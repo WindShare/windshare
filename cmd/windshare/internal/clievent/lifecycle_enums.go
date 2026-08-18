@@ -160,19 +160,94 @@ type PeerAttemptStage uint8
 
 const (
 	PeerAttemptStarted PeerAttemptStage = iota + 1
+	PeerNegotiationDeadlineArmed
+	PeerNegotiationDeadlineExpired
 	PeerOfferReceived
 	PeerAnswerCreated
 	PeerAnswerSent
 	PeerDataChannelOpen
-	PeerLaneAdmissionStarted
+	PeerAdmissionDeadlineArmed
+	PeerAdmissionDeadlineExpired
+	PeerLaneHelloAuthenticated
+	PeerAdmissionResponseSettled
 	PeerAttemptAdmitted
 	PeerAttemptFailed
 )
 
 func (value PeerAttemptStage) Name() (string, bool) {
 	names := [...]string{
-		"", "started", "offer_received", "answer_created", "answer_sent", "datachannel_open",
-		"lane_admission_started", "admitted", "failed",
+		"", "started", "negotiation-deadline-armed", "negotiation-deadline-expired",
+		"offer-received", "answer-created", "answer-sent", "datachannel-open",
+		"admission-deadline-armed", "admission-deadline-expired", "lane-hello-authenticated",
+		"admission-response-settled", "admitted", "failed",
+	}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerAttemptPhase uint8
+
+const (
+	PeerPhaseNegotiation PeerAttemptPhase = iota + 1
+	PeerPhaseAdmission
+)
+
+func (value PeerAttemptPhase) Name() (string, bool) {
+	names := [...]string{"", "negotiation", "admission"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerAdmissionDisposition uint8
+
+const (
+	PeerAdmissionAccepted PeerAdmissionDisposition = iota + 1
+	PeerAdmissionRejected
+)
+
+func (value PeerAdmissionDisposition) Name() (string, bool) {
+	names := [...]string{"", "accepted", "rejected"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerResponseDelivery uint8
+
+const (
+	PeerResponseDelivered PeerResponseDelivery = iota + 1
+	PeerResponseDeliveryFailed
+)
+
+func (value PeerResponseDelivery) Name() (string, bool) {
+	names := [...]string{"", "delivered", "delivery-failed"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerLaneRejectionCode uint8
+
+const (
+	PeerLaneRejectUnknownSession PeerLaneRejectionCode = iota + 1
+	PeerLaneRejectStaleEpoch
+	PeerLaneRejectGrantConsumed
+	PeerLaneRejectGrantExpired
+	PeerLaneRejectAdmissionLimited
+	PeerLaneRejectStopping
+	PeerLaneRejectGrantMismatch
+)
+
+func (value PeerLaneRejectionCode) Name() (string, bool) {
+	names := [...]string{
+		"", "unknown-session", "stale-epoch", "grant-consumed", "grant-expired",
+		"admission-limited", "stopping", "grant-mismatch",
 	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false

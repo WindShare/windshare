@@ -178,7 +178,7 @@ func TestReceiverTerminationClosedClassMappingsAreExhaustive(t *testing.T) {
 	}
 	provenances := []v2peer.ReceiverTerminalProvenance{
 		v2peer.ReceiverProvenanceUnbound, v2peer.ReceiverProvenanceLocalExplicitStop, v2peer.ReceiverProvenanceLocalContextEnded,
-		v2peer.ReceiverProvenanceLocalNegotiationFailure, v2peer.ReceiverProvenanceLocalAttemptTimeout, v2peer.ReceiverProvenanceLocalOperationContract,
+		v2peer.ReceiverProvenanceLocalNegotiationFailure, v2peer.ReceiverProvenanceLocalNegotiationTimeout, v2peer.ReceiverProvenanceLocalAdmissionTimeout, v2peer.ReceiverProvenanceLocalOperationContract,
 		v2peer.ReceiverProvenanceRemoteOperationRejected, v2peer.ReceiverProvenanceRemoteUnknownControl, v2peer.ReceiverProvenanceRemoteControlMalformed,
 		v2peer.ReceiverProvenanceRemoteFailureMalformed, v2peer.ReceiverProvenanceRemoteFailureScopeViolation, v2peer.ReceiverProvenanceRuntimeStopping,
 		v2peer.ReceiverProvenanceSignalingAdapterContract, v2peer.ReceiverProvenanceAuthenticatedSecondAnswer,
@@ -195,7 +195,7 @@ func TestReceiverTerminationClosedClassMappingsAreExhaustive(t *testing.T) {
 			t.Fatalf("benign %q rejected", value)
 		}
 	}
-	classes := []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseRuntimeClosed, v2peer.ReceiverCauseConfiguration, v2peer.ReceiverCauseOperationMissing, v2peer.ReceiverCauseAttemptTimeout, v2peer.ReceiverCauseCandidateLimit, v2peer.ReceiverCauseChannelAdmission, v2peer.ReceiverCauseEventCapacity, v2peer.ReceiverCauseNegotiation, v2peer.ReceiverCauseProtocol, v2peer.ReceiverCauseDeadline, v2peer.ReceiverCausePeerShutdown, v2peer.ReceiverCauseChannelDrain, v2peer.ReceiverCauseUnknown}
+	classes := []v2peer.ReceiverCauseClass{v2peer.ReceiverCauseRuntimeClosed, v2peer.ReceiverCauseConfiguration, v2peer.ReceiverCauseOperationMissing, v2peer.ReceiverCauseNegotiationTimeout, v2peer.ReceiverCauseAdmissionTimeout, v2peer.ReceiverCauseCandidateLimit, v2peer.ReceiverCauseChannelAdmission, v2peer.ReceiverCauseEventCapacity, v2peer.ReceiverCauseNegotiation, v2peer.ReceiverCauseProtocol, v2peer.ReceiverCauseDeadline, v2peer.ReceiverCausePeerShutdown, v2peer.ReceiverCauseChannelDrain, v2peer.ReceiverCauseUnknown}
 	for _, value := range classes {
 		if _, ok := projectReceiverCauseClassification(value); !ok {
 			t.Fatalf("cause %q rejected", value)

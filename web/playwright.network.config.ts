@@ -6,9 +6,10 @@ const NETWORK_HARD_TIMEOUT_MILLISECONDS = 240_000
 export default defineConfig({
   testDir: './e2e',
   // The ordinary smoke owns the relay-only path. These scenarios complement it
-  // by proving authenticated direct and TURN peer adoption after relay loss.
+  // with direct recovery and authenticated peer adoption across route changes.
   testMatch: [
     'v2-direct-hot-switch.weekly.spec.ts',
+    'v2-direct-recovery.weekly.spec.ts',
     'v2-local-turn.network.spec.ts',
   ],
   outputDir: 'test-results/network-routes',

@@ -1,6 +1,5 @@
 import { describe, expect, expectTypeOf, it } from 'vitest'
 
-import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { byteRange, FileGeometry } from '../../src/content/geometry'
 import {
   V2BlockBroker,
@@ -18,6 +17,15 @@ const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
   assertActive: () => undefined,
   subscribe: () => () => undefined,
 })
+
+function onlyRoute(route: 'relay' | 'peer'): V2BlockRouteEligibility {
+  return Object.freeze({
+    active: true,
+    allows: (candidate: 'relay' | 'peer') => candidate === route,
+    assertActive: () => undefined,
+    subscribe: () => () => undefined,
+  })
+}
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -245,30 +253,29 @@ describe('v2 preview/download block broker', () => {
     lanes.add(relay, 'relay')
     const broker = new V2BlockBroker(lanes)
     const descriptor = revision()
-    const largeRoutes = new V2ConnectivityRouteAuthority()
-    const smallRoutes = new V2ConnectivityRouteAuthority()
-    smallRoutes.admitRelay()
+    const peerRoutes = onlyRoute('peer')
+    const relayRoutes = onlyRoute('relay')
 
     const largeDistinct = broker.readBlock(
       { descriptor, leaseId: identity(10), localBlockIndex: 0n },
-      { routes: largeRoutes, priority: 'download' },
+      { routes: peerRoutes, priority: 'download' },
     )
     await turn()
     expect(relay.calls).toHaveLength(0)
 
     await expect(broker.readBlock(
       { descriptor, leaseId: identity(20), localBlockIndex: 1n },
-      { routes: smallRoutes, priority: 'download' },
+      { routes: relayRoutes, priority: 'download' },
     )).resolves.toMatchObject({ localBlockIndex: 1n })
     expect(relay.calls.map((call) => call.localBlockIndex)).toEqual([1n])
 
     const sharedLarge = broker.readBlock(
       { descriptor, leaseId: identity(30), localBlockIndex: 2n },
-      { routes: largeRoutes, priority: 'download' },
+      { routes: peerRoutes, priority: 'download' },
     )
     const sharedSmall = broker.readBlock(
       { descriptor, leaseId: identity(40), localBlockIndex: 2n },
-      { routes: smallRoutes, priority: 'preview' },
+      { routes: relayRoutes, priority: 'preview' },
     )
     await expect(Promise.all([sharedLarge, sharedSmall])).resolves.toHaveLength(2)
     expect(relay.calls.map((call) => call.localBlockIndex)).toEqual([1n, 2n])
@@ -293,14 +300,13 @@ describe('v2 preview/download block broker', () => {
     lanes.add(relay, 'relay')
     const broker = new V2BlockBroker(lanes)
     const descriptor = revision()
-    const largeRoutes = new V2ConnectivityRouteAuthority()
-    const canceledRoutes = new V2ConnectivityRouteAuthority()
-    canceledRoutes.admitRelay()
+    const survivingRoutes = onlyRoute('peer')
+    const canceledRoutes = onlyRoute('relay')
     const controller = new AbortController()
 
     const surviving = broker.readBlock(
       { descriptor, leaseId: identity(10), localBlockIndex: 3n },
-      { routes: largeRoutes, priority: 'download' },
+      { routes: survivingRoutes, priority: 'download' },
     )
     const canceled = broker.readBlock(
       { descriptor, leaseId: identity(20), localBlockIndex: 3n },

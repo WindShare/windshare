@@ -1,11 +1,9 @@
 package v2peer
 
 import (
-	"errors"
-	"net"
+	"sync"
 	"time"
 
-	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -16,14 +14,40 @@ import (
 type SenderAttemptStage string
 
 const (
-	SenderAttemptStarted              SenderAttemptStage = "started"
-	SenderAttemptOfferReceived        SenderAttemptStage = "offer-received"
-	SenderAttemptAnswerCreated        SenderAttemptStage = "answer-created"
-	SenderAttemptAnswerSent           SenderAttemptStage = "answer-sent"
-	SenderAttemptDataChannelOpen      SenderAttemptStage = "datachannel-open"
-	SenderAttemptLaneAdmissionStarted SenderAttemptStage = "lane-admission-started"
-	SenderAttemptAdmitted             SenderAttemptStage = "admitted"
-	SenderAttemptFailed               SenderAttemptStage = "failed"
+	SenderAttemptStarted                    SenderAttemptStage = "started"
+	SenderAttemptNegotiationDeadlineArmed   SenderAttemptStage = "negotiation-deadline-armed"
+	SenderAttemptNegotiationDeadlineExpired SenderAttemptStage = "negotiation-deadline-expired"
+	SenderAttemptOfferReceived              SenderAttemptStage = "offer-received"
+	SenderAttemptAnswerCreated              SenderAttemptStage = "answer-created"
+	SenderAttemptAnswerSent                 SenderAttemptStage = "answer-sent"
+	SenderAttemptDataChannelOpen            SenderAttemptStage = "datachannel-open"
+	SenderAttemptAdmissionDeadlineArmed     SenderAttemptStage = "admission-deadline-armed"
+	SenderAttemptAdmissionDeadlineExpired   SenderAttemptStage = "admission-deadline-expired"
+	SenderAttemptLaneHelloAuthenticated     SenderAttemptStage = "lane-hello-authenticated"
+	SenderAttemptAdmissionResponseSettled   SenderAttemptStage = "admission-response-settled"
+	SenderAttemptAdmitted                   SenderAttemptStage = "admitted"
+	SenderAttemptFailed                     SenderAttemptStage = "failed"
+)
+
+type SenderAttemptPhase string
+
+const (
+	SenderAttemptPhaseNegotiation SenderAttemptPhase = "negotiation"
+	SenderAttemptPhaseAdmission   SenderAttemptPhase = "admission"
+)
+
+type SenderAdmissionDisposition string
+
+const (
+	SenderAdmissionAccepted SenderAdmissionDisposition = "accepted"
+	SenderAdmissionRejected SenderAdmissionDisposition = "rejected"
+)
+
+type SenderResponseDelivery string
+
+const (
+	SenderResponseDelivered      SenderResponseDelivery = "delivered"
+	SenderResponseDeliveryFailed SenderResponseDelivery = "delivery-failed"
 )
 
 type AttemptFailureScope string
@@ -51,22 +75,8 @@ type SenderCandidateCounts struct {
 	RemoteAccepted uint32
 }
 
-type PionCandidateEvidence struct {
-	CandidateType string
-	Protocol      string
-	Address       string
-	Port          uint16
-	AddressFamily string
-}
-
-type PionSelectedPairEvidence struct {
-	Local  PionCandidateEvidence
-	Remote PionCandidateEvidence
-}
-
 // PeerOperationFailure preserves the exact authenticated operation failure
-// delivered to the browser. The JSON projection intentionally emits the frozen
-// typed code and message; the browser stream owns the numeric-code evidence.
+// delivered to the browser without retaining provider-controlled error text.
 type PeerOperationFailure struct {
 	Code    uint16
 	Message string
@@ -80,62 +90,104 @@ type SenderAttemptFailure struct {
 	Operation          *PeerOperationFailure
 }
 
+type SenderLaneRejection struct {
+	Code             protocolsession.LaneRejectCode
+	RetryAfterMillis uint64
+}
+
 type SenderAttemptObservation struct {
 	SessionID            protocolsession.ProtocolSessionID
 	PeerPathID           v2signal.PeerPathID
 	AttemptID            v2signal.AttemptID
+	OfferOperationID     protocolsession.OperationID
 	SideSequence         uint64
 	AttemptElapsedMillis uint64
 	Stage                SenderAttemptStage
+	Phase                SenderAttemptPhase
+	DeadlineMillis       uint64
 	CandidateCounts      *SenderCandidateCounts
+	GrantOperationID     protocolsession.OperationID
 	Lane                 *sessionruntime.LaneIdentity
-	SelectedPair         *PionSelectedPairEvidence
+	AdmissionDisposition SenderAdmissionDisposition
+	ResponseDelivery     SenderResponseDelivery
+	Rejection            *SenderLaneRejection
 	Failure              *SenderAttemptFailure
 }
 
 type senderAttemptRecorder struct {
-	factory   *Factory
-	sessionID protocolsession.ProtocolSessionID
-	binding   v2signal.Binding
-	startedAt time.Time
+	factory          *Factory
+	sessionID        protocolsession.ProtocolSessionID
+	binding          v2signal.Binding
+	offerOperationID protocolsession.OperationID
+	startedAt        time.Time
 
-	sequence   uint64
-	elapsed    uint64
-	next       SenderAttemptStage
-	terminal   SenderAttemptStage
-	lastCounts SenderCandidateCounts
+	mu                     sync.Mutex
+	sequence               uint64
+	elapsed                uint64
+	next                   SenderAttemptStage
+	terminal               SenderAttemptStage
+	lastCounts             SenderCandidateCounts
+	grantOperationID       protocolsession.OperationID
+	lane                   *sessionruntime.LaneIdentity
+	laneHelloPending       bool
+	admissionExpiryPending bool
 }
 
 func newSenderAttemptRecorder(
 	factory *Factory,
 	sessionID protocolsession.ProtocolSessionID,
 	binding v2signal.Binding,
+	offerOperationIDs ...protocolsession.OperationID,
 ) *senderAttemptRecorder {
+	var offerOperationID protocolsession.OperationID
+	if len(offerOperationIDs) != 0 {
+		offerOperationID = offerOperationIDs[0]
+	}
 	return &senderAttemptRecorder{
-		factory: factory, sessionID: sessionID, binding: binding,
+		factory: factory, sessionID: sessionID, binding: binding, offerOperationID: offerOperationID,
 		startedAt: factory.now(), next: SenderAttemptStarted,
 	}
 }
 
 func (recorder *senderAttemptRecorder) begin() {
-	recorder.complete(SenderAttemptStarted, SenderCandidateCounts{}, nil, nil)
-	recorder.complete(SenderAttemptOfferReceived, SenderCandidateCounts{}, nil, nil)
+	recorder.complete(SenderAttemptStarted, SenderCandidateCounts{}, SenderAttemptObservation{})
+}
+
+func (recorder *senderAttemptRecorder) negotiationDeadlineArmed() {
+	recorder.complete(SenderAttemptNegotiationDeadlineArmed, SenderCandidateCounts{}, SenderAttemptObservation{
+		Phase:          SenderAttemptPhaseNegotiation,
+		DeadlineMillis: durationMilliseconds(recorder.factory.negotiationBudget),
+	})
+	recorder.complete(SenderAttemptOfferReceived, SenderCandidateCounts{}, SenderAttemptObservation{})
 }
 
 func (recorder *senderAttemptRecorder) complete(
 	stage SenderAttemptStage,
 	counts SenderCandidateCounts,
-	lane *sessionruntime.LaneIdentity,
-	pair *PionSelectedPairEvidence,
+	payload any,
+	_ ...any,
 ) {
-	if recorder == nil || recorder.terminal != "" || recorder.next != stage {
+	if recorder == nil {
 		return
 	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.terminal != "" || recorder.next != stage {
+		return
+	}
+	evidence, _ := payload.(SenderAttemptObservation)
 	recorder.lastCounts = counts
-	recorder.emit(SenderAttemptObservation{
-		Stage: stage, CandidateCounts: candidateCountsForStage(stage, counts),
-		Lane: cloneLane(lane), SelectedPair: cloneSelectedPair(pair),
-	})
+	evidence.Stage = stage
+	evidence.CandidateCounts = candidateCountsForStage(stage, counts)
+	if senderStageCarriesGrant(stage) {
+		if evidence.GrantOperationID.IsZero() {
+			evidence.GrantOperationID = recorder.grantOperationID
+		}
+		if evidence.Lane == nil {
+			evidence.Lane = cloneLane(recorder.lane)
+		}
+	}
+	recorder.emitLocked(evidence)
 	if stage == SenderAttemptAdmitted {
 		recorder.terminal = stage
 		return
@@ -144,31 +196,182 @@ func (recorder *senderAttemptRecorder) complete(
 }
 
 func (recorder *senderAttemptRecorder) fail(failure SenderAttemptFailure) {
-	if recorder == nil || recorder.terminal != "" || recorder.next == "" {
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.terminal != "" || recorder.next == "" {
 		return
 	}
 	failure.FailedAtStage = recorder.next
-	observation := SenderAttemptObservation{Stage: SenderAttemptFailed, Failure: &failure}
+	observation := SenderAttemptObservation{
+		Stage: SenderAttemptFailed, Failure: &failure,
+		GrantOperationID: recorder.grantOperationID, Lane: cloneLane(recorder.lane),
+	}
 	if senderFailureCarriesCandidateCounts(recorder.next) {
 		counts := recorder.lastCounts
 		observation.CandidateCounts = &counts
 	}
-	recorder.emit(observation)
+	recorder.emitLocked(observation)
 	recorder.terminal = SenderAttemptFailed
 }
 
+func (recorder *senderAttemptRecorder) dataChannelOpened(counts SenderCandidateCounts) {
+	recorder.complete(SenderAttemptDataChannelOpen, counts, SenderAttemptObservation{})
+	recorder.complete(SenderAttemptAdmissionDeadlineArmed, counts, SenderAttemptObservation{
+		Phase:          SenderAttemptPhaseAdmission,
+		DeadlineMillis: durationMilliseconds(recorder.factory.admissionBudget),
+	})
+	recorder.flushLaneHello()
+}
+
+func (recorder *senderAttemptRecorder) phaseDeadlineExpired(phase PeerAttemptPhase) {
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.terminal != "" {
+		return
+	}
+	if phase == PeerAttemptPhaseAdmission && recorder.laneHelloPending {
+		// Authenticated settlement owns the result; keep its linearization
+		// milestone ahead of the observational timeout that raced it.
+		recorder.admissionExpiryPending = true
+		return
+	}
+	recorder.emitPhaseDeadlineExpiredLocked(phase)
+}
+
+func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase PeerAttemptPhase) {
+	observation := SenderAttemptObservation{CandidateCounts: candidateCountsForStage(recorder.next, recorder.lastCounts)}
+	switch phase {
+	case PeerAttemptPhaseNegotiation:
+		observation.Stage = SenderAttemptNegotiationDeadlineExpired
+		observation.Phase = SenderAttemptPhaseNegotiation
+		observation.DeadlineMillis = durationMilliseconds(recorder.factory.negotiationBudget)
+	case PeerAttemptPhaseAdmission:
+		observation.Stage = SenderAttemptAdmissionDeadlineExpired
+		observation.Phase = SenderAttemptPhaseAdmission
+		observation.DeadlineMillis = durationMilliseconds(recorder.factory.admissionBudget)
+	default:
+		return
+	}
+	observation.GrantOperationID = recorder.grantOperationID
+	observation.Lane = cloneLane(recorder.lane)
+	recorder.emitLocked(observation)
+}
+
+func (recorder *senderAttemptRecorder) laneHelloAuthenticated(
+	operation protocolsession.OperationID,
+	lane sessionruntime.LaneIdentity,
+) {
+	if recorder == nil || operation.IsZero() || lane.ID == 0 || lane.Epoch == 0 {
+		return
+	}
+	recorder.mu.Lock()
+	if recorder.grantOperationID.IsZero() {
+		recorder.grantOperationID = operation
+		copy := lane
+		recorder.lane = &copy
+	}
+	recorder.laneHelloPending = true
+	recorder.mu.Unlock()
+	recorder.flushLaneHello()
+}
+
+func (recorder *senderAttemptRecorder) flushLaneHello() {
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	if recorder.terminal != "" || recorder.next != SenderAttemptLaneHelloAuthenticated ||
+		!recorder.laneHelloPending || recorder.grantOperationID.IsZero() || recorder.lane == nil {
+		recorder.mu.Unlock()
+		return
+	}
+	operation := recorder.grantOperationID
+	lane := *recorder.lane
+	counts := recorder.lastCounts
+	recorder.laneHelloPending = false
+	recorder.mu.Unlock()
+	recorder.complete(SenderAttemptLaneHelloAuthenticated, counts, SenderAttemptObservation{
+		Phase:            SenderAttemptPhaseAdmission,
+		GrantOperationID: operation,
+		Lane:             &lane,
+	})
+	recorder.flushAdmissionDeadlineExpired()
+}
+
+func (recorder *senderAttemptRecorder) flushAdmissionDeadlineExpired() {
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.terminal != "" || !recorder.admissionExpiryPending ||
+		recorder.next != SenderAttemptAdmissionResponseSettled {
+		return
+	}
+	recorder.admissionExpiryPending = false
+	recorder.emitPhaseDeadlineExpiredLocked(PeerAttemptPhaseAdmission)
+}
+
+func (recorder *senderAttemptRecorder) admissionSettled(
+	result sessionruntime.SenderPeerAdmissionResult,
+	counts SenderCandidateCounts,
+) {
+	if recorder == nil || !result.SettlementBegan {
+		return
+	}
+	evidence := SenderAttemptObservation{
+		Phase:            SenderAttemptPhaseAdmission,
+		GrantOperationID: result.GrantOperationID,
+		Lane:             &result.Lane,
+	}
+	switch result.Disposition {
+	case sessionruntime.SenderPeerAdmissionAccepted:
+		evidence.AdmissionDisposition = SenderAdmissionAccepted
+	case sessionruntime.SenderPeerAdmissionRejected:
+		evidence.AdmissionDisposition = SenderAdmissionRejected
+		evidence.Rejection = &SenderLaneRejection{
+			Code:             result.Rejection.Code,
+			RetryAfterMillis: durationMilliseconds(result.Rejection.RetryAfter),
+		}
+	default:
+		return
+	}
+	switch result.ResponseDelivery {
+	case sessionruntime.SenderPeerResponseDeliveryFailed:
+		evidence.ResponseDelivery = SenderResponseDeliveryFailed
+	case sessionruntime.SenderPeerResponseDelivered:
+		evidence.ResponseDelivery = SenderResponseDelivered
+	default:
+		return
+	}
+	recorder.complete(SenderAttemptAdmissionResponseSettled, counts, evidence)
+}
+
 func (recorder *senderAttemptRecorder) recordCandidateCounts(counts SenderCandidateCounts) {
-	if recorder == nil || recorder.terminal != "" {
+	if recorder == nil {
+		return
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	if recorder.terminal != "" {
 		return
 	}
 	recorder.lastCounts = counts
 }
 
 func (recorder *senderAttemptRecorder) admitted() bool {
-	return recorder != nil && recorder.terminal == SenderAttemptAdmitted
+	if recorder == nil {
+		return false
+	}
+	recorder.mu.Lock()
+	defer recorder.mu.Unlock()
+	return recorder.terminal == SenderAttemptAdmitted
 }
 
-func (recorder *senderAttemptRecorder) emit(observation SenderAttemptObservation) {
+func (recorder *senderAttemptRecorder) emitLocked(observation SenderAttemptObservation) {
 	recorder.sequence++
 	elapsed := max(recorder.factory.now().Sub(recorder.startedAt), 0)
 	elapsedMillis := max(uint64(elapsed/time.Millisecond), recorder.elapsed)
@@ -176,6 +379,7 @@ func (recorder *senderAttemptRecorder) emit(observation SenderAttemptObservation
 	observation.SessionID = recorder.sessionID
 	observation.PeerPathID = recorder.binding.PeerPathID
 	observation.AttemptID = recorder.binding.AttemptID
+	observation.OfferOperationID = recorder.offerOperationID
 	observation.SideSequence = recorder.sequence
 	observation.AttemptElapsedMillis = elapsedMillis
 	recorder.factory.observeSenderAttempt(observation)
@@ -184,6 +388,8 @@ func (recorder *senderAttemptRecorder) emit(observation SenderAttemptObservation
 func senderStageSuccessor(stage SenderAttemptStage) SenderAttemptStage {
 	switch stage {
 	case SenderAttemptStarted:
+		return SenderAttemptNegotiationDeadlineArmed
+	case SenderAttemptNegotiationDeadlineArmed:
 		return SenderAttemptOfferReceived
 	case SenderAttemptOfferReceived:
 		return SenderAttemptAnswerCreated
@@ -192,11 +398,26 @@ func senderStageSuccessor(stage SenderAttemptStage) SenderAttemptStage {
 	case SenderAttemptAnswerSent:
 		return SenderAttemptDataChannelOpen
 	case SenderAttemptDataChannelOpen:
-		return SenderAttemptLaneAdmissionStarted
-	case SenderAttemptLaneAdmissionStarted:
+		return SenderAttemptAdmissionDeadlineArmed
+	case SenderAttemptAdmissionDeadlineArmed:
+		return SenderAttemptLaneHelloAuthenticated
+	case SenderAttemptLaneHelloAuthenticated:
+		return SenderAttemptAdmissionResponseSettled
+	case SenderAttemptAdmissionResponseSettled:
 		return SenderAttemptAdmitted
 	default:
 		return ""
+	}
+}
+
+func senderStageCarriesGrant(stage SenderAttemptStage) bool {
+	switch stage {
+	case SenderAttemptLaneHelloAuthenticated,
+		SenderAttemptAdmissionResponseSettled,
+		SenderAttemptAdmitted:
+		return true
+	default:
+		return false
 	}
 }
 
@@ -204,7 +425,8 @@ func candidateCountsForStage(
 	stage SenderAttemptStage,
 	counts SenderCandidateCounts,
 ) *SenderCandidateCounts {
-	if stage == SenderAttemptStarted || stage == SenderAttemptOfferReceived {
+	if stage == SenderAttemptStarted || stage == SenderAttemptNegotiationDeadlineArmed ||
+		stage == SenderAttemptOfferReceived {
 		return nil
 	}
 	copy := counts
@@ -212,7 +434,8 @@ func candidateCountsForStage(
 }
 
 func senderFailureCarriesCandidateCounts(failedAt SenderAttemptStage) bool {
-	return failedAt != SenderAttemptOfferReceived && failedAt != SenderAttemptAnswerCreated
+	return failedAt != SenderAttemptNegotiationDeadlineArmed && failedAt != SenderAttemptOfferReceived &&
+		failedAt != SenderAttemptAnswerCreated
 }
 
 func cloneLane(lane *sessionruntime.LaneIdentity) *sessionruntime.LaneIdentity {
@@ -220,14 +443,6 @@ func cloneLane(lane *sessionruntime.LaneIdentity) *sessionruntime.LaneIdentity {
 		return nil
 	}
 	copy := *lane
-	return &copy
-}
-
-func cloneSelectedPair(pair *PionSelectedPairEvidence) *PionSelectedPairEvidence {
-	if pair == nil {
-		return nil
-	}
-	copy := *pair
 	return &copy
 }
 
@@ -252,96 +467,21 @@ func cloneSenderAttemptObservation(observation SenderAttemptObservation) SenderA
 		clone.CandidateCounts = &counts
 	}
 	clone.Lane = cloneLane(observation.Lane)
-	clone.SelectedPair = cloneSelectedPair(observation.SelectedPair)
+	if observation.Rejection != nil {
+		rejection := *observation.Rejection
+		clone.Rejection = &rejection
+	}
 	if observation.Failure != nil {
 		failure := *observation.Failure
+		failure.Message = ""
 		if observation.Failure.Operation != nil {
 			operation := *observation.Failure.Operation
+			operation.Message = ""
 			failure.Operation = &operation
 		}
 		clone.Failure = &failure
 	}
 	return clone
-}
-
-type selectedCandidatePairReader interface {
-	SelectedCandidatePair() (*pion.ICECandidatePair, error)
-}
-
-type pionTransportOwner interface {
-	SCTP() *pion.SCTPTransport
-}
-
-func selectedPairEvidence(peer PeerConnection) *PionSelectedPairEvidence {
-	pair, err := readSelectedCandidatePair(peer)
-	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
-		return nil
-	}
-	local, err := pionCandidateEvidence(pair.Local)
-	if err != nil {
-		return nil
-	}
-	remote, err := pionCandidateEvidence(pair.Remote)
-	if err != nil {
-		return nil
-	}
-	if local.Address == remote.Address && local.Port == remote.Port && local.Protocol == remote.Protocol {
-		return nil
-	}
-	return &PionSelectedPairEvidence{Local: local, Remote: remote}
-}
-
-func readSelectedCandidatePair(peer PeerConnection) (*pion.ICECandidatePair, error) {
-	if peer == nil {
-		return nil, errors.New("peer connection is absent")
-	}
-	if reader, ok := peer.(selectedCandidatePairReader); ok {
-		return reader.SelectedCandidatePair()
-	}
-	owner, ok := peer.(pionTransportOwner)
-	if !ok || owner.SCTP() == nil || owner.SCTP().Transport() == nil ||
-		owner.SCTP().Transport().ICETransport() == nil {
-		return nil, errors.New("peer connection does not expose an ICE transport")
-	}
-	return owner.SCTP().Transport().ICETransport().GetSelectedCandidatePair()
-}
-
-func pionCandidateEvidence(candidate *pion.ICECandidate) (PionCandidateEvidence, error) {
-	if candidate == nil || candidate.Port == 0 {
-		return PionCandidateEvidence{}, errors.New("selected ICE candidate is incomplete")
-	}
-	address := net.ParseIP(candidate.Address)
-	family := "ipv6"
-	if address == nil || address.IsUnspecified() || address.IsLoopback() || address.IsMulticast() || address.IsLinkLocalUnicast() {
-		return PionCandidateEvidence{}, errors.New("selected ICE candidate address is not operational unicast")
-	}
-	if address4 := address.To4(); address4 != nil {
-		// net.IP's predicates intentionally recognize only individual special
-		// addresses. Evidence rejects the full non-operational IPv4 ranges so a
-		// malformed candidate cannot masquerade as an externally usable pair.
-		if address4[0] == 0 || address4[0] == 127 || address4[0] >= 224 ||
-			(address4[0] == 169 && address4[1] == 254) {
-			return PionCandidateEvidence{}, errors.New("selected ICE candidate address is not operational unicast")
-		}
-		family = "ipv4"
-	} else if address.To16() == nil {
-		return PionCandidateEvidence{}, errors.New("selected ICE candidate address family is unknown")
-	}
-	candidateType := candidate.Typ.String()
-	switch candidate.Typ {
-	case pion.ICECandidateTypeHost, pion.ICECandidateTypePrflx,
-		pion.ICECandidateTypeSrflx, pion.ICECandidateTypeRelay:
-	default:
-		return PionCandidateEvidence{}, errors.New("selected ICE candidate type is unknown")
-	}
-	protocol := candidate.Protocol.String()
-	if candidate.Protocol != pion.ICEProtocolUDP && candidate.Protocol != pion.ICEProtocolTCP {
-		return PionCandidateEvidence{}, errors.New("selected ICE candidate protocol is unknown")
-	}
-	return PionCandidateEvidence{
-		CandidateType: candidateType, Protocol: protocol, Address: candidate.Address,
-		Port: candidate.Port, AddressFamily: family,
-	}, nil
 }
 
 func typedPeerErrorForOperationCode(code uint16) TypedPeerErrorCode {
@@ -357,4 +497,11 @@ func typedPeerErrorForOperationCode(code uint16) TypedPeerErrorCode {
 	default:
 		return TypedPeerErrorUnexpected
 	}
+}
+
+func durationMilliseconds(value time.Duration) uint64 {
+	if value <= 0 {
+		return 0
+	}
+	return uint64(value / time.Millisecond)
 }

@@ -203,6 +203,33 @@ func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T)
 	}
 }
 
+func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+	recorder := &protocolTraceRecorder{}
+	runtime.protocolTracer = recorder
+	operationID := id16[protocolsession.OperationID](0x7a)
+	lane := LaneIdentity{ID: 7, Epoch: 2}
+	runtime.traceProtocolOperation(ProtocolOperationTrace{
+		Stage: ProtocolOperationReceiverCompleted, OperationID: operationID,
+		RequestKind: protocolsession.MessageLaneAttach, ResponseKind: protocolsession.MessageLaneAttach,
+		HasResponse: true, Lane: lane, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome: protocolsession.SendOutcomeDelivered, ResponseCount: 1,
+	})
+	events := recorder.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("lane-grant trace events = %d, want 1", len(events))
+	}
+	event := events[0]
+	if event.ProtocolSessionID != runtime.sessionID || event.OperationID != operationID ||
+		event.RequestKind != protocolsession.MessageLaneAttach ||
+		event.ResponseKind != protocolsession.MessageLaneAttach || !event.HasResponse ||
+		!event.HasLane || event.Lane != lane || event.ResponseCount != 1 ||
+		event.SendOutcome != protocolsession.SendOutcomeDelivered {
+		t.Fatalf("lane-grant trace = %+v", event)
+	}
+}
+
 func TestProtocolOperationTracerPanicCannotChangeRuntimeAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	runtime.protocolTracer = ProtocolOperationTraceFunc(func(ProtocolOperationTrace) {

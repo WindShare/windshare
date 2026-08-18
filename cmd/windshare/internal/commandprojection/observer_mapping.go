@@ -50,100 +50,70 @@ func projectProtocolRole(value protocolsession.Role) (clievent.ProtocolRole, boo
 	}
 }
 
+var protocolOperationStageProjections = map[sessionruntime.ProtocolOperationStage]clievent.ProtocolOperationStage{
+	sessionruntime.ProtocolOperationReceiverCompleted:     clievent.ProtocolOperationReceiverCompleted,
+	sessionruntime.ProtocolOperationReceiverFailed:        clievent.ProtocolOperationReceiverFailed,
+	sessionruntime.ProtocolOperationReceiverEnded:         clievent.ProtocolOperationReceiverEnded,
+	sessionruntime.ProtocolOperationSenderRequestReceived: clievent.ProtocolOperationSenderRequestReceived,
+	sessionruntime.ProtocolOperationSenderResponseSettled: clievent.ProtocolOperationSenderResponseSettled,
+}
+
+var protocolMessageKindProjections = map[protocolsession.MessageKind]clievent.ProtocolMessageKind{
+	protocolsession.MessageListChildren:      clievent.ProtocolMessageListChildren,
+	protocolsession.MessageCatalogResult:     clievent.ProtocolMessageCatalogResult,
+	protocolsession.MessageOpenRevisions:     clievent.ProtocolMessageOpenRevisions,
+	protocolsession.MessageOpenResults:       clievent.ProtocolMessageOpenResults,
+	protocolsession.MessageRenewLease:        clievent.ProtocolMessageRenewLease,
+	protocolsession.MessageReleaseLease:      clievent.ProtocolMessageReleaseLease,
+	protocolsession.MessageRequestBlocks:     clievent.ProtocolMessageRequestBlocks,
+	protocolsession.MessageBlockFragment:     clievent.ProtocolMessageBlockFragment,
+	protocolsession.MessageCancel:            clievent.ProtocolMessageCancel,
+	protocolsession.MessageOperationError:    clievent.ProtocolMessageOperationError,
+	protocolsession.MessageSessionTerminal:   clievent.ProtocolMessageSessionTerminal,
+	protocolsession.MessageLaneAttach:        clievent.ProtocolMessageLaneAttach,
+	protocolsession.MessageScanProgress:      clievent.ProtocolMessageScanProgress,
+	protocolsession.MessageOperationComplete: clievent.ProtocolMessageOperationComplete,
+	protocolsession.MessageLeaseResult:       clievent.ProtocolMessageLeaseResult,
+	protocolsession.MessagePeerOffer:         clievent.ProtocolMessagePeerOffer,
+	protocolsession.MessagePeerAnswer:        clievent.ProtocolMessagePeerAnswer,
+	protocolsession.MessagePeerCandidate:     clievent.ProtocolMessagePeerCandidate,
+}
+
+var protocolSendOutcomeProjections = map[protocolsession.SendOutcome]clievent.ProtocolSendOutcome{
+	protocolsession.SendOutcomeUnknown:   clievent.ProtocolSendUnknown,
+	protocolsession.SendOutcomeDelivered: clievent.ProtocolSendDelivered,
+	protocolsession.SendOutcomeDropped:   clievent.ProtocolSendDropped,
+}
+
+var protocolOperationCauseProjections = map[sessionruntime.ProtocolOperationCause]clievent.ProtocolOperationCause{
+	sessionruntime.ProtocolOperationCauseNone:            clievent.ProtocolOperationCauseNone,
+	sessionruntime.ProtocolOperationCauseCanceled:        clievent.ProtocolOperationCauseCanceled,
+	sessionruntime.ProtocolOperationCauseDeadline:        clievent.ProtocolOperationCauseDeadline,
+	sessionruntime.ProtocolOperationCauseRuntimeClosed:   clievent.ProtocolOperationCauseRuntimeClosed,
+	sessionruntime.ProtocolOperationCauseLaneUnavailable: clievent.ProtocolOperationCauseLaneUnavailable,
+	sessionruntime.ProtocolOperationCauseWriterStopped:   clievent.ProtocolOperationCauseWriterStopped,
+	sessionruntime.ProtocolOperationCauseOperationClosed: clievent.ProtocolOperationCauseOperationClosed,
+	sessionruntime.ProtocolOperationCauseProtocolFailure: clievent.ProtocolOperationCauseProtocolFailure,
+}
+
 func projectProtocolOperationStage(value sessionruntime.ProtocolOperationStage) (clievent.ProtocolOperationStage, bool) {
-	switch value {
-	case sessionruntime.ProtocolOperationReceiverCompleted:
-		return clievent.ProtocolOperationReceiverCompleted, true
-	case sessionruntime.ProtocolOperationReceiverFailed:
-		return clievent.ProtocolOperationReceiverFailed, true
-	case sessionruntime.ProtocolOperationReceiverEnded:
-		return clievent.ProtocolOperationReceiverEnded, true
-	case sessionruntime.ProtocolOperationSenderRequestReceived:
-		return clievent.ProtocolOperationSenderRequestReceived, true
-	case sessionruntime.ProtocolOperationSenderResponseSettled:
-		return clievent.ProtocolOperationSenderResponseSettled, true
-	default:
-		return 0, false
-	}
+	projected, ok := protocolOperationStageProjections[value]
+	return projected, ok
 }
 
 func projectProtocolMessageKind(value protocolsession.MessageKind) (clievent.ProtocolMessageKind, bool) {
-	switch value {
-	case protocolsession.MessageListChildren:
-		return clievent.ProtocolMessageListChildren, true
-	case protocolsession.MessageCatalogResult:
-		return clievent.ProtocolMessageCatalogResult, true
-	case protocolsession.MessageOpenRevisions:
-		return clievent.ProtocolMessageOpenRevisions, true
-	case protocolsession.MessageOpenResults:
-		return clievent.ProtocolMessageOpenResults, true
-	case protocolsession.MessageRenewLease:
-		return clievent.ProtocolMessageRenewLease, true
-	case protocolsession.MessageReleaseLease:
-		return clievent.ProtocolMessageReleaseLease, true
-	case protocolsession.MessageRequestBlocks:
-		return clievent.ProtocolMessageRequestBlocks, true
-	case protocolsession.MessageBlockFragment:
-		return clievent.ProtocolMessageBlockFragment, true
-	case protocolsession.MessageCancel:
-		return clievent.ProtocolMessageCancel, true
-	case protocolsession.MessageOperationError:
-		return clievent.ProtocolMessageOperationError, true
-	case protocolsession.MessageSessionTerminal:
-		return clievent.ProtocolMessageSessionTerminal, true
-	case protocolsession.MessageLaneAttach:
-		return clievent.ProtocolMessageLaneAttach, true
-	case protocolsession.MessageScanProgress:
-		return clievent.ProtocolMessageScanProgress, true
-	case protocolsession.MessageOperationComplete:
-		return clievent.ProtocolMessageOperationComplete, true
-	case protocolsession.MessageLeaseResult:
-		return clievent.ProtocolMessageLeaseResult, true
-	case protocolsession.MessagePeerOffer:
-		return clievent.ProtocolMessagePeerOffer, true
-	case protocolsession.MessagePeerAnswer:
-		return clievent.ProtocolMessagePeerAnswer, true
-	case protocolsession.MessagePeerCandidate:
-		return clievent.ProtocolMessagePeerCandidate, true
-	default:
-		return 0, false
-	}
+	projected, ok := protocolMessageKindProjections[value]
+	return projected, ok
 }
 
 func projectProtocolSendOutcome(value protocolsession.SendOutcome) (clievent.ProtocolSendOutcome, bool) {
-	switch value {
-	case protocolsession.SendOutcomeUnknown:
-		return clievent.ProtocolSendUnknown, true
-	case protocolsession.SendOutcomeDelivered:
-		return clievent.ProtocolSendDelivered, true
-	case protocolsession.SendOutcomeDropped:
-		return clievent.ProtocolSendDropped, true
-	default:
-		return 0, false
-	}
+	projected, ok := protocolSendOutcomeProjections[value]
+	return projected, ok
 }
 
 func projectProtocolOperationCause(value sessionruntime.ProtocolOperationCause) (clievent.ProtocolOperationCause, bool) {
-	switch value {
-	case sessionruntime.ProtocolOperationCauseNone:
-		return clievent.ProtocolOperationCauseNone, true
-	case sessionruntime.ProtocolOperationCauseCanceled:
-		return clievent.ProtocolOperationCauseCanceled, true
-	case sessionruntime.ProtocolOperationCauseDeadline:
-		return clievent.ProtocolOperationCauseDeadline, true
-	case sessionruntime.ProtocolOperationCauseRuntimeClosed:
-		return clievent.ProtocolOperationCauseRuntimeClosed, true
-	case sessionruntime.ProtocolOperationCauseLaneUnavailable:
-		return clievent.ProtocolOperationCauseLaneUnavailable, true
-	case sessionruntime.ProtocolOperationCauseWriterStopped:
-		return clievent.ProtocolOperationCauseWriterStopped, true
-	case sessionruntime.ProtocolOperationCauseOperationClosed:
-		return clievent.ProtocolOperationCauseOperationClosed, true
-	case sessionruntime.ProtocolOperationCauseProtocolFailure:
-		return clievent.ProtocolOperationCauseProtocolFailure, true
-	default:
-		return 0, false
-	}
+	projected, ok := protocolOperationCauseProjections[value]
+	return projected, ok
 }
 
 func projectRelayRetirement(value relayv2.LifecycleRetirementSource) (clievent.RelayRetirementSource, bool) {
@@ -270,38 +240,80 @@ func projectWebRTCCause(value wsrtc.LifecycleCause) (clievent.WebRTCLifecycleCau
 	}
 }
 
+var peerStageProjections = map[v2peer.SenderAttemptStage]clievent.PeerAttemptStage{
+	v2peer.SenderAttemptStarted:                    clievent.PeerAttemptStarted,
+	v2peer.SenderAttemptNegotiationDeadlineArmed:   clievent.PeerNegotiationDeadlineArmed,
+	v2peer.SenderAttemptNegotiationDeadlineExpired: clievent.PeerNegotiationDeadlineExpired,
+	v2peer.SenderAttemptOfferReceived:              clievent.PeerOfferReceived,
+	v2peer.SenderAttemptAnswerCreated:              clievent.PeerAnswerCreated,
+	v2peer.SenderAttemptAnswerSent:                 clievent.PeerAnswerSent,
+	v2peer.SenderAttemptDataChannelOpen:            clievent.PeerDataChannelOpen,
+	v2peer.SenderAttemptAdmissionDeadlineArmed:     clievent.PeerAdmissionDeadlineArmed,
+	v2peer.SenderAttemptAdmissionDeadlineExpired:   clievent.PeerAdmissionDeadlineExpired,
+	v2peer.SenderAttemptLaneHelloAuthenticated:     clievent.PeerLaneHelloAuthenticated,
+	v2peer.SenderAttemptAdmissionResponseSettled:   clievent.PeerAdmissionResponseSettled,
+	v2peer.SenderAttemptAdmitted:                   clievent.PeerAttemptAdmitted,
+	v2peer.SenderAttemptFailed:                     clievent.PeerAttemptFailed,
+}
+
+var peerPhaseProjections = map[v2peer.SenderAttemptPhase]clievent.PeerAttemptPhase{
+	v2peer.SenderAttemptPhaseNegotiation: clievent.PeerPhaseNegotiation,
+	v2peer.SenderAttemptPhaseAdmission:   clievent.PeerPhaseAdmission,
+}
+
+var peerAdmissionDispositionProjections = map[v2peer.SenderAdmissionDisposition]clievent.PeerAdmissionDisposition{
+	v2peer.SenderAdmissionAccepted: clievent.PeerAdmissionAccepted,
+	v2peer.SenderAdmissionRejected: clievent.PeerAdmissionRejected,
+}
+
+var peerResponseDeliveryProjections = map[v2peer.SenderResponseDelivery]clievent.PeerResponseDelivery{
+	v2peer.SenderResponseDelivered:      clievent.PeerResponseDelivered,
+	v2peer.SenderResponseDeliveryFailed: clievent.PeerResponseDeliveryFailed,
+}
+
+var peerLaneRejectionProjections = map[protocolsession.LaneRejectCode]clievent.PeerLaneRejectionCode{
+	protocolsession.LaneRejectUnknownSession:   clievent.PeerLaneRejectUnknownSession,
+	protocolsession.LaneRejectStaleEpoch:       clievent.PeerLaneRejectStaleEpoch,
+	protocolsession.LaneRejectGrantConsumed:    clievent.PeerLaneRejectGrantConsumed,
+	protocolsession.LaneRejectGrantExpired:     clievent.PeerLaneRejectGrantExpired,
+	protocolsession.LaneRejectAdmissionLimited: clievent.PeerLaneRejectAdmissionLimited,
+	protocolsession.LaneRejectStopping:         clievent.PeerLaneRejectStopping,
+	protocolsession.LaneRejectGrantMismatch:    clievent.PeerLaneRejectGrantMismatch,
+}
+
+var peerFailureScopeProjections = map[v2peer.AttemptFailureScope]clievent.PeerFailureScope{
+	v2peer.AttemptFailureScopeAttempt: clievent.PeerFailureAttempt,
+	v2peer.AttemptFailureScopeSession: clievent.PeerFailureSession,
+}
+
 func projectPeerStage(value v2peer.SenderAttemptStage) (clievent.PeerAttemptStage, bool) {
-	switch value {
-	case v2peer.SenderAttemptStarted:
-		return clievent.PeerAttemptStarted, true
-	case v2peer.SenderAttemptOfferReceived:
-		return clievent.PeerOfferReceived, true
-	case v2peer.SenderAttemptAnswerCreated:
-		return clievent.PeerAnswerCreated, true
-	case v2peer.SenderAttemptAnswerSent:
-		return clievent.PeerAnswerSent, true
-	case v2peer.SenderAttemptDataChannelOpen:
-		return clievent.PeerDataChannelOpen, true
-	case v2peer.SenderAttemptLaneAdmissionStarted:
-		return clievent.PeerLaneAdmissionStarted, true
-	case v2peer.SenderAttemptAdmitted:
-		return clievent.PeerAttemptAdmitted, true
-	case v2peer.SenderAttemptFailed:
-		return clievent.PeerAttemptFailed, true
-	default:
-		return 0, false
-	}
+	projected, ok := peerStageProjections[value]
+	return projected, ok
+}
+
+func projectPeerPhase(value v2peer.SenderAttemptPhase) (clievent.PeerAttemptPhase, bool) {
+	projected, ok := peerPhaseProjections[value]
+	return projected, ok
+}
+
+func projectPeerAdmissionDisposition(value v2peer.SenderAdmissionDisposition) (clievent.PeerAdmissionDisposition, bool) {
+	projected, ok := peerAdmissionDispositionProjections[value]
+	return projected, ok
+}
+
+func projectPeerResponseDelivery(value v2peer.SenderResponseDelivery) (clievent.PeerResponseDelivery, bool) {
+	projected, ok := peerResponseDeliveryProjections[value]
+	return projected, ok
+}
+
+func projectPeerLaneRejection(value protocolsession.LaneRejectCode) (clievent.PeerLaneRejectionCode, bool) {
+	projected, ok := peerLaneRejectionProjections[value]
+	return projected, ok
 }
 
 func projectPeerFailureScope(value v2peer.AttemptFailureScope) (clievent.PeerFailureScope, bool) {
-	switch value {
-	case v2peer.AttemptFailureScopeAttempt:
-		return clievent.PeerFailureAttempt, true
-	case v2peer.AttemptFailureScopeSession:
-		return clievent.PeerFailureSession, true
-	default:
-		return 0, false
-	}
+	projected, ok := peerFailureScopeProjections[value]
+	return projected, ok
 }
 
 func projectTransferStage(value transfer.TransferLifecycleStage) (clievent.TransferLifecycleStage, bool) {

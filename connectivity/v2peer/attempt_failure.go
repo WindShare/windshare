@@ -13,7 +13,8 @@ func (attempt *peerAttempt) deliverFailure(
 	result error,
 	operationCanceled bool,
 ) error {
-	if result == nil || operationCanceled || attempt.recorder.admitted() || errors.Is(result, context.Canceled) {
+	if result == nil || operationCanceled || attempt.recorder.admitted() ||
+		attempt.authenticatedSettlementBegan() || errors.Is(result, context.Canceled) {
 		return result
 	}
 	code, message := peerFailure(result)
@@ -32,7 +33,7 @@ func peerFailure(err error) (uint16, string) {
 		return rejected.code, rejected.message
 	}
 	switch {
-	case errors.Is(err, errAttemptTimeout):
+	case errors.Is(err, ErrPeerNegotiationTimeout), errors.Is(err, ErrPeerAdmissionTimeout):
 		return protocolsession.PeerOperationCodeTimeout, peerTimeoutFailureMessage
 	case errors.Is(err, errCandidateLimit):
 		return protocolsession.PeerOperationCodeCandidates, peerCandidateLimitMessage

@@ -278,9 +278,10 @@ func (timer *receiverManualTimer) Fire() {
 
 type receiverManualTimerSource struct{ timer *receiverManualTimer }
 
-func (source receiverManualTimerSource) NewReceiverAttemptTimer(
+func (source receiverManualTimerSource) NewPeerPhaseTimer(
+	PeerAttemptPhase,
 	time.Duration,
-) (ReceiverAttemptTimer, error) {
+) (PeerPhaseTimer, error) {
 	return source.timer, nil
 }
 
@@ -300,7 +301,7 @@ func startReceiverPreOperationAttempt(
 	parent context.Context,
 	signaling ReceiverSignaling,
 	peer ReceiverPeerConnection,
-	timers ReceiverAttemptTimerSource,
+	timers PeerPhaseTimerSource,
 ) *ReceiverAttempt {
 	t.Helper()
 	channel := newReceiverTestChannel()
@@ -311,9 +312,10 @@ func startReceiverPreOperationAttempt(
 		DataChannels: DataChannelAdapterFunc(
 			func(*pion.DataChannel) (PeerDataChannel, error) { return channel, nil },
 		),
-		AttemptTimeout: peerTestTimeout,
-		AttemptTimers:  timers,
-		Random:         bytes.NewReader(bytes.Repeat([]byte{0x6b}, v2signal.IdentityBytes*2)),
+		NegotiationBudget: peerTestTimeout,
+		AdmissionBudget:   peerTestTimeout,
+		PhaseTimers:       timers,
+		Random:            bytes.NewReader(bytes.Repeat([]byte{0x6b}, v2signal.IdentityBytes*2)),
 	}
 	factory, err := NewReceiverFactory(config)
 	if err != nil {
@@ -462,11 +464,11 @@ func TestReceiverPreOperationContextEndingsRemainLocal(t *testing.T) {
 	}
 }
 
-func TestReceiverPreOperationAttemptTimeoutUsesTypedLocalDecision(t *testing.T) {
+func TestReceiverPreOperationNegotiationTimeoutUsesTypedLocalDecision(t *testing.T) {
 	timer := newReceiverManualTimer()
 	entered := make(chan struct{})
 	harness := newReceiverHarness(t, func(config *ReceiverFactoryConfig, configured *receiverTestSignaling) {
-		config.AttemptTimers = receiverManualTimerSource{timer: timer}
+		config.PhaseTimers = receiverManualTimerSource{timer: timer}
 		configured.open = func(
 			ctx context.Context,
 			_ ReceiverSignalingOperationBinding,
@@ -485,11 +487,11 @@ func TestReceiverPreOperationAttemptTimeoutUsesTypedLocalDecision(t *testing.T) 
 	assertReceiverPreOperationOutcome(
 		t, outcome,
 		ReceiverTerminalLocal,
-		ReceiverProvenanceLocalAttemptTimeout,
+		ReceiverProvenanceLocalNegotiationTimeout,
 		ReceiverDispositionFallbackAllowed,
 	)
-	if !errors.Is(outcome.RetainedCause(), errAttemptTimeout) ||
-		!outcome.HasRetainedCauseClass(ReceiverCauseAttemptTimeout) ||
+	if !errors.Is(outcome.RetainedCause(), ErrPeerNegotiationTimeout) ||
+		!outcome.HasRetainedCauseClass(ReceiverCauseNegotiationTimeout) ||
 		errors.Is(outcome.RetainedCause(), ErrProtocol) ||
 		outcome.HasRetainedCauseClass(ReceiverCauseProtocol) {
 		t.Fatalf("timeout diagnostics=%v classes=%v", outcome.RetainedCause(), outcome.RetainedCauseClasses())

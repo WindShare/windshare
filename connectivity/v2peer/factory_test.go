@@ -32,13 +32,14 @@ type capturedFailure struct {
 }
 
 type testPeerSession struct {
-	share      catalog.ShareInstance
-	sessionID  protocolsession.ProtocolSessionID
-	controls   chan capturedControl
-	failures   chan capturedFailure
-	admissions chan protocolsession.FrameChannel
-	lane       sessionruntime.LaneIdentity
-	admitErr   error
+	share           catalog.ShareInstance
+	sessionID       protocolsession.ProtocolSessionID
+	controls        chan capturedControl
+	failures        chan capturedFailure
+	admissions      chan protocolsession.FrameChannel
+	ownedAdmissions chan protocolsession.FrameChannel
+	lane            sessionruntime.LaneIdentity
+	admitErr        error
 }
 
 func newTestPeerSession(seed byte) *testPeerSession {
@@ -49,8 +50,60 @@ func newTestPeerSession(seed byte) *testPeerSession {
 	return &testPeerSession{
 		share: share, sessionID: sessionID,
 		controls: make(chan capturedControl, 16), failures: make(chan capturedFailure, 16),
-		admissions: make(chan protocolsession.FrameChannel, 4),
-		lane:       sessionruntime.LaneIdentity{ID: 9, Epoch: 2},
+		admissions:      make(chan protocolsession.FrameChannel, 4),
+		ownedAdmissions: make(chan protocolsession.FrameChannel, 4),
+		lane:            sessionruntime.LaneIdentity{ID: 9, Epoch: 2},
+	}
+}
+
+func TestPeerFactoriesValidateIndependentPhaseBudgets(t *testing.T) {
+	sender, err := NewFactory(Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	receiver, err := NewReceiverFactory(ReceiverFactoryConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sender.negotiationBudget != DefaultPeerNegotiationBudget ||
+		sender.admissionBudget != DefaultPeerAdmissionBudget ||
+		receiver.negotiationBudget != DefaultPeerNegotiationBudget ||
+		receiver.admissionBudget != DefaultPeerAdmissionBudget {
+		t.Fatalf(
+			"default phase budgets sender=%s/%s receiver=%s/%s",
+			sender.negotiationBudget,
+			sender.admissionBudget,
+			receiver.negotiationBudget,
+			receiver.admissionBudget,
+		)
+	}
+	invalid := []struct {
+		name        string
+		negotiation time.Duration
+		admission   time.Duration
+	}{
+		{name: "negative negotiation", negotiation: -time.Second},
+		{name: "negative admission", admission: -time.Second},
+		{
+			name:      "admission consumes grant margin",
+			admission: MaximumPeerAdmissionBudget + time.Nanosecond,
+		},
+	}
+	for _, test := range invalid {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := NewFactory(Config{
+				NegotiationBudget: test.negotiation,
+				AdmissionBudget:   test.admission,
+			}); !errors.Is(err, ErrConfig) {
+				t.Fatalf("sender phase configuration error = %v", err)
+			}
+			if _, err := NewReceiverFactory(ReceiverFactoryConfig{
+				NegotiationBudget: test.negotiation,
+				AdmissionBudget:   test.admission,
+			}); !errors.Is(err, ErrConfig) {
+				t.Fatalf("receiver phase configuration error = %v", err)
+			}
+		})
 	}
 }
 
@@ -89,9 +142,37 @@ func (session *testPeerSession) FailPeerOperation(
 func (session *testPeerSession) AdmitPeerChannel(
 	_ context.Context,
 	channel protocolsession.FrameChannel,
-) (sessionruntime.LaneIdentity, error) {
-	session.admissions <- channel
-	return session.lane, session.admitErr
+	control sessionruntime.SenderPeerAdmissionControl,
+) (sessionruntime.SenderPeerAdmissionResult, error) {
+	observed := channel
+	if owner, ok := channel.(*ownedPeerDataChannel); ok {
+		observed = owner.PeerDataChannel
+	}
+	session.admissions <- observed
+	session.ownedAdmissions <- channel
+	if session.admitErr != nil {
+		_ = channel.Close()
+		return sessionruntime.SenderPeerAdmissionResult{
+			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
+			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		}, session.admitErr
+	}
+	grantOperation := testOperationID(250)
+	if !control.BeginAuthenticatedSettlement(grantOperation, session.lane) {
+		_ = channel.Close()
+		return sessionruntime.SenderPeerAdmissionResult{
+			Disposition:      sessionruntime.SenderPeerAdmissionSilentClose,
+			ResponseDelivery: sessionruntime.SenderPeerResponseNotAttempted,
+			LaneAttachment:   sessionruntime.SenderPeerLaneAttachmentNotAttempted,
+		}, context.Canceled
+	}
+	return sessionruntime.SenderPeerAdmissionResult{
+		SettlementBegan: true, GrantOperationID: grantOperation, Lane: session.lane,
+		Disposition:      sessionruntime.SenderPeerAdmissionAccepted,
+		ResponseDelivery: sessionruntime.SenderPeerResponseDelivered,
+		LaneAttachment:   sessionruntime.SenderPeerLaneAttached,
+	}, nil
 }
 
 type testPeerConnection struct {
@@ -103,6 +184,7 @@ type testPeerConnection struct {
 	added       chan pion.ICECandidateInit
 	closed      chan struct{}
 	closeOnce   sync.Once
+	closeCalls  atomic.Int32
 	answer      pion.SessionDescription
 	local       *pion.SessionDescription
 	localSDP    string
@@ -161,6 +243,7 @@ func (peer *testPeerConnection) AddICECandidate(candidate pion.ICECandidateInit)
 	return nil
 }
 func (peer *testPeerConnection) Close() error {
+	peer.closeCalls.Add(1)
 	peer.closeOnce.Do(func() { close(peer.closed) })
 	return nil
 }
@@ -178,11 +261,12 @@ func (peer *testPeerConnection) emitDataChannel(channel *pion.DataChannel) {
 }
 
 type testPeerChannel struct {
-	receive   chan framechannel.Frame
-	opened    chan struct{}
-	done      chan struct{}
-	closeOnce sync.Once
-	state     atomic.Uint32
+	receive    chan framechannel.Frame
+	opened     chan struct{}
+	done       chan struct{}
+	closeOnce  sync.Once
+	closeCalls atomic.Int32
+	state      atomic.Uint32
 }
 
 func newTestPeerChannel() *testPeerChannel {
@@ -199,6 +283,7 @@ func (channel *testPeerChannel) State() framechannel.ChannelState {
 	return framechannel.ChannelState(channel.state.Load())
 }
 func (channel *testPeerChannel) Close() error {
+	channel.closeCalls.Add(1)
 	channel.closeOnce.Do(func() {
 		channel.state.Store(uint32(framechannel.Closed))
 		close(channel.done)
@@ -282,7 +367,8 @@ func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	if admitted := receiveTest(t, session.admissions); admitted != channel {
 		t.Fatalf("admitted channel = %T, want injected channel", admitted)
 	}
-	if err := channel.Close(); err != nil {
+	admittedOwner := receiveTest(t, session.ownedAdmissions)
+	if err := admittedOwner.Close(); err != nil {
 		t.Fatalf("close peer channel: %v", err)
 	}
 	receiveTest(t, peer.closed)
@@ -321,7 +407,7 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 	now := time.Unix(1_000, 0)
 	factory := mustTestFactory(t, Config{
 		Now: func() time.Time { return now }, RetiredBindingTTL: time.Minute,
-		MaxActiveAttempts: 1, MaxRetiredBindings: 1,
+		MaxRetiredBindings: 1,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return nil, errors.New("stop test attempt")
 		}),
@@ -389,7 +475,6 @@ func TestSenderHandlerRetainsBindingAcrossCompletionAndCancelUntilExpiry(t *test
 func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	peer := newTestPeerConnection()
 	factory := mustTestFactory(t, Config{
-		MaxActiveAttempts: 1,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -494,7 +579,9 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	if failure.operation != operation || failure.code != protocolsession.PeerOperationCodeNegotiation {
 		t.Fatalf("overflow failure = %#v", failure)
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
@@ -506,7 +593,7 @@ func TestSenderHandlerQueueOverflowTombstonesRejectedOfferBinding(t *testing.T) 
 	); !errors.Is(err, v2signal.ErrSignalBinding) {
 		t.Fatalf("overflowed offer binding replay = %v", err)
 	}
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
 		t.Fatalf("overflowed binding restarted evidence: %#v", observations)
 	}
 }
@@ -539,7 +626,9 @@ func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	if len(handler.events) != 0 {
 		t.Fatal("canceled peer offer reached the negotiation queue")
 	}
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 3 })
+	waitForTest(t, func() bool {
+		return senderAttemptReachedTerminal(collector.forAttempt(binding.AttemptID), SenderAttemptFailed)
+	})
 	assertUnstartedSenderTerminal(
 		t,
 		collector.forAttempt(binding.AttemptID),
@@ -549,7 +638,7 @@ func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	if err := handler.HandleMessage(messageContext, message); err != nil {
 		t.Fatalf("canceled offer replay: %v", err)
 	}
-	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 3 {
+	if observations := collector.forAttempt(binding.AttemptID); len(observations) != 2 {
 		t.Fatalf("canceled offer replay restarted evidence: %#v", observations)
 	}
 
@@ -615,7 +704,7 @@ func TestSenderHandlerBoundsTimeoutAndCandidateFlood(t *testing.T) {
 	}{
 		{
 			name:      "timeout",
-			configure: func(config *Config) { config.AttemptTimeout = 20 * time.Millisecond },
+			configure: func(config *Config) { config.NegotiationBudget = 20 * time.Millisecond },
 			stimulate: func(*testing.T, *testPeerConnection, *testPeerSession) {},
 			wantCode:  protocolsession.PeerOperationCodeTimeout,
 		},
@@ -707,6 +796,7 @@ func TestSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 	receiveTest(t, session.controls)
 	peer.emitDataChannel(&pion.DataChannel{})
 	receiveTest(t, session.admissions)
+	admittedOwner := receiveTest(t, session.ownedAdmissions)
 	var attempt *peerAttempt
 	waitForTest(t, func() bool {
 		handler.mu.Lock()
@@ -727,7 +817,7 @@ func TestSenderHandlerCancellationKeepsAnAdmittedLaneUntilPhysicalClose(t *testi
 		t.Fatal("operation cancellation closed an admitted DataChannel")
 	default:
 	}
-	if err := channel.Close(); err != nil {
+	if err := admittedOwner.Close(); err != nil {
 		t.Fatal(err)
 	}
 	receiveTest(t, peer.closed)

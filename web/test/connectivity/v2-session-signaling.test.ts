@@ -9,6 +9,8 @@ import {
 } from '../../src/connectivity/v2-signaling-codec'
 import {
   V2AuthenticatedPeerOperationError,
+  createV2PeerBindingForPath,
+  createV2PeerPathIdentity,
   type V2SessionSignalingTrace,
   V2SessionSignalingRoute,
 } from '../../src/connectivity/v2-session-signaling'
@@ -116,6 +118,19 @@ class SignalingSessionFacade {
 }
 
 describe('v2 authenticated session signaling', () => {
+  it('keeps one path identity while allocating a fresh attempt binding', () => {
+    let seed = 1
+    const randomBytes = (length: number) => new Uint8Array(length).fill(seed++)
+    const peerPathId = createV2PeerPathIdentity(randomBytes)
+    const first = createV2PeerBindingForPath(peerPathId, randomBytes)
+    const second = createV2PeerBindingForPath(peerPathId, randomBytes)
+
+    expect(first.peerPathId).toEqual(peerPathId)
+    expect(second.peerPathId).toEqual(peerPathId)
+    expect(first.attemptId).not.toEqual(second.attemptId)
+    expect(first.peerPathId).not.toBe(peerPathId)
+  })
+
   it('carries an offer through signed answer and candidate delivery on the production path', async () => {
     const senderKeys = await senderControlKeyPair()
     const descriptor = shareDescriptor(senderKeys.publicKey)
@@ -370,6 +385,7 @@ describe('v2 authenticated session signaling', () => {
       (event) => attemptDiagnostics.push(event),
     )
     const incoming = route.messages.getReader()
+    route.phaseDeadlineArmed('negotiation', 15_000)
     route.offerCreated({ localEmitted: 0, remoteAccepted: 0 })
     await route.send({
       kind: SIGNAL_KIND_OFFER,
@@ -402,25 +418,17 @@ describe('v2 authenticated session signaling', () => {
     expect(traces).toContainEqual(expect.objectContaining({
       type: 'route-failed',
       failureScope: 'attempt',
-      reason: peerFailure,
+      failureCode: 'authenticated-peer-operation',
+      peerOperationCode: 0x5001,
     }))
+    expect(JSON.stringify(traces)).not.toContain('peer rejected')
     expect(attemptDiagnostics.map((event) => event.stage)).toEqual([
       'started',
+      'negotiation-deadline-armed',
       'offer-created',
       'offer-sent',
-      'failed',
     ])
-    expect(attemptDiagnostics.at(-1)).toMatchObject({
-      failedAtStage: 'answer-received',
-      failureScope: 'attempt',
-      typedErrorCode: 'peer-negotiation',
-      failureMessage: 'peer rejected',
-      authenticatedSenderOperationFailure: {
-        scope: 'peer',
-        code: 0x5001,
-        message: 'peer rejected',
-      },
-    })
+    expect(JSON.stringify(attemptDiagnostics)).not.toContain('peer rejected')
 
     const healthyId = identity(53)
     const healthy = router.create(
@@ -484,6 +492,7 @@ describe('v2 authenticated signaling contract failures', () => {
     expect(traces).toContainEqual(expect.objectContaining({
       type: 'route-failed',
       failureScope: 'session',
+      failureCode: 'session-contract',
     }))
     incoming.releaseLock()
   })

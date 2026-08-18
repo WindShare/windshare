@@ -100,13 +100,22 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
       throw new Error('TURN admission wait returned a non-admitted diagnostic')
     }
     expect(admitted.evidence).toMatchObject({
+      schemaVersion: 2,
+      stream: 'attempt',
       sessionId: expect.any(String),
       peerPathId: expect.any(String),
       attemptId: expect.any(String),
-      selectedPair: {
-        local: { candidateType: 'relay', protocol: 'udp' },
+      side: 'browser',
+      stage: 'admitted',
+      phase: 'admission',
+      offerOperationId: expect.any(String),
+      grantOperationId: expect.any(String),
+      lane: {
+        laneId: expect.any(Number),
+        laneEpoch: expect.any(Number),
       },
     })
+    expect(admitted.evidence.grantOperationId).not.toBe(admitted.evidence.offerOperationId)
     expect(lane.observation).toMatchObject({
       laneId: admitted.evidence.lane.laneId,
       laneEpoch: admitted.evidence.lane.laneEpoch,

@@ -24,7 +24,7 @@ func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 			wantCode: TypedPeerErrorNegotiation, wantScope: AttemptFailureScopeAttempt,
 		},
 		{
-			name: "timeout", result: errAttemptTimeout, primary: errAttemptTimeout,
+			name: "negotiation timeout", result: ErrPeerNegotiationTimeout, primary: ErrPeerNegotiationTimeout,
 			wantCode: TypedPeerErrorTimeout, wantScope: AttemptFailureScopeAttempt,
 		},
 		{
@@ -70,19 +70,19 @@ func TestSenderAttemptStreamSaturationCannotBlockSettlement(t *testing.T) {
 		PeerDiagnosticObservationCapacity: 2,
 	})
 	recorder := newSenderAttemptRecorder(factory, newTestPeerSession(201).sessionID, testBinding(202))
-	recorder.complete(SenderAttemptStarted, SenderCandidateCounts{}, nil, nil)
-	recorder.complete(SenderAttemptOfferReceived, SenderCandidateCounts{}, nil, nil)
+	recorder.begin()
+	recorder.negotiationDeadlineArmed()
 	recorder.complete(SenderAttemptAnswerCreated, SenderCandidateCounts{}, nil, nil)
 	recorder.fail(SenderAttemptFailure{
 		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorNegotiation,
 	})
 
 	completion := factory.CompleteObservations()
-	if completion.Attempts.Enqueued != 1 || completion.Attempts.Loss.CapacityDropped != 3 {
+	if completion.Attempts.Enqueued != 1 || completion.Attempts.Loss.CapacityDropped != 4 {
 		t.Fatalf("attempt completion = %#v", completion.Attempts)
 	}
 	diagnostic := <-factory.PeerDiagnostics()
-	if diagnostic.Reason != PeerDiagnosticStreamCapacity || diagnostic.Count != 3 {
+	if diagnostic.Reason != PeerDiagnosticStreamCapacity || diagnostic.Count != 4 {
 		t.Fatalf("stream capacity diagnostic = %#v", diagnostic)
 	}
 }

@@ -74,9 +74,12 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 	}, wsrtc.LifecycleCause("unknown"), projectWebRTCCause)
 
 	assertClosedProjection(t, "peer stage", []v2peer.SenderAttemptStage{
-		v2peer.SenderAttemptStarted, v2peer.SenderAttemptOfferReceived,
+		v2peer.SenderAttemptStarted, v2peer.SenderAttemptNegotiationDeadlineArmed,
+		v2peer.SenderAttemptNegotiationDeadlineExpired, v2peer.SenderAttemptOfferReceived,
 		v2peer.SenderAttemptAnswerCreated, v2peer.SenderAttemptAnswerSent,
-		v2peer.SenderAttemptDataChannelOpen, v2peer.SenderAttemptLaneAdmissionStarted,
+		v2peer.SenderAttemptDataChannelOpen, v2peer.SenderAttemptAdmissionDeadlineArmed,
+		v2peer.SenderAttemptAdmissionDeadlineExpired, v2peer.SenderAttemptLaneHelloAuthenticated,
+		v2peer.SenderAttemptAdmissionResponseSettled,
 		v2peer.SenderAttemptAdmitted, v2peer.SenderAttemptFailed,
 	}, v2peer.SenderAttemptStage("unknown"), projectPeerStage)
 	assertClosedProjection(t, "peer failure scope", []v2peer.AttemptFailureScope{
@@ -212,24 +215,27 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 	peerPath := v2signal.PeerPathID{0x31, 0x32}
 	attemptID := v2signal.AttemptID{0x41, 0x42}
 	lane := sessionruntime.LaneIdentity{ID: 7, Epoch: 2}
+	offerOperation := sourceProtocolOperationID(t, 0x51)
+	grantOperation := sourceProtocolOperationID(t, 0x52)
 	peer, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
+		OfferOperationID: offerOperation, GrantOperationID: grantOperation,
 		SideSequence: 4, AttemptElapsedMillis: 120, Stage: v2peer.SenderAttemptAdmitted,
-		CandidateCounts: &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
-		Lane:            &lane,
-		SelectedPair: &v2peer.PionSelectedPairEvidence{
-			Local:  v2peer.PionCandidateEvidence{Address: "198.51.100.7", Protocol: "udp"},
-			Remote: v2peer.PionCandidateEvidence{Address: "203.0.113.9", Protocol: "udp"},
-		},
+		Phase:                v2peer.SenderAttemptPhaseAdmission,
+		CandidateCounts:      &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
+		Lane:                 &lane,
+		AdmissionDisposition: v2peer.SenderAdmissionAccepted,
+		ResponseDelivery:     v2peer.SenderResponseDelivered,
 	})
 	if err != nil || peer.PeerPathID().Hex() != fmt.Sprintf("%x", peerPath) ||
 		peer.PeerAttemptID().Hex() != fmt.Sprintf("%x", attemptID) {
 		t.Fatalf("peer projection = %#v, err %v", peer, err)
 	}
-	assertProjectionOmits(t, peer, "198.51.100.7", "203.0.113.9")
 	admissionStarted, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
-		SideSequence: 3, AttemptElapsedMillis: 119, Stage: v2peer.SenderAttemptLaneAdmissionStarted,
+		OfferOperationID: offerOperation, GrantOperationID: grantOperation,
+		SideSequence: 3, AttemptElapsedMillis: 119, Stage: v2peer.SenderAttemptLaneHelloAuthenticated,
+		Phase:           v2peer.SenderAttemptPhaseAdmission,
 		CandidateCounts: &v2peer.SenderCandidateCounts{LocalEmitted: 2, RemoteAccepted: 1},
 		Lane:            &lane,
 	})
@@ -240,12 +246,34 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 	if !ok || projectedLane.ID() != lane.ID || projectedLane.Epoch() != lane.Epoch {
 		t.Fatalf("admission-started lane = %#v, present %t", projectedLane, ok)
 	}
+	settled, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
+		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
+		OfferOperationID: offerOperation, GrantOperationID: grantOperation,
+		SideSequence: 4, AttemptElapsedMillis: 120,
+		Stage: v2peer.SenderAttemptAdmissionResponseSettled,
+		Phase: v2peer.SenderAttemptPhaseAdmission, Lane: &lane,
+		AdmissionDisposition: v2peer.SenderAdmissionRejected,
+		ResponseDelivery:     v2peer.SenderResponseDelivered,
+		Rejection: &v2peer.SenderLaneRejection{
+			Code: protocolsession.LaneRejectAdmissionLimited, RetryAfterMillis: 7_000,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	disposition, delivery, ok := settled.Admission()
+	rejection, retryAfter, rejectionOK := settled.Rejection()
+	if !ok || disposition != clievent.PeerAdmissionRejected || delivery != clievent.PeerResponseDelivered ||
+		!rejectionOK || rejection != clievent.PeerLaneRejectAdmissionLimited || retryAfter != 7_000 {
+		t.Fatalf("settled admission projection = %#v", settled)
+	}
 
 	failedPeer, err := ProjectSenderAttempt(clievent.CommandShare, v2peer.SenderAttemptObservation{
 		SessionID: sessionID, PeerPathID: peerPath, AttemptID: attemptID,
 		SideSequence: 5, Stage: v2peer.SenderAttemptFailed,
 		Failure: &v2peer.SenderAttemptFailure{
-			Scope: v2peer.AttemptFailureScopeSession, TypedPeerErrorCode: v2peer.TypedPeerErrorAdmission,
+			FailedAtStage: v2peer.SenderAttemptLaneHelloAuthenticated,
+			Scope:         v2peer.AttemptFailureScopeSession, TypedPeerErrorCode: v2peer.TypedPeerErrorAdmission,
 			Message:   "provider-message-SECRET",
 			Operation: &v2peer.PeerOperationFailure{Code: 99, Message: "operation-message-SECRET"},
 		},
@@ -508,6 +536,15 @@ func sourceReceiveOperationID(t *testing.T, marker byte) receivecontract.Operati
 func sourceProtocolSessionID(t *testing.T, marker byte) protocolsession.ProtocolSessionID {
 	t.Helper()
 	value, err := protocolsession.ProtocolSessionIDFromBytes(bytes.Repeat([]byte{marker}, protocolsession.IdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
+}
+
+func sourceProtocolOperationID(t *testing.T, marker byte) protocolsession.OperationID {
+	t.Helper()
+	value, err := protocolsession.OperationIDFromBytes(bytes.Repeat([]byte{marker}, protocolsession.IdentityBytes))
 	if err != nil {
 		t.Fatal(err)
 	}
