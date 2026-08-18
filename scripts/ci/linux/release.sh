@@ -181,12 +181,12 @@ fi
   # govulncheck's stable source-scan package-pattern contract.
   "$govulncheck_executable" ./...
 
-  echo "-- install windshare CLI from the extracted release revision"
+  echo "-- install wind CLI from the extracted release revision"
   install_root="$temporary_root/installed-cli"
   install -d -m 0700 -- "$install_root"
-  GOBIN="$install_root" go install ./cmd/windshare
-  test -x "$install_root/windshare"
-  "$install_root/windshare" --help >/dev/null
+  GOBIN="$install_root" go install ./cmd/wind
+  test -x "$install_root/wind"
+  "$install_root/wind" --help >/dev/null
 )
 
 if [ "$native_profile" = "linux-ext4" ]; then
