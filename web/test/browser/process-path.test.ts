@@ -10,7 +10,7 @@ describe('direct product-stack executable paths', () => {
 
     expect(directBinaryPaths(directory, 'win32')).toEqual({
       directory,
-      windshare: join(directory, 'windshare.exe'),
+      wind: join(directory, 'wind.exe'),
       relay: join(directory, 'wsrelay.exe'),
     })
   })
@@ -20,9 +20,9 @@ describe('direct product-stack executable paths', () => {
     const second = directBinaryPaths(resolve('test-results', 'invocation-b'), 'linux')
 
     expect(first.directory).not.toBe(second.directory)
-    expect(first.windshare).not.toBe(second.windshare)
+    expect(first.wind).not.toBe(second.wind)
     expect(first.relay).not.toBe(second.relay)
-    expect(first.windshare).toBe(join(first.directory, 'windshare'))
+    expect(first.wind).toBe(join(first.directory, 'wind'))
     expect(first.relay).toBe(join(first.directory, 'wsrelay'))
   })
 

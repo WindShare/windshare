@@ -23,7 +23,7 @@ const (
 
 type e2eBinaries struct {
 	relay        string
-	windshare    string
+	wind         string
 	processOwner string
 }
 
@@ -140,7 +140,7 @@ func buildE2EBinaries(outDir string, profile e2eBuildProfile) (e2eBinaries, erro
 		}
 	}
 	return e2eBinaries{
-		relay: plan[0].output, windshare: plan[1].output, processOwner: plan[2].output,
+		relay: plan[0].output, wind: plan[1].output, processOwner: plan[2].output,
 	}, nil
 }
 
@@ -163,7 +163,7 @@ func e2eBuildPlan(outDir string, profile e2eBuildProfile) ([]e2eBuildTarget, err
 	}
 	targets := []e2eBuildTarget{
 		{output: filepath.Join(outDir, exeName("wsrelay")), packageID: "./relay/cmd/wsrelay"},
-		{output: filepath.Join(outDir, exeName("windshare")), packageID: "./cmd/windshare"},
+		{output: filepath.Join(outDir, exeName("wind")), packageID: "./cmd/wind"},
 		{output: filepath.Join(outDir, exeName("testprocessowner")), packageID: "./cmd/testprocessowner"},
 	}
 	for index := range targets {
@@ -200,7 +200,7 @@ func TestE2EBuildPlanAppliesProfileToEveryChild(t *testing.T) {
 			}
 			if len(plan) != 3 ||
 				plan[0].packageID != "./relay/cmd/wsrelay" ||
-				plan[1].packageID != "./cmd/windshare" ||
+				plan[1].packageID != "./cmd/wind" ||
 				plan[2].packageID != "./cmd/testprocessowner" {
 				t.Fatalf("build plan = %+v", plan)
 			}
@@ -225,7 +225,7 @@ func TestLongE2EChildBuildProfileMatchesParentInstrumentation(t *testing.T) {
 	wantRace := currentE2EBuildProfile == e2eBuildProfileRace
 	for component, filename := range map[string]string{
 		"wsrelay":          binaries.relay,
-		"windshare":        binaries.windshare,
+		"wind":             binaries.wind,
 		"testprocessowner": binaries.processOwner,
 	} {
 		t.Run(component, func(t *testing.T) {
@@ -279,7 +279,7 @@ func TestE2EBinaryFixtureBuildsLazilyOnceAndCleansUp(t *testing.T) {
 			if directory != "fixture-bin" || profile != e2eBuildProfileRace {
 				t.Fatalf("build input = %q, %q", directory, profile)
 			}
-			return e2eBinaries{relay: "relay", windshare: "windshare", processOwner: "owner"}, nil
+			return e2eBinaries{relay: "relay", wind: "wind", processOwner: "owner"}, nil
 		},
 		removeDirectory: func(directory string) error {
 			removeCalls++

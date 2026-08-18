@@ -50,7 +50,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 		t.Fatal(err)
 	}
 	share := startTracedV2Process(
-		t, scenario, v2WindShareShareComponent, binaries.windshare,
+		t, scenario, v2ShareCommandComponent, binaries.wind,
 		"share", source, "--relay", relayURL,
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
@@ -59,7 +59,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 	share.forbidUserTrace(append(capabilitySecrets, source, filepath.Base(source))...)
 	output := testoutputroot.New(t).RootPath
 	receiver := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		t, scenario, v2GetCommandComponent, binaries.wind,
 		"get", shareLink, "-o", output, "--connectivity", "relay-only",
 	)
 	receiver.forbidStderr(capabilitySecrets...)
@@ -84,7 +84,7 @@ func TestUserTraceCriticalSenderRelayReceiver(t *testing.T) {
 
 	p2pOutput := testoutputroot.New(t).RootPath
 	p2pReceiver := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		t, scenario, v2GetCommandComponent, binaries.wind,
 		"get", shareLink, "-o", p2pOutput, "--connectivity", "p2p-only",
 	)
 	p2pReceiver.forbidStderr(capabilitySecrets...)
@@ -122,7 +122,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 		t.Fatal(err)
 	}
 	share := startV2Process(
-		t, scenario, v2WindShareShareComponent, binaries.windshare,
+		t, scenario, v2ShareCommandComponent, binaries.wind,
 		"share", source, "--relay", proxy.BaseURL(),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
@@ -146,7 +146,7 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 
 	output := testoutputroot.New(t).RootPath
 	receiver := startTracedV2Process(
-		t, scenario, v2WindShareGetComponent, binaries.windshare,
+		t, scenario, v2GetCommandComponent, binaries.wind,
 		"get", shareLink, "-o", output, "--connectivity", "relay-only",
 	)
 	receiver.forbidStderr(capabilitySecrets...)
@@ -174,7 +174,7 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 		t.Fatal(err)
 	}
 	share := startTracedV2Process(
-		t, scenario, v2WindShareShareComponent, binaries.windshare,
+		t, scenario, v2ShareCommandComponent, binaries.wind,
 		"share", source, "--relay", proxy.BaseURL(),
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
@@ -210,7 +210,7 @@ func TestLongV2ProcessExplicitStopPublishesDurableRelayTombstone(t *testing.T) {
 	for attempt := 1; attempt <= 2; attempt++ {
 		output := testoutputroot.New(t).RootPath
 		receiver := startTracedV2Process(
-			t, scenario, v2WindShareGetComponent, binaries.windshare,
+			t, scenario, v2GetCommandComponent, binaries.wind,
 			"get", shareLink, "-o", output, "--connectivity", "relay-only",
 		)
 		receiver.forbidStderr(capabilitySecrets...)

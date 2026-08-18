@@ -56,7 +56,7 @@ trace。
 
 ### Sender trace 与源目录
 
-- `cmd/windshare/sender.ndjson` 共 435 行，均可解析为 JSON。
+- `cmd/wind/sender.ndjson` 共 435 行，均可解析为 JSON。
 - 430 条为 `debug`、5 条为 `info`；`operation_error` 是经过认证的协议业务终态，日志级别不能证明
   “没有错误”。
 - 旧事件 428 没有 scope、code、retryable 或 retry-after，因此无法区分 `invalid-lease`、

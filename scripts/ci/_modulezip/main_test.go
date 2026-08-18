@@ -195,7 +195,7 @@ func TestModuleZipInputUsesCanonicalNestedModuleOmissions(t *testing.T) {
 			t.Fatalf("nested module file entered root archive: %s", omitted)
 		}
 	}
-	if !contains(accepted, "core/link/link.go") || !contains(accepted, "cmd/windshare/main.go") {
+	if !contains(accepted, "core/link/link.go") || !contains(accepted, "cmd/wind/main.go") {
 		t.Fatalf("root production files missing from accepted projection: %v", accepted)
 	}
 
@@ -295,7 +295,7 @@ func writeModuleFixture(t *testing.T, root string) {
 		"README.md":                         "fixture readme\n",
 		"go.mod":                            "module " + modulePath + "\n\ngo 1.25.0\n",
 		"go.sum":                            "example.com/dependency v1.0.0 h1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n",
-		"cmd/windshare/main.go":             "package main\nfunc main() {}\n",
+		"cmd/wind/main.go":                  "package main\nfunc main() {}\n",
 		"core/link/link.go":                 "package link\n",
 		"core/testvectors/README.md":        "vectors\n",
 		"core/testvectors/inventory.txt":    "canonical.json\n",

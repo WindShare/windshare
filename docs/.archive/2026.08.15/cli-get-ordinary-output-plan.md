@@ -9,8 +9,8 @@
 用户可以直接运行：
 
 ```text
-windshare get <capability-link>
-windshare get -o <directory> <capability-link>
+wind get <capability-link>
+wind get -o <directory> <capability-link>
 ```
 
 不带 `-o` 使用当前目录；`-o` 指定保存容器，不把多个根项目摊平到容器中。目标目录可以是普通的 Downloads 目录，也可以是已经存在的目录；不要求提权、预建私有目录或修改 ACL。
@@ -203,7 +203,7 @@ If interrupted, completed files stay; the next get uses a new name and downloads
 
 只有全部选中文件为 `downloaded`/`resumed`（允许结果根或单文件目标为 `renamed`），且没有 collision、failed 或 `item-blocked` 时返回成功。mtime 等显示属性 warning 不改变成功；空目录按目录结果独立成功。warning 保持退出码 0；未完成、collision、item-blocked、operation-needs-attention 或整体暂停返回非 0。文件/目录故障只隔离该项或子树；sender 退出、session terminal 或整体连接不可用使本次命令 paused/failed，operation 仍为 active，不伪装成多个 file-local fault。
 
-`windshare resume list -o <directory>` 按 operation 分列 `incomplete`、`resumable`、`cleanup-pending` 和 `operation-needs-attention`，并在 operation 下列出 `item-blocked` 项；不维护 terminal provenance。`incomplete` 表示没有可用 partial、但仍可按原 intent 重试；只有 `resumable` 含 active partial。`resume discard` 只能删除 record 明确绑定且 identity 仍匹配的 unfinished partial，永不删除 final 或陌生对象。
+`wind resume list -o <directory>` 按 operation 分列 `incomplete`、`resumable`、`cleanup-pending` 和 `operation-needs-attention`，并在 operation 下列出 `item-blocked` 项；不维护 terminal provenance。`incomplete` 表示没有可用 partial、但仍可按原 intent 重试；只有 `resumable` 含 active partial。`resume discard` 只能删除 record 明确绑定且 identity 仍匹配的 unfinished partial，永不删除 final 或陌生对象。
 
 ## 6. 核心重构边界
 
