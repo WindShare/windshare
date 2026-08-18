@@ -36,7 +36,7 @@ var requiredFiles = []string{
 	"go.sum",
 	"LICENSE",
 	"NOTICE",
-	"cmd/windshare/main.go",
+	"cmd/wind/main.go",
 	"core/testvectors/README.md",
 	"core/testvectors/inventory.txt",
 }
