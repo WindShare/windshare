@@ -292,7 +292,7 @@ export interface V2PlanExecutionAuthority {
     evidence: ExactPreparationEvidence,
     signal: AbortSignal,
   ): Promise<PreparationExecutionResult<PortableExecution>>
-  abortUnopened(
+  settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     reason: unknown,
     signal: AbortSignal,

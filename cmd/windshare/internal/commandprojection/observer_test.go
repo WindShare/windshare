@@ -122,6 +122,12 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationCauseOperationClosed,
 		sessionruntime.ProtocolOperationCauseProtocolFailure,
 	}, sessionruntime.ProtocolOperationCause(255), projectProtocolOperationCause)
+	assertClosedProjection(t, "protocol operation error scope", []sessionruntime.ProtocolOperationErrorScope{
+		sessionruntime.ProtocolOperationErrorDirectory,
+		sessionruntime.ProtocolOperationErrorRevision,
+		sessionruntime.ProtocolOperationErrorBlock,
+		sessionruntime.ProtocolOperationErrorPeer,
+	}, sessionruntime.ProtocolOperationErrorScope(255), projectProtocolOperationErrorScope)
 
 	assertClosedProjection(t, "transfer stage", []transfer.TransferLifecycleStage{
 		transfer.TransferDiscoveryStarted, transfer.TransferGenerationCommitted,
@@ -317,6 +323,22 @@ func TestProtocolOperationProjectionPreservesCorrelationAndClosedDiagnostics(t *
 		event.RequestKind() != clievent.ProtocolMessageReleaseLease ||
 		event.Cause() != clievent.ProtocolOperationCauseDeadline {
 		t.Fatalf("protocol operation projection = %#v", event)
+	}
+	operationError, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
+		Stage:             sessionruntime.ProtocolOperationSenderResponseSettled,
+		Role:              protocolsession.RoleSender,
+		ProtocolSessionID: sessionID, OperationID: operationID,
+		RequestKind:  protocolsession.MessageRequestBlocks,
+		ResponseKind: protocolsession.MessageOperationError, HasResponse: true,
+		OperationErrorScope: sessionruntime.ProtocolOperationErrorRevision,
+		OperationErrorCode:  0x3008, HasOperationError: true,
+		Cause: sessionruntime.ProtocolOperationCauseNone,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scope, code, retryable, ok := operationError.OperationError(); !ok || scope != clievent.ProtocolOperationErrorRevision || code != 0x3008 || retryable {
+		t.Fatalf("projected operation error = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
 	}
 	if _, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
 		Stage:             sessionruntime.ProtocolOperationReceiverFailed,

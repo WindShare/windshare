@@ -227,6 +227,12 @@ export class WorkspaceOperationStages {
     return this.#continuation.resumeReceive(...args)
   }
 
+  restoreReceiveContinuation(
+    ...args: Parameters<WorkspaceContinuationStages['restoreReceiveContinuation']>
+  ): ReturnType<WorkspaceContinuationStages['restoreReceiveContinuation']> {
+    return this.#continuation.restoreReceiveContinuation(...args)
+  }
+
   resumePackage(
     ...args: Parameters<WorkspaceContinuationStages['resumePackage']>
   ): ReturnType<WorkspaceContinuationStages['resumePackage']> {

@@ -144,7 +144,11 @@ export class V2RevisionService {
     )
     const message = await operation.next(signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
-      throw await remoteOperationErrorFor(this.#session, message.body, 'revision')
+      throw await remoteOperationErrorFor(
+        this.#session,
+        message.body,
+        V2_MESSAGE_KIND.openRevisions,
+      )
     }
     if (message.kind !== V2_MESSAGE_KIND.openResults) {
       throw new Error('Revision open received an unexpected response')
@@ -231,7 +235,11 @@ export class V2RevisionService {
       )
       const message = await operation.next(deadline.signal)
       if (message.kind === V2_MESSAGE_KIND.operationError) {
-        throw await remoteOperationErrorFor(this.#session, message.body, 'revision')
+        throw await remoteOperationErrorFor(
+          this.#session,
+          message.body,
+          V2_MESSAGE_KIND.releaseLease,
+        )
       }
       if (
         message.kind !== V2_MESSAGE_KIND.operationComplete ||
@@ -333,7 +341,11 @@ export class V2RevisionService {
     )
     const message = await operation.next(signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
-      throw await remoteOperationErrorFor(this.#session, message.body, 'revision')
+      throw await remoteOperationErrorFor(
+        this.#session,
+        message.body,
+        V2_MESSAGE_KIND.renewLease,
+      )
     }
     if (message.kind !== V2_MESSAGE_KIND.leaseResult) {
       throw new Error('Lease renewal received an unexpected response')
@@ -427,7 +439,11 @@ export class V2SessionBlockLane implements V2BlockLane {
           continue
         }
         if (message.kind === V2_MESSAGE_KIND.operationError) {
-          throw await remoteOperationErrorFor(this.#session, message.body, 'block')
+          throw await remoteOperationErrorFor(
+            this.#session,
+            message.body,
+            V2_MESSAGE_KIND.requestBlocks,
+          )
         }
         return await openV2BlockRecord(
           requireCompletedBlockObject(message, object),
