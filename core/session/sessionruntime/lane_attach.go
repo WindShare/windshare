@@ -254,7 +254,7 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 // calling provider cleanup more than once.
 type candidateChannelOwner struct {
 	protocolsession.FrameChannel
-	receive   <-chan framechannel.Frame
+	receive   func() <-chan framechannel.Frame
 	closeOnce sync.Once
 	closeErr  error
 }
@@ -263,7 +263,13 @@ func newCandidateChannelOwner(channel protocolsession.FrameChannel) *candidateCh
 	if owner, ok := channel.(*candidateChannelOwner); ok {
 		return owner
 	}
-	return &candidateChannelOwner{FrameChannel: channel, receive: channel.Recv()}
+	// Transport receive subscription must follow lifecycle admission so runtime
+	// cancellation owns every externally visible handshake side effect. OnceValue
+	// retains the channel's single receive stream without subscribing eagerly.
+	return &candidateChannelOwner{
+		FrameChannel: channel,
+		receive:      sync.OnceValue(channel.Recv),
+	}
 }
 
 func newCandidateChannelOwnerWithReceive(
@@ -273,10 +279,13 @@ func newCandidateChannelOwnerWithReceive(
 	if owner, ok := channel.(*candidateChannelOwner); ok {
 		return owner
 	}
-	return &candidateChannelOwner{FrameChannel: channel, receive: receive}
+	return &candidateChannelOwner{
+		FrameChannel: channel,
+		receive:      func() <-chan framechannel.Frame { return receive },
+	}
 }
 
-func (owner *candidateChannelOwner) Recv() <-chan framechannel.Frame { return owner.receive }
+func (owner *candidateChannelOwner) Recv() <-chan framechannel.Frame { return owner.receive() }
 
 func (owner *candidateChannelOwner) Close() error {
 	owner.closeOnce.Do(func() { owner.closeErr = owner.FrameChannel.Close() })
