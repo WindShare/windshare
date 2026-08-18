@@ -50,6 +50,7 @@ not validation gates.
 `make ci` runs `short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc` serially.
 Runtime and protocol failures run first because they carry the highest product risk. Use `make check` or a
 focused target while iterating; run `make ci` before handoff. The local p95 goal is at most 10 minutes.
+Named Go suites discover their selected top-level tests before execution and fail when a selector matches none.
 
 Browser component ownership is filename-driven by `web/playwright.contract.config.ts`. The platform
 browser gate runs the Chromium smoke before short component contracts; the weekly supplement owns the
