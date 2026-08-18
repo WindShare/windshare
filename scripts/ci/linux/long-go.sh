@@ -6,15 +6,15 @@ SECONDS=0
 echo "== long-go =="
 
 echo "-- named E2E long suites"
-go test -count=1 -run '^TestLong' ./e2e
+go run ./scripts/ci/_gotestsuite -run '^TestLong' ./e2e
 
 echo "-- integration packages"
 go test -count=1 ./integration/relayv2 ./integration/v2peer
 
 echo "-- catalog long suites"
-go test -count=1 -run '^TestLong' ./core/catalog
+go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/catalog
 
 echo "-- output runtime long suites"
-go test -count=1 -run '^TestLong' ./core/osfs/internal/outputruntime
+go run ./scripts/ci/_gotestsuite -run '^TestLong' ./core/osfs/internal/outputruntime
 
 echo "== long-go: PASS in ${SECONDS}s =="
