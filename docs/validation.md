@@ -31,13 +31,14 @@ not validation gates.
 | Entry point | Direct responsibility |
 |---|---|
 | `make ci` | Run the ordinary source gates in their fixed order. |
+| `make ci-parallel` | Run the same ordinary gates once across three bounded local lanes. |
 | `make ci-full` | Run ordinary CI plus all current-host equivalents of weekly suites. |
 | `make check` | Run fast Go and Web feedback. |
 | `make hygiene` | Verify formatting, diff hygiene, the single-module layout, retired paths, and production dependency boundaries. |
 | `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
 | `make lint`, `make vet` | Analyze the complete production module. |
 | `make gopls` | Check tracked Go files with the local language server. |
-| `make short-go` | Test the disjoint core and non-core sets once each with short, race, and atomic coverage instrumentation, then enforce coverage. |
+| `make short-go` | Validate the disjoint core and non-core sets with short, race, atomic coverage, and Go's local test cache, then enforce coverage. |
 | `make race`, `make coverage` | Run diagnostic-only short sweeps; `make ci` uses the combined `short-go` gate. |
 | `make vectors` | Verify the canonical Go-to-TypeScript protocol vectors without modifying the worktree. |
 | `make vectors-update` | Explicitly regenerate the canonical protocol vectors for review. |
@@ -48,8 +49,12 @@ not validation gates.
 | `make long-go` | Run named E2E/catalog/output-runtime long suites and native integration packages. |
 
 `make ci` runs `short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc` serially.
-Runtime and protocol failures run first because they carry the highest product risk. Use `make check` or a
-focused target while iterating; run `make ci` before handoff. The local p95 goal is at most 10 minutes.
+`make ci-parallel` owns that exact gate set through concurrent runtime (`short-go`, `vectors`, `e2e`), Web
+(`web`, `browser`), and static-analysis lanes; each lane preserves its listed order. Runtime and protocol
+failures run first in the serial entry point because they carry the highest product risk. Use `make check` or
+a focused target while iterating; run `make ci` before handoff. Local `short-go` reuses Go test results when
+their code and observed inputs are unchanged; hosted CI and release validation still force fresh execution.
+The serial local p95 goal is at most 10 minutes.
 Named Go suites discover their selected top-level tests before execution and fail when a selector matches none.
 
 Browser component ownership is filename-driven by `web/playwright.contract.config.ts`. The platform
