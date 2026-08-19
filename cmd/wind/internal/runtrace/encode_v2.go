@@ -380,6 +380,13 @@ func (visitor *encodeVisitorV2) VisitTransferLifecycleObserved(event clievent.Tr
 	visitor.record.Stage = new(stage)
 	visitor.record.FileSelection = new(selection)
 	visitor.record.FileSettlement = new(fileSettlement)
+	if reason, ok := event.ItemBlock(); ok {
+		reasonName, err := nameOf(reason)
+		if err != nil {
+			return err
+		}
+		visitor.record.ItemBlockReason = new(reasonName)
+	}
 	visitor.record.TreeSettlement = new(treeSettlement)
 	if err := visitor.setProgress(event.Progress()); err != nil {
 		return err

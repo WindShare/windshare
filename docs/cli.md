@@ -51,7 +51,7 @@ WindShare never overwrites an existing object, follows a link, or merges unrelat
 
 While authenticated discovery is open, progress reports discovered files and ready bytes without a percentage or ETA. A percentage requires complete discovery and exact counters. Rate uses newly verified unique bytes; ETA additionally requires a stable nonzero rate, remaining work, and no known non-success file outcome. Verified content waiting for publication is shown as finalizing.
 
-The final result is `success`, `partial`, `paused`, or `failed`; source drift is reported separately and exits with code 4. Output lists downloaded, resumed, paused, collision, item-blocked, and failed outcomes separately. Only success uses `Download completed`, and the destination is the authority-selected published path.
+The final result is `success`, `partial`, `paused`, or `failed`. Authenticated sender evidence change on reopen or during a read invalidates that revision and exits with code 4; a stored checkpoint for another revision is instead item-local `revision-conflict`, preserves prior output, and lets independent siblings continue. Output lists downloaded, resumed, paused, collision, item-blocked, and failed outcomes separately. A collision-only partial says existing destinations prevented completion and is never reported as `unexpected`. Only success uses `Download completed`, and the destination is the authority-selected published path.
 
 ## Output and diagnostics
 
@@ -67,7 +67,7 @@ Trace records use full semantic run/session/operation identifiers and normalized
 
 ## Resume state
 
-A destination is `resumable` only when it proves safe no-replace publication, operation recovery, verified-range recovery, and crash cleanup. Repeating the same compatible `get` continues the matching active operation; for repeat-run tracing, use a run directory so every attempt keeps separate evidence:
+A destination is `resumable` only when it proves safe no-replace publication, operation recovery, verified-range recovery, and crash cleanup. Repeating the same compatible `get` continues the matching active operation. If the sender released its file handle after the resume grace, an exact source-evidence match reopens the same revision with a new lease, so verified ranges still resume; temporary inability to compare remains retryable, while proven change invalidates the revision instead of silently replacing it. For repeat-run tracing, use a run directory so every attempt keeps separate evidence:
 
 ```text
 wind get -o <directory> <same-capability-link> --trace-dir <trace-directory>
@@ -80,4 +80,4 @@ wind resume list -o <directory>
 wind resume discard -o <directory> --item <N>
 ```
 
-`resume list` reports destination-owned `incomplete`, `resumable`, `cleanup-pending`, `operation-needs-attention`, and `item-blocked` state. Failures use closed `stage`, optional `reconciliation_stage`, and optional `native_error_class` fields so destination binding, inventory, operation acquisition, checkpoint reconciliation, native durability, and authority close remain distinguishable without exposing paths or provider text. `resume discard` requires exact interactive confirmation and removes only identity-matched unfinished WindShare state; published files and unknown objects are preserved.
+`resume list` reports destination-owned `incomplete`, `resumable`, `cleanup-pending`, `operation-needs-attention`, and `item-blocked` state. Item-local reasons distinguish `revision-conflict`, `owned-object-unknown`, and `checkpoint-invalid`; only uncertain root, registry, lease, or operation ownership stops the whole operation. Failures use closed `stage`, optional `reconciliation_stage`, and optional `native_error_class` fields so destination binding, inventory, operation acquisition, checkpoint reconciliation, native durability, and authority close remain distinguishable without exposing paths or provider text. `resume discard` requires exact interactive confirmation and removes only identity-matched unfinished WindShare state; published files and unknown objects are preserved.

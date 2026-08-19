@@ -54,7 +54,7 @@ func candidateReconciliationFixture(
 	if err := owned.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Store(context.Background(), nil, record); err != nil {
+	if _, err := store.installInitialRecord(context.Background(), record); err != nil {
 		t.Fatal(err)
 	}
 	return store, &repository, record

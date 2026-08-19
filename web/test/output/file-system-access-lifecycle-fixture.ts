@@ -30,20 +30,28 @@ import {
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  classifyCheckpointLineage,
+  deriveCheckpointLineageID,
   fileCheckpointIsComplete,
+  sameCheckpointLineageSpec,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 import {
-  checkpointMatchesNamespace,
   finalFileCheckpointProof,
+  type CheckpointLineageDecision,
+  type CheckpointLineageLookupRequest,
   type CheckpointNamespaceBinding,
   type FileCheckpointPage,
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
+  type InitialCheckpointCASResult,
   type PersistentHandleRecord,
 } from '../../src/output/persistence/journal'
+import type {
+  FileCheckpointCandidateObservation,
+} from '../../src/output/persistent-tree/recovery'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   receiveOperationLeaseRecord,
@@ -605,27 +613,114 @@ class MemoryCheckpointRepository implements FSAFileCheckpointRepository {
     this.#onRetire = onRetire
   }
 
-  async putCandidate(record: FileCheckpointV2): Promise<void> {
-    validateFileCheckpoint(record)
-    if (!checkpointMatchesNamespace(record, this.binding) ||
-        record.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-      throw new TypeError('candidate escaped its operation')
-    }
-    const previous = this.#store.candidates.get(record.recordId)
-    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
-    this.#store.candidates.set(record.recordId, record)
+  async lookupLineage(
+    request: CheckpointLineageLookupRequest,
+  ): Promise<CheckpointLineageDecision> {
+    return this.#lineageDecision(request)
   }
 
-  async commit(record: FileCheckpointV2): Promise<void> {
-    const candidate = this.#store.candidates.get(record.recordId)
-    if (candidate === undefined || record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+  async createInitialCheckpoint(
+    candidate: FileCheckpointV2,
+  ): Promise<InitialCheckpointCASResult> {
+    validateFileCheckpoint(candidate)
+    const lineageId = deriveCheckpointLineageID(candidate)
+    const decision = this.#lineageDecision({
+      lineageId,
+      fileId: candidate.fileId,
+      canonicalPath: candidate.canonicalPath,
+      fileRevision: candidate.fileRevision,
+      exactSize: candidate.exactSize,
+    })
+    if (decision.kind !== 'absent') return decision
+    this.#store.candidates.set(candidate.recordId, candidate)
+    return Object.freeze({ kind: 'installed', lineageId, record: candidate })
+  }
+
+  async resolveCandidate(
+    candidate: FileCheckpointV2,
+    observation: Exclude<FileCheckpointCandidateObservation, { kind: 'ownership-unknown' }>,
+  ): Promise<void> {
+    if (this.#store.candidates.get(candidate.recordId)?.checksum !== candidate.checksum) {
+      throw new DOMException('candidate changed during recovery', 'InvalidStateError')
+    }
+    const resolved = observation.kind === 'verified'
+      ? observation.committed
+      : observation.checkpoint
+    this.#store.committed.set(candidate.recordId, resolved)
+    this.#store.candidates.delete(candidate.recordId)
+  }
+
+  #lineageDecision(request: CheckpointLineageLookupRequest): CheckpointLineageDecision {
+    const spec = Object.freeze({
+      ...this.binding,
+      fileId: request.fileId,
+      canonicalPath: request.canonicalPath,
+    })
+    if (deriveCheckpointLineageID(spec) !== request.lineageId) {
+      throw new TypeError('lineage lookup ID does not match its coordinates')
+    }
+    const physical = new Map(this.#store.committed)
+    for (const [recordId, candidate] of this.#store.candidates) {
+      if (!physical.has(recordId)) physical.set(recordId, candidate)
+    }
+    const records = [...physical.values()].filter(record =>
+      sameCheckpointLineageSpec(record, spec))
+    const kind = classifyCheckpointLineage(
+      { fileRevision: request.fileRevision, exactSize: request.exactSize },
+      records.map(record => ({
+        fileRevision: record.fileRevision,
+        exactSize: record.exactSize,
+        ownedObjectId: record.ownedObjectId,
+      })),
+    )
+    if (kind === 'absent') {
+      return Object.freeze({ kind, lineageId: request.lineageId })
+    }
+    if (kind === 'exact') {
+      return Object.freeze({ kind, lineageId: request.lineageId, record: records[0]! })
+    }
+    return Object.freeze({
+      kind,
+      lineageId: request.lineageId,
+      records: Object.freeze(records),
+    })
+  }
+
+  async stageCheckpointUpdate(
+    previous: FileCheckpointV2,
+    candidate: FileCheckpointV2,
+  ): Promise<void> {
+    validateFileCheckpointTransition(previous, candidate)
+    if (previous.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        this.#store.committed.get(previous.recordId)?.checksum !== previous.checksum) {
+      throw new DOMException('committed checkpoint predecessor missing', 'InvalidStateError')
+    }
+    const current = this.#store.candidates.get(candidate.recordId)
+    if (current !== undefined && current.checksum !== candidate.checksum) {
+      throw new DOMException('checkpoint candidate changed', 'InvalidStateError')
+    }
+    this.#store.candidates.set(candidate.recordId, candidate)
+  }
+
+  async commitCheckpointCandidate(
+    candidate: FileCheckpointV2,
+    committed: FileCheckpointV2,
+  ): Promise<void> {
+    validateFileCheckpointTransition(candidate, committed)
+    if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+      throw new TypeError('memory repository commits only verified checkpoints')
+    }
+    const currentCandidate = this.#store.candidates.get(candidate.recordId)
+    const previous = this.#store.committed.get(candidate.recordId)
+    if (currentCandidate === undefined && previous?.checksum === committed.checksum) return
+    if (currentCandidate?.checksum !== candidate.checksum) {
       throw new DOMException('checkpoint candidate missing', 'InvalidStateError')
     }
-    validateFileCheckpointTransition(candidate, record)
-    const previous = this.#store.committed.get(record.recordId)
-    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
-    this.#store.committed.set(record.recordId, record)
-    this.#store.candidates.delete(record.recordId)
+    if (previous !== undefined) validateFileCheckpointTransition(previous, committed)
+    this.#store.committed.set(committed.recordId, committed)
+    this.#store.candidates.delete(committed.recordId)
   }
 
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {

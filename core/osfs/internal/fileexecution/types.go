@@ -46,6 +46,24 @@ func (key CheckpointKey) valid() bool {
 		key.exactSize <= catalog.MaxFileSize && key.materializer.Valid() && !key.authority.IsZero()
 }
 
+func (key CheckpointKey) CheckpointLineageSpec() (checkpointmodel.CheckpointLineageSpec, error) {
+	if !key.valid() {
+		return checkpointmodel.CheckpointLineageSpec{}, ErrInvalidClaim
+	}
+	return checkpointmodel.CheckpointLineageSpec{
+		OperationID: key.operation, ReceiveIntentDigest: key.intent,
+		MaterializationBindingDigest: key.materialization,
+		FileID:                       key.fileID, CanonicalPath: key.path, MaterializerKind: key.materializer,
+		AuthorityRef: key.authority,
+	}, nil
+}
+
+func (key CheckpointKey) CheckpointLineageRequest() checkpointmodel.CheckpointLineageRequest {
+	return checkpointmodel.CheckpointLineageRequest{
+		FileRevision: key.revision, ExactSize: key.exactSize,
+	}
+}
+
 func (key CheckpointKey) matches(record checkpointmodel.Record) bool {
 	return key.valid() && record.Valid() && record.OperationID() == key.operation &&
 		record.ReceiveIntentDigest() == key.intent &&
@@ -58,6 +76,64 @@ func (key CheckpointKey) matches(record checkpointmodel.Record) bool {
 type CheckpointObservation struct {
 	present bool
 	record  checkpointmodel.Record
+}
+
+// CheckpointResolution carries the shared closed decision while exposing a
+// physical record only when that decision grants exact range authority.
+type CheckpointResolution struct {
+	decision checkpointmodel.CheckpointLineageDecision
+	record   checkpointmodel.Record
+}
+
+func ResolveCheckpoint(
+	decision checkpointmodel.CheckpointLineageDecision,
+	record checkpointmodel.Record,
+) (CheckpointResolution, error) {
+	exact := decision == checkpointmodel.CheckpointLineageDecisionExact
+	if !decision.Valid() || exact != record.Valid() {
+		return CheckpointResolution{}, ErrInvalidObservation
+	}
+	return CheckpointResolution{decision: decision, record: record}, nil
+}
+
+func (resolution CheckpointResolution) Decision() checkpointmodel.CheckpointLineageDecision {
+	return resolution.decision
+}
+
+func (resolution CheckpointResolution) Record() (checkpointmodel.Record, bool) {
+	return resolution.record, resolution.decision == checkpointmodel.CheckpointLineageDecisionExact &&
+		resolution.record.Valid()
+}
+
+func (resolution CheckpointResolution) valid() bool {
+	return resolution.decision.Valid() &&
+		(resolution.decision == checkpointmodel.CheckpointLineageDecisionExact) == resolution.record.Valid()
+}
+
+type InitialCheckpointObservation struct {
+	resolution CheckpointResolution
+	installed  bool
+}
+
+func ObserveInitialCheckpoint(
+	resolution CheckpointResolution,
+	installed bool,
+) (InitialCheckpointObservation, error) {
+	if !resolution.valid() || installed && resolution.decision != checkpointmodel.CheckpointLineageDecisionExact {
+		return InitialCheckpointObservation{}, ErrInvalidObservation
+	}
+	return InitialCheckpointObservation{resolution: resolution, installed: installed}, nil
+}
+
+func (observation InitialCheckpointObservation) Resolution() CheckpointResolution {
+	return observation.resolution
+}
+
+func (observation InitialCheckpointObservation) Installed() bool { return observation.installed }
+
+func (observation InitialCheckpointObservation) valid() bool {
+	return observation.resolution.valid() &&
+		(!observation.installed || observation.resolution.decision == checkpointmodel.CheckpointLineageDecisionExact)
 }
 
 func MissingCheckpoint() CheckpointObservation { return CheckpointObservation{} }
@@ -280,15 +356,14 @@ type Platform interface {
 }
 
 type CheckpointRepository interface {
-	Lookup(context.Context, CheckpointKey) (checkpointmodel.Record, bool, error)
-	Store(context.Context, *checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
-}
-
-// CheckpointAbandoner drops only the process-local lookup authority for an
-// unusable record. Its durable image and any foreign partial stay untouched;
-// a new checkpoint can then own the same authenticated file coordinate.
-type CheckpointAbandoner interface {
-	Abandon(context.Context, checkpointmodel.Record) error
+	Lookup(context.Context, CheckpointKey) (CheckpointResolution, error)
+	// A nil InstallInitial error is the durability proof that permits owned-object
+	// creation. A readable image accompanied by an install error is ambiguity,
+	// not success, and must keep Installed false.
+	InstallInitial(context.Context, CheckpointKey, checkpointmodel.Record) (InitialCheckpointObservation, error)
+	// Replace must preserve every physical install error even when the requested
+	// image can be reread; callers cannot advance ranges from readability alone.
+	Replace(context.Context, checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
 }
 
 type Config struct {

@@ -3,6 +3,7 @@ import {
   fileCheckpointDigest,
   fileCheckpointIsComplete,
   validateFileCheckpoint,
+  type CheckpointLineageID,
   type FileCheckpointV2,
 } from './checkpoint'
 import {
@@ -42,10 +43,50 @@ export interface FinalFileCheckpointProof {
   readonly complete: true
 }
 
+export interface CheckpointLineageLookupRequest {
+  readonly lineageId: CheckpointLineageID
+  readonly fileId: string
+  readonly canonicalPath: readonly string[]
+  readonly fileRevision: string
+  readonly exactSize: bigint
+}
+
+export type CheckpointLineageDecision =
+  | Readonly<{ kind: 'absent'; lineageId: CheckpointLineageID }>
+  | Readonly<{ kind: 'exact'; lineageId: CheckpointLineageID; record: FileCheckpointV2 }>
+  | Readonly<{
+    kind: 'revision-conflict'
+    lineageId: CheckpointLineageID
+    records: readonly FileCheckpointV2[]
+  }>
+  | Readonly<{
+    kind: 'ownership-conflict'
+    lineageId: CheckpointLineageID
+    records: readonly FileCheckpointV2[]
+  }>
+  | Readonly<{
+    kind: 'invalid'
+    lineageId: CheckpointLineageID
+    records: readonly FileCheckpointV2[]
+  }>
+
+export type InitialCheckpointCASResult =
+  | Readonly<{
+    kind: 'installed'
+    lineageId: CheckpointLineageID
+    record: FileCheckpointV2
+  }>
+  | Exclude<CheckpointLineageDecision, { readonly kind: 'absent' }>
+
 export interface FileCheckpointJournal {
   readonly binding: CheckpointNamespaceBinding
-  putCandidate(record: FileCheckpointV2): Promise<void>
-  commit(record: FileCheckpointV2): Promise<void>
+  lookupLineage(request: CheckpointLineageLookupRequest): Promise<CheckpointLineageDecision>
+  /** Sole initial authority install; classification and persistence are one repository CAS. */
+  createInitialCheckpoint(candidate: FileCheckpointV2): Promise<InitialCheckpointCASResult>
+  /** Physical progress may advance only from an exact committed predecessor. */
+  stageCheckpointUpdate(previous: FileCheckpointV2, candidate: FileCheckpointV2): Promise<void>
+  /** Promotion consumes the exact candidate selected or staged by repository authority. */
+  commitCheckpointCandidate(candidate: FileCheckpointV2, committed: FileCheckpointV2): Promise<void>
   readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined>
   scanCommitted(scan: FileCheckpointScan): Promise<FileCheckpointPage>
   scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage>

@@ -1,6 +1,7 @@
 package outputruntime
 
 import (
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
@@ -12,6 +13,7 @@ func (authority *Authority) traceCheckpointReconciled(
 	intent transfer.ReceiveIntent,
 	sessionID transfer.OutputSessionID,
 	recordCount uint64,
+	repositoryAttention bool,
 	reconciliationErr error,
 ) {
 	if authority == nil || intent.IsZero() {
@@ -39,6 +41,11 @@ func (authority *Authority) traceCheckpointReconciled(
 		event.FaultDomain = diagnostic.FaultDomain
 		event.NormalizedFaultScope = diagnostic.NormalizedScope
 		event.NormalizedFaultCode = diagnostic.NormalizedCode
+		event.Failed = true
+	} else if repositoryAttention {
+		// Repository attention proves neither a path nor a lineage. Report only
+		// the closed aggregate decision so unsafe names never cross the trace boundary.
+		event.RuntimeDecision = FilesystemOutputRuntimeNeedsAttention
 		event.Failed = true
 	}
 	authority.trace(event)
@@ -87,14 +94,34 @@ func (authority *Authority) fileRuntimeTrace() fileexecution.TraceSink {
 		projected := FilesystemOutputTrace{
 			Operation: TraceRuntimeDecision, ReceiveIntentDigest: event.IntentDigest,
 			ReceiveOperationID: event.OperationID, SessionID: event.SessionID,
-			RuntimeComponent: FilesystemOutputRuntimeFile,
-			RuntimeOperation: runtimeFileOperation(event.Operation),
-			RuntimeDecision:  runtimeFileDecision(event.Outcome),
-			OperationID:      event.Sequence,
+			RuntimeComponent:   FilesystemOutputRuntimeFile,
+			RuntimeOperation:   runtimeFileOperation(event.Operation),
+			RuntimeDecision:    runtimeFileDecision(event.Outcome),
+			CheckpointDecision: runtimeCheckpointDecision(event.Decision),
+			OperationID:        event.Sequence,
 		}
 		applyRuntimeFault(&projected, event.Fault)
 		authority.trace(projected)
 	})
+}
+
+func runtimeCheckpointDecision(
+	decision checkpointmodel.CheckpointLineageDecision,
+) FilesystemCheckpointDecision {
+	switch decision {
+	case checkpointmodel.CheckpointLineageDecisionAbsent:
+		return FilesystemCheckpointAbsent
+	case checkpointmodel.CheckpointLineageDecisionExact:
+		return FilesystemCheckpointExact
+	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:
+		return FilesystemCheckpointRevisionConflict
+	case checkpointmodel.CheckpointLineageDecisionOwnershipConflict:
+		return FilesystemCheckpointOwnershipConflict
+	case checkpointmodel.CheckpointLineageDecisionInvalid:
+		return FilesystemCheckpointInvalid
+	default:
+		return 0
+	}
 }
 
 func applyRuntimeFault(event *FilesystemOutputTrace, value transferfault.Fault) {

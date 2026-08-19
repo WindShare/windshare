@@ -44,6 +44,11 @@ func (visitor *encodeVisitorV2) setFilesystemOutputAuthority(event clievent.File
 	if err := visitor.setFilesystemNativeLock(event); err != nil {
 		return err
 	}
+	if checkpointDecision, ok := event.CheckpointDecision(); ok {
+		if err := setNamedRecordField(&visitor.record.FilesystemCheckpointDecision, checkpointDecision); err != nil {
+			return err
+		}
+	}
 	return visitor.setFilesystemRuntimeDecision(event)
 }
 

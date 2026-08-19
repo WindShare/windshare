@@ -125,23 +125,69 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 }
 
 type memoryCheckpointRepository struct {
-	record    checkpointmodel.Record
-	present   bool
-	stores    []checkpointmodel.Record
-	lookupErr error
-	storeErr  error
+	record        checkpointmodel.Record
+	present       bool
+	decision      checkpointmodel.CheckpointLineageDecision
+	stores        []checkpointmodel.Record
+	lookupErr     error
+	storeErr      error
+	installErrors []error
 }
 
 func (repository *memoryCheckpointRepository) Lookup(
 	context.Context,
 	CheckpointKey,
-) (checkpointmodel.Record, bool, error) {
-	return repository.record, repository.present, repository.lookupErr
+) (CheckpointResolution, error) {
+	if repository.lookupErr != nil {
+		return CheckpointResolution{}, repository.lookupErr
+	}
+	if repository.decision.Valid() && repository.decision != checkpointmodel.CheckpointLineageDecisionExact {
+		return ResolveCheckpoint(repository.decision, checkpointmodel.Record{})
+	}
+	if !repository.present {
+		return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
+	}
+	return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
 }
 
-func (repository *memoryCheckpointRepository) Store(
+func (repository *memoryCheckpointRepository) InstallInitial(
 	_ context.Context,
-	previous *checkpointmodel.Record,
+	_ CheckpointKey,
+	next checkpointmodel.Record,
+) (InitialCheckpointObservation, error) {
+	if len(repository.installErrors) != 0 {
+		err := repository.installErrors[0]
+		repository.installErrors = repository.installErrors[1:]
+		return InitialCheckpointObservation{}, err
+	}
+	if repository.storeErr != nil {
+		if repository.present {
+			resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
+			observed, _ := ObserveInitialCheckpoint(resolution, false)
+			return observed, repository.storeErr
+		}
+		return InitialCheckpointObservation{}, repository.storeErr
+	}
+	if repository.decision.Valid() && repository.decision != checkpointmodel.CheckpointLineageDecisionAbsent {
+		resolution, _ := ResolveCheckpoint(repository.decision, checkpointmodel.Record{})
+		return ObserveInitialCheckpoint(resolution, false)
+	}
+	if repository.present {
+		resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, repository.record)
+		return ObserveInitialCheckpoint(resolution, false)
+	}
+	repository.record, repository.present = next, true
+	repository.stores = append(repository.stores, next)
+	resolution, err := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
+	if err != nil {
+		return InitialCheckpointObservation{}, err
+	}
+	return ObserveInitialCheckpoint(resolution, true)
+}
+
+func (repository *memoryCheckpointRepository) Replace(
+	_ context.Context,
+	previous checkpointmodel.Record,
 	next checkpointmodel.Record,
 ) (CheckpointObservation, error) {
 	if repository.storeErr != nil {
@@ -151,33 +197,16 @@ func (repository *memoryCheckpointRepository) Store(
 		}
 		return MissingCheckpoint(), repository.storeErr
 	}
-	if previous == nil {
-		if repository.present {
-			observed, _ := ObservedCheckpoint(repository.record)
-			return observed, nil
-		}
-	} else if !repository.present || !recordEqual(repository.record, *previous) {
+	if !repository.present || !recordEqual(repository.record, previous) {
 		if !repository.present {
 			return MissingCheckpoint(), nil
 		}
 		observed, _ := ObservedCheckpoint(repository.record)
 		return observed, nil
 	}
-	repository.record, repository.present = next, true
+	repository.record = next
 	repository.stores = append(repository.stores, next)
-	observed, err := ObservedCheckpoint(next)
-	return observed, err
-}
-
-func (repository *memoryCheckpointRepository) Abandon(
-	_ context.Context,
-	record checkpointmodel.Record,
-) error {
-	if !repository.present || repository.record.RecordID() != record.RecordID() {
-		return ErrCheckpointBinding
-	}
-	repository.present = false
-	return nil
+	return ObservedCheckpoint(next)
 }
 
 type memoryOwnedData struct {
@@ -225,6 +254,9 @@ type memoryPlatform struct {
 	objects          map[checkpointmodel.ObjectID]*memoryOwnedData
 	createCollisions int
 	openCondition    OwnedCondition
+	observeCalls     int
+	createCalls      int
+	openCalls        int
 	retirements      []RetirementStep
 	retirementErr    error
 }
@@ -238,6 +270,7 @@ func (platform *memoryPlatform) ObserveOwnedObject(
 	object checkpointmodel.ObjectID,
 	_ uint64,
 ) (OwnedObservation, error) {
+	platform.observeCalls++
 	condition := OwnedAbsent
 	if platform.createCollisions > 0 {
 		platform.createCollisions--
@@ -255,6 +288,7 @@ func (platform *memoryPlatform) CreateOwnedFile(
 	object checkpointmodel.ObjectID,
 	size uint64,
 ) (OwnedFile, OwnedObservation, error) {
+	platform.createCalls++
 	if platform.createCollisions > 0 {
 		platform.createCollisions--
 		observation, _ := NewOwnedObservation(object, OwnedObjectCollision)
@@ -272,6 +306,7 @@ func (platform *memoryPlatform) OpenOwnedFile(
 	_ uint64,
 	_ bool,
 ) (OwnedFile, OwnedObservation, error) {
+	platform.openCalls++
 	condition := platform.openCondition
 	if condition == 0 {
 		condition = OwnedReady
@@ -613,13 +648,12 @@ func TestFileTransactionRejectsOverlapsBoundsAndClosedReuse(t *testing.T) {
 	}
 }
 
-func TestBeginExistingMissingPartialPreservesOldAndStartsFresh(t *testing.T) {
+func TestBeginExistingMissingPartialKeepsAuthorityAndBlocksItem(t *testing.T) {
 	fixture := newExecutionFixture(t, 4)
 	repository := &memoryCheckpointRepository{}
 	platform := newMemoryPlatform()
 	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
 	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
-	engine.random = bytes.NewReader(bytes.Repeat([]byte{0x81}, 128))
 	key, err := engine.checkpointKey(fixture.file)
 	if err != nil {
 		t.Fatal(err)
@@ -634,15 +668,83 @@ func TestBeginExistingMissingPartialPreservesOldAndStartsFresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	transaction, _, ok := start.Transaction()
-	if !ok || transaction.Binding().ObjectIdentity().Bytes()[0] != 0x81 {
-		t.Fatalf("fresh transaction = (%t, %x)", ok, transaction.Binding().ObjectIdentity().Bytes())
+	settlement, ok := start.ImmediateSettlement()
+	if !ok || settlement.Kind() != transfer.FileItemBlocked {
+		t.Fatalf("missing partial settlement = (%t, %d)", ok, settlement.Kind())
 	}
-	if repository.record.RecordID() == oldRecord.RecordID() {
-		t.Fatal("missing old partial retained lookup authority")
+	if _, reason, blocked := settlement.ItemBlock(); !blocked || reason != transfer.ItemBlockOwnedObjectUnknown {
+		t.Fatalf("missing partial block = (%d, %t)", reason, blocked)
+	}
+	if repository.record.RecordID() != oldRecord.RecordID() {
+		t.Fatal("missing partial replaced its durable authority")
 	}
 	if _, found := platform.objects[oldObject]; found {
 		t.Fatal("recovery manufactured ownership of the missing old object")
+	}
+}
+
+func TestCheckpointConflictsBlockBeforeDestinationOrObjectObservation(t *testing.T) {
+	fixture := newExecutionFixture(t, 4)
+	for name, test := range map[string]struct {
+		decision checkpointmodel.CheckpointLineageDecision
+		reason   transfer.ItemBlockReason
+	}{
+		"revision":  {checkpointmodel.CheckpointLineageDecisionRevisionConflict, transfer.ItemBlockRevisionConflict},
+		"ownership": {checkpointmodel.CheckpointLineageDecisionOwnershipConflict, transfer.ItemBlockOwnedObjectUnknown},
+		"invalid":   {checkpointmodel.CheckpointLineageDecisionInvalid, transfer.ItemBlockCheckpointInvalid},
+	} {
+		t.Run(name, func(t *testing.T) {
+			repository := &memoryCheckpointRepository{decision: test.decision}
+			platform := newMemoryPlatform()
+			destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+			var traces []TraceEvent
+			engine := newFixtureEngine(t, fixture, repository, platform, destination, TraceSinkFunc(func(event TraceEvent) {
+				traces = append(traces, event)
+			}))
+			start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+			settlement, immediate := start.ImmediateSettlement()
+			_, reason, blocked := settlement.ItemBlock()
+			if err != nil || !immediate || !blocked || reason != test.reason {
+				t.Fatalf("conflict settlement = (%t, %t, %d, %v)", immediate, blocked, reason, err)
+			}
+			if platform.observeCalls != 0 || platform.createCalls != 0 || platform.openCalls != 0 {
+				t.Fatalf("conflict touched owned state: observe=%d create=%d open=%d",
+					platform.observeCalls, platform.createCalls, platform.openCalls)
+			}
+			if len(traces) != 1 || traces[0].Decision != test.decision || traces[0].Operation != TraceCheckpoint {
+				t.Fatalf("conflict trace = %+v", traces)
+			}
+		})
+	}
+}
+
+func TestInitialCandidateRecreatesSameObjectAfterPreObjectCrash(t *testing.T) {
+	fixture := newExecutionFixture(t, 4)
+	repository := &memoryCheckpointRepository{}
+	platform := newMemoryPlatform()
+	destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+	engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+	key, err := engine.checkpointKey(fixture.file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	object, _ := checkpointmodel.ObjectIDFromBytes(bytes.Repeat([]byte{0x71}, transfer.OwnedObjectIdentityBytes))
+	candidate, err := newInitialRecord(key, object)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repository.record, repository.present = candidate, true
+	platform.openCondition = OwnedAbsent
+
+	start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+	transaction, _, hasTransaction := start.Transaction()
+	if err != nil || !hasTransaction {
+		t.Fatalf("candidate recovery = (transaction=%t, %v)", hasTransaction, err)
+	}
+	if transaction.Binding().ObjectIdentity().Bytes()[0] != 0x71 || platform.objects[object] == nil ||
+		repository.record.RecordID() != candidate.RecordID() ||
+		repository.record.CommitState() != checkpointmodel.CommitVerified {
+		t.Fatalf("candidate authority changed: object=%x record=%+v", transaction.Binding().ObjectIdentity().Bytes(), repository.record)
 	}
 }
 
@@ -713,7 +815,7 @@ func TestRecoveryReducerCoversClosedOwnershipOutcomes(t *testing.T) {
 		"retired":              {retired, owned(OwnedAbsent), final(FinalAbsent), RecoveryReturnRetired},
 		"quarantined":          {quarantined, owned(OwnedReady), final(FinalAbsent), RecoveryReturnQuarantined},
 		"unknown":              {active, owned(OwnedReady), final(FinalUnsafe), RecoveryInstallQuarantine},
-		"anchor-missing":       {active, owned(OwnedAnchorMissing), final(FinalAbsent), RecoveryStartNewPreservingOld},
+		"anchor-missing":       {active, owned(OwnedAnchorMissing), final(FinalAbsent), RecoveryReturnOwnershipBlocked},
 	} {
 		t.Run(name, func(t *testing.T) {
 			decision, err := ReduceRecovery(test.record, test.owned, test.final)
@@ -749,6 +851,53 @@ func TestEngineRejectsInvalidConfigurationAndExhaustedObjectAllocation(t *testin
 	if repository.present {
 		t.Fatal("allocation exhaustion installed a checkpoint")
 	}
+}
+
+func TestEngineHandlesProspectiveCheckpointAdmissionWithoutObjectMutation(t *testing.T) {
+	fixture := newExecutionFixture(t, 1)
+
+	t.Run("claimed proposal retries a new object", func(t *testing.T) {
+		repository := &memoryCheckpointRepository{installErrors: []error{ErrCheckpointObjectClaimed}}
+		platform := newMemoryPlatform()
+		destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+		engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+		start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		transaction, _, ok := start.Transaction()
+		if !ok {
+			t.Fatal("retry did not start a file transaction")
+		}
+		want, err := checkpointmodel.ObjectIDFromBytes(bytes.Repeat(
+			[]byte{0x02}, transfer.OwnedObjectIdentityBytes,
+		))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if repository.record.OwnedObjectID() != want || platform.observeCalls != 2 ||
+			platform.createCalls != 1 || len(platform.objects) != 1 {
+			t.Fatalf("proposal retry = (object=%x observe=%d create=%d objects=%d)",
+				repository.record.OwnedObjectID(), platform.observeCalls, platform.createCalls, len(platform.objects))
+		}
+		if transaction.Binding().ObjectIdentity().Bytes()[0] != 0x02 {
+			t.Fatalf("transaction used rejected proposal: %x", transaction.Binding().ObjectIdentity().Bytes())
+		}
+	})
+
+	t.Run("capacity failure creates no object", func(t *testing.T) {
+		repository := &memoryCheckpointRepository{installErrors: []error{ErrCheckpointRecordCapacity}}
+		platform := newMemoryPlatform()
+		destination := &memoryDestination{target: fixture.file.Target(), final: FinalAbsent}
+		engine := newFixtureEngine(t, fixture, repository, platform, destination, nil)
+		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrCheckpointRecordCapacity) {
+			t.Fatalf("capacity error = %v", err)
+		}
+		if repository.present || platform.createCalls != 0 || len(platform.objects) != 0 {
+			t.Fatalf("capacity failure mutated authority: present=%t create=%d objects=%d",
+				repository.present, platform.createCalls, len(platform.objects))
+		}
+	})
 }
 
 func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {

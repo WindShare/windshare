@@ -333,6 +333,8 @@ export interface TestOutputOptions {
   readonly durability?: 'None' | 'ProcessRestart'
   readonly initialRanges?: readonly ByteRange[]
   readonly failBegin?: boolean
+  readonly failBeginFor?: string
+  readonly beginFailure?: unknown
   readonly failWrite?: boolean
   readonly failCommit?: boolean
   readonly retirement?: 'FileIsolated' | 'JobOutputCompromised'
@@ -372,7 +374,9 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
       events.push('begin-request')
       const revision = snapshotOpenedOutputRevision(await request.openRevision(signal))
       events.push('revision-opened')
-      if (options.failBegin === true) throw new Error('fixture begin failure')
+      if (options.failBegin === true || options.failBeginFor === request.source.fileId) {
+        throw options.beginFailure ?? new Error('fixture begin failure')
+      }
       const file = snapshotOutputFile({
         source: revision,
         sourcePath: request.sourcePath,

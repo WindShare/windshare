@@ -1,0 +1,59 @@
+import { describe, expect, it } from 'vitest'
+
+import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
+import { presentTransferResult } from '../../src/ui/v2-transfer-result'
+
+describe('transfer result presentation', () => {
+  it('uses source, local checkpoint, collision, then residual headline priority without losing counts', () => {
+    const presentation = presentTransferResult(worker({
+      sourceDriftFiles: 1,
+      revisionConflictFiles: 2,
+      checkpointInvalidFiles: 3,
+      ownedObjectUnknownFiles: 4,
+      collisionFiles: 5,
+      failedFiles: 6,
+    }))
+    expect(presentation.title).toBe('Source content changed')
+    expect(presentation.lines.join(' ')).toMatch(/authenticated source content changed/u)
+    expect(presentation.lines.join(' ')).toMatch(/local resume data belongs to another source revision/u)
+    expect(presentation.lines.join(' ')).toMatch(/invalid local resume checkpoint/u)
+    expect(presentation.lines.join(' ')).toMatch(/owned destination object/u)
+    expect(presentation.lines.join(' ')).toMatch(/existing destinations prevented files from completing/u)
+  })
+
+  it.each([
+    ['revision conflict', { revisionConflictFiles: 1 }, 'Resume revision conflict', /another source revision/u],
+    ['invalid checkpoint', { checkpointInvalidFiles: 1 }, 'Invalid resume checkpoint', /invalid local resume checkpoint/u],
+    ['owned object conflict', { ownedObjectUnknownFiles: 1 }, 'Resume ownership conflict', /owned destination object/u],
+    ['destination collision', { collisionFiles: 1 }, 'Existing destinations prevented completion', /existing destination prevented/u],
+  ] as const)('presents %s without source-change or needs-attention wording', (_name, patch, title, copy) => {
+    const presentation = presentTransferResult(worker(patch))
+    const text = `${presentation.title} ${presentation.lines.join(' ')}`
+    expect(presentation.title).toBe(title)
+    expect(text).toMatch(copy)
+    expect(text).not.toMatch(/source content changed|needs attention/iu)
+  })
+})
+
+function worker(
+  patch: Partial<TransferWorkerSettlement['fileOutcomes']>,
+): TransferWorkerSettlement {
+  const fileOutcomes = {
+    sourceDriftFiles: 0,
+    revisionConflictFiles: 0,
+    checkpointInvalidFiles: 0,
+    ownedObjectUnknownFiles: 0,
+    collisionFiles: 0,
+    failedFiles: 0,
+    ...patch,
+  }
+  const fileFailureCount = Object.values(fileOutcomes).reduce((sum, count) => sum + count, 0)
+  return Object.freeze({
+    status: 'CompletedWithErrors',
+    failures: Object.freeze([]),
+    failureCount: fileFailureCount,
+    fileFailureCount,
+    omittedFailureCount: fileFailureCount,
+    fileOutcomes: Object.freeze(fileOutcomes),
+  })
+}

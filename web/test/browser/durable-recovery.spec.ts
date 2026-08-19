@@ -14,7 +14,10 @@ import type {
   ReceiveCrashCutResult,
   RecoveredPackageResult,
 } from './durable-recovery-harness'
-import type { IndexedDbV6Probe } from './durable-recovery-idb-probe'
+import type {
+  IndexedDbCheckpointLineageProbe,
+  IndexedDbV6Probe,
+} from './durable-recovery-idb-probe'
 
 const HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
 const IDB_PROBE_PATH = '/test/browser/durable-recovery-idb-probe.ts'
@@ -40,6 +43,35 @@ test('v6 repositories replace resume authority and fail closed across IndexedDB 
     v6StoresPresent: true,
     legacyStoreRetainedForCleanup: true,
     legacyRowsVisibleToV6: false,
+  })
+})
+
+test('checkpoint lineage claim reconciles physical crash evidence and serializes authorities', async ({
+  page,
+}) => {
+  const result = await page.evaluate(async (path) => {
+    const probe = await import(path) as typeof import('./durable-recovery-idb-probe')
+    return probe.probeIndexedDbCheckpointLineage()
+  }, IDB_PROBE_PATH) as IndexedDbCheckpointLineageProbe
+
+  expect(result).toEqual({
+    putCandidateSurfacePresent: false,
+    unbackedUpdateRejection: 'InvalidStateError',
+    unbackedUpdateCandidateRows: 0,
+    updateConcurrencyOutcomes: ['InvalidStateError', 'resolved'],
+    updateConcurrencyCandidateRows: 1,
+    concurrentKinds: ['exact', 'installed'],
+    concurrentObjectConverged: true,
+    candidateRowsBeforeResolution: 1,
+    candidateBeforeObjectDecision: 'exact',
+    candidateRowsAfterResolution: 0,
+    resolutionReplayDecision: 'exact',
+    revisionDecision: 'revision-conflict',
+    ownershipDecision: 'ownership-conflict',
+    invalidDecision: 'invalid',
+    crossLineageOwnershipDecision: 'ownership-conflict',
+    unresolvedCandidateRejection: 'InvalidStateError',
+    resolvedRange: '0:1',
   })
 })
 

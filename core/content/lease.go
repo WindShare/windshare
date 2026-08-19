@@ -60,7 +60,7 @@ func (s *RevisionStore) RenewLease(id LeaseID) (RevisionLease, error) {
 	if state == nil {
 		return RevisionLease{}, s.leaseTombstoneErrorLocked(id)
 	}
-	if state.status == leaseDrifted || state.revision.drifted {
+	if state.status == leaseDrifted || state.revision.lifecycle == revisionLifecycleInvalidated {
 		return RevisionLease{}, ErrRevisionDrift
 	}
 	if state.status != leaseActive || !now.Before(state.expiresAt) {
@@ -124,7 +124,7 @@ func (s *RevisionStore) ValidateLease(id LeaseID, descriptor FileRevisionDescrip
 	if state == nil {
 		return s.leaseTombstoneErrorLocked(id)
 	}
-	if state.status == leaseDrifted || state.revision.drifted {
+	if state.status == leaseDrifted || state.revision.lifecycle == revisionLifecycleInvalidated {
 		return ErrRevisionDrift
 	}
 	if state.status != leaseActive || !now.Before(state.expiresAt) {
@@ -217,7 +217,7 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 		s.mu.Unlock()
 		return nil, err
 	}
-	if lease.status == leaseDrifted || lease.revision.drifted {
+	if lease.status == leaseDrifted || lease.revision.lifecycle == revisionLifecycleInvalidated {
 		s.mu.Unlock()
 		return nil, ErrRevisionDrift
 	}
@@ -234,16 +234,25 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 	plainLength, _ := descriptor.Geometry().BlockPlainLength(ref.LocalBlockIndex())
 	revision := lease.revision
 	revision.readers++
+	s.readingRevisions[revision] = struct{}{}
 	s.readWG.Add(1)
 	s.mu.Unlock()
+	defer s.readWG.Done()
 
 	destination := make([]byte, plainLength)
-	readErr, drift := readStableBlock(ctx, revision.source, destination, offset)
-	drifted, cleanup, invalidate := s.finishRead(revision, drift)
-	s.readWG.Done()
-	cleanup.run()
-	if invalidate && s.invalidator != nil {
-		s.invalidator.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
+	comparison, readErr := readStableBlock(ctx, revision.source, destination, offset)
+	drifted, cleanups, invalidate, budgetErr := s.finishRead(revision, comparison)
+	for _, cleanup := range cleanups {
+		cleanup.run()
+	}
+	if invalidate {
+		s.invalidateRevisionCache(revisionIdentity{file: descriptor.FileID(), revision: descriptor.FileRevision()})
+	}
+	if comparison == RevisionComparisonMismatch {
+		s.traceRevision(RevisionTraceStageMismatchInvalidation, RevisionTraceCauseActiveRead, descriptor.FileID(), descriptor.FileRevision())
+	}
+	if budgetErr != nil {
+		s.traceRevision(RevisionTraceStageMetadataBudgetStop, RevisionTraceCauseMetadataBudget, descriptor.FileID(), descriptor.FileRevision())
 	}
 	if drifted {
 		return nil, ErrRevisionDrift
@@ -254,75 +263,70 @@ func (s *RevisionStore) ReadBlock(ctx context.Context, leaseID LeaseID, ref Bloc
 	return destination, nil
 }
 
-func readStableBlock(ctx context.Context, source StableFile, destination []byte, offset uint64) (readErr error, drift bool) {
+func readStableBlock(ctx context.Context, source StableFile, destination []byte, offset uint64) (comparison RevisionComparison, readErr error) {
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			readErr = fmt.Errorf("stable file read panicked: %v\n%s", recovered, debug.Stack())
-			drift = true
+			comparison = RevisionComparisonUnavailable
 		}
 	}()
-	readErr = source.Verify(ctx)
-	if readErr == nil {
-		var count int
-		count, readErr = source.ReadAt(ctx, destination, offset)
-		if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
-			return readErr, false
-		}
-		if count != len(destination) {
-			drift = true
-		}
-		if errors.Is(readErr, io.EOF) && count == len(destination) {
-			readErr = nil
-		}
+	if readErr = source.Verify(ctx); readErr != nil {
+		return RevisionComparisonOf(readErr), readErr
 	}
-	if readErr == nil {
-		readErr = source.Verify(ctx)
+	count, readErr := source.ReadAt(ctx, destination, offset)
+	if errors.Is(readErr, context.Canceled) || errors.Is(readErr, context.DeadlineExceeded) {
+		return RevisionComparisonUnavailable, readErr
 	}
-	if readErr != nil && !errors.Is(readErr, context.Canceled) && !errors.Is(readErr, context.DeadlineExceeded) {
-		drift = true
+	shortEOF := count != len(destination) && errors.Is(readErr, io.EOF)
+	if count == len(destination) && errors.Is(readErr, io.EOF) {
+		readErr = nil
 	}
-	return readErr, drift
+	if count != len(destination) && readErr == nil {
+		readErr = io.ErrUnexpectedEOF
+	}
+	verifyErr := source.Verify(ctx)
+	if RevisionComparisonOf(verifyErr) == RevisionComparisonMismatch {
+		return RevisionComparisonMismatch, verifyErr
+	}
+	if shortEOF || RevisionComparisonOf(readErr) == RevisionComparisonMismatch {
+		return RevisionComparisonMismatch, readErr
+	}
+	if readErr != nil {
+		return RevisionComparisonUnavailable, readErr
+	}
+	if verifyErr != nil {
+		return RevisionComparisonUnavailable, verifyErr
+	}
+	return RevisionComparisonMatch, nil
 }
 
-func (s *RevisionStore) finishRead(revision *revisionState, drift bool) (bool, revisionCleanup, bool) {
+func (s *RevisionStore) finishRead(revision *revisionState, comparison RevisionComparison) (bool, []revisionCleanup, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	revision.readers--
-	invalidate := false
-	if drift && !revision.drifted {
-		revision.drifted = true
-		invalidate = true
-		driftedAt := s.clock.Now()
-		if s.revisions[revision.descriptor.FileID()] == revision {
-			delete(s.revisions, revision.descriptor.FileID())
-		}
-		for leaseID, lease := range revision.leases {
-			if lease.status == leaseActive {
-				lease.quota.Release()
-				lease.quota = nil
-			}
-			lease.sessionQuota = nil
-			lease.status = leaseDrifted
-			lease.endedAt = driftedAt
-			s.rememberLeaseTombstoneLocked(leaseID, leaseDrifted)
-			delete(s.leases, leaseID)
-		}
-		releaseAllSessionHandlesLocked(revision)
-		revision.leases = nil
-		revision.closePending = true
+	if revision.readers == 0 {
+		delete(s.readingRevisions, revision)
 	}
+	var cleanups []revisionCleanup
+	var budgetErr error
+	invalidate := comparison == RevisionComparisonMismatch
+	if invalidate {
+		cleanups, budgetErr = s.invalidateIdentityLocked(revision.identity(), revision)
+	}
+	_, recorded := s.invalidated[revision.identity()]
+	drifted := revision.lifecycle == revisionLifecycleInvalidated || recorded
 	if revision.closePending && revision.readers == 0 && !revision.closed {
 		revision.closed = true
-		cleanup := revisionCleanup{source: revision.source, reservation: revision.handleQuota}
+		cleanups = append(cleanups, revisionCleanup{source: revision.source, reservation: revision.handleQuota})
 		revision.source = nil
 		revision.handleQuota = nil
-		return revision.drifted, cleanup, invalidate
 	}
-	return revision.drifted, revisionCleanup{}, invalidate
+	return drifted, cleanups, invalidate, budgetErr
 }
 
 func (s *RevisionStore) reap(now time.Time) {
 	cleanups := make([]revisionCleanup, 0)
+	released := make([]revisionIdentity, 0)
 	s.mu.Lock()
 	expired := make([]LeaseID, 0)
 	for id, lease := range s.leases {
@@ -344,7 +348,9 @@ func (s *RevisionStore) reap(now time.Time) {
 				delete(s.leases, leaseID)
 			}
 			revision.leases = nil
+			revision.lifecycle = revisionLifecycleReleased
 			revision.closePending = true
+			released = append(released, revision.identity())
 			if revision.readers == 0 && !revision.closed {
 				revision.closed = true
 				cleanups = append(cleanups, revisionCleanup{source: revision.source, reservation: revision.handleQuota})
@@ -356,5 +362,8 @@ func (s *RevisionStore) reap(now time.Time) {
 	s.mu.Unlock()
 	for _, cleanup := range cleanups {
 		cleanup.run()
+	}
+	for _, identity := range released {
+		s.traceRevision(RevisionTraceStageCleanRelease, RevisionTraceCauseUnknown, identity.file, identity.revision)
 	}
 }

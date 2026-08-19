@@ -43,18 +43,15 @@ func TestFreshFileExecutionStoreIndexesOnlyCurrentOperationAndCleansExactState(t
 	if err := owned.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.Store(ctx, nil, record); err != nil {
+	if _, err := store.installInitialRecord(ctx, record); err != nil {
 		t.Fatal(err)
 	}
 	records, attention := store.Snapshot()
 	if len(records) != 1 || records[0].RecordID() != record.RecordID() || len(attention) != 0 {
 		t.Fatalf("current-operation snapshot = (%+v, %+v)", records, attention)
 	}
-	if err := store.Abandon(ctx, record); err != nil {
-		t.Fatal(err)
-	}
-	if records, _ := store.Snapshot(); len(records) != 0 {
-		t.Fatalf("abandoned checkpoint remained resumable: %+v", records)
+	if records, _ := store.Snapshot(); len(records) != 1 {
+		t.Fatalf("checkpoint authority disappeared before cleanup: %+v", records)
 	}
 	if err := store.CleanupOwned(ctx); err != nil {
 		t.Fatal(err)
@@ -88,7 +85,7 @@ func TestFreshFileExecutionStoreCleanupRejectsUncertainOrCanceledAuthority(t *te
 	if err := store.CleanupOwned(canceled); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled cleanup = %v", err)
 	}
-	store.attention = []Attention{{}}
+	store.authority.attention = []Attention{{}}
 	if err := store.CleanupOwned(context.Background()); ErrorCodeFor(err) != ErrorUnsafeInstall {
 		t.Fatalf("uncertain cleanup = %v", err)
 	}

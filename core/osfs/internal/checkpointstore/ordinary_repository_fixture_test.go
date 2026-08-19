@@ -3,7 +3,6 @@ package checkpointstore
 import (
 	"bytes"
 	"crypto/sha256"
-	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -125,11 +124,4 @@ func checkpointRecordFixture(
 		t.Fatal(err)
 	}
 	return record
-}
-
-func errorCode(err error) ErrorCode {
-	if repositoryErr, ok := errors.AsType[*Error](err); ok {
-		return repositoryErr.Code()
-	}
-	return ""
 }

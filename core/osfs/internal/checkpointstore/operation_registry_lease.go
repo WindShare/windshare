@@ -15,6 +15,7 @@ type OperationRegistryLease struct {
 	operation receivecontract.OperationID
 	record    checkpointmodel.OrdinaryOperationRecord
 	lock      outputcap.Lock
+	files     *fileExecutionAuthority
 	deleted   bool
 }
 
@@ -114,7 +115,10 @@ func (registry *OperationRegistry) acquireOperationLease(
 			return nil, repositoryError("sync exact ordinary operation lease", errors.Join(err, lock.Close()))
 		}
 	}
-	return &OperationRegistryLease{registry: registry, operation: operation, lock: lock}, nil
+	return &OperationRegistryLease{
+		registry: registry, operation: operation, lock: lock,
+		files: newFileExecutionAuthority(),
+	}, nil
 }
 
 func (lease *OperationRegistryLease) Replace(

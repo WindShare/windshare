@@ -4,6 +4,7 @@ import {
   bindMaterialization,
   offerArtifacts,
 } from '../../src/output/planning'
+import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import type {
   ReceiveOperationMutationPort,
   ReceiveOperationResumeSource,
@@ -309,6 +310,95 @@ describe('browser retained continuation composition', () => {
       inventory.close()
     },
   )
+
+  it('records retained workspace ownership attention without restoring the continuation', async () => {
+    const fallback = receiveLifecycle(41, {
+      kind: 'resumable-receive',
+      checkpointSetDigest: identity(42, 32),
+      completedFileCount: 1n,
+      completedBytes: 64n,
+      expiresAt: 5_000,
+    })
+    if (fallback.kind !== 'resumable-receive') throw new Error('test fallback changed kind')
+    const failure = new TargetOwnershipUnknownError('checkpoint', fallback.operationId)
+    const close = vi.fn(async () => undefined)
+    const restoreReceiveContinuation = vi.fn(async () => fallback)
+    const attention = Object.freeze({
+      kind: 'needs-attention' as const,
+      operationId: fallback.operationId,
+      receiveIntentDigest: fallback.receiveIntentDigest,
+      generation: fallback.generation + 2n,
+      reason: 'target-ownership-unknown' as const,
+      lastVerifiedRecordDigest: identity(43, 32),
+    })
+    const recordTargetOwnershipUnknown = vi.fn(async () => attention)
+    const traceNames: string[] = []
+    const continuation = Object.freeze({
+      kind: 'workspace-receive' as const,
+      operation: Object.freeze({
+        kind: 'workspace' as const,
+        intent: Object.freeze({
+          operationId: fallback.operationId,
+          digest: fallback.receiveIntentDigest,
+        }),
+        lifecycle: Object.freeze({
+          ...fallback,
+          kind: 'receiving' as const,
+          generation: fallback.generation + 1n,
+          activeLeaseId: identity(44),
+        }),
+        receiveAdmissionFallback: fallback,
+        admittedContent: Object.freeze({}),
+        receiveContinuation: Object.freeze({
+          openBackend: async (options?: {
+            readonly onTrace?: (event: {
+              readonly name: 'receive.operation.needs_attention'
+              readonly operation_id: string
+              readonly prior_state: 'receiving'
+              readonly needs_attention_reason: 'target-ownership-unknown'
+            }) => void
+          }) => {
+            options?.onTrace?.(Object.freeze({
+              name: 'receive.operation.needs_attention',
+              operation_id: fallback.operationId,
+              prior_state: 'receiving',
+              needs_attention_reason: 'target-ownership-unknown',
+            }))
+            throw failure
+          },
+        }),
+        stages: Object.freeze({
+          restoreReceiveContinuation,
+          recordTargetOwnershipUnknown,
+        }),
+        close,
+      }),
+    }) as unknown as AuthorityOwnedReceiveOperationContinuation
+    const composition = createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      {
+        openResumeSource: async () => new FakeResumeSource([fallback]),
+        resumeMutations: mutationPort(vi.fn(async () => Object.freeze({
+          kind: 'continuation' as const,
+          continuation,
+        }))),
+        now: () => 1_000,
+        onTrace: event => traceNames.push(event.name),
+      },
+    )
+    const inventory = await composition.retained.list(new AbortController().signal)
+    const operation = inventory.operations[0]
+    if (operation === undefined) throw new Error('resumable operation was not projected')
+
+    await expect(inventory.act(operation, 'continue', new AbortController().signal))
+      .rejects.toBe(failure)
+
+    expect(recordTargetOwnershipUnknown).toHaveBeenCalledWith(fallback.receiveIntentDigest)
+    expect(restoreReceiveContinuation).not.toHaveBeenCalled()
+    expect(traceNames).toContain('receive.operation.needs_attention')
+    expect(close).toHaveBeenCalledOnce()
+    inventory.close()
+  })
 
   it('executes only the output-owned package continuation and closes its authority', async () => {
     const source = new FakeResumeSource([receiveLifecycle(42, {

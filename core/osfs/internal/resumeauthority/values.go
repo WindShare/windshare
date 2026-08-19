@@ -89,10 +89,11 @@ const (
 	ItemBlockPublicationUnknown
 	ItemBlockCheckpointInvalid
 	ItemBlockOwnedObjectUnknown
+	ItemBlockRevisionConflict
 )
 
 func (reason ItemBlockReason) Valid() bool {
-	return reason >= ItemBlockNone && reason <= ItemBlockOwnedObjectUnknown
+	return reason >= ItemBlockNone && reason <= ItemBlockRevisionConflict
 }
 
 func (reason ItemBlockReason) String() string {
@@ -105,6 +106,8 @@ func (reason ItemBlockReason) String() string {
 		return "checkpoint-invalid"
 	case ItemBlockOwnedObjectUnknown:
 		return "owned-object-unknown"
+	case ItemBlockRevisionConflict:
+		return "revision-conflict"
 	default:
 		return ""
 	}

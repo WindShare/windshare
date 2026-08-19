@@ -21,6 +21,7 @@ describe('workspace execution admission settlement', () => {
     }))
     const recordUnknown = vi.fn(async () => needsAttention(states.receiving))
     const settlement = new WorkspaceExecutionAdmissionSettlement({
+      operationId: states.receiving.operationId,
       currentLifecycle: async () => current,
       restoreContinuation,
       discard,
@@ -47,6 +48,7 @@ describe('workspace execution admission settlement', () => {
     const attention = needsAttention(states.receiving)
     const recordUnknown = vi.fn(async () => attention)
     const settlement = new WorkspaceExecutionAdmissionSettlement({
+      operationId: states.receiving.operationId,
       currentLifecycle: async () => states.receiving,
       restoreContinuation,
       discard,
@@ -72,6 +74,7 @@ describe('workspace execution admission settlement', () => {
     const terminal = discarded(initial)
     const discard = vi.fn(async () => Object.freeze({ lifecycle: terminal, workspaceUsage: null }))
     const settlement = new WorkspaceExecutionAdmissionSettlement({
+      operationId: initial.operationId,
       currentLifecycle: async () => initial,
       restoreContinuation: async fallback => fallback,
       discard,

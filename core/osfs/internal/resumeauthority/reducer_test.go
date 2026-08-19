@@ -270,6 +270,7 @@ func TestResumeVocabularyAndPublicValuesPreserveExactAuthority(t *testing.T) {
 		ItemBlockPublicationUnknown: "publication-unknown",
 		ItemBlockCheckpointInvalid:  "checkpoint-invalid",
 		ItemBlockOwnedObjectUnknown: "owned-object-unknown",
+		ItemBlockRevisionConflict:   "revision-conflict",
 	} {
 		if reason.String() != want {
 			t.Fatalf("block reason %d = %q", reason, reason.String())

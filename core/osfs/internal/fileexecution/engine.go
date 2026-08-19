@@ -10,7 +10,6 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
@@ -77,20 +76,42 @@ func (engine *Engine) BeginFile(
 	if destination == nil || destination.Target() != file.Target() {
 		return transfer.FileStart{}, joinFailures(ctx, bindingError(ErrPortContract), closeDestination(destination))
 	}
-	record, found, err := engine.checkpoints.Lookup(ctx, key)
+	resolution, err := engine.checkpoints.Lookup(ctx, key)
 	if err != nil {
 		return transfer.FileStart{}, joinFailures(ctx, collaboratorError(ctx, err), closeDestination(destination))
 	}
-	if found {
-		if !key.matches(record) || !engine.binding.Matches(record, record.RecordID()) {
+	if !resolution.valid() {
+		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
+	}
+	engine.emit(engine.checkpointDecisionTrace(sequence, resolution.Decision()))
+	sequence = engine.nextSequence()
+	return engine.beginResolved(ctx, sequence, file, key, destination, resolution)
+}
+
+func (engine *Engine) beginResolved(
+	ctx context.Context,
+	sequence uint64,
+	file transfer.MaterializationFile,
+	key CheckpointKey,
+	destination FileDestination,
+	resolution CheckpointResolution,
+) (transfer.FileStart, error) {
+	switch resolution.Decision() {
+	case checkpointmodel.CheckpointLineageDecisionExact:
+		record, exact := resolution.Record()
+		if !exact || !key.matches(record) || !engine.binding.Matches(record, record.RecordID()) {
 			return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrCheckpointBinding), closeDestination(destination))
 		}
 		return engine.beginExisting(ctx, sequence, file, destination, record)
-	}
-	if record.Valid() {
+	case checkpointmodel.CheckpointLineageDecisionAbsent:
+		return engine.beginNew(ctx, sequence, file, key, destination)
+	case checkpointmodel.CheckpointLineageDecisionRevisionConflict,
+		checkpointmodel.CheckpointLineageDecisionOwnershipConflict,
+		checkpointmodel.CheckpointLineageDecisionInvalid:
+		return engine.beginCheckpointBlocked(ctx, file, destination, resolution.Decision())
+	default:
 		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
 	}
-	return engine.beginNew(ctx, sequence, file, key, destination)
 }
 
 func (engine *Engine) beginNew(
@@ -104,64 +125,53 @@ func (engine *Engine) beginNew(
 	if err != nil || !final.valid() {
 		return transfer.FileStart{}, joinFailures(ctx, collaboratorError(ctx, err), closeDestination(destination))
 	}
-	if final.Condition() != FinalAbsent {
-		if final.Condition() != FinalCollision && final.Condition() != FinalOwnedExact {
-			return transfer.FileStart{}, joinFailures(ctx, bindingError(ErrTargetOwnershipUnknown), closeDestination(destination))
-		}
+	switch final.Condition() {
+	case FinalAbsent:
+		return engine.beginInitialCheckpoint(ctx, sequence, file, key, destination)
+	case FinalCollision, FinalOwnedExact:
 		settlement, settlementErr := transfer.NewCollisionFileSettlement(file.Target())
 		return settlementStart(settlement, joinFailures(ctx, settlementErr, closeDestination(destination)))
+	default:
+		return transfer.FileStart{}, joinFailures(
+			ctx, bindingError(ErrTargetOwnershipUnknown), closeDestination(destination),
+		)
 	}
-	for range MaximumObjectAllocationAttempts {
-		object, allocationErr := engine.allocateObjectID()
-		if allocationErr != nil {
-			return transfer.FileStart{}, joinFailures(ctx, allocationErr, closeDestination(destination))
-		}
-		observation, observeErr := engine.platform.ObserveOwnedObject(ctx, object, key.exactSize)
-		if observeErr != nil || !observation.validFor(object) {
-			return transfer.FileStart{}, joinFailures(
-				ctx, bindingError(ErrInvalidObservation), collaboratorError(ctx, observeErr),
-				closeDestination(destination),
-			)
-		}
-		if observation.Condition() != OwnedAbsent {
-			continue
-		}
-		candidate, err := newInitialRecord(key, object)
-		if err != nil {
-			return transfer.FileStart{}, joinFailures(ctx, err, closeDestination(destination))
-		}
-		// The immutable candidate is durable before any stage name exists. A crash
-		// after this cut can therefore classify and clean only our exact object.
-		if _, err := engine.storeRecord(ctx, nil, candidate); err != nil {
-			return transfer.FileStart{}, joinFailures(ctx, err, closeDestination(destination))
-		}
-		ownedFile, observation, createErr := engine.platform.CreateOwnedFile(ctx, destination, object, key.exactSize)
-		if !observation.validFor(object) {
-			return transfer.FileStart{}, joinFailures(
-				ctx, bindingError(ErrInvalidObservation), collaboratorError(ctx, createErr),
-				closeOwnedFile(ownedFile), closeDestination(destination),
-			)
-		}
-		if observation.Condition() != OwnedReady || ownedFile == nil || ownedFile.ObjectID() != object {
-			return transfer.FileStart{}, joinFailures(ctx, collaboratorError(ctx, createErr), bindingError(ErrTargetOwnershipUnknown), closeOwnedFile(ownedFile), closeDestination(destination))
-		}
-		if err := ownedFile.Sync(); err != nil {
-			return transfer.FileStart{}, joinFailures(ctx, collaboratorError(ctx, err), closeOwnedFile(ownedFile), closeDestination(destination))
-		}
-		verified, err := checkpointmodel.PromoteInitialCandidate(candidate)
-		if err != nil {
-			return transfer.FileStart{}, joinFailures(ctx, err, closeOwnedFile(ownedFile), closeDestination(destination))
-		}
-		if _, err := engine.storeRecord(ctx, &candidate, verified); err != nil {
-			return transfer.FileStart{}, joinFailures(ctx, err, closeOwnedFile(ownedFile), closeDestination(destination))
-		}
-		engine.emit(engine.traceEvent(sequence, TraceCreateOwnedFile, TraceSucceeded, 0, verified.Phase(), fault.Fault{}))
-		return engine.transactionStart(file, destination, ownedFile, verified)
+}
+
+func (engine *Engine) beginCheckpointBlocked(
+	ctx context.Context,
+	file transfer.MaterializationFile,
+	destination FileDestination,
+	decision checkpointmodel.CheckpointLineageDecision,
+) (transfer.FileStart, error) {
+	var reason transfer.ItemBlockReason
+	switch decision {
+	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:
+		reason = transfer.ItemBlockRevisionConflict
+	case checkpointmodel.CheckpointLineageDecisionOwnershipConflict:
+		reason = transfer.ItemBlockOwnedObjectUnknown
+	case checkpointmodel.CheckpointLineageDecisionInvalid:
+		reason = transfer.ItemBlockCheckpointInvalid
+	default:
+		return transfer.FileStart{}, joinFailures(ctx, checkpointBindingError(ErrPortContract), closeDestination(destination))
 	}
-	return transfer.FileStart{}, joinFailures(
-		ctx, newOutputFault(fault.ScopeOutputPause, fault.OutputResourceBudget, ErrObjectAllocation),
-		closeDestination(destination),
+	return engine.beginItemBlocked(ctx, file, destination, reason)
+}
+
+func (engine *Engine) beginItemBlocked(
+	ctx context.Context,
+	file transfer.MaterializationFile,
+	destination FileDestination,
+	reason transfer.ItemBlockReason,
+) (transfer.FileStart, error) {
+	reference, err := transfer.NewMaterializationStateRef(
+		file.Target().OutputSessionID(), file.Target().Locator().Digest(),
 	)
+	if err != nil {
+		return transfer.FileStart{}, joinFailures(ctx, err, closeDestination(destination))
+	}
+	settlement, err := transfer.NewImmediateItemBlockedFileSettlement(file.Target(), reference, reason)
+	return engine.terminalStart(ctx, destination, nil, settlement, err)
 }
 
 func (engine *Engine) transactionStart(
@@ -229,24 +239,26 @@ func (engine *Engine) storeRecord(
 	next checkpointmodel.Record,
 ) (bool, error) {
 	if ctx == nil || !next.Valid() || !engine.binding.Matches(next, next.RecordID()) ||
-		previous != nil && (!previous.Valid() || previous.RecordID() != next.RecordID()) {
+		previous == nil || !previous.Valid() || previous.RecordID() != next.RecordID() {
 		return false, checkpointBindingError(ErrCheckpointBinding)
 	}
-	observation, operationErr := engine.checkpoints.Store(ctx, previous, next)
+	observation, operationErr := engine.checkpoints.Replace(ctx, *previous, next)
+	if operationErr != nil {
+		return false, checkpointInstallError(operationErr)
+	}
 	if !observation.valid() {
-		return false, checkpointInstallError(errors.Join(ErrInvalidObservation, operationErr))
+		return false, checkpointInstallError(ErrInvalidObservation)
 	}
 	if current, present := observation.Record(); present && recordEqual(current, next) {
-		return operationErr != nil, nil
+		return false, nil
 	}
-	if previous != nil {
-		if current, present := observation.Record(); present && recordEqual(current, *previous) {
-			return false, checkpointInstallError(errors.Join(ErrCheckpointNotInstalled, operationErr))
-		}
-	} else if _, present := observation.Record(); !present {
-		return false, checkpointInstallError(errors.Join(ErrCheckpointNotInstalled, operationErr))
+	if current, present := observation.Record(); present && recordEqual(current, *previous) {
+		return false, checkpointInstallError(ErrCheckpointNotInstalled)
 	}
-	return false, checkpointInstallError(errors.Join(ErrTargetOwnershipUnknown, operationErr))
+	if _, present := observation.Record(); !present {
+		return false, checkpointInstallError(ErrCheckpointNotInstalled)
+	}
+	return false, checkpointInstallError(ErrTargetOwnershipUnknown)
 }
 
 func (engine *Engine) allocateObjectID() (checkpointmodel.ObjectID, error) {

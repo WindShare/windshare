@@ -4,6 +4,7 @@ import type {
 import { lifecycleDeadline } from '../../output/workspace'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import { TransferPauseRequestedError } from '../../transfer/output-session'
+import type { ProjectionEpoch } from '../../transfer/projection'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
   V2TransferAdmissionFailureError,
@@ -26,11 +27,19 @@ import type {
 
 const MAXIMUM_TIMER_DELAY_MILLISECONDS = 2_147_483_647
 
+export interface ActiveReceiveJoinedShare {
+  beginDownloadConnectivity(): V2ConnectivityActivation
+  transferJob(
+    ...args: Parameters<V2JoinedBrowserShare['transferJob']>
+  ): Pick<ReturnType<V2JoinedBrowserShare['transferJob']>, 'run'>
+}
+
 interface ActiveReceiveOperation {
   readonly boundary: number
-  readonly joined: V2JoinedBrowserShare
+  readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
   readonly runtime: V2BoundReceiveOperation
+  readonly presentationProjectionEpoch: ProjectionEpoch | null
   transfer?: AbortController
   connectivity?: V2ConnectivityActivation
   running?: Promise<void>
@@ -46,7 +55,7 @@ interface PendingLifecycleAction {
 
 export interface ActiveReceiveCoordinatorOptions {
   readonly outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
-  readonly ownsJoinedShare: (joined: V2JoinedBrowserShare) => boolean
+  readonly ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly onProgress: (progress: TransferProgress) => void
   readonly onTrace: (event: TransferTraceEvent) => void
   readonly onActionError: (error: unknown) => void
@@ -54,14 +63,14 @@ export interface ActiveReceiveCoordinatorOptions {
 }
 
 export interface ActiveReceiveAdoption {
-  readonly joined: V2JoinedBrowserShare
+  readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
   readonly runtime: V2BoundReceiveOperation
 }
 
 export class ActiveReceiveCoordinator {
   readonly #outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
-  readonly #ownsJoinedShare: (joined: V2JoinedBrowserShare) => boolean
+  readonly #ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly #onProgress: (progress: TransferProgress) => void
   readonly #onTrace: (event: TransferTraceEvent) => void
   readonly #onActionError: (error: unknown) => void
@@ -88,9 +97,16 @@ export class ActiveReceiveCoordinator {
   }
 
   adopt(input: ActiveReceiveAdoption): void {
+    const output = this.#outputs.getSnapshot()
+    if (output.receiveIntent === null ||
+        output.receiveIntent.operationId !== input.runtime.intent.operationId ||
+        output.receiveIntent.digest !== input.runtime.intent.digest) {
+      throw new TypeError('active receive runtime does not belong to the presented receive intent')
+    }
     const operation: ActiveReceiveOperation = {
       boundary: ++this.#boundary,
       ...input,
+      presentationProjectionEpoch: output.projection?.projection.epoch ?? null,
     }
     this.#pendingLifecycleAction = undefined
     this.#operation = operation
@@ -205,13 +221,17 @@ export class ActiveReceiveCoordinator {
 
   async #settleTransfer(active: ActiveReceiveOperation, result: TransferJobResult): Promise<void> {
     if (!this.#operationIsCurrent(active)) return
-    if (result.intent.digest !== active.runtime.intent.digest) {
+    if (result.intent.operationId !== active.runtime.intent.operationId ||
+        result.intent.digest !== active.runtime.intent.digest) {
       throw new TypeError('transfer result does not belong to the active receive intent')
     }
     const usage = await Promise.resolve(active.runtime.resolveWorkspaceUsage(result.lifecycle))
     if (!this.#operationIsCurrent(active)) return
     if (!this.#outputs.updateLifecycle(result.lifecycle, Date.now(), usage, Object.freeze([]))) {
       throw new TypeError('transfer lifecycle did not advance the active receive operation')
+    }
+    if (!this.#outputs.adoptTransferResult(active.presentationProjectionEpoch, result)) {
+      throw new TypeError('transfer result escaped its presentation boundary')
     }
     this.#scheduleExpiry(active)
     if (result.abortReason !== undefined) this.#reportTransferFailure(active, result.abortReason)

@@ -527,11 +527,19 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
               <h2>Receive as</h2>
               <ArtifactOfferPanel output={snapshot.output} controller={controller} />
               <LifecyclePanel output={snapshot.output} controller={controller} />
+              {snapshot.output.transferResultPresentation !== null && (
+                <div className={`transfer-result transfer-result-${snapshot.output.transferResultPresentation.tone}`}>
+                  <strong>{snapshot.output.transferResultPresentation.title}</strong>
+                  {snapshot.output.transferResultPresentation.lines.map((line) => (
+                    <p key={line}>{line}</p>
+                  ))}
+                </div>
+              )}
               {snapshot.progress.transferJobId.length > 0 && (
                 <div className="progress-panel">
                   <strong>{completionProgressDescription(snapshot.progress)}</strong>
                   <p>{discoveryProgressDescription(snapshot.progress)}</p>
-                  {snapshot.progress.fileErrors > 0 && (
+                  {snapshot.progress.fileErrors > 0 && snapshot.output.transferResultPresentation === null && (
                     <p>{snapshot.progress.fileErrors} file error(s)</p>
                   )}
                   {snapshot.progress.selectionErrors > 0 && (

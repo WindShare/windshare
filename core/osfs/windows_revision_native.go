@@ -404,9 +404,11 @@ func classifyWindowsStableOpenError(err error) error {
 		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED):
 		return errors.Join(content.ErrUnsupportedStability, err)
 	case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND),
-		errors.Is(err, windows.ERROR_CANT_ACCESS_FILE), errors.Is(err, windows.ERROR_REPARSE),
-		errors.Is(err, windows.ERROR_REPARSE_OBJECT), errors.Is(err, windows.ERROR_REPARSE_POINT_ENCOUNTERED):
-		return errors.Join(content.ErrRevisionStale, err)
+		errors.Is(err, windows.ERROR_CANT_ACCESS_FILE):
+		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonUnavailable)
+	case errors.Is(err, windows.ERROR_REPARSE), errors.Is(err, windows.ERROR_REPARSE_OBJECT),
+		errors.Is(err, windows.ERROR_REPARSE_POINT_ENCOUNTERED):
+		return content.WithRevisionComparison(errors.Join(content.ErrRevisionStale, err), content.RevisionComparisonMismatch)
 	default:
 		return err
 	}
