@@ -59,7 +59,7 @@ The final result is `success`, `partial`, `paused`, or `failed`; source drift is
 - Human status, progress, warnings, errors, and results are written to stderr. Redirected stderr has no ANSI or dynamic refresh and, by default, keeps only warnings, errors, and final results.
 - `-v` and `--verbose` add static handshake, reconnect, lane, fallback, and failed protocol-operation diagnostics without changing capability output, results, or exit codes.
 - `--trace <file>` claims that exact path for one new versioned private-safe NDJSON file. An existing path is preserved and the command fails before relay or output mutation; append, overwrite, and `--trace=-` are unsupported.
-- `--trace-dir <directory>` creates one run-specific NDJSON file and reports its generated path on stderr. Each trace file belongs to one command invocation; WindShare never rotates or deletes traces, so retention remains user-owned.
+- `--trace-dir <directory>` creates the directory when needed, writes one compactly named run-specific NDJSON file, and reports its generated path on stderr. Each trace file belongs to one command invocation; WindShare never rotates or deletes traces, so retention remains user-owned.
 - Protocol-operation records omit successful block/streaming milestones. `content_path` reports usable paths, while terminal `lane_settlement` records summarize authenticated blocks and bytes delivered by each relay or direct lane.
 - Trace recording never waits for file I/O. Projection, queue, write, or flush loss emits bounded `observer_loss` evidence when possible and one `Trace is incomplete` warning, without cancelling or reclassifying the transfer.
 

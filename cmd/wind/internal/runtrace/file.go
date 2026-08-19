@@ -9,7 +9,10 @@ import (
 	"time"
 )
 
-const ownerOnlyFileMode = 0o600
+const (
+	ownerOnlyDirectoryMode = 0o700
+	ownerOnlyFileMode      = 0o600
+)
 
 type systemClock struct{}
 
@@ -41,6 +44,9 @@ func normalizedDependencies(dependencies Dependencies) Dependencies {
 	if dependencies.Random == nil {
 		dependencies.Random = rand.Reader
 	}
+	if dependencies.EnsureDirectory == nil {
+		dependencies.EnsureDirectory = ensureTraceDirectory
+	}
 	if dependencies.OpenFile == nil {
 		dependencies.OpenFile = openOwnerOnlyFile
 	}
@@ -50,6 +56,10 @@ func normalizedDependencies(dependencies Dependencies) Dependencies {
 		}
 	}
 	return dependencies
+}
+
+func ensureTraceDirectory(path string) error {
+	return os.MkdirAll(path, ownerOnlyDirectoryMode)
 }
 
 func openOwnerOnlyFile(path string) (TraceFile, error) {
