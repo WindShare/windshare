@@ -147,13 +147,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       verifiedRanges: this.#ranges.ranges,
       commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
     })
-    await this.#checkpoints.putCandidate(candidate)
+    await this.#checkpoints.stageCheckpointUpdate(this.#checkpoint, candidate)
     await this.#handle.verify('checkpoint')
     const committed = newFileCheckpointV2({
       ...candidate,
       commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
     })
-    await this.#checkpoints.commit(committed)
+    await this.#checkpoints.commitCheckpointCandidate(candidate, committed)
     const verified = await this.#checkpoints.readCommitted(committed.recordId)
     if (verified === undefined || verified.checksum !== committed.checksum ||
         verified.checkpointGeneration !== committed.checkpointGeneration) {

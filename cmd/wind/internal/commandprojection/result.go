@@ -148,6 +148,9 @@ func resultFailure(
 	if failure, ok := ProjectTransferInterruption(input.Result.SettlementInterruption); ok {
 		return failure, true
 	}
+	if failure, ok := projectFileOutcomeFailure(input.Result.Progress.FileOutcomes); ok {
+		return failure, true
+	}
 	for _, directory := range input.Result.Directories {
 		if failure, ok := ProjectFault(directory.Fault); ok {
 			return failure, true
@@ -172,6 +175,25 @@ func resultFailure(
 		}
 	}
 	return mustFailure(clievent.FailureUnexpected), true
+}
+
+func projectFileOutcomeFailure(outcomes transfer.FileOutcomeSummary) (clievent.Failure, bool) {
+	// Local semantic outcomes are authoritative aggregates; bounded diagnostics
+	// cannot safely choose either the result code or its product wording.
+	for _, candidate := range []struct {
+		count uint64
+		code  clievent.FailureCode
+	}{
+		{outcomes.RevisionConflictFiles, clievent.FailureCheckpointRevisionConflict},
+		{outcomes.CheckpointInvalidFiles, clievent.FailureCheckpointInvalid},
+		{outcomes.OwnedObjectUnknownFiles, clievent.FailureOwnedObjectUnknown},
+		{outcomes.CollisionFiles, clievent.FailureDestinationCollision},
+	} {
+		if candidate.count != 0 {
+			return mustFailure(candidate.code), true
+		}
+	}
+	return clievent.Failure{}, false
 }
 
 type ShareFailureClass uint8

@@ -4,8 +4,13 @@ import {
   offerArtifacts,
   type ArtifactOffers,
 } from '../../src/output/planning'
+import { fileId } from '../../src/catalog/model'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
-import type { SelectionProjectionState } from '../../src/transfer/projection'
+import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
+import {
+  nextProjectionEpoch,
+  type SelectionProjectionState,
+} from '../../src/transfer/projection'
 import {
   presentArtifactOffers,
 } from '../../src/ui/v2-artifact-presentation'
@@ -252,6 +257,45 @@ describe('artifact action activation boundary', () => {
     const staleEpoch = projection(selection, singleFileProof(), 1n, 3n).epoch
     expect(controller.adoptReceiveIntent(staleEpoch, intent)).toBe(false)
     expect(controller.getSnapshot().receiveIntent).toBeNull()
+  })
+
+  it('fences exact transfer-result presentation by projection epoch and receive identity', async () => {
+    const selection = await selectionSpec()
+    const projected = projection(selection, singleFileProof(), 128n, 4n)
+    const controller = new V2OutputPresentationController<string>()
+    await controller.updateProjection(
+      state(projected, COMPLETE_DISCOVERY),
+      environment({ targets: [managedTarget()] }),
+    )
+    await controller.activateArtifact('download-original', () => 'authority')
+    const action = controller.getSnapshot().chosenAction
+    if (action?.artifact === null || action?.artifact === undefined) throw new Error('missing artifact')
+    const intent = {
+      operationId: identity(82),
+      digest: identity(83, 32),
+      artifact: action.artifact,
+      plan: { kind: action.plan.kind },
+    } as ReceiveIntent
+    expect(controller.adoptReceiveIntent(projected.epoch, intent)).toBe(true)
+
+    const failures = new TransferFailureAccumulator()
+    failures.record({
+      kind: 'file',
+      fileId: fileId(identity(84)),
+      reason: new Error('diagnostic is not presentation'),
+    }, 'revision-conflict')
+    const result = {
+      worker: transferWorkerSettlement('CompletedWithErrors', failures.snapshot()),
+      intent,
+      transferJobId: 'job-1',
+    }
+    expect(controller.adoptTransferResult(nextProjectionEpoch(2n), result)).toBe(false)
+    expect(controller.getSnapshot().transferResultPresentation).toBeNull()
+    expect(controller.adoptTransferResult(projected.epoch, result)).toBe(true)
+    expect(controller.getSnapshot().transferResultPresentation).toMatchObject({
+      title: 'Resume revision conflict',
+      lines: [expect.stringMatching(/local resume data/u)],
+    })
   })
 })
 

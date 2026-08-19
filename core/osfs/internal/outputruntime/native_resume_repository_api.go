@@ -279,9 +279,17 @@ func (lease *NativeResumeLease) Snapshot(
 		}
 		return resumeauthority.Snapshot{}, nativeResumeError(err)
 	}
-	items, err := ordinaryResumeItems(ctx, lease.topLevel, lease.store)
+	items, repositoryAttention, err := ordinaryResumeItems(ctx, lease.topLevel, lease.store)
 	if err != nil {
 		return resumeauthority.Snapshot{}, nativeResumeError(err)
+	}
+	if repositoryAttention && record.Lifecycle() == checkpointmodel.OrdinaryOperationActive {
+		if _, transitionErr := lease.transitionLocked(
+			checkpointmodel.OrdinaryLifecycleRequireAttention,
+			checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
+		); transitionErr != nil {
+			return resumeauthority.Snapshot{}, transitionErr
+		}
 	}
 	return resumeauthority.NewSnapshot(lease.header, items)
 }
@@ -400,10 +408,15 @@ func (lease *NativeResumeLease) ensureFileStoreLocked() (bool, error) {
 		&repository, lease.runtime.destination.LiveCleanupProfile(),
 	)
 	var recordCount uint64
+	var repositoryAttention bool
 	if store != nil {
 		recordCount = store.RecordCount()
+		_, attention := store.LineageSnapshot()
+		repositoryAttention = len(attention) != 0
 	}
-	lease.runtime.traceCheckpointReconciled(intent, transfer.OutputSessionID{}, recordCount, err)
+	lease.runtime.traceCheckpointReconciled(
+		intent, transfer.OutputSessionID{}, recordCount, repositoryAttention, err,
+	)
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(
 			FilesystemOutputFailureCheckpointReconciliation,

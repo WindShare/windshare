@@ -73,9 +73,9 @@ func TestRecoveryReducerSeparatesDefiniteTamperFromUnknownOwnership(t *testing.T
 		wantAction RecoveryAction
 		wantReason checkpointmodel.QuarantineReason
 	}{
-		{"owned absent", active, OwnedAbsent, FinalAbsent, RecoveryStartNewPreservingOld, 0},
-		{"anchor absent", active, OwnedAnchorMissing, FinalAbsent, RecoveryStartNewPreservingOld, 0},
-		{"stage absent", active, OwnedStageMissing, FinalAbsent, RecoveryStartNewPreservingOld, 0},
+		{"owned absent", active, OwnedAbsent, FinalAbsent, RecoveryReturnOwnershipBlocked, 0},
+		{"anchor absent", active, OwnedAnchorMissing, FinalAbsent, RecoveryReturnOwnershipBlocked, 0},
+		{"stage absent", active, OwnedStageMissing, FinalAbsent, RecoveryReturnOwnershipBlocked, 0},
 		{"active collision", active, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
 		{"paused incomplete collision", paused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
 		{"paused complete collision", fullPaused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
@@ -388,29 +388,29 @@ func TestEngineRejectsCanceledAndUnboundCollaborators(t *testing.T) {
 
 type coverageCheckpointRepository struct {
 	CheckpointRepository
-	lookup func(context.Context, CheckpointKey) (checkpointmodel.Record, bool, error)
-	store  func(context.Context, *checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
+	lookup  func(context.Context, CheckpointKey) (CheckpointResolution, error)
+	replace func(context.Context, checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error)
 }
 
 func (repository *coverageCheckpointRepository) Lookup(
 	ctx context.Context,
 	key CheckpointKey,
-) (checkpointmodel.Record, bool, error) {
+) (CheckpointResolution, error) {
 	if repository.lookup != nil {
 		return repository.lookup(ctx, key)
 	}
 	return repository.CheckpointRepository.Lookup(ctx, key)
 }
 
-func (repository *coverageCheckpointRepository) Store(
+func (repository *coverageCheckpointRepository) Replace(
 	ctx context.Context,
-	previous *checkpointmodel.Record,
+	previous checkpointmodel.Record,
 	next checkpointmodel.Record,
 ) (CheckpointObservation, error) {
-	if repository.store != nil {
-		return repository.store(ctx, previous, next)
+	if repository.replace != nil {
+		return repository.replace(ctx, previous, next)
 	}
-	return repository.CheckpointRepository.Store(ctx, previous, next)
+	return repository.CheckpointRepository.Replace(ctx, previous, next)
 }
 
 type coveragePlatform struct {
@@ -468,7 +468,7 @@ func (authority *coverageDirectoryAuthority) BindFile(
 	return authority.destination, authority.err
 }
 
-func TestStoreRecordCrashCutUsesObservationAsTheOnlyInstallAuthority(t *testing.T) {
+func TestStoreRecordNeverConvertsInstallErrorIntoDurableSuccess(t *testing.T) {
 	transaction, repository, _, _ := newCoveragePartialFileTransaction(t, 4)
 	engine := transaction.engine
 	previous := repository.record
@@ -485,17 +485,17 @@ func TestStoreRecordCrashCutUsesObservationAsTheOnlyInstallAuthority(t *testing.
 		wantChanged bool
 		want        error
 	}{
-		"next observed despite operation error": {&previous, mustObservedCheckpoint(t, next), operationErr, true, nil},
-		"previous remains":                      {&previous, mustObservedCheckpoint(t, previous), operationErr, false, ErrCheckpointNotInstalled},
-		"create remains missing":                {nil, MissingCheckpoint(), operationErr, false, ErrCheckpointNotInstalled},
-		"foreign observation":                   {&previous, mustObservedCheckpoint(t, mustForeignExecutionRecord(t, previous)), operationErr, false, ErrTargetOwnershipUnknown},
-		"invalid observation":                   {&previous, CheckpointObservation{present: true}, operationErr, false, ErrInvalidObservation},
+		"next observed despite operation error": {&previous, mustObservedCheckpoint(t, next), operationErr, false, operationErr},
+		"previous remains":                      {&previous, mustObservedCheckpoint(t, previous), operationErr, false, operationErr},
+		"create rejected without predecessor":   {nil, MissingCheckpoint(), operationErr, false, ErrCheckpointBinding},
+		"foreign observation":                   {&previous, mustObservedCheckpoint(t, mustForeignExecutionRecord(t, previous)), operationErr, false, operationErr},
+		"invalid observation":                   {&previous, CheckpointObservation{present: true}, operationErr, false, operationErr},
 	} {
 		t.Run(name, func(t *testing.T) {
 			original := engine.checkpoints
 			engine.checkpoints = &coverageCheckpointRepository{
 				CheckpointRepository: original,
-				store: func(context.Context, *checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error) {
+				replace: func(context.Context, checkpointmodel.Record, checkpointmodel.Record) (CheckpointObservation, error) {
 					return test.observation, test.operation
 				},
 			}
@@ -724,8 +724,11 @@ func TestBeginExistingRejectsUnverifiableOwnedAndFinalObservations(t *testing.T)
 	t.Run("candidate needs exact owned witness", func(t *testing.T) {
 		engine, platform, _ := newExistingEngine(candidate)
 		platform.openCondition = OwnedStageMissing
-		if _, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination); !errors.Is(err, ErrTargetOwnershipUnknown) {
-			t.Fatalf("candidate witness error = %v", err)
+		start, err := engine.BeginFile(context.Background(), fixture.file, fixture.destination)
+		settlement, immediate := start.ImmediateSettlement()
+		_, reason, blocked := settlement.ItemBlock()
+		if err != nil || !immediate || !blocked || reason != transfer.ItemBlockOwnedObjectUnknown {
+			t.Fatalf("candidate witness settlement = (%t, %t, %d, %v)", immediate, blocked, reason, err)
 		}
 	})
 

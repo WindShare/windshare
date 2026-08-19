@@ -132,10 +132,11 @@ const (
 	resumeBlockedPublicationUnknown resumeBlockedReason = iota + 1
 	resumeBlockedCheckpointInvalid
 	resumeBlockedOwnedObjectUnknown
+	resumeBlockedRevisionConflict
 )
 
 func (reason resumeBlockedReason) valid() bool {
-	return reason >= resumeBlockedPublicationUnknown && reason <= resumeBlockedOwnedObjectUnknown
+	return reason >= resumeBlockedPublicationUnknown && reason <= resumeBlockedRevisionConflict
 }
 
 func (reason resumeBlockedReason) String() string {
@@ -146,6 +147,8 @@ func (reason resumeBlockedReason) String() string {
 		return "checkpoint-invalid"
 	case resumeBlockedOwnedObjectUnknown:
 		return "owned-object-unknown"
+	case resumeBlockedRevisionConflict:
+		return "revision-conflict"
 	default:
 		return ""
 	}

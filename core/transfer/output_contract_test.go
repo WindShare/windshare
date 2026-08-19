@@ -354,11 +354,21 @@ func immediatePublishedSettlement(
 	return settlement
 }
 
-func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
+func TestTransferJobIsolatesImmediateCollisionAndItemBlocks(t *testing.T) {
+	itemBlockedSettlement := func(reason ItemBlockReason) func(*jobOutput, string, content.FileRevisionDescriptor) FileSettlement {
+		return func(output *jobOutput, path string, descriptor content.FileRevisionDescriptor) FileSettlement {
+			locator, _ := NewPathMaterializationLocator(path)
+			target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
+			reference, _ := NewMaterializationStateRef(output.session, locator.Digest())
+			settlement, _ := NewImmediateItemBlockedFileSettlement(target, reference, reason)
+			return settlement
+		}
+	}
 	for _, test := range []struct {
 		name       string
 		settlement func(*jobOutput, string, content.FileRevisionDescriptor) FileSettlement
 		cause      error
+		outcomes   FileOutcomeSummary
 	}{
 		{
 			name: "collision",
@@ -368,20 +378,38 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 				settlement, _ := NewCollisionFileSettlement(target)
 				return settlement
 			},
-			cause: ErrOutputPublishBlocked,
+			cause:    ErrOutputPublishBlocked,
+			outcomes: FileOutcomeSummary{DownloadedFiles: 1, CollisionFiles: 1},
 		},
 		{
-			name: "quarantine",
-			settlement: func(output *jobOutput, path string, descriptor content.FileRevisionDescriptor) FileSettlement {
-				locator, _ := NewPathMaterializationLocator(path)
-				target, _ := NewFileMaterializationTarget(output.SessionID(), descriptor, locator)
-				reference, _ := NewMaterializationStateRef(output.session, locator.Digest())
-				settlement, _ := NewImmediateItemBlockedFileSettlement(
-					target, reference, ItemBlockOwnershipUnknown,
-				)
-				return settlement
+			name:       "quarantine",
+			settlement: itemBlockedSettlement(ItemBlockOwnershipUnknown),
+			cause:      ErrOutputQuarantined,
+			outcomes:   FileOutcomeSummary{DownloadedFiles: 1, ItemBlockedFiles: 1},
+		},
+		{
+			name:       "revision conflict",
+			settlement: itemBlockedSettlement(ItemBlockRevisionConflict),
+			cause:      ErrOutputQuarantined,
+			outcomes: FileOutcomeSummary{
+				DownloadedFiles: 1, ItemBlockedFiles: 1, RevisionConflictFiles: 1,
 			},
-			cause: ErrOutputQuarantined,
+		},
+		{
+			name:       "invalid checkpoint",
+			settlement: itemBlockedSettlement(ItemBlockCheckpointInvalid),
+			cause:      ErrOutputQuarantined,
+			outcomes: FileOutcomeSummary{
+				DownloadedFiles: 1, ItemBlockedFiles: 1, CheckpointInvalidFiles: 1,
+			},
+		},
+		{
+			name:       "owned object conflict",
+			settlement: itemBlockedSettlement(ItemBlockOwnedObjectUnknown),
+			cause:      ErrOutputQuarantined,
+			outcomes: FileOutcomeSummary{
+				DownloadedFiles: 1, ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1,
+			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -421,7 +449,8 @@ func TestTransferJobIsolatesImmediateCollisionAndQuarantine(t *testing.T) {
 			}
 			result := job.Run(context.Background())
 			if result.Outcome != DirectTreeOutcomeFailed || result.Settlement.Kind() != DirectTreeSettlementFailed ||
-				result.SucceededFiles != 1 || len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.cause) {
+				result.SucceededFiles != 1 || len(result.Files) != 1 || !errors.Is(result.Files[0].Cause, test.cause) ||
+				result.Progress.FileOutcomes != test.outcomes || !result.Progress.CountersExact {
 				t.Fatalf("result=%+v", result)
 			}
 			if _, exists := output.transactions[blockedPath]; exists {

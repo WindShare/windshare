@@ -181,7 +181,7 @@ func TestOwnedCreateReconcilesPartialAllocationWithoutInventingReadyState(t *tes
 		_ = lease.Close()
 		_ = namespace.Close()
 	})
-	store := &FileExecutionStore{repository: &repository, records: make(map[[sha256.Size]byte]checkpointmodel.Record)}
+	store := &FileExecutionStore{repository: &repository, authority: repository.authority}
 	object, err := checkpointmodel.ObjectIDFromBytes(bytes.Repeat([]byte{0x92}, sha256.Size))
 	if err != nil {
 		t.Fatal(err)
@@ -219,10 +219,10 @@ func TestFileExecutionStoreRejectsAmbiguousIndexAndMissingInstall(t *testing.T) 
 		t.Fatal(err)
 	}
 	record := checkpointRecordFixture(t, ownership, fixture, 0xa2)
-	if err := store.indexRecord(checkpointmodel.Record{}); errorCode(err) != ErrorCorruptRecord {
+	if err := store.authority.add(checkpointmodel.Record{}); !errors.Is(err, checkpointmodel.ErrInvalidRecord) {
 		t.Fatalf("invalid index error = %v", err)
 	}
-	if err := store.indexRecord(record); err != nil {
+	if err := store.authority.add(record); err != nil {
 		t.Fatal(err)
 	}
 	conflictingSpec := checkpointmodel.RecordSpec{
@@ -237,32 +237,100 @@ func TestFileExecutionStoreRejectsAmbiguousIndexAndMissingInstall(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := store.indexRecord(conflicting); errorCode(err) != ErrorCorruptRecord {
-		t.Fatalf("ambiguous index error = %v", err)
+	if err := store.authority.add(conflicting); err != nil {
+		t.Fatalf("retain conflicting authority = %v", err)
+	}
+	slots, _ := store.LineageSnapshot()
+	if len(slots) != 1 || slots[0].Decision() != checkpointmodel.CheckpointLineageDecisionOwnershipConflict {
+		t.Fatalf("conflicting authority decision = %+v", slots)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := store.Store(canceled, nil, record); !errors.Is(err, context.Canceled) {
+	if _, err := store.installInitialRecord(canceled, record); !errors.Is(err, context.Canceled) {
 		t.Fatalf("canceled checkpoint store error = %v", err)
 	}
 	var nilStore *FileExecutionStore
-	if _, err := nilStore.Store(context.Background(), nil, record); err == nil {
+	if _, err := nilStore.installInitialRecord(context.Background(), record); err == nil {
 		t.Fatal("nil checkpoint store accepted an install")
 	}
 
 	faultRepository := repository
+	faultRepository.authority = newFileExecutionAuthority()
 	faultRepository.records = &faultDirectory{
 		Directory:       repository.records,
 		createDirectory: func(string, bool) (outputcap.Directory, error) { return nil, errors.New("record shard unavailable") },
 	}
 	missingStore := &FileExecutionStore{
 		repository: &faultRepository,
-		records:    make(map[[sha256.Size]byte]checkpointmodel.Record),
+		authority:  faultRepository.authority,
 	}
-	observation, err := missingStore.Store(context.Background(), nil, record)
-	if _, present := observation.Record(); present || err == nil {
+	observation, err := missingStore.installInitialRecord(context.Background(), record)
+	if _, present := observation.Resolution().Record(); present || err == nil {
 		t.Fatalf("failed checkpoint install = (present=%t, %v)", present, err)
+	}
+}
+
+func TestInitialInstallReadableAfterSyncFailureNeverReportsDurableSuccess(t *testing.T) {
+	_, namespace, lease, repository, ownership, fixture := openRepositoryFixture(t, 0xaa)
+	t.Cleanup(func() {
+		_ = repository.Close()
+		_ = lease.Close()
+		_ = namespace.Close()
+	})
+	store, err := NewFreshFileExecutionStore(&repository)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record := checkpointRecordFixture(t, ownership, fixture, 0xab)
+	shardName, _ := recordLocation(record.RecordID())
+	syncFailure := errors.New("checkpoint shard sync failed")
+	originalRecords := repository.records
+	shardSyncs := 0
+	wrapShard := func(directory outputcap.Directory) outputcap.Directory {
+		return &faultDirectory{
+			Directory: directory,
+			sync: func() error {
+				shardSyncs++
+				if shardSyncs == 1 {
+					return nil
+				}
+				return syncFailure
+			},
+		}
+	}
+	repository.records = &faultDirectory{
+		Directory: originalRecords,
+		createDirectory: func(name string, private bool) (outputcap.Directory, error) {
+			directory, err := originalRecords.CreateDirectory(name, private)
+			if err == nil && name == shardName {
+				directory = wrapShard(directory)
+			}
+			return directory, err
+		},
+		openDirectory: func(name string, private bool) (outputcap.Directory, error) {
+			directory, err := originalRecords.OpenDirectory(name, private)
+			if err == nil && name == shardName {
+				directory = wrapShard(directory)
+			}
+			return directory, err
+		},
+	}
+
+	observation, err := store.installInitialRecord(context.Background(), record)
+	if !errors.Is(err, syncFailure) || observation.Installed() {
+		t.Fatalf("ambiguous initial install = (%t, %v)", observation.Installed(), err)
+	}
+	if observed, reopenErr := repository.Reopen(record.RecordID()); reopenErr != nil ||
+		!bytes.Equal(observed.CanonicalBytes(), record.CanonicalBytes()) {
+		t.Fatalf("expected readable ambiguity evidence = (%+v, %v)", observed, reopenErr)
+	}
+	if store.RecordCount() != 0 {
+		t.Fatalf("readable unsynced image gained authority: count=%d", store.RecordCount())
+	}
+	if retry, retryErr := store.installInitialRecord(context.Background(), record); retry.Installed() || ErrorCodeFor(retryErr) != ErrorStateIO ||
+		!errors.Is(retryErr, errFileExecutionAuthorityUnsettled) {
+		t.Fatalf("unsettled authority retry = (%t, %v)", retry.Installed(), retryErr)
 	}
 }
 

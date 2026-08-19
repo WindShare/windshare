@@ -2,6 +2,7 @@ import type {
   FileCheckpointJournal,
   FinalFileCheckpointProof,
 } from '../persistence/journal'
+import type { FileCheckpointRecoveryRepository } from './recovery'
 
 export interface OpenedFileRevision {
   readonly fileId: string
@@ -39,9 +40,18 @@ export interface PersistentOutputTree {
   prepareRoot(): Promise<void>
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization>
   validateDirectory(path: readonly string[], ownedObjectId: string): Promise<boolean>
+  proposeFileOwnedObjectId(
+    path: readonly string[],
+    revision: OpenedFileRevision,
+  ): Promise<string>
+  inspectFileDestination(
+    path: readonly string[],
+    selectedOwnedObjectId: string,
+  ): Promise<'absent' | 'occupied'>
   createFileAfterRevisionOpen(
     path: readonly string[],
     revision: OpenedFileRevision,
+    selectedOwnedObjectId: string,
   ): Promise<PersistentTreeFile>
   openFile(
     path: readonly string[],
@@ -72,19 +82,29 @@ export interface PersistentByteRange {
   readonly end: bigint
 }
 
+export type RecoverableFileCheckpointJournal =
+  FileCheckpointJournal & Pick<FileCheckpointRecoveryRepository, 'resolveCandidate'>
+
 export interface PersistentTreeSessionOptions {
   readonly tree: PersistentOutputTree
-  readonly checkpoints: FileCheckpointJournal
+  readonly checkpoints: RecoverableFileCheckpointJournal
   readonly trace?: PersistentTreeTrace
 }
 
 export type PersistentTreeTraceEvent =
-  Readonly<{
-    name: 'receive.operation.needs_attention'
-    operation_id: string
-    prior_state: 'receiving'
-    needs_attention_reason: 'target-ownership-unknown'
-  }>
+  | Readonly<{
+      name: 'receive.operation.needs_attention'
+      operation_id: string
+      prior_state: 'receiving'
+      needs_attention_reason: 'target-ownership-unknown'
+    }>
+  | Readonly<{
+      name: 'receive.checkpoint.decision'
+      operation_id: string
+      file_id: string
+      record_id?: string
+      decision: 'absent' | 'installed' | 'exact' | 'revision-conflict' | 'ownership-conflict' | 'invalid'
+    }>
 
 export type PersistentTreeTrace = (event: PersistentTreeTraceEvent) => void
 

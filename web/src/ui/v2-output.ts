@@ -20,6 +20,7 @@ import type {
   ProjectionEpoch,
   SelectionProjectionState,
 } from '../transfer/projection'
+import type { TransferJobResult } from '../transfer/job/contract'
 import {
   presentArtifactOffers,
   type ArtifactOfferPresentation,
@@ -30,6 +31,10 @@ import {
   type V2ActiveReceiveControl,
   type WorkspaceUsage,
 } from './v2-lifecycle-presentation'
+import {
+  presentTransferResult,
+  type TransferResultPresentation,
+} from './v2-transfer-result'
 
 export interface V2OutputPresentationSnapshot {
   readonly projection: SelectionProjectionState | null
@@ -45,6 +50,7 @@ export interface V2OutputPresentationSnapshot {
   readonly expiresAt: number | null
   readonly workspaceUsage: WorkspaceUsage | null
   readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly transferResultPresentation: TransferResultPresentation | null
 }
 
 export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object.freeze({
@@ -61,6 +67,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   expiresAt: null,
   workspaceUsage: null,
   activeControls: Object.freeze([]),
+  transferResultPresentation: null,
 })
 
 export type V2OutputTraceEvent =
@@ -105,6 +112,11 @@ export type RetryConfirmationResult =
   | Readonly<{ kind: 'unavailable' }>
   | Readonly<{ kind: 'completed'; projectionEpoch: ProjectionEpoch }>
   | Readonly<{ kind: 'stale'; projectionEpoch: ProjectionEpoch }>
+
+export type TransferResultProjection = Pick<
+  TransferJobResult,
+  'worker' | 'intent' | 'transferJobId'
+>
 
 export interface V2OutputPresentationControllerOptions<Authority> {
   readonly planner?: ArtifactOfferPlanner
@@ -169,6 +181,7 @@ export class V2OutputPresentationController<Authority = unknown> {
             expiresAt: null,
             workspaceUsage: null,
             activeControls: Object.freeze([]),
+            transferResultPresentation: null,
           }
         : {}),
     }))
@@ -352,6 +365,24 @@ export class V2OutputPresentationController<Authority = unknown> {
       ...this.#snapshot,
       activeControls: Object.freeze([...controls]),
     }, lifecycle, Date.now(), this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  adoptTransferResult(
+    projectionEpoch: ProjectionEpoch | null,
+    result: TransferResultProjection,
+  ): boolean {
+    const intent = this.#snapshot.receiveIntent
+    const currentProjectionEpoch = this.#snapshot.projection?.projection.epoch ?? null
+    if (currentProjectionEpoch !== projectionEpoch || intent === null ||
+        result.intent.operationId !== intent.operationId || result.intent.digest !== intent.digest) {
+      if (projectionEpoch !== null) this.#traceStale(projectionEpoch, 'artifact-action')
+      return false
+    }
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      transferResultPresentation: presentTransferResult(result.worker),
+    }))
     return true
   }
 

@@ -46,9 +46,13 @@ local performance diagnostics are in
 
 There is no silent artifact fallback, partial ZIP, global block identity, or v1
 resume path. Old app-owned records are cleanup-only and cannot create a recoverable
-operation. For `resumable-receive` and `resumable-package`, Continue invokes an
-output-owned executor that revalidates exact preparation or sealed package evidence;
-the UI never reconstructs authority. Save, redownload, discard, and expiry remain live.
+operation. A sender handle released after resume grace can reopen with a new lease and
+the same revision when source evidence is unchanged, so durable ranges remain usable.
+A different stored revision is an item-local `revision-conflict`; ownership and invalid
+binding remain `owned-object-unknown` and `checkpoint-invalid`, and siblings continue.
+For `resumable-receive` and `resumable-package`, Continue invokes an output-owned
+executor that revalidates exact preparation or sealed package evidence; the UI never
+reconstructs authority. Save, redownload, discard, and expiry remain live.
 
 ## Local gates
 

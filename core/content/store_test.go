@@ -117,11 +117,28 @@ func (g *sequenceIDs) nextValue() byte {
 	return g.next
 }
 
-func (g *sequenceIDs) NewFileRevision() (FileRevision, error) {
-	return contentID[FileRevision](g.nextValue()), nil
-}
 func (g *sequenceIDs) NewLeaseID() (LeaseID, error) {
 	return contentID[LeaseID](g.nextValue()), nil
+}
+
+func testRevisionDeriver(t *testing.T) *HMACRevisionIdentityDeriver {
+	t.Helper()
+	var key RevisionIdentityKey
+	key[0] = 1
+	deriver, err := NewHMACRevisionIdentityDeriver(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return deriver
+}
+
+func testRevisionMetadataBudget(t *testing.T, capacity uint64) *RevisionMetadataBudget {
+	t.Helper()
+	budget, err := NewRevisionMetadataBudget(capacity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return budget
 }
 
 type recordingInvalidator struct {
@@ -162,15 +179,21 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 	t.Helper()
 	process := generousQuota(t, "process")
 	share := generousQuota(t, "share")
+	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		Source:  source, ProcessQuota: process, ShareQuota: share, Clock: clock,
-		IDs: &sequenceIDs{}, CacheInvalidator: invalidator,
+		LeaseIDs: &sequenceIDs{}, RevisionDeriver: deriver,
+		MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries), CacheInvalidator: invalidator,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		deriver.Destroy()
+	})
 	return store, process, share
 }
 
@@ -179,7 +202,8 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	file, record := fileRecord(t, uint64(catalog.MinChunkSize)+1)
 	data := append(make([]byte, catalog.MinChunkSize), 'i')
 	stable := &testStableFile{data: data}
-	source := &testRevisionSource{files: []*testStableFile{stable}, started: make(chan struct{}), release: make(chan struct{})}
+	reopened := &testStableFile{data: append([]byte(nil), data...)}
+	source := &testRevisionSource{files: []*testStableFile{stable, reopened}, started: make(chan struct{}), release: make(chan struct{})}
 	store, process, share := newRevisionStore(t, source, clock, nil, file, record)
 	session := generousQuota(t, "session")
 
@@ -235,10 +259,9 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	}
 	clock.Advance(RevisionResumeGrace)
 	third, err := store.OpenRevision(context.Background(), file, session)
-	if err == nil || !third.ID().IsZero() || source.Calls() != 2 {
-		// The second fake source is intentionally absent: this proves grace expiry
-		// tears down the stable handle and performs a fresh candidate verification.
-		t.Fatalf("post-grace open = %+v, %v, calls=%d", third, err, source.Calls())
+	if err != nil || third.ID().IsZero() || third.ID() == second.ID() ||
+		third.Descriptor().FileRevision() != second.Descriptor().FileRevision() || source.Calls() != 2 {
+		t.Fatalf("post-grace reopen = %+v, %v, calls=%d", third, err, source.Calls())
 	}
 	if stable.closed.Load() != 1 {
 		t.Fatalf("stable source closes = %d", stable.closed.Load())

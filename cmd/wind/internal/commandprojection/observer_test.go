@@ -157,6 +157,11 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		osfs.TraceSessionOpened, osfs.TraceCheckpointReconciled,
 		osfs.TraceRuntimeDecision,
 	}, osfs.FilesystemOutputTraceOperation(255), projectFilesystemOperation)
+	assertClosedProjection(t, "filesystem checkpoint decision", []osfs.FilesystemCheckpointDecision{
+		0, osfs.FilesystemCheckpointAbsent, osfs.FilesystemCheckpointExact,
+		osfs.FilesystemCheckpointRevisionConflict, osfs.FilesystemCheckpointOwnershipConflict,
+		osfs.FilesystemCheckpointInvalid,
+	}, osfs.FilesystemCheckpointDecision(255), projectFilesystemCheckpointDecision)
 	assertClosedProjection(t, "sender terminal transport", []sessionruntime.SenderTerminalTransportDisposition{
 		sessionruntime.SenderTerminalTransportAccepted,
 		sessionruntime.SenderTerminalTransportNotReached,
@@ -193,6 +198,25 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		liveshare.RootPrefetchBudgetFailed, liveshare.RootPrefetchScanFailed,
 		liveshare.RootPrefetchStopped,
 	}, liveshare.RootPrefetchDecision(255), projectRootPrefetchDecision)
+}
+
+func TestFilesystemCheckpointDecisionProjectionIsExact(t *testing.T) {
+	tests := []struct {
+		source osfs.FilesystemCheckpointDecision
+		want   clievent.FilesystemCheckpointDecision
+	}{
+		{osfs.FilesystemCheckpointAbsent, clievent.FilesystemCheckpointAbsent},
+		{osfs.FilesystemCheckpointExact, clievent.FilesystemCheckpointExact},
+		{osfs.FilesystemCheckpointRevisionConflict, clievent.FilesystemCheckpointRevisionConflict},
+		{osfs.FilesystemCheckpointOwnershipConflict, clievent.FilesystemCheckpointOwnershipConflict},
+		{osfs.FilesystemCheckpointInvalid, clievent.FilesystemCheckpointInvalid},
+	}
+	for _, test := range tests {
+		got, ok := projectFilesystemCheckpointDecision(test.source)
+		if !ok || got != test.want {
+			t.Fatalf("checkpoint decision %v projected as %v, present=%t", test.source, got, ok)
+		}
+	}
 }
 
 func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
@@ -367,14 +391,27 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		ReceiveIntentDigest: transfer.ReceiveIntentDigest{0x61},
 		OutputSessionID:     transfer.OutputSessionID{0x62},
 		FileSelection:       transfer.FileSelectionInherited,
-		FileSettlement:      transfer.FilePublished, Progress: progress,
+		FileSettlement:      transfer.FileItemBlocked,
+		ItemBlockReason:     transfer.ItemBlockRevisionConflict,
+		Progress:            progress,
 	})
 	if err != nil || transferEvent.ReceiveOperationID().Hex() != fmt.Sprintf("%x", receiveID) ||
 		transferEvent.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
 		transferEvent.TransferJobID().Hex() != fmt.Sprintf("%x", jobID) {
 		t.Fatalf("transfer projection = %#v, err %v", transferEvent, err)
 	}
+	if reason, present := transferEvent.ItemBlock(); !present || reason != clievent.ItemBlockRevisionConflict {
+		t.Fatalf("item block reason = %v,%t", reason, present)
+	}
 	assertProjectionOmits(t, transferEvent, fmt.Sprintf("%x", transfer.ReceiveIntentDigest{0x61}), fmt.Sprintf("%x", transfer.OutputSessionID{0x62}))
+	if _, err := ProjectTransferLifecycle(transfer.TransferLifecycleTrace{
+		Stage: transfer.TransferFileSettled, ReceiveOperationID: receiveID,
+		ProtocolSessionID: sessionID, TransferJobID: jobID,
+		FileSettlement: transfer.FileItemBlocked, ItemBlockReason: transfer.ItemBlockReason(255),
+		Progress: progress,
+	}); err != ErrInvalidProjection {
+		t.Fatalf("unknown item-block trace reason error = %v", err)
+	}
 	canceled, err := ProjectTransferLifecycle(transfer.TransferLifecycleTrace{
 		Stage: transfer.TransferDiscoveryCompleted, ReceiveOperationID: receiveID,
 		ProtocolSessionID: sessionID, TransferJobID: jobID,
@@ -396,6 +433,7 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		NodeClaimCount: 1, DirectoryClaimCount: 2, FileClaimCount: 3,
 		ActiveFileClaimCount: 4, ReservedFileSlotCount: 5,
 		DirectoryMetadataBytes: 6, CheckpointRecordCount: 7,
+		CheckpointDecision: osfs.FilesystemCheckpointRevisionConflict,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -404,6 +442,10 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 	if !present || projectedReceive.Hex() != fmt.Sprintf("%x", receiveID) ||
 		filesystemEvent.Counters().CheckpointRecords != 7 {
 		t.Fatalf("filesystem projection = %#v", filesystemEvent)
+	}
+	checkpointDecision, present := filesystemEvent.CheckpointDecision()
+	if !present || checkpointDecision != clievent.FilesystemCheckpointRevisionConflict {
+		t.Fatalf("checkpoint decision = %v, present=%t", checkpointDecision, present)
 	}
 	assertProjectionOmits(t, filesystemEvent, fmt.Sprintf("%x", transfer.ReceiveIntentDigest{0x71}), fmt.Sprintf("%x", transfer.OutputSessionID{0x72}))
 	withoutReceive, err := ProjectFilesystemOutput(osfs.FilesystemOutputTrace{Operation: osfs.TraceFilesystemCertified})

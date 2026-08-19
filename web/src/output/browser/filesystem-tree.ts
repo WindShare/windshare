@@ -1,9 +1,14 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
-import { bigintToSafeNumber } from '../../content/geometry'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type { NamedContainerEntryReservation } from '../../transfer/intent'
-import type { PersistentHandleRepository, PersistentHandleRecord } from '../persistence/journal'
-import { FILE_CHECKPOINT_ID_BYTES, identityBytes } from '../persistence/checkpoint'
+import type { PersistentHandleRepository } from '../persistence/journal'
+import {
+  BrowserFileLineageAuthority,
+  createOwnedObjectId,
+  namespaceEntryExists,
+  requireOwnedObjectId,
+  sameEntry,
+} from './filesystem-file-lineage'
 import {
   fsaOwnedDirectoryHandleId,
   persistFSAOwnedDirectory,
@@ -21,17 +26,10 @@ import type {
 } from '../persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 
-const READ_WRITE_PERMISSION = Object.freeze({ mode: 'readwrite' as const })
-export const FSA_FILE_HANDLE_KIND = 1
-const FSA_FILE_HANDLE_DOMAIN = 'windshare/fsa-file-handle/v1'
-const FSA_DIRECTORY_LOCATOR_DOMAIN = 'windshare/fsa-directory-locator/v1'
+export { FSA_FILE_HANDLE_KIND } from './filesystem-file-lineage'
 
-type FSAFileIdentityStage =
-  | 'parent-authority'
-  | 'namespace-create'
-  | 'writer-open'
-  | 'checkpoint'
-  | 'commit'
+const READ_WRITE_PERMISSION = Object.freeze({ mode: 'readwrite' as const })
+const FSA_DIRECTORY_LOCATOR_DOMAIN = 'windshare/fsa-directory-locator/v1'
 
 interface PermissionCapableDirectoryHandle extends FileSystemDirectoryHandle {
   queryPermission?(descriptor?: { readonly mode?: 'read' | 'readwrite' }): Promise<PermissionState>
@@ -49,18 +47,26 @@ export interface BrowserFileSystemTreeOptions {
 export class BrowserFileSystemTree implements PersistentOutputTree {
   readonly #binding: PersistedFSAOperationBinding
   readonly #operationRepository: FSAOperationBindingRepository
-  readonly #fileHandles: PersistentHandleRepository
   readonly #mutations: FSARootMutationAuthority
   readonly #randomOwnedObjectId: () => string
+  readonly #files: BrowserFileLineageAuthority
   #root: FileSystemDirectoryHandle | undefined
   #rootOwnedObjectId: string | undefined
 
   constructor(options: BrowserFileSystemTreeOptions) {
     this.#binding = options.binding
     this.#operationRepository = options.operationRepository
-    this.#fileHandles = options.fileHandles
     this.#mutations = options.mutations
     this.#randomOwnedObjectId = options.randomOwnedObjectId ?? createOwnedObjectId
+    this.#files = new BrowserFileLineageAuthority({
+      binding: options.binding,
+      fileHandles: options.fileHandles,
+      mutations: options.mutations,
+      prepareRoot: () => this.#requirePreparedRoot(),
+      verifyParent: () => this.#verifyParent(),
+      resolveParent: path => this.#parent(path),
+      randomOwnedObjectId: this.#randomOwnedObjectId,
+    })
   }
 
   async authorize(): Promise<void> {
@@ -249,105 +255,37 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return sameEntry(current, persisted, this.#binding.intent.operationId, 'parent-authority')
   }
 
-  async createFileAfterRevisionOpen(
+  proposeFileOwnedObjectId(
     path: readonly string[],
     revision: OpenedFileRevision,
-  ): Promise<PersistentTreeFile> {
-    requireOpenedRevision(revision)
-    const canonicalPath = this.#filePath(path)
-    await this.#requirePreparedRoot()
-    return this.#mutate('create-file', async () => {
-      await this.#verifyParent()
-      const { parent, name } = await this.#parent(canonicalPath)
-      if (await namespaceEntryExists(parent, name)) {
-        throw new TargetOwnershipUnknownError('namespace-create', this.#binding.intent.operationId)
-      }
-      const created = await parent.getFileHandle(name, { create: true })
-      const ownedObjectId = requireOwnedObjectId(this.#randomOwnedObjectId())
-      const handleRecord = fileHandleRecord(
-        this.#binding.reservation,
-        ownedObjectId,
-        created,
-      )
-      const existing = await this.#readFileHandle(handleRecord.id, 'namespace-create')
-      if (existing !== undefined) {
-        throw new TargetOwnershipUnknownError('namespace-create', this.#binding.intent.operationId)
-      }
-      try {
-        await this.#fileHandles.putHandle(handleRecord)
-      } catch (cause) {
-        throw new TargetOwnershipUnknownError(
-          'namespace-create',
-          this.#binding.intent.operationId,
-          { cause },
-        )
-      }
-      const persisted = await this.#readFileHandle(handleRecord.id, 'namespace-create')
-      const current = await requireFileEntry(parent, name, this.#binding.intent.operationId)
-      if (!await sameFileHandleRecord(persisted, handleRecord) ||
-          !await sameEntry(current, created, this.#binding.intent.operationId, 'namespace-create')) {
-        throw new TargetOwnershipUnknownError('namespace-create', this.#binding.intent.operationId)
-      }
-      return new BrowserPersistentFile(
-        ownedObjectId,
-        created,
-        (stage) => this.#verifyFile(canonicalPath, ownedObjectId, stage),
-        (kind, operation) => this.#mutate(kind, operation),
-      )
-    })
+  ): Promise<string> {
+    return this.#files.proposeOwnedObjectId(path, revision)
   }
 
-  async openFile(
+  inspectFileDestination(
+    path: readonly string[],
+    selectedOwnedObjectId: string,
+  ): Promise<'absent' | 'occupied'> {
+    return this.#files.inspectDestination(path, selectedOwnedObjectId)
+  }
+
+  createFileAfterRevisionOpen(
+    path: readonly string[],
+    revision: OpenedFileRevision,
+    selectedOwnedObjectId: string,
+  ): Promise<PersistentTreeFile> {
+    return this.#files.createAfterRevisionOpen(path, revision, selectedOwnedObjectId)
+  }
+
+  openFile(
     path: readonly string[],
     ownedObjectId: string,
   ): Promise<PersistentTreeFile | undefined> {
-    const canonicalPath = this.#filePath(path)
-    const objectId = requireOwnedObjectId(ownedObjectId)
-    const record = await this.#readFileHandle(fileHandleId(
-      this.#binding.intent.operationId,
-      objectId,
-    ), 'parent-authority')
-    if (record === undefined) return undefined
-    const handle = requireFileHandle(
-      record.handle,
-      this.#binding.intent.operationId,
-      'parent-authority',
-    )
-    if (record.operationId !== this.#binding.intent.operationId ||
-        record.kind !== FSA_FILE_HANDLE_KIND ||
-        record.authorityRef !== this.#binding.reservation.authorityRef ||
-        record.ownedObjectId !== objectId) {
-      throw new TargetOwnershipUnknownError('parent-authority', this.#binding.intent.operationId)
-    }
-    await this.#verifyFile(canonicalPath, objectId, 'writer-open')
-    return new BrowserPersistentFile(
-      objectId,
-      handle,
-      (stage) => this.#verifyFile(canonicalPath, objectId, stage),
-      (kind, operation) => this.#mutate(kind, operation),
-    )
+    return this.#files.open(path, ownedObjectId)
   }
 
-  async removeFile(path: readonly string[], ownedObjectId: string): Promise<void> {
-    const canonicalPath = this.#filePath(path)
-    const objectId = requireOwnedObjectId(ownedObjectId)
-    await this.#mutate('remove-entry', async () => {
-      await this.#verifyFile(canonicalPath, objectId, 'commit')
-      const { parent, name } = await this.#parent(canonicalPath)
-      await parent.removeEntry(name)
-      try {
-        await this.#fileHandles.deleteHandle(fileHandleId(
-          this.#binding.intent.operationId,
-          objectId,
-        ))
-      } catch (cause) {
-        throw new TargetOwnershipUnknownError(
-          'cleanup',
-          this.#binding.intent.operationId,
-          { cause },
-        )
-      }
-    })
+  removeFile(path: readonly string[], ownedObjectId: string): Promise<void> {
+    return this.#files.remove(path, ownedObjectId)
   }
 
   async removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void> {
@@ -369,37 +307,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     })
   }
 
-  async #verifyFile(
-    path: readonly string[],
-    ownedObjectId: string,
-    stage: 'writer-open' | 'checkpoint' | 'commit',
-  ): Promise<void> {
-    await this.#verifyParent()
-    const record = await this.#readFileHandle(fileHandleId(
-      this.#binding.intent.operationId,
-      ownedObjectId,
-    ), stage)
-    const persistedHandle = record === undefined
-      ? undefined
-      : requireFileHandle(record.handle, this.#binding.intent.operationId, stage)
-    if (record === undefined || record.operationId !== this.#binding.intent.operationId ||
-        record.kind !== FSA_FILE_HANDLE_KIND ||
-        record.authorityRef !== this.#binding.reservation.authorityRef ||
-        record.ownedObjectId !== ownedObjectId || persistedHandle === undefined) {
-      throw new TargetOwnershipUnknownError(stage, this.#binding.intent.operationId)
-    }
-    const { parent, name } = await this.#parent(path)
-    const current = await requireFileEntry(parent, name, this.#binding.intent.operationId)
-    if (!await sameEntry(
-      current,
-      persistedHandle,
-      this.#binding.intent.operationId,
-      stage,
-    )) {
-      throw new TargetOwnershipUnknownError(stage, this.#binding.intent.operationId)
-    }
-  }
-
   async #verifyParent(): Promise<FileSystemDirectoryHandle> {
     const verified = await verifyFSAOperationBinding({
       repository: this.#operationRepository,
@@ -413,15 +320,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     if (this.#binding.reservation.entryKind === 'result-root' && this.#root === undefined) {
       await this.prepareRoot()
     }
-  }
-
-  #filePath(path: readonly string[]): readonly string[] {
-    const canonical = snapshotRelativePath(path, false)
-    if (this.#binding.reservation.entryKind === 'single-file' &&
-        (canonical.length !== 1 || canonical[0] !== this.#binding.reservation.reservedName)) {
-      throw new TypeError('Single-file DirectoryTree must write directly below its parent')
-    }
-    return canonical
   }
 
   async #parent(path: readonly string[]): Promise<{
@@ -470,73 +368,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return this.#mutations.run(kind, operation)
   }
 
-  async #readFileHandle(
-    id: string,
-    stage: FSAFileIdentityStage,
-  ): Promise<PersistentHandleRecord | undefined> {
-    try {
-      return await this.#fileHandles.readHandle(id)
-    } catch (cause) {
-      throw new TargetOwnershipUnknownError(stage, this.#binding.intent.operationId, { cause })
-    }
-  }
-}
-
-class BrowserPersistentFile implements PersistentTreeFile {
-  readonly ownedObjectId: string
-  readonly #handle: FileSystemFileHandle
-  readonly #verify: PersistentTreeFile['verify']
-  readonly #mutate: <T>(kind: FSANamespaceMutationKind, operation: () => Promise<T>) => Promise<T>
-  #writer: FileSystemWritableFileStream | undefined
-
-  constructor(
-    ownedObjectId: string,
-    handle: FileSystemFileHandle,
-    verify: PersistentTreeFile['verify'],
-    mutate: <T>(kind: FSANamespaceMutationKind, operation: () => Promise<T>) => Promise<T>,
-  ) {
-    this.ownedObjectId = ownedObjectId
-    this.#handle = handle
-    this.#verify = verify
-    this.#mutate = mutate
-  }
-
-  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
-    await this.#mutate('open-writer', async () => {
-      await this.#verify('writer-open')
-      this.#writer ??= await this.#handle.createWritable({ keepExistingData: true })
-      await this.#writer.write({
-        type: 'write',
-        position: bigintToSafeNumber(offset, 'output offset'),
-        data: data.slice(),
-      })
-    })
-  }
-
-  async flush(): Promise<void> {
-    const writer = this.#writer
-    if (writer === undefined) return
-    this.#writer = undefined
-    await writer.close()
-  }
-
-  async size(): Promise<bigint> {
-    await this.flush()
-    return BigInt((await this.#handle.getFile()).size)
-  }
-
-  verify(stage: 'writer-open' | 'checkpoint' | 'commit'): Promise<void> {
-    return this.#verify(stage)
-  }
-
-  close(): Promise<void> {
-    return this.flush()
-  }
-
-  async read(): Promise<Blob> {
-    await this.flush()
-    return this.#handle.getFile()
-  }
 }
 
 export async function fsaDirectoryHandleId(
@@ -551,115 +382,9 @@ export async function fsaDirectoryHandleId(
   return fsaOwnedDirectoryHandleId(reservation.operationId, digest)
 }
 
-function fileHandleRecord(
-  reservation: NamedContainerEntryReservation,
-  ownedObjectId: string,
-  handle: FileSystemFileHandle,
-): PersistentHandleRecord {
-  return Object.freeze({
-    id: fileHandleId(reservation.operationId, ownedObjectId),
-    operationId: reservation.operationId,
-    kind: FSA_FILE_HANDLE_KIND,
-    authorityRef: reservation.authorityRef,
-    ownedObjectId,
-    handle,
-  })
-}
-
-function fileHandleId(operationId: string, ownedObjectId: string): string {
-  return `${FSA_FILE_HANDLE_DOMAIN}/${operationId}/${ownedObjectId}`
-}
-
-async function sameFileHandleRecord(
-  actual: PersistentHandleRecord | undefined,
-  expected: PersistentHandleRecord,
-): Promise<boolean> {
-  const actualHandle = actual === undefined
-    ? undefined
-    : requireFileHandle(actual.handle, expected.operationId, 'namespace-create')
-  const expectedHandle = requireFileHandle(
-    expected.handle,
-    expected.operationId,
-    'namespace-create',
-  )
-  return actual !== undefined && actual.id === expected.id &&
-    actual.operationId === expected.operationId && actual.kind === expected.kind &&
-    actual.authorityRef === expected.authorityRef &&
-    actual.ownedObjectId === expected.ownedObjectId && actualHandle !== undefined &&
-    await sameEntry(actualHandle, expectedHandle, expected.operationId, 'namespace-create')
-}
-
-function requireFileHandle(
-  value: unknown,
-  operationId: string,
-  stage: FSAFileIdentityStage,
-): FileSystemFileHandle {
-  try {
-    const handle = fileSystemHandle(value)
-    if (handle.kind !== 'file') {
-      throw new TypeError('Persisted FSA handle is not a file')
-    }
-    return handle as FileSystemFileHandle
-  } catch (cause) {
-    if (cause instanceof TargetOwnershipUnknownError) throw cause
-    throw new TargetOwnershipUnknownError(stage, operationId, { cause })
-  }
-}
-
-function fileSystemHandle(value: unknown): FileSystemHandle {
-  if (typeof value !== 'object' || value === null ||
-      !('kind' in value) || !('isSameEntry' in value) ||
-      ((value as { readonly kind?: unknown }).kind !== 'file' &&
-       (value as { readonly kind?: unknown }).kind !== 'directory') ||
-      typeof (value as { readonly isSameEntry?: unknown }).isSameEntry !== 'function') {
-    throw new TypeError('Persisted FSA handle is invalid')
-  }
-  return value as FileSystemHandle
-}
-
 function snapshotRelativePath(path: readonly string[], allowEmpty: boolean): readonly string[] {
   if (allowEmpty && path.length === 0) return Object.freeze([])
   return snapshotPortableCatalogPath(path)
-}
-
-function requireOpenedRevision(revision: OpenedFileRevision): void {
-  identityBytes(revision.fileId, 16, 'file ID')
-  identityBytes(revision.fileRevision, 16, 'file revision')
-  if (typeof revision.exactSize !== 'bigint' || revision.exactSize < 0n ||
-      revision.exactSize > 0xffff_ffff_ffff_ffffn) {
-    throw new TypeError('Opened file revision has an invalid exact size')
-  }
-}
-
-function requireOwnedObjectId(value: string): string {
-  return encodeBase64Url(identityBytes(value, FILE_CHECKPOINT_ID_BYTES, 'owned object ID'))
-}
-
-function createOwnedObjectId(): string {
-  const value = new Uint8Array(FILE_CHECKPOINT_ID_BYTES)
-  crypto.getRandomValues(value)
-  return requireOwnedObjectId(encodeBase64Url(value))
-}
-
-async function namespaceEntryExists(
-  parent: FileSystemDirectoryHandle,
-  name: string,
-): Promise<boolean> {
-  try {
-    await parent.getFileHandle(name)
-    return true
-  } catch (error) {
-    if (!errorNamed(error, 'NotFoundError') && !errorNamed(error, 'TypeMismatchError')) throw error
-    if (errorNamed(error, 'TypeMismatchError')) return true
-  }
-  try {
-    await parent.getDirectoryHandle(name)
-    return true
-  } catch (error) {
-    if (errorNamed(error, 'NotFoundError')) return false
-    if (errorNamed(error, 'TypeMismatchError')) return true
-    throw error
-  }
 }
 
 async function requireDirectoryEntry(
@@ -672,34 +397,4 @@ async function requireDirectoryEntry(
   } catch (cause) {
     throw new TargetOwnershipUnknownError('parent-authority', operationId, { cause })
   }
-}
-
-async function requireFileEntry(
-  parent: FileSystemDirectoryHandle,
-  name: string,
-  operationId: string,
-): Promise<FileSystemFileHandle> {
-  try {
-    return await parent.getFileHandle(name)
-  } catch (cause) {
-    throw new TargetOwnershipUnknownError('parent-authority', operationId, { cause })
-  }
-}
-
-async function sameEntry(
-  left: FileSystemHandle,
-  right: FileSystemHandle,
-  operationId: string,
-  stage: FSAFileIdentityStage,
-): Promise<boolean> {
-  try {
-    return await left.isSameEntry(right)
-  } catch (cause) {
-    throw new TargetOwnershipUnknownError(stage, operationId, { cause })
-  }
-}
-
-function errorNamed(error: unknown, name: string): boolean {
-  return typeof error === 'object' && error !== null &&
-    'name' in error && (error as { readonly name?: unknown }).name === name
 }

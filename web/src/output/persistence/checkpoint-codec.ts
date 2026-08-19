@@ -498,6 +498,13 @@ function sha256Sync(input: Uint8Array): Uint8Array<ArrayBuffer> {
   return output as Uint8Array<ArrayBuffer>
 }
 
+// IndexedDB lineage classification must not yield to WebCrypto while a
+// read-write transaction is live, so local derived indexes share this exact
+// synchronous primitive with the physical checkpoint codec.
+export function checkpointSha256Sync(input: Uint8Array): Uint8Array<ArrayBuffer> {
+  return sha256Sync(input)
+}
+
 function rotateRight(value: number, count: number): number {
   return (value >>> count) | (value << (32 - count))
 }

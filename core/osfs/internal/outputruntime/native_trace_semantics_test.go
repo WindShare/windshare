@@ -3,6 +3,7 @@ package outputruntime
 import (
 	"testing"
 
+	"github.com/windshare/windshare/core/osfs/internal/checkpointmodel"
 	"github.com/windshare/windshare/core/osfs/internal/directoryauthority"
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/osfs/internal/outputsession"
@@ -119,6 +120,22 @@ func TestRuntimeTraceVocabularyProjectsEveryLifecycleMilestone(t *testing.T) {
 			t.Fatalf("file decision %d = %d, want %d", test.input, got, test.want)
 		}
 	}
+	checkpointDecisions := []struct {
+		input checkpointmodel.CheckpointLineageDecision
+		want  FilesystemCheckpointDecision
+	}{
+		{checkpointmodel.CheckpointLineageDecisionAbsent, FilesystemCheckpointAbsent},
+		{checkpointmodel.CheckpointLineageDecisionExact, FilesystemCheckpointExact},
+		{checkpointmodel.CheckpointLineageDecisionRevisionConflict, FilesystemCheckpointRevisionConflict},
+		{checkpointmodel.CheckpointLineageDecisionOwnershipConflict, FilesystemCheckpointOwnershipConflict},
+		{checkpointmodel.CheckpointLineageDecisionInvalid, FilesystemCheckpointInvalid},
+		{0, 0},
+	}
+	for _, test := range checkpointDecisions {
+		if got := runtimeCheckpointDecision(test.input); got != test.want {
+			t.Fatalf("checkpoint decision %d = %d, want %d", test.input, got, test.want)
+		}
+	}
 }
 
 func TestRuntimeTraceAdaptersPreserveFaultAndCommitOutcome(t *testing.T) {
@@ -146,7 +163,12 @@ func TestRuntimeTraceAdaptersPreserveFaultAndCommitOutcome(t *testing.T) {
 		Outcome:   fileexecution.TraceNeedsAttention,
 		Fault:     value,
 	})
-	if len(traces) != 3 {
+	authority.fileRuntimeTrace().TraceFileExecution(fileexecution.TraceEvent{
+		Operation: fileexecution.TraceCheckpoint,
+		Outcome:   fileexecution.TraceReconciled,
+		Decision:  checkpointmodel.CheckpointLineageDecisionRevisionConflict,
+	})
+	if len(traces) != 4 {
 		t.Fatalf("trace count = %d", len(traces))
 	}
 	if traces[0].RuntimeDecision != FilesystemOutputRuntimeSucceeded ||
@@ -160,6 +182,12 @@ func TestRuntimeTraceAdaptersPreserveFaultAndCommitOutcome(t *testing.T) {
 		traces[2].RuntimeDecision != FilesystemOutputRuntimeNeedsAttention ||
 		!traces[2].Failed {
 		t.Fatalf("file trace projection = %+v", traces[2])
+	}
+	if traces[3].RuntimeOperation != FilesystemOutputRuntimeCheckpointFile ||
+		traces[3].RuntimeDecision != FilesystemOutputRuntimeReconciled ||
+		traces[3].CheckpointDecision != FilesystemCheckpointRevisionConflict ||
+		traces[3].Failed {
+		t.Fatalf("checkpoint trace projection = %+v", traces[3])
 	}
 	applyRuntimeFault(nil, value)
 	empty := FilesystemOutputTrace{}

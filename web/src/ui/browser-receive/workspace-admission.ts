@@ -1,3 +1,4 @@
+import { TargetOwnershipUnknownError } from '../../output/persistent-tree/errors'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { WorkspaceUsage } from '../v2-lifecycle-presentation'
 import type { V2LifecycleMutation } from '../v2-receive-runtime'
@@ -9,6 +10,7 @@ export type WorkspaceReceiveAdmissionFallback = Extract<
 >
 
 interface WorkspaceExecutionAdmissionSettlementPort {
+  readonly operationId: string
   readonly currentLifecycle: () => Promise<ReceiveLifecycleState>
   readonly restoreContinuation: (
     fallback: WorkspaceReceiveAdmissionFallback,
@@ -40,7 +42,10 @@ export class WorkspaceExecutionAdmissionSettlement {
     this.#executionAdmitted = true
   }
 
-  async settle(): Promise<V2LifecycleMutation> {
+  async settle(reason?: unknown): Promise<V2LifecycleMutation> {
+    if (reason instanceof TargetOwnershipUnknownError) {
+      return this.#settleOwnershipUnknown(reason)
+    }
     const current = await this.#port.currentLifecycle()
     if (isWorkspaceTerminal(current) || isStable(current)) {
       return Object.freeze({
@@ -61,6 +66,21 @@ export class WorkspaceExecutionAdmissionSettlement {
       (current.kind === 'intent-frozen' || current.kind === 'preparing' ||
        (current.kind === 'receiving' && this.#fallback === undefined))
     if (safelyUnopened) return this.#port.discard()
+    const lifecycle = await this.#port.recordUnknown()
+    return Object.freeze({
+      lifecycle,
+      workspaceUsage: this.#port.workspaceUsage(lifecycle),
+    })
+  }
+
+  async #settleOwnershipUnknown(
+    reason: TargetOwnershipUnknownError,
+  ): Promise<V2LifecycleMutation> {
+    if (reason.operationId !== null && reason.operationId !== this.#port.operationId) {
+      throw new TypeError('Workspace admission ownership evidence belongs to another operation', {
+        cause: reason,
+      })
+    }
     const lifecycle = await this.#port.recordUnknown()
     return Object.freeze({
       lifecycle,

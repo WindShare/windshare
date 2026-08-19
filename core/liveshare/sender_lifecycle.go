@@ -19,16 +19,17 @@ type senderRuntimeLifecycle interface {
 }
 
 type senderOwnedResources struct {
-	runtimeFactory senderRuntimeLifecycle
-	cache          *contentflow.SharedBlockCache
-	catalogAccess  *senderCatalogAccess
-	catalogObjects *catalogflow.SealedCatalogStore
-	recordSealer   *records.Sealer
-	revisionStore  *content.RevisionStore
-	revisionSource *osfs.RootedRevisionSource
-	catalogStore   *catalog.CatalogStore
-	selectedSource selectedCatalogSource
-	keyTree        *content.KeyTree
+	runtimeFactory  senderRuntimeLifecycle
+	cache           *contentflow.SharedBlockCache
+	catalogAccess   *senderCatalogAccess
+	catalogObjects  *catalogflow.SealedCatalogStore
+	recordSealer    *records.Sealer
+	revisionStore   *content.RevisionStore
+	revisionDeriver senderRevisionIdentityDeriver
+	revisionSource  *osfs.RootedRevisionSource
+	catalogStore    *catalog.CatalogStore
+	selectedSource  selectedCatalogSource
+	keyTree         *content.KeyTree
 }
 
 // Stop synchronously freezes admission, then transfers teardown to one worker.
@@ -45,16 +46,17 @@ func (sender *PreparedSender) Stop() error {
 	done := make(chan struct{})
 	sender.closeDone = done
 	resources := senderOwnedResources{
-		runtimeFactory: sender.runtimeFactory,
-		cache:          sender.cache,
-		catalogAccess:  sender.catalogAccess,
-		catalogObjects: sender.catalogObjects,
-		recordSealer:   sender.recordSealer,
-		revisionStore:  sender.revisionStore,
-		revisionSource: sender.revisionSource,
-		catalogStore:   sender.catalogStore,
-		selectedSource: sender.selectedSource,
-		keyTree:        sender.keyTree,
+		runtimeFactory:  sender.runtimeFactory,
+		cache:           sender.cache,
+		catalogAccess:   sender.catalogAccess,
+		catalogObjects:  sender.catalogObjects,
+		recordSealer:    sender.recordSealer,
+		revisionStore:   sender.revisionStore,
+		revisionDeriver: sender.revisionDeriver,
+		revisionSource:  sender.revisionSource,
+		catalogStore:    sender.catalogStore,
+		selectedSource:  sender.selectedSource,
+		keyTree:         sender.keyTree,
 	}
 	var beginErr error
 	if resources.runtimeFactory != nil {
@@ -108,6 +110,10 @@ func (sender *PreparedSender) finishClose(
 	if resources.revisionStore != nil {
 		result = errors.Join(result, resources.revisionStore.Close())
 	}
+	if resources.revisionDeriver != nil {
+		// Store close is the join proof for every user of this injected secret.
+		resources.revisionDeriver.Destroy()
+	}
 	if resources.revisionSource != nil {
 		result = errors.Join(result, resources.revisionSource.Close())
 	}
@@ -148,6 +154,7 @@ func (sender *PreparedSender) finishClose(
 	sender.catalogObjects = nil
 	sender.recordSealer = nil
 	sender.revisionStore = nil
+	sender.revisionDeriver = nil
 	sender.revisionSource = nil
 	sender.catalogStore = nil
 	sender.selectedSource = nil

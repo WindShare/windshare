@@ -5,8 +5,10 @@ import {
   FILE_CHECKPOINT_NAMESPACE,
   FILE_CHECKPOINT_OWNERSHIP_MARKER,
   canonicalFileCheckpointBytes,
+  canonicalCheckpointLineageBytes,
   checkpointIdentityEqual,
   decodeFileCheckpointV2,
+  deriveCheckpointLineageID,
   encodeFileCheckpointV2,
   newFileCheckpointV2,
   selectVerifiedCheckpoint,
@@ -130,6 +132,12 @@ describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
       expect(record.receiveIntentDigest).toBe(intent.digest)
       expect(record.materializationBindingDigest).toBe(intent.bindingDigest)
       expect(record.recordId).toBe(requiredString(vector.recordId, 'checkpoint record ID'))
+      expect(deriveCheckpointLineageID(record))
+        .toBe(requiredString(vector.checkpointLineageId, 'checkpoint lineage ID'))
+      expect(encodeBase64Url(canonicalCheckpointLineageBytes(record))).toBe(requiredString(
+        vector.checkpointLineageCanonicalBytesB64Url,
+        'checkpoint lineage canonical bytes',
+      ))
       expect(record.checksum).toBe(requiredString(vector.checksum, 'checkpoint checksum'))
       expect(encodeBase64Url(canonicalFileCheckpointBytes(record)))
         .toBe(requiredString(vector.canonicalBytesB64Url, 'checkpoint canonical bytes'))
@@ -150,6 +158,13 @@ describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
     expect(() => validateFileCheckpointTransition(verified, nextCandidate)).not.toThrow()
     expect(() => validateFileCheckpointTransition(nextCandidate, nextVerified)).not.toThrow()
     expect(checkpointIdentityEqual(candidate, foreignAuthority)).toBe(false)
+    expect(deriveCheckpointLineageID(verified)).toBe(deriveCheckpointLineageID(candidate))
+    expect(deriveCheckpointLineageID(paused)).toBe(deriveCheckpointLineageID(candidate))
+    expect(deriveCheckpointLineageID(nextCandidate)).toBe(deriveCheckpointLineageID(candidate))
+    expect(deriveCheckpointLineageID(nextVerified)).toBe(deriveCheckpointLineageID(candidate))
+    expect(deriveCheckpointLineageID(foreignAuthority)).not.toBe(deriveCheckpointLineageID(candidate))
+    expect([verified, paused, nextCandidate, nextVerified].map((record) => record.recordId))
+      .toEqual([candidate.recordId, candidate.recordId, candidate.recordId, candidate.recordId])
 
     const crashCuts = checkpointCase('crash-cuts')
     const beforeCommit = selectVerifiedCheckpoint(candidate, verified, nextCandidate)
@@ -164,6 +179,67 @@ describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
       crashCuts.afterCommitCheckpointGeneration,
       'after-commit generation',
     )))
+  })
+
+  it('replays every included and excluded lineage axis without redefining RecordID', () => {
+    const baselineVector = checkpointCase('candidate')
+    const baseline = checkpointRecord(baselineVector)
+    const baselineLineage = deriveCheckpointLineageID(baseline)
+    const names = [
+      'lineage-excludes-revision',
+      'lineage-excludes-size',
+      'lineage-excludes-owned-object',
+      'lineage-operation',
+      'lineage-intent',
+      'lineage-binding',
+      'lineage-file',
+      'lineage-path-segments-a',
+      'lineage-path-segments-b',
+      'lineage-path-unicode',
+      'lineage-materializer-fsa',
+      'lineage-materializer-origin-private',
+      'lineage-materializer-atomic',
+    ] as const
+    const records = new Map<string, FileCheckpointV2>()
+
+    for (const name of names) {
+      const vector = checkpointCase(name)
+      const record = checkpointRecord(vector)
+      const lineageId = deriveCheckpointLineageID(record)
+      const relation = requiredString(vector.lineageRelation, 'checkpoint lineage relation')
+      expect(lineageId).toBe(requiredString(vector.checkpointLineageId, 'checkpoint lineage ID'))
+      expect(encodeBase64Url(canonicalCheckpointLineageBytes(record))).toBe(requiredString(
+        vector.checkpointLineageCanonicalBytesB64Url,
+        'checkpoint lineage canonical bytes',
+      ))
+      expect(relation === 'same' ? lineageId === baselineLineage : lineageId !== baselineLineage)
+        .toBe(true)
+      expect(record.recordId).toBe(requiredString(vector.recordId, 'checkpoint record ID'))
+      expect(record.checksum).toBe(requiredString(vector.checksum, 'checkpoint checksum'))
+      expect(encodeBase64Url(canonicalFileCheckpointBytes(record)))
+        .toBe(requiredString(vector.canonicalBytesB64Url, 'checkpoint canonical bytes'))
+      const encoded = encodeFileCheckpointV2(record)
+      expect(encodeBase64Url(encoded)).toBe(requiredString(vector.encodedB64Url, 'checkpoint envelope'))
+      expect(decodeFileCheckpointV2(encoded)).toEqual(record)
+      records.set(name, record)
+    }
+
+    for (const name of [
+      'lineage-excludes-revision',
+      'lineage-excludes-size',
+      'lineage-excludes-owned-object',
+    ] as const) {
+      expect(deriveCheckpointLineageID(records.get(name)!)).toBe(baselineLineage)
+      expect(records.get(name)!.recordId).not.toBe(baseline.recordId)
+    }
+    expect(deriveCheckpointLineageID(records.get('lineage-path-segments-a')!))
+      .not.toBe(deriveCheckpointLineageID(records.get('lineage-path-segments-b')!))
+    expect([
+      baseline.materializerKind,
+      records.get('lineage-materializer-fsa')!.materializerKind,
+      records.get('lineage-materializer-origin-private')!.materializerKind,
+      records.get('lineage-materializer-atomic')!.materializerKind,
+    ]).toEqual([1, 2, 3, 4])
   })
 })
 

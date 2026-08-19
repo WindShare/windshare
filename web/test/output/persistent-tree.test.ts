@@ -4,7 +4,11 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+  classifyCheckpointLineage,
+  deriveCheckpointLineageID,
   fileCheckpointIsComplete,
+  newFileCheckpointV2,
+  sameCheckpointLineageSpec,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
@@ -12,7 +16,10 @@ import {
 import {
   checkpointMatchesNamespace,
   finalFileCheckpointProof,
+  type CheckpointLineageDecision,
+  type CheckpointLineageLookupRequest,
   type FileCheckpointJournal,
+  type InitialCheckpointCASResult,
   type FileCheckpointPage,
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
@@ -23,8 +30,10 @@ import type {
   PersistentDirectoryMaterialization,
   PersistentOutputTree,
   PersistentTreeFile,
+  PersistentTreeTraceEvent,
 } from '../../src/output/persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+import type { FileCheckpointCandidateObservation } from '../../src/output/persistent-tree/recovery'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { identity } from './planning/fixture'
 
@@ -132,8 +141,196 @@ describe('persistent DirectoryTree materialization port', () => {
         fileRevision: NEXT_REVISION,
         exactSize: 1n,
       }),
-    })).rejects.toMatchObject({ name: 'SourceRevisionChangedError' })
+    })).rejects.toMatchObject({
+      name: 'CheckpointLineageDecisionError',
+      decision: 'revision-conflict',
+    })
     expect(fixture.events.filter((event) => event === 'create:report.bin')).toHaveLength(1)
+  })
+
+  it('blocks an invalid same-revision size without creating another object', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(1n),
+    })
+    await first.writeRange(0n, Uint8Array.of(1))
+    await first.commit()
+    await first.close()
+
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })).rejects.toMatchObject({
+      name: 'CheckpointLineageDecisionError',
+      decision: 'invalid',
+    })
+    expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
+  })
+
+  it('blocks multiple persisted objects for one lineage without moving ranges', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })
+    await first.writeRange(0n, Uint8Array.of(1))
+    await first.checkpoint()
+    await first.close()
+    const original = (await fixture.checkpoints.scanCommitted({
+      direction: 'ascending',
+      fileId: FILE_ID,
+    })).records[0]!
+    const conflictingCandidate = newFileCheckpointV2({
+      ...original,
+      ownedObjectId: identity(99, 32),
+      commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
+    })
+    fixture.checkpoints.seedCommittedForTest(newFileCheckpointV2({
+      ...conflictingCandidate,
+      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    }))
+
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })).rejects.toMatchObject({
+      name: 'CheckpointLineageDecisionError',
+      decision: 'ownership-conflict',
+    })
+    const records = (await fixture.checkpoints.scanCommitted({
+      direction: 'ascending',
+      fileId: FILE_ID,
+    })).records
+    expect(records).toHaveLength(2)
+    expect(records.find(record => record.recordId === original.recordId)?.verifiedRanges)
+      .toEqual([{ start: 0n, end: 1n }])
+    expect(records.find(record => record.recordId !== original.recordId)?.verifiedRanges)
+      .toEqual([{ start: 0n, end: 1n }])
+  })
+
+  it('classifies an occupied absent-lineage destination as a collision before claiming', async () => {
+    const fixture = await materializationFixture()
+    fixture.tree.occupy(['report.bin'], identity(88, 32))
+
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(1n),
+    })).rejects.toMatchObject({ name: 'DestinationCollisionError', kind: 'collision' })
+    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
+      .toEqual([])
+  })
+
+  it('recreates only the selected authority after a candidate-before-object restart', async () => {
+    const fixture = await materializationFixture()
+    fixture.tree.failNextCreation()
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })).rejects.toThrow('simulated pre-object crash')
+    const selected = fixture.tree.proposedOwnedObjectIds[0]!
+    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
+      .toEqual([expect.objectContaining({ ownedObjectId: selected })])
+    await fixture.session.close()
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints,
+    })
+    const resumed = await reopened.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })
+    expect(resumed.ownedObjectId).toBe(selected)
+    expect(fixture.tree.proposedOwnedObjectIds).toEqual([selected])
+    expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
+  })
+
+  it('rejects unresolved post-object recovery as operation ownership attention', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })
+    await transaction.writeRange(0n, Uint8Array.of(7))
+    await transaction.checkpoint()
+    await transaction.close()
+    const committed = (await fixture.checkpoints.scanCommitted({
+      direction: 'ascending',
+      fileId: FILE_ID,
+    })).records[0]!
+    fixture.checkpoints.seedCandidateForTest(newFileCheckpointV2({
+      ...committed,
+      stateGeneration: committed.stateGeneration + 1n,
+      checkpointGeneration: committed.checkpointGeneration + 1n,
+      commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
+    }))
+    fixture.tree.occupy(['report.bin'], identity(88, 32))
+    await fixture.session.close()
+    const trace: PersistentTreeTraceEvent[] = []
+
+    await expect(PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints,
+      trace: event => trace.push(event),
+    })).rejects.toMatchObject({
+      name: 'InvalidStateError',
+      reason: 'target-ownership-unknown',
+      stage: 'checkpoint',
+    })
+
+    expect(trace).toEqual([expect.objectContaining({
+      name: 'receive.operation.needs_attention',
+      operation_id: fixture.binding.operationId,
+      needs_attention_reason: 'target-ownership-unknown',
+    })])
+    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
+      .toEqual([expect.objectContaining({ recordId: committed.recordId })])
+  })
+
+  it('recovers the same object when restart occurs after creation but before promotion', async () => {
+    const fixture = await materializationFixture()
+    fixture.checkpoints.failNextCommit()
+    await expect(fixture.session.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })).rejects.toThrow('simulated post-object crash')
+    const selected = fixture.tree.proposedOwnedObjectIds[0]!
+    expect(fixture.tree.visible(['report.bin'])).toEqual(new Uint8Array())
+    await fixture.session.close()
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints,
+    })
+    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
+      .toEqual([])
+    const resumed = await reopened.beginFile({
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    })
+    expect(resumed.ownedObjectId).toBe(selected)
+    expect(fixture.tree.proposedOwnedObjectIds).toEqual([selected])
+    expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
+  })
+
+  it('concurrent callers converge on the repository-selected object identity', async () => {
+    const fixture = await materializationFixture()
+    const request = {
+      artifactPath: ['report.bin'],
+      openRevision: async () => revision(2n),
+    } as const
+
+    const [left, right] = await Promise.all([
+      fixture.session.beginFile(request),
+      fixture.session.beginFile(request),
+    ])
+    expect(left.ownedObjectId).toBe(right.ownedObjectId)
+    expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
+    expect((await fixture.checkpoints.scanCommitted({
+      direction: 'ascending',
+      fileId: FILE_ID,
+    })).records).toHaveLength(1)
   })
 
   it('rechecks object identity before writer acquisition and after checkpoint commit', async () => {
@@ -201,6 +398,8 @@ function revision(exactSize: bigint): OpenedFileRevision {
 class MemoryTree implements PersistentOutputTree {
   readonly #events: string[]
   readonly #files = new Map<string, MemoryFile>()
+  readonly proposedOwnedObjectIds: string[] = []
+  #failNextCreation = false
   #nextObject = 60
 
   constructor(events: string[]) {
@@ -224,15 +423,40 @@ class MemoryTree implements PersistentOutputTree {
     return true
   }
 
+  async proposeFileOwnedObjectId(
+    _path: readonly string[],
+    revision: OpenedFileRevision,
+  ): Promise<string> {
+    if (revision.exactSize < 0n) throw new RangeError('negative revision size')
+    const proposed = identity(this.#nextObject++, 32)
+    this.proposedOwnedObjectIds.push(proposed)
+    return proposed
+  }
+
+  async inspectFileDestination(
+    path: readonly string[],
+  ): Promise<'absent' | 'occupied'> {
+    return this.#files.has(path.join('/')) ? 'occupied' : 'absent'
+  }
+
   async createFileAfterRevisionOpen(
     path: readonly string[],
     revision: OpenedFileRevision,
+    selectedOwnedObjectId: string,
   ): Promise<PersistentTreeFile> {
     if (revision.exactSize < 0n) throw new RangeError('negative revision size')
     const key = path.join('/')
-    if (this.#files.has(key)) throw new DOMException('collision', 'InvalidModificationError')
+    const existing = this.#files.get(key)
+    if (existing !== undefined) {
+      if (existing.ownedObjectId === selectedOwnedObjectId) return existing
+      throw new DOMException('collision', 'InvalidModificationError')
+    }
+    if (this.#failNextCreation) {
+      this.#failNextCreation = false
+      throw new Error('simulated pre-object crash')
+    }
     this.#events.push(`create:${key}`)
-    const file = new MemoryFile(identity(this.#nextObject++, 32))
+    const file = new MemoryFile(selectedOwnedObjectId)
     this.#files.set(key, file)
     return file
   }
@@ -254,6 +478,14 @@ class MemoryTree implements PersistentOutputTree {
   }
 
   async removeDirectory(): Promise<void> {}
+
+  failNextCreation(): void {
+    this.#failNextCreation = true
+  }
+
+  occupy(path: readonly string[], ownedObjectId: string): void {
+    this.#files.set(path.join('/'), new MemoryFile(ownedObjectId))
+  }
 
   visible(path: readonly string[]): Uint8Array | undefined {
     return this.#files.get(path.join('/'))?.snapshot()
@@ -321,34 +553,143 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
   readonly binding: FileCheckpointJournal['binding']
   readonly #candidates = new Map<string, FileCheckpointV2>()
   readonly #committed = new Map<string, FileCheckpointV2>()
+  #failNextCommit = false
 
   constructor(binding: FileCheckpointJournal['binding']) {
     this.binding = binding
   }
 
-  async putCandidate(record: FileCheckpointV2): Promise<void> {
+  async lookupLineage(
+    request: CheckpointLineageLookupRequest,
+  ): Promise<CheckpointLineageDecision> {
+    return this.#lineageDecision(request)
+  }
+
+  async createInitialCheckpoint(
+    candidate: FileCheckpointV2,
+  ): Promise<InitialCheckpointCASResult> {
+    validateFileCheckpoint(candidate)
+    const lineageId = deriveCheckpointLineageID(candidate)
+    const decision = this.#lineageDecision({
+      lineageId,
+      fileId: candidate.fileId,
+      canonicalPath: candidate.canonicalPath,
+      fileRevision: candidate.fileRevision,
+      exactSize: candidate.exactSize,
+    })
+    if (decision.kind !== 'absent') return decision
+    this.#candidates.set(candidate.recordId, candidate)
+    return Object.freeze({ kind: 'installed', lineageId, record: candidate })
+  }
+
+  async resolveCandidate(
+    candidate: FileCheckpointV2,
+    observation: Exclude<FileCheckpointCandidateObservation, { kind: 'ownership-unknown' }>,
+  ): Promise<void> {
+    const current = this.#candidates.get(candidate.recordId)
+    if (current?.checksum !== candidate.checksum) {
+      throw new DOMException('candidate changed during recovery', 'InvalidStateError')
+    }
+    const resolved = observation.kind === 'verified'
+      ? observation.committed
+      : observation.checkpoint
+    this.#committed.set(candidate.recordId, resolved)
+    this.#candidates.delete(candidate.recordId)
+  }
+
+  #lineageDecision(request: CheckpointLineageLookupRequest): CheckpointLineageDecision {
+    const spec = Object.freeze({
+      ...this.binding,
+      fileId: request.fileId,
+      canonicalPath: request.canonicalPath,
+    })
+    if (deriveCheckpointLineageID(spec) !== request.lineageId) {
+      throw new TypeError('lineage lookup ID does not match its coordinates')
+    }
+    const physical = new Map(this.#committed)
+    for (const [recordId, candidate] of this.#candidates) {
+      if (!physical.has(recordId)) physical.set(recordId, candidate)
+    }
+    const records = [...physical.values()].filter(record =>
+      sameCheckpointLineageSpec(record, spec))
+    const decision = classifyCheckpointLineage(
+      { fileRevision: request.fileRevision, exactSize: request.exactSize },
+      records.map(record => ({
+        fileRevision: record.fileRevision,
+        exactSize: record.exactSize,
+        ownedObjectId: record.ownedObjectId,
+      })),
+    )
+    if (decision === 'absent') {
+      return Object.freeze({ kind: 'absent', lineageId: request.lineageId })
+    }
+    if (decision === 'exact') {
+      return Object.freeze({ kind: 'exact', lineageId: request.lineageId, record: records[0]! })
+    }
+    return Object.freeze({
+      kind: decision,
+      lineageId: request.lineageId,
+      records: Object.freeze(records),
+    })
+  }
+
+  async stageCheckpointUpdate(
+    previous: FileCheckpointV2,
+    candidate: FileCheckpointV2,
+  ): Promise<void> {
+    validateFileCheckpointTransition(previous, candidate)
+    if (previous.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        this.#committed.get(previous.recordId)?.checksum !== previous.checksum) {
+      throw new DOMException('committed checkpoint predecessor missing', 'InvalidStateError')
+    }
+    const current = this.#candidates.get(candidate.recordId)
+    if (current !== undefined && current.checksum !== candidate.checksum) {
+      throw new DOMException('checkpoint candidate changed', 'InvalidStateError')
+    }
+    this.#candidates.set(candidate.recordId, candidate)
+  }
+
+  async commitCheckpointCandidate(
+    candidate: FileCheckpointV2,
+    committed: FileCheckpointV2,
+  ): Promise<void> {
+    if (this.#failNextCommit) {
+      this.#failNextCommit = false
+      throw new Error('simulated post-object crash')
+    }
+    validateFileCheckpointTransition(candidate, committed)
+    if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+      throw new TypeError('memory repository commits only verified checkpoints')
+    }
+    const currentCandidate = this.#candidates.get(candidate.recordId)
+    const previous = this.#committed.get(candidate.recordId)
+    if (currentCandidate === undefined && previous?.checksum === committed.checksum) return
+    if (currentCandidate?.checksum !== candidate.checksum) {
+      throw new DOMException('candidate missing', 'InvalidStateError')
+    }
+    if (previous !== undefined) validateFileCheckpointTransition(previous, committed)
+    this.#committed.set(committed.recordId, committed)
+    this.#candidates.delete(committed.recordId)
+  }
+
+  seedCommittedForTest(record: FileCheckpointV2): void {
+    validateFileCheckpoint(record)
+    if (!checkpointMatchesNamespace(record, this.binding) ||
+        record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
+      throw new TypeError('test checkpoint seed escaped its namespace')
+    }
+    this.#committed.set(record.recordId, record)
+  }
+
+  seedCandidateForTest(record: FileCheckpointV2): void {
     validateFileCheckpoint(record)
     if (!checkpointMatchesNamespace(record, this.binding) ||
         record.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-      throw new TypeError('candidate escaped its checkpoint namespace')
+      throw new TypeError('test candidate seed escaped its namespace')
     }
-    const previous = this.#candidates.get(record.recordId)
-    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
     this.#candidates.set(record.recordId, record)
-  }
-
-  async commit(record: FileCheckpointV2): Promise<void> {
-    validateFileCheckpoint(record)
-    if (record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
-      throw new TypeError('memory repository commits only verified checkpoints')
-    }
-    const candidate = this.#candidates.get(record.recordId)
-    if (candidate === undefined) throw new DOMException('candidate missing', 'InvalidStateError')
-    validateFileCheckpointTransition(candidate, record)
-    const previous = this.#committed.get(record.recordId)
-    if (previous !== undefined) validateFileCheckpointTransition(previous, record)
-    this.#committed.set(record.recordId, record)
-    this.#candidates.delete(record.recordId)
   }
 
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
@@ -373,6 +714,10 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
       throw new DOMException('final checkpoint missing', 'NotFoundError')
     }
     return finalFileCheckpointProof(record)
+  }
+
+  failNextCommit(): void {
+    this.#failNextCommit = true
   }
 
   async retireOperation(): Promise<void> {
