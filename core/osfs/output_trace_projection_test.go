@@ -117,6 +117,22 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 		}
 	}
 
+	checkpointDecisions := []struct {
+		value outputruntime.FilesystemCheckpointDecision
+		want  FilesystemCheckpointDecision
+	}{
+		{outputruntime.FilesystemCheckpointAbsent, FilesystemCheckpointAbsent},
+		{outputruntime.FilesystemCheckpointExact, FilesystemCheckpointExact},
+		{outputruntime.FilesystemCheckpointRevisionConflict, FilesystemCheckpointRevisionConflict},
+		{outputruntime.FilesystemCheckpointOwnershipConflict, FilesystemCheckpointOwnershipConflict},
+		{outputruntime.FilesystemCheckpointInvalid, FilesystemCheckpointInvalid},
+	}
+	for _, test := range checkpointDecisions {
+		if actual := projectCheckpointDecision(test.value); actual != test.want {
+			t.Fatalf("checkpoint decision %d projected as %d, want %d", test.value, actual, test.want)
+		}
+	}
+
 	certifications := []struct {
 		value outputruntime.FilesystemOutputCertificationID
 		want  FilesystemOutputCertificationID
@@ -216,7 +232,8 @@ func TestOutputTraceProjectionMapsEveryRuntimeEnum(t *testing.T) {
 
 	if projectTraceOperation(255) != 0 || projectRootOpenDisposition("unknown") != "" ||
 		projectRuntimeComponent(255) != 0 || projectRuntimeOperation(255) != 0 ||
-		projectRuntimeDecision(255) != 0 || projectCertification("unknown") != "" ||
+		projectRuntimeDecision(255) != 0 || projectCheckpointDecision(255) != 0 ||
+		projectCertification("unknown") != "" ||
 		projectNativeLockScope(255) != 0 || projectNativeLockMilestone(255) != 0 ||
 		projectFilesystemFailureStage(255) != 0 ||
 		projectFilesystemReconciliationStep(255) != 0 ||
@@ -239,6 +256,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		RuntimeComponent:       outputruntime.FilesystemOutputRuntimeFile,
 		RuntimeOperation:       outputruntime.FilesystemOutputRuntimeCheckpointFile,
 		RuntimeDecision:        outputruntime.FilesystemOutputRuntimeReconciled,
+		CheckpointDecision:     outputruntime.FilesystemCheckpointRevisionConflict,
 		OperationID:            3,
 		ClaimID:                4,
 		FaultDomain:            5,
@@ -268,6 +286,7 @@ func TestOutputTraceProjectionCopiesNativeRuntimePayload(t *testing.T) {
 		RuntimeComponent:       FilesystemOutputRuntimeFile,
 		RuntimeOperation:       FilesystemOutputRuntimeCheckpointFile,
 		RuntimeDecision:        FilesystemOutputRuntimeReconciled,
+		CheckpointDecision:     FilesystemCheckpointRevisionConflict,
 		OperationID:            3,
 		ClaimID:                4,
 		FaultDomain:            5,

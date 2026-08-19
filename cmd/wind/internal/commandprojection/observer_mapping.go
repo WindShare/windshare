@@ -4,7 +4,6 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
@@ -397,6 +396,29 @@ func projectFileSettlement(value transfer.FileSettlementKind) (clievent.FileSett
 	}
 }
 
+func projectItemBlockReason(value transfer.ItemBlockReason) (clievent.ItemBlockReason, bool) {
+	switch value {
+	case 0:
+		return clievent.ItemBlockNone, true
+	case transfer.ItemBlockStateCorrupt:
+		return clievent.ItemBlockStateCorrupt, true
+	case transfer.ItemBlockOwnershipUnknown:
+		return clievent.ItemBlockOwnershipUnknown, true
+	case transfer.ItemBlockPublicationAmbiguous:
+		return clievent.ItemBlockPublicationAmbiguous, true
+	case transfer.ItemBlockRetirementUncertain:
+		return clievent.ItemBlockRetirementUncertain, true
+	case transfer.ItemBlockRevisionConflict:
+		return clievent.ItemBlockRevisionConflict, true
+	case transfer.ItemBlockCheckpointInvalid:
+		return clievent.ItemBlockCheckpointInvalid, true
+	case transfer.ItemBlockOwnedObjectUnknown:
+		return clievent.ItemBlockOwnedObjectUnknown, true
+	default:
+		return 0, false
+	}
+}
+
 func projectTreeSettlement(value transfer.DirectTreeSettlementKind) (clievent.TreeSettlement, bool) {
 	switch value {
 	case 0:
@@ -412,133 +434,6 @@ func projectTreeSettlement(value transfer.DirectTreeSettlementKind) (clievent.Tr
 	default:
 		return 0, false
 	}
-}
-
-func projectFilesystemOperation(value osfs.FilesystemOutputTraceOperation) (clievent.FilesystemOutputOperation, bool) {
-	switch value {
-	case osfs.TraceFilesystemCertified:
-		return clievent.FilesystemCertified, true
-	case osfs.TraceFeatureProbeCompleted:
-		return clievent.FilesystemFeatureProbeCompleted, true
-	case osfs.TraceCheckpointNamespaceOpened:
-		return clievent.FilesystemCheckpointNamespaceOpened, true
-	case osfs.TraceNativeLock:
-		return clievent.FilesystemNativeLock, true
-	case osfs.TraceSessionOpened:
-		return clievent.FilesystemSessionOpened, true
-	case osfs.TraceCheckpointReconciled:
-		return clievent.FilesystemCheckpointReconciled, true
-	case osfs.TraceRuntimeDecision:
-		return clievent.FilesystemRuntimeDecision, true
-	default:
-		return 0, false
-	}
-}
-
-func projectFilesystemCertification(value osfs.FilesystemOutputCertificationID) (clievent.FilesystemCertification, bool) {
-	switch value {
-	case "":
-		return 0, true
-	case osfs.FilesystemOutputCertificationLinuxExt4ProcessRestart:
-		return clievent.FilesystemCertificationLinuxExt4ProcessRestart, true
-	case osfs.FilesystemOutputCertificationWindowsNTFSProcessRestart:
-		return clievent.FilesystemCertificationWindowsNTFSProcessRestart, true
-	default:
-		return 0, false
-	}
-}
-
-func projectFilesystemRootDisposition(value osfs.FilesystemOutputRootDisposition) (clievent.FilesystemRootDisposition, bool) {
-	switch value {
-	case "":
-		return 0, true
-	case osfs.FilesystemOutputCallerProvidedContainer:
-		return clievent.FilesystemRootCallerProvidedContainer, true
-	case osfs.FilesystemOutputAuthorityCreatedRoot:
-		return clievent.FilesystemRootAuthorityCreated, true
-	default:
-		return 0, false
-	}
-}
-
-func projectFilesystemRuntimeComponent(value osfs.FilesystemOutputRuntimeComponent) (clievent.FilesystemRuntimeComponent, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if value < osfs.FilesystemOutputRuntimeSession || value > osfs.FilesystemOutputRuntimeCheckpoint {
-		return 0, false
-	}
-	return clievent.FilesystemRuntimeComponent(value), true
-}
-
-func projectFilesystemRuntimeOperation(value osfs.FilesystemOutputRuntimeOperation) (clievent.FilesystemRuntimeOperation, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if value < osfs.FilesystemOutputRuntimeOpenDirectTree || value > osfs.FilesystemOutputRuntimeCleanup {
-		return 0, false
-	}
-	return clievent.FilesystemRuntimeOperation(value), true
-}
-
-func projectFilesystemRuntimeDecision(value osfs.FilesystemOutputRuntimeDecision) (clievent.FilesystemRuntimeDecisionKind, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if value < osfs.FilesystemOutputRuntimeValidated || value > osfs.FilesystemOutputRuntimeCleanupPending {
-		return 0, false
-	}
-	return clievent.FilesystemRuntimeDecisionKind(value), true
-}
-
-func projectFilesystemNativeLockScope(value osfs.FilesystemOutputNativeLockScope) (clievent.FilesystemNativeLockScope, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if value != osfs.FilesystemOutputNativeLockSession {
-		return 0, false
-	}
-	return clievent.FilesystemNativeLockSession, true
-}
-
-func projectFilesystemNativeLockMilestone(value osfs.FilesystemOutputNativeLockMilestone) (clievent.FilesystemNativeLockMilestone, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if value < osfs.FilesystemOutputNativeLockAcquired || value > osfs.FilesystemOutputNativeLockReleaseReportedFailure {
-		return 0, false
-	}
-	return clievent.FilesystemNativeLockMilestone(value), true
-}
-
-func projectFilesystemFailureStage(value osfs.FilesystemOutputFailureStage) (clievent.FilesystemFailureStage, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if !value.Valid() {
-		return 0, false
-	}
-	return clievent.FilesystemFailureStage(value), true
-}
-
-func projectFilesystemReconciliationStep(value osfs.FilesystemCheckpointReconciliationStep) (clievent.FilesystemReconciliationStep, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if !value.Valid() {
-		return 0, false
-	}
-	return clievent.FilesystemReconciliationStep(value), true
-}
-
-func projectFilesystemNativeErrorClass(value osfs.FilesystemNativeErrorClass) (clievent.FilesystemNativeErrorClass, bool) {
-	if value == 0 {
-		return 0, true
-	}
-	if !value.Valid() {
-		return 0, false
-	}
-	return clievent.FilesystemNativeErrorClass(value), true
 }
 
 func projectSenderTerminalTransport(value sessionruntime.SenderTerminalTransportDisposition) (clievent.SenderTerminalTransport, bool) {

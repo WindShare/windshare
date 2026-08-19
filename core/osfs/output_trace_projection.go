@@ -28,6 +28,7 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		RuntimeComponent:       projectRuntimeComponent(event.RuntimeComponent),
 		RuntimeOperation:       projectRuntimeOperation(event.RuntimeOperation),
 		RuntimeDecision:        projectRuntimeDecision(event.RuntimeDecision),
+		CheckpointDecision:     projectCheckpointDecision(event.CheckpointDecision),
 		OperationID:            event.OperationID,
 		ClaimID:                event.ClaimID,
 		FaultDomain:            event.FaultDomain,
@@ -44,6 +45,25 @@ func projectFilesystemOutputTrace(event outputruntime.FilesystemOutputTrace) Fil
 		ReconciliationStep:     projectFilesystemReconciliationStep(event.ReconciliationStep),
 		NativeErrorClass:       projectFilesystemNativeErrorClass(event.NativeErrorClass),
 		Failed:                 event.Failed,
+	}
+}
+
+func projectCheckpointDecision(
+	value outputruntime.FilesystemCheckpointDecision,
+) FilesystemCheckpointDecision {
+	switch value {
+	case outputruntime.FilesystemCheckpointAbsent:
+		return FilesystemCheckpointAbsent
+	case outputruntime.FilesystemCheckpointExact:
+		return FilesystemCheckpointExact
+	case outputruntime.FilesystemCheckpointRevisionConflict:
+		return FilesystemCheckpointRevisionConflict
+	case outputruntime.FilesystemCheckpointOwnershipConflict:
+		return FilesystemCheckpointOwnershipConflict
+	case outputruntime.FilesystemCheckpointInvalid:
+		return FilesystemCheckpointInvalid
+	default:
+		return 0
 	}
 }
 

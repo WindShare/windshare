@@ -129,9 +129,10 @@ type recordV2 struct {
 	PeerFailedAtStage         *string `json:"peer_failed_at_stage,omitempty"`
 	FailureScope              *string `json:"failure_scope,omitempty"`
 
-	FileSelection  *string `json:"file_selection,omitempty"`
-	FileSettlement *string `json:"file_settlement,omitempty"`
-	TreeSettlement *string `json:"tree_settlement,omitempty"`
+	FileSelection   *string `json:"file_selection,omitempty"`
+	FileSettlement  *string `json:"file_settlement,omitempty"`
+	ItemBlockReason *string `json:"item_block_reason,omitempty"`
+	TreeSettlement  *string `json:"tree_settlement,omitempty"`
 
 	NodeClaims                    *string `json:"node_claims,omitempty"`
 	DirectoryClaims               *string `json:"directory_claims,omitempty"`
@@ -149,6 +150,7 @@ type recordV2 struct {
 	FilesystemRuntimeComponent    *string `json:"filesystem_runtime_component,omitempty"`
 	FilesystemRuntimeOperation    *string `json:"filesystem_runtime_operation,omitempty"`
 	FilesystemRuntimeDecision     *string `json:"filesystem_runtime_decision,omitempty"`
+	FilesystemCheckpointDecision  *string `json:"filesystem_checkpoint_decision,omitempty"`
 	FilesystemOperationID         *string `json:"filesystem_operation_id,omitempty"`
 	FilesystemClaimID             *string `json:"filesystem_claim_id,omitempty"`
 	FilesystemFailureStage        *string `json:"filesystem_failure_stage,omitempty"`

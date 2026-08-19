@@ -123,23 +123,21 @@ func (ids *runtimeIDs) value() byte {
 	return ids.next
 }
 
-func (ids *runtimeIDs) NewFileRevision() (content.FileRevision, error) {
-	return flowID[content.FileRevision](ids.value()), nil
-}
 func (ids *runtimeIDs) NewLeaseID() (content.LeaseID, error) {
 	return flowID[content.LeaseID](ids.value()), nil
 }
 
 type runtimeFixture struct {
-	share   catalog.ShareInstance
-	file    catalog.FileID
-	stable  *runtimeStableFile
-	clock   *runtimeClock
-	store   *content.RevisionStore
-	cache   *SharedBlockCache
-	service *SenderService
-	opener  *records.Opener
-	quota   *content.QuotaAccount
+	share           catalog.ShareInstance
+	file            catalog.FileID
+	stable          *runtimeStableFile
+	clock           *runtimeClock
+	store           *content.RevisionStore
+	revisionDeriver *content.HMACRevisionIdentityDeriver
+	cache           *SharedBlockCache
+	service         *SenderService
+	opener          *records.Opener
+	quota           *content.QuotaAccount
 }
 
 func quotaAccount(t *testing.T, name string) *content.QuotaAccount {
@@ -172,13 +170,24 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	cache, _ := NewSharedBlockCache(share, uint64(catalog.MinChunkSize)*4, processCache)
 	clock := &runtimeClock{now: time.Unix(1_000, 0)}
 	stable := &runtimeStableFile{data: data}
+	revisionDeriver, err := content.NewHMACRevisionIdentityDeriver(content.RevisionIdentityKey{0x81})
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
+	if err != nil {
+		revisionDeriver.Destroy()
+		t.Fatal(err)
+	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: share, ChunkSize: catalog.MinChunkSize,
 		Catalog: runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		Source:  runtimeSource{file: stable}, ProcessQuota: quotaAccount(t, "process"), ShareQuota: quotaAccount(t, "share"),
-		Clock: clock, IDs: &runtimeIDs{}, CacheInvalidator: cache,
+		Clock: clock, LeaseIDs: &runtimeIDs{}, RevisionDeriver: revisionDeriver,
+		MetadataBudget: metadataBudget, CacheInvalidator: cache,
 	})
 	if err != nil {
+		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
 	readSecret := bytes.Repeat([]byte{0x66}, content.ReadSecretBytes)
@@ -200,7 +209,8 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	}
 	return runtimeFixture{
 		share: share, file: file, stable: stable, clock: clock, store: store,
-		cache: cache, service: service, opener: opener, quota: sessionQuota,
+		revisionDeriver: revisionDeriver,
+		cache:           cache, service: service, opener: opener, quota: sessionQuota,
 	}
 }
 
@@ -213,6 +223,7 @@ func (fixture runtimeFixture) close(t *testing.T) {
 	if err := fixture.store.Close(); err != nil {
 		t.Fatal(err)
 	}
+	fixture.revisionDeriver.Destroy()
 }
 
 func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {

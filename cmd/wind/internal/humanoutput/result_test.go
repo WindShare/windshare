@@ -114,6 +114,39 @@ func TestTransferResultPreservesPublishedDestinationKind(t *testing.T) {
 	}
 }
 
+func TestTransferResultExplainsLocalOutcomeWithoutSourceOrUnexpectedWording(t *testing.T) {
+	tests := []struct {
+		code     clievent.FailureCode
+		outcomes clievent.FileOutcomes
+		want     string
+	}{
+		{clievent.FailureCheckpointRevisionConflict, clievent.FileOutcomes{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, "another source revision"},
+		{clievent.FailureCheckpointInvalid, clievent.FileOutcomes{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, "invalid checkpoint binding"},
+		{clievent.FailureOwnedObjectUnknown, clievent.FileOutcomes{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, "destination object it owns"},
+		{clievent.FailureDestinationCollision, clievent.FileOutcomes{CollisionFiles: 1}, "Existing destinations prevented"},
+	}
+	for _, test := range tests {
+		failure := mustFailure(t, test.code)
+		result, err := clievent.NewTransferResult(clievent.TransferResultSpec{
+			Status: clievent.ResultPartial, ExitCode: clievent.ExitFailure,
+			Destination: clievent.NewDisplayPath("out"), Files: test.outcomes,
+			CountersExact: true, Failure: failure,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var output strings.Builder
+		for _, line := range formatTransferResult(result, SelectSymbols(false)) {
+			output.WriteString(lineText(line))
+		}
+		text := output.String()
+		if !strings.Contains(text, test.want) || strings.Contains(text, "unexpected") ||
+			strings.Contains(text, "source content changed") || strings.Contains(text, "needs attention") {
+			t.Fatalf("local outcome output = %q", text)
+		}
+	}
+}
+
 func TestDisplayValuesAreEscapedBeforeLayout(t *testing.T) {
 	t.Parallel()
 	subject, err := clievent.NewFileSubject(clievent.NewDisplayName("bad\n\x1b\u202efile"), 1)

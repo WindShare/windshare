@@ -93,6 +93,20 @@ func (v FilesystemRuntimeDecisionKind) Name() (string, bool) {
 	return closedName(uint8(v), []string{"", "validated", "reserved", "coalesced", "rejected", "rolled_back", "admitted", "active", "sealed", "settled", "ambiguous", "draining", "closed", "succeeded", "reconciled", "collision", "no_change", "needs_attention", "isolated_failure", "cleanup_pending"})
 }
 
+type FilesystemCheckpointDecision uint8
+
+const (
+	FilesystemCheckpointAbsent FilesystemCheckpointDecision = iota + 1
+	FilesystemCheckpointExact
+	FilesystemCheckpointRevisionConflict
+	FilesystemCheckpointOwnershipConflict
+	FilesystemCheckpointInvalid
+)
+
+func (v FilesystemCheckpointDecision) Name() (string, bool) {
+	return closedName(uint8(v), []string{"", "absent", "exact", "revision_conflict", "ownership_conflict", "invalid"})
+}
+
 type FilesystemNativeLockScope uint8
 
 const FilesystemNativeLockSession FilesystemNativeLockScope = 1

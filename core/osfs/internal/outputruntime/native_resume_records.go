@@ -15,30 +15,60 @@ func ordinaryResumeItems(
 	ctx context.Context,
 	topLevel *destinationauthority.TopLevelReservation,
 	store *checkpointstore.FileExecutionStore,
-) ([]resumeauthority.Item, error) {
+) ([]resumeauthority.Item, bool, error) {
 	if ctx == nil || topLevel == nil || store == nil {
-		return nil, resumeauthority.ErrInvalidContract
+		return nil, false, resumeauthority.ErrInvalidContract
 	}
-	records, attention := store.Snapshot()
-	items := make([]resumeauthority.Item, 0, len(records)+len(attention))
-	for _, current := range attention {
-		item, err := resumeauthority.NewBlockedReference(current.Reference())
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
-	}
-	for _, record := range records {
+	slots, attention := store.LineageSnapshot()
+	items := make([]resumeauthority.Item, 0, len(slots))
+	for _, slot := range slots {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return nil, false, err
 		}
-		item, err := ordinaryResumeRecordItem(ctx, topLevel, store, record)
+		item, err := ordinaryResumeLineageItem(ctx, topLevel, store, slot)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		items = append(items, item)
 	}
-	return items, nil
+	// Reconciliation attention has no authenticated lineage or safe path. Keep
+	// it out of item inventory and let the operation lease close ownership.
+	return items, len(attention) != 0, nil
+}
+
+func ordinaryResumeLineageItem(
+	ctx context.Context,
+	topLevel *destinationauthority.TopLevelReservation,
+	store *checkpointstore.FileExecutionStore,
+	slot checkpointstore.FileExecutionLineageSlot,
+) (resumeauthority.Item, error) {
+	switch slot.Decision() {
+	case checkpointmodel.CheckpointLineageDecisionExact:
+		record, exact := slot.Record()
+		if !exact {
+			return resumeauthority.Item{}, resumeauthority.ErrInvalidContract
+		}
+		return ordinaryResumeRecordItem(ctx, topLevel, store, record)
+	case checkpointmodel.CheckpointLineageDecisionRevisionConflict:
+		return resumeauthority.NewItem(
+			slot.CanonicalPath(), resumeauthority.ItemBlocked,
+			resumeauthority.ItemBlockRevisionConflict,
+		)
+	case checkpointmodel.CheckpointLineageDecisionOwnershipConflict:
+		return resumeauthority.NewItem(
+			slot.CanonicalPath(), resumeauthority.ItemBlocked,
+			resumeauthority.ItemBlockOwnedObjectUnknown,
+		)
+	case checkpointmodel.CheckpointLineageDecisionInvalid:
+		return resumeauthority.NewItem(
+			slot.CanonicalPath(), resumeauthority.ItemBlocked,
+			resumeauthority.ItemBlockCheckpointInvalid,
+		)
+	default:
+		// Startup slots always contain authenticated physical evidence. Absent is
+		// meaningful for a live claim, but cannot grant an inventory item.
+		return resumeauthority.Item{}, resumeauthority.ErrInvalidContract
+	}
 }
 
 func ordinaryResumeRecordItem(
@@ -67,97 +97,18 @@ func ordinaryResumeRecordItem(
 			resumeauthority.ItemBlockPublicationUnknown,
 		)
 	}
-	if record.Phase() == checkpointmodel.PhaseQuarantined ||
-		record.CommitState() == checkpointmodel.CommitQuarantined {
-		return resumeauthority.NewItem(
-			record.CanonicalPath(), resumeauthority.ItemBlocked,
-			resumeauthority.ItemBlockCheckpointInvalid,
-		)
-	}
-
-	switch record.Phase() {
-	case checkpointmodel.PhasePublished:
-		if final.Condition() == fileexecution.FinalOwnedExact {
-			return ordinaryResumeItem(record, resumeauthority.ItemPublished)
-		}
-		return blockedPublicationItem(record)
-	case checkpointmodel.PhasePublishing:
-		switch final.Condition() {
-		case fileexecution.FinalOwnedExact:
-			return ordinaryResumeItem(record, resumeauthority.ItemPublished)
-		case fileexecution.FinalAbsent, fileexecution.FinalCollision:
-			// A definite collision changes only when publication may proceed. It
-			// does not make an intact owned object ambiguous or permanently block
-			// the operation after the foreign final is removed.
-			if owned.Condition() == fileexecution.OwnedReady {
-				return ordinaryResumeItem(record, resumeauthority.ItemResumable)
-			}
-			return blockedOwnedItem(record, owned)
-		default:
-			return blockedPublicationItem(record)
-		}
-	case checkpointmodel.PhaseReserved, checkpointmodel.PhaseActive, checkpointmodel.PhasePaused:
-		switch final.Condition() {
-		case fileexecution.FinalAbsent, fileexecution.FinalCollision:
-			// Inventory reports durable restart capability, not the current
-			// destination occupancy. A known foreign final is surfaced as a typed
-			// collision by file execution and remains safe to retry in-place.
-			switch owned.Condition() {
-			case fileexecution.OwnedReady:
-				if len(record.VerifiedRanges()) != 0 ||
-					record.Phase() == checkpointmodel.PhasePaused {
-					return ordinaryResumeItem(record, resumeauthority.ItemResumable)
-				}
-				return ordinaryResumeItem(record, resumeauthority.ItemIncomplete)
-			case fileexecution.OwnedAbsent, fileexecution.OwnedAnchorMissing,
-				fileexecution.OwnedStageMissing:
-				// A normal matched receive starts a fresh object while preserving
-				// this lost checkpoint evidence.
-				return ordinaryResumeItem(record, resumeauthority.ItemIncomplete)
-			default:
-				return blockedOwnedItem(record, owned)
-			}
-		default:
-			return blockedPublicationItem(record)
-		}
-	case checkpointmodel.PhaseRetired:
-		if record.RetirementReason() == checkpointmodel.RetirementPublished &&
-			final.Condition() == fileexecution.FinalOwnedExact {
-			return ordinaryResumeItem(record, resumeauthority.ItemPublished)
-		}
-		return ordinaryResumeItem(record, resumeauthority.ItemFailed)
-	default:
-		return resumeauthority.NewItem(
-			record.CanonicalPath(), resumeauthority.ItemBlocked,
-			resumeauthority.ItemBlockCheckpointInvalid,
-		)
-	}
-}
-
-func ordinaryResumeItem(
-	record checkpointmodel.Record,
-	state resumeauthority.ItemState,
-) (resumeauthority.Item, error) {
-	return resumeauthority.NewItem(
-		record.CanonicalPath(), state, resumeauthority.ItemBlockNone,
-	)
+	return reduceOrdinaryResumeRecord(record, owned, final).item(record)
 }
 
 func blockedPublicationItem(record checkpointmodel.Record) (resumeauthority.Item, error) {
-	return resumeauthority.NewItem(
-		record.CanonicalPath(), resumeauthority.ItemBlocked,
-		resumeauthority.ItemBlockPublicationUnknown,
-	)
+	return ordinaryResumeBlock(resumeauthority.ItemBlockPublicationUnknown).item(record)
 }
 
 func blockedOwnedItem(
 	record checkpointmodel.Record,
 	_ fileexecution.OwnedObservation,
 ) (resumeauthority.Item, error) {
-	return resumeauthority.NewItem(
-		record.CanonicalPath(), resumeauthority.ItemBlocked,
-		resumeauthority.ItemBlockOwnedObjectUnknown,
-	)
+	return ordinaryResumeBlock(resumeauthority.ItemBlockOwnedObjectUnknown).item(record)
 }
 
 func closeNativeResumeOwnedFile(file fileexecution.OwnedFile) error {

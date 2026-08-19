@@ -61,6 +61,7 @@ func TestFilesystemSummaryProjectionShowsOnlyBlockedItemsAndHidesControlReferenc
 		{fakeResumeItemView{path: "result/publish", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockPublicationUnknown}, resumeBlockedPublicationUnknown},
 		{fakeResumeItemView{path: "result/checkpoint", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockCheckpointInvalid}, resumeBlockedCheckpointInvalid},
 		{fakeResumeItemView{path: "result/partial", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockOwnedObjectUnknown}, resumeBlockedOwnedObjectUnknown},
+		{fakeResumeItemView{path: "result/revision", state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockRevisionConflict}, resumeBlockedRevisionConflict},
 		{fakeResumeItemView{state: osfs.ResumeItemBlocked, reason: osfs.ResumeItemBlockCheckpointInvalid, reference: "private-record-17"}, resumeBlockedCheckpointInvalid},
 	}
 	projected := make([]resumeBlockedItem, 0, len(blockedTests))
@@ -81,7 +82,7 @@ func TestFilesystemSummaryProjectionShowsOnlyBlockedItemsAndHidesControlReferenc
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"publication-unknown", "checkpoint-invalid", "owned-object-unknown", "path_known=false"} {
+	for _, want := range []string{"publication-unknown", "checkpoint-invalid", "owned-object-unknown", "revision-conflict", "path_known=false"} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered=%q missing=%q", rendered, want)
 		}

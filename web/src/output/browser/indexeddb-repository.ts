@@ -1,5 +1,7 @@
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  FILE_CHECKPOINT_COMMIT_QUARANTINED,
+  FILE_CHECKPOINT_COMMIT_VERIFIED,
   MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION,
   MAX_CHECKPOINT_RECORDS_PER_OPERATION,
   validateFileCheckpoint,
@@ -11,10 +13,13 @@ import {
   finalFileCheckpointProof,
   validateFileCheckpointPage,
   type CheckpointNamespaceBinding,
+  type CheckpointLineageDecision,
+  type CheckpointLineageLookupRequest,
   type FileCheckpointJournal,
   type FileCheckpointPage,
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
+  type InitialCheckpointCASResult,
   type PersistentHandleRecord,
   type PersistentHandleInventoryRepository,
   type PersistentHandleRepository,
@@ -60,17 +65,27 @@ import {
   abortConcurrency,
   abortIntegrity,
   assertAuxiliaryCapacity,
-  assertCheckpointCapacity,
+  assertCheckpointInstallCapacity,
   assertOperationConcurrency,
   assertOperationMutationOwnership,
+  checkpointLineageAuthority,
+  checkpointLineageAuthorityForCandidate,
+  classifyCheckpointInventory,
   compareRecordIds,
+  readCheckpointInventory,
   readStoredCheckpoint,
+  resolveStoredCheckpointCandidate,
+  stageStoredCheckpointUpdate,
   storedCheckpoint,
   validateCheckpointHandle,
   validateStoredReceiveRecord,
 } from './indexeddb/repository-transactions'
 
 export { IndexedDbOperationConcurrencyError } from './indexeddb/repository-transactions'
+
+export type IndexedDbCandidateResolution =
+  | Readonly<{ kind: 'verified'; committed: FileCheckpointV2 }>
+  | Readonly<{ kind: 'quarantined'; checkpoint: FileCheckpointV2 }>
 
 const RECEIVE_OPERATION_RECORD_BOUND = 1_048_576
 const RECEIVE_OPERATION_PAGE_BOUND = 1_048_576
@@ -98,54 +113,137 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
     )
   }
 
-  async putCandidate(record: FileCheckpointV2): Promise<void> {
+  async lookupLineage(
+    request: CheckpointLineageLookupRequest,
+  ): Promise<CheckpointLineageDecision> {
     this.#assertOpen()
-    this.#assertBinding(record)
-    if (record.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-      throw new TypeError('candidate store accepts only candidate checkpoints')
-    }
-    const transaction = this.#database.transaction(
+    const authority = checkpointLineageAuthority(this.binding, request)
+    const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
-      'readwrite',
-    )
-    const store = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
-    const existing = await requestResult<unknown>(store.get(record.recordId))
-    if (existing === undefined) await assertCheckpointCapacity(store, record.operationId)
-    else validateFileCheckpointTransition(readStoredCheckpoint(existing), record)
-    store.put(storedCheckpoint(record))
-    await transactionCompletion(transaction)
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readonly')
+    try {
+      const inventory = await readCheckpointInventory(transaction, this.binding, authority)
+      const decision = classifyCheckpointInventory(authority, inventory)
+      await transactionCompletion(transaction)
+      return decision
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
   }
 
-  async commit(record: FileCheckpointV2): Promise<void> {
+  async createInitialCheckpoint(
+    candidate: FileCheckpointV2,
+  ): Promise<InitialCheckpointCASResult> {
     this.#assertOpen()
-    this.#assertBinding(record)
-    if (record.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
-      throw new TypeError('committed checkpoint must have verified reducer state')
+    this.#assertBinding(candidate)
+    const authority = checkpointLineageAuthorityForCandidate(this.binding, candidate)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readwrite')
+    try {
+      const inventory = await readCheckpointInventory(transaction, this.binding, authority)
+      const decision = classifyCheckpointInventory(authority, inventory)
+      if (decision.kind !== 'absent') {
+        await transactionCompletion(transaction)
+        return decision
+      }
+      assertCheckpointInstallCapacity(inventory, candidate)
+      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
+        .put(storedCheckpoint(candidate))
+      await transactionCompletion(transaction)
+      return Object.freeze({
+        kind: 'installed',
+        lineageId: authority.lineageId,
+        record: candidate,
+      })
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
+  }
+
+  async resolveCandidate(
+    candidate: FileCheckpointV2,
+    observation: IndexedDbCandidateResolution,
+  ): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(candidate)
+    const resolved = observation.kind === 'verified'
+      ? observation.committed
+      : observation.checkpoint
+    this.#assertBinding(resolved)
+    const expectedCommitState = observation.kind === 'verified'
+      ? FILE_CHECKPOINT_COMMIT_VERIFIED
+      : FILE_CHECKPOINT_COMMIT_QUARANTINED
+    if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        resolved.recordId !== candidate.recordId ||
+        resolved.commitState !== expectedCommitState) {
+      throw new TypeError('checkpoint candidate observation is not a valid resolution')
     }
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
     ], 'readwrite')
-    const candidates = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
-    const committed = transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE)
-    const [candidateValue, committedValue] = await Promise.all([
-      requestResult<unknown>(candidates.get(record.recordId)),
-      requestResult<unknown>(committed.get(record.recordId)),
-    ])
-    if (candidateValue === undefined && committedValue === undefined) {
-      abortConcurrency(transaction, 'checkpoint commit has no candidate authority')
+    try {
+      await resolveStoredCheckpointCandidate(transaction, candidate, resolved)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
     }
-    if (candidateValue !== undefined) {
-      validateFileCheckpointTransition(readStoredCheckpoint(candidateValue), record)
+  }
+
+  async stageCheckpointUpdate(
+    previous: FileCheckpointV2,
+    candidate: FileCheckpointV2,
+  ): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(previous)
+    this.#assertBinding(candidate)
+    if (previous.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      throw new TypeError('checkpoint update requires a committed predecessor and candidate successor')
     }
-    if (committedValue !== undefined) {
-      validateFileCheckpointTransition(readStoredCheckpoint(committedValue), record)
-    } else {
-      await assertCheckpointCapacity(committed, record.operationId)
+    validateFileCheckpointTransition(previous, candidate)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readwrite')
+    try {
+      await stageStoredCheckpointUpdate(transaction, previous, candidate)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
     }
-    committed.put(storedCheckpoint(record))
-    candidates.delete(record.recordId)
-    await transactionCompletion(transaction)
+  }
+
+  async commitCheckpointCandidate(
+    candidate: FileCheckpointV2,
+    committed: FileCheckpointV2,
+  ): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(candidate)
+    this.#assertBinding(committed)
+    if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
+        committed.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE) {
+      throw new TypeError('checkpoint promotion requires an exact candidate and committed successor')
+    }
+    validateFileCheckpointTransition(candidate, committed)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readwrite')
+    try {
+      await resolveStoredCheckpointCandidate(transaction, candidate, committed)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
   }
 
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
@@ -375,6 +473,14 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
     if (this.#closed) {
       throw new DOMException('File checkpoint repository is closed', 'InvalidStateError')
     }
+  }
+}
+
+function abortQuietly(transaction: IDBTransaction): void {
+  try {
+    transaction.abort()
+  } catch {
+    // A completed/aborted transaction already preserved the required no-write outcome.
   }
 }
 

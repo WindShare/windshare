@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { byteRange } from '../../src/content/geometry'
 import {
   V2BlockBroker,
@@ -10,6 +11,7 @@ import {
   type V2BlockRouteEligibility,
 } from '../../src/content/v2-broker'
 import type { V2BlockRecord } from '../../src/content/v2-records'
+import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
 import type { TestOutput } from './v2-job-fixture'
 import {
   catalogFixture,
@@ -102,6 +104,44 @@ describe('v2 authenticated file transfer', () => {
     expect(readers.revisionRequests).toEqual([file.idText])
     expect(readers.releases).toEqual([file.idText])
     expect(plans.settlements).toEqual(['direct-atomic:Succeeded'])
+  })
+
+  it('isolates a checkpoint decision while an independent sibling completes', async () => {
+    const root = identity(2)
+    const blocked = fileEntry(identity(11), 'blocked.bin', 2n)
+    const sibling = fileEntry(identity(12), 'sibling.bin', 2n)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [blocked, sibling] }])
+    const readers = readerFixture([blocked, sibling])
+    const output = testOutput([], {
+      failBeginFor: blocked.idText,
+      beginFailure: new CheckpointLineageDecisionError('revision-conflict'),
+    })
+    const plans = planAuthorityFixture({ output })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(result.worker.fileOutcomes).toEqual(expect.objectContaining({
+      revisionConflictFiles: 1,
+      sourceDriftFiles: 0,
+      failedFiles: 0,
+    }))
+    expect(output.commits).toEqual([sibling.idText])
+    expect(readers.blockRequests).toEqual([sibling.idText])
+    expect(result.lifecycle.kind).toBe('partial-directory')
   })
 
   it('requests only missing authenticated ranges and still commits the whole file', async () => {

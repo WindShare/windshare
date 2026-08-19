@@ -105,13 +105,16 @@ type FileJobFailure struct {
 // settlements. It intentionally carries counts rather than paths or checkpoint
 // facts so consumers can report provenance without retaining a second manifest.
 type FileOutcomeSummary struct {
-	DownloadedFiles      uint64
-	ResumedFiles         uint64
-	PausedFiles          uint64
-	CollisionFiles       uint64
-	FailedFiles          uint64
-	ItemBlockedFiles     uint64
-	ModifiedTimeWarnings uint64
+	DownloadedFiles         uint64
+	ResumedFiles            uint64
+	PausedFiles             uint64
+	CollisionFiles          uint64
+	FailedFiles             uint64
+	ItemBlockedFiles        uint64
+	RevisionConflictFiles   uint64
+	CheckpointInvalidFiles  uint64
+	OwnedObjectUnknownFiles uint64
+	ModifiedTimeWarnings    uint64
 }
 
 func (summary FileOutcomeSummary) PublishedFiles() uint64 {

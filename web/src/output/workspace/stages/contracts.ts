@@ -1,4 +1,5 @@
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../../transfer/intent'
+import type { PersistentTreeTraceEvent } from '../../persistent-tree/contracts'
 import {
   validateReceiveIntent,
   type ReceiveIntent,
@@ -86,6 +87,7 @@ export type WorkspaceReceiveIntent = ReceiveIntent & {
 }
 
 export type WorkspaceStageTraceEvent =
+  | PersistentTreeTraceEvent
   | Readonly<{
       name: 'receive.preparation.started'
       operation_id: string

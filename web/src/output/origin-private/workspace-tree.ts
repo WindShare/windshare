@@ -142,13 +142,46 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
     return true
   }
 
+  async proposeFileOwnedObjectId(
+    path: readonly string[],
+    revision: OpenedFileRevision,
+  ): Promise<string> {
+    return rawFileObjectId(
+      this.#root.operationId,
+      snapshotPath(path, false),
+      snapshotRevision(revision),
+    )
+  }
+
+  async inspectFileDestination(
+    path: readonly string[],
+    selectedOwnedObjectId: string,
+  ): Promise<'absent' | 'occupied'> {
+    snapshotPath(path, false)
+    const ownedObjectId = snapshotIdentity(selectedOwnedObjectId, 32, 'owned object ID')
+    const persisted = await this.#readHandle(
+      originPrivateRawFileHandleId(this.#root.operationId, ownedObjectId),
+      'namespace-create',
+    )
+    const current = await this.#root.readObject(
+      ORIGIN_PRIVATE_RAW_FILE_CONTAINER,
+      ownedObjectId,
+      'namespace-create',
+    )
+    return persisted === undefined && current === undefined ? 'absent' : 'occupied'
+  }
+
   async createFileAfterRevisionOpen(
     path: readonly string[],
     revision: OpenedFileRevision,
+    selectedOwnedObjectId: string,
   ): Promise<PersistentTreeFile> {
     const canonical = snapshotPath(path, false)
     const opened = snapshotRevision(revision)
-    const ownedObjectId = await rawFileObjectId(this.#root.operationId, canonical, opened)
+    const ownedObjectId = snapshotIdentity(selectedOwnedObjectId, 32, 'owned object ID')
+    if (ownedObjectId !== await rawFileObjectId(this.#root.operationId, canonical, opened)) {
+      throw new TypeError('selected raw file object does not match its materialization plan')
+    }
     const id = originPrivateRawFileHandleId(this.#root.operationId, ownedObjectId)
     const persisted = await this.#readHandle(id, 'namespace-create')
     const current = await this.#root.readObject(
@@ -156,7 +189,7 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
       ownedObjectId,
       'namespace-create',
     )
-    if (persisted !== undefined) {
+    if (persisted !== undefined || current !== undefined) {
       const handle = await this.#requireMatchingHandle(
         persisted,
         ORIGIN_PRIVATE_FILE_HANDLE_KIND,
@@ -164,13 +197,7 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
         current,
         'namespace-create',
       )
-      // A durable handle without a checkpoint is the precise crash cut this method owns.
-      const reset = await handle.createWritable({ keepExistingData: false })
-      await reset.close()
       return this.#file(canonical, ownedObjectId, handle)
-    }
-    if (current !== undefined) {
-      throw new TargetOwnershipUnknownError('namespace-create', this.#root.operationId)
     }
     const created = await this.#root.createObject(ORIGIN_PRIVATE_RAW_FILE_CONTAINER, ownedObjectId)
     await this.#persistHandle(Object.freeze({
@@ -391,7 +418,7 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
   }
 }
 
-async function rawFileObjectId(
+export async function rawFileObjectId(
   operationId: string,
   path: readonly string[],
   revision: OpenedFileRevision,

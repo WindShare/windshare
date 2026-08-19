@@ -163,6 +163,14 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The trace path already exists; prior evidence was preserved and command/output state was untouched. Choose a new --trace path, use --trace-dir, or omit tracing."
 	case clievent.MessageOutputNeedsAttention:
 		message = "The destination needs attention before the transfer can continue."
+	case clievent.MessageDestinationCollision:
+		message = "Existing destinations prevented one or more files from completing."
+	case clievent.MessageCheckpointRevisionConflict:
+		message = "Local resume data belongs to another source revision; no destination was replaced."
+	case clievent.MessageCheckpointInvalid:
+		message = "Local resume data has an invalid checkpoint binding; existing evidence was preserved."
+	case clievent.MessageOwnedObjectUnknown:
+		message = "Local resume data disagrees about which destination object it owns; no automatic change was made."
 	default:
 		message = "An unexpected error occurred."
 	}

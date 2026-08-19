@@ -270,11 +270,13 @@ func TestRootedRevisionSourceTransfersOnlySuccessfullyBoundHandles(t *testing.T)
 	if _, err := rejectedHandle.Stat(); err == nil {
 		t.Fatal("failed binder retained an open file handle")
 	}
-	if _, err := source.OpenStable(context.Background(), emptyLocatorFileRecord(t)); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("empty locator error = %v", err)
+	if _, err := source.OpenStable(context.Background(), emptyLocatorFileRecord(t)); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonMismatch {
+		t.Fatalf("empty locator error = %v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
-	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 5)); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("size mismatch error = %v", err)
+	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 5)); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonMismatch {
+		t.Fatalf("size mismatch error = %v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	if err := source.Close(); err != nil {
 		t.Fatal(err)
@@ -322,8 +324,9 @@ func TestRootedRevisionSourceClassifiesRootAndOwnedBinderFailures(t *testing.T) 
 	if err := source.roots[0].Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 4)); err == nil {
-		t.Fatal("closed root authority reopened a revision")
+	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 4)); err == nil ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("closed root authority error=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	_ = source.Close()
 

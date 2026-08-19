@@ -26,6 +26,10 @@ const (
 	MessageTraceIncomplete
 	MessageTraceExists
 	MessageOutputNeedsAttention
+	MessageDestinationCollision
+	MessageCheckpointRevisionConflict
+	MessageCheckpointInvalid
+	MessageOwnedObjectUnknown
 )
 
 func (value SafeMessageKey) Name() (string, bool) {
@@ -68,6 +72,14 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "trace_exists", true
 	case MessageOutputNeedsAttention:
 		return "output_needs_attention", true
+	case MessageDestinationCollision:
+		return "destination_collision", true
+	case MessageCheckpointRevisionConflict:
+		return "checkpoint_revision_conflict", true
+	case MessageCheckpointInvalid:
+		return "checkpoint_invalid", true
+	case MessageOwnedObjectUnknown:
+		return "owned_object_unknown", true
 	default:
 		return "", false
 	}
@@ -139,6 +151,10 @@ const (
 	FailureOutputMutationAmbiguous
 	FailureOutputContract
 	FailureOutputNeedsAttention
+	FailureDestinationCollision
+	FailureCheckpointRevisionConflict
+	FailureCheckpointInvalid
+	FailureOwnedObjectUnknown
 	FailureCheckpointBusy
 	FailureCheckpointCorruptRecord
 	FailureCheckpointUnsafeInstall
@@ -318,6 +334,14 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"output_contract", MessageOutputFailed}, true
 	case FailureOutputNeedsAttention:
 		return failureDefinition{"output_needs_attention", MessageOutputNeedsAttention}, true
+	case FailureDestinationCollision:
+		return failureDefinition{"destination_collision", MessageDestinationCollision}, true
+	case FailureCheckpointRevisionConflict:
+		return failureDefinition{"checkpoint_revision_conflict", MessageCheckpointRevisionConflict}, true
+	case FailureCheckpointInvalid:
+		return failureDefinition{"checkpoint_invalid", MessageCheckpointInvalid}, true
+	case FailureOwnedObjectUnknown:
+		return failureDefinition{"owned_object_unknown", MessageOwnedObjectUnknown}, true
 	case FailureCheckpointBusy:
 		return failureDefinition{"checkpoint_busy", MessageCheckpointFailed}, true
 	case FailureCheckpointCorruptRecord:

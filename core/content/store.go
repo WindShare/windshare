@@ -1,34 +1,12 @@
 package content
 
 import (
-	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
-	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 )
-
-type randomIdentities struct{}
-
-func (randomIdentities) NewFileRevision() (FileRevision, error) {
-	var revision FileRevision
-	if _, err := rand.Read(revision[:]); err != nil {
-		return FileRevision{}, fmt.Errorf("generate file revision identity: %w", err)
-	}
-	return revision, nil
-}
-
-func (randomIdentities) NewLeaseID() (LeaseID, error) {
-	var lease LeaseID
-	if _, err := rand.Read(lease[:]); err != nil {
-		return LeaseID{}, fmt.Errorf("generate revision lease identity: %w", err)
-	}
-	return lease, nil
-}
 
 type RevisionStoreConfig struct {
 	ShareInstance    catalog.ShareInstance
@@ -38,37 +16,59 @@ type RevisionStoreConfig struct {
 	ProcessQuota     *QuotaAccount
 	ShareQuota       *QuotaAccount
 	Clock            Clock
-	IDs              IdentityGenerator
+	LeaseIDs         LeaseIDGenerator
+	RevisionDeriver  RevisionIdentityDeriver
+	MetadataBudget   *RevisionMetadataBudget
 	CacheInvalidator CacheInvalidator
+	Tracer           RevisionTracer
 }
 
 type RevisionStore struct {
-	shareInstance catalog.ShareInstance
-	chunkSize     uint32
-	catalog       CatalogNodeSource
-	source        RevisionSource
-	processQuota  *QuotaAccount
-	shareQuota    *QuotaAccount
-	clock         Clock
-	ids           IdentityGenerator
-	invalidator   CacheInvalidator
+	shareInstance   catalog.ShareInstance
+	chunkSize       uint32
+	catalog         CatalogNodeSource
+	source          RevisionSource
+	processQuota    *QuotaAccount
+	shareQuota      *QuotaAccount
+	clock           Clock
+	leaseIDs        LeaseIDGenerator
+	revisionDeriver RevisionIdentityDeriver
+	metadataBudget  *RevisionMetadataBudget
+	invalidator     CacheInvalidator
+	tracer          RevisionTracer
 
-	mu              sync.Mutex
-	closed          bool
-	revisions       map[catalog.FileID]*revisionState
-	leases          map[LeaseID]*leaseState
-	opening         map[catalog.FileID]*openAttempt
-	usedRevisions   map[FileRevision]struct{}
-	leaseTombstones map[LeaseID]leaseStatus
-	revisionOrder   []FileRevision
-	leaseOrder      []LeaseID
-	revisionCursor  int
-	leaseCursor     int
-	openWG          sync.WaitGroup
-	readWG          sync.WaitGroup
+	mu                       sync.Mutex
+	closed                   bool
+	revisionAdmissionStopped bool
+	revisions                map[catalog.FileID]*revisionState
+	readingRevisions         map[*revisionState]struct{}
+	leases                   map[LeaseID]*leaseState
+	opening                  map[catalog.FileID]*openAttempt
+	invalidated              map[revisionIdentity]*revisionMetadataReservation
+	leaseTombstones          map[LeaseID]leaseStatus
+	leaseOrder               []LeaseID
+	leaseCursor              int
+	openWG                   sync.WaitGroup
+	readWG                   sync.WaitGroup
 }
 
 const IdentityTombstoneLimit = 4_096
+
+type revisionLifecycle uint8
+
+const (
+	revisionLifecycleUnknown revisionLifecycle = iota
+	revisionLifecycleActive
+	revisionLifecycleReleased
+	revisionLifecycleInvalidated
+)
+
+type revisionIdentity struct {
+	file     catalog.FileID
+	revision FileRevision
+}
+
+func (i revisionIdentity) isZero() bool { return i.file.IsZero() || i.revision.IsZero() }
 
 type revisionState struct {
 	descriptor     FileRevisionDescriptor
@@ -80,7 +80,11 @@ type revisionState struct {
 	readers        int
 	closePending   bool
 	closed         bool
-	drifted        bool
+	lifecycle      revisionLifecycle
+}
+
+func (r *revisionState) identity() revisionIdentity {
+	return revisionIdentity{file: r.descriptor.FileID(), revision: r.descriptor.FileRevision()}
 }
 
 type sessionHandleState struct {
@@ -107,32 +111,6 @@ type leaseState struct {
 	endedAt      time.Time
 }
 
-type openAttempt struct {
-	file           catalog.FileID
-	done           chan struct{}
-	cancel         context.CancelFunc
-	waiters        int
-	completed      bool
-	ownerAdmission *openAdmission
-	revision       *revisionState
-	err            error
-}
-
-type openAdmission struct {
-	leaseQuota         *QuotaReservation
-	sessionHandleQuota *QuotaReservation
-}
-
-func (a *openAdmission) release() {
-	if a == nil {
-		return
-	}
-	a.leaseQuota.Release()
-	a.leaseQuota = nil
-	a.sessionHandleQuota.Release()
-	a.sessionHandleQuota = nil
-}
-
 type revisionCleanup struct {
 	source      StableFile
 	reservation *QuotaReservation
@@ -153,8 +131,9 @@ func (c revisionCleanup) run() {
 }
 
 func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
-	if config.ShareInstance.IsZero() || config.Catalog == nil || config.Source == nil || config.ProcessQuota == nil || config.ShareQuota == nil {
-		return nil, errors.New("revision store requires share identity, catalog, source, and process/share quotas")
+	if config.ShareInstance.IsZero() || config.Catalog == nil || config.Source == nil ||
+		config.ProcessQuota == nil || config.ShareQuota == nil || config.RevisionDeriver == nil || config.MetadataBudget == nil {
+		return nil, errors.New("revision store requires share identity, catalog, source, process/share quotas, revision deriver, and metadata budget")
 	}
 	if config.ProcessQuota == config.ShareQuota {
 		return nil, errors.New("revision store process and share quotas must be distinct")
@@ -165,318 +144,18 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	if config.Clock == nil {
 		config.Clock = wallClock{}
 	}
-	if config.IDs == nil {
-		config.IDs = randomIdentities{}
+	if config.LeaseIDs == nil {
+		config.LeaseIDs = randomLeaseIDs{}
 	}
 	return &RevisionStore{
 		shareInstance: config.ShareInstance, chunkSize: config.ChunkSize,
 		catalog: config.Catalog, source: config.Source, processQuota: config.ProcessQuota, shareQuota: config.ShareQuota,
-		clock: config.Clock, ids: config.IDs, invalidator: config.CacheInvalidator,
-		revisions: make(map[catalog.FileID]*revisionState), leases: make(map[LeaseID]*leaseState), opening: make(map[catalog.FileID]*openAttempt),
-		usedRevisions: make(map[FileRevision]struct{}), leaseTombstones: make(map[LeaseID]leaseStatus),
+		clock: config.Clock, leaseIDs: config.LeaseIDs, revisionDeriver: config.RevisionDeriver,
+		metadataBudget: config.MetadataBudget, invalidator: config.CacheInvalidator, tracer: config.Tracer,
+		revisions: make(map[catalog.FileID]*revisionState), readingRevisions: make(map[*revisionState]struct{}),
+		leases: make(map[LeaseID]*leaseState), opening: make(map[catalog.FileID]*openAttempt),
+		invalidated: make(map[revisionIdentity]*revisionMetadataReservation), leaseTombstones: make(map[LeaseID]leaseStatus),
 	}, nil
-}
-
-func (s *RevisionStore) OpenRevision(ctx context.Context, file catalog.FileID, sessionQuota *QuotaAccount) (RevisionLease, error) {
-	if err := ctx.Err(); err != nil {
-		return RevisionLease{}, err
-	}
-	if file.IsZero() || sessionQuota == nil {
-		return RevisionLease{}, errors.New("open revision requires a file identity and session quota")
-	}
-	s.reap(s.clock.Now())
-
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return RevisionLease{}, ErrRevisionStoreClosed
-	}
-	if revision := s.revisions[file]; revision != nil && !revision.drifted && !revision.closed {
-		lease, err := s.acquireLeaseLocked(revision, sessionQuota, s.clock.Now(), nil)
-		s.mu.Unlock()
-		return lease, err
-	}
-	if attempt := s.opening[file]; attempt != nil {
-		attempt.waiters++
-		s.mu.Unlock()
-		return s.awaitOpen(ctx, attempt, sessionQuota, false)
-	}
-	admission, err := s.reserveOpenAdmission(sessionQuota)
-	if err != nil {
-		s.mu.Unlock()
-		return RevisionLease{}, err
-	}
-	attemptContext, cancel := context.WithCancel(context.Background())
-	attempt := &openAttempt{file: file, done: make(chan struct{}), cancel: cancel, waiters: 1, ownerAdmission: admission}
-	s.opening[file] = attempt
-	s.openWG.Add(1)
-	s.mu.Unlock()
-	go s.runOpen(attemptContext, attempt)
-	return s.awaitOpen(ctx, attempt, sessionQuota, true)
-}
-
-func (s *RevisionStore) reserveOpenAdmission(sessionQuota *QuotaAccount) (*openAdmission, error) {
-	leaseQuota, err := ReserveQuota(QuotaHierarchy{Process: s.processQuota, Share: s.shareQuota, Session: sessionQuota}, QuotaUsage{ActiveLeases: 1})
-	if err != nil {
-		return nil, err
-	}
-	handleQuota, err := reserveQuotaAccounts([]*QuotaAccount{sessionQuota}, QuotaUsage{StableHandles: 1})
-	if err != nil {
-		leaseQuota.Release()
-		return nil, err
-	}
-	return &openAdmission{leaseQuota: leaseQuota, sessionHandleQuota: handleQuota}, nil
-}
-
-func (s *RevisionStore) acquireLeaseLocked(revision *revisionState, sessionQuota *QuotaAccount, now time.Time, admission *openAdmission) (RevisionLease, error) {
-	defer admission.release()
-	var leaseQuota *QuotaReservation
-	if admission != nil {
-		leaseQuota = admission.leaseQuota
-		admission.leaseQuota = nil
-	}
-	if leaseQuota == nil {
-		var err error
-		leaseQuota, err = ReserveQuota(QuotaHierarchy{Process: s.processQuota, Share: s.shareQuota, Session: sessionQuota}, QuotaUsage{ActiveLeases: 1})
-		if err != nil {
-			return RevisionLease{}, err
-		}
-	}
-	sessionHandle := revision.sessionHandles[sessionQuota]
-	newSessionHandle := sessionHandle == nil
-	if newSessionHandle {
-		var handleQuota *QuotaReservation
-		if admission != nil {
-			handleQuota = admission.sessionHandleQuota
-			admission.sessionHandleQuota = nil
-		}
-		if handleQuota == nil {
-			var reserveErr error
-			handleQuota, reserveErr = reserveQuotaAccounts([]*QuotaAccount{sessionQuota}, QuotaUsage{StableHandles: 1})
-			if reserveErr != nil {
-				leaseQuota.Release()
-				return RevisionLease{}, reserveErr
-			}
-		}
-		sessionHandle = &sessionHandleState{quota: handleQuota}
-	}
-	leaseID, err := s.ids.NewLeaseID()
-	if err != nil {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, err
-	}
-	if leaseID.IsZero() {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, errors.New("revision lease generator returned a zero identity")
-	}
-	if _, exists := s.leases[leaseID]; exists {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, errors.New("revision lease generator reused an identity")
-	}
-	if _, exists := s.leaseTombstones[leaseID]; exists {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, errors.New("revision lease generator reused an identity")
-	}
-	lease := RevisionLease{id: leaseID, descriptor: revision.descriptor, ttl: LeaseTTL, renewAfter: LeaseTTL - LeaseRenewWindow}
-	state := &leaseState{
-		lease: lease, revision: revision, quota: leaseQuota, sessionQuota: sessionQuota, status: leaseActive,
-		createdAt: now, expiresAt: now.Add(LeaseTTL),
-	}
-	if newSessionHandle {
-		revision.sessionHandles[sessionQuota] = sessionHandle
-	}
-	sessionHandle.leases++
-	revision.leases[leaseID] = state
-	revision.graceUntil = time.Time{}
-	s.leases[leaseID] = state
-	return lease, nil
-}
-
-func (s *RevisionStore) awaitOpen(ctx context.Context, attempt *openAttempt, sessionQuota *QuotaAccount, ownsAdmission bool) (RevisionLease, error) {
-	select {
-	case <-attempt.done:
-		s.mu.Lock()
-		attempt.waiters--
-		var admission *openAdmission
-		if ownsAdmission {
-			admission = attempt.ownerAdmission
-			attempt.ownerAdmission = nil
-			if s.opening[attempt.file] == attempt {
-				delete(s.opening, attempt.file)
-			}
-		}
-		if attempt.err != nil {
-			err := attempt.err
-			s.mu.Unlock()
-			admission.release()
-			return RevisionLease{}, err
-		}
-		if s.closed || attempt.revision == nil || attempt.revision.closed {
-			s.mu.Unlock()
-			admission.release()
-			return RevisionLease{}, ErrRevisionStoreClosed
-		}
-		lease, err := s.acquireLeaseLocked(attempt.revision, sessionQuota, s.clock.Now(), admission)
-		s.mu.Unlock()
-		return lease, err
-	case <-ctx.Done():
-		s.mu.Lock()
-		var admission *openAdmission
-		if ownsAdmission {
-			admission = attempt.ownerAdmission
-			attempt.ownerAdmission = nil
-			if attempt.completed && s.opening[attempt.file] == attempt {
-				delete(s.opening, attempt.file)
-			}
-		}
-		if !attempt.completed {
-			attempt.waiters--
-			if attempt.waiters == 0 {
-				if s.opening[attempt.file] == attempt {
-					delete(s.opening, attempt.file)
-				}
-				attempt.cancel()
-			}
-		}
-		s.mu.Unlock()
-		admission.release()
-		return RevisionLease{}, ctx.Err()
-	}
-}
-
-func (s *RevisionStore) runOpen(ctx context.Context, attempt *openAttempt) {
-	defer s.openWG.Done()
-	var revision *revisionState
-	var resultErr error
-	defer func() {
-		if recovered := recover(); recovered != nil {
-			resultErr = fmt.Errorf("revision source panicked: %v\n%s", recovered, debug.Stack())
-		}
-		s.completeOpen(attempt, revision, resultErr)
-	}()
-	record, exists, err := s.catalog.Node(ctx, attempt.file.NodeID())
-	if err != nil {
-		resultErr = err
-		return
-	}
-	recordFile, isFile := record.FileID()
-	if !exists || !isFile || recordFile != attempt.file {
-		resultErr = ErrRevisionNotFound
-		return
-	}
-	// The physical source is share-scoped and survives ProtocolSession reconnects;
-	// each session is charged separately only while it owns a lease below.
-	handleQuota, err := reserveQuotaAccounts([]*QuotaAccount{s.processQuota, s.shareQuota}, QuotaUsage{StableHandles: 1})
-	if err != nil {
-		resultErr = err
-		return
-	}
-	var stable StableFile
-	cleanup := true
-	defer func() {
-		if cleanup {
-			revisionCleanup{source: stable, reservation: handleQuota}.run()
-		}
-	}()
-	stable, err = s.source.OpenStable(ctx, record)
-	if err != nil {
-		resultErr = err
-		return
-	}
-	if err := stable.Verify(ctx); err != nil {
-		if errors.Is(err, ErrSourceDrift) {
-			resultErr = ErrRevisionStale
-		} else {
-			resultErr = fmt.Errorf("verify stable file before revision publication: %w", err)
-		}
-		return
-	}
-	expectedSize := record.Entry().ExpectedSize()
-	if stable.ExactSize() != expectedSize {
-		resultErr = ErrRevisionStale
-		return
-	}
-	geometry, err := NewFileGeometry(stable.ExactSize(), s.chunkSize)
-	if err != nil {
-		resultErr = err
-		return
-	}
-	revisionID, err := s.ids.NewFileRevision()
-	if err != nil {
-		resultErr = err
-		return
-	}
-	if revisionID.IsZero() {
-		resultErr = errors.New("file revision generator returned a zero identity")
-		return
-	}
-	descriptor, err := NewFileRevisionDescriptor(s.shareInstance, attempt.file, revisionID, geometry, stable.ModifiedTime())
-	if err != nil {
-		resultErr = err
-		return
-	}
-	revision = &revisionState{
-		descriptor: descriptor, source: stable, handleQuota: handleQuota,
-		leases: make(map[LeaseID]*leaseState), sessionHandles: make(map[*QuotaAccount]*sessionHandleState),
-		graceUntil: s.clock.Now().Add(RevisionResumeGrace),
-	}
-	cleanup = false
-}
-
-func (s *RevisionStore) completeOpen(attempt *openAttempt, revision *revisionState, resultErr error) {
-	var cleanup revisionCleanup
-	var admission *openAdmission
-	s.mu.Lock()
-	if attempt.completed {
-		s.mu.Unlock()
-		return
-	}
-	attempt.completed = true
-	current := s.opening[attempt.file] == attempt
-	if resultErr == nil && revision != nil && current && !s.closed {
-		if _, reused := s.usedRevisions[revision.descriptor.FileRevision()]; reused {
-			resultErr = errors.New("file revision generator reused an identity")
-		} else if existing := s.revisions[attempt.file]; existing != nil {
-			resultErr = errors.New("revision source raced an existing file revision")
-		} else {
-			s.rememberRevisionIDLocked(revision.descriptor.FileRevision())
-			s.revisions[attempt.file] = revision
-			attempt.revision = revision
-		}
-	}
-	if resultErr == nil && attempt.revision == nil {
-		resultErr = context.Canceled
-	}
-	attempt.err = resultErr
-	if resultErr != nil || attempt.revision == nil {
-		admission = attempt.ownerAdmission
-		attempt.ownerAdmission = nil
-	}
-	if current && attempt.ownerAdmission == nil {
-		delete(s.opening, attempt.file)
-	}
-	if revision != nil && attempt.revision != revision {
-		revision.closed = true
-		cleanup = revisionCleanup{source: revision.source, reservation: revision.handleQuota}
-	}
-	s.mu.Unlock()
-	cleanup.run()
-	admission.release()
-	// Closing done publishes both the result and completed rollback, so callers
-	// never observe a failed open with admission still charged.
-	close(attempt.done)
 }
 
 func (s *RevisionStore) rememberLeaseTombstoneLocked(id LeaseID, status leaseStatus) {
@@ -488,17 +167,6 @@ func (s *RevisionStore) rememberLeaseTombstoneLocked(id LeaseID, status leaseSta
 		s.leaseCursor = (s.leaseCursor + 1) % IdentityTombstoneLimit
 	}
 	s.leaseTombstones[id] = status
-}
-
-func (s *RevisionStore) rememberRevisionIDLocked(id FileRevision) {
-	if len(s.revisionOrder) < IdentityTombstoneLimit {
-		s.revisionOrder = append(s.revisionOrder, id)
-	} else {
-		delete(s.usedRevisions, s.revisionOrder[s.revisionCursor])
-		s.revisionOrder[s.revisionCursor] = id
-		s.revisionCursor = (s.revisionCursor + 1) % IdentityTombstoneLimit
-	}
-	s.usedRevisions[id] = struct{}{}
 }
 
 func (s *RevisionStore) Close() error {
@@ -529,10 +197,13 @@ func (s *RevisionStore) Close() error {
 			lease.sessionQuota = nil
 		}
 		releaseAllSessionHandlesLocked(revision)
+		revision.lifecycle = revisionLifecycleReleased
 		revision.closePending = true
 		if revision.readers == 0 && !revision.closed {
 			revision.closed = true
 			cleanups = append(cleanups, revisionCleanup{source: revision.source, reservation: revision.handleQuota})
+			revision.source = nil
+			revision.handleQuota = nil
 		}
 	}
 	s.revisions = make(map[catalog.FileID]*revisionState)
@@ -548,6 +219,16 @@ func (s *RevisionStore) Close() error {
 	s.readWG.Wait()
 	for _, cleanup := range cleanups {
 		cleanup.run()
+	}
+	s.mu.Lock()
+	metadata := make([]*revisionMetadataReservation, 0, len(s.invalidated))
+	for _, reservation := range s.invalidated {
+		metadata = append(metadata, reservation)
+	}
+	s.invalidated = make(map[revisionIdentity]*revisionMetadataReservation)
+	s.mu.Unlock()
+	for _, reservation := range metadata {
+		reservation.release()
 	}
 	return nil
 }

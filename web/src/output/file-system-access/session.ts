@@ -333,7 +333,7 @@ export async function bindNewFileSystemAccessOutput(
       rootLease,
     })
   } catch (error) {
-    if (error instanceof TargetOwnershipUnknownError) {
+    if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
       emitFSAOutputTrace(options.trace, needsAttention(operationId))
     }
     checkpoints?.close()
@@ -353,7 +353,7 @@ export async function reopenFileSystemAccessOutput(
       intent,
     })
   } catch (error) {
-    if (error instanceof TargetOwnershipUnknownError) {
+    if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
       emitFSAOutputTrace(options.trace, needsAttention(intent.operationId))
     }
     throw error
@@ -397,7 +397,7 @@ export async function reopenFileSystemAccessOutput(
       rootLease,
     })
   } catch (error) {
-    if (error instanceof TargetOwnershipUnknownError) {
+    if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
       emitFSAOutputTrace(options.trace, needsAttention(intent.operationId))
     }
     checkpoints?.close()

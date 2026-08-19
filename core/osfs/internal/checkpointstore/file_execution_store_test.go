@@ -85,10 +85,11 @@ func TestFileExecutionStoreOwnsCheckpointAndObjectLifecycle(t *testing.T) {
 		t.Fatalf("duplicate owned file = (%T, %d, %v)", duplicate, collision.Condition(), err)
 	}
 
-	checkpoint, err := store.Store(context.Background(), nil, record)
+	initial, err := store.installInitialRecord(context.Background(), record)
 	if err != nil {
 		t.Fatal(err)
 	}
+	checkpoint := initial.Resolution()
 	if observed, ok := checkpoint.Record(); !ok || observed.RecordID() != record.RecordID() {
 		t.Fatalf("created checkpoint observation = (%v, %t)", observed.RecordID(), ok)
 	}
@@ -210,8 +211,8 @@ func TestFileExecutionStoreRejectsInvalidAndCanceledAuthority(t *testing.T) {
 	if nilStore.RecordCount() != 0 {
 		t.Fatal("nil store reported records")
 	}
-	if _, found, err := nilStore.Lookup(context.Background(), fileexecution.CheckpointKey{}); err == nil || found {
-		t.Fatalf("nil lookup = (%t, %v)", found, err)
+	if _, err := nilStore.Lookup(context.Background(), fileexecution.CheckpointKey{}); err == nil {
+		t.Fatalf("nil lookup = %v", err)
 	}
 
 	_, namespace, lease, repository, _, _ := openRepositoryFixture(t, 0xa1)

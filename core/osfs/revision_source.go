@@ -111,55 +111,61 @@ func closeRoots(roots []*os.Root) error {
 
 func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.NodeRecord) (content.StableFile, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, content.WithRevisionComparison(err, content.RevisionComparisonUnavailable)
 	}
 	fileID, isFile := record.FileID()
 	if !isFile || fileID.IsZero() {
-		return nil, content.ErrRevisionNotFound
+		return nil, content.WithRevisionComparison(content.ErrRevisionNotFound, content.RevisionComparisonUnavailable)
 	}
 	locator := record.Locator()
 	if locator.IsZero() || locator.RelativePath() == "" {
-		return nil, content.ErrRevisionStale
+		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	s.mu.RLock()
 	if s.closed {
 		s.mu.RUnlock()
-		return nil, content.ErrRevisionStoreClosed
+		return nil, content.WithRevisionComparison(content.ErrRevisionStoreClosed, content.RevisionComparisonUnavailable)
 	}
 	slot := int(locator.RootSlot())
 	if slot >= len(s.roots) {
 		s.mu.RUnlock()
-		return nil, content.ErrRevisionStale
+		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	root := s.roots[slot]
 	before, err := root.Lstat(locator.RelativePath())
 	if err != nil {
 		s.mu.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.ErrRevisionStale
+			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
 		}
-		return nil, pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err)
+		return nil, content.WithRevisionComparison(
+			pathfailure.Filesystem("inspect stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
+		)
 	}
 	if !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 || isReparsePoint(before) {
 		s.mu.RUnlock()
-		return nil, content.ErrRevisionStale
+		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	handle, err := root.Open(locator.RelativePath())
 	if err != nil {
 		s.mu.RUnlock()
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, content.ErrRevisionStale
+			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
 		}
-		return nil, pathfailure.Filesystem("open stable revision", locator.RelativePath(), err)
+		return nil, content.WithRevisionComparison(
+			pathfailure.Filesystem("open stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
+		)
 	}
 	after, lstatErr := root.Lstat(locator.RelativePath())
 	s.mu.RUnlock()
 	if lstatErr != nil {
 		_ = handle.Close()
 		if errors.Is(lstatErr, os.ErrNotExist) {
-			return nil, content.ErrRevisionStale
+			return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonUnavailable)
 		}
-		return nil, pathfailure.Filesystem("reinspect stable revision", locator.RelativePath(), lstatErr)
+		return nil, content.WithRevisionComparison(
+			pathfailure.Filesystem("reinspect stable revision", locator.RelativePath(), lstatErr), content.RevisionComparisonUnavailable,
+		)
 	}
 	owned := false
 	defer func() {
@@ -169,7 +175,9 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	}()
 	info, err := handle.Stat()
 	if err != nil {
-		return nil, pathfailure.Filesystem("stat stable revision", locator.RelativePath(), err)
+		return nil, content.WithRevisionComparison(
+			pathfailure.Filesystem("stat stable revision", locator.RelativePath(), err), content.RevisionComparisonUnavailable,
+		)
 	}
 	// Lstat on both sides of Open prevents a path replacement from being
 	// accepted merely because its final target is regular. The binder then
@@ -177,7 +185,7 @@ func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.No
 	if !after.Mode().IsRegular() || after.Mode()&os.ModeSymlink != 0 || isReparsePoint(after) ||
 		!info.Mode().IsRegular() || isReparsePoint(info) || !os.SameFile(before, info) || !os.SameFile(after, info) ||
 		uint64(info.Size()) != record.Entry().ExpectedSize() {
-		return nil, content.ErrRevisionStale
+		return nil, content.WithRevisionComparison(content.ErrRevisionStale, content.RevisionComparisonMismatch)
 	}
 	stable, err := s.binder.BindStable(ctx, StableBinding{
 		File: handle, Record: record, RootSlot: locator.RootSlot(), RelativePath: locator.RelativePath(),
