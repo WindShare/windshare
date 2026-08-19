@@ -155,7 +155,7 @@ func TestGetTraceDirectoryOwnsAndReportsRunFileBeforeOutputConstruction(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	traceDirectory := t.TempDir()
+	traceDirectory := filepath.Join(t.TempDir(), "new", "nested", "traces")
 	var stdout, stderr bytes.Buffer
 	outputCalls := 0
 	app := &App{

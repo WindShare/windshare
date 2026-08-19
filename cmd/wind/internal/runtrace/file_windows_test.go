@@ -48,7 +48,7 @@ func TestTraceTargetsCreateProtectedOwnerOnlyWindowsFiles(t *testing.T) {
 		target Target
 	}{
 		{name: "exact file", target: mustExactTarget(t, parent+`\exact.ndjson`)},
-		{name: "run directory", target: mustRunDirectory(t, parent)},
+		{name: "run directory", target: mustRunDirectory(t, parent+`\generated-traces`)},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			recorder, err := Open(test.target, clievent.CommandShare, Config{})
