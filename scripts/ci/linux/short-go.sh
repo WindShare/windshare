@@ -19,14 +19,16 @@ cleanup() {
 }
 trap cleanup EXIT
 
-echo "-- non-core short race and atomic coverage sweep"
-go test -short -race -count=1 -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"
+# Hosted CI owns forced reruns; local validation keeps Go's content-aware cache
+# so unchanged race/coverage packages do not dominate feedback time.
+echo "-- non-core short race and atomic coverage"
+go test -short -race -covermode=atomic -coverprofile="$root_profile" "${non_core_packages[@]}"
 
 echo "-- non-core coverage verdict"
 go-test-coverage --config=.testcoverage.yml --profile="$root_profile"
 
-echo "-- core short race and atomic coverage sweep"
-go test -short -race -count=1 -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
+echo "-- core short race and atomic coverage"
+go test -short -race -covermode=atomic -coverprofile="$core_profile" "${core_packages[@]}"
 
 echo "-- core coverage verdict"
 go-test-coverage --config=core/.testcoverage.yml --profile="$core_profile" --source-dir=core
