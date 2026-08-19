@@ -260,6 +260,7 @@ export function closeAuthority(
   repository: ReceiveOperationRepository,
   lease: BrowserReceiveOperationLease,
   resources: ReopenResources,
+  observeReleaseFailure?: (failure: unknown) => void,
 ): () => Promise<void> {
   let closed: Promise<void> | undefined
   return () => {
@@ -277,6 +278,7 @@ export function closeAuthority(
         (result): result is PromiseRejectedResult => result.status === 'rejected',
       )
       if (failures.length > 0) {
+        for (const failure of failures) observeReleaseFailure?.(failure.reason)
         throw new AggregateError(
           failures.map((result) => result.reason),
           'Receive reopen authority did not close cleanly',
@@ -293,6 +295,7 @@ export async function closeAfterFailure(
   claim: WorkspaceBudgetClaim | undefined,
   packageBackend: import('../../origin-private/session').OriginPrivatePackageContinuationBackend | undefined,
   failure: unknown,
+  observeReleaseFailure?: (failure: unknown) => void,
 ): Promise<never> {
   const releases = await Promise.allSettled([
     ...(packageBackend === undefined ? [] : [packageBackend.close()]),
@@ -304,6 +307,13 @@ export async function closeAfterFailure(
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
     .map((result) => result.reason)
   if (releaseFailures.length > 0) {
+    for (const releaseFailure of releaseFailures) {
+      try {
+        observeReleaseFailure?.(releaseFailure)
+      } catch {
+        // Authority release remains independent from an observational callback.
+      }
+    }
     throw new AggregateError(
       [failure, ...releaseFailures],
       'Receive reopen failure could not release its authority',

@@ -1,6 +1,6 @@
 import type {
-  V2BrowserConnectivityAttemptDiagnostic,
-  V2BrowserConnectivityRecoveryDiagnostic,
+  V2PeerAttemptTraceEvent,
+  V2PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
 import type { V2PeerRecoveryPolicy } from '../../src/connectivity/v2-peer-recovery'
 
@@ -53,6 +53,32 @@ export interface HotSwitchRecoveryControl {
   readonly policy: V2PeerRecoveryPolicy
 }
 
+type WithoutCorrelation<Event> = Event extends unknown ? Omit<Event, 'correlation'> : never
+
+type RecoveryBridgePayload<Event> = Event extends {
+  readonly stage: 'attempt-replaced'
+  readonly previousAttemptId: unknown
+}
+  ? Omit<Event, 'correlation' | 'previousAttemptId'> & Readonly<{
+      previousAttemptIdBytes: readonly number[]
+    }>
+  : WithoutCorrelation<Event>
+
+export type HotSwitchPeerAttemptEvidence = WithoutCorrelation<V2PeerAttemptTraceEvent> & Readonly<{
+  protocolSessionIdBytes: readonly number[]
+  peerPathIdBytes: readonly number[]
+  attemptIdBytes: readonly number[]
+  operationIdBytes?: readonly number[]
+  lane?: Readonly<{ laneId: number; laneEpoch: number }>
+}>
+
+export type HotSwitchPeerRecoveryEvidence = RecoveryBridgePayload<V2PeerRecoveryTraceEvent> & Readonly<{
+  protocolSessionIdBytes: readonly number[]
+  peerPathIdBytes: readonly number[]
+  attemptIdBytes?: readonly number[]
+  lane?: Readonly<{ laneId: number; laneEpoch: number }>
+}>
+
 export interface HotSwitchAdmissionGateObservation {
   readonly offerOrdinal: number
   readonly release: 'attempt-timeout' | 'page-controlled'
@@ -60,8 +86,8 @@ export interface HotSwitchAdmissionGateObservation {
 
 /** Product observations cross the Playwright bridge without evidence-process ownership. */
 export type HotSwitchPageEvent =
-  | { readonly kind: 'attempt'; readonly evidence: V2BrowserConnectivityAttemptDiagnostic }
-  | { readonly kind: 'recovery'; readonly evidence: V2BrowserConnectivityRecoveryDiagnostic }
+  | { readonly kind: 'attempt'; readonly evidence: HotSwitchPeerAttemptEvidence }
+  | { readonly kind: 'recovery'; readonly evidence: HotSwitchPeerRecoveryEvidence }
   | {
       readonly kind: 'admission-response-gated'
       readonly observation: HotSwitchAdmissionGateObservation

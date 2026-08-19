@@ -28,12 +28,19 @@ const (
 	ObserverLossFilesystemOutput
 	ObserverLossCatalogStorage
 	ObserverLossRootPrefetch
+	ObserverLossSenderTerminalSend
+	ObserverLossSenderSessionTerminal
 	ObserverLossCommandAdapter
 	ObserverLossCategoryLimit
 )
 
 func (value ObserverLossCategory) Name() (string, bool) {
-	names := [...]string{"", "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement", "protocol_operation", "transfer_lifecycle", "filesystem_output", "catalog_storage", "root_prefetch", "command_adapter"}
+	names := [...]string{
+		"", "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination",
+		"lane_settlement", "protocol_operation", "transfer_lifecycle", "filesystem_output",
+		"catalog_storage", "root_prefetch", "sender_terminal_send", "sender_session_terminal",
+		"command_adapter",
+	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}

@@ -45,11 +45,11 @@ export interface OfferChannelFactory {
 
 /** Consumer-side milestone port; implementations never receive attempt authority. */
 export interface V2PeerOfferAttemptObserver {
-  offerCreated(candidateCounts: V2CandidateCounts): void
-  offerSent(candidateCounts: V2CandidateCounts): void
-  answerReceived(candidateCounts: V2CandidateCounts): void
+  offerCreated(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
+  offerSent(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
+  answerReceived(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
   dataChannelOpened(
-    candidateCounts: V2CandidateCounts,
+    candidateCounts: V2CandidateCounts | (() => V2CandidateCounts),
     ...unusedLegacyArguments: readonly unknown[]
   ): void
 }
@@ -265,12 +265,12 @@ class OfferNegotiation {
     if (local === null || local.type !== SIGNAL_KIND_OFFER || local.sdp === '') {
       throw new PeerNegotiationError('local offer description is unavailable')
     }
-    this.#observe((observer) => observer.offerCreated(this.#candidateCounts()))
+    this.#observe((observer) => observer.offerCreated(() => this.#candidateCounts()))
     await this.#send({
       kind: SIGNAL_KIND_OFFER,
       payload: { type: local.type, sdp: local.sdp },
     }, signal)
-    this.#observe((observer) => observer.offerSent(this.#candidateCounts()))
+    this.#observe((observer) => observer.offerSent(() => this.#candidateCounts()))
   }
 
   async #processEvents(signal: AbortSignal): Promise<void> {
@@ -313,7 +313,7 @@ class OfferNegotiation {
     if (this.#signalingAvailable) {
       const accepted = await this.#remote.accept(event.signal, signal)
       if (accepted === 'answer') {
-        this.#observe((observer) => observer.answerReceived(this.#candidateCounts()))
+        this.#observe((observer) => observer.answerReceived(() => this.#candidateCounts()))
       }
     }
     return 'continue'
@@ -322,7 +322,7 @@ class OfferNegotiation {
   #publishOpenedChannel(): void {
     if (!this.#openedChannel) {
       this.#openedChannel = true
-      this.#observe((observer) => observer.dataChannelOpened(this.#candidateCounts()))
+      this.#observe((observer) => observer.dataChannelOpened(() => this.#candidateCounts()))
       this.#opened.resolve(this.#ownedChannel)
     }
   }

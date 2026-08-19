@@ -1,3 +1,4 @@
+import type { OutputFailureSinks } from '../diagnostics'
 import type { ReceiveLifecycleState } from '../workspace/state'
 import {
   assertReceiveOperationCanContinue,
@@ -28,9 +29,18 @@ export type ReceiveOperationDiscardResult =
     }>
 
 export interface ReceiveOperationMutationPort<TResult = unknown> {
-  resume(descriptor: ReceiveOperationResumeDescriptor): Promise<TResult>
-  expire(descriptor: ReceiveOperationResumeDescriptor): Promise<TResult>
-  discard(descriptor: ReceiveOperationResumeDescriptor): Promise<ReceiveOperationDiscardResult>
+  resume(
+    descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult>
+  expire(
+    descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult>
+  discard(
+    descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
+  ): Promise<ReceiveOperationDiscardResult>
 }
 
 interface ResumeReferenceOwner {
@@ -106,19 +116,25 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     return new ReceiveOperationResumeInventory(owner, references)
   }
 
-  async resume(reference: ReceiveOperationResumeRef): Promise<TResult> {
+  async resume(
+    reference: ReceiveOperationResumeRef,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult> {
     const descriptor = this.#consume(reference)
     const now = this.#clock.now()
     if (descriptor.expiresAt !== undefined && now >= descriptor.expiresAt) {
-      return this.#mutations.expire(descriptor)
+      return this.#mutations.expire(descriptor, failures)
     }
     assertReceiveOperationCanContinue(descriptor, now)
-    return this.#mutations.resume(descriptor)
+    return this.#mutations.resume(descriptor, failures)
   }
 
-  async discard(reference: ReceiveOperationResumeRef): Promise<ReceiveOperationDiscardResult> {
+  async discard(
+    reference: ReceiveOperationResumeRef,
+    failures?: OutputFailureSinks,
+  ): Promise<ReceiveOperationDiscardResult> {
     const descriptor = this.#consume(reference)
-    return this.#mutations.discard(descriptor)
+    return this.#mutations.discard(descriptor, failures)
   }
 
   #consume(reference: ReceiveOperationResumeRef): ReceiveOperationResumeDescriptor {

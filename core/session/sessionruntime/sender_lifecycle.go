@@ -85,58 +85,58 @@ func registerSenderHandlers(
 	})
 }
 
-type SenderTerminalTransportDisposition string
+type SenderTerminalSendTransportDisposition string
 
 const (
-	SenderTerminalTransportAccepted   SenderTerminalTransportDisposition = "accepted"
-	SenderTerminalTransportNotReached SenderTerminalTransportDisposition = "not_reached"
-	SenderTerminalTransportUnsettled  SenderTerminalTransportDisposition = "unsettled"
-	SenderTerminalTransportRejected   SenderTerminalTransportDisposition = "rejected_before_acceptance"
-	SenderTerminalTransportRetired    SenderTerminalTransportDisposition = "retired_before_acceptance"
+	SenderTerminalSendTransportAccepted   SenderTerminalSendTransportDisposition = "accepted"
+	SenderTerminalSendTransportNotReached SenderTerminalSendTransportDisposition = "not_reached"
+	SenderTerminalSendTransportUnsettled  SenderTerminalSendTransportDisposition = "unsettled"
+	SenderTerminalSendTransportRejected   SenderTerminalSendTransportDisposition = "rejected_before_acceptance"
+	SenderTerminalSendTransportRetired    SenderTerminalSendTransportDisposition = "retired_before_acceptance"
 )
 
-type SenderTerminalOutcome string
+type SenderTerminalSendOutcome string
 
 const (
-	SenderTerminalOutcomeDelivered SenderTerminalOutcome = "delivered"
-	SenderTerminalOutcomeDropped   SenderTerminalOutcome = "dropped"
-	SenderTerminalOutcomeUnknown   SenderTerminalOutcome = "unknown"
+	SenderTerminalSendOutcomeDelivered SenderTerminalSendOutcome = "delivered"
+	SenderTerminalSendOutcomeDropped   SenderTerminalSendOutcome = "dropped"
+	SenderTerminalSendOutcomeUnknown   SenderTerminalSendOutcome = "unknown"
 )
 
-type SenderTerminalDecision string
+type SenderTerminalSendDecision string
 
 const (
-	SenderTerminalDecisionDelivered         SenderTerminalDecision = "delivered"
-	SenderTerminalDecisionNaturalRetirement SenderTerminalDecision = "natural_retirement"
-	SenderTerminalDecisionFailed            SenderTerminalDecision = "failed"
+	SenderTerminalSendDecisionDelivered         SenderTerminalSendDecision = "delivered"
+	SenderTerminalSendDecisionNaturalRetirement SenderTerminalSendDecision = "natural_retirement"
+	SenderTerminalSendDecisionFailed            SenderTerminalSendDecision = "failed"
 )
 
-// SenderTerminalObservation exposes only stable identities and decisions. The
+// SenderTerminalSendObserved exposes only stable identities and decisions. The
 // terminal body, cryptographic material, and provider-specific error text stay
 // below this boundary so production logs cannot leak share content or keys.
-type SenderTerminalObservation struct {
+type SenderTerminalSendObserved struct {
 	ProtocolSessionID    protocolsession.ProtocolSessionID
 	Lane                 LaneIdentity
 	Settled              bool
-	TransportDisposition SenderTerminalTransportDisposition
-	Outcome              SenderTerminalOutcome
-	Decision             SenderTerminalDecision
+	TransportDisposition SenderTerminalSendTransportDisposition
+	Outcome              SenderTerminalSendOutcome
+	Decision             SenderTerminalSendDecision
 }
 
-type SenderTerminalObserver interface {
-	ObserveSenderTerminal(SenderTerminalObservation)
+type SenderTerminalSendObserver interface {
+	ObserveSenderTerminalSend(SenderTerminalSendObserved)
 }
 
-type SenderTerminalObserverFunc func(SenderTerminalObservation)
+type SenderTerminalSendObserverFunc func(SenderTerminalSendObserved)
 
-func (function SenderTerminalObserverFunc) ObserveSenderTerminal(observation SenderTerminalObservation) {
+func (function SenderTerminalSendObserverFunc) ObserveSenderTerminalSend(observation SenderTerminalSendObserved) {
 	if function != nil {
 		function(observation)
 	}
 }
 
-func observeSenderTerminal(
-	observer SenderTerminalObserver,
+func observeSenderTerminalSend(
+	observer SenderTerminalSendObserver,
 	sessionID protocolsession.ProtocolSessionID,
 	lane LaneIdentity,
 	completion protocolsession.SendCompletion,
@@ -145,38 +145,43 @@ func observeSenderTerminal(
 	if observer == nil {
 		return
 	}
-	observation := SenderTerminalObservation{
+	observation := SenderTerminalSendObserved{
 		ProtocolSessionID: sessionID,
 		Lane:              lane,
 		Settled:           completion.Settled,
-		Decision:          SenderTerminalDecisionFailed,
+		Decision:          SenderTerminalSendDecisionFailed,
 	}
 	switch {
 	case !completion.Settled:
-		observation.TransportDisposition = SenderTerminalTransportUnsettled
+		observation.TransportDisposition = SenderTerminalSendTransportUnsettled
 	case completion.TransportDisposition == framechannel.SendRetired:
-		observation.TransportDisposition = SenderTerminalTransportRetired
-		observation.Decision = SenderTerminalDecisionNaturalRetirement
+		observation.TransportDisposition = SenderTerminalSendTransportRetired
+		observation.Decision = SenderTerminalSendDecisionNaturalRetirement
 	case completion.TransportDisposition == framechannel.SendRejected:
-		observation.TransportDisposition = SenderTerminalTransportRejected
+		observation.TransportDisposition = SenderTerminalSendTransportRejected
 	case completion.TransportDisposition == framechannel.SendAccepted:
-		observation.TransportDisposition = SenderTerminalTransportAccepted
+		observation.TransportDisposition = SenderTerminalSendTransportAccepted
 	default:
-		observation.TransportDisposition = SenderTerminalTransportNotReached
+		observation.TransportDisposition = SenderTerminalSendTransportNotReached
 	}
 	switch completion.Outcome {
 	case protocolsession.SendOutcomeDelivered:
-		observation.Outcome = SenderTerminalOutcomeDelivered
-		observation.Decision = SenderTerminalDecisionDelivered
+		observation.Outcome = SenderTerminalSendOutcomeDelivered
+		observation.Decision = SenderTerminalSendDecisionDelivered
 	case protocolsession.SendOutcomeDropped:
-		observation.Outcome = SenderTerminalOutcomeDropped
+		observation.Outcome = SenderTerminalSendOutcomeDropped
 	case protocolsession.SendOutcomeUnknown:
-		observation.Outcome = SenderTerminalOutcomeUnknown
+		observation.Outcome = SenderTerminalSendOutcomeUnknown
 	}
-	if naturallyRetired && observation.Decision != SenderTerminalDecisionDelivered {
-		observation.Decision = SenderTerminalDecisionNaturalRetirement
+	if naturallyRetired && observation.Decision != SenderTerminalSendDecisionDelivered {
+		observation.Decision = SenderTerminalSendDecisionNaturalRetirement
 	}
-	observer.ObserveSenderTerminal(observation)
+	// Terminal-send evidence is diagnostic consequence data. Observer failures
+	// cannot change the already-owned receipt settlement or stop result.
+	func() {
+		defer func() { _ = recover() }()
+		observer.ObserveSenderTerminalSend(observation)
+	}()
 }
 
 func (runtime *SenderRuntime) Stop(ctx context.Context, message string) error {
@@ -222,10 +227,14 @@ func (runtime *SenderRuntime) BeginStop(ctx context.Context, message string) err
 		runtime.stopMu.Unlock()
 		return ErrRuntimeClosed
 	}
+	claim := runtime.claimTermination(runtimeTerminationGracefulStop)
 	runtime.stopStarted = true
 	runtime.stopDone = make(chan struct{})
 	runtime.lanesRegistry.Stop()
 	runtime.stopMu.Unlock()
+	// Claiming before fanout makes graceful stop the immutable root even when a
+	// receipt failure or concurrent lane retirement follows.
+	runtime.publishTermination(claim)
 	stopContext, cancelStop := context.WithCancel(ctx)
 	stopLifecycle := context.AfterFunc(runtime.ctx, cancelStop)
 	go runtime.runStop(stopContext, ctx, normalized, func() {
@@ -257,7 +266,9 @@ func (runtime *SenderRuntime) runStop(
 	runtime.stopMu.Lock()
 	runtime.stopErr = err
 	runtime.stopMu.Unlock()
-	runtime.cancel()
+	// BeginStop already claimed and published the root. This cancellation ends
+	// component ownership without reclassifying terminal-send consequences.
+	runtime.cancelContext()
 	<-runtime.Done()
 }
 
@@ -316,10 +327,11 @@ func (runtime *SenderRuntime) BeginClose() {
 		return
 	}
 	runtime.stopMu.Lock()
+	claim := runtime.claimTermination(runtimeTerminationForcedClose)
 	runtime.closeStarted = true
 	runtime.stopMu.Unlock()
 	runtime.lanesRegistry.Stop()
-	runtime.beginClose()
+	runtime.completeTermination(claim, true)
 }
 
 func (runtime *SenderRuntime) WaitClosed() {

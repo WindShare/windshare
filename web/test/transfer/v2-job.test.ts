@@ -77,15 +77,17 @@ describe('plan-specific transfer routing', () => {
       plans: planAuthorityFixture(),
       revisions: readers.revisions,
       broker: readers.broker,
-      onTrace: event => traces.push(event),
+      trace: { current: event => { traces.push(event) } },
     }).run()
 
-    expect(traces.map(event => event.name)).toEqual(expect.arrayContaining([
-      'receive.intent.frozen',
-      'receive.materialization.started',
-      'receive.materialization.completed',
-      'receive.tree.finalized',
-    ]))
+    expect(traces
+      .filter(event => event.name === 'receive_transition')
+      .map(event => event.transition)).toEqual(expect.arrayContaining([
+        'intent_frozen',
+        'materialization_started',
+        'materialization_completed',
+        'tree_finalized',
+      ]))
     const serialized = JSON.stringify(traces, (_key, value) =>
       typeof value === 'bigint' ? value.toString() : value,
     )

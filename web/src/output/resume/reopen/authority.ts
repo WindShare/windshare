@@ -5,13 +5,17 @@ import {
   acquireBrowserReceiveOperationLease,
   type BrowserReceiveOperationLease,
 } from '../../browser/session-lease'
-import type { OriginPrivateStorageEstimate } from '../../origin-private/admission'
-import { OriginPrivateWorkspaceBudgetOwnershipError } from '../../origin-private/admission-authority'
 import {
   reopenOriginPrivateWorkspaceNamespace,
 } from '../../origin-private/namespace'
 import { openOriginPrivateWorkspaceBackend } from '../../origin-private/session'
-import type { PersistentTreeTrace } from '../../persistent-tree/contracts'
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+  type OutputFailureSinks,
+} from '../../diagnostics'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
 import {
   RECEIVE_RECORD_OPERATION,
@@ -19,39 +23,24 @@ import {
   operationRecordId,
   storedReceiveOperationRecord,
 } from '../../workspace/records'
-import type { PreparationAdmissionReceiptV1 } from '../../workspace/receipts'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import { lifecycleDeadline, type ReceiveLifecycleState } from '../../workspace/state'
-import {
-  WorkspaceOperationStages,
-  type AdmittedWorkspaceContent,
-  type WorkspaceContentRequestCounter,
-} from '../../workspace/stages'
-import type { SealedWorkspaceZipPreparationV1 } from '../../workspace/preparation'
-import {
-  readWorkspacePackageCleanupAuthority,
-  reopenWorkspacePackageContinuation,
-  reopenWorkspacePreparationAuthority,
-  type OpenOriginPrivatePackageContinuation,
-} from '../workspace-continuation'
+import { WorkspaceOperationStages } from '../../workspace/stages'
 import type { ReceiveOperationResumeDescriptor } from '../descriptor'
 import {
   PersistedReceiveOperationDeadlineElapsedError,
   PersistedReceiveOperationNeedsAttentionError,
-  PersistedWorkspaceBudgetReclaimRejectedError,
   type LeaseOptions,
   type PersistedReceiveOperationReopenAuthorityOptions,
   type PersistedReceiveOperationReopenPurpose,
   type PersistedReceiveOperationReopenTrace,
   type PersistedReceiveOperationReopenTraceEvent,
   type PersistedReopenSnapshot,
-  type PersistedWorkspaceBudgetReclaim,
   type ReopenLifecycleAuthority,
   type ReopenResources,
   type ReopenedReceiveOperation,
   type ReopenedReceiveTarget,
-  type ReopenedWorkspaceReceiveContinuation,
 } from './model'
 import {
   SYSTEM_CLOCK,
@@ -64,11 +53,10 @@ import {
   persistExpiry,
   persistOwnershipAttention,
   persistReceiveResume,
-  readPersistedWorkspaceAdmission,
   reclaimOriginPrivateWorkspaceBudget,
-  requireOriginPrivateBudgetClaim,
   samePersistedRecord,
 } from './persistence'
+import { WorkspaceContinuationAuthority } from './workspace-continuation-authority'
 
 /**
  * Turns an inventory projection into one operation-scoped authority. The caller
@@ -81,14 +69,8 @@ export class PersistedReceiveOperationReopenAuthority {
   readonly #acquireLease: typeof acquireBrowserReceiveOperationLease
   readonly #verifyDirectTreeBinding: typeof verifyFSAOperationBinding
   readonly #reopenWorkspaceNamespace: typeof reopenOriginPrivateWorkspaceNamespace
-  readonly #openWorkspaceStages: typeof WorkspaceOperationStages.open
-  readonly #reclaimWorkspaceBudget: PersistedWorkspaceBudgetReclaim
-  readonly #estimateWorkspaceStorage: () => Promise<OriginPrivateStorageEstimate>
-  readonly #workspaceBudgetDatabaseName: string | undefined
-  readonly #checkpointDatabaseName: string | undefined
-  readonly #openWorkspacePackageContinuation: OpenOriginPrivatePackageContinuation | undefined
-  readonly #openWorkspaceReceiveBackend: typeof openOriginPrivateWorkspaceBackend
-  readonly #contentRequests: WorkspaceContentRequestCounter
+  readonly #workspaceContinuation: WorkspaceContinuationAuthority
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #trace: PersistedReceiveOperationReopenTrace | undefined
 
   constructor(options: PersistedReceiveOperationReopenAuthorityOptions) {
@@ -99,25 +81,48 @@ export class PersistedReceiveOperationReopenAuthority {
     this.#verifyDirectTreeBinding = options.verifyDirectTreeBinding ?? verifyFSAOperationBinding
     this.#reopenWorkspaceNamespace = options.reopenWorkspaceNamespace ??
       reopenOriginPrivateWorkspaceNamespace
-    this.#openWorkspaceStages = options.openWorkspaceStages ?? WorkspaceOperationStages.open
-    this.#reclaimWorkspaceBudget = options.reclaimWorkspaceBudget ??
-      reclaimOriginPrivateWorkspaceBudget
-    this.#estimateWorkspaceStorage = options.estimateWorkspaceStorage ??
-      estimateOriginPrivateStorage
-    this.#workspaceBudgetDatabaseName = options.workspaceBudgetDatabaseName
-    this.#checkpointDatabaseName = options.checkpointDatabaseName
-    this.#openWorkspacePackageContinuation = options.openWorkspacePackageContinuation
-    this.#openWorkspaceReceiveBackend = options.openWorkspaceReceiveBackend ??
-      openOriginPrivateWorkspaceBackend
-    this.#contentRequests = options.contentRequests ?? ZERO_CONTENT_REQUESTS
+    this.#workspaceContinuation = new WorkspaceContinuationAuthority({
+      openWorkspaceStages: options.openWorkspaceStages ?? WorkspaceOperationStages.open,
+      reclaimWorkspaceBudget: options.reclaimWorkspaceBudget ??
+        reclaimOriginPrivateWorkspaceBudget,
+      estimateWorkspaceStorage: options.estimateWorkspaceStorage ??
+        estimateOriginPrivateStorage,
+      openWorkspaceReceiveBackend: options.openWorkspaceReceiveBackend ??
+        openOriginPrivateWorkspaceBackend,
+      contentRequests: options.contentRequests ?? ZERO_CONTENT_REQUESTS,
+      now: () => this.#now(),
+      ownershipAttention: input => this.#throwOwnershipAttention(
+        input.repository,
+        input.snapshot,
+        input.lease,
+        input.snapshot.operation.operationId,
+      ),
+      ...(options.workspaceBudgetDatabaseName === undefined
+        ? {}
+        : { workspaceBudgetDatabaseName: options.workspaceBudgetDatabaseName }),
+      ...(options.checkpointDatabaseName === undefined
+        ? {}
+        : { checkpointDatabaseName: options.checkpointDatabaseName }),
+      ...(options.openWorkspacePackageContinuation === undefined
+        ? {}
+        : { openWorkspacePackageContinuation: options.openWorkspacePackageContinuation }),
+    })
+    this.#diagnostics = options.diagnostics
     this.#trace = options.trace
   }
 
   async reopen(
     descriptor: ReceiveOperationResumeDescriptor,
     purpose: PersistedReceiveOperationReopenPurpose,
+    failures?: OutputFailureSinks,
   ): Promise<ReopenedReceiveOperation> {
-    const repository = await this.#repositoryFactory()
+    const diagnostics = this.#diagnosticsFor(failures)
+    this.#emitReviewedReopen('started')
+    const repository = await this.#repositoryFactory().catch((error: unknown) => {
+      recordOutputException(diagnostics?.failures?.reopen, error)
+      this.#emitReviewedReopen('failed')
+      throw error
+    })
     const resources: ReopenResources = {}
     try {
       const { snapshot, lease } = await this.#acquireSnapshotAuthority(
@@ -135,6 +140,7 @@ export class PersistedReceiveOperationReopenAuthority {
         descriptor,
         purpose,
         resources,
+        ...(diagnostics === undefined ? {} : { diagnostics }),
       })
       const operation = await this.#createReopenedOperation({
         repository,
@@ -143,7 +149,9 @@ export class PersistedReceiveOperationReopenAuthority {
         target,
         lifecycleAuthority,
         resources,
+        ...(diagnostics === undefined ? {} : { diagnostics }),
       })
+      this.#emitReviewedReopen('authorized')
       this.#emit(Object.freeze({
         name: 'receive.operation.reopen_authorized',
         operation_id: descriptor.operationId,
@@ -154,12 +162,15 @@ export class PersistedReceiveOperationReopenAuthority {
       }))
       return operation
     } catch (error) {
+      recordOutputException(diagnostics?.failures?.reopen, error)
+      this.#emitReviewedReopen('failed')
       return closeAfterFailure(
         repository,
         resources.lease,
         resources.reclaimedClaim,
         resources.packageBackend,
         error,
+        cleanupFailure => this.#observeCleanupFailure(cleanupFailure, diagnostics),
       )
     }
   }
@@ -224,6 +235,7 @@ export class PersistedReceiveOperationReopenAuthority {
     descriptor: ReceiveOperationResumeDescriptor
     purpose: PersistedReceiveOperationReopenPurpose
     resources: ReopenResources
+    diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenLifecycleAuthority> {
     const observedAt = this.#now()
     const deadline = lifecycleDeadline(input.snapshot.lifecycle)
@@ -280,6 +292,7 @@ export class PersistedReceiveOperationReopenAuthority {
       target: ReopenedReceiveTarget
       descriptor: ReceiveOperationResumeDescriptor
       resources: ReopenResources
+      diagnostics?: OutputDiagnosticsPorts
     }>,
     observedAt: number,
   ): Promise<ReopenLifecycleAuthority> {
@@ -297,111 +310,11 @@ export class PersistedReceiveOperationReopenAuthority {
         receiveAdmissionFallback: input.snapshot.lifecycle,
       })
     }
-    return this.#resumeWorkspace(
+    return this.#workspaceContinuation.resumeReceive(
       Object.freeze({ ...input, target: input.target }),
       observedAt,
       input.snapshot.lifecycle,
     )
-  }
-
-  async #resumeWorkspace(
-    input: Readonly<{
-      repository: ReceiveOperationRepository
-      snapshot: PersistedReopenSnapshot
-      lease: BrowserReceiveOperationLease
-      target: Extract<ReopenedReceiveTarget, { kind: 'workspace' }>
-      descriptor: ReceiveOperationResumeDescriptor
-      resources: ReopenResources
-    }>,
-    observedAt: number,
-    admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
-  ): Promise<ReopenLifecycleAuthority> {
-    const stages = await this.#openStages(input.repository, input.snapshot, input.lease)
-    const admission = await this.#reclaimWorkspaceAdmission(input)
-    let preparation: SealedWorkspaceZipPreparationV1 | undefined
-    try {
-      preparation = await reopenWorkspacePreparationAuthority({
-        repository: input.repository,
-        intent: input.snapshot.operation.receiveIntent,
-        admissionReceipt: admission.receipt,
-      })
-    } catch {
-      return this.#throwOwnershipAttention(
-        input.repository,
-        input.snapshot,
-        input.lease,
-        input.descriptor.operationId,
-      )
-    }
-    const lifecycle = await persistReceiveResume(
-      input.repository,
-      input.snapshot,
-      input.lease,
-      observedAt,
-    )
-    const claim = input.resources.reclaimedClaim
-    if (claim === undefined) throw new TypeError('workspace reopen omitted its budget claim')
-    const admittedContent = await stages.reopenAdmittedContent({
-      budget: admission.budget,
-      claim,
-    })
-    const receiveContinuation = this.#workspaceReceiveContinuation({
-      repository: input.repository,
-      snapshot: input.snapshot,
-      target: input.target,
-      admittedContent,
-      resources: input.resources,
-      ...(preparation === undefined ? {} : { preparation }),
-    })
-    return Object.freeze({
-      lifecycle,
-      receiveAdmissionFallback: admissionFallback,
-      stages,
-      admittedContent,
-      receiveContinuation,
-      ...(preparation === undefined ? {} : { preparation }),
-    })
-  }
-
-  #workspaceReceiveContinuation(input: Readonly<{
-    repository: ReceiveOperationRepository
-    snapshot: PersistedReopenSnapshot
-    target: Extract<ReopenedReceiveTarget, { kind: 'workspace' }>
-    admittedContent: AdmittedWorkspaceContent
-    preparation?: SealedWorkspaceZipPreparationV1
-    resources: ReopenResources
-  }>): ReopenedWorkspaceReceiveContinuation {
-    return Object.freeze({
-      ...(input.preparation === undefined ? {} : { preparation: input.preparation }),
-      openBackend: (options?: { readonly onTrace?: PersistentTreeTrace }) => {
-        if (input.resources.closed === true) {
-          throw new DOMException('Receive continuation authority is closed', 'InvalidStateError')
-        }
-        const budgetClaim = requireOriginPrivateBudgetClaim(
-          input.admittedContent.claim,
-          input.snapshot.operation.operationId,
-        )
-        input.resources.receiveBackendOpening ??= this.#openWorkspaceReceiveBackend({
-          receiveIntent: input.snapshot.operation.receiveIntent,
-          operationRepository: input.repository,
-          namespace: input.target.namespace,
-          contentGate: input.admittedContent.gate,
-          budgetClaim,
-          ...(this.#checkpointDatabaseName === undefined
-            ? {}
-            : { checkpointDatabaseName: this.#checkpointDatabaseName }),
-          ...(options?.onTrace === undefined ? {} : { onTrace: options.onTrace }),
-        }).then(async (backend) => {
-          if (input.resources.closed === true) {
-            await backend.close()
-            throw new DOMException('Receive continuation closed while opening', 'InvalidStateError')
-          }
-          input.resources.receiveBackend = backend
-          return backend
-        })
-        return input.resources.receiveBackendOpening
-      },
-    })
   }
 
   async #resumePackage(input: Readonly<{
@@ -411,102 +324,14 @@ export class PersistedReceiveOperationReopenAuthority {
     target: ReopenedReceiveTarget
     descriptor: ReceiveOperationResumeDescriptor
     resources: ReopenResources
+    diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenLifecycleAuthority> {
     if (input.target.kind !== 'workspace' || input.snapshot.lifecycle.kind !== 'resumable-package') {
       throw new TypeError('package continuation requires a stable workspace operation')
     }
-    const workspaceInput = Object.freeze({ ...input, target: input.target })
-    const stages = await this.#openStages(input.repository, input.snapshot, input.lease)
-    const admission = await this.#reclaimWorkspaceAdmission(workspaceInput)
-    const claim = input.resources.reclaimedClaim
-    if (claim === undefined) throw new TypeError('package reopen omitted its budget claim')
-    try {
-      const admittedContent = await stages.reopenAdmittedPackage({
-        budget: admission.budget,
-        claim,
-      })
-      const cleanupReceipt = await readWorkspacePackageCleanupAuthority({
-        repository: input.repository,
-        intent: input.snapshot.operation.receiveIntent,
-        lifecycle: input.snapshot.lifecycle,
-      })
-      const reopened = await reopenWorkspacePackageContinuation({
-        repository: input.repository,
-        intent: input.snapshot.operation.receiveIntent,
-        lifecycle: input.snapshot.lifecycle,
-        namespace: input.target.namespace,
-        stages,
-        admitted: admittedContent,
-        admissionReceipt: admission.receipt,
-        cleanupReceipt,
-        ...(this.#checkpointDatabaseName === undefined
-          ? {}
-          : { checkpointDatabaseName: this.#checkpointDatabaseName }),
-        ...(this.#openWorkspacePackageContinuation === undefined
-          ? {}
-          : { openBackend: this.#openWorkspacePackageContinuation }),
-      })
-      input.resources.packageBackend = reopened.backend
-      return Object.freeze({
-        lifecycle: input.snapshot.lifecycle,
-        stages,
-        admittedContent,
-        packageContinuation: reopened.continuation,
-      })
-    } catch {
-      return this.#throwOwnershipAttention(
-        input.repository,
-        input.snapshot,
-        input.lease,
-        input.descriptor.operationId,
-      )
-    }
-  }
-
-  async #reclaimWorkspaceAdmission(input: Readonly<{
-    repository: ReceiveOperationRepository
-    snapshot: PersistedReopenSnapshot
-    lease: BrowserReceiveOperationLease
-    target: Extract<ReopenedReceiveTarget, { kind: 'workspace' }>
-    descriptor: ReceiveOperationResumeDescriptor
-    resources: ReopenResources
-  }>): Promise<Readonly<{
-    budget: AdmittedWorkspaceContent['budget']
-    receipt: PreparationAdmissionReceiptV1
-  }>> {
-    try {
-      const admission = await readPersistedWorkspaceAdmission(
-        input.repository,
-        input.snapshot.operation.receiveIntent,
-      )
-      const claimResult = await this.#reclaimWorkspaceBudget({
-        intent: input.snapshot.operation.receiveIntent,
-        namespace: input.target.namespace,
-        repository: input.repository,
-        operationLease: input.lease,
-        budget: admission.budget,
-        receipt: admission.receipt,
-        estimate: this.#estimateWorkspaceStorage,
-        now: () => this.#now(),
-        ...(this.#workspaceBudgetDatabaseName === undefined
-          ? {}
-          : { databaseName: this.#workspaceBudgetDatabaseName }),
-      })
-      if (claimResult.kind === 'rejected') {
-        throw new PersistedWorkspaceBudgetReclaimRejectedError(claimResult)
-      }
-      input.resources.reclaimedClaim = claimResult.claim
-      return admission
-    } catch (error) {
-      if (!(error instanceof TargetOwnershipUnknownError) &&
-          !(error instanceof OriginPrivateWorkspaceBudgetOwnershipError)) throw error
-      return this.#throwOwnershipAttention(
-        input.repository,
-        input.snapshot,
-        input.lease,
-        input.descriptor.operationId,
-      )
-    }
+    return this.#workspaceContinuation.resumePackage(
+      Object.freeze({ ...input, target: input.target }),
+    )
   }
 
   async #throwOwnershipAttention(
@@ -532,6 +357,7 @@ export class PersistedReceiveOperationReopenAuthority {
     target: ReopenedReceiveTarget
     lifecycleAuthority: ReopenLifecycleAuthority
     resources: ReopenResources
+    diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenedReceiveOperation> {
     const base = {
       intent: input.snapshot.operation.receiveIntent,
@@ -542,6 +368,7 @@ export class PersistedReceiveOperationReopenAuthority {
         input.repository,
         input.lease,
         input.resources,
+        error => this.#observeCleanupFailure(error, input.diagnostics),
       ),
     }
     if (input.target.kind === 'direct-tree') {
@@ -553,7 +380,12 @@ export class PersistedReceiveOperationReopenAuthority {
       })
     }
     const stages = input.lifecycleAuthority.stages ??
-      await this.#openStages(input.repository, input.snapshot, input.lease)
+      await this.#workspaceContinuation.openStages(
+        input.repository,
+        input.snapshot,
+        input.lease,
+        input.diagnostics,
+      )
     return Object.freeze({
       ...base,
       ...input.target,
@@ -573,20 +405,6 @@ export class PersistedReceiveOperationReopenAuthority {
       ...(input.lifecycleAuthority.packageContinuation === undefined
         ? {}
         : { packageContinuation: input.lifecycleAuthority.packageContinuation }),
-    })
-  }
-
-  #openStages(
-    repository: ReceiveOperationRepository,
-    snapshot: PersistedReopenSnapshot,
-    lease: BrowserReceiveOperationLease,
-  ): Promise<WorkspaceOperationStages> {
-    return this.#openWorkspaceStages({
-      repository,
-      receiveIntent: snapshot.operation.receiveIntent,
-      leaseId: lease.leaseId,
-      clock: () => this.#now(),
-      contentRequests: this.#contentRequests,
     })
   }
 
@@ -619,12 +437,50 @@ export class PersistedReceiveOperationReopenAuthority {
     })
   }
 
+  #diagnosticsFor(failures: OutputFailureSinks | undefined): OutputDiagnosticsPorts | undefined {
+    if (failures === undefined) return this.#diagnostics
+    if (this.#diagnostics === undefined) {
+      return Object.freeze({ backend: 'origin_private', failures })
+    }
+    return Object.freeze({ ...this.#diagnostics, failures })
+  }
+
   #now(): number {
     const value = this.#clock.now()
     if (!Number.isSafeInteger(value) || value < 0) {
       throw new TypeError('receive reopen clock must be a non-negative safe integer')
     }
     return value
+  }
+
+  #observeCleanupFailure(
+    error: unknown,
+    diagnostics: OutputDiagnosticsPorts | undefined,
+  ): void {
+    recordOutputException(
+      diagnostics?.failures?.cleanup,
+      error,
+      { recoveryDisposition: 'needs_attention' },
+    )
+    emitOutputTrace(diagnostics?.trace, () =>
+      outputTraceEvent('cleanup', {
+        backend: diagnostics?.backend === 'file_system_access'
+          ? 'file_system_access'
+          : 'origin_private',
+        transition: 'failed',
+      }))
+  }
+
+  #emitReviewedReopen(
+    transition: 'started' | 'authorized' | 'failed',
+  ): void {
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('reopen', {
+        backend: this.#diagnostics?.backend === 'file_system_access'
+          ? 'file_system_access'
+          : 'origin_private',
+        transition,
+      }))
   }
 
   #emit(event: PersistedReceiveOperationReopenTraceEvent): void {

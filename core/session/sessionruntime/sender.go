@@ -91,22 +91,23 @@ func (function InitialLaneIDSourceFunc) NextInitialLaneID() (uint32, error) {
 }
 
 type SenderFactoryConfig struct {
-	ShareInstance        catalog.ShareInstance
-	SessionAuthKey       []byte
-	SenderPrivateKey     ed25519.PrivateKey
-	Catalog              SenderCatalogFactory
-	Content              SenderContentFactory
-	Peers                SenderPeerHandlerFactory
-	ReplayGuard          *protocolsession.ClientHelloReplayGuard
-	Random               io.Reader
-	InitialLaneIDs       InitialLaneIDSource
-	OperationLimits      protocolsession.OperationLimits
-	RouterLimits         protocolsession.RouterLimits
-	Now                  func() time.Time
-	TerminalConnectivity TerminalConnectivity
-	TerminalTimeout      time.Duration
-	TerminalObserver     SenderTerminalObserver
-	ProtocolTracer       ProtocolOperationTracer
+	ShareInstance           catalog.ShareInstance
+	SessionAuthKey          []byte
+	SenderPrivateKey        ed25519.PrivateKey
+	Catalog                 SenderCatalogFactory
+	Content                 SenderContentFactory
+	Peers                   SenderPeerHandlerFactory
+	ReplayGuard             *protocolsession.ClientHelloReplayGuard
+	Random                  io.Reader
+	InitialLaneIDs          InitialLaneIDSource
+	OperationLimits         protocolsession.OperationLimits
+	RouterLimits            protocolsession.RouterLimits
+	Now                     func() time.Time
+	TerminalConnectivity    TerminalConnectivity
+	TerminalTimeout         time.Duration
+	TerminalSendObserver    SenderTerminalSendObserver
+	SessionTerminalObserver SenderSessionTerminalObserver
+	ProtocolTracer          ProtocolOperationTracer
 }
 
 type SenderFactory struct {
@@ -124,7 +125,7 @@ type SenderFactory struct {
 	now                  func() time.Time
 	terminalConnectivity TerminalConnectivity
 	terminalTimeout      time.Duration
-	terminalObserver     SenderTerminalObserver
+	terminalObserver     *senderTerminalObservers
 	protocolTracer       ProtocolOperationTracer
 	admissionContext     context.Context
 	cancelAdmissions     context.CancelFunc
@@ -177,7 +178,10 @@ func NewSenderFactory(config SenderFactoryConfig) (*SenderFactory, error) {
 		random: &lockedReader{reader: config.Random}, laneIDs: config.InitialLaneIDs,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits, now: config.Now,
 		terminalConnectivity: config.TerminalConnectivity, terminalTimeout: config.TerminalTimeout,
-		terminalObserver: config.TerminalObserver,
+		terminalObserver: newSenderTerminalObservers(
+			config.TerminalSendObserver,
+			config.SessionTerminalObserver,
+		),
 		protocolTracer:   config.ProtocolTracer,
 		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
 		sessions: make(map[protocolsession.ProtocolSessionID]*SenderRuntime), terminalDone: make(chan struct{}),
@@ -318,7 +322,8 @@ func (factory *SenderFactory) acceptClient(
 		),
 		Continuations:   factory.peers,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
-		ProtocolTracer: factory.protocolTracer,
+		ProtocolTracer:          factory.protocolTracer,
+		SessionTerminalObserver: factory.terminalObserver.sessionObserver(),
 	})
 	if err != nil {
 		keys.Destroy()
@@ -339,7 +344,8 @@ func (factory *SenderFactory) acceptClient(
 	}
 	contentTransferred = true
 	outbound := senderOutbound{
-		runtime: runtime, privateKey: factory.privateKey, observer: factory.terminalObserver,
+		runtime: runtime, privateKey: factory.privateKey,
+		observer: factory.terminalObserver.sendObserver(),
 	}
 	laneRegistry, err := protocolsession.NewLaneRegistry(protocolsession.LaneRegistryConfig{
 		ShareInstance: factory.share, ProtocolSessionID: sessionID,
@@ -389,7 +395,7 @@ func (factory *SenderFactory) acceptClient(
 	factory.mu.Lock()
 	if factory.stopping {
 		factory.mu.Unlock()
-		runtime.cancel()
+		runtime.terminate(runtimeTerminationForcedClose)
 		return nil, ErrRuntimeClosed
 	}
 	factory.sessions[sessionID] = sender

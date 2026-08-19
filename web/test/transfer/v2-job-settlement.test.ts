@@ -242,13 +242,15 @@ describe('v2 plan settlement', () => {
 
     expect(thrown).toBeInstanceOf(V2TransferFailureSettlementError)
     const failure = thrown as V2TransferFailureSettlementError
-    expect(failure.transferFailure).toBeInstanceOf(Error)
-    expect(failure.message).toBe((failure.transferFailure as Error).message)
-    expect(failure.message).not.toContain('fixture pause failure')
+    expect(failure.transferFailure).toBe(failure.trigger)
+    expect(failure.message).toBe('Transfer failed before output settlement completed')
+    expect(failure.cause).toBeUndefined()
+    expect(failure.settlementFailures).toHaveLength(2)
     expect(failure.settlementFailures).toEqual([
-      expect.objectContaining({ message: 'fixture pause failure' }),
-      expect.objectContaining({ message: 'fixture unknown-settlement failure' }),
+      expect.objectContaining({ fact: expect.objectContaining({ stage: 'settlement' }) }),
+      expect.objectContaining({ fact: expect.objectContaining({ stage: 'settlement' }) }),
     ])
+    expect(JSON.stringify(failure.settlementFailures)).not.toContain('fixture')
   })
 })
 

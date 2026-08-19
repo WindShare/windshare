@@ -1,4 +1,5 @@
 import type { ReceiveIntent } from '../../transfer/intent'
+import type { OutputDiagnosticsPorts } from '../diagnostics'
 import type { OriginPrivateWorkspaceBudgetClaim } from '../origin-private/admission'
 import {
   openOriginPrivatePackageContinuationBackend,
@@ -148,6 +149,7 @@ export async function reopenWorkspacePackageContinuation(input: {
   readonly cleanupReceipt: PackageTemporaryCleanupReceiptV1
   readonly checkpointDatabaseName?: string
   readonly openBackend?: OpenOriginPrivatePackageContinuation
+  readonly diagnostics?: OutputDiagnosticsPorts
 }): Promise<Readonly<{
   backend: OriginPrivatePackageContinuationBackend
   continuation: ReopenedWorkspacePackageContinuation
@@ -169,6 +171,7 @@ export async function reopenWorkspacePackageContinuation(input: {
     ...(input.checkpointDatabaseName === undefined
       ? {}
       : { checkpointDatabaseName: input.checkpointDatabaseName }),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
   try {
     const preparation = await reopenWorkspacePreparationAuthority({
@@ -182,7 +185,11 @@ export async function reopenWorkspacePackageContinuation(input: {
     await backend.verifyManifestOwnership(manifest)
     await backend.verifyTemporaryCleanup(input.cleanupReceipt)
     let executed = false
-    const workflow = new OriginPrivatePackageWorkflow({ stages: input.stages, store: backend.packages })
+    const workflow = new OriginPrivatePackageWorkflow({
+      stages: input.stages,
+      store: backend.packages,
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+    })
     const continuation: ReopenedWorkspacePackageContinuation = Object.freeze({
       sealedMaterialization: seal,
       materializedManifest: manifest,
@@ -217,7 +224,21 @@ export async function reopenWorkspacePackageContinuation(input: {
     })
     return Object.freeze({ backend, continuation })
   } catch (error) {
-    await backend.close().catch(() => undefined)
+    let cleanupFailed = false
+    let cleanupFailure: unknown
+    try {
+      await backend.close()
+    } catch (caughtCleanupFailure) {
+      cleanupFailed = true
+      cleanupFailure = caughtCleanupFailure
+    }
+    if (cleanupFailed) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Package continuation failed and its checkpoint authority did not close',
+        { cause: error },
+      )
+    }
     throw error
   }
 }

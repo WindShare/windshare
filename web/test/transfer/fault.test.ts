@@ -80,10 +80,9 @@ describe('closed transfer fault values', () => {
 describe('fault boundary normalization', () => {
   it('excludes cancellation and defaults unknown errors to dependency-contract output pause', () => {
     const normalized = checkpointFault(FaultScope.OutputPause, CheckpointFaultCode.CorruptRecord)
-    const diagnostic = new Error('native checkpoint decoder detail')
-    const typed = new BoundaryFaultError(normalized, undefined, { cause: diagnostic })
+    const typed = new BoundaryFaultError(normalized)
     expect(normalizeBoundaryError(typed)).toEqual({ kind: 'fault', fault: normalized })
-    expect(typed.cause).toBe(diagnostic)
+    expect(typed.cause).toBeUndefined()
 
     expect(normalizeBoundaryError(new Error('untyped collaborator failure'))).toEqual({
       kind: 'fault',
@@ -95,8 +94,14 @@ describe('fault boundary normalization', () => {
     canceled.abort(new DOMException('Canceled', 'AbortError'))
     expect(normalizeBoundaryError(typed, canceled.signal)).toEqual({ kind: 'canceled' })
     expect(normalizeBoundaryError(undefined, canceled.signal)).toEqual({ kind: 'canceled' })
-    expect(normalizeBoundaryError(new DOMException('Canceled', 'AbortError'))).toEqual({ kind: 'canceled' })
-    expect(normalizeBoundaryError(new DOMException('Timed out', 'TimeoutError'))).toEqual({ kind: 'canceled' })
+    expect(normalizeBoundaryError(new DOMException('Canceled', 'AbortError'))).toEqual({
+      kind: 'fault',
+      fault: dependencyContractFault(),
+    })
+    expect(normalizeBoundaryError(new DOMException('Timed out', 'TimeoutError'))).toEqual({
+      kind: 'fault',
+      fault: dependencyContractFault(),
+    })
     expect(normalizeBoundaryError({ name: 'AbortError' })).toEqual({
       kind: 'fault',
       fault: dependencyContractFault(),

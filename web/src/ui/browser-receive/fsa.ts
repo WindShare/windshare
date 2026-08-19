@@ -11,10 +11,14 @@ import {
 import {
   bindNewFileSystemAccessOutput,
   reopenFileSystemAccessOutput,
-  type FSAOutputTrace,
   type FileSystemAccessOutputSession,
 } from '../../output/file-system-access/session'
-import type { PersistentTreeTrace } from '../../output/persistent-tree/contracts'
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../../output/diagnostics'
 import type {
   AcquiredMaterializationAuthority,
   ArtifactAction,
@@ -22,6 +26,7 @@ import type {
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
+import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
@@ -47,6 +52,7 @@ import type {
   V2LifecycleMutation,
   V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
+import { V2PresentationSourceError } from '../v2-receive-runtime'
 import {
   operationDigest,
   readLifecycle,
@@ -58,18 +64,18 @@ import {
 export class StartedFSAReceive implements V2StartedArtifactAuthority {
   readonly #action: ArtifactAction
   readonly #picked: Promise<AcquiredFSAParentAuthority>
-  readonly #trace: PersistentTreeTrace | undefined
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #released = false
   #claimed = false
 
   constructor(
     action: ArtifactAction,
     picked: Promise<AcquiredFSAParentAuthority>,
-    trace?: PersistentTreeTrace,
+    diagnostics?: OutputDiagnosticsPorts,
   ) {
     this.#action = action
     this.#picked = picked
-    this.#trace = trace
+    this.#diagnostics = diagnostics
   }
 
   async finalize(
@@ -77,11 +83,19 @@ export class StartedFSAReceive implements V2StartedArtifactAuthority {
     signal: AbortSignal,
   ): Promise<V2BoundReceiveOperation> {
     this.#claim()
-    const authority = await this.#picked
+    const authority = await this.#picked.catch((error: unknown) => {
+      observeFSAReservationFailure(this.#diagnostics, error)
+      throw error instanceof DOMException && error.name === 'AbortError'
+        ? new V2PresentationSourceError('picker_refused', error)
+        : error
+    })
     signal.throwIfAborted()
     this.#requireLive()
     const artifact = requireDirectoryArtifact(this.#action)
-    const repository = await IndexedDbReceiveOperationRepository.open()
+    const repository = await IndexedDbReceiveOperationRepository.open().catch((error: unknown) => {
+      observeFSAReservationFailure(this.#diagnostics, error)
+      throw error
+    })
     let session: FileSystemAccessOutputSession | undefined
     let lease: BrowserReceiveOperationLease | undefined
     try {
@@ -90,7 +104,9 @@ export class StartedFSAReceive implements V2StartedArtifactAuthority {
         artifact,
         operationRepository: repository,
         operationId: createOperationID(),
-        ...(this.#trace === undefined ? {} : { trace: fsaTraceAdapter(this.#trace) }),
+        ...(this.#diagnostics === undefined
+          ? {}
+          : { diagnostics: this.#diagnostics }),
         freezeIntent: async (reservation) => {
           signal.throwIfAborted()
           this.#requireLive()
@@ -117,14 +133,49 @@ export class StartedFSAReceive implements V2StartedArtifactAuthority {
         session,
         repository,
         lease,
-        ...(this.#trace === undefined ? {} : { trace: this.#trace }),
+        ...(this.#diagnostics === undefined
+          ? {}
+          : { diagnostics: this.#diagnostics }),
       })
       signal.throwIfAborted()
       return runtime
     } catch (error) {
-      await session?.close().catch(() => undefined)
-      await lease?.release().catch(() => undefined)
-      repository.close()
+      const cleanupFailures: unknown[] = []
+      let outerCleanupFailureObserved = false
+      try {
+        await session?.close()
+      } catch (cleanupFailure) {
+        // The FSA session owns native cleanup classification.
+        cleanupFailures.push(cleanupFailure)
+      }
+      try {
+        await lease?.release()
+      } catch (cleanupFailure) {
+        cleanupFailures.push(cleanupFailure)
+        outerCleanupFailureObserved = true
+        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
+      }
+      try {
+        repository.close()
+      } catch (cleanupFailure) {
+        cleanupFailures.push(cleanupFailure)
+        outerCleanupFailureObserved = true
+        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
+      }
+      if (outerCleanupFailureObserved) {
+        emitOutputTrace(this.#diagnostics?.trace, () =>
+          outputTraceEvent('cleanup', {
+            backend: 'file_system_access',
+            transition: 'failed',
+          }))
+      }
+      if (cleanupFailures.length !== 0) {
+        throw new AggregateError(
+          [error, ...cleanupFailures],
+          'FSA receive activation failed and could not release all authorities',
+          { cause: error },
+        )
+      }
       throw error
     }
   }
@@ -152,7 +203,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #closeAuthority: (() => Promise<void>) | undefined
-  readonly #trace: PersistentTreeTrace | undefined
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #session: FileSystemAccessOutputSession
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
@@ -167,16 +218,16 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     session: FileSystemAccessOutputSession
     settlement: FileSystemAccessOperationSettlementAuthority
     closeAuthority?: () => Promise<void>
-    trace?: PersistentTreeTrace
     plans: V2PlanExecutionAuthority
     transferJobId: string
+    diagnostics?: OutputDiagnosticsPorts
   }) {
     this.intent = input.intent
     this.lifecycle = input.lifecycle
     this.#repository = input.repository
     this.#lease = input.lease
     this.#closeAuthority = input.closeAuthority
-    this.#trace = input.trace
+    this.#diagnostics = input.diagnostics
     this.#session = input.session
     this.#settlement = input.settlement
     this.#plans = input.plans
@@ -189,15 +240,23 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     repository: IndexedDbReceiveOperationRepository
     lease: BrowserReceiveOperationLease
     session: FileSystemAccessOutputSession
-    trace?: PersistentTreeTrace
+    diagnostics?: OutputDiagnosticsPorts
   }): Promise<FSAReceiveOperation> {
-    const attempt = await createFSAAttempt(input.intent, input.repository, input.lease, input.session, 'start')
+    const attempt = await createFSAAttempt(
+      input.intent,
+      input.repository,
+      input.lease,
+      input.session,
+      'start',
+      undefined,
+      input.diagnostics,
+    )
     return new FSAReceiveOperation({ ...input, ...attempt })
   }
 
   static async reopen(
     operation: ReopenedDirectTreeOperation,
-    trace?: PersistentTreeTrace,
+    diagnostics?: OutputDiagnosticsPorts,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -211,13 +270,14 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       operation.repository,
       operation.lease,
       admissionFallback,
+      diagnostics,
     )
     let session: FileSystemAccessOutputSession | undefined
     try {
       session = await reopenFileSystemAccessOutput({
         intent: operation.intent,
         operationRepository: operation.repository,
-        ...(trace === undefined ? {} : { trace: fsaTraceAdapter(trace) }),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
       })
       const plans = await createFSAPlanAuthority(
         operation.intent,
@@ -234,23 +294,18 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         lease: operation.lease,
         session,
         closeAuthority: () => operation.close(),
-        ...(trace === undefined ? {} : { trace }),
         settlement: attemptAuthority.settlement,
         plans,
         transferJobId: attemptAuthority.transferJobId,
+        ...(diagnostics === undefined ? {} : { diagnostics }),
       })
     } catch (error) {
-      await session?.close().catch(() => undefined)
-      try {
-        await attemptAuthority.settlement.settleExecutionAdmissionFailure(
-          operation.intent,
-          error,
-          new AbortController().signal,
-        )
-      } catch (settlementError) {
-        throw new V2TransferFailureSettlementError(error, [settlementError])
-      }
-      throw error
+      return settleFailedFSAReopen(
+        attemptAuthority.settlement,
+        operation.intent,
+        session,
+        error,
+      )
     }
   }
 
@@ -276,7 +331,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     const session = await reopenFileSystemAccessOutput({
       intent: this.intent,
       operationRepository: this.#repository,
-      ...(this.#trace === undefined ? {} : { trace: fsaTraceAdapter(this.#trace) }),
+      ...(this.#diagnostics === undefined
+        ? {}
+        : { diagnostics: this.#diagnostics }),
     })
     try {
       // Acquire the attempt before leaving the stable state so setup failures retain
@@ -288,6 +345,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         session,
         'resume',
         lifecycle,
+        this.#diagnostics,
       )
       const resumed = await transitionLifecycle(
         this.#repository,
@@ -306,8 +364,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         resumeTransfer: true,
       })
     } catch (error) {
-      await session.close().catch(() => undefined)
-      throw error
+      return closeFSAContinuationAfterFailure(session, error)
     }
   }
 
@@ -347,12 +404,36 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     if (this.#detached) return
     this.#detached = true
     const failures: unknown[] = []
-    await this.#session.close().catch((error: unknown) => failures.push(error))
+    let outerFailureObserved = false
+    await this.#session.close().catch((error: unknown) => {
+      // The output session owns classification for file, checkpoint, and root release.
+      failures.push(error)
+    })
     await (this.#closeAuthority?.() ?? this.#lease.release())
-      .catch((error: unknown) => failures.push(error))
-    if (this.#closeAuthority === undefined) this.#repository.close()
+      .catch((error: unknown) => {
+        failures.push(error)
+        outerFailureObserved = true
+        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
+      })
+    if (this.#closeAuthority === undefined) {
+      try {
+        this.#repository.close()
+      } catch (error) {
+        failures.push(error)
+        outerFailureObserved = true
+        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
+      }
+    }
     if (failures.length > 0) {
-      throw new AggregateError(failures, 'FSA receive resources did not detach')
+      const failure = new AggregateError(failures, 'FSA receive resources did not detach')
+      if (outerFailureObserved) {
+        emitOutputTrace(this.#diagnostics?.trace, () =>
+          outputTraceEvent('cleanup', {
+            backend: 'file_system_access',
+            transition: 'failed',
+          }))
+      }
+      throw failure
     }
   }
 
@@ -361,11 +442,88 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   }
 }
 
-function fsaTraceAdapter(trace: PersistentTreeTrace): FSAOutputTrace {
-  return event => {
-    if (event.name === 'receive.operation.needs_attention' ||
-        event.name === 'receive.checkpoint.decision') trace(event)
+async function settleFailedFSAReopen(
+  settlement: FileSystemAccessOperationSettlementAuthority,
+  intent: ReceiveIntent,
+  session: FileSystemAccessOutputSession | undefined,
+  error: unknown,
+): Promise<never> {
+  let cleanupFailure: unknown
+  try {
+    await session?.close()
+  } catch (caughtCleanupFailure) {
+    // The output session emitted the cleanup fact at its native boundary.
+    cleanupFailure = caughtCleanupFailure
   }
+  try {
+    await settlement.settleExecutionAdmissionFailure(
+      intent,
+      error,
+      new AbortController().signal,
+    )
+  } catch (settlementError) {
+    const consequences = [
+      classificationForTransferFailure(settlementError, {
+        stage: 'settlement',
+        relation: 'consequence',
+      }),
+      ...(cleanupFailure === undefined
+        ? []
+        : [classificationForTransferFailure(cleanupFailure, {
+            stage: 'cleanup',
+            relation: 'consequence',
+          })]),
+    ].filter(candidate => candidate !== undefined)
+    if (consequences.length !== 0) {
+      throw new V2TransferFailureSettlementError(
+        classificationForTransferFailure(error, {
+          stage: 'output_reservation',
+          relation: 'contributor',
+        }),
+        consequences,
+      )
+    }
+  }
+  if (cleanupFailure !== undefined) {
+    throw new AggregateError(
+      [error, cleanupFailure],
+      'FSA reopen failed and output cleanup also failed',
+      { cause: error },
+    )
+  }
+  throw error
+}
+
+async function closeFSAContinuationAfterFailure(
+  session: FileSystemAccessOutputSession,
+  error: unknown,
+): Promise<never> {
+  let cleanupFailure: unknown
+  try {
+    await session.close()
+  } catch (caughtCleanupFailure) {
+    cleanupFailure = caughtCleanupFailure
+  }
+  if (cleanupFailure !== undefined) {
+    throw new AggregateError(
+      [error, cleanupFailure],
+      'FSA continuation failed and output cleanup also failed',
+      { cause: error },
+    )
+  }
+  throw error
+}
+
+function observeFSAReservationFailure(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  error: unknown,
+): void {
+  recordOutputException(diagnostics?.failures?.outputReservation, error)
+  emitOutputTrace(diagnostics?.trace, () =>
+    outputTraceEvent('output_reservation', {
+      backend: 'file_system_access',
+      transition: 'failed',
+    }))
 }
 
 async function createFSAAttempt(
@@ -375,6 +533,7 @@ async function createFSAAttempt(
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
   admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+  diagnostics?: OutputDiagnosticsPorts,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
@@ -385,6 +544,7 @@ async function createFSAAttempt(
     repository,
     lease,
     admissionFallback,
+    diagnostics,
   )
   const plans = await createFSAPlanAuthority(
     intent,
@@ -402,6 +562,7 @@ async function createFSAAttemptSettlement(
   repository: ReceiveOperationRepository,
   lease: BrowserReceiveOperationLease,
   admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+  diagnostics?: OutputDiagnosticsPorts,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   transferJobId: string
@@ -413,6 +574,7 @@ async function createFSAAttemptSettlement(
     lifecycleLeaseId: lease.leaseId,
     transferJobId,
     ...(admissionFallback === undefined ? {} : { admissionFallback }),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
   })
   return Object.freeze({ settlement, transferJobId })
 }

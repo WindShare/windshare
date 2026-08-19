@@ -12,10 +12,9 @@ import (
 )
 
 const (
-	SchemaVersion            = 2
+	SchemaVersion            = 3
 	DefaultLifecycleCapacity = 256
 	DefaultSampleInterval    = 250 * time.Millisecond
-	maxJSONSafeInteger       = uint64(1<<53 - 1)
 )
 
 var (
@@ -87,7 +86,7 @@ type queuedEvent struct {
 
 type Recorder struct {
 	command clievent.Command
-	runID   string
+	runID   runIdentity
 	path    string
 	clock   Clock
 	start   time.Time
@@ -176,18 +175,18 @@ func openTarget(
 	command clievent.Command,
 	start time.Time,
 	dependencies Dependencies,
-) (TraceFile, string, string, error) {
+) (TraceFile, string, runIdentity, error) {
 	attempts := 1
 	if target.kind == targetRunDirectory {
 		if err := dependencies.EnsureDirectory(target.path); err != nil {
-			return nil, "", "", ErrTraceDirectoryUnavailable
+			return nil, "", runIdentity{}, ErrTraceDirectoryUnavailable
 		}
 		attempts = directoryCreateAttempts
 	}
 	for range attempts {
 		runID, err := newRunID(dependencies.Random)
 		if err != nil {
-			return nil, "", "", ErrRunIDUnavailable
+			return nil, "", runIdentity{}, ErrRunIDUnavailable
 		}
 		path := target.path
 		if target.kind == targetRunDirectory {
@@ -198,14 +197,14 @@ func openTarget(
 			if target.kind == targetRunDirectory {
 				continue
 			}
-			return nil, "", "", ErrTraceExists
+			return nil, "", runIdentity{}, ErrTraceExists
 		}
 		if err != nil || file == nil {
-			return nil, "", "", ErrTraceFileUnavailable
+			return nil, "", runIdentity{}, ErrTraceFileUnavailable
 		}
 		return file, path, runID, nil
 	}
-	return nil, "", "", ErrTraceNameUnavailable
+	return nil, "", runIdentity{}, ErrTraceNameUnavailable
 }
 
 func normalizedConfig(config Config) (int, time.Duration, bool) {
@@ -223,7 +222,7 @@ func normalizedConfig(config Config) (int, time.Duration, bool) {
 	return capacity, interval, true
 }
 
-func (recorder *Recorder) RunID() string { return recorder.runID }
+func (recorder *Recorder) RunID() string { return recorder.runID.encoded() }
 
 // Path is intentionally local recorder state; trace rows omit it so a diagnostic
 // artifact cannot disclose the caller's filesystem namespace.
@@ -331,7 +330,7 @@ func (recorder *Recorder) Close() Status {
 }
 
 func (recorder *Recorder) nextMetadataLocked() (entryMetadata, bool) {
-	if recorder.lastSequence >= maxJSONSafeInteger {
+	if recorder.lastSequence == ^uint64(0) {
 		recorder.schemaLimited.Store(true)
 		recorder.markIncomplete(clievent.TraceIncompleteSchemaLimit)
 		return entryMetadata{}, false
@@ -370,7 +369,8 @@ func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
 		clievent.PeerAttemptObserved,
 		clievent.TransferLifecycleObserved,
 		clievent.FilesystemOutputObserved,
-		clievent.SenderTerminalObserved,
+		clievent.SenderTerminalSendObserved,
+		clievent.SenderSessionTerminated,
 		clievent.CatalogStorageObserved,
 		clievent.RootPrefetchObserved,
 		clievent.ProtocolOperationObserved,

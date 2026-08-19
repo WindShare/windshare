@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
+import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { FileGeometry } from '../../src/content/geometry'
 import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
@@ -11,11 +12,17 @@ import {
 import type { V2FileRevisionDescriptor } from '../../src/content/v2-records'
 import {
   decodeV2Message,
+  decodeV2OperationErrorControl,
   encodeV2Body,
   encodeV2Message,
+  type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from '../../src/session/v2-message'
 import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../../src/session/v2-runtime'
+import {
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 import { fragmentRecord } from './v2-fragment-fixture'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
@@ -31,6 +38,22 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
   value[0] = first
   return value
+}
+
+function blockProtocolFailure(message: V2SessionMessage) {
+  const decoded = decodeV2OperationErrorControl(message.body)
+  return createProtocolFailure({
+    requestKind: 'request_blocks',
+    wireScope: decoded.scope,
+    wireCode: decoded.code,
+    retryable: decoded.retryable,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: Object.freeze({
+      protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
+      protocolOperationId: createV2ProtocolOperationIdentity(message.operationId!),
+      lane: Object.freeze({ id: 1, epoch: 1 }),
+    }),
+  })
 }
 
 const share: V2ShareDescriptor = Object.freeze({
@@ -190,6 +213,7 @@ describe('v2 session block lane deadlines', () => {
       ),
       cancelOperation: async () => { cancellations += 1 },
       close,
+      authenticatedProtocolFailure: blockProtocolFailure,
     } as unknown as V2ReceiverSessionRuntime
     const lane = new V2SessionBlockLane(
       1,

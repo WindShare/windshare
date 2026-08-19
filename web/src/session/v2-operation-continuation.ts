@@ -69,6 +69,16 @@ export class V2OperationContinuationAuthority {
     }
   }
 
+  peerBinding(): Readonly<PeerBinding> | undefined {
+    const binding = this.#peerBinding
+    return binding === undefined
+      ? undefined
+      : Object.freeze({
+          peerPathId: binding.peerPathId.slice(),
+          attemptId: binding.attemptId.slice(),
+        })
+  }
+
   reserve(message: V2SessionMessage): Promise<V2OperationMessageReservation> {
     return this.#serialize(() => this.#reserve(message))
   }

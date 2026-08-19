@@ -47,7 +47,7 @@ describe('authenticated projection discovery coordinator', () => {
 
   it('fences an in-flight source when a selection mutation starts a new epoch', async () => {
     const traces: ProjectionTraceEvent[] = []
-    const controller = new SelectionProjectionController((event) => traces.push(event))
+    const controller = new SelectionProjectionController({ current: event => { traces.push(event) } })
     const spec = await emptySelection()
     const first = controller.beginSelection(spec)
     const gate = deferred<void>()
@@ -68,10 +68,11 @@ describe('authenticated projection discovery coordinator', () => {
     expect(controller.state).toBe(current)
     expect(controller.state.discovery.kind).toBe('idle')
     expect(traces.at(-1)).toMatchObject({
-      name: 'receive.projection.stale_event_dropped',
-      current_projection_epoch: current.projection.epoch,
-      stale_projection_epoch: first.projection.epoch,
-      event_class: 'discovery-result',
+      name: 'projection_transition',
+      transition: 'stale_event_dropped',
+      currentProjectionEpoch: current.projection.epoch,
+      staleProjectionEpoch: first.projection.epoch,
+      eventClass: 'discovery_result',
     })
   })
 })

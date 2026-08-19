@@ -90,6 +90,7 @@ export function previewSnapshot(
   entry: Extract<V2CatalogEntry, { kind: 'file' }>,
   presentation: V2PreviewPresentation,
   seeking: boolean,
+  presentationId: number,
 ) {
   return Object.freeze(presentation.kind === 'image'
     ? {
@@ -97,6 +98,7 @@ export function previewSnapshot(
         fileId: entry.idText,
         name: presentation.name,
         url: presentation.url,
+        presentationId,
         mimeType: presentation.mimeType,
         width: presentation.width,
         height: presentation.height,
@@ -106,6 +108,7 @@ export function previewSnapshot(
         fileId: entry.idText,
         name: presentation.name,
         url: presentation.url,
+        presentationId,
         mimeType: presentation.mimeType,
         width: presentation.width,
         height: presentation.height,

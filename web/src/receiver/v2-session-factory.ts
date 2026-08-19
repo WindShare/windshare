@@ -1,6 +1,7 @@
 import { openV2ShareDescriptor, type V2ShareDescriptor } from '../catalog/v2-records'
 import { equalBytes } from '../crypto/bytes'
 import type { Suite02CapabilityKey } from '../crypto/suite02-link'
+import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
 import { V2ReceiverSessionRuntime, type V2ReceiverSessionOptions } from '../session/v2-runtime'
 import {
   dialV2RelayReceiver,
@@ -37,6 +38,7 @@ export interface V2BrowserSessionFactoryOptions {
   readonly descriptorObject: Uint8Array
   readonly dialRelay?: typeof dialV2RelayReceiver
   readonly openDescriptor?: typeof openV2ShareDescriptor
+  readonly protocolTrace?: V2ProtocolTraceSource
   readonly connectSession?: (
     options: V2ReceiverSessionOptions,
   ) => Promise<V2ReceiverSessionRuntime>
@@ -60,6 +62,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   readonly #descriptorObject: Uint8Array<ArrayBuffer>
   readonly #dialRelay: typeof dialV2RelayReceiver
   readonly #openDescriptor: typeof openV2ShareDescriptor
+  readonly #protocolTrace: V2ProtocolTraceSource | undefined
   readonly #connectSession: (
     options: V2ReceiverSessionOptions,
   ) => Promise<V2ReceiverSessionRuntime>
@@ -78,6 +81,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     this.#descriptorObject = options.descriptorObject.slice()
     this.#dialRelay = options.dialRelay ?? dialV2RelayReceiver
     this.#openDescriptor = options.openDescriptor ?? openV2ShareDescriptor
+    this.#protocolTrace = options.protocolTrace
     this.#connectSession = options.connectSession ?? ((sessionOptions) =>
       V2ReceiverSessionRuntime.connect(sessionOptions))
   }
@@ -91,6 +95,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
         readSecret: this.#capability.readSecret,
         initialChannel: relay.channel,
         signal,
+        ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       })
       return Object.freeze({
         relay,

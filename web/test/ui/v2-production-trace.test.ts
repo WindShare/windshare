@@ -1,162 +1,173 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import {
-  createPrivacySafeV2ReceiverTraceSink,
-  privacySafeV2ReceiverTrace,
-  type PrivacySafeV2ReceiverTrace,
+  createBrowserDiagnosticsComposition,
+  type BrowserDiagnosticsClock,
+} from '../../src/diagnostics/browser-composition'
+import { installWindShareDiagnostics } from '../../src/diagnostics/export/developer-api'
+import { unclassifiedFailureFact } from '../../src/diagnostics/incident'
+import type {
+  TraceScheduledTask,
+  TraceScheduler,
+} from '../../src/diagnostics/trace/ports'
+import {
+  createV2ReceiverTraceSource,
+  projectV2ReceiverTraceEvent,
 } from '../../src/ui/v2-production-trace'
+import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 
-describe('v2 production trace privacy boundary', () => {
-  it('retains normalized materialization facts while replacing opaque identities with presence', () => {
-    const safe = privacySafeV2ReceiverTrace({
-      name: 'receive.materialization.failed',
-      operation_id: 'operation-secret',
-      receive_intent_digest: 'intent-secret',
-      protocol_session_id: 'session-secret',
-      transfer_job_id: 'job-secret',
-      plan_kind: 'workspace-then-publish',
-      directory_failure_reason: 'output-write-failed',
-      completed_file_count: 0n,
-      completed_bytes: 0n,
-    })
-
-    expect(safe).toEqual({
-      name: 'receive.materialization.failed',
-      plan_kind: 'workspace-then-publish',
-      directory_failure_reason: 'output-write-failed',
-      completed_file_count: 0n,
-      completed_bytes: 0n,
-      has_operation_id: true,
-      has_receive_intent_digest: true,
-      has_protocol_session_id: true,
-      has_transfer_job_id: true,
-    })
-    expect(Object.values(safe)).not.toContain('operation-secret')
-    expect(Object.values(safe)).not.toContain('intent-secret')
-    expect(Object.values(safe)).not.toContain('session-secret')
-    expect(Object.values(safe)).not.toContain('job-secret')
-  })
-
-  it('projects workspace preparation milestones without exposing authority identities', () => {
-    const safe = privacySafeV2ReceiverTrace({
-      name: 'receive.preparation_admission.accepted',
-      operation_id: 'operation-secret',
-      receive_intent_digest: 'intent-secret',
-      plan_kind: 'workspace-then-publish',
-      admission_kind: 'workspace-budget',
-      artifact_bytes: 68n,
-      metadata_bytes: 256n,
-      unique_raw_bytes: 68n,
-      package_bytes: 512n,
-      peak_temporary_bytes: 580n,
-      durable_metadata_bytes: 384n,
-      peak_owned_bytes: 964n,
-      limit_class: 'none',
-    })
-
-    expect(safe).toEqual({
-      name: 'receive.preparation_admission.accepted',
-      plan_kind: 'workspace-then-publish',
-      admission_kind: 'workspace-budget',
-      artifact_bytes: 68n,
-      metadata_bytes: 256n,
-      unique_raw_bytes: 68n,
-      package_bytes: 512n,
-      peak_temporary_bytes: 580n,
-      durable_metadata_bytes: 384n,
-      peak_owned_bytes: 964n,
-      limit_class: 'none',
-      has_operation_id: true,
-      has_receive_intent_digest: true,
-    })
-    expect(Object.values(safe)).not.toContain('operation-secret')
-    expect(Object.values(safe)).not.toContain('intent-secret')
-  })
-
-  it('replaces workspace preparation and publication bindings with presence facts', () => {
-    const safe = privacySafeV2ReceiverTrace({
-      name: 'receive.package.sealed',
-      operation_id: 'operation-secret',
-      package_digest: 'package-secret',
-      layout_digest: 'layout-secret',
-      artifact_bytes: 68n,
-    })
-
-    expect(safe).toEqual({
-      name: 'receive.package.sealed',
-      artifact_bytes: 68n,
-      has_operation_id: true,
-      has_package_digest: true,
-      has_layout_digest: true,
-    })
-    expect(Object.values(safe)).not.toContain('package-secret')
-    expect(Object.values(safe)).not.toContain('layout-secret')
-  })
-
-  it('keeps reopen decisions while redacting operation, intent, and lease identities', () => {
-    const safe = privacySafeV2ReceiverTrace({
-      name: 'receive.operation.reopen_authorized',
-      operation_id: 'operation-secret',
-      receive_intent_digest: 'intent-secret',
-      lifecycle_generation: 7n,
-      continuation: 'save-artifact',
-      lease_id: 'lease-secret',
-    })
-
-    expect(safe).toEqual({
-      name: 'receive.operation.reopen_authorized',
-      lifecycle_generation: 7n,
-      continuation: 'save-artifact',
-      has_operation_id: true,
-      has_receive_intent_digest: true,
-      has_lease_id: true,
-    })
-    expect(Object.values(safe)).not.toContain('lease-secret')
-  })
-
-  it('cannot serialize future exception, path, name, or capability fields', () => {
-    const unsafe = {
-      name: 'receive.materialization.failed',
-      plan_kind: 'portable-handoff',
-      directory_failure_reason: 'output-commit-failed',
-      completed_file_count: 0n,
-      completed_bytes: 0n,
-      error_name: 'TypeError',
-      error_message: 'failed at private/report.txt',
-      source_path: 'private/report.txt',
-      suggested_name: 'report.txt',
-      capability_input: '#secret',
-    } as unknown as Parameters<typeof privacySafeV2ReceiverTrace>[0]
-
-    expect(privacySafeV2ReceiverTrace(unsafe)).toEqual({
-      name: 'receive.materialization.failed',
-      plan_kind: 'portable-handoff',
-      directory_failure_reason: 'output-commit-failed',
-      completed_file_count: 0n,
-      completed_bytes: 0n,
+describe('browser diagnostics production composition', () => {
+  it('uses injected package identity and the test build mode', () => {
+    expect(browserBuildSnapshot()).toEqual({
+      version: '0.0.0',
+      mode: 'test',
     })
   })
 
-  it('writes one structured allowlisted event through the injected console', () => {
-    const info = vi.fn<(label: string, event: PrivacySafeV2ReceiverTrace) => void>()
-    const sink = createPrivacySafeV2ReceiverTraceSink({ info })
+  it('keeps the event factory untouched until tracing is explicitly enabled', () => {
+    const composition = productionComposition()
+    const source = createV2ReceiverTraceSource(composition.trace)
+    const createEvent = vi.fn<() => V2ReceiverTraceEvent>(() =>
+      Object.freeze({
+        name: 'join_transition',
+        transition: 'started',
+      }))
 
-    sink({
-      name: 'receive.intent.frozen',
-      operation_id: 'operation-secret',
-      receive_intent_digest: 'intent-secret',
-      artifact_kind: 'zip-archive',
-      layout_class: 'zip-result-root',
-      plan_kind: 'workspace-then-publish',
+    emit(source, createEvent)
+    expect(createEvent).not.toHaveBeenCalled()
+    expect(composition.runtime.status()).toMatchObject({
+      state: 'idle',
+      enabled: false,
+      retained_event_count: '0',
     })
 
-    expect(info).toHaveBeenCalledWith('windshare.receive', {
-      name: 'receive.intent.frozen',
-      artifact_kind: 'zip-archive',
-      layout_class: 'zip-result-root',
-      plan_kind: 'workspace-then-publish',
-      has_operation_id: true,
-      has_receive_intent_digest: true,
+    composition.runtime.enable()
+    emit(source, createEvent)
+    expect(createEvent).toHaveBeenCalledOnce()
+    expect(composition.runtime.status()).toMatchObject({
+      state: 'recording_pre_failure',
+      enabled: true,
+      retained_event_count: '1',
     })
+  })
+
+  it('exports enabled trace without writing per-event console output', () => {
+    const error = vi.fn()
+    const composition = productionComposition(error)
+    const source = createV2ReceiverTraceSource(composition.trace)
+
+    composition.runtime.enable()
+    emit(source, () => Object.freeze({
+      name: 'join_transition',
+      transition: 'started',
+    }))
+    const lines = composition.runtime.export().trimEnd().split('\n').map(
+      (line) => JSON.parse(line) as Record<string, unknown>,
+    )
+
+    expect(lines.map((line) => line.line_type)).toEqual([
+      'bundle_header',
+      'trace_capture',
+      'trace_event',
+    ])
+    expect(lines[2]).toMatchObject({
+      line_type: 'trace_event',
+      record: {
+        event: 'join_transition',
+        payload: { transition: 'started' },
+      },
+    })
+    expect(error).not.toHaveBeenCalled()
+  })
+
+  it('keeps retained-inventory failure events closed at the typed adapter', () => {
+    const projected = projectV2ReceiverTraceEvent({
+      name: 'receive.inventory.load.failed',
+    })
+
+    expect(projected).toEqual({
+      eventName: 'retained_inventory',
+      payload: { transition: 'load_failed' },
+    })
+    expect(Object.keys(projected.payload)).toEqual(['transition'])
+  })
+
+  it('retains and exports an incident even when the console sink throws', () => {
+    const error = vi.fn(() => {
+      throw new Error('console unavailable')
+    })
+    const composition = productionComposition(error)
+    const owner = composition.incidents.openScope('join')
+    const trigger = owner.facts.record(unclassifiedFailureFact({
+      stage: 'join',
+      recoveryDisposition: 'terminal',
+    }), 'contributor')
+
+    composition.incidents.submitDecision(owner.handle, {
+      kind: 'incident',
+      boundary: 'join',
+      outcome: 'failed',
+      trigger,
+    })
+    owner.close()
+
+    expect(error).toHaveBeenCalledOnce()
+    expect(composition.runtime.inspectLastFailure()).toMatchObject({
+      event: 'failure_incident',
+      payload: {
+        scope: { scope_kind: 'join', scope_sequence: '1' },
+        presentation: { boundary: 'join', outcome: 'failed' },
+      },
+    })
+    expect(composition.runtime.export()).toContain('"line_type":"incident"')
+  })
+
+  it('installs one frozen readonly developer facade without product dependencies', () => {
+    const composition = productionComposition()
+    const target = {}
+    const api = installWindShareDiagnostics(target, composition.runtime)
+    const descriptor = Object.getOwnPropertyDescriptor(
+      target,
+      'windshareDiagnostics',
+    )
+
+    expect(Object.isFrozen(api)).toBe(true)
+    expect(descriptor).toMatchObject({
+      configurable: false,
+      enumerable: false,
+      writable: false,
+      value: api,
+    })
+    expect(api.status()).toMatchObject({ state: 'idle', enabled: false })
   })
 })
+
+function productionComposition(error = vi.fn()) {
+  let now = 1_000
+  const clock: BrowserDiagnosticsClock = Object.freeze({
+    nowMilliseconds: () => now++,
+    captureTime: () => new Date(now++).toISOString(),
+  })
+  const scheduler: TraceScheduler = Object.freeze({
+    schedule: (): TraceScheduledTask => Object.freeze({ cancel: () => undefined }),
+  })
+  return createBrowserDiagnosticsComposition({
+    build: browserBuildSnapshot(),
+    secureContext: true,
+    consoleSink: Object.freeze({ error }),
+    randomBytes: (byteLength) =>
+      Uint8Array.from({ length: byteLength }, (_, index) => index + 1),
+    clock,
+    scheduler,
+  })
+}
+
+function emit(
+  source: ReturnType<typeof createV2ReceiverTraceSource>,
+  createEvent: () => V2ReceiverTraceEvent,
+): void {
+  const observer = source.current
+  if (observer === undefined) return
+  observer(createEvent())
+}

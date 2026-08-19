@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
 
+import type {
+  OutputDiagnosticsPorts,
+  OutputFailureObservation,
+  OutputTraceEvent,
+} from '../../src/output/diagnostics'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
@@ -354,6 +359,53 @@ describe('persistent DirectoryTree materialization port', () => {
     await expect(afterCommit.commit()).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
   })
 
+  it('keeps range success off trace while retaining checkpoint decisions and transaction failure', async () => {
+    const traceEvents: OutputTraceEvent[] = []
+    const writeFailures: OutputFailureObservation<'output_write'>[] = []
+    const diagnostics: OutputDiagnosticsPorts = {
+      backend: 'file_system_access',
+      failures: {
+        outputWrite: {
+          stage: 'output_write',
+          record: (observation) => {
+            writeFailures.push(observation)
+            return undefined
+          },
+        },
+      },
+      trace: {
+        current: (event) => traceEvents.push(event),
+      },
+    }
+    const fixture = await materializationFixture(diagnostics)
+    const transaction = await fixture.session.beginFile({
+      artifactPath: ['bounded.bin'],
+      openRevision: async () => revision(2n),
+    })
+    await transaction.writeRange(0n, Uint8Array.of(1))
+    await transaction.checkpoint()
+    expect(traceEvents).toEqual([{
+      eventName: 'checkpoint',
+      payload: { backend: 'file_system_access', transition: 'persisted', decision: 'installed' }, }])
+    fixture.tree.failVerification(['bounded.bin'], 'writer-open', 2)
+    await expect(transaction.writeRange(1n, Uint8Array.of(2)))
+      .rejects.toBeInstanceOf(TargetOwnershipUnknownError)
+
+    expect(writeFailures).toEqual([
+      expect.objectContaining({
+        nativeClass: 'invalid_state',
+        code: 'ownership',
+      }),
+    ])
+    expect(traceEvents.at(-1)).toEqual({
+      eventName: 'output_write',
+      payload: {
+        backend: 'file_system_access',
+        transition: 'transaction_failed',
+      },
+    })
+  })
+
   it('isolates one failed file without removing another successful visible file', async () => {
     const fixture = await materializationFixture()
     const good = await fixture.session.beginFile({
@@ -376,7 +428,7 @@ describe('persistent DirectoryTree materialization port', () => {
   })
 })
 
-async function materializationFixture() {
+async function materializationFixture(diagnostics?: OutputDiagnosticsPorts) {
   const binding = durableCheckpointNamespaceIdentity({
     operationId: identity(1),
     receiveIntentDigest: identity(2, 32),
@@ -387,7 +439,11 @@ async function materializationFixture() {
   const events: string[] = []
   const tree = new MemoryTree(events)
   const checkpoints = new MemoryCheckpointRepository(binding)
-  const session = await PersistentTreeOutputSession.open({ tree, checkpoints })
+  const session = await PersistentTreeOutputSession.open({
+    tree,
+    checkpoints,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
+  })
   return { binding, events, tree, checkpoints, session }
 }
 

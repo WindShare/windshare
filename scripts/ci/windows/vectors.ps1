@@ -24,5 +24,8 @@ Invoke-Step 'verify protocol-contract vectors' {
 Invoke-Step 'verify peer-signaling vectors' {
     go test -count=1 ./connectivity/v2signal
 }
+Invoke-Step 'verify diagnostic-correlation vectors' {
+    go test -count=1 ./cmd/wind/internal/runtrace -run 'Test(CorrelationV1|DiagnosticCorrelationVectors)'
+}
 
 Write-Output ('== vectors: PASS in {0:mm\:ss} ==' -f $gateStopwatch.Elapsed)

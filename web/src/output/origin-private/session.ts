@@ -1,57 +1,50 @@
 import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
 import { IndexedDbFileCheckpointRepository } from '../browser/indexeddb-repository'
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import { FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE } from '../persistence/checkpoint'
-import type {
-  FileCheckpointJournal,
-  FinalFileCheckpointProof,
-  PersistentHandleRepository,
-} from '../persistence/journal'
-import { finalFileCheckpointProof } from '../persistence/journal'
 import {
   durableCheckpointNamespaceIdentity,
   sameDurableCheckpointNamespace,
 } from '../persistence/namespace'
 import type {
-  PersistentDirectoryMaterialization,
-  PersistentFileRequest,
-  PersistentFileTransactionPort,
   PersistentMaterializationPort,
   PersistentTreeTrace,
 } from '../persistent-tree/contracts'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
-import type { FileCheckpointRecoveryRepository } from '../persistent-tree/recovery'
-import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import type { ReceiveOperationRepository } from '../workspace/repository'
 import type { WorkspaceContentGate } from '../workspace/stages'
-import type {
-  FinalCheckpointReader,
-  FinalCheckpointRecoveryEvidence,
-  FinalCheckpointRecoveryReader,
-  MaterializedManifestV1,
-} from '../workspace/manifest'
-import type { PackageTemporaryCleanupReceiptV1 } from '../workspace/receipts'
 import type { OriginPrivateWorkspaceBudgetClaim } from './admission'
-import {
-  OriginPrivateWorkspaceCleanupPort,
-  type OriginPrivateWorkspaceCleanupAuthority,
-} from './cleanup-port'
+import { OriginPrivateWorkspaceCleanupPort } from './cleanup-port'
 import type { OriginPrivateWorkspaceNamespace } from './namespace'
-import {
-  OriginPrivatePackageStore,
-  type PackagedArtifactReadPort,
-} from './package-store'
+import { OriginPrivatePackageStore } from './package-store'
 import { OriginPrivateWorkspaceRoot } from './workspace-root'
 import { OriginPrivateWorkspaceTree } from './workspace-tree'
+import {
+  OriginPrivateMaterializationSession,
+  OriginPrivatePackageContinuationBackendSession,
+  OriginPrivateRetainedArtifactBackendSession,
+  OriginPrivateWorkspaceBackendSession,
+  closeOwnedCheckpointAfterFailure,
+  createOriginPrivateFinalCheckpointReader,
+  type OriginPrivateCheckpointStore,
+  type OriginPrivateDurableCheckpointStore,
+  type OriginPrivatePackageContinuationBackend,
+  type OriginPrivateRetainedArtifactBackend,
+  type OriginPrivateWorkspaceBackend,
+} from './backend-sessions'
 
-export interface OriginPrivateCheckpointStore
-extends FileCheckpointJournal, PersistentHandleRepository,
-  Pick<FileCheckpointRecoveryRepository, 'resolveCandidate'> {
-  close?(): void
-}
-
-export interface OriginPrivateDurableCheckpointStore extends OriginPrivateCheckpointStore {
-  retireOperation(): Promise<void>
-}
+export type {
+  OriginPrivateCheckpointStore,
+  OriginPrivateDurableCheckpointStore,
+  OriginPrivatePackageContinuationBackend,
+  OriginPrivateRetainedArtifactBackend,
+  OriginPrivateWorkspaceBackend,
+} from './backend-sessions'
 
 export interface OriginPrivateMaterializationOptions {
   readonly receiveIntent: ReceiveIntent
@@ -62,30 +55,20 @@ export interface OriginPrivateMaterializationOptions {
   readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
   readonly checkpointStore?: OriginPrivateCheckpointStore
   readonly checkpointDatabaseName?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly onTrace?: PersistentTreeTrace
 }
 
-export interface OriginPrivateWorkspaceBackend {
-  readonly materialization: PersistentMaterializationPort
-  readonly packages: OriginPrivatePackageStore
-  readonly packagedArtifacts: PackagedArtifactReadPort
-  readonly finalCheckpoints: FinalCheckpointReader
-  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-  close(): Promise<void>
-}
-
-export interface OriginPrivateRetainedArtifactBackend {
-  readonly packagedArtifacts: PackagedArtifactReadPort
-  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-  close(): Promise<void>
-}
-
-export interface OriginPrivatePackageContinuationBackend {
-  readonly packages: OriginPrivatePackageStore
-  readonly finalCheckpoints: FinalCheckpointRecoveryReader
-  verifyManifestOwnership(manifest: MaterializedManifestV1): Promise<void>
-  verifyTemporaryCleanup(receipt: PackageTemporaryCleanupReceiptV1): Promise<void>
-  close(): Promise<void>
+function recordCheckpointFailure(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  error: unknown,
+): void {
+  recordOutputException(diagnostics?.failures?.checkpoint, error)
+  emitOutputTrace(diagnostics?.trace, () =>
+    outputTraceEvent('checkpoint', {
+      backend: 'origin_private',
+      transition: 'failed',
+    }))
 }
 
 /**
@@ -110,10 +93,25 @@ export async function openOriginPrivateWorkspaceMaterialization(
   const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
     binding,
     options.checkpointDatabaseName,
-  )
+  ).catch((error: unknown) => {
+    recordCheckpointFailure(options.diagnostics, error)
+    throw error
+  })
   if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
-    if (ownsStore) checkpoints.close?.()
-    throw new TypeError('origin-private checkpoint store escaped the receive operation')
+    const error = new TypeError('origin-private checkpoint store escaped the receive operation')
+    recordCheckpointFailure(options.diagnostics, error)
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Origin-private checkpoint binding failed and the store did not close',
+      )
+    }
+    throw error
   }
   try {
     const root = new OriginPrivateWorkspaceRoot({
@@ -130,11 +128,30 @@ export async function openOriginPrivateWorkspaceMaterialization(
     const session = await PersistentTreeOutputSession.open({
       tree: new OriginPrivateWorkspaceTree({ root, handles: checkpoints }),
       checkpoints,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       ...(options.onTrace === undefined ? {} : { trace: options.onTrace }),
     })
-    return new OriginPrivateMaterializationSession(session, checkpoints, ownsStore)
+    return new OriginPrivateMaterializationSession(
+      session,
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
   } catch (error) {
-    if (ownsStore) checkpoints.close?.()
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Origin-private materialization failed and the checkpoint store did not close',
+        { cause: error },
+      )
+    }
     throw error
   }
 }
@@ -148,6 +165,7 @@ export async function openOriginPrivateWorkspaceBackend(options: {
   readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
   readonly checkpointStore?: OriginPrivateDurableCheckpointStore
   readonly checkpointDatabaseName?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly onTrace?: PersistentTreeTrace
 }): Promise<OriginPrivateWorkspaceBackend> {
   const intent = await validateReceiveIntent(options.receiveIntent)
@@ -167,10 +185,25 @@ export async function openOriginPrivateWorkspaceBackend(options: {
   const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
     binding,
     options.checkpointDatabaseName,
-  )
+  ).catch((error: unknown) => {
+    recordCheckpointFailure(options.diagnostics, error)
+    throw error
+  })
   if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
-    if (ownsStore) checkpoints.close?.()
-    throw new TypeError('origin-private checkpoint store escaped the receive operation')
+    const error = new TypeError('origin-private checkpoint store escaped the receive operation')
+    recordCheckpointFailure(options.diagnostics, error)
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Origin-private checkpoint binding failed and the store did not close',
+      )
+    }
+    throw error
   }
   try {
     const root = new OriginPrivateWorkspaceRoot({
@@ -187,12 +220,16 @@ export async function openOriginPrivateWorkspaceBackend(options: {
     const treeSession = await PersistentTreeOutputSession.open({
       tree: new OriginPrivateWorkspaceTree({ root, handles: checkpoints }),
       checkpoints,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       ...(options.onTrace === undefined ? {} : { trace: options.onTrace }),
     })
     const materialization = new OriginPrivateMaterializationSession(
       treeSession,
       checkpoints,
       false,
+      options.diagnostics,
     )
     const packages = new OriginPrivatePackageStore({
       root,
@@ -206,16 +243,7 @@ export async function openOriginPrivateWorkspaceBackend(options: {
       checkpoints,
       packages,
     })
-    const finalCheckpoints: FinalCheckpointReader = Object.freeze({
-      readFinalCheckpoint: async (recordId: string, checkpointGeneration: bigint) => {
-        try {
-          return await checkpoints.finalCheckpointProof(recordId, checkpointGeneration)
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'NotFoundError') return undefined
-          throw error
-        }
-      },
-    })
+    const finalCheckpoints = createOriginPrivateFinalCheckpointReader(checkpoints)
     return new OriginPrivateWorkspaceBackendSession({
       materialization,
       packages,
@@ -223,9 +251,21 @@ export async function openOriginPrivateWorkspaceBackend(options: {
       cleanup,
       checkpoints,
       ownsStore,
+      ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
-    if (ownsStore) checkpoints.close?.()
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Origin-private output reservation failed and the checkpoint store did not close',
+        { cause: error },
+      )
+    }
     throw error
   }
 }
@@ -237,6 +277,7 @@ export async function openOriginPrivateRetainedArtifactBackend(options: {
   readonly namespace: OriginPrivateWorkspaceNamespace
   readonly checkpointStore?: OriginPrivateDurableCheckpointStore
   readonly checkpointDatabaseName?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
 }): Promise<OriginPrivateRetainedArtifactBackend> {
   const intent = await validateReceiveIntent(options.receiveIntent)
   if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree' ||
@@ -255,10 +296,25 @@ export async function openOriginPrivateRetainedArtifactBackend(options: {
   const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
     binding,
     options.checkpointDatabaseName,
-  )
+  ).catch((error: unknown) => {
+    recordCheckpointFailure(options.diagnostics, error)
+    throw error
+  })
   if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
-    if (ownsStore) checkpoints.close?.()
-    throw new TypeError('retained package checkpoint store escaped the receive operation')
+    const error = new TypeError('retained package checkpoint store escaped the receive operation')
+    recordCheckpointFailure(options.diagnostics, error)
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Retained checkpoint binding failed and the store did not close',
+      )
+    }
+    throw error
   }
   try {
     const root = new OriginPrivateWorkspaceRoot({
@@ -288,9 +344,21 @@ export async function openOriginPrivateRetainedArtifactBackend(options: {
       cleanup,
       checkpoints,
       ownsStore,
+      ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
-    if (ownsStore) checkpoints.close?.()
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Retained artifact reopen failed and the checkpoint store did not close',
+        { cause: error },
+      )
+    }
     throw error
   }
 }
@@ -304,6 +372,7 @@ export async function openOriginPrivatePackageContinuationBackend(options: {
   readonly budgetClaim: OriginPrivateWorkspaceBudgetClaim
   readonly checkpointStore?: OriginPrivateDurableCheckpointStore
   readonly checkpointDatabaseName?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
 }): Promise<OriginPrivatePackageContinuationBackend> {
   const intent = await validateReceiveIntent(options.receiveIntent)
   if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind === 'directory-tree' ||
@@ -322,10 +391,25 @@ export async function openOriginPrivatePackageContinuationBackend(options: {
   const checkpoints = options.checkpointStore ?? await IndexedDbFileCheckpointRepository.open(
     binding,
     options.checkpointDatabaseName,
-  )
+  ).catch((error: unknown) => {
+    recordCheckpointFailure(options.diagnostics, error)
+    throw error
+  })
   if (!sameDurableCheckpointNamespace(checkpoints.binding, binding)) {
-    if (ownsStore) checkpoints.close?.()
-    throw new TypeError('package continuation checkpoint store escaped the receive operation')
+    const error = new TypeError('package continuation checkpoint store escaped the receive operation')
+    recordCheckpointFailure(options.diagnostics, error)
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Package continuation checkpoint binding failed and the store did not close',
+      )
+    }
+    throw error
   }
   try {
     const root = new OriginPrivateWorkspaceRoot({
@@ -352,215 +436,23 @@ export async function openOriginPrivatePackageContinuationBackend(options: {
       packages,
       checkpoints,
       ownsStore,
+      ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
-    if (ownsStore) checkpoints.close?.()
+    const cleanupFailure = closeOwnedCheckpointAfterFailure(
+      checkpoints,
+      ownsStore,
+      options.diagnostics,
+    )
+    if (cleanupFailure !== undefined) {
+      throw new AggregateError(
+        [error, cleanupFailure],
+        'Package continuation reopen failed and the checkpoint store did not close',
+        { cause: error },
+      )
+    }
     throw error
   }
-}
-
-class OriginPrivateMaterializationSession implements PersistentMaterializationPort {
-  readonly #session: PersistentTreeOutputSession
-  readonly #checkpoints: OriginPrivateCheckpointStore
-  readonly #ownsStore: boolean
-  #closed = false
-
-  constructor(
-    session: PersistentTreeOutputSession,
-    checkpoints: OriginPrivateCheckpointStore,
-    ownsStore: boolean,
-  ) {
-    this.#session = session
-    this.#checkpoints = checkpoints
-    this.#ownsStore = ownsStore
-  }
-
-  beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
-    return this.#session.beginFile(request)
-  }
-
-  ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
-    return this.#session.ensureDirectory(path)
-  }
-
-  async close(): Promise<void> {
-    if (this.#closed) return
-    this.#closed = true
-    try {
-      await this.#session.close()
-    } finally {
-      if (this.#ownsStore) this.#checkpoints.close?.()
-    }
-  }
-}
-
-class OriginPrivateWorkspaceBackendSession implements OriginPrivateWorkspaceBackend {
-  readonly materialization: PersistentMaterializationPort
-  readonly packages: OriginPrivatePackageStore
-  readonly packagedArtifacts: PackagedArtifactReadPort
-  readonly finalCheckpoints: FinalCheckpointReader
-  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-  readonly #checkpoints: OriginPrivateDurableCheckpointStore
-  readonly #ownsStore: boolean
-  #closed = false
-
-  constructor(input: {
-    readonly materialization: PersistentMaterializationPort
-    readonly packages: OriginPrivatePackageStore
-    readonly finalCheckpoints: FinalCheckpointReader
-    readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-    readonly checkpoints: OriginPrivateDurableCheckpointStore
-    readonly ownsStore: boolean
-  }) {
-    this.materialization = input.materialization
-    this.packages = input.packages
-    this.packagedArtifacts = input.packages
-    this.finalCheckpoints = input.finalCheckpoints
-    this.cleanup = input.cleanup
-    this.#checkpoints = input.checkpoints
-    this.#ownsStore = input.ownsStore
-  }
-
-  async close(): Promise<void> {
-    if (this.#closed) return
-    this.#closed = true
-    try {
-      await this.materialization.close()
-    } finally {
-      if (this.#ownsStore) this.#checkpoints.close?.()
-    }
-  }
-}
-
-class OriginPrivateRetainedArtifactBackendSession implements OriginPrivateRetainedArtifactBackend {
-  readonly packagedArtifacts: PackagedArtifactReadPort
-  readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-  readonly close: () => Promise<void>
-
-  constructor(input: {
-    readonly packages: OriginPrivatePackageStore
-    readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
-    readonly checkpoints: OriginPrivateDurableCheckpointStore
-    readonly ownsStore: boolean
-  }) {
-    this.packagedArtifacts = input.packages
-    this.cleanup = input.cleanup
-    this.close = checkpointStoreCloser(input.checkpoints, input.ownsStore)
-  }
-}
-
-class OriginPrivatePackageContinuationBackendSession
-implements OriginPrivatePackageContinuationBackend {
-  readonly packages: OriginPrivatePackageStore
-  readonly finalCheckpoints: FinalCheckpointRecoveryReader
-  readonly #operationId: string
-  readonly #tree: OriginPrivateWorkspaceTree
-  readonly close: () => Promise<void>
-
-  constructor(input: {
-    readonly operationId: string
-    readonly tree: OriginPrivateWorkspaceTree
-    readonly packages: OriginPrivatePackageStore
-    readonly checkpoints: OriginPrivateDurableCheckpointStore
-    readonly ownsStore: boolean
-  }) {
-    this.#operationId = input.operationId
-    this.#tree = input.tree
-    this.packages = input.packages
-    this.close = checkpointStoreCloser(input.checkpoints, input.ownsStore)
-    this.finalCheckpoints = Object.freeze({
-      readFinalCheckpoint: async (recordId: string, checkpointGeneration: bigint) => {
-        try {
-          return await input.checkpoints.finalCheckpointProof(recordId, checkpointGeneration)
-        } catch (error) {
-          if (error instanceof DOMException && error.name === 'NotFoundError') return undefined
-          throw error
-        }
-      },
-      recoverFinalCheckpoint: (evidence: FinalCheckpointRecoveryEvidence) =>
-        recoverFinalCheckpoint(input.checkpoints, evidence),
-    })
-  }
-
-  async verifyManifestOwnership(manifest: MaterializedManifestV1): Promise<void> {
-    if (manifest.operationId !== this.#operationId) {
-      throw new TypeError('materialized manifest escaped the package continuation')
-    }
-    for (const entry of manifest.entries) {
-      if (entry.kind === 'directory') {
-        if (!await this.#tree.validateDirectory(entry.artifactPath, entry.ownedObjectId)) {
-          throw new TargetOwnershipUnknownError('commit', this.#operationId)
-        }
-        continue
-      }
-      const file = await this.packages.readOwnedFile(entry.ownedObjectId)
-      if (BigInt(file.size) !== entry.exactSize) {
-        throw new TargetOwnershipUnknownError('commit', this.#operationId)
-      }
-    }
-  }
-
-  async verifyTemporaryCleanup(receipt: PackageTemporaryCleanupReceiptV1): Promise<void> {
-    if (receipt.operationId !== this.#operationId) {
-      throw new TypeError('temporary package cleanup escaped the package continuation')
-    }
-    const current = await this.packages.cleanupPackage(receipt.packageOwnedObjectId)
-    if (current.operationId !== receipt.operationId ||
-        current.packageOwnedObjectId !== receipt.packageOwnedObjectId ||
-        current.packageHandleId !== receipt.packageHandleId || current.result !== 'already-absent') {
-      throw new TargetOwnershipUnknownError('cleanup', this.#operationId)
-    }
-  }
-
-}
-
-function checkpointStoreCloser(
-  checkpoints: OriginPrivateDurableCheckpointStore,
-  ownsStore: boolean,
-): () => Promise<void> {
-  let closed = false
-  return async () => {
-    if (closed) return
-    closed = true
-    if (ownsStore) checkpoints.close?.()
-  }
-}
-
-async function recoverFinalCheckpoint(
-  checkpoints: OriginPrivateDurableCheckpointStore,
-  evidence: FinalCheckpointRecoveryEvidence,
-): Promise<FinalFileCheckpointProof | undefined> {
-  const matches: FinalFileCheckpointProof[] = []
-  let cursor: string | undefined
-  do {
-    const page = await checkpoints.scanCommitted({
-      direction: 'ascending',
-      fileId: evidence.fileId,
-      ...(cursor === undefined ? {} : { cursor }),
-    })
-    for (const record of page.records) {
-      let proof: FinalFileCheckpointProof
-      try {
-        proof = finalFileCheckpointProof(record)
-      } catch {
-        continue
-      }
-      if (proof.fileRevision === evidence.fileRevision &&
-          proof.exactSize === evidence.exactSize && proof.ownedObjectId === evidence.ownedObjectId &&
-          proof.recordDigest === evidence.recordDigest &&
-          proof.checkpointGeneration === evidence.checkpointGeneration &&
-          samePath(proof.canonicalPath, evidence.artifactPath)) {
-        matches.push(proof)
-      }
-    }
-    cursor = page.nextCursor
-  } while (cursor !== undefined)
-  if (matches.length > 1) throw new TypeError('final checkpoint authority is ambiguous')
-  return matches[0]
-}
-
-function samePath(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((segment, index) => segment === right[index])
 }
 
 export type {

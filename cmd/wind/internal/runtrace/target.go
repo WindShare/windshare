@@ -54,9 +54,9 @@ func (target Target) valid() bool {
 		(target.kind == targetExactFile || target.kind == targetRunDirectory)
 }
 
-func directoryTracePath(directory string, command clievent.Command, started time.Time, runID string) string {
+func directoryTracePath(directory string, command clievent.Command, started time.Time, runID runIdentity) string {
 	commandName, _ := command.Name()
-	filenameToken := runID[:directoryFilenameTokenHexLength]
-	filename := commandName + "-" + started.UTC().Format(directoryTimestampLayout) + "-" + filenameToken + traceFilenameExtension
+	filename := commandName + "-" + started.UTC().Format(directoryTimestampLayout) + "-" +
+		runID.filenameToken() + traceFilenameExtension
 	return filepath.Join(directory, filename)
 }
