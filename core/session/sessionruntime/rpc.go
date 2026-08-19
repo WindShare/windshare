@@ -149,7 +149,18 @@ func (client *rpcClient) HandleMessage(ctx context.Context, message protocolsess
 	} else if !expected.Same(generation) {
 		return nil
 	}
-	err := call.enqueue(operationResponse{message: message, generation: generation})
+	response := operationResponse{message: message, generation: generation}
+	var err error
+	if call.traceEnabled && message.Kind() == protocolsession.MessageOperationError {
+		lane, hasLane := inboundLane(ctx)
+		err = call.enqueueAuthenticatedFailure(response, authenticatedFailureSource{
+			protocolSessionID: client.runtime.sessionID,
+			lane:              lane,
+			hasLane:           hasLane,
+		})
+	} else {
+		err = call.enqueue(response)
+	}
 	if err != nil {
 		call.recordProtocolTraceFailure(err)
 	}
@@ -297,8 +308,7 @@ func (client *rpcClient) newCall(
 
 func (runtime *runtimeCore) failRPCOperationAuthority() error {
 	_ = runtime.router.TerminateLocal()
-	runtime.recordError(errRPCOperationAuthority)
-	runtime.cancel()
+	runtime.terminateRuntimeFailed(errRPCOperationAuthority)
 	return errRPCOperationAuthority
 }
 
@@ -313,8 +323,7 @@ func (runtime *runtimeCore) reconcileLocalCancel(
 	// make a later ID collision ambiguous. Fail-closing atomically clears the
 	// table instead of continuing a session whose at-most-once state is unknown.
 	_ = runtime.router.TerminateLocal()
-	runtime.recordError(err)
-	runtime.cancel()
+	runtime.terminateRuntimeFailed(err)
 	return err
 }
 

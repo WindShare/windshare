@@ -1,95 +1,154 @@
-import type { V2PeerAttemptFailure } from './v2-peer-failure'
+import type { FailureCorrelation } from '../diagnostics/incident/fact'
+import type { V2ProtocolOperationIdentity } from '../session/v2-identities'
 import {
   V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
-  V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
   v2TypedErrorForPeerOperationCode,
-  type V2AttemptOrdinalCorrelation,
-  type V2BrowserConnectivityAttemptDiagnostic,
-  type V2StableBrowserConnectivityAttemptStage,
-  type V2ConnectivityObserver,
+  type V2CandidateCounts,
+  type V2ConnectivityTraceSource,
   type V2LaneIdentity,
+  type V2PeerAttemptCorrelation,
+  type V2PeerAttemptTraceEvent,
 } from './diagnostics'
+import {
+  classifyV2PeerAttemptFailure,
+  type V2PeerAttemptFailure,
+} from './v2-peer-failure'
 
 const BROWSER_LINEAR_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES.filter(
-  (stage): stage is Exclude<
-    V2StableBrowserConnectivityAttemptStage,
-    'negotiation-deadline-expired' | 'admission-deadline-expired' | 'failed'
-  > => stage !== 'negotiation-deadline-expired' &&
-    stage !== 'admission-deadline-expired' && stage !== 'failed',
+  (stage) => stage !== 'negotiation-deadline-expired' &&
+    stage !== 'admission-deadline-expired' &&
+    stage !== 'failed',
 )
 
-type AttemptEnvelopeKey =
-  | 'schemaVersion' | 'stream' | 'sessionId' | 'peerPathId' | 'attemptId' | 'side'
-  | 'sideSequence' | 'attemptElapsedMs' | keyof V2AttemptOrdinalCorrelation
+type LinearAttemptStage = (typeof BROWSER_LINEAR_STAGES)[number]
+type V2PeerAttemptTracePayload<Event = V2PeerAttemptTraceEvent> =
+  Event extends V2PeerAttemptTraceEvent
+    ? Omit<
+        Event,
+        'eventName' | 'correlation' | 'waveOrdinal' |
+        'waveAttemptOrdinal' | 'sessionAttemptOrdinal'
+      >
+    : never
 
-type BrowserAttemptPayload = V2BrowserConnectivityAttemptDiagnostic extends infer Event
-  ? Event extends V2BrowserConnectivityAttemptDiagnostic ? Omit<Event, AttemptEnvelopeKey> : never
-  : never
-
-interface BrowserAttemptCorrelation extends V2AttemptOrdinalCorrelation {
-  readonly sessionId: string
-  readonly peerPathId: string
-  readonly attemptId: string
-}
-
-/** Owns the one linear, privacy-safe event stream for a browser attempt. */
+/** Owns one linear peer-attempt trace stream without owning peer policy. */
 export class BrowserAttemptLifecycle {
-  readonly #observers: readonly V2ConnectivityObserver[]
-  readonly #now: () => number
-  readonly #correlation: BrowserAttemptCorrelation
-  readonly #startedAt: number
+  readonly #trace: V2ConnectivityTraceSource | undefined
+  readonly #correlation: () => V2PeerAttemptCorrelation
   #nextStageIndex = 1
-  #sideSequence = 0
-  #lastElapsedMs = 0
   #terminal = false
-  #offerOperationId: string | undefined
-  #grantOperationId: string | undefined
+  #offerOperationId: V2ProtocolOperationIdentity | undefined
+  #grantOperationId: V2ProtocolOperationIdentity | undefined
   #lane: V2LaneIdentity | undefined
 
   constructor(
-    correlation: BrowserAttemptCorrelation,
-    observers: readonly (V2ConnectivityObserver | undefined)[],
-    now: () => number,
+    correlation: () => V2PeerAttemptCorrelation,
+    trace?: V2ConnectivityTraceSource,
   ) {
-    this.#observers = observers.filter(
-      (observer): observer is V2ConnectivityObserver => observer !== undefined,
-    )
-    this.#now = now
-    this.#correlation = Object.freeze({ ...correlation })
-    this.#startedAt = this.#readNow()
-    this.#emit({ stage: 'started' })
+    this.#trace = trace
+    this.#correlation = correlation
+    this.#emit(() => this.#event({ stage: 'started' }))
   }
 
-  setOfferOperationId(operationId: string): void {
-    if (!this.#terminal && operationId !== '') this.#offerOperationId ??= operationId
+  setOfferOperationId(operationId: V2ProtocolOperationIdentity): void {
+    if (!this.#terminal) this.#offerOperationId ??= operationId
   }
 
-  advance(payload: BrowserAttemptPayload): void {
-    if (this.#terminal || !this.#expect(payload.stage)) return
-    this.#remember(payload)
-    this.#nextStageIndex += 1
-    this.#emit(this.#withRememberedCorrelation(payload))
-    if (payload.stage === 'admitted') this.#terminal = true
-  }
-
-  deadlineExpired(
-    phase: 'negotiation' | 'admission',
-    deadlineBudgetMs: number,
+  offerMilestone(
+    stage: 'offer-created' | 'offer-sent' | 'answer-received' | 'datachannel-open',
+    candidateCounts: V2CandidateCounts | (() => V2CandidateCounts),
   ): void {
-    if (this.#terminal) return
-    const stage = phase === 'negotiation'
-      ? 'negotiation-deadline-expired'
-      : 'admission-deadline-expired'
-    if (stage === 'negotiation-deadline-expired') {
-      this.#emit({ stage, phase: 'negotiation', deadlineBudgetMs })
+    this.#advance(stage, () => {
+      const counts = typeof candidateCounts === 'function' ? candidateCounts() : candidateCounts
+      return this.#event({
+        stage,
+        candidateCounts: Object.freeze({ ...counts }),
+      }, this.#offerOperationId)
+    })
+  }
+
+  phaseDeadlineArmed(
+    phase: 'negotiation' | 'admission',
+    deadlineBudgetMilliseconds: number,
+  ): void {
+    if (phase === 'negotiation') {
+      this.#advance('negotiation-deadline-armed', () => this.#event({
+        stage: 'negotiation-deadline-armed',
+        phase: 'negotiation',
+        deadlineBudgetMilliseconds,
+      }, this.#offerOperationId))
       return
     }
-    this.#emit(this.#withRememberedCorrelation({
+    this.#advance('admission-deadline-armed', () => this.#event({
+      stage: 'admission-deadline-armed',
+      phase: 'admission',
+      deadlineBudgetMilliseconds,
+    }, this.#offerOperationId))
+  }
+
+  phaseDeadlineExpired(
+    phase: 'negotiation' | 'admission',
+    deadlineBudgetMilliseconds: number,
+  ): void {
+    if (this.#terminal) return
+    if (phase === 'negotiation') {
+      this.#emit(() => this.#event({
+        stage: 'negotiation-deadline-expired',
+        phase: 'negotiation',
+        deadlineBudgetMilliseconds,
+      }, this.#offerOperationId))
+      return
+    }
+    this.#emit(() => this.#event({
+      stage: 'admission-deadline-expired',
+      phase: 'admission',
+      deadlineBudgetMilliseconds,
+    }, this.#offerOperationId))
+  }
+
+  grantRequested(
+    grantOperationId: V2ProtocolOperationIdentity,
+    requestedLaneId: number,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#advance('grant-requested', () => this.#event({
+      stage: 'grant-requested',
+      phase: 'admission',
+      requestedLaneId,
+    }, grantOperationId))
+  }
+
+  grantMilestone(
+    stage: 'grant-received' | 'lane-hello-sent' | 'admission-response-received' |
+      'lane-attached' | 'admitted',
+    grantOperationId: V2ProtocolOperationIdentity,
+    lane: V2LaneIdentity,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#lane = lane
+    this.#advance(stage, () => this.#event({
       stage,
       phase: 'admission',
-      deadlineBudgetMs,
-      offerOperationId: this.#offerOperationId ?? '',
-    }))
+    }, grantOperationId, lane))
+  }
+
+  admissionResponseSettled(
+    grantOperationId: V2ProtocolOperationIdentity,
+    lane: V2LaneIdentity,
+    settlement:
+      | Readonly<{ disposition: 'accepted' }>
+      | Readonly<{
+          disposition: 'rejected'
+          rejectionCode: number
+          retryAfterMilliseconds: number
+        }>,
+  ): void {
+    this.#grantOperationId = grantOperationId
+    this.#lane = lane
+    this.#advance('admission-response-settled', () => this.#event({
+      stage: 'admission-response-settled',
+      phase: 'admission',
+      settlement: Object.freeze({ ...settlement }),
+    }, grantOperationId, lane))
   }
 
   failed(failure: V2PeerAttemptFailure): void {
@@ -97,84 +156,63 @@ export class BrowserAttemptLifecycle {
     const failedAtStage = BROWSER_LINEAR_STAGES[this.#nextStageIndex]
     if (failedAtStage === undefined || failedAtStage === 'started') return
     this.#terminal = true
-    this.#emit({
-      stage: 'failed',
-      failedAtStage,
-      failure: snapshotFailure(failure),
-      failureScope: failure.kind === 'session-terminal' ? 'session' : 'attempt',
-      typedErrorCode: diagnosticTypedErrorCode(failure),
-      ...(this.#offerOperationId === undefined
-        ? {}
-        : { offerOperationId: this.#offerOperationId }),
-      ...(this.#grantOperationId === undefined
-        ? {}
-        : { grantOperationId: this.#grantOperationId }),
-      ...(this.#lane === undefined ? {} : { lane: this.#lane }),
+    this.#emit(() => {
+      const decision = classifyV2PeerAttemptFailure(failure)
+      return this.#event({
+        stage: 'failed',
+        failedAtStage,
+        failure: snapshotFailure(failure),
+        failureScope: failure.kind === 'session-terminal' ? 'session' : 'attempt',
+        typedErrorCode: diagnosticTypedErrorCode(failure),
+        retryable: decision.type === 'retry-attempt',
+      }, this.#grantOperationId ?? this.#offerOperationId, this.#lane)
     })
   }
 
-  #expect(stage: BrowserAttemptPayload['stage']): boolean {
-    const expected = BROWSER_LINEAR_STAGES[this.#nextStageIndex]
-    return expected === stage
+  #advance(
+    stage: LinearAttemptStage,
+    createEvent: () => V2PeerAttemptTraceEvent,
+  ): void {
+    if (this.#terminal || BROWSER_LINEAR_STAGES[this.#nextStageIndex] !== stage) return
+    this.#nextStageIndex += 1
+    this.#emit(createEvent)
+    if (stage === 'admitted') this.#terminal = true
   }
 
-  #remember(payload: BrowserAttemptPayload): void {
-    if ('offerOperationId' in payload && payload.offerOperationId !== undefined) {
-      this.#offerOperationId ??= payload.offerOperationId
-    }
-    if ('grantOperationId' in payload) this.#grantOperationId = payload.grantOperationId
-    if ('lane' in payload) this.#lane = snapshotLane(payload.lane)
-  }
-
-  #withRememberedCorrelation(payload: BrowserAttemptPayload): BrowserAttemptPayload {
-    const withOffer = this.#offerOperationId === undefined || 'offerOperationId' in payload
-      ? payload
-      : { ...payload, offerOperationId: this.#offerOperationId }
-    return Object.freeze(withOffer) as BrowserAttemptPayload
-  }
-
-  #emit(payload: BrowserAttemptPayload): void {
-    if (this.#observers.length === 0) return
-    this.#sideSequence += 1
-    const event = Object.freeze({
-      schemaVersion: V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
-      stream: 'attempt' as const,
-      ...this.#correlation,
-      side: 'browser' as const,
-      sideSequence: this.#sideSequence,
-      attemptElapsedMs: this.#elapsedMilliseconds(),
+  #event(
+    payload: V2PeerAttemptTracePayload,
+    operationId?: V2ProtocolOperationIdentity,
+    lane?: V2LaneIdentity,
+  ): V2PeerAttemptTraceEvent {
+    const attemptCorrelation = this.#correlation()
+    const correlation: FailureCorrelation = Object.freeze({
+      protocolSessionId: attemptCorrelation.protocolSessionId,
+      ...(operationId === undefined ? {} : { protocolOperationId: operationId }),
+      peerPathId: attemptCorrelation.peerPathId,
+      peerAttemptId: attemptCorrelation.attemptId,
+      ...(lane === undefined
+        ? {}
+        : { lane: Object.freeze({ id: lane.laneId, epoch: lane.laneEpoch }) }),
+    })
+    return Object.freeze({
+      eventName: 'peer_attempt',
+      correlation,
+      waveOrdinal: attemptCorrelation.waveOrdinal,
+      waveAttemptOrdinal: attemptCorrelation.waveAttemptOrdinal,
+      sessionAttemptOrdinal: attemptCorrelation.sessionAttemptOrdinal,
       ...payload,
-    }) as V2BrowserConnectivityAttemptDiagnostic
-    for (const observer of this.#observers) {
-      try {
-        observer(event)
-      } catch {
-        // Observer loss cannot alter phase, authenticated settlement, or cleanup.
-      }
-    }
+    }) as V2PeerAttemptTraceEvent
   }
 
-  #elapsedMilliseconds(): number {
-    const elapsed = Math.max(0, Math.floor(this.#readNow() - this.#startedAt))
-    this.#lastElapsedMs = Math.max(this.#lastElapsedMs, elapsed)
-    return this.#lastElapsedMs
-  }
-
-  #readNow(): number {
+  #emit(createEvent: () => V2PeerAttemptTraceEvent): void {
     try {
-      const value = this.#now()
-      if (Number.isFinite(value)) {
-        return Math.min(Number.MAX_SAFE_INTEGER, Math.max(0, value))
-      }
+      const observer = this.#trace?.current
+      if (observer === undefined) return
+      observer(createEvent())
     } catch {
-      // A diagnostic clock is isolated for the same reason as its observer.
+      // Trace loss cannot alter phase, authenticated settlement, or cleanup.
     }
-    return 0
   }
-}
-
-function snapshotLane(lane: V2LaneIdentity): V2LaneIdentity {
-  return Object.freeze({ laneId: lane.laneId, laneEpoch: lane.laneEpoch })
 }
 
 function snapshotFailure(failure: V2PeerAttemptFailure): V2PeerAttemptFailure {

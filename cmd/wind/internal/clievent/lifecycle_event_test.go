@@ -1,6 +1,9 @@
 package clievent
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 	session, err := NewProtocolSessionID(bytes16(1))
@@ -60,5 +63,57 @@ func TestPeerAttemptLaneRequirementMatchesAdmissionLifecycle(t *testing.T) {
 				t.Fatalf("NewPeerAttemptObserved() error = %v, valid = %t", err, test.valid)
 			}
 		})
+	}
+}
+
+func TestSenderTerminalEventsSeparateRootFromSendConsequence(t *testing.T) {
+	session, _ := NewProtocolSessionID(bytes16(21))
+	lane, _ := NewLaneIdentity(4, 0)
+	send, err := NewSenderTerminalSendObserved(
+		session,
+		lane,
+		true,
+		SenderTerminalSendAccepted,
+		SenderTerminalSendDelivered,
+		SenderTerminalSendDecisionDelivered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if send.Command() != CommandShare || send.Level() != LevelDebug ||
+		send.ProtocolSessionID() != session || send.Lane() != lane || !send.Settled() ||
+		send.TransportDisposition() != SenderTerminalSendAccepted ||
+		send.Outcome() != SenderTerminalSendDelivered ||
+		send.Decision() != SenderTerminalSendDecisionDelivered {
+		t.Fatalf("terminal send = %#v", send)
+	}
+
+	pairs := []struct {
+		trigger    SenderSessionTerminalTrigger
+		provenance SenderSessionTerminalProvenance
+	}{
+		{SenderSessionTerminalGracefulStop, SenderSessionTerminalNormalStop},
+		{SenderSessionTerminalForcedClose, SenderSessionTerminalCallerStop},
+		{SenderSessionTerminalPeerTerminal, SenderSessionTerminalRemoteClose},
+		{SenderSessionTerminalPathsExhausted, SenderSessionTerminalLaneRetirement},
+		{SenderSessionTerminalRuntimeFailed, SenderSessionTerminalLocalFault},
+	}
+	for _, pair := range pairs {
+		root, err := NewSenderSessionTerminated(session, pair.trigger, pair.provenance)
+		if err != nil {
+			t.Fatalf("valid root %v/%v: %v", pair.trigger, pair.provenance, err)
+		}
+		if root.Command() != CommandShare || root.Level() != LevelDebug ||
+			root.ProtocolSessionID() != session || root.Trigger() != pair.trigger ||
+			root.Provenance() != pair.provenance {
+			t.Fatalf("terminal root = %#v", root)
+		}
+	}
+	if _, err := NewSenderSessionTerminated(
+		session,
+		SenderSessionTerminalGracefulStop,
+		SenderSessionTerminalLocalFault,
+	); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("invalid terminal pair error = %v", err)
 	}
 }

@@ -468,9 +468,12 @@ func TestSenderFactoryStopWaitsForContextIgnoringTerminalTransport(t *testing.T)
 
 func TestSenderFactoryStopTreatsTransportRetirementBeforePhysicalAdmissionAsNatural(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	observed := make(chan SenderTerminalObservation, 1)
-	fixture.senderFactory.terminalObserver = SenderTerminalObserverFunc(
-		func(observation SenderTerminalObservation) { observed <- observation },
+	observed := make(chan SenderTerminalSendObserved, 1)
+	fixture.senderFactory.terminalObserver = newSenderTerminalObservers(
+		SenderTerminalSendObserverFunc(
+			func(observation SenderTerminalSendObserved) { observed <- observation },
+		),
+		nil,
 	)
 	baseSenderChannel, receiverChannel := newMemoryChannelPair()
 	senderChannel := newReceiveRetirementGateChannel(baseSenderChannel)
@@ -539,9 +542,9 @@ func TestSenderFactoryStopTreatsTransportRetirementBeforePhysicalAdmissionAsNatu
 	select {
 	case observation := <-observed:
 		if observation.ProtocolSessionID != sender.sessionID || observation.Lane != sender.initial ||
-			observation.TransportDisposition != SenderTerminalTransportRetired ||
-			observation.Outcome != SenderTerminalOutcomeDropped ||
-			observation.Decision != SenderTerminalDecisionNaturalRetirement {
+			observation.TransportDisposition != SenderTerminalSendTransportRetired ||
+			observation.Outcome != SenderTerminalSendOutcomeDropped ||
+			observation.Decision != SenderTerminalSendDecisionNaturalRetirement {
 			t.Fatalf("retirement observation=%+v", observation)
 		}
 	default:
@@ -628,9 +631,12 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 
 func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	observed := make(chan SenderTerminalObservation, 1)
-	fixture.senderFactory.terminalObserver = SenderTerminalObserverFunc(
-		func(observation SenderTerminalObservation) { observed <- observation },
+	observed := make(chan SenderTerminalSendObserved, 1)
+	fixture.senderFactory.terminalObserver = newSenderTerminalObservers(
+		SenderTerminalSendObserverFunc(
+			func(observation SenderTerminalSendObserved) { observed <- observation },
+		),
+		nil,
 	)
 	baseSenderChannel, receiverChannel := newMemoryChannelPair()
 	transportErr := errors.New("accepted terminal transport failed")
@@ -682,9 +688,9 @@ func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T
 	}
 	select {
 	case observation := <-observed:
-		if observation.TransportDisposition != SenderTerminalTransportAccepted ||
-			observation.Outcome != SenderTerminalOutcomeUnknown ||
-			observation.Decision != SenderTerminalDecisionFailed {
+		if observation.TransportDisposition != SenderTerminalSendTransportAccepted ||
+			observation.Outcome != SenderTerminalSendOutcomeUnknown ||
+			observation.Decision != SenderTerminalSendDecisionFailed {
 			t.Fatalf("accepted failure observation=%+v", observation)
 		}
 	default:

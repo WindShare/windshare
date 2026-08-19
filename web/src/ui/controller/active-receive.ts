@@ -1,31 +1,43 @@
-import type {
-  V2ConnectivityActivation,
-} from '../../connectivity/v2-receiver-policy'
-import { lifecycleDeadline } from '../../output/workspace'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
+import type { V2ConnectivityActivation } from '../../connectivity/v2-receiver-policy'
+import type {
+  LateOutputFailureConsequenceCapability,
+  OutputFailureBindingLease,
+} from '../../output/diagnostics'
 import { TransferPauseRequestedError } from '../../transfer/output-session'
 import type { ProjectionEpoch } from '../../transfer/projection'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
+  materializeClassifiedTransferFailure,
+  type ClassifiedTransferFailure,
+} from '../../transfer/job/failures'
+import type { V2TransferAdmissionFailureAuthority } from '../../transfer/job/admission-error'
+import {
   V2TransferAdmissionFailureError,
   type TransferJobResult,
   type TransferProgress,
-  type TransferTraceEvent,
 } from '../../transfer/v2-job'
-import type {
-  LifecycleUserAction,
-  V2ActiveReceiveControl,
-} from '../v2-lifecycle-presentation'
+import type { LifecycleUserAction } from '../v2-lifecycle-presentation'
 import { isAbortError } from '../v2-controller-state'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type { V2OutputPresentationController } from '../v2-output'
 import type {
   V2BoundReceiveOperation,
-  V2LifecycleMutation,
   V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
-
-const MAXIMUM_TIMER_DELAY_MILLISECONDS = 2_147_483_647
+import {
+  StaleReceiveBoundaryError,
+  type V2ReceiverControllerOptions,
+} from './contracts'
+import {
+  ActiveReceiveObservability,
+  type V2ReceivePresentationAttempt,
+} from './active-receive-observability'
+import {
+  ActiveReceiveLifecycle,
+  type ActiveReceiveLifecycleOperation,
+} from './active-receive-lifecycle'
+import type { V2PresentationAttempt } from './presentation-attempt'
 
 export interface ActiveReceiveJoinedShare {
   beginDownloadConnectivity(): V2ConnectivityActivation
@@ -34,7 +46,7 @@ export interface ActiveReceiveJoinedShare {
   ): Pick<ReturnType<V2JoinedBrowserShare['transferJob']>, 'run'>
 }
 
-interface ActiveReceiveOperation {
+interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly boundary: number
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
@@ -43,21 +55,20 @@ interface ActiveReceiveOperation {
   transfer?: AbortController
   connectivity?: V2ConnectivityActivation
   running?: Promise<void>
+  receiveAttempt?: V2ReceivePresentationAttempt
+  latestReceiveAttempt?: V2ReceivePresentationAttempt
+  receiveOutputLease?: OutputFailureBindingLease
   expiryTimer?: ReturnType<typeof setTimeout>
+  detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
-}
-
-interface PendingLifecycleAction {
-  readonly operation: ActiveReceiveOperation
-  readonly generation: bigint
-  readonly action: LifecycleUserAction
 }
 
 export interface ActiveReceiveCoordinatorOptions {
   readonly outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
   readonly ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly onProgress: (progress: TransferProgress) => void
-  readonly onTrace: (event: TransferTraceEvent) => void
+  readonly trace?: V2ReceiverControllerOptions['trace']
+  readonly incidents?: V2ReceiverControllerOptions['incidents']
   readonly onActionError: (error: unknown) => void
   readonly onFailure: (error: unknown) => void
 }
@@ -72,20 +83,35 @@ export class ActiveReceiveCoordinator {
   readonly #outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
   readonly #ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly #onProgress: (progress: TransferProgress) => void
-  readonly #onTrace: (event: TransferTraceEvent) => void
-  readonly #onActionError: (error: unknown) => void
+  readonly #traceSource: V2ReceiverControllerOptions['trace']
+  readonly #observability: ActiveReceiveObservability
+  readonly #lifecycle: ActiveReceiveLifecycle
   readonly #onFailure: (error: unknown) => void
   #boundary = 0
   #operation: ActiveReceiveOperation | undefined
-  #pendingLifecycleAction: PendingLifecycleAction | undefined
 
   constructor(options: ActiveReceiveCoordinatorOptions) {
     this.#outputs = options.outputs
     this.#ownsJoinedShare = options.ownsJoinedShare
     this.#onProgress = options.onProgress
-    this.#onTrace = options.onTrace
-    this.#onActionError = options.onActionError
+    this.#traceSource = options.trace
+    this.#observability = new ActiveReceiveObservability({
+      ...(options.trace === undefined ? {} : { trace: options.trace }),
+      ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
+    })
     this.#onFailure = options.onFailure
+    this.#lifecycle = new ActiveReceiveLifecycle({
+      outputs: this.#outputs,
+      observability: this.#observability,
+      currentOperation: () => this.#operation,
+      operationIsCurrent: operation =>
+        this.#operationIsCurrent(operation as ActiveReceiveOperation),
+      startTransfer: operation => this.#startTransfer(operation as ActiveReceiveOperation),
+      replaceDetachConsequence: (operation, attempt) =>
+        this.#replaceDetachConsequence(operation as ActiveReceiveOperation, attempt),
+      onActionError: options.onActionError,
+      onFailure: error => this.#reportTransferFailure(error),
+    })
   }
 
   get active(): boolean {
@@ -103,80 +129,59 @@ export class ActiveReceiveCoordinator {
         output.receiveIntent.digest !== input.runtime.intent.digest) {
       throw new TypeError('active receive runtime does not belong to the presented receive intent')
     }
+    const replaced = this.#operation
+    if (replaced !== undefined) {
+      this.#observability.receiveExclusion(replaced.receiveAttempt, 'stale_replacement')
+    }
     const operation: ActiveReceiveOperation = {
       boundary: ++this.#boundary,
       ...input,
       presentationProjectionEpoch: output.projection?.projection.epoch ?? null,
     }
-    this.#pendingLifecycleAction = undefined
+    this.#lifecycle.cancel('stale_replacement')
     this.#operation = operation
     this.#startTransfer(operation)
   }
 
   performLifecycleAction(action: LifecycleUserAction): void {
-    const active = this.#operation
-    const output = this.#outputs.getSnapshot()
-    const lifecycle = output.lifecycle
-    const presented = output.lifecyclePresentation
-    if (active === undefined || lifecycle === null || presented === null ||
-        this.#pendingLifecycleAction !== undefined ||
-        !presented.actions.some((candidate) => candidate.kind === action)) return
-
-    if (action === 'pause' || action === 'stop') {
-      this.#interruptReceive(active, action)
-      return
-    }
-
-    const pending = Object.freeze({
-      operation: active,
-      generation: lifecycle.generation,
-      action,
-    })
-    this.#pendingLifecycleAction = pending
-    let started: V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
-    try {
-      // Publication pickers must start before the rendered click returns.
-      started = active.runtime.startLifecycleAction(action, lifecycle)
-    } catch (error) {
-      if (this.#pendingLifecycleAction !== pending) return
-      this.#pendingLifecycleAction = undefined
-      this.#onActionError(error)
-      return
-    }
-    Promise.resolve(started).then(
-      (mutation) => {
-        if (this.#pendingLifecycleAction !== pending) return
-        this.#pendingLifecycleAction = undefined
-        return this.#applyLifecycleMutation(active, lifecycle.generation, mutation)
-      },
-      (error: unknown) => {
-        if (this.#pendingLifecycleAction !== pending) return
-        this.#pendingLifecycleAction = undefined
-        if (!isAbortError(error)) this.#onActionError(error)
-      },
-    ).catch(() => undefined)
+    this.#lifecycle.perform(action)
   }
 
   reset(reason: unknown): Promise<void> {
-    this.#pendingLifecycleAction = undefined
+    this.#lifecycle.cancel(
+      reason instanceof StaleReceiveBoundaryError ? 'stale_replacement' : 'cancelled',
+    )
     const active = this.#operation
     this.#operation = undefined
     if (active === undefined) return Promise.resolve()
-    if (active.expiryTimer !== undefined) clearTimeout(active.expiryTimer)
+    this.#lifecycle.cancelExpiry(active)
     active.transfer?.abort(reason)
+    this.#observability.receiveExclusion(
+      active.receiveAttempt,
+      reason instanceof StaleReceiveBoundaryError ? 'stale_replacement' : 'cancelled',
+    )
     if (active.running !== undefined) {
       return active.running.then(
         () => this.#detachOperation(active),
         () => this.#detachOperation(active),
       )
     }
-    return this.#detachOperation(active)
+    return this.#detachOperation(active).finally(() => {
+      this.#closeAttempt(active.receiveAttempt)
+    })
   }
 
   #startTransfer(active: ActiveReceiveOperation): void {
     if (!this.#operationIsCurrent(active) || active.transfer !== undefined) return
+    const attempt = this.#observability.openReceive()
+    active.receiveAttempt = attempt
+    active.latestReceiveAttempt = attempt
+    const outputLease = active.runtime.bindOutputFailures?.(attempt.outputFailures)
+    if (outputLease !== undefined) active.receiveOutputLease = outputLease
+
     let connectivity: V2ConnectivityActivation | undefined
     let transfer: AbortController | undefined
+    let task: Promise<void>
     try {
       connectivity = active.joined.beginDownloadConnectivity()
       transfer = new AbortController()
@@ -189,80 +194,234 @@ export class ActiveReceiveCoordinator {
         {
           selection: active.selection,
           transferJobId: active.runtime.transferJobId,
-          onProgress: (progress) => {
+          onProgress: progress => {
             if (this.#operationIsCurrent(active)) this.#onProgress(progress)
           },
-          onTrace: this.#onTrace,
+          ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
+          ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),
         },
       )
-      const ownedConnectivity = connectivity
-      const ownedTransfer = transfer
-      active.running = job.run(ownedTransfer.signal).then(
-        (result) => this.#settleTransfer(active, result).catch((error: unknown) => {
-          this.#reportTransferFailure(active, error)
-        }),
+      task = job.run(transfer.signal).then(
+        result => this.#settleTransfer(active, attempt, result),
         (error: unknown) => error instanceof V2TransferAdmissionFailureError
-          ? this.#settleTransferAdmissionFailure(active, error.transferFailure)
-          : this.#reportTransferFailure(active, error),
-      ).finally(async () => {
-        ownedConnectivity.close()
-        if (active.connectivity === ownedConnectivity) delete active.connectivity
-        if (active.transfer === ownedTransfer) delete active.transfer
-        if (!this.#operationIsCurrent(active)) await this.#detachOperation(active)
-      })
+          ? this.#settleTransferAdmissionFailure(active, attempt, error)
+          : this.#settleUnexpectedTransferFailure(active, attempt, error),
+      )
     } catch (error) {
       transfer?.abort(error)
-      connectivity?.close()
-      if (active.connectivity === connectivity) delete active.connectivity
-      if (active.transfer === transfer) delete active.transfer
-      active.running = this.#settleTransferAdmissionFailure(active, error)
+      task = this.#settleTransferAdmissionFailure(active, attempt, error)
     }
+
+    const ownedConnectivity = connectivity
+    const ownedTransfer = transfer
+    active.running = task.finally(async () => {
+      try {
+        ownedConnectivity?.close()
+      } catch (error) {
+        const classified = this.#observability.classifyTransferFailure(
+          attempt,
+          error,
+          'consequence',
+          'cleanup',
+        )
+        if (classified === undefined) {
+          this.#observability.recordUnclassified(attempt, 'cleanup', 'consequence')
+        }
+      }
+      if (active.connectivity === ownedConnectivity) delete active.connectivity
+      if (active.transfer === ownedTransfer) delete active.transfer
+      if (!this.#operationIsCurrent(active)) await this.#detachOperation(active)
+      if (!attempt.decisionSettled) this.#observability.receiveExclusion(attempt, 'success')
+      this.#replaceDetachConsequence(active, attempt)
+      if (active.receiveOutputLease !== undefined) {
+        active.receiveOutputLease.revoke()
+        delete active.receiveOutputLease
+      }
+      this.#closeAttempt(attempt)
+      if (active.receiveAttempt === attempt) delete active.receiveAttempt
+    })
   }
 
-  async #settleTransfer(active: ActiveReceiveOperation, result: TransferJobResult): Promise<void> {
-    if (!this.#operationIsCurrent(active)) return
-    if (result.intent.operationId !== active.runtime.intent.operationId ||
-        result.intent.digest !== active.runtime.intent.digest) {
-      throw new TypeError('transfer result does not belong to the active receive intent')
+  async #settleTransfer(
+    active: ActiveReceiveOperation,
+    attempt: V2ReceivePresentationAttempt,
+    result: TransferJobResult,
+  ): Promise<void> {
+    if (!this.#operationIsCurrent(active)) {
+      this.#observability.receiveExclusion(attempt, 'stale_replacement')
+      return
     }
+    this.#assertTransferResultIdentity(active, result)
+
+    const trigger = this.#observability.transferTrigger(attempt, result.abortReason, result.failureTrigger)
     const usage = await Promise.resolve(active.runtime.resolveWorkspaceUsage(result.lifecycle))
-    if (!this.#operationIsCurrent(active)) return
-    if (!this.#outputs.updateLifecycle(result.lifecycle, Date.now(), usage, Object.freeze([]))) {
-      throw new TypeError('transfer lifecycle did not advance the active receive operation')
+    if (!this.#operationIsCurrent(active)) {
+      this.#observability.receiveExclusion(attempt, 'stale_replacement')
+      return
     }
-    if (!this.#outputs.adoptTransferResult(active.presentationProjectionEpoch, result)) {
-      throw new TypeError('transfer result escaped its presentation boundary')
+
+    if (trigger !== undefined) {
+      this.#observability.receiveIncident(
+        attempt,
+        trigger,
+        ActiveReceiveObservability.receiveOutcome(result.lifecycle),
+      )
+    } else if (attempt.interruptionExclusion !== undefined) {
+      this.#observability.receiveExclusion(attempt, attempt.interruptionExclusion)
     }
-    this.#scheduleExpiry(active)
-    if (result.abortReason !== undefined) this.#reportTransferFailure(active, result.abortReason)
+
+    try {
+      if (!this.#outputs.updateLifecycle(result.lifecycle, Date.now(), usage, Object.freeze([]))) {
+        throw new TypeError('transfer lifecycle did not advance the active receive operation')
+      }
+      if (!this.#outputs.adoptTransferResult(active.presentationProjectionEpoch, result)) {
+        throw new TypeError('transfer result escaped its presentation boundary')
+      }
+    } catch (error) {
+      const publicationFailure = this.#observability.classifyTransferFailure(
+        attempt,
+        error,
+        trigger === undefined ? 'contributor' : 'consequence',
+        'settlement',
+      )
+      if (trigger === undefined && publicationFailure !== undefined) {
+        this.#observability.receiveIncident(attempt, publicationFailure, 'failed')
+      }
+      throw error
+    }
+
+    if (!attempt.decisionSettled) this.#observability.receiveExclusion(attempt, 'success')
+    this.#lifecycle.scheduleExpiry(active)
+    if (result.abortReason !== undefined && trigger !== undefined) {
+      this.#reportTransferFailure(result.abortReason)
+    }
   }
 
   async #settleTransferAdmissionFailure(
     active: ActiveReceiveOperation,
+    attempt: V2ReceivePresentationAttempt,
     error: unknown,
   ): Promise<void> {
-    if (!this.#operationIsCurrent(active)) return
+    if (!this.#operationIsCurrent(active)) {
+      this.#observability.receiveExclusion(attempt, 'stale_replacement')
+      return
+    }
+
+    const authority = this.#admissionFailureAuthority(error)
+    if (authority?.kind === 'canceled') {
+      this.#observability.receiveExclusion(attempt, 'cancelled')
+    }
+    const trigger = this.#admissionFailureTrigger(attempt, error, authority)
+
     try {
-      const mutation = await Promise.resolve(active.runtime.settleTransferAdmissionFailure(error))
-      await this.#applyLifecycleMutation(
+      const mutation = await Promise.resolve(
+        active.runtime.settleTransferAdmissionFailure(
+          authority?.kind === 'fault' ? authority.classification : error,
+        ),
+      )
+      const applied = await this.#lifecycle.applyMutation(
         active,
         this.#outputs.getSnapshot().lifecycle?.generation ?? 0n,
         mutation,
+        () => {
+          if (trigger !== undefined) {
+            this.#observability.receiveIncident(
+              attempt,
+              trigger,
+              ActiveReceiveObservability.receiveOutcome(mutation.lifecycle),
+            )
+          } else if (!attempt.decisionSettled) {
+            this.#observability.receiveExclusion(attempt, 'cancelled')
+          }
+        },
       )
+      if (!applied) {
+        this.#observability.receiveExclusion(attempt, 'stale_replacement')
+        return
+      }
     } catch (settlementError) {
-      this.#reportTransferFailure(
-        active,
-        new V2TransferFailureSettlementError(error, [settlementError]),
+      this.#reportAdmissionSettlementFailure(attempt, error, trigger, settlementError)
+      return
+    }
+
+    if (trigger !== undefined) this.#reportTransferFailure(error)
+  }
+
+  #admissionFailureAuthority(
+    error: unknown,
+  ): V2TransferAdmissionFailureAuthority | undefined {
+    return error instanceof V2TransferAdmissionFailureError ? error.authority : undefined
+  }
+
+  #admissionFailureTrigger(
+    attempt: V2ReceivePresentationAttempt,
+    error: unknown,
+    authority: V2TransferAdmissionFailureAuthority | undefined,
+  ): ClassifiedTransferFailure | undefined {
+    if (authority?.kind === 'canceled') return undefined
+    if (authority?.kind === 'fault') {
+      return materializeClassifiedTransferFailure(authority.classification, attempt.handle)
+    }
+    return this.#observability.classifyTransferFailure(
+      attempt,
+      error,
+      'contributor',
+      'content_read',
+    )
+  }
+
+  #reportAdmissionSettlementFailure(
+    attempt: V2ReceivePresentationAttempt,
+    admissionError: unknown,
+    trigger: ClassifiedTransferFailure | undefined,
+    settlementError: unknown,
+  ): void {
+    const consequence = this.#observability.classifyTransferFailure(
+      attempt,
+      settlementError,
+      trigger === undefined ? 'contributor' : 'consequence',
+      'settlement',
+    )
+    const selectedTrigger = trigger ?? consequence
+    if (selectedTrigger !== undefined) {
+      this.#observability.receiveIncident(attempt, selectedTrigger, 'failed')
+    }
+    const consequences = consequence === undefined ? [] : [consequence]
+    const productError = selectedTrigger === undefined
+      ? admissionError
+      : new V2TransferFailureSettlementError(trigger, consequences)
+    this.#reportTransferFailure(productError)
+  }
+
+  async #settleUnexpectedTransferFailure(
+    active: ActiveReceiveOperation,
+    attempt: V2ReceivePresentationAttempt,
+    error: unknown,
+  ): Promise<void> {
+    if (!this.#operationIsCurrent(active)) {
+      this.#observability.receiveExclusion(attempt, 'stale_replacement')
+      return
+    }
+    const callerOwnedAbort = isAbortError(error) &&
+      active.transfer?.signal.aborted === true && active.transfer.signal.reason === error
+    if (callerOwnedAbort || error instanceof TransferPauseRequestedError) {
+      this.#observability.receiveExclusion(
+        attempt,
+        attempt.interruptionExclusion ?? 'cancelled',
       )
       return
     }
-    this.#reportTransferFailure(active, error)
+    const trigger = this.#observability.classifyTransferFailure(
+      attempt,
+      error,
+      'contributor',
+      'content_read',
+    )
+    if (trigger !== undefined) this.#observability.receiveIncident(attempt, trigger, 'failed')
+    this.#reportTransferFailure(error)
   }
 
-  #reportTransferFailure(active: ActiveReceiveOperation, error: unknown): void {
-    if (!this.#operationIsCurrent(active)) return
-    if (!(error instanceof V2TransferFailureSettlementError) &&
-        (isAbortError(error) || error instanceof TransferPauseRequestedError)) return
+  #reportTransferFailure(error: unknown): void {
     try {
       this.#onFailure(error)
     } catch {
@@ -270,95 +429,61 @@ export class ActiveReceiveCoordinator {
     }
   }
 
-  #interruptReceive(active: ActiveReceiveOperation, control: V2ActiveReceiveControl): void {
-    const transfer = active.transfer
-    if (transfer === undefined || transfer.signal.aborted ||
-        !active.runtime.activeControls.includes(control)) return
-    this.#outputs.updateActiveControls(Object.freeze([]))
-    try {
-      active.runtime.interrupt(control, transfer)
-      if (!transfer.signal.aborted) {
-        throw new TypeError('receive interruption did not synchronously close the transfer lifetime')
-      }
-    } catch (error) {
-      this.#outputs.updateActiveControls(active.runtime.activeControls)
-      this.#onActionError(error)
-    }
-  }
-
-  async #applyLifecycleMutation(
+  #assertTransferResultIdentity(
     active: ActiveReceiveOperation,
-    expectedGeneration: bigint,
-    mutation: V2LifecycleMutation,
-  ): Promise<void> {
-    const current = this.#outputs.getSnapshot().lifecycle
-    if (!this.#operationIsCurrent(active) || current === null ||
-        current.generation !== expectedGeneration ||
-        mutation.lifecycle.operationId !== active.runtime.intent.operationId ||
-        mutation.lifecycle.receiveIntentDigest !== active.runtime.intent.digest) return
-    const usage = mutation.workspaceUsage === undefined
-      ? await Promise.resolve(active.runtime.resolveWorkspaceUsage(mutation.lifecycle))
-      : mutation.workspaceUsage
-    if (!this.#operationIsCurrent(active) ||
-        this.#outputs.getSnapshot().lifecycle?.generation !== expectedGeneration) return
-    const controls = mutation.activeControls ?? Object.freeze([])
-    if (!this.#outputs.updateLifecycle(mutation.lifecycle, Date.now(), usage, controls)) return
-    this.#scheduleExpiry(active)
-    if (mutation.resumeTransfer === true) this.#resumeTransferWhenIdle(active)
-  }
-
-  #resumeTransferWhenIdle(active: ActiveReceiveOperation): void {
-    const running = active.running
-    if (active.transfer === undefined || running === undefined) {
-      this.#startTransfer(active)
-      return
+    result: TransferJobResult,
+  ): void {
+    if (result.intent.operationId !== active.runtime.intent.operationId ||
+        result.intent.digest !== active.runtime.intent.digest) {
+      throw new TypeError('transfer result does not belong to the active receive intent')
     }
-    running.finally(() => {
-      if (this.#operationIsCurrent(active)) this.#startTransfer(active)
-    }).catch(() => undefined)
-  }
-
-  #scheduleExpiry(active: ActiveReceiveOperation): void {
-    if (active.expiryTimer !== undefined) clearTimeout(active.expiryTimer)
-    delete active.expiryTimer
-    const lifecycle = this.#outputs.getSnapshot().lifecycle
-    if (!this.#operationIsCurrent(active) || lifecycle === null) return
-    const deadline = lifecycleDeadline(lifecycle)
-    if (deadline === undefined) return
-    const delay = Math.min(MAXIMUM_TIMER_DELAY_MILLISECONDS, Math.max(0, deadline - Date.now()))
-    const expectedGeneration = lifecycle.generation
-    active.expiryTimer = setTimeout(() => {
-      delete active.expiryTimer
-      this.#observeExpiry(active, expectedGeneration, deadline).catch((error: unknown) => {
-        if (!isAbortError(error) && this.#operationIsCurrent(active)) this.#onFailure(error)
-      })
-    }, delay)
-  }
-
-  async #observeExpiry(
-    active: ActiveReceiveOperation,
-    expectedGeneration: bigint,
-    deadline: number,
-  ): Promise<void> {
-    if (!this.#operationIsCurrent(active) ||
-        this.#outputs.getSnapshot().lifecycle?.generation !== expectedGeneration) return
-    if (Date.now() < deadline) {
-      this.#scheduleExpiry(active)
-      return
-    }
-    const lifecycle = this.#outputs.getSnapshot().lifecycle
-    if (lifecycle === null) return
-    const mutation = await active.runtime.observeExpiry(lifecycle)
-    await this.#applyLifecycleMutation(active, expectedGeneration, mutation)
   }
 
   #operationIsCurrent(active: ActiveReceiveOperation): boolean {
-    return this.#operation === active && active.boundary === this.#boundary &&
+    return this.#operation === active &&
+      active.boundary === this.#boundary &&
       this.#ownsJoinedShare(active.joined)
   }
 
   #detachOperation(active: ActiveReceiveOperation): Promise<void> {
-    active.detachment ??= Promise.resolve(active.runtime.detach()).then(() => undefined)
+    if (active.detachment !== undefined) return active.detachment
+    const lateCapability = active.detachOutputCapability
+    const outputLease = lateCapability === undefined
+      ? undefined
+      : active.runtime.bindOutputFailures?.(lateCapability.sinks)
+    active.detachment = Promise.resolve().then(() => active.runtime.detach()).then(
+      () => undefined,
+      (error: unknown) => {
+        this.#observability.recordUnclassified(
+          active.latestReceiveAttempt,
+          'detach',
+          'consequence',
+        )
+        throw error
+      },
+    ).finally(() => {
+      outputLease?.revoke()
+      lateCapability?.revoke()
+      if (active.detachOutputCapability === lateCapability) {
+        delete active.detachOutputCapability
+      }
+    })
     return active.detachment
+  }
+
+  #replaceDetachConsequence(
+    active: ActiveReceiveOperation,
+    attempt: V2PresentationAttempt,
+  ): void {
+    if (active.detachment !== undefined) return
+    active.detachOutputCapability?.revoke()
+    delete active.detachOutputCapability
+    if (!attempt.incidentSettled) return
+    const capability = attempt.createLateCleanupCapability()
+    if (capability !== undefined) active.detachOutputCapability = capability
+  }
+
+  #closeAttempt(attempt: V2PresentationAttempt | undefined): void {
+    attempt?.close()
   }
 }

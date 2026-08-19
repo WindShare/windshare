@@ -1,25 +1,49 @@
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
-import { encodeBase64Url } from '../crypto/bytes'
+import type { FailureCorrelation, ProtocolFailure } from '../diagnostics/incident/fact'
 import {
   decodeV2LaneGrant,
   encodeV2LaneAttachRequest,
   encodeV2LaneHello,
   type V2LaneGrant,
-  type V2LaneRejection,
   V2_LANE_ACCEPT_BYTES,
   V2_LANE_REJECT_BYTES,
   verifyV2LaneAccept,
   verifyV2LaneReject,
 } from './v2-lane-codec'
+import {
+  deadlineSignal,
+  laneAdmissionIdentity,
+  readLaneAdmission,
+  V2LaneAdmissionRejectedError,
+  V2LaneAdmissionTransportError,
+  V2LaneInstallationError,
+  type V2LaneAdmissionResult,
+  type V2LaneAdoptionOptions,
+  type V2LaneGrantRequestOptions,
+} from './v2-lane-admission'
 import { V2SessionLane } from './v2-lane-runtime'
 import {
   encodeV2Body,
   encodeV2Message,
   type V2MessageKind,
+  type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from './v2-message'
-import { V2OperationRouter, type V2OperationQueue } from './v2-operation-router'
+import {
+  protocolMessageKindV1,
+  type V2LaneDetachmentClass,
+  type V2ProtocolTraceEvent,
+  type V2ProtocolTraceSource,
+} from './v2-diagnostics'
+import {
+  createV2PeerAttemptIdentity,
+  createV2PeerPathIdentityValue,
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+  type V2ProtocolSessionIdentity,
+} from './v2-identities'
+import { V2OperationQueue, V2OperationRouter } from './v2-operation-router'
 import {
   type V2LaneChange,
   V2_OPERATION_CANCEL_REASON,
@@ -38,110 +62,24 @@ import {
 
 export const V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS = 30_000
 
+export {
+  V2LaneAdmissionRejectedError,
+  V2LaneAdmissionTransportError,
+  V2LaneInstallationError,
+} from './v2-lane-admission'
+export type {
+  V2LaneAdmissionResult,
+  V2LaneAdoptionOptions,
+  V2LaneGrantRequestOptions,
+} from './v2-lane-admission'
 export * from './v2-lane-runtime'
 export * from './v2-operation-router'
 export * from './v2-runtime-types'
 
-export class V2LaneAdmissionRejectedError extends V2SessionRuntimeError {
-  readonly rejection: V2LaneRejection
-
-  constructor(rejection: V2LaneRejection) {
-    super('lane', `Sender rejected lane admission (code ${rejection.code})`)
-    this.name = 'V2LaneAdmissionRejectedError'
-    this.rejection = rejection
-  }
-}
-
-export class V2LaneAdmissionTransportError extends V2SessionRuntimeError {
-  constructor(message: string, options?: ErrorOptions) {
-    super('lane', message, options)
-    this.name = 'V2LaneAdmissionTransportError'
-  }
-}
-
-export class V2LaneInstallationError extends V2SessionRuntimeError {
-  constructor(options?: ErrorOptions) {
-    super('lane', 'Accepted lane could not be installed', options)
-    this.name = 'V2LaneInstallationError'
-  }
-}
-
-interface V2LaneAdmissionIdentity {
-  readonly grantOperationId: string
-  readonly laneId: number
-  readonly laneEpoch: number
-}
-
-/**
- * Authentication and local installation are separate settlement facts. Keeping
- * them in one closed result prevents a later lifecycle signal from erasing a
- * sender-authenticated disposition when publication fails locally.
- */
-export type V2LaneAdmissionResult =
-  | {
-      readonly disposition: 'unverified'
-      readonly installation: 'not-attempted'
-      readonly error: unknown
-    }
-  | (V2LaneAdmissionIdentity & {
-      readonly disposition: 'rejected'
-      readonly installation: 'not-attempted'
-      readonly rejection: V2LaneRejection
-      readonly error: V2LaneAdmissionRejectedError
-    })
-  | (V2LaneAdmissionIdentity & {
-      readonly disposition: 'accepted'
-      readonly installation: 'failed'
-      readonly error: V2LaneInstallationError
-    })
-  | (V2LaneAdmissionIdentity & {
-      readonly disposition: 'accepted'
-      readonly installation: 'installed'
-    })
-
-export type V2LaneAdmissionMilestone =
-  | {
-      readonly type: 'grant-requested' | 'grant-received' | 'lane-hello-sent'
-      readonly grantOperationId: string
-      readonly laneId: number
-      readonly laneEpoch: number
-    }
-  | {
-      readonly type: 'admission-response-accepted'
-      readonly grantOperationId: string
-      readonly laneId: number
-      readonly laneEpoch: number
-    }
-  | {
-      readonly type: 'admission-response-rejected'
-      readonly grantOperationId: string
-      readonly laneId: number
-      readonly laneEpoch: number
-      readonly rejection: V2LaneRejection
-    }
-  | {
-      readonly type: 'lane-adopted'
-      readonly grantOperationId: string
-      readonly laneId: number
-      readonly laneEpoch: number
-    }
-
-export type V2LaneAdmissionObserver = (milestone: V2LaneAdmissionMilestone) => void
-
-export interface V2LaneGrantRequestOptions {
-  readonly laneId?: number
-  readonly signal?: AbortSignal
-  readonly observeAdmission?: V2LaneAdmissionObserver
-}
-
-export interface V2LaneAdoptionOptions {
-  readonly signal?: AbortSignal
-  readonly observeAdmission?: V2LaneAdmissionObserver
-}
-
 export class V2ReceiverSessionRuntime {
   readonly descriptor: V2ShareDescriptor
   readonly keys: V2SessionKeys
+  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
   readonly receiverInstanceId: Uint8Array<ArrayBuffer>
   readonly #router: V2OperationRouter
   readonly #lanes = new Map<number, V2SessionLane>()
@@ -151,6 +89,7 @@ export class V2ReceiverSessionRuntime {
   readonly #laneListeners = new Set<(change: V2LaneChange) => void>()
   readonly #randomBytes: (length: number) => Uint8Array
   readonly #connectivityCleanup: () => void | Promise<void>
+  readonly #protocolTrace: V2ProtocolTraceSource | undefined
   #closed = false
   #closeTask: Promise<void> | undefined
 
@@ -162,12 +101,21 @@ export class V2ReceiverSessionRuntime {
   ) {
     this.descriptor = options.descriptor
     this.keys = keys
+    this.protocolSessionIdentity = createV2ProtocolSessionIdentity(keys.protocolSessionId)
     this.receiverInstanceId = receiverInstanceId.slice()
-    this.#router = new V2OperationRouter(() => {
-      this.close().catch(() => undefined)
-    })
+    this.#router = new V2OperationRouter(
+      () => {
+        this.close().catch(() => undefined)
+      },
+      undefined,
+      {
+        protocolSessionIdentity: this.protocolSessionIdentity,
+        ...(options.protocolTrace === undefined ? {} : { trace: options.protocolTrace }),
+      },
+    )
     this.#randomBytes = options.randomBytes ?? secureRandomBytes
     this.#connectivityCleanup = options.connectivityCleanup ?? (() => undefined)
+    this.#protocolTrace = options.protocolTrace
     this.#attach(options.initialChannel, reader, keys.initialLaneId, keys.initialLaneEpoch)
   }
 
@@ -217,6 +165,38 @@ export class V2ReceiverSessionRuntime {
     return Object.freeze([...this.#lanes.keys()])
   }
 
+  operationCorrelation(operation: V2SessionOperation): FailureCorrelation {
+    const laneId = this.#operationLanes.get(operation as V2OperationQueue)
+    const laneEpoch = laneId === undefined ? undefined : this.#laneEpochs.get(laneId)
+    const peerBinding = operation instanceof V2OperationQueue
+      ? operation.peerBinding()
+      : undefined
+    return Object.freeze({
+      protocolSessionId: this.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      ...(peerBinding === undefined
+        ? {}
+        : {
+            peerPathId: createV2PeerPathIdentityValue(peerBinding.peerPathId),
+            peerAttemptId: createV2PeerAttemptIdentity(peerBinding.attemptId),
+          }),
+      ...(laneId === undefined || laneEpoch === undefined
+        ? {}
+        : { lane: Object.freeze({ id: laneId, epoch: laneEpoch }) }),
+    })
+  }
+
+  authenticatedProtocolFailure(message: V2SessionMessage): ProtocolFailure {
+    const failure = this.#router.protocolFailureFor(message)
+    if (failure === undefined) {
+      throw new V2SessionRuntimeError(
+        'session',
+        'Authenticated operation failure was not captured during routing',
+      )
+    }
+    return failure
+  }
+
   subscribeLaneChanges(listener: (change: V2LaneChange) => void): () => void {
     this.#laneListeners.add(listener)
     return () => this.#laneListeners.delete(listener)
@@ -231,12 +211,11 @@ export class V2ReceiverSessionRuntime {
       encodeV2LaneAttachRequest(requestedLaneId),
       options,
     )
-    emitLaneAdmission(options.observeAdmission, {
-      type: 'grant-requested',
-      grantOperationId: encodeBase64Url(operation.id),
-      laneId: requestedLaneId,
-      laneEpoch: 0,
-    })
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'lane_transition',
+      transition: 'grant_requested',
+      correlation: this.operationCorrelation(operation),
+    }))
     const message = await operation.next(options.signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
       throw new V2SessionRuntimeError('lane', 'Sender rejected the lane grant request')
@@ -261,7 +240,15 @@ export class V2ReceiverSessionRuntime {
         { cause: error },
       )
     }
-    emitLaneAdmission(options.observeAdmission, grantMilestone('grant-received', grant))
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'lane_transition',
+      transition: 'grant_received',
+      correlation: Object.freeze({
+        protocolSessionId: this.protocolSessionIdentity,
+        protocolOperationId: createV2ProtocolOperationIdentity(grant.grantOperationId),
+        lane: Object.freeze({ id: grant.laneId, epoch: grant.laneEpoch }),
+      }),
+    }))
     return grant
   }
 
@@ -292,7 +279,11 @@ export class V2ReceiverSessionRuntime {
         if (signal?.aborted) throw signal.reason ?? cause
         throw new V2LaneAdmissionTransportError('LaneHello delivery failed', { cause })
       }
-      emitLaneAdmission(options.observeAdmission, grantMilestone('lane-hello-sent', grant))
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'lane_transition',
+        transition: 'hello_sent',
+        correlation: this.#laneGrantCorrelation(grant),
+      }))
       const response = await readLaneAdmission(reader, signal)
       if (response.byteLength === V2_LANE_REJECT_BYTES) {
         const rejection = await verifyV2LaneReject(
@@ -300,10 +291,13 @@ export class V2ReceiverSessionRuntime {
           hello,
           this.descriptor.senderPublicKey,
         )
-        emitLaneAdmission(options.observeAdmission, {
-          ...grantMilestone('admission-response-rejected', grant),
-          rejection,
-        })
+        this.#emitProtocolTrace(() => Object.freeze({
+          eventName: 'lane_transition',
+          transition: 'admission_rejected',
+          rejectionCode: rejection.code,
+          retryAfterMilliseconds: rejection.retryAfterMilliseconds,
+          correlation: this.#laneGrantCorrelation(grant),
+        }))
         const error = new V2LaneAdmissionRejectedError(rejection)
         cleanupCause = error
         return Object.freeze({
@@ -318,10 +312,11 @@ export class V2ReceiverSessionRuntime {
         throw new V2SessionRuntimeError('lane', 'Lane admission response has an invalid length')
       }
       await verifyV2LaneAccept(response, hello, this.descriptor.senderPublicKey)
-      emitLaneAdmission(
-        options.observeAdmission,
-        grantMilestone('admission-response-accepted', grant),
-      )
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'lane_transition',
+        transition: 'admission_accepted',
+        correlation: this.#laneGrantCorrelation(grant),
+      }))
       try {
         await this.#installAcceptedLane(channel, reader, grant.laneId, grant.laneEpoch)
       } catch (cause) {
@@ -335,7 +330,11 @@ export class V2ReceiverSessionRuntime {
         })
       }
       transferred = true
-      emitLaneAdmission(options.observeAdmission, grantMilestone('lane-adopted', grant))
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'lane_transition',
+        transition: 'installed',
+        correlation: this.#laneGrantCorrelation(grant),
+      }))
       return Object.freeze({
         ...laneAdmissionIdentity(grant),
         disposition: 'accepted',
@@ -392,7 +391,19 @@ export class V2ReceiverSessionRuntime {
     }
     try {
       await lane.writer.send(message)
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'protocol_operation',
+        transition: 'request_sent',
+        requestKind: protocolMessageKindV1(kind),
+        correlation: this.operationCorrelation(operation),
+      }))
     } catch (error) {
+      this.#emitProtocolTrace(() => Object.freeze({
+        eventName: 'protocol_operation',
+        transition: 'request_send_failed',
+        requestKind: protocolMessageKindV1(kind),
+        correlation: this.operationCorrelation(operation),
+      }))
       operation.cancel(error)
       throw error
     }
@@ -430,6 +441,12 @@ export class V2ReceiverSessionRuntime {
     }
     // Local ownership ends before remote I/O. Otherwise a disappeared or
     // backpressured lane can keep an abandoned operation routable forever.
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'protocol_operation',
+      transition: 'cancelled',
+      requestKind: protocolMessageKindV1(operation.requestKind),
+      correlation: this.operationCorrelation(operation),
+    }))
     operation.cancel(cancellation.cause)
     const lane = (cancellation.laneId === undefined
       ? undefined
@@ -498,16 +515,31 @@ export class V2ReceiverSessionRuntime {
       onClosed: (closed, failure, fatal) => {
         // Fatal authenticated failures become non-recoverable before observers
         // see the final lane detach; physical zero-lane loss remains recoverable.
+        let detachmentClass: V2LaneDetachmentClass = 'physical_failure'
+        if (fatal) detachmentClass = 'authenticated_failure'
+        else if (this.#closed) detachmentClass = 'closed'
         if (fatal) this.#closed = true
         const scopedFailure = fatal
           ? new V2SessionRuntimeError('session', 'Authenticated session lane failed', { cause: failure })
           : new V2SessionRuntimeError('lane', 'Physical session lane failed', { cause: failure })
-        this.#detach(closed, scopedFailure)
+        this.#detach(
+          closed,
+          scopedFailure,
+          detachmentClass,
+        )
         if (fatal) this.close().catch(() => undefined)
       },
     })
     this.#lanes.set(laneId, lane)
     this.#laneEpochs.set(laneId, laneEpoch)
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'lane_transition',
+      transition: 'attached',
+      correlation: Object.freeze({
+        protocolSessionId: this.protocolSessionIdentity,
+        lane: Object.freeze({ id: laneId, epoch: laneEpoch }),
+      }),
+    }))
     this.#emitLaneChange({ type: 'attached', laneId, laneEpoch })
   }
 
@@ -557,13 +589,26 @@ export class V2ReceiverSessionRuntime {
     }
   }
 
-  #detach(lane: V2SessionLane, failure?: unknown): void {
+  #detach(
+    lane: V2SessionLane,
+    failure?: unknown,
+    detachmentClass: 'closed' | 'physical_failure' | 'authenticated_failure' = 'closed',
+  ): void {
     if (this.#lanes.get(lane.id) !== lane) return
     this.#lanes.delete(lane.id)
     const reason = failure ?? new V2SessionRuntimeError('lane', 'Operation lane became unavailable')
     for (const [operation, laneId] of this.#operationLanes) {
       if (laneId === lane.id) operation.fail(reason)
     }
+    this.#emitProtocolTrace(() => Object.freeze({
+      eventName: 'lane_transition',
+      transition: 'detached',
+      detachmentClass,
+      correlation: Object.freeze({
+        protocolSessionId: this.protocolSessionIdentity,
+        lane: Object.freeze({ id: lane.id, epoch: lane.epoch }),
+      }),
+    }))
     this.#emitLaneChange({
       type: 'detached',
       laneId: lane.id,
@@ -579,6 +624,24 @@ export class V2ReceiverSessionRuntime {
       } catch {
         // Observers cannot own or destabilize authenticated lane lifecycle.
       }
+    }
+  }
+
+  #laneGrantCorrelation(grant: V2LaneGrant): FailureCorrelation {
+    return Object.freeze({
+      protocolSessionId: this.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(grant.grantOperationId),
+      lane: Object.freeze({ id: grant.laneId, epoch: grant.laneEpoch }),
+    })
+  }
+
+  #emitProtocolTrace(createEvent: () => V2ProtocolTraceEvent): void {
+    try {
+      const observer = this.#protocolTrace?.current
+      if (observer === undefined) return
+      observer(createEvent())
+    } catch {
+      // Diagnostic observation cannot acquire protocol or lane authority.
     }
   }
 
@@ -601,44 +664,6 @@ function isReceiverFollowupAllowed(request: V2MessageKind, followup: V2MessageKi
   return request === V2_MESSAGE_KIND.peerOffer && followup === V2_MESSAGE_KIND.peerCandidate
 }
 
-async function readLaneAdmission(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  signal?: AbortSignal,
-): Promise<Uint8Array<ArrayBuffer>> {
-  signal?.throwIfAborted()
-  if (signal === undefined) {
-    const result = await reader.read()
-    if (result.done) {
-      throw new V2LaneAdmissionTransportError('Candidate lane closed before admission')
-    }
-    return result.value.slice()
-  }
-  return new Promise<Uint8Array<ArrayBuffer>>((resolve, reject) => {
-    let settled = false
-    const finish = (operation: () => void) => {
-      if (settled) return
-      settled = true
-      signal.removeEventListener('abort', aborted)
-      operation()
-    }
-    const aborted = () => {
-      const reason = signal.reason ?? new DOMException('Lane admission aborted', 'AbortError')
-      reader.cancel(reason).catch(() => undefined)
-      finish(() => reject(reason))
-    }
-    signal.addEventListener('abort', aborted, { once: true })
-    reader.read().then(
-      (result) => finish(() => {
-        if (result.done) {
-          reject(new V2LaneAdmissionTransportError('Candidate lane closed before admission'))
-        } else {
-          resolve(result.value.slice())
-        }
-      }),
-      (error: unknown) => finish(() => reject(error)),
-    )
-  })
-}
 
 function secureRandomBytes(length: number): Uint8Array<ArrayBuffer> {
   const output = new Uint8Array(length)
@@ -665,59 +690,4 @@ function cancellationProtocolReason(cause: unknown): V2OperationCancelReason {
   return cause instanceof DOMException && cause.name === 'TimeoutError'
     ? V2_OPERATION_CANCEL_REASON.timeout
     : V2_OPERATION_CANCEL_REASON.user
-}
-
-function grantMilestone<T extends V2LaneAdmissionMilestone['type']>(
-  type: T,
-  grant: V2LaneGrant,
-): Extract<V2LaneAdmissionMilestone, { readonly type: T }> {
-  return Object.freeze({
-    type,
-    grantOperationId: encodeBase64Url(grant.grantOperationId),
-    laneId: grant.laneId,
-    laneEpoch: grant.laneEpoch,
-  }) as Extract<V2LaneAdmissionMilestone, { readonly type: T }>
-}
-
-function laneAdmissionIdentity(grant: V2LaneGrant): V2LaneAdmissionIdentity {
-  return Object.freeze({
-    grantOperationId: encodeBase64Url(grant.grantOperationId),
-    laneId: grant.laneId,
-    laneEpoch: grant.laneEpoch,
-  })
-}
-
-function emitLaneAdmission(
-  observer: V2LaneAdmissionObserver | undefined,
-  milestone: V2LaneAdmissionMilestone,
-): void {
-  try {
-    observer?.(Object.freeze(milestone))
-  } catch {
-    // Admission evidence is observational; authenticated state has already advanced.
-  }
-}
-
-function deadlineSignal(
-  parent: AbortSignal | undefined,
-  milliseconds: number,
-  message: string,
-  scope: 'lane' | 'session',
-): { readonly signal: AbortSignal; readonly close: () => void } {
-  const controller = new AbortController()
-  const abort = () => controller.abort(
-    parent?.reason ?? new DOMException('Operation aborted', 'AbortError'),
-  )
-  parent?.addEventListener('abort', abort, { once: true })
-  if (parent?.aborted) abort()
-  const timer = globalThis.setTimeout(() => {
-    controller.abort(new V2SessionRuntimeError(scope, message))
-  }, milliseconds)
-  return {
-    signal: controller.signal,
-    close: () => {
-      globalThis.clearTimeout(timer)
-      parent?.removeEventListener('abort', abort)
-    },
-  }
 }

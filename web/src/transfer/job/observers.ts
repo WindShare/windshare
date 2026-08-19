@@ -1,4 +1,5 @@
 import type { V2ContentLaneStatus } from '../../content/v2-broker'
+import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type { ReceiveIntent } from '../intent'
 import type { SelectionMeasure } from '../measure'
 import type { MaterializationSummary } from '../output-session'
@@ -7,17 +8,15 @@ import type {
   MaterializationFailureReason,
   TransferProgress,
   TransferTraceEvent,
-  TransferTraceListener,
 } from './contract'
 
 export interface V2TransferObserversOptions {
   readonly intent: ReceiveIntent
   readonly transferJobId: string
   readonly lanes: V2ContentLaneStatus
-  readonly protocolSessionId?: () => string
   readonly onProgress?: (progress: TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
-  readonly onTrace?: TransferTraceListener
+  readonly trace?: DomainTraceSource<TransferTraceEvent>
 }
 
 export interface V2TransferProgressState {
@@ -31,7 +30,10 @@ export interface V2TransferProgressState {
   readonly outputSessionId?: string
 }
 
-/** Keeps fallible diagnostic consumers outside transfer and output authority. */
+/**
+ * Product observers and trace have separate ports. A trace payload is built only
+ * after the revocable source yields an active observer.
+ */
 export class V2TransferObservers {
   readonly #options: V2TransferObserversOptions
 
@@ -43,11 +45,15 @@ export class V2TransferObservers {
     try {
       this.#options.onMeasure?.(value)
     } catch {
-      // Diagnostic observers own their own failures.
+      // Product observers cannot alter catalog, output, or settlement authority.
     }
   }
 
   progress(state: V2TransferProgressState): void {
+    const partial = state.measure.discovery === 'failed' ||
+      state.failedDirectories > 0 ||
+      state.fileErrors > 0 ||
+      state.selectionErrors > 0
     try {
       this.#options.onProgress?.(Object.freeze({
         discoveredFiles: state.measure.discoveredFiles,
@@ -60,48 +66,58 @@ export class V2TransferObservers {
         contentLanes: this.#options.lanes.size,
         discovery: state.measure.discovery,
         failedDirectories: state.failedDirectories,
-        partial: state.measure.discovery === 'failed' || state.failedDirectories > 0 ||
-          state.fileErrors > 0 || state.selectionErrors > 0,
+        partial,
         transferJobId: this.#options.transferJobId,
         ...(state.outputSessionId === undefined ? {} : { outputSessionId: state.outputSessionId }),
       }))
     } catch {
-      // UI observers cannot alter catalog, output, or settlement authority.
+      // Product observers cannot alter catalog, output, or settlement authority.
     }
+
+    this.#emit(() => Object.freeze({
+      name: 'transfer_progress',
+      discoveredFiles: BigInt(state.measure.discoveredFiles),
+      discoveredBytes: state.measure.discoveredBytes,
+      writtenBytes: state.writtenBytes,
+      completedFiles: BigInt(state.completedFiles),
+      completedBytes: state.completedBytes,
+      fileErrors: BigInt(state.fileErrors),
+      selectionErrors: BigInt(state.selectionErrors),
+      failedDirectories: BigInt(state.failedDirectories),
+      contentLanes: this.#options.lanes.size,
+      discovery: state.measure.discovery,
+      partial,
+    }))
   }
 
   intentFrozen(layoutClass: ArtifactLayoutClass): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.intent.frozen',
-      artifact_kind: this.#options.intent.artifact.kind,
-      layout_class: layoutClass,
-      plan_kind: this.#options.intent.plan.kind,
-    })
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'intent_frozen',
+      artifactKind: this.#options.intent.artifact.kind,
+      layoutClass,
+      planKind: this.#options.intent.plan.kind,
+    }))
   }
 
   directoryAdmitted(input: {
-    readonly outputSessionId: string
     readonly admittedDirectoryCount: bigint
     readonly layoutClass: Exclude<ArtifactLayoutClass, 'original-file'>
   }): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.directory_admission.accepted',
-      output_session_id: input.outputSessionId,
-      admitted_directory_count: input.admittedDirectoryCount,
-      layout_class: input.layoutClass,
-    })
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'directory_admitted',
+      admittedDirectoryCount: input.admittedDirectoryCount,
+      layoutClass: input.layoutClass,
+    }))
   }
 
-  materializationStarted(outputSessionId: string): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.materialization.started',
-      transfer_job_id: this.#options.transferJobId,
-      output_session_id: outputSessionId,
-      plan_kind: this.#options.intent.plan.kind,
-    })
+  materializationStarted(): void {
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'materialization_started',
+      planKind: this.#options.intent.plan.kind,
+    }))
   }
 
   materializationFailed(
@@ -109,27 +125,25 @@ export class V2TransferObservers {
     completedFileCount: bigint,
     completedBytes: bigint,
   ): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.materialization.failed',
-      transfer_job_id: this.#options.transferJobId,
-      plan_kind: this.#options.intent.plan.kind,
-      directory_failure_reason: reason,
-      completed_file_count: completedFileCount,
-      completed_bytes: completedBytes,
-    })
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'materialization_failed',
+      planKind: this.#options.intent.plan.kind,
+      materializationFailureReason: reason,
+      completedFileCount,
+      completedBytes,
+    }))
   }
 
   materializationCompleted(summary: MaterializationSummary): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.materialization.completed',
-      transfer_job_id: this.#options.transferJobId,
-      entry_count: summary.entryCount,
-      file_count: summary.fileCount,
-      directory_count: summary.directoryCount,
-      raw_bytes: summary.rawBytes,
-    })
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'materialization_completed',
+      entryCount: summary.entryCount,
+      fileCount: summary.fileCount,
+      directoryCount: summary.directoryCount,
+      rawBytes: summary.rawBytes,
+    }))
   }
 
   treeFinalized(input: {
@@ -137,41 +151,22 @@ export class V2TransferObservers {
     readonly successCount: bigint
     readonly failureCount: bigint
   }): void {
-    this.#emit({
-      ...this.#identity(),
-      name: 'receive.tree.finalized',
-      tree_outcome: input.outcome,
-      success_count: input.successCount,
-      failure_count: input.failureCount,
-      visibility: 'prefix-visible',
-    })
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'tree_finalized',
+      outcome: input.outcome === 'partial-directory' ? 'partial_directory' : input.outcome,
+      successCount: input.successCount,
+      failureCount: input.failureCount,
+    }))
   }
 
-  #identity(): Readonly<{
-    operation_id: string
-    receive_intent_digest: string
-    protocol_session_id?: string
-  }> {
-    const protocolSessionId = safeProtocolSessionId(this.#options.protocolSessionId?.())
-    return Object.freeze({
-      operation_id: this.#options.intent.operationId,
-      receive_intent_digest: this.#options.intent.digest,
-      ...(protocolSessionId === undefined ? {} : { protocol_session_id: protocolSessionId }),
-    })
-  }
-
-  #emit(event: TransferTraceEvent): void {
+  #emit(build: () => TransferTraceEvent): void {
     try {
-      this.#options.onTrace?.(Object.freeze(event))
+      const observer = this.#options.trace?.current
+      if (observer === undefined) return
+      observer(build())
     } catch {
-      // Trace observers are diagnostic only and cannot alter transfer authority.
+      // Trace diagnostics are passive and cannot alter transfer authority.
     }
   }
-}
-
-function safeProtocolSessionId(value: string | undefined): string | undefined {
-  if (value === undefined) return undefined
-  if (typeof value !== 'string' || value.length === 0 ||
-      new TextEncoder().encode(value).byteLength > 128) return undefined
-  return value
 }

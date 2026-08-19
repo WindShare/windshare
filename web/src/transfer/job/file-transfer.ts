@@ -9,6 +9,7 @@ import type {
   V2RevisionReader,
 } from '../../content/v2-session-services'
 import { encodeBase64Url } from '../../crypto/bytes'
+import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import {
   OutputTransactionContractError,
   retireOutputFileTransaction,
@@ -27,9 +28,12 @@ import {
 } from '../output-session'
 import { V2OutputPausedError, type PendingFile } from './contract'
 import {
+  V2ClassifiedTransferFailureError,
   V2FileOutputError,
+  materializeClassifiedTransferFailure,
   normalizeV2FileTransferFailure,
   normalizedV2FileTransferFault,
+  type ClassifiedTransferFailure,
   type NormalizedV2FileTransferFailure,
 } from './failures'
 import {
@@ -58,6 +62,7 @@ export interface V2FileTransferOptions {
   readonly output: OutputSession
   readonly signal: AbortSignal
   readonly outputSettlementTimeoutMilliseconds: number
+  readonly incidentScope?: IncidentScopeHandle
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
   readonly onComplete: (exactSize: bigint) => void
 }
@@ -154,11 +159,19 @@ export async function transferV2File(
     primaryFailure = await settleFailedFileTransfer(
       options,
       transaction,
-      normalizeV2FileTransferFailure(error, options.signal),
+      normalizeV2FileTransferFailure(error, {
+        signal: options.signal,
+        ...(options.incidentScope === undefined
+          ? {}
+          : { incidentScope: options.incidentScope }),
+      }),
     )
   } finally {
-    const releaseFailure = await releaseRevisionLease(acquired, options.outputSettlementTimeoutMilliseconds)
-    throwTransferOrReleaseFailure(primaryFailure, releaseFailure)
+    const releaseFailure = await releaseRevisionLease(
+      acquired,
+      options.outputSettlementTimeoutMilliseconds,
+    )
+    throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
   }
 }
 
@@ -173,11 +186,13 @@ async function settleFailedFileTransfer(
     if (failure.fault.scope === FaultScope.OutputPause ||
         failure.fault.scope === FaultScope.SessionTerminal) return failure
     const promoted = promoteFaultScope(failure.fault, FaultScope.OutputPause)
-    return normalizedV2FileTransferFault(
-      promoted,
-      failure.diagnostic,
-      'Unretired file state requires a stable output pause',
-    )
+    return normalizedV2FileTransferFault(promoted, {
+      ...(options.incidentScope === undefined
+        ? {}
+        : { incidentScope: options.incidentScope }),
+      stage: 'settlement',
+      materializationFailureReason: failure.materializationFailureReason,
+    })
   }
   let disposition: Awaited<ReturnType<BoundOutputFileTransaction['retire']>>
   try {
@@ -187,20 +202,34 @@ async function settleFailedFileTransfer(
       () => retireOutputFileTransaction(transaction, authorization),
     )
   } catch (retirementFailure) {
+    normalizeV2FileTransferFailure(retirementFailure, {
+      ...(options.incidentScope === undefined
+        ? {}
+        : { incidentScope: options.incidentScope }),
+      relation: 'consequence',
+      stage: 'settlement',
+    })
     return normalizedV2FileTransferFault(
       outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-      new AggregateError(
-        [failure.diagnostic, retirementFailure],
-        'Transfer and authorized output retirement failed',
-      ),
-      'Output transaction could not establish retirement isolation',
+      {
+        ...(options.incidentScope === undefined
+          ? {}
+          : { incidentScope: options.incidentScope }),
+        stage: 'settlement',
+        materializationFailureReason: failure.materializationFailureReason,
+      },
     )
   }
   return disposition === 'JobOutputCompromised'
     ? normalizedV2FileTransferFault(
         outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-        failure.diagnostic,
-        'Output backend cannot isolate an authorized file retirement',
+        {
+          ...(options.incidentScope === undefined
+            ? {}
+            : { incidentScope: options.incidentScope }),
+          stage: 'settlement',
+          materializationFailureReason: failure.materializationFailureReason,
+        },
       )
     : failure
 }
@@ -223,6 +252,7 @@ async function releaseRevisionLease(
 }
 
 function throwTransferOrReleaseFailure(
+  incidentScope: IncidentScopeHandle | undefined,
   primaryFailure: NormalizedV2FileTransferFailure | undefined,
   releaseFailure: NormalizedV2FileTransferFailure | undefined,
 ): void {
@@ -230,21 +260,47 @@ function throwTransferOrReleaseFailure(
     if (primaryFailure !== undefined) throw primaryFailure.diagnostic
     return
   }
-  if (primaryFailure === undefined) throw releaseFailure.diagnostic
+  if (primaryFailure === undefined) {
+    if (releaseFailure.kind === 'canceled') throw releaseFailure.diagnostic
+    throw classifiedFailureError(materializeClassifiedTransferFailure(
+      releaseFailure.diagnostic.classification,
+      incidentScope,
+      'contributor',
+    ))
+  }
+
   // Cancellation controls the run outside the fault lattice. A concurrent
-  // settlement fault must not turn that exact control decision into fault policy.
-  if (primaryFailure.kind === 'canceled') throw primaryFailure.diagnostic
-  if (releaseFailure.kind === 'canceled') throw releaseFailure.diagnostic
+  // settlement failure is retained only as a consequence of that product decision.
+  if (primaryFailure.kind === 'canceled') {
+    if (releaseFailure.kind === 'fault') {
+      materializeClassifiedTransferFailure(
+        releaseFailure.diagnostic.classification,
+        incidentScope,
+        'consequence',
+      )
+    }
+    throw primaryFailure.diagnostic
+  }
+  if (releaseFailure.kind === 'canceled') throw primaryFailure.diagnostic
+
+  materializeClassifiedTransferFailure(
+    releaseFailure.diagnostic.classification,
+    incidentScope,
+    'consequence',
+  )
   const governing = joinFaults(primaryFailure.fault, releaseFailure.fault)
   if (governing === undefined) throw primaryFailure.diagnostic
-  throw normalizedV2FileTransferFault(
-    governing,
-    new AggregateError(
-      [primaryFailure.diagnostic, releaseFailure.diagnostic],
-      'File transfer and revision lease settlement failed',
-    ),
-    'Revision lease could not establish bounded terminal settlement',
-  ).diagnostic
+  throw normalizedV2FileTransferFault(governing, {
+    ...(incidentScope === undefined ? {} : { incidentScope }),
+    stage: 'settlement',
+    materializationFailureReason: primaryFailure.materializationFailureReason,
+  }).diagnostic
+}
+
+function classifiedFailureError(
+  classification: ClassifiedTransferFailure,
+): V2ClassifiedTransferFailureError {
+  return new V2ClassifiedTransferFailureError(classification)
 }
 
 function outputFileFor(
@@ -381,6 +437,6 @@ async function outputOperation<T>(
         cause instanceof OutputSessionCompromisedError ||
         cause instanceof V2OutputPausedError ||
         signal.aborted) throw cause
-    throw new V2FileOutputError(message, reason, { cause })
+    throw new V2FileOutputError(message, reason, cause)
   }
 }

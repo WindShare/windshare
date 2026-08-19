@@ -6,18 +6,23 @@ import type {
   V2BlockRouteEligibility,
   V2BlockTransportRoute,
 } from '../content/v2-route-policy'
-import { encodeBase64Url } from '../crypto/bytes'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import {
+  createV2PeerPathIdentityValue,
+  equalV2DiagnosticIdentities,
+  type V2PeerAttemptIdentity,
+  type V2PeerPathIdentity,
+  type V2ProtocolSessionIdentity,
+} from '../session/v2-identities'
 import type { PeerChannel } from './peer-channel'
 import {
   browserPeerConnectionAvailable,
   BrowserOfferChannelFactory,
   type OfferChannelFactory,
 } from './peer-offer'
+import type { V2ConnectivityTraceSource } from './diagnostics'
 import {
   createV2PeerPathIdentity,
-  type V2ConnectivityObserver,
-  type V2SessionSignalingObserver,
   V2SessionSignalingRoute,
 } from './v2-session-signaling'
 import {
@@ -31,8 +36,6 @@ import {
   type V2PeerRecoveryDependencies,
   V2PeerRecoverySupervisor,
 } from './v2-peer-recovery'
-
-export type { V2ConnectivityObserver } from './v2-session-signaling'
 
 export interface V2ContentLaneAdmissionObservation {
   readonly laneId: number
@@ -50,12 +53,9 @@ export interface V2ReceiverConnectivityOptions {
   readonly offers?: OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
   readonly nativePeerUsable?: () => boolean
-  readonly connectivityObserver?: V2ConnectivityObserver
-  readonly now?: () => number
-  readonly onPeerError?: (error: unknown) => void
+  readonly connectivityTrace?: V2ConnectivityTraceSource
   readonly onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void
   readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
-  readonly observePeerSignaling?: V2SessionSignalingObserver
   readonly peerRecovery?: V2PeerRecoveryDependencies
 }
 
@@ -116,9 +116,9 @@ interface V2ActiveConnectivity {
 }
 
 interface V2InstalledPeer {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
-  readonly attemptId: string
+  readonly protocolSessionId: V2ProtocolSessionIdentity
+  readonly peerPathId: V2PeerPathIdentity
+  readonly attemptId: V2PeerAttemptIdentity
   readonly laneId: number
   readonly laneEpoch: number
   readonly peer: PeerChannel
@@ -134,18 +134,15 @@ export class V2ReceiverConnectivity {
   readonly #offers: OfferChannelFactory
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #nativePeerUsable: () => boolean
-  readonly #connectivityObserver: V2ConnectivityObserver | undefined
-  readonly #now: () => number
-  readonly #onPeerError: (error: unknown) => void
+  readonly #connectivityTrace: V2ConnectivityTraceSource | undefined
   readonly #onContentLaneAdmitted: (
     observation: V2ContentLaneAdmissionObservation,
   ) => void
   readonly #onContentLaneDetached: (
     observation: V2ContentLaneDetachmentObservation,
   ) => void
-  readonly #observePeerSignaling: V2SessionSignalingObserver
   readonly #peerRecoveryOptions: V2PeerRecoveryDependencies
-  readonly #protocolSessionId: string
+  readonly #protocolSessionId: V2ProtocolSessionIdentity
   readonly #lifetime = new AbortController()
   readonly #admitted = new Map<number, { readonly laneEpoch: number; readonly route: V2BlockTransportRoute }>()
   readonly #laneEpochs = new Map<number, number>()
@@ -153,7 +150,7 @@ export class V2ReceiverConnectivity {
   readonly #peerCleanupTasks = new Map<V2InstalledPeer, Promise<void>>()
   readonly #unsubscribeLaneChanges: () => void
   #peerRecovery: V2PeerRecoverySupervisor | undefined
-  #peerPathId: string | undefined
+  #peerPathId: V2PeerPathIdentity | undefined
   #installedPeer: V2InstalledPeer | undefined
   #relayLaneId: number
   #closeTask: Promise<void> | undefined
@@ -167,14 +164,11 @@ export class V2ReceiverConnectivity {
     this.#offers = options.offers ?? new BrowserOfferChannelFactory()
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable ?? (() => browserPeerConnectionAvailable())
-    this.#connectivityObserver = options.connectivityObserver
-    this.#now = options.now ?? (() => performance.now())
-    this.#onPeerError = options.onPeerError ?? (() => undefined)
+    this.#connectivityTrace = options.connectivityTrace
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted ?? (() => undefined)
     this.#onContentLaneDetached = options.onContentLaneDetached ?? (() => undefined)
-    this.#observePeerSignaling = options.observePeerSignaling ?? (() => undefined)
     this.#peerRecoveryOptions = options.peerRecovery ?? {}
-    this.#protocolSessionId = encodeBase64Url(options.session.keys.protocolSessionId)
+    this.#protocolSessionId = options.session.protocolSessionIdentity
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
       if (change.type === 'attached') {
@@ -274,7 +268,7 @@ export class V2ReceiverConnectivity {
     const peerPathIdentity = this.#randomBytes === undefined
       ? createV2PeerPathIdentity()
       : createV2PeerPathIdentity(this.#randomBytes)
-    const peerPathId = encodeBase64Url(peerPathIdentity)
+    const peerPathId = createV2PeerPathIdentityValue(peerPathIdentity)
     const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
     const attempts = new V2BrowserPeerAttemptExecutor({
       session: this.#session,
@@ -283,15 +277,7 @@ export class V2ReceiverConnectivity {
       clock,
       publish: (candidate) => this.#publishPeer(candidate),
       ...(this.#randomBytes === undefined ? {} : { randomBytes: this.#randomBytes }),
-      ...(this.#connectivityObserver === undefined
-        ? {}
-        : { connectivityObserver: this.#connectivityObserver }),
-      observePeerSignaling: this.#observePeerSignaling,
-      ...(this.#peerRecoveryOptions.observeAttempt === undefined
-        ? {}
-        : { observeAttempt: this.#peerRecoveryOptions.observeAttempt }),
-      now: this.#now,
-      onFailure: (error) => this.#reportPeerError(error),
+      ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
     this.#peerPathId = peerPathId
     this.#peerRecovery = new V2PeerRecoverySupervisor({
@@ -306,9 +292,7 @@ export class V2ReceiverConnectivity {
         ? {}
         : { random: this.#peerRecoveryOptions.random }),
       rearmSource: this.#peerRecoveryOptions.rearmSource ?? new BrowserV2PeerRecoveryRearmSource(),
-      ...(this.#peerRecoveryOptions.observer === undefined
-        ? {}
-        : { observer: this.#peerRecoveryOptions.observer }),
+      ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
     return this.#peerRecovery
   }
@@ -318,8 +302,8 @@ export class V2ReceiverConnectivity {
       if (this.#nativePeerUsable()) return true
       // A caller may know more than constructor presence (for example, a local
       // ICE/DataChannel probe), but that probe never owns relay eligibility.
-    } catch (error) {
-      this.#reportPeerError(error)
+    } catch {
+      return false
     }
     return false
   }
@@ -327,8 +311,9 @@ export class V2ReceiverConnectivity {
   #publishPeer(candidate: V2PeerCandidatePublication): boolean {
     if (
       this.#lifetime.signal.aborted || this.#installedPeer !== undefined ||
-      candidate.protocolSessionId !== this.#protocolSessionId ||
-      candidate.peerPathId !== this.#peerPathId ||
+      !equalV2DiagnosticIdentities(candidate.protocolSessionId, this.#protocolSessionId) ||
+      this.#peerPathId === undefined ||
+      !equalV2DiagnosticIdentities(candidate.peerPathId, this.#peerPathId) ||
       this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
       !this.#session.laneIds().includes(candidate.laneId)
     ) return false
@@ -336,15 +321,6 @@ export class V2ReceiverConnectivity {
     this.#installedPeer = { ...candidate }
     return true
   }
-
-  #reportPeerError(error: unknown): void {
-    try {
-      this.#onPeerError(error)
-    } catch {
-      // Failure diagnostics cannot reject the owned attempt task after cleanup.
-    }
-  }
-
 
   #endActivation(
     id: number,
@@ -360,8 +336,11 @@ export class V2ReceiverConnectivity {
   #peerDetached(laneId: number, laneEpoch: number): void {
     const installed = this.#installedPeer
     if (
-      installed === undefined || installed.protocolSessionId !== this.#protocolSessionId ||
-      installed.peerPathId !== this.#peerPathId || installed.laneId !== laneId ||
+      installed === undefined ||
+      !equalV2DiagnosticIdentities(installed.protocolSessionId, this.#protocolSessionId) ||
+      this.#peerPathId === undefined ||
+      !equalV2DiagnosticIdentities(installed.peerPathId, this.#peerPathId) ||
+      installed.laneId !== laneId ||
       installed.laneEpoch !== laneEpoch
     ) return
     this.#installedPeer = undefined

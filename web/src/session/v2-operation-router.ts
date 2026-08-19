@@ -1,5 +1,23 @@
 import { encodeBase64Url } from '../crypto/bytes'
 import {
+  createProtocolFailure,
+  type FailureCorrelation,
+  type ProtocolFailure,
+} from '../diagnostics/incident/fact'
+import {
+  protocolMessageKindV1,
+  type V2ProtocolOperationSettlement,
+  type V2ProtocolTraceEvent,
+  type V2ProtocolTraceSource,
+} from './v2-diagnostics'
+import {
+  createV2PeerAttemptIdentity,
+  createV2PeerPathIdentityValue,
+  createV2ProtocolOperationIdentity,
+  type V2ProtocolSessionIdentity,
+} from './v2-identities'
+import {
+  decodeV2OperationErrorControl,
   type V2MessageKind,
   V2_MESSAGE_KIND,
   type V2SessionMessage,
@@ -36,10 +54,19 @@ export class V2OperationQueue implements V2SessionOperation {
   readonly #settlementCleanups = new Set<() => void>()
   readonly #admission: V2SessionQueueAdmission
   readonly #authority: V2OperationContinuationAuthority
-  readonly #onClose: (authority: V2OperationContinuationAuthority) => void
+  readonly #onClose: (
+    authority: V2OperationContinuationAuthority,
+    settlement: V2ProtocolOperationSettlement,
+  ) => void
   readonly #onConsumerSettled: () => void
+  readonly #onAuthenticatedMessage: (
+    message: V2SessionMessage,
+    laneId?: number,
+    laneEpoch?: number,
+  ) => void
   #pushTail: Promise<void> = Promise.resolve()
   #failure: unknown
+  #settlement: V2ProtocolOperationSettlement | undefined
   #closed = false
   #consumerSettled = false
 
@@ -48,8 +75,16 @@ export class V2OperationQueue implements V2SessionOperation {
     requestKind: V2MessageKind,
     canonicalRequestBody: Uint8Array,
     admission: V2SessionQueueAdmission,
-    onClose: (authority: V2OperationContinuationAuthority) => void,
+    onClose: (
+      authority: V2OperationContinuationAuthority,
+      settlement: V2ProtocolOperationSettlement,
+    ) => void,
     onConsumerSettled: () => void,
+    onAuthenticatedMessage: (
+      message: V2SessionMessage,
+      laneId?: number,
+      laneEpoch?: number,
+    ) => void,
   ) {
     this.id = id.slice()
     this.requestKind = requestKind
@@ -57,6 +92,18 @@ export class V2OperationQueue implements V2SessionOperation {
     this.#authority = new V2OperationContinuationAuthority(requestKind, canonicalRequestBody)
     this.#onClose = onClose
     this.#onConsumerSettled = onConsumerSettled
+    this.#onAuthenticatedMessage = onAuthenticatedMessage
+  }
+
+  peerBinding(): Readonly<{
+    peerPathId: Uint8Array<ArrayBuffer>
+    attemptId: Uint8Array<ArrayBuffer>
+  }> | undefined {
+    return this.#authority.peerBinding()
+  }
+
+  get settlement(): V2ProtocolOperationSettlement | undefined {
+    return this.#settlement
   }
 
   next(signal?: AbortSignal): Promise<V2SessionMessage> {
@@ -94,13 +141,17 @@ export class V2OperationQueue implements V2SessionOperation {
     })
   }
 
-  push(message: V2SessionMessage): Promise<void> {
-    const pushed = this.#pushTail.then(() => this.#push(message))
+  push(message: V2SessionMessage, laneId?: number, laneEpoch?: number): Promise<void> {
+    const pushed = this.#pushTail.then(() => this.#push(message, laneId, laneEpoch))
     this.#pushTail = pushed.catch(() => undefined)
     return pushed
   }
 
-  async #push(message: V2SessionMessage): Promise<void> {
+  async #push(
+    message: V2SessionMessage,
+    laneId?: number,
+    laneEpoch?: number,
+  ): Promise<void> {
     if (this.#failure !== undefined) return
     if (this.#closed) {
       await this.#authority.acceptLate(message)
@@ -114,6 +165,7 @@ export class V2OperationQueue implements V2SessionOperation {
       return
     }
     try {
+      this.#onAuthenticatedMessage(message, laneId, laneEpoch)
       const reader = this.#readers.shift()
       if (reader === undefined) {
         if (this.#messages.length >= V2_SESSION_OPERATION_RESPONSE_QUEUE) {
@@ -134,18 +186,19 @@ export class V2OperationQueue implements V2SessionOperation {
 
   fail(reason: unknown): void {
     if (this.#failure !== undefined) return
-    if (isSessionFailure(reason)) this.#authority.close()
+    const settlement = isSessionFailure(reason) ? 'session_terminal' : 'local_cancel'
+    if (settlement === 'session_terminal') this.#authority.close()
     else this.#authority.retire('local-cancel')
-    this.#rejectConsumer(reason)
+    this.#rejectConsumer(reason, settlement)
   }
 
   cancel(cause: unknown): void {
     if (this.#failure !== undefined) return
     this.#authority.retire('local-cancel')
-    this.#rejectConsumer(cause)
+    this.#rejectConsumer(cause, 'local_cancel')
   }
 
-  #rejectConsumer(reason: unknown): void {
+  #rejectConsumer(reason: unknown, settlement: V2ProtocolOperationSettlement): void {
     if (this.#closed) {
       this.#failure = reason
       this.#clearMessages()
@@ -157,7 +210,7 @@ export class V2OperationQueue implements V2SessionOperation {
     this.#closed = true
     this.#clearMessages()
     for (const reader of this.#readers.splice(0)) reader.reject(reason)
-    this.#settle(true)
+    this.#settle(true, settlement)
   }
 
   close(): void {
@@ -185,11 +238,18 @@ export class V2OperationQueue implements V2SessionOperation {
     for (const reader of this.#readers.splice(0)) {
       reader.reject(new V2SessionRuntimeError('operation', 'Operation is complete'))
     }
-    this.#settle(acceptLateNonterminal)
+    this.#settle(
+      acceptLateNonterminal,
+      acceptLateNonterminal ? 'local_cancel' : 'remote_final',
+    )
   }
 
-  #settle(acceptLateNonterminal: boolean): void {
-    this.#onClose(this.#authority)
+  #settle(
+    acceptLateNonterminal: boolean,
+    settlement: V2ProtocolOperationSettlement,
+  ): void {
+    this.#settlement = settlement
+    this.#onClose(this.#authority, settlement)
     if (acceptLateNonterminal || this.#messages.length === 0) this.#settleConsumer()
   }
 
@@ -207,6 +267,11 @@ export class V2OperationQueue implements V2SessionOperation {
 
 }
 
+export interface V2OperationRouterDiagnostics {
+  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
+  readonly trace?: V2ProtocolTraceSource
+}
+
 export class V2OperationRouter {
   readonly #operations = new Map<string, V2OperationQueue>()
   readonly #draining = new Set<V2OperationQueue>()
@@ -214,11 +279,18 @@ export class V2OperationRouter {
   readonly #now: () => number
   readonly #tombstones = new Map<string, V2OperationTombstone>()
   readonly #admission = new V2SessionQueueAdmission()
+  readonly #diagnostics: V2OperationRouterDiagnostics | undefined
+  readonly #protocolFailures = new WeakMap<V2SessionMessage, ProtocolFailure>()
   #terminal: unknown
 
-  constructor(onTerminal: (reason: unknown) => void, now: () => number = () => Date.now()) {
+  constructor(
+    onTerminal: (reason: unknown) => void,
+    now: () => number = () => Date.now(),
+    diagnostics?: V2OperationRouterDiagnostics,
+  ) {
     this.#onTerminal = onTerminal
     this.#now = now
+    this.#diagnostics = diagnostics
   }
 
   create(
@@ -245,15 +317,21 @@ export class V2OperationRouter {
       requestKind,
       canonicalRequestBody,
       this.#admission,
-      (authority) => {
+      (authority, settlement) => {
         this.#operations.delete(key)
         this.#draining.add(operation)
         this.#tombstones.set(key, new V2OperationTombstone(
           this.#now() + V2_OPERATION_TOMBSTONE_MILLISECONDS,
           authority,
         ))
+        if (settlement !== 'remote_final') {
+          this.#emitSettlement(operation, settlement)
+        }
       },
       () => this.#draining.delete(operation),
+      (message, laneId, laneEpoch) => {
+        this.#captureProtocolFailure(operation, message, laneId, laneEpoch)
+      },
     )
     this.#operations.set(key, operation)
     return operation
@@ -267,7 +345,15 @@ export class V2OperationRouter {
     return Object.freeze([...this.#operations.values()])
   }
 
-  async route(message: V2SessionMessage): Promise<void> {
+  protocolFailureFor(message: V2SessionMessage): ProtocolFailure | undefined {
+    return this.#protocolFailures.get(message)
+  }
+
+  async route(
+    message: V2SessionMessage,
+    laneId?: number,
+    laneEpoch?: number,
+  ): Promise<void> {
     if (this.#terminal !== undefined) return
     if (message.kind === V2_MESSAGE_KIND.sessionTerminal) {
       const reason = new V2SessionRuntimeError('session', 'Sender ended the protocol session')
@@ -282,7 +368,29 @@ export class V2OperationRouter {
     const key = encodeBase64Url(operationId)
     const operation = this.#operations.get(key)
     if (operation !== undefined) {
-      await operation.push(message)
+      await operation.push(message, laneId, laneEpoch)
+      if (message.kind !== V2_MESSAGE_KIND.blockFragment) {
+        this.#emitTrace(() => Object.freeze({
+          eventName: 'protocol_operation',
+          transition: 'response_received',
+          requestKind: protocolMessageKindV1(operation.requestKind),
+          responseKind: protocolMessageKindV1(message.kind),
+          correlation: this.#operationCorrelation(operation, laneId, laneEpoch),
+        }))
+      }
+      const protocolFailure = this.#protocolFailures.get(message)
+      if (protocolFailure !== undefined) {
+        this.#emitTrace(() => Object.freeze({
+          eventName: 'protocol_operation',
+          transition: 'authenticated_failure',
+          requestKind: protocolFailure.requestKind,
+          protocolFailure,
+          correlation: protocolFailure.correlation,
+        }))
+      }
+      if (operation.settlement === 'remote_final') {
+        this.#emitSettlement(operation, 'remote_final', laneId, laneEpoch)
+      }
       return
     }
     this.#pruneTombstones()
@@ -302,6 +410,93 @@ export class V2OperationRouter {
     this.#operations.clear()
     this.#draining.clear()
     this.#tombstones.clear()
+  }
+
+  #captureProtocolFailure(
+    operation: V2OperationQueue,
+    message: V2SessionMessage,
+    laneId?: number,
+    laneEpoch?: number,
+  ): void {
+    if (message.kind !== V2_MESSAGE_KIND.operationError) return
+    const diagnostics = this.#diagnostics
+    if (diagnostics === undefined) return
+    const decoded = decodeV2OperationErrorControl(message.body)
+    const peerBinding = operation.peerBinding()
+    const correlation: ProtocolFailure['correlation'] = Object.freeze({
+      protocolSessionId: diagnostics.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      ...(peerBinding === undefined
+        ? {}
+        : {
+            peerPathId: createV2PeerPathIdentityValue(peerBinding.peerPathId),
+            peerAttemptId: createV2PeerAttemptIdentity(peerBinding.attemptId),
+          }),
+      ...(laneId === undefined || laneEpoch === undefined
+        ? {}
+        : { lane: Object.freeze({ id: laneId, epoch: laneEpoch }) }),
+    })
+    this.#protocolFailures.set(message, createProtocolFailure({
+      requestKind: protocolMessageKindV1(operation.requestKind),
+      wireScope: decoded.scope,
+      wireCode: decoded.code,
+      retryable: decoded.retryable,
+      ...(decoded.retryAfterMilliseconds === undefined
+        ? {}
+        : { retryAfterMilliseconds: decoded.retryAfterMilliseconds }),
+      settlement: Object.freeze({ kind: 'received_authenticated' }),
+      correlation,
+    }))
+  }
+
+  #emitSettlement(
+    operation: V2OperationQueue,
+    settlement: V2ProtocolOperationSettlement,
+    laneId?: number,
+    laneEpoch?: number,
+  ): void {
+    this.#emitTrace(() => Object.freeze({
+      eventName: 'protocol_operation',
+      transition: 'settled',
+      requestKind: protocolMessageKindV1(operation.requestKind),
+      settlement,
+      correlation: this.#operationCorrelation(operation, laneId, laneEpoch),
+    }))
+  }
+
+  #operationCorrelation(
+    operation: V2OperationQueue,
+    laneId: number | undefined,
+    laneEpoch: number | undefined,
+  ): FailureCorrelation {
+    const diagnostics = this.#diagnostics
+    if (diagnostics === undefined) {
+      throw new V2SessionRuntimeError('session', 'Protocol trace correlation is unavailable')
+    }
+    const peerBinding = operation.peerBinding()
+    return Object.freeze({
+      protocolSessionId: diagnostics.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      ...(peerBinding === undefined
+        ? {}
+        : {
+            peerPathId: createV2PeerPathIdentityValue(peerBinding.peerPathId),
+            peerAttemptId: createV2PeerAttemptIdentity(peerBinding.attemptId),
+          }),
+      ...(laneId === undefined || laneEpoch === undefined
+        ? {}
+        : { lane: Object.freeze({ id: laneId, epoch: laneEpoch }) }),
+    })
+  }
+
+  #emitTrace(createEvent: () => V2ProtocolTraceEvent): void {
+    try {
+      const observer = this.#diagnostics?.trace?.current
+      if (observer === undefined) return
+      observer(createEvent())
+    } catch {
+      // Trace failure cannot alter authenticated routing or queue settlement.
+    }
   }
 
   #pruneTombstones(): void {

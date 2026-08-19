@@ -13,8 +13,7 @@ import {
   V2ConnectivityRouteAuthority,
   type V2ContentLaneAdmissionObservation,
 } from '../../src/connectivity/v2-receiver-policy'
-import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
-import type { V2PeerAttemptMilestone } from '../../src/connectivity/v2-peer-attempt'
+import type { V2PeerAttemptTraceEvent } from '../../src/connectivity/diagnostics'
 import {
   V2BrowserSessionFactory,
   type V2AttachedRelay,
@@ -24,6 +23,10 @@ import {
 } from '../../src/receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+import {
+  createV2ProtocolSessionIdentity,
+  type V2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import { V2SessionRuntimeError, type V2LaneChange } from '../../src/session/v2-runtime-types'
 import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
 
@@ -39,6 +42,7 @@ afterEach(() => vi.useRealTimers())
 class FakeSession {
   readonly initialLaneId: number
   readonly keys: { readonly protocolSessionId: Uint8Array<ArrayBuffer>; readonly initialLaneEpoch: 0 }
+  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
   readonly #laneIds: Set<number>
   readonly #listeners = new Set<(change: V2LaneChange) => void>()
   closeCalls = 0
@@ -51,6 +55,7 @@ class FakeSession {
       protocolSessionId: identity(this.initialLaneId + 100),
       initialLaneEpoch: 0,
     })
+    this.protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
     this.#laneIds = new Set(laneIds)
   }
 
@@ -315,7 +320,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     const supervisor = new V2ReceiverReconnectSupervisor({
       descriptor: descriptor(),
       initial: core(session, relay),
@@ -325,7 +330,9 @@ describe('v2 receiver reconnect supervisor', () => {
         offer: async () => { throw new Error('synthetic observed peer failure') },
       }),
       nativePeerUsable: () => true,
-      connectivityObserver: (event) => diagnostics.push(event),
+      connectivityTrace: { current: (event) => {
+        if (event.eventName === 'peer_attempt') diagnostics.push(event)
+      } },
     })
 
     const activation = supervisor.beginConnectivity('preview')
@@ -367,6 +374,9 @@ describe('v2 receiver reconnect supervisor', () => {
     await flushReconciliation()
 
     expect(supervisor.generationId).toBe(2)
+    expect(supervisor.protocolSessionIdentity.copyBytes()).toEqual(
+      secondSession.protocolSessionIdentity.copyBytes(),
+    )
     expect(observations).toEqual([
       { laneId: 1, laneEpoch: 0, route: 'relay' },
       { laneId: 10, laneEpoch: 0, route: 'relay' },
@@ -383,7 +393,7 @@ describe('v2 receiver reconnect supervisor', () => {
     const secondRelay = new TrackedRelay(10)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => core(secondSession, secondRelay)
-    const milestones: V2PeerAttemptMilestone[] = []
+    const milestones: V2PeerAttemptTraceEvent[] = []
     let seed = 20
     const supervisor = new V2ReceiverReconnectSupervisor({
       descriptor: descriptor(),
@@ -394,23 +404,33 @@ describe('v2 receiver reconnect supervisor', () => {
         offer: async () => { throw new Error('synthetic path-scoped failure') },
       }),
       nativePeerUsable: () => true,
-      peerRecovery: {
-        observeAttempt: (milestone) => milestones.push(milestone),
-      },
+      connectivityTrace: { current: (event) => {
+        if (event.eventName === 'peer_attempt') milestones.push(event)
+      } },
     })
     const activation = supervisor.beginConnectivity('preview')
     await flushReconciliation()
-    const first = milestones.find((milestone) => milestone.type === 'phase-deadline-armed')
+    const first = milestones.find((milestone) =>
+      milestone.stage === 'negotiation-deadline-armed')
     expect(first).toBeDefined()
 
     firstSession.detach(1)
     await flushReconciliation()
-    const armed = milestones.filter((milestone) => milestone.type === 'phase-deadline-armed')
+    const armed = milestones.filter((milestone) =>
+      milestone.stage === 'negotiation-deadline-armed')
     expect(armed).toHaveLength(2)
-    expect(armed[1]).toMatchObject({ protocolSessionId: supervisor.protocolSessionId })
-    expect(armed[1]?.protocolSessionId).not.toBe(armed[0]?.protocolSessionId)
-    expect(armed[1]?.peerPathId).not.toBe(armed[0]?.peerPathId)
-    expect(armed[1]?.attemptId).not.toBe(armed[0]?.attemptId)
+    expect(armed[1]?.correlation.protocolSessionId?.copyBytes()).toEqual(
+      secondSession.protocolSessionIdentity.copyBytes(),
+    )
+    expect(armed[1]?.correlation.protocolSessionId?.copyBytes()).not.toEqual(
+      armed[0]?.correlation.protocolSessionId?.copyBytes(),
+    )
+    expect(armed[1]?.correlation.peerPathId?.copyBytes()).not.toEqual(
+      armed[0]?.correlation.peerPathId?.copyBytes(),
+    )
+    expect(armed[1]?.correlation.peerAttemptId?.copyBytes()).not.toEqual(
+      armed[0]?.correlation.peerAttemptId?.copyBytes(),
+    )
     expect(supervisor.contentLaneCount(activation.routes)).toBe(1)
 
     activation.close()

@@ -404,17 +404,17 @@ func (value FilesystemOutputOperation) Name() (string, bool) {
 	return names[value], true
 }
 
-type SenderTerminalTransport uint8
+type SenderTerminalSendTransport uint8
 
 const (
-	SenderTerminalAccepted SenderTerminalTransport = iota + 1
-	SenderTerminalNotReached
-	SenderTerminalUnsettled
-	SenderTerminalRejected
-	SenderTerminalRetired
+	SenderTerminalSendAccepted SenderTerminalSendTransport = iota + 1
+	SenderTerminalSendNotReached
+	SenderTerminalSendUnsettled
+	SenderTerminalSendRejected
+	SenderTerminalSendRetired
 )
 
-func (value SenderTerminalTransport) Name() (string, bool) {
+func (value SenderTerminalSendTransport) Name() (string, bool) {
 	names := [...]string{
 		"", "accepted", "not_reached", "unsettled", "rejected_before_acceptance", "retired_before_acceptance",
 	}
@@ -424,15 +424,15 @@ func (value SenderTerminalTransport) Name() (string, bool) {
 	return names[value], true
 }
 
-type SenderTerminalOutcome uint8
+type SenderTerminalSendOutcome uint8
 
 const (
-	SenderTerminalDelivered SenderTerminalOutcome = iota + 1
-	SenderTerminalDropped
-	SenderTerminalUnknown
+	SenderTerminalSendDelivered SenderTerminalSendOutcome = iota + 1
+	SenderTerminalSendDropped
+	SenderTerminalSendUnknown
 )
 
-func (value SenderTerminalOutcome) Name() (string, bool) {
+func (value SenderTerminalSendOutcome) Name() (string, bool) {
 	names := [...]string{"", "delivered", "dropped", "unknown"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
@@ -440,16 +440,56 @@ func (value SenderTerminalOutcome) Name() (string, bool) {
 	return names[value], true
 }
 
-type SenderTerminalDecision uint8
+type SenderTerminalSendDecision uint8
 
 const (
-	SenderTerminalDecisionDelivered SenderTerminalDecision = iota + 1
-	SenderTerminalNaturalRetirement
-	SenderTerminalFailed
+	SenderTerminalSendDecisionDelivered SenderTerminalSendDecision = iota + 1
+	SenderTerminalSendNaturalRetirement
+	SenderTerminalSendFailed
 )
 
-func (value SenderTerminalDecision) Name() (string, bool) {
+func (value SenderTerminalSendDecision) Name() (string, bool) {
 	names := [...]string{"", "delivered", "natural_retirement", "failed"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SenderSessionTerminalTrigger uint8
+
+const (
+	SenderSessionTerminalGracefulStop SenderSessionTerminalTrigger = iota + 1
+	SenderSessionTerminalForcedClose
+	SenderSessionTerminalPeerTerminal
+	SenderSessionTerminalPathsExhausted
+	SenderSessionTerminalRuntimeFailed
+)
+
+func (value SenderSessionTerminalTrigger) Name() (string, bool) {
+	names := [...]string{
+		"", "graceful_stop", "forced_close", "peer_terminal", "paths_exhausted", "runtime_failed",
+	}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SenderSessionTerminalProvenance uint8
+
+const (
+	SenderSessionTerminalNormalStop SenderSessionTerminalProvenance = iota + 1
+	SenderSessionTerminalCallerStop
+	SenderSessionTerminalRemoteClose
+	SenderSessionTerminalLaneRetirement
+	SenderSessionTerminalLocalFault
+)
+
+func (value SenderSessionTerminalProvenance) Name() (string, bool) {
+	names := [...]string{
+		"", "normal_stop", "caller_stop", "remote_close", "lane_retirement", "local_fault",
+	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}

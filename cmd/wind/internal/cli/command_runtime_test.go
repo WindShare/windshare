@@ -72,7 +72,8 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	shareDiagnostics := newShareObservations(runtime)
 	if !runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() == nil ||
 		getDiagnostics.relayObservationCapacity() == 0 || getDiagnostics.webRTCObservationCapacity() == 0 || getDiagnostics.laneSettlementObservationCapacity() == 0 ||
-		shareDiagnostics.protocolTracer() == nil || shareDiagnostics.relayObservationCapacity() == 0 {
+		shareDiagnostics.protocolTracer() == nil || shareDiagnostics.terminalSendObserver() == nil ||
+		shareDiagnostics.sessionTerminalObserver() == nil || shareDiagnostics.relayObservationCapacity() == 0 {
 		t.Fatal("verbose/trace runtime did not enable detailed diagnostics")
 	}
 	if !runtime.Publish(clievent.NewReady()) {
@@ -104,8 +105,61 @@ func TestCommandRuntimeLeavesProtocolHotPathUnobservedByDefault(t *testing.T) {
 	shareDiagnostics := newShareObservations(runtime)
 	if runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() != nil ||
 		getDiagnostics.relayObservationCapacity() != 0 || getDiagnostics.webRTCObservationCapacity() != 0 || getDiagnostics.laneSettlementObservationCapacity() != 0 ||
-		shareDiagnostics.protocolTracer() != nil || shareDiagnostics.relayObservationCapacity() != 0 {
+		shareDiagnostics.protocolTracer() != nil || shareDiagnostics.terminalSendObserver() != nil ||
+		shareDiagnostics.sessionTerminalObserver() != nil || shareDiagnostics.relayObservationCapacity() != 0 {
 		t.Fatal("default runtime enabled detailed diagnostics")
+	}
+}
+
+func TestCommandRuntimeSeparatesDetailedAndTraceOnlyObserverAuthority(t *testing.T) {
+	tests := []struct {
+		name         string
+		verbose      bool
+		trace        bool
+		wantDetailed bool
+	}{
+		{name: "default"},
+		{name: "verbose_only", verbose: true, wantDetailed: true},
+		{name: "trace_only", trace: true, wantDetailed: true},
+		{name: "trace_and_verbose", verbose: true, trace: true, wantDetailed: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			opened := false
+			recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+			app := &App{
+				Stderr: bytes.NewBuffer(nil),
+				openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+					opened = true
+					return recorder, nil
+				},
+			}
+			options := observationOptions{verbose: test.verbose}
+			if test.trace {
+				options = testExactTraceOptions("trace.ndjson")
+				options.verbose = test.verbose
+			}
+
+			runtime, err := app.newCommandRuntime(clievent.CommandShare, options)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer runtime.Close()
+
+			observations := newShareObservations(runtime)
+			if opened != test.trace || runtime.traceRecordingEnabled() != test.trace {
+				t.Fatalf("trace opened=%t enabled=%t, want %t", opened, runtime.traceRecordingEnabled(), test.trace)
+			}
+			if runtime.detailedDiagnosticsEnabled() != test.wantDetailed ||
+				(observations.protocolTracer() != nil) != test.wantDetailed {
+				t.Fatalf("detailed runtime=%t protocol=%t, want %t", runtime.detailedDiagnosticsEnabled(), observations.protocolTracer() != nil, test.wantDetailed)
+			}
+			if (observations.terminalSendObserver() != nil) != test.trace ||
+				(observations.sessionTerminalObserver() != nil) != test.trace {
+				t.Fatalf("terminal send=%t session=%t, want trace=%t", observations.terminalSendObserver() != nil, observations.sessionTerminalObserver() != nil, test.trace)
+			}
+		})
 	}
 }
 

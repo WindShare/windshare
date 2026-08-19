@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const captured = vi.hoisted(() => ({
+  sessionOptions: [] as Array<Record<string, unknown>>,
+  factoryOptions: [] as Array<Record<string, unknown>>,
   supervisorOptions: [] as Array<Record<string, unknown>>,
 }))
 
@@ -56,7 +58,8 @@ vi.mock('../../src/transport/relay/v2-receiver', () => ({
 
 vi.mock('../../src/session/v2-runtime', () => ({
   V2ReceiverSessionRuntime: class {
-    static async connect() {
+    static async connect(options: Record<string, unknown>) {
+      captured.sessionOptions.push(options)
       return {
         initialLaneId: 7,
         close: async () => undefined,
@@ -67,6 +70,10 @@ vi.mock('../../src/session/v2-runtime', () => ({
 
 vi.mock('../../src/receiver/v2-session-factory', () => ({
   V2BrowserSessionFactory: class {
+    constructor(options: Record<string, unknown>) {
+      captured.factoryOptions.push(options)
+    }
+
     close(): void {}
   },
 }))
@@ -112,13 +119,16 @@ import {
 
 describe('v2 browser gateway connectivity injection', () => {
   beforeEach(() => {
+    captured.sessionOptions.length = 0
+    captured.factoryOptions.length = 0
     captured.supervisorOptions.length = 0
   })
 
-  it('forwards connectivity diagnostics to the supervisor', async () => {
+  it('forwards lazy protocol and connectivity traces through every generation boundary', async () => {
     const offersFactory = () => ({ offer: vi.fn() }) as never
     const nativePeerUsable = () => true
-    const connectivityObserver = vi.fn()
+    const protocolTrace = { current: vi.fn() }
+    const connectivityTrace = { current: vi.fn() }
     const onBlockDispatched = vi.fn()
     const onBlockFetched = vi.fn()
     const onContentLaneAdmitted = vi.fn()
@@ -126,7 +136,8 @@ describe('v2 browser gateway connectivity injection', () => {
     const gateway = new V2BrowserReceiverGateway({
       offersFactory,
       nativePeerUsable,
-      connectivityObserver,
+      protocolTrace,
+      connectivityTrace,
       onBlockDispatched,
       onBlockFetched,
       onContentLaneAdmitted,
@@ -141,7 +152,9 @@ describe('v2 browser gateway connectivity injection', () => {
 
     expect(options?.offersFactory).toBe(offersFactory)
     expect(options?.nativePeerUsable).toBe(nativePeerUsable)
-    expect(options?.connectivityObserver).toBe(connectivityObserver)
+    expect(options?.connectivityTrace).toBe(connectivityTrace)
+    expect(captured.sessionOptions.at(-1)?.protocolTrace).toBe(protocolTrace)
+    expect(captured.factoryOptions.at(-1)?.protocolTrace).toBe(protocolTrace)
     expect(options?.onBlockDispatched).toBe(onBlockDispatched)
     expect(options?.onBlockFetched).toBe(onBlockFetched)
     expect(options?.onContentLaneAdmitted).toBe(onContentLaneAdmitted)
@@ -240,7 +253,7 @@ describe('v2 joined-share projection authority', () => {
       rules: selectionRulesSpecFromPolicy(frozenSelection),
     })
     const controller = new SelectionProjectionController()
-    controller.beginSelection(selection, supervisor.protocolSessionId)
+    controller.beginSelection(selection)
     const states: SelectionProjectionState[] = []
 
     for await (const state of discoverAuthenticatedSelection(

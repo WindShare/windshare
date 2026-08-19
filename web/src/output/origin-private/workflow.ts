@@ -1,3 +1,9 @@
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import type {
   PackagedArtifactV1,
@@ -42,14 +48,17 @@ export class OriginPrivatePackageWorkflow {
   readonly #stages: WorkspaceOperationStages
   readonly #store: OriginPrivatePackageStore
   readonly #createZipBuilder: () => OriginPrivateZipPackageBuilder
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
 
   constructor(input: {
     readonly stages: WorkspaceOperationStages
     readonly store: OriginPrivatePackageStore
     readonly createZipBuilder?: () => OriginPrivateZipPackageBuilder
+    readonly diagnostics?: OutputDiagnosticsPorts
   }) {
     this.#stages = input.stages
     this.#store = input.store
+    this.#diagnostics = input.diagnostics
     this.#createZipBuilder = input.createZipBuilder ?? (() => new OriginPrivateZipPackageBuilder())
   }
 
@@ -78,6 +87,7 @@ export class OriginPrivatePackageWorkflow {
       })
       return this.#finishZipResult(result, builder, allocation, input)
     } catch (error) {
+      this.#recordPackageFailure(error)
       return this.#recordFailure(error, allocation, input.sealedMaterialization)
     }
   }
@@ -106,6 +116,7 @@ export class OriginPrivatePackageWorkflow {
         verification,
       )
     } catch (error) {
+      this.#recordPackageFailure(error)
       return this.#recordFailure(error, allocation, input.sealedMaterialization)
     }
   }
@@ -121,6 +132,12 @@ export class OriginPrivatePackageWorkflow {
         temporaryCleanup: proof,
       })
     } catch (error) {
+      recordOutputException(
+        this.#diagnostics?.failures?.cleanup,
+        error,
+        { recoveryDisposition: 'needs_attention' },
+      )
+      this.#traceCleanup('ownership_unknown')
       if (!(error instanceof TargetOwnershipUnknownError)) throw error
       return this.#stages.recordTargetOwnershipUnknown(input.sealedMaterializationDigest)
     }
@@ -130,16 +147,47 @@ export class OriginPrivatePackageWorkflow {
     sealedMaterialization: SealedMaterializationV1,
     retry: boolean,
   ): Promise<OriginPrivatePackageAllocation> {
-    const allocation = await this.#store.allocatePackage()
+    const allocation = await this.#store.allocatePackage().catch((error: unknown) => {
+      recordOutputException(
+        this.#diagnostics?.failures?.outputReservation,
+        error,
+        { recoveryDisposition: retry ? 'resumable_package' : 'none' },
+      )
+      this.#traceReservation('failed')
+      throw error
+    })
     try {
       if (retry) {
         await this.#stages.resumePackage(sealedMaterialization, allocation.handleRecord)
       } else {
         await this.#stages.startPackage(sealedMaterialization, allocation.handleRecord)
       }
+      this.#traceReservation('acquired')
       return allocation
     } catch (error) {
-      await this.#store.cleanupUncommittedPackage(allocation).catch(() => undefined)
+      if (retry) {
+        recordOutputException(
+          this.#diagnostics?.failures?.continuation,
+          error,
+          { recoveryDisposition: 'resumable_package' },
+        )
+        this.#traceContinuationFailure()
+      } else {
+        recordOutputException(
+          this.#diagnostics?.failures?.outputReservation,
+          error,
+          { recoveryDisposition: 'none' },
+        )
+        this.#traceReservation('failed')
+      }
+      await this.#store.cleanupUncommittedPackage(allocation).catch((cleanupError: unknown) => {
+        recordOutputException(
+          this.#diagnostics?.failures?.cleanup,
+          cleanupError,
+          { recoveryDisposition: 'needs_attention' },
+        )
+        this.#traceCleanup('failed')
+      })
       throw error
     }
   }
@@ -211,12 +259,72 @@ export class OriginPrivatePackageWorkflow {
       }
       return Object.freeze({ kind: 'retryable-failure', reason, state })
     } catch (cleanupError) {
+      recordOutputException(
+        this.#diagnostics?.failures?.cleanup,
+        cleanupError,
+        { recoveryDisposition: 'needs_attention' },
+      )
+      this.#traceCleanup(cleanupError instanceof TargetOwnershipUnknownError
+        ? 'ownership_unknown'
+        : 'failed')
       if (!(cleanupError instanceof TargetOwnershipUnknownError)) throw cleanupError
       return Object.freeze({
         kind: 'needs-attention',
         state: await this.#stages.recordTargetOwnershipUnknown(seal.digest),
       })
     }
+  }
+
+  #recordPackageFailure(error: unknown): void {
+    if (error instanceof TargetOwnershipUnknownError && error.stage === 'cleanup') {
+      recordOutputException(
+        this.#diagnostics?.failures?.cleanup,
+        error,
+        { recoveryDisposition: 'needs_attention' },
+      )
+      this.#traceCleanup('ownership_unknown')
+      return
+    }
+    recordOutputException(
+      this.#diagnostics?.failures?.outputWrite,
+      error,
+      {
+        recoveryDisposition: error instanceof TargetOwnershipUnknownError
+          ? 'needs_attention'
+          : 'resumable_package',
+      },
+    )
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('output_write', {
+        backend: 'origin_private',
+        transition: 'transaction_failed',
+      }))
+  }
+
+  #traceReservation(transition: 'acquired' | 'failed'): void {
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('output_reservation', {
+        backend: 'origin_private',
+        transition,
+      }))
+  }
+
+  #traceContinuationFailure(): void {
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('continuation', {
+        backend: 'origin_private',
+        transition: 'admission_failed',
+      }))
+  }
+
+  #traceCleanup(
+    transition: 'ownership_unknown' | 'failed',
+  ): void {
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('cleanup', {
+        backend: 'origin_private',
+        transition,
+      }))
   }
 }
 

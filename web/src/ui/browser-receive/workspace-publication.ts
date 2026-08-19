@@ -1,3 +1,4 @@
+import type { OutputDiagnosticsPorts } from '../../output/diagnostics'
 import { removeOriginPrivateWorkspaceNamespace, type OriginPrivateWorkspaceNamespace } from '../../output/origin-private/namespace'
 import type { OriginPrivateRetainedArtifactBackend } from '../../output/origin-private/session'
 import { BrowserHandoffNotStartedError, createWindowBrowserHandoffPublisher } from '../../output/portable/browser-download'
@@ -28,6 +29,7 @@ export async function handoffRetainedWorkspacePackage(
   windowPort: BrowserReceiveWindow,
   operation: RetainedWorkspaceHandoffOperation,
   backend: OriginPrivateRetainedArtifactBackend,
+  diagnostics?: OutputDiagnosticsPorts,
 ): Promise<ReceiveLifecycleState> {
   const { lifecycle } = operation
   if (lifecycle.kind !== 'waiting-to-save' &&
@@ -47,7 +49,11 @@ export async function handoffRetainedWorkspacePackage(
   try {
     const publisher = createPackagedArtifactHandoffPublisher({
       packages: backend.packagedArtifacts,
-      browser: createWindowBrowserHandoffPublisher(windowPort),
+      browser: createWindowBrowserHandoffPublisher(
+        windowPort,
+        undefined,
+        diagnostics,
+      ),
       File: windowPort.File,
     })
     const started = await publisher.handoff({ artifact, attempt, retryableUntil })

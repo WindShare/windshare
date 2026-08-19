@@ -1,5 +1,6 @@
 import type { FrameChannel } from '../contracts/channel'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
+import type { V2ProtocolTraceSource } from './v2-diagnostics'
 import type { V2MessageKind, V2SessionMessage } from './v2-message'
 
 export const V2_OPERATION_CANCEL_REASON = Object.freeze({
@@ -40,6 +41,7 @@ export interface V2ReceiverSessionOptions {
   readonly signal?: AbortSignal
   readonly randomBytes?: (length: number) => Uint8Array
   readonly connectivityCleanup?: () => void | Promise<void>
+  readonly protocolTrace?: V2ProtocolTraceSource
 }
 
 export class V2SessionRuntimeError extends Error {

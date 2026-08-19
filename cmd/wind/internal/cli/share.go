@@ -360,10 +360,11 @@ func (a *App) newShareRuntimeFactory(
 		return nil, fmt.Errorf("initialize direct peer connectivity: %w", err)
 	}
 	return prepared.NewRuntimeFactory(liveshare.RuntimeFactoryConfig{
-		TerminalConnectivity: lifecycle,
-		PeerHandlers:         peers,
-		TerminalObserver:     observations,
-		ProtocolTracer:       observations.protocolTracer(),
+		TerminalConnectivity:    lifecycle,
+		PeerHandlers:            peers,
+		TerminalSendObserver:    observations.terminalSendObserver(),
+		SessionTerminalObserver: observations.sessionTerminalObserver(),
+		ProtocolTracer:          observations.protocolTracer(),
 	})
 }
 

@@ -1,0 +1,240 @@
+import { describe, expect, it, vi } from 'vitest'
+
+import {
+  createIncidentScopeIssuer,
+  type FailureFact,
+  type FailureFactRelation,
+  type FailureFactSink,
+} from '../../src/diagnostics/incident'
+import {
+  createAttemptOutputFailureCapability,
+  createLateOutputCleanupCapability,
+  createOutputFailureBinding,
+  createOutputFailureSink,
+  emitOutputTrace,
+  nativeFailureClass,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputTraceEvent,
+  type OutputTraceSource,
+} from '../../src/output/diagnostics'
+import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+
+describe('output diagnostics', () => {
+  it('records a stage-fixed privacy-safe consequence without retaining the exception', () => {
+    const scope = createIncidentScopeIssuer().open('receive')
+    const facts: FailureFact[] = []
+    const relations: FailureFactRelation[] = []
+    const forwarding: FailureFactSink = Object.freeze({
+      record: (fact: FailureFact, relation: FailureFactRelation) => {
+        facts.push(fact)
+        relations.push(relation)
+        return scope.facts.record(fact, relation)
+      },
+    })
+    const sink = createOutputFailureSink({
+      facts: forwarding,
+      stage: 'settlement',
+      relation: 'consequence',
+      recoveryDisposition: 'needs_attention',
+    })
+    const error = new TargetOwnershipUnknownError('settlement', 'private-operation', {
+      cause: new Error('private path and name'),
+    })
+
+    const ref = recordOutputException(sink, error)
+
+    expect(ref?.scope).toEqual(scope.identity)
+    expect(relations).toEqual(['consequence'])
+    expect(facts).toEqual([
+      expect.objectContaining({
+        kind: 'native_output_failure',
+        stage: 'settlement',
+        recoveryDisposition: 'needs_attention',
+        payload: {
+          nativeOutputFailure: {
+            nativeClass: 'invalid_state',
+            code: 'ownership',
+          },
+        },
+      }),
+    ])
+    const encoded = JSON.stringify(facts)
+    expect(encoded).not.toContain('private-operation')
+    expect(encoded).not.toContain('private path')
+    expect(encoded).not.toContain('TargetOwnershipUnknownError')
+  })
+
+  it('keeps browser exception classification closed and does not trust arbitrary names', () => {
+    expect(nativeFailureClass(new DOMException('ignored', 'QuotaExceededError')))
+      .toBe('quota_exceeded')
+    expect(nativeFailureClass(Object.freeze({ name: 'QuotaExceededError' }))).toBe('unknown')
+    expect(nativeFailureClass(new Error('ignored'))).toBe('unknown')
+    expect(nativeFailureClass(new Error('outer', {
+      cause: new DOMException('ignored', 'QuotaExceededError'),
+    }))).toBe('unknown')
+  })
+
+  it('isolates a failing fact sink from the output result', () => {
+    const sink = createOutputFailureSink({
+      facts: Object.freeze({
+        record: () => {
+          throw new Error('diagnostic sink failed')
+        },
+      }) as FailureFactSink,
+      stage: 'cleanup',
+      relation: 'consequence',
+      recoveryDisposition: 'needs_attention',
+    })
+
+    expect(recordOutputException(sink, new DOMException('ignored', 'InvalidStateError')))
+      .toBeUndefined()
+    expect(recordOutputException(Object.freeze({
+      stage: 'cleanup',
+      record: () => {
+        throw new Error('direct diagnostic sink failed')
+      },
+    }), new DOMException('ignored', 'InvalidStateError'))).toBeUndefined()
+  })
+
+  it('routes a long-lived output runtime only to the currently bound attempt', () => {
+    const issuer = createIncidentScopeIssuer()
+    const firstFacts: Array<Readonly<{ fact: FailureFact; relation: FailureFactRelation }>> = []
+    const secondFacts: Array<Readonly<{ fact: FailureFact; relation: FailureFactRelation }>> = []
+    const first = issuer.open('receive', {
+      factRecorded: observation => firstFacts.push({
+        fact: observation.fact,
+        relation: observation.relation,
+      }),
+    })
+    const second = issuer.open('receive', {
+      factRecorded: observation => secondFacts.push({
+        fact: observation.fact,
+        relation: observation.relation,
+      }),
+    })
+    const firstAttempt = createAttemptOutputFailureCapability(first.facts)
+    const secondAttempt = createAttemptOutputFailureCapability(second.facts)
+    const binding = createOutputFailureBinding()
+    const firstLease = binding.bind(firstAttempt.sinks)
+
+    recordOutputException(
+      binding.sinks.outputReservation,
+      new DOMException('private', 'NotAllowedError'),
+    )
+    const secondLease = binding.bind(secondAttempt.sinks)
+    firstLease.revoke()
+    recordOutputException(
+      binding.sinks.checkpoint,
+      new DOMException('private', 'QuotaExceededError'),
+    )
+    recordOutputException(
+      binding.sinks.cleanup,
+      new DOMException('private', 'InvalidStateError'),
+    )
+
+    expect(firstFacts).toMatchObject([
+      {
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'output_reservation',
+          payload: { nativeOutputFailure: { nativeClass: 'not_allowed' } },
+        },
+        relation: 'contributor',
+      },
+    ])
+    expect(secondFacts).toMatchObject([
+      {
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'checkpoint',
+          payload: { nativeOutputFailure: { nativeClass: 'quota_exceeded' } },
+        },
+        relation: 'contributor',
+      },
+      {
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'cleanup',
+          payload: { nativeOutputFailure: { nativeClass: 'invalid_state' } },
+        },
+        relation: 'consequence',
+      },
+    ])
+
+    secondLease.revoke()
+    recordOutputException(
+      binding.sinks.outputWrite,
+      new DOMException('private', 'AbortError'),
+    )
+    expect(secondFacts).toHaveLength(2)
+  })
+
+  it('allows only explicitly owned late cleanup consequences after incident sealing', () => {
+    const observations: Array<Readonly<{
+      fact: FailureFact
+      relation: FailureFactRelation
+    }>> = []
+    const scope = createIncidentScopeIssuer().open('receive', {
+      factRecorded: observation => observations.push({
+        fact: observation.fact,
+        relation: observation.relation,
+      }),
+    })
+    const late = createLateOutputCleanupCapability(scope.facts)
+    scope.close()
+
+    recordOutputException(
+      late.sinks.cleanup,
+      new DOMException('private detach detail', 'InvalidStateError'),
+    )
+    late.revoke()
+    recordOutputException(
+      late.sinks.cleanup,
+      new DOMException('late unrelated cleanup', 'QuotaExceededError'),
+    )
+
+    expect(observations).toMatchObject([{
+      fact: {
+        kind: 'native_output_failure',
+        stage: 'cleanup',
+        payload: { nativeOutputFailure: { nativeClass: 'invalid_state' } },
+      },
+      relation: 'consequence',
+    }])
+  })
+
+  it('does not construct trace payloads while disabled and isolates observers', () => {
+    const createEvent = vi.fn(() =>
+      outputTraceEvent('checkpoint', {
+        backend: 'origin_private',
+        transition: 'failed',
+      }))
+    const disabled: OutputTraceSource = Object.freeze({ current: undefined })
+
+    emitOutputTrace(disabled, createEvent)
+
+    expect(createEvent).not.toHaveBeenCalled()
+
+    const events: OutputTraceEvent[] = []
+    const enabled: OutputTraceSource = {
+      get current() {
+        return (event: OutputTraceEvent) => {
+          events.push(event)
+          throw new Error('diagnostic observer failed')
+        }
+      },
+    }
+    expect(() => emitOutputTrace(enabled, createEvent)).not.toThrow()
+    expect(createEvent).toHaveBeenCalledOnce()
+    expect(events).toEqual([
+      {
+        eventName: 'checkpoint',
+        payload: {
+          backend: 'origin_private',
+          transition: 'failed',
+        },
+      },
+    ])
+  })
+})

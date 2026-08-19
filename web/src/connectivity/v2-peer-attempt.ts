@@ -1,12 +1,18 @@
-import { encodeBase64Url } from '../crypto/bytes'
 import {
   V2LaneAdmissionRejectedError,
   V2LaneAdmissionTransportError,
   V2LaneInstallationError,
-  type V2LaneAdmissionMilestone,
   type V2LaneAdmissionResult,
   type V2ReceiverSessionRuntime,
 } from '../session/v2-runtime'
+import {
+  createV2PeerAttemptIdentity,
+  createV2ProtocolOperationIdentity,
+  equalV2DiagnosticIdentities,
+  type V2PeerAttemptIdentity,
+  type V2PeerPathIdentity,
+  type V2ProtocolSessionIdentity,
+} from '../session/v2-identities'
 import { V2LaneCodecError, type V2LaneGrant } from '../session/v2-lane-codec'
 import { V2SessionRuntimeError } from '../session/v2-runtime-types'
 import {
@@ -28,19 +34,18 @@ import type {
   V2PeerRecoveryAttemptFactory,
   V2PeerRecoveryClock,
 } from './v2-peer-recovery'
+import type { V2ConnectivityTraceSource } from './diagnostics'
 import {
   V2AuthenticatedPeerOperationError,
   createV2PeerBindingForPath,
-  type V2ConnectivityObserver,
-  type V2SessionSignalingObserver,
   V2SessionSignalingRoute,
 } from './v2-session-signaling'
 import type { V2PeerBinding } from './v2-signaling-codec'
 
 export interface V2PeerCandidatePublication {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
-  readonly attemptId: string
+  readonly protocolSessionId: V2ProtocolSessionIdentity
+  readonly peerPathId: V2PeerPathIdentity
+  readonly attemptId: V2PeerAttemptIdentity
   readonly peer: PeerChannel
   readonly route: V2SessionSignalingRoute
   readonly laneId: number
@@ -49,34 +54,6 @@ export interface V2PeerCandidatePublication {
 
 export type V2PeerCandidatePublisher = (candidate: V2PeerCandidatePublication) => boolean
 
-interface V2PeerAttemptCorrelation {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
-  readonly attemptId: string
-  readonly waveOrdinal: number
-  readonly waveAttemptOrdinal: number
-  readonly sessionAttemptOrdinal: number
-}
-
-export type V2PeerAttemptMilestone = V2PeerAttemptCorrelation & (
-  | {
-      readonly type: 'phase-deadline-armed' | 'phase-deadline-expired'
-      readonly phase: V2PeerAttemptPhase
-      readonly budgetMilliseconds: number
-    }
-  | {
-      readonly type: 'grant-requested' | 'grant-received' | 'lane-hello-sent' |
-        'admission-settlement-begun' | 'admission-response-accepted' |
-        'admission-response-rejected' | 'lane-adopted' | 'lane-published'
-      readonly phase: 'admission'
-      readonly grantOperationId: string
-      readonly laneId: number
-      readonly laneEpoch: number
-    }
-)
-
-export type V2PeerAttemptObserver = (milestone: V2PeerAttemptMilestone) => void
-
 export interface V2BrowserPeerAttemptExecutorOptions {
   readonly session: V2ReceiverSessionRuntime
   readonly offers: OfferChannelFactory
@@ -84,11 +61,7 @@ export interface V2BrowserPeerAttemptExecutorOptions {
   readonly clock: V2PeerRecoveryClock
   readonly publish: V2PeerCandidatePublisher
   readonly randomBytes?: (length: number) => Uint8Array
-  readonly connectivityObserver?: V2ConnectivityObserver
-  readonly observePeerSignaling?: V2SessionSignalingObserver
-  readonly observeAttempt?: V2PeerAttemptObserver
-  readonly now?: () => number
-  readonly onFailure?: (error: unknown) => void
+  readonly trace?: V2ConnectivityTraceSource
 }
 
 interface AttemptResources {
@@ -146,11 +119,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   readonly #clock: V2PeerRecoveryClock
   readonly #publish: V2PeerCandidatePublisher
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
-  readonly #connectivityObserver: V2ConnectivityObserver | undefined
-  readonly #observePeerSignaling: V2SessionSignalingObserver | undefined
-  readonly #observeAttempt: V2PeerAttemptObserver | undefined
-  readonly #now: () => number
-  readonly #onFailure: (error: unknown) => void
+  readonly #trace: V2ConnectivityTraceSource | undefined
 
   constructor(options: V2BrowserPeerAttemptExecutorOptions) {
     if (
@@ -163,21 +132,17 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     this.#clock = options.clock
     this.#publish = options.publish
     this.#randomBytes = options.randomBytes
-    this.#connectivityObserver = options.connectivityObserver
-    this.#observePeerSignaling = options.observePeerSignaling
-    this.#observeAttempt = options.observeAttempt
-    this.#now = options.now ?? (() => performance.now())
-    this.#onFailure = options.onFailure ?? (() => undefined)
+    this.#trace = options.trace
   }
 
   createAttempt(context: V2PeerAttemptContext): V2PeerAttemptHandle {
     const binding = this.#randomBytes === undefined
       ? createV2PeerBindingForPath(this.#peerPathIdentity)
       : createV2PeerBindingForPath(this.#peerPathIdentity, this.#randomBytes)
-    const attemptId = encodeBase64Url(binding.attemptId)
+    const attemptId = createV2PeerAttemptIdentity(binding.attemptId)
     const controller = new AbortController()
     let cancellationOwner: Parameters<V2PeerAttemptHandle['cancel']>[0] | undefined
-    const result = this.#run(context, binding, attemptId, controller.signal, () => cancellationOwner)
+    const result = this.#run(context, binding, controller.signal, () => cancellationOwner)
     return Object.freeze({
       attemptId,
       result,
@@ -192,11 +157,9 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   async #run(
     context: V2PeerAttemptContext,
     binding: V2PeerBinding,
-    attemptId: string,
     signal: AbortSignal,
     cancellationOwner: () => Parameters<V2PeerAttemptHandle['cancel']>[0] | undefined,
   ): Promise<V2PeerAttemptResult> {
-    const correlation = this.#correlation(context, attemptId)
     const resources: AttemptResources = { peerOwner: 'attempt' }
     let terminalError: unknown
     try {
@@ -204,20 +167,17 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       const route = new V2SessionSignalingRoute(
         this.#session,
         binding,
-        this.#observePeerSignaling,
-        this.#connectivityObserver,
-        this.#now,
+        this.#trace,
         {
-          waveOrdinal: correlation.waveOrdinal,
-          waveAttemptOrdinal: correlation.waveAttemptOrdinal,
-          sessionAttemptOrdinal: correlation.sessionAttemptOrdinal,
+          waveOrdinal: context.waveOrdinal,
+          waveAttemptOrdinal: context.waveAttemptOrdinal,
+          sessionAttemptOrdinal: context.sessionAttemptOrdinal,
         },
       )
       resources.route = route
       const negotiation = await this.#runPhase(
         'negotiation',
         context.negotiationBudgetMilliseconds,
-        correlation,
         signal,
         route.attemptFailureSignal,
         route,
@@ -234,13 +194,11 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       const admission = await this.#runPhase(
         'admission',
         context.admissionBudgetMilliseconds,
-        correlation,
         signal,
         route.attemptFailureSignal,
         route,
         (phaseSignal) => this.#admit(
           context,
-          correlation,
           resources,
           route,
           peer,
@@ -258,7 +216,6 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
         ? Object.freeze({ type: 'lifecycle-cancelled' as const, owner })
         : Object.freeze({ type: 'failed' as const, failure: this.#classifyFailure(settlement.error) })
       this.#failRoute(resources.route, result)
-      if (result.type === 'failed') this.#reportFailure(settlement.error)
       return result
     } finally {
       if (resources.peerOwner !== 'published') {
@@ -274,23 +231,40 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
 
   async #admit(
     context: V2PeerAttemptContext,
-    correlation: V2PeerAttemptCorrelation,
     resources: AttemptResources,
     route: V2SessionSignalingRoute,
     peer: PeerChannel,
     signal: AbortSignal,
   ): Promise<PhaseWorkSettlement<{ readonly laneId: number; readonly laneEpoch: number }>> {
-    const observeAdmission = (milestone: V2LaneAdmissionMilestone) => {
-      this.#admissionMilestone(correlation, route, milestone)
-    }
     route.throwIfAttemptFailed()
-    const grant = await this.#session.requestLaneGrant(context.requestedLaneId, {
-      signal,
-      observeAdmission,
-    })
+    const grant = await this.#session.requestLaneGrant(context.requestedLaneId, { signal })
+    const grantOperationId = createV2ProtocolOperationIdentity(grant.grantOperationId)
+    const laneIdentity = Object.freeze({ laneId: grant.laneId, laneEpoch: grant.laneEpoch })
+    route.grantRequested(grantOperationId, grant.laneId)
+    route.grantMilestone('grant-received', grantOperationId, laneIdentity)
     route.throwIfAttemptFailed()
+
     resources.peerOwner = 'adoption'
-    const adoption = await this.#session.adoptGrantedLane(peer, grant, { signal, observeAdmission })
+    const adoption = await this.#session.adoptGrantedLane(peer, grant, { signal })
+    if (adoption.disposition !== 'unverified') {
+      route.grantMilestone('lane-hello-sent', grantOperationId, laneIdentity)
+      route.grantMilestone('admission-response-received', grantOperationId, laneIdentity)
+      route.admissionResponseSettled(
+        grantOperationId,
+        laneIdentity,
+        adoption.disposition === 'accepted'
+          ? Object.freeze({ disposition: 'accepted' })
+          : Object.freeze({
+              disposition: 'rejected',
+              rejectionCode: adoption.rejection.code,
+              retryAfterMilliseconds: adoption.rejection.retryAfterMilliseconds,
+            }),
+      )
+      if (adoption.disposition === 'accepted' && adoption.installation === 'installed') {
+        route.grantMilestone('lane-attached', grantOperationId, laneIdentity)
+      }
+    }
+
     const settlement = receiverAdmissionSettlement(grant, adoption)
     if (settlement.type === 'failed') return settlement
     resources.peerOwner = 'runtime'
@@ -298,9 +272,9 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     let published: boolean
     try {
       published = this.#publish({
-        protocolSessionId: correlation.protocolSessionId,
-        peerPathId: correlation.peerPathId,
-        attemptId: correlation.attemptId,
+        protocolSessionId: context.protocolSessionId,
+        peerPathId: context.peerPathId,
+        attemptId: createV2PeerAttemptIdentity(route.binding.attemptId),
         peer,
         route,
         laneId: grant.laneId,
@@ -313,38 +287,18 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       return failedPhase(new V2LaneInstallationError(), 'authenticated-admission')
     }
     resources.peerOwner = 'published'
-    const grantOperationId = encodeBase64Url(grant.grantOperationId)
-    const laneIdentity = { laneId: grant.laneId, laneEpoch: grant.laneEpoch }
-    this.#emit({
-      ...correlation,
-      type: 'lane-published',
-      phase: 'admission',
-      grantOperationId,
-      laneId: grant.laneId,
-      laneEpoch: grant.laneEpoch,
-    })
     route.grantMilestone('admitted', grantOperationId, laneIdentity)
-    return completedPhase(
-      Object.freeze({ laneId: grant.laneId, laneEpoch: grant.laneEpoch }),
-      'authenticated-admission',
-    )
+    return completedPhase(laneIdentity, 'authenticated-admission')
   }
 
   async #runPhase<T>(
     phase: V2PeerAttemptPhase,
     budgetMilliseconds: number,
-    correlation: V2PeerAttemptCorrelation,
     ownerSignal: AbortSignal,
     routeFailureSignal: AbortSignal,
     lifecycle: V2SessionSignalingRoute,
     work: (signal: AbortSignal) => Promise<PhaseWorkSettlement<T>>,
   ): Promise<PhaseWorkSettlement<T>> {
-    this.#emit({
-      ...correlation,
-      type: 'phase-deadline-armed',
-      phase,
-      budgetMilliseconds,
-    })
     lifecycle.phaseDeadlineArmed(phase, budgetMilliseconds)
     const phaseController = linkedController(ownerSignal, routeFailureSignal)
     const timerController = new AbortController()
@@ -387,12 +341,6 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
 
       const timeout = new V2PeerPhaseTimeoutError(phase)
       lifecycle.phaseDeadlineExpired(phase, budgetMilliseconds)
-      this.#emit({
-        ...correlation,
-        type: 'phase-deadline-expired',
-        phase,
-        budgetMilliseconds,
-      })
       phaseController.abort(timeout)
       const joined = await workResult
       if (joined.type !== 'work') return failedPhase(timeout, 'local')
@@ -423,84 +371,6 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     if (route !== undefined && result.type === 'failed') route.failAttempt(result.failure)
   }
 
-  #admissionMilestone(
-    correlation: V2PeerAttemptCorrelation,
-    route: V2SessionSignalingRoute,
-    milestone: V2LaneAdmissionMilestone,
-  ): void {
-    const lane = { laneId: milestone.laneId, laneEpoch: milestone.laneEpoch }
-    if (milestone.type === 'grant-requested') {
-      route.grantRequested(milestone.grantOperationId, milestone.laneId)
-      this.#emitAdmissionMilestone(correlation, milestone)
-      return
-    }
-    if (milestone.type === 'admission-response-accepted') {
-      route.grantMilestone('admission-response-received', milestone.grantOperationId, lane)
-      route.admissionResponseSettled(milestone.grantOperationId, lane, {
-        disposition: 'accepted',
-      })
-      this.#emitAdmissionMilestone(correlation, milestone, true)
-      return
-    }
-    if (milestone.type === 'admission-response-rejected') {
-      route.grantMilestone('admission-response-received', milestone.grantOperationId, lane)
-      route.admissionResponseSettled(milestone.grantOperationId, lane, {
-        disposition: 'rejected',
-        rejection: milestone.rejection,
-      })
-      this.#emitAdmissionMilestone(correlation, milestone, true)
-      return
-    }
-    route.grantMilestone(
-      milestone.type === 'lane-adopted' ? 'lane-attached' : milestone.type,
-      milestone.grantOperationId,
-      lane,
-    )
-    this.#emitAdmissionMilestone(correlation, milestone)
-  }
-
-  #emitAdmissionMilestone(
-    correlation: V2PeerAttemptCorrelation,
-    milestone: V2LaneAdmissionMilestone,
-    settlementBegan = false,
-  ): void {
-    const base = {
-      ...correlation,
-      phase: 'admission' as const,
-      grantOperationId: milestone.grantOperationId,
-      laneId: milestone.laneId,
-      laneEpoch: milestone.laneEpoch,
-    }
-    if (settlementBegan) this.#emit({ ...base, type: 'admission-settlement-begun' })
-    this.#emit({ ...base, type: milestone.type })
-  }
-
-  #correlation(context: V2PeerAttemptContext, attemptId: string): V2PeerAttemptCorrelation {
-    return Object.freeze({
-      protocolSessionId: context.protocolSessionId,
-      peerPathId: context.peerPathId,
-      attemptId,
-      waveOrdinal: context.waveOrdinal,
-      waveAttemptOrdinal: context.waveAttemptOrdinal,
-      sessionAttemptOrdinal: context.sessionAttemptOrdinal,
-    })
-  }
-
-  #emit(milestone: V2PeerAttemptMilestone): void {
-    try {
-      this.#observeAttempt?.(Object.freeze(milestone))
-    } catch {
-      // Evidence loss cannot change phase, settlement, publication, or retry authority.
-    }
-  }
-
-  #reportFailure(error: unknown): void {
-    try {
-      this.#onFailure(error)
-    } catch {
-      // Legacy diagnostics remain observational while recovery consumes typed results.
-    }
-  }
 }
 
 function linkedController(...sources: readonly AbortSignal[]): {
@@ -585,7 +455,10 @@ function receiverAdmissionSettlement(
 ): PhaseWorkSettlement<void> {
   if (result.disposition === 'unverified') return failedPhase(result.error, 'local')
   if (
-    result.grantOperationId !== encodeBase64Url(grant.grantOperationId) ||
+    !equalV2DiagnosticIdentities(
+      result.grantOperationId,
+      createV2ProtocolOperationIdentity(grant.grantOperationId),
+    ) ||
     result.laneId !== grant.laneId ||
     result.laneEpoch !== grant.laneEpoch
   ) return inconsistentAdmissionSettlement()
@@ -623,7 +496,7 @@ function classifyAttemptError(error: unknown): V2PeerAttemptFailure {
   if (error instanceof V2AuthenticatedPeerOperationError) {
     return Object.freeze({
       kind: 'authenticated-peer-operation',
-      code: error.operationFailure.code,
+      code: error.protocolFailure.wireCode,
     })
   }
   if (error instanceof V2LaneAdmissionRejectedError) {

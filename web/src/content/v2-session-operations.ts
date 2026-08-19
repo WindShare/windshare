@@ -5,62 +5,48 @@ import type {
 import type { V2CatalogPageRequest } from '../catalog/v2-records'
 import { equalBytes } from '../crypto/bytes'
 import {
-  decodeV2OperationErrorControl,
+  protocolFailureFact,
+  type FailureFact,
+  type ProtocolFailure,
+} from '../diagnostics/incident/fact'
+import {
   decodeV2ScanProgress,
-  type V2MessageKind,
+  type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from '../session/v2-message'
-import { v2OperationErrorScopeAllowed } from '../session/v2-operation-error-contract'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import { V2SessionRuntimeError } from '../session/v2-runtime-types'
 import { decodeV2CatalogResult, encodeV2ListRequest } from './v2-flow'
 
 export class V2RemoteOperationError extends Error {
-  readonly body: Uint8Array<ArrayBuffer>
   readonly scope: 'directory' | 'revision' | 'block' | 'peer'
   readonly code: number
   readonly retryable: boolean
   readonly retryAfterMilliseconds: number | undefined
-  readonly remoteMessage: string
+  readonly protocolFailure: ProtocolFailure
+  readonly failureFact: FailureFact<'protocol_failure'>
 
-  constructor(body: Uint8Array) {
-    const decoded = decodeV2OperationErrorControl(body)
-    super(decoded.message.length === 0
-      ? 'Sender rejected the authenticated operation'
-      : decoded.message)
+  constructor(protocolFailure: ProtocolFailure) {
+    super('Sender rejected the authenticated operation')
     this.name = 'V2RemoteOperationError'
-    this.body = body.slice()
-    this.scope = decoded.scope
-    this.code = decoded.code
-    this.retryable = decoded.retryable
-    this.retryAfterMilliseconds = decoded.retryAfterMilliseconds
-    this.remoteMessage = decoded.message
+    this.scope = protocolFailure.wireScope
+    this.code = protocolFailure.wireCode
+    this.retryable = protocolFailure.retryable
+    this.retryAfterMilliseconds = protocolFailure.retryAfterMilliseconds
+    this.protocolFailure = protocolFailure
+    this.failureFact = protocolFailureFact({
+      stage: 'protocol_operation',
+      recoveryDisposition: protocolFailure.retryable ? 'retryable' : 'terminal',
+      protocolFailure,
+    })
   }
 }
 
-export async function remoteOperationErrorFor(
+export function remoteOperationErrorFor(
   session: V2ReceiverSessionRuntime,
-  body: Uint8Array,
-  requestKind: V2MessageKind,
-): Promise<V2RemoteOperationError> {
-  let remote: V2RemoteOperationError
-  try {
-    remote = new V2RemoteOperationError(body)
-  } catch (cause) {
-    await session.close().catch(() => undefined)
-    throw new V2SessionRuntimeError('session', 'Authenticated operation error was malformed', {
-      cause,
-    })
-  }
-  if (!v2OperationErrorScopeAllowed(requestKind, remote.scope)) {
-    await session.close().catch(() => undefined)
-    throw new V2SessionRuntimeError(
-      'session',
-      'Authenticated operation error belonged to another operation scope',
-      { cause: remote },
-    )
-  }
-  return remote
+  message: V2SessionMessage,
+): V2RemoteOperationError {
+  return new V2RemoteOperationError(session.authenticatedProtocolFailure(message))
 }
 
 export class V2CatalogSessionOperations implements V2CatalogOperationClient {
@@ -115,11 +101,7 @@ export class V2CatalogSessionOperations implements V2CatalogOperationClient {
         continue
       }
       if (message.kind === V2_MESSAGE_KIND.operationError) {
-        throw await remoteOperationErrorFor(
-          this.#session,
-          message.body,
-          V2_MESSAGE_KIND.listChildren,
-        )
+        throw remoteOperationErrorFor(this.#session, message)
       }
       if (message.kind !== V2_MESSAGE_KIND.catalogResult) {
         throw new Error('Catalog operation received an unexpected response')

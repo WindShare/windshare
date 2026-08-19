@@ -5,10 +5,10 @@ import {
   type V2ContentLaneAdmissionObservation,
   type V2ContentLaneDetachmentObservation,
   type V2ContentIntent,
-  type V2ConnectivityObserver,
   V2ReceiverConnectivity,
 } from '../connectivity/v2-receiver-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
+import type { V2ConnectivityTraceSource } from '../connectivity/diagnostics'
 import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
 import {
   V2BlockBroker,
@@ -26,6 +26,7 @@ import {
 } from '../content/v2-session-services'
 import { V2SessionRuntimeError, type V2LaneChange } from '../session/v2-runtime-types'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import type { V2ProtocolSessionIdentity } from '../session/v2-identities'
 import { encodeBase64Url } from '../crypto/bytes'
 import {
   V2RelayReceiverError,
@@ -61,7 +62,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
   readonly nativePeerUsable?: () => boolean
-  readonly connectivityObserver?: V2ConnectivityObserver
+  readonly connectivityTrace?: V2ConnectivityTraceSource
   readonly peerRecovery?: V2PeerRecoveryDependencies
   readonly onRecoveryError?: (error: unknown) => void
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
@@ -104,7 +105,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
-  readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #connectivityTrace: V2ConnectivityTraceSource | undefined
   readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
   readonly #onRecoveryError: (error: unknown) => void
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
@@ -136,7 +137,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#offersFactory = options.offersFactory
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable
-    this.#connectivityObserver = options.connectivityObserver
+    this.#connectivityTrace = options.connectivityTrace
     this.#peerRecovery = options.peerRecovery
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#onBlockDispatched = options.onBlockDispatched
@@ -162,6 +163,10 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   get protocolSessionId(): string {
     return encodeBase64Url(this.#current.session.keys.protocolSessionId)
+  }
+
+  get protocolSessionIdentity(): V2ProtocolSessionIdentity {
+    return this.#current.session.protocolSessionIdentity
   }
 
   get isStopped(): boolean {
@@ -293,18 +298,16 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ...(this.#nativePeerUsable === undefined
           ? {}
           : { nativePeerUsable: this.#nativePeerUsable }),
-        ...(this.#connectivityObserver === undefined
+        ...(this.#connectivityTrace === undefined
           ? {}
-          : { connectivityObserver: this.#connectivityObserver }),
+          : { connectivityTrace: this.#connectivityTrace }),
         ...(this.#peerRecovery === undefined ? {} : { peerRecovery: this.#peerRecovery }),
-        now: () => this.#clock.now(),
         ...(this.#onContentLaneAdmitted === undefined
           ? {}
           : { onContentLaneAdmitted: this.#onContentLaneAdmitted }),
         ...(this.#onContentLaneDetached === undefined
           ? {}
           : { onContentLaneDetached: this.#onContentLaneDetached }),
-        onPeerError: this.#onRecoveryError,
       })
       const generation: V2ReceiverGeneration = {
         id: this.#nextGeneration++,

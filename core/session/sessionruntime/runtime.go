@@ -42,27 +42,29 @@ func (reader *lockedReader) Read(destination []byte) (int, error) {
 }
 
 type runtimeCore struct {
-	share          catalog.ShareInstance
-	role           protocolsession.Role
-	sessionID      protocolsession.ProtocolSessionID
-	initial        LaneIdentity
-	keys           protocolsession.SessionKeys
-	random         io.Reader
-	operations     *protocolsession.OperationTable
-	router         *protocolsession.RoleRouter
-	lanes          *runtimeLanes
-	routes         *operationLaneRoutes
-	now            func() time.Time
-	protocolTracer ProtocolOperationTracer
+	share                   catalog.ShareInstance
+	role                    protocolsession.Role
+	sessionID               protocolsession.ProtocolSessionID
+	initial                 LaneIdentity
+	keys                    protocolsession.SessionKeys
+	random                  io.Reader
+	operations              *protocolsession.OperationTable
+	router                  *protocolsession.RoleRouter
+	lanes                   *runtimeLanes
+	routes                  *operationLaneRoutes
+	now                     func() time.Time
+	protocolTracer          ProtocolOperationTracer
+	sessionTerminalObserver SenderSessionTerminalObserver
+	termination             runtimeTerminationArbiter
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	done   chan struct{}
-	work   sync.WaitGroup
+	ctx             context.Context
+	cancel          context.CancelFunc
+	cancelLifecycle context.CancelFunc
+	done            chan struct{}
+	work            sync.WaitGroup
 
 	errMu      sync.Mutex
 	err        error
-	once       sync.Once
 	finishOnce sync.Once
 	finalizeMu sync.Mutex
 	finalizers []func()
@@ -74,19 +76,20 @@ type runtimeCore struct {
 }
 
 type runtimeConfig struct {
-	Share           catalog.ShareInstance
-	Role            protocolsession.Role
-	Keys            protocolsession.SessionKeys
-	LaneID          uint32
-	LaneEpoch       uint32
-	Channel         protocolsession.FrameChannel
-	Random          io.Reader
-	Authenticator   protocolsession.InboundMessageAuthenticator
-	Continuations   protocolsession.OperationContinuationClassifier
-	OperationLimits protocolsession.OperationLimits
-	RouterLimits    protocolsession.RouterLimits
-	Now             func() time.Time
-	ProtocolTracer  ProtocolOperationTracer
+	Share                   catalog.ShareInstance
+	Role                    protocolsession.Role
+	Keys                    protocolsession.SessionKeys
+	LaneID                  uint32
+	LaneEpoch               uint32
+	Channel                 protocolsession.FrameChannel
+	Random                  io.Reader
+	Authenticator           protocolsession.InboundMessageAuthenticator
+	Continuations           protocolsession.OperationContinuationClassifier
+	OperationLimits         protocolsession.OperationLimits
+	RouterLimits            protocolsession.RouterLimits
+	Now                     func() time.Time
+	ProtocolTracer          ProtocolOperationTracer
+	SessionTerminalObserver SenderSessionTerminalObserver
 }
 
 func newRuntime(config runtimeConfig) (*runtimeCore, error) {
@@ -115,17 +118,25 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 	if err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancelLifecycle := context.WithCancel(context.Background())
 	runtime := &runtimeCore{
 		share: config.Share, role: config.Role, sessionID: config.Keys.ProtocolSessionID(),
 		initial: LaneIdentity{ID: config.LaneID, Epoch: config.LaneEpoch}, keys: config.Keys,
 		random: config.Random, operations: operations, router: router,
-		routes: newOperationLaneRoutes(), now: config.Now, protocolTracer: config.ProtocolTracer,
-		ctx: ctx, cancel: cancel, done: make(chan struct{}),
+		routes:                  newOperationLaneRoutes(),
+		now:                     config.Now,
+		protocolTracer:          config.ProtocolTracer,
+		sessionTerminalObserver: config.SessionTerminalObserver,
+		ctx:                     ctx,
+		cancelLifecycle:         cancelLifecycle,
+		done:                    make(chan struct{}),
 	}
+	// Legacy package-local cancellation sites fail closed through the arbiter.
+	// Causal owners use the explicit trigger methods below.
+	runtime.cancel = func() { runtime.terminate(runtimeTerminationFailed) }
 	runtime.lanes = newRuntimeLanes(runtime)
 	if _, err := runtime.lanes.add(runtime.initial, config.Channel, config.Authenticator, true); err != nil {
-		cancel()
+		cancelLifecycle()
 		config.Keys.Destroy()
 		return nil, err
 	}
@@ -150,10 +161,16 @@ func (runtime *runtimeCore) start(additional ...runtimeComponent) {
 		go func() {
 			defer runtime.work.Done()
 			err := component(runtime.ctx)
-			if err != nil && !errors.Is(err, context.Canceled) {
-				runtime.recordError(err)
+			if runtime.ctx.Err() != nil {
+				return
 			}
-			runtime.cancel()
+			if err != nil && !errors.Is(err, context.Canceled) {
+				runtime.terminateRuntimeFailed(err)
+				return
+			}
+			// A component has no independent normal terminal state. Returning while
+			// the runtime is live means the shared session can no longer make progress.
+			runtime.terminate(runtimeTerminationFailed)
 		}()
 	}
 	runtime.lanes.start()
@@ -276,7 +293,7 @@ func (runtime *runtimeCore) close() {
 
 func (runtime *runtimeCore) beginClose() {
 	if runtime != nil {
-		runtime.once.Do(runtime.cancel)
+		runtime.terminate(runtimeTerminationForcedClose)
 	}
 }
 
@@ -329,7 +346,7 @@ func (runtime *runtimeCore) senderControlBase(lane LaneIdentity) protocolsession
 type senderOutbound struct {
 	runtime    *runtimeCore
 	privateKey ed25519.PrivateKey
-	observer   SenderTerminalObserver
+	observer   SenderTerminalSendObserver
 }
 
 func (outbound senderOutbound) sendControl(
@@ -344,31 +361,37 @@ func (outbound senderOutbound) sendControl(
 	var deadlineMillis uint64
 	var hasDeadline bool
 	requestKind := protocolsession.MessageKind(0)
-	var operationErrorScope ProtocolOperationErrorScope
-	var operationErrorCode uint16
-	var operationErrorRetryable bool
-	var hasOperationError bool
 	if traceEnabled {
 		started = outbound.runtime.now()
 		deadlineMillis, hasDeadline = remainingDeadlineMillis(ctx, started)
 		if route, routeErr := outboundRoute(ctx, operationID); routeErr == nil {
 			requestKind = route.requestKind
 		}
-		operationErrorScope, operationErrorCode, operationErrorRetryable, hasOperationError =
-			protocolOperationErrorTrace(kind, body)
 	}
 	transaction, err := beginOutboundTransaction(outbound.runtime, ctx, operationID)
 	if err != nil {
 		if traceEnabled && requestKind != 0 {
+			failure, _ := protocolFailureForResponseSend(
+				outbound.runtime.sessionID,
+				operationID,
+				requestKind,
+				kind,
+				body,
+				LaneIdentity{},
+				false,
+				protocolsession.SendCompletion{
+					Settled: true,
+					Outcome: protocolsession.SendOutcomeDropped,
+				},
+			)
 			outbound.runtime.traceProtocolOperation(ProtocolOperationTrace{
 				Stage:       ProtocolOperationSenderResponseSettled,
 				OperationID: operationID, RequestKind: requestKind,
 				ResponseKind: kind, HasResponse: true,
 				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
 				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
-				OperationErrorScope:    operationErrorScope, OperationErrorCode: operationErrorCode,
-				OperationErrorRetryable: operationErrorRetryable, HasOperationError: hasOperationError,
-				Cause: protocolOperationCause(err),
+				Failure:                failure,
+				Cause:                  protocolOperationCause(err),
 			})
 		}
 		if final {
@@ -384,6 +407,16 @@ func (outbound senderOutbound) sendControl(
 		usableAtSelection := outbound.runtime.lanes.usableCount()
 		defer func() {
 			completion := transaction.lastCompletion
+			failure, _ := protocolFailureForResponseSend(
+				outbound.runtime.sessionID,
+				operationID,
+				transaction.route.requestKind,
+				kind,
+				body,
+				transaction.lane.identity,
+				transaction.lane.identity.valid(true),
+				completion,
+			)
 			cause := protocolOperationCause(resultErr)
 			if cause == ProtocolOperationCauseNone && transaction.attempted &&
 				(!completion.Settled || !completion.Admitted || resultOutcome != protocolsession.SendOutcomeDelivered) {
@@ -399,9 +432,8 @@ func (outbound senderOutbound) sendControl(
 				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
 				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
 				UsableLanesAtSelection: usableAtSelection,
-				OperationErrorScope:    operationErrorScope, OperationErrorCode: operationErrorCode,
-				OperationErrorRetryable: operationErrorRetryable, HasOperationError: hasOperationError,
-				Cause: cause,
+				Failure:                failure,
+				Cause:                  cause,
 			})
 		}()
 	}
@@ -537,7 +569,7 @@ func (outbound senderOutbound) sendTerminalRecipients(
 	for _, settled := range completions {
 		completion := settled.completion
 		naturallyRetired := terminalCompletionNaturallyRetired(completion, noUsableReplacement)
-		observeSenderTerminal(
+		observeSenderTerminalSend(
 			outbound.observer,
 			outbound.runtime.sessionID,
 			settled.lane,

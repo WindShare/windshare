@@ -17,6 +17,11 @@ sorted JSON allowlist, and Go tests reject missing or extra files.
 
 ## Inventory
 
+Cross-runtime diagnostic contracts:
+
+- `diagnostic-correlation-v1.json`: typed protocol/session/path/lane identities,
+  canonical unpadded base64url projection, and safe numeric/text boundaries.
+
 Receiver-local canonical contracts:
 
 - `receive-intent-v1.json`: SelectionSpec, ArtifactSpec, binding, plan, and

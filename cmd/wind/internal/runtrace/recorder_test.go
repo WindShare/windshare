@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -536,10 +537,10 @@ func TestRecorderReportsUpstreamLossAndSchemaExhaustion(t *testing.T) {
 		file := &memoryTraceFile{}
 		recorder := openTestRecorder(t, clievent.CommandShare, Config{}, fixedClock(), file, newManualTicker())
 		recorder.entryMu.Lock()
-		recorder.lastSequence = maxJSONSafeInteger
+		recorder.lastSequence = ^uint64(0)
 		recorder.entryMu.Unlock()
 		if recorder.Record(clievent.NewReady()) {
-			t.Fatal("event unexpectedly accepted beyond JSON-safe sequence ceiling")
+			t.Fatal("event unexpectedly accepted after sequence exhaustion")
 		}
 		health := awaitHealth(t, recorder.Health())
 		if health.Cause() != clievent.TraceIncompleteSchemaLimit {
@@ -625,8 +626,8 @@ func TestOpenValidatesSynchronouslyAndCreatesOwnerOnlyFile(t *testing.T) {
 	if recorder.Path() != path {
 		t.Fatalf("exact recorder path = %q, want %q", recorder.Path(), path)
 	}
-	if got := recorder.RunID(); len(got) != clievent.IdentityBytes*2 {
-		t.Fatalf("run ID length = %d, want %d", len(got), clievent.IdentityBytes*2)
+	if got := recorder.RunID(); len(got) != 22 {
+		t.Fatalf("run ID length = %d, want unpadded base64url length 22", len(got))
 	}
 	status := recorder.Close()
 	if !status.Complete {
@@ -753,13 +754,92 @@ func awaitSignal(t *testing.T, signal <-chan struct{}, description string) {
 	}
 }
 
-func decodeRecords(t *testing.T, contents []byte) []recordV2 {
+type decodedRecordV3 struct {
+	SchemaVersion   int
+	Sequence        uint64
+	Time            string
+	ElapsedMS       int64
+	Level           string
+	Event           string
+	Command         string
+	RunID           string
+	Correlation     *CorrelationV1
+	Payload         json.RawMessage
+	VerifiedBytes   *string
+	TraceIncomplete *bool
+	WriterFailed    *bool
+	FlushFailed     *bool
+	SchemaLimited   *bool
+}
+
+func (record *decodedRecordV3) UnmarshalJSON(data []byte) error {
+	var envelope struct {
+		SchemaVersion int             `json:"schema_version"`
+		Sequence      string          `json:"sequence"`
+		Time          string          `json:"time"`
+		ElapsedMS     string          `json:"elapsed_ms"`
+		Level         string          `json:"level"`
+		Event         string          `json:"event"`
+		Command       string          `json:"command"`
+		RuntimeRunID  string          `json:"runtime_run_id"`
+		Correlation   *CorrelationV1  `json:"correlation,omitempty"`
+		Payload       json.RawMessage `json:"payload"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil {
+		return err
+	}
+	sequence, err := strconv.ParseUint(envelope.Sequence, 10, 64)
+	if err != nil {
+		return err
+	}
+	elapsedMS, err := strconv.ParseInt(envelope.ElapsedMS, 10, 64)
+	if err != nil {
+		return err
+	}
+	*record = decodedRecordV3{
+		SchemaVersion: envelope.SchemaVersion,
+		Sequence:      sequence,
+		Time:          envelope.Time,
+		ElapsedMS:     elapsedMS,
+		Level:         envelope.Level,
+		Event:         envelope.Event,
+		Command:       envelope.Command,
+		RunID:         envelope.RuntimeRunID,
+		Correlation:   envelope.Correlation,
+		Payload:       envelope.Payload,
+	}
+	switch envelope.Event {
+	case "transfer_progress":
+		var payload struct {
+			Progress struct {
+				VerifiedBytes string `json:"verified_bytes"`
+			} `json:"progress"`
+		}
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return err
+		}
+		record.VerifiedBytes = new(payload.Progress.VerifiedBytes)
+	case "trace_summary":
+		var payload traceSummaryPayloadV3
+		if err := json.Unmarshal(envelope.Payload, &payload); err != nil {
+			return err
+		}
+		record.TraceIncomplete = new(payload.Incomplete)
+		record.WriterFailed = new(payload.WriterFailed)
+		record.FlushFailed = new(payload.FlushFailed)
+		record.SchemaLimited = new(payload.SchemaLimited)
+	}
+	return nil
+}
+
+func decodeRecords(t *testing.T, contents []byte) []decodedRecordV3 {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-	var records []recordV2
+	var records []decodedRecordV3
 	for {
-		var record recordV2
+		var record decodedRecordV3
 		if err := decoder.Decode(&record); err != nil {
 			if errors.Is(err, io.EOF) {
 				return records

@@ -1,15 +1,19 @@
 import type { DirectoryId, FileId } from '../catalog/model'
+import { isFailureFact } from '../diagnostics/incident'
+import { compareFaults, isFault } from './fault'
+import { MATERIALIZATION_FAILURE_REASONS } from './job/contract'
+import type { ClassifiedTransferFailure } from './job/failures'
 
 export interface DirectoryTransferFailure {
   readonly kind: 'directory'
   readonly directoryId: DirectoryId
-  readonly reason: unknown
+  readonly classification: ClassifiedTransferFailure
 }
 
 export interface FileTransferFailure {
   readonly kind: 'file'
   readonly fileId: FileId
-  readonly reason: unknown
+  readonly classification: ClassifiedTransferFailure
 }
 
 export type TransferFailure = DirectoryTransferFailure | FileTransferFailure
@@ -72,6 +76,7 @@ export interface TransferFailureSummary {
   readonly fileFailureCount: number
   readonly omittedFailureCount: number
   readonly fileOutcomes: TransferFileOutcomeCounts
+  readonly trigger?: ClassifiedTransferFailure
 }
 
 export const EMPTY_TRANSFER_FAILURE_SUMMARY: TransferFailureSummary = Object.freeze({
@@ -88,6 +93,7 @@ interface TransferWorkerSettlementBase {
   readonly fileFailureCount: number
   readonly omittedFailureCount: number
   readonly fileOutcomes: TransferFileOutcomeCounts
+  readonly trigger?: ClassifiedTransferFailure
 }
 
 export type TransferWorkerSettlement =
@@ -105,13 +111,22 @@ export type SuccessfulTransferWorkerSettlement = Extract<
   Readonly<{ readonly status: 'Succeeded' }>
 >
 
-/** Retains representative diagnostics while exact aggregate counts remain width-independent. */
+interface TriggerCandidate {
+  readonly classification: ClassifiedTransferFailure
+  readonly selectionOrdinal: bigint
+}
+
+/**
+ * Retains bounded product evidence while trigger nomination stays exact even after
+ * representative storage saturates. The stable ordinal is never exported.
+ */
 export class TransferFailureAccumulator {
   readonly #failures: TransferFailure[] = []
   #failureCount = 0
   #fileFailureCount = 0
   #directoryFailureCount = 0
   readonly #fileOutcomes = { ...EMPTY_TRANSFER_FILE_OUTCOME_COUNTS }
+  #trigger: TriggerCandidate | undefined
 
   get failureCount(): number {
     return this.#failureCount
@@ -121,17 +136,25 @@ export class TransferFailureAccumulator {
     return this.#directoryFailureCount > 0
   }
 
-  record(failure: TransferFailure, fileOutcome?: TransferFileOutcome): void {
-    this.#count(failure, fileOutcome)
+  record(
+    failure: TransferFailure,
+    selectionOrdinal: bigint,
+    fileOutcome?: TransferFileOutcome,
+  ): void {
+    this.#count(failure, selectionOrdinal, fileOutcome)
     if (this.#failures.length < MAXIMUM_RETAINED_TRANSFER_FAILURES) {
-      this.#failures.push(Object.freeze({ ...failure }))
+      this.#failures.push(snapshotFailure(failure))
     }
   }
 
   /** Retains bounded evidence for a terminal semantic settlement even after saturation. */
-  recordRepresentative(failure: TransferFailure, fileOutcome?: TransferFileOutcome): void {
-    this.#count(failure, fileOutcome)
-    const snapshot = Object.freeze({ ...failure })
+  recordRepresentative(
+    failure: TransferFailure,
+    selectionOrdinal: bigint,
+    fileOutcome?: TransferFileOutcome,
+  ): void {
+    this.#count(failure, selectionOrdinal, fileOutcome)
+    const snapshot = snapshotFailure(failure)
     if (this.#failures.length < MAXIMUM_RETAINED_TRANSFER_FAILURES) {
       this.#failures.push(snapshot)
       return
@@ -139,17 +162,37 @@ export class TransferFailureAccumulator {
     this.#failures[this.#failures.length - 1] = snapshot
   }
 
-  #count(failure: TransferFailure, fileOutcome?: TransferFileOutcome): void {
+  #count(
+    failure: TransferFailure,
+    selectionOrdinal: bigint,
+    fileOutcome?: TransferFileOutcome,
+  ): void {
+    if (!isClassifiedTransferFailure(failure.classification)) {
+      throw new TypeError('Transfer failures require one closed classification')
+    }
+    if (selectionOrdinal < 0n) {
+      throw new RangeError('Transfer failure selection ordinal must be non-negative')
+    }
     if (failure.kind === 'directory' && fileOutcome !== undefined) {
       throw new TypeError('directory failures cannot carry file outcomes')
     }
     this.#failureCount = incrementExact(this.#failureCount, 'Transfer failure count')
     if (failure.kind === 'directory') {
-      this.#directoryFailureCount += 1
-      return
+      this.#directoryFailureCount = incrementExact(
+        this.#directoryFailureCount,
+        'Directory failure count',
+      )
+    } else {
+      this.#fileFailureCount = incrementExact(this.#fileFailureCount, 'File failure count')
+      this.#recordFileOutcome(fileOutcome ?? 'failed')
     }
-    this.#fileFailureCount = incrementExact(this.#fileFailureCount, 'File failure count')
-    this.#recordFileOutcome(fileOutcome ?? 'failed')
+    const candidate = Object.freeze({
+      classification: failure.classification,
+      selectionOrdinal,
+    })
+    if (this.#trigger === undefined || compareTriggerCandidates(candidate, this.#trigger) > 0) {
+      this.#trigger = candidate
+    }
   }
 
   #recordFileOutcome(outcome: TransferFileOutcome): void {
@@ -199,20 +242,26 @@ export class TransferFailureAccumulator {
 
   snapshot(): TransferFailureSummary {
     return Object.freeze({
-      failures: Object.freeze([...this.#failures]),
+      failures: Object.freeze(this.#failures.map(snapshotFailure)),
       failureCount: this.#failureCount,
       fileFailureCount: this.#fileFailureCount,
       omittedFailureCount: this.#failureCount - this.#failures.length,
       fileOutcomes: Object.freeze({ ...this.#fileOutcomes }),
+      ...(this.#trigger === undefined ? {} : { trigger: this.#trigger.classification }),
     })
   }
 }
 
 export function summarizeTransferFailures(
-  failures: readonly TransferFailure[],
+  failures: readonly Readonly<{
+    readonly failure: TransferFailure
+    readonly selectionOrdinal: bigint
+  }>[],
 ): TransferFailureSummary {
   const accumulator = new TransferFailureAccumulator()
-  for (const failure of failures) accumulator.record(failure)
+  for (const entry of failures) {
+    accumulator.record(entry.failure, entry.selectionOrdinal)
+  }
   return accumulator.snapshot()
 }
 
@@ -241,12 +290,48 @@ export function transferWorkerSettlement(
   }
   return Object.freeze({
     status,
-    failures: Object.freeze(summary.failures.map((failure) => Object.freeze({ ...failure }))),
+    failures: Object.freeze(summary.failures.map(snapshotFailure)),
     failureCount: summary.failureCount,
     fileFailureCount: summary.fileFailureCount,
     omittedFailureCount: summary.omittedFailureCount,
     fileOutcomes: Object.freeze({ ...summary.fileOutcomes }),
+    ...(summary.trigger === undefined ? {} : { trigger: summary.trigger }),
   }) as TransferWorkerSettlement
+}
+
+function compareTriggerCandidates(left: TriggerCandidate, right: TriggerCandidate): number {
+  const authority = compareFaults(left.classification.fault, right.classification.fault)
+  if (authority !== 0) return authority
+  if (left.selectionOrdinal < right.selectionOrdinal) return 1
+  if (left.selectionOrdinal > right.selectionOrdinal) return -1
+  return 0
+}
+
+function snapshotFailure(failure: TransferFailure): TransferFailure {
+  return failure.kind === 'directory'
+    ? Object.freeze({
+        kind: 'directory',
+        directoryId: failure.directoryId,
+        classification: failure.classification,
+      })
+    : Object.freeze({
+        kind: 'file',
+        fileId: failure.fileId,
+        classification: failure.classification,
+      })
+}
+
+function isClassifiedTransferFailure(value: unknown): value is ClassifiedTransferFailure {
+  if (typeof value !== 'object' || value === null || !Object.isFrozen(value)) return false
+  const candidate = value as Partial<ClassifiedTransferFailure>
+  return isFault(candidate.fault) &&
+    Object.isFrozen(candidate.fault) &&
+    isFailureFact(candidate.fact) &&
+    (candidate.fact.kind !== 'fault' || candidate.fact.payload.fault === candidate.fault) &&
+    typeof candidate.materializationFailureReason === 'string' &&
+    MATERIALIZATION_FAILURE_REASONS.some(
+      reason => reason === candidate.materializationFailureReason,
+    )
 }
 
 function validateFailureSummary(summary: TransferFailureSummary): void {
@@ -258,8 +343,22 @@ function validateFailureSummary(summary: TransferFailureSummary): void {
     summary.failures.length > MAXIMUM_RETAINED_TRANSFER_FAILURES ||
     summary.failureCount !== summary.failures.length + summary.omittedFailureCount ||
     summary.fileFailureCount > summary.failureCount ||
-    !validFileOutcomeCounts(summary.fileOutcomes, summary.fileFailureCount)
-  ) throw new TypeError('Transfer failure summary is inconsistent or unbounded')
+    !validFileOutcomeCounts(summary.fileOutcomes, summary.fileFailureCount) ||
+    (summary.failureCount === 0) !== (summary.trigger === undefined)
+  ) {
+    throw new TypeError('Transfer failure summary is inconsistent or unbounded')
+  }
+  if (
+    summary.trigger !== undefined &&
+    !isClassifiedTransferFailure(summary.trigger)
+  ) {
+    throw new TypeError('Transfer failure summary trigger is not classified')
+  }
+  for (const failure of summary.failures) {
+    if (!isClassifiedTransferFailure(failure.classification)) {
+      throw new TypeError('Transfer failure summary contains an unclassified entry')
+    }
+  }
 }
 
 function validFileOutcomeCounts(

@@ -1,4 +1,6 @@
+export * from './v2-diagnostics'
 export * from './v2-envelope'
+export * from './v2-identities'
 export * from './v2-lane-codec'
 export * from './v2-message'
 export * from './v2-operation-router'

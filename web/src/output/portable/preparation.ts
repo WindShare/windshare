@@ -1,3 +1,9 @@
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import type {
   BrowserHandoffTargetOffer,
   PortableEnvironmentOffer,
@@ -116,6 +122,7 @@ export interface PortableExecutionRoutePorts {
   readonly publisher: BrowserHandoffPublisher
   readonly assembly: PortableAssemblyPorts
   readonly lifecycle: PortableExecutionLifecycleAuthority
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly createZipSpool?: () => ZipCentralDirectorySpool
   readonly createZipWriter?: PortableZipArchiveWriterFactory
 }
@@ -188,6 +195,7 @@ async function preparePortableOriginal(
       intent,
       entry: original,
       handoff,
+      ...(ports.diagnostics === undefined ? {} : { diagnostics: ports.diagnostics }),
     })
     return acceptedPortableExecution({
       intent,
@@ -199,6 +207,7 @@ async function preparePortableOriginal(
       attemptId: ports.attemptId,
     })
   } catch (error) {
+    recordPortableReservationFailure(ports.diagnostics, error)
     return rejectAdmissionError(
       intent,
       signal,
@@ -251,6 +260,7 @@ async function preparePortableZip(
       layout,
       handoff,
       createSpool: createZipSpool,
+      ...(ports.diagnostics === undefined ? {} : { diagnostics: ports.diagnostics }),
       ...(ports.createZipWriter === undefined
         ? {}
         : { createWriter: ports.createZipWriter }),
@@ -265,6 +275,7 @@ async function preparePortableZip(
       attemptId: ports.attemptId,
     })
   } catch (error) {
+    recordPortableReservationFailure(ports.diagnostics, error)
     return rejectAdmissionError(intent, signal, ports.lifecycle, normalizeZipAdmissionError(error))
   }
 }
@@ -432,6 +443,18 @@ function assertMaterializationSummary(
       summary.rawBytes !== evidence.selectedRawBytes) {
     throw new TypeError('portable materialization does not match exact preparation')
   }
+}
+
+function recordPortableReservationFailure(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  error: unknown,
+): void {
+  recordOutputException(diagnostics?.failures?.outputReservation, error)
+  emitOutputTrace(diagnostics?.trace, () =>
+    outputTraceEvent('output_reservation', {
+      backend: 'portable',
+      transition: 'failed',
+    }))
 }
 
 function assertPortableEnvironmentEnvelope(environment: PortableExecutionEnvironment): void {

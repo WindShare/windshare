@@ -3,15 +3,15 @@ import { createHash } from 'node:crypto'
 import { expect, type Page, type TestInfo } from '@playwright/test'
 
 import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
-import {
-  V2_TYPED_PEER_ERROR_CODES,
-  type V2BrowserConnectivityAttemptDiagnostic,
-} from '../../src/connectivity/diagnostics'
+import { V2_TYPED_PEER_ERROR_CODES } from '../../src/connectivity/diagnostics'
 import {
   classifyNativePeerConnection,
   type NativeRtcCapabilityDiagnostic,
 } from '../../test/transport/webrtc/browser-capability'
-import type { HotSwitchPageEvent } from './hot-switch-contract'
+import type {
+  HotSwitchPageEvent,
+  HotSwitchPeerAttemptEvidence,
+} from './hot-switch-contract'
 import {
   releasePageOutput,
   sealPageRelayCut,
@@ -44,7 +44,7 @@ type ResolvedHotSwitchRoute = Exclude<HotSwitchRouteMode, 'native-capability'>
 type PeerAttemptFailure = {
   readonly kind: 'attempt'
   readonly evidence: Extract<
-    V2BrowserConnectivityAttemptDiagnostic,
+    HotSwitchPeerAttemptEvidence,
     { readonly stage: 'failed' }
   >
 }
@@ -363,17 +363,18 @@ async function completePeerHotSwitch(
   )
 
   expect(peerAttempt.evidence).toMatchObject({
-    sessionId: expect.any(String),
-    peerPathId: expect.any(String),
-    attemptId: expect.any(String),
+    protocolSessionIdBytes: expect.any(Array),
+    peerPathIdBytes: expect.any(Array),
+    attemptIdBytes: expect.any(Array),
     stage: 'admitted',
   })
   if (peerAttempt.evidence.stage !== 'admitted') {
     throw new Error('Peer admission wait returned a non-admitted diagnostic')
   }
+  const admittedLane = requireEvidenceLane(peerAttempt.evidence)
   expect(peerLane.observation).toMatchObject({
-    laneId: peerAttempt.evidence.lane.laneId,
-    laneEpoch: peerAttempt.evidence.lane.laneEpoch,
+    laneId: admittedLane.laneId,
+    laneEpoch: admittedLane.laneEpoch,
     route: 'peer',
   })
   expect(peerDispatch.observation).toMatchObject({
@@ -412,7 +413,10 @@ function assertRelayFallback(
     expect(attempts.some((event) =>
       event.kind === 'attempt' &&
       event.evidence.stage === 'failed' &&
-      event.evidence.attemptId === expectedFailure.evidence.attemptId,
+      sameIdentityBytes(
+        event.evidence.attemptIdBytes,
+        expectedFailure.evidence.attemptIdBytes,
+      ),
     )).toBe(true)
     expect(attempts.some((event) =>
       event.kind === 'attempt' && event.evidence.stage === 'admitted',
@@ -429,6 +433,18 @@ function assertRelayFallback(
   expect(snapshot.some((event) =>
     event.kind === 'dispatch' && event.observation.route === 'relay',
   )).toBe(true)
+}
+
+function requireEvidenceLane(evidence: { readonly lane?: {
+  readonly laneId: number
+  readonly laneEpoch: number
+} }): { readonly laneId: number; readonly laneEpoch: number } {
+  if (evidence.lane === undefined) throw new Error('Peer evidence did not retain its lane')
+  return evidence.lane
+}
+
+function sameIdentityBytes(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 function assertStackIdentity(
