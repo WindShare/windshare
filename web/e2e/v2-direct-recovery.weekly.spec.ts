@@ -108,12 +108,12 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const firstFailed = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'failed' &&
-        event.evidence.attemptId === firstStarted.evidence.attemptId,
+        sameIdentityBytes(event.evidence.attemptIdBytes, firstStarted.evidence.attemptIdBytes),
       'first admission timeout',
     )
     requireAttemptStage(firstFailed, 'failed')
     expect(firstFailed.evidence).toMatchObject({
-      peerPathId: firstStarted.evidence.peerPathId,
+      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
       failureScope: 'attempt',
       typedErrorCode: 'peer-timeout',
       failure: {
@@ -132,13 +132,17 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const retryDecision = await events.waitFor(
       'recovery',
       (event) => event.evidence.stage === 'retry-decided' &&
-        event.evidence.attemptId === firstStarted.evidence.attemptId,
+        event.evidence.attemptIdBytes !== undefined &&
+        sameIdentityBytes(event.evidence.attemptIdBytes, firstStarted.evidence.attemptIdBytes),
       'retry decision for the gated admission',
     )
     const replacement = await events.waitFor(
       'recovery',
       (event) => event.evidence.stage === 'attempt-replaced' &&
-        event.evidence.previousAttemptId === firstStarted.evidence.attemptId,
+        sameIdentityBytes(
+          event.evidence.previousAttemptIdBytes,
+          firstStarted.evidence.attemptIdBytes,
+        ),
       'fresh replacement attempt',
     )
     requireRecoveryStage(retryDecision, 'retry-decided')
@@ -147,27 +151,35 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       decision: 'retry-attempt',
       reason: 'local-transient',
     })
-    expect(replacement.evidence.attemptId).not.toBe(firstStarted.evidence.attemptId)
+    expect(replacement.evidence.attemptIdBytes).not.toEqual(
+      firstStarted.evidence.attemptIdBytes,
+    )
 
     const recoveredAttempt = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'admitted' &&
-        event.evidence.attemptId === replacement.evidence.attemptId,
+        event.evidence.attemptIdBytes !== undefined &&
+          replacement.evidence.attemptIdBytes !== undefined &&
+          sameIdentityBytes(
+            event.evidence.attemptIdBytes,
+            replacement.evidence.attemptIdBytes,
+          ),
       'authenticated replacement admission',
     )
     requireAttemptStage(recoveredAttempt, 'admitted')
     expect(recoveredAttempt.evidence).toMatchObject({
-      sessionId: firstStarted.evidence.sessionId,
-      peerPathId: firstStarted.evidence.peerPathId,
+      protocolSessionIdBytes: firstStarted.evidence.protocolSessionIdBytes,
+      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
       waveOrdinal: firstStarted.evidence.waveOrdinal,
       waveAttemptOrdinal: 2,
       sessionAttemptOrdinal: 2,
     })
+    const recoveredAttemptLane = requireEvidenceLane(recoveredAttempt.evidence)
     const recoveredLane = await events.waitFor(
       'lane-admitted',
       (event) => event.observation.route === 'peer' &&
-        event.observation.laneId === recoveredAttempt.evidence.lane.laneId &&
-        event.observation.laneEpoch === recoveredAttempt.evidence.lane.laneEpoch,
+        event.observation.laneId === recoveredAttemptLane.laneId &&
+        event.observation.laneEpoch === recoveredAttemptLane.laneEpoch,
       'recovered peer content lane',
     )
 
@@ -197,7 +209,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const detached = await events.waitFor(
       'recovery',
       (event) => event.evidence.stage === 'peer-detached' &&
-        event.evidence.lane.laneId === recoveredLane.observation.laneId &&
+        event.evidence.lane?.laneId === recoveredLane.observation.laneId &&
         event.evidence.lane.laneEpoch === recoveredLane.observation.laneEpoch,
       'exact recovery detachment',
     )
@@ -223,12 +235,14 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
       'detachment replacement attempt',
     )
     expect(detachmentAttempt.evidence).toMatchObject({
-      sessionId: firstStarted.evidence.sessionId,
-      peerPathId: firstStarted.evidence.peerPathId,
+      protocolSessionIdBytes: firstStarted.evidence.protocolSessionIdBytes,
+      peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
       sessionAttemptOrdinal: 3,
       waveAttemptOrdinal: 1,
     })
-    expect(detachmentAttempt.evidence.attemptId).not.toBe(recoveredAttempt.evidence.attemptId)
+    expect(detachmentAttempt.evidence.attemptIdBytes).not.toEqual(
+      recoveredAttempt.evidence.attemptIdBytes,
+    )
     await events.waitFor(
       'admission-response-gated',
       (event) => event.observation.offerOrdinal === 3 &&
@@ -238,7 +252,10 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const requestedLogicalLane = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'grant-requested' &&
-        event.evidence.attemptId === detachmentAttempt.evidence.attemptId,
+        sameIdentityBytes(
+          event.evidence.attemptIdBytes,
+          detachmentAttempt.evidence.attemptIdBytes,
+        ),
       'detachment lane-grant request',
     )
     requireAttemptStage(requestedLogicalLane, 'grant-requested')
@@ -260,7 +277,10 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const readoptedAttempt = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'admitted' &&
-        event.evidence.attemptId === detachmentAttempt.evidence.attemptId,
+        sameIdentityBytes(
+          event.evidence.attemptIdBytes,
+          detachmentAttempt.evidence.attemptIdBytes,
+        ),
       'peer readoption after detachment',
     )
     requireAttemptStage(readoptedAttempt, 'admitted')
@@ -271,7 +291,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
         event.observation.laneEpoch > recoveredLane.observation.laneEpoch,
       'reattached logical peer lane',
     )
-    expect(readoptedAttempt.evidence.lane).toEqual({
+    expect(requireEvidenceLane(readoptedAttempt.evidence)).toEqual({
       laneId: readoptedLane.observation.laneId,
       laneEpoch: readoptedLane.observation.laneEpoch,
     })
@@ -357,6 +377,18 @@ function requireRecoveryStage<T extends RecoveryEvent['evidence']['stage']>(
   if (event.evidence.stage !== stage) {
     throw new Error(`Expected recovery stage ${stage}, received ${event.evidence.stage}`)
   }
+}
+
+function requireEvidenceLane(evidence: { readonly lane?: {
+  readonly laneId: number
+  readonly laneEpoch: number
+} }): { readonly laneId: number; readonly laneEpoch: number } {
+  if (evidence.lane === undefined) throw new Error('Peer evidence did not retain its lane')
+  return evidence.lane
+}
+
+function sameIdentityBytes(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
 }
 
 async function attachDiagnostic(

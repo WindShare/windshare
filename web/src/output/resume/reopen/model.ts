@@ -1,4 +1,5 @@
 import type { ReceiveIntent } from '../../../transfer/intent'
+import type { OutputDiagnosticsPorts } from '../../diagnostics'
 import type {
   PersistedFSAOperationBinding,
   verifyFSAOperationBinding,
@@ -100,7 +101,10 @@ export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase
 
 export interface ReopenedWorkspaceReceiveContinuation {
   readonly preparation?: SealedWorkspaceZipPreparationV1
-  openBackend(options?: { readonly onTrace?: PersistentTreeTrace }): Promise<OriginPrivateWorkspaceBackend>
+  openBackend(options?: {
+    readonly onTrace?: PersistentTreeTrace
+    readonly diagnostics?: OutputDiagnosticsPorts
+  }): Promise<OriginPrivateWorkspaceBackend>
 }
 
 export type ReopenedReceiveOperation = ReopenedDirectTreeOperation | ReopenedWorkspaceOperation
@@ -175,6 +179,7 @@ export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly openWorkspacePackageContinuation?: OpenOriginPrivatePackageContinuation
   readonly openWorkspaceReceiveBackend?: typeof openOriginPrivateWorkspaceBackend
   readonly contentRequests?: WorkspaceContentRequestCounter
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: PersistedReceiveOperationReopenTrace
 }
 

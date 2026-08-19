@@ -1,3 +1,4 @@
+import type { OutputDiagnosticsPorts } from '../diagnostics'
 import type {
   FileCheckpointJournal,
   FinalFileCheckpointProof,
@@ -88,6 +89,7 @@ export type RecoverableFileCheckpointJournal =
 export interface PersistentTreeSessionOptions {
   readonly tree: PersistentOutputTree
   readonly checkpoints: RecoverableFileCheckpointJournal
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: PersistentTreeTrace
 }
 
@@ -107,5 +109,3 @@ export type PersistentTreeTraceEvent =
     }>
 
 export type PersistentTreeTrace = (event: PersistentTreeTraceEvent) => void
-
-export const NOOP_PERSISTENT_TREE_TRACE: PersistentTreeTrace = () => undefined

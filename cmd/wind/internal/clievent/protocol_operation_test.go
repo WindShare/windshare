@@ -81,24 +81,120 @@ func TestProtocolOperationEventRejectsContradictoryLifecycleFacts(t *testing.T) 
 	}
 }
 
-func TestProtocolOperationEventExposesBoundedOperationErrorClassification(t *testing.T) {
+func TestProtocolOperationEventCarriesTypedProtocolFailure(t *testing.T) {
 	session, _ := NewProtocolSessionID(bytes16(51))
 	operation, _ := NewProtocolOperationID(bytes16(52))
+	lane, _ := NewLaneIdentity(7, 0)
+	failure, err := NewResponseSendProtocolFailure(
+		ProtocolFailureSpec{
+			RequestKind:       ProtocolMessageRequestBlocks,
+			WireScope:         ProtocolFailureRevision,
+			WireCode:          0x3008,
+			Retryable:         true,
+			RetryAfterMillis:  30_000,
+			HasRetryAfter:     true,
+			ProtocolSession:   session,
+			ProtocolOperation: operation,
+			Lane:              lane,
+			HasLane:           true,
+		},
+		ProtocolFailureResponseSendSettlement{
+			Admitted: true, Settled: true, Outcome: ProtocolSendDelivered,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	event, err := NewProtocolOperationObserved(ProtocolOperationSpec{
 		Command: CommandShare, Role: ProtocolRoleSender,
 		Stage:           ProtocolOperationSenderResponseSettled,
 		ProtocolSession: session, ProtocolOperation: operation,
 		RequestKind:  ProtocolMessageRequestBlocks,
 		ResponseKind: ProtocolMessageOperationError, HasResponse: true,
-		OperationErrorScope: ProtocolOperationErrorRevision,
-		OperationErrorCode:  0x3008, HasOperationError: true,
+		Lane: lane, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome: ProtocolSendDelivered, Failure: failure,
 		Cause: ProtocolOperationCauseNone,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, code, retryable, ok := event.OperationError()
-	if !ok || scope != ProtocolOperationErrorRevision || code != 0x3008 || retryable {
-		t.Fatalf("operation error = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
+	projected, ok := event.Failure()
+	if !ok || projected.RequestKind() != ProtocolMessageRequestBlocks ||
+		projected.WireScope() != ProtocolFailureRevision || projected.WireCode() != 0x3008 ||
+		!projected.Retryable() || projected.ProtocolSessionID() != session ||
+		projected.ProtocolOperationID() != operation {
+		t.Fatalf("protocol failure = %#v, present=%v", projected, ok)
+	}
+	if retryAfter, present := projected.RetryAfterMillis(); !present || retryAfter != 30_000 {
+		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
+	}
+	if projectedLane, present := projected.Lane(); !present || projectedLane != lane {
+		t.Fatalf("failure lane = %#v, present=%v", projectedLane, present)
+	}
+	response, present := projected.Settlement().ResponseSend()
+	if !present || !response.Admitted || !response.Settled || response.Outcome != ProtocolSendDelivered {
+		t.Fatalf("response settlement = %#v, present=%v", response, present)
+	}
+	contradictory := event.spec
+	contradictory.SendOutcome = ProtocolSendDropped
+	if _, err := NewProtocolOperationObserved(contradictory); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("contradictory outer settlement error = %v", err)
+	}
+}
+
+func TestProtocolFailureRejectsInvalidRetrySettlementAndOuterCorrelation(t *testing.T) {
+	session, _ := NewProtocolSessionID(bytes16(61))
+	operation, _ := NewProtocolOperationID(bytes16(62))
+	otherOperation, _ := NewProtocolOperationID(bytes16(63))
+	lane, _ := NewLaneIdentity(3, 1)
+	base := ProtocolFailureSpec{
+		RequestKind: ProtocolMessageReleaseLease,
+		WireScope:   ProtocolFailureRevision, WireCode: 0xffff,
+		Retryable: true, RetryAfterMillis: 1, HasRetryAfter: true,
+		ProtocolSession: session, ProtocolOperation: operation,
+		Lane: lane, HasLane: true,
+	}
+
+	for _, test := range []struct {
+		name   string
+		mutate func(*ProtocolFailureSpec)
+	}{
+		{"retry without value", func(spec *ProtocolFailureSpec) { spec.HasRetryAfter = false }},
+		{"zero retry", func(spec *ProtocolFailureSpec) { spec.RetryAfterMillis = 0 }},
+		{"oversized retry", func(spec *ProtocolFailureSpec) { spec.RetryAfterMillis = 30_001 }},
+		{"unknown scope", func(spec *ProtocolFailureSpec) { spec.WireScope = 255 }},
+		{"hidden lane", func(spec *ProtocolFailureSpec) { spec.HasLane = false }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			spec := base
+			test.mutate(&spec)
+			if _, err := NewReceivedAuthenticatedProtocolFailure(spec); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("invalid failure error = %v", err)
+			}
+		})
+	}
+	if _, err := NewResponseSendProtocolFailure(
+		base,
+		ProtocolFailureResponseSendSettlement{Outcome: ProtocolSendDelivered},
+	); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("unsettled delivery error = %v", err)
+	}
+
+	failure, err := NewReceivedAuthenticatedProtocolFailure(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer := ProtocolOperationSpec{
+		Command: CommandGet, Role: ProtocolRoleReceiver,
+		Stage:           ProtocolOperationReceiverFailed,
+		ProtocolSession: session, ProtocolOperation: otherOperation,
+		RequestKind:  ProtocolMessageReleaseLease,
+		ResponseKind: ProtocolMessageOperationError, HasResponse: true,
+		Lane: lane, HasLane: true, Failure: failure,
+		Cause: ProtocolOperationCauseProtocolFailure,
+	}
+	if _, err := NewProtocolOperationObserved(outer); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("mismatched operation correlation error = %v", err)
 	}
 }

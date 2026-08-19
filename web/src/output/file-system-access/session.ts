@@ -10,6 +10,12 @@ import {
   type ReceiveIntent,
 } from '../../transfer/intent'
 import { authorizeFSAParent } from '../capability/acquisition'
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import type { AcquiredFSAParentAuthority } from '../capability/contract'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
 import {
@@ -110,6 +116,7 @@ export interface BindNewFileSystemAccessOutputOptions {
   readonly operationId?: string
   readonly reservationId?: string
   readonly authorityRef?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: FSAOutputTrace
 }
 
@@ -119,6 +126,7 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly lockManager?: BrowserLockManagerRuntime
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: FSAOutputTrace
 }
 
@@ -131,6 +139,7 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
   readonly #operationRepository: FSAOperationBindingRepository
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #settlementStarted = false
   #settlementObservationActive = false
   #closePromise: Promise<void> | undefined
@@ -144,6 +153,7 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
     operationRepository: FSAOperationBindingRepository
     checkpoints: FSAFileCheckpointRepository
     rootLease: FSARootMutationLease
+    diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.intent = input.intent
     this.reservation = input.reservation
@@ -153,6 +163,7 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
     this.#operationRepository = input.operationRepository
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
+    this.#diagnostics = input.diagnostics
   }
 
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
@@ -176,15 +187,22 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
       throw new DOMException('FSA materialization settlement already started', 'InvalidStateError')
     }
     this.#settlementStarted = true
+    outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'started' })
     // Quiescing writers precedes the mutation barrier, while repository and Web Lock
     // resources remain live until the settlement cut explicitly closes the session.
     await this.#materialization.close()
     this.#settlementObservationActive = true
     try {
-      return await this.#rootLease.authority.run(
+      const result = await this.#rootLease.authority.run(
         'settle-operation',
         () => observe(this.#observation()),
       )
+      outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'completed' })
+      return result
+    } catch (error) {
+      recordOutputException(this.#diagnostics?.failures?.settlement, error)
+      outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'failed' })
+      throw error
     } finally {
       this.#settlementObservationActive = false
     }
@@ -202,21 +220,37 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
   }
 
   async #close(): Promise<void> {
-    let failure: unknown
+    const failures: unknown[] = []
+    let outerFailureObserved = false
     try {
       await this.#materialization.close()
     } catch (error) {
-      failure = error
+      // File-transaction cleanup owns its native classification; this layer only
+      // preserves that failure while releasing the remaining FSA authorities.
+      failures.push(error)
     }
-    this.#checkpoints.close()
+    try {
+      this.#checkpoints.close()
+    } catch (error) {
+      failures.push(error)
+      outerFailureObserved = true
+      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
+    }
     try {
       await this.#rootLease.release()
     } catch (error) {
-      failure = failure === undefined
-        ? error
-        : new AggregateError([failure, error], 'FSA materialization and root lease close failed')
+      failures.push(error)
+      outerFailureObserved = true
+      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
     }
-    if (failure !== undefined) throw failure
+    if (failures.length !== 0) {
+      if (outerFailureObserved) {
+        outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
+      }
+      if (failures.length === 1) throw failures[0]
+      throw new AggregateError(failures, 'FSA output authorities did not close cleanly')
+    }
+    outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'completed' })
   }
 
   #observation(): FSAFinalSettlementObservation {
@@ -278,10 +312,16 @@ export async function bindNewFileSystemAccessOutput(
   const operationId = options.operationId ?? createOperationID()
   const reservationId = options.reservationId ?? createDestinationReservationID()
   const authorityRef = canonicalAuthorityRef(options.authorityRef ?? createAuthorityRef())
-  const rootLease = options.lockManager === undefined
-    ? await acquireFSARootMutationLease(options.authority.parent)
-    : await acquireFSARootMutationLease(options.authority.parent, options.lockManager)
+  const rootLease = await (options.lockManager === undefined
+    ? acquireFSARootMutationLease(options.authority.parent)
+    : acquireFSARootMutationLease(options.authority.parent, options.lockManager)
+  ).catch((error: unknown) => {
+    recordOutputException(options.diagnostics?.failures?.outputReservation, error)
+    outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
+    throw error
+  })
   let checkpoints: FSAFileCheckpointRepository | undefined
+  let materializationOpening = false
   try {
     await authorizeFSAParent(options.authority)
     const reservation = await rootLease.authority.run('reserve-name', async () => {
@@ -310,6 +350,7 @@ export async function bindNewFileSystemAccessOutput(
       parent: options.authority.parent,
     })
     emitFSAOutputTrace(options.trace, reservationCreated(reservation))
+    outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'acquired' })
     checkpoints = await openFSAFileCheckpointRepository(options, intent, reservation)
     const tree = new BrowserFileSystemTree({
       binding,
@@ -317,9 +358,13 @@ export async function bindNewFileSystemAccessOutput(
       fileHandles: checkpoints,
       mutations: rootLease.authority,
     })
+    materializationOpening = true
     const materialization = await PersistentTreeOutputSession.open({
       tree,
       checkpoints,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     return new FileSystemAccessOutputSession({
@@ -331,13 +376,30 @@ export async function bindNewFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
     if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
       emitFSAOutputTrace(options.trace, needsAttention(operationId))
     }
-    checkpoints?.close()
-    await rootLease.release().catch(() => undefined)
+    if (!materializationOpening) {
+      recordOutputException(options.diagnostics?.failures?.outputReservation, error)
+      outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
+    }
+    const cleanupFailures = await releaseFailedFSAOpen(
+      checkpoints,
+      rootLease,
+      options.diagnostics,
+    )
+    if (cleanupFailures.length !== 0) {
+      throw new AggregateError(
+        [error, ...cleanupFailures],
+        'FSA output reservation failed and could not release all authorities',
+        { cause: error },
+      )
+    }
     throw error
   }
 }
@@ -356,12 +418,20 @@ export async function reopenFileSystemAccessOutput(
     if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
       emitFSAOutputTrace(options.trace, needsAttention(intent.operationId))
     }
+    recordOutputException(options.diagnostics?.failures?.reopen, error)
+    outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
     throw error
   }
-  const rootLease = options.lockManager === undefined
-    ? await acquireFSARootMutationLease(firstBinding.parent)
-    : await acquireFSARootMutationLease(firstBinding.parent, options.lockManager)
+  const rootLease = await (options.lockManager === undefined
+    ? acquireFSARootMutationLease(firstBinding.parent)
+    : acquireFSARootMutationLease(firstBinding.parent, options.lockManager)
+  ).catch((error: unknown) => {
+    recordOutputException(options.diagnostics?.failures?.reopen, error)
+    outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
+    throw error
+  })
   let checkpoints: FSAFileCheckpointRepository | undefined
+  let materializationOpening = false
   try {
     const binding = await verifyFSAOperationBinding({
       repository: options.operationRepository,
@@ -375,9 +445,13 @@ export async function reopenFileSystemAccessOutput(
       fileHandles: checkpoints,
       mutations: rootLease.authority,
     })
+    materializationOpening = true
     const materialization = await PersistentTreeOutputSession.open({
       tree,
       checkpoints,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     emitFSAOutputTrace(options.trace, Object.freeze({
@@ -386,6 +460,7 @@ export async function reopenFileSystemAccessOutput(
       receive_intent_digest: intent.digest,
       reservation_kind: 'named-container-entry',
     }))
+    outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'authorized' })
     return new FileSystemAccessOutputSession({
       intent,
       reservation: binding.reservation,
@@ -395,15 +470,65 @@ export async function reopenFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease,
+      ...(options.diagnostics === undefined
+        ? {}
+        : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
-    if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
-      emitFSAOutputTrace(options.trace, needsAttention(intent.operationId))
+    reportFSAReopenFailure(options, intent.operationId, error, materializationOpening)
+    const cleanupFailures = await releaseFailedFSAOpen(
+      checkpoints,
+      rootLease,
+      options.diagnostics,
+    )
+    if (cleanupFailures.length !== 0) {
+      throw new AggregateError(
+        [error, ...cleanupFailures],
+        'FSA output reopen failed and could not release all authorities',
+        { cause: error },
+      )
     }
-    checkpoints?.close()
-    await rootLease.release().catch(() => undefined)
     throw error
   }
+}
+
+function reportFSAReopenFailure(
+  options: ReopenFileSystemAccessOutputOptions,
+  operationId: string,
+  error: unknown,
+  materializationOpening: boolean,
+): void {
+  if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
+    emitFSAOutputTrace(options.trace, needsAttention(operationId))
+  }
+  if (!materializationOpening) {
+    recordOutputException(options.diagnostics?.failures?.reopen, error)
+  }
+  outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
+}
+
+async function releaseFailedFSAOpen(
+  checkpoints: FSAFileCheckpointRepository | undefined,
+  rootLease: FSARootMutationLease,
+  diagnostics: OutputDiagnosticsPorts | undefined,
+): Promise<readonly unknown[]> {
+  const failures: unknown[] = []
+  try {
+    checkpoints?.close()
+  } catch (error) {
+    failures.push(error)
+    recordOutputException(diagnostics?.failures?.cleanup, error)
+  }
+  try {
+    await rootLease.release()
+  } catch (error) {
+    failures.push(error)
+    recordOutputException(diagnostics?.failures?.cleanup, error)
+  }
+  if (failures.length !== 0) {
+    outputTrace(diagnostics, { eventName: 'cleanup', transition: 'failed' })
+  }
+  return Object.freeze(failures)
 }
 
 async function validateBoundIntent(
@@ -498,6 +623,35 @@ function needsAttention(
     prior_state: 'receiving',
     needs_attention_reason: 'target-ownership-unknown',
   })
+}
+
+type FSAOutputTraceInput =
+  | Readonly<{
+      eventName: 'output_reservation'
+      transition: 'acquired' | 'failed'
+    }>
+  | Readonly<{
+      eventName: 'settlement'
+      transition: 'started' | 'completed' | 'failed'
+    }>
+  | Readonly<{
+      eventName: 'reopen'
+      transition: 'authorized' | 'failed'
+    }>
+  | Readonly<{
+      eventName: 'cleanup'
+      transition: 'completed' | 'failed'
+    }>
+
+function outputTrace(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  input: FSAOutputTraceInput,
+): void {
+  emitOutputTrace(diagnostics?.trace, () =>
+    outputTraceEvent(input.eventName, {
+      backend: 'file_system_access',
+      transition: input.transition,
+    }))
 }
 
 function emitFSAOutputTrace(

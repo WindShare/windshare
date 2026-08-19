@@ -5,6 +5,8 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== vectors-update =="
 
+echo "-- update diagnostic-correlation vectors"
+go test -count=1 ./cmd/wind/internal/runtrace -run 'TestDiagnosticCorrelationVectors' -update
 echo "-- update protocol-contract vectors"
 go test -count=1 ./core/internal/protocolcontract -update
 echo "-- update peer-signaling vectors"

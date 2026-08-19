@@ -153,15 +153,24 @@ describe('browser offer negotiation', () => {
   it('reports isolated negotiation milestones without collecting network endpoints', async () => {
     const fixture = negotiationFixture()
     const milestones: Array<{ readonly stage: string; readonly counts: V2CandidateCounts }> = []
+    const snapshotCounts = (
+      counts: V2CandidateCounts | (() => V2CandidateCounts),
+    ): V2CandidateCounts => typeof counts === 'function' ? counts() : counts
     const observer: V2PeerOfferAttemptObserver = {
-      offerCreated: (counts) => milestones.push({ stage: 'offer-created', counts }),
+      offerCreated: (counts) => milestones.push({
+        stage: 'offer-created',
+        counts: snapshotCounts(counts),
+      }),
       offerSent: (counts) => {
-        milestones.push({ stage: 'offer-sent', counts })
+        milestones.push({ stage: 'offer-sent', counts: snapshotCounts(counts) })
         throw new Error('synthetic observer failure')
       },
-      answerReceived: (counts) => milestones.push({ stage: 'answer-received', counts }),
+      answerReceived: (counts) => milestones.push({
+        stage: 'answer-received',
+        counts: snapshotCounts(counts),
+      }),
       dataChannelOpened: (counts) => {
-        milestones.push({ stage: 'datachannel-open', counts })
+        milestones.push({ stage: 'datachannel-open', counts: snapshotCounts(counts) })
       },
     }
 

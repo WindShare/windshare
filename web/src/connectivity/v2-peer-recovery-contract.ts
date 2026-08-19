@@ -1,9 +1,13 @@
 import { browserConnectivityClock } from './clock'
 import type {
-  V2BrowserConnectivityRecoveryDiagnostic,
+  V2ConnectivityTraceSource,
   V2PeerRecoveryWaveTrigger,
 } from './diagnostics'
-import type { V2PeerAttemptObserver } from './v2-peer-attempt'
+import type {
+  V2PeerAttemptIdentity,
+  V2PeerPathIdentity,
+  V2ProtocolSessionIdentity,
+} from '../session/v2-identities'
 import type {
   V2PeerAdmittedLane,
   V2PeerAttemptCancellationOwner,
@@ -138,8 +142,8 @@ export const browserV2PeerRecoveryClock: V2PeerRecoveryClock = Object.freeze({
 })
 
 export interface V2PeerAttemptContext {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
+  readonly protocolSessionId: V2ProtocolSessionIdentity
+  readonly peerPathId: V2PeerPathIdentity
   readonly waveOrdinal: number
   readonly waveAttemptOrdinal: number
   readonly sessionAttemptOrdinal: number
@@ -150,7 +154,7 @@ export interface V2PeerAttemptContext {
 }
 
 export interface V2PeerAttemptHandle {
-  readonly attemptId: string
+  readonly attemptId: V2PeerAttemptIdentity
   readonly result: Promise<V2PeerAttemptResult>
   cancel(owner: V2PeerAttemptCancellationOwner): void
 }
@@ -168,8 +172,8 @@ export interface V2PeerRecoveryActivation {
 }
 
 export interface V2PeerLaneDetachment {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
+  readonly protocolSessionId: V2ProtocolSessionIdentity
+  readonly peerPathId: V2PeerPathIdentity
   readonly laneId: number
   readonly laneEpoch: number
 }
@@ -204,77 +208,23 @@ export type V2PeerRecoveryState =
     }
   | { readonly kind: 'session-stopped'; readonly reason: V2ProtocolSessionTerminalSnapshot['code'] }
 
-export type V2PeerRecoveryEventPayload =
-  | { readonly stage: 'wave-started'; readonly waveOrdinal: number; readonly trigger: V2PeerRecoveryWaveTrigger }
-  | {
-      readonly stage: 'wave-rearmed'
-      readonly waveOrdinal: number
-      readonly trigger: 'activation' | 'network-change'
-    }
-  | {
-      readonly stage: 'retry-decided'
-      readonly waveOrdinal: number
-      readonly attemptId: string
-      readonly decision: V2PeerFailureDecision['type']
-      readonly reason: V2PeerFailureDecision['reason']
-      readonly authenticatedRetryAfterMilliseconds: number
-    }
-  | {
-      readonly stage: 'backoff-scheduled'
-      readonly waveOrdinal: number
-      readonly attemptId: string
-      readonly retryOrdinal: number
-      readonly localDelayMilliseconds: number
-      readonly authenticatedRetryAfterMilliseconds: number
-      readonly effectiveDelayMilliseconds: number
-    }
-  | {
-      readonly stage: 'attempt-replaced'
-      readonly waveOrdinal: number
-      readonly previousAttemptId: string
-      readonly attemptId: string
-    }
-  | {
-      readonly stage: 'wave-quiesced'
-      readonly waveOrdinal: number
-      readonly reason: 'wave-attempt-budget' | 'wave-elapsed-budget'
-    }
-  | {
-      readonly stage: 'peer-detached'
-      readonly lane: { readonly laneId: number; readonly laneEpoch: number }
-    }
-  | {
-      readonly stage: 'session-budget-exhausted'
-      readonly reason: 'session-attempt-budget' | 'session-elapsed-budget'
-    }
-  | {
-      readonly stage: 'path-stopped'
-      readonly reason: Extract<V2PeerFailureDecision, { readonly type: 'stop-path' }>['reason']
-    }
-  | { readonly stage: 'session-stopped'; readonly reason: V2ProtocolSessionTerminalSnapshot['code'] }
-
-export type V2PeerRecoveryEvent = V2BrowserConnectivityRecoveryDiagnostic
-export type V2PeerRecoveryObserver = (event: V2PeerRecoveryEvent) => void
-
-/** One injectable policy boundary is threaded from the gateway to each session generation. */
+/** One policy boundary is threaded from the gateway to each session generation. */
 export interface V2PeerRecoveryDependencies {
   readonly policy?: V2PeerRecoveryPolicy
   readonly clock?: V2PeerRecoveryClock
   readonly random?: () => number
   readonly rearmSource?: V2PeerRecoveryRearmSource
-  readonly observer?: V2PeerRecoveryObserver
-  readonly observeAttempt?: V2PeerAttemptObserver
 }
 
 export interface V2PeerRecoverySupervisorOptions {
-  readonly protocolSessionId: string
-  readonly peerPathId: string
+  readonly protocolSessionId: V2ProtocolSessionIdentity
+  readonly peerPathId: V2PeerPathIdentity
   readonly attempts: V2PeerRecoveryAttemptFactory
   readonly policy?: V2PeerRecoveryPolicy
   readonly clock?: V2PeerRecoveryClock
   readonly random?: () => number
   readonly rearmSource?: V2PeerRecoveryRearmSource
-  readonly observer?: V2PeerRecoveryObserver
+  readonly trace?: V2ConnectivityTraceSource
 }
 
 export type V2PeerRecoveryAttemptRace =
@@ -299,9 +249,12 @@ export interface V2PeerRecoveryPendingWave {
   readonly rearmed: boolean
 }
 
-export function requireV2PeerRecoveryCorrelation(sessionId: string, peerPathId: string): void {
-  requireCorrelation(sessionId, 'ProtocolSession ID')
-  requireCorrelation(peerPathId, 'peer path ID')
+export function requireV2PeerRecoveryCorrelation(
+  sessionId: V2ProtocolSessionIdentity,
+  peerPathId: V2PeerPathIdentity,
+): void {
+  requireCorrelation(sessionId, 'protocol_session', 'ProtocolSession ID')
+  requireCorrelation(peerPathId, 'peer_path', 'peer path ID')
 }
 
 function requirePositiveInteger(value: number, label: string): void {
@@ -310,9 +263,13 @@ function requirePositiveInteger(value: number, label: string): void {
   }
 }
 
-function requireCorrelation(value: string, label: string): void {
-  if (!/^[A-Za-z0-9_-]{1,128}$/.test(value)) {
-    throw new RangeError(`${label} must be a bounded correlation identifier`)
+function requireCorrelation(
+  value: { readonly kind: string; readonly byteLength: number; copyBytes(): Uint8Array },
+  expectedKind: string,
+  label: string,
+): void {
+  if (value.kind !== expectedKind || value.byteLength !== 16 || value.copyBytes().byteLength !== 16) {
+    throw new RangeError(`${label} must be a typed 16-byte identity`)
   }
 }
 

@@ -1,0 +1,300 @@
+{
+  "version": 1,
+  "kind": "diagnostic-correlation-v1",
+  "description": "Typed diagnostic correlation identities projected as canonical unpadded base64url, with numeric lane fields and decimal text for uint64 values.",
+  "cases": [
+    {
+      "name": "full-correlation",
+      "input": {
+        "protocol_session_id_bytes": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15
+        ],
+        "protocol_operation_id_bytes": [
+          240,
+          241,
+          242,
+          243,
+          244,
+          245,
+          246,
+          247,
+          248,
+          249,
+          250,
+          251,
+          252,
+          253,
+          254,
+          255
+        ],
+        "peer_path_id_bytes": [
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47
+        ],
+        "peer_attempt_id_bytes": [
+          224,
+          225,
+          226,
+          227,
+          228,
+          229,
+          230,
+          231,
+          232,
+          233,
+          234,
+          235,
+          236,
+          237,
+          238,
+          239
+        ],
+        "lane_id": 7,
+        "lane_epoch": 2,
+        "sequence": "1",
+        "elapsed_ms": "0"
+      },
+      "expected": {
+        "correlation": {
+          "protocol_session_id": "AAECAwQFBgcICQoLDA0ODw",
+          "protocol_operation_id": "8PHy8_T19vf4-fr7_P3-_w",
+          "peer_path_id": "ICEiIyQlJicoKSorLC0uLw",
+          "peer_attempt_id": "4OHi4-Tl5ufo6err7O3u7w",
+          "lane_id": 7,
+          "lane_epoch": 2
+        },
+        "sequence": "1",
+        "elapsed_ms": "0",
+        "request_kind": "request_blocks",
+        "wire_scope": "block",
+        "wire_code": 12296
+      }
+    },
+    {
+      "name": "session-operation-only",
+      "input": {
+        "protocol_session_id_bytes": [
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63
+        ],
+        "protocol_operation_id_bytes": [
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79
+        ],
+        "sequence": "2",
+        "elapsed_ms": "17"
+      },
+      "expected": {
+        "correlation": {
+          "protocol_session_id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+          "protocol_operation_id": "QEFCQ0RFRkdISUpLTE1OTw"
+        },
+        "sequence": "2",
+        "elapsed_ms": "17",
+        "request_kind": "open_revisions",
+        "wire_scope": "revision",
+        "wire_code": 8193
+      }
+    },
+    {
+      "name": "path-attempt-only",
+      "input": {
+        "peer_path_id_bytes": [
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95
+        ],
+        "peer_attempt_id_bytes": [
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111
+        ],
+        "sequence": "3",
+        "elapsed_ms": "29"
+      },
+      "expected": {
+        "correlation": {
+          "peer_path_id": "UFFSU1RVVldYWVpbXF1eXw",
+          "peer_attempt_id": "YGFiY2RlZmdoaWprbG1ubw"
+        },
+        "sequence": "3",
+        "elapsed_ms": "29",
+        "request_kind": "peer_offer",
+        "wire_scope": "peer",
+        "wire_code": 16385
+      }
+    },
+    {
+      "name": "lane-uint32-zero",
+      "input": {
+        "lane_id": 0,
+        "lane_epoch": 0,
+        "sequence": "4",
+        "elapsed_ms": "31"
+      },
+      "expected": {
+        "correlation": {
+          "lane_id": 0,
+          "lane_epoch": 0
+        },
+        "sequence": "4",
+        "elapsed_ms": "31",
+        "request_kind": "lane_attach",
+        "wire_scope": "peer",
+        "wire_code": 0
+      }
+    },
+    {
+      "name": "lane-uint32-maximum",
+      "input": {
+        "lane_id": 4294967295,
+        "lane_epoch": 4294967295,
+        "sequence": "5",
+        "elapsed_ms": "47"
+      },
+      "expected": {
+        "correlation": {
+          "lane_id": 4294967295,
+          "lane_epoch": 4294967295
+        },
+        "sequence": "5",
+        "elapsed_ms": "47",
+        "request_kind": "block_fragment",
+        "wire_scope": "block",
+        "wire_code": 65535
+      }
+    },
+    {
+      "name": "absent-correlation",
+      "input": {
+        "sequence": "6",
+        "elapsed_ms": "53"
+      },
+      "expected": {
+        "sequence": "6",
+        "elapsed_ms": "53",
+        "request_kind": "list_children",
+        "wire_scope": "directory",
+        "wire_code": 4097
+      }
+    },
+    {
+      "name": "maximum-uint64-decimal-text",
+      "input": {
+        "protocol_session_id_bytes": [
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127
+        ],
+        "sequence": "18446744073709551615",
+        "elapsed_ms": "18446744073709551615"
+      },
+      "expected": {
+        "correlation": {
+          "protocol_session_id": "cHFyc3R1dnd4eXp7fH1-fw"
+        },
+        "sequence": "18446744073709551615",
+        "elapsed_ms": "18446744073709551615",
+        "request_kind": "session_terminal",
+        "wire_scope": "directory",
+        "wire_code": 65535
+      }
+    }
+  ]
+}

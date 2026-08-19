@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process'
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -35,6 +35,7 @@ export const DIRECT_WEBKIT_RELAY_BLOCK_BYTES = 32 * 1024
 export interface DirectShareOptions {
   readonly blockSizeBytes?: number
   readonly relayUrl?: string
+  readonly senderTrace?: boolean
 }
 
 export interface DirectStackTrace {
@@ -65,6 +66,7 @@ export class DirectProductStack {
   readonly #observe: (event: DirectStackTrace) => void
   readonly #processes: DirectProcess[] = []
   readonly #proxies: RelayCutProxy[] = []
+  readonly #senderTracePaths = new WeakMap<DirectShare, string>()
   #rootDirectory: string | undefined
   #vite: ViteDevServer | undefined
   #binaries: DirectBinaryPaths | undefined
@@ -130,7 +132,7 @@ export class DirectProductStack {
     validateBlockSize(blockSizeBytes)
     this.#senderSequence += 1
     const operationId = `${this.#scenarioId}-sender-${this.#senderSequence}`
-    const sender = this.#track(new DirectProcess(binaries.wind, [
+    const commandArguments = [
       'share',
       path,
       '--relay',
@@ -140,7 +142,15 @@ export class DirectProductStack {
       '--block-size',
       String(blockSizeBytes),
       '--split-key',
-    ], {
+    ]
+    let senderTracePath: string | undefined
+    if (options.senderTrace === true) {
+      const traceDirectory = join(this.#requireRoot(), 'sender-traces')
+      await mkdir(traceDirectory, { recursive: true })
+      senderTracePath = join(traceDirectory, `${operationId}.ndjson`)
+      commandArguments.push('--trace', senderTracePath)
+    }
+    const sender = this.#track(new DirectProcess(binaries.wind, commandArguments, {
       cwd: REPOSITORY_ROOT,
       environment: localGoEnvironment(),
       operationId,
@@ -169,7 +179,30 @@ export class DirectProductStack {
     // later cleanup diagnostics cannot retain a second capability transport.
     sender.consumeReadiness('stdout')
     this.#trace(operationId, 'ready')
-    return Object.freeze({ bareLink, key: separateKey })
+    const share = Object.freeze({ bareLink, key: separateKey })
+    if (senderTracePath !== undefined) this.#senderTracePaths.set(share, senderTracePath)
+    return share
+  }
+
+  async senderTraceRecords(share: DirectShare): Promise<readonly unknown[]> {
+    const encoded = await this.senderTraceArtifact(share)
+    return Object.freeze(
+      encoded.trimEnd().split('\n')
+        .filter((line) => line.length > 0)
+        .map((line): unknown => JSON.parse(line) as unknown),
+    )
+  }
+
+  async senderTraceArtifact(share: DirectShare): Promise<string> {
+    const tracePath = this.#senderTracePaths.get(share)
+    if (tracePath === undefined) {
+      throw new TypeError('Direct share did not enable sender tracing')
+    }
+    const encoded = await readFile(tracePath, 'utf8')
+    // The recorder owns newline-delimited record boundaries. Ignoring a trailing
+    // partial write lets a live sender be observed without inventing invalid data.
+    const completeBoundary = encoded.lastIndexOf('\n')
+    return completeBoundary < 0 ? '' : encoded.slice(0, completeBoundary + 1)
   }
 
   async createRelayCutProxy(): Promise<RelayCutProxy> {

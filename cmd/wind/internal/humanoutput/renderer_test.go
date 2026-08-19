@@ -207,9 +207,17 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	senderTerminal, err := clievent.NewSenderTerminalObserved(
-		sessionID, lane, true, clievent.SenderTerminalAccepted,
-		clievent.SenderTerminalDelivered, clievent.SenderTerminalDecisionDelivered,
+	senderTerminalSend, err := clievent.NewSenderTerminalSendObserved(
+		sessionID, lane, true, clievent.SenderTerminalSendAccepted,
+		clievent.SenderTerminalSendDelivered, clievent.SenderTerminalSendDecisionDelivered,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	senderSessionTerminated, err := clievent.NewSenderSessionTerminated(
+		sessionID,
+		clievent.SenderSessionTerminalGracefulStop,
+		clievent.SenderSessionTerminalNormalStop,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -262,7 +270,8 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		{"peer attempt", peerAttempt, false, true, false, false},
 		{"transfer lifecycle", transferLifecycle, false, false, false, false},
 		{"filesystem output", filesystem, false, false, false, false},
-		{"sender terminal", senderTerminal, false, false, false, false},
+		{"sender terminal send", senderTerminalSend, false, false, false, false},
+		{"sender session terminated", senderSessionTerminated, false, false, false, false},
 		{"catalog storage", catalogStorage, false, false, false, false},
 		{"root prefetch", rootPrefetch, false, false, false, false},
 		{"protocol operation failure", protocolOperation, false, true, false, false},

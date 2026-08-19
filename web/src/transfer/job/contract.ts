@@ -7,6 +7,8 @@ import type {
 import type { V2FrozenSelectionPolicy, V2SelectionPolicy } from '../../catalog/v2-selection'
 import type { V2BlockRangeReader, V2ContentLaneStatus } from '../../content/v2-broker'
 import type { V2RevisionReader } from '../../content/v2-session-services'
+import type { IncidentScopeHandle } from '../../diagnostics/incident'
+import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type {
   CanonicalModifiedTime,
@@ -16,6 +18,7 @@ import type {
 import type { ReceiveIntent } from '../intent'
 import type { SelectionMeasure } from '../measure'
 import type { TransferWorkerSettlement } from '../outcome'
+import type { ClassifiedTransferFailure } from './failures'
 import type {
   DurabilityLevel,
   ExactPreparationEvidence,
@@ -94,64 +97,74 @@ export interface TransferProgress {
 }
 
 export type ArtifactLayoutClass = DirectoryAdmissionLayout | 'original-file'
-export type MaterializationFailureReason =
-  | 'file-open-failed'
-  | 'source-revision-changed'
-  | 'content-read-failed'
-  | 'output-write-failed'
-  | 'output-commit-failed'
-  | 'directory-finalize-failed'
+export const MATERIALIZATION_FAILURE_REASONS = Object.freeze([
+  'file-open-failed',
+  'source-revision-changed',
+  'content-read-failed',
+  'output-write-failed',
+  'output-commit-failed',
+  'directory-finalize-failed',
+] as const)
 
-type TraceIdentity = Readonly<{
-  operation_id: string
-  receive_intent_digest: string
-  protocol_session_id?: string
-}>
+export type MaterializationFailureReason =
+  (typeof MATERIALIZATION_FAILURE_REASONS)[number]
 
 export type TransferTraceEvent =
-  | Readonly<TraceIdentity & {
-      name: 'receive.intent.frozen'
-      artifact_kind: ReceiveIntent['artifact']['kind']
-      layout_class: ArtifactLayoutClass
-      plan_kind: ReceiveIntent['plan']['kind']
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'intent_frozen'
+      artifactKind: ReceiveIntent['artifact']['kind']
+      layoutClass: ArtifactLayoutClass
+      planKind: ReceiveIntent['plan']['kind']
     }>
-  | Readonly<TraceIdentity & {
-      name: 'receive.directory_admission.accepted'
-      output_session_id: string
-      admitted_directory_count: bigint
-      layout_class: DirectoryAdmissionLayout
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'directory_admitted'
+      admittedDirectoryCount: bigint
+      layoutClass: DirectoryAdmissionLayout
     }>
-  | Readonly<TraceIdentity & {
-      name: 'receive.materialization.started'
-      transfer_job_id: string
-      output_session_id: string
-      plan_kind: ReceiveIntent['plan']['kind']
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'materialization_started'
+      planKind: ReceiveIntent['plan']['kind']
     }>
-  | Readonly<TraceIdentity & {
-      name: 'receive.materialization.failed'
-      transfer_job_id: string
-      plan_kind: ReceiveIntent['plan']['kind']
-      directory_failure_reason: MaterializationFailureReason
-      completed_file_count: bigint
-      completed_bytes: bigint
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'materialization_failed'
+      planKind: ReceiveIntent['plan']['kind']
+      materializationFailureReason: MaterializationFailureReason
+      completedFileCount: bigint
+      completedBytes: bigint
     }>
-  | Readonly<TraceIdentity & {
-      name: 'receive.materialization.completed'
-      transfer_job_id: string
-      entry_count: bigint
-      file_count: bigint
-      directory_count: bigint
-      raw_bytes: bigint
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'materialization_completed'
+      entryCount: bigint
+      fileCount: bigint
+      directoryCount: bigint
+      rawBytes: bigint
     }>
-  | Readonly<TraceIdentity & {
-      name: 'receive.tree.finalized'
-      tree_outcome: 'published' | 'partial-directory' | 'discarded'
-      success_count: bigint
-      failure_count: bigint
-      visibility: 'prefix-visible'
+  | Readonly<{
+      name: 'receive_transition'
+      transition: 'tree_finalized'
+      outcome: 'published' | 'partial_directory' | 'discarded'
+      successCount: bigint
+      failureCount: bigint
     }>
-
-export type TransferTraceListener = (event: TransferTraceEvent) => void
+  | Readonly<{
+      name: 'transfer_progress'
+      discoveredFiles: bigint
+      discoveredBytes: bigint
+      writtenBytes: bigint
+      completedFiles: bigint
+      completedBytes: bigint
+      fileErrors: bigint
+      selectionErrors: bigint
+      failedDirectories: bigint
+      contentLanes: number
+      discovery: SelectionMeasure['discovery']
+      partial: boolean
+    }>
 
 export interface TransferJobOptions {
   readonly descriptor: V2ShareDescriptor
@@ -165,9 +178,8 @@ export interface TransferJobOptions {
   readonly transferJobId?: string
   readonly onProgress?: (progress: TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
-  readonly onTrace?: TransferTraceListener
-  /** Resolves the active ProtocolSession generation at the instant each trace is emitted. */
-  readonly protocolSessionId?: () => string
+  readonly trace?: DomainTraceSource<TransferTraceEvent>
+  readonly incidentScope?: IncidentScopeHandle
   readonly maximumConcurrentFiles?: number
   readonly maximumConcurrentDirectories?: number
   readonly maximumPendingFiles?: number
@@ -217,6 +229,7 @@ export interface TransferJobResult {
   readonly lifecycle: ReceiveLifecycleState
   readonly measure: SelectionMeasure
   readonly abortReason?: unknown
+  readonly failureTrigger?: ClassifiedTransferFailure
   readonly transferJobId: string
   readonly intent: ReceiveIntent
   readonly outputDurability?: DurabilityLevel

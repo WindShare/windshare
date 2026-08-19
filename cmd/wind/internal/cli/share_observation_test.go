@@ -48,13 +48,18 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 		Cause:      wsrtc.LifecycleCauseNone,
 	})
 	observations.ObserveSenderAttempt(testShareAttemptObservation(t))
-	observations.ObserveSenderTerminal(sessionruntime.SenderTerminalObservation{
+	observations.ObserveSenderTerminalSend(sessionruntime.SenderTerminalSendObserved{
 		ProtocolSessionID:    testShareProtocolSessionID(t, 0x31),
 		Lane:                 sessionruntime.LaneIdentity{ID: 3, Epoch: 4},
 		Settled:              true,
-		TransportDisposition: sessionruntime.SenderTerminalTransportAccepted,
-		Outcome:              sessionruntime.SenderTerminalOutcomeDelivered,
-		Decision:             sessionruntime.SenderTerminalDecisionDelivered,
+		TransportDisposition: sessionruntime.SenderTerminalSendTransportAccepted,
+		Outcome:              sessionruntime.SenderTerminalSendOutcomeDelivered,
+		Decision:             sessionruntime.SenderTerminalSendDecisionDelivered,
+	})
+	observations.ObserveSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
+		ProtocolSessionID: testShareProtocolSessionID(t, 0x31),
+		Trigger:           sessionruntime.SenderSessionTerminalTriggerGracefulStop,
+		Provenance:        sessionruntime.SenderSessionTerminalProvenanceNormalStop,
 	})
 	observations.ObserveRelayRecovery(senderRelayRecoveryAttempt{
 		attempt: 2,
@@ -67,7 +72,8 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 		clievent.RelayLifecycleObserved{},
 		clievent.WebRTCLifecycleObserved{},
 		clievent.PeerAttemptObserved{},
-		clievent.SenderTerminalObserved{},
+		clievent.SenderTerminalSendObserved{},
+		clievent.SenderSessionTerminated{},
 		clievent.RelayRecovering{},
 	}
 	if len(emitter.events) != len(wantTypes) || emitter.lifecycleLoss != 0 {
@@ -77,6 +83,34 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 		if eventTypeName(emitter.events[index]) != eventTypeName(want) {
 			t.Fatalf("event %d type = %T, want %T", index, emitter.events[index], want)
 		}
+	}
+}
+
+func TestShareTerminalObserversRequireTracePreference(t *testing.T) {
+	plain := newShareObservations(&shareRecordingEmitter{})
+	if plain.protocolTracer() != nil || plain.terminalSendObserver() != nil ||
+		plain.sessionTerminalObserver() != nil {
+		t.Fatal("default share observations exposed a detailed core observer")
+	}
+
+	detailed := newShareObservations(&shareRecordingEmitter{detailed: true})
+	if detailed.protocolTracer() == nil {
+		t.Fatal("detailed share observations omitted the protocol tracer")
+	}
+	if detailed.terminalSendObserver() != nil || detailed.sessionTerminalObserver() != nil {
+		t.Fatal("detailed share observations exposed trace-only terminal observers")
+	}
+
+	traced := newShareObservations(&shareRecordingEmitter{detailed: true, trace: true})
+	if traced.protocolTracer() == nil || traced.terminalSendObserver() == nil ||
+		traced.sessionTerminalObserver() == nil {
+		t.Fatal("traced share observations omitted a core observer")
+	}
+
+	var absent *shareObservations
+	if absent.protocolTracer() != nil || absent.terminalSendObserver() != nil ||
+		absent.sessionTerminalObserver() != nil {
+		t.Fatal("nil share observations exposed an observer")
 	}
 }
 
@@ -223,6 +257,7 @@ type shareRecordingEmitter struct {
 	published     []clievent.Event
 	lifecycleLoss uint64
 	detailed      bool
+	trace         bool
 }
 
 func (emitter *shareRecordingEmitter) Observe(event clievent.Event) bool {
@@ -241,6 +276,7 @@ func (emitter *shareRecordingEmitter) ReportObserverLoss(_ clievent.ObserverLoss
 }
 
 func (emitter *shareRecordingEmitter) detailedDiagnosticsEnabled() bool { return emitter.detailed }
+func (emitter *shareRecordingEmitter) traceRecordingEnabled() bool      { return emitter.trace }
 
 func testShareAttemptObservation(t *testing.T) v2peer.SenderAttemptObservation {
 	t.Helper()

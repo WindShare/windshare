@@ -1,12 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
-import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
-import { encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  V2BrowserPeerAttemptExecutor,
-  type V2PeerAttemptMilestone,
-} from '../../src/connectivity/v2-peer-attempt'
+import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
+import { V2BrowserPeerAttemptExecutor } from '../../src/connectivity/v2-peer-attempt'
 import type {
   V2PeerAttemptContext,
   V2PeerRecoveryClock,
@@ -15,9 +11,13 @@ import {
   V2LaneAdmissionRejectedError,
   V2LaneAdmissionTransportError,
   V2LaneInstallationError,
-  type V2LaneAdmissionObserver,
   type V2ReceiverSessionRuntime,
 } from '../../src/session/v2-runtime'
+import {
+  createV2PeerPathIdentityValue,
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import { type V2LaneRejection, V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
 
 class ManualClock implements V2PeerRecoveryClock {
@@ -55,6 +55,7 @@ class ManualClock implements V2PeerRecoveryClock {
 
 class FakeSession {
   readonly keys = Object.freeze({ protocolSessionId: identity(90) })
+  readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(identity(90))
   readonly grant = Object.freeze({
     laneId: 2,
     laneEpoch: 1,
@@ -90,39 +91,22 @@ class FakeSession {
 
   async requestLaneGrant(
     _requestedLaneId: number,
-    options: { readonly signal?: AbortSignal; readonly observeAdmission?: V2LaneAdmissionObserver },
+    options: { readonly signal?: AbortSignal },
   ) {
-    const grantOperationId = encodeBase64Url(this.grant.grantOperationId)
-    options.observeAdmission?.({
-      type: 'grant-requested',
-      grantOperationId,
-      laneId: 0,
-      laneEpoch: 0,
-    })
     await optionalGate(this.grantGate, options.signal)
-    options.observeAdmission?.({
-      type: 'grant-received',
-      grantOperationId,
-      laneId: this.grant.laneId,
-      laneEpoch: this.grant.laneEpoch,
-    })
     return this.grant
   }
 
   async adoptGrantedLane(
     peer: PeerChannel,
     grant: typeof this.grant,
-    options: { readonly signal?: AbortSignal; readonly observeAdmission?: V2LaneAdmissionObserver },
+    options: { readonly signal?: AbortSignal },
   ) {
     const correlation = {
-      grantOperationId: encodeBase64Url(grant.grantOperationId),
+      grantOperationId: createV2ProtocolOperationIdentity(grant.grantOperationId),
       laneId: grant.laneId,
       laneEpoch: grant.laneEpoch,
     }
-    options.observeAdmission?.({
-      type: 'lane-hello-sent',
-      ...correlation,
-    })
     try {
       if (this.adoptionIgnoresSignal) {
         await this.adoptGate
@@ -134,11 +118,6 @@ class FakeSession {
       throw error
     }
     if (this.authenticatedRejection !== undefined) {
-      options.observeAdmission?.({
-        type: 'admission-response-rejected',
-        ...correlation,
-        rejection: this.authenticatedRejection,
-      })
       const error = new V2LaneAdmissionRejectedError(this.authenticatedRejection)
       if (this.adoptionClosesPeer) await peer.close()
       return Object.freeze({
@@ -153,10 +132,6 @@ class FakeSession {
       if (this.adoptionClosesPeer) await peer.close()
       throw this.adoptFailure
     }
-    options.observeAdmission?.({
-      type: 'admission-response-accepted',
-      ...correlation,
-    })
     try {
       if (this.adoptionIgnoresSignal) {
         await this.installationGate
@@ -183,10 +158,6 @@ class FakeSession {
       })
     }
     this.ids.add(grant.laneId)
-    options.observeAdmission?.({
-      type: 'lane-adopted',
-      ...correlation,
-    })
     return Object.freeze({
       ...correlation,
       disposition: 'accepted' as const,
@@ -240,9 +211,7 @@ function fixture() {
   const session = new FakeSession()
   const offers = new ControlledOffers()
   const clock = new ManualClock()
-  const milestones: V2PeerAttemptMilestone[] = []
-  const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
-  const failures: unknown[] = []
+  const diagnostics: V2ConnectivityTraceEvent[] = []
   const publications: unknown[] = []
   let randomSeed = 10
   const executor = new V2BrowserPeerAttemptExecutor({
@@ -255,17 +224,15 @@ function fixture() {
       publications.push(candidate)
       return true
     },
-    observeAttempt: (milestone) => milestones.push(milestone),
-    connectivityObserver: (event) => diagnostics.push(event),
-    onFailure: (error) => failures.push(error),
+    trace: { current: (event) => diagnostics.push(event) },
   })
-  return { clock, diagnostics, executor, failures, milestones, offers, publications, session }
+  return { clock, diagnostics, executor, offers, publications, session }
 }
 
 function attemptContext(phases: string[] = []): V2PeerAttemptContext {
   return Object.freeze({
-    protocolSessionId: 'protocol-session',
-    peerPathId: 'peer-path',
+    protocolSessionId: createV2ProtocolSessionIdentity(identity(90)),
+    peerPathId: createV2PeerPathIdentityValue(identity(7)),
     waveOrdinal: 1,
     waveAttemptOrdinal: 1,
     sessionAttemptOrdinal: 1,
@@ -279,7 +246,7 @@ function attemptContext(phases: string[] = []): V2PeerAttemptContext {
 describe('browser peer attempt phase executor', () => {
   it('starts a fresh admission deadline only after local DataChannel Open', async () => {
     const phases: string[] = []
-    const { clock, diagnostics, executor, milestones, offers, publications } = fixture()
+    const { clock, diagnostics, executor, offers, publications } = fixture()
     const peer = new CountingPeer()
     const attempt = executor.createAttempt(attemptContext(phases))
 
@@ -295,17 +262,6 @@ describe('browser peer attempt phase executor', () => {
     })
     expect(publications).toHaveLength(1)
     expect(peer.closes).toBe(0)
-    expect(milestones.map((milestone) => milestone.type)).toEqual([
-      'phase-deadline-armed',
-      'phase-deadline-armed',
-      'grant-requested',
-      'grant-received',
-      'lane-hello-sent',
-      'admission-settlement-begun',
-      'admission-response-accepted',
-      'lane-adopted',
-      'lane-published',
-    ])
     expect(diagnostics.map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
@@ -322,9 +278,9 @@ describe('browser peer attempt phase executor', () => {
       'lane-attached',
       'admitted',
     ])
-    expect(diagnostics.every((event, index) =>
-      event.sideSequence === index + 1 &&
-      event.sessionId !== '' && event.peerPathId !== '' && event.attemptId !== ''
+    expect(diagnostics.every((event) =>
+      event.correlation.protocolSessionId?.kind === 'protocol_session' &&
+      event.correlation.peerPathId?.kind === 'peer_path'
     )).toBe(true)
     const forbiddenAuthorityFields = [
       'sdp',
@@ -399,7 +355,7 @@ describe('browser peer attempt phase executor', () => {
   })
 
   it('retains a late authenticated installation failure after admission timeout', async () => {
-    const { clock, executor, failures, milestones, offers, publications, session } = fixture()
+    const { clock, diagnostics, executor, offers, publications, session } = fixture()
     const peer = new CountingPeer()
     const installation = deferred<void>()
     const installationError = new V2LaneInstallationError({ cause: new Error('install failed') })
@@ -410,12 +366,12 @@ describe('browser peer attempt phase executor', () => {
     const attempt = executor.createAttempt(attemptContext())
     offers.opened.resolve(peer)
     await turns()
-    expect(milestones.at(-1)?.type).toBe('admission-response-accepted')
 
     clock.expire(1)
     await turns()
-    expect(milestones).toContainEqual(expect.objectContaining({
-      type: 'phase-deadline-expired',
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      eventName: 'peer_attempt',
+      stage: 'admission-deadline-expired',
       phase: 'admission',
     }))
     installation.resolve()
@@ -428,13 +384,12 @@ describe('browser peer attempt phase executor', () => {
         reason: 'lane-installation-failed',
       },
     })
-    expect(failures).toEqual([installationError])
     expect(publications).toHaveLength(0)
     expect(peer.closes).toBe(1)
   })
 
   it('retains a late authenticated installation failure after lifecycle cancellation', async () => {
-    const { executor, failures, milestones, offers, publications, session } = fixture()
+    const { executor, offers, publications, session } = fixture()
     const peer = new CountingPeer()
     const installation = deferred<void>()
     const installationError = new V2LaneInstallationError({ cause: new Error('install failed') })
@@ -445,7 +400,6 @@ describe('browser peer attempt phase executor', () => {
     const attempt = executor.createAttempt(attemptContext())
     offers.opened.resolve(peer)
     await turns()
-    expect(milestones.at(-1)?.type).toBe('admission-response-accepted')
 
     attempt.cancel('last-activation')
     await turns()
@@ -459,8 +413,6 @@ describe('browser peer attempt phase executor', () => {
         reason: 'lane-installation-failed',
       },
     })
-    expect(failures).toEqual([installationError])
-    expect(milestones.some((milestone) => milestone.type === 'lane-adopted')).toBe(false)
     expect(publications).toHaveLength(0)
     expect(peer.closes).toBe(1)
   })
@@ -481,7 +433,7 @@ describe('browser peer attempt phase executor', () => {
   })
 
   it('retains a verified late success after its deadline has requested cancellation', async () => {
-    const { clock, executor, milestones, offers, publications, session } = fixture()
+    const { clock, diagnostics, executor, offers, publications, session } = fixture()
     const peer = new CountingPeer()
     const settlement = deferred<void>()
     session.adoptGate = settlement.promise
@@ -496,8 +448,9 @@ describe('browser peer attempt phase executor', () => {
 
     await expect(attempt.result).resolves.toMatchObject({ type: 'admitted' })
     expect(publications).toHaveLength(1)
-    expect(milestones).toContainEqual(expect.objectContaining({
-      type: 'phase-deadline-expired',
+    expect(diagnostics).toContainEqual(expect.objectContaining({
+      eventName: 'peer_attempt',
+      stage: 'admission-deadline-expired',
       phase: 'admission',
     }))
     expect(peer.closes).toBe(0)
@@ -507,7 +460,7 @@ describe('browser peer attempt phase executor', () => {
     const { executor } = fixture()
     const first = executor.createAttempt(attemptContext())
     const second = executor.createAttempt(attemptContext())
-    expect(first.attemptId).not.toBe(second.attemptId)
+    expect(first.attemptId.copyBytes()).not.toEqual(second.attemptId.copyBytes())
     first.cancel('runtime-stop')
     second.cancel('runtime-stop')
     await Promise.all([first.result, second.result])

@@ -1,3 +1,8 @@
+import type { FailureFact } from '../diagnostics/incident'
+import type {
+  OutputFailureBindingLease,
+  OutputFailureSinks,
+} from '../output/diagnostics'
 import type {
   AcquiredMaterializationAuthority,
   ArtifactAction,
@@ -12,6 +17,26 @@ import type {
   V2ActiveReceiveControl,
   WorkspaceUsage,
 } from './v2-lifecycle-presentation'
+
+export type V2PresentationSourceOutcome =
+  | 'picker_refused'
+  | 'caller_cancelled'
+  | 'stale_replacement'
+  | 'native_fault'
+
+export class V2PresentationSourceError extends Error {
+  readonly outcome: V2PresentationSourceOutcome
+
+  constructor(outcome: V2PresentationSourceOutcome, cause: unknown) {
+    super('Browser receive source reported a closed presentation outcome', { cause })
+    this.name = 'V2PresentationSourceError'
+    this.outcome = outcome
+  }
+}
+
+export function presentationSourceOutcome(error: unknown): V2PresentationSourceOutcome {
+  return error instanceof V2PresentationSourceError ? error.outcome : 'native_fault'
+}
 
 export interface V2LifecycleMutation {
   readonly lifecycle: ReceiveLifecycleState
@@ -42,6 +67,12 @@ export interface V2BoundReceiveOperation {
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls: readonly V2ActiveReceiveControl[]
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
+
+  /**
+   * The runtime-local binding prevents output sessions that span retries from
+   * retaining the authority of whichever presentation attempt created them.
+   */
+  bindOutputFailures?(failures: OutputFailureSinks | undefined): OutputFailureBindingLease
 
   /** The implementation translates the product control into its plan-specific stable cut. */
   interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void
@@ -89,6 +120,8 @@ export interface V2RetainedReceiveOperation {
 
 export interface V2RetainedReceiveInventory {
   readonly operations: readonly V2RetainedReceiveOperation[]
+  /** Source-reviewed facts; the coordinator never infers incident admission from React state. */
+  readonly presentationFailures: readonly FailureFact[]
 
   /**
    * The operation object is an opaque inventory-owned token. Implementations reject
@@ -98,12 +131,16 @@ export interface V2RetainedReceiveInventory {
     operation: V2RetainedReceiveOperation,
     action: V2RetainedReceiveAction,
     signal: AbortSignal,
+    failures?: OutputFailureSinks,
   ): PromiseLike<V2RetainedReceiveActionResult>
   close(): void
 }
 
 export interface V2RetainedReceiveInventoryPort {
-  list(signal: AbortSignal): PromiseLike<V2RetainedReceiveInventory>
+  list(
+    signal: AbortSignal,
+    failures?: OutputFailureSinks,
+  ): PromiseLike<V2RetainedReceiveInventory>
 }
 
 export interface V2ReceiveCompositionPort {
@@ -114,5 +151,6 @@ export interface V2ReceiveCompositionPort {
   /** The implementation must start any picker before this call returns. */
   startArtifactAuthority(
     action: ArtifactAction,
+    failures?: OutputFailureSinks,
   ): V2StartedArtifactAuthority | PromiseLike<V2StartedArtifactAuthority>
 }

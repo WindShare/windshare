@@ -1,3 +1,9 @@
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  type OutputDiagnosticsPorts,
+  type OutputFailureSink,
+} from '../../output/diagnostics'
 import { createWindowBrowserHandoffPublisher } from '../../output/portable/browser-download'
 import {
   createPortableExecutionRoutes,
@@ -45,6 +51,8 @@ import {
   unavailableRoute,
 } from './shared'
 
+type PortableFailureStage = 'settlement' | 'publication' | 'cleanup'
+
 type LifecycleEventPayload = LifecycleEvent extends infer Event
   ? Event extends LifecycleEvent
     ? Omit<Event, 'expectedGeneration' | 'leaseId'>
@@ -54,12 +62,18 @@ type LifecycleEventPayload = LifecycleEvent extends infer Event
 export class StartedPortableReceive implements V2StartedArtifactAuthority {
   readonly #window: BrowserReceiveWindow
   readonly #action: ArtifactAction
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #released = false
   #claimed = false
 
-  constructor(windowPort: BrowserReceiveWindow, action: ArtifactAction) {
+  constructor(
+    windowPort: BrowserReceiveWindow,
+    action: ArtifactAction,
+    diagnostics?: OutputDiagnosticsPorts,
+  ) {
     this.#window = windowPort
     this.#action = action
+    this.#diagnostics = diagnostics
   }
 
   async finalize(
@@ -82,7 +96,12 @@ export class StartedPortableReceive implements V2StartedArtifactAuthority {
     }))
     signal.throwIfAborted()
     this.#requireLive()
-    return PortableReceiveOperation.create(this.#window, action, intent)
+    return PortableReceiveOperation.create(
+      this.#window,
+      action,
+      intent,
+      this.#diagnostics,
+    )
   }
 
   release(): void {
@@ -112,14 +131,19 @@ V2ExecutionAdmissionLifecycle {
   readonly initialWorkspaceUsage = null
   readonly #leaseId = createOperationID()
   readonly #attemptId = createOperationID()
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #state: ReceiveLifecycleState
   #plans!: V2PlanExecutionAuthority
   #transferJobId = createTransferJobID()
   #preparationStarted = false
   #detached = false
 
-  private constructor(intent: ReceiveIntent) {
+  private constructor(
+    intent: ReceiveIntent,
+    diagnostics?: OutputDiagnosticsPorts,
+  ) {
     this.intent = intent
+    this.#diagnostics = diagnostics
     this.lifecycle = initialReceiveLifecycleState({
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
@@ -131,9 +155,16 @@ V2ExecutionAdmissionLifecycle {
     windowPort: BrowserReceiveWindow,
     action: ArtifactAction,
     intent: ReceiveIntent,
+    diagnostics?: OutputDiagnosticsPorts,
   ): Promise<PortableReceiveOperation> {
-    const owner = new PortableReceiveOperation(intent)
-    owner.#plans = await portablePlanAuthority(windowPort, action, intent, owner)
+    const owner = new PortableReceiveOperation(intent, diagnostics)
+    owner.#plans = await portablePlanAuthority(
+      windowPort,
+      action,
+      intent,
+      owner,
+      diagnostics,
+    )
     return owner
   }
 
@@ -281,11 +312,38 @@ V2ExecutionAdmissionLifecycle {
     intent: ReceiveIntent,
   ): Promise<Extract<ReceiveLifecycleState, { readonly kind: 'needs-attention' }>> {
     requireSameIntent(this.intent, intent)
+    this.#recordClosedFailure('settlement')
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('settlement', {
+        backend: 'portable',
+        transition: 'ownership_unknown',
+        outcome: 'needs_attention',
+      }))
     this.#state = this.#reduce({
       kind: 'ownership-unknown',
       lastVerifiedRecordDigest: await operationDigest(this.intent, 'portable-settlement-unknown'),
     })
     return this.#state as Extract<ReceiveLifecycleState, { readonly kind: 'needs-attention' }>
+  }
+
+  #recordClosedFailure(stage: PortableFailureStage): void {
+    try {
+      const sink = this.#failureSink(stage)
+      sink?.record({
+        nativeClass: 'unknown',
+        recoveryDisposition: 'needs_attention',
+      })
+    } catch {
+      // Closed diagnostic facts cannot acquire portable lifecycle authority.
+    }
+  }
+
+  #failureSink(
+    stage: PortableFailureStage,
+  ): OutputFailureSink<PortableFailureStage> | undefined {
+    if (stage === 'settlement') return this.#diagnostics?.failures?.settlement
+    if (stage === 'publication') return this.#diagnostics?.failures?.publication
+    return this.#diagnostics?.failures?.cleanup
   }
 
   #reduce(event: LifecycleEventPayload): ReceiveLifecycleState {
@@ -310,6 +368,7 @@ async function portablePlanAuthority(
   action: ArtifactAction,
   intent: ReceiveIntent,
   owner: PortableReceiveOperation,
+  diagnostics?: OutputDiagnosticsPorts,
 ): Promise<V2PlanExecutionAuthority> {
   const portableAction = requirePortableAction(action)
   const routes = createPortableExecutionRoutes({
@@ -318,12 +377,17 @@ async function portablePlanAuthority(
       handoffTarget: portableAction.plan.handoffTarget,
     },
     attemptId: owner.attemptId,
-    publisher: createWindowBrowserHandoffPublisher(windowPort),
+    publisher: createWindowBrowserHandoffPublisher(
+      windowPort,
+      undefined,
+      diagnostics,
+    ),
     assembly: {
       Blob: windowPort.Blob,
       WritableStream: windowPort.WritableStream,
     },
     lifecycle: owner,
+    ...(diagnostics === undefined ? {} : { diagnostics }),
     createZipSpool: () => new IndexedDbZipCentralDirectorySpool({
       namespace: `portable-${intent.operationId}`,
     }),

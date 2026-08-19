@@ -16,15 +16,23 @@ export type {
   TransferJobResult,
   TransferProgress,
   TransferTraceEvent,
-  TransferTraceListener,
 } from './contract'
-export { isV2FileScopedTransferFailure } from './failures'
-export { V2TransferAdmissionFailureError } from './admission-error'
+export {
+  V2ClassifiedTransferFailureError,
+  isClassifiedTransferFailure,
+  isV2FileScopedTransferFailure,
+  type ClassifiedTransferFailure,
+} from './failures'
+export {
+  V2TransferAdmissionFailureError,
+  type V2TransferAdmissionFailureAuthority,
+} from './admission-error'
 export { V2RangeReaderContractError } from './file-transfer'
 export {
   V2_DEFAULT_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
   V2_MAXIMUM_OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
   V2OutputSettlementTimeoutError,
+  V2TransferFailureSettlementError,
 } from '../settlement/v2-output'
 export {
   V2PlanRouteUnavailableError,

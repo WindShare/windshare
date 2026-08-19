@@ -359,13 +359,22 @@ func (lanes *runtimeLanes) run(lane *runtimeLane) {
 	lane.cancel()
 	lane.closeChannel()
 	second := <-results
-	cause := fatalLaneError(first, second)
-	lanes.completeLane(lane)
+	lanes.settleRun(lane, first, second)
+}
 
+func (lanes *runtimeLanes) settleRun(lane *runtimeLane, results ...laneRunResult) {
+	cause := fatalLaneError(results...)
 	if cause != nil && lanes.runtime.ctx.Err() == nil {
+		// The pump owns authenticated peer-terminal and local protocol failures.
+		// Claim that cause before completeLane can publish last-path retirement.
 		lanes.runtime.recordError(cause)
-		lanes.runtime.cancel()
+		if errors.Is(cause, protocolsession.ErrPeerSessionTerminal) {
+			lanes.runtime.terminate(runtimeTerminationPeerTerminal)
+		} else {
+			lanes.runtime.terminate(runtimeTerminationFailed)
+		}
 	}
+	lanes.completeLane(lane)
 }
 
 func fatalLaneError(results ...laneRunResult) error {
@@ -388,6 +397,13 @@ func (lanes *runtimeLanes) finishLane(lane *runtimeLane) {
 	}
 	hook := lanes.onDetach
 	lastUsable := !lanes.stopping && !lanes.hasUsableLocked()
+	var claim runtimeTerminationClaim
+	if lastUsable {
+		// The registry lock makes the no-path decision atomic with lane removal.
+		// Claiming here prevents a later stop or cleanup consequence from replacing
+		// the actual session root while callbacks publish detach.
+		claim = lanes.runtime.claimTermination(runtimeTerminationPathsExhausted)
+	}
 	lanes.mu.Unlock()
 	if hook != nil {
 		hook(lane.identity)
@@ -396,7 +412,7 @@ func (lanes *runtimeLanes) finishLane(lane *runtimeLane) {
 		// Losing every physical path ends this cryptographic session. A later
 		// connection must run a fresh transcript and cannot revive old sequence,
 		// operation, grant, or lease authority.
-		lanes.runtime.cancel()
+		lanes.runtime.completeTermination(claim, true)
 	}
 }
 

@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
+import type { V2PeerRecoveryTraceEvent } from '../../src/connectivity/diagnostics'
 import { V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
+import {
+  createV2PeerAttemptIdentity,
+  createV2PeerPathIdentityValue,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import type {
   V2PeerAttemptCancellationOwner,
   V2PeerAttemptResult,
@@ -18,10 +24,18 @@ import {
   type V2PeerAttemptHandle,
   type V2PeerRecoveryAttemptFactory,
   type V2PeerRecoveryClock,
-  type V2PeerRecoveryEvent,
   type V2PeerRecoveryRearmSource,
   type V2PeerRecoverySupervisorOptions,
 } from '../../src/connectivity/v2-peer-recovery'
+
+function identity(first: number): Uint8Array<ArrayBuffer> {
+  const value = new Uint8Array(16)
+  value[0] = first
+  return value
+}
+
+const SESSION_ID = createV2ProtocolSessionIdentity(identity(1))
+const PEER_PATH_ID = createV2PeerPathIdentityValue(identity(2))
 
 const TRANSIENT: V2PeerAttemptResult = Object.freeze({
   type: 'failed',
@@ -133,7 +147,7 @@ class ScriptedAttempts implements V2PeerRecoveryAttemptFactory {
       result = Promise.resolve(typeof scripted === 'function' ? scripted(context) : scripted)
     }
     return {
-      attemptId: `attempt_${index + 1}`,
+      attemptId: createV2PeerAttemptIdentity(identity(index + 3)),
       result,
       cancel: (owner) => {
         this.cancellations.push(owner)
@@ -174,22 +188,24 @@ function fixture(
   readonly supervisor: V2PeerRecoverySupervisor
   readonly attempts: ScriptedAttempts
   readonly clock: ManualClock
-  readonly events: V2PeerRecoveryEvent[]
+  readonly events: V2PeerRecoveryTraceEvent[]
 } {
   const attempts = new ScriptedAttempts(script)
   const clock = new ManualClock()
-  const events: V2PeerRecoveryEvent[] = []
+  const events: V2PeerRecoveryTraceEvent[] = []
   return {
     attempts,
     clock,
     events,
     supervisor: new V2PeerRecoverySupervisor({
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       attempts,
       clock,
       random: () => 0,
-      observer: (event) => events.push(event),
+      trace: { current: (event) => {
+        if (event.eventName === 'peer_recovery') events.push(event)
+      } },
       ...overrides,
     }),
   }
@@ -251,8 +267,8 @@ describe('v2 peer recovery supervisor', () => {
 
     expect(attempts.contexts).toHaveLength(1)
     expect(attempts.contexts[0]).toMatchObject({
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       waveOrdinal: 1,
       waveAttemptOrdinal: 1,
       sessionAttemptOrdinal: 1,
@@ -507,14 +523,14 @@ describe('v2 peer recovery supervisor', () => {
     await supervisor.join()
 
     expect(supervisor.peerDetached({
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       laneId: 7,
       laneEpoch: 0,
     })).toBe(false)
     expect(supervisor.peerDetached({
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       laneId: 7,
       laneEpoch: 1,
     })).toBe(true)
@@ -539,8 +555,8 @@ describe('v2 peer recovery supervisor', () => {
     activation.close()
 
     expect(supervisor.peerDetached({
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       laneId: 7,
       laneEpoch: 1,
     })).toBe(true)
@@ -554,19 +570,19 @@ describe('v2 peer recovery supervisor', () => {
     await supervisor.join()
   })
 
-  it('contains observer exceptions and exposes no relay or session mutation authority', async () => {
+  it('contains trace exceptions and exposes no relay or session mutation authority', async () => {
     let relayClosures = 0
     let sessionClosures = 0
     const attempts = new ScriptedAttempts([TRANSIENT])
     const clock = new ManualClock()
     const options = {
-      protocolSessionId: 'session_1',
-      peerPathId: 'path_1',
+      protocolSessionId: SESSION_ID,
+      peerPathId: PEER_PATH_ID,
       attempts,
       clock,
       random: () => 0,
       policy: createV2PeerRecoveryPolicy({ waveMaxAttempts: 1 }),
-      observer: () => { throw new Error('synthetic observer failure') },
+      trace: { current: () => { throw new Error('synthetic trace failure') } },
       closeRelay: () => { relayClosures += 1 },
       closeSession: () => { sessionClosures += 1 },
     } satisfies V2PeerRecoverySupervisorOptions & {

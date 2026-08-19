@@ -6,6 +6,7 @@ export const INERT_TEST_RECEIVE_COMPOSITION: V2ReceiveCompositionPort = Object.f
   retained: Object.freeze({
     list: () => Promise.resolve(Object.freeze({
       operations: Object.freeze([]),
+      presentationFailures: Object.freeze([]),
       act: () => Promise.reject(new DOMException('No retained operation', 'InvalidStateError')),
       close: () => undefined,
     })),

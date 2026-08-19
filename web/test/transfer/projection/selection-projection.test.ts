@@ -214,7 +214,7 @@ describe('epoch-scoped selection projection', () => {
 
   it('drops old-epoch progress, failure, and completion without side effects', async () => {
     const traces: ProjectionTraceEvent[] = []
-    const controller = new SelectionProjectionController((event) => traces.push(event))
+    const controller = new SelectionProjectionController({ current: event => { traces.push(event) } })
     const spec = await selection({ defaultSelected: true })
     const first = controller.beginSelection(spec)
     controller.apply({ kind: 'discovery-started', epoch: first.projection.epoch })
@@ -244,8 +244,25 @@ describe('epoch-scoped selection projection', () => {
       settledTargets: first.projection.unsettledTargets,
     })).toBe(current)
     expect(controller.state).toBe(current)
-    expect(traces.filter((event) => event.name === 'receive.projection.stale_event_dropped'))
-      .toHaveLength(3)
+    expect(traces.filter((event) =>
+      event.name === 'projection_transition' &&
+      event.transition === 'stale_event_dropped',
+    )).toHaveLength(3)
+  })
+
+  it('does not snapshot trace correlation while the dynamic observer is absent', async () => {
+    let correlationRead = false
+    const correlation = Object.defineProperty({}, 'protocolSessionId', {
+      get: () => {
+        correlationRead = true
+        throw new Error('disabled trace constructed correlation')
+      },
+    })
+    const controller = new SelectionProjectionController({ current: undefined })
+    const spec = await selection({ defaultSelected: true })
+
+    expect(() => controller.beginSelection(spec, correlation as never)).not.toThrow()
+    expect(correlationRead).toBe(false)
   })
 
   it('proves Tree early and never revokes it while unrelated targets remain', async () => {

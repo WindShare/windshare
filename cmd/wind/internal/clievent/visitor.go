@@ -19,7 +19,8 @@ type Visitor interface {
 	VisitPeerAttemptObserved(PeerAttemptObserved) error
 	VisitTransferLifecycleObserved(TransferLifecycleObserved) error
 	VisitFilesystemOutputObserved(FilesystemOutputObserved) error
-	VisitSenderTerminalObserved(SenderTerminalObserved) error
+	VisitSenderTerminalSendObserved(SenderTerminalSendObserved) error
+	VisitSenderSessionTerminated(SenderSessionTerminated) error
 	VisitCatalogStorageObserved(CatalogStorageObserved) error
 	VisitRootPrefetchObserved(RootPrefetchObserved) error
 	VisitProtocolOperationObserved(ProtocolOperationObserved) error
@@ -163,7 +164,7 @@ func acceptFilesystemOutputObserved(visitor Visitor, value FilesystemOutputObser
 	return visitor.VisitFilesystemOutputObserved(value)
 }
 
-func acceptSenderTerminalObserved(visitor Visitor, value SenderTerminalObserved) error {
+func acceptSenderTerminalSendObserved(visitor Visitor, value SenderTerminalSendObserved) error {
 	_, transportOK := value.transportDisposition.Name()
 	_, outcomeOK := value.outcome.Name()
 	_, decisionOK := value.decision.Name()
@@ -171,7 +172,15 @@ func acceptSenderTerminalObserved(visitor Visitor, value SenderTerminalObserved)
 		!transportOK || !outcomeOK || !decisionOK {
 		return ErrInvalidEvent
 	}
-	return visitor.VisitSenderTerminalObserved(value)
+	return visitor.VisitSenderTerminalSendObserved(value)
+}
+
+func acceptSenderSessionTerminated(visitor Visitor, value SenderSessionTerminated) error {
+	if visitor == nil || !value.session.Valid() ||
+		!validSenderSessionTerminalPair(value.trigger, value.provenance) {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitSenderSessionTerminated(value)
 }
 
 func acceptCatalogStorageObserved(visitor Visitor, value CatalogStorageObserved) error {
