@@ -34,14 +34,16 @@ $coreProfile = Join-Path $profileDirectory 'core.cover.out'
 
 Write-Output '== short-go =='
 try {
-    Invoke-Step 'non-core short race and atomic coverage sweep' {
-        go test -short -race -count=1 -covermode=atomic "-coverprofile=$rootProfile" $nonCorePackages
+    # Hosted CI owns forced reruns; local validation keeps Go's content-aware
+    # cache so unchanged race/coverage packages do not dominate feedback time.
+    Invoke-Step 'non-core short race and atomic coverage' {
+        go test -short -race -covermode=atomic "-coverprofile=$rootProfile" $nonCorePackages
     }
     Invoke-Step 'non-core coverage verdict' {
         go-test-coverage --config=.testcoverage.yml "--profile=$rootProfile"
     }
-    Invoke-Step 'core short race and atomic coverage sweep' {
-        go test -short -race -count=1 -covermode=atomic "-coverprofile=$coreProfile" $corePackages
+    Invoke-Step 'core short race and atomic coverage' {
+        go test -short -race -covermode=atomic "-coverprofile=$coreProfile" $corePackages
     }
     Invoke-Step 'core coverage verdict' {
         go-test-coverage --config=core/.testcoverage.yml "--profile=$coreProfile" --source-dir=core
