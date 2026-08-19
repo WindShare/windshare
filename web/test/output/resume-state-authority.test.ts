@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { OutputFailureSinks } from '../../src/output/diagnostics'
 import {
   ReceiveOperationResumeAuthority,
   type ReceiveOperationMutationPort,
@@ -53,6 +54,36 @@ describe('receive operation resume authority', () => {
     await expect(authority.resume(reference)).resolves.toBe('expired')
     expect(resume).not.toHaveBeenCalled()
     expect(expire).toHaveBeenCalledOnce()
+  })
+
+  it('forwards the exact attempt-local output capability through resume, expiry, and discard', async () => {
+    const lifecycle = resumableReceive(10_000)
+    const resume = vi.fn(async () => 'resumed')
+    const expire = vi.fn(async () => 'expired')
+    const discard = vi.fn(async () => ({ kind: 'already-absent' as const }))
+    const authority = new ReceiveOperationResumeAuthority({
+      source: { listLifecycleStates: async () => [lifecycle] },
+      mutations: mutations({ resume, expire, discard }),
+      clock: { now: () => 10_001 },
+    })
+    const failures = Object.freeze({}) as OutputFailureSinks
+
+    const resumeInventory = await authority.listResumeState()
+    await authority.resume(resumeInventory.operations[0]!, failures)
+    expect(resume).toHaveBeenCalledWith(expect.any(Object), failures)
+
+    const discardInventory = await authority.listResumeState()
+    await authority.discard(discardInventory.operations[0]!, failures)
+    expect(discard).toHaveBeenCalledWith(expect.any(Object), failures)
+
+    const expiredAuthority = new ReceiveOperationResumeAuthority({
+      source: { listLifecycleStates: async () => [lifecycle] },
+      mutations: mutations({ expire }),
+      clock: { now: () => 10_000 + STABLE_RETENTION_MILLISECONDS },
+    })
+    const expiryInventory = await expiredAuthority.listResumeState()
+    await expiredAuthority.resume(expiryInventory.operations[0]!, failures)
+    expect(expire).toHaveBeenCalledWith(expect.any(Object), failures)
   })
 
   it('closes inventory authority and reports cleanup uncertainty without partial export', async () => {

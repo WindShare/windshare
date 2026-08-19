@@ -162,10 +162,6 @@ func (a *App) openCommandTrace(
 	return nil, errUserTraceOpen
 }
 
-func (runtime *commandRuntime) detailedDiagnosticsEnabled() bool {
-	return runtime != nil && runtime.detailedDiagnostics
-}
-
 func openNativeUserTrace(
 	target runtrace.Target,
 	command clievent.Command,
@@ -409,61 +405,6 @@ func (runtime *commandRuntime) PublishTransferFinalization(
 	return runtime.finalize(&progress, settlement)
 }
 
-// ReportObserverLoss accounts for facts dropped by a bounded producer adapter
-// before they could be offered to Observe. Recorder-local Record failures must not
-// be reported here because runtrace already owns those counters.
-func (runtime *commandRuntime) ReportObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) bool {
-	if runtime == nil {
-		return false
-	}
-	if _, ok := category.Name(); !ok {
-		return false
-	}
-	if _, ok := reason.Name(); !ok || count == 0 {
-		return false
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed {
-		return false
-	}
-	runtime.addObserverLoss(category, reason, count)
-	runtime.signalReadyLocked()
-	return true
-}
-
-func (runtime *commandRuntime) ReportCumulativeObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, cumulative uint64) bool {
-	if runtime == nil || cumulative == 0 {
-		return false
-	}
-	if _, ok := category.Name(); !ok {
-		return false
-	}
-	if _, ok := reason.Name(); !ok {
-		return false
-	}
-	runtime.entryMu.Lock()
-	defer runtime.entryMu.Unlock()
-	if runtime.closed {
-		return false
-	}
-	counter := &runtime.upstreamCumulative[category][reason]
-	previous := counter.Load()
-	if cumulative <= previous {
-		return true
-	}
-	counter.Store(cumulative)
-	runtime.addObserverLoss(category, reason, cumulative-previous)
-	runtime.signalReadyLocked()
-	return true
-}
-
-func (runtime *commandRuntime) addObserverLoss(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, count uint64) {
-	if category > 0 && category < clievent.ObserverLossCategoryLimit && reason > 0 && reason < clievent.ObserverLossReasonLimit {
-		saturatingAtomicAdd(&runtime.pendingObserverLoss[category][reason], count)
-	}
-}
-
 func (runtime *commandRuntime) signalReadyLocked() {
 	select {
 	case runtime.ready <- struct{}{}:
@@ -476,13 +417,6 @@ func (runtime *commandRuntime) Clock() commandClock {
 		return nil
 	}
 	return runtime.clock
-}
-
-func (runtime *commandRuntime) HumanOutputError() error {
-	if runtime == nil || runtime.canvas == nil {
-		return nil
-	}
-	return runtime.canvas.Err()
 }
 
 func (runtime *commandRuntime) Close() {
@@ -521,13 +455,6 @@ func (runtime *commandRuntime) run() {
 			return
 		}
 	}
-}
-
-func (runtime *commandRuntime) traceHealth() <-chan clievent.TraceIncomplete {
-	if runtime.trace == nil {
-		return nil
-	}
-	return runtime.trace.Health()
 }
 
 func (runtime *commandRuntime) dispatch(event clievent.Event) {

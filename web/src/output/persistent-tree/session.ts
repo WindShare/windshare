@@ -1,5 +1,11 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
+import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
@@ -23,9 +29,6 @@ import type {
   RecoverableFileCheckpointJournal,
 } from './contracts'
 import {
-  NOOP_PERSISTENT_TREE_TRACE,
-} from './contracts'
-import {
   CheckpointLineageDecisionError,
   DestinationCollisionError,
   TargetOwnershipUnknownError,
@@ -33,10 +36,22 @@ import {
 import { PersistentFileTransaction } from './file-transaction'
 import { recoverFileCheckpointCandidates } from './recovery'
 
+type PersistentTreeTraceInput =
+  | Readonly<{
+      eventName: 'output_reservation'
+      transition: 'acquired' | 'failed'
+    }>
+  | Readonly<{
+      eventName: 'checkpoint'
+      transition: 'restored' | 'persisted' | 'failed'
+      decision?: 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid'
+    }>
+
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
-  readonly #trace: NonNullable<PersistentTreeSessionOptions['trace']>
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #legacyTrace: PersistentTreeSessionOptions['trace']
   readonly #active = new Set<PersistentFileTransaction>()
   readonly #recreatablePreObjectCandidates = new Set<string>()
   #needsAttentionReported = false
@@ -45,24 +60,34 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   private constructor(options: PersistentTreeSessionOptions) {
     this.#tree = options.tree
     this.#checkpoints = options.checkpoints
-    this.#trace = options.trace ?? NOOP_PERSISTENT_TREE_TRACE
+    this.#diagnostics = options.diagnostics
+    this.#legacyTrace = options.trace
   }
 
   static async open(options: PersistentTreeSessionOptions): Promise<PersistentTreeOutputSession> {
     const session = new PersistentTreeOutputSession(options)
-    await options.tree.authorize()
-    await options.tree.prepareRoot()
-    const recovery = await recoverFileCheckpointCandidates(options.checkpoints, {
-      observe: candidate => session.#observeCandidate(candidate),
-    })
-    const unresolvedOwnership = recovery.unknownRecordIds.filter(
-      recordId => !session.#recreatablePreObjectCandidates.has(recordId),
-    )
-    if (unresolvedOwnership.length !== 0) {
-      session.#reportNeedsAttention()
-      throw new TargetOwnershipUnknownError('checkpoint', options.checkpoints.binding.operationId)
+    try {
+      await options.tree.authorize()
+      await options.tree.prepareRoot()
+      const recovery = await recoverFileCheckpointCandidates(options.checkpoints, {
+        observe: candidate => session.#observeCandidate(candidate),
+      })
+      const unresolvedOwnership = recovery.unknownRecordIds.filter(
+        recordId => !session.#recreatablePreObjectCandidates.has(recordId),
+      )
+      if (unresolvedOwnership.length !== 0) {
+        session.#reportLegacyNeedsAttention()
+        throw new TargetOwnershipUnknownError(
+          'checkpoint',
+          options.checkpoints.binding.operationId,
+        )
+      }
+      return session
+    } catch (error) {
+      recordOutputException(options.diagnostics?.failures?.outputReservation, error)
+      session.#trace({ eventName: 'output_reservation', transition: 'failed' })
+      throw error
     }
-    return session
   }
 
   async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransaction> {
@@ -72,45 +97,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     // checkpoint reservations and namespace placeholders for unopened revisions.
     const revision = snapshotOpenedRevision(await request.openRevision())
     try {
-      const lineageId = deriveCheckpointLineageID({
-        ...this.#checkpoints.binding,
-        fileId: revision.fileId,
-        canonicalPath: artifactPath,
-      })
-      const lookup = {
-        lineageId,
-        fileId: revision.fileId,
-        canonicalPath: artifactPath,
-        fileRevision: revision.fileRevision,
-        exactSize: revision.exactSize,
-      } as const
-      let decision: InitialCheckpointCASResult | CheckpointLineageDecision =
-        await this.#checkpoints.lookupLineage(lookup)
-      if (decision.kind === 'absent') {
-        const proposedOwnedObjectId = await this.#tree.proposeFileOwnedObjectId(
-          artifactPath,
-          revision,
-        )
-        if (await this.#tree.inspectFileDestination(artifactPath, proposedOwnedObjectId) ===
-            'occupied') {
-          decision = await this.#checkpoints.lookupLineage(lookup)
-          if (decision.kind === 'absent') {
-            this.#traceCheckpointDecision(revision.fileId, decision)
-            throw new DestinationCollisionError()
-          }
-        }
-        if (decision.kind === 'absent') {
-          decision = await this.#checkpoints.createInitialCheckpoint(
-            initialCheckpoint(
-              this.#checkpoints.binding,
-              revision,
-              artifactPath,
-              proposedOwnedObjectId,
-            ),
-          )
-        }
-      }
-
+      const decision = await this.#selectInitialCheckpoint(revision, artifactPath)
       this.#traceCheckpointDecision(revision.fileId, decision)
       const checkpoint = selectedCheckpoint(decision)
       let handle = await this.#tree.openFile(artifactPath, checkpoint.ownedObjectId)
@@ -134,12 +121,17 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         checkpoint: committed,
         checkpoints: this.#checkpoints,
         onClose: (closed) => this.#active.delete(closed),
-        onOwnershipUnknown: () => this.#reportNeedsAttention(),
+        onOwnershipUnknown: () => this.#reportLegacyNeedsAttention(),
+        ...(this.#diagnostics === undefined
+          ? {}
+          : { diagnostics: this.#diagnostics }),
       })
       this.#active.add(transaction)
       return transaction
     } catch (error) {
-      if (error instanceof TargetOwnershipUnknownError) this.#reportNeedsAttention()
+      recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+      this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+      if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
       throw error
     }
   }
@@ -164,6 +156,47 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     if (failures.length !== 0) {
       throw new AggregateError(failures, 'Persistent tree file transactions did not close cleanly')
     }
+  }
+
+  async #selectInitialCheckpoint(
+    revision: OpenedFileRevision,
+    artifactPath: readonly string[],
+  ): Promise<InitialCheckpointCASResult | CheckpointLineageDecision> {
+    const lookup = {
+      lineageId: deriveCheckpointLineageID({
+        ...this.#checkpoints.binding,
+        fileId: revision.fileId,
+        canonicalPath: artifactPath,
+      }),
+      fileId: revision.fileId,
+      canonicalPath: artifactPath,
+      fileRevision: revision.fileRevision,
+      exactSize: revision.exactSize,
+    } as const
+    let decision: InitialCheckpointCASResult | CheckpointLineageDecision =
+      await this.#checkpoints.lookupLineage(lookup)
+    if (decision.kind !== 'absent') return decision
+
+    const proposedOwnedObjectId = await this.#tree.proposeFileOwnedObjectId(
+      artifactPath,
+      revision,
+    )
+    if (await this.#tree.inspectFileDestination(artifactPath, proposedOwnedObjectId) ===
+        'occupied') {
+      decision = await this.#checkpoints.lookupLineage(lookup)
+      if (decision.kind === 'absent') {
+        this.#traceCheckpointDecision(revision.fileId, decision)
+        throw new DestinationCollisionError()
+      }
+    }
+    if (decision.kind !== 'absent') return decision
+
+    return this.#checkpoints.createInitialCheckpoint(initialCheckpoint(
+      this.#checkpoints.binding,
+      revision,
+      artifactPath,
+      proposedOwnedObjectId,
+    ))
   }
 
   async #promoteInitialCheckpoint(candidate: FileCheckpointV2): Promise<FileCheckpointV2> {
@@ -234,7 +267,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     decision: InitialCheckpointCASResult | CheckpointLineageDecision,
   ): void {
     try {
-      this.#trace(Object.freeze({
+      this.#legacyTrace?.(Object.freeze({
         name: 'receive.checkpoint.decision',
         operation_id: this.#checkpoints.binding.operationId,
         file_id: fileId,
@@ -246,25 +279,64 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     } catch {
       // Checkpoint authority remains independent from optional telemetry.
     }
+    this.#trace({
+      eventName: 'checkpoint',
+      transition: checkpointTraceTransition(decision.kind),
+      decision: checkpointTraceDecision(decision.kind),
+    })
   }
 
   #requireOpen(): void {
     if (this.#closed) throw new DOMException('Persistent tree session is closed', 'InvalidStateError')
   }
 
-  #reportNeedsAttention(): void {
+  #reportLegacyNeedsAttention(): void {
     if (this.#needsAttentionReported) return
     this.#needsAttentionReported = true
     try {
-      this.#trace(Object.freeze({
+      this.#legacyTrace?.(Object.freeze({
         name: 'receive.operation.needs_attention',
         operation_id: this.#checkpoints.binding.operationId,
         prior_state: 'receiving',
         needs_attention_reason: 'target-ownership-unknown',
       }))
     } catch {
-      // Ownership failures remain authoritative even if telemetry is unavailable.
+      // Legacy observation cannot acquire ownership authority during the cutover.
     }
+  }
+
+  #trace(input: PersistentTreeTraceInput): void {
+    const diagnostics = this.#diagnostics
+    emitOutputTrace(diagnostics?.trace, () =>
+      outputTraceEvent(input.eventName, {
+        backend: diagnostics?.backend === 'file_system_access'
+          ? 'file_system_access'
+          : 'origin_private',
+        transition: input.transition,
+        ...('decision' in input && input.decision !== undefined
+          ? { decision: input.decision }
+          : {}),
+      }))
+  }
+}
+
+function checkpointTraceTransition(
+  decision: InitialCheckpointCASResult['kind'] | CheckpointLineageDecision['kind'],
+): 'persisted' | 'restored' | 'failed' {
+  switch (decision) {
+    case 'installed': return 'persisted'
+    case 'exact': return 'restored'
+    default: return 'failed'
+  }
+}
+
+function checkpointTraceDecision(
+  decision: InitialCheckpointCASResult['kind'] | CheckpointLineageDecision['kind'],
+): 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid' {
+  switch (decision) {
+    case 'revision-conflict': return 'revision_conflict'
+    case 'ownership-conflict': return 'ownership_conflict'
+    default: return decision
   }
 }
 

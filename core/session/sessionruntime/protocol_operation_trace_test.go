@@ -161,6 +161,105 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 	}
 }
 
+func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+	recorder := &protocolTraceRecorder{}
+	runtime.protocolTracer = recorder
+	selected, err := runtime.lanes.selectLane(&runtime.initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerContext, stopWriter := context.WithCancel(context.Background())
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- selected.writer.Run(writerContext) }()
+	defer func() {
+		stopWriter()
+		<-writerDone
+	}()
+
+	operationID := id16[protocolsession.OperationID](0x76)
+	request, err := protocolsession.NewMessage(
+		protocolsession.MessageOpenRevisions,
+		&operationID,
+		[]byte{0xa0},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x77}, ed25519.SeedSize))
+	outbound := senderOutbound{runtime: runtime, privateKey: privateKey}
+	failureBody, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
+		Scope:      protocolsession.OperationScopeRevision,
+		Code:       0x3008,
+		Retryable:  true,
+		RetryAfter: 2 * time.Second,
+		Message:    "provider-only revision detail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.router.RegisterHandler(
+		protocolsession.MessageOpenRevisions,
+		protocolsession.MessageHandlerFunc(func(ctx context.Context, message protocolsession.Message) error {
+			id, ok := message.OperationID()
+			if !ok {
+				return ErrOperationMissing
+			}
+			_, sendErr := outbound.SendControl(
+				ctx,
+				protocolsession.MessageOperationError,
+				id,
+				failureBody,
+			)
+			return sendErr
+		}),
+	); err != nil {
+		t.Fatal(err)
+	}
+	inbound := laneInboundRouter{runtime: runtime, identity: runtime.initial}
+	if disposition, routeErr := inbound.RouteInbound(context.Background(), request); routeErr != nil ||
+		disposition != protocolsession.OperationDeliver {
+		t.Fatalf("route open revisions: disposition=%d error=%v", disposition, routeErr)
+	}
+	queued, err := runtime.router.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.router.Dispatch(context.Background(), queued); err != nil {
+		t.Fatal(err)
+	}
+
+	events := recorder.snapshot()
+	if len(events) != 2 {
+		t.Fatalf("sender protocol trace events = %d, want 2: %+v", len(events), events)
+	}
+	event := events[1]
+	failure := event.Failure
+	if event.Stage != ProtocolOperationSenderResponseSettled ||
+		event.RequestKind != protocolsession.MessageOpenRevisions ||
+		event.ResponseKind != protocolsession.MessageOperationError ||
+		failure.IsZero() ||
+		failure.RequestKind() != protocolsession.MessageOpenRevisions ||
+		failure.WireScope() != ProtocolFailureRevision ||
+		failure.WireCode() != 0x3008 ||
+		!failure.Retryable() ||
+		failure.ProtocolSessionID() != runtime.sessionID ||
+		failure.ProtocolOperationID() != operationID {
+		t.Fatalf("sender failure trace = %+v", event)
+	}
+	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 2_000 {
+		t.Fatalf("sender failure retry after = %d, present=%v", retryAfter, present)
+	}
+	if lane, present := failure.Lane(); !present || lane != runtime.initial {
+		t.Fatalf("sender failure lane = %+v, present=%v", lane, present)
+	}
+	response, present := failure.Settlement().ResponseSend()
+	if !present || !response.Admitted || !response.Settled ||
+		response.Outcome != protocolsession.SendOutcomeDelivered {
+		t.Fatalf("sender failure settlement = %+v, present=%v", response, present)
+	}
+}
+
 func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	recorder := &protocolTraceRecorder{}
@@ -203,27 +302,173 @@ func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T)
 	}
 }
 
-func TestProtocolOperationErrorTraceRetainsOnlyBoundedWireClassification(t *testing.T) {
+func TestProtocolFailureForResponseSendRetainsReviewedFactsAndSettlement(t *testing.T) {
 	body, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
-		Scope:   protocolsession.OperationScopeRevision,
-		Code:    0x3008,
-		Message: "provider text must not enter the trace",
+		Scope:      protocolsession.OperationScopeRevision,
+		Code:       0x3008,
+		Retryable:  true,
+		RetryAfter: protocolsession.MaxOperationFailureRetryAfter,
+		Message:    "provider text must not enter the trace",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, code, retryable, ok := protocolOperationErrorTrace(
+	sessionID := id16[protocolsession.ProtocolSessionID](0x7b)
+	operationID := id16[protocolsession.OperationID](0x7c)
+	lane := LaneIdentity{ID: 9, Epoch: 4}
+	failure, ok := protocolFailureForResponseSend(
+		sessionID,
+		operationID,
+		protocolsession.MessageOpenRevisions,
 		protocolsession.MessageOperationError,
 		body,
+		lane,
+		true,
+		protocolsession.SendCompletion{
+			Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeDelivered,
+		},
 	)
-	if !ok || scope != ProtocolOperationErrorRevision || code != 0x3008 || retryable {
-		t.Fatalf("operation error trace = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
+	if !ok || failure.IsZero() ||
+		failure.RequestKind() != protocolsession.MessageOpenRevisions ||
+		failure.WireScope() != ProtocolFailureRevision ||
+		failure.WireCode() != 0x3008 ||
+		!failure.Retryable() ||
+		failure.ProtocolSessionID() != sessionID ||
+		failure.ProtocolOperationID() != operationID {
+		t.Fatalf("response-send protocol failure = %+v, present=%v", failure, ok)
 	}
-	if _, _, _, malformed := protocolOperationErrorTrace(
+	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 30_000 {
+		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
+	}
+	if gotLane, present := failure.Lane(); !present || gotLane != lane {
+		t.Fatalf("failure lane = %+v, present=%v", gotLane, present)
+	}
+	settlement := failure.Settlement()
+	response, present := settlement.ResponseSend()
+	if settlement.Kind() != ProtocolFailureSettlementResponseSend || !present ||
+		!response.Admitted || !response.Settled ||
+		response.Outcome != protocolsession.SendOutcomeDelivered {
+		t.Fatalf("response-send settlement = %+v, present=%v", response, present)
+	}
+
+	if _, malformed := protocolFailureForResponseSend(
+		sessionID,
+		operationID,
+		protocolsession.MessageOpenRevisions,
 		protocolsession.MessageOperationError,
 		[]byte("provider text must not enter the trace"),
+		lane,
+		true,
+		protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped},
 	); malformed {
 		t.Fatal("malformed operation error exposed unverified classification")
+	}
+}
+
+func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
+	recorder := &protocolTraceRecorder{}
+	runtime.protocolTracer = recorder
+	rpc := newRPCClient(runtime, bytes.NewReader(bytes.Repeat([]byte{0x7d}, protocolsession.IdentityBytes)))
+	if err := rpc.register(runtime.router); err != nil {
+		t.Fatal(err)
+	}
+	selected, err := runtime.lanes.selectLane(&runtime.initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writerContext, stopWriter := context.WithCancel(context.Background())
+	writerDone := make(chan error, 1)
+	go func() { writerDone <- selected.writer.Run(writerContext) }()
+	defer func() {
+		stopWriter()
+		<-writerDone
+	}()
+
+	call, err := rpc.begin(context.Background(), protocolsession.MessageRequestBlocks, []byte{0xa0})
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
+		Scope:      protocolsession.OperationScopeBlock,
+		Code:       0x4003,
+		Retryable:  true,
+		RetryAfter: 1250 * time.Millisecond,
+		Message:    "private provider detail",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding := runtime.senderControlBase(runtime.initial)
+	binding.Sequence = 1
+	binding.MessageKind = protocolsession.MessageOperationError
+	binding.OperationID = call.id
+	binding.HasOperationID = true
+	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{97}, ed25519.SeedSize))
+	signed, err := protocolsession.SignControlBody(
+		privateKey,
+		protocolsession.ControlDomainOperation,
+		binding,
+		semantic,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	message, err := protocolsession.NewMessage(
+		protocolsession.MessageOperationError,
+		&call.id,
+		signed,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbound := laneInboundRouter{runtime: runtime, identity: runtime.initial}
+	disposition, err := inbound.RouteInbound(context.Background(), message)
+	if err != nil || disposition != protocolsession.OperationDeliver {
+		t.Fatalf("route authenticated failure: disposition=%d error=%v", disposition, err)
+	}
+	queued, err := runtime.router.Next(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.router.Dispatch(context.Background(), queued); err != nil {
+		t.Fatal(err)
+	}
+	if response, err := rpc.await(context.Background(), call); err != nil ||
+		response.Kind() != protocolsession.MessageOperationError {
+		t.Fatalf("await authenticated failure: kind=%d error=%v", response.Kind(), err)
+	}
+	rpc.end(call)
+
+	events := recorder.snapshot()
+	if len(events) != 1 {
+		t.Fatalf("protocol trace events = %d, want 1: %+v", len(events), events)
+	}
+	event := events[0]
+	failure := event.Failure
+	if event.Stage != ProtocolOperationReceiverFailed ||
+		event.Cause != ProtocolOperationCauseProtocolFailure ||
+		failure.IsZero() ||
+		failure.RequestKind() != protocolsession.MessageRequestBlocks ||
+		failure.WireScope() != ProtocolFailureBlock ||
+		failure.WireCode() != 0x4003 ||
+		!failure.Retryable() ||
+		failure.ProtocolSessionID() != runtime.sessionID ||
+		failure.ProtocolOperationID() != call.id {
+		t.Fatalf("authenticated receive trace = %+v", event)
+	}
+	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 1_250 {
+		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
+	}
+	if lane, present := failure.Lane(); !present || lane != runtime.initial {
+		t.Fatalf("authenticated receive lane = %+v, present=%v", lane, present)
+	}
+	settlement := failure.Settlement()
+	if settlement.Kind() != ProtocolFailureSettlementReceivedAuthenticated {
+		t.Fatalf("authenticated receive settlement kind = %d", settlement.Kind())
+	}
+	if response, present := settlement.ResponseSend(); present {
+		t.Fatalf("authenticated receive exposed response send settlement: %+v", response)
 	}
 }
 

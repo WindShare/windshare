@@ -17,6 +17,7 @@ import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
 } from '../../src/output/workspace/records'
+import { classificationForTransferFailure } from '../../src/transfer/job/failures'
 import {
   EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
   transferWorkerSettlement,
@@ -340,16 +341,26 @@ describe('File System Access settlement authority', () => {
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(8), SIGNAL)
     await opened.transaction.commit(SIGNAL)
+    const classification = classificationForTransferFailure(
+      new Error('directory metadata failed'),
+      {
+        stage: 'output_commit',
+        relation: 'contributor',
+        materializationFailureReason: 'directory-finalize-failed',
+      },
+    )
+    if (classification === undefined) throw new TypeError('test failure must be classified')
     const worker = transferWorkerSettlement('CompletedWithErrors', {
       failures: Object.freeze([{
         kind: 'directory' as const,
         directoryId: directoryId(session.intent.syntheticRoot),
-        reason: new Error('directory metadata failed'),
+        classification,
       }]),
       failureCount: 1,
       fileFailureCount: 0,
       omittedFailureCount: 0,
       fileOutcomes: EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
+      trigger: classification,
     })
 
     await expect(execution.settle({

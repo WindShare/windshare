@@ -1,17 +1,21 @@
-import { encodeBase64Url } from '../crypto/bytes'
 import {
   type V2AttemptOrdinalCorrelation,
   type V2CandidateCounts,
-  type V2ConnectivityObserver,
+  type V2ConnectivityTraceSource,
   type V2LaneIdentity,
 } from './diagnostics'
 import {
-  decodeV2OperationErrorControl,
   V2MessageError,
   type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from '../session/v2-message'
 import type { V2ReceiverSessionRuntime, V2SessionOperation } from '../session/v2-runtime'
+import {
+  createV2PeerAttemptIdentity,
+  createV2PeerPathIdentityValue,
+  createV2ProtocolOperationIdentity,
+  type V2ProtocolOperationIdentity,
+} from '../session/v2-identities'
 import {
   V2_OPERATION_CANCEL_REASON,
   V2SessionRuntimeError,
@@ -45,21 +49,7 @@ export {
   V2AuthenticatedPeerOperationError,
   V2SessionSignalingError,
 } from './v2-session-signaling-errors'
-export type { V2ConnectivityObserver } from './diagnostics'
-
-type V2SessionSignalingDecision = {
-  readonly type: 'route-failed'
-  readonly failureScope: 'attempt' | 'session'
-  readonly failureCode: 'authenticated-peer-operation' | 'attempt-failure' | 'session-contract'
-  readonly peerOperationCode?: number
-}
-
-export type V2SessionSignalingTrace = V2SessionSignalingDecision & {
-  readonly peerPathId: string
-  readonly attemptId: string
-}
-
-export type V2SessionSignalingObserver = (event: V2SessionSignalingTrace) => void
+export type { V2ConnectivityTraceSource } from './diagnostics'
 
 /**
  * Projects one PeerConnection negotiation over a single authenticated operation.
@@ -71,7 +61,6 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
   readonly binding: V2PeerBinding
   readonly #session: V2ReceiverSessionRuntime
   readonly #controller: ReadableStreamDefaultController<ConnectivitySignal>
-  readonly #observe: V2SessionSignalingObserver
   readonly #attempt: BrowserAttemptLifecycle
   readonly #failureController = new AbortController()
   #operation: V2SessionOperation | undefined
@@ -83,19 +72,15 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
   constructor(
     session: V2ReceiverSessionRuntime,
     binding: V2PeerBinding,
-    observe: V2SessionSignalingObserver = () => undefined,
-    observeConnectivity?: V2ConnectivityObserver,
-    now: () => number = () => performance.now(),
+    trace?: V2ConnectivityTraceSource,
     correlation: V2AttemptOrdinalCorrelation = {
       waveOrdinal: 1,
       waveAttemptOrdinal: 1,
       sessionAttemptOrdinal: 1,
     },
-    observeAttempt?: V2ConnectivityObserver,
   ) {
     this.#session = session
     this.binding = snapshotBinding(binding)
-    this.#observe = observe
     let controller!: ReadableStreamDefaultController<ConnectivitySignal>
     this.messages = new ReadableStream<ConnectivitySignal>({
       start: (candidate) => {
@@ -104,17 +89,17 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
       cancel: (reason) => this.close(reason),
     })
     this.#controller = controller
+    const attemptOrdinals = Object.freeze({ ...correlation })
     // Started is published only after construction can no longer strand a
     // partially initialized route without a terminal owner.
     this.#attempt = new BrowserAttemptLifecycle(
-      {
-        sessionId: encodeBase64Url(session.keys.protocolSessionId),
-        peerPathId: encodeBase64Url(this.binding.peerPathId),
-        attemptId: encodeBase64Url(this.binding.attemptId),
-        ...correlation,
-      },
-      [observeConnectivity, observeAttempt],
-      now,
+      () => Object.freeze({
+        protocolSessionId: session.protocolSessionIdentity,
+        peerPathId: createV2PeerPathIdentityValue(this.binding.peerPathId),
+        attemptId: createV2PeerAttemptIdentity(this.binding.attemptId),
+        ...attemptOrdinals,
+      }),
+      trace,
     )
   }
 
@@ -141,88 +126,58 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     )
   }
 
-  offerCreated(candidateCounts: V2CandidateCounts): void {
-    this.#attempt.advance({ stage: 'offer-created', candidateCounts })
+  offerCreated(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
+    this.#attempt.offerMilestone('offer-created', candidateCounts)
   }
 
-  offerSent(candidateCounts: V2CandidateCounts): void {
-    this.#attempt.advance({ stage: 'offer-sent', candidateCounts })
+  offerSent(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
+    this.#attempt.offerMilestone('offer-sent', candidateCounts)
   }
 
-  answerReceived(candidateCounts: V2CandidateCounts): void {
-    this.#attempt.advance({ stage: 'answer-received', candidateCounts })
+  answerReceived(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
+    this.#attempt.offerMilestone('answer-received', candidateCounts)
   }
 
-  dataChannelOpened(
-    candidateCounts: V2CandidateCounts,
-  ): void {
-    this.#attempt.advance({ stage: 'datachannel-open', candidateCounts })
+  dataChannelOpened(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
+    this.#attempt.offerMilestone('datachannel-open', candidateCounts)
   }
 
   phaseDeadlineArmed(phase: 'negotiation' | 'admission', deadlineBudgetMs: number): void {
-    if (phase === 'negotiation') {
-      this.#attempt.advance({
-        stage: 'negotiation-deadline-armed',
-        phase,
-        deadlineBudgetMs,
-      })
-      return
-    }
-    this.#attempt.advance({
-      stage: 'admission-deadline-armed',
-      phase,
-      deadlineBudgetMs,
-      offerOperationId: this.#requireOfferOperationId(),
-    })
+    this.#attempt.phaseDeadlineArmed(phase, deadlineBudgetMs)
   }
 
   phaseDeadlineExpired(phase: 'negotiation' | 'admission', deadlineBudgetMs: number): void {
-    this.#attempt.deadlineExpired(phase, deadlineBudgetMs)
+    this.#attempt.phaseDeadlineExpired(phase, deadlineBudgetMs)
   }
 
-  grantRequested(grantOperationId: string, requestedLaneId: number): void {
-    this.#attempt.advance({
-      stage: 'grant-requested',
-      phase: 'admission',
-      offerOperationId: this.#requireOfferOperationId(),
-      grantOperationId,
-      requestedLaneId,
-    })
+  grantRequested(
+    grantOperationId: V2ProtocolOperationIdentity,
+    requestedLaneId: number,
+  ): void {
+    this.#attempt.grantRequested(grantOperationId, requestedLaneId)
   }
 
   grantMilestone(
     stage: 'grant-received' | 'lane-hello-sent' | 'admission-response-received' |
       'lane-attached' | 'admitted',
-    grantOperationId: string,
+    grantOperationId: V2ProtocolOperationIdentity,
     lane: V2LaneIdentity,
   ): void {
-    this.#attempt.advance({
-      stage,
-      phase: 'admission',
-      offerOperationId: this.#requireOfferOperationId(),
-      grantOperationId,
-      lane,
-    })
+    this.#attempt.grantMilestone(stage, grantOperationId, lane)
   }
 
   admissionResponseSettled(
-    grantOperationId: string,
+    grantOperationId: V2ProtocolOperationIdentity,
     lane: V2LaneIdentity,
     settlement:
       | { readonly disposition: 'accepted' }
       | {
           readonly disposition: 'rejected'
-          readonly rejection: { readonly code: number; readonly retryAfterMilliseconds: number }
+          readonly rejectionCode: number
+          readonly retryAfterMilliseconds: number
         },
   ): void {
-    this.#attempt.advance({
-      stage: 'admission-response-settled',
-      phase: 'admission',
-      offerOperationId: this.#requireOfferOperationId(),
-      grantOperationId,
-      lane,
-      settlement,
-    })
+    this.#attempt.admissionResponseSettled(grantOperationId, lane, settlement)
   }
 
   /** Admission observes this independently of optional evidence consumers. */
@@ -276,7 +231,7 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
         return
       }
       this.#operation = operation
-      this.#attempt.setOfferOperationId(encodeBase64Url(operation.id))
+      this.#attempt.setOfferOperationId(createV2ProtocolOperationIdentity(operation.id))
       this.#pump(operation).catch(() => undefined)
     } catch (error) {
       this.#fail(error)
@@ -296,11 +251,11 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
 
   async #acceptSenderMessage(message: V2SessionMessage): Promise<void> {
     if (message.kind === V2_MESSAGE_KIND.operationError) {
-      const failure = decodeV2OperationErrorControl(message.body)
-      if (failure.scope !== 'peer') {
+      const protocolFailure = this.#session.authenticatedProtocolFailure(message)
+      if (protocolFailure.wireScope !== 'peer') {
         throw new V2PeerProtocolError('Peer operation received an error from another scope')
       }
-      throw new V2AuthenticatedPeerOperationError(Object.freeze({ ...failure, scope: 'peer' }))
+      throw new V2AuthenticatedPeerOperationError(protocolFailure)
     }
     if (message.kind === V2_MESSAGE_KIND.peerAnswer) {
       if (this.#answerSeen) throw new V2PeerProtocolError('Sender sent more than one peer answer')
@@ -345,7 +300,6 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
           'Authenticated peer signaling violated its operation binding',
           { cause: error },
         ),
-        'session',
       )
       return
     }
@@ -358,25 +312,11 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     }
   }
 
-  #fail(reason: unknown, failureScope: 'attempt' | 'session' = 'attempt'): void {
+  #fail(reason: unknown): void {
     if (this.#closed) return
     this.#closed = true
     this.#failure = Object.freeze({ reason })
     this.#failureController.abort(reason)
-    let failureCode: V2SessionSignalingDecision['failureCode'] = 'attempt-failure'
-    if (reason instanceof V2AuthenticatedPeerOperationError) {
-      failureCode = 'authenticated-peer-operation'
-    } else if (failureScope === 'session') {
-      failureCode = 'session-contract'
-    }
-    this.#trace({
-      type: 'route-failed',
-      failureScope,
-      failureCode,
-      ...(reason instanceof V2AuthenticatedPeerOperationError
-        ? { peerOperationCode: reason.operationFailure.code }
-        : {}),
-    })
     const operation = this.#operation
     this.#operation = undefined
     operation?.cancel(reason)
@@ -391,25 +331,6 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
     if (this.#closed) throw new V2SessionSignalingError('Peer signaling route is closed')
   }
 
-  #requireOfferOperationId(): string {
-    const operation = this.#operation
-    if (operation === undefined) {
-      throw new V2SessionSignalingError('Peer offer operation identity is unavailable')
-    }
-    return encodeBase64Url(operation.id)
-  }
-
-  #trace(event: V2SessionSignalingDecision): void {
-    try {
-      this.#observe(Object.freeze({
-        ...event,
-        peerPathId: encodeBase64Url(this.binding.peerPathId),
-        attemptId: encodeBase64Url(this.binding.attemptId),
-      }) as V2SessionSignalingTrace)
-    } catch {
-      // Diagnostics cannot own or destabilize authenticated attempt lifecycle.
-    }
-  }
 }
 
 export function createV2PeerBinding(

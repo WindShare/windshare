@@ -5,7 +5,9 @@ import {
   type ArtifactOffers,
 } from '../../src/output/planning'
 import { fileId } from '../../src/catalog/model'
+import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/fault'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
+import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
 import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
 import {
   nextProjectionEpoch,
@@ -195,7 +197,11 @@ describe('artifact action activation boundary', () => {
     const controller = new V2OutputPresentationController<string>({
       planner,
       releaseStaleAuthority: release,
-      onTrace: (event) => traces.push(event),
+      trace: Object.freeze({
+        get current() {
+          return (event: unknown) => traces.push(event)
+        },
+      }),
     })
 
     const firstUpdate = controller.updateProjection(
@@ -229,10 +235,11 @@ describe('artifact action activation boundary', () => {
     await expect(activation).resolves.toMatchObject({ kind: 'stale', projectionEpoch: 2n })
     expect(release).toHaveBeenCalledWith('stale-authority')
     expect(traces).toContainEqual(expect.objectContaining({
-      name: 'receive.projection.stale_event_dropped',
-      stale_projection_epoch: 2n,
-      current_projection_epoch: 3n,
-      event_class: 'authority-result',
+      name: 'authority_transition',
+      transition: 'stale_event_dropped',
+      staleProjectionEpoch: 2n,
+      currentProjectionEpoch: 3n,
+      eventClass: 'authority_result',
     }))
   })
 
@@ -282,8 +289,10 @@ describe('artifact action activation boundary', () => {
     failures.record({
       kind: 'file',
       fileId: fileId(identity(84)),
-      reason: new Error('diagnostic is not presentation'),
-    }, 'revision-conflict')
+      classification: normalizedV2FileTransferFault(
+        sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable),
+      ).diagnostic.classification,
+    }, 1n, 'revision-conflict')
     const result = {
       worker: transferWorkerSettlement('CompletedWithErrors', failures.snapshot()),
       intent,

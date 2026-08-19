@@ -3,6 +3,15 @@ import { describe, expect, it } from 'vitest'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import {
+  createIncidentScopeIssuer,
+  type FailureFactRelation,
+  type IncidentScopeKind,
+  type PresentationDecision,
+} from '../../src/diagnostics/incident'
+import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
+import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
+import { V2PresentationAttempt } from '../../src/ui/controller/presentation-attempt'
 import { projectBrowsePage } from '../../src/ui/v2-controller-state'
 import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
 
@@ -22,6 +31,71 @@ describe('v2 browse page presentation', () => {
       selectedVisibleBytes: 1_024n,
     })
     expect(projection.snapshot.rows.map((row) => row.selection)).toEqual(['selected', 'unselected'])
+  })
+})
+
+describe('v2 controller diagnostics', () => {
+  it('keeps the initiating trigger before consequences and closes after owned cleanup', () => {
+    const issuer = createIncidentScopeIssuer()
+    const order: string[] = []
+    const decisions: PresentationDecision[] = []
+    const incidents: V2ReceiverIncidentPort = {
+      openScope: (kind: IncidentScopeKind) => issuer.open(kind, {
+        factRecorded: ({ relation }: { relation: FailureFactRelation }) => {
+          order.push(`fact:${relation}`)
+        },
+        scopeClosed: () => order.push('closed'),
+      }),
+      submitDecision: (_scope, decision) => {
+        decisions.push(decision)
+        order.push('decision')
+      },
+    }
+    const attempt = new V2PresentationAttempt(incidents, 'authority_activation')
+    const trigger = attempt.recordUnclassified('authority_activation', 'contributor')!
+
+    attempt.incident('projection_authority', 'failed', trigger)
+    attempt.recordUnclassified('cleanup', 'consequence', 'none')
+    attempt.close()
+
+    expect(order).toEqual(['fact:contributor', 'decision', 'fact:consequence', 'closed'])
+    expect(decisions).toEqual([
+      expect.objectContaining({ kind: 'incident', boundary: 'projection_authority', trigger }),
+    ])
+  })
+
+  it('keeps reporter failure passive and constructs trace payloads only for a current observer', () => {
+    const issuer = createIncidentScopeIssuer()
+    const attempt = new V2PresentationAttempt({
+      openScope: (kind) => issuer.open(kind),
+      submitDecision: () => { throw new Error('reporter unavailable') },
+    }, 'join')
+    const trigger = attempt.recordUnclassified('join', 'contributor')!
+
+    expect(() => attempt.incident('join', 'failed', trigger)).not.toThrow()
+    expect(attempt.decisionSettled).toBe(true)
+    expect(() => attempt.close()).not.toThrow()
+
+    const traceState: {
+      observer?: (event: { readonly name: string }) => void
+    } = {}
+    let payloadsConstructed = 0
+    const observed: string[] = []
+    const observability = new V2ControllerObservability({
+      trace: { get current() { return traceState.observer } },
+    })
+    observability.trace(() => {
+      payloadsConstructed += 1
+      return Object.freeze({ name: 'join_transition', transition: 'started' })
+    })
+    traceState.observer = (event) => observed.push(event.name)
+    observability.trace(() => {
+      payloadsConstructed += 1
+      return Object.freeze({ name: 'join_transition', transition: 'joined' })
+    })
+
+    expect(payloadsConstructed).toBe(1)
+    expect(observed).toEqual(['join_transition'])
   })
 })
 

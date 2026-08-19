@@ -4,6 +4,8 @@ import {
 } from '../../catalog/path-policy'
 import { V2_CATALOG_DIRECTORY_ENTRIES } from '../../catalog/v2-records'
 import { decodeBase64Url } from '../../crypto/bytes'
+import type { FailureCorrelation } from '../../diagnostics/incident'
+import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import {
   MAX_SELECTION_RULES,
   STABLE_IDENTITY_BYTES,
@@ -148,45 +150,51 @@ export type SelectionProjectionEvent =
 
 export type ProjectionTraceEvent =
   | Readonly<{
-      name: 'receive.projection.started'
-      projection_epoch: ProjectionEpoch
-      protocol_session_id?: string
+      name: 'projection_transition'
+      transition: 'started'
+      projectionEpoch: ProjectionEpoch
+      correlation?: FailureCorrelation
     }>
   | Readonly<{
-      name: 'receive.projection.refined'
-      projection_epoch: ProjectionEpoch
-      shape_proof: ArtifactShapeProof['kind']
-      discovery_state: DiscoveryState['kind']
-      file_count_lower_bound: number
-      directory_count_lower_bound: number
-      byte_count_lower_bound: bigint
-      unsettled_target_count: number
+      name: 'projection_transition'
+      transition: 'refined'
+      projectionEpoch: ProjectionEpoch
+      shapeProof: ArtifactShapeProof['kind']
+      discoveryState: DiscoveryState['kind']
+      fileCountLowerBound: number
+      directoryCountLowerBound: number
+      byteCountLowerBound: bigint
+      unsettledTargetCount: number
     }>
   | Readonly<{
-      name: 'receive.projection.proven'
-      projection_epoch: ProjectionEpoch
-      shape_proof: Exclude<ArtifactShapeProof['kind'], 'unknown'>
-      layout_basis_class: LayoutBasisProof['kind']
+      name: 'projection_transition'
+      transition: 'proven'
+      projectionEpoch: ProjectionEpoch
+      shapeProof: Exclude<ArtifactShapeProof['kind'], 'unknown'>
+      layoutBasisClass: LayoutBasisProof['kind']
     }>
   | Readonly<{
-      name: 'receive.projection.retryable_failure'
-      projection_epoch: ProjectionEpoch
-      shape_proof: ArtifactShapeProof['kind']
-      retryable_discovery_reason: RetryableDiscoveryReason
+      name: 'projection_transition'
+      transition: 'retryable_failure'
+      projectionEpoch: ProjectionEpoch
+      shapeProof: ArtifactShapeProof['kind']
+      retryableDiscoveryReason: RetryableDiscoveryReason
     }>
   | Readonly<{
-      name: 'receive.projection.retry_started'
-      projection_epoch: ProjectionEpoch
-      retained_shape_proof: ArtifactShapeProof['kind']
+      name: 'projection_transition'
+      transition: 'retry_started'
+      projectionEpoch: ProjectionEpoch
+      retainedShapeProof: ArtifactShapeProof['kind']
     }>
   | Readonly<{
-      name: 'receive.projection.stale_event_dropped'
-      current_projection_epoch: ProjectionEpoch
-      stale_projection_epoch: ProjectionEpoch
-      event_class: 'catalog-evidence' | 'discovery-result'
+      name: 'projection_transition'
+      transition: 'stale_event_dropped'
+      currentProjectionEpoch: ProjectionEpoch
+      staleProjectionEpoch: ProjectionEpoch
+      eventClass: 'catalog_evidence' | 'discovery_result'
     }>
 
-export type ProjectionTraceSink = (event: ProjectionTraceEvent) => void
+export type ProjectionTraceSource = DomainTraceSource<ProjectionTraceEvent>
 
 export class SelectionProjectionError extends Error {
   constructor(message: string, options?: ErrorOptions) {
