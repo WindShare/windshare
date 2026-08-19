@@ -269,14 +269,16 @@ function assertFault(value: unknown): asserts value is Fault {
   if (!isFault(value)) throw new TypeError(INVALID_FAULT_MESSAGE)
 }
 
-// The native cause remains available on this immediate diagnostic object. Only
-// fault is copied into BoundaryNormalization, so later policy cannot traverse it.
+/**
+ * Carries only closed product authority across a failure boundary. Native errors
+ * stay at their classifier so later policy cannot recover authority from causes.
+ */
 export class BoundaryFaultError extends Error {
   readonly fault: Fault
 
-  constructor(fault: Fault, message = BOUNDARY_FAULT_MESSAGE, options?: ErrorOptions) {
+  constructor(fault: Fault, message = BOUNDARY_FAULT_MESSAGE) {
     assertFault(fault)
-    super(message, options)
+    super(message)
     this.name = 'BoundaryFaultError'
     this.fault = immutableFault(fault)
   }
@@ -295,17 +297,11 @@ export function normalizeBoundaryError(
   signal?: AbortSignal,
 ): BoundaryNormalization {
   if (signal?.aborted === true) return canceledBoundary
-  if (error === undefined) return successfulBoundary
-  if (isCancellationError(error)) return canceledBoundary
   if (error instanceof BoundaryFaultError && isFault(error.fault)) {
     return Object.freeze({ kind: 'fault', fault: immutableFault(error.fault) })
   }
+  if (error === undefined) return successfulBoundary
   return Object.freeze({ kind: 'fault', fault: dependencyContractFault() })
-}
-
-function isCancellationError(error: unknown): boolean {
-  return typeof DOMException !== 'undefined' && error instanceof DOMException &&
-    (error.name === 'AbortError' || error.name === 'TimeoutError')
 }
 
 export function dependencyContractFault(): SessionFault {

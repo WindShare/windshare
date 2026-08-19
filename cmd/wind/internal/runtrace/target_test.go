@@ -2,7 +2,6 @@ package runtrace
 
 import (
 	"bytes"
-	"encoding/hex"
 	"errors"
 	"io/fs"
 	"os"
@@ -106,7 +105,7 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 	wantRunID := repeatedRunID(3)
 	wantPath := filepath.Join(
 		"trace-root",
-		"get-20260817T023456Z-"+wantRunID[:directoryFilenameTokenHexLength]+".ndjson",
+		"get-20260817T023456Z-"+repeatedRunIdentity(3).filenameToken()+".ndjson",
 	)
 	if recorder.RunID() != wantRunID || recorder.Path() != wantPath {
 		t.Fatalf("identity = (%q, %q), want (%q, %q)", recorder.RunID(), recorder.Path(), wantRunID, wantPath)
@@ -118,7 +117,7 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 		t.Fatalf("directory preparations = %d, want 1", prepareCalls)
 	}
 	for index, path := range opened {
-		wantToken := repeatedRunID(byte(index + 1))[:directoryFilenameTokenHexLength]
+		wantToken := repeatedRunIdentity(byte(index + 1)).filenameToken()
 		if !strings.HasSuffix(path, "-"+wantToken+".ndjson") {
 			t.Fatalf("attempt %d path %q does not carry filename token %q", index+1, path, wantToken)
 		}
@@ -169,7 +168,7 @@ func TestDirectoryTargetCollisionExhaustionPreservesEverySibling(t *testing.T) {
 	for attempt := 1; attempt <= directoryCreateAttempts; attempt++ {
 		value := byte(attempt)
 		randomValues = append(randomValues, bytes.Repeat([]byte{value}, clievent.IdentityBytes)...)
-		path := directoryTracePath(directory, clievent.CommandShare, started, repeatedRunID(value))
+		path := directoryTracePath(directory, clievent.CommandShare, started, repeatedRunIdentity(value))
 		contents := "retained evidence " + repeatedRunID(value)
 		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 			t.Fatal(err)
@@ -234,7 +233,7 @@ func TestDirectoryTargetCreatesCompactOwnerOnlyTraceWithFullRunIdentity(t *testi
 		t.Fatal(err)
 	}
 	wantRunID := repeatedRunID(9)
-	wantName := "get-20260817T023456Z-" + wantRunID[:directoryFilenameTokenHexLength] + ".ndjson"
+	wantName := "get-20260817T023456Z-" + repeatedRunIdentity(9).filenameToken() + ".ndjson"
 	if recorder.Path() != filepath.Join(directory, wantName) || recorder.RunID() != wantRunID {
 		t.Fatalf("created trace = path %q, run ID %q", recorder.Path(), recorder.RunID())
 	}
@@ -308,7 +307,7 @@ func TestDirectoryTargetConcurrentNativeOpensOwnDistinctFiles(t *testing.T) {
 			t.Errorf("duplicate recorder path %q", recorder.Path())
 		}
 		paths[recorder.Path()] = struct{}{}
-		filenameToken := recorder.RunID()[:directoryFilenameTokenHexLength]
+		filenameToken := recorder.runID.filenameToken()
 		if !strings.HasSuffix(filepath.Base(recorder.Path()), "-"+filenameToken+".ndjson") {
 			t.Errorf("path %q does not carry filename token %q", recorder.Path(), filenameToken)
 		}
@@ -336,6 +335,12 @@ func identitySequence(values ...byte) *bytes.Reader {
 	return bytes.NewReader(raw)
 }
 
+func repeatedRunIdentity(value byte) runIdentity {
+	var identity runIdentity
+	copy(identity[:], bytes.Repeat([]byte{value}, clievent.IdentityBytes))
+	return identity
+}
+
 func repeatedRunID(value byte) string {
-	return hex.EncodeToString(bytes.Repeat([]byte{value}, clievent.IdentityBytes))
+	return repeatedRunIdentity(value).encoded()
 }

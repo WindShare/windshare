@@ -471,8 +471,7 @@ func (runtime *runtimeCore) abandonOutboundOperation(
 	// after its handler has abandoned all output. Terminalizing the shared table
 	// is safer than continuing with ambiguous at-most-once authority.
 	_ = runtime.router.TerminateLocal()
-	runtime.recordError(err)
-	runtime.cancel()
+	runtime.terminateRuntimeFailed(err)
 	return err
 }
 
@@ -493,8 +492,7 @@ func (runtime *runtimeCore) abandonBoundOutboundOperation(
 		// session after releasing the route instead of leaking ambiguous authority.
 		runtime.routes.releaseRoute(operationID, route)
 		_ = runtime.router.TerminateLocal()
-		runtime.recordError(ErrOperationMissing)
-		runtime.cancel()
+		runtime.terminateRuntimeFailed(ErrOperationMissing)
 		return ErrOperationMissing
 	}
 	return runtime.abandonOutboundOperation(operationID, route, generation)
@@ -510,8 +508,7 @@ func (runtime *runtimeCore) failMissingReplayAuthority(
 		runtime.abandonOutboundOperation(operationID, route, generation),
 	)
 	_ = runtime.router.TerminateLocal()
-	runtime.recordError(err)
-	runtime.cancel()
+	runtime.terminateRuntimeFailed(err)
 	return err
 }
 

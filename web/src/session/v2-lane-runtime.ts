@@ -182,9 +182,13 @@ export class V2SessionLane {
           },
           this.#descriptor.senderPublicKey,
         )
-        await this.#router.route(message.data
-          ? message
-          : Object.freeze({ ...message, body: authenticatedBody }))
+        await this.#router.route(
+          message.data
+            ? message
+            : Object.freeze({ ...message, body: authenticatedBody }),
+          this.id,
+          this.epoch,
+        )
       }
     } catch (error) {
       failure = error

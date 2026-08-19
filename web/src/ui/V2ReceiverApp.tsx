@@ -220,10 +220,12 @@ function VideoPreview(props: {
   const position = () => {
     if (video.current !== null) video.current.currentTime = props.preview.positionSeconds
   }
+  const presented = () =>
+    props.controller.previewMediaPresented(props.preview.presentationId)
   return (
     <>
       <video
-        key={props.preview.url}
+        key={props.preview.presentationId}
         ref={video}
         className="preview-media"
         src={props.preview.url}
@@ -232,8 +234,12 @@ function VideoPreview(props: {
         playsInline
         preload="auto"
         onLoadedMetadata={position}
-        onLoadedData={position}
-        onError={() => props.controller.previewMediaFailed(props.preview.url)}
+        onLoadedData={() => {
+          position()
+          presented()
+        }}
+        onSeeked={presented}
+        onError={() => props.controller.previewMediaFailed(props.preview.presentationId)}
       />
       <label className="preview-seek">
         <span>
@@ -280,7 +286,8 @@ function PreviewPanel(props: {
           className="preview-media"
           src={imagePreview.url}
           alt={`Preview of ${imagePreview.name}`}
-          onError={() => props.controller.previewMediaFailed(imagePreview.url)}
+          onLoad={() => props.controller.previewMediaPresented(imagePreview.presentationId)}
+          onError={() => props.controller.previewMediaFailed(imagePreview.presentationId)}
         />
       )}
       {props.preview.state === 'video' && (

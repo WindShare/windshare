@@ -44,6 +44,7 @@ export type V2PreviewSnapshot =
       readonly fileId: string
       readonly name: string
       readonly url: string
+      readonly presentationId: number
       readonly mimeType: string
       readonly width: number
       readonly height: number
@@ -53,6 +54,7 @@ export type V2PreviewSnapshot =
       readonly fileId: string
       readonly name: string
       readonly url: string
+      readonly presentationId: number
       readonly mimeType: string
       readonly width: number
       readonly height: number
@@ -83,6 +85,42 @@ export type V2RetainedReceiveInventorySnapshot =
       operations: readonly V2RetainedReceiveOperation[]
       error: string
     }>
+
+export interface V2ControllerDiagnosticSnapshot {
+  readonly generation: bigint
+  readonly phase: V2ReceiverPhase
+}
+
+export interface V2LifecycleDiagnosticSnapshot {
+  readonly generation: bigint
+  readonly state: NonNullable<V2OutputPresentationSnapshot['lifecycle']>['kind']
+}
+
+export interface V2ProgressDiagnosticSnapshot {
+  readonly generation: bigint
+  readonly discovery: V2ReceiverProgress['discovery']
+  readonly discoveredFiles: bigint
+  readonly discoveredBytes: bigint
+  readonly writtenBytes: bigint
+  readonly completedFiles: bigint
+  readonly completedBytes: bigint
+  readonly fileErrors: bigint
+  readonly selectionErrors: bigint
+  readonly failedDirectories: bigint
+  readonly contentLanes: number
+}
+
+export interface V2OutputDiagnosticSnapshot {
+  readonly generation: bigint
+  readonly planKind: NonNullable<V2OutputPresentationSnapshot['plan']>['kind']
+}
+
+export interface V2ReceiverDiagnosticSnapshot {
+  readonly controller: V2ControllerDiagnosticSnapshot
+  readonly lifecycle?: V2LifecycleDiagnosticSnapshot
+  readonly progress: V2ProgressDiagnosticSnapshot
+  readonly output?: V2OutputDiagnosticSnapshot
+}
 
 export interface V2ReceiverSnapshot {
   readonly phase: V2ReceiverPhase

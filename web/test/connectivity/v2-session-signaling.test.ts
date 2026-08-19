@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
-import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
+import type { ProtocolFailure } from '../../src/diagnostics/incident/fact'
+import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
   decodeV2PeerCandidate,
   decodeV2PeerOffer,
@@ -11,7 +12,6 @@ import {
   V2AuthenticatedPeerOperationError,
   createV2PeerBindingForPath,
   createV2PeerPathIdentity,
-  type V2SessionSignalingTrace,
   V2SessionSignalingRoute,
 } from '../../src/connectivity/v2-session-signaling'
 import {
@@ -27,10 +27,15 @@ import {
   encodeV2Body,
   encodeV2Message,
   type V2MessageKind,
+  type V2SessionMessage,
   V2_MESSAGE_KIND,
 } from '../../src/session/v2-message'
 import { V2OperationRouter } from '../../src/session/v2-operation-router'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
+import {
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import type {
   V2OperationCancellation,
   V2SessionOperation,
@@ -39,6 +44,14 @@ import type { V2SessionKeys } from '../../src/session/v2-transcript'
 import { senderControlKeyPair, signSenderOperationControl } from '../session/signed-control-fixture'
 
 const EXACT_CANDIDATE_REPLAY_STRESS_COUNT = 300
+
+function signalingRouter(): V2OperationRouter {
+  return new V2OperationRouter(
+    () => undefined,
+    undefined,
+    { protocolSessionIdentity: createV2ProtocolSessionIdentity(protocolKeys().protocolSessionId) },
+  )
+}
 
 class InMemoryFrameChannel implements FrameChannel {
   readonly frames: ReadableStream<Uint8Array<ArrayBuffer>>
@@ -77,6 +90,8 @@ class InMemoryFrameChannel implements FrameChannel {
 
 class SignalingSessionFacade {
   readonly keys = protocolKeys()
+  readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
+  readonly protocolFailures: ProtocolFailure[] = []
   readonly #router: V2OperationRouter
   readonly #operationId: Uint8Array<ArrayBuffer>
   operation: V2SessionOperation | undefined
@@ -111,6 +126,21 @@ class SignalingSessionFacade {
     operation.cancel(cancellation.cause)
   }
 
+  operationCorrelation(operation: V2SessionOperation) {
+    return Object.freeze({
+      protocolSessionId: this.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      lane: Object.freeze({ id: this.keys.initialLaneId, epoch: this.keys.initialLaneEpoch }),
+    })
+  }
+
+  authenticatedProtocolFailure(message: V2SessionMessage): ProtocolFailure {
+    const failure = this.#router.protocolFailureFor(message)
+    if (failure === undefined) throw new Error('test router did not capture protocol failure')
+    this.protocolFailures.push(failure)
+    return failure
+  }
+
   async close(): Promise<void> {
     this.closeCalls += 1
     this.operation?.cancel(new DOMException('Test session closed', 'AbortError'))
@@ -131,6 +161,39 @@ describe('v2 authenticated session signaling', () => {
     expect(first.peerPathId).not.toBe(peerPathId)
   })
 
+  it('reads the trace source at each milestone without constructing disabled payloads', async () => {
+    const router = signalingRouter()
+    const session = new SignalingSessionFacade(router, identity(35))
+    const events: V2ConnectivityTraceEvent[] = []
+    let current: ((event: V2ConnectivityTraceEvent) => void) | undefined
+    const route = new V2SessionSignalingRoute(
+      session as unknown as V2ReceiverSessionRuntime,
+      Object.freeze({ peerPathId: identity(36), attemptId: identity(37) }),
+      { get current() { return current } },
+    )
+    let candidatePayloadConstructed = false
+
+    route.phaseDeadlineArmed('negotiation', 1_000)
+    route.offerCreated(() => {
+      candidatePayloadConstructed = true
+      return Object.freeze({ localEmitted: 0, remoteAccepted: 0 })
+    })
+    expect(candidatePayloadConstructed).toBe(false)
+    expect(events).toEqual([])
+
+    current = (event) => events.push(event)
+    route.offerSent(() => Object.freeze({ localEmitted: 1, remoteAccepted: 0 }))
+    expect(events).toHaveLength(1)
+    expect(events[0]).toMatchObject({ eventName: 'peer_attempt', stage: 'offer-sent' })
+
+    current = () => { throw new Error('synthetic trace failure') }
+    expect(() => route.answerReceived(() => Object.freeze({
+      localEmitted: 1,
+      remoteAccepted: 1,
+    }))).not.toThrow()
+    await route.close()
+  })
+
   it('carries an offer through signed answer and candidate delivery on the production path', async () => {
     const senderKeys = await senderControlKeyPair()
     const descriptor = shareDescriptor(senderKeys.publicKey)
@@ -140,7 +203,7 @@ describe('v2 authenticated session signaling', () => {
       peerPathId: identity(41),
       attemptId: identity(42),
     })
-    const router = new V2OperationRouter(() => undefined)
+    const router = signalingRouter()
     const session = new SignalingSessionFacade(router, operationId)
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
@@ -308,7 +371,7 @@ describe('v2 authenticated session signaling', () => {
   })
 
   it('dedupes concurrent candidate replays that arrive before the answer', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = signalingRouter()
     const operationId = identity(45)
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(46),
@@ -369,20 +432,18 @@ describe('v2 authenticated session signaling', () => {
   })
 
   it('contains a peer operation failure to its attempt while other session work stays healthy', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = signalingRouter()
     const operationId = identity(50)
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(51),
       attemptId: identity(52),
     })
     const session = new SignalingSessionFacade(router, operationId)
-    const traces: V2SessionSignalingTrace[] = []
-    const attemptDiagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const attemptDiagnostics: V2ConnectivityTraceEvent[] = []
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
       binding,
-      (event) => traces.push(event),
-      (event) => attemptDiagnostics.push(event),
+      { current: (event) => attemptDiagnostics.push(event) },
     )
     const incoming = route.messages.getReader()
     route.phaseDeadlineArmed('negotiation', 15_000)
@@ -407,21 +468,18 @@ describe('v2 authenticated session signaling', () => {
     )
     expect(peerFailure).toBeInstanceOf(V2AuthenticatedPeerOperationError)
     expect(peerFailure).toMatchObject({
-      message: 'peer rejected',
-      operationFailure: {
-        scope: 'peer',
-        code: 0x5001,
-        message: 'peer rejected',
+      message: 'Sender rejected the authenticated peer operation',
+      protocolFailure: {
+        wireScope: 'peer',
+        wireCode: 0x5001,
+        requestKind: 'peer_offer',
+        settlement: { kind: 'received_authenticated' },
       },
+      failureFact: { kind: 'protocol_failure' },
     })
     expect(session.closeCalls).toBe(0)
-    expect(traces).toContainEqual(expect.objectContaining({
-      type: 'route-failed',
-      failureScope: 'attempt',
-      failureCode: 'authenticated-peer-operation',
-      peerOperationCode: 0x5001,
-    }))
-    expect(JSON.stringify(traces)).not.toContain('peer rejected')
+    expect(session.protocolFailures).toHaveLength(1)
+    expect(JSON.stringify(session.protocolFailures)).not.toContain('peer rejected')
     expect(attemptDiagnostics.map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
@@ -449,18 +507,18 @@ describe('v2 authenticated session signaling', () => {
 
 describe('v2 authenticated signaling contract failures', () => {
   it('keeps authenticated binding conflicts session-fatal', async () => {
-    const router = new V2OperationRouter(() => undefined)
+    const router = signalingRouter()
     const operationId = identity(60)
     const binding: V2PeerBinding = Object.freeze({
       peerPathId: identity(61),
       attemptId: identity(62),
     })
     const session = new SignalingSessionFacade(router, operationId)
-    const traces: V2SessionSignalingTrace[] = []
+    const traces: V2ConnectivityTraceEvent[] = []
     const route = new V2SessionSignalingRoute(
       session as unknown as V2ReceiverSessionRuntime,
       binding,
-      (event) => traces.push(event),
+      { current: (event) => traces.push(event) },
     )
     const incoming = route.messages.getReader()
     await route.send({
@@ -489,11 +547,7 @@ describe('v2 authenticated signaling contract failures', () => {
     router.terminate(routeFailure)
     await expect(failedRead).rejects.toMatchObject({ scope: 'session' })
     expect(session.closeCalls).toBe(1)
-    expect(traces).toContainEqual(expect.objectContaining({
-      type: 'route-failed',
-      failureScope: 'session',
-      failureCode: 'session-contract',
-    }))
+    expect(traces.every((event) => event.eventName === 'peer_attempt')).toBe(true)
     incoming.releaseLock()
   })
 })

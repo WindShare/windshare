@@ -1,5 +1,9 @@
-import { fileCheckpointIsComplete, type FileCheckpointV2 } from '../persistence/checkpoint'
-import type { FinalFileCheckpointProof } from '../persistence/journal'
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { verifyFSAOperationBinding } from '../browser/indexeddb-root-binding'
 import {
@@ -7,27 +11,17 @@ import {
   snapshotIdentity,
 } from '../workspace/canonical'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../workspace/lifecycle'
-import type { MaterializedManifestEntry } from '../workspace/manifest'
 import type { PersistedReceiveRecord } from '../workspace/records'
 import type { ReceiveOperationRepository } from '../workspace/repository'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveLifecycleState } from '../workspace/state'
-import {
-  DirectorySettlementKind,
-  createDirectoryAdmissionScope,
-  type DirectoryAdmissionScope,
-} from '../../transfer/directory-admission'
+import { createDirectoryAdmissionScope, type DirectoryAdmissionScope } from '../../transfer/directory-admission'
 import { snapshotTransferJobId } from '../../transfer/job/identity'
 import type { ReceiveIntent } from '../../transfer/intent'
-import type {
-  MaterializationSummary,
-  PlanPauseRequest,
-  PlanSettlementRequest,
-} from '../../transfer/output-session'
+import type { PlanPauseRequest, PlanSettlementRequest } from '../../transfer/output-session'
 import type { CompletedTransferWorkerSettlement } from '../../transfer/outcome'
 import type {
   PersistentDirectTreeSettlementAuthority,
-  PersistentDirectorySettlementEvidence,
   PersistentMaterializationEvidence,
   PersistentMaterializationSettlementCut,
 } from '../../transfer/settlement/persistent-execution'
@@ -44,22 +38,13 @@ import {
 import {
   createFSASettlementReceipt,
   createFSAUnopenedCleanupReceipt,
-  fsaCheckpointSetDigest,
-  materializationSummary,
   requireDirectTreeIntent,
-  sameFileEvidence,
-  sameFinalProof,
-  sameSummary,
-  snapshotDirectorySettlements,
-  snapshotEntries,
   type DirectTreeIntent,
   type ObservedSettlementEvidence,
 } from './settlement-proof'
+import { observeFSASettlementEvidence } from './settlement-evidence'
 
 export { fsaCheckpointSetDigest } from './settlement-proof'
-
-type MaterializedFileEntry = Extract<MaterializedManifestEntry, { kind: 'file' }>
-type MaterializedDirectoryEntry = Extract<MaterializedManifestEntry, { kind: 'directory' }>
 
 export type FSASettlementRepository = Pick<
   ReceiveOperationRepository,
@@ -110,6 +95,7 @@ export interface CreateFileSystemAccessSettlementAuthorityOptions {
   /** Exact durable state to restore when a continuation cannot admit an execution. */
   readonly admissionFallback?: ReceiveAdmissionFallback
   readonly clock?: () => number
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: (event: FSASettlementTraceEvent) => void
 }
 
@@ -129,6 +115,9 @@ export async function createFileSystemAccessSettlementAuthority(
     transferJobId: snapshotTransferJobId(options.transferJobId),
     ...(admissionFallback === undefined ? {} : { admissionFallback }),
     clock: options.clock ?? Date.now,
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
     directoryScope: await createDirectoryAdmissionScope(intent),
   })
@@ -141,6 +130,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   readonly #transferJobId: string
   readonly #clock: () => number
   readonly #trace: CreateFileSystemAccessSettlementAuthorityOptions['trace']
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #directoryScope: DirectoryAdmissionScope
   readonly #admissionFallback: ReceiveAdmissionFallback | undefined
   #materializationBound = false
@@ -152,6 +142,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     transferJobId: string
     admissionFallback?: ReceiveAdmissionFallback
     clock: () => number
+    diagnostics?: OutputDiagnosticsPorts
     trace?: (event: FSASettlementTraceEvent) => void
     directoryScope: DirectoryAdmissionScope
   }>) {
@@ -162,6 +153,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     this.#admissionFallback = input.admissionFallback
     this.#clock = input.clock
     this.#trace = input.trace
+    this.#diagnostics = input.diagnostics
     this.#directoryScope = input.directoryScope
   }
 
@@ -270,7 +262,14 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       if (request.worker.status !== 'Paused') {
         throw new TypeError('FSA pause requires a paused worker settlement')
       }
-      const observed = await this.#observe(observation, cut.evidence, request.materialization, false)
+      const observed = await observeFSASettlementEvidence({
+        intent: this.#intent,
+        directoryScope: this.#directoryScope,
+        observation,
+        evidence: cut.evidence,
+        summary: request.materialization,
+        requireComplete: false,
+      })
       const receipt = await this.#settlementReceipt('resumable-receive', request, observed)
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
@@ -309,12 +308,14 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
         throw new TypeError('FSA settlement escaped its transfer job')
       }
       const published = request.worker.status === 'Succeeded'
-      const observed = await this.#observe(
+      const observed = await observeFSASettlementEvidence({
+        intent: this.#intent,
+        directoryScope: this.#directoryScope,
         observation,
-        cut.evidence,
-        request.materialization,
-        published,
-      )
+        evidence: cut.evidence,
+        summary: request.materialization,
+        requireComplete: published,
+      })
       const outcome = published ? 'published' as const : 'partial-directory' as const
       const receipt = await this.#settlementReceipt(outcome, request, observed)
       let current = await this.#lifecycle()
@@ -376,7 +377,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       failure = cause
       if (cause instanceof TargetOwnershipUnknownError) {
         try {
-          result = (await this.#recordNeedsAttention(cause)).state
+          result = (await this.#recordNeedsAttention(cause, false)).state
           failure = undefined
         } catch (attentionFailure) {
           failure = new AggregateError(
@@ -396,127 +397,6 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     if (failure !== undefined) throw failure
     if (result === undefined) throw new TypeError('FSA settlement produced no lifecycle state')
     return result
-  }
-
-  async #observe(
-    authority: FSAFinalSettlementObservation,
-    evidence: PersistentMaterializationEvidence,
-    summary: MaterializationSummary,
-    requireComplete: boolean,
-  ): Promise<ObservedSettlementEvidence> {
-    await authority.verifyOperationBinding()
-    const candidates = await authority.candidateCheckpoints()
-    if (candidates.length !== 0) {
-      throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId)
-    }
-    const checkpoints = await authority.committedCheckpoints()
-    const entries = snapshotEntries(evidence.entries)
-    const fileEntries = entries.filter(
-      (entry): entry is MaterializedFileEntry => entry.kind === 'file',
-    )
-    const directoryEntries = entries.filter(
-      (entry): entry is MaterializedDirectoryEntry => entry.kind === 'directory',
-    )
-    await this.#verifyCheckpointEvidence(authority, checkpoints, fileEntries, requireComplete)
-    const directorySettlements = await this.#verifyDirectoryEvidence(
-      authority,
-      evidence.directorySettlements,
-      directoryEntries,
-      requireComplete,
-    )
-    this.#validateLayout(directoryEntries, requireComplete)
-    const measured = materializationSummary(entries)
-    if (!sameSummary(measured, summary)) {
-      throw new TypeError('FSA settlement summary differs from owned evidence')
-    }
-    const checkpointSetDigest = await fsaCheckpointSetDigest(this.#intent, checkpoints)
-    return Object.freeze({
-      entries,
-      directorySettlements,
-      checkpoints,
-      checkpointSetDigest,
-      completedFileCount: BigInt(fileEntries.length),
-      completedBytes: fileEntries.reduce((total, entry) => total + entry.exactSize, 0n),
-    })
-  }
-
-  async #verifyCheckpointEvidence(
-    authority: FSAFinalSettlementObservation,
-    checkpoints: readonly FileCheckpointV2[],
-    fileEntries: readonly MaterializedFileEntry[],
-    requireComplete: boolean,
-  ): Promise<void> {
-    const checkpointById = new Map(checkpoints.map(record => [record.recordId, record]))
-    const fileByCheckpoint = new Map(fileEntries.map(entry => [entry.checkpoint.recordId, entry]))
-    if (fileByCheckpoint.size !== fileEntries.length) {
-      throw new TypeError('FSA settlement repeats a final checkpoint')
-    }
-
-    for (const checkpoint of checkpoints) {
-      await authority.verifyCheckpointFile(checkpoint)
-      if (fileCheckpointIsComplete(checkpoint) && !fileByCheckpoint.has(checkpoint.recordId)) {
-        throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId)
-      }
-      if (requireComplete && !fileCheckpointIsComplete(checkpoint)) {
-        throw new TypeError('published FSA settlement contains an incomplete checkpoint')
-      }
-    }
-    for (const entry of fileEntries) {
-      const checkpoint = checkpointById.get(entry.checkpoint.recordId)
-      if (checkpoint === undefined || !sameFileEvidence(entry, checkpoint)) {
-        throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId)
-      }
-      let proof: FinalFileCheckpointProof
-      try {
-        proof = await authority.finalCheckpointProof(
-          entry.checkpoint.recordId,
-          entry.checkpoint.checkpointGeneration,
-        )
-      } catch (cause) {
-        throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId, { cause })
-      }
-      if (!sameFinalProof(proof, entry, this.#intent)) {
-        throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId)
-      }
-    }
-  }
-
-  async #verifyDirectoryEvidence(
-    authority: FSAFinalSettlementObservation,
-    supplied: readonly PersistentDirectorySettlementEvidence[],
-    directoryEntries: readonly MaterializedDirectoryEntry[],
-    requireComplete: boolean,
-  ): Promise<readonly PersistentDirectorySettlementEvidence[]> {
-    for (const entry of directoryEntries) {
-      await authority.verifyDirectory(entry.artifactPath, entry.ownedObjectId)
-    }
-    const directorySettlements = snapshotDirectorySettlements(
-      supplied,
-      directoryEntries,
-      this.#directoryScope,
-    )
-    if (requireComplete && (directorySettlements.length !== directoryEntries.length ||
-        directorySettlements.some(value => value.settlement.kind !== DirectorySettlementKind.Finalized))) {
-      throw new TypeError('published FSA settlement lacks finalized directory evidence')
-    }
-    return directorySettlements
-  }
-
-  #validateLayout(
-    directories: readonly MaterializedDirectoryEntry[],
-    requireComplete: boolean,
-  ): void {
-    if (this.#intent.artifact.layout.kind === 'single-file') {
-      if (directories.length !== 0) {
-        throw new TypeError('single-file FSA settlement contains an extra result root')
-      }
-      return
-    }
-    const roots = directories.filter(entry => entry.artifactPath.length === 0)
-    if (roots.length > 1 || (requireComplete && roots.length !== 1) ||
-        roots.some(entry => entry.directoryId !== this.#intent.syntheticRoot)) {
-      throw new TypeError('FSA result-root settlement has invalid root evidence')
-    }
   }
 
   #settlementReceipt(
@@ -621,9 +501,19 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     return (await this.#recordNeedsAttention(reason)).state
   }
 
-  async #recordNeedsAttention(cause?: unknown): Promise<VerifiedLifecycle> {
+  async #recordNeedsAttention(
+    cause?: unknown,
+    classifyCause = true,
+  ): Promise<VerifiedLifecycle> {
+    if (cause !== undefined && classifyCause) {
+      recordOutputException(this.#diagnostics?.failures?.settlement, cause)
+    }
     const current = await this.#lifecycle()
     if (current.state.kind === 'needs-attention') return current
+    if (cause === undefined) {
+      this.#recordReviewedFailure('settlement', 'needs_attention')
+    }
+    this.#emitOutputSettlement('ownership_unknown')
     const next = this.#reduce(current.state, {
       kind: 'ownership-unknown',
       lastVerifiedRecordDigest: current.record.digest,
@@ -681,6 +571,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     completedBytes: bigint,
     ownershipStage?: TargetOwnershipUnknownError['stage'],
   ): void {
+    this.#emitOutputSettlement('completed', normalizedSettlementOutcome(outcome))
     try {
       this.#trace?.(Object.freeze({
         name: 'receive.fsa.settlement.completed',
@@ -699,6 +590,12 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   }
 
   #emitAdmissionFailureRestored(fallback: ReceiveAdmissionFallback): void {
+    this.#recordReviewedFailure('continuation', 'resumable_receive')
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('continuation', {
+        backend: 'file_system_access',
+        transition: 'admission_failed',
+      }))
     try {
       this.#trace?.(Object.freeze({
         name: 'receive.fsa.continuation.admission_failed',
@@ -714,6 +611,47 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       // Durable lifecycle restoration remains authoritative when telemetry is unavailable.
     }
   }
+
+  #recordReviewedFailure(
+    stage: 'settlement' | 'continuation',
+    recoveryDisposition: 'needs_attention' | 'resumable_receive',
+  ): void {
+    try {
+      const sink = stage === 'settlement'
+        ? this.#diagnostics?.failures?.settlement
+        : this.#diagnostics?.failures?.continuation
+      sink?.record({ nativeClass: 'unknown', recoveryDisposition })
+    } catch {
+      // Reviewed facts remain observation-only when a custom sink rejects them.
+    }
+  }
+
+  #emitOutputSettlement(
+    transition: 'completed' | 'ownership_unknown',
+    outcome?: 'published' | 'partial_directory' | 'resumable_receive' | 'discarded' | 'needs_attention',
+  ): void {
+    emitOutputTrace(this.#diagnostics?.trace, () =>
+      outputTraceEvent('settlement', {
+        backend: 'file_system_access',
+        transition,
+        ...(outcome === undefined ? {} : { outcome }),
+      }))
+  }
+}
+
+function normalizedSettlementOutcome(
+  outcome: Extract<
+    FSASettlementTraceEvent,
+    { name: 'receive.fsa.settlement.completed' }
+  >['outcome'],
+): 'published' | 'partial_directory' | 'resumable_receive' | 'discarded' | 'needs_attention' {
+  return outcome === 'partial-directory' || outcome === 'resumable-receive' ||
+      outcome === 'needs-attention'
+    ? outcome.replace('-', '_') as
+      | 'partial_directory'
+      | 'resumable_receive'
+      | 'needs_attention'
+    : outcome
 }
 
 interface VerifiedLifecycle {

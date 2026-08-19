@@ -43,6 +43,7 @@ func (routes *operationLaneRoutes) reserveRequest(
 }
 
 type outboundRouteContextKey struct{}
+type inboundLaneContextKey struct{}
 
 type outboundRouteBinding struct {
 	operationID protocolsession.OperationID
@@ -71,6 +72,21 @@ func outboundRoute(ctx context.Context, operationID protocolsession.OperationID)
 		return nil, ErrOperationMissing
 	}
 	return binding.route, nil
+}
+
+func bindInboundLane(ctx context.Context, lane LaneIdentity) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, inboundLaneContextKey{}, lane)
+}
+
+func inboundLane(ctx context.Context) (LaneIdentity, bool) {
+	if ctx == nil {
+		return LaneIdentity{}, false
+	}
+	lane, ok := ctx.Value(inboundLaneContextKey{}).(LaneIdentity)
+	return lane, ok && lane.valid(true)
 }
 
 type operationLaneRoutes struct {
@@ -239,26 +255,23 @@ type operationCall struct {
 	request    protocolsession.Message
 	replay     protocolsession.OutboundReplayPermit
 
-	requestKind                  protocolsession.MessageKind
-	traceEnabled                 bool
-	traceStarted                 time.Time
-	traceDeadlineMillis          uint64
-	traceHasDeadline             bool
-	traceUsableAtSelection       uint32
-	traceHasSend                 bool
-	traceSendSettled             bool
-	traceSendAdmitted            bool
-	traceSendOutcome             protocolsession.SendOutcome
-	traceResponseCount           uint64
-	traceResponseKind            protocolsession.MessageKind
-	traceHasResponse             bool
-	traceHasFinalResponse        bool
-	traceOperationErrorScope     ProtocolOperationErrorScope
-	traceOperationErrorCode      uint16
-	traceOperationErrorRetryable bool
-	traceHasOperationError       bool
-	traceCause                   ProtocolOperationCause
-	traceEmitted                 bool
+	requestKind            protocolsession.MessageKind
+	traceEnabled           bool
+	traceStarted           time.Time
+	traceDeadlineMillis    uint64
+	traceHasDeadline       bool
+	traceUsableAtSelection uint32
+	traceHasSend           bool
+	traceSendSettled       bool
+	traceSendAdmitted      bool
+	traceSendOutcome       protocolsession.SendOutcome
+	traceResponseCount     uint64
+	traceResponseKind      protocolsession.MessageKind
+	traceHasResponse       bool
+	traceHasFinalResponse  bool
+	traceFailure           ProtocolFailure
+	traceCause             ProtocolOperationCause
+	traceEmitted           bool
 
 	// The admitted continuation bound is operation identity metadata, not live
 	// authority. Retaining it after close prevents shutdown timing from changing
@@ -391,30 +404,74 @@ func (call *operationCall) enqueue(response operationResponse) error {
 	if call.closed {
 		return nil
 	}
-	if call.traceEnabled {
-		if call.traceResponseCount != ^uint64(0) {
-			call.traceResponseCount++
-		}
-		call.traceResponseKind = response.message.Kind()
-		call.traceHasResponse = true
-		if scope, code, retryable, ok := protocolOperationErrorTrace(
-			response.message.Kind(),
-			response.message.Body(),
-		); ok {
-			call.traceOperationErrorScope = scope
-			call.traceOperationErrorCode = code
-			call.traceOperationErrorRetryable = retryable
-			call.traceHasOperationError = true
-		}
-		if senderResponseFinal(response.message.Kind()) {
-			call.traceHasFinalResponse = true
-		}
+	call.traceResponse(response.message.Kind())
+	return call.enqueueLocked(response)
+}
+
+type authenticatedFailureSource struct {
+	protocolSessionID protocolsession.ProtocolSessionID
+	lane              LaneIdentity
+	hasLane           bool
+}
+
+func (call *operationCall) enqueueAuthenticatedFailure(
+	response operationResponse,
+	source authenticatedFailureSource,
+) error {
+	call.stateMu.Lock()
+	defer call.stateMu.Unlock()
+	if call.closed {
+		return nil
 	}
+	call.traceResponse(response.message.Kind())
+	call.traceAuthenticatedFailure(response.message, source)
+	return call.enqueueLocked(response)
+}
+
+func (call *operationCall) enqueueLocked(response operationResponse) error {
 	select {
 	case call.messages <- response:
 		return nil
 	default:
 		return ErrOperationOverflow
+	}
+}
+
+func (call *operationCall) traceResponse(kind protocolsession.MessageKind) {
+	if !call.traceEnabled {
+		return
+	}
+	if call.traceResponseCount != ^uint64(0) {
+		call.traceResponseCount++
+	}
+	call.traceResponseKind = kind
+	call.traceHasResponse = true
+	if senderResponseFinal(kind) {
+		call.traceHasFinalResponse = true
+	}
+}
+
+func (call *operationCall) traceAuthenticatedFailure(
+	message protocolsession.Message,
+	source authenticatedFailureSource,
+) {
+	if !call.traceEnabled {
+		return
+	}
+	failure, ok := protocolFailureForAuthenticatedReceive(
+		source.protocolSessionID,
+		call.id,
+		call.requestKind,
+		message,
+		source.lane,
+		source.hasLane,
+	)
+	if !ok {
+		return
+	}
+	call.traceFailure = failure
+	if call.traceCause == ProtocolOperationCauseNone {
+		call.traceCause = ProtocolOperationCauseProtocolFailure
 	}
 }
 
@@ -532,6 +589,14 @@ func (router laneInboundRouter) prepareInboundRoute(
 ) (inboundRouteBinding, error) {
 	operationID, hasOperation := message.OperationID()
 	binding := inboundRouteBinding{ctx: ctx, operationID: operationID, hasOperation: hasOperation}
+	if router.runtime.role == protocolsession.RoleReceiver &&
+		message.Kind() == protocolsession.MessageOperationError &&
+		router.runtime.protocolOperationTracingEnabled() {
+		// The physical lane is attached only for the one authenticated failure
+		// message that consumes it. Successful and trace-disabled traffic avoid a
+		// context allocation on the protocol hot path.
+		binding.ctx = bindInboundLane(binding.ctx, router.identity)
+	}
 	if !hasOperation || router.runtime.role != protocolsession.RoleSender {
 		return binding, nil
 	}

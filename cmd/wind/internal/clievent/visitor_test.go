@@ -58,8 +58,11 @@ func (visitor *exhaustiveVisitor) VisitTransferLifecycleObserved(TransferLifecyc
 func (visitor *exhaustiveVisitor) VisitFilesystemOutputObserved(FilesystemOutputObserved) error {
 	return visitor.mark("filesystem_output")
 }
-func (visitor *exhaustiveVisitor) VisitSenderTerminalObserved(SenderTerminalObserved) error {
-	return visitor.mark("sender_terminal")
+func (visitor *exhaustiveVisitor) VisitSenderTerminalSendObserved(SenderTerminalSendObserved) error {
+	return visitor.mark("sender_terminal_send")
+}
+func (visitor *exhaustiveVisitor) VisitSenderSessionTerminated(SenderSessionTerminated) error {
+	return visitor.mark("sender_session_terminated")
 }
 func (visitor *exhaustiveVisitor) VisitCatalogStorageObserved(CatalogStorageObserved) error {
 	return visitor.mark("catalog_storage")
@@ -130,9 +133,12 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	filesystemOutput, _ := NewFilesystemOutputObserved(FilesystemOutputSpec{
 		ReceiveOperation: receiveID, Operation: FilesystemRuntimeDecision,
 	})
-	senderTerminal, _ := NewSenderTerminalObserved(
-		sessionID, lane, true, SenderTerminalAccepted,
-		SenderTerminalDelivered, SenderTerminalDecisionDelivered,
+	senderTerminalSend, _ := NewSenderTerminalSendObserved(
+		sessionID, lane, true, SenderTerminalSendAccepted,
+		SenderTerminalSendDelivered, SenderTerminalSendDecisionDelivered,
+	)
+	senderSessionTerminated, _ := NewSenderSessionTerminated(
+		sessionID, SenderSessionTerminalGracefulStop, SenderSessionTerminalNormalStop,
 	)
 	catalogStorage, _ := NewCatalogStorageObserved(
 		CatalogStorageRecovered, CatalogStorageCauseNone, CatalogUsage{}, 0,
@@ -176,7 +182,8 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 		{"peer_attempt", peerAttempt},
 		{"transfer_lifecycle", transferLifecycle},
 		{"filesystem_output", filesystemOutput},
-		{"sender_terminal", senderTerminal},
+		{"sender_terminal_send", senderTerminalSend},
+		{"sender_session_terminated", senderSessionTerminated},
 		{"catalog_storage", catalogStorage},
 		{"root_prefetch", rootPrefetch},
 		{"protocol_operation", protocolOperation},

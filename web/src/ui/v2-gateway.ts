@@ -12,10 +12,10 @@ import {
 } from '../catalog/v2-selection'
 import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
+import type { V2ConnectivityTraceSource } from '../connectivity/diagnostics'
 import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
 import type {
   V2ConnectivityActivation,
-  V2ConnectivityObserver,
   V2ContentLaneAdmissionObservation,
   V2ContentLaneDetachmentObservation,
 } from '../connectivity/v2-receiver-policy'
@@ -27,6 +27,8 @@ import {
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
+import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
+import type { V2ProtocolSessionIdentity } from '../session/v2-identities'
 import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import type {
   V2BlockDispatchObservation,
@@ -174,6 +176,10 @@ export class V2JoinedBrowserShare {
     return this.#supervisor.protocolSessionId
   }
 
+  get protocolSessionIdentity(): V2ProtocolSessionIdentity {
+    return this.#supervisor.protocolSessionIdentity
+  }
+
   projectionSource(
     selection: V2FrozenSelectionPolicy,
     explicitRetry = false,
@@ -191,7 +197,10 @@ export class V2JoinedBrowserShare {
     plans: V2PlanExecutionAuthority,
     intent: ReceiveIntent,
     connectivity: V2ConnectivityActivation,
-    callbacks: Partial<Pick<TransferJobOptions, 'onProgress' | 'onMeasure' | 'onTrace' | 'transferJobId'>> & {
+    callbacks: Partial<Pick<
+      TransferJobOptions,
+      'onProgress' | 'onMeasure' | 'trace' | 'transferJobId' | 'incidentScope'
+    >> & {
       readonly selection?: V2FrozenSelectionPolicy
     } = {},
   ): TransferJob {
@@ -206,7 +215,6 @@ export class V2JoinedBrowserShare {
       lanes: content.lanes,
       plans,
       intent,
-      protocolSessionId: () => this.#supervisor.protocolSessionId,
       ...jobCallbacks,
     })
   }
@@ -475,7 +483,8 @@ class ProjectionDiscoverySummary {
 export interface V2BrowserReceiverGatewayOptions {
   readonly offersFactory?: () => OfferChannelFactory
   readonly nativePeerUsable?: () => boolean
-  readonly connectivityObserver?: V2ConnectivityObserver
+  readonly protocolTrace?: V2ProtocolTraceSource
+  readonly connectivityTrace?: V2ConnectivityTraceSource
   readonly peerRecovery?: V2PeerRecoveryDependencies
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
@@ -486,7 +495,8 @@ export interface V2BrowserReceiverGatewayOptions {
 export class V2BrowserReceiverGateway {
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
-  readonly #connectivityObserver: V2ConnectivityObserver | undefined
+  readonly #protocolTrace: V2ProtocolTraceSource | undefined
+  readonly #connectivityTrace: V2ConnectivityTraceSource | undefined
   readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
   readonly #onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined
   readonly #onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined
@@ -500,7 +510,8 @@ export class V2BrowserReceiverGateway {
   constructor(options: V2BrowserReceiverGatewayOptions = {}) {
     this.#offersFactory = options.offersFactory
     this.#nativePeerUsable = options.nativePeerUsable
-    this.#connectivityObserver = options.connectivityObserver
+    this.#protocolTrace = options.protocolTrace
+    this.#connectivityTrace = options.connectivityTrace
     this.#peerRecovery = options.peerRecovery
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
@@ -537,12 +548,14 @@ export class V2BrowserReceiverGateway {
         readSecret: capability.readSecret,
         initialChannel: relay.channel,
         ...(signal === undefined ? {} : { signal }),
+        ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       })
       sessionFactory = new V2BrowserSessionFactory({
         relayBase,
         capability,
         descriptor,
         descriptorObject: relay.descriptorObject,
+        ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       })
       supervisor = new V2ReceiverReconnectSupervisor({
         descriptor,
@@ -555,7 +568,7 @@ export class V2BrowserReceiverGateway {
         ...gatewayConnectivityOptions(
           this.#offersFactory,
           this.#nativePeerUsable,
-          this.#connectivityObserver,
+          this.#connectivityTrace,
           this.#peerRecovery,
           this.#onBlockDispatched,
           this.#onBlockFetched,
@@ -601,7 +614,7 @@ export class V2BrowserReceiverGateway {
 function gatewayConnectivityOptions(
   offersFactory: (() => OfferChannelFactory) | undefined,
   nativePeerUsable: (() => boolean) | undefined,
-  connectivityObserver: V2ConnectivityObserver | undefined,
+  connectivityTrace: V2ConnectivityTraceSource | undefined,
   peerRecovery: V2PeerRecoveryDependencies | undefined,
   onBlockDispatched: ((observation: V2BlockDispatchObservation) => void) | undefined,
   onBlockFetched: ((observation: V2BlockRouteObservation) => void) | undefined,
@@ -613,7 +626,7 @@ function gatewayConnectivityOptions(
   return {
     ...(offersFactory === undefined ? {} : { offersFactory }),
     ...(nativePeerUsable === undefined ? {} : { nativePeerUsable }),
-    ...(connectivityObserver === undefined ? {} : { connectivityObserver }),
+    ...(connectivityTrace === undefined ? {} : { connectivityTrace }),
     ...(peerRecovery === undefined ? {} : { peerRecovery }),
     ...(onBlockDispatched === undefined ? {} : { onBlockDispatched }),
     ...(onBlockFetched === undefined ? {} : { onBlockFetched }),

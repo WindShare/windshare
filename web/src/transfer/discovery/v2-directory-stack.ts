@@ -1,5 +1,6 @@
+import { FaultScope } from '../fault'
 import type { DirectoryWork } from '../job/contract'
-import { V2DirectoryOutputError, isDirectoryScopedFailure } from '../job/failures'
+import { V2DirectoryOutputError, normalizeV2FileTransferFailure } from '../job/failures'
 
 export interface V2DirectoryStackFrame {
   readonly work: DirectoryWork
@@ -14,11 +15,18 @@ export async function advanceV2DirectoryFrame(
   try {
     return await frame.discovery.next()
   } catch (error) {
-    if (frame.work.cursor.path.length === 0 || !isDirectoryScopedFailure(error)) throw error
     const directoryId = error instanceof V2DirectoryOutputError && error.directoryId !== undefined
       ? error.directoryId
       : frame.work.cursor.idText
-    isolate(directoryId, error)
+    const normalized = normalizeV2FileTransferFailure(error)
+    if (
+      frame.work.cursor.path.length === 0 ||
+      normalized.kind === 'canceled' ||
+      normalized.fault.scope !== FaultScope.DirectoryLocal
+    ) {
+      throw normalized.diagnostic
+    }
+    isolate(directoryId, normalized.diagnostic)
     return undefined
   }
 }

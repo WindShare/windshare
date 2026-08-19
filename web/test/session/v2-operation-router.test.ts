@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
+import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
+import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../../src/session/v2-operation-continuation'
 import {
   V2_MAXIMUM_ACTIVE_OPERATIONS,
@@ -18,6 +20,107 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 }
 
 describe('v2 operation replay ownership', () => {
+  it('emits closed response and settlement facts with typed lane correlation', async () => {
+    const events: V2ProtocolTraceEvent[] = []
+    const router = new V2OperationRouter(
+      () => undefined,
+      () => 1_000,
+      {
+        protocolSessionIdentity: createV2ProtocolSessionIdentity(identity(18)),
+        trace: { current: (event) => events.push(event) },
+      },
+    )
+    const operationId = identity(19)
+    router.create(operationId, V2_MESSAGE_KIND.listChildren, EMPTY_REQUEST_BODY)
+
+    await router.route(
+      encodeV2Message(V2_MESSAGE_KIND.catalogResult, operationId, EMPTY_REQUEST_BODY),
+      4,
+      0,
+    )
+
+    expect(events).toHaveLength(2)
+    expect(events[0]).toMatchObject({
+      eventName: 'protocol_operation',
+      transition: 'response_received',
+      requestKind: 'list_children',
+      responseKind: 'catalog_result',
+      correlation: {
+        protocolSessionId: { kind: 'protocol_session', byteLength: 16 },
+        protocolOperationId: { kind: 'protocol_operation', byteLength: 16 },
+        lane: { id: 4, epoch: 0 },
+      },
+    })
+    expect(events[1]).toMatchObject({
+      eventName: 'protocol_operation',
+      transition: 'settled',
+      requestKind: 'list_children',
+      settlement: 'remote_final',
+    })
+    expect(Object.keys(events[1]!).sort()).toEqual([
+      'correlation',
+      'eventName',
+      'requestKind',
+      'settlement',
+      'transition',
+    ])
+  })
+
+  it('captures authenticated peer failure before delivery and emits it without provider detail', async () => {
+    const events: V2ProtocolTraceEvent[] = []
+    const router = new V2OperationRouter(
+      () => undefined,
+      () => 1_000,
+      {
+        protocolSessionIdentity: createV2ProtocolSessionIdentity(identity(20)),
+        trace: { current: (event) => events.push(event) },
+      },
+    )
+    const operationId = identity(21)
+    const peerPathId = identity(22)
+    const attemptId = identity(23)
+    const operation = router.create(
+      operationId,
+      V2_MESSAGE_KIND.peerOffer,
+      peerOfferBody(peerPathId, attemptId),
+    )
+    const deliveredFailure = operation.next().then((message) => ({
+      message,
+      protocolFailure: router.protocolFailureFor(message),
+    }))
+    const providerDetail = 'provider detail must never be retained'
+    const routed = router.route(operationError(operationId, 'peer', providerDetail), 4, 0)
+
+    const delivered = await deliveredFailure
+    expect(delivered.protocolFailure).toMatchObject({
+      requestKind: 'peer_offer',
+      wireScope: 'peer',
+      retryable: false,
+      settlement: { kind: 'received_authenticated' },
+      correlation: {
+        protocolSessionId: { kind: 'protocol_session', byteLength: 16 },
+        protocolOperationId: { kind: 'protocol_operation', byteLength: 16 },
+        peerPathId: { kind: 'peer_path', byteLength: 16 },
+        peerAttemptId: { kind: 'peer_attempt', byteLength: 16 },
+        lane: { id: 4, epoch: 0 },
+      },
+    })
+    expect(delivered.protocolFailure?.correlation.peerPathId?.copyBytes()).toEqual(peerPathId)
+    expect(delivered.protocolFailure?.correlation.peerAttemptId?.copyBytes()).toEqual(attemptId)
+    expect(JSON.stringify(delivered.protocolFailure)).not.toContain(providerDetail)
+    await routed
+    expect(events.map((event) => event.transition)).toEqual([
+      'response_received',
+      'authenticated_failure',
+      'settled',
+    ])
+    expect(events[1]).toMatchObject({
+      eventName: 'protocol_operation',
+      transition: 'authenticated_failure',
+      protocolFailure: delivered.protocolFailure,
+    })
+  })
+
   it('drops concurrent exact peer-answer replays before delivery without advancing multiplicity', async () => {
     const router = new V2OperationRouter(() => undefined)
     const operationId = identity(22)

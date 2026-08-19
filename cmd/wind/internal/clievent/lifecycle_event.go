@@ -474,48 +474,54 @@ func (value FilesystemOutputObserved) Accept(visitor Visitor) error {
 	return acceptFilesystemOutputObserved(visitor, value)
 }
 
-type SenderTerminalObserved struct {
+type SenderTerminalSendObserved struct {
 	session              ProtocolSessionID
 	lane                 LaneIdentity
 	settled              bool
-	transportDisposition SenderTerminalTransport
-	outcome              SenderTerminalOutcome
-	decision             SenderTerminalDecision
+	transportDisposition SenderTerminalSendTransport
+	outcome              SenderTerminalSendOutcome
+	decision             SenderTerminalSendDecision
 }
 
-func NewSenderTerminalObserved(
+func NewSenderTerminalSendObserved(
 	session ProtocolSessionID,
 	lane LaneIdentity,
 	settled bool,
-	transportDisposition SenderTerminalTransport,
-	outcome SenderTerminalOutcome,
-	decision SenderTerminalDecision,
-) (SenderTerminalObserved, error) {
+	transportDisposition SenderTerminalSendTransport,
+	outcome SenderTerminalSendOutcome,
+	decision SenderTerminalSendDecision,
+) (SenderTerminalSendObserved, error) {
 	_, transportOK := transportDisposition.Name()
 	_, outcomeOK := outcome.Name()
 	_, decisionOK := decision.Name()
 	if !session.Valid() || !lane.Valid() || !transportOK || !outcomeOK || !decisionOK {
-		return SenderTerminalObserved{}, ErrInvalidEvent
+		return SenderTerminalSendObserved{}, ErrInvalidEvent
 	}
-	return SenderTerminalObserved{
+	return SenderTerminalSendObserved{
 		session: session, lane: lane, settled: settled,
 		transportDisposition: transportDisposition, outcome: outcome, decision: decision,
 	}, nil
 }
 
-func (SenderTerminalObserved) event()                                     {}
-func (SenderTerminalObserved) Command() Command                           { return CommandShare }
-func (SenderTerminalObserved) Level() Level                               { return LevelDebug }
-func (value SenderTerminalObserved) ProtocolSessionID() ProtocolSessionID { return value.session }
-func (value SenderTerminalObserved) Lane() LaneIdentity                   { return value.lane }
-func (value SenderTerminalObserved) Settled() bool                        { return value.settled }
-func (value SenderTerminalObserved) TransportDisposition() SenderTerminalTransport {
+func (SenderTerminalSendObserved) event()           {}
+func (SenderTerminalSendObserved) Command() Command { return CommandShare }
+func (SenderTerminalSendObserved) Level() Level     { return LevelDebug }
+func (value SenderTerminalSendObserved) ProtocolSessionID() ProtocolSessionID {
+	return value.session
+}
+func (value SenderTerminalSendObserved) Lane() LaneIdentity { return value.lane }
+func (value SenderTerminalSendObserved) Settled() bool      { return value.settled }
+func (value SenderTerminalSendObserved) TransportDisposition() SenderTerminalSendTransport {
 	return value.transportDisposition
 }
-func (value SenderTerminalObserved) Outcome() SenderTerminalOutcome   { return value.outcome }
-func (value SenderTerminalObserved) Decision() SenderTerminalDecision { return value.decision }
-func (value SenderTerminalObserved) Accept(visitor Visitor) error {
-	return acceptSenderTerminalObserved(visitor, value)
+func (value SenderTerminalSendObserved) Outcome() SenderTerminalSendOutcome {
+	return value.outcome
+}
+func (value SenderTerminalSendObserved) Decision() SenderTerminalSendDecision {
+	return value.decision
+}
+func (value SenderTerminalSendObserved) Accept(visitor Visitor) error {
+	return acceptSenderTerminalSendObserved(visitor, value)
 }
 
 type CatalogUsage struct {

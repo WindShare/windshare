@@ -2,6 +2,10 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import App from './App.tsx'
 import './index.css'
+import { browserBuildSnapshot } from './diagnostics/build-identity'
+import { createBrowserDiagnosticsComposition } from './diagnostics/browser-composition'
+import { installWindShareDiagnostics } from './diagnostics/export/developer-api'
+import type { IncidentRecordV1 } from './diagnostics/export/incident-record-v1'
 import { createBrowserReceiveOperationMutationPort } from './output/resume/reopen-authority'
 import {
   createBrowserReceiveComposition,
@@ -9,26 +13,59 @@ import {
 } from './ui/v2-browser-receive-composition'
 import { captureV2Location, V2ReceiverController } from './ui/v2-controller'
 import { V2BrowserReceiverGateway } from './ui/v2-gateway'
-import { createPrivacySafeV2ReceiverTraceSink } from './ui/v2-production-trace'
+import {
+  createConnectivityTraceSource,
+  createOutputTraceSource,
+  createProtocolTraceSource,
+  createV2ReceiverTraceSource,
+} from './ui/v2-production-trace'
 
 // Initialization runs outside React so StrictMode cannot duplicate capability
-// parsing, fragment erasure, or the pre-gesture relay join. Capability removal
-// also precedes fallible browser-capability discovery in gateway construction.
+// parsing, fragment erasure, or the pre-gesture relay join. Fragment erasure
+// happens before any fallible browser-capability discovery or receiver assembly.
 const initialCapability = captureV2Location(window)
-const receiveTrace = createPrivacySafeV2ReceiverTraceSink(console)
-const receiveMutations = createBrowserReceiveOperationMutationPort({ trace: receiveTrace })
+
+// Late binding keeps startup incidents reportable before the controller exists,
+// without exposing the composition root to a temporal-dead-zone lookup.
+const controllerContext: {
+  read:
+    | (() => ReturnType<V2ReceiverController['getDiagnosticSnapshot']>)
+    | undefined
+} = { read: undefined }
+
+const diagnostics = createBrowserDiagnosticsComposition({
+  build: browserBuildSnapshot(),
+  secureContext: window.isSecureContext,
+  consoleSink: Object.freeze({
+    error: (record: IncidentRecordV1) => console.error(record),
+  }),
+  controllerSnapshot: () => controllerContext.read?.(),
+})
+const receiverTrace = createV2ReceiverTraceSource(diagnostics.trace)
+const outputTrace = createOutputTraceSource(diagnostics.trace)
+const protocolTrace = createProtocolTraceSource(diagnostics.trace)
+const connectivityTrace = createConnectivityTraceSource(diagnostics.trace)
+
+const receiveMutations = createBrowserReceiveOperationMutationPort()
 const receiveComposition = createBrowserReceiveComposition(
   window as BrowserReceiveWindow,
-  { resumeMutations: receiveMutations, onTrace: receiveTrace },
-)
-const controller = new V2ReceiverController(
-  new V2BrowserReceiverGateway(),
   {
-    receive: receiveComposition,
-    onOutputTrace: receiveTrace,
+    resumeMutations: receiveMutations,
+    outputTrace,
   },
 )
+const gateway = new V2BrowserReceiverGateway({
+  protocolTrace,
+  connectivityTrace,
+})
+const controller = new V2ReceiverController(gateway, {
+  receive: receiveComposition,
+  trace: receiverTrace,
+  incidents: diagnostics.incidents,
+})
+controllerContext.read = () => controller.getDiagnosticSnapshot()
 controller.initialize(initialCapability)
+installWindShareDiagnostics(window, diagnostics.runtime)
 
 window.addEventListener('pagehide', (event) => {
   // A persisted page resumes the same controller from the back-forward cache;

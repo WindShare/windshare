@@ -1,7 +1,25 @@
+import type { FailureCorrelation } from '../diagnostics/incident/fact'
 import {
-  V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
-  type V2PeerRecoveryWaveTrigger,
+  createV2PeerPathIdentityValue,
+  createV2ProtocolSessionIdentity,
+  equalV2DiagnosticIdentities,
+  type V2PeerAttemptIdentity,
+  type V2PeerPathIdentity,
+  type V2ProtocolSessionIdentity,
+} from '../session/v2-identities'
+import type {
+  V2ConnectivityTraceSource,
+  V2PeerRecoveryTraceEvent,
+  V2PeerRecoveryWaveTrigger,
 } from './diagnostics'
+import {
+  abortOwner,
+  authoritativeAfterCancellation,
+  isAttemptHandle,
+  localContractResult,
+  normalizeAttemptResult,
+  waitForAbort,
+} from './v2-peer-recovery-attempt-result'
 import {
   classifyV2PeerAttemptFailure,
   type V2PeerAdmittedLane,
@@ -23,9 +41,6 @@ import {
   type V2PeerRecoveryAttemptFactory,
   type V2PeerRecoveryAttemptRace as AttemptRace,
   type V2PeerRecoveryClock,
-  type V2PeerRecoveryEvent,
-  type V2PeerRecoveryEventPayload,
-  type V2PeerRecoveryObserver,
   type V2PeerRecoveryExhaustion as RecoveryExhaustion,
   type V2PeerRecoveryPendingWave as PendingWave,
   type V2PeerRecoveryPolicy,
@@ -38,16 +53,20 @@ import {
 export * from './v2-peer-recovery-contract'
 
 const NEVER: Promise<never> = new Promise(() => undefined)
-const UINT32_MAXIMUM = 0xffff_ffff
+
+type V2PeerRecoveryTracePayload<Event = V2PeerRecoveryTraceEvent> =
+  Event extends V2PeerRecoveryTraceEvent
+    ? Omit<Event, 'eventName' | 'correlation'>
+    : never
 
 export class V2PeerRecoverySupervisor {
-  readonly #protocolSessionId: string
-  readonly #peerPathId: string
+  readonly #protocolSessionId: V2ProtocolSessionIdentity
+  readonly #peerPathId: V2PeerPathIdentity
   readonly #attempts: V2PeerRecoveryAttemptFactory
   readonly #policy: V2PeerRecoveryPolicy
   readonly #clock: V2PeerRecoveryClock
   readonly #random: () => number
-  readonly #observer: V2PeerRecoveryObserver | undefined
+  readonly #trace: V2ConnectivityTraceSource | undefined
   #state: V2PeerRecoveryState = Object.freeze({ kind: 'idle' })
   #task: Promise<void> | undefined
   #waveController: AbortController | undefined
@@ -59,7 +78,6 @@ export class V2PeerRecoverySupervisor {
   #sessionActiveElapsedMilliseconds = 0
   #activeSince: number | undefined
   #lastNow: number | undefined
-  #observationSequence = 0
   #waveOrdinal = 0
   #authenticatedNotBefore = 0
   #preferredLaneId = 0
@@ -68,13 +86,13 @@ export class V2PeerRecoverySupervisor {
 
   constructor(options: V2PeerRecoverySupervisorOptions) {
     requireV2PeerRecoveryCorrelation(options.protocolSessionId, options.peerPathId)
-    this.#protocolSessionId = options.protocolSessionId
-    this.#peerPathId = options.peerPathId
+    this.#protocolSessionId = createV2ProtocolSessionIdentity(options.protocolSessionId.copyBytes())
+    this.#peerPathId = createV2PeerPathIdentityValue(options.peerPathId.copyBytes())
     this.#attempts = options.attempts
     this.#policy = createV2PeerRecoveryPolicy(options.policy)
     this.#clock = options.clock ?? browserV2PeerRecoveryClock
     this.#random = options.random ?? Math.random
-    this.#observer = options.observer
+    this.#trace = options.trace
     this.#subscribeRearm(options.rearmSource)
   }
 
@@ -123,10 +141,11 @@ export class V2PeerRecoverySupervisor {
     if (this.#state.kind !== 'admitted' || !this.#matchesCurrentLane(detachment)) return false
     this.#preferredLaneId = detachment.laneId
     this.#currentLane = undefined
-    this.#emit(Object.freeze({
-      stage: 'peer-detached',
-      lane: Object.freeze({ laneId: detachment.laneId, laneEpoch: detachment.laneEpoch }),
-    }))
+    this.#emit(
+      () => Object.freeze({ stage: 'peer-detached' }),
+      undefined,
+      detachment,
+    )
     if (this.#activationCount === 0) {
       this.#setState(Object.freeze({ kind: 'idle' }))
     } else {
@@ -225,9 +244,9 @@ export class V2PeerRecoverySupervisor {
       attempts: 0,
     }
     this.#activeSince = wave.startedAt
-    this.#emit(Object.freeze({ stage: 'wave-started', waveOrdinal: wave.ordinal, trigger }))
+    this.#emit(() => Object.freeze({ stage: 'wave-started', waveOrdinal: wave.ordinal, trigger }))
     if (rearmed && trigger !== 'detachment') {
-      this.#emit(Object.freeze({ stage: 'wave-rearmed', waveOrdinal: wave.ordinal, trigger }))
+      this.#emit(() => Object.freeze({ stage: 'wave-rearmed', waveOrdinal: wave.ordinal, trigger }))
     }
 
     try {
@@ -243,7 +262,7 @@ export class V2PeerRecoverySupervisor {
 
   async #attemptWave(wave: WaveBudget, signal: AbortSignal): Promise<void> {
     let retryOrdinal = 0
-    let previousAttemptId: string | undefined
+    let previousAttemptId: V2PeerAttemptIdentity | undefined
     if (!await this.#waitForRetainedNotBefore(wave, signal)) return
 
     while (!signal.aborted && this.#terminal === undefined && this.#activationCount > 0) {
@@ -259,12 +278,15 @@ export class V2PeerRecoverySupervisor {
         return
       }
       if (previousAttemptId !== undefined) {
-        this.#emit(Object.freeze({
-          stage: 'attempt-replaced',
-          waveOrdinal: wave.ordinal,
-          previousAttemptId,
-          attemptId: attempt.attemptId,
-        }))
+        const replacedAttemptId = previousAttemptId
+        this.#emit(
+          () => Object.freeze({
+            stage: 'attempt-replaced',
+            waveOrdinal: wave.ordinal,
+            previousAttemptId: replacedAttemptId,
+          }),
+          attempt.attemptId,
+        )
       }
       previousAttemptId = attempt.attemptId
 
@@ -380,7 +402,7 @@ export class V2PeerRecoverySupervisor {
 
   async #settleAttemptResult(
     result: V2PeerAttemptResult,
-    attemptId: string,
+    attemptId: V2PeerAttemptIdentity,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -398,17 +420,19 @@ export class V2PeerRecoverySupervisor {
     }
 
     const decision = classifyV2PeerAttemptFailure(result.failure)
-    this.#emit(Object.freeze({
-      stage: 'retry-decided',
-      waveOrdinal: wave.ordinal,
+    this.#emit(
+      () => Object.freeze({
+        stage: 'retry-decided',
+        waveOrdinal: wave.ordinal,
+        decision: decision.type,
+        reason: decision.reason,
+        authenticatedRetryAfterMilliseconds: decision.type === 'retry-attempt' &&
+            decision.reason === 'admission-limited'
+          ? decision.authenticatedRetryAfterMilliseconds
+          : 0,
+      }),
       attemptId,
-      decision: decision.type,
-      reason: decision.reason,
-      authenticatedRetryAfterMilliseconds: decision.type === 'retry-attempt' &&
-          decision.reason === 'admission-limited'
-        ? decision.authenticatedRetryAfterMilliseconds
-        : 0,
-    }))
+    )
     if (decision.type === 'stop-path') {
       this.#stopPath(decision.reason)
       return false
@@ -423,7 +447,7 @@ export class V2PeerRecoverySupervisor {
 
   async #scheduleRetry(
     decision: Extract<V2PeerFailureDecision, { readonly type: 'retry-attempt' }>,
-    attemptId: string,
+    attemptId: V2PeerAttemptIdentity,
     wave: WaveBudget,
     retryOrdinal: number,
     signal: AbortSignal,
@@ -454,15 +478,17 @@ export class V2PeerRecoverySupervisor {
     }
     const authenticatedDelay = Math.max(0, this.#authenticatedNotBefore - now)
     const delay = Math.max(localDelay, authenticatedDelay)
-    this.#emit(Object.freeze({
-      stage: 'backoff-scheduled',
-      waveOrdinal: wave.ordinal,
+    this.#emit(
+      () => Object.freeze({
+        stage: 'backoff-scheduled',
+        waveOrdinal: wave.ordinal,
+        retryOrdinal,
+        localDelayMilliseconds: localDelay,
+        authenticatedRetryAfterMilliseconds: authenticatedDelay,
+        effectiveDelayMilliseconds: delay,
+      }),
       attemptId,
-      retryOrdinal,
-      localDelayMilliseconds: localDelay,
-      authenticatedRetryAfterMilliseconds: authenticatedDelay,
-      effectiveDelayMilliseconds: delay,
-    }))
+    )
     return this.#waitForRetry(delay, wave, retryOrdinal, signal)
   }
 
@@ -599,12 +625,12 @@ export class V2PeerRecoverySupervisor {
     if (exhaustion === 'session-attempt-budget' || exhaustion === 'session-elapsed-budget') {
       const reason = exhaustion
       this.#setState(Object.freeze({ kind: 'session-exhausted', reason }))
-      this.#emit(Object.freeze({ stage: 'session-budget-exhausted', reason }))
+      this.#emit(() => Object.freeze({ stage: 'session-budget-exhausted', reason }))
       return
     }
     const reason = exhaustion
     this.#setState(Object.freeze({ kind: 'quiescent', reason }))
-    this.#emit(Object.freeze({
+    this.#emit(() => Object.freeze({
       stage: 'wave-quiesced',
       waveOrdinal: waveOrdinal ?? this.#waveOrdinal,
       reason,
@@ -618,7 +644,7 @@ export class V2PeerRecoverySupervisor {
     if (this.#state.kind === 'path-stopped' && this.#state.reason === reason) return
     this.#pendingWave = undefined
     this.#setState(Object.freeze({ kind: 'path-stopped', reason }))
-    this.#emit(Object.freeze({ stage: 'path-stopped', reason }))
+    this.#emit(() => Object.freeze({ stage: 'path-stopped', reason }))
     this.#safeCancel(this.#currentAttempt, 'runtime-stop')
     this.#waveController?.abort('runtime-stop')
   }
@@ -629,7 +655,7 @@ export class V2PeerRecoverySupervisor {
     this.#unsubscribeRearm = undefined
     this.#pendingWave = undefined
     this.#setState(Object.freeze({ kind: 'session-stopped', reason: terminal.code }))
-    this.#emit(Object.freeze({ stage: 'session-stopped', reason: terminal.code }))
+    this.#emit(() => Object.freeze({ stage: 'session-stopped', reason: terminal.code }))
   }
 
   #cancelWave(owner: V2PeerAttemptCancellationOwner): void {
@@ -646,8 +672,8 @@ export class V2PeerRecoverySupervisor {
   }
 
   #matchesCurrentLane(detachment: V2PeerLaneDetachment): boolean {
-    return detachment.protocolSessionId === this.#protocolSessionId &&
-      detachment.peerPathId === this.#peerPathId &&
+    return equalV2DiagnosticIdentities(detachment.protocolSessionId, this.#protocolSessionId) &&
+      equalV2DiagnosticIdentities(detachment.peerPathId, this.#peerPathId) &&
       detachment.laneId === this.#currentLane?.laneId &&
       detachment.laneEpoch === this.#currentLane.laneEpoch
   }
@@ -656,23 +682,29 @@ export class V2PeerRecoverySupervisor {
     this.#state = state
   }
 
-  #emit(payload: V2PeerRecoveryEventPayload): void {
-    this.#observationSequence += 1
-    const now = this.#lastNow ?? 0
-    const event = Object.freeze({
-      schemaVersion: V2_CONNECTIVITY_DIAGNOSTIC_SCHEMA_VERSION,
-      stream: 'recovery' as const,
-      sessionId: this.#protocolSessionId,
-      peerPathId: this.#peerPathId,
-      side: 'browser' as const,
-      sideSequence: this.#observationSequence,
-      sessionRecoveryElapsedMs: Math.max(0, this.#sessionElapsedAt(now)),
-      ...payload,
-    }) as V2PeerRecoveryEvent
+  #emit(
+    createPayload: () => V2PeerRecoveryTracePayload,
+    attemptId?: V2PeerAttemptIdentity,
+    lane?: { readonly laneId: number; readonly laneEpoch: number },
+  ): void {
     try {
-      this.#observer?.(event)
+      const observer = this.#trace?.current
+      if (observer === undefined) return
+      const correlation: FailureCorrelation = Object.freeze({
+        protocolSessionId: this.#protocolSessionId,
+        peerPathId: this.#peerPathId,
+        ...(attemptId === undefined ? {} : { peerAttemptId: attemptId }),
+        ...(lane === undefined
+          ? {}
+          : { lane: Object.freeze({ id: lane.laneId, epoch: lane.laneEpoch }) }),
+      })
+      observer(Object.freeze({
+        eventName: 'peer_recovery',
+        correlation,
+        ...createPayload(),
+      }) as V2PeerRecoveryTraceEvent)
     } catch {
-      // Evidence loss is observational and must not perturb retry or session authority.
+      // Trace loss cannot perturb retry, budget, or session authority.
     }
   }
 }
@@ -698,75 +730,4 @@ export class BrowserV2PeerRecoveryRearmSource implements V2PeerRecoveryRearmSour
 
 function browserNetworkConnection(): EventTarget | undefined {
   return (navigator as Navigator & { readonly connection?: EventTarget }).connection
-}
-
-function normalizeAttemptResult(value: unknown): V2PeerAttemptResult {
-  if (!isRecord(value)) return localContractResult()
-  if (value.type === 'admitted' && isLane(value.lane)) {
-    return Object.freeze({ type: 'admitted', lane: Object.freeze({ ...value.lane }) })
-  }
-  if (value.type === 'failed') {
-    const decision = classifyV2PeerAttemptFailure(value.failure)
-    if (decision.reason !== 'untyped-failure') return value as unknown as V2PeerAttemptResult
-  }
-  if (
-    value.type === 'lifecycle-cancelled' &&
-    isCancellationOwner(value.owner)
-  ) return value as unknown as V2PeerAttemptResult
-  return localContractResult()
-}
-
-function localContractResult(): V2PeerAttemptResult {
-  return Object.freeze({
-    type: 'failed',
-    failure: Object.freeze({
-      kind: 'local-contract',
-      code: 'invalid-adapter-result',
-    }),
-  })
-}
-
-function authoritativeAfterCancellation(result: V2PeerAttemptResult): boolean {
-  if (result.type === 'admitted') return true
-  if (result.type !== 'failed') return false
-  return result.failure.kind === 'authenticated-peer-operation' ||
-    result.failure.kind === 'authenticated-lane-rejection' ||
-    result.failure.kind === 'session-terminal'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null
-}
-
-function isAttemptHandle(value: unknown): value is V2PeerAttemptHandle {
-  if (typeof value !== 'object' || value === null) return false
-  const candidate = value as Partial<V2PeerAttemptHandle>
-  return typeof candidate.attemptId === 'string' &&
-    /^[A-Za-z0-9_-]{1,128}$/.test(candidate.attemptId) &&
-    candidate.result instanceof Promise &&
-    typeof candidate.cancel === 'function'
-}
-
-function isLane(value: unknown): value is V2PeerAdmittedLane {
-  if (typeof value !== 'object' || value === null) return false
-  const lane = value as Partial<V2PeerAdmittedLane>
-  return isNonzeroUint32(lane.laneId) && isNonzeroUint32(lane.laneEpoch)
-}
-
-function isNonzeroUint32(value: unknown): value is number {
-  return Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= UINT32_MAXIMUM
-}
-
-function isCancellationOwner(value: unknown): value is V2PeerAttemptCancellationOwner {
-  return value === 'last-activation' || value === 'generation-replaced' ||
-    value === 'runtime-stop' || value === 'recovery-budget'
-}
-
-function waitForAbort(signal: AbortSignal): Promise<void> {
-  if (signal.aborted) return Promise.resolve()
-  return new Promise((resolve) => signal.addEventListener('abort', () => resolve(), { once: true }))
-}
-
-function abortOwner(signal: AbortSignal): V2PeerAttemptCancellationOwner {
-  return isCancellationOwner(signal.reason) ? signal.reason : 'runtime-stop'
 }

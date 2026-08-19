@@ -122,12 +122,12 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationCauseOperationClosed,
 		sessionruntime.ProtocolOperationCauseProtocolFailure,
 	}, sessionruntime.ProtocolOperationCause(255), projectProtocolOperationCause)
-	assertClosedProjection(t, "protocol operation error scope", []sessionruntime.ProtocolOperationErrorScope{
-		sessionruntime.ProtocolOperationErrorDirectory,
-		sessionruntime.ProtocolOperationErrorRevision,
-		sessionruntime.ProtocolOperationErrorBlock,
-		sessionruntime.ProtocolOperationErrorPeer,
-	}, sessionruntime.ProtocolOperationErrorScope(255), projectProtocolOperationErrorScope)
+	assertClosedProjection(t, "protocol failure scope", []sessionruntime.ProtocolFailureScope{
+		sessionruntime.ProtocolFailureDirectory,
+		sessionruntime.ProtocolFailureRevision,
+		sessionruntime.ProtocolFailureBlock,
+		sessionruntime.ProtocolFailurePeer,
+	}, sessionruntime.ProtocolFailureScope(255), projectProtocolFailureScope)
 
 	assertClosedProjection(t, "transfer stage", []transfer.TransferLifecycleStage{
 		transfer.TransferDiscoveryStarted, transfer.TransferGenerationCommitted,
@@ -146,6 +146,12 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		0, transfer.FilePublished, transfer.FilePaused, transfer.FileCollision,
 		transfer.FileItemBlocked, transfer.FileFailed,
 	}, transfer.FileSettlementKind(255), projectFileSettlement)
+	assertClosedProjection(t, "item block reason", []transfer.ItemBlockReason{
+		0, transfer.ItemBlockStateCorrupt, transfer.ItemBlockOwnershipUnknown,
+		transfer.ItemBlockPublicationAmbiguous, transfer.ItemBlockRetirementUncertain,
+		transfer.ItemBlockRevisionConflict, transfer.ItemBlockCheckpointInvalid,
+		transfer.ItemBlockOwnedObjectUnknown,
+	}, transfer.ItemBlockReason(255), projectItemBlockReason)
 	assertClosedProjection(t, "tree settlement", []transfer.DirectTreeSettlementKind{
 		0, transfer.DirectTreeSettlementSuccess, transfer.DirectTreeSettlementPartial,
 		transfer.DirectTreeSettlementPaused, transfer.DirectTreeSettlementFailed,
@@ -162,23 +168,37 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		osfs.FilesystemCheckpointRevisionConflict, osfs.FilesystemCheckpointOwnershipConflict,
 		osfs.FilesystemCheckpointInvalid,
 	}, osfs.FilesystemCheckpointDecision(255), projectFilesystemCheckpointDecision)
-	assertClosedProjection(t, "sender terminal transport", []sessionruntime.SenderTerminalTransportDisposition{
-		sessionruntime.SenderTerminalTransportAccepted,
-		sessionruntime.SenderTerminalTransportNotReached,
-		sessionruntime.SenderTerminalTransportUnsettled,
-		sessionruntime.SenderTerminalTransportRejected,
-		sessionruntime.SenderTerminalTransportRetired,
-	}, sessionruntime.SenderTerminalTransportDisposition("unknown"), projectSenderTerminalTransport)
-	assertClosedProjection(t, "sender terminal outcome", []sessionruntime.SenderTerminalOutcome{
-		sessionruntime.SenderTerminalOutcomeDelivered,
-		sessionruntime.SenderTerminalOutcomeDropped,
-		sessionruntime.SenderTerminalOutcomeUnknown,
-	}, sessionruntime.SenderTerminalOutcome("invalid"), projectSenderTerminalOutcome)
-	assertClosedProjection(t, "sender terminal decision", []sessionruntime.SenderTerminalDecision{
-		sessionruntime.SenderTerminalDecisionDelivered,
-		sessionruntime.SenderTerminalDecisionNaturalRetirement,
-		sessionruntime.SenderTerminalDecisionFailed,
-	}, sessionruntime.SenderTerminalDecision("invalid"), projectSenderTerminalDecision)
+	assertClosedProjection(t, "sender terminal send transport", []sessionruntime.SenderTerminalSendTransportDisposition{
+		sessionruntime.SenderTerminalSendTransportAccepted,
+		sessionruntime.SenderTerminalSendTransportNotReached,
+		sessionruntime.SenderTerminalSendTransportUnsettled,
+		sessionruntime.SenderTerminalSendTransportRejected,
+		sessionruntime.SenderTerminalSendTransportRetired,
+	}, sessionruntime.SenderTerminalSendTransportDisposition("unknown"), projectSenderTerminalSendTransport)
+	assertClosedProjection(t, "sender terminal send outcome", []sessionruntime.SenderTerminalSendOutcome{
+		sessionruntime.SenderTerminalSendOutcomeDelivered,
+		sessionruntime.SenderTerminalSendOutcomeDropped,
+		sessionruntime.SenderTerminalSendOutcomeUnknown,
+	}, sessionruntime.SenderTerminalSendOutcome("invalid"), projectSenderTerminalSendOutcome)
+	assertClosedProjection(t, "sender terminal send decision", []sessionruntime.SenderTerminalSendDecision{
+		sessionruntime.SenderTerminalSendDecisionDelivered,
+		sessionruntime.SenderTerminalSendDecisionNaturalRetirement,
+		sessionruntime.SenderTerminalSendDecisionFailed,
+	}, sessionruntime.SenderTerminalSendDecision("invalid"), projectSenderTerminalSendDecision)
+	assertClosedProjection(t, "sender session terminal trigger", []sessionruntime.SenderSessionTerminalTrigger{
+		sessionruntime.SenderSessionTerminalTriggerGracefulStop,
+		sessionruntime.SenderSessionTerminalTriggerForcedClose,
+		sessionruntime.SenderSessionTerminalTriggerPeerTerminal,
+		sessionruntime.SenderSessionTerminalTriggerPathsExhausted,
+		sessionruntime.SenderSessionTerminalTriggerRuntimeFailed,
+	}, sessionruntime.SenderSessionTerminalTrigger("invalid"), projectSenderSessionTerminalTrigger)
+	assertClosedProjection(t, "sender session terminal provenance", []sessionruntime.SenderSessionTerminalProvenance{
+		sessionruntime.SenderSessionTerminalProvenanceNormalStop,
+		sessionruntime.SenderSessionTerminalProvenanceCallerStop,
+		sessionruntime.SenderSessionTerminalProvenanceRemoteClose,
+		sessionruntime.SenderSessionTerminalProvenanceLaneRetirement,
+		sessionruntime.SenderSessionTerminalProvenanceLocalFault,
+	}, sessionruntime.SenderSessionTerminalProvenance("invalid"), projectSenderSessionTerminalProvenance)
 
 	assertClosedProjection(t, "catalog storage operation", []liveshare.CatalogStorageOperation{
 		liveshare.CatalogStorageCreating, liveshare.CatalogStorageCreated,
@@ -348,21 +368,81 @@ func TestProtocolOperationProjectionPreservesCorrelationAndClosedDiagnostics(t *
 		event.Cause() != clievent.ProtocolOperationCauseDeadline {
 		t.Fatalf("protocol operation projection = %#v", event)
 	}
+	failure, err := sessionruntime.NewResponseSendProtocolFailure(
+		sessionruntime.ProtocolFailureSpec{
+			RequestKind: protocolsession.MessageRequestBlocks,
+			WireScope:   sessionruntime.ProtocolFailureRevision, WireCode: 0x3008,
+			Retryable: true, RetryAfterMillis: 30_000, HasRetryAfter: true,
+			ProtocolSessionID: sessionID, ProtocolOperationID: operationID,
+			Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
+		},
+		sessionruntime.ProtocolFailureResponseSendSettlement{
+			Admitted: true, Settled: true, Outcome: protocolsession.SendOutcomeDelivered,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	operationError, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
 		Stage:             sessionruntime.ProtocolOperationSenderResponseSettled,
 		Role:              protocolsession.RoleSender,
 		ProtocolSessionID: sessionID, OperationID: operationID,
 		RequestKind:  protocolsession.MessageRequestBlocks,
 		ResponseKind: protocolsession.MessageOperationError, HasResponse: true,
-		OperationErrorScope: sessionruntime.ProtocolOperationErrorRevision,
-		OperationErrorCode:  0x3008, HasOperationError: true,
+		Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome: protocolsession.SendOutcomeDelivered, Failure: failure,
 		Cause: sessionruntime.ProtocolOperationCauseNone,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if scope, code, retryable, ok := operationError.OperationError(); !ok || scope != clievent.ProtocolOperationErrorRevision || code != 0x3008 || retryable {
-		t.Fatalf("projected operation error = scope=%d code=%x retryable=%v present=%v", scope, code, retryable, ok)
+	projectedFailure, present := operationError.Failure()
+	if !present || projectedFailure.WireScope() != clievent.ProtocolFailureRevision ||
+		projectedFailure.WireCode() != 0x3008 || !projectedFailure.Retryable() ||
+		projectedFailure.ProtocolSessionID() != operationError.ProtocolSessionID() ||
+		projectedFailure.ProtocolOperationID() != operationError.ProtocolOperationID() {
+		t.Fatalf("projected protocol failure = %#v, present=%v", projectedFailure, present)
+	}
+	if retryAfter, ok := projectedFailure.RetryAfterMillis(); !ok || retryAfter != 30_000 {
+		t.Fatalf("projected retry after = %d, present=%v", retryAfter, ok)
+	}
+	response, ok := projectedFailure.Settlement().ResponseSend()
+	if !ok || !response.Admitted || !response.Settled || response.Outcome != clievent.ProtocolSendDelivered {
+		t.Fatalf("projected response settlement = %#v, present=%v", response, ok)
+	}
+	receivedFailure, err := sessionruntime.NewReceivedAuthenticatedProtocolFailure(
+		sessionruntime.ProtocolFailureSpec{
+			RequestKind: protocolsession.MessageRequestBlocks,
+			WireScope:   sessionruntime.ProtocolFailureBlock, WireCode: 0x4003,
+			Retryable: true, RetryAfterMillis: 1_250, HasRetryAfter: true,
+			ProtocolSessionID: sessionID, ProtocolOperationID: operationID,
+			Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	received, err := ProjectProtocolOperation(clievent.CommandGet, sessionruntime.ProtocolOperationTrace{
+		Stage: sessionruntime.ProtocolOperationReceiverFailed, Role: protocolsession.RoleReceiver,
+		ProtocolSessionID: sessionID, OperationID: operationID,
+		RequestKind:  protocolsession.MessageRequestBlocks,
+		ResponseKind: protocolsession.MessageOperationError, HasResponse: true,
+		Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
+		HasSend: true, SendSettled: true, SendAdmitted: true,
+		SendOutcome: protocolsession.SendOutcomeDelivered,
+		Failure:     receivedFailure, Cause: sessionruntime.ProtocolOperationCauseProtocolFailure,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectedReceived, present := received.Failure()
+	if !present || projectedReceived.WireScope() != clievent.ProtocolFailureBlock ||
+		projectedReceived.Settlement().Kind() != clievent.ProtocolFailureReceivedAuthenticated {
+		t.Fatalf("projected received failure = %#v, present=%v", projectedReceived, present)
+	}
+	if response, present := projectedReceived.Settlement().ResponseSend(); present {
+		t.Fatalf("received failure exposed response settlement = %#v", response)
 	}
 	if _, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
 		Stage:             sessionruntime.ProtocolOperationReceiverFailed,
@@ -472,15 +552,32 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		t.Fatalf("filesystem failure classification = (%v, %v, %v, %t)", stage, step, nativeClass, present)
 	}
 
-	terminal, err := ProjectSenderTerminal(sessionruntime.SenderTerminalObservation{
+	terminalSend, err := ProjectSenderTerminalSend(sessionruntime.SenderTerminalSendObserved{
 		ProtocolSessionID: sessionID, Lane: sessionruntime.LaneIdentity{ID: 8, Epoch: 3},
-		Settled: true, TransportDisposition: sessionruntime.SenderTerminalTransportAccepted,
-		Outcome:  sessionruntime.SenderTerminalOutcomeDelivered,
-		Decision: sessionruntime.SenderTerminalDecisionDelivered,
+		Settled: true, TransportDisposition: sessionruntime.SenderTerminalSendTransportAccepted,
+		Outcome:  sessionruntime.SenderTerminalSendOutcomeDelivered,
+		Decision: sessionruntime.SenderTerminalSendDecisionDelivered,
 	})
-	if err != nil || terminal.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
-		terminal.Lane().ID() != 8 || !terminal.Settled() {
-		t.Fatalf("terminal projection = %#v, err %v", terminal, err)
+	if err != nil || terminalSend.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
+		terminalSend.Lane().ID() != 8 || !terminalSend.Settled() {
+		t.Fatalf("terminal send projection = %#v, err %v", terminalSend, err)
+	}
+	terminalRoot, err := ProjectSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
+		ProtocolSessionID: sessionID,
+		Trigger:           sessionruntime.SenderSessionTerminalTriggerRuntimeFailed,
+		Provenance:        sessionruntime.SenderSessionTerminalProvenanceLocalFault,
+	})
+	if err != nil || terminalRoot.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
+		terminalRoot.Trigger() != clievent.SenderSessionTerminalRuntimeFailed ||
+		terminalRoot.Provenance() != clievent.SenderSessionTerminalLocalFault {
+		t.Fatalf("terminal root projection = %#v, err %v", terminalRoot, err)
+	}
+	if _, err := ProjectSenderSessionTerminated(sessionruntime.SenderSessionTerminated{
+		ProtocolSessionID: sessionID,
+		Trigger:           sessionruntime.SenderSessionTerminalTriggerGracefulStop,
+		Provenance:        sessionruntime.SenderSessionTerminalProvenanceLocalFault,
+	}); err == nil {
+		t.Fatal("invalid sender terminal root pair was projected")
 	}
 
 	shareSecret, err := catalog.ShareInstanceFromBytes(bytes.Repeat([]byte{0x81}, catalog.IdentityBytes))

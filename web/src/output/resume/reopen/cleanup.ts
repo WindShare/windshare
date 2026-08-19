@@ -1,5 +1,9 @@
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-repository'
 import {
+  recordOutputException,
+  type OutputFailureSinks,
+} from '../../diagnostics'
+import {
   discardReopenedFileSystemAccessOutput,
   type FreshPageFileSystemAccessDiscardResult,
 } from '../../file-system-access/fresh-page-discard'
@@ -22,7 +26,10 @@ import type {
 } from './model'
 
 export interface ReceiveOperationOwnedCleanupExecutor {
-  cleanup(operation: ReopenedReceiveOperation): Promise<ReceiveOperationDiscardResult>
+  cleanup(
+    operation: ReopenedReceiveOperation,
+    failures?: OutputFailureSinks,
+  ): Promise<ReceiveOperationDiscardResult>
 }
 
 export interface PersistedReceiveOperationCleanupExecutorOptions {
@@ -44,14 +51,24 @@ implements ReceiveOperationOwnedCleanupExecutor {
     this.#openWorkspaceBackend = options.openWorkspaceBackend ?? openOriginPrivateRetainedArtifactBackend
   }
 
-  async cleanup(operation: ReopenedReceiveOperation): Promise<ReceiveOperationDiscardResult> {
+  async cleanup(
+    operation: ReopenedReceiveOperation,
+    failures?: OutputFailureSinks,
+  ): Promise<ReceiveOperationDiscardResult> {
     if (operation.kind === 'direct-tree') {
-      return projectDirectTreeDiscard(await this.#discardDirectTree({
-        operation,
-        ...(this.#checkpointDatabaseName === undefined
-          ? {}
-          : { databaseName: this.#checkpointDatabaseName }),
-      }))
+      try {
+        return projectDirectTreeDiscard(await this.#discardDirectTree({
+          operation,
+          ...(this.#checkpointDatabaseName === undefined
+            ? {}
+            : { databaseName: this.#checkpointDatabaseName }),
+        }))
+      } catch (error) {
+        recordOutputException(failures?.cleanup, error, {
+          recoveryDisposition: 'needs_attention',
+        })
+        throw error
+      }
     }
     let backend: OriginPrivateRetainedArtifactBackend | undefined
     try {
@@ -62,6 +79,9 @@ implements ReceiveOperationOwnedCleanupExecutor {
         ...(this.#checkpointDatabaseName === undefined
           ? {}
           : { checkpointDatabaseName: this.#checkpointDatabaseName }),
+        ...(failures === undefined
+          ? {}
+          : { diagnostics: { backend: 'origin_private', failures } as const }),
       })
       const request = await backend.cleanup.cleanupRequest()
       const result = operation.lifecycle.kind === 'expired' ||
@@ -140,8 +160,9 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
 
   async resume(
     descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    const operation = await this.#reopen.reopen(descriptor, 'continue')
+    const operation = await this.#reopen.reopen(descriptor, 'continue', failures)
     return Object.freeze({
       kind: 'continuation',
       continuation: classifyReopenedContinuation(operation),
@@ -150,12 +171,13 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
 
   async expire(
     descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    const operation = await this.#reopen.reopen(descriptor, 'cleanup')
+    const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
       return Object.freeze({
         kind: 'retention-cleanup',
-        result: await this.#cleanup.cleanup(operation),
+        result: await this.#cleanup.cleanup(operation, failures),
       })
     } finally {
       await operation.close()
@@ -164,10 +186,11 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
 
   async discard(
     descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
-    const operation = await this.#reopen.reopen(descriptor, 'cleanup')
+    const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
-      return await this.#cleanup.cleanup(operation)
+      return await this.#cleanup.cleanup(operation, failures)
     } finally {
       await operation.close()
     }

@@ -1,4 +1,10 @@
 import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
+import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
@@ -136,6 +142,7 @@ export interface BrowserHandoffPorts {
     durationMilliseconds: number,
   ) => ObjectUrlLease
   readonly now?: () => number
+  readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: BrowserHandoffTraceListener
 }
 
@@ -221,6 +228,7 @@ export function createBrowserHandoffPublisher(
 export function createWindowBrowserHandoffPublisher(
   windowPort: BrowserHandoffWindow,
   traceListener?: BrowserHandoffTraceListener,
+  diagnostics?: OutputDiagnosticsPorts,
 ): TimedBrowserHandoffPublisher {
   if (!browserSupportsObjectUrlHandoff(windowPort)) {
     throw new DOMException('Browser handoff is unavailable', 'NotSupportedError')
@@ -237,6 +245,7 @@ export function createWindowBrowserHandoffPublisher(
       })
     },
     now: () => Date.now(),
+    ...(diagnostics === undefined ? {} : { diagnostics }),
     ...(traceListener === undefined ? {} : { trace: traceListener }),
   })
 }
@@ -303,6 +312,7 @@ export async function openPortableBrowserHandoff(input: Readonly<{
   attemptId: string
   windowPort: PortableHandoffWindow
   trace?: BrowserHandoffTraceListener
+  diagnostics?: OutputDiagnosticsPorts
 }>): Promise<PortableHandoffSession> {
   if (!browserSupportsPortableHandoff(input.windowPort)) {
     throw new DOMException('Portable browser handoff is unavailable', 'NotSupportedError')
@@ -311,7 +321,11 @@ export async function openPortableBrowserHandoff(input: Readonly<{
     intent: input.intent,
     admission: input.admission,
     attemptId: input.attemptId,
-    publisher: createWindowBrowserHandoffPublisher(input.windowPort, input.trace),
+    publisher: createWindowBrowserHandoffPublisher(
+      input.windowPort,
+      input.trace,
+      input.diagnostics,
+    ),
     assembly: {
       Blob: input.windowPort.Blob,
       WritableStream: input.windowPort.WritableStream,
@@ -502,7 +516,13 @@ function publishBrowserHandoff(
     anchor.href = objectUrl
     anchor.hidden = true
     ports.appendAnchor(anchor)
-  } catch {
+  } catch (error) {
+    recordOutputException(ports.diagnostics?.failures?.publication, error)
+    emitOutputTrace(ports.diagnostics?.trace, () =>
+      outputTraceEvent('publication', {
+        backend: ports.diagnostics?.backend ?? 'portable',
+        transition: 'not_committed',
+      }))
     try {
       lease?.cancel()
     } catch {
@@ -528,6 +548,11 @@ function publishBrowserHandoff(
     // The finite URL lease remains authoritative after the boundary.
   }
   removeAnchor(anchor)
+  emitOutputTrace(ports.diagnostics?.trace, () =>
+    outputTraceEvent('publication', {
+      backend: ports.diagnostics?.backend ?? 'portable',
+      transition: 'committed',
+    }))
   const result: DownloadStarted = request.context.attemptKind === 'workspace'
     ? Object.freeze({
         kind: 'download-started' as const,

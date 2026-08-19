@@ -1,3 +1,7 @@
+import {
+  createFailureCorrelation,
+  type FailureCorrelation,
+} from '../../diagnostics/incident'
 import type { SelectionSpec } from '../intent'
 import {
   MAX_PROJECTION_GENERATION_REFERENCES,
@@ -22,7 +26,7 @@ import {
   type ProjectionEpoch,
   type ProjectionMetrics,
   type ProjectionTraceEvent,
-  type ProjectionTraceSink,
+  type ProjectionTraceSource,
   type SelectedRootFact,
   type SelectionProjectionEvent,
   type SelectionProjectionState,
@@ -88,11 +92,11 @@ export function reduceSelectionProjection(
 }
 
 export class SelectionProjectionController {
-  readonly #trace: ProjectionTraceSink | undefined
+  readonly #trace: ProjectionTraceSource | undefined
   #lastEpoch = 0n
   #state: SelectionProjectionState | undefined
 
-  constructor(trace?: ProjectionTraceSink) {
+  constructor(trace?: ProjectionTraceSource) {
     this.#trace = trace
   }
 
@@ -104,14 +108,20 @@ export class SelectionProjectionController {
   }
 
   /** A caller must begin again for every selection mutation, even if rules look equivalent. */
-  beginSelection(selection: SelectionSpec, protocolSessionId?: string): SelectionProjectionState {
+  beginSelection(
+    selection: SelectionSpec,
+    correlation?: FailureCorrelation,
+  ): SelectionProjectionState {
     const epoch = nextProjectionEpoch(this.#lastEpoch)
     this.#lastEpoch = epoch
     this.#state = createSelectionProjectionState(selection, epoch)
-    this.#trace?.(Object.freeze({
-      name: 'receive.projection.started',
-      projection_epoch: epoch,
-      ...(protocolSessionId === undefined ? {} : { protocol_session_id: protocolSessionId }),
+    this.#emit(() => Object.freeze({
+      name: 'projection_transition',
+      transition: 'started',
+      projectionEpoch: epoch,
+      ...(correlation === undefined
+        ? {}
+        : { correlation: createFailureCorrelation(correlation) }),
     }))
     return this.#state
   }
@@ -142,11 +152,12 @@ export class SelectionProjectionController {
     if (staleEpoch === current.projection.epoch) {
       throw new SelectionProjectionError('current-epoch events must pass through the reducer')
     }
-    this.#trace?.(Object.freeze({
-      name: 'receive.projection.stale_event_dropped',
-      current_projection_epoch: current.projection.epoch,
-      stale_projection_epoch: staleEpoch,
-      event_class: eventClass,
+    this.#emit(() => Object.freeze({
+      name: 'projection_transition',
+      transition: 'stale_event_dropped',
+      currentProjectionEpoch: current.projection.epoch,
+      staleProjectionEpoch: staleEpoch,
+      eventClass: eventClass === 'catalog-evidence' ? 'catalog_evidence' : 'discovery_result',
     }))
     return current
   }
@@ -158,25 +169,37 @@ export class SelectionProjectionController {
   ): void {
     if (after === before) return
     if (event.kind === 'retryable-failure') {
-      this.#trace?.(Object.freeze({
-        name: 'receive.projection.retryable_failure',
-        projection_epoch: after.projection.epoch,
-        shape_proof: after.projection.proof.kind,
-        retryable_discovery_reason: event.reason,
+      this.#emit(() => Object.freeze({
+        name: 'projection_transition',
+        transition: 'retryable_failure',
+        projectionEpoch: after.projection.epoch,
+        shapeProof: after.projection.proof.kind,
+        retryableDiscoveryReason: event.reason,
       }))
       return
     }
     if (event.kind === 'retry-started') {
-      this.#trace?.(Object.freeze({
-        name: 'receive.projection.retry_started',
-        projection_epoch: after.projection.epoch,
-        retained_shape_proof: after.projection.proof.kind,
+      this.#emit(() => Object.freeze({
+        name: 'projection_transition',
+        transition: 'retry_started',
+        projectionEpoch: after.projection.epoch,
+        retainedShapeProof: after.projection.proof.kind,
       }))
       return
     }
-    this.#trace?.(refinedTrace(after))
+    this.#emit(() => refinedTrace(after))
     if (before.projection.proof.kind === 'unknown' && after.projection.proof.kind !== 'unknown') {
-      this.#trace?.(provenTrace(after))
+      this.#emit(() => provenTrace(after))
+    }
+  }
+
+  #emit(build: () => ProjectionTraceEvent): void {
+    try {
+      const observer = this.#trace?.current
+      if (observer === undefined) return
+      observer(build())
+    } catch {
+      // Projection tracing is passive and cannot alter selection authority.
     }
   }
 }
@@ -499,14 +522,15 @@ function withDiscovery(
 
 function refinedTrace(state: SelectionProjectionState): ProjectionTraceEvent {
   return Object.freeze({
-    name: 'receive.projection.refined',
-    projection_epoch: state.projection.epoch,
-    shape_proof: state.projection.proof.kind,
-    discovery_state: state.discovery.kind,
-    file_count_lower_bound: state.projection.metrics.fileCountLowerBound,
-    directory_count_lower_bound: state.projection.metrics.directoryCountLowerBound,
-    byte_count_lower_bound: state.projection.metrics.byteCountLowerBound,
-    unsettled_target_count: state.projection.unsettledTargets.length,
+    name: 'projection_transition',
+    transition: 'refined',
+    projectionEpoch: state.projection.epoch,
+    shapeProof: state.projection.proof.kind,
+    discoveryState: state.discovery.kind,
+    fileCountLowerBound: state.projection.metrics.fileCountLowerBound,
+    directoryCountLowerBound: state.projection.metrics.directoryCountLowerBound,
+    byteCountLowerBound: state.projection.metrics.byteCountLowerBound,
+    unsettledTargetCount: state.projection.unsettledTargets.length,
   })
 }
 
@@ -516,9 +540,10 @@ function provenTrace(state: SelectionProjectionState): ProjectionTraceEvent {
     throw new SelectionProjectionError('unknown proof cannot produce a proven trace')
   }
   return Object.freeze({
-    name: 'receive.projection.proven',
-    projection_epoch: state.projection.epoch,
-    shape_proof: proof.kind,
-    layout_basis_class: proof.kind === 'tree' ? proof.layoutBasis.kind : 'unsettled',
+    name: 'projection_transition',
+    transition: 'proven',
+    projectionEpoch: state.projection.epoch,
+    shapeProof: proof.kind,
+    layoutBasisClass: proof.kind === 'tree' ? proof.layoutBasis.kind : 'unsettled',
   })
 }

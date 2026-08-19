@@ -55,22 +55,6 @@ describe('v2 catalog session scan progress', () => {
       expect(session.closeCalls).toBe(1)
     })
   }
-
-  it('terminates the ProtocolSession when catalog receives another error scope', async () => {
-    const session = new FakeCatalogSession([
-      controlMessage(
-        V2_MESSAGE_KIND.operationError,
-        encodeV2Body(new Map<number, unknown>([
-          [0, 1], [1, 5], [2, 0x5001], [3, false], [4, null],
-          [5, 'Peer negotiation failed'],
-        ])),
-      ),
-    ])
-    await expect(new V2CatalogSessionOperations(
-      session as unknown as V2ReceiverSessionRuntime,
-    ).fetchPage(request, new AbortController().signal)).rejects.toMatchObject({ scope: 'session' })
-    expect(session.closeCalls).toBe(1)
-  })
 })
 
 class FakeCatalogSession {

@@ -1,5 +1,13 @@
+import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import { dependencyContractFault } from '../fault'
 import type { ReceiveIntent } from '../intent'
+import {
+  materializeClassifiedTransferFailure,
+  normalizeV2FileTransferFailure,
+  normalizedV2FileTransferFault,
+  type ClassifiedTransferFailure,
+} from '../job/failures'
 import type { TransferWorkerSettlement } from '../outcome'
 import type {
   MaterializationSummary,
@@ -24,19 +32,33 @@ export class V2OutputSettlementTimeoutError extends Error {
   }
 }
 
-/** Keeps the transfer failure user-visible while retaining every failed safety action as cause. */
+/**
+ * Carries reviewed initiating and consequence semantics across the settlement boundary.
+ * Native errors remain at their immediate classifier and cannot become later policy inputs.
+ */
 export class V2TransferFailureSettlementError extends Error {
-  readonly transferFailure: unknown
-  readonly settlementFailures: readonly unknown[]
+  readonly transferFailure: ClassifiedTransferFailure | undefined
+  readonly settlementFailures: readonly ClassifiedTransferFailure[]
+  readonly trigger: ClassifiedTransferFailure
 
-  constructor(transferFailure: unknown, settlementFailures: readonly unknown[]) {
-    const failures = Object.freeze([...settlementFailures])
-    super(primaryTransferFailureMessage(transferFailure), {
-      cause: new AggregateError(failures, 'Transfer failure could not reach a proven output state'),
-    })
+  constructor(
+    transferFailure: ClassifiedTransferFailure | undefined,
+    settlementFailures: readonly ClassifiedTransferFailure[],
+  ) {
+    const initiating = transferFailure === undefined
+      ? undefined
+      : materializeClassifiedTransferFailure(transferFailure, undefined)
+    const failures = Object.freeze(settlementFailures.map(failure =>
+      materializeClassifiedTransferFailure(failure, undefined)))
+    const trigger = initiating ?? failures[0]
+    if (trigger === undefined) {
+      throw new TypeError('Failed output settlement requires reviewed failure authority')
+    }
+    super('Transfer failed before output settlement completed')
     this.name = 'V2TransferFailureSettlementError'
-    this.transferFailure = transferFailure
+    this.transferFailure = initiating
     this.settlementFailures = failures
+    this.trigger = trigger
   }
 }
 
@@ -70,6 +92,8 @@ export async function pauseFailedV2Execution(options: {
   readonly worker: TransferWorkerSettlement
   readonly materialization: MaterializationSummary
   readonly reason: unknown
+  readonly failureTrigger?: ClassifiedTransferFailure
+  readonly incidentScope?: IncidentScopeHandle
   readonly timeoutMilliseconds: number
   readonly clock?: V2OutputSettlementClock
   readonly validateState?: (state: ReceiveLifecycleState) => ReceiveLifecycleState
@@ -108,18 +132,25 @@ export async function pauseFailedV2Execution(options: {
         ),
       ))
     } catch (unknownSettlementFailure) {
-      throw new V2TransferFailureSettlementError(options.reason, [
-        settlementFailure,
-        unknownSettlementFailure,
-      ])
+      const settlementFailures = [settlementFailure, unknownSettlementFailure]
+        .map(classifySettlementConsequence)
+      throw new V2TransferFailureSettlementError(options.failureTrigger, settlementFailures)
     }
   }
-}
 
-function primaryTransferFailureMessage(error: unknown): string {
-  return error instanceof Error && error.message.trim().length > 0
-    ? error.message
-    : 'Transfer failed before output settlement completed'
+  function classifySettlementConsequence(error: unknown): ClassifiedTransferFailure {
+    const normalized = normalizeV2FileTransferFailure(error, {
+      stage: 'settlement',
+      relation: 'consequence',
+      ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
+    })
+    if (normalized.kind === 'fault') return normalized.diagnostic.classification
+    return normalizedV2FileTransferFault(dependencyContractFault(), {
+      stage: 'settlement',
+      relation: 'consequence',
+      ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
+    }).diagnostic.classification
+  }
 }
 
 class SettlementBudget {

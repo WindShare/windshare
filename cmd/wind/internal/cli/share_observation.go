@@ -31,6 +31,10 @@ type detailedDiagnosticsPreference interface {
 	detailedDiagnosticsEnabled() bool
 }
 
+type traceRecordingPreference interface {
+	traceRecordingEnabled() bool
+}
+
 type shareObservations struct {
 	observer shareEventObserver
 
@@ -166,9 +170,18 @@ func (observations *shareObservations) senderAttemptContext(
 	observations.emitProjectedContext(ctx, gate, clievent.ObserverLossSenderAttempt, event, err)
 }
 
-func (observations *shareObservations) ObserveSenderTerminal(value sessionruntime.SenderTerminalObservation) {
-	event, err := commandprojection.ProjectSenderTerminal(value)
-	observations.emitProjected(clievent.ObserverLossProtocolOperation, event, err)
+func (observations *shareObservations) ObserveSenderTerminalSend(
+	value sessionruntime.SenderTerminalSendObserved,
+) {
+	event, err := commandprojection.ProjectSenderTerminalSend(value)
+	observations.emitProjected(clievent.ObserverLossSenderTerminalSend, event, err)
+}
+
+func (observations *shareObservations) ObserveSenderSessionTerminated(
+	value sessionruntime.SenderSessionTerminated,
+) {
+	event, err := commandprojection.ProjectSenderSessionTerminated(value)
+	observations.emitProjected(clievent.ObserverLossSenderSessionTerminal, event, err)
 }
 
 func (observations *shareObservations) TraceProtocolOperation(value sessionruntime.ProtocolOperationTrace) {
@@ -177,11 +190,21 @@ func (observations *shareObservations) TraceProtocolOperation(value sessionrunti
 }
 
 func (observations *shareObservations) protocolTracer() sessionruntime.ProtocolOperationTracer {
-	if observations == nil || observations.observer == nil {
+	if !observations.detailedDiagnosticsEnabled() {
 		return nil
 	}
-	preference, ok := observations.observer.(detailedDiagnosticsPreference)
-	if !ok || !preference.detailedDiagnosticsEnabled() {
+	return observations
+}
+
+func (observations *shareObservations) terminalSendObserver() sessionruntime.SenderTerminalSendObserver {
+	if !observations.traceRecordingEnabled() {
+		return nil
+	}
+	return observations
+}
+
+func (observations *shareObservations) sessionTerminalObserver() sessionruntime.SenderSessionTerminalObserver {
+	if !observations.traceRecordingEnabled() {
 		return nil
 	}
 	return observations
@@ -253,6 +276,14 @@ func (observations *shareObservations) detailedDiagnosticsEnabled() bool {
 	}
 	preference, ok := observations.observer.(detailedDiagnosticsPreference)
 	return ok && preference.detailedDiagnosticsEnabled()
+}
+
+func (observations *shareObservations) traceRecordingEnabled() bool {
+	if observations == nil || observations.observer == nil {
+		return false
+	}
+	preference, ok := observations.observer.(traceRecordingPreference)
+	return ok && preference.traceRecordingEnabled()
 }
 
 func (observations *shareObservations) relayObservationCapacity() int {

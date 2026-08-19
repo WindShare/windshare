@@ -133,12 +133,12 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 		name           string
 		addReplacement bool
 		wantError      bool
-		wantDecision   SenderTerminalDecision
+		wantDecision   SenderTerminalSendDecision
 	}{
-		{name: "last writer retires", wantDecision: SenderTerminalDecisionNaturalRetirement},
+		{name: "last writer retires", wantDecision: SenderTerminalSendDecisionNaturalRetirement},
 		{
 			name: "usable replacement remains", addReplacement: true, wantError: true,
-			wantDecision: SenderTerminalDecisionFailed,
+			wantDecision: SenderTerminalSendDecisionFailed,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -156,13 +156,13 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 						t.Fatalf("add usable replacement: %v", err)
 					}
 				}
-				observed := make(chan SenderTerminalObservation, 1)
+				observed := make(chan SenderTerminalSendObserved, 1)
 				result := make(chan error, 1)
 				go func() {
 					result <- (senderOutbound{
 						runtime: runtime, privateKey: privateKey,
-						observer: SenderTerminalObserverFunc(
-							func(observation SenderTerminalObservation) { observed <- observation },
+						observer: SenderTerminalSendObserverFunc(
+							func(observation SenderTerminalSendObserved) { observed <- observation },
 						),
 					}).sendTerminalRecipients(
 						context.Background(), context.Background(), body, recipients,
@@ -186,8 +186,8 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 					t.Fatalf("naturally retired receipt failed terminal fanout: %v", terminalErr)
 				}
 				observation := <-observed
-				if observation.TransportDisposition != SenderTerminalTransportNotReached ||
-					observation.Outcome != SenderTerminalOutcomeDropped ||
+				if observation.TransportDisposition != SenderTerminalSendTransportNotReached ||
+					observation.Outcome != SenderTerminalSendOutcomeDropped ||
 					observation.Decision != test.wantDecision {
 					t.Fatalf("post-admission retirement observation=%+v", observation)
 				}
@@ -208,12 +208,12 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 		name           string
 		addReplacement bool
 		wantError      bool
-		wantDecision   SenderTerminalDecision
+		wantDecision   SenderTerminalSendDecision
 	}{
-		{name: "last lane cancellation", wantDecision: SenderTerminalDecisionNaturalRetirement},
+		{name: "last lane cancellation", wantDecision: SenderTerminalSendDecisionNaturalRetirement},
 		{
 			name: "usable replacement remains", addReplacement: true, wantError: true,
-			wantDecision: SenderTerminalDecisionFailed,
+			wantDecision: SenderTerminalSendDecisionFailed,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -244,13 +244,13 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 					}
 				}
 
-				observed := make(chan SenderTerminalObservation, 1)
+				observed := make(chan SenderTerminalSendObserved, 1)
 				terminalResult := make(chan error, 1)
 				go func() {
 					terminalResult <- (senderOutbound{
 						runtime: runtime, privateKey: privateKey,
-						observer: SenderTerminalObserverFunc(
-							func(observation SenderTerminalObservation) { observed <- observation },
+						observer: SenderTerminalSendObserverFunc(
+							func(observation SenderTerminalSendObserved) { observed <- observation },
 						),
 					}).sendTerminalRecipients(
 						context.Background(), context.Background(), body, recipients,
@@ -282,8 +282,8 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 				}
 				observation := <-observed
 				if !observation.Settled ||
-					observation.TransportDisposition != SenderTerminalTransportRejected ||
-					observation.Outcome != SenderTerminalOutcomeDropped ||
+					observation.TransportDisposition != SenderTerminalSendTransportRejected ||
+					observation.Outcome != SenderTerminalSendOutcomeDropped ||
 					observation.Decision != test.wantDecision {
 					t.Fatalf("cancellation rejection observation=%+v", observation)
 				}

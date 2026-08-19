@@ -15,6 +15,8 @@ import {
   createSelectionSpec,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
+import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/fault'
+import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
 import type { SelectionMeasure } from '../../src/transfer/measure'
 import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
 import {
@@ -130,7 +132,6 @@ async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonl
     outputs,
     ownsJoinedShare: candidate => candidate === share,
     onProgress: () => undefined,
-    onTrace: () => undefined,
     onActionError: error => failures.push(error),
     onFailure: error => failures.push(error),
   })
@@ -310,8 +311,10 @@ function workerWithFileOutcome(outcome: TransferFileOutcome): TransferWorkerSett
   failures.record(Object.freeze({
     kind: 'file',
     fileId: fileId(FILE_ID),
-    reason: new Error('bounded diagnostic is not presentation authority'),
-  }), outcome)
+    classification: normalizedV2FileTransferFault(
+      sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable),
+    ).diagnostic.classification,
+  }), 1n, outcome)
   return transferWorkerSettlement('CompletedWithErrors', failures.snapshot())
 }
 

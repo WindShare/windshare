@@ -16,7 +16,8 @@ func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T)
 		reflect.TypeFor[LaneAdopted](),
 		reflect.TypeFor[RelayLifecycleObserved](), reflect.TypeFor[WebRTCLifecycleObserved](),
 		reflect.TypeFor[PeerAttemptObserved](), reflect.TypeFor[TransferLifecycleObserved](),
-		reflect.TypeFor[FilesystemOutputObserved](), reflect.TypeFor[SenderTerminalObserved](),
+		reflect.TypeFor[FilesystemOutputObserved](), reflect.TypeFor[SenderTerminalSendObserved](),
+		reflect.TypeFor[SenderSessionTerminated](), reflect.TypeFor[ProtocolOperationObserved](),
 		reflect.TypeFor[CatalogStorageObserved](),
 		reflect.TypeFor[RootPrefetchObserved](),
 	}

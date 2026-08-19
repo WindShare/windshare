@@ -1,3 +1,9 @@
+import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
 import type { PreparationFileEntry } from '../workspace/preparation'
 import {
   type BeginOutputFileResult,
@@ -50,6 +56,7 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
   readonly #entry: PreparationFileEntry
   readonly #handoff: PortableHandoffSession
   readonly #inner: SingleFileStreamOutputSession
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #transaction: OutputFileTransaction | undefined
   #beginPending: Promise<BeginOutputFileResult> | undefined
 
@@ -57,10 +64,12 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
     intent: ReceiveIntent
     entry: PreparationFileEntry
     handoff: PortableHandoffSession
+    diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.#intent = input.intent
     this.#entry = input.entry
     this.#handoff = input.handoff
+    this.#diagnostics = input.diagnostics
     this.#inner = new SingleFileStreamOutputSession(
       `${input.intent.plan.kind === 'portable-handoff'
         ? input.intent.plan.portable.portablePlanId
@@ -82,14 +91,19 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
     if (this.#beginPending !== undefined) {
       throw new OutputSessionBindingError('portable original output accepts exactly one file')
     }
-    const request = snapshotOutputFileRequest(input)
-    assertPreparedFileRequest(this.#intent, this.#entry, request, this.capabilities)
+    const request = this.#snapshotRequest(input)
     const opening = this.#inner.beginFile(request, signal).then((result) => {
-      this.#transaction = result.transaction
+      this.#transaction = observePortableTransaction(
+        result.transaction,
+        this.#diagnostics,
+      )
       return Object.freeze({
         ...result,
         transaction: this.#transaction,
       })
+    }).catch((error: unknown) => {
+      recordPortableFailure(this.#diagnostics, 'output_write', error)
+      throw error
     })
     this.#beginPending = opening
     return opening
@@ -98,7 +112,9 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
   async finalize(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
     if (this.#transaction === undefined) {
-      throw new PortableHandoffError('preparation-invalidated')
+      const error = new PortableHandoffError('preparation-invalidated')
+      recordPortableFailure(this.#diagnostics, 'output_commit', error)
+      throw error
     }
   }
 
@@ -113,11 +129,29 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
         // A failed revision open leaves the stream unlocked for direct cleanup.
       }
     }
-    if (!this.#handoff.writable.locked) await this.#handoff.writable.abort(reason)
+    if (!this.#handoff.writable.locked) {
+      try {
+        await this.#handoff.writable.abort(reason)
+      } catch (error) {
+        recordPortableFailure(this.#diagnostics, 'cleanup', error)
+        throw error
+      }
+    }
   }
 
   retryCleanup(): Promise<void> {
     return Promise.resolve()
+  }
+
+  #snapshotRequest(input: OutputFileRequest): OutputFileRequest {
+    try {
+      const request = snapshotOutputFileRequest(input)
+      assertPreparedFileRequest(this.#intent, this.#entry, request, this.capabilities)
+      return request
+    } catch (error) {
+      recordPortableFailure(this.#diagnostics, 'output_write', error)
+      throw error
+    }
   }
 }
 
@@ -138,10 +172,12 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
   readonly #handoff: PortableHandoffSession
   readonly #createSpool: () => ZipCentralDirectorySpool
   readonly #createWriter: PortableZipArchiveWriterFactory
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #writer: ZipArchiveWriter | undefined
   #entryIndex = 0
   #tail: Promise<void> = Promise.resolve()
   #failure: unknown
+  readonly #diagnosticFailureStages = new Set<PortableDiagnosticFailureStage>()
   #state: ZipSessionState = 'open'
   #abortPromise: Promise<void> | undefined
 
@@ -152,11 +188,13 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
     handoff: PortableHandoffSession
     createSpool: () => ZipCentralDirectorySpool
     createWriter?: PortableZipArchiveWriterFactory
+    diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.#intent = input.intent
     this.#layout = input.layout
     this.#handoff = input.handoff
     this.#createSpool = input.createSpool
+    this.#diagnostics = input.diagnostics
     this.#createWriter = input.createWriter ?? ((output, spool, layout) =>
       new StreamingZipArchiveWriter(output, spool, {
         kind: 'sealed',
@@ -223,22 +261,30 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
         revision.exactSize,
         [],
       )
-      const transaction = new PortableZipMemberTransaction({
-        member,
-        revision,
-        ownership,
-        committed: () => {
-          this.#entryIndex += 1
-          finish()
-        },
-        failed: (error) => {
+      const transaction = observePortableTransaction(
+        new PortableZipMemberTransaction({
+          member,
+          revision,
+          ownership,
+          committed: () => {
+            this.#entryIndex += 1
+            finish()
+          },
+          failed: (error) => {
+            this.#recordFailure(error)
+            finish(error)
+          },
+        }),
+        this.#diagnostics,
+        (stage, error) => {
           this.#recordFailure(error)
-          finish(error)
+          this.#recordDiagnosticFailure(stage, error)
         },
-      })
+      )
       return Object.freeze({ revision, transaction, durableRanges })
     }).catch((error: unknown) => {
       this.#recordFailure(error)
+      this.#recordDiagnosticFailure('output_write', error)
       finish(error)
       this.abort(error).catch(() => undefined)
       throw error
@@ -247,6 +293,21 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
   }
 
   async finalize(signal: AbortSignal): Promise<void> {
+    try {
+      await this.#finalize(signal)
+    } catch (error) {
+      const cleanupFailed = this.#writer?.cleanupPending === true
+      if (cleanupFailed || this.#failure === undefined) {
+        this.#recordDiagnosticFailure(
+          cleanupFailed ? 'cleanup' : 'output_commit',
+          error,
+        )
+      }
+      throw error
+    }
+  }
+
+  async #finalize(signal: AbortSignal): Promise<void> {
     if (this.#state !== 'open') throw new Error('portable ZIP output is already settled')
     this.#state = 'closing'
     await this.#tail
@@ -285,6 +346,7 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
       () => { this.#state = 'closed' },
       (error: unknown) => {
         this.#recordFailure(error)
+        this.#recordDiagnosticFailure('cleanup', error)
         throw error
       },
     )
@@ -292,8 +354,13 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
     return this.#abortPromise
   }
 
-  retryCleanup(): Promise<void> {
-    return this.#writer?.retryCleanup() ?? Promise.resolve()
+  async retryCleanup(): Promise<void> {
+    try {
+      await (this.#writer?.retryCleanup() ?? Promise.resolve())
+    } catch (error) {
+      this.#recordDiagnosticFailure('cleanup', error)
+      throw error
+    }
   }
 
   #nextFile(
@@ -332,6 +399,15 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
       this.#layout,
     )
     return this.#writer
+  }
+
+  #recordDiagnosticFailure(
+    stage: PortableDiagnosticFailureStage,
+    error: unknown,
+  ): void {
+    if (this.#diagnosticFailureStages.has(stage)) return
+    this.#diagnosticFailureStages.add(stage)
+    recordPortableFailure(this.#diagnostics, stage, error)
   }
 
   #recordFailure(error: unknown): void {
@@ -450,6 +526,85 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
 
   #requireOpen(): void {
     if (this.#settled) throw new Error('portable ZIP member is settled')
+  }
+}
+
+type PortableDiagnosticFailureStage =
+  | 'output_write'
+  | 'output_commit'
+  | 'cleanup'
+
+function observePortableTransaction(
+  transaction: OutputFileTransaction,
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  onFailure?: (stage: PortableDiagnosticFailureStage, error: unknown) => void,
+): OutputFileTransaction {
+  const observedFailureStages = new Set<PortableDiagnosticFailureStage>()
+  const observe = async <Result>(
+    stage: PortableDiagnosticFailureStage,
+    operation: () => Promise<Result>,
+  ): Promise<Result> => {
+    try {
+      return await operation()
+    } catch (error) {
+      if (!observedFailureStages.has(stage)) {
+        observedFailureStages.add(stage)
+        if (onFailure === undefined) recordPortableFailure(diagnostics, stage, error)
+        else onFailure(stage, error)
+      }
+      throw error
+    }
+  }
+  const observed: OutputFileTransaction = {
+    writeRange: (offset, data, signal) =>
+      observe('output_write', () => transaction.writeRange(offset, data, signal)),
+    checkpoint: signal =>
+      observe('output_write', () => transaction.checkpoint(signal)),
+    commit: async signal => {
+      await observe('output_commit', () => transaction.commit(signal))
+      emitOutputTrace(diagnostics?.trace, () =>
+        outputTraceEvent('output_write', {
+          backend: 'portable',
+          transition: 'transaction_committed',
+        }))
+    },
+    retire: reason =>
+      observe('cleanup', () => transaction.retire(reason)),
+    pause: reason =>
+      observe('cleanup', () => transaction.pause(reason)),
+  }
+  return Object.freeze(observed)
+}
+
+function recordPortableFailure(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  stage: PortableDiagnosticFailureStage,
+  error: unknown,
+): void {
+  switch (stage) {
+    case 'output_write':
+      recordOutputException(diagnostics?.failures?.outputWrite, error)
+      emitOutputTrace(diagnostics?.trace, () =>
+        outputTraceEvent('output_write', {
+          backend: 'portable',
+          transition: 'transaction_failed',
+        }))
+      return
+    case 'output_commit':
+      recordOutputException(diagnostics?.failures?.outputCommit, error)
+      emitOutputTrace(diagnostics?.trace, () =>
+        outputTraceEvent('output_write', {
+          backend: 'portable',
+          transition: 'commit_failed',
+        }))
+      return
+    case 'cleanup':
+      recordOutputException(diagnostics?.failures?.cleanup, error)
+      emitOutputTrace(diagnostics?.trace, () =>
+        outputTraceEvent('cleanup', {
+          backend: 'portable',
+          transition: 'failed',
+        }))
   }
 }
 
