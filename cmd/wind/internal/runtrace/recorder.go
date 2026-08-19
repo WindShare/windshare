@@ -19,12 +19,13 @@ const (
 )
 
 var (
-	ErrInvalidTarget        = errors.New("trace target is invalid")
-	ErrInvalidConfig        = errors.New("trace configuration is invalid")
-	ErrRunIDUnavailable     = errors.New("trace run identity is unavailable")
-	ErrTraceFileUnavailable = errors.New("trace file is unavailable")
-	ErrTraceNameUnavailable = errors.New("trace filename is unavailable")
-	ErrTraceExists          = errors.New("trace path already exists")
+	ErrInvalidTarget             = errors.New("trace target is invalid")
+	ErrInvalidConfig             = errors.New("trace configuration is invalid")
+	ErrRunIDUnavailable          = errors.New("trace run identity is unavailable")
+	ErrTraceDirectoryUnavailable = errors.New("trace directory is unavailable")
+	ErrTraceFileUnavailable      = errors.New("trace file is unavailable")
+	ErrTraceNameUnavailable      = errors.New("trace filename is unavailable")
+	ErrTraceExists               = errors.New("trace path already exists")
 )
 
 type Clock interface {
@@ -46,13 +47,15 @@ type TraceFile interface {
 // OpenFile is an exclusive-create seam: collisions must remain distinguishable
 // so directory targets can choose a new identity without inspecting existing evidence.
 type OpenFile func(path string) (TraceFile, error)
+type EnsureDirectory func(path string) error
 type NewTicker func(interval time.Duration) Ticker
 
 type Dependencies struct {
-	Clock     Clock
-	Random    io.Reader
-	OpenFile  OpenFile
-	NewTicker NewTicker
+	Clock           Clock
+	Random          io.Reader
+	EnsureDirectory EnsureDirectory
+	OpenFile        OpenFile
+	NewTicker       NewTicker
 }
 
 type Config struct {
@@ -176,6 +179,9 @@ func openTarget(
 ) (TraceFile, string, string, error) {
 	attempts := 1
 	if target.kind == targetRunDirectory {
+		if err := dependencies.EnsureDirectory(target.path); err != nil {
+			return nil, "", "", ErrTraceDirectoryUnavailable
+		}
 		attempts = directoryCreateAttempts
 	}
 	for range attempts {

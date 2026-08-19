@@ -91,7 +91,7 @@ func bindObservationOptions(flags *flag.FlagSet, options *observationOptions) er
 	flags.BoolVar(&options.verbose, "v", false, "show diagnostic milestones")
 	flags.BoolVar(&options.verbose, "verbose", false, "show diagnostic milestones")
 	flags.Var(observationTraceFlag{selection: &options.trace, mode: observationTraceExact}, "trace", "write privacy-safe NDJSON trace to an exact new file")
-	flags.Var(observationTraceFlag{selection: &options.trace, mode: observationTraceDirectory}, "trace-dir", "write privacy-safe NDJSON trace to a generated file in this directory")
+	flags.Var(observationTraceFlag{selection: &options.trace, mode: observationTraceDirectory}, "trace-dir", "write privacy-safe NDJSON trace to a generated file in this directory, creating it if needed")
 	return nil
 }
 
