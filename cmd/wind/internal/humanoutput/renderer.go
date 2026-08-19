@@ -263,7 +263,7 @@ func (visitor eventVisitor) VisitLaneAdopted(event clievent.LaneAdopted) error {
 }
 
 // The relay/WebRTC lifecycle, transfer internals, filesystem authority,
-// terminal settlement, catalog storage, and root-prefetch records are stable trace decisions.
+// terminal root/send settlement, catalog storage, and root-prefetch records are stable trace decisions.
 // Rendering them in verbose mode would recreate the internal state-machine
 // ledger that this boundary is designed to remove.
 func (eventVisitor) VisitRelayLifecycleObserved(clievent.RelayLifecycleObserved) error   { return nil }
@@ -282,7 +282,12 @@ func (eventVisitor) VisitTransferLifecycleObserved(clievent.TransferLifecycleObs
 func (eventVisitor) VisitFilesystemOutputObserved(clievent.FilesystemOutputObserved) error {
 	return nil
 }
-func (eventVisitor) VisitSenderTerminalObserved(clievent.SenderTerminalObserved) error { return nil }
+func (eventVisitor) VisitSenderTerminalSendObserved(clievent.SenderTerminalSendObserved) error {
+	return nil
+}
+func (eventVisitor) VisitSenderSessionTerminated(clievent.SenderSessionTerminated) error {
+	return nil
+}
 func (eventVisitor) VisitCatalogStorageObserved(clievent.CatalogStorageObserved) error { return nil }
 func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) error     { return nil }
 func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {

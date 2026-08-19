@@ -2,13 +2,8 @@ package commandprojection
 
 import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
-	"github.com/windshare/windshare/connectivity/v2peer"
-	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
-	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/transport/relayv2"
-	wsrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 func ProjectSharingSubject(summary liveshare.SelectedRootSummary) (clievent.SharingSubjectSelected, error) {
@@ -52,398 +47,56 @@ func ProjectSharingSubject(summary liveshare.SelectedRootSummary) (clievent.Shar
 	return event, nil
 }
 
-func ProjectRelayLifecycle(
-	command clievent.Command,
-	value relayv2.LifecycleTrace,
-) (clievent.RelayLifecycleObserved, error) {
-	if !command.Valid() {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
-	}
-	switch relayv2.ValidateLifecycleTrace(value) {
-	case relayv2.LifecycleContractValid:
-	case relayv2.LifecycleContractUnknownEnum:
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	case relayv2.LifecycleContractInvalidIdentity:
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
-	case relayv2.LifecycleContractInvalidStageFields:
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionInvalidStageFields)
-	default:
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionEventContract)
-	}
-	stage, ok := projectRelayStage(value.Stage)
-	if !ok {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	disposition, ok := projectOptionalDisposition(value.Disposition)
-	if !ok {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	retirement, ok := projectRelayRetirement(value.RetirementSource)
-	if !ok {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	cause, ok := projectRelayCause(value.Cause)
-	if !ok {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	drain, ok := projectRelayCause(value.DrainCause)
-	if !ok {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	var session clievent.RelaySessionID
-	if nonzeroBytes(value.RelaySessionID[:]) {
-		var err error
-		session, err = RelaySessionID(value.RelaySessionID[:])
-		if err != nil {
-			return clievent.RelayLifecycleObserved{}, err
-		}
-	}
-	event, err := clievent.NewRelayLifecycleObserved(clievent.RelayLifecycleSpec{
-		Command: command, LinkID: value.LinkID, RelaySession: session, SendOperationID: value.OperationID,
-		Stage: stage, Terminal: value.Terminal, Disposition: disposition,
-		RetirementSource: retirement, Cause: cause, DrainCause: drain, Dropped: value.Dropped,
-	})
-	if err != nil {
-		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionEventContract)
-	}
-	return event, nil
-}
-
-func nonzeroBytes(raw []byte) bool {
-	for _, value := range raw {
-		if value != 0 {
-			return true
-		}
-	}
-	return false
-}
-
-func ProjectWebRTCLifecycle(
-	command clievent.Command,
-	value wsrtc.LifecycleTrace,
-) (clievent.WebRTCLifecycleObserved, error) {
-	if !command.Valid() {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
-	}
-	switch wsrtc.ValidateLifecycleTrace(value) {
-	case wsrtc.LifecycleContractValid:
-	case wsrtc.LifecycleContractUnknownEnum:
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	case wsrtc.LifecycleContractInvalidIdentity:
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidIdentity)
-	case wsrtc.LifecycleContractInvalidStageFields:
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionInvalidStageFields)
-	default:
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionEventContract)
-	}
-	operation, ok := projectWebRTCOperation(value.Operation)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	transition, ok := projectWebRTCTransition(value.Transition)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	disposition, ok := projectOptionalDisposition(value.Disposition)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	state, ok := projectChannelState(value.State)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	terminal, ok := projectWebRTCTerminal(value.Terminal)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	cause, ok := projectWebRTCCause(value.Cause)
-	if !ok {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	event, err := clievent.NewWebRTCLifecycleObserved(clievent.WebRTCLifecycleSpec{
-		Command: command, ChannelID: value.ChannelID, SendOperationID: value.OperationID,
-		Operation: operation, Transition: transition, Disposition: disposition,
-		State: state, Terminal: terminal, Cause: cause, Dropped: value.Dropped,
-	})
-	if err != nil {
-		return clievent.WebRTCLifecycleObserved{}, invalidProjection(ProjectionEventContract)
-	}
-	return event, nil
-}
-
-func ProjectSenderAttempt(
-	command clievent.Command,
-	value v2peer.SenderAttemptObservation,
-) (clievent.PeerAttemptObserved, error) {
-	session, err := ProtocolSessionID(value.SessionID)
-	if err != nil {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	path, err := PeerPathID(value.PeerPathID)
-	if err != nil {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	attempt, err := PeerAttemptID(value.AttemptID)
-	if err != nil {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	stage, ok := projectPeerStage(value.Stage)
-	if !ok {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	spec := clievent.PeerAttemptSpec{
-		Command: command, Session: session, PeerPath: path, Attempt: attempt,
-		Sequence: value.SideSequence, ElapsedMillis: value.AttemptElapsedMillis, Stage: stage,
-	}
-	if err := projectSenderAttemptEvidence(&spec, value); err != nil {
-		return clievent.PeerAttemptObserved{}, err
-	}
-	event, err := clievent.NewPeerAttemptObserved(spec)
-	if err != nil {
-		return clievent.PeerAttemptObserved{}, ErrInvalidProjection
-	}
-	return event, nil
-}
-
-func projectSenderAttemptEvidence(
-	spec *clievent.PeerAttemptSpec,
-	value v2peer.SenderAttemptObservation,
-) error {
-	var err error
-	var ok bool
-	if !value.OfferOperationID.IsZero() {
-		spec.OfferOperation, err = ProtocolOperationID(value.OfferOperationID)
-		if err != nil {
-			return ErrInvalidProjection
-		}
-		spec.HasOfferOperation = true
-	}
-	if value.DeadlineMillis != 0 || value.Phase != "" {
-		spec.Phase, ok = projectPeerPhase(value.Phase)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.DeadlineMillis = value.DeadlineMillis
-	}
-	if value.CandidateCounts != nil {
-		spec.Candidates = clievent.CandidateCounts{
-			LocalEmitted:   value.CandidateCounts.LocalEmitted,
-			RemoteAccepted: value.CandidateCounts.RemoteAccepted,
-		}
-		spec.HasCandidates = true
-	}
-	if !value.GrantOperationID.IsZero() {
-		spec.GrantOperation, err = ProtocolOperationID(value.GrantOperationID)
-		if err != nil {
-			return ErrInvalidProjection
-		}
-		spec.HasGrantOperation = true
-	}
-	if value.Lane != nil {
-		spec.Lane, err = LaneIdentity(*value.Lane)
-		if err != nil {
-			return ErrInvalidProjection
-		}
-		spec.HasLane = true
-	}
-	if value.AdmissionDisposition != "" || value.ResponseDelivery != "" {
-		spec.AdmissionDisposition, ok = projectPeerAdmissionDisposition(value.AdmissionDisposition)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.ResponseDelivery, ok = projectPeerResponseDelivery(value.ResponseDelivery)
-		if !ok {
-			return ErrInvalidProjection
-		}
-	}
-	if value.Rejection != nil {
-		spec.RejectionCode, ok = projectPeerLaneRejection(value.Rejection.Code)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.RejectionRetryAfterMillis = value.Rejection.RetryAfterMillis
-	}
-	if value.Failure != nil {
-		spec.FailedAtStage, ok = projectPeerStage(value.Failure.FailedAtStage)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.FailureScope, ok = projectPeerFailureScope(value.Failure.Scope)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.Failure, ok = ProjectPeerErrorCode(value.Failure.TypedPeerErrorCode)
-		if !ok {
-			return ErrInvalidProjection
-		}
-	}
-	return nil
-}
-
-func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.TransferLifecycleObserved, error) {
-	if value.Interruption != 0 && !value.Interruption.Valid() {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	receiveID, err := ReceiveOperationID(value.ReceiveOperationID)
-	if err != nil {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	sessionID, err := ProtocolSessionID(value.ProtocolSessionID)
-	if err != nil {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	jobID, err := TransferJobID(value.TransferJobID)
-	if err != nil {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	stage, ok := projectTransferStage(value.Stage)
-	if !ok {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	progress, err := ProjectProgress(value.Progress)
-	if err != nil {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	selection, ok := projectFileSelection(value.FileSelection)
-	if !ok {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	fileSettlement, ok := projectFileSettlement(value.FileSettlement)
-	if !ok {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	itemBlockReason, ok := projectItemBlockReason(value.ItemBlockReason)
-	if !ok {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	treeSettlement, ok := projectTreeSettlement(value.DirectTreeSettlement)
-	if !ok {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	spec := clievent.TransferLifecycleSpec{
-		ReceiveOperation: receiveID, ProtocolSession: sessionID, TransferJob: jobID,
-		Stage: stage, Progress: progress, FileSelection: selection,
-		FileSettlement: fileSettlement, ItemBlockReason: itemBlockReason,
-		TreeSettlement: treeSettlement,
-	}
-	if value.Failed {
-		if spec.Failure, ok = ProjectFault(value.Fault); !ok {
-			if spec.Failure, ok = ProjectTransferInterruption(value.Interruption); !ok {
-				spec.Failure = mustFailure(clievent.FailureUnexpected)
-			}
-		}
-	} else if value.Fault.Valid() || value.Interruption != 0 {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	event, err := clievent.NewTransferLifecycleObserved(spec)
-	if err != nil {
-		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
-	}
-	return event, nil
-}
-
-func ProjectProtocolOperation(
-	command clievent.Command,
-	value sessionruntime.ProtocolOperationTrace,
-) (clievent.ProtocolOperationObserved, error) {
-	role, ok := projectProtocolRole(value.Role)
-	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	stage, ok := projectProtocolOperationStage(value.Stage)
-	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	sessionID, err := ProtocolSessionID(value.ProtocolSessionID)
-	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	operationID, err := ProtocolOperationID(value.OperationID)
-	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	requestKind, ok := projectProtocolMessageKind(value.RequestKind)
-	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	var responseKind clievent.ProtocolMessageKind
-	if value.HasResponse {
-		responseKind, ok = projectProtocolMessageKind(value.ResponseKind)
-		if !ok {
-			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-		}
-	}
-	sendOutcome, ok := projectProtocolSendOutcome(value.SendOutcome)
-	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	cause, ok := projectProtocolOperationCause(value.Cause)
-	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	var lane clievent.LaneIdentity
-	if value.HasLane {
-		lane, err = LaneIdentity(value.Lane)
-		if err != nil {
-			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-		}
-	}
-	var operationErrorScope clievent.ProtocolOperationErrorScope
-	if value.HasOperationError {
-		operationErrorScope, ok = projectProtocolOperationErrorScope(value.OperationErrorScope)
-		if !ok {
-			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-		}
-	}
-	event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		Command: command, Role: role, Stage: stage,
-		ProtocolSession: sessionID, ProtocolOperation: operationID,
-		RequestKind: requestKind, ResponseKind: responseKind, HasResponse: value.HasResponse,
-		Lane: lane, HasLane: value.HasLane,
-		HasSend: value.HasSend, SendSettled: value.SendSettled,
-		SendAdmitted: value.SendAdmitted, SendOutcome: sendOutcome,
-		ResponseCount:           value.ResponseCount,
-		DeadlineRemainingMillis: value.DeadlineRemainingMillis, HasDeadline: value.HasDeadline,
-		OperationElapsedMillis:  value.OperationElapsedMillis,
-		UsableLanesAtSelection:  value.UsableLanesAtSelection,
-		UsableLanesAtSettlement: value.UsableLanesAtSettlement,
-		OperationErrorScope:     operationErrorScope, OperationErrorCode: value.OperationErrorCode,
-		OperationErrorRetryable: value.OperationErrorRetryable,
-		HasOperationError:       value.HasOperationError,
-		Cause:                   cause,
-	})
-	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	return event, nil
-}
-
-func ProjectSenderTerminal(value sessionruntime.SenderTerminalObservation) (clievent.SenderTerminalObserved, error) {
+func ProjectSenderTerminalSend(
+	value sessionruntime.SenderTerminalSendObserved,
+) (clievent.SenderTerminalSendObserved, error) {
 	session, err := ProtocolSessionID(value.ProtocolSessionID)
 	if err != nil {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
 	}
 	lane, err := LaneIdentity(value.Lane)
 	if err != nil {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
 	}
-	transport, ok := projectSenderTerminalTransport(value.TransportDisposition)
+	transport, ok := projectSenderTerminalSendTransport(value.TransportDisposition)
 	if !ok {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
 	}
-	outcome, ok := projectSenderTerminalOutcome(value.Outcome)
+	outcome, ok := projectSenderTerminalSendOutcome(value.Outcome)
 	if !ok {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
 	}
-	decision, ok := projectSenderTerminalDecision(value.Decision)
+	decision, ok := projectSenderTerminalSendDecision(value.Decision)
 	if !ok {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
 	}
-	event, err := clievent.NewSenderTerminalObserved(
+	event, err := clievent.NewSenderTerminalSendObserved(
 		session, lane, value.Settled, transport, outcome, decision,
 	)
 	if err != nil {
-		return clievent.SenderTerminalObserved{}, ErrInvalidProjection
+		return clievent.SenderTerminalSendObserved{}, ErrInvalidProjection
+	}
+	return event, nil
+}
+
+func ProjectSenderSessionTerminated(
+	value sessionruntime.SenderSessionTerminated,
+) (clievent.SenderSessionTerminated, error) {
+	session, err := ProtocolSessionID(value.ProtocolSessionID)
+	if err != nil {
+		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
+	}
+	trigger, ok := projectSenderSessionTerminalTrigger(value.Trigger)
+	if !ok {
+		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
+	}
+	provenance, ok := projectSenderSessionTerminalProvenance(value.Provenance)
+	if !ok {
+		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
+	}
+	event, err := clievent.NewSenderSessionTerminated(session, trigger, provenance)
+	if err != nil {
+		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
 	}
 	return event, nil
 }
@@ -485,32 +138,4 @@ func ProjectRootPrefetch(value liveshare.RootPrefetchTrace) (clievent.RootPrefet
 		return clievent.RootPrefetchObserved{}, ErrInvalidProjection
 	}
 	return event, nil
-}
-
-func projectOptionalDisposition(value framechannel.SendDisposition) (clievent.SendDisposition, bool) {
-	switch value {
-	case 0:
-		return 0, true
-	case framechannel.SendAccepted:
-		return clievent.SendAccepted, true
-	case framechannel.SendRejected:
-		return clievent.SendRejected, true
-	case framechannel.SendRetired:
-		return clievent.SendRetired, true
-	default:
-		return 0, false
-	}
-}
-
-func projectChannelState(value framechannel.ChannelState) (clievent.ChannelState, bool) {
-	switch value {
-	case framechannel.Connecting:
-		return clievent.ChannelConnecting, true
-	case framechannel.Open:
-		return clievent.ChannelOpen, true
-	case framechannel.Closed:
-		return clievent.ChannelClosed, true
-	default:
-		return 0, false
-	}
 }

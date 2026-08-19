@@ -49,10 +49,11 @@ type RegistrationMaterial struct {
 }
 
 type RuntimeFactoryConfig struct {
-	TerminalConnectivity sessionruntime.TerminalConnectivity
-	PeerHandlers         sessionruntime.SenderPeerHandlerFactory
-	TerminalObserver     sessionruntime.SenderTerminalObserver
-	ProtocolTracer       sessionruntime.ProtocolOperationTracer
+	TerminalConnectivity    sessionruntime.TerminalConnectivity
+	PeerHandlers            sessionruntime.SenderPeerHandlerFactory
+	TerminalSendObserver    sessionruntime.SenderTerminalSendObserver
+	SessionTerminalObserver sessionruntime.SenderSessionTerminalObserver
+	ProtocolTracer          sessionruntime.ProtocolOperationTracer
 }
 
 type senderRevisionIdentityDeriver interface {
@@ -558,10 +559,11 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 	factory, err := sessionruntime.NewSenderFactory(sessionruntime.SenderFactoryConfig{
 		ShareInstance: sender.descriptor.ShareInstance(), SessionAuthKey: sender.sessionAuthKey,
 		SenderPrivateKey: sender.privateKey, Catalog: sender.catalogAccess, Content: contentFactory,
-		Peers:            config.PeerHandlers,
-		TerminalObserver: config.TerminalObserver,
-		ProtocolTracer:   config.ProtocolTracer,
-		Random:           sender.random, TerminalConnectivity: prefetchTerminalConnectivity{
+		Peers:                   config.PeerHandlers,
+		TerminalSendObserver:    config.TerminalSendObserver,
+		SessionTerminalObserver: config.SessionTerminalObserver,
+		ProtocolTracer:          config.ProtocolTracer,
+		Random:                  sender.random, TerminalConnectivity: prefetchTerminalConnectivity{
 			prefetch: sender.catalogAccess,
 			delegate: config.TerminalConnectivity,
 		},

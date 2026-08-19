@@ -7,17 +7,29 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
 
-func newRunID(random io.Reader) (string, error) {
-	raw := make([]byte, clievent.IdentityBytes)
-	if _, err := io.ReadFull(random, raw); err != nil {
-		return "", err
+type runIdentity [clievent.IdentityBytes]byte
+
+func newRunID(random io.Reader) (runIdentity, error) {
+	var identity runIdentity
+	if _, err := io.ReadFull(random, identity[:]); err != nil {
+		return runIdentity{}, err
 	}
-	allZero := true
-	for _, value := range raw {
-		allZero = allZero && value == 0
+	if !identity.valid() {
+		return runIdentity{}, ErrRunIDUnavailable
 	}
-	if allZero {
-		return "", ErrRunIDUnavailable
-	}
-	return hex.EncodeToString(raw), nil
+	return identity, nil
+}
+
+func (identity runIdentity) valid() bool {
+	return identity != (runIdentity{})
+}
+
+func (identity runIdentity) encoded() string {
+	return encodeCorrelationIdentity(identity[:])
+}
+
+// Filename correlation is deliberately shorter and visually filesystem-safe;
+// the full local run identity remains available only inside each v3 record.
+func (identity runIdentity) filenameToken() string {
+	return hex.EncodeToString(identity[:])[:directoryFilenameTokenHexLength]
 }

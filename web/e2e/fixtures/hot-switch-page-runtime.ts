@@ -1,12 +1,17 @@
-import type { V2BrowserConnectivityAttemptDiagnostic } from '../../src/connectivity/diagnostics'
 import type {
-  HotSwitchLaneObservation,
   HotSwitchPageEvent,
   HotSwitchRecoveryControl,
   ObservedTransferFailure,
 } from './hot-switch-contract'
 import type { V2FrozenSelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import {
+  DeliveryBuffer,
+  EvidenceBridge,
+  projectAttemptEvidence,
+  projectRecoveryEvidence,
+  RelayCutEvidence,
+} from './hot-switch-page-evidence'
 import {
   OneShotRelease,
   OutputFence,
@@ -18,11 +23,7 @@ import type {
 } from '../../src/output/workspace/state'
 import type { ReceiveIntent } from '../../src/transfer/intent'
 import type {
-  BeginOutputFileResult,
   DirectAtomicExecution,
-  OutputFileRequest,
-  OutputFileTransaction,
-  OutputSession,
   V2PlanExecutionAuthority,
 } from '../../src/transfer/output-session'
 
@@ -89,140 +90,6 @@ interface BoundDirectAtomicOperation {
   readonly selection: V2FrozenSelectionPolicy
 }
 
-class EvidenceBridge {
-  readonly #bridge: (event: HotSwitchPageEvent) => Promise<void>
-  readonly #maximumFailureDepth: number
-  #failure: string | undefined
-  #queue = Promise.resolve()
-
-  constructor(
-    bridge: (event: HotSwitchPageEvent) => Promise<void>,
-    maximumFailureDepth: number,
-  ) {
-    this.#bridge = bridge
-    this.#maximumFailureDepth = maximumFailureDepth
-  }
-
-  publish(event: HotSwitchPageEvent): Promise<void> {
-    this.#queue = this.#queue
-      .then(() => this.#bridge(event))
-      .catch((error: unknown) => {
-        this.#failure ??= describeFailure(error, this.#maximumFailureDepth)
-      })
-    return this.#queue
-  }
-
-  async terminalFailure(): Promise<string | undefined> {
-    // Observer callbacks deliberately do not block product control flow. The
-    // terminal drains their serialized bridge so a rejected event cannot vanish.
-    await this.#queue
-    return this.#failure
-  }
-
-  describe(reason: unknown): string {
-    return describeFailure(reason, this.#maximumFailureDepth)
-  }
-}
-
-class RelayCutEvidence {
-  readonly #bridge: EvidenceBridge
-  readonly #activeRelayLanes = new Set<string>()
-  #ineligibilityPublished = false
-  #sealed = false
-
-  constructor(bridge: EvidenceBridge) {
-    this.#bridge = bridge
-  }
-
-  admit(observation: HotSwitchLaneObservation): void {
-    if (observation.route === 'relay') this.#activeRelayLanes.add(laneKey(observation))
-    this.#bridge.publish({ kind: 'lane-admitted', observation }).catch(() => undefined)
-  }
-
-  detach(observation: HotSwitchLaneObservation): void {
-    if (observation.route === 'relay') this.#activeRelayLanes.delete(laneKey(observation))
-    this.#bridge.publish({ kind: 'lane-detached', observation })
-      .then(() => this.#publishIneligibility())
-      .catch(() => undefined)
-  }
-
-  async seal(): Promise<void> {
-    this.#sealed = true
-    await this.#publishIneligibility()
-  }
-
-  async #publishIneligibility(): Promise<void> {
-    if (
-      !this.#sealed || this.#ineligibilityPublished || this.#activeRelayLanes.size !== 0
-    ) return
-    this.#ineligibilityPublished = true
-    await this.#bridge.publish({ kind: 'relay-ineligible' })
-  }
-}
-
-class DeliveryBuffer {
-  readonly #chunks: Uint8Array[] = []
-
-  outputSession(
-    stream: StreamModule,
-    outputSessionId: string,
-    outputFence: OutputFence,
-  ): DirectAtomicStreamOutput {
-    const session = new stream.SingleFileStreamOutputSession(
-      outputSessionId,
-      new WritableStream<Uint8Array>({
-        write: async (chunk) => {
-          await outputFence.waitForWrite()
-          this.#chunks.push(chunk.slice())
-        },
-      }),
-    )
-    return new DirectAtomicStreamOutput(session)
-  }
-
-  async snapshot(): Promise<{ readonly bytes: number; readonly sha256: string }> {
-    const length = this.#chunks.reduce((total, chunk) => total + chunk.byteLength, 0)
-    const bytes = new Uint8Array(length)
-    let offset = 0
-    for (const chunk of this.#chunks) {
-      bytes.set(chunk, offset)
-      offset += chunk.byteLength
-    }
-    const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))
-    return Object.freeze({
-      bytes: length,
-      sha256: Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join(''),
-    })
-  }
-}
-
-class DirectAtomicStreamOutput implements OutputSession {
-  readonly identity
-  readonly capabilities
-  readonly #session: OutputSession
-  #transaction: OutputFileTransaction | undefined
-
-  constructor(session: OutputSession) {
-    this.#session = session
-    this.identity = session.identity
-    this.capabilities = session.capabilities
-  }
-
-  async beginFile(
-    request: OutputFileRequest,
-    signal: AbortSignal,
-  ): Promise<BeginOutputFileResult> {
-    const opened = await this.#session.beginFile(request, signal)
-    this.#transaction = opened.transaction
-    return opened
-  }
-
-  async pauseActiveTransaction(reason: unknown): Promise<void> {
-    // OutputSession intentionally owns no job-wide pause. The plan route retains
-    // the one transaction it opened so rollback remains at the authority boundary.
-    await this.#transaction?.pause(reason)
-  }
-}
 
 export function startHotSwitchPageTransfer(input: HotSwitchPageTransferRuntimeInput): void {
   const hotSwitchWindow = window as HotSwitchWindow
@@ -301,12 +168,12 @@ async function runTransfer(
           ? {
               kind: 'file',
               id: failure.fileId,
-              reason: bridge.describe(failure.reason),
+              reason: failure.classification.materializationFailureReason,
             }
           : {
               kind: 'directory',
               id: failure.directoryId,
-              reason: bridge.describe(failure.reason),
+              reason: failure.classification.materializationFailureReason,
             }
       )),
       failureCount: result.worker.failureCount,
@@ -358,7 +225,9 @@ async function bindDirectAtomicOperation(
     rules: modules.intent.selectionRulesSpecFromPolicy(selection),
   })
   const projection = new modules.projection.SelectionProjectionController()
-  let current = projection.beginSelection(selectionSpec, joined.protocolSessionId)
+  let current = projection.beginSelection(selectionSpec, Object.freeze({
+    protocolSessionId: joined.protocolSessionIdentity,
+  }))
   for await (const state of modules.projection.discoverAuthenticatedSelection(
     projection,
     joined.projectionSource(selection),
@@ -516,6 +385,7 @@ async function operationReceipt(intent: ReceiveIntent, purpose: string): Promise
   return encodeBase64Url(new Uint8Array(digest))
 }
 
+
 function createGateway(
   input: HotSwitchPageTransferRuntimeInput,
   modules: ProductModules,
@@ -545,8 +415,13 @@ function createGateway(
   return new modules.gateway.V2BrowserReceiverGateway({
     offersFactory: () => gatedOffers,
     nativePeerUsable: () => input.nativePeerUsable,
-    connectivityObserver: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => {
-      bridge.publish({ kind: 'attempt', evidence: diagnostic }).catch(() => undefined)
+    connectivityTrace: {
+      current: (event) => {
+        const observed = event.eventName === 'peer_attempt'
+          ? { kind: 'attempt' as const, evidence: projectAttemptEvidence(event) }
+          : { kind: 'recovery' as const, evidence: projectRecoveryEvidence(event) }
+        bridge.publish(observed).catch(() => undefined)
+      },
     },
     ...(input.peerRecovery === undefined
       ? {}
@@ -554,9 +429,6 @@ function createGateway(
           peerRecovery: {
             policy: input.peerRecovery.policy,
             random: () => 0,
-            observer: (diagnostic) => {
-              bridge.publish({ kind: 'recovery', evidence: diagnostic }).catch(() => undefined)
-            },
           },
         }),
     onBlockDispatched: (observation) => {
@@ -641,31 +513,4 @@ async function closeReceiver(
     return runtimeError ?? bridge.describe(error)
   }
   return runtimeError
-}
-
-function describeFailure(reason: unknown, maximumDepth: number, depth = 0): string {
-  if (depth >= maximumDepth) return '[nested failure truncated]'
-  if (reason instanceof AggregateError) {
-    const nested = reason.errors.map((error) => describeFailure(error, maximumDepth, depth + 1))
-    const summary = `${reason.name}: ${reason.message}`
-    const failures = nested.length === 0 ? summary : `${summary}; errors=[${nested.join(' | ')}]`
-    return reason.cause === undefined
-      ? failures
-      : `${failures}; cause=${describeFailure(reason.cause, maximumDepth, depth + 1)}`
-  }
-  if (reason instanceof Error) {
-    const summary = `${reason.name}: ${reason.message}`
-    return reason.cause === undefined
-      ? summary
-      : `${summary}; cause=${describeFailure(reason.cause, maximumDepth, depth + 1)}`
-  }
-  try {
-    return String(reason)
-  } catch {
-    return '[unprintable non-Error failure]'
-  }
-}
-
-function laneKey(lane: { readonly laneId: number; readonly laneEpoch: number }): string {
-  return `${lane.laneId}/${lane.laneEpoch}`
 }

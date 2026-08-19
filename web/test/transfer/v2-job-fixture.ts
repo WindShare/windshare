@@ -628,7 +628,7 @@ export function transferJobFixture(input: {
   readonly plans: V2PlanExecutionAuthority
   readonly revisions: V2RevisionReader
   readonly broker: V2BlockRangeReader
-  readonly onTrace?: ConstructorParameters<typeof TransferJob>[0]['onTrace']
+  readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
   readonly maximumConcurrentFiles?: number
   readonly outputSettlementTimeoutMilliseconds?: number
 }): TransferJob {
@@ -646,7 +646,7 @@ export function transferJobFixture(input: {
     lanes: { size: 1 },
     plans: input.plans,
     intent: input.intent,
-    ...(input.onTrace === undefined ? {} : { onTrace: input.onTrace }),
+    ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.maximumConcurrentFiles === undefined
       ? {}
       : { maximumConcurrentFiles: input.maximumConcurrentFiles }),

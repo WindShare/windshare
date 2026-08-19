@@ -1,14 +1,15 @@
 import { V2_CATALOG_PATH_DEPTH } from '../../catalog/path-policy'
-import { V2DirectoryFailureError, type V2CatalogClient } from '../../catalog/v2-client'
+import type { V2CatalogClient } from '../../catalog/v2-client'
 import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import { V2_CATALOG_IDENTITY_BYTES, type V2CatalogEntry } from '../../catalog/v2-records'
 import { equalBytes } from '../../crypto/bytes'
-import { V2RemoteOperationError } from '../../content/v2-session-services'
+import { FaultScope } from '../fault'
 import {
   V2CatalogTraversalError,
   V2DirectoryTraversalError,
   type DirectoryCursor,
 } from '../job/contract'
+import { normalizeV2FileTransferFailure } from '../job/failures'
 import type { V2CatalogTraversalGuard } from '../job/traversal'
 
 export interface V2GenerationReplayConsumer<T> {
@@ -148,12 +149,12 @@ async function loadCommittedDirectory<T>(
     return await options.catalog.loadDirectory(cursor.id, { signal: options.discoverySignal })
   } catch (error) {
     if (options.opaqueSearchSatisfied()) return undefined
-    if (error instanceof V2DirectoryFailureError ||
-        (error instanceof V2RemoteOperationError && error.scope === 'directory')) {
-      options.recordDirectoryFailure(cursor.idText, error)
+    const normalized = normalizeV2FileTransferFailure(error)
+    if (normalized.kind === 'fault' && normalized.fault.scope === FaultScope.DirectoryLocal) {
+      options.recordDirectoryFailure(cursor.idText, normalized.diagnostic)
       return undefined
     }
-    throw error
+    throw normalized.diagnostic
   }
 }
 

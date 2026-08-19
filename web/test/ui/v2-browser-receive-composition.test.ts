@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  createIncidentScopeIssuer,
+  type FailureFact,
+  type FailureFactRelation,
+} from '../../src/diagnostics/incident'
+import {
+  createAttemptOutputFailureCapability,
+  recordOutputException,
+  type OutputFailureSinks,
+  type OutputTraceEvent,
+} from '../../src/output/diagnostics'
+import {
   bindMaterialization,
   offerArtifacts,
 } from '../../src/output/planning'
@@ -467,6 +478,163 @@ describe('browser retained continuation composition', () => {
     inventory.close()
   })
 
+  it('preserves the continuation trigger before its cleanup consequence', async () => {
+    const source = new FakeResumeSource([receiveLifecycle(48, {
+      kind: 'resumable-package',
+      sealedMaterializationDigest: identity(49, 32),
+      tempCleanupProofDigest: identity(50, 32),
+      expiresAt: 5_000,
+    })])
+    const trigger = new DOMException('package continuation failed', 'OperationError')
+    const consequence = new DOMException('checkpoint close failed', 'InvalidStateError')
+    const continuation = fakeContinuation(
+      'workspace-package',
+      vi.fn(() => Promise.reject(consequence)),
+    )
+    const composition = createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      {
+        openResumeSource: async () => source,
+        resumeMutations: mutationPort(vi.fn(async () => Object.freeze({
+          kind: 'continuation' as const,
+          continuation,
+        }))),
+        continuationExecutor: fakeContinuationExecutor({
+          resumePackage: () => Promise.reject(trigger),
+        }),
+        now: () => 1_000,
+      },
+    )
+    const inventory = await composition.retained.list(new AbortController().signal)
+    const operation = inventory.operations[0]
+    if (operation === undefined) throw new Error('package continuation was not projected')
+
+    const result = inventory.act(operation, 'continue', new AbortController().signal)
+    const rejected = await Promise.resolve(result).then(
+      () => undefined,
+      (error: unknown) => error,
+    )
+    expect(rejected).toBeInstanceOf(AggregateError)
+    const aggregate = rejected as AggregateError
+    expect(aggregate.errors).toEqual([trigger, consequence])
+    expect(aggregate.cause).toBe(trigger)
+    inventory.close()
+  })
+
+})
+
+describe('browser output attempt ownership', () => {
+  it('keeps retained reopen and cleanup evidence inside the exact action attempts', async () => {
+    const reopenFailure = new DOMException('private reopen detail', 'AbortError')
+    const cleanupFailure = new DOMException('private cleanup detail', 'InvalidStateError')
+    const source = new FakeResumeSource([
+      receiveLifecycle(48, {
+        kind: 'resumable-receive',
+        checkpointSetDigest: identity(49, 32),
+        completedFileCount: 1n,
+        completedBytes: 64n,
+        expiresAt: 5_000,
+      }),
+      receiveLifecycle(50, {
+        kind: 'waiting-to-save',
+        packageDigest: identity(51, 32),
+        expiresAt: 5_000,
+      }),
+    ])
+    const mutations: ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> =
+      Object.freeze({
+        resume: (
+          _descriptor: ReceiveOperationResumeDescriptor,
+          failures?: OutputFailureSinks,
+        ) => {
+          recordOutputException(failures?.reopen, reopenFailure)
+          return Promise.reject(reopenFailure)
+        },
+        expire: () => Promise.reject(new Error('unexpected expiry')),
+        discard: (
+          _descriptor: ReceiveOperationResumeDescriptor,
+          failures?: OutputFailureSinks,
+        ) => {
+          recordOutputException(failures?.cleanup, cleanupFailure)
+          return Promise.resolve(Object.freeze({ kind: 'already-absent' as const }))
+        },
+      })
+    const composition = createBrowserReceiveComposition(
+      capableWindow(vi.fn(async () => directoryHandle())),
+      {
+        openResumeSource: async () => source,
+        resumeMutations: mutations,
+        now: () => 1_000,
+      },
+    )
+    const inventory = await composition.retained.list(new AbortController().signal)
+    const resumable = inventory.operations.find(
+      operation => operation.continuation === 'resume-receive',
+    )
+    const discardable = inventory.operations.find(
+      operation => operation.continuation === 'save-artifact',
+    )
+    if (resumable === undefined || discardable === undefined) {
+      throw new Error('retained action fixtures were not projected')
+    }
+
+    const issuer = createIncidentScopeIssuer()
+    const observed: Array<Array<Readonly<{
+      fact: FailureFact
+      relation: FailureFactRelation
+    }>>> = [[], []]
+    const attempts = observed.map((facts) => {
+      const scope = issuer.open('retained_action', {
+        factRecorded: observation => facts.push({
+          fact: observation.fact,
+          relation: observation.relation,
+        }),
+      })
+      return {
+        scope,
+        failures: createAttemptOutputFailureCapability(scope.facts),
+      }
+    })
+
+    await expect(inventory.act(
+      resumable,
+      'continue',
+      new AbortController().signal,
+      attempts[0]!.failures.sinks,
+    )).rejects.toBe(reopenFailure)
+    await expect(inventory.act(
+      discardable,
+      'discard',
+      new AbortController().signal,
+      attempts[1]!.failures.sinks,
+    )).resolves.toEqual({ kind: 'completed' })
+
+    expect(observed).toMatchObject([
+      [{
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'reopen',
+          payload: { nativeOutputFailure: { nativeClass: 'abort' } },
+        },
+        relation: 'contributor',
+      }],
+      [{
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'cleanup',
+          payload: { nativeOutputFailure: { nativeClass: 'invalid_state' } },
+        },
+        relation: 'consequence',
+      }],
+    ])
+    expect(attempts[0]!.scope.identity).not.toEqual(attempts[1]!.scope.identity)
+    for (const attempt of attempts) {
+      attempt.failures.revoke()
+      attempt.scope.close()
+    }
+    inventory.close()
+  })
+
   it('starts exactly one FSA picker synchronously in the explicit action stack', async () => {
     let inActionStack = true
     const calls: boolean[] = []
@@ -496,10 +664,94 @@ describe('browser retained continuation composition', () => {
     await Promise.resolve(authority).then(value => value.release('test completed'))
   })
 
+  it('binds native picker failures to the exact production authority attempt', async () => {
+    const picker = vi.fn()
+      .mockRejectedValueOnce(new DOMException('private refusal', 'AbortError'))
+      .mockRejectedValueOnce(new DOMException('private reservation', 'QuotaExceededError'))
+    const windowPort = capableWindow(picker)
+    const composition = createBrowserReceiveComposition(windowPort)
+    const selection = await testSelection()
+    const environment = await composition.environment(new AbortController().signal)
+    const offered = await offerArtifacts(
+      projection(selection, treeProof()),
+      COMPLETE_DISCOVERY,
+      environment,
+    )
+    if (offered.kind !== 'artifact-actions') throw new Error('tree action was not offered')
+    const action = [offered.primary, ...offered.alternatives]
+      .find(candidate => candidate.plan.kind === 'direct-tree')
+    if (action === undefined) throw new Error('FSA DirectTree action was not offered')
+
+    const issuer = createIncidentScopeIssuer()
+    const observed: Array<Array<Readonly<{
+      fact: FailureFact
+      relation: FailureFactRelation
+    }>>> = [[], []]
+    const attempts = observed.map((facts) => {
+      const scope = issuer.open('authority_activation', {
+        factRecorded: observation => facts.push({
+          fact: observation.fact,
+          relation: observation.relation,
+        }),
+      })
+      return {
+        scope,
+        failures: createAttemptOutputFailureCapability(scope.facts),
+      }
+    })
+
+    const first = await composition.startArtifactAuthority(
+      action,
+      attempts[0]!.failures.sinks,
+    )
+    await expect(first.finalize(
+      () => Promise.reject(new Error('intent must not freeze')),
+      new AbortController().signal,
+    )).rejects.toMatchObject({ outcome: 'picker_refused' })
+
+    const second = await composition.startArtifactAuthority(
+      action,
+      attempts[1]!.failures.sinks,
+    )
+    await expect(second.finalize(
+      () => Promise.reject(new Error('intent must not freeze')),
+      new AbortController().signal,
+    )).rejects.toBeInstanceOf(DOMException)
+
+    expect(observed).toMatchObject([
+      [{
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'output_reservation',
+          payload: { nativeOutputFailure: { nativeClass: 'abort' } },
+        },
+        relation: 'contributor',
+      }],
+      [{
+        fact: {
+          kind: 'native_output_failure',
+          stage: 'output_reservation',
+          payload: { nativeOutputFailure: { nativeClass: 'quota_exceeded' } },
+        },
+        relation: 'contributor',
+      }],
+    ])
+    expect(attempts[0]!.scope.identity).not.toEqual(attempts[1]!.scope.identity)
+    for (const attempt of attempts) {
+      attempt.failures.revoke()
+      attempt.scope.close()
+    }
+  })
+
   it('runs a timestamped portable artifact through the real operation-bound plan authority', async () => {
     const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
     Object.defineProperty(windowPort.navigator, 'locks', { value: undefined })
-    const composition = createBrowserReceiveComposition(windowPort)
+    const outputTraceEvents: OutputTraceEvent[] = []
+    const composition = createBrowserReceiveComposition(windowPort, {
+      outputTrace: {
+        current: event => outputTraceEvents.push(event),
+      },
+    })
     const selection = await createSelectionSpec({
       shareInstance: binaryIdentityText(1),
       syntheticRoot: binaryIdentityText(2),
@@ -554,7 +806,6 @@ describe('browser retained continuation composition', () => {
       { id: docs.id, entries: [file] },
     ])
     const readers = readerFixture([file])
-    const traceNames: string[] = []
     const createObjectURL = vi.mocked(windowPort.URL.createObjectURL)
     const objectURLCallsBeforeAttempt = createObjectURL.mock.calls.length
     const result = await transferJobFixture({
@@ -564,15 +815,33 @@ describe('browser retained continuation composition', () => {
       plans: runtime.plans,
       revisions: readers.revisions,
       broker: readers.broker,
-      onTrace: event => traceNames.push(event.name),
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
     expect(result.lifecycle.kind).toBe('download-started')
     expect(readers.revisionRequests).toEqual([file.idText])
     expect(readers.blockRequests).not.toHaveLength(0)
-    expect(traceNames).toContain('receive.materialization.completed')
-    expect(traceNames).not.toContain('receive.materialization.failed')
+    expect(outputTraceEvents).toEqual(expect.arrayContaining([
+      {
+        eventName: 'output_write',
+        payload: {
+          backend: 'portable',
+          transition: 'transaction_committed',
+        },
+      },
+      {
+        eventName: 'publication',
+        payload: {
+          backend: 'portable',
+          transition: 'committed',
+        },
+      },
+    ]))
+    expect(outputTraceEvents).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        payload: expect.objectContaining({ transition: 'transaction_failed' }),
+      }),
+    ]))
     expect(createObjectURL.mock.calls).toHaveLength(objectURLCallsBeforeAttempt + 1)
     const [publishedArtifact] = createObjectURL.mock.calls.at(-1) ?? []
     if (!(publishedArtifact instanceof Blob)) {

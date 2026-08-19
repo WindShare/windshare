@@ -63,7 +63,9 @@ The final result is `success`, `partial`, `paused`, or `failed`. Authenticated s
 - Protocol-operation records omit successful block/streaming milestones. `content_path` reports usable paths, while terminal `lane_settlement` records summarize authenticated blocks and bytes delivered by each relay or direct lane.
 - Trace recording never waits for file I/O. Projection, queue, write, or flush loss emits bounded `observer_loss` evidence when possible and one `Trace is incomplete` warning, without cancelling or reclassifying the transfer.
 
-Trace records use full semantic run/session/operation identifiers and normalized relay authority. They exclude capability links and keys, tokens, private keys, filenames, catalog and local paths, command lines, environment values, raw content, and unfiltered provider text. The private process-event pipe used by repository tests is a separate correctness authority.
+Trace files use schema v3: a common envelope, optional cross-runtime `correlation`, and an event-specific `payload`. Fixed-width identities use unpadded base64url; large counters use decimal strings. `runtime_run_id` identifies only the local command invocation; join sender and receiver evidence with shared protocol session/operation/lane correlation instead.
+
+Traces exclude capability links and keys, tokens, private keys, filenames, catalog and local paths, command lines, environment values, raw content, and unfiltered provider text. The private process-event pipe used by repository tests is a separate correctness authority.
 
 ## Resume state
 

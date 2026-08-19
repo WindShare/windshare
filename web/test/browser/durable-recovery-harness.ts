@@ -51,7 +51,6 @@ import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
 } from '../../src/ui/v2-browser-receive-composition'
-import { createPrivacySafeV2ReceiverTraceSink } from '../../src/ui/v2-production-trace'
 import {
   WORKSPACE_HANDLE_ZIP_LAYOUT,
   WorkspaceOperationStages,
@@ -218,7 +217,6 @@ export async function proveFreshPreparedZipAdmission(
     randomBytes: () => new Uint8Array(16).fill(0x41),
   })
   const traces: WorkspaceStageTraceEvent[] = []
-  const productionTrace = createPrivacySafeV2ReceiverTraceSink(console)
   let contentRequests = 0n
   const stages = await WorkspaceOperationStages.open({
     repository,
@@ -226,10 +224,7 @@ export async function proveFreshPreparedZipAdmission(
     leaseId: lease.leaseId,
     clock: () => INITIAL_TIME,
     contentRequests: { count: () => contentRequests },
-    onTrace: (event) => {
-      productionTrace(event)
-      traces.push(event)
-    },
+    onTrace: (event) => traces.push(event),
   })
   let cleanupBackend: Awaited<ReturnType<
     typeof openOriginPrivateRetainedArtifactBackend
@@ -560,7 +555,11 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
       broker: readers.broker,
       lanes: { size: PRODUCT_FIXTURE_LANE_COUNT },
       transferJobId: runtime.transferJobId,
-      onTrace: event => transferTraceNames.push(event.name),
+      trace: {
+        current: event => transferTraceNames.push(
+          event.name === 'receive_transition' ? event.transition : event.name,
+        ),
+      },
     }).run(signal)
     const evidence = observedEvidence
     if (evidence === undefined) {

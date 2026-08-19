@@ -4,11 +4,10 @@ import {
   type V2CatalogEntry,
 } from '../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../catalog/v2-selection'
-import { encodeBase64Url } from '../crypto/bytes'
+import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import type { ReceiveLifecycleState } from '../output/workspace/state'
 import {
   DirectorySettlementKind,
-  createDirectoryAdmissionScope,
   snapshotMaterializationDirectory,
   validateDirectoryAdmissionBinding,
   type DirectoryAdmission,
@@ -31,9 +30,11 @@ import {
   finalizeV2Directories,
 } from './job/directory-transfer'
 import {
+  V2ClassifiedTransferFailureError,
   isolatedDirectoryOutputFailure,
-  materializationFailureReason,
+  normalizeV2FileTransferFailure,
   transferFileOutcomeEvidence,
+  type ClassifiedTransferFailure,
 } from './job/failures'
 import { V2TransferAdmissionFailureError } from './job/admission-error'
 import { V2JobDiscovery } from './job/discovery'
@@ -67,15 +68,6 @@ import {
   runPreparedFileWorkers,
 } from './job/workers'
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
-import type {
-  DirectAtomicPlan,
-  DirectTreePlan,
-  OriginalFileArtifact,
-  PortableHandoffPlan,
-  ReceiveIntent,
-  WorkspaceThenPublishPlan,
-  ZipArchiveArtifact,
-} from './intent'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   TransferFailureAccumulator,
@@ -86,13 +78,13 @@ import {
 } from './outcome'
 import {
   snapshotDirectoryMaterializationRequest,
-  validatePlanExecutionBinding,
   type ExactPreparationEvidence,
   type IncrementalDirectoryOutput,
   type MaterializationSummary,
   type PlanExecution,
 } from './output-session'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
+import { TransferJobMaterialization } from './v2-job-materialization'
 import {
   outputSettlementTimeoutMilliseconds,
   pauseFailedV2Execution,
@@ -101,19 +93,6 @@ import {
 
 export * from './job/public'
 
-class IncompleteArtifactError extends Error {
-  constructor() {
-    super('complete artifact materialization has selected or discovery failures')
-    this.name = 'IncompleteArtifactError'
-  }
-}
-
-type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
-type DirectAtomicIntent = ReceiveIntent & Readonly<{ plan: DirectAtomicPlan }>
-type WorkspaceIntent = ReceiveIntent & Readonly<{ plan: WorkspaceThenPublishPlan }>
-type WorkspaceOriginalIntent = WorkspaceIntent & Readonly<{ artifact: OriginalFileArtifact }>
-type WorkspaceZipIntent = WorkspaceIntent & Readonly<{ artifact: ZipArchiveArtifact }>
-type PortableIntent = ReceiveIntent & Readonly<{ plan: PortableHandoffPlan }>
 
 /**
  * Direct plans retain bounded discovery/content overlap. Prepared plans first
@@ -130,6 +109,7 @@ export class TransferJob {
   readonly #traversal: V2CatalogTraversalGuard
   readonly #discovery: V2JobDiscovery
   readonly #root: V2JobRootAuthority
+  readonly #materialization: TransferJobMaterialization
   readonly #explicitTargets: V2ExplicitSelectionTargetLedger
   readonly #failedDirectoryIds = new Set<string>()
   readonly #finalizableDirectories: DirectoryAdmission[] = []
@@ -146,6 +126,7 @@ export class TransferJob {
   #observers: V2TransferObservers | undefined
   #preparation: ExactPreparationEvidence | undefined
   #lastWorker: TransferWorkerSettlement | undefined
+  #externalCancellationRequested = false
   #started = false
 
   constructor(options: TransferJobOptions) {
@@ -182,6 +163,55 @@ export class TransferJob {
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
+    this.#materialization = new TransferJobMaterialization({
+      signal: this.#lifetime.signal,
+      admission: options.plans,
+      root: {
+        load: () => this.#root.load(),
+        cursor: () => this.#root.cursor(),
+        authenticated: committed => this.#root.authenticated(committed),
+        direct: () => this.#root.direct(
+          (cursor, committed) => this.#admitDirectory(cursor, committed),
+        ),
+        singleFileEvidence: (intent, committed) => collectExactSingleFileEvidence({
+          catalog: this.#options.catalog,
+          descriptor: this.#options.descriptor,
+          selection: this.#selection,
+          artifact: intent.artifact,
+          signal: this.#lifetime.signal,
+          root: committed,
+        }),
+      },
+      discovery: {
+        createDirectFileQueue: () => newFileQueue(this.#limits),
+        run: (root, directFiles, collector) => this.#runDiscovery(root, directFiles, collector),
+        finish: () => this.#finishDiscovery(),
+        hasFailures: () => this.#failures.failureCount !== 0,
+        prepareDirectory: (collector, cursor, committed, role) =>
+          this.#preparedDirectory(collector, cursor, committed, role),
+      },
+      execution: {
+        bind: execution => {
+          this.#execution = execution
+        },
+        bindDirectoryOutput: output => {
+          this.#directoryOutput = output
+        },
+        bindDirectoryScope: scope => {
+          this.#directoryScope = scope
+        },
+        recordPreparation: evidence => {
+          this.#preparation = evidence
+        },
+        requireBound: () => this.#requireExecution(),
+        materializationStarted: () => this.#observers?.materializationStarted(),
+        finalizeDirectories: () => this.#finalizeDirectories(),
+        transferPreparedFiles: files => this.#transferPreparedFiles(files),
+        completeWorkers: measure => this.#completeWorkers(measure),
+        settleIncompletePreparation: measure => this.#settleIncompletePreparation(measure),
+        preparationRejected: state => this.#preparationRejected(state),
+      },
+    })
   }
 
   async run(signal?: AbortSignal): Promise<TransferJobResult> {
@@ -199,164 +229,19 @@ export class TransferJob {
         intent,
         transferJobId: this.#transferJobId,
         lanes: this.#options.lanes,
-        ...(this.#options.protocolSessionId === undefined
-          ? {}
-          : { protocolSessionId: this.#options.protocolSessionId }),
         ...(this.#options.onProgress === undefined ? {} : { onProgress: this.#options.onProgress }),
         ...(this.#options.onMeasure === undefined ? {} : { onMeasure: this.#options.onMeasure }),
-        ...(this.#options.onTrace === undefined ? {} : { onTrace: this.#options.onTrace }),
+        ...(this.#options.trace === undefined ? {} : { trace: this.#options.trace }),
       })
       this.#observers.intentFrozen(artifactLayoutClass(intent))
       this.#emitProgress()
-      switch (intent.plan.kind) {
-        case 'direct-tree': return await this.#runDirectTree(intent as DirectTreeIntent)
-        case 'direct-atomic': return await this.#runDirectAtomic(intent as DirectAtomicIntent)
-        case 'workspace-then-publish': return await this.#runWorkspace(intent as WorkspaceIntent)
-        case 'portable-handoff': return await this.#runPreparedPortable(intent as PortableIntent)
-      }
-      throw new TypeError('receive intent has an unknown materialization plan')
+      return await this.#materialization.run(intent)
     } catch (error) {
-      if (this.#intent === undefined) throw new V2TransferAdmissionFailureError(error)
+      if (this.#intent === undefined) throw this.#admissionFailure(error)
       return this.#settleRunFailure(error)
     } finally {
       this.#externalAbortCleanup?.()
     }
-  }
-
-  async #runDirectTree(
-    intent: DirectTreeIntent,
-  ): Promise<TransferJobResult> {
-    const execution = validatePlanExecutionBinding(
-      intent,
-      await this.#options.plans.openDirectTree(intent, this.#lifetime.signal),
-    )
-    this.#execution = execution
-    this.#directoryOutput = execution.directories
-    this.#directoryScope = await createDirectoryAdmissionScope(intent)
-    this.#observers?.materializationStarted(execution.output.identity.outputSessionId)
-    const root = await this.#root.direct((cursor, committed) => this.#admitDirectory(cursor, committed))
-    await this.#runDiscovery(root, newFileQueue(this.#limits))
-    const measure = this.#finishDiscovery()
-    await this.#finalizeDirectories()
-    return this.#completeWorkers(measure)
-  }
-
-  async #runDirectAtomic(
-    intent: DirectAtomicIntent,
-  ): Promise<TransferJobResult> {
-    const execution = validatePlanExecutionBinding(
-      intent,
-      await this.#options.plans.openDirectAtomic(intent, this.#lifetime.signal),
-    )
-    this.#execution = execution
-    this.#directoryOutput = execution.directories
-    if (execution.directories !== undefined) {
-      this.#directoryScope = await createDirectoryAdmissionScope(intent)
-    }
-    this.#observers?.materializationStarted(execution.output.identity.outputSessionId)
-    const root = execution.directories === undefined
-      ? this.#root.authenticated(await this.#root.load())
-      : await this.#root.direct((cursor, committed) => this.#admitDirectory(cursor, committed))
-    await this.#runDiscovery(root, newFileQueue(this.#limits))
-    const measure = this.#finishDiscovery()
-    if (execution.directories !== undefined) await this.#finalizeDirectories()
-    return this.#completeWorkers(measure)
-  }
-
-  async #runWorkspace(intent: WorkspaceIntent): Promise<TransferJobResult> {
-    switch (intent.artifact.kind) {
-      case 'original-file': return this.#runWorkspaceOriginal(intent as WorkspaceOriginalIntent)
-      case 'zip-archive': return this.#runPreparedWorkspaceZip(intent as WorkspaceZipIntent)
-      case 'directory-tree':
-        throw new TypeError('WorkspaceThenPublish does not support DirectoryTree artifacts')
-    }
-  }
-
-  async #runWorkspaceOriginal(
-    intent: WorkspaceOriginalIntent,
-  ): Promise<TransferJobResult> {
-    const committed = await this.#root.load()
-    const evidence = await collectExactSingleFileEvidence({
-      catalog: this.#options.catalog,
-      descriptor: this.#options.descriptor,
-      selection: this.#selection,
-      artifact: intent.artifact,
-      signal: this.#lifetime.signal,
-      root: committed,
-    })
-    const admitted = await this.#options.plans.openWorkspaceOriginal(
-      intent,
-      evidence,
-      this.#lifetime.signal,
-    )
-    if (admitted.kind === 'rejected') return this.#preparationRejected(admitted.state)
-    const execution = validatePlanExecutionBinding(intent, admitted.execution)
-    this.#execution = execution
-    this.#observers?.materializationStarted(execution.output.identity.outputSessionId)
-    const root = this.#root.authenticated(committed)
-    await this.#runDiscovery(root, newFileQueue(this.#limits))
-    const measure = this.#finishDiscovery()
-    return this.#completeWorkers(measure)
-  }
-
-  async #runPreparedWorkspaceZip(
-    intent: WorkspaceZipIntent,
-  ): Promise<TransferJobResult> {
-    const collector = await this.#collectExactPreparation(intent)
-    if (this.#failures.failureCount !== 0) {
-      return this.#settleIncompletePreparation(this.#measure.snapshot())
-    }
-    const evidence = collector.evidence()
-    this.#preparation = evidence
-    const prepared = await this.#options.plans.prepareWorkspaceZip(intent, evidence, this.#lifetime.signal)
-    if (prepared.kind === 'rejected') return this.#preparationRejected(prepared.state)
-    this.#execution = validatePlanExecutionBinding(intent, prepared.execution)
-    return this.#runPreparedContent(collector, this.#measure.snapshot())
-  }
-
-  async #runPreparedPortable(
-    intent: PortableIntent,
-  ): Promise<TransferJobResult> {
-    const collector = await this.#collectExactPreparation(intent)
-    if (this.#failures.failureCount !== 0) {
-      return this.#settleIncompletePreparation(this.#measure.snapshot())
-    }
-    const evidence = collector.evidence()
-    this.#preparation = evidence
-    const prepared = await this.#options.plans.preparePortable(intent, evidence, this.#lifetime.signal)
-    if (prepared.kind === 'rejected') return this.#preparationRejected(prepared.state)
-    this.#execution = validatePlanExecutionBinding(intent, prepared.execution)
-    return this.#runPreparedContent(collector, this.#measure.snapshot())
-  }
-
-  async #collectExactPreparation(
-    intent: TransferJobOptions['intent'],
-  ): Promise<ExactPreparationCollector> {
-    const collector = new ExactPreparationCollector(intent)
-    const committed = await this.#root.load()
-    const cursor = this.#root.cursor()
-    const root: DirectoryWork = {
-      cursor,
-      materializeParent: async (role = 'ancestor') => this.#preparedDirectory(
-        collector,
-        cursor,
-        committed,
-        role,
-      ),
-    }
-    await this.#runDiscovery(root, undefined, collector)
-    this.#finishDiscovery()
-    return collector
-  }
-
-  async #runPreparedContent(
-    collector: ExactPreparationCollector,
-    measure: SelectionMeasure,
-  ): Promise<TransferJobResult> {
-    const execution = this.#requireExecution()
-    this.#observers?.materializationStarted(execution.output.identity.outputSessionId)
-    await this.#transferPreparedFiles(collector.pendingFiles())
-    return this.#completeWorkers(measure)
   }
 
   async #runDiscovery(
@@ -417,6 +302,7 @@ export class TransferJob {
         error,
         execution.output.capabilities.fileFailureIsolation,
         cursor.idText,
+        this.#options.incidentScope,
       )
       throw isolated ?? error
     }
@@ -424,7 +310,6 @@ export class TransferJob {
     this.#finalizableDirectories.push(admission)
     if (artifactPath.length > 0) this.#materializedDirectoryPaths.add(artifactPath.join('/'))
     this.#observers?.directoryAdmitted({
-      outputSessionId: execution.output.identity.outputSessionId,
       admittedDirectoryCount: BigInt(this.#directoryAdmissionClaims),
       layoutClass: scope.layout,
     })
@@ -469,6 +354,7 @@ export class TransferJob {
               error,
               this.#requireExecution().output.capabilities.fileFailureIsolation,
               admission.directoryId,
+              this.#options.incidentScope,
             )
         if (isolated === undefined) throw error
         this.#recordDirectoryFailure(admission.directoryId, isolated)
@@ -503,6 +389,9 @@ export class TransferJob {
       output: execution.output,
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
       onWriteAcknowledged: (bytes) => {
         this.#progress.acknowledgeWrite(bytes)
         this.#emitProgress()
@@ -523,12 +412,14 @@ export class TransferJob {
     const execution = this.#requireExecution()
     if (execution.planKind !== 'direct-tree' && worker.status !== 'Succeeded') {
       this.#observers?.materializationFailed(
-        materializationFailureReason(worker.failures.at(0)?.reason),
+        worker.trigger?.materializationFailureReason ?? 'content-read-failed',
         BigInt(this.#progress.completedFiles),
         this.#progress.completedBytes,
       )
-      const lifecycle = await this.#pause(worker, new IncompleteArtifactError())
-      return this.#result(worker, lifecycle, measure, new IncompleteArtifactError())
+      const failureTrigger = requireWorkerFailureTrigger(worker)
+      const reason = new V2ClassifiedTransferFailureError(failureTrigger)
+      const lifecycle = await this.#pause(worker, reason, failureTrigger)
+      return this.#result(worker, lifecycle, measure, reason, failureTrigger)
     }
     this.#observers?.materializationCompleted(summary)
     const lifecycle = await this.#settleCompleted(execution, worker, summary)
@@ -578,9 +469,10 @@ export class TransferJob {
   async #settleIncompletePreparation(measure: SelectionMeasure): Promise<TransferJobResult> {
     const worker = transferWorkerSettlement('CompletedWithErrors', this.#failures.snapshot())
     this.#lastWorker = worker
-    const reason = new IncompleteArtifactError()
-    const lifecycle = await this.#pause(worker, reason)
-    return this.#result(worker, lifecycle, measure, reason)
+    const failureTrigger = requireWorkerFailureTrigger(worker)
+    const reason = new V2ClassifiedTransferFailureError(failureTrigger)
+    const lifecycle = await this.#pause(worker, reason, failureTrigger)
+    return this.#result(worker, lifecycle, measure, reason, failureTrigger)
   }
 
   #preparationRejected(state: ReceiveLifecycleState): TransferJobResult {
@@ -590,8 +482,34 @@ export class TransferJob {
     return this.#result(worker, lifecycle, this.#measure.snapshot())
   }
 
+  #admissionFailure(error: unknown): V2TransferAdmissionFailureError {
+    const normalized = normalizeV2FileTransferFailure(error, {
+      stage: 'authority_selection',
+      ...(this.#externalCancellationRequested ? { signal: this.#lifetime.signal } : {}),
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
+    })
+    return new V2TransferAdmissionFailureError(normalized.kind === 'canceled'
+      ? Object.freeze({ kind: 'canceled' })
+      : Object.freeze({
+          kind: 'fault',
+          classification: normalized.diagnostic.classification,
+        }))
+  }
+
   async #settleRunFailure(error: unknown): Promise<TransferJobResult> {
-    if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
+    const normalized = normalizeV2FileTransferFailure(error, {
+      ...(this.#externalCancellationRequested ? { signal: this.#lifetime.signal } : {}),
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
+    })
+    const abortReason = normalized.diagnostic
+    const failureTrigger = normalized.kind === 'fault'
+      ? normalized.diagnostic.classification
+      : undefined
+    if (!this.#lifetime.signal.aborted) this.#lifetime.abort(abortReason)
     let measure = this.#measure.snapshot()
     if (measure.discovery === 'open') {
       measure = this.#measure.fail()
@@ -600,11 +518,13 @@ export class TransferJob {
     }
     const worker = this.#lastWorker ?? transferWorkerSettlement('Paused', this.#failures.snapshot())
     this.#observers?.materializationFailed(
-      materializationFailureReason(error),
+      failureTrigger?.materializationFailureReason ??
+        worker.trigger?.materializationFailureReason ??
+        'content-read-failed',
       BigInt(this.#progress.completedFiles),
       this.#progress.completedBytes,
     )
-    const lifecycle = await this.#pause(worker, error)
+    const lifecycle = await this.#pause(worker, abortReason, failureTrigger)
     if (this.#execution?.planKind === 'direct-tree') {
       const outcome = failedTreeOutcome(lifecycle)
       if (outcome !== undefined) {
@@ -615,12 +535,13 @@ export class TransferJob {
         })
       }
     }
-    return this.#result(worker, lifecycle, measure, error)
+    return this.#result(worker, lifecycle, measure, abortReason, failureTrigger)
   }
 
   async #pause(
     worker: TransferWorkerSettlement,
     reason: unknown,
+    failureTrigger?: ClassifiedTransferFailure,
   ): Promise<ReceiveLifecycleState> {
     const state = await pauseFailedV2Execution({
       intent: this.#requireIntent(),
@@ -629,6 +550,10 @@ export class TransferJob {
       worker,
       materialization: this.#materializationSummary(),
       reason,
+      ...(failureTrigger === undefined ? {} : { failureTrigger }),
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
       timeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
       validateState: state => validatePauseLifecycle(this.#requireIntent(), worker, state),
     })
@@ -640,6 +565,7 @@ export class TransferJob {
     lifecycle: ReceiveLifecycleState,
     measure: SelectionMeasure,
     abortReason?: unknown,
+    failureTrigger: ClassifiedTransferFailure | undefined = worker.trigger,
   ): TransferJobResult {
     const execution = this.#execution
     return Object.freeze({
@@ -649,6 +575,7 @@ export class TransferJob {
       transferJobId: this.#transferJobId,
       intent: this.#requireIntent(),
       ...(abortReason === undefined ? {} : { abortReason }),
+      ...(failureTrigger === undefined ? {} : { failureTrigger }),
       ...(execution === undefined ? {} : { outputDurability: execution.output.capabilities.durability }),
       ...(this.#preparation === undefined ? {} : { preparation: this.#preparation }),
     })
@@ -664,16 +591,40 @@ export class TransferJob {
   #recordDirectoryFailure(identity: string, reason: unknown): void {
     if (this.#failedDirectoryIds.has(identity)) return
     this.#failedDirectoryIds.add(identity)
+    const normalized = normalizeV2FileTransferFailure(reason, {
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
+    })
+    if (normalized.kind === 'canceled') throw normalized.diagnostic
     this.#progress.failDirectory()
-    this.#failures.record(Object.freeze({ kind: 'directory', directoryId: directoryId(identity), reason }))
+    this.#failures.record(
+      Object.freeze({
+        kind: 'directory',
+        directoryId: directoryId(identity),
+        classification: normalized.diagnostic.classification,
+      }),
+      transferSelectionOrdinal(identity),
+    )
     this.#emitProgress()
   }
 
   #recordFileFailure(entry: Extract<V2CatalogEntry, { kind: 'file' }>, reason: unknown): void {
+    const normalized = normalizeV2FileTransferFailure(reason, {
+      ...(this.#options.incidentScope === undefined
+        ? {}
+        : { incidentScope: this.#options.incidentScope }),
+    })
+    if (normalized.kind === 'canceled') throw normalized.diagnostic
     const evidence = transferFileOutcomeEvidence(reason) ??
       Object.freeze({ kind: 'residual-failure' as const })
     this.#failures.record(
-      Object.freeze({ kind: 'file', fileId: fileId(entry.idText), reason }),
+      Object.freeze({
+        kind: 'file',
+        fileId: fileId(entry.idText),
+        classification: normalized.diagnostic.classification,
+      }),
+      transferSelectionOrdinal(entry.idText),
       projectTransferFileOutcome(evidence),
     )
     this.#progress.recordFileError()
@@ -684,10 +635,29 @@ export class TransferJob {
     const missing = this.#explicitTargets.missing()
     if (this.#progress.failedDirectories === 0) {
       for (const target of missing) {
-        const reason = new V2SelectionTargetMissingError(target)
-        this.#failures.recordRepresentative(target.kind === 'directory'
-          ? Object.freeze({ kind: 'directory', directoryId: directoryId(target.idText), reason })
-          : Object.freeze({ kind: 'file', fileId: fileId(target.idText), reason }))
+        const normalized = normalizeV2FileTransferFailure(
+          new V2SelectionTargetMissingError(target),
+          {
+            ...(this.#options.incidentScope === undefined
+              ? {}
+              : { incidentScope: this.#options.incidentScope }),
+          },
+        )
+        if (normalized.kind === 'canceled') throw normalized.diagnostic
+        this.#failures.recordRepresentative(
+          target.kind === 'directory'
+            ? Object.freeze({
+                kind: 'directory',
+                directoryId: directoryId(target.idText),
+                classification: normalized.diagnostic.classification,
+              })
+            : Object.freeze({
+                kind: 'file',
+                fileId: fileId(target.idText),
+                classification: normalized.diagnostic.classification,
+              }),
+          transferSelectionOrdinal(target.idText),
+        )
         this.#progress.recordSelectionError()
       }
     }
@@ -732,10 +702,30 @@ export class TransferJob {
     if (signal === undefined) return
     const abort = () => {
       if (this.#lifetime.signal.aborted) return
+      this.#externalCancellationRequested = true
       this.#lifetime.abort(signal.reason ?? new DOMException('Transfer aborted', 'AbortError'))
     }
     signal.addEventListener('abort', abort, { once: true })
     this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
     if (signal.aborted) abort()
   }
+}
+
+function requireWorkerFailureTrigger(
+  worker: TransferWorkerSettlement,
+): ClassifiedTransferFailure {
+  if (worker.trigger === undefined) {
+    throw new TypeError('Failed transfer worker is missing nominated failure authority')
+  }
+  return worker.trigger
+}
+
+function transferSelectionOrdinal(identity: string): bigint {
+  const bytes = decodeBase64Url(identity)
+  if (bytes?.byteLength !== 16 || bytes.every(value => value === 0)) {
+    throw new TypeError('Transfer failure identity is not canonical')
+  }
+  let ordinal = 0n
+  for (const value of bytes) ordinal = ordinal << 8n | BigInt(value)
+  return ordinal
 }

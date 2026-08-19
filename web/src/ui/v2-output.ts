@@ -1,3 +1,4 @@
+import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import {
   offerArtifacts,
   type ArtifactAction,
@@ -71,14 +72,56 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
 })
 
 export type V2OutputTraceEvent =
-  | OfferComputedDecision
-  | OfferDisabledDecision
   | Readonly<{
-      name: 'receive.projection.stale_event_dropped'
-      current_projection_epoch: ProjectionEpoch
-      stale_projection_epoch: ProjectionEpoch
-      event_class: 'capability-result' | 'artifact-action' | 'authority-result'
+      name: 'authority_transition'
+      transition: 'offers_computed'
+      projectionEpoch: ProjectionEpoch
+      shapeProof: OfferComputedDecision['shape_proof']
+      offeredArtifactKinds: OfferComputedDecision['offered_artifact_kinds']
+      offeredPlanKinds: OfferComputedDecision['offered_plan_kinds']
+      primaryArtifactKind: OfferComputedDecision['primary_artifact_kind']
     }>
+  | Readonly<{
+      name: 'authority_transition'
+      transition: 'offers_disabled'
+      projectionEpoch: ProjectionEpoch
+      shapeProof: OfferDisabledDecision['shape_proof']
+      reason: OfferDisabledDecision['offer_unavailable_reason']
+      hardLimitClass?: NonNullable<OfferDisabledDecision['hard_limit_class']>
+    }>
+  | Readonly<{
+      name: 'authority_transition'
+      transition: 'stale_event_dropped'
+      currentProjectionEpoch: ProjectionEpoch
+      staleProjectionEpoch: ProjectionEpoch
+      eventClass: 'capability_result' | 'artifact_action' | 'authority_result'
+    }>
+
+function offerDecisionTraceEvent(
+  decision: OfferComputedDecision | OfferDisabledDecision,
+): V2OutputTraceEvent {
+  if (decision.name === 'receive.offer.computed') {
+    return Object.freeze({
+      name: 'authority_transition',
+      transition: 'offers_computed',
+      projectionEpoch: decision.projection_epoch,
+      shapeProof: decision.shape_proof,
+      offeredArtifactKinds: decision.offered_artifact_kinds,
+      offeredPlanKinds: decision.offered_plan_kinds,
+      primaryArtifactKind: decision.primary_artifact_kind,
+    })
+  }
+  return Object.freeze({
+    name: 'authority_transition',
+    transition: 'offers_disabled',
+    projectionEpoch: decision.projection_epoch,
+    shapeProof: decision.shape_proof,
+    reason: decision.offer_unavailable_reason,
+    ...(decision.hard_limit_class === undefined
+      ? {}
+      : { hardLimitClass: decision.hard_limit_class }),
+  })
+}
 
 export type ArtifactOfferPlanner = (
   projection: SelectionProjectionState['projection'],
@@ -121,7 +164,7 @@ export type TransferResultProjection = Pick<
 export interface V2OutputPresentationControllerOptions<Authority> {
   readonly planner?: ArtifactOfferPlanner
   readonly releaseStaleAuthority?: (authority: Authority) => void | PromiseLike<void>
-  readonly onTrace?: (event: V2OutputTraceEvent) => void
+  readonly trace?: DomainTraceSource<V2OutputTraceEvent>
 }
 
 interface PendingActivation {
@@ -137,7 +180,7 @@ interface PendingActivation {
 export class V2OutputPresentationController<Authority = unknown> {
   readonly #planner: ArtifactOfferPlanner
   readonly #releaseStaleAuthority: ((authority: Authority) => void | PromiseLike<void>) | undefined
-  readonly #onTrace: ((event: V2OutputTraceEvent) => void) | undefined
+  readonly #traceSource: DomainTraceSource<V2OutputTraceEvent> | undefined
   readonly #listeners = new Set<() => void>()
   #snapshot = EMPTY_V2_OUTPUT_PRESENTATION
   #boundary = 0
@@ -146,7 +189,7 @@ export class V2OutputPresentationController<Authority = unknown> {
   constructor(options: V2OutputPresentationControllerOptions<Authority> = {}) {
     this.#planner = options.planner ?? offerArtifacts
     this.#releaseStaleAuthority = options.releaseStaleAuthority
-    this.#onTrace = options.onTrace
+    this.#traceSource = options.trace
   }
 
   readonly subscribe = (listener: () => void): (() => void) => {
@@ -203,7 +246,7 @@ export class V2OutputPresentationController<Authority = unknown> {
         chosenArtifactKind: null,
         chosenArtifact: null,
       }))
-      this.#trace(offers.decision)
+      this.#emitTrace(() => offerDecisionTraceEvent(offers.decision))
       return Object.freeze({ kind: 'applied', offers })
     })
   }
@@ -468,23 +511,24 @@ export class V2OutputPresentationController<Authority = unknown> {
 
   #traceStale(
     staleEpoch: ProjectionEpoch,
-    eventClass: Extract<V2OutputTraceEvent, {
-      name: 'receive.projection.stale_event_dropped'
-    }>['event_class'],
+    eventClass: 'capability-result' | 'artifact-action' | 'authority-result',
   ): void {
     const currentEpoch = this.#snapshot.projection?.projection.epoch
     if (currentEpoch === undefined || currentEpoch === staleEpoch) return
-    this.#trace(Object.freeze({
-      name: 'receive.projection.stale_event_dropped',
-      current_projection_epoch: currentEpoch,
-      stale_projection_epoch: staleEpoch,
-      event_class: eventClass,
+    this.#emitTrace(() => Object.freeze({
+      name: 'authority_transition',
+      transition: 'stale_event_dropped',
+      currentProjectionEpoch: currentEpoch,
+      staleProjectionEpoch: staleEpoch,
+      eventClass: staleTraceEventClass(eventClass),
     }))
   }
 
-  #trace(event: V2OutputTraceEvent): void {
+  #emitTrace(createEvent: () => V2OutputTraceEvent): void {
+    const observer = this.#traceSource?.current
+    if (observer === undefined) return
     try {
-      this.#onTrace?.(event)
+      observer(createEvent())
     } catch {
       // Observers cannot change artifact choice, authority ownership, or epoch fencing.
     }
@@ -493,5 +537,18 @@ export class V2OutputPresentationController<Authority = unknown> {
   #publish(snapshot: V2OutputPresentationSnapshot): void {
     this.#snapshot = snapshot
     for (const listener of this.#listeners) listener()
+  }
+}
+
+function staleTraceEventClass(
+  eventClass: 'capability-result' | 'artifact-action' | 'authority-result',
+): 'capability_result' | 'artifact_action' | 'authority_result' {
+  switch (eventClass) {
+    case 'capability-result':
+      return 'capability_result'
+    case 'artifact-action':
+      return 'artifact_action'
+    case 'authority-result':
+      return 'authority_result'
   }
 }

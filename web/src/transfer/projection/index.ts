@@ -18,7 +18,7 @@ export {
   type ProjectionEpoch,
   type ProjectionMetrics,
   type ProjectionTraceEvent,
-  type ProjectionTraceSink,
+  type ProjectionTraceSource,
   type RetryableDiscoveryReason,
   type SelectedRootFact,
   type SelectionProjectionEvent,

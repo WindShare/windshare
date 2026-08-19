@@ -99,26 +99,32 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     if (admitted.evidence.stage !== 'admitted') {
       throw new Error('TURN admission wait returned a non-admitted diagnostic')
     }
+    const offerSent = await events.waitFor(
+      'attempt',
+      (event) => event.evidence.stage === 'offer-sent' &&
+        sameIdentityBytes(event.evidence.attemptIdBytes, admitted.evidence.attemptIdBytes),
+      'TURN offer operation',
+    )
+    const admittedLane = requireEvidenceLane(admitted.evidence)
     expect(admitted.evidence).toMatchObject({
-      schemaVersion: 2,
-      stream: 'attempt',
-      sessionId: expect.any(String),
-      peerPathId: expect.any(String),
-      attemptId: expect.any(String),
-      side: 'browser',
+      eventName: 'peer_attempt',
+      protocolSessionIdBytes: expect.any(Array),
+      peerPathIdBytes: expect.any(Array),
+      attemptIdBytes: expect.any(Array),
+      operationIdBytes: expect.any(Array),
       stage: 'admitted',
       phase: 'admission',
-      offerOperationId: expect.any(String),
-      grantOperationId: expect.any(String),
       lane: {
         laneId: expect.any(Number),
         laneEpoch: expect.any(Number),
       },
     })
-    expect(admitted.evidence.grantOperationId).not.toBe(admitted.evidence.offerOperationId)
+    expect(requireOperationIdentity(admitted.evidence)).not.toEqual(
+      requireOperationIdentity(offerSent.evidence),
+    )
     expect(lane.observation).toMatchObject({
-      laneId: admitted.evidence.lane.laneId,
-      laneEpoch: admitted.evidence.lane.laneEpoch,
+      laneId: admittedLane.laneId,
+      laneEpoch: admittedLane.laneEpoch,
       route: 'peer',
     })
     expect(peerDispatch.observation).toMatchObject({
@@ -201,6 +207,27 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     redactor?.clear()
   }
 })
+
+function requireEvidenceLane(evidence: { readonly lane?: {
+  readonly laneId: number
+  readonly laneEpoch: number
+} }): { readonly laneId: number; readonly laneEpoch: number } {
+  if (evidence.lane === undefined) throw new Error('Peer evidence did not retain its lane')
+  return evidence.lane
+}
+
+function requireOperationIdentity(
+  evidence: { readonly operationIdBytes?: readonly number[] },
+): readonly number[] {
+  if (evidence.operationIdBytes === undefined) {
+    throw new Error('Peer evidence did not retain its protocol operation identity')
+  }
+  return evidence.operationIdBytes
+}
+
+function sameIdentityBytes(left: readonly number[], right: readonly number[]): boolean {
+  return left.length === right.length && left.every((value, index) => value === right[index])
+}
 
 function deterministicBytes(length: number): Uint8Array {
   return Uint8Array.from({ length }, (_value, index) => (index * 43 + 29) & 0xff)

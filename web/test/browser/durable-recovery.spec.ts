@@ -163,8 +163,8 @@ test('admits catalog-derived TransferJob evidence before requesting workspace co
   })
   expect(result.workspaceTraceNames).toContain('receive.preparation.sealed')
   expect(result.workspaceTraceNames).toContain('receive.preparation_admission.accepted')
-  expect(result.transferTraceNames).toContain('receive.materialization.completed')
-  expect(result.transferTraceNames).not.toContain('receive.materialization.failed')
+  expect(result.transferTraceNames).toContain('materialization_completed')
+  expect(result.transferTraceNames).not.toContain('materialization_failed')
 })
 
 test('reopens workspace admission authority from a fresh page', async ({ page }) => {

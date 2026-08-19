@@ -1,4 +1,5 @@
 import type { ReceiveIntent } from '../../transfer/intent'
+import type { OutputDiagnosticsPorts } from '../diagnostics'
 import {
   createPersistedReceiveRecord,
   createReceiveOperationV1,
@@ -84,6 +85,7 @@ export class WorkspaceOperationStages {
     readonly clock: () => number
     readonly contentRequests: WorkspaceContentRequestCounter
     readonly onTrace?: WorkspaceStageTraceListener
+    readonly diagnostics?: OutputDiagnosticsPorts
   }): Promise<WorkspaceOperationStages> {
     return new WorkspaceOperationStages(new WorkspaceStageRuntime({
       repository: input.repository,
@@ -92,6 +94,7 @@ export class WorkspaceOperationStages {
       clock: input.clock,
       contentRequests: input.contentRequests,
       ...(input.onTrace === undefined ? {} : { trace: input.onTrace }),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     }))
   }
 

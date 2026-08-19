@@ -1,5 +1,11 @@
 import { ByteRangeSet, byteRange } from '../../content/geometry'
 import {
+  emitOutputTrace,
+  outputTraceEvent,
+  recordOutputException,
+  type OutputDiagnosticsPorts,
+} from '../diagnostics'
+import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   fileCheckpointIsComplete,
@@ -18,6 +24,26 @@ import type {
 } from './contracts'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
 
+type PersistentTransactionFailureStage =
+  | 'output_write'
+  | 'output_commit'
+  | 'checkpoint'
+  | 'cleanup'
+
+type PersistentTransactionTraceInput =
+  | Readonly<{
+      eventName: 'output_write'
+      transition: 'transaction_failed' | 'transaction_committed' | 'commit_failed'
+    }>
+  | Readonly<{
+      eventName: 'checkpoint'
+      transition: 'failed'
+    }>
+  | Readonly<{
+      eventName: 'cleanup'
+      transition: 'failed'
+    }>
+
 export class PersistentFileTransaction implements PersistentFileTransactionPort {
   readonly revision: OpenedFileRevision
   readonly ownedObjectId: string
@@ -25,6 +51,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   readonly #checkpoints: FileCheckpointJournal
   readonly #onClose: (transaction: PersistentFileTransaction) => void
   readonly #onOwnershipUnknown: (error: TargetOwnershipUnknownError) => void
+  readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #checkpoint: FileCheckpointV2
   #ranges: ByteRangeSet
   #tail: Promise<unknown> = Promise.resolve()
@@ -38,6 +65,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     checkpoints: FileCheckpointJournal
     onClose?: (transaction: PersistentFileTransaction) => void
     onOwnershipUnknown?: (error: TargetOwnershipUnknownError) => void
+    diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.revision = Object.freeze({ ...input.revision })
     this.ownedObjectId = input.handle.ownedObjectId
@@ -46,6 +74,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#checkpoints = input.checkpoints
     this.#onClose = input.onClose ?? (() => undefined)
     this.#onOwnershipUnknown = input.onOwnershipUnknown ?? (() => undefined)
+    this.#diagnostics = input.diagnostics
     this.#ranges = new ByteRangeSet(input.revision.exactSize, input.checkpoint.verifiedRanges)
   }
 
@@ -59,7 +88,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     signal?: AbortSignal,
   ): Promise<void> {
     const snapshot = data.slice()
-    return this.#enqueue(async () => {
+    return this.#enqueue('output_write', async () => {
       throwIfAborted(signal)
       this.#requireMutable()
       const end = offset + BigInt(snapshot.byteLength)
@@ -77,11 +106,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   }
 
   checkpoint(signal?: AbortSignal): Promise<readonly PersistentByteRange[]> {
-    return this.#enqueue(() => this.#checkpointNow(signal))
+    return this.#enqueue('checkpoint', async () => {
+      return this.#checkpointNow(signal)
+    })
   }
 
   commit(signal?: AbortSignal): Promise<FinalFileCheckpointProof> {
-    return this.#enqueue(async () => {
+    return this.#enqueue('output_commit', async () => {
       throwIfAborted(signal)
       this.#requireOpen()
       if (this.#finalProof !== undefined) {
@@ -112,12 +143,16 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       // window where an external replacement could masquerade as successful commit.
       await this.#handle.verify('commit')
       this.#finalProof = proof
+      this.#trace({
+        eventName: 'output_write',
+        transition: 'transaction_committed',
+      })
       return proof
     })
   }
 
   close(): Promise<void> {
-    return this.#enqueue(async () => {
+    return this.#enqueue('cleanup', async () => {
       if (this.#closed) return
       this.#closed = true
       try {
@@ -165,11 +200,15 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     return verified.verifiedRanges
   }
 
-  #enqueue<T>(operation: () => Promise<T>): Promise<T> {
+  #enqueue<T>(
+    stage: PersistentTransactionFailureStage,
+    operation: () => Promise<T>,
+  ): Promise<T> {
     const observed = async (): Promise<T> => {
       try {
         return await operation()
       } catch (error) {
+        this.#recordFailure(stage, error)
         if (error instanceof TargetOwnershipUnknownError) this.#onOwnershipUnknown(error)
         throw error
       }
@@ -177,6 +216,47 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     const result = this.#tail.then(observed, observed)
     this.#tail = result
     return result
+  }
+
+  #recordFailure(stage: PersistentTransactionFailureStage, error: unknown): void {
+    const failures = this.#diagnostics?.failures
+    switch (stage) {
+      case 'output_write':
+        recordOutputException(failures?.outputWrite, error)
+        this.#trace({
+          eventName: 'output_write',
+          transition: 'transaction_failed',
+        })
+        return
+      case 'output_commit':
+        recordOutputException(failures?.outputCommit, error)
+        this.#trace({
+          eventName: 'output_write',
+          transition: 'commit_failed',
+        })
+        return
+      case 'checkpoint':
+        recordOutputException(failures?.checkpoint, error)
+        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+        return
+      case 'cleanup':
+        recordOutputException(failures?.cleanup, error)
+        this.#trace({ eventName: 'cleanup', transition: 'failed' })
+        return
+      default:
+        return
+    }
+  }
+
+  #trace(input: PersistentTransactionTraceInput): void {
+    const diagnostics = this.#diagnostics
+    emitOutputTrace(diagnostics?.trace, () =>
+      outputTraceEvent(input.eventName, {
+        backend: diagnostics?.backend === 'file_system_access'
+          ? 'file_system_access'
+          : 'origin_private',
+        transition: input.transition,
+      }))
   }
 
   #requireOpen(): void {

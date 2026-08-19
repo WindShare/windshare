@@ -2,10 +2,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
 import { V2LaneSet, type V2BlockDemand, type V2BlockLane } from '../../src/content/v2-lane-set'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import { encodeBase64Url } from '../../src/crypto/bytes'
+import { createProtocolFailure, type ProtocolFailure } from '../../src/diagnostics/incident/fact'
 import type {
-  V2BrowserConnectivityAttemptDiagnostic,
   V2CandidateCounts,
+  V2PeerAttemptTraceEvent,
+  V2PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
 import type {
   OfferChannelFactory,
@@ -25,11 +26,13 @@ import {
 } from '../../src/connectivity/v2-receiver-policy'
 import type { V2SessionMessage } from '../../src/session/v2-message'
 import type {
-  V2LaneAdmissionMilestone,
-  V2LaneAdmissionObserver,
   V2ReceiverSessionRuntime,
   V2SessionOperation,
 } from '../../src/session/v2-runtime'
+import {
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 import type {
   V2LaneChange,
   V2OperationCancellation,
@@ -37,7 +40,6 @@ import type {
 import type {
   V2PeerRecoveryClock,
   V2PeerRecoveryDependencies,
-  V2PeerRecoveryEvent,
 } from '../../src/connectivity/v2-peer-recovery'
 
 class FakeSession {
@@ -46,6 +48,8 @@ class FakeSession {
     protocolSessionId: identity(90),
     initialLaneEpoch: 0,
   })
+  readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
+  readonly protocolFailures: ProtocolFailure[] = []
   readonly #ids = new Set([this.initialLaneId])
   readonly #listeners = new Set<(change: V2LaneChange) => void>()
   attachGate: Promise<void> | undefined
@@ -70,22 +74,12 @@ class FakeSession {
 
   async requestLaneGrant(
     requestedLaneId: number,
-    options: {
-      readonly signal?: AbortSignal
-      readonly observeAdmission?: V2LaneAdmissionObserver
-    } = {},
+    options: { readonly signal?: AbortSignal } = {},
   ) {
     this.grantCalls += 1
     this.requestedLaneIds.push(requestedLaneId)
     const laneId = requestedLaneId === 0 ? this.#nextLaneId++ : requestedLaneId
     const operationIdentity = identity(this.#nextGrantOperationIdentity++)
-    const grantOperationId = encodeBase64Url(operationIdentity)
-    emitAdmission(options.observeAdmission, {
-      type: 'grant-requested',
-      grantOperationId,
-      laneId: requestedLaneId,
-      laneEpoch: 0,
-    })
     await awaitOptionalGate(this.grantGate, options.signal)
     const grant = {
       laneId,
@@ -93,12 +87,6 @@ class FakeSession {
       grantOperationId: operationIdentity,
       attachNonce: identity(this.#nextGrantOperationIdentity + 40),
     }
-    emitAdmission(options.observeAdmission, {
-      type: 'grant-received',
-      grantOperationId,
-      laneId: grant.laneId,
-      laneEpoch: grant.laneEpoch,
-    })
     return grant
   }
 
@@ -109,21 +97,16 @@ class FakeSession {
       readonly laneEpoch: number
       readonly grantOperationId: Uint8Array
     },
-    options: {
-      readonly signal?: AbortSignal
-      readonly observeAdmission?: V2LaneAdmissionObserver
-    } = {},
+    options: { readonly signal?: AbortSignal } = {},
   ) {
     this.attachCalls += 1
     const correlation = {
-      grantOperationId: encodeBase64Url(grant.grantOperationId),
+      grantOperationId: createV2ProtocolOperationIdentity(grant.grantOperationId),
       laneId: grant.laneId,
       laneEpoch: grant.laneEpoch,
     }
-    emitAdmission(options.observeAdmission, { type: 'lane-hello-sent', ...correlation })
     await awaitOptionalGate(this.attachGate, options.signal)
     options.signal?.throwIfAborted()
-    emitAdmission(options.observeAdmission, { type: 'admission-response-accepted', ...correlation })
     this.#ids.add(grant.laneId)
     const change: V2LaneChange = {
       type: 'attached',
@@ -131,7 +114,6 @@ class FakeSession {
       laneEpoch: grant.laneEpoch,
     }
     for (const listener of this.#listeners) listener(change)
-    emitAdmission(options.observeAdmission, { type: 'lane-adopted', ...correlation })
     return Object.freeze({
       ...correlation,
       disposition: 'accepted' as const,
@@ -152,6 +134,18 @@ class FakeSession {
     cancellation: V2OperationCancellation,
   ): Promise<void> {
     operation.cancel(cancellation.cause)
+  }
+
+  operationCorrelation(operation: V2SessionOperation) {
+    return Object.freeze({
+      protocolSessionId: this.protocolSessionIdentity,
+      protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+      lane: Object.freeze({ id: this.initialLaneId, epoch: this.keys.initialLaneEpoch }),
+    })
+  }
+
+  recordProtocolFailure(failure: ProtocolFailure): void {
+    this.protocolFailures.push(failure)
   }
 
   async close(): Promise<void> {
@@ -334,6 +328,20 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
+function authenticatedPeerFailure(code: number): V2AuthenticatedPeerOperationError {
+  return new V2AuthenticatedPeerOperationError(createProtocolFailure({
+    requestKind: 'peer_offer',
+    wireScope: 'peer',
+    wireCode: code,
+    retryable: false,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: Object.freeze({
+      protocolSessionId: createV2ProtocolSessionIdentity(identity(90)),
+      protocolOperationId: createV2ProtocolOperationIdentity(identity(80)),
+    }),
+  }))
+}
+
 function fakePeer(): PeerChannel {
   return {
     state: 'open',
@@ -395,26 +403,15 @@ async function awaitOptionalGate(
   })
 }
 
-function emitAdmission(
-  observer: V2LaneAdmissionObserver | undefined,
-  milestone: V2LaneAdmissionMilestone,
-): void {
-  try {
-    observer?.(Object.freeze(milestone))
-  } catch {
-    // The fake preserves the production boundary where evidence cannot own admission.
-  }
-}
-
 function fixture(
   offers: OfferChannelFactory,
   onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
   options: {
     readonly nativePeerUsable?: () => boolean
-    readonly connectivityObserver?: (diagnostic: V2BrowserConnectivityAttemptDiagnostic) => void
+    readonly attemptTraceObserver?: (event: V2PeerAttemptTraceEvent) => void
+    readonly recoveryTraceObserver?: (event: V2PeerRecoveryTraceEvent) => void
     readonly randomBytes?: (length: number) => Uint8Array
     readonly onContentLaneDetached?: (observation: V2ContentLaneDetachmentObservation) => void
-    readonly onPeerError?: (error: unknown) => void
     readonly peerRecovery?: V2PeerRecoveryDependencies
   } = {},
 ) {
@@ -429,14 +426,20 @@ function fixture(
     offers,
     randomBytes: options.randomBytes ?? ((length) => new Uint8Array(length).fill(identitySeed++)),
     nativePeerUsable: options.nativePeerUsable ?? (() => true),
-    ...(options.connectivityObserver === undefined
+    ...(options.attemptTraceObserver === undefined && options.recoveryTraceObserver === undefined
       ? {}
-      : { connectivityObserver: options.connectivityObserver }),
+      : {
+          connectivityTrace: {
+            current: (event) => {
+              if (event.eventName === 'peer_attempt') options.attemptTraceObserver?.(event)
+              else options.recoveryTraceObserver?.(event)
+            },
+          },
+        }),
     ...(options.onContentLaneDetached === undefined
       ? {}
       : { onContentLaneDetached: options.onContentLaneDetached }),
     ...(options.peerRecovery === undefined ? {} : { peerRecovery: options.peerRecovery }),
-    onPeerError: options.onPeerError ?? ((error) => errors.push(error)),
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }
@@ -536,7 +539,7 @@ describe('v2 receiver content activation policy', () => {
   it('keeps relay usable without allocating a binding when the native API is absent', async () => {
     vi.useFakeTimers()
     const offers = new SuccessfulOffers()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     let randomCalls = 0
     const { connectivity, lanes } = fixture(offers, undefined, {
       nativePeerUsable: () => false,
@@ -544,7 +547,7 @@ describe('v2 receiver content activation policy', () => {
         randomCalls += 1
         return new Uint8Array(length).fill(8)
       },
-      connectivityObserver: (event) => diagnostics.push(event),
+      attemptTraceObserver: (event) => diagnostics.push(event),
     })
 
     const preview = connectivity.begin('preview')
@@ -560,25 +563,18 @@ describe('v2 receiver content activation policy', () => {
     await connectivity.close()
   })
 
-  it('contains API-gate and diagnostic observer exceptions without starting a task rejection', async () => {
+  it('contains API-gate exceptions without starting a task rejection', async () => {
     vi.useFakeTimers()
     const offers = new SuccessfulOffers()
     const predicateFailure = new Error('synthetic API gate failure')
-    let reportedFailures = 0
     const { connectivity, lanes } = fixture(offers, undefined, {
       nativePeerUsable: () => { throw predicateFailure },
-      onPeerError: (error) => {
-        expect(error).toBe(predicateFailure)
-        reportedFailures += 1
-        throw new Error('synthetic peer diagnostic failure')
-      },
     })
 
     const preview = connectivity.begin('preview')
     await turn()
 
     expect(offers.calls).toBe(0)
-    expect(reportedFailures).toBe(1)
     expect(lanes.laneIds()).toEqual([1])
     expect(preview.routes.allows('relay')).toBe(true)
 
@@ -588,9 +584,9 @@ describe('v2 receiver content activation policy', () => {
 
   it('emits one schema-valid lifecycle and does not fail it during normal cleanup', async () => {
     vi.useFakeTimers()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     const { connectivity, lanes } = fixture(new SuccessfulOffers(), undefined, {
-      connectivityObserver: (event) => diagnostics.push(event),
+      attemptTraceObserver: (event) => diagnostics.push(event),
     })
 
     const preview = connectivity.begin('preview')
@@ -613,12 +609,14 @@ describe('v2 receiver content activation policy', () => {
       'lane-attached',
       'admitted',
     ])
-    expect(diagnostics.map((event) => event.sideSequence)).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14,
-    ])
+    expect(diagnostics.every((event) =>
+      event.correlation.protocolSessionId?.kind === 'protocol_session' &&
+      event.correlation.peerPathId?.kind === 'peer_path' &&
+      event.correlation.peerAttemptId?.kind === 'peer_attempt'
+    )).toBe(true)
     expect(diagnostics.at(-1)).toMatchObject({
       stage: 'admitted',
-      lane: { laneId: 2, laneEpoch: 1 },
+      correlation: { lane: { id: 2, epoch: 1 } },
     })
 
     preview.close()
@@ -630,7 +628,7 @@ describe('v2 receiver content activation policy', () => {
     vi.useFakeTimers()
     const stages: string[] = []
     const { connectivity, lanes, errors } = fixture(new SuccessfulOffers(), undefined, {
-      connectivityObserver: (event) => {
+      attemptTraceObserver: (event) => {
         stages.push(event.stage)
         throw new Error('synthetic diagnostic observer failure')
       },
@@ -649,22 +647,16 @@ describe('v2 receiver content activation policy', () => {
 
   it('blocks grant, attach, and admission after a post-Open authenticated failure', async () => {
     vi.useFakeTimers()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     const { connectivity, lanes, session } = fixture(new SuccessfulOffers(), undefined, {
-      connectivityObserver: (event) => diagnostics.push(event),
+      attemptTraceObserver: (event) => diagnostics.push(event),
     })
     session.grantGate = new Promise<void>(() => undefined)
     const preview = connectivity.begin('preview')
     await turn()
     expect(session.grantCalls).toBe(1)
 
-    session.failPeerOperation(new V2AuthenticatedPeerOperationError({
-      scope: 'peer',
-      code: 0x5004,
-      retryable: false,
-      retryAfterMilliseconds: undefined,
-      message: 'sender rejected lane admission',
-    }))
+    session.failPeerOperation(authenticatedPeerFailure(0x5004))
     await turn()
 
     expect(diagnostics.map((event) => event.stage)).toEqual([
@@ -675,11 +667,10 @@ describe('v2 receiver content activation policy', () => {
       'answer-received',
       'datachannel-open',
       'admission-deadline-armed',
-      'grant-requested',
       'failed',
     ])
     expect(diagnostics.at(-1)).toMatchObject({
-      failedAtStage: 'grant-received',
+      failedAtStage: 'grant-requested',
       typedErrorCode: 'peer-admission',
       failure: {
         kind: 'authenticated-peer-operation',
@@ -696,12 +687,11 @@ describe('v2 receiver content activation policy', () => {
 
   it('starts and terminalizes an API-present attempt even when negotiation fails', async () => {
     vi.useFakeTimers()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     const { connectivity, lanes } = fixture({
       offer: async () => { throw new Error('independent probe did not control this attempt') },
     }, undefined, {
-      connectivityObserver: (event) => diagnostics.push(event),
-      onPeerError: () => { throw new Error('synthetic peer diagnostic failure') },
+      attemptTraceObserver: (event) => diagnostics.push(event),
     })
 
     const preview = connectivity.begin('preview')
@@ -727,10 +717,10 @@ describe('v2 receiver content activation policy', () => {
 
   it('cancels a pending attempt without manufacturing failure authority', async () => {
     vi.useFakeTimers()
-    const diagnostics: V2BrowserConnectivityAttemptDiagnostic[] = []
+    const diagnostics: V2PeerAttemptTraceEvent[] = []
     const offers = new PendingOffers()
     const { connectivity } = fixture(offers, undefined, {
-      connectivityObserver: (event) => diagnostics.push(event),
+      attemptTraceObserver: (event) => diagnostics.push(event),
     })
     connectivity.begin('preview')
     await turn()
@@ -902,7 +892,7 @@ describe('v2 receiver immediate dual-path policy', () => {
     await turn()
     expect(failures.lanes.laneIds()).toEqual([1])
     expect(preview.routes.allows('relay')).toBe(true)
-    expect(failures.errors).toHaveLength(1)
+    expect(failures.errors).toEqual([])
     preview.close()
     await failures.connectivity.close()
   })
@@ -999,7 +989,7 @@ describe('v2 receiver immediate dual-path policy', () => {
 
   it('keeps relay and the ProtocolSession usable through wave and session exhaustion', async () => {
     const clock = new ManualRecoveryClock()
-    const events: V2PeerRecoveryEvent[] = []
+    const events: V2PeerRecoveryTraceEvent[] = []
     let attempts = 0
     const result = fixture({
       offer: async () => {
@@ -1007,10 +997,10 @@ describe('v2 receiver immediate dual-path policy', () => {
         throw new PeerNegotiationError('synthetic transient transport loss')
       },
     }, undefined, {
+      recoveryTraceObserver: (event) => events.push(event),
       peerRecovery: {
         clock,
         random: () => 1,
-        observer: (event) => events.push(event),
         policy: {
           negotiationBudgetMilliseconds: 100,
           admissionBudgetMilliseconds: 100,
