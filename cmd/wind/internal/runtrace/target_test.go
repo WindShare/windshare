@@ -52,6 +52,10 @@ func TestExactTargetCollisionIsOneFailFastAttempt(t *testing.T) {
 	recorder, err := OpenWithDependencies(mustExactTarget(t, "evidence.ndjson"), clievent.CommandShare, Config{}, Dependencies{
 		Clock:  fixedClock(),
 		Random: bytes.NewReader(bytes.Repeat([]byte{1}, clievent.IdentityBytes)),
+		EnsureDirectory: func(string) error {
+			t.Fatal("exact target attempted to prepare a directory")
+			return nil
+		},
 		OpenFile: func(path string) (TraceFile, error) {
 			openCalls++
 			return nil, fs.ErrExist
@@ -73,10 +77,21 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 	ticker := newManualTicker()
 	file := &memoryTraceFile{}
 	var opened []string
+	prepareCalls := 0
 	recorder, err := OpenWithDependencies(mustRunDirectory(t, "trace-root"), clievent.CommandGet, Config{}, Dependencies{
 		Clock:  clock,
 		Random: identitySequence(1, 2, 3),
+		EnsureDirectory: func(path string) error {
+			prepareCalls++
+			if path != "trace-root" {
+				t.Fatalf("prepared directory = %q", path)
+			}
+			return nil
+		},
 		OpenFile: func(path string) (TraceFile, error) {
+			if prepareCalls != 1 {
+				t.Fatalf("open attempted after %d directory preparations", prepareCalls)
+			}
 			opened = append(opened, path)
 			if len(opened) < 3 {
 				return nil, ErrTraceExists
@@ -91,7 +106,7 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 	wantRunID := repeatedRunID(3)
 	wantPath := filepath.Join(
 		"trace-root",
-		"get-20260817T023456.123456789Z-"+wantRunID+".ndjson",
+		"get-20260817T023456Z-"+wantRunID[:directoryFilenameTokenHexLength]+".ndjson",
 	)
 	if recorder.RunID() != wantRunID || recorder.Path() != wantPath {
 		t.Fatalf("identity = (%q, %q), want (%q, %q)", recorder.RunID(), recorder.Path(), wantRunID, wantPath)
@@ -99,10 +114,13 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 	if len(opened) != 3 || opened[2] != wantPath {
 		t.Fatalf("opened paths = %q", opened)
 	}
+	if prepareCalls != 1 {
+		t.Fatalf("directory preparations = %d, want 1", prepareCalls)
+	}
 	for index, path := range opened {
-		wantID := repeatedRunID(byte(index + 1))
-		if !strings.HasSuffix(path, "-"+wantID+".ndjson") {
-			t.Fatalf("attempt %d path %q does not carry run ID %q", index+1, path, wantID)
+		wantToken := repeatedRunID(byte(index + 1))[:directoryFilenameTokenHexLength]
+		if !strings.HasSuffix(path, "-"+wantToken+".ndjson") {
+			t.Fatalf("attempt %d path %q does not carry filename token %q", index+1, path, wantToken)
 		}
 	}
 	if status := recorder.Close(); !status.Complete {
@@ -110,8 +128,37 @@ func TestDirectoryTargetRetriesFreshRunIdentities(t *testing.T) {
 	}
 	records := decodeRecords(t, file.Bytes())
 	if len(records) != 1 || records[0].RunID != wantRunID {
-		t.Fatalf("trace records do not agree with filename identity: %+v", records)
+		t.Fatalf("trace records do not retain full run identity: %+v", records)
 	}
+}
+
+func TestDirectoryTargetPreparationFailureStopsBeforeIdentityAndFileClaim(t *testing.T) {
+	ticker := newManualTicker()
+	prepareCalls := 0
+	openCalls := 0
+	recorder, err := OpenWithDependencies(mustRunDirectory(t, "trace-root"), clievent.CommandGet, Config{}, Dependencies{
+		Clock:  fixedClock(),
+		Random: bytes.NewReader(nil),
+		EnsureDirectory: func(path string) error {
+			prepareCalls++
+			if path != "trace-root" {
+				t.Fatalf("prepared directory = %q", path)
+			}
+			return errInjected
+		},
+		OpenFile: func(string) (TraceFile, error) {
+			openCalls++
+			return &memoryTraceFile{}, nil
+		},
+		NewTicker: func(time.Duration) Ticker { return ticker },
+	})
+	if recorder != nil || !errors.Is(err, ErrTraceDirectoryUnavailable) {
+		t.Fatalf("directory preparation failure = recorder %v, err %v", recorder, err)
+	}
+	if prepareCalls != 1 || openCalls != 0 {
+		t.Fatalf("directory preparations = %d, file claims = %d", prepareCalls, openCalls)
+	}
+	awaitSignal(t, ticker.stopped, "ticker stop after directory preparation failure")
 }
 
 func TestDirectoryTargetCollisionExhaustionPreservesEverySibling(t *testing.T) {
@@ -158,8 +205,9 @@ func TestDirectoryTargetDoesNotRetryNonCollisionFailure(t *testing.T) {
 	openCalls := 0
 	ticker := newManualTicker()
 	recorder, err := OpenWithDependencies(mustRunDirectory(t, "trace-root"), clievent.CommandGet, Config{}, Dependencies{
-		Clock:  fixedClock(),
-		Random: identitySequence(1, 2),
+		Clock:           fixedClock(),
+		Random:          identitySequence(1, 2),
+		EnsureDirectory: func(string) error { return nil },
 		OpenFile: func(string) (TraceFile, error) {
 			openCalls++
 			return nil, errInjected
@@ -175,8 +223,8 @@ func TestDirectoryTargetDoesNotRetryNonCollisionFailure(t *testing.T) {
 	awaitSignal(t, ticker.stopped, "ticker stop after directory failure")
 }
 
-func TestDirectoryTargetCreatesOneOwnerOnlyTraceWithMatchingIdentity(t *testing.T) {
-	directory := t.TempDir()
+func TestDirectoryTargetCreatesCompactOwnerOnlyTraceWithFullRunIdentity(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "new", "nested", "traces")
 	started := time.Date(2026, 8, 17, 10, 34, 56, 123456789, time.FixedZone("test", 8*60*60))
 	recorder, err := OpenWithDependencies(mustRunDirectory(t, directory), clievent.CommandGet, Config{}, Dependencies{
 		Clock:  &incrementingClock{current: started, step: time.Millisecond},
@@ -186,7 +234,7 @@ func TestDirectoryTargetCreatesOneOwnerOnlyTraceWithMatchingIdentity(t *testing.
 		t.Fatal(err)
 	}
 	wantRunID := repeatedRunID(9)
-	wantName := "get-20260817T023456.123456789Z-" + wantRunID + ".ndjson"
+	wantName := "get-20260817T023456Z-" + wantRunID[:directoryFilenameTokenHexLength] + ".ndjson"
 	if recorder.Path() != filepath.Join(directory, wantName) || recorder.RunID() != wantRunID {
 		t.Fatalf("created trace = path %q, run ID %q", recorder.Path(), recorder.RunID())
 	}
@@ -201,6 +249,13 @@ func TestDirectoryTargetCreatesOneOwnerOnlyTraceWithMatchingIdentity(t *testing.
 		t.Fatalf("created entries = %+v", entries)
 	}
 	if runtime.GOOS != "windows" {
+		directoryInfo, err := os.Stat(directory)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if directoryInfo.Mode().Perm() != ownerOnlyDirectoryMode {
+			t.Fatalf("trace directory mode = %o, want %o", directoryInfo.Mode().Perm(), ownerOnlyDirectoryMode)
+		}
 		info, err := entries[0].Info()
 		if err != nil {
 			t.Fatal(err)
@@ -224,7 +279,7 @@ func TestDirectoryTargetCreatesOneOwnerOnlyTraceWithMatchingIdentity(t *testing.
 
 func TestDirectoryTargetConcurrentNativeOpensOwnDistinctFiles(t *testing.T) {
 	const recorderCount = 32
-	directory := t.TempDir()
+	directory := filepath.Join(t.TempDir(), "concurrent", "traces")
 	target := mustRunDirectory(t, directory)
 	recorders := make(chan *Recorder, recorderCount)
 	errorsSeen := make(chan error, recorderCount)
@@ -253,8 +308,9 @@ func TestDirectoryTargetConcurrentNativeOpensOwnDistinctFiles(t *testing.T) {
 			t.Errorf("duplicate recorder path %q", recorder.Path())
 		}
 		paths[recorder.Path()] = struct{}{}
-		if !strings.HasSuffix(filepath.Base(recorder.Path()), "-"+recorder.RunID()+".ndjson") {
-			t.Errorf("path %q does not match run ID %q", recorder.Path(), recorder.RunID())
+		filenameToken := recorder.RunID()[:directoryFilenameTokenHexLength]
+		if !strings.HasSuffix(filepath.Base(recorder.Path()), "-"+filenameToken+".ndjson") {
+			t.Errorf("path %q does not carry filename token %q", recorder.Path(), filenameToken)
 		}
 		if status := recorder.Close(); !status.Complete {
 			t.Errorf("close %q: %+v", recorder.Path(), status)
