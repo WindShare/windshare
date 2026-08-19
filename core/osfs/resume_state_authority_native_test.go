@@ -262,10 +262,28 @@ func TestRepositoryResumeStateAuthorityProjectsOrdinaryInventory(t *testing.T) {
 	if ResumeOperationResumable.String() != "resumable" ||
 		ResumeItemBlocked.String() != "item-blocked" ||
 		ResumeItemBlockPublicationUnknown.String() != "publication-unknown" ||
+		ResumeItemBlockRevisionConflict.String() != "revision-conflict" ||
 		ResumeOperationState(0).String() != "" ||
 		ResumeItemState(0).String() != "" ||
 		ResumeItemBlockReason(0).String() != "" {
 		t.Fatal("resume vocabulary is not stable")
+	}
+}
+
+func TestResumeStateProjectionPreservesRevisionConflictAsItemLocal(t *testing.T) {
+	item, err := resumeauthority.NewItem(
+		"result/conflicted.bin",
+		resumeauthority.ItemBlocked,
+		resumeauthority.ItemBlockRevisionConflict,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projected := projectResumeStateItem(item)
+	if projected.State() != ResumeItemBlocked ||
+		projected.BlockReason() != ResumeItemBlockRevisionConflict ||
+		projected.BlockReason().String() != "revision-conflict" {
+		t.Fatalf("revision conflict projection = %+v", projected)
 	}
 }
 

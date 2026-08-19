@@ -25,6 +25,7 @@ type Repository struct {
 	anchors     outputcap.Directory
 	stages      outputcap.Directory
 	binding     checkpointmodel.Binding
+	authority   *fileExecutionAuthority
 }
 
 // OpenOrdinaryFileRepository binds the unchanged FileCheckpointV2 codec to one
@@ -70,7 +71,7 @@ func OpenOrdinaryFileRepository(
 	}
 	return Repository{
 		operation: operation, checkpoints: checkpoints, records: records,
-		anchors: anchors, stages: stages, binding: binding,
+		anchors: anchors, stages: stages, binding: binding, authority: lease.files,
 	}, nil
 }
 

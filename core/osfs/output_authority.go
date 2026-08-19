@@ -298,6 +298,19 @@ const (
 	FilesystemOutputRuntimeCleanupPending
 )
 
+// FilesystemCheckpointDecision is the closed, privacy-safe result of resolving
+// one local checkpoint lineage. It intentionally exposes no path, revision, or
+// owned-object identity.
+type FilesystemCheckpointDecision uint8
+
+const (
+	FilesystemCheckpointAbsent FilesystemCheckpointDecision = iota + 1
+	FilesystemCheckpointExact
+	FilesystemCheckpointRevisionConflict
+	FilesystemCheckpointOwnershipConflict
+	FilesystemCheckpointInvalid
+)
+
 type FilesystemOutputNativeLockScope uint8
 
 const FilesystemOutputNativeLockSession FilesystemOutputNativeLockScope = 1
@@ -327,6 +340,7 @@ type FilesystemOutputTrace struct {
 	RuntimeComponent       FilesystemOutputRuntimeComponent
 	RuntimeOperation       FilesystemOutputRuntimeOperation
 	RuntimeDecision        FilesystemOutputRuntimeDecision
+	CheckpointDecision     FilesystemCheckpointDecision
 	OperationID            uint64
 	ClaimID                uint64
 	FaultDomain            uint8

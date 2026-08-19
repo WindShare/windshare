@@ -157,6 +157,24 @@ func (tracker *receiveProgressTracker) acceptFileSettlement(
 		outcomes.ItemBlockedFiles, tracker.snapshot.CountersExact = saturatingAdd(
 			outcomes.ItemBlockedFiles, 1, tracker.snapshot.CountersExact,
 		)
+		_, reason, hasReason := settlement.ItemBlock()
+		if !hasReason {
+			break
+		}
+		switch reason {
+		case ItemBlockRevisionConflict:
+			outcomes.RevisionConflictFiles, tracker.snapshot.CountersExact = saturatingAdd(
+				outcomes.RevisionConflictFiles, 1, tracker.snapshot.CountersExact,
+			)
+		case ItemBlockCheckpointInvalid:
+			outcomes.CheckpointInvalidFiles, tracker.snapshot.CountersExact = saturatingAdd(
+				outcomes.CheckpointInvalidFiles, 1, tracker.snapshot.CountersExact,
+			)
+		case ItemBlockOwnedObjectUnknown:
+			outcomes.OwnedObjectUnknownFiles, tracker.snapshot.CountersExact = saturatingAdd(
+				outcomes.OwnedObjectUnknownFiles, 1, tracker.snapshot.CountersExact,
+			)
+		}
 	case FileFailed:
 		outcomes.FailedFiles, tracker.snapshot.CountersExact = saturatingAdd(
 			outcomes.FailedFiles, 1, tracker.snapshot.CountersExact,

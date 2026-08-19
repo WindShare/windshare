@@ -136,6 +136,9 @@ func TestFilesystemFailureClassificationProjectionIsExhaustive(t *testing.T) {
 	}
 
 	for name, source := range map[string]osfs.FilesystemOutputTrace{
+		"unknown checkpoint decision": {
+			Operation: osfs.TraceRuntimeDecision, CheckpointDecision: osfs.FilesystemCheckpointDecision(255),
+		},
 		"unknown stage": {
 			Operation: osfs.TraceRuntimeDecision, FailureStage: osfs.FilesystemOutputFailureStage(255), Failed: true,
 		},

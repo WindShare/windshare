@@ -11,8 +11,10 @@ import {
 import {
   bindNewFileSystemAccessOutput,
   reopenFileSystemAccessOutput,
+  type FSAOutputTrace,
   type FileSystemAccessOutputSession,
 } from '../../output/file-system-access/session'
+import type { PersistentTreeTrace } from '../../output/persistent-tree/contracts'
 import type {
   AcquiredMaterializationAuthority,
   ArtifactAction,
@@ -56,15 +58,18 @@ import {
 export class StartedFSAReceive implements V2StartedArtifactAuthority {
   readonly #action: ArtifactAction
   readonly #picked: Promise<AcquiredFSAParentAuthority>
+  readonly #trace: PersistentTreeTrace | undefined
   #released = false
   #claimed = false
 
   constructor(
     action: ArtifactAction,
     picked: Promise<AcquiredFSAParentAuthority>,
+    trace?: PersistentTreeTrace,
   ) {
     this.#action = action
     this.#picked = picked
+    this.#trace = trace
   }
 
   async finalize(
@@ -85,6 +90,7 @@ export class StartedFSAReceive implements V2StartedArtifactAuthority {
         artifact,
         operationRepository: repository,
         operationId: createOperationID(),
+        ...(this.#trace === undefined ? {} : { trace: fsaTraceAdapter(this.#trace) }),
         freezeIntent: async (reservation) => {
           signal.throwIfAborted()
           this.#requireLive()
@@ -111,6 +117,7 @@ export class StartedFSAReceive implements V2StartedArtifactAuthority {
         session,
         repository,
         lease,
+        ...(this.#trace === undefined ? {} : { trace: this.#trace }),
       })
       signal.throwIfAborted()
       return runtime
@@ -145,6 +152,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #closeAuthority: (() => Promise<void>) | undefined
+  readonly #trace: PersistentTreeTrace | undefined
   #session: FileSystemAccessOutputSession
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
@@ -159,6 +167,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     session: FileSystemAccessOutputSession
     settlement: FileSystemAccessOperationSettlementAuthority
     closeAuthority?: () => Promise<void>
+    trace?: PersistentTreeTrace
     plans: V2PlanExecutionAuthority
     transferJobId: string
   }) {
@@ -167,6 +176,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#repository = input.repository
     this.#lease = input.lease
     this.#closeAuthority = input.closeAuthority
+    this.#trace = input.trace
     this.#session = input.session
     this.#settlement = input.settlement
     this.#plans = input.plans
@@ -179,12 +189,16 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     repository: IndexedDbReceiveOperationRepository
     lease: BrowserReceiveOperationLease
     session: FileSystemAccessOutputSession
+    trace?: PersistentTreeTrace
   }): Promise<FSAReceiveOperation> {
     const attempt = await createFSAAttempt(input.intent, input.repository, input.lease, input.session, 'start')
     return new FSAReceiveOperation({ ...input, ...attempt })
   }
 
-  static async reopen(operation: ReopenedDirectTreeOperation): Promise<FSAReceiveOperation> {
+  static async reopen(
+    operation: ReopenedDirectTreeOperation,
+    trace?: PersistentTreeTrace,
+  ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
     }
@@ -203,6 +217,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       session = await reopenFileSystemAccessOutput({
         intent: operation.intent,
         operationRepository: operation.repository,
+        ...(trace === undefined ? {} : { trace: fsaTraceAdapter(trace) }),
       })
       const plans = await createFSAPlanAuthority(
         operation.intent,
@@ -219,6 +234,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         lease: operation.lease,
         session,
         closeAuthority: () => operation.close(),
+        ...(trace === undefined ? {} : { trace }),
         settlement: attemptAuthority.settlement,
         plans,
         transferJobId: attemptAuthority.transferJobId,
@@ -260,6 +276,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     const session = await reopenFileSystemAccessOutput({
       intent: this.intent,
       operationRepository: this.#repository,
+      ...(this.#trace === undefined ? {} : { trace: fsaTraceAdapter(this.#trace) }),
     })
     try {
       // Acquire the attempt before leaving the stable state so setup failures retain
@@ -341,6 +358,13 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
 
   #requireAttached(): void {
     if (this.#detached) throw new DOMException('Receive operation is detached', 'InvalidStateError')
+  }
+}
+
+function fsaTraceAdapter(trace: PersistentTreeTrace): FSAOutputTrace {
+  return event => {
+    if (event.name === 'receive.operation.needs_attention' ||
+        event.name === 'receive.checkpoint.decision') trace(event)
   }
 }
 

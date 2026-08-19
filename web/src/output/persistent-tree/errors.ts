@@ -1,8 +1,11 @@
 export type PersistentOutputErrorKind =
   | 'authorization'
+  | 'checkpoint-invalid'
   | 'collision'
   | 'incomplete-file'
   | 'output-state'
+  | 'owned-object-unknown'
+  | 'revision-conflict'
   | 'source-revision-changed'
   | 'target-ownership-unknown'
 
@@ -42,6 +45,39 @@ export type TargetOwnershipStage =
   | 'commit'
   | 'settlement'
   | 'cleanup'
+
+export type CheckpointBlockDecision =
+  | 'revision-conflict'
+  | 'ownership-conflict'
+  | 'invalid'
+
+export class CheckpointLineageDecisionError extends PersistentOutputError {
+  readonly decision: CheckpointBlockDecision
+
+  constructor(decision: CheckpointBlockDecision) {
+    super(
+      checkpointBlockKind(decision),
+      'Authenticated local checkpoint evidence blocks this file lineage',
+    )
+    this.name = 'CheckpointLineageDecisionError'
+    this.decision = decision
+  }
+}
+
+function checkpointBlockKind(decision: CheckpointBlockDecision): PersistentOutputErrorKind {
+  switch (decision) {
+    case 'revision-conflict': return 'revision-conflict'
+    case 'ownership-conflict': return 'owned-object-unknown'
+    case 'invalid': return 'checkpoint-invalid'
+  }
+}
+
+export class DestinationCollisionError extends PersistentOutputError {
+  constructor(options?: ErrorOptions) {
+    super('collision', 'An existing unowned destination blocks this file', options)
+    this.name = 'DestinationCollisionError'
+  }
+}
 
 export class SourceRevisionChangedError extends PersistentOutputError {
   constructor(options?: ErrorOptions) {

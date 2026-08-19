@@ -26,6 +26,7 @@ var (
 
 type (
 	FileCheckpointRecordID            = checkpointmodel.RecordID
+	FileCheckpointLineageID           = checkpointmodel.CheckpointLineageID
 	FileCheckpointObjectID            = checkpointmodel.ObjectID
 	FileCheckpointChecksum            = checkpointmodel.Checksum
 	FileCheckpointRange               = checkpointmodel.Range
@@ -130,6 +131,12 @@ func (checkpoint FileCheckpointV2) OwnershipMarker() string {
 func (checkpoint FileCheckpointV2) Namespace() string { return checkpoint.record.Namespace() }
 func (checkpoint FileCheckpointV2) RecordID() FileCheckpointRecordID {
 	return checkpoint.record.RecordID()
+}
+func (checkpoint FileCheckpointV2) CheckpointLineageID() (FileCheckpointLineageID, error) {
+	return checkpoint.record.CheckpointLineageID()
+}
+func (checkpoint FileCheckpointV2) CheckpointLineageCanonicalBytes() ([]byte, error) {
+	return checkpoint.record.CheckpointLineageCanonicalBytes()
 }
 func (checkpoint FileCheckpointV2) OperationID() receivecontract.OperationID {
 	return checkpoint.record.OperationID()

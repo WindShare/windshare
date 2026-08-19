@@ -241,7 +241,7 @@ func TestObserveOrdinaryResumeFinalParameterValidationAndHelpers(t *testing.T) {
 	}
 
 	// ordinaryResumeItems with invalid parameters
-	if _, err := ordinaryResumeItems(nilContext, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
+	if _, _, err := ordinaryResumeItems(nilContext, nil, nil); !errors.Is(err, resumeauthority.ErrInvalidContract) {
 		t.Fatalf("nil ordinaryResumeItems error = %v", err)
 	}
 

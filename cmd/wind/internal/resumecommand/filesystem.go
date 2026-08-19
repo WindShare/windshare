@@ -209,6 +209,8 @@ func projectResumeBlockedReason(reason osfs.ResumeItemBlockReason) (resumeBlocke
 		return resumeBlockedCheckpointInvalid, nil
 	case osfs.ResumeItemBlockOwnedObjectUnknown:
 		return resumeBlockedOwnedObjectUnknown, nil
+	case osfs.ResumeItemBlockRevisionConflict:
+		return resumeBlockedRevisionConflict, nil
 	default:
 		return 0, errResumeStateContract
 	}

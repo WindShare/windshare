@@ -4,6 +4,7 @@ import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   MAXIMUM_RETAINED_TRANSFER_FAILURES,
   TransferFailureAccumulator,
+  projectTransferFileOutcome,
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
 import { identityText } from './v2-job-fixture'
@@ -14,7 +15,16 @@ describe('transfer worker settlement', () => {
       status: 'Succeeded',
       failures: [],
       failureCount: 0,
+      fileFailureCount: 0,
       omittedFailureCount: 0,
+      fileOutcomes: {
+        sourceDriftFiles: 0,
+        revisionConflictFiles: 0,
+        checkpointInvalidFiles: 0,
+        ownedObjectUnknownFiles: 0,
+        collisionFiles: 0,
+        failedFiles: 0,
+      },
     })
     expect(transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY).status).toBe('Paused')
   })
@@ -41,5 +51,40 @@ describe('transfer worker settlement', () => {
     expect(snapshot.failures).toHaveLength(MAXIMUM_RETAINED_TRANSFER_FAILURES)
     expect(snapshot.failureCount).toBe(MAXIMUM_RETAINED_TRANSFER_FAILURES + 3)
     expect(snapshot.omittedFailureCount).toBe(3)
+  })
+
+  it.each([
+    [{ kind: 'authenticated-source-drift' }, 'source-drift'],
+    [{ kind: 'checkpoint-decision', decision: 'revision-conflict' }, 'revision-conflict'],
+    [{ kind: 'checkpoint-decision', decision: 'ownership-conflict' }, 'owned-object-unknown'],
+    [{ kind: 'checkpoint-decision', decision: 'invalid' }, 'checkpoint-invalid'],
+    [{ kind: 'occupied-unbound-destination' }, 'destination-collision'],
+    [{ kind: 'residual-failure' }, 'failed'],
+  ] as const)('projects %o to %s', (evidence, expected) => {
+    expect(projectTransferFileOutcome(evidence)).toBe(expected)
+  })
+
+  it('keeps exact outcome counts independent of bounded diagnostics', () => {
+    const accumulator = new TransferFailureAccumulator()
+    const outcomes = [
+      'source-drift',
+      'revision-conflict',
+      'checkpoint-invalid',
+      'owned-object-unknown',
+      'destination-collision',
+      'failed',
+    ] as const
+    for (let index = 0; index < MAXIMUM_RETAINED_TRANSFER_FAILURES + outcomes.length; index += 1) {
+      accumulator.record({
+        kind: 'file',
+        fileId: fileId(identityText((index % 200) + 1)),
+        reason: new Error('bounded diagnostic'),
+      }, outcomes[index % outcomes.length])
+    }
+    const settlement = transferWorkerSettlement('CompletedWithErrors', accumulator.snapshot())
+    expect(settlement.fileFailureCount).toBe(MAXIMUM_RETAINED_TRANSFER_FAILURES + outcomes.length)
+    expect(Object.values(settlement.fileOutcomes).reduce((sum, count) => sum + count, 0))
+      .toBe(settlement.fileFailureCount)
+    expect(settlement.omittedFailureCount).toBe(outcomes.length)
   })
 })

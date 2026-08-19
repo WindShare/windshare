@@ -185,7 +185,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
 
   async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
-    _reason: unknown,
+    reason: unknown,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
     signal.throwIfAborted()
@@ -193,9 +193,12 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     try {
       await verifyFSAOperationBinding({ repository: this.#repository, intent: this.#intent })
     } catch (cause) {
-      if (!(cause instanceof TargetOwnershipUnknownError)) throw cause
-      return (await this.#recordNeedsAttention(cause)).state
+      const ownershipState = await this.#settleAdmissionOwnershipUnknown(cause)
+      if (ownershipState !== undefined) return ownershipState
+      throw cause
     }
+    const ownershipState = await this.#settleAdmissionOwnershipUnknown(reason)
+    if (ownershipState !== undefined) return ownershipState
     const current = await this.#lifecycle()
     if (this.#admissionFallback !== undefined &&
         sameReceiveAdmissionFallback(current.state, this.#admissionFallback)) {
@@ -604,6 +607,18 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     } catch {
       return false
     }
+  }
+
+  async #settleAdmissionOwnershipUnknown(
+    reason: unknown,
+  ): Promise<ReceiveLifecycleState | undefined> {
+    if (!(reason instanceof TargetOwnershipUnknownError)) return undefined
+    if (reason.operationId !== null && reason.operationId !== this.#intent.operationId) {
+      throw new TypeError('FSA admission ownership evidence belongs to another operation', {
+        cause: reason,
+      })
+    }
+    return (await this.#recordNeedsAttention(reason)).state
   }
 
   async #recordNeedsAttention(cause?: unknown): Promise<VerifiedLifecycle> {

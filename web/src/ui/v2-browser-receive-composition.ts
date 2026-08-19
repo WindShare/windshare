@@ -15,6 +15,7 @@ import type {
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
 } from '../output/planning'
+import { TargetOwnershipUnknownError } from '../output/persistent-tree/errors'
 import {
   ReceiveOperationResumeAuthority,
   type ReceiveOperationMutationPort,
@@ -369,37 +370,9 @@ function browserRetainedContinuationExecutor(
       signal.throwIfAborted()
       switch (continuation.kind) {
         case 'direct-tree-receive':
-          return FSAReceiveOperation.reopen(continuation.operation)
-        case 'workspace-receive': {
-          const fallback = continuation.operation.receiveAdmissionFallback
-          if (fallback === undefined) {
-            throw new TypeError('Workspace continuation omitted its admission fallback')
-          }
-          try {
-            const backend = await continuation.operation.receiveContinuation.openBackend(
-              trace === undefined ? {} : { onTrace: trace },
-            )
-            try {
-              signal.throwIfAborted()
-              return await WorkspaceReceiveOperation.reopen({
-                windowPort,
-                operation: continuation.operation,
-                backend,
-                ...(trace === undefined ? {} : { trace }),
-              })
-            } catch (error) {
-              await backend.close().catch(() => undefined)
-              throw error
-            }
-          } catch (error) {
-            try {
-              await continuation.operation.stages.restoreReceiveContinuation(fallback)
-            } catch (settlementError) {
-              throw new V2TransferFailureSettlementError(error, [settlementError])
-            }
-            throw error
-          }
-        }
+          return FSAReceiveOperation.reopen(continuation.operation, trace)
+        case 'workspace-receive':
+          return reopenWorkspaceReceiveContinuation(windowPort, continuation, signal, trace)
       }
     },
     resumePackage: async (
@@ -415,6 +388,62 @@ function browserRetainedContinuationExecutor(
     ) =>
       continueRetainedWorkspaceOperation(windowPort, continuation.operation, action, signal),
   })
+}
+
+async function reopenWorkspaceReceiveContinuation(
+  windowPort: BrowserReceiveWindow,
+  continuation: WorkspaceReceiveContinuation,
+  signal: AbortSignal,
+  trace: WorkspaceStageTraceListener | undefined,
+): Promise<V2BoundReceiveOperation> {
+  const fallback = continuation.operation.receiveAdmissionFallback
+  if (fallback === undefined) {
+    throw new TypeError('Workspace continuation omitted its admission fallback')
+  }
+  try {
+    const backend = await continuation.operation.receiveContinuation.openBackend(
+      trace === undefined ? {} : { onTrace: trace },
+    )
+    try {
+      signal.throwIfAborted()
+      return await WorkspaceReceiveOperation.reopen({
+        windowPort,
+        operation: continuation.operation,
+        backend,
+        ...(trace === undefined ? {} : { trace }),
+      })
+    } catch (error) {
+      await backend.close().catch(() => undefined)
+      throw error
+    }
+  } catch (error) {
+    try {
+      await settleWorkspaceReceiveAdmissionFailure(continuation, fallback, error)
+    } catch (settlementError) {
+      throw new V2TransferFailureSettlementError(error, [settlementError])
+    }
+    throw error
+  }
+}
+
+async function settleWorkspaceReceiveAdmissionFailure(
+  continuation: WorkspaceReceiveContinuation,
+  fallback: NonNullable<WorkspaceReceiveContinuation['operation']['receiveAdmissionFallback']>,
+  error: unknown,
+): Promise<void> {
+  if (!(error instanceof TargetOwnershipUnknownError)) {
+    await continuation.operation.stages.restoreReceiveContinuation(fallback)
+    return
+  }
+  if (error.operationId !== null &&
+      error.operationId !== continuation.operation.intent.operationId) {
+    throw new TypeError('Workspace recovery evidence belongs to another operation', {
+      cause: error,
+    })
+  }
+  await continuation.operation.stages.recordTargetOwnershipUnknown(
+    continuation.operation.intent.digest,
+  )
 }
 
 async function continueRetainedWorkspaceOperation(
@@ -533,7 +562,7 @@ function startProductionAuthority(
       }
       // startFSAParentPicker invokes showDirectoryPicker before returning this click-stack call.
       const picked = startFSAParentPicker(providers.runtime, action.plan.target)
-      return new StartedFSAReceive(action, picked)
+      return new StartedFSAReceive(action, picked, trace)
     }
     case 'workspace-then-publish':
       if (!providers.workspace || providers.workspaceOffer === null ||

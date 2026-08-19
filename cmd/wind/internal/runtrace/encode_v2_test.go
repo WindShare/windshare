@@ -226,6 +226,7 @@ func TestEncodeV2FilesystemFailureClassification(t *testing.T) {
 	failure := mustValue(clievent.NewFailure(clievent.FailureOutputNeedsAttention))
 	event := mustValue(clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
 		Operation:          clievent.FilesystemCheckpointReconciled,
+		CheckpointDecision: clievent.FilesystemCheckpointRevisionConflict,
 		Failure:            failure,
 		FailureStage:       clievent.FilesystemFailureNativeDurability,
 		ReconciliationStep: clievent.FilesystemReconciliationRecordPromotion,
@@ -248,6 +249,7 @@ func TestEncodeV2FilesystemFailureClassification(t *testing.T) {
 		t.Fatal(err)
 	}
 	for field, want := range map[string]string{
+		"filesystem_checkpoint_decision": "revision_conflict",
 		"filesystem_failure_stage":       "native_durability",
 		"filesystem_reconciliation_step": "record_promotion",
 		"filesystem_native_error_class":  "sharing_violation",

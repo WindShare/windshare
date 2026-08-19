@@ -24,7 +24,11 @@ Receiver-local canonical contracts:
 - `directory-admission-v2.json`: ReceiveIntent-bound layout, generation,
   ancestry, path, modified-time, HMAC, and settlement cases.
 - `file-checkpoint-v2.json`: operation/intent/binding authority, owned object,
-  lifecycle, checksum, envelope, transition, and verified crash-cut cases.
+  lifecycle, checksum, envelope, transition, and verified crash-cut cases. Its
+  `checkpointLineageId` rows isolate operation, intent, binding, file, canonical
+  path segment, materializer, and authority axes while proving revision, size,
+  owned object, ranges, lifecycle, and generations do not affect this receiver-local
+  lookup index. Lineage is not `RecordID`, persisted checkpoint, or wire identity.
 - `v2-semantics.json`: connection sizing, shape proof, artifact/plan/guarantee
   rows, WorkspaceBudget, picker timing, complete-only ZIP, checkpoint crash
   cuts, and receiver terminal projections alongside preserved protocol rules.

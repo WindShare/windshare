@@ -66,6 +66,9 @@ func projectFileOutcomes(value transfer.FileOutcomeSummary) clievent.FileOutcome
 		DownloadedFiles: value.DownloadedFiles, ResumedFiles: value.ResumedFiles,
 		PausedFiles: value.PausedFiles, CollisionFiles: value.CollisionFiles,
 		ItemBlockedFiles: value.ItemBlockedFiles, FailedFiles: value.FailedFiles,
-		ModifiedTimeWarnings: value.ModifiedTimeWarnings,
+		RevisionConflictFiles:   value.RevisionConflictFiles,
+		CheckpointInvalidFiles:  value.CheckpointInvalidFiles,
+		OwnedObjectUnknownFiles: value.OwnedObjectUnknownFiles,
+		ModifiedTimeWarnings:    value.ModifiedTimeWarnings,
 	}
 }

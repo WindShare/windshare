@@ -157,19 +157,25 @@ func TestRootedRevisionSourceRejectsInvalidRootsRecordsAndBinders(t *testing.T) 
 	}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := source.OpenStable(canceled, rootedFileRecord(t, 0, "file.bin", 4)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled open=%v", err)
+	if _, err := source.OpenStable(canceled, rootedFileRecord(t, 0, "file.bin", 4)); !errors.Is(err, context.Canceled) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("canceled open=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
-	if _, err := source.OpenStable(context.Background(), catalog.NodeRecord{}); !errors.Is(err, content.ErrRevisionNotFound) {
-		t.Fatalf("non-file record=%v", err)
+	if _, err := source.OpenStable(context.Background(), catalog.NodeRecord{}); !errors.Is(err, content.ErrRevisionNotFound) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("non-file record=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
-	for _, record := range []catalog.NodeRecord{
-		rootedFileRecord(t, 1, "file.bin", 4),
-		rootedFileRecord(t, 0, "missing.bin", 4),
-		rootedFileRecord(t, 0, "directory", 0),
+	for _, test := range []struct {
+		record     catalog.NodeRecord
+		comparison content.RevisionComparison
+	}{
+		{record: rootedFileRecord(t, 1, "file.bin", 4), comparison: content.RevisionComparisonMismatch},
+		{record: rootedFileRecord(t, 0, "missing.bin", 4), comparison: content.RevisionComparisonUnavailable},
+		{record: rootedFileRecord(t, 0, "directory", 0), comparison: content.RevisionComparisonMismatch},
 	} {
-		if _, err := source.OpenStable(context.Background(), record); !errors.Is(err, content.ErrRevisionStale) {
-			t.Fatalf("invalid record error=%v", err)
+		if _, err := source.OpenStable(context.Background(), test.record); !errors.Is(err, content.ErrRevisionStale) ||
+			content.RevisionComparisonOf(err) != test.comparison {
+			t.Fatalf("invalid record error=%v comparison=%v", err, content.RevisionComparisonOf(err))
 		}
 	}
 	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 4)); err == nil {
@@ -187,8 +193,9 @@ func TestRootedRevisionSourceRejectsInvalidRootsRecordsAndBinders(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 4)); !errors.Is(err, sentinel) {
-		t.Fatalf("binder error=%v", err)
+	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "file.bin", 4)); !errors.Is(err, sentinel) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("binder error=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	_ = source.Close()
 }
@@ -260,8 +267,9 @@ func TestRootedRevisionSourceRejectsFinalSymlinkBeforeBinding(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer source.Close()
-	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "link.bin", 6)); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("final symlink open = %v", err)
+	if _, err := source.OpenStable(context.Background(), rootedFileRecord(t, 0, "link.bin", 6)); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonMismatch {
+		t.Fatalf("final symlink open = %v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	if bindings != 0 {
 		t.Fatal("rejected symlink reached the stability binder")

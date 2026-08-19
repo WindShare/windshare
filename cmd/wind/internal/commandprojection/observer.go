@@ -5,7 +5,6 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
-	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -313,6 +312,10 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 	if !ok {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
 	}
+	itemBlockReason, ok := projectItemBlockReason(value.ItemBlockReason)
+	if !ok {
+		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
+	}
 	treeSettlement, ok := projectTreeSettlement(value.DirectTreeSettlement)
 	if !ok {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
@@ -320,7 +323,8 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 	spec := clievent.TransferLifecycleSpec{
 		ReceiveOperation: receiveID, ProtocolSession: sessionID, TransferJob: jobID,
 		Stage: stage, Progress: progress, FileSelection: selection,
-		FileSettlement: fileSettlement, TreeSettlement: treeSettlement,
+		FileSettlement: fileSettlement, ItemBlockReason: itemBlockReason,
+		TreeSettlement: treeSettlement,
 	}
 	if value.Failed {
 		if spec.Failure, ok = ProjectFault(value.Fault); !ok {
@@ -410,102 +414,6 @@ func ProjectProtocolOperation(
 	})
 	if err != nil {
 		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
-	}
-	return event, nil
-}
-
-func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.FilesystemOutputObserved, error) {
-	operation, ok := projectFilesystemOperation(value.Operation)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
-	}
-	var receiveID clievent.ReceiveOperationID
-	var err error
-	if !value.ReceiveOperationID.IsZero() {
-		receiveID, err = ReceiveOperationID(value.ReceiveOperationID)
-		if err != nil {
-			return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
-		}
-	}
-	var receiveIntent clievent.ReceiveIntentDigest
-	if !value.ReceiveIntentDigest.IsZero() {
-		receiveIntent, err = clievent.NewReceiveIntentDigest(value.ReceiveIntentDigest.Bytes())
-		if err != nil {
-			return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidIdentity)
-		}
-	}
-	var outputSession clievent.OutputSessionID
-	if !value.SessionID.IsZero() {
-		outputSession, err = clievent.NewOutputSessionID(value.SessionID.Bytes())
-		if err != nil {
-			return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidIdentity)
-		}
-	}
-	var failure clievent.Failure
-	if value.Failed {
-		if failure, ok = ProjectNormalizedFault(value.FaultDomain, value.NormalizedFaultScope, value.NormalizedFaultCode); !ok {
-			failure = mustFailure(clievent.FailureUnexpected)
-		}
-	} else if value.FaultDomain != 0 || value.NormalizedFaultScope != 0 || value.NormalizedFaultCode != 0 {
-		return clievent.FilesystemOutputObserved{}, ErrInvalidProjection
-	}
-	certification, ok := projectFilesystemCertification(value.Certification)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	rootDisposition, ok := projectFilesystemRootDisposition(value.RootOpenDisposition)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	runtimeComponent, ok := projectFilesystemRuntimeComponent(value.RuntimeComponent)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	runtimeOperation, ok := projectFilesystemRuntimeOperation(value.RuntimeOperation)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	runtimeDecision, ok := projectFilesystemRuntimeDecision(value.RuntimeDecision)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	lockScope, ok := projectFilesystemNativeLockScope(value.NativeLockScope)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	lockMilestone, ok := projectFilesystemNativeLockMilestone(value.NativeLockMilestone)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	failureStage, ok := projectFilesystemFailureStage(value.FailureStage)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	reconciliation, ok := projectFilesystemReconciliationStep(value.ReconciliationStep)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	nativeClass, ok := projectFilesystemNativeErrorClass(value.NativeErrorClass)
-	if !ok {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
-	}
-	event, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		Operation: operation, ReceiveIntent: receiveIntent, ReceiveOperation: receiveID, OutputSession: outputSession,
-		Certification: certification, NativeLockScope: lockScope, NativeLockMilestone: lockMilestone,
-		RootDisposition: rootDisposition, RuntimeComponent: runtimeComponent,
-		RuntimeOperation: runtimeOperation, RuntimeDecision: runtimeDecision,
-		OperationID: value.OperationID, ClaimID: value.ClaimID,
-		Counters: clievent.FilesystemOutputCounters{
-			NodeClaims: value.NodeClaimCount, DirectoryClaims: value.DirectoryClaimCount,
-			FileClaims: value.FileClaimCount, ActiveFileClaims: value.ActiveFileClaimCount,
-			ReservedFileSlots:      value.ReservedFileSlotCount,
-			DirectoryMetadataBytes: value.DirectoryMetadataBytes,
-			CheckpointRecords:      value.CheckpointRecordCount,
-		},
-		Failure: failure, FailureStage: failureStage, ReconciliationStep: reconciliation, NativeErrorClass: nativeClass,
-	})
-	if err != nil {
-		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidStageFields)
 	}
 	return event, nil
 }

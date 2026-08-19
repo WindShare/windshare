@@ -26,6 +26,11 @@ import {
 } from '../../src/transfer/intent'
 import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
 import {
+  EMPTY_TRANSFER_FAILURE_SUMMARY,
+  transferWorkerSettlement,
+  type TransferWorkerSettlement,
+} from '../../src/transfer/outcome'
+import {
   createAuthenticatedProjectionEvidence,
   type AuthenticatedDiscoveryRequest,
   type AuthenticatedDiscoverySource,
@@ -924,9 +929,15 @@ class FakeTransferRun {
     return this.#result.promise
   }
 
-  resolve(lifecycle: ReceiveLifecycleState, abortReason?: unknown): void {
+  resolve(
+    lifecycle: ReceiveLifecycleState,
+    abortReason?: unknown,
+    worker: TransferWorkerSettlement = abortReason === undefined
+      ? transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
+      : transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY),
+  ): void {
     this.#result.resolve({
-      worker: Object.freeze({}) as never,
+      worker,
       lifecycle,
       measure: Object.freeze({}) as never,
       transferJobId: identityText(76),

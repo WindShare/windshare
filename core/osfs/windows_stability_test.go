@@ -276,6 +276,13 @@ func TestWindowsStabilityBinderFailsClosedAtEveryBoundary(t *testing.T) {
 			if !errors.Is(err, test.want) {
 				t.Fatalf("error=%v want=%v", err, test.want)
 			}
+			wantComparison := content.RevisionComparisonUnavailable
+			if errors.Is(test.want, content.ErrRevisionStale) {
+				wantComparison = content.RevisionComparisonMismatch
+			}
+			if content.RevisionComparisonOf(err) != wantComparison {
+				t.Fatalf("comparison=%v want=%v error=%v", content.RevisionComparisonOf(err), wantComparison, err)
+			}
 			if got := len(root.paths) != 0; got != test.wantOpen {
 				t.Fatalf("opened=%v paths=%v", got, root.paths)
 			}
@@ -521,8 +528,13 @@ func TestWindowsStableNativeOpenContractDeniesWritesAndReparseTraversal(t *testi
 			t.Fatalf("unsupported native contract error=%v", unsupported)
 		}
 	}
-	if !errors.Is(classifyWindowsStableOpenError(windows.ERROR_FILE_NOT_FOUND), content.ErrRevisionStale) {
-		t.Fatal("missing stable path was not classified as a stale revision")
+	missing := classifyWindowsStableOpenError(windows.ERROR_FILE_NOT_FOUND)
+	if !errors.Is(missing, content.ErrRevisionStale) || content.RevisionComparisonOf(missing) != content.RevisionComparisonUnavailable {
+		t.Fatalf("missing stable path classification=%v comparison=%v", missing, content.RevisionComparisonOf(missing))
+	}
+	reparse := classifyWindowsStableOpenError(windows.ERROR_REPARSE_POINT_ENCOUNTERED)
+	if !errors.Is(reparse, content.ErrRevisionStale) || content.RevisionComparisonOf(reparse) != content.RevisionComparisonMismatch {
+		t.Fatalf("reparse classification=%v comparison=%v", reparse, content.RevisionComparisonOf(reparse))
 	}
 	sentinel := errors.New("unclassified native failure")
 	if !errors.Is(classifyWindowsStableOpenError(sentinel), sentinel) || !errors.Is(classifyWindowsRootOpenError(sentinel), sentinel) ||
@@ -586,11 +598,13 @@ func TestWindowsNativeBaselineAndRootFailuresAreExplicit(t *testing.T) {
 		t.Fatal(err)
 	}
 	nativeRoot := binder.roots[0]
-	if _, err := nativeRoot.OpenStable("missing.bin"); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("missing root-relative native open=%v", err)
+	if _, err := nativeRoot.OpenStable("missing.bin"); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("missing root-relative native open=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
-	if _, err := nativeRoot.OpenStable("../outside.bin"); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("nonlocal root-relative native open=%v", err)
+	if _, err := nativeRoot.OpenStable("../outside.bin"); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonMismatch {
+		t.Fatalf("nonlocal root-relative native open=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	if err := binder.Close(); err != nil {
 		t.Fatal(err)

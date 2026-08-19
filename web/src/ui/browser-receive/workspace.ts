@@ -269,6 +269,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
     })
     this.#admissionSettlement = new WorkspaceExecutionAdmissionSettlement({
+      operationId: this.intent.operationId,
       currentLifecycle: () => readLifecycle(this.#repository, this.intent.operationId),
       restoreContinuation: fallback => this.#stages.restoreReceiveContinuation(fallback),
       discard: () => this.#discard(),
@@ -385,20 +386,20 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return Object.freeze({ ownedBytes, maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT })
   }
 
-  settleTransferAdmissionFailure(): Promise<V2LifecycleMutation> {
+  settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
     this.#requireAttached()
-    return this.#admissionSettlement.settle()
+    return this.#admissionSettlement.settle(reason)
   }
 
   async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
-    _reason: unknown,
+    reason: unknown,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
     requireSameIntent(this.intent, intent)
     signal.throwIfAborted()
     this.#requireAttached()
-    return (await this.#admissionSettlement.settle()).lifecycle
+    return (await this.#admissionSettlement.settle(reason)).lifecycle
   }
 
   async recordSettlementUnknown(

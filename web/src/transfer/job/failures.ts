@@ -7,6 +7,11 @@ import {
   V2RevisionChangedDuringRecoveryError,
   V2RevisionLeaseExpiredError,
 } from '../../content/v2-session-services'
+import {
+  CheckpointLineageDecisionError,
+  DestinationCollisionError,
+  SourceRevisionChangedError,
+} from '../../output/persistent-tree/errors'
 import { OutputTransactionContractError } from '../output-file-transaction'
 import {
   OutputDirectoryMutationError,
@@ -16,10 +21,12 @@ import {
 } from '../output-session'
 import {
   BoundaryFaultError,
+  CheckpointFaultCode,
   FaultScope,
   OutputFaultCode,
   SessionFaultCode,
   SourceFaultCode,
+  checkpointFault,
   dependencyContractFault,
   normalizeBoundaryError,
   outputFault,
@@ -27,6 +34,7 @@ import {
   sourceFault,
   type Fault,
 } from '../fault'
+import type { TransferFileOutcomeEvidence } from '../outcome'
 import {
   V2DirectoryTraversalError,
   V2OutputPausedError,
@@ -112,6 +120,35 @@ export function normalizeV2FileTransferFailure(
   return normalizedV2FileTransferFault(normalization.fault, candidate)
 }
 
+export function transferFileOutcomeEvidence(
+  input: unknown,
+): TransferFileOutcomeEvidence | undefined {
+  let error = input
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (error instanceof CheckpointLineageDecisionError) {
+      return Object.freeze({ kind: 'checkpoint-decision', decision: error.decision })
+    }
+    if (error instanceof DestinationCollisionError) {
+      return Object.freeze({ kind: 'occupied-unbound-destination' })
+    }
+    if (error instanceof SourceRevisionChangedError ||
+        error instanceof V2RevisionChangedDuringRecoveryError ||
+        error instanceof V2FileRevisionChangedError ||
+        (error instanceof V2RemoteRevisionError &&
+          (error.failure.code === REVISION_FAILURE_DRIFT ||
+           error.failure.code === REVISION_FAILURE_STALE)) ||
+        (error instanceof BoundaryFaultError &&
+          error.fault.domain === 'source' &&
+          (error.fault.code === SourceFaultCode.RevisionChanged ||
+           error.fault.code === SourceFaultCode.RevisionInvalidated))) {
+      return Object.freeze({ kind: 'authenticated-source-drift' })
+    }
+    if (!(error instanceof Error) || error.cause === undefined) return undefined
+    error = error.cause
+  }
+  return undefined
+}
+
 export function normalizedV2FileTransferFault(
   fault: Fault,
   cause: unknown,
@@ -127,14 +164,12 @@ export function isV2FileScopedTransferFailure(error: unknown): boolean {
 }
 
 function fileTransferFault(error: unknown): Fault | undefined {
+  const persistent = persistentFileTransferFault(error)
+  if (persistent !== undefined) return persistent
   if (error instanceof V2RemoteRevisionError) {
     return revisionFailureFault(error.failure.code, error.failure.retryable)
   }
-  if (error instanceof V2RemoteOperationError) {
-    if (error.scope === 'revision') return revisionFailureFault(error.code, error.retryable)
-    if (error.scope === 'block') return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
-    return sessionFault(FaultScope.OutputPause, SessionFaultCode.Transport)
-  }
+  if (error instanceof V2RemoteOperationError) return remoteOperationFault(error)
   if (error instanceof V2RevisionChangedDuringRecoveryError) {
     return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionInvalidated)
   }
@@ -161,6 +196,39 @@ function fileTransferFault(error: unknown): Fault | undefined {
   }
   if (error instanceof V2FileOutputError || error instanceof V2OutputPausedError) {
     return outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO)
+  }
+  return undefined
+}
+
+function remoteOperationFault(error: V2RemoteOperationError): Fault {
+  if (error.scope === 'revision') return revisionFailureFault(error.code, error.retryable)
+  if (error.scope === 'block') {
+    return sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable)
+  }
+  return sessionFault(FaultScope.OutputPause, SessionFaultCode.Transport)
+}
+
+function persistentFileTransferFault(input: unknown): Fault | undefined {
+  let error = input
+  for (let depth = 0; depth < 8; depth += 1) {
+    if (error instanceof CheckpointLineageDecisionError) {
+      switch (error.decision) {
+        case 'revision-conflict':
+          return checkpointFault(FaultScope.FileLocal, CheckpointFaultCode.UnsafeInstall)
+        case 'ownership-conflict':
+          return checkpointFault(FaultScope.FileLocal, CheckpointFaultCode.OwnershipMismatch)
+        case 'invalid':
+          return checkpointFault(FaultScope.FileLocal, CheckpointFaultCode.CorruptRecord)
+      }
+    }
+    if (error instanceof DestinationCollisionError) {
+      return outputFault(FaultScope.FileLocal, OutputFaultCode.NamespaceUnsafe)
+    }
+    if (error instanceof SourceRevisionChangedError) {
+      return sourceFault(FaultScope.FileLocal, SourceFaultCode.RevisionChanged)
+    }
+    if (!(error instanceof Error) || error.cause === undefined) return undefined
+    error = error.cause
   }
   return undefined
 }

@@ -47,6 +47,7 @@ const (
 	ResumeItemBlockPublicationUnknown
 	ResumeItemBlockCheckpointInvalid
 	ResumeItemBlockOwnedObjectUnknown
+	ResumeItemBlockRevisionConflict
 )
 
 func (reason ResumeItemBlockReason) String() string {
