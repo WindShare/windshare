@@ -115,8 +115,9 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 	binder := POSIXStabilityBinder{}
 	canceled, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := binder.BindStable(canceled, StableBinding{}); !errors.Is(err, context.Canceled) {
-		t.Fatalf("canceled bind error = %v", err)
+	if _, err := binder.BindStable(canceled, StableBinding{}); !errors.Is(err, context.Canceled) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("canceled bind error = %v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 	if _, err := binder.BindStable(context.Background(), StableBinding{File: nil}); !errors.Is(err, content.ErrUnsupportedStability) {
 		t.Fatalf("nil file bind error = %v", err)
@@ -124,8 +125,9 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 
 	// Stale candidate / identity mismatch
 	var dummyRecord catalog.NodeRecord
-	if _, err := binder.BindStable(context.Background(), StableBinding{File: handle, Record: dummyRecord}); !errors.Is(err, content.ErrRevisionStale) {
-		t.Fatalf("mismatched record bind error = %v", err)
+	if _, err := binder.BindStable(context.Background(), StableBinding{File: handle, Record: dummyRecord}); !errors.Is(err, content.ErrRevisionStale) ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonMismatch {
+		t.Fatalf("mismatched record bind error = %v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 
 	// Closed handle error paths
@@ -137,7 +139,8 @@ func TestPOSIXStabilityPlatformConstructorsAndBinderEdgeCases(t *testing.T) {
 	if _, _, err := POSIXCatalogBaseline(closedHandle); err == nil {
 		t.Fatal("expected error for closed handle baseline")
 	}
-	if _, err := binder.BindStable(context.Background(), StableBinding{File: closedHandle}); err == nil {
-		t.Fatal("expected error for closed handle bind")
+	if _, err := binder.BindStable(context.Background(), StableBinding{File: closedHandle}); err == nil ||
+		content.RevisionComparisonOf(err) != content.RevisionComparisonUnavailable {
+		t.Fatalf("closed handle bind error=%v comparison=%v", err, content.RevisionComparisonOf(err))
 	}
 }

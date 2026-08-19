@@ -20,7 +20,8 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 		VerifiedBytes: 350, NewlyVerifiedBytes: 300,
 		FileOutcomes: transfer.FileOutcomeSummary{
 			DownloadedFiles: 1, ResumedFiles: 1, PausedFiles: 1,
-			CollisionFiles: 1, ItemBlockedFiles: 1, FailedFiles: 1,
+			CollisionFiles: 1, ItemBlockedFiles: 3, FailedFiles: 1,
+			RevisionConflictFiles: 1, CheckpointInvalidFiles: 1, OwnedObjectUnknownFiles: 1,
 			ModifiedTimeWarnings: 2,
 		},
 		Discovery: transfer.DiscoveryComplete, CountersExact: true,
@@ -35,7 +36,9 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 		projected.VerifiedBytes() != 350 || projected.NewlyVerifiedBytes() != 300 ||
 		projected.Discovery() != clievent.DiscoveryComplete || !projected.CountersExact() ||
 		files.DownloadedFiles != 1 || files.ResumedFiles != 1 || files.PausedFiles != 1 ||
-		files.CollisionFiles != 1 || files.ItemBlockedFiles != 1 || files.FailedFiles != 1 ||
+		files.CollisionFiles != 1 || files.ItemBlockedFiles != 3 || files.FailedFiles != 1 ||
+		files.RevisionConflictFiles != 1 || files.CheckpointInvalidFiles != 1 ||
+		files.OwnedObjectUnknownFiles != 1 ||
 		files.ModifiedTimeWarnings != 2 {
 		t.Fatalf("progress projection lost facts: %+v files=%+v", projected, files)
 	}
@@ -181,6 +184,48 @@ func TestGetResultProjectsClosedSettlementDeadline(t *testing.T) {
 	failure, present := projected.Failure()
 	if !present || failure.Code() != clievent.FailureDeadline || projected.ExitCode() != clievent.ExitFailure {
 		t.Fatalf("deadline result=%+v failure=%+v present=%t", projected, failure, present)
+	}
+}
+
+func TestGetResultProjectsAuthoritativeLocalOutcomesWithoutUnexpectedFallback(t *testing.T) {
+	tests := []struct {
+		name     string
+		outcomes transfer.FileOutcomeSummary
+		want     clievent.FailureCode
+	}{
+		{"revision conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, RevisionConflictFiles: 1}, clievent.FailureCheckpointRevisionConflict},
+		{"invalid checkpoint", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, CheckpointInvalidFiles: 1}, clievent.FailureCheckpointInvalid},
+		{"owned object conflict", transfer.FileOutcomeSummary{ItemBlockedFiles: 1, OwnedObjectUnknownFiles: 1}, clievent.FailureOwnedObjectUnknown},
+		{"destination collision", transfer.FileOutcomeSummary{CollisionFiles: 1}, clievent.FailureDestinationCollision},
+		{
+			"mixed local priority",
+			transfer.FileOutcomeSummary{
+				ItemBlockedFiles: 3, RevisionConflictFiles: 1,
+				CheckpointInvalidFiles: 1, OwnedObjectUnknownFiles: 1, CollisionFiles: 1,
+			},
+			clievent.FailureCheckpointRevisionConflict,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			job := successfulJobResult(t)
+			job.Outcome = transfer.DirectTreeOutcomePartial
+			job.Progress.PublishedFiles = 0
+			job.Progress.PublishedBytes = 0
+			job.Progress.VerifiedBytes = 0
+			job.Progress.FileOutcomes = test.outcomes
+			job.SucceededFiles = 0
+			projected, err := ProjectGetResult(GetResultInput{
+				Result: job, Destination: clievent.NewDisplayPath("C:/safe"),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			failure, ok := projected.Failure()
+			if !ok || failure.Code() != test.want || failure.Code() == clievent.FailureUnexpected {
+				t.Fatalf("failure = %+v, present=%t, want %v", failure, ok, test.want)
+			}
+		})
 	}
 }
 

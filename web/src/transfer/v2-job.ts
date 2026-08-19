@@ -33,6 +33,7 @@ import {
 import {
   isolatedDirectoryOutputFailure,
   materializationFailureReason,
+  transferFileOutcomeEvidence,
 } from './job/failures'
 import { V2TransferAdmissionFailureError } from './job/admission-error'
 import { V2JobDiscovery } from './job/discovery'
@@ -78,6 +79,7 @@ import type {
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   TransferFailureAccumulator,
+  projectTransferFileOutcome,
   transferWorkerSettlement,
   type CompletedTransferWorkerSettlement,
   type TransferWorkerSettlement,
@@ -668,7 +670,12 @@ export class TransferJob {
   }
 
   #recordFileFailure(entry: Extract<V2CatalogEntry, { kind: 'file' }>, reason: unknown): void {
-    this.#failures.record(Object.freeze({ kind: 'file', fileId: fileId(entry.idText), reason }))
+    const evidence = transferFileOutcomeEvidence(reason) ??
+      Object.freeze({ kind: 'residual-failure' as const })
+    this.#failures.record(
+      Object.freeze({ kind: 'file', fileId: fileId(entry.idText), reason }),
+      projectTransferFileOutcome(evidence),
+    )
     this.#progress.recordFileError()
     this.#emitProgress()
   }

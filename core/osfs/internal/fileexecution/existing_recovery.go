@@ -41,6 +41,9 @@ func (engine *Engine) beginExisting(
 			ctx, bindingError(ErrInvalidObservation), collaboratorError(ctx, openErr),
 		)
 	}
+	if openErr != nil {
+		return recovery.failStart(ctx, collaboratorError(ctx, openErr))
+	}
 	expectation, err := expectationFor(record)
 	if err != nil {
 		return recovery.failStart(ctx, err)
@@ -48,6 +51,15 @@ func (engine *Engine) beginExisting(
 	final, finalErr := destination.ObserveFinal(ctx, expectation)
 	if finalErr != nil || !final.valid() {
 		return recovery.failStart(ctx, collaboratorError(ctx, finalErr))
+	}
+	if checkpointmodel.InitialCandidate(recovery.record) && owned.Condition() == OwnedAbsent &&
+		final.Condition() == FinalAbsent {
+		return recovery.recreateInitialCandidate(ctx)
+	}
+	if recovery.record.CommitState() == checkpointmodel.CommitCandidate && owned.Condition() != OwnedReady {
+		return recovery.engine.beginItemBlocked(
+			ctx, recovery.file, recovery.destination, transfer.ItemBlockOwnedObjectUnknown,
+		)
 	}
 	if err := recovery.commitCandidate(ctx, owned, final); err != nil {
 		return recovery.failStart(ctx, err)
@@ -154,8 +166,10 @@ func (recovery *existingFileRecovery) start(
 		return recovery.engine.terminalStart(
 			ctx, recovery.destination, recovery.ownedFile, settlement, err,
 		)
-	case RecoveryStartNewPreservingOld:
-		return recovery.startNewPreservingOld(ctx)
+	case RecoveryReturnOwnershipBlocked:
+		return recovery.engine.beginItemBlocked(
+			ctx, recovery.file, recovery.destination, transfer.ItemBlockOwnedObjectUnknown,
+		)
 	case RecoveryInstallQuarantine:
 		return recovery.installQuarantine(ctx, decision.QuarantineReason())
 	default:
@@ -182,26 +196,58 @@ func (recovery *existingFileRecovery) returnCollision(
 	)
 }
 
-func (recovery *existingFileRecovery) startNewPreservingOld(
+func (recovery *existingFileRecovery) recreateInitialCandidate(
 	ctx context.Context,
 ) (transfer.FileStart, error) {
-	abandoner, ok := recovery.engine.checkpoints.(CheckpointAbandoner)
-	if !ok {
-		return recovery.failStart(ctx, bindingError(ErrPortContract))
+	owned, observation, createErr := recovery.engine.platform.CreateOwnedFile(
+		ctx, recovery.destination, recovery.record.OwnedObjectID(), recovery.record.ExactSize(),
+	)
+	if createErr != nil || !observation.validFor(recovery.record.OwnedObjectID()) {
+		return recovery.failStart(ctx, collaboratorError(ctx, createErr), bindingError(ErrInvalidObservation), closeOwnedFile(owned))
 	}
-	key, err := recovery.engine.checkpointKey(recovery.file)
+	if observation.Condition() != OwnedReady {
+		if owned != nil {
+			return recovery.failStart(ctx, bindingError(ErrInvalidObservation), closeOwnedFile(owned))
+		}
+		if observation.Condition() != OwnedObjectCollision {
+			return recovery.engine.beginItemBlocked(
+				ctx, recovery.file, recovery.destination, transfer.ItemBlockOwnedObjectUnknown,
+			)
+		}
+		opened, observed, openErr := recovery.engine.platform.OpenOwnedFile(
+			ctx, recovery.record.OwnedObjectID(), recovery.record.ExactSize(), true,
+		)
+		if openErr != nil || !ownedFileMatchesObservation(
+			opened, observed, recovery.record.OwnedObjectID(),
+		) {
+			return recovery.failStart(
+				ctx, collaboratorError(ctx, openErr), bindingError(ErrInvalidObservation), closeOwnedFile(opened),
+			)
+		}
+		if observed.Condition() != OwnedReady {
+			return recovery.engine.beginItemBlocked(
+				ctx, recovery.file, recovery.destination, transfer.ItemBlockOwnedObjectUnknown,
+			)
+		}
+		owned = opened
+	}
+	if owned == nil || owned.ObjectID() != recovery.record.OwnedObjectID() {
+		return recovery.failStart(ctx, bindingError(ErrInvalidObservation), closeOwnedFile(owned))
+	}
+	recovery.ownedFile = owned
+	if err := owned.Sync(); err != nil {
+		return recovery.failStart(ctx, collaboratorError(ctx, err))
+	}
+	verified, err := checkpointmodel.PromoteInitialCandidate(recovery.record)
 	if err != nil {
 		return recovery.failStart(ctx, err)
 	}
-	if err := abandoner.Abandon(ctx, recovery.record); err != nil {
-		return recovery.failStart(ctx, collaboratorError(ctx, err))
-	}
-	if err := closeOwnedFile(recovery.ownedFile); err != nil {
+	if _, err := recovery.engine.storeRecord(ctx, &recovery.record, verified); err != nil {
 		return recovery.failStart(ctx, err)
 	}
-	recovery.ownedFile = nil
-	return recovery.engine.beginNew(
-		ctx, recovery.engine.nextSequence(), recovery.file, key, recovery.destination,
+	recovery.record = verified
+	return recovery.engine.transactionStart(
+		recovery.file, recovery.destination, recovery.ownedFile, recovery.record, true,
 	)
 }
 

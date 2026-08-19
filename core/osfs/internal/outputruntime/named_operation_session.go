@@ -171,12 +171,17 @@ func (authority *Authority) namedFileExecutor(
 		storeFactory = checkpointstore.NewFileExecutionStoreWithProfile
 	}
 	store, err := storeFactory(&repository, authority.destination.LiveCleanupProfile())
+	var repositoryAttention bool
 	if operation.reopened {
 		var recordCount uint64
 		if store != nil {
 			recordCount = store.RecordCount()
+			_, attention := store.LineageSnapshot()
+			repositoryAttention = len(attention) != 0
 		}
-		authority.traceCheckpointReconciled(operation.intent, sessionID, recordCount, err)
+		authority.traceCheckpointReconciled(
+			operation.intent, sessionID, recordCount, repositoryAttention, err,
+		)
 	}
 	if err != nil {
 		primary := diagnoseFilesystemOutputFailure(
@@ -184,6 +189,18 @@ func (authority *Authority) namedFileExecutor(
 			checkpointRuntimeError(context.Background(), "reconcile ordinary file repository", err),
 		)
 		return nil, nil, nil, freezeFilesystemOutputFailure(primary, repository.Close())
+	}
+	if repositoryAttention {
+		// Opaque repository evidence cannot grant mutation authority even when
+		// authenticated siblings reconcile cleanly.
+		attentionErr := requireOperationAttention(
+			operation.lease, checkpointmodel.OrdinaryReasonOperationOwnershipUnknown,
+		)
+		primary := runtimeOutputError(
+			context.Background(), transferfault.OutputOwnership,
+			"reject ordinary file repository attention", ErrNativeResumeOwnershipUnknown,
+		)
+		return nil, nil, nil, errors.Join(primary, attentionErr, repository.Close())
 	}
 	fileAuthority, err := directoryauthority.NewFileAuthority(directories, store, sessionID)
 	if err != nil {

@@ -14,6 +14,19 @@ export {
 } from './checkpoint-codec'
 
 export {
+  CHECKPOINT_LINEAGE_DOMAIN,
+  canonicalCheckpointLineageBytes,
+  classifyCheckpointLineage,
+  deriveCheckpointLineageID,
+  sameCheckpointLineageSpec,
+  type CheckpointLineageDecisionKind,
+  type CheckpointLineageEvidence,
+  type CheckpointLineageID,
+  type CheckpointLineageRequest,
+  type CheckpointLineageSpec,
+} from './checkpoint-lineage'
+
+export {
   CHECKPOINT_SHARD_BUCKETS,
   FILE_CHECKPOINT_ID_BYTES,
   FILE_CHECKPOINT_MATERIALIZER_ATOMIC_FILE,
