@@ -203,7 +203,14 @@ const (
 	ItemBlockOwnershipUnknown
 	ItemBlockPublicationAmbiguous
 	ItemBlockRetirementUncertain
+	ItemBlockRevisionConflict
+	ItemBlockCheckpointInvalid
+	ItemBlockOwnedObjectUnknown
 )
+
+func (reason ItemBlockReason) Valid() bool {
+	return reason >= ItemBlockStateCorrupt && reason <= ItemBlockOwnedObjectUnknown
+}
 
 func NewImmediateItemBlockedFileSettlement(
 	target FileMaterializationTarget,
@@ -240,7 +247,7 @@ func validItemBlockedSettlement(
 	return target.valid() && !reference.IsZero() &&
 		reference.OutputSessionID() == target.OutputSessionID() &&
 		reference.LocatorDigest() == target.Locator().Digest() &&
-		reason >= ItemBlockStateCorrupt && reason <= ItemBlockRetirementUncertain
+		reason.Valid()
 }
 
 func (s FileSettlement) ItemBlock() (MaterializationStateRef, ItemBlockReason, bool) {
@@ -612,6 +619,7 @@ type TransferLifecycleTrace struct {
 	ConnectionSizeClass  ConnectionSizeClass
 	FileSelection        FileSelectionDecision
 	FileSettlement       FileSettlementKind
+	ItemBlockReason      ItemBlockReason
 	DirectTreeSettlement DirectTreeSettlementKind
 	Progress             ReceiveProgressSnapshot
 	Fault                fault.Fault

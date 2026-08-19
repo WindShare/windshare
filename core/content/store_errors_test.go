@@ -23,24 +23,28 @@ func (f revisionSourceFunc) OpenStable(ctx context.Context, record catalog.NodeR
 }
 
 type fixedIDs struct {
-	revision FileRevision
-	lease    LeaseID
+	lease LeaseID
 }
 
-func (g fixedIDs) NewFileRevision() (FileRevision, error) { return g.revision, nil }
-func (g fixedIDs) NewLeaseID() (LeaseID, error)           { return g.lease, nil }
+func (g fixedIDs) NewLeaseID() (LeaseID, error) { return g.lease, nil }
 
-func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source RevisionSource, clock Clock, ids IdentityGenerator) (*RevisionStore, *QuotaAccount, *QuotaAccount) {
+func customRevisionStore(t *testing.T, nodeSource CatalogNodeSource, source RevisionSource, clock Clock, ids LeaseIDGenerator) (*RevisionStore, *QuotaAccount, *QuotaAccount) {
 	t.Helper()
 	process := generousQuota(t, "process")
 	share := generousQuota(t, "share")
+	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
-		Catalog: nodeSource, Source: source, ProcessQuota: process, ShareQuota: share, Clock: clock, IDs: ids,
+		Catalog: nodeSource, Source: source, ProcessQuota: process, ShareQuota: share, Clock: clock, LeaseIDs: ids,
+		RevisionDeriver: deriver, MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() {
+		_ = store.Close()
+		deriver.Destroy()
+	})
 	return store, process, share
 }
 
@@ -148,7 +152,7 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 		name    string
 		catalog CatalogNodeSource
 		source  RevisionSource
-		ids     IdentityGenerator
+		ids     LeaseIDGenerator
 	}{
 		{
 			name: "catalog error",
@@ -172,10 +176,6 @@ func TestOpenRevisionRollsBackEveryPrepublicationFailure(t *testing.T) {
 		{
 			name: "size mismatch", catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 			source: &testRevisionSource{files: []*testStableFile{{data: []byte{1, 2}}}}, ids: &sequenceIDs{},
-		},
-		{
-			name: "zero revision identity", catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-			source: &testRevisionSource{files: []*testStableFile{{data: []byte{1}}}}, ids: fixedIDs{lease: contentID[LeaseID](1)},
 		},
 		{
 			name: "source panic", catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
@@ -307,7 +307,7 @@ func TestLeaseErrorsDoNotEvictAnAdmittedRevision(t *testing.T) {
 func TestOpenRevisionRejectsLeaseIdentityReuseWithoutClosingRevision(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
-	ids := fixedIDs{revision: contentID[FileRevision](1), lease: contentID[LeaseID](2)}
+	ids := fixedIDs{lease: contentID[LeaseID](2)}
 	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{stable}}, nil, ids)
 	session := generousQuota(t, "session")
 	first, err := store.OpenRevision(context.Background(), file, session)
@@ -330,11 +330,11 @@ func TestOpenRevisionRejectsLeaseIdentityReuseWithoutClosingRevision(t *testing.
 	_ = store.Close()
 }
 
-func TestExpiredLeaseGraceUsesActualExpiryAndForcesFreshRevision(t *testing.T) {
+func TestExpiredLeaseGraceUsesActualExpiryAndReusesStableRevision(t *testing.T) {
 	clock := &testClock{now: time.Unix(100, 0)}
 	file, record := fileRecord(t, 1)
 	firstSource := &testStableFile{data: []byte{1}}
-	secondSource := &testStableFile{data: []byte{2}}
+	secondSource := &testStableFile{data: []byte{1}}
 	source := &testRevisionSource{files: []*testStableFile{firstSource, secondSource}}
 	store, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, source, clock, &sequenceIDs{})
 	defer store.Close()
@@ -348,8 +348,8 @@ func TestExpiredLeaseGraceUsesActualExpiryAndForcesFreshRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first.Descriptor().FileRevision() == second.Descriptor().FileRevision() || source.Calls() != 2 || firstSource.closed.Load() != 1 {
-		t.Fatalf("expired revision reuse: first=%x second=%x calls=%d closes=%d", first.Descriptor().FileRevision(), second.Descriptor().FileRevision(), source.Calls(), firstSource.closed.Load())
+	if first.Descriptor().FileRevision() != second.Descriptor().FileRevision() || first.ID() == second.ID() || source.Calls() != 2 || firstSource.closed.Load() != 1 {
+		t.Fatalf("stable revision reopen: first=%x second=%x calls=%d closes=%d", first.Descriptor().FileRevision(), second.Descriptor().FileRevision(), source.Calls(), firstSource.closed.Load())
 	}
 	if _, err := store.RenewLease(first.ID()); !errors.Is(err, ErrLeaseExpired) {
 		t.Fatalf("expired lease tombstone = %v", err)
@@ -381,15 +381,17 @@ func TestDelayedReleaseCannotRestartGraceAfterLeaseExpiry(t *testing.T) {
 	}
 }
 
-func TestGeneratedIdentitiesAreNonzeroAndNeverReusedAfterGrace(t *testing.T) {
+func TestDefaultLeaseIdentityIsNonzeroAndDerivedRevisionSurvivesGrace(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	process := generousQuota(t, "process")
 	share := generousQuota(t, "share")
 	stable := &testStableFile{data: []byte{1}}
+	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		Source:  &testRevisionSource{files: []*testStableFile{stable}}, ProcessQuota: process, ShareQuota: share,
+		RevisionDeriver: deriver, MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -403,20 +405,21 @@ func TestGeneratedIdentitiesAreNonzeroAndNeverReusedAfterGrace(t *testing.T) {
 		t.Fatal("default identity generator returned zero")
 	}
 	_ = store.Close()
+	deriver.Destroy()
 
 	clock := &testClock{now: time.Unix(100, 0)}
 	firstStable := &testStableFile{data: []byte{1}}
 	secondStable := &testStableFile{data: []byte{1}}
-	fixed := fixedIDs{revision: contentID[FileRevision](7), lease: contentID[LeaseID](8)}
-	reuseStore, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{firstStable, secondStable}}, clock, fixed)
+	reuseStore, _, _ := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, &testRevisionSource{files: []*testStableFile{firstStable, secondStable}}, clock, &sequenceIDs{})
 	first, err := reuseStore.OpenRevision(context.Background(), file, session)
 	if err != nil {
 		t.Fatal(err)
 	}
 	_ = reuseStore.ReleaseLease(first.ID())
 	clock.Advance(RevisionResumeGrace)
-	if _, err := reuseStore.OpenRevision(context.Background(), file, session); err == nil {
-		t.Fatal("reused file revision identity was accepted")
+	second, err := reuseStore.OpenRevision(context.Background(), file, session)
+	if err != nil || first.Descriptor().FileRevision() != second.Descriptor().FileRevision() || first.ID() == second.ID() {
+		t.Fatalf("derived revision did not survive clean release: second=%+v err=%v", second, err)
 	}
 	_ = reuseStore.Close()
 }
@@ -475,7 +478,7 @@ func (f *panicAfterPublicationFile) Verify(context.Context) error {
 func (*panicAfterPublicationFile) ReadAt(context.Context, []byte, uint64) (int, error) { return 1, nil }
 func (f *panicAfterPublicationFile) Close() error                                      { f.closed.Add(1); return nil }
 
-func TestStableReadPanicDriftsRevisionWithoutLeakingResources(t *testing.T) {
+func TestStableReadPanicIsUnavailableAndDoesNotInvalidateRevision(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &panicAfterPublicationFile{}
 	store, process, share := customRevisionStore(t, testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}}, revisionSourceFunc(func(context.Context, catalog.NodeRecord) (StableFile, error) {
@@ -487,24 +490,29 @@ func TestStableReadPanicDriftsRevisionWithoutLeakingResources(t *testing.T) {
 		t.Fatal(err)
 	}
 	ref, _ := NewBlockRef(file, lease.Descriptor().FileRevision(), 0, lease.Descriptor().Geometry())
-	if _, err := store.ReadBlock(context.Background(), lease.ID(), ref); !errors.Is(err, ErrRevisionDrift) {
+	if _, err := store.ReadBlock(context.Background(), lease.ID(), ref); err == nil || errors.Is(err, ErrRevisionDrift) {
 		t.Fatalf("panicking stable read = %v", err)
 	}
+	if stable.closed.Load() != 0 || process.Snapshot().Used == (QuotaUsage{}) || share.Snapshot().Used == (QuotaUsage{}) || session.Snapshot().Used == (QuotaUsage{}) {
+		t.Fatal("uncertain read invalidated an otherwise active revision")
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if stable.closed.Load() != 1 || process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) || session.Snapshot().Used != (QuotaUsage{}) {
-		t.Fatal("panicking stable read leaked source or quota")
+		t.Fatal("store close leaked source or quota after uncertain read")
 	}
 }
 
 func TestCancelledStableReadDoesNotDriftSharedRevision(t *testing.T) {
-	readErr, drift := readStableBlock(context.Background(), cancelledReadFile{}, make([]byte, 1), 0)
-	if !errors.Is(readErr, context.Canceled) || drift {
-		t.Fatalf("cancelled read = %v, drift=%v", readErr, drift)
+	comparison, readErr := readStableBlock(context.Background(), cancelledReadFile{}, make([]byte, 1), 0)
+	if !errors.Is(readErr, context.Canceled) || comparison != RevisionComparisonUnavailable {
+		t.Fatalf("cancelled read = %v, comparison=%v", readErr, comparison)
 	}
 }
 
-func TestIdentityTombstoneRingsRemainBounded(t *testing.T) {
+func TestLeaseIdentityTombstoneRingRemainsBounded(t *testing.T) {
 	store := &RevisionStore{
-		usedRevisions:   make(map[FileRevision]struct{}),
 		leaseTombstones: make(map[LeaseID]leaseStatus),
 	}
 	for index := 0; index <= IdentityTombstoneLimit; index++ {
@@ -512,13 +520,8 @@ func TestIdentityTombstoneRingsRemainBounded(t *testing.T) {
 		lease[0] = byte(index >> 8)
 		lease[1] = byte(index)
 		store.rememberLeaseTombstoneLocked(lease, leaseExpired)
-		var revision FileRevision
-		revision[0] = byte(index >> 8)
-		revision[1] = byte(index)
-		store.rememberRevisionIDLocked(revision)
 	}
-	if len(store.leaseTombstones) != IdentityTombstoneLimit || len(store.usedRevisions) != IdentityTombstoneLimit ||
-		len(store.leaseOrder) != IdentityTombstoneLimit || len(store.revisionOrder) != IdentityTombstoneLimit {
-		t.Fatalf("identity tombstones are unbounded: leases=%d revisions=%d", len(store.leaseTombstones), len(store.usedRevisions))
+	if len(store.leaseTombstones) != IdentityTombstoneLimit || len(store.leaseOrder) != IdentityTombstoneLimit {
+		t.Fatalf("lease identity tombstones are unbounded: leases=%d", len(store.leaseTombstones))
 	}
 }

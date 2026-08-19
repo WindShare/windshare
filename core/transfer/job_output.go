@@ -467,13 +467,15 @@ func (policy lifecyclePolicy) retireReason() FileRetireReason {
 }
 
 func (r *jobRun) traceFileSettlement(plan plannedFile, settlement FileSettlement, failure error) {
+	_, itemBlockReason, _ := settlement.ItemBlock()
 	r.job.trace(TransferLifecycleTrace{
 		Stage: TransferFileSettled, OutputSessionID: r.output.SessionID(),
-		FileSelection:  plan.selectionDecision,
-		FileSettlement: settlement.Kind(),
-		Fault:          closedFault(failure),
-		Interruption:   closedInterruption(failure),
-		Failed:         failure != nil,
+		FileSelection:   plan.selectionDecision,
+		FileSettlement:  settlement.Kind(),
+		ItemBlockReason: itemBlockReason,
+		Fault:           closedFault(failure),
+		Interruption:    closedInterruption(failure),
+		Failed:          failure != nil,
 	})
 }
 

@@ -37,7 +37,7 @@ var (
 		legacy_roots_removed root_prefetch_attempt root_prefetch_entry_count root_prefetch_omitted_count
 		receive_intent_digest output_session_id filesystem_certification filesystem_root_disposition
 		filesystem_native_lock_scope filesystem_native_lock_milestone filesystem_runtime_component filesystem_runtime_operation
-		filesystem_runtime_decision filesystem_operation_id filesystem_claim_id filesystem_failure_stage
+		filesystem_runtime_decision filesystem_checkpoint_decision filesystem_operation_id filesystem_claim_id filesystem_failure_stage
 		filesystem_reconciliation_step filesystem_native_error_class
 		lane_route delivered_blocks delivered_bytes failed_block_attempts reassigned_blocks
 		observer_loss_category observer_loss_reason observer_loss_count
@@ -55,6 +55,9 @@ var (
 	`)
 	v2TraceStringSliceFields = v2TraceFieldSet(`
 		receiver_benign_components receiver_retained_cause_classes receiver_teardown_transitions
+	`)
+	v2TraceFilesystemCheckpointDecisions = v2TraceFieldSet(`
+		absent exact revision_conflict ownership_conflict invalid
 	`)
 	v2TraceDecimalStringFields = v2TraceFieldSet(`
 		file_bytes selected_items retry_after_ms discovered_files discovered_bytes published_files published_bytes verified_bytes newly_verified_bytes
@@ -291,7 +294,14 @@ func validateV2TraceRecord(
 
 func validateV2DiagnosticRecord(t *testing.T, record map[string]json.RawMessage) {
 	t.Helper()
-	switch event := v2TraceString(t, record, "event"); event {
+	event := v2TraceString(t, record, "event")
+	if _, present := record["filesystem_checkpoint_decision"]; present {
+		decision := v2TraceString(t, record, "filesystem_checkpoint_decision")
+		if !v2ValidFilesystemCheckpointDecision(event, decision) {
+			t.Fatalf("filesystem checkpoint decision %q is outside the closed vocabulary for event %q", decision, event)
+		}
+	}
+	switch event {
 	case "lane_settlement":
 		route := v2TraceString(t, record, "lane_route")
 		if route != "relay" && route != "direct" {
@@ -326,6 +336,10 @@ func validateV2DiagnosticRecord(t *testing.T, record map[string]json.RawMessage)
 			t.Fatal("ordinary successful relay sends must not enter the user trace")
 		}
 	}
+}
+
+func v2ValidFilesystemCheckpointDecision(event, decision string) bool {
+	return event == "filesystem_output" && v2TraceHas(v2TraceFilesystemCheckpointDecisions, decision)
 }
 
 func v2KnownObserverLossCategory(value string) bool {
@@ -538,6 +552,33 @@ func assertV2UserTraceTransportDiagnostics(
 	}
 }
 
+func TestUserTraceV2FilesystemCheckpointDecisionVocabulary(t *testing.T) {
+	tests := []struct {
+		name     string
+		event    string
+		decision string
+		want     bool
+	}{
+		{"absent", "filesystem_output", "absent", true},
+		{"exact", "filesystem_output", "exact", true},
+		{"revision conflict", "filesystem_output", "revision_conflict", true},
+		{"ownership conflict", "filesystem_output", "ownership_conflict", true},
+		{"invalid", "filesystem_output", "invalid", true},
+		{"empty", "filesystem_output", "", false},
+		{"case variant", "filesystem_output", "RevisionConflict", false},
+		{"display spelling", "filesystem_output", "revision-conflict", false},
+		{"sensitive payload", "filesystem_output", `checkpoint/path/owned-object-id`, false},
+		{"wrong event", "transfer_lifecycle", "exact", false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := v2ValidFilesystemCheckpointDecision(test.event, test.decision); got != test.want {
+				t.Fatalf("valid=%t want=%t", got, test.want)
+			}
+		})
+	}
+}
+
 func TestUserTraceV2DiagnosticContract(t *testing.T) {
 	runID := strings.Repeat("1", 32)
 	base := func(sequence int, event string) map[string]any {
@@ -581,9 +622,16 @@ func TestUserTraceV2DiagnosticContract(t *testing.T) {
 	termination["receiver_channel_drain_failed"] = false
 	adaptive := base(4, "content_path_selected")
 	adaptive["content_path"] = "direct_and_relay"
+	recordVectors := []map[string]any{lane, loss, termination, adaptive}
+	for index, decision := range []string{"absent", "exact", "revision_conflict", "ownership_conflict", "invalid"} {
+		filesystem := base(index+5, "filesystem_output")
+		filesystem["operation"] = "runtime_decision"
+		filesystem["filesystem_checkpoint_decision"] = decision
+		recordVectors = append(recordVectors, filesystem)
+	}
 
 	var encoded bytes.Buffer
-	for _, record := range []map[string]any{lane, loss, termination, adaptive} {
+	for _, record := range recordVectors {
 		line, err := json.Marshal(record)
 		if err != nil {
 			t.Fatal(err)
@@ -596,8 +644,8 @@ func TestUserTraceV2DiagnosticContract(t *testing.T) {
 		t.Fatal(err)
 	}
 	records, _ := readV2UserTrace(t, path, "get")
-	if len(records) != 4 {
-		t.Fatalf("diagnostic records=%d want=4", len(records))
+	if len(records) != len(recordVectors) {
+		t.Fatalf("diagnostic records=%d want=%d", len(records), len(recordVectors))
 	}
 	for _, record := range records {
 		if v2TraceString(t, record, "event") == "fallback" {

@@ -26,6 +26,9 @@ func TestProgressSnapshotEnforcesExactCounterRelationships(t *testing.T) {
 		{"published exceeds verified", func(value *ProgressSpec) { value.PublishedBytes = 91 }},
 		{"published files exceed discovered", func(value *ProgressSpec) { value.PublishedFiles = 4 }},
 		{"settlement count disagrees", func(value *ProgressSpec) { value.FileOutcomes.ResumedFiles = 0 }},
+		{"classified item blocks exceed total", func(value *ProgressSpec) {
+			value.FileOutcomes.RevisionConflictFiles = 1
+		}},
 		{"invalid discovery", func(value *ProgressSpec) { value.Discovery = 0 }},
 	}
 	for _, test := range tests {

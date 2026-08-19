@@ -13,7 +13,7 @@ const (
 	RecoveryReturnPublished
 	RecoveryReturnRetired
 	RecoveryReturnQuarantined
-	RecoveryStartNewPreservingOld
+	RecoveryReturnOwnershipBlocked
 	RecoveryInstallQuarantine
 )
 
@@ -82,9 +82,9 @@ func reduceWritableRecovery(
 			}
 			return RecoveryDecision{action: RecoveryOpenActive}, nil
 		case OwnedAbsent, OwnedAnchorMissing, OwnedStageMissing:
-			// Definite loss of our restart object cannot authorize mutation of the
-			// old path. Preserve its evidence and establish a fresh object instead.
-			return RecoveryDecision{action: RecoveryStartNewPreservingOld}, nil
+			// A committed record remains the sole authority for this lineage. Losing
+			// its object must not manufacture a second object or move verified ranges.
+			return RecoveryDecision{action: RecoveryReturnOwnershipBlocked}, nil
 		default:
 			return recoveryQuarantine(ownedQuarantineReason(owned.Condition())), nil
 		}

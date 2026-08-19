@@ -9,12 +9,18 @@ import {
   createFileSystemAccessSettlementAuthority,
   type FSASettlementTraceEvent,
 } from '../../src/output/file-system-access/settlement'
-import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+import {
+  DestinationCollisionError,
+  TargetOwnershipUnknownError,
+} from '../../src/output/persistent-tree/errors'
 import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
 } from '../../src/output/workspace/records'
-import { transferWorkerSettlement } from '../../src/transfer/outcome'
+import {
+  EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
+  transferWorkerSettlement,
+} from '../../src/transfer/outcome'
 import { identity } from './planning/fixture'
 import {
   MemoryDirectory,
@@ -170,6 +176,30 @@ describe('File System Access DirectTree lifecycle', () => {
     await reopened.close()
   })
 
+  it('reports a pre-existing file as a collision only while its lineage is absent', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const session = await bindTask({
+      parent,
+      repository: new MemoryOperationRepository(),
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await singleFileArtifact(),
+      operationSeed: 35,
+    })
+    await parent.getFileHandle(session.reservation.reservedName, { create: true })
+
+    await expect(session.beginFile({
+      artifactPath: [session.reservation.reservedName],
+      openRevision: async () => ({
+        fileId: identity(3),
+        fileRevision: identity(33),
+        exactSize: 4n,
+      }),
+    })).rejects.toBeInstanceOf(DestinationCollisionError)
+    expect(parent.fileNames()).toEqual([session.reservation.reservedName])
+    await session.close()
+  })
+
   it('turns an external task-root race into NeedsAttention without merging', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
@@ -317,7 +347,9 @@ describe('File System Access settlement authority', () => {
         reason: new Error('directory metadata failed'),
       }]),
       failureCount: 1,
+      fileFailureCount: 0,
       omittedFailureCount: 0,
+      fileOutcomes: EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
     })
 
     await expect(execution.settle({
@@ -548,6 +580,61 @@ describe('File System Access settlement authority', () => {
       reason: 'target-ownership-unknown',
     })
     await session.close()
+  })
+})
+
+describe('File System Access admission ownership recovery', () => {
+  it('turns unresolved checkpoint recovery into operation attention instead of continuation restore', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const session = await bindTask({
+      parent,
+      repository,
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await singleFileArtifact(),
+      operationSeed: 109,
+    })
+    const leaseId = identity(110)
+    await startReceiving(repository, session.intent, leaseId)
+    const execution = await fsaExecution(
+      session,
+      repository,
+      leaseId,
+      identity(111),
+      identity(112),
+    )
+    const fallback = await execution.pause({
+      worker: PAUSED,
+      materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      reason: new Error('first attempt paused'),
+    }, SIGNAL)
+    if (fallback.kind !== 'resumable-receive') throw new Error('test did not create a continuation')
+    await resumeReceiving(repository, session.intent, leaseId)
+    const trace: FSASettlementTraceEvent[] = []
+    const settlement = await createFileSystemAccessSettlementAuthority({
+      intent: session.intent,
+      repository,
+      lifecycleLeaseId: leaseId,
+      transferJobId: identity(113),
+      admissionFallback: fallback,
+      clock: () => 1_800,
+      trace: event => trace.push(event),
+    })
+
+    await expect(settlement.settleExecutionAdmissionFailure(
+      session.intent,
+      new TargetOwnershipUnknownError('checkpoint', session.intent.operationId),
+      SIGNAL,
+    )).resolves.toMatchObject({
+      kind: 'needs-attention',
+      reason: 'target-ownership-unknown',
+    })
+    expect(trace).toEqual([expect.objectContaining({
+      name: 'receive.fsa.settlement.completed',
+      outcome: 'needs-attention',
+      ownership_stage: 'checkpoint',
+    })])
   })
 })
 

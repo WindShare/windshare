@@ -3,11 +3,7 @@ package checkpointstore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/binary"
 	"errors"
-	"io"
-	"io/fs"
 	"slices"
 	"sync"
 
@@ -15,26 +11,23 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/fileexecution"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
-	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
 const (
-	fileExecutionLookupDomain = "windshare/file-execution-checkpoint-lookup/v2"
-	ownedAnchorSuffix         = ".anchor"
-	ownedStageSuffix          = ".stage"
+	ownedAnchorSuffix = ".anchor"
+	ownedStageSuffix  = ".stage"
 )
 
-// FileExecutionStore is the native adapter for the checkpoint-native file
-// engine. Private stage and anchor handles never leave checkpointstore; public
-// publication receives only semantic compare/link operations over an object ID.
+// FileExecutionStore binds the native file engine to the physical checkpoint
+// repository. Its logical authority state is shared through the operation
+// lease, so separate adapters cannot both observe an absent lineage and install
+// competing objects.
 type FileExecutionStore struct {
 	mu sync.Mutex
 
 	repository *Repository
 	profile    checkpointmodel.LiveCleanupNativeProfile
-	records    map[[sha256.Size]byte]checkpointmodel.Record
-	retained   map[checkpointmodel.RecordID]checkpointmodel.Record
-	attention  []Attention
+	authority  *fileExecutionAuthority
 }
 
 var (
@@ -72,305 +65,350 @@ func newFileExecutionStore(
 	profile checkpointmodel.LiveCleanupNativeProfile,
 	reconcile bool,
 ) (*FileExecutionStore, error) {
-	if repository == nil || repository.records == nil || repository.anchors == nil || repository.stages == nil {
+	if repository == nil || repository.records == nil || repository.anchors == nil ||
+		repository.stages == nil || repository.authority == nil {
 		return nil, transfer.ErrInvalidOutputBinding
 	}
 	store := &FileExecutionStore{
-		repository: repository,
-		profile:    profile,
-		records:    make(map[[sha256.Size]byte]checkpointmodel.Record),
-		retained:   make(map[checkpointmodel.RecordID]checkpointmodel.Record),
+		repository: repository, profile: profile, authority: repository.authority,
 	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
 	if !reconcile {
+		if len(store.authority.physical) != 0 || len(store.authority.attention) != 0 {
+			return nil, codedError(ErrorUnsafeInstall, "open fresh file execution store", checkpointmodel.ErrRecordBinding)
+		}
 		return store, nil
 	}
 	snapshot, err := repository.Reconcile(store.candidateDurable)
 	if err != nil {
 		return nil, err
 	}
-	// Corrupt or foreign checkpoint images are inert evidence. They cannot grant
-	// range authority, but they also must not make an unrelated file or sibling
-	// unresumable; list/discard surface the bounded attention references instead.
-	store.attention = snapshot.Attention()
-	for _, record := range snapshot.Records() {
-		if err := store.indexReconciledRecord(record); err != nil {
-			return nil, err
-		}
+	// Physical candidate/committed reconciliation is complete before any logical
+	// grouping. Corrupt and foreign images remain bounded inert attention.
+	if err := store.authority.rebuild(snapshot.Records(), snapshot.Attention()); err != nil {
+		return nil, codedError(ErrorCorruptRecord, "index reconciled file checkpoints", err)
 	}
 	return store, nil
 }
 
+// Snapshot retains the physical inventory for exact cleanup and low-level
+// diagnostics. Logical consumers must use LineageSnapshot so conflicts never
+// acquire range authority through iteration order.
 func (store *FileExecutionStore) Snapshot() (records []checkpointmodel.Record, attention []Attention) {
-	if store == nil {
+	if store == nil || store.authority == nil {
 		return nil, nil
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	records = make([]checkpointmodel.Record, 0, len(store.records))
-	for _, record := range store.records {
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	records = make([]checkpointmodel.Record, 0, len(store.authority.physical))
+	for _, record := range store.authority.physical {
 		records = append(records, record)
 	}
-	slices.SortFunc(records, func(left, right checkpointmodel.Record) int {
-		return bytes.Compare(left.RecordID().Bytes(), right.RecordID().Bytes())
-	})
-	return records, slices.Clone(store.attention)
+	slices.SortFunc(records, compareRecordID)
+	return records, slices.Clone(store.authority.attention)
 }
 
-// CleanupOwned retires only objects whose exact canonical records were already
-// authenticated during this operation-scoped reconciliation. Unknown entries
-// remain untouched and keep terminal cleanup pending.
+func (store *FileExecutionStore) LineageSnapshot() (
+	slots []FileExecutionLineageSlot,
+	attention []Attention,
+) {
+	if store == nil || store.authority == nil {
+		return nil, nil
+	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	return store.authority.lineageSnapshot(), slices.Clone(store.authority.attention)
+}
+
+// CleanupOwned retires every authenticated physical record, including records
+// in conflict slots. Shared object claims are retired once and records are never
+// discarded merely to manufacture a selected lineage.
 func (store *FileExecutionStore) CleanupOwned(ctx context.Context) error {
-	if store == nil || ctx == nil {
+	if store == nil || store.authority == nil || ctx == nil {
 		return transfer.ErrInvalidOutputBinding
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if len(store.attention) != 0 {
+	if err := store.authority.requireSettled(); err != nil {
+		return codedError(ErrorStateIO, "cleanup unsettled ordinary file state", err)
+	}
+	if len(store.authority.attention) != 0 {
 		return codedError(ErrorUnsafeInstall, "cleanup ordinary file state", checkpointmodel.ErrRecordRecovery)
 	}
-	records := make([]checkpointmodel.Record, 0, len(store.records)+len(store.retained))
-	for _, record := range store.records {
+	records := make([]checkpointmodel.Record, 0, len(store.authority.physical))
+	for _, record := range store.authority.physical {
 		records = append(records, record)
 	}
-	for _, record := range store.retained {
-		records = append(records, record)
-	}
-	slices.SortFunc(records, func(left, right checkpointmodel.Record) int {
-		return bytes.Compare(left.RecordID().Bytes(), right.RecordID().Bytes())
-	})
+	slices.SortFunc(records, compareRecordID)
+	retiredObjects := make(map[checkpointmodel.ObjectID]struct{})
 	for _, record := range records {
-		for _, step := range []fileexecution.RetirementStep{
-			fileexecution.RetirementRemoveStage,
-			fileexecution.RetirementSyncStageNamespace,
-			fileexecution.RetirementRemoveAnchor,
-			fileexecution.RetirementSyncAnchorNamespace,
-		} {
-			observation, err := store.applyRetirementLocked(record.OwnedObjectID(), step)
-			if err != nil || !observation.ValidForCleanup(record.OwnedObjectID()) {
-				return errors.Join(err, checkpointmodel.ErrRecordRecovery)
+		if _, retired := retiredObjects[record.OwnedObjectID()]; !retired {
+			for _, step := range []fileexecution.RetirementStep{
+				fileexecution.RetirementRemoveStage,
+				fileexecution.RetirementSyncStageNamespace,
+				fileexecution.RetirementRemoveAnchor,
+				fileexecution.RetirementSyncAnchorNamespace,
+			} {
+				observation, err := store.applyRetirementLocked(record.OwnedObjectID(), step)
+				if err != nil || !observation.ValidForCleanup(record.OwnedObjectID()) {
+					return errors.Join(err, checkpointmodel.ErrRecordRecovery)
+				}
 			}
+			retiredObjects[record.OwnedObjectID()] = struct{}{}
 		}
 		if err := store.repository.Remove(record); err != nil {
 			return err
 		}
-		delete(store.records, checkpointRecordLookupKey(record))
-		delete(store.retained, record.RecordID())
+		if err := store.authority.remove(record); err != nil {
+			return codedError(ErrorCorruptRecord, "remove file checkpoint authority", err)
+		}
 	}
 	return nil
 }
 
-// RecordCount reports only the selected in-memory index. It never re-enumerates
-// the namespace, so tracing cannot accidentally perform checkpoint I/O outside
-// the intent lease acquired by composition.
 func (store *FileExecutionStore) RecordCount() uint64 {
-	if store == nil {
+	if store == nil || store.authority == nil {
 		return 0
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	return uint64(len(store.records))
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	return uint64(len(store.authority.physical))
 }
 
 func (store *FileExecutionStore) Lookup(
 	ctx context.Context,
 	key fileexecution.CheckpointKey,
-) (checkpointmodel.Record, bool, error) {
-	if store == nil || ctx == nil {
-		return checkpointmodel.Record{}, false, dependencyBoundaryError(
+) (fileexecution.CheckpointResolution, error) {
+	if store == nil || store.authority == nil || ctx == nil {
+		return fileexecution.CheckpointResolution{}, dependencyBoundaryError(
 			"lookup file execution checkpoint", transfer.ErrInvalidOutputBinding,
 		)
 	}
 	if err := ctx.Err(); err != nil {
-		return checkpointmodel.Record{}, false, err
+		return fileexecution.CheckpointResolution{}, err
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	record, found := store.records[checkpointLookupKey(
-		key.OperationID(),
-		key.ReceiveIntentDigest(),
-		key.MaterializationBindingDigest(),
-		key.FileID().Bytes(),
-		key.FileRevision().Bytes(),
-		key.CanonicalPath(),
-		key.ExactSize(),
-		key.MaterializerKind(),
-		key.AuthorityRef(),
-	)]
-	if !found {
-		return checkpointmodel.Record{}, false, nil
+	spec, err := key.CheckpointLineageSpec()
+	if err != nil {
+		return fileexecution.CheckpointResolution{}, dependencyBoundaryError("derive checkpoint lineage", err)
 	}
-	if !checkpointKeyMatchesRecord(key, record) {
-		return checkpointmodel.Record{}, false, codedError(
-			ErrorCorruptRecord,
-			"lookup file execution checkpoint",
-			checkpointmodel.ErrRecordBinding,
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	decision, record, err := store.authority.classify(spec, key.CheckpointLineageRequest())
+	if err != nil {
+		if errors.Is(err, errFileExecutionAuthorityUnsettled) {
+			return fileexecution.CheckpointResolution{}, codedError(
+				ErrorStateIO, "classify unsettled file checkpoint authority", err,
+			)
+		}
+		return fileexecution.CheckpointResolution{}, codedError(ErrorCorruptRecord, "classify file checkpoint lineage", err)
+	}
+	if decision == checkpointmodel.CheckpointLineageDecisionExact && !checkpointKeyMatchesRecord(key, record) {
+		return fileexecution.CheckpointResolution{}, codedError(
+			ErrorCorruptRecord, "lookup file execution checkpoint", checkpointmodel.ErrRecordBinding,
 		)
 	}
-	return record, true, nil
+	return fileexecution.ResolveCheckpoint(decision, record)
 }
 
-func (store *FileExecutionStore) Abandon(
+func (store *FileExecutionStore) InstallInitial(
 	ctx context.Context,
-	record checkpointmodel.Record,
-) error {
-	if store == nil || ctx == nil || !record.Valid() {
-		return transfer.ErrInvalidOutputBinding
+	key fileexecution.CheckpointKey,
+	candidate checkpointmodel.Record,
+) (fileexecution.InitialCheckpointObservation, error) {
+	if store == nil || store.authority == nil || ctx == nil || !candidate.Valid() ||
+		!checkpointmodel.InitialCandidate(candidate) || !checkpointKeyMatchesRecord(key, candidate) {
+		return fileexecution.InitialCheckpointObservation{}, dependencyBoundaryError(
+			"install initial file checkpoint", transfer.ErrInvalidOutputBinding,
+		)
 	}
 	if err := ctx.Err(); err != nil {
-		return err
+		return fileexecution.InitialCheckpointObservation{}, err
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	key := checkpointRecordLookupKey(record)
-	current, found := store.records[key]
-	if !found || current.RecordID() != record.RecordID() {
-		return codedError(ErrorCorruptRecord, "abandon file checkpoint lookup", checkpointmodel.ErrRecordBinding)
+	spec, err := key.CheckpointLineageSpec()
+	if err != nil {
+		return fileexecution.InitialCheckpointObservation{}, dependencyBoundaryError("derive initial checkpoint lineage", err)
 	}
-	delete(store.records, key)
-	store.retained[current.RecordID()] = current
-	return nil
+	return store.installInitial(ctx, spec, key.CheckpointLineageRequest(), candidate)
 }
 
-func (store *FileExecutionStore) Store(
+func (store *FileExecutionStore) installInitialRecord(
 	ctx context.Context,
-	previous *checkpointmodel.Record,
+	candidate checkpointmodel.Record,
+) (fileexecution.InitialCheckpointObservation, error) {
+	spec, err := candidate.CheckpointLineageSpec()
+	if err != nil {
+		return fileexecution.InitialCheckpointObservation{}, err
+	}
+	return store.installInitial(ctx, spec, checkpointmodel.CheckpointLineageRequest{
+		FileRevision: candidate.FileRevision(), ExactSize: candidate.ExactSize(),
+	}, candidate)
+}
+
+func (store *FileExecutionStore) installInitial(
+	ctx context.Context,
+	spec checkpointmodel.CheckpointLineageSpec,
+	request checkpointmodel.CheckpointLineageRequest,
+	candidate checkpointmodel.Record,
+) (fileexecution.InitialCheckpointObservation, error) {
+	if store == nil || store.authority == nil || ctx == nil || !checkpointmodel.InitialCandidate(candidate) {
+		return fileexecution.InitialCheckpointObservation{}, transfer.ErrInvalidOutputBinding
+	}
+	if err := ctx.Err(); err != nil {
+		return fileexecution.InitialCheckpointObservation{}, err
+	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	decision, selected, err := store.authority.classify(spec, request)
+	if err != nil {
+		return fileexecution.InitialCheckpointObservation{}, initialAuthorityError(err)
+	}
+	if decision != checkpointmodel.CheckpointLineageDecisionAbsent {
+		resolution, resolveErr := fileexecution.ResolveCheckpoint(decision, selected)
+		observation, observeErr := fileexecution.ObserveInitialCheckpoint(resolution, false)
+		return observation, errors.Join(resolveErr, observeErr)
+	}
+	if err := store.authority.admitInitial(candidate); err != nil {
+		return fileexecution.InitialCheckpointObservation{}, initialAuthorityError(err)
+	}
+
+	operationErr := store.repository.Create(candidate)
+	observed, observationErr := store.repository.Reopen(candidate.RecordID())
+	if operationErr != nil {
+		// An exact reread diagnoses an ambiguous create, but only a successful
+		// installation operation proves directory durability. Freeze this lease's
+		// authority until reconciliation establishes the physical reality.
+		store.authority.markUnsettled()
+		if observationErr == nil && !bytes.Equal(observed.CanonicalBytes(), candidate.CanonicalBytes()) {
+			observationErr = checkpointmodel.ErrRecordBinding
+		}
+		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, operationErr, observationErr,
+		)
+	}
+	if observationErr != nil {
+		store.authority.markUnsettled()
+		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, observationErr,
+		)
+	}
+	if !bytes.Equal(observed.CanonicalBytes(), candidate.CanonicalBytes()) {
+		store.authority.markUnsettled()
+		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, checkpointmodel.ErrRecordBinding,
+		)
+	}
+	if err := store.authority.add(observed); err != nil {
+		store.authority.markUnsettled()
+		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(ctx, err)
+	}
+	decision, selected, err = store.authority.classify(spec, request)
+	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionExact ||
+		selected.RecordID() != candidate.RecordID() {
+		store.authority.markUnsettled()
+		return fileexecution.InitialCheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, err, checkpointmodel.ErrRecordBinding,
+		)
+	}
+	resolution, err := fileexecution.ResolveCheckpoint(decision, selected)
+	if err != nil {
+		store.authority.markUnsettled()
+		return fileexecution.InitialCheckpointObservation{}, err
+	}
+	observation, err := fileexecution.ObserveInitialCheckpoint(resolution, true)
+	if err != nil {
+		store.authority.markUnsettled()
+	}
+	return observation, err
+}
+
+func initialAuthorityError(err error) error {
+	switch {
+	case errors.Is(err, fileexecution.ErrCheckpointObjectClaimed),
+		errors.Is(err, fileexecution.ErrCheckpointRecordCapacity):
+		return err
+	case errors.Is(err, errFileExecutionAuthorityUnsettled):
+		return codedError(ErrorStateIO, "admit initial checkpoint through unsettled authority", err)
+	default:
+		return codedError(ErrorCorruptRecord, "admit initial file checkpoint", err)
+	}
+}
+
+func (store *FileExecutionStore) Replace(
+	ctx context.Context,
+	previous checkpointmodel.Record,
 	next checkpointmodel.Record,
 ) (fileexecution.CheckpointObservation, error) {
-	if store == nil || store.repository == nil || ctx == nil || !next.Valid() {
+	if store == nil || store.authority == nil || ctx == nil || !previous.Valid() || !next.Valid() ||
+		previous.RecordID() != next.RecordID() {
 		return fileexecution.CheckpointObservation{}, dependencyBoundaryError(
-			"store file execution checkpoint", transfer.ErrInvalidOutputBinding,
+			"replace file execution checkpoint", transfer.ErrInvalidOutputBinding,
 		)
 	}
 	if err := ctx.Err(); err != nil {
 		return fileexecution.CheckpointObservation{}, err
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-
-	var operationErr error
-	if previous == nil {
-		operationErr = store.repository.Create(next)
-	} else {
-		operationErr = store.repository.Replace(*previous, next)
+	spec, err := previous.CheckpointLineageSpec()
+	if err != nil {
+		return fileexecution.CheckpointObservation{}, err
 	}
+	store.authority.mu.Lock()
+	defer store.authority.mu.Unlock()
+	decision, selected, err := store.authority.classify(spec, checkpointmodel.CheckpointLineageRequest{
+		FileRevision: previous.FileRevision(), ExactSize: previous.ExactSize(),
+	})
+	if errors.Is(err, errFileExecutionAuthorityUnsettled) {
+		return fileexecution.CheckpointObservation{}, codedError(
+			ErrorStateIO, "replace through unsettled file checkpoint authority", err,
+		)
+	}
+	if err != nil || decision != checkpointmodel.CheckpointLineageDecisionExact ||
+		selected.RecordID() != previous.RecordID() {
+		return fileexecution.CheckpointObservation{}, codedError(
+			ErrorUnsafeInstall, "replace conflicted file checkpoint", errors.Join(err, checkpointmodel.ErrRecordBinding),
+		)
+	}
+
+	operationErr := store.repository.Replace(previous, next)
 	observed, observationErr := store.repository.Reopen(next.RecordID())
-	if observationErr != nil {
-		if errors.Is(observationErr, fs.ErrNotExist) {
-			delete(store.records, checkpointRecordLookupKey(next))
-			return fileexecution.MissingCheckpoint(), transferfault.ReduceBoundaryErrors(ctx, operationErr)
+	if operationErr != nil {
+		store.authority.markUnsettled()
+		if observationErr == nil &&
+			!bytes.Equal(observed.CanonicalBytes(), next.CanonicalBytes()) &&
+			!bytes.Equal(observed.CanonicalBytes(), previous.CanonicalBytes()) {
+			observationErr = checkpointmodel.ErrRecordBinding
 		}
 		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(
 			ctx, operationErr, observationErr,
 		)
 	}
-	if err := store.indexRecord(observed); err != nil {
-		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(ctx, operationErr, err)
+	if observationErr != nil {
+		store.authority.markUnsettled()
+		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, observationErr,
+		)
 	}
-	observation, err := fileexecution.ObservedCheckpoint(observed)
-	return observation, transferfault.ReduceBoundaryErrors(ctx, operationErr, err)
-}
-
-func (store *FileExecutionStore) indexReconciledRecord(record checkpointmodel.Record) error {
-	if !record.Valid() {
-		return codedError(ErrorCorruptRecord, "index reconciled file checkpoint", checkpointmodel.ErrInvalidRecord)
+	if bytes.Equal(observed.CanonicalBytes(), next.CanonicalBytes()) {
+		if err := store.authority.replace(previous, observed); err != nil {
+			store.authority.markUnsettled()
+			return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(ctx, err)
+		}
+	} else if !bytes.Equal(observed.CanonicalBytes(), previous.CanonicalBytes()) {
+		store.authority.markUnsettled()
+		return fileexecution.CheckpointObservation{}, transferfault.ReduceBoundaryErrors(
+			ctx, checkpointmodel.ErrRecordBinding,
+		)
 	}
-	key := checkpointRecordLookupKey(record)
-	current, found := store.records[key]
-	if !found || current.RecordID() == record.RecordID() {
-		store.records[key] = record
-		return nil
+	observation, observeErr := fileexecution.ObservedCheckpoint(observed)
+	if observeErr != nil {
+		store.authority.markUnsettled()
 	}
-	currentReady, currentErr := store.recordOwnedReady(current)
-	nextReady, nextErr := store.recordOwnedReady(record)
-	if currentErr != nil || nextErr != nil {
-		return errors.Join(currentErr, nextErr)
-	}
-	switch {
-	case currentReady && !nextReady:
-		store.retained[record.RecordID()] = record
-		return nil
-	case !currentReady && nextReady:
-		store.retained[current.RecordID()] = current
-		store.records[key] = record
-		return nil
-	default:
-		return codedError(ErrorCorruptRecord, "select reconciled file checkpoint", checkpointmodel.ErrRecordBinding)
-	}
-}
-
-func (store *FileExecutionStore) recordOwnedReady(record checkpointmodel.Record) (bool, error) {
-	files, observation, err := store.openObservedOwnedLocked(
-		record.OwnedObjectID(), record.ExactSize(), true,
-	)
-	if err != nil {
-		return false, errors.Join(err, files.close())
-	}
-	return observation.Condition() == fileexecution.OwnedReady, files.close()
-}
-
-func (store *FileExecutionStore) indexRecord(record checkpointmodel.Record) error {
-	if !record.Valid() {
-		return codedError(ErrorCorruptRecord, "index file execution checkpoint", checkpointmodel.ErrInvalidRecord)
-	}
-	key := checkpointRecordLookupKey(record)
-	if current, found := store.records[key]; found && current.RecordID() != record.RecordID() {
-		return codedError(ErrorCorruptRecord, "index file execution checkpoint", checkpointmodel.ErrRecordBinding)
-	}
-	store.records[key] = record
-	return nil
-}
-
-func checkpointRecordLookupKey(record checkpointmodel.Record) [sha256.Size]byte {
-	return checkpointLookupKey(
-		record.OperationID(),
-		record.ReceiveIntentDigest(),
-		record.MaterializationBindingDigest(),
-		record.FileID().Bytes(),
-		record.FileRevision().Bytes(),
-		record.CanonicalPath(),
-		record.ExactSize(),
-		record.MaterializerKind(),
-		record.AuthorityRef(),
-	)
-}
-
-func checkpointLookupKey(
-	operation receivecontract.OperationID,
-	intent transfer.ReceiveIntentDigest,
-	materialization receivecontract.BindingDigest,
-	fileID []byte,
-	revision []byte,
-	path string,
-	exactSize uint64,
-	materializer checkpointmodel.MaterializerKind,
-	authority receivecontract.AuthorityRef,
-) [sha256.Size]byte {
-	hash := sha256.New()
-	writeExecutionLookupBytes(hash, []byte(fileExecutionLookupDomain))
-	writeExecutionLookupBytes(hash, operation.Bytes())
-	writeExecutionLookupBytes(hash, intent.Bytes())
-	writeExecutionLookupBytes(hash, materialization.Bytes())
-	writeExecutionLookupBytes(hash, fileID)
-	writeExecutionLookupBytes(hash, revision)
-	writeExecutionLookupBytes(hash, []byte(path))
-	var encodedSize [8]byte
-	binary.BigEndian.PutUint64(encodedSize[:], exactSize)
-	_, _ = hash.Write(encodedSize[:])
-	writeExecutionLookupBytes(hash, []byte{byte(materializer)})
-	writeExecutionLookupBytes(hash, authority.Bytes())
-	var result [sha256.Size]byte
-	copy(result[:], hash.Sum(nil))
-	return result
-}
-
-func writeExecutionLookupBytes(target io.Writer, value []byte) {
-	var size [4]byte
-	binary.BigEndian.PutUint32(size[:], uint32(len(value)))
-	_, _ = target.Write(size[:])
-	_, _ = target.Write(value)
+	return observation, transferfault.ReduceBoundaryErrors(ctx, observeErr)
 }
 
 func checkpointKeyMatchesRecord(key fileexecution.CheckpointKey, record checkpointmodel.Record) bool {
@@ -380,4 +418,8 @@ func checkpointKeyMatchesRecord(key fileexecution.CheckpointKey, record checkpoi
 		record.FileID() == key.FileID() && record.FileRevision() == key.FileRevision() &&
 		record.CanonicalPath() == key.CanonicalPath() && record.ExactSize() == key.ExactSize() &&
 		record.MaterializerKind() == key.MaterializerKind() && record.AuthorityRef() == key.AuthorityRef()
+}
+
+func compareRecordID(left, right checkpointmodel.Record) int {
+	return bytes.Compare(left.RecordID().Bytes(), right.RecordID().Bytes())
 }

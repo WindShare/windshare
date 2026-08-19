@@ -289,7 +289,7 @@ func (repository *Repository) appendReconciledShardRecords(
 			return err
 		}
 		stable[name] = loaded
-		if !checkpointmodel.Committed(loaded.record) {
+		if !checkpointmodel.Committed(loaded.record) && !checkpointmodel.InitialCandidate(loaded.record) {
 			result.attention = append(result.attention, newAttention(AttentionUncommittedRecord, shardName, name))
 			continue
 		}

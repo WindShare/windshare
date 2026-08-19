@@ -100,14 +100,19 @@ func (store *FileExecutionStore) openCandidateDurabilityLocked(
 }
 
 func (store *FileExecutionStore) candidateDurable(record checkpointmodel.Record) (bool, error) {
-	store.mu.Lock()
-	defer store.mu.Unlock()
 	if !record.Valid() || record.CommitState() != checkpointmodel.CommitCandidate {
 		return false, reconciliationError(
 			ReconciliationCandidateObservation, checkpointmodel.ErrRecordBinding,
 		)
 	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
 	files, observation, err := store.openCandidateDurabilityLocked(record)
+	if checkpointmodel.InitialCandidate(record) && observation.Condition() == fileexecution.OwnedAbsent {
+		// Candidate installation deliberately precedes owned creation. Exact
+		// absence retains this recorded object as the sole lineage authority.
+		return false, nil
+	}
 	if err != nil || observation.Condition() != fileexecution.OwnedReady || files == nil {
 		if err == nil {
 			err = checkpointmodel.ErrRecordBinding

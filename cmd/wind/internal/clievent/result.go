@@ -57,7 +57,8 @@ type TransferResult struct {
 }
 
 func NewTransferResult(spec TransferResultSpec) (TransferResult, error) {
-	if !spec.Status.Valid() || !spec.ExitCode.Valid() || spec.Elapsed < 0 || spec.Destination.Empty() {
+	if !spec.Status.Valid() || !spec.ExitCode.Valid() || spec.Elapsed < 0 || spec.Destination.Empty() ||
+		spec.CountersExact && !validExactItemBlockCounts(spec.Files) {
 		return TransferResult{}, ErrInvalidResult
 	}
 	if _, ok := spec.Drift.Name(); !ok {

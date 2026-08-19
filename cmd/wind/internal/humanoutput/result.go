@@ -61,8 +61,17 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 	if outcomes.CollisionFiles != 0 {
 		parts = append(parts, countedResultNoun(result, outcomes.CollisionFiles, "collision", "collisions"))
 	}
-	if outcomes.ItemBlockedFiles != 0 {
-		parts = append(parts, resultCount(result, outcomes.ItemBlockedFiles)+" item-blocked")
+	if outcomes.RevisionConflictFiles != 0 {
+		parts = append(parts, resultCount(result, outcomes.RevisionConflictFiles)+" revision-conflict blocked")
+	}
+	if outcomes.CheckpointInvalidFiles != 0 {
+		parts = append(parts, resultCount(result, outcomes.CheckpointInvalidFiles)+" invalid-checkpoint blocked")
+	}
+	if outcomes.OwnedObjectUnknownFiles != 0 {
+		parts = append(parts, resultCount(result, outcomes.OwnedObjectUnknownFiles)+" ownership-conflict blocked")
+	}
+	if residualItemBlockedFiles(outcomes) != 0 {
+		parts = append(parts, resultCount(result, residualItemBlockedFiles(outcomes))+" item-blocked")
 	}
 	if outcomes.FailedFiles != 0 {
 		parts = append(parts, resultCount(result, outcomes.FailedFiles)+" failed")
@@ -82,6 +91,20 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 	}
 	parts = append(parts, bytePrefix+FormatBytes(result.PublishedBytes()))
 	return strings.Join(parts, separator)
+}
+
+func residualItemBlockedFiles(outcomes clievent.FileOutcomes) uint64 {
+	classified := outcomes.RevisionConflictFiles
+	for _, count := range []uint64{outcomes.CheckpointInvalidFiles, outcomes.OwnedObjectUnknownFiles} {
+		if count > ^uint64(0)-classified {
+			return 0
+		}
+		classified += count
+	}
+	if classified >= outcomes.ItemBlockedFiles {
+		return 0
+	}
+	return outcomes.ItemBlockedFiles - classified
 }
 
 func resultCount(result clievent.TransferResult, count uint64) string {

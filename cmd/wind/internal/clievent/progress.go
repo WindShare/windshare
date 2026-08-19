@@ -5,13 +5,16 @@ import "errors"
 var ErrInvalidProgress = errors.New("CLI receive progress is invalid")
 
 type FileOutcomes struct {
-	DownloadedFiles      uint64
-	ResumedFiles         uint64
-	PausedFiles          uint64
-	CollisionFiles       uint64
-	ItemBlockedFiles     uint64
-	FailedFiles          uint64
-	ModifiedTimeWarnings uint64
+	DownloadedFiles         uint64
+	ResumedFiles            uint64
+	PausedFiles             uint64
+	CollisionFiles          uint64
+	ItemBlockedFiles        uint64
+	RevisionConflictFiles   uint64
+	CheckpointInvalidFiles  uint64
+	OwnedObjectUnknownFiles uint64
+	FailedFiles             uint64
+	ModifiedTimeWarnings    uint64
 }
 
 func (outcomes FileOutcomes) HasNonSuccess() bool {
@@ -52,7 +55,8 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 			spec.FileOutcomes.DownloadedFiles,
 			spec.FileOutcomes.ResumedFiles,
 		)
-		if overflow || spec.NewlyVerifiedBytes > spec.VerifiedBytes ||
+		if overflow || !validExactItemBlockCounts(spec.FileOutcomes) ||
+			spec.NewlyVerifiedBytes > spec.VerifiedBytes ||
 			spec.VerifiedBytes > spec.DiscoveredBytes ||
 			spec.PublishedBytes > spec.VerifiedBytes ||
 			spec.PublishedFiles > spec.DiscoveredFiles ||
@@ -67,6 +71,12 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 		fileOutcomes: spec.FileOutcomes, discovery: spec.Discovery,
 		countersExact: spec.CountersExact,
 	}, nil
+}
+
+func validExactItemBlockCounts(outcomes FileOutcomes) bool {
+	classified, overflow := checkedAdd(outcomes.RevisionConflictFiles, outcomes.CheckpointInvalidFiles)
+	classified, ownershipOverflow := checkedAdd(classified, outcomes.OwnedObjectUnknownFiles)
+	return !overflow && !ownershipOverflow && classified <= outcomes.ItemBlockedFiles
 }
 
 func checkedAdd(left, right uint64) (uint64, bool) {

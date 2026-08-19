@@ -19,6 +19,7 @@ import type {
   PersistentTreeTrace,
 } from '../persistent-tree/contracts'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
+import type { FileCheckpointRecoveryRepository } from '../persistent-tree/recovery'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import type { ReceiveOperationRepository } from '../workspace/repository'
 import type { WorkspaceContentGate } from '../workspace/stages'
@@ -43,7 +44,8 @@ import { OriginPrivateWorkspaceRoot } from './workspace-root'
 import { OriginPrivateWorkspaceTree } from './workspace-tree'
 
 export interface OriginPrivateCheckpointStore
-extends FileCheckpointJournal, PersistentHandleRepository {
+extends FileCheckpointJournal, PersistentHandleRepository,
+  Pick<FileCheckpointRecoveryRepository, 'resolveCandidate'> {
   close?(): void
 }
 

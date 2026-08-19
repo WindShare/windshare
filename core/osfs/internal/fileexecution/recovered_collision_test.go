@@ -19,25 +19,43 @@ type collisionRecoveryRepository struct {
 func (repository *collisionRecoveryRepository) Lookup(
 	_ context.Context,
 	key CheckpointKey,
-) (checkpointmodel.Record, bool, error) {
+) (CheckpointResolution, error) {
 	record, present := repository.records[key.CanonicalPath()]
-	return record, present, nil
+	if !present {
+		return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionAbsent, checkpointmodel.Record{})
+	}
+	return ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, record)
 }
 
-func (repository *collisionRecoveryRepository) Store(
+func (repository *collisionRecoveryRepository) InstallInitial(
 	_ context.Context,
-	previous *checkpointmodel.Record,
+	_ CheckpointKey,
 	next checkpointmodel.Record,
-) (CheckpointObservation, error) {
+) (InitialCheckpointObservation, error) {
 	path := next.CanonicalPath()
 	current, present := repository.records[path]
-	if previous == nil && present || previous != nil && (!present || !recordEqual(current, *previous)) {
+	if present {
+		resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, current)
+		return ObserveInitialCheckpoint(resolution, false)
+	}
+	repository.records[path] = next
+	resolution, _ := ResolveCheckpoint(checkpointmodel.CheckpointLineageDecisionExact, next)
+	return ObserveInitialCheckpoint(resolution, true)
+}
+
+func (repository *collisionRecoveryRepository) Replace(
+	_ context.Context,
+	previous checkpointmodel.Record,
+	next checkpointmodel.Record,
+) (CheckpointObservation, error) {
+	current, present := repository.records[next.CanonicalPath()]
+	if !present || !recordEqual(current, previous) {
 		if !present {
 			return MissingCheckpoint(), nil
 		}
 		return ObservedCheckpoint(current)
 	}
-	repository.records[path] = next
+	repository.records[next.CanonicalPath()] = next
 	return ObservedCheckpoint(next)
 }
 

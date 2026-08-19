@@ -258,6 +258,7 @@ type TransferLifecycleSpec struct {
 	Progress         ProgressSnapshot
 	FileSelection    FileSelectionDecision
 	FileSettlement   FileSettlement
+	ItemBlockReason  ItemBlockReason
 	TreeSettlement   TreeSettlement
 	Failure          Failure
 }
@@ -275,9 +276,11 @@ func validTransferLifecycleSpec(spec TransferLifecycleSpec) bool {
 	_, stageOK := spec.Stage.Name()
 	_, selectionOK := spec.FileSelection.Name()
 	_, fileSettlementOK := spec.FileSettlement.Name()
+	_, itemBlockReasonOK := spec.ItemBlockReason.Name()
 	_, treeSettlementOK := spec.TreeSettlement.Name()
 	return spec.ReceiveOperation.Valid() && spec.ProtocolSession.Valid() && spec.TransferJob.Valid() &&
-		stageOK && spec.Progress.Valid() && selectionOK && fileSettlementOK && treeSettlementOK
+		stageOK && spec.Progress.Valid() && selectionOK && fileSettlementOK && itemBlockReasonOK &&
+		treeSettlementOK && (spec.ItemBlockReason == ItemBlockNone || spec.FileSettlement == FileItemBlocked)
 }
 
 func (TransferLifecycleObserved) event()           {}
@@ -297,6 +300,9 @@ func (value TransferLifecycleObserved) FileSelection() FileSelectionDecision {
 }
 func (value TransferLifecycleObserved) FileSettlement() FileSettlement {
 	return value.spec.FileSettlement
+}
+func (value TransferLifecycleObserved) ItemBlock() (ItemBlockReason, bool) {
+	return value.spec.ItemBlockReason, value.spec.ItemBlockReason != ItemBlockNone
 }
 func (value TransferLifecycleObserved) TreeSettlement() TreeSettlement {
 	return value.spec.TreeSettlement
@@ -330,6 +336,7 @@ type FilesystemOutputSpec struct {
 	RuntimeComponent    FilesystemRuntimeComponent
 	RuntimeOperation    FilesystemRuntimeOperation
 	RuntimeDecision     FilesystemRuntimeDecisionKind
+	CheckpointDecision  FilesystemCheckpointDecision
 	OperationID         uint64
 	ClaimID             uint64
 	Counters            FilesystemOutputCounters
@@ -377,6 +384,7 @@ func validFilesystemOutputNames(spec FilesystemOutputSpec) bool {
 		{spec.RuntimeComponent != 0, spec.RuntimeComponent},
 		{spec.RuntimeOperation != 0, spec.RuntimeOperation},
 		{spec.RuntimeDecision != 0, spec.RuntimeDecision},
+		{spec.CheckpointDecision != 0, spec.CheckpointDecision},
 		{spec.FailureStage != 0, spec.FailureStage},
 		{spec.ReconciliationStep != 0, spec.ReconciliationStep},
 		{spec.NativeErrorClass != 0, spec.NativeErrorClass},
@@ -447,6 +455,10 @@ func (value FilesystemOutputObserved) RuntimeDecision() (FilesystemRuntimeCompon
 	_, b := value.spec.RuntimeOperation.Name()
 	_, c := value.spec.RuntimeDecision.Name()
 	return value.spec.RuntimeComponent, value.spec.RuntimeOperation, value.spec.RuntimeDecision, a && b && c
+}
+func (value FilesystemOutputObserved) CheckpointDecision() (FilesystemCheckpointDecision, bool) {
+	_, ok := value.spec.CheckpointDecision.Name()
+	return value.spec.CheckpointDecision, ok
 }
 func (value FilesystemOutputObserved) Correlation() (uint64, uint64) {
 	return value.spec.OperationID, value.spec.ClaimID

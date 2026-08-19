@@ -45,6 +45,7 @@ type TraceEvent struct {
 	Outcome      TraceOutcome
 	Previous     checkpointmodel.Phase
 	Next         checkpointmodel.Phase
+	Decision     checkpointmodel.CheckpointLineageDecision
 	Fault        fault.Fault
 }
 
@@ -84,6 +85,19 @@ func (engine *Engine) traceEvent(
 		SessionID: engine.sessionID, Sequence: sequence, Operation: operation,
 		Outcome: outcome, Previous: previous, Next: next, Fault: value,
 	}
+}
+
+func (engine *Engine) checkpointDecisionTrace(
+	sequence uint64,
+	decision checkpointmodel.CheckpointLineageDecision,
+) TraceEvent {
+	outcome := TraceReconciled
+	if decision == checkpointmodel.CheckpointLineageDecisionAbsent {
+		outcome = TraceNoChange
+	}
+	event := engine.traceEvent(sequence, TraceCheckpoint, outcome, 0, 0, fault.Fault{})
+	event.Decision = decision
+	return event
 }
 
 func traceFault(err error) fault.Fault {

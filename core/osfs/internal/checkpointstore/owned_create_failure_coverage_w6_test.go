@@ -27,7 +27,7 @@ func TestOwnedCreateReconcilesFailureCutsWithoutInventingAuthority(t *testing.T)
 			t.Fatal(err)
 		}
 		return &FileExecutionStore{
-			repository: &repository, records: make(map[[sha256.Size]byte]checkpointmodel.Record),
+			repository: &repository, authority: repository.authority,
 		}, &repository, object
 	}
 	prepareShard := func(

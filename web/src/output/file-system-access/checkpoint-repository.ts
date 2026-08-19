@@ -13,9 +13,11 @@ import type {
 } from '../persistence/journal'
 import { validateFileCheckpointPage } from '../persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../persistence/namespace'
+import type { FileCheckpointRecoveryRepository } from '../persistent-tree/recovery'
 
 export interface FSAFileCheckpointRepository
-extends FileCheckpointJournal, PersistentHandleInventoryRepository {
+extends FileCheckpointJournal, PersistentHandleInventoryRepository,
+  Pick<FileCheckpointRecoveryRepository, 'resolveCandidate'> {
   close(): void
 }
 

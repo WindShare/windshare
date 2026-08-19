@@ -116,7 +116,6 @@ type wallClock struct{}
 
 func (wallClock) Now() time.Time { return time.Now() }
 
-type IdentityGenerator interface {
-	NewFileRevision() (FileRevision, error)
+type LeaseIDGenerator interface {
 	NewLeaseID() (LeaseID, error)
 }

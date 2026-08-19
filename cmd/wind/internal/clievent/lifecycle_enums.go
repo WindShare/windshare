@@ -339,6 +339,30 @@ func (value FileSettlement) Name() (string, bool) {
 	return names[value], true
 }
 
+type ItemBlockReason uint8
+
+const (
+	ItemBlockNone ItemBlockReason = iota
+	ItemBlockStateCorrupt
+	ItemBlockOwnershipUnknown
+	ItemBlockPublicationAmbiguous
+	ItemBlockRetirementUncertain
+	ItemBlockRevisionConflict
+	ItemBlockCheckpointInvalid
+	ItemBlockOwnedObjectUnknown
+)
+
+func (value ItemBlockReason) Name() (string, bool) {
+	names := [...]string{
+		"none", "state_corrupt", "ownership_unknown", "publication_ambiguous",
+		"retirement_uncertain", "revision_conflict", "checkpoint_invalid", "owned_object_unknown",
+	}
+	if int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
 type TreeSettlement uint8
 
 const (

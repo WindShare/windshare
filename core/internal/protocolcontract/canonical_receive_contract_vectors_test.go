@@ -113,7 +113,8 @@ func buildCanonicalReceiveContractVectors(t *testing.T) []canonicalContractVecto
 			Version: 1,
 			Kind:    "file-checkpoint-v2",
 			Description: "Canonical FileCheckpointV2 records bound to OperationID, ReceiveIntentDigest, materialization " +
-				"binding, owned object identity, reducer state, and verified crash cuts.",
+				"binding, owned object identity, reducer state, and verified crash cuts, plus the orthogonal local " +
+				"CheckpointLineageID index.",
 			Cases: buildFileCheckpointVectorCases(t, intents),
 		},
 	}
@@ -643,43 +644,43 @@ func buildFileCheckpointVectorCases(
 	}
 	authorityRef := contractSequence(0x41, receivecontract.AuthorityRefBytes)
 	ownedObjectID := contractSequence(0x51, receivecontract.AuthorityRefBytes)
-	newCheckpoint := func(
-		name string,
-		authority []byte,
-		stateGeneration uint64,
-		checkpointGeneration uint64,
-		ranges []osfs.FileCheckpointRange,
-		phase osfs.FileCheckpointPhase,
-		commitState osfs.FileCheckpointCommitState,
-	) osfs.FileCheckpointV2 {
-		t.Helper()
-		checkpoint, checkpointErr := osfs.NewFileCheckpointV2(osfs.FileCheckpointSpec{
-			OperationID: fixture.intent.OperationID(), ReceiveIntentDigest: fixture.intent.Digest(),
-			MaterializationBindingDigest: fixture.intent.BindingDigest(),
-			FileID:                       checkpointFile, FileRevision: checkpointRevision,
-			CanonicalPath: "folder/file.bin", ExactSize: 64,
-			MaterializerKind: osfs.FileCheckpointMaterializerNativeTree,
-			AuthorityRef:     authority, OwnedObjectID: ownedObjectID,
-			StateGeneration: stateGeneration, CheckpointGeneration: checkpointGeneration,
-			VerifiedRanges: ranges, Phase: phase, CommitState: commitState,
-		})
-		if checkpointErr != nil {
-			t.Fatalf("%s checkpoint: %v", name, checkpointErr)
-		}
-		return checkpoint
+	baseSpec := osfs.FileCheckpointSpec{
+		OperationID: fixture.intent.OperationID(), ReceiveIntentDigest: fixture.intent.Digest(),
+		MaterializationBindingDigest: fixture.intent.BindingDigest(),
+		FileID:                       checkpointFile, FileRevision: checkpointRevision,
+		CanonicalPath: "folder/file.bin", ExactSize: 64,
+		MaterializerKind: osfs.FileCheckpointMaterializerNativeTree,
+		AuthorityRef:     authorityRef, OwnedObjectID: ownedObjectID,
+		StateGeneration: 1, CheckpointGeneration: 1,
+		VerifiedRanges: []osfs.FileCheckpointRange{{Offset: 0, End: 16}, {Offset: 32, End: 64}},
+		Phase:          osfs.FileCheckpointActive, CommitState: osfs.FileCheckpointCandidate,
 	}
-	firstRanges := []osfs.FileCheckpointRange{{Offset: 0, End: 16}, {Offset: 32, End: 64}}
 	secondRanges := []osfs.FileCheckpointRange{{Offset: 0, End: 16}, {Offset: 24, End: 64}}
-	candidate := newCheckpoint("candidate", authorityRef, 1, 1, firstRanges, osfs.FileCheckpointActive, osfs.FileCheckpointCandidate)
-	verified := newCheckpoint("verified", authorityRef, 1, 1, firstRanges, osfs.FileCheckpointActive, osfs.FileCheckpointVerified)
-	paused := newCheckpoint("paused", authorityRef, 2, 1, firstRanges, osfs.FileCheckpointPaused, osfs.FileCheckpointVerified)
-	nextCandidate := newCheckpoint("next candidate", authorityRef, 2, 2, secondRanges, osfs.FileCheckpointActive, osfs.FileCheckpointCandidate)
-	nextVerified := newCheckpoint("next verified", authorityRef, 2, 2, secondRanges, osfs.FileCheckpointActive, osfs.FileCheckpointVerified)
-	foreignAuthority := newCheckpoint(
-		"foreign authority", contractSequence(0x42, receivecontract.AuthorityRefBytes),
-		1, 1, firstRanges, osfs.FileCheckpointActive, osfs.FileCheckpointCandidate,
-	)
-	return []any{
+	candidate := newFileCheckpointVectorRecord(t, "candidate", baseSpec, nil)
+	verified := newFileCheckpointVectorRecord(t, "verified", baseSpec, func(spec *osfs.FileCheckpointSpec) {
+		spec.CommitState = osfs.FileCheckpointVerified
+	})
+	paused := newFileCheckpointVectorRecord(t, "paused", baseSpec, func(spec *osfs.FileCheckpointSpec) {
+		spec.StateGeneration = 2
+		spec.Phase = osfs.FileCheckpointPaused
+		spec.CommitState = osfs.FileCheckpointVerified
+	})
+	nextCandidate := newFileCheckpointVectorRecord(t, "next candidate", baseSpec, func(spec *osfs.FileCheckpointSpec) {
+		spec.StateGeneration = 2
+		spec.CheckpointGeneration = 2
+		spec.VerifiedRanges = secondRanges
+	})
+	nextVerified := newFileCheckpointVectorRecord(t, "next verified", baseSpec, func(spec *osfs.FileCheckpointSpec) {
+		spec.StateGeneration = 2
+		spec.CheckpointGeneration = 2
+		spec.VerifiedRanges = secondRanges
+		spec.CommitState = osfs.FileCheckpointVerified
+	})
+	foreignAuthority := newFileCheckpointVectorRecord(t, "foreign authority", baseSpec, func(spec *osfs.FileCheckpointSpec) {
+		spec.AuthorityRef = contractSequence(0x42, receivecontract.AuthorityRefBytes)
+	})
+
+	result := []any{
 		fileCheckpointVectorCase(t, "candidate", fixture.name, candidate),
 		fileCheckpointVectorCase(t, "verified", fixture.name, verified),
 		fileCheckpointVectorCase(t, "paused", fixture.name, paused),
@@ -694,52 +695,7 @@ func buildFileCheckpointVectorCases(
 			"afterCommitCheckpointGeneration":  "2",
 		},
 	}
-}
-
-func fileCheckpointVectorCase(
-	t *testing.T,
-	name string,
-	receiveIntentCase string,
-	checkpoint osfs.FileCheckpointV2,
-) map[string]any {
-	t.Helper()
-	encoded, err := osfs.EncodeFileCheckpointV2(checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ranges := make([]map[string]string, len(checkpoint.VerifiedRanges()))
-	for index, current := range checkpoint.VerifiedRanges() {
-		ranges[index] = map[string]string{
-			"start": strconv.FormatUint(current.Offset, 10),
-			"end":   strconv.FormatUint(current.End, 10),
-		}
-	}
-	return map[string]any{
-		"name": name, "receiveIntentCase": receiveIntentCase,
-		"schemaVersion":   checkpoint.SchemaVersion(),
-		"ownershipMarker": checkpoint.OwnershipMarker(), "namespace": checkpoint.Namespace(),
-		"recordId":                     b64URL(checkpoint.RecordID().Bytes()),
-		"operationId":                  b64URL(checkpoint.OperationID().Bytes()),
-		"receiveIntentDigest":          b64URL(checkpoint.ReceiveIntentDigest().Bytes()),
-		"materializationBindingDigest": b64URL(checkpoint.MaterializationBindingDigest().Bytes()),
-		"fileId":                       b64URL(checkpoint.FileID().Bytes()),
-		"fileRevision":                 b64URL(checkpoint.FileRevision().Bytes()),
-		"canonicalPath":                canonicalPathSegments(checkpoint.CanonicalPath()),
-		"exactSize":                    strconv.FormatUint(checkpoint.ExactSize(), 10),
-		"materializerKind":             uint8(checkpoint.MaterializerKind()),
-		"authorityRef":                 b64URL(checkpoint.AuthorityRef().Bytes()),
-		"ownedObjectId":                b64URL(checkpoint.OwnedObjectID().Bytes()),
-		"stateGeneration":              strconv.FormatUint(checkpoint.StateGeneration(), 10),
-		"checkpointGeneration":         strconv.FormatUint(checkpoint.CheckpointGeneration(), 10),
-		"verifiedRanges":               ranges,
-		"phase":                        uint8(checkpoint.Phase()), "commitState": uint8(checkpoint.CommitState()),
-		"quarantineReason":     uint8(checkpoint.QuarantineReason()),
-		"quarantineOrigin":     uint8(checkpoint.QuarantineOrigin()),
-		"retirementReason":     uint8(checkpoint.RetirementReason()),
-		"checksum":             b64URL(checkpoint.Checksum().Bytes()),
-		"canonicalBytesB64Url": b64URL(checkpoint.CanonicalBytes()),
-		"encodedB64Url":        b64URL(encoded),
-	}
+	return append(result, buildFileCheckpointLineageVectorCases(t, fixture.name, baseSpec)...)
 }
 
 func findReceiveIntentFixture(
