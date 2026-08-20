@@ -4,6 +4,10 @@ import { defineConfig } from 'vitest/config'
 
 const UNIT_TEST_PATTERN = 'test/**/*.test.{ts,tsx}'
 const BUILD_REVISION_PATTERN = /^[0-9a-f]{7,64}$/
+const LOCAL_DEVELOPMENT_MODE = 'windshare-local'
+const LOCAL_RELAY_PROXY_TARGET = 'http://127.0.0.1:8484'
+const RELAY_WEBSOCKET_PATH = '/v2/ws'
+const RELAY_HEALTH_PATH = '/healthz'
 
 interface PackageMetadata {
   readonly version: string
@@ -27,6 +31,23 @@ export default defineConfig(({ command, mode }) => {
       __WIND_BUILD_MODE__: JSON.stringify(buildMode),
     },
     plugins: [react()],
+    ...(mode === LOCAL_DEVELOPMENT_MODE
+      ? {
+          server: {
+            // The browser sees one origin while the production relay remains an
+            // independently debuggable process with its own lifecycle and logs.
+            proxy: {
+              [RELAY_WEBSOCKET_PATH]: {
+                target: LOCAL_RELAY_PROXY_TARGET,
+                ws: true,
+              },
+              [RELAY_HEALTH_PATH]: {
+                target: LOCAL_RELAY_PROXY_TARGET,
+              },
+            },
+          },
+        }
+      : {}),
     test: {
       // A single worker and explicit cleanup make order or leaked globals unable to
       // turn a passing unit suite into a runner-dependent result.
