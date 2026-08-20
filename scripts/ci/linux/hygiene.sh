@@ -24,6 +24,9 @@ fi
 echo "-- whitespace"
 git --no-pager diff --check
 
+echo "-- Frozen Unicode Go tables"
+node scripts/unicode15/generate-go.mjs --check
+
 echo "-- Web retired paths and production graph"
 node scripts/ci/web-forbidden.mjs
 
