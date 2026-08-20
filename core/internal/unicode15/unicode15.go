@@ -64,7 +64,7 @@ func caseFoldMappings() map[rune]string {
 
 func parseRuneMappings(data string) map[rune][]rune {
 	mappings := make(map[rune][]rune)
-	for _, record := range strings.Fields(data) {
+	for record := range strings.FieldsSeq(data) {
 		sourceText, replacementText, ok := strings.Cut(record, "=")
 		if !ok {
 			panic("unicode15: malformed rune mapping")
@@ -82,7 +82,7 @@ func parseRuneMappings(data string) map[rune][]rune {
 
 func parseCombiningClasses(data string) map[rune]uint8 {
 	classes := make(map[rune]uint8)
-	for _, record := range strings.Fields(data) {
+	for record := range strings.FieldsSeq(data) {
 		scalarText, classText, ok := strings.Cut(record, "=")
 		if !ok {
 			panic("unicode15: malformed combining-class record")
@@ -98,7 +98,7 @@ func parseCombiningClasses(data string) map[rune]uint8 {
 
 func parseCompositions(data string) map[uint64]rune {
 	compositions := make(map[uint64]rune)
-	for _, record := range strings.Fields(data) {
+	for record := range strings.FieldsSeq(data) {
 		pairText, compositeText, ok := strings.Cut(record, "=")
 		if !ok {
 			panic("unicode15: malformed composition record")
