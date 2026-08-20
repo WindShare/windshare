@@ -10,16 +10,12 @@ import {
   type LocalOutputCorrelationInputV1,
 } from '../../diagnostics/export/correlation-v1'
 import {
-  persistentOutputStageFailureRecord,
+  projectPersistentOutputStageFailure,
   type PersistentOutputStageDiagnostics,
   type PersistentOutputStageFailureMilestone,
   type PersistentOutputStageFailureProjectionV1,
   type PersistentOutputStageMilestone,
 } from '../persistent-tree/stage-diagnostics'
-import {
-  normalizeOutputException,
-  type NormalizedOutputException,
-} from './exception'
 
 export const LOCAL_OUTPUT_OPERATION_FAILURE_SCHEMA_VERSION = 1 as const
 export const MAX_RETAINED_LOCAL_OUTPUT_OPERATION_FAILURES = 32
@@ -31,7 +27,6 @@ export interface LocalOutputOperationFailureV1 {
   readonly schemaVersion: typeof LOCAL_OUTPUT_OPERATION_FAILURE_SCHEMA_VERSION
   readonly recordKind: 'local_output_operation_failure'
   readonly stageFailure: PersistentOutputStageFailureProjectionV1
-  readonly normalizedException: NormalizedOutputException
 }
 
 export interface CorrelatedLocalOutputOperationFailureV1 {
@@ -41,12 +36,6 @@ export interface CorrelatedLocalOutputOperationFailureV1 {
   }>
   readonly correlation: CorrelationV1
   readonly failure: LocalOutputOperationFailureV1
-}
-
-export interface LocalOutputOperationFailureRecord {
-  /** The raw value remains local and is never serialized into the diagnostic bundle. */
-  readonly local: PersistentOutputStageFailureMilestone
-  readonly projection: CorrelatedLocalOutputOperationFailureV1
 }
 
 export interface LocalOutputOperationFailureReadPort {
@@ -93,7 +82,9 @@ const attemptStates = new WeakMap<IncidentScopeHandle, LocalOutputFailureAttempt
 export class BoundedLocalOutputOperationFailureHistory
 implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagnosticsPort {
   readonly #capacity: number
-  readonly #records: LocalOutputOperationFailureRecord[] = []
+  // Raw thrown values stay on the synchronous milestone so count-bounded history
+  // cannot accidentally extend the lifetime of an arbitrarily large object graph.
+  readonly #records: CorrelatedLocalOutputOperationFailureV1[] = []
   #generation = 0
 
   constructor(capacity = MAX_RETAINED_LOCAL_OUTPUT_OPERATION_FAILURES) {
@@ -126,11 +117,11 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
             return
           }
           const claimed = consumeClaim(pending, key)
-          if (milestone.transition === 'completed') return
+          if (milestone.transition !== 'failed') return
           const attempt = claimed.found ? claimed.attempt : input.attempt.claim()
           if (attempt === undefined || !attempt.isActive()) return
           const protocol = attempt.protocolAttempt(transferJobId)
-          const record = localOutputOperationFailureRecord(milestone, {
+          const record = projectCorrelatedLocalOutputOperationFailure(milestone, {
             owningScope: attempt.scope,
             correlation: {
               receiveOperationId: milestone.correlation.operationId,
@@ -139,7 +130,7 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
               ...(protocol === undefined ? {} : protocol),
             },
           })
-          if (record !== undefined) this.#append(record)
+          this.#append(record)
         } catch {
           // Local diagnostics cannot replace or delay the native output result.
         }
@@ -148,11 +139,7 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
   }
 
   snapshot(): readonly CorrelatedLocalOutputOperationFailureV1[] {
-    return Object.freeze(this.#records.map(record => record.projection))
-  }
-
-  lastLocal(): LocalOutputOperationFailureRecord | undefined {
-    return this.#records.at(-1)
+    return Object.freeze([...this.#records])
   }
 
   clear(): void {
@@ -160,7 +147,7 @@ implements LocalOutputOperationFailureReadPort, LocalOutputOperationFailureDiagn
     this.#records.splice(0)
   }
 
-  #append(record: LocalOutputOperationFailureRecord): void {
+  #append(record: CorrelatedLocalOutputOperationFailureV1): void {
     if (this.#records.length >= this.#capacity) this.#records.shift()
     this.#records.push(record)
   }
@@ -249,37 +236,27 @@ export function bindLocalOutputFailureProtocolAttempt(
   return true
 }
 
-export function localOutputOperationFailureRecord(
-  milestone: PersistentOutputStageMilestone,
+export function projectCorrelatedLocalOutputOperationFailure(
+  milestone: PersistentOutputStageFailureMilestone,
   association: Readonly<{
     owningScope: IncidentScopeIdentity
     correlation: LocalOutputCorrelationInputV1
   }>,
-): LocalOutputOperationFailureRecord | undefined {
-  const stageRecord = persistentOutputStageFailureRecord(milestone)
-  if (stageRecord === undefined) return undefined
+): CorrelatedLocalOutputOperationFailureV1 {
   return Object.freeze({
-    local: stageRecord.local,
-    projection: Object.freeze({
-      owningScope: projectIncidentScope(association.owningScope),
-      correlation: projectLocalOutputCorrelationV1(association.correlation),
-      failure: projectLocalOutputOperationFailure(stageRecord.local),
-    }),
+    owningScope: projectIncidentScope(association.owningScope),
+    correlation: projectLocalOutputCorrelationV1(association.correlation),
+    failure: projectLocalOutputOperationFailure(milestone),
   })
 }
 
 export function projectLocalOutputOperationFailure(
   milestone: PersistentOutputStageFailureMilestone,
 ): LocalOutputOperationFailureV1 {
-  const stageRecord = persistentOutputStageFailureRecord(milestone)
-  if (stageRecord === undefined) {
-    throw new TypeError('local output failure projection requires a failed stage milestone')
-  }
   return Object.freeze({
     schemaVersion: LOCAL_OUTPUT_OPERATION_FAILURE_SCHEMA_VERSION,
     recordKind: 'local_output_operation_failure',
-    stageFailure: stageRecord.projection,
-    normalizedException: normalizeOutputException(milestone.exception.raw),
+    stageFailure: projectPersistentOutputStageFailure(milestone),
   })
 }
 
