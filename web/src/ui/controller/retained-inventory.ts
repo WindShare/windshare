@@ -130,6 +130,7 @@ export class RetainedInventoryCoordinator {
       attempt,
     })
     this.#pending = pending
+    this.#publishReadyInventory(inventory, pending)
     this.#trace(() => Object.freeze({
       name: 'receive.inventory.action.started',
       retained_action: action,
@@ -155,11 +156,15 @@ export class RetainedInventoryCoordinator {
   }
 
   cancelPending(reason: unknown): void {
+    this.#cancelPending(reason, true)
+  }
+
+  #cancelPending(reason: unknown, publishClearedSnapshot: boolean): void {
     const pending = this.#pending
     if (pending === undefined) return
     this.#boundary += 1
-    this.#pending = undefined
     pending.controller.abort(reason)
+    this.#clearPending(pending, publishClearedSnapshot)
     this.#exclude(pending.attempt, 'cancelled')
     this.#closeAttempt(pending.attempt)
   }
@@ -178,6 +183,7 @@ export class RetainedInventoryCoordinator {
   }
 
   async #loadInventory(): Promise<void> {
+    this.#cancelPending(new DOMException('Resume inventory reloaded', 'AbortError'), false)
     this.#replaceInventoryLoad()
     const attempt = this.#newAttempt('retained_inventory')
     this.#closeInventoryBeforeLoad(attempt)
@@ -288,11 +294,35 @@ export class RetainedInventoryCoordinator {
       name: 'receive.inventory.load.completed',
       operation_count: loaded.operations.length,
     }))
+    this.#publishReadyInventory(loaded)
+  }
+
+  #publishReadyInventory(
+    inventory: V2RetainedReceiveInventory,
+    pending?: PendingRetainedAction,
+  ): void {
     this.#options.publish(Object.freeze({
       kind: 'ready',
-      operations: Object.freeze([...loaded.operations]),
+      operations: Object.freeze([...inventory.operations]),
       error: null,
+      pending: pending === undefined
+        ? null
+        : Object.freeze({
+            operationId: pending.operation.operationId,
+            action: pending.action,
+          }),
     }))
+  }
+
+  #clearPending(
+    pending: PendingRetainedAction,
+    publishClearedSnapshot: boolean,
+  ): void {
+    if (this.#pending !== pending) return
+    this.#pending = undefined
+    if (publishClearedSnapshot && this.#inventory === pending.inventory) {
+      this.#publishReadyInventory(pending.inventory)
+    }
   }
 
   #settleInventoryLoadFailure(
@@ -309,6 +339,7 @@ export class RetainedInventoryCoordinator {
       kind: 'failed',
       operations: Object.freeze([]),
       error: 'Stored receive tasks could not be loaded.',
+      pending: null,
     }))
     this.#trace(() => Object.freeze({
       name: 'receive.inventory.load.failed',
@@ -417,7 +448,6 @@ export class RetainedInventoryCoordinator {
   }
 
   #completeAction(pending: PendingRetainedAction): void {
-    this.#pending = undefined
     const exclusion = pending.action === 'discard' || pending.action === 'delete'
       ? 'user_discarded'
       : 'success'
@@ -428,6 +458,7 @@ export class RetainedInventoryCoordinator {
         retained_action: pending.action,
         continuation: pending.operation.continuation,
       }))
+      this.#clearPending(pending, false)
       this.#loadInventory().catch(() => undefined)
     } finally {
       this.#closeAttempt(pending.attempt)
@@ -502,7 +533,6 @@ export class RetainedInventoryCoordinator {
       return
     }
     this.#boundary += 1
-    this.#pending = undefined
     pending.controller.abort(new StaleReceiveBoundaryError())
     try {
       this.#trace(() => Object.freeze({
@@ -510,6 +540,7 @@ export class RetainedInventoryCoordinator {
         retained_action: pending.action,
         continuation: pending.operation.continuation,
       }))
+      this.#clearPending(pending, false)
       this.#loadInventory().catch(() => undefined)
     } finally {
       this.#closeAttempt(pending.attempt)
@@ -525,7 +556,6 @@ export class RetainedInventoryCoordinator {
       this.#retireStale(pending)
       return
     }
-    this.#pending = undefined
     try {
       this.#trace(() => Object.freeze({
         name: 'receive.inventory.action.failed',
@@ -551,11 +581,12 @@ export class RetainedInventoryCoordinator {
         }
         this.#options.onActionError(error)
       }
-      this.#loadInventory().catch(() => undefined)
     } catch (settlementError) {
       this.#exclude(pending.attempt, 'not_user_visible')
       throw settlementError
     } finally {
+      this.#clearPending(pending, false)
+      this.#loadInventory().catch(() => undefined)
       this.#closeAttempt(pending.attempt)
     }
   }

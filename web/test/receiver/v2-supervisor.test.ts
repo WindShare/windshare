@@ -477,6 +477,10 @@ describe('v2 receiver reconnect supervisor', () => {
       return { relay: replacementRelay.connection, laneId: 3 }
     }
     const { supervisor } = supervisorFixture(session, initialRelay, factory)
+    const generations: number[] = []
+    supervisor.subscribeProtocolGeneration(observation => {
+      generations.push(observation.generationId)
+    })
 
     session.detach(1)
     await flushReconciliation()
@@ -486,6 +490,7 @@ describe('v2 receiver reconnect supervisor', () => {
     expect(supervisor.generationId).toBe(1)
     expect(session.laneIds()).toEqual([2, 3])
     expect(initialRelay.closeCalls).toBe(1)
+    expect(generations).toEqual([])
 
     await supervisor.close()
   })
@@ -499,6 +504,13 @@ describe('v2 receiver reconnect supervisor', () => {
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = () => fresh.promise
     const { supervisor } = supervisorFixture(firstSession, firstRelay, factory)
+    const generations: Array<{ generationId: number; protocolSessionIdentity: unknown }> = []
+    supervisor.subscribeProtocolGeneration(observation => {
+      generations.push({
+        generationId: observation.generationId,
+        protocolSessionIdentity: observation.protocolSessionIdentity,
+      })
+    })
     const waiters = [
       supervisor.waitForGenerationAfter(1),
       supervisor.waitForGenerationAfter(1),
@@ -518,6 +530,10 @@ describe('v2 receiver reconnect supervisor', () => {
     expect(factory.attachRelayCalls).toBe(0)
     expect(supervisor.generationId).toBe(2)
     expect(firstSession.closeCalls).toBeGreaterThan(0)
+    expect(generations).toEqual([{
+      generationId: 2,
+      protocolSessionIdentity: secondSession.protocolSessionIdentity,
+    }])
 
     await supervisor.close()
   })

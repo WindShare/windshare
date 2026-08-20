@@ -55,6 +55,8 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #active = new Set<PersistentFileTransaction>()
   readonly #recreatablePreObjectCandidates = new Set<string>()
   #needsAttentionReported = false
+  #activated = false
+  #activation: Promise<void> | undefined
   #closed = false
 
   private constructor(options: PersistentTreeSessionOptions) {
@@ -69,6 +71,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     try {
       await options.tree.authorize()
       await options.tree.prepareRoot()
+      session.#activated = true
       const recovery = await recoverFileCheckpointCandidates(options.checkpoints, {
         observe: candidate => session.#observeCandidate(candidate),
       })
@@ -90,8 +93,44 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
   }
 
+  /**
+   * A newly committed operation must exist before PrefixVisible namespace publication.
+   * This path validates authority but leaves prepareRoot behind the bound execution.
+   */
+  static async createNew(
+    options: PersistentTreeSessionOptions,
+  ): Promise<PersistentTreeOutputSession> {
+    const session = new PersistentTreeOutputSession(options)
+    try {
+      await options.tree.authorize()
+      return session
+    } catch (error) {
+      recordOutputException(options.diagnostics?.failures?.outputReservation, error)
+      session.#trace({ eventName: 'output_reservation', transition: 'failed' })
+      throw error
+    }
+  }
+
+  activate(): Promise<void> {
+    this.#requireOpen()
+    if (this.#activated) return Promise.resolve()
+    this.#activation ??= this.#tree.prepareRoot().then(
+      () => {
+        this.#activated = true
+      },
+      (error: unknown) => {
+        recordOutputException(this.#diagnostics?.failures?.outputReservation, error)
+        this.#trace({ eventName: 'output_reservation', transition: 'failed' })
+        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+        throw error
+      },
+    )
+    return this.#activation
+  }
+
   async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransaction> {
     this.#requireOpen()
+    this.#requireActivated()
     const artifactPath = snapshotPortableCatalogPath(request.artifactPath)
     // Awaiting authenticated source authority before local planning prevents both
     // checkpoint reservations and namespace placeholders for unopened revisions.
@@ -138,6 +177,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
 
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
     this.#requireOpen()
+    this.#requireActivated()
     return this.#tree.ensureDirectory(path)
   }
 
@@ -288,6 +328,12 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
 
   #requireOpen(): void {
     if (this.#closed) throw new DOMException('Persistent tree session is closed', 'InvalidStateError')
+  }
+
+  #requireActivated(): void {
+    if (!this.#activated) {
+      throw new DOMException('Persistent tree session is not activated', 'InvalidStateError')
+    }
   }
 
   #reportLegacyNeedsAttention(): void {

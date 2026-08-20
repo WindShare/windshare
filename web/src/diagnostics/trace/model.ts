@@ -65,6 +65,67 @@ type PlanKindV1 =
   | 'workspace_then_publish'
   | 'portable_handoff'
 
+type AuthorityActivationContextV1 = Readonly<{
+  activation_id: string
+  authenticated_share_instance_id: string
+  selection_digest: string
+  observed_protocol_session_id: string
+  projection_epoch: string
+  observation_revision: string
+  artifact_kind: ArtifactKindV1
+  plan_kind: PlanKindV1
+}>
+
+type AuthorityActivationTransitionV1 = AuthorityActivationContextV1 & (
+  | Readonly<{ transition: 'activation_started' }>
+  | Readonly<{
+      transition: 'prerequisite_waiting'
+      waiting_for: 'authority' | 'resolution' | 'authority_and_resolution'
+    }>
+  | Readonly<{
+      transition: 'retry_required'
+      retryable_discovery_reason:
+        | 'catalog_temporarily_unavailable'
+        | 'receiver_reconnecting'
+        | 'generation_replay_interrupted'
+    }>
+  | Readonly<{ transition: 'artifact_resolved' }>
+  | Readonly<{
+      transition: 'semantic_invalidated'
+      invalidation_reason:
+        | 'selection_changed'
+        | 'selection_empty'
+        | 'artifact_shape_incompatible'
+        | 'semantic_route_unavailable'
+        | 'hard_limit_exceeded'
+        | 'authenticated_share_instance_changed'
+        | 'installed_route_changed'
+        | 'caller_cancelled'
+    }>
+  | Readonly<{ transition: 'commit_started' }>
+  | Readonly<{
+      transition: 'commit_pre_cut_retry'
+      receiver_operation_id?: string
+    }>
+  | Readonly<{
+      transition: 'commit_bound_operation'
+      receiver_operation_id: string
+    }>
+  | Readonly<{
+      transition: 'commit_owned_effects'
+      receiver_operation_id: string
+    }>
+  | Readonly<{
+      transition: 'cleanup_completed'
+      receiver_operation_id?: string
+    }>
+  | Readonly<{
+      transition: 'cleanup_failed'
+      receiver_operation_id: string
+      failed_stage: 'settlement' | 'detach'
+    }>
+)
+
 type AttemptTransitionV1 =
   | 'started'
   | 'completed'
@@ -168,17 +229,7 @@ export interface TraceEventPayloadByNameV1 {
         stale_projection_epoch: string
         event_class: 'capability_result' | 'artifact_action' | 'authority_result'
       }>
-    | Readonly<{
-        transition:
-          | 'activation_started'
-          | 'authority_acquired'
-          | 'intent_frozen'
-          | 'activation_failed'
-          | 'stale_replacement'
-          | 'authority_invalidated'
-        artifact_kind?: ArtifactKindV1
-        plan_kind?: PlanKindV1
-      }>
+    | AuthorityActivationTransitionV1
   readonly protocol_operation:
     | Readonly<{
         transition: 'request_sent' | 'request_send_failed' | 'cancelled'

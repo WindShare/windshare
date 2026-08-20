@@ -1,19 +1,9 @@
-import type { V2FrozenSelectionPolicy } from '../catalog/v2-selection'
-import type {
-  ArtifactOperation,
-  EnvironmentOffers,
-} from '../output/planning'
+import type { ArtifactOperation } from '../output/planning'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
   validateReceiveIntent,
 } from '../transfer/intent'
-import {
-  discoverAuthenticatedSelection,
-  retryAuthenticatedSelectionDiscovery,
-  SelectionProjectionController,
-  type SelectionProjectionState,
-} from '../transfer/projection'
 import type { TransferProgress } from '../transfer/v2-job'
 import {
   V2BrowserReceiverGateway,
@@ -43,7 +33,6 @@ import {
   type V2ReceiveCompositionPort,
   type V2RetainedReceiveAction,
   type V2RetainedReceiveOperation,
-  type V2StartedArtifactAuthority,
 } from './v2-receive-runtime'
 import { ActiveReceiveCoordinator } from './controller/active-receive'
 import { V2ControllerObservability } from './controller/controller-observability'
@@ -54,8 +43,8 @@ import {
 } from './controller/contracts'
 import {
   V2AuthorityActivationCoordinator,
-  type V2ActiveProjection,
 } from './controller/authority-activation'
+import { SelectionProjectionRuntime } from './controller/projection-observation'
 import {
   RetainedInventoryCoordinator,
   type RetainedContinuationAdoption,
@@ -85,23 +74,22 @@ export class V2ReceiverController {
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
   readonly #listeners = new Set<() => void>()
   readonly #observability: V2ControllerObservability
-  readonly #outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
-  readonly #projection: SelectionProjectionController
+  readonly #outputs: V2OutputPresentationController
+  readonly #projectionObservation: SelectionProjectionRuntime
   readonly #previews: V2PreviewController
   readonly #activeReceive: ActiveReceiveCoordinator
   readonly #authority: V2AuthorityActivationCoordinator
   readonly #retained: RetainedInventoryCoordinator
   readonly #browse: BrowserNavigationCoordinator
   readonly #unsubscribeOutput: () => void
+  readonly #unsubscribeAuthority: () => void
   #snapshot: V2ReceiverSnapshot
   #diagnosticGeneration = 0n
   #pageUrl = ''
   #joined: V2JoinedBrowserShare | undefined
   #joinNavigation: AbortController | undefined
   #unsubscribeScanProgress: (() => void) | undefined
-  #projectionRevision = 0
-  #projectionPending: AbortController | undefined
-  #activeProjection: V2ActiveProjection | undefined
+  #unsubscribeProtocolGeneration: (() => void) | undefined
   #disposed = false
 
   constructor(
@@ -115,11 +103,7 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
     this.#capabilityLifecycle = new V2CapabilityInputLifecycle(options)
-    this.#projection = new SelectionProjectionController(options.trace)
-    this.#outputs = new V2OutputPresentationController({
-      releaseStaleAuthority: (authority) => authority.release(new StaleReceiveBoundaryError()),
-      ...(options.trace === undefined ? {} : { trace: options.trace }),
-    })
+    this.#outputs = new V2OutputPresentationController()
     this.#activeReceive = new ActiveReceiveCoordinator({
       outputs: this.#outputs,
       ownsJoinedShare: (joined) => !this.#disposed && this.#joined === joined,
@@ -130,22 +114,47 @@ export class V2ReceiverController {
       onFailure: (error) => this.#fail(error),
     })
     this.#authority = new V2AuthorityActivationCoordinator({
-      outputs: this.#outputs,
       receive: this.#receive,
       activeReceive: this.#activeReceive,
       observability: this.#observability,
-      currentProjection: () => this.#activeProjection,
+      currentProjection: () => this.#projectionObservation.current,
       currentJoinedShare: () => this.#joined,
       choiceBlocked: () => this.#retained.pending || this.#activeReceive.active,
-      restartProjection: (joined) => this.#beginSelectionProjection(joined),
+      retryProjection: (projection) => {
+        this.#projectionObservation.retry(projection).catch(() => undefined)
+      },
+      publishProjection: ({ observationRevision, state, offers }) => {
+        this.#outputs.updateProjection(observationRevision, state, offers)
+      },
+      adoptReceiveIntent: (choice, intent, runtime, commitOwnership) =>
+        this.#outputs.adoptReceiveIntentAtomically(
+          choice,
+          intent,
+          commitOwnership,
+          runtime.lifecycle,
+          Date.now(),
+          runtime.initialWorkspaceUsage,
+          runtime.activeControls,
+        ),
+      refreshRetainedInventory: () => {
+        this.#retained.load().catch(() => undefined)
+      },
       publishActionError: (error) => this.#publishActionError(error),
+    })
+    this.#projectionObservation = new SelectionProjectionRuntime({
+      receive: this.#receive,
+      authority: this.#authority,
+      observability: this.#observability,
+      currentJoinedShare: () => this.#joined,
+      isDisposed: () => this.#disposed,
+      onFailure: error => this.#fail(error),
+      ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     this.#retained = new RetainedInventoryCoordinator({
       receive: this.#receive,
       isDisposed: () => this.#disposed,
       currentJoinedShare: () => this.#joined,
-      continuationBlocked: () => this.#activeReceive.active || this.#authority.pending ||
-        this.#snapshot.output.chosenAction !== null,
+      continuationBlocked: () => this.#activeReceive.active || this.#authority.pending,
       adoptContinuation: (input) => this.#adoptRetainedReceiveContinuation(input),
       ownsRuntime: (runtime) => this.#activeReceive.ownsRuntime(runtime),
       publish: (retained) => this.#publish({ ...this.#snapshot, retained }),
@@ -181,6 +190,9 @@ export class V2ReceiverController {
     })
     this.#unsubscribeOutput = this.#outputs.subscribe(() => {
       if (!this.#disposed) this.#publish({ ...this.#snapshot, output: this.#outputs.getSnapshot() })
+    })
+    this.#unsubscribeAuthority = this.#authority.subscribe(() => {
+      this.#outputs.updateActivation(this.#authority.getSnapshot())
     })
     this.#previews = new V2PreviewController({
       snapshot: () => this.#snapshot,
@@ -313,12 +325,7 @@ export class V2ReceiverController {
   }
 
   retryOutputConfirmation(): void {
-    const projection = this.#activeProjection
-    if (projection === undefined) return
-    this.#outputs.retryConfirmation((epoch) => {
-      if (this.#activeProjection !== projection || projection.epoch !== epoch) return
-      return this.#retryProjection(projection)
-    }).catch(() => undefined)
+    this.#authority.retry()
   }
 
   performLifecycleAction(action: LifecycleUserAction): void {
@@ -341,7 +348,10 @@ export class V2ReceiverController {
     this.#retained.close(new DOMException('Receiver disposed', 'AbortError'))
     this.#unsubscribeScanProgress?.()
     this.#unsubscribeScanProgress = undefined
+    this.#unsubscribeProtocolGeneration?.()
+    this.#unsubscribeProtocolGeneration = undefined
     const detached = this.#resetReceiveOwnership(new DOMException('Receiver disposed', 'AbortError'))
+    this.#unsubscribeAuthority()
     this.#unsubscribeOutput()
     this.#outputs.close()
     await Promise.allSettled([
@@ -360,24 +370,22 @@ export class V2ReceiverController {
     const intent = await validateReceiveIntent(runtime.intent)
     if (this.#disposed || this.#joined !== joined) throw new StaleReceiveBoundaryError()
     const selection = v2SelectionPolicyFromIntent(intent)
-    this.#projectionRevision += 1
-    this.#projectionPending?.abort(new StaleReceiveBoundaryError())
-    this.#projectionPending = undefined
-    this.#activeProjection?.controller.abort(new StaleReceiveBoundaryError())
-    this.#activeProjection = undefined
-    this.#authority.abort(new StaleReceiveBoundaryError())
-    this.#outputs.adoptRetainedReceiveIntent(
-      intent,
-      runtime.lifecycle,
-      Date.now(),
-      runtime.initialWorkspaceUsage,
-      runtime.activeControls,
-    )
-    this.#activeReceive.adopt({
+    this.#projectionObservation.stop(new StaleReceiveBoundaryError())
+    this.#authority.invalidate(new StaleReceiveBoundaryError(), 'caller-cancelled')
+    const prepared = this.#activeReceive.prepareAdoption({
       joined,
       selection,
       runtime,
     })
+    this.#outputs.adoptRetainedReceiveIntentAtomically(
+      intent,
+      runtime.lifecycle,
+      prepared.commit,
+      Date.now(),
+      runtime.initialWorkspaceUsage,
+      runtime.activeControls,
+    )
+    prepared.start()
   }
 
   #join(input: string): Promise<void> {
@@ -390,13 +398,17 @@ export class V2ReceiverController {
     attempt: V2PresentationAttempt,
   ): Promise<void> {
     let navigation: AbortController | undefined
+    let previous: V2JoinedBrowserShare | undefined
+    let joinedReplacementInstalled = false
     this.#observability.trace(() => Object.freeze({
       name: 'join_transition',
       transition: 'started',
     }))
     try {
       this.#retained.cancelPending(new StaleReceiveBoundaryError())
-      this.#resetReceiveOwnership(new StaleReceiveBoundaryError()).catch(() => undefined)
+      this.#activeReceive.reset(new StaleReceiveBoundaryError()).catch(() => undefined)
+      this.#authority.suspendForJoin()
+      this.#stopProjectionObservation(new StaleReceiveBoundaryError())
       await this.#previews.close()
       this.#joinNavigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
       this.#browse.cancel(new DOMException('A newer join replaced this one', 'AbortError'))
@@ -412,16 +424,16 @@ export class V2ReceiverController {
         preview: EMPTY_V2_PREVIEW,
         progress: EMPTY_V2_PROGRESS,
       })
-      const previous = this.#joined
+      previous = this.#joined
       this.#unsubscribeScanProgress?.()
       this.#unsubscribeScanProgress = undefined
-      await previous?.close()
+      this.#unsubscribeProtocolGeneration?.()
+      this.#unsubscribeProtocolGeneration = undefined
       navigation.signal.throwIfAborted()
-      if (this.#joined === previous) this.#joined = undefined
       const activeNavigation = navigation
       const joined = await lease.handoff((ownedInput) =>
         this.#gateway.join(ownedInput, this.#pageUrl, activeNavigation.signal))
-      if (this.#joinNavigation !== navigation || navigation.signal.aborted || this.#disposed) {
+      if (!this.#joinReplacementIsCurrent(navigation)) {
         await joined.close()
         this.#observability.exclude(attempt, 'join', 'stale_replacement')
         this.#observability.trace(() => Object.freeze({
@@ -430,36 +442,42 @@ export class V2ReceiverController {
         }))
         return
       }
+      const frozenSelection = joined.selection.snapshot()
+      const selection = await createSelectionSpec({
+        shareInstance: joined.descriptor.shareInstanceId,
+        syntheticRoot: joined.descriptor.syntheticRootId,
+        rules: selectionRulesSpecFromPolicy(frozenSelection),
+      })
+      navigation.signal.throwIfAborted()
+      if (!this.#joinReplacementIsCurrent(navigation)) {
+        await joined.close()
+        return
+      }
       this.#joined = joined
+      joinedReplacementInstalled = true
+      this.#authority.completeJoin(joined, selection)
+      await previous?.close().catch(() => undefined)
       this.#observability.exclude(attempt, 'join', 'success')
       this.#observability.trace(() => Object.freeze({
         name: 'join_transition',
         transition: 'joined',
       }))
-      this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
-        (progress) => this.#browse.catalogScanProgress(joined, progress),
-      )
+      this.#subscribeJoinedNotifications(joined)
       const root = joined.rootDirectory()
       this.#browse.clearCatalog()
       await this.#browse.loadPage(root, 0, Object.freeze([root]))
       if (this.#joined === joined && this.#browse.pageMatches(root)) {
-        this.#beginSelectionProjection(joined)
+        this.#beginSelectionProjection(joined, 'observation-replacement')
       }
     } catch (error) {
-      if (
-        navigation !== undefined &&
-        this.#joinNavigation === navigation &&
-        !navigation.signal.aborted
-      ) {
-        this.#observability.fail(attempt, 'join', error, 'join')
-        this.#observability.trace(() => Object.freeze({
-          name: 'join_transition',
-          transition: 'failed',
-        }))
-        this.#fail(error, lease)
-      } else {
-        this.#observability.exclude(attempt, 'join', 'stale_replacement')
-      }
+      this.#handleJoinFailure(
+        error,
+        lease,
+        attempt,
+        navigation,
+        previous,
+        joinedReplacementInstalled,
+      )
     } finally {
       if (this.#joinNavigation === navigation) this.#joinNavigation = undefined
       lease.release()
@@ -470,196 +488,66 @@ export class V2ReceiverController {
     }
   }
 
-  #beginSelectionProjection(joined: V2JoinedBrowserShare): void {
-    const revision = ++this.#projectionRevision
-    this.#projectionPending?.abort(new StaleReceiveBoundaryError())
-    this.#projectionPending = undefined
-    this.#activeProjection?.controller.abort(new StaleReceiveBoundaryError())
-    this.#activeProjection = undefined
-    this.#authority.abort(new StaleReceiveBoundaryError())
-    this.#outputs.invalidate()
-    this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS })
-
-    const attempt = this.#observability.open('projection')
-    const controller = new AbortController()
-    this.#projectionPending = controller
-    const frozenSelection = joined.selection.snapshot()
-    const environment = Promise.resolve(this.#receive.environment(controller.signal))
-    this.#startProjectionOwned(
-      revision,
-      joined,
-      frozenSelection,
-      controller,
-      environment,
-    ).then(() => {
-      this.#observability.exclude(
-        attempt,
-        'projection_authority',
-        this.#projectionBoundaryIsCurrent(revision, joined) && !controller.signal.aborted
-          ? 'success'
-          : 'stale_replacement',
-      )
-    }).catch((error: unknown) => {
-      if (
-        !controller.signal.aborted &&
-        revision === this.#projectionRevision &&
-        this.#joined === joined
-      ) {
-        this.#observability.fail(
-          attempt,
-          'projection_authority',
-          error,
-          'projection',
-        )
-        this.#fail(error)
-      } else {
-        this.#observability.exclude(
-          attempt,
-          'projection_authority',
-          'stale_replacement',
-        )
-      }
-    }).finally(() => {
-      if (this.#projectionPending === controller) this.#projectionPending = undefined
-      attempt.close()
-    })
+  #joinReplacementIsCurrent(navigation: AbortController): boolean {
+    return this.#joinNavigation === navigation && !navigation.signal.aborted && !this.#disposed
   }
 
-  async #startProjectionOwned(
-    revision: number,
-    joined: V2JoinedBrowserShare,
-    frozenSelection: V2FrozenSelectionPolicy,
-    controller: AbortController,
-    environmentTask: Promise<EnvironmentOffers>,
-  ): Promise<void> {
-    const selection = await createSelectionSpec({
-      shareInstance: joined.descriptor.shareInstanceId,
-      syntheticRoot: joined.descriptor.syntheticRootId,
-      rules: selectionRulesSpecFromPolicy(frozenSelection),
-    })
-    controller.signal.throwIfAborted()
-    if (!this.#projectionBoundaryIsCurrent(revision, joined)) return
-
-    const environment = await environmentTask
-    controller.signal.throwIfAborted()
-    if (!this.#projectionBoundaryIsCurrent(revision, joined)) return
-    const protocolSessionId = joined.protocolSessionId
-    const state = this.#projection.beginSelection(selection, Object.freeze({
-      protocolSessionId: joined.protocolSessionIdentity,
-    }))
-    const active: V2ActiveProjection = {
-      revision,
-      joined,
-      selection,
-      frozenSelection,
-      epoch: state.projection.epoch,
-      controller,
-      protocolSessionId,
-      state,
-      environment,
-    }
-    this.#activeProjection = active
-    if (this.#projectionPending === controller) this.#projectionPending = undefined
-    await this.#outputs.updateProjection(state, environment)
-    if (this.#activeProjection !== active || controller.signal.aborted) return
-    if (active.protocolSessionId !== joined.protocolSessionId) {
-      this.#beginSelectionProjection(joined)
+  #handleJoinFailure(
+    error: unknown,
+    lease: V2CapabilityJoinLease,
+    attempt: V2PresentationAttempt,
+    navigation: AbortController | undefined,
+    previous: V2JoinedBrowserShare | undefined,
+    joinedReplacementInstalled: boolean,
+  ): void {
+    if (navigation === undefined || this.#joinNavigation !== navigation || navigation.signal.aborted) {
+      this.#observability.exclude(attempt, 'join', 'stale_replacement')
       return
     }
-    await this.#consumeProjection(
-      active,
-      controller,
-      discoverAuthenticatedSelection(
-        this.#projection,
-        joined.projectionSource(frozenSelection),
-        controller.signal,
-      ),
+    if (!joinedReplacementInstalled) {
+      this.#authority.cancelJoin()
+      if (previous !== undefined && this.#joined === previous) {
+        this.#subscribeJoinedNotifications(previous)
+      }
+    }
+    this.#observability.fail(attempt, 'join', error, 'join')
+    this.#observability.trace(() => Object.freeze({
+      name: 'join_transition',
+      transition: 'failed',
+    }))
+    this.#fail(error, lease)
+  }
+
+  #beginSelectionProjection(
+    joined: V2JoinedBrowserShare,
+    replacement: 'selection-change' | 'observation-replacement' = 'selection-change',
+  ): void {
+    if (replacement === 'selection-change') this.#outputs.reset()
+    this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS })
+    this.#projectionObservation.start(joined, replacement)
+  }
+
+  #stopProjectionObservation(reason: unknown): void {
+    this.#projectionObservation.stop(reason)
+  }
+
+  #subscribeJoinedNotifications(joined: V2JoinedBrowserShare): void {
+    this.#unsubscribeScanProgress?.()
+    this.#unsubscribeProtocolGeneration?.()
+    this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
+      progress => this.#browse.catalogScanProgress(joined, progress),
     )
-  }
-
-  async #retryProjection(active: V2ActiveProjection): Promise<void> {
-    const attempt = this.#observability.open('projection')
-    active.controller.abort(new DOMException('Projection retry replaced the prior source', 'AbortError'))
-    const controller = new AbortController()
-    active.controller = controller
-    try {
-      const environment = await Promise.resolve(this.#receive.environment(controller.signal))
-      controller.signal.throwIfAborted()
-      if (
-        this.#activeProjection !== active ||
-        active.controller !== controller ||
-        !this.#projectionBoundaryIsCurrent(active.revision, active.joined)
-      ) {
-        this.#observability.exclude(
-          attempt,
-          'projection_authority',
-          'stale_replacement',
-        )
-        return
+    this.#unsubscribeProtocolGeneration = joined.subscribeProtocolGeneration(() => {
+      if (!this.#disposed && this.#joined === joined && this.#joinNavigation === undefined) {
+        this.#beginSelectionProjection(joined, 'observation-replacement')
       }
-      active.environment = environment
-      active.protocolSessionId = active.joined.protocolSessionId
-      await this.#consumeProjection(
-        active,
-        controller,
-        retryAuthenticatedSelectionDiscovery(
-          this.#projection,
-          active.joined.projectionSource(active.frozenSelection, true),
-          controller.signal,
-        ),
-      )
-      this.#observability.exclude(attempt, 'projection_authority', 'success')
-    } catch (error) {
-      if (
-        !controller.signal.aborted &&
-        this.#activeProjection === active &&
-        active.controller === controller
-      ) {
-        this.#observability.fail(
-          attempt,
-          'projection_authority',
-          error,
-          'projection',
-        )
-        this.#fail(error)
-      } else {
-        this.#observability.exclude(
-          attempt,
-          'projection_authority',
-          'stale_replacement',
-        )
-      }
-      throw error
-    } finally {
-      attempt.close()
-    }
-  }
-
-  async #consumeProjection(
-    active: V2ActiveProjection,
-    controller: AbortController,
-    states: AsyncGenerator<SelectionProjectionState, SelectionProjectionState>,
-  ): Promise<void> {
-    for await (const state of states) {
-      if (this.#activeProjection !== active || active.controller !== controller ||
-          controller.signal.aborted) return
-      active.state = state
-      await this.#outputs.updateProjection(state, active.environment)
-    }
-  }
-
-  #projectionBoundaryIsCurrent(revision: number, joined: V2JoinedBrowserShare): boolean {
-    return revision === this.#projectionRevision && this.#joined === joined && !this.#disposed
+    })
   }
 
   #resetReceiveOwnership(reason: unknown): Promise<void> {
-    this.#projectionRevision += 1
-    this.#projectionPending?.abort(reason)
-    this.#projectionPending = undefined
-    this.#activeProjection?.controller.abort(reason)
-    this.#activeProjection = undefined
-    this.#authority.abort(reason)
-    this.#outputs.invalidate()
+    this.#stopProjectionObservation(reason)
+    this.#authority.invalidate(reason, 'caller-cancelled')
+    this.#outputs.reset()
     return this.#activeReceive.reset(reason)
   }
 
@@ -686,7 +574,7 @@ export class V2ReceiverController {
 
   #selectionLocked(): boolean {
     return this.#retained.pending ||
-      this.#snapshot.output.chosenAction !== null || this.#snapshot.output.receiveIntent !== null
+      this.#authority.pending || this.#snapshot.output.receiveIntent !== null
   }
 
   #publishActionError(error: unknown): void {

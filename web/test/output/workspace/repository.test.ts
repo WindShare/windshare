@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
-  INDEXEDDB_V6_STORE_SCHEMAS,
+  INDEXEDDB_V7_STORE_SCHEMAS,
 } from '../../../src/output/browser/indexeddb-database'
 import {
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
@@ -21,10 +21,10 @@ import {
   storedReceiveLifecycleState,
 } from '../../../src/output/workspace/state-codec'
 
-describe('IndexedDB v6 operation repository contract', () => {
-  it('replaces v5 once with the exact eight v6 stores and indexes', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(6)
-    expect(INDEXEDDB_V6_STORE_SCHEMAS).toEqual([
+describe('IndexedDB v7 operation repository contract', () => {
+  it('adds bounded global activation enumeration without changing operation stores', () => {
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(7)
+    expect(INDEXEDDB_V7_STORE_SCHEMAS).toEqual([
       schema('file-checkpoint-v2-candidates', [
         ['by-operation', 'operationId'],
         ['by-operation-file', ['operationId', 'fileId']],
@@ -44,6 +44,7 @@ describe('IndexedDB v6 operation repository contract', () => {
         ['by-reopen-key', 'reopenKey'],
         ['by-state', 'state'],
         ['by-expiry', 'expiresAt'],
+        ['by-kind', 'kind'],
       ]),
       schema('receive-operation-v1-manifest-pages', [
         ['by-operation', 'operationId'],

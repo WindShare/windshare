@@ -11,7 +11,17 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   browse_transition: { transition: 'started' },
   preview_transition: { attempt: 'open', transition: 'started' },
   projection_transition: { transition: 'started', projection_epoch: '1' },
-  authority_transition: { transition: 'activation_started' },
+  authority_transition: {
+    transition: 'activation_started',
+    activation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+    authenticated_share_instance_id: 'BgAAAAAAAAAAAAAAAAAAAA',
+    selection_digest: 'BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+    observed_protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+    projection_epoch: '1',
+    observation_revision: '1',
+    artifact_kind: 'directory_tree',
+    plan_kind: 'direct_tree',
+  },
   protocol_operation: { transition: 'request_sent', request_kind: 'list_children' },
   peer_attempt: {
     stage: 'started',
@@ -58,9 +68,27 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   readonly [Name in TraceEventNameV1]: TraceEventPayloadByNameV1[Name]
 }
 
+const CLOSED_AUTHORITY_OWNERSHIP_PAYLOADS = Object.freeze([
+  Object.freeze({
+    ...PAYLOAD_FOR_EVERY_EVENT.authority_transition,
+    transition: 'commit_pre_cut_retry' as const,
+    receiver_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+  }),
+  Object.freeze({
+    ...PAYLOAD_FOR_EVERY_EVENT.authority_transition,
+    transition: 'cleanup_failed' as const,
+    receiver_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    failed_stage: 'settlement' as const,
+  }),
+]) satisfies readonly TraceEventPayloadByNameV1['authority_transition'][]
+
 describe('TraceEventPayloadV1 integration union', () => {
   it('owns one closed JSON payload for every frozen event name', () => {
     expect(Object.keys(PAYLOAD_FOR_EVERY_EVENT)).toEqual(TRACE_EVENT_NAMES_V1)
     expect(() => JSON.stringify(PAYLOAD_FOR_EVERY_EVENT)).not.toThrow()
+    expect(CLOSED_AUTHORITY_OWNERSHIP_PAYLOADS.map(({ transition }) => transition)).toEqual([
+      'commit_pre_cut_retry',
+      'cleanup_failed',
+    ])
   })
 })

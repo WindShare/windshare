@@ -7,6 +7,7 @@ import {
   assertCanonicalRecordDomain,
   canonicalDigest,
   canonicalFrame,
+  canonicalText,
   equalCanonicalBytes,
   canonicalIdentity,
   canonicalRecord,
@@ -33,6 +34,7 @@ export const RECEIVE_RECORD_PUBLICATION_ATTEMPT = 8 as const
 export const RECEIVE_RECORD_LIFECYCLE_STATE = 9 as const
 export const RECEIVE_RECORD_RECEIPT = 10 as const
 export const RECEIVE_RECORD_CLEANUP = 11 as const
+export const RECEIVE_RECORD_WORKSPACE_ACTIVATION = 12 as const
 
 export type ReceiveRecordKind =
   | typeof RECEIVE_RECORD_OPERATION
@@ -46,6 +48,7 @@ export type ReceiveRecordKind =
   | typeof RECEIVE_RECORD_LIFECYCLE_STATE
   | typeof RECEIVE_RECORD_RECEIPT
   | typeof RECEIVE_RECORD_CLEANUP
+  | typeof RECEIVE_RECORD_WORKSPACE_ACTIVATION
 
 export type OperationReopenKey =
   | Readonly<{ kind: 'none' }>
@@ -107,6 +110,20 @@ export interface ReceiveOperationLeaseRecord {
   readonly acquiredAt: number
   readonly heartbeatAt: number
 }
+
+export interface WorkspaceActivationCandidateV1 {
+  readonly schemaVersion: typeof RECEIVE_OPERATION_SCHEMA_VERSION
+  readonly operationId: string
+  readonly entryIdentity: string
+  readonly rootHandleId: string
+  readonly rootOwnedObjectId: string
+  readonly repositoryAuthority: string
+  readonly canonicalBytes: CanonicalBytes
+  readonly digest: string
+}
+
+const WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN = 'windshare/workspace-activation-candidate/v1'
+const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
 
 export async function createReceiveOperationV1(input: {
   readonly receiveIntent: ReceiveIntent
@@ -331,6 +348,89 @@ export async function createManifestPageRecord(input: {
   })
 }
 
+export async function createWorkspaceActivationCandidate(input: {
+  readonly operationId: string
+  readonly entryIdentity: string
+  readonly rootHandleId: string
+  readonly rootOwnedObjectId: string
+  readonly repositoryAuthority: string
+}): Promise<WorkspaceActivationCandidateV1> {
+  const operationId = snapshotIdentity(input.operationId, 16, 'operation ID')
+  const entryIdentity = snapshotIdentity(input.entryIdentity, 32, 'workspace entry identity')
+  const rootHandleId = canonicalText(input.rootHandleId)
+  if (rootHandleId.byteLength === 0) throw new TypeError('workspace root handle ID is empty')
+  const rootOwnedObjectId = snapshotIdentity(
+    input.rootOwnedObjectId,
+    32,
+    'workspace owned object ID',
+  )
+  const repositoryAuthority = snapshotIdentity(
+    input.repositoryAuthority,
+    32,
+    'workspace repository authority',
+  )
+  const canonicalBytes = canonicalRecord(WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN, 1, [
+    canonicalFrame(canonicalIdentity(operationId, 16, 'operation ID')),
+    canonicalFrame(canonicalIdentity(entryIdentity, 32, 'workspace entry identity')),
+    canonicalFrame(rootHandleId),
+    canonicalFrame(canonicalIdentity(rootOwnedObjectId, 32, 'workspace owned object ID')),
+    canonicalFrame(canonicalIdentity(repositoryAuthority, 32, 'workspace repository authority')),
+  ])
+  return Object.freeze({
+    schemaVersion: RECEIVE_OPERATION_SCHEMA_VERSION,
+    operationId,
+    entryIdentity,
+    rootHandleId: input.rootHandleId,
+    rootOwnedObjectId,
+    repositoryAuthority,
+    canonicalBytes,
+    digest: await canonicalDigest(canonicalBytes),
+  })
+}
+
+export function storedWorkspaceActivationCandidate(
+  candidate: WorkspaceActivationCandidateV1,
+): Promise<PersistedReceiveRecord> {
+  return createPersistedReceiveRecord({
+    operationId: candidate.operationId,
+    kind: RECEIVE_RECORD_WORKSPACE_ACTIVATION,
+    canonicalBytes: candidate.canonicalBytes,
+  })
+}
+
+export async function decodeStoredWorkspaceActivationCandidate(
+  recordInput: PersistedReceiveRecord,
+): Promise<WorkspaceActivationCandidateV1> {
+  const record = await validatePersistedReceiveRecord(recordInput)
+  if (record.kind !== RECEIVE_RECORD_WORKSPACE_ACTIVATION) {
+    throw new TypeError('workspace activation decoder requires an activation candidate record')
+  }
+  const reader = CanonicalRecordReader.open(
+    record.canonicalBytes,
+    WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN,
+    RECEIVE_OPERATION_SCHEMA_VERSION,
+  )
+  const operationId = reader.framedIdentity(16, 'operation ID')
+  const entryIdentity = reader.framedIdentity(32, 'workspace entry identity')
+  const rootHandleId = decodeCanonicalText(reader.frame('workspace root handle ID'))
+  const rootOwnedObjectId = reader.framedIdentity(32, 'workspace owned object ID')
+  const repositoryAuthority = reader.framedIdentity(32, 'workspace repository authority')
+  reader.finish('workspace activation candidate')
+  const rebuilt = await createWorkspaceActivationCandidate({
+    operationId,
+    entryIdentity,
+    rootHandleId,
+    rootOwnedObjectId,
+    repositoryAuthority,
+  })
+  const projection = await storedWorkspaceActivationCandidate(rebuilt)
+  if (record.id !== projection.id || record.digest !== projection.digest ||
+      !equalCanonicalBytes(record.canonicalBytes, projection.canonicalBytes)) {
+    throw new TypeError('workspace activation candidate changed its canonical authority')
+  }
+  return rebuilt
+}
+
 export function validateReceiveOperationHandleRecord<T>(
   record: ReceiveOperationHandleRecord<T>,
 ): ReceiveOperationHandleRecord<T> {
@@ -423,7 +523,17 @@ export function receiveRecordDomain(kind: ReceiveRecordKind): string {
     case RECEIVE_RECORD_RECEIPT:
     case RECEIVE_RECORD_CLEANUP:
       return 'windshare/receive-receipt/v1'
+    case RECEIVE_RECORD_WORKSPACE_ACTIVATION:
+      return WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN
   }
+}
+
+function decodeCanonicalText(bytes: Uint8Array): string {
+  const value = TEXT_DECODER.decode(bytes)
+  if (!equalCanonicalBytes(canonicalText(value), bytes)) {
+    throw new TypeError('canonical text encoding is invalid')
+  }
+  return value
 }
 
 function snapshotReopenKey(input: OperationReopenKey): OperationReopenKey {

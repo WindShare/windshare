@@ -11,10 +11,18 @@ import {
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
-import { FSARootMutationBusyError } from '../../src/output/browser/namespace-mutation'
 import {
-  bindNewFileSystemAccessOutput,
+  FSARootMutationBusyError,
+  acquireFSARootMutationLease,
+} from '../../src/output/browser/namespace-mutation'
+import {
+  prepareFSAOperationBindingTransition,
+  verifyFSAOperationBinding,
+} from '../../src/output/browser/indexeddb-root-binding'
+import {
+  assembleNewFileSystemAccessOutput,
   reopenFileSystemAccessOutput,
+  reserveNewFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
 } from '../../src/output/file-system-access/session'
 
@@ -188,39 +196,78 @@ export async function releaseHeldTask(fixture: FsaNamespaceFixture): Promise<voi
   await resetFixture(fixture)
 }
 
+export async function exerciseFailedPreExecutionActivation(
+  fixture: FsaNamespaceFixture,
+): Promise<{ readonly rootAbsentBeforeExecution: boolean; readonly rootAbsentAfterDetach: boolean }> {
+  await resetFixture(fixture)
+  const parent = await parentDirectory(fixture, true)
+  const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
+  const session = await bindTask(
+    fixture,
+    parent,
+    repository,
+    await resultRootArtifact(),
+    60,
+    false,
+  )
+  const rootAbsentBeforeExecution = (await entryKinds(parent)).total === 0
+  await session.close()
+  const rootAbsentAfterDetach = (await entryKinds(parent)).total === 0
+  repository.close()
+  await resetFixture(fixture)
+  return Object.freeze({ rootAbsentBeforeExecution, rootAbsentAfterDetach })
+}
+
 async function bindTask(
   fixture: FsaNamespaceFixture,
   parent: FileSystemDirectoryHandle,
   repository: IndexedDbReceiveOperationRepository,
   artifact: DirectoryTreeArtifact,
   seed: number,
+  activate = true,
 ): Promise<FileSystemAccessOutputSession> {
   const selection = await createSelectionSpec({
     shareInstance: identity(1),
     syntheticRoot: identity(2),
     rules: { mode: 'node-id', defaultSelected: true, rules: [] },
   })
-  return bindNewFileSystemAccessOutput({
-    authority: acquiredParent(parent),
+  const authority = acquiredParent(parent)
+  const rootLease = await acquireFSARootMutationLease(parent)
+  const reserved = await reserveNewFileSystemAccessOutput({
+    authority,
     artifact,
-    operationRepository: repository,
-    databaseName: fixture.databaseName,
+    rootLease,
     operationId: identity(seed),
     reservationId: identity(seed + 1),
     authorityRef: identity(seed + 2, 32),
-    freezeIntent: async (reservation) => createReceiveIntent({
-      selection,
-      artifact,
-      plan: await createDirectTreePlan(artifact, reservation),
-    }),
   })
+  const intent = await createReceiveIntent({
+    selection,
+    artifact,
+    plan: await createDirectTreePlan(artifact, reserved.reservation),
+  })
+  const prepared = await prepareFSAOperationBindingTransition({
+    repository,
+    intent,
+    parent,
+  })
+  await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
+  const binding = await verifyFSAOperationBinding({ repository, intent, expectedParent: parent })
+  const session = await assembleNewFileSystemAccessOutput({
+    binding,
+    operationRepository: repository,
+    rootLease,
+    databaseName: fixture.databaseName,
+  })
+  if (activate) await session.activate()
+  return session
 }
 
 function acquiredParent(parent: FileSystemDirectoryHandle): AcquiredFSAParentAuthority {
   const offer = fsaParentOffer()
   return Object.freeze({
     kind: 'fsa-parent-directory-authority',
-    environmentTargetOfferId: offer.id,
+    targetRouteId: offer.routeId,
     offer,
     parent,
   })

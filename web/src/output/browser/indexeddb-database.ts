@@ -1,4 +1,4 @@
-export const CHECKPOINT_DATABASE_VERSION = 6
+export const CHECKPOINT_DATABASE_VERSION = 7
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = 'windshare-output-checkpoints'
 
 export const INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE = 'file-checkpoint-v2-candidates'
@@ -13,6 +13,7 @@ export const INDEXEDDB_RECEIVE_LEASE_STORE = 'receive-operation-v1-leases'
 export const INDEXEDDB_BY_OPERATION_INDEX = 'by-operation'
 export const INDEXEDDB_BY_OPERATION_FILE_INDEX = 'by-operation-file'
 export const INDEXEDDB_BY_OPERATION_KIND_INDEX = 'by-operation-kind'
+export const INDEXEDDB_BY_KIND_INDEX = 'by-kind'
 export const INDEXEDDB_BY_REOPEN_KEY_INDEX = 'by-reopen-key'
 export const INDEXEDDB_BY_STATE_INDEX = 'by-state'
 export const INDEXEDDB_BY_EXPIRY_INDEX = 'by-expiry'
@@ -72,13 +73,23 @@ export const INDEXEDDB_V6_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Objec
   ]),
 ])
 
+export const INDEXEDDB_V7_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze(
+  INDEXEDDB_V6_STORE_SCHEMAS.map((schema) => schema.name === INDEXEDDB_RECEIVE_RECORD_STORE
+    ? storeSchema(schema.name, [
+        ...schema.indexes,
+        indexSchema(INDEXEDDB_BY_KIND_INDEX, 'kind'),
+      ])
+    : schema),
+)
+
 export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDBDatabase> {
   if (name.length === 0) throw new TypeError('IndexedDB name must not be empty')
   if (typeof indexedDB === 'undefined') {
     throw new DOMException('IndexedDB output repository is unavailable', 'NotSupportedError')
   }
   const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
-  request.addEventListener('upgradeneeded', () => installIndexedDbV6Schema(request.result))
+  request.addEventListener('upgradeneeded', () =>
+    installIndexedDbV7Schema(request.result, request.transaction ?? undefined))
   let blocked = false
   return new Promise<IDBDatabase>((resolve, reject) => {
     request.addEventListener('blocked', () => {
@@ -102,6 +113,25 @@ export function installIndexedDbV6Schema(database: IDBDatabase): void {
     const store = database.createObjectStore(schema.name, { keyPath: 'id' })
     for (const index of schema.indexes) {
       store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+    }
+  }
+}
+
+export function installIndexedDbV7Schema(
+  database: IDBDatabase,
+  transaction?: IDBTransaction,
+): void {
+  for (const schema of INDEXEDDB_V7_STORE_SCHEMAS) {
+    const store = database.objectStoreNames.contains(schema.name)
+      ? transaction?.objectStore(schema.name)
+      : database.createObjectStore(schema.name, { keyPath: 'id' })
+    if (store === undefined) {
+      throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
+    }
+    for (const index of schema.indexes) {
+      if (!store.indexNames.contains(index.name)) {
+        store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+      }
     }
   }
 }
