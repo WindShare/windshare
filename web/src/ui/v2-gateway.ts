@@ -27,6 +27,7 @@ import {
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
+import type { V2ProtocolGenerationListener } from '../receiver/v2-supervisor'
 import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
 import type { V2ProtocolSessionIdentity } from '../session/v2-identities'
 import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
@@ -178,6 +179,10 @@ export class V2JoinedBrowserShare {
 
   get protocolSessionIdentity(): V2ProtocolSessionIdentity {
     return this.#supervisor.protocolSessionIdentity
+  }
+
+  subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
+    return this.#supervisor.subscribeProtocolGeneration(listener)
   }
 
   projectionSource(

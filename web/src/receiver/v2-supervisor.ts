@@ -90,6 +90,16 @@ interface V2GenerationWaiter {
   readonly abort?: () => void
 }
 
+export interface V2ProtocolGenerationObservation {
+  readonly generationId: number
+  readonly protocolSessionId: string
+  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
+}
+
+export type V2ProtocolGenerationListener = (
+  observation: V2ProtocolGenerationObservation,
+) => void
+
 /**
  * Receiver authority above ProtocolSession. Only this class may publish a new
  * generation, so old lane events, leases, and frames cannot mutate its successor.
@@ -118,6 +128,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   ) | undefined
   readonly #lifetime = new AbortController()
   readonly #waiters = new Set<V2GenerationWaiter>()
+  readonly #generationListeners = new Set<V2ProtocolGenerationListener>()
   // One joined share can replace protocol generations, but its route evidence is one stream.
   readonly #dispatchSequence = new V2BlockDispatchSequenceAuthority()
   #current: V2ReceiverGeneration
@@ -241,6 +252,11 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   waitForGenerationAfter(generationId: number, signal?: AbortSignal): Promise<void> {
     return this.#waitForGenerationAfter(generationId, signal)
+  }
+
+  subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
+    this.#generationListeners.add(listener)
+    return () => this.#generationListeners.delete(listener)
   }
 
   close(): Promise<void> {
@@ -441,7 +457,23 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#current = next
     this.connectivity.bind(next.connectivity)
     this.#wakeWaiters()
+    this.#publishGenerationInstalled(next)
     await this.#closeGeneration(previous)
+  }
+
+  #publishGenerationInstalled(generation: V2ReceiverGeneration): void {
+    const observation = Object.freeze({
+      generationId: generation.id,
+      protocolSessionId: encodeBase64Url(generation.session.keys.protocolSessionId),
+      protocolSessionIdentity: generation.session.protocolSessionIdentity,
+    })
+    for (const listener of this.#generationListeners) {
+      try {
+        listener(observation)
+      } catch {
+        // A controller observer cannot revoke the generation already installed by this owner.
+      }
+    }
   }
 
   async #ready(signal?: AbortSignal): Promise<V2ReceiverGeneration> {
@@ -499,6 +531,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     for (const waiter of this.#waiters) waiter.reject(reason)
     this.#waiters.clear()
     this.#current.retired = true
+    this.#generationListeners.clear()
     this.content.close()
     this.connectivity.close().catch(() => undefined)
     this.#factory.close()
@@ -518,6 +551,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     for (const waiter of this.#waiters) waiter.reject(this.#lifetime.signal.reason)
     this.#waiters.clear()
     this.#current.retired = true
+    this.#generationListeners.clear()
     this.content.close()
     await Promise.allSettled([
       this.connectivity.close(),

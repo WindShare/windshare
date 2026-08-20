@@ -15,20 +15,23 @@ import {
   type BrowserHandoffCapabilityRuntime,
 } from '../output/portable/packaged-handoff'
 import type {
-  ArtifactAction,
   BrowserHandoffTargetOffer,
+  FSADirectoryContainerOffer,
+  OfferedArtifactChoice,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
 } from '../output/planning'
 import type { WorkspaceStageTraceListener } from '../output/workspace/stages'
 import type {
+  V2ArtifactPresentationAuthority,
   V2ReceiveCompositionPort,
-  V2StartedArtifactAuthority,
+  V2RouteCommitInput,
+  V2RouteCommitResult,
 } from './v2-receive-runtime'
 import { V2PresentationSourceError } from './v2-receive-runtime'
 import type { BrowserReceiveWindow } from './browser-receive/contracts'
-import { StartedFSAReceive } from './browser-receive/fsa'
-import { StartedPortableReceive } from './browser-receive/portable'
+import { FSAArtifactPresentationAuthority } from './browser-receive/fsa-route'
+import { startPortableArtifactAuthority } from './browser-receive/portable-route'
 import {
   bindRuntimeOutputFailures,
   listBrowserRetainedOperations,
@@ -40,7 +43,7 @@ import {
   unavailableRoute,
   workspaceEnvironmentOffer,
 } from './browser-receive/shared'
-import { StartedWorkspaceReceive } from './browser-receive/workspace'
+import { startWorkspaceArtifactAuthority } from './browser-receive/workspace-route'
 
 export type { BrowserReceiveWindow } from './browser-receive/contracts'
 export type { BrowserRetainedContinuationExecutor } from './browser-receive/retained'
@@ -49,11 +52,9 @@ export interface BrowserReceiveCompositionOptions extends BrowserRetainedComposi
   readonly onTrace?: WorkspaceStageTraceListener
 }
 
-interface BrowserProviders {
-  readonly fsa: boolean
-  readonly workspace: boolean
-  readonly portable: boolean
+interface InstalledBrowserRouteRegistry {
   readonly runtime: BrowserCapabilityRuntime
+  readonly fsaParent: FSADirectoryContainerOffer | null
   readonly handoffTarget: BrowserHandoffTargetOffer | null
   readonly workspaceOffer: WorkspaceEnvironmentOffer | null
   readonly portableOffer: PortableEnvironmentOffer | null
@@ -72,10 +73,10 @@ export function createBrowserReceiveComposition(
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
     }),
     environment: async (signal) => {
-      const providers = await inspectBrowserProviders(windowPort, signal)
-      return probeBrowserEnvironment(providers.runtime, {
-        ...(providers.workspaceOffer === null ? {} : { workspace: providers.workspaceOffer }),
-        ...(providers.portableOffer === null ? {} : { portable: providers.portableOffer }),
+      const registry = await inspectBrowserRouteRegistry(windowPort, signal)
+      return probeBrowserEnvironment(registry.runtime, {
+        ...(registry.workspaceOffer === null ? {} : { workspace: registry.workspaceOffer }),
+        ...(registry.portableOffer === null ? {} : { portable: registry.portableOffer }),
       }).offers
     },
     startArtifactAuthority: (action, failures) => startProductionAuthority(
@@ -89,22 +90,21 @@ export function createBrowserReceiveComposition(
   return Object.freeze(composition)
 }
 
-async function inspectBrowserProviders(
+async function inspectBrowserRouteRegistry(
   windowPort: BrowserReceiveWindow,
   signal: AbortSignal,
-): Promise<BrowserProviders> {
+): Promise<InstalledBrowserRouteRegistry> {
   signal.throwIfAborted()
   const hasRepository = typeof windowPort.indexedDB?.open === 'function'
   const hasLocks = typeof windowPort.navigator.locks?.request === 'function'
-  const hasWorkspaceStorage =
-    typeof windowPort.navigator.storage?.getDirectory === 'function' &&
-    typeof windowPort.navigator.storage?.estimate === 'function'
+  const hasWorkspaceDirectory =
+    typeof windowPort.navigator.storage?.getDirectory === 'function'
   const handoffFacts = probeBrowserHandoffCapabilities(
     windowPort as unknown as BrowserHandoffCapabilityRuntime,
   )
-  const workspace = hasRepository && hasLocks && hasWorkspaceStorage &&
+  const hasWorkspaceRoute = hasRepository && hasLocks && hasWorkspaceDirectory &&
     handoffFacts.supportsWorkspacePackage
-  const portable = hasRepository && handoffFacts.supportsPortableArtifact
+  const hasPortableRoute = hasRepository && handoffFacts.supportsPortableArtifact
   const runtime: BrowserCapabilityRuntime = Object.freeze({
     ...(hasRepository && hasLocks && typeof windowPort.showDirectoryPicker === 'function'
       ? { showDirectoryPicker: windowPort.showDirectoryPicker.bind(windowPort) }
@@ -112,27 +112,26 @@ async function inspectBrowserProviders(
     browserHandoff: windowPort as unknown as BrowserHandoffCapabilityRuntime,
   })
   const initial = probeBrowserEnvironment(runtime)
-  const workspaceOffer = workspace
+  const workspaceOffer = hasWorkspaceRoute
     ? workspaceEnvironmentOffer(await quotaAvailability(windowPort.navigator.storage, signal))
     : null
-  const portableOffer = portable ? portableEnvironmentOffer() : null
+  const portableOffer = hasPortableRoute ? portableEnvironmentOffer() : null
   return Object.freeze({
-    fsa: initial.fsaParent !== null,
-    workspace,
-    portable,
     runtime,
+    fsaParent: initial.fsaParent,
     handoffTarget: initial.browserHandoff,
     workspaceOffer,
     portableOffer,
   })
 }
 
-function inspectBrowserProvidersSynchronously(windowPort: BrowserReceiveWindow): BrowserProviders {
+function inspectBrowserRouteRegistrySynchronously(
+  windowPort: BrowserReceiveWindow,
+): InstalledBrowserRouteRegistry {
   const hasRepository = typeof windowPort.indexedDB?.open === 'function'
   const hasLocks = typeof windowPort.navigator.locks?.request === 'function'
-  const hasWorkspaceStorage =
-    typeof windowPort.navigator.storage?.getDirectory === 'function' &&
-    typeof windowPort.navigator.storage?.estimate === 'function'
+  const hasWorkspaceDirectory =
+    typeof windowPort.navigator.storage?.getDirectory === 'function'
   const handoffFacts = probeBrowserHandoffCapabilities(
     windowPort as unknown as BrowserHandoffCapabilityRuntime,
   )
@@ -143,18 +142,17 @@ function inspectBrowserProvidersSynchronously(windowPort: BrowserReceiveWindow):
     browserHandoff: windowPort as unknown as BrowserHandoffCapabilityRuntime,
   })
   const environment = probeBrowserEnvironment(runtime)
+  const hasWorkspaceRoute = hasRepository && hasLocks && hasWorkspaceDirectory &&
+    handoffFacts.supportsWorkspacePackage
+  const hasPortableRoute = hasRepository && handoffFacts.supportsPortableArtifact
   return Object.freeze({
-    fsa: environment.fsaParent !== null,
-    workspace: hasRepository && hasLocks && hasWorkspaceStorage &&
-      handoffFacts.supportsWorkspacePackage,
-    portable: hasRepository && handoffFacts.supportsPortableArtifact,
     runtime,
+    fsaParent: environment.fsaParent,
     handoffTarget: environment.browserHandoff,
-    workspaceOffer: hasRepository && hasLocks && hasWorkspaceStorage &&
-        handoffFacts.supportsWorkspacePackage
+    workspaceOffer: hasWorkspaceRoute
       ? workspaceEnvironmentOffer(null)
       : null,
-    portableOffer: hasRepository && handoffFacts.supportsPortableArtifact
+    portableOffer: hasPortableRoute
       ? portableEnvironmentOffer()
       : null,
   })
@@ -173,81 +171,91 @@ function diagnosticsFor(
   })
 }
 
-function bindStartedAuthorityOutputFailures(
-  authority: V2StartedArtifactAuthority,
+function bindArtifactAuthorityOutputFailures(
+  authority: V2ArtifactPresentationAuthority,
   binding: OutputFailureBinding,
-): V2StartedArtifactAuthority {
+): V2ArtifactPresentationAuthority {
   return Object.freeze({
-    finalize: async (
-      freezeIntent: Parameters<V2StartedArtifactAuthority['finalize']>[0],
-      signal: AbortSignal,
-    ) => bindRuntimeOutputFailures(
-      await authority.finalize(freezeIntent, signal),
-      binding,
-    ),
+    ready: authority.ready,
+    commit: async (input: V2RouteCommitInput) =>
+      bindCommittedOperation(await authority.commit(input), binding),
     release: (reason: unknown) => authority.release(reason),
   })
 }
 
-function pickerPresentationError(error: unknown): unknown {
-  return error instanceof DOMException && error.name === 'AbortError'
-    ? new V2PresentationSourceError('picker_refused', error)
-    : error
+function bindCommittedOperation(
+  result: V2RouteCommitResult,
+  binding: OutputFailureBinding,
+): V2RouteCommitResult {
+  if (result.kind !== 'bound-operation') return result
+  return Object.freeze({
+    kind: 'bound-operation',
+    operation: bindRuntimeOutputFailures(result.operation, binding),
+  })
 }
 
 function startProductionAuthority(
   windowPort: BrowserReceiveWindow,
-  action: ArtifactAction,
+  offered: OfferedArtifactChoice,
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: BrowserReceiveCompositionOptions['outputTrace'],
   failures?: OutputFailureSinks,
-): V2StartedArtifactAuthority {
-  const providers = inspectBrowserProvidersSynchronously(windowPort)
+): V2ArtifactPresentationAuthority {
+  const registry = inspectBrowserRouteRegistrySynchronously(windowPort)
   const binding = createOutputFailureBinding(failures)
-  switch (action.plan.kind) {
+  switch (offered.route.kind) {
     case 'direct-tree': {
-      if (!providers.fsa || action.plan.target.kind !== 'fsa-parent-directory') {
+      if (offered.route.target.kind !== 'fsa-parent-directory' ||
+          registry.fsaParent === null ||
+          offered.route.target.routeId !== registry.fsaParent.routeId) {
         throw unavailableRoute()
       }
       // startFSAParentPicker invokes showDirectoryPicker before returning this click-stack call.
       let picked: ReturnType<typeof startFSAParentPicker>
       try {
-        picked = startFSAParentPicker(providers.runtime, action.plan.target)
+        picked = startFSAParentPicker(registry.runtime, registry.fsaParent)
       } catch (error) {
         throw pickerPresentationError(error)
       }
-      return bindStartedAuthorityOutputFailures(
-        new StartedFSAReceive(
-          action,
+      const diagnostics = diagnosticsFor('file_system_access', outputTrace, binding.sinks)
+      return bindArtifactAuthorityOutputFailures(
+        new FSAArtifactPresentationAuthority({
+          offered,
           picked,
-          diagnosticsFor('file_system_access', outputTrace, binding.sinks),
-        ),
+          ...(diagnostics === undefined ? {} : { diagnostics }),
+        }),
         binding,
       )
     }
-    case 'workspace-then-publish':
-      if (!providers.workspace || providers.workspaceOffer === null ||
-          providers.handoffTarget?.supportsWorkspacePackage !== true) {
+    case 'workspace-then-publish': {
+      if (registry.workspaceOffer === null ||
+          registry.handoffTarget?.supportsWorkspacePackage !== true ||
+          offered.route.workspace.routeId !== registry.workspaceOffer.routeId ||
+          offered.route.publicationTarget.routeId !== registry.handoffTarget.routeId) {
         throw unavailableRoute()
       }
-      return bindStartedAuthorityOutputFailures(
-        new StartedWorkspaceReceive(
+      const diagnostics = diagnosticsFor('origin_private', outputTrace, binding.sinks)
+      return bindArtifactAuthorityOutputFailures(
+        startWorkspaceArtifactAuthority({
           windowPort,
-          action,
-          trace,
-          diagnosticsFor('origin_private', outputTrace, binding.sinks),
-        ),
+          offered,
+          ...(trace === undefined ? {} : { trace }),
+          ...(diagnostics === undefined ? {} : { diagnostics }),
+        }),
         binding,
       )
+    }
     case 'portable-handoff':
-      if (!providers.portable || providers.portableOffer === null ||
-          providers.handoffTarget?.supportsPortableArtifact !== true) {
+      if (registry.portableOffer === null ||
+          registry.handoffTarget?.supportsPortableArtifact !== true ||
+          offered.route.portable.routeId !== registry.portableOffer.routeId ||
+          offered.route.handoffTarget.routeId !== registry.handoffTarget.routeId) {
         throw unavailableRoute()
       }
-      return bindStartedAuthorityOutputFailures(
-        new StartedPortableReceive(
+      return bindArtifactAuthorityOutputFailures(
+        startPortableArtifactAuthority(
           windowPort,
-          action,
+          offered,
           diagnosticsFor('portable', outputTrace, binding.sinks),
         ),
         binding,
@@ -255,4 +263,10 @@ function startProductionAuthority(
     case 'direct-atomic':
       throw unavailableRoute()
   }
+}
+
+function pickerPresentationError(error: unknown): unknown {
+  return error instanceof DOMException && error.name === 'AbortError'
+    ? new V2PresentationSourceError('picker_refused', error)
+    : error
 }

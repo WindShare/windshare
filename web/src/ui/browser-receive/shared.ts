@@ -1,6 +1,5 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
-  ArtifactAction,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
 } from '../../output/planning'
@@ -21,14 +20,13 @@ import {
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
-  type DirectoryTreeArtifact,
   type ReceiveIntent,
 } from '../../transfer/intent'
 import type { ExactSingleFileEvidence } from '../../transfer/output-session'
 import type { OriginPrivateStorageManager } from './contracts'
 
-const WORKSPACE_ENVIRONMENT_OFFER_ID = 'browser-origin-private-workspace'
-const PORTABLE_ENVIRONMENT_OFFER_ID = 'browser-portable-memory'
+const WORKSPACE_ROUTE_ID = 'browser-origin-private-workspace'
+const PORTABLE_ROUTE_ID = 'browser-portable-memory'
 const AUTHORITY_REFERENCE_BYTES = 32
 type LifecycleEventPayload = LifecycleEvent extends infer Event
   ? Event extends LifecycleEvent
@@ -99,21 +97,36 @@ export async function digestText(value: string): Promise<string> {
 }
 
 export async function quotaAvailability(
-  storage: OriginPrivateStorageManager,
+  storage: Partial<Pick<OriginPrivateStorageManager, 'estimate'>>,
   signal: AbortSignal,
 ): Promise<bigint | null> {
-  const estimate = await storage.estimate()
   signal.throwIfAborted()
-  if (!Number.isSafeInteger(estimate.quota) || !Number.isSafeInteger(estimate.usage) ||
-      estimate.quota === undefined || estimate.usage === undefined) return null
-  return BigInt(Math.max(0, estimate.quota - estimate.usage))
+  const estimateQuota = storage.estimate
+  if (typeof estimateQuota !== 'function') return null
+
+  let estimate: unknown
+  try {
+    estimate = await estimateQuota.call(storage)
+  } catch {
+    signal.throwIfAborted()
+    // Quota is observational; provider failure must not revoke an installed workspace route.
+    return null
+  }
+  signal.throwIfAborted()
+  if (estimate === null || typeof estimate !== 'object') return null
+  const { quota, usage } = estimate as StorageEstimate
+  if (typeof quota !== 'number' || typeof usage !== 'number' ||
+      !Number.isSafeInteger(quota) || !Number.isSafeInteger(usage) || quota < 0 || usage < 0) {
+    return null
+  }
+  return BigInt(Math.max(0, quota - usage))
 }
 
 export function workspaceEnvironmentOffer(
   quotaAvailabilityEstimateBytes: bigint | null,
 ): WorkspaceEnvironmentOffer {
   return Object.freeze({
-    id: WORKSPACE_ENVIRONMENT_OFFER_ID,
+    routeId: WORKSPACE_ROUTE_ID,
     kind: 'origin-private-workspace',
     persistence: 'durable-owned-repository',
     jobHardLimitBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
@@ -125,7 +138,7 @@ export function workspaceEnvironmentOffer(
 
 export function portableEnvironmentOffer(): PortableEnvironmentOffer {
   return Object.freeze({
-    id: PORTABLE_ENVIRONMENT_OFFER_ID,
+    routeId: PORTABLE_ROUTE_ID,
     kind: 'portable-memory',
     persistence: 'none',
     maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,
@@ -133,37 +146,6 @@ export function portableEnvironmentOffer(): PortableEnvironmentOffer {
     maximumParts: DEFAULT_PORTABLE_MAXIMUM_PARTS,
     objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   })
-}
-
-export function requireDirectoryArtifact(action: ArtifactAction): DirectoryTreeArtifact {
-  if (action.artifact?.kind !== 'directory-tree') {
-    throw new TypeError('FSA DirectTree action lacks a directory artifact')
-  }
-  return action.artifact
-}
-
-export function requireWorkspaceAction(action: ArtifactAction): ArtifactAction & Readonly<{
-  artifact: NonNullable<ArtifactAction['artifact']>
-  plan: Extract<ArtifactAction['plan'], { kind: 'workspace-then-publish' }>
-}> {
-  if (action.plan.kind !== 'workspace-then-publish' || action.artifact === null ||
-      action.artifact.kind === 'directory-tree') throw unavailableRoute()
-  return action as ArtifactAction & Readonly<{
-    artifact: NonNullable<ArtifactAction['artifact']>
-    plan: Extract<ArtifactAction['plan'], { kind: 'workspace-then-publish' }>
-  }>
-}
-
-export function requirePortableAction(action: ArtifactAction): ArtifactAction & Readonly<{
-  artifact: NonNullable<ArtifactAction['artifact']>
-  plan: Extract<ArtifactAction['plan'], { kind: 'portable-handoff' }>
-}> {
-  if (action.plan.kind !== 'portable-handoff' || action.artifact === null ||
-      action.artifact.kind === 'directory-tree') throw unavailableRoute()
-  return action as ArtifactAction & Readonly<{
-    artifact: NonNullable<ArtifactAction['artifact']>
-    plan: Extract<ArtifactAction['plan'], { kind: 'portable-handoff' }>
-  }>
 }
 
 export function requireMatchingSingleFileAdmission(

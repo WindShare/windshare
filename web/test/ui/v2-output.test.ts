@@ -1,25 +1,26 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  materializationRouteIdentity,
   offerArtifacts,
+  reconcileArtifactChoice,
+  type ArtifactChoice,
   type ArtifactOffers,
+  type EnvironmentOffers,
+  type OfferedArtifactChoice,
+  type ResolvedArtifactAction,
 } from '../../src/output/planning'
-import { fileId } from '../../src/catalog/model'
-import { FaultScope, SourceFaultCode, sourceFault } from '../../src/transfer/fault'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
-import { normalizedV2FileTransferFault } from '../../src/transfer/job/failures'
-import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
+import type { SelectionProjectionState } from '../../src/transfer/projection'
+import type {
+  V2AuthorityActivationSnapshot,
+  V2LiveAuthorityActivationSnapshot,
+} from '../../src/ui/controller/activation-model'
 import {
-  nextProjectionEpoch,
-  type SelectionProjectionState,
-} from '../../src/transfer/projection'
-import {
+  activationLocksSelection,
   presentArtifactOffers,
 } from '../../src/ui/v2-artifact-presentation'
-import {
-  V2OutputPresentationController,
-  type ArtifactOfferPlanner,
-} from '../../src/ui/v2-output'
+import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import {
   COMPLETE_DISCOVERY,
   environment,
@@ -35,278 +36,386 @@ import {
 } from '../output/planning/fixture'
 
 describe('artifact product presentation', () => {
-  it('keeps confirming noninteractive and exposes retry without an artifact callback', async () => {
+  it('keeps confirmation noninteractive and labels offered choices without backend details', async () => {
     const selection = await selectionSpec()
     const unknown = projection(selection, { kind: 'unknown' }, 0n, 1n)
-    const offers = environment({ targets: [handoffTarget()], portable: portableOffer() })
-    const controller = new V2OutputPresentationController()
-    const authority = vi.fn()
-
-    await controller.updateProjection(state(unknown, { kind: 'discovering' }), offers)
-    expect(controller.getSnapshot().offerPresentation).toMatchObject({
+    const confirming = await offerArtifacts(
+      unknown,
+      { kind: 'discovering' },
+      environment({ targets: [handoffTarget()], portable: portableOffer() }),
+    )
+    expect(presentArtifactOffers(confirming)).toMatchObject({
       kind: 'status',
       interactive: false,
       title: 'Confirming selected content…',
     })
-    await expect(controller.activateArtifact('check-then-download', authority))
-      .resolves.toEqual({ kind: 'unavailable' })
 
-    await controller.updateProjection(state(unknown, {
-      kind: 'retryable-failure',
-      reason: 'catalog-temporarily-unavailable',
-    }), offers)
-    expect(controller.getSnapshot().offerPresentation).toMatchObject({
-      kind: 'retry',
-      label: 'Retry confirmation',
-    })
-    const events: string[] = []
-    await controller.retryConfirmation(() => { events.push('retry-started') })
-    expect(events).toEqual(['retry-started'])
-    expect(authority).not.toHaveBeenCalled()
-  })
-
-  it('labels every final artifact action and explains ZIP as one uncompressed complete package', async () => {
-    const selection = await selectionSpec()
     const treeOffers = await offerArtifacts(
       projection(selection, treeProof(), 1_024n),
       COMPLETE_DISCOVERY,
       environment({ targets: [fsaTarget(), handoffTarget()], workspace: workspaceOffer() }),
     )
-    const treePresentation = presentArtifactOffers(treeOffers)
-    if (treePresentation.kind !== 'actions') throw new Error('expected tree actions')
-
-    expect(treePresentation.primary.label).toBe('Save using original folder hierarchy')
+    const treePresentation = requireChoices(presentArtifactOffers(treeOffers))
+    expect(treePresentation.primary).toMatchObject({
+      operation: 'save-directory-tree',
+      label: 'Save using original folder hierarchy',
+      choice: { artifactKind: 'directory-tree' },
+    })
     expect(treePresentation.alternatives[0]).toMatchObject({
       label: 'Download photos.zip',
       packageExplanation: expect.stringMatching(/one ZIP package without compression/u),
     })
 
-    const singleProjection = projection(selection, singleFileProof(), 128n)
-    const download = presentArtifactOffers(await offerArtifacts(
-      singleProjection,
+    const single = projection(selection, singleFileProof(), 128n)
+    const download = requireChoices(presentArtifactOffers(await offerArtifacts(
+      single,
       COMPLETE_DISCOVERY,
       environment({ targets: [managedTarget()] }),
-    ))
-    const folder = presentArtifactOffers(await offerArtifacts(
-      singleProjection,
+    )))
+    const folder = requireChoices(presentArtifactOffers(await offerArtifacts(
+      single,
       COMPLETE_DISCOVERY,
       environment({ targets: [fsaTarget()] }),
-    ))
-    const checked = presentArtifactOffers(await offerArtifacts(
-      singleProjection,
+    )))
+    const checked = requireChoices(presentArtifactOffers(await offerArtifacts(
+      single,
       COMPLETE_DISCOVERY,
       environment({ targets: [handoffTarget()], portable: portableOffer() }),
-    ))
-
-    expect(requireActions(download).primary.label).toBe('Download report.txt')
-    expect(requireActions(folder).primary.label).toBe('Save to folder')
-    expect(requireActions(checked).primary.label).toBe('Check then download')
+    )))
+    expect(download.primary.label).toBe('Download report.txt')
+    expect(folder.primary.label).toBe('Save to folder')
+    expect(checked.primary.label).toBe('Check then download')
 
     const userCopy = collectText([treePresentation, download, folder, checked])
     expect(userCopy).not.toMatch(/backend|OPFS|stream|admission|partial.?ZIP/iu)
   })
 })
 
-describe('artifact action activation boundary', () => {
-  it('starts authority synchronously in the final action click stack', async () => {
-    const selection = await selectionSpec()
-    const controller = new V2OutputPresentationController<string>()
-    await controller.updateProjection(
-      state(projection(selection, singleFileProof(), 128n), COMPLETE_DISCOVERY),
-      environment({ targets: [managedTarget()] }),
-    )
-    let inClickStack = true
-    const observations: boolean[] = []
+describe('derived output presentation', () => {
+  it('applies only increasing owner revisions and never runs planning itself', async () => {
+    const first = await singleFileObservation(1n)
+    const second = await singleFileObservation(2n)
+    const outputs = new V2OutputPresentationController()
+    const listener = vi.fn()
+    outputs.subscribe(listener)
 
-    const activation = controller.activateArtifact('download-original', () => {
-      observations.push(inClickStack)
-      return 'authority'
-    })
-    inClickStack = false
+    expect(outputs.updateProjection(2, second.state, second.offers)).toBe(true)
+    expect(outputs.updateProjection(1, first.state, first.offers)).toBe(false)
 
-    expect(observations).toEqual([true])
-    await expect(activation).resolves.toMatchObject({
-      kind: 'acquired',
-      authority: 'authority',
-      action: { operation: 'download-original' },
+    expect(outputs.getSnapshot()).toMatchObject({
+      projectionRevision: 2,
+      projection: { projection: { epoch: 2n } },
+      offers: { projectionEpoch: 2n },
+      offerPresentation: { kind: 'choices' },
     })
+    expect(listener).toHaveBeenCalledOnce()
   })
 
-  it('restores the offered action when authority acquisition is cancelled', async () => {
+  it('keeps the coordinator-owned choice visible through replacement observations', async () => {
     const selection = await selectionSpec()
-    const controller = new V2OutputPresentationController()
-    await controller.updateProjection(
-      state(projection(selection, singleFileProof(), 128n), COMPLETE_DISCOVERY),
-      environment({ targets: [managedTarget()] }),
+    const firstProjection = projection(selection, treeProof({ kind: 'unsettled' }), 128n, 1n)
+    const firstEnvironment = environment({ targets: [fsaTarget()] })
+    const firstOffers = await offerArtifacts(
+      firstProjection,
+      { kind: 'discovering' },
+      firstEnvironment,
     )
-    const cancelled = deferred<never>()
-
-    const activation = controller.activateArtifact('download-original', () => cancelled.promise)
-    expect(controller.getSnapshot().chosenAction?.operation).toBe('download-original')
-    cancelled.reject(new DOMException('cancelled', 'AbortError'))
-
-    await expect(activation).rejects.toMatchObject({ name: 'AbortError' })
-    expect(controller.getSnapshot().chosenAction).toBeNull()
-    expect(controller.getSnapshot().offerPresentation?.kind).toBe('actions')
-  })
-
-  it('treats asynchronous projection as data only and never starts authority on completion', async () => {
-    const selection = await selectionSpec()
-    const projected = projection(selection, singleFileProof(), 128n)
-    const expected = await offerArtifacts(
-      projected,
-      COMPLETE_DISCOVERY,
-      environment({ targets: [managedTarget()] }),
+    const offered = requireOfferedChoice(firstOffers)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(
+      1,
+      state(firstProjection, { kind: 'discovering' }),
+      firstOffers,
     )
-    const pending = deferred<ArtifactOffers>()
-    const planner = vi.fn(() => pending.promise)
-    const authority = vi.fn()
-    const controller = new V2OutputPresentationController({ planner })
+    outputs.updateActivation(waitingResolution(offered, firstProjection, 1))
 
-    const update = controller.updateProjection(
-      state(projected, COMPLETE_DISCOVERY),
-      environment({ targets: [managedTarget()] }),
+    const replacementProjection = projection(selection, { kind: 'unknown' }, 0n, 2n)
+    const replacementOffers = await offerArtifacts(
+      replacementProjection,
+      { kind: 'discovering' },
+      firstEnvironment,
     )
-    pending.resolve(expected)
-    await update
-
-    expect(planner).toHaveBeenCalledOnce()
-    expect(authority).not.toHaveBeenCalled()
-    expect(controller.getSnapshot().offerPresentation?.kind).toBe('actions')
-  })
-
-  it('drops stale offer and authority completions across projection epochs', async () => {
-    const selection = await selectionSpec()
-    const firstProjection = projection(selection, singleFileProof(), 128n, 1n)
-    const secondProjection = projection(selection, treeProof(), 256n, 2n)
-    const firstEnvironment = environment({ targets: [managedTarget()] })
-    const secondEnvironment = environment({ targets: [fsaTarget()] })
-    const firstOffers = await offerArtifacts(firstProjection, COMPLETE_DISCOVERY, firstEnvironment)
-    const secondOffers = await offerArtifacts(secondProjection, COMPLETE_DISCOVERY, secondEnvironment)
-    const firstPlan = deferred<ArtifactOffers>()
-    const secondPlan = deferred<ArtifactOffers>()
-    const thirdPlan = deferred<ArtifactOffers>()
-    const planned = [firstPlan, secondPlan, thirdPlan]
-    const planner: ArtifactOfferPlanner = vi.fn(() => {
-      const next = planned.shift()
-      if (next === undefined) throw new Error('unexpected planning request')
-      return next.promise
-    })
-    const release = vi.fn()
-    const traces: unknown[] = []
-    const controller = new V2OutputPresentationController<string>({
-      planner,
-      releaseStaleAuthority: release,
-      trace: Object.freeze({
-        get current() {
-          return (event: unknown) => traces.push(event)
-        },
+    outputs.updateProjection(
+      2,
+      state(replacementProjection, { kind: 'discovering' }),
+      replacementOffers,
+    )
+    outputs.updateActivation(Object.freeze({
+      ...waitingResolution(offered, firstProjection, 1),
+      observation: Object.freeze({
+        revision: 2,
+        protocolSessionId: 'protocol-session-2',
+        projectionEpoch: replacementProjection.epoch,
       }),
-    })
-
-    const firstUpdate = controller.updateProjection(
-      state(firstProjection, COMPLETE_DISCOVERY),
-      firstEnvironment,
-    )
-    const secondUpdate = controller.updateProjection(
-      state(secondProjection, COMPLETE_DISCOVERY),
-      secondEnvironment,
-    )
-    secondPlan.resolve(secondOffers)
-    await secondUpdate
-    firstPlan.resolve(firstOffers)
-    await expect(firstUpdate).resolves.toMatchObject({ kind: 'stale', projectionEpoch: 1n })
-    expect(controller.getSnapshot().projection?.projection.epoch).toBe(2n)
-    expect(controller.getSnapshot().offerPresentation).toMatchObject({
-      kind: 'actions',
-      primary: { operation: 'save-directory-tree' },
-    })
-
-    const authority = deferred<string>()
-    const activation = controller.activateArtifact('save-directory-tree', () => authority.promise)
-    const thirdProjection = projection(selection, singleFileProof(), 64n, 3n)
-    const thirdUpdate = controller.updateProjection(
-      state(thirdProjection, COMPLETE_DISCOVERY),
-      firstEnvironment,
-    )
-    thirdPlan.resolve(await offerArtifacts(thirdProjection, COMPLETE_DISCOVERY, firstEnvironment))
-    await thirdUpdate
-    authority.resolve('stale-authority')
-    await expect(activation).resolves.toMatchObject({ kind: 'stale', projectionEpoch: 2n })
-    expect(release).toHaveBeenCalledWith('stale-authority')
-    expect(traces).toContainEqual(expect.objectContaining({
-      name: 'authority_transition',
-      transition: 'stale_event_dropped',
-      staleProjectionEpoch: 2n,
-      currentProjectionEpoch: 3n,
-      eventClass: 'authority_result',
     }))
-  })
 
-  it('rejects a bound intent from an older epoch before lifecycle state can be published', async () => {
-    const selection = await selectionSpec()
-    const projected = projection(selection, singleFileProof(), 128n, 4n)
-    const controller = new V2OutputPresentationController<string>()
-    await controller.updateProjection(
-      state(projected, COMPLETE_DISCOVERY),
-      environment({ targets: [managedTarget()] }),
-    )
-    await controller.activateArtifact('download-original', () => 'authority')
-    const action = controller.getSnapshot().chosenAction
-    if (action?.artifact === null || action?.artifact === undefined) throw new Error('missing artifact')
-    const intent = {
-      operationId: identity(80),
-      digest: identity(81, 32),
-      artifact: action.artifact,
-      plan: { kind: action.plan.kind },
-    } as ReceiveIntent
-
-    const staleEpoch = projection(selection, singleFileProof(), 1n, 3n).epoch
-    expect(controller.adoptReceiveIntent(staleEpoch, intent)).toBe(false)
-    expect(controller.getSnapshot().receiveIntent).toBeNull()
-  })
-
-  it('fences exact transfer-result presentation by projection epoch and receive identity', async () => {
-    const selection = await selectionSpec()
-    const projected = projection(selection, singleFileProof(), 128n, 4n)
-    const controller = new V2OutputPresentationController<string>()
-    await controller.updateProjection(
-      state(projected, COMPLETE_DISCOVERY),
-      environment({ targets: [managedTarget()] }),
-    )
-    await controller.activateArtifact('download-original', () => 'authority')
-    const action = controller.getSnapshot().chosenAction
-    if (action?.artifact === null || action?.artifact === undefined) throw new Error('missing artifact')
-    const intent = {
-      operationId: identity(82),
-      digest: identity(83, 32),
-      artifact: action.artifact,
-      plan: { kind: action.plan.kind },
-    } as ReceiveIntent
-    expect(controller.adoptReceiveIntent(projected.epoch, intent)).toBe(true)
-
-    const failures = new TransferFailureAccumulator()
-    failures.record({
-      kind: 'file',
-      fileId: fileId(identity(84)),
-      classification: normalizedV2FileTransferFault(
-        sourceFault(FaultScope.FileLocal, SourceFaultCode.Unavailable),
-      ).diagnostic.classification,
-    }, 1n, 'revision-conflict')
-    const result = {
-      worker: transferWorkerSettlement('CompletedWithErrors', failures.snapshot()),
-      intent,
-      transferJobId: 'job-1',
-    }
-    expect(controller.adoptTransferResult(nextProjectionEpoch(2n), result)).toBe(false)
-    expect(controller.getSnapshot().transferResultPresentation).toBeNull()
-    expect(controller.adoptTransferResult(projected.epoch, result)).toBe(true)
-    expect(controller.getSnapshot().transferResultPresentation).toMatchObject({
-      title: 'Resume revision conflict',
-      lines: [expect.stringMatching(/local resume data/u)],
+    expect(outputs.getSnapshot()).toMatchObject({
+      projectionRevision: 2,
+      offerPresentation: { kind: 'status' },
+      chosenChoice: { operation: 'save-directory-tree' },
+      activationPresentation: {
+        kind: 'waiting',
+        choice: {
+          operation: 'save-directory-tree',
+          label: 'Save using original folder hierarchy',
+        },
+      },
     })
+  })
+
+  it('derives waiting, retry, commit, and lock state from coordinator snapshots', async () => {
+    const observation = await singleFileObservation(4n)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(1, observation.state, observation.offers)
+
+    const waiting: V2AuthorityActivationSnapshot = Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 1),
+      kind: 'waiting-authority',
+      resolution: Object.freeze({ kind: 'resolved', action: observation.action }),
+    })
+    outputs.updateActivation(waiting)
+    expect(outputs.getSnapshot().activationPresentation).toMatchObject({
+      kind: 'waiting',
+      title: 'Waiting for the save location…',
+    })
+    expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(true)
+    expect(outputs.getSnapshot().resolvedArtifact?.digest).toBe(observation.action.artifact.digest)
+
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 2),
+      kind: 'retry-required',
+      authorityReady: true,
+      reason: 'catalog-temporarily-unavailable',
+    }))
+    expect(outputs.getSnapshot().activationPresentation).toMatchObject({
+      kind: 'retry',
+      label: 'Retry confirmation',
+      choice: { operation: 'download-original' },
+    })
+
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 3),
+      kind: 'committing',
+      action: observation.action,
+    }))
+    expect(outputs.getSnapshot().activationPresentation).toMatchObject({
+      kind: 'committing',
+      choice: { operation: 'download-original' },
+    })
+
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 4),
+      kind: 'cleanup-required',
+      operationId: identity(71),
+      ownerKind: 'owned-effects',
+      failedStage: 'detach',
+      settlementComplete: true,
+      detachComplete: false,
+    }))
+    expect(outputs.getSnapshot().activationPresentation).toMatchObject({
+      kind: 'retry',
+      title: 'Output cleanup needs attention.',
+      choice: { operation: 'download-original' },
+    })
+    expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(true)
+
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 5),
+      kind: 'terminal',
+      outcome: Object.freeze({ kind: 'picker-refused' }),
+    }))
+    expect(outputs.getSnapshot().activationPresentation).toBeNull()
+    expect(activationLocksSelection(outputs.getSnapshot().activation)).toBe(false)
+    expect(outputs.getSnapshot().offerPresentation?.interactive).toBe(true)
+
+    const boundOutputs = new V2OutputPresentationController()
+    boundOutputs.updateProjection(1, observation.state, observation.offers)
+    boundOutputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 5),
+      kind: 'committing',
+      action: observation.action,
+    }))
+    boundOutputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 6),
+      kind: 'terminal',
+      outcome: Object.freeze({ kind: 'bound-operation', operationId: identity(72) }),
+    }))
+    expect(activationLocksSelection(boundOutputs.getSnapshot().activation)).toBe(true)
+    expect(boundOutputs.getSnapshot().resolvedArtifact?.digest)
+      .toBe(observation.action.artifact.digest)
+  })
+
+  it('adopts a matching coordinator choice across epoch and session replacement', async () => {
+    const observation = await singleFileObservation(5n)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(1, observation.state, observation.offers)
+    outputs.updateActivation(waitingResolution(
+      observation.offered,
+      observation.state.projection,
+      1,
+    ))
+
+    const replacement = await singleFileObservation(6n)
+    outputs.updateProjection(2, replacement.state, replacement.offers)
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, replacement.action, 2),
+      kind: 'committing',
+      action: replacement.action,
+      observation: Object.freeze({
+        revision: 2,
+        protocolSessionId: 'replacement-session',
+        projectionEpoch: replacement.state.projection.epoch,
+      }),
+    }))
+
+    const intent = receiveIntent(observation.action)
+    expect(outputs.adoptReceiveIntent(observation.offered.choice, intent)).toBe(true)
+    expect(outputs.getSnapshot()).toMatchObject({
+      receiveIntent: { operationId: intent.operationId },
+      resolvedArtifact: { digest: observation.action.artifact.digest },
+      plan: { kind: observation.offered.choice.plan.kind },
+    })
+
+    const differentChoice: ArtifactChoice = Object.freeze({
+      ...observation.offered.choice,
+      operation: 'check-then-download',
+    })
+    expect(outputs.adoptReceiveIntent(differentChoice, intent)).toBe(false)
+
+    const mismatchedIntent = Object.freeze({
+      ...intent,
+      artifact: Object.freeze({ ...intent.artifact, kind: 'zip-archive' }),
+    }) as ReceiveIntent
+    expect(() => outputs.adoptReceiveIntent(observation.offered.choice, mismatchedIntent))
+      .toThrow(/does not match the coordinator-owned artifact choice/u)
+
+    const mismatchedActionIntent = Object.freeze({
+      ...intent,
+      artifact: Object.freeze({ ...intent.artifact, digest: identity(91, 32) }),
+    }) as ReceiveIntent
+    expect(() => outputs.adoptReceiveIntent(observation.offered.choice, mismatchedActionIntent))
+      .toThrow(/does not match the coordinator-owned resolved action/u)
+  })
+
+  it('publishes a receive intent only after its prepared owner is installed', async () => {
+    const observation = await singleFileObservation(7n)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(1, observation.state, observation.offers)
+    outputs.updateActivation(Object.freeze({
+      ...liveActivation(observation.offered, observation.action, 1),
+      kind: 'committing',
+      action: observation.action,
+    }))
+    const intent = receiveIntent(observation.action)
+    let owned = false
+    const observedOwnership: boolean[] = []
+    outputs.subscribe(() => {
+      if (outputs.getSnapshot().receiveIntent !== null) observedOwnership.push(owned)
+    })
+
+    expect(outputs.adoptReceiveIntentAtomically(
+      observation.offered.choice,
+      intent,
+      () => { owned = true },
+    )).toBe(true)
+    expect(observedOwnership).toEqual([true])
+  })
+
+  it('rejects mismatched projection facts without mutating visible state', async () => {
+    const observation = await singleFileObservation(8n)
+    const outputs = new V2OutputPresentationController()
+    const mismatched = Object.freeze({
+      ...observation.offers,
+      selectionDigest: identity(90, 32),
+    }) as ArtifactOffers
+
+    expect(() => outputs.updateProjection(1, observation.state, mismatched))
+      .toThrow(/do not belong to the supplied projection observation/u)
+    expect(outputs.getSnapshot()).toBe(outputs.getSnapshot())
+    expect(outputs.getSnapshot().projection).toBeNull()
   })
 })
+
+async function singleFileObservation(epoch: bigint): Promise<Readonly<{
+  state: SelectionProjectionState
+  offers: ArtifactOffers
+  environment: EnvironmentOffers
+  offered: OfferedArtifactChoice
+  action: ResolvedArtifactAction
+}>> {
+  const selection = await selectionSpec()
+  const projected = projection(selection, singleFileProof(), 128n, epoch)
+  const outputEnvironment = environment({ targets: [managedTarget()] })
+  const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, outputEnvironment)
+  const offered = requireOfferedChoice(offers)
+  const reconciled = await reconcileArtifactChoice({
+    choice: offered.choice,
+    preferredRoute: materializationRouteIdentity(offered.route),
+    expectedSelectionDigest: projected.selectionDigest,
+    projection: projected,
+    discovery: COMPLETE_DISCOVERY,
+    environment: outputEnvironment,
+    previousObservation: null,
+  })
+  if (reconciled.kind !== 'resolved') {
+    throw new Error(`expected resolved action, received ${reconciled.kind}`)
+  }
+  return Object.freeze({
+    state: state(projected, COMPLETE_DISCOVERY),
+    offers,
+    environment: outputEnvironment,
+    offered,
+    action: reconciled.action,
+  })
+}
+
+function waitingResolution(
+  offered: OfferedArtifactChoice,
+  projected: SelectionProjectionState['projection'],
+  revision: number,
+): V2AuthorityActivationSnapshot {
+  return Object.freeze({
+    activationId: 'activation-1',
+    authenticatedShareInstanceId: identity(70),
+    selectionDigest: projected.selectionDigest,
+    choice: offered.choice,
+    installedRoute: materializationRouteIdentity(offered.route),
+    observation: Object.freeze({
+      revision,
+      protocolSessionId: `protocol-session-${revision}`,
+      projectionEpoch: projected.epoch,
+    }),
+    kind: 'waiting-resolution',
+  })
+}
+
+function liveActivation(
+  offered: OfferedArtifactChoice,
+  action: ResolvedArtifactAction,
+  revision: number,
+): V2LiveAuthorityActivationSnapshot {
+  return Object.freeze({
+    activationId: 'activation-1',
+    authenticatedShareInstanceId: identity(70),
+    selectionDigest: action.selectionDigest,
+    choice: offered.choice,
+    installedRoute: materializationRouteIdentity(offered.route),
+    observation: Object.freeze({
+      revision,
+      protocolSessionId: `protocol-session-${revision}`,
+      projectionEpoch: action.projectionEpoch,
+    }),
+  })
+}
+
+function receiveIntent(action: ResolvedArtifactAction): ReceiveIntent {
+  return Object.freeze({
+    operationId: identity(80),
+    digest: identity(81, 32),
+    artifact: action.artifact,
+    plan: Object.freeze({ kind: action.choice.plan.kind }),
+  }) as ReceiveIntent
+}
 
 async function selectionSpec() {
   return createSelectionSpec({
@@ -323,9 +432,16 @@ function state(
   return Object.freeze({ projection: value, discovery })
 }
 
-function requireActions(value: ReturnType<typeof presentArtifactOffers>) {
-  if (value.kind !== 'actions') throw new Error(`expected actions, received ${value.kind}`)
+function requireChoices(value: ReturnType<typeof presentArtifactOffers>) {
+  if (value.kind !== 'choices') throw new Error(`expected choices, received ${value.kind}`)
   return value
+}
+
+function requireOfferedChoice(offers: ArtifactOffers): OfferedArtifactChoice {
+  if (offers.kind !== 'artifact-actions') {
+    throw new Error(`expected artifact choices, received ${offers.kind}`)
+  }
+  return offers.primary
 }
 
 function collectText(value: unknown, seen = new Set<object>()): string {
@@ -333,21 +449,4 @@ function collectText(value: unknown, seen = new Set<object>()): string {
   if (typeof value !== 'object' || value === null || seen.has(value)) return ''
   seen.add(value)
   return Object.values(value).map((nested) => collectText(nested, seen)).join(' ')
-}
-
-function deferred<T>(): {
-  readonly promise: Promise<T>
-  readonly resolve: (value: T) => void
-  readonly reject: (reason: unknown) => void
-} {
-  let resolve!: (value: T) => void
-  let reject!: (reason: unknown) => void
-  return {
-    promise: new Promise<T>((accept, decline) => {
-      resolve = accept
-      reject = decline
-    }),
-    resolve,
-    reject,
-  }
 }

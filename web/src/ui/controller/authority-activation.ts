@@ -1,375 +1,750 @@
-import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import {
-  bindMaterialization,
+  materializationRouteIdentity,
+  sameArtifactChoiceSemantics,
+  sameMaterializationRouteIdentity,
   type ArtifactOperation,
-  type EnvironmentOffers,
 } from '../../output/planning'
-import {
-  validateReceiveIntent,
-  type ReceiveIntent,
-  type SelectionSpec,
-} from '../../transfer/intent'
-import type {
-  ProjectionEpoch,
-  SelectionProjectionState,
-} from '../../transfer/projection'
+import type { SelectionSpec } from '../../transfer/intent'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type {
-  ArtifactActivationResult,
-  V2OutputPresentationController,
-} from '../v2-output'
-import type {
+  V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
-  V2ReceiveCompositionPort,
-  V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
 import { presentationSourceOutcome } from '../v2-receive-runtime'
-import type { ActiveReceiveCoordinator } from './active-receive'
+import type {
+  ActiveReceiveAdoption,
+  ActiveReceiveCoordinator,
+} from './active-receive'
+import type {
+  V2AuthorityActivationSnapshot,
+  V2AuthorityActivationTerminalOutcome,
+} from './activation-model'
+import { V2ActivationStateContractError } from './activation-model'
 import {
-  ArtifactChoiceInvalidatedError,
   StaleReceiveBoundaryError,
 } from './contracts'
-import type { V2ControllerObservability } from './controller-observability'
-import type { V2PresentationAttempt } from './presentation-attempt'
+import {
+  AuthorityCommitTransaction,
+  boundOperationCleanup,
+  ownedEffectsCleanup,
+  type ActivationCleanupOwner,
+  type AuthorityCommitOutcome,
+  type ReceiveIntentBinder,
+} from './authority-commit'
+import {
+  AuthorityPlanningPipeline,
+  planningSubject,
+  type AuthorityPlanningRequest,
+  type AuthorityPlanningResult,
+  type AuthorityPlanningSubject,
+  type V2AuthorityProjectionPublication,
+} from './authority-planning'
+import {
+  cleanupRequiredSnapshot,
+  closeActivationAttempt,
+  createActivationId,
+  createAuthorityActivationRecord,
+  observationMatchesActivation,
+  projectLiveActivation,
+  releaseActivationAuthority,
+  runActivationCleanup,
+  terminalAuthoritySnapshot,
+  traceAuthorityTransition,
+  type AuthorityActivationRecord,
+  type AuthorityActivationOptions,
+  type AuthorityAttemptExclusion,
+  type AuthorityTraceDetail,
+} from './authority-lifecycle'
+import type { V2ActiveProjection } from './projection-observation'
 
-type AcquiredArtifactActivation = Extract<
-  ArtifactActivationResult<V2StartedArtifactAuthority>,
-  { kind: 'acquired' }
->
-
-export interface V2ActiveProjection {
-  readonly revision: number
-  readonly joined: V2JoinedBrowserShare
-  readonly selection: SelectionSpec
-  readonly frozenSelection: V2FrozenSelectionPolicy
-  readonly epoch: ProjectionEpoch
-  controller: AbortController
-  protocolSessionId: string
-  state: SelectionProjectionState
-  environment: EnvironmentOffers
-}
-
-interface AuthorityActivationOptions {
-  readonly outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
-  readonly receive: V2ReceiveCompositionPort
-  readonly activeReceive: ActiveReceiveCoordinator
-  readonly observability: V2ControllerObservability
-  readonly currentProjection: () => V2ActiveProjection | undefined
-  readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
-  readonly choiceBlocked: () => boolean
-  readonly restartProjection: (joined: V2JoinedBrowserShare) => void
-  readonly publishActionError: (error: unknown) => void
-}
+export type { AuthorityActivationOptions } from './authority-lifecycle'
 
 /**
- * Owns the complete artifact-authority lifetime. Product state is published at
- * the decision boundary, while release/settlement/detach and scope close remain
- * ordered within this owner without becoming publication prerequisites.
+ * Owns activation from the trusted click through the commit linearization point.
+ * Projection/session objects are replaceable observations; only authenticated
+ * share, selection, semantic choice, and installed route bind local authority.
  */
 export class V2AuthorityActivationCoordinator {
-  readonly #outputs: AuthorityActivationOptions['outputs']
-  readonly #receive: AuthorityActivationOptions['receive']
-  readonly #activeReceive: AuthorityActivationOptions['activeReceive']
-  readonly #observability: AuthorityActivationOptions['observability']
-  readonly #currentProjection: AuthorityActivationOptions['currentProjection']
-  readonly #currentJoinedShare: AuthorityActivationOptions['currentJoinedShare']
-  readonly #choiceBlocked: AuthorityActivationOptions['choiceBlocked']
-  readonly #restartProjection: AuthorityActivationOptions['restartProjection']
-  readonly #publishActionError: AuthorityActivationOptions['publishActionError']
-  #acquisition: AbortController | undefined
+  readonly #options: AuthorityActivationOptions
+  readonly #planning: AuthorityPlanningPipeline
+  readonly #binder: ReceiveIntentBinder | undefined
+  readonly #createActivationId: () => string
+  readonly #listeners = new Set<() => void>()
+  #snapshot: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
+  #activation: AuthorityActivationRecord | undefined
+  #joinSuspended = false
+  #joinReplacement: V2JoinedBrowserShare | undefined
 
   constructor(options: AuthorityActivationOptions) {
-    this.#outputs = options.outputs
-    this.#receive = options.receive
-    this.#activeReceive = options.activeReceive
-    this.#observability = options.observability
-    this.#currentProjection = options.currentProjection
-    this.#currentJoinedShare = options.currentJoinedShare
-    this.#choiceBlocked = options.choiceBlocked
-    this.#restartProjection = options.restartProjection
-    this.#publishActionError = options.publishActionError
+    this.#options = options
+    this.#binder = options.binder
+    this.#createActivationId = options.createActivationId ?? createActivationId
+    this.#planning = new AuthorityPlanningPipeline({
+      currentProjection: options.currentProjection,
+      offersApplied: (request, offers) => this.#offersApplied(request, offers),
+      planningFailed: error => this.#planningFailed(error),
+      reconciliationApplied: (subject, request, outcome) =>
+        this.#applyReconciliation(subject, request, outcome),
+      reconciliationFailed: (subject, error) => this.#reconciliationFailed(subject, error),
+      reconciliationEvidenceAdvanced: subject => this.#planningEvidenceAdvanced(subject),
+      ...(options.planner === undefined ? {} : { planner: options.planner }),
+      ...(options.reconciler === undefined ? {} : { reconciler: options.reconciler }),
+    })
   }
+
+  readonly subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => this.#listeners.delete(listener)
+  }
+
+  readonly getSnapshot = (): V2AuthorityActivationSnapshot => this.#snapshot
 
   get pending(): boolean {
-    return this.#acquisition !== undefined
-  }
-
-  abort(reason: unknown): void {
-    this.#acquisition?.abort(reason)
-    this.#acquisition = undefined
-  }
-
-  choose(operation: ArtifactOperation): void {
-    const joined = this.#currentJoinedShare()
-    const projection = this.#currentProjection()
-    if (joined === undefined || projection === undefined || this.#choiceBlocked()) return
-    if (projection.protocolSessionId !== joined.protocolSessionId) {
-      this.#restartProjection(joined)
-      return
-    }
-
-    const attempt = this.#observability.open('authority_activation')
-    this.#observability.trace(() => Object.freeze({
-      name: 'authority_transition',
-      transition: 'activation_started',
-    }))
-    const activation = this.#outputs.activateArtifact(
-      operation,
-      (action) => this.#receive.startArtifactAuthority(action, attempt.outputFailures),
+    const activation = this.#activation
+    return activation !== undefined && (
+      activation.terminal === undefined ||
+      activation.commitAttempt !== undefined ||
+      activation.cleanup !== undefined
     )
-    activation.then((result) => {
-      if (result.kind === 'unavailable') {
-        this.#observability.exclude(attempt, 'projection_authority', 'authority_invalidated')
-        this.#observability.trace(() => Object.freeze({
-          name: 'authority_transition',
-          transition: 'authority_invalidated',
-        }))
-        attempt.close()
-        return
-      }
-      if (result.kind === 'stale') {
-        this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-        this.#observability.trace(() => Object.freeze({
-          name: 'authority_transition',
-          transition: 'stale_replacement',
-          artifactKind: result.action.artifactKind,
-          planKind: result.action.plan.kind,
-        }))
-        attempt.close()
-        return
-      }
-      return this.#finish(result, attempt)
-    }).catch((error: unknown) => {
-      if (error instanceof ArtifactChoiceInvalidatedError) {
-        this.#observability.exclude(attempt, 'projection_authority', 'authority_invalidated')
-      } else if (presentationSourceOutcome(error) === 'picker_refused') {
-        this.#observability.exclude(attempt, 'projection_authority', 'picker_refused')
+  }
+
+  observeProjection(active: V2ActiveProjection): void {
+    const activation = this.#activation
+    if (activation !== undefined && activation.terminal === undefined) {
+      this.#beginObservationReplacement(activation, new StaleReceiveBoundaryError(), false)
+    }
+    const request = this.#planning.observe(
+      active,
+      activation === undefined || activation.terminal !== undefined
+        ? undefined
+        : planningSubject(activation),
+    )
+    if (activation !== undefined && activation.terminal === undefined) {
+      if (active.selection.shareInstance !== activation.authenticatedShareInstanceId) {
+        this.#invalidate(activation, 'authenticated-share-instance-changed')
+      } else if (active.selection.digest !== activation.selectionDigest &&
+          active.epoch !== activation.projectionEpoch) {
+        this.#invalidate(activation, 'selection-changed')
       } else {
-        this.#observability.fail(
-          attempt,
-          'projection_authority',
-          error,
-          'authority_activation',
-        )
-        this.#observability.trace(() => Object.freeze({
-          name: 'authority_transition',
-          transition: 'activation_failed',
-        }))
-        this.#publishActionError(error)
+        activation.joined = active.joined
+        activation.observationRevision = request.revision
+        activation.protocolSessionId = active.protocolSessionId
+        activation.projectionEpoch = active.epoch
+        activation.observationReplacementPending = false
+        delete activation.resolution
+        delete activation.retryReason
+        if (this.#joinReplacement === active.joined) {
+          this.#joinReplacement = undefined
+          this.#joinSuspended = false
+        }
+        this.#publishLiveSnapshot(activation)
       }
-      attempt.close()
-    })
-  }
-
-  async #finish(
-    activation: AcquiredArtifactActivation,
-    attempt: V2PresentationAttempt,
-  ): Promise<void> {
-    const activeProjection = this.#currentProjection()
-    if (
-      activeProjection === undefined ||
-      activeProjection.epoch !== activation.projectionEpoch ||
-      !this.#outputs.acquiredAuthorityIsCurrent(activation)
-    ) {
-      this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-      await Promise.resolve(
-        activation.authority.release(new StaleReceiveBoundaryError()),
-      ).catch(() => {
-        this.#observability.recordConsequence(attempt, 'cleanup')
-      })
-      attempt.close()
-      return
     }
 
-    this.#observability.trace(() => Object.freeze({
-      name: 'authority_transition',
-      transition: 'authority_acquired',
-      artifactKind: activation.action.artifactKind,
-      planKind: activation.action.plan.kind,
-    }))
-    const controller = new AbortController()
-    this.abort(new StaleReceiveBoundaryError())
-    this.#acquisition = controller
-    let frozenIntent: ReceiveIntent | undefined
-    let finalizedRuntime: V2BoundReceiveOperation | undefined
+  }
+
+  /**
+   * Opens the no-projection interval before the projection owner clears its old
+   * observation. Pre-fence route work is cancelled, while fenced ownership stays
+   * with this coordinator until a replacement can adopt or settle it.
+   */
+  startObservationReplacement(reason: unknown): void {
+    const activation = this.#activation
+    if (activation === undefined || activation.terminal !== undefined) return
+    this.#beginObservationReplacement(activation, reason)
+  }
+
+  choose(operation: ArtifactOperation): boolean {
+    const current = this.#options.currentProjection()
+    const planned = this.#planning.latestOffers
+    if (current === undefined || planned === undefined || planned.request.active !== current ||
+        planned.request.state !== current.state || !this.#planning.isCurrent(planned.request) ||
+        this.#options.choiceBlocked() || this.pending ||
+        planned.offers.kind !== 'artifact-actions') return false
+    const offered = [planned.offers.primary, ...planned.offers.alternatives]
+      .find(candidate => candidate.choice.operation === operation)
+    if (offered === undefined) return false
+
+    const attempt = this.#options.observability.open('authority_activation')
+    let activationId: string
     try {
-      const runtime = await activation.authority.finalize(async (acquired) => {
-        controller.signal.throwIfAborted()
-        if (!this.#boundaryIsCurrent(activeProjection, activation)) {
-          throw new StaleReceiveBoundaryError()
-        }
-        const environment = await Promise.resolve(this.#receive.environment(controller.signal))
-        controller.signal.throwIfAborted()
-        if (!this.#boundaryIsCurrent(activeProjection, activation)) {
-          throw new StaleReceiveBoundaryError()
-        }
-        const bound = await bindMaterialization({
-          selection: activeProjection.selection,
-          chosenAction: activation.action,
-          currentProjection: activeProjection.state.projection,
-          currentDiscovery: activeProjection.state.discovery,
-          currentEnvironment: environment,
-          acquired,
-        })
-        if (bound.kind !== 'bound') throw new ArtifactChoiceInvalidatedError()
-        frozenIntent = bound.intent
-        return bound.intent
-      }, controller.signal)
-      finalizedRuntime = runtime
-      controller.signal.throwIfAborted()
-      if (!this.#boundaryIsCurrent(activeProjection, activation) || frozenIntent === undefined) {
-        this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-        await this.#settleAndDetachStaleRuntime(runtime, attempt)
-        return
-      }
-
-      const intent = await validateReceiveIntent(runtime.intent)
-      if (
-        intent.digest !== frozenIntent.digest ||
-        runtime.lifecycle.operationId !== intent.operationId ||
-        runtime.lifecycle.receiveIntentDigest !== intent.digest
-      ) {
-        throw new TypeError('bound receive runtime does not match the frozen intent authority')
-      }
-      if (!this.#outputs.adoptReceiveIntent(
-        activeProjection.epoch,
-        intent,
-        runtime.lifecycle,
-        Date.now(),
-        runtime.initialWorkspaceUsage,
-        runtime.activeControls,
-      )) {
-        this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-        await this.#settleAndDetachStaleRuntime(runtime, attempt)
-        return
-      }
-
-      this.#observability.exclude(attempt, 'projection_authority', 'success')
-      this.#observability.trace(() => Object.freeze({
-        name: 'authority_transition',
-        transition: 'intent_frozen',
-        artifactKind: intent.artifact.kind,
-        planKind: intent.plan.kind,
-      }))
-      activeProjection.controller.abort(new DOMException('Receive intent is frozen', 'AbortError'))
-      this.#activeReceive.adopt({
-        joined: activeProjection.joined,
-        selection: activeProjection.frozenSelection,
-        runtime,
-      })
+      activationId = this.#createActivationId()
     } catch (error) {
-      await this.#handleActivationFailure(
-        error,
-        activation,
-        attempt,
-        activeProjection,
-        controller,
-        finalizedRuntime,
-      )
-    } finally {
-      if (this.#acquisition === controller) this.#acquisition = undefined
-      if (!attempt.decisionSettled) {
-        this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-      }
+      this.#options.observability.fail(attempt, 'projection_authority', error, 'authority_activation')
       attempt.close()
+      this.#options.publishActionError(error)
+      return false
+    }
+    const record = createAuthorityActivationRecord({
+      activationId,
+      authenticatedShareInstanceId: current.selection.shareInstance,
+      selectionDigest: current.selection.digest,
+      choice: offered.choice,
+      installedRoute: materializationRouteIdentity(offered.route),
+      attempt,
+      joined: current.joined,
+      observationRevision: planned.request.revision,
+      protocolSessionId: current.protocolSessionId,
+      projectionEpoch: current.epoch,
+    })
+    this.#activation = record
+    this.#trace(record, { transition: 'activation_started' })
+
+    let authority: V2ArtifactPresentationAuthority
+    try {
+      // Installing the record first closes reentrant and repeated-click picker races.
+      authority = this.#options.receive.startArtifactAuthority(offered, attempt.outputFailures)
+      record.authority = authority
+    } catch (error) {
+      this.#handlePresentationSourceFailure(record, error)
+      return true
+    }
+
+    this.#publishLiveSnapshot(record)
+    this.#observeAuthority(record, authority)
+    this.#planning.reconcile(planned.request, planningSubject(record))
+    return true
+  }
+
+  retry(): boolean {
+    const activation = this.#activation
+    if (activation?.cleanup !== undefined) {
+      if (activation.cleanup.running) return false
+      this.#runCleanup(activation, activation.cleanup)
+      return true
+    }
+    const active = this.#options.currentProjection()
+    if (active === undefined) return false
+    if (activation !== undefined && activation.terminal === undefined) {
+      if (activation.retryReason === undefined) return false
+    } else if (this.#planning.latestOffers?.offers.kind !== 'retry-confirmation') {
+      return false
+    }
+    this.#options.retryProjection(active)
+    return true
+  }
+
+  suspendForJoin(): void {
+    this.#joinSuspended = true
+    this.#joinReplacement = undefined
+    const activation = this.#activation
+    if (activation !== undefined && activation.terminal === undefined) {
+      this.#beginObservationReplacement(activation, new StaleReceiveBoundaryError())
     }
   }
 
-  async #handleActivationFailure(
-    error: unknown,
-    activation: AcquiredArtifactActivation,
-    attempt: V2PresentationAttempt,
-    activeProjection: V2ActiveProjection,
-    controller: AbortController,
-    finalizedRuntime: V2BoundReceiveOperation | undefined,
-  ): Promise<void> {
-    const invalidated = error instanceof ArtifactChoiceInvalidatedError
-    const sourceOutcome = presentationSourceOutcome(error)
-    if (invalidated) {
-      this.#observability.exclude(attempt, 'projection_authority', 'authority_invalidated')
-    } else if (sourceOutcome === 'picker_refused') {
-      this.#observability.exclude(attempt, 'projection_authority', 'picker_refused')
-    } else if (
-      sourceOutcome === 'caller_cancelled' ||
-      sourceOutcome === 'stale_replacement' ||
-      controller.signal.aborted ||
-      error instanceof StaleReceiveBoundaryError
-    ) {
-      this.#observability.exclude(attempt, 'projection_authority', 'stale_replacement')
-    } else {
-      this.#observability.fail(
-        attempt,
-        'projection_authority',
-        error,
-        'authority_activation',
-      )
-      this.#observability.trace(() => Object.freeze({
-        name: 'authority_transition',
-        transition: 'activation_failed',
-        artifactKind: activation.action.artifactKind,
-        planKind: activation.action.plan.kind,
-      }))
-      this.#publishActionError(error)
+  completeJoin(joined: V2JoinedBrowserShare, selection: SelectionSpec): void {
+    const activation = this.#activation
+    if (activation === undefined || activation.terminal !== undefined) {
+      this.#joinSuspended = false
+      return
     }
+    if (selection.shareInstance !== activation.authenticatedShareInstanceId) {
+      this.#joinSuspended = false
+      this.#invalidate(activation, 'authenticated-share-instance-changed')
+      return
+    }
+    if (selection.digest !== activation.selectionDigest) {
+      this.#joinSuspended = false
+      this.#invalidate(activation, 'selection-changed')
+      return
+    }
+    activation.joined = joined
+    this.#joinReplacement = joined
+  }
 
-    if (finalizedRuntime === undefined) {
-      await Promise.resolve(activation.authority.release(error)).catch(() => {
-        this.#observability.recordConsequence(attempt, 'cleanup')
-      })
-    } else {
-      await Promise.resolve(finalizedRuntime.settleTransferAdmissionFailure(error))
-        .catch(() => {
-          this.#observability.recordConsequence(attempt, 'settlement')
+  cancelJoin(): void {
+    this.#joinSuspended = false
+    this.#joinReplacement = undefined
+    const activation = this.#activation
+    if (activation !== undefined) this.#maybeCommit(activation)
+  }
+
+  invalidate(reason: unknown, invalidation: 'caller-cancelled' | 'selection-changed'): void {
+    this.#planning.invalidated()
+    const activation = this.#activation
+    if (activation !== undefined && activation.terminal === undefined) {
+      if (invalidation === 'caller-cancelled') activation.controller.abort(reason)
+      this.#invalidate(activation, invalidation)
+    }
+  }
+
+  close(reason: unknown): void {
+    this.invalidate(reason, 'caller-cancelled')
+    this.#listeners.clear()
+  }
+
+  #observeAuthority(
+    record: AuthorityActivationRecord,
+    authority: V2ArtifactPresentationAuthority,
+  ): void {
+    Promise.resolve(authority.ready).then(() => {
+      if (this.#activation !== record || record.terminal !== undefined) return
+      record.authorityReady = true
+      this.#publishLiveSnapshot(record)
+      this.#maybeCommit(record)
+    }, (error: unknown) => {
+      if (this.#activation !== record || record.terminal !== undefined) return
+      this.#handlePresentationSourceFailure(record, error)
+    }).catch(() => undefined)
+  }
+
+  #offersApplied(
+    request: AuthorityPlanningRequest,
+    offers: V2AuthorityProjectionPublication['offers'],
+  ): void {
+    this.#options.publishProjection(Object.freeze({
+      observationRevision: request.revision,
+      state: request.state,
+      offers,
+    }))
+    const activation = this.#activation
+    if (activation !== undefined) {
+      this.#maybeCommit(activation)
+      this.#maybeAdoptBoundResult(activation)
+    }
+  }
+
+  #applyReconciliation(
+    subject: AuthorityPlanningSubject,
+    request: AuthorityPlanningRequest,
+    outcome: AuthorityPlanningResult,
+  ): void {
+    const record = subject.key as AuthorityActivationRecord
+    if (this.#activation !== record || record.terminal !== undefined) return
+    record.observationRevision = request.revision
+    record.protocolSessionId = request.active.protocolSessionId
+    record.projectionEpoch = request.active.epoch
+    delete record.resolution
+    delete record.retryReason
+    switch (outcome.kind) {
+      case 'waiting':
+        this.#publishLiveSnapshot(record)
+        this.#maybeAdoptBoundResult(record)
+        return
+      case 'retry-required':
+        record.retryReason = outcome.reason
+        this.#trace(record, {
+          transition: 'retry_required',
+          retryableDiscoveryReason: outcome.reason,
         })
-      await Promise.resolve(finalizedRuntime.detach()).catch(() => {
-        this.#observability.recordConsequence(attempt, 'detach')
-      })
-    }
-    if (this.#currentProjection() === activeProjection && !controller.signal.aborted) {
-      await this.#refreshCurrentOffers(activeProjection).catch(() => {
-        this.#observability.recordConsequence(attempt, 'projection')
-      })
+        this.#publishLiveSnapshot(record)
+        this.#maybeAdoptBoundResult(record)
+        return
+      case 'invalidated':
+        this.#invalidate(record, outcome.reason)
+        return
+      case 'resolved':
+        record.resolution = outcome.action
+        this.#trace(record, { transition: 'artifact_resolved' })
+        this.#publishLiveSnapshot(record)
+        this.#maybeCommit(record)
+        this.#maybeAdoptBoundResult(record)
     }
   }
 
-  async #refreshCurrentOffers(active: V2ActiveProjection): Promise<void> {
-    if (this.#currentProjection() !== active) return
-    if (active.protocolSessionId !== active.joined.protocolSessionId) {
-      this.#restartProjection(active.joined)
+  #planningFailed(error: unknown): void {
+    const activation = this.#activation
+    if (activation !== undefined && activation.terminal === undefined) {
+      this.#fail(activation, error)
       return
     }
-    const environment = await Promise.resolve(this.#receive.environment(active.controller.signal))
-    if (this.#currentProjection() !== active || active.controller.signal.aborted) return
-    if (active.protocolSessionId !== active.joined.protocolSessionId) {
-      this.#restartProjection(active.joined)
+    this.#options.publishActionError(error)
+  }
+
+  #reconciliationFailed(subject: AuthorityPlanningSubject, error: unknown): void {
+    const record = subject.key as AuthorityActivationRecord
+    if (this.#activation !== record || record.terminal !== undefined) return
+    this.#fail(record, error)
+  }
+
+  #planningEvidenceAdvanced(subject: AuthorityPlanningSubject): void {
+    const record = subject.key as AuthorityActivationRecord
+    if (this.#activation !== record) return
+    this.#maybeCommit(record)
+    this.#maybeAdoptBoundResult(record)
+  }
+
+  #maybeCommit(record: AuthorityActivationRecord): void {
+    if (this.#activation !== record || record.terminal !== undefined ||
+        record.commitAttempt !== undefined || record.cleanup !== undefined ||
+        record.observationReplacementPending ||
+        this.#joinSuspended || !record.authorityReady || record.resolution === undefined ||
+        record.authority === undefined || !this.#planning.readyForCommit(
+          planningSubject(record),
+          record.projectionEpoch,
+          record.observationRevision,
+        )) return
+    const attempt = new AuthorityCommitTransaction({
+      action: record.resolution,
+      observationRevision: record.observationRevision,
+      authority: record.authority,
+      assertFinalFence: transaction => this.#assertFinalFence(record, transaction),
+      ...(this.#binder === undefined ? {} : { binder: this.#binder }),
+    })
+    record.commitAttempt = attempt
+    this.#publishLiveSnapshot(record)
+    this.#trace(record, { transition: 'commit_started' })
+    attempt.run().then(
+      result => this.#commitCompleted(record, attempt, result),
+      error => this.#commitRejected(record, attempt, error),
+    ).catch(() => undefined)
+  }
+
+  #assertFinalFence(
+    record: AuthorityActivationRecord,
+    attempt: AuthorityCommitTransaction,
+  ): SelectionSpec {
+    const active = this.#options.currentProjection()
+    const joined = this.#options.currentJoinedShare()
+    if (this.#activation !== record || record.terminal !== undefined ||
+        record.commitAttempt !== attempt || record.observationReplacementPending ||
+        this.#joinSuspended || !observationMatchesActivation(record, active, joined) ||
+        !this.#planning.readyForCommit(
+          planningSubject(record),
+          record.projectionEpoch,
+          record.observationRevision,
+        ) ||
+        record.resolution !== attempt.action ||
+        !sameArtifactChoiceSemantics(record.choice, attempt.action.choice) ||
+        !sameMaterializationRouteIdentity(
+          record.installedRoute,
+          materializationRouteIdentity(attempt.action.route),
+        )) {
+      throw new StaleReceiveBoundaryError()
+    }
+    return active.selection
+  }
+
+  #commitCompleted(
+    record: AuthorityActivationRecord,
+    attempt: AuthorityCommitTransaction,
+    result: AuthorityCommitOutcome,
+  ): void {
+    if (record.commitAttempt !== attempt) return
+    if (result.kind === 'retryable-precut') {
+      this.#trace(record, {
+        transition: 'commit_pre_cut_retry',
+        ...(result.receiverOperationId === undefined
+          ? {}
+          : { receiverOperationId: result.receiverOperationId }),
+      })
+      delete record.commitAttempt
+      if (record.terminal !== undefined) {
+        releaseActivationAuthority(
+          record,
+          this.#options.observability,
+          new StaleReceiveBoundaryError(),
+        ).finally(() => {
+          this.#trace(record, { transition: 'cleanup_completed' })
+          closeActivationAttempt(record, this.#options.observability)
+        }).catch(() => undefined)
+        return
+      }
+      if (!record.observationReplacementPending &&
+          record.observationRevision <= attempt.observationRevision) {
+        this.#fail(record, new V2ActivationStateContractError(
+          'route requested a pre-cut retry without a replacement observation',
+        ))
+        return
+      }
+      this.#publishLiveSnapshot(record)
+      this.#maybeCommit(record)
       return
     }
-    active.environment = environment
-    await this.#outputs.updateProjection(active.state, environment)
+    if (result.kind === 'owned-effects') {
+      this.#trace(record, {
+        transition: 'commit_owned_effects',
+        receiverOperationId: result.authority.intent.operationId,
+      })
+      delete record.commitAttempt
+      record.released = true
+      if (this.#activation === record && record.terminal === undefined) {
+        this.#reportFailure(record, result.cause)
+      }
+      this.#beginCleanup(record, ownedEffectsCleanup(
+        result,
+        record.terminal ?? Object.freeze({
+          kind: 'owned-effects-settled',
+          operationId: result.authority.intent.operationId,
+        }),
+      ))
+      return
+    }
+    const runtime = result.operation
+    this.#trace(record, {
+      transition: 'commit_bound_operation',
+      receiverOperationId: runtime.intent.operationId,
+    })
+    this.#maybeAdoptBoundResult(record)
   }
 
-  #boundaryIsCurrent(
-    projection: V2ActiveProjection,
-    activation: AcquiredArtifactActivation,
-  ): boolean {
-    return this.#currentProjection() === projection &&
-      projection.epoch === activation.projectionEpoch &&
-      this.#currentJoinedShare() === projection.joined &&
-      projection.protocolSessionId === projection.joined.protocolSessionId &&
-      this.#outputs.acquiredAuthorityIsCurrent(activation)
+  #maybeAdoptBoundResult(record: AuthorityActivationRecord): void {
+    const attempt = record.commitAttempt
+    const result = attempt?.outcome
+    if (attempt === undefined || result?.kind !== 'bound-operation' ||
+        record.cleanup !== undefined) return
+    const runtime = result.operation
+    const intent = result.intent
+    if (record.terminal !== undefined) {
+      this.#beginBoundRuntimeCleanup(record, attempt, runtime, new StaleReceiveBoundaryError())
+      return
+    }
+    const active = this.#currentObservation(record)
+    const resolution = record.resolution
+    if (active === undefined || resolution === undefined) return
+    if (!sameArtifactChoiceSemantics(record.choice, resolution.choice) ||
+        !sameMaterializationRouteIdentity(
+          record.installedRoute,
+          materializationRouteIdentity(resolution.route),
+        ) || resolution.artifact.digest !== attempt.action.artifact.digest ||
+        intent.artifact.digest !== resolution.artifact.digest) {
+      const error = new StaleReceiveBoundaryError()
+      this.#invalidate(record, 'artifact-shape-incompatible')
+      this.#beginBoundRuntimeCleanup(record, attempt, runtime, error)
+      return
+    }
+    const adoption: ActiveReceiveAdoption = {
+      joined: record.joined,
+      selection: active.frozenSelection,
+      runtime,
+    }
+    let prepared: ReturnType<ActiveReceiveCoordinator['prepareAdoption']>
+    try {
+      prepared = this.#options.activeReceive.prepareAdoption(adoption)
+      if (!this.#options.adoptReceiveIntent(record.choice, intent, runtime, prepared.commit)) {
+        throw new StaleReceiveBoundaryError()
+      }
+    } catch (error) {
+      if (record.terminal === undefined) this.#reportFailure(record, error)
+      this.#beginBoundRuntimeCleanup(record, attempt, runtime, error)
+      return
+    }
+    prepared.start()
+    delete record.commitAttempt
+    record.released = true
+    this.#terminalWithoutRelease(record, Object.freeze({
+      kind: 'bound-operation',
+      operationId: intent.operationId,
+    }), 'success')
+    active.controller.abort(new DOMException('Receive intent is frozen', 'AbortError'))
   }
 
-  async #settleAndDetachStaleRuntime(
+  #commitRejected(
+    record: AuthorityActivationRecord,
+    attempt: AuthorityCommitTransaction,
+    error: unknown,
+  ): void {
+    if (record.commitAttempt !== attempt) return
+    delete record.commitAttempt
+    if (this.#activation !== record || record.terminal !== undefined) {
+      releaseActivationAuthority(record, this.#options.observability, error).finally(() => {
+        this.#trace(record, { transition: 'cleanup_completed' })
+        closeActivationAttempt(record, this.#options.observability)
+      }).catch(() => undefined)
+      return
+    }
+    this.#fail(record, error)
+  }
+
+  #beginBoundRuntimeCleanup(
+    record: AuthorityActivationRecord,
+    attempt: AuthorityCommitTransaction,
     runtime: V2BoundReceiveOperation,
-    attempt: V2PresentationAttempt,
-  ): Promise<void> {
-    await Promise.resolve(
-      runtime.settleTransferAdmissionFailure(new StaleReceiveBoundaryError()),
-    ).catch(() => {
-      this.#observability.recordConsequence(attempt, 'settlement')
-    })
-    await Promise.resolve(runtime.detach()).catch(() => {
-      this.#observability.recordConsequence(attempt, 'detach')
-    })
+    reason: unknown,
+  ): void {
+    if (record.commitAttempt === attempt) delete record.commitAttempt
+    record.released = true
+    this.#beginCleanup(
+      record,
+      boundOperationCleanup(
+        runtime,
+        reason,
+        record.terminal ?? Object.freeze({ kind: 'failed' }),
+      ),
+    )
   }
+
+  #beginCleanup(
+    record: AuthorityActivationRecord,
+    cleanup: ActivationCleanupOwner,
+  ): void {
+    if (record.cleanup !== undefined) return
+    record.cleanup = cleanup
+    this.#runCleanup(record, cleanup)
+  }
+
+  #runCleanup(record: AuthorityActivationRecord, cleanup: ActivationCleanupOwner): void {
+    if (record.cleanup !== cleanup) return
+    runActivationCleanup(
+      record,
+      cleanup,
+      this.#options.observability,
+      this.#options.refreshRetainedInventory,
+      {
+        completed: () => {
+          if (record.cleanup !== cleanup) return
+          delete record.cleanup
+          this.#trace(record, {
+            transition: 'cleanup_completed',
+            receiverOperationId: cleanup.operationId,
+          })
+          if (record.terminal === undefined) {
+            this.#markTerminal(record, cleanup.outcome, undefined)
+          } else {
+            this.#publishSnapshot(terminalAuthoritySnapshot(record))
+          }
+          closeActivationAttempt(record, this.#options.observability)
+        },
+        pending: failedStage => {
+          if (record.cleanup === cleanup) {
+            this.#publishSnapshot(cleanupRequiredSnapshot(record, failedStage))
+          }
+        },
+      },
+    )
+  }
+
+  #invalidate(
+    record: AuthorityActivationRecord,
+    reason: Extract<V2AuthorityActivationTerminalOutcome, { kind: 'invalidated' }>['reason'],
+  ): void {
+    this.#trace(record, { transition: 'semantic_invalidated', invalidationReason: reason })
+    this.#terminal(
+      record,
+      Object.freeze({ kind: 'invalidated', reason }),
+      reason === 'caller-cancelled' ? 'cancelled' : 'authority_invalidated',
+      new StaleReceiveBoundaryError(),
+    )
+  }
+
+  #fail(record: AuthorityActivationRecord, error: unknown, release = true): void {
+    if (this.#activation !== record || record.terminal !== undefined) return
+    this.#reportFailure(record, error)
+    const outcome = Object.freeze({ kind: 'failed' as const })
+    if (release) {
+      this.#terminal(record, outcome, undefined, error)
+    } else {
+      this.#terminalWithoutRelease(record, outcome, undefined)
+    }
+  }
+
+  #reportFailure(record: AuthorityActivationRecord, error: unknown): void {
+    if (record.failureReported) return
+    record.failureReported = true
+    this.#options.observability.fail(
+      record.attempt,
+      'projection_authority',
+      error,
+      'authority_activation',
+    )
+    this.#options.publishActionError(error)
+  }
+
+  #handlePresentationSourceFailure(record: AuthorityActivationRecord, error: unknown): void {
+    if (presentationSourceOutcome(error) === 'picker_refused') {
+      this.#terminal(record, Object.freeze({ kind: 'picker-refused' }), 'picker_refused', error)
+      return
+    }
+    this.#fail(record, error)
+  }
+
+  #terminal(
+    record: AuthorityActivationRecord,
+    outcome: V2AuthorityActivationTerminalOutcome,
+    exclusion: AuthorityAttemptExclusion | undefined,
+    releaseReason: unknown,
+  ): void {
+    if (!this.#markTerminal(record, outcome, exclusion)) return
+    record.controller.abort(releaseReason)
+    const attempt = record.commitAttempt
+    if (attempt !== undefined) {
+      attempt.abortPreFence(releaseReason)
+      return
+    }
+    if (record.cleanup !== undefined) return
+    releaseActivationAuthority(record, this.#options.observability, releaseReason).finally(() => {
+      this.#trace(record, { transition: 'cleanup_completed' })
+      closeActivationAttempt(record, this.#options.observability)
+    }).catch(() => undefined)
+  }
+
+  #terminalWithoutRelease(
+    record: AuthorityActivationRecord,
+    outcome: V2AuthorityActivationTerminalOutcome,
+    exclusion: AuthorityAttemptExclusion | undefined,
+  ): void {
+    if (!this.#markTerminal(record, outcome, exclusion)) return
+    this.#trace(record, {
+      transition: 'cleanup_completed',
+      ...('operationId' in outcome ? { receiverOperationId: outcome.operationId } : {}),
+    })
+    closeActivationAttempt(record, this.#options.observability)
+  }
+
+  #markTerminal(
+    record: AuthorityActivationRecord,
+    outcome: V2AuthorityActivationTerminalOutcome,
+    exclusion: AuthorityAttemptExclusion | undefined,
+  ): boolean {
+    if (this.#activation !== record || record.terminal !== undefined) return false
+    record.terminal = outcome
+    if (exclusion !== undefined) {
+      this.#options.observability.exclude(record.attempt, 'projection_authority', exclusion)
+    }
+    this.#publishSnapshot(terminalAuthoritySnapshot(record))
+    return true
+  }
+
+  #publishLiveSnapshot(record: AuthorityActivationRecord): void {
+    if (this.#activation !== record || record.terminal !== undefined) return
+    if (record.cleanup !== undefined) return
+    const projection = projectLiveActivation(record)
+    if (projection.waitingFor !== undefined) {
+      this.#trace(record, {
+        transition: 'prerequisite_waiting',
+        waitingFor: projection.waitingFor,
+      })
+    }
+    this.#publishSnapshot(projection.snapshot)
+  }
+
+  #publishSnapshot(snapshot: V2AuthorityActivationSnapshot): void {
+    this.#snapshot = snapshot
+    for (const listener of this.#listeners) listener()
+  }
+
+  #beginObservationReplacement(
+    record: AuthorityActivationRecord,
+    reason: unknown,
+    advanceRevision = true,
+  ): void {
+    if (record.observationReplacementPending) return
+    record.observationReplacementPending = true
+    this.#planning.beginReplacement(advanceRevision)
+    const attempt = record.commitAttempt
+    attempt?.abortPreFence(reason)
+    this.#publishLiveSnapshot(record)
+  }
+
+  #currentObservation(record: AuthorityActivationRecord): V2ActiveProjection | undefined {
+    const active = this.#options.currentProjection()
+    const joined = this.#options.currentJoinedShare()
+    if (record.observationReplacementPending || this.#joinSuspended ||
+        !observationMatchesActivation(record, active, joined) ||
+        !this.#planning.readyForCommit(
+          planningSubject(record),
+          record.projectionEpoch,
+          record.observationRevision,
+        )) return undefined
+    return active
+  }
+
+  #trace(
+    record: AuthorityActivationRecord,
+    detail: AuthorityTraceDetail,
+  ): void {
+    traceAuthorityTransition(this.#options.observability, record, detail)
+  }
+
 }

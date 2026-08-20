@@ -10,18 +10,33 @@ import {
 } from '../../transfer/intent'
 import type { GuaranteeProfile } from '../../transfer/intent'
 import type {
+  ArtifactChoice,
+  BrowserHandoffTargetOffer,
+  BrowserHandoffTargetSemantics,
   DestinationGuaranteeFacts,
   EnvironmentOffers,
   EnvironmentOffersInput,
   EnvironmentTargetKind,
   EnvironmentTargetOffer,
   EnvironmentTargetOfferInput,
+  FSADirectoryContainerOffer,
+  FSADirectoryTargetSemantics,
+  ManagedAtomicTargetOffer,
+  ManagedAtomicTargetSemantics,
+  MaterializationRouteIdentity,
+  MaterializationTargetSemantics,
+  NativeDirectoryContainerOffer,
+  NativeDirectoryTargetSemantics,
+  OfferedMaterializationPlanSemantics,
+  OfferedMaterializationRoute,
   PortableEnvironmentOffer,
+  PortablePlanSemantics,
   TargetAuthorityPersistence,
   WorkspaceEnvironmentOffer,
+  WorkspacePlanSemantics,
 } from './contracts'
 
-const MAX_ENVIRONMENT_OFFER_ID_UTF8_BYTES = 128
+const MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES = 128
 const TEXT_ENCODER = new TextEncoder()
 const VALID_ENVIRONMENT_OFFERS = new WeakSet<object>()
 
@@ -56,8 +71,7 @@ export function createEnvironmentOffers(input: EnvironmentOffersInput): Environm
   const seen = new Set<string>()
   const targets = input.targets.map((target) => {
     const snapshot = snapshotTarget(target)
-    if (seen.has(snapshot.id)) throw new TypeError('environment target identifiers must be unique')
-    seen.add(snapshot.id)
+    requireUniqueRouteID(seen, snapshot.routeId)
     return snapshot
   }).sort(compareTarget)
   const workspace = input.workspace === undefined || input.workspace === null
@@ -66,6 +80,8 @@ export function createEnvironmentOffers(input: EnvironmentOffersInput): Environm
   const portable = input.portable === undefined || input.portable === null
     ? null
     : snapshotPortable(input.portable)
+  if (workspace !== null) requireUniqueRouteID(seen, workspace.routeId)
+  if (portable !== null) requireUniqueRouteID(seen, portable.routeId)
   const result = Object.freeze({
     targets: Object.freeze(targets),
     workspace,
@@ -93,8 +109,8 @@ export function sameGuaranteeFacts(
 }
 
 export function sameTargetSemantics(
-  left: EnvironmentTargetOffer,
-  right: EnvironmentTargetOffer,
+  left: EnvironmentTargetOffer | MaterializationTargetSemantics,
+  right: EnvironmentTargetOffer | MaterializationTargetSemantics,
 ): boolean {
   if (left.kind !== right.kind ||
       left.persistence !== right.persistence ||
@@ -107,6 +123,165 @@ export function sameTargetSemantics(
     left.supportsPortableArtifact === right.supportsPortableArtifact
 }
 
+export function materializationPlanSemantics(
+  route: OfferedMaterializationRoute,
+): OfferedMaterializationPlanSemantics {
+  switch (route.kind) {
+    case 'direct-tree':
+      return Object.freeze({ kind: route.kind, target: targetSemantics(route.target) })
+    case 'direct-atomic':
+      return Object.freeze({ kind: route.kind, target: targetSemantics(route.target) })
+    case 'workspace-then-publish':
+      return Object.freeze({
+        kind: route.kind,
+        workspace: workspaceSemantics(route.workspace),
+        publicationTarget: targetSemantics(route.publicationTarget),
+      })
+    case 'portable-handoff':
+      return Object.freeze({
+        kind: route.kind,
+        portable: portableSemantics(route.portable),
+        handoffTarget: targetSemantics(route.handoffTarget),
+      })
+  }
+}
+
+export function sameMaterializationPlanSemantics(
+  left: OfferedMaterializationPlanSemantics,
+  right: OfferedMaterializationPlanSemantics,
+): boolean {
+  if (left.kind !== right.kind) return false
+  switch (left.kind) {
+    case 'direct-tree':
+      return right.kind === 'direct-tree' && sameTargetSemantics(left.target, right.target)
+    case 'direct-atomic':
+      return right.kind === 'direct-atomic' && sameTargetSemantics(left.target, right.target)
+    case 'workspace-then-publish':
+      return right.kind === 'workspace-then-publish' &&
+        sameWorkspaceSemantics(left.workspace, right.workspace) &&
+        sameTargetSemantics(left.publicationTarget, right.publicationTarget)
+    case 'portable-handoff':
+      return right.kind === 'portable-handoff' &&
+        samePortableSemantics(left.portable, right.portable) &&
+        sameTargetSemantics(left.handoffTarget, right.handoffTarget)
+  }
+}
+
+export function sameArtifactChoiceSemantics(left: ArtifactChoice, right: ArtifactChoice): boolean {
+  return left.operation === right.operation &&
+    left.artifactKind === right.artifactKind &&
+    left.recovery === right.recovery &&
+    left.preparation.manifest === right.preparation.manifest &&
+    left.preparation.hardAdmission === right.preparation.hardAdmission &&
+    sameMaterializationPlanSemantics(left.plan, right.plan)
+}
+
+export function materializationRouteIdentity(
+  route: OfferedMaterializationRoute,
+): MaterializationRouteIdentity {
+  switch (route.kind) {
+    case 'direct-tree':
+    case 'direct-atomic':
+      return Object.freeze({ kind: 'direct', targetRouteId: route.target.routeId })
+    case 'workspace-then-publish':
+      return Object.freeze({
+        kind: 'workspace',
+        workspaceRouteId: route.workspace.routeId,
+        publicationTargetRouteId: route.publicationTarget.routeId,
+      })
+    case 'portable-handoff':
+      return Object.freeze({
+        kind: 'portable',
+        portableRouteId: route.portable.routeId,
+        handoffTargetRouteId: route.handoffTarget.routeId,
+      })
+  }
+}
+
+export function sameMaterializationRouteIdentity(
+  left: MaterializationRouteIdentity,
+  right: MaterializationRouteIdentity,
+): boolean {
+  if (left.kind !== right.kind) return false
+  switch (left.kind) {
+    case 'direct':
+      return right.kind === 'direct' && left.targetRouteId === right.targetRouteId
+    case 'workspace':
+      return right.kind === 'workspace' &&
+        left.workspaceRouteId === right.workspaceRouteId &&
+        left.publicationTargetRouteId === right.publicationTargetRouteId
+    case 'portable':
+      return right.kind === 'portable' &&
+        left.portableRouteId === right.portableRouteId &&
+        left.handoffTargetRouteId === right.handoffTargetRouteId
+  }
+}
+
+function targetSemantics(
+  target: NativeDirectoryContainerOffer | FSADirectoryContainerOffer,
+): NativeDirectoryTargetSemantics | FSADirectoryTargetSemantics
+function targetSemantics(target: ManagedAtomicTargetOffer): ManagedAtomicTargetSemantics
+function targetSemantics(target: BrowserHandoffTargetOffer): BrowserHandoffTargetSemantics
+function targetSemantics(
+  target: ManagedAtomicTargetOffer | BrowserHandoffTargetOffer,
+): ManagedAtomicTargetSemantics | BrowserHandoffTargetSemantics
+function targetSemantics(
+  target: NativeDirectoryContainerOffer | FSADirectoryContainerOffer |
+    ManagedAtomicTargetOffer | BrowserHandoffTargetOffer,
+): MaterializationTargetSemantics {
+  const base = {
+    kind: target.kind,
+    guarantees: target.guarantees,
+    persistence: target.persistence,
+    hardMaximumOutputBytes: target.hardMaximumOutputBytes,
+    legalProfile: target.legalProfile,
+  }
+  return Object.freeze(target.kind === 'browser-handoff'
+    ? {
+        ...base,
+        objectUrlLeaseMilliseconds: target.objectUrlLeaseMilliseconds,
+        supportsWorkspacePackage: target.supportsWorkspacePackage,
+        supportsPortableArtifact: target.supportsPortableArtifact,
+      }
+    : base) as MaterializationTargetSemantics
+}
+
+function workspaceSemantics(workspace: WorkspaceEnvironmentOffer): WorkspacePlanSemantics {
+  return Object.freeze({
+    kind: workspace.kind,
+    persistence: workspace.persistence,
+    jobHardLimitBytes: workspace.jobHardLimitBytes,
+    processHardLimitBytes: workspace.processHardLimitBytes,
+    minimumQuotaReserveBytes: workspace.minimumQuotaReserveBytes,
+  })
+}
+
+function portableSemantics(portable: PortableEnvironmentOffer): PortablePlanSemantics {
+  return Object.freeze({
+    kind: portable.kind,
+    persistence: portable.persistence,
+    maximumArtifactBytes: portable.maximumArtifactBytes,
+    assemblyPartBytes: portable.assemblyPartBytes,
+    maximumParts: portable.maximumParts,
+    objectUrlLeaseMilliseconds: portable.objectUrlLeaseMilliseconds,
+  })
+}
+
+function sameWorkspaceSemantics(left: WorkspacePlanSemantics, right: WorkspacePlanSemantics): boolean {
+  return left.kind === right.kind && left.persistence === right.persistence &&
+    left.jobHardLimitBytes === right.jobHardLimitBytes &&
+    left.processHardLimitBytes === right.processHardLimitBytes &&
+    left.minimumQuotaReserveBytes === right.minimumQuotaReserveBytes
+}
+
+function samePortableSemantics(left: PortablePlanSemantics, right: PortablePlanSemantics): boolean {
+  return left.kind === right.kind && left.persistence === right.persistence &&
+    left.maximumArtifactBytes === right.maximumArtifactBytes &&
+    left.assemblyPartBytes === right.assemblyPartBytes &&
+    left.maximumParts === right.maximumParts &&
+    left.objectUrlLeaseMilliseconds === right.objectUrlLeaseMilliseconds
+}
+
 export function outputLowerBoundFits(
   hardMaximumOutputBytes: bigint | null,
   byteCountLowerBound: bigint,
@@ -115,7 +290,7 @@ export function outputLowerBoundFits(
 }
 
 function snapshotTarget(input: EnvironmentTargetOfferInput): EnvironmentTargetOffer {
-  const id = requireOfferID(input.id)
+  const routeId = requireRouteID(input.routeId)
   requireHardMaximum(input.hardMaximumOutputBytes)
   requireTargetPersistence(input.kind, input.persistence)
   const guarantees = snapshotGuaranteeFacts(input.guarantees)
@@ -124,7 +299,7 @@ function snapshotTarget(input: EnvironmentTargetOfferInput): EnvironmentTargetOf
     if (!sameGuaranteeFacts(guarantees, PRECREATED_BROWSER_FILE_FACTS)) {
       throw new TypeError('precreated browser file facts do not match showSaveFilePicker behavior')
     }
-    return Object.freeze({ ...input, id, guarantees, legalProfile: null })
+    return Object.freeze({ ...input, routeId, guarantees, legalProfile: null })
   }
   if (legalProfile === null) {
     throw new TypeError('environment target reports a contradictory guarantee combination')
@@ -136,11 +311,11 @@ function snapshotTarget(input: EnvironmentTargetOfferInput): EnvironmentTargetOf
       throw new TypeError('browser handoff lease does not match the frozen finite lease')
     }
   }
-  return Object.freeze({ ...input, id, guarantees, legalProfile }) as EnvironmentTargetOffer
+  return Object.freeze({ ...input, routeId, guarantees, legalProfile }) as EnvironmentTargetOffer
 }
 
 function snapshotWorkspace(input: WorkspaceEnvironmentOffer): WorkspaceEnvironmentOffer {
-  const id = requireOfferID(input.id)
+  const routeId = requireRouteID(input.routeId)
   if (input.kind !== 'origin-private-workspace' ||
       input.persistence !== 'durable-owned-repository') {
     throw new TypeError('workspace persistence facts are invalid')
@@ -154,11 +329,11 @@ function snapshotWorkspace(input: WorkspaceEnvironmentOffer): WorkspaceEnvironme
   if (input.quotaAvailabilityEstimateBytes !== null && input.quotaAvailabilityEstimateBytes < 0n) {
     throw new RangeError('workspace quota availability estimate must be non-negative')
   }
-  return Object.freeze({ ...input, id })
+  return Object.freeze({ ...input, routeId })
 }
 
 function snapshotPortable(input: PortableEnvironmentOffer): PortableEnvironmentOffer {
-  const id = requireOfferID(input.id)
+  const routeId = requireRouteID(input.routeId)
   if (input.kind !== 'portable-memory' || input.persistence !== 'none' ||
       input.maximumArtifactBytes !== DEFAULT_PORTABLE_ARTIFACT_LIMIT ||
       input.assemblyPartBytes !== DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES ||
@@ -166,7 +341,7 @@ function snapshotPortable(input: PortableEnvironmentOffer): PortableEnvironmentO
       input.objectUrlLeaseMilliseconds !== BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS) {
     throw new TypeError('portable environment facts do not match the bounded portable contract')
   }
-  return Object.freeze({ ...input, id })
+  return Object.freeze({ ...input, routeId })
 }
 
 function isManagedAtomicFacts(facts: DestinationGuaranteeFacts): boolean {
@@ -204,12 +379,17 @@ function requireTargetPersistence(
   if (persistence !== expected[kind]) throw new TypeError('environment target persistence fact is invalid')
 }
 
-function requireOfferID(value: string): string {
+function requireRouteID(value: string): string {
   if (typeof value !== 'string' || value.length === 0 ||
-      TEXT_ENCODER.encode(value).byteLength > MAX_ENVIRONMENT_OFFER_ID_UTF8_BYTES) {
-    throw new TypeError('environment offer identifier is invalid')
+      TEXT_ENCODER.encode(value).byteLength > MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES) {
+    throw new TypeError('environment route identifier is invalid')
   }
   return value
+}
+
+function requireUniqueRouteID(seen: Set<string>, routeId: string): void {
+  if (seen.has(routeId)) throw new TypeError('environment route identifiers must be unique')
+  seen.add(routeId)
 }
 
 function requireHardMaximum(value: bigint | null): void {
@@ -226,8 +406,8 @@ function requireBoolean(value: boolean, label: string): void {
 
 function compareTarget(left: EnvironmentTargetOffer, right: EnvironmentTargetOffer): number {
   const kindOrder = targetKindOrder(left.kind) - targetKindOrder(right.kind)
-  if (kindOrder !== 0 || left.id === right.id) return kindOrder
-  return left.id < right.id ? -1 : 1
+  if (kindOrder !== 0 || left.routeId === right.routeId) return kindOrder
+  return left.routeId < right.routeId ? -1 : 1
 }
 
 function targetKindOrder(value: EnvironmentTargetKind): number {

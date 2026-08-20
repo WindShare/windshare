@@ -68,7 +68,7 @@ describe('browser output capability adapters', () => {
       browserHandoff: unsupportedFile.runtime,
     }, {
       portable: {
-        id: 'bounded-portable-memory',
+        routeId: 'bounded-portable-memory',
         kind: 'portable-memory',
         persistence: 'none',
         maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,
@@ -106,6 +106,7 @@ describe('browser output capability adapters', () => {
     expect(events).toEqual(['picker:readwrite', 'returned'])
     await expect(promise).resolves.toMatchObject({
       kind: 'fsa-parent-directory-authority',
+      targetRouteId: 'browser-fsa-parent-directory',
       parent,
       offer: { legalProfile: 'fsa-tree' },
     })
@@ -116,11 +117,26 @@ describe('browser output capability adapters', () => {
     ])
   })
 
+  it('keeps installed route identities stable while capability observations refresh', () => {
+    const first = probeBrowserEnvironment({
+      showDirectoryPicker: async () => fakeDirectory(),
+      browserHandoff: fakeBrowserHandoffRuntime(true).runtime,
+    })
+    const second = probeBrowserEnvironment({
+      showDirectoryPicker: async () => fakeDirectory(),
+      browserHandoff: fakeBrowserHandoffRuntime(false).runtime,
+    })
+
+    expect(second.fsaParent?.routeId).toBe(first.fsaParent?.routeId)
+    expect(second.browserHandoff?.routeId).toBe(first.browserHandoff?.routeId)
+    expect(second.browserHandoff?.supportsWorkspacePackage).toBe(false)
+  })
+
   it('reauthorizes a persisted parent and rejects permission denial', async () => {
     const granted = fakeDirectory({ query: 'prompt', request: 'granted' })
     await expect(authorizeFSAParent({
       kind: 'fsa-parent-directory-authority',
-      environmentTargetOfferId: fsaParentOffer().id,
+      targetRouteId: fsaParentOffer().routeId,
       offer: fsaParentOffer(),
       parent: granted,
     })).resolves.toBeUndefined()
@@ -129,7 +145,7 @@ describe('browser output capability adapters', () => {
     const denied = fakeDirectory({ query: 'denied', request: 'denied' })
     await expect(authorizeFSAParent({
       kind: 'fsa-parent-directory-authority',
-      environmentTargetOfferId: fsaParentOffer().id,
+      targetRouteId: fsaParentOffer().routeId,
       offer: fsaParentOffer(),
       parent: denied,
     })).rejects.toMatchObject({ name: 'NotAllowedError' })

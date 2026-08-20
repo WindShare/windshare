@@ -10,7 +10,7 @@ import {
 } from '../../src/transfer/intent'
 import {
   fsaOwnedDirectoryHandleId,
-  persistFSAOperationBinding,
+  prepareFSAOperationBindingTransition,
   persistFSAOwnedDirectory,
   verifyFSAOperationBinding,
 } from '../../src/output/browser/indexeddb-root-binding'
@@ -50,12 +50,19 @@ describe('FSA namespace and persisted parent authority', () => {
     await reopened.release()
   })
 
-  it('persists operation, reservation, and parent handle in one verified transition', async () => {
+  it('prepares binding records without persistence so the owner cut can commit them together', async () => {
     const repository = new MemoryOperationRepository()
     const parent = directoryHandle('downloads', 'parent-a')
     const intent = await singleFileIntent()
 
-    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
+    const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+    expect(repository.transitions).toEqual([])
+    await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
+    const persisted = await verifyFSAOperationBinding({
+      repository,
+      intent,
+      expectedParent: parent,
+    })
     expect(persisted.reservation.guarantees).toMatchObject({
       profile: 'fsa-tree',
       replacement: 'coordinated-no-replace',
@@ -76,7 +83,7 @@ describe('FSA namespace and persisted parent authority', () => {
     const repository = new MemoryOperationRepository()
     const parent = directoryHandle('downloads', 'parent-a')
     const intent = await singleFileIntent()
-    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
+    const persisted = await commitFSAOperationBinding(repository, intent, parent)
 
     await expect(verifyFSAOperationBinding({
       repository,
@@ -102,7 +109,7 @@ describe('FSA namespace and persisted parent authority', () => {
     const repository = new MemoryOperationRepository()
     const parent = directoryHandle('downloads', 'parent-a')
     const intent = await singleFileIntent()
-    const persisted = await persistFSAOperationBinding({ repository, intent, parent })
+    const persisted = await commitFSAOperationBinding(repository, intent, parent)
     const handleId = fsaOwnedDirectoryHandleId(intent.operationId, 'opaque-locator')
     const first = directoryHandle('task-root', 'root-a')
 
@@ -147,6 +154,16 @@ async function singleFileIntent(): Promise<ReceiveIntent> {
     artifact,
     plan: await createDirectTreePlan(artifact, reservation),
   })
+}
+
+async function commitFSAOperationBinding(
+  repository: MemoryOperationRepository,
+  intent: ReceiveIntent,
+  parent: FileSystemDirectoryHandle,
+) {
+  const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+  await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
+  return verifyFSAOperationBinding({ repository, intent, expectedParent: parent })
 }
 
 class MemoryLockManager implements BrowserLockManagerRuntime {

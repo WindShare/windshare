@@ -1,30 +1,19 @@
 import {
-  acquireBrowserReceiveOperationLease,
   type BrowserReceiveOperationLease,
 } from '../../output/browser/session-lease'
-import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
-import type { AcquiredFSAParentAuthority } from '../../output/capability/contract'
 import {
   createFileSystemAccessSettlementAuthority,
   type FileSystemAccessOperationSettlementAuthority,
 } from '../../output/file-system-access/settlement'
 import {
-  bindNewFileSystemAccessOutput,
   reopenFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
 } from '../../output/file-system-access/session'
 import {
-  emitOutputTrace,
-  outputTraceEvent,
-  recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
-import type {
-  AcquiredMaterializationAuthority,
-  ArtifactAction,
-} from '../../output/planning'
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
@@ -33,7 +22,6 @@ import {
   createV2PlanExecutionAuthority,
 } from '../../transfer/settlement/v2-plan-authority'
 import {
-  createOperationID,
   createOutputSessionID,
   createTransferJobID,
   type ReceiveIntent,
@@ -50,150 +38,14 @@ import type {
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-  V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
-import { V2PresentationSourceError } from '../v2-receive-runtime'
 import {
   operationDigest,
   readLifecycle,
-  requireDirectoryArtifact,
   transitionLifecycle,
   unavailableRoute,
 } from './shared'
-
-export class StartedFSAReceive implements V2StartedArtifactAuthority {
-  readonly #action: ArtifactAction
-  readonly #picked: Promise<AcquiredFSAParentAuthority>
-  readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #released = false
-  #claimed = false
-
-  constructor(
-    action: ArtifactAction,
-    picked: Promise<AcquiredFSAParentAuthority>,
-    diagnostics?: OutputDiagnosticsPorts,
-  ) {
-    this.#action = action
-    this.#picked = picked
-    this.#diagnostics = diagnostics
-  }
-
-  async finalize(
-    freezeIntent: (acquired: AcquiredMaterializationAuthority) => Promise<ReceiveIntent>,
-    signal: AbortSignal,
-  ): Promise<V2BoundReceiveOperation> {
-    this.#claim()
-    const authority = await this.#picked.catch((error: unknown) => {
-      observeFSAReservationFailure(this.#diagnostics, error)
-      throw error instanceof DOMException && error.name === 'AbortError'
-        ? new V2PresentationSourceError('picker_refused', error)
-        : error
-    })
-    signal.throwIfAborted()
-    this.#requireLive()
-    const artifact = requireDirectoryArtifact(this.#action)
-    const repository = await IndexedDbReceiveOperationRepository.open().catch((error: unknown) => {
-      observeFSAReservationFailure(this.#diagnostics, error)
-      throw error
-    })
-    let session: FileSystemAccessOutputSession | undefined
-    let lease: BrowserReceiveOperationLease | undefined
-    try {
-      session = await bindNewFileSystemAccessOutput({
-        authority,
-        artifact,
-        operationRepository: repository,
-        operationId: createOperationID(),
-        ...(this.#diagnostics === undefined
-          ? {}
-          : { diagnostics: this.#diagnostics }),
-        freezeIntent: async (reservation) => {
-          signal.throwIfAborted()
-          this.#requireLive()
-          return freezeIntent(Object.freeze({
-            kind: 'destination-reservation',
-            environmentTargetOfferId: authority.environmentTargetOfferId,
-            reservation,
-          }))
-        },
-      })
-      signal.throwIfAborted()
-      const lifecycle = initialReceiveLifecycleState({
-        operationId: session.intent.operationId,
-        receiveIntentDigest: session.intent.digest,
-      })
-      lease = await acquireBrowserReceiveOperationLease(
-        repository,
-        session.intent.operationId,
-        { acquireTransition: { lifecycle } },
-      )
-      const runtime = await FSAReceiveOperation.create({
-        intent: session.intent,
-        lifecycle,
-        session,
-        repository,
-        lease,
-        ...(this.#diagnostics === undefined
-          ? {}
-          : { diagnostics: this.#diagnostics }),
-      })
-      signal.throwIfAborted()
-      return runtime
-    } catch (error) {
-      const cleanupFailures: unknown[] = []
-      let outerCleanupFailureObserved = false
-      try {
-        await session?.close()
-      } catch (cleanupFailure) {
-        // The FSA session owns native cleanup classification.
-        cleanupFailures.push(cleanupFailure)
-      }
-      try {
-        await lease?.release()
-      } catch (cleanupFailure) {
-        cleanupFailures.push(cleanupFailure)
-        outerCleanupFailureObserved = true
-        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
-      }
-      try {
-        repository.close()
-      } catch (cleanupFailure) {
-        cleanupFailures.push(cleanupFailure)
-        outerCleanupFailureObserved = true
-        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
-      }
-      if (outerCleanupFailureObserved) {
-        emitOutputTrace(this.#diagnostics?.trace, () =>
-          outputTraceEvent('cleanup', {
-            backend: 'file_system_access',
-            transition: 'failed',
-          }))
-      }
-      if (cleanupFailures.length !== 0) {
-        throw new AggregateError(
-          [error, ...cleanupFailures],
-          'FSA receive activation failed and could not release all authorities',
-          { cause: error },
-        )
-      }
-      throw error
-    }
-  }
-
-  release(): void {
-    this.#released = true
-  }
-
-  #claim(): void {
-    if (this.#claimed) throw new DOMException('Artifact authority was already finalized', 'InvalidStateError')
-    this.#claimed = true
-    this.#requireLive()
-  }
-
-  #requireLive(): void {
-    if (this.#released) throw new DOMException('Artifact authority was released', 'AbortError')
-  }
-}
+import { FSAResourceOwner } from './fsa-resource-owner'
 
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly intent: ReceiveIntent
@@ -202,9 +54,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly initialWorkspaceUsage = null
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
-  readonly #closeAuthority: (() => Promise<void>) | undefined
+  readonly #resources: FSAResourceOwner
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #session: FileSystemAccessOutputSession
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
   #transferJobId: string
@@ -217,7 +68,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     lease: BrowserReceiveOperationLease
     session: FileSystemAccessOutputSession
     settlement: FileSystemAccessOperationSettlementAuthority
-    closeAuthority?: () => Promise<void>
+    resources: FSAResourceOwner
     plans: V2PlanExecutionAuthority
     transferJobId: string
     diagnostics?: OutputDiagnosticsPorts
@@ -226,32 +77,33 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.lifecycle = input.lifecycle
     this.#repository = input.repository
     this.#lease = input.lease
-    this.#closeAuthority = input.closeAuthority
+    this.#resources = input.resources
     this.#diagnostics = input.diagnostics
-    this.#session = input.session
     this.#settlement = input.settlement
     this.#plans = input.plans
     this.#transferJobId = input.transferJobId
   }
 
-  static async create(input: {
+  static async createCommitted(input: {
     intent: ReceiveIntent
     lifecycle: ReceiveLifecycleState
-    repository: IndexedDbReceiveOperationRepository
+    repository: ReceiveOperationRepository
     lease: BrowserReceiveOperationLease
     session: FileSystemAccessOutputSession
+    settlement: FileSystemAccessOperationSettlementAuthority
+    transferJobId: string
+    resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
   }): Promise<FSAReceiveOperation> {
-    const attempt = await createFSAAttempt(
+    const plans = await createFSAPlanAuthority(
       input.intent,
       input.repository,
       input.lease,
       input.session,
       'start',
-      undefined,
-      input.diagnostics,
+      input.settlement,
     )
-    return new FSAReceiveOperation({ ...input, ...attempt })
+    return new FSAReceiveOperation({ ...input, plans })
   }
 
   static async reopen(
@@ -287,13 +139,18 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         'resume',
         attemptAuthority.settlement,
       )
+      const resources = new FSAResourceOwner({
+        outputSession: session,
+        closeOperationAuthority: () => operation.close(),
+        ...(diagnostics === undefined ? {} : { diagnostics }),
+      })
       return new FSAReceiveOperation({
         intent: operation.intent,
         lifecycle: operation.lifecycle,
         repository: operation.repository,
         lease: operation.lease,
         session,
-        closeAuthority: () => operation.close(),
+        resources,
         settlement: attemptAuthority.settlement,
         plans,
         transferJobId: attemptAuthority.transferJobId,
@@ -354,7 +211,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         { kind: 'resume-started' },
         lifecycle,
       )
-      this.#session = session
+      this.#resources.replaceOutputSession(session)
       this.#settlement = attempt.settlement
       this.#plans = attempt.plans
       this.#transferJobId = attempt.transferJobId
@@ -403,38 +260,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#detached) return
     this.#detached = true
-    const failures: unknown[] = []
-    let outerFailureObserved = false
-    await this.#session.close().catch((error: unknown) => {
-      // The output session owns classification for file, checkpoint, and root release.
-      failures.push(error)
-    })
-    await (this.#closeAuthority?.() ?? this.#lease.release())
-      .catch((error: unknown) => {
-        failures.push(error)
-        outerFailureObserved = true
-        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-      })
-    if (this.#closeAuthority === undefined) {
-      try {
-        this.#repository.close()
-      } catch (error) {
-        failures.push(error)
-        outerFailureObserved = true
-        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-      }
-    }
-    if (failures.length > 0) {
-      const failure = new AggregateError(failures, 'FSA receive resources did not detach')
-      if (outerFailureObserved) {
-        emitOutputTrace(this.#diagnostics?.trace, () =>
-          outputTraceEvent('cleanup', {
-            backend: 'file_system_access',
-            transition: 'failed',
-          }))
-      }
-      throw failure
-    }
+    await this.#resources.close()
   }
 
   #requireAttached(): void {
@@ -514,18 +340,6 @@ async function closeFSAContinuationAfterFailure(
   throw error
 }
 
-function observeFSAReservationFailure(
-  diagnostics: OutputDiagnosticsPorts | undefined,
-  error: unknown,
-): void {
-  recordOutputException(diagnostics?.failures?.outputReservation, error)
-  emitOutputTrace(diagnostics?.trace, () =>
-    outputTraceEvent('output_reservation', {
-      backend: 'file_system_access',
-      transition: 'failed',
-    }))
-}
-
 async function createFSAAttempt(
   intent: ReceiveIntent,
   repository: ReceiveOperationRepository,
@@ -592,6 +406,11 @@ async function createFSAPlanAuthority(
     routes: {
       directTree: {
         open: async (boundIntent, signal) => {
+          signal.throwIfAborted()
+          // Binding settlement before prepareRoot ensures any ambiguous namespace
+          // creation is treated as owned activation work, never as safely unopened.
+          const materializationSettlement = settlement.bindMaterialization(session)
+          await session.activate()
           if (lifecycleEntry === 'start') {
             await transitionLifecycle(repository, intent, lease.leaseId, { kind: 'receive-started' })
           } else {
@@ -608,7 +427,7 @@ async function createFSAPlanAuthority(
               backend: 'browser-fsa-tree',
               outputSessionId: createOutputSessionID(),
             }),
-            settlement: settlement.bindMaterialization(session),
+            settlement: materializationSettlement,
           })
         },
       },

@@ -10,6 +10,7 @@ import {
   type ReceiveOperationHandleRecord,
   type ReceiveOperationLeaseRecord,
   type ReceiveRecordKind,
+  type WorkspaceActivationCandidateV1,
 } from './records'
 import type { ReceiveLifecycleState } from './state'
 import {
@@ -60,6 +61,13 @@ export interface ReceiveOperationRepository {
 /** Terminal cleanup requires an exact, operation-confined handle inventory. */
 export interface ReceiveOperationHandleInventoryRepository extends ReceiveOperationRepository {
   listHandles(operationId: string): Promise<readonly ReceiveOperationHandleRecord[]>
+}
+
+/** Global enumeration is deliberately limited to journaled activation identities. */
+export interface WorkspaceActivationJournalRepository
+extends ReceiveOperationHandleInventoryRepository {
+  listWorkspaceActivationCandidates(): Promise<readonly WorkspaceActivationCandidateV1[]>
+  listInitialWorkspaceActivationOperationIds(): Promise<readonly string[]>
 }
 
 export async function prepareReceiveOperationTransition(

@@ -1,20 +1,26 @@
 import type {
   ArtifactSpec,
+  CommitVisibility,
   DeliveryMode,
   GuaranteeProfile,
   MaterializationPlan,
   NameAuthority,
   ReplacementGuarantee,
   RollbackGuarantee,
-  CommitVisibility,
 } from '../../transfer/intent'
 import type {
   DiscoveryState,
   ProjectionEpoch,
+  RetryableDiscoveryReason,
   SelectionProjectionV1,
 } from '../../transfer/projection'
 
-export type { DiscoveryState, ProjectionEpoch, SelectionProjectionV1 }
+export type {
+  DiscoveryState,
+  ProjectionEpoch,
+  RetryableDiscoveryReason,
+  SelectionProjectionV1,
+}
 
 export interface DestinationGuaranteeFacts {
   readonly nameAuthority: NameAuthority
@@ -29,7 +35,7 @@ interface EnvironmentTargetOfferBase<
   Persistence extends TargetAuthorityPersistence,
   Profile extends GuaranteeProfile | null,
 > {
-  readonly id: string
+  readonly routeId: string
   readonly kind: Kind
   readonly guarantees: DestinationGuaranteeFacts
   readonly persistence: Persistence
@@ -98,7 +104,7 @@ type WithoutLegalProfile<T> = T extends EnvironmentTargetOffer
 export type EnvironmentTargetOfferInput = WithoutLegalProfile<EnvironmentTargetOffer>
 
 export interface WorkspaceEnvironmentOffer {
-  readonly id: string
+  readonly routeId: string
   readonly kind: 'origin-private-workspace'
   readonly persistence: 'durable-owned-repository'
   readonly jobHardLimitBytes: bigint
@@ -108,7 +114,7 @@ export interface WorkspaceEnvironmentOffer {
 }
 
 export interface PortableEnvironmentOffer {
-  readonly id: string
+  readonly routeId: string
   readonly kind: 'portable-memory'
   readonly persistence: 'none'
   readonly maximumArtifactBytes: bigint
@@ -147,45 +153,169 @@ export interface PreparationRequirement {
   readonly hardAdmission: 'none' | 'workspace-budget' | 'portable-artifact'
 }
 
-export interface DirectTreePlanOffer {
+interface TargetSemanticsBase<
+  Kind extends EnvironmentTargetKind,
+  Persistence extends TargetAuthorityPersistence,
+  Profile extends GuaranteeProfile,
+> {
+  readonly kind: Kind
+  readonly guarantees: DestinationGuaranteeFacts
+  readonly persistence: Persistence
+  readonly hardMaximumOutputBytes: bigint | null
+  readonly legalProfile: Profile
+}
+
+export type NativeDirectoryTargetSemantics = TargetSemanticsBase<
+  'native-directory-container',
+  'durable-authority',
+  'native-tree'
+>
+
+export type FSADirectoryTargetSemantics = TargetSemanticsBase<
+  'fsa-parent-directory',
+  'durable-after-repository-commit',
+  'fsa-tree'
+>
+
+export type ManagedAtomicTargetSemantics = TargetSemanticsBase<
+  'managed-atomic-file-target',
+  'operation-scoped',
+  'managed-atomic'
+>
+
+export type BrowserHandoffTargetSemantics = TargetSemanticsBase<
+  'browser-handoff',
+  'none',
+  'browser-handoff'
+> & Readonly<{
+  readonly objectUrlLeaseMilliseconds: bigint
+  readonly supportsWorkspacePackage: boolean
+  readonly supportsPortableArtifact: boolean
+}>
+
+export type MaterializationTargetSemantics =
+  | NativeDirectoryTargetSemantics
+  | FSADirectoryTargetSemantics
+  | ManagedAtomicTargetSemantics
+  | BrowserHandoffTargetSemantics
+
+export interface WorkspacePlanSemantics {
+  readonly kind: 'origin-private-workspace'
+  readonly persistence: 'durable-owned-repository'
+  readonly jobHardLimitBytes: bigint
+  readonly processHardLimitBytes: bigint
+  readonly minimumQuotaReserveBytes: bigint
+}
+
+export interface PortablePlanSemantics {
+  readonly kind: 'portable-memory'
+  readonly persistence: 'none'
+  readonly maximumArtifactBytes: bigint
+  readonly assemblyPartBytes: bigint
+  readonly maximumParts: bigint
+  readonly objectUrlLeaseMilliseconds: bigint
+}
+
+export interface DirectTreePlanSemantics {
+  readonly kind: 'direct-tree'
+  readonly target: NativeDirectoryTargetSemantics | FSADirectoryTargetSemantics
+}
+
+export interface DirectAtomicPlanSemantics {
+  readonly kind: 'direct-atomic'
+  readonly target: ManagedAtomicTargetSemantics
+}
+
+export interface WorkspaceThenPublishPlanSemantics {
+  readonly kind: 'workspace-then-publish'
+  readonly workspace: WorkspacePlanSemantics
+  readonly publicationTarget: ManagedAtomicTargetSemantics | BrowserHandoffTargetSemantics
+}
+
+export interface PortableHandoffPlanSemantics {
+  readonly kind: 'portable-handoff'
+  readonly portable: PortablePlanSemantics
+  readonly handoffTarget: BrowserHandoffTargetSemantics
+}
+
+export type OfferedMaterializationPlanSemantics =
+  | DirectTreePlanSemantics
+  | DirectAtomicPlanSemantics
+  | WorkspaceThenPublishPlanSemantics
+  | PortableHandoffPlanSemantics
+
+export interface DirectTreeMaterializationRoute {
   readonly kind: 'direct-tree'
   readonly target: NativeDirectoryContainerOffer | FSADirectoryContainerOffer
 }
 
-export interface DirectAtomicPlanOffer {
+export interface DirectAtomicMaterializationRoute {
   readonly kind: 'direct-atomic'
   readonly target: ManagedAtomicTargetOffer
 }
 
-export interface WorkspaceThenPublishPlanOffer {
+export interface WorkspaceThenPublishMaterializationRoute {
   readonly kind: 'workspace-then-publish'
   readonly workspace: WorkspaceEnvironmentOffer
   readonly publicationTarget: ManagedAtomicTargetOffer | BrowserHandoffTargetOffer
 }
 
-export interface PortableHandoffPlanOffer {
+export interface PortableHandoffMaterializationRoute {
   readonly kind: 'portable-handoff'
   readonly portable: PortableEnvironmentOffer
   readonly handoffTarget: BrowserHandoffTargetOffer
 }
 
-export type OfferedMaterializationPlan =
-  | DirectTreePlanOffer
-  | DirectAtomicPlanOffer
-  | WorkspaceThenPublishPlanOffer
-  | PortableHandoffPlanOffer
+export type OfferedMaterializationRoute =
+  | DirectTreeMaterializationRoute
+  | DirectAtomicMaterializationRoute
+  | WorkspaceThenPublishMaterializationRoute
+  | PortableHandoffMaterializationRoute
 
-export interface ArtifactAction {
-  readonly kind: 'artifact-action'
-  readonly projectionEpoch: ProjectionEpoch
+export type MaterializationRouteIdentity =
+  | Readonly<{ kind: 'direct'; targetRouteId: string }>
+  | Readonly<{
+      kind: 'workspace'
+      workspaceRouteId: string
+      publicationTargetRouteId: string
+    }>
+  | Readonly<{
+      kind: 'portable'
+      portableRouteId: string
+      handoffTargetRouteId: string
+    }>
+
+export interface ArtifactChoice {
+  readonly kind: 'artifact-choice'
   readonly operation: ArtifactOperation
   readonly artifactKind: ArtifactSpec['kind']
-  readonly artifact: ArtifactSpec | null
-  readonly suggestedName: string | null
-  readonly importance: 'primary' | 'secondary'
   readonly recovery: RecoverySemantics
   readonly preparation: PreparationRequirement
-  readonly plan: OfferedMaterializationPlan
+  readonly plan: OfferedMaterializationPlanSemantics
+}
+
+export interface OfferedArtifactChoice {
+  readonly kind: 'offered-artifact-choice'
+  readonly choice: ArtifactChoice
+  readonly route: OfferedMaterializationRoute
+  readonly suggestedName: string | null
+  readonly importance: 'primary' | 'secondary'
+}
+
+export interface ResolvedArtifactAction {
+  readonly kind: 'resolved-artifact-action'
+  readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
+  readonly resolvedArtifactDigest: string
+  readonly choice: ArtifactChoice
+  readonly route: OfferedMaterializationRoute
+  readonly artifact: ArtifactSpec
+}
+
+export interface ArtifactResolutionObservation {
+  readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
+  readonly resolvedArtifactDigest: string | null
 }
 
 export type OfferUnavailableReason =
@@ -219,6 +349,7 @@ export interface ConfirmingSelectedContentOffer {
   readonly kind: 'confirming-selected-content'
   readonly interactive: false
   readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
   readonly reason: 'shape-unsettled'
   readonly decision: OfferDisabledDecision
 }
@@ -227,6 +358,7 @@ export interface RetryConfirmationOffer {
   readonly kind: 'retry-confirmation'
   readonly interactive: true
   readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
   readonly reason: 'discovery-retry-required'
   readonly decision: OfferDisabledDecision
 }
@@ -235,6 +367,7 @@ export interface SelectionEmptyOffer {
   readonly kind: 'selection-empty'
   readonly interactive: false
   readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
   readonly reason: 'selection-empty'
   readonly decision: OfferDisabledDecision
 }
@@ -243,6 +376,7 @@ export interface NoSafeDestinationOffer {
   readonly kind: 'no-safe-destination'
   readonly interactive: false
   readonly projectionEpoch: ProjectionEpoch
+  readonly selectionDigest: string
   readonly reason:
     | 'no-safe-destination'
     | 'portable-limit-exceeded'
@@ -254,8 +388,9 @@ export interface ArtifactActionsOffer {
   readonly kind: 'artifact-actions'
   readonly interactive: true
   readonly projectionEpoch: ProjectionEpoch
-  readonly primary: ArtifactAction
-  readonly alternatives: readonly ArtifactAction[]
+  readonly selectionDigest: string
+  readonly primary: OfferedArtifactChoice
+  readonly alternatives: readonly OfferedArtifactChoice[]
   readonly decision: OfferComputedDecision
 }
 

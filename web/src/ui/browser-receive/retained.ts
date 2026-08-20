@@ -1,5 +1,6 @@
 import { lifecycleFailureFact, type FailureFact } from '../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../output/browser/indexeddb-resume-state'
+import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
 import {
   createOutputFailureBinding,
   emitOutputTrace,
@@ -25,6 +26,8 @@ import type {
   ReopenedWorkspaceOperation,
 } from '../../output/resume/reopen-authority'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
+import { recoverWorkspaceActivationCandidates } from '../../output/workspace/activation-recovery'
+import type { WorkspaceActivationJournalRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import type {
@@ -36,7 +39,7 @@ import type {
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import { FSAReceiveOperation } from './fsa'
-import { WorkspaceReceiveOperation } from './workspace'
+import { WorkspaceReceiveOperation } from './workspace-operation'
 import { handoffRetainedWorkspacePackage } from './workspace-publication'
 
 const RESUME_AUTHORITY_UNAVAILABLE =
@@ -104,6 +107,8 @@ export interface BrowserRetainedCompositionOptions {
   readonly now?: () => number
   readonly outputTrace?: OutputTraceSource
   readonly onTrace?: WorkspaceStageTraceListener
+  readonly openActivationRepository?: () => Promise<WorkspaceActivationJournalRepository>
+  readonly recoverWorkspaceActivations?: typeof recoverWorkspaceActivationCandidates
 }
 
 export async function listBrowserRetainedOperations(
@@ -113,6 +118,25 @@ export async function listBrowserRetainedOperations(
 ): Promise<V2RetainedReceiveInventory> {
   signal.throwIfAborted()
   if (typeof windowPort.indexedDB?.open !== 'function') return emptyRetainedInventory()
+
+  if (options.openResumeSource === undefined || options.openActivationRepository !== undefined ||
+      options.recoverWorkspaceActivations !== undefined) {
+    const activationRepository = await (
+      options.openActivationRepository ?? (() => IndexedDbReceiveOperationRepository.open())
+    )()
+    try {
+      await (options.recoverWorkspaceActivations ?? recoverWorkspaceActivationCandidates)({
+        repository: activationRepository,
+        storage: windowPort.navigator.storage as StorageManager & {
+          getDirectory(): Promise<FileSystemDirectoryHandle>
+        },
+        locks: windowPort.navigator.locks,
+      })
+    } finally {
+      activationRepository.close()
+    }
+  }
+  signal.throwIfAborted()
 
   const source = await (options.openResumeSource ?? (() => IndexedDbReceiveResumeSource.open()))()
   let inventoryClosed = false

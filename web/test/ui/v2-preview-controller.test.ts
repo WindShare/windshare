@@ -104,6 +104,14 @@ class FakeJoined {
     }
   }
 
+  get protocolSessionIdentity(): string {
+    return this.protocolSessionId
+  }
+
+  subscribeProtocolGeneration(): () => void {
+    return () => undefined
+  }
+
   projectionSource(): AuthenticatedDiscoverySource {
     return completedProjectionSource()
   }
@@ -184,6 +192,14 @@ function authenticatedRemoteOperationError(): V2RemoteOperationError {
 
 async function turn(): Promise<void> {
   for (let index = 0; index < 8; index += 1) await Promise.resolve()
+}
+
+async function waitFor(predicate: () => boolean): Promise<void> {
+  for (let attempt = 0; attempt < 200; attempt += 1) {
+    if (predicate()) return
+    await new Promise<void>(resolve => setTimeout(resolve, 1))
+  }
+  throw new Error('timed out waiting for controller state')
 }
 
 afterEach(() => vi.unstubAllGlobals())
@@ -526,7 +542,7 @@ describe('v2 preview click controller boundary', () => {
     } as unknown as V2BrowserReceiverGateway
     const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await turn()
+    await waitFor(() => controller.getSnapshot().phase === 'browsing')
     expect(controller.getSnapshot().phase).toBe('browsing')
 
     controller.previewFile('stale-row')
@@ -569,7 +585,7 @@ describe('v2 preview click controller boundary', () => {
     } as unknown as V2BrowserReceiverGateway
     const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await turn()
+    await waitFor(() => controller.getSnapshot().status.includes('257 entries discovered'))
     expect(controller.getSnapshot().status).toContain('257 entries discovered')
     expect(controller.getSnapshot().status).toContain('total still unknown')
     releasePage()
@@ -592,16 +608,16 @@ describe('v2 preview click controller boundary', () => {
     const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
 
     controller.initialize({ capabilityInput: 'first-key', pageUrl: 'https://receiver.invalid/s/share' })
-    await turn()
+    await waitFor(() => pending.length === 1)
     controller.submitKey('second-key')
-    await turn()
+    await waitFor(() => pending.length === 2)
     expect(pending).toHaveLength(2)
 
     pending[1]?.(second as unknown as V2JoinedBrowserShare)
-    await turn()
+    await waitFor(() => controller.getSnapshot().rows[0]?.name === 'second.png')
     expect(controller.getSnapshot().rows[0]?.name).toBe('second.png')
     pending[0]?.(first as unknown as V2JoinedBrowserShare)
-    await turn()
+    await waitFor(() => first.closes === 1)
     expect(first.closes).toBe(1)
     expect(controller.getSnapshot().rows[0]?.name).toBe('second.png')
     await controller.dispose()
@@ -622,6 +638,7 @@ describe('v2 preview click controller boundary', () => {
       },
       recoveryIdentity: 'share.recovery',
       protocolSessionId: identityText(8),
+      protocolSessionIdentity: identityText(8),
       selection,
       rootDirectory: () => ({
         id: identity(1), idText: identityText(1), name: 'Shared files', path: [], ancestry: [identityText(1)],
@@ -638,6 +655,7 @@ describe('v2 preview click controller boundary', () => {
       },
       projectionSource: () => completedProjectionSource(),
       subscribeCatalogScanProgress: () => () => undefined,
+      subscribeProtocolGeneration: () => () => undefined,
       close: async () => undefined,
     } as unknown as V2JoinedBrowserShare
     const gateway = { join: async () => joined } as unknown as V2BrowserReceiverGateway
@@ -659,7 +677,7 @@ describe('v2 preview click controller boundary', () => {
     })
 
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await turn()
+    await waitFor(() => controller.getSnapshot().rows.length === 1)
     expect(controller.getSnapshot().output.projection).toBeNull()
     controller.toggleSelection(entry.idText)
     expect(controller.getSnapshot().rows[0]?.selection).toBe('selected')

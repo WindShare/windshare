@@ -1,18 +1,14 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { recordOutputException } from '../../src/output/diagnostics'
-import type { EnvironmentOffers } from '../../src/output/planning'
 import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
 import { V2TransferAdmissionFailureError } from '../../src/transfer/v2-job'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
 import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
-import type { V2StartedArtifactAuthority } from '../../src/ui/v2-receive-runtime'
 import {
   FakeGateway,
-  FakeBoundRuntime,
   FakeJoinedShare,
   FakeReceiveComposition,
-  FakeStartedAuthority,
   FILE_ID,
   MANAGED_ENVIRONMENT,
   NO_DESTINATION_ENVIRONMENT,
@@ -20,7 +16,6 @@ import {
   controllerFor,
   deferred,
   identityText,
-  missingAction,
   next,
   recordingIncidents,
   resetOrchestrationTestEnvironment,
@@ -38,7 +33,7 @@ describe('v2 receiver active operation orchestration', () => {
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, receive)
 
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     expect(receive.startedAuthorities).toHaveLength(0)
 
     let inClickStack = true
@@ -89,7 +84,7 @@ describe('v2 receiver active operation orchestration', () => {
 
     controller.toggleSelection(FILE_ID)
     await waitFor(() => joined.projectionRequests.length === 2)
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     const staleRequest = joined.projectionRequests[0]
     const currentEpoch = controller.getSnapshot().output.projection?.projection.epoch
@@ -101,7 +96,7 @@ describe('v2 receiver active operation orchestration', () => {
     firstProjection.resolve()
     await turns()
     expect(controller.getSnapshot().output.projection?.projection.epoch).toBe(currentEpoch)
-    expect(controller.getSnapshot().output.offerPresentation?.kind).toBe('actions')
+    expect(controller.getSnapshot().output.offerPresentation?.kind).toBe('choices')
 
     await controller.dispose()
   })
@@ -110,39 +105,43 @@ describe('v2 receiver active operation orchestration', () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, receive)
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
-    joined.protocolSessionId = identityText(4)
+    joined.replaceProtocolSession(identityText(4))
     controller.chooseArtifact('download-original')
 
     expect(receive.startedAuthorities).toHaveLength(0)
     await waitFor(() => controller.getSnapshot().output.projection?.projection.epoch === 2n)
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     expect(receive.startedAuthorities).toHaveLength(0)
 
     await controller.dispose()
   })
 
   it('rechecks current capability facts after acquisition and refuses an invalidated action', async () => {
-    const finalCapability = deferred<EnvironmentOffers>()
+    const authorityReady = deferred<void>()
     const receive = new FakeReceiveComposition(
       MANAGED_ENVIRONMENT,
-      [MANAGED_ENVIRONMENT, finalCapability.promise, NO_DESTINATION_ENVIRONMENT],
+      [MANAGED_ENVIRONMENT, NO_DESTINATION_ENVIRONMENT],
     )
+    receive.authorityReady = authorityReady.promise
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, receive)
 
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     controller.chooseArtifact('download-original')
-    await waitFor(() => receive.environmentCalls >= 2)
-
-    finalCapability.resolve(NO_DESTINATION_ENVIRONMENT)
+    joined.replaceProtocolSession(identityText(5))
     await waitFor(() => (receive.startedAuthorities[0]?.releaseReasons.length ?? 0) > 0)
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'status')
+    await waitFor(() => {
+      const presentation = controller.getSnapshot().output.offerPresentation
+      return presentation?.kind === 'status' &&
+        presentation.title === 'This browser cannot safely create the selected result.'
+    })
+    authorityReady.resolve()
 
     expect(joined.transferRuns).toHaveLength(0)
     expect(controller.getSnapshot().output.receiveIntent).toBeNull()
-    expect(controller.getSnapshot().output.chosenAction).toBeNull()
+    expect(controller.getSnapshot().output.chosenChoice).toBeNull()
     expect(controller.getSnapshot().output.offerPresentation).toMatchObject({
       kind: 'status',
       title: 'This browser cannot safely create the selected result.',
@@ -151,10 +150,10 @@ describe('v2 receiver active operation orchestration', () => {
     await controller.dispose()
   })
 
-  it('releases a late authority result after a newer join owns the receiver', async () => {
-    const authorityGate = deferred<V2StartedArtifactAuthority>()
+  it('preserves late authority readiness when a reauthenticated join proves the same semantics', async () => {
+    const authorityReady = deferred<void>()
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
-    receive.authorityGate = authorityGate.promise
+    receive.authorityReady = authorityReady.promise
     const first = new FakeJoinedShare(true)
     const second = new FakeJoinedShare(true)
     const gateway = new FakeGateway([first, second])
@@ -163,21 +162,20 @@ describe('v2 receiver active operation orchestration', () => {
     })
     controller.initialize({ capabilityInput: 'first', pageUrl: 'https://receiver.invalid/s/share' })
 
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
     controller.chooseArtifact('download-original')
+    const late = receive.startedAuthorities[0]
+    if (late === undefined) throw new Error('authority was not installed synchronously')
     controller.submitKey('second')
     await waitFor(() => gateway.joinCount === 2)
     await waitFor(() => first.closeCount === 1)
 
-    const late = new FakeStartedAuthority(
-      receive.startedActions[0] ?? missingAction(),
-      () => new FakeBoundRuntime(),
-    )
-    authorityGate.resolve(late)
-    await waitFor(() => late.releaseReasons.length === 1)
+    authorityReady.resolve()
+    await waitFor(() => second.transferRuns.length === 1)
 
     expect(first.transferRuns).toHaveLength(0)
-    expect(controller.getSnapshot().output.receiveIntent).toBeNull()
+    expect(late.releaseReasons).toHaveLength(0)
+    expect(controller.getSnapshot().output.receiveIntent).not.toBeNull()
     await controller.dispose()
   })
 

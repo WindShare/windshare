@@ -1,5 +1,4 @@
 import type { BrowserReceiveOperationLease } from '../../output/browser/session-lease'
-import type { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
 import {
   emitOutputTrace,
   outputTraceEvent,
@@ -152,7 +151,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   static async create(input: {
     windowPort: BrowserReceiveWindow
     intent: ReceiveIntent
-    repository: IndexedDbReceiveOperationRepository
+    repository: ReceiveOperationRepository
     namespace: OriginPrivateWorkspaceNamespace
     lease: BrowserReceiveOperationLease
     stages: WorkspaceOperationStages

@@ -26,7 +26,9 @@ import {
 } from '../persistence/journal'
 import {
   operationRecordId,
+  decodeStoredWorkspaceActivationCandidate,
   RECEIVE_RECORD_LIFECYCLE_STATE,
+  RECEIVE_RECORD_WORKSPACE_ACTIVATION,
   validateManifestPageRecord,
   validateReceiveOperationHandleRecord,
   validateReceiveOperationLeaseRecord,
@@ -35,19 +37,25 @@ import {
   type ReceiveOperationHandleRecord,
   type ReceiveOperationLeaseRecord,
   type ReceiveRecordKind,
+  type WorkspaceActivationCandidateV1,
 } from '../workspace/records'
 import { snapshotIdentity } from '../workspace/canonical'
+import { RECEIVE_STATE_INTENT_FROZEN } from '../workspace/state'
+import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import {
   prepareReceiveOperationTransition,
   type ReceiveOperationRepository,
   type ReceiveOperationHandleInventoryRepository,
   type ReceiveOperationTransition,
+  type WorkspaceActivationJournalRepository,
 } from '../workspace/repository'
 import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
   INDEXEDDB_BY_OPERATION_FILE_INDEX,
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_BY_OPERATION_KIND_INDEX,
+  INDEXEDDB_BY_KIND_INDEX,
+  INDEXEDDB_BY_STATE_INDEX,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
@@ -90,6 +98,7 @@ export type IndexedDbCandidateResolution =
 const RECEIVE_OPERATION_RECORD_BOUND = 1_048_576
 const RECEIVE_OPERATION_PAGE_BOUND = 1_048_576
 const RECEIVE_OPERATION_HANDLE_BOUND = 1_048_576
+const WORKSPACE_ACTIVATION_CANDIDATE_BOUND = 4_096
 
 export class IndexedDbFileCheckpointRepository
 implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleInventoryRepository {
@@ -485,7 +494,9 @@ function abortQuietly(transaction: IDBTransaction): void {
 }
 
 export class IndexedDbReceiveOperationRepository
-implements ReceiveOperationRepository, ReceiveOperationHandleInventoryRepository {
+implements ReceiveOperationRepository,
+  ReceiveOperationHandleInventoryRepository,
+  WorkspaceActivationJournalRepository {
   readonly #database: IDBDatabase
   #closed = false
 
@@ -577,6 +588,54 @@ implements ReceiveOperationRepository, ReceiveOperationHandleInventoryRepository
       value as ReceiveOperationHandleRecord,
     ))
     return Object.freeze(handles.sort((left, right) => compareRecordIds(left.id, right.id)))
+  }
+
+  async listWorkspaceActivationCandidates(): Promise<readonly WorkspaceActivationCandidateV1[]> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const values = await requestResult<unknown[]>(
+      transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
+        .index(INDEXEDDB_BY_KIND_INDEX)
+        .getAll(
+          IDBKeyRange.only(RECEIVE_RECORD_WORKSPACE_ACTIVATION),
+          WORKSPACE_ACTIVATION_CANDIDATE_BOUND + 1,
+        ),
+    )
+    await transactionCompletion(transaction)
+    if (values.length > WORKSPACE_ACTIVATION_CANDIDATE_BOUND) {
+      throw new DOMException('Workspace activation inventory exceeds its bound', 'QuotaExceededError')
+    }
+    return Object.freeze(await Promise.all(values.map(async (value) =>
+      decodeStoredWorkspaceActivationCandidate(await validateStoredReceiveRecord(value)))))
+  }
+
+  async listInitialWorkspaceActivationOperationIds(): Promise<readonly string[]> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const values = await requestResult<unknown[]>(
+      transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
+        .index(INDEXEDDB_BY_STATE_INDEX)
+        .getAll(
+          IDBKeyRange.only(RECEIVE_STATE_INTENT_FROZEN),
+          WORKSPACE_ACTIVATION_CANDIDATE_BOUND + 1,
+        ),
+    )
+    await transactionCompletion(transaction)
+    if (values.length > WORKSPACE_ACTIVATION_CANDIDATE_BOUND) {
+      throw new DOMException('Initial workspace activation inventory exceeds its bound', 'QuotaExceededError')
+    }
+    const operationIds = await Promise.all(values.map(async (value) => {
+      const record = await validateStoredReceiveRecord(value)
+      const lifecycle = decodeStoredReceiveLifecycleState(record)
+      if (lifecycle.kind !== 'intent-frozen') {
+        throw new TypeError('Initial workspace activation index disagrees with lifecycle authority')
+      }
+      return lifecycle.operationId
+    }))
+    if (new Set(operationIds).size !== operationIds.length) {
+      throw new TypeError('Initial workspace activation inventory repeats an operation')
+    }
+    return Object.freeze(operationIds.sort())
   }
 
   async readLease(operationId: string): Promise<ReceiveOperationLeaseRecord | undefined> {
