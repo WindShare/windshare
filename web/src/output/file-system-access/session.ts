@@ -9,7 +9,6 @@ import {
   type NamedContainerEntryReservation,
   type ReceiveIntent,
 } from '../../transfer/intent'
-import { authorizeFSAParent } from '../capability/acquisition'
 import {
   emitOutputTrace,
   outputTraceEvent,
@@ -19,7 +18,6 @@ import {
 import type { AcquiredFSAParentAuthority } from '../capability/contract'
 import { BrowserFileSystemTree } from '../browser/filesystem-tree'
 import {
-  persistFSAOperationBinding,
   verifyFSAOperationBinding,
   type FSAOperationBindingRepository,
   type PersistedFSAOperationBinding,
@@ -41,7 +39,7 @@ import type {
   PersistentDirectoryMaterialization,
   PersistentFileRequest,
   PersistentFileTransactionPort,
-  PersistentMaterializationPort,
+  ActivatablePersistentMaterializationPort,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
@@ -103,19 +101,31 @@ export interface FSAFinalSettlementObservation {
   retireCheckpoints(): Promise<void>
 }
 
-export interface BindNewFileSystemAccessOutputOptions {
+export interface ReserveNewFileSystemAccessOutputOptions {
   readonly authority: AcquiredFSAParentAuthority
   readonly artifact: DirectoryTreeArtifact
-  readonly operationRepository: FSAOperationBindingRepository
-  readonly freezeIntent: (
-    reservation: NamedContainerEntryReservation,
-  ) => Promise<ReceiveIntent>
-  readonly lockManager?: BrowserLockManagerRuntime
-  readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
-  readonly databaseName?: string
+  readonly rootLease: FSARootMutationLease
   readonly operationId?: string
   readonly reservationId?: string
   readonly authorityRef?: string
+  readonly diagnostics?: OutputDiagnosticsPorts
+  readonly trace?: FSAOutputTrace
+}
+
+export interface ReservedFileSystemAccessOutput {
+  readonly authority: AcquiredFSAParentAuthority
+  readonly artifact: DirectoryTreeArtifact
+  readonly operationId: string
+  readonly reservation: NamedContainerEntryReservation
+  readonly rootLease: FSARootMutationLease
+}
+
+export interface AssembleNewFileSystemAccessOutputOptions {
+  readonly binding: PersistedFSAOperationBinding
+  readonly operationRepository: FSAOperationBindingRepository
+  readonly rootLease: FSARootMutationLease
+  readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
+  readonly databaseName?: string
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: FSAOutputTrace
 }
@@ -130,7 +140,7 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly trace?: FSAOutputTrace
 }
 
-export class FileSystemAccessOutputSession implements PersistentMaterializationPort {
+export class FileSystemAccessOutputSession implements ActivatablePersistentMaterializationPort {
   readonly intent: ReceiveIntent
   readonly reservation: NamedContainerEntryReservation
   readonly #materialization: PersistentTreeOutputSession
@@ -174,6 +184,11 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
     this.#requireMaterializing()
     return this.#materialization.ensureDirectory(path)
+  }
+
+  activate(): Promise<void> {
+    this.#requireMaterializing()
+    return this.#materialization.activate()
   }
 
   usesOperationRepository(repository: FSAOperationBindingRepository): boolean {
@@ -305,61 +320,61 @@ export class FileSystemAccessOutputSession implements PersistentMaterializationP
   }
 }
 
-export async function bindNewFileSystemAccessOutput(
-  options: BindNewFileSystemAccessOutputOptions,
-): Promise<FileSystemAccessOutputSession> {
+export async function reserveNewFileSystemAccessOutput(
+  options: ReserveNewFileSystemAccessOutputOptions,
+): Promise<ReservedFileSystemAccessOutput> {
   const artifact = await requireDirectoryTreeArtifact(options.artifact)
   const operationId = options.operationId ?? createOperationID()
   const reservationId = options.reservationId ?? createDestinationReservationID()
-  const authorityRef = canonicalAuthorityRef(options.authorityRef ?? createAuthorityRef())
-  const rootLease = await (options.lockManager === undefined
-    ? acquireFSARootMutationLease(options.authority.parent)
-    : acquireFSARootMutationLease(options.authority.parent, options.lockManager)
-  ).catch((error: unknown) => {
-    recordOutputException(options.diagnostics?.failures?.outputReservation, error)
-    outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
-    throw error
+  const authorityRef = canonicalAuthorityRef(options.authorityRef ?? createFSAAuthorityReference())
+  const reservation = await options.rootLease.authority.run('reserve-name', async () => {
+    const decision = await firstAvailableName(
+      options.authority.parent,
+      operationId,
+      artifact,
+    )
+    return createFSANamedEntryReservation({
+      operationId,
+      reservationId,
+      artifact,
+      authorityRef,
+      reservedName: decision.reservedName,
+      collisionIndex: decision.collisionIndex,
+    })
+  })
+  return Object.freeze({
+    authority: options.authority,
+    artifact,
+    operationId,
+    reservation,
+    rootLease: options.rootLease,
+  })
+}
+
+export async function assembleNewFileSystemAccessOutput(
+  options: AssembleNewFileSystemAccessOutputOptions,
+): Promise<FileSystemAccessOutputSession> {
+  const binding = await verifyFSAOperationBinding({
+    repository: options.operationRepository,
+    intent: options.binding.intent,
+    expectedParent: options.binding.parent,
   })
   let checkpoints: FSAFileCheckpointRepository | undefined
-  let materializationOpening = false
   try {
-    await authorizeFSAParent(options.authority)
-    const reservation = await rootLease.authority.run('reserve-name', async () => {
-      const decision = await firstAvailableName(
-        options.authority.parent,
-        operationId,
-        artifact,
-      )
-      return createFSANamedEntryReservation({
-        operationId,
-        reservationId,
-        artifact,
-        authorityRef,
-        reservedName: decision.reservedName,
-        collisionIndex: decision.collisionIndex,
-      })
-    })
-    const intent = await validateBoundIntent(
-      await options.freezeIntent(reservation),
-      artifact,
-      reservation,
+    checkpoints = await openFSAFileCheckpointRepository(
+      options,
+      binding.intent,
+      binding.reservation,
     )
-    const binding = await persistFSAOperationBinding({
-      repository: options.operationRepository,
-      intent,
-      parent: options.authority.parent,
-    })
-    emitFSAOutputTrace(options.trace, reservationCreated(reservation))
+    emitFSAOutputTrace(options.trace, reservationCreated(binding.reservation))
     outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'acquired' })
-    checkpoints = await openFSAFileCheckpointRepository(options, intent, reservation)
     const tree = new BrowserFileSystemTree({
       binding,
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
-      mutations: rootLease.authority,
+      mutations: options.rootLease.authority,
     })
-    materializationOpening = true
-    const materialization = await PersistentTreeOutputSession.open({
+    const materialization = await PersistentTreeOutputSession.createNew({
       tree,
       checkpoints,
       ...(options.diagnostics === undefined
@@ -368,35 +383,32 @@ export async function bindNewFileSystemAccessOutput(
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     return new FileSystemAccessOutputSession({
-      intent,
-      reservation,
+      intent: binding.intent,
+      reservation: binding.reservation,
       materialization,
       tree,
       binding,
       operationRepository: options.operationRepository,
       checkpoints,
-      rootLease,
+      rootLease: options.rootLease,
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
     })
   } catch (error) {
-    if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
-      emitFSAOutputTrace(options.trace, needsAttention(operationId))
+    recordOutputException(options.diagnostics?.failures?.outputReservation, error)
+    outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
+    let cleanupFailure: unknown
+    try {
+      checkpoints?.close()
+    } catch (caught) {
+      cleanupFailure = caught
+      recordOutputException(options.diagnostics?.failures?.cleanup, caught)
     }
-    if (!materializationOpening) {
-      recordOutputException(options.diagnostics?.failures?.outputReservation, error)
-      outputTrace(options.diagnostics, { eventName: 'output_reservation', transition: 'failed' })
-    }
-    const cleanupFailures = await releaseFailedFSAOpen(
-      checkpoints,
-      rootLease,
-      options.diagnostics,
-    )
-    if (cleanupFailures.length !== 0) {
+    if (cleanupFailure !== undefined) {
       throw new AggregateError(
-        [error, ...cleanupFailures],
-        'FSA output reservation failed and could not release all authorities',
+        [error, cleanupFailure],
+        'FSA output assembly failed and could not close its checkpoint repository',
         { cause: error },
       )
     }
@@ -531,20 +543,6 @@ async function releaseFailedFSAOpen(
   return Object.freeze(failures)
 }
 
-async function validateBoundIntent(
-  input: ReceiveIntent,
-  artifact: DirectoryTreeArtifact,
-  reservation: NamedContainerEntryReservation,
-): Promise<ReceiveIntent> {
-  const intent = await validateReceiveIntent(input)
-  if (intent.artifact.digest !== artifact.digest || intent.operationId !== reservation.operationId ||
-      intent.plan.kind !== 'direct-tree' ||
-      intent.plan.reservation.digest !== reservation.digest) {
-    throw new TypeError('Frozen ReceiveIntent does not bind the acquired FSA reservation')
-  }
-  return intent
-}
-
 async function requireDirectoryTreeArtifact(
   input: DirectoryTreeArtifact,
 ): Promise<DirectoryTreeArtifact> {
@@ -669,7 +667,7 @@ function canonicalAuthorityRef(value: string): string {
   return encodeBase64Url(identityBytes(value, FILE_CHECKPOINT_ID_BYTES, 'authority reference'))
 }
 
-function createAuthorityRef(): string {
+export function createFSAAuthorityReference(): string {
   const value = new Uint8Array(FILE_CHECKPOINT_ID_BYTES)
   crypto.getRandomValues(value)
   return canonicalAuthorityRef(encodeBase64Url(value))

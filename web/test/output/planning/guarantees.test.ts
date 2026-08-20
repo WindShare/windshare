@@ -3,10 +3,13 @@ import { describe, expect, it } from 'vitest'
 import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
+  createSelectionSpec,
 } from '../../../src/transfer/intent'
 import {
   createEnvironmentOffers,
   legalGuaranteeProfile,
+  offerArtifacts,
+  sameArtifactChoiceSemantics,
 } from '../../../src/output/planning'
 import type {
   DeliveryMode,
@@ -17,6 +20,7 @@ import type {
 } from '../../../src/transfer/intent'
 import type {
   DestinationGuaranteeFacts,
+  ArtifactChoice,
   EnvironmentTargetKind,
   EnvironmentTargetOfferInput,
 } from '../../../src/output/planning'
@@ -27,6 +31,9 @@ import {
   portableOffer,
   precreatedBrowserFileTarget,
   workspaceOffer,
+  identity,
+  projection,
+  treeProof,
 } from './fixture'
 
 const NAME_AUTHORITIES: readonly NameAuthority[] = [
@@ -117,6 +124,66 @@ describe('environment guarantee legality', () => {
       targets: [handoffTarget()],
       portable: { ...portableOffer(), maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT + 1n },
     })).toThrow(/bounded portable/u)
+  })
+
+  it('requires route identities to be unique across the entire installed snapshot', () => {
+    expect(() => createEnvironmentOffers({
+      targets: [fsaTarget('shared-route')],
+      workspace: workspaceOffer('shared-route'),
+    })).toThrow(/route identifiers must be unique/u)
+    expect(() => createEnvironmentOffers({
+      targets: [fsaTarget('duplicate'), managedTarget('duplicate')],
+    })).toThrow(/route identifiers must be unique/u)
+  })
+
+  it('compares every frozen choice semantic while excluding presentation and route identity', async () => {
+    const selection = await createSelectionSpec({
+      shareInstance: identity(1), syntheticRoot: identity(2),
+      rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+    })
+    const first = await offerArtifacts(
+      projection(selection, treeProof(), 1n),
+      { kind: 'complete' },
+      createEnvironmentOffers({ targets: [fsaTarget('route-a')] }),
+    )
+    const reprobed = await offerArtifacts(
+      projection(selection, treeProof(), 1n),
+      { kind: 'complete' },
+      createEnvironmentOffers({ targets: [fsaTarget('route-b')] }),
+    )
+    if (first.kind !== 'artifact-actions' || reprobed.kind !== 'artifact-actions') {
+      throw new Error('expected artifact choices')
+    }
+    const base = first.primary.choice
+    if (base.plan.kind !== 'direct-tree') throw new Error('expected direct tree semantics')
+    expect(sameArtifactChoiceSemantics(base, reprobed.primary.choice)).toBe(true)
+
+    const mutations: readonly ArtifactChoice[] = [
+      { ...base, operation: 'save-single-to-folder' },
+      { ...base, artifactKind: 'original-file' },
+      { ...base, recovery: 'restart-required' },
+      { ...base, preparation: { ...base.preparation, manifest: 'exact-artifact' } },
+      {
+        ...base,
+        plan: {
+          ...base.plan,
+          target: { ...base.plan.target, hardMaximumOutputBytes: 1n },
+        } as ArtifactChoice['plan'],
+      },
+      {
+        ...base,
+        plan: {
+          ...base.plan,
+          target: {
+            ...base.plan.target,
+            guarantees: { ...base.plan.target.guarantees, rollback: 'to-absent' },
+          },
+        } as ArtifactChoice['plan'],
+      },
+    ]
+    for (const mutation of mutations) {
+      expect(sameArtifactChoiceSemantics(base, mutation)).toBe(false)
+    }
   })
 })
 

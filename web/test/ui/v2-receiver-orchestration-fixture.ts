@@ -13,9 +13,10 @@ import {
 } from '../../src/diagnostics/incident'
 import { recordOutputException, type OutputFailureSinks } from '../../src/output/diagnostics'
 import type {
-  AcquiredMaterializationAuthority,
-  ArtifactAction,
+  CandidateMaterializationBinding,
   EnvironmentOffers,
+  OfferedArtifactChoice,
+  ResolvedArtifactAction,
 } from '../../src/output/planning'
 import {
   initialReceiveLifecycleState,
@@ -58,14 +59,17 @@ import type {
 } from '../../src/ui/v2-lifecycle-presentation'
 import type {
   V2BoundReceiveOperation,
+  V2ArtifactPresentationAuthority,
   V2LifecycleMutation,
+  V2RouteCommitInput,
+  V2RouteCommitResult,
   V2ReceiveCompositionPort,
   V2RetainedReceiveAction,
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
   V2RetainedReceiveOperation,
-  V2StartedArtifactAuthority,
 } from '../../src/ui/v2-receive-runtime'
+import type { V2ProtocolGenerationListener } from '../../src/receiver/v2-supervisor'
 import {
   environment,
   handoffTarget,
@@ -98,7 +102,7 @@ export function resetOrchestrationTestEnvironment(): void {
 }
 
 export class FakeReceiveComposition implements V2ReceiveCompositionPort {
-  readonly startedActions: ArtifactAction[] = []
+  readonly startedChoices: OfferedArtifactChoice[] = []
   readonly startedAuthorities: FakeStartedAuthority[] = []
   readonly authorityStartStacks: boolean[] = []
   readonly retainedSignals: AbortSignal[] = []
@@ -134,7 +138,7 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
   readonly #environmentQueue: Array<EnvironmentOffers | PromiseLike<EnvironmentOffers>>
   environmentCalls = 0
   clickStack: () => boolean = () => true
-  authorityGate: PromiseLike<V2StartedArtifactAuthority> | undefined
+  authorityReady: Promise<void> | undefined
 
   constructor(
     fallback: EnvironmentOffers,
@@ -150,42 +154,47 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
   }
 
   startArtifactAuthority(
-    action: ArtifactAction,
-  ): V2StartedArtifactAuthority | PromiseLike<V2StartedArtifactAuthority> {
-    this.startedActions.push(action)
+    offered: OfferedArtifactChoice,
+  ): V2ArtifactPresentationAuthority {
+    this.startedChoices.push(offered)
     this.authorityStartStacks.push(this.clickStack())
-    if (this.authorityGate !== undefined) return this.authorityGate
-    const authority = new FakeStartedAuthority(action, intent => new FakeBoundRuntime(intent))
+    const authority = new FakeStartedAuthority(
+      offered,
+      intent => new FakeBoundRuntime(intent),
+      this.authorityReady,
+    )
     this.startedAuthorities.push(authority)
     return authority
   }
 }
 
-export class FakeStartedAuthority implements V2StartedArtifactAuthority {
+export class FakeStartedAuthority implements V2ArtifactPresentationAuthority {
+  readonly ready: Promise<void>
   readonly releaseReasons: unknown[] = []
-  readonly #action: ArtifactAction
+  readonly commitActions: ResolvedArtifactAction[] = []
+  readonly #offered: OfferedArtifactChoice
   readonly #runtime: (intent: ReceiveIntent) => FakeBoundRuntime
   runtime: FakeBoundRuntime | undefined
 
   constructor(
-    action: ArtifactAction,
+    offered: OfferedArtifactChoice,
     runtime: (intent: ReceiveIntent) => FakeBoundRuntime,
+    ready: Promise<void> = Promise.resolve(),
   ) {
-    this.#action = action
+    this.#offered = offered
     this.#runtime = runtime
+    this.ready = ready
   }
 
-  async finalize(
-    freezeIntent: (acquired: AcquiredMaterializationAuthority) => Promise<ReceiveIntent>,
-    signal: AbortSignal,
-  ): Promise<V2BoundReceiveOperation> {
-    signal.throwIfAborted()
-    const acquired = await acquiredAuthority(this.#action)
-    signal.throwIfAborted()
-    const intent = await freezeIntent(acquired)
-    signal.throwIfAborted()
-    this.runtime = this.#runtime(intent)
-    return this.runtime
+  async commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult> {
+    input.signal.throwIfAborted()
+    this.commitActions.push(input.action)
+    const candidate = await candidateBindingForTest(input.action, this.#offered.suggestedName)
+    input.signal.throwIfAborted()
+    const bound = await input.freezeAtFence(candidate)
+    input.signal.throwIfAborted()
+    this.runtime = this.#runtime(bound.intent)
+    return Object.freeze({ kind: 'bound-operation', operation: this.runtime })
   }
 
   release(reason: unknown): void {
@@ -332,6 +341,7 @@ export class FakeJoinedShare {
   readonly projectionRequests: Array<{ readonly signal: AbortSignal }> = []
   readonly transferRuns: FakeTransferRun[] = []
   readonly #projectionGates: Array<PromiseLike<void> | undefined>
+  readonly #generationListeners = new Set<V2ProtocolGenerationListener>()
   closeCount = 0
 
   constructor(defaultSelected: boolean, projectionGates: Array<PromiseLike<void> | undefined> = []) {
@@ -362,6 +372,28 @@ export class FakeJoinedShare {
 
   subscribeCatalogScanProgress(): () => void {
     return () => undefined
+  }
+
+  get protocolSessionIdentity(): string {
+    return this.protocolSessionId
+  }
+
+  subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
+    this.#generationListeners.add(listener)
+    return () => this.#generationListeners.delete(listener)
+  }
+
+  replaceProtocolSession(protocolSessionId: string): void {
+    this.protocolSessionId = protocolSessionId
+    for (const listener of this.#generationListeners) {
+      listener(Object.freeze({
+        generationId: 2,
+        protocolSessionId,
+        protocolSessionIdentity: protocolSessionId as unknown as Parameters<
+          V2ProtocolGenerationListener
+        >[0]['protocolSessionIdentity'],
+      }))
+    }
   }
 
   projectionSource(selection: V2FrozenSelectionPolicy): AuthenticatedDiscoverySource {
@@ -555,30 +587,32 @@ export async function startTransfer(
   controller: V2ReceiverController,
   joined: FakeJoinedShare,
 ): Promise<void> {
-  await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+  await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
   controller.chooseArtifact('download-original')
   await waitFor(() => joined.transferRuns.length === 1)
 }
 
-async function acquiredAuthority(action: ArtifactAction): Promise<AcquiredMaterializationAuthority> {
+export async function candidateBindingForTest(
+  action: ResolvedArtifactAction,
+  suggestedName: string | null,
+): Promise<CandidateMaterializationBinding> {
   const artifact = action.artifact
-  if (artifact === null) throw new Error('test action does not have a settled artifact')
-  switch (action.plan.kind) {
+  switch (action.route.kind) {
     case 'direct-atomic': {
       const reservation = await createManagedAtomicReservation({
         operationId: identityText(40),
         reservationId: identityText(41),
         artifact,
         authorityRef: identityText(42, 32),
-        nameAuthority: action.plan.target.guarantees.nameAuthority as
+        nameAuthority: action.route.target.guarantees.nameAuthority as
           'application-chosen' | 'user-chosen',
-        requestedName: action.suggestedName ?? FILE_ENTRY.name,
-        reservedName: action.suggestedName ?? FILE_ENTRY.name,
+        requestedName: suggestedName ?? FILE_ENTRY.name,
+        reservedName: suggestedName ?? FILE_ENTRY.name,
         collisionIndex: 0,
       })
       return Object.freeze({
         kind: 'destination-reservation',
-        environmentTargetOfferId: action.plan.target.id,
+        targetRouteId: action.route.target.routeId,
         reservation,
       })
     }
@@ -591,13 +625,14 @@ async function acquiredAuthority(action: ArtifactAction): Promise<AcquiredMateri
       })
       return Object.freeze({
         kind: 'workspace-binding',
-        workspaceOfferId: action.plan.workspace.id,
+        workspaceRouteId: action.route.workspace.routeId,
+        publicationTargetRouteId: action.route.publicationTarget.routeId,
         workspace,
       })
     }
     case 'direct-tree':
     case 'portable-handoff':
-      throw new Error(`unsupported test plan ${action.plan.kind}`)
+      throw new Error(`unsupported test plan ${action.choice.plan.kind}`)
   }
 }
 
@@ -819,8 +854,8 @@ function stableKindForExpiry(
   throw new Error('test lifecycle cannot expire')
 }
 
-export function missingAction(): ArtifactAction {
-  throw new Error('authority action was not captured')
+export function missingChoice(): OfferedArtifactChoice {
+  throw new Error('authority choice was not captured')
 }
 
 export function identityText(seed: number, width = 16): string {

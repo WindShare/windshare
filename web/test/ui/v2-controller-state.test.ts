@@ -3,17 +3,22 @@ import { describe, expect, it } from 'vitest'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
+import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
 import {
   createIncidentScopeIssuer,
   type FailureFactRelation,
   type IncidentScopeKind,
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
+import { ArtifactPlanningContractError } from '../../src/output/planning'
+import { V2ActivationStateContractError } from '../../src/ui/controller/activation-model'
 import { V2ControllerObservability } from '../../src/ui/controller/controller-observability'
 import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
 import { V2PresentationAttempt } from '../../src/ui/controller/presentation-attempt'
 import { projectBrowsePage } from '../../src/ui/v2-controller-state'
 import type { V2BrowseDirectory, V2BrowsePage } from '../../src/ui/v2-gateway'
+import type { V2RouteCommitResult } from '../../src/ui/v2-receive-runtime'
 
 describe('v2 browse page presentation', () => {
   it('reports only visible selection facts and leaves artifact semantics to projection', () => {
@@ -35,6 +40,20 @@ describe('v2 browse page presentation', () => {
 })
 
 describe('v2 controller diagnostics', () => {
+  it('keeps clean pre-cut replacement distinct from post-cut ownership', () => {
+    const result = Object.freeze({
+      kind: 'retryable-precut',
+      receiverOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
+    }) satisfies V2RouteCommitResult
+
+    expect(result).toEqual({
+      kind: 'retryable-precut',
+      receiverOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
+    })
+    expect(result).not.toHaveProperty('operation')
+    expect(result).not.toHaveProperty('authority')
+  })
+
   it('keeps the initiating trigger before consequences and closes after owned cleanup', () => {
     const issuer = createIncidentScopeIssuer()
     const order: string[] = []
@@ -97,7 +116,52 @@ describe('v2 controller diagnostics', () => {
     expect(payloadsConstructed).toBe(1)
     expect(observed).toEqual(['join_transition'])
   })
+
+  it.each([
+    new ArtifactPlanningContractError('same-epoch-selection-digest-changed'),
+    new V2ActivationStateContractError('impossible activation transition'),
+  ])('classifies %s as a terminal output Contract fault', (error) => {
+    const composition = diagnosticsComposition()
+    const observability = new V2ControllerObservability({ incidents: composition.incidents })
+    const attempt = observability.open('authority_activation')
+
+    observability.fail(attempt, 'projection_authority', error, 'authority_activation')
+    attempt.close()
+
+    const incident = composition.runtime.inspectLastFailure()
+    expect(incident?.payload.trigger).toEqual({
+      kind: 'fault',
+      stage: 'authority_activation',
+      recovery_disposition: 'terminal',
+      payload: {
+        fault: {
+          domain: 'output',
+          scope: 'output_pause',
+          code: 'contract',
+        },
+      },
+    })
+    expect(JSON.stringify(incident)).not.toContain('unclassified')
+  })
 })
+
+function diagnosticsComposition() {
+  let now = 1_000
+  return createBrowserDiagnosticsComposition({
+    build: browserBuildSnapshot(),
+    secureContext: true,
+    consoleSink: Object.freeze({ error: () => undefined }),
+    randomBytes: (byteLength) =>
+      Uint8Array.from({ length: byteLength }, (_, index) => index + 1),
+    clock: Object.freeze({
+      nowMilliseconds: () => now++,
+      captureTime: () => new Date(now++).toISOString(),
+    }),
+    scheduler: Object.freeze({
+      schedule: () => Object.freeze({ cancel: () => undefined }),
+    }),
+  })
+}
 
 function directory(): V2BrowseDirectory {
   return Object.freeze({

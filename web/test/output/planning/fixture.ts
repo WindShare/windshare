@@ -38,9 +38,9 @@ export function identity(seed: number, width = 16): string {
   return encodeBase64Url(bytes)
 }
 
-export function nativeTarget(id = 'native'): EnvironmentTargetOfferInput {
+export function nativeTarget(routeId = 'native'): EnvironmentTargetOfferInput {
   return {
-    id,
+    routeId,
     kind: 'native-directory-container',
     guarantees: guaranteeFacts(nativeTreeGuarantees()),
     persistence: 'durable-authority',
@@ -48,9 +48,9 @@ export function nativeTarget(id = 'native'): EnvironmentTargetOfferInput {
   }
 }
 
-export function fsaTarget(id = 'fsa'): EnvironmentTargetOfferInput {
+export function fsaTarget(routeId = 'fsa'): EnvironmentTargetOfferInput {
   return {
-    id,
+    routeId,
     kind: 'fsa-parent-directory',
     guarantees: guaranteeFacts(fsaTreeGuarantees()),
     persistence: 'durable-after-repository-commit',
@@ -59,11 +59,11 @@ export function fsaTarget(id = 'fsa'): EnvironmentTargetOfferInput {
 }
 
 export function managedTarget(
-  id = 'managed',
+  routeId = 'managed',
   nameAuthority: 'application-chosen' | 'user-chosen' = 'application-chosen',
 ): EnvironmentTargetOfferInput {
   return {
-    id,
+    routeId,
     kind: 'managed-atomic-file-target',
     guarantees: guaranteeFacts(managedAtomicGuarantees(nameAuthority)),
     persistence: 'operation-scoped',
@@ -71,9 +71,9 @@ export function managedTarget(
   }
 }
 
-export function handoffTarget(id = 'handoff'): EnvironmentTargetOfferInput {
+export function handoffTarget(routeId = 'handoff'): EnvironmentTargetOfferInput {
   return {
-    id,
+    routeId,
     kind: 'browser-handoff',
     guarantees: guaranteeFacts(browserHandoffGuarantees()),
     persistence: 'none',
@@ -84,9 +84,9 @@ export function handoffTarget(id = 'handoff'): EnvironmentTargetOfferInput {
   }
 }
 
-export function precreatedBrowserFileTarget(id = 'save-picker'): EnvironmentTargetOfferInput {
+export function precreatedBrowserFileTarget(routeId = 'save-picker'): EnvironmentTargetOfferInput {
   return {
-    id,
+    routeId,
     kind: 'precreated-browser-file',
     guarantees: {
       nameAuthority: 'user-chosen',
@@ -100,9 +100,9 @@ export function precreatedBrowserFileTarget(id = 'save-picker'): EnvironmentTarg
   }
 }
 
-export function workspaceOffer(id = 'workspace'): WorkspaceEnvironmentOffer {
+export function workspaceOffer(routeId = 'workspace'): WorkspaceEnvironmentOffer {
   return {
-    id,
+    routeId,
     kind: 'origin-private-workspace',
     persistence: 'durable-owned-repository',
     jobHardLimitBytes: TEST_JOB_WORKSPACE_LIMIT,
@@ -112,9 +112,9 @@ export function workspaceOffer(id = 'workspace'): WorkspaceEnvironmentOffer {
   }
 }
 
-export function portableOffer(id = 'portable'): PortableEnvironmentOffer {
+export function portableOffer(routeId = 'portable'): PortableEnvironmentOffer {
   return {
-    id,
+    routeId,
     kind: 'portable-memory',
     persistence: 'none',
     maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,

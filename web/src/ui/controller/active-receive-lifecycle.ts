@@ -10,7 +10,6 @@ import type { V2OutputPresentationController } from '../v2-output'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-  V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
 import { presentationSourceOutcome } from '../v2-receive-runtime'
 import { StaleReceiveBoundaryError } from './contracts'
@@ -39,7 +38,7 @@ interface PendingLifecycleAction {
 }
 
 export interface ActiveReceiveLifecycleOptions {
-  readonly outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  readonly outputs: V2OutputPresentationController
   readonly observability: ActiveReceiveObservability
   readonly currentOperation: () => ActiveReceiveLifecycleOperation | undefined
   readonly operationIsCurrent: (operation: ActiveReceiveLifecycleOperation) => boolean
@@ -53,7 +52,7 @@ export interface ActiveReceiveLifecycleOptions {
 }
 
 export class ActiveReceiveLifecycle {
-  readonly #outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  readonly #outputs: V2OutputPresentationController
   readonly #observability: ActiveReceiveObservability
   readonly #currentOperation: () => ActiveReceiveLifecycleOperation | undefined
   readonly #operationIsCurrent: (operation: ActiveReceiveLifecycleOperation) => boolean

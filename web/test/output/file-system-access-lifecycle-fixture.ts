@@ -13,10 +13,17 @@ import {
 import type { DirectoryAdmission } from '../../src/transfer/directory-admission'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
-import type { BrowserLockManagerRuntime } from '../../src/output/browser/namespace-mutation'
-import { verifyFSAOperationBinding } from '../../src/output/browser/indexeddb-root-binding'
 import {
-  bindNewFileSystemAccessOutput,
+  acquireFSARootMutationLease,
+  type BrowserLockManagerRuntime,
+} from '../../src/output/browser/namespace-mutation'
+import {
+  prepareFSAOperationBindingTransition,
+  verifyFSAOperationBinding,
+} from '../../src/output/browser/indexeddb-root-binding'
+import {
+  assembleNewFileSystemAccessOutput,
+  reserveNewFileSystemAccessOutput,
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
   type FSAOutputTraceEvent,
@@ -284,25 +291,49 @@ export async function bindTask(input: Readonly<{
   locks: MemoryLockManager
   artifact: DirectoryTreeArtifact
   operationSeed: number
+  activate?: boolean
   trace?: (event: FSAOutputTraceEvent) => void
 }>) {
   const selection = await selectionSpec()
-  return bindNewFileSystemAccessOutput({
-    authority: acquiredParent(input.parent),
+  const authority = acquiredParent(input.parent)
+  const rootLease = await acquireFSARootMutationLease(
+    input.parent as unknown as FileSystemDirectoryHandle,
+    input.locks,
+  )
+  const reserved = await reserveNewFileSystemAccessOutput({
+    authority,
     artifact: input.artifact,
-    operationRepository: input.repository,
-    lockManager: input.locks,
-    checkpointRepositoryFactory: input.checkpointFactory,
+    rootLease,
     operationId: identity(input.operationSeed),
     reservationId: identity(input.operationSeed + 1),
     authorityRef: identity(input.operationSeed + 2, 32),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
-    freezeIntent: async (reservation) => createReceiveIntent({
-      selection,
-      artifact: input.artifact,
-      plan: await createDirectTreePlan(input.artifact, reservation),
-    }),
   })
+  const intent = await createReceiveIntent({
+    selection,
+    artifact: input.artifact,
+    plan: await createDirectTreePlan(input.artifact, reserved.reservation),
+  })
+  const prepared = await prepareFSAOperationBindingTransition({
+    repository: input.repository,
+    intent,
+    parent: authority.parent,
+  })
+  await input.repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
+  const binding = await verifyFSAOperationBinding({
+    repository: input.repository,
+    intent,
+    expectedParent: authority.parent,
+  })
+  const session = await assembleNewFileSystemAccessOutput({
+    binding,
+    operationRepository: input.repository,
+    rootLease,
+    checkpointRepositoryFactory: input.checkpointFactory,
+    ...(input.trace === undefined ? {} : { trace: input.trace }),
+  })
+  if (input.activate !== false) await session.activate()
+  return session
 }
 
 export async function fsaExecution(
@@ -463,7 +494,7 @@ function acquiredParent(parent: MemoryDirectory): AcquiredFSAParentAuthority {
   const offer = fsaParentOffer()
   return Object.freeze({
     kind: 'fsa-parent-directory-authority',
-    environmentTargetOfferId: offer.id,
+    targetRouteId: offer.routeId,
     offer,
     parent: parent as unknown as FileSystemDirectoryHandle,
   })

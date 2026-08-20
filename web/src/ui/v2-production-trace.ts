@@ -251,17 +251,73 @@ function projectAuthorityTraceEvent(
         stale_projection_epoch: decimal(event.staleProjectionEpoch),
         event_class: snake(event.eventClass),
       })
-    default:
+    case 'activation_started':
+    case 'artifact_resolved':
+    case 'commit_started':
       return observation(event.name, {
         transition: event.transition,
-        ...(event.artifactKind === undefined
+        ...projectAuthorityActivationContext(event),
+      })
+    case 'commit_pre_cut_retry':
+    case 'cleanup_completed':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        ...(event.receiverOperationId === undefined
           ? {}
-          : { artifact_kind: snake(event.artifactKind) }),
-        ...(event.planKind === undefined
-          ? {}
-          : { plan_kind: snake(event.planKind) }),
+          : { receiver_operation_id: event.receiverOperationId }),
+      })
+    case 'prerequisite_waiting':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        waiting_for: snake(event.waitingFor),
+      })
+    case 'retry_required':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        retryable_discovery_reason: snake(event.retryableDiscoveryReason),
+      })
+    case 'semantic_invalidated':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        invalidation_reason: snake(event.invalidationReason),
+      })
+    case 'commit_bound_operation':
+    case 'commit_owned_effects':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        receiver_operation_id: event.receiverOperationId,
+      })
+    case 'cleanup_failed':
+      return observation(event.name, {
+        transition: event.transition,
+        ...projectAuthorityActivationContext(event),
+        receiver_operation_id: event.receiverOperationId,
+        failed_stage: event.failedStage,
       })
   }
+}
+
+function projectAuthorityActivationContext(
+  event: Extract<
+    V2ReceiverTraceEvent,
+    { readonly name: 'authority_transition'; readonly activationId: string }
+  >,
+) {
+  return {
+    activation_id: event.activationId,
+    authenticated_share_instance_id: event.authenticatedShareInstanceId,
+    selection_digest: event.selectionDigest,
+    observed_protocol_session_id: event.observedProtocolSessionId,
+    projection_epoch: decimal(event.projectionEpoch),
+    observation_revision: decimal(event.observationRevision),
+    artifact_kind: snake(event.artifactKind),
+    plan_kind: snake(event.planKind),
+  } as const
 }
 
 function projectTransferTraceEvent(
