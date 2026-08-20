@@ -16,6 +16,18 @@ export interface CorrelationV1 {
   readonly peer_attempt_id?: string
   readonly lane_id?: number
   readonly lane_epoch?: number
+  readonly receive_operation_id?: string
+  readonly transfer_job_id?: string
+  readonly output_session_id?: string
+  readonly protocol_generation?: number
+}
+
+export interface LocalOutputCorrelationInputV1 {
+  readonly receiveOperationId: string
+  readonly transferJobId: string
+  readonly outputSessionId: string
+  readonly protocolSessionIdentity?: FailureIdentity<'protocol_session'>
+  readonly protocolGeneration?: number
 }
 
 // Projection is the only boundary allowed to turn typed identity bytes into
@@ -74,6 +86,44 @@ export function projectCorrelationV1(
   return Object.freeze(projected)
 }
 
+/**
+ * Local output correlation deliberately excludes artifact paths. Protocol identity
+ * is shared with the ordinary incident vocabulary, while receive/output identities
+ * remain diagnostic-only and never enter protocol trace payloads.
+ */
+export function projectLocalOutputCorrelationV1(
+  input: LocalOutputCorrelationInputV1,
+): CorrelationV1 {
+  const receiveOperationId = correlationText(
+    input.receiveOperationId,
+    'receive operation identity',
+  )
+  const transferJobId = correlationText(input.transferJobId, 'transfer job identity')
+  const outputSessionId = correlationText(input.outputSessionId, 'output session identity')
+  const protocolSessionId = projectIdentity(input.protocolSessionIdentity, 'protocol_session')
+  if ((protocolSessionId === undefined) !== (input.protocolGeneration === undefined)) {
+    throw new TypeError('protocol generation and session identity must be captured together')
+  }
+  if (input.protocolGeneration !== undefined && (
+    !Number.isSafeInteger(input.protocolGeneration) ||
+    input.protocolGeneration <= 0 ||
+    input.protocolGeneration > UINT32_MAX
+  )) {
+    throw new RangeError('protocol generation must be a positive uint32')
+  }
+  return Object.freeze({
+    receive_operation_id: receiveOperationId,
+    transfer_job_id: transferJobId,
+    output_session_id: outputSessionId,
+    ...(protocolSessionId === undefined
+      ? {}
+      : {
+          protocol_session_id: protocolSessionId,
+          protocol_generation: input.protocolGeneration,
+        }),
+  })
+}
+
 function projectIdentity<Kind extends FailureIdentityKind>(
   identity: FailureIdentity<Kind> | undefined,
   expectedKind: Kind,
@@ -110,4 +160,11 @@ function validateLane(
     throw new TypeError('Lane correlation must contain a uint32 ID and epoch')
   }
   return lane
+}
+
+function correlationText(value: string, field: string): string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new TypeError(`${field} must be non-empty text`)
+  }
+  return value
 }

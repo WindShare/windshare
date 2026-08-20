@@ -49,7 +49,7 @@ export class V2PresentationAttempt {
     } catch {
       // Diagnostics cannot prevent an accepted product attempt from starting.
     }
-    this.#outputFailures = createAttemptOutputFailureCapability(this.#scope?.facts)
+    this.#outputFailures = createAttemptOutputFailureCapability(this.#scope?.handle)
   }
 
   get decisionSettled(): boolean {
@@ -140,7 +140,7 @@ export class V2PresentationAttempt {
       return undefined
     }
     this.#lateCleanupCapabilityIssued = true
-    return createLateOutputCleanupCapability(this.#scope.facts)
+    return createLateOutputCleanupCapability(this.#scope.handle)
   }
 
   close(): void {

@@ -622,11 +622,12 @@ describe('File System Access activation boundary settlement', () => {
   it('records NeedsAttention when root activation may have acquired namespace effects', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
+    const locks = new MemoryLockManager()
     const session = await bindTask({
       parent,
       repository,
       checkpointFactory: memoryCheckpointFactory(),
-      locks: new MemoryLockManager(),
+      locks,
       artifact: await resultRootArtifact(),
       operationSeed: 115,
       activate: false,
@@ -649,7 +650,9 @@ describe('File System Access activation boundary settlement', () => {
       activationFailure,
       SIGNAL,
     )).resolves.toMatchObject({ kind: 'needs-attention' })
+    expect(locks.releaseCount).toBe(1)
     await session.close()
+    expect(locks.releaseCount).toBe(1)
   })
 })
 

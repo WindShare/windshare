@@ -45,6 +45,11 @@ import type {
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import {
+  createPersistentOutputStageAuthority,
+  type PersistentOutputStageAuthority,
+  type PersistentOutputStageDiagnostics,
+} from '../persistent-tree/stage-diagnostics'
+import {
   openFSAFileCheckpointRepository,
   scanAllFSAFileCheckpoints,
   type FSAFileCheckpointRepository,
@@ -70,7 +75,7 @@ export type FSAReservationTraceEvent =
       operation_id: string
       reservation_kind: 'named-container-entry'
       collision_index: number
-      name_authority: 'application-chosen'
+      name_authority: 'application-chosen' | 'user-chosen'
       replacement_guarantee: 'coordinated-no-replace'
       delivery_mode: 'managed-target'
       commit_visibility: 'prefix-visible'
@@ -127,6 +132,7 @@ export interface AssembleNewFileSystemAccessOutputOptions {
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly stageDiagnostics?: PersistentOutputStageDiagnostics
   readonly trace?: FSAOutputTrace
 }
 
@@ -137,6 +143,7 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly stageDiagnostics?: PersistentOutputStageDiagnostics
   readonly trace?: FSAOutputTrace
 }
 
@@ -149,6 +156,7 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
   readonly #operationRepository: FSAOperationBindingRepository
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
+  readonly #stageAuthority: PersistentOutputStageAuthority | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #settlementStarted = false
   #settlementObservationActive = false
@@ -163,6 +171,7 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
     operationRepository: FSAOperationBindingRepository
     checkpoints: FSAFileCheckpointRepository
     rootLease: FSARootMutationLease
+    stageAuthority?: PersistentOutputStageAuthority
     diagnostics?: OutputDiagnosticsPorts
   }>) {
     this.intent = input.intent
@@ -173,6 +182,7 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
     this.#operationRepository = input.operationRepository
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
+    this.#stageAuthority = input.stageAuthority
     this.#diagnostics = input.diagnostics
   }
 
@@ -275,6 +285,9 @@ export class FileSystemAccessOutputSession implements ActivatablePersistentMater
           repository: this.#operationRepository,
           intent: this.intent,
           expectedParent: this.#binding.parent,
+          ...(this.#stageAuthority === undefined
+            ? {}
+            : { stageScope: this.#stageAuthority.bindingScope() }),
         })
       },
       verifyDirectory: async (path: readonly string[], ownedObjectId: string) => {
@@ -354,10 +367,20 @@ export async function reserveNewFileSystemAccessOutput(
 export async function assembleNewFileSystemAccessOutput(
   options: AssembleNewFileSystemAccessOutputOptions,
 ): Promise<FileSystemAccessOutputSession> {
+  const stageAuthority = createPersistentOutputStageAuthority(
+    options.stageDiagnostics,
+    {
+      operationId: options.binding.intent.operationId,
+      artifactId: options.binding.intent.artifact.digest,
+    },
+  )
   const binding = await verifyFSAOperationBinding({
     repository: options.operationRepository,
     intent: options.binding.intent,
     expectedParent: options.binding.parent,
+    ...(stageAuthority === undefined
+      ? {}
+      : { stageScope: stageAuthority.bindingScope() }),
   })
   let checkpoints: FSAFileCheckpointRepository | undefined
   try {
@@ -373,6 +396,7 @@ export async function assembleNewFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: options.rootLease.authority,
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
     })
     const materialization = await PersistentTreeOutputSession.createNew({
       tree,
@@ -380,6 +404,7 @@ export async function assembleNewFileSystemAccessOutput(
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     return new FileSystemAccessOutputSession({
@@ -391,6 +416,7 @@ export async function assembleNewFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease: options.rootLease,
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
@@ -420,11 +446,21 @@ export async function reopenFileSystemAccessOutput(
   options: ReopenFileSystemAccessOutputOptions,
 ): Promise<FileSystemAccessOutputSession> {
   const intent = await validateReceiveIntent(options.intent)
+  const stageAuthority = createPersistentOutputStageAuthority(
+    options.stageDiagnostics,
+    {
+      operationId: intent.operationId,
+      artifactId: intent.artifact.digest,
+    },
+  )
   let firstBinding: PersistedFSAOperationBinding
   try {
     firstBinding = await verifyFSAOperationBinding({
       repository: options.operationRepository,
       intent,
+      ...(stageAuthority === undefined
+        ? {}
+        : { stageScope: stageAuthority.bindingScope() }),
     })
   } catch (error) {
     if (error instanceof TargetOwnershipUnknownError && error.stage !== 'checkpoint') {
@@ -434,14 +470,7 @@ export async function reopenFileSystemAccessOutput(
     outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
     throw error
   }
-  const rootLease = await (options.lockManager === undefined
-    ? acquireFSARootMutationLease(firstBinding.parent)
-    : acquireFSARootMutationLease(firstBinding.parent, options.lockManager)
-  ).catch((error: unknown) => {
-    recordOutputException(options.diagnostics?.failures?.reopen, error)
-    outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
-    throw error
-  })
+  const rootLease = await acquireReopenRootLease(firstBinding.parent, options)
   let checkpoints: FSAFileCheckpointRepository | undefined
   let materializationOpening = false
   try {
@@ -449,6 +478,9 @@ export async function reopenFileSystemAccessOutput(
       repository: options.operationRepository,
       intent,
       expectedParent: firstBinding.parent,
+      ...(stageAuthority === undefined
+        ? {}
+        : { stageScope: stageAuthority.bindingScope() }),
     })
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const tree = new BrowserFileSystemTree({
@@ -456,6 +488,7 @@ export async function reopenFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: rootLease.authority,
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
     })
     materializationOpening = true
     const materialization = await PersistentTreeOutputSession.open({
@@ -464,6 +497,7 @@ export async function reopenFileSystemAccessOutput(
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     emitFSAOutputTrace(options.trace, Object.freeze({
@@ -482,6 +516,7 @@ export async function reopenFileSystemAccessOutput(
       operationRepository: options.operationRepository,
       checkpoints,
       rootLease,
+      ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
@@ -500,6 +535,21 @@ export async function reopenFileSystemAccessOutput(
         { cause: error },
       )
     }
+    throw error
+  }
+}
+
+async function acquireReopenRootLease(
+  parent: FileSystemDirectoryHandle,
+  options: ReopenFileSystemAccessOutputOptions,
+): Promise<FSARootMutationLease> {
+  try {
+    return options.lockManager === undefined
+      ? await acquireFSARootMutationLease(parent)
+      : await acquireFSARootMutationLease(parent, options.lockManager)
+  } catch (error) {
+    recordOutputException(options.diagnostics?.failures?.reopen, error)
+    outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
     throw error
   }
 }
@@ -599,12 +649,16 @@ async function namespaceEntryExists(
 function reservationCreated(
   reservation: NamedContainerEntryReservation,
 ): Extract<FSAReservationTraceEvent, { name: 'receive.reservation.created' }> {
+  const nameAuthority = reservation.guarantees.nameAuthority
+  if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
+    throw new TypeError('FSA reservation name authority is invalid')
+  }
   return Object.freeze({
     name: 'receive.reservation.created',
     operation_id: reservation.operationId,
     reservation_kind: 'named-container-entry',
     collision_index: reservation.collisionIndex,
-    name_authority: 'application-chosen',
+    name_authority: nameAuthority,
     replacement_guarantee: 'coordinated-no-replace',
     delivery_mode: 'managed-target',
     commit_visibility: 'prefix-visible',

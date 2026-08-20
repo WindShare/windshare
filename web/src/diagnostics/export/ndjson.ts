@@ -1,6 +1,7 @@
 import type {
   DiagnosticBundleHeaderV1,
   DiagnosticBundleIncidentLineV1,
+  DiagnosticBundleLocalOutputFailureLineV1,
   DiagnosticBundleTraceCaptureLineV1,
   DiagnosticBundleTraceEventLineV1,
   DiagnosticBundleV1,
@@ -9,6 +10,7 @@ import type {
 type DiagnosticBundleLineV1 =
   | DiagnosticBundleHeaderV1
   | DiagnosticBundleIncidentLineV1
+  | DiagnosticBundleLocalOutputFailureLineV1
   | DiagnosticBundleTraceCaptureLineV1
   | DiagnosticBundleTraceEventLineV1
 
@@ -16,6 +18,7 @@ export function encodeDiagnosticBundleNdjson(bundle: DiagnosticBundleV1): string
   const lines: DiagnosticBundleLineV1[] = [
     bundle.header,
     ...bundle.incidents,
+    ...bundle.localOutputFailures,
     ...(bundle.traceCapture === undefined ? [] : [bundle.traceCapture]),
     ...bundle.traceEvents,
   ]

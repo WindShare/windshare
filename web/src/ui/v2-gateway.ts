@@ -25,6 +25,7 @@ import {
   type Suite02CapabilityLink,
 } from '../crypto/suite02-link'
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
+import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
 import type { V2ProtocolGenerationListener } from '../receiver/v2-supervisor'
@@ -209,8 +210,21 @@ export class V2JoinedBrowserShare {
       readonly selection?: V2FrozenSelectionPolicy
     } = {},
   ): TransferJob {
+    const protocolGeneration = this.#supervisor.generationId
+    const protocolSessionIdentity = this.#supervisor.protocolSessionIdentity
     const content = this.#supervisor.content.forRoutes(connectivity.routes)
     const { selection = this.selection.snapshot(), ...jobCallbacks } = callbacks
+    if (callbacks.incidentScope !== undefined && callbacks.transferJobId !== undefined) {
+      try {
+        bindLocalOutputFailureProtocolAttempt(callbacks.incidentScope, {
+          transferJobId: callbacks.transferJobId,
+          protocolSessionIdentity,
+          protocolGeneration,
+        })
+      } catch {
+        // Correlation is observational and cannot prevent transfer construction.
+      }
+    }
     return new TransferJob({
       descriptor: this.descriptor,
       catalog: this.#catalog,
