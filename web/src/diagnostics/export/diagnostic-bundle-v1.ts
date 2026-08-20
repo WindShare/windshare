@@ -26,6 +26,7 @@ import type {
   LocalOutputOperationFailureV1,
 } from '../../output/diagnostics/local-output-failure'
 import type { CorrelationV1 } from './correlation-v1'
+import { hasBoundedOutputExceptionEvidence } from './local-output-failure-v1'
 
 export const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 1 as const
 
@@ -236,7 +237,8 @@ function validateLocalOutputFailure(
       record.stageFailure.sequence <= 0 ||
       owningScope.scopeKind.length === 0 ||
       BigInt(canonicalDecimal(owningScope.scopeSequence, 'local output incident scope')) <= 0n ||
-      !isDeeplyFrozen(projection)) {
+      !isDeeplyFrozen(projection) ||
+      !hasBoundedOutputExceptionEvidence(record)) {
     throw new TypeError('local output failure is not a frozen bounded stage projection')
   }
   const keys = Object.keys(correlation)

@@ -25,42 +25,80 @@ export const OUTPUT_NATIVE_ERROR_CLASSES = Object.freeze([
 
 export type OutputNativeErrorClass = (typeof OUTPUT_NATIVE_ERROR_CLASSES)[number]
 
-export interface NormalizedOutputException {
+export interface OutputExceptionProjection {
   readonly javascriptKind: OutputJavaScriptExceptionKind
   readonly nativeClass: OutputNativeErrorClass
   readonly thrownType: string
   readonly constructorName: string | null
   readonly errorName: string | null
-  readonly domExceptionName: string | null
-  readonly message: string
+  readonly message: string | null
   readonly stack: string | null
-  readonly thrownValue: string
+  readonly thrownValue: string | null
   readonly cause: string | null
 }
+
+export type OutputExceptionTextProjector = (value: string) => string
 
 /**
  * Only genuine platform objects select an error class. Name-like properties on
  * arbitrary thrown values remain diagnostic text and acquire no recovery meaning.
+ * Every dynamic string crosses the caller-owned projector before it can become
+ * retained evidence, so capture and export cannot silently diverge on capacity.
  */
-export function normalizeOutputException(thrown: unknown): NormalizedOutputException {
+export function projectOutputException(
+  thrown: unknown,
+  projectText: OutputExceptionTextProjector,
+): OutputExceptionProjection {
   const domException = isNativeDOMException(thrown) ? thrown : undefined
   const typeError = domException === undefined && isNativeTypeError(thrown)
     ? thrown
     : undefined
   const error = domException ?? typeError ?? (isNativeError(thrown) ? thrown : undefined)
+  const constructorName = safeConstructorName(error ?? thrown)
+  const errorName = error === undefined ? null : safeErrorName(error)
+  const message = error === undefined ? null : safeErrorMessage(error)
+  const stack = error === undefined ? null : safeErrorStack(error)
+  const cause = error === undefined ? null : safeErrorCause(error)
+  const thrownValue = error === undefined ? safeString(thrown) : null
+  const projectedErrorName = projectNullableText(errorName, projectText)
 
   return Object.freeze({
     javascriptKind: javascriptExceptionKind(domException, typeError),
-    nativeClass: nativeErrorClass(domException, typeError),
+    nativeClass: nativeErrorClass(domException, typeError, errorName),
     thrownType: thrown === null ? 'null' : typeof thrown,
-    constructorName: safeConstructorName(error ?? thrown),
-    errorName: error === undefined ? null : safeErrorName(error),
-    domExceptionName: domException === undefined ? null : safeErrorName(domException),
-    message: error === undefined ? safeString(thrown) : safeErrorMessage(error),
-    stack: error === undefined ? null : safeErrorStack(error),
-    thrownValue: safeString(thrown),
-    cause: error === undefined ? null : safeErrorCause(error),
+    constructorName: projectNullableText(constructorName, projectText),
+    errorName: projectedErrorName,
+    message: projectNullableText(message, projectText),
+    stack: projectNullableText(stack, projectText),
+    thrownValue: projectNullableText(thrownValue, projectText),
+    cause: projectNullableText(cause, projectText),
   })
+}
+
+export function isBoundedOutputExceptionProjection(
+  projection: OutputExceptionProjection,
+  maximumTextBytes: number,
+): boolean {
+  if (!Number.isSafeInteger(maximumTextBytes) || maximumTextBytes <= 0) {
+    throw new RangeError('output exception text capacity must be a positive integer')
+  }
+  return [
+    projection.constructorName,
+    projection.errorName,
+    projection.message,
+    projection.stack,
+    projection.thrownValue,
+    projection.cause,
+  ].every(value => value === null || (
+    typeof value === 'string' && new TextEncoder().encode(value).byteLength <= maximumTextBytes
+  ))
+}
+
+function projectNullableText(
+  value: string | null,
+  projectText: OutputExceptionTextProjector,
+): string | null {
+  return value === null ? null : projectText(value)
 }
 
 function javascriptExceptionKind(
@@ -75,8 +113,9 @@ function javascriptExceptionKind(
 function nativeErrorClass(
   domException: DOMException | undefined,
   typeError: TypeError | undefined,
+  errorName: string | null,
 ): OutputNativeErrorClass {
-  if (domException !== undefined) return classForDOMException(safeErrorName(domException) ?? '')
+  if (domException !== undefined) return classForDOMException(errorName ?? '')
   if (typeError !== undefined) return 'type_error'
   return 'unknown'
 }

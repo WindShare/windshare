@@ -1,26 +1,14 @@
 import type {
   PersistentOutputCheckpointRecordFact,
   PersistentOutputCheckpointRecordProjection,
+  PersistentOutputCapturedException,
   PersistentOutputExceptionProjection,
   PersistentOutputFailureFacts,
   PersistentOutputObservedFact,
-  PersistentOutputRawException,
   PersistentOutputStageFailureMilestone,
   PersistentOutputStageFailureProjectionV1,
-  PersistentOutputStageFailureRecord,
-  PersistentOutputStageMilestone,
   ProjectedObservedFact,
 } from './stage-diagnostic-model'
-
-export function persistentOutputStageFailureRecord(
-  milestone: PersistentOutputStageMilestone,
-): PersistentOutputStageFailureRecord | undefined {
-  if (milestone.transition !== 'failed') return undefined
-  return Object.freeze({
-    local: milestone,
-    projection: projectPersistentOutputStageFailure(milestone),
-  })
-}
 
 export function projectPersistentOutputStageFailure(
   milestone: PersistentOutputStageFailureMilestone,
@@ -135,15 +123,7 @@ function projectObservedFact<Input, Output>(
 }
 
 function projectException(
-  exception: PersistentOutputRawException,
+  exception: PersistentOutputCapturedException,
 ): PersistentOutputExceptionProjection {
-  return Object.freeze({
-    valueType: exception.valueType,
-    ...(exception.constructorName === undefined
-      ? {}
-      : { constructorName: exception.constructorName }),
-    ...(exception.name === undefined ? {} : { name: exception.name }),
-    ...(exception.message === undefined ? {} : { message: exception.message }),
-    ...(exception.stack === undefined ? {} : { stack: exception.stack }),
-  })
+  return exception.projection
 }

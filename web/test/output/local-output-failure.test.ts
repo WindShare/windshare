@@ -9,15 +9,16 @@ import {
   bindLocalOutputFailureProtocolAttempt,
   createAttemptOutputFailureCapability,
   createOutputFailureBinding,
-  normalizeOutputException,
+  type OutputExceptionProjection,
 } from '../../src/output/diagnostics'
-import type {
-  PersistentOutputStageFailureMilestone,
-  PersistentOutputStageMilestone,
+import {
+  persistentOutputCapturedException,
+  type PersistentOutputStageFailureMilestone,
+  type PersistentOutputStageMilestone,
 } from '../../src/output/persistent-tree/stage-diagnostics'
 
 describe('local output failure diagnostics', () => {
-  it('retains bounded attempt-correlated failures while keeping raw identity local', () => {
+  it('retains bounded attempt-correlated projections without retaining raw identity', () => {
     const scope = createIncidentScopeIssuer().open('receive')
     const attempt = createAttemptOutputFailureCapability(scope.handle)
     const history = new BoundedLocalOutputOperationFailureHistory(2)
@@ -46,7 +47,6 @@ describe('local output failure diagnostics', () => {
     diagnostics.observe(failedMilestone(6, third))
 
     expect(history.snapshot().map(record => record.failure.stageFailure.sequence)).toEqual([4, 6])
-    expect(history.lastLocal()?.local.exception.raw).toBe(third)
     expect(JSON.stringify(history.snapshot())).not.toContain('"raw"')
     expect(history.snapshot()[0]).toMatchObject({
       owningScope: {
@@ -61,13 +61,17 @@ describe('local output failure diagnostics', () => {
         output_session_id: 'output-session',
       },
       failure: {
-        normalizedException: {
-          javascriptKind: 'unknown',
-          message: 'second failure',
-          cause: 'disk detached',
+        stageFailure: {
+          exception: {
+            javascriptKind: 'unknown',
+            message: 'second failure',
+            cause: 'disk detached',
+          },
         },
       },
     })
+    expect(history.snapshot()[1]?.failure.stageFailure.exception.thrownValue)
+      .toBe('[object Object]')
 
     history.clear()
     expect(history.snapshot()).toEqual([])
@@ -111,24 +115,23 @@ describe('local output failure diagnostics', () => {
       },
     })
 
-    expect(normalizeOutputException(hostile)).toEqual({
+    expect(exceptionProjection(hostile)).toEqual({
       javascriptKind: 'unknown',
       nativeClass: 'unknown',
       thrownType: 'object',
       constructorName: null,
       errorName: null,
-      domExceptionName: null,
-      message: '[unprintable thrown value]',
+      message: null,
       stack: null,
       thrownValue: '[unprintable thrown value]',
       cause: null,
     })
-    expect(normalizeOutputException(
+    expect(exceptionProjection(
       new DOMException('storage refused', 'NotAllowedError'),
     )).toMatchObject({
       javascriptKind: 'dom-exception',
       nativeClass: 'not_allowed',
-      domExceptionName: 'NotAllowedError',
+      errorName: 'NotAllowedError',
       message: 'storage refused',
     })
   })
@@ -152,24 +155,18 @@ function failedMilestone(
   sequence: number,
   error: unknown,
 ): PersistentOutputStageFailureMilestone {
-  const normalized = normalizeOutputException(error)
   return Object.freeze({
     sequence,
     transition: 'failed',
     stage: 'fsa.file.writer.write',
     correlation: correlation(),
-    exception: Object.freeze({
-      raw: error,
-      valueType: normalized.thrownType,
-      ...(normalized.constructorName === null
-        ? {}
-        : { constructorName: normalized.constructorName }),
-      ...(normalized.errorName === null ? {} : { name: normalized.errorName }),
-      ...(normalized.message.length === 0 ? {} : { message: normalized.message }),
-      ...(normalized.stack === null ? {} : { stack: normalized.stack }),
-    }),
+    exception: persistentOutputCapturedException(error),
     facts: emptyFailureFacts(),
   })
+}
+
+function exceptionProjection(error: unknown): OutputExceptionProjection {
+  return persistentOutputCapturedException(error).projection
 }
 
 function correlation() {

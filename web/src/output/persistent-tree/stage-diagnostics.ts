@@ -8,7 +8,7 @@ import type {
   PersistentOutputFailureFactProviderName,
   PersistentOutputFailureFacts,
   PersistentOutputFailureObservation,
-  PersistentOutputRawException,
+  PersistentOutputCapturedException,
   PersistentOutputStage,
   PersistentOutputStageCorrelation,
   PersistentOutputStageDiagnostics,
@@ -274,7 +274,7 @@ export class PersistentOutputStageScope {
     const outcomes = new Map<
       PersistentOutputFailureFactProviderName,
       | Readonly<{ kind: 'fulfilled'; facts: Omit<PersistentOutputFailureFacts, 'observation'> }>
-      | Readonly<{ kind: 'rejected'; exception: PersistentOutputRawException }>
+      | Readonly<{ kind: 'rejected'; exception: PersistentOutputCapturedException }>
     >()
     let deadlineHandle: ReturnType<typeof setTimeout> | undefined
     const deadline = new Promise<'timeout'>((resolve) => {
@@ -301,7 +301,7 @@ export class PersistentOutputStageScope {
     if (cut === 'completed' && deadlineHandle !== undefined) clearTimeout(deadlineHandle)
 
     let merged: Omit<PersistentOutputFailureFacts, 'observation'> = Object.freeze({})
-    const probeFailures: PersistentOutputRawException[] = []
+    const probeFailures: PersistentOutputCapturedException[] = []
     const unavailable: Array<PersistentOutputFailureObservation['unavailableProviders'][number]> = []
     let completedProviderCount = 0
     for (const [name] of entries) {
