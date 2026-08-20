@@ -12,6 +12,18 @@ import {
 import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../src/ui/v2-output'
 import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
 
+function buttonMarkup(html: string, label: string): string {
+  const markup = html.match(new RegExp(`<button[^>]*>${label}</button>`))?.[0]
+  if (markup === undefined) throw new Error(`button was not rendered: ${label}`)
+  return markup
+}
+
+function inputMarkup(html: string, ariaLabel: string): string {
+  const markup = html.match(new RegExp(`<input[^>]*aria-label="${ariaLabel}"[^>]*>`))?.[0]
+  if (markup === undefined) throw new Error(`input was not rendered: ${ariaLabel}`)
+  return markup
+}
+
 function createMockController(snapshotOverrides: Partial<V2ReceiverSnapshot> = {}): V2ReceiverController {
   const snapshot: V2ReceiverSnapshot = {
     phase: 'awaiting-key',
@@ -79,6 +91,97 @@ describe('Portal and App mode routing', () => {
     expect(html).toContain('Browse and save shared files')
   })
 
+  it('server-renders retained authority as busy and locks browsing actions until settlement', () => {
+    const operation = Object.freeze({
+      operationId: 'pending-operation',
+      receiveIntentDigest: 'pending-intent',
+      lifecycleGeneration: 1n,
+      lifecycle: Object.freeze({}),
+      continuation: 'save-artifact',
+      actions: Object.freeze(['save', 'discard'] as const),
+    }) as unknown as V2RetainedReceiveOperation
+    const artifactChoice = Object.freeze({
+      offeredChoice: null,
+      choice: Object.freeze({ artifactKind: 'single-file' }) as never,
+      operation: 'download-original' as const,
+      label: 'Receive original',
+      description: 'Receive the selected file.',
+      importance: 'primary' as const,
+      packageExplanation: null,
+    })
+    const output: V2ReceiverSnapshot['output'] = Object.freeze({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      offerPresentation: Object.freeze({
+        kind: 'choices',
+        interactive: true,
+        primary: artifactChoice,
+        alternatives: Object.freeze([]),
+      }),
+    })
+    const base: Partial<V2ReceiverSnapshot> = {
+      phase: 'browsing',
+      breadcrumbs: Object.freeze([{ id: 'root', name: 'Root Directory' }]),
+      rows: Object.freeze([{
+        id: 'file',
+        kind: 'file',
+        name: 'report.txt',
+        expectedSize: 1n,
+        selection: 'selected',
+      }]),
+      output,
+    }
+    const pendingRetained: V2ReceiverSnapshot['retained'] = Object.freeze({
+      kind: 'ready',
+      error: null,
+      operations: Object.freeze([operation]),
+      pending: Object.freeze({ operationId: operation.operationId, action: 'save' }),
+    })
+    const settledRetained: V2ReceiverSnapshot['retained'] = Object.freeze({
+      ...pendingRetained,
+      pending: null,
+    })
+
+    const pendingHtml = renderToString(<App controller={createMockController({
+      ...base,
+      retained: pendingRetained,
+    })} />)
+    const settledHtml = renderToString(<App controller={createMockController({
+      ...base,
+      retained: settledRetained,
+    })} />)
+
+    expect(pendingHtml).toMatch(/class="retained-receive-panel"[^>]*aria-busy="true"/)
+    expect(inputMarkup(pendingHtml, 'Select report.txt')).toContain('disabled')
+    expect(buttonMarkup(pendingHtml, 'Receive original')).toContain('disabled')
+    expect(buttonMarkup(pendingHtml, 'Save')).toContain('disabled')
+    expect(inputMarkup(settledHtml, 'Select report.txt')).not.toContain('disabled')
+    expect(buttonMarkup(settledHtml, 'Receive original')).not.toContain('disabled')
+    expect(buttonMarkup(settledHtml, 'Save')).not.toContain('disabled')
+
+    const retryOutput: V2ReceiverSnapshot['output'] = Object.freeze({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      offerPresentation: Object.freeze({
+        kind: 'retry',
+        interactive: true,
+        title: 'Confirmation paused',
+        description: 'Retry the same selection.',
+        label: 'Retry confirmation',
+      }),
+    })
+    const pendingRetryHtml = renderToString(<App controller={createMockController({
+      ...base,
+      output: retryOutput,
+      retained: pendingRetained,
+    })} />)
+    const settledRetryHtml = renderToString(<App controller={createMockController({
+      ...base,
+      output: retryOutput,
+      retained: settledRetained,
+    })} />)
+    expect(buttonMarkup(pendingRetryHtml, 'Retry confirmation')).toContain('disabled')
+    expect(buttonMarkup(settledRetryHtml, 'Retry confirmation')).not.toContain('disabled')
+  })
+
   it('renders PortalApp with retained tasks banner when local tasks exist', () => {
     const mockOp = {
       operationId: 'op-123',
@@ -95,6 +198,7 @@ describe('Portal and App mode routing', () => {
         kind: 'ready',
         error: null,
         operations: Object.freeze([mockOp]),
+        pending: null,
       },
     })
     const html = renderToString(<PortalApp controller={controller} />)

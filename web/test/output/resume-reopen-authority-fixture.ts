@@ -1,5 +1,6 @@
 import { vi } from 'vitest'
 
+import { prepareFSAOperationBindingTransition } from '../../src/output/browser/indexeddb-root-binding'
 import {
   createDirectTreePlan,
   createFSANamedEntryReservation,
@@ -130,6 +131,18 @@ export function reopenAuthority(
       manager: new MemoryLockManager(),
       randomBytes: bytesFilled(randomSeed),
     },
+  })
+}
+
+export async function seedFSAOperationBinding(
+  repository: ReceiveOperationRepository,
+  intent: ReceiveIntent,
+  parent: FileSystemDirectoryHandle,
+): Promise<void> {
+  const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+  await repository.commitTransition({
+    operationId: intent.operationId,
+    ...prepared.transition,
   })
 }
 
@@ -587,10 +600,12 @@ export class MemoryLockManager implements BrowserLockManagerRuntime {
   }
 }
 
+type MemoryFileSystemEntry = MemoryDirectoryHandle | MemoryFileHandle
+
 export class MemoryDirectoryHandle {
   readonly kind = 'directory' as const
   readonly name: string
-  readonly #directories = new Map<string, MemoryDirectoryHandle>()
+  readonly #entries = new Map<string, MemoryFileSystemEntry>()
   creationCount = 0
 
   constructor(name: string) {
@@ -609,19 +624,162 @@ export class MemoryDirectoryHandle {
     name: string,
     options?: FileSystemGetDirectoryOptions,
   ): Promise<FileSystemDirectoryHandle> {
-    let directory = this.#directories.get(name)
-    if (directory === undefined && options?.create === true) {
-      directory = new MemoryDirectoryHandle(name)
-      this.#directories.set(name, directory)
-      this.creationCount += 1
+    const existing = this.#entries.get(name)
+    if (existing instanceof MemoryDirectoryHandle) return existing.asHandle()
+    if (existing !== undefined) {
+      throw new DOMException('entry is not a directory', 'TypeMismatchError')
     }
-    if (directory === undefined) throw new DOMException('directory is absent', 'NotFoundError')
+    if (options?.create !== true) {
+      throw new DOMException('directory is absent', 'NotFoundError')
+    }
+    const directory = new MemoryDirectoryHandle(name)
+    this.#entries.set(name, directory)
+    this.creationCount += 1
     return directory.asHandle()
   }
 
-  async removeEntry(name: string): Promise<void> {
-    if (!this.#directories.delete(name)) throw new DOMException('directory is absent', 'NotFoundError')
+  async getFileHandle(
+    name: string,
+    options?: FileSystemGetFileOptions,
+  ): Promise<FileSystemFileHandle> {
+    const existing = this.#entries.get(name)
+    if (existing instanceof MemoryFileHandle) return existing.asHandle()
+    if (existing !== undefined) {
+      throw new DOMException('entry is not a file', 'TypeMismatchError')
+    }
+    if (options?.create !== true) {
+      throw new DOMException('file is absent', 'NotFoundError')
+    }
+    const file = new MemoryFileHandle(name)
+    this.#entries.set(name, file)
+    return file.asHandle()
   }
+
+  async removeEntry(name: string, options?: FileSystemRemoveOptions): Promise<void> {
+    const existing = this.#entries.get(name)
+    if (existing === undefined) {
+      throw new DOMException('entry is absent', 'NotFoundError')
+    }
+    if (existing instanceof MemoryDirectoryHandle &&
+        existing.#entries.size !== 0 &&
+        options?.recursive !== true) {
+      throw new DOMException('directory is not empty', 'InvalidModificationError')
+    }
+    this.#entries.delete(name)
+  }
+}
+
+class MemoryFileHandle {
+  readonly kind = 'file' as const
+  readonly name: string
+  #bytes = new Uint8Array()
+
+  constructor(name: string) {
+    this.name = name
+  }
+
+  asHandle(): FileSystemFileHandle {
+    return this as unknown as FileSystemFileHandle
+  }
+
+  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other === this
+  }
+
+  async getFile(): Promise<File> {
+    const copy = this.#bytes.slice()
+    return new Blob([copy.buffer]) as File
+  }
+
+  async createWritable(
+    options?: FileSystemCreateWritableOptions,
+  ): Promise<FileSystemWritableFileStream> {
+    let staged = options?.keepExistingData === true ? this.#bytes.slice() : new Uint8Array()
+    let position = 0
+    let open = true
+    const requireOpen = () => {
+      if (!open) throw new DOMException('writable is closed', 'InvalidStateError')
+    }
+    const writeAt = (offset: number, bytes: Uint8Array) => {
+      const length = Math.max(staged.byteLength, offset + bytes.byteLength)
+      const next = new Uint8Array(length)
+      next.set(staged)
+      next.set(bytes, offset)
+      staged = next
+      position = offset + bytes.byteLength
+    }
+    const write = async (chunk: FileSystemWriteChunkType): Promise<void> => {
+      requireOpen()
+      if (!isWriteCommand(chunk)) {
+        writeAt(position, await memoryWriteBytes(chunk))
+        return
+      }
+      if (chunk.type === 'write') {
+        if (chunk.data === undefined || chunk.data === null) {
+          throw new TypeError('write command requires data')
+        }
+        const offset = chunk.position === undefined || chunk.position === null
+          ? position
+          : requireFileOffset(chunk.position)
+        writeAt(offset, await memoryWriteBytes(chunk.data))
+        return
+      }
+      if (chunk.type === 'seek') {
+        if (chunk.position === undefined || chunk.position === null) {
+          throw new TypeError('seek command requires a position')
+        }
+        position = requireFileOffset(chunk.position)
+        return
+      }
+      if (chunk.size === undefined || chunk.size === null) {
+        throw new TypeError('truncate command requires a size')
+      }
+      const size = requireFileOffset(chunk.size)
+      const resized = new Uint8Array(size)
+      resized.set(staged.subarray(0, size))
+      staged = resized
+      position = Math.min(position, size)
+    }
+    return {
+      write,
+      close: async () => {
+        requireOpen()
+        this.#bytes = staged
+        open = false
+      },
+      abort: async () => {
+        requireOpen()
+        open = false
+      },
+    } as unknown as FileSystemWritableFileStream
+  }
+}
+
+function isWriteCommand(
+  chunk: FileSystemWriteChunkType,
+): chunk is WriteParams {
+  return typeof chunk === 'object' && chunk !== null &&
+    'type' in chunk &&
+    (chunk.type === 'write' || chunk.type === 'seek' || chunk.type === 'truncate')
+}
+
+async function memoryWriteBytes(
+  data: BufferSource | Blob | string,
+): Promise<Uint8Array> {
+  if (typeof data === 'string') return new TextEncoder().encode(data)
+  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer())
+  if (data instanceof ArrayBuffer) return new Uint8Array(data.slice(0))
+  if (ArrayBuffer.isView(data)) {
+    return new Uint8Array(data.buffer, data.byteOffset, data.byteLength).slice()
+  }
+  throw new TypeError('unsupported memory file write')
+}
+
+function requireFileOffset(value: number): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new DOMException('file offset is invalid', 'TypeError')
+  }
+  return value
 }
 
 export function memoryStorage(root: MemoryDirectoryHandle): NonNullable<

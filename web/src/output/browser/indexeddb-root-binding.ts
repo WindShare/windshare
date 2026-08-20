@@ -35,20 +35,28 @@ export interface PersistedFSAOperationBinding {
   readonly parentHandleId: string
 }
 
+export interface PreparedFSAOperationBindingTransition {
+  readonly intent: ReceiveIntent
+  readonly reservation: NamedContainerEntryReservation
+  readonly parent: FileSystemDirectoryHandle
+  readonly parentHandleId: string
+  readonly transition: Pick<ReceiveOperationTransition, 'records' | 'handles'>
+}
+
 export type FSAOperationBindingRepository = Pick<
   ReceiveOperationRepository,
   'commitTransition' | 'readRecord' | 'readHandle'
 >
 
 /**
- * Operation, reservation, and parent capability share one repository transition. No
- * namespace entry may be created until this function has verified the committed cut.
+ * Preparation is deliberately read-only so lifecycle and lease ownership can join
+ * these records in the caller's single durable transition.
  */
-export async function persistFSAOperationBinding(input: Readonly<{
+export async function prepareFSAOperationBindingTransition(input: Readonly<{
   repository: FSAOperationBindingRepository
   intent: ReceiveIntent
   parent: FileSystemDirectoryHandle
-}>): Promise<PersistedFSAOperationBinding> {
+}>): Promise<PreparedFSAOperationBindingTransition> {
   const validated = await validatedFSAIntent(input.intent)
   const operation = await createReceiveOperationV1({ receiveIntent: validated.intent })
   const operationRecord = storedReceiveOperationRecord(operation)
@@ -72,23 +80,15 @@ export async function persistFSAOperationBinding(input: Readonly<{
   await assertCompatibleExistingParent(input.repository, parentRecord, input.parent)
   await assertCompatibleExistingRecord(input.repository, operationRecord)
   await assertCompatibleExistingRecord(input.repository, reservationRecord)
-  try {
-    await input.repository.commitTransition({
-      operationId: validated.intent.operationId,
-      records: [operationRecord, reservationRecord],
-      handles: [parentRecord],
-    })
-  } catch (cause) {
-    throw new TargetOwnershipUnknownError(
-      'reservation',
-      validated.intent.operationId,
-      { cause },
-    )
-  }
-  return verifyFSAOperationBinding({
-    repository: input.repository,
+  return Object.freeze({
     intent: validated.intent,
-    expectedParent: input.parent,
+    reservation: validated.reservation,
+    parent: input.parent,
+    parentHandleId,
+    transition: Object.freeze({
+      records: Object.freeze([operationRecord, reservationRecord]),
+      handles: Object.freeze([parentRecord]),
+    }),
   })
 }
 

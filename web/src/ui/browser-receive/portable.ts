@@ -12,10 +12,7 @@ import {
   type PortableDownloadStartedRecord,
   type PortableExecutionLifecycleAuthority,
 } from '../../output/portable/preparation'
-import type {
-  AcquiredMaterializationAuthority,
-  ArtifactAction,
-} from '../../output/planning'
+import type { ResolvedArtifactAction } from '../../output/planning'
 import { IndexedDbZipCentralDirectorySpool } from '../../output/streams/zip-spool'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../../output/workspace/lifecycle'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
@@ -25,8 +22,6 @@ import {
 } from '../../transfer/settlement/v2-plan-authority'
 import {
   createOperationID,
-  createPortableBinding,
-  createPortablePlanID,
   createTransferJobID,
   type ReceiveIntent,
 } from '../../transfer/intent'
@@ -41,12 +36,10 @@ import type { V2ActiveReceiveControl } from '../v2-lifecycle-presentation'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-  V2StartedArtifactAuthority,
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import {
   operationDigest,
-  requirePortableAction,
   requireSameIntent,
   unavailableRoute,
 } from './shared'
@@ -59,66 +52,18 @@ type LifecycleEventPayload = LifecycleEvent extends infer Event
     : never
   : never
 
-export class StartedPortableReceive implements V2StartedArtifactAuthority {
-  readonly #window: BrowserReceiveWindow
-  readonly #action: ArtifactAction
-  readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #released = false
-  #claimed = false
+export type PortableResolvedArtifactAction = ResolvedArtifactAction & Readonly<{
+  route: Extract<ResolvedArtifactAction['route'], { kind: 'portable-handoff' }>
+  artifact: Exclude<ResolvedArtifactAction['artifact'], { kind: 'directory-tree' }>
+}>
 
-  constructor(
-    windowPort: BrowserReceiveWindow,
-    action: ArtifactAction,
-    diagnostics?: OutputDiagnosticsPorts,
-  ) {
-    this.#window = windowPort
-    this.#action = action
-    this.#diagnostics = diagnostics
-  }
-
-  async finalize(
-    freezeIntent: (acquired: AcquiredMaterializationAuthority) => Promise<ReceiveIntent>,
-    signal: AbortSignal,
-  ): Promise<V2BoundReceiveOperation> {
-    this.#claim()
-    signal.throwIfAborted()
-    const action = requirePortableAction(this.#action)
-    const portable = await createPortableBinding({
-      operationId: createOperationID(),
-      portablePlanId: createPortablePlanID(),
-      artifact: action.artifact,
-    })
-    const intent = await freezeIntent(Object.freeze({
-      kind: 'portable-binding',
-      portableOfferId: action.plan.portable.id,
-      handoffTargetOfferId: action.plan.handoffTarget.id,
-      portable,
-    }))
-    signal.throwIfAborted()
-    this.#requireLive()
-    return PortableReceiveOperation.create(
-      this.#window,
-      action,
-      intent,
-      this.#diagnostics,
-    )
-  }
-
-  release(): void {
-    this.#released = true
-  }
-
-  #claim(): void {
-    if (this.#claimed) {
-      throw new DOMException('Portable artifact authority was already finalized', 'InvalidStateError')
-    }
-    this.#claimed = true
-    this.#requireLive()
-  }
-
-  #requireLive(): void {
-    if (this.#released) throw new DOMException('Artifact authority was released', 'AbortError')
-  }
+export async function createPortableReceiveOperation(
+  windowPort: BrowserReceiveWindow,
+  action: PortableResolvedArtifactAction,
+  intent: ReceiveIntent,
+  diagnostics?: OutputDiagnosticsPorts,
+): Promise<V2BoundReceiveOperation> {
+  return PortableReceiveOperation.create(windowPort, action, intent, diagnostics)
 }
 
 class PortableReceiveOperation implements
@@ -153,7 +98,7 @@ V2ExecutionAdmissionLifecycle {
 
   static async create(
     windowPort: BrowserReceiveWindow,
-    action: ArtifactAction,
+    action: PortableResolvedArtifactAction,
     intent: ReceiveIntent,
     diagnostics?: OutputDiagnosticsPorts,
   ): Promise<PortableReceiveOperation> {
@@ -365,16 +310,15 @@ V2ExecutionAdmissionLifecycle {
 
 async function portablePlanAuthority(
   windowPort: BrowserReceiveWindow,
-  action: ArtifactAction,
+  action: PortableResolvedArtifactAction,
   intent: ReceiveIntent,
   owner: PortableReceiveOperation,
   diagnostics?: OutputDiagnosticsPorts,
 ): Promise<V2PlanExecutionAuthority> {
-  const portableAction = requirePortableAction(action)
   const routes = createPortableExecutionRoutes({
     environment: {
-      portable: portableAction.plan.portable,
-      handoffTarget: portableAction.plan.handoffTarget,
+      portable: action.route.portable,
+      handoffTarget: action.route.handoffTarget,
     },
     attemptId: owner.attemptId,
     publisher: createWindowBrowserHandoffPublisher(

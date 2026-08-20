@@ -27,6 +27,20 @@ const PROJECTION_SHAPE_PROOFS = ['unknown', 'none', 'single_file', 'tree'] as co
 const PROVEN_PROJECTION_SHAPE_PROOFS = ['none', 'single_file', 'tree'] as const
 const OUTPUT_BACKENDS = ['file_system_access', 'origin_private', 'portable'] as const
 const CHECKPOINT_BACKENDS = ['file_system_access', 'origin_private'] as const
+const CANONICAL_IDENTITY = /^[A-Za-z0-9_-]{21}[AQgw]$/
+const CANONICAL_DIGEST = /^[A-Za-z0-9_-]{42}[AEIMQUYcgkosw048]$/
+const ZERO_IDENTITY = 'A'.repeat(22)
+const ZERO_DIGEST = 'A'.repeat(43)
+const AUTHORITY_ACTIVATION_CONTEXT_KEYS = [
+  'activation_id',
+  'authenticated_share_instance_id',
+  'selection_digest',
+  'observed_protocol_session_id',
+  'projection_epoch',
+  'observation_revision',
+  'artifact_kind',
+  'plan_kind',
+] as const
 const LIFECYCLE_STATES = [
   'intent_frozen',
   'preparing',
@@ -180,22 +194,86 @@ export function validateAuthority(payload: UnknownRecord): void {
         'authority event class')
       return
     case 'activation_started':
-    case 'authority_acquired':
-    case 'intent_frozen':
-    case 'activation_failed':
-    case 'stale_replacement':
-    case 'authority_invalidated':
-      exactKeys(payload, ['transition'], ['artifact_kind', 'plan_kind'],
-        'authority activation payload')
-      if (payload.artifact_kind !== undefined) {
-        member(payload.artifact_kind, ARTIFACT_KINDS, 'authority artifact kind')
+    case 'artifact_resolved':
+    case 'commit_started':
+      validateAuthorityActivationContext(payload)
+      return
+    case 'commit_pre_cut_retry':
+    case 'cleanup_completed':
+      validateAuthorityActivationContext(payload, [], ['receiver_operation_id'])
+      if (payload.receiver_operation_id !== undefined) {
+        canonicalIdentity(payload.receiver_operation_id, 'authority receiver operation ID')
       }
-      if (payload.plan_kind !== undefined) {
-        member(payload.plan_kind, PLAN_KINDS, 'authority plan kind')
-      }
+      return
+    case 'prerequisite_waiting':
+      validateAuthorityActivationContext(payload, ['waiting_for'])
+      member(payload.waiting_for, ['authority', 'resolution', 'authority_and_resolution'],
+        'authority waiting prerequisite')
+      return
+    case 'retry_required':
+      validateAuthorityActivationContext(payload, ['retryable_discovery_reason'])
+      member(payload.retryable_discovery_reason, [
+        'catalog_temporarily_unavailable',
+        'receiver_reconnecting',
+        'generation_replay_interrupted',
+      ], 'authority retryable discovery reason')
+      return
+    case 'semantic_invalidated':
+      validateAuthorityActivationContext(payload, ['invalidation_reason'])
+      member(payload.invalidation_reason, [
+        'selection_changed',
+        'selection_empty',
+        'artifact_shape_incompatible',
+        'semantic_route_unavailable',
+        'hard_limit_exceeded',
+        'authenticated_share_instance_changed',
+        'installed_route_changed',
+        'caller_cancelled',
+      ], 'authority invalidation reason')
+      return
+    case 'commit_bound_operation':
+    case 'commit_owned_effects':
+      validateAuthorityActivationContext(payload, ['receiver_operation_id'])
+      canonicalIdentity(payload.receiver_operation_id, 'authority receiver operation ID')
+      return
+    case 'cleanup_failed':
+      validateAuthorityActivationContext(payload, ['receiver_operation_id', 'failed_stage'])
+      canonicalIdentity(payload.receiver_operation_id, 'authority receiver operation ID')
+      member(payload.failed_stage, ['settlement', 'detach'], 'authority cleanup failed stage')
       return
     default:
       throw new TypeError('authority_transition discriminant is invalid')
+  }
+}
+
+function validateAuthorityActivationContext(
+  payload: UnknownRecord,
+  required: readonly string[] = [],
+  optional: readonly string[] = [],
+): void {
+  exactKeys(payload, ['transition', ...AUTHORITY_ACTIVATION_CONTEXT_KEYS, ...required], optional,
+    'authority activation payload')
+  canonicalIdentity(payload.activation_id, 'authority activation ID')
+  canonicalIdentity(payload.authenticated_share_instance_id,
+    'authority authenticated share-instance ID')
+  canonicalDigest(payload.selection_digest, 'authority selection digest')
+  canonicalIdentity(payload.observed_protocol_session_id,
+    'authority observed ProtocolSession ID')
+  decimalUint64(payload.projection_epoch, 'authority projection epoch')
+  decimalUint64(payload.observation_revision, 'authority observation revision')
+  member(payload.artifact_kind, ARTIFACT_KINDS, 'authority artifact kind')
+  member(payload.plan_kind, PLAN_KINDS, 'authority plan kind')
+}
+
+function canonicalIdentity(value: unknown, field: string): void {
+  if (typeof value !== 'string' || !CANONICAL_IDENTITY.test(value) || value === ZERO_IDENTITY) {
+    throw new TypeError(`${field} must be a canonical non-zero 16-byte base64url identity`)
+  }
+}
+
+function canonicalDigest(value: unknown, field: string): void {
+  if (typeof value !== 'string' || !CANONICAL_DIGEST.test(value) || value === ZERO_DIGEST) {
+    throw new TypeError(`${field} must be a canonical non-zero 32-byte base64url digest`)
   }
 }
 

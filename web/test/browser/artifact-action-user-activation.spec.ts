@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
-import type { ArtifactActionActivationProof } from './artifact-action-user-activation-harness'
+import type { ArtifactChoiceActivationProof } from './artifact-action-user-activation-harness'
 
 const HARNESS_PATH = '/test/browser/artifact-action-user-activation-harness.ts'
 const ACTION_LABEL = 'Save using original folder hierarchy'
@@ -20,6 +20,7 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
     selectedPlanKind: 'direct-tree',
     pickerCallsBeforeClick: 0,
     pickerCalls: 0,
+    adoptionPreparationCalls: 0,
   })
 
   await page.getByRole('button', { name: ACTION_LABEL, exact: true }).click()
@@ -34,18 +35,22 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
     clickWasTrusted: true,
     userActivationWasActive: true,
     pickerStartedBeforeActionReturned: true,
+    firstChoiceAccepted: true,
+    reentrantChoiceAccepted: false,
+    repeatedChoiceAccepted: false,
+    adoptionPreparationCalls: 0,
     authorityReleased: true,
   })
 })
 
-async function installHarness(page: Page): Promise<ArtifactActionActivationProof> {
+async function installHarness(page: Page): Promise<ArtifactChoiceActivationProof> {
   return page.evaluate(async (path) => {
     const harness = await import(path) as typeof import('./artifact-action-user-activation-harness')
     return harness.installArtifactActionActivationHarness()
   }, HARNESS_PATH)
 }
 
-async function readProof(page: Page): Promise<ArtifactActionActivationProof> {
+async function readProof(page: Page): Promise<ArtifactChoiceActivationProof> {
   return page.evaluate(async (path) => {
     const harness = await import(path) as typeof import('./artifact-action-user-activation-harness')
     return harness.readArtifactActionActivationProof()

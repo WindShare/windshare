@@ -21,7 +21,12 @@ import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
 } from '../../src/output/workspace/state'
-import type { ReceiveIntent } from '../../src/transfer/intent'
+import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
+import type {
+  EnvironmentOffers,
+  ResolvedArtifactAction,
+} from '../../src/output/planning'
+import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
   DirectAtomicExecution,
   V2PlanExecutionAuthority,
@@ -243,26 +248,19 @@ async function bindDirectAtomicOperation(
 
   const environment = modules.planning.createEnvironmentOffers({
     targets: [{
-      id: STREAM_TARGET_OFFER_ID,
+      routeId: STREAM_TARGET_OFFER_ID,
       kind: 'managed-atomic-file-target',
       guarantees: modules.intent.managedAtomicGuarantees('application-chosen'),
       persistence: 'operation-scoped',
       hardMaximumOutputBytes: BigInt(input.transferBytes),
     }],
   })
-  const offers = await modules.planning.offerArtifacts(
-    current.projection,
-    current.discovery,
+  const { action, suggestedName } = await resolveHotSwitchDirectAtomicChoice(
+    modules,
+    selectionSpec,
+    current,
     environment,
   )
-  if (offers.kind !== 'artifact-actions') {
-    throw new Error(`Hot-switch stream offer is unavailable: ${offers.kind}`)
-  }
-  const action = offers.primary
-  if (action.operation !== 'download-original' || action.plan.kind !== 'direct-atomic' ||
-      action.artifact?.kind !== 'original-file' || action.suggestedName === null) {
-    throw new Error('Hot-switch fixture received an incompatible artifact action')
-  }
 
   const reservation = await modules.intent.createManagedAtomicReservation({
     operationId: modules.intent.createOperationID(),
@@ -270,24 +268,21 @@ async function bindDirectAtomicOperation(
     artifact: action.artifact,
     authorityRef: randomAuthorityReference(),
     nameAuthority: 'application-chosen',
-    requestedName: action.suggestedName,
-    reservedName: action.suggestedName,
+    requestedName: suggestedName,
+    reservedName: suggestedName,
     collisionIndex: 0,
   })
-  const bound = await modules.planning.bindMaterialization({
+  const bound = await modules.planning.bindReceiveIntent({
     selection: selectionSpec,
-    chosenAction: action,
-    currentProjection: current.projection,
-    currentDiscovery: current.discovery,
-    currentEnvironment: environment,
-    acquired: {
+    action,
+    candidate: {
       kind: 'destination-reservation',
-      environmentTargetOfferId: STREAM_TARGET_OFFER_ID,
+      targetRouteId: STREAM_TARGET_OFFER_ID,
       reservation,
     },
   })
-  if (bound.kind !== 'bound' || bound.intent.plan.kind !== 'direct-atomic') {
-    throw new Error(`Hot-switch intent binding did not remain direct-atomic: ${bound.kind}`)
+  if (bound.intent.plan.kind !== 'direct-atomic') {
+    throw new Error('Hot-switch intent binding did not remain direct-atomic')
   }
   const intent = bound.intent
   const plans = await modules.planAuthority.createV2PlanExecutionAuthority({
@@ -355,6 +350,44 @@ async function bindDirectAtomicOperation(
     },
   })
   return Object.freeze({ intent, plans, selection })
+}
+
+async function resolveHotSwitchDirectAtomicChoice(
+  modules: ProductModules,
+  selection: SelectionSpec,
+  state: SelectionProjectionState,
+  environment: EnvironmentOffers,
+): Promise<Readonly<{
+  action: ResolvedArtifactAction
+  suggestedName: string
+}>> {
+  const offers = await modules.planning.offerArtifacts(
+    state.projection,
+    state.discovery,
+    environment,
+  )
+  if (offers.kind !== 'artifact-actions') {
+    throw new Error(`Hot-switch stream offer is unavailable: ${offers.kind}`)
+  }
+  const offered = offers.primary
+  if (offered.choice.operation !== 'download-original' ||
+      offered.route.kind !== 'direct-atomic' ||
+      offered.choice.artifactKind !== 'original-file' || offered.suggestedName === null) {
+    throw new Error('Hot-switch fixture received an incompatible artifact choice')
+  }
+  const resolution = await modules.planning.reconcileArtifactChoice({
+    choice: offered.choice,
+    preferredRoute: modules.planning.materializationRouteIdentity(offered.route),
+    expectedSelectionDigest: selection.digest,
+    projection: state.projection,
+    discovery: state.discovery,
+    environment,
+    previousObservation: null,
+  })
+  if (resolution.kind !== 'resolved' || resolution.action.artifact.kind !== 'original-file') {
+    throw new Error(`Hot-switch artifact choice did not resolve: ${resolution.kind}`)
+  }
+  return Object.freeze({ action: resolution.action, suggestedName: offered.suggestedName })
 }
 
 function lifecycleState(

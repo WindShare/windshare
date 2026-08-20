@@ -68,6 +68,11 @@ export interface PersistentMaterializationPort {
   close(): Promise<void>
 }
 
+/** Root publication is an explicit post-binding step for PrefixVisible destinations. */
+export interface ActivatablePersistentMaterializationPort extends PersistentMaterializationPort {
+  activate(): Promise<void>
+}
+
 export interface PersistentFileTransactionPort {
   readonly revision: OpenedFileRevision
   readonly ownedObjectId: string

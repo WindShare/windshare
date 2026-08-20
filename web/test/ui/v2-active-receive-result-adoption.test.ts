@@ -9,8 +9,14 @@ import {
   type ReceiveLifecycleState,
 } from '../../src/output/workspace'
 import {
+  materializationRouteIdentity,
+  offerArtifacts,
+  type ArtifactChoice,
+} from '../../src/output/planning'
+import {
   createDirectAtomicPlan,
   createManagedAtomicReservation,
+  createOriginalFileArtifact,
   createReceiveIntent,
   createSelectionSpec,
   type ReceiveIntent,
@@ -38,7 +44,6 @@ import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import type {
   V2BoundReceiveOperation,
   V2LifecycleMutation,
-  V2StartedArtifactAuthority,
 } from '../../src/ui/v2-receive-runtime'
 import {
   COMPLETE_DISCOVERY,
@@ -109,18 +114,18 @@ describe('active receive result adoption', () => {
 })
 
 async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonly<{
-  outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  outputs: V2OutputPresentationController
   failures: unknown[]
   settle: (outcome: TransferFileOutcome) => void
   close: () => Promise<void>
 }>> {
-  const { outputs, intent, projectionEpoch } = await preparedOutput()
+  const { outputs, intent, choice } = await preparedOutput()
   const lifecycle = initialReceiveLifecycleState({
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
   })
   if (mode === 'live') {
-    expect(outputs.adoptReceiveIntent(projectionEpoch, intent, lifecycle)).toBe(true)
+    expect(outputs.adoptReceiveIntent(choice, intent, lifecycle)).toBe(true)
   } else {
     outputs.adoptRetainedReceiveIntent(intent, lifecycle)
   }
@@ -158,9 +163,9 @@ async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonl
 }
 
 async function preparedOutput(): Promise<Readonly<{
-  outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  outputs: V2OutputPresentationController
   intent: ReceiveIntent
-  projectionEpoch: ReturnType<typeof projection>['epoch']
+  choice: ArtifactChoice
 }>> {
   const selection = await createSelectionSpec({
     shareInstance: identity(1),
@@ -168,48 +173,66 @@ async function preparedOutput(): Promise<Readonly<{
     rules: { mode: 'node-id', defaultSelected: true, rules: [] },
   })
   const projected = projection(selection, singleFileProof(), 128n, 4n)
-  const outputs = new V2OutputPresentationController<V2StartedArtifactAuthority>()
-  await outputs.updateProjection(
-    Object.freeze({ projection: projected, discovery: COMPLETE_DISCOVERY }),
+  const state = Object.freeze({ projection: projected, discovery: COMPLETE_DISCOVERY })
+  const offers = await offerArtifacts(
+    projected,
+    COMPLETE_DISCOVERY,
     environment({ targets: [managedTarget()] }),
   )
-  await outputs.activateArtifact('download-original', () => INERT_ARTIFACT_AUTHORITY)
-  const action = outputs.getSnapshot().chosenAction
-  if (action?.artifact === null || action?.artifact === undefined ||
-      action.plan.kind !== 'direct-atomic') {
+  if (offers.kind !== 'artifact-actions' || offers.primary.route.kind !== 'direct-atomic') {
     throw new Error('result-adoption fixture did not select a direct atomic artifact')
   }
-  const nameAuthority = action.plan.target.guarantees.nameAuthority
+  const offered = offers.primary
+  if (offered.route.kind !== 'direct-atomic') {
+    throw new Error('result-adoption fixture lost its direct atomic route')
+  }
+  const artifact = await createOriginalFileArtifact({
+    fileId: FILE_ID,
+    sourcePath: 'report.txt',
+    suggestedName: offered.suggestedName ?? 'report.txt',
+  })
+  const nameAuthority = offered.route.target.guarantees.nameAuthority
   if (nameAuthority === 'browser-chosen') {
     throw new Error('managed result-adoption fixture requires an application-owned name')
   }
   const reservation = await createManagedAtomicReservation({
     operationId: identity(10),
     reservationId: identity(11),
-    artifact: action.artifact,
+    artifact,
     authorityRef: identity(12, 32),
     nameAuthority,
-    requestedName: action.suggestedName ?? 'report.txt',
-    reservedName: action.suggestedName ?? 'report.txt',
+    requestedName: offered.suggestedName ?? 'report.txt',
+    reservedName: offered.suggestedName ?? 'report.txt',
     collisionIndex: 0,
   })
-  const plan = await createDirectAtomicPlan(action.artifact, reservation)
+  const plan = await createDirectAtomicPlan(artifact, reservation)
   const intent = await createReceiveIntent({
     selection,
-    artifact: action.artifact,
+    artifact,
     plan,
   })
+  const outputs = new V2OutputPresentationController()
+  outputs.updateProjection(1, state, offers)
+  outputs.updateActivation(Object.freeze({
+    kind: 'terminal',
+    activationId: identity(13),
+    authenticatedShareInstanceId: selection.shareInstance,
+    selectionDigest: selection.digest,
+    choice: offered.choice,
+    installedRoute: materializationRouteIdentity(offered.route),
+    observation: Object.freeze({
+      revision: 1,
+      protocolSessionId: identity(14),
+      projectionEpoch: projected.epoch,
+    }),
+    outcome: Object.freeze({ kind: 'bound-operation', operationId: intent.operationId }),
+  }))
   return Object.freeze({
     outputs,
     intent,
-    projectionEpoch: projected.epoch,
+    choice: offered.choice,
   })
 }
-
-const INERT_ARTIFACT_AUTHORITY: V2StartedArtifactAuthority = Object.freeze({
-  finalize: unavailableExecution,
-  release: () => undefined,
-})
 
 class ResultShare implements ActiveReceiveJoinedShare {
   readonly #result = deferred<TransferJobResult>()

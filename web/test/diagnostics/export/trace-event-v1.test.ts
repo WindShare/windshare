@@ -29,6 +29,9 @@ const SESSION_ID = 'AQAAAAAAAAAAAAAAAAAAAA'
 const OPERATION_ID = 'AgAAAAAAAAAAAAAAAAAAAA'
 const PATH_ID = 'AwAAAAAAAAAAAAAAAAAAAA'
 const ATTEMPT_ID = 'BAAAAAAAAAAAAAAAAAAAAA'
+const ACTIVATION_ID = 'BQAAAAAAAAAAAAAAAAAAAA'
+const SHARE_INSTANCE_ID = 'BgAAAAAAAAAAAAAAAAAAAA'
+const SELECTION_DIGEST = 'BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const PRIVATE_TEXT = 'C:/private/provider-message.txt'
 
 const CORRELATION = Object.freeze({
@@ -38,6 +41,17 @@ const CORRELATION = Object.freeze({
   peer_attempt_id: ATTEMPT_ID,
   lane_id: 0,
   lane_epoch: 0,
+})
+
+const AUTHORITY_ACTIVATION_CONTEXT = Object.freeze({
+  activation_id: ACTIVATION_ID,
+  authenticated_share_instance_id: SHARE_INSTANCE_ID,
+  selection_digest: SELECTION_DIGEST,
+  observed_protocol_session_id: SESSION_ID,
+  projection_epoch: '10',
+  observation_revision: '1',
+  artifact_kind: 'directory_tree' as const,
+  plan_kind: 'direct_tree' as const,
 })
 
 const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
@@ -101,9 +115,57 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
     event_class: 'authority_result',
   }),
   observation('authority_transition', {
-    transition: 'authority_acquired',
-    artifact_kind: 'original_file',
-    plan_kind: 'direct_atomic',
+    transition: 'activation_started',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+  }),
+  observation('authority_transition', {
+    transition: 'prerequisite_waiting',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    waiting_for: 'authority_and_resolution',
+  }),
+  observation('authority_transition', {
+    transition: 'retry_required',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    retryable_discovery_reason: 'receiver_reconnecting',
+  }),
+  observation('authority_transition', {
+    transition: 'artifact_resolved',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+  }),
+  observation('authority_transition', {
+    transition: 'semantic_invalidated',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    invalidation_reason: 'installed_route_changed',
+  }),
+  observation('authority_transition', {
+    transition: 'commit_started',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+  }),
+  observation('authority_transition', {
+    transition: 'commit_pre_cut_retry',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    receiver_operation_id: OPERATION_ID,
+  }),
+  observation('authority_transition', {
+    transition: 'commit_bound_operation',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    receiver_operation_id: OPERATION_ID,
+  }),
+  observation('authority_transition', {
+    transition: 'commit_owned_effects',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    receiver_operation_id: OPERATION_ID,
+  }),
+  observation('authority_transition', {
+    transition: 'cleanup_completed',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    receiver_operation_id: OPERATION_ID,
+  }),
+  observation('authority_transition', {
+    transition: 'cleanup_failed',
+    ...AUTHORITY_ACTIVATION_CONTEXT,
+    receiver_operation_id: OPERATION_ID,
+    failed_stage: 'settlement',
   }),
   correlated('protocol_operation', {
     transition: 'request_sent',
@@ -410,6 +472,40 @@ describe('closed TraceEventObservationV1 boundary', () => {
     expectRejected(unknownPlan)
   })
 
+  it('keeps activation identities canonical and distinct from protocol correlation', () => {
+    const wrongActivationWidth = clone(event('authority_transition', 'activation_started'))
+    wrongActivationWidth.payload.activation_id = SELECTION_DIGEST
+    expectRejected(wrongActivationWidth)
+
+    const wrongDigestWidth = clone(event('authority_transition', 'activation_started'))
+    wrongDigestWidth.payload.selection_digest = ACTIVATION_ID
+    expectRejected(wrongDigestWidth)
+
+    const overloadedProtocolOperation = clone(event('authority_transition', 'activation_started'))
+    overloadedProtocolOperation.payload.protocol_operation_id = OPERATION_ID
+    expectRejected(overloadedProtocolOperation)
+
+    const preCandidateRetry = clone(event('authority_transition', 'commit_pre_cut_retry'))
+    delete preCandidateRetry.payload.receiver_operation_id
+    expect(() => snapshotTraceEventObservationV1(
+      preCandidateRetry as TraceEventObservationV1,
+    )).not.toThrow()
+
+    const preOperationCleanup = clone(event('authority_transition', 'cleanup_completed'))
+    delete preOperationCleanup.payload.receiver_operation_id
+    expect(() => snapshotTraceEventObservationV1(
+      preOperationCleanup as TraceEventObservationV1,
+    )).not.toThrow()
+
+    const cleanupWithoutOwner = clone(event('authority_transition', 'cleanup_failed'))
+    delete cleanupWithoutOwner.payload.receiver_operation_id
+    expectRejected(cleanupWithoutOwner)
+
+    const cleanupWithOpenStage = clone(event('authority_transition', 'cleanup_failed'))
+    cleanupWithOpenStage.payload.failed_stage = 'arbitrary_provider_stage'
+    expectRejected(cleanupWithOpenStage)
+  })
+
   it('rejects open or contradictory protocol, peer, lifecycle, and correlation shapes', () => {
     const authenticated = clone(event('protocol_operation', 'authenticated_failure'))
     ;(authenticated.payload.protocol_failure as UnknownRecord).detail = PRIVATE_TEXT
@@ -591,8 +687,8 @@ function crossVariantFields(): readonly MutableObservation[] {
   projection.payload.shape_proof = 'tree'
   const protocol = clone(event('protocol_operation', 'request_sent'))
   protocol.payload.response_kind = 'block_fragment'
-  const authority = clone(event('authority_transition', 'authority_acquired'))
-  authority.payload.projection_epoch = '1'
+  const authority = clone(event('authority_transition', 'activation_started'))
+  authority.payload.retryable_discovery_reason = 'receiver_reconnecting'
   const peer = clone(event('peer_attempt', 'started'))
   peer.payload.deadline_budget_ms = 10
   const recovery = clone(event('peer_recovery', 'peer_detached'))

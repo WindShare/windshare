@@ -27,6 +27,10 @@ interface NamespaceHarness {
     scope: string | null
   }>
   releaseHeldTask(fixture: FsaNamespaceFixture): Promise<void>
+  exerciseFailedPreExecutionActivation(fixture: FsaNamespaceFixture): Promise<{
+    rootAbsentBeforeExecution: boolean
+    rootAbsentAfterDetach: boolean
+  }>
 }
 
 test('FSA task roots keep suffix and ownership across restart', async ({ browserName, page }) => {
@@ -73,6 +77,19 @@ test('FSA parent Web Lock spans tabs', async ({ browserName, context, page }) =>
   })
   await callHarness(page, 'releaseHeldTask', fixture)
   await competitor.close()
+})
+
+test('failed activation before DirectTree execution leaves no visible task root', async ({
+  browserName,
+  page,
+}) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  expect(await callHarness(
+    page,
+    'exerciseFailedPreExecutionActivation',
+    testFixture('pre-execution-failure'),
+  )).toEqual({ rootAbsentBeforeExecution: true, rootAbsentAfterDetach: true })
 })
 
 function testFixture(label: string): FsaNamespaceFixture {

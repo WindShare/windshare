@@ -1,5 +1,8 @@
 import type { V2OutputPresentationSnapshot } from './v2-output'
-import type { V2RetainedReceiveOperation } from './v2-receive-runtime'
+import type {
+  V2RetainedReceiveAction,
+  V2RetainedReceiveOperation,
+} from './v2-receive-runtime'
 
 /** Shell navigation is separate from the receive lifecycle owned by W2-E. */
 export type V2ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
@@ -69,21 +72,29 @@ export type V2PreviewSnapshot =
       readonly message: string
     }
 
+export interface V2PendingRetainedReceiveActionSnapshot {
+  readonly operationId: string
+  readonly action: V2RetainedReceiveAction
+}
+
 export type V2RetainedReceiveInventorySnapshot =
   | Readonly<{
       kind: 'loading'
       operations: readonly V2RetainedReceiveOperation[]
       error: null
+      pending: null
     }>
   | Readonly<{
       kind: 'ready'
       operations: readonly V2RetainedReceiveOperation[]
       error: null
+      pending: V2PendingRetainedReceiveActionSnapshot | null
     }>
   | Readonly<{
       kind: 'failed'
       operations: readonly V2RetainedReceiveOperation[]
       error: string
+      pending: null
     }>
 
 export interface V2ControllerDiagnosticSnapshot {
@@ -145,6 +156,7 @@ export const EMPTY_V2_RETAINED_INVENTORY: V2RetainedReceiveInventorySnapshot = O
   kind: 'loading',
   operations: Object.freeze([]),
   error: null,
+  pending: null,
 })
 
 export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
