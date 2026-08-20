@@ -1,6 +1,9 @@
 import { useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react'
 
-import type { PresentedArtifactAction } from './v2-artifact-presentation'
+import {
+  activationLocksSelection,
+  type PresentedArtifactChoice,
+} from './v2-artifact-presentation'
 import type { LifecycleActionPresentation } from './v2-lifecycle-presentation'
 import type {
   V2BrowseRow,
@@ -166,7 +169,11 @@ function RetainedReceivePanel(props: {
   }
   if (props.inventory.operations.length === 0) return null
   return (
-    <section className="retained-receive-panel" aria-labelledby="retained-receive-title">
+    <section
+      className="retained-receive-panel"
+      aria-labelledby="retained-receive-title"
+      aria-busy={props.inventory.pending !== null}
+    >
       <strong id="retained-receive-title">Stored receive tasks</strong>
       <p>Actions reopen and verify the exact saved operation before changing owned data.</p>
       <ul className="retained-receive-list">
@@ -197,6 +204,7 @@ function RetainedReceivePanel(props: {
                         ? 'abort-action'
                         : undefined}
                       type="button"
+                      disabled={props.inventory.pending !== null}
                       onClick={() => props.controller.performRetainedAction(operation, action)}
                     >
                       {retainedActionLabel(operation, action)}
@@ -297,8 +305,8 @@ function PreviewPanel(props: {
   )
 }
 
-function ArtifactActionButton(props: {
-  readonly presented: PresentedArtifactAction
+function ArtifactChoiceButton(props: {
+  readonly presented: PresentedArtifactChoice
   readonly controller: V2ReceiverController
   readonly disabled: boolean
 }) {
@@ -321,7 +329,35 @@ function ArtifactActionButton(props: {
 function ArtifactOfferPanel(props: {
   readonly output: V2OutputPresentationSnapshot
   readonly controller: V2ReceiverController
+  readonly disabled: boolean
 }) {
+  const activation = props.output.activationPresentation
+  if (activation !== null) {
+    return (
+      <div className="output-guidance">
+        <ul className="artifact-action-list" aria-label="Selected result">
+          <ArtifactChoiceButton
+            presented={activation.choice}
+            controller={props.controller}
+            disabled
+          />
+        </ul>
+        <div role="status">
+          <strong>{activation.title}</strong>
+          <p>{activation.description}</p>
+        </div>
+        {activation.kind === 'retry' && (
+          <button
+            type="button"
+            disabled={props.disabled}
+            onClick={() => props.controller.retryOutputConfirmation()}
+          >
+            {activation.label}
+          </button>
+        )}
+      </div>
+    )
+  }
   const presentation = props.output.offerPresentation
   if (presentation === null) {
     return props.output.projection === null
@@ -341,22 +377,29 @@ function ArtifactOfferPanel(props: {
       <div className="output-guidance">
         <strong>{presentation.title}</strong>
         <p>{presentation.description}</p>
-        <button type="button" onClick={() => props.controller.retryOutputConfirmation()}>
+        <button
+          type="button"
+          disabled={props.disabled}
+          onClick={() => props.controller.retryOutputConfirmation()}
+        >
           {presentation.label}
         </button>
       </div>
     )
   }
-  const disabled = props.output.chosenAction !== null
   return (
     <ul className="artifact-action-list" aria-label="Choose the result to receive">
-      <ArtifactActionButton presented={presentation.primary} controller={props.controller} disabled={disabled} />
+      <ArtifactChoiceButton
+        presented={presentation.primary}
+        controller={props.controller}
+        disabled={props.disabled}
+      />
       {presentation.alternatives.map((alternative) => (
-        <ArtifactActionButton
-          key={`${alternative.operation}:${alternative.action.artifactKind}`}
+        <ArtifactChoiceButton
+          key={`${alternative.operation}:${alternative.choice.artifactKind}`}
           presented={alternative}
           controller={props.controller}
-          disabled={disabled}
+          disabled={props.disabled}
         />
       ))}
     </ul>
@@ -416,7 +459,10 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
     controller.getSnapshot,
     controller.getSnapshot,
   )
-  const receiveLocked = snapshot.output.chosenAction !== null || snapshot.output.receiveIntent !== null
+  const retainedActionPending = snapshot.retained.pending !== null
+  const receiveLocked = retainedActionPending ||
+    activationLocksSelection(snapshot.output.activation) ||
+    snapshot.output.receiveIntent !== null
   const selectionLocked = receiveLocked || snapshot.phase !== 'browsing'
   const alert = useRef<HTMLDivElement>(null)
 
@@ -532,7 +578,11 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
 
             <aside className="save-panel" aria-label="Result and receive status">
               <h2>Receive as</h2>
-              <ArtifactOfferPanel output={snapshot.output} controller={controller} />
+              <ArtifactOfferPanel
+                output={snapshot.output}
+                controller={controller}
+                disabled={retainedActionPending}
+              />
               <LifecyclePanel output={snapshot.output} controller={controller} />
               {snapshot.output.transferResultPresentation !== null && (
                 <div className={`transfer-result transfer-result-${snapshot.output.transferResultPresentation.tone}`}>

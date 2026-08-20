@@ -4,9 +4,11 @@ import type {
   OutputFailureSinks,
 } from '../output/diagnostics'
 import type {
-  AcquiredMaterializationAuthority,
-  ArtifactAction,
+  BoundReceiveIntent,
+  CandidateMaterializationBinding,
   EnvironmentOffers,
+  OfferedArtifactChoice,
+  ResolvedArtifactAction,
 } from '../output/planning'
 import type { ReceiveOperationContinuation } from '../output/resume/descriptor'
 import type { ReceiveLifecycleState } from '../output/workspace'
@@ -45,20 +47,6 @@ export interface V2LifecycleMutation {
   readonly resumeTransfer?: boolean
 }
 
-/**
- * The authority adapter owns handles and persistence, while the callback keeps the
- * epoch/capability recheck in the controller immediately before intent persistence.
- */
-export interface V2StartedArtifactAuthority {
-  finalize(
-    freezeIntent: (
-      acquired: AcquiredMaterializationAuthority,
-    ) => Promise<ReceiveIntent>,
-    signal: AbortSignal,
-  ): Promise<V2BoundReceiveOperation>
-  release(reason: unknown): void | PromiseLike<void>
-}
-
 export interface V2BoundReceiveOperation {
   readonly intent: ReceiveIntent
   /** Plans and job identity are replaced together only at an explicit continuation boundary. */
@@ -91,6 +79,61 @@ export interface V2BoundReceiveOperation {
     reason: unknown,
   ): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
   detach(): void | PromiseLike<void>
+}
+
+export interface V2OwnedActivationAuthority {
+  readonly intent: ReceiveIntent
+  readonly lifecycle: ReceiveLifecycleState
+
+  /** Durable effects remain owned until settlement records their terminal disposition. */
+  settleActivationFailure(reason: unknown): Promise<V2LifecycleMutation>
+  detach(): void | PromiseLike<void>
+}
+
+/**
+ * A successful bound-operation return is the activation linearization point.
+ * Routes must represent uncertain or retained pre-return effects as owned-effects.
+ * Retryable-precut certifies both proven absence and that this same presentation
+ * authority is ready for another commit; an ordinary rejection ends the authority.
+ * Once the durable cut may have occurred, neither retryable-precut nor rejection is valid.
+ */
+export type V2RouteCommitResult =
+  | Readonly<{
+      kind: 'bound-operation'
+      operation: V2BoundReceiveOperation
+    }>
+  | Readonly<{
+      kind: 'owned-effects'
+      cause: unknown
+      authority: V2OwnedActivationAuthority
+    }>
+  | Readonly<{
+      kind: 'retryable-precut'
+      /** Present when candidate preparation minted the receiver-local operation identity. */
+      receiverOperationId?: string
+    }>
+
+export interface V2RouteCommitInput {
+  readonly action: ResolvedArtifactAction
+  /** Attempt cancellation is separate from releasing the reusable presentation authority. */
+  readonly signal: AbortSignal
+
+  /**
+   * The route supplies only canonical candidate data. The coordinator owns the
+   * final identity/observation fence and is the sole receive-intent binder.
+   */
+  readonly freezeAtFence: (
+    candidate: CandidateMaterializationBinding,
+  ) => Promise<BoundReceiveIntent>
+}
+
+export interface V2ArtifactPresentationAuthority {
+  /** Workspace and portable are ready immediately; picker-backed routes settle later. */
+  readonly ready: Promise<void>
+  /** A retryable-precut result is the only outcome that permits another call. */
+  commit(input: V2RouteCommitInput): Promise<V2RouteCommitResult>
+  /** Non-cancellable picker work remains observed and drained after this pre-commit release. */
+  release(reason: unknown): void | PromiseLike<void>
 }
 
 export type V2RetainedReceiveAction =
@@ -150,7 +193,7 @@ export interface V2ReceiveCompositionPort {
 
   /** The implementation must start any picker before this call returns. */
   startArtifactAuthority(
-    action: ArtifactAction,
+    offered: OfferedArtifactChoice,
     failures?: OutputFailureSinks,
-  ): V2StartedArtifactAuthority | PromiseLike<V2StartedArtifactAuthority>
+  ): V2ArtifactPresentationAuthority
 }

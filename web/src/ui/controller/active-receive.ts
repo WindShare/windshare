@@ -5,7 +5,6 @@ import type {
   OutputFailureBindingLease,
 } from '../../output/diagnostics'
 import { TransferPauseRequestedError } from '../../transfer/output-session'
-import type { ProjectionEpoch } from '../../transfer/projection'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
   materializeClassifiedTransferFailure,
@@ -21,10 +20,7 @@ import type { LifecycleUserAction } from '../v2-lifecycle-presentation'
 import { isAbortError } from '../v2-controller-state'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type { V2OutputPresentationController } from '../v2-output'
-import type {
-  V2BoundReceiveOperation,
-  V2StartedArtifactAuthority,
-} from '../v2-receive-runtime'
+import type { V2BoundReceiveOperation } from '../v2-receive-runtime'
 import {
   StaleReceiveBoundaryError,
   type V2ReceiverControllerOptions,
@@ -51,7 +47,6 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
   readonly runtime: V2BoundReceiveOperation
-  readonly presentationProjectionEpoch: ProjectionEpoch | null
   transfer?: AbortController
   connectivity?: V2ConnectivityActivation
   running?: Promise<void>
@@ -64,7 +59,7 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
 }
 
 export interface ActiveReceiveCoordinatorOptions {
-  readonly outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  readonly outputs: V2OutputPresentationController
   readonly ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly onProgress: (progress: TransferProgress) => void
   readonly trace?: V2ReceiverControllerOptions['trace']
@@ -79,8 +74,14 @@ export interface ActiveReceiveAdoption {
   readonly runtime: V2BoundReceiveOperation
 }
 
+export interface PreparedActiveReceiveAdoption {
+  /** Ownership installation is deliberately infallible after preparation succeeds. */
+  readonly commit: () => void
+  readonly start: () => void
+}
+
 export class ActiveReceiveCoordinator {
-  readonly #outputs: V2OutputPresentationController<V2StartedArtifactAuthority>
+  readonly #outputs: V2OutputPresentationController
   readonly #ownsJoinedShare: (joined: ActiveReceiveJoinedShare) => boolean
   readonly #onProgress: (progress: TransferProgress) => void
   readonly #traceSource: V2ReceiverControllerOptions['trace']
@@ -129,18 +130,33 @@ export class ActiveReceiveCoordinator {
         output.receiveIntent.digest !== input.runtime.intent.digest) {
       throw new TypeError('active receive runtime does not belong to the presented receive intent')
     }
-    const replaced = this.#operation
-    if (replaced !== undefined) {
-      this.#observability.receiveExclusion(replaced.receiveAttempt, 'stale_replacement')
+    const prepared = this.prepareAdoption(input)
+    prepared.commit()
+    prepared.start()
+  }
+
+  prepareAdoption(input: ActiveReceiveAdoption): PreparedActiveReceiveAdoption {
+    if (!this.#ownsJoinedShare(input.joined)) throw new StaleReceiveBoundaryError()
+    if (this.#operation !== undefined) {
+      throw new TypeError('active receive ownership must be cleared before adoption')
     }
     const operation: ActiveReceiveOperation = {
-      boundary: ++this.#boundary,
+      boundary: this.#boundary + 1,
       ...input,
-      presentationProjectionEpoch: output.projection?.projection.epoch ?? null,
     }
-    this.#lifecycle.cancel('stale_replacement')
-    this.#operation = operation
-    this.#startTransfer(operation)
+    let committed = false
+    return Object.freeze({
+      commit: () => {
+        if (committed) return
+        committed = true
+        this.#boundary = operation.boundary
+        this.#lifecycle.cancel('stale_replacement')
+        this.#operation = operation
+      },
+      start: () => {
+        if (committed) this.#startTransfer(operation)
+      },
+    })
   }
 
   performLifecycleAction(action: LifecycleUserAction): void {
@@ -274,8 +290,8 @@ export class ActiveReceiveCoordinator {
       if (!this.#outputs.updateLifecycle(result.lifecycle, Date.now(), usage, Object.freeze([]))) {
         throw new TypeError('transfer lifecycle did not advance the active receive operation')
       }
-      if (!this.#outputs.adoptTransferResult(active.presentationProjectionEpoch, result)) {
-        throw new TypeError('transfer result escaped its presentation boundary')
+      if (!this.#outputs.adoptTransferResult(result)) {
+        throw new TypeError('transfer result escaped its receive-intent authority')
       }
     } catch (error) {
       const publicationFailure = this.#observability.classifyTransferFailure(

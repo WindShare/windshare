@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { persistFSAOperationBinding } from '../../src/output/browser/indexeddb-root-binding'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import {
   openOriginPrivateWorkspaceNamespace,
@@ -45,6 +44,7 @@ import {
   requiredDescriptor,
   retainedCleanupBackend,
   resumableReceive,
+  seedFSAOperationBinding,
   seedWorkspaceAdmission,
   seedWorkspacePackage,
   seedWorkspaceZipAdmission,
@@ -69,11 +69,7 @@ describe('persisted receive operation reopen authority', () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
     const parent = new MemoryDirectoryHandle('downloads')
-    await persistFSAOperationBinding({
-      repository: new MemoryOperationRepository(state),
-      intent,
-      parent: parent.asHandle(),
-    })
+    await seedFSAOperationBinding(new MemoryOperationRepository(state), intent, parent.asHandle())
     const lifecycle = resumableReceive(intent, 4n)
     await state.seedLifecycle(lifecycle)
     const staleLeaseId = identity(80)
@@ -124,11 +120,7 @@ describe('persisted receive operation reopen authority', () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
     const parent = new MemoryDirectoryHandle('downloads')
-    await persistFSAOperationBinding({
-      repository: new MemoryOperationRepository(state),
-      intent,
-      parent: parent.asHandle(),
-    })
+    await seedFSAOperationBinding(new MemoryOperationRepository(state), intent, parent.asHandle())
     const lifecycle = resumableReceive(intent, 5n)
     await state.seedLifecycle(lifecycle)
     const receiptDigest = identity(84, 32)
@@ -534,11 +526,11 @@ describe('persisted workspace package continuation', () => {
   it('persists NeedsAttention when external binding ownership is unprovable', async () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
-    await persistFSAOperationBinding({
-      repository: new MemoryOperationRepository(state),
+    await seedFSAOperationBinding(
+      new MemoryOperationRepository(state),
       intent,
-      parent: new MemoryDirectoryHandle('downloads').asHandle(),
-    })
+      new MemoryDirectoryHandle('downloads').asHandle(),
+    )
     const lifecycle = resumableReceive(intent, 8n)
     await state.seedLifecycle(lifecycle)
     const parent = [...state.handles.values()][0]!
@@ -566,11 +558,11 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
   it('commits Expired before a continuation can cross the exact 24-hour deadline', async () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
-    await persistFSAOperationBinding({
-      repository: new MemoryOperationRepository(state),
+    await seedFSAOperationBinding(
+      new MemoryOperationRepository(state),
       intent,
-      parent: new MemoryDirectoryHandle('downloads').asHandle(),
-    })
+      new MemoryDirectoryHandle('downloads').asHandle(),
+    )
     const lifecycle = resumableReceive(intent, 10n)
     await state.seedLifecycle(lifecycle)
     const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
@@ -593,11 +585,11 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
   it('rejects a concurrent lifecycle advance at the acquisition generation fence', async () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
-    await persistFSAOperationBinding({
-      repository: new MemoryOperationRepository(state),
+    await seedFSAOperationBinding(
+      new MemoryOperationRepository(state),
       intent,
-      parent: new MemoryDirectoryHandle('downloads').asHandle(),
-    })
+      new MemoryDirectoryHandle('downloads').asHandle(),
+    )
     const lifecycle = resumableReceive(intent, 12n)
     await state.seedLifecycle(lifecycle)
     const verifyBinding = vi.fn()

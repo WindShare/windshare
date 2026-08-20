@@ -1,20 +1,38 @@
 import { V2RemoteOperationError } from '../../content/v2-session-operations'
-import type {
-  FailureFactRef,
-  FailureFactRelation,
-  FailureStage,
-  PresentationBoundary,
-  PresentationExclusionReason,
+import {
+  faultFailureFact,
+  type FailureFactRef,
+  type FailureFactRelation,
+  type FailureStage,
+  type PresentationBoundary,
+  type PresentationExclusionReason,
 } from '../../diagnostics/incident'
+import { ArtifactPlanningContractError } from '../../output/planning'
+import {
+  FaultScope,
+  OutputFaultCode,
+  outputFault,
+  type Fault,
+} from '../../transfer/fault'
+import { V2ActivationStateContractError } from './activation-model'
 import type { V2ReceiverControllerOptions, V2ReceiverTraceEvent } from './contracts'
 import { V2PresentationAttempt } from './presentation-attempt'
 
 type ControllerBoundary = Extract<PresentationBoundary, 'join' | 'projection_authority'>
 type ControllerScopeKind = 'join' | 'projection' | 'authority_activation'
+type ControllerFailureStage = Extract<
+  FailureStage,
+  'join' | 'projection' | 'authority_activation'
+>
 type ControllerTraceEvent = Extract<
   V2ReceiverTraceEvent,
   { readonly name: 'join_transition' | 'authority_transition' }
 >
+
+const ACTIVATION_CONTRACT_FAULT: Fault = outputFault(
+  FaultScope.OutputPause,
+  OutputFaultCode.Contract,
+)
 
 /**
  * Controller diagnostics observe authority transitions but never hold authority
@@ -38,13 +56,9 @@ export class V2ControllerObservability {
     attempt: V2PresentationAttempt,
     boundary: ControllerBoundary,
     error: unknown,
-    stage: Extract<FailureStage, 'join' | 'projection' | 'authority_activation'>,
+    stage: ControllerFailureStage,
   ): void {
-    const trigger = attempt.outputFailureTrigger ?? (
-      error instanceof V2RemoteOperationError
-        ? attempt.record(error.failureFact, 'contributor')
-        : attempt.recordUnclassified(stage, 'contributor')
-    )
+    const trigger = attempt.outputFailureTrigger ?? recordFailureTrigger(attempt, error, stage)
     if (trigger !== undefined) attempt.incident(boundary, 'failed', trigger)
   }
 
@@ -80,4 +94,29 @@ export class V2ControllerObservability {
       // Detailed trace cannot alter epoch, authority, or operation ownership.
     }
   }
+}
+
+function recordFailureTrigger(
+  attempt: V2PresentationAttempt,
+  error: unknown,
+  stage: ControllerFailureStage,
+): FailureFactRef | undefined {
+  if (error instanceof V2RemoteOperationError) {
+    return attempt.record(error.failureFact, 'contributor')
+  }
+  if (stage === 'authority_activation' && isActivationContractError(error)) {
+    return attempt.record(faultFailureFact({
+      stage,
+      recoveryDisposition: 'terminal',
+      fault: ACTIVATION_CONTRACT_FAULT,
+    }), 'contributor')
+  }
+  return attempt.recordUnclassified(stage, 'contributor')
+}
+
+function isActivationContractError(
+  error: unknown,
+): error is ArtifactPlanningContractError | V2ActivationStateContractError {
+  return error instanceof ArtifactPlanningContractError ||
+    error instanceof V2ActivationStateContractError
 }

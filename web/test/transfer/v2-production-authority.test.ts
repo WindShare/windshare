@@ -481,7 +481,7 @@ function portableRouteRegistry(
 function portableEnvironment(): PortableExecutionEnvironment {
   return Object.freeze({
     portable: Object.freeze({
-      id: 'portable-memory',
+      routeId: 'portable-memory',
       kind: 'portable-memory',
       persistence: 'none',
       maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,

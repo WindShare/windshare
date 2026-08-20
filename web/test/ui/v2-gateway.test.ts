@@ -204,6 +204,26 @@ describe('v2 joined-share path admission', () => {
 })
 
 describe('v2 joined-share projection authority', () => {
+  it('forwards ProtocolSession generation subscriptions without synthesizing an initial event', () => {
+    const unsubscribe = vi.fn()
+    const subscribeProtocolGeneration = vi.fn(() => unsubscribe)
+    const joined = new V2JoinedBrowserShare({
+      descriptor: {} as never,
+      supervisor: { subscribeProtocolGeneration } as never,
+      catalog: {} as never,
+      recoveryIdentity: 'generation-subscription',
+    })
+    const listener = vi.fn()
+
+    const release = joined.subscribeProtocolGeneration(listener)
+
+    expect(subscribeProtocolGeneration).toHaveBeenCalledOnce()
+    expect(subscribeProtocolGeneration).toHaveBeenCalledWith(listener)
+    expect(listener).not.toHaveBeenCalled()
+    release()
+    expect(unsubscribe).toHaveBeenCalledOnce()
+  })
+
   it('turns a reconnect generation change into an explicit retryable projection fence', async () => {
     const supervisor = { protocolSessionId: 'session-1' }
     const joined = new V2JoinedBrowserShare({
@@ -285,19 +305,17 @@ describe('v2 joined-share projection authority', () => {
     )
     if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
     expect(offered.primary).toMatchObject({
-      operation: 'download-zip',
-      artifactKind: 'zip-archive',
       suggestedName: 'windshare.zip',
-      recovery: 'workspace-resumable',
-      plan: {
+      choice: {
+        operation: 'download-zip',
+        artifactKind: 'zip-archive',
+        recovery: 'workspace-resumable',
+        plan: { kind: 'workspace-then-publish' },
+      },
+      route: {
         kind: 'workspace-then-publish',
         workspace: { kind: 'origin-private-workspace' },
         publicationTarget: { kind: 'browser-handoff' },
-      },
-      artifact: {
-        kind: 'zip-archive',
-        suggestedName: 'windshare.zip',
-        layout: { class: 'synthetic-selection', name: 'windshare' },
       },
     })
   })

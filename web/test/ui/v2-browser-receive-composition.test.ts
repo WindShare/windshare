@@ -12,8 +12,10 @@ import {
   type OutputTraceEvent,
 } from '../../src/output/diagnostics'
 import {
-  bindMaterialization,
+  bindReceiveIntent,
+  materializationRouteIdentity,
   offerArtifacts,
+  reconcileArtifactChoice,
 } from '../../src/output/planning'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import type {
@@ -40,6 +42,7 @@ import type { V2BoundReceiveOperation } from '../../src/ui/v2-receive-runtime'
 import {
   COMPLETE_DISCOVERY,
   projection,
+  singleFileProof,
   treeProof,
 } from '../output/planning/fixture'
 import {
@@ -53,6 +56,52 @@ import {
 } from '../transfer/v2-job-fixture'
 
 describe('browser production receive composition', () => {
+  it.each([
+    ['FSA', 'direct-tree', 'directory-tree', treeProof, 0n],
+    ['workspace', 'workspace-then-publish', 'zip-archive', treeProof, 0n],
+    ['portable', 'portable-handoff', 'original-file', singleFileProof, 3n],
+  ] as const)(
+    'installs %s through the common release-before-commit authority contract',
+    async (_name, routeKind, artifactKind, proof, byteCount) => {
+      const picker = vi.fn(async () => directoryHandle())
+      const windowPort = capableWindow(picker)
+      if (routeKind === 'portable-handoff') {
+        Object.defineProperty(windowPort.navigator, 'locks', { value: undefined })
+      }
+      const composition = createBrowserReceiveComposition(windowPort)
+      const selection = await testSelection()
+      const projected = projection(selection, proof(), byteCount)
+      const environment = await composition.environment(new AbortController().signal)
+      const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, environment)
+      if (offers.kind !== 'artifact-actions') throw new Error('route choice was not offered')
+      const offered = [offers.primary, ...offers.alternatives].find(candidate =>
+        candidate.route.kind === routeKind && candidate.choice.artifactKind === artifactKind)
+      if (offered === undefined) throw new Error(`${routeKind} choice was not offered`)
+      const resolution = await reconcileArtifactChoice({
+        choice: offered.choice,
+        preferredRoute: materializationRouteIdentity(offered.route),
+        expectedSelectionDigest: selection.digest,
+        projection: projected,
+        discovery: COMPLETE_DISCOVERY,
+        environment,
+        previousObservation: null,
+      })
+      if (resolution.kind !== 'resolved') throw new Error(`${routeKind} choice did not resolve`)
+      const authority = composition.startArtifactAuthority(offered)
+      await authority.ready
+      const freezeAtFence = vi.fn()
+
+      await authority.release('common contract cancellation')
+
+      await expect(authority.commit({
+        action: resolution.action,
+        signal: new AbortController().signal,
+        freezeAtFence,
+      })).rejects.toBeInstanceOf(DOMException)
+      expect(freezeAtFence).not.toHaveBeenCalled()
+    },
+  )
+
   it('advertises only complete installed route assemblies and never probes with a picker', async () => {
     const picker = vi.fn(async () => directoryHandle())
     const windowPort = capableWindow(picker)
@@ -68,6 +117,120 @@ describe('browser production receive composition', () => {
     expect(environment.targets.some(target => target.kind === 'managed-atomic-file-target')).toBe(false)
     expect(environment.workspace?.kind).toBe('origin-private-workspace')
     expect(environment.portable?.kind).toBe('portable-memory')
+  })
+
+  it('keeps installed routes available when quota estimation is absent', async () => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(windowPort.navigator.storage, 'estimate', { value: undefined })
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    const environment = await composition.environment(new AbortController().signal)
+
+    expect(environment.targets.map(target => target.kind)).toEqual([
+      'fsa-parent-directory',
+      'browser-handoff',
+    ])
+    expect(environment.workspace?.quotaAvailabilityEstimateBytes).toBeNull()
+    expect(environment.portable?.kind).toBe('portable-memory')
+  })
+
+  it('keeps installed routes available when quota estimation rejects', async () => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    vi.mocked(windowPort.navigator.storage.estimate)
+      .mockRejectedValueOnce(new DOMException('estimate unavailable', 'NotReadableError'))
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    const environment = await composition.environment(new AbortController().signal)
+
+    expect(environment.targets.map(target => target.kind)).toEqual([
+      'fsa-parent-directory',
+      'browser-handoff',
+    ])
+    expect(environment.workspace?.quotaAvailabilityEstimateBytes).toBeNull()
+    expect(environment.portable?.kind).toBe('portable-memory')
+  })
+
+  it.each([
+    ['missing usage', { quota: 8_192 }],
+    ['non-finite usage', { usage: Number.NaN, quota: 8_192 }],
+    ['negative quota', { usage: 0, quota: -1 }],
+    ['unsafe quota', { usage: 0, quota: Number.MAX_SAFE_INTEGER + 1 }],
+  ])('keeps installed routes available for an invalid quota estimate: %s', async (_case, estimate) => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    vi.mocked(windowPort.navigator.storage.estimate).mockResolvedValueOnce(estimate)
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    const environment = await composition.environment(new AbortController().signal)
+
+    expect(environment.targets.map(target => target.kind)).toEqual([
+      'fsa-parent-directory',
+      'browser-handoff',
+    ])
+    expect(environment.workspace?.quotaAvailabilityEstimateBytes).toBeNull()
+    expect(environment.portable?.kind).toBe('portable-memory')
+  })
+
+  it('rejects an already-aborted environment probe before observing quota', async () => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    const estimate = vi.mocked(windowPort.navigator.storage.estimate)
+    const composition = createBrowserReceiveComposition(windowPort)
+    const controller = new AbortController()
+    controller.abort()
+
+    await expect(composition.environment(controller.signal)).rejects.toMatchObject({ name: 'AbortError' })
+    expect(estimate).not.toHaveBeenCalled()
+  })
+
+  it('keeps route identities stable across successful and failed quota probes', async () => {
+    const picker = vi.fn(async () => directoryHandle())
+    const windowPort = capableWindow(picker)
+    const estimate = vi.mocked(windowPort.navigator.storage.estimate)
+    estimate
+      .mockResolvedValueOnce({ usage: 1_024, quota: 8_192 })
+      .mockRejectedValueOnce(new DOMException('estimate unavailable', 'NotReadableError'))
+      .mockResolvedValueOnce({ usage: 2_048, quota: 16_384 })
+    const composition = createBrowserReceiveComposition(windowPort)
+    const first = await composition.environment(new AbortController().signal)
+    const second = await composition.environment(new AbortController().signal)
+    const third = await composition.environment(new AbortController().signal)
+
+    expect(first.workspace?.quotaAvailabilityEstimateBytes).toBe(7_168n)
+    expect(second.workspace?.quotaAvailabilityEstimateBytes).toBeNull()
+    expect(third.workspace?.quotaAvailabilityEstimateBytes).toBe(14_336n)
+    expect([second.workspace?.routeId, third.workspace?.routeId])
+      .toEqual([first.workspace?.routeId, first.workspace?.routeId])
+    expect([second.portable?.routeId, third.portable?.routeId])
+      .toEqual([first.portable?.routeId, first.portable?.routeId])
+    expect(second.targets.map(target => target.routeId))
+      .toEqual(first.targets.map(target => target.routeId))
+    expect(third.targets.map(target => target.routeId))
+      .toEqual(first.targets.map(target => target.routeId))
+
+    const selection = await testSelection()
+    const projected = projection(selection, treeProof())
+    const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, first)
+    if (offers.kind !== 'artifact-actions') throw new Error('workspace choice was not offered')
+    const offered = [offers.primary, ...offers.alternatives].find(candidate =>
+      candidate.route.kind === 'workspace-then-publish')
+    if (offered === undefined || offered.route.kind !== 'workspace-then-publish') {
+      throw new Error('workspace choice was not offered')
+    }
+    const authority = composition.startArtifactAuthority(offered)
+    await authority.ready
+    await authority.release('stable route identity proven')
+
+    const foreign = Object.freeze({
+      ...offered,
+      route: Object.freeze({
+        ...offered.route,
+        workspace: Object.freeze({
+          ...offered.route.workspace,
+          routeId: `${offered.route.workspace.routeId}-replacement`,
+        }),
+      }),
+    })
+    expect(() => composition.startArtifactAuthority(foreign)).toThrowError(DOMException)
+    expect(picker).not.toHaveBeenCalled()
   })
 
   it('removes FSA, workspace, and portable offers when their production registry owner is absent', async () => {
@@ -652,16 +815,40 @@ describe('browser output attempt ownership', () => {
       environment,
     )
     if (offered.kind !== 'artifact-actions') throw new Error('tree action was not offered')
-    const action = [offered.primary, ...offered.alternatives]
-      .find(candidate => candidate.plan.kind === 'direct-tree')
-    if (action === undefined) throw new Error('FSA DirectTree action was not offered')
+    const choice = [offered.primary, ...offered.alternatives]
+      .find(candidate => candidate.route.kind === 'direct-tree')
+    if (choice === undefined) throw new Error('FSA DirectTree choice was not offered')
 
-    const authority = composition.startArtifactAuthority(action)
+    const authority = composition.startArtifactAuthority(choice)
     inActionStack = false
 
     expect(picker).toHaveBeenCalledTimes(1)
     expect(calls).toEqual([true])
-    await Promise.resolve(authority).then(value => value.release('test completed'))
+    await authority.ready
+    await authority.release('test completed')
+  })
+
+  it('classifies a synchronous picker refusal without retrying the authority source', async () => {
+    const refusal = new DOMException('user refused', 'AbortError')
+    const picker = vi.fn(() => { throw refusal })
+    const composition = createBrowserReceiveComposition(capableWindow(picker))
+    const selection = await testSelection()
+    const environment = await composition.environment(new AbortController().signal)
+    const offers = await offerArtifacts(
+      projection(selection, treeProof()),
+      COMPLETE_DISCOVERY,
+      environment,
+    )
+    if (offers.kind !== 'artifact-actions') throw new Error('tree choice was not offered')
+    const choice = [offers.primary, ...offers.alternatives]
+      .find(candidate => candidate.route.kind === 'direct-tree')
+    if (choice === undefined) throw new Error('FSA DirectTree choice was not offered')
+
+    expect(() => composition.startArtifactAuthority(choice)).toThrowError(expect.objectContaining({
+      outcome: 'picker_refused',
+      cause: refusal,
+    }))
+    expect(picker).toHaveBeenCalledTimes(1)
   })
 
   it('binds native picker failures to the exact production authority attempt', async () => {
@@ -678,9 +865,9 @@ describe('browser output attempt ownership', () => {
       environment,
     )
     if (offered.kind !== 'artifact-actions') throw new Error('tree action was not offered')
-    const action = [offered.primary, ...offered.alternatives]
-      .find(candidate => candidate.plan.kind === 'direct-tree')
-    if (action === undefined) throw new Error('FSA DirectTree action was not offered')
+    const choice = [offered.primary, ...offered.alternatives]
+      .find(candidate => candidate.route.kind === 'direct-tree')
+    if (choice === undefined) throw new Error('FSA DirectTree choice was not offered')
 
     const issuer = createIncidentScopeIssuer()
     const observed: Array<Array<Readonly<{
@@ -700,23 +887,17 @@ describe('browser output attempt ownership', () => {
       }
     })
 
-    const first = await composition.startArtifactAuthority(
-      action,
+    const first = composition.startArtifactAuthority(
+      choice,
       attempts[0]!.failures.sinks,
     )
-    await expect(first.finalize(
-      () => Promise.reject(new Error('intent must not freeze')),
-      new AbortController().signal,
-    )).rejects.toMatchObject({ outcome: 'picker_refused' })
+    await expect(first.ready).rejects.toMatchObject({ outcome: 'picker_refused' })
 
-    const second = await composition.startArtifactAuthority(
-      action,
+    const second = composition.startArtifactAuthority(
+      choice,
       attempts[1]!.failures.sinks,
     )
-    await expect(second.finalize(
-      () => Promise.reject(new Error('intent must not freeze')),
-      new AbortController().signal,
-    )).rejects.toBeInstanceOf(DOMException)
+    await expect(second.ready).rejects.toBeInstanceOf(DOMException)
 
     expect(observed).toMatchObject([
       [{
@@ -768,23 +949,34 @@ describe('browser output attempt ownership', () => {
     }, 3n)
     const offered = await offerArtifacts(state, COMPLETE_DISCOVERY, environment)
     if (offered.kind !== 'artifact-actions') throw new Error('file action was not offered')
-    const action = [offered.primary, ...offered.alternatives]
-      .find(candidate => candidate.plan.kind === 'portable-handoff')
-    if (action === undefined) throw new Error('portable action was not offered')
-    const started = await composition.startArtifactAuthority(action)
-
-    const runtime = await started.finalize(async acquired => {
-      const bound = await bindMaterialization({
+    const choice = [offered.primary, ...offered.alternatives]
+      .find(candidate => candidate.route.kind === 'portable-handoff')
+    if (choice === undefined) throw new Error('portable choice was not offered')
+    const resolution = await reconcileArtifactChoice({
+      choice: choice.choice,
+      preferredRoute: materializationRouteIdentity(choice.route),
+      expectedSelectionDigest: selection.digest,
+      projection: state,
+      discovery: COMPLETE_DISCOVERY,
+      environment,
+      previousObservation: null,
+    })
+    if (resolution.kind !== 'resolved') throw new Error('portable choice did not resolve')
+    const authority = composition.startArtifactAuthority(choice)
+    await authority.ready
+    const committed = await authority.commit({
+      action: resolution.action,
+      signal: new AbortController().signal,
+      freezeAtFence: candidate => bindReceiveIntent({
         selection,
-        chosenAction: action,
-        currentProjection: state,
-        currentDiscovery: COMPLETE_DISCOVERY,
-        currentEnvironment: environment,
-        acquired,
-      })
-      if (bound.kind !== 'bound') throw new Error('portable action did not freeze')
-      return bound.intent
-    }, new AbortController().signal)
+        action: resolution.action,
+        candidate,
+      }),
+    })
+    if (committed.kind !== 'bound-operation') {
+      throw new Error('portable route unexpectedly retained durable effects')
+    }
+    const runtime = committed.operation
 
     expect(runtime.intent.plan.kind).toBe('portable-handoff')
     expect(runtime.transferJobId).toHaveLength(22)

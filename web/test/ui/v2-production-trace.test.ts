@@ -11,6 +11,7 @@ import type {
   TraceScheduledTask,
   TraceScheduler,
 } from '../../src/diagnostics/trace/ports'
+import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
   createV2ReceiverTraceSource,
   projectV2ReceiverTraceEvent,
@@ -91,6 +92,130 @@ describe('browser diagnostics production composition', () => {
       payload: { transition: 'load_failed' },
     })
     expect(Object.keys(projected.payload)).toEqual(['transition'])
+  })
+
+  it('projects activation decisions with stable local identity across observation replacement', () => {
+    const activation = Object.freeze({
+      name: 'authority_transition' as const,
+      activationId: 'BQAAAAAAAAAAAAAAAAAAAA',
+      authenticatedShareInstanceId: 'BgAAAAAAAAAAAAAAAAAAAA',
+      selectionDigest: 'BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      artifactKind: 'directory-tree' as const,
+      planKind: 'direct-tree' as const,
+    })
+    const started = projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'activation_started',
+      observedProtocolSessionId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      projectionEpoch: nextProjectionEpoch(6n),
+      observationRevision: 1,
+    })
+    const waiting = projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'prerequisite_waiting',
+      waitingFor: 'resolution',
+      observedProtocolSessionId: 'AgAAAAAAAAAAAAAAAAAAAA',
+      projectionEpoch: nextProjectionEpoch(7n),
+      observationRevision: 2,
+    })
+
+    expect(started.payload).toEqual({
+      transition: 'activation_started',
+      activation_id: activation.activationId,
+      authenticated_share_instance_id: activation.authenticatedShareInstanceId,
+      selection_digest: activation.selectionDigest,
+      observed_protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+      projection_epoch: '7',
+      observation_revision: '1',
+      artifact_kind: 'directory_tree',
+      plan_kind: 'direct_tree',
+    })
+    expect(waiting.payload).toMatchObject({
+      transition: 'prerequisite_waiting',
+      activation_id: activation.activationId,
+      observed_protocol_session_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+      projection_epoch: '8',
+      observation_revision: '2',
+      waiting_for: 'resolution',
+    })
+    expect(waiting.payload).not.toHaveProperty('protocol_operation_id')
+  })
+
+  it('projects closed retry, invalidation, commit-result, and cleanup decision fields', () => {
+    const activation = Object.freeze({
+      name: 'authority_transition' as const,
+      activationId: 'BQAAAAAAAAAAAAAAAAAAAA',
+      authenticatedShareInstanceId: 'BgAAAAAAAAAAAAAAAAAAAA',
+      selectionDigest: 'BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+      observedProtocolSessionId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      projectionEpoch: nextProjectionEpoch(8n),
+      observationRevision: 3,
+      artifactKind: 'directory-tree' as const,
+      planKind: 'direct-tree' as const,
+    })
+
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'retry_required',
+      retryableDiscoveryReason: 'receiver-reconnecting',
+    }).payload).toMatchObject({
+      transition: 'retry_required',
+      retryable_discovery_reason: 'receiver_reconnecting',
+    })
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'semantic_invalidated',
+      invalidationReason: 'installed-route-changed',
+    }).payload).toMatchObject({
+      transition: 'semantic_invalidated',
+      invalidation_reason: 'installed_route_changed',
+    })
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'commit_owned_effects',
+      receiverOperationId: 'AwAAAAAAAAAAAAAAAAAAAA',
+    }).payload).toMatchObject({
+      transition: 'commit_owned_effects',
+      receiver_operation_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+    })
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'commit_pre_cut_retry',
+      receiverOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
+    }).payload).toEqual({
+      transition: 'commit_pre_cut_retry',
+      activation_id: activation.activationId,
+      authenticated_share_instance_id: activation.authenticatedShareInstanceId,
+      selection_digest: activation.selectionDigest,
+      observed_protocol_session_id: activation.observedProtocolSessionId,
+      projection_epoch: '9',
+      observation_revision: '3',
+      artifact_kind: 'directory_tree',
+      plan_kind: 'direct_tree',
+      receiver_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    })
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'cleanup_failed',
+      receiverOperationId: 'AwAAAAAAAAAAAAAAAAAAAA',
+      failedStage: 'detach',
+    }).payload).toEqual({
+      transition: 'cleanup_failed',
+      activation_id: activation.activationId,
+      authenticated_share_instance_id: activation.authenticatedShareInstanceId,
+      selection_digest: activation.selectionDigest,
+      observed_protocol_session_id: activation.observedProtocolSessionId,
+      projection_epoch: '9',
+      observation_revision: '3',
+      artifact_kind: 'directory_tree',
+      plan_kind: 'direct_tree',
+      receiver_operation_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+      failed_stage: 'detach',
+    })
+    expect(projectV2ReceiverTraceEvent({
+      ...activation,
+      transition: 'cleanup_completed',
+    }).payload).not.toHaveProperty('receiver_operation_id')
   })
 
   it('retains and exports an incident even when the console sink throws', () => {

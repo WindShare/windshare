@@ -7,19 +7,24 @@ import type {
   FreshPageWorkspaceResumeCut,
   FreshPageWorkspaceResumeFixture,
   FreshPageWorkspaceResumeProof,
-  FreshPreparedZipAdmissionProof,
-  ProductPreparedZipAdmissionProof,
   PublicationRetryResult,
-  TransferJobPreparedZipProof,
   ReceiveCrashCutResult,
   RecoveredPackageResult,
+  WorkspaceActivationReloadCut,
+  WorkspaceActivationReloadProof,
 } from './durable-recovery-harness'
+import type {
+  FreshPreparedZipAdmissionProof,
+  ProductPreparedZipAdmissionProof,
+  TransferJobPreparedZipProof,
+} from './durable-preparation-harness'
 import type {
   IndexedDbCheckpointLineageProbe,
   IndexedDbV6Probe,
 } from './durable-recovery-idb-probe'
 
-const HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
+const RECOVERY_HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
+const PREPARATION_HARNESS_PATH = '/test/browser/durable-preparation-harness.ts'
 const IDB_PROBE_PATH = '/test/browser/durable-recovery-idb-probe.ts'
 
 test.beforeEach(async ({ browserName, page }) => {
@@ -27,7 +32,7 @@ test.beforeEach(async ({ browserName, page }) => {
   await requireOriginPrivateStorage(page, browserName)
 })
 
-test('v6 repositories replace resume authority and fail closed across IndexedDB boundaries', async ({
+test('v7 repositories replace resume authority and fail closed across IndexedDB boundaries', async ({
   page,
 }) => {
   const result = await page.evaluate(async (path) => {
@@ -39,10 +44,31 @@ test('v6 repositories replace resume authority and fail closed across IndexedDB 
     blockedUpgrade: 'InvalidStateError',
     blockedRequestClosedLate: true,
     versionChange: 'InvalidStateError',
-    schemaVersion: 6,
+    schemaVersion: 7,
     v6StoresPresent: true,
     legacyStoreRetainedForCleanup: true,
     legacyRowsVisibleToV6: false,
+  })
+})
+
+test('promotes an exactly marked workspace activation candidate after reload', async ({ page }) => {
+  const key = `activation-${crypto.randomUUID()}`
+  const cut = await page.evaluate(async ({ path, key: fixtureKey }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.createWorkspaceActivationReloadCut(fixtureKey)
+  }, { path: RECOVERY_HARNESS_PATH, key }) as WorkspaceActivationReloadCut
+  expect(cut.candidateCount).toBe(1)
+
+  await page.reload()
+  const proof = await page.evaluate(async ({ path, cut: fixture }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.recoverWorkspaceActivationReloadCut(fixture)
+  }, { path: RECOVERY_HARNESS_PATH, cut }) as WorkspaceActivationReloadProof
+  expect(proof).toEqual({
+    candidateCount: 0,
+    promotedHandlePresent: true,
+    lifecycle: 'needs-attention',
+    retainedContinuation: 'needs-attention',
   })
 })
 
@@ -80,9 +106,9 @@ test('commits prepared ZIP admission through fresh browser durability authoritie
 }) => {
   const key = crypto.randomUUID()
   const result = await page.evaluate(async ({ path, fixtureKey }) => {
-    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    const harness = await import(path) as typeof import('./durable-preparation-harness')
     return harness.proveFreshPreparedZipAdmission(fixtureKey)
-  }, { path: HARNESS_PATH, fixtureKey: key }) as FreshPreparedZipAdmissionProof
+  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as FreshPreparedZipAdmissionProof
 
   expect(result).toEqual({
     lifecycle: 'receiving',
@@ -101,9 +127,9 @@ test('commits prepared ZIP admission through fresh browser durability authoritie
 test('admits product-bound workspace ZIP before requesting content', async ({ page }) => {
   const key = crypto.randomUUID()
   const result = await page.evaluate(async ({ path, fixtureKey }) => {
-    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    const harness = await import(path) as typeof import('./durable-preparation-harness')
     return harness.proveProductPreparedZipAdmission(fixtureKey)
-  }, { path: HARNESS_PATH, fixtureKey: key }) as ProductPreparedZipAdmissionProof
+  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as ProductPreparedZipAdmissionProof
 
   expect(result).toEqual({
     admission: 'accepted',
@@ -123,9 +149,9 @@ test('admits catalog-derived TransferJob evidence before requesting workspace co
   page,
 }) => {
   const result = await page.evaluate(async (path) => {
-    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    const harness = await import(path) as typeof import('./durable-preparation-harness')
     return harness.proveTransferJobPreparedZip()
-  }, HARNESS_PATH) as TransferJobPreparedZipProof
+  }, PREPARATION_HARNESS_PATH) as TransferJobPreparedZipProof
 
   expect(result).toMatchObject({
     worker: 'Succeeded',
@@ -172,7 +198,7 @@ test('reopens workspace admission authority from a fresh page', async ({ page })
   const cut = await page.evaluate(async ({ path, fixtureKey }) => {
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.createFreshPageWorkspaceResumeCut(fixtureKey)
-  }, { path: HARNESS_PATH, fixtureKey: key }) as FreshPageWorkspaceResumeCut
+  }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as FreshPageWorkspaceResumeCut
   expect(cut.lifecycle).toBe('resumable-receive')
 
   await page.reload()
@@ -180,7 +206,7 @@ test('reopens workspace admission authority from a fresh page', async ({ page })
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.reopenFreshPageWorkspaceResume(fixture)
   }, {
-    path: HARNESS_PATH,
+    path: RECOVERY_HARNESS_PATH,
     fixture: cut.fixture as FreshPageWorkspaceResumeFixture,
   }) as FreshPageWorkspaceResumeProof
 
@@ -198,7 +224,7 @@ test('recovers a FileCheckpoint, seals once, and retries the retained package af
   const crashCut = await page.evaluate(async ({ path, fixtureKey }) => {
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.createOriginPrivateReceiveCrashCut(fixtureKey)
-  }, { path: HARNESS_PATH, fixtureKey: key }) as ReceiveCrashCutResult
+  }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as ReceiveCrashCutResult
   expect(crashCut).toMatchObject({
     ranges: ['0:3'],
     lifecycle: 'receiving',
@@ -210,7 +236,7 @@ test('recovers a FileCheckpoint, seals once, and retries the retained package af
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.recoverReceiveAndSealPackage(fixture)
   }, {
-    path: HARNESS_PATH,
+    path: RECOVERY_HARNESS_PATH,
     fixture: crashCut.fixture as DurableReceiveFixture,
   }) as RecoveredPackageResult
   expect(recovered).toMatchObject({
@@ -228,7 +254,7 @@ test('recovers a FileCheckpoint, seals once, and retries the retained package af
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.retryRetainedPackagePublication(fixture)
   }, {
-    path: HARNESS_PATH,
+    path: RECOVERY_HARNESS_PATH,
     fixture: recovered.fixture as DurablePackageFixture,
   }) as PublicationRetryResult
   expect(retried).toEqual({

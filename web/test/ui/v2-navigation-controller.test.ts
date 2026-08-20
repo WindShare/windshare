@@ -84,6 +84,14 @@ class NavigableJoinedShare {
     return () => undefined
   }
 
+  get protocolSessionIdentity(): string {
+    return this.protocolSessionId
+  }
+
+  subscribeProtocolGeneration(): () => void {
+    return () => undefined
+  }
+
   projectionSource(): AuthenticatedDiscoverySource {
     return Object.freeze({
       discover: async function* (request: AuthenticatedDiscoveryRequest) {
@@ -421,8 +429,7 @@ async function readyController(): Promise<{
     receive: INERT_TEST_RECEIVE_COMPOSITION,
   })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-  await turns()
-  expect(controller.getSnapshot().phase).toBe('browsing')
+  await vi.waitFor(() => expect(controller.getSnapshot().phase).toBe('browsing'))
   return { controller, joined }
 }
 

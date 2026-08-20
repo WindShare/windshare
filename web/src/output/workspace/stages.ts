@@ -3,9 +3,12 @@ import type { OutputDiagnosticsPorts } from '../diagnostics'
 import {
   createPersistedReceiveRecord,
   createReceiveOperationV1,
+  createWorkspaceActivationCandidate,
   receiveOperationHandleRecord,
   RECEIVE_RECORD_WORKSPACE_BINDING,
+  storedWorkspaceActivationCandidate,
   storedReceiveOperationRecord,
+  type WorkspaceActivationCandidateV1,
 } from './records'
 import type { ReceiveOperationRepository } from './repository'
 import { initialReceiveLifecycleState } from './state'
@@ -24,13 +27,13 @@ import { WorkspaceStageRuntime } from './stages/runtime'
 
 export * from './stages/contracts'
 
-export async function persistWorkspaceOperation(input: {
+export async function journalWorkspaceActivation(input: {
   readonly repository: ReceiveOperationRepository
   readonly receiveIntent: ReceiveIntent
+  readonly entryIdentity: string
   readonly workspaceRootHandleId: string
   readonly workspaceOwnedObjectId: string
-  readonly workspaceRootHandle: FileSystemDirectoryHandle
-}): Promise<void> {
+}): Promise<WorkspaceActivationCandidateV1> {
   const intent = await requireWorkspaceIntent(input.receiveIntent)
   const operation = await createReceiveOperationV1({ receiveIntent: intent })
   const workspaceRecord = await createPersistedReceiveRecord({
@@ -38,23 +41,49 @@ export async function persistWorkspaceOperation(input: {
     kind: RECEIVE_RECORD_WORKSPACE_BINDING,
     canonicalBytes: intent.plan.workspace.canonicalBytes,
   })
+  const candidate = await createWorkspaceActivationCandidate({
+    operationId: intent.operationId,
+    entryIdentity: input.entryIdentity,
+    rootHandleId: input.workspaceRootHandleId,
+    rootOwnedObjectId: input.workspaceOwnedObjectId,
+    repositoryAuthority: intent.plan.workspace.repositoryRef,
+  })
   const lifecycle = initialReceiveLifecycleState({
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
   })
-  const root = receiveOperationHandleRecord({
-    id: input.workspaceRootHandleId,
+  await input.repository.commitTransition({
     operationId: intent.operationId,
+    records: [
+      storedReceiveOperationRecord(operation),
+      workspaceRecord,
+      await storedWorkspaceActivationCandidate(candidate),
+    ],
+    lifecycle,
+  })
+  return candidate
+}
+
+export async function promoteWorkspaceActivation(input: {
+  readonly repository: ReceiveOperationRepository
+  readonly candidate: WorkspaceActivationCandidateV1
+  readonly workspaceRootHandle: FileSystemDirectoryHandle
+  readonly expectedLifecycleGeneration?: bigint
+}): Promise<void> {
+  const candidateRecord = await storedWorkspaceActivationCandidate(input.candidate)
+  const root = receiveOperationHandleRecord({
+    id: input.candidate.rootHandleId,
+    operationId: input.candidate.operationId,
     kind: WORKSPACE_HANDLE_ROOT,
-    authorityRef: intent.plan.workspace.repositoryRef,
-    ownedObjectId: input.workspaceOwnedObjectId,
+    authorityRef: input.candidate.repositoryAuthority,
+    ownedObjectId: input.candidate.rootOwnedObjectId,
     handle: input.workspaceRootHandle,
   })
   await input.repository.commitTransition({
-    operationId: intent.operationId,
-    records: [storedReceiveOperationRecord(operation), workspaceRecord],
+    operationId: input.candidate.operationId,
+    expectedLifecycleGeneration: input.expectedLifecycleGeneration ?? 1n,
     handles: [root],
-    lifecycle,
+    deleteRecordIds: [candidateRecord.id],
   })
 }
 

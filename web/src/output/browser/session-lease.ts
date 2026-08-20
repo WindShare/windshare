@@ -174,6 +174,23 @@ export async function acquireBrowserReceiveOperationLease(
   })
 }
 
+export async function verifyBrowserReceiveOperationLease(
+  repository: Pick<ReceiveOperationRepository, 'readLease'>,
+  lease: Pick<BrowserReceiveOperationLease, 'operationId' | 'leaseId' | 'acquiredAt'>,
+): Promise<ReceiveOperationLeaseRecord> {
+  const operationId = snapshotIdentity(lease.operationId, 16, 'operation ID')
+  const leaseId = snapshotIdentity(lease.leaseId, 16, 'lease ID')
+  const record = await repository.readLease(operationId)
+  if (record === undefined || record.operationId !== operationId ||
+      record.leaseId !== leaseId || record.acquiredAt !== lease.acquiredAt) {
+    throw new DOMException(
+      'The durable receive-operation lease does not match the live Web Lock owner',
+      'InvalidStateError',
+    )
+  }
+  return record
+}
+
 /** Serializes ownership-aware v5 cleanup across every page in the origin. */
 export function acquireBrowserCheckpointCleanupLease(
   databaseName: string,

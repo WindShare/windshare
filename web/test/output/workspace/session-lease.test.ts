@@ -12,10 +12,12 @@ import type {
   ReceiveOperationHandleRecord,
   ReceiveOperationLeaseRecord,
 } from '../../../src/output/workspace/records'
+import { RECEIVE_RECORD_OPERATION } from '../../../src/output/workspace/records'
 import type {
   ReceiveOperationRepository,
   ReceiveOperationTransition,
 } from '../../../src/output/workspace/repository'
+import { initialReceiveLifecycleState } from '../../../src/output/workspace/state'
 
 describe('browser receive operation lease', () => {
   it('atomically replaces an abandoned durable lease, heartbeats, and releases', async () => {
@@ -61,6 +63,48 @@ describe('browser receive operation lease', () => {
       { manager: lockManager(false) },
     )).rejects.toBeInstanceOf(BrowserReceiveOperationBusyError)
     expect(repository.transitions).toEqual([])
+  })
+
+  it('joins initial records, handles, lifecycle, and lease in one acquisition transition', async () => {
+    const operationId = identity(16, 4)
+    const repository = new MemoryRepository()
+    const record = {
+      id: `windshare/receive-operation/v1/${operationId}/fixture`,
+      schemaVersion: 1 as const,
+      operationId,
+      kind: RECEIVE_RECORD_OPERATION,
+      digest: identity(32, 5),
+      canonicalBytes: Uint8Array.of(1),
+    }
+    const handle = {
+      id: `windshare/receive-operation/v1/${operationId}/handle`,
+      schemaVersion: 1 as const,
+      operationId,
+      kind: 1,
+      authorityRef: identity(32, 6),
+      handle: Object.freeze({ kind: 'directory' }),
+    }
+    const lifecycle = initialReceiveLifecycleState({
+      operationId,
+      receiveIntentDigest: identity(32, 7),
+    })
+
+    const lease = await acquireBrowserReceiveOperationLease(repository, operationId, {
+      manager: lockManager(true),
+      clock: { now: () => 300 },
+      randomBytes: length => new Uint8Array(length).fill(8),
+      acquireTransition: { records: [record], handles: [handle], lifecycle },
+    })
+
+    expect(repository.transitions).toHaveLength(1)
+    expect(repository.transitions[0]).toMatchObject({
+      operationId,
+      records: [record],
+      handles: [handle],
+      lifecycle,
+      lease: { kind: 'put', record: expect.objectContaining({ leaseId: lease.leaseId }) },
+    })
+    await lease.release()
   })
 })
 

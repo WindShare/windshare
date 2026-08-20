@@ -6,28 +6,30 @@ import {
 } from '../../transfer/intent'
 import type { ArtifactSpec } from '../../transfer/intent'
 import type {
-  ArtifactAction,
   ArtifactActionsOffer,
+  ArtifactChoice,
   ArtifactOffers,
   BrowserHandoffTargetOffer,
-  DirectAtomicPlanOffer,
+  DirectAtomicMaterializationRoute,
+  DiscoveryState,
   EnvironmentOffers,
   FSADirectoryContainerOffer,
   ManagedAtomicTargetOffer,
   NativeDirectoryContainerOffer,
   NoSafeDestinationOffer,
-  OfferedMaterializationPlan,
+  OfferedArtifactChoice,
+  OfferedMaterializationRoute,
   OfferDisabledDecision,
   OfferUnavailableReason,
-  PortableHandoffPlanOffer,
+  PortableHandoffMaterializationRoute,
   PreparationRequirement,
   RecoverySemantics,
   SelectionProjectionV1,
-  DiscoveryState,
-  WorkspaceThenPublishPlanOffer,
+  WorkspaceThenPublishMaterializationRoute,
 } from './contracts'
 import {
   assertEnvironmentOffers,
+  materializationPlanSemantics,
   outputLowerBoundFits,
 } from './guarantees'
 import {
@@ -35,10 +37,17 @@ import {
   resultRootLayoutFromProof,
 } from './naming'
 
-type CompletePlanOffer =
-  | DirectAtomicPlanOffer
-  | WorkspaceThenPublishPlanOffer
-  | PortableHandoffPlanOffer
+type CompleteMaterializationRoute =
+  | DirectAtomicMaterializationRoute
+  | WorkspaceThenPublishMaterializationRoute
+  | PortableHandoffMaterializationRoute
+
+interface PlanningArtifactCandidate {
+  readonly choice: ArtifactChoice
+  readonly route: OfferedMaterializationRoute
+  readonly artifact: ArtifactSpec | null
+  readonly suggestedName: string | null
+}
 
 export async function offerArtifacts(
   projection: SelectionProjectionV1,
@@ -61,18 +70,35 @@ export async function offerArtifacts(
     }
     return disabledProjectionOffer(projection, 'selection-empty', 'selection-empty')
   }
-  const actions = projection.proof.kind === 'single-file'
-    ? await singleFileActions(projection, projection.proof, environment)
-    : await treeActions(projection, projection.proof, environment)
-  if (actions.length === 0) return noSafeDestination(projection, environment)
-  return artifactActionsOffer(projection, actions)
+  const candidates = await deriveArtifactCandidates(projection, environment)
+  if (candidates.length === 0) return noSafeDestination(projection, environment)
+  if (discovery.kind === 'retryable-failure' &&
+      candidates.every((candidate) => candidate.artifact === null)) {
+    return disabledProjectionOffer(projection, 'retry-confirmation', 'discovery-retry-required')
+  }
+  return artifactActionsOffer(projection, candidates)
 }
 
-async function singleFileActions(
+async function deriveArtifactCandidates(
+  projection: SelectionProjectionV1,
+  environment: EnvironmentOffers,
+): Promise<readonly PlanningArtifactCandidate[]> {
+  switch (projection.proof.kind) {
+    case 'single-file':
+      return singleFileCandidates(projection, projection.proof, environment)
+    case 'tree':
+      return treeCandidates(projection, projection.proof, environment)
+    case 'unknown':
+    case 'none':
+      return Object.freeze([])
+  }
+}
+
+async function singleFileCandidates(
   projection: SelectionProjectionV1,
   proof: Extract<SelectionProjectionV1['proof'], { kind: 'single-file' }>,
   environment: EnvironmentOffers,
-): Promise<readonly ArtifactAction[]> {
+): Promise<readonly PlanningArtifactCandidate[]> {
   const file = proof.file
   const original = await createOriginalFileArtifact({
     fileId: file.fileId,
@@ -84,66 +110,66 @@ async function singleFileActions(
     sourcePath: file.sourcePath,
     outputName: file.portableName,
   })
-  const completePlan = chooseCompletePlan(environment, projection.metrics.byteCountLowerBound)
-  const actions: ArtifactAction[] = []
-  if (completePlan !== null) {
-    actions.push(actionForCompleteArtifact(projection.epoch, original, completePlan))
+  const completeRoute = chooseCompleteRoute(environment, projection.metrics.byteCountLowerBound)
+  const candidates: PlanningArtifactCandidate[] = []
+  if (completeRoute !== null) {
+    candidates.push(candidateForCompleteArtifact(original, completeRoute))
   }
   const directoryTarget = chooseDirectoryTarget(environment, projection.metrics.byteCountLowerBound)
   if (directoryTarget !== null) {
-    actions.push(createAction({
-      projectionEpoch: projection.epoch,
+    candidates.push(createCandidate({
       operation: 'save-single-to-folder',
       artifact: directoryTree,
-      plan: Object.freeze({ kind: 'direct-tree', target: directoryTarget }),
+      route: Object.freeze({ kind: 'direct-tree', target: directoryTarget }),
       recovery: 'checkpoint-resumable',
       preparation: noPreparation(),
     }))
   }
-  return actions
+  return Object.freeze(candidates)
 }
 
-async function treeActions(
+async function treeCandidates(
   projection: SelectionProjectionV1,
   proof: Extract<SelectionProjectionV1['proof'], { kind: 'tree' }>,
   environment: EnvironmentOffers,
-): Promise<readonly ArtifactAction[]> {
+): Promise<readonly PlanningArtifactCandidate[]> {
   const layout = resultRootLayoutFromProof(proof)
   const directoryTarget = chooseDirectoryTarget(environment, projection.metrics.byteCountLowerBound)
-  const actions: ArtifactAction[] = []
+  const candidates: PlanningArtifactCandidate[] = []
   if (directoryTarget !== null) {
     const artifact = layout === null ? null : await createResultRootDirectoryTreeArtifact(layout)
-    actions.push(createAction({
-      projectionEpoch: projection.epoch,
+    candidates.push(createCandidate({
       operation: 'save-directory-tree',
       artifact,
       unresolvedArtifactKind: 'directory-tree',
-      plan: Object.freeze({ kind: 'direct-tree', target: directoryTarget }),
+      route: Object.freeze({ kind: 'direct-tree', target: directoryTarget }),
       recovery: 'checkpoint-resumable',
       preparation: noPreparation(),
     }))
   }
   if (layout !== null) {
-    const completePlan = chooseCompletePlan(environment, projection.metrics.byteCountLowerBound)
-    if (completePlan !== null) {
-      const archive = await createZipArchiveArtifact(layout)
-      actions.push(actionForCompleteArtifact(projection.epoch, archive, completePlan))
+    const completeRoute = chooseCompleteRoute(environment, projection.metrics.byteCountLowerBound)
+    if (completeRoute !== null) {
+      candidates.push(candidateForCompleteArtifact(
+        await createZipArchiveArtifact(layout),
+        completeRoute,
+      ))
     }
   }
-  return actions
+  return Object.freeze(candidates)
 }
 
-function chooseCompletePlan(
+function chooseCompleteRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
-): DirectAtomicPlanOffer | WorkspaceThenPublishPlanOffer | PortableHandoffPlanOffer | null {
-  // One displayed operation freezes delivery and recovery semantics. Selecting a
-  // deterministic plan family here prevents later capability probes from changing them.
+): CompleteMaterializationRoute | null {
+  // The priority affects presentation only. Reconciliation selects the already
+  // chosen family directly, so a later higher-priority route cannot replace it.
   const atomicTarget = chooseAtomicTarget(environment, byteCountLowerBound)
   if (atomicTarget !== null) return Object.freeze({ kind: 'direct-atomic', target: atomicTarget })
-  const workspacePlan = chooseWorkspacePlan(environment, byteCountLowerBound)
-  if (workspacePlan !== null) return workspacePlan
-  return choosePortablePlan(environment, byteCountLowerBound)
+  const workspaceRoute = chooseWorkspaceRoute(environment, byteCountLowerBound)
+  if (workspaceRoute !== null) return workspaceRoute
+  return choosePortableRoute(environment, byteCountLowerBound)
 }
 
 function chooseDirectoryTarget(
@@ -166,10 +192,10 @@ function chooseAtomicTarget(
       outputLowerBoundFits(target.hardMaximumOutputBytes, byteCountLowerBound)) ?? null
 }
 
-function chooseWorkspacePlan(
+function chooseWorkspaceRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
-): WorkspaceThenPublishPlanOffer | null {
+): WorkspaceThenPublishMaterializationRoute | null {
   const workspace = environment.workspace
   if (workspace === null || byteCountLowerBound > workspace.jobHardLimitBytes ||
       byteCountLowerBound > workspace.processHardLimitBytes) return null
@@ -182,10 +208,10 @@ function chooseWorkspacePlan(
     : Object.freeze({ kind: 'workspace-then-publish', workspace, publicationTarget })
 }
 
-function choosePortablePlan(
+function choosePortableRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
-): PortableHandoffPlanOffer | null {
+): PortableHandoffMaterializationRoute | null {
   const portable = environment.portable
   if (portable === null || byteCountLowerBound > portable.maximumArtifactBytes) return null
   const handoffTarget = environment.targets.find((target): target is BrowserHandoffTargetOffer =>
@@ -196,44 +222,40 @@ function choosePortablePlan(
     : Object.freeze({ kind: 'portable-handoff', portable, handoffTarget })
 }
 
-function actionForCompleteArtifact(
-  projectionEpoch: SelectionProjectionV1['epoch'],
+function candidateForCompleteArtifact(
   artifact: Exclude<ArtifactSpec, { kind: 'directory-tree' }>,
-  plan: CompletePlanOffer,
-): ArtifactAction {
-  return createAction({
-    projectionEpoch,
-    operation: completeArtifactOperation(artifact, plan),
+  route: CompleteMaterializationRoute,
+): PlanningArtifactCandidate {
+  return createCandidate({
+    operation: completeArtifactOperation(artifact, route),
     artifact,
-    plan,
-    recovery: recoveryForCompletePlan(plan),
-    preparation: preparationForCompletePlan(artifact, plan),
+    route,
+    recovery: recoveryForCompleteRoute(route),
+    preparation: preparationForCompleteRoute(artifact, route),
   })
 }
 
 function completeArtifactOperation(
   artifact: Exclude<ArtifactSpec, { kind: 'directory-tree' }>,
-  plan: CompletePlanOffer,
-): ArtifactAction['operation'] {
-  if (plan.kind === 'portable-handoff') return 'check-then-download'
+  route: CompleteMaterializationRoute,
+): ArtifactChoice['operation'] {
+  if (route.kind === 'portable-handoff') return 'check-then-download'
   return artifact.kind === 'original-file' ? 'download-original' : 'download-zip'
 }
 
-function recoveryForCompletePlan(
-  plan: CompletePlanOffer,
-): RecoverySemantics {
-  switch (plan.kind) {
+function recoveryForCompleteRoute(route: CompleteMaterializationRoute): RecoverySemantics {
+  switch (route.kind) {
     case 'direct-atomic': return 'restart-required'
     case 'workspace-then-publish': return 'workspace-resumable'
     case 'portable-handoff': return 'none'
   }
 }
 
-function preparationForCompletePlan(
+function preparationForCompleteRoute(
   artifact: Exclude<ArtifactSpec, { kind: 'directory-tree' }>,
-  plan: CompletePlanOffer,
+  route: CompleteMaterializationRoute,
 ): PreparationRequirement {
-  switch (plan.kind) {
+  switch (route.kind) {
     case 'direct-atomic':
       return noPreparation()
     case 'workspace-then-publish':
@@ -246,54 +268,68 @@ function preparationForCompletePlan(
   }
 }
 
-function createAction(input: Readonly<{
-  projectionEpoch: SelectionProjectionV1['epoch']
-  operation: ArtifactAction['operation']
+function createCandidate(input: Readonly<{
+  operation: ArtifactChoice['operation']
   artifact: ArtifactSpec | null
   unresolvedArtifactKind?: ArtifactSpec['kind']
-  plan: OfferedMaterializationPlan
+  route: OfferedMaterializationRoute
   recovery: RecoverySemantics
   preparation: PreparationRequirement
-}>): ArtifactAction {
+}>): PlanningArtifactCandidate {
   const artifactKind = input.artifact?.kind ?? input.unresolvedArtifactKind
-  if (artifactKind === undefined) throw new TypeError('offered action requires an artifact kind')
+  if (artifactKind === undefined) throw new TypeError('offered choice requires an artifact kind')
   return Object.freeze({
-    kind: 'artifact-action',
-    projectionEpoch: input.projectionEpoch,
-    operation: input.operation,
-    artifactKind,
+    choice: Object.freeze({
+      kind: 'artifact-choice',
+      operation: input.operation,
+      artifactKind,
+      recovery: input.recovery,
+      preparation: input.preparation,
+      plan: materializationPlanSemantics(input.route),
+    }),
+    route: input.route,
     artifact: input.artifact,
     suggestedName: input.artifact === null ? null : artifactRequestedName(input.artifact),
-    importance: 'secondary',
-    recovery: input.recovery,
-    preparation: input.preparation,
-    plan: input.plan,
   })
 }
 
 function artifactActionsOffer(
   projection: SelectionProjectionV1,
-  actions: readonly ArtifactAction[],
+  candidates: readonly PlanningArtifactCandidate[],
 ): ArtifactActionsOffer {
-  const [first, ...rest] = actions
-  if (first === undefined) throw new TypeError('artifact action list is empty')
-  const primary = Object.freeze({ ...first, importance: 'primary' as const })
-  const alternatives = Object.freeze(rest)
+  const [first, ...rest] = candidates
+  if (first === undefined) throw new TypeError('artifact choice list is empty')
+  const primary = offeredChoice(first, 'primary')
+  const alternatives = Object.freeze(rest.map((candidate) => offeredChoice(candidate, 'secondary')))
   const all = [primary, ...alternatives]
   return Object.freeze({
     kind: 'artifact-actions',
     interactive: true,
     projectionEpoch: projection.epoch,
+    selectionDigest: projection.selectionDigest,
     primary,
     alternatives,
     decision: Object.freeze({
       name: 'receive.offer.computed',
       projection_epoch: projection.epoch,
       shape_proof: projection.proof.kind,
-      offered_artifact_kinds: Object.freeze(unique(all.map((action) => action.artifactKind))),
-      offered_plan_kinds: Object.freeze(unique(all.map((action) => action.plan.kind))),
-      primary_artifact_kind: primary.artifactKind,
+      offered_artifact_kinds: Object.freeze(unique(all.map((offered) => offered.choice.artifactKind))),
+      offered_plan_kinds: Object.freeze(unique(all.map((offered) => offered.choice.plan.kind))),
+      primary_artifact_kind: primary.choice.artifactKind,
     }),
+  })
+}
+
+function offeredChoice(
+  candidate: PlanningArtifactCandidate,
+  importance: OfferedArtifactChoice['importance'],
+): OfferedArtifactChoice {
+  return Object.freeze({
+    kind: 'offered-artifact-choice',
+    choice: candidate.choice,
+    route: candidate.route,
+    suggestedName: candidate.suggestedName,
+    importance,
   })
 }
 
@@ -306,6 +342,7 @@ function disabledProjectionOffer(
     kind,
     interactive: kind === 'retry-confirmation',
     projectionEpoch: projection.epoch,
+    selectionDigest: projection.selectionDigest,
     reason,
     decision: disabledDecision(projection, reason),
   }) as Extract<ArtifactOffers, { kind: typeof kind }>
@@ -317,13 +354,13 @@ function noSafeDestination(
 ): NoSafeDestinationOffer {
   const reason = unavailableReason(projection, environment)
   const hardLimitClass = hardLimitClassForReason(reason)
-  const decision = disabledDecision(projection, reason, hardLimitClass)
   return Object.freeze({
     kind: 'no-safe-destination',
     interactive: false,
     projectionEpoch: projection.epoch,
+    selectionDigest: projection.selectionDigest,
     reason,
-    decision,
+    decision: disabledDecision(projection, reason, hardLimitClass),
   })
 }
 

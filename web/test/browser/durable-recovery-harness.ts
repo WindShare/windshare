@@ -1,84 +1,43 @@
-import { encodeBase64Url } from '../../src/crypto/bytes'
-import {
-  bindMaterialization,
-  offerArtifacts,
-  type SelectionProjectionV1,
-} from '../../src/output/planning'
-import { nextProjectionEpoch } from '../../src/transfer/projection'
-import { TransferJob } from '../../src/transfer/v2-job'
-import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
-import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import type {
-  ExactPreparationEvidence,
-  V2PlanExecutionAuthority,
-} from '../../src/transfer/output-session'
-import {
-  createOriginalFileArtifact,
-  createReceiveIntent,
-  createSelectionSpec,
-  createSyntheticSelectionResultRoot,
-  createWorkspaceBinding,
-  createWorkspaceThenPublishPlan,
-  createZipArchiveArtifact,
-  type OriginalFileArtifact,
-  type ReceiveIntent,
-} from '../../src/transfer/intent'
+import type { ReceiveIntent } from '../../src/transfer/intent'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
-import {
-  OriginPrivateWorkspaceBudgetAuthority,
-  type OriginPrivateWorkspaceBudgetClaim,
-} from '../../src/output/origin-private/admission'
 import {
   openOriginPrivateRetainedArtifactBackend,
   openOriginPrivateWorkspaceBackend,
 } from '../../src/output/origin-private/session'
 import {
   openOriginPrivateWorkspaceNamespace,
+  originPrivateWorkspaceRootHandleId,
 } from '../../src/output/origin-private/namespace'
 import { OriginPrivatePackageWorkflow } from '../../src/output/origin-private/workflow'
 import type { PackagedArtifactV1 } from '../../src/output/workspace/aggregate'
 import { createSingleFileWorkspaceBudget } from '../../src/output/workspace/budget'
-import { sealWorkspaceZipPreparation } from '../../src/output/workspace/preparation'
-import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import { recoverAbandonedOperation } from '../../src/output/workspace/recovery'
+import { recoverWorkspaceActivationCandidates } from '../../src/output/workspace/activation-recovery'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
 import {
   createBrowserReceiveOperationMutationPort,
 } from '../../src/output/resume/reopen-authority'
 import {
-  createBrowserReceiveComposition,
-  type BrowserReceiveWindow,
-} from '../../src/ui/v2-browser-receive-composition'
-import {
-  WORKSPACE_HANDLE_ZIP_LAYOUT,
   WorkspaceOperationStages,
   type WorkspaceStageTraceEvent,
-  workspaceZipLayoutHandleId,
 } from '../../src/output/workspace/stages'
 import {
-  catalogFixture,
-  directoryEntry,
-  fileEntry,
-  identity as catalogIdentity,
-  identityText as catalogIdentityText,
-  readerFixture,
-} from '../transfer/v2-job-fixture'
+  DURABLE_FIXTURE_CAPACITY_BYTES,
+  DURABLE_FIXTURE_INITIAL_TIME,
+  durableIdentities,
+  durableIntent,
+  originPrivateClaim,
+  readDurableLifecycle,
+  workspaceBudgetAuthority,
+} from './durable-output-fixture'
 
 const FILE_BYTES = Uint8Array.of(1, 2, 3, 4, 5)
-const PRODUCT_ZIP_FILE_BYTES = 68n
-const PRODUCT_FIXTURE_CHUNK_BYTES = 2
-const PRODUCT_FIXTURE_LANE_COUNT = 1
-const EMPTY_MATERIALIZATION_SUMMARY = Object.freeze({ entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n })
 const CHECKPOINT_PREFIX_BYTES = 3
-const INITIAL_TIME = 1_000
 const FRESH_PAGE_RECOVERY_TIME = 1_500
 const RECOVERY_TIME = 3_000
 const RETRY_TIME = 4_000
-const CLAIM_LEASE_MILLISECONDS = 1_000
-const CLAIM_HEARTBEAT_MILLISECONDS = 500
-const CAPACITY_BYTES = 1_000_000_000n
 const ACTIVE_SIGNAL = new AbortController().signal
 
 export interface DurableReceiveFixture {
@@ -102,44 +61,6 @@ export interface DurablePackageFixture extends DurableReceiveFixture {
   readonly originalExpiry: number
 }
 
-export interface FreshPreparedZipAdmissionProof {
-  readonly lifecycle: string
-  readonly contentRequests: string
-  readonly traceNames: readonly string[]
-  readonly receiptCount: number
-  readonly manifestPageCount: number
-  readonly layoutHandlePresent: boolean
-}
-
-export interface ProductPreparedZipAdmissionProof {
-  readonly admission: string
-  readonly lifecycle: string
-  readonly traceNames: readonly string[]
-  readonly cleanup: string
-}
-
-export interface TransferJobPreparedZipProof {
-  readonly worker: string
-  readonly lifecycle: string
-  readonly workspaceTraceNames: readonly string[]
-  readonly transferTraceNames: readonly string[]
-  readonly evidence: Readonly<{
-    readonly entryCount: string
-    readonly fileCount: string
-    readonly directoryCount: string
-    readonly selectedRawBytes: string
-    readonly generationCount: number
-    readonly entries: readonly Readonly<{
-      readonly kind: 'directory' | 'file'
-      readonly role?: string
-      readonly sourceSegmentCount: number
-      readonly artifactSegmentCount: number
-      readonly modifiedTimePresent: boolean
-    }>[]
-  }>
-  readonly cleanup: string
-}
-
 export interface FreshPageWorkspaceResumeFixture {
   readonly key: string
   readonly checkpointDatabaseName: string
@@ -155,6 +76,20 @@ export interface FreshPageWorkspaceResumeProof {
   readonly lifecycle: string
   readonly admittedContentReopened: boolean
   readonly cleanup: string
+}
+
+export interface WorkspaceActivationReloadCut {
+  readonly key: string
+  readonly databaseName: string
+  readonly operationId: string
+  readonly candidateCount: number
+}
+
+export interface WorkspaceActivationReloadProof {
+  readonly candidateCount: number
+  readonly promotedHandlePresent: boolean
+  readonly lifecycle: string
+  readonly retainedContinuation: string | null
 }
 
 export interface ReceiveCrashCutResult {
@@ -186,398 +121,59 @@ export interface PublicationRetryResult {
   readonly cleanup: string
 }
 
-export async function proveFreshPreparedZipAdmission(
+export async function createWorkspaceActivationReloadCut(
   key: string,
-): Promise<FreshPreparedZipAdmissionProof> {
+): Promise<WorkspaceActivationReloadCut> {
   const ids = await durableIdentities(key)
-  const artifact = await createZipArchiveArtifact(createSyntheticSelectionResultRoot())
-  const workspace = await createWorkspaceBinding({
-    operationId: ids.operationId,
-    workspaceId: ids.workspaceId,
-    artifact,
-    repositoryRef: ids.repositoryRef,
-  })
-  const intent = await createReceiveIntent({
-    selection: await createSelectionSpec({
-      shareInstance: ids.shareInstance,
-      syntheticRoot: ids.syntheticRoot,
-      rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-    }),
-    artifact,
-    plan: await createWorkspaceThenPublishPlan(artifact, workspace),
-  })
-  const repository = await IndexedDbReceiveOperationRepository.open()
-  const namespace = await openOriginPrivateWorkspaceNamespace({
-    receiveIntent: intent,
-    repository,
-    randomOwnedObjectId: () => ids.rootOwnedObjectId,
-  })
-  const lease = await acquireBrowserReceiveOperationLease(repository, intent.operationId, {
-    clock: { now: () => INITIAL_TIME },
-    randomBytes: () => new Uint8Array(16).fill(0x41),
-  })
-  const traces: WorkspaceStageTraceEvent[] = []
-  let contentRequests = 0n
-  const stages = await WorkspaceOperationStages.open({
-    repository,
-    receiveIntent: intent,
-    leaseId: lease.leaseId,
-    clock: () => INITIAL_TIME,
-    contentRequests: { count: () => contentRequests },
-    onTrace: (event) => traces.push(event),
-  })
-  let cleanupBackend: Awaited<ReturnType<
-    typeof openOriginPrivateRetainedArtifactBackend
-  >> | undefined
-  let claim: OriginPrivateWorkspaceBudgetClaim | undefined
+  const intent = await durableIntent(ids)
+  const databaseName = `windshare-workspace-activation-${key}`
+  const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
+  let markerCutReached = false
   try {
-    const preparationId = await identity(key, 'preparation', 16)
-    const rootGeneration = await identity(key, 'root-generation', 16)
-    const modifiedTime = Object.freeze({
-      seconds: 1_700_000_000n,
-      nanoseconds: 123_000_000,
-      precision: 3 as const,
-      milliseconds: 1_700_000_000_123n,
-    })
-    await stages.beginReceive(preparationId)
-    const preparation = await sealWorkspaceZipPreparation({
+    await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
-      preparationId,
-      generations: [
-        {
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-        },
-        {
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-        },
-      ],
-      entries: [
-        {
-          kind: 'directory',
-          sourcePath: [],
-          artifactPath: [artifact.layout.name],
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-          role: 'result-root',
-        },
-        {
-          kind: 'directory',
-          sourcePath: ['micro-share'],
-          artifactPath: [artifact.layout.name, 'micro-share'],
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-          role: 'necessary-ancestor',
-          modifiedTime,
-        },
-        {
-          kind: 'file',
-          sourcePath: ['micro-share', 'pixel.png'],
-          artifactPath: [artifact.layout.name, 'micro-share', 'pixel.png'],
-          fileId: ids.fileId,
-          containingDirectoryId: ids.directoryId,
-          generation: ids.generation,
-          exactSize: PRODUCT_ZIP_FILE_BYTES,
-          modifiedTime,
-        },
-      ],
-    })
-    const authority = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
-      estimate: () => navigator.storage.estimate(),
-    })
-    const admission = await stages.admitPreparedZip({
-      preparation,
-      authority,
-      durableMetadataBytesExcludingAdmissionRecords: 0n,
-      rejectionCleanup: {
-        targets: Object.freeze([]),
-        port: Object.freeze({
-          removeOwnedObject: async () => Object.freeze({ kind: 'ownership-unknown' as const }),
-          removeFileCheckpoints: async () => Object.freeze({
-            kind: 'ownership-unknown' as const,
-          }),
-        }),
+      repository,
+      onActivationTransition: transition => {
+        if (transition !== 'marker-written') return
+        markerCutReached = true
+        throw new Error('simulated page loss after durable workspace marker')
       },
     })
-    if (admission.kind !== 'accepted') {
-      throw new DOMException(
-        `prepared ZIP admission rejected: ${admission.reason}`,
-        'QuotaExceededError',
-      )
-    }
-    claim = originPrivateClaim(admission.content.claim)
-    cleanupBackend = await openOriginPrivateRetainedArtifactBackend({
-      receiveIntent: intent,
-      operationRepository: repository,
-      namespace,
-    })
-    const [lifecycle, receipts, pages, layoutHandle] = await Promise.all([
-      readLifecycle(repository, intent.operationId),
-      repository.listRecords(intent.operationId, RECEIVE_RECORD_RECEIPT),
-      repository.listManifestPages(intent.operationId),
-      repository.readHandle(workspaceZipLayoutHandleId(intent.operationId, preparationId)),
-    ])
-    if (layoutHandle === undefined || layoutHandle.kind !== WORKSPACE_HANDLE_ZIP_LAYOUT) {
-      throw new Error('prepared ZIP admission omitted its durable layout handle')
-    }
-    return Object.freeze({
-      lifecycle: lifecycle.kind,
-      contentRequests: contentRequests.toString(),
-      traceNames: Object.freeze(traces.map((event) => event.name)),
-      receiptCount: receipts.length,
-      manifestPageCount: pages.length,
-      layoutHandlePresent: true,
-    })
-  } finally {
-    await claim?.release().catch(() => undefined)
-    if (cleanupBackend !== undefined) {
-      await stages.discard(await cleanupBackend.cleanup.cleanupRequest()).catch(() => undefined)
-      await cleanupBackend.close().catch(() => undefined)
-    }
-    await lease.release().catch(() => undefined)
+  } catch {
+    // The marker cut deliberately interrupts before handle promotion.
+  }
+  if (!markerCutReached) {
     repository.close()
-    contentRequests = 0n
+    throw new TypeError('workspace activation reload cut did not reach the marker boundary')
   }
+  const candidateCount = (await repository.listWorkspaceActivationCandidates()).length
+  repository.close()
+  return Object.freeze({ key, databaseName, operationId: intent.operationId, candidateCount })
 }
 
-export async function proveProductPreparedZipAdmission(
-  key: string,
-): Promise<ProductPreparedZipAdmissionProof> {
-  const ids = await durableIdentities(key)
-  const selection = await createSelectionSpec({
-    shareInstance: ids.shareInstance,
-    syntheticRoot: ids.syntheticRoot,
-    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-  })
-  const projection = productZipProjection(selection.digest, ids.directoryId)
-  const traces: WorkspaceStageTraceEvent[] = []
-  const composition = createBrowserReceiveComposition(window as BrowserReceiveWindow, {
-    onTrace: (event) => traces.push(event),
-  })
-  const signal = new AbortController().signal
-  const environment = await composition.environment(signal)
-  const offered = await offerArtifacts(
-    projection,
-    Object.freeze({ kind: 'complete' as const }),
-    environment,
-  )
-  if (offered.kind !== 'artifact-actions') {
-    throw new TypeError('product composition did not offer workspace ZIP')
-  }
-  const action = [offered.primary, ...offered.alternatives].find(candidate =>
-    candidate.plan.kind === 'workspace-then-publish' && candidate.artifact?.kind === 'zip-archive')
-  if (action === undefined) throw new TypeError('product composition omitted workspace ZIP')
-
-  const started = await composition.startArtifactAuthority(action)
-  let runtime: Awaited<ReturnType<typeof started.finalize>> | undefined
+export async function recoverWorkspaceActivationReloadCut(
+  cut: WorkspaceActivationReloadCut,
+): Promise<WorkspaceActivationReloadProof> {
+  const repository = await IndexedDbReceiveOperationRepository.open(cut.databaseName)
   try {
-    runtime = await started.finalize(async acquired => {
-      const bound = await bindMaterialization({
-        selection,
-        chosenAction: action,
-        currentProjection: projection,
-        currentDiscovery: Object.freeze({ kind: 'complete' as const }),
-        currentEnvironment: environment,
-        acquired,
-      })
-      if (bound.kind !== 'bound') throw new TypeError('product workspace ZIP did not freeze')
-      return bound.intent
-    }, signal)
-    const intent = runtime.intent
-    if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive') {
-      throw new TypeError('product binding changed the workspace ZIP route')
-    }
-    const rootGeneration = await identity(key, 'product-root-generation', 16)
-    const modifiedTime = Object.freeze({
-      seconds: 1_700_000_000n,
-      nanoseconds: 123_000_000,
-      precision: 3 as const,
-      milliseconds: 1_700_000_000_123n,
-    })
-    const workspaceIntent = intent as Parameters<
-      typeof runtime.plans.prepareWorkspaceZip
-    >[0]
-    const admission = await runtime.plans.prepareWorkspaceZip(workspaceIntent, Object.freeze({
-      generations: Object.freeze([
-        Object.freeze({ directoryId: ids.syntheticRoot, generation: rootGeneration }),
-        Object.freeze({ directoryId: ids.directoryId, generation: ids.generation }),
-      ]),
-      entries: Object.freeze([
-        Object.freeze({
-          kind: 'directory' as const,
-          sourcePath: Object.freeze([]),
-          artifactPath: Object.freeze([intent.artifact.layout.name]),
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-          role: 'result-root' as const,
-        }),
-        Object.freeze({
-          kind: 'directory' as const,
-          sourcePath: Object.freeze(['micro-share']),
-          artifactPath: Object.freeze([intent.artifact.layout.name, 'micro-share']),
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-          role: 'necessary-ancestor' as const,
-          modifiedTime,
-        }),
-        Object.freeze({
-          kind: 'file' as const,
-          sourcePath: Object.freeze(['micro-share', 'pixel.png']),
-          artifactPath: Object.freeze([intent.artifact.layout.name, 'micro-share', 'pixel.png']),
-          fileId: ids.fileId,
-          containingDirectoryId: ids.directoryId,
-          generation: ids.generation,
-          exactSize: PRODUCT_ZIP_FILE_BYTES,
-          modifiedTime,
-        }),
-      ]),
-      entryCount: 3n,
-      fileCount: 1n,
-      directoryCount: 2n,
-      selectedRawBytes: PRODUCT_ZIP_FILE_BYTES,
-    }), signal)
-    if (admission.kind !== 'accepted') {
-      throw new DOMException('product workspace ZIP was rejected', 'QuotaExceededError')
-    }
-    const paused = await admission.execution.pause(Object.freeze({
-      worker: transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY),
-      materialization: EMPTY_MATERIALIZATION_SUMMARY,
-      reason: 'product admission proof completed',
-    }), signal)
-    const discarded = await runtime.startLifecycleAction('discard', paused)
-    return Object.freeze({
-      admission: admission.kind,
-      lifecycle: 'receiving',
-      traceNames: Object.freeze(traces.map(event => event.name)),
-      cleanup: discarded.lifecycle.kind,
-    })
-  } finally {
-    if (runtime !== undefined) {
-      await Promise.resolve(runtime.detach()).catch(() => undefined)
-    }
-  }
-}
-
-export async function proveTransferJobPreparedZip(): Promise<TransferJobPreparedZipProof> {
-  const selection = await createSelectionSpec({
-    shareInstance: catalogIdentityText(1),
-    syntheticRoot: catalogIdentityText(2),
-    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-  })
-  const modifiedTime = Object.freeze({
-    seconds: 1_700_000_000n,
-    nanoseconds: 123_456_789,
-    precision: 3 as const,
-    milliseconds: 1_700_000_000_123n,
-  })
-  const directory = Object.freeze({
-    ...directoryEntry(catalogIdentity(30), 'micro-share'),
-    modifiedTime,
-  })
-  const file = Object.freeze({
-    ...fileEntry(catalogIdentity(20), 'pixel.png', PRODUCT_ZIP_FILE_BYTES),
-    modifiedTime,
-  })
-  const projection = productZipProjection(selection.digest, directory.idText)
-  const workspaceTraces: WorkspaceStageTraceEvent[] = []
-  const transferTraceNames: string[] = []
-  const composition = createBrowserReceiveComposition(window as BrowserReceiveWindow, {
-    onTrace: event => workspaceTraces.push(event),
-  })
-  const signal = new AbortController().signal
-  const environment = await composition.environment(signal)
-  const offered = await offerArtifacts(
-    projection,
-    Object.freeze({ kind: 'complete' as const }),
-    environment,
-  )
-  if (offered.kind !== 'artifact-actions') {
-    throw new TypeError('product composition did not offer workspace ZIP')
-  }
-  const action = [offered.primary, ...offered.alternatives].find(candidate =>
-    candidate.plan.kind === 'workspace-then-publish' && candidate.artifact?.kind === 'zip-archive')
-  if (action === undefined) throw new TypeError('product composition omitted workspace ZIP')
-
-  const started = await composition.startArtifactAuthority(action)
-  let runtime: Awaited<ReturnType<typeof started.finalize>> | undefined
-  try {
-    runtime = await started.finalize(async acquired => {
-      const bound = await bindMaterialization({
-        selection,
-        chosenAction: action,
-        currentProjection: projection,
-        currentDiscovery: Object.freeze({ kind: 'complete' as const }),
-        currentEnvironment: environment,
-        acquired,
-      })
-      if (bound.kind !== 'bound') throw new TypeError('product workspace ZIP did not freeze')
-      return bound.intent
-    }, signal)
-    const catalog = catalogFixture([
-      {
-        id: catalogIdentity(2),
-        entries: [directory],
-        generation: catalogIdentity(90),
-      },
-      {
-        id: directory.id,
-        entries: [file],
-        generation: catalogIdentity(91),
-      },
+    await recoverWorkspaceActivationCandidates({ repository })
+    const [candidates, root, lifecycleRecord] = await Promise.all([
+      repository.listWorkspaceActivationCandidates(),
+      repository.readHandle(originPrivateWorkspaceRootHandleId(cut.operationId)),
+      repository.readLifecycle(cut.operationId),
     ])
-    const readers = readerFixture([file])
-    let observedEvidence: ExactPreparationEvidence | undefined
-    const prepareWorkspaceZip: V2PlanExecutionAuthority['prepareWorkspaceZip'] = async (
-      intent,
-      evidence,
-      preparationSignal,
-    ) => {
-      observedEvidence = evidence
-      return runtime!.plans.prepareWorkspaceZip(intent, evidence, preparationSignal)
+    if (lifecycleRecord === undefined) {
+      throw new TypeError('promoted workspace activation omitted its lifecycle')
     }
-    const plans: V2PlanExecutionAuthority = Object.freeze({
-      ...runtime.plans,
-      prepareWorkspaceZip,
-    })
-    const result = await new TransferJob({
-      descriptor: {
-        shareInstance: catalogIdentity(1),
-        syntheticRoot: catalogIdentity(2),
-        syntheticRootId: catalogIdentityText(2),
-        chunkSize: PRODUCT_FIXTURE_CHUNK_BYTES,
-      } as never,
-      catalog: catalog.catalog,
-      selection: new V2SelectionPolicy(true),
-      intent: runtime.intent,
-      plans,
-      revisions: readers.revisions,
-      broker: readers.broker,
-      lanes: { size: PRODUCT_FIXTURE_LANE_COUNT },
-      transferJobId: runtime.transferJobId,
-      trace: {
-        current: event => transferTraceNames.push(
-          event.name === 'receive_transition' ? event.transition : event.name,
-        ),
-      },
-    }).run(signal)
-    const evidence = observedEvidence
-    if (evidence === undefined) {
-      throw new TypeError('TransferJob did not expose exact preparation evidence')
-    }
-    const discarded = await runtime.startLifecycleAction('discard', result.lifecycle)
+    const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)
     return Object.freeze({
-      worker: result.worker.status,
-      lifecycle: result.lifecycle.kind,
-      workspaceTraceNames: Object.freeze(workspaceTraces.map(event => event.name)),
-      transferTraceNames: Object.freeze(transferTraceNames),
-      evidence: summarizePreparationEvidence(evidence),
-      cleanup: discarded.lifecycle.kind,
+      candidateCount: candidates.length,
+      promotedHandlePresent: root !== undefined,
+      lifecycle: lifecycle.kind,
+      retainedContinuation: receiveOperationResumeDescriptor(lifecycle, Date.now())?.continuation ?? null,
     })
   } finally {
-    if (runtime !== undefined) {
-      await Promise.resolve(runtime.detach()).catch(() => undefined)
-    }
+    repository.close()
   }
 }
 
@@ -595,14 +191,14 @@ export async function createFreshPageWorkspaceResumeCut(
     randomOwnedObjectId: () => ids.rootOwnedObjectId,
   })
   const lease = await acquireBrowserReceiveOperationLease(repository, intent.operationId, {
-    clock: { now: () => INITIAL_TIME },
+    clock: { now: () => DURABLE_FIXTURE_INITIAL_TIME },
     randomBytes: () => new Uint8Array(16).fill(0x51),
   })
   const stages = await WorkspaceOperationStages.open({
     repository,
     receiveIntent: intent,
     leaseId: lease.leaseId,
-    clock: () => INITIAL_TIME,
+    clock: () => DURABLE_FIXTURE_INITIAL_TIME,
     contentRequests: { count: () => 0n },
   })
   const rejectionBackend = await openOriginPrivateRetainedArtifactBackend({
@@ -614,7 +210,7 @@ export async function createFreshPageWorkspaceResumeCut(
   const authority = await workspaceBudgetAuthority({
     operationId: intent.operationId,
     databaseName: admissionDatabaseName,
-    now: INITIAL_TIME,
+    now: DURABLE_FIXTURE_INITIAL_TIME,
     token: `${key}-resume-cut`,
   })
   const admission = await stages.admitSingleFile({
@@ -655,7 +251,7 @@ export async function reopenFreshPageWorkspaceResume(
   )
   const ids = await durableIdentities(fixture.key)
   const intent = await durableIntent(ids)
-  const stable = await readLifecycle(descriptorRepository, intent.operationId)
+  const stable = await readDurableLifecycle(descriptorRepository, intent.operationId)
   const descriptor = receiveOperationResumeDescriptor(stable, FRESH_PAGE_RECOVERY_TIME)
   descriptorRepository.close()
   if (descriptor === undefined || descriptor.continuation !== 'resume-receive') {
@@ -670,7 +266,10 @@ export async function reopenFreshPageWorkspaceResume(
       randomBytes: () => new Uint8Array(16).fill(0x61),
     },
     workspaceBudgetDatabaseName: fixture.admissionDatabaseName,
-    estimateWorkspaceStorage: async () => ({ usage: 0, quota: Number(CAPACITY_BYTES) }),
+    estimateWorkspaceStorage: async () => ({
+      usage: 0,
+      quota: Number(DURABLE_FIXTURE_CAPACITY_BYTES),
+    }),
   })
   const mutation = await mutations.resume(descriptor)
   if (mutation.kind !== 'continuation' ||
@@ -712,7 +311,7 @@ export async function createOriginPrivateReceiveCrashCut(
     randomOwnedObjectId: () => ids.rootOwnedObjectId,
   })
   const lease = await acquireBrowserReceiveOperationLease(repository, intent.operationId, {
-    clock: { now: () => INITIAL_TIME },
+    clock: { now: () => DURABLE_FIXTURE_INITIAL_TIME },
     randomBytes: () => new Uint8Array(16).fill(0x21),
   })
   let contentRequests = 0n
@@ -720,7 +319,7 @@ export async function createOriginPrivateReceiveCrashCut(
     repository,
     receiveIntent: intent,
     leaseId: lease.leaseId,
-    clock: () => INITIAL_TIME,
+    clock: () => DURABLE_FIXTURE_INITIAL_TIME,
     contentRequests: { count: () => contentRequests },
   })
   const rejectionBackend = await openOriginPrivateRetainedArtifactBackend({
@@ -732,7 +331,7 @@ export async function createOriginPrivateReceiveCrashCut(
   const authority = await workspaceBudgetAuthority({
     operationId: intent.operationId,
     databaseName: admissionDatabaseName,
-    now: INITIAL_TIME,
+    now: DURABLE_FIXTURE_INITIAL_TIME,
     token: `${key}-initial`,
   })
   const admission = await stages.admitSingleFile({
@@ -769,7 +368,7 @@ export async function createOriginPrivateReceiveCrashCut(
   await transaction.writeRange(0n, FILE_BYTES.subarray(0, CHECKPOINT_PREFIX_BYTES), ACTIVE_SIGNAL)
   const ranges = await transaction.checkpoint(ACTIVE_SIGNAL)
   await transaction.close()
-  const lifecycle = await readLifecycle(repository, intent.operationId)
+  const lifecycle = await readDurableLifecycle(repository, intent.operationId)
   ;(globalThis as Record<string, unknown>).__windshareW3cCrashCut = {
     repository,
     backend,
@@ -859,7 +458,7 @@ export async function recoverReceiveAndSealPackage(
   if (checkpoint === undefined || committed.records.length !== 1) {
     throw new Error('recovered workspace lacks its unique checkpoint')
   }
-  const observed = await readLifecycle(repository, intent.operationId)
+  const observed = await readDurableLifecycle(repository, intent.operationId)
   const recovery = recoverAbandonedOperation(observed, {
     kind: 'verified-receive',
     checkpointSetDigest: checkpoint.checksum,
@@ -1026,131 +625,6 @@ export async function retryRetainedPackagePublication(
   })
 }
 
-function summarizePreparationEvidence(
-  evidence: ExactPreparationEvidence,
-): TransferJobPreparedZipProof['evidence'] {
-  return Object.freeze({
-    entryCount: evidence.entryCount.toString(),
-    fileCount: evidence.fileCount.toString(),
-    directoryCount: evidence.directoryCount.toString(),
-    selectedRawBytes: evidence.selectedRawBytes.toString(),
-    generationCount: evidence.generations.length,
-    entries: Object.freeze(evidence.entries.map(entry => Object.freeze({
-      kind: entry.kind,
-      ...(entry.kind === 'directory' ? { role: entry.role } : {}),
-      sourceSegmentCount: entry.sourcePath.length,
-      artifactSegmentCount: entry.artifactPath.length,
-      modifiedTimePresent: entry.modifiedTime !== undefined,
-    }))),
-  })
-}
-
-function productZipProjection(
-  selectionDigest: string,
-  directoryId: string,
-): SelectionProjectionV1 {
-  const selectedRoot = Object.freeze({
-    kind: 'directory' as const,
-    directoryId,
-    sourcePath: 'micro-share',
-    portableName: 'micro-share',
-  })
-  return Object.freeze({
-    version: 1 as const,
-    epoch: nextProjectionEpoch(0n),
-    selectionDigest,
-    selectedRoots: Object.freeze([selectedRoot]),
-    selectedRootCountLowerBound: 1,
-    selectedRootsTruncated: false,
-    generations: Object.freeze([]),
-    metrics: Object.freeze({
-      fileCountLowerBound: 1,
-      directoryCountLowerBound: 1,
-      byteCountLowerBound: PRODUCT_ZIP_FILE_BYTES,
-    }),
-    unsettledTargets: Object.freeze([]),
-    proof: Object.freeze({
-      kind: 'tree' as const,
-      selectedRoots: Object.freeze([selectedRoot]),
-      selectedRootCountLowerBound: 1,
-      selectedRootsTruncated: false,
-      layoutBasis: Object.freeze({ kind: 'synthetic-selection' as const }),
-    }),
-  })
-}
-
-type DurableIntent = ReceiveIntent & { readonly artifact: OriginalFileArtifact }
-
-async function durableIntent(ids: DurableIdentities): Promise<DurableIntent> {
-  const artifact = await createOriginalFileArtifact({
-    fileId: ids.fileId,
-    sourcePath: 'root/browser-file.bin',
-    suggestedName: 'browser-file.bin',
-  })
-  const workspace = await createWorkspaceBinding({
-    operationId: ids.operationId,
-    workspaceId: ids.workspaceId,
-    artifact,
-    repositoryRef: ids.repositoryRef,
-  })
-  const intent = await createReceiveIntent({
-    selection: await createSelectionSpec({
-      shareInstance: ids.shareInstance,
-      syntheticRoot: ids.syntheticRoot,
-      rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-    }),
-    artifact,
-    plan: await createWorkspaceThenPublishPlan(artifact, workspace),
-  })
-  if (intent.artifact.kind !== 'original-file') throw new TypeError('durable fixture artifact changed')
-  return intent as DurableIntent
-}
-
-interface DurableIdentities {
-  readonly operationId: string
-  readonly workspaceId: string
-  readonly repositoryRef: string
-  readonly shareInstance: string
-  readonly syntheticRoot: string
-  readonly fileId: string
-  readonly fileRevision: string
-  readonly directoryId: string
-  readonly generation: string
-  readonly rootOwnedObjectId: string
-  readonly transferJobId: string
-  readonly expiryReceiptDigest: string
-  readonly firstPublicationAttemptId: string
-  readonly secondPublicationAttemptId: string
-}
-
-async function durableIdentities(key: string): Promise<DurableIdentities> {
-  if (!/^[A-Za-z0-9-]{1,80}$/u.test(key)) throw new TypeError('durable fixture key is invalid')
-  return Object.freeze({
-    operationId: await identity(key, 'operation', 16),
-    workspaceId: await identity(key, 'workspace', 16),
-    repositoryRef: await identity(key, 'repository', 32),
-    shareInstance: await identity(key, 'share', 16),
-    syntheticRoot: await identity(key, 'selection-root', 16),
-    fileId: await identity(key, 'file', 16),
-    fileRevision: await identity(key, 'revision', 16),
-    directoryId: await identity(key, 'directory', 16),
-    generation: await identity(key, 'generation', 16),
-    rootOwnedObjectId: await identity(key, 'workspace-root-object', 32),
-    transferJobId: await identity(key, 'transfer-job', 16),
-    expiryReceiptDigest: await identity(key, 'expiry-receipt', 32),
-    firstPublicationAttemptId: await identity(key, 'publication-one', 16),
-    secondPublicationAttemptId: await identity(key, 'publication-two', 16),
-  })
-}
-
-async function identity(key: string, label: string, width: 16 | 32): Promise<string> {
-  const digest = new Uint8Array(await crypto.subtle.digest(
-    'SHA-256',
-    new TextEncoder().encode(`windshare/w3c-test/${key}/${label}`),
-  ))
-  return encodeBase64Url(digest.slice(0, width))
-}
-
 function checkpointBinding(intent: ReceiveIntent) {
   if (intent.plan.kind !== 'workspace-then-publish') throw new TypeError('test intent is not workspace')
   return Object.freeze({
@@ -1160,34 +634,6 @@ function checkpointBinding(intent: ReceiveIntent) {
     materializerKind: 3 as const,
     authorityRef: intent.plan.workspace.repositoryRef,
   })
-}
-
-async function workspaceBudgetAuthority(input: {
-  readonly operationId: string
-  readonly databaseName: string
-  readonly now: number
-  readonly token: string
-}): Promise<OriginPrivateWorkspaceBudgetAuthority> {
-  return OriginPrivateWorkspaceBudgetAuthority.open(input.operationId, {
-    estimate: async () => ({ usage: 0, quota: Number(CAPACITY_BYTES) }),
-    jobLimitBytes: CAPACITY_BYTES,
-    processLimitBytes: CAPACITY_BYTES,
-    minimumReserveBytes: 0n,
-    databaseName: input.databaseName,
-    now: () => input.now,
-    leaseMilliseconds: CLAIM_LEASE_MILLISECONDS,
-    heartbeatMilliseconds: CLAIM_HEARTBEAT_MILLISECONDS,
-    randomToken: () => input.token,
-  })
-}
-
-async function readLifecycle(
-  repository: IndexedDbReceiveOperationRepository,
-  operationId: string,
-) {
-  const record = await repository.readLifecycle(operationId)
-  if (record === undefined) throw new Error('durable operation lacks lifecycle state')
-  return decodeStoredReceiveLifecycleState(record)
 }
 
 function serializedPackage(artifact: PackagedArtifactV1): DurablePackageFixture['package'] {
@@ -1204,16 +650,6 @@ function serializedPackage(artifact: PackagedArtifactV1): DurablePackageFixture[
 
 function rangeText(range: { readonly start: bigint; readonly end: bigint }): string {
   return `${range.start}:${range.end}`
-}
-
-function originPrivateClaim(claim: {
-  readonly budgetDigest: string
-  release(): Promise<void>
-}): OriginPrivateWorkspaceBudgetClaim {
-  if (!('readmit' in claim) || typeof claim.readmit !== 'function') {
-    throw new TypeError('origin-private admission did not return a readmission claim')
-  }
-  return claim as OriginPrivateWorkspaceBudgetClaim
 }
 
 function deleteDatabase(name: string): Promise<void> {

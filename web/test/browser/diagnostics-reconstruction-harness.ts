@@ -6,7 +6,7 @@ import {
   createFailureIdentity,
   type ProtocolMessageKindV1,
 } from '../../src/diagnostics/incident'
-import { persistFSAOperationBinding } from '../../src/output/browser/indexeddb-root-binding'
+import { prepareFSAOperationBindingTransition } from '../../src/output/browser/indexeddb-root-binding'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
 import { fsaRootMutationLockName } from '../../src/output/browser/namespace-mutation'
 import {
@@ -78,15 +78,21 @@ export async function reconstructFSAContinuationFailure(
   const databaseName = `windshare-w6-reconstruction-${crypto.randomUUID()}`
   const parent = await reconstructionDirectory()
   const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
-  await persistFSAOperationBinding({
+  const stableLifecycle = resumableReceive(intent, 4n)
+  const binding = await prepareFSAOperationBindingTransition({
     repository,
     intent,
     parent,
   })
-  const stableLifecycle = resumableReceive(intent, 4n)
   await repository.commitTransition({
     operationId: intent.operationId,
-    records: [await storedReceiveLifecycleState(stableLifecycle)],
+    records: [
+      ...(binding.transition.records ?? []),
+      await storedReceiveLifecycleState(stableLifecycle),
+    ],
+    ...(binding.transition.handles === undefined
+      ? {}
+      : { handles: binding.transition.handles }),
   })
   repository.close()
 
