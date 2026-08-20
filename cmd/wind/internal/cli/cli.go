@@ -26,13 +26,12 @@ const (
 	ExitDrift   = 4 // 快照漂移中止:分享期间文件被修改(§6.3)
 )
 
-// 部署期默认值:M1 无注册域名,一律指向本机开发环境(§6.3"前端域为
-// 部署期配置")。
+// The local defaults describe the browser-facing gateway started by dev.ps1.
+// Vite owns that origin and proxies the relay path, so generated capabilities
+// never expose the relay's private development listener.
 const (
-	// DefaultRelayURL 与 wsrelay 的默认监听端口(:8484)对齐。
-	DefaultRelayURL = "ws://127.0.0.1:8484"
-	// DefaultFrontURL 是链接的前端基址占位(Vite 开发服务器默认端口)。
-	DefaultFrontURL = "http://localhost:5173"
+	DefaultRelayURL = "ws://localhost:38384"
+	DefaultFrontURL = "http://localhost:38384"
 )
 
 const usageText = `Usage:
