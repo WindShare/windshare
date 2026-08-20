@@ -1,4 +1,5 @@
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
+import { projectOutputException } from '../diagnostics/exception'
 import type {
   FileCheckpointJournal,
   FileCheckpointScan,
@@ -10,7 +11,7 @@ import type {
   PersistentOutputFailureFacts,
   PersistentOutputFailureObservation,
   PersistentOutputObservedFact,
-  PersistentOutputRawException,
+  PersistentOutputCapturedException,
 } from './stage-diagnostic-model'
 
 export const PERSISTENT_OUTPUT_FAILURE_FACT_LIMITS = Object.freeze({
@@ -36,8 +37,8 @@ implements PersistentOutputFailureFactContext {
     return this.#controller.signal
   }
 
-  exception(error: unknown): PersistentOutputRawException {
-    return snapshotException(error, value => this.#boundedString(value))
+  exception(error: unknown): PersistentOutputCapturedException {
+    return captureException(error, value => this.#boundedString(value))
   }
 
   claimCheckpointPage(): boolean {
@@ -134,13 +135,15 @@ export async function persistentOutputObservedFact<Value>(
   } catch (error) {
     return Object.freeze({
       status: 'unavailable',
-      exception: context?.exception(error) ?? persistentOutputRawException(error),
+      exception: context?.exception(error) ?? persistentOutputCapturedException(error),
     })
   }
 }
 
-export function persistentOutputRawException(error: unknown): PersistentOutputRawException {
-  return snapshotException(error, value => value)
+export function persistentOutputCapturedException(
+  error: unknown,
+): PersistentOutputCapturedException {
+  return new PersistentOutputFailureObservationBudget().exception(error)
 }
 
 export async function captureCheckpointFailureFacts(
@@ -231,40 +234,14 @@ function retainCheckpointRecords(
   return retained
 }
 
-function snapshotException(
+function captureException(
   error: unknown,
   bound: (value: string) => string,
-): PersistentOutputRawException {
+): PersistentOutputCapturedException {
   return Object.freeze({
     raw: error,
-    valueType: error === null ? 'null' : typeof error,
-    ...exceptionObjectFields(error, bound),
+    projection: projectOutputException(error, bound),
   })
-}
-
-function exceptionObjectFields(
-  error: unknown,
-  bound: (value: string) => string,
-): Partial<Pick<PersistentOutputRawException, 'constructorName' | 'name' | 'message' | 'stack'>> {
-  if (typeof error !== 'object' || error === null) return Object.freeze({})
-  try {
-    const candidate = error as {
-      readonly constructor?: { readonly name?: unknown }
-      readonly name?: unknown
-      readonly message?: unknown
-      readonly stack?: unknown
-    }
-    return Object.freeze({
-      ...(typeof candidate.constructor?.name === 'string'
-        ? { constructorName: bound(candidate.constructor.name) }
-        : {}),
-      ...(typeof candidate.name === 'string' ? { name: bound(candidate.name) } : {}),
-      ...(typeof candidate.message === 'string' ? { message: bound(candidate.message) } : {}),
-      ...(typeof candidate.stack === 'string' ? { stack: bound(candidate.stack) } : {}),
-    })
-  } catch {
-    return Object.freeze({})
-  }
 }
 
 function truncateUTF8(

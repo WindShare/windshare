@@ -1,4 +1,5 @@
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
+import type { OutputExceptionProjection } from '../diagnostics/exception'
 
 export type PersistentOutputStage =
   | 'fsa.binding.parent-handle.verify'
@@ -51,26 +52,22 @@ export interface PersistentOutputStageCorrelation {
   readonly checkpointGeneration?: bigint
 }
 
-export interface PersistentOutputRawException {
-  /** Exact in-process identity is local-only; bounded scalar fields support deterministic export. */
+export interface PersistentOutputCapturedException {
+  /** Exact identity is transient in-process evidence and must not enter retained projections. */
   readonly raw: unknown
-  readonly valueType: string
-  readonly constructorName?: string
-  readonly name?: string
-  readonly message?: string
-  readonly stack?: string
+  readonly projection: OutputExceptionProjection
 }
 
 export type PersistentOutputObservedFact<Value> =
   | Readonly<{ readonly status: 'observed'; readonly value: Value }>
   | Readonly<{
       readonly status: 'unavailable'
-      readonly exception: PersistentOutputRawException
+      readonly exception: PersistentOutputCapturedException
     }>
 
 export interface PersistentOutputWriterFacts {
   readonly state: 'not-created' | 'open' | 'closed' | 'close-failed'
-  readonly closeFailure?: PersistentOutputRawException
+  readonly closeFailure?: PersistentOutputCapturedException
 }
 
 export interface PersistentOutputFSAFacts {
@@ -121,14 +118,14 @@ export interface PersistentOutputFailureObservation {
   readonly unavailableProviders: readonly Readonly<{
     readonly provider: PersistentOutputFailureFactProviderName
     readonly reason: 'rejected' | 'timeout'
-    readonly exception?: PersistentOutputRawException
+    readonly exception?: PersistentOutputCapturedException
   }>[]
 }
 
 export interface PersistentOutputFailureFacts {
   readonly fsa?: PersistentOutputFSAFacts
   readonly checkpoint?: PersistentOutputCheckpointFacts
-  readonly probeFailures?: readonly PersistentOutputRawException[]
+  readonly probeFailures?: readonly PersistentOutputCapturedException[]
   readonly observation: PersistentOutputFailureObservation
 }
 
@@ -144,7 +141,7 @@ export type PersistentOutputStageMilestone =
       readonly transition: 'failed'
       readonly stage: PersistentOutputStage
       readonly correlation: PersistentOutputStageCorrelation
-      readonly exception: PersistentOutputRawException
+      readonly exception: PersistentOutputCapturedException
       readonly facts: PersistentOutputFailureFacts
     }>
 
@@ -152,7 +149,7 @@ export type PersistentOutputStageFailureMilestone = Extract<
   PersistentOutputStageMilestone,
   { readonly transition: 'failed' }
 >
-export type PersistentOutputExceptionProjection = Omit<PersistentOutputRawException, 'raw'>
+export type PersistentOutputExceptionProjection = OutputExceptionProjection
 
 export interface PersistentOutputCheckpointRecordProjection {
   readonly recordId: string
@@ -220,11 +217,6 @@ export interface PersistentOutputStageFailureProjectionV1 {
   }>
 }
 
-export interface PersistentOutputStageFailureRecord {
-  readonly local: PersistentOutputStageFailureMilestone
-  readonly projection: PersistentOutputStageFailureProjectionV1
-}
-
 export interface PersistentOutputStageDiagnostics {
   /** Supplied by the caller so diagnostic correlation never invents a session identity. */
   readonly outputSessionId: string
@@ -237,7 +229,7 @@ export interface PersistentOutputStageDiagnostics {
 
 export interface PersistentOutputFailureFactContext {
   readonly signal: AbortSignal
-  exception(error: unknown): PersistentOutputRawException
+  exception(error: unknown): PersistentOutputCapturedException
   claimCheckpointPage(): boolean
   remainingCheckpointRecords(): number
   checkpointRecord(record: FileCheckpointV2): PersistentOutputCheckpointRecordFact | undefined

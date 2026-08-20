@@ -14,7 +14,7 @@ import {
   PERSISTENT_OUTPUT_FAILURE_FACT_LIMITS,
   captureCheckpointFailureFacts,
   createPersistentOutputStageAuthority,
-  persistentOutputStageFailureRecord,
+  projectPersistentOutputStageFailure,
   type PersistentOutputCheckpointFacts,
   type PersistentOutputFSAFacts,
   type PersistentOutputStage,
@@ -410,10 +410,12 @@ describe('persistent DirectTree native stage diagnostics', () => {
         })
         expect(failure.exception).toMatchObject({
           raw,
-          valueType: 'object',
-          constructorName: 'DOMException',
-          name: 'UnknownError',
-          message: `injected ${faultCase.stage}`,
+          projection: {
+            thrownType: 'object',
+            constructorName: 'DOMException',
+            errorName: 'UnknownError',
+            message: `injected ${faultCase.stage}`,
+          },
         })
         expectCheckpointFacts(
           failure.facts.checkpoint,
@@ -426,9 +428,8 @@ describe('persistent DirectTree native stage diagnostics', () => {
           expect(failure.facts.fsa).toBeUndefined()
         }
 
-        const record = persistentOutputStageFailureRecord(failure)
-        expect(record?.local.exception.raw).toBe(raw)
-        expect(record?.projection).toMatchObject({
+        const projection = projectPersistentOutputStageFailure(failure)
+        expect(projection).toMatchObject({
           schemaVersion: 1,
           stage: faultCase.stage,
           correlation: {
@@ -439,12 +440,12 @@ describe('persistent DirectTree native stage diagnostics', () => {
             artifactPath: ['photos', 'report.bin'],
           },
           exception: {
-            valueType: 'object',
+            thrownType: 'object',
             constructorName: 'DOMException',
-            name: 'UnknownError',
+            errorName: 'UnknownError',
           },
         })
-        expect('raw' in (record?.projection.exception ?? {})).toBe(false)
+        expect('raw' in projection.exception).toBe(false)
 
         expect(result.worker.status).toBe('Paused')
         expect(result.failureTrigger?.fault).toEqual(
