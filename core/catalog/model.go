@@ -5,11 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 
-	"golang.org/x/text/cases"
-	"golang.org/x/text/unicode/norm"
+	"github.com/windshare/windshare/core/internal/unicode15"
 )
 
 const IdentityBytes = 16
@@ -114,7 +112,7 @@ const (
 	SuiteV2                  = 2
 	SenderPublicKeySize      = 32
 	MaxDescriptorObjectBytes = 16 << 10
-	PathPolicyV1             = "windshare/path/v1-unicode-15.0.0"
+	PathPolicyV1             = "windshare/path/v1-unicode-" + unicode15.Version
 	activeCapabilities       = CapabilityCatalog | CapabilityRanges | CapabilityAuthenticatedModifiedTime
 )
 
@@ -485,13 +483,42 @@ var windowsReservedNames = map[string]struct{}{
 	"COM¹": {}, "COM²": {}, "COM³": {}, "LPT¹": {}, "LPT²": {}, "LPT³": {},
 }
 
+// General-category tables advance with the Go toolchain. Freezing the Unicode
+// 15 Cf ranges keeps validation aligned with the versioned path identity.
+var formatCharacterRanges = [...]struct {
+	first rune
+	last  rune
+}{
+	{0x00ad, 0x00ad},
+	{0x0600, 0x0605},
+	{0x061c, 0x061c},
+	{0x06dd, 0x06dd},
+	{0x070f, 0x070f},
+	{0x0890, 0x0891},
+	{0x08e2, 0x08e2},
+	{0x180e, 0x180e},
+	{0x200b, 0x200f},
+	{0x202a, 0x202e},
+	{0x2060, 0x2064},
+	{0x2066, 0x206f},
+	{0xfeff, 0xfeff},
+	{0xfff9, 0xfffb},
+	{0x110bd, 0x110bd},
+	{0x110cd, 0x110cd},
+	{0x13430, 0x1343f},
+	{0x1bca0, 0x1bca3},
+	{0x1d173, 0x1d17a},
+	{0xe0001, 0xe0001},
+	{0xe0020, 0xe007f},
+}
+
 // CanonicalName normalizes Unicode before validation so equality and ordering are
 // stable across filesystems that expose different normalization forms.
 func CanonicalName(name string) (string, error) {
 	if !utf8.ValidString(name) {
 		return "", fmt.Errorf("%w: invalid UTF-8", ErrInvalidName)
 	}
-	canonical := norm.NFC.String(name)
+	canonical := unicode15.NormalizeNFC(name)
 	if canonical == "" || canonical == "." || canonical == ".." {
 		return "", fmt.Errorf("%w: empty or relative component", ErrInvalidName)
 	}
@@ -505,7 +532,7 @@ func CanonicalName(name string) (string, error) {
 		return "", fmt.Errorf("%w: trailing dots and spaces are not portable", ErrInvalidName)
 	}
 	for _, r := range canonical {
-		if unicode.IsControl(r) || unicode.In(r, unicode.Cf) || strings.ContainsRune(`<>:"|?*`, r) {
+		if isControlOrFormatCharacter(r) || strings.ContainsRune(`<>:"|?*`, r) {
 			return "", fmt.Errorf("%w: contains a non-portable character", ErrInvalidName)
 		}
 	}
@@ -513,7 +540,7 @@ func CanonicalName(name string) (string, error) {
 	if dot := strings.IndexByte(stem, '.'); dot >= 0 {
 		stem = stem[:dot]
 	}
-	if _, reserved := windowsReservedNames[strings.ToUpper(stem)]; reserved {
+	if _, reserved := windowsReservedNames[asciiUpper(stem)]; reserved {
 		return "", fmt.Errorf("%w: reserved device name", ErrInvalidName)
 	}
 	return canonical, nil
@@ -523,7 +550,7 @@ func CanonicalPath(path string) (string, error) {
 	if !utf8.ValidString(path) {
 		return "", fmt.Errorf("%w: invalid UTF-8", ErrInvalidPath)
 	}
-	canonical := norm.NFC.String(path)
+	canonical := unicode15.NormalizeNFC(path)
 	if canonical == "" || !utf8.ValidString(canonical) || len(canonical) > MaxPathBytes {
 		return "", fmt.Errorf("%w: empty, invalid UTF-8, or too long", ErrInvalidPath)
 	}
@@ -575,9 +602,42 @@ func validateSourceLocator(path string) error {
 }
 
 func siblingCollisionKey(name string) string {
-	return norm.NFC.String(cases.Fold().String(name))
+	return unicode15.FoldPortableName(name)
 }
 
 func reservedOutputRootName(name string) bool {
 	return strings.HasPrefix(siblingCollisionKey(name), reservedOutputRootPrefix)
+}
+
+func isControlOrFormatCharacter(scalar rune) bool {
+	if scalar <= 0x1f || scalar >= 0x7f && scalar <= 0x9f {
+		return true
+	}
+	low, high := 0, len(formatCharacterRanges)
+	for low < high {
+		middle := low + (high-low)/2
+		candidate := formatCharacterRanges[middle]
+		if scalar < candidate.first {
+			high = middle
+		} else if scalar > candidate.last {
+			low = middle + 1
+		} else {
+			return true
+		}
+	}
+	return false
+}
+
+func asciiUpper(value string) string {
+	// Win32 device aliases are ASCII-insensitive. Ambient Unicode uppercasing
+	// would make newly assigned characters silently change path validity.
+	var output strings.Builder
+	output.Grow(len(value))
+	for _, scalar := range value {
+		if scalar >= 'a' && scalar <= 'z' {
+			scalar -= 'a' - 'A'
+		}
+		output.WriteRune(scalar)
+	}
+	return output.String()
 }
