@@ -237,6 +237,7 @@ describe('retained inventory incident ownership', () => {
       { name: 'receive.inventory.load.completed', operation_count: 1 },
     ])
     expect(JSON.stringify(enabled.traceEvents)).not.toContain('error_name')
+    expect(enabled.publications.at(-1)?.pending).toBeNull()
     expect(enabled.incidents.decisions.find(
       ({ scope }) => scope.scopeKind === 'retained_action',
     )).toMatchObject({
@@ -264,6 +265,79 @@ describe('retained inventory incident ownership', () => {
 })
 
 describe('retained action incident ownership', () => {
+  it.each([
+    ['continue', 'resume-receive'],
+    ['save', 'save-artifact'],
+    ['redownload', 'retry-download'],
+    ['discard', 'needs-attention'],
+    ['delete', 'cleanup-expired'],
+  ] as const)(
+    'publishes pending %s authority before invoking the retained inventory',
+    async (action, continuation) => {
+      const retained = operation([action], continuation)
+      const actionGate = deferred<V2RetainedReceiveActionResult>()
+      let latestPublished: RetainedHarness['publications'][number] | undefined
+      let snapshotDuringAct: RetainedHarness['publications'][number] | undefined
+      const inventory = testInventory([retained], () => {
+        snapshotDuringAct = latestPublished
+        return actionGate.promise
+      })
+      const joined = action === 'continue'
+        ? ({ protocolSessionId: 'session' } as unknown as V2JoinedBrowserShare)
+        : undefined
+      const harness = retainedHarness(
+        () => Promise.resolve(inventory),
+        joined,
+        { onPublish: published => { latestPublished = published } },
+      )
+
+      await harness.coordinator.load()
+      harness.coordinator.perform(retained, action)
+
+      expect(snapshotDuringAct).toMatchObject({
+        kind: 'ready',
+        operations: [retained],
+        pending: { operationId: retained.operationId, action },
+      })
+      expect(Object.isFrozen(snapshotDuringAct?.pending)).toBe(true)
+      expect(harness.coordinator.pending).toBe(true)
+
+      actionGate.resolve(Object.freeze({ kind: 'completed' }))
+      await turns()
+      expect(harness.publications.at(-1)).toMatchObject({
+        kind: 'ready',
+        pending: null,
+      })
+      expect(harness.coordinator.pending).toBe(false)
+    },
+  )
+
+  it('aborts and clears a pending action before replacing its inventory', async () => {
+    const retained = operation(['save'], 'save-artifact')
+    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    let actionSignal: AbortSignal | undefined
+    const inventory = testInventory([retained], (_operation, _action, signal) => {
+      actionSignal = signal
+      return actionGate.promise
+    })
+    const harness = retainedHarness(() => Promise.resolve(inventory))
+
+    await harness.coordinator.load()
+    harness.coordinator.perform(retained, 'save')
+    await harness.coordinator.load()
+
+    expect(actionSignal?.aborted).toBe(true)
+    expect(harness.coordinator.pending).toBe(false)
+    expect(harness.publications.at(-1)).toMatchObject({
+      kind: 'ready',
+      pending: null,
+    })
+
+    actionGate.resolve(Object.freeze({ kind: 'completed' }))
+    await turns()
+    expect(harness.actionErrors).toHaveLength(0)
+  })
+
   it.each([
     ['continue', 'resume-receive'],
     ['save', 'save-artifact'],
@@ -349,9 +423,14 @@ describe('retained action incident ownership', () => {
 
     await harness.coordinator.load()
     harness.coordinator.perform(retained, 'save')
+    expect(harness.publications.at(-1)?.pending).toEqual({
+      operationId: retained.operationId,
+      action: 'save',
+    })
     harness.coordinator.cancelPending(
       new DOMException('cancelled', 'AbortError'),
     )
+    expect(harness.publications.at(-1)?.pending).toBeNull()
 
     const actionDecision = harness.incidents.decisions.find(
       ({ scope }) => scope.scopeKind === 'retained_action',

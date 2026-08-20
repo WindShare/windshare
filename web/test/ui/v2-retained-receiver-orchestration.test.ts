@@ -82,6 +82,43 @@ describe('v2 receiver product orchestration', () => {
     await controller.dispose()
   })
 
+  it('keeps direct selection, artifact, and retained admission closed while an action is pending', async () => {
+    const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true)
+    const operation = waitingRetainedOperation()
+    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    receive.retainedOperations = Object.freeze([operation])
+    receive.retainedActionGate = actionGate.promise
+    const controller = controllerFor(joined, receive)
+    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().rows.length > 0)
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
+    const before = controller.getSnapshot()
+    const row = before.rows[0]
+    const presentation = before.output.offerPresentation
+    if (row === undefined || presentation?.kind !== 'choices') {
+      throw new Error('browsing controls were not presented')
+    }
+
+    controller.performRetainedAction(operation, 'save')
+    expect(controller.getSnapshot().retained.pending).toEqual({
+      operationId: operation.operationId,
+      action: 'save',
+    })
+
+    controller.toggleSelection(row.id)
+    controller.chooseArtifact(presentation.primary.operation)
+    controller.performRetainedAction(operation, 'discard')
+
+    expect(controller.getSnapshot().rows[0]?.selection).toBe(row.selection)
+    expect(receive.startedAuthorities).toHaveLength(0)
+    expect(receive.retainedActionCalls).toMatchObject([{ operation, action: 'save' }])
+
+    actionGate.resolve(Object.freeze({ kind: 'completed' }))
+    await waitFor(() => controller.getSnapshot().retained.pending === null)
+    await controller.dispose()
+  })
+
   it('fences a retained mutation that completes after controller disposal', async () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const operation = waitingRetainedOperation()
@@ -118,7 +155,7 @@ describe('v2 receiver product orchestration', () => {
     }))
     const controller = controllerFor(joined, receive)
     await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(operation, 'continue')
     await waitFor(() => joined.transferRuns.length === 1)
@@ -148,7 +185,7 @@ describe('v2 receiver product orchestration', () => {
     )
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
     await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(operation, 'continue')
     joined.protocolSessionId = identityText(4)
@@ -178,7 +215,7 @@ describe('v2 receiver product orchestration', () => {
     }))
     const controller = controllerFor(joined, receive)
     await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
-    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'actions')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     controller.performRetainedAction(foreignOperation, 'continue')
     await waitFor(() => runtime.detachments.length === 1)

@@ -99,6 +99,46 @@ export interface CreateFileSystemAccessSettlementAuthorityOptions {
   readonly trace?: (event: FSASettlementTraceEvent) => void
 }
 
+export interface PreparedFileSystemAccessSettlement {
+  readonly intent: DirectTreeIntent
+  readonly admissionFallback?: ReceiveAdmissionFallback
+  readonly directoryScope: DirectoryAdmissionScope
+}
+
+export async function prepareFileSystemAccessSettlement(
+  intentInput: ReceiveIntent,
+  admissionFallbackInput?: ReceiveAdmissionFallback,
+): Promise<PreparedFileSystemAccessSettlement> {
+  const intent = await requireDirectTreeIntent(intentInput)
+  const admissionFallback = snapshotReceiveAdmissionFallback(intent, admissionFallbackInput)
+  return Object.freeze({
+    intent,
+    ...(admissionFallback === undefined ? {} : { admissionFallback }),
+    directoryScope: await createDirectoryAdmissionScope(intent),
+  })
+}
+
+export function activatePreparedFileSystemAccessSettlement(
+  prepared: PreparedFileSystemAccessSettlement,
+  options: Omit<CreateFileSystemAccessSettlementAuthorityOptions, 'intent' | 'admissionFallback'>,
+): FileSystemAccessOperationSettlementAuthority {
+  return new FSAOperationSettlementAuthority({
+    intent: prepared.intent,
+    repository: options.repository,
+    lifecycleLeaseId: snapshotIdentity(options.lifecycleLeaseId, 16, 'lifecycle lease ID'),
+    transferJobId: snapshotTransferJobId(options.transferJobId),
+    ...(prepared.admissionFallback === undefined
+      ? {}
+      : { admissionFallback: prepared.admissionFallback }),
+    clock: options.clock ?? Date.now,
+    ...(options.diagnostics === undefined
+      ? {}
+      : { diagnostics: options.diagnostics }),
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
+    directoryScope: prepared.directoryScope,
+  })
+}
+
 /**
  * Owns the reducer and durable receipt cut for one FSA operation. Transfer supplies
  * evidence, but only this authority can turn an observed namespace into lifecycle state.
@@ -106,20 +146,16 @@ export interface CreateFileSystemAccessSettlementAuthorityOptions {
 export async function createFileSystemAccessSettlementAuthority(
   options: CreateFileSystemAccessSettlementAuthorityOptions,
 ): Promise<FileSystemAccessOperationSettlementAuthority> {
-  const intent = await requireDirectTreeIntent(options.intent)
-  const admissionFallback = snapshotReceiveAdmissionFallback(intent, options.admissionFallback)
-  return new FSAOperationSettlementAuthority({
-    intent,
+  const prepared = await prepareFileSystemAccessSettlement(options.intent, options.admissionFallback)
+  return activatePreparedFileSystemAccessSettlement(prepared, {
     repository: options.repository,
-    lifecycleLeaseId: snapshotIdentity(options.lifecycleLeaseId, 16, 'lifecycle lease ID'),
-    transferJobId: snapshotTransferJobId(options.transferJobId),
-    ...(admissionFallback === undefined ? {} : { admissionFallback }),
-    clock: options.clock ?? Date.now,
+    lifecycleLeaseId: options.lifecycleLeaseId,
+    transferJobId: options.transferJobId,
+    ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.diagnostics === undefined
       ? {}
       : { diagnostics: options.diagnostics }),
     ...(options.trace === undefined ? {} : { trace: options.trace }),
-    directoryScope: await createDirectoryAdmissionScope(intent),
   })
 }
 
@@ -133,7 +169,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #directoryScope: DirectoryAdmissionScope
   readonly #admissionFallback: ReceiveAdmissionFallback | undefined
-  #materializationBound = false
+  #materializationActivationStarted = false
 
   constructor(input: Readonly<{
     intent: DirectTreeIntent
@@ -164,10 +200,12 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     if (!session.usesOperationRepository(this.#repository)) {
       throw new TypeError('FSA materialization and lifecycle must share one repository authority')
     }
-    if (this.#materializationBound) {
+    if (this.#materializationActivationStarted) {
       throw new DOMException('FSA settlement authority already has a materialization', 'InvalidStateError')
     }
-    this.#materializationBound = true
+    // Binding is the activation fence: from here a failed prepareRoot may have
+    // produced namespace effects, even when no usable materialization was returned.
+    this.#materializationActivationStarted = true
     const authority: PersistentDirectTreeSettlementAuthority = {
       pause: (request, cut, signal) => this.#pause(session, request, cut, signal),
       settle: (request, cut, signal) => this.#settle(session, request, cut, signal),
@@ -199,7 +237,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     if (isFSAStableOrTerminal(current.state)) return current.state
     if (current.state.kind === 'receiving' && this.#admissionFallback !== undefined &&
         current.state.generation === this.#admissionFallback.generation + 1n &&
-        !this.#materializationBound) {
+        !this.#materializationActivationStarted) {
       const fallback = this.#admissionFallback
       const next = this.#reduce(current.state, {
         kind: 'resume-admission-failed',
@@ -217,7 +255,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       this.#emitAdmissionFailureRestored(fallback)
       return committed.state
     }
-    const safelyUnopened = !this.#materializationBound &&
+    const safelyUnopened = !this.#materializationActivationStarted &&
       (current.state.kind === 'intent-frozen' ||
        (current.state.kind === 'receiving' && this.#admissionFallback === undefined))
     if (!safelyUnopened) {

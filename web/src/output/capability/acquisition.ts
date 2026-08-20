@@ -15,8 +15,8 @@ import {
   type FSADirectoryContainerOffer,
 } from '../planning'
 import {
-  BROWSER_HANDOFF_TARGET_OFFER_ID,
-  FSA_PARENT_DIRECTORY_OFFER_ID,
+  BROWSER_HANDOFF_TARGET_ROUTE_ID,
+  FSA_PARENT_DIRECTORY_ROUTE_ID,
   type AcquiredFSAParentAuthority,
   type AuthorityAcquiredDecision,
   type BrowserCapabilityRuntime,
@@ -63,12 +63,12 @@ export function probeBrowserEnvironment(
 
 export function browserHandoffOffer(
   facts: BrowserHandoffCapabilityFacts,
-  id = BROWSER_HANDOFF_TARGET_OFFER_ID,
+  routeId = BROWSER_HANDOFF_TARGET_ROUTE_ID,
 ): BrowserHandoffTargetOffer {
   const guarantees = browserHandoffGuarantees()
   const offers = createEnvironmentOffers({
     targets: [{
-      id,
+      routeId,
       kind: 'browser-handoff',
       guarantees: {
         nameAuthority: guarantees.nameAuthority,
@@ -92,12 +92,12 @@ export function browserHandoffOffer(
 }
 
 export function fsaParentOffer(
-  id = FSA_PARENT_DIRECTORY_OFFER_ID,
+  routeId = FSA_PARENT_DIRECTORY_ROUTE_ID,
 ): FSADirectoryContainerOffer {
   const guarantees = fsaTreeGuarantees()
   const offers = createEnvironmentOffers({
     targets: [{
-      id,
+      routeId,
       kind: 'fsa-parent-directory',
       guarantees: {
         nameAuthority: guarantees.nameAuthority,
@@ -142,7 +142,7 @@ export function startFSAParentPicker(
     emitCapabilityTrace(trace, authorityDecision())
     return Object.freeze({
       kind: 'fsa-parent-directory-authority' as const,
-      environmentTargetOfferId: offer.id,
+      targetRouteId: offer.routeId,
       offer,
       parent,
     })
@@ -153,7 +153,7 @@ export async function authorizeFSAParent(
   authority: AcquiredFSAParentAuthority,
 ): Promise<void> {
   assertFSAOffer(authority.offer)
-  if (authority.environmentTargetOfferId !== authority.offer.id ||
+  if (authority.targetRouteId !== authority.offer.routeId ||
       authority.parent.kind !== 'directory') {
     throw new TypeError('Acquired FSA authority does not match its environment offer')
   }

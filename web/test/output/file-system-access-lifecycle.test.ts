@@ -228,6 +228,25 @@ describe('File System Access DirectTree lifecycle', () => {
     })
   })
 
+  it('keeps a new result root dormant until bound execution activation', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const session = await bindTask({
+      parent,
+      repository: new MemoryOperationRepository(),
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await resultRootArtifact(),
+      operationSeed: 45,
+      activate: false,
+    })
+
+    expect(parent.entryNames()).toEqual([])
+    expect(() => session.ensureDirectory([])).toThrow(/not activated/u)
+    await session.activate()
+    expect(parent.directoryNames()).toEqual([session.reservation.reservedName])
+    await session.close()
+  })
+
   it('rechecks the file identity before writer acquisition and preserves the replacement', async () => {
     const parent = new MemoryDirectory('downloads')
     const trace: FSAOutputTraceEvent[] = []
@@ -485,34 +504,6 @@ describe('File System Access settlement authority', () => {
     expect(retired).toBe(1)
   })
 
-  it('settles a never-opened single-file admission failure without creating a namespace entry', async () => {
-    const parent = new MemoryDirectory('downloads')
-    const repository = new MemoryOperationRepository()
-    const session = await bindTask({
-      parent,
-      repository,
-      checkpointFactory: memoryCheckpointFactory(),
-      locks: new MemoryLockManager(),
-      artifact: await singleFileArtifact(),
-      operationSeed: 100,
-    })
-    const leaseId = identity(101)
-    const transferJobId = identity(102)
-    await installIntentFrozen(repository, session.intent, leaseId)
-    const settlement = await createFileSystemAccessSettlementAuthority({
-      intent: session.intent,
-      repository,
-      lifecycleLeaseId: leaseId,
-      transferJobId,
-      clock: () => 1_000,
-    })
-
-    await expect(settlement.settleExecutionAdmissionFailure(session.intent, 'cancelled', SIGNAL))
-      .resolves.toMatchObject({ kind: 'discarded' })
-    expect(parent.entryNames()).toEqual([])
-    await session.close()
-  })
-
   it('restores the exact continuation when a resumed execution fails before output binding', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
@@ -590,6 +581,74 @@ describe('File System Access settlement authority', () => {
       kind: 'needs-attention',
       reason: 'target-ownership-unknown',
     })
+    await session.close()
+  })
+})
+
+describe('File System Access activation boundary settlement', () => {
+  it('settles never-opened file and result-root failures without creating namespace entries', async () => {
+    for (const [offset, artifact] of [
+      [0, await singleFileArtifact()],
+      [10, await resultRootArtifact()],
+    ] as const) {
+      const parent = new MemoryDirectory(`downloads-${offset}`)
+      const repository = new MemoryOperationRepository()
+      const session = await bindTask({
+        parent,
+        repository,
+        checkpointFactory: memoryCheckpointFactory(),
+        locks: new MemoryLockManager(),
+        artifact,
+        operationSeed: 100 + offset,
+        activate: false,
+      })
+      const leaseId = identity(101 + offset)
+      await installIntentFrozen(repository, session.intent, leaseId)
+      const settlement = await createFileSystemAccessSettlementAuthority({
+        intent: session.intent,
+        repository,
+        lifecycleLeaseId: leaseId,
+        transferJobId: identity(102 + offset),
+        clock: () => 1_000,
+      })
+
+      await expect(settlement.settleExecutionAdmissionFailure(session.intent, 'cancelled', SIGNAL))
+        .resolves.toMatchObject({ kind: 'discarded' })
+      expect(parent.entryNames()).toEqual([])
+      await session.close()
+    }
+  })
+
+  it('records NeedsAttention when root activation may have acquired namespace effects', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const session = await bindTask({
+      parent,
+      repository,
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await resultRootArtifact(),
+      operationSeed: 115,
+      activate: false,
+    })
+    const leaseId = identity(116)
+    await installIntentFrozen(repository, session.intent, leaseId)
+    const settlement = await createFileSystemAccessSettlementAuthority({
+      intent: session.intent,
+      repository,
+      lifecycleLeaseId: leaseId,
+      transferJobId: identity(117),
+      clock: () => 1_000,
+    })
+    settlement.bindMaterialization(session)
+    await parent.getDirectoryHandle(session.reservation.reservedName, { create: true })
+    const activationFailure = await session.activate().catch(error => error)
+
+    await expect(settlement.settleExecutionAdmissionFailure(
+      session.intent,
+      activationFailure,
+      SIGNAL,
+    )).resolves.toMatchObject({ kind: 'needs-attention' })
     await session.close()
   })
 })

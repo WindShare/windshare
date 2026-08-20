@@ -20,7 +20,7 @@ import { createOperationID, type ReceiveIntent } from '../../transfer/intent'
 import type { V2PlanExecutionAuthority } from '../../transfer/output-session'
 import type { BrowserReceiveWindow } from './contracts'
 import { unavailableRoute } from './shared'
-import type { WorkspaceReceiveOperation } from './workspace'
+import type { WorkspaceReceiveOperation } from './workspace-operation'
 
 type RetainedWorkspaceHandoffOperation =
   Pick<ReopenedWorkspaceOperation, 'intent' | 'lifecycle' | 'stages'>

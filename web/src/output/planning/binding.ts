@@ -9,39 +9,36 @@ import type {
   DestinationReservation,
   PortableBinding,
   ReceiveIntent,
+  SelectionSpec,
   WorkspaceBinding,
 } from '../../transfer/intent'
 import type {
-  ArtifactAction,
-  ArtifactActionsOffer,
-  DiscoveryState,
-  EnvironmentOffers,
   EnvironmentTargetOffer,
-  OfferDisabledDecision,
-  OfferedMaterializationPlan,
-  SelectionProjectionV1,
+  OfferedMaterializationRoute,
+  ResolvedArtifactAction,
 } from './contracts'
 import {
+  materializationPlanSemantics,
   sameGuaranteeFacts,
-  sameTargetSemantics,
+  sameMaterializationPlanSemantics,
 } from './guarantees'
-import { offerArtifacts } from './offers'
 
-export type AcquiredMaterializationAuthority =
+export type CandidateMaterializationBinding =
   | Readonly<{
       kind: 'destination-reservation'
-      environmentTargetOfferId: string
+      targetRouteId: string
       reservation: DestinationReservation
     }>
   | Readonly<{
       kind: 'workspace-binding'
-      workspaceOfferId: string
+      workspaceRouteId: string
+      publicationTargetRouteId: string
       workspace: WorkspaceBinding
     }>
   | Readonly<{
       kind: 'portable-binding'
-      portableOfferId: string
-      handoffTargetOfferId: string
+      portableRouteId: string
+      handoffTargetRouteId: string
       portable: PortableBinding
     }>
 
@@ -59,59 +56,24 @@ export interface IntentFrozenDecision {
   readonly plan_kind: ReceiveIntent['plan']['kind']
 }
 
-export type BindMaterializationResult =
-  | Readonly<{
-      kind: 'bound'
-      intent: ReceiveIntent
-      decision: IntentFrozenDecision
-    }>
-  | Readonly<{
-      kind: 'awaiting-layout'
-      unavailableReason: 'shape-unsettled'
-      decision: OfferDisabledDecision
-    }>
-  | Readonly<{
-      kind: 'artifact-choice-required'
-      unavailableReason: 'capability-changed'
-      decision: OfferDisabledDecision
-    }>
+export interface BoundReceiveIntent {
+  readonly intent: ReceiveIntent
+  readonly decision: IntentFrozenDecision
+}
 
-export async function bindMaterialization(input: Readonly<{
-  selection: ReceiveIntent['selection']
-  chosenAction: ArtifactAction
-  currentProjection: SelectionProjectionV1
-  currentDiscovery: DiscoveryState
-  currentEnvironment: EnvironmentOffers
-  acquired: AcquiredMaterializationAuthority
-}>): Promise<BindMaterializationResult> {
-  if (input.selection.digest !== input.currentProjection.selectionDigest ||
-      input.chosenAction.projectionEpoch !== input.currentProjection.epoch) {
-    return artifactChoiceRequired(input.currentProjection)
-  }
-  const currentOffers = await offerArtifacts(
-    input.currentProjection,
-    input.currentDiscovery,
-    input.currentEnvironment,
-  )
-  if (currentOffers.kind !== 'artifact-actions') return artifactChoiceRequired(input.currentProjection)
-  const currentAction = findCompatibleAction(input.chosenAction, currentOffers)
-  if (currentAction === null) return artifactChoiceRequired(input.currentProjection)
-  const artifact = currentAction.artifact
-  if (artifact === null) {
-    return Object.freeze({
-      kind: 'awaiting-layout',
-      unavailableReason: 'shape-unsettled',
-      decision: disabledDecision(input.currentProjection, 'shape-unsettled'),
-    })
-  }
-  const plan = await bindPlan(currentAction.plan, artifact, input.acquired)
+export async function bindReceiveIntent(input: Readonly<{
+  selection: SelectionSpec
+  action: ResolvedArtifactAction
+  candidate: CandidateMaterializationBinding
+}>): Promise<BoundReceiveIntent> {
+  assertAction(input.selection, input.action)
+  const plan = await bindPlan(input.action, input.candidate)
   const intent = await createReceiveIntent({
     selection: input.selection,
-    artifact,
+    artifact: input.action.artifact,
     plan,
   })
   return Object.freeze({
-    kind: 'bound',
     intent,
     decision: Object.freeze({
       name: 'receive.intent.frozen',
@@ -124,66 +86,73 @@ export async function bindMaterialization(input: Readonly<{
   })
 }
 
-function findCompatibleAction(
-  chosen: ArtifactAction,
-  current: ArtifactActionsOffer,
-): ArtifactAction | null {
-  for (const candidate of [current.primary, ...current.alternatives]) {
-    if (chosen.operation !== candidate.operation ||
-        chosen.artifactKind !== candidate.artifactKind ||
-        chosen.recovery !== candidate.recovery ||
-        !samePreparation(chosen, candidate) ||
-        !samePlanSemantics(chosen.plan, candidate.plan)) continue
-    if (chosen.artifact !== null && chosen.artifact.digest !== candidate.artifact?.digest) continue
-    return candidate
+function assertAction(selection: SelectionSpec, action: ResolvedArtifactAction): void {
+  if (selection.digest !== action.selectionDigest) {
+    throw new TypeError('selection does not match the resolved artifact action')
   }
-  return null
+  if (action.artifact.digest !== action.resolvedArtifactDigest ||
+      action.artifact.kind !== action.choice.artifactKind) {
+    throw new TypeError('resolved artifact evidence does not match the frozen choice')
+  }
+  if (!sameMaterializationPlanSemantics(
+    action.choice.plan,
+    materializationPlanSemantics(action.route),
+  )) {
+    throw new TypeError('resolved route does not represent the frozen plan semantics')
+  }
 }
 
 async function bindPlan(
-  offeredPlan: OfferedMaterializationPlan,
-  artifact: NonNullable<ArtifactAction['artifact']>,
-  acquired: AcquiredMaterializationAuthority,
+  action: ResolvedArtifactAction,
+  candidate: CandidateMaterializationBinding,
 ): Promise<ReceiveIntent['plan']> {
-  switch (offeredPlan.kind) {
+  const route = action.route
+  switch (route.kind) {
     case 'direct-tree':
-      requireDestinationAuthority(offeredPlan, acquired)
-      return createDirectTreePlan(artifact, acquired.reservation)
+      requireDestinationBinding(route, candidate)
+      return createDirectTreePlan(action.artifact, candidate.reservation)
     case 'direct-atomic':
-      requireDestinationAuthority(offeredPlan, acquired)
-      return createDirectAtomicPlan(artifact, acquired.reservation)
+      requireDestinationBinding(route, candidate)
+      return createDirectAtomicPlan(action.artifact, candidate.reservation)
     case 'workspace-then-publish':
-      if (acquired.kind !== 'workspace-binding' ||
-          acquired.workspaceOfferId !== offeredPlan.workspace.id) {
-        throw new TypeError('workspace authority does not match the current offered plan')
+      if (candidate.kind !== 'workspace-binding' ||
+          candidate.workspaceRouteId !== route.workspace.routeId ||
+          candidate.publicationTargetRouteId !== route.publicationTarget.routeId) {
+        throw new TypeError('workspace binding does not match the resolved route identities')
       }
-      return createWorkspaceThenPublishPlan(artifact, acquired.workspace)
+      return createWorkspaceThenPublishPlan(action.artifact, candidate.workspace)
     case 'portable-handoff':
-      if (acquired.kind !== 'portable-binding' ||
-          acquired.portableOfferId !== offeredPlan.portable.id ||
-          acquired.handoffTargetOfferId !== offeredPlan.handoffTarget.id) {
-        throw new TypeError('portable authority does not match the current offered plan')
+      if (candidate.kind !== 'portable-binding' ||
+          candidate.portableRouteId !== route.portable.routeId ||
+          candidate.handoffTargetRouteId !== route.handoffTarget.routeId) {
+        throw new TypeError('portable binding does not match the resolved route identities')
       }
-      return createPortableHandoffPlan(artifact, acquired.portable)
+      if (candidate.portable.maximumArtifactBytes !== route.portable.maximumArtifactBytes ||
+          candidate.portable.assemblyPartBytes !== route.portable.assemblyPartBytes ||
+          candidate.portable.maximumParts !== route.portable.maximumParts ||
+          candidate.portable.objectUrlLeaseMilliseconds !== route.portable.objectUrlLeaseMilliseconds) {
+        throw new TypeError('portable binding does not match the resolved hard policies')
+      }
+      return createPortableHandoffPlan(action.artifact, candidate.portable)
   }
 }
 
-function requireDestinationAuthority(
-  plan: Extract<OfferedMaterializationPlan, { kind: 'direct-tree' | 'direct-atomic' }>,
-  acquired: AcquiredMaterializationAuthority,
-): asserts acquired is Extract<AcquiredMaterializationAuthority, { kind: 'destination-reservation' }> {
-  if (acquired.kind !== 'destination-reservation' ||
-      acquired.environmentTargetOfferId !== plan.target.id ||
-      !reservationMatchesTarget(acquired.reservation, plan.target)) {
-    throw new TypeError('destination authority does not match the current offered guarantees')
+function requireDestinationBinding(
+  route: Extract<OfferedMaterializationRoute, { kind: 'direct-tree' | 'direct-atomic' }>,
+  candidate: CandidateMaterializationBinding,
+): asserts candidate is Extract<CandidateMaterializationBinding, { kind: 'destination-reservation' }> {
+  if (candidate.kind !== 'destination-reservation' ||
+      candidate.targetRouteId !== route.target.routeId ||
+      !reservationMatchesTarget(candidate.reservation, route.target)) {
+    throw new TypeError('destination binding does not match the resolved route guarantees')
   }
 }
 
 function reservationMatchesTarget(
   reservation: DestinationReservation,
-  target: EnvironmentTargetOffer,
+  target: Exclude<EnvironmentTargetOffer, { kind: 'browser-handoff' | 'precreated-browser-file' }>,
 ): boolean {
-  if (target.legalProfile === null || reservation.guarantees.profile !== target.legalProfile ||
+  if (reservation.guarantees.profile !== target.legalProfile ||
       !sameGuaranteeFacts(reservation.guarantees, target.guarantees)) return false
   switch (target.kind) {
     case 'native-directory-container':
@@ -192,80 +161,7 @@ function reservationMatchesTarget(
       return reservation.authorityKind === 'fsa-container'
     case 'managed-atomic-file-target':
       return reservation.authorityKind === 'managed-atomic-target'
-    case 'browser-handoff':
-      return false
   }
-}
-
-function samePlanSemantics(
-  left: OfferedMaterializationPlan,
-  right: OfferedMaterializationPlan,
-): boolean {
-  if (left.kind !== right.kind) return false
-  switch (left.kind) {
-    case 'direct-tree':
-      return right.kind === 'direct-tree' && sameTargetSemantics(left.target, right.target)
-    case 'direct-atomic':
-      return right.kind === 'direct-atomic' && sameTargetSemantics(left.target, right.target)
-    case 'workspace-then-publish':
-      return right.kind === 'workspace-then-publish' &&
-        sameWorkspaceSemantics(left.workspace, right.workspace) &&
-        sameTargetSemantics(left.publicationTarget, right.publicationTarget)
-    case 'portable-handoff':
-      return right.kind === 'portable-handoff' &&
-        samePortableSemantics(left.portable, right.portable) &&
-        sameTargetSemantics(left.handoffTarget, right.handoffTarget)
-  }
-}
-
-function sameWorkspaceSemantics(
-  left: Extract<OfferedMaterializationPlan, { kind: 'workspace-then-publish' }>['workspace'],
-  right: Extract<OfferedMaterializationPlan, { kind: 'workspace-then-publish' }>['workspace'],
-): boolean {
-  // A quota estimate is an observation, not reserved capacity. Re-probing it must
-  // not mutate the displayed plan; exact workspace admission remains mandatory.
-  return left.kind === right.kind && left.persistence === right.persistence &&
-    left.jobHardLimitBytes === right.jobHardLimitBytes &&
-    left.processHardLimitBytes === right.processHardLimitBytes &&
-    left.minimumQuotaReserveBytes === right.minimumQuotaReserveBytes
-}
-
-function samePortableSemantics(
-  left: Extract<OfferedMaterializationPlan, { kind: 'portable-handoff' }>['portable'],
-  right: Extract<OfferedMaterializationPlan, { kind: 'portable-handoff' }>['portable'],
-): boolean {
-  return left.kind === right.kind && left.persistence === right.persistence &&
-    left.maximumArtifactBytes === right.maximumArtifactBytes &&
-    left.assemblyPartBytes === right.assemblyPartBytes &&
-    left.maximumParts === right.maximumParts &&
-    left.objectUrlLeaseMilliseconds === right.objectUrlLeaseMilliseconds
-}
-
-function samePreparation(left: ArtifactAction, right: ArtifactAction): boolean {
-  return left.preparation.manifest === right.preparation.manifest &&
-    left.preparation.hardAdmission === right.preparation.hardAdmission
-}
-
-function artifactChoiceRequired(
-  projection: SelectionProjectionV1,
-): Extract<BindMaterializationResult, { kind: 'artifact-choice-required' }> {
-  return Object.freeze({
-    kind: 'artifact-choice-required',
-    unavailableReason: 'capability-changed',
-    decision: disabledDecision(projection, 'capability-changed'),
-  })
-}
-
-function disabledDecision(
-  projection: SelectionProjectionV1,
-  reason: 'capability-changed' | 'shape-unsettled',
-): OfferDisabledDecision {
-  return Object.freeze({
-    name: 'receive.offer.disabled',
-    projection_epoch: projection.epoch,
-    shape_proof: projection.proof.kind,
-    offer_unavailable_reason: reason,
-  })
 }
 
 function layoutClass(intent: ReceiveIntent): IntentFrozenDecision['layout_class'] {

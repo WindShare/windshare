@@ -5,8 +5,8 @@ import type {
   FSADirectoryContainerOffer,
 } from '../planning'
 
-export const FSA_PARENT_DIRECTORY_OFFER_ID = 'browser-fsa-parent-directory'
-export const BROWSER_HANDOFF_TARGET_OFFER_ID = 'browser-object-url-handoff'
+export const FSA_PARENT_DIRECTORY_ROUTE_ID = 'browser-fsa-parent-directory'
+export const BROWSER_HANDOFF_TARGET_ROUTE_ID = 'browser-object-url-handoff'
 
 export interface DirectoryPickerOptions {
   readonly mode: 'readwrite'
@@ -22,7 +22,7 @@ export interface BrowserCapabilityRuntime {
 
 export interface AcquiredFSAParentAuthority {
   readonly kind: 'fsa-parent-directory-authority'
-  readonly environmentTargetOfferId: string
+  readonly targetRouteId: string
   readonly offer: FSADirectoryContainerOffer
   readonly parent: FileSystemDirectoryHandle
 }
