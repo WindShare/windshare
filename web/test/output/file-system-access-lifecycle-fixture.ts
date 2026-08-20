@@ -9,6 +9,7 @@ import {
   type DirectoryTreeArtifact,
   type DirectTreePlan,
   type ReceiveIntent,
+  type SelectionSpec,
 } from '../../src/transfer/intent'
 import type { DirectoryAdmission } from '../../src/transfer/directory-admission'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
@@ -59,6 +60,9 @@ import {
 import type {
   FileCheckpointCandidateObservation,
 } from '../../src/output/persistent-tree/recovery'
+import type {
+  PersistentOutputStageDiagnostics,
+} from '../../src/output/persistent-tree/stage-diagnostics'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   receiveOperationLeaseRecord,
@@ -291,10 +295,12 @@ export async function bindTask(input: Readonly<{
   locks: MemoryLockManager
   artifact: DirectoryTreeArtifact
   operationSeed: number
+  selection?: SelectionSpec
   activate?: boolean
+  stageDiagnostics?: PersistentOutputStageDiagnostics
   trace?: (event: FSAOutputTraceEvent) => void
 }>) {
-  const selection = await selectionSpec()
+  const selection = input.selection ?? await selectionSpec()
   const authority = acquiredParent(input.parent)
   const rootLease = await acquireFSARootMutationLease(
     input.parent as unknown as FileSystemDirectoryHandle,
@@ -330,6 +336,9 @@ export async function bindTask(input: Readonly<{
     operationRepository: input.repository,
     rootLease,
     checkpointRepositoryFactory: input.checkpointFactory,
+    ...(input.stageDiagnostics === undefined
+      ? {}
+      : { stageDiagnostics: input.stageDiagnostics }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
   })
   if (input.activate !== false) await session.activate()
@@ -835,6 +844,8 @@ export class MemoryDirectory {
   readonly name: string
   readonly #token = crypto.randomUUID()
   readonly #entries = new Map<string, MemoryDirectory | MemoryFile>()
+  queryPermissionState: PermissionState = 'granted'
+  requestPermissionState: PermissionState = 'granted'
   onFileCreated: (() => void) | undefined
   onRemoveEntry: ((name: string) => Promise<void>) | undefined
 
@@ -847,11 +858,11 @@ export class MemoryDirectory {
   }
 
   async queryPermission(): Promise<PermissionState> {
-    return 'granted'
+    return this.queryPermissionState
   }
 
   async requestPermission(): Promise<PermissionState> {
-    return 'granted'
+    return this.requestPermissionState
   }
 
   async getDirectoryHandle(

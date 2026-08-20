@@ -170,6 +170,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
   readonly #directoryScope: DirectoryAdmissionScope
   readonly #admissionFallback: ReceiveAdmissionFallback | undefined
   #materializationActivationStarted = false
+  #boundMaterialization: FileSystemAccessOutputSession | undefined
 
   constructor(input: Readonly<{
     intent: DirectTreeIntent
@@ -206,6 +207,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
     // Binding is the activation fence: from here a failed prepareRoot may have
     // produced namespace effects, even when no usable materialization was returned.
     this.#materializationActivationStarted = true
+    this.#boundMaterialization = session
     const authority: PersistentDirectTreeSettlementAuthority = {
       pause: (request, cut, signal) => this.#pause(session, request, cut, signal),
       settle: (request, cut, signal) => this.#settle(session, request, cut, signal),
@@ -259,7 +261,7 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
       (current.state.kind === 'intent-frozen' ||
        (current.state.kind === 'receiving' && this.#admissionFallback === undefined))
     if (!safelyUnopened) {
-      return (await this.#recordNeedsAttention()).state
+      return this.#recordAdmissionNeedsAttention()
     }
     const receipt = await this.#unopenedCleanupReceipt()
     const next = this.#reduce(current.state, {
@@ -536,7 +538,18 @@ class FSAOperationSettlementAuthority implements FileSystemAccessOperationSettle
         cause: reason,
       })
     }
-    return (await this.#recordNeedsAttention(reason)).state
+    return this.#recordAdmissionNeedsAttention(reason)
+  }
+
+  async #recordAdmissionNeedsAttention(reason?: unknown): Promise<ReceiveLifecycleState> {
+    try {
+      return (await this.#recordNeedsAttention(reason)).state
+    } finally {
+      // Admission failures return before an execution cut exists. A bound
+      // materialization therefore owns final repository and Web Lock cleanup here,
+      // even when recording NeedsAttention itself fails.
+      await this.#boundMaterialization?.close()
+    }
   }
 
   async #recordNeedsAttention(

@@ -366,7 +366,9 @@ export class WorkspacePublicationStages {
       this.runtime.emit({
         name: 'receive.operation.expired',
         operation_id: this.runtime.intent.operationId,
-        prior_stable_state: next.priorStableState,
+        // This branch expires the waiting-to-save predecessor created above; using
+        // that proof avoids widening publication to unrelated retained states.
+        prior_stable_state: 'waiting-to-save',
         expires_at_ms: next.expiresAt,
       })
     }

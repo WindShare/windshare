@@ -9,8 +9,9 @@ import {
   reopenFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
 } from '../../output/file-system-access/session'
-import {
-  type OutputDiagnosticsPorts,
+import type {
+  LocalOutputOperationFailureDiagnosticsPort,
+  OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
@@ -47,6 +48,16 @@ import {
 } from './shared'
 import { FSAResourceOwner } from './fsa-resource-owner'
 
+interface FSAAttemptIdentitySource {
+  readonly createOutputSessionId: () => string
+  readonly createTransferJobId: () => string
+}
+
+const defaultAttemptIdentitySource: FSAAttemptIdentitySource = Object.freeze({
+  createOutputSessionId: createOutputSessionID,
+  createTransferJobId: createTransferJobID,
+})
+
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
@@ -56,6 +67,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly #lease: BrowserReceiveOperationLease
   readonly #resources: FSAResourceOwner
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
+  readonly #attemptIdentities: FSAAttemptIdentitySource
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
   #transferJobId: string
@@ -71,7 +84,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     resources: FSAResourceOwner
     plans: V2PlanExecutionAuthority
     transferJobId: string
+    attemptIdentities: FSAAttemptIdentitySource
     diagnostics?: OutputDiagnosticsPorts
+    localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   }) {
     this.intent = input.intent
     this.lifecycle = input.lifecycle
@@ -79,6 +94,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#lease = input.lease
     this.#resources = input.resources
     this.#diagnostics = input.diagnostics
+    this.#localOutputFailures = input.localOutputFailures
+    this.#attemptIdentities = input.attemptIdentities
     this.#settlement = input.settlement
     this.#plans = input.plans
     this.#transferJobId = input.transferJobId
@@ -92,8 +109,11 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     session: FileSystemAccessOutputSession
     settlement: FileSystemAccessOperationSettlementAuthority
     transferJobId: string
+    outputSessionId: string
+    attemptIdentities: FSAAttemptIdentitySource
     resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
+    localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   }): Promise<FSAReceiveOperation> {
     const plans = await createFSAPlanAuthority(
       input.intent,
@@ -102,6 +122,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       input.session,
       'start',
       input.settlement,
+      input.outputSessionId,
     )
     return new FSAReceiveOperation({ ...input, plans })
   }
@@ -109,6 +130,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   static async reopen(
     operation: ReopenedDirectTreeOperation,
     diagnostics?: OutputDiagnosticsPorts,
+    localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
+    attemptIdentities: FSAAttemptIdentitySource = defaultAttemptIdentitySource,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -117,19 +140,28 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     if (admissionFallback === undefined) {
       throw new TypeError('Direct-tree continuation omitted its admission fallback')
     }
+    const transferJobId = attemptIdentities.createTransferJobId()
     const attemptAuthority = await createFSAAttemptSettlement(
       operation.intent,
       operation.repository,
       operation.lease,
       admissionFallback,
       diagnostics,
+      transferJobId,
     )
     let session: FileSystemAccessOutputSession | undefined
+    const outputSessionId = attemptIdentities.createOutputSessionId()
     try {
       session = await reopenFileSystemAccessOutput({
         intent: operation.intent,
         operationRepository: operation.repository,
         ...(diagnostics === undefined ? {} : { diagnostics }),
+        ...stageDiagnosticsOption(
+          localOutputFailures,
+          diagnostics?.failures?.attempt,
+          transferJobId,
+          outputSessionId,
+        ),
       })
       const plans = await createFSAPlanAuthority(
         operation.intent,
@@ -138,6 +170,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         session,
         'resume',
         attemptAuthority.settlement,
+        outputSessionId,
       )
       const resources = new FSAResourceOwner({
         outputSession: session,
@@ -154,7 +187,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         settlement: attemptAuthority.settlement,
         plans,
         transferJobId: attemptAuthority.transferJobId,
+        attemptIdentities,
         ...(diagnostics === undefined ? {} : { diagnostics }),
+        ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
     } catch (error) {
       return settleFailedFSAReopen(
@@ -185,12 +220,20 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
     if (action !== 'continue' || lifecycle.kind !== 'resumable-receive') throw unavailableRoute()
+    const transferJobId = this.#attemptIdentities.createTransferJobId()
+    const outputSessionId = this.#attemptIdentities.createOutputSessionId()
     const session = await reopenFileSystemAccessOutput({
       intent: this.intent,
       operationRepository: this.#repository,
       ...(this.#diagnostics === undefined
         ? {}
         : { diagnostics: this.#diagnostics }),
+      ...stageDiagnosticsOption(
+        this.#localOutputFailures,
+        this.#diagnostics?.failures?.attempt,
+        transferJobId,
+        outputSessionId,
+      ),
     })
     try {
       // Acquire the attempt before leaving the stable state so setup failures retain
@@ -203,6 +246,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         'resume',
         lifecycle,
         this.#diagnostics,
+        transferJobId,
+        outputSessionId,
       )
       const resumed = await transitionLifecycle(
         this.#repository,
@@ -346,8 +391,10 @@ async function createFSAAttempt(
   lease: BrowserReceiveOperationLease,
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
-  admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
-  diagnostics?: OutputDiagnosticsPorts,
+  admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }> | undefined,
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  transferJobId: string,
+  outputSessionId: string,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
@@ -359,6 +406,7 @@ async function createFSAAttempt(
     lease,
     admissionFallback,
     diagnostics,
+    transferJobId,
   )
   const plans = await createFSAPlanAuthority(
     intent,
@@ -367,6 +415,7 @@ async function createFSAAttempt(
     session,
     lifecycleEntry,
     attemptAuthority.settlement,
+    outputSessionId,
   )
   return Object.freeze({ ...attemptAuthority, plans })
 }
@@ -375,13 +424,13 @@ async function createFSAAttemptSettlement(
   intent: ReceiveIntent,
   repository: ReceiveOperationRepository,
   lease: BrowserReceiveOperationLease,
-  admissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
-  diagnostics?: OutputDiagnosticsPorts,
+  admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }> | undefined,
+  diagnostics: OutputDiagnosticsPorts | undefined,
+  transferJobId: string,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   transferJobId: string
 }>> {
-  const transferJobId = createTransferJobID()
   const settlement = await createFileSystemAccessSettlementAuthority({
     intent,
     repository,
@@ -393,6 +442,21 @@ async function createFSAAttemptSettlement(
   return Object.freeze({ settlement, transferJobId })
 }
 
+function stageDiagnosticsOption(
+  failures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+  attempt: NonNullable<OutputDiagnosticsPorts['failures']>['attempt'],
+  transferJobId: string,
+  outputSessionId: string,
+): Readonly<{
+  stageDiagnostics?: ReturnType<LocalOutputOperationFailureDiagnosticsPort['forAttempt']>
+}> {
+  return failures === undefined || attempt === undefined
+    ? Object.freeze({})
+    : Object.freeze({
+        stageDiagnostics: failures.forAttempt({ attempt, transferJobId, outputSessionId }),
+      })
+}
+
 async function createFSAPlanAuthority(
   intent: ReceiveIntent,
   repository: ReceiveOperationRepository,
@@ -400,6 +464,7 @@ async function createFSAPlanAuthority(
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
   settlement: FileSystemAccessOperationSettlementAuthority,
+  outputSessionId: string,
 ): Promise<V2PlanExecutionAuthority> {
   const plans = await createV2PlanExecutionAuthority({
     intent,
@@ -425,7 +490,7 @@ async function createFSAPlanAuthority(
             materialization: session,
             outputIdentity: outputSessionIdentity({
               backend: 'browser-fsa-tree',
-              outputSessionId: createOutputSessionID(),
+              outputSessionId,
             }),
             settlement: materializationSettlement,
           })

@@ -2,7 +2,16 @@ import {
   validatePersistedReceiveRecord,
   type PersistedReceiveRecord,
 } from '../workspace/records'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import {
+  RECEIVE_STATE_DOWNLOAD_STARTED,
+  RECEIVE_STATE_EXPIRED,
+  RECEIVE_STATE_NEEDS_ATTENTION,
+  RECEIVE_STATE_PUBLISHED,
+  RECEIVE_STATE_RESUMABLE_PACKAGE,
+  RECEIVE_STATE_RESUMABLE_RECEIVE,
+  RECEIVE_STATE_WAITING_TO_SAVE,
+  type ReceiveLifecycleState,
+} from '../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import {
@@ -15,7 +24,15 @@ import {
 } from './indexeddb-database'
 
 const RESUME_INVENTORY_BOUND = 1_048_576
-const INVENTORIED_STATE_BYTES = Object.freeze([4, 9, 11, 14, 15, 19, 20] as const)
+const INVENTORIED_STATE_BYTES = Object.freeze([
+  RECEIVE_STATE_RESUMABLE_RECEIVE,
+  RECEIVE_STATE_RESUMABLE_PACKAGE,
+  RECEIVE_STATE_WAITING_TO_SAVE,
+  RECEIVE_STATE_PUBLISHED,
+  RECEIVE_STATE_DOWNLOAD_STARTED,
+  RECEIVE_STATE_EXPIRED,
+  RECEIVE_STATE_NEEDS_ATTENTION,
+] as const)
 
 /**
  * Production resume inventory reads only v6 lifecycle records. Legacy v5

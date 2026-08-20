@@ -23,6 +23,10 @@ import type {
   PersistentTreeFile,
 } from './contracts'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
+import {
+  runPersistentOutputStage,
+  type PersistentOutputStageScope,
+} from './stage-diagnostics'
 
 type PersistentTransactionFailureStage =
   | 'output_write'
@@ -52,6 +56,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   readonly #onClose: (transaction: PersistentFileTransaction) => void
   readonly #onOwnershipUnknown: (error: TargetOwnershipUnknownError) => void
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #stageScope: PersistentOutputStageScope | undefined
   #checkpoint: FileCheckpointV2
   #ranges: ByteRangeSet
   #tail: Promise<unknown> = Promise.resolve()
@@ -66,6 +71,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     onClose?: (transaction: PersistentFileTransaction) => void
     onOwnershipUnknown?: (error: TargetOwnershipUnknownError) => void
     diagnostics?: OutputDiagnosticsPorts
+    stageScope?: PersistentOutputStageScope
   }>) {
     this.revision = Object.freeze({ ...input.revision })
     this.ownedObjectId = input.handle.ownedObjectId
@@ -75,6 +81,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#onClose = input.onClose ?? (() => undefined)
     this.#onOwnershipUnknown = input.onOwnershipUnknown ?? (() => undefined)
     this.#diagnostics = input.diagnostics
+    this.#stageScope = input.stageScope
     this.#ranges = new ByteRangeSet(input.revision.exactSize, input.checkpoint.verifiedRanges)
   }
 
@@ -182,14 +189,34 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       verifiedRanges: this.#ranges.ranges,
       commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
     })
-    await this.#checkpoints.stageCheckpointUpdate(this.#checkpoint, candidate)
+    const candidateScope = this.#stageScope?.withCorrelation({
+      checkpointRecordId: candidate.recordId,
+      checkpointGeneration: candidate.checkpointGeneration,
+    })
+    await runPersistentOutputStage(
+      candidateScope,
+      'indexeddb.checkpoint.candidate-stage',
+      () => this.#checkpoints.stageCheckpointUpdate(this.#checkpoint, candidate),
+    )
     await this.#handle.verify('checkpoint')
     const committed = newFileCheckpointV2({
       ...candidate,
       commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
     })
-    await this.#checkpoints.commitCheckpointCandidate(candidate, committed)
-    const verified = await this.#checkpoints.readCommitted(committed.recordId)
+    const committedScope = candidateScope?.withCorrelation({
+      checkpointRecordId: committed.recordId,
+      checkpointGeneration: committed.checkpointGeneration,
+    })
+    await runPersistentOutputStage(
+      committedScope,
+      'indexeddb.checkpoint.commit',
+      () => this.#checkpoints.commitCheckpointCandidate(candidate, committed),
+    )
+    const verified = await runPersistentOutputStage(
+      committedScope,
+      'indexeddb.checkpoint.committed-read',
+      () => this.#checkpoints.readCommitted(committed.recordId),
+    )
     if (verified === undefined || verified.checksum !== committed.checksum ||
         verified.checkpointGeneration !== committed.checkpointGeneration) {
       throw new TargetOwnershipUnknownError('checkpoint', this.#checkpoint.operationId)

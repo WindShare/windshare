@@ -10,6 +10,7 @@ import type {
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { ReceiveIntent } from '../../src/transfer/intent'
+import { V2OutputPausedError } from '../../src/transfer/job/contract'
 import {
   outputSessionIdentity,
   type ExactPreparationEvidence,
@@ -118,6 +119,72 @@ describe('persistent production execution bridge', () => {
     expect(settledEvidence?.directorySettlements).toMatchObject([
       { artifactPath: [], settlement: { kind: 'finalized' } },
     ])
+  })
+
+  it('types only backend directory rejections as output-wide state I/O', async () => {
+    const intent = asDirectTree(await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection: new V2SelectionPolicy(),
+    }))
+    const raw = new DOMException('root directory write failed', 'UnknownError')
+    const ensureDirectory = vi.fn(async () => { throw raw })
+    const materialization: PersistentMaterializationPort = {
+      beginFile: async () => { throw new Error('file materialization must not start') },
+      ensureDirectory,
+      close: async () => undefined,
+    }
+    const execution = await createPersistentDirectTreeExecution({
+      intent,
+      materialization,
+      outputIdentity: outputSessionIdentity({
+        backend: 'persistent-test',
+        outputSessionId: 'directory-error-boundary',
+      }),
+      settlement: {
+        pause: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return partialDirectoryState(intent)
+        },
+        settle: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return publishedState(intent)
+        },
+      },
+    })
+
+    let backendFailure: unknown
+    try {
+      await execution.directories.admitDirectory({
+        source: {
+          directoryId: intent.syntheticRoot,
+          generation: identityText(90),
+          path: Object.freeze([]),
+        },
+        artifactPath: Object.freeze([]),
+      }, SIGNAL)
+    } catch (error) {
+      backendFailure = error
+    }
+    expect(backendFailure).toBeInstanceOf(V2OutputPausedError)
+    expect((backendFailure as Error).cause).toBe(raw)
+
+    let contractFailure: unknown
+    try {
+      await execution.directories.admitDirectory({
+        source: {
+          directoryId: identityText(99),
+          generation: identityText(91),
+          path: Object.freeze([]),
+        },
+        artifactPath: Object.freeze([]),
+      }, SIGNAL)
+    } catch (error) {
+      contractFailure = error
+    }
+    expect(contractFailure).not.toBeInstanceOf(V2OutputPausedError)
+    expect(contractFailure).toMatchObject({ name: 'DirectoryAdmissionBindingError' })
+    expect(ensureDirectory).toHaveBeenCalledOnce()
   })
 
   it('does not accept a lifecycle state while mutable materialization remains open', async () => {

@@ -4,6 +4,10 @@ import type {
   FinalFileCheckpointProof,
 } from '../persistence/journal'
 import type { FileCheckpointRecoveryRepository } from './recovery'
+import type {
+  PersistentOutputStageAuthority,
+  PersistentOutputStageScope,
+} from './stage-diagnostics'
 
 export interface OpenedFileRevision {
   readonly fileId: string
@@ -13,10 +17,6 @@ export interface OpenedFileRevision {
 
 export interface PersistentFileRequest {
   readonly artifactPath: readonly string[]
-  /**
-   * Namespace mutation is sequenced after this promise resolves. The callback is the
-   * authenticated content-session revision boundary, not a catalog-size assertion.
-   */
   readonly openRevision: () => Promise<OpenedFileRevision>
 }
 
@@ -48,15 +48,18 @@ export interface PersistentOutputTree {
   inspectFileDestination(
     path: readonly string[],
     selectedOwnedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<'absent' | 'occupied'>
   createFileAfterRevisionOpen(
     path: readonly string[],
     revision: OpenedFileRevision,
     selectedOwnedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<PersistentTreeFile>
   openFile(
     path: readonly string[],
     ownedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<PersistentTreeFile | undefined>
   removeFile(path: readonly string[], ownedObjectId: string): Promise<void>
   removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void>
@@ -95,6 +98,7 @@ export interface PersistentTreeSessionOptions {
   readonly tree: PersistentOutputTree
   readonly checkpoints: RecoverableFileCheckpointJournal
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly stageAuthority?: PersistentOutputStageAuthority
   readonly trace?: PersistentTreeTrace
 }
 

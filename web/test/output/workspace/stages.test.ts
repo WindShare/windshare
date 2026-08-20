@@ -10,6 +10,7 @@ import {
   createZipArchiveArtifact,
 } from '../../../src/transfer/intent'
 import { admitWorkspaceBudget } from '../../../src/output/workspace/budget'
+import { sealPackagedArtifact } from '../../../src/output/workspace/aggregate'
 import type { WorkspaceOwnedCleanupPort } from '../../../src/output/workspace/cleanup'
 import { sealWorkspaceZipPreparation } from '../../../src/output/workspace/preparation'
 import {
@@ -26,9 +27,11 @@ import type {
 } from '../../../src/output/workspace/repository'
 import {
   assertWorkspaceContentGate,
+  stableStateKind,
   workspaceZipLayoutHandleId,
   WorkspaceOperationStages,
   type WorkspaceBudgetAuthority,
+  type WorkspaceStageTraceEvent,
 } from '../../../src/output/workspace/stages'
 import { initialReceiveLifecycleState } from '../../../src/output/workspace/state'
 import {
@@ -187,6 +190,82 @@ describe('workspace stage admission gate', () => {
       claim: admitted.content.claim,
     })).rejects.toThrow('before durable budget admission')
     expect(releases).toBe(1)
+  })
+
+  it('expires a not-started handoff from the exact waiting-to-save predecessor', async () => {
+    const intent = await zipIntent()
+    const packaged = await sealPackagedArtifact({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      sealedMaterializationDigest: identity(32, 20),
+      artifactSpecDigest: intent.artifact.digest,
+      packageOwnedObjectId: identity(32, 21),
+      exactBytes: 3n,
+      artifactReceiptDigest: identity(32, 22),
+      layoutDigest: identity(32, 23),
+    })
+    const expiresAt = 2_000
+    const waiting = Object.freeze({
+      kind: 'waiting-to-save' as const,
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      generation: 1n,
+      packageDigest: packaged.digest,
+      expiresAt,
+    })
+    expect(stableStateKind(waiting)).toBe('waiting-to-save')
+    expect(() => stableStateKind(initialReceiveLifecycleState({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+    }))).toThrow('not durably expirable')
+    expect(() => stableStateKind(Object.freeze({
+      ...waiting,
+      kind: 'artifact-sealed' as const,
+    }))).toThrow('not durably expirable')
+
+    const repository = new MemoryReceiveOperationRepository()
+    await repository.commitTransition({ operationId: intent.operationId, lifecycle: waiting })
+    let now = 1_000
+    const trace: WorkspaceStageTraceEvent[] = []
+    const stages = await WorkspaceOperationStages.open({
+      repository,
+      receiveIntent: intent,
+      leaseId: identity(16, 24),
+      clock: () => now,
+      contentRequests: { count: () => 0n },
+      onTrace: event => trace.push(event),
+    })
+    const attempt = await stages.startHandoff({
+      package: packaged,
+      publicationAttemptId: identity(16, 25),
+      suggestedName: 'WindShare.zip',
+      packagedFileSupported: true,
+    })
+
+    now = expiresAt
+    const expired = await stages.recordHandoffNotStarted({
+      package: packaged,
+      attempt,
+      reason: 'user-cancelled',
+    })
+    const stored = await repository.readLifecycle(intent.operationId)
+
+    expect(expired).toMatchObject({
+      kind: 'expired',
+      priorStableState: 'waiting-to-save',
+      expiresAt,
+    })
+    expect(stored === undefined ? undefined : decodeStoredReceiveLifecycleState(stored))
+      .toMatchObject({
+        kind: 'expired',
+        priorStableState: 'waiting-to-save',
+        expiresAt,
+      })
+    expect(trace).toContainEqual(expect.objectContaining({
+      name: 'receive.operation.expired',
+      prior_stable_state: 'waiting-to-save',
+      expires_at_ms: expiresAt,
+    }))
   })
 })
 

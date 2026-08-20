@@ -39,6 +39,7 @@ import {
   type OutputSessionIdentity,
   type WorkspaceExecution,
 } from '../output-session'
+import { V2OutputPausedError } from '../job/contract'
 import {
   snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
@@ -265,7 +266,13 @@ class PersistentMaterializationOutput implements OutputSession {
           request.source,
           signal,
           async () => {
-            const materialized = await this.#materialization.ensureDirectory(request.artifactPath)
+            const materialized = await this.#materialization
+              .ensureDirectory(request.artifactPath)
+              .catch((cause: unknown) => {
+                // Directory writes need the same output-wide state-I/O boundary as file writes;
+                // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
+                throw new V2OutputPausedError('Persistent directory materialization failed', { cause })
+              })
             this.#recordDirectory({
               kind: 'directory',
               artifactPath: request.artifactPath,

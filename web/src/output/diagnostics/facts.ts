@@ -17,6 +17,7 @@ import {
   PersistentOutputError,
   TargetOwnershipUnknownError,
 } from '../persistent-tree/errors'
+import type { LocalOutputFailureAttemptSource } from './local-output-failure'
 
 export const OUTPUT_FAILURE_STAGES = Object.freeze([
   'output_reservation',
@@ -47,6 +48,8 @@ export interface OutputFailureSink<Stage extends OutputFailureStage> {
 }
 
 export interface OutputFailureSinks {
+  /** Correlation-only authority; native output code never reads or mutates it. */
+  readonly attempt?: LocalOutputFailureAttemptSource
   readonly outputReservation?: OutputFailureSink<'output_reservation'>
   readonly outputWrite?: OutputFailureSink<'output_write'>
   readonly outputCommit?: OutputFailureSink<'output_commit'>

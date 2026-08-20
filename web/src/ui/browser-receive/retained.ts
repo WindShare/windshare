@@ -6,6 +6,7 @@ import {
   emitOutputTrace,
   outputTraceEvent,
   recordOutputException,
+  type LocalOutputOperationFailureDiagnosticsPort,
   type OutputDiagnosticBackend,
   type OutputDiagnosticsPorts,
   type OutputFailureBinding,
@@ -106,6 +107,7 @@ export interface BrowserRetainedCompositionOptions {
   readonly continuationExecutor?: BrowserRetainedContinuationExecutor
   readonly now?: () => number
   readonly outputTrace?: OutputTraceSource
+  readonly localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   readonly onTrace?: WorkspaceStageTraceListener
   readonly openActivationRepository?: () => Promise<WorkspaceActivationJournalRepository>
   readonly recoverWorkspaceActivations?: typeof recoverWorkspaceActivationCandidates
@@ -310,7 +312,12 @@ async function performRetainedAction(
     return Object.freeze({ kind: 'completed' })
   }
   const executor = options.continuationExecutor ??
-    browserRetainedContinuationExecutor(windowPort, options.onTrace, options.outputTrace)
+    browserRetainedContinuationExecutor(
+      windowPort,
+      options.onTrace,
+      options.outputTrace,
+      options.localOutputFailures,
+    )
   const { continuation } = result
   switch (continuation.kind) {
     case 'direct-tree-receive':
@@ -435,6 +442,7 @@ function browserRetainedContinuationExecutor(
   windowPort: BrowserReceiveWindow,
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: OutputTraceSource | undefined,
+  localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
 ): BrowserRetainedContinuationExecutor {
   return Object.freeze({
     resumeReceive: async (
@@ -450,6 +458,7 @@ function browserRetainedContinuationExecutor(
             await FSAReceiveOperation.reopen(
               continuation.operation,
               diagnosticsFor('file_system_access', outputTrace, binding.sinks),
+              localOutputFailures,
             ),
             binding,
           )
