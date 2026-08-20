@@ -617,11 +617,12 @@ func isControlOrFormatCharacter(scalar rune) bool {
 	for low < high {
 		middle := low + (high-low)/2
 		candidate := formatCharacterRanges[middle]
-		if scalar < candidate.first {
+		switch {
+		case scalar < candidate.first:
 			high = middle
-		} else if scalar > candidate.last {
+		case scalar > candidate.last:
 			low = middle + 1
-		} else {
+		default:
 			return true
 		}
 	}
