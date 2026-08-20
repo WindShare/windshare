@@ -8,6 +8,12 @@ import {
 import { sameGuaranteeFacts } from '../planning'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
+  runPersistentOutputStage,
+  type PersistentOutputStage,
+  type PersistentOutputStageScope,
+} from '../persistent-tree/stage-diagnostics'
+import { captureFSAFailureFacts } from './filesystem-failure-facts'
+import {
   RECEIVE_RECORD_RESERVATION,
   createPersistedReceiveRecord,
   createReceiveOperationV1,
@@ -96,6 +102,7 @@ export async function verifyFSAOperationBinding(input: Readonly<{
   repository: FSAOperationBindingRepository
   intent: ReceiveIntent
   expectedParent?: FileSystemDirectoryHandle
+  stageScope?: PersistentOutputStageScope
 }>): Promise<PersistedFSAOperationBinding> {
   const validated = await validatedFSAIntent(input.intent)
   const operation = storedReceiveOperationRecord(await createReceiveOperationV1({
@@ -110,14 +117,36 @@ export async function verifyFSAOperationBinding(input: Readonly<{
     validated.intent.operationId,
     validated.reservation.authorityRef,
   )
+  if (input.expectedParent !== undefined) {
+    const expectedParent = input.expectedParent
+    input.stageScope?.addFailureFacts('binding', context => captureFSAFailureFacts({
+      target: { kind: 'handle', resolve: async () => expectedParent },
+      permissionFallback: expectedParent,
+      expectedKind: 'directory',
+      readPersistedHandle: async () =>
+        (await input.repository.readHandle<FileSystemDirectoryHandle>(parentHandleId))?.handle,
+    }, context))
+  }
   let storedOperation: PersistedReceiveRecord | undefined
   let storedReservation: PersistedReceiveRecord | undefined
   let storedParent: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
   try {
     [storedOperation, storedReservation, storedParent] = await Promise.all([
-      input.repository.readRecord(operation.id),
-      input.repository.readRecord(reservationRecord.id),
-      input.repository.readHandle<FileSystemDirectoryHandle>(parentHandleId),
+      runPersistentOutputStage(
+        input.stageScope,
+        'indexeddb.binding.operation.read',
+        () => input.repository.readRecord(operation.id),
+      ),
+      runPersistentOutputStage(
+        input.stageScope,
+        'indexeddb.binding.reservation.read',
+        () => input.repository.readRecord(reservationRecord.id),
+      ),
+      runPersistentOutputStage(
+        input.stageScope,
+        'indexeddb.binding.parent-handle.read',
+        () => input.repository.readHandle<FileSystemDirectoryHandle>(parentHandleId),
+      ),
     ])
   } catch (cause) {
     throw ownershipUnknown('reservation', validated.intent.operationId, cause)
@@ -143,6 +172,8 @@ export async function verifyFSAOperationBinding(input: Readonly<{
         storedParentHandle,
         validated.intent.operationId,
         'parent-authority',
+        input.stageScope,
+        'fsa.binding.parent-handle.verify',
       )) {
     throw new TargetOwnershipUnknownError('parent-authority', validated.intent.operationId)
   }
@@ -160,6 +191,8 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
   handleId: string
   ownedObjectId: string
   handle: FileSystemDirectoryHandle
+  diagnosticTarget?: 'root' | 'directory'
+  stageScope?: PersistentOutputStageScope
 }>): Promise<void> {
   requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
   const record = receiveOperationHandleRecord({
@@ -172,19 +205,33 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
   })
   let existing: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
   try {
-    existing = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+    existing = await runPersistentOutputStage(
+      input.stageScope,
+      ownedDirectoryStage(input.diagnosticTarget, 'read'),
+      () => input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId),
+    )
   } catch (cause) {
     throw ownershipUnknown('namespace-create', input.reservation.operationId, cause)
   }
   if (existing !== undefined &&
-      !await sameOwnedDirectoryRecord(existing, record, input.reservation.operationId)) {
+      !await sameOwnedDirectoryRecord(
+        existing,
+        record,
+        input.reservation.operationId,
+        input.stageScope,
+        input.diagnosticTarget,
+      )) {
     throw new TargetOwnershipUnknownError('namespace-create', input.reservation.operationId)
   }
   try {
-    await input.repository.commitTransition({
-      operationId: input.reservation.operationId,
-      handles: [record],
-    })
+    await runPersistentOutputStage(
+      input.stageScope,
+      ownedDirectoryStage(input.diagnosticTarget, 'persist'),
+      () => input.repository.commitTransition({
+        operationId: input.reservation.operationId,
+        handles: [record],
+      }),
+    )
   } catch (cause) {
     throw new TargetOwnershipUnknownError(
       'namespace-create',
@@ -194,12 +241,22 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
   }
   let committed: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
   try {
-    committed = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+    committed = await runPersistentOutputStage(
+      input.stageScope,
+      ownedDirectoryStage(input.diagnosticTarget, 'committed-read'),
+      () => input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId),
+    )
   } catch (cause) {
     throw ownershipUnknown('namespace-create', input.reservation.operationId, cause)
   }
   if (committed === undefined ||
-      !await sameOwnedDirectoryRecord(committed, record, input.reservation.operationId)) {
+      !await sameOwnedDirectoryRecord(
+        committed,
+        record,
+        input.reservation.operationId,
+        input.stageScope,
+        input.diagnosticTarget,
+      )) {
     throw new TargetOwnershipUnknownError('namespace-create', input.reservation.operationId)
   }
 }
@@ -209,11 +266,17 @@ export async function readFSAOwnedDirectory(input: Readonly<{
   reservation: NamedContainerEntryReservation
   handleId: string
   ownedObjectId?: string
+  diagnosticTarget?: 'root' | 'directory'
+  stageScope?: PersistentOutputStageScope
 }>): Promise<FileSystemDirectoryHandle | undefined> {
   requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
   let record: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
   try {
-    record = await input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId)
+    record = await runPersistentOutputStage(
+      input.stageScope,
+      ownedDirectoryStage(input.diagnosticTarget, 'read'),
+      () => input.repository.readHandle<FileSystemDirectoryHandle>(input.handleId),
+    )
   } catch (cause) {
     throw ownershipUnknown('parent-authority', input.reservation.operationId, cause)
   }
@@ -316,13 +379,24 @@ async function sameOwnedDirectoryRecord(
   existing: ReceiveOperationHandleRecord<FileSystemDirectoryHandle>,
   expected: ReceiveOperationHandleRecord<FileSystemDirectoryHandle>,
   operationId: string,
+  stageScope?: PersistentOutputStageScope,
+  diagnosticTarget: 'root' | 'directory' = 'directory',
 ): Promise<boolean> {
   const existingHandle = requireDirectoryHandle(existing.handle, operationId, 'namespace-create')
   const expectedHandle = requireDirectoryHandle(expected.handle, operationId, 'namespace-create')
   return existing.id === expected.id && existing.operationId === expected.operationId &&
     existing.kind === expected.kind && existing.authorityRef === expected.authorityRef &&
     existing.ownedObjectId === expected.ownedObjectId &&
-    await sameEntry(existingHandle, expectedHandle, operationId, 'namespace-create')
+    await sameEntry(
+      existingHandle,
+      expectedHandle,
+      operationId,
+      'namespace-create',
+      stageScope,
+      diagnosticTarget === 'root'
+        ? 'fsa.root.handle.verify'
+        : 'fsa.directory.handle.verify',
+    )
 }
 
 function requireDirectoryHandle(
@@ -344,11 +418,37 @@ async function sameEntry(
   right: FileSystemHandle,
   operationId: string,
   stage: 'parent-authority' | 'namespace-create',
+  stageScope?: PersistentOutputStageScope,
+  diagnosticStage?: PersistentOutputStage,
 ): Promise<boolean> {
   try {
-    return await left.isSameEntry(right)
+    return diagnosticStage === undefined
+      ? await left.isSameEntry(right)
+      : await runPersistentOutputStage(
+          stageScope,
+          diagnosticStage,
+          () => left.isSameEntry(right),
+        )
   } catch (cause) {
     throw new TargetOwnershipUnknownError(stage, operationId, { cause })
+  }
+}
+
+function ownedDirectoryStage(
+  target: 'root' | 'directory' = 'directory',
+  operation: 'read' | 'persist' | 'committed-read',
+): PersistentOutputStage {
+  if (target === 'root') {
+    switch (operation) {
+      case 'read': return 'indexeddb.root-handle.read'
+      case 'persist': return 'indexeddb.root-handle.persist'
+      case 'committed-read': return 'indexeddb.root-handle.committed-read'
+    }
+  }
+  switch (operation) {
+    case 'read': return 'indexeddb.directory-handle.read'
+    case 'persist': return 'indexeddb.directory-handle.persist'
+    case 'committed-read': return 'indexeddb.directory-handle.committed-read'
   }
 }
 

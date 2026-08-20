@@ -3,6 +3,7 @@ import type {
   FailureFactRef,
   FailureFactRelation,
   FailureFactSink,
+  IncidentScopeHandle,
   RecoveryDisposition,
 } from '../../diagnostics/incident'
 import {
@@ -10,6 +11,8 @@ import {
   type OutputFailureSinks,
   type OutputFailureStage,
 } from './facts'
+import { createLocalOutputFailureAttemptAuthority } from './local-output-failure'
+import { createLateLocalOutputFailureAttemptAuthority } from './local-output-failure'
 
 const OUTPUT_ATTEMPT_RELATION: Readonly<Record<OutputFailureStage, FailureFactRelation>> =
   Object.freeze({
@@ -47,9 +50,11 @@ export interface LateOutputFailureConsequenceCapability {
  * This deliberately exposes no contributor stages and requires explicit revocation.
  */
 export function createLateOutputCleanupCapability(
-  facts: FailureFactSink | undefined,
+  scope: IncidentScopeHandle | undefined,
 ): LateOutputFailureConsequenceCapability {
+  const facts = scope?.facts
   let active = facts !== undefined
+  const localOutputFailures = createLateLocalOutputFailureAttemptAuthority(scope)
   const cleanup = createOutputFailureSink({
     facts: Object.freeze({
       record: (fact: FailureFact, relation: FailureFactRelation) => {
@@ -67,9 +72,10 @@ export function createLateOutputCleanupCapability(
     recoveryDisposition: 'needs_attention',
   })
   return Object.freeze({
-    sinks: Object.freeze({ cleanup }),
+    sinks: Object.freeze({ attempt: localOutputFailures.source, cleanup }),
     revoke: () => {
       active = false
+      localOutputFailures.revoke()
     },
   })
 }
@@ -85,10 +91,12 @@ export interface AttemptOutputFailureCapability {
  * classify at its boundary, but cannot outlive or redirect the owning incident scope.
  */
 export function createAttemptOutputFailureCapability(
-  facts: FailureFactSink | undefined,
+  scope: IncidentScopeHandle | undefined,
 ): AttemptOutputFailureCapability {
+  const facts = scope?.facts
   let active = facts !== undefined
   let firstContributor: FailureFactRef | undefined
+  const localOutputFailures = createLocalOutputFailureAttemptAuthority(scope)
   const guardedFacts: FailureFactSink = Object.freeze({
     record: (fact: FailureFact, relation: FailureFactRelation) => {
       if (!active || facts === undefined) {
@@ -107,6 +115,7 @@ export function createAttemptOutputFailureCapability(
       recoveryDisposition: OUTPUT_ATTEMPT_RECOVERY[stage],
     })
   const sinks: OutputFailureSinks = Object.freeze({
+    attempt: localOutputFailures.source,
     outputReservation: sink('output_reservation'),
     outputWrite: sink('output_write'),
     outputCommit: sink('output_commit'),
@@ -122,6 +131,7 @@ export function createAttemptOutputFailureCapability(
     firstContributor: () => firstContributor,
     revoke: () => {
       active = false
+      localOutputFailures.revoke()
     },
   })
 }

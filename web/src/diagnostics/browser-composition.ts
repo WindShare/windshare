@@ -33,6 +33,10 @@ import {
   type TraceScheduler,
 } from './trace/ports'
 import { TraceSwitch } from './trace/switch'
+import {
+  BoundedLocalOutputOperationFailureHistory,
+  type LocalOutputOperationFailureDiagnosticsPort,
+} from '../output/diagnostics/local-output-failure'
 
 const RUNTIME_RUN_ID_BYTES = 16
 
@@ -58,6 +62,7 @@ export interface BrowserDiagnosticsComposition {
   >
   readonly incidents: IncidentReporter
   readonly runtime: BrowserDiagnosticsRuntime
+  readonly localOutputFailures: LocalOutputOperationFailureDiagnosticsPort
 }
 
 export const SYSTEM_BROWSER_DIAGNOSTICS_CLOCK: BrowserDiagnosticsClock =
@@ -92,6 +97,7 @@ export function createBrowserDiagnosticsComposition(
   })
   const health = new IncidentDiagnosticsHealth(trace)
   const history = new BoundedIncidentHistory()
+  const localOutputFailures = new BoundedLocalOutputOperationFailureHistory()
   const startedAtMilliseconds = safeNow(clock)
   const projector = createIncidentRecordProjector({
     runtimeRunId,
@@ -135,10 +141,11 @@ export function createBrowserDiagnosticsComposition(
     identity,
     incident: incidents,
     trace,
+    localOutputFailures,
     timeSource: Object.freeze({ captureTime: () => clock.captureTime() }),
   })
 
-  return Object.freeze({ trace, incidents, runtime })
+  return Object.freeze({ trace, incidents, runtime, localOutputFailures })
 }
 
 function diagnosticContextSources(

@@ -5,6 +5,7 @@ import {
 import type { BrowserCapabilityRuntime } from '../output/capability/contract'
 import {
   createOutputFailureBinding,
+  type LocalOutputOperationFailureDiagnosticsPort,
   type OutputDiagnosticBackend,
   type OutputDiagnosticsPorts,
   type OutputFailureBinding,
@@ -84,6 +85,7 @@ export function createBrowserReceiveComposition(
       action,
       options.onTrace,
       options.outputTrace,
+      options.localOutputFailures,
       failures,
     ),
   }
@@ -158,6 +160,14 @@ function inspectBrowserRouteRegistrySynchronously(
   })
 }
 
+function localOutputFailuresOption(
+  failures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+): Readonly<{ localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort }> {
+  return failures === undefined
+    ? Object.freeze({})
+    : Object.freeze({ localOutputFailures: failures })
+}
+
 function diagnosticsFor(
   backend: OutputDiagnosticBackend,
   trace: BrowserReceiveCompositionOptions['outputTrace'],
@@ -199,6 +209,7 @@ function startProductionAuthority(
   offered: OfferedArtifactChoice,
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: BrowserReceiveCompositionOptions['outputTrace'],
+  localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
   failures?: OutputFailureSinks,
 ): V2ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort)
@@ -223,6 +234,7 @@ function startProductionAuthority(
           offered,
           picked,
           ...(diagnostics === undefined ? {} : { diagnostics }),
+          ...localOutputFailuresOption(localOutputFailures),
         }),
         binding,
       )

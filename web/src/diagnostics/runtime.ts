@@ -12,6 +12,9 @@ import type { IncidentHealthReadPort } from './incident/health'
 import type { IncidentHistoryReadPort } from './incident/history'
 import type { IncidentLink } from './incident/reporter'
 import type {
+  LocalOutputOperationFailureReadPort,
+} from '../output/diagnostics/local-output-failure'
+import type {
   TraceCaptureSnapshot,
   TraceCoreStatus,
   TraceEventObservationV1,
@@ -40,6 +43,9 @@ export interface BrowserDiagnosticsRuntimeOptions {
   readonly incident: DiagnosticsIncidentRuntimePort
   readonly trace: DiagnosticsTraceRuntimePort
   readonly timeSource?: DiagnosticsExportTimeSource
+  readonly localOutputFailures?: LocalOutputOperationFailureReadPort & Readonly<{
+    clear(): void
+  }>
 }
 
 export interface DiagnosticsRuntimePort {
@@ -59,12 +65,14 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
   readonly #incident: DiagnosticsIncidentRuntimePort
   readonly #trace: DiagnosticsTraceRuntimePort
   readonly #timeSource: DiagnosticsExportTimeSource
+  readonly #localOutputFailures: BrowserDiagnosticsRuntimeOptions['localOutputFailures']
 
   constructor(options: BrowserDiagnosticsRuntimeOptions) {
     this.#identity = options.identity
     this.#incident = options.incident
     this.#trace = options.trace
     this.#timeSource = options.timeSource ?? SYSTEM_DIAGNOSTICS_EXPORT_TIME_SOURCE
+    this.#localOutputFailures = options.localOutputFailures
   }
 
   enable(): DiagnosticsStatusV1 {
@@ -103,6 +111,7 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
       identity: this.#identity,
       time: this.#timeSource.captureTime(),
       incidents,
+      localOutputFailures: this.#localOutputFailures?.snapshot() ?? [],
       status,
       healthAtExport,
       ...(traceCapture === undefined ? {} : { traceCapture }),
@@ -120,6 +129,11 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
       this.#trace.clear()
     } catch {
       // Explicit clear has no product authority and is best-effort per store.
+    }
+    try {
+      this.#localOutputFailures?.clear()
+    } catch {
+      // Local output evidence is diagnostic-only and clears independently.
     }
   }
 

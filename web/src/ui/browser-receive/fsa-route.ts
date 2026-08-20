@@ -19,6 +19,7 @@ import {
   emitOutputTrace,
   outputTraceEvent,
   recordOutputException,
+  type LocalOutputOperationFailureDiagnosticsPort,
   type OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
 import {
@@ -52,6 +53,7 @@ import {
 import {
   createDestinationReservationID,
   createOperationID,
+  createOutputSessionID,
   createTransferJobID,
 } from '../../transfer/intent'
 import type {
@@ -86,6 +88,7 @@ export interface FSARouteDependencies {
   readonly createOperationId: () => string
   readonly createReservationId: () => string
   readonly createAuthorityRef: () => string
+  readonly createOutputSessionId: () => string
   readonly createTransferJobId: () => string
   readonly clock: () => number
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
@@ -95,6 +98,7 @@ export interface FSAArtifactPresentationAuthorityOptions {
   readonly offered: OfferedArtifactChoice
   readonly picked: Promise<AcquiredFSAParentAuthority>
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   readonly dependencies?: Partial<FSARouteDependencies>
 }
 
@@ -106,6 +110,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
   readonly #installedRouteId: string
   readonly #picked: Promise<AcquiredFSAParentAuthority>
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #dependencies: FSARouteDependencies
   #state: FSAActivationState = 'open'
   #releaseReason: unknown
@@ -114,6 +119,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
     this.#offered = requireFSAOffer(options.offered)
     this.#installedRouteId = this.#offered.route.target.routeId
     this.#diagnostics = options.diagnostics
+    this.#localOutputFailures = options.localOutputFailures
     this.#dependencies = routeDependencies(options.dependencies)
     this.#picked = options.picked.then(
       authority => requirePickedAuthority(authority, this.#offered.route.target),
@@ -171,6 +177,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         parent: authority.parent,
       })
       const transferJobId = this.#dependencies.createTransferJobId()
+      const outputSessionId = this.#dependencies.createOutputSessionId()
       const preparedSettlement = await prepareFileSystemAccessSettlement(bound.intent)
       this.#requireCommitting(input.signal)
 
@@ -225,6 +232,12 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
             ? {}
             : { checkpointRepositoryFactory: this.#dependencies.checkpointRepositoryFactory }),
           ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+          ...stageDiagnosticsOption(
+            this.#localOutputFailures,
+            this.#diagnostics?.failures?.attempt,
+            transferJobId,
+            outputSessionId,
+          ),
         })
         resources.adoptOutputSession(session)
         const operation = await FSAReceiveOperation.createCommitted({
@@ -235,8 +248,14 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
           session,
           settlement,
           transferJobId,
+          outputSessionId,
+          attemptIdentities: Object.freeze({
+            createOutputSessionId: this.#dependencies.createOutputSessionId,
+            createTransferJobId: this.#dependencies.createTransferJobId,
+          }),
           resources,
           ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+          ...localOutputFailuresOption(this.#localOutputFailures),
         })
         this.#requireCommitting(input.signal)
         this.#state = 'transferred'
@@ -469,6 +488,29 @@ function pickerError(error: unknown): unknown {
     : error
 }
 
+function stageDiagnosticsOption(
+  failures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+  attempt: NonNullable<OutputDiagnosticsPorts['failures']>['attempt'],
+  transferJobId: string,
+  outputSessionId: string,
+): Readonly<{
+  stageDiagnostics?: ReturnType<LocalOutputOperationFailureDiagnosticsPort['forAttempt']>
+}> {
+  return failures === undefined || attempt === undefined
+    ? Object.freeze({})
+    : Object.freeze({
+        stageDiagnostics: failures.forAttempt({ attempt, transferJobId, outputSessionId }),
+      })
+}
+
+function localOutputFailuresOption(
+  failures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+): Readonly<{ localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort }> {
+  return failures === undefined
+    ? Object.freeze({})
+    : Object.freeze({ localOutputFailures: failures })
+}
+
 function routeDependencies(
   overrides: Partial<FSARouteDependencies> | undefined,
 ): FSARouteDependencies {
@@ -480,6 +522,7 @@ function routeDependencies(
     createOperationId: createOperationID,
     createReservationId: createDestinationReservationID,
     createAuthorityRef: createFSAAuthorityReference,
+    createOutputSessionId: createOutputSessionID,
     createTransferJobId: createTransferJobID,
     clock: Date.now,
     ...overrides,

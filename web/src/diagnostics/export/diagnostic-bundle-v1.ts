@@ -21,6 +21,11 @@ import {
   utcRfc3339,
 } from './json'
 import { snapshotTraceEventObservationV1 } from './trace-event-v1'
+import type {
+  CorrelatedLocalOutputOperationFailureV1,
+  LocalOutputOperationFailureV1,
+} from '../../output/diagnostics/local-output-failure'
+import type { CorrelationV1 } from './correlation-v1'
 
 export const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 1 as const
 
@@ -69,6 +74,16 @@ export interface DiagnosticBundleIncidentLineV1 {
   readonly record: IncidentRecordV1
 }
 
+export interface DiagnosticBundleLocalOutputFailureLineV1 {
+  readonly line_type: 'local_output_operation_failure'
+  readonly owning_incident: Readonly<{
+    readonly incident_sequence: string
+    readonly scope: IncidentRecordV1['payload']['scope']
+  }>
+  readonly correlation: CorrelationV1
+  readonly record: LocalOutputOperationFailureV1
+}
+
 export interface DiagnosticBundleTraceCaptureLineV1 {
   readonly line_type: 'trace_capture'
   readonly status: DiagnosticsStatusV1
@@ -82,6 +97,7 @@ export interface DiagnosticBundleTraceEventLineV1 {
 export interface DiagnosticBundleV1 {
   readonly header: DiagnosticBundleHeaderV1
   readonly incidents: readonly DiagnosticBundleIncidentLineV1[]
+  readonly localOutputFailures: readonly DiagnosticBundleLocalOutputFailureLineV1[]
   readonly traceCapture?: DiagnosticBundleTraceCaptureLineV1
   readonly traceEvents: readonly DiagnosticBundleTraceEventLineV1[]
 }
@@ -96,6 +112,7 @@ export interface DiagnosticBundleSnapshotInput {
   readonly identity: DiagnosticBundleIdentityV1
   readonly time: string
   readonly incidents: readonly IncidentRecordV1[]
+  readonly localOutputFailures?: readonly CorrelatedLocalOutputOperationFailureV1[]
   readonly status: DiagnosticsStatusV1
   readonly healthAtExport: DiagnosticsHealthV1
   readonly traceCapture?: TraceCaptureSnapshot<TraceEventObservationV1, IncidentLink>
@@ -163,6 +180,12 @@ export function createDiagnosticBundleV1(
   requireUniqueDecimalSequences(incidentRecords.map((record) => record.sequence), 'incident')
   const incidents = Object.freeze(incidentRecords.map((record) =>
     deepFreezeJson({ line_type: 'incident' as const, record })))
+  const localOutputFailures = Object.freeze(
+    [...(input.localOutputFailures ?? [])]
+      .map((record) => projectLocalOutputFailureLine(record, incidentRecords))
+      .filter((line): line is DiagnosticBundleLocalOutputFailureLineV1 => line !== undefined)
+      .sort(compareLocalOutputFailures),
+  )
 
   const capture = input.traceCapture
   if ((capture === undefined) !== (status.state === 'idle')) {
@@ -196,9 +219,98 @@ export function createDiagnosticBundleV1(
       diagnostics_health_at_export: healthAtExport,
     }),
     incidents,
+    localOutputFailures,
     ...(traceCapture === undefined ? {} : { traceCapture }),
     traceEvents,
   })
+}
+
+function validateLocalOutputFailure(
+  projection: CorrelatedLocalOutputOperationFailureV1,
+): void {
+  const { failure: record, correlation, owningScope } = projection
+  if (record.schemaVersion !== 1 ||
+      record.recordKind !== 'local_output_operation_failure' ||
+      record.stageFailure.schemaVersion !== 1 ||
+      !Number.isSafeInteger(record.stageFailure.sequence) ||
+      record.stageFailure.sequence <= 0 ||
+      owningScope.scopeKind.length === 0 ||
+      BigInt(canonicalDecimal(owningScope.scopeSequence, 'local output incident scope')) <= 0n ||
+      !isDeeplyFrozen(projection)) {
+    throw new TypeError('local output failure is not a frozen bounded stage projection')
+  }
+  const keys = Object.keys(correlation)
+  if (!keys.every((key) => [
+    'protocol_session_id',
+    'receive_operation_id',
+    'transfer_job_id',
+    'output_session_id',
+    'protocol_generation',
+  ].includes(key)) ||
+      correlation.receive_operation_id !== record.stageFailure.correlation.operationId ||
+      correlation.output_session_id !== record.stageFailure.correlation.outputSessionId ||
+      !nonEmptyText(correlation.transfer_job_id) ||
+      !nonEmptyText(correlation.receive_operation_id) ||
+      !nonEmptyText(correlation.output_session_id) ||
+      ((correlation.protocol_session_id === undefined) !==
+        (correlation.protocol_generation === undefined)) ||
+      (correlation.protocol_session_id !== undefined &&
+        !/^[A-Za-z0-9_-]{22}$/.test(correlation.protocol_session_id)) ||
+      (correlation.protocol_generation !== undefined &&
+        (!Number.isSafeInteger(correlation.protocol_generation) ||
+          correlation.protocol_generation <= 0 ||
+          correlation.protocol_generation > 0xffff_ffff))) {
+    throw new TypeError('local output failure correlation is invalid')
+  }
+}
+
+function projectLocalOutputFailureLine(
+  projection: CorrelatedLocalOutputOperationFailureV1,
+  incidents: readonly IncidentRecordV1[],
+): DiagnosticBundleLocalOutputFailureLineV1 | undefined {
+  validateLocalOutputFailure(projection)
+  const owner = incidents.filter((incident) =>
+    incident.payload.root_incident_sequence === undefined &&
+    incident.payload.scope.scope_kind === projection.owningScope.scopeKind &&
+    incident.payload.scope.scope_sequence === projection.owningScope.scopeSequence &&
+    incidentContainsNativeOutputFailure(incident))
+  if (owner.length !== 1) return undefined
+  const incident = owner[0]!
+  return deepFreezeJson({
+    line_type: 'local_output_operation_failure' as const,
+    owning_incident: {
+      incident_sequence: incident.sequence,
+      scope: incident.payload.scope,
+    },
+    correlation: projection.correlation,
+    record: projection.failure,
+  })
+}
+
+function compareLocalOutputFailures(
+  left: DiagnosticBundleLocalOutputFailureLineV1,
+  right: DiagnosticBundleLocalOutputFailureLineV1,
+): number {
+  return compareDecimal(
+    left.owning_incident.incident_sequence,
+    right.owning_incident.incident_sequence,
+  ) ||
+    (left.correlation.protocol_generation ?? 0) -
+      (right.correlation.protocol_generation ?? 0) ||
+    compareText(left.correlation.receive_operation_id!, right.correlation.receive_operation_id!) ||
+    compareText(left.correlation.transfer_job_id!, right.correlation.transfer_job_id!) ||
+    compareText(left.correlation.output_session_id!, right.correlation.output_session_id!) ||
+    compareText(
+      left.record.stageFailure.correlation.artifactId,
+      right.record.stageFailure.correlation.artifactId,
+    ) ||
+    left.record.stageFailure.sequence - right.record.stageFailure.sequence
+}
+
+function incidentContainsNativeOutputFailure(incident: IncidentRecordV1): boolean {
+  return incident.payload.trigger.kind === 'native_output_failure' ||
+    [...incident.payload.contributors, ...incident.payload.consequences]
+      .some((bucket) => bucket.representative.kind === 'native_output_failure')
 }
 
 function projectCapturedEvent(
@@ -561,6 +673,15 @@ function compareBigInt(left: bigint, right: bigint): number {
   if (left < right) return -1
   if (left > right) return 1
   return 0
+}
+
+function compareText(left: string, right: string): number {
+  if (left === right) return 0
+  return left < right ? -1 : 1
+}
+
+function nonEmptyText(value: unknown): value is string {
+  return typeof value === 'string' && value.length > 0
 }
 
 function requireUniqueDecimalSequences(

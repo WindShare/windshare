@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import {
+  createFailureIdentity,
   createIncidentScopeIssuer,
   type FailureFact,
   type FailureFactRelation,
   type FailureFactSink,
 } from '../../src/diagnostics/incident'
 import {
+  bindLocalOutputFailureProtocolAttempt,
   createAttemptOutputFailureCapability,
   createLateOutputCleanupCapability,
   createOutputFailureBinding,
@@ -113,8 +115,8 @@ describe('output diagnostics', () => {
         relation: observation.relation,
       }),
     })
-    const firstAttempt = createAttemptOutputFailureCapability(first.facts)
-    const secondAttempt = createAttemptOutputFailureCapability(second.facts)
+    const firstAttempt = createAttemptOutputFailureCapability(first.handle)
+    const secondAttempt = createAttemptOutputFailureCapability(second.handle)
     const binding = createOutputFailureBinding()
     const firstLease = binding.bind(firstAttempt.sinks)
 
@@ -170,6 +172,45 @@ describe('output diagnostics', () => {
     expect(secondFacts).toHaveLength(2)
   })
 
+  it('completes one incident-owned attempt from the gateway correlation cut exactly once', () => {
+    const scope = createIncidentScopeIssuer().open('receive')
+    const attempt = createAttemptOutputFailureCapability(scope.handle)
+    const protocolSessionIdentity = createFailureIdentity(
+      'protocol_session',
+      new Uint8Array(16).fill(4),
+    )
+
+    expect(bindLocalOutputFailureProtocolAttempt(scope.handle, {
+      transferJobId: 'transfer-job',
+      protocolSessionIdentity,
+      protocolGeneration: 9,
+    })).toBe(true)
+    expect(bindLocalOutputFailureProtocolAttempt(scope.handle, {
+      transferJobId: 'transfer-job',
+      protocolSessionIdentity,
+      protocolGeneration: 9,
+    })).toBe(true)
+    expect(() => bindLocalOutputFailureProtocolAttempt(scope.handle, {
+      transferJobId: 'transfer-job',
+      protocolSessionIdentity,
+      protocolGeneration: 10,
+    })).toThrow('different protocol attempt correlation')
+
+    const claimed = attempt.sinks.attempt?.claim()
+    expect(claimed?.scope).toEqual(scope.identity)
+    expect(claimed?.protocolAttempt('transfer-job')).toMatchObject({
+      protocolGeneration: 9,
+    })
+
+    attempt.revoke()
+    expect(attempt.sinks.attempt?.claim()).toBeUndefined()
+    expect(bindLocalOutputFailureProtocolAttempt(scope.handle, {
+      transferJobId: 'successor-job',
+      protocolSessionIdentity,
+      protocolGeneration: 10,
+    })).toBe(false)
+  })
+
   it('allows only explicitly owned late cleanup consequences after incident sealing', () => {
     const observations: Array<Readonly<{
       fact: FailureFact
@@ -181,14 +222,19 @@ describe('output diagnostics', () => {
         relation: observation.relation,
       }),
     })
-    const late = createLateOutputCleanupCapability(scope.facts)
+    const attempt = createAttemptOutputFailureCapability(scope.handle)
+    const late = createLateOutputCleanupCapability(scope.handle)
     scope.close()
+    attempt.revoke()
+    expect(attempt.sinks.attempt?.claim()).toBeUndefined()
+    expect(late.sinks.attempt?.claim()?.scope).toEqual(scope.identity)
 
     recordOutputException(
       late.sinks.cleanup,
       new DOMException('private detach detail', 'InvalidStateError'),
     )
     late.revoke()
+    expect(late.sinks.attempt?.claim()).toBeUndefined()
     recordOutputException(
       late.sinks.cleanup,
       new DOMException('late unrelated cleanup', 'QuotaExceededError'),

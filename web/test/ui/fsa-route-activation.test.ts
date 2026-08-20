@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { acquireFSARootMutationLease } from '../../src/output/browser/namespace-mutation'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
+import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
 import { authorizeFSAParent, fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
 import {
@@ -12,13 +13,21 @@ import {
   type OfferedArtifactChoice,
   type ResolvedArtifactAction,
 } from '../../src/output/planning'
+import {
+  createAttemptOutputFailureCapability,
+  type LocalOutputOperationFailureDiagnosticsPort,
+} from '../../src/output/diagnostics'
 import type { FSAFileCheckpointRepositoryFactory } from '../../src/output/file-system-access/session'
+import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import type { ReceiveOperationTransition } from '../../src/output/workspace/repository'
 import {
   createSelectionSpec,
   type DirectTreePlan,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
+import {
+  FSAReceiveOperation,
+} from '../../src/ui/browser-receive/fsa'
 import {
   FSAArtifactPresentationAuthority,
   type FSARouteDependencies,
@@ -127,6 +136,206 @@ describe('FSA presentation route activation', () => {
     await result.operation.detach()
   })
 
+  it('uses one output-session identity for local stage diagnostics and DirectTree execution', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const outputSessionId = identity(44)
+    const transferJobId = identity(43)
+    const observedSessionIds: string[] = []
+    const observedTransferJobIds: string[] = []
+    const localOutputFailures: LocalOutputOperationFailureDiagnosticsPort = {
+      forAttempt: (input) => {
+        observedSessionIds.push(input.outputSessionId)
+        observedTransferJobIds.push(input.transferJobId)
+        expect(input.attempt.claim()?.scope.scopeKind).toBe('authority_activation')
+        return Object.freeze({
+          outputSessionId: input.outputSessionId,
+          observe: () => undefined,
+        })
+      },
+    }
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      new TestRepository(),
+      {
+        createOutputSessionId: () => outputSessionId,
+        createTransferJobId: () => transferJobId,
+      },
+      localOutputFailures,
+    )
+
+    const result = await route.commit(commitInput(planning))
+    expect(result.kind).toBe('bound-operation')
+    if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    const execution = await result.operation.plans.openDirectTree(
+      requireDirectTreeIntent(result.operation.intent),
+      new AbortController().signal,
+    )
+
+    expect(observedSessionIds).toEqual([outputSessionId])
+    expect(observedTransferJobIds).toEqual([transferJobId])
+    expect(execution.output.identity.outputSessionId).toBe(outputSessionId)
+    await result.operation.detach()
+  })
+})
+
+describe('FSA output diagnostic correlation', () => {
+  it('pre-creates the continuation identities before binding its owning attempt', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const transferJobIds = [identity(43), identity(45)]
+    const outputSessionIds = [identity(44), identity(46)]
+    const observed: Array<Readonly<{
+      transferJobId: string
+      outputSessionId: string
+      scopeKind: string | undefined
+    }>> = []
+    const stopBeforeNativeReopen = new Error('continuation correlation observed')
+    const localOutputFailures: LocalOutputOperationFailureDiagnosticsPort = {
+      forAttempt: (input) => {
+        observed.push(Object.freeze({
+          transferJobId: input.transferJobId,
+          outputSessionId: input.outputSessionId,
+          scopeKind: input.attempt.claim()?.scope.scopeKind,
+        }))
+        if (observed.length === 2) throw stopBeforeNativeReopen
+        return Object.freeze({
+          outputSessionId: input.outputSessionId,
+          observe: () => undefined,
+        })
+      },
+    }
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      new TestRepository(),
+      {
+        createTransferJobId: () => transferJobIds.shift()!,
+        createOutputSessionId: () => outputSessionIds.shift()!,
+      },
+      localOutputFailures,
+    )
+
+    const result = await route.commit(commitInput(planning))
+    if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    const lifecycle = Object.freeze({
+      kind: 'resumable-receive' as const,
+      operationId: result.operation.intent.operationId,
+      receiveIntentDigest: result.operation.intent.digest,
+      generation: 1n,
+      checkpointSetDigest: identity(47, 32),
+      completedFileCount: 0n,
+      completedBytes: 0n,
+      expiresAt: 5_000,
+    })
+
+    await expect(result.operation.startLifecycleAction('continue', lifecycle))
+      .rejects.toBe(stopBeforeNativeReopen)
+    expect(observed).toEqual([
+      {
+        transferJobId: identity(43),
+        outputSessionId: identity(44),
+        scopeKind: 'authority_activation',
+      },
+      {
+        transferJobId: identity(45),
+        outputSessionId: identity(46),
+        scopeKind: 'authority_activation',
+      },
+    ])
+    await result.operation.detach()
+  })
+
+  it('binds retained reopen identities to the retained action incident before native reopen', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const repository = new TestRepository()
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      repository,
+    )
+    const committed = await route.commit(commitInput(planning))
+    if (committed.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    await committed.operation.plans.openDirectTree(
+      requireDirectTreeIntent(committed.operation.intent),
+      new AbortController().signal,
+    )
+    const receiving = repository.transitions.at(-1)?.lifecycle
+    if (receiving?.kind !== 'receiving') throw new Error('expected an active receiving lifecycle')
+
+    const fallback = Object.freeze({
+      kind: 'resumable-receive' as const,
+      operationId: committed.operation.intent.operationId,
+      receiveIntentDigest: committed.operation.intent.digest,
+      generation: receiving.generation - 1n,
+      checkpointSetDigest: identity(48, 32),
+      completedFileCount: 0n,
+      completedBytes: 0n,
+      expiresAt: 5_000,
+    })
+    const retainedOperation = Object.freeze({
+      kind: 'direct-tree' as const,
+      intent: committed.operation.intent,
+      lifecycle: receiving,
+      receiveAdmissionFallback: fallback,
+      repository,
+      lease: Object.freeze({
+        operationId: committed.operation.intent.operationId,
+        leaseId: receiving.activeLeaseId,
+        acquiredAt: 1_000,
+        heartbeat: () => Promise.reject(new Error('unexpected retained heartbeat')),
+        release: () => Promise.resolve(),
+      }),
+      binding: Object.freeze({}),
+      close: () => Promise.resolve(),
+    }) as unknown as ReopenedDirectTreeOperation
+    const issuer = createIncidentScopeIssuer()
+    const scope = issuer.open('retained_action')
+    const attempt = createAttemptOutputFailureCapability(scope.handle)
+    const observed: Array<Readonly<{
+      transferJobId: string
+      outputSessionId: string
+      scopeKind: string | undefined
+    }>> = []
+    const stopBeforeNativeReopen = new Error('retained correlation observed')
+    const localOutputFailures: LocalOutputOperationFailureDiagnosticsPort = {
+      forAttempt: (input) => {
+        observed.push(Object.freeze({
+          transferJobId: input.transferJobId,
+          outputSessionId: input.outputSessionId,
+          scopeKind: input.attempt.claim()?.scope.scopeKind,
+        }))
+        throw stopBeforeNativeReopen
+      },
+    }
+
+    await expect(FSAReceiveOperation.reopen(
+      retainedOperation,
+      { backend: 'file_system_access', failures: attempt.sinks },
+      localOutputFailures,
+      {
+        createTransferJobId: () => identity(49),
+        createOutputSessionId: () => identity(50),
+      },
+    )).rejects.toBe(stopBeforeNativeReopen)
+    expect(observed).toEqual([{
+      transferJobId: identity(49),
+      outputSessionId: identity(50),
+      scopeKind: 'retained_action',
+    }])
+
+    attempt.revoke()
+    scope.close()
+    await committed.operation.detach()
+  })
+})
+
+describe('FSA presentation route activation retry cuts', () => {
   it('reuses the settled picker authority after clean cancellation before candidate preparation', async () => {
     const planning = await planningFixture()
     const parent = new MemoryDirectory('downloads')
@@ -539,8 +748,14 @@ function routeFixture(
   _parent: MemoryDirectory,
   repository: TestRepository,
   overrides: Partial<FSARouteDependencies> = {},
+  localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
 ): FSAArtifactPresentationAuthority {
   const operationLocks = new MemoryLockManager()
+  const diagnosticAttempt = localOutputFailures === undefined
+    ? undefined
+    : createAttemptOutputFailureCapability(
+        createIncidentScopeIssuer().open('authority_activation').handle,
+      )
   return new FSAArtifactPresentationAuthority({
     offered,
     picked,
@@ -557,10 +772,20 @@ function routeFixture(
       createOperationId: () => identity(40),
       createReservationId: () => identity(41),
       createAuthorityRef: () => identity(42, 32),
+      createOutputSessionId: () => identity(44),
       createTransferJobId: () => identity(43),
       checkpointRepositoryFactory: memoryCheckpointFactory(),
       ...overrides,
     },
+    ...(diagnosticAttempt === undefined
+      ? {}
+      : {
+          diagnostics: {
+            backend: 'file_system_access' as const,
+            failures: diagnosticAttempt.sinks,
+          },
+        }),
+    ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
   })
 }
 
