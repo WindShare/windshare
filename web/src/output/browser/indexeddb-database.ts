@@ -1,4 +1,4 @@
-export const CHECKPOINT_DATABASE_VERSION = 7
+export const CHECKPOINT_DATABASE_VERSION = 8
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = 'windshare-output-checkpoints'
 
 export const INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE = 'file-checkpoint-v2-candidates'
@@ -9,6 +9,8 @@ export const INDEXEDDB_RECEIVE_RECORD_STORE = 'receive-operation-v1-records'
 export const INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE = 'receive-operation-v1-manifest-pages'
 export const INDEXEDDB_RECEIVE_HANDLE_STORE = 'receive-operation-v1-handles'
 export const INDEXEDDB_RECEIVE_LEASE_STORE = 'receive-operation-v1-leases'
+export const INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE = 'compatible-name-v1-operations'
+export const INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE = 'compatible-name-v1-mappings'
 
 export const INDEXEDDB_BY_OPERATION_INDEX = 'by-operation'
 export const INDEXEDDB_BY_OPERATION_FILE_INDEX = 'by-operation-file'
@@ -17,6 +19,7 @@ export const INDEXEDDB_BY_KIND_INDEX = 'by-kind'
 export const INDEXEDDB_BY_REOPEN_KEY_INDEX = 'by-reopen-key'
 export const INDEXEDDB_BY_STATE_INDEX = 'by-state'
 export const INDEXEDDB_BY_EXPIRY_INDEX = 'by-expiry'
+export const INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX = 'by-operation-commit-ordinal'
 
 export const INDEXEDDB_LEGACY_V5_STORES = Object.freeze([
   'file-checkpoint-v1-candidates',
@@ -31,6 +34,7 @@ export const INDEXEDDB_LEGACY_V5_STORES = Object.freeze([
 
 export interface IndexedDbStoreSchema {
   readonly name: string
+  readonly keyPath: string
   readonly indexes: readonly Readonly<{
     name: string
     keyPath: string | readonly string[]
@@ -38,49 +42,58 @@ export interface IndexedDbStoreSchema {
 }
 
 export const INDEXEDDB_V6_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
-  storeSchema(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE, [
+  storeSchema(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId']),
   ]),
-  storeSchema(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, [
+  storeSchema(INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId']),
   ]),
-  storeSchema(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE, [
+  storeSchema(INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
   ]),
-  storeSchema(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, [
+  storeSchema(INDEXEDDB_FILE_CHECKPOINT_CONTROL_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
   ]),
-  storeSchema(INDEXEDDB_RECEIVE_RECORD_STORE, [
+  storeSchema(INDEXEDDB_RECEIVE_RECORD_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
     indexSchema(INDEXEDDB_BY_REOPEN_KEY_INDEX, 'reopenKey'),
     indexSchema(INDEXEDDB_BY_STATE_INDEX, 'state'),
     indexSchema(INDEXEDDB_BY_EXPIRY_INDEX, 'expiresAt'),
   ]),
-  storeSchema(INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE, [
+  storeSchema(INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
   ]),
-  storeSchema(INDEXEDDB_RECEIVE_HANDLE_STORE, [
+  storeSchema(INDEXEDDB_RECEIVE_HANDLE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
   ]),
-  storeSchema(INDEXEDDB_RECEIVE_LEASE_STORE, [
+  storeSchema(INDEXEDDB_RECEIVE_LEASE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
   ]),
 ])
 
 export const INDEXEDDB_V7_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze(
   INDEXEDDB_V6_STORE_SCHEMAS.map((schema) => schema.name === INDEXEDDB_RECEIVE_RECORD_STORE
-    ? storeSchema(schema.name, [
+    ? storeSchema(schema.name, schema.keyPath, [
         ...schema.indexes,
         indexSchema(INDEXEDDB_BY_KIND_INDEX, 'kind'),
       ])
     : schema),
 )
+
+export const INDEXEDDB_V8_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
+  ...INDEXEDDB_V7_STORE_SCHEMAS,
+  storeSchema(INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE, 'operationId', []),
+  storeSchema(INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE, 'id', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX, ['operationId', 'commitOrdinal']),
+  ]),
+])
 
 export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDBDatabase> {
   if (name.length === 0) throw new TypeError('IndexedDB name must not be empty')
@@ -88,8 +101,12 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
     throw new DOMException('IndexedDB output repository is unavailable', 'NotSupportedError')
   }
   const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
-  request.addEventListener('upgradeneeded', () =>
-    installIndexedDbV7Schema(request.result, request.transaction ?? undefined))
+  request.addEventListener('upgradeneeded', (event) =>
+    installIndexedDbV8Schema(
+      request.result,
+      request.transaction ?? undefined,
+      event.oldVersion,
+    ))
   let blocked = false
   return new Promise<IDBDatabase>((resolve, reject) => {
     request.addEventListener('blocked', () => {
@@ -110,7 +127,7 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
 export function installIndexedDbV6Schema(database: IDBDatabase): void {
   for (const schema of INDEXEDDB_V6_STORE_SCHEMAS) {
     if (database.objectStoreNames.contains(schema.name)) continue
-    const store = database.createObjectStore(schema.name, { keyPath: 'id' })
+    const store = database.createObjectStore(schema.name, { keyPath: schema.keyPath })
     for (const index of schema.indexes) {
       store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
     }
@@ -124,7 +141,7 @@ export function installIndexedDbV7Schema(
   for (const schema of INDEXEDDB_V7_STORE_SCHEMAS) {
     const store = database.objectStoreNames.contains(schema.name)
       ? transaction?.objectStore(schema.name)
-      : database.createObjectStore(schema.name, { keyPath: 'id' })
+      : database.createObjectStore(schema.name, { keyPath: schema.keyPath })
     if (store === undefined) {
       throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
     }
@@ -133,6 +150,36 @@ export function installIndexedDbV7Schema(
         store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
       }
     }
+  }
+}
+
+export function installIndexedDbV8Schema(
+  database: IDBDatabase,
+  transaction?: IDBTransaction,
+  oldVersion = CHECKPOINT_DATABASE_VERSION,
+): void {
+  for (const schema of INDEXEDDB_V8_STORE_SCHEMAS) {
+    const store = database.objectStoreNames.contains(schema.name)
+      ? transaction?.objectStore(schema.name)
+      : database.createObjectStore(schema.name, { keyPath: schema.keyPath })
+    if (store === undefined) {
+      throw new DOMException('IndexedDB schema upgrade lacks its versionchange transaction', 'InvalidStateError')
+    }
+    for (const index of schema.indexes) {
+      if (!store.indexNames.contains(index.name)) {
+        store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+      }
+    }
+  }
+
+  if (oldVersion <= 0 || oldVersion >= CHECKPOINT_DATABASE_VERSION) return
+  if (transaction === undefined) {
+    throw new DOMException('IndexedDB v8 migration lacks its versionchange transaction', 'InvalidStateError')
+  }
+  // ReceiveIntent v1 cannot be reinterpreted under the v2 digest domain. Clearing only
+  // browser metadata leaves the user's already-materialized filesystem entries untouched.
+  for (const schema of INDEXEDDB_V7_STORE_SCHEMAS) {
+    transaction.objectStore(schema.name).clear()
   }
 }
 
@@ -157,9 +204,10 @@ export function isIndexedDbRecord(value: unknown): value is Record<string, unkno
 
 function storeSchema(
   name: string,
+  keyPath: string,
   indexes: readonly IndexedDbStoreSchema['indexes'][number][],
 ): IndexedDbStoreSchema {
-  return Object.freeze({ name, indexes: Object.freeze(indexes) })
+  return Object.freeze({ name, keyPath, indexes: Object.freeze(indexes) })
 }
 
 function indexSchema(

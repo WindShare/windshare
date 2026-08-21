@@ -296,6 +296,12 @@ jobs:
           Get-WindShareGoPackageSet -Set all | Out-Null
           # The wildcard preserves go build's handling of test-only packages.
           go build ./...
+      - name: Prove browser compatible-name restoration refuses replacement
+        shell: cmd
+        run: >-
+          powershell.exe -NoLogo -NoProfile -NonInteractive
+          -ExecutionPolicy Bypass
+          -File scripts\ci\windows\browser-compatible-name-restoration.tests.ps1
       # The measured Windows race path exceeded the six-minute workflow goal;
       # Linux owns race/coverage while this lane keeps Windows-native behavior.
       - name: Run production short tests once

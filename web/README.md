@@ -5,10 +5,25 @@ capability links, authenticates a small share descriptor, browses catalog pages
 on demand, and reads file-local encrypted ranges over relay or WebRTC lanes.
 
 Receive actions name the final artifact: `original-file`, `directory-tree`, or
-`zip-archive`. The receiver-local `ReceiveIntentV1` binds that artifact to a legal
+`zip-archive`. The receiver-local `ReceiveIntentV2` binds that artifact to a legal
 destination/workspace plan without adding a sender or relay wire field. Directory
 output may retain successful files; ZIP uses `store` encoding and `complete-only`
 publication. `browser-handoff` ends at `download-started`, never `published`.
+
+Named output keeps `requestedName`, `logicalReservedName`, and `physicalName`
+distinct. Ordinary output keeps the logical and physical names equal. Browser FSA
+uses a compatible physical name only after the expected non-creating native lookup
+itself throws `TypeError`; names, extensions, messages, browser brands, and operating
+systems are not classifiers. The current restoration template is proven only on
+Windows, so other platforms fail before creating a compatible target.
+
+Windows compatible output includes an owned PowerShell script and sidecar. The UI
+qualifies the result as completed or partial with compatible names only after workers,
+output admissions, transactions, and the sidecar projector are quiescent and the
+terminal footer is validated. A failed final catch-up retains local pending state and
+does not publish qualified success. Browser resume follows the persisted physical-name
+ledger until the user runs the restoration script; restoration intentionally ends
+browser resumability for that output.
 
 Browsing uses the established relay without starting ICE. A preview or download
 activation makes relay content eligible immediately and starts one bounded P2P
@@ -39,7 +54,7 @@ local performance diagnostics are in
 | `src/output/persistent-tree/`, `src/output/file-system-access/` | Prefix-visible `directory-tree` transactions and FSA reservation/settlement |
 | `src/output/workspace/`, `src/output/origin-private/` | Manifests, budgets, lifecycle/recovery, OPFS materialization, package, and publication |
 | `src/output/zip-layout/`, `src/output/streams/`, `src/output/portable/` | Exact store-ZIP policy/writer and bounded browser handoff |
-| `src/output/browser/`, `src/output/resume/` | IndexedDB v6 repository, operation leases, and retained-operation inventory |
+| `src/output/browser/`, `src/output/resume/` | IndexedDB v8 repository, operation leases, compatible-name ledger, and retained-operation inventory |
 | `src/preview/` | Image and MP4 range preview over the shared broker |
 | `src/ui/` | Progressive browser UI and immediate capability-fragment erasure |
 | `src/unicode/` | Pinned Unicode 15 normalization and full-fold tables |
@@ -67,6 +82,10 @@ make web
 make browser
 pnpm -C web test:browser:contract:short
 ```
+
+On Windows, run the production restoration primitive contract with
+`powershell.exe -NoProfile -File .\scripts\ci\windows\browser-compatible-name-restoration.tests.ps1`
+from the repository root.
 
 `make web` runs ESLint, the TypeScript/Vite production build, and Vitest.
 `make browser` runs the direct current-platform Chromium product smoke followed by the

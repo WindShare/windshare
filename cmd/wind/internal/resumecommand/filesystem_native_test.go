@@ -59,7 +59,7 @@ func TestFilesystemResumeInventoryRestartsAndDiscardsExactOperationWithoutDeleti
 	if !ok {
 		t.Fatal("operation omitted its named destination reservation")
 	}
-	foreignPath := filepath.Join(root, reservation.ReservedName(), "foreign.txt")
+	foreignPath := filepath.Join(root, reservation.PhysicalName(), "foreign.txt")
 	foreignContent := []byte("foreign content must survive discard")
 	if err := os.WriteFile(foreignPath, foreignContent, 0o600); err != nil {
 		t.Fatal(err)

@@ -1,8 +1,13 @@
+import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
 import type { V2OutputPresentationSnapshot } from './v2-output'
 import type {
   V2RetainedReceiveAction,
   V2RetainedReceiveOperation,
 } from './v2-receive-runtime'
+
+export type V2RetainedReceivePresentationOperation = Readonly<
+  V2RetainedReceiveOperation & { readonly repairSummary?: CompatibleNameRepairSummary }
+>
 
 /** Shell navigation is separate from the receive lifecycle owned by W2-E. */
 export type V2ReceiverPhase = 'awaiting-key' | 'joining' | 'browsing' | 'failed'
@@ -80,19 +85,19 @@ export interface V2PendingRetainedReceiveActionSnapshot {
 export type V2RetainedReceiveInventorySnapshot =
   | Readonly<{
       kind: 'loading'
-      operations: readonly V2RetainedReceiveOperation[]
+      operations: readonly V2RetainedReceivePresentationOperation[]
       error: null
       pending: null
     }>
   | Readonly<{
       kind: 'ready'
-      operations: readonly V2RetainedReceiveOperation[]
+      operations: readonly V2RetainedReceivePresentationOperation[]
       error: null
       pending: V2PendingRetainedReceiveActionSnapshot | null
     }>
   | Readonly<{
       kind: 'failed'
-      operations: readonly V2RetainedReceiveOperation[]
+      operations: readonly V2RetainedReceivePresentationOperation[]
       error: string
       pending: null
     }>

@@ -8,6 +8,7 @@ import {
   nextReceiveLifecycleState,
   type ReceiveLifecycleState,
 } from '../../src/output/workspace'
+import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import {
   materializationRouteIdentity,
   offerArtifacts,
@@ -36,6 +37,7 @@ import {
   ActiveReceiveCoordinator,
   type ActiveReceiveJoinedShare,
 } from '../../src/ui/controller/active-receive'
+import type { V2ActiveCompatibleNameRepairProjection } from '../../src/ui/controller/contracts'
 import type {
   LifecycleUserAction,
   V2ActiveReceiveControl,
@@ -111,12 +113,150 @@ describe('active receive result adoption', () => {
     expect(fixture.failures).toEqual([])
     await fixture.close()
   })
+
+  it('keeps one live repair notice updated and qualifies the first terminal publication', async () => {
+    const repair = new TestActiveRepairProjection()
+    repair.publish(repairSummary(0, [], 'active'))
+    const fixture = await resultAdoptionFixture('live', repair)
+
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
+      replacementCount: 0,
+      actionMode: 'abnormal-stop-recovery',
+      scriptName: 'restore-names.windshare-abc234.ps1',
+      sidecarName: 'restore-names.windshare-abc234.tsv',
+      runCommand: expect.stringContaining(
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File',
+      ),
+    })
+
+    const active = repairSummary(2, [
+      ['folder', 'pyvenv.cfg'],
+      ['folder', 'nested'],
+    ], 'active')
+    repair.publish(active)
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
+      replacementCount: 2,
+      logicalPathSample: ['folder/pyvenv.cfg', 'folder/nested'],
+      actionMode: 'abnormal-stop-recovery',
+    })
+
+    const publishedTitles: string[] = []
+    const unsubscribe = fixture.outputs.subscribe(() => {
+      const snapshot = fixture.outputs.getSnapshot()
+      if (snapshot.lifecycle?.kind === 'published') {
+        publishedTitles.push(snapshot.lifecyclePresentation?.title ?? '')
+      }
+    })
+    const terminalRepair = repairSummary(2, active.logicalPathSample, 'completed')
+    fixture.settleResult(Object.freeze({
+      worker: workerWithFileOutcome('destination-collision'),
+      lifecycle: publishedLifecycle(fixture.initialLifecycle),
+      measure: TRANSFER_MEASURE,
+      transferJobId: fixture.runtime.transferJobId,
+      intent: fixture.intent,
+      repairSummary: terminalRepair,
+    }))
+    await waitFor(() => fixture.outputs.getSnapshot().lifecycle?.kind === 'published')
+    unsubscribe()
+
+    expect(publishedTitles).not.toHaveLength(0)
+    expect(publishedTitles.every(title => title === 'Completed with compatible names')).toBe(true)
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
+      .toMatchObject({ actionMode: 'routine-restoration' })
+    expect(repair.subscriptionCount).toBe(1)
+    await fixture.close()
+    expect(repair.unsubscribed).toBe(true)
+  })
+
+  it('clears a live zero-count notice before publishing an ordinary empty-cleanup result', async () => {
+    const repair = new TestActiveRepairProjection()
+    repair.publish(repairSummary(0, [], 'active'))
+    const fixture = await resultAdoptionFixture('live', repair)
+    expect(fixture.outputs.getSnapshot().repairSummary?.committedCount).toBe(0)
+
+    const publishedSnapshots: Array<Readonly<{ title: string; hasRepair: boolean }>> = []
+    const unsubscribe = fixture.outputs.subscribe(() => {
+      const snapshot = fixture.outputs.getSnapshot()
+      if (snapshot.lifecycle?.kind === 'published') {
+        publishedSnapshots.push(Object.freeze({
+          title: snapshot.lifecyclePresentation?.title ?? '',
+          hasRepair: snapshot.repairSummary !== null,
+        }))
+      }
+    })
+    fixture.settleResult(Object.freeze({
+      worker: transferWorkerSettlement('Succeeded', new TransferFailureAccumulator().snapshot()),
+      lifecycle: publishedLifecycle(fixture.initialLifecycle),
+      measure: TRANSFER_MEASURE,
+      transferJobId: fixture.runtime.transferJobId,
+      intent: fixture.intent,
+    }))
+    await waitFor(() => fixture.outputs.getSnapshot().transferResultPresentation !== null)
+    unsubscribe()
+
+    expect(publishedSnapshots).not.toHaveLength(0)
+    expect(publishedSnapshots.every(snapshot =>
+      snapshot.title === 'Saved' && !snapshot.hasRepair)).toBe(true)
+    expect(fixture.outputs.getSnapshot()).toMatchObject({
+      repairSummary: null,
+      lifecyclePresentation: { compatibleNameRepair: null },
+      transferResultPresentation: { title: 'Transfer completed' },
+    })
+    await fixture.close()
+  })
+
+  it('keeps the restoration command labeled for abnormal stops while resumably paused', async () => {
+    const repair = new TestActiveRepairProjection()
+    repair.publish(repairSummary(1, [['folder', 'pyvenv.cfg']], 'active'))
+    const fixture = await resultAdoptionFixture('live', repair)
+
+    fixture.settle('destination-collision')
+    await waitFor(() => fixture.outputs.getSnapshot().lifecycle?.kind === 'resumable-receive')
+
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
+      replacementCount: 1,
+      actionMode: 'abnormal-stop-recovery',
+      actionTitle: 'Abnormal-stop recovery only',
+    })
+    await fixture.close()
+  })
+
+  it('adopts a repair projection activated by the first repaired descendant', async () => {
+    const fixture = await resultAdoptionFixture('live', undefined, true)
+    const repair = new TestActiveRepairProjection()
+    repair.publish(repairSummary(0, [], 'active'))
+
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toBeNull()
+    fixture.runtime.activateRepairProjection(repair)
+
+    expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
+      replacementCount: 0,
+      logicalPathSample: [],
+      actionMode: 'abnormal-stop-recovery',
+    })
+    expect(fixture.runtime.activationSubscriptionCount).toBe(1)
+    expect(repair.subscriptionCount).toBe(1)
+
+    fixture.settle('destination-collision')
+    await waitFor(() => fixture.outputs.getSnapshot().lifecycle?.kind === 'resumable-receive')
+    await fixture.close()
+    expect(fixture.runtime.activationUnsubscribed).toBe(true)
+    expect(repair.unsubscribed).toBe(true)
+  })
 })
 
-async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonly<{
+async function resultAdoptionFixture(
+  mode: 'live' | 'retained',
+  repairProjection?: V2ActiveCompatibleNameRepairProjection,
+  enableLateRepairActivation = false,
+): Promise<Readonly<{
   outputs: V2OutputPresentationController
   failures: unknown[]
   settle: (outcome: TransferFileOutcome) => void
+  settleResult: (result: TransferJobResult) => void
+  intent: ReceiveIntent
+  initialLifecycle: ReceiveLifecycleState
+  runtime: ResultRuntime
   close: () => Promise<void>
 }>> {
   const { outputs, intent, choice } = await preparedOutput()
@@ -130,7 +270,7 @@ async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonl
     outputs.adoptRetainedReceiveIntent(intent, lifecycle)
   }
 
-  const runtime = new ResultRuntime(intent, lifecycle)
+  const runtime = new ResultRuntime(intent, lifecycle, enableLateRepairActivation)
   const share = new ResultShare(intent)
   const failures: unknown[] = []
   const coordinator = new ActiveReceiveCoordinator({
@@ -144,11 +284,15 @@ async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonl
     joined: share,
     selection: new V2SelectionPolicy(true).snapshot(),
     runtime,
+    ...(repairProjection === undefined ? {} : { repairProjection }),
   })
 
   return Object.freeze({
     outputs,
     failures,
+    intent,
+    initialLifecycle: lifecycle,
+    runtime,
     settle: outcome => {
       share.resolve(Object.freeze({
         worker: workerWithFileOutcome(outcome),
@@ -158,6 +302,7 @@ async function resultAdoptionFixture(mode: 'live' | 'retained'): Promise<Readonl
         intent,
       }))
     },
+    settleResult: result => share.resolve(result),
     close: () => coordinator.reset(new DOMException('test completed', 'AbortError')),
   })
 }
@@ -279,12 +424,39 @@ class ResultRuntime implements V2BoundReceiveOperation {
   readonly transferJobId = identity(20)
   readonly activeControls = Object.freeze([] as const)
   readonly initialWorkspaceUsage = null
+  readonly subscribeRepairProjectionActivation?: NonNullable<
+    V2BoundReceiveOperation['subscribeRepairProjectionActivation']
+  >
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
+  #repairActivationListener:
+    ((source: V2ActiveCompatibleNameRepairProjection) => void) | undefined
+  activationSubscriptionCount = 0
+  activationUnsubscribed = false
 
-  constructor(intent: ReceiveIntent, lifecycle: ReceiveLifecycleState) {
+  constructor(
+    intent: ReceiveIntent,
+    lifecycle: ReceiveLifecycleState,
+    enableLateRepairActivation: boolean,
+  ) {
     this.intent = intent
     this.lifecycle = lifecycle
+    if (enableLateRepairActivation) {
+      this.subscribeRepairProjectionActivation = listener => {
+        this.activationSubscriptionCount += 1
+        this.#repairActivationListener = listener
+        return () => {
+          if (this.#repairActivationListener === listener) {
+            this.#repairActivationListener = undefined
+          }
+          this.activationUnsubscribed = true
+        }
+      }
+    }
+  }
+
+  activateRepairProjection(source: V2ActiveCompatibleNameRepairProjection): void {
+    this.#repairActivationListener?.(source)
   }
 
   interrupt(
@@ -349,6 +521,55 @@ function resumableLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleSta
     completedBytes: 0n,
     expiresAt: Date.now() + 60_000,
   })
+}
+
+function publishedLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleState {
+  return nextReceiveLifecycleState(initial, {
+    kind: 'published',
+    receiptDigest: identity(31, 32),
+    cleanupState: 'clean',
+  })
+}
+
+function repairSummary(
+  committedCount: number,
+  logicalPathSample: readonly (readonly string[])[],
+  footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
+): CompatibleNameRepairSummary {
+  return Object.freeze({
+    committedCount,
+    logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
+    pairDisplayNames: Object.freeze({
+      script: 'restore-names.windshare-abc234.ps1',
+      sidecar: 'restore-names.windshare-abc234.tsv',
+    }),
+    placement: 'inside-logical-root',
+    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
+    latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
+    pendingCatchUp: false,
+  })
+}
+
+class TestActiveRepairProjection implements V2ActiveCompatibleNameRepairProjection {
+  #listener: ((summary: CompatibleNameRepairSummary) => void) | undefined
+  #current: CompatibleNameRepairSummary | undefined
+  subscriptionCount = 0
+  unsubscribed = false
+
+  subscribe(listener: (summary: CompatibleNameRepairSummary) => void): () => void {
+    this.subscriptionCount += 1
+    this.#listener = listener
+    if (this.#current !== undefined) listener(this.#current)
+    return () => {
+      if (this.#listener === listener) this.#listener = undefined
+      this.unsubscribed = true
+    }
+  }
+
+  publish(summary: CompatibleNameRepairSummary): void {
+    this.#current = summary
+    this.#listener?.(summary)
+  }
 }
 
 function unavailableExecution(): Promise<never> {

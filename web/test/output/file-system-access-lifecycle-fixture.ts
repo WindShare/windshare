@@ -9,6 +9,7 @@ import {
   type DirectoryTreeArtifact,
   type DirectTreePlan,
   type ReceiveIntent,
+  type SelectionSpec,
 } from '../../src/transfer/intent'
 import type { DirectoryAdmission } from '../../src/transfer/directory-admission'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
@@ -20,6 +21,8 @@ import {
 import {
   prepareFSAOperationBindingTransition,
   verifyFSAOperationBinding,
+  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT,
+  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR,
 } from '../../src/output/browser/indexeddb-root-binding'
 import {
   assembleNewFileSystemAccessOutput,
@@ -30,6 +33,20 @@ import {
   type FileSystemAccessOutputSession,
 } from '../../src/output/file-system-access/session'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
+import type {
+  CompatibleNameActivationLedger,
+  CompatibleNameRootRepairFactory,
+} from '../../src/output/file-system-access/compatible-name/coordinator'
+import {
+  compatibleNameMappingV1,
+  compatibleNameOperationBootstrapV1,
+  compatibleNameOperationHeaderV1,
+  compatibleNameRepairSummary,
+  type CompatibleNameMappingV1,
+  type CompatibleNameOperationHeaderV1,
+  type CompatibleNamePendingTerminalOutcomeV1,
+  type CompatibleNameRepairSummary,
+} from '../../src/output/file-system-access/compatible-name/model'
 import {
   discardReopenedFileSystemAccessOutput,
   type ReopenedFileSystemAccessDiscardOperation,
@@ -59,8 +76,12 @@ import {
 import type {
   FileCheckpointCandidateObservation,
 } from '../../src/output/persistent-tree/recovery'
+import type {
+  PersistentOutputStageDiagnostics,
+} from '../../src/output/persistent-tree/stage-diagnostics'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
+  receiveOperationHandleRecord,
   receiveOperationLeaseRecord,
   type PersistedReceiveRecord,
   type ReceiveOperationHandleRecord,
@@ -82,10 +103,20 @@ import {
 } from '../../src/transfer/outcome'
 import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
 import { identity } from './planning/fixture'
+import {
+  MemoryDirectory,
+} from './file-system-access-memory-fs'
+
+export {
+  MemoryDirectory,
+  MemoryFile,
+  type MemoryDirectoryLookup,
+} from './file-system-access-memory-fs'
 
 export const SIGNAL = new AbortController().signal
 export const SUCCESS = transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
 export const PAUSED = transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY)
+
 
 export interface FreshDiscardFixture {
   readonly parent: MemoryDirectory
@@ -93,7 +124,7 @@ export interface FreshDiscardFixture {
   readonly checkpointFactory: FSAFileCheckpointRepositoryFactory
   readonly locks: MemoryLockManager
   readonly intent: ReceiveIntent
-  readonly reservationName: string
+  readonly physicalName: string
   readonly leaseId: string
   readonly operation: ReopenedFileSystemAccessDiscardOperation
   retired(): number
@@ -156,7 +187,7 @@ export async function freshDiscardFixture(input: Readonly<{
     fileRevision: identity(input.seed + 10),
     artifactPath: input.successfulFile
       ? ['unfinished.bin']
-      : [session.reservation.reservedName],
+      : [session.reservation.requestedName],
     exactSize: 2n,
     ...(parentAdmission === undefined ? {} : { parentAdmission }),
   }), SIGNAL)
@@ -223,7 +254,7 @@ export async function freshDiscardFixture(input: Readonly<{
     checkpointFactory,
     locks,
     intent: session.intent,
-    reservationName: session.reservation.reservedName,
+    physicalName: session.reservation.physicalName,
     leaseId,
     operation,
     retired: () => retireCount,
@@ -240,8 +271,251 @@ export function discardFreshFixture(
     operation,
     lockManager: fixture.locks,
     checkpointRepositoryFactory: fixture.checkpointFactory,
+    openCompatibleNameLedger: async () => new AbsentCompatibleNameLedger(),
     clock: () => nowMilliseconds,
   })
+}
+
+export function absentCompatibleNameLedgerFactory(): Promise<CompatibleNameActivationLedger> {
+  return Promise.resolve(new AbsentCompatibleNameLedger())
+}
+
+class AbsentCompatibleNameLedger implements CompatibleNameActivationLedger {
+  async readHeader(): Promise<undefined> { return undefined }
+  async loadOperation(): Promise<undefined> { return undefined }
+  async bootstrapOperation(): Promise<never> { throw new Error('unexpected compatible bootstrap') }
+  async claimMapping(): Promise<never> { throw new Error('unexpected compatible mapping') }
+  async recordPairOwnership(): Promise<never> { throw new Error('unexpected pair ownership') }
+  async recordCompatibleTargetCreated(): Promise<never> { throw new Error('unexpected target activation') }
+  async recordVerifiedDirectoryOwnership(): Promise<never> {
+    throw new Error('unexpected directory ownership')
+  }
+  async commitMapping(): Promise<never> { throw new Error('unexpected compatible commit') }
+  async scanCommittedMappings(): Promise<readonly never[]> { return Object.freeze([]) }
+  async persistRepairSummary(): Promise<never> { throw new Error('unexpected compatible summary') }
+  async persistPendingTerminalOutcome(): Promise<never> { throw new Error('unexpected terminal outcome') }
+  async readPendingTerminalOutcome(): Promise<undefined> { return undefined }
+  async clearPendingTerminalOutcome(): Promise<never> { throw new Error('unexpected terminal clear') }
+  async readRepairSummary(): Promise<undefined> { return undefined }
+  async removeVerifiedEmptyOperation(): Promise<never> { throw new Error('unexpected repair cleanup') }
+  close(): void {}
+}
+
+export class MemoryCompatibleNameLedger implements CompatibleNameActivationLedger {
+  header: CompatibleNameOperationHeaderV1 | undefined
+  readonly mappings = new Map<string, CompatibleNameMappingV1>()
+  closeCount = 0
+  #nextOrdinal = 1
+  readonly #repository: MemoryOperationRepository
+
+  constructor(repository: MemoryOperationRepository) {
+    this.#repository = repository
+  }
+
+  async readHeader(operationId: string): Promise<CompatibleNameOperationHeaderV1 | undefined> {
+    return this.header?.operationId === operationId ? this.header : undefined
+  }
+
+  async loadOperation(operationId: string) {
+    if (this.header?.operationId !== operationId) return undefined
+    return Object.freeze({
+      header: this.header,
+      mappings: Object.freeze([...this.mappings.values()]),
+    })
+  }
+
+  async bootstrapOperation(input: Parameters<
+    CompatibleNameActivationLedger['bootstrapOperation']
+  >[0]) {
+    const bootstrap = compatibleNameOperationBootstrapV1(input)
+    if (this.header !== undefined) throw new Error('memory compatible operation already exists')
+    this.header = bootstrap.header
+    this.mappings.set(bootstrap.initialMapping.id, bootstrap.initialMapping)
+    return (await this.loadOperation(bootstrap.header.operationId))!
+  }
+
+  async claimMapping(input: Parameters<CompatibleNameActivationLedger['claimMapping']>[0]) {
+    const mapping = compatibleNameMappingV1(input)
+    const existing = this.mappings.get(mapping.id)
+    if (existing !== undefined) return existing
+    this.mappings.set(mapping.id, mapping)
+    return mapping
+  }
+
+  async recordPairOwnership(input: Parameters<
+    CompatibleNameActivationLedger['recordPairOwnership']
+  >[0]) {
+    const header = this.#requireHeader(input.operationId)
+    const identity = header.pair[input.pairKind]
+    const kind = input.pairKind === 'script'
+      ? FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT
+      : FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR
+    await this.#repository.commitTransition({
+      operationId: input.operationId,
+      handles: [receiveOperationHandleRecord({
+        id: identity.handleId,
+        operationId: input.operationId,
+        kind,
+        authorityRef: header.authorityRef,
+        ownedObjectId: identity.ownedObjectId,
+        handle: input.handle,
+      })],
+    })
+    const pair = Object.freeze({
+      ...header.pair,
+      [input.pairKind]: Object.freeze({ ...identity, ownershipState: 'owned' as const }),
+    })
+    this.header = compatibleNameOperationHeaderV1({
+      ...header,
+      pair,
+      activationState: pair.script.ownershipState === 'owned' &&
+        pair.sidecar.ownershipState === 'owned' ? 'pair-ready' : 'prepared',
+    })
+    return this.header
+  }
+
+  async recordCompatibleTargetCreated(input: Parameters<
+    CompatibleNameActivationLedger['recordCompatibleTargetCreated']
+  >[0]) {
+    const header = this.#requireHeader(input.operationId)
+    this.#mapping(input.operationId, input.logicalPath, input.entryKind)
+    if (header.activationState === 'active') return header
+    this.header = compatibleNameOperationHeaderV1({
+      ...header,
+      activationState: 'active',
+      repairSummary: input.repairSummary,
+    })
+    return this.header
+  }
+
+  async recordVerifiedDirectoryOwnership(input: Parameters<
+    CompatibleNameActivationLedger['recordVerifiedDirectoryOwnership']
+  >[0]) {
+    const mapping = this.#mapping(input.operationId, input.logicalPath, input.entryKind)
+    const owned = compatibleNameMappingV1({
+      ...mapping,
+      ownershipState: 'owned',
+      ownedObjectId: input.ownedObjectId,
+    })
+    this.mappings.set(owned.id, owned)
+    return owned
+  }
+
+  async commitMapping(input: Parameters<CompatibleNameActivationLedger['commitMapping']>[0]) {
+    const mapping = this.#mapping(input.operationId, input.logicalPath, input.entryKind)
+    if (mapping.commitState === 'committed') return mapping
+    const committed = compatibleNameMappingV1({
+      ...mapping,
+      ownershipState: 'owned',
+      ownedObjectId: input.ownedObjectId,
+      commitState: 'committed',
+      commitOrdinal: this.#nextOrdinal++,
+    })
+    this.mappings.set(committed.id, committed)
+    this.header = compatibleNameOperationHeaderV1({
+      ...this.#requireHeader(input.operationId),
+      ...(this.header?.repairSummary === undefined
+        ? {}
+        : {
+            repairSummary: compatibleNameRepairSummary({
+              ...this.header.repairSummary,
+              committedCount: committed.commitOrdinal!,
+              logicalPathSample: this.header.repairSummary.logicalPathSample.length === 0
+                ? [committed.logicalPath]
+                : this.header.repairSummary.logicalPathSample,
+              pendingCatchUp: true,
+            }),
+          }),
+    })
+    return committed
+  }
+
+  async scanCommittedMappings(operationId: string, afterOrdinal = 0) {
+    this.#requireHeader(operationId)
+    return Object.freeze([...this.mappings.values()]
+      .filter(mapping => (mapping.commitOrdinal ?? 0) > afterOrdinal)
+      .sort((left, right) => left.commitOrdinal! - right.commitOrdinal!))
+  }
+
+  async persistRepairSummary(
+    operationId: string,
+    summary: CompatibleNameRepairSummary,
+  ): Promise<CompatibleNameOperationHeaderV1> {
+    this.header = compatibleNameOperationHeaderV1({
+      ...this.#requireHeader(operationId),
+      repairSummary: summary,
+    })
+    return this.header
+  }
+
+  async persistPendingTerminalOutcome(input: {
+    operationId: string
+    outcome: CompatibleNamePendingTerminalOutcomeV1
+    repairSummary: CompatibleNameRepairSummary
+  }): Promise<CompatibleNameOperationHeaderV1> {
+    this.header = compatibleNameOperationHeaderV1({
+      ...this.#requireHeader(input.operationId),
+      pendingTerminalOutcome: input.outcome,
+      repairSummary: input.repairSummary,
+    })
+    return this.header
+  }
+
+  async readPendingTerminalOutcome(
+    operationId: string,
+  ): Promise<CompatibleNamePendingTerminalOutcomeV1 | undefined> {
+    return this.#requireHeader(operationId).pendingTerminalOutcome
+  }
+
+  async clearPendingTerminalOutcome(input: {
+    operationId: string
+    repairSummary: CompatibleNameRepairSummary
+  }): Promise<CompatibleNameOperationHeaderV1> {
+    const header = { ...this.#requireHeader(input.operationId), repairSummary: input.repairSummary }
+    delete header.pendingTerminalOutcome
+    this.header = compatibleNameOperationHeaderV1(header)
+    return this.header
+  }
+
+  async readRepairSummary(operationId: string): Promise<CompatibleNameRepairSummary | undefined> {
+    return this.#requireHeader(operationId).repairSummary
+  }
+
+  async removeVerifiedEmptyOperation(
+    expectedHeader: CompatibleNameOperationHeaderV1,
+  ): Promise<void> {
+    if (this.header === undefined) return
+    const committed = [...this.mappings.values()].filter(mapping => mapping.commitState === 'committed')
+    if (this.header.operationId !== expectedHeader.operationId || committed.length !== 0) {
+      throw new Error('memory compatible repair is not empty')
+    }
+    await this.#repository.commitTransition({
+      operationId: expectedHeader.operationId,
+      deleteHandleIds: [expectedHeader.pair.script.handleId, expectedHeader.pair.sidecar.handleId],
+    })
+    this.mappings.clear()
+    this.header = undefined
+  }
+
+  close(): void { this.closeCount += 1 }
+
+  #requireHeader(operationId: string): CompatibleNameOperationHeaderV1 {
+    if (this.header?.operationId !== operationId) throw new Error('memory compatible header is missing')
+    return this.header
+  }
+
+  #mapping(
+    operationId: string,
+    logicalPath: readonly string[],
+    entryKind: 'file' | 'directory',
+  ): CompatibleNameMappingV1 {
+    const mapping = [...this.mappings.values()].find(value =>
+      value.operationId === operationId && value.entryKind === entryKind &&
+      value.logicalPath.length === logicalPath.length &&
+      value.logicalPath.every((component, index) => component === logicalPath[index]))
+    if (mapping === undefined) throw new Error('memory compatible mapping is missing')
+    return mapping
+  }
 }
 
 export async function persistFreshFixtureExpiry(
@@ -291,10 +565,14 @@ export async function bindTask(input: Readonly<{
   locks: MemoryLockManager
   artifact: DirectoryTreeArtifact
   operationSeed: number
+  selection?: SelectionSpec
   activate?: boolean
+  prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
+  openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
+  stageDiagnostics?: PersistentOutputStageDiagnostics
   trace?: (event: FSAOutputTraceEvent) => void
 }>) {
-  const selection = await selectionSpec()
+  const selection = input.selection ?? await selectionSpec()
   const authority = acquiredParent(input.parent)
   const rootLease = await acquireFSARootMutationLease(
     input.parent as unknown as FileSystemDirectoryHandle,
@@ -307,6 +585,9 @@ export async function bindTask(input: Readonly<{
     operationId: identity(input.operationSeed),
     reservationId: identity(input.operationSeed + 1),
     authorityRef: identity(input.operationSeed + 2, 32),
+    ...(input.prepareCompatibleNameRootRepair === undefined
+      ? {}
+      : { prepareCompatibleNameRootRepair: input.prepareCompatibleNameRootRepair }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
   })
   const intent = await createReceiveIntent({
@@ -330,6 +611,27 @@ export async function bindTask(input: Readonly<{
     operationRepository: input.repository,
     rootLease,
     checkpointRepositoryFactory: input.checkpointFactory,
+    ...(input.openCompatibleNameLedger === undefined
+      ? {}
+      : { openCompatibleNameLedger: input.openCompatibleNameLedger }),
+    ...(input.openCompatibleNameLedger === undefined
+      ? {}
+      : {
+          compatibleNamePreparation: {
+            platform: 'windows',
+            templateProvider: {
+              select: () => Object.freeze({
+                id: 'windows-powershell-v1',
+                scriptFileExtension: '.ps1',
+                source: '# test restoration script\n',
+              }),
+            },
+            randomBits: () => 0,
+          },
+        }),
+    ...(input.stageDiagnostics === undefined
+      ? {}
+      : { stageDiagnostics: input.stageDiagnostics }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
   })
   if (input.activate !== false) await session.activate()
@@ -828,151 +1130,4 @@ function scanRecords(
       ? { nextCursor: page.at(-1)!.recordId }
       : {}),
   })
-}
-
-export class MemoryDirectory {
-  readonly kind = 'directory' as const
-  readonly name: string
-  readonly #token = crypto.randomUUID()
-  readonly #entries = new Map<string, MemoryDirectory | MemoryFile>()
-  onFileCreated: (() => void) | undefined
-  onRemoveEntry: ((name: string) => Promise<void>) | undefined
-
-  constructor(name: string) {
-    this.name = name
-  }
-
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return (other as MemoryDirectory).#token === this.#token
-  }
-
-  async queryPermission(): Promise<PermissionState> {
-    return 'granted'
-  }
-
-  async requestPermission(): Promise<PermissionState> {
-    return 'granted'
-  }
-
-  async getDirectoryHandle(
-    name: string,
-    options?: FileSystemGetDirectoryOptions,
-  ): Promise<FileSystemDirectoryHandle> {
-    const existing = this.#entries.get(name)
-    if (existing instanceof MemoryDirectory) return existing as unknown as FileSystemDirectoryHandle
-    if (existing !== undefined) throw domError('TypeMismatchError')
-    if (options?.create !== true) throw domError('NotFoundError')
-    const created = new MemoryDirectory(name)
-    this.#entries.set(name, created)
-    return created as unknown as FileSystemDirectoryHandle
-  }
-
-  async getFileHandle(
-    name: string,
-    options?: FileSystemGetFileOptions,
-  ): Promise<FileSystemFileHandle> {
-    const existing = this.#entries.get(name)
-    if (existing instanceof MemoryFile) return existing as unknown as FileSystemFileHandle
-    if (existing !== undefined) throw domError('TypeMismatchError')
-    if (options?.create !== true) throw domError('NotFoundError')
-    const created = new MemoryFile(name)
-    this.#entries.set(name, created)
-    this.onFileCreated?.()
-    return created as unknown as FileSystemFileHandle
-  }
-
-  async removeEntry(name: string): Promise<void> {
-    await this.onRemoveEntry?.(name)
-    if (!this.#entries.delete(name)) throw domError('NotFoundError')
-  }
-
-  async *entries(): AsyncIterableIterator<[string, FileSystemHandle]> {
-    for (const [name, handle] of [...this.#entries]) {
-      yield [name, handle as unknown as FileSystemHandle]
-    }
-  }
-
-  directoryNames(): string[] {
-    return [...this.#entries.entries()]
-      .filter((entry): entry is [string, MemoryDirectory] => entry[1] instanceof MemoryDirectory)
-      .map(([name]) => name)
-      .sort()
-  }
-
-  fileNames(): string[] {
-    return [...this.#entries.entries()]
-      .filter((entry): entry is [string, MemoryFile] => entry[1] instanceof MemoryFile)
-      .map(([name]) => name)
-      .sort()
-  }
-
-  entryNames(): string[] {
-    return [...this.#entries.keys()].sort()
-  }
-
-  async fileBytes(name: string): Promise<Uint8Array> {
-    const file = this.#entries.get(name)
-    if (!(file instanceof MemoryFile)) throw new Error('memory file is missing')
-    return file.bytes()
-  }
-
-  replaceFile(name: string, bytes: Uint8Array): MemoryFile {
-    const file = new MemoryFile(name, Uint8Array.from(bytes))
-    this.#entries.set(name, file)
-    return file
-  }
-}
-
-export class MemoryFile {
-  readonly kind = 'file' as const
-  readonly name: string
-  readonly #token = crypto.randomUUID()
-  #bytes: Uint8Array
-
-  constructor(name: string, bytes = new Uint8Array()) {
-    this.name = name
-    this.#bytes = bytes.slice()
-  }
-
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other instanceof MemoryFile && other.#token === this.#token
-  }
-
-  async getFile(): Promise<File> {
-    const copy = new Uint8Array(this.#bytes.byteLength)
-    copy.set(this.#bytes)
-    return new Blob([copy.buffer]) as File
-  }
-
-  async createWritable(
-    options?: FileSystemCreateWritableOptions,
-  ): Promise<FileSystemWritableFileStream> {
-    if (options?.keepExistingData !== true) this.#bytes = new Uint8Array()
-    return {
-      write: async (data: FileSystemWriteChunkType) => {
-        if (typeof data !== 'object' || data === null || !('type' in data) || data.type !== 'write') {
-          throw new TypeError('memory writer requires positioned writes')
-        }
-        const command = data as WriteParams
-        if (!(command.data instanceof Uint8Array)) {
-          throw new TypeError('memory writer accepts Uint8Array writes')
-        }
-        const position = Number(command.position ?? 0)
-        const source = command.data
-        const next = new Uint8Array(Math.max(this.#bytes.byteLength, position + source.byteLength))
-        next.set(this.#bytes)
-        next.set(source, position)
-        this.#bytes = next
-      },
-      close: async () => {},
-    } as unknown as FileSystemWritableFileStream
-  }
-
-  async bytes(): Promise<Uint8Array> {
-    return this.#bytes.slice()
-  }
-}
-
-function domError(name: string): DOMException {
-  return new DOMException(name, name)
 }

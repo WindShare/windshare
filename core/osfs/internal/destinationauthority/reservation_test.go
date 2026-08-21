@@ -30,7 +30,8 @@ func TestReservedEntryAliasesOnlyLogicalTopLevelComponent(t *testing.T) {
 		t.Fatal(err)
 	}
 	entry, err := NewReservedEntry(reservation)
-	if err != nil || entry.PreferredName() != "file.txt" || entry.ReservedName() != reservedName ||
+	if err != nil || entry.RequestedName() != "file.txt" || entry.LogicalReservedName() != reservedName ||
+		entry.PhysicalName() != reservedName ||
 		entry.CollisionIndex() != 1 || entry.EntryKind() != receivecontract.ContainerEntrySingleFile {
 		t.Fatalf("reserved entry = %+v, %v", entry, err)
 	}

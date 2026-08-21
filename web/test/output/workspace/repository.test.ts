@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
-  INDEXEDDB_V7_STORE_SCHEMAS,
+  INDEXEDDB_V8_STORE_SCHEMAS,
 } from '../../../src/output/browser/indexeddb-database'
 import {
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
@@ -21,10 +21,10 @@ import {
   storedReceiveLifecycleState,
 } from '../../../src/output/workspace/state-codec'
 
-describe('IndexedDB v7 operation repository contract', () => {
-  it('adds bounded global activation enumeration without changing operation stores', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(7)
-    expect(INDEXEDDB_V7_STORE_SCHEMAS).toEqual([
+describe('IndexedDB v8 operation repository contract', () => {
+  it('adds isolated compatible-name stores without overloading operation records', () => {
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(8)
+    expect(INDEXEDDB_V8_STORE_SCHEMAS).toEqual([
       schema('file-checkpoint-v2-candidates', [
         ['by-operation', 'operationId'],
         ['by-operation-file', ['operationId', 'fileId']],
@@ -55,6 +55,11 @@ describe('IndexedDB v7 operation repository contract', () => {
         ['by-operation-kind', ['operationId', 'kind']],
       ]),
       schema('receive-operation-v1-leases', [['by-operation', 'operationId']]),
+      schema('compatible-name-v1-operations', [], 'operationId'),
+      schema('compatible-name-v1-mappings', [
+        ['by-operation', 'operationId'],
+        ['by-operation-commit-ordinal', ['operationId', 'commitOrdinal']],
+      ]),
     ])
   })
 
@@ -147,9 +152,11 @@ describe('IndexedDB v7 operation repository contract', () => {
 function schema(
   name: string,
   indexes: readonly (readonly [string, string | readonly string[]])[],
+  keyPath = 'id',
 ) {
   return {
     name,
+    keyPath,
     indexes: indexes.map(([indexName, keyPath]) => ({ name: indexName, keyPath })),
   }
 }

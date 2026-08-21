@@ -42,6 +42,8 @@ import {
 import { snapshotIdentity } from '../workspace/canonical'
 import { RECEIVE_STATE_INTENT_FROZEN } from '../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
+import type { CompatibleNameOperationBootstrapV1 } from '../file-system-access/compatible-name/model'
+import type { FSACompatibleNameBootstrapRepository } from './indexeddb-root-binding'
 import {
   prepareReceiveOperationTransition,
   type ReceiveOperationRepository,
@@ -59,6 +61,8 @@ import {
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+  INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
+  INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
   INDEXEDDB_RECEIVE_HANDLE_STORE,
   INDEXEDDB_RECEIVE_LEASE_STORE,
   INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
@@ -68,6 +72,11 @@ import {
   requestResult,
   transactionCompletion,
 } from './indexeddb-database'
+import {
+  applyCompatibleNameBootstrapTransaction,
+  assertCompatibleNameBootstrapTransaction,
+  assertCompatibleNameBootstrapTransition,
+} from './indexeddb-compatible-name-ledger'
 import {
   applyOperationTransition,
   abortConcurrency,
@@ -496,7 +505,8 @@ function abortQuietly(transaction: IDBTransaction): void {
 export class IndexedDbReceiveOperationRepository
 implements ReceiveOperationRepository,
   ReceiveOperationHandleInventoryRepository,
-  WorkspaceActivationJournalRepository {
+  WorkspaceActivationJournalRepository,
+  FSACompatibleNameBootstrapRepository {
   readonly #database: IDBDatabase
   #closed = false
 
@@ -526,6 +536,37 @@ implements ReceiveOperationRepository,
     await assertOperationMutationOwnership(transaction, prepared)
     applyOperationTransition(transaction, prepared)
     await transactionCompletion(transaction)
+  }
+
+  async commitFSACompatibleNameBootstrap(input: Readonly<{
+    transition: ReceiveOperationTransition
+    bootstrap: CompatibleNameOperationBootstrapV1
+  }>): Promise<void> {
+    this.#assertOpen()
+    const prepared = await prepareReceiveOperationTransition(input.transition)
+    const bootstrap = assertCompatibleNameBootstrapTransition(prepared, input.bootstrap)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_RECEIVE_RECORD_STORE,
+      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
+      INDEXEDDB_RECEIVE_HANDLE_STORE,
+      INDEXEDDB_RECEIVE_LEASE_STORE,
+      INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
+      INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
+    ], 'readwrite')
+    try {
+      await assertOperationConcurrency(transaction, prepared)
+      await assertOperationMutationOwnership(transaction, prepared)
+      const insertBootstrap = await assertCompatibleNameBootstrapTransaction(
+        transaction,
+        bootstrap,
+      )
+      applyOperationTransition(transaction, prepared)
+      if (insertBootstrap) applyCompatibleNameBootstrapTransaction(transaction, bootstrap)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

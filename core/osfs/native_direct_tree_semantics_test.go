@@ -230,7 +230,7 @@ func nativeDirectTreeResultRoot(
 	if !ok || reservation.EntryKind() != receivecontract.ContainerEntryResultRoot {
 		t.Fatal("native result-root reservation is missing")
 	}
-	return filepath.Join(root, reservation.ReservedName())
+	return filepath.Join(root, reservation.PhysicalName())
 }
 
 func nativeDirectTreePublicNames(t *testing.T, root string) []string {

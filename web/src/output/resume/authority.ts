@@ -41,6 +41,10 @@ export interface ReceiveOperationMutationPort<TResult = unknown> {
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult>
+  catchUp?(
+    descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult>
 }
 
 interface ResumeReferenceOwner {
@@ -135,6 +139,23 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   ): Promise<ReceiveOperationDiscardResult> {
     const descriptor = this.#consume(reference)
     return this.#mutations.discard(descriptor, failures)
+  }
+
+  async catchUp(
+    reference: ReceiveOperationResumeRef,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult> {
+    const descriptor = this.#consume(reference)
+    if (descriptor.continuation !== 'pending-catch-up' &&
+        descriptor.continuation !== 'restoration-available' &&
+        descriptor.continuation !== 'retry-cleanup') {
+      throw new DOMException('Receive operation has no terminal catch-up authority', 'InvalidStateError')
+    }
+    const catchUp = this.#mutations.catchUp
+    if (catchUp === undefined) {
+      throw new DOMException('Terminal catch-up authority is unavailable', 'NotSupportedError')
+    }
+    return catchUp(descriptor, failures)
   }
 
   #consume(reference: ReceiveOperationResumeRef): ReceiveOperationResumeDescriptor {

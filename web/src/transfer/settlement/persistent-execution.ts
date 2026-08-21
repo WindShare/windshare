@@ -2,10 +2,12 @@ import type { FinalFileCheckpointProof } from '../../output/persistence/journal'
 import type {
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
+  PersistentOutputNamespaceClaimPort,
 } from '../../output/persistent-tree/contracts'
 import type { MaterializedManifestEntry } from '../../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../../output/workspace/preparation'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import {
   createDirectoryAdmissionScope,
   validateDirectorySettlement,
@@ -23,6 +25,7 @@ import {
   outputCapabilities,
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
+  snapshotDirectoryMaterializationRequest,
   snapshotOutputFileRequest,
   type BeginOutputFileResult,
   type DirectTreeExecution,
@@ -39,6 +42,7 @@ import {
   type OutputSessionIdentity,
   type WorkspaceExecution,
 } from '../output-session'
+import { V2OutputPausedError } from '../job/contract'
 import {
   snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
@@ -89,7 +93,9 @@ export async function createPersistentDirectTreeExecution(input: {
   readonly materialization: PersistentMaterializationPort
   readonly outputIdentity: OutputSessionIdentity
   readonly settlement: PersistentDirectTreeSettlementAuthority
+  readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   readonly capabilities?: Partial<OutputCapabilities>
+  readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
 }): Promise<DirectTreeExecution> {
   const scope = await createDirectoryAdmissionScope(input.intent)
   const adapter = new PersistentMaterializationOutput({
@@ -101,22 +107,43 @@ export async function createPersistentDirectTreeExecution(input: {
       ...input.capabilities,
     }),
     directoryLedger: new DirectoryAdmissionLedger(scope),
+    ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
   })
+  let terminalSettlementInitiated = false
+  const stop = input.settlement.stop
   const execution: DirectTreeExecution = {
     planKind: 'direct-tree',
     output: adapter,
     directories: adapter.directories(),
+    ...(input.repairSummary === undefined ? {} : { repairSummary: input.repairSummary }),
+    terminalSettlementInitiated: () => terminalSettlementInitiated,
     pause: async (request, signal) => {
-      const cut = new PersistentSettlementCut(adapter.evidence(), () => adapter.close())
+      const cut = new PersistentSettlementCut(() => adapter.evidence(), () => adapter.close())
       const state = await input.settlement.pause(request, cut, signal)
       await cut.validateReturnedState(state)
       return state
     },
+    ...(stop === undefined ? {} : {
+      stop: async (request, signal) => {
+        terminalSettlementInitiated = true
+        const cut = new PersistentSettlementCut(() => {
+          const evidence = adapter.evidence()
+          requireMatchingMaterializationSummary(request, evidence)
+          return evidence
+        }, () => adapter.close())
+        const state = await stop(request, cut, signal)
+        await cut.validateReturnedState(state)
+        return state
+      },
+    }),
     settle: async (request, signal) => {
-      const evidence = adapter.evidence()
-      requireMatchingMaterializationSummary(request, evidence)
-      if (request.worker.status === 'Succeeded') requireCompleteDirectorySettlement(evidence)
-      const cut = new PersistentSettlementCut(evidence, () => adapter.close())
+      terminalSettlementInitiated = true
+      const cut = new PersistentSettlementCut(() => {
+        const evidence = adapter.evidence()
+        requireMatchingMaterializationSummary(request, evidence)
+        if (request.worker.status === 'Succeeded') requireCompleteDirectorySettlement(evidence)
+        return evidence
+      }, () => adapter.close())
       const state = await input.settlement.settle(request, cut, signal)
       await cut.validateReturnedState(state)
       return state
@@ -237,6 +264,7 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #materialization: PersistentMaterializationPort
   readonly #checkpointNamespace: PersistentCheckpointNamespaceEvidence
   readonly #directoryLedger: DirectoryAdmissionLedger | undefined
+  readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
   readonly #directoryPathByAdmission = new Map<string, readonly string[]>()
   readonly #directorySettlements = new Map<string, PersistentDirectorySettlementEvidence>()
@@ -248,12 +276,14 @@ class PersistentMaterializationOutput implements OutputSession {
     readonly outputIdentity: OutputSessionIdentity
     readonly capabilities: OutputCapabilities
     readonly directoryLedger?: DirectoryAdmissionLedger
+    readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   }) {
     this.#materialization = input.materialization
     this.#checkpointNamespace = Object.freeze({ ...input.checkpointNamespace })
     this.identity = outputSessionIdentity(input.outputIdentity)
     this.capabilities = outputCapabilities(input.capabilities)
     this.#directoryLedger = input.directoryLedger
+    this.#namespaceClaims = input.namespaceClaims
   }
 
   directories(): IncrementalDirectoryOutput {
@@ -261,21 +291,39 @@ class PersistentMaterializationOutput implements OutputSession {
     if (ledger === undefined) throw new TypeError('persistent output has no incremental directory authority')
     const directories: IncrementalDirectoryOutput = {
       admitDirectory: async (request, signal) => {
+        const snapshot = snapshotDirectoryMaterializationRequest(request)
         const admission = await ledger.admitDirectory(
-          request.source,
+          snapshot.source,
           signal,
           async () => {
-            const materialized = await this.#materialization.ensureDirectory(request.artifactPath)
+            if (this.#namespaceClaims !== undefined) {
+              if (snapshot.logicalSiblingMembership === undefined) {
+                throw new TypeError(
+                  'persistent namespace claims require authenticated logical-sibling membership',
+                )
+              }
+              this.#namespaceClaims.bindDirectoryNamespace(Object.freeze({
+                artifactPath: snapshot.artifactPath,
+                logicalSiblingMembership: snapshot.logicalSiblingMembership,
+              }))
+            }
+            const materialized = await this.#materialization
+              .ensureDirectory(snapshot.artifactPath)
+              .catch((cause: unknown) => {
+                // Directory writes need the same output-wide state-I/O boundary as file writes;
+                // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
+                throw new V2OutputPausedError('Persistent directory materialization failed', { cause })
+              })
             this.#recordDirectory({
               kind: 'directory',
-              artifactPath: request.artifactPath,
-              directoryId: request.source.directoryId,
-              generation: request.source.generation,
+              artifactPath: snapshot.artifactPath,
+              directoryId: snapshot.source.directoryId,
+              generation: snapshot.source.generation,
               ownedObjectId: materialized.ownedObjectId,
             })
           },
         )
-        const artifactPath = Object.freeze([...request.artifactPath])
+        const artifactPath = Object.freeze([...snapshot.artifactPath])
         const existingPath = this.#directoryPathByAdmission.get(admission.token)
         if (existingPath !== undefined && !samePath(existingPath, artifactPath)) {
           throw new TypeError('directory admission changed its materialized artifact path')
@@ -434,13 +482,32 @@ class PersistentMaterializationOutput implements OutputSession {
 
 class PersistentSettlementCut<Evidence extends PersistentMaterializationEvidence>
 implements PersistentMaterializationSettlementCut<Evidence> {
-  readonly evidence: Evidence
+  readonly #evidence: Evidence | (() => Evidence)
   readonly #close: () => Promise<void>
+  #snapshot: Evidence | undefined
+  #sealed = false
   #closePromise: Promise<void> | undefined
 
-  constructor(evidence: Evidence, close: () => Promise<void>) {
-    this.evidence = evidence
+  constructor(evidence: Evidence | (() => Evidence), close: () => Promise<void>) {
+    this.#evidence = evidence
     this.#close = close
+  }
+
+  get evidence(): Evidence {
+    return this.snapshotQuiescentEvidence()
+  }
+
+  snapshotQuiescentEvidence(): Evidence {
+    this.#snapshot ??= typeof this.#evidence === 'function'
+      ? (this.#evidence as () => Evidence)()
+      : this.#evidence
+    return this.#snapshot
+  }
+
+  sealEvidence(): Evidence {
+    const evidence = this.snapshotQuiescentEvidence()
+    this.#sealed = true
+    return evidence
   }
 
   closeMaterialization(): Promise<void> {
@@ -452,6 +519,7 @@ implements PersistentMaterializationSettlementCut<Evidence> {
     if (this.#closePromise === undefined) {
       throw new TypeError('persistent lifecycle settlement returned before closing materialization')
     }
+    if (!this.#sealed) this.sealEvidence()
     try {
       await this.#closePromise
     } catch (cause) {

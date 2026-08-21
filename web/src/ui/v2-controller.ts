@@ -158,6 +158,14 @@ export class V2ReceiverController {
       adoptContinuation: (input) => this.#adoptRetainedReceiveContinuation(input),
       ownsRuntime: (runtime) => this.#activeReceive.ownsRuntime(runtime),
       publish: (retained) => this.#publish({ ...this.#snapshot, retained }),
+      ...(options.receive.retained.readRepairSummary === undefined
+        ? {}
+        : {
+            repairSource: {
+              readRepairSummary: (operationId: string, signal: AbortSignal) =>
+                options.receive.retained.readRepairSummary!(operationId, signal),
+            },
+          }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       onActionError: (error) => this.#publishActionError(error),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
@@ -376,6 +384,9 @@ export class V2ReceiverController {
       joined,
       selection,
       runtime,
+      ...(runtime.repairProjection === undefined
+        ? {}
+        : { repairProjection: runtime.repairProjection }),
     })
     this.#outputs.adoptRetainedReceiveIntentAtomically(
       intent,
@@ -384,6 +395,7 @@ export class V2ReceiverController {
       Date.now(),
       runtime.initialWorkspaceUsage,
       runtime.activeControls,
+      input.retained.repairSummary,
     )
     prepared.start()
   }

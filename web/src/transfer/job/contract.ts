@@ -9,6 +9,7 @@ import type { V2BlockRangeReader, V2ContentLaneStatus } from '../../content/v2-b
 import type { V2RevisionReader } from '../../content/v2-session-services'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
+import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type {
   CanonicalModifiedTime,
@@ -25,6 +26,8 @@ import type {
   V2PlanExecutionAuthority,
 } from '../output-session'
 import { MAX_DIRECTORY_ADMISSIONS } from '../directory-admission-ledger'
+import type { V2OutputSettlementDeadline } from '../settlement/v2-output'
+import type { WorkerFamilyFailureSource } from '../worker-family/supervisor'
 
 export const V2_MAXIMUM_CONCURRENT_FILES = 4
 export const V2_MAXIMUM_CONCURRENT_DIRECTORIES = 4
@@ -152,6 +155,17 @@ export type TransferTraceEvent =
       failureCount: bigint
     }>
   | Readonly<{
+      name: 'receive_transition'
+      transition: 'worker_consequence_observed'
+      workerFamily: 'discovery' | 'prepared-files'
+      failureSource: WorkerFamilyFailureSource
+      operationId: string
+      transferJobId: string
+      protocolSessionId?: string
+      protocolGeneration?: number
+      outputSessionId?: string
+    }>
+  | Readonly<{
       name: 'transfer_progress'
       discoveredFiles: bigint
       discoveredBytes: bigint
@@ -176,6 +190,10 @@ export interface TransferJobOptions {
   readonly plans: V2PlanExecutionAuthority
   readonly intent: ReceiveIntent
   readonly transferJobId?: string
+  readonly protocol?: Readonly<{
+    readonly sessionId: string
+    readonly generation: number
+  }>
   readonly onProgress?: (progress: TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly trace?: DomainTraceSource<TransferTraceEvent>
@@ -188,6 +206,8 @@ export interface TransferJobOptions {
   readonly maximumDirectoryAdmissions?: number
   /** One terminal collaborator may consume at most this bounded settlement interval. */
   readonly outputSettlementTimeoutMilliseconds?: number
+  /** Injectable deadline ownership keeps terminal-cut concurrency tests independent of wall time. */
+  readonly outputSettlementDeadline?: V2OutputSettlementDeadline
 }
 
 export interface DirectoryCursor {
@@ -206,6 +226,16 @@ export interface AuthenticatedDirectory {
   readonly artifactPath: readonly string[]
   readonly modifiedTime?: CanonicalModifiedTime
   readonly admission?: DirectoryAdmission
+}
+
+/**
+ * Exact committed-generation authority for the logical children of one directory.
+ * Output backends may consult it only while evaluating an activated compatible-name candidate.
+ */
+export interface AuthenticatedLogicalSiblingMembership {
+  readonly directoryId: string
+  readonly generation: string
+  hasCommittedName(candidate: string): Promise<boolean>
 }
 
 export interface DirectoryWork {
@@ -227,6 +257,8 @@ export interface PendingFile {
 export interface TransferJobResult {
   readonly worker: TransferWorkerSettlement
   readonly lifecycle: ReceiveLifecycleState
+  /** Repair qualifies output independently, so ordinary lifecycle kinds remain canonical. */
+  readonly repairSummary?: CompatibleNameRepairSummary
   readonly measure: SelectionMeasure
   readonly abortReason?: unknown
   readonly failureTrigger?: ClassifiedTransferFailure

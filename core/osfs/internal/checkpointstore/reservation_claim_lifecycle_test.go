@@ -54,13 +54,14 @@ func resultRootReservationClaimFixture(
 		t.Fatal(err)
 	}
 	return destinationauthority.ReservationClaimSpec{
-		CanonicalNameKey: reservedName,
-		OperationID:      operation,
-		ReservationID:    reservationID,
-		EntryKind:        reservation.EntryKind(),
-		RequestedName:    reservation.RequestedName(),
-		ReservedName:     reservation.ReservedName(),
-		CollisionIndex:   collision,
+		CanonicalNameKey:    reservedName,
+		OperationID:         operation,
+		ReservationID:       reservationID,
+		EntryKind:           reservation.EntryKind(),
+		RequestedName:       reservation.RequestedName(),
+		LogicalReservedName: reservation.LogicalReservedName(),
+		PhysicalName:        reservation.PhysicalName(),
+		CollisionIndex:      collision,
 	}, reservation
 }
 

@@ -449,7 +449,8 @@ func TestOperationRegistryClaimSerializesDifferentActiveKeysAndPreservesUnknown(
 	second := ordinaryRegistryFixture(t, 0x41)
 	second.claimSpec.CanonicalNameKey = first.claimSpec.CanonicalNameKey
 	second.claimSpec.RequestedName = first.claimSpec.RequestedName
-	second.claimSpec.ReservedName = first.claimSpec.ReservedName
+	second.claimSpec.LogicalReservedName = first.claimSpec.LogicalReservedName
+	second.claimSpec.PhysicalName = first.claimSpec.PhysicalName
 
 	handle, outcome, err := registry.BeginReservation(first.claimSpec)
 	if err != nil || outcome != destinationauthority.ReservationMetadataClaimCommitted {
@@ -640,8 +641,10 @@ func ordinaryRegistryFixture(t *testing.T, fill byte) ordinaryRegistryTestFixtur
 	return ordinaryRegistryTestFixture{
 		intent: intent, key: key, reservation: reservation,
 		claimSpec: destinationauthority.ReservationClaimSpec{
-			CanonicalNameKey: reservation.ReservedName(), OperationID: intent.OperationID(), ReservationID: reservation.ID(),
-			EntryKind: reservation.EntryKind(), RequestedName: reservation.RequestedName(), ReservedName: reservation.ReservedName(), CollisionIndex: reservation.CollisionIndex(),
+			CanonicalNameKey: reservation.PhysicalName(), OperationID: intent.OperationID(), ReservationID: reservation.ID(),
+			EntryKind: reservation.EntryKind(), RequestedName: reservation.RequestedName(),
+			LogicalReservedName: reservation.LogicalReservedName(), PhysicalName: reservation.PhysicalName(),
+			CollisionIndex: reservation.CollisionIndex(),
 		},
 	}
 }

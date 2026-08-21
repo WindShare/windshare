@@ -269,6 +269,32 @@ describe('v2 catalog multi-receiver ownership', () => {
     second.close()
   })
 
+  it('exposes committed-generation name membership without refetching the directory', async () => {
+    const fixture = catalogVectorFixture()
+    const store = new MemoryV2CatalogPageStore()
+    let fetches = 0
+    const client = new V2CatalogClient({
+      descriptor: fixture.descriptor,
+      readSecret: fixture.readSecret,
+      operations: {
+        fetchPage: async () => {
+          fetches += 1
+          return fixture.catalogObject
+        },
+      },
+      store,
+    })
+    const committed = await client.loadDirectory(fixture.directoryId)
+    const firstPage = await client.page(committed, 0)
+    const firstName = firstPage.entries[0]?.name
+    if (firstName === undefined) throw new Error('catalog vector has no entry')
+
+    await expect(client.hasCommittedName(committed, firstName)).resolves.toBe(true)
+    await expect(client.hasCommittedName(committed, 'definitely-missing')).resolves.toBe(false)
+    expect(fetches).toBe(1)
+    client.close()
+  })
+
   it('keeps the fallback lock published when a queued receiver cancels', async () => {
     let releaseFirst!: () => void
     const firstGate = new Promise<void>((resolve) => {
@@ -427,6 +453,10 @@ class ObservedCatalogStore implements V2CatalogPageStore {
 
   loadPage(directory: V2CommittedDirectory, pageIndex: number): Promise<V2CatalogPage | undefined> {
     return this.#inner.loadPage(directory, pageIndex)
+  }
+
+  hasCommittedName(directory: V2CommittedDirectory, name: string): Promise<boolean> {
+    return this.#inner.hasCommittedName(directory, name)
   }
 
   begin(directoryIdText: string): Promise<void> {

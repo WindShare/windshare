@@ -6,6 +6,11 @@ import {
   type ResolvedArtifactAction,
 } from '../output/planning'
 import {
+  compatibleNameRepairSummary,
+  type CompatibleNameRepairSummary,
+} from '../output/file-system-access/compatible-name/model'
+import {
+  isTerminalLifecycleState,
   lifecycleDeadline,
   type ReceiveLifecycleState,
 } from '../output/workspace'
@@ -49,6 +54,7 @@ export interface V2OutputPresentationSnapshot {
   readonly receiveIntent: ReceiveIntent | null
   readonly plan: MaterializationPlan | null
   readonly lifecycle: ReceiveLifecycleState | null
+  readonly repairSummary: CompatibleNameRepairSummary | null
   readonly lifecyclePresentation: ReceiveLifecyclePresentation | null
   readonly expiresAt: number | null
   readonly workspaceUsage: WorkspaceUsage | null
@@ -68,6 +74,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   receiveIntent: null,
   plan: null,
   lifecycle: null,
+  repairSummary: null,
   lifecyclePresentation: null,
   expiresAt: null,
   workspaceUsage: null,
@@ -77,7 +84,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
 
 export type TransferResultProjection = Pick<
   TransferJobResult,
-  'worker' | 'intent' | 'transferJobId'
+  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary'
 >
 
 /**
@@ -166,6 +173,7 @@ export class V2OutputPresentationController {
     nowMilliseconds = Date.now(),
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     return this.adoptReceiveIntentAtomically(
       choice,
@@ -175,6 +183,7 @@ export class V2OutputPresentationController {
       nowMilliseconds,
       workspaceUsage,
       activeControls,
+      repairSummary,
     )
   }
 
@@ -186,6 +195,7 @@ export class V2OutputPresentationController {
     nowMilliseconds = Date.now(),
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
   ): boolean {
     const activation = this.#snapshot.activation
     if (activation.kind === 'inactive' ||
@@ -202,6 +212,7 @@ export class V2OutputPresentationController {
       resolvedArtifact: intent.artifact,
       receiveIntent: intent,
       plan: intent.plan,
+      repairSummary: snapshotCompatibleNameRepair(repairSummary),
       activeControls: Object.freeze([...activeControls]),
     }, lifecycle ?? null, nowMilliseconds, workspaceUsage)
     this.#publishWithOwnership(snapshot, commitOwnership)
@@ -214,6 +225,7 @@ export class V2OutputPresentationController {
     nowMilliseconds = Date.now(),
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
   ): void {
     this.adoptRetainedReceiveIntentAtomically(
       intent,
@@ -222,6 +234,7 @@ export class V2OutputPresentationController {
       nowMilliseconds,
       workspaceUsage,
       activeControls,
+      repairSummary,
     )
   }
 
@@ -232,6 +245,7 @@ export class V2OutputPresentationController {
     nowMilliseconds = Date.now(),
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary,
   ): void {
     if (lifecycle.operationId !== intent.operationId ||
         lifecycle.receiveIntentDigest !== intent.digest) {
@@ -242,6 +256,7 @@ export class V2OutputPresentationController {
       resolvedArtifact: intent.artifact,
       receiveIntent: intent,
       plan: intent.plan,
+      repairSummary: snapshotCompatibleNameRepair(repairSummary),
       activeControls: Object.freeze([...activeControls]),
     }, lifecycle, nowMilliseconds, workspaceUsage)
     this.#activeOfferedChoice = null
@@ -254,6 +269,7 @@ export class V2OutputPresentationController {
     nowMilliseconds = Date.now(),
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
+    repairSummary?: CompatibleNameRepairSummary | null,
   ): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || state.operationId !== intent.operationId ||
@@ -262,6 +278,10 @@ export class V2OutputPresentationController {
     if (current !== null && state.generation <= current.generation) return false
     this.#publishLifecycleSnapshot({
       ...this.#snapshot,
+      repairSummary: nextCompatibleNameRepair(
+        this.#snapshot.repairSummary,
+        repairSummary,
+      ),
       activeControls: Object.freeze([...activeControls]),
     }, state, nowMilliseconds, workspaceUsage)
     return true
@@ -277,13 +297,50 @@ export class V2OutputPresentationController {
     return true
   }
 
+  updateRepairSummary(
+    operationId: string,
+    summary: CompatibleNameRepairSummary,
+    nowMilliseconds = Date.now(),
+  ): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.operationId !== operationId) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      repairSummary: nextCompatibleNameRepair(this.#snapshot.repairSummary, summary),
+    }, this.#snapshot.lifecycle, nowMilliseconds, this.#snapshot.workspaceUsage)
+    return true
+  }
+
   adoptTransferResult(result: TransferResultProjection): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || result.intent.operationId !== intent.operationId ||
-        result.intent.digest !== intent.digest) return false
-    this.#publish(Object.freeze({
+        result.intent.digest !== intent.digest ||
+        result.lifecycle.operationId !== intent.operationId ||
+        result.lifecycle.receiveIntentDigest !== intent.digest) return false
+    const currentLifecycle = this.#snapshot.lifecycle
+    if (currentLifecycle !== null && result.lifecycle.generation < currentLifecycle.generation) {
+      return false
+    }
+    // An absent terminal summary is authoritative only after the output layer has
+    // verified and removed an empty repair pair. Carrying the earlier live notice
+    // would falsely qualify an ordinary terminal result.
+    const terminalRepairSummary = result.repairSummary ??
+      (isTerminalLifecycleState(result.lifecycle) ? null : undefined)
+    const repairSummary = nextCompatibleNameRepair(
+      this.#snapshot.repairSummary,
+      terminalRepairSummary,
+    )
+    const snapshot = this.#buildLifecycleSnapshot({
       ...this.#snapshot,
-      transferResultPresentation: presentTransferResult(result.worker),
+      repairSummary,
+    }, result.lifecycle, Date.now(), this.#snapshot.workspaceUsage)
+    this.#publish(Object.freeze({
+      ...snapshot,
+      transferResultPresentation: presentTransferResult(
+        result.worker,
+        repairSummary,
+        result.lifecycle,
+      ),
     }))
     return true
   }
@@ -336,6 +393,7 @@ export class V2OutputPresentationController {
       nowMilliseconds,
       ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
       activeControls: base.activeControls,
+      repairSummary: base.repairSummary,
     })
     return Object.freeze({
       ...base,
@@ -395,6 +453,67 @@ function findOfferedChoice(
   if (offers?.kind !== 'artifact-actions') return null
   return [offers.primary, ...offers.alternatives].find((candidate) =>
     sameArtifactChoiceSemantics(candidate.choice, choice)) ?? null
+}
+
+function snapshotCompatibleNameRepair(
+  summary: CompatibleNameRepairSummary | undefined,
+): CompatibleNameRepairSummary | null {
+  return summary === undefined ? null : compatibleNameRepairSummary(summary)
+}
+
+function nextCompatibleNameRepair(
+  current: CompatibleNameRepairSummary | null,
+  next: CompatibleNameRepairSummary | null | undefined,
+): CompatibleNameRepairSummary | null {
+  if (next === undefined) return current
+  if (next === null) return null
+  const snapshot = compatibleNameRepairSummary(next)
+  if (current !== null) assertCompatibleNameRepairProgression(current, snapshot)
+  return snapshot
+}
+
+function assertCompatibleNameRepairProgression(
+  current: CompatibleNameRepairSummary,
+  next: CompatibleNameRepairSummary,
+): void {
+  if (next.committedCount < current.committedCount) {
+    throw new TypeError('compatible-name repair count cannot move backward')
+  }
+  if (next.placement !== current.placement ||
+      next.pairDisplayNames.script !== current.pairDisplayNames.script ||
+      next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar ||
+      next.runCommand !== current.runCommand) {
+    throw new TypeError('compatible-name restoration identity cannot change')
+  }
+  for (let index = 0; index < current.logicalPathSample.length; index += 1) {
+    if (!sameLogicalPath(current.logicalPathSample[index], next.logicalPathSample[index])) {
+      throw new TypeError('compatible-name logical path sample cannot be rewritten')
+    }
+  }
+  const currentFooter = current.latestObservedFooter
+  const nextFooter = next.latestObservedFooter
+  if (currentFooter === undefined) return
+  if (nextFooter === undefined || nextFooter.committedCount < currentFooter.committedCount) {
+    throw new TypeError('compatible-name sidecar checkpoint cannot move backward')
+  }
+  if (currentFooter.state !== 'active' &&
+      (nextFooter.state !== currentFooter.state ||
+       nextFooter.committedCount !== currentFooter.committedCount ||
+       next.committedCount !== current.committedCount ||
+       next.logicalPathSample.length !== current.logicalPathSample.length)) {
+    throw new TypeError('compatible-name terminal sidecar checkpoint is immutable')
+  }
+  if (!current.pendingCatchUp && currentFooter.state !== 'active' && next.pendingCatchUp) {
+    throw new TypeError('completed compatible-name catch-up cannot become pending')
+  }
+}
+
+function sameLogicalPath(
+  first: readonly string[] | undefined,
+  second: readonly string[] | undefined,
+): boolean {
+  return first !== undefined && second !== undefined && first.length === second.length &&
+    first.every((component, index) => component === second[index])
 }
 
 function resolvedActionFromActivation(

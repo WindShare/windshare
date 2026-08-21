@@ -53,6 +53,11 @@ export interface BrowserReceiveOperationLeaseOptions {
     ReceiveOperationTransition,
     'operationId' | 'expectedLeaseId' | 'lease'
   >
+  readonly acquisitionTransitionCommitter?: BrowserReceiveOperationAcquisitionTransitionCommitter
+}
+
+export interface BrowserReceiveOperationAcquisitionTransitionCommitter {
+  commitAcquisitionTransition(transition: ReceiveOperationTransition): Promise<void>
 }
 
 export class BrowserReceiveOperationBusyError extends DOMException {
@@ -82,6 +87,8 @@ export async function acquireBrowserReceiveOperationLease(
   const manager = options.manager ?? browserLockManager()
   const clock = options.clock ?? systemClock
   const randomBytes = options.randomBytes ?? secureRandomBytes
+  const acquisitionTransitionCommitter = options.acquisitionTransitionCommitter ??
+    defaultAcquisitionTransitionCommitter(repository)
   const lock = await acquireBrowserLease(
     browserReceiveOperationLockName(identity),
     true,
@@ -98,7 +105,7 @@ export async function acquireBrowserReceiveOperationLease(
       leaseId,
       acquiredAt,
     })
-    await repository.commitTransition({
+    await acquisitionTransitionCommitter.commitAcquisitionTransition({
       ...(options.acquireTransition ?? {}),
       operationId: identity,
       ...(existing === undefined ? {} : { expectedLeaseId: existing.leaseId }),
@@ -171,6 +178,15 @@ export async function acquireBrowserReceiveOperationLease(
     acquiredAt,
     heartbeat,
     release,
+  })
+}
+
+function defaultAcquisitionTransitionCommitter(
+  repository: ReceiveOperationRepository,
+): BrowserReceiveOperationAcquisitionTransitionCommitter {
+  return Object.freeze({
+    commitAcquisitionTransition: (transition: ReceiveOperationTransition) =>
+      repository.commitTransition(transition),
   })
 }
 

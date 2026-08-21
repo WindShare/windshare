@@ -3,6 +3,7 @@ import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import type { AuthenticatedGenerationReference } from '../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../output/workspace/preparation'
 import type { ReceiveLifecycleState } from '../output/workspace/state'
+import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
 import {
   FaultScope,
   isFault,
@@ -31,9 +32,11 @@ import type {
 } from './intent'
 import type {
   CompletedTransferWorkerSettlement,
+  PausedTransferWorkerSettlement,
   SuccessfulTransferWorkerSettlement,
   TransferWorkerSettlement,
 } from './outcome'
+import type { AuthenticatedLogicalSiblingMembership } from './job/contract'
 
 export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
 export type FileRetirementDisposition = 'FileIsolated' | 'JobOutputCompromised'
@@ -149,6 +152,8 @@ export interface OutputSession {
 export interface DirectoryMaterializationRequest {
   readonly source: MaterializationDirectory
   readonly artifactPath: readonly string[]
+  /** Lazy authority; carrying it must not itself query catalog page storage. */
+  readonly logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership
 }
 
 /** Incremental directory authority is legal only for DirectTree and DirectAtomic ZIP. */
@@ -181,6 +186,14 @@ export interface PlanPauseRequest {
   readonly reason: unknown
 }
 
+/** Explicit terminal ownership cut for DirectTree output that remains user-owned. */
+export interface PlanStopRequest {
+  readonly transferJobId: string
+  readonly worker: PausedTransferWorkerSettlement
+  readonly materialization: MaterializationSummary
+  readonly reason: TransferStopRequestedError
+}
+
 interface PlanExecutionBase<Plan extends MaterializationPlan> {
   readonly planKind: Plan['kind']
   readonly output: OutputSession
@@ -190,10 +203,13 @@ interface PlanExecutionBase<Plan extends MaterializationPlan> {
 export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   readonly planKind: 'direct-tree'
   readonly directories: IncrementalDirectoryOutput
+  readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly terminalSettlementInitiated?: () => boolean
   settle(
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>
+  stop?(request: PlanStopRequest, signal: AbortSignal): Promise<ReceiveLifecycleState>
 }
 
 export interface DirectAtomicExecution extends PlanExecutionBase<DirectAtomicPlan> {
@@ -361,6 +377,14 @@ export class TransferPauseRequestedError extends Error {
   }
 }
 
+/** Stop retains the materialized DirectTree prefix and therefore must never enter Pause cleanup. */
+export class TransferStopRequestedError extends Error {
+  constructor(message = 'Transfer stopped by receiver and partial output retained') {
+    super(message)
+    this.name = 'TransferStopRequestedError'
+  }
+}
+
 /** A finite output-operation budget was exhausted before accepting more state. */
 export class OutputBudgetExceededError extends Error {
   readonly budget: string
@@ -452,9 +476,33 @@ export function snapshotOutputFile(file: OutputFile): OutputFile {
 export function snapshotDirectoryMaterializationRequest(
   request: DirectoryMaterializationRequest,
 ): DirectoryMaterializationRequest {
+  const source = snapshotMaterializationDirectory(request.source)
+  const logicalSiblingMembership = request.logicalSiblingMembership === undefined
+    ? undefined
+    : snapshotLogicalSiblingMembership(request.logicalSiblingMembership, source)
   return Object.freeze({
-    source: snapshotMaterializationDirectory(request.source),
+    source,
     artifactPath: snapshotMaterializationPath(request.artifactPath),
+    ...(logicalSiblingMembership === undefined ? {} : { logicalSiblingMembership }),
+  })
+}
+
+function snapshotLogicalSiblingMembership(
+  membership: AuthenticatedLogicalSiblingMembership,
+  source: MaterializationDirectory,
+): AuthenticatedLogicalSiblingMembership {
+  if (membership.directoryId !== source.directoryId || membership.generation !== source.generation) {
+    throw new OutputSessionBindingError(
+      'logical-sibling membership does not match the admitted directory generation',
+    )
+  }
+  if (typeof membership.hasCommittedName !== 'function') {
+    throw new OutputSessionBindingError('logical-sibling membership has no committed-name authority')
+  }
+  return Object.freeze({
+    directoryId: source.directoryId,
+    generation: source.generation,
+    hasCommittedName: (candidate: string) => membership.hasCommittedName(candidate),
   })
 }
 

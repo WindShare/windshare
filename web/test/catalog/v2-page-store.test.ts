@@ -4,6 +4,7 @@ import {
   catalogPageMetadataCharge,
   MemoryV2CatalogPageStore,
   V2_DEFAULT_CATALOG_CACHE_BUDGET_LIMITS,
+  type V2CommittedDirectory,
 } from '../../src/catalog/v2-page-store'
 import {
   type V2CatalogEntry,
@@ -86,6 +87,37 @@ describe('v2 catalog page store', () => {
       .resolves.toBeUndefined()
   })
 
+  it('answers portable-name membership only from the exact committed generation', async () => {
+    const store = new MemoryV2CatalogPageStore()
+    const staged = page(0, 'root', [entry(1, 'Straße')])
+    const committed = committedDirectory(staged)
+    await store.begin('root')
+    await store.stage(staged)
+
+    await expect(store.hasCommittedName(committed, 'Straße')).rejects.toMatchObject({
+      name: 'V2CatalogPageStoreError',
+      kind: 'local-storage',
+    })
+    await store.commit(committed)
+    await expect(store.hasCommittedName(committed, 'STRASSE')).resolves.toBe(true)
+    await expect(store.hasCommittedName(committed, 'missing')).resolves.toBe(false)
+
+    const staleGeneration: V2CommittedDirectory = {
+      ...committed,
+      // The readable projection is deliberately unchanged: raw authenticated identity must win.
+      generation: Uint8Array.from({ length: 16 }, (_, index) => index === 0 ? 2 : 0),
+    }
+    await expect(store.hasCommittedName(staleGeneration, 'Straße')).rejects.toMatchObject({
+      name: 'V2CatalogPageStoreError',
+      kind: 'local-storage',
+    })
+    await store.begin('root')
+    await expect(store.hasCommittedName(committed, 'Straße')).rejects.toMatchObject({
+      name: 'V2CatalogPageStoreError',
+      kind: 'local-storage',
+    })
+  })
+
   it('atomically replaces staged ownership with persistent failure authority', async () => {
     const store = new MemoryV2CatalogPageStore()
     await store.stage(page(0, 'root', [entry(1, 'first')]))
@@ -145,6 +177,19 @@ describe('v2 catalog page store', () => {
     })
   })
 })
+
+function committedDirectory(staged: V2CatalogPage): V2CommittedDirectory {
+  return Object.freeze({
+    directoryIdText: staged.directoryIdText,
+    generationText: staged.generationText,
+    directoryId: staged.directoryId.slice(),
+    generation: staged.generation.slice(),
+    pageCount: 1,
+    entryCount: staged.entries.length,
+    omittedCount: staged.omittedCount,
+    terminalCommitment: staged.objectCommitment.slice(),
+  })
+}
 
 function directoryFailure(directoryIdText: string, retryable: boolean): V2DirectoryFailure {
   return Object.freeze({

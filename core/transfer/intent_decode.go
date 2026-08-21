@@ -9,11 +9,11 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-// DecodeReceiveIntent is the only persistence decoder for ReceiveIntentV1. It
+// DecodeReceiveIntent is the only persistence decoder for ReceiveIntentV2. It
 // reconstructs every nested value through the validated constructors and then
 // requires an exact canonical re-encode before returning durable authority.
 func DecodeReceiveIntent(encoded []byte) (ReceiveIntent, error) {
-	cursor, err := newReceiveIntentDecoder(encoded, receiveIntentDomain, ReceiveIntentV1)
+	cursor, err := newReceiveIntentDecoder(encoded, receiveIntentDomain, ReceiveIntentV2)
 	if err != nil {
 		return ReceiveIntent{}, err
 	}

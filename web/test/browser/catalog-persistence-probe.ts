@@ -146,6 +146,53 @@ export async function probeCommitAbortAndReopen(): Promise<Readonly<Record<strin
   }
 }
 
+export async function probeCommittedNameMembership(): Promise<Readonly<Record<string, boolean>>> {
+  const databaseName = uniqueDatabaseName('committed-name-membership')
+  const committed = { ...directory('root'), entryCount: 2 }
+  const storedPage = page(0, 'root', [
+    entry('node-1', 'Straße'),
+    entry('node-2', 'durable-name'),
+  ])
+  let store: IndexedDbV2CatalogPageStore | undefined
+  let reopened: IndexedDbV2CatalogPageStore | undefined
+  try {
+    store = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    await store.begin('root')
+    await store.stage(storedPage)
+    const stagedGenerationUnavailable = await rejectsLocalStorage(
+      store.hasCommittedName(committed, 'durable-name'),
+    )
+    await store.commit(committed)
+    const exactNameFound = await store.hasCommittedName(committed, 'durable-name')
+    const portableCollisionFound = await store.hasCommittedName(committed, 'STRASSE')
+    const absentNameRejected = !await store.hasCommittedName(committed, 'missing')
+    const staleGenerationRejected = await rejectsLocalStorage(store.hasCommittedName({
+      ...committed,
+      // Keep the projection equal so the raw authenticated generation is the deciding authority.
+      generation: identity(0x44),
+    }, 'durable-name'))
+    store.close()
+    store = undefined
+
+    reopened = await IndexedDbV2CatalogPageStore.open('share', databaseName)
+    const reopenedDirectory = await reopened.loadDirectory('root')
+    const reopenFound = reopenedDirectory !== undefined &&
+      await reopened.hasCommittedName(reopenedDirectory, 'durable-name')
+    return Object.freeze({
+      stagedGenerationUnavailable,
+      exactNameFound,
+      portableCollisionFound,
+      absentNameRejected,
+      staleGenerationRejected,
+      reopenFound,
+    })
+  } finally {
+    reopened?.close()
+    store?.close()
+    await deleteDatabase(databaseName)
+  }
+}
+
 export async function probeSignedRootCollision(): Promise<Readonly<Record<string, boolean>>> {
   const databaseName = uniqueDatabaseName('root-collision')
   const fixture = await createSignedRootCollisionFixture()

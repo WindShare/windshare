@@ -123,6 +123,7 @@ export type AuthorityOwnedReceiveOperationMutationResult =
 
 export type AuthorityOwnedReceiveOperationContinuation =
   | Readonly<{ kind: 'direct-tree-receive'; operation: ReopenedDirectTreeOperation }>
+  | Readonly<{ kind: 'direct-tree-catch-up'; operation: ReopenedDirectTreeOperation }>
   | Readonly<{
       kind: 'workspace-receive'
       operation: ReopenedWorkspaceOperation & {
@@ -194,6 +195,33 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     } finally {
       await operation.close()
     }
+  }
+
+  async catchUp(
+    descriptor: ReceiveOperationResumeDescriptor,
+    failures?: OutputFailureSinks,
+  ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
+    const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
+    if (operation.kind !== 'direct-tree') {
+      return withClosedOperation(operation, async () => {
+        throw new TypeError('terminal catch-up is exclusive to DirectTree operations')
+      })
+    }
+    return Object.freeze({
+      kind: 'continuation',
+      continuation: Object.freeze({ kind: 'direct-tree-catch-up', operation }),
+    })
+  }
+}
+
+async function withClosedOperation<Result>(
+  operation: ReopenedReceiveOperation,
+  action: () => Promise<Result>,
+): Promise<Result> {
+  try {
+    return await action()
+  } finally {
+    await operation.close()
   }
 }
 
