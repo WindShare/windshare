@@ -42,6 +42,7 @@ import {
   MAX_RESULT_COMPONENT_BYTES,
   MAX_SELECTION_RULES,
   MAX_SELECTION_TARGET_UTF8_BYTES,
+  RECEIVE_INTENT_VERSION,
   STABLE_IDENTITY_BYTES,
   type ArtifactSpec,
   type AtomicTargetReservation,
@@ -88,7 +89,7 @@ export async function decodeReceiveIntent(canonicalBytes: Uint8Array): Promise<R
   }
   const encoded = Uint8Array.from(canonicalBytes)
   try {
-    const cursor = CanonicalDecoder.record(encoded, RECEIVE_INTENT_DOMAIN)
+    const cursor = CanonicalDecoder.record(encoded, RECEIVE_INTENT_DOMAIN, RECEIVE_INTENT_VERSION)
     const selectionBytes = cursor.readFrame(cursor.remaining)
     const artifactBytes = cursor.readFrame(cursor.remaining)
     const planBytes = cursor.readFrame(cursor.remaining)
@@ -330,13 +331,22 @@ async function decodeNamedContainerEntryReservationBytes(
   const entryKind = cursor.readFramedByte()
   if (entryKind !== 1 && entryKind !== 2) invalidDecodedCanonicalBytes()
   const requestedName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
-  const reservedName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
+  const logicalReservedName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
+  const physicalName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
   const collisionIndex = cursor.readFramedUint32()
-  const options = { ...common, reservedName, collisionIndex }
+  const options = { ...common, logicalReservedName, physicalName, collisionIndex }
   let reservation: NamedContainerEntryReservation
   if (common.authorityKind === 1 &&
       sameGuarantees(common.guarantees, nativeTreeGuarantees())) {
-    reservation = await createNativeNamedEntryReservation(options)
+    reservation = await createNativeNamedEntryReservation({
+      operationId: options.operationId,
+      reservationId: options.reservationId,
+      artifact: options.artifact,
+      authorityRef: options.authorityRef,
+      logicalReservedName: options.logicalReservedName,
+      collisionIndex: options.collisionIndex,
+    })
+    if (reservation.physicalName !== physicalName) invalidDecodedCanonicalBytes()
   } else if (common.authorityKind === 2 &&
              sameGuarantees(common.guarantees, fsaTreeGuarantees())) {
     reservation = await createFSANamedEntryReservation(options)

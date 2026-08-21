@@ -435,7 +435,8 @@ async function fsaDirectTreeIntent(): Promise<ReceiveIntent> {
     reservationId: identityText(111),
     artifact,
     authorityRef: digestIdentity(112),
-    reservedName: artifact.layout.root.name,
+    logicalReservedName: artifact.layout.root.name,
+    physicalName: artifact.layout.root.name,
     collisionIndex: 0,
   })
   const plan = await createDirectTreePlan(artifact, reservation)

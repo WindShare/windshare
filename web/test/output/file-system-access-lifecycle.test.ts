@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { directoryId } from '../../src/catalog/model'
 import {
+  inspectFileSystemComponent,
+  PathComponentRejectedError,
+  type FileSystemComponentKind,
+  type FileSystemComponentInspectionStage,
+} from '../../src/output/browser/filesystem-component-inspection'
+import {
   reopenFileSystemAccessOutput,
   type FSAOutputTraceEvent,
 } from '../../src/output/file-system-access/session'
@@ -30,6 +36,7 @@ import {
   PAUSED,
   SIGNAL,
   SUCCESS,
+  absentCompatibleNameLedgerFactory,
   bindTask,
   discardFreshFixture,
   freshDiscardFixture,
@@ -44,7 +51,225 @@ import {
   startReceiving,
 } from './file-system-access-lifecycle-fixture'
 
+describe('native FSA component inspection boundary', () => {
+  const rejectionCases: readonly Readonly<{
+    expectedKind: FileSystemComponentKind
+    stage: FileSystemComponentInspectionStage
+  }>[] = [
+    { expectedKind: 'file', stage: 'fsa.file.entry.inspect' },
+    { expectedKind: 'directory', stage: 'fsa.directory.entry.inspect' },
+    { expectedKind: 'directory', stage: 'fsa.root.entry.inspect' },
+  ]
+
+  it.each(rejectionCases)(
+    'classifies only the awaited $stage expected-kind TypeError before mutation',
+    async ({ expectedKind, stage }) => {
+      const parent = new MemoryDirectory('downloads')
+      const cause = new TypeError('opaque native refusal')
+      const lookups: string[] = []
+      parent.onEntryLookup = lookup => {
+        lookups.push(`${lookup.kind}:${lookup.name}:${lookup.create}`)
+        if (lookup.kind === expectedKind) throw cause
+      }
+
+      const rejected = inspectFileSystemComponent({
+        verifiedParent: parent as unknown as FileSystemDirectoryHandle,
+        component: 'portable-name.bin',
+        expectedKind,
+        stage,
+        mode: 'classify-rejection',
+      })
+
+      await expect(rejected).rejects.toMatchObject({
+        name: 'PathComponentRejectedError',
+        cause,
+        canonicalComponent: 'portable-name.bin',
+        expectedKind,
+        stage,
+        preMutation: true,
+      })
+      await expect(rejected).rejects.toBeInstanceOf(PathComponentRejectedError)
+      expect(lookups).toEqual([`${expectedKind}:portable-name.bin:false`])
+      expect(parent.entryNames()).toEqual([])
+    },
+  )
+
+  it('validates one canonical component before touching the native parent', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const lookups: string[] = []
+    parent.onEntryLookup = lookup => { lookups.push(lookup.name) }
+
+    const rejected = inspectFileSystemComponent({
+      verifiedParent: parent as unknown as FileSystemDirectoryHandle,
+      component: 'nested/name.bin',
+      expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect',
+      mode: 'classify-rejection',
+    })
+
+    await expect(rejected).rejects.toBeInstanceOf(TypeError)
+    await expect(rejected).rejects.not.toBeInstanceOf(PathComponentRejectedError)
+    expect(lookups).toEqual([])
+  })
+
+  it('probes the expected kind first and reports both entry kinds as occupied', async () => {
+    const fileParent = new MemoryDirectory('downloads')
+    await fileParent.getDirectoryHandle('existing', { create: true })
+    const fileLookups: string[] = []
+    fileParent.onEntryLookup = lookup => { fileLookups.push(lookup.kind) }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: fileParent as unknown as FileSystemDirectoryHandle,
+      component: 'existing',
+      expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect',
+      mode: 'classify-rejection',
+    })).resolves.toBe('occupied')
+    expect(fileLookups).toEqual(['file'])
+
+    const directoryParent = new MemoryDirectory('downloads')
+    await directoryParent.getFileHandle('existing', { create: true })
+    const directoryLookups: string[] = []
+    directoryParent.onEntryLookup = lookup => { directoryLookups.push(lookup.kind) }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: directoryParent as unknown as FileSystemDirectoryHandle,
+      component: 'existing',
+      expectedKind: 'directory',
+      stage: 'fsa.directory.entry.inspect',
+      mode: 'classify-rejection',
+    })).resolves.toBe('occupied')
+    expect(directoryLookups).toEqual(['directory'])
+  })
+
+  it('uses an opposite-kind lookup only after expected-kind NotFoundError', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const lookups: string[] = []
+    parent.onEntryLookup = lookup => { lookups.push(lookup.kind) }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: parent as unknown as FileSystemDirectoryHandle,
+      component: 'absent.bin',
+      expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect',
+      mode: 'classify-rejection',
+    })).resolves.toBe('absent')
+    expect(lookups).toEqual(['file', 'directory'])
+  })
+
+  it.each(['present', 'type-mismatch'] as const)(
+    'treats an opposite-kind %s result as occupied after expected-kind NotFoundError',
+    async oppositeResult => {
+      const parent = new MemoryDirectory('downloads')
+      if (oppositeResult === 'present') {
+        await parent.getDirectoryHandle('occupied', { create: true })
+      }
+      const lookups: string[] = []
+      parent.onEntryLookup = lookup => {
+        lookups.push(lookup.kind)
+        if (lookup.kind === 'file') throw new DOMException('missing', 'NotFoundError')
+        if (oppositeResult === 'type-mismatch') {
+          throw new DOMException('different entry kind', 'TypeMismatchError')
+        }
+      }
+
+      await expect(inspectFileSystemComponent({
+        verifiedParent: parent as unknown as FileSystemDirectoryHandle,
+        component: 'occupied',
+        expectedKind: 'file',
+        stage: 'fsa.file.entry.inspect',
+        mode: 'classify-rejection',
+      })).resolves.toBe('occupied')
+      expect(lookups).toEqual(['file', 'directory'])
+    },
+  )
+
+  it('leaves expected-kind non-TypeError and every secondary failure unwrapped', async () => {
+    const expectedFailure = new DOMException('permission denied', 'NotAllowedError')
+    const expectedParent = new MemoryDirectory('downloads')
+    expectedParent.onEntryLookup = () => { throw expectedFailure }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: expectedParent as unknown as FileSystemDirectoryHandle,
+      component: 'report.bin',
+      expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect',
+      mode: 'classify-rejection',
+    })).rejects.toBe(expectedFailure)
+
+    const secondaryFailure = new TypeError('opposite-kind lookup failed')
+    const secondaryParent = new MemoryDirectory('downloads')
+    const lookups: string[] = []
+    secondaryParent.onEntryLookup = lookup => {
+      lookups.push(lookup.kind)
+      if (lookup.kind === 'directory') throw secondaryFailure
+    }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: secondaryParent as unknown as FileSystemDirectoryHandle,
+      component: 'report.bin',
+      expectedKind: 'file',
+      stage: 'fsa.file.entry.inspect',
+      mode: 'classify-rejection',
+    })).rejects.toBe(secondaryFailure)
+    expect(lookups).toEqual(['file', 'directory'])
+  })
+
+  it('keeps diagnostic call ordering without manufacturing a rejection trigger', async () => {
+    const cause = new TypeError('diagnostic native refusal')
+    const parent = new MemoryDirectory('downloads')
+    const lookups: string[] = []
+    parent.onEntryLookup = lookup => {
+      lookups.push(lookup.kind)
+      throw cause
+    }
+
+    await expect(inspectFileSystemComponent({
+      verifiedParent: parent as unknown as FileSystemDirectoryHandle,
+      component: 'report.bin',
+      expectedKind: 'directory',
+      stage: 'fsa.directory.entry.inspect',
+      mode: 'diagnostic',
+    })).rejects.toBe(cause)
+    expect(lookups).toEqual(['directory'])
+  })
+})
+
 describe('File System Access DirectTree lifecycle', () => {
+  it.each([
+    { label: 'single-file', artifact: singleFileArtifact, expected: ['file:report.bin', 'directory:report.bin'] },
+    { label: 'result-root', artifact: resultRootArtifact, expected: ['directory:photos', 'file:photos'] },
+  ])('reserves an ordinary $label root by expected kind without activating repair', async ({
+    artifact,
+    expected,
+  }) => {
+    const parent = new MemoryDirectory('downloads')
+    const lookups: string[] = []
+    let repairFactoryCalls = 0
+    parent.onEntryLookup = (lookup) => {
+      if (!lookup.create) lookups.push(`${lookup.kind}:${lookup.name}`)
+    }
+    const session = await bindTask({
+      parent,
+      repository: new MemoryOperationRepository(),
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await artifact(),
+      operationSeed: 9,
+      activate: false,
+      prepareCompatibleNameRootRepair: async () => {
+        repairFactoryCalls += 1
+        throw new Error('ordinary reservation must not activate repair')
+      },
+    })
+
+    expect(lookups).toEqual(expected)
+    expect(repairFactoryCalls).toBe(0)
+    expect(session.reservation.logicalReservedName).toBe(session.reservation.physicalName)
+    expect(parent.entryNames()).toEqual([])
+    await session.close()
+  })
+
   it('persists a collision suffix, creates one task root, and reopens it after restart', async () => {
     const parent = new MemoryDirectory('downloads')
     const unrelated = await parent.getDirectoryHandle('photos', { create: true })
@@ -62,10 +287,10 @@ describe('File System Access DirectTree lifecycle', () => {
     })
 
     expect(first.reservation.collisionIndex).toBe(1)
-    expect(first.reservation.reservedName).not.toBe('photos')
-    const taskRoot = await parent.getDirectoryHandle(first.reservation.reservedName)
+    expect(first.reservation.logicalReservedName).not.toBe('photos')
+    const taskRoot = await parent.getDirectoryHandle(first.reservation.physicalName)
     expect(await parent.getDirectoryHandle('photos')).toBe(unrelated)
-    expect(parent.directoryNames()).toEqual(['photos', first.reservation.reservedName].sort())
+    expect(parent.directoryNames()).toEqual(['photos', first.reservation.physicalName].sort())
     await first.ensureDirectory(['nested'])
     const firstFile = await first.beginFile({
       artifactPath: ['nested', 'photo.bin'],
@@ -88,9 +313,10 @@ describe('File System Access DirectTree lifecycle', () => {
       operationRepository: repository,
       lockManager: locks,
       checkpointRepositoryFactory: checkpointFactory,
+      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
-    expect(reopened.reservation.reservedName).toBe(first.reservation.reservedName)
-    expect(await parent.getDirectoryHandle(reopened.reservation.reservedName)).toBe(taskRoot)
+    expect(reopened.reservation.logicalReservedName).toBe(first.reservation.logicalReservedName)
+    expect(await parent.getDirectoryHandle(reopened.reservation.physicalName)).toBe(taskRoot)
     await expect(reopened.ensureDirectory(['nested'])).resolves.toMatchObject({ created: false })
     const reopenedFile = await reopened.beginFile({
       artifactPath: ['nested', 'photo.bin'],
@@ -112,7 +338,7 @@ describe('File System Access DirectTree lifecycle', () => {
       artifact,
       operationSeed: 20,
     })
-    expect(second.reservation.reservedName).not.toBe(first.reservation.reservedName)
+    expect(second.reservation.logicalReservedName).not.toBe(first.reservation.logicalReservedName)
     expect(parent.directoryNames()).toHaveLength(3)
     await second.close()
   })
@@ -136,7 +362,7 @@ describe('File System Access DirectTree lifecycle', () => {
     const ordering: string[] = []
     parent.onFileCreated = () => ordering.push('created')
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.reservedName],
+      artifactPath: [session.reservation.requestedName],
       openRevision: async () => {
         ordering.push('revision-opened')
         return {
@@ -148,10 +374,10 @@ describe('File System Access DirectTree lifecycle', () => {
     })
     expect(ordering).toEqual(['revision-opened', 'created'])
     expect(parent.directoryNames()).toEqual([])
-    expect(parent.fileNames()).toEqual([session.reservation.reservedName])
+    expect(parent.fileNames()).toEqual([session.reservation.physicalName])
 
     await transaction.writeRange(0n, Uint8Array.of(1, 2))
-    expect(await parent.fileBytes(session.reservation.reservedName)).toEqual(Uint8Array.of(1, 2))
+    expect(await parent.fileBytes(session.reservation.physicalName)).toEqual(Uint8Array.of(1, 2))
     await transaction.checkpoint()
     await transaction.writeRange(2n, Uint8Array.of(3, 4))
     await transaction.commit()
@@ -163,9 +389,10 @@ describe('File System Access DirectTree lifecycle', () => {
       operationRepository: repository,
       lockManager: locks,
       checkpointRepositoryFactory: checkpointFactory,
+      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     const resumed = await reopened.beginFile({
-      artifactPath: [reopened.reservation.reservedName],
+      artifactPath: [reopened.reservation.requestedName],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
@@ -173,8 +400,44 @@ describe('File System Access DirectTree lifecycle', () => {
       }),
     })
     expect(resumed.ownedObjectId).toBe(transaction.ownedObjectId)
-    expect(parent.entryNames()).toEqual([session.reservation.reservedName])
+    expect(parent.entryNames()).toEqual([session.reservation.physicalName])
     await reopened.close()
+  })
+
+  it('keeps a nonzero collision reservation out of the transfer artifact path', async () => {
+    const parent = new MemoryDirectory('downloads')
+    await parent.getFileHandle('report.bin', { create: true })
+    const session = await bindTask({
+      parent,
+      repository: new MemoryOperationRepository(),
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await singleFileArtifact(),
+      operationSeed: 34,
+    })
+
+    expect(session.reservation).toMatchObject({
+      collisionIndex: 1,
+      requestedName: 'report.bin',
+    })
+    expect(session.reservation.logicalReservedName).not.toBe(session.reservation.requestedName)
+    expect(session.reservation.physicalName).toBe(session.reservation.logicalReservedName)
+
+    const transaction = await session.beginFile({
+      artifactPath: [session.reservation.requestedName],
+      openRevision: async () => ({
+        fileId: identity(3),
+        fileRevision: identity(34),
+        exactSize: 1n,
+      }),
+    })
+    await transaction.writeRange(0n, Uint8Array.of(7))
+    await transaction.commit()
+    expect(parent.fileNames()).toEqual([
+      session.reservation.physicalName,
+      session.reservation.requestedName,
+    ].sort())
+    await session.close()
   })
 
   it('reports a pre-existing file as a collision only while its lineage is absent', async () => {
@@ -187,17 +450,17 @@ describe('File System Access DirectTree lifecycle', () => {
       artifact: await singleFileArtifact(),
       operationSeed: 35,
     })
-    await parent.getFileHandle(session.reservation.reservedName, { create: true })
+    await parent.getFileHandle(session.reservation.physicalName, { create: true })
 
     await expect(session.beginFile({
-      artifactPath: [session.reservation.reservedName],
+      artifactPath: [session.reservation.requestedName],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
         exactSize: 4n,
       }),
     })).rejects.toBeInstanceOf(DestinationCollisionError)
-    expect(parent.fileNames()).toEqual([session.reservation.reservedName])
+    expect(parent.fileNames()).toEqual([session.reservation.physicalName])
     await session.close()
   })
 
@@ -243,7 +506,7 @@ describe('File System Access DirectTree lifecycle', () => {
     expect(parent.entryNames()).toEqual([])
     expect(() => session.ensureDirectory([])).toThrow(/not activated/u)
     await session.activate()
-    expect(parent.directoryNames()).toEqual([session.reservation.reservedName])
+    expect(parent.directoryNames()).toEqual([session.reservation.physicalName])
     await session.close()
   })
 
@@ -260,14 +523,14 @@ describe('File System Access DirectTree lifecycle', () => {
       trace: (event) => trace.push(event),
     })
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.reservedName],
+      artifactPath: [session.reservation.requestedName],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(34),
         exactSize: 1n,
       }),
     })
-    const replacement = parent.replaceFile(session.reservation.reservedName, Uint8Array.of(9))
+    const replacement = parent.replaceFile(session.reservation.physicalName, Uint8Array.of(9))
     await expect(transaction.writeRange(0n, Uint8Array.of(1))).rejects.toBeInstanceOf(
       TargetOwnershipUnknownError,
     )
@@ -279,6 +542,8 @@ describe('File System Access DirectTree lifecycle', () => {
     await session.close().catch(() => undefined)
   })
 })
+
+
 describe('File System Access settlement authority', () => {
   it('publishes only after final directory and checkpoint ownership observation', async () => {
     const parent = new MemoryDirectory('downloads')
@@ -413,12 +678,12 @@ describe('File System Access settlement authority', () => {
       intent: session.intent,
       fileId: identity(3),
       fileRevision: identity(84),
-      artifactPath: [session.reservation.reservedName],
+      artifactPath: [session.reservation.requestedName],
       exactSize: 1n,
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(1), SIGNAL)
     await opened.transaction.commit(SIGNAL)
-    parent.replaceFile(session.reservation.reservedName, Uint8Array.of(9))
+    parent.replaceFile(session.reservation.physicalName, Uint8Array.of(9))
 
     await expect(execution.settle({
       transferJobId,
@@ -453,7 +718,7 @@ describe('File System Access settlement authority', () => {
       intent: first.intent,
       fileId: identity(3),
       fileRevision: identity(94),
-      artifactPath: [first.reservation.reservedName],
+      artifactPath: [first.reservation.requestedName],
       exactSize: 4n,
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(1, 2), SIGNAL)
@@ -477,6 +742,7 @@ describe('File System Access settlement authority', () => {
       operationRepository: repository,
       lockManager: locks,
       checkpointRepositoryFactory: checkpointFactory,
+      openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     const reopenedExecution = await fsaExecution(
       reopened,
@@ -489,7 +755,7 @@ describe('File System Access settlement authority', () => {
       intent: reopened.intent,
       fileId: identity(3),
       fileRevision: identity(94),
-      artifactPath: [reopened.reservation.reservedName],
+      artifactPath: [reopened.reservation.requestedName],
       exactSize: 4n,
     }), SIGNAL)
     expect(resumed.durableRanges.ranges).toEqual([{ start: 0n, end: 2n }])
@@ -622,11 +888,12 @@ describe('File System Access activation boundary settlement', () => {
   it('records NeedsAttention when root activation may have acquired namespace effects', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
+    const locks = new MemoryLockManager()
     const session = await bindTask({
       parent,
       repository,
       checkpointFactory: memoryCheckpointFactory(),
-      locks: new MemoryLockManager(),
+      locks,
       artifact: await resultRootArtifact(),
       operationSeed: 115,
       activate: false,
@@ -641,7 +908,7 @@ describe('File System Access activation boundary settlement', () => {
       clock: () => 1_000,
     })
     settlement.bindMaterialization(session)
-    await parent.getDirectoryHandle(session.reservation.reservedName, { create: true })
+    await parent.getDirectoryHandle(session.reservation.physicalName, { create: true })
     const activationFailure = await session.activate().catch(error => error)
 
     await expect(settlement.settleExecutionAdmissionFailure(
@@ -649,7 +916,9 @@ describe('File System Access activation boundary settlement', () => {
       activationFailure,
       SIGNAL,
     )).resolves.toMatchObject({ kind: 'needs-attention' })
+    expect(locks.releaseCount).toBe(1)
     await session.close()
+    expect(locks.releaseCount).toBe(1)
   })
 })
 
@@ -737,7 +1006,7 @@ describe('File System Access fresh-page discard authority', () => {
       receiptDigest: expect.any(String),
     })
     const root = await fixture.parent.getDirectoryHandle(
-      fixture.reservationName,
+      fixture.physicalName,
     ) as unknown as MemoryDirectory
     expect(root.fileNames()).toEqual(['kept.bin'])
     expect(await root.fileBytes('kept.bin')).toEqual(Uint8Array.of(7, 8))
@@ -749,7 +1018,7 @@ describe('File System Access fresh-page discard authority', () => {
   it('persists target ownership attention for changed parent or file identity', async () => {
     const changedFile = await freshDiscardFixture({ seed: 130, successfulFile: false })
     const replacement = changedFile.parent.replaceFile(
-      changedFile.reservationName,
+      changedFile.physicalName,
       Uint8Array.of(9),
     )
     await expect(discardFreshFixture(changedFile)).resolves.toMatchObject({
@@ -770,20 +1039,20 @@ describe('File System Access fresh-page discard authority', () => {
     await expect(discardFreshFixture(changedParent)).resolves.toMatchObject({
       lifecycle: { kind: 'needs-attention', reason: 'target-ownership-unknown' },
     })
-    expect(changedParent.parent.fileNames()).toEqual([changedParent.reservationName])
+    expect(changedParent.parent.fileNames()).toEqual([changedParent.physicalName])
     expect(changedParent.retired()).toBe(0)
   })
 
   it('persists cleanup attention when deletion has no conclusive result', async () => {
     const fixture = await freshDiscardFixture({ seed: 150, successfulFile: false })
     fixture.parent.onRemoveEntry = async (name) => {
-      if (name === fixture.reservationName) throw new DOMException('delete unknown', 'OperationError')
+      if (name === fixture.physicalName) throw new DOMException('delete unknown', 'OperationError')
     }
 
     await expect(discardFreshFixture(fixture)).resolves.toMatchObject({
       lifecycle: { kind: 'needs-attention', reason: 'cleanup-unknown' },
     })
-    expect(fixture.parent.fileNames()).toEqual([fixture.reservationName])
+    expect(fixture.parent.fileNames()).toEqual([fixture.physicalName])
     expect(fixture.retired()).toBe(0)
   })
 
@@ -799,7 +1068,7 @@ describe('File System Access fresh-page discard authority', () => {
     await expect(discardFreshFixture(stale, staleOperation)).rejects.toMatchObject({
       name: 'InvalidStateError',
     })
-    expect(stale.parent.fileNames()).toEqual([stale.reservationName])
+    expect(stale.parent.fileNames()).toEqual([stale.physicalName])
 
     const foreign = await freshDiscardFixture({ seed: 170, successfulFile: false })
     const foreignOperation = Object.freeze({
@@ -812,7 +1081,7 @@ describe('File System Access fresh-page discard authority', () => {
     await expect(discardFreshFixture(foreign, foreignOperation)).rejects.toMatchObject({
       name: 'InvalidStateError',
     })
-    expect(foreign.parent.fileNames()).toEqual([foreign.reservationName])
+    expect(foreign.parent.fileNames()).toEqual([foreign.physicalName])
 
     const concurrent = await freshDiscardFixture({ seed: 180, successfulFile: false })
     const first = discardFreshFixture(concurrent)
@@ -839,7 +1108,7 @@ describe('File System Access fresh-page discard authority', () => {
       receiptDigest: expect.any(String),
     })
     const root = await fixture.parent.getDirectoryHandle(
-      fixture.reservationName,
+      fixture.physicalName,
     ) as unknown as MemoryDirectory
     expect(root.fileNames()).toEqual(['kept.bin'])
     expect(fixture.retired()).toBe(1)

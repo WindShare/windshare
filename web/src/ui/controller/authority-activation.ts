@@ -508,6 +508,9 @@ export class V2AuthorityActivationCoordinator {
       joined: record.joined,
       selection: active.frozenSelection,
       runtime,
+      ...(runtime.repairProjection === undefined
+        ? {}
+        : { repairProjection: runtime.repairProjection }),
     }
     let prepared: ReturnType<ActiveReceiveCoordinator['prepareAdoption']>
     try {

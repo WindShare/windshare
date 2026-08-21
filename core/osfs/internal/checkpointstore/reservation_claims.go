@@ -42,7 +42,8 @@ func (registry *OperationRegistry) BeginReservation(
 	record, err := checkpointmodel.NewReservationClaimRecord(checkpointmodel.ReservationClaimRecordSpec{
 		CanonicalNameKey: spec.CanonicalNameKey, OperationID: spec.OperationID,
 		ReservationID: spec.ReservationID, RequestedName: spec.RequestedName,
-		ReservedName: spec.ReservedName, EntryKind: spec.EntryKind,
+		LogicalReservedName: spec.LogicalReservedName, PhysicalName: spec.PhysicalName,
+		EntryKind:      spec.EntryKind,
 		CollisionIndex: spec.CollisionIndex, Generation: 1, Phase: checkpointmodel.ReservationClaimed,
 	})
 	if err != nil {
@@ -101,7 +102,8 @@ func (handle *ReservationClaimHandle) BindReservation(
 	if !handle.valid() || reservation.IsZero() || reservation.ID() != handle.record.ReservationID() ||
 		reservation.OperationID() != handle.record.OperationID() ||
 		reservation.RequestedName() != handle.record.RequestedName() ||
-		reservation.ReservedName() != handle.record.ReservedName() ||
+		reservation.LogicalReservedName() != handle.record.LogicalReservedName() ||
+		reservation.PhysicalName() != handle.record.PhysicalName() ||
 		reservation.EntryKind() != handle.record.EntryKind() ||
 		reservation.CollisionIndex() != handle.record.CollisionIndex() {
 		return 0, transfer.ErrInvalidOutputBinding
@@ -243,7 +245,8 @@ func (registry *OperationRegistry) recoveryProof(
 	if !direct || digestErr != nil || claimRecord.Phase() != checkpointmodel.ReservationOperationBound ||
 		claimRecord.OperationID() != record.OperationID() || claimRecord.ReservationID() != reservation.ID() ||
 		claimRecord.ReservationDigest() != reservation.Digest() || claimRecord.RequestedName() != reservation.RequestedName() ||
-		claimRecord.ReservedName() != reservation.ReservedName() || claimRecord.EntryKind() != reservation.EntryKind() ||
+		claimRecord.LogicalReservedName() != reservation.LogicalReservedName() ||
+		claimRecord.PhysicalName() != reservation.PhysicalName() || claimRecord.EntryKind() != reservation.EntryKind() ||
 		claimRecord.CollisionIndex() != reservation.CollisionIndex() || claimRecord.OperationBindingDigest() != bindingDigest {
 		return ReservationRecoveryProof{}, checkpointmodel.ErrInvalidReservationClaim
 	}

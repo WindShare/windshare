@@ -5,6 +5,7 @@ import {
 import type { BrowserCapabilityRuntime } from '../output/capability/contract'
 import {
   createOutputFailureBinding,
+  type LocalOutputOperationFailureDiagnosticsPort,
   type OutputDiagnosticBackend,
   type OutputDiagnosticsPorts,
   type OutputFailureBinding,
@@ -35,6 +36,7 @@ import { startPortableArtifactAuthority } from './browser-receive/portable-route
 import {
   bindRuntimeOutputFailures,
   listBrowserRetainedOperations,
+  readBrowserCompatibleNameRepairSummary,
   type BrowserRetainedCompositionOptions,
 } from './browser-receive/retained'
 import {
@@ -71,6 +73,8 @@ export function createBrowserReceiveComposition(
   const composition: V2ReceiveCompositionPort = {
     retained: Object.freeze({
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
+      readRepairSummary: (operationId: string, signal: AbortSignal) =>
+        readBrowserCompatibleNameRepairSummary(options, operationId, signal),
     }),
     environment: async (signal) => {
       const registry = await inspectBrowserRouteRegistry(windowPort, signal)
@@ -84,6 +88,7 @@ export function createBrowserReceiveComposition(
       action,
       options.onTrace,
       options.outputTrace,
+      options.localOutputFailures,
       failures,
     ),
   }
@@ -158,6 +163,14 @@ function inspectBrowserRouteRegistrySynchronously(
   })
 }
 
+function localOutputFailuresOption(
+  failures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+): Readonly<{ localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort }> {
+  return failures === undefined
+    ? Object.freeze({})
+    : Object.freeze({ localOutputFailures: failures })
+}
+
 function diagnosticsFor(
   backend: OutputDiagnosticBackend,
   trace: BrowserReceiveCompositionOptions['outputTrace'],
@@ -199,6 +212,7 @@ function startProductionAuthority(
   offered: OfferedArtifactChoice,
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: BrowserReceiveCompositionOptions['outputTrace'],
+  localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
   failures?: OutputFailureSinks,
 ): V2ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort)
@@ -223,6 +237,7 @@ function startProductionAuthority(
           offered,
           picked,
           ...(diagnostics === undefined ? {} : { diagnostics }),
+          ...localOutputFailuresOption(localOutputFailures),
         }),
         binding,
       )

@@ -28,6 +28,7 @@ import {
   OutputBudgetExceededError,
   OutputSessionCompromisedError,
   TransferPauseRequestedError,
+  TransferStopRequestedError,
 } from '../output-session'
 import {
   BoundaryFaultError,
@@ -63,6 +64,7 @@ const REVISION_FAILURE_NOT_FOUND = 0x3002
 const REVISION_FAILURE_UNREADABLE = 0x3003
 const REVISION_FAILURE_UNSUPPORTED_STABILITY = 0x3004
 const REVISION_FAILURE_DRIFT = 0x3007
+const MAXIMUM_FAILURE_CAUSE_DEPTH = 8
 
 export interface ClassifiedTransferFailure {
   readonly fault: Fault
@@ -112,10 +114,11 @@ export function isolatedDirectoryOutputFailure(
   directoryId?: string,
   incidentScope?: IncidentScopeHandle,
 ): V2DirectoryOutputError | undefined {
+  const mutation = findOutputDirectoryMutationError(error)
   if (
     !fileFailureIsolation ||
-    !(error instanceof OutputDirectoryMutationError) ||
-    error.sessionCompromised
+    mutation === undefined ||
+    mutation.sessionCompromised
   ) {
     return undefined
   }
@@ -149,7 +152,7 @@ export function normalizeV2FileTransferFailure(
   error: unknown,
   options: TransferFailureClassificationOptions = {},
 ): NormalizedV2FileTransferFailure {
-  if (error instanceof TransferPauseRequestedError) {
+  if (error instanceof TransferPauseRequestedError || error instanceof TransferStopRequestedError) {
     return Object.freeze({ kind: 'canceled', diagnostic: error })
   }
   if (options.signal?.aborted === true) {
@@ -211,7 +214,7 @@ export function transferFileOutcomeEvidence(
   input: unknown,
 ): TransferFileOutcomeEvidence | undefined {
   let error = input
-  for (let depth = 0; depth < 8; depth += 1) {
+  for (let depth = 0; depth < MAXIMUM_FAILURE_CAUSE_DEPTH; depth += 1) {
     if (error instanceof V2ClassifiedTransferFailureError &&
         error.fileOutcomeEvidence !== undefined) {
       return error.fileOutcomeEvidence
@@ -407,7 +410,7 @@ function catalogTransferFault(error: unknown): Fault | undefined {
 
 function persistentFileTransferFault(input: unknown): Fault | undefined {
   let error = input
-  for (let depth = 0; depth < 8; depth += 1) {
+  for (let depth = 0; depth < MAXIMUM_FAILURE_CAUSE_DEPTH; depth += 1) {
     if (error instanceof CheckpointLineageDecisionError) {
       switch (error.decision) {
         case 'revision-conflict':
@@ -443,10 +446,11 @@ function outputTransferFault(error: unknown): Fault | undefined {
   if (error instanceof V2DirectoryOutputError) {
     return outputFault(FaultScope.DirectoryLocal, OutputFaultCode.DirectoryMetadata)
   }
-  if (error instanceof OutputDirectoryMutationError) {
+  const directoryMutation = findOutputDirectoryMutationError(error)
+  if (directoryMutation !== undefined) {
     return outputFault(
       FaultScope.OutputPause,
-      error.sessionCompromised
+      directoryMutation.sessionCompromised
         ? OutputFaultCode.MutationAmbiguous
         : OutputFaultCode.DirectoryMetadata,
     )
@@ -473,7 +477,7 @@ function failureStage(error: unknown): FailureStage {
   }
   if (
     error instanceof V2DirectoryOutputError ||
-    error instanceof OutputDirectoryMutationError
+    findOutputDirectoryMutationError(error) !== undefined
   ) {
     return 'output_commit'
   }
@@ -486,6 +490,16 @@ function failureStage(error: unknown): FailureStage {
     return 'output_write'
   }
   return 'content_read'
+}
+
+function findOutputDirectoryMutationError(input: unknown): OutputDirectoryMutationError | undefined {
+  let error = input
+  for (let depth = 0; depth < MAXIMUM_FAILURE_CAUSE_DEPTH; depth += 1) {
+    if (error instanceof OutputDirectoryMutationError) return error
+    if (!(error instanceof Error) || error.cause === undefined) return undefined
+    error = error.cause
+  }
+  return undefined
 }
 
 function recoveryDispositionFor(

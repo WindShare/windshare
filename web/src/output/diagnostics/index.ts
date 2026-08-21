@@ -1,5 +1,7 @@
 export * from './attempt'
 export * from './binding'
+export * from './exception'
 export * from './facts'
+export * from './local-output-failure'
 export * from './ports'
 export * from './trace'

@@ -48,6 +48,7 @@ import {
   type IncrementalDirectoryOutput,
   type OutputFileRequest,
   type OutputSession,
+  type PlanStopRequest,
   type PortableExecution,
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
@@ -260,6 +261,7 @@ export interface ReaderFixtureOptions {
   readonly failRevisionFor?: string
   readonly failBlockFor?: string
   readonly beforeOpen?: (fileId: string) => void | Promise<void>
+  readonly observeOpenSignal?: (fileId: string, signal: AbortSignal | undefined) => void
   readonly beforeRead?: (fileId: string) => void | Promise<void>
 }
 
@@ -284,6 +286,7 @@ export function readerFixture(
       const idText = encodeBase64Url(id)
       revisionRequests.push(idText)
       events.push(`revision:${idText}`)
+      options.observeOpenSignal?.(idText, signal)
       await options.beforeOpen?.(idText)
       if (options.failRevisionFor === idText) {
         throw new V2FileRevisionChangedError('fixture revision failure')
@@ -447,7 +450,10 @@ export interface TestPlanAuthority extends V2PlanExecutionAuthority {
   readonly preparations: ExactPreparationEvidence[]
   readonly singleFileAdmissions: ExactSingleFileEvidence[]
   readonly settlements: string[]
+  readonly settlementSignals: readonly AbortSignal[]
   readonly pauses: string[]
+  readonly stops: readonly PlanStopRequest[]
+  readonly stopSignals: readonly AbortSignal[]
   readonly admissionFailures: unknown[]
   readonly unknownSettlements: string[]
   readonly pauseSignals: AbortSignal[]
@@ -458,11 +464,14 @@ export function planAuthorityFixture(input: {
   readonly output?: TestOutput
   readonly rejectPreparation?: boolean
   readonly failSettlement?: boolean
+  readonly settlementFailure?: Error
   readonly failPause?: boolean
   readonly failUnknownSettlement?: boolean
   readonly hangPause?: boolean
   readonly failDirectoryFinalizePath?: string
   readonly invalidPauseLifecycle?: boolean
+  readonly beforeDirectTreeSettlement?: (signal: AbortSignal) => void | Promise<void>
+  readonly beforeDirectTreeStop?: (signal: AbortSignal) => void | Promise<void>
   readonly onWorkspaceOriginalAdmission?: (evidence: ExactSingleFileEvidence) => void
 } = {}): TestPlanAuthority {
   const output = input.output ?? testOutput()
@@ -470,7 +479,10 @@ export function planAuthorityFixture(input: {
   const preparations: ExactPreparationEvidence[] = []
   const singleFileAdmissions: ExactSingleFileEvidence[] = []
   const settlements: string[] = []
+  const settlementSignals: AbortSignal[] = []
   const pauses: string[] = []
+  const stops: PlanStopRequest[] = []
+  const stopSignals: AbortSignal[] = []
   const admissionFailures: unknown[] = []
   const unknownSettlements: string[] = []
   const pauseSignals: AbortSignal[] = []
@@ -499,14 +511,27 @@ export function planAuthorityFixture(input: {
     openDirectTree: async (intent) => {
       routes.push('direct-tree')
       const directories = await directoryOutput(intent, input.failDirectoryFinalizePath)
+      let terminalSettlementInitiated = false
       const execution: DirectTreeExecution = {
         planKind: 'direct-tree',
         output,
         directories,
-        settle: async ({ worker }) => {
+        terminalSettlementInitiated: () => terminalSettlementInitiated,
+        settle: async ({ worker }, signal) => {
+          terminalSettlementInitiated = true
           settlements.push(`direct-tree:${worker.status}`)
+          settlementSignals.push(signal)
+          await input.beforeDirectTreeSettlement?.(signal)
+          if (input.settlementFailure !== undefined) throw input.settlementFailure
           if (input.failSettlement === true) throw new Error('fixture settlement failure')
           return worker.status === 'Succeeded' ? publishedState(intent) : partialState(intent, worker.failureCount)
+        },
+        stop: async (request, signal) => {
+          terminalSettlementInitiated = true
+          stops.push(request)
+          stopSignals.push(signal)
+          await input.beforeDirectTreeStop?.(signal)
+          return stoppedState(intent, request.materialization.entryCount)
         },
         pause: async (_request, signal) => {
           pauseSignals.push(signal)
@@ -591,7 +616,10 @@ export function planAuthorityFixture(input: {
     preparations,
     singleFileAdmissions,
     settlements,
+    settlementSignals,
     pauses,
+    stops,
+    stopSignals,
     admissionFailures,
     unknownSettlements,
     pauseSignals,
@@ -631,6 +659,7 @@ export function transferJobFixture(input: {
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
   readonly maximumConcurrentFiles?: number
   readonly outputSettlementTimeoutMilliseconds?: number
+  readonly outputSettlementDeadline?: ConstructorParameters<typeof TransferJob>[0]['outputSettlementDeadline']
 }): TransferJob {
   return new TransferJob({
     descriptor: {
@@ -646,6 +675,10 @@ export function transferJobFixture(input: {
     lanes: { size: 1 },
     plans: input.plans,
     intent: input.intent,
+    protocol: Object.freeze({
+      sessionId: identityText(91),
+      generation: 3,
+    }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.maximumConcurrentFiles === undefined
       ? {}
@@ -653,6 +686,9 @@ export function transferJobFixture(input: {
     ...(input.outputSettlementTimeoutMilliseconds === undefined
       ? {}
       : { outputSettlementTimeoutMilliseconds: input.outputSettlementTimeoutMilliseconds }),
+    ...(input.outputSettlementDeadline === undefined
+      ? {}
+      : { outputSettlementDeadline: input.outputSettlementDeadline }),
   })
 }
 
@@ -673,6 +709,17 @@ function partialState(intent: ReceiveIntent, failures: number): ReceiveLifecycle
     successCount: 0n,
     failureCount: BigInt(failures),
     receiptDigest: digestIdentity(72),
+  })
+}
+
+function stoppedState(intent: ReceiveIntent, successCount: bigint): ReceiveLifecycleState {
+  return Object.freeze({
+    ...stateIdentity(intent),
+    kind: 'partial-directory',
+    reason: 'stopped',
+    successCount: successCount === 0n ? 1n : successCount,
+    failureCount: 0n,
+    receiptDigest: digestIdentity(79),
   })
 }
 

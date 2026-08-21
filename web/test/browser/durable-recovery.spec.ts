@@ -2,6 +2,8 @@ import { expect, test } from '@playwright/test'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 import type {
+  CompatibleNameRecoveryCut,
+  CompatibleNameRecoveryProof,
   DurablePackageFixture,
   DurableReceiveFixture,
   FreshPageWorkspaceResumeCut,
@@ -32,7 +34,46 @@ test.beforeEach(async ({ browserName, page }) => {
   await requireOriginPrivateStorage(page, browserName)
 })
 
-test('v7 repositories replace resume authority and fail closed across IndexedDB boundaries', async ({
+test('reopens compatible-name translation without changing logical checkpoint lineage', async ({
+  page,
+}) => {
+  const key = `compatible-${crypto.randomUUID()}`
+  const cut = await page.evaluate(async ({ path, fixtureKey }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.createCompatibleNameRecoveryCut(fixtureKey)
+  }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as CompatibleNameRecoveryCut
+  expect(cut).toMatchObject({
+    logicalCheckpointPath: ['logical-checkpoint.bin'],
+    physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
+    rejectedEntriesBefore: [],
+    logicalEntryAbsent: true,
+    sidecarCommittedCountBeforeCommit: 0,
+    durableActivationState: 'active',
+    durableRepairSummaryCount: 0,
+    checkpointRanges: ['0:2'],
+    physicalPrefixBytes: [1, 2],
+  })
+
+  await page.reload()
+  const proof = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.reopenCompatibleNameRecovery(fixture)
+  }, { path: RECOVERY_HARNESS_PATH, fixture: cut.fixture }) as CompatibleNameRecoveryProof
+  expect(proof).toEqual({
+    headerPointRead: true,
+    logicalCheckpointPath: ['logical-checkpoint.bin'],
+    physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
+    committedOrdinal: 1,
+    resumedRanges: ['0:2'],
+    physicalBytes: [1, 2, 3, 4],
+    sidecarCommittedCount: 1,
+    reopenedRepairSummaryCount: 0,
+    incompleteTailTruncated: true,
+    logicalEntryAbsent: true,
+  })
+})
+
+test('v8 repositories replace resume authority and fail closed across IndexedDB boundaries', async ({
   page,
 }) => {
   const result = await page.evaluate(async (path) => {
@@ -44,7 +85,7 @@ test('v7 repositories replace resume authority and fail closed across IndexedDB 
     blockedUpgrade: 'InvalidStateError',
     blockedRequestClosedLate: true,
     versionChange: 'InvalidStateError',
-    schemaVersion: 7,
+    schemaVersion: 8,
     v6StoresPresent: true,
     legacyStoreRetainedForCleanup: true,
     legacyRowsVisibleToV6: false,

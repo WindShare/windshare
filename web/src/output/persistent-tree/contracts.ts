@@ -4,6 +4,11 @@ import type {
   FinalFileCheckpointProof,
 } from '../persistence/journal'
 import type { FileCheckpointRecoveryRepository } from './recovery'
+import type { AuthenticatedLogicalSiblingMembership } from '../../transfer/job/contract'
+import type {
+  PersistentOutputStageAuthority,
+  PersistentOutputStageScope,
+} from './stage-diagnostics'
 
 export interface OpenedFileRevision {
   readonly fileId: string
@@ -13,10 +18,6 @@ export interface OpenedFileRevision {
 
 export interface PersistentFileRequest {
   readonly artifactPath: readonly string[]
-  /**
-   * Namespace mutation is sequenced after this promise resolves. The callback is the
-   * authenticated content-session revision boundary, not a catalog-size assertion.
-   */
   readonly openRevision: () => Promise<OpenedFileRevision>
 }
 
@@ -48,15 +49,18 @@ export interface PersistentOutputTree {
   inspectFileDestination(
     path: readonly string[],
     selectedOwnedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<'absent' | 'occupied'>
   createFileAfterRevisionOpen(
     path: readonly string[],
     revision: OpenedFileRevision,
     selectedOwnedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<PersistentTreeFile>
   openFile(
     path: readonly string[],
     ownedObjectId: string,
+    stageScope?: PersistentOutputStageScope,
   ): Promise<PersistentTreeFile | undefined>
   removeFile(path: readonly string[], ownedObjectId: string): Promise<void>
   removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void>
@@ -66,6 +70,19 @@ export interface PersistentMaterializationPort {
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort>
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization>
   close(): Promise<void>
+}
+
+export interface PersistentDirectoryNamespaceClaim {
+  readonly artifactPath: readonly string[]
+  readonly logicalSiblingMembership: AuthenticatedLogicalSiblingMembership
+}
+
+/**
+ * Optional DirectTree join for a backend that can activate compatible physical names.
+ * Binding is synchronous and must not inspect membership; candidate allocation owns that lazy query.
+ */
+export interface PersistentOutputNamespaceClaimPort {
+  bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void
 }
 
 /** Root publication is an explicit post-binding step for PrefixVisible destinations. */
@@ -95,6 +112,7 @@ export interface PersistentTreeSessionOptions {
   readonly tree: PersistentOutputTree
   readonly checkpoints: RecoverableFileCheckpointJournal
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly stageAuthority?: PersistentOutputStageAuthority
   readonly trace?: PersistentTreeTrace
 }
 

@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>WindShare Windows FSA Path Probe</title>
+    <style>
+      body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 72rem; }
+      button { font: inherit; padding: 0.6rem 1rem; }
+      pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-word; }
+    </style>
+  </head>
+  <body>
+    <h1>WindShare Windows FSA Path Probe</h1>
+    <p>Select an empty disposable NTFS directory. The probe leaves its output intact for inspection.</p>
+    <button id="run-probe" type="button">Run host-backed probe</button>
+    <p id="status" role="status">Ready.</p>
+    <pre id="evidence" aria-label="Probe evidence"></pre>
+    <script type="module">
+      import { runWindowsFSAPathProbe } from '/test/browser/windows-fsa-path-probe-harness.ts'
+
+      const button = document.querySelector('#run-probe')
+      const status = document.querySelector('#status')
+      const evidence = document.querySelector('#evidence')
+
+      button.addEventListener('click', () => {
+        button.disabled = true
+        status.textContent = 'Choose the prepared disposable directory in the native picker.'
+        void runWindowsFSAPathProbe().then((result) => {
+          globalThis.windShareFSAPathProbeResult = result
+          evidence.textContent = JSON.stringify(result, null, 2)
+          if (result.probeFailure !== null) {
+            status.textContent = 'Probe failed before the target operation completed.'
+          } else if (result.rejection === null) {
+            status.textContent = 'Probe completed without a rejection.'
+          } else {
+            status.textContent = 'Probe captured a rejection.'
+          }
+        }, (error) => {
+          const failure = {
+            probeFailure: error instanceof Error
+              ? { constructor: error.constructor.name, name: error.name, message: error.message, stack: error.stack }
+              : { constructor: null, name: null, message: String(error), stack: null },
+          }
+          globalThis.windShareFSAPathProbeResult = failure
+          evidence.textContent = JSON.stringify(failure, null, 2)
+          status.textContent = 'Probe failed before the target operation completed.'
+        }).finally(() => { button.disabled = false })
+      })
+    </script>
+  </body>
+</html>

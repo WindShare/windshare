@@ -329,6 +329,43 @@ export function validateReceive(payload: UnknownRecord): void {
         'tree finalization outcome')
       decimalFields(payload, ['success_count', 'failure_count'], 'tree finalized')
       return
+    case 'worker_consequence_observed': {
+      exactKeys(payload, [
+        'transition', 'worker_family', 'failure_source', 'operation_id', 'transfer_job_id',
+      ], [
+        'failure_source_index', 'protocol_session_id', 'protocol_generation', 'output_session_id',
+      ], 'worker consequence payload')
+      member(payload.worker_family, ['discovery', 'prepared_files'], 'worker family')
+      member(payload.failure_source, [
+        'producer', 'worker', 'abort', 'queue_close', 'queue_abort',
+      ], 'worker consequence source')
+      const indexed = payload.failure_source === 'worker' ||
+        payload.failure_source === 'queue_close' ||
+        payload.failure_source === 'queue_abort'
+      if (indexed !== (payload.failure_source_index !== undefined)) {
+        throw new TypeError('worker consequence source index disagrees with its source')
+      }
+      if (payload.failure_source_index !== undefined) {
+        uint32(payload.failure_source_index, 'worker consequence source index')
+      }
+      canonicalIdentity(payload.operation_id, 'worker consequence operation ID')
+      canonicalIdentity(payload.transfer_job_id, 'worker consequence transfer job ID')
+      const hasProtocolSession = payload.protocol_session_id !== undefined
+      const hasProtocolGeneration = payload.protocol_generation !== undefined
+      if (hasProtocolSession !== hasProtocolGeneration) {
+        throw new TypeError('worker consequence protocol context must be complete')
+      }
+      if (hasProtocolSession) {
+        canonicalIdentity(payload.protocol_session_id, 'worker consequence protocol session ID')
+        if (uint32(payload.protocol_generation, 'worker consequence protocol generation') === 0) {
+          throw new RangeError('worker consequence protocol generation must be positive')
+        }
+      }
+      if (payload.output_session_id !== undefined) {
+        canonicalIdentity(payload.output_session_id, 'worker consequence output session ID')
+      }
+      return
+    }
     default:
       throw new TypeError('receive_transition discriminant is invalid')
   }
@@ -436,10 +473,11 @@ export function validateRetainedAction(payload: UnknownRecord): void {
   exactKeys(payload, ['transition', 'action', 'continuation'], [], 'retained action payload')
   member(payload.transition, ['started', 'completed', 'failed', 'excluded'],
     'retained action transition')
-  member(payload.action, ['continue', 'save', 'redownload', 'discard', 'delete'],
+  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete'],
     'retained action')
   member(payload.continuation, [
-    'resume_receive', 'resume_package', 'save_artifact', 'retry_download',
+    'resume_receive', 'pending_catch_up', 'restoration_available',
+    'resume_package', 'save_artifact', 'retry_download',
     'cleanup_expired', 'retry_cleanup', 'needs_attention',
   ], 'retained action continuation')
 }

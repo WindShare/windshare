@@ -160,10 +160,14 @@ export async function createNativeNamedEntryReservation(input: {
   readonly reservationId: string
   readonly artifact: ArtifactSpec
   readonly authorityRef: string
-  readonly reservedName: string
+  readonly logicalReservedName: string
   readonly collisionIndex: number
 }): Promise<NamedContainerEntryReservation> {
-  return createNamedEntryReservation({ ...input, authorityKind: 'native-container' })
+  return createNamedEntryReservation({
+    ...input,
+    authorityKind: 'native-container',
+    physicalName: input.logicalReservedName,
+  })
 }
 
 export async function createFSANamedEntryReservation(input: {
@@ -171,7 +175,8 @@ export async function createFSANamedEntryReservation(input: {
   readonly reservationId: string
   readonly artifact: ArtifactSpec
   readonly authorityRef: string
-  readonly reservedName: string
+  readonly logicalReservedName: string
+  readonly physicalName: string
   readonly collisionIndex: number
 }): Promise<NamedContainerEntryReservation> {
   return createNamedEntryReservation({ ...input, authorityKind: 'fsa-container' })
@@ -183,7 +188,8 @@ async function createNamedEntryReservation(input: {
   readonly artifact: ArtifactSpec
   readonly authorityRef: string
   readonly authorityKind: 'native-container' | 'fsa-container'
-  readonly reservedName: string
+  readonly logicalReservedName: string
+  readonly physicalName: string
   readonly collisionIndex: number
 }): Promise<NamedContainerEntryReservation> {
   const artifact = await validateArtifactSpec(input.artifact)
@@ -194,14 +200,20 @@ async function createNamedEntryReservation(input: {
   const requestedName = artifact.layout.kind === 'single-file'
     ? artifact.layout.outputName
     : artifact.layout.root.name
-  const reservedName = requireResultName(input.reservedName)
+  const logicalReservedName = requireResultName(input.logicalReservedName)
+  const physicalName = requireResultName(input.physicalName)
   const expected = await collisionName(
     input.operationId,
     requestedName,
     input.collisionIndex,
     entryKind === 'single-file',
   )
-  if (reservedName !== expected) throw new TypeError('named-entry collision decision is invalid')
+  if (logicalReservedName !== expected) {
+    throw new TypeError('named-entry collision decision is invalid')
+  }
+  if (input.authorityKind === 'native-container' && physicalName !== logicalReservedName) {
+    throw new TypeError('native named-entry physical name must equal its logical reservation')
+  }
   return createDestinationReservation({
     kind: 'named-container-entry',
     operationId: input.operationId,
@@ -214,7 +226,8 @@ async function createNamedEntryReservation(input: {
       : fsaTreeGuarantees(),
     entryKind,
     requestedName,
-    reservedName,
+    logicalReservedName,
+    physicalName,
     collisionIndex: input.collisionIndex,
   }) as Promise<NamedContainerEntryReservation>
 }
@@ -277,7 +290,8 @@ type DestinationReservationInput =
       guarantees: GuaranteeSet
       entryKind: 'single-file' | 'result-root'
       requestedName: string
-      reservedName: string
+      logicalReservedName: string
+      physicalName: string
       collisionIndex: number
     }>
   | Readonly<{
@@ -326,13 +340,15 @@ async function createDestinationReservation(
       requireUint32(input.collisionIndex, 'collision index')
       fields.push(frame(Uint8Array.of(input.entryKind === 'single-file' ? 1 : 2)))
       fields.push(frame(TEXT_ENCODER.encode(input.requestedName)))
-      fields.push(frame(TEXT_ENCODER.encode(input.reservedName)))
+      fields.push(frame(TEXT_ENCODER.encode(input.logicalReservedName)))
+      fields.push(frame(TEXT_ENCODER.encode(input.physicalName)))
       fields.push(frame(uint32(input.collisionIndex)))
       variant = {
         kind: input.kind,
         entryKind: input.entryKind,
         requestedName: input.requestedName,
-        reservedName: input.reservedName,
+        logicalReservedName: input.logicalReservedName,
+        physicalName: input.physicalName,
         collisionIndex: input.collisionIndex,
       }
       break
@@ -389,11 +405,19 @@ export async function validateDestinationReservation(
         reservationId: input.reservationId,
         artifact,
         authorityRef: input.authorityRef,
-        reservedName: input.reservedName,
+        logicalReservedName: input.logicalReservedName,
+        physicalName: input.physicalName,
         collisionIndex: input.collisionIndex,
       }
       rebuilt = input.authorityKind === 'native-container'
-        ? await createNativeNamedEntryReservation(options)
+        ? await createNativeNamedEntryReservation({
+            operationId: options.operationId,
+            reservationId: options.reservationId,
+            artifact: options.artifact,
+            authorityRef: options.authorityRef,
+            logicalReservedName: options.logicalReservedName,
+            collisionIndex: options.collisionIndex,
+          })
         : await createFSANamedEntryReservation(options)
       if (input.entryKind !== rebuilt.entryKind) {
         throw new TypeError('destination reservation entry kind is invalid')

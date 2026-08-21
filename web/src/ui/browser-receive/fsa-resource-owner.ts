@@ -7,6 +7,7 @@ import {
   type OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
 import type { FileSystemAccessOutputSession } from '../../output/file-system-access/session'
+import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 
 export interface FSAResourceOwnerOptions {
   readonly repository?: Readonly<{ close(): void }>
@@ -62,6 +63,20 @@ export class FSAResourceOwner {
     }
     this.#outputSession = session
     this.#rootTransferred = true
+  }
+
+  get repairProjection(): CompatibleNameRepairProjectionSource | undefined {
+    return this.#outputSession?.repairProjection
+  }
+
+  subscribeRepairProjectionActivation(
+    listener: (source: CompatibleNameRepairProjectionSource) => void,
+  ): () => void {
+    const session = this.#outputSession
+    if (session === undefined) {
+      throw new DOMException('FSA output session is unavailable', 'InvalidStateError')
+    }
+    return session.subscribeRepairProjectionActivation(listener)
   }
 
   close(): Promise<void> {

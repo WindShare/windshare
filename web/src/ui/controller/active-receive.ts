@@ -4,6 +4,7 @@ import type {
   LateOutputFailureConsequenceCapability,
   OutputFailureBindingLease,
 } from '../../output/diagnostics'
+import { isTerminalLifecycleState } from '../../output/workspace'
 import { TransferPauseRequestedError } from '../../transfer/output-session'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
 import {
@@ -23,6 +24,7 @@ import type { V2OutputPresentationController } from '../v2-output'
 import type { V2BoundReceiveOperation } from '../v2-receive-runtime'
 import {
   StaleReceiveBoundaryError,
+  type V2ActiveCompatibleNameRepairProjection,
   type V2ReceiverControllerOptions,
 } from './contracts'
 import {
@@ -47,6 +49,7 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
   readonly runtime: V2BoundReceiveOperation
+  repairProjection?: V2ActiveCompatibleNameRepairProjection
   transfer?: AbortController
   connectivity?: V2ConnectivityActivation
   running?: Promise<void>
@@ -56,6 +59,8 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   expiryTimer?: ReturnType<typeof setTimeout>
   detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
+  unsubscribeRepairProjection?: () => void
+  unsubscribeRepairProjectionActivation?: () => void
 }
 
 export interface ActiveReceiveCoordinatorOptions {
@@ -72,6 +77,7 @@ export interface ActiveReceiveAdoption {
   readonly joined: ActiveReceiveJoinedShare
   readonly selection: V2FrozenSelectionPolicy
   readonly runtime: V2BoundReceiveOperation
+  readonly repairProjection?: V2ActiveCompatibleNameRepairProjection
 }
 
 export interface PreparedActiveReceiveAdoption {
@@ -170,6 +176,7 @@ export class ActiveReceiveCoordinator {
     const active = this.#operation
     this.#operation = undefined
     if (active === undefined) return Promise.resolve()
+    this.#stopRepairProjection(active)
     this.#lifecycle.cancelExpiry(active)
     active.transfer?.abort(reason)
     this.#observability.receiveExclusion(
@@ -199,6 +206,8 @@ export class ActiveReceiveCoordinator {
     let transfer: AbortController | undefined
     let task: Promise<void>
     try {
+      this.#startRepairProjectionActivation(active)
+      this.#startRepairProjection(active)
       connectivity = active.joined.beginDownloadConnectivity()
       transfer = new AbortController()
       active.connectivity = connectivity
@@ -287,7 +296,13 @@ export class ActiveReceiveCoordinator {
     }
 
     try {
-      if (!this.#outputs.updateLifecycle(result.lifecycle, Date.now(), usage, Object.freeze([]))) {
+      if (!this.#outputs.updateLifecycle(
+        result.lifecycle,
+        Date.now(),
+        usage,
+        Object.freeze([]),
+        repairSummaryAtResultBoundary(result),
+      )) {
         throw new TypeError('transfer lifecycle did not advance the active receive operation')
       }
       if (!this.#outputs.adoptTransferResult(result)) {
@@ -461,6 +476,57 @@ export class ActiveReceiveCoordinator {
       this.#ownsJoinedShare(active.joined)
   }
 
+  #startRepairProjection(active: ActiveReceiveOperation): void {
+    const projection = active.repairProjection
+    if (projection === undefined || active.unsubscribeRepairProjection !== undefined) return
+    const unsubscribe = projection.subscribe(summary => {
+      if (!this.#operationIsCurrent(active)) return
+      this.#outputs.updateRepairSummary(active.runtime.intent.operationId, summary)
+    })
+    if (this.#operationIsCurrent(active)) {
+      active.unsubscribeRepairProjection = unsubscribe
+      return
+    }
+    unsubscribe()
+  }
+
+  #startRepairProjectionActivation(active: ActiveReceiveOperation): void {
+    if (active.repairProjection !== undefined ||
+        active.unsubscribeRepairProjectionActivation !== undefined) return
+    const subscribe = active.runtime.subscribeRepairProjectionActivation
+    if (subscribe === undefined) return
+    const unsubscribe = subscribe.call(active.runtime, projection => {
+      if (!this.#operationIsCurrent(active) || active.repairProjection !== undefined) return
+      active.repairProjection = projection
+      this.#startRepairProjection(active)
+    })
+    if (this.#operationIsCurrent(active)) {
+      active.unsubscribeRepairProjectionActivation = unsubscribe
+      return
+    }
+    unsubscribe()
+  }
+
+  #stopRepairProjection(active: ActiveReceiveOperation): void {
+    const unsubscribeActivation = active.unsubscribeRepairProjectionActivation
+    if (unsubscribeActivation !== undefined) {
+      delete active.unsubscribeRepairProjectionActivation
+      try {
+        unsubscribeActivation()
+      } catch {
+        // Activation-source cleanup cannot replace receive ownership settlement.
+      }
+    }
+    const unsubscribe = active.unsubscribeRepairProjection
+    if (unsubscribe === undefined) return
+    delete active.unsubscribeRepairProjection
+    try {
+      unsubscribe()
+    } catch {
+      // Presentation-source cleanup cannot replace receive ownership settlement.
+    }
+  }
+
   #detachOperation(active: ActiveReceiveOperation): Promise<void> {
     if (active.detachment !== undefined) return active.detachment
     const lateCapability = active.detachOutputCapability
@@ -502,4 +568,11 @@ export class ActiveReceiveCoordinator {
   #closeAttempt(attempt: V2PresentationAttempt | undefined): void {
     attempt?.close()
   }
+}
+
+function repairSummaryAtResultBoundary(
+  result: TransferJobResult,
+): TransferJobResult['repairSummary'] | null {
+  if (result.repairSummary !== undefined) return result.repairSummary
+  return isTerminalLifecycleState(result.lifecycle) ? null : undefined
 }

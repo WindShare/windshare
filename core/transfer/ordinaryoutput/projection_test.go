@@ -145,7 +145,7 @@ func TestArtifactPathProjectorThreeStateMatrix(t *testing.T) {
 	}
 }
 
-func TestArtifactPathProjectorIsStableAcrossReservedNameAlias(t *testing.T) {
+func TestArtifactPathProjectorIsStableAcrossLogicalReservationAlias(t *testing.T) {
 	root := projectionID[catalog.DirectoryID](1)
 	anchor := projectionID[catalog.DirectoryID](2)
 	file := projectionID[catalog.FileID](3)
@@ -160,7 +160,7 @@ func TestArtifactPathProjectorIsStableAcrossReservedNameAlias(t *testing.T) {
 	reservation, err := receivecontract.NewNativeNamedEntryReservation(
 		operation, reservationID, artifact, authority, reservedName, 1,
 	)
-	if err != nil || reservation.ReservedName() == "photos" {
+	if err != nil || reservation.LogicalReservedName() == "photos" {
 		t.Fatalf("reservation=%+v err=%v", reservation, err)
 	}
 	projector, err := NewArtifactPathProjector(root, artifact)
@@ -172,8 +172,9 @@ func TestArtifactPathProjectorIsStableAcrossReservedNameAlias(t *testing.T) {
 	))
 	path, ok := projection.ArtifactPath()
 	if !ok || path.String() != "photos/image.jpg" ||
-		strings.HasPrefix(path.String(), reservation.ReservedName()+"/") {
-		t.Fatalf("projection=%+v path=%q reserved=%q", projection, path.String(), reservation.ReservedName())
+		strings.HasPrefix(path.String(), reservation.LogicalReservedName()+"/") {
+		t.Fatalf("projection=%+v path=%q logical-reserved=%q", projection, path.String(),
+			reservation.LogicalReservedName())
 	}
 }
 

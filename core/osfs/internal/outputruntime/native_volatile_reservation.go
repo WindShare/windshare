@@ -115,7 +115,8 @@ func (handle *volatileReservationClaimHandle) BindReservation(
 		reservation.IsZero() || reservation.OperationID() != handle.spec.OperationID ||
 		reservation.ID() != handle.spec.ReservationID ||
 		reservation.RequestedName() != handle.spec.RequestedName ||
-		reservation.ReservedName() != handle.spec.ReservedName ||
+		reservation.LogicalReservedName() != handle.spec.LogicalReservedName ||
+		reservation.PhysicalName() != handle.spec.PhysicalName ||
 		reservation.CollisionIndex() != handle.spec.CollisionIndex ||
 		reservation.EntryKind() != handle.spec.EntryKind {
 		return 0, transfer.ErrInvalidOutputBinding
