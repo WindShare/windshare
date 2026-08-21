@@ -27,6 +27,9 @@ git --no-pager diff --check
 echo "-- Web production graph resolver tests"
 node --test scripts/ci/web-forbidden.tests.mjs
 
+echo "-- Frozen Unicode Go tables"
+node scripts/unicode15/generate-go.mjs --check
+
 echo "-- Web retired paths and production graph"
 node scripts/ci/web-forbidden.mjs
 
