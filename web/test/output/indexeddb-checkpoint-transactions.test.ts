@@ -2,6 +2,12 @@ import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
+  CHECKPOINT_DATABASE_VERSION,
+  INDEXEDDB_V7_STORE_SCHEMAS,
+  INDEXEDDB_V8_STORE_SCHEMAS,
+  installIndexedDbV8Schema,
+} from '../../src/output/browser/indexeddb-database'
+import {
   assertCheckpointInstallCapacity,
   assertPristineInitialCheckpoint,
   type IndexedDbCheckpointInventory,
@@ -16,6 +22,41 @@ import {
 } from '../../src/output/persistence/checkpoint'
 
 describe('IndexedDB checkpoint transaction admission', () => {
+  it('owns the v7 metadata reset inside the v8 versionchange transaction', () => {
+    const cleared: string[] = []
+    const stores = new Map(INDEXEDDB_V8_STORE_SCHEMAS.map(schema => [
+      schema.name,
+      {
+        indexNames: { contains: (name: string) =>
+          schema.indexes.some(index => index.name === name) },
+        clear: () => cleared.push(schema.name),
+      },
+    ]))
+    const database = {
+      objectStoreNames: { contains: (name: string) => stores.has(name) },
+    } as unknown as IDBDatabase
+    const transaction = {
+      objectStore: (name: string) => stores.get(name),
+    } as unknown as IDBTransaction
+
+    installIndexedDbV8Schema(database, transaction, CHECKPOINT_DATABASE_VERSION - 1)
+
+    expect(cleared).toEqual(INDEXEDDB_V7_STORE_SCHEMAS.map(schema => schema.name))
+    expect(INDEXEDDB_V8_STORE_SCHEMAS.slice(-2).map(schema => schema.name)).toEqual([
+      'compatible-name-v1-operations',
+      'compatible-name-v1-mappings',
+    ])
+  })
+
+  it('refuses to upgrade existing stores without the owning versionchange transaction', () => {
+    const database = {
+      objectStoreNames: { contains: () => true },
+    } as unknown as IDBDatabase
+    expect(() => installIndexedDbV8Schema(database, undefined, 7)).toThrow(
+      'lacks its versionchange transaction',
+    )
+  })
+
   it('enforces the operation-wide physical RecordID capacity before installation', () => {
     const candidate = checkpoint()
     const physicalRecordIds = new Set<string>()

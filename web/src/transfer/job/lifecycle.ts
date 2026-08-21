@@ -141,6 +141,18 @@ export function validatePauseLifecycle(
   return state
 }
 
+export function validateStopLifecycle(
+  intent: TransferJobOptions['intent'],
+  state: ReceiveLifecycleState,
+): ReceiveLifecycleState {
+  validateLifecycleIdentity(intent, state)
+  if (intent.plan.kind !== 'direct-tree' || state.kind !== 'partial-directory' ||
+      state.reason !== 'stopped') {
+    throw new TypeError('Stop must retain an ordinary stopped DirectTree partial result')
+  }
+  return state
+}
+
 export function validatePreparationRejectionLifecycle(
   intent: TransferJobOptions['intent'],
   state: ReceiveLifecycleState,

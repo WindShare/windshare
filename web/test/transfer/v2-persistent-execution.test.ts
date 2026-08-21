@@ -6,16 +6,23 @@ import type {
   PersistentFileRequest,
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
+  PersistentOutputNamespaceClaimPort,
 } from '../../src/output/persistent-tree/contracts'
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { ReceiveIntent } from '../../src/transfer/intent'
-import { V2OutputPausedError } from '../../src/transfer/job/contract'
 import {
+  V2OutputPausedError,
+  type AuthenticatedLogicalSiblingMembership,
+} from '../../src/transfer/job/contract'
+import {
+  OutputDirectoryMutationError,
   outputSessionIdentity,
+  snapshotDirectoryMaterializationRequest,
   type ExactPreparationEvidence,
   type OutputFileRequest,
 } from '../../src/transfer/output-session'
+import { isolatedDirectoryOutputFailure } from '../../src/transfer/job/failures'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
@@ -41,6 +48,146 @@ import {
 const SIGNAL = new AbortController().signal
 const SUCCESS = transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
 const PAUSED = transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY)
+
+describe('persistent namespace claim bridge', () => {
+  it('rejects membership authority from another committed generation', () => {
+    expect(() => snapshotDirectoryMaterializationRequest({
+      source: {
+        directoryId: identityText(2),
+        generation: identityText(90),
+        path: Object.freeze([]),
+      },
+      artifactPath: Object.freeze([]),
+      logicalSiblingMembership: {
+        directoryId: identityText(2),
+        generation: identityText(91),
+        hasCommittedName: async () => false,
+      },
+    })).toThrow('does not match the admitted directory generation')
+  })
+
+  it('binds lazy authenticated membership without querying it on an ordinary directory admission', async () => {
+    const intent = asDirectTree(await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection: new V2SelectionPolicy(),
+    }))
+    const materialization = new PersistentMaterializationFixture(intent)
+    const hasCommittedName = vi.fn(async (candidate: string) => candidate === 'occupied')
+    const membership: AuthenticatedLogicalSiblingMembership = Object.freeze({
+      directoryId: intent.syntheticRoot,
+      generation: identityText(90),
+      hasCommittedName,
+    })
+    let bound: Parameters<PersistentOutputNamespaceClaimPort['bindDirectoryNamespace']>[0] | undefined
+    const namespaceClaims: PersistentOutputNamespaceClaimPort = {
+      bindDirectoryNamespace: (claim) => {
+        materialization.events.push('namespace-bound')
+        bound = claim
+      },
+    }
+    const execution = await createPersistentDirectTreeExecution({
+      intent,
+      materialization,
+      namespaceClaims,
+      outputIdentity: outputSessionIdentity({
+        backend: 'persistent-test',
+        outputSessionId: 'namespace-claim-session',
+      }),
+      settlement: {
+        pause: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return partialDirectoryState(intent)
+        },
+        settle: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return publishedState(intent)
+        },
+      },
+    })
+
+    await execution.directories.admitDirectory({
+      source: {
+        directoryId: intent.syntheticRoot,
+        generation: identityText(90),
+        path: Object.freeze([]),
+      },
+      artifactPath: Object.freeze([]),
+      logicalSiblingMembership: membership,
+    }, SIGNAL)
+
+    expect(materialization.events.slice(0, 2)).toEqual([
+      'namespace-bound',
+      'ensure-directory:',
+    ])
+    expect(hasCommittedName).not.toHaveBeenCalled()
+    if (bound === undefined) throw new Error('namespace claim was not bound')
+    await expect(bound.logicalSiblingMembership.hasCommittedName('occupied')).resolves.toBe(true)
+    expect(hasCommittedName).toHaveBeenCalledOnce()
+  })
+
+  it('isolates a later logical directory collision without retrying its namespace mutation', async () => {
+    const intent = asDirectTree(await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection: new V2SelectionPolicy(),
+    }))
+    const collision = new OutputDirectoryMutationError(
+      'logical directory collides with an operation-owned compatible name',
+      false,
+    )
+    const ensureDirectory = vi.fn(async () => { throw collision })
+    const execution = await createPersistentDirectTreeExecution({
+      intent,
+      materialization: {
+        beginFile: async () => { throw new Error('file materialization must not start') },
+        ensureDirectory,
+        close: async () => undefined,
+      },
+      outputIdentity: outputSessionIdentity({
+        backend: 'persistent-test',
+        outputSessionId: 'late-logical-collision',
+      }),
+      settlement: {
+        pause: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return partialDirectoryState(intent)
+        },
+        settle: async (_request, cut) => {
+          await cut.closeMaterialization()
+          return publishedState(intent)
+        },
+      },
+    })
+
+    let failure: unknown
+    try {
+      await execution.directories.admitDirectory({
+        source: {
+          directoryId: intent.syntheticRoot,
+          generation: identityText(90),
+          path: Object.freeze([]),
+        },
+        artifactPath: Object.freeze([]),
+      }, SIGNAL)
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBeInstanceOf(V2OutputPausedError)
+    expect((failure as Error).cause).toBe(collision)
+    expect(ensureDirectory).toHaveBeenCalledOnce()
+    expect(isolatedDirectoryOutputFailure(failure, true, intent.syntheticRoot))
+      .toMatchObject({
+        directoryId: intent.syntheticRoot,
+        classification: {
+          fault: { scope: 'directory-local' },
+          materializationFailureReason: 'directory-finalize-failed',
+        },
+      })
+  })
+
+})
 
 describe('persistent production execution bridge', () => {
   it('keeps DirectTree revision authority ahead of file creation and settles from proofs', async () => {
@@ -282,7 +429,9 @@ describe('persistent production execution bridge', () => {
         rawBytes: 0n,
       },
     }, SIGNAL)).rejects.toThrow('requires every directory proof')
-    expect(settle).not.toHaveBeenCalled()
+    // The lifecycle authority now owns the quiescent cut, so proof validation occurs
+    // only after it has synchronously closed external materialization admission.
+    expect(settle).toHaveBeenCalledOnce()
   })
 
   it('allows a lifecycle owner to record close uncertainty as NeedsAttention', async () => {

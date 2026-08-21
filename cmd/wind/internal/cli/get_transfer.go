@@ -325,10 +325,10 @@ func getOperationDestination(
 	case receivecontract.ReservationContainerRoot:
 		return displayRoot, false, nil
 	case receivecontract.ReservationNamedContainerEntry:
-		if reservation.ReservedName() == "" {
+		if reservation.PhysicalName() == "" {
 			return "", false, errGetOutputReservationContract
 		}
-		return filepath.Join(displayRoot, reservation.ReservedName()), reservation.CollisionIndex() > 0, nil
+		return filepath.Join(displayRoot, reservation.PhysicalName()), reservation.CollisionIndex() > 0, nil
 	default:
 		return "", false, errGetOutputReservationContract
 	}

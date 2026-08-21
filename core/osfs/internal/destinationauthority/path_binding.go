@@ -10,7 +10,7 @@ import (
 
 var ErrInvalidArtifactPath = errors.New("destination authority artifact path is invalid")
 
-// PhysicalArtifactPath applies exactly one preferred-to-reserved alias. It does
+// PhysicalArtifactPath applies exactly one requested-to-physical alias. It does
 // not parse source coordinates; only the projector's logical artifact output is
 // eligible to reach this boundary.
 func PhysicalArtifactPath(logicalPath string, reservation ReservedEntry) (string, error) {
@@ -19,7 +19,7 @@ func PhysicalArtifactPath(logicalPath string, reservation ReservedEntry) (string
 		return "", ErrInvalidArtifactPath
 	}
 	components := strings.Split(logicalPath, "/")
-	if components[0] != reservation.preferredName {
+	if components[0] != reservation.requestedName {
 		return "", ErrInvalidArtifactPath
 	}
 	if reservation.kind == receivecontract.ContainerEntryResultRoot {
@@ -28,6 +28,6 @@ func PhysicalArtifactPath(logicalPath string, reservation ReservedEntry) (string
 		}
 		return strings.Join(components[1:], "/"), nil
 	}
-	components[0] = reservation.reservedName
+	components[0] = reservation.physicalName
 	return strings.Join(components, "/"), nil
 }

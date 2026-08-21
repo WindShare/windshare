@@ -162,7 +162,8 @@ async function writerFixture(closeFailure?: unknown): Promise<Readonly<{
     reservationId: identity(56),
     artifact,
     authorityRef,
-    reservedName: 'payload.bin',
+    logicalReservedName: 'payload.bin',
+    physicalName: 'payload.bin',
     collisionIndex: 0,
   })
   const binding = {

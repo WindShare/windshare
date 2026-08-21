@@ -14,6 +14,7 @@ import type {
   OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
+import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
@@ -29,6 +30,7 @@ import {
 } from '../../transfer/intent'
 import {
   TransferPauseRequestedError,
+  TransferStopRequestedError,
   outputSessionIdentity,
   type V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
@@ -61,8 +63,9 @@ const defaultAttemptIdentitySource: FSAAttemptIdentitySource = Object.freeze({
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly intent: ReceiveIntent
   readonly lifecycle: ReceiveLifecycleState
-  readonly activeControls = Object.freeze(['pause'] as const)
+  readonly activeControls = Object.freeze(['pause', 'stop'] as const)
   readonly initialWorkspaceUsage = null
+  readonly repairProjection?: CompatibleNameRepairProjectionSource
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #resources: FSAResourceOwner
@@ -93,6 +96,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#repository = input.repository
     this.#lease = input.lease
     this.#resources = input.resources
+    const repairProjection = input.session.repairProjection
+    if (repairProjection !== undefined) this.repairProjection = repairProjection
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
@@ -210,8 +215,21 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   }
 
   interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
-    if (control !== 'pause') throw unavailableRoute()
-    transfer.abort(new TransferPauseRequestedError())
+    switch (control) {
+      case 'pause':
+        transfer.abort(new TransferPauseRequestedError())
+        return
+      case 'stop':
+        transfer.abort(new TransferStopRequestedError())
+        return
+      default: throw unavailableRoute()
+    }
+  }
+
+  subscribeRepairProjectionActivation(
+    listener: (source: CompatibleNameRepairProjectionSource) => void,
+  ): () => void {
+    return this.#resources.subscribeRepairProjectionActivation(listener)
   }
 
   async startLifecycleAction(
@@ -487,8 +505,10 @@ async function createFSAPlanAuthority(
           signal.throwIfAborted()
           return createPersistentDirectTreeExecution({
             intent: boundIntent,
-            materialization: session,
-            outputIdentity: outputSessionIdentity({
+             materialization: session,
+             namespaceClaims: session,
+             repairSummary: () => session.repairSummary(),
+             outputIdentity: outputSessionIdentity({
               backend: 'browser-fsa-tree',
               outputSessionId,
             }),

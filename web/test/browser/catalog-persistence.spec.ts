@@ -51,6 +51,22 @@ test('preserves commits and cleans abort and crash residue after reopen', async 
   })
 })
 
+test('queries exact names only through the currently committed generation', async ({ page }) => {
+  const result = await page.evaluate(async (modulePath) => {
+    const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')
+    return probe.probeCommittedNameMembership()
+  }, PROBE_MODULE)
+
+  expect(result).toEqual({
+    stagedGenerationUnavailable: true,
+    exactNameFound: true,
+    portableCollisionFound: true,
+    absentNameRejected: true,
+    staleGenerationRejected: true,
+    reopenFound: true,
+  })
+})
+
 test('rejects a signed synthetic-root child before IndexedDB commit', async ({ page }) => {
   const result = await page.evaluate(async (modulePath) => {
     const probe = await import(modulePath) as typeof import('./catalog-persistence-probe')

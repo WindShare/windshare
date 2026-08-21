@@ -381,7 +381,39 @@ function projectTransferTraceEvent(
         success_count: decimal(event.successCount),
         failure_count: decimal(event.failureCount),
       })
+    case 'worker_consequence_observed': {
+      const source = event.failureSource
+      const sourceIndex = workerConsequenceSourceIndex(source)
+      return observation(event.name, {
+        transition: event.transition,
+        worker_family: snake(event.workerFamily),
+        failure_source: snake(source.kind),
+        ...(sourceIndex === undefined ? {} : { failure_source_index: sourceIndex }),
+        operation_id: event.operationId,
+        transfer_job_id: event.transferJobId,
+        ...(event.protocolSessionId === undefined || event.protocolGeneration === undefined
+          ? {}
+          : {
+              protocol_session_id: event.protocolSessionId,
+              protocol_generation: event.protocolGeneration,
+            }),
+        ...(event.outputSessionId === undefined
+          ? {}
+          : { output_session_id: event.outputSessionId }),
+      })
+    }
   }
+}
+
+function workerConsequenceSourceIndex(
+  source: Extract<
+    TransferTraceEvent,
+    { readonly transition: 'worker_consequence_observed' }
+  >['failureSource'],
+): number | undefined {
+  if (source.kind === 'worker') return source.workerIndex
+  if (source.kind === 'queue-close' || source.kind === 'queue-abort') return source.queueIndex
+  return undefined
 }
 
 function projectPeerAttemptPayload(

@@ -6,6 +6,7 @@ import type {
   V2RetainedReceiveActionResult,
   V2RetainedReceiveInventory,
 } from '../../src/ui/v2-receive-runtime'
+import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import {
   FakeGateway,
   FakeJoinedShare,
@@ -28,6 +29,56 @@ import {
 afterEach(resetOrchestrationTestEnvironment)
 
 describe('v2 receiver product orchestration', () => {
+  it('qualifies pending retained repair authority and reloads after local catch-up', async () => {
+    const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
+    const lifecycle = Object.freeze({
+      kind: 'receiving' as const,
+      operationId: identityText(101),
+      receiveIntentDigest: identityText(102, 32),
+      generation: 3n,
+      activeLeaseId: identityText(103),
+    })
+    const sourceOperation = Object.freeze({
+      operationId: lifecycle.operationId,
+      receiveIntentDigest: lifecycle.receiveIntentDigest,
+      lifecycleGeneration: lifecycle.generation,
+      lifecycle,
+      continuation: 'pending-catch-up' as const,
+      actions: Object.freeze(['catch-up'] as const),
+    })
+    const summary = repairSummary(true, 'active')
+    receive.retainedOperations = Object.freeze([sourceOperation])
+    receive.repairSummaries.set(sourceOperation.operationId, summary)
+    const actionGate = deferred<V2RetainedReceiveActionResult>()
+    receive.retainedActionGate = actionGate.promise
+    const controller = new V2ReceiverController(
+      new FakeGateway([]) as unknown as V2BrowserReceiverGateway,
+      { receive },
+    )
+    controller.initialize({ capabilityInput: null, pageUrl: 'https://receiver.invalid/s/share' })
+    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+
+    const presented = controller.getSnapshot().retained.operations[0]
+    expect(presented).not.toBe(sourceOperation)
+    expect(presented).toMatchObject({
+      actions: ['catch-up'],
+      repairSummary: summary,
+    })
+    if (presented === undefined) throw new Error('pending catch-up was not presented')
+    controller.performRetainedAction(presented, 'catch-up')
+
+    expect(receive.retainedActionCalls).toMatchObject([{
+      operation: sourceOperation,
+      action: 'catch-up',
+    }])
+    receive.retainedOperations = Object.freeze([])
+    actionGate.resolve(Object.freeze({ kind: 'completed' }))
+    await waitFor(() => controller.getSnapshot().retained.kind === 'ready' &&
+      controller.getSnapshot().retained.operations.length === 0)
+
+    await controller.dispose()
+  })
+
   it('publishes retained v6 lifecycle inventory without acquiring receive authority', async () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     receive.retainedOperations = Object.freeze([retainedOperation()])
@@ -248,3 +299,21 @@ describe('v2 receiver product orchestration', () => {
     expect(traces).toEqual(['receive.inventory.load.started'])
   })
 })
+
+function repairSummary(
+  pendingCatchUp: boolean,
+  footerState: 'active' | 'completed' | 'stopped' | 'failed',
+): CompatibleNameRepairSummary {
+  return Object.freeze({
+    committedCount: 1,
+    logicalPathSample: Object.freeze([Object.freeze(['report.txt'])]),
+    pairDisplayNames: Object.freeze({
+      script: 'restore-names.windshare-abc234.ps1',
+      sidecar: 'restore-names.windshare-abc234.tsv',
+    }),
+    placement: 'inside-logical-root',
+    runCommand: 'powershell.exe -NoProfile -File ".\\restore-names.windshare-abc234.ps1"',
+    latestObservedFooter: Object.freeze({ committedCount: 1, state: footerState }),
+    pendingCatchUp,
+  })
+}

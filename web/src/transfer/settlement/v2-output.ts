@@ -22,6 +22,10 @@ export interface V2OutputSettlementClock {
   now(): number
 }
 
+export interface V2OutputSettlementDeadline {
+  schedule(delayMilliseconds: number, expire: () => void): Readonly<{ cancel(): void }>
+}
+
 export class V2OutputSettlementTimeoutError extends Error {
   readonly operation: string
 
@@ -76,8 +80,66 @@ export async function withOutputSettlementTimeout<T>(
   timeoutMilliseconds: number,
   settle: () => Promise<T>,
   clock?: V2OutputSettlementClock,
+  deadline?: V2OutputSettlementDeadline,
 ): Promise<T> {
-  return settleWithin(operation, new SettlementBudget(timeoutMilliseconds, clock), settle)
+  return settleWithin(
+    operation,
+    new SettlementBudget(timeoutMilliseconds, clock),
+    settle,
+    deadline,
+  )
+}
+
+/**
+ * A DirectTree terminal cut owns live mutation and lifecycle authority until its
+ * original promise drains. A deadline may revoke cancellable work and govern the
+ * exposed failure, but cannot detach that authority from the job result boundary.
+ */
+export async function withQuiescentOutputSettlementTimeout<T>(
+  operation: string,
+  timeoutMilliseconds: number,
+  settle: (signal: AbortSignal) => Promise<T>,
+  deadline: V2OutputSettlementDeadline = SYSTEM_SETTLEMENT_DEADLINE,
+): Promise<T> {
+  const controller = new AbortController()
+  const timeoutError = new V2OutputSettlementTimeoutError(operation)
+  const terminal = Promise.resolve().then(() => settle(controller.signal))
+  const terminalOutcome = terminal.then(
+    value => Object.freeze({ kind: 'settled' as const, value }),
+    error => Object.freeze({ kind: 'failed' as const, error }),
+  )
+  let deadlineTask: Readonly<{ cancel(): void }> | undefined
+  const deadlineOutcome = new Promise<
+    Readonly<{ kind: 'expired'; error: V2OutputSettlementTimeoutError }> |
+    Readonly<{ kind: 'deadline-failed'; error: unknown }>
+  >(resolve => {
+    try {
+      deadlineTask = deadline.schedule(
+        timeoutMilliseconds,
+        () => resolve(Object.freeze({ kind: 'expired' as const, error: timeoutError })),
+      )
+    } catch (error) {
+      resolve(Object.freeze({ kind: 'deadline-failed' as const, error }))
+    }
+  })
+
+  try {
+    const first = await Promise.race([terminalOutcome, deadlineOutcome])
+    if (first.kind === 'expired' || first.kind === 'deadline-failed') {
+      controller.abort(first.error)
+      // The latched deadline outcome remains authoritative even if cancellation or
+      // a later terminal collaborator failure is observed while draining the cut.
+      await terminalOutcome
+      throw first.error
+    }
+    if (first.kind === 'failed') throw first.error
+    return first.value
+  } finally {
+    deadlineTask?.cancel()
+    if (!controller.signal.aborted) {
+      controller.abort(new DOMException('Terminal output settlement boundary closed', 'AbortError'))
+    }
+  }
 }
 
 /**
@@ -96,6 +158,7 @@ export async function pauseFailedV2Execution(options: {
   readonly incidentScope?: IncidentScopeHandle
   readonly timeoutMilliseconds: number
   readonly clock?: V2OutputSettlementClock
+  readonly deadline?: V2OutputSettlementDeadline
   readonly validateState?: (state: ReceiveLifecycleState) => ReceiveLifecycleState
 }): Promise<ReceiveLifecycleState> {
   const budget = new SettlementBudget(options.timeoutMilliseconds, options.clock)
@@ -110,6 +173,7 @@ export async function pauseFailedV2Execution(options: {
           options.reason,
           signal,
         ),
+        options.deadline,
       ))
     }
     return validate(await settleWithSignal(
@@ -120,6 +184,7 @@ export async function pauseFailedV2Execution(options: {
         materialization: options.materialization,
         reason: options.reason,
       }, signal),
+      options.deadline,
     ))
   } catch (settlementFailure) {
     try {
@@ -130,6 +195,7 @@ export async function pauseFailedV2Execution(options: {
           options.intent,
           signal,
         ),
+        options.deadline,
       ))
     } catch (unknownSettlementFailure) {
       const settlementFailures = [settlementFailure, unknownSettlementFailure]
@@ -177,21 +243,32 @@ const MONOTONIC_CLOCK: V2OutputSettlementClock = Object.freeze({
   now: () => performance.now(),
 })
 
+const SYSTEM_SETTLEMENT_DEADLINE: V2OutputSettlementDeadline = Object.freeze({
+  schedule: (delayMilliseconds: number, expire: () => void) => {
+    const timer = setTimeout(expire, delayMilliseconds)
+    return Object.freeze({ cancel: () => clearTimeout(timer) })
+  },
+})
+
 async function settleWithin<T>(
   operation: string,
   budget: SettlementBudget,
   settle: () => Promise<T>,
+  deadline: V2OutputSettlementDeadline = SYSTEM_SETTLEMENT_DEADLINE,
 ): Promise<T> {
   const remaining = budget.remainingMilliseconds()
   if (remaining <= 0) throw new V2OutputSettlementTimeoutError(operation)
-  let timer: ReturnType<typeof setTimeout> | undefined
+  let deadlineTask: Readonly<{ cancel(): void }> | undefined
   const timeout = new Promise<never>((_resolve, reject) => {
-    timer = setTimeout(() => reject(new V2OutputSettlementTimeoutError(operation)), remaining)
+    deadlineTask = deadline.schedule(
+      remaining,
+      () => reject(new V2OutputSettlementTimeoutError(operation)),
+    )
   })
   try {
     return await Promise.race([Promise.resolve().then(settle), timeout])
   } finally {
-    if (timer !== undefined) clearTimeout(timer)
+    deadlineTask?.cancel()
   }
 }
 
@@ -199,13 +276,19 @@ async function settleWithSignal<T>(
   operation: string,
   budget: SettlementBudget,
   settle: (signal: AbortSignal) => Promise<T>,
+  deadline?: V2OutputSettlementDeadline,
 ): Promise<T> {
   const controller = new AbortController()
   try {
     // The transfer lifetime is already aborted. Settlement needs an independent
     // bounded signal so cleanup can establish a stable cut, while timeout still
     // revokes the collaborator before authority is recorded as unknown.
-    return await settleWithin(operation, budget, () => settle(controller.signal))
+    return await settleWithin(
+      operation,
+      budget,
+      () => settle(controller.signal),
+      deadline,
+    )
   } finally {
     controller.abort(new DOMException('Output settlement boundary closed', 'AbortError'))
   }

@@ -12,6 +12,7 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { recordOutputException, type OutputFailureSinks } from '../../src/output/diagnostics'
+import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import type {
   CandidateMaterializationBinding,
   EnvironmentOffers,
@@ -112,10 +113,15 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
     signal: AbortSignal
   }>> = []
   readonly retainedInventories: V2RetainedReceiveInventory[] = []
+  readonly repairSummaries = new Map<string, CompatibleNameRepairSummary>()
   retainedOperations: readonly V2RetainedReceiveOperation[] = Object.freeze([])
   retainedGate: PromiseLike<V2RetainedReceiveInventory> | undefined
   retainedActionGate: PromiseLike<V2RetainedReceiveActionResult> | undefined
   readonly retained = Object.freeze({
+    readRepairSummary: (operationId: string, signal: AbortSignal) => {
+      signal.throwIfAborted()
+      return Promise.resolve(this.repairSummaries.get(operationId))
+    },
     list: (signal: AbortSignal): PromiseLike<V2RetainedReceiveInventory> => {
       this.retainedSignals.push(signal)
       if (this.retainedGate !== undefined) return this.retainedGate

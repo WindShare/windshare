@@ -7,6 +7,8 @@ export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 1 as const
 
 export type ReceiveOperationContinuation =
   | 'resume-receive'
+  | 'pending-catch-up'
+  | 'restoration-available'
   | 'resume-package'
   | 'save-artifact'
   | 'retry-download'
@@ -69,6 +71,7 @@ function continuationFor(
   const deadline = lifecycleDeadline(lifecycle)
   if (deadline !== undefined && nowMilliseconds >= deadline) return 'cleanup-expired'
   switch (lifecycle.kind) {
+    case 'receiving': return 'pending-catch-up'
     case 'resumable-receive': return 'resume-receive'
     case 'resumable-package': return 'resume-package'
     case 'waiting-to-save': return 'save-artifact'
@@ -79,7 +82,10 @@ function continuationFor(
     case 'expired':
       return lifecycle.cleanupState === 'cleanup-pending' ? 'cleanup-expired' : undefined
     case 'published':
-      return lifecycle.cleanupState === 'cleanup-pending' ? 'retry-cleanup' : undefined
+      return lifecycle.cleanupState === 'cleanup-pending'
+        ? 'retry-cleanup'
+        : 'restoration-available'
+    case 'partial-directory': return 'restoration-available'
     case 'needs-attention': return 'needs-attention'
     default: return undefined
   }

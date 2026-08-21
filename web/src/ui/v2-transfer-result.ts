@@ -1,4 +1,10 @@
+import {
+  compatibleNameRepairSummary,
+  type CompatibleNameRepairSummary,
+} from '../output/file-system-access/compatible-name/model'
 import type { TransferWorkerSettlement } from '../transfer/outcome'
+import type { ReceiveLifecycleState } from '../output/workspace/state'
+import { hasValidatedTerminalCompatibleNameRepair } from './v2-lifecycle-presentation'
 
 export type TransferResultTone = 'success' | 'warning'
 
@@ -10,13 +16,39 @@ export interface TransferResultPresentation {
 
 export function presentTransferResult(
   worker: TransferWorkerSettlement,
+  repairSummary?: CompatibleNameRepairSummary | null,
+  lifecycle?: ReceiveLifecycleState,
+): TransferResultPresentation {
+  const ordinary = presentOrdinaryTransferResult(worker, lifecycle)
+  if (repairSummary === undefined || repairSummary === null) return ordinary
+
+  const repair = compatibleNameRepairSummary(repairSummary)
+  const lines = [...ordinary.lines]
+  if (worker.status === 'CompletedWithErrors') {
+    lines.unshift(`${ordinary.title}.`)
+  }
+  lines.push(
+    `Saved names remain compatible until the restoration script "${repair.pairDisplayNames.script}" runs.`,
+  )
+
+  if (worker.status === 'Paused' &&
+      !(lifecycle?.kind === 'partial-directory' && lifecycle.reason === 'stopped')) {
+    return result('Paused with compatible names', 'warning', lines)
+  }
+  if (!hasValidatedTerminalCompatibleNameRepair(repair)) {
+    return result('Compatible-name restoration catch-up required', 'warning', lines)
+  }
+  return worker.status === 'Succeeded'
+    ? result('Completed with compatible names', 'success', lines)
+    : result('Partial with compatible names', 'warning', lines)
+}
+
+function presentOrdinaryTransferResult(
+  worker: TransferWorkerSettlement,
+  lifecycle?: ReceiveLifecycleState,
 ): TransferResultPresentation {
   if (worker.status === 'Succeeded') {
-    return Object.freeze({
-      title: 'Transfer completed',
-      tone: 'success',
-      lines: Object.freeze([]),
-    })
+    return result('Transfer completed', 'success', [])
   }
 
   const counts = worker.fileOutcomes
@@ -36,16 +68,34 @@ export function presentTransferResult(
   appendCount(lines, counts.collisionFiles,
     'existing destination prevented a file from completing',
     'existing destinations prevented files from completing')
-  appendCount(lines, counts.failedFiles, 'file failed for another reason', 'files failed for another reason')
+  appendCount(lines, counts.failedFiles,
+    'file failed for another reason',
+    'files failed for another reason')
 
   const directoryFailures = worker.failureCount - worker.fileFailureCount
   appendCount(lines, directoryFailures, 'directory did not finish', 'directories did not finish')
-  if (lines.length === 0 && worker.status === 'Paused') lines.push('The transfer paused before completion.')
+  if (lines.length === 0 && worker.status === 'Paused') {
+    lines.push('The transfer paused before completion.')
+  }
 
+  return result(
+    lifecycle?.kind === 'partial-directory' && lifecycle.reason === 'stopped'
+      ? 'Transfer stopped'
+      : resultTitle(worker),
+    'warning',
+    lines,
+  )
+}
+
+function result(
+  title: string,
+  tone: TransferResultTone,
+  lines: readonly string[],
+): TransferResultPresentation {
   return Object.freeze({
-    title: resultTitle(worker),
-    tone: 'warning',
-    lines: Object.freeze(lines),
+    title,
+    tone,
+    lines: Object.freeze([...lines]),
   })
 }
 

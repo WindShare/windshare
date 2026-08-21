@@ -1,5 +1,9 @@
 import { artifactRequestedName } from '../output/planning'
 import {
+  compatibleNameRepairSummary,
+  type CompatibleNameRepairSummary,
+} from '../output/file-system-access/compatible-name/model'
+import {
   lifecycleDeadline,
   type ReceiveLifecycleState,
 } from '../output/workspace'
@@ -44,6 +48,31 @@ export interface LifecycleActionPresentation {
   readonly destructive: boolean
 }
 
+export type CompatibleNameRepairActionMode =
+  | 'abnormal-stop-recovery'
+  | 'catch-up-required'
+  | 'routine-restoration'
+
+export type CompatibleNameRepairPresentationContext =
+  | 'receive-lifecycle'
+  | 'pending-catch-up'
+
+export interface CompatibleNameRepairPresentation {
+  readonly noticeTitle: string
+  readonly noticeDescription: string
+  readonly replacementCount: number
+  readonly replacementCountLabel: string
+  readonly logicalPathSample: readonly string[]
+  readonly omittedLogicalPathCount: number
+  readonly scriptName: string
+  readonly sidecarName: string
+  readonly placementLabel: string
+  readonly runCommand: string | null
+  readonly actionMode: CompatibleNameRepairActionMode
+  readonly actionTitle: string
+  readonly actionDescription: string
+}
+
 export interface ReceiveLifecyclePresentation {
   readonly stateKind: ReceiveLifecycleState['kind']
   readonly category: 'active' | 'retained' | 'terminal'
@@ -53,6 +82,50 @@ export interface ReceiveLifecyclePresentation {
   readonly retention: RetentionPresentation | null
   readonly usage: WorkspaceUsagePresentation | null
   readonly actions: readonly LifecycleActionPresentation[]
+  readonly compatibleNameRepair: CompatibleNameRepairPresentation | null
+}
+
+export function presentCompatibleNameRepair(input: Readonly<{
+  state: ReceiveLifecycleState | null
+  summary: CompatibleNameRepairSummary
+  context?: CompatibleNameRepairPresentationContext
+}>): CompatibleNameRepairPresentation {
+  const summary = compatibleNameRepairSummary(input.summary)
+  const actionMode = compatibleNameRepairActionMode(
+    input.state,
+    summary,
+    input.context ?? 'receive-lifecycle',
+  )
+  const logicalPathSample = Object.freeze(summary.logicalPathSample.map(path => path.join('/')))
+  return Object.freeze({
+    noticeTitle: 'Compatible names are in use',
+    noticeDescription: 'The browser rejected an original name. WindShare saved the affected entry under a compatible name and prepared a restoration tool. The saved names remain compatible until that tool runs.',
+    replacementCount: summary.committedCount,
+    replacementCountLabel: `${summary.committedCount} verified/committed name ${
+      summary.committedCount === 1 ? 'replacement' : 'replacements'}`,
+    logicalPathSample,
+    omittedLogicalPathCount: summary.committedCount - logicalPathSample.length,
+    scriptName: summary.pairDisplayNames.script,
+    sidecarName: summary.pairDisplayNames.sidecar,
+    placementLabel: summary.placement === 'inside-logical-root'
+      ? 'Inside the received folder'
+      : 'Beside the received result',
+    // Catch-up still needs the compatible physical namespace, so exposing a runnable
+    // restoration command at that boundary would invite an irreversible ordering error.
+    runCommand: actionMode === 'catch-up-required' ? null : summary.runCommand,
+    actionMode,
+    actionTitle: repairActionTitle(actionMode),
+    actionDescription: repairActionDescription(actionMode),
+  })
+}
+
+export function hasValidatedTerminalCompatibleNameRepair(
+  summary: CompatibleNameRepairSummary,
+): boolean {
+  const footer = summary.latestObservedFooter
+  return summary.committedCount > 0 && !summary.pendingCatchUp &&
+    footer !== undefined && footer.state !== 'active' &&
+    footer.committedCount === summary.committedCount
 }
 
 export function presentReceiveLifecycle(input: Readonly<{
@@ -62,10 +135,14 @@ export function presentReceiveLifecycle(input: Readonly<{
   nowMilliseconds: number
   workspaceUsage?: WorkspaceUsage | null
   activeControls?: readonly V2ActiveReceiveControl[]
+  repairSummary?: CompatibleNameRepairSummary | null
 }>): ReceiveLifecyclePresentation {
   requireClock(input.nowMilliseconds)
   const retention = retentionPresentation(input.state, input.nowMilliseconds)
-  const copy = lifecycleCopy(input.state, input.artifact)
+  const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
+    ? null
+    : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary })
+  const copy = lifecycleCopy(input.state, input.artifact, compatibleNameRepair)
   const actions = presentedLifecycleActions(input, retention)
   return Object.freeze({
     stateKind: input.state.kind,
@@ -80,7 +157,41 @@ export function presentReceiveLifecycle(input: Readonly<{
     retention,
     usage: workspaceUsagePresentation(input),
     actions,
+    compatibleNameRepair,
   })
+}
+
+function compatibleNameRepairActionMode(
+  state: ReceiveLifecycleState | null,
+  summary: CompatibleNameRepairSummary,
+  context: CompatibleNameRepairPresentationContext,
+): CompatibleNameRepairActionMode {
+  if (context === 'pending-catch-up') return 'catch-up-required'
+  if (state === null || lifecycleCategory(state) !== 'terminal') {
+    return 'abnormal-stop-recovery'
+  }
+  return hasValidatedTerminalCompatibleNameRepair(summary)
+    ? 'routine-restoration'
+    : 'catch-up-required'
+}
+
+function repairActionTitle(mode: CompatibleNameRepairActionMode): string {
+  switch (mode) {
+    case 'abnormal-stop-recovery': return 'Abnormal-stop recovery only'
+    case 'catch-up-required': return 'Restoration tool catch-up required'
+    case 'routine-restoration': return 'Restore the original names'
+  }
+}
+
+function repairActionDescription(mode: CompatibleNameRepairActionMode): string {
+  switch (mode) {
+    case 'abnormal-stop-recovery':
+      return 'Do not run this command while WindShare is receiving or while this task remains resumable. Use it only after an abnormal stop and after deciding not to resume.'
+    case 'catch-up-required':
+      return 'Do not run the restoration tool yet. WindShare must finish the local sidecar checkpoint before restoration becomes the routine action.'
+    case 'routine-restoration':
+      return 'Receiving has ended and the terminal sidecar checkpoint is complete. Run this command when you are ready to restore the logical names.'
+  }
 }
 
 function presentedLifecycleActions(
@@ -102,11 +213,14 @@ function presentedLifecycleActions(
 function lifecycleCopy(
   state: ReceiveLifecycleState,
   artifact: ArtifactSpec,
+  compatibleNameRepair: CompatibleNameRepairPresentation | null,
 ): Readonly<{
   title: string
   description: string
   tone: ReceiveLifecyclePresentation['tone']
 }> {
+  const repairCopy = compatibleNameLifecycleCopy(state, compatibleNameRepair)
+  if (repairCopy !== null) return repairCopy
   const name = browserArtifactName(artifact)
   switch (state.kind) {
     case 'intent-frozen':
@@ -192,6 +306,38 @@ function lifecycleCopy(
     case 'needs-attention':
       return copy('Needs attention', needsAttentionDescription(state.reason), 'critical')
   }
+}
+
+function compatibleNameLifecycleCopy(
+  state: ReceiveLifecycleState,
+  repair: CompatibleNameRepairPresentation | null,
+): Readonly<{
+  title: string
+  description: string
+  tone: ReceiveLifecyclePresentation['tone']
+}> | null {
+  if (repair === null || (state.kind !== 'published' && state.kind !== 'partial-directory')) {
+    return null
+  }
+  if (repair.actionMode !== 'routine-restoration') {
+    return copy(
+      'Restoration tool catch-up required',
+      'WindShare has not validated a complete terminal sidecar checkpoint, so this result is not presented as complete yet.',
+      'warning',
+    )
+  }
+  if (state.kind === 'published') {
+    return copy(
+      'Completed with compatible names',
+      'The complete result was saved under compatible names. Run the restoration tool to restore the logical names.',
+      'positive',
+    )
+  }
+  return copy(
+    'Partial with compatible names',
+    `${partialDirectoryDescription(state)} Saved entries still use compatible names until the restoration tool runs.`,
+    'warning',
+  )
 }
 
 function lifecycleActions(

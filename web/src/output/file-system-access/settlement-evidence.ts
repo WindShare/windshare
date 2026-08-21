@@ -14,6 +14,7 @@ import type { MaterializedManifestEntry } from '../workspace/manifest'
 import type { FSAFinalSettlementObservation } from './session'
 import {
   fsaCheckpointSetDigest,
+  fsaCheckpointReferenceSetDigest,
   materializationSummary,
   sameFileEvidence,
   sameFinalProof,
@@ -22,6 +23,7 @@ import {
   snapshotEntries,
   type DirectTreeIntent,
   type ObservedSettlementEvidence,
+  type SettlementReceiptEvidence,
 } from './settlement-proof'
 
 type MaterializedFileEntry = Extract<MaterializedManifestEntry, { kind: 'file' }>
@@ -34,6 +36,56 @@ export interface ObserveFSASettlementEvidenceOptions {
   readonly evidence: PersistentMaterializationEvidence
   readonly summary: MaterializationSummary
   readonly requireComplete: boolean
+}
+
+/**
+ * Builds the deterministic pending-outcome receipt input from an already-quiescent
+ * in-memory manifest. Native ownership reads remain behind the terminal footer.
+ */
+export async function snapshotQuiescentFSASettlementEvidence(
+  options: Omit<ObserveFSASettlementEvidenceOptions, 'observation'>,
+): Promise<SettlementReceiptEvidence> {
+  const entries = snapshotEntries(options.evidence.entries)
+  const fileEntries = entries.filter(
+    (entry): entry is MaterializedFileEntry => entry.kind === 'file',
+  )
+  const directoryEntries = entries.filter(
+    (entry): entry is MaterializedDirectoryEntry => entry.kind === 'directory',
+  )
+  const directorySettlements = snapshotDirectorySettlements(
+    options.evidence.directorySettlements,
+    directoryEntries,
+    options.directoryScope,
+  )
+  if (options.requireComplete && (directorySettlements.length !== directoryEntries.length ||
+      directorySettlements.some(value =>
+        value.settlement.kind !== DirectorySettlementKind.Finalized))) {
+    throw new TypeError('published FSA settlement lacks finalized directory evidence')
+  }
+  validateLayout(options.intent, directoryEntries, options.requireComplete)
+  const measured = materializationSummary(entries)
+  if (!sameSummary(measured, options.summary)) {
+    throw new TypeError('FSA settlement summary differs from owned evidence')
+  }
+  const checkpointReferences = fileEntries
+    .map(entry => entry.checkpoint)
+    .sort(compareCheckpointReferences)
+  return Object.freeze({
+    entries,
+    directorySettlements,
+    checkpointSetDigest: await fsaCheckpointReferenceSetDigest(options.intent, checkpointReferences),
+    completedFileCount: BigInt(fileEntries.length),
+    completedBytes: fileEntries.reduce((total, entry) => total + entry.exactSize, 0n),
+  })
+}
+
+function compareCheckpointReferences(
+  left: Readonly<{ recordId: string }>,
+  right: Readonly<{ recordId: string }>,
+): number {
+  if (left.recordId < right.recordId) return -1
+  if (left.recordId > right.recordId) return 1
+  return 0
 }
 
 /**

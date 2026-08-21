@@ -230,7 +230,8 @@ func TestVolatileReservationClaimsSerializeAndRollbackExactNames(t *testing.T) {
 	}
 	spec := destinationauthority.ReservationClaimSpec{
 		CanonicalNameKey: resultRoot.Name(), OperationID: operationID, ReservationID: reservationID,
-		EntryKind: reservation.EntryKind(), RequestedName: resultRoot.Name(), ReservedName: resultRoot.Name(),
+		EntryKind: reservation.EntryKind(), RequestedName: resultRoot.Name(),
+		LogicalReservedName: resultRoot.Name(), PhysicalName: resultRoot.Name(),
 	}
 	claimer, err := newVolatileReservationClaimer(authorityRef)
 	if err != nil {

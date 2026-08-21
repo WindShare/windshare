@@ -13,13 +13,13 @@ import (
 )
 
 const (
-	ReservationClaimRecordVersionV1       = uint8(1)
-	ReservationClaimRecordDomainV1        = "windshare/reservation-claim/v1"
-	ReservationClaimTokenDomainV1         = "windshare/reservation-claim-token/v1"
-	MaximumReservationClaimRecordBytesV1  = 16 * 1024
-	MaximumReservationNameBytesV1         = 4 * 1024
-	MaximumCanonicalNameKeyBytesV1        = 4 * 1024
-	MaximumPersistentIdentityClaimBytesV1 = 4 * 1024
+	ReservationClaimRecordVersionV2       = uint8(2)
+	ReservationClaimRecordDomainV2        = "windshare/reservation-claim/v2"
+	ReservationClaimTokenDomainV2         = "windshare/reservation-claim-token/v2"
+	MaximumReservationClaimRecordBytesV2  = 16 * 1024
+	MaximumReservationNameBytesV2         = 4 * 1024
+	MaximumCanonicalNameKeyBytesV2        = 4 * 1024
+	MaximumPersistentIdentityClaimBytesV2 = 4 * 1024
 )
 
 var ErrInvalidReservationClaim = errors.New("reservation metadata claim is invalid")
@@ -42,7 +42,8 @@ type ReservationClaimRecordSpec struct {
 	OperationID            receivecontract.OperationID
 	ReservationID          receivecontract.DestinationReservationID
 	RequestedName          string
-	ReservedName           string
+	LogicalReservedName    string
+	PhysicalName           string
 	EntryKind              receivecontract.ContainerEntryKind
 	CollisionIndex         uint32
 	Generation             uint64
@@ -62,7 +63,8 @@ type ReservationClaimRecord struct {
 	operationID            receivecontract.OperationID
 	reservationID          receivecontract.DestinationReservationID
 	requestedName          string
-	reservedName           string
+	logicalReservedName    string
+	physicalName           string
 	entryKind              receivecontract.ContainerEntryKind
 	collisionIndex         uint32
 	generation             uint64
@@ -73,19 +75,22 @@ type ReservationClaimRecord struct {
 }
 
 func NewReservationClaimRecord(spec ReservationClaimRecordSpec) (ReservationClaimRecord, error) {
-	if !validReservationClaimText(spec.CanonicalNameKey, MaximumCanonicalNameKeyBytesV1) ||
-		!validReservationClaimText(spec.RequestedName, MaximumReservationNameBytesV1) ||
-		!validReservationClaimText(spec.ReservedName, MaximumReservationNameBytesV1) ||
+	if !validReservationClaimText(spec.CanonicalNameKey, MaximumCanonicalNameKeyBytesV2) ||
+		!validReservationClaimText(spec.RequestedName, MaximumReservationNameBytesV2) ||
+		!validReservationClaimText(spec.LogicalReservedName, MaximumReservationNameBytesV2) ||
+		!validReservationClaimText(spec.PhysicalName, MaximumReservationNameBytesV2) ||
+		spec.LogicalReservedName != spec.PhysicalName ||
 		spec.OperationID.IsZero() || spec.ReservationID.IsZero() || spec.Generation == 0 ||
 		(spec.EntryKind != receivecontract.ContainerEntrySingleFile &&
 			spec.EntryKind != receivecontract.ContainerEntryResultRoot) || !spec.Phase.Valid() ||
-		len(spec.PersistentIdentity) > MaximumPersistentIdentityClaimBytesV1 {
+		len(spec.PersistentIdentity) > MaximumPersistentIdentityClaimBytesV2 {
 		return ReservationClaimRecord{}, ErrInvalidReservationClaim
 	}
 	token, _ := ReservationClaimTokenForCanonicalNameKey(spec.CanonicalNameKey)
 	record := ReservationClaimRecord{
 		canonicalNameKey: spec.CanonicalNameKey, token: token, operationID: spec.OperationID,
-		reservationID: spec.ReservationID, requestedName: spec.RequestedName, reservedName: spec.ReservedName,
+		reservationID: spec.ReservationID, requestedName: spec.RequestedName,
+		logicalReservedName: spec.LogicalReservedName, physicalName: spec.PhysicalName,
 		entryKind: spec.EntryKind, collisionIndex: spec.CollisionIndex, generation: spec.Generation,
 		phase: spec.Phase, reservationDigest: spec.ReservationDigest,
 		persistentIdentity: slices.Clone(spec.PersistentIdentity), operationBindingDigest: spec.OperationBindingDigest,
@@ -105,7 +110,10 @@ func (record ReservationClaimRecord) ReservationID() receivecontract.Destination
 	return record.reservationID
 }
 func (record ReservationClaimRecord) RequestedName() string { return record.requestedName }
-func (record ReservationClaimRecord) ReservedName() string  { return record.reservedName }
+func (record ReservationClaimRecord) LogicalReservedName() string {
+	return record.logicalReservedName
+}
+func (record ReservationClaimRecord) PhysicalName() string { return record.physicalName }
 func (record ReservationClaimRecord) EntryKind() receivecontract.ContainerEntryKind {
 	return record.entryKind
 }
@@ -125,13 +133,15 @@ func (record ReservationClaimRecord) OperationBindingDigest() [sha256.Size]byte 
 }
 
 func (record ReservationClaimRecord) Valid() bool {
-	if !validReservationClaimText(record.canonicalNameKey, MaximumCanonicalNameKeyBytesV1) ||
-		!validReservationClaimText(record.requestedName, MaximumReservationNameBytesV1) ||
-		!validReservationClaimText(record.reservedName, MaximumReservationNameBytesV1) ||
+	if !validReservationClaimText(record.canonicalNameKey, MaximumCanonicalNameKeyBytesV2) ||
+		!validReservationClaimText(record.requestedName, MaximumReservationNameBytesV2) ||
+		!validReservationClaimText(record.logicalReservedName, MaximumReservationNameBytesV2) ||
+		!validReservationClaimText(record.physicalName, MaximumReservationNameBytesV2) ||
+		record.logicalReservedName != record.physicalName ||
 		record.operationID.IsZero() || record.reservationID.IsZero() || record.generation == 0 ||
 		(record.entryKind != receivecontract.ContainerEntrySingleFile &&
 			record.entryKind != receivecontract.ContainerEntryResultRoot) || !record.phase.Valid() ||
-		len(record.persistentIdentity) > MaximumPersistentIdentityClaimBytesV1 ||
+		len(record.persistentIdentity) > MaximumPersistentIdentityClaimBytesV2 ||
 		record.token != mustReservationClaimToken(record.canonicalNameKey) {
 		return false
 	}
@@ -175,7 +185,7 @@ func BindReservationDirectory(
 ) (ReservationClaimRecord, error) {
 	if !previous.Valid() || previous.phase != ReservationBindingBound ||
 		previous.entryKind != receivecontract.ContainerEntryResultRoot ||
-		len(persistentIdentity) == 0 || len(persistentIdentity) > MaximumPersistentIdentityClaimBytesV1 {
+		len(persistentIdentity) == 0 || len(persistentIdentity) > MaximumPersistentIdentityClaimBytesV2 {
 		return ReservationClaimRecord{}, ErrInvalidReservationClaim
 	}
 	next := previous
@@ -208,7 +218,8 @@ func SameReservationClaim(left, right ReservationClaimRecord) bool {
 	return left.Valid() && right.Valid() && left.token == right.token &&
 		left.canonicalNameKey == right.canonicalNameKey && left.operationID == right.operationID &&
 		left.reservationID == right.reservationID && left.requestedName == right.requestedName &&
-		left.reservedName == right.reservedName && left.entryKind == right.entryKind &&
+		left.logicalReservedName == right.logicalReservedName && left.physicalName == right.physicalName &&
+		left.entryKind == right.entryKind &&
 		left.collisionIndex == right.collisionIndex
 }
 
@@ -229,15 +240,16 @@ func EncodeReservationClaimRecord(record ReservationClaimRecord) ([]byte, error)
 		return nil, ErrInvalidReservationClaim
 	}
 	var encoded bytes.Buffer
-	_, _ = encoded.WriteString(ReservationClaimRecordDomainV1)
+	_, _ = encoded.WriteString(ReservationClaimRecordDomainV2)
 	_ = encoded.WriteByte(0)
-	_ = encoded.WriteByte(ReservationClaimRecordVersionV1)
+	_ = encoded.WriteByte(ReservationClaimRecordVersionV2)
 	writeOrdinaryFrame(&encoded, []byte(record.canonicalNameKey))
 	writeOrdinaryFrame(&encoded, record.token[:])
 	writeOrdinaryFrame(&encoded, record.operationID.Bytes())
 	writeOrdinaryFrame(&encoded, record.reservationID.Bytes())
 	writeOrdinaryFrame(&encoded, []byte(record.requestedName))
-	writeOrdinaryFrame(&encoded, []byte(record.reservedName))
+	writeOrdinaryFrame(&encoded, []byte(record.logicalReservedName))
+	writeOrdinaryFrame(&encoded, []byte(record.physicalName))
 	_ = encoded.WriteByte(byte(record.entryKind))
 	writeReservationClaimUint32(&encoded, record.collisionIndex)
 	writeOrdinaryUint64(&encoded, record.generation)
@@ -249,33 +261,34 @@ func EncodeReservationClaimRecord(record ReservationClaimRecord) ([]byte, error)
 	writeReservationClaimOptionalFrame(&encoded, reservationDigest)
 	writeReservationClaimOptionalFrame(&encoded, record.persistentIdentity)
 	writeReservationClaimOptionalFrame(&encoded, record.operationBindingDigest[:])
-	if encoded.Len() > MaximumReservationClaimRecordBytesV1 {
+	if encoded.Len() > MaximumReservationClaimRecordBytesV2 {
 		return nil, ErrInvalidReservationClaim
 	}
 	return encoded.Bytes(), nil
 }
 
 func DecodeReservationClaimRecord(encoded []byte) (ReservationClaimRecord, error) {
-	if len(encoded) == 0 || len(encoded) > MaximumReservationClaimRecordBytesV1 {
+	if len(encoded) == 0 || len(encoded) > MaximumReservationClaimRecordBytesV2 {
 		return ReservationClaimRecord{}, ErrInvalidReservationClaim
 	}
-	prefix := append(append([]byte(nil), ReservationClaimRecordDomainV1...), 0, ReservationClaimRecordVersionV1)
+	prefix := append(append([]byte(nil), ReservationClaimRecordDomainV2...), 0, ReservationClaimRecordVersionV2)
 	if !bytes.HasPrefix(encoded, prefix) {
 		return ReservationClaimRecord{}, ErrInvalidReservationClaim
 	}
 	cursor := reservationClaimCursor{encoded: encoded, offset: len(prefix)}
-	key := cursor.text(MaximumCanonicalNameKeyBytesV1)
+	key := cursor.text(MaximumCanonicalNameKeyBytesV2)
 	tokenRaw := cursor.frame(sha256.Size)
 	operationRaw := cursor.frame(receivecontract.StableIdentityBytes)
 	reservationRaw := cursor.frame(receivecontract.StableIdentityBytes)
-	requested := cursor.text(MaximumReservationNameBytesV1)
-	reserved := cursor.text(MaximumReservationNameBytesV1)
+	requested := cursor.text(MaximumReservationNameBytesV2)
+	logicalReserved := cursor.text(MaximumReservationNameBytesV2)
+	physical := cursor.text(MaximumReservationNameBytesV2)
 	entryKind := cursor.byte()
 	collisionIndex := cursor.uint32()
 	generation := cursor.uint64()
 	phase := cursor.byte()
 	digestRaw := cursor.optionalFrame(sha256.Size)
-	identityRaw := cursor.optionalFrame(MaximumPersistentIdentityClaimBytesV1)
+	identityRaw := cursor.optionalFrame(MaximumPersistentIdentityClaimBytesV2)
 	operationDigestRaw := cursor.optionalFrame(sha256.Size)
 	if cursor.err != nil || cursor.offset != len(encoded) {
 		return ReservationClaimRecord{}, ErrInvalidReservationClaim
@@ -292,7 +305,8 @@ func DecodeReservationClaimRecord(encoded []byte) (ReservationClaimRecord, error
 	copy(operationDigest[:], operationDigestRaw)
 	record, recordErr := NewReservationClaimRecord(ReservationClaimRecordSpec{
 		CanonicalNameKey: key, OperationID: operation, ReservationID: reservation,
-		RequestedName: requested, ReservedName: reserved, EntryKind: receivecontract.ContainerEntryKind(entryKind),
+		RequestedName: requested, LogicalReservedName: logicalReserved, PhysicalName: physical,
+		EntryKind:      receivecontract.ContainerEntryKind(entryKind),
 		CollisionIndex: collisionIndex, Generation: generation, Phase: ReservationClaimPhase(phase),
 		ReservationDigest: digest, PersistentIdentity: identityRaw, OperationBindingDigest: operationDigest,
 	})
@@ -305,12 +319,12 @@ func DecodeReservationClaimRecord(encoded []byte) (ReservationClaimRecord, error
 }
 
 func ReservationClaimTokenForCanonicalNameKey(canonicalNameKey string) ([sha256.Size]byte, error) {
-	if !validReservationClaimText(canonicalNameKey, MaximumCanonicalNameKeyBytesV1) {
+	if !validReservationClaimText(canonicalNameKey, MaximumCanonicalNameKeyBytesV2) {
 		return [sha256.Size]byte{}, ErrInvalidReservationClaim
 	}
 	hash := sha256.New()
-	_, _ = hash.Write([]byte(ReservationClaimTokenDomainV1))
-	_, _ = hash.Write([]byte{0, ReservationClaimRecordVersionV1})
+	_, _ = hash.Write([]byte(ReservationClaimTokenDomainV2))
+	_, _ = hash.Write([]byte{0, ReservationClaimRecordVersionV2})
 	writeOrdinaryFrame(hash, []byte(canonicalNameKey))
 	var token [sha256.Size]byte
 	copy(token[:], hash.Sum(nil))

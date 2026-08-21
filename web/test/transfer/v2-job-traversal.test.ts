@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { V2_MAXIMUM_DIRECTORY_PAGES } from '../../src/catalog/v2-client'
 import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
@@ -12,6 +12,7 @@ import {
   V2CatalogTraversalError,
   type DirectoryCursor,
 } from '../../src/transfer/job/contract'
+import { createAuthenticatedLogicalSiblingMembership } from '../../src/transfer/job/discovery'
 import { V2CatalogPageCursor, V2CatalogTraversalGuard } from '../../src/transfer/job/traversal'
 
 const SHARE = identity(1)
@@ -21,6 +22,30 @@ const FIRST_COMMITMENT = commitment(1)
 const TERMINAL_COMMITMENT = commitment(2)
 
 describe('v2 catalog generation cursor', () => {
+  it('retains exact committed logical-sibling authority without eagerly querying the store', async () => {
+    const directory = committed(1, 1)
+    const signal = new AbortController().signal
+    const hasCommittedName = vi.fn(async () => true)
+    const membership = createAuthenticatedLogicalSiblingMembership(
+      { hasCommittedName },
+      directory,
+      signal,
+    )
+
+    expect(membership).toMatchObject({
+      directoryId: directory.directoryIdText,
+      generation: directory.generationText,
+    })
+    expect(hasCommittedName).not.toHaveBeenCalled()
+
+    await expect(membership.hasCommittedName('candidate.windshare-aaaaaa')).resolves.toBe(true)
+    expect(hasCommittedName).toHaveBeenCalledWith(
+      directory,
+      'candidate.windshare-aaaaaa',
+      signal,
+    )
+  })
+
   it('accepts canonical sibling order across a committed page boundary', () => {
     const pages = cursor()
 

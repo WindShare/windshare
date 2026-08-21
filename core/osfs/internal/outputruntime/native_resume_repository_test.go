@@ -202,7 +202,7 @@ func openOrdinaryResumeFileWithTracer(
 		authority: authority, session: session, intent: intent,
 		transaction: transaction, durable: durable, settlement: settlement,
 		rootAdmission: rootAdmission,
-		finalPath:     filepath.Join(root, reservation.ReservedName()),
+		finalPath:     filepath.Join(root, reservation.PhysicalName()),
 	}
 }
 func pauseOrdinaryResumeFixture(t *testing.T, fixture ordinaryResumeSessionFixture) {

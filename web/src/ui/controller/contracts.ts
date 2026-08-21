@@ -1,4 +1,5 @@
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
+import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import type {
   IncidentScopeHandle,
   IncidentScopeKind,
@@ -36,6 +37,29 @@ export type V2RetainedInventoryTraceEvent =
       retained_action: V2RetainedReceiveAction
       continuation: V2RetainedReceiveOperation['continuation']
     }>
+
+/**
+ * Repaired output runtimes own this projection; ordinary runtimes omit it entirely so
+ * their hot path never constructs a ledger reader, subscriber, or mapping snapshot.
+ */
+export interface V2ActiveCompatibleNameRepairProjection {
+  /**
+   * The source synchronously emits its latest durable summary, when one exists, before
+   * returning the unsubscribe function. Later emissions represent monotonic durable state.
+   */
+  subscribe(listener: (summary: CompatibleNameRepairSummary) => void): () => void
+}
+
+/**
+ * Implementations perform one operation-header point read. Undefined means there is no
+ * user-visible repair summary; the boundary must never infer repair state from lifecycle data.
+ */
+export interface V2RetainedCompatibleNameRepairSource {
+  readRepairSummary(
+    operationId: string,
+    signal: AbortSignal,
+  ): PromiseLike<CompatibleNameRepairSummary | undefined>
+}
 
 export type V2AuthorityOfferTraceEvent =
   | Readonly<{

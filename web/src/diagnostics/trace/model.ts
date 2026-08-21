@@ -440,6 +440,17 @@ export interface TraceEventPayloadByNameV1 {
         success_count: string
         failure_count: string
       }>
+    | Readonly<{
+        transition: 'worker_consequence_observed'
+        worker_family: 'discovery' | 'prepared_files'
+        failure_source: 'producer' | 'worker' | 'abort' | 'queue_close' | 'queue_abort'
+        failure_source_index?: number
+        operation_id: string
+        transfer_job_id: string
+        protocol_session_id?: string
+        protocol_generation?: number
+        output_session_id?: string
+      }>
   readonly lifecycle_action_transition: Readonly<{
     transition: 'started' | 'completed' | 'failed' | 'excluded'
     action:
@@ -515,9 +526,11 @@ export interface TraceEventPayloadByNameV1 {
     | Readonly<{ transition: 'load_completed'; operation_count: string }>
   readonly retained_action: Readonly<{
     transition: 'started' | 'completed' | 'failed' | 'excluded'
-    action: 'continue' | 'save' | 'redownload' | 'discard' | 'delete'
+    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete'
     continuation:
       | 'resume_receive'
+      | 'pending_catch_up'
+      | 'restoration_available'
       | 'resume_package'
       | 'save_artifact'
       | 'retry_download'

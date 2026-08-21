@@ -320,7 +320,7 @@ async function bindProbe(
       checkpoints,
       rootLease,
       session,
-      resultName: binding.reservation.reservedName,
+      resultName: binding.reservation.physicalName,
       lockName: await fsaRootMutationLockName(selectedParent),
     })
   } catch (error) {

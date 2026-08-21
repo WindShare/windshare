@@ -265,12 +265,12 @@ describe('browser production receive composition', () => {
       'download-started': 'retry-download',
       expired: 'cleanup-expired',
       'needs-attention': 'needs-attention',
-      published: 'retry-cleanup',
+      published: 'restoration-available',
       'resumable-package': 'resume-package',
       'resumable-receive': 'resume-receive',
       'waiting-to-save': 'save-artifact',
     })
-    expect(operations).toHaveLength(7)
+    expect(operations).toHaveLength(8)
     expect(operations[0]?.lifecycle).not.toHaveProperty('verifiedRanges')
     expect(operations.every(operation => operation.actions.length === 0)).toBe(true)
     expect(source.closeCalls).toBe(0)
