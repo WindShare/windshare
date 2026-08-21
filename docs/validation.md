@@ -34,7 +34,7 @@ not validation gates.
 | `make ci-parallel` | Run the same ordinary gates once across three bounded local lanes. |
 | `make ci-full` | Run ordinary CI plus all current-host equivalents of weekly suites. |
 | `make check` | Run fast Go and Web feedback. |
-| `make hygiene` | Verify formatting, diff hygiene, the single-module layout, retired paths, and production dependency boundaries. |
+| `make hygiene` | Verify formatting, generated protocol tables, diff hygiene, the single-module layout, retired paths, and production dependency boundaries. |
 | `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
 | `make lint`, `make vet` | Analyze the complete production module. |
 | `make gopls` | Check tracked Go files with the local language server. |
