@@ -43,6 +43,7 @@ import type {
   MaterializationSummary,
   PlanPauseRequest,
   PlanSettlementRequest,
+  PlanStopRequest,
 } from '../../transfer/output-session'
 import type {
   CompletedTransferWorkerSettlement,
@@ -58,13 +59,16 @@ export type DirectTreeIntent = ReceiveIntent & Readonly<{
   artifact: DirectoryTreeArtifact
 }>
 
-export interface ObservedSettlementEvidence {
+export interface SettlementReceiptEvidence {
   readonly entries: readonly MaterializedManifestEntry[]
   readonly directorySettlements: readonly PersistentDirectorySettlementEvidence[]
-  readonly checkpoints: readonly FileCheckpointV2[]
   readonly checkpointSetDigest: string
   readonly completedFileCount: bigint
   readonly completedBytes: bigint
+}
+
+export interface ObservedSettlementEvidence extends SettlementReceiptEvidence {
+  readonly checkpoints: readonly FileCheckpointV2[]
 }
 
 export async function requireDirectTreeIntent(input: ReceiveIntent): Promise<DirectTreeIntent> {
@@ -190,6 +194,21 @@ export async function fsaCheckpointSetDigest(
   intent: DirectTreeIntent,
   checkpoints: readonly FileCheckpointV2[],
 ): Promise<string> {
+  return fsaCheckpointReferenceSetDigest(intent, checkpoints.map(checkpoint => Object.freeze({
+    recordId: checkpoint.recordId,
+    recordDigest: fileCheckpointDigest(checkpoint),
+    checkpointGeneration: checkpoint.checkpointGeneration,
+  })))
+}
+
+export function fsaCheckpointReferenceSetDigest(
+  intent: DirectTreeIntent,
+  checkpoints: readonly Readonly<{
+    recordId: string
+    recordDigest: string
+    checkpointGeneration: bigint
+  }>[],
+): Promise<string> {
   return canonicalDigest(canonicalRecord('windshare/fsa-checkpoint-set/v1', 1, [
     identityFrame(intent.operationId, 16, 'operation ID'),
     identityFrame(intent.digest, 32, 'receive intent digest'),
@@ -197,7 +216,7 @@ export async function fsaCheckpointSetDigest(
     canonicalFrame(canonicalU64(BigInt(checkpoints.length))),
     ...checkpoints.map(checkpoint => canonicalFrame(concatCanonicalBytes([
       identityFrame(checkpoint.recordId, 32, 'checkpoint record ID'),
-      identityFrame(fileCheckpointDigest(checkpoint), 32, 'checkpoint digest'),
+      identityFrame(checkpoint.recordDigest, 32, 'checkpoint digest'),
       canonicalFrame(canonicalU64(checkpoint.checkpointGeneration)),
     ]))),
   ]))
@@ -207,8 +226,8 @@ export function createFSASettlementReceipt(input: Readonly<{
   intent: DirectTreeIntent
   transferJobId: string
   outcome: 'published' | 'partial-directory' | 'resumable-receive'
-  request: PlanPauseRequest | PlanSettlementRequest<CompletedTransferWorkerSettlement>
-  evidence: ObservedSettlementEvidence
+  request: PlanPauseRequest | PlanSettlementRequest<CompletedTransferWorkerSettlement> | PlanStopRequest
+  evidence: SettlementReceiptEvidence
 }>): Promise<PersistedReceiveRecord> {
   const bytes = canonicalRecord('windshare/receive-receipt/v1', 1, [
     canonicalU8(FSA_SETTLEMENT_RECEIPT),

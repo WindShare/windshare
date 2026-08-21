@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	destinationReservationDomain = "windshare/destination-reservation/v1"
+	destinationReservationDomain = "windshare/destination-reservation/v2"
 	workspaceBindingDomain       = "windshare/workspace-binding/v1"
 	portableBindingDomain        = "windshare/portable-binding/v1"
 	nameCollisionDomain          = "windshare/name-collision/v1"
@@ -110,19 +110,21 @@ const (
 )
 
 type DestinationReservation struct {
-	kind           DestinationReservationKind
-	operation      OperationID
-	id             DestinationReservationID
-	artifact       ArtifactDigest
-	authorityKind  AuthorityKind
-	authority      AuthorityRef
-	guarantees     GuaranteeSet
-	entryKind      ContainerEntryKind
-	requestedName  string
-	reservedName   string
-	collisionIndex uint32
-	encoded        []byte
-	digest         BindingDigest
+	kind                DestinationReservationKind
+	operation           OperationID
+	id                  DestinationReservationID
+	artifact            ArtifactDigest
+	authorityKind       AuthorityKind
+	authority           AuthorityRef
+	guarantees          GuaranteeSet
+	entryKind           ContainerEntryKind
+	requestedName       string
+	logicalReservedName string
+	physicalName        string
+	reservedName        string
+	collisionIndex      uint32
+	encoded             []byte
+	digest              BindingDigest
 }
 
 type WorkspaceBinding struct {
@@ -197,7 +199,7 @@ func NewNativeContainerRootReservation(
 	}
 	return newDestinationReservation(
 		ReservationContainerRoot, operation, id, artifact, AuthorityNativeContainer,
-		authority, NativeTreeGuarantees(), 0, "", "", 0,
+		authority, NativeTreeGuarantees(), 0, "", "", "", "", 0,
 	)
 }
 
@@ -206,12 +208,12 @@ func NewNativeNamedEntryReservation(
 	id DestinationReservationID,
 	artifact ArtifactSpec,
 	authority AuthorityRef,
-	reservedName string,
+	logicalReservedName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
 	return newNamedEntryReservation(
 		operation, id, artifact, AuthorityNativeContainer, authority,
-		NativeTreeGuarantees(), reservedName, collisionIndex,
+		NativeTreeGuarantees(), logicalReservedName, logicalReservedName, collisionIndex,
 	)
 }
 
@@ -220,12 +222,13 @@ func NewFSANamedEntryReservation(
 	id DestinationReservationID,
 	artifact ArtifactSpec,
 	authority AuthorityRef,
-	reservedName string,
+	logicalReservedName string,
+	physicalName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
 	return newNamedEntryReservation(
 		operation, id, artifact, AuthorityFSAContainer, authority,
-		FSATreeGuarantees(), reservedName, collisionIndex,
+		FSATreeGuarantees(), logicalReservedName, physicalName, collisionIndex,
 	)
 }
 
@@ -236,7 +239,8 @@ func newNamedEntryReservation(
 	authorityKind AuthorityKind,
 	authority AuthorityRef,
 	guarantees GuaranteeSet,
-	reservedName string,
+	logicalReservedName string,
+	physicalName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
 	layout, ok := artifact.DirectoryTree()
@@ -256,12 +260,13 @@ func newNamedEntryReservation(
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	expected, err := CollisionName(operation, requestedName, collisionIndex, entryKind == ContainerEntrySingleFile)
-	if err != nil || reservedName != expected {
+	if err != nil || logicalReservedName != expected || canonicalComponent(physicalName) != nil ||
+		(authorityKind == AuthorityNativeContainer && physicalName != logicalReservedName) {
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	return newDestinationReservation(
 		ReservationNamedContainerEntry, operation, id, artifact, authorityKind,
-		authority, guarantees, entryKind, requestedName, reservedName, collisionIndex,
+		authority, guarantees, entryKind, requestedName, logicalReservedName, physicalName, "", collisionIndex,
 	)
 }
 
@@ -288,7 +293,7 @@ func NewManagedAtomicReservation(
 	}
 	return newDestinationReservation(
 		ReservationAtomicTarget, operation, id, artifact, AuthorityManagedAtomicTarget,
-		authority, guarantees, 0, requestedName, reservedName, collisionIndex,
+		authority, guarantees, 0, requestedName, "", "", reservedName, collisionIndex,
 	)
 }
 
@@ -301,7 +306,7 @@ func newDestinationReservation(
 	authority AuthorityRef,
 	guarantees GuaranteeSet,
 	entryKind ContainerEntryKind,
-	requestedName, reservedName string,
+	requestedName, logicalReservedName, physicalName, reservedName string,
 	collisionIndex uint32,
 ) (DestinationReservation, error) {
 	if operation.IsZero() || id.IsZero() || artifact.IsZero() || authority.IsZero() || !guarantees.valid() {
@@ -315,7 +320,8 @@ func newDestinationReservation(
 	switch kind {
 	case ReservationContainerRoot:
 		if authorityKind != AuthorityNativeContainer || guarantees.profile != GuaranteeNativeTree ||
-			entryKind != 0 || requestedName != "" || reservedName != "" || collisionIndex != 0 {
+			entryKind != 0 || requestedName != "" || logicalReservedName != "" ||
+			physicalName != "" || reservedName != "" || collisionIndex != 0 {
 			return DestinationReservation{}, ErrInvalidReceiveContract
 		}
 	case ReservationNamedContainerEntry:
@@ -325,10 +331,12 @@ func newDestinationReservation(
 		}
 		encoded = append(encoded, frame([]byte{byte(entryKind)})...)
 		encoded = append(encoded, frame([]byte(requestedName))...)
-		encoded = append(encoded, frame([]byte(reservedName))...)
+		encoded = append(encoded, frame([]byte(logicalReservedName))...)
+		encoded = append(encoded, frame([]byte(physicalName))...)
 		encoded = append(encoded, frame(uint32Bytes(collisionIndex))...)
 	case ReservationAtomicTarget:
-		if authorityKind != AuthorityManagedAtomicTarget || guarantees.profile != GuaranteeManagedAtomic || entryKind != 0 {
+		if authorityKind != AuthorityManagedAtomicTarget || guarantees.profile != GuaranteeManagedAtomic || entryKind != 0 ||
+			logicalReservedName != "" || physicalName != "" {
 			return DestinationReservation{}, ErrInvalidReceiveContract
 		}
 		encoded = append(encoded, frame([]byte(requestedName))...)
@@ -341,7 +349,8 @@ func newDestinationReservation(
 	return DestinationReservation{
 		kind: kind, operation: operation, id: id, artifact: artifact.Digest(),
 		authorityKind: authorityKind, authority: authority, guarantees: guarantees,
-		entryKind: entryKind, requestedName: requestedName, reservedName: reservedName,
+		entryKind: entryKind, requestedName: requestedName,
+		logicalReservedName: logicalReservedName, physicalName: physicalName, reservedName: reservedName,
 		collisionIndex: collisionIndex, encoded: encoded, digest: BindingDigest(sum),
 	}, nil
 }
@@ -510,7 +519,11 @@ func (reservation DestinationReservation) Guarantees() GuaranteeSet   { return r
 func (reservation DestinationReservation) EntryKind() ContainerEntryKind {
 	return reservation.entryKind
 }
-func (reservation DestinationReservation) RequestedName() string     { return reservation.requestedName }
+func (reservation DestinationReservation) RequestedName() string { return reservation.requestedName }
+func (reservation DestinationReservation) LogicalReservedName() string {
+	return reservation.logicalReservedName
+}
+func (reservation DestinationReservation) PhysicalName() string      { return reservation.physicalName }
 func (reservation DestinationReservation) ReservedName() string      { return reservation.reservedName }
 func (reservation DestinationReservation) CollisionIndex() uint32    { return reservation.collisionIndex }
 func (reservation DestinationReservation) CanonicalBytes() []byte    { return clone(reservation.encoded) }

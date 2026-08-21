@@ -26,6 +26,8 @@ export interface V2CatalogPageStore {
   loadDirectory(directoryIdText: string): Promise<V2CommittedDirectory | undefined>
   loadFailure(directoryIdText: string): Promise<V2CachedDirectoryFailure | undefined>
   loadPage(directory: V2CommittedDirectory, pageIndex: number): Promise<V2CatalogPage | undefined>
+  /** Answers from the exact authenticated generation only; staged or superseded state is unavailable. */
+  hasCommittedName(directory: V2CommittedDirectory, name: string): Promise<boolean>
   begin(directoryIdText: string): Promise<void>
   stage(page: V2CatalogPage): Promise<void>
   commit(directory: V2CommittedDirectory): Promise<void>
@@ -58,6 +60,16 @@ export class V2CatalogPageStoreError extends Error {
   }
 }
 
+export function isSameCommittedGeneration(
+  left: V2CommittedDirectory,
+  right: V2CommittedDirectory,
+): boolean {
+  return left.directoryIdText === right.directoryIdText &&
+    left.generationText === right.generationText &&
+    equalBytes(left.directoryId, right.directoryId) &&
+    equalBytes(left.generation, right.generation)
+}
+
 export function snapshotDirectory(directory: V2CommittedDirectory): V2CommittedDirectory {
   const directoryId = requireCatalogIdentity(directory.directoryId, 'directory ID')
   const generation = requireCatalogIdentity(directory.generation, 'directory generation')
@@ -71,6 +83,10 @@ export function snapshotDirectory(directory: V2CommittedDirectory): V2CommittedD
     omittedCount: directory.omittedCount,
     terminalCommitment: directory.terminalCommitment.slice(),
   })
+}
+
+function equalBytes(left: Uint8Array, right: Uint8Array): boolean {
+  return left.byteLength === right.byteLength && left.every((byte, index) => byte === right[index])
 }
 
 function requireCatalogIdentity(

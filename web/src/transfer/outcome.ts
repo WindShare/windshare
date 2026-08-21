@@ -106,6 +106,11 @@ export type CompletedTransferWorkerSettlement = Exclude<
   Readonly<TransferWorkerSettlementBase & { readonly status: 'Paused' }>
 >
 
+export type PausedTransferWorkerSettlement = Extract<
+  TransferWorkerSettlement,
+  Readonly<{ readonly status: 'Paused' }>
+>
+
 export type SuccessfulTransferWorkerSettlement = Extract<
   TransferWorkerSettlement,
   Readonly<{ readonly status: 'Succeeded' }>

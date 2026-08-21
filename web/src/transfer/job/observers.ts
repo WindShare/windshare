@@ -1,4 +1,5 @@
 import type { V2ContentLaneStatus } from '../../content/v2-broker'
+import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type { ReceiveIntent } from '../intent'
 import type { SelectionMeasure } from '../measure'
@@ -9,11 +10,18 @@ import type {
   TransferProgress,
   TransferTraceEvent,
 } from './contract'
+import { normalizeV2FileTransferFailure } from './failures'
+import type { WorkerFamilyConsequenceFailure } from '../worker-family/supervisor'
 
 export interface V2TransferObserversOptions {
   readonly intent: ReceiveIntent
   readonly transferJobId: string
+  readonly protocol?: Readonly<{
+    readonly sessionId: string
+    readonly generation: number
+  }>
   readonly lanes: V2ContentLaneStatus
+  readonly incidentScope?: IncidentScopeHandle
   readonly onProgress?: (progress: TransferProgress) => void
   readonly onMeasure?: (measure: SelectionMeasure) => void
   readonly trace?: DomainTraceSource<TransferTraceEvent>
@@ -117,6 +125,38 @@ export class V2TransferObservers {
       name: 'receive_transition',
       transition: 'materialization_started',
       planKind: this.#options.intent.plan.kind,
+    }))
+  }
+
+  workerConsequence(
+    workerFamily: 'discovery' | 'prepared-files',
+    consequence: WorkerFamilyConsequenceFailure,
+    outputSessionId?: string,
+  ): void {
+    try {
+      normalizeV2FileTransferFailure(consequence.failure, {
+        relation: 'consequence',
+        ...(this.#options.incidentScope === undefined
+          ? {}
+          : { incidentScope: this.#options.incidentScope }),
+      })
+    } catch {
+      // Incident aggregation is passive and cannot interfere with family drainage.
+    }
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: 'worker_consequence_observed',
+      workerFamily,
+      failureSource: consequence.source,
+      operationId: this.#options.intent.operationId,
+      transferJobId: this.#options.transferJobId,
+      ...(this.#options.protocol === undefined
+        ? {}
+        : {
+            protocolSessionId: this.#options.protocol.sessionId,
+            protocolGeneration: this.#options.protocol.generation,
+          }),
+      ...(outputSessionId === undefined ? {} : { outputSessionId }),
     }))
   }
 

@@ -9,6 +9,8 @@ import {
 } from '../browser/filesystem-tree'
 import {
   FSA_OPERATION_HANDLE_DIRECTORY,
+  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT,
+  FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR,
   FSA_OPERATION_HANDLE_PARENT,
   verifyFSAOperationBinding,
   type PersistedFSAOperationBinding,
@@ -35,6 +37,12 @@ import {
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
 } from './checkpoint-repository'
+import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
+import {
+  CompatibleNamePathAuthority,
+  type CompatibleNameActivationLedger,
+  type CompatibleNameRootRepairPreparationOptions,
+} from './compatible-name/coordinator'
 
 export interface OpenFreshPageFileSystemAccessDiscardOptions {
   readonly intent: ReceiveIntent
@@ -43,6 +51,8 @@ export interface OpenFreshPageFileSystemAccessDiscardOptions {
   readonly lockManager?: BrowserLockManagerRuntime
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
+  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
+  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
 }
 
 export interface FSAFreshPageDiscardCut {
@@ -50,7 +60,7 @@ export interface FSAFreshPageDiscardCut {
   readonly candidateCheckpoints: readonly FileCheckpointV2[]
   readonly successfulCheckpoints: readonly FileCheckpointV2[]
   readonly removedObjectIds: readonly string[]
-  readonly removedDirectoryHandleIds: readonly string[]
+  readonly removedHandleIds: readonly string[]
   retireCheckpoints(): Promise<void>
 }
 
@@ -89,6 +99,7 @@ export class FreshPageFileSystemAccessDiscardSession {
   readonly #tree: BrowserFileSystemTree
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
+  readonly #compatibleNames: CompatibleNamePathAuthority
   #discardStarted = false
   #closePromise: Promise<void> | undefined
 
@@ -99,6 +110,7 @@ export class FreshPageFileSystemAccessDiscardSession {
     tree: BrowserFileSystemTree
     checkpoints: FSAFileCheckpointRepository
     rootLease: FSARootMutationLease
+    compatibleNames: CompatibleNamePathAuthority
   }>) {
     this.intent = input.intent
     this.#binding = input.binding
@@ -106,6 +118,7 @@ export class FreshPageFileSystemAccessDiscardSession {
     this.#tree = input.tree
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
+    this.#compatibleNames = input.compatibleNames
   }
 
   usesOperationRepository(repository: ReceiveOperationRepository): boolean {
@@ -118,9 +131,7 @@ export class FreshPageFileSystemAccessDiscardSession {
     }
     this.#discardStarted = true
     await this.#verifyBinding()
-    if (this.#binding.reservation.entryKind === 'result-root') {
-      await this.#tree.reopenOwnedRootForCleanup()
-    }
+    await this.#tree.reopenOwnedRootForCleanup()
 
     const [committed, candidates, checkpointHandles, operationHandles] = await Promise.all([
       scanAllFSAFileCheckpoints(this.#checkpoints, 'committed'),
@@ -146,7 +157,7 @@ export class FreshPageFileSystemAccessDiscardSession {
 
     const successful = objects.flatMap(object =>
       object.successful === undefined ? [] : [object.successful])
-    const removedDirectoryHandleIds: string[] = []
+    const removedHandleIds: string[] = []
     const removableDirectories = directories
       .filter(directory => !successful.some(checkpoint =>
         pathStartsWith(checkpoint.canonicalPath, directory.path)))
@@ -157,7 +168,12 @@ export class FreshPageFileSystemAccessDiscardSession {
         await this.#tree.removeDirectory(directory.path, directory.ownedObjectId)
       })
       removedObjectIds.push(directory.ownedObjectId)
-      removedDirectoryHandleIds.push(directory.handleId)
+      removedHandleIds.push(directory.handleId)
+    }
+    const removedRepair = await this.#compatibleNames.removeVerifiedEmptyRepair(this.#tree.ownedRoot())
+    if (removedRepair.kind === 'removed') {
+      removedObjectIds.push(...removedRepair.removedObjectIds)
+      removedHandleIds.push(...removedRepair.removedHandleIds)
     }
 
     return Object.freeze({
@@ -165,7 +181,7 @@ export class FreshPageFileSystemAccessDiscardSession {
       candidateCheckpoints: candidates,
       successfulCheckpoints: Object.freeze(successful),
       removedObjectIds: Object.freeze(removedObjectIds.sort()),
-      removedDirectoryHandleIds: Object.freeze(removedDirectoryHandleIds.sort()),
+      removedHandleIds: Object.freeze(removedHandleIds.sort()),
       retireCheckpoints: () => this.#checkpoints.retireOperation(),
     })
   }
@@ -231,34 +247,16 @@ export class FreshPageFileSystemAccessDiscardSession {
     objects: readonly OwnedCheckpointObject[],
     handles: readonly ReceiveOperationHandleRecord[],
   ): Promise<readonly OwnedDirectoryObservation[]> {
-    const parent = handles.find(handle => handle.id === this.#binding.parentHandleId)
-    if (parent === undefined || handles.filter(handle =>
-      handle.id === this.#binding.parentHandleId).length !== 1 ||
-        parent.operationId !== this.intent.operationId ||
-        parent.kind !== FSA_OPERATION_HANDLE_PARENT ||
-        parent.authorityRef !== this.#binding.reservation.authorityRef ||
-        parent.ownedObjectId !== undefined || !isDirectoryHandle(parent.handle) ||
-        !await sameEntryForCleanup(parent.handle, this.#binding.parent, this.intent.operationId)) {
-      throw new TargetOwnershipUnknownError('parent-authority', this.intent.operationId)
-    }
-    const directoryById = new Map<string, ReceiveOperationHandleRecord>()
-    const directoryObjectIds = new Set<string>()
-    for (const handle of handles) {
-      if (handle.id === this.#binding.parentHandleId) continue
-      if (handle.operationId !== this.intent.operationId ||
-          handle.kind !== FSA_OPERATION_HANDLE_DIRECTORY ||
-          handle.authorityRef !== this.#binding.reservation.authorityRef ||
-          handle.ownedObjectId === undefined || directoryById.has(handle.id) ||
-          directoryObjectIds.has(handle.ownedObjectId) || !isDirectoryHandle(handle.handle)) {
-        throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
-      }
-      directoryById.set(handle.id, handle)
-      directoryObjectIds.add(handle.ownedObjectId)
-    }
+    await verifyPersistedParentAuthority(this.#binding, handles)
+    const directoryById = ownedDirectoryHandleInventory(
+      this.#binding,
+      handles,
+      this.#compatibleNames.pairHandleIds(),
+    )
 
     if (this.#binding.reservation.entryKind === 'single-file') {
       if (directoryById.size !== 0 || objects.length > 1 ||
-          objects.some(object => !samePath(object.path, [this.#binding.reservation.reservedName]))) {
+          objects.some(object => !samePath(object.path, [this.#binding.reservation.requestedName]))) {
         throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
       }
       if (objects.length === 0) await requireReservedEntryAbsent(this.#binding)
@@ -289,6 +287,7 @@ export class FreshPageFileSystemAccessDiscardSession {
 
   async #close(): Promise<void> {
     this.#checkpoints.close()
+    this.#compatibleNames.close()
     await this.#rootLease.release()
   }
 }
@@ -315,6 +314,7 @@ export async function openFreshPageFileSystemAccessDiscard(
     ? await acquireFSARootMutationLease(firstBinding.parent)
     : await acquireFSARootMutationLease(firstBinding.parent, options.lockManager)
   let checkpoints: FSAFileCheckpointRepository | undefined
+  let compatibleNames: CompatibleNamePathAuthority | undefined
   try {
     const binding = await verifyFSAOperationBinding({
       repository: options.operationRepository,
@@ -325,12 +325,21 @@ export async function openFreshPageFileSystemAccessDiscard(
         binding.reservation.digest !== options.binding.reservation.digest) {
       throw new TargetOwnershipUnknownError('reservation', intent.operationId)
     }
+    compatibleNames = await CompatibleNamePathAuthority.openForReopen({
+      binding,
+      mutations: rootLease.authority,
+      pairHandles: options.operationRepository,
+      openLedger: options.openCompatibleNameLedger ??
+        (() => IndexedDbCompatibleNameLedger.open(options.databaseName)),
+      preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
+    })
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
     const tree = new BrowserFileSystemTree({
       binding,
       operationRepository: options.operationRepository,
       fileHandles: checkpoints,
       mutations: rootLease.authority,
+      compatibleNames,
     })
     return new FreshPageFileSystemAccessDiscardSession({
       intent,
@@ -339,9 +348,11 @@ export async function openFreshPageFileSystemAccessDiscard(
       tree,
       checkpoints,
       rootLease,
+      compatibleNames,
     })
   } catch (error) {
     checkpoints?.close()
+    compatibleNames?.close()
     await rootLease.release().catch(() => undefined)
     throw error
   }
@@ -476,7 +487,56 @@ function requireOperationHandleInventory(
   return repository as ReceiveOperationHandleInventoryRepository
 }
 
-async function walkOwnedDirectory(input: Readonly<{
+async function verifyPersistedParentAuthority(
+  binding: PersistedFSAOperationBinding,
+  handles: readonly ReceiveOperationHandleRecord[],
+): Promise<void> {
+  const parentRecords = handles.filter(handle => handle.id === binding.parentHandleId)
+  const parent = parentRecords[0]
+  if (parentRecords.length !== 1 || parent === undefined ||
+      parent.operationId !== binding.intent.operationId ||
+      parent.kind !== FSA_OPERATION_HANDLE_PARENT ||
+      parent.authorityRef !== binding.reservation.authorityRef ||
+      parent.ownedObjectId !== undefined || !isDirectoryHandle(parent.handle) ||
+      !await sameEntryForCleanup(parent.handle, binding.parent, binding.intent.operationId)) {
+    throw new TargetOwnershipUnknownError('parent-authority', binding.intent.operationId)
+  }
+}
+
+function ownedDirectoryHandleInventory(
+  binding: PersistedFSAOperationBinding,
+  handles: readonly ReceiveOperationHandleRecord[],
+  pairHandleIds: readonly string[],
+): ReadonlyMap<string, ReceiveOperationHandleRecord> {
+  const directoryById = new Map<string, ReceiveOperationHandleRecord>()
+  const directoryObjectIds = new Set<string>()
+  const expectedPairHandleIds = new Set(pairHandleIds)
+  for (const handle of handles) {
+    if (handle.id === binding.parentHandleId) continue
+    if (handle.kind === FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SCRIPT ||
+        handle.kind === FSA_OPERATION_HANDLE_COMPATIBLE_NAME_SIDECAR) {
+      if (!expectedPairHandleIds.delete(handle.id)) {
+        throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
+      }
+      continue
+    }
+    if (handle.operationId !== binding.intent.operationId ||
+        handle.kind !== FSA_OPERATION_HANDLE_DIRECTORY ||
+        handle.authorityRef !== binding.reservation.authorityRef ||
+        handle.ownedObjectId === undefined || directoryById.has(handle.id) ||
+        directoryObjectIds.has(handle.ownedObjectId) || !isDirectoryHandle(handle.handle)) {
+      throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
+    }
+    directoryById.set(handle.id, handle)
+    directoryObjectIds.add(handle.ownedObjectId)
+  }
+  if (expectedPairHandleIds.size !== 0) {
+    throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
+  }
+  return directoryById
+}
+
+interface OwnedDirectoryWalkInput {
   tree: BrowserFileSystemTree
   binding: PersistedFSAOperationBinding
   directory: FileSystemDirectoryHandle
@@ -486,7 +546,9 @@ async function walkOwnedDirectory(input: Readonly<{
   seenDirectories: Set<string>
   seenFiles: Set<string>
   directories: OwnedDirectoryObservation[]
-}>): Promise<void> {
+}
+
+async function walkOwnedDirectory(input: Readonly<OwnedDirectoryWalkInput>): Promise<void> {
   const operationId = input.binding.intent.operationId
   let handleId: string
   try {
@@ -514,21 +576,7 @@ async function walkOwnedDirectory(input: Readonly<{
   }
   try {
     for await (const [name, handle] of enumerable.entries()) {
-      const path = Object.freeze([...input.path, name])
-      if (handle.kind === 'directory') {
-        await walkOwnedDirectory({ ...input, directory: handle as FileSystemDirectoryHandle, path })
-        continue
-      }
-      if (handle.kind !== 'file') {
-        throw new TargetOwnershipUnknownError('cleanup', operationId)
-      }
-      const key = pathKey(path)
-      const object = input.fileByPath.get(key)
-      if (object === undefined || input.seenFiles.has(key) ||
-          !await sameEntryForCleanup(handle, object.persistedHandle, operationId)) {
-        throw new TargetOwnershipUnknownError('cleanup', operationId)
-      }
-      input.seenFiles.add(key)
+      await walkOwnedDirectoryEntry(input, name, handle, operationId)
     }
   } catch (cause) {
     if (cause instanceof TargetOwnershipUnknownError) throw cause
@@ -536,11 +584,39 @@ async function walkOwnedDirectory(input: Readonly<{
   }
 }
 
+async function walkOwnedDirectoryEntry(
+  input: Readonly<OwnedDirectoryWalkInput>,
+  physicalName: string,
+  handle: FileSystemHandle,
+  operationId: string,
+): Promise<void> {
+  if (handle.kind !== 'directory' && handle.kind !== 'file') {
+    throw new TargetOwnershipUnknownError('cleanup', operationId)
+  }
+  const translated = input.tree.physicalChild(input.path, physicalName, handle.kind)
+  if (translated.kind === 'restoration-pair') return
+  if (translated.kind !== 'logical') {
+    throw new TargetOwnershipUnknownError('cleanup', operationId)
+  }
+  const path = Object.freeze([...input.path, translated.logicalComponent])
+  if (handle.kind === 'directory') {
+    await walkOwnedDirectory({ ...input, directory: handle as FileSystemDirectoryHandle, path })
+    return
+  }
+  const key = pathKey(path)
+  const object = input.fileByPath.get(key)
+  if (object === undefined || input.seenFiles.has(key) ||
+      !await sameEntryForCleanup(handle, object.persistedHandle, operationId)) {
+    throw new TargetOwnershipUnknownError('cleanup', operationId)
+  }
+  input.seenFiles.add(key)
+}
+
 async function requireResultRoot(
   binding: PersistedFSAOperationBinding,
 ): Promise<FileSystemDirectoryHandle> {
   try {
-    return await binding.parent.getDirectoryHandle(binding.reservation.reservedName)
+    return await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
   } catch (cause) {
     throw new TargetOwnershipUnknownError('parent-authority', binding.intent.operationId, { cause })
   }
@@ -549,8 +625,8 @@ async function requireResultRoot(
 async function requireReservedEntryAbsent(binding: PersistedFSAOperationBinding): Promise<void> {
   for (const kind of ['file', 'directory'] as const) {
     try {
-      if (kind === 'file') await binding.parent.getFileHandle(binding.reservation.reservedName)
-      else await binding.parent.getDirectoryHandle(binding.reservation.reservedName)
+      if (kind === 'file') await binding.parent.getFileHandle(binding.reservation.physicalName)
+      else await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
       throw new TargetOwnershipUnknownError('cleanup', binding.intent.operationId)
     } catch (cause) {
       if (cause instanceof TargetOwnershipUnknownError) throw cause
@@ -618,4 +694,13 @@ function comparePaths(left: readonly string[], right: readonly string[]): number
 function errorNamed(error: unknown, name: string): boolean {
   return typeof error === 'object' && error !== null &&
     'name' in error && (error as { readonly name?: unknown }).name === name
+}
+
+function defaultCompatibleNamePreparation(): CompatibleNameRootRepairPreparationOptions {
+  const platform = globalThis.navigator?.platform
+  return Object.freeze({
+    platform: typeof platform === 'string' && platform.toLowerCase().startsWith('win')
+      ? 'windows'
+      : 'unsupported',
+  })
 }

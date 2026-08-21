@@ -37,7 +37,7 @@ type topLevelReservationCandidate struct {
 	canonical    receivecontract.DestinationReservation
 	claim        ReservationClaim
 	handle       ReservationClaimHandle
-	reservedName string
+	physicalName string
 }
 
 func reserveTopLevelOnRoot(
@@ -88,21 +88,23 @@ func beginTopLevelReservationCandidate(
 	collisionIndex uint32,
 	canonicalComponentKey func(string) (string, error),
 ) (topLevelReservationCandidate, bool, error) {
-	reservedName, err := receivecontract.CollisionName(
+	logicalReservedName, err := receivecontract.CollisionName(
 		request.OperationID, preferredName, collisionIndex,
 		entryKind == receivecontract.ContainerEntrySingleFile,
 	)
 	if err != nil {
 		return topLevelReservationCandidate{}, false, errors.Join(ErrInvalidReservation, err)
 	}
-	canonicalNameKey, err := canonicalComponentKey(reservedName)
+	physicalName := logicalReservedName
+	canonicalNameKey, err := canonicalComponentKey(physicalName)
 	if err != nil || canonicalNameKey == "" {
 		return topLevelReservationCandidate{}, false, errors.Join(ErrInvalidReservation, err)
 	}
 	handle, outcome, claimErr := request.Metadata.BeginReservation(ReservationClaimSpec{
 		CanonicalNameKey: canonicalNameKey,
 		OperationID:      request.OperationID, ReservationID: request.ReservationID,
-		EntryKind: entryKind, RequestedName: preferredName, ReservedName: reservedName,
+		EntryKind: entryKind, RequestedName: preferredName,
+		LogicalReservedName: logicalReservedName, PhysicalName: physicalName,
 		CollisionIndex: collisionIndex,
 	})
 	if outcome == ReservationMetadataClaimCollision {
@@ -119,7 +121,7 @@ func beginTopLevelReservationCandidate(
 			ErrReservationIndeterminate, claimErr, closeReservationClaimHandle(handle),
 		)
 	}
-	canonical, err := canonicalReservation(binding, request, reservedName, collisionIndex)
+	canonical, err := canonicalReservation(binding, request, logicalReservedName, collisionIndex)
 	if err != nil {
 		return topLevelReservationCandidate{}, false, errors.Join(err, rollbackReservationClaim(handle))
 	}
@@ -136,7 +138,7 @@ func beginTopLevelReservationCandidate(
 		)
 	}
 	return topLevelReservationCandidate{
-		canonical: canonical, claim: claim, handle: handle, reservedName: reservedName,
+		canonical: canonical, claim: claim, handle: handle, physicalName: physicalName,
 	}, false, nil
 }
 
@@ -144,7 +146,7 @@ func reserveSingleFileCandidate(
 	root outputcap.Directory,
 	candidate topLevelReservationCandidate,
 ) (*TopLevelReservation, bool, error) {
-	kind, exact, err := root.ClassifyExactEntry(candidate.reservedName)
+	kind, exact, err := root.ClassifyExactEntry(candidate.physicalName)
 	if err != nil || !exact {
 		return nil, false, errors.Join(
 			ErrReservationIndeterminate, err, closeReservationClaimHandle(candidate.handle),
@@ -174,7 +176,7 @@ func reserveResultRootCandidate(
 			rollbackReservationClaim(candidate.handle),
 		)
 	}
-	directory, outcome, reserveErr := reserver.ReservePublicDirectoryNoReplace(candidate.reservedName)
+	directory, outcome, reserveErr := reserver.ReservePublicDirectoryNoReplace(candidate.physicalName)
 	switch outcome {
 	case outputcap.PublishNoReplaceCollision:
 		if reserveErr != nil || directory != nil {
@@ -262,7 +264,7 @@ func (authority *BoundDestination) ReopenTopLevel(
 		if err != nil || expected.Reservation.AuthorityRef() != authority.binding.AuthorityRef() {
 			return ErrInvalidReservation
 		}
-		kind, exact, err := root.ClassifyExactEntry(entry.ReservedName())
+		kind, exact, err := root.ClassifyExactEntry(entry.PhysicalName())
 		if err != nil || !exact {
 			return errors.Join(ErrReservationIndeterminate, err)
 		}
@@ -281,7 +283,7 @@ func (authority *BoundDestination) ReopenTopLevel(
 		if kind != outputcap.EntryDirectory {
 			return ErrReservationCollision
 		}
-		directory, openErr := openExactPublicDirectory(root, entry.ReservedName())
+		directory, openErr := openExactPublicDirectory(root, entry.PhysicalName())
 		if openErr != nil {
 			return openErr
 		}
@@ -323,12 +325,12 @@ func newTopLevelReservation(
 func canonicalReservation(
 	binding Binding,
 	request ReservationRequest,
-	reservedName string,
+	logicalReservedName string,
 	collisionIndex uint32,
 ) (receivecontract.DestinationReservation, error) {
 	canonical, err := receivecontract.NewNativeNamedEntryReservation(
 		request.OperationID, request.ReservationID, request.Artifact,
-		binding.AuthorityRef(), reservedName, collisionIndex,
+		binding.AuthorityRef(), logicalReservedName, collisionIndex,
 	)
 	if err != nil {
 		return receivecontract.DestinationReservation{}, errors.Join(ErrInvalidReservation, err)

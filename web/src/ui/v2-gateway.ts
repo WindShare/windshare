@@ -234,6 +234,10 @@ export class V2JoinedBrowserShare {
       lanes: content.lanes,
       plans,
       intent,
+      protocol: Object.freeze({
+        sessionId: this.#supervisor.protocolSessionId,
+        generation: protocolGeneration,
+      }),
       ...jobCallbacks,
     })
   }

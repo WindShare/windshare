@@ -44,8 +44,9 @@ func TestDecodeReceiveIntentRejectsMalformedNonCanonicalAndCrossBoundImages(t *t
 	fixtures := decodeReceiveIntentFixtures(t)
 	intent := fixtures["direct-tree-node-selection"]
 	encoded := intent.CanonicalBytes()
-	wrongVersion := bytes.Clone(encoded)
-	wrongVersion[len(receiveIntentDomain)+1]++
+	legacyVersion := bytes.Clone(encoded)
+	legacyVersion[len(receiveIntentDomain)-1] = '1'
+	legacyVersion[len(receiveIntentDomain)+1] = 1
 	zeroShare := bytes.Clone(encoded)
 	shareOffset := bytes.Index(zeroShare, intent.ShareInstance().Bytes())
 	if shareOffset < 0 {
@@ -54,7 +55,7 @@ func TestDecodeReceiveIntentRejectsMalformedNonCanonicalAndCrossBoundImages(t *t
 	clear(zeroShare[shareOffset : shareOffset+catalog.IdentityBytes])
 	for name, value := range map[string][]byte{
 		"empty":          nil,
-		"wrong-version":  wrongVersion,
+		"v1-version":     legacyVersion,
 		"zero-share":     zeroShare,
 		"trailing":       append(bytes.Clone(encoded), 0),
 		"foreign-prefix": append([]byte("foreign"), encoded...),
@@ -93,7 +94,7 @@ func TestDecodeReceiveIntentRejectsMalformedNonCanonicalAndCrossBoundImages(t *t
 }
 
 func canonicalIntentFromFields(selection, artifact, plan []byte) []byte {
-	encoded := append([]byte(receiveIntentDomain), 0, ReceiveIntentV1)
+	encoded := append([]byte(receiveIntentDomain), 0, ReceiveIntentV2)
 	encoded = appendCanonicalField(encoded, selection)
 	encoded = appendCanonicalField(encoded, artifact)
 	return appendCanonicalField(encoded, plan)

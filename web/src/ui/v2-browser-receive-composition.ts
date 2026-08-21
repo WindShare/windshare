@@ -36,6 +36,7 @@ import { startPortableArtifactAuthority } from './browser-receive/portable-route
 import {
   bindRuntimeOutputFailures,
   listBrowserRetainedOperations,
+  readBrowserCompatibleNameRepairSummary,
   type BrowserRetainedCompositionOptions,
 } from './browser-receive/retained'
 import {
@@ -72,6 +73,8 @@ export function createBrowserReceiveComposition(
   const composition: V2ReceiveCompositionPort = {
     retained: Object.freeze({
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
+      readRepairSummary: (operationId: string, signal: AbortSignal) =>
+        readBrowserCompatibleNameRepairSummary(options, operationId, signal),
     }),
     environment: async (signal) => {
       const registry = await inspectBrowserRouteRegistry(windowPort, signal)

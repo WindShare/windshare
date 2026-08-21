@@ -47,6 +47,10 @@ import {
   type FSAFreshPageDiscardCut,
   type FreshPageFileSystemAccessDiscardSession,
 } from './session'
+import type {
+  CompatibleNameActivationLedger,
+  CompatibleNameRootRepairPreparationOptions,
+} from './compatible-name/coordinator'
 import { fsaCheckpointSetDigest } from './settlement'
 
 const FSA_FRESH_PAGE_CLEANUP_RECEIPT = 14
@@ -100,6 +104,8 @@ export interface DiscardReopenedFileSystemAccessOutputOptions {
   readonly lockManager?: BrowserLockManagerRuntime
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
+  readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
+  readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
   readonly clock?: () => number
   readonly trace?: (event: FSAFreshPageDiscardTraceEvent) => void
 }
@@ -166,6 +172,12 @@ class FreshPageDiscardExecution {
       ...(this.#options.databaseName === undefined
         ? {}
         : { databaseName: this.#options.databaseName }),
+      ...(this.#options.openCompatibleNameLedger === undefined
+        ? {}
+        : { openCompatibleNameLedger: this.#options.openCompatibleNameLedger }),
+      ...(this.#options.compatibleNamePreparation === undefined
+        ? {}
+        : { compatibleNamePreparation: this.#options.compatibleNamePreparation }),
     })
     if (!this.#session.usesOperationRepository(this.#options.operation.repository)) {
       throw new TypeError('Fresh-page FSA discard split its repository authority')
@@ -354,7 +366,7 @@ class FreshPageDiscardLifecycleAuthority {
       current,
       next,
       records,
-      cut.removedDirectoryHandleIds,
+      cut.removedHandleIds,
     )
     try {
       await cut.retireCheckpoints()
@@ -637,8 +649,8 @@ async function freshPageCleanupReceipt(input: Readonly<{
         canonicalFrame(canonicalCheckpointEvidence(checkpoint))),
       canonicalFrame(canonicalU64(BigInt(input.cut.removedObjectIds.length))),
       ...input.cut.removedObjectIds.map(value => identityFrame(value, 32, 'removed object ID')),
-      canonicalFrame(canonicalU64(BigInt(input.cut.removedDirectoryHandleIds.length))),
-      ...input.cut.removedDirectoryHandleIds.map(value => canonicalFrame(canonicalText(value))),
+      canonicalFrame(canonicalU64(BigInt(input.cut.removedHandleIds.length))),
+      ...input.cut.removedHandleIds.map(value => canonicalFrame(canonicalText(value))),
     ]),
   })
 }

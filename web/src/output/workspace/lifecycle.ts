@@ -16,8 +16,9 @@ export function reduceReceiveLifecycle(
   context: LifecycleReducerContext,
 ): LifecycleReduction {
   requireClock(context.nowMilliseconds)
+  const catchUpReacquisition = event.kind === 'terminal-catch-up-reacquired'
   if (event.expectedGeneration !== state.generation || event.leaseId !== context.activeLeaseId ||
-      activeLeaseMismatch(state, context.activeLeaseId)) {
+      (!catchUpReacquisition && activeLeaseMismatch(state, context.activeLeaseId))) {
     return Object.freeze({ status: 'stale', state })
   }
   const deadline = lifecycleDeadline(state)
@@ -33,6 +34,7 @@ export function reduceReceiveLifecycle(
     case 'pause-verified': return applied(pauseVerified(state, event, context))
     case 'resume-started': return applied(resumeStable(state, event, context))
     case 'resume-admission-failed': return applied(restoreReceiveContinuation(state, event, context))
+    case 'terminal-catch-up-reacquired': return applied(reacquireTerminalCatchUp(state, context))
     case 'stop-requested': return applied(stopReceive(state, event, context.planKind))
     case 'discovery-completed': return applied(discoveryCompleted(state, context))
     case 'tree-finalization-completed': return applied(finalizeTree(state, event, context))
@@ -76,6 +78,20 @@ export function reduceReceiveLifecycle(
     case 'abandoned-operation-observed':
       return applied(state)
   }
+}
+
+function reacquireTerminalCatchUp(
+  state: ReceiveLifecycleState,
+  context: LifecycleReducerContext,
+): ReceiveLifecycleState {
+  requireState(state, 'receiving')
+  if (context.planKind !== 'direct-tree') {
+    throw new TypeError('terminal catch-up reacquisition is exclusive to DirectTree')
+  }
+  return nextReceiveLifecycleState(state, {
+    kind: 'receiving',
+    activeLeaseId: context.activeLeaseId,
+  })
 }
 
 function startReceive(

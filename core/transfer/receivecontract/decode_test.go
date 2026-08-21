@@ -226,22 +226,22 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		"wrong-guarantee": decoderReservationImage(
 			namedReservation, ReservationNamedContainerEntry, AuthorityNativeContainer,
 			FSATreeGuarantees(), namedReservation.EntryKind(), namedReservation.RequestedName(),
-			namedReservation.ReservedName(), namedReservation.CollisionIndex(),
+			namedReservation.LogicalReservedName(), namedReservation.CollisionIndex(),
 		),
 		"unknown-authority": decoderReservationImage(
 			namedReservation, ReservationNamedContainerEntry, AuthorityKind(0xff),
 			NativeTreeGuarantees(), namedReservation.EntryKind(), namedReservation.RequestedName(),
-			namedReservation.ReservedName(), namedReservation.CollisionIndex(),
+			namedReservation.LogicalReservedName(), namedReservation.CollisionIndex(),
 		),
 		"wrong-entry-kind": decoderReservationImage(
 			namedReservation, ReservationNamedContainerEntry, AuthorityNativeContainer,
 			NativeTreeGuarantees(), ContainerEntryResultRoot, namedReservation.RequestedName(),
-			namedReservation.ReservedName(), namedReservation.CollisionIndex(),
+			namedReservation.LogicalReservedName(), namedReservation.CollisionIndex(),
 		),
 		"wrong-requested-name": decoderReservationImage(
 			namedReservation, ReservationNamedContainerEntry, AuthorityNativeContainer,
 			NativeTreeGuarantees(), namedReservation.EntryKind(), "other.txt",
-			namedReservation.ReservedName(), namedReservation.CollisionIndex(),
+			namedReservation.LogicalReservedName(), namedReservation.CollisionIndex(),
 		),
 	} {
 		t.Run("named-reservation-"+name, func(t *testing.T) {
@@ -259,7 +259,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 	fsaWrongGuarantee := decoderReservationImage(
 		fsaReservation, ReservationNamedContainerEntry, AuthorityFSAContainer,
 		NativeTreeGuarantees(), fsaReservation.EntryKind(), fsaReservation.RequestedName(),
-		fsaReservation.ReservedName(), fsaReservation.CollisionIndex(),
+		fsaReservation.LogicalReservedName(), fsaReservation.CollisionIndex(),
 	)
 	if _, err := decodeDestinationReservation(fsaWrongGuarantee, fsa.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("FSA guarantee error=%v", err)
@@ -347,6 +347,7 @@ func decoderReservationImage(
 		encoded = append(encoded, frame([]byte{byte(entryKind)})...)
 		encoded = append(encoded, frame([]byte(requestedName))...)
 		encoded = append(encoded, frame([]byte(reservedName))...)
+		encoded = append(encoded, frame([]byte(reservation.PhysicalName()))...)
 		encoded = append(encoded, frame(uint32Bytes(collisionIndex))...)
 	case ReservationAtomicTarget:
 		encoded = append(encoded, frame([]byte(requestedName))...)
@@ -439,7 +440,7 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 		t.Fatal(err)
 	}
 	selectionReservation, err := NewFSANamedEntryReservation(
-		operation, reservationID, selectionTree, authority, selectionReserved, 2,
+		operation, reservationID, selectionTree, authority, selectionReserved, selectionReserved, 2,
 	)
 	if err != nil {
 		t.Fatal(err)

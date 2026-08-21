@@ -47,6 +47,7 @@ if ($unformatted.Count -ne 0) {
 }
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
+Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
 Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
 Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }
 Invoke-Step 'Core production dependency boundary tests' { go test ./scripts/ci/_coreboundary }

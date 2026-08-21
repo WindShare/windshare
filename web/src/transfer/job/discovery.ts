@@ -1,3 +1,4 @@
+import type { V2CatalogClient } from '../../catalog/v2-client'
 import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
@@ -6,6 +7,7 @@ import type { ReceiveIntent } from '../intent'
 import { artifactFilePath } from './artifact-path'
 import type {
   AuthenticatedDirectory,
+  AuthenticatedLogicalSiblingMembership,
   DirectoryCursor,
   DirectoryWork,
   PendingFile,
@@ -15,6 +17,19 @@ import type { ExactPreparationCollector } from './preparation'
 import { AsyncBoundedQueue } from './scheduler'
 import type { V2ExplicitSelectionTargetLedger } from './selection'
 import type { V2CatalogTraversalGuard } from './traversal'
+
+/** Retains the raw committed handle so membership cannot be reconstructed from text projections. */
+export function createAuthenticatedLogicalSiblingMembership(
+  catalog: Pick<V2CatalogClient, 'hasCommittedName'>,
+  committed: V2CommittedDirectory,
+  signal: AbortSignal,
+): AuthenticatedLogicalSiblingMembership {
+  return Object.freeze({
+    directoryId: committed.directoryIdText,
+    generation: committed.generationText,
+    hasCommittedName: (candidate: string) => catalog.hasCommittedName(committed, candidate, signal),
+  })
+}
 
 export class V2JobDiscovery {
   readonly #catalog: TransferJobOptions['catalog']

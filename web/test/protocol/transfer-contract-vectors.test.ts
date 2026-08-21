@@ -65,7 +65,7 @@ import {
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const receiveIntentVectors = loadVectorFile(
-  new URL('../../../core/testvectors/receive-intent-v1.json', import.meta.url),
+  new URL('../../../core/testvectors/receive-intent-v2.json', import.meta.url),
 )
 const admissionVectors = loadVectorFile(
   new URL('../../../core/testvectors/directory-admission-v2.json', import.meta.url),
@@ -74,7 +74,7 @@ const checkpointVectors = loadVectorFile(
   new URL('../../../core/testvectors/file-checkpoint-v2.json', import.meta.url),
 )
 
-describe('Go↔TypeScript ReceiveIntentV1 vectors', () => {
+describe('Go↔TypeScript ReceiveIntentV2 vectors', () => {
   for (const vector of receiveIntentVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       await replayReceiveIntent(vector)
@@ -429,11 +429,19 @@ async function destinationReservation(
     case 'named-container-entry': {
       const named = {
         ...base,
-        reservedName: requiredString(input.reservedName, 'reserved name'),
+        logicalReservedName: requiredString(input.logicalReservedName, 'logical reserved name'),
+        physicalName: requiredString(input.physicalName, 'physical name'),
         collisionIndex: requiredNumber(input.collisionIndex, 'collision index'),
       }
       switch (requiredString(input.authorityKind, 'reservation authority kind')) {
-        case 'native-container': return createNativeNamedEntryReservation(named)
+        case 'native-container': return createNativeNamedEntryReservation({
+          operationId: named.operationId,
+          reservationId: named.reservationId,
+          artifact: named.artifact,
+          authorityRef: named.authorityRef,
+          logicalReservedName: named.logicalReservedName,
+          collisionIndex: named.collisionIndex,
+        })
         case 'fsa-container': return createFSANamedEntryReservation(named)
         default: throw new Error('named reservation authority kind is invalid')
       }
