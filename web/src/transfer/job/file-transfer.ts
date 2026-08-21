@@ -20,6 +20,7 @@ import {
   OutputBudgetExceededError,
   OutputSessionCompromisedError,
   TransferPauseRequestedError,
+  TransferStopRequestedError,
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
   snapshotOutputFileRequest,
@@ -433,6 +434,7 @@ async function outputOperation<T>(
     if (cause instanceof OutputTransactionContractError ||
         cause instanceof BoundaryFaultError ||
         cause instanceof TransferPauseRequestedError ||
+        cause instanceof TransferStopRequestedError ||
         cause instanceof OutputBudgetExceededError ||
         cause instanceof OutputSessionCompromisedError ||
         cause instanceof V2OutputPausedError ||

@@ -1,12 +1,22 @@
 import { describe, expect, it } from 'vitest'
 
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
-import { V2TransferFailureSettlementError } from '../../src/transfer/settlement/v2-output'
+import {
+  TransferPauseRequestedError,
+  TransferStopRequestedError,
+} from '../../src/transfer/output-session'
+import type { TransferTraceEvent } from '../../src/transfer/v2-job'
+import {
+  V2OutputSettlementTimeoutError,
+  V2TransferFailureSettlementError,
+  type V2OutputSettlementDeadline,
+} from '../../src/transfer/settlement/v2-output'
 import {
   catalogFixture,
   directoryEntry,
   fileEntry,
   identity,
+  identityText,
   planAuthorityFixture,
   readerFixture,
   receiveIntentFixture,
@@ -15,6 +25,55 @@ import {
 } from './v2-job-fixture'
 
 describe('v2 plan settlement', () => {
+  it('aborts an in-flight DirectTree receive into its typed Stop terminal cut', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    let announceRead!: () => void
+    const readStarted = new Promise<void>(resolve => { announceRead = resolve })
+    let releaseRead!: () => void
+    const readGate = new Promise<void>(resolve => { releaseRead = resolve })
+    const readers = readerFixture([file], [], {
+      beforeRead: async () => {
+        announceRead()
+        await readGate
+      },
+    })
+    const plans = planAuthorityFixture()
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+    const transfer = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    })
+    const controller = new AbortController()
+    const resultPromise = transfer.run(controller.signal)
+    await readStarted
+    const reason = new TransferStopRequestedError()
+    controller.abort(reason)
+    releaseRead()
+
+    const result = await resultPromise
+
+    expect(result.worker.status).toBe('Paused')
+    expect(result.abortReason).toBe(reason)
+    expect(result.lifecycle).toMatchObject({ kind: 'partial-directory', reason: 'stopped' })
+    expect(plans.stops).toHaveLength(1)
+    expect(plans.stops[0]?.reason).toBe(reason)
+    expect(plans.stops[0]?.worker).toBe(result.worker)
+    expect(plans.settlements).toEqual([])
+    expect(plans.pauses).toEqual([])
+    expect(plans.stopSignals[0]?.aborted).toBe(true)
+  })
+
   it('settles DirectTree progressively as a partial directory after a file-local failure', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
@@ -43,6 +102,88 @@ describe('v2 plan settlement', () => {
     expect(plans.settlements).toEqual(['direct-tree:CompletedWithErrors'])
     expect(plans.pauses).toEqual([])
   })
+
+  it.each([
+    {
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      workerFamily: 'discovery',
+    },
+    {
+      planKind: 'workspace-then-publish',
+      artifactKind: 'zip-archive',
+      workerFamily: 'prepared-files',
+    },
+  ] as const)(
+    'records a later $workerFamily worker consequence with stable receive context',
+    async ({ planKind, artifactKind, workerFamily }) => {
+      const root = identity(2)
+      const first = fileEntry(identity(11), 'first.bin', 2n)
+      const second = fileEntry(identity(12), 'second.bin', 2n)
+      const selection = new V2SelectionPolicy(true)
+      const catalog = catalogFixture([{ id: root, entries: [first, second] }])
+      const firstStarted = deferred<void>()
+      const secondStarted = deferred<void>()
+      const releaseFirst = deferred<void>()
+      const releaseSecond = deferred<void>()
+      const familyAborted = deferred<void>()
+      const initiatingFailure = new TransferPauseRequestedError()
+      const laterFailure = new Error('later worker consequence')
+      const readers = readerFixture([first, second], [], {
+        observeOpenSignal: (fileId, signal) => {
+          if (fileId !== second.idText) return
+          signal?.addEventListener('abort', () => familyAborted.resolve(), { once: true })
+        },
+        beforeOpen: async fileId => {
+          if (fileId === first.idText) {
+            firstStarted.resolve()
+            await releaseFirst.promise
+            throw initiatingFailure
+          }
+          secondStarted.resolve()
+          await releaseSecond.promise
+          throw laterFailure
+        },
+      })
+      const plans = planAuthorityFixture()
+      const intent = await receiveIntentFixture({ planKind, artifactKind, selection })
+      const traces: TransferTraceEvent[] = []
+      const running = transferJobFixture({
+        catalog: catalog.catalog,
+        selection,
+        intent,
+        plans,
+        revisions: readers.revisions,
+        broker: readers.broker,
+        maximumConcurrentFiles: 2,
+        trace: { current: event => traces.push(event) },
+      }).run()
+
+      await Promise.all([firstStarted.promise, secondStarted.promise])
+      releaseFirst.resolve()
+      await familyAborted.promise
+      releaseSecond.resolve()
+      const result = await running
+
+      expect(result.abortReason).toBe(initiatingFailure)
+      const consequences = traces.filter((event): event is Extract<
+        TransferTraceEvent,
+        { transition: 'worker_consequence_observed' }
+      > => event.name === 'receive_transition' &&
+        event.transition === 'worker_consequence_observed')
+      expect(consequences).toEqual(expect.arrayContaining([
+        expect.objectContaining({
+          workerFamily,
+          operationId: intent.operationId,
+          transferJobId: result.transferJobId,
+          protocolSessionId: identityText(91),
+          protocolGeneration: 3,
+          outputSessionId: 'test-session',
+          failureSource: expect.objectContaining({ kind: 'worker' }),
+        }),
+      ]))
+    },
+  )
 
   it('pauses a complete artifact instead of calling settlement after the same file-local failure', async () => {
     const root = identity(2)
@@ -149,6 +290,168 @@ describe('v2 plan settlement', () => {
     expect(plans.output.commits).toEqual([file.idText])
   })
 
+})
+
+describe('v2 terminal settlement authority', () => {
+  it('does not re-enter Pause or replace an initiating DirectTree terminal-cut failure', async () => {
+    const root = identity(2)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [] }])
+    const readers = readerFixture([])
+    const plansFailure = new Error('projector terminal drain failed')
+    const plans = planAuthorityFixture({ settlementFailure: plansFailure })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+
+    let failure: unknown
+    try {
+      await transferJobFixture({
+        catalog: catalog.catalog,
+        selection,
+        intent,
+        plans,
+        revisions: readers.revisions,
+        broker: readers.broker,
+      }).run()
+    } catch (error) {
+      failure = error
+    }
+
+    expect(failure).toBe(plansFailure)
+    expect(plans.settlements).toEqual(['direct-tree:Succeeded'])
+    expect(plans.pauses).toEqual([])
+    expect(plans.unknownSettlements).toEqual([])
+  })
+
+  it('drains DirectTree terminal authority before exposing a latched timeout', async () => {
+    const root = identity(2)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [] }])
+    const readers = readerFixture([])
+    const terminalEntered = deferred<void>()
+    const terminalAborted = deferred<void>()
+    const releaseTerminal = deferred<void>()
+    const terminalMutations: string[] = []
+    const deadline = manualSettlementDeadline()
+    const plans = planAuthorityFixture({
+      beforeDirectTreeSettlement: async signal => {
+        signal.addEventListener('abort', () => terminalAborted.resolve(), { once: true })
+        terminalEntered.resolve()
+        await releaseTerminal.promise
+        terminalMutations.push('terminal-finished')
+      },
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+    const running = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+      outputSettlementDeadline: deadline,
+    }).run()
+    let exposed = false
+    const exposureObservation = running.then(
+      () => { exposed = true },
+      () => { exposed = true },
+    )
+    await terminalEntered.promise
+
+    deadline.expire()
+    await terminalAborted.promise
+
+    expect(exposed).toBe(false)
+    expect(terminalMutations).toEqual([])
+    expect(plans.settlementSignals[0]?.aborted).toBe(true)
+
+    releaseTerminal.resolve()
+    await expect(running).rejects.toBeInstanceOf(V2OutputSettlementTimeoutError)
+    await exposureObservation
+    expect(exposed).toBe(true)
+    expect(terminalMutations).toEqual(['terminal-finished'])
+    expect(plans.pauses).toEqual([])
+    expect(plans.unknownSettlements).toEqual([])
+
+    const stableMutations = [...terminalMutations]
+    await Promise.resolve()
+    expect(terminalMutations).toEqual(stableMutations)
+  })
+
+  it('drains DirectTree Stop authority before exposing a latched timeout', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readStarted = deferred<void>()
+    const releaseRead = deferred<void>()
+    const readers = readerFixture([file], [], {
+      beforeRead: async () => {
+        readStarted.resolve()
+        await releaseRead.promise
+      },
+    })
+    const terminalEntered = deferred<void>()
+    const terminalAborted = deferred<void>()
+    const releaseTerminal = deferred<void>()
+    const terminalMutations: string[] = []
+    const deadline = manualSettlementDeadline()
+    const plans = planAuthorityFixture({
+      beforeDirectTreeStop: async signal => {
+        signal.addEventListener('abort', () => terminalAborted.resolve(), { once: true })
+        terminalEntered.resolve()
+        await releaseTerminal.promise
+        terminalMutations.push('stop-finished')
+      },
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+    const controller = new AbortController()
+    const running = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+      outputSettlementDeadline: deadline,
+    }).run(controller.signal)
+    let exposed = false
+    const exposureObservation = running.then(
+      () => { exposed = true },
+      () => { exposed = true },
+    )
+    await readStarted.promise
+    controller.abort(new TransferStopRequestedError())
+    releaseRead.resolve()
+    await terminalEntered.promise
+
+    deadline.expire()
+    await terminalAborted.promise
+
+    expect(exposed).toBe(false)
+    expect(terminalMutations).toEqual([])
+    expect(plans.stopSignals[0]?.aborted).toBe(true)
+
+    releaseTerminal.resolve()
+    await expect(running).rejects.toBeInstanceOf(V2OutputSettlementTimeoutError)
+    await exposureObservation
+    expect(exposed).toBe(true)
+    expect(terminalMutations).toEqual(['stop-finished'])
+    expect(plans.pauses).toEqual([])
+    expect(plans.unknownSettlements).toEqual([])
+  })
+
   it('bounds a plan pause and records target ownership as unknown', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 2n)
@@ -253,6 +556,29 @@ describe('v2 plan settlement', () => {
     expect(JSON.stringify(failure.settlementFailures)).not.toContain('fixture')
   })
 })
+
+function manualSettlementDeadline(): V2OutputSettlementDeadline & Readonly<{
+  expire(): void
+}> {
+  let expiration: (() => void) | undefined
+  return Object.freeze({
+    schedule: (_delayMilliseconds: number, expire: () => void) => {
+      if (expiration !== undefined) throw new Error('test deadline was scheduled twice')
+      expiration = expire
+      return Object.freeze({ cancel: () => undefined })
+    },
+    expire: () => {
+      if (expiration === undefined) throw new Error('test deadline is not scheduled')
+      expiration()
+    },
+  })
+}
+
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>(complete => { resolve = complete })
+  return Object.freeze({ promise, resolve })
+}
 
 async function withExternalBound<T>(operation: Promise<T>, milliseconds: number): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined

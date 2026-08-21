@@ -17,7 +17,6 @@ import {
   createOwnedObjectId,
   fileHandleId,
   fileHandleRecord,
-  namespaceEntryExists,
   recordOwnsFile,
   requireFileHandle,
   requireOpenedRevision,
@@ -28,6 +27,11 @@ import {
 import { createBrowserPersistentFile } from './filesystem-persistent-file'
 import type { PersistedFSAOperationBinding } from './indexeddb-root-binding'
 import type { FSARootMutationAuthority } from './namespace-mutation'
+import type { CompatibleNamePathAuthority } from '../file-system-access/compatible-name/coordinator'
+import {
+  PathComponentRejectedError,
+  inspectFileSystemComponent,
+} from './filesystem-component-inspection'
 
 export {
   FSA_FILE_HANDLE_KIND,
@@ -42,6 +46,8 @@ interface BrowserFileLineageAuthorityOptions {
   readonly fileHandles: PersistentHandleRepository
   readonly mutations: FSARootMutationAuthority
   readonly prepareRoot: () => Promise<void>
+  readonly pairParent?: () => FileSystemDirectoryHandle | undefined
+  readonly compatibleNames?: CompatibleNamePathAuthority
   readonly verifyParent: (stageScope?: PersistentOutputStageScope) =>
     Promise<FileSystemDirectoryHandle>
   readonly resolveParent: (
@@ -63,6 +69,8 @@ export class BrowserFileLineageAuthority {
   readonly #fileHandles: PersistentHandleRepository
   readonly #mutations: FSARootMutationAuthority
   readonly #prepareRoot: () => Promise<void>
+  readonly #pairParent: () => FileSystemDirectoryHandle | undefined
+  readonly #compatibleNames: CompatibleNamePathAuthority | undefined
   readonly #verifyParent: BrowserFileLineageAuthorityOptions['verifyParent']
   readonly #resolveParent: BrowserFileLineageAuthorityOptions['resolveParent']
   readonly #randomOwnedObjectId: () => string
@@ -72,6 +80,8 @@ export class BrowserFileLineageAuthority {
     this.#fileHandles = options.fileHandles
     this.#mutations = options.mutations
     this.#prepareRoot = options.prepareRoot
+    this.#pairParent = options.pairParent ?? (() => undefined)
+    this.#compatibleNames = options.compatibleNames
     this.#verifyParent = options.verifyParent
     this.#resolveParent = options.resolveParent
     this.#randomOwnedObjectId = options.randomOwnedObjectId ?? createOwnedObjectId
@@ -98,11 +108,34 @@ export class BrowserFileLineageAuthority {
     return this.#mutations.run('create-file', async () => {
       await this.#verifyParent(stageScope)
       const { parent, name } = await this.#resolveParent(canonicalPath, stageScope)
-      return await runPersistentOutputStage(
-        stageScope,
-        'fsa.file.entry.inspect',
-        () => namespaceEntryExists(parent, name),
-      ) ? 'occupied' : 'absent'
+      if (this.#compatibleNames?.hasLateLogicalCollision(canonicalPath, 'file')) return 'occupied'
+      try {
+        return await runPersistentOutputStage(
+          stageScope,
+          'fsa.file.entry.inspect',
+          () => inspectFileSystemComponent({
+            verifiedParent: parent,
+            component: name,
+            expectedKind: 'file',
+            stage: 'fsa.file.entry.inspect',
+            mode: this.#compatibleNames?.hasMapping(canonicalPath, 'file') === true
+              ? 'diagnostic'
+              : 'classify-rejection',
+          }),
+        )
+      } catch (error) {
+        const pairParent = this.#pairParent()
+        if (!(error instanceof PathComponentRejectedError) ||
+            this.#compatibleNames === undefined || pairParent === undefined) throw error
+        await this.#compatibleNames.resolveRejectedComponent({
+          rejection: error,
+          artifactPath: canonicalPath,
+          entryKind: 'file',
+          parent,
+          pairParent,
+        })
+        return 'absent'
+      }
     })
   }
 
@@ -140,8 +173,14 @@ export class BrowserFileLineageAuthority {
       if (await runPersistentOutputStage(
         stageScope,
         'fsa.file.entry.inspect',
-        () => namespaceEntryExists(parent, name),
-      )) {
+        () => inspectFileSystemComponent({
+          verifiedParent: parent,
+          component: name,
+          expectedKind: 'file',
+          stage: 'fsa.file.entry.inspect',
+          mode: 'diagnostic',
+        }),
+      ) === 'occupied') {
         throw new TargetOwnershipUnknownError(
           'namespace-create',
           this.#binding.intent.operationId,
@@ -257,6 +296,11 @@ export class BrowserFileLineageAuthority {
       stageScope,
       'fsa.file.entry.create',
       () => parent.getFileHandle(name, { create: true }),
+    )
+    await this.#compatibleNames?.recordCompatibleTargetCreated(
+      canonicalPath,
+      'file',
+      this.#pairParent(),
     )
     const record = fileHandleRecord(this.#binding.reservation, ownedObjectId, created)
     try {
@@ -383,7 +427,7 @@ export class BrowserFileLineageAuthority {
     const canonical = snapshotPortableCatalogPath(path)
     if (this.#binding.reservation.entryKind === 'single-file' &&
         (canonical.length !== 1 ||
-         canonical[0] !== this.#binding.reservation.reservedName)) {
+         canonical[0] !== this.#binding.reservation.requestedName)) {
       throw new TypeError('Single-file DirectoryTree must write directly below its parent')
     }
     return canonical

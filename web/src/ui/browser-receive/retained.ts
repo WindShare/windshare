@@ -1,20 +1,17 @@
 import { lifecycleFailureFact, type FailureFact } from '../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../output/browser/indexeddb-resume-state'
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
+import { IndexedDbCompatibleNameLedger } from '../../output/browser/indexeddb-compatible-name-ledger'
+import type { CompatibleNameLedger } from '../../output/file-system-access/compatible-name/ledger'
+import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import {
   createOutputFailureBinding,
-  emitOutputTrace,
-  outputTraceEvent,
   recordOutputException,
   type LocalOutputOperationFailureDiagnosticsPort,
-  type OutputDiagnosticBackend,
-  type OutputDiagnosticsPorts,
   type OutputFailureBinding,
   type OutputFailureSinks,
   type OutputTraceSource,
 } from '../../output/diagnostics'
-import { openOriginPrivateRetainedArtifactBackend } from '../../output/origin-private/session'
-import { TargetOwnershipUnknownError } from '../../output/persistent-tree/errors'
 import {
   ReceiveOperationResumeAuthority,
   type ReceiveOperationMutationPort,
@@ -24,13 +21,11 @@ import {
 import type {
   AuthorityOwnedReceiveOperationContinuation,
   AuthorityOwnedReceiveOperationMutationResult,
-  ReopenedWorkspaceOperation,
 } from '../../output/resume/reopen-authority'
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import { recoverWorkspaceActivationCandidates } from '../../output/workspace/activation-recovery'
 import type { WorkspaceActivationJournalRepository } from '../../output/workspace/repository'
-import { classificationForTransferFailure } from '../../transfer/job/failures'
-import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
+import { catchUpFileSystemAccessPendingOutcome } from '../../output/file-system-access/settlement'
 import type {
   V2BoundReceiveOperation,
   V2RetainedReceiveAction,
@@ -40,8 +35,14 @@ import type {
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import { FSAReceiveOperation } from './fsa'
-import { WorkspaceReceiveOperation } from './workspace-operation'
-import { handoffRetainedWorkspacePackage } from './workspace-publication'
+import { unavailableRoute } from './shared'
+import { diagnosticsFor } from './retained-diagnostics'
+import {
+  continueRetainedWorkspaceOperation,
+  continuationMismatch,
+  resumeWorkspaceReceive,
+} from './retained-workspace'
+
 
 const RESUME_AUTHORITY_UNAVAILABLE =
   'Saved actions are unavailable because this browser has no persisted-operation authority.'
@@ -60,9 +61,17 @@ const READ_ONLY_RESUME_MUTATIONS:
       'Persisted receive cleanup authority is not installed',
       'NotSupportedError',
     )),
+    catchUp: () => Promise.reject(new DOMException(
+      'Persisted terminal catch-up authority is not installed',
+      'NotSupportedError',
+    )),
   })
 
 type RetainedContinuationAction = Extract<V2RetainedReceiveAction, 'save' | 'redownload'>
+type DirectTreeCatchUpContinuation = Extract<
+  AuthorityOwnedReceiveOperationContinuation,
+  { readonly kind: 'direct-tree-catch-up' }
+>
 type DirectTreeReceiveContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'direct-tree-receive' }
@@ -82,6 +91,11 @@ type WorkspaceRetainedContinuation = Extract<
 >
 
 export interface BrowserRetainedContinuationExecutor {
+  catchUpTerminal?(
+    continuation: DirectTreeCatchUpContinuation,
+    signal: AbortSignal,
+    failures?: OutputFailureSinks,
+  ): Promise<void>
   resumeReceive(
     continuation: ReceiveContinuation,
     signal: AbortSignal,
@@ -111,6 +125,27 @@ export interface BrowserRetainedCompositionOptions {
   readonly onTrace?: WorkspaceStageTraceListener
   readonly openActivationRepository?: () => Promise<WorkspaceActivationJournalRepository>
   readonly recoverWorkspaceActivations?: typeof recoverWorkspaceActivationCandidates
+  readonly openCompatibleNameLedger?: () => Promise<Pick<
+    CompatibleNameLedger,
+    'readRepairSummary' | 'close'
+  >>
+}
+
+export async function readBrowserCompatibleNameRepairSummary(
+  options: BrowserRetainedCompositionOptions,
+  operationId: string,
+  signal: AbortSignal,
+): Promise<CompatibleNameRepairSummary | undefined> {
+  signal.throwIfAborted()
+  const ledger = await (options.openCompatibleNameLedger ??
+    (() => IndexedDbCompatibleNameLedger.open()))()
+  try {
+    const summary = await ledger.readRepairSummary(operationId)
+    signal.throwIfAborted()
+    return summary
+  } finally {
+    ledger.close()
+  }
 }
 
 export async function listBrowserRetainedOperations(
@@ -272,6 +307,9 @@ function retainedOperationAuthority(
     })
   }
   switch (continuation) {
+    case 'pending-catch-up':
+    case 'restoration-available':
+      return Object.freeze({ actions: retainedActions('catch-up') })
     case 'resume-receive':
     case 'resume-package':
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
@@ -280,8 +318,9 @@ function retainedOperationAuthority(
     case 'retry-download':
       return Object.freeze({ actions: retainedActions('redownload', 'delete') })
     case 'cleanup-expired':
-    case 'retry-cleanup':
       return Object.freeze({ actions: retainedActions('delete') })
+    case 'retry-cleanup':
+      return Object.freeze({ actions: retainedActions('catch-up', 'delete') })
     case 'needs-attention':
       return Object.freeze({
         actions: retainedActions(),
@@ -306,7 +345,9 @@ async function performRetainedAction(
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
   }
-  const result = await authority.resume(reference, failures)
+  const result = action === 'catch-up'
+    ? await authority.catchUp(reference, failures)
+    : await authority.resume(reference, failures)
   if (result.kind === 'retention-cleanup') {
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
@@ -320,6 +361,17 @@ async function performRetainedAction(
     )
   const { continuation } = result
   switch (continuation.kind) {
+    case 'direct-tree-catch-up':
+      return withRetainedOperationClose(continuation.operation, async () => {
+        if (action !== 'catch-up') throw continuationMismatch()
+        const catchUp = executor.catchUpTerminal
+        if (catchUp === undefined) throw unavailableRoute()
+        signal.throwIfAborted()
+        await (failures === undefined
+          ? catchUp(continuation, signal)
+          : catchUp(continuation, signal, failures))
+        return Object.freeze({ kind: 'completed' as const })
+      })
     case 'direct-tree-receive':
     case 'workspace-receive':
       return continueRetainedReceive(executor, continuation, action, signal, failures)
@@ -445,6 +497,21 @@ function browserRetainedContinuationExecutor(
   localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
 ): BrowserRetainedContinuationExecutor {
   return Object.freeze({
+    catchUpTerminal: async (
+      continuation: DirectTreeCatchUpContinuation,
+      signal: AbortSignal,
+      failures?: OutputFailureSinks,
+    ) => {
+      try {
+        await catchUpFileSystemAccessPendingOutcome({
+          operation: continuation.operation,
+          signal,
+        })
+      } catch (error) {
+        if (!signal.aborted) recordOutputException(failures?.settlement, error)
+        throw error
+      }
+    },
     resumeReceive: async (
       continuation: ReceiveContinuation,
       signal: AbortSignal,
@@ -500,185 +567,7 @@ function browserRetainedContinuationExecutor(
   })
 }
 
-async function resumeWorkspaceReceive(
-  windowPort: BrowserReceiveWindow,
-  continuation: WorkspaceReceiveContinuation,
-  signal: AbortSignal,
-  trace: WorkspaceStageTraceListener | undefined,
-  outputTrace: OutputTraceSource | undefined,
-  binding: OutputFailureBinding,
-): Promise<V2BoundReceiveOperation> {
-  const fallback = continuation.operation.receiveAdmissionFallback
-  if (fallback === undefined) {
-    throw new TypeError('Workspace continuation omitted its admission fallback')
-  }
-  try {
-    const backend = await continuation.operation.receiveContinuation.openBackend({
-      ...(trace === undefined ? {} : { onTrace: trace }),
-      ...diagnosticsOption('origin_private', outputTrace, binding.sinks),
-    })
-    try {
-      signal.throwIfAborted()
-      const runtime = await WorkspaceReceiveOperation.reopen({
-        windowPort,
-        operation: continuation.operation,
-        backend,
-        ...(trace === undefined ? {} : { trace }),
-        ...diagnosticsOption('origin_private', outputTrace, binding.sinks),
-      })
-      return bindRuntimeOutputFailures(runtime, binding)
-    } catch (error) {
-      let cleanupFailed = false
-      let cleanupFailure: unknown
-      try {
-        await backend.close()
-      } catch (caughtCleanupFailure) {
-        cleanupFailed = true
-        cleanupFailure = caughtCleanupFailure
-      }
-      if (cleanupFailed) {
-        throw new AggregateError(
-          [error, cleanupFailure],
-          'Workspace continuation adoption and output cleanup both failed',
-          { cause: error },
-        )
-      }
-      throw error
-    }
-  } catch (error) {
-    try {
-      await settleWorkspaceReceiveAdmissionFailure(continuation, fallback, error)
-    } catch (settlementError) {
-      const consequence = classificationForTransferFailure(settlementError, {
-        stage: 'settlement',
-        relation: 'consequence',
-      })
-      if (consequence === undefined) throw error
-      throw new V2TransferFailureSettlementError(
-        classificationForTransferFailure(error, {
-          stage: 'reopen',
-          relation: 'contributor',
-        }),
-        [consequence],
-      )
-    }
-    throw error
-  }
-}
 
-async function settleWorkspaceReceiveAdmissionFailure(
-  continuation: WorkspaceReceiveContinuation,
-  fallback: NonNullable<WorkspaceReceiveContinuation['operation']['receiveAdmissionFallback']>,
-  error: unknown,
-): Promise<void> {
-  if (!(error instanceof TargetOwnershipUnknownError)) {
-    await continuation.operation.stages.restoreReceiveContinuation(fallback)
-    return
-  }
-  if (error.operationId !== null &&
-      error.operationId !== continuation.operation.intent.operationId) {
-    throw new TypeError('Workspace recovery evidence belongs to another operation', {
-      cause: error,
-    })
-  }
-  await continuation.operation.stages.recordTargetOwnershipUnknown(
-    continuation.operation.intent.digest,
-  )
-}
-
-async function continueRetainedWorkspaceOperation(
-  windowPort: BrowserReceiveWindow,
-  operation: ReopenedWorkspaceOperation,
-  action: RetainedContinuationAction,
-  signal: AbortSignal,
-  diagnostics?: OutputDiagnosticsPorts,
-): Promise<void> {
-  signal.throwIfAborted()
-  if ((action === 'save' && operation.lifecycle.kind !== 'waiting-to-save') ||
-      (action === 'redownload' && (operation.lifecycle.kind !== 'download-started' ||
-        operation.lifecycle.attemptKind !== 'workspace'))) {
-    throw continuationMismatch()
-  }
-  const backend = await openOriginPrivateRetainedArtifactBackend({
-    receiveIntent: operation.intent,
-    operationRepository: operation.repository,
-    namespace: operation.namespace,
-    ...(diagnostics === undefined ? {} : { diagnostics }),
-  }).catch((error: unknown) => {
-    recordOutputException(diagnostics?.failures?.continuation, error)
-    emitOutputTrace(diagnostics?.trace, () =>
-      outputTraceEvent('continuation', {
-        backend: 'origin_private',
-        transition: 'admission_failed',
-      }))
-    throw error
-  })
-  let handoffFailed = false
-  let handoffFailure: unknown
-  try {
-    signal.throwIfAborted()
-    await handoffRetainedWorkspacePackage(windowPort, operation, backend, diagnostics)
-  } catch (error) {
-    handoffFailed = true
-    handoffFailure = error
-    if (!signal.aborted) {
-      recordOutputException(diagnostics?.failures?.publication, error)
-      emitOutputTrace(diagnostics?.trace, () =>
-        outputTraceEvent('publication', {
-          backend: 'origin_private',
-          transition: 'unknown',
-        }))
-    }
-  }
-
-  let cleanupFailed = false
-  let cleanupFailure: unknown
-  try {
-    await backend.close()
-  } catch (error) {
-    // The retained backend owns checkpoint-close classification and trace emission.
-    cleanupFailed = true
-    cleanupFailure = error
-  }
-
-  if (handoffFailed && cleanupFailed) {
-    throw new AggregateError(
-      [handoffFailure, cleanupFailure],
-      'Retained handoff and output cleanup both failed',
-    )
-  }
-  if (handoffFailed) throw handoffFailure
-  if (cleanupFailed) throw cleanupFailure
-}
-
-function continuationMismatch(): DOMException {
-  return new DOMException(
-    'Retained continuation does not match its reopened authority',
-    'InvalidStateError',
-  )
-}
-
-function diagnosticsOption(
-  backend: OutputDiagnosticBackend,
-  trace: OutputTraceSource | undefined,
-  failures?: OutputFailureSinks,
-): { readonly diagnostics?: OutputDiagnosticsPorts } {
-  const diagnostics = diagnosticsFor(backend, trace, failures)
-  return diagnostics === undefined ? Object.freeze({}) : Object.freeze({ diagnostics })
-}
-
-function diagnosticsFor(
-  backend: OutputDiagnosticBackend,
-  trace: OutputTraceSource | undefined,
-  failures?: OutputFailureSinks,
-): OutputDiagnosticsPorts | undefined {
-  if (trace === undefined && failures === undefined) return undefined
-  return Object.freeze({
-    backend,
-    ...(failures === undefined ? {} : { failures }),
-    ...(trace === undefined ? {} : { trace }),
-  })
-}
 
 export function bindRuntimeOutputFailures(
   runtime: V2BoundReceiveOperation,
@@ -694,6 +583,18 @@ export function bindRuntimeOutputFailures(
     },
     lifecycle: runtime.lifecycle,
     activeControls: runtime.activeControls,
+    ...(runtime.repairProjection === undefined
+      ? {}
+      : { repairProjection: runtime.repairProjection }),
+    ...(runtime.subscribeRepairProjectionActivation === undefined
+      ? {}
+      : {
+          subscribeRepairProjectionActivation: (
+            listener: Parameters<NonNullable<
+              V2BoundReceiveOperation['subscribeRepairProjectionActivation']
+            >>[0],
+          ) => runtime.subscribeRepairProjectionActivation!(listener),
+        }),
     ...(runtime.initialWorkspaceUsage === undefined
       ? {}
       : { initialWorkspaceUsage: runtime.initialWorkspaceUsage }),

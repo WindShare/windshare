@@ -146,7 +146,8 @@ async function singleFileIntent(): Promise<ReceiveIntent> {
     reservationId: identity(5),
     artifact,
     authorityRef: identity(6, 32),
-    reservedName: 'report.bin',
+    logicalReservedName: 'report.bin',
+    physicalName: 'report.bin',
     collisionIndex: 0,
   })
   return createReceiveIntent({

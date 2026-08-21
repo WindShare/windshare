@@ -24,7 +24,7 @@ Cross-runtime diagnostic contracts:
 
 Receiver-local canonical contracts:
 
-- `receive-intent-v1.json`: SelectionSpec, ArtifactSpec, binding, plan, and
+- `receive-intent-v2.json`: SelectionSpec, ArtifactSpec, binding, plan, and
   ReceiveIntent canonical bytes and digests for every legal plan family.
 - `directory-admission-v2.json`: ReceiveIntent-bound layout, generation,
   ancestry, path, modified-time, HMAC, and settlement cases.

@@ -15,7 +15,8 @@ func TestReservationClaimCanonicalPhasesAndDefensiveIdentity(t *testing.T) {
 	digest, _ := receivecontract.BindingDigestFromBytes(bytes.Repeat([]byte{0x73}, sha256.Size))
 	base, err := NewReservationClaimRecord(ReservationClaimRecordSpec{
 		CanonicalNameKey: "download", OperationID: operation, ReservationID: reservationID,
-		RequestedName: "download", ReservedName: "download", EntryKind: receivecontract.ContainerEntryResultRoot,
+		RequestedName: "download", LogicalReservedName: "download", PhysicalName: "download",
+		EntryKind:  receivecontract.ContainerEntryResultRoot,
 		Generation: 1, Phase: ReservationClaimed,
 	})
 	if err != nil {
@@ -58,7 +59,8 @@ func TestReservationClaimSingleFileBindsWithoutDirectoryIdentity(t *testing.T) {
 	digest, _ = receivecontract.BindingDigestFromBytes(bytes.Repeat([]byte{0x83}, sha256.Size))
 	base, err := NewReservationClaimRecord(ReservationClaimRecordSpec{
 		CanonicalNameKey: "file", OperationID: operation, ReservationID: reservationID,
-		RequestedName: "file", ReservedName: "file", EntryKind: receivecontract.ContainerEntrySingleFile,
+		RequestedName: "file", LogicalReservedName: "file", PhysicalName: "file",
+		EntryKind:  receivecontract.ContainerEntrySingleFile,
 		Generation: 1, Phase: ReservationClaimed,
 	})
 	bound, bindErr := BindReservationClaim(base, digest)

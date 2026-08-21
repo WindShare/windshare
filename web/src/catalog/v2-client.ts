@@ -188,6 +188,19 @@ export class V2CatalogClient {
     return page
   }
 
+  async hasCommittedName(
+    directory: V2CommittedDirectory,
+    name: string,
+    signal?: AbortSignal,
+  ): Promise<boolean> {
+    this.#requireOpen()
+    signal?.throwIfAborted()
+    const present = await this.#store.hasCommittedName(directory, name)
+    this.#requireOpen()
+    signal?.throwIfAborted()
+    return present
+  }
+
   async *entries(
     directory: V2CommittedDirectory,
     signal?: AbortSignal,

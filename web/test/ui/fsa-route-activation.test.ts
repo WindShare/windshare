@@ -3,14 +3,10 @@ import { describe, expect, it } from 'vitest'
 import { acquireFSARootMutationLease } from '../../src/output/browser/namespace-mutation'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
-import { authorizeFSAParent, fsaParentOffer } from '../../src/output/capability/acquisition'
+import { authorizeFSAParent } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
 import {
   bindReceiveIntent,
-  materializationRouteIdentity,
-  offerArtifacts,
-  reconcileArtifactChoice,
-  type OfferedArtifactChoice,
   type ResolvedArtifactAction,
 } from '../../src/output/planning'
 import {
@@ -18,34 +14,41 @@ import {
   type LocalOutputOperationFailureDiagnosticsPort,
 } from '../../src/output/diagnostics'
 import type { FSAFileCheckpointRepositoryFactory } from '../../src/output/file-system-access/session'
-import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
-import type { ReceiveOperationTransition } from '../../src/output/workspace/repository'
 import {
-  createSelectionSpec,
-  type DirectTreePlan,
-  type ReceiveIntent,
-} from '../../src/transfer/intent'
+  prepareCompatibleNameRootRepair,
+} from '../../src/output/file-system-access/compatible-name/coordinator'
+import {
+  type CompatibleNameRepairSummary,
+} from '../../src/output/file-system-access/compatible-name/model'
+import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
+import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {
   FSAReceiveOperation,
 } from '../../src/ui/browser-receive/fsa'
 import {
-  FSAArtifactPresentationAuthority,
-  type FSARouteDependencies,
-} from '../../src/ui/browser-receive/fsa-route'
-import {
   MemoryDirectory,
   MemoryLockManager,
-  MemoryOperationRepository,
   memoryCheckpointFactory,
 } from '../output/file-system-access-lifecycle-fixture'
 import {
-  COMPLETE_DISCOVERY,
-  environment,
-  fsaTarget,
   identity,
-  projection,
-  treeProof,
 } from '../output/planning/fixture'
+import {
+  MemoryCompatibleNameActivationLedger,
+  TestRepository,
+  acquiredParent,
+  classifiedRootRejection,
+  commitInput,
+  commitInputForAction,
+  deferred,
+  fsaReservationName,
+  planningFixture,
+  replacementResolvedAction,
+  requireDirectRoute,
+  requireDirectTreeIntent,
+  routeFixture,
+} from './fsa-route-activation-fixture'
+
 
 describe('FSA presentation route activation', () => {
   it('starts no route work while the one picker is pending and drains late success after release', async () => {
@@ -119,7 +122,9 @@ describe('FSA presentation route activation', () => {
     await route.ready
     const result = await route.commit(commitInput(planning))
     expect(result.kind).toBe('bound-operation')
-    if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    if (result.kind !== 'bound-operation') {
+      throw result.kind === 'owned-effects' ? result.cause : new Error('expected a bound FSA operation')
+    }
     expect(order).toEqual(['authorize', 'root-lease'])
     expect(repository.transitions[0]).toMatchObject({
       operationId: result.operation.intent.operationId,
@@ -134,6 +139,258 @@ describe('FSA presentation route activation', () => {
     await result.operation.plans.openDirectTree(directIntent, new AbortController().signal)
     expect(parent.directoryNames()).toEqual([fsaReservationName(directIntent)])
     await result.operation.detach()
+  })
+
+  it('keeps the ordinary root on the zero-repair path with expected-kind-first inspection', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const repository = new TestRepository()
+    const lookups: string[] = []
+    let repairFactoryCalls = 0
+    let ledgerFactoryCalls = 0
+    parent.onEntryLookup = (lookup) => {
+      if (!lookup.create) lookups.push(`${lookup.kind}:${lookup.name}`)
+    }
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      repository,
+      {
+        prepareCompatibleNameRootRepair: async () => {
+          repairFactoryCalls += 1
+          throw new Error('ordinary reservation must not activate repair')
+        },
+        openCompatibleNameLedger: async () => {
+          ledgerFactoryCalls += 1
+          throw new Error('ordinary reservation must not open the repair ledger')
+        },
+      },
+    )
+
+    const result = await route.commit(commitInput(planning))
+    if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    const reservation = requireDirectTreeIntent(result.operation.intent).plan.reservation
+    if (reservation.kind !== 'named-container-entry') throw new Error('expected named reservation')
+    expect(reservation.logicalReservedName).toBe(reservation.physicalName)
+    expect(lookups).toEqual(['directory:photos', 'file:photos'])
+    expect(repairFactoryCalls).toBe(0)
+    expect(ledgerFactoryCalls).toBe(0)
+    expect(repository.compatibleBootstrapCommits).toBe(0)
+    expect(result.operation.repairProjection).toBeUndefined()
+    expect(parent.entryNames()).toEqual([])
+    await result.operation.detach()
+  })
+
+})
+
+describe('FSA compatible-name route activation', () => {
+  it('commits rejected-root repair atomically and verifies the owned pair before root creation', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const repository = new TestRepository()
+    const ledger = new MemoryCompatibleNameActivationLedger(repository)
+    const mutationOrder: string[] = []
+    let refused = false
+    let ledgerFactoryCalls = 0
+    parent.onEntryLookup = (lookup) => {
+      if (!refused && !lookup.create && lookup.kind === 'directory' && lookup.name === 'photos') {
+        refused = true
+        throw new TypeError('injected native root refusal')
+      }
+      if (lookup.create) mutationOrder.push(`${lookup.kind}:${lookup.name}`)
+    }
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      repository,
+      {
+        prepareCompatibleNameRootRepair: input => prepareCompatibleNameRootRepair(input, {
+          platform: 'windows',
+          randomBits: () => 0,
+          randomOwnedObjectId: (() => {
+            const ids = [identity(52, 32), identity(53, 32)]
+            return () => ids.shift()!
+          })(),
+        }),
+        openCompatibleNameLedger: async () => {
+          ledgerFactoryCalls += 1
+          return ledger
+        },
+      },
+    )
+    const baseInput = commitInput(planning)
+    const result = await route.commit({
+      ...baseInput,
+      freezeAtFence: async (candidate) => {
+        expect(repository.compatibleBootstrap).toBeUndefined()
+        expect(parent.entryNames()).toEqual([])
+        return baseInput.freezeAtFence(candidate)
+      },
+    })
+    if (result.kind !== 'bound-operation') {
+      throw result.kind === 'owned-effects' ? result.cause : new Error('expected a bound FSA operation')
+    }
+
+    const reservation = requireDirectTreeIntent(result.operation.intent).plan.reservation
+    if (reservation.kind !== 'named-container-entry') throw new Error('expected named reservation')
+    expect(reservation).toMatchObject({
+      logicalReservedName: 'photos',
+      physicalName: 'photos.windshare-aaaaaa',
+    })
+    expect(repository.compatibleBootstrapCommits).toBe(1)
+    expect(repository.compatibleBootstrap?.initialMapping.physicalComponent)
+      .toBe(reservation.physicalName)
+    expect(ledgerFactoryCalls).toBe(1)
+    expect(ledger.header?.activationState).toBe('pair-ready')
+    expect(ledger.header?.pair.script.ownershipState).toBe('owned')
+    expect(ledger.header?.pair.sidecar.ownershipState).toBe('owned')
+    expect(parent.entryNames()).toEqual([
+      'restore.windshare-aaaaaa.data',
+      'restore.windshare-aaaaaa.ps1',
+    ])
+    const checkpoint = decodeCompatibleNameSidecar(
+      await parent.fileBytes('restore.windshare-aaaaaa.data'),
+    )
+    expect(checkpoint).toMatchObject({
+      header: { operationId: result.operation.intent.operationId, placement: 'beside' },
+      footer: { committedCount: 0, state: 'active' },
+      mappings: [],
+      trailingByteLength: 0,
+    })
+    expect(mutationOrder).toEqual([
+      'file:restore.windshare-aaaaaa.ps1',
+      'file:restore.windshare-aaaaaa.data',
+    ])
+    const repairSummaries: CompatibleNameRepairSummary[] = []
+    const repairProjection = result.operation.repairProjection
+    if (repairProjection === undefined) throw new Error('repaired runtime omitted its projection')
+    const unsubscribeRepair = repairProjection.subscribe(summary => repairSummaries.push(summary))
+    expect(repairSummaries).toEqual([])
+
+    await result.operation.plans.openDirectTree(
+      requireDirectTreeIntent(result.operation.intent),
+      new AbortController().signal,
+    )
+    expect(mutationOrder).toEqual([
+      'file:restore.windshare-aaaaaa.ps1',
+      'file:restore.windshare-aaaaaa.data',
+      'directory:photos.windshare-aaaaaa',
+    ])
+    expect(ledger.mapping?.commitState).toBe('committed')
+    expect(ledger.mapping?.ownedObjectId).toBeDefined()
+    expect(repairSummaries[0]).toMatchObject({ committedCount: 0, pendingCatchUp: false })
+    expect(repairSummaries).toContainEqual(expect.objectContaining({
+      committedCount: 1,
+      pendingCatchUp: true,
+    }))
+    unsubscribeRepair()
+    await result.operation.detach()
+    expect(ledger.closeCount).toBe(1)
+  })
+
+  it('advances root and pair allocation only for candidates proven occupied', async () => {
+    const parent = new MemoryDirectory('downloads')
+    await parent.getDirectoryHandle('photos.windshare-aaaaaa', { create: true })
+    await parent.getFileHandle('restore.windshare-aaaaaa.ps1', { create: true })
+    const prepared = await prepareCompatibleNameRootRepair({
+      rejection: classifiedRootRejection('photos', 'directory'),
+      parent: parent as unknown as FileSystemDirectoryHandle,
+      operationId: identity(40),
+      authorityRef: identity(42, 32),
+      logicalReservedName: 'photos',
+      entryKind: 'directory',
+    }, {
+      platform: 'windows',
+      randomBits: () => 0,
+      randomOwnedObjectId: (() => {
+        const ids = [identity(52, 32), identity(53, 32)]
+        return () => ids.shift()!
+      })(),
+    })
+
+    expect(prepared.bootstrap.initialMapping).toMatchObject({ attempt: 1 })
+    expect(prepared.bootstrap.initialMapping.physicalComponent)
+      .not.toBe('photos.windshare-aaaaaa')
+    expect(prepared.bootstrap.header.pair.script.physicalName)
+      .not.toBe('restore.windshare-aaaaaa.ps1')
+    expect(prepared.bootstrap.header.pair.sidecar.physicalName)
+      .toBe('restore.windshare-aaaaaa.data')
+    expect(parent.entryNames()).toEqual([
+      'photos.windshare-aaaaaa',
+      'restore.windshare-aaaaaa.ps1',
+    ])
+  })
+
+  it('does not reinterpret a compatible-candidate TypeError as occupancy', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const cause = new TypeError('derived candidate rejected')
+    const inspected: string[] = []
+    parent.onEntryLookup = (lookup) => {
+      inspected.push(`${lookup.kind}:${lookup.name}`)
+      if (lookup.kind === 'directory' && lookup.name === 'photos.windshare-aaaaaa') throw cause
+    }
+
+    await expect(prepareCompatibleNameRootRepair({
+      rejection: classifiedRootRejection('photos', 'directory'),
+      parent: parent as unknown as FileSystemDirectoryHandle,
+      operationId: identity(40),
+      authorityRef: identity(42, 32),
+      logicalReservedName: 'photos',
+      entryKind: 'directory',
+    }, {
+      platform: 'windows',
+      randomBits: () => 0,
+    })).rejects.toBe(cause)
+    expect(inspected).toEqual(['directory:photos.windshare-aaaaaa'])
+    expect(parent.entryNames()).toEqual([])
+  })
+
+  it('keeps the compatible target absent when restoration-pair creation fails', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const repository = new TestRepository()
+    const ledger = new MemoryCompatibleNameActivationLedger(repository)
+    const pairFailure = new DOMException('sidecar creation refused', 'NotAllowedError')
+    let refused = false
+    parent.onEntryLookup = (lookup) => {
+      if (!refused && !lookup.create && lookup.kind === 'directory' && lookup.name === 'photos') {
+        refused = true
+        throw new TypeError('injected native root refusal')
+      }
+      if (lookup.create && lookup.name === 'restore.windshare-aaaaaa.data') throw pairFailure
+    }
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      repository,
+      {
+        prepareCompatibleNameRootRepair: input => prepareCompatibleNameRootRepair(input, {
+          platform: 'windows',
+          randomBits: () => 0,
+          randomOwnedObjectId: (() => {
+            const ids = [identity(52, 32), identity(53, 32)]
+            return () => ids.shift()!
+          })(),
+        }),
+        openCompatibleNameLedger: async () => ledger,
+      },
+    )
+
+    const result = await route.commit(commitInput(planning))
+    expect(result.kind).toBe('owned-effects')
+    if (result.kind !== 'owned-effects') throw new Error('expected owned repair effects')
+    expect(result.cause).toBe(pairFailure)
+    expect(repository.compatibleBootstrapCommits).toBe(1)
+    expect(parent.entryNames()).toEqual(['restore.windshare-aaaaaa.ps1'])
+    expect(parent.directoryNames()).not.toContain('photos.windshare-aaaaaa')
+    expect(ledger.header?.pair.script.ownershipState).toBe('owned')
+    expect(ledger.header?.pair.sidecar.ownershipState).toBe('claimed')
+    expect(ledger.closeCount).toBe(1)
+    await result.authority.settleActivationFailure(result.cause)
+    await result.authority.detach()
   })
 
   it('uses one output-session identity for local stage diagnostics and DirectTree execution', async () => {
@@ -679,210 +936,3 @@ describe('FSA presentation route failure ownership', () => {
     expect(parent.entryNames()).toEqual([])
   })
 })
-
-interface PlanningFixture {
-  readonly selection: Awaited<ReturnType<typeof selectionSpec>>
-  readonly offered: OfferedArtifactChoice
-  readonly action: ResolvedArtifactAction
-}
-
-async function planningFixture(): Promise<PlanningFixture> {
-  const selection = await selectionSpec()
-  const currentProjection = projection(selection, treeProof(), 10n)
-  const currentEnvironment = environment({ targets: [fsaTarget('fsa-route')] })
-  const offers = await offerArtifacts(currentProjection, COMPLETE_DISCOVERY, currentEnvironment)
-  if (offers.kind !== 'artifact-actions') throw new Error('expected an offered FSA choice')
-  const offered = offers.primary
-  const outcome = await reconcileArtifactChoice({
-    choice: offered.choice,
-    preferredRoute: materializationRouteIdentity(offered.route),
-    expectedSelectionDigest: selection.digest,
-    projection: currentProjection,
-    discovery: COMPLETE_DISCOVERY,
-    environment: currentEnvironment,
-    previousObservation: {
-      projectionEpoch: currentProjection.epoch,
-      selectionDigest: selection.digest,
-      resolvedArtifactDigest: null,
-    },
-  })
-  if (outcome.kind !== 'resolved') throw new Error(`expected resolution, received ${outcome.kind}`)
-  return Object.freeze({ selection, offered, action: outcome.action })
-}
-
-async function replacementResolvedAction(
-  planning: PlanningFixture,
-): Promise<ResolvedArtifactAction> {
-  const replacementProjection = projection(
-    planning.selection,
-    treeProof({
-      kind: 'directory-selection',
-      anchor: { directoryId: identity(31), sourcePath: 'photos-refined' },
-    }),
-    20n,
-    2n,
-  )
-  const replacementEnvironment = environment({ targets: [fsaTarget('fsa-route')] })
-  const outcome = await reconcileArtifactChoice({
-    choice: planning.offered.choice,
-    preferredRoute: materializationRouteIdentity(planning.offered.route),
-    expectedSelectionDigest: planning.selection.digest,
-    projection: replacementProjection,
-    discovery: COMPLETE_DISCOVERY,
-    environment: replacementEnvironment,
-    previousObservation: {
-      projectionEpoch: planning.action.projectionEpoch,
-      selectionDigest: planning.action.selectionDigest,
-      resolvedArtifactDigest: planning.action.resolvedArtifactDigest,
-    },
-  })
-  if (outcome.kind !== 'resolved') {
-    throw new Error(`expected replacement resolution, received ${outcome.kind}`)
-  }
-  return outcome.action
-}
-
-function routeFixture(
-  offered: OfferedArtifactChoice,
-  picked: Promise<AcquiredFSAParentAuthority>,
-  _parent: MemoryDirectory,
-  repository: TestRepository,
-  overrides: Partial<FSARouteDependencies> = {},
-  localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
-): FSAArtifactPresentationAuthority {
-  const operationLocks = new MemoryLockManager()
-  const diagnosticAttempt = localOutputFailures === undefined
-    ? undefined
-    : createAttemptOutputFailureCapability(
-        createIncidentScopeIssuer().open('authority_activation').handle,
-      )
-  return new FSAArtifactPresentationAuthority({
-    offered,
-    picked,
-    dependencies: {
-      openRepository: async () => repository,
-      acquireOperationLease: (store, operationId, options) =>
-        acquireBrowserReceiveOperationLease(store, operationId, {
-          ...options,
-          manager: operationLocks,
-          clock: { now: () => 1_000 },
-          randomBytes: length => new Uint8Array(length).fill(9),
-        }),
-      acquireRootLease: handle => acquireFSARootMutationLease(handle, new MemoryLockManager()),
-      createOperationId: () => identity(40),
-      createReservationId: () => identity(41),
-      createAuthorityRef: () => identity(42, 32),
-      createOutputSessionId: () => identity(44),
-      createTransferJobId: () => identity(43),
-      checkpointRepositoryFactory: memoryCheckpointFactory(),
-      ...overrides,
-    },
-    ...(diagnosticAttempt === undefined
-      ? {}
-      : {
-          diagnostics: {
-            backend: 'file_system_access' as const,
-            failures: diagnosticAttempt.sinks,
-          },
-        }),
-    ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
-  })
-}
-
-function commitInput(planning: PlanningFixture) {
-  return commitInputForAction(planning.selection, planning.action)
-}
-
-function commitInputForAction(
-  selection: PlanningFixture['selection'],
-  action: ResolvedArtifactAction,
-) {
-  return {
-    action,
-    signal: new AbortController().signal,
-    freezeAtFence: (candidate: Parameters<typeof bindReceiveIntent>[0]['candidate']) =>
-      bindReceiveIntent({ selection, action, candidate }),
-  }
-}
-
-function acquiredParent(
-  parent: MemoryDirectory,
-  offered: OfferedArtifactChoice,
-): AcquiredFSAParentAuthority {
-  if (offered.route.kind !== 'direct-tree' ||
-      offered.route.target.kind !== 'fsa-parent-directory') throw new Error('expected FSA route')
-  return Object.freeze({
-    kind: 'fsa-parent-directory-authority',
-    targetRouteId: offered.route.target.routeId,
-    offer: fsaParentOffer(offered.route.target.routeId),
-    parent: parent as unknown as FileSystemDirectoryHandle,
-  })
-}
-
-async function selectionSpec() {
-  return createSelectionSpec({
-    shareInstance: identity(1),
-    syntheticRoot: identity(2),
-    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
-  })
-}
-
-function requireDirectTreeIntent(intent: ReceiveIntent): ReceiveIntent & Readonly<{ plan: DirectTreePlan }> {
-  if (intent.plan.kind !== 'direct-tree') throw new Error('expected DirectTree intent')
-  return intent as ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
-}
-
-function fsaReservationName(intent: ReceiveIntent & Readonly<{ plan: DirectTreePlan }>): string {
-  const reservation = intent.plan.reservation
-  if (reservation.kind !== 'named-container-entry' || reservation.authorityKind !== 'fsa-container') {
-    throw new Error('expected an FSA named-entry reservation')
-  }
-  return reservation.reservedName
-}
-
-function requireDirectRoute(action: ResolvedArtifactAction) {
-  if (action.route.kind !== 'direct-tree') throw new Error('expected DirectTree route')
-  return action.route
-}
-
-class TestRepository extends MemoryOperationRepository {
-  readonly transitions: ReceiveOperationTransition[] = []
-  closeCount = 0
-  failNextTransition = false
-  hideNextCommittedLifecycle = false
-  afterNextTransition: (() => void) | undefined
-
-  override async commitTransition(transition: ReceiveOperationTransition): Promise<void> {
-    if (this.failNextTransition) {
-      this.failNextTransition = false
-      throw new DOMException('injected transaction abort', 'AbortError')
-    }
-    this.transitions.push(transition)
-    await super.commitTransition(transition)
-    const afterTransition = this.afterNextTransition
-    this.afterNextTransition = undefined
-    afterTransition?.()
-  }
-
-  override close(): void {
-    this.closeCount += 1
-  }
-
-  override async readLifecycle(operationId: string) {
-    if (this.hideNextCommittedLifecycle && this.transitions.length !== 0) {
-      this.hideNextCommittedLifecycle = false
-      return undefined
-    }
-    return super.readLifecycle(operationId)
-  }
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void
-  let reject!: (reason: unknown) => void
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
-  })
-  return { promise, resolve, reject }
-}

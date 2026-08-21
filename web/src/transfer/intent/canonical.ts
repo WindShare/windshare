@@ -22,11 +22,11 @@ export const INVALID_RECEIVE_INTENT_CANONICAL_BYTES = 'receive intent canonical 
 export const SELECTION_SPEC_DOMAIN = 'windshare/selection-spec/v1'
 export const ARTIFACT_SPEC_DOMAIN = 'windshare/artifact-spec/v1'
 export const RESULT_ROOT_LAYOUT_DOMAIN = 'windshare/result-root-layout/v1'
-export const DESTINATION_RESERVATION_DOMAIN = 'windshare/destination-reservation/v1'
+export const DESTINATION_RESERVATION_DOMAIN = 'windshare/destination-reservation/v2'
 export const WORKSPACE_BINDING_DOMAIN = 'windshare/workspace-binding/v1'
 export const PORTABLE_BINDING_DOMAIN = 'windshare/portable-binding/v1'
-export const MATERIALIZATION_PLAN_DOMAIN = 'windshare/materialization-plan/v1'
-export const RECEIVE_INTENT_DOMAIN = 'windshare/receive-intent/v1'
+export const MATERIALIZATION_PLAN_DOMAIN = 'windshare/materialization-plan/v2'
+export const RECEIVE_INTENT_DOMAIN = 'windshare/receive-intent/v2'
 export const NAME_COLLISION_DOMAIN = 'windshare/name-collision/v1'
 
 const CANONICAL_SCHEMA_VERSION = 1
@@ -42,12 +42,16 @@ export class CanonicalDecoder {
     this.encoded = encoded
   }
 
-  public static record(encoded: CanonicalBytes, domain: string): CanonicalDecoder {
+  public static record(
+    encoded: CanonicalBytes,
+    domain: string,
+    version = CANONICAL_SCHEMA_VERSION,
+  ): CanonicalDecoder {
     const cursor = new CanonicalDecoder(encoded)
     for (const expected of TEXT_ENCODER.encode(domain)) {
       if (cursor.readRawByte() !== expected) invalidDecodedCanonicalBytes()
     }
-    if (cursor.readRawByte() !== 0 || cursor.readRawByte() !== CANONICAL_SCHEMA_VERSION) {
+    if (cursor.readRawByte() !== 0 || cursor.readRawByte() !== version) {
       return invalidDecodedCanonicalBytes()
     }
     return cursor
@@ -235,10 +239,17 @@ export async function digestText(value: Uint8Array): Promise<string> {
   return encodeBase64Url(await sha256(value))
 }
 
-export function canonicalRecord(domain: string, fields: readonly Uint8Array[]): CanonicalBytes {
+export function canonicalRecord(
+  domain: string,
+  fields: readonly Uint8Array[],
+  version = CANONICAL_SCHEMA_VERSION,
+): CanonicalBytes {
+  if (!Number.isInteger(version) || version < 1 || version > 0xff) {
+    throw new RangeError('canonical record version must be a non-zero byte')
+  }
   return concat([
     TEXT_ENCODER.encode(domain),
-    Uint8Array.of(0, 1),
+    Uint8Array.of(0, version),
     ...fields,
   ])
 }

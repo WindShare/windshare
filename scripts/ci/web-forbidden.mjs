@@ -1,6 +1,8 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { dirname, relative, resolve, sep } from 'node:path'
+import { dirname, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+
+import { productionGraph } from './web-source-graph.mjs'
 
 const REPOSITORY_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '../..')
 const WEB_ROOT = resolve(REPOSITORY_ROOT, 'web')
@@ -151,6 +153,7 @@ const REQUIRED_PRODUCTION_DEPENDENCIES = [
   'web/src/output/resume/workspace-continuation.ts',
   'web/src/output/file-system-access/session.ts',
   'web/src/output/file-system-access/settlement.ts',
+  'web/src/output/file-system-access/compatible-name/restoration/windows-v1.ps1',
   'web/src/output/origin-private/session.ts',
   'web/src/output/origin-private/workflow.ts',
   'web/src/output/origin-private/zip-exporter.ts',
@@ -176,7 +179,10 @@ for (const path of [...FORBIDDEN_PATHS, ...RETIRED_VECTOR_PATHS]) {
   }
 }
 
-const production = productionGraph(PRODUCTION_ENTRY)
+const { dependencies: production, unresolved } = productionGraph(PRODUCTION_ENTRY, SOURCE_ROOT)
+for (const missing of unresolved) {
+  violations.push(`${portable(missing.importer)} has unresolved relative import ${missing.specifier}`)
+}
 const productionPaths = new Set([...production].map(portable))
 const requiredProductionPaths = new Set(REQUIRED_PRODUCTION_DEPENDENCIES)
 for (const root of REQUIRED_PRODUCTION_MODULE_ROOTS) {
@@ -198,6 +204,7 @@ for (const forbidden of FORBIDDEN_PATHS.filter((path) => path.startsWith('web/sr
   }
 }
 for (const file of production) {
+  if (!isProductionTypeScript(file)) continue
   const source = readFileSync(file, 'utf8')
   for (const [name, pattern] of RETIRED_PRODUCTION_SYMBOLS) {
     if (pattern.test(source)) {
@@ -220,51 +227,6 @@ if (violations.length > 0) {
     `${RETIRED_PRODUCTION_SYMBOLS.length} retired symbols absent; ${production.size} production dependencies; ` +
     `${requiredProductionPaths.size} required edges present)`,
   )
-}
-
-function productionGraph(entry) {
-  const visited = new Set()
-  const pending = [entry]
-  while (pending.length > 0) {
-    const file = pending.pop()
-    if (file === undefined || visited.has(file)) continue
-    visited.add(file)
-    const source = readFileSync(file, 'utf8')
-    for (const specifier of relativeSpecifiers(source)) {
-      const dependency = resolveSource(dirname(file), specifier)
-      if (dependency === undefined) {
-        violations.push(`${portable(file)} has unresolved relative import ${specifier}`)
-      } else if (dependency === SOURCE_ROOT || dependency.startsWith(`${SOURCE_ROOT}${sep}`)) {
-        pending.push(dependency)
-      }
-    }
-  }
-  return visited
-}
-
-function relativeSpecifiers(source) {
-  const specifiers = []
-  for (const match of source.matchAll(/(?:from\s*|import\s*)['"](\.[^'"]+)['"]/gu)) {
-    if (match[1] !== undefined) specifiers.push(match[1])
-  }
-  for (const match of source.matchAll(/import\s*\(\s*['"](\.[^'"]+)['"]\s*\)/gu)) {
-    if (match[1] !== undefined) specifiers.push(match[1])
-  }
-  return specifiers
-}
-
-function resolveSource(parent, specifier) {
-  const base = resolve(parent, specifier)
-  for (const candidate of [
-    base,
-    `${base}.ts`,
-    `${base}.tsx`,
-    resolve(base, 'index.ts'),
-    resolve(base, 'index.tsx'),
-  ]) {
-    if (existsSync(candidate) && statSync(candidate).isFile()) return candidate
-  }
-  return undefined
 }
 
 function filesUnder(root) {

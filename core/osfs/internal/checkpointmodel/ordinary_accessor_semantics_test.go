@@ -58,7 +58,7 @@ func TestReservationClaimAccessorsPreserveExactNameAndIdentityBinding(t *testing
 	))
 	record, err := NewReservationClaimRecord(ReservationClaimRecordSpec{
 		CanonicalNameKey: "download", OperationID: operation, ReservationID: reservationID,
-		RequestedName: "download", ReservedName: "download-2",
+		RequestedName: "download", LogicalReservedName: "download-2", PhysicalName: "download-2",
 		EntryKind: receivecontract.ContainerEntryResultRoot, CollisionIndex: 2,
 		Generation: 1, Phase: ReservationClaimed,
 	})
@@ -67,7 +67,7 @@ func TestReservationClaimAccessorsPreserveExactNameAndIdentityBinding(t *testing
 	}
 	if record.CanonicalNameKey() != "download" || record.OperationID() != operation ||
 		record.ReservationID() != reservationID || record.RequestedName() != "download" ||
-		record.ReservedName() != "download-2" ||
+		record.LogicalReservedName() != "download-2" || record.PhysicalName() != "download-2" ||
 		record.EntryKind() != receivecontract.ContainerEntryResultRoot ||
 		record.CollisionIndex() != 2 || record.ReservationDigest() != (receivecontract.BindingDigest{}) {
 		t.Fatalf("reservation accessors = %+v", record)

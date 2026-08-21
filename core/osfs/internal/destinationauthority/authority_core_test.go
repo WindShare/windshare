@@ -164,11 +164,11 @@ func TestReserveSingleFileClaimsMetadataWhilePublicNameStaysAbsent(t *testing.T)
 		len(reserved.PersistentIdentityClaim()) != 0 || reserved.MetadataClaim().Generation != 2 {
 		t.Fatalf("reservation=%+v identity=%x claim=%+v", entry, reserved.PersistentIdentityClaim(), reserved.MetadataClaim())
 	}
-	if len(claimer.specs) != 3 || claimer.specs[2].CanonicalNameKey != strings.ToUpper(entry.ReservedName()) {
+	if len(claimer.specs) != 3 || claimer.specs[2].CanonicalNameKey != strings.ToUpper(entry.PhysicalName()) {
 		t.Fatalf("claim specs=%+v", claimer.specs)
 	}
-	if _, present := platform.root.entries[entry.ReservedName()]; present {
-		t.Fatalf("single-file reservation mutated public name %q", entry.ReservedName())
+	if _, present := platform.root.entries[entry.PhysicalName()]; present {
+		t.Fatalf("single-file reservation mutated public name %q", entry.PhysicalName())
 	}
 	reopened, err := authority.ReopenTopLevel(ExpectedReservation{
 		Reservation: reserved.CanonicalReservation(), MetadataClaim: reserved.MetadataClaim(),
@@ -240,7 +240,7 @@ func TestTopLevelReservationsExposeOnlyFreshlyRevalidatedExecutionRoots(t *testi
 	if err := resultGuard.Close(); err != nil {
 		t.Fatal(err)
 	}
-	platform.root.entries[result.entry.ReservedName()] = &destinationNode{
+	platform.root.entries[result.entry.PhysicalName()] = &destinationNode{
 		id: 99, identity: []byte("replacement"), entries: map[string]*destinationNode{},
 	}
 	if _, err := result.AcquirePublicOperationGuard(); !errors.Is(err, ErrRetainedRootChanged) {
@@ -253,7 +253,7 @@ func TestReservationClaimSpecRejectsNonCanonicalCandidate(t *testing.T) {
 	spec := ReservationClaimSpec{
 		CanonicalNameKey: "FILE.TXT", OperationID: request.OperationID, ReservationID: request.ReservationID,
 		EntryKind: receivecontract.ContainerEntrySingleFile, RequestedName: "file.txt",
-		ReservedName: "foreign.txt", CollisionIndex: 0,
+		LogicalReservedName: "foreign.txt", PhysicalName: "foreign.txt", CollisionIndex: 0,
 	}
 	if spec.Valid() {
 		t.Fatal("claim spec accepted a name that was not derived by CollisionName")
@@ -301,16 +301,16 @@ func TestReserveDirectoryCreatesOrdinaryRootAndReopensExactIdentity(t *testing.T
 		t.Fatal(err)
 	}
 	entry := reserved.ReservedEntry()
-	publicNode := platform.root.entries[entry.ReservedName()]
+	publicNode := platform.root.entries[entry.PhysicalName()]
 	if publicNode == nil || publicNode.private || reserved.directory == nil ||
 		!bytes.Equal(reserved.PersistentIdentityClaim(), publicNode.identity) || reserved.MetadataClaim().Generation != 3 {
 		t.Fatalf("node=%+v identity=%x claim=%+v", publicNode, reserved.PersistentIdentityClaim(), reserved.MetadataClaim())
 	}
-	physical, err := PhysicalArtifactPath(entry.PreferredName()+"/child/file.txt", entry)
+	physical, err := PhysicalArtifactPath(entry.RequestedName()+"/child/file.txt", entry)
 	if err != nil || physical != "child/file.txt" {
 		t.Fatalf("physical=%q err=%v", physical, err)
 	}
-	rootPhysical, err := PhysicalArtifactPath(entry.PreferredName(), entry)
+	rootPhysical, err := PhysicalArtifactPath(entry.RequestedName(), entry)
 	if err != nil || rootPhysical != "" {
 		t.Fatalf("root physical=%q err=%v", rootPhysical, err)
 	}
@@ -326,7 +326,7 @@ func TestReserveDirectoryCreatesOrdinaryRootAndReopensExactIdentity(t *testing.T
 		t.Fatalf("reopen=%+v err=%v", reopened, err)
 	}
 	_ = reopened.Close()
-	platform.root.entries[entry.ReservedName()] = &destinationNode{
+	platform.root.entries[entry.PhysicalName()] = &destinationNode{
 		id: 70, identity: []byte("replacement-identity"), entries: map[string]*destinationNode{},
 	}
 	if _, err := authority.ReopenTopLevel(expected); !errors.Is(err, ErrReservationIndeterminate) {

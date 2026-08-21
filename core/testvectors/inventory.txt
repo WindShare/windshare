@@ -4,7 +4,7 @@ envelope-sample.json
 file-checkpoint-v2.json
 path-policy.json
 portable-path-vectors.json
-receive-intent-v1.json
+receive-intent-v2.json
 v2-fragment.json
 v2-identity.json
 v2-peer-signaling.json

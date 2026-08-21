@@ -74,9 +74,9 @@ describe('DirectoryAdmission v2 binding', () => {
     }
     const child = await createDirectoryAdmission(SECRET, scope, childDirectory)
 
-    expect(intent.digest).toBe('xs4aZXCn-OP6jUHf8nxuaLxtxxDJy52zdNfBlAWFKfE')
-    expect(root.token).toBe('ga_pazR-tSpAA1wIpn-VLH9bQQ82_PiBQSIGrp1q65Y')
-    expect(child.token).toBe('yu8hvZ3nTB-n4vPvJ0XdehcivSIUPWfSdcs2P2coS7g')
+    expect(intent.digest).toBe('0nnnictvYU_T1TDDKOizgxB_NDzLFPINaWXdepRW49o')
+    expect(root.token).toBe('hHXHEyKXtIBfQLGRmtIQUttu1hYd-tra0kuKFfAOwU0')
+    expect(child.token).toBe('eMKF1jXVxzA6PTsbmSlGozwfx33gz-DfUrTUs4LFaf8')
 
     expect(scope).toMatchObject({
       receiveIntentDigest: intent.digest,
@@ -88,7 +88,7 @@ describe('DirectoryAdmission v2 binding', () => {
     const message = canonicalDirectoryAdmissionMessageV2(scope, childDirectory)
     expect(message).toEqual(expectedDirectoryAdmissionMessage(scope, childDirectory))
     expect(encodeBase64Url(await sha256(message)))
-      .toBe('-UZ_B6qoEBFrOV7XkR2Osusr3mFEe5YVI0xIHsdTK5o')
+      .toBe('4HldBQ_op6cGfFHvdQrCxynzbWqKQ6kLQLMhmrZi0i4')
     expect(validateDirectoryAdmissionBinding(scope, childDirectory, child)).toEqual(child)
     expect(await verifyDirectoryAdmissionToken(SECRET, scope, childDirectory, child.token)).toBe(true)
     expect(await verifyDirectoryAdmissionToken(
@@ -241,7 +241,8 @@ async function directTreeIntent(): Promise<ReceiveIntent> {
     reservationId: identity(12),
     artifact,
     authorityRef: identity(13, 32),
-    reservedName: 'docs-selection',
+    logicalReservedName: 'docs-selection',
+    physicalName: 'docs-selection',
     collisionIndex: 0,
   })
   return createReceiveIntent({

@@ -73,7 +73,7 @@ func TestCompositeRuntimeTransferJobPublishesDurableFilesystemOutput(t *testing.
 		t.Fatalf("transfer result = %+v", result)
 	}
 	destination, _ := intent.MaterializationPlan().DestinationReservation()
-	written, err := os.ReadFile(filepath.Join(outputRoot, destination.ReservedName(), "folder", "file.bin"))
+	written, err := os.ReadFile(filepath.Join(outputRoot, destination.PhysicalName(), "folder", "file.bin"))
 	if err != nil {
 		t.Fatal(err)
 	}

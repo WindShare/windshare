@@ -12,8 +12,11 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { recordOutputException } from '../../src/output/diagnostics'
+import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type { V2RetainedCompatibleNameRepairSource } from '../../src/ui/controller/contracts'
 import { RetainedInventoryCoordinator } from '../../src/ui/controller/retained-inventory'
 import type { V2JoinedBrowserShare } from '../../src/ui/v2-gateway'
+import type { V2RetainedReceivePresentationOperation } from '../../src/ui/v2-model'
 import type {
   V2BoundReceiveOperation,
   V2ReceiveCompositionPort,
@@ -260,6 +263,176 @@ describe('retained inventory incident ownership', () => {
     const disabled = retainedHarness(() => Promise.resolve(testInventory([])))
     await disabled.coordinator.load()
     expect(disabled.traceEvents).toEqual([])
+  })
+
+  it('reconstructs a durable first-target notice without replacing inventory action authority', async () => {
+    const ordinary = operation([], 'needs-attention', 'ordinary-operation')
+    const repairedAuthority = operation(['save'], 'save-artifact', 'repaired-operation')
+    const action = deferred<V2RetainedReceiveActionResult>()
+    const reads: string[] = []
+    let actedWith: V2RetainedReceiveOperation | undefined
+    let durableSummary = repairSummary(0, [], 'active')
+    const inventory = testInventory([ordinary, repairedAuthority], (candidate) => {
+      actedWith = candidate
+      return action.promise
+    })
+    const harness = retainedHarness(
+      () => Promise.resolve(inventory),
+      undefined,
+      {
+        repairSource: {
+          readRepairSummary: (operationId) => {
+            reads.push(operationId)
+            return Promise.resolve(operationId === repairedAuthority.operationId
+              ? durableSummary
+              : undefined)
+          },
+        },
+      },
+    )
+
+    await harness.coordinator.load()
+
+    const ready = harness.publications.at(-1)
+    const repaired = ready?.operations.find(
+      candidate => candidate.operationId === repairedAuthority.operationId,
+    )
+    expect(reads).toEqual(['ordinary-operation', 'repaired-operation'])
+    expect(ready?.operations[0]).toBe(ordinary)
+    expect(repaired).not.toBe(repairedAuthority)
+    expect(repaired?.repairSummary).toEqual(durableSummary)
+    expect(repaired?.repairSummary).toMatchObject({
+      committedCount: 0,
+      logicalPathSample: [],
+    })
+
+    harness.coordinator.perform(
+      repaired as V2RetainedReceivePresentationOperation,
+      'save',
+    )
+    expect(actedWith).toBe(repairedAuthority)
+
+    harness.coordinator.cancelPending(new DOMException('test complete', 'AbortError'))
+    durableSummary = repairSummary(2, [
+      ['folder', 'pyvenv.cfg'],
+      ['folder', 'nested'],
+    ], 'active')
+    await harness.coordinator.load()
+    expect(harness.publications.at(-1)?.operations.find(
+      candidate => candidate.operationId === repairedAuthority.operationId,
+    )?.repairSummary).toEqual(durableSummary)
+    expect(reads).toEqual([
+      'ordinary-operation',
+      'repaired-operation',
+      'ordinary-operation',
+      'repaired-operation',
+    ])
+  })
+
+  it('fails retained loading instead of publishing an operation without its repair truth', async () => {
+    const repaired = operation([], 'needs-attention', 'repaired-operation')
+    const harness = retainedHarness(
+      () => Promise.resolve(testInventory([repaired])),
+      undefined,
+      {
+        repairSource: {
+          readRepairSummary: () => Promise.reject(new Error('header point read failed')),
+        },
+      },
+    )
+
+    await harness.coordinator.load()
+
+    expect(harness.publications.at(-1)).toMatchObject({
+      kind: 'failed',
+      operations: [],
+      error: 'Stored receive tasks could not be loaded.',
+    })
+  })
+
+  it('exposes catch-up only for a durable pending repair and preserves source action authority', async () => {
+    const ordinaryActive = operation(['catch-up'], 'pending-catch-up', 'ordinary-active')
+    const pendingRepair = operation(['catch-up'], 'pending-catch-up', 'pending-repair')
+    let actedWith: V2RetainedReceiveOperation | undefined
+    const action = deferred<V2RetainedReceiveActionResult>()
+    const inventory = testInventory([ordinaryActive, pendingRepair], (candidate) => {
+      actedWith = candidate
+      return action.promise
+    })
+    const pendingSummary = Object.freeze({
+      ...repairSummary(1, [['pyvenv.cfg']], 'active'),
+      pendingCatchUp: true,
+    })
+    const harness = retainedHarness(
+      () => Promise.resolve(inventory),
+      undefined,
+      {
+        repairSource: {
+          readRepairSummary: operationId => Promise.resolve(
+            operationId === pendingRepair.operationId ? pendingSummary : undefined,
+          ),
+        },
+      },
+    )
+
+    await harness.coordinator.load()
+    const ready = harness.publications.at(-1)
+    expect(ready?.operations.map(candidate => candidate.operationId)).toEqual(['pending-repair'])
+    expect(ready?.operations[0]?.actions).toEqual(['catch-up'])
+    harness.coordinator.perform(ready!.operations[0]!, 'catch-up')
+    expect(actedWith).toBe(pendingRepair)
+    harness.coordinator.cancelPending(new DOMException('test complete', 'AbortError'))
+  })
+
+})
+
+describe('retained terminal repair presentation', () => {
+
+  it('projects validated published repair as completed restoration without losing cleanup authority', async () => {
+    const lifecycle = Object.freeze({
+      kind: 'published' as const,
+      operationId: 'published-repair',
+      receiveIntentDigest: 'intent',
+      generation: 4n,
+      receiptDigest: 'receipt',
+      cleanupState: 'cleanup-pending' as const,
+    })
+    const source = Object.freeze({
+      operationId: lifecycle.operationId,
+      receiveIntentDigest: lifecycle.receiveIntentDigest,
+      lifecycleGeneration: lifecycle.generation,
+      lifecycle,
+      continuation: 'retry-cleanup' as const,
+      actions: Object.freeze(['catch-up', 'delete'] as const),
+    })
+    let actedWith: V2RetainedReceiveOperation | undefined
+    const action = deferred<V2RetainedReceiveActionResult>()
+    const inventory = testInventory([source], candidate => {
+      actedWith = candidate
+      return action.promise
+    })
+    const summary = repairSummary(1, [['pyvenv.cfg']], 'completed')
+    const harness = retainedHarness(
+      () => Promise.resolve(inventory),
+      undefined,
+      {
+        repairSource: {
+          readRepairSummary: () => Promise.resolve(summary),
+        },
+      },
+    )
+
+    await harness.coordinator.load()
+    const presented = harness.publications.at(-1)?.operations[0]
+
+    expect(presented).toMatchObject({
+      continuation: 'restoration-available',
+      actions: ['delete'],
+      repairSummary: summary,
+    })
+    harness.coordinator.perform(presented!, 'delete')
+    expect(actedWith).toBe(source)
+    harness.coordinator.cancelPending(new DOMException('test complete', 'AbortError'))
   })
 
 })
@@ -577,6 +750,7 @@ function retainedHarness(
   options: Readonly<{
     traceEnabled?: boolean
     onPublish?: (retained: Parameters<RetainedInventoryCoordinatorOptions['publish']>[0]) => void
+    repairSource?: V2RetainedCompatibleNameRepairSource
   }> = {},
 ): RetainedHarness {
   const incidents = new RecordingRetainedIncidents()
@@ -599,6 +773,7 @@ function retainedHarness(
       publications.push(retained)
       options.onPublish?.(retained)
     },
+    ...(options.repairSource === undefined ? {} : { repairSource: options.repairSource }),
     trace: Object.freeze({
       current: options.traceEnabled === true
         ? (event: unknown) => traceEvents.push(event)
@@ -613,15 +788,35 @@ function retainedHarness(
 function operation(
   actions: readonly V2RetainedReceiveAction[],
   continuation: V2RetainedReceiveOperation['continuation'],
+  operationId = 'operation',
 ): V2RetainedReceiveOperation {
   return Object.freeze({
-    operationId: 'operation',
+    operationId,
     receiveIntentDigest: 'intent',
     lifecycleGeneration: 1n,
     lifecycle: Object.freeze({ kind: 'needs-attention' }),
     continuation,
     actions: Object.freeze([...actions]),
   }) as V2RetainedReceiveOperation
+}
+
+function repairSummary(
+  committedCount: number,
+  logicalPathSample: readonly (readonly string[])[],
+  footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
+): CompatibleNameRepairSummary {
+  return Object.freeze({
+    committedCount,
+    logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
+    pairDisplayNames: Object.freeze({
+      script: 'restore-names.windshare-abc234.ps1',
+      sidecar: 'restore-names.windshare-abc234.tsv',
+    }),
+    placement: 'inside-logical-root',
+    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
+    latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
+    pendingCatchUp: false,
+  })
 }
 
 function testInventory(

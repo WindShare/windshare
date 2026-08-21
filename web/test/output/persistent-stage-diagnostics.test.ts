@@ -643,7 +643,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
     })
 
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.reservedName],
+      artifactPath: [session.reservation.requestedName],
       openRevision: async () => ({
         fileId: identityText(3),
         fileRevision: identityText(4),
@@ -655,7 +655,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
     await transaction.close()
     await session.close()
 
-    expect(await parent.fileBytes(session.reservation.reservedName)).toEqual(Uint8Array.of(1, 2))
+    expect(await parent.fileBytes(session.reservation.physicalName)).toEqual(Uint8Array.of(1, 2))
   })
 })
 

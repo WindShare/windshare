@@ -4,6 +4,7 @@ import type {
   FinalFileCheckpointProof,
 } from '../persistence/journal'
 import type { FileCheckpointRecoveryRepository } from './recovery'
+import type { AuthenticatedLogicalSiblingMembership } from '../../transfer/job/contract'
 import type {
   PersistentOutputStageAuthority,
   PersistentOutputStageScope,
@@ -69,6 +70,19 @@ export interface PersistentMaterializationPort {
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort>
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization>
   close(): Promise<void>
+}
+
+export interface PersistentDirectoryNamespaceClaim {
+  readonly artifactPath: readonly string[]
+  readonly logicalSiblingMembership: AuthenticatedLogicalSiblingMembership
+}
+
+/**
+ * Optional DirectTree join for a backend that can activate compatible physical names.
+ * Binding is synchronous and must not inspect membership; candidate allocation owns that lazy query.
+ */
+export interface PersistentOutputNamespaceClaimPort {
+  bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void
 }
 
 /** Root publication is an explicit post-binding step for PrefixVisible destinations. */

@@ -56,7 +56,7 @@ describe('receive intent binding', () => {
           targetRouteId: 'fsa',
           reservation: await createFSANamedEntryReservation({
             operationId: identity(20), reservationId: identity(21), artifact: directTree.artifact,
-            authorityRef: identity(22, 32), reservedName: 'report.txt', collisionIndex: 0,
+            authorityRef: identity(22, 32), logicalReservedName: 'report.txt', physicalName: 'report.txt', collisionIndex: 0,
           }),
         },
         planKind: 'direct-tree',
@@ -198,7 +198,7 @@ describe('receive intent binding', () => {
     const action = await resolvedAction(selection, environment({ targets: [fsaTarget()] }))
     const honest = await createFSANamedEntryReservation({
       operationId: identity(60), reservationId: identity(61), artifact: action.artifact,
-      authorityRef: identity(62, 32), reservedName: 'report.txt', collisionIndex: 0,
+      authorityRef: identity(62, 32), logicalReservedName: 'report.txt', physicalName: 'report.txt', collisionIndex: 0,
     })
     await expect(bindReceiveIntent({
       selection,
@@ -208,7 +208,7 @@ describe('receive intent binding', () => {
 
     const dishonest = await createNativeNamedEntryReservation({
       operationId: identity(63), reservationId: identity(64), artifact: action.artifact,
-      authorityRef: identity(65, 32), reservedName: 'report.txt', collisionIndex: 0,
+      authorityRef: identity(65, 32), logicalReservedName: 'report.txt', collisionIndex: 0,
     })
     await expect(bindReceiveIntent({
       selection,

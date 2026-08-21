@@ -40,6 +40,7 @@ import {
   runPersistentOutputStage,
   type PersistentOutputStageScope,
 } from './stage-diagnostics'
+import { MutationAdmissionBarrier, type MutationAdmission } from './admission-barrier'
 
 type PersistentTreeTraceInput =
   | Readonly<{
@@ -58,12 +59,13 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #stageAuthority: PersistentTreeSessionOptions['stageAuthority']
   readonly #legacyTrace: PersistentTreeSessionOptions['trace']
-  readonly #active = new Set<PersistentFileTransaction>()
+  readonly #mutationAdmissions = new MutationAdmissionBarrier()
   readonly #recreatablePreObjectCandidates = new Set<string>()
   #needsAttentionReported = false
   #activated = false
   #activation: Promise<void> | undefined
   #closed = false
+  #closePromise: Promise<void> | undefined
 
   private constructor(options: PersistentTreeSessionOptions) {
     this.#tree = options.tree
@@ -135,106 +137,121 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     return this.#activation
   }
 
-  async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransaction> {
-    this.#requireOpen()
-    this.#requireActivated()
-    const artifactPath = snapshotPortableCatalogPath(request.artifactPath)
-    // Awaiting authenticated source authority before local planning prevents both
-    // checkpoint reservations and namespace placeholders for unopened revisions.
-    const revision = snapshotOpenedRevision(await request.openRevision())
-    const stageScope = this.#stageAuthority?.fileScope(revision.fileId, artifactPath)
-    stageScope?.addFailureFacts(
-      'checkpoint',
-      context => captureCheckpointFailureFacts(
-        this.#checkpoints,
-        revision.fileId,
-        context,
-      ),
-    )
-    let handedOff = false
+  beginFile(request: PersistentFileRequest): Promise<PersistentFileTransaction> {
+    let admission: MutationAdmission | undefined
     try {
-      const decision = await this.#selectInitialCheckpoint(revision, artifactPath, stageScope)
-      this.#traceCheckpointDecision(revision.fileId, decision)
-      const checkpoint = selectedCheckpoint(decision)
-      const fileScope = stageScope?.withCorrelation({
-        ownedObjectId: checkpoint.ownedObjectId,
-        checkpointRecordId: checkpoint.recordId,
-        checkpointGeneration: checkpoint.checkpointGeneration,
-      })
-      let handle = await this.#tree.openFile(
-        artifactPath,
-        checkpoint.ownedObjectId,
-        fileScope,
+      admission = this.#mutationAdmissions.enter()
+      this.#requireActivated()
+      const artifactPath = snapshotPortableCatalogPath(request.artifactPath)
+      return this.#beginAdmittedFile(request, artifactPath, admission)
+    } catch (error) {
+      admission?.leave()
+      return Promise.reject(error)
+    }
+  }
+
+  async #beginAdmittedFile(
+    request: PersistentFileRequest,
+    artifactPath: readonly string[],
+    admission: MutationAdmission,
+  ): Promise<PersistentFileTransaction> {
+    let handedOff = false
+    let stageScope: PersistentOutputStageScope | undefined
+    try {
+      // Awaiting authenticated source authority before local planning prevents both
+      // checkpoint reservations and namespace placeholders for unopened revisions.
+      const revision = snapshotOpenedRevision(await request.openRevision())
+      stageScope = this.#stageAuthority?.fileScope(revision.fileId, artifactPath)
+      stageScope?.addFailureFacts(
+        'checkpoint',
+        context => captureCheckpointFailureFacts(
+          this.#checkpoints,
+          revision.fileId,
+          context,
+        ),
       )
-      if (handle === undefined) {
-        if (!isPristinePreObjectCandidate(checkpoint)) {
-          throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
-        }
-        handle = await this.#tree.createFileAfterRevisionOpen(
+      try {
+        const decision = await this.#selectInitialCheckpoint(revision, artifactPath, stageScope)
+        this.#traceCheckpointDecision(revision.fileId, decision)
+        const checkpoint = selectedCheckpoint(decision)
+        const fileScope = stageScope?.withCorrelation({
+          ownedObjectId: checkpoint.ownedObjectId,
+          checkpointRecordId: checkpoint.recordId,
+          checkpointGeneration: checkpoint.checkpointGeneration,
+        })
+        let handle = await this.#tree.openFile(
           artifactPath,
-          revision,
           checkpoint.ownedObjectId,
           fileScope,
         )
+        if (handle === undefined) {
+          if (!isPristinePreObjectCandidate(checkpoint)) {
+            throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
+          }
+          handle = await this.#tree.createFileAfterRevisionOpen(
+            artifactPath,
+            revision,
+            checkpoint.ownedObjectId,
+            fileScope,
+          )
+        }
+        await verifySelectedFile(handle, checkpoint, revision)
+        const committed = checkpoint.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE
+          ? await this.#promoteInitialCheckpoint(checkpoint, fileScope)
+          : checkpoint
+        const transactionScope = fileScope?.withCorrelation({
+          checkpointRecordId: committed.recordId,
+          checkpointGeneration: committed.checkpointGeneration,
+        })
+        const transaction = new PersistentFileTransaction({
+          revision,
+          handle,
+          checkpoint: committed,
+          checkpoints: this.#checkpoints,
+          onClose: () => {
+            admission.leave()
+            transactionScope?.retireFileEvidence()
+          },
+          onOwnershipUnknown: () => this.#reportLegacyNeedsAttention(),
+          ...(transactionScope === undefined ? {} : { stageScope: transactionScope }),
+          ...(this.#diagnostics === undefined
+            ? {}
+            : { diagnostics: this.#diagnostics }),
+        })
+        admission.transferTo(() => transaction.close())
+        handedOff = true
+        return transaction
+      } catch (error) {
+        recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+        throw error
       }
-      await verifySelectedFile(handle, checkpoint, revision)
-      const committed = checkpoint.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE
-        ? await this.#promoteInitialCheckpoint(checkpoint, fileScope)
-        : checkpoint
-      const transactionScope = fileScope?.withCorrelation({
-        checkpointRecordId: committed.recordId,
-        checkpointGeneration: committed.checkpointGeneration,
-      })
-      const transaction = new PersistentFileTransaction({
-        revision,
-        handle,
-        checkpoint: committed,
-        checkpoints: this.#checkpoints,
-        onClose: (closed) => {
-          this.#active.delete(closed)
-          transactionScope?.retireFileEvidence()
-        },
-        onOwnershipUnknown: () => this.#reportLegacyNeedsAttention(),
-        ...(transactionScope === undefined ? {} : { stageScope: transactionScope }),
-        ...(this.#diagnostics === undefined
-          ? {}
-          : { diagnostics: this.#diagnostics }),
-      })
-      this.#active.add(transaction)
-      handedOff = true
-      return transaction
-    } catch (error) {
-      recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
-      this.#trace({ eventName: 'checkpoint', transition: 'failed' })
-      if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
-      throw error
     } finally {
-      if (!handedOff) stageScope?.retireFileEvidence()
+      if (!handedOff) {
+        admission.leave()
+        stageScope?.retireFileEvidence()
+      }
     }
   }
 
   ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
-    this.#requireOpen()
-    this.#requireActivated()
-    return this.#tree.ensureDirectory(path)
+    const admission = this.#mutationAdmissions.enter()
+    try {
+      this.#requireActivated()
+      return this.#tree.ensureDirectory(path).finally(() => admission.leave())
+    } catch (error) {
+      admission.leave()
+      throw error
+    }
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return
+  close(): Promise<void> {
+    if (this.#closePromise !== undefined) return this.#closePromise
     this.#closed = true
-    const failures: unknown[] = []
-    for (const transaction of this.#active) {
-      try {
-        await transaction.close()
-      } catch (error) {
-        failures.push(error)
-      }
-    }
-    this.#active.clear()
-    this.#stageAuthority?.retireAllFileEvidence()
-    if (failures.length !== 0) {
-      throw new AggregateError(failures, 'Persistent tree file transactions did not close cleanly')
-    }
+    const drain = this.#mutationAdmissions.closeExternalAdmission()
+    this.#closePromise = drain.finally(() => this.#stageAuthority?.retireAllFileEvidence())
+    return this.#closePromise
   }
 
   async #selectInitialCheckpoint(

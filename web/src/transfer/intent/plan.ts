@@ -245,7 +245,7 @@ export function canonicalReceiveIntentBytes(input: {
     frame(input.selection.canonicalBytes),
     frame(input.artifact.canonicalBytes),
     frame(input.plan.canonicalBytes),
-  ])
+  ], RECEIVE_INTENT_VERSION)
 }
 
 export async function validateReceiveIntent(input: ReceiveIntent): Promise<ReceiveIntent> {
