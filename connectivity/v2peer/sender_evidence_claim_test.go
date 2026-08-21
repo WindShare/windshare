@@ -13,9 +13,9 @@ import (
 
 func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *testing.T) {
 	collector := &senderObservationCollector{}
-	now := time.Unix(9_000, 0)
+	clock := newManualTestClock(time.Unix(9_000, 0))
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		Now:                          func() time.Time { return now },
+		Now:                          clock.Now,
 		RetiredBindingTTL:            time.Minute,
 		MaxSessionEvidenceIdentities: 2,
 	})
@@ -45,7 +45,7 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 
 	// Replay retention is deliberately finite. Its session claim remains exact
 	// until the separately named evidence budget ends the entire session.
-	now = now.Add(2 * time.Minute)
+	clock.Advance(2 * time.Minute)
 	if err := handler.HandleMessage(messageContext, message); err != nil {
 		t.Fatalf("replayed malformed offer: %v", err)
 	}

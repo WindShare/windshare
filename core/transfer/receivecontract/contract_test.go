@@ -219,7 +219,9 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatal(err)
 	}
 	resultName, _ := CollisionName(operation, "docs-selection", 2, false)
-	fsaEntry, err := NewFSANamedEntryReservation(operation, reservationID, tree, authority, resultName, 2)
+	fsaEntry, err := NewFSANamedEntryReservation(
+		operation, reservationID, tree, authority, resultName, "docs-selection.windshare-abcdef", 2,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +240,8 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		t.Fatalf("native root=%+v", nativeRoot)
 	}
 	if nativeEntry.Kind() != ReservationNamedContainerEntry || nativeEntry.EntryKind() != ContainerEntrySingleFile ||
-		nativeEntry.RequestedName() != "report.txt" || nativeEntry.ReservedName() != singleName ||
+		nativeEntry.RequestedName() != "report.txt" || nativeEntry.LogicalReservedName() != singleName ||
+		nativeEntry.PhysicalName() != singleName ||
 		nativeEntry.CollisionIndex() != 1 || fsaEntry.Guarantees() != FSATreeGuarantees() ||
 		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "chosen.zip" ||
 		atomic.ReservedName() != atomicName || atomic.Guarantees().NameAuthority() != NameUserChosen {

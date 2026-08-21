@@ -12,6 +12,7 @@ import type {
 } from '../output/planning'
 import type { ReceiveOperationContinuation } from '../output/resume/descriptor'
 import type { ReceiveLifecycleState } from '../output/workspace'
+import type { CompatibleNameRepairProjectionSource } from '../output/file-system-access/compatible-name/coordinator'
 import type { ReceiveIntent } from '../transfer/intent'
 import type { V2PlanExecutionAuthority } from '../transfer/output-session'
 import type {
@@ -55,6 +56,10 @@ export interface V2BoundReceiveOperation {
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls: readonly V2ActiveReceiveControl[]
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
+  readonly repairProjection?: CompatibleNameRepairProjectionSource
+  subscribeRepairProjectionActivation?(
+    listener: (source: CompatibleNameRepairProjectionSource) => void,
+  ): () => void
 
   /**
    * The runtime-local binding prevents output sessions that span retries from
@@ -138,6 +143,7 @@ export interface V2ArtifactPresentationAuthority {
 
 export type V2RetainedReceiveAction =
   | 'continue'
+  | 'catch-up'
   | 'save'
   | 'redownload'
   | 'discard'
@@ -184,6 +190,10 @@ export interface V2RetainedReceiveInventoryPort {
     signal: AbortSignal,
     failures?: OutputFailureSinks,
   ): PromiseLike<V2RetainedReceiveInventory>
+  readRepairSummary?(
+    operationId: string,
+    signal: AbortSignal,
+  ): PromiseLike<import('../output/file-system-access/compatible-name/model').CompatibleNameRepairSummary | undefined>
 }
 
 export interface V2ReceiveCompositionPort {

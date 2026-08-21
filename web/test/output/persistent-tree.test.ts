@@ -338,6 +338,9 @@ describe('persistent DirectoryTree materialization port', () => {
     })).records).toHaveLength(1)
   })
 
+})
+
+describe('persistent tree diagnostics and mutation admission', () => {
   it('rechecks object identity before writer acquisition and after checkpoint commit', async () => {
     const fixture = await materializationFixture()
     const beforeWriter = await fixture.session.beginFile({
@@ -406,6 +409,91 @@ describe('persistent DirectoryTree materialization port', () => {
     })
   })
 
+  it('admits directory mutations synchronously and drains them without serializing workers', async () => {
+    const fixture = await materializationFixture()
+    const firstBarrier = fixture.tree.deferDirectory(['first'])
+    const secondBarrier = fixture.tree.deferDirectory(['second'])
+
+    const first = fixture.session.ensureDirectory(['first'])
+    const second = fixture.session.ensureDirectory(['second'])
+    await Promise.all([firstBarrier.started, secondBarrier.started])
+
+    let drained = false
+    const close = fixture.session.close().then(() => { drained = true })
+    expect(() => fixture.session.ensureDirectory(['late'])).toThrowError(
+      expect.objectContaining({ name: 'InvalidStateError' }),
+    )
+    await Promise.resolve()
+    expect(drained).toBe(false)
+
+    secondBarrier.release()
+    await second
+    await Promise.resolve()
+    expect(drained).toBe(false)
+
+    firstBarrier.release()
+    await first
+    await close
+    expect(drained).toBe(true)
+  })
+
+  it('closes transferred file transactions concurrently before completing the drain', async () => {
+    const fixture = await materializationFixture()
+    const firstBarrier = fixture.tree.deferFileClose(['first.bin'])
+    const secondBarrier = fixture.tree.deferFileClose(['second.bin'])
+    const first = await fixture.session.beginFile({
+      artifactPath: ['first.bin'],
+      openRevision: async () => ({ ...revision(0n), fileId: identity(51) }),
+    })
+    const second = await fixture.session.beginFile({
+      artifactPath: ['second.bin'],
+      openRevision: async () => ({ ...revision(0n), fileId: identity(52) }),
+    })
+
+    let drained = false
+    const close = fixture.session.close().then(() => { drained = true })
+    await Promise.all([firstBarrier.started, secondBarrier.started])
+    expect(drained).toBe(false)
+
+    firstBarrier.release()
+    await first.close()
+    expect(drained).toBe(false)
+
+    secondBarrier.release()
+    await second.close()
+    await close
+    expect(drained).toBe(true)
+  })
+
+  it('keeps a file admitted across its first await when close takes the external cut', async () => {
+    const fixture = await materializationFixture()
+    const revisionBarrier = deferred<OpenedFileRevision>()
+    const fileCloseBarrier = fixture.tree.deferFileClose(['late.bin'])
+
+    const beginning = fixture.session.beginFile({
+      artifactPath: ['late.bin'],
+      openRevision: () => revisionBarrier.promise,
+    })
+    let drained = false
+    const close = fixture.session.close().then(() => { drained = true })
+    await expect(fixture.session.beginFile({
+      artifactPath: ['rejected.bin'],
+      openRevision: async () => revision(0n),
+    })).rejects.toMatchObject({ name: 'InvalidStateError' })
+    await Promise.resolve()
+    expect(drained).toBe(false)
+
+    revisionBarrier.resolve(revision(0n))
+    const transaction = await beginning
+    await fileCloseBarrier.started
+    expect(drained).toBe(false)
+
+    fileCloseBarrier.release()
+    await close
+    await expect(transaction.writeRange(0n, new Uint8Array()))
+      .rejects.toMatchObject({ kind: 'output-state' })
+  })
+
   it('isolates one failed file without removing another successful visible file', async () => {
     const fixture = await materializationFixture()
     const good = await fixture.session.beginFile({
@@ -454,6 +542,8 @@ function revision(exactSize: bigint): OpenedFileRevision {
 class MemoryTree implements PersistentOutputTree {
   readonly #events: string[]
   readonly #files = new Map<string, MemoryFile>()
+  readonly #directoryBarriers = new Map<string, FileCloseBarrier>()
+  readonly #fileCloseBarriers = new Map<string, FileCloseBarrier>()
   readonly proposedOwnedObjectIds: string[] = []
   #failNextCreation = false
   #nextObject = 60
@@ -472,6 +562,9 @@ class MemoryTree implements PersistentOutputTree {
 
   async ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
     if (path.some((component) => component.length === 0)) throw new TypeError('empty path component')
+    const barrier = this.#directoryBarriers.get(path.join('/'))
+    barrier?.started.resolve()
+    await barrier?.release.promise
     return Object.freeze({ ownedObjectId: identity(this.#nextObject++, 32), created: true })
   }
 
@@ -512,7 +605,7 @@ class MemoryTree implements PersistentOutputTree {
       throw new Error('simulated pre-object crash')
     }
     this.#events.push(`create:${key}`)
-    const file = new MemoryFile(selectedOwnedObjectId)
+    const file = new MemoryFile(selectedOwnedObjectId, this.#fileCloseBarriers.get(key))
     this.#files.set(key, file)
     return file
   }
@@ -539,6 +632,20 @@ class MemoryTree implements PersistentOutputTree {
     this.#failNextCreation = true
   }
 
+  deferDirectory(path: readonly string[]): ControlledBarrier {
+    const started = deferred<void>()
+    const release = deferred<void>()
+    this.#directoryBarriers.set(path.join('/'), { started, release })
+    return Object.freeze({ started: started.promise, release: () => release.resolve() })
+  }
+
+  deferFileClose(path: readonly string[]): ControlledBarrier {
+    const started = deferred<void>()
+    const release = deferred<void>()
+    this.#fileCloseBarriers.set(path.join('/'), { started, release })
+    return Object.freeze({ started: started.promise, release: () => release.resolve() })
+  }
+
   occupy(path: readonly string[], ownedObjectId: string): void {
     this.#files.set(path.join('/'), new MemoryFile(ownedObjectId))
   }
@@ -558,12 +665,14 @@ class MemoryTree implements PersistentOutputTree {
 
 class MemoryFile implements PersistentTreeFile {
   readonly ownedObjectId: string
+  readonly #closeBarrier: FileCloseBarrier | undefined
   #bytes = new Uint8Array()
   readonly #verificationCounts = new Map<string, number>()
   #failure: { readonly stage: string; readonly occurrence: number } | undefined
 
-  constructor(ownedObjectId: string) {
+  constructor(ownedObjectId: string, closeBarrier?: FileCloseBarrier) {
     this.ownedObjectId = ownedObjectId
+    this.#closeBarrier = closeBarrier
   }
 
   async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
@@ -590,7 +699,10 @@ class MemoryFile implements PersistentTreeFile {
     }
   }
 
-  async close(): Promise<void> {}
+  async close(): Promise<void> {
+    this.#closeBarrier?.started.resolve()
+    await this.#closeBarrier?.release.promise
+  }
 
   async read(): Promise<Blob> {
     return new Blob([this.#bytes])
@@ -603,6 +715,32 @@ class MemoryFile implements PersistentTreeFile {
   failVerification(stage: string, occurrence: number): void {
     this.#failure = { stage, occurrence }
   }
+}
+
+interface Deferred<T> {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T | PromiseLike<T>) => void
+  readonly reject: (reason?: unknown) => void
+}
+
+interface FileCloseBarrier {
+  readonly started: Deferred<void>
+  readonly release: Deferred<void>
+}
+
+interface ControlledBarrier {
+  readonly started: Promise<void>
+  readonly release: () => void
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolve!: Deferred<T>['resolve']
+  let reject!: Deferred<T>['reject']
+  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
 }
 
 class MemoryCheckpointRepository implements FileCheckpointJournal {

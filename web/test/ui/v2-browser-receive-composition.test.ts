@@ -265,12 +265,12 @@ describe('browser production receive composition', () => {
       'download-started': 'retry-download',
       expired: 'cleanup-expired',
       'needs-attention': 'needs-attention',
-      published: 'retry-cleanup',
+      published: 'restoration-available',
       'resumable-package': 'resume-package',
       'resumable-receive': 'resume-receive',
       'waiting-to-save': 'save-artifact',
     })
-    expect(operations).toHaveLength(7)
+    expect(operations).toHaveLength(8)
     expect(operations[0]?.lifecycle).not.toHaveProperty('verifiedRanges')
     expect(operations.every(operation => operation.actions.length === 0)).toBe(true)
     expect(source.closeCalls).toBe(0)
@@ -473,14 +473,28 @@ describe('browser retained continuation composition', () => {
       const inventory = await composition.retained.list(new AbortController().signal)
       const operation = inventory.operations[0]
       if (operation === undefined) throw new Error('receive continuation was not projected')
+      const scope = createIncidentScopeIssuer().open('retained_action')
+      const failures = createAttemptOutputFailureCapability(scope.handle)
 
-      await expect(inventory.act(operation, 'continue', new AbortController().signal))
+      await expect(inventory.act(
+        operation,
+        'continue',
+        new AbortController().signal,
+        failures.sinks,
+      ))
         .resolves.toEqual({ kind: 'receive-continuation', runtime })
 
-      expect(resumeReceive).toHaveBeenCalledWith(continuation, expect.any(AbortSignal))
+      expect(resumeReceive).toHaveBeenCalledWith(
+        continuation,
+        expect.any(AbortSignal),
+        failures.sinks,
+      )
+      expect(failures.sinks.attempt?.claim()?.scope).toEqual(scope.identity)
       expect(close).not.toHaveBeenCalled()
       await runtime.detach()
       expect(close).toHaveBeenCalledTimes(1)
+      failures.revoke()
+      scope.close()
       inventory.close()
     },
   )
@@ -755,7 +769,7 @@ describe('browser output attempt ownership', () => {
       })
       return {
         scope,
-        failures: createAttemptOutputFailureCapability(scope.facts),
+        failures: createAttemptOutputFailureCapability(scope.handle),
       }
     })
 
@@ -883,7 +897,7 @@ describe('browser output attempt ownership', () => {
       })
       return {
         scope,
-        failures: createAttemptOutputFailureCapability(scope.facts),
+        failures: createAttemptOutputFailureCapability(scope.handle),
       }
     })
 

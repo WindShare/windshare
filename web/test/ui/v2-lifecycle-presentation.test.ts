@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
@@ -87,6 +88,112 @@ describe('receive lifecycle terminal presentation', () => {
 
     expect(presentation.description).toContain('3 file(s) remain saved')
     expect(presentation.actions).toEqual([])
+  })
+})
+
+describe('compatible-name repair presentation', () => {
+  it('keeps the first replacement notice non-blocking and labels active or paused use as abnormal-stop recovery', () => {
+    const summary = repairSummary('active', true, 3)
+    const active = present(
+      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      summary,
+    )
+    const paused = present(lifecycle({
+      kind: 'resumable-receive',
+      checkpointSetDigest: 'checkpoints',
+      completedFileCount: 1n,
+      completedBytes: 128n,
+      expiresAt: DEADLINE,
+    }), TREE, 'direct-tree', NOW, undefined, summary)
+
+    expect(active.compatibleNameRepair).toMatchObject({
+      noticeTitle: 'Compatible names are in use',
+      replacementCount: 3,
+      replacementCountLabel: '3 verified/committed name replacements',
+      logicalPathSample: ['folder/pyvenv.cfg', 'folder/nested'],
+      omittedLogicalPathCount: 1,
+      scriptName: 'restore-names.windshare-abc234.ps1',
+      sidecarName: 'restore-names.windshare-abc234.tsv',
+      runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
+      actionMode: 'abnormal-stop-recovery',
+    })
+    expect(paused.compatibleNameRepair?.actionMode).toBe('abnormal-stop-recovery')
+    expect(paused.compatibleNameRepair?.actionDescription).toMatch(/do not run.*resumable/iu)
+    expect(active.compatibleNameRepair?.noticeDescription).toContain('remain compatible')
+
+    const createdTarget = present(
+      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      repairSummary('active', false, 0),
+    )
+    expect(createdTarget.compatibleNameRepair).toMatchObject({
+      replacementCount: 0,
+      replacementCountLabel: '0 verified/committed name replacements',
+      logicalPathSample: [],
+      actionMode: 'abnormal-stop-recovery',
+    })
+  })
+
+  it.each([
+    ['published', lifecycle({ kind: 'published', receiptDigest: 'receipt', cleanupState: 'clean' }),
+      'completed', 'Completed with compatible names'],
+    ['partial-directory', lifecycle({
+      kind: 'partial-directory',
+      reason: 'stopped',
+      successCount: 2n,
+      failureCount: 1n,
+      receiptDigest: 'receipt',
+    }), 'stopped', 'Partial with compatible names'],
+  ] as const)('qualifies a terminal %s only after its complete terminal footer', (
+    _kind,
+    state,
+    footerState,
+    title,
+  ) => {
+    const presentation = present(
+      state,
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      repairSummary(footerState, false, 2),
+    )
+
+    expect(presentation).toMatchObject({
+      stateKind: state.kind,
+      category: 'terminal',
+      title,
+      compatibleNameRepair: {
+        actionMode: 'routine-restoration',
+        actionTitle: 'Restore the original names',
+      },
+    })
+    expect(presentation.description).toContain('compatible names')
+    expect(presentation.description).not.toMatch(/names (?:are|were) restored/iu)
+  })
+
+  it('withholds qualified terminal success while sidecar catch-up is pending', () => {
+    const presentation = present(
+      lifecycle({ kind: 'published', receiptDigest: 'receipt', cleanupState: 'clean' }),
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      repairSummary('completed', true, 2),
+    )
+
+    expect(presentation.title).toBe('Restoration tool catch-up required')
+    expect(presentation.tone).toBe('warning')
+    expect(presentation.compatibleNameRepair?.actionMode).toBe('catch-up-required')
+    expect(presentation.compatibleNameRepair?.runCommand).toBeNull()
+    expect(presentation.description).not.toMatch(/complete result was saved/iu)
   })
 })
 
@@ -180,6 +287,7 @@ function present(
   planKind: MaterializationPlan['kind'] = 'workspace-then-publish',
   nowMilliseconds = NOW,
   workspaceUsage?: { readonly ownedBytes: bigint; readonly maximumBytes?: bigint },
+  repairSummary?: CompatibleNameRepairSummary,
 ) {
   return presentReceiveLifecycle({
     state,
@@ -187,6 +295,7 @@ function present(
     planKind,
     nowMilliseconds,
     ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
+    ...(repairSummary === undefined ? {} : { repairSummary }),
   })
 }
 
@@ -199,4 +308,26 @@ function lifecycle(
     receiveIntentDigest: 'intent',
     generation: 1n,
   }) as ReceiveLifecycleState
+}
+
+function repairSummary(
+  footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
+  pendingCatchUp: boolean,
+  committedCount: number,
+): CompatibleNameRepairSummary {
+  return Object.freeze({
+    committedCount,
+    logicalPathSample: Object.freeze([
+      Object.freeze(['folder', 'pyvenv.cfg']),
+      Object.freeze(['folder', 'nested']),
+    ].slice(0, committedCount)),
+    pairDisplayNames: Object.freeze({
+      script: 'restore-names.windshare-abc234.ps1',
+      sidecar: 'restore-names.windshare-abc234.tsv',
+    }),
+    placement: 'inside-logical-root',
+    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
+    latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
+    pendingCatchUp,
+  })
 }

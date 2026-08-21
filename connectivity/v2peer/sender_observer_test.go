@@ -513,11 +513,11 @@ func TestSenderAttemptObservationClassifiesCancellationAndRuntimeStop(t *testing
 func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *testing.T) {
 	collector := &senderObservationCollector{}
 	peer := newTestPeerConnection()
-	now := time.Unix(8_000, 0)
+	clock := newManualTestClock(time.Unix(8_000, 0))
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
 		MaxRetiredBindings: 1,
 		RetiredBindingTTL:  time.Minute,
-		Now:                func() time.Time { return now },
+		Now:                clock.Now,
 		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
 			return peer, nil
 		}),
@@ -544,7 +544,7 @@ func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	}
 	// The first active binding saturates replay retention. Evidence still owns
 	// the rejected identity, and that claim survives the retention window.
-	now = now.Add(2 * time.Minute)
+	clock.Advance(2 * time.Minute)
 	if err := handler.HandleMessage(
 		rejectedContext,
 		testMessage(t, protocolsession.MessagePeerOffer, rejectedOperation, repeatedBody),

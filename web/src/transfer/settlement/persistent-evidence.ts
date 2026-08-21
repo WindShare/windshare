@@ -17,6 +17,7 @@ import type {
   ExactPreparationEvidence,
   ExactSingleFileEvidence,
   PlanPauseRequest,
+  PlanStopRequest,
   PlanSettlementRequest,
 } from '../output-session'
 import type {
@@ -51,6 +52,10 @@ export interface PersistentMaterializationSettlementCut<
   Evidence extends PersistentMaterializationEvidence,
 > {
   readonly evidence: Evidence
+  /** Captures the immutable in-memory manifest only after the backend has quiesced admissions. */
+  snapshotQuiescentEvidence(): Evidence
+  /** Qualifies the captured snapshot as the settlement evidence after final materialization work. */
+  sealEvidence(): Evidence
   /** The lifecycle owner chooses the final ownership-check/close ordering and must await this cut. */
   closeMaterialization(): Promise<void>
 }
@@ -63,6 +68,11 @@ export interface PersistentDirectTreeSettlementAuthority {
   ): Promise<ReceiveLifecycleState>
   settle(
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
+    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+  stop?(
+    request: PlanStopRequest,
     cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>
@@ -120,7 +130,7 @@ export function requireCompleteWorkspaceMaterialization(
 }
 
 export function requireMatchingMaterializationSummary(
-  request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
+  request: PlanSettlementRequest<CompletedTransferWorkerSettlement> | PlanStopRequest,
   evidence: PersistentMaterializationEvidence,
 ): void {
   const materializedEntries = evidence.entries.filter(entry =>

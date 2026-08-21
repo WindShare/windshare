@@ -23,6 +23,7 @@ import (
 var retiredReceiveVectorFiles = []string{
 	"directory-admission-v1.json",
 	"file-checkpoint-v1.json",
+	"receive-intent-v1.json",
 	"transfer-intent-v1.json",
 }
 
@@ -97,9 +98,9 @@ func buildCanonicalReceiveContractVectors(t *testing.T) []canonicalContractVecto
 	return []canonicalContractVectorFile{
 		{
 			Version: 1,
-			Kind:    "receive-intent-v1",
-			Description: "Receiver-local ReceiveIntentV1 values for every legal artifact and materialization-plan family, " +
-				"including canonical nested bytes and the windshare/receive-intent/v1 digest.",
+			Kind:    "receive-intent-v2",
+			Description: "Receiver-local ReceiveIntentV2 values for every legal artifact and materialization-plan family, " +
+				"including canonical nested bytes and the windshare/receive-intent/v2 digest.",
 			Cases: intentCases,
 		},
 		{
@@ -196,8 +197,11 @@ func buildReceiveIntentVectorFixtures(t *testing.T) []receiveIntentVectorFixture
 	fixtures := make([]receiveIntentVectorFixture, 0, 9)
 	fixtures = append(fixtures,
 		newNativeCatalogRootFixture(t, "catalog-root-direct-tree", nodeFixture, catalogTree, 0x60),
-		newFSANamedFixture(t, "single-file-fsa-direct-tree", pathFixture, singleReport, 0x61, 1),
-		newFSANamedFixture(t, "result-root-fsa-direct-tree", nodeFixture, resultTree, 0x62, 0),
+		newFSANamedFixture(
+			t, "single-file-fsa-direct-tree", pathFixture, singleReport, 0x61, 1,
+			"report.windshare-abcdef",
+		),
+		newFSANamedFixture(t, "result-root-fsa-direct-tree", nodeFixture, resultTree, 0x62, 0, "docs-selection"),
 		newManagedAtomicFixture(t, "original-file-direct-atomic", pathFixture, originalReport, 0x63, receivecontract.NameApplicationChosen, "report.txt", 0),
 		newManagedAtomicFixture(t, "zip-archive-direct-atomic", nodeFixture, directoryArchive, 0x64, receivecontract.NameUserChosen, "chosen.zip", 1),
 		newWorkspaceFixture(t, "original-file-workspace", pathFixture, originalReport, 0x65),
@@ -237,6 +241,7 @@ func newFSANamedFixture(
 	artifact receivecontract.ArtifactSpec,
 	seed byte,
 	collisionIndex uint32,
+	physicalName string,
 ) receiveIntentVectorFixture {
 	t.Helper()
 	operation := mustOperationID(t, contractSequence(seed, receivecontract.StableIdentityBytes))
@@ -248,7 +253,7 @@ func newFSANamedFixture(
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewFSANamedEntryReservation(
-		operation, reservationID, artifact, authority, reservedName, collisionIndex,
+		operation, reservationID, artifact, authority, reservedName, physicalName, collisionIndex,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -470,7 +475,8 @@ func destinationReservationVectorInput(reservation receivecontract.DestinationRe
 	case receivecontract.ReservationNamedContainerEntry:
 		result["entryKind"] = containerEntryKindString(reservation.EntryKind())
 		result["requestedName"] = reservation.RequestedName()
-		result["reservedName"] = reservation.ReservedName()
+		result["logicalReservedName"] = reservation.LogicalReservedName()
+		result["physicalName"] = reservation.PhysicalName()
 		result["collisionIndex"] = reservation.CollisionIndex()
 	case receivecontract.ReservationAtomicTarget:
 		result["requestedName"] = reservation.RequestedName()

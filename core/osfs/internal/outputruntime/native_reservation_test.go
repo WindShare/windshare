@@ -51,10 +51,11 @@ func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
 	}
 	reservation, _ := intent.MaterializationPlan().DestinationReservation()
 	if reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
-		reservation.ReservedName() != "docs" {
-		t.Fatalf("named reservation = kind %d name %q", reservation.Kind(), reservation.ReservedName())
+		reservation.LogicalReservedName() != "docs" || reservation.PhysicalName() != "docs" {
+		t.Fatalf("named reservation = kind %d logical %q physical %q", reservation.Kind(),
+			reservation.LogicalReservedName(), reservation.PhysicalName())
 	}
-	if info, err := os.Stat(filepath.Join(root.path, reservation.ReservedName())); err != nil || !info.IsDir() {
+	if info, err := os.Stat(filepath.Join(root.path, reservation.PhysicalName())); err != nil || !info.IsDir() {
 		t.Fatalf("direct result root = (%v, %v)", info, err)
 	}
 	if _, err := os.Stat(filepath.Join(root.path, checkpointstore.ControlDirectory, retiredAggregateCheckpointDirectory)); !errors.Is(err, fs.ErrNotExist) {
@@ -263,8 +264,10 @@ func TestStagedAuthorityReservedSuffixIsFrozenAcrossReopen(t *testing.T) {
 	}
 	intent, _ := operation.ReceiveIntent()
 	reservation, _ := intent.MaterializationPlan().DestinationReservation()
-	if reservation.CollisionIndex() != 1 || reservation.ReservedName() == "report.txt" {
-		t.Fatalf("collision reservation = index %d name %q", reservation.CollisionIndex(), reservation.ReservedName())
+	if reservation.CollisionIndex() != 1 || reservation.LogicalReservedName() == "report.txt" ||
+		reservation.PhysicalName() != reservation.LogicalReservedName() {
+		t.Fatalf("collision reservation = index %d logical %q physical %q", reservation.CollisionIndex(),
+			reservation.LogicalReservedName(), reservation.PhysicalName())
 	}
 	if err := first.Close(); err != nil {
 		t.Fatal(err)
@@ -349,7 +352,7 @@ func TestStagedAuthorityLeavesSingleFileAbsentUntilPublication(t *testing.T) {
 	}
 	intent, _ := operation.ReceiveIntent()
 	reservation, _ := intent.MaterializationPlan().DestinationReservation()
-	if _, err := os.Stat(filepath.Join(root.path, reservation.ReservedName())); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := os.Stat(filepath.Join(root.path, reservation.PhysicalName())); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatalf("single-file reservation materialized final name: %v", err)
 	}
 	if err := authority.Close(); err != nil {

@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
@@ -51,7 +52,7 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	reservation, err := receivecontract.NewFSANamedEntryReservation(
-		operation, reservationID, artifact, authority, "docs-selection", 0,
+		operation, reservationID, artifact, authority, "docs-selection", "docs-selection", 0,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -103,13 +104,13 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString(childAdmission.Bytes()),
 	}
 	want := []string{
-		"xs4aZXCn-OP6jUHf8nxuaLxtxxDJy52zdNfBlAWFKfE",
-		"-UZ_B6qoEBFrOV7XkR2Osusr3mFEe5YVI0xIHsdTK5o",
-		"ga_pazR-tSpAA1wIpn-VLH9bQQ82_PiBQSIGrp1q65Y",
-		"yu8hvZ3nTB-n4vPvJ0XdehcivSIUPWfSdcs2P2coS7g",
+		"0nnnictvYU_T1TDDKOizgxB_NDzLFPINaWXdepRW49o",
+		"4HldBQ_op6cGfFHvdQrCxynzbWqKQ6kLQLMhmrZi0i4",
+		"hHXHEyKXtIBfQLGRmtIQUttu1hYd-tra0kuKFfAOwU0",
+		"eMKF1jXVxzA6PTsbmSlGozwfx33gz-DfUrTUs4LFaf8",
 	}
 	if !slices.Equal(got, want) {
-		t.Fatalf("cross-runtime values=%v want=%v", got, want)
+		t.Fatalf("cross-runtime values:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }
 

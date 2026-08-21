@@ -552,8 +552,9 @@ func validateNamedOperationIntent(
 	}
 	reservation, ok := intent.MaterializationPlan().DestinationReservation()
 	if !ok || reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
-		reservation.RequestedName() != entry.PreferredName() ||
-		reservation.ReservedName() != entry.ReservedName() ||
+		reservation.RequestedName() != entry.RequestedName() ||
+		reservation.LogicalReservedName() != entry.LogicalReservedName() ||
+		reservation.PhysicalName() != entry.PhysicalName() ||
 		reservation.CollisionIndex() != entry.CollisionIndex() ||
 		reservation.EntryKind() != entry.EntryKind() {
 		return transfer.ErrInvalidOutputBinding

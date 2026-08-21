@@ -84,7 +84,7 @@ func TestReservationValidationRejectsEveryUntrustedCoordinate(t *testing.T) {
 	spec := ReservationClaimSpec{
 		CanonicalNameKey: "file.txt", OperationID: request.OperationID,
 		ReservationID: request.ReservationID, EntryKind: receivecontract.ContainerEntryKind(255),
-		RequestedName: "file.txt", ReservedName: "file.txt",
+		RequestedName: "file.txt", LogicalReservedName: "file.txt", PhysicalName: "file.txt",
 	}
 	if spec.Valid() {
 		t.Fatal("unknown entry kind accepted")

@@ -3,11 +3,11 @@ import { V2_MAXIMUM_SELECTION_RULE_OVERRIDES } from '../../catalog/v2-selection'
 
 export type CanonicalBytes = Uint8Array<ArrayBuffer>
 
-export const RECEIVE_INTENT_VERSION = 1 as const
+export const RECEIVE_INTENT_VERSION = 2 as const
 export const SELECTION_SPEC_VERSION = 1 as const
 export const ARTIFACT_SPEC_VERSION = 1 as const
-export const MATERIALIZATION_PLAN_VERSION = 1 as const
-export const DESTINATION_RESERVATION_VERSION = 1 as const
+export const MATERIALIZATION_PLAN_VERSION = 2 as const
+export const DESTINATION_RESERVATION_VERSION = 2 as const
 export const WORKSPACE_BINDING_VERSION = 1 as const
 export const PORTABLE_BINDING_VERSION = 1 as const
 
@@ -183,7 +183,8 @@ export interface NamedContainerEntryReservation extends DestinationReservationBa
   readonly authorityKind: 'native-container' | 'fsa-container'
   readonly entryKind: 'single-file' | 'result-root'
   readonly requestedName: string
-  readonly reservedName: string
+  readonly logicalReservedName: string
+  readonly physicalName: string
   readonly collisionIndex: number
 }
 

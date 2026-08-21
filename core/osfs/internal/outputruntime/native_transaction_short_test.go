@@ -99,7 +99,7 @@ func openLiveTransactionFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	finalPath := filepath.Join(root, reservation.ReservedName())
+	finalPath := filepath.Join(root, reservation.PhysicalName())
 	if collision {
 		if err := os.WriteFile(finalPath, []byte("foreign"), 0o600); err != nil {
 			t.Fatal(err)

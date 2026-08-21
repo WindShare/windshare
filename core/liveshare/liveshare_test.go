@@ -224,7 +224,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatalf("job result = %+v", result)
 	}
 	destination, _ := intent.MaterializationPlan().DestinationReservation()
-	written, err := os.ReadFile(filepath.Join(outputRoot, destination.ReservedName(), "tree", "nested", "file.bin"))
+	written, err := os.ReadFile(filepath.Join(outputRoot, destination.PhysicalName(), "tree", "nested", "file.bin"))
 	if err != nil || !bytes.Equal(written, payload) {
 		t.Fatalf("output bytes = %d, %v", len(written), err)
 	}

@@ -48,6 +48,7 @@ export type LifecycleEvent =
       expiresAt: number
       partialReceiptDigest?: string
     }>
+  | Readonly<LifecycleEventAuthority & { kind: 'terminal-catch-up-reacquired' }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'stop-requested'
       successCount: bigint

@@ -4,6 +4,7 @@ import type {
   OutputFailureSinks,
   OutputFailureStage,
 } from './facts'
+import type { LocalOutputFailureAttemptSource } from './local-output-failure'
 
 export interface OutputFailureBindingLease {
   revoke(): void
@@ -54,6 +55,9 @@ export function createOutputFailureBinding(
     },
   })
   const sinks: OutputFailureSinks = Object.freeze({
+    attempt: Object.freeze({
+      claim: () => current?.sinks.attempt?.claim(),
+    }) satisfies LocalOutputFailureAttemptSource,
     outputReservation: proxy('outputReservation', 'output_reservation'),
     outputWrite: proxy('outputWrite', 'output_write'),
     outputCommit: proxy('outputCommit', 'output_commit'),

@@ -218,6 +218,45 @@ describe('browser diagnostics production composition', () => {
     }).payload).not.toHaveProperty('receiver_operation_id')
   })
 
+  it('exports worker-family consequence diagnostics with stable operation context', () => {
+    const composition = productionComposition()
+    const source = createV2ReceiverTraceSource(composition.trace)
+
+    composition.runtime.enable()
+    emit(source, () => Object.freeze({
+      name: 'receive_transition',
+      transition: 'worker_consequence_observed',
+      workerFamily: 'prepared-files',
+      failureSource: Object.freeze({ kind: 'worker', workerIndex: 2 }),
+      operationId: 'BQAAAAAAAAAAAAAAAAAAAA',
+      transferJobId: 'BgAAAAAAAAAAAAAAAAAAAA',
+      protocolSessionId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      protocolGeneration: 3,
+      outputSessionId: 'AgAAAAAAAAAAAAAAAAAAAA',
+    }))
+    const lines = composition.runtime.export().trimEnd().split('\n').map(
+      line => JSON.parse(line) as Record<string, unknown>,
+    )
+
+    expect(lines.at(-1)).toMatchObject({
+      line_type: 'trace_event',
+      record: {
+        event: 'receive_transition',
+        payload: {
+          transition: 'worker_consequence_observed',
+          worker_family: 'prepared_files',
+          failure_source: 'worker',
+          failure_source_index: 2,
+          operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+          transfer_job_id: 'BgAAAAAAAAAAAAAAAAAAAA',
+          protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+          protocol_generation: 3,
+          output_session_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+        },
+      },
+    })
+  })
+
   it('retains and exports an incident even when the console sink throws', () => {
     const error = vi.fn(() => {
       throw new Error('console unavailable')

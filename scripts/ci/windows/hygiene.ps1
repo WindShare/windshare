@@ -47,6 +47,7 @@ if ($unformatted.Count -ne 0) {
 }
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
+Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
 Invoke-Step 'Frozen Unicode Go tables' { node scripts/unicode15/generate-go.mjs --check }
 Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
 Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }

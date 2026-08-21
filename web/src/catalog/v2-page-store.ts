@@ -1,6 +1,7 @@
 import { catalogNameCollisionKey } from './path-policy'
 import type { V2CatalogPage } from './v2-records'
 import {
+  isSameCommittedGeneration,
   requireCachedFailure,
   snapshotCachedFailure,
   snapshotDirectory,
@@ -30,7 +31,7 @@ export class MemoryV2CatalogPageStore implements V2CatalogPageStore {
   readonly #failures = new Map<string, V2CachedDirectoryFailure>()
   readonly #pages = new Map<string, Map<string, Map<number, V2CatalogPage>>>()
   readonly #nodeOwners = new Map<string, string>()
-  readonly #nameOwners = new Map<string, Set<string>>()
+  readonly #nameOwners = new Map<string, Map<string, string>>()
 
   async loadDirectory(directoryIdText: string): Promise<V2CommittedDirectory | undefined> {
     return this.#directories.get(directoryIdText)
@@ -46,6 +47,15 @@ export class MemoryV2CatalogPageStore implements V2CatalogPageStore {
     pageIndex: number,
   ): Promise<V2CatalogPage | undefined> {
     return this.#pages.get(directory.directoryIdText)?.get(directory.generationText)?.get(pageIndex)
+  }
+
+  async hasCommittedName(directory: V2CommittedDirectory, name: string): Promise<boolean> {
+    const committed = this.#directories.get(directory.directoryIdText)
+    if (committed === undefined || !isSameCommittedGeneration(committed, directory)) {
+      throw committedGenerationUnavailable()
+    }
+    return this.#nameOwners.get(directory.directoryIdText)?.get(catalogNameCollisionKey(name)) ===
+      directory.generationText
   }
 
   async begin(directoryIdText: string): Promise<void> {
@@ -75,8 +85,8 @@ export class MemoryV2CatalogPageStore implements V2CatalogPageStore {
       pendingNames.add(nameKey)
     }
     for (const node of pendingNodes) this.#nodeOwners.set(node, page.directoryIdText)
-    const names = ownedNames ?? new Set<string>()
-    for (const name of pendingNames) names.add(name)
+    const names = ownedNames ?? new Map<string, string>()
+    for (const name of pendingNames) names.set(name, page.generationText)
     this.#nameOwners.set(page.directoryIdText, names)
     const generations = this.#pages.get(page.directoryIdText) ?? new Map()
     const pages = generations.get(page.generationText) ?? new Map()
@@ -119,6 +129,13 @@ export class MemoryV2CatalogPageStore implements V2CatalogPageStore {
   }
 
   close(): void {}
+}
+
+function committedGenerationUnavailable(): V2CatalogPageStoreError {
+  return new V2CatalogPageStoreError(
+    'local-storage',
+    'Catalog directory generation is no longer committed',
+  )
 }
 
 function ownershipFailure(message: string): V2CatalogPageStoreError {

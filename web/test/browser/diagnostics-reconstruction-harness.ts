@@ -320,7 +320,8 @@ async function directTreeIntent(): Promise<ReceiveIntent> {
     reservationId: identity(5),
     artifact,
     authorityRef: identity(6, 32),
-    reservedName: PRIVATE_FIXTURE_NAME,
+    logicalReservedName: PRIVATE_FIXTURE_NAME,
+    physicalName: PRIVATE_FIXTURE_NAME,
     collisionIndex: 0,
   })
   return createReceiveIntent({

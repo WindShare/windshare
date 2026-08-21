@@ -29,6 +29,7 @@ import {
   waitForIndexedDbTransaction,
 } from './v2-indexeddb-transaction'
 import {
+  isSameCommittedGeneration,
   requireCachedFailure,
   snapshotCachedFailure,
   snapshotDirectory,
@@ -173,6 +174,51 @@ export class IndexedDbV2CatalogPageStore implements V2CatalogPageStore {
       ),
     )
     return record?.page
+  }
+
+  async hasCommittedName(directory: V2CommittedDirectory, name: string): Promise<boolean> {
+    this.#requireOpen()
+    const portableNameKey = catalogNameCollisionKey(name)
+    const transaction = this.#database.transaction(
+      [CATALOG_DIRECTORY_STORE, CATALOG_PAGE_STORE],
+      'readonly',
+    )
+    const completion = waitForIndexedDbTransaction(transaction)
+    const directories = transaction.objectStore(CATALOG_DIRECTORY_STORE)
+    const pages = transaction.objectStore(CATALOG_PAGE_STORE)
+    try {
+      const [committed, pageKey] = await Promise.all([
+        requestResult<StoredDirectoryState | undefined>(
+          directories.get(this.#directoryKey(directory.directoryIdText)),
+        ),
+        // The key proves indexed membership without cloning a potentially large page payload.
+        requestResult<IDBValidKey | undefined>(
+          pages.index(NAME_OWNER_INDEX).getKey([
+            this.#shareInstanceId,
+            directory.directoryIdText,
+            portableNameKey,
+          ] satisfies NameOwnerKey),
+        ),
+      ])
+      await completion
+      if (
+        committed === undefined ||
+        committed.kind !== 'committed' ||
+        committed.pathPolicy !== V2_PATH_POLICY ||
+        !isSameCommittedGeneration(committed, directory)
+      ) throw committedGenerationUnavailable()
+      if (pageKey === undefined) return false
+      if (!isPageKeyForGeneration(pageKey, this.#shareInstanceId, directory)) {
+        throw new V2CatalogPageStoreError(
+          'local-storage',
+          'Catalog name-owner index does not belong to the committed generation',
+        )
+      }
+      return true
+    } catch (error) {
+      await completion.catch(() => undefined)
+      throw error
+    }
   }
 
   async begin(directoryIdText: string): Promise<void> {
@@ -505,6 +551,25 @@ function abortTransaction(transaction: IDBTransaction): void {
   } catch {
     // Completion or an IndexedDB failure may already have made it inactive.
   }
+}
+
+function isPageKeyForGeneration(
+  value: IDBValidKey,
+  shareInstanceId: string,
+  directory: V2CommittedDirectory,
+): value is PageOwnerKey {
+  return Array.isArray(value) && value.length === 4 &&
+    value[0] === shareInstanceId &&
+    value[1] === directory.directoryIdText &&
+    value[2] === directory.generationText &&
+    Number.isSafeInteger(value[3])
+}
+
+function committedGenerationUnavailable(): V2CatalogPageStoreError {
+  return new V2CatalogPageStoreError(
+    'local-storage',
+    'Catalog directory generation is no longer committed',
+  )
 }
 
 function ownershipFailure(message: string): V2CatalogPageStoreError {

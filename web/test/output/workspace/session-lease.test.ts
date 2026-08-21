@@ -106,6 +106,29 @@ describe('browser receive operation lease', () => {
     })
     await lease.release()
   })
+
+  it('injects only the acquisition commit while heartbeats keep the ordinary repository path', async () => {
+    const operationId = identity(16, 9)
+    const repository = new MemoryRepository()
+    const acquisitionTransitions: ReceiveOperationTransition[] = []
+    const lease = await acquireBrowserReceiveOperationLease(repository, operationId, {
+      manager: lockManager(true),
+      clock: { now: () => 400 },
+      randomBytes: length => new Uint8Array(length).fill(10),
+      acquisitionTransitionCommitter: {
+        commitAcquisitionTransition: async (transition) => {
+          acquisitionTransitions.push(transition)
+          await repository.commitTransition(transition)
+        },
+      },
+    })
+
+    expect(acquisitionTransitions).toHaveLength(1)
+    await lease.heartbeat()
+    expect(acquisitionTransitions).toHaveLength(1)
+    expect(repository.transitions).toHaveLength(2)
+    await lease.release()
+  })
 })
 
 class MemoryRepository implements ReceiveOperationRepository {

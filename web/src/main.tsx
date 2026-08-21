@@ -52,6 +52,7 @@ const receiveComposition = createBrowserReceiveComposition(
   {
     resumeMutations: receiveMutations,
     outputTrace,
+    localOutputFailures: diagnostics.localOutputFailures,
   },
 )
 const gateway = new V2BrowserReceiverGateway({
