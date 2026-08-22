@@ -122,7 +122,6 @@ Reuse protocol session/operation IDs and add a stable capacity decision ID. Diag
 - Native receiver tests: hinted backoff, cancellation, successful retry, resumable pause, and unchanged file-error counts.
 - Browser tests: the same retry, pause, and accounting semantics as the native receiver.
 - One synthetic cross-layer case that rapidly settles more than 256 tiny files, using in-memory stable sources to avoid slowing normal local tests.
-- Update `docs/协议规范.md` so grace retention, pressure reclamation, retryable capacity, and the best-effort recovery trade-off match the implementation.
 
 Run focused Go and web gates during each layer, then run `make ci-parallel` after all code and documentation changes.
 
