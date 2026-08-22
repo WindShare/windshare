@@ -63,7 +63,10 @@ type DirectTreeIntent = ReceiveIntent & Readonly<{
 }>
 
 type FreshPageDiscardLifecycle =
-  | Extract<ReceiveLifecycleState, { readonly kind: 'resumable-receive' }>
+  | Extract<ReceiveLifecycleState, {
+      readonly kind: 'resumable-receive'
+      readonly payloadKind: 'file-set'
+    }>
   | Extract<ReceiveLifecycleState, { readonly kind: 'expired' }>
 
 export interface ReopenedFileSystemAccessDiscardOperation {
@@ -549,7 +552,7 @@ class FreshPageDiscardLifecycleAuthority {
   }
 
   #requireDiscardLifecycle(state: ReceiveLifecycleState): FreshPageDiscardLifecycle {
-    if (state.kind === 'resumable-receive') {
+    if (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') {
       if (this.#now() >= state.expiresAt) {
         throw new DOMException(
           'Elapsed DirectTree retention must be persisted as Expired before cleanup',
@@ -714,7 +717,7 @@ async function requireDirectTreeIntent(input: ReceiveIntent): Promise<DirectTree
       intent.plan.reservation.guarantees.profile !== 'fsa-tree' ||
       intent.plan.reservation.guarantees.delivery !== 'managed-target' ||
       intent.plan.reservation.guarantees.replacement !== 'coordinated-no-replace' ||
-      intent.plan.reservation.guarantees.visibility !== 'prefix-visible') {
+      intent.plan.reservation.guarantees.targetVisibility !== 'committed-objects-visible') {
     throw new TypeError('Fresh-page FSA discard requires the frozen FSA DirectTree guarantees')
   }
   return intent as DirectTreeIntent

@@ -1,0 +1,494 @@
+{
+  "version": 1,
+  "kind": "receive-intent-v3",
+  "description": "Receiver-local ReceiveIntentV3 values for portable materialization families. Direct resumable ZIP is intentionally absent because exact reviewed runtime support is receiver-local, not cross-runtime vector authority.",
+  "cases": [
+    {
+      "artifact": {
+        "kind": "directory-tree",
+        "layout": {
+          "kind": "catalog-root"
+        }
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQIAAAAAAAAAAQM",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEA",
+        "artifactChoiceId": "SkM7gbPiETBKx4Xlx84V9Ak7Qw8xqleb70cGLI9GAiU",
+        "artifactDigest": "kSWdrArVphagDw9wJS2ZFj7k5QmUM8C0xUqEazKVlFk",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAEBAAAAAAAAABBgYWJjZGVmZ2hpamtsbW5vAAAAAAAAABBwcXJzdHV2d3h5ent8fX5_AAAAAAAAACCRJZ2sCtWmFqAPD3AlLZkWPuTlCZQzwLTFSoRrMpWUWQAAAAAAAAABAQAAAAAAAAAggIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8AAAAAAAAAPwAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAg",
+        "bindingDigest": "bdxV72HHNOGzC5K7p2yp8yv_l-473BOZRSI9TOXSwqI",
+        "operationId": "YGFiY2RlZmdoaWprbG1ubw",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEBAAAAAAAAAPd3aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjMAAQEAAAAAAAAAEGBhYmNkZWZnaGlqa2xtbm8AAAAAAAAAEHBxcnN0dXZ3eHl6e3x9fn8AAAAAAAAAIJElnawK1aYWoA8PcCUtmRY-5OUJlDPAtMVKhGsylZRZAAAAAAAAAAEBAAAAAAAAACCAgYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2enwAAAAAAAAA_AAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAEA",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAu3dpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAAQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAAQEAAAAAAAAAAQIAAAAAAAAAEEBBQkNERUZHSElKS0xNTk8AAAAAAAAAAQAAAAAAAAAAJndpbmRzaGFyZS9hcnRpZmFjdC1zcGVjL3YxAAECAAAAAAAAAAEDAAAAAAAAASx3aW5kc2hhcmUvbWF0ZXJpYWxpemF0aW9uLXBsYW4vdjMAAQEAAAAAAAAA93dpbmRzaGFyZS9kZXN0aW5hdGlvbi1yZXNlcnZhdGlvbi92MwABAQAAAAAAAAAQYGFiY2RlZmdoaWprbG1ubwAAAAAAAAAQcHFyc3R1dnd4eXp7fH1-fwAAAAAAAAAgkSWdrArVphagDw9wJS2ZFj7k5QmUM8C0xUqEazKVlFkAAAAAAAAAAQEAAAAAAAAAIICBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6fAAAAAAAAAD8AAAAAAAAAAQEAAAAAAAAAAQEAAAAAAAAAAQEAAAAAAAAAAQEAAAAAAAAAAQIAAAAAAAAAAQIAAAAAAAAAAQIAAAAAAAAAAQA",
+        "receiveIntentDigest": "mBI-pxo-jENVBaGaVirfO5zOAxsfGcPDD-3qV2XDNbY",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQEAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAABAQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAAQQEFCQ0RFRkdISUpLTE1OTwAAAAAAAAABAA",
+        "selectionDigest": "M_H-GAxajUVQ5qrwQqwro6Z0C4ZVaPHW_hoeOpAKFB8"
+      },
+      "name": "catalog-root-direct-tree",
+      "plan": {
+        "kind": "direct-tree",
+        "preparation": "none",
+        "reservation": {
+          "authorityKind": "native-container",
+          "authorityRef": "gIGCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp8",
+          "guarantees": {
+            "artifactAvailability": "committed-objects-usable",
+            "cleanupAuthority": "no-whole-target-rollback",
+            "delivery": "managed-target",
+            "nameAuthority": "application-chosen",
+            "profile": "native-tree",
+            "replacement": "atomic-no-replace",
+            "targetVisibility": "committed-objects-visible"
+          },
+          "kind": "container-root",
+          "operationId": "YGFiY2RlZmdoaWprbG1ubw",
+          "reservationId": "cHFyc3R1dnd4eXp7fH1-fw"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "node-id",
+          "rules": [
+            {
+              "id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+              "kind": "directory",
+              "selected": true
+            },
+            {
+              "id": "QEFCQ0RFRkdISUpLTE1OTw",
+              "kind": "file",
+              "selected": false
+            }
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "kind": "directory-tree",
+        "layout": {
+          "fileId": "QUJDREVGR0hJSktMTU5PUA",
+          "kind": "single-file",
+          "outputName": "report.txt",
+          "sourcePath": "docs/report.txt"
+        }
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQIAAAAAAAAAWQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEA",
+        "artifactChoiceId": "-86w08pqFaptJgI-X9JzUnSOzb0QnqVXosmk1Mp6hYo",
+        "artifactDigest": "5Jwbzu8b4_LYnLlphFxaRgiOemLmqMj67hEHuKAcf_A",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAECAAAAAAAAABBhYmNkZWZnaGlqa2xtbm9wAAAAAAAAABBxcnN0dXZ3eHl6e3x9fn-AAAAAAAAAACDknBvO7xvj8ticuWmEXFpGCI56YuaoyPruEQe4oBx_8AAAAAAAAAABAgAAAAAAAAAggYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6AAAAAAAAAAPwAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAVcmVwb3J0LWVhYmFjZTc4YTgudHh0AAAAAAAAABdyZXBvcnQud2luZHNoYXJlLWFiY2RlZgAAAAAAAAAEAAAAAQ",
+        "bindingDigest": "HikuLjtLhUZo8E8JF1lJgRmubt57k6LeUGyD-es9raY",
+        "operationId": "YWJjZGVmZ2hpamtsbW5vcA",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEBAAAAAAAAAVp3aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjMAAQIAAAAAAAAAEGFiY2RlZmdoaWprbG1ub3AAAAAAAAAAEHFyc3R1dnd4eXp7fH1-f4AAAAAAAAAAIOScG87vG-Py2Jy5aYRcWkYIjnpi5qjI-u4RB7igHH_wAAAAAAAAAAECAAAAAAAAACCBgoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foAAAAAAAAAA_AAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAABVyZXBvcnQtZWFiYWNlNzhhOC50eHQAAAAAAAAAF3JlcG9ydC53aW5kc2hhcmUtYWJjZGVmAAAAAAAAAAQAAAABAAAAAAAAAAEA",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAjHdpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAECAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAD2RvY3MvcmVwb3J0LnR4dAAAAAAAAAAGcGhvdG9zAAAAAAAAAH53aW5kc2hhcmUvYXJ0aWZhY3Qtc3BlYy92MQABAgAAAAAAAABZAQAAAAAAAAAQQUJDREVGR0hJSktMTU5PUAAAAAAAAAAmAAAAAAAAAAIAAAAAAAAABGRvY3MAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAACnJlcG9ydC50eHQAAAAAAAABj3dpbmRzaGFyZS9tYXRlcmlhbGl6YXRpb24tcGxhbi92MwABAQAAAAAAAAFad2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAECAAAAAAAAABBhYmNkZWZnaGlqa2xtbm9wAAAAAAAAABBxcnN0dXZ3eHl6e3x9fn-AAAAAAAAAACDknBvO7xvj8ticuWmEXFpGCI56YuaoyPruEQe4oBx_8AAAAAAAAAABAgAAAAAAAAAggYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6AAAAAAAAAAPwAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAVcmVwb3J0LWVhYmFjZTc4YTgudHh0AAAAAAAAABdyZXBvcnQud2luZHNoYXJlLWFiY2RlZgAAAAAAAAAEAAAAAQAAAAAAAAABAA",
+        "receiveIntentDigest": "os3qUKRayblq5J1h1JZPgTLNg156LUGLyaO-ToU2I0M",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAAPZG9jcy9yZXBvcnQudHh0AAAAAAAAAAZwaG90b3M",
+        "selectionDigest": "osjKZfS8adSJjGAaWDRIO-Nwag5aOHNDt8l-Ige-N6c"
+      },
+      "name": "single-file-fsa-direct-tree",
+      "plan": {
+        "kind": "direct-tree",
+        "preparation": "none",
+        "reservation": {
+          "authorityKind": "fsa-container",
+          "authorityRef": "gYKDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6A",
+          "collisionIndex": 1,
+          "entryKind": "single-file",
+          "guarantees": {
+            "artifactAvailability": "committed-objects-usable",
+            "cleanupAuthority": "no-whole-target-rollback",
+            "delivery": "managed-target",
+            "nameAuthority": "application-chosen",
+            "profile": "fsa-tree",
+            "replacement": "coordinated-no-replace",
+            "targetVisibility": "committed-objects-visible"
+          },
+          "kind": "named-container-entry",
+          "logicalReservedName": "report-eabace78a8.txt",
+          "operationId": "YWJjZGVmZ2hpamtsbW5vcA",
+          "physicalName": "report.windshare-abcdef",
+          "requestedName": "report.txt",
+          "reservationId": "cXJzdHV2d3h5ent8fX5_gA"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "catalog-path",
+          "paths": [
+            "photos",
+            "docs/report.txt"
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "kind": "directory-tree",
+        "layout": {
+          "kind": "result-root",
+          "root": {
+            "anchor": {
+              "directoryId": "MDEyMzQ1Njc4OTo7PD0-Pw",
+              "kind": "directory",
+              "sourcePath": "docs"
+            },
+            "class": "directory-selection",
+            "name": "docs-selection"
+          }
+        }
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQIAAAAAAAAAhgIAAAAAAAAAfXdpbmRzaGFyZS9yZXN1bHQtcm9vdC1sYXlvdXQvdjEAAQAAAAAAAAABAgAAAAAAAAA1AQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAAUAAAAAAAAAAEAAAAAAAAABGRvY3MAAAAAAAAADmRvY3Mtc2VsZWN0aW9u",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEA",
+        "artifactChoiceId": "-86w08pqFaptJgI-X9JzUnSOzb0QnqVXosmk1Mp6hYo",
+        "artifactDigest": "aogbrtvtud-JQbBrZBtPY6nTSZ6mASuhG5TBQkUqNOQ",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAECAAAAAAAAABBiY2RlZmdoaWprbG1ub3BxAAAAAAAAABByc3R1dnd4eXp7fH1-f4CBAAAAAAAAACBqiBuu2-2534lBsGtkG09jqdNJnqYBK6EblMFCRSo05AAAAAAAAAABAgAAAAAAAAAggoOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKEAAAAAAAAAPwAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAABAgAAAAAAAAAOZG9jcy1zZWxlY3Rpb24AAAAAAAAADmRvY3Mtc2VsZWN0aW9uAAAAAAAAAA5kb2NzLXNlbGVjdGlvbgAAAAAAAAAEAAAAAA",
+        "bindingDigest": "14DesZ_BFx1UwINZ6xvxY1hrzAiucrhpgPcT5yIfDWg",
+        "operationId": "YmNkZWZnaGlqa2xtbm9wcQ",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEBAAAAAAAAAU53aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjMAAQIAAAAAAAAAEGJjZGVmZ2hpamtsbW5vcHEAAAAAAAAAEHJzdHV2d3h5ent8fX5_gIEAAAAAAAAAIGqIG67b7bnfiUGwa2QbT2Op00mepgEroRuUwUJFKjTkAAAAAAAAAAECAAAAAAAAACCCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goQAAAAAAAAA_AAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAA5kb2NzLXNlbGVjdGlvbgAAAAAAAAAOZG9jcy1zZWxlY3Rpb24AAAAAAAAADmRvY3Mtc2VsZWN0aW9uAAAAAAAAAAQAAAAAAAAAAAAAAAEA",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAu3dpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAAQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAAQEAAAAAAAAAAQIAAAAAAAAAEEBBQkNERUZHSElKS0xNTk8AAAAAAAAAAQAAAAAAAAAAq3dpbmRzaGFyZS9hcnRpZmFjdC1zcGVjL3YxAAECAAAAAAAAAIYCAAAAAAAAAH13aW5kc2hhcmUvcmVzdWx0LXJvb3QtbGF5b3V0L3YxAAEAAAAAAAAAAQIAAAAAAAAANQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAFAAAAAAAAAABAAAAAAAAAARkb2NzAAAAAAAAAA5kb2NzLXNlbGVjdGlvbgAAAAAAAAGDd2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEBAAAAAAAAAU53aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjMAAQIAAAAAAAAAEGJjZGVmZ2hpamtsbW5vcHEAAAAAAAAAEHJzdHV2d3h5ent8fX5_gIEAAAAAAAAAIGqIG67b7bnfiUGwa2QbT2Op00mepgEroRuUwUJFKjTkAAAAAAAAAAECAAAAAAAAACCCg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goQAAAAAAAAA_AAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAAECAAAAAAAAAA5kb2NzLXNlbGVjdGlvbgAAAAAAAAAOZG9jcy1zZWxlY3Rpb24AAAAAAAAADmRvY3Mtc2VsZWN0aW9uAAAAAAAAAAQAAAAAAAAAAAAAAAEA",
+        "receiveIntentDigest": "-bee5P0YoH2jijeRvB3SSiSiZdxtIBYnhIeY1OsyvFY",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQEAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAABAQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAAQQEFCQ0RFRkdISUpLTE1OTwAAAAAAAAABAA",
+        "selectionDigest": "M_H-GAxajUVQ5qrwQqwro6Z0C4ZVaPHW_hoeOpAKFB8"
+      },
+      "name": "result-root-fsa-direct-tree",
+      "plan": {
+        "kind": "direct-tree",
+        "preparation": "none",
+        "reservation": {
+          "authorityKind": "fsa-container",
+          "authorityRef": "goOEhYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKE",
+          "collisionIndex": 0,
+          "entryKind": "result-root",
+          "guarantees": {
+            "artifactAvailability": "committed-objects-usable",
+            "cleanupAuthority": "no-whole-target-rollback",
+            "delivery": "managed-target",
+            "nameAuthority": "application-chosen",
+            "profile": "fsa-tree",
+            "replacement": "coordinated-no-replace",
+            "targetVisibility": "committed-objects-visible"
+          },
+          "kind": "named-container-entry",
+          "logicalReservedName": "docs-selection",
+          "operationId": "YmNkZWZnaGlqa2xtbm9wcQ",
+          "physicalName": "docs-selection",
+          "requestedName": "docs-selection",
+          "reservationId": "cnN0dXZ3eHl6e3x9fn-AgQ"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "node-id",
+          "rules": [
+            {
+              "id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+              "kind": "directory",
+              "selected": true
+            },
+            {
+              "id": "QEFCQ0RFRkdISUpLTE1OTw",
+              "kind": "file",
+              "selected": false
+            }
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "fileId": "QUJDREVGR0hJSktMTU5PUA",
+        "kind": "original-file",
+        "sourcePath": "docs/report.txt",
+        "suggestedName": "report.txt"
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEDAAAAAAAAAAEA",
+        "artifactChoiceId": "dcQ_3FoLv3QOsDlvHjo4HBPWs4evMgjqlxwyqF6XVCY",
+        "artifactDigest": "aBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBY",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAEDAAAAAAAAABBjZGVmZ2hpamtsbW5vcHFyAAAAAAAAABBzdHV2d3h5ent8fX5_gIGCAAAAAAAAACBoG0c_mXIlkANww-5N95Vek9uZHFFyTmV9qvfjFB5QFgAAAAAAAAABAwAAAAAAAAAgg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaIAAAAAAAAAPwAAAAAAAAABAwAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAEAAAAAA",
+        "bindingDigest": "3wFYuIT8EiK2TEml9JJRz3Zz8dbf_9og743OpXxMsq8",
+        "operationId": "Y2RlZmdoaWprbG1ub3Bxcg",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAECAAAAAAAAASd3aW5kc2hhcmUvZGVzdGluYXRpb24tcmVzZXJ2YXRpb24vdjMAAQMAAAAAAAAAEGNkZWZnaGlqa2xtbm9wcXIAAAAAAAAAEHN0dXZ3eHl6e3x9fn-AgYIAAAAAAAAAIGgbRz-ZciWQA3DD7k33lV6T25kcUXJOZX2q9-MUHlAWAAAAAAAAAAEDAAAAAAAAACCDhIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChogAAAAAAAAA_AAAAAAAAAAEDAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAAQAAAAAAAAAAAAAAAEA",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAjHdpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAECAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAD2RvY3MvcmVwb3J0LnR4dAAAAAAAAAAGcGhvdG9zAAAAAAAAAHV3aW5kc2hhcmUvYXJ0aWZhY3Qtc3BlYy92MQABAQAAAAAAAAAQQUJDREVGR0hJSktMTU5PUAAAAAAAAAAmAAAAAAAAAAIAAAAAAAAABGRvY3MAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAACnJlcG9ydC50eHQAAAAAAAABXHdpbmRzaGFyZS9tYXRlcmlhbGl6YXRpb24tcGxhbi92MwABAgAAAAAAAAEnd2luZHNoYXJlL2Rlc3RpbmF0aW9uLXJlc2VydmF0aW9uL3YzAAEDAAAAAAAAABBjZGVmZ2hpamtsbW5vcHFyAAAAAAAAABBzdHV2d3h5ent8fX5_gIGCAAAAAAAAACBoG0c_mXIlkANww-5N95Vek9uZHFFyTmV9qvfjFB5QFgAAAAAAAAABAwAAAAAAAAAgg4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaIAAAAAAAAAPwAAAAAAAAABAwAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAKcmVwb3J0LnR4dAAAAAAAAAAEAAAAAAAAAAAAAAABAA",
+        "receiveIntentDigest": "53O7wveXjKPIuyM21JoPCbU2cNt6lm_j-d1N9LX9nFU",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAAPZG9jcy9yZXBvcnQudHh0AAAAAAAAAAZwaG90b3M",
+        "selectionDigest": "osjKZfS8adSJjGAaWDRIO-Nwag5aOHNDt8l-Ige-N6c"
+      },
+      "name": "original-file-direct-atomic",
+      "plan": {
+        "kind": "direct-atomic",
+        "preparation": "none",
+        "reservation": {
+          "authorityKind": "managed-atomic-target",
+          "authorityRef": "g4SFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaI",
+          "collisionIndex": 0,
+          "guarantees": {
+            "artifactAvailability": "verified-complete-only",
+            "cleanupAuthority": "rollback-to-absent-before-publication",
+            "delivery": "managed-target",
+            "nameAuthority": "application-chosen",
+            "profile": "managed-atomic",
+            "replacement": "atomic-no-replace",
+            "targetVisibility": "hidden-until-verified-publication"
+          },
+          "kind": "atomic-target",
+          "operationId": "Y2RlZmdoaWprbG1ub3Bxcg",
+          "requestedName": "report.txt",
+          "reservationId": "c3R1dnd4eXp7fH1-f4CBgg",
+          "reservedName": "report.txt"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "catalog-path",
+          "paths": [
+            "photos",
+            "docs/report.txt"
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "fileId": "QUJDREVGR0hJSktMTU5PUA",
+        "kind": "original-file",
+        "sourcePath": "docs/report.txt",
+        "suggestedName": "report.txt"
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEA",
+        "artifactChoiceId": "Dvbx-UlDN2_rNykBcKT0U_8JC_fYgSLi4DKuf4wKHes",
+        "artifactDigest": "aBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBY",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL3dvcmtzcGFjZS1iaW5kaW5nL3YxAAEAAAAAAAAAEGVmZ2hpamtsbW5vcHFyc3QAAAAAAAAAEHV2d3h5ent8fX5_gIGCg4QAAAAAAAAAIGgbRz-ZciWQA3DD7k33lV6T25kcUXJOZX2q9-MUHlAWAAAAAAAAACCFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaKjpAAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQ",
+        "bindingDigest": "3I78CBPKRhq2B7BM1CUCQpsiLy9weg4rolcGYfXYjfs",
+        "operationId": "ZWZnaGlqa2xtbm9wcXJzdA",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEDAAAAAAAAALt3aW5kc2hhcmUvd29ya3NwYWNlLWJpbmRpbmcvdjEAAQAAAAAAAAAQZWZnaGlqa2xtbm9wcXJzdAAAAAAAAAAQdXZ3eHl6e3x9fn-AgYKDhAAAAAAAAAAgaBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBYAAAAAAAAAIIWGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEEAAAAAAAAAAEA",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAjHdpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAECAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAD2RvY3MvcmVwb3J0LnR4dAAAAAAAAAAGcGhvdG9zAAAAAAAAAHV3aW5kc2hhcmUvYXJ0aWZhY3Qtc3BlYy92MQABAQAAAAAAAAAQQUJDREVGR0hJSktMTU5PUAAAAAAAAAAmAAAAAAAAAAIAAAAAAAAABGRvY3MAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAA-XdpbmRzaGFyZS9tYXRlcmlhbGl6YXRpb24tcGxhbi92MwABAwAAAAAAAAC7d2luZHNoYXJlL3dvcmtzcGFjZS1iaW5kaW5nL3YxAAEAAAAAAAAAEGVmZ2hpamtsbW5vcHFyc3QAAAAAAAAAEHV2d3h5ent8fX5_gIGCg4QAAAAAAAAAIGgbRz-ZciWQA3DD7k33lV6T25kcUXJOZX2q9-MUHlAWAAAAAAAAACCFhoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaKjpAAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABBAAAAAAAAAABAA",
+        "receiveIntentDigest": "Gn9DdDHPiXu7KKmJ7ITqR-6glj7IsTzCsj5XRqIRoUs",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAAPZG9jcy9yZXBvcnQudHh0AAAAAAAAAAZwaG90b3M",
+        "selectionDigest": "osjKZfS8adSJjGAaWDRIO-Nwag5aOHNDt8l-Ige-N6c"
+      },
+      "name": "original-file-workspace",
+      "plan": {
+        "kind": "workspace-then-publish",
+        "preparation": "none",
+        "publicationGuarantee": "browser-handoff",
+        "workspace": {
+          "budgetPolicy": "workspace-v1",
+          "operationId": "ZWZnaGlqa2xtbm9wcXJzdA",
+          "repositoryRef": "hYaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGio6Q",
+          "retentionPolicy": "stable-24h-v1",
+          "workspaceId": "dXZ3eHl6e3x9fn-AgYKDhA",
+          "workspaceKind": "origin-private"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "catalog-path",
+          "paths": [
+            "photos",
+            "docs/report.txt"
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "completeness": "complete-only",
+        "encoding": "store",
+        "kind": "zip-archive",
+        "layout": {
+          "anchor": {
+            "kind": "synthetic-root"
+          },
+          "class": "synthetic-selection",
+          "name": "windshare"
+        },
+        "suggestedName": "windshare.zip"
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQMAAAAAAAAARHdpbmRzaGFyZS9yZXN1bHQtcm9vdC1sYXlvdXQvdjEAAQAAAAAAAAABAwAAAAAAAAABAgAAAAAAAAAJd2luZHNoYXJlAAAAAAAAAA13aW5kc2hhcmUuemlwAAAAAAAAAAEBAAAAAAAAAAEB",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEB",
+        "artifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
+        "artifactDigest": "5Pkwgr9oOXx4pfouOQ0FFbFgb_VYTCGJVz7dwzMZZe0",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL3dvcmtzcGFjZS1iaW5kaW5nL3YxAAEAAAAAAAAAEGZnaGlqa2xtbm9wcXJzdHUAAAAAAAAAEHZ3eHl6e3x9fn-AgYKDhIUAAAAAAAAAIOT5MIK_aDl8eKX6LjkNBRWxYG_1WEwhiVc-3cMzGWXtAAAAAAAAACCGh4iJiouMjY6PkJGSk5SVlpeYmZqbnJ2en6ChoqOkpQAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAABAQ",
+        "bindingDigest": "uqdfJ0hfTwEkUniGCodoAFcIZleIwFwNR4fptJ3UmaI",
+        "operationId": "ZmdoaWprbG1ub3BxcnN0dQ",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEDAAAAAAAAALt3aW5kc2hhcmUvd29ya3NwYWNlLWJpbmRpbmcvdjEAAQAAAAAAAAAQZmdoaWprbG1ub3BxcnN0dQAAAAAAAAAQdnd4eXp7fH1-f4CBgoOEhQAAAAAAAAAg5Pkwgr9oOXx4pfouOQ0FFbFgb_VYTCGJVz7dwzMZZe0AAAAAAAAAIIaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGio6SlAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEEAAAAAAAAAAEB",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAu3dpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAAQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAAQEAAAAAAAAAAQIAAAAAAAAAEEBBQkNERUZHSElKS0xNTk8AAAAAAAAAAQAAAAAAAAAAkHdpbmRzaGFyZS9hcnRpZmFjdC1zcGVjL3YxAAEDAAAAAAAAAER3aW5kc2hhcmUvcmVzdWx0LXJvb3QtbGF5b3V0L3YxAAEAAAAAAAAAAQMAAAAAAAAAAQIAAAAAAAAACXdpbmRzaGFyZQAAAAAAAAANd2luZHNoYXJlLnppcAAAAAAAAAABAQAAAAAAAAABAQAAAAAAAAD5d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEDAAAAAAAAALt3aW5kc2hhcmUvd29ya3NwYWNlLWJpbmRpbmcvdjEAAQAAAAAAAAAQZmdoaWprbG1ub3BxcnN0dQAAAAAAAAAQdnd4eXp7fH1-f4CBgoOEhQAAAAAAAAAg5Pkwgr9oOXx4pfouOQ0FFbFgb_VYTCGJVz7dwzMZZe0AAAAAAAAAIIaHiImKi4yNjo-QkZKTlJWWl5iZmpucnZ6foKGio6SlAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEEAAAAAAAAAAEB",
+        "receiveIntentDigest": "1VxfEkTs16MTE8rI9vxPUnnBo0myq6QKdBmGIrip0_I",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQEAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAABAQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAAQQEFCQ0RFRkdISUpLTE1OTwAAAAAAAAABAA",
+        "selectionDigest": "M_H-GAxajUVQ5qrwQqwro6Z0C4ZVaPHW_hoeOpAKFB8"
+      },
+      "name": "zip-archive-workspace",
+      "plan": {
+        "kind": "workspace-then-publish",
+        "preparation": "exact-zip",
+        "publicationGuarantee": "browser-handoff",
+        "workspace": {
+          "budgetPolicy": "workspace-v1",
+          "operationId": "ZmdoaWprbG1ub3BxcnN0dQ",
+          "repositoryRef": "hoeIiYqLjI2Oj5CRkpOUlZaXmJmam5ydnp-goaKjpKU",
+          "retentionPolicy": "stable-24h-v1",
+          "workspaceId": "dnd4eXp7fH1-f4CBgoOEhQ",
+          "workspaceKind": "origin-private"
+        }
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "node-id",
+          "rules": [
+            {
+              "id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+              "kind": "directory",
+              "selected": true
+            },
+            {
+              "id": "QEFCQ0RFRkdISUpLTE1OTw",
+              "kind": "file",
+              "selected": false
+            }
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "fileId": "QUJDREVGR0hJSktMTU5PUA",
+        "kind": "original-file",
+        "sourcePath": "docs/report.txt",
+        "suggestedName": "report.txt"
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQEAAAAAAAAAEEFCQ0RFRkdISUpLTE1OT1AAAAAAAAAAJgAAAAAAAAACAAAAAAAAAARkb2NzAAAAAAAAAApyZXBvcnQudHh0AAAAAAAAAApyZXBvcnQudHh0",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEEAAAAAAAAAAEEAAAAAAAAAAEC",
+        "artifactChoiceId": "LO6AkTh6UNacP3KFqfHH1upv4vJVDXmIMdRcyGm2wEw",
+        "artifactDigest": "aBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBY",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL3BvcnRhYmxlLWJpbmRpbmcvdjEAAQAAAAAAAAAQZ2hpamtsbW5vcHFyc3R1dgAAAAAAAAAQd3h5ent8fX5_gIGCg4SFhgAAAAAAAAAgaBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBYAAAAAAAAACAAAAAAEAAAAAAAAAAAAAAgAAAAAABAAAAAAAAAAAAAIAAAAAAAAAEAAAAAAAAAACAAAAAAAAOpgAAAAAAAAAAEC",
+        "bindingDigest": "byQEVNDW1W-GQdckaFTQIfps9-aluT0ojIbFegufLB8",
+        "operationId": "Z2hpamtsbW5vcHFyc3R1dg",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEEAAAAAAAAAMB3aW5kc2hhcmUvcG9ydGFibGUtYmluZGluZy92MQABAAAAAAAAABBnaGlqa2xtbm9wcXJzdHV2AAAAAAAAABB3eHl6e3x9fn-AgYKDhIWGAAAAAAAAACBoG0c_mXIlkANww-5N95Vek9uZHFFyTmV9qvfjFB5QFgAAAAAAAAAIAAAAAAQAAAAAAAAAAAAACAAAAAAAEAAAAAAAAAAAAAgAAAAAAAAAQAAAAAAAAAAIAAAAAAAA6mAAAAAAAAAAAQIAAAAAAAAAAQQAAAAAAAAAAQI",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAjHdpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAECAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAD2RvY3MvcmVwb3J0LnR4dAAAAAAAAAAGcGhvdG9zAAAAAAAAAHV3aW5kc2hhcmUvYXJ0aWZhY3Qtc3BlYy92MQABAQAAAAAAAAAQQUJDREVGR0hJSktMTU5PUAAAAAAAAAAmAAAAAAAAAAIAAAAAAAAABGRvY3MAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAACnJlcG9ydC50eHQAAAAAAAAA_ndpbmRzaGFyZS9tYXRlcmlhbGl6YXRpb24tcGxhbi92MwABBAAAAAAAAADAd2luZHNoYXJlL3BvcnRhYmxlLWJpbmRpbmcvdjEAAQAAAAAAAAAQZ2hpamtsbW5vcHFyc3R1dgAAAAAAAAAQd3h5ent8fX5_gIGCg4SFhgAAAAAAAAAgaBtHP5lyJZADcMPuTfeVXpPbmRxRck5lfar34xQeUBYAAAAAAAAACAAAAAAEAAAAAAAAAAAAAAgAAAAAABAAAAAAAAAAAAAIAAAAAAAAAEAAAAAAAAAACAAAAAAAAOpgAAAAAAAAAAECAAAAAAAAAAEEAAAAAAAAAAEC",
+        "receiveIntentDigest": "6mo7ao8FyY_iJ8YHasDK5PeHKwxSiC7tGaq8FV5h8uc",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQIAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAAPZG9jcy9yZXBvcnQudHh0AAAAAAAAAAZwaG90b3M",
+        "selectionDigest": "osjKZfS8adSJjGAaWDRIO-Nwag5aOHNDt8l-Ige-N6c"
+      },
+      "name": "original-file-portable",
+      "plan": {
+        "kind": "portable-handoff",
+        "portable": {
+          "assemblyPartBytes": "1048576",
+          "maximumArtifactBytes": "67108864",
+          "maximumParts": "64",
+          "objectUrlLeaseMilliseconds": "60000",
+          "operationId": "Z2hpamtsbW5vcHFyc3R1dg",
+          "portablePlanId": "d3h5ent8fX5_gIGCg4SFhg",
+          "preparation": "exact-artifact"
+        },
+        "preparation": "exact-artifact",
+        "publicationGuarantee": "browser-handoff"
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "catalog-path",
+          "paths": [
+            "photos",
+            "docs/report.txt"
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    },
+    {
+      "artifact": {
+        "completeness": "complete-only",
+        "encoding": "store",
+        "kind": "zip-archive",
+        "layout": {
+          "anchor": {
+            "directoryId": "MDEyMzQ1Njc4OTo7PD0-Pw",
+            "kind": "directory",
+            "sourcePath": "docs"
+          },
+          "class": "directory-selection",
+          "name": "docs-selection"
+        },
+        "suggestedName": "docs-selection.zip"
+      },
+      "expected": {
+        "artifactCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LXNwZWMvdjEAAQMAAAAAAAAAfXdpbmRzaGFyZS9yZXN1bHQtcm9vdC1sYXlvdXQvdjEAAQAAAAAAAAABAgAAAAAAAAA1AQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAAUAAAAAAAAAAEAAAAAAAAABGRvY3MAAAAAAAAADmRvY3Mtc2VsZWN0aW9uAAAAAAAAABJkb2NzLXNlbGVjdGlvbi56aXAAAAAAAAAAAQEAAAAAAAAAAQE",
+        "artifactChoiceCanonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEEAAAAAAAAAAEC",
+        "artifactChoiceId": "g8oXhxfPndjraB0hohXPqNXsUl-DHFN01vqDLc7lLMM",
+        "artifactDigest": "m8kSPweNYfFrzSxqcPGVY33JL4tTiWzXQQ-Bmq5jtjc",
+        "bindingCanonicalBytesB64Url": "d2luZHNoYXJlL3BvcnRhYmxlLWJpbmRpbmcvdjEAAQAAAAAAAAAQaGlqa2xtbm9wcXJzdHV2dwAAAAAAAAAQeHl6e3x9fn-AgYKDhIWGhwAAAAAAAAAgm8kSPweNYfFrzSxqcPGVY33JL4tTiWzXQQ-Bmq5jtjcAAAAAAAAACAAAAAAEAAAAAAAAAAAAAAgAAAAAABAAAAAAAAAAAAAIAAAAAAAAAEAAAAAAAAAACAAAAAAAAOpgAAAAAAAAAAEC",
+        "bindingDigest": "48x-13pNos9aMm7SDv689sQLJG8SfASaRbOz0azlC2k",
+        "operationId": "aGlqa2xtbm9wcXJzdHV2dw",
+        "planCanonicalBytesB64Url": "d2luZHNoYXJlL21hdGVyaWFsaXphdGlvbi1wbGFuL3YzAAEEAAAAAAAAAMB3aW5kc2hhcmUvcG9ydGFibGUtYmluZGluZy92MQABAAAAAAAAABBoaWprbG1ub3BxcnN0dXZ3AAAAAAAAABB4eXp7fH1-f4CBgoOEhYaHAAAAAAAAACCbyRI_B41h8WvNLGpw8ZVjfckvi1OJbNdBD4GarmO2NwAAAAAAAAAIAAAAAAQAAAAAAAAAAAAACAAAAAAAEAAAAAAAAAAAAAgAAAAAAAAAQAAAAAAAAAAIAAAAAAAA6mAAAAAAAAAAAQIAAAAAAAAAAQQAAAAAAAAAAQI",
+        "receiveIntentCanonicalBytesB64Url": "d2luZHNoYXJlL3JlY2VpdmUtaW50ZW50L3YzAAMAAAAAAAAAu3dpbmRzaGFyZS9zZWxlY3Rpb24tc3BlYy92MQABAAAAAAAAABAQERITFBUWFxgZGhscHR4fAAAAAAAAABAgISIjJCUmJygpKissLS4vAAAAAAAAAAEBAAAAAAAAAAEAAAAAAAAAAAIAAAAAAAAAAQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAAQEAAAAAAAAAAQIAAAAAAAAAEEBBQkNERUZHSElKS0xNTk8AAAAAAAAAAQAAAAAAAAAAzndpbmRzaGFyZS9hcnRpZmFjdC1zcGVjL3YxAAEDAAAAAAAAAH13aW5kc2hhcmUvcmVzdWx0LXJvb3QtbGF5b3V0L3YxAAEAAAAAAAAAAQIAAAAAAAAANQEAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAFAAAAAAAAAABAAAAAAAAAARkb2NzAAAAAAAAAA5kb2NzLXNlbGVjdGlvbgAAAAAAAAASZG9jcy1zZWxlY3Rpb24uemlwAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAP53aW5kc2hhcmUvbWF0ZXJpYWxpemF0aW9uLXBsYW4vdjMAAQQAAAAAAAAAwHdpbmRzaGFyZS9wb3J0YWJsZS1iaW5kaW5nL3YxAAEAAAAAAAAAEGhpamtsbW5vcHFyc3R1dncAAAAAAAAAEHh5ent8fX5_gIGCg4SFhocAAAAAAAAAIJvJEj8HjWHxa80sanDxlWN9yS-LU4ls10EPgZquY7Y3AAAAAAAAAAgAAAAABAAAAAAAAAAAAAAIAAAAAAAQAAAAAAAAAAAACAAAAAAAAABAAAAAAAAAAAgAAAAAAADqYAAAAAAAAAABAgAAAAAAAAABBAAAAAAAAAABAg",
+        "receiveIntentDigest": "gPXquFc3zqOKj_S-VnNydZEnH4FEtyhQNQ4vRMXyv8c",
+        "selectionCanonicalBytesB64Url": "d2luZHNoYXJlL3NlbGVjdGlvbi1zcGVjL3YxAAEAAAAAAAAAEBAREhMUFRYXGBkaGxwdHh8AAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAAQEAAAAAAAAAAQAAAAAAAAAAAgAAAAAAAAABAQAAAAAAAAAQMDEyMzQ1Njc4OTo7PD0-PwAAAAAAAAABAQAAAAAAAAABAgAAAAAAAAAQQEFCQ0RFRkdISUpLTE1OTwAAAAAAAAABAA",
+        "selectionDigest": "M_H-GAxajUVQ5qrwQqwro6Z0C4ZVaPHW_hoeOpAKFB8"
+      },
+      "name": "zip-archive-portable",
+      "plan": {
+        "kind": "portable-handoff",
+        "portable": {
+          "assemblyPartBytes": "1048576",
+          "maximumArtifactBytes": "67108864",
+          "maximumParts": "64",
+          "objectUrlLeaseMilliseconds": "60000",
+          "operationId": "aGlqa2xtbm9wcXJzdHV2dw",
+          "portablePlanId": "eHl6e3x9fn-AgYKDhIWGhw",
+          "preparation": "exact-artifact"
+        },
+        "preparation": "exact-artifact",
+        "publicationGuarantee": "browser-handoff"
+      },
+      "selection": {
+        "rules": {
+          "defaultSelected": false,
+          "mode": "node-id",
+          "rules": [
+            {
+              "id": "MDEyMzQ1Njc4OTo7PD0-Pw",
+              "kind": "directory",
+              "selected": true
+            },
+            {
+              "id": "QEFCQ0RFRkdISUpLTE1OTw",
+              "kind": "file",
+              "selected": false
+            }
+          ]
+        },
+        "shareInstance": "EBESExQVFhcYGRobHB0eHw",
+        "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
+      }
+    }
+  ]
+}

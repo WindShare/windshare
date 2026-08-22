@@ -33,6 +33,7 @@ import {
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
+  deriveArtifactChoiceIdentity,
 } from '../../src/transfer/intent'
 import {
   OriginPrivateWorkspaceTree,
@@ -104,6 +105,7 @@ describe('origin-private workspace activation commit cut', () => {
 
     const opening = openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: { getDirectory: async () => parent as unknown as FileSystemDirectoryHandle } as StorageManager & {
         getDirectory(): Promise<FileSystemDirectoryHandle>
@@ -129,6 +131,7 @@ describe('origin-private workspace activation commit cut', () => {
 
     const opening = openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: { getDirectory: async () => parent as unknown as FileSystemDirectoryHandle } as StorageManager & {
         getDirectory(): Promise<FileSystemDirectoryHandle>
@@ -152,6 +155,7 @@ describe('origin-private workspace activation commit cut', () => {
 
     await expect(openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: storageFor(parent),
       randomEntryIdentity: () => identity(94, 32),
@@ -178,6 +182,7 @@ describe('origin-private workspace activation commit cut', () => {
 
     await expect(openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: storageFor(parent),
       randomEntryIdentity: () => identity(96, 32),
@@ -206,6 +211,7 @@ describe('origin-private workspace activation commit cut', () => {
 
     await expect(openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: storageFor(parent),
       signal: abort.signal,
@@ -236,6 +242,7 @@ describe('origin-private workspace activation commit cut', () => {
       parent.afterNextMarkerClose(() => abort.abort('reload cut'))
       await expect(openOriginPrivateWorkspaceNamespace({
         receiveIntent: intent,
+        preClickRanking: await selectedRanking(intent),
         repository,
         storage: storageFor(parent),
         signal: abort.signal,
@@ -261,6 +268,7 @@ describe('origin-private workspace activation commit cut', () => {
     const parent = new NamespaceDirectoryHandle('root', true)
     await expect(openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository,
       storage: storageFor(parent),
       randomEntryIdentity: () => identity(102, 32),
@@ -560,6 +568,10 @@ async function workspaceIntent() {
     artifact,
     plan: await createWorkspaceThenPublishPlan(artifact, workspace),
   })
+}
+
+async function selectedRanking(intent: Awaited<ReturnType<typeof workspaceIntent>>) {
+  return Object.freeze([(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id])
 }
 
 function storageFor(parent: NamespaceDirectoryHandle): StorageManager & {

@@ -12,6 +12,7 @@ import {
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
+  deriveArtifactChoiceIdentity,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import type { BrowserLockManagerRuntime } from '../../src/output/browser/session-lease'
@@ -139,7 +140,12 @@ export async function seedFSAOperationBinding(
   intent: ReceiveIntent,
   parent: FileSystemDirectoryHandle,
 ): Promise<void> {
-  const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+  const prepared = await prepareFSAOperationBindingTransition({
+    repository,
+    intent,
+    parent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+  })
   await repository.commitTransition({
     operationId: intent.operationId,
     ...prepared.transition,
@@ -154,10 +160,11 @@ export function requiredDescriptor(lifecycle: ReceiveLifecycleState, now: number
 
 export function resumableReceive(intent: ReceiveIntent, generation: bigint): Extract<
   ReceiveLifecycleState,
-  { kind: 'resumable-receive' }
+  { kind: 'resumable-receive'; payloadKind: 'file-set' }
 > {
   return Object.freeze({
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
     generation,

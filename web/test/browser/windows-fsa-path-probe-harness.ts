@@ -5,6 +5,7 @@ import {
   createReceiveIntent,
   createResultRootDirectoryTreeArtifact,
   createSelectionSpec,
+  deriveArtifactChoiceIdentity,
   type DirectoryTreeArtifact,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
@@ -295,6 +296,7 @@ async function bindProbe(
       repository,
       intent,
       parent: selectedParent,
+      preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
     })
     await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
     const binding = await verifyFSAOperationBinding({

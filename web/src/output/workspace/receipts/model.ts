@@ -118,6 +118,9 @@ export interface ExpiryReceiptV1 extends ReceiveReceiptBase {
     | 'resumable-package'
     | 'waiting-to-save'
     | 'download-started'
+    | 'authorization-required'
+    | 'target-verification-required'
+    | 'destination-space-required'
   readonly expiresAt: number
   readonly retainedSuccessCount: bigint
   readonly cleanupState: 'clean' | 'cleanup-pending'

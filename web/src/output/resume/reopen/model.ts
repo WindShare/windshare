@@ -21,7 +21,12 @@ import type {
   openOriginPrivateWorkspaceBackend,
 } from '../../origin-private/session'
 import type { PersistentTreeTrace } from '../../persistent-tree/contracts'
-import type { PersistedReceiveRecord, ReceiveOperationV1 } from '../../workspace/records'
+import type {
+  DirectZipCandidateV1,
+  DirectZipCheckpointV1,
+} from '../../direct-zip/journal/model'
+import type { DirectZipJournalRepository } from '../../direct-zip/journal/repository'
+import type { PersistedReceiveRecord, ReceiveOperationV2 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import type { PlanKind, ReceiveLifecycleState } from '../../workspace/state'
 import type {
@@ -46,6 +51,9 @@ export type StableLifecycleKind =
   | 'resumable-package'
   | 'waiting-to-save'
   | 'download-started'
+  | 'authorization-required'
+  | 'target-verification-required'
+  | 'destination-space-required'
 
 export type PersistedReceiveOperationReopenTraceEvent =
   | Readonly<{
@@ -84,7 +92,10 @@ export interface ReopenedReceiveOperationBase {
 export interface ReopenedDirectTreeOperation extends ReopenedReceiveOperationBase {
   readonly kind: 'direct-tree'
   readonly binding: PersistedFSAOperationBinding
-  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }>
 }
 
 export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase {
@@ -95,8 +106,18 @@ export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase
   readonly admittedContent?: AdmittedWorkspaceContent
   readonly preparation?: SealedWorkspaceZipPreparationV1
   readonly receiveContinuation?: ReopenedWorkspaceReceiveContinuation
-  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }>
   readonly packageContinuation?: ReopenedWorkspacePackageContinuation
+}
+
+export interface ReopenedDirectZipOperation extends ReopenedReceiveOperationBase {
+  readonly kind: 'direct-zip'
+  readonly journal: DirectZipJournalRepository
+  readonly checkpoint: DirectZipCheckpointV1
+  readonly candidate?: DirectZipCandidateV1
 }
 
 export interface ReopenedWorkspaceReceiveContinuation {
@@ -107,7 +128,10 @@ export interface ReopenedWorkspaceReceiveContinuation {
   }): Promise<OriginPrivateWorkspaceBackend>
 }
 
-export type ReopenedReceiveOperation = ReopenedDirectTreeOperation | ReopenedWorkspaceOperation
+export type ReopenedReceiveOperation =
+  | ReopenedDirectTreeOperation
+  | ReopenedWorkspaceOperation
+  | ReopenedDirectZipOperation
 
 export class PersistedReceiveOperationDeadlineElapsedError extends DOMException {
   readonly state: Extract<ReceiveLifecycleState, { kind: 'expired' }>
@@ -166,6 +190,7 @@ export type PersistedWorkspaceBudgetReclaim = (
 
 export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly repositoryFactory: () => Promise<ReceiveOperationRepository>
+  readonly openDirectZipJournal?: () => Promise<DirectZipJournalRepository>
   readonly clock?: { now(): number }
   readonly leaseOptions?: LeaseOptions
   readonly acquireLease?: typeof acquireBrowserReceiveOperationLease
@@ -184,9 +209,9 @@ export interface PersistedReceiveOperationReopenAuthorityOptions {
 }
 
 export interface PersistedReopenSnapshot {
-  readonly operation: ReceiveOperationV1
+  readonly operation: ReceiveOperationV2
   readonly operationRecord: PersistedReceiveRecord
-  readonly bindingRecord: PersistedReceiveRecord
+  readonly bindingRecord?: PersistedReceiveRecord
   readonly lifecycle: ReceiveLifecycleState
   readonly lifecycleRecord: PersistedReceiveRecord
 }
@@ -194,6 +219,12 @@ export interface PersistedReopenSnapshot {
 export type ReopenedReceiveTarget =
   | Readonly<{ kind: 'direct-tree'; binding: PersistedFSAOperationBinding }>
   | Readonly<{ kind: 'workspace'; namespace: OriginPrivateWorkspaceNamespace }>
+  | Readonly<{
+      kind: 'direct-zip'
+      journal: DirectZipJournalRepository
+      checkpoint: DirectZipCheckpointV1
+      candidate?: DirectZipCandidateV1
+    }>
 
 export interface ReopenResources {
   lease?: BrowserReceiveOperationLease
@@ -201,12 +232,16 @@ export interface ReopenResources {
   packageBackend?: OriginPrivatePackageContinuationBackend
   receiveBackend?: OriginPrivateWorkspaceBackend
   receiveBackendOpening?: Promise<OriginPrivateWorkspaceBackend>
+  directZipJournal?: DirectZipJournalRepository
   closed?: boolean
 }
 
 export interface ReopenLifecycleAuthority {
   readonly lifecycle: ReceiveLifecycleState
-  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>
+  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }>
   readonly stages?: WorkspaceOperationStages
   readonly admittedContent?: AdmittedWorkspaceContent
   readonly preparation?: SealedWorkspaceZipPreparationV1

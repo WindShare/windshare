@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "windshare/browser-fsa-resumable-zip-support-matrix/v1",
+  "title": "WindShare browser FSA resumable ZIP support matrix",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["candidateSchema", "defaultVerdict", "matrixSchema", "notes", "policyConstants", "reviewStatus", "reviewedPlatforms", "schema"],
+  "properties": {
+    "candidateSchema": { "const": "windshare/browser-fsa-resumable-zip-support-matrix-candidate/v1" },
+    "defaultVerdict": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directLocalRoute", "processRestart"],
+      "properties": {
+        "directLocalRoute": { "const": "unsupported" },
+        "processRestart": { "const": "unproven" }
+      }
+    },
+    "matrixSchema": { "const": "windshare/browser-fsa-resumable-zip-support-matrix/v1" },
+    "notes": { "type": "array", "minItems": 3, "items": { "type": "string" } },
+    "policyConstants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["directZipAutomaticCheckpointMaximumCumulativeCopyBytes", "directZipAutomaticCheckpointMaximumModeledPeakTemporaryBytes", "directZipAutomaticCheckpointMaximumPrefixCopyBytes", "zipWorkspaceRecommendationMaximumPeakBytes"],
+      "properties": {
+        "directZipAutomaticCheckpointMaximumCumulativeCopyBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "directZipAutomaticCheckpointMaximumModeledPeakTemporaryBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "directZipAutomaticCheckpointMaximumPrefixCopyBytes": { "type": ["integer", "null"], "minimum": 0 },
+        "zipWorkspaceRecommendationMaximumPeakBytes": { "type": ["integer", "null"], "minimum": 0 }
+      }
+    },
+    "reviewStatus": { "enum": ["no-reviewed-local-evidence", "reviewed-local-evidence"] },
+    "reviewedPlatforms": { "type": "array", "items": { "$ref": "#/$defs/reviewedPlatform" } },
+    "schema": { "const": "windshare/browser-fsa-resumable-zip-support-matrix/v1" }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "reviewedPlatforms": { "maxItems": 0 } } },
+      "then": { "properties": { "reviewStatus": { "const": "no-reviewed-local-evidence" } } },
+      "else": { "properties": { "reviewStatus": { "const": "reviewed-local-evidence" } } }
+    }
+  ],
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "reviewedPlatform": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["browser", "entryId", "featureFacts", "filesystem", "platform", "rawEvidenceSha256", "repositoryCommit", "review", "runConfigSha256", "scenarios", "sourceManifestSha256", "supportingArtifactManifestSha256", "verdict"],
+      "properties": {
+        "browser": {
+          "type": "object", "additionalProperties": false,
+          "required": ["channel", "executableSha256", "version"],
+          "properties": { "channel": { "type": "string" }, "executableSha256": { "$ref": "#/$defs/sha256" }, "version": { "type": "string" } }
+        },
+        "entryId": { "type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{2,127}$" },
+        "featureFacts": {
+          "type": "object", "additionalProperties": false,
+          "required": ["createWritable", "handleIsSameEntry", "handleQueryPermission", "handleRequestPermission", "indexedDB", "isSecureContext", "locks", "showDirectoryPicker"],
+          "properties": {
+            "createWritable": { "const": "function" }, "handleIsSameEntry": { "const": "function" },
+            "handleQueryPermission": { "const": "function" }, "handleRequestPermission": { "const": "function" },
+            "indexedDB": { "const": "object" }, "isSecureContext": { "const": true }, "locks": { "const": "object" }, "showDirectoryPicker": { "const": "function" }
+          }
+        },
+        "filesystem": {
+          "type": "object", "additionalProperties": false,
+          "required": ["allocationUnitBytes", "blockSize", "driveTypeCode", "fileSystem", "operatorAttestation"],
+          "properties": {
+            "allocationUnitBytes": { "type": "integer", "minimum": 1 }, "blockSize": { "type": "string", "pattern": "^[0-9]+$" },
+            "driveTypeCode": { "type": "integer" }, "fileSystem": { "type": "string" }, "operatorAttestation": { "type": "string" }
+          }
+        },
+        "platform": {
+          "type": "object", "additionalProperties": false,
+          "required": ["arch", "platform", "release", "type", "version"],
+          "properties": { "arch": { "type": "string" }, "platform": { "type": "string" }, "release": { "type": "string" }, "type": { "type": "string" }, "version": { "type": "string" } }
+        },
+        "rawEvidenceSha256": { "$ref": "#/$defs/sha256" },
+        "repositoryCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "review": {
+          "type": "object", "additionalProperties": false,
+          "required": ["directZipEpochPolicyDigest", "epochPolicyReviewSha256", "independentReviewSha256", "reviewedAt", "reviewer", "rationale", "workspaceRecommendationArtifactManifestSha256", "workspaceRecommendationCandidateSha256", "workspaceRecommendationPolicyDigest", "workspaceRecommendationPolicyReviewSha256", "workspaceRecommendationRawEvidenceSha256", "workspaceRecommendationSourceBindingSha256"],
+          "properties": {
+            "directZipEpochPolicyDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+            "epochPolicyReviewSha256": { "$ref": "#/$defs/sha256" },
+            "independentReviewSha256": { "$ref": "#/$defs/sha256" },
+            "reviewedAt": { "type": "string", "format": "date-time" },
+            "reviewer": { "type": "string", "minLength": 1 },
+            "rationale": { "type": "string", "minLength": 1 },
+            "workspaceRecommendationArtifactManifestSha256": { "$ref": "#/$defs/sha256" },
+            "workspaceRecommendationCandidateSha256": { "$ref": "#/$defs/sha256" },
+            "workspaceRecommendationPolicyDigest": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+            "workspaceRecommendationPolicyReviewSha256": { "$ref": "#/$defs/sha256" },
+            "workspaceRecommendationRawEvidenceSha256": { "$ref": "#/$defs/sha256" },
+            "workspaceRecommendationSourceBindingSha256": { "$ref": "#/$defs/sha256" }
+          }
+        },
+        "runConfigSha256": { "$ref": "#/$defs/sha256" },
+        "scenarios": {
+          "type": "object", "additionalProperties": false,
+          "required": ["authorityBinding", "externalReplacementLocatorOnly", "sameTargetProcessRestartContinuation"],
+          "properties": { "authorityBinding": { "const": true }, "externalReplacementLocatorOnly": { "const": true }, "sameTargetProcessRestartContinuation": { "type": "integer", "minimum": 1 } }
+        },
+        "sourceManifestSha256": { "$ref": "#/$defs/sha256" },
+        "supportingArtifactManifestSha256": { "$ref": "#/$defs/sha256" },
+        "verdict": {
+          "type": "object", "additionalProperties": false,
+          "required": ["directLocalRoute", "processRestart"],
+          "properties": { "directLocalRoute": { "const": "supported" }, "processRestart": { "const": true } }
+        }
+      }
+    }
+  }
+}

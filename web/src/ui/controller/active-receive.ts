@@ -61,6 +61,7 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   detachment?: Promise<void>
   unsubscribeRepairProjection?: () => void
   unsubscribeRepairProjectionActivation?: () => void
+  unsubscribeOutputProgress?: () => void
 }
 
 export interface ActiveReceiveCoordinatorOptions {
@@ -160,7 +161,9 @@ export class ActiveReceiveCoordinator {
         this.#operation = operation
       },
       start: () => {
-        if (committed) this.#startTransfer(operation)
+        if (!committed) return
+        this.#startOutputProgress(operation)
+        this.#startTransfer(operation)
       },
     })
   }
@@ -177,6 +180,7 @@ export class ActiveReceiveCoordinator {
     this.#operation = undefined
     if (active === undefined) return Promise.resolve()
     this.#stopRepairProjection(active)
+    this.#stopOutputProgress(active)
     this.#lifecycle.cancelExpiry(active)
     active.transfer?.abort(reason)
     this.#observability.receiveExclusion(
@@ -527,8 +531,44 @@ export class ActiveReceiveCoordinator {
     }
   }
 
+  #startOutputProgress(active: ActiveReceiveOperation): void {
+    const source = active.runtime.outputProgress
+    if (source === undefined || active.unsubscribeOutputProgress !== undefined) return
+    const publish = (progress: ReturnType<typeof source.getSnapshot>) => {
+      if (!this.#operationIsCurrent(active)) return
+      try {
+        this.#outputs.updateDirectZipProgress(progress)
+      } catch (error) {
+        this.#reportTransferFailure(error)
+      }
+    }
+    try {
+      publish(source.getSnapshot())
+      const unsubscribe = source.subscribe(publish)
+      if (this.#operationIsCurrent(active)) {
+        active.unsubscribeOutputProgress = unsubscribe
+      } else {
+        unsubscribe()
+      }
+    } catch (error) {
+      this.#reportTransferFailure(error)
+    }
+  }
+
+  #stopOutputProgress(active: ActiveReceiveOperation): void {
+    const unsubscribe = active.unsubscribeOutputProgress
+    if (unsubscribe === undefined) return
+    delete active.unsubscribeOutputProgress
+    try {
+      unsubscribe()
+    } catch {
+      // The operation remains authoritative; a presentation-source cleanup cannot replace it.
+    }
+  }
+
   #detachOperation(active: ActiveReceiveOperation): Promise<void> {
     if (active.detachment !== undefined) return active.detachment
+    this.#stopOutputProgress(active)
     const lateCapability = active.detachOutputCapability
     const outputLease = lateCapability === undefined
       ? undefined

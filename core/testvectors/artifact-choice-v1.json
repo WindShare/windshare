@@ -1,0 +1,161 @@
+{
+  "version": 1,
+  "kind": "artifact-choice-v1",
+  "description": "Stable ArtifactChoiceIdentityV1 tuples, including direct-resumable ZIP whose positive route support remains confined to the exact reviewed runtime and policy evidence tuple.",
+  "cases": [
+    {
+      "expected": {
+        "artifactChoiceId": "SkM7gbPiETBKx4Xlx84V9Ak7Qw8xqleb70cGLI9GAiU",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAEBAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "directory-tree",
+        "guaranteeProfile": "native-tree",
+        "materializationKind": "direct-tree",
+        "preparation": "none"
+      },
+      "name": "directory-tree-native",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "-86w08pqFaptJgI-X9JzUnSOzb0QnqVXosmk1Mp6hYo",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAECAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "directory-tree",
+        "guaranteeProfile": "fsa-tree",
+        "materializationKind": "direct-tree",
+        "preparation": "none"
+      },
+      "name": "directory-tree-fsa",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "dcQ_3FoLv3QOsDlvHjo4HBPWs4evMgjqlxwyqF6XVCY",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAECAAAAAAAAAAEDAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "original-file",
+        "guaranteeProfile": "managed-atomic",
+        "materializationKind": "direct-atomic",
+        "preparation": "none"
+      },
+      "name": "original-file-direct-atomic",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "YyVnGAPMuLOWbpEwGDuAOiLdmvI5_cWN7cip-W4n18s",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "original-file",
+        "guaranteeProfile": "managed-atomic",
+        "materializationKind": "workspace-then-publish",
+        "preparation": "none"
+      },
+      "name": "original-file-workspace-managed",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "Dvbx-UlDN2_rNykBcKT0U_8JC_fYgSLi4DKuf4wKHes",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "original-file",
+        "guaranteeProfile": "browser-handoff",
+        "materializationKind": "workspace-then-publish",
+        "preparation": "none"
+      },
+      "name": "original-file-workspace-handoff",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "NFzu17yuO3Tf1AybKcEmquxReXHtzeX3hLoKs8NXTww",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEB"
+      },
+      "input": {
+        "artifactKind": "zip-archive",
+        "guaranteeProfile": "managed-atomic",
+        "materializationKind": "workspace-then-publish",
+        "preparation": "exact-zip"
+      },
+      "name": "zip-workspace-managed",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEB"
+      },
+      "input": {
+        "artifactKind": "zip-archive",
+        "guaranteeProfile": "browser-handoff",
+        "materializationKind": "workspace-then-publish",
+        "preparation": "exact-zip"
+      },
+      "name": "zip-workspace-handoff",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "LO6AkTh6UNacP3KFqfHH1upv4vJVDXmIMdRcyGm2wEw",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEBAAAAAAAAAAEEAAAAAAAAAAEEAAAAAAAAAAEC"
+      },
+      "input": {
+        "artifactKind": "original-file",
+        "guaranteeProfile": "browser-handoff",
+        "materializationKind": "portable-handoff",
+        "preparation": "exact-artifact"
+      },
+      "name": "original-file-portable",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "g8oXhxfPndjraB0hohXPqNXsUl-DHFN01vqDLc7lLMM",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEEAAAAAAAAAAEC"
+      },
+      "input": {
+        "artifactKind": "zip-archive",
+        "guaranteeProfile": "browser-handoff",
+        "materializationKind": "portable-handoff",
+        "preparation": "exact-artifact"
+      },
+      "name": "zip-portable",
+      "policyAvailability": "not-required",
+      "routeSupport": "available"
+    },
+    {
+      "expected": {
+        "artifactChoiceId": "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEFAAAAAAAAAAEFAAAAAAAAAAEA"
+      },
+      "input": {
+        "artifactKind": "zip-archive",
+        "guaranteeProfile": "fsa-owned-file",
+        "materializationKind": "direct-resumable-zip",
+        "preparation": "none"
+      },
+      "name": "zip-direct-resumable",
+      "policyAvailability": {
+        "directZipEpochPolicyDigest": "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo",
+        "reason": "exact-reviewed-runtime-required",
+        "zipRouteRecommendationPolicyDigest": "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI"
+      },
+      "routeSupport": "available-exact-reviewed-platform-only"
+    }
+  ]
+}

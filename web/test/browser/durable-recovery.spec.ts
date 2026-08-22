@@ -22,7 +22,7 @@ import type {
 } from './durable-preparation-harness'
 import type {
   IndexedDbCheckpointLineageProbe,
-  IndexedDbV6Probe,
+  IndexedDbV9Probe,
 } from './durable-recovery-idb-probe'
 
 const RECOVERY_HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
@@ -73,22 +73,22 @@ test('reopens compatible-name translation without changing logical checkpoint li
   })
 })
 
-test('v8 repositories replace resume authority and fail closed across IndexedDB boundaries', async ({
+test('v8 repositories migrate destructively to v9 and fail closed across IndexedDB boundaries', async ({
   page,
 }) => {
   const result = await page.evaluate(async (path) => {
     const probe = await import(path) as typeof import('./durable-recovery-idb-probe')
-    return probe.probeIndexedDbV6Replacement()
-  }, IDB_PROBE_PATH) as IndexedDbV6Probe
+    return probe.probeIndexedDbV9Replacement()
+  }, IDB_PROBE_PATH) as IndexedDbV9Probe
 
   expect(result).toEqual({
     blockedUpgrade: 'InvalidStateError',
     blockedRequestClosedLate: true,
     versionChange: 'InvalidStateError',
-    schemaVersion: 8,
-    v6StoresPresent: true,
+    schemaVersion: 9,
+    v9StoresPresent: true,
     legacyStoreRetainedForCleanup: true,
-    legacyRowsVisibleToV6: false,
+    legacyRowsVisibleToV9: false,
   })
 })
 

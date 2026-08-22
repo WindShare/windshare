@@ -2,7 +2,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-  INDEXEDDB_V6_STORE_SCHEMAS,
+  INDEXEDDB_V9_STORE_SCHEMAS,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 import {
@@ -27,14 +27,14 @@ import {
 
 const LEGACY_PAUSED_STORE = 'paused-task-descriptor-v1'
 
-export interface IndexedDbV6Probe {
+export interface IndexedDbV9Probe {
   readonly blockedUpgrade: string
   readonly blockedRequestClosedLate: boolean
   readonly versionChange: string
   readonly schemaVersion: number
-  readonly v6StoresPresent: boolean
+  readonly v9StoresPresent: boolean
   readonly legacyStoreRetainedForCleanup: boolean
-  readonly legacyRowsVisibleToV6: boolean
+  readonly legacyRowsVisibleToV9: boolean
 }
 
 export interface IndexedDbCheckpointLineageProbe {
@@ -57,7 +57,7 @@ export interface IndexedDbCheckpointLineageProbe {
   readonly resolvedRange: string
 }
 
-export async function probeIndexedDbV6Replacement(): Promise<IndexedDbV6Probe> {
+export async function probeIndexedDbV9Replacement(): Promise<IndexedDbV9Probe> {
   const blocked = await probeBlockedUpgrade()
   const versionChange = await probeVersionChange()
   const replacement = await probeReplacement()
@@ -335,11 +335,11 @@ async function probeVersionChange(): Promise<string> {
 }
 
 async function probeReplacement(): Promise<Pick<
-  IndexedDbV6Probe,
+  IndexedDbV9Probe,
   | 'schemaVersion'
-  | 'v6StoresPresent'
+  | 'v9StoresPresent'
   | 'legacyStoreRetainedForCleanup'
-  | 'legacyRowsVisibleToV6'
+  | 'legacyRowsVisibleToV9'
 >> {
   const databaseName = `w3c-v6-replacement-${crypto.randomUUID()}`
   const operationId = identity(16, 0x41)
@@ -358,9 +358,9 @@ async function probeReplacement(): Promise<Pick<
   const names = new Set(Array.from(raw.objectStoreNames))
   const result = Object.freeze({
     schemaVersion: raw.version,
-    v6StoresPresent: INDEXEDDB_V6_STORE_SCHEMAS.every((schema) => names.has(schema.name)),
+    v9StoresPresent: INDEXEDDB_V9_STORE_SCHEMAS.every((schema) => names.has(schema.name)),
     legacyStoreRetainedForCleanup: names.has(LEGACY_PAUSED_STORE),
-    legacyRowsVisibleToV6: (await repository.listRecords(operationId)).length !== 0,
+    legacyRowsVisibleToV9: (await repository.listRecords(operationId)).length !== 0,
   })
   raw.close()
   repository.close()

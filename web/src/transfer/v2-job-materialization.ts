@@ -16,6 +16,7 @@ import type { AsyncBoundedQueue } from './job/scheduler'
 import type { SelectionMeasure } from './measure'
 import type {
   DirectAtomicPlan,
+  DirectResumableZipPlan,
   DirectTreePlan,
   OriginalFileArtifact,
   PortableHandoffPlan,
@@ -29,11 +30,16 @@ import {
   type ExactSingleFileEvidence,
   type IncrementalDirectoryOutput,
   type PlanExecution,
+  type DirectResumableZipExecution,
   type V2PlanExecutionAuthority,
 } from './output-session'
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
 type DirectAtomicIntent = ReceiveIntent & Readonly<{ plan: DirectAtomicPlan }>
+type DirectResumableZipIntent = ReceiveIntent & Readonly<{
+  plan: DirectResumableZipPlan
+  artifact: ZipArchiveArtifact
+}>
 type WorkspaceIntent = ReceiveIntent & Readonly<{ plan: WorkspaceThenPublishPlan }>
 type WorkspaceOriginalIntent = WorkspaceIntent & Readonly<{ artifact: OriginalFileArtifact }>
 type WorkspaceZipIntent = WorkspaceIntent & Readonly<{ artifact: ZipArchiveArtifact }>
@@ -43,6 +49,7 @@ type MaterializationPlanAdmission = Pick<
   V2PlanExecutionAuthority,
   | 'openDirectTree'
   | 'openDirectAtomic'
+  | 'openDirectResumableZip'
   | 'openWorkspaceOriginal'
   | 'prepareWorkspaceZip'
   | 'preparePortable'
@@ -90,12 +97,17 @@ interface MaterializationExecutionPort {
   preparationRejected(state: ReceiveLifecycleState): TransferJobResult
 }
 
+interface DirectZipMaterializationPort {
+  run(execution: DirectResumableZipExecution): Promise<SelectionMeasure>
+}
+
 export interface TransferJobMaterializationContext {
   readonly signal: AbortSignal
   readonly admission: MaterializationPlanAdmission
   readonly root: MaterializationRootPort
   readonly discovery: MaterializationDiscoveryPort
   readonly execution: MaterializationExecutionPort
+  readonly directZip: DirectZipMaterializationPort
 }
 
 /**
@@ -113,10 +125,22 @@ export class TransferJobMaterialization {
     switch (intent.plan.kind) {
       case 'direct-tree': return this.#runDirectTree(intent as DirectTreeIntent)
       case 'direct-atomic': return this.#runDirectAtomic(intent as DirectAtomicIntent)
+      case 'direct-resumable-zip':
+        return this.#runDirectResumableZip(intent as DirectResumableZipIntent)
       case 'workspace-then-publish': return this.#runWorkspace(intent as WorkspaceIntent)
       case 'portable-handoff': return this.#runPreparedPortable(intent as PortableIntent)
     }
     throw new TypeError('receive intent has an unknown materialization plan')
+  }
+
+  async #runDirectResumableZip(intent: DirectResumableZipIntent): Promise<TransferJobResult> {
+    const execution = validatePlanExecutionBinding(
+      intent,
+      await this.#context.admission.openDirectResumableZip(intent, this.#context.signal),
+    )
+    this.#context.execution.bind(execution)
+    this.#context.execution.materializationStarted()
+    return this.#context.execution.completeWorkers(await this.#context.directZip.run(execution))
   }
 
   async #runDirectTree(intent: DirectTreeIntent): Promise<TransferJobResult> {
@@ -141,19 +165,10 @@ export class TransferJobMaterialization {
       await this.#context.admission.openDirectAtomic(intent, this.#context.signal),
     )
     this.#context.execution.bind(execution)
-    this.#context.execution.bindDirectoryOutput(execution.directories)
-    if (execution.directories !== undefined) {
-      this.#context.execution.bindDirectoryScope(await createDirectoryAdmissionScope(intent))
-    }
     this.#context.execution.materializationStarted()
-    const root = execution.directories === undefined
-      ? this.#context.root.authenticated(await this.#context.root.load())
-      : await this.#context.root.direct()
+    const root = this.#context.root.authenticated(await this.#context.root.load())
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
     const measure = this.#context.discovery.finish()
-    if (execution.directories !== undefined) {
-      await this.#context.execution.finalizeDirectories()
-    }
     return this.#context.execution.completeWorkers(measure)
   }
 

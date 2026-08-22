@@ -78,8 +78,10 @@ export async function requireDirectTreeIntent(input: ReceiveIntent): Promise<Dir
       intent.plan.reservation.guarantees.profile !== 'fsa-tree' ||
       intent.plan.reservation.guarantees.delivery !== 'managed-target' ||
       intent.plan.reservation.guarantees.replacement !== 'coordinated-no-replace' ||
-      intent.plan.reservation.guarantees.visibility !== 'prefix-visible') {
-    throw new TypeError('FSA settlement requires ManagedTarget CoordinatedNoReplace PrefixVisible')
+      intent.plan.reservation.guarantees.targetVisibility !== 'committed-objects-visible') {
+    throw new TypeError(
+      'FSA settlement requires managed, coordinated, committed-object-visible output',
+    )
   }
   return intent as DirectTreeIntent
 }

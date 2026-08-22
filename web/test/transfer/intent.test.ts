@@ -14,10 +14,13 @@ import {
   browserHandoffGuarantees,
   canonicalReceiveIntentBytes,
   collisionName,
+  createArtifactChoiceIdentity,
   createCatalogRootDirectoryTreeArtifact,
   createDirectorySelectionResultRoot,
   createDirectAtomicPlan,
+  createDirectResumableZipPlan,
   createDirectTreePlan,
+  createFSAOwnedFileBinding,
   createFSANamedEntryReservation,
   createManagedAtomicReservation,
   createNativeContainerRootReservation,
@@ -33,11 +36,14 @@ import {
   createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
   decodeReceiveIntent,
+  deriveArtifactChoiceIdentity,
+  fsaOwnedFileGuarantees,
   fsaTreeGuarantees,
   managedAtomicGuarantees,
   materializationPlanBindingDigest,
   nativeTreeGuarantees,
   receiveIntentDigest,
+  unavailableDirectZipPolicyDigests,
   validateReceiveIntent,
 } from '../../src/transfer/intent'
 import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
@@ -88,7 +94,7 @@ describe('ReceiveIntent canonical authority', () => {
       plan,
     }))
     expect(intent.digest).toBe(encodeBase64Url(await sha256(intent.canonicalBytes)))
-    expect(intent.digest).toBe('TyDonnz7sYXQn2fbpd6MhTXiz0rb4lwPFE2oi0Jwd6o')
+    expect(intent.digest).toBe('_-zVJFYomTUJqymN56HiUL1q6NyF_a69IEmAdVUMLl0')
     expect(await receiveIntentDigest(intent)).toBe(intent.digest)
     const decoded = await decodeReceiveIntent(intent.canonicalBytes)
     expect(decoded).toEqual(intent)
@@ -96,7 +102,7 @@ describe('ReceiveIntent canonical authority', () => {
     expect(canonicalReceiveIntentBytes(decoded)).toEqual(intent.canonicalBytes)
     await expect(validateReceiveIntent(decoded)).resolves.toEqual(decoded)
 
-    expectReceiveIntentV2Prefix(intent, selectionSpec.canonicalBytes.byteLength)
+    expectReceiveIntentV3Prefix(intent, selectionSpec.canonicalBytes.byteLength)
     const callerBytes = intent.canonicalBytes
     const firstByte = callerBytes[0]
     if (firstByte === undefined) {
@@ -152,14 +158,14 @@ describe('ReceiveIntent canonical authority', () => {
     const atomicReservation = await createManagedAtomicReservation({
       operationId,
       reservationId,
-      artifact: archive,
+      artifact: original,
       authorityRef,
       nameAuthority: 'user-chosen',
-      requestedName: 'picked.zip',
-      reservedName: 'picked.zip',
+      requestedName: 'report.txt',
+      reservedName: 'report.txt',
       collisionIndex: 0,
     })
-    const directAtomic = await createDirectAtomicPlan(archive, atomicReservation)
+    const directAtomic = await createDirectAtomicPlan(original, atomicReservation)
     const workspace = await createWorkspaceBinding({
       operationId,
       workspaceId: identity(26),
@@ -173,6 +179,28 @@ describe('ReceiveIntent canonical authority', () => {
       artifact: original,
     })
     const portablePlan = await createPortableHandoffPlan(original, portable)
+    await expect(createFSAOwnedFileBinding({
+      operationId,
+      artifact: archive,
+      stableName: `docs-selection.windshare-${identity(30)}.zip`,
+      targetRef: identity(31, 32),
+      policies: unavailableDirectZipPolicyDigests(),
+    })).rejects.toThrow(/absent/u)
+    // Opaque nonzero fixture digests exercise the closed codec; they are not production policy evidence.
+    const directBinding = await createFSAOwnedFileBinding({
+      operationId,
+      artifact: archive,
+      stableName: `docs-selection.windshare-${identity(30)}.zip`,
+      targetRef: identity(31, 32),
+      policies: {
+        zipEncoding: identity(32, 32),
+        layout: identity(33, 32),
+        checkpoint: identity(34, 32),
+        journalBudget: identity(35, 32),
+        epoch: identity(36, 32),
+      },
+    })
+    const directZip = await createDirectResumableZipPlan(archive, directBinding)
 
     expect(directTree.kind).toBe('direct-tree')
     expect(directTree.version).toBe(MATERIALIZATION_PLAN_VERSION)
@@ -182,9 +210,20 @@ describe('ReceiveIntent canonical authority', () => {
       physicalName: 'docs-selection.windshare-abcdef',
     })
     expect(directAtomic.kind).toBe('direct-atomic')
-    expect(atomicReservation.requestedName).toBe('picked.zip')
+    expect(atomicReservation.requestedName).toBe('report.txt')
+    expect(directZip.kind).toBe('direct-resumable-zip')
+    expect(directBinding.guarantees).toEqual(fsaOwnedFileGuarantees())
+    expect((await deriveArtifactChoiceIdentity(archive, directZip)).id).toBe(
+      '0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU',
+    )
+    expect((await createArtifactChoiceIdentity({
+      artifactKind: 'zip-archive',
+      materializationKind: 'workspace-then-publish',
+      guaranteeProfile: 'browser-handoff',
+      preparation: 'exact-zip',
+    })).id).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
     expect(workspacePlan.preparation).toBe('exact-zip')
-    expect(portablePlan.publicationRoute).toBe('browser-handoff')
+    expect(portablePlan.publicationGuarantee).toBe('browser-handoff')
     expect(portable).toMatchObject({
       maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,
       assemblyPartBytes: DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
@@ -200,15 +239,19 @@ describe('ReceiveIntent canonical authority', () => {
       nameAuthority: 'application-chosen',
       replacement: 'atomic-no-replace',
       delivery: 'managed-target',
-      visibility: 'prefix-visible',
-      rollback: 'none',
+      targetVisibility: 'committed-objects-visible',
+      artifactAvailability: 'committed-objects-usable',
+      cleanupAuthority: 'no-whole-target-rollback',
     })
     expect(fsaTreeGuarantees().replacement).toBe('coordinated-no-replace')
-    expect(managedAtomicGuarantees('user-chosen').visibility).toBe('atomic-commit')
+    expect(managedAtomicGuarantees('user-chosen').targetVisibility).toBe(
+      'hidden-until-verified-publication',
+    )
     expect(browserHandoffGuarantees().delivery).toBe('browser-handoff')
 
     await expect(createDirectTreePlan(singleTree, atomicReservation)).rejects.toThrow()
     await expect(createDirectAtomicPlan(resultTree, fsaReservation)).rejects.toThrow()
+    await expect(createDirectAtomicPlan(archive, atomicReservation)).rejects.toThrow()
     await expect(createWorkspaceBinding({
       operationId,
       workspaceId: identity(28),
@@ -223,7 +266,8 @@ describe('ReceiveIntent canonical authority', () => {
 
     for (const [artifact, plan, intentSelection] of [
       [resultTree, directTree, selectionSpec],
-      [archive, directAtomic, selectionSpec],
+      [original, directAtomic, selectionSpec],
+      [archive, directZip, selectionSpec],
       [archive, workspacePlan, selectionSpec],
       [original, portablePlan, pathSelectionSpec],
     ] as const) {
@@ -298,42 +342,59 @@ describe('ReceiveIntent canonical authority', () => {
 
     const directBytes = directIntent.canonicalBytes
     const directFrames = receiveIntentFrames(directBytes)
-    const workspacePreparation = planField(workspaceIntent.canonicalBytes, 0)
+    const workspacePreparation = planField(workspaceIntent.canonicalBytes, 1)
     const portableRoute = planField(portableIntent.canonicalBytes, 0)
-    const malformed = [
-      appendBytes(directBytes, Uint8Array.of(0)),
-      directBytes.slice(0, directBytes.byteLength - 1),
-      mutateByte(directBytes, 0, directBytes[0]! ^ 1),
-      legacyReceiveIntentV1Bytes(directBytes),
-      mutateByte(
+    const malformed: readonly (readonly [string, Uint8Array])[] = [
+      ['trailing intent byte', appendBytes(directBytes, Uint8Array.of(0))],
+      ['truncated intent', directBytes.slice(0, directBytes.byteLength - 1)],
+      ['wrong intent domain', mutateByte(directBytes, 0, directBytes[0]! ^ 1)],
+      ['legacy V2 envelope', legacyReceiveIntentV2Bytes(directBytes)],
+      ['unknown artifact kind', mutateByte(
         directBytes,
         directFrames.artifact.payloadOffset + recordFieldsOffset(ARTIFACT_SPEC_TEST_DOMAIN),
         0xff,
-      ),
-      mutateByte(
+      )],
+      ['unknown plan kind', mutateByte(
         directBytes,
         directFrames.plan.payloadOffset + recordFieldsOffset(MATERIALIZATION_PLAN_TEST_DOMAIN),
         0xff,
-      ),
-      swapNodeSelectionRules(directBytes),
-      zeroDirectOperationIdentity(directBytes),
-      mutateManagedGuaranteeNameAuthority(directBytes, 3),
-      malformedReceiveIntentEnvelope(
+      )],
+      ['unsorted selection rules', swapNodeSelectionRules(directBytes)],
+      ['zero operation identity', zeroDirectOperationIdentity(directBytes)],
+      ['wrong managed guarantee', mutateManagedGuaranteeNameAuthority(directBytes, 3)],
+      ['artifact and plan mismatch', malformedReceiveIntentEnvelope(
         selectionSpec.canonicalBytes,
         otherArtifact.canonicalBytes,
         directPlan.canonicalBytes,
-      ),
-      mutateByte(workspaceIntent.canonicalBytes, workspacePreparation.payloadOffset, 1),
-      mutateByte(portableIntent.canonicalBytes, portableRoute.payloadOffset, 1),
-      mutatePortableArtifactLimit(portableIntent.canonicalBytes),
-      mutateOriginalArtifactName(directBytes),
+      )],
+      ['workspace preparation drift', mutateByte(
+        workspaceIntent.canonicalBytes,
+        workspacePreparation.payloadOffset,
+        1,
+      )],
+      ['portable guarantee drift', mutateByte(
+        portableIntent.canonicalBytes,
+        portableRoute.payloadOffset,
+        1,
+      )],
+      ['portable limit drift', mutatePortableArtifactLimit(portableIntent.canonicalBytes)],
+      ['artifact name drift', mutateOriginalArtifactName(directBytes)],
     ]
 
-    for (const encoded of malformed) {
-      await expect(decodeReceiveIntent(encoded)).rejects.toThrow(/canonical bytes/u)
+    for (const [name, encoded] of malformed) {
+      let error: unknown
+      try {
+        await decodeReceiveIntent(encoded)
+      } catch (candidate) {
+        error = candidate
+      }
+      expect(error, name).toBeInstanceOf(Error)
+      expect((error as Error).message, name).toMatch(/canonical bytes/u)
     }
   })
+})
 
+describe('ReceiveIntent input integrity', () => {
   it('rejects non-canonical selection, names, identities, and collision decisions', async () => {
     await expect(createSelectionSpec({
       shareInstance: identity(1),
@@ -428,8 +489,8 @@ describe('ReceiveIntent canonical authority', () => {
   })
 })
 
-function expectReceiveIntentV2Prefix(intent: ReceiveIntent, selectionBytes: number): void {
-  const prefix = new TextEncoder().encode('windshare/receive-intent/v2\0')
+function expectReceiveIntentV3Prefix(intent: ReceiveIntent, selectionBytes: number): void {
+  const prefix = new TextEncoder().encode('windshare/receive-intent/v3\0')
   expect(intent.canonicalBytes.slice(0, prefix.byteLength)).toEqual(prefix)
   expect(intent.canonicalBytes[prefix.byteLength]).toBe(RECEIVE_INTENT_VERSION)
   const firstFrame = intent.canonicalBytes.slice(prefix.byteLength + 1)
@@ -441,12 +502,12 @@ function readUint64(value: Uint8Array): bigint {
 }
 
 const TEST_TEXT_ENCODER = new TextEncoder()
-const RECEIVE_INTENT_TEST_DOMAIN = 'windshare/receive-intent/v2'
+const RECEIVE_INTENT_TEST_DOMAIN = 'windshare/receive-intent/v3'
 const SELECTION_SPEC_TEST_DOMAIN = 'windshare/selection-spec/v1'
 const ARTIFACT_SPEC_TEST_DOMAIN = 'windshare/artifact-spec/v1'
-const DESTINATION_RESERVATION_TEST_DOMAIN = 'windshare/destination-reservation/v2'
+const DESTINATION_RESERVATION_TEST_DOMAIN = 'windshare/destination-reservation/v3'
 const PORTABLE_BINDING_TEST_DOMAIN = 'windshare/portable-binding/v1'
-const MATERIALIZATION_PLAN_TEST_DOMAIN = 'windshare/materialization-plan/v2'
+const MATERIALIZATION_PLAN_TEST_DOMAIN = 'windshare/materialization-plan/v3'
 
 interface FrameLocation {
   readonly payloadOffset: number
@@ -462,11 +523,11 @@ function recordVersionOffset(domain: string): number {
   return TEST_TEXT_ENCODER.encode(domain).byteLength + 1
 }
 
-function legacyReceiveIntentV1Bytes(value: Uint8Array): Uint8Array {
-  const domainV1 = mutateByte(
-    value, TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN).byteLength - 1, '1'.charCodeAt(0),
+function legacyReceiveIntentV2Bytes(value: Uint8Array): Uint8Array {
+  const domainV2 = mutateByte(
+    value, TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN).byteLength - 1, '2'.charCodeAt(0),
   )
-  return mutateByte(domainV1, recordVersionOffset(RECEIVE_INTENT_TEST_DOMAIN), 1)
+  return mutateByte(domainV2, recordVersionOffset(RECEIVE_INTENT_TEST_DOMAIN), 2)
 }
 
 function locateFrame(value: Uint8Array, offset: number): FrameLocation {
@@ -565,7 +626,8 @@ function mutateManagedGuaranteeNameAuthority(value: Uint8Array, byte: number): U
     offset = locateFrame(value, offset).nextOffset
   }
   const guarantees = locateFrame(value, offset)
-  const nameAuthority = locateFrame(value, guarantees.payloadOffset)
+  const profile = locateFrame(value, guarantees.payloadOffset)
+  const nameAuthority = locateFrame(value, profile.nextOffset)
   return mutateByte(value, nameAuthority.payloadOffset, byte)
 }
 
@@ -596,7 +658,7 @@ function malformedReceiveIntentEnvelope(
 ): Uint8Array {
   return appendMany([
     TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN),
-    Uint8Array.of(0, 2),
+    Uint8Array.of(0, 3),
     testFrame(selection),
     testFrame(artifact),
     testFrame(plan),

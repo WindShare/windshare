@@ -1,9 +1,9 @@
-import type { ArtifactOperation } from '../output/planning'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
   validateReceiveIntent,
 } from '../transfer/intent'
+import type { ArtifactChoiceID } from '../transfer/intent'
 import type { TransferProgress } from '../transfer/v2-job'
 import {
   V2BrowserReceiverGateway,
@@ -23,7 +23,10 @@ import {
   type V2CapabilityJoinLease,
   type V2CapturedLocation,
 } from './v2-capability-lifecycle'
-import type { LifecycleUserAction } from './v2-lifecycle-presentation'
+import {
+  presentNewReceiveOperation,
+  type LifecycleUserAction,
+} from './v2-lifecycle-presentation'
 import {
   EMPTY_V2_OUTPUT_PRESENTATION,
   V2OutputPresentationController,
@@ -91,6 +94,7 @@ export class V2ReceiverController {
   #unsubscribeScanProgress: (() => void) | undefined
   #unsubscribeProtocolGeneration: (() => void) | undefined
   #disposed = false
+  #newOperationPending = false
 
   constructor(
     gateway: V2BrowserReceiverGateway,
@@ -328,8 +332,8 @@ export class V2ReceiverController {
     this.#previews.mediaFailed(presentationId)
   }
 
-  chooseArtifact(operation: ArtifactOperation): void {
-    this.#authority.choose(operation)
+  chooseArtifact(choiceId: ArtifactChoiceID): void {
+    this.#authority.choose(choiceId)
   }
 
   retryOutputConfirmation(): void {
@@ -345,6 +349,32 @@ export class V2ReceiverController {
     action: V2RetainedReceiveAction,
   ): void {
     this.#retained.perform(operation, action)
+  }
+
+  startNewReceiveOperation(): void {
+    const joined = this.#joined
+    const output = this.#snapshot.output
+    const presentation = presentNewReceiveOperation({
+      lifecycle: output.lifecycle,
+      plan: output.plan,
+    })
+    if (this.#disposed || this.#newOperationPending || joined === undefined ||
+        presentation === null) return
+    this.#newOperationPending = true
+    const boundary = new DOMException(
+      presentation.kind === 'direct-tree-to-zip'
+        ? 'The completed DirectTree receive is being replaced by a new ZIP operation'
+        : 'The deleted Direct ZIP target is being replaced by a new receive operation',
+      'AbortError',
+    )
+    this.#resetReceiveOwnership(boundary).then(() => {
+      if (!this.#disposed && this.#joined === joined) {
+        this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS, error: null })
+        this.#beginSelectionProjection(joined, 'observation-replacement')
+      }
+    }, error => this.#publishActionError(error)).finally(() => {
+      this.#newOperationPending = false
+    })
   }
 
   async dispose(): Promise<void> {

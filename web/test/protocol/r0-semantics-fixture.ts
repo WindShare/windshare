@@ -37,6 +37,7 @@ export type ReceiveLifecyclePlanName =
   | 'direct-atomic'
   | 'workspace-then-publish'
   | 'portable-handoff'
+  | 'direct-resumable-zip'
 
 export interface ReceiveLifecycleTerminalState {
   readonly state: ReceiveLifecycleTerminalStateName
@@ -45,12 +46,24 @@ export interface ReceiveLifecycleTerminalState {
 }
 
 export interface ReceiveLifecycleSemanticsVector extends SemanticsVector {
-  readonly name: 'receive-lifecycle-terminal-states'
-  readonly states: readonly ReceiveLifecycleTerminalState[]
+  readonly name: 'receive-lifecycle-v2'
+  readonly domain: 'windshare/receive-lifecycle-state/v2'
+  readonly schemaVersion: 2
+  readonly terminalStates: readonly ReceiveLifecycleTerminalState[]
+  readonly nonterminalRecoveryStates: readonly {
+    readonly state: 'authorization-required' | 'target-verification-required' | 'destination-space-required'
+    readonly byte: 21 | 22 | 23
+  }[]
+  readonly restartReasons: Readonly<Record<string, number>>
+  readonly resumableReceivePayloadKinds: Readonly<Record<string, number>>
+  readonly directZipByteSemantics: Readonly<Record<string, string>>
   readonly deadlineWritingStates: readonly (
     | 'resumable-receive'
     | 'resumable-package'
     | 'waiting-to-save'
+    | 'authorization-required'
+    | 'target-verification-required'
+    | 'destination-space-required'
   )[]
   readonly publishedCleanupPendingRemains: 'published'
   readonly handoffNeverMeans: 'published'
@@ -86,22 +99,35 @@ const RECEIVE_PLAN_NAMES = new Set<string>([
   'direct-atomic',
   'workspace-then-publish',
   'portable-handoff',
+  'direct-resumable-zip',
 ])
 
 const DEADLINE_WRITING_STATES = new Set<string>([
   'resumable-receive',
   'resumable-package',
   'waiting-to-save',
+  'authorization-required',
+  'target-verification-required',
+  'destination-space-required',
 ])
 
 export function requireReceiveLifecycleSemanticsVector(
   value: SemanticsVector | undefined,
 ): ReceiveLifecycleSemanticsVector {
-  if (value?.name !== 'receive-lifecycle-terminal-states') {
+  if (value?.name !== 'receive-lifecycle-v2' ||
+      value.domain !== 'windshare/receive-lifecycle-state/v2' || value.schemaVersion !== 2) {
     throw new Error('receive lifecycle terminal-state vector is missing')
   }
-  if (!isArrayOf(value.states, isReceiveLifecycleTerminalState)) {
+  if (!isArrayOf(value.terminalStates, isReceiveLifecycleTerminalState)) {
     throw new Error('receive lifecycle terminal states are malformed')
+  }
+  if (!isArrayOf(value.nonterminalRecoveryStates, isNonterminalRecoveryState)) {
+    throw new Error('receive lifecycle nonterminal recovery states are malformed')
+  }
+  if (!isIntegerRecord(value.restartReasons) ||
+      !isIntegerRecord(value.resumableReceivePayloadKinds) ||
+      !isStringRecord(value.directZipByteSemantics)) {
+    throw new Error('receive lifecycle direct-resume projections are malformed')
   }
   if (!isArrayOf(value.deadlineWritingStates, isDeadlineWritingState)) {
     throw new Error('receive lifecycle deadline-writing states are malformed')
@@ -112,6 +138,26 @@ export function requireReceiveLifecycleSemanticsVector(
     throw new Error('receive lifecycle terminal projections are malformed')
   }
   return value as ReceiveLifecycleSemanticsVector
+}
+
+function isNonterminalRecoveryState(
+  value: unknown,
+): value is ReceiveLifecycleSemanticsVector['nonterminalRecoveryStates'][number] {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
+  const state = value as Record<string, unknown>
+  return (state.state === 'authorization-required' && state.byte === 21) ||
+    (state.state === 'target-verification-required' && state.byte === 22) ||
+    (state.state === 'destination-space-required' && state.byte === 23)
+}
+
+function isIntegerRecord(value: unknown): value is Readonly<Record<string, number>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === 'number' && Number.isInteger(item))
+}
+
+function isStringRecord(value: unknown): value is Readonly<Record<string, string>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value) &&
+    Object.values(value).every((item) => typeof item === 'string')
 }
 
 function isReceiveLifecycleTerminalState(value: unknown): value is ReceiveLifecycleTerminalState {

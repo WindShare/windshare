@@ -86,8 +86,25 @@ export function projectV2ReceiverTraceEvent(
       return observation('retained_action', {
         transition: retainedActionTransition(event.name),
         action: event.retained_action,
-        continuation: snake(event.continuation),
+        continuation: retainedContinuation(event.continuation),
       })
+  }
+}
+
+function retainedContinuation(
+  continuation: Extract<V2ReceiverTraceEvent, {
+    readonly name: 'receive.inventory.action.started' | 'receive.inventory.action.completed' |
+      'receive.inventory.action.failed'
+  }>['continuation'],
+): TraceEventPayloadByNameV1['retained_action']['continuation'] {
+  switch (continuation) {
+    case 'resume-direct-zip':
+    case 'reauthorize-direct-zip':
+    case 'verify-direct-zip-target':
+    case 'retry-direct-zip-space':
+      return 'resume_receive'
+    default:
+      return snake(continuation) as TraceEventPayloadByNameV1['retained_action']['continuation']
   }
 }
 

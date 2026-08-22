@@ -97,24 +97,30 @@ function continuationStates() {
   })
   const fallback = nextReceiveLifecycleState(initial, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: identity(5, 32),
     completedFileCount: 19n,
     completedBytes: 35_020n,
     expiresAt: 86_401_000,
   })
-  if (fallback.kind !== 'resumable-receive') throw new Error('test fallback changed kind')
+  if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
+    throw new Error('test fallback changed payload kind')
+  }
   const receiving = nextReceiveLifecycleState(fallback, {
     kind: 'receiving',
     activeLeaseId: identity(6, 16),
   })
   const restored = nextReceiveLifecycleState(receiving, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: fallback.checkpointSetDigest,
     completedFileCount: fallback.completedFileCount,
     completedBytes: fallback.completedBytes,
     expiresAt: fallback.expiresAt,
   })
-  if (restored.kind !== 'resumable-receive') throw new Error('test restoration changed kind')
+  if (restored.kind !== 'resumable-receive' || restored.payloadKind !== 'file-set') {
+    throw new Error('test restoration changed payload kind')
+  }
   return Object.freeze({ fallback, receiving, restored })
 }
 
@@ -139,7 +145,10 @@ function needsAttention(state: ReceiveLifecycleState) {
 
 function workspaceUsage(state: ReceiveLifecycleState) {
   return Object.freeze({
-    ownedBytes: state.kind === 'resumable-receive' ? state.completedBytes : 0n,
+    ownedBytes:
+      state.kind === 'resumable-receive' && state.payloadKind === 'file-set'
+        ? state.completedBytes
+        : 0n,
     maximumBytes: 1_000_000n,
   })
 }

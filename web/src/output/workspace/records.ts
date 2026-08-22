@@ -1,6 +1,10 @@
 import {
+  decodeArtifactChoiceIdentity,
   decodeReceiveIntent,
+  deriveArtifactChoiceIdentity,
   validateReceiveIntent,
+  type ArtifactChoiceID,
+  type ArtifactChoiceIdentity,
   type ReceiveIntent,
 } from '../../transfer/intent'
 import {
@@ -20,7 +24,7 @@ import {
 } from './canonical'
 import { CanonicalRecordReader } from './canonical-reader'
 
-export const RECEIVE_OPERATION_SCHEMA_VERSION = 1 as const
+export const RECEIVE_OPERATION_SCHEMA_VERSION = 2 as const
 export const MANIFEST_PAGE_ENTRY_LIMIT = 128
 
 export const RECEIVE_RECORD_OPERATION = 1 as const
@@ -54,12 +58,15 @@ export type OperationReopenKey =
   | Readonly<{ kind: 'none' }>
   | Readonly<{ kind: 'cli-compatible'; compatibleOperationKey: string }>
 
-export interface ReceiveOperationV1 {
+export interface ReceiveOperationV2 {
   readonly schemaVersion: typeof RECEIVE_OPERATION_SCHEMA_VERSION
   readonly operationId: string
   readonly receiveIntent: ReceiveIntent
   readonly receiveIntentDigest: string
   readonly planBindingDigest: string
+  readonly choiceIdentity: ArtifactChoiceIdentity
+  readonly choiceId: ArtifactChoiceID
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly reopenKey: OperationReopenKey
   readonly canonicalBytes: CanonicalBytes
   readonly digest: string
@@ -125,10 +132,11 @@ export interface WorkspaceActivationCandidateV1 {
 const WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN = 'windshare/workspace-activation-candidate/v1'
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })
 
-export async function createReceiveOperationV1(input: {
+export async function createReceiveOperationV2(input: {
   readonly receiveIntent: ReceiveIntent
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly reopenKey?: OperationReopenKey
-}): Promise<ReceiveOperationV1> {
+}): Promise<ReceiveOperationV2> {
   const receiveIntent = await validateReceiveIntent(input.receiveIntent)
   const operationId = snapshotIdentity(receiveIntent.operationId, 16, 'operation ID')
   const receiveIntentDigest = snapshotIdentity(
@@ -142,11 +150,17 @@ export async function createReceiveOperationV1(input: {
     'plan binding digest',
   )
   const reopenKey = snapshotReopenKey(input.reopenKey ?? { kind: 'none' })
-  const canonicalBytes = canonicalRecord('windshare/receive-operation/v1', 1, [
+  const choiceIdentity = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
+  const choiceId = choiceIdentity.id
+  const preClickRanking = snapshotPreClickRanking(input.preClickRanking, choiceId)
+  const canonicalBytes = canonicalRecord('windshare/receive-operation/v2', 2, [
     canonicalFrame(canonicalIdentity(operationId, 16, 'operation ID')),
     canonicalFrame(receiveIntent.canonicalBytes),
     canonicalFrame(canonicalIdentity(receiveIntentDigest, 32, 'receive intent digest')),
     canonicalFrame(canonicalIdentity(planBindingDigest, 32, 'plan binding digest')),
+    canonicalFrame(choiceIdentity.canonicalBytes),
+    canonicalFrame(canonicalIdentity(choiceId, 32, 'artifact choice ID')),
+    canonicalFrame(canonicalPreClickRanking(preClickRanking)),
     canonicalFrame(canonicalReopenKey(reopenKey)),
   ])
   return Object.freeze({
@@ -155,6 +169,9 @@ export async function createReceiveOperationV1(input: {
     receiveIntent,
     receiveIntentDigest,
     planBindingDigest,
+    choiceIdentity,
+    choiceId,
+    preClickRanking,
     reopenKey,
     canonicalBytes,
     digest: await canonicalDigest(canonicalBytes),
@@ -162,7 +179,7 @@ export async function createReceiveOperationV1(input: {
 }
 
 export function storedReceiveOperationRecord(
-  operation: ReceiveOperationV1,
+  operation: ReceiveOperationV2,
 ): PersistedReceiveRecord {
   const reopenKey = operation.reopenKey.kind === 'cli-compatible'
     ? operation.reopenKey.compatibleOperationKey
@@ -185,20 +202,23 @@ export function storedReceiveOperationRecord(
  */
 export async function decodeStoredReceiveOperation(
   recordInput: PersistedReceiveRecord,
-): Promise<ReceiveOperationV1> {
+): Promise<ReceiveOperationV2> {
   const record = await validatePersistedReceiveRecord(recordInput)
   if (record.kind !== RECEIVE_RECORD_OPERATION) {
     throw new TypeError('receive operation decoder requires an operation record')
   }
   const reader = CanonicalRecordReader.open(
     record.canonicalBytes,
-    'windshare/receive-operation/v1',
+    'windshare/receive-operation/v2',
     RECEIVE_OPERATION_SCHEMA_VERSION,
   )
   const operationId = reader.framedIdentity(16, 'operation ID')
   const receiveIntentBytes = reader.frame('receive intent')
   const receiveIntentDigest = reader.framedIdentity(32, 'receive intent digest')
   const planBindingDigest = reader.framedIdentity(32, 'plan binding digest')
+  const choiceIdentityBytes = reader.frame('artifact choice identity')
+  const choiceId = reader.framedIdentity(32, 'artifact choice ID') as ArtifactChoiceID
+  const preClickRanking = decodeCanonicalPreClickRanking(reader.frame('pre-click ranking'))
   const reopenKey = decodeCanonicalReopenKey(reader.frame('operation reopen key'))
   reader.finish('receive operation')
 
@@ -206,11 +226,14 @@ export async function decodeStoredReceiveOperation(
   if (!equalCanonicalBytes(receiveIntent.canonicalBytes, receiveIntentBytes)) {
     throw new TypeError('decoded receive intent changed its canonical bytes')
   }
-  const rebuilt = await createReceiveOperationV1({ receiveIntent, reopenKey })
+  const choiceIdentity = await decodeArtifactChoiceIdentity(choiceIdentityBytes)
+  const rebuilt = await createReceiveOperationV2({ receiveIntent, preClickRanking, reopenKey })
   const projection = storedReceiveOperationRecord(rebuilt)
   if (rebuilt.operationId !== operationId ||
       rebuilt.receiveIntentDigest !== receiveIntentDigest ||
       rebuilt.planBindingDigest !== planBindingDigest ||
+      rebuilt.choiceId !== choiceId || rebuilt.choiceIdentity.id !== choiceIdentity.id ||
+      !equalCanonicalBytes(rebuilt.choiceIdentity.canonicalBytes, choiceIdentityBytes) ||
       record.id !== projection.id || record.operationId !== projection.operationId ||
       record.digest !== projection.digest || record.reopenKey !== projection.reopenKey ||
       !equalCanonicalBytes(record.canonicalBytes, projection.canonicalBytes)) {
@@ -232,7 +255,7 @@ export async function createPersistedReceiveRecord(input: {
   assertCanonicalRecordDomain(
     canonicalBytes,
     receiveRecordDomain(input.kind),
-    RECEIVE_OPERATION_SCHEMA_VERSION,
+    receiveRecordCanonicalVersion(input.kind),
   )
   validateIndexedProjections(
     input.kind,
@@ -266,7 +289,11 @@ export async function validatePersistedReceiveRecord(
   const operationId = snapshotIdentity(record.operationId, 16, 'operation ID')
   const digest = snapshotIdentity(record.digest, 32, 'receive record digest')
   const canonicalBytes = snapshotCanonicalBytes(record.canonicalBytes)
-  assertCanonicalRecordDomain(canonicalBytes, receiveRecordDomain(record.kind), 1)
+  assertCanonicalRecordDomain(
+    canonicalBytes,
+    receiveRecordDomain(record.kind),
+    receiveRecordCanonicalVersion(record.kind),
+  )
   if (await canonicalDigest(canonicalBytes) !== digest) {
     throw new TypeError('receive record digest does not match canonical bytes')
   }
@@ -408,7 +435,7 @@ export async function decodeStoredWorkspaceActivationCandidate(
   const reader = CanonicalRecordReader.open(
     record.canonicalBytes,
     WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN,
-    RECEIVE_OPERATION_SCHEMA_VERSION,
+    1,
   )
   const operationId = reader.framedIdentity(16, 'operation ID')
   const entryIdentity = reader.framedIdentity(32, 'workspace entry identity')
@@ -487,7 +514,7 @@ export function receiveOperationLeaseRecord(input: {
   const heartbeatAt = unixMilliseconds(input.heartbeatAt ?? acquiredAt, 'lease heartbeat time')
   if (heartbeatAt < acquiredAt) throw new TypeError('lease heartbeat predates acquisition')
   return Object.freeze({
-    id: `windshare/receive-operation/v1/${operationId}/lease`,
+    id: receiveOperationLeaseId(operationId),
     schemaVersion: RECEIVE_OPERATION_SCHEMA_VERSION,
     operationId,
     leaseId: snapshotIdentity(input.leaseId, 16, 'lease ID'),
@@ -496,36 +523,49 @@ export function receiveOperationLeaseRecord(input: {
   })
 }
 
+export function receiveOperationLeaseId(operationId: string): string {
+  return `windshare/receive-operation/v2/${snapshotIdentity(operationId, 16, 'operation ID')}/lease`
+}
+
+export function receiveOperationRecordPrefix(operationId: string): string {
+  return `windshare/receive-operation/v2/${snapshotIdentity(operationId, 16, 'operation ID')}/`
+}
+
 export function operationRecordId(
   operationId: string,
   kind: ReceiveRecordKind,
   digest?: string,
 ): string {
-  const operation = snapshotIdentity(operationId, 16, 'operation ID')
+  const prefix = receiveOperationRecordPrefix(operationId)
   if (kind === RECEIVE_RECORD_OPERATION || kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
-    return `windshare/receive-operation/v1/${operation}/${kind}`
+    return `${prefix}${kind}`
   }
   if (digest === undefined) throw new TypeError('immutable receive record requires its digest')
-  return `windshare/receive-operation/v1/${operation}/${kind}/${snapshotIdentity(digest, 32, 'record digest')}`
+  return `${prefix}${kind}/${snapshotIdentity(digest, 32, 'record digest')}`
 }
 
 export function receiveRecordDomain(kind: ReceiveRecordKind): string {
   switch (kind) {
-    case RECEIVE_RECORD_OPERATION: return 'windshare/receive-operation/v1'
-    case RECEIVE_RECORD_RESERVATION: return 'windshare/destination-reservation/v2'
+    case RECEIVE_RECORD_OPERATION: return 'windshare/receive-operation/v2'
+    case RECEIVE_RECORD_RESERVATION: return 'windshare/destination-reservation/v3'
     case RECEIVE_RECORD_WORKSPACE_BINDING: return 'windshare/workspace-binding/v1'
     case RECEIVE_RECORD_PREPARATION: return 'windshare/preparation-manifest/v1'
     case RECEIVE_RECORD_MATERIALIZED_MANIFEST: return 'windshare/materialized-manifest/v1'
     case RECEIVE_RECORD_SEALED_MATERIALIZATION: return 'windshare/sealed-materialization/v1'
     case RECEIVE_RECORD_PACKAGE: return 'windshare/packaged-artifact/v1'
     case RECEIVE_RECORD_PUBLICATION_ATTEMPT: return 'windshare/publication-attempt/v1'
-    case RECEIVE_RECORD_LIFECYCLE_STATE: return 'windshare/receive-lifecycle-state/v1'
+    case RECEIVE_RECORD_LIFECYCLE_STATE: return 'windshare/receive-lifecycle-state/v2'
     case RECEIVE_RECORD_RECEIPT:
     case RECEIVE_RECORD_CLEANUP:
       return 'windshare/receive-receipt/v1'
     case RECEIVE_RECORD_WORKSPACE_ACTIVATION:
       return WORKSPACE_ACTIVATION_CANDIDATE_DOMAIN
   }
+}
+
+function receiveRecordCanonicalVersion(kind: ReceiveRecordKind): number {
+  if (kind === RECEIVE_RECORD_OPERATION || kind === RECEIVE_RECORD_LIFECYCLE_STATE) return 2
+  return 1
 }
 
 function decodeCanonicalText(bytes: Uint8Array): string {
@@ -547,6 +587,46 @@ function snapshotReopenKey(input: OperationReopenKey): OperationReopenKey {
       'compatible operation key',
     ),
   })
+}
+
+function snapshotPreClickRanking(
+  input: readonly ArtifactChoiceID[],
+  selectedChoiceId: ArtifactChoiceID,
+): readonly ArtifactChoiceID[] {
+  if (!Array.isArray(input) || input.length === 0) {
+    throw new TypeError('pre-click ranking must contain the selected artifact choice')
+  }
+  const ranking = input.map((choiceId) =>
+    snapshotIdentity(choiceId, 32, 'ranked artifact choice ID') as ArtifactChoiceID)
+  if (new Set(ranking).size !== ranking.length || !ranking.includes(selectedChoiceId)) {
+    throw new TypeError('pre-click ranking must contain unique choices and the selected choice')
+  }
+  return Object.freeze(ranking)
+}
+
+function canonicalPreClickRanking(ranking: readonly ArtifactChoiceID[]): CanonicalBytes {
+  return concatCanonicalBytes([
+    canonicalU64(BigInt(ranking.length)),
+    ...ranking.map((choiceId) =>
+      canonicalFrame(canonicalIdentity(choiceId, 32, 'ranked artifact choice ID'))),
+  ])
+}
+
+function decodeCanonicalPreClickRanking(bytes: Uint8Array): readonly ArtifactChoiceID[] {
+  const reader = CanonicalRecordReader.value(bytes)
+  const count = reader.u64('pre-click ranking count')
+  if (count === 0n || count > BigInt(Number.MAX_SAFE_INTEGER)) {
+    throw new TypeError('pre-click ranking count is invalid')
+  }
+  const ranking: ArtifactChoiceID[] = []
+  for (let index = 0; index < Number(count); index += 1) {
+    ranking.push(reader.framedIdentity(32, 'ranked artifact choice ID') as ArtifactChoiceID)
+  }
+  reader.finish('pre-click ranking')
+  if (new Set(ranking).size !== ranking.length) {
+    throw new TypeError('pre-click ranking repeats an artifact choice')
+  }
+  return Object.freeze(ranking)
 }
 
 function canonicalReopenKey(key: OperationReopenKey): CanonicalBytes {
@@ -585,7 +665,7 @@ function validateIndexedProjections(
       (state !== undefined || expiresAt !== undefined || lifecycleGeneration !== undefined)) {
     throw new TypeError('state and expiry projections exist only on lifecycle records')
   }
-  if (state !== undefined && (!Number.isInteger(state) || state < 1 || state > 20)) {
+  if (state !== undefined && (!Number.isInteger(state) || state < 1 || state > 23)) {
     throw new TypeError('lifecycle state projection is invalid')
   }
   if (expiresAt !== undefined) unixMilliseconds(expiresAt, 'lifecycle expiry')

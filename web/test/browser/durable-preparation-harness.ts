@@ -22,6 +22,7 @@ import {
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
+  deriveArtifactChoiceIdentity,
   type SelectionSpec,
 } from '../../src/transfer/intent'
 import { IndexedDbReceiveOperationRepository } from '../../src/output/browser/indexeddb-repository'
@@ -132,6 +133,7 @@ export async function proveFreshPreparedZipAdmission(
   const repository = await IndexedDbReceiveOperationRepository.open()
   const namespace = await openOriginPrivateWorkspaceNamespace({
     receiveIntent: intent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
     repository,
     randomOwnedObjectId: () => ids.rootOwnedObjectId,
   })
@@ -516,7 +518,7 @@ async function commitProductionChoice(
   if (resolution.kind !== 'resolved') {
     throw new TypeError('product workspace choice did not resolve')
   }
-  const authority = composition.startArtifactAuthority(offered)
+  const authority = composition.startArtifactAuthority(offered, [offered.choice.choiceId])
   await authority.ready
   const committed = await authority.commit({
     action: resolution.action,

@@ -22,11 +22,13 @@ export const INVALID_RECEIVE_INTENT_CANONICAL_BYTES = 'receive intent canonical 
 export const SELECTION_SPEC_DOMAIN = 'windshare/selection-spec/v1'
 export const ARTIFACT_SPEC_DOMAIN = 'windshare/artifact-spec/v1'
 export const RESULT_ROOT_LAYOUT_DOMAIN = 'windshare/result-root-layout/v1'
-export const DESTINATION_RESERVATION_DOMAIN = 'windshare/destination-reservation/v2'
+export const DESTINATION_RESERVATION_DOMAIN = 'windshare/destination-reservation/v3'
+export const FSA_OWNED_FILE_BINDING_DOMAIN = 'windshare/fsa-owned-file-binding/v1'
+export const ARTIFACT_CHOICE_IDENTITY_DOMAIN = 'windshare/artifact-choice/v1'
 export const WORKSPACE_BINDING_DOMAIN = 'windshare/workspace-binding/v1'
 export const PORTABLE_BINDING_DOMAIN = 'windshare/portable-binding/v1'
-export const MATERIALIZATION_PLAN_DOMAIN = 'windshare/materialization-plan/v2'
-export const RECEIVE_INTENT_DOMAIN = 'windshare/receive-intent/v2'
+export const MATERIALIZATION_PLAN_DOMAIN = 'windshare/materialization-plan/v3'
+export const RECEIVE_INTENT_DOMAIN = 'windshare/receive-intent/v3'
 export const NAME_COLLISION_DOMAIN = 'windshare/name-collision/v1'
 
 const CANONICAL_SCHEMA_VERSION = 1

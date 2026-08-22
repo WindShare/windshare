@@ -1,12 +1,14 @@
 import {
   createDirectAtomicPlan,
   createDirectTreePlan,
+  createDirectResumableZipPlan,
   createPortableHandoffPlan,
   createReceiveIntent,
   createWorkspaceThenPublishPlan,
 } from '../../transfer/intent'
 import type {
   DestinationReservation,
+  FSAOwnedFileBinding,
   PortableBinding,
   ReceiveIntent,
   SelectionSpec,
@@ -40,6 +42,11 @@ export type CandidateMaterializationBinding =
       portableRouteId: string
       handoffTargetRouteId: string
       portable: PortableBinding
+    }>
+  | Readonly<{
+      kind: 'fsa-owned-file-binding'
+      targetRouteId: string
+      binding: FSAOwnedFileBinding
     }>
 
 export interface IntentFrozenDecision {
@@ -134,6 +141,15 @@ async function bindPlan(
         throw new TypeError('portable binding does not match the resolved hard policies')
       }
       return createPortableHandoffPlan(action.artifact, candidate.portable)
+    case 'direct-resumable-zip':
+      if (candidate.kind !== 'fsa-owned-file-binding' ||
+          candidate.targetRouteId !== route.target.routeId ||
+          candidate.binding.guarantees.profile !== route.target.legalProfile ||
+          !sameGuaranteeFacts(candidate.binding.guarantees, route.target.guarantees) ||
+          !sameDirectZipPolicyDigests(candidate.binding.policies, route.target.support.policies)) {
+        throw new TypeError('direct ZIP binding does not match the reviewed route authority')
+      }
+      return createDirectResumableZipPlan(action.artifact, candidate.binding)
   }
 }
 
@@ -161,7 +177,18 @@ function reservationMatchesTarget(
       return reservation.authorityKind === 'fsa-container'
     case 'managed-atomic-file-target':
       return reservation.authorityKind === 'managed-atomic-target'
+    case 'fsa-owned-file-target':
+      return false
   }
+}
+
+function sameDirectZipPolicyDigests(
+  left: FSAOwnedFileBinding['policies'],
+  right: FSAOwnedFileBinding['policies'],
+): boolean {
+  return left.zipEncoding === right.zipEncoding && left.layout === right.layout &&
+    left.checkpoint === right.checkpoint && left.journalBudget === right.journalBudget &&
+    left.epoch === right.epoch
 }
 
 function layoutClass(intent: ReceiveIntent): IntentFrozenDecision['layout_class'] {
