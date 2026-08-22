@@ -6,14 +6,15 @@ import {
 import {
   CHECKPOINT_DATABASE_VERSION,
   INDEXEDDB_LEGACY_V5_STORES,
-  INDEXEDDB_V6_STORE_SCHEMAS,
+  INDEXEDDB_V9_STORE_SCHEMAS,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 
 const LEGACY_STORE_NAMES = INDEXEDDB_LEGACY_CLEANUP_ORDER
-const CURRENT_STORE_NAMES = Object.freeze(INDEXEDDB_V6_STORE_SCHEMAS.map(({ name }) => name))
+const CURRENT_STORE_SCHEMAS = INDEXEDDB_V9_STORE_SCHEMAS
+const CURRENT_STORE_NAMES = Object.freeze(CURRENT_STORE_SCHEMAS.map(({ name }) => name))
 const RECORDS_PER_LEGACY_STORE = 2
 const LEGACY_FILE_CHECKPOINT_MARKER = 'windshare/file-checkpoint/v1'
 const LEGACY_FILE_CHECKPOINT_NAMESPACE = '.windshare-output/checkpoints-v1'
@@ -23,7 +24,8 @@ export interface IndexedDbLegacyCleanupIsolationProbe {
   readonly first: IndexedDbLegacyCleanupReport
   readonly second: IndexedDbLegacyCleanupReport
   readonly legacyCounts: readonly number[]
-  readonly currentSentinelsPresent: readonly boolean[]
+  readonly currentStoreCount: number
+  readonly currentSentinelsPreserved: boolean
   readonly publishedSentinelBytes: readonly number[]
 }
 
@@ -44,7 +46,8 @@ export async function probeIndexedDbLegacyCleanupIsolation(
       first,
       second,
       legacyCounts,
-      currentSentinelsPresent,
+      currentStoreCount: currentSentinelsPresent.length,
+      currentSentinelsPreserved: currentSentinelsPresent.every(Boolean),
       publishedSentinelBytes,
     }
   } finally {
@@ -72,8 +75,8 @@ export async function seedIndexedDbLegacyCleanup(databaseName: string): Promise<
         transaction.objectStore(storeName).put(ownedLegacyRow(storeName, index))
       }
     }
-    for (const storeName of CURRENT_STORE_NAMES) {
-      transaction.objectStore(storeName).put(currentSentinel(storeName))
+    for (const schema of CURRENT_STORE_SCHEMAS) {
+      transaction.objectStore(schema.name).put(currentSentinel(schema.name, schema.keyPath))
     }
     await transactionCompletion(transaction)
   } finally {
@@ -119,7 +122,7 @@ async function currentStoreSentinels(databaseName: string): Promise<readonly boo
   try {
     const transaction = database.transaction(CURRENT_STORE_NAMES, 'readonly')
     const records = await Promise.all(CURRENT_STORE_NAMES.map((storeName) => requestResult<unknown>(
-      transaction.objectStore(storeName).get(currentSentinel(storeName).id),
+      transaction.objectStore(storeName).get(currentSentinelKey(storeName)),
     )))
     await transactionCompletion(transaction)
     return records.map((record, index) => {
@@ -132,11 +135,15 @@ async function currentStoreSentinels(databaseName: string): Promise<readonly boo
   }
 }
 
-function currentSentinel(storeName: string): {
-  readonly id: string
-  readonly sentinel: string
-} {
-  return Object.freeze({ id: `current-sentinel:${storeName}`, sentinel: storeName })
+function currentSentinel(storeName: string, keyPath: string): Readonly<Record<string, string>> {
+  return Object.freeze({
+    [keyPath]: currentSentinelKey(storeName),
+    sentinel: storeName,
+  })
+}
+
+function currentSentinelKey(storeName: string): string {
+  return `current-sentinel:${storeName}`
 }
 
 function ownedLegacyRow(

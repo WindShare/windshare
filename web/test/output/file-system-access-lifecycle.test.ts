@@ -795,7 +795,9 @@ describe('File System Access settlement authority', () => {
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
       reason: new Error('first attempt paused'),
     }, SIGNAL)
-    if (fallback.kind !== 'resumable-receive') throw new Error('test did not create a continuation')
+    if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
+      throw new Error('test did not create a file-set continuation')
+    }
     await resumeReceiving(repository, session.intent, leaseId)
     const trace: FSASettlementTraceEvent[] = []
     const settlement = await createFileSystemAccessSettlementAuthority({
@@ -828,7 +830,9 @@ describe('File System Access settlement authority', () => {
       restored_checkpoint_set_digest: fallback.checkpointSetDigest,
       restored_expires_at_ms: fallback.expiresAt,
     })])
-    if (restored.kind !== 'resumable-receive') throw new Error('continuation was not restored')
+    if (restored.kind !== 'resumable-receive' || restored.payloadKind !== 'file-set') {
+      throw new Error('file-set continuation was not restored')
+    }
     await resumeReceiving(repository, session.intent, leaseId)
     const boundSettlement = await createFileSystemAccessSettlementAuthority({
       intent: session.intent,
@@ -948,7 +952,9 @@ describe('File System Access admission ownership recovery', () => {
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
       reason: new Error('first attempt paused'),
     }, SIGNAL)
-    if (fallback.kind !== 'resumable-receive') throw new Error('test did not create a continuation')
+    if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
+      throw new Error('test did not create a file-set continuation')
+    }
     await resumeReceiving(repository, session.intent, leaseId)
     const trace: FSASettlementTraceEvent[] = []
     const settlement = await createFileSystemAccessSettlementAuthority({

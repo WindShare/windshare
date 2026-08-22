@@ -49,6 +49,7 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'continuation',
   'reopen',
   'cleanup',
+  'direct_zip_milestone',
   'retained_inventory',
   'retained_action',
   'incident_marker',
@@ -64,6 +65,7 @@ type PlanKindV1 =
   | 'direct_atomic'
   | 'workspace_then_publish'
   | 'portable_handoff'
+  | 'direct_resumable_zip'
 
 type AuthorityActivationContextV1 = Readonly<{
   activation_id: string
@@ -140,6 +142,102 @@ type ProjectionShapeProofV1 =
   | 'tree'
 
 type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
+
+export type DirectZipMilestonePayloadV1 = Readonly<{
+  operation_id: string
+  session_id: string
+  plan_kind: 'direct_resumable_zip'
+  milestone:
+    | 'session_started'
+    | 'session_restored'
+    | 'session_paused'
+    | 'session_resumed'
+    | 'session_settled'
+    | 'session_stopped'
+    | 'permission_query'
+    | 'permission_request'
+    | 'candidate_persist'
+    | 'exact_name_lookup'
+    | 'exact_name_create'
+    | 'bootstrap_write'
+    | 'bootstrap_close'
+    | 'snapshot'
+    | 'epoch_open'
+    | 'epoch_write'
+    | 'epoch_truncate'
+    | 'epoch_close'
+    | 'epoch_abort'
+    | 'range_proof'
+    | 'cleanup_delete'
+    | 'cleanup_observe'
+    | 'epoch_opened'
+    | 'member_admitted'
+    | 'member_resumed'
+    | 'checkpoint_policy_decided'
+    | 'candidate_staged'
+    | 'predecessor_verified'
+    | 'epoch_close_observed'
+    | 'candidate_resolved'
+    | 'checkpoint_promoted'
+    | 'closing_entered'
+    | 'central_record_replayed'
+    | 'completion_verified'
+    | 'writer_gated'
+    | 'writer_failed'
+  checkpoint_phase: 'between_members' | 'inside_member' | 'closing'
+  epoch_offset_class:
+    | 'not_positioned'
+    | 'member_header'
+    | 'member_payload'
+    | 'member_descriptor'
+    | 'central_directory'
+    | 'closing_tail'
+  prefix_copy_decision:
+    | 'not_evaluated'
+    | 'admit'
+    | 'decline_evidence_unavailable'
+    | 'decline_prefix_copy_budget'
+    | 'decline_cumulative_copy_budget'
+  peak_space_decision:
+    | 'not_evaluated'
+    | 'within_budget'
+    | 'confirmation_required'
+    | 'destination_space_required'
+    | 'evidence_unavailable'
+  permission_decision: 'not_evaluated' | 'granted' | 'authorization_required'
+  identity_decision:
+    | 'not_evaluated'
+    | 'verified'
+    | 'target_verification_required'
+    | 'restart_required'
+    | 'needs_attention'
+  space_decision:
+    | 'not_evaluated'
+    | 'admitted'
+    | 'destination_space_required'
+    | 'quota_exceeded'
+    | 'native_effect_ambiguous'
+  cleanup_decision:
+    | 'not_evaluated'
+    | 'not_requested'
+    | 'retained'
+    | 'deleted'
+    | 'needs_attention'
+  native_error_class?:
+    | 'abort'
+    | 'data'
+    | 'invalid_state'
+    | 'no_modification_allowed'
+    | 'not_allowed'
+    | 'not_found'
+    | 'not_supported'
+    | 'quota_exceeded'
+    | 'security'
+    | 'timeout'
+    | 'type_error'
+    | 'type_mismatch'
+    | 'unknown'
+}>
 
 /**
  * The V1 payload map is deliberately closed at the diagnostics boundary. Domain
@@ -521,6 +619,7 @@ export interface TraceEventPayloadByNameV1 {
     backend: OutputBackendV1
     transition: 'started' | 'completed' | 'retryable_failure' | 'ownership_unknown' | 'failed'
   }>
+  readonly direct_zip_milestone: DirectZipMilestonePayloadV1
   readonly retained_inventory:
     | Readonly<{ transition: 'load_started' | 'load_failed' }>
     | Readonly<{ transition: 'load_completed'; operation_count: string }>

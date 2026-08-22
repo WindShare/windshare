@@ -313,7 +313,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		t.Fatalf("workspace preparation error=%v", err)
 	}
 	portablePlan := portable.plan.CanonicalBytes()
-	portablePlan[len(portablePlan)-10] = byte(PublicationManagedAtomic)
+	portablePlan[len(portablePlan)-10] = byte(GuaranteeManagedAtomic)
 	if _, err := DecodeMaterializationPlan(portablePlan, portable.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("portable route error=%v", err)
 	}
@@ -456,13 +456,19 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	zipReserved, err := CollisionName(operation, "chosen.zip", 4, true)
+	target, err := FSAOwnedTargetRefFromBytes(contractOpaque(140))
 	if err != nil {
 		t.Fatal(err)
 	}
-	zipReservation, err := NewManagedAtomicReservation(
-		operation, reservationID, zipSelection, authority, NameUserChosen,
-		"chosen.zip", zipReserved, 4,
+	policies := DirectZipPolicyDigests{
+		ZipEncoding:   mustPolicyDigest(t, contractOpaque(150)),
+		Layout:        mustPolicyDigest(t, contractOpaque(160)),
+		Checkpoint:    mustPolicyDigest(t, contractOpaque(170)),
+		JournalBudget: mustPolicyDigest(t, contractOpaque(180)),
+		Epoch:         mustPolicyDigest(t, contractOpaque(190)),
+	}
+	ownedFile, err := NewFSAOwnedFileBinding(
+		operation, zipSelection, "docs-selection.windshare-YWJjZGVmZ2hpamtsbW5vcA.zip", target, policies,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -484,7 +490,7 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	atomicZip, err := NewDirectAtomicPlan(zipSelection, zipReservation)
+	directZip, err := NewDirectResumableZIPPlan(zipSelection, ownedFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -533,11 +539,20 @@ func newDecoderContractFixture(t *testing.T) decoderContractFixture {
 			"direct-tree-single":     {single, directSingle},
 			"direct-tree-selection":  {selectionTree, directSelection},
 			"direct-atomic-original": {original, atomicOriginal},
-			"direct-atomic-zip":      {zipSelection, atomicZip},
+			"direct-resumable-zip":   {zipSelection, directZip},
 			"workspace-original":     {original, workspaceOriginal},
 			"workspace-zip":          {zipComplete, workspaceZip},
 			"portable-original":      {original, portableOriginal},
 			"portable-zip":           {zipSynthetic, portableZip},
 		},
 	}
+}
+
+func mustPolicyDigest(t *testing.T, raw []byte) PolicyDigest {
+	t.Helper()
+	value, err := PolicyDigestFromBytes(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return value
 }

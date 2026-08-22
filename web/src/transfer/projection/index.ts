@@ -26,6 +26,7 @@ export {
   type SelectionProjectionV1,
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
+  type WorkspaceCostObservationV1,
 } from './model'
 export {
   SelectionProjectionController,

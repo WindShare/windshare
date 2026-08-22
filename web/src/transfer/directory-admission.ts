@@ -123,12 +123,16 @@ export async function createDirectoryAdmissionScope(
           break
       }
       break
-    case 'direct-atomic':
+    case 'direct-resumable-zip':
       if (intent.artifact.kind !== 'zip-archive') {
-        throw new DirectoryAdmissionBindingError('only direct-atomic ZIP uses directory admission')
+        throw new DirectoryAdmissionBindingError('Direct ZIP directory admission requires a ZIP')
       }
       layout = 'zip-result-root'
       break
+    case 'direct-atomic':
+      throw new DirectoryAdmissionBindingError(
+        'DirectAtomic original-file output does not use directory admission',
+      )
     case 'workspace-then-publish':
     case 'portable-handoff':
       throw new DirectoryAdmissionBindingError(

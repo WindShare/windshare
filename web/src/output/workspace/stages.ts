@@ -1,8 +1,8 @@
-import type { ReceiveIntent } from '../../transfer/intent'
+import type { ArtifactChoiceID, ReceiveIntent } from '../../transfer/intent'
 import type { OutputDiagnosticsPorts } from '../diagnostics'
 import {
   createPersistedReceiveRecord,
-  createReceiveOperationV1,
+  createReceiveOperationV2,
   createWorkspaceActivationCandidate,
   receiveOperationHandleRecord,
   RECEIVE_RECORD_WORKSPACE_BINDING,
@@ -30,12 +30,17 @@ export * from './stages/contracts'
 export async function journalWorkspaceActivation(input: {
   readonly repository: ReceiveOperationRepository
   readonly receiveIntent: ReceiveIntent
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly entryIdentity: string
   readonly workspaceRootHandleId: string
   readonly workspaceOwnedObjectId: string
 }): Promise<WorkspaceActivationCandidateV1> {
+  const preClickRanking = Object.freeze([...input.preClickRanking])
   const intent = await requireWorkspaceIntent(input.receiveIntent)
-  const operation = await createReceiveOperationV1({ receiveIntent: intent })
+  const operation = await createReceiveOperationV2({
+    receiveIntent: intent,
+    preClickRanking,
+  })
   const workspaceRecord = await createPersistedReceiveRecord({
     operationId: intent.operationId,
     kind: RECEIVE_RECORD_WORKSPACE_BINDING,

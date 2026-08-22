@@ -101,12 +101,13 @@ func DecodeMaterializationPlan(encoded []byte, artifact ArtifactSpec) (Materiali
 		}
 	case PlanWorkspaceThenPublish:
 		bindingRaw, bindingErr := cursor.frame(cursor.remaining())
+		publication, publicationErr := cursor.framedByte()
 		preparation, preparationErr := cursor.framedByte()
 		workspace, workspaceErr := decodeWorkspaceBinding(bindingRaw, artifact)
-		if firstDecodeError(bindingErr, preparationErr, workspaceErr) != nil {
+		if firstDecodeError(bindingErr, publicationErr, preparationErr, workspaceErr) != nil {
 			return MaterializationPlan{}, ErrInvalidReceiveContract
 		}
-		plan, err = NewWorkspaceThenPublishPlan(artifact, workspace)
+		plan, err = NewWorkspaceThenPublishPlan(artifact, workspace, GuaranteeProfile(publication))
 		if err == nil && plan.Preparation() != PreparationPolicy(preparation) {
 			err = ErrInvalidReceiveContract
 		}
@@ -116,11 +117,20 @@ func DecodeMaterializationPlan(encoded []byte, artifact ArtifactSpec) (Materiali
 		preparation, preparationErr := cursor.framedByte()
 		portable, portableErr := decodePortableBinding(bindingRaw, artifact)
 		if firstDecodeError(bindingErr, routeErr, preparationErr, portableErr) != nil ||
-			PublicationRoute(route) != PublicationBrowserHandoff ||
+			GuaranteeProfile(route) != GuaranteeBrowserHandoff ||
 			PreparationPolicy(preparation) != PreparationExactArtifact {
 			return MaterializationPlan{}, ErrInvalidReceiveContract
 		}
 		plan, err = NewPortableHandoffPlan(artifact, portable)
+	case PlanDirectResumableZIP:
+		bindingRaw, bindingErr := cursor.frame(cursor.remaining())
+		preparation, preparationErr := cursor.framedByte()
+		binding, bindingErr2 := decodeFSAOwnedFileBinding(bindingRaw, artifact)
+		if firstDecodeError(bindingErr, preparationErr, bindingErr2) != nil ||
+			PreparationPolicy(preparation) != PreparationNone {
+			return MaterializationPlan{}, ErrInvalidReceiveContract
+		}
+		plan, err = NewDirectResumableZIPPlan(artifact, binding)
 	default:
 		return MaterializationPlan{}, ErrInvalidReceiveContract
 	}
@@ -371,8 +381,51 @@ func decodePortableBinding(encoded []byte, artifact ArtifactSpec) (PortableBindi
 	return binding, nil
 }
 
+func decodeFSAOwnedFileBinding(encoded []byte, artifact ArtifactSpec) (FSAOwnedFileBinding, error) {
+	cursor, err := newContractDecoder(encoded, fsaOwnedFileBindingDomain)
+	if err != nil {
+		return FSAOwnedFileBinding{}, err
+	}
+	operationRaw, operationFrameErr := cursor.fixedFrame(StableIdentityBytes)
+	artifactRaw, artifactFrameErr := cursor.fixedFrame(AuthorityRefBytes)
+	nameRaw, nameErr := cursor.frame(MaxResultComponentBytes)
+	targetRaw, targetFrameErr := cursor.fixedFrame(AuthorityRefBytes)
+	guaranteeRaw, guaranteeFrameErr := cursor.frame(cursor.remaining())
+	encodingRaw, encodingErr := cursor.fixedFrame(AuthorityRefBytes)
+	layoutRaw, layoutErr := cursor.fixedFrame(AuthorityRefBytes)
+	checkpointRaw, checkpointErr := cursor.fixedFrame(AuthorityRefBytes)
+	journalRaw, journalErr := cursor.fixedFrame(AuthorityRefBytes)
+	epochRaw, epochErr := cursor.fixedFrame(AuthorityRefBytes)
+	operation, operationErr := OperationIDFromBytes(operationRaw)
+	artifactDigest, artifactErr := ArtifactDigestFromBytes(artifactRaw)
+	target, targetErr := FSAOwnedTargetRefFromBytes(targetRaw)
+	guarantees, guaranteesErr := decodeGuaranteeSet(guaranteeRaw)
+	encoding, encodingDigestErr := PolicyDigestFromBytes(encodingRaw)
+	layout, layoutDigestErr := PolicyDigestFromBytes(layoutRaw)
+	checkpoint, checkpointDigestErr := PolicyDigestFromBytes(checkpointRaw)
+	journal, journalDigestErr := PolicyDigestFromBytes(journalRaw)
+	epoch, epochDigestErr := PolicyDigestFromBytes(epochRaw)
+	if firstDecodeError(
+		operationFrameErr, artifactFrameErr, nameErr, targetFrameErr, guaranteeFrameErr,
+		encodingErr, layoutErr, checkpointErr, journalErr, epochErr,
+		operationErr, artifactErr, targetErr, guaranteesErr, encodingDigestErr,
+		layoutDigestErr, checkpointDigestErr, journalDigestErr, epochDigestErr,
+	) != nil || artifactDigest != artifact.Digest() || guarantees != FSAOwnedFileGuarantees() {
+		return FSAOwnedFileBinding{}, ErrInvalidReceiveContract
+	}
+	binding, err := NewFSAOwnedFileBinding(operation, artifact, string(nameRaw), target, DirectZipPolicyDigests{
+		ZipEncoding: encoding, Layout: layout, Checkpoint: checkpoint, JournalBudget: journal, Epoch: epoch,
+	})
+	if err != nil || !cursor.done() || !bytes.Equal(binding.CanonicalBytes(), encoded) {
+		return FSAOwnedFileBinding{}, ErrInvalidReceiveContract
+	}
+	return binding, nil
+}
+
 func decodeGuaranteeSet(encoded []byte) (GuaranteeSet, error) {
-	candidates := []GuaranteeSet{NativeTreeGuarantees(), FSATreeGuarantees(), BrowserHandoffGuarantees()}
+	candidates := []GuaranteeSet{
+		NativeTreeGuarantees(), FSATreeGuarantees(), BrowserHandoffGuarantees(), FSAOwnedFileGuarantees(),
+	}
 	for _, name := range []NameAuthority{NameApplicationChosen, NameUserChosen} {
 		managed, err := ManagedAtomicGuarantees(name)
 		if err != nil {

@@ -1,6 +1,6 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { offerArtifacts, type SelectionProjectionV1 } from '../../src/output/planning'
-import { createSelectionSpec } from '../../src/transfer/intent'
+import { createSelectionSpec, type ArtifactChoiceID } from '../../src/transfer/intent'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
   createBrowserReceiveComposition,
@@ -46,6 +46,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
   let pickerCalls = 0
   let adoptionPreparationCalls = 0
   let actionReturned = false
+  const activeChoice: { choiceId?: ArtifactChoiceID } = {}
   const coordinatorOwner: { current?: V2AuthorityActivationCoordinator } = {}
   let complete: (() => void) | undefined
   completion = new Promise<void>((resolve) => {
@@ -62,7 +63,9 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
         pickerMode: options.mode ?? null,
         userActivationWasActive: navigator.userActivation.isActive,
         pickerStartedBeforeActionReturned: !actionReturned,
-        reentrantChoiceAccepted: coordinatorOwner.current?.choose('save-directory-tree') ?? false,
+        reentrantChoiceAccepted: activeChoice.choiceId === undefined
+          ? false
+          : coordinatorOwner.current?.choose(activeChoice.choiceId) ?? false,
       })
       return Promise.resolve(parent)
     },
@@ -86,6 +89,7 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
   if (choice === undefined || choice.choice.artifactKind !== 'directory-tree') {
     throw new TypeError('Browser composition did not offer FSA DirectoryTree')
   }
+  activeChoice.choiceId = choice.choice.choiceId
   const presented = presentArtifactChoice(choice)
   if (presented.label !== ACTION_LABEL) {
     throw new TypeError('FSA DirectoryTree product label changed unexpectedly')
@@ -155,8 +159,8 @@ export async function installArtifactActionActivationHarness(): Promise<Artifact
   button.addEventListener('click', (event) => {
     proof = freezeProof({ ...requiredProof(), clickWasTrusted: event.isTrusted })
     try {
-      const firstChoiceAccepted = coordinator?.choose(choice.choice.operation) ?? false
-      const repeatedChoiceAccepted = coordinator?.choose(choice.choice.operation) ?? false
+      const firstChoiceAccepted = coordinator?.choose(choice.choice.choiceId) ?? false
+      const repeatedChoiceAccepted = coordinator?.choose(choice.choice.choiceId) ?? false
       actionReturned = true
       proof = freezeProof({
         ...requiredProof(),

@@ -210,6 +210,7 @@ function recoverFinalizingTree(
   }
   return reduction(nextReceiveLifecycleState(state, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.successCount,
     completedBytes: observation.completedBytes,
@@ -393,6 +394,7 @@ function resumableReceive(
 ): ReceiveLifecycleState {
   return nextReceiveLifecycleState(state, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.completedFileCount,
     completedBytes: observation.completedBytes,
@@ -486,9 +488,12 @@ function assertDurableRecoveryPlan(
 
 function stableStateKind(
   state: ReceiveLifecycleState,
-): 'resumable-receive' | 'resumable-package' | 'waiting-to-save' | 'download-started' {
+): import('./state').RetainedLifecycleKind {
   if (state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
-      state.kind === 'waiting-to-save' || state.kind === 'download-started') return state.kind
+      state.kind === 'waiting-to-save' || state.kind === 'download-started' ||
+      state.kind === 'authorization-required' ||
+      state.kind === 'target-verification-required' ||
+      state.kind === 'destination-space-required') return state.kind
   if (state.kind === 'handing-off') return 'waiting-to-save'
   throw new TypeError('recovery expiry requires a stable state')
 }

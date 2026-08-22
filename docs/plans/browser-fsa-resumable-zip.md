@@ -59,6 +59,10 @@ FSA 没有跨本地进程的条件创建、条件替换和条件删除。计划�
 
 FSA `createWritable({ keepExistingData: true })` 会复制既有 prefix，因此 `DirectZipEpochPolicyV1` 以正常传输速度和空间为先：保持一个长生命周期 writer，不按 block、member、固定时间或固定字节关闭。自动 checkpoint 只有在下一 epoch 的 committed-prefix 峰值和累计 prefix-copy 仍处于具名预算内时才允许；超预算后传输继续，但安全位置不再前移。用户主动暂停时关闭当前 epoch 并显示“正在保存可继续位置”；再次继续前按 committed length 明示最多可能需要的额外临时空间。策略不承诺固定最大回退。
 
+经 reviewed native evidence 冻结的 V1 自动预算为：单次 prefix copy 256 MiB、累计 prefix copy 512 MiB、modeled peak temporary space 256 MiB。三者都使用包含 ZIP header、descriptor 与 ownership extra 的精确 committed archive bytes，并采用 inclusive 上界；因此 raw predecessor 为 256 MiB、提交后 prefix 为 257 MiB 的测量 case 不会被自动 checkpoint 接受。
+
+同一 exact Windows/Edge/NTFS support row 另行绑定 workspace peak 推荐上界 `1,073,744,986` bytes 和 digest `zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI`。该值是三次 512 MiB raw case 的 checked `raw + package + spool + durable metadata` 峰值；1 GiB raw 的精确 modeled peak 为 `2,147,489,972` bytes，超过预先声明的 1.25 GiB evidence cap，因此未执行。它只在 complete exact discovery、checked budget 与两条 route 都可用时改变点击前展示排序，不授予 authority、不扫描目标，也不允许点击后替换 route。
+
 一次 checkpoint cut 为：
 
 1. 在同一 writable 中暂存一个或多个 member，并在写入时计算 expected epoch digest；
@@ -100,7 +104,7 @@ OPFS `waiting-to-save`、重新下载和 complete-only 清理语义保持不变�
 
 ## 6. 实施与验证顺序
 
-1. 先做真实本地 FSA spike，不以 OPFS 或 mock 代替；真实 fixture 总量不超过约 10 GiB，执行前检查并保留具名磁盘安全余量，结束后只清理 ownership-proven 测试文件。覆盖首次写入、`keepExistingData` 重开、浏览器终止、重新授权和外部替换；磁盘满只用受控配额或 fault injection 模拟，不得主动耗尽本地磁盘。测量 prefix copy、峰值空间、close 与读回成本，据此冻结支持矩阵、workspace 推荐预算和 `DirectZipEpochPolicyV1` 具名常量。
+1. 真实本地 FSA spike 已完成，并据此冻结支持矩阵、workspace 推荐预算和 `DirectZipEpochPolicyV1` 具名常量。发布树只保留 compact reviewed matrix/schema/digest、脱离采集器的 verifier 和确定性 workspace threshold derivation；原生 UI 采集器与 raw receipts 不随产品分发。
 2. 同步重构 Go/TypeScript canonical choice identity、plan/target guarantee、lifecycle byte 和两套用户文案；直接升级版本，不双读旧合同。
 3. 实现 FSA reservation candidate、ZIP ownership marker、handle persistence、operation lease 与安全清理。
 4. 实现带 budget admission 的 `DirectZipJournal`，持久化 layout、discovery、central records、checkpoint 与 candidate transitions。

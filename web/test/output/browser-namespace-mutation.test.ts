@@ -6,6 +6,7 @@ import {
   createReceiveIntent,
   createSelectionSpec,
   createSingleFileDirectoryTreeArtifact,
+  deriveArtifactChoiceIdentity,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import {
@@ -55,7 +56,12 @@ describe('FSA namespace and persisted parent authority', () => {
     const parent = directoryHandle('downloads', 'parent-a')
     const intent = await singleFileIntent()
 
-    const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+    const prepared = await prepareFSAOperationBindingTransition({
+      repository,
+      intent,
+      parent,
+      preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+    })
     expect(repository.transitions).toEqual([])
     await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
     const persisted = await verifyFSAOperationBinding({
@@ -67,8 +73,9 @@ describe('FSA namespace and persisted parent authority', () => {
       profile: 'fsa-tree',
       replacement: 'coordinated-no-replace',
       delivery: 'managed-target',
-      visibility: 'prefix-visible',
-      rollback: 'none',
+      targetVisibility: 'committed-objects-visible',
+      artifactAvailability: 'committed-objects-usable',
+      cleanupAuthority: 'no-whole-target-rollback',
     })
     expect(repository.transitions).toHaveLength(1)
     expect(repository.transitions[0]).toMatchObject({ operationId: intent.operationId })
@@ -162,7 +169,12 @@ async function commitFSAOperationBinding(
   intent: ReceiveIntent,
   parent: FileSystemDirectoryHandle,
 ) {
-  const prepared = await prepareFSAOperationBindingTransition({ repository, intent, parent })
+  const prepared = await prepareFSAOperationBindingTransition({
+    repository,
+    intent,
+    parent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+  })
   await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
   return verifyFSAOperationBinding({ repository, intent, expectedParent: parent })
 }

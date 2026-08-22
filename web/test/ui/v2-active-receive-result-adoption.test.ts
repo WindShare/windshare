@@ -66,6 +66,7 @@ const TRANSFER_MEASURE: SelectionMeasure = Object.freeze({
 const UNAVAILABLE_PLANS: V2PlanExecutionAuthority = Object.freeze({
   openDirectTree: unavailableExecution,
   openDirectAtomic: unavailableExecution,
+  openDirectResumableZip: unavailableExecution,
   openWorkspaceOriginal: unavailableExecution,
   prepareWorkspaceZip: unavailableExecution,
   preparePortable: unavailableExecution,
@@ -365,6 +366,7 @@ async function preparedOutput(): Promise<Readonly<{
     selectionDigest: selection.digest,
     choice: offered.choice,
     installedRoute: materializationRouteIdentity(offered.route),
+    preClickRanking: Object.freeze([offered.choice.choiceId]),
     observation: Object.freeze({
       revision: 1,
       protocolSessionId: identity(14),
@@ -516,6 +518,7 @@ function workerWithFileOutcome(outcome: TransferFileOutcome): TransferWorkerSett
 function resumableLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleState {
   return nextReceiveLifecycleState(initial, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: identity(30, 32),
     completedFileCount: 0n,
     completedBytes: 0n,

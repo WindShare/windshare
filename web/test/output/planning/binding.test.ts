@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createFSANamedEntryReservation,
+  createFSAOwnedFileBinding,
   createManagedAtomicReservation,
   createNativeNamedEntryReservation,
   createPortableBinding,
@@ -22,6 +23,7 @@ import {
 import {
   COMPLETE_DISCOVERY,
   environment,
+  directZipTarget,
   fsaTarget,
   handoffTarget,
   identity,
@@ -29,6 +31,8 @@ import {
   portableOffer,
   projection,
   singleFileProof,
+  reviewedDirectZipSupport,
+  treeProof,
   workspaceOffer,
 } from './fixture'
 
@@ -117,6 +121,56 @@ describe('receive intent binding', () => {
       expect(bound.intent.operationId).toBe(operationID(testCase.candidate))
       expect(bound.decision.operation_id).toBe(bound.intent.operationId)
     }
+  })
+
+  it('binds a reviewed direct ZIP route without substituting workspace authority', async () => {
+    const selection = await selectionSpec()
+    const support = reviewedDirectZipSupport()
+    const currentEnvironment = environment({
+      targets: [directZipTarget()],
+      directZipSupport: support,
+      zipRecommendationPolicy: {
+        version: 1,
+        kind: 'available',
+        workspacePeakBytesThreshold: 0n,
+        policyDigest: support.recommendationPolicyDigest,
+      },
+    })
+    const currentProjection = projection(selection, treeProof(), 10n)
+    const offers = await offerArtifacts(currentProjection, COMPLETE_DISCOVERY, currentEnvironment)
+    if (offers.kind !== 'artifact-actions' || offers.primary.route.kind !== 'direct-resumable-zip') {
+      throw new Error('expected direct ZIP planning action')
+    }
+    const outcome = await reconcileArtifactChoice({
+      choice: offers.primary.choice,
+      preferredRoute: materializationRouteIdentity(offers.primary.route),
+      expectedSelectionDigest: selection.digest,
+      projection: currentProjection,
+      discovery: COMPLETE_DISCOVERY,
+      environment: currentEnvironment,
+      previousObservation: {
+        projectionEpoch: currentProjection.epoch,
+        selectionDigest: selection.digest,
+        resolvedArtifactDigest: null,
+      },
+    })
+    if (outcome.kind !== 'resolved') throw new Error('expected resolved direct ZIP action')
+    const binding = await createFSAOwnedFileBinding({
+      operationId: identity(80),
+      artifact: outcome.action.artifact,
+      stableName: `photos.windshare-${identity(81)}.zip`,
+      targetRef: identity(82, 32),
+      policies: support.policies,
+    })
+
+    const bound = await bindReceiveIntent({
+      selection,
+      action: outcome.action,
+      candidate: { kind: 'fsa-owned-file-binding', targetRouteId: 'direct-zip', binding },
+    })
+
+    expect(bound.intent.plan.kind).toBe('direct-resumable-zip')
+    expect(bound.intent.operationId).toBe(binding.operationId)
   })
 
   it('rejects selection and resolved-artifact digest mismatches before plan binding', async () => {
@@ -280,5 +334,6 @@ function operationID(candidate: CandidateMaterializationBinding): string {
     case 'destination-reservation': return candidate.reservation.operationId
     case 'workspace-binding': return candidate.workspace.operationId
     case 'portable-binding': return candidate.portable.operationId
+    case 'fsa-owned-file-binding': return candidate.binding.operationId
   }
 }

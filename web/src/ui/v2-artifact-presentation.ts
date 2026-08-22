@@ -4,8 +4,11 @@ import type {
   ArtifactOperation,
   OfferUnavailableReason,
   OfferedArtifactChoice,
+  ProjectedByteCount,
+  ZipRouteGroup,
 } from '../output/planning'
 import type { V2AuthorityActivationSnapshot } from './controller/activation-model'
+import { formatBytes } from './v2-progress-presentation'
 
 export interface PresentedArtifactChoice {
   readonly offeredChoice: OfferedArtifactChoice | null
@@ -15,7 +18,24 @@ export interface PresentedArtifactChoice {
   readonly description: string
   readonly importance: OfferedArtifactChoice['importance']
   readonly packageExplanation: string | null
+  readonly selectedBytes: string
+  readonly resultBytes: string
 }
+
+export type ZipModePresentation =
+  | Readonly<{
+      kind: 'routes'
+      title: 'ZIP package'
+      description: string
+      primary: PresentedArtifactChoice
+      secondary: PresentedArtifactChoice | null
+      recommendation: string
+    }>
+  | Readonly<{
+      kind: 'native-fallback'
+      title: 'ZIP package'
+      description: string
+    }>
 
 export type ArtifactOfferPresentation =
   | Readonly<{
@@ -23,6 +43,7 @@ export type ArtifactOfferPresentation =
       interactive: false
       title: string
       description: string
+      nativeFallback: string | null
     }>
   | Readonly<{
       kind: 'retry'
@@ -34,8 +55,8 @@ export type ArtifactOfferPresentation =
   | Readonly<{
       kind: 'choices'
       interactive: true
-      primary: PresentedArtifactChoice
-      alternatives: readonly PresentedArtifactChoice[]
+      defaultChoices: readonly PresentedArtifactChoice[]
+      zipMode: ZipModePresentation | null
     }>
 
 export type ArtifactActivationPresentation =
@@ -60,7 +81,10 @@ export type ArtifactActivationPresentation =
     }>
 
 const ZIP_PACKAGE_EXPLANATION =
-  'Creates one ZIP package without compression. It becomes available only after every selected item is received.'
+  'Package only: creates one ZIP package and stores files without compression. The ZIP is usable only after closing and verification finish.'
+
+const NATIVE_ZIP_FALLBACK =
+  'This browser has no safe ZIP route for the selection. Use the native receiver for this ZIP.'
 
 export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPresentation {
   switch (offers.kind) {
@@ -70,6 +94,7 @@ export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPres
         interactive: false,
         title: 'Confirming selected content…',
         description: 'WindShare is determining the final result. No save dialog will open automatically.',
+        nativeFallback: null,
       })
     case 'retry-confirmation':
       return Object.freeze({
@@ -85,6 +110,7 @@ export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPres
         interactive: false,
         title: 'Nothing is selected.',
         description: 'Select a file or folder before receiving.',
+        nativeFallback: null,
       })
     case 'no-safe-destination':
       return Object.freeze({
@@ -92,14 +118,23 @@ export function presentArtifactOffers(offers: ArtifactOffers): ArtifactOfferPres
         interactive: false,
         title: unavailableTitle(offers.reason),
         description: unavailableDescription(offers.reason),
+        nativeFallback: offers.fallback.kind === 'native-recommended'
+          ? NATIVE_ZIP_FALLBACK
+          : null,
       })
-    case 'artifact-actions':
+    case 'artifact-actions': {
+      const choices = [offers.primary, ...offers.alternatives]
+      const defaultChoices = choices
+        .filter(candidate => candidate.choice.artifactKind !== 'zip-archive')
+        .map(presentArtifactChoice)
+      const zipMode = presentZipMode(offers.zip, choices)
       return Object.freeze({
         kind: 'choices',
         interactive: true,
-        primary: presentArtifactChoice(offers.primary),
-        alternatives: Object.freeze(offers.alternatives.map(presentArtifactChoice)),
+        defaultChoices: Object.freeze(defaultChoices),
+        zipMode,
       })
+    }
   }
 }
 
@@ -203,10 +238,25 @@ function presentChoice(
     description: artifactChoiceDescription(choice),
     importance,
     packageExplanation: choice.artifactKind === 'zip-archive' ? ZIP_PACKAGE_EXPLANATION : null,
+    selectedBytes: projectedBytes('Selected content', offeredChoice?.sizeProjection.raw),
+    resultBytes: projectedBytes(
+      choice.artifactKind === 'zip-archive' ? 'ZIP package' : 'Result',
+      offeredChoice?.sizeProjection.artifact,
+    ),
   })
 }
 
 function artifactChoiceLabel(choice: ArtifactChoice, suggestedName: string | null): string {
+  if (choice.artifactKind === 'zip-archive') {
+    switch (choice.plan.kind) {
+      case 'direct-resumable-zip': return 'Save ZIP to a folder'
+      case 'workspace-then-publish': return 'Save ZIP after receiving completes'
+      case 'portable-handoff': return 'Check then download ZIP'
+      case 'direct-tree':
+      case 'direct-atomic':
+        break
+    }
+  }
   switch (choice.operation) {
     case 'download-original':
       return suggestedName === null ? 'Download selected file' : `Download ${suggestedName}`
@@ -234,13 +284,60 @@ function artifactChoiceDescription(choice: ArtifactChoice): string {
       : 'Checks that the complete file fits before receiving it. The browser takes over when the file is ready.'
   }
   if (choice.artifactKind === 'zip-archive') {
+    if (choice.plan.kind === 'direct-resumable-zip') {
+      return 'Creates the named ZIP in the folder you choose. An incomplete target is visible until closing and verification finish; do not move or modify it meanwhile.'
+    }
     return choice.recovery === 'workspace-resumable'
-      ? 'Receives every selected item before saving the complete ZIP. Retained progress can continue later.'
-      : 'Saves one complete ZIP only after every selected item succeeds.'
+      ? 'Receives every selected item before asking where to save the complete ZIP. Retained progress can continue later.'
+      : 'Hands off one complete ZIP only after every selected item succeeds.'
   }
   return choice.recovery === 'workspace-resumable'
     ? 'Receives the complete file before saving it. Retained progress can continue later.'
     : 'Saves the complete file without publishing an incomplete result.'
+}
+
+function presentZipMode(
+  group: ZipRouteGroup | null,
+  choices: readonly OfferedArtifactChoice[],
+): ZipModePresentation | null {
+  if (group !== null) {
+    return Object.freeze({
+      kind: 'routes',
+      title: 'ZIP package',
+      description: ZIP_PACKAGE_EXPLANATION,
+      primary: presentArtifactChoice(group.primary),
+      secondary: group.secondary === null ? null : presentArtifactChoice(group.secondary),
+      recommendation: zipRecommendationCopy(group),
+    })
+  }
+  return choices.some(choice => choice.choice.artifactKind === 'directory-tree')
+    ? Object.freeze({
+        kind: 'native-fallback',
+        title: 'ZIP package',
+        description: NATIVE_ZIP_FALLBACK,
+      })
+    : null
+}
+
+function zipRecommendationCopy(group: ZipRouteGroup): string {
+  if (group.recommendation.kind === 'recommended') {
+    return group.recommendation.reason === 'workspace-within-reviewed-budget'
+      ? 'Recommended: receive completely first because the checked local cost is within the reviewed budget.'
+      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the reviewed budget.'
+  }
+  switch (group.recommendation.reason) {
+    case 'only-one-route-available': return 'This is the only safe browser ZIP route currently available.'
+    case 'no-browser-zip-route': return NATIVE_ZIP_FALLBACK
+    case 'discovery-incomplete': return 'No route is recommended until selected-content discovery is complete.'
+    case 'workspace-cost-unavailable': return 'No route is recommended because complete-first cost is unavailable.'
+    case 'recommendation-policy-unavailable': return 'No route is recommended because measured comparison data is unavailable.'
+  }
+}
+
+function projectedBytes(label: string, value: ProjectedByteCount | undefined): string {
+  if (value === undefined) return `${label}: size unavailable`
+  const exactness = value.kind === 'exact' ? 'exact' : 'estimated lower bound'
+  return `${label}: ${formatBytes(value.bytes)} (${exactness})`
 }
 
 function unavailableTitle(reason: OfferUnavailableReason): string {

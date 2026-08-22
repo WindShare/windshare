@@ -12,6 +12,7 @@ import {
 } from './canonical'
 import {
   validateDestinationReservation,
+  validateFSAOwnedFileBinding,
   validatePortableBinding,
   validateWorkspaceBinding,
 } from './destination'
@@ -22,8 +23,11 @@ import {
   type CanonicalBytes,
   type DestinationReservation,
   type DirectAtomicPlan,
+  type DirectResumableZipPlan,
   type DirectTreePlan,
   type MaterializationPlan,
+  type FSAOwnedFileBinding,
+  type GuaranteeProfile,
   type PortableBinding,
   type PortableHandoffPlan,
   type ReceiveIntent,
@@ -76,8 +80,8 @@ export async function createDirectAtomicPlan(
 ): Promise<DirectAtomicPlan> {
   const artifact = await validateArtifactSpec(artifactInput)
   const reservation = await validateDestinationReservation(reservationInput, artifact)
-  if (artifact.kind === 'directory-tree' || reservation.kind !== 'atomic-target') {
-    throw new TypeError('direct-atomic requires a complete artifact and atomic reservation')
+  if (artifact.kind !== 'original-file' || reservation.kind !== 'atomic-target') {
+    throw new TypeError('direct-atomic requires an original-file artifact and atomic reservation')
   }
   const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
     Uint8Array.of(2),
@@ -95,19 +99,25 @@ export async function createDirectAtomicPlan(
 export async function createWorkspaceThenPublishPlan(
   artifactInput: ArtifactSpec,
   workspaceInput: WorkspaceBinding,
+  publicationGuarantee: 'managed-atomic' | 'browser-handoff' = 'browser-handoff',
 ): Promise<WorkspaceThenPublishPlan> {
+  if (publicationGuarantee !== 'managed-atomic' && publicationGuarantee !== 'browser-handoff') {
+    throw new TypeError('workspace publication guarantee is invalid')
+  }
   const artifact = await validateArtifactSpec(artifactInput)
   const workspace = await validateWorkspaceBinding(workspaceInput, artifact)
   const preparation = artifact.kind === 'zip-archive' ? 'exact-zip' : 'none'
   const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
     Uint8Array.of(3),
     frame(workspace.canonicalBytes),
+    frame(Uint8Array.of(guaranteeProfileByte(publicationGuarantee))),
     frame(Uint8Array.of(preparation === 'exact-zip' ? 1 : 0)),
   ])
   return canonicalValue({
     version: MATERIALIZATION_PLAN_VERSION,
     kind: 'workspace-then-publish' as const,
     workspace,
+    publicationGuarantee,
     preparation,
   }, canonicalBytes)
 }
@@ -121,15 +131,37 @@ export async function createPortableHandoffPlan(
   const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
     Uint8Array.of(4),
     frame(portable.canonicalBytes),
-    frame(Uint8Array.of(2)),
+    frame(Uint8Array.of(guaranteeProfileByte('browser-handoff'))),
     frame(Uint8Array.of(2)),
   ])
   return canonicalValue({
     version: MATERIALIZATION_PLAN_VERSION,
     kind: 'portable-handoff' as const,
     portable,
-    publicationRoute: 'browser-handoff' as const,
+    publicationGuarantee: 'browser-handoff' as const,
     preparation: 'exact-artifact' as const,
+  }, canonicalBytes)
+}
+
+export async function createDirectResumableZipPlan(
+  artifactInput: ArtifactSpec,
+  bindingInput: FSAOwnedFileBinding,
+): Promise<DirectResumableZipPlan> {
+  const artifact = await validateArtifactSpec(artifactInput)
+  const binding = await validateFSAOwnedFileBinding(bindingInput, artifact)
+  if (artifact.kind !== 'zip-archive' || binding.guarantees.profile !== 'fsa-owned-file') {
+    throw new TypeError('direct-resumable-zip requires an FSA owned-file ZIP binding')
+  }
+  const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
+    Uint8Array.of(5),
+    frame(binding.canonicalBytes),
+    frame(Uint8Array.of(0)),
+  ])
+  return canonicalValue({
+    version: MATERIALIZATION_PLAN_VERSION,
+    kind: 'direct-resumable-zip' as const,
+    binding,
+    preparation: 'none' as const,
   }, canonicalBytes)
 }
 
@@ -151,16 +183,20 @@ export async function validateMaterializationPlan(
       rebuilt = await createDirectAtomicPlan(artifact, input.reservation)
       break
     case 'workspace-then-publish':
-      rebuilt = await createWorkspaceThenPublishPlan(artifact, input.workspace)
+      rebuilt = await createWorkspaceThenPublishPlan(artifact, input.workspace, input.publicationGuarantee)
       if (input.preparation !== rebuilt.preparation) {
         throw new TypeError('workspace preparation policy is invalid')
       }
       break
     case 'portable-handoff':
-      if (input.publicationRoute !== 'browser-handoff' || input.preparation !== 'exact-artifact') {
+      if (input.publicationGuarantee !== 'browser-handoff' || input.preparation !== 'exact-artifact') {
         throw new TypeError('portable handoff policy is invalid')
       }
       rebuilt = await createPortableHandoffPlan(artifact, input.portable)
+      break
+    case 'direct-resumable-zip':
+      if (input.preparation !== 'none') throw new TypeError('direct-resumable-zip preparation is invalid')
+      rebuilt = await createDirectResumableZipPlan(artifact, input.binding)
       break
     default:
       throw new TypeError('materialization plan kind is invalid')
@@ -177,6 +213,8 @@ export function materializationPlanOperationID(plan: MaterializationPlan): strin
       return plan.workspace.operationId
     case 'portable-handoff':
       return plan.portable.operationId
+    case 'direct-resumable-zip':
+      return plan.binding.operationId
   }
 }
 
@@ -189,6 +227,8 @@ export function materializationPlanArtifactDigest(plan: MaterializationPlan): st
       return plan.workspace.artifactDigest
     case 'portable-handoff':
       return plan.portable.artifactDigest
+    case 'direct-resumable-zip':
+      return plan.binding.artifactDigest
   }
 }
 
@@ -201,6 +241,8 @@ export function materializationPlanBindingDigest(plan: MaterializationPlan): str
       return plan.workspace.digest
     case 'portable-handoff':
       return plan.portable.digest
+    case 'direct-resumable-zip':
+      return plan.binding.digest
   }
 }
 
@@ -262,4 +304,14 @@ export async function validateReceiveIntent(input: ReceiveIntent): Promise<Recei
 
 export async function receiveIntentDigest(input: ReceiveIntent): Promise<string> {
   return (await validateReceiveIntent(input)).digest
+}
+
+function guaranteeProfileByte(value: GuaranteeProfile): number {
+  switch (value) {
+    case 'native-tree': return 1
+    case 'fsa-tree': return 2
+    case 'managed-atomic': return 3
+    case 'browser-handoff': return 4
+    case 'fsa-owned-file': return 5
+  }
 }

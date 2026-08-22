@@ -11,8 +11,10 @@ import {
 } from '../../src/output/planning'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
+  RECEIVE_RECORD_OPERATION,
   RECEIVE_RECORD_WORKSPACE_ACTIVATION,
   createWorkspaceActivationCandidate,
+  decodeStoredReceiveOperation,
   decodeStoredWorkspaceActivationCandidate,
   receiveOperationLeaseRecord,
   type ManifestPageRecord,
@@ -39,6 +41,7 @@ import {
 } from '../../src/output/workspace/stages'
 import {
   createSelectionSpec,
+  type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
@@ -105,6 +108,29 @@ describe('workspace route activation ownership', () => {
     expect(await fixture.repository.readLease(OPERATION_ID)).toEqual(expect.objectContaining({
       leaseId: LEASE_ID,
     }))
+  })
+
+  it('persists the immutable pre-click ranking instead of recomputing it from the selected route', async () => {
+    const secondary = identity(92, 32) as ArtifactChoiceID
+    const ranking: ArtifactChoiceID[] = []
+    const fixture = await routeFixture({ preClickRanking: ranking })
+    ranking.push(fixture.action.choiceId, secondary)
+    const authority = fixture.authority()
+    ranking.splice(1, 1)
+
+    const result = await authority.commit({
+      action: fixture.action,
+      signal: new AbortController().signal,
+      freezeAtFence: candidate =>
+        bindReceiveIntent({ selection: fixture.selection, action: fixture.action, candidate }),
+    })
+    expect(result.kind).toBe('bound-operation')
+    const record = fixture.repository.records(OPERATION_ID).find(candidate =>
+      candidate.kind === RECEIVE_RECORD_OPERATION)
+    if (record === undefined) throw new Error('workspace operation record was not persisted')
+    const operation = await decodeStoredReceiveOperation(record)
+    expect(operation.preClickRanking).toEqual([fixture.action.choiceId, secondary])
+    expect(Object.isFrozen(operation.preClickRanking)).toBe(true)
   })
 
   it('serializes activation recovery until promotion and the persistent lease are complete', async () => {
@@ -302,6 +328,7 @@ type FailurePoint =
 async function routeFixture(options: {
   readonly failure?: FailurePoint
   readonly trackActivationLock?: boolean
+  readonly preClickRanking?: readonly ArtifactChoiceID[]
 } = {}) {
   const planned = await workspaceResolvedAction()
   const repository = new MemoryReceiveOperationRepository()
@@ -424,6 +451,7 @@ async function routeFixture(options: {
         const candidate = await journalWorkspaceActivation({
           repository,
           receiveIntent: input.receiveIntent,
+          preClickRanking: input.preClickRanking,
           entryIdentity: activationCandidate.entryIdentity,
           workspaceRootHandleId: activationCandidate.rootHandleId,
           workspaceOwnedObjectId: activationCandidate.rootOwnedObjectId,
@@ -442,6 +470,7 @@ async function routeFixture(options: {
       const candidate = await journalWorkspaceActivation({
         repository,
         receiveIntent: input.receiveIntent,
+        preClickRanking: input.preClickRanking,
         entryIdentity: activationCandidate.entryIdentity,
         workspaceRootHandleId: namespace.rootHandleId,
         workspaceOwnedObjectId: namespace.rootOwnedObjectId,
@@ -495,12 +524,14 @@ async function routeFixture(options: {
     authority: () => new WorkspaceArtifactPresentationAuthority({
       windowPort,
       offered: planned.offered,
+      preClickRanking: options.preClickRanking ?? [planned.offered.choice.choiceId],
       dependencies,
     }),
     commit: async () => {
       const authority = new WorkspaceArtifactPresentationAuthority({
         windowPort,
         offered: planned.offered,
+        preClickRanking: options.preClickRanking ?? [planned.offered.choice.choiceId],
         dependencies,
       })
       return authority.commit({

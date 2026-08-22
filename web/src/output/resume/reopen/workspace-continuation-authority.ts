@@ -99,7 +99,10 @@ export class WorkspaceContinuationAuthority {
   async resumeReceive(
     input: WorkspaceContinuationInput,
     observedAt: number,
-    admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+    admissionFallback: Extract<ReceiveLifecycleState, {
+      kind: 'resumable-receive'
+      payloadKind: 'file-set'
+    }>,
   ): Promise<ReopenLifecycleAuthority> {
     const stages = await this.openStages(
       input.repository,

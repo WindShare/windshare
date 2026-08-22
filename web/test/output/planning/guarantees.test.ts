@@ -4,6 +4,7 @@ import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS,
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   createSelectionSpec,
+  fsaOwnedFileGuarantees,
 } from '../../../src/transfer/intent'
 import {
   createEnvironmentOffers,
@@ -15,8 +16,9 @@ import type {
   DeliveryMode,
   NameAuthority,
   ReplacementGuarantee,
-  RollbackGuarantee,
-  CommitVisibility,
+  TargetVisibility,
+  ArtifactAvailability,
+  CleanupAuthority,
 } from '../../../src/transfer/intent'
 import type {
   DestinationGuaranteeFacts,
@@ -43,11 +45,21 @@ const REPLACEMENTS: readonly ReplacementGuarantee[] = [
   'atomic-no-replace', 'coordinated-no-replace', 'user-authorized-replace', 'unknown',
 ]
 const DELIVERIES: readonly DeliveryMode[] = ['managed-target', 'browser-handoff']
-const VISIBILITIES: readonly CommitVisibility[] = ['atomic-commit', 'prefix-visible', 'unobservable']
-const ROLLBACKS: readonly RollbackGuarantee[] = ['to-absent', 'none']
+const TARGET_VISIBILITIES: readonly TargetVisibility[] = [
+  'hidden-until-verified-publication', 'committed-objects-visible', 'unobservable',
+  'operation-owned-incomplete-file-visible',
+]
+const ARTIFACT_AVAILABILITIES: readonly ArtifactAvailability[] = [
+  'verified-complete-only', 'committed-objects-usable', 'handoff-only',
+]
+const CLEANUP_AUTHORITIES: readonly CleanupAuthority[] = [
+  'rollback-to-absent-before-publication', 'no-whole-target-rollback',
+  'ownership-proof-required', 'no-managed-cleanup',
+]
 const TARGET_KINDS: readonly EnvironmentTargetKind[] = [
   'native-directory-container',
   'fsa-parent-directory',
+  'fsa-owned-file-target',
   'managed-atomic-file-target',
   'browser-handoff',
   'precreated-browser-file',
@@ -69,6 +81,7 @@ describe('environment guarantee legality', () => {
     expect(Object.fromEntries(legalCounts)).toEqual({
       'native-directory-container': 1,
       'fsa-parent-directory': 1,
+      'fsa-owned-file-target': 1,
       'managed-atomic-file-target': 2,
       'browser-handoff': 1,
       'precreated-browser-file': 0,
@@ -86,8 +99,9 @@ describe('environment guarantee legality', () => {
         nameAuthority: 'user-chosen',
         replacement: 'unknown',
         delivery: 'managed-target',
-        visibility: 'unobservable',
-        rollback: 'none',
+        targetVisibility: 'unobservable',
+        artifactAvailability: 'verified-complete-only',
+        cleanupAuthority: 'no-managed-cleanup',
       },
     })
   })
@@ -176,7 +190,10 @@ describe('environment guarantee legality', () => {
           ...base.plan,
           target: {
             ...base.plan.target,
-            guarantees: { ...base.plan.target.guarantees, rollback: 'to-absent' },
+            guarantees: {
+              ...base.plan.target.guarantees,
+              cleanupAuthority: 'rollback-to-absent-before-publication',
+            },
           },
         } as ArtifactChoice['plan'],
       },
@@ -192,9 +209,14 @@ function guaranteeProduct(): DestinationGuaranteeFacts[] {
   for (const nameAuthority of NAME_AUTHORITIES) {
     for (const replacement of REPLACEMENTS) {
       for (const delivery of DELIVERIES) {
-        for (const visibility of VISIBILITIES) {
-          for (const rollback of ROLLBACKS) {
-            result.push({ nameAuthority, replacement, delivery, visibility, rollback })
+        for (const targetVisibility of TARGET_VISIBILITIES) {
+          for (const artifactAvailability of ARTIFACT_AVAILABILITIES) {
+            for (const cleanupAuthority of CLEANUP_AUTHORITIES) {
+              result.push({
+                nameAuthority, replacement, delivery, targetVisibility,
+                artifactAvailability, cleanupAuthority,
+              })
+            }
           }
         }
       }
@@ -209,27 +231,36 @@ function expectedProfile(
 ): ReturnType<typeof legalGuaranteeProfile> {
   if (kind === 'native-directory-container' && exact(facts, {
     nameAuthority: 'application-chosen', replacement: 'atomic-no-replace',
-    delivery: 'managed-target', visibility: 'prefix-visible', rollback: 'none',
+    delivery: 'managed-target', targetVisibility: 'committed-objects-visible',
+    artifactAvailability: 'committed-objects-usable', cleanupAuthority: 'no-whole-target-rollback',
   })) return 'native-tree'
   if (kind === 'fsa-parent-directory' && exact(facts, {
     nameAuthority: 'application-chosen', replacement: 'coordinated-no-replace',
-    delivery: 'managed-target', visibility: 'prefix-visible', rollback: 'none',
+    delivery: 'managed-target', targetVisibility: 'committed-objects-visible',
+    artifactAvailability: 'committed-objects-usable', cleanupAuthority: 'no-whole-target-rollback',
   })) return 'fsa-tree'
+  if (kind === 'fsa-owned-file-target' && exact(facts, fsaOwnedFileGuarantees())) {
+    return 'fsa-owned-file'
+  }
   if (kind === 'managed-atomic-file-target' &&
       (facts.nameAuthority === 'application-chosen' || facts.nameAuthority === 'user-chosen') &&
       facts.replacement === 'atomic-no-replace' && facts.delivery === 'managed-target' &&
-      facts.visibility === 'atomic-commit' && facts.rollback === 'to-absent') {
+      facts.targetVisibility === 'hidden-until-verified-publication' &&
+      facts.artifactAvailability === 'verified-complete-only' &&
+      facts.cleanupAuthority === 'rollback-to-absent-before-publication') {
     return 'managed-atomic'
   }
   if (kind === 'browser-handoff' && exact(facts, {
     nameAuthority: 'browser-chosen', replacement: 'unknown',
-    delivery: 'browser-handoff', visibility: 'unobservable', rollback: 'none',
+    delivery: 'browser-handoff', targetVisibility: 'unobservable',
+    artifactAvailability: 'handoff-only', cleanupAuthority: 'no-managed-cleanup',
   })) return 'browser-handoff'
   return null
 }
 
 function exact(left: DestinationGuaranteeFacts, right: DestinationGuaranteeFacts): boolean {
   return left.nameAuthority === right.nameAuthority && left.replacement === right.replacement &&
-    left.delivery === right.delivery && left.visibility === right.visibility &&
-    left.rollback === right.rollback
+    left.delivery === right.delivery && left.targetVisibility === right.targetVisibility &&
+    left.artifactAvailability === right.artifactAvailability &&
+    left.cleanupAuthority === right.cleanupAuthority
 }

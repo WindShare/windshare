@@ -1,0 +1,74 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "windshare/browser-fsa-resumable-zip-support-matrix-candidate/v1",
+  "title": "WindShare browser FSA resumable ZIP support candidate",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "reviewStatus",
+    "rawEvidenceSha256",
+    "sourceManifestSha256",
+    "runConfigSha256",
+    "supportingArtifactManifestSha256",
+    "repositoryCommit",
+    "platform",
+    "filesystem",
+    "browser",
+    "runtimes",
+    "featureFacts",
+    "scenarioObservations",
+    "policyFacts",
+    "warnings"
+  ],
+  "properties": {
+    "schema": { "const": "windshare/browser-fsa-resumable-zip-support-matrix-candidate/v1" },
+    "reviewStatus": { "const": "unreviewed" },
+    "rawEvidenceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "sourceManifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "runConfigSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "supportingArtifactManifestSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "repositoryCommit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "platform": { "type": "object" },
+    "filesystem": { "type": "object" },
+    "browser": { "type": "object" },
+    "runtimes": { "type": "object" },
+    "featureFacts": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "required": ["createWritable", "handleIsSameEntry", "handleQueryPermission", "handleRequestPermission", "indexedDB", "isSecureContext", "locks", "showDirectoryPicker"],
+      "properties": {
+        "createWritable": { "const": "function" },
+        "handleIsSameEntry": { "const": "function" },
+        "handleQueryPermission": { "const": "function" },
+        "handleRequestPermission": { "const": "function" },
+        "indexedDB": { "const": "object" },
+        "isSecureContext": { "const": true },
+        "locks": { "const": "object" },
+        "showDirectoryPicker": { "const": "function" }
+      }
+    },
+    "scenarioObservations": { "type": "array" },
+    "policyFacts": {
+      "type": "object",
+      "required": ["directZipEpochPolicyV1", "zipWorkspaceRecommendationMaximumPeakBytes", "processRestart"],
+      "properties": {
+        "directZipEpochPolicyV1": { "$ref": "#/$defs/unfrozen" },
+        "zipWorkspaceRecommendationMaximumPeakBytes": { "$ref": "#/$defs/unfrozen" },
+        "processRestart": {
+          "type": "object",
+          "required": ["status", "value"],
+          "properties": { "status": { "const": "unproven" }, "value": { "const": false } }
+        }
+      }
+    },
+    "warnings": { "type": "array", "minItems": 3, "items": { "type": "string" } }
+  },
+  "$defs": {
+    "unfrozen": {
+      "type": "object",
+      "required": ["status", "value"],
+      "properties": { "status": { "const": "unfrozen" }, "value": { "type": "null" } }
+    }
+  }
+}
