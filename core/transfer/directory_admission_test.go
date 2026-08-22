@@ -104,10 +104,10 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString(childAdmission.Bytes()),
 	}
 	want := []string{
-		"0nnnictvYU_T1TDDKOizgxB_NDzLFPINaWXdepRW49o",
-		"4HldBQ_op6cGfFHvdQrCxynzbWqKQ6kLQLMhmrZi0i4",
-		"hHXHEyKXtIBfQLGRmtIQUttu1hYd-tra0kuKFfAOwU0",
-		"eMKF1jXVxzA6PTsbmSlGozwfx33gz-DfUrTUs4LFaf8",
+		"PKgx50isr9LVzH14HJib08_RPM501Cvw1_G2Y2b_ctQ",
+		"-FfVAg8-AJUOylS_dYhiCz9vF2DrUTncrpE-PhQ7HOc",
+		"wciDHOmyvV1fBGC2T_jZZlUN2dbt-T3s7YC1PFXmzI0",
+		"VfTe1srkTkvVQNeSJS1oaYl8MZ_BBtMPEn4ZiATmL8w",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("cross-runtime values:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

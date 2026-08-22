@@ -65,6 +65,7 @@ import {
   createOperationID,
   createOutputSessionID,
   createTransferJobID,
+  type ArtifactChoiceID,
 } from '../../transfer/intent'
 import type {
   V2ArtifactPresentationAuthority,
@@ -76,6 +77,7 @@ import type {
 import { V2PresentationSourceError } from '../v2-receive-runtime'
 import { FSAReceiveOperation } from './fsa'
 import { FSAResourceOwner } from './fsa-resource-owner'
+import { snapshotPreClickRanking } from './shared'
 
 type FSARouteRepository = ReceiveOperationRepository & Partial<FSACompatibleNameBootstrapRepository>
 type OfferedFSAChoice = Omit<OfferedArtifactChoice, 'route'> & Readonly<{
@@ -109,6 +111,7 @@ export interface FSARouteDependencies {
 export interface FSAArtifactPresentationAuthorityOptions {
   readonly offered: OfferedArtifactChoice
   readonly picked: Promise<AcquiredFSAParentAuthority>
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   readonly dependencies?: Partial<FSARouteDependencies>
@@ -121,6 +124,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
   readonly #offered: OfferedFSAChoice
   readonly #installedRouteId: string
   readonly #picked: Promise<AcquiredFSAParentAuthority>
+  readonly #preClickRanking: readonly ArtifactChoiceID[]
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #dependencies: FSARouteDependencies
@@ -129,6 +133,10 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
 
   constructor(options: FSAArtifactPresentationAuthorityOptions) {
     this.#offered = requireFSAOffer(options.offered)
+    this.#preClickRanking = snapshotPreClickRanking(
+      this.#offered.choice.choiceId,
+      options.preClickRanking,
+    )
     this.#installedRouteId = this.#offered.route.target.routeId
     this.#diagnostics = options.diagnostics
     this.#localOutputFailures = options.localOutputFailures
@@ -188,6 +196,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         repository,
         intent: bound.intent,
         parent: authority.parent,
+        preClickRanking: this.#preClickRanking,
       })
       const transferJobId = this.#dependencies.createTransferJobId()
       const outputSessionId = this.#dependencies.createOutputSessionId()

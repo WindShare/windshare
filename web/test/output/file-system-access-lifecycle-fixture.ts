@@ -6,6 +6,7 @@ import {
   createResultRootDirectoryTreeArtifact,
   createSelectionSpec,
   createSingleFileDirectoryTreeArtifact,
+  deriveArtifactChoiceIdentity,
   type DirectoryTreeArtifact,
   type DirectTreePlan,
   type ReceiveIntent,
@@ -522,7 +523,7 @@ export async function persistFreshFixtureExpiry(
   fixture: FreshDiscardFixture,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'expired' }>> {
   const current = await lifecycleState(fixture.repository, fixture.intent.operationId)
-  if (current.kind !== 'resumable-receive') {
+  if (current.kind !== 'resumable-receive' || current.payloadKind !== 'file-set') {
     throw new TypeError('fresh discard expiry fixture is not resumable')
   }
   const receipt = await createExpiryReceipt({
@@ -599,6 +600,7 @@ export async function bindTask(input: Readonly<{
     repository: input.repository,
     intent,
     parent: authority.parent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
   })
   await input.repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
   const binding = await verifyFSAOperationBinding({

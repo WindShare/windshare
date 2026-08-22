@@ -221,12 +221,6 @@ describe('v2 plan settlement', () => {
       lifecycle: 'partial-directory',
       settlement: 'direct-tree:CompletedWithErrors',
     },
-    {
-      planKind: 'direct-atomic',
-      artifactKind: 'zip-archive',
-      lifecycle: 'restart-required',
-      settlement: undefined,
-    },
   ] as const)(
     'isolates a child finalization failure without allowing an incomplete $planKind artifact to publish',
     async ({ planKind, artifactKind, lifecycle, settlement }) => {

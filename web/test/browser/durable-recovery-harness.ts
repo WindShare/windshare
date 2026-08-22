@@ -1,4 +1,4 @@
-import type { ReceiveIntent } from '../../src/transfer/intent'
+import { deriveArtifactChoiceIdentity, type ReceiveIntent } from '../../src/transfer/intent'
 import {
   IndexedDbFileCheckpointRepository,
   IndexedDbReceiveOperationRepository,
@@ -346,6 +346,7 @@ export async function createWorkspaceActivationReloadCut(
   try {
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
       repository,
       onActivationTransition: transition => {
         if (transition !== 'marker-written') return
@@ -401,6 +402,7 @@ export async function createFreshPageWorkspaceResumeCut(
   const repository = await IndexedDbReceiveOperationRepository.open(checkpointDatabaseName)
   const namespace = await openOriginPrivateWorkspaceNamespace({
     receiveIntent: intent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
     repository,
     randomOwnedObjectId: () => ids.rootOwnedObjectId,
   })
@@ -521,6 +523,7 @@ export async function createOriginPrivateReceiveCrashCut(
   const repository = await IndexedDbReceiveOperationRepository.open(checkpointDatabaseName)
   const namespace = await openOriginPrivateWorkspaceNamespace({
     receiveIntent: intent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
     repository,
     randomOwnedObjectId: () => ids.rootOwnedObjectId,
   })
@@ -608,7 +611,11 @@ export async function recoverReceiveAndSealPackage(
   const ids = await durableIdentities(fixture.key)
   const intent = await durableIntent(ids)
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.checkpointDatabaseName)
-  const namespace = await openOriginPrivateWorkspaceNamespace({ receiveIntent: intent, repository })
+  const namespace = await openOriginPrivateWorkspaceNamespace({
+    receiveIntent: intent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+    repository,
+  })
   const lease = await acquireBrowserReceiveOperationLease(repository, intent.operationId, {
     clock: { now: () => RECOVERY_TIME },
     randomBytes: () => new Uint8Array(16).fill(0x31),
@@ -767,8 +774,12 @@ export async function retryRetainedPackagePublication(
   const intent = await durableIntent(ids)
   const repository = await durableStep('open operation repository', () =>
     IndexedDbReceiveOperationRepository.open(fixture.checkpointDatabaseName))
-  const namespace = await durableStep('open retained OPFS namespace', () =>
-    openOriginPrivateWorkspaceNamespace({ receiveIntent: intent, repository }))
+  const namespace = await durableStep('open retained OPFS namespace', async () =>
+    openOriginPrivateWorkspaceNamespace({
+      receiveIntent: intent,
+      preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
+      repository,
+    }))
   const lease = await durableStep('acquire retained operation lease', () =>
     acquireBrowserReceiveOperationLease(repository, intent.operationId, {
       clock: { now: () => RETRY_TIME },

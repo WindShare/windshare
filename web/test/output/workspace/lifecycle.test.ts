@@ -58,7 +58,7 @@ describe('receive lifecycle reducer', () => {
       kind: 'resume-admission-failed',
       expectedGeneration: resumed.generation,
       leaseId: LEASE,
-      checkpointSetDigest: stable.kind === 'resumable-receive'
+      checkpointSetDigest: stable.kind === 'resumable-receive' && stable.payloadKind === 'file-set'
         ? stable.checkpointSetDigest
         : identity(32, 4),
       completedFileCount: 1n,

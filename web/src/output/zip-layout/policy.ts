@@ -8,6 +8,7 @@ export const MAX_ZIP_SPOOL_BYTES = 268_435_456n
 export const ZIP_UINT16_SENTINEL = 0xffffn
 export const ZIP_UINT32_SENTINEL = 0xffff_ffffn
 export const ZIP_UINT64_MAXIMUM = (1n << 64n) - 1n
+export const ZIP_CRC32_INITIAL_ACCUMULATOR = 0xffff_ffff
 
 const ZIP_LOCAL_FILE_HEADER = 0x0403_4b50
 const ZIP_DATA_DESCRIPTOR = 0x0807_4b50
@@ -32,6 +33,7 @@ export const ZIP64_END_BYTES = 76n
 const ZIP_MINIMUM_DATE_MILLISECONDS = BigInt(Date.UTC(1980, 0, 1, 0, 0, 0))
 const ZIP_MAXIMUM_DATE_MILLISECONDS = BigInt(Date.UTC(2107, 11, 31, 23, 59, 58))
 const TEXT_ENCODER = new TextEncoder()
+const EMPTY_ZIP_EXTRA_FIELDS = new Uint8Array(0)
 
 export type ZipEntryKind = 'directory' | 'file'
 
@@ -235,8 +237,21 @@ export function sameZipEntryPlan(left: ZipEntryPlanV1, right: ZipEntryPlanV1): b
 }
 
 export function encodeZipLocalHeader(plan: ZipEntryPlanV1): Uint8Array<ArrayBuffer> {
+  return encodeZipLocalHeaderWithTrailingExtraFields(plan, EMPTY_ZIP_EXTRA_FIELDS)
+}
+
+export function encodeZipLocalHeaderWithTrailingExtraFields(
+  plan: ZipEntryPlanV1,
+  trailingExtraFields: Uint8Array,
+): Uint8Array<ArrayBuffer> {
   validateZipEntryPlan(plan, plan.localHeaderOffset)
-  const output = new Uint8Array(toAllocationLength(plan.localHeaderBytes, 'ZIP local header'))
+  const extraFields = snapshotTrailingExtraFields(
+    trailingExtraFields,
+    plan.localExtraBytes,
+    'ZIP local header',
+  )
+  const encodedBytes = checkedZipAdd(plan.localHeaderBytes, BigInt(extraFields.byteLength))
+  const output = new Uint8Array(toAllocationLength(encodedBytes, 'ZIP local header'))
   const view = new DataView(output.buffer)
   view.setUint32(0, ZIP_LOCAL_FILE_HEADER, true)
   view.setUint16(4, plan.versionNeeded, true)
@@ -248,16 +263,17 @@ export function encodeZipLocalHeader(plan: ZipEntryPlanV1): Uint8Array<ArrayBuff
   view.setUint32(18, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : 0, true)
   view.setUint32(22, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : 0, true)
   view.setUint16(26, plan.nameBytes.length, true)
-  view.setUint16(28, Number(plan.localExtraBytes), true)
+  view.setUint16(28, Number(plan.localExtraBytes) + extraFields.byteLength, true)
   output.set(plan.nameBytes, Number(ZIP_LOCAL_HEADER_FIXED_BYTES))
+  const extraOffset = Number(ZIP_LOCAL_HEADER_FIXED_BYTES) + plan.nameBytes.length
   if (plan.zip64Size) {
-    const extraOffset = Number(ZIP_LOCAL_HEADER_FIXED_BYTES) + plan.nameBytes.length
     view.setUint16(extraOffset, ZIP64_EXTRA_FIELD, true)
     view.setUint16(extraOffset + 2, 16, true)
     view.setBigUint64(extraOffset + 4, plan.exactSize, true)
     view.setBigUint64(extraOffset + 12, plan.exactSize, true)
   }
-  assertEncodedLength(output, plan.localHeaderBytes, 'ZIP local header')
+  output.set(extraFields, extraOffset + Number(plan.localExtraBytes))
+  assertEncodedLength(output, encodedBytes, 'ZIP local header')
   return output
 }
 
@@ -287,9 +303,27 @@ export function encodeZipCentralDirectoryRecord(
   plan: ZipEntryPlanV1,
   crc32: number,
 ): Uint8Array<ArrayBuffer> {
+  return encodeZipCentralDirectoryRecordWithTrailingExtraFields(
+    plan,
+    crc32,
+    EMPTY_ZIP_EXTRA_FIELDS,
+  )
+}
+
+export function encodeZipCentralDirectoryRecordWithTrailingExtraFields(
+  plan: ZipEntryPlanV1,
+  crc32: number,
+  trailingExtraFields: Uint8Array,
+): Uint8Array<ArrayBuffer> {
   validateZipEntryPlan(plan, plan.localHeaderOffset)
   requireUint32(crc32, 'ZIP CRC-32')
-  const output = new Uint8Array(toAllocationLength(plan.centralRecordBytes, 'ZIP central record'))
+  const extraFields = snapshotTrailingExtraFields(
+    trailingExtraFields,
+    plan.centralExtraBytes,
+    'ZIP central record',
+  )
+  const encodedBytes = checkedZipAdd(plan.centralRecordBytes, BigInt(extraFields.byteLength))
+  const output = new Uint8Array(toAllocationLength(encodedBytes, 'ZIP central record'))
   const view = new DataView(output.buffer)
   view.setUint32(0, ZIP_CENTRAL_DIRECTORY_HEADER, true)
   view.setUint16(4, ZIP64_VERSION, true)
@@ -302,7 +336,7 @@ export function encodeZipCentralDirectoryRecord(
   view.setUint32(20, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : Number(plan.exactSize), true)
   view.setUint32(24, plan.zip64Size ? Number(ZIP_UINT32_SENTINEL) : Number(plan.exactSize), true)
   view.setUint16(28, plan.nameBytes.length, true)
-  view.setUint16(30, Number(plan.centralExtraBytes), true)
+  view.setUint16(30, Number(plan.centralExtraBytes) + extraFields.byteLength, true)
   view.setUint16(32, 0, true)
   view.setUint16(34, 0, true)
   view.setUint16(36, 0, true)
@@ -313,19 +347,20 @@ export function encodeZipCentralDirectoryRecord(
     true,
   )
   output.set(plan.nameBytes, Number(ZIP_CENTRAL_HEADER_FIXED_BYTES))
+  const extraOffset = Number(ZIP_CENTRAL_HEADER_FIXED_BYTES) + plan.nameBytes.length
   if (plan.centralZip64ValueCount > 0) {
-    let extraOffset = Number(ZIP_CENTRAL_HEADER_FIXED_BYTES) + plan.nameBytes.length
     view.setUint16(extraOffset, ZIP64_EXTRA_FIELD, true)
     view.setUint16(extraOffset + 2, plan.centralZip64ValueCount * Number(ZIP64_EXTRA_VALUE_BYTES), true)
-    extraOffset += Number(ZIP64_EXTRA_HEADER_BYTES)
+    let zip64ValueOffset = extraOffset + Number(ZIP64_EXTRA_HEADER_BYTES)
     if (plan.zip64Size) {
-      view.setBigUint64(extraOffset, plan.exactSize, true)
-      view.setBigUint64(extraOffset + 8, plan.exactSize, true)
-      extraOffset += 16
+      view.setBigUint64(zip64ValueOffset, plan.exactSize, true)
+      view.setBigUint64(zip64ValueOffset + 8, plan.exactSize, true)
+      zip64ValueOffset += 16
     }
-    if (plan.zip64Offset) view.setBigUint64(extraOffset, plan.localHeaderOffset, true)
+    if (plan.zip64Offset) view.setBigUint64(zip64ValueOffset, plan.localHeaderOffset, true)
   }
-  assertEncodedLength(output, plan.centralRecordBytes, 'ZIP central record')
+  output.set(extraFields, extraOffset + Number(plan.centralExtraBytes))
+  assertEncodedLength(output, encodedBytes, 'ZIP central record')
   return output
 }
 
@@ -431,7 +466,12 @@ export function requireZipUint64(value: bigint, label: string): void {
 }
 
 export class ZipCrc32 {
-  #value = 0xffff_ffff
+  #value: number
+
+  constructor(unfinalizedAccumulator = ZIP_CRC32_INITIAL_ACCUMULATOR) {
+    requireUint32(unfinalizedAccumulator, 'ZIP CRC-32 accumulator')
+    this.#value = unfinalizedAccumulator >>> 0
+  }
 
   update(bytes: Uint8Array): void {
     let current = this.#value >>> 0
@@ -443,6 +483,10 @@ export class ZipCrc32 {
 
   digest(): number {
     return (this.#value ^ 0xffff_ffff) >>> 0
+  }
+
+  snapshot(): number {
+    return this.#value >>> 0
   }
 }
 
@@ -568,6 +612,18 @@ function toAllocationLength(value: bigint, label: string): number {
 
 function assertEncodedLength(bytes: Uint8Array, expected: bigint, label: string): void {
   if (BigInt(bytes.byteLength) !== expected) throw new Error(`${label} length disagrees with its plan`)
+}
+
+function snapshotTrailingExtraFields(
+  bytes: Uint8Array,
+  plannedExtraBytes: bigint,
+  label: string,
+): Uint8Array<ArrayBuffer> {
+  if (!(bytes instanceof Uint8Array)) throw new TypeError(`${label} trailing extra fields are invalid`)
+  if (plannedExtraBytes + BigInt(bytes.byteLength) > ZIP_UINT16_SENTINEL) {
+    throw new RangeError(`${label} extra fields exceed the ZIP format`)
+  }
+  return Uint8Array.from(bytes)
 }
 
 function requireUint32(value: number, label: string): void {

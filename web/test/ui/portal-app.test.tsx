@@ -102,20 +102,25 @@ describe('Portal and App mode routing', () => {
     }) as unknown as V2RetainedReceiveOperation
     const artifactChoice = Object.freeze({
       offeredChoice: null,
-      choice: Object.freeze({ artifactKind: 'single-file' }) as never,
+      choice: Object.freeze({
+        artifactKind: 'single-file',
+        choiceId: 'original-choice',
+      }) as never,
       operation: 'download-original' as const,
       label: 'Receive original',
       description: 'Receive the selected file.',
       importance: 'primary' as const,
       packageExplanation: null,
+      selectedBytes: 'Selected content: 1 B (exact)',
+      resultBytes: 'Result: 1 B (exact)',
     })
     const output: V2ReceiverSnapshot['output'] = Object.freeze({
       ...EMPTY_V2_OUTPUT_PRESENTATION,
       offerPresentation: Object.freeze({
         kind: 'choices',
         interactive: true,
-        primary: artifactChoice,
-        alternatives: Object.freeze([]),
+        defaultChoices: Object.freeze([artifactChoice]),
+        zipMode: null,
       }),
     })
     const base: Partial<V2ReceiverSnapshot> = {
@@ -182,6 +187,84 @@ describe('Portal and App mode routing', () => {
     expect(buttonMarkup(settledRetryHtml, 'Retry confirmation')).not.toContain('disabled')
   })
 
+  it('renders ZIP as an explicit route mode in the planner-frozen primary and secondary order', () => {
+    const workspace = presentedZipChoice(
+      'workspace-choice',
+      'Save ZIP after receiving completes',
+      'primary',
+    )
+    const direct = presentedZipChoice(
+      'direct-choice',
+      'Save ZIP to a folder',
+      'secondary',
+    )
+    const output: V2ReceiverSnapshot['output'] = Object.freeze({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      offerPresentation: Object.freeze({
+        kind: 'choices',
+        interactive: true,
+        defaultChoices: Object.freeze([]),
+        zipMode: Object.freeze({
+          kind: 'routes',
+          title: 'ZIP package',
+          description: 'Package only: one ZIP without compression.',
+          primary: workspace,
+          secondary: direct,
+          recommendation: 'Recommended: receive completely first.',
+        }),
+      }),
+    })
+    const html = renderToString(<App controller={createMockController({
+      phase: 'browsing',
+      breadcrumbs: Object.freeze([{ id: 'root', name: 'Root Directory' }]),
+      output,
+    })} />)
+
+    expect(html).toContain('Receive as a ZIP package')
+    expect(html.indexOf(workspace.label)).toBeLessThan(html.indexOf(direct.label))
+    expect(html).toContain('Selected content: 1.0 KiB (exact)')
+    expect(html).toContain('ZIP package: 1.1 KiB (exact)')
+    expect(html).not.toMatch(/FSA|OPFS|backend/iu)
+  })
+
+  it('warns that switching a completed folder receive to ZIP creates a new operation', () => {
+    const output: V2ReceiverSnapshot['output'] = Object.freeze({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      plan: Object.freeze({ kind: 'direct-tree' }) as never,
+      lifecycle: Object.freeze({ kind: 'published' }) as never,
+    })
+    const html = renderToString(<App controller={createMockController({
+      phase: 'browsing',
+      breadcrumbs: Object.freeze([{ id: 'root', name: 'Root Directory' }]),
+      output,
+    })} />)
+
+    expect(html).toContain('This starts a new receive operation')
+    expect(html).toContain('their bytes are not reused for the ZIP')
+    expect(html).toContain('Choose a ZIP route for a new operation')
+  })
+
+  it('offers a new save route when the retained Direct ZIP target was deleted', () => {
+    const output: V2ReceiverSnapshot['output'] = Object.freeze({
+      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      plan: Object.freeze({ kind: 'direct-resumable-zip' }) as never,
+      lifecycle: Object.freeze({
+        kind: 'restart-required',
+        reason: 'target-deleted',
+      }) as never,
+    })
+    const html = renderToString(<App controller={createMockController({
+      phase: 'browsing',
+      breadcrumbs: Object.freeze([{ id: 'root', name: 'Root Directory' }]),
+      output,
+    })} />)
+
+    expect(html).toContain('Choose a new save route')
+    expect(html).toContain('previous ZIP target is gone and will not be recreated')
+    expect(html).toContain('Choose a route for a new operation')
+    expect(html).not.toMatch(/OPFS|backend/iu)
+  })
+
   it('renders PortalApp with retained tasks banner when local tasks exist', () => {
     const mockOp = {
       operationId: 'op-123',
@@ -207,3 +290,21 @@ describe('Portal and App mode routing', () => {
     expect(html).toContain('一键恢复任务 →')
   })
 })
+
+function presentedZipChoice(
+  choiceId: string,
+  label: string,
+  importance: 'primary' | 'secondary',
+) {
+  return Object.freeze({
+    offeredChoice: null,
+    choice: Object.freeze({ choiceId }) as never,
+    operation: 'download-zip' as const,
+    label,
+    description: `${label}.`,
+    importance,
+    packageExplanation: 'Package only: one ZIP without compression.',
+    selectedBytes: 'Selected content: 1.0 KiB (exact)',
+    resultBytes: 'ZIP package: 1.1 KiB (exact)',
+  })
+}

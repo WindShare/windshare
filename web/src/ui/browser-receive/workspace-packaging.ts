@@ -54,7 +54,10 @@ export interface WorkspaceContinuationPort {
   closeOwnedBackend(): Promise<void>
   createPlans(): Promise<V2PlanExecutionAuthority>
   beginContinuation(
-    lifecycle: Extract<ReceiveLifecycleState, { readonly kind: 'resumable-receive' }>,
+    lifecycle: Extract<ReceiveLifecycleState, {
+      readonly kind: 'resumable-receive'
+      readonly payloadKind: 'file-set'
+    }>,
   ): void
   installTransferAttempt(plans: V2PlanExecutionAuthority, transferJobId: string): void
 }
@@ -177,7 +180,9 @@ export class WorkspaceReceivePackaging {
     if (lifecycle.kind === 'discarded' ||
         (lifecycle.kind === 'expired' && lifecycle.cleanupState === 'clean')) return null
     let ownedBytes = 0n
-    if (lifecycle.kind === 'resumable-receive') ownedBytes = lifecycle.completedBytes
+    if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'file-set') {
+      ownedBytes = lifecycle.completedBytes
+    }
     else if (this.#packageExactBytes !== undefined &&
         (lifecycle.kind === 'waiting-to-save' ||
          (lifecycle.kind === 'download-started' && lifecycle.attemptKind === 'workspace'))) {
@@ -266,7 +271,8 @@ export class WorkspaceReceivePackaging {
         workspaceUsage: this.resolveWorkspaceUsage(result.state),
       })
     }
-    if (lifecycle.kind !== 'resumable-receive' || !continuation.admitted ||
+    if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set' ||
+        !continuation.admitted ||
         !continuation.hasReceiveAuthority) throw unavailableRoute()
     await continuation.closeOwnedBackend()
     const plans = await continuation.createPlans()

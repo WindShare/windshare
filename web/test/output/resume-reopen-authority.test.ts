@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { deriveArtifactChoiceIdentity, type ReceiveIntent } from '../../src/transfer/intent'
+
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import {
   openOriginPrivateWorkspaceNamespace,
@@ -105,6 +107,7 @@ describe('persisted receive operation reopen authority', () => {
     })
     expect(reopened.lease.leaseId).not.toBe(staleLeaseId)
     expect(reopened.lifecycle).toMatchObject({ activeLeaseId: reopened.lease.leaseId })
+    if (reopened.kind !== 'direct-tree') throw new Error('test reopened the wrong route')
     expect(reopened.receiveAdmissionFallback).toEqual(lifecycle)
     expect(trace).toHaveBeenCalledWith(expect.objectContaining({
       name: 'receive.operation.reopen_authorized',
@@ -162,6 +165,7 @@ describe('persisted receive operation reopen authority', () => {
     const storage = memoryStorage(storageRoot)
     const initial = await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(71, 32),
@@ -234,6 +238,7 @@ describe('persisted receive operation reopen authority', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(90, 32),
@@ -311,6 +316,7 @@ describe('persisted workspace package continuation', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(92, 32),
@@ -433,6 +439,7 @@ describe('persisted workspace package continuation', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(109, 32),
@@ -488,6 +495,7 @@ describe('persisted workspace package continuation', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(82, 32),
@@ -553,6 +561,10 @@ describe('persisted workspace package continuation', () => {
     expect(state.lease).toBeUndefined()
   })
 })
+
+async function selectedRanking(intent: ReceiveIntent) {
+  return Object.freeze([(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id])
+}
 
 describe('persisted receive operation lifecycle and cleanup authority', () => {
   it('commits Expired before a continuation can cross the exact 24-hour deadline', async () => {
@@ -622,6 +634,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(76, 32),
@@ -669,6 +682,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
     const storage = memoryStorage(storageRoot)
     await openOriginPrivateWorkspaceNamespace({
       receiveIntent: intent,
+      preClickRanking: await selectedRanking(intent),
       repository: new MemoryOperationRepository(state),
       storage,
       randomOwnedObjectId: () => identity(79, 32),

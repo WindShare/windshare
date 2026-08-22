@@ -1,6 +1,7 @@
 import { snapshotIdentity } from './canonical'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
+  receiveOperationRecordPrefix,
   validateManifestPageRecord,
   validatePersistedReceiveRecord,
   validateReceiveOperationHandleRecord,
@@ -121,7 +122,7 @@ export async function prepareReceiveOperationTransition(
     deleteRecordIds: snapshotDeleteIds(
       transition.deleteRecordIds,
       'record',
-      `windshare/receive-operation/v1/${operationId}/`,
+      receiveOperationRecordPrefix(operationId),
     ),
     deleteManifestPageIds: snapshotDeleteIds(
       transition.deleteManifestPageIds,

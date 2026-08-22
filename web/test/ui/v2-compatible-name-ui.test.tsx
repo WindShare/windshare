@@ -29,7 +29,7 @@ describe('compatible-name receiver UI', () => {
     const lifecyclePresentation = presentReceiveLifecycle({
       state: lifecycle,
       artifact: TREE,
-      planKind: 'direct-tree',
+      plan: Object.freeze({ kind: 'direct-tree' }) as NonNullable<V2OutputPresentationSnapshot['plan']>,
       nowMilliseconds: 1_000,
       repairSummary,
     })

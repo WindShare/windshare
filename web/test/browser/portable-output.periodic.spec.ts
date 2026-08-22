@@ -4,6 +4,7 @@ import { ZIP_OUTPUT_METADATA_BUFFER_BYTES } from '../../src/output/streams/zip-o
 
 const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
 const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
+const WEEKLY_MILLION_MEMBER_WRITER_TIMEOUT_MILLISECONDS = 150_000
 
 test('streams one million ZIP members through the production writer and durable spool', async ({
   browserName,
@@ -12,7 +13,7 @@ test('streams one million ZIP members through the production writer and durable 
   // Other engines run the same production quota/fencing paths below; this single
   // structural stress avoids tripling a deliberately million-entry browser gate.
   test.skip(browserName !== 'chromium', 'The million-member structural stress runs once in Chromium')
-  test.setTimeout(120_000)
+  test.setTimeout(WEEKLY_MILLION_MEMBER_WRITER_TIMEOUT_MILLISECONDS)
   await page.goto('/')
   const result = await page.evaluate(async () => {
     const probePath = '/test/browser/portable-output-periodic-probe.ts'

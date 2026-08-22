@@ -1,28 +1,17 @@
-import {
-  materializationRouteIdentity,
-  sameArtifactChoiceSemantics,
-  sameMaterializationRouteIdentity,
-  type ArtifactOperation,
-} from '../../output/planning'
-import type { SelectionSpec } from '../../transfer/intent'
+import type { ArtifactChoiceID, SelectionSpec } from '../../transfer/intent'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type {
   V2ArtifactPresentationAuthority,
   V2BoundReceiveOperation,
 } from '../v2-receive-runtime'
 import { presentationSourceOutcome } from '../v2-receive-runtime'
-import type {
-  ActiveReceiveAdoption,
-  ActiveReceiveCoordinator,
-} from './active-receive'
+import type { ActiveReceiveCoordinator } from './active-receive'
 import type {
   V2AuthorityActivationSnapshot,
   V2AuthorityActivationTerminalOutcome,
 } from './activation-model'
 import { V2ActivationStateContractError } from './activation-model'
-import {
-  StaleReceiveBoundaryError,
-} from './contracts'
+import { StaleReceiveBoundaryError } from './contracts'
 import {
   AuthorityCommitTransaction,
   boundOperationCleanup,
@@ -43,7 +32,6 @@ import {
   cleanupRequiredSnapshot,
   closeActivationAttempt,
   createActivationId,
-  createAuthorityActivationRecord,
   observationMatchesActivation,
   projectLiveActivation,
   releaseActivationAuthority,
@@ -55,6 +43,12 @@ import {
   type AuthorityAttemptExclusion,
   type AuthorityTraceDetail,
 } from './authority-lifecycle'
+import {
+  beginFrozenAuthorityCommit,
+  createProvisionalAuthorityActivation,
+  displayedArtifactChoiceRanking,
+  frozenBoundOperation,
+} from './authority-activation-transaction'
 import type { V2ActiveProjection } from './projection-observation'
 
 export type { AuthorityActivationOptions } from './authority-lifecycle'
@@ -154,7 +148,7 @@ export class V2AuthorityActivationCoordinator {
     this.#beginObservationReplacement(activation, reason)
   }
 
-  choose(operation: ArtifactOperation): boolean {
+  choose(choiceId: ArtifactChoiceID): boolean {
     const current = this.#options.currentProjection()
     const planned = this.#planning.latestOffers
     if (current === undefined || planned === undefined || planned.request.active !== current ||
@@ -162,8 +156,9 @@ export class V2AuthorityActivationCoordinator {
         this.#options.choiceBlocked() || this.pending ||
         planned.offers.kind !== 'artifact-actions') return false
     const offered = [planned.offers.primary, ...planned.offers.alternatives]
-      .find(candidate => candidate.choice.operation === operation)
+      .find(candidate => candidate.choice.choiceId === choiceId)
     if (offered === undefined) return false
+    const preClickRanking = displayedArtifactChoiceRanking(planned.offers, offered.choice)
 
     const attempt = this.#options.observability.open('authority_activation')
     let activationId: string
@@ -175,17 +170,13 @@ export class V2AuthorityActivationCoordinator {
       this.#options.publishActionError(error)
       return false
     }
-    const record = createAuthorityActivationRecord({
+    const record = createProvisionalAuthorityActivation({
       activationId,
-      authenticatedShareInstanceId: current.selection.shareInstance,
-      selectionDigest: current.selection.digest,
-      choice: offered.choice,
-      installedRoute: materializationRouteIdentity(offered.route),
-      attempt,
-      joined: current.joined,
+      active: current,
+      offered,
+      preClickRanking,
       observationRevision: planned.request.revision,
-      protocolSessionId: current.protocolSessionId,
-      projectionEpoch: current.epoch,
+      attempt,
     })
     this.#activation = record
     this.#trace(record, { transition: 'activation_started' })
@@ -193,7 +184,11 @@ export class V2AuthorityActivationCoordinator {
     let authority: V2ArtifactPresentationAuthority
     try {
       // Installing the record first closes reentrant and repeated-click picker races.
-      authority = this.#options.receive.startArtifactAuthority(offered, attempt.outputFailures)
+      authority = this.#options.receive.startArtifactAuthority(
+        offered,
+        preClickRanking,
+        attempt.outputFailures,
+      )
       record.authority = authority
     } catch (error) {
       this.#handlePresentationSourceFailure(record, error)
@@ -366,54 +361,21 @@ export class V2AuthorityActivationCoordinator {
   }
 
   #maybeCommit(record: AuthorityActivationRecord): void {
-    if (this.#activation !== record || record.terminal !== undefined ||
-        record.commitAttempt !== undefined || record.cleanup !== undefined ||
-        record.observationReplacementPending ||
-        this.#joinSuspended || !record.authorityReady || record.resolution === undefined ||
-        record.authority === undefined || !this.#planning.readyForCommit(
-          planningSubject(record),
-          record.projectionEpoch,
-          record.observationRevision,
-        )) return
-    const attempt = new AuthorityCommitTransaction({
-      action: record.resolution,
-      observationRevision: record.observationRevision,
-      authority: record.authority,
-      assertFinalFence: transaction => this.#assertFinalFence(record, transaction),
+    const attempt = beginFrozenAuthorityCommit(record, {
+      currentActivation: () => this.#activation,
+      currentProjection: this.#options.currentProjection,
+      currentJoinedShare: this.#options.currentJoinedShare,
+      joinSuspended: () => this.#joinSuspended,
+      planning: this.#planning,
       ...(this.#binder === undefined ? {} : { binder: this.#binder }),
     })
-    record.commitAttempt = attempt
+    if (attempt === undefined) return
     this.#publishLiveSnapshot(record)
     this.#trace(record, { transition: 'commit_started' })
     attempt.run().then(
       result => this.#commitCompleted(record, attempt, result),
       error => this.#commitRejected(record, attempt, error),
     ).catch(() => undefined)
-  }
-
-  #assertFinalFence(
-    record: AuthorityActivationRecord,
-    attempt: AuthorityCommitTransaction,
-  ): SelectionSpec {
-    const active = this.#options.currentProjection()
-    const joined = this.#options.currentJoinedShare()
-    if (this.#activation !== record || record.terminal !== undefined ||
-        record.commitAttempt !== attempt || record.observationReplacementPending ||
-        this.#joinSuspended || !observationMatchesActivation(record, active, joined) ||
-        !this.#planning.readyForCommit(
-          planningSubject(record),
-          record.projectionEpoch,
-          record.observationRevision,
-        ) ||
-        record.resolution !== attempt.action ||
-        !sameArtifactChoiceSemantics(record.choice, attempt.action.choice) ||
-        !sameMaterializationRouteIdentity(
-          record.installedRoute,
-          materializationRouteIdentity(attempt.action.route),
-        )) {
-      throw new StaleReceiveBoundaryError()
-    }
-    return active.selection
   }
 
   #commitCompleted(
@@ -485,42 +447,33 @@ export class V2AuthorityActivationCoordinator {
     if (attempt === undefined || result?.kind !== 'bound-operation' ||
         record.cleanup !== undefined) return
     const runtime = result.operation
-    const intent = result.intent
     if (record.terminal !== undefined) {
       this.#beginBoundRuntimeCleanup(record, attempt, runtime, new StaleReceiveBoundaryError())
       return
     }
     const active = this.#currentObservation(record)
-    const resolution = record.resolution
-    if (active === undefined || resolution === undefined) return
-    if (!sameArtifactChoiceSemantics(record.choice, resolution.choice) ||
-        !sameMaterializationRouteIdentity(
-          record.installedRoute,
-          materializationRouteIdentity(resolution.route),
-        ) || resolution.artifact.digest !== attempt.action.artifact.digest ||
-        intent.artifact.digest !== resolution.artifact.digest) {
+    if (active === undefined || record.resolution === undefined) return
+    const bound = frozenBoundOperation(record, attempt, result, active)
+    if (bound === undefined) {
       const error = new StaleReceiveBoundaryError()
       this.#invalidate(record, 'artifact-shape-incompatible')
       this.#beginBoundRuntimeCleanup(record, attempt, runtime, error)
       return
     }
-    const adoption: ActiveReceiveAdoption = {
-      joined: record.joined,
-      selection: active.frozenSelection,
-      runtime,
-      ...(runtime.repairProjection === undefined
-        ? {}
-        : { repairProjection: runtime.repairProjection }),
-    }
     let prepared: ReturnType<ActiveReceiveCoordinator['prepareAdoption']>
     try {
-      prepared = this.#options.activeReceive.prepareAdoption(adoption)
-      if (!this.#options.adoptReceiveIntent(record.choice, intent, runtime, prepared.commit)) {
+      prepared = this.#options.activeReceive.prepareAdoption(bound.adoption)
+      if (!this.#options.adoptReceiveIntent(
+        record.choice,
+        bound.intent,
+        bound.runtime,
+        prepared.commit,
+      )) {
         throw new StaleReceiveBoundaryError()
       }
     } catch (error) {
       if (record.terminal === undefined) this.#reportFailure(record, error)
-      this.#beginBoundRuntimeCleanup(record, attempt, runtime, error)
+      this.#beginBoundRuntimeCleanup(record, attempt, bound.runtime, error)
       return
     }
     prepared.start()
@@ -528,7 +481,7 @@ export class V2AuthorityActivationCoordinator {
     record.released = true
     this.#terminalWithoutRelease(record, Object.freeze({
       kind: 'bound-operation',
-      operationId: intent.operationId,
+      operationId: bound.intent.operationId,
     }), 'success')
     active.controller.abort(new DOMException('Receive intent is frozen', 'AbortError'))
   }

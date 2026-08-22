@@ -6,7 +6,11 @@ import type {
   ReceiveLifecycleStatePayload,
 } from '../../src/output/workspace'
 import type { ArtifactSpec, MaterializationPlan } from '../../src/transfer/intent'
-import { presentReceiveLifecycle } from '../../src/ui/v2-lifecycle-presentation'
+import {
+  presentNewReceiveOperation,
+  presentReceiveLifecycle,
+} from '../../src/ui/v2-lifecycle-presentation'
+import type { V2DirectZipProgressSnapshot } from '../../src/ui/v2-receive-runtime'
 
 const NOW = 1_000_000
 const DEADLINE = NOW + 86_400_000
@@ -91,6 +95,106 @@ describe('receive lifecycle terminal presentation', () => {
   })
 })
 
+describe('direct ZIP lifecycle presentation', () => {
+  it('uses the bound filename and keeps the target explicitly incomplete through close and verification', () => {
+    const receiving = present(
+      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
+      ZIP,
+      'direct-resumable-zip',
+    )
+    const closing = present(
+      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
+      ZIP,
+      'direct-resumable-zip',
+      NOW,
+      undefined,
+      undefined,
+      directZipProgress('closing'),
+    )
+    const verifying = present(
+      lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
+      ZIP,
+      'direct-resumable-zip',
+      NOW,
+      undefined,
+      undefined,
+      directZipProgress('verifying'),
+    )
+
+    expect(receiving.description).toContain('photos.windshare-abc234.zip')
+    expect(receiving.description).toContain('incomplete target')
+    expect(closing).toMatchObject({ title: 'Closing photos.windshare-abc234.zip' })
+    expect(closing.description).toContain('still incomplete')
+    expect(verifying.description).toContain('photos.windshare-abc234.zip')
+  })
+
+  it('separates resumable, authorization, verification, space, restart, and attention states', () => {
+    const resumable = present(lifecycle({
+      kind: 'resumable-receive',
+      payloadKind: 'direct-zip',
+      directZipCheckpointDigest: 'checkpoint',
+      safeSelectedPayloadBytes: 1_024n,
+      committedArchiveLength: 2_048n,
+      checkpointPhase: 'between-members',
+      expiresAt: DEADLINE,
+    }), ZIP, 'direct-resumable-zip')
+    const gate = (kind: 'authorization-required' | 'target-verification-required' |
+      'destination-space-required') => present(lifecycle({
+        kind,
+        recoveryGateDigest: `${kind}-digest`,
+        expiresAt: DEADLINE,
+      }), ZIP, 'direct-resumable-zip')
+    const restart = present(lifecycle({
+      kind: 'restart-required',
+      reason: 'target-deleted',
+      receiptDigest: 'receipt',
+    }), ZIP, 'direct-resumable-zip')
+    const attention = present(lifecycle({
+      kind: 'needs-attention',
+      reason: 'target-ownership-unknown',
+      lastVerifiedRecordDigest: 'record',
+    }), ZIP, 'direct-resumable-zip')
+
+    expect(resumable.description).toContain('1.0 KiB can be resumed safely')
+    expect(resumable.actions.map(action => action.label)).toEqual([
+      'Continue ZIP',
+      'Delete only after ownership is verified',
+    ])
+    expect(gate('authorization-required')).toMatchObject({ title: 'Save authorization required' })
+    expect(gate('target-verification-required')).toMatchObject({ title: 'Saved target must be verified' })
+    expect(gate('destination-space-required')).toMatchObject({ title: 'More destination space is required' })
+    expect(restart.description).toContain('will not recreate it under the old operation')
+    expect(attention.description).toContain('No automatic change was made')
+  })
+
+  it('offers a new-operation route only when the retained ZIP target was deleted', () => {
+    const deleted = presentNewReceiveOperation({
+      lifecycle: lifecycle({
+        kind: 'restart-required',
+        reason: 'target-deleted',
+        receiptDigest: 'receipt',
+      }),
+      plan: planForTest('direct-resumable-zip'),
+    })
+    const changed = presentNewReceiveOperation({
+      lifecycle: lifecycle({
+        kind: 'restart-required',
+        reason: 'source-revision-changed',
+        receiptDigest: 'receipt',
+      }),
+      plan: planForTest('direct-resumable-zip'),
+    })
+
+    expect(deleted).toMatchObject({
+      kind: 'deleted-direct-zip-target',
+      title: 'Choose a new save route',
+      actionLabel: 'Choose a route for a new operation',
+    })
+    expect(deleted?.description).toContain('will not be recreated')
+    expect(changed).toBeNull()
+  })
+})
+
 describe('compatible-name repair presentation', () => {
   it('keeps the first replacement notice non-blocking and labels active or paused use as abnormal-stop recovery', () => {
     const summary = repairSummary('active', true, 3)
@@ -104,6 +208,7 @@ describe('compatible-name repair presentation', () => {
     )
     const paused = present(lifecycle({
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 1n,
       completedBytes: 128n,
@@ -223,6 +328,7 @@ describe('retention, usage, and lifecycle-valid actions', () => {
   it('suppresses continuation immediately when a stable deadline has elapsed', () => {
     const state = lifecycle({
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 2n,
       completedBytes: 512n,
@@ -288,15 +394,40 @@ function present(
   nowMilliseconds = NOW,
   workspaceUsage?: { readonly ownedBytes: bigint; readonly maximumBytes?: bigint },
   repairSummary?: CompatibleNameRepairSummary,
+  directZipProgress?: V2DirectZipProgressSnapshot,
 ) {
   return presentReceiveLifecycle({
     state,
     artifact,
-    planKind,
+    plan: planForTest(planKind),
     nowMilliseconds,
     ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
     ...(repairSummary === undefined ? {} : { repairSummary }),
+    ...(directZipProgress === undefined ? {} : { directZipProgress }),
   })
+}
+
+function directZipProgress(
+  phase: V2DirectZipProgressSnapshot['phase'],
+): V2DirectZipProgressSnapshot {
+  return Object.freeze({
+    kind: 'direct-zip',
+    operationId: 'operation',
+    generation: 1n,
+    phase,
+    receivedSelectedBytes: 1_024n,
+    safeResumeBytes: 768n,
+  })
+}
+
+function planForTest(kind: MaterializationPlan['kind']): MaterializationPlan {
+  if (kind === 'direct-resumable-zip') {
+    return {
+      kind,
+      binding: { stableName: 'photos.windshare-abc234.zip' },
+    } as MaterializationPlan
+  }
+  return { kind } as MaterializationPlan
 }
 
 function lifecycle(

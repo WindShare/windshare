@@ -28,6 +28,7 @@ import {
   createOperationID,
   createWorkspaceBinding,
   createWorkspaceID,
+  type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
 import type {
@@ -37,6 +38,7 @@ import type {
   V2RouteCommitResult,
 } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
+import { snapshotPreClickRanking } from './shared'
 import {
   workspaceActivationOwnerDependencies,
   WorkspaceOwnedActivationAuthority,
@@ -79,6 +81,7 @@ export type WorkspaceRouteDependencyOverrides =
 export interface WorkspaceArtifactAuthorityOptions {
   readonly windowPort: BrowserReceiveWindow
   readonly offered: OfferedArtifactChoice
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly trace?: WorkspaceStageTraceListener
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly dependencies?: WorkspaceRouteDependencyOverrides
@@ -89,6 +92,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
   readonly ready = Promise.resolve()
   readonly #window: BrowserReceiveWindow
   readonly #choice: OfferedArtifactChoice['choice']
+  readonly #preClickRanking: readonly ArtifactChoiceID[]
   readonly #workspaceRouteId: string
   readonly #publicationTargetRouteId: string
   readonly #trace: WorkspaceStageTraceListener | undefined
@@ -111,6 +115,10 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
     }
     this.#window = options.windowPort
     this.#choice = options.offered.choice
+    this.#preClickRanking = snapshotPreClickRanking(
+      this.#choice.choiceId,
+      options.preClickRanking,
+    )
     this.#workspaceRouteId = route.workspace.routeId
     this.#publicationTargetRouteId = route.publicationTarget.routeId
     this.#trace = options.trace
@@ -162,6 +170,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
     const lease = await this.#dependencies.activationOwner.withActivationLock(operationId, async () => {
       attempt.namespace = await this.#dependencies.openNamespace({
         receiveIntent: attempt.frozen!.intent,
+        preClickRanking: this.#preClickRanking,
         repository: attempt.repository!,
         storage: this.#window.navigator.storage,
         signal: input.signal,

@@ -10,7 +10,7 @@
         "modifiedTime": null,
         "path": []
       },
-      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAgdd9rbEbTAdyWdW7Mcp1YMegeRsZf-zMCk_ttBsa0YZsAAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAEFBRUlNUVVZXWFlaW1xdXl8AAAAAAAAAAAAAAAAAAAABAQAAAAAAAAABAQ",
+      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAgmBI-pxo-jENVBaGaVirfO5zOAxsfGcPDD-3qV2XDNbYAAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAECAhIiMkJSYnKCkqKywtLi8AAAAAAAAAEFBRUlNUVVZXWFlaW1xdXl8AAAAAAAAAAAAAAAAAAAABAQAAAAAAAAABAQ",
       "name": "synthetic-root",
       "parentCase": null,
       "receiveIntentCase": "catalog-root-direct-tree",
@@ -18,15 +18,15 @@
       "scope": {
         "layout": "directory-tree-catalog-root",
         "layoutVersion": 1,
-        "receiveIntentDigest": "dd9rbEbTAdyWdW7Mcp1YMegeRsZf-zMCk_ttBsa0YZs",
+        "receiveIntentDigest": "mBI-pxo-jENVBaGaVirfO5zOAxsfGcPDD-3qV2XDNbY",
         "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
       },
       "secretB64Url": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
       "settlement": {
-        "admissionToken": "p7V0iHMaKt81E79bMXzH2HK63l2Qj6dPlERfw3EO8T8",
+        "admissionToken": "lppWllLelxGeP3MYn8ErGMpVPJoOyUgztViFtvixHo8",
         "kind": "finalized"
       },
-      "token": "p7V0iHMaKt81E79bMXzH2HK63l2Qj6dPlERfw3EO8T8"
+      "token": "lppWllLelxGeP3MYn8ErGMpVPJoOyUgztViFtvixHo8"
     },
     {
       "directory": {
@@ -41,7 +41,7 @@
           "photos"
         ]
       },
-      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAgdd9rbEbTAdyWdW7Mcp1YMegeRsZf-zMCk_ttBsa0YZsAAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAEGBhYmNkZWZnaGlqa2xtbm8AAAAAAAAAIKe1dIhzGirfNRO_WzF8x9hyut5dkI-nT5REX8NxDvE_AAAAAAAAAB8CAAAAAAAAABYAAAAAAAAAAQAAAAAAAAAGcGhvdG9zAAAAAAAAACYCAAAAAAAAAAgAAAAAZVPxyAAAAAAAAAAEB1TUwAAAAAAAAAABAg",
+      "messageB64Url": "d2luZHNoYXJlL2RpcmVjdG9yeS1hZG1pc3Npb24vdjIAAgAAAAAAAAAgmBI-pxo-jENVBaGaVirfO5zOAxsfGcPDD-3qV2XDNbYAAAAAAAAAAQEAAAAAAAAAAQMAAAAAAAAAEDAxMjM0NTY3ODk6Ozw9Pj8AAAAAAAAAEGBhYmNkZWZnaGlqa2xtbm8AAAAAAAAAIJaaVpZS3pcRnj9zGJ_BKxjKVTyaDslIM7VYhbb4sR6PAAAAAAAAAB8CAAAAAAAAABYAAAAAAAAAAQAAAAAAAAAGcGhvdG9zAAAAAAAAACYCAAAAAAAAAAgAAAAAZVPxyAAAAAAAAAAEB1TUwAAAAAAAAAABAg",
       "name": "child-generation",
       "parentCase": "synthetic-root",
       "receiveIntentCase": "catalog-root-direct-tree",
@@ -49,12 +49,12 @@
       "scope": {
         "layout": "directory-tree-catalog-root",
         "layoutVersion": 1,
-        "receiveIntentDigest": "dd9rbEbTAdyWdW7Mcp1YMegeRsZf-zMCk_ttBsa0YZs",
+        "receiveIntentDigest": "mBI-pxo-jENVBaGaVirfO5zOAxsfGcPDD-3qV2XDNbY",
         "syntheticRoot": "ICEiIyQlJicoKSorLC0uLw"
       },
       "secretB64Url": "wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29zd3t8",
       "settlement": {
-        "admissionToken": "fQhMDjzm-DzqEjAq6j77jboZ4A_g94OLIeDMKIvN1qs",
+        "admissionToken": "TKNqFtHBd9TKyes80hOGcPDxwx3K0mfv2P5jMjnvWAE",
         "fault": {
           "code": "directory-metadata",
           "domain": "output",
@@ -62,7 +62,7 @@
         },
         "kind": "isolated-failure"
       },
-      "token": "fQhMDjzm-DzqEjAq6j77jboZ4A_g94OLIeDMKIvN1qs"
+      "token": "TKNqFtHBd9TKyes80hOGcPDxwx3K0mfv2P5jMjnvWAE"
     }
   ]
 }

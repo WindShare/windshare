@@ -6,6 +6,7 @@ import {
   createResultRootDirectoryTreeArtifact,
   createSelectionSpec,
   createSingleFileDirectoryTreeArtifact,
+  deriveArtifactChoiceIdentity,
   type DirectoryTreeArtifact,
 } from '../../src/transfer/intent'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
@@ -571,6 +572,7 @@ export async function bindTask(
     repository,
     intent,
     parent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
   })
   if (reserved.compatibleNameRepair === undefined) {
     await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })

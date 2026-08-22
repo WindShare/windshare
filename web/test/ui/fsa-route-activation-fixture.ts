@@ -39,6 +39,7 @@ import type { ReceiveOperationTransition } from '../../src/output/workspace/repo
 import { receiveOperationHandleRecord } from '../../src/output/workspace/records'
 import {
   createSelectionSpec,
+  type ArtifactChoiceID,
   type DirectTreePlan,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
@@ -131,6 +132,7 @@ export function routeFixture(
   repository: TestRepository,
   overrides: Partial<FSARouteDependencies> = {},
   localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
+  preClickRanking: readonly ArtifactChoiceID[] = [offered.choice.choiceId],
 ): FSAArtifactPresentationAuthority {
   const operationLocks = new MemoryLockManager()
   const diagnosticAttempt = localOutputFailures === undefined
@@ -141,6 +143,7 @@ export function routeFixture(
   return new FSAArtifactPresentationAuthority({
     offered,
     picked,
+    preClickRanking,
     dependencies: {
       openRepository: async () => repository,
       acquireOperationLease: (store, operationId, options) =>
