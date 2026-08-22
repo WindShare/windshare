@@ -1,12 +1,13 @@
 # P2P 直连成功率执行计划
 
 状态：待批准
-范围：无人工端口映射时，尽可能提高浏览器接收端与 Go 发送端的 WebRTC 直连率。提高 STUN 可用性，特别是中国大陆。
+范围：无人工端口映射时，尽可能提高浏览器接收端与 Go 发送端、Go 接收端与 Go 发送端的 WebRTC 直连率。提高 STUN 可用性，特别是中国大陆。
 
 ## 当前基线
 
 - 内容 activation 已经让应用 relay 立即传输，同时在后台执行 P2P；纯目录浏览不启动 ICE。
 - 当前使用单一 `PeerConnection + 固定 STUN`，已经支持 Trickle ICE、一次一个 attempt、有限重试与 relay 并行承载。
+- 接收端固定创建 Offer/DataChannel，发送端固定 Answer；双方均为 Full ICE agent，都会收集 candidate、发送 connectivity check。固定协商角色不等于发送端被动打洞。
 - 本计划只扩展现有恢复框架，不新建第二套 retry、detach、identity 或 lane admission 所有者。
 
 ## 目标与边界
@@ -16,6 +17,7 @@
 - 普通用户不选择 STUN、不理解 NAT，也不手工开放端口；`relay-only` 保持零 ICE、零 STUN 和零端口映射。
 - 双硬 NAT、CGNAT 无公网映射、UDP 封锁等不可穿透拓扑明确降级，不以无界探测伪造成功率。
 - NAT、provider 和路径成本留在 `connectivity`；`core` 只接收认证后的 `FrameChannel`。
+- 不根据预判 NAT 类型切换 Offerer；角色反转不增加可用 candidate pair，只有真实网络证据证明存在稳定增益时才另行评估。
 - 主界面只依据已接纳的活动 lane，以及 WebRTC lane 的 selected pair，显示“已直连”“中转传输”或“两者并行”；candidate 或端口映射成功只进入诊断。
 - 连接流程不得临时提权或阻塞用户操作；防火墙权限不可得时记录原因并继续 relay。
 - 代表性真实网络样本不阻塞实现或发布；缺少样本时只声明机制完成，不宣称直连率提升或数字。
@@ -75,18 +77,18 @@ PeerConnectivity
 - 默认部署至少提供面向中国大陆网络的受控 STUN-only endpoint，优先 UDP 3478；UDP 443 仅在独立 listener 不冲突且确实部署时进入池。STUN 使用独立 listener、健康状态、速率限制和指标，不启用 TURN allocation。
 - STUN 故障不影响应用 relay；`relay-only` 不加载、解析或访问 STUN endpoint。
 
-### 4. 稳定 Go 侧 ICE socket
+### 4. 稳定所有 Go 端点的 ICE socket
 
-- 用 Pion `API + SettingEngine + ICE UDP mux` 取代 factory 直接调用默认 `NewPeerConnection`。
+- 用进程级 `NativePeerConnectivity` 统一向 Go 发送端和 Go 接收端提供 Pion `API + SettingEngine + ICE UDP mux`，取代两类 factory 直接调用默认 `NewPeerConnection`。
 - 同一网络代际复用 UDP4/UDP6 socket，使 discovery、ICE checks、attempt 和已接纳 lane 共享 NAT 映射。
 - 保留有效 LAN、mDNS、global-unicast IPv6 与接口路径；按地址族、接口类别和 candidate 类型限制噪声。
 - 默认路由、可用接口或地址、VPN 与休眠恢复变化经去抖后创建新代际；旧代际在引用归零后释放，candidate、映射和观察事实不得跨代复用。
 - 防火墙规则属于安装/平台层；连接模块不提权、不改全局策略，权限不可得时继续 relay。
 
-### 5. 建立发送端公网可达路径
+### 5. 建立 Go 端点公网可达路径
 
 - 发布当前路由可用的 global-unicast IPv6；tentative、deprecated、过期或已换代地址不得继续使用。
-- 只有内容 activation、尚未直连且普通 ICE 已获得短暂先行机会时，才后台有界尝试 PCP、NAT-PMP 和受控 UPnP；直连成功立即取消未完成工作。
+- 任意 Go 端点只有在内容 activation、尚未直连且普通 ICE 已获得短暂先行机会时，才后台有界尝试 PCP、NAT-PMP 和受控 UPnP；直连成功立即取消未完成工作。浏览器端不模拟原生端口映射能力。
 - 多种映射协议由 `ReachabilityAuthority` 统一竞争，只保留一个租约并撤销其余结果。映射绑定 socket 与网络代际，只发布设备实际返回且公网可路由的 IP/端口；追加 candidate，不替换 LAN、IPv6 或 STUN candidate。
 - 映射晚到默认供下一 fresh attempt 使用；只有第 2 阶段证明安全时才加入当前 attempt。最终可达性仍由认证 ICE check 裁决。
 - 映射租约只由 active attempt 或已接纳 lane 的可达需求持有；最后一个需求结束后在有界 grace 内停止刷新并撤销。网络变化时重建，崩溃依靠短 TTL 收敛。
@@ -95,6 +97,7 @@ PeerConnectivity
 
 - 首次 attempt 使用主 profile、单一 PeerConnection、Trickle ICE 和现有 phase budget，不等待 gathering 完成。
 - `attempt-transient` 失败后以同一稳定 socket 创建 fresh PeerConnection；备用 profile 可用时至多旋转一次，任何时刻只有一个 PeerConnection 在尝试。
+- Go 接收端 `PeerSet` 统一创建 fresh Offer；Go 发送端只回答当前 attempt。lane detach 或任一 Go 端网络代际变化由该所有者触发恢复，不引入双向 Offer 或第二套 supervisor。
 - direct 失效时健康 relay 持续承载内容。仅网络变化、lane detach 或一次有预算的延迟恢复可重新触发；不做永久周期打洞。
 - 网络变化使用新 socket 代际；lane admission 转移所有权后及时释放失败 attempt 与无用 candidate。
 - 后台尝试不得让传输进度归零或状态反复闪烁；只有已接纳 lane 的 selected pair 证明后才显示“已直连”。
@@ -106,7 +109,7 @@ PeerConnectivity
 
 ## 验证与收敛
 
-- 自动化测试验证失败作用域、profile 选择、socket/attempt 所有权、候选预算、代际隔离、实际外部端口、映射刷新与撤销、crash TTL、relay 降级和资源释放；网关行为使用确定性 fake。
+- 自动化测试验证失败作用域、profile 选择、socket/attempt 所有权、候选预算、代际隔离、实际外部端口、映射刷新与撤销、crash TTL、relay 降级和资源释放；Go↔Go 覆盖发送端映射、接收端映射、双方映射和双方不可映射四种拓扑，网关行为使用确定性 fake。
 - Pion spike 验证实际外部端口、收包路径和映射晚到语义；单机确定性拓扑证明机制正确，真实网络仅在使用中积累证据，不是交付前置。
 - 每阶段运行聚焦 gate；全部代码完成后运行 `make ci-parallel`。
 
@@ -116,4 +119,5 @@ PeerConnectivity
 - 不在出链接、纯浏览或应用启动时提前进行 ICE、STUN、端口映射或防火墙提权。
 - 不接受 relay 或能力链接动态下发 STUN 地址；本阶段不做远程配置签名系统。
 - 不创建并行或探测专用 PeerConnection，不做无限重试、无界 socket、候选洪泛或端口扫描。
+- 不为 NAT 类型增加 Offer/Answer 角色反转或 glare 协商。
 - 本轮不引入 TURN；WebSocket relay、端口映射成功或同机转发不得标记为 direct。
