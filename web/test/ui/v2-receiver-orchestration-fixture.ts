@@ -30,8 +30,10 @@ import {
   createOriginalFileArtifact,
   createReceiveIntent,
   createSelectionSpec,
+  createFSAOwnedFileBinding,
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
+  type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import type { V2PlanExecutionAuthority } from '../../src/transfer/output-session'
@@ -73,8 +75,10 @@ import type {
 import type { V2ProtocolGenerationListener } from '../../src/receiver/v2-supervisor'
 import {
   environment,
+  directZipTarget,
   handoffTarget,
   managedTarget,
+  reviewedDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -88,6 +92,17 @@ export const WORKSPACE_ENVIRONMENT = environment({
   workspace: workspaceOffer(),
 })
 export const NO_DESTINATION_ENVIRONMENT = environment()
+const DIRECT_ZIP_SUPPORT = reviewedDirectZipSupport()
+export const DIRECT_ZIP_ENVIRONMENT = environment({
+  targets: [directZipTarget()],
+  directZipSupport: DIRECT_ZIP_SUPPORT,
+  zipRecommendationPolicy: {
+    version: 1,
+    kind: 'available',
+    workspacePeakBytesThreshold: 0n,
+    policyDigest: DIRECT_ZIP_SUPPORT.recommendationPolicyDigest,
+  },
+})
 
 const FILE_ENTRY: Extract<V2CatalogEntry, { kind: 'file' }> = Object.freeze({
   kind: 'file',
@@ -145,6 +160,7 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
   environmentCalls = 0
   clickStack: () => boolean = () => true
   authorityReady: Promise<void> | undefined
+  readonly startedRankings: Array<readonly ArtifactChoiceID[]> = []
 
   constructor(
     fallback: EnvironmentOffers,
@@ -161,8 +177,10 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
 
   startArtifactAuthority(
     offered: OfferedArtifactChoice,
+    preClickRanking: readonly ArtifactChoiceID[],
   ): V2ArtifactPresentationAuthority {
     this.startedChoices.push(offered)
+    this.startedRankings.push(Object.freeze([...preClickRanking]))
     this.authorityStartStacks.push(this.clickStack())
     const authority = new FakeStartedAuthority(
       offered,
@@ -308,6 +326,7 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
       return {
         lifecycle: next(this.lifecycle, {
           kind: 'resumable-receive',
+          payloadKind: 'file-set',
           checkpointSetDigest: identityText(74, 32),
           completedFileCount: 0n,
           completedBytes: 0n,
@@ -347,12 +366,18 @@ export class FakeJoinedShare {
   readonly projectionRequests: Array<{ readonly signal: AbortSignal }> = []
   readonly transferRuns: FakeTransferRun[] = []
   readonly #projectionGates: Array<PromiseLike<void> | undefined>
+  readonly #projectionShape: 'single-file' | 'tree'
   readonly #generationListeners = new Set<V2ProtocolGenerationListener>()
   closeCount = 0
 
-  constructor(defaultSelected: boolean, projectionGates: Array<PromiseLike<void> | undefined> = []) {
+  constructor(
+    defaultSelected: boolean,
+    projectionGates: Array<PromiseLike<void> | undefined> = [],
+    projectionShape: 'single-file' | 'tree' = 'single-file',
+  ) {
     this.selection = new V2SelectionPolicy(defaultSelected)
     this.#projectionGates = [...projectionGates]
+    this.#projectionShape = projectionShape
   }
 
   rootDirectory(): V2BrowseDirectory {
@@ -405,28 +430,43 @@ export class FakeJoinedShare {
   projectionSource(selection: V2FrozenSelectionPolicy): AuthenticatedDiscoverySource {
     const gate = this.#projectionGates.shift()
     const requests = this.projectionRequests
+    const projectionShape = this.#projectionShape
     return Object.freeze({
       discover: async function* (request: AuthenticatedDiscoveryRequest) {
         requests.push({ signal: request.signal })
         await gate
         const selected = selection.selected(FILE_ENTRY, [ROOT_ID])
+        let fileCountLowerBound = 0
+        if (selected) fileCountLowerBound = projectionShape === 'tree' ? 2 : 1
         yield createAuthenticatedProjectionEvidence({
           generations: [{
             directoryId: ROOT_ID,
             generation: identityText(20 + requests.length),
           }],
           metrics: {
-            fileCountLowerBound: selected ? 1 : 0,
-            directoryCountLowerBound: 0,
+            fileCountLowerBound,
+            directoryCountLowerBound: selected && projectionShape === 'tree' ? 1 : 0,
             byteCountLowerBound: selected ? FILE_ENTRY.expectedSize : 0n,
           },
-          ...(selected
+          ...(selected && projectionShape === 'single-file'
             ? {
                 representativeFile: {
                   fileId: FILE_ID,
                   sourcePath: FILE_ENTRY.name,
                   portableName: FILE_ENTRY.name,
                 },
+              }
+            : {}),
+          ...(selected && projectionShape === 'tree'
+            ? {
+                selectedRoots: [{
+                  kind: 'directory' as const,
+                  directoryId: ROOT_ID,
+                  sourcePath: 'Shared files',
+                  portableName: 'Shared files',
+                }],
+                selectedRootCount: 1,
+                earlyLayoutBasis: { kind: 'synthetic-selection' as const },
               }
             : {}),
           settledTargets: request.unsettledTargets,
@@ -480,6 +520,7 @@ export class FakeTransferRun {
       this.resolve(reason.control === 'pause'
         ? next(lifecycle, {
             kind: 'resumable-receive',
+            payloadKind: 'file-set',
             checkpointSetDigest: identityText(74, 32),
             completedFileCount: 0n,
             completedBytes: 0n,
@@ -594,7 +635,9 @@ export async function startTransfer(
   joined: FakeJoinedShare,
 ): Promise<void> {
   await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
-  controller.chooseArtifact('download-original')
+  const offers = controller.getSnapshot().output.offers
+  if (offers?.kind !== 'artifact-actions') throw new Error('test receive offer is unavailable')
+  controller.chooseArtifact(offers.primary.choice.choiceId)
   await waitFor(() => joined.transferRuns.length === 1)
 }
 
@@ -634,6 +677,20 @@ export async function candidateBindingForTest(
         workspaceRouteId: action.route.workspace.routeId,
         publicationTargetRouteId: action.route.publicationTarget.routeId,
         workspace,
+      })
+    }
+    case 'direct-resumable-zip': {
+      const binding = await createFSAOwnedFileBinding({
+        operationId: identityText(46),
+        artifact,
+        stableName: `selection.windshare-${identityText(47)}.zip`,
+        targetRef: identityText(48, 32),
+        policies: action.route.target.support.policies,
+      })
+      return Object.freeze({
+        kind: 'fsa-owned-file-binding',
+        targetRouteId: action.route.target.routeId,
+        binding,
       })
     }
     case 'direct-tree':
@@ -676,6 +733,7 @@ export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
   })
   const retained = next(initial, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: identityText(93, 32),
     completedFileCount: 1n,
     completedBytes: 64n,
@@ -768,6 +826,7 @@ export function stableLifecycle(
     case 'resumable-receive':
       return next(lifecycle, {
         kind,
+        payloadKind: 'file-set',
         checkpointSetDigest: identityText(50, 32),
         completedFileCount: 1n,
         completedBytes: 128n,

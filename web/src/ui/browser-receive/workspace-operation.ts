@@ -474,7 +474,10 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       },
       createPlans: () => workspacePlanAuthority(this.intent, this),
       beginContinuation: (
-        lifecycle: Extract<ReceiveLifecycleState, { readonly kind: 'resumable-receive' }>,
+        lifecycle: Extract<ReceiveLifecycleState, {
+          readonly kind: 'resumable-receive'
+          readonly payloadKind: 'file-set'
+        }>,
       ) =>
         this.#admissionSettlement.beginContinuation(lifecycle),
       installTransferAttempt: (

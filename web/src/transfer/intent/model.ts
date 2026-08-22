@@ -3,23 +3,28 @@ import { V2_MAXIMUM_SELECTION_RULE_OVERRIDES } from '../../catalog/v2-selection'
 
 export type CanonicalBytes = Uint8Array<ArrayBuffer>
 
-export const RECEIVE_INTENT_VERSION = 2 as const
+export const RECEIVE_INTENT_VERSION = 3 as const
 export const SELECTION_SPEC_VERSION = 1 as const
 export const ARTIFACT_SPEC_VERSION = 1 as const
-export const MATERIALIZATION_PLAN_VERSION = 2 as const
-export const DESTINATION_RESERVATION_VERSION = 2 as const
+export const MATERIALIZATION_PLAN_VERSION = 3 as const
+export const DESTINATION_RESERVATION_VERSION = 3 as const
+export const FSA_OWNED_FILE_BINDING_VERSION = 1 as const
+export const ARTIFACT_CHOICE_IDENTITY_VERSION = 1 as const
 export const WORKSPACE_BINDING_VERSION = 1 as const
 export const PORTABLE_BINDING_VERSION = 1 as const
 
 export const STABLE_IDENTITY_BYTES = 16
 export const AUTHORITY_REFERENCE_BYTES = 32
 export const RECEIVE_INTENT_DIGEST_BYTES = 32
+export const ARTIFACT_CHOICE_ID_BYTES = 32
 export const MAX_SELECTION_RULES = V2_MAXIMUM_SELECTION_RULE_OVERRIDES
 export const MAX_SELECTION_TARGET_UTF8_BYTES = 1 << 20
 export const DEFAULT_RESULT_ROOT_NAME = 'windshare'
 export const DEFAULT_ARCHIVE_NAME = 'windshare.zip'
 export const PARTIAL_SELECTION_SUFFIX = '-selection'
 export const ARCHIVE_EXTENSION = '.zip'
+export const DIRECT_ZIP_STABLE_NAME_INFIX = '.windshare-'
+export const DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH = 22
 export const RESULT_NAME_POLICY = 'windshare/result-name/v1-unicode-15.0.0'
 export const MAX_RESULT_COMPONENT_BYTES = V2_CATALOG_NAME_BYTES
 export const COLLISION_SUFFIX_HEX_CHARS = 10
@@ -139,6 +144,10 @@ export type ArtifactSpec =
   | DirectoryTreeArtifact
   | ZipArchiveArtifact
 
+export type ArtifactKind = ArtifactSpec['kind']
+export type MaterializationKind = MaterializationPlan['kind']
+export type PreparationPolicy = 'none' | 'exact-zip' | 'exact-artifact'
+
 export type NameAuthority = 'application-chosen' | 'user-chosen' | 'browser-chosen'
 export type ReplacementGuarantee =
   | 'atomic-no-replace'
@@ -146,21 +155,35 @@ export type ReplacementGuarantee =
   | 'user-authorized-replace'
   | 'unknown'
 export type DeliveryMode = 'managed-target' | 'browser-handoff'
-export type CommitVisibility = 'atomic-commit' | 'prefix-visible' | 'unobservable'
-export type RollbackGuarantee = 'to-absent' | 'none'
+export type TargetVisibility =
+  | 'hidden-until-verified-publication'
+  | 'committed-objects-visible'
+  | 'unobservable'
+  | 'operation-owned-incomplete-file-visible'
+export type ArtifactAvailability =
+  | 'verified-complete-only'
+  | 'committed-objects-usable'
+  | 'handoff-only'
+export type CleanupAuthority =
+  | 'rollback-to-absent-before-publication'
+  | 'no-whole-target-rollback'
+  | 'ownership-proof-required'
+  | 'no-managed-cleanup'
 export type GuaranteeProfile =
   | 'native-tree'
   | 'fsa-tree'
   | 'managed-atomic'
   | 'browser-handoff'
+  | 'fsa-owned-file'
 
 export interface GuaranteeSet {
   readonly profile: GuaranteeProfile
   readonly nameAuthority: NameAuthority
   readonly replacement: ReplacementGuarantee
   readonly delivery: DeliveryMode
-  readonly visibility: CommitVisibility
-  readonly rollback: RollbackGuarantee
+  readonly targetVisibility: TargetVisibility
+  readonly artifactAvailability: ArtifactAvailability
+  readonly cleanupAuthority: CleanupAuthority
 }
 
 interface DestinationReservationBase extends CanonicalDigestValue {
@@ -224,6 +247,32 @@ export interface PortableBinding extends CanonicalDigestValue {
   readonly preparation: 'exact-artifact'
 }
 
+export interface DirectZipPolicyDigests {
+  readonly zipEncoding: string | null
+  readonly layout: string | null
+  readonly checkpoint: string | null
+  readonly journalBudget: string | null
+  readonly epoch: string | null
+}
+
+export interface AvailableDirectZipPolicyDigests extends DirectZipPolicyDigests {
+  readonly zipEncoding: string
+  readonly layout: string
+  readonly checkpoint: string
+  readonly journalBudget: string
+  readonly epoch: string
+}
+
+export interface FSAOwnedFileBinding extends CanonicalDigestValue {
+  readonly version: typeof FSA_OWNED_FILE_BINDING_VERSION
+  readonly operationId: string
+  readonly artifactDigest: string
+  readonly stableName: string
+  readonly targetRef: string
+  readonly guarantees: GuaranteeSet & Readonly<{ profile: 'fsa-owned-file' }>
+  readonly policies: AvailableDirectZipPolicyDigests
+}
+
 interface MaterializationPlanBase extends CanonicalValue {
   readonly version: typeof MATERIALIZATION_PLAN_VERSION
 }
@@ -243,14 +292,21 @@ export interface DirectAtomicPlan extends MaterializationPlanBase {
 export interface WorkspaceThenPublishPlan extends MaterializationPlanBase {
   readonly kind: 'workspace-then-publish'
   readonly workspace: WorkspaceBinding
+  readonly publicationGuarantee: 'managed-atomic' | 'browser-handoff'
   readonly preparation: 'none' | 'exact-zip'
 }
 
 export interface PortableHandoffPlan extends MaterializationPlanBase {
   readonly kind: 'portable-handoff'
   readonly portable: PortableBinding
-  readonly publicationRoute: 'browser-handoff'
+  readonly publicationGuarantee: 'browser-handoff'
   readonly preparation: 'exact-artifact'
+}
+
+export interface DirectResumableZipPlan extends MaterializationPlanBase {
+  readonly kind: 'direct-resumable-zip'
+  readonly binding: FSAOwnedFileBinding
+  readonly preparation: 'none'
 }
 
 export type MaterializationPlan =
@@ -258,6 +314,19 @@ export type MaterializationPlan =
   | DirectAtomicPlan
   | WorkspaceThenPublishPlan
   | PortableHandoffPlan
+  | DirectResumableZipPlan
+
+declare const ARTIFACT_CHOICE_ID_BRAND: unique symbol
+export type ArtifactChoiceID = string & Readonly<{ [ARTIFACT_CHOICE_ID_BRAND]: true }>
+
+export interface ArtifactChoiceIdentity extends CanonicalValue {
+  readonly version: typeof ARTIFACT_CHOICE_IDENTITY_VERSION
+  readonly artifactKind: ArtifactKind
+  readonly materializationKind: MaterializationKind
+  readonly guaranteeProfile: GuaranteeProfile
+  readonly preparation: PreparationPolicy
+  readonly id: ArtifactChoiceID
+}
 
 export interface ReceiveIntent extends CanonicalDigestValue {
   readonly version: typeof RECEIVE_INTENT_VERSION

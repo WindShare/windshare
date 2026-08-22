@@ -11,9 +11,10 @@ import (
 const vectorInventoryFile = "inventory.txt"
 
 var requiredReceiveVectorFiles = []string{
+	"artifact-choice-v1.json",
 	"directory-admission-v2.json",
 	"file-checkpoint-v2.json",
-	"receive-intent-v2.json",
+	"receive-intent-v3.json",
 }
 
 func TestVectorInventoryIsExact(t *testing.T) {

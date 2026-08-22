@@ -96,6 +96,22 @@ describe('diagnostic context projection', () => {
       output: { generation: '7', plan_kind: 'direct_atomic' },
     })
   })
+
+  it('projects the V3 direct ZIP plan and new resumable lifecycle states', () => {
+    for (const state of [
+      'authorization-required',
+      'target-verification-required',
+      'destination-space-required',
+    ] as const) {
+      expect(captureDiagnosticContextV1({
+        lifecycle: source({ generation: 1n, state }),
+        output: source({ generation: 2n, planKind: 'direct-resumable-zip' }),
+      })).toEqual({
+        lifecycle: { generation: '1', state: state.replaceAll('-', '_') },
+        output: { generation: '2', plan_kind: 'direct_resumable_zip' },
+      })
+    }
+  })
 })
 
 function source<Snapshot>(snapshot: Snapshot & Record<string, unknown>) {

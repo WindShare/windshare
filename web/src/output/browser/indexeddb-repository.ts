@@ -26,6 +26,7 @@ import {
 } from '../persistence/journal'
 import {
   operationRecordId,
+  receiveOperationLeaseId,
   decodeStoredWorkspaceActivationCandidate,
   RECEIVE_RECORD_LIFECYCLE_STATE,
   RECEIVE_RECORD_WORKSPACE_ACTIVATION,
@@ -683,7 +684,7 @@ implements ReceiveOperationRepository,
     const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
     const value = await this.#read<unknown>(
       INDEXEDDB_RECEIVE_LEASE_STORE,
-      `windshare/receive-operation/v1/${canonicalOperationId}/lease`,
+      receiveOperationLeaseId(canonicalOperationId),
     )
     if (value === undefined) return undefined
     const record = validateReceiveOperationLeaseRecord(value as ReceiveOperationLeaseRecord)

@@ -36,6 +36,7 @@ import { FaultDomain, FaultScope, OutputFaultCode, outputFault } from '../../src
 import {
   createCatalogRootDirectoryTreeArtifact,
   createCompleteDirectoryResultRoot,
+  createArtifactChoiceIdentity,
   createDirectorySelectionResultRoot,
   createDirectAtomicPlan,
   createDirectTreePlan,
@@ -54,10 +55,15 @@ import {
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   createZipArchiveArtifact,
+  deriveArtifactChoiceIdentity,
+  type ArtifactKind,
   type ArtifactSpec,
   type CanonicalDigestValue,
   type DestinationReservation,
   type MaterializationPlan,
+  type MaterializationKind,
+  type GuaranteeProfile,
+  type PreparationPolicy,
   type ReceiveIntent,
   type ResultRootLayout,
   type SelectionRulesSpec,
@@ -65,7 +71,10 @@ import {
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const receiveIntentVectors = loadVectorFile(
-  new URL('../../../core/testvectors/receive-intent-v2.json', import.meta.url),
+  new URL('../../../core/testvectors/receive-intent-v3.json', import.meta.url),
+)
+const artifactChoiceVectors = loadVectorFile(
+  new URL('../../../core/testvectors/artifact-choice-v1.json', import.meta.url),
 )
 const admissionVectors = loadVectorFile(
   new URL('../../../core/testvectors/directory-admission-v2.json', import.meta.url),
@@ -74,7 +83,39 @@ const checkpointVectors = loadVectorFile(
   new URL('../../../core/testvectors/file-checkpoint-v2.json', import.meta.url),
 )
 
-describe('Go↔TypeScript ReceiveIntentV2 vectors', () => {
+describe('Go↔TypeScript ArtifactChoiceIdentityV1 vectors', () => {
+  for (const vector of artifactChoiceVectors.cases) {
+    it(`replays ${vector.name}`, async () => {
+      const input = requiredRecord(vector.input, 'artifact choice input')
+      const identity = await createArtifactChoiceIdentity({
+        artifactKind: artifactKind(requiredString(input.artifactKind, 'artifact kind')),
+        materializationKind: materializationKind(requiredString(
+          input.materializationKind,
+          'materialization kind',
+        )),
+        guaranteeProfile: guaranteeProfile(requiredString(input.guaranteeProfile, 'guarantee profile')),
+        preparation: preparationPolicy(requiredString(input.preparation, 'preparation policy')),
+      })
+      const expected = requiredRecord(vector.expected, 'artifact choice expected values')
+      expect(encodeBase64Url(identity.canonicalBytes)).toBe(requiredString(
+        expected.canonicalBytesB64Url,
+        'artifact choice canonical bytes',
+      ))
+      expect(identity.id).toBe(requiredString(expected.artifactChoiceId, 'artifact choice ID'))
+      if (identity.materializationKind === 'direct-resumable-zip') {
+        expect(vector.routeSupport).toBe('available-exact-reviewed-platform-only')
+        const policy = requiredRecord(vector.policyAvailability, 'direct ZIP policy availability')
+        expect(policy).toMatchObject({
+          directZipEpochPolicyDigest: 'dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo',
+          zipRouteRecommendationPolicyDigest: 'zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI',
+          reason: 'exact-reviewed-runtime-required',
+        })
+      }
+    })
+  }
+})
+
+describe('Go↔TypeScript ReceiveIntentV3 vectors', () => {
   for (const vector of receiveIntentVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       await replayReceiveIntent(vector)
@@ -269,6 +310,12 @@ async function replayReceiveIntent(vector: VectorCase): Promise<ReceiveIntent> {
   expect(encodeBase64Url(binding.canonicalBytes))
     .toBe(requiredString(expected.bindingCanonicalBytesB64Url, 'binding canonical bytes'))
   expect(binding.digest).toBe(requiredString(expected.bindingDigest, 'binding digest'))
+  const choice = await deriveArtifactChoiceIdentity(artifact, plan)
+  expect(encodeBase64Url(choice.canonicalBytes)).toBe(requiredString(
+    expected.artifactChoiceCanonicalBytesB64Url,
+    'artifact choice canonical bytes',
+  ))
+  expect(choice.id).toBe(requiredString(expected.artifactChoiceId, 'artifact choice ID'))
   expect(encodeBase64Url(plan.canonicalBytes))
     .toBe(requiredString(expected.planCanonicalBytesB64Url, 'materialization plan canonical bytes'))
   expect(intent.operationId).toBe(requiredString(expected.operationId, 'operation ID'))
@@ -397,7 +444,14 @@ async function materializationPlan(
         artifact,
         repositoryRef: requiredString(workspaceInput.repositoryRef, 'workspace repository'),
       })
-      return { plan: await createWorkspaceThenPublishPlan(artifact, workspace), binding: workspace }
+      const publicationGuarantee = requiredString(input.publicationGuarantee, 'publication guarantee')
+      if (publicationGuarantee !== 'managed-atomic' && publicationGuarantee !== 'browser-handoff') {
+        throw new Error('workspace publication guarantee is invalid')
+      }
+      return {
+        plan: await createWorkspaceThenPublishPlan(artifact, workspace, publicationGuarantee),
+        binding: workspace,
+      }
     }
     case 'portable-handoff': {
       const portableInput = requiredRecord(input.portable, 'portable binding')
@@ -411,6 +465,37 @@ async function materializationPlan(
     default:
       throw new Error('materialization plan kind is invalid')
   }
+}
+
+function artifactKind(value: string): ArtifactKind {
+  if (value !== 'original-file' && value !== 'directory-tree' && value !== 'zip-archive') {
+    throw new Error('artifact kind is invalid')
+  }
+  return value
+}
+
+function materializationKind(value: string): MaterializationKind {
+  if (value !== 'direct-tree' && value !== 'direct-atomic' &&
+      value !== 'workspace-then-publish' && value !== 'portable-handoff' &&
+      value !== 'direct-resumable-zip') {
+    throw new Error('materialization kind is invalid')
+  }
+  return value
+}
+
+function guaranteeProfile(value: string): GuaranteeProfile {
+  if (value !== 'native-tree' && value !== 'fsa-tree' && value !== 'managed-atomic' &&
+      value !== 'browser-handoff' && value !== 'fsa-owned-file') {
+    throw new Error('guarantee profile is invalid')
+  }
+  return value
+}
+
+function preparationPolicy(value: string): PreparationPolicy {
+  if (value !== 'none' && value !== 'exact-zip' && value !== 'exact-artifact') {
+    throw new Error('preparation policy is invalid')
+  }
+  return value
 }
 
 async function destinationReservation(

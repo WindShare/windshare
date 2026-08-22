@@ -248,6 +248,9 @@ export function stableStateByte(state: ExpiryReceiptV1['priorStableState']): num
     case 'resumable-package': return 2
     case 'waiting-to-save': return 3
     case 'download-started': return 4
+    case 'authorization-required': return 5
+    case 'target-verification-required': return 6
+    case 'destination-space-required': return 7
   }
 }
 

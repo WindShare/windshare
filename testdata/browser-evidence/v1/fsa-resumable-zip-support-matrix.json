@@ -1,0 +1,85 @@
+{
+  "candidateSchema": "windshare/browser-fsa-resumable-zip-support-matrix-candidate/v1",
+  "defaultVerdict": {
+    "directLocalRoute": "unsupported",
+    "processRestart": "unproven"
+  },
+  "matrixSchema": "windshare/browser-fsa-resumable-zip-support-matrix/v1",
+  "notes": [
+    "API presence, OPFS, mocks, headless picker failures, and graceful browser closes are not local FSA restart evidence.",
+    "A candidate remains unreviewed even when every observed scenario succeeds.",
+    "Production must fail closed until an exact platform, filesystem profile, browser binary digest, and raw-evidence digest are reviewed.",
+    "The reviewed workspace recommendation is a display ranking only; it performs no scan, authority grant, target action, or post-click route substitution.",
+    "Positive routing remains confined to the one exact reviewed platform, filesystem, browser binary, feature set, native evidence, and policy evidence tuple."
+  ],
+  "policyConstants": {
+    "directZipAutomaticCheckpointMaximumCumulativeCopyBytes": 536870912,
+    "directZipAutomaticCheckpointMaximumModeledPeakTemporaryBytes": 268435456,
+    "directZipAutomaticCheckpointMaximumPrefixCopyBytes": 268435456,
+    "zipWorkspaceRecommendationMaximumPeakBytes": 1073744986
+  },
+  "reviewStatus": "reviewed-local-evidence",
+  "reviewedPlatforms": [
+    {
+      "browser": {
+        "channel": "Edge",
+        "executableSha256": "486c0e70f7c66a3288f3b00acf25452b69e08c2cb1f361937d8f6e720ee01ece",
+        "version": "151.0.4129.93"
+      },
+      "entryId": "windows-11-pro-10.0.26200-x64-edge-151.0.4129.93-ntfs-4096",
+      "featureFacts": {
+        "createWritable": "function",
+        "handleIsSameEntry": "function",
+        "handleQueryPermission": "function",
+        "handleRequestPermission": "function",
+        "indexedDB": "object",
+        "isSecureContext": true,
+        "locks": "object",
+        "showDirectoryPicker": "function"
+      },
+      "filesystem": {
+        "allocationUnitBytes": 4096,
+        "blockSize": "4096",
+        "driveTypeCode": 3,
+        "fileSystem": "NTFS",
+        "operatorAttestation": "windows-local-ntfs"
+      },
+      "platform": {
+        "arch": "x64",
+        "platform": "win32",
+        "release": "10.0.26200",
+        "type": "Windows_NT",
+        "version": "Windows 11 Pro"
+      },
+      "rawEvidenceSha256": "8cc3b2c53cf47c9733af65d1ff202aac83e620d6c63724ba4a6f76bb82a990a1",
+      "repositoryCommit": "3625708e3b998ddc6bc04eb55593896d05171b08",
+      "review": {
+        "directZipEpochPolicyDigest": "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo",
+        "epochPolicyReviewSha256": "e3faacd98460b5d4977a9ce65b19d8c4b596dfd1f1fe757cb3ad58297312162a",
+        "independentReviewSha256": "f2a7e39b97b4895e02fc6bd5a1208e3388d268e7cab1f868b40d64c51bcd10a0",
+        "rationale": "The exact native run proves same-target continuation after owned browser-process termination and explicit prompt-to-granted reauthorization. Separately reviewed epoch and workspace recommendation policies are bound to this exact Windows, Edge, NTFS, feature, binary, and evidence tuple; the recommendation is display ranking only.",
+        "reviewedAt": "2026-08-22T09:41:24Z",
+        "reviewer": "independent-evidence-review",
+        "workspaceRecommendationArtifactManifestSha256": "385231824ced4c4199c6e3a42c382f35ebcbc9a7c7330d19681cd7c43f77b25c",
+        "workspaceRecommendationCandidateSha256": "827270a9f04eddc5d9fc97f6fc36f945787ed020459ef9f88d35a80c327ae0e5",
+        "workspaceRecommendationPolicyDigest": "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI",
+        "workspaceRecommendationPolicyReviewSha256": "dc9d4fe8945dbe445e8bc90c430ca57777163607c43bfd82b09ae7d48a2ae484",
+        "workspaceRecommendationRawEvidenceSha256": "f47ea879a70395d4e4dac6b67cffee43b3cb06923ce310ec78fe09170dde7906",
+        "workspaceRecommendationSourceBindingSha256": "3224e5d874b5ad313bfefad4ff24c0fb1cb9fb3916dda83f066830e8d1f0180f"
+      },
+      "runConfigSha256": "bdb60cd13c25660e45f1e1b7b1cfe6929beba04a42ae14839962bc5d97f7e275",
+      "scenarios": {
+        "authorityBinding": true,
+        "externalReplacementLocatorOnly": true,
+        "sameTargetProcessRestartContinuation": 4
+      },
+      "sourceManifestSha256": "bb5d9d32e3bd977a209ff8402080cf08eb135be61b03a753dc9487974442ecef",
+      "supportingArtifactManifestSha256": "09edd1390d6bf244e98967262c0fba261ec29125cd4ec1e0add1572e9359efd5",
+      "verdict": {
+        "directLocalRoute": "supported",
+        "processRestart": true
+      }
+    }
+  ],
+  "schema": "windshare/browser-fsa-resumable-zip-support-matrix/v1"
+}

@@ -7,6 +7,7 @@ import {
   type SelectionProjectionState,
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
+  type WorkspaceCostObservationV1,
 } from './model'
 import { SelectionProjectionController } from './reducer'
 
@@ -21,6 +22,7 @@ export interface AuthenticatedDiscoveryRequest {
 export interface AuthenticatedDiscoveryCompletion {
   readonly settledTargets?: readonly UnsettledSelectionTarget[]
   readonly layoutBasis?: SettledLayoutBasisProof
+  readonly workspaceCostObservation?: WorkspaceCostObservationV1
 }
 
 export interface AuthenticatedDiscoverySource {
@@ -161,6 +163,9 @@ function applyCompletion(
       ? {}
       : { settledTargets: completion.settledTargets }),
     ...(completion.layoutBasis === undefined ? {} : { layoutBasis: completion.layoutBasis }),
+    ...(completion.workspaceCostObservation === undefined
+      ? {}
+      : { workspaceCostObservation: completion.workspaceCostObservation }),
   }))
 }
 

@@ -20,6 +20,7 @@ import {
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
+  type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
 import type { ExactSingleFileEvidence } from '../../transfer/output-session'
@@ -172,6 +173,21 @@ export function requireSameIntent(expected: ReceiveIntent, supplied: ReceiveInte
   if (expected.operationId !== supplied.operationId || expected.digest !== supplied.digest) {
     throw new TypeError('Receive authority escaped its frozen intent')
   }
+}
+
+export function snapshotPreClickRanking(
+  selected: ArtifactChoiceID,
+  ranking: readonly ArtifactChoiceID[],
+): readonly ArtifactChoiceID[] {
+  const snapshot = Object.freeze([...ranking])
+  if (snapshot.length === 0 || !snapshot.includes(selected) ||
+      new Set(snapshot).size !== snapshot.length) {
+    throw new DOMException(
+      'Artifact activation lost the exact pre-click choice ranking',
+      'InvalidStateError',
+    )
+  }
+  return snapshot
 }
 
 export function randomAuthorityReference(): string {

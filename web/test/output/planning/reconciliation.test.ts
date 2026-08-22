@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { createSelectionSpec } from '../../../src/transfer/intent'
+import { createArtifactChoiceIdentity, createSelectionSpec } from '../../../src/transfer/intent'
 import type {
   ArtifactActionsOffer,
   ArtifactResolutionObservation,
@@ -11,6 +11,8 @@ import {
   materializationRouteIdentity,
   offerArtifacts,
   reconcileArtifactChoice,
+  resolveArtifactChoiceIdentity,
+  sameStableArtifactChoiceIdentity,
 } from '../../../src/output/planning'
 import {
   COMPLETE_DISCOVERY,
@@ -26,6 +28,43 @@ import {
 } from './fixture'
 
 describe('artifact choice reconciliation', () => {
+  it('assigns distinct stable identities to the two ZIP routes without hashing route observations', async () => {
+    const selection = await selectionSpec()
+    const current = projection(selection, treeProof(), 1n, 1n)
+    const offered = await offeredChoice(current, environment({
+      targets: [handoffTarget('handoff-observation-a')],
+      workspace: workspaceOffer(),
+    }))
+    if (offered.choice.plan.kind !== 'workspace-then-publish') {
+      throw new Error('fixture did not select the workspace ZIP route')
+    }
+
+    const workspace = await resolveArtifactChoiceIdentity(offered.choice)
+    const changedObservations = await resolveArtifactChoiceIdentity({
+      ...offered.choice,
+      plan: {
+        ...offered.choice.plan,
+        workspace: {
+          ...offered.choice.plan.workspace,
+          jobHardLimitBytes: offered.choice.plan.workspace.jobHardLimitBytes + 1n,
+        },
+      },
+    })
+    const directIdentity = await createArtifactChoiceIdentity({
+      artifactKind: 'zip-archive',
+      materializationKind: 'direct-resumable-zip',
+      guaranteeProfile: 'fsa-owned-file',
+      preparation: 'none',
+    })
+    const direct = Object.freeze({ choiceIdentity: directIdentity, choiceId: directIdentity.id })
+
+    expect(workspace.choiceId).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
+    expect(changedObservations.choiceId).toBe(workspace.choiceId)
+    expect(direct.choiceId).toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
+    expect(sameStableArtifactChoiceIdentity(workspace, changedObservations)).toBe(true)
+    expect(sameStableArtifactChoiceIdentity(workspace, direct)).toBe(false)
+  })
+
   it('progresses waiting to resolved once within one projection epoch', async () => {
     const selection = await selectionSpec()
     const unsettled = projection(selection, treeProof({ kind: 'unsettled' }), 1n)
@@ -48,6 +87,7 @@ describe('artifact choice reconciliation', () => {
         kind: 'resolved-artifact-action',
         selectionDigest: selection.digest,
         choice: offered.choice,
+        choiceId: expect.any(String),
         artifact: { kind: 'directory-tree' },
       },
     })

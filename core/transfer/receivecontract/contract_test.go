@@ -2,12 +2,112 @@ package receivecontract
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
 )
+
+func TestArtifactChoiceIdentityFreezesDirectAndWorkspaceZIPChoices(t *testing.T) {
+	tests := []struct {
+		name        string
+		artifact    ArtifactKind
+		plan        MaterializationPlanKind
+		guarantee   GuaranteeProfile
+		preparation PreparationPolicy
+		wantID      string
+	}{
+		{
+			name: "direct-resumable", artifact: ArtifactZipArchive, plan: PlanDirectResumableZIP,
+			guarantee: GuaranteeFSAOwnedFile, preparation: PreparationNone,
+			wantID: "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
+		},
+		{
+			name: "workspace-browser-handoff", artifact: ArtifactZipArchive, plan: PlanWorkspaceThenPublish,
+			guarantee: GuaranteeBrowserHandoff, preparation: PreparationExactZip,
+			wantID: "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			identity, err := NewArtifactChoiceIdentity(
+				test.artifact, test.plan, test.guarantee, test.preparation,
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := base64.RawURLEncoding.EncodeToString(identity.ID().Bytes()); got != test.wantID {
+				t.Fatalf("artifact choice ID=%s want=%s", got, test.wantID)
+			}
+			decoded, err := DecodeArtifactChoiceIdentity(identity.CanonicalBytes())
+			if err != nil || decoded.ID() != identity.ID() || decoded.IsZero() {
+				t.Fatalf("decoded identity=%+v error=%v", decoded, err)
+			}
+		})
+	}
+
+	if _, err := NewArtifactChoiceIdentity(
+		ArtifactZipArchive, PlanDirectAtomic, GuaranteeManagedAtomic, PreparationExactZip,
+	); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("legacy direct-atomic ZIP choice error=%v", err)
+	}
+	legacyDomain := []byte("windshare/artifact-choice/v0\x00\x01")
+	if _, err := DecodeArtifactChoiceIdentity(legacyDomain); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("legacy artifact choice identity error=%v", err)
+	}
+}
+
+func TestFSAOwnedFileBindingRequiresEveryFrozenPolicyDigest(t *testing.T) {
+	operation := mustIdentity(OperationIDFromBytes(contractStable(70)))
+	target := mustIdentity(FSAOwnedTargetRefFromBytes(contractOpaque(71)))
+	directory := contractID[catalog.DirectoryID](72)
+	root, err := NewDirectorySelectionResultRoot(directory, "docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := NewZipArchiveArtifact(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stableName := "docs-selection.windshare-YWJjZGVmZ2hpamtsbW5vcA.zip"
+	if _, err := NewFSAOwnedFileBinding(
+		operation, archive, stableName, target, DirectZipPolicyDigests{},
+	); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("absent policy digests error=%v", err)
+	}
+
+	// These opaque values test structural completeness only; they make no production support claim.
+	policies := DirectZipPolicyDigests{
+		ZipEncoding:   mustIdentity(PolicyDigestFromBytes(contractOpaque(73))),
+		Layout:        mustIdentity(PolicyDigestFromBytes(contractOpaque(74))),
+		Checkpoint:    mustIdentity(PolicyDigestFromBytes(contractOpaque(75))),
+		JournalBudget: mustIdentity(PolicyDigestFromBytes(contractOpaque(76))),
+		Epoch:         mustIdentity(PolicyDigestFromBytes(contractOpaque(77))),
+	}
+	binding, err := NewFSAOwnedFileBinding(operation, archive, stableName, target, policies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binding.IsZero() || binding.PolicyDigests() != policies ||
+		binding.Guarantees() != FSAOwnedFileGuarantees() {
+		t.Fatalf("FSA owned-file binding=%+v", binding)
+	}
+	plan, err := NewDirectResumableZIPPlan(archive, binding)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeMaterializationPlan(plan.CanonicalBytes(), archive)
+	if err != nil || decoded.Kind() != PlanDirectResumableZIP {
+		t.Fatalf("decoded direct ZIP plan=%+v error=%v", decoded, err)
+	}
+	if _, err := NewFSAOwnedFileBinding(
+		operation, archive, "docs-selection.zip", target, policies,
+	); !errors.Is(err, ErrInvalidReceiveContract) {
+		t.Fatalf("unstable direct ZIP name error=%v", err)
+	}
+}
 
 func contractID[T ~[16]byte](seed byte) T {
 	var value T
@@ -225,9 +325,9 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	atomicName, _ := CollisionName(operation, "chosen.zip", 3, true)
+	atomicName, _ := CollisionName(operation, "report.txt", 3, true)
 	atomic, err := NewManagedAtomicReservation(
-		operation, reservationID, archive, authority, NameUserChosen, "chosen.zip", atomicName, 3,
+		operation, reservationID, original, authority, NameUserChosen, "report.txt", atomicName, 3,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -243,14 +343,16 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		nativeEntry.RequestedName() != "report.txt" || nativeEntry.LogicalReservedName() != singleName ||
 		nativeEntry.PhysicalName() != singleName ||
 		nativeEntry.CollisionIndex() != 1 || fsaEntry.Guarantees() != FSATreeGuarantees() ||
-		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "chosen.zip" ||
+		atomic.Kind() != ReservationAtomicTarget || atomic.RequestedName() != "report.txt" ||
 		atomic.ReservedName() != atomicName || atomic.Guarantees().NameAuthority() != NameUserChosen {
 		t.Fatal("reservation variant fields mismatch")
 	}
 	if atomic.Guarantees().Profile() != GuaranteeManagedAtomic ||
 		atomic.Guarantees().Replacement() != ReplacementAtomicNoReplace ||
 		atomic.Guarantees().Delivery() != DeliveryManagedTarget ||
-		atomic.Guarantees().Visibility() != CommitAtomic || atomic.Guarantees().Rollback() != RollbackToAbsent {
+		atomic.Guarantees().TargetVisibility() != TargetHiddenUntilVerifiedPublication ||
+		atomic.Guarantees().ArtifactAvailability() != ArtifactVerifiedCompleteOnly ||
+		atomic.Guarantees().CleanupAuthority() != CleanupRollbackToAbsentBeforePublication {
 		t.Fatalf("atomic guarantees=%+v", atomic.Guarantees())
 	}
 	if BrowserHandoffGuarantees().Profile() != GuaranteeBrowserHandoff ||
@@ -271,7 +373,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if _, err := NewDirectTreePlan(tree, fsaEntry); err != nil {
 		t.Fatal(err)
 	}
-	directAtomic, err := NewDirectAtomicPlan(archive, atomic)
+	directAtomic, err := NewDirectAtomicPlan(original, atomic)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -377,7 +479,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 	if _, err := NewPortableHandoffPlan(original, portable); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("mismatched portable binding accepted: %v", err)
 	}
-	if _, err := NewDirectAtomicPlan(original, atomic); !errors.Is(err, ErrInvalidReceiveContract) {
+	if _, err := NewDirectAtomicPlan(archive, atomic); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("mismatched atomic reservation accepted: %v", err)
 	}
 	if !(MaterializationPlan{}).IsZero() || (MaterializationPlan{}).OperationID() != (OperationID{}) ||

@@ -6,6 +6,7 @@ import type {
   ResolvedArtifactAction,
 } from '../../output/planning'
 import type { ReceiveIntent } from '../../transfer/intent'
+import type { ArtifactChoiceID } from '../../transfer/intent'
 import type { ProjectionEpoch } from '../../transfer/projection'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type {
@@ -76,6 +77,7 @@ export interface AuthorityActivationRecord {
   readonly selectionDigest: string
   readonly choice: OfferedArtifactChoice['choice']
   readonly installedRoute: MaterializationRouteIdentity
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly controller: AbortController
   readonly attempt: V2PresentationAttempt
   joined: V2JoinedBrowserShare
@@ -122,6 +124,7 @@ export function createAuthorityActivationRecord(input: Readonly<{
   joined: V2JoinedBrowserShare
   choice: OfferedArtifactChoice['choice']
   installedRoute: MaterializationRouteIdentity
+  preClickRanking: readonly ArtifactChoiceID[]
   authenticatedShareInstanceId: string
   selectionDigest: string
   observationRevision: number
@@ -317,6 +320,7 @@ function liveAuthoritySnapshot(record: AuthorityActivationRecord): V2LiveAuthori
     selectionDigest: record.selectionDigest,
     choice: record.choice,
     installedRoute: record.installedRoute,
+    preClickRanking: record.preClickRanking,
     observation: Object.freeze({
       revision: record.observationRevision,
       protocolSessionId: record.protocolSessionId,

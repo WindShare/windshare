@@ -24,8 +24,12 @@ Cross-runtime diagnostic contracts:
 
 Receiver-local canonical contracts:
 
-- `receive-intent-v2.json`: SelectionSpec, ArtifactSpec, binding, plan, and
-  ReceiveIntent canonical bytes and digests for every legal plan family.
+- `artifact-choice-v1.json`: stable semantic choice identities and IDs. Direct
+  resumable ZIP is positive only for an exact reviewed runtime and policy-evidence tuple.
+- `receive-intent-v3.json`: SelectionSpec, ArtifactSpec, binding, V3 plan, and
+  ReceiveIntent bytes and digests for every currently activatable plan family.
+  It contains no fabricated direct-ZIP binding because exact runtime support is
+  receiver-local rather than cross-runtime vector authority.
 - `directory-admission-v2.json`: ReceiveIntent-bound layout, generation,
   ancestry, path, modified-time, HMAC, and settlement cases.
 - `file-checkpoint-v2.json`: operation/intent/binding authority, owned object,
@@ -34,9 +38,12 @@ Receiver-local canonical contracts:
   path segment, materializer, and authority axes while proving revision, size,
   owned object, ranges, lifecycle, and generations do not affect this receiver-local
   lookup index. Lineage is not `RecordID`, persisted checkpoint, or wire identity.
-- `v2-semantics.json`: connection sizing, shape proof, artifact/plan/guarantee
-  rows, WorkspaceBudget, picker timing, complete-only ZIP, checkpoint crash
-  cuts, and receiver terminal projections alongside preserved protocol rules.
+- `v2-semantics.json`: connection sizing, shape proof, strict V3 artifact/plan/
+  guarantee rows, lifecycle V2, WorkspaceBudget, picker timing, complete-only
+  ZIP, checkpoint crash cuts, and receiver terminal projections alongside
+  preserved protocol rules. Direct ZIP records its exact-runtime-only support
+  classification and the two reviewed policy decisions without making the Go
+  vectors a broader platform authority.
 
 Other generated v2 files retain sender objects, sessions, fragmentation,
 identity, and peer signaling. `path-policy.json`, `portable-path-vectors.json`,

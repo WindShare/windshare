@@ -237,7 +237,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
-    if (action !== 'continue' || lifecycle.kind !== 'resumable-receive') throw unavailableRoute()
+    if (action !== 'continue' || lifecycle.kind !== 'resumable-receive' ||
+        lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
     const transferJobId = this.#attemptIdentities.createTransferJobId()
     const outputSessionId = this.#attemptIdentities.createOutputSessionId()
     const session = await reopenFileSystemAccessOutput({
@@ -409,7 +410,10 @@ async function createFSAAttempt(
   lease: BrowserReceiveOperationLease,
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
-  admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }> | undefined,
+  admissionFallback: Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }> | undefined,
   diagnostics: OutputDiagnosticsPorts | undefined,
   transferJobId: string,
   outputSessionId: string,
@@ -442,7 +446,10 @@ async function createFSAAttemptSettlement(
   intent: ReceiveIntent,
   repository: ReceiveOperationRepository,
   lease: BrowserReceiveOperationLease,
-  admissionFallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }> | undefined,
+  admissionFallback: Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }> | undefined,
   diagnostics: OutputDiagnosticsPorts | undefined,
   transferJobId: string,
 ): Promise<Readonly<{

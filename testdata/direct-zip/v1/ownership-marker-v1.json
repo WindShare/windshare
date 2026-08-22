@@ -1,0 +1,16 @@
+{
+  "schema": "windshare/direct-zip-marker-fixture/v1",
+  "archive": "ownership-marker-v1.zip",
+  "archiveBytes": 390,
+  "archiveSha256": "6fb91a264510bbd4edde826a8f0b0c390df32e1152c16fd46907491e98cdbb9a",
+  "rootMember": "windshare-fixture/",
+  "bootstrapPrefixBytes": 184,
+  "centralRecordOffset": 184,
+  "centralRecordBytes": 184,
+  "closingTailBytes": 22,
+  "headerId": "0x5357",
+  "operationIdHex": "0102030405060708090a0b0c0d0e0f10",
+  "candidateIdHex": "1112131415161718191a1b1c1d1e1f20",
+  "ownershipNonceHex": "2122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f40",
+  "bindingDigestHex": "4142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f60"
+}

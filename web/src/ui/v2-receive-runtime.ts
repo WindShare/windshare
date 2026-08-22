@@ -13,7 +13,7 @@ import type {
 import type { ReceiveOperationContinuation } from '../output/resume/descriptor'
 import type { ReceiveLifecycleState } from '../output/workspace'
 import type { CompatibleNameRepairProjectionSource } from '../output/file-system-access/compatible-name/coordinator'
-import type { ReceiveIntent } from '../transfer/intent'
+import type { ArtifactChoiceID, ReceiveIntent } from '../transfer/intent'
 import type { V2PlanExecutionAuthority } from '../transfer/output-session'
 import type {
   LifecycleUserAction,
@@ -55,6 +55,7 @@ export interface V2BoundReceiveOperation {
   readonly transferJobId: string
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly outputProgress?: V2DirectZipProgressSource
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
   subscribeRepairProjectionActivation?(
@@ -204,6 +205,29 @@ export interface V2ReceiveCompositionPort {
   /** The implementation must start any picker before this call returns. */
   startArtifactAuthority(
     offered: OfferedArtifactChoice,
+    preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
   ): V2ArtifactPresentationAuthority
+}
+
+export type V2DirectZipProgressPhase =
+  | 'receiving'
+  | 'saving-resume-position'
+  | 'closing'
+  | 'verifying'
+
+export interface V2DirectZipProgressSnapshot {
+  readonly kind: 'direct-zip'
+  readonly operationId: string
+  readonly generation: bigint
+  readonly phase: V2DirectZipProgressPhase
+  readonly receivedSelectedBytes: bigint
+  readonly safeResumeBytes: bigint
+  readonly resumeTemporarySpaceUpperBound?: bigint
+}
+
+/** The operation owns this stream; UI observers never derive safe bytes from transfer acknowledgements. */
+export interface V2DirectZipProgressSource {
+  getSnapshot(): V2DirectZipProgressSnapshot
+  subscribe(listener: (snapshot: V2DirectZipProgressSnapshot) => void): () => void
 }

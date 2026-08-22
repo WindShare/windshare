@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import {
+  WorkspaceCostObservationAccumulatorV1,
   materializationRouteIdentity,
   offerArtifacts,
   reconcileArtifactChoice,
@@ -26,6 +27,7 @@ import {
 import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import {
   COMPLETE_DISCOVERY,
+  directZipTarget,
   environment,
   fsaTarget,
   handoffTarget,
@@ -33,6 +35,7 @@ import {
   managedTarget,
   portableOffer,
   projection,
+  reviewedDirectZipSupport,
   singleFileProof,
   treeProof,
   workspaceOffer,
@@ -59,15 +62,17 @@ describe('artifact product presentation', () => {
       environment({ targets: [fsaTarget(), handoffTarget()], workspace: workspaceOffer() }),
     )
     const treePresentation = requireChoices(presentArtifactOffers(treeOffers))
-    expect(treePresentation.primary).toMatchObject({
+    expect(treePresentation.defaultChoices[0]).toMatchObject({
       operation: 'save-directory-tree',
       label: 'Save using original folder hierarchy',
       choice: { artifactKind: 'directory-tree' },
     })
-    expect(treePresentation.alternatives[0]).toMatchObject({
-      label: 'Download photos.zip',
-      packageExplanation: expect.stringMatching(/one ZIP package without compression/u),
+    const zipRoutes = requireZipRoutes(treePresentation)
+    expect(zipRoutes.primary).toMatchObject({
+      label: 'Save ZIP after receiving completes',
+      packageExplanation: expect.stringMatching(/Package only:.*without compression/u),
     })
+    expect(zipRoutes.secondary).toBeNull()
 
     const single = projection(selection, singleFileProof(), 128n)
     const download = requireChoices(presentArtifactOffers(await offerArtifacts(
@@ -85,12 +90,61 @@ describe('artifact product presentation', () => {
       COMPLETE_DISCOVERY,
       environment({ targets: [handoffTarget()], portable: portableOffer() }),
     )))
-    expect(download.primary.label).toBe('Download report.txt')
-    expect(folder.primary.label).toBe('Save to folder')
-    expect(checked.primary.label).toBe('Check then download')
+    expect(download.defaultChoices[0]?.label).toBe('Download report.txt')
+    expect(folder.defaultChoices[0]?.label).toBe('Save to folder')
+    expect(checked.defaultChoices[0]?.label).toBe('Check then download')
 
     const userCopy = collectText([treePresentation, download, folder, checked])
     expect(userCopy).not.toMatch(/backend|OPFS|stream|admission|partial.?ZIP/iu)
+  })
+
+  it('presents stable ZIP identities without borrowing workspace precision for Direct ZIP', async () => {
+    const selection = await selectionSpec()
+    const cost = new WorkspaceCostObservationAccumulatorV1()
+    cost.observe({ kind: 'directory', path: ['photos'] })
+    cost.observe({ kind: 'file', path: ['photos', 'one.jpg'], exactSize: 1_024n })
+    const workspaceCostObservation = cost.complete()
+    const projected = {
+      ...projection(selection, treeProof(), 1_024n),
+      workspaceCostObservation,
+    }
+    const support = reviewedDirectZipSupport()
+    const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, environment({
+      targets: [fsaTarget(), directZipTarget(), handoffTarget()],
+      workspace: workspaceOffer(),
+      directZipSupport: support,
+      zipRecommendationPolicy: {
+        version: 1,
+        kind: 'available',
+        workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes,
+        policyDigest: support.recommendationPolicyDigest,
+      },
+    }))
+    const zip = requireZipRoutes(requireChoices(presentArtifactOffers(offers)))
+
+    expect(zip.primary.choice.choiceId).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
+    expect(zip.secondary?.choice.choiceId).toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
+    expect(zip.primary.selectedBytes).toBe('Selected content: 1.0 KiB (exact)')
+    expect(zip.primary.resultBytes).toMatch(/^ZIP package: .* \(exact\)$/u)
+    expect(zip.secondary?.selectedBytes).toBe('Selected content: 1.0 KiB (exact)')
+    expect(zip.secondary?.resultBytes)
+      .toBe('ZIP package: 1.0 KiB (estimated lower bound)')
+    expect(zip.recommendation).toContain('Recommended: receive completely first')
+  })
+
+  it('uses explicit lower-bound wording and a native fallback when no browser ZIP route is safe', async () => {
+    const selection = await selectionSpec()
+    const offers = await offerArtifacts(
+      projection(selection, treeProof({ kind: 'unsettled' }), 1_024n),
+      { kind: 'discovering' },
+      environment({ targets: [fsaTarget()] }),
+    )
+    const presentation = requireChoices(presentArtifactOffers(offers))
+
+    expect(presentation.defaultChoices[0]?.selectedBytes)
+      .toBe('Selected content: 1.0 KiB (estimated lower bound)')
+    expect(presentation.zipMode).toMatchObject({ kind: 'native-fallback' })
+    expect(collectText(presentation.zipMode)).not.toMatch(/FSA|OPFS|backend/iu)
   })
 })
 
@@ -505,6 +559,7 @@ function waitingResolution(
     selectionDigest: projected.selectionDigest,
     choice: offered.choice,
     installedRoute: materializationRouteIdentity(offered.route),
+    preClickRanking: Object.freeze([offered.choice.choiceId]),
     observation: Object.freeze({
       revision,
       protocolSessionId: `protocol-session-${revision}`,
@@ -525,6 +580,7 @@ function liveActivation(
     selectionDigest: action.selectionDigest,
     choice: offered.choice,
     installedRoute: materializationRouteIdentity(offered.route),
+    preClickRanking: Object.freeze([offered.choice.choiceId]),
     observation: Object.freeze({
       revision,
       protocolSessionId: `protocol-session-${revision}`,
@@ -611,6 +667,11 @@ function state(
 function requireChoices(value: ReturnType<typeof presentArtifactOffers>) {
   if (value.kind !== 'choices') throw new Error(`expected choices, received ${value.kind}`)
   return value
+}
+
+function requireZipRoutes(value: ReturnType<typeof requireChoices>) {
+  if (value.zipMode?.kind !== 'routes') throw new Error('expected ZIP routes')
+  return value.zipMode
 }
 
 function requireOfferedChoice(offers: ArtifactOffers): OfferedArtifactChoice {

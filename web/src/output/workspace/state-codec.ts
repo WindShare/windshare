@@ -14,8 +14,15 @@ import {
   receiveStateByte,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
+  type RetainedLifecycleKind,
   type RestartRequiredReason,
 } from './state'
+
+const RESUMABLE_RECEIVE_FILE_SET = 1
+const RESUMABLE_RECEIVE_DIRECT_ZIP = 2
+const DIRECT_ZIP_PHASE_BETWEEN_MEMBERS = 1
+const DIRECT_ZIP_PHASE_INSIDE_MEMBER = 2
+const DIRECT_ZIP_PHASE_CLOSING = 3
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   createPersistedReceiveRecord,
@@ -28,7 +35,7 @@ export function canonicalReceiveLifecycleStateBytes(
   if (state.generation === 0n) {
     throw new TypeError('receive lifecycle generation must not be zero')
   }
-  return canonicalRecord('windshare/receive-lifecycle-state/v1', 1, [
+  return canonicalRecord('windshare/receive-lifecycle-state/v2', 2, [
     canonicalFrame(canonicalIdentity(state.operationId, 16, 'operation ID')),
     canonicalFrame(canonicalIdentity(state.receiveIntentDigest, 32, 'receive intent digest')),
     canonicalFrame(canonicalU64(state.generation)),
@@ -127,13 +134,30 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
       canonicalFrame(canonicalU8(attentionReasonByte(state.reason))),
       digestFrame(state.lastVerifiedRecordDigest, 'last verified record digest'),
     ]
+    case 'authorization-required':
+    case 'target-verification-required':
+    case 'destination-space-required': return [
+      digestFrame(state.recoveryGateDigest, 'recovery gate digest'),
+      millisecondsFrame(state.expiresAt),
+    ]
   }
 }
 
 function resumableReceivePayload(
   state: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
 ): readonly CanonicalBytes[] {
+  if (state.payloadKind === 'direct-zip') {
+    return [
+      canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_DIRECT_ZIP)),
+      digestFrame(state.directZipCheckpointDigest, 'direct ZIP checkpoint digest'),
+      canonicalFrame(canonicalU64(state.safeSelectedPayloadBytes)),
+      canonicalFrame(canonicalU64(state.committedArchiveLength)),
+      canonicalFrame(canonicalU8(directZipCheckpointPhaseByte(state.checkpointPhase))),
+      millisecondsFrame(state.expiresAt),
+    ]
+  }
   return [
+    canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_FILE_SET)),
     digestFrame(state.checkpointSetDigest, 'checkpoint set digest'),
     canonicalFrame(canonicalU64(state.completedFileCount)),
     canonicalFrame(canonicalU64(state.completedBytes)),
@@ -211,17 +235,21 @@ function restartReasonByte(reason: RestartRequiredReason): number {
     case 'source-revision-changed': return 3
     case 'preparation-invalidated': return 4
     case 'content-session-ended': return 5
+    case 'target-deleted': return 6
   }
 }
 
 function stableStateByte(
-  state: 'resumable-receive' | 'resumable-package' | 'waiting-to-save' | 'download-started',
+  state: RetainedLifecycleKind,
 ): number {
   switch (state) {
     case 'resumable-receive': return 4
     case 'resumable-package': return 9
     case 'waiting-to-save': return 11
     case 'download-started': return 15
+    case 'authorization-required': return 21
+    case 'target-verification-required': return 22
+    case 'destination-space-required': return 23
   }
 }
 
@@ -266,15 +294,7 @@ function decodeMaterializationState(
       kind: 'receiving',
       activeLeaseId: reader.identity(16, 'lease ID'),
     })
-    case 4: return Object.freeze({
-      ...base,
-      kind: 'resumable-receive',
-      checkpointSetDigest: reader.identity(32, 'checkpoint set digest'),
-      completedFileCount: reader.u64('completed file count'),
-      completedBytes: reader.u64('completed bytes'),
-      expiresAt: reader.milliseconds(),
-      ...optionalDigest(reader.frame(), 'partial receipt digest', 'partialReceiptDigest'),
-    })
+    case 4: return decodeResumableReceiveState(reader, base)
     case 5: return Object.freeze({
       ...base,
       kind: 'finalizing-tree',
@@ -373,8 +393,56 @@ function decodePublicationState(
       reason: attentionReasonFromByte(reader.byte('attention reason')),
       lastVerifiedRecordDigest: reader.identity(32, 'last verified record digest'),
     })
+    case 21: return decodeRecoveryGateState(reader, base, 'authorization-required')
+    case 22: return decodeRecoveryGateState(reader, base, 'target-verification-required')
+    case 23: return decodeRecoveryGateState(reader, base, 'destination-space-required')
     default: throw new TypeError('receive lifecycle state discriminant is invalid')
   }
+}
+
+function decodeResumableReceiveState(
+  reader: LifecycleFrameReader,
+  base: DecodedLifecycleBase,
+): ReceiveLifecycleState {
+  const payloadKind = reader.byte('resumable receive payload kind')
+  if (payloadKind === RESUMABLE_RECEIVE_FILE_SET) {
+    return Object.freeze({
+      ...base,
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest: reader.identity(32, 'checkpoint set digest'),
+      completedFileCount: reader.u64('completed file count'),
+      completedBytes: reader.u64('completed bytes'),
+      expiresAt: reader.milliseconds(),
+      ...optionalDigest(reader.frame(), 'partial receipt digest', 'partialReceiptDigest'),
+    })
+  }
+  if (payloadKind === RESUMABLE_RECEIVE_DIRECT_ZIP) {
+    return Object.freeze({
+      ...base,
+      kind: 'resumable-receive',
+      payloadKind: 'direct-zip',
+      directZipCheckpointDigest: reader.identity(32, 'direct ZIP checkpoint digest'),
+      safeSelectedPayloadBytes: reader.u64('safe selected payload bytes'),
+      committedArchiveLength: reader.u64('committed archive length'),
+      checkpointPhase: directZipCheckpointPhaseFromByte(reader.byte('direct ZIP checkpoint phase')),
+      expiresAt: reader.milliseconds(),
+    })
+  }
+  throw new TypeError('resumable receive payload kind is invalid')
+}
+
+function decodeRecoveryGateState(
+  reader: LifecycleFrameReader,
+  base: DecodedLifecycleBase,
+  kind: 'authorization-required' | 'target-verification-required' | 'destination-space-required',
+): ReceiveLifecycleState {
+  return Object.freeze({
+    ...base,
+    kind,
+    recoveryGateDigest: reader.identity(32, 'recovery gate digest'),
+    expiresAt: reader.milliseconds(),
+  })
 }
 
 function decodeHandingOffState(
@@ -444,10 +512,10 @@ class LifecycleFrameReader {
 
   static open(bytes: Uint8Array): LifecycleFrameReader {
     if (!(bytes instanceof Uint8Array)) throw new TypeError('lifecycle record must be bytes')
-    const prefix = new TextEncoder().encode('windshare/receive-lifecycle-state/v1\0')
+    const prefix = new TextEncoder().encode('windshare/receive-lifecycle-state/v2\0')
     if (bytes.byteLength <= prefix.byteLength ||
         !equalBytes(bytes.subarray(0, prefix.byteLength), prefix) ||
-        bytes[prefix.byteLength] !== 1) {
+        bytes[prefix.byteLength] !== 2) {
       throw new TypeError('lifecycle record domain or version is invalid')
     }
     return new LifecycleFrameReader(bytes, prefix.byteLength + 1)
@@ -573,6 +641,7 @@ function restartReasonFromByte(value: number): RestartRequiredReason {
     'source-revision-changed',
     'preparation-invalidated',
     'content-session-ended',
+    'target-deleted',
   ]
   const reason = reasons[value - 1]
   if (reason === undefined) throw new TypeError('restart reason is invalid')
@@ -581,13 +650,37 @@ function restartReasonFromByte(value: number): RestartRequiredReason {
 
 function stableStateFromByte(
   value: number,
-): 'resumable-receive' | 'resumable-package' | 'waiting-to-save' | 'download-started' {
+): RetainedLifecycleKind {
   switch (value) {
     case 4: return 'resumable-receive'
     case 9: return 'resumable-package'
     case 11: return 'waiting-to-save'
     case 15: return 'download-started'
+    case 21: return 'authorization-required'
+    case 22: return 'target-verification-required'
+    case 23: return 'destination-space-required'
     default: throw new TypeError('prior stable state is invalid')
+  }
+}
+
+function directZipCheckpointPhaseByte(
+  phase: 'between-members' | 'inside-member' | 'closing',
+): number {
+  switch (phase) {
+    case 'between-members': return DIRECT_ZIP_PHASE_BETWEEN_MEMBERS
+    case 'inside-member': return DIRECT_ZIP_PHASE_INSIDE_MEMBER
+    case 'closing': return DIRECT_ZIP_PHASE_CLOSING
+  }
+}
+
+function directZipCheckpointPhaseFromByte(
+  value: number,
+): 'between-members' | 'inside-member' | 'closing' {
+  switch (value) {
+    case DIRECT_ZIP_PHASE_BETWEEN_MEMBERS: return 'between-members'
+    case DIRECT_ZIP_PHASE_INSIDE_MEMBER: return 'inside-member'
+    case DIRECT_ZIP_PHASE_CLOSING: return 'closing'
+    default: throw new TypeError('direct ZIP checkpoint phase is invalid')
   }
 }
 

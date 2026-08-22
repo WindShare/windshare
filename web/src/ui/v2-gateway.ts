@@ -26,6 +26,7 @@ import {
 } from '../crypto/suite02-link'
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
+import { WorkspaceCostObservationAccumulatorV1 } from '../output/planning/workspace-cost-observation'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
 import type { V2ProtocolGenerationListener } from '../receiver/v2-supervisor'
@@ -39,7 +40,12 @@ import type {
 import { V2FilePreview } from '../preview/v2-preview'
 import { projectAuthenticatedV2Generation } from '../transfer/discovery/v2-projection-evidence'
 import { TransferJob, type TransferJobOptions } from '../transfer/v2-job'
-import type { ReceiveIntent } from '../transfer/intent'
+import {
+  DEFAULT_RESULT_ROOT_NAME,
+  createCompleteDirectoryResultRoot,
+  createDirectorySelectionResultRoot,
+  type ReceiveIntent,
+} from '../transfer/intent'
 import type { V2PlanExecutionAuthority } from '../transfer/output-session'
 import {
   RetryableProjectionDiscoveryError,
@@ -324,11 +330,15 @@ class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
     request.signal.throwIfAborted()
     this.#requireSameProtocolSession()
     const layoutBasis = summary.layoutBasis()
+    const workspaceCostObservation = summary.workspaceCostObservation(layoutBasis)
     // Committed generation evidence owns target settlement. Completion only
     // closes discovery with the cross-generation layout proof; replaying the
     // request here would claim targets whose authority was already consumed.
     return Object.freeze({
       ...(layoutBasis === undefined ? {} : { layoutBasis }),
+      ...(workspaceCostObservation === undefined
+        ? {}
+        : { workspaceCostObservation }),
     })
   }
 
@@ -403,7 +413,9 @@ class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
     for await (const page of this.#catalog.pages(committed, request.signal)) {
       for (const entry of page.entries) {
         request.signal.throwIfAborted()
-        const child = this.#projectionChild(cursor, entry, summary)
+        const selected = this.#selection.selected(entry, cursor.ancestry)
+        summary.observeCatalogEntry([...cursor.path, entry.name], entry, selected)
+        const child = this.#projectionChild(cursor, entry, summary, selected)
         if (child !== undefined) yield child
       }
     }
@@ -413,8 +425,8 @@ class V2JoinedProjectionSource implements AuthenticatedDiscoverySource {
     cursor: ProjectionDirectoryCursor,
     entry: V2CatalogEntry,
     summary: ProjectionDiscoverySummary,
+    selected: boolean,
   ): ProjectionDirectoryCursor | undefined {
-    const selected = this.#selection.selected(entry, cursor.ancestry)
     if (cursor.selectedDirectoryRoot !== undefined && !selected) {
       summary.markDirectoryRootPartial(cursor.selectedDirectoryRoot.directoryId)
     }
@@ -459,9 +471,16 @@ class ProjectionDiscoverySummary {
   #selectedDirectoryCount = 0
   #selectedRootCount = 0
   #singleSelectedRoot: SelectedRootFact | undefined
+  readonly #syntheticCost = new WorkspaceCostObservationAccumulatorV1()
+  #completeDirectoryCost: WorkspaceCostObservationAccumulatorV1 | undefined
+  #partialDirectoryCost: WorkspaceCostObservationAccumulatorV1 | undefined
+  #costFailed = false
 
   constructor(syntheticRootSelected: boolean) {
     this.#syntheticRootSelected = syntheticRootSelected
+    this.#observeCost(this.#syntheticCost, {
+      kind: 'directory', path: [DEFAULT_RESULT_ROOT_NAME],
+    })
   }
 
   observe(evidence: AuthenticatedProjectionEvidence): void {
@@ -478,6 +497,29 @@ class ProjectionDiscoverySummary {
     }
     this.#selectedRootCount = Math.min(2, this.#selectedRootCount + evidence.selectedRootCount)
     if (this.#selectedRootCount !== 1) this.#singleSelectedRoot = undefined
+    const root = this.#singleSelectedRoot
+    if (this.#completeDirectoryCost === undefined && root?.kind === 'directory') {
+      this.#completeDirectoryCost = new WorkspaceCostObservationAccumulatorV1()
+      this.#partialDirectoryCost = new WorkspaceCostObservationAccumulatorV1()
+    }
+  }
+
+  observeCatalogEntry(
+    sourcePath: readonly string[],
+    entry: V2CatalogEntry,
+    selected: boolean,
+  ): void {
+    if (!selected || this.#costFailed) return
+    this.#observeCost(this.#syntheticCost, costSpec(entry, [DEFAULT_RESULT_ROOT_NAME, ...sourcePath]))
+    const root = this.#singleSelectedRoot
+    if (root?.kind !== 'directory') return
+    const anchor = root.sourcePath.split('/')
+    if (!startsWithPath(sourcePath, anchor)) return
+    const suffix = sourcePath.slice(anchor.length)
+    const completeName = createCompleteDirectoryResultRoot(root.directoryId, root.sourcePath).name
+    const partialName = createDirectorySelectionResultRoot(root.directoryId, root.sourcePath).name
+    this.#observeCost(this.#completeDirectoryCost!, costSpec(entry, [completeName, ...suffix]))
+    this.#observeCost(this.#partialDirectoryCost!, costSpec(entry, [partialName, ...suffix]))
   }
 
   markDirectoryRootPartial(directoryId: string): void {
@@ -501,6 +543,54 @@ class ProjectionDiscoverySummary {
     }
     return Object.freeze({ kind: 'synthetic-selection' as const })
   }
+
+  workspaceCostObservation(layout: SettledLayoutBasisProof | undefined) {
+    if (this.#costFailed || layout === undefined) return undefined
+    try {
+      switch (layout.kind) {
+        case 'synthetic-selection': return this.#syntheticCost.complete()
+        case 'complete-directory': return this.#completeDirectoryCost?.complete()
+        case 'directory-selection': return this.#partialDirectoryCost?.complete()
+      }
+    } catch {
+      // Recommendation evidence is passive; format limits leave the cost unknown.
+      return undefined
+    }
+  }
+
+  #observeCost(
+    accumulator: WorkspaceCostObservationAccumulatorV1,
+    spec: Parameters<WorkspaceCostObservationAccumulatorV1['observe']>[0],
+  ): void {
+    try {
+      accumulator.observe(spec)
+    } catch {
+      this.#costFailed = true
+    }
+  }
+}
+
+function costSpec(entry: V2CatalogEntry, path: readonly string[]) {
+  return entry.kind === 'file'
+    ? Object.freeze({
+        kind: 'file' as const,
+        path,
+        exactSize: entry.expectedSize,
+        ...(entry.modifiedTime === undefined
+          ? {}
+          : { modifiedTimeMilliseconds: entry.modifiedTime.milliseconds }),
+      })
+    : Object.freeze({
+        kind: 'directory' as const,
+        path,
+        ...(entry.modifiedTime === undefined
+          ? {}
+          : { modifiedTimeMilliseconds: entry.modifiedTime.milliseconds }),
+      })
+}
+
+function startsWithPath(path: readonly string[], prefix: readonly string[]): boolean {
+  return path.length >= prefix.length && prefix.every((component, index) => path[index] === component)
 }
 
 export interface V2BrowserReceiverGatewayOptions {

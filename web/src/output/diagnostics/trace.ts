@@ -1,3 +1,4 @@
+import type { DirectZipMilestonePayloadV1 } from '../../diagnostics/trace/model'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 
 export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
@@ -47,6 +48,7 @@ export interface OutputTracePayloadByName {
     backend: OutputDiagnosticBackend
     transition: 'started' | 'completed' | 'retryable_failure' | 'ownership_unknown' | 'failed'
   }>
+  readonly direct_zip_milestone: DirectZipMilestonePayloadV1
 }
 
 export type OutputTraceEventName = keyof OutputTracePayloadByName

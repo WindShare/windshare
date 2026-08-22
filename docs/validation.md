@@ -34,7 +34,7 @@ not validation gates.
 | `make ci-parallel` | Run the same ordinary gates once across three bounded local lanes. |
 | `make ci-full` | Run ordinary CI plus all current-host equivalents of weekly suites. |
 | `make check` | Run fast Go and Web feedback. |
-| `make hygiene` | Verify formatting, generated protocol tables, diff hygiene, the single-module layout, retired paths, and production dependency boundaries. |
+| `make hygiene` | Verify formatting, generated protocol tables, diff hygiene, deterministic browser-evidence contracts, the single-module layout, retired paths, and production dependency boundaries. |
 | `make sloc`, `make workflow-lint` | Run local sloc-guard and actionlint directly. |
 | `make lint`, `make vet` | Analyze the complete production module. |
 | `make gopls` | Check tracked Go files with the local language server. |
@@ -61,6 +61,12 @@ Browser component ownership is filename-driven by `web/playwright.contract.confi
 browser gate runs the Chromium smoke before short component contracts; the weekly supplement owns the
 remaining browser projects and product scenarios. A dated, machine-specific diagnostic is available in the
 [local test timing snapshot](local-test-timing.md); it does not define a cross-host performance baseline.
+
+The browser FSA acquisition experiment is complete. Shipping retains its compact reviewed support matrix,
+schemas, detached digest, and a noninteractive artifact verifier; native picker/browser acquisition source and
+raw receipts are not distributed. `make hygiene` checks those frozen artifacts plus the self-contained workspace
+threshold derivation. The Web suite separately proves that production grants support only for one exact reviewed
+browser, platform, filesystem, feature, artifact-byte, and policy-digest match.
 
 Coverage is blocking: the core package-set total is at least 90%, the non-core package-set total is at
 least 80%, and every included Go package is at least 70%. Product packages are not excluded and thresholds

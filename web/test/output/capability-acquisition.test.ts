@@ -29,8 +29,9 @@ describe('browser output capability adapters', () => {
         nameAuthority: 'application-chosen',
         replacement: 'coordinated-no-replace',
         delivery: 'managed-target',
-        visibility: 'prefix-visible',
-        rollback: 'none',
+        targetVisibility: 'committed-objects-visible',
+        artifactAvailability: 'committed-objects-usable',
+        cleanupAuthority: 'no-whole-target-rollback',
       },
     })
     expect(snapshot.offers.targets).toEqual([snapshot.fsaParent])

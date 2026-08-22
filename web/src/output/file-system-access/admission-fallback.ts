@@ -4,7 +4,7 @@ import type { DirectTreeIntent } from './settlement-proof'
 
 export type ReceiveAdmissionFallback = Extract<
   ReceiveLifecycleState,
-  { kind: 'resumable-receive' }
+  { kind: 'resumable-receive'; payloadKind: 'file-set' }
 >
 
 export function snapshotReceiveAdmissionFallback(
@@ -22,6 +22,7 @@ export function snapshotReceiveAdmissionFallback(
   }
   return Object.freeze({
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     operationId: input.operationId,
     receiveIntentDigest: input.receiveIntentDigest,
     generation: input.generation,
@@ -39,7 +40,7 @@ export function sameReceiveAdmissionFallback(
   state: ReceiveLifecycleState,
   fallback: ReceiveAdmissionFallback,
 ): boolean {
-  return state.kind === 'resumable-receive' &&
+  return state.kind === 'resumable-receive' && state.payloadKind === 'file-set' &&
     state.checkpointSetDigest === fallback.checkpointSetDigest &&
     state.completedFileCount === fallback.completedFileCount &&
     state.completedBytes === fallback.completedBytes &&
@@ -48,7 +49,8 @@ export function sameReceiveAdmissionFallback(
 }
 
 export function isFSAStableOrTerminal(state: ReceiveLifecycleState): boolean {
-  return state.kind === 'resumable-receive' || state.kind === 'published' ||
+  return (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') ||
+    state.kind === 'published' ||
     state.kind === 'partial-directory' || state.kind === 'restart-required' ||
     state.kind === 'discarded' || state.kind === 'expired' || state.kind === 'needs-attention'
 }

@@ -164,11 +164,14 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
         {
           artifact: 'zip-archive',
           layout: 'result-root',
-          plan: 'direct-atomic',
-          binding: 'atomic-target',
-          guaranteeProfiles: ['managed-atomic'],
-          preparation: 'progressive-immutable-ledger',
-          completion: 'complete-only',
+          plan: 'direct-resumable-zip',
+          binding: 'fsa-owned-file',
+          guaranteeProfiles: ['fsa-owned-file'],
+          preparation: 'none',
+          completion: 'verified-complete-only',
+          targetVisibility: 'operation-owned-incomplete-file-visible',
+          artifactAvailability: 'verified-complete-only',
+          cleanupAuthority: 'ownership-proof-required',
         },
         {
           artifact: 'original-file',
@@ -200,7 +203,9 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
       ],
     })
   })
+})
 
+describe('R0 receive recovery and lifecycle contract', () => {
   it('freezes WorkspaceBudget accounting and complete-only ZIP failure', () => {
     expect(semantics.find((value) => value.name === 'workspace-budget-v1')).toEqual({
       name: 'workspace-budget-v1',
@@ -258,9 +263,10 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
 
   it('distinguishes receiver terminal projections without inventing publication', () => {
     const lifecycle = requireReceiveLifecycleSemanticsVector(semantics.find(
-      (value) => value.name === 'receive-lifecycle-terminal-states',
+      (value) => value.name === 'receive-lifecycle-v2',
     ))
-    expect(lifecycle.states.map((state) => state.state)).toEqual([
+    expect(lifecycle.domain).toBe('windshare/receive-lifecycle-state/v2')
+    expect(lifecycle.terminalStates.map((state) => state.state)).toEqual([
       'published',
       'download-started',
       'partial-directory',
@@ -269,15 +275,93 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
       'expired',
       'needs-attention',
     ])
-    expect(lifecycle.states.map((state) => state.byte)).toEqual([14, 15, 16, 17, 18, 19, 20])
+    expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 15, 16, 17, 18, 19, 20])
+    expect(lifecycle.nonterminalRecoveryStates).toEqual([
+      { state: 'authorization-required', byte: 21 },
+      { state: 'target-verification-required', byte: 22 },
+      { state: 'destination-space-required', byte: 23 },
+    ])
+    expect(lifecycle.restartReasons['target-deleted']).toBe(6)
+    expect(lifecycle.resumableReceivePayloadKinds).toEqual({ 'file-set': 1, 'direct-zip': 2 })
+    expect(lifecycle.directZipByteSemantics).toEqual({
+      receivedBytes: 'selected-source-payload-bytes-received-in-live-attempt',
+      safeResumeBytes: 'selected-source-payload-bytes-covered-by-verified-checkpoint',
+      committedArchiveLength: 'verified-target-prefix-bytes',
+    })
     expect(lifecycle.deadlineWritingStates).toEqual([
       'resumable-receive',
       'resumable-package',
       'waiting-to-save',
+      'authorization-required',
+      'target-verification-required',
+      'destination-space-required',
     ])
     expect(lifecycle.publishedCleanupPendingRemains).toBe('published')
     expect(lifecycle.handoffNeverMeans).toBe('published')
     expect(lifecycle.completeArtifactsExclude).toEqual(['partial-directory'])
+  })
+
+  it('freezes both reviewed policies without broadening exact-platform routing', () => {
+    expect(semantics.find((value) => value.name === 'direct-zip-contract-policy-v1')).toEqual({
+      name: 'direct-zip-contract-policy-v1',
+      routeSupport: 'available-exact-reviewed-platform-only',
+      processRestart: 'reviewed-exact-platform-only',
+      ownershipExtraFormat: {
+        domain: 'windshare/direct-zip-ownership-extra/v1',
+        availability: 'frozen',
+        digest: 'hnFdK_xeDeYInsyhv5i4YdU57UUcWeAGUYLTakWaZQw',
+      },
+      choiceIdentity: {
+        domain: 'windshare/artifact-choice/v1',
+        materializationByte: 5,
+        directZipArtifactChoiceId: '0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU',
+        workspaceZipArtifactChoiceId: 'RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ',
+      },
+      policies: [
+        {
+          name: 'zip-encoding-v2',
+          domain: 'windshare/zip-encoding/v2-store-data-descriptor-owned-marker',
+          availability: 'frozen',
+          digest: 'LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc',
+        },
+        {
+          name: 'direct-zip-layout-v2',
+          domain: 'windshare/zip-layout/v2-paged-owned-marker',
+          availability: 'frozen',
+          digest: 'VSV-D1TwhzhxuCZYgx1-ZEE26oFu-mHXA4oWELOgGH4',
+        },
+        {
+          name: 'direct-zip-checkpoint-v1',
+          domain: 'windshare/direct-zip-checkpoint-policy/v1',
+          availability: 'frozen',
+        },
+        {
+          name: 'direct-zip-journal-budget-v1',
+          domain: 'windshare/direct-zip-journal-budget/v1',
+          availability: 'frozen',
+        },
+        {
+          name: 'direct-zip-epoch-v1',
+          domain: 'windshare/direct-zip-epoch-policy/v1',
+          availability: 'frozen',
+          automaticMaxPrefixCopyBytes: '268435456',
+          automaticMaxCumulativeCopyBytes: '536870912',
+          automaticMaxModeledPeakTemporaryBytes: '268435456',
+          units: 'committed-archive-bytes',
+          boundary: 'inclusive',
+          digest: 'dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo',
+        },
+        {
+          name: 'zip-route-recommendation-v1',
+          domain: 'windshare/zip-route-recommendation-policy/v1',
+          availability: 'frozen',
+          boundary: 'inclusive',
+          exactWorkspaceRecommendationBudget: '1073744986',
+          digest: 'zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI',
+          semantics: 'display-ranking-only',
+        },
+      ],
+    })
   })
 
   it('preserves unrelated catalog, source, and sender lifecycle contracts', () => {

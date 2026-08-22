@@ -3,6 +3,7 @@ import {
   validateDestinationReservation,
   validateReceiveIntent,
   type NamedContainerEntryReservation,
+  type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
 import { sameGuaranteeFacts } from '../planning'
@@ -20,8 +21,11 @@ import {
 import { captureFSAFailureFacts } from './filesystem-failure-facts'
 import {
   RECEIVE_RECORD_RESERVATION,
+  RECEIVE_RECORD_OPERATION,
   createPersistedReceiveRecord,
-  createReceiveOperationV1,
+  createReceiveOperationV2,
+  decodeStoredReceiveOperation,
+  operationRecordId,
   receiveOperationHandleRecord,
   storedReceiveOperationRecord,
   type PersistedReceiveRecord,
@@ -85,9 +89,13 @@ export async function prepareFSAOperationBindingTransition(input: Readonly<{
   repository: FSAOperationBindingRepository
   intent: ReceiveIntent
   parent: FileSystemDirectoryHandle
+  preClickRanking: readonly ArtifactChoiceID[]
 }>): Promise<PreparedFSAOperationBindingTransition> {
   const validated = await validatedFSAIntent(input.intent)
-  const operation = await createReceiveOperationV1({ receiveIntent: validated.intent })
+  const operation = await createReceiveOperationV2({
+    receiveIntent: validated.intent,
+    preClickRanking: input.preClickRanking,
+  })
   const operationRecord = storedReceiveOperationRecord(operation)
   const reservationRecord = await createPersistedReceiveRecord({
     operationId: validated.intent.operationId,
@@ -128,9 +136,6 @@ export async function verifyFSAOperationBinding(input: Readonly<{
   stageScope?: PersistentOutputStageScope
 }>): Promise<PersistedFSAOperationBinding> {
   const validated = await validatedFSAIntent(input.intent)
-  const operation = storedReceiveOperationRecord(await createReceiveOperationV1({
-    receiveIntent: validated.intent,
-  }))
   const reservationRecord = await createPersistedReceiveRecord({
     operationId: validated.intent.operationId,
     kind: RECEIVE_RECORD_RESERVATION,
@@ -158,7 +163,10 @@ export async function verifyFSAOperationBinding(input: Readonly<{
       runPersistentOutputStage(
         input.stageScope,
         'indexeddb.binding.operation.read',
-        () => input.repository.readRecord(operation.id),
+        () => input.repository.readRecord(operationRecordId(
+          validated.intent.operationId,
+          RECEIVE_RECORD_OPERATION,
+        )),
       ),
       runPersistentOutputStage(
         input.stageScope,
@@ -181,7 +189,17 @@ export async function verifyFSAOperationBinding(input: Readonly<{
         validated.intent.operationId,
         'parent-authority',
       )
-  if (!samePersistedRecord(operation, storedOperation) ||
+  let decodedOperation
+  try {
+    decodedOperation = storedOperation === undefined
+      ? undefined
+      : await decodeStoredReceiveOperation(storedOperation)
+  } catch {
+    decodedOperation = undefined
+  }
+  if (decodedOperation === undefined ||
+      decodedOperation.receiveIntentDigest !== validated.intent.digest ||
+      !equalCanonicalBytes(decodedOperation.receiveIntent.canonicalBytes, validated.intent.canonicalBytes) ||
       !samePersistedRecord(reservationRecord, storedReservation) ||
       storedParent === undefined || storedParent.kind !== FSA_OPERATION_HANDLE_PARENT ||
       storedParent.operationId !== validated.intent.operationId ||

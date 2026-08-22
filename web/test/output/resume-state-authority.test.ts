@@ -86,6 +86,31 @@ describe('receive operation resume authority', () => {
     expect(expire).toHaveBeenCalledWith(expect.any(Object), failures)
   })
 
+  it('consumes an explicit retained-cleanup reference exactly once', async () => {
+    const lifecycle: ReceiveLifecycleState = Object.freeze({
+      kind: 'expired',
+      operationId: identity(16, 1),
+      receiveIntentDigest: identity(32, 2),
+      generation: 5n,
+      priorStableState: 'resumable-receive',
+      expiresAt: 10_000,
+      cleanupState: 'cleanup-pending',
+      expiryReceiptDigest: identity(32, 4),
+    })
+    const expire = vi.fn(async () => 'cleaned')
+    const authority = new ReceiveOperationResumeAuthority({
+      source: { listLifecycleStates: async () => [lifecycle] },
+      mutations: mutations({ expire }),
+      clock: { now: () => 10_001 },
+    })
+    const inventory = await authority.listResumeState()
+    const reference = inventory.operations[0]!
+
+    await expect(authority.cleanup(reference)).resolves.toBe('cleaned')
+    await expect(authority.cleanup(reference)).rejects.toThrow('another authority')
+    expect(expire).toHaveBeenCalledOnce()
+  })
+
   it('closes inventory authority and reports cleanup uncertainty without partial export', async () => {
     const lifecycle = resumableReceive(10_000)
     const discard = vi.fn(async () => ({
@@ -129,6 +154,7 @@ ReceiveOperationMutationPort<string> {
 function resumableReceive(enteredAt: number): ReceiveLifecycleState {
   return Object.freeze({
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     operationId: identity(16, 1),
     receiveIntentDigest: identity(32, 2),
     generation: 4n,

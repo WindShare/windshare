@@ -6,6 +6,7 @@ import type {
   ResolvedArtifactAction,
   RetryableDiscoveryReason,
 } from '../../output/planning'
+import type { ArtifactChoiceID } from '../../transfer/intent'
 
 export interface V2ActivationObservation {
   /**
@@ -30,6 +31,7 @@ export interface V2LiveAuthorityActivationSnapshot {
   readonly choice: ArtifactChoice
   /** The initial route identity is retained so a refresh cannot silently switch authority. */
   readonly installedRoute: MaterializationRouteIdentity
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly observation: V2ActivationObservation
 }
 

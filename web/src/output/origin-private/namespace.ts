@@ -1,5 +1,9 @@
 import { encodeBase64Url } from '../../crypto/bytes'
-import { validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
+import {
+  validateReceiveIntent,
+  type ArtifactChoiceID,
+  type ReceiveIntent,
+} from '../../transfer/intent'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import type {
   ReceiveOperationHandleRecord,
@@ -56,6 +60,7 @@ export class OriginPrivateWorkspaceNamespaceOpenError extends Error {
 /** The journal commit precedes every OPFS mutation, including creation of the namespace entry. */
 export async function openOriginPrivateWorkspaceNamespace(input: {
   readonly receiveIntent: ReceiveIntent
+  readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly repository: ReceiveOperationRepository
   readonly storage?: OriginPrivateStorageManager
   readonly signal?: AbortSignal
@@ -67,6 +72,7 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
     transition: 'journaled' | 'namespace-created' | 'marker-written' | 'promoted',
   ) => void
 }): Promise<OriginPrivateWorkspaceNamespace> {
+  const preClickRanking = Object.freeze([...input.preClickRanking])
   const intent = await requireWorkspaceIntent(input.receiveIntent)
   const rootHandleId = originPrivateWorkspaceRootHandleId(intent.operationId)
   if (await input.repository.readHandle(rootHandleId) !== undefined) {
@@ -83,6 +89,7 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
   const candidate = await journalWorkspaceActivation({
     repository: input.repository,
     receiveIntent: intent,
+    preClickRanking,
     entryIdentity: (input.randomEntryIdentity ?? randomIdentity)(),
     workspaceRootHandleId: rootHandleId,
     workspaceOwnedObjectId: (input.randomOwnedObjectId ?? randomIdentity)(),

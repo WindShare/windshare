@@ -48,6 +48,30 @@ if ($unformatted.Count -ne 0) {
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
 Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
+Invoke-Step 'Browser FSA reviewed support artifact syntax' {
+    $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip' -Recurse -File -Filter '*.mjs')
+    foreach ($script in $evidenceScripts) {
+        & node --check $script.FullName
+        if ($LASTEXITCODE -ne 0) { throw "node --check failed for $($script.FullName)" }
+    }
+}
+Invoke-Step 'Browser FSA reviewed support artifacts' {
+    $evidenceTests = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip/tests' -File -Filter '*.test.mjs')
+    & node --test @($evidenceTests.FullName)
+    if ($LASTEXITCODE -ne 0) { throw 'Browser FSA reviewed support artifact tests failed' }
+    & node web/scripts/browser-evidence-review/fsa-resumable-zip/review.mjs | Out-Null
+}
+Invoke-Step 'Browser workspace ZIP review JavaScript syntax' {
+    $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence/workspace-zip-recommendation' -Recurse -File -Filter '*.mjs')
+    foreach ($script in $evidenceScripts) {
+        & node --check $script.FullName
+        if ($LASTEXITCODE -ne 0) { throw "node --check failed for $($script.FullName)" }
+    }
+}
+Invoke-Step 'Browser workspace ZIP review contracts' {
+    $evidenceTests = @(Get-ChildItem 'web/scripts/browser-evidence/workspace-zip-recommendation/tests' -File -Filter '*.test.mjs')
+    & node --test @($evidenceTests.FullName)
+}
 Invoke-Step 'Frozen Unicode Go tables' { node scripts/unicode15/generate-go.mjs --check }
 Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
 Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }
