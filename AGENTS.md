@@ -22,7 +22,7 @@
 
 ### Validation
 
-- During iteration, use a focused `make <gate>` or `make check`; run `make ci` before handoff. Local gates use installed prerequisites.
+- During iteration, use a focused `make <gate>` or `make check`; run `make ci-parallel` after final code modifications are complete for handoff. Local gates use installed prerequisites.
 - See `docs/validation.md` for ownership and release details.
 
 ### 其他
