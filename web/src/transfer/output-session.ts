@@ -22,6 +22,7 @@ import {
 } from './directory-admission'
 import type {
   DirectAtomicPlan,
+  DirectResumableZipPlan,
   DirectTreePlan,
   MaterializationPlan,
   OriginalFileArtifact,
@@ -30,6 +31,11 @@ import type {
   WorkspaceThenPublishPlan,
   ZipArchiveArtifact,
 } from './intent'
+import type {
+  DirectZipIntent,
+  DirectZipOrderedOutputV1,
+  DirectZipOutputSessionV1,
+} from './direct-zip/model'
 import type {
   CompletedTransferWorkerSettlement,
   PausedTransferWorkerSettlement,
@@ -156,7 +162,7 @@ export interface DirectoryMaterializationRequest {
   readonly logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership
 }
 
-/** Incremental directory authority is legal only for DirectTree and DirectAtomic ZIP. */
+/** Incremental directory authority is exclusive to native/tree materialization. */
 export interface IncrementalDirectoryOutput {
   admitDirectory(
     directory: DirectoryMaterializationRequest,
@@ -194,9 +200,12 @@ export interface PlanStopRequest {
   readonly reason: TransferStopRequestedError
 }
 
-interface PlanExecutionBase<Plan extends MaterializationPlan> {
+interface PlanExecutionBase<
+  Plan extends MaterializationPlan,
+  Output extends Pick<OutputSession, 'identity' | 'capabilities'> = OutputSession,
+> {
   readonly planKind: Plan['kind']
-  readonly output: OutputSession
+  readonly output: Output
   pause(request: PlanPauseRequest, signal: AbortSignal): Promise<ReceiveLifecycleState>
 }
 
@@ -214,8 +223,16 @@ export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
 
 export interface DirectAtomicExecution extends PlanExecutionBase<DirectAtomicPlan> {
   readonly planKind: 'direct-atomic'
-  /** Present only for the legal progressive ZIP form. */
-  readonly directories?: IncrementalDirectoryOutput
+  settle(
+    request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
+    signal: AbortSignal,
+  ): Promise<ReceiveLifecycleState>
+}
+
+export interface DirectResumableZipExecution extends
+  PlanExecutionBase<DirectResumableZipPlan, DirectZipOutputSessionV1> {
+  readonly planKind: 'direct-resumable-zip'
+  readonly ordered: DirectZipOrderedOutputV1
   settle(
     request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
     signal: AbortSignal,
@@ -241,6 +258,7 @@ export interface PortableExecution extends PlanExecutionBase<PortableHandoffPlan
 export type PlanExecution =
   | DirectTreeExecution
   | DirectAtomicExecution
+  | DirectResumableZipExecution
   | WorkspaceExecution
   | PortableExecution
 
@@ -293,6 +311,10 @@ export interface V2PlanExecutionAuthority {
     intent: ReceiveIntentForPlan<DirectAtomicPlan>,
     signal: AbortSignal,
   ): Promise<DirectAtomicExecution>
+  openDirectResumableZip(
+    intent: DirectZipIntent,
+    signal: AbortSignal,
+  ): Promise<DirectResumableZipExecution>
   openWorkspaceOriginal(
     intent: ReceiveIntentForPlanArtifact<WorkspaceThenPublishPlan, OriginalFileArtifact>,
     evidence: ExactSingleFileEvidence,
@@ -357,11 +379,18 @@ export function validatePlanExecutionBinding<Execution extends PlanExecution>(
   if (intent.plan.kind === 'direct-tree' && !hasDirectoryPort(execution)) {
     throw new OutputSessionBindingError('DirectTree execution requires incremental directory authority')
   }
-  if (intent.plan.kind === 'direct-atomic' && intent.artifact.kind === 'zip-archive' &&
-      !hasDirectoryPort(execution)) {
-    throw new OutputSessionBindingError('DirectAtomic ZIP requires incremental directory authority')
+  if (intent.plan.kind === 'direct-resumable-zip' && !hasOrderedDirectZipPort(execution)) {
+    throw new OutputSessionBindingError('DirectResumableZip execution requires ordered archive authority')
   }
   return execution
+}
+
+function hasOrderedDirectZipPort(execution: PlanExecution): boolean {
+  if (!('ordered' in execution) || execution.ordered === undefined) return false
+  return typeof execution.ordered.beginTraversal === 'function' &&
+    typeof execution.ordered.visit === 'function' &&
+    typeof execution.ordered.finishTraversal === 'function' &&
+    typeof execution.ordered.materializationSummary === 'function'
 }
 
 function hasDirectoryPort(execution: PlanExecution): boolean {

@@ -29,6 +29,7 @@ import {
   createReceiveIntent,
   createSelectionSpec,
   createSingleFileDirectoryTreeArtifact,
+  deriveArtifactChoiceIdentity,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import { FSAReceiveOperation } from '../../src/ui/browser-receive/fsa'
@@ -65,24 +66,45 @@ export interface FSAReconstructionResult {
   readonly forbiddenSentinels: readonly string[]
 }
 
+export type FSAReconstructionAttempt =
+  | Readonly<{
+      kind: 'unavailable'
+      reason: 'origin-private-storage-unavailable'
+    }>
+  | Readonly<{
+      kind: 'reconstructed'
+      result: FSAReconstructionResult
+    }>
+
 /**
  * Reproduces the failure at the real FSA reopen/settlement seam while keeping the
  * network operation external. The caller supplies a tuple observed from the live
  * browser/sender exchange so this bundle and the sender artifact share authority.
+ * Origin-private storage is fixture authority, not part of that live receive; its
+ * absence therefore yields an explicit unsupported result instead of rewriting a
+ * successful product outcome as a reconstruction failure.
  */
 export async function reconstructFSAContinuationFailure(
   input: FSAReconstructionCorrelation,
-): Promise<FSAReconstructionResult> {
+): Promise<FSAReconstructionAttempt> {
+  const getDirectory = reconstructionDirectory()
+  if (getDirectory === undefined) {
+    return Object.freeze({
+      kind: 'unavailable',
+      reason: 'origin-private-storage-unavailable',
+    })
+  }
   const correlation = protocolCorrelation(input)
   const intent = await directTreeIntent()
   const databaseName = `windshare-w6-reconstruction-${crypto.randomUUID()}`
-  const parent = await reconstructionDirectory()
+  const parent = await getDirectory()
   const repository = await IndexedDbReceiveOperationRepository.open(databaseName)
   const stableLifecycle = resumableReceive(intent, 4n)
   const binding = await prepareFSAOperationBindingTransition({
     repository,
     intent,
     parent,
+    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
   })
   await repository.commitTransition({
     operationId: intent.operationId,
@@ -245,15 +267,18 @@ export async function reconstructFSAContinuationFailure(
   const bundle = diagnostics.runtime.export()
 
   return Object.freeze({
-    bundle,
-    incidentConsoleCount: incidentConsole.length,
-    actionErrorName: actionError instanceof Error ? actionError.name : 'unknown',
-    restoredLifecycle: lifecycle.kind,
-    forbiddenSentinels: Object.freeze([
-      PRIVATE_REOPEN_DETAIL,
-      PRIVATE_CLEANUP_DETAIL,
-      PRIVATE_FIXTURE_NAME,
-    ]),
+    kind: 'reconstructed',
+    result: Object.freeze({
+      bundle,
+      incidentConsoleCount: incidentConsole.length,
+      actionErrorName: actionError instanceof Error ? actionError.name : 'unknown',
+      restoredLifecycle: lifecycle.kind,
+      forbiddenSentinels: Object.freeze([
+        PRIVATE_REOPEN_DETAIL,
+        PRIVATE_CLEANUP_DETAIL,
+        PRIVATE_FIXTURE_NAME,
+      ]),
+    }),
   })
 }
 
@@ -334,9 +359,13 @@ async function directTreeIntent(): Promise<ReceiveIntent> {
 function resumableReceive(
   intent: ReceiveIntent,
   generation: bigint,
-): Extract<ReceiveLifecycleState, { readonly kind: 'resumable-receive' }> {
+): Extract<ReceiveLifecycleState, {
+  readonly kind: 'resumable-receive'
+  readonly payloadKind: 'file-set'
+}> {
   return Object.freeze({
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
     generation,
@@ -417,13 +446,10 @@ function identityBytes(seed: number, length: number): Uint8Array {
   return new Uint8Array(length).fill(seed & 0xff)
 }
 
-function reconstructionDirectory(): Promise<FileSystemDirectoryHandle> {
+function reconstructionDirectory(): (() => Promise<FileSystemDirectoryHandle>) | undefined {
   const target = globalThis as typeof globalThis & Readonly<{
     __windshareReconstructionDirectory?: () => Promise<FileSystemDirectoryHandle>
   }>
   const getDirectory = target.__windshareReconstructionDirectory
-  if (getDirectory === undefined) {
-    throw new DOMException('Reconstruction storage is unavailable', 'NotSupportedError')
-  }
-  return getDirectory()
+  return getDirectory
 }

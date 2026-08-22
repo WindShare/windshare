@@ -11,12 +11,12 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-const ReceiveIntentV2 uint8 = 2
+const ReceiveIntentV3 uint8 = 3
 
 const (
 	ReceiveIntentDigestBytes = sha256.Size
 	TransferJobIdentityBytes = catalog.IdentityBytes
-	receiveIntentDomain      = "windshare/receive-intent/v2"
+	receiveIntentDomain      = "windshare/receive-intent/v3"
 )
 
 var (
@@ -107,7 +107,7 @@ func canonicalReceiveIntentBytes(
 	encoded := make([]byte, 0, len(receiveIntentDomain)+2+
 		len(selection.encoded)+len(artifact.CanonicalBytes())+len(plan.CanonicalBytes())+24)
 	encoded = append(encoded, receiveIntentDomain...)
-	encoded = append(encoded, 0, ReceiveIntentV2)
+	encoded = append(encoded, 0, ReceiveIntentV3)
 	encoded = appendCanonicalField(encoded, selection.CanonicalBytes())
 	encoded = appendCanonicalField(encoded, artifact.CanonicalBytes())
 	encoded = appendCanonicalField(encoded, plan.CanonicalBytes())

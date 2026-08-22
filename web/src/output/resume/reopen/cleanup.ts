@@ -21,6 +21,7 @@ import { PersistedReceiveOperationReopenAuthority } from './authority'
 import type {
   PersistedReceiveOperationReopenAuthorityOptions,
   ReopenedDirectTreeOperation,
+  ReopenedDirectZipOperation,
   ReopenedReceiveOperation,
   ReopenedWorkspaceOperation,
 } from './model'
@@ -30,6 +31,14 @@ export interface ReceiveOperationOwnedCleanupExecutor {
     operation: ReopenedReceiveOperation,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult>
+}
+
+export interface PersistedReceiveOperationReopenPort {
+  reopen(
+    descriptor: ReceiveOperationResumeDescriptor,
+    purpose: 'continue' | 'cleanup',
+    failures?: OutputFailureSinks,
+  ): Promise<ReopenedReceiveOperation>
 }
 
 export interface PersistedReceiveOperationCleanupExecutorOptions {
@@ -69,6 +78,12 @@ implements ReceiveOperationOwnedCleanupExecutor {
         })
         throw error
       }
+    }
+    if (operation.kind === 'direct-zip') {
+      throw new DOMException(
+        'Direct ZIP cleanup requires the owned-file target proof authority',
+        'NotSupportedError',
+      )
     }
     let backend: OriginPrivateRetainedArtifactBackend | undefined
     try {
@@ -140,6 +155,11 @@ export type AuthorityOwnedReceiveOperationContinuation =
       }
     }>
   | Readonly<{ kind: 'workspace-retained'; operation: ReopenedWorkspaceOperation }>
+  | Readonly<{ kind: 'direct-zip'; operation: ReopenedDirectZipOperation }>
+  | Readonly<{
+      kind: 'direct-zip-retained-cleanup'
+      operation: ReopenedDirectZipOperation
+    }>
 
 /**
  * Presentation can consume a descriptor but cannot provide an intent, binding, or
@@ -148,11 +168,11 @@ export type AuthorityOwnedReceiveOperationContinuation =
  */
 export class AuthorityOwnedReceiveOperationMutationPort
 implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> {
-  readonly #reopen: PersistedReceiveOperationReopenAuthority
+  readonly #reopen: PersistedReceiveOperationReopenPort
   readonly #cleanup: ReceiveOperationOwnedCleanupExecutor
 
   constructor(input: {
-    readonly reopen: PersistedReceiveOperationReopenAuthority
+    readonly reopen: PersistedReceiveOperationReopenPort
     readonly cleanup: ReceiveOperationOwnedCleanupExecutor
   }) {
     this.#reopen = input.reopen
@@ -175,6 +195,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
+    if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     try {
       return Object.freeze({
         kind: 'retention-cleanup',
@@ -202,6 +223,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
+    if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     if (operation.kind !== 'direct-tree') {
       return withClosedOperation(operation, async () => {
         throw new TypeError('terminal catch-up is exclusive to DirectTree operations')
@@ -212,6 +234,17 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
       continuation: Object.freeze({ kind: 'direct-tree-catch-up', operation }),
     })
   }
+}
+
+function directZipRetainedCleanup(
+  operation: ReopenedDirectZipOperation,
+): AuthorityOwnedReceiveOperationMutationResult {
+  // Generic cleanup intentionally has no target-proof port. Ownership transfers
+  // to the injected Direct ZIP runtime, which closes this reopen authority.
+  return Object.freeze({
+    kind: 'continuation',
+    continuation: Object.freeze({ kind: 'direct-zip-retained-cleanup', operation }),
+  })
 }
 
 async function withClosedOperation<Result>(
@@ -281,6 +314,9 @@ function classifyReopenedContinuation(
 ): AuthorityOwnedReceiveOperationContinuation {
   if (operation.kind === 'direct-tree') {
     return Object.freeze({ kind: 'direct-tree-receive', operation })
+  }
+  if (operation.kind === 'direct-zip') {
+    return Object.freeze({ kind: 'direct-zip', operation })
   }
   if (operation.lifecycle.kind === 'receiving' && operation.admittedContent !== undefined &&
       operation.receiveContinuation !== undefined) {

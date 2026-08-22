@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
-  INDEXEDDB_V8_STORE_SCHEMAS,
+  INDEXEDDB_V9_STORE_SCHEMAS,
 } from '../../../src/output/browser/indexeddb-database'
 import {
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
@@ -21,45 +21,28 @@ import {
   storedReceiveLifecycleState,
 } from '../../../src/output/workspace/state-codec'
 
-describe('IndexedDB v8 operation repository contract', () => {
-  it('adds isolated compatible-name stores without overloading operation records', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(8)
-    expect(INDEXEDDB_V8_STORE_SCHEMAS).toEqual([
-      schema('file-checkpoint-v2-candidates', [
-        ['by-operation', 'operationId'],
-        ['by-operation-file', ['operationId', 'fileId']],
-      ]),
-      schema('file-checkpoint-v2-committed', [
-        ['by-operation', 'operationId'],
-        ['by-operation-file', ['operationId', 'fileId']],
-      ]),
-      schema('file-checkpoint-v2-handles', [['by-operation', 'operationId']]),
-      schema('file-checkpoint-v2-control', [
-        ['by-operation', 'operationId'],
-        ['by-operation-kind', ['operationId', 'kind']],
-      ]),
-      schema('receive-operation-v1-records', [
+describe('IndexedDB v9 operation repository contract', () => {
+  it('isolates V2 receive authority and Direct ZIP journal stores', () => {
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(9)
+    const stores = new Map(INDEXEDDB_V9_STORE_SCHEMAS.map(value => [value.name, value]))
+    expect([...stores.keys()]).not.toContain('receive-operation-v1-records')
+    expect(stores.get('receive-operation-v2-records')).toEqual(schema(
+      'receive-operation-v2-records',
+      [
         ['by-operation', 'operationId'],
         ['by-operation-kind', ['operationId', 'kind']],
         ['by-reopen-key', 'reopenKey'],
         ['by-state', 'state'],
         ['by-expiry', 'expiresAt'],
         ['by-kind', 'kind'],
-      ]),
-      schema('receive-operation-v1-manifest-pages', [
-        ['by-operation', 'operationId'],
-        ['by-operation-kind', ['operationId', 'kind']],
-      ]),
-      schema('receive-operation-v1-handles', [
-        ['by-operation', 'operationId'],
-        ['by-operation-kind', ['operationId', 'kind']],
-      ]),
-      schema('receive-operation-v1-leases', [['by-operation', 'operationId']]),
-      schema('compatible-name-v1-operations', [], 'operationId'),
-      schema('compatible-name-v1-mappings', [
-        ['by-operation', 'operationId'],
-        ['by-operation-commit-ordinal', ['operationId', 'commitOrdinal']],
-      ]),
+      ],
+    ))
+    expect([...stores.keys()].filter(name => name.startsWith('direct-zip-'))).toEqual([
+      'direct-zip-state-v1',
+      'direct-zip-candidates-v1',
+      'direct-zip-layout-pages-v1',
+      'direct-zip-central-pages-v1',
+      'direct-zip-epoch-pages-v1',
     ])
   })
 

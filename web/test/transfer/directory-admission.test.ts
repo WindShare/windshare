@@ -37,7 +37,6 @@ import {
   createSelectionSpec,
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
-  createZipArchiveArtifact,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 
@@ -74,9 +73,9 @@ describe('DirectoryAdmission v2 binding', () => {
     }
     const child = await createDirectoryAdmission(SECRET, scope, childDirectory)
 
-    expect(intent.digest).toBe('0nnnictvYU_T1TDDKOizgxB_NDzLFPINaWXdepRW49o')
-    expect(root.token).toBe('hHXHEyKXtIBfQLGRmtIQUttu1hYd-tra0kuKFfAOwU0')
-    expect(child.token).toBe('eMKF1jXVxzA6PTsbmSlGozwfx33gz-DfUrTUs4LFaf8')
+    expect(intent.digest).toBe('PKgx50isr9LVzH14HJib08_RPM501Cvw1_G2Y2b_ctQ')
+    expect(root.token).toBe('wciDHOmyvV1fBGC2T_jZZlUN2dbt-T3s7YC1PFXmzI0')
+    expect(child.token).toBe('VfTe1srkTkvVQNeSJS1oaYl8MZ_BBtMPEn4ZiATmL8w')
 
     expect(scope).toMatchObject({
       receiveIntentDigest: intent.digest,
@@ -88,7 +87,7 @@ describe('DirectoryAdmission v2 binding', () => {
     const message = canonicalDirectoryAdmissionMessageV2(scope, childDirectory)
     expect(message).toEqual(expectedDirectoryAdmissionMessage(scope, childDirectory))
     expect(encodeBase64Url(await sha256(message)))
-      .toBe('4HldBQ_op6cGfFHvdQrCxynzbWqKQ6kLQLMhmrZi0i4')
+      .toBe('-FfVAg8-AJUOylS_dYhiCz9vF2DrUTncrpE-PhQ7HOc')
     expect(validateDirectoryAdmissionBinding(scope, childDirectory, child)).toEqual(child)
     expect(await verifyDirectoryAdmissionToken(SECRET, scope, childDirectory, child.token)).toBe(true)
     expect(await verifyDirectoryAdmissionToken(
@@ -108,11 +107,7 @@ describe('DirectoryAdmission v2 binding', () => {
     expect('canonicalDirectoryAdmissionMessageV1' in admissionContract).toBe(false)
   })
 
-  it('admits direct-atomic ZIP but rejects prepared and original-file plans', async () => {
-    const zipIntent = await directAtomicZipIntent()
-    const zipScope = await createDirectoryAdmissionScope(zipIntent)
-    expect(zipScope.layout).toBe('zip-result-root')
-
+  it('rejects prepared and original-file plans', async () => {
     const workspaceIntent = await workspaceIntentForOriginal()
     await expect(createDirectoryAdmissionScope(workspaceIntent))
       .rejects.toThrow(/sealed manifest/u)
@@ -135,7 +130,7 @@ describe('DirectoryAdmission v2 binding', () => {
       plan: await createDirectAtomicPlan(original, reservation),
     })
     await expect(createDirectoryAdmissionScope(directOriginal))
-      .rejects.toThrow(/direct-atomic ZIP/u)
+      .rejects.toThrow(/DirectAtomic original-file output/u)
   })
 
   it('retains exact v2 receipts and only the closed isolated metadata settlement', async () => {
@@ -249,28 +244,6 @@ async function directTreeIntent(): Promise<ReceiveIntent> {
     selection,
     artifact,
     plan: await createDirectTreePlan(artifact, reservation),
-  })
-}
-
-async function directAtomicZipIntent(): Promise<ReceiveIntent> {
-  const selection = await selectionSpec()
-  const artifact = await createZipArchiveArtifact(
-    createDirectorySelectionResultRoot(identity(20), 'docs'),
-  )
-  const reservation = await createManagedAtomicReservation({
-    operationId: identity(21),
-    reservationId: identity(22),
-    artifact,
-    authorityRef: identity(23, 32),
-    nameAuthority: 'application-chosen',
-    requestedName: 'docs-selection.zip',
-    reservedName: 'docs-selection.zip',
-    collisionIndex: 0,
-  })
-  return createReceiveIntent({
-    selection,
-    artifact,
-    plan: await createDirectAtomicPlan(artifact, reservation),
   })
 }
 

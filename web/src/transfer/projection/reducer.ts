@@ -33,6 +33,7 @@ import {
   type SelectionProjectionV1,
   type SettledLayoutBasisProof,
   type UnsettledSelectionTarget,
+  type WorkspaceCostObservationV1,
 } from './model'
 
 const MAXIMUM_PROJECTION_BYTES = (1n << 64n) - 1n
@@ -87,6 +88,7 @@ export function reduceSelectionProjection(
       state,
       event.settledTargets ?? [],
       event.layoutBasis,
+      event.workspaceCostObservation,
     )
   }
 }
@@ -286,6 +288,7 @@ function completeDiscovery(
   state: SelectionProjectionState,
   settledTargets: readonly UnsettledSelectionTarget[],
   layoutBasis: SettledLayoutBasisProof | undefined,
+  workspaceCostObservation: WorkspaceCostObservationV1 | undefined,
 ): SelectionProjectionState {
   if (state.discovery.kind !== 'discovering') {
     throw new SelectionProjectionError('discovery completion requires active discovery')
@@ -300,9 +303,34 @@ function completeDiscovery(
       ...state.projection,
       unsettledTargets: remainingTargets,
       proof,
+      ...(workspaceCostObservation === undefined
+        ? {}
+        : { workspaceCostObservation: snapshotWorkspaceCostObservation(workspaceCostObservation) }),
     }),
     discovery: COMPLETE_DISCOVERY,
   })
+}
+
+function snapshotWorkspaceCostObservation(
+  input: WorkspaceCostObservationV1,
+): WorkspaceCostObservationV1 {
+  if (input.version !== 1) throw new SelectionProjectionError('workspace cost version is invalid')
+  const values = [
+    input.rawBytes,
+    input.packageBytes,
+    input.centralDirectorySpoolBytes,
+    input.durableMetadataBytes,
+    input.peakOwnedBytes,
+  ]
+  if (values.some((value) => typeof value !== 'bigint' || value < 0n || value > MAXIMUM_PROJECTION_BYTES)) {
+    throw new SelectionProjectionError('workspace cost exceeds its unsigned 64-bit domain')
+  }
+  const expectedPeak = input.rawBytes + input.packageBytes +
+    input.centralDirectorySpoolBytes + input.durableMetadataBytes
+  if (expectedPeak > MAXIMUM_PROJECTION_BYTES || input.peakOwnedBytes !== expectedPeak) {
+    throw new SelectionProjectionError('workspace cost peak is not checked canonical arithmetic')
+  }
+  return Object.freeze({ ...input })
 }
 
 function completeProof(

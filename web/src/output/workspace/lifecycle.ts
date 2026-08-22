@@ -2,11 +2,24 @@ import {
   lifecycleDeadline,
   nextReceiveLifecycleState,
   stableDeadline,
-  type NeedsAttentionReason,
   type PlanKind,
   type ReceiveLifecycleState,
+  type RetainedLifecycleKind,
 } from './state'
 import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
+import {
+  gateDirectZipRecovery,
+  pauseDirectZip,
+  resumeDirectZipRecovery,
+} from './lifecycle/recovery'
+import {
+  activeLeaseMismatch,
+  applied,
+  needsAttention,
+  requireClock,
+  requireState,
+  requireWorkspaceState,
+} from './lifecycle/transitions'
 
 export type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
 
@@ -24,8 +37,18 @@ export function reduceReceiveLifecycle(
   const deadline = lifecycleDeadline(state)
   if (deadline !== undefined && context.nowMilliseconds >= deadline &&
       (event.kind === 'resume-started' || event.kind === 'save-requested' ||
-       event.kind === 'handoff-requested')) {
+       event.kind === 'handoff-requested' || event.kind === 'direct-zip-recovery-gated' ||
+       event.kind === 'direct-zip-recovery-resumed')) {
     throw new TypeError('stable lifecycle deadline elapsed before continuation')
+  }
+  if (event.kind === 'direct-zip-pause-verified') {
+    return applied(pauseDirectZip(state, event, context))
+  }
+  if (event.kind === 'direct-zip-recovery-gated') {
+    return applied(gateDirectZipRecovery(state, event, context))
+  }
+  if (event.kind === 'direct-zip-recovery-resumed') {
+    return applied(resumeDirectZipRecovery(state, context))
   }
   switch (event.kind) {
     case 'receive-started': return applied(startReceive(state, event, context))
@@ -162,6 +185,7 @@ function pauseVerified(
     }
     return nextReceiveLifecycleState(state, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: event.checkpointSetDigest,
       completedFileCount: event.completedFileCount,
       completedBytes: event.completedBytes,
@@ -186,8 +210,11 @@ function resumeStable(
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
   if (state.kind === 'resumable-receive') {
-    if (context.planKind !== 'direct-tree' &&
-        context.planKind !== 'workspace-then-publish') {
+    const directZipResume = context.planKind === 'direct-resumable-zip' &&
+      state.payloadKind === 'direct-zip'
+    const fileSetResume = (context.planKind === 'direct-tree' ||
+      context.planKind === 'workspace-then-publish') && state.payloadKind === 'file-set'
+    if (!directZipResume && !fileSetResume) {
       throw new TypeError('plan cannot resume receive state')
     }
     if (event.packageTempObjectId !== undefined) {
@@ -226,6 +253,7 @@ function restoreReceiveContinuation(
   }
   return nextReceiveLifecycleState(state, {
     kind: 'resumable-receive',
+    payloadKind: 'file-set',
     checkpointSetDigest: event.checkpointSetDigest,
     completedFileCount: event.completedFileCount,
     completedBytes: event.completedBytes,
@@ -305,6 +333,7 @@ function finalizeTree(
       }
       return nextReceiveLifecycleState(state, {
         kind: 'resumable-receive',
+        payloadKind: 'file-set',
         checkpointSetDigest: event.checkpointSetDigest,
         completedFileCount: event.completedFileCount,
         completedBytes: event.completedBytes,
@@ -349,7 +378,13 @@ function restartRequired(
   const portableState = planKind === 'portable-handoff' &&
     (state.kind === 'receiving' ||
      (state.kind === 'handing-off' && state.attemptKind === 'portable'))
-  if (!directAtomicState && !portableState) {
+  const directZipDeleted = planKind === 'direct-resumable-zip' &&
+    event.reason === 'target-deleted' &&
+    (state.kind === 'receiving' || state.kind === 'resumable-receive' ||
+     state.kind === 'authorization-required' ||
+     state.kind === 'target-verification-required' ||
+     state.kind === 'destination-space-required')
+  if (!directAtomicState && !portableState && !directZipDeleted) {
     throw new TypeError('restart boundary is legal only for DirectAtomic or Portable')
   }
   if (event.reason === 'direct-atomic-rolled-back' && !directAtomicState) {
@@ -357,6 +392,9 @@ function restartRequired(
   }
   if (event.reason === 'portable-aborted' && !portableState) {
     throw new TypeError('portable abort reason requires a portable handoff')
+  }
+  if (event.reason === 'target-deleted' && !directZipDeleted) {
+    throw new TypeError('target deletion reason requires a DirectResumableZip boundary')
   }
   return nextReceiveLifecycleState(state, {
     kind: 'restart-required',
@@ -608,60 +646,19 @@ function expireState(
 
 function priorStableStateKind(
   state: ReceiveLifecycleState,
-): 'resumable-receive' | 'resumable-package' | 'waiting-to-save' | 'download-started' {
+): RetainedLifecycleKind {
   switch (state.kind) {
     case 'resumable-receive':
     case 'resumable-package':
     case 'waiting-to-save':
     case 'download-started':
+    case 'authorization-required':
+    case 'target-verification-required':
+    case 'destination-space-required':
       return state.kind
     default:
       throw new TypeError('state has no stable expiry identity')
   }
-}
-
-function needsAttention(
-  state: ReceiveLifecycleState,
-  reason: NeedsAttentionReason,
-  lastVerifiedRecordDigest: string,
-): ReceiveLifecycleState {
-  return nextReceiveLifecycleState(state, {
-    kind: 'needs-attention',
-    reason,
-    lastVerifiedRecordDigest,
-  })
-}
-
-function activeLeaseMismatch(state: ReceiveLifecycleState, leaseId: string): boolean {
-  return 'activeLeaseId' in state && state.activeLeaseId !== leaseId
-}
-
-function requireWorkspaceState<K extends ReceiveLifecycleState['kind']>(
-  state: ReceiveLifecycleState,
-  planKind: PlanKind,
-  kind: K,
-): asserts state is Extract<ReceiveLifecycleState, { kind: K }> {
-  if (planKind !== 'workspace-then-publish') {
-    throw new TypeError('event is exclusive to WorkspaceThenPublish')
-  }
-  requireState(state, kind)
-}
-
-function requireState<K extends ReceiveLifecycleState['kind']>(
-  state: ReceiveLifecycleState,
-  kind: K,
-): asserts state is Extract<ReceiveLifecycleState, { kind: K }> {
-  if (state.kind !== kind) throw new TypeError(`event is not legal from ${state.kind}`)
-}
-
-function requireClock(nowMilliseconds: number): void {
-  if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) {
-    throw new TypeError('lifecycle clock must be a non-negative safe integer')
-  }
-}
-
-function applied(state: ReceiveLifecycleState): LifecycleReduction {
-  return Object.freeze({ status: 'applied', state })
 }
 
 export type {

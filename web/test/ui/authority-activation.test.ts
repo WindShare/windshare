@@ -60,9 +60,12 @@ describe('authority activation coordinator', () => {
       harness.planning[0]?.resolve(harness.observations[0]!.offers)
       await waitFor(() => harness.publications.length === 1)
 
-      expect(harness.coordinator.choose('download-original')).toBe(true)
-      expect(harness.coordinator.choose('download-original')).toBe(false)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(false)
       expect(harness.receive.startedAuthorities).toHaveLength(1)
+      expect(harness.receive.startedRankings).toEqual([
+        [primaryChoiceId(harness.observations[0]!.offers)],
+      ])
       await waitFor(() => harness.reconciliation.length === 1)
 
       if (order === 'authority-first') {
@@ -108,7 +111,7 @@ describe('authority activation coordinator', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
     await binderStarted.promise
@@ -130,7 +133,7 @@ describe('authority activation coordinator', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
 
@@ -178,7 +181,7 @@ describe('authority activation coordinator', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
 
@@ -201,7 +204,7 @@ describe('authority activation coordinator', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve({
       kind: 'retry-required',
@@ -246,7 +249,7 @@ describe('authority activation transactionality', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
     await waitFor(() => commits === 1)
@@ -287,7 +290,7 @@ describe('authority activation transactionality', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     await waitFor(() => harness.reconciliation.length === 1)
     harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
     await fenceReached.promise
@@ -352,13 +355,13 @@ describe('authority activation transactionality', () => {
       harness.observe(0)
       harness.planning[0]?.resolve(harness.observations[0]!.offers)
       await waitFor(() => harness.publications.length === 1)
-      expect(harness.coordinator.choose('download-original')).toBe(true)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
       await waitFor(() => harness.reconciliation.length === 1)
       harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
 
       await waitFor(() => harness.coordinator.getSnapshot().kind === 'cleanup-required')
       expect(harness.coordinator.pending).toBe(true)
-      expect(harness.coordinator.choose('download-original')).toBe(false)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(false)
       expect(harness.transitions()).not.toContain('cleanup_completed')
       expect(harness.coordinator.retry()).toBe(true)
       await waitFor(() => harness.coordinator.getSnapshot().kind === 'terminal')
@@ -401,7 +404,7 @@ describe('authority activation transactionality', () => {
       harness.observe(0)
       harness.planning[0]?.resolve(harness.observations[0]!.offers)
       await waitFor(() => harness.publications.length === 1)
-      expect(harness.coordinator.choose('download-original')).toBe(true)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
       await waitFor(() => harness.reconciliation.length === 1)
       harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
 
@@ -421,13 +424,13 @@ describe('authority activation transactionality', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       kind: 'terminal',
       outcome: { kind: 'picker-refused' },
     })
     expect(harness.actionErrors).toHaveLength(0)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
   })
 
   it('reports a synchronous native presentation-source failure', async () => {
@@ -436,7 +439,7 @@ describe('authority activation transactionality', () => {
     harness.observe(0)
     harness.planning[0]?.resolve(harness.observations[0]!.offers)
     await waitFor(() => harness.publications.length === 1)
-    expect(harness.coordinator.choose('download-original')).toBe(true)
+    expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
     expect(harness.coordinator.getSnapshot()).toMatchObject({
       kind: 'terminal',
       outcome: { kind: 'failed' },
@@ -468,7 +471,7 @@ describe('post-fence activation ownership', () => {
       harness.observe(0)
       harness.planning[0]?.resolve(harness.observations[0]!.offers)
       await waitFor(() => harness.publications.length === 1)
-      expect(harness.coordinator.choose('download-original')).toBe(true)
+      expect(harness.coordinator.choose(primaryChoiceId(harness.observations[0]!.offers))).toBe(true)
       await waitFor(() => harness.reconciliation.length === 1)
       harness.reconciliation[0]?.resolve(harness.observations[0]!.outcome)
       await fenceReached.promise
@@ -548,6 +551,11 @@ interface CoordinatorHarness {
   observe(index: number): void
   replaceCurrentWithoutObservation(index: number): void
   transitions(): string[]
+}
+
+function primaryChoiceId(offers: ArtifactOffers) {
+  if (offers.kind !== 'artifact-actions') throw new Error('test offer is not actionable')
+  return offers.primary.choice.choiceId
 }
 
 async function createHarness(options: Readonly<{

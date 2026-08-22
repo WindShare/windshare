@@ -200,7 +200,7 @@ describe('IncidentRecordV1 projection', () => {
         stage: 'lifecycle_action',
         recoveryDisposition: 'restart_required',
         kind: 'restart-required',
-        reason: 'content-session-ended',
+        reason: 'target-deleted',
       }),
     ])
 
@@ -228,7 +228,7 @@ describe('IncidentRecordV1 projection', () => {
     )?.payload).toEqual({
       lifecycle_failure: {
         state: 'restart_required',
-        reason: 'content_session_ended',
+        reason: 'target_deleted',
       },
     })
   })

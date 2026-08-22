@@ -24,7 +24,7 @@ describe('browser receive operation lease', () => {
     const operationId = identity(16, 1)
     const repository = new MemoryRepository({
       id: `windshare/receive-operation/v1/${operationId}/lease`,
-      schemaVersion: 1,
+      schemaVersion: 2,
       operationId,
       leaseId: identity(16, 2),
       acquiredAt: 100,
@@ -70,7 +70,7 @@ describe('browser receive operation lease', () => {
     const repository = new MemoryRepository()
     const record = {
       id: `windshare/receive-operation/v1/${operationId}/fixture`,
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       operationId,
       kind: RECEIVE_RECORD_OPERATION,
       digest: identity(32, 5),
@@ -78,7 +78,7 @@ describe('browser receive operation lease', () => {
     }
     const handle = {
       id: `windshare/receive-operation/v1/${operationId}/handle`,
-      schemaVersion: 1 as const,
+      schemaVersion: 2 as const,
       operationId,
       kind: 1,
       authorityRef: identity(32, 6),

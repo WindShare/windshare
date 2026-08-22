@@ -1,18 +1,23 @@
 import type {
+  ArtifactAvailability,
+  ArtifactChoiceID,
+  ArtifactChoiceIdentity,
   ArtifactSpec,
-  CommitVisibility,
+  AvailableDirectZipPolicyDigests,
+  CleanupAuthority,
   DeliveryMode,
   GuaranteeProfile,
   MaterializationPlan,
   NameAuthority,
   ReplacementGuarantee,
-  RollbackGuarantee,
+  TargetVisibility,
 } from '../../transfer/intent'
 import type {
   DiscoveryState,
   ProjectionEpoch,
   RetryableDiscoveryReason,
   SelectionProjectionV1,
+  WorkspaceCostObservationV1,
 } from '../../transfer/projection'
 
 export type {
@@ -20,14 +25,16 @@ export type {
   ProjectionEpoch,
   RetryableDiscoveryReason,
   SelectionProjectionV1,
+  WorkspaceCostObservationV1,
 }
 
 export interface DestinationGuaranteeFacts {
   readonly nameAuthority: NameAuthority
   readonly replacement: ReplacementGuarantee
   readonly delivery: DeliveryMode
-  readonly visibility: CommitVisibility
-  readonly rollback: RollbackGuarantee
+  readonly targetVisibility: TargetVisibility
+  readonly artifactAvailability: ArtifactAvailability
+  readonly cleanupAuthority: CleanupAuthority
 }
 
 interface EnvironmentTargetOfferBase<
@@ -55,6 +62,36 @@ export type FSADirectoryContainerOffer = EnvironmentTargetOfferBase<
   'fsa-tree'
 >
 
+export interface ReviewedDirectZipSupportFacts {
+  readonly kind: 'reviewed-supported'
+  readonly supportMatrixDigest: string
+  readonly browserBinaryDigest: string
+  readonly browserVersion: string
+  readonly operatingSystemBuild: string
+  readonly filesystemProfile: string
+  readonly rawEvidenceDigest: string
+  readonly requiredFeatureFactsDigest: string
+  readonly recommendationPolicyDigest: string
+  readonly policies: AvailableDirectZipPolicyDigests
+}
+
+export type DirectZipSupportFacts =
+  | ReviewedDirectZipSupportFacts
+  | Readonly<{
+      kind: 'unavailable'
+      reason:
+        | 'support-evidence-missing'
+        | 'platform-not-reviewed'
+        | 'direct-route-unsupported'
+        | 'policy-digests-unavailable'
+    }>
+
+export type FSAOwnedFileTargetOffer = EnvironmentTargetOfferBase<
+  'fsa-owned-file-target',
+  'operation-scoped',
+  'fsa-owned-file'
+> & Readonly<{ readonly support: ReviewedDirectZipSupportFacts }>
+
 export type ManagedAtomicTargetOffer = EnvironmentTargetOfferBase<
   'managed-atomic-file-target',
   'operation-scoped',
@@ -80,6 +117,7 @@ export type PrecreatedBrowserFileOffer = EnvironmentTargetOfferBase<
 export type EnvironmentTargetOffer =
   | NativeDirectoryContainerOffer
   | FSADirectoryContainerOffer
+  | FSAOwnedFileTargetOffer
   | ManagedAtomicTargetOffer
   | BrowserHandoffTargetOffer
   | PrecreatedBrowserFileOffer
@@ -87,6 +125,7 @@ export type EnvironmentTargetOffer =
 export type EnvironmentTargetKind =
   | 'native-directory-container'
   | 'fsa-parent-directory'
+  | 'fsa-owned-file-target'
   | 'managed-atomic-file-target'
   | 'browser-handoff'
   | 'precreated-browser-file'
@@ -127,12 +166,16 @@ export interface EnvironmentOffers {
   readonly targets: readonly EnvironmentTargetOffer[]
   readonly workspace: WorkspaceEnvironmentOffer | null
   readonly portable: PortableEnvironmentOffer | null
+  readonly directZipSupport: DirectZipSupportFacts
+  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicyV1
 }
 
 export interface EnvironmentOffersInput {
   readonly targets: readonly EnvironmentTargetOfferInput[]
   readonly workspace?: WorkspaceEnvironmentOffer | null
   readonly portable?: PortableEnvironmentOffer | null
+  readonly directZipSupport?: DirectZipSupportFacts
+  readonly zipRecommendationPolicy?: ZipRouteRecommendationPolicyV1
 }
 
 export type ArtifactOperation =
@@ -177,6 +220,12 @@ export type FSADirectoryTargetSemantics = TargetSemanticsBase<
   'fsa-tree'
 >
 
+export type FSAOwnedFileTargetSemantics = TargetSemanticsBase<
+  'fsa-owned-file-target',
+  'operation-scoped',
+  'fsa-owned-file'
+> & Readonly<{ readonly support: ReviewedDirectZipSupportFacts }>
+
 export type ManagedAtomicTargetSemantics = TargetSemanticsBase<
   'managed-atomic-file-target',
   'operation-scoped',
@@ -196,6 +245,7 @@ export type BrowserHandoffTargetSemantics = TargetSemanticsBase<
 export type MaterializationTargetSemantics =
   | NativeDirectoryTargetSemantics
   | FSADirectoryTargetSemantics
+  | FSAOwnedFileTargetSemantics
   | ManagedAtomicTargetSemantics
   | BrowserHandoffTargetSemantics
 
@@ -238,11 +288,17 @@ export interface PortableHandoffPlanSemantics {
   readonly handoffTarget: BrowserHandoffTargetSemantics
 }
 
+export interface DirectResumableZipPlanSemantics {
+  readonly kind: 'direct-resumable-zip'
+  readonly target: FSAOwnedFileTargetSemantics
+}
+
 export type OfferedMaterializationPlanSemantics =
   | DirectTreePlanSemantics
   | DirectAtomicPlanSemantics
   | WorkspaceThenPublishPlanSemantics
   | PortableHandoffPlanSemantics
+  | DirectResumableZipPlanSemantics
 
 export interface DirectTreeMaterializationRoute {
   readonly kind: 'direct-tree'
@@ -266,11 +322,17 @@ export interface PortableHandoffMaterializationRoute {
   readonly handoffTarget: BrowserHandoffTargetOffer
 }
 
+export interface DirectResumableZipMaterializationRoute {
+  readonly kind: 'direct-resumable-zip'
+  readonly target: FSAOwnedFileTargetOffer
+}
+
 export type OfferedMaterializationRoute =
   | DirectTreeMaterializationRoute
   | DirectAtomicMaterializationRoute
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
+  | DirectResumableZipMaterializationRoute
 
 export type MaterializationRouteIdentity =
   | Readonly<{ kind: 'direct'; targetRouteId: string }>
@@ -285,13 +347,29 @@ export type MaterializationRouteIdentity =
       handoffTargetRouteId: string
     }>
 
-export interface ArtifactChoice {
-  readonly kind: 'artifact-choice'
-  readonly operation: ArtifactOperation
-  readonly artifactKind: ArtifactSpec['kind']
-  readonly recovery: RecoverySemantics
-  readonly preparation: PreparationRequirement
-  readonly plan: OfferedMaterializationPlanSemantics
+export type ArtifactChoiceSemantics = Readonly<{
+  kind: 'artifact-choice'
+  operation: ArtifactOperation
+  artifactKind: ArtifactSpec['kind']
+  recovery: RecoverySemantics
+  preparation: PreparationRequirement
+  plan: OfferedMaterializationPlanSemantics
+}>
+
+export interface StableArtifactChoiceIdentity {
+  readonly choiceIdentity: ArtifactChoiceIdentity
+  readonly choiceId: ArtifactChoiceID
+}
+
+export interface ArtifactChoice extends ArtifactChoiceSemantics, StableArtifactChoiceIdentity {}
+
+export type ProjectedByteCount =
+  | Readonly<{ kind: 'exact'; bytes: bigint }>
+  | Readonly<{ kind: 'estimated-lower-bound'; bytes: bigint }>
+
+export interface ArtifactSizeProjection {
+  readonly raw: ProjectedByteCount
+  readonly artifact: ProjectedByteCount
 }
 
 export interface OfferedArtifactChoice {
@@ -300,9 +378,50 @@ export interface OfferedArtifactChoice {
   readonly route: OfferedMaterializationRoute
   readonly suggestedName: string | null
   readonly importance: 'primary' | 'secondary'
+  readonly sizeProjection: ArtifactSizeProjection
 }
 
-export interface ResolvedArtifactAction {
+export type ZipRouteRecommendationPolicyV1 =
+  | Readonly<{
+      version: 1
+      kind: 'available'
+      workspacePeakBytesThreshold: bigint
+      policyDigest: string
+    }>
+  | Readonly<{
+      version: 1
+      kind: 'unavailable'
+      reason: 'measured-threshold-unavailable' | 'policy-digest-unavailable'
+    }>
+
+export type ZipRouteRecommendation =
+  | Readonly<{
+      kind: 'recommended'
+      choiceId: ArtifactChoiceID
+      reason: 'workspace-within-reviewed-budget' | 'direct-unknown-or-over-budget'
+    }>
+  | Readonly<{
+      kind: 'no-recommendation'
+      reason:
+        | 'only-one-route-available'
+        | 'no-browser-zip-route'
+        | 'discovery-incomplete'
+        | 'workspace-cost-unavailable'
+        | 'recommendation-policy-unavailable'
+    }>
+
+export interface ZipRouteGroup {
+  readonly kind: 'zip-route-group'
+  readonly primary: OfferedArtifactChoice
+  readonly secondary: OfferedArtifactChoice | null
+  readonly recommendation: ZipRouteRecommendation
+  readonly fallback: Readonly<{
+    kind: 'native-recommended' | 'none'
+    reason?: 'no-supported-browser-zip-route'
+  }>
+}
+
+export interface ResolvedArtifactAction extends StableArtifactChoiceIdentity {
   readonly kind: 'resolved-artifact-action'
   readonly projectionEpoch: ProjectionEpoch
   readonly selectionDigest: string
@@ -382,6 +501,10 @@ export interface NoSafeDestinationOffer {
     | 'portable-limit-exceeded'
     | 'workspace-limit-exceeded'
   readonly decision: OfferDisabledDecision
+  readonly fallback: Readonly<{
+    kind: 'native-recommended'
+    reason: 'no-supported-browser-zip-route'
+  }>
 }
 
 export interface ArtifactActionsOffer {
@@ -391,6 +514,7 @@ export interface ArtifactActionsOffer {
   readonly selectionDigest: string
   readonly primary: OfferedArtifactChoice
   readonly alternatives: readonly OfferedArtifactChoice[]
+  readonly zip: ZipRouteGroup | null
   readonly decision: OfferComputedDecision
 }
 

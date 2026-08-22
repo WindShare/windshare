@@ -23,6 +23,11 @@ import {
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {
+  decodeStoredReceiveOperation,
+  RECEIVE_RECORD_OPERATION,
+} from '../../src/output/workspace/records'
+import type { ArtifactChoiceID } from '../../src/transfer/intent'
+import {
   FSAReceiveOperation,
 } from '../../src/ui/browser-receive/fsa'
 import {
@@ -138,6 +143,34 @@ describe('FSA presentation route activation', () => {
     const directIntent = requireDirectTreeIntent(result.operation.intent)
     await result.operation.plans.openDirectTree(directIntent, new AbortController().signal)
     expect(parent.directoryNames()).toEqual([fsaReservationName(directIntent)])
+    await result.operation.detach()
+  })
+
+  it('persists the immutable pre-click ranking instead of substituting the selected DirectTree choice', async () => {
+    const planning = await planningFixture()
+    const parent = new MemoryDirectory('downloads')
+    const repository = new TestRepository()
+    const secondary = identity(96, 32) as ArtifactChoiceID
+    const ranking = [planning.offered.choice.choiceId, secondary]
+    const route = routeFixture(
+      planning.offered,
+      Promise.resolve(acquiredParent(parent, planning.offered)),
+      parent,
+      repository,
+      {},
+      undefined,
+      ranking,
+    )
+    ranking.splice(1, 1)
+
+    const result = await route.commit(commitInput(planning))
+    if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
+    const records = await repository.listRecords(result.operation.intent.operationId)
+    const record = records.find(candidate => candidate.kind === RECEIVE_RECORD_OPERATION)
+    if (record === undefined) throw new Error('FSA operation record was not persisted')
+    const operation = await decodeStoredReceiveOperation(record)
+    expect(operation.preClickRanking).toEqual([planning.offered.choice.choiceId, secondary])
+    expect(Object.isFrozen(operation.preClickRanking)).toBe(true)
     await result.operation.detach()
   })
 
@@ -480,6 +513,7 @@ describe('FSA output diagnostic correlation', () => {
     if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
     const lifecycle = Object.freeze({
       kind: 'resumable-receive' as const,
+      payloadKind: 'file-set' as const,
       operationId: result.operation.intent.operationId,
       receiveIntentDigest: result.operation.intent.digest,
       generation: 1n,
@@ -527,6 +561,7 @@ describe('FSA output diagnostic correlation', () => {
 
     const fallback = Object.freeze({
       kind: 'resumable-receive' as const,
+      payloadKind: 'file-set' as const,
       operationId: committed.operation.intent.operationId,
       receiveIntentDigest: committed.operation.intent.digest,
       generation: receiving.generation - 1n,

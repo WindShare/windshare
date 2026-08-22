@@ -195,7 +195,11 @@ test('receives an explicit directory artifact from the real sender and relay', a
     expect(joined.browser.runtimeRunId).not.toBe(joined.sender.runtimeRunId)
     expect(detailedTraceConsoleMessages).toEqual([])
 
-    const reconstruction = await page.evaluate(async ({ path, correlation }) => {
+    const reconstructionStorageAvailable = await page.evaluate(() =>
+      typeof (window as typeof window & Readonly<{
+        __windshareReconstructionDirectory?: unknown
+      }>).__windshareReconstructionDirectory === 'function')
+    const reconstructionAttempt = await page.evaluate(async ({ path, correlation }) => {
       const harness = await import(path) as typeof import(
         '../test/browser/diagnostics-reconstruction-harness'
       )
@@ -208,6 +212,17 @@ test('receives an explicit directory artifact from the real sender and relay', a
         requestKind: joined.browser.requestKind,
       },
     })
+    if (reconstructionAttempt.kind === 'unavailable') {
+      expect(reconstructionStorageAvailable).toBe(false)
+      expect(reconstructionAttempt.reason).toBe('origin-private-storage-unavailable')
+      await testInfo.attach('fsa-continuation-reconstruction-capability', {
+        body: JSON.stringify(reconstructionAttempt),
+        contentType: 'application/json',
+      })
+      return
+    }
+    expect(reconstructionStorageAvailable).toBe(true)
+    const reconstruction = reconstructionAttempt.result
     const reconstructionRecords = parseNdjson(reconstruction.bundle)
     const senderArtifact = await stack.senderTraceArtifact(share)
     const senderRecords = parseNdjson(senderArtifact)

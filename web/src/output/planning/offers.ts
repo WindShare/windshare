@@ -8,9 +8,11 @@ import type { ArtifactSpec } from '../../transfer/intent'
 import type {
   ArtifactActionsOffer,
   ArtifactChoice,
+  ArtifactChoiceSemantics,
   ArtifactOffers,
   BrowserHandoffTargetOffer,
   DirectAtomicMaterializationRoute,
+  DirectResumableZipMaterializationRoute,
   DiscoveryState,
   EnvironmentOffers,
   FSADirectoryContainerOffer,
@@ -36,18 +38,23 @@ import {
   artifactRequestedName,
   resultRootLayoutFromProof,
 } from './naming'
+import { resolveArtifactChoiceIdentity } from './reconciliation'
+import { recommendZipRoutes } from './zip-route-recommendation'
 
 type CompleteMaterializationRoute =
   | DirectAtomicMaterializationRoute
+  | DirectResumableZipMaterializationRoute
   | WorkspaceThenPublishMaterializationRoute
   | PortableHandoffMaterializationRoute
 
 interface PlanningArtifactCandidate {
-  readonly choice: ArtifactChoice
+  readonly choice: ArtifactChoiceSemantics
   readonly route: OfferedMaterializationRoute
   readonly artifact: ArtifactSpec | null
   readonly suggestedName: string | null
 }
+type IdentifiedPlanningArtifactCandidate = Omit<PlanningArtifactCandidate, 'choice'> &
+  Readonly<{ choice: ArtifactChoice }>
 
 export async function offerArtifacts(
   projection: SelectionProjectionV1,
@@ -70,13 +77,15 @@ export async function offerArtifacts(
     }
     return disabledProjectionOffer(projection, 'selection-empty', 'selection-empty')
   }
-  const candidates = await deriveArtifactCandidates(projection, environment)
+  const candidates = await Promise.all(
+    (await deriveArtifactCandidates(projection, environment)).map(freezeCandidateIdentity),
+  )
   if (candidates.length === 0) return noSafeDestination(projection, environment)
   if (discovery.kind === 'retryable-failure' &&
       candidates.every((candidate) => candidate.artifact === null)) {
     return disabledProjectionOffer(projection, 'retry-confirmation', 'discovery-retry-required')
   }
-  return artifactActionsOffer(projection, candidates)
+  return artifactActionsOffer(projection, discovery, candidates, environment)
 }
 
 async function deriveArtifactCandidates(
@@ -110,7 +119,7 @@ async function singleFileCandidates(
     sourcePath: file.sourcePath,
     outputName: file.portableName,
   })
-  const completeRoute = chooseCompleteRoute(environment, projection.metrics.byteCountLowerBound)
+  const completeRoute = chooseOriginalFileRoute(environment, projection.metrics.byteCountLowerBound)
   const candidates: PlanningArtifactCandidate[] = []
   if (completeRoute !== null) {
     candidates.push(candidateForCompleteArtifact(original, completeRoute))
@@ -148,8 +157,7 @@ async function treeCandidates(
     }))
   }
   if (layout !== null) {
-    const completeRoute = chooseCompleteRoute(environment, projection.metrics.byteCountLowerBound)
-    if (completeRoute !== null) {
+    for (const completeRoute of chooseZipRoutes(environment, projection.metrics.byteCountLowerBound)) {
       candidates.push(candidateForCompleteArtifact(
         await createZipArchiveArtifact(layout),
         completeRoute,
@@ -159,7 +167,7 @@ async function treeCandidates(
   return Object.freeze(candidates)
 }
 
-function chooseCompleteRoute(
+function chooseOriginalFileRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
 ): CompleteMaterializationRoute | null {
@@ -170,6 +178,35 @@ function chooseCompleteRoute(
   const workspaceRoute = chooseWorkspaceRoute(environment, byteCountLowerBound)
   if (workspaceRoute !== null) return workspaceRoute
   return choosePortableRoute(environment, byteCountLowerBound)
+}
+
+function chooseZipRoutes(
+  environment: EnvironmentOffers,
+  byteCountLowerBound: bigint,
+): readonly CompleteMaterializationRoute[] {
+  const direct = chooseDirectZipRoute(environment, byteCountLowerBound)
+  const workspace = chooseWorkspaceRoute(environment, byteCountLowerBound)
+  const portable = direct === null && workspace === null
+    ? choosePortableRoute(environment, byteCountLowerBound)
+    : null
+  return Object.freeze([
+    ...(direct === null ? [] : [direct]),
+    ...(workspace === null ? [] : [workspace]),
+    ...(portable === null ? [] : [portable]),
+  ])
+}
+
+function chooseDirectZipRoute(
+  environment: EnvironmentOffers,
+  byteCountLowerBound: bigint,
+): DirectResumableZipMaterializationRoute | null {
+  if (environment.directZipSupport.kind !== 'reviewed-supported') return null
+  const target = environment.targets.find((candidate) =>
+    candidate.kind === 'fsa-owned-file-target' &&
+    outputLowerBoundFits(candidate.hardMaximumOutputBytes, byteCountLowerBound))
+  return target?.kind === 'fsa-owned-file-target'
+    ? Object.freeze({ kind: 'direct-resumable-zip', target })
+    : null
 }
 
 function chooseDirectoryTarget(
@@ -248,6 +285,7 @@ function recoveryForCompleteRoute(route: CompleteMaterializationRoute): Recovery
     case 'direct-atomic': return 'restart-required'
     case 'workspace-then-publish': return 'workspace-resumable'
     case 'portable-handoff': return 'none'
+    case 'direct-resumable-zip': return 'checkpoint-resumable'
   }
 }
 
@@ -265,6 +303,8 @@ function preparationForCompleteRoute(
       })
     case 'portable-handoff':
       return Object.freeze({ manifest: 'exact-artifact', hardAdmission: 'portable-artifact' })
+    case 'direct-resumable-zip':
+      return noPreparation()
   }
 }
 
@@ -295,12 +335,29 @@ function createCandidate(input: Readonly<{
 
 function artifactActionsOffer(
   projection: SelectionProjectionV1,
-  candidates: readonly PlanningArtifactCandidate[],
+  discovery: DiscoveryState,
+  candidates: readonly IdentifiedPlanningArtifactCandidate[],
+  environment: EnvironmentOffers,
 ): ArtifactActionsOffer {
-  const [first, ...rest] = candidates
+  const [first] = candidates
   if (first === undefined) throw new TypeError('artifact choice list is empty')
-  const primary = offeredChoice(first, 'primary')
-  const alternatives = Object.freeze(rest.map((candidate) => offeredChoice(candidate, 'secondary')))
+  const initiallyOffered = candidates.map((candidate, index) =>
+    offeredChoice(candidate, index === 0 ? 'primary' : 'secondary', projection, discovery))
+  const zipChoices = initiallyOffered.filter((choice) => choice.choice.artifactKind === 'zip-archive')
+  const zip = recommendZipRoutes({
+    direct: zipChoices.find((choice) => choice.route.kind === 'direct-resumable-zip') ?? null,
+    workspace: zipChoices.find((choice) => choice.route.kind === 'workspace-then-publish') ?? null,
+    portable: zipChoices.find((choice) => choice.route.kind === 'portable-handoff') ?? null,
+    discoveryComplete: discovery.kind === 'complete',
+    workspaceCost: projection.workspaceCostObservation ?? null,
+    policy: environment.zipRecommendationPolicy,
+  })
+  const nonZip = initiallyOffered.filter((choice) => choice.choice.artifactKind !== 'zip-archive')
+  const orderedZip = zip === null ? [] : [zip.primary, ...(zip.secondary === null ? [] : [zip.secondary])]
+  const ordered = [...nonZip, ...orderedZip]
+  const primary = Object.freeze({ ...ordered[0]!, importance: 'primary' as const })
+  const alternatives = Object.freeze(ordered.slice(1).map((choice) =>
+    Object.freeze({ ...choice, importance: 'secondary' as const })))
   const all = [primary, ...alternatives]
   return Object.freeze({
     kind: 'artifact-actions',
@@ -309,6 +366,7 @@ function artifactActionsOffer(
     selectionDigest: projection.selectionDigest,
     primary,
     alternatives,
+    zip,
     decision: Object.freeze({
       name: 'receive.offer.computed',
       projection_epoch: projection.epoch,
@@ -321,8 +379,10 @@ function artifactActionsOffer(
 }
 
 function offeredChoice(
-  candidate: PlanningArtifactCandidate,
+  candidate: IdentifiedPlanningArtifactCandidate,
   importance: OfferedArtifactChoice['importance'],
+  projection: SelectionProjectionV1,
+  discovery: DiscoveryState,
 ): OfferedArtifactChoice {
   return Object.freeze({
     kind: 'offered-artifact-choice',
@@ -330,7 +390,43 @@ function offeredChoice(
     route: candidate.route,
     suggestedName: candidate.suggestedName,
     importance,
+    sizeProjection: sizeProjection(candidate, projection, discovery),
   })
+}
+
+async function freezeCandidateIdentity(
+  candidate: PlanningArtifactCandidate,
+): Promise<IdentifiedPlanningArtifactCandidate> {
+  const identity = await resolveArtifactChoiceIdentity(candidate.choice)
+  return Object.freeze({
+    ...candidate,
+    choice: Object.freeze({ ...candidate.choice, ...identity }),
+  })
+}
+
+function sizeProjection(
+  candidate: IdentifiedPlanningArtifactCandidate,
+  projection: SelectionProjectionV1,
+  discovery: DiscoveryState,
+) {
+  const raw = Object.freeze({
+    kind: discovery.kind === 'complete' ? 'exact' as const : 'estimated-lower-bound' as const,
+    bytes: projection.metrics.byteCountLowerBound,
+  })
+  // Workspace packaging evidence cannot prove the byte layout of a distinct direct ZIP target.
+  const observedPackage = candidate.choice.artifactKind === 'zip-archive' &&
+    candidate.route.kind !== 'direct-resumable-zip'
+    ? projection.workspaceCostObservation?.packageBytes
+    : undefined
+  const artifact = observedPackage === undefined
+    ? Object.freeze({
+        kind: candidate.choice.artifactKind === 'zip-archive'
+          ? 'estimated-lower-bound' as const
+          : raw.kind,
+        bytes: projection.metrics.byteCountLowerBound,
+      })
+    : Object.freeze({ kind: 'exact' as const, bytes: observedPackage })
+  return Object.freeze({ raw, artifact })
 }
 
 function disabledProjectionOffer(
@@ -360,6 +456,10 @@ function noSafeDestination(
     projectionEpoch: projection.epoch,
     selectionDigest: projection.selectionDigest,
     reason,
+    fallback: Object.freeze({
+      kind: 'native-recommended',
+      reason: 'no-supported-browser-zip-route',
+    }),
     decision: disabledDecision(projection, reason, hardLimitClass),
   })
 }

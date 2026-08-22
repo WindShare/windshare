@@ -16,6 +16,18 @@ export type RestartRequiredReason =
   | 'source-revision-changed'
   | 'preparation-invalidated'
   | 'content-session-ended'
+  | 'target-deleted'
+export type DirectZipCheckpointPhase = 'between-members' | 'inside-member' | 'closing'
+export type RecoveryGateKind =
+  | 'authorization-required'
+  | 'target-verification-required'
+  | 'destination-space-required'
+export type RetainedLifecycleKind =
+  | 'resumable-receive'
+  | 'resumable-package'
+  | 'waiting-to-save'
+  | 'download-started'
+  | RecoveryGateKind
 export type PartialDirectoryReason = 'failures' | 'stopped'
 export type PreparationAdmissionReason =
   | 'entry-limit'
@@ -60,6 +72,9 @@ export const RECEIVE_STATE_RESTART_REQUIRED = 17 as const
 export const RECEIVE_STATE_DISCARDED = 18 as const
 export const RECEIVE_STATE_EXPIRED = 19 as const
 export const RECEIVE_STATE_NEEDS_ATTENTION = 20 as const
+export const RECEIVE_STATE_AUTHORIZATION_REQUIRED = 21 as const
+export const RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED = 22 as const
+export const RECEIVE_STATE_DESTINATION_SPACE_REQUIRED = 23 as const
 
 export type ReceiveStateByte =
   | typeof RECEIVE_STATE_INTENT_FROZEN
@@ -82,6 +97,9 @@ export type ReceiveStateByte =
   | typeof RECEIVE_STATE_DISCARDED
   | typeof RECEIVE_STATE_EXPIRED
   | typeof RECEIVE_STATE_NEEDS_ATTENTION
+  | typeof RECEIVE_STATE_AUTHORIZATION_REQUIRED
+  | typeof RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED
+  | typeof RECEIVE_STATE_DESTINATION_SPACE_REQUIRED
 
 interface LifecycleStateBase {
   readonly operationId: string
@@ -95,11 +113,21 @@ export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & { kind: 'receiving'; activeLeaseId: string }>
   | Readonly<LifecycleStateBase & {
       kind: 'resumable-receive'
+      payloadKind: 'file-set'
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
       expiresAt: number
       partialReceiptDigest?: string
+    }>
+  | Readonly<LifecycleStateBase & {
+      kind: 'resumable-receive'
+      payloadKind: 'direct-zip'
+      directZipCheckpointDigest: string
+      safeSelectedPayloadBytes: bigint
+      committedArchiveLength: bigint
+      checkpointPhase: DirectZipCheckpointPhase
+      expiresAt: number
     }>
   | Readonly<LifecycleStateBase & { kind: 'finalizing-tree'; activeLeaseId: string }>
   | Readonly<LifecycleStateBase & { kind: 'committing-atomic'; activeLeaseId: string }>
@@ -173,7 +201,7 @@ export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & { kind: 'discarded'; cleanupReceiptDigest: string }>
   | Readonly<LifecycleStateBase & {
       kind: 'expired'
-      priorStableState: 'resumable-receive' | 'resumable-package' | 'waiting-to-save' | 'download-started'
+      priorStableState: RetainedLifecycleKind
       expiresAt: number
       cleanupState: OwnedCleanupState
       expiryReceiptDigest: string
@@ -182,6 +210,11 @@ export type ReceiveLifecycleState =
       kind: 'needs-attention'
       reason: NeedsAttentionReason
       lastVerifiedRecordDigest: string
+    }>
+  | Readonly<LifecycleStateBase & {
+      kind: RecoveryGateKind
+      recoveryGateDigest: string
+      expiresAt: number
     }>
 
 type StatePayload<T> = T extends LifecycleStateBase
@@ -246,6 +279,9 @@ export function receiveStateByte(state: ReceiveLifecycleState): ReceiveStateByte
     case 'discarded': return RECEIVE_STATE_DISCARDED
     case 'expired': return RECEIVE_STATE_EXPIRED
     case 'needs-attention': return RECEIVE_STATE_NEEDS_ATTENTION
+    case 'authorization-required': return RECEIVE_STATE_AUTHORIZATION_REQUIRED
+    case 'target-verification-required': return RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED
+    case 'destination-space-required': return RECEIVE_STATE_DESTINATION_SPACE_REQUIRED
   }
 }
 
@@ -254,6 +290,9 @@ export function lifecycleDeadline(state: ReceiveLifecycleState): number | undefi
     case 'resumable-receive':
     case 'resumable-package':
     case 'waiting-to-save':
+    case 'authorization-required':
+    case 'target-verification-required':
+    case 'destination-space-required':
       return state.expiresAt
     case 'download-started':
       return state.attemptKind === 'workspace' ? state.retryableUntil : undefined

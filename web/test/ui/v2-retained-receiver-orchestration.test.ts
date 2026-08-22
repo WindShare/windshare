@@ -158,7 +158,9 @@ describe('v2 receiver product orchestration', () => {
     })
 
     controller.toggleSelection(row.id)
-    controller.chooseArtifact(presentation.primary.operation)
+    const defaultChoice = presentation.defaultChoices[0]
+    if (defaultChoice === undefined) throw new Error('default choice was not presented')
+    controller.chooseArtifact(defaultChoice.choice.choiceId)
     controller.performRetainedAction(operation, 'discard')
 
     expect(controller.getSnapshot().rows[0]?.selection).toBe(row.selection)

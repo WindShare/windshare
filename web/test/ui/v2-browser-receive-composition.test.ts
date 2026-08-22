@@ -87,7 +87,7 @@ describe('browser production receive composition', () => {
         previousObservation: null,
       })
       if (resolution.kind !== 'resolved') throw new Error(`${routeKind} choice did not resolve`)
-      const authority = composition.startArtifactAuthority(offered)
+      const authority = composition.startArtifactAuthority(offered, [offered.choice.choiceId])
       await authority.ready
       const freezeAtFence = vi.fn()
 
@@ -131,6 +131,19 @@ describe('browser production receive composition', () => {
       'browser-handoff',
     ])
     expect(environment.workspace?.quotaAvailabilityEstimateBytes).toBeNull()
+    expect(environment.portable?.kind).toBe('portable-memory')
+  })
+
+  it('offers only portable handoff when picker and origin-private storage are unavailable', async () => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(windowPort, 'showDirectoryPicker', { value: undefined })
+    Object.defineProperty(windowPort.navigator.storage, 'getDirectory', { value: undefined })
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    const environment = await composition.environment(new AbortController().signal)
+
+    expect(environment.targets.map(target => target.kind)).toEqual(['browser-handoff'])
+    expect(environment.workspace).toBeNull()
     expect(environment.portable?.kind).toBe('portable-memory')
   })
 
@@ -215,7 +228,7 @@ describe('browser production receive composition', () => {
     if (offered === undefined || offered.route.kind !== 'workspace-then-publish') {
       throw new Error('workspace choice was not offered')
     }
-    const authority = composition.startArtifactAuthority(offered)
+    const authority = composition.startArtifactAuthority(offered, [offered.choice.choiceId])
     await authority.ready
     await authority.release('stable route identity proven')
 
@@ -229,7 +242,8 @@ describe('browser production receive composition', () => {
         }),
       }),
     })
-    expect(() => composition.startArtifactAuthority(foreign)).toThrowError(DOMException)
+    expect(() => composition.startArtifactAuthority(foreign, [foreign.choice.choiceId]))
+      .toThrowError(DOMException)
     expect(picker).not.toHaveBeenCalled()
   })
 
@@ -283,6 +297,7 @@ describe('browser production receive composition', () => {
   it('turns an elapsed stable deadline into cleanup-only inventory', async () => {
     const source = new FakeResumeSource([receiveLifecycle(20, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: identity(21, 32),
       completedFileCount: 3n,
       completedBytes: 512n,
@@ -309,6 +324,7 @@ describe('browser production receive composition', () => {
   it('keeps the live resume reference until expiry cleanup consumes the exact inventory token', async () => {
     const source = new FakeResumeSource([receiveLifecycle(22, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: identity(23, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
@@ -362,6 +378,7 @@ describe('browser production receive composition', () => {
   it('enables Continue and authority-owned discard only when mutation authority is installed', async () => {
     const source = new FakeResumeSource([receiveLifecycle(26, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: identity(27, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
@@ -449,6 +466,7 @@ describe('browser retained continuation composition', () => {
     async (kind) => {
       const source = new FakeResumeSource([receiveLifecycle(40, {
         kind: 'resumable-receive',
+      payloadKind: 'file-set',
         checkpointSetDigest: identity(41, 32),
         completedFileCount: 1n,
         completedBytes: 64n,
@@ -502,6 +520,7 @@ describe('browser retained continuation composition', () => {
   it('records retained workspace ownership attention without restoring the continuation', async () => {
     const fallback = receiveLifecycle(41, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: identity(42, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
@@ -707,6 +726,7 @@ describe('browser output attempt ownership', () => {
     const source = new FakeResumeSource([
       receiveLifecycle(48, {
         kind: 'resumable-receive',
+      payloadKind: 'file-set',
         checkpointSetDigest: identity(49, 32),
         completedFileCount: 1n,
         completedBytes: 64n,
@@ -833,7 +853,7 @@ describe('browser output attempt ownership', () => {
       .find(candidate => candidate.route.kind === 'direct-tree')
     if (choice === undefined) throw new Error('FSA DirectTree choice was not offered')
 
-    const authority = composition.startArtifactAuthority(choice)
+    const authority = composition.startArtifactAuthority(choice, [choice.choice.choiceId])
     inActionStack = false
 
     expect(picker).toHaveBeenCalledTimes(1)
@@ -858,7 +878,8 @@ describe('browser output attempt ownership', () => {
       .find(candidate => candidate.route.kind === 'direct-tree')
     if (choice === undefined) throw new Error('FSA DirectTree choice was not offered')
 
-    expect(() => composition.startArtifactAuthority(choice)).toThrowError(expect.objectContaining({
+    expect(() => composition.startArtifactAuthority(choice, [choice.choice.choiceId]))
+      .toThrowError(expect.objectContaining({
       outcome: 'picker_refused',
       cause: refusal,
     }))
@@ -903,12 +924,14 @@ describe('browser output attempt ownership', () => {
 
     const first = composition.startArtifactAuthority(
       choice,
+      [choice.choice.choiceId],
       attempts[0]!.failures.sinks,
     )
     await expect(first.ready).rejects.toMatchObject({ outcome: 'picker_refused' })
 
     const second = composition.startArtifactAuthority(
       choice,
+      [choice.choice.choiceId],
       attempts[1]!.failures.sinks,
     )
     await expect(second.ready).rejects.toBeInstanceOf(DOMException)
@@ -976,7 +999,7 @@ describe('browser output attempt ownership', () => {
       previousObservation: null,
     })
     if (resolution.kind !== 'resolved') throw new Error('portable choice did not resolve')
-    const authority = composition.startArtifactAuthority(choice)
+    const authority = composition.startArtifactAuthority(choice, [choice.choice.choiceId])
     await authority.ready
     const committed = await authority.commit({
       action: resolution.action,
@@ -1125,6 +1148,7 @@ function retainedLifecycles(): readonly ReceiveLifecycleState[] {
   return Object.freeze([
     receiveLifecycle(1, {
       kind: 'resumable-receive',
+      payloadKind: 'file-set',
       checkpointSetDigest: identity(30, 32),
       completedFileCount: 2n,
       completedBytes: 256n,

@@ -6,7 +6,7 @@ import { isWorkspaceTerminal } from './shared'
 
 export type WorkspaceReceiveAdmissionFallback = Extract<
   ReceiveLifecycleState,
-  { kind: 'resumable-receive' }
+  { kind: 'resumable-receive'; payloadKind: 'file-set' }
 >
 
 interface WorkspaceExecutionAdmissionSettlementPort {

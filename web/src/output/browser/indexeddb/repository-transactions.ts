@@ -23,6 +23,7 @@ import {
 } from '../../persistence/journal'
 import {
   operationRecordId,
+  receiveOperationLeaseId,
   RECEIVE_RECORD_LIFECYCLE_STATE,
   validatePersistedReceiveRecord,
   validateReceiveOperationLeaseRecord,
@@ -380,9 +381,7 @@ export async function assertOperationConcurrency(
       transition.operationId,
       RECEIVE_RECORD_LIFECYCLE_STATE,
     ))),
-    requestResult<unknown>(leases.get(
-      `windshare/receive-operation/v1/${transition.operationId}/lease`,
-    )),
+    requestResult<unknown>(leases.get(receiveOperationLeaseId(transition.operationId))),
   ])
   const lifecycle = lifecycleValue === undefined
     ? undefined
@@ -477,7 +476,7 @@ export function applyOperationTransition(
   for (const handle of transition.handles) handles.put(handle)
   if (transition.lease?.kind === 'put') leases.put(transition.lease.record)
   else if (transition.lease?.kind === 'delete') {
-    leases.delete(`windshare/receive-operation/v1/${transition.operationId}/lease`)
+    leases.delete(receiveOperationLeaseId(transition.operationId))
   }
 }
 
