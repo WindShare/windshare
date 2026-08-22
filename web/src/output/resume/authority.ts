@@ -1,5 +1,6 @@
 import type { OutputFailureSinks } from '../diagnostics'
 import type { ReceiveLifecycleState } from '../workspace/state'
+import type { DirectZipBootstrapResumeDescriptorV1 } from '../direct-zip/journal/repository'
 import {
   assertReceiveOperationCanContinue,
   receiveOperationResumeDescriptor,
@@ -11,6 +12,7 @@ export interface ResumeOperationClock {
 }
 
 export interface ReceiveOperationResumeSource {
+  listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
 }
 
@@ -75,11 +77,17 @@ export class ReceiveOperationResumeRef {
 
 export class ReceiveOperationResumeInventory {
   readonly operations: readonly ReceiveOperationResumeRef[]
+  readonly directZipBootstrapCandidates: readonly DirectZipBootstrapResumeDescriptorV1[]
   readonly #owner: ResumeReferenceOwner
 
-  constructor(owner: ResumeReferenceOwner, operations: readonly ReceiveOperationResumeRef[]) {
+  constructor(
+    owner: ResumeReferenceOwner,
+    operations: readonly ReceiveOperationResumeRef[],
+    directZipBootstrapCandidates: readonly DirectZipBootstrapResumeDescriptorV1[] = [],
+  ) {
     this.#owner = owner
     this.operations = Object.freeze([...operations])
+    this.directZipBootstrapCandidates = Object.freeze([...directZipBootstrapCandidates])
   }
 
   close(): void {
@@ -105,6 +113,10 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
 
   async listResumeState(): Promise<ReceiveOperationResumeInventory> {
     const now = this.#clock.now()
+    // Pre-intent filesystem effects must be surfaced before intent-backed retained work.
+    const directZipBootstrapCandidates = this.#source.listDirectZipBootstrapCandidates === undefined
+      ? []
+      : await this.#source.listDirectZipBootstrapCandidates()
     const lifecycles = await this.#source.listLifecycleStates()
     const owner: ResumeReferenceOwner = { open: true }
     const references: ReceiveOperationResumeRef[] = []
@@ -117,7 +129,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     }
     references.sort((left, right) =>
       left.descriptor.operationId.localeCompare(right.descriptor.operationId))
-    return new ReceiveOperationResumeInventory(owner, references)
+    return new ReceiveOperationResumeInventory(owner, references, directZipBootstrapCandidates)
   }
 
   async resume(
@@ -139,6 +151,20 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   ): Promise<ReceiveOperationDiscardResult> {
     const descriptor = this.#consume(reference)
     return this.#mutations.discard(descriptor, failures)
+  }
+
+  async cleanup(
+    reference: ReceiveOperationResumeRef,
+    failures?: OutputFailureSinks,
+  ): Promise<TResult> {
+    const descriptor = this.#consume(reference)
+    if (descriptor.continuation !== 'cleanup-expired' &&
+        descriptor.continuation !== 'retry-cleanup') {
+      throw new DOMException('Receive operation has no retained cleanup authority', 'InvalidStateError')
+    }
+    // Expiry owns the cleanup-purpose reopen. Keeping that cut behind this
+    // single-use reference prevents presentation from replaying a descriptor.
+    return this.#mutations.expire(descriptor, failures)
   }
 
   async catchUp(

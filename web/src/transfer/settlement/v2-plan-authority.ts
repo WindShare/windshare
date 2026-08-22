@@ -7,6 +7,7 @@ import {
 import {
   validateReceiveIntent,
   type DirectAtomicPlan,
+  type DirectResumableZipPlan,
   type DirectTreePlan,
   type OriginalFileArtifact,
   type PortableHandoffPlan,
@@ -17,6 +18,7 @@ import {
 import {
   validatePlanExecutionBinding,
   type DirectAtomicExecution,
+  type DirectResumableZipExecution,
   type DirectTreeExecution,
   type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
@@ -32,6 +34,10 @@ const U64_MAXIMUM = 0xffff_ffff_ffff_ffffn
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
 type DirectAtomicIntent = ReceiveIntent & Readonly<{ plan: DirectAtomicPlan }>
+type DirectResumableZipIntent = ReceiveIntent & Readonly<{
+  plan: DirectResumableZipPlan
+  artifact: ZipArchiveArtifact
+}>
 type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
   plan: WorkspaceThenPublishPlan
   artifact: OriginalFileArtifact
@@ -50,6 +56,13 @@ export interface V2DirectTreeExecutionRoute {
 
 export interface V2DirectAtomicExecutionRoute {
   open(intent: DirectAtomicIntent, signal: AbortSignal): Promise<DirectAtomicExecution>
+}
+
+export interface V2DirectResumableZipExecutionRoute {
+  open(
+    intent: DirectResumableZipIntent,
+    signal: AbortSignal,
+  ): Promise<DirectResumableZipExecution>
 }
 
 export interface V2WorkspaceOriginalExecutionRoute {
@@ -103,6 +116,7 @@ export interface V2ExecutionAdmissionLifecycle {
 export interface V2PlanExecutionRouteRegistry {
   readonly directTree?: V2DirectTreeExecutionRoute
   readonly directAtomic?: V2DirectAtomicExecutionRoute
+  readonly directResumableZip?: V2DirectResumableZipExecutionRoute
   readonly workspaceOriginal?: V2WorkspaceOriginalExecutionRoute
   readonly workspaceZip?: V2WorkspaceZipExecutionRoute
   readonly portableOriginal?: V2PortableOriginalExecutionRoute
@@ -161,6 +175,14 @@ export async function createV2PlanExecutionAuthority(input: {
     openDirectAtomic: async (supplied, signal) => {
       const intent = await claim(supplied, 'direct-atomic', signal)
       const route = routes.directAtomic
+      if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
+      const execution = validatePlanExecutionBinding(intent, await route.open(intent, signal))
+      signal.throwIfAborted()
+      return execution
+    },
+    openDirectResumableZip: async (supplied, signal) => {
+      const intent = await claim(supplied, 'direct-resumable-zip', signal)
+      const route = routes.directResumableZip
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
       const execution = validatePlanExecutionBinding(intent, await route.open(intent, signal))
       signal.throwIfAborted()
@@ -246,6 +268,9 @@ function snapshotRouteRegistry(input: V2PlanExecutionRouteRegistry): V2PlanExecu
     ...(input.directAtomic === undefined
       ? {}
       : { directAtomic: snapshotRoute(input.directAtomic, 'open') }),
+    ...(input.directResumableZip === undefined
+      ? {}
+      : { directResumableZip: snapshotRoute(input.directResumableZip, 'open') }),
     ...(input.workspaceOriginal === undefined
       ? {}
       : { workspaceOriginal: snapshotRoute(input.workspaceOriginal, 'admit') }),
@@ -401,6 +426,7 @@ function planBindingDigest(intent: ReceiveIntent): string {
     case 'direct-atomic': return intent.plan.reservation.digest
     case 'workspace-then-publish': return intent.plan.workspace.digest
     case 'portable-handoff': return intent.plan.portable.digest
+    case 'direct-resumable-zip': return intent.plan.binding.digest
   }
 }
 

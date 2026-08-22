@@ -9,6 +9,7 @@ import {
   FakeGateway,
   FakeJoinedShare,
   FakeReceiveComposition,
+  DIRECT_ZIP_ENVIRONMENT,
   FILE_ID,
   MANAGED_ENVIRONMENT,
   NO_DESTINATION_ENVIRONMENT,
@@ -38,7 +39,7 @@ describe('v2 receiver active operation orchestration', () => {
 
     let inClickStack = true
     receive.clickStack = () => inClickStack
-    controller.chooseArtifact('download-original')
+    choosePrimary(controller)
     inClickStack = false
 
     expect(receive.authorityStartStacks).toEqual([true])
@@ -70,6 +71,33 @@ describe('v2 receiver active operation orchestration', () => {
 
     await controller.dispose()
     expect(runtime.detachments).toEqual(['detached'])
+  })
+
+  it('starts a fresh planning operation after the owned Direct ZIP target is deleted', async () => {
+    const receive = new FakeReceiveComposition(DIRECT_ZIP_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true, [], 'tree')
+    const controller = controllerFor(joined, receive)
+    await startTransfer(controller, joined)
+    const runtime = receive.startedAuthorities[0]?.runtime
+    const run = joined.transferRuns[0]
+    if (runtime === undefined || run === undefined) throw new Error('Direct ZIP receive was not started')
+    run.resolve(next(runtime.lifecycle, {
+      kind: 'restart-required',
+      reason: 'target-deleted',
+      receiptDigest: identityText(77, 32),
+    }))
+    await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'restart-required')
+    const projectionCount = joined.projectionRequests.length
+
+    controller.startNewReceiveOperation()
+    await waitFor(() => joined.projectionRequests.length === projectionCount + 1)
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
+
+    expect(runtime.detachments).toEqual(['detached'])
+    expect(controller.getSnapshot().output.receiveIntent).toBeNull()
+    expect(controller.getSnapshot().output.lifecycle).toBeNull()
+    expect(receive.startedAuthorities).toHaveLength(1)
+    await controller.dispose()
   })
 
   it('fences a stale catalog projection when selection mutation starts a new epoch', async () => {
@@ -108,7 +136,7 @@ describe('v2 receiver active operation orchestration', () => {
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
 
     joined.replaceProtocolSession(identityText(4))
-    controller.chooseArtifact('download-original')
+    choosePrimary(controller)
 
     expect(receive.startedAuthorities).toHaveLength(0)
     await waitFor(() => controller.getSnapshot().output.projection?.projection.epoch === 2n)
@@ -129,7 +157,7 @@ describe('v2 receiver active operation orchestration', () => {
     const controller = controllerFor(joined, receive)
 
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
-    controller.chooseArtifact('download-original')
+    choosePrimary(controller)
     joined.replaceProtocolSession(identityText(5))
     await waitFor(() => (receive.startedAuthorities[0]?.releaseReasons.length ?? 0) > 0)
     await waitFor(() => {
@@ -163,7 +191,7 @@ describe('v2 receiver active operation orchestration', () => {
     controller.initialize({ capabilityInput: 'first', pageUrl: 'https://receiver.invalid/s/share' })
 
     await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
-    controller.chooseArtifact('download-original')
+    choosePrimary(controller)
     const late = receive.startedAuthorities[0]
     if (late === undefined) throw new Error('authority was not installed synchronously')
     controller.submitKey('second')
@@ -292,6 +320,12 @@ describe('v2 receiver active operation orchestration', () => {
     await controller.dispose()
   })
 })
+
+function choosePrimary(controller: V2ReceiverController): void {
+  const offers = controller.getSnapshot().output.offers
+  if (offers?.kind !== 'artifact-actions') throw new Error('primary artifact choice is unavailable')
+  controller.chooseArtifact(offers.primary.choice.choiceId)
+}
 
 describe('v2 receive attempt observability', () => {
   it('links detach cleanup after the sealed native transfer trigger without reopening contributors', async () => {

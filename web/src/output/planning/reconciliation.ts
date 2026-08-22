@@ -1,12 +1,14 @@
 import {
+  createArtifactChoiceIdentity,
   createOriginalFileArtifact,
   createResultRootDirectoryTreeArtifact,
   createSingleFileDirectoryTreeArtifact,
   createZipArchiveArtifact,
 } from '../../transfer/intent'
-import type { ArtifactSpec } from '../../transfer/intent'
+import type { ArtifactSpec, GuaranteeProfile } from '../../transfer/intent'
 import type {
   ArtifactChoice,
+  ArtifactChoiceSemantics,
   ArtifactResolutionObservation,
   DiscoveryState,
   EnvironmentOffers,
@@ -16,6 +18,7 @@ import type {
   ResolvedArtifactAction,
   RetryableDiscoveryReason,
   SelectionProjectionV1,
+  StableArtifactChoiceIdentity,
 } from './contracts'
 import {
   assertEnvironmentOffers,
@@ -114,17 +117,55 @@ export async function reconcileArtifactChoice(input: Readonly<{
   const eligibleRoutes = semanticRoutes.filter((route) =>
     routeFitsLowerBound(route, input.projection.metrics.byteCountLowerBound))
   if (eligibleRoutes.length === 0) return invalidated('hard-limit-exceeded', observation)
-  const route = preferRoute(eligibleRoutes, input.preferredRoute)
+  const route = preferredRoute(eligibleRoutes, input.preferredRoute)
+  if (route === null) return invalidated('semantic-route-unavailable', observation)
+  const stableChoice = await resolveArtifactChoiceIdentity(input.choice)
+  if (stableChoice.choiceId !== input.choice.choiceId) {
+    throw new TypeError('artifact choice identity does not match its frozen semantics')
+  }
   const action: ResolvedArtifactAction = Object.freeze({
     kind: 'resolved-artifact-action',
     projectionEpoch: input.projection.epoch,
     selectionDigest: input.projection.selectionDigest,
     resolvedArtifactDigest: derivation.artifact.digest,
     choice: input.choice,
+    ...stableChoice,
     route,
     artifact: derivation.artifact,
   })
   return Object.freeze({ kind: 'resolved', action, observation })
+}
+
+export async function resolveArtifactChoiceIdentity(
+  choice: ArtifactChoiceSemantics,
+): Promise<StableArtifactChoiceIdentity> {
+  const choiceIdentity = await createArtifactChoiceIdentity({
+    artifactKind: choice.artifactKind,
+    materializationKind: choice.plan.kind,
+    guaranteeProfile: choiceGuaranteeProfile(choice.plan),
+    preparation: choice.preparation.manifest,
+  })
+  return Object.freeze({ choiceIdentity, choiceId: choiceIdentity.id })
+}
+
+export function sameStableArtifactChoiceIdentity(
+  left: StableArtifactChoiceIdentity,
+  right: StableArtifactChoiceIdentity,
+): boolean {
+  return left.choiceId === right.choiceId
+}
+
+function choiceGuaranteeProfile(plan: OfferedMaterializationPlanSemantics): GuaranteeProfile {
+  switch (plan.kind) {
+    case 'direct-tree':
+    case 'direct-atomic':
+    case 'direct-resumable-zip':
+      return plan.target.legalProfile
+    case 'workspace-then-publish':
+      return plan.publicationTarget.legalProfile
+    case 'portable-handoff':
+      return plan.handoffTarget.legalProfile
+  }
 }
 
 type ArtifactDerivation =
@@ -230,6 +271,8 @@ function routesWithSemantics(
       return workspaceRoutes(semantics, environment)
     case 'portable-handoff':
       return portableRoutes(semantics, environment)
+    case 'direct-resumable-zip':
+      return directZipRoutes(semantics, environment)
   }
 }
 
@@ -251,6 +294,17 @@ function directAtomicRoutes(
   return Object.freeze(environment.targets.flatMap((target) =>
     target.kind === 'managed-atomic-file-target' && sameTargetSemantics(semantics.target, target)
       ? [Object.freeze({ kind: 'direct-atomic' as const, target })]
+      : []))
+}
+
+function directZipRoutes(
+  semantics: Extract<OfferedMaterializationPlanSemantics, { kind: 'direct-resumable-zip' }>,
+  environment: EnvironmentOffers,
+): readonly OfferedMaterializationRoute[] {
+  if (environment.directZipSupport.kind !== 'reviewed-supported') return Object.freeze([])
+  return Object.freeze(environment.targets.flatMap((target) =>
+    target.kind === 'fsa-owned-file-target' && sameTargetSemantics(semantics.target, target)
+      ? [Object.freeze({ kind: 'direct-resumable-zip' as const, target })]
       : []))
 }
 
@@ -293,6 +347,7 @@ function routeFitsLowerBound(route: OfferedMaterializationRoute, lowerBound: big
   switch (route.kind) {
     case 'direct-tree':
     case 'direct-atomic':
+    case 'direct-resumable-zip':
       return outputLowerBoundFits(route.target.hardMaximumOutputBytes, lowerBound)
     case 'workspace-then-publish':
       return lowerBound <= route.workspace.jobHardLimitBytes &&
@@ -304,12 +359,12 @@ function routeFitsLowerBound(route: OfferedMaterializationRoute, lowerBound: big
   }
 }
 
-function preferRoute(
+function preferredRoute(
   routes: readonly OfferedMaterializationRoute[],
   preferred: MaterializationRouteIdentity,
-): OfferedMaterializationRoute {
+): OfferedMaterializationRoute | null {
   return routes.find((route) =>
-    sameMaterializationRouteIdentity(materializationRouteIdentity(route), preferred)) ?? routes[0]!
+    sameMaterializationRouteIdentity(materializationRouteIdentity(route), preferred)) ?? null
 }
 
 function invalidated(

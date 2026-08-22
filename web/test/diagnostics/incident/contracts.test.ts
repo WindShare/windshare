@@ -380,6 +380,17 @@ describe('incident frozen contracts', () => {
       kind: 'restart-required',
       reason: 'content-session-ended',
     }))).toBe(true)
+    expect(isFailureFact(lifecycleFailureFact({
+      stage: 'reopen',
+      recoveryDisposition: 'retryable',
+      kind: 'authorization-required',
+    }))).toBe(true)
+    expect(isFailureFact(lifecycleFailureFact({
+      stage: 'reopen',
+      recoveryDisposition: 'restart_required',
+      kind: 'restart-required',
+      reason: 'target-deleted',
+    }))).toBe(true)
     expect(() => lifecycleFailureFact({
       stage: 'lifecycle_action',
       recoveryDisposition: 'terminal',

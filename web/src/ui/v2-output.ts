@@ -1,6 +1,7 @@
 import {
   sameArtifactChoiceSemantics,
   type ArtifactChoice,
+  type ArtifactSizeProjection,
   type ArtifactOffers,
   type OfferedArtifactChoice,
   type ResolvedArtifactAction,
@@ -39,6 +40,7 @@ import {
   presentTransferResult,
   type TransferResultPresentation,
 } from './v2-transfer-result'
+import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
 
 const INACTIVE_ACTIVATION: V2AuthorityActivationSnapshot = Object.freeze({ kind: 'inactive' })
 
@@ -50,6 +52,7 @@ export interface V2OutputPresentationSnapshot {
   readonly activation: V2AuthorityActivationSnapshot
   readonly activationPresentation: ArtifactActivationPresentation | null
   readonly chosenChoice: ArtifactChoice | null
+  readonly chosenSizeProjection: ArtifactSizeProjection | null
   readonly resolvedArtifact: ArtifactSpec | null
   readonly receiveIntent: ReceiveIntent | null
   readonly plan: MaterializationPlan | null
@@ -59,6 +62,7 @@ export interface V2OutputPresentationSnapshot {
   readonly expiresAt: number | null
   readonly workspaceUsage: WorkspaceUsage | null
   readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly directZipProgress: V2DirectZipProgressSnapshot | null
   readonly transferResultPresentation: TransferResultPresentation | null
 }
 
@@ -70,6 +74,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   activation: INACTIVE_ACTIVATION,
   activationPresentation: null,
   chosenChoice: null,
+  chosenSizeProjection: null,
   resolvedArtifact: null,
   receiveIntent: null,
   plan: null,
@@ -79,6 +84,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   expiresAt: null,
   workspaceUsage: null,
   activeControls: Object.freeze([]),
+  directZipProgress: null,
   transferResultPresentation: null,
 })
 
@@ -161,6 +167,10 @@ export class V2OutputPresentationController {
       chosenChoice: activationPresentsChoice(activation) ||
         (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
         ? activation.choice
+        : null,
+      chosenSizeProjection: activationPresentsChoice(activation) ||
+        (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
+        ? this.#activeOfferedChoice?.sizeProjection ?? this.#snapshot.chosenSizeProjection
         : null,
       resolvedArtifact: this.#snapshot.receiveIntent?.artifact ?? this.#resolvedAction?.artifact ?? null,
     }))
@@ -297,6 +307,20 @@ export class V2OutputPresentationController {
     return true
   }
 
+  updateDirectZipProgress(progress: V2DirectZipProgressSnapshot): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.plan.kind !== 'direct-resumable-zip' ||
+        progress.operationId !== intent.operationId) return false
+    requireDirectZipProgress(progress)
+    const current = this.#snapshot.directZipProgress
+    if (current !== null && progress.generation <= current.generation) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      directZipProgress: Object.freeze({ ...progress }),
+    }, this.#snapshot.lifecycle, Date.now(), this.#snapshot.workspaceUsage)
+    return true
+  }
+
   updateRepairSummary(
     operationId: string,
     summary: CompatibleNameRepairSummary,
@@ -389,11 +413,12 @@ export class V2OutputPresentationController {
     const lifecyclePresentation = presentReceiveLifecycle({
       state: lifecycle,
       artifact,
-      planKind: plan.kind,
+      plan,
       nowMilliseconds,
       ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
       activeControls: base.activeControls,
       repairSummary: base.repairSummary,
+      directZipProgress: base.directZipProgress,
     })
     return Object.freeze({
       ...base,
@@ -421,6 +446,16 @@ export class V2OutputPresentationController {
   #publish(snapshot: V2OutputPresentationSnapshot): void {
     this.#snapshot = snapshot
     for (const listener of this.#listeners) listener()
+  }
+}
+
+function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
+  if (progress.operationId.length === 0 || progress.generation < 0n ||
+      progress.receivedSelectedBytes < 0n || progress.safeResumeBytes < 0n ||
+      progress.safeResumeBytes > progress.receivedSelectedBytes ||
+      (progress.resumeTemporarySpaceUpperBound !== undefined &&
+       progress.resumeTemporarySpaceUpperBound < 0n)) {
+    throw new TypeError('direct ZIP progress snapshot is invalid')
   }
 }
 

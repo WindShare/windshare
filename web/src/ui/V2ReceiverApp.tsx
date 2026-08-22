@@ -6,6 +6,7 @@ import {
 } from './v2-artifact-presentation'
 import {
   presentCompatibleNameRepair,
+  presentNewReceiveOperation,
   type CompatibleNameRepairPresentation,
   type LifecycleActionPresentation,
 } from './v2-lifecycle-presentation'
@@ -24,6 +25,7 @@ import {
   completionProgressDescription,
   discoveryProgressDescription,
   formatBytes,
+  presentDirectZipProgress,
 } from './v2-progress-presentation'
 
 function SelectionCheckbox(props: {
@@ -115,6 +117,26 @@ function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<
         title: 'Receive can continue',
         description: 'File checkpoints are retained for this task.',
       })
+    case 'resume-direct-zip':
+      return Object.freeze({
+        title: 'ZIP can continue',
+        description: 'The unfinished target and its verified resume position are retained.',
+      })
+    case 'reauthorize-direct-zip':
+      return Object.freeze({
+        title: 'Save authorization required',
+        description: 'Continue from a trusted action to authorize the same saved target.',
+      })
+    case 'verify-direct-zip-target':
+      return Object.freeze({
+        title: 'Saved target must be verified',
+        description: 'A slower ownership check is required before the unfinished ZIP can change.',
+      })
+    case 'retry-direct-zip-space':
+      return Object.freeze({
+        title: 'More destination space is required',
+        description: 'Free space, then retry from the last verified resume position.',
+      })
     case 'resume-package':
       return Object.freeze({
         title: 'Packaging can continue',
@@ -165,6 +187,12 @@ function retainedActionLabel(
       return 'Discard task and delete retained content'
     case 'delete':
       if (operation.continuation === 'cleanup-expired') return 'Delete expired data'
+      if (operation.continuation === 'resume-direct-zip' ||
+          operation.continuation === 'reauthorize-direct-zip' ||
+          operation.continuation === 'verify-direct-zip-target' ||
+          operation.continuation === 'retry-direct-zip-space') {
+        return 'Verify ownership and delete unfinished ZIP'
+      }
       if (operation.continuation === 'retry-cleanup' ||
           (operation.lifecycle.kind === 'published' &&
            operation.lifecycle.cleanupState === 'cleanup-pending')) return 'Retry cleanup'
@@ -393,9 +421,11 @@ function ArtifactChoiceButton(props: {
         className={props.presented.importance === 'primary' ? 'primary-action' : undefined}
         type="button"
         disabled={props.disabled}
-        onClick={() => props.controller.chooseArtifact(props.presented.operation)}
+        onClick={() => props.controller.chooseArtifact(props.presented.choice.choiceId)}
       >{props.presented.label}</button>
       <p>{props.presented.description}</p>
+      <small>{props.presented.selectedBytes}</small>
+      <small>{props.presented.resultBytes}</small>
       {props.presented.packageExplanation !== null && (
         <small>{props.presented.packageExplanation}</small>
       )}
@@ -446,6 +476,7 @@ function ArtifactOfferPanel(props: {
       <div className="output-guidance" role="status">
         <strong>{presentation.title}</strong>
         <p>{presentation.description}</p>
+        {presentation.nativeFallback !== null && <p>{presentation.nativeFallback}</p>}
       </div>
     )
   }
@@ -464,22 +495,50 @@ function ArtifactOfferPanel(props: {
       </div>
     )
   }
+  const zip = presentation.zipMode
   return (
-    <ul className="artifact-action-list" aria-label="Choose the result to receive">
-      <ArtifactChoiceButton
-        presented={presentation.primary}
-        controller={props.controller}
-        disabled={props.disabled}
-      />
-      {presentation.alternatives.map((alternative) => (
-        <ArtifactChoiceButton
-          key={`${alternative.operation}:${alternative.choice.artifactKind}`}
-          presented={alternative}
-          controller={props.controller}
-          disabled={props.disabled}
-        />
-      ))}
-    </ul>
+    <div className="artifact-modes">
+      {presentation.defaultChoices.length > 0 && (
+        <section aria-labelledby="default-result-mode">
+          <strong id="default-result-mode">Original files and folders</strong>
+          <ul className="artifact-action-list" aria-label="Original result choices">
+            {presentation.defaultChoices.map(choice => (
+              <ArtifactChoiceButton
+                key={choice.choice.choiceId}
+                presented={choice}
+                controller={props.controller}
+                disabled={props.disabled}
+              />
+            ))}
+          </ul>
+        </section>
+      )}
+      {zip !== null && (
+        <details className="zip-result-mode" open={presentation.defaultChoices.length === 0}>
+          <summary>Receive as a ZIP package</summary>
+          <p>{zip.description}</p>
+          {zip.kind === 'routes' ? (
+            <>
+              <p>{zip.recommendation}</p>
+              <ul className="artifact-action-list" aria-label="ZIP save routes">
+                <ArtifactChoiceButton
+                  presented={zip.primary}
+                  controller={props.controller}
+                  disabled={props.disabled}
+                />
+                {zip.secondary !== null && (
+                  <ArtifactChoiceButton
+                    presented={zip.secondary}
+                    controller={props.controller}
+                    disabled={props.disabled}
+                  />
+                )}
+              </ul>
+            </>
+          ) : null}
+        </details>
+      )}
+    </div>
   )
 }
 
@@ -526,6 +585,54 @@ function LifecyclePanel(props: {
           ))}
         </div>
       )}
+    </section>
+  )
+}
+
+function DirectZipProgressPanel(props: {
+  readonly output: V2OutputPresentationSnapshot
+}) {
+  const progress = props.output.directZipProgress
+  if (progress === null) return null
+  const selected = props.output.chosenSizeProjection?.raw
+  if (selected === undefined) {
+    return (
+      <div className="progress-panel" aria-live="polite">
+        <strong>{formatBytes(progress.receivedSelectedBytes)} received</strong>
+        <p>If interrupted, resume from {formatBytes(progress.safeResumeBytes)}.</p>
+      </div>
+    )
+  }
+  const presented = presentDirectZipProgress({
+    progress,
+    selectedBytes: selected,
+    lifecycle: props.output.lifecycle,
+  })
+  return (
+    <div className="progress-panel" aria-live="polite">
+      <strong>{presented.primary}</strong>
+      <p>{presented.safeResume}</p>
+      {presented.temporarySpace !== null && <p>{presented.temporarySpace}</p>}
+    </div>
+  )
+}
+
+function NewReceiveOperationPanel(props: {
+  readonly output: V2OutputPresentationSnapshot
+  readonly controller: V2ReceiverController
+}) {
+  const presentation = presentNewReceiveOperation({
+    plan: props.output.plan,
+    lifecycle: props.output.lifecycle,
+  })
+  if (presentation === null) return null
+  return (
+    <section className="new-operation-panel" aria-label={presentation.ariaLabel}>
+      <strong>{presentation.title}</strong>
+      <p>{presentation.description}</p>
+      <button type="button" onClick={() => props.controller.startNewReceiveOperation()}>
+        {presentation.actionLabel}
+      </button>
     </section>
   )
 }
@@ -661,6 +768,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                 disabled={retainedActionPending}
               />
               <LifecyclePanel output={snapshot.output} controller={controller} />
+              <NewReceiveOperationPanel output={snapshot.output} controller={controller} />
               <CompatibleNameRepairPanel
                 repair={snapshot.output.lifecyclePresentation?.compatibleNameRepair ?? null}
               />
@@ -672,7 +780,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                   ))}
                 </div>
               )}
-              {snapshot.progress.transferJobId.length > 0 && (
+              <DirectZipProgressPanel output={snapshot.output} />
+              {snapshot.output.directZipProgress === null && snapshot.progress.transferJobId.length > 0 && (
                 <div className="progress-panel">
                   <strong>{completionProgressDescription(snapshot.progress)}</strong>
                   <p>{discoveryProgressDescription(snapshot.progress)}</p>

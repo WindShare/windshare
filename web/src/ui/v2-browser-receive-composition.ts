@@ -17,12 +17,16 @@ import {
 } from '../output/portable/packaged-handoff'
 import type {
   BrowserHandoffTargetOffer,
+  DirectZipSupportFacts,
+  EnvironmentTargetOfferInput,
   FSADirectoryContainerOffer,
   OfferedArtifactChoice,
   PortableEnvironmentOffer,
   WorkspaceEnvironmentOffer,
+  ZipRouteRecommendationPolicyV1,
 } from '../output/planning'
 import type { WorkspaceStageTraceListener } from '../output/workspace/stages'
+import type { ArtifactChoiceID } from '../transfer/intent'
 import type {
   V2ArtifactPresentationAuthority,
   V2ReceiveCompositionPort,
@@ -46,12 +50,19 @@ import {
   workspaceEnvironmentOffer,
 } from './browser-receive/shared'
 import { startWorkspaceArtifactAuthority } from './browser-receive/workspace-route'
+import {
+  inspectBrowserDirectZipEnvironment,
+  startBrowserDirectZipAuthority,
+  type BrowserDirectZipCompositionPort,
+  type InstalledBrowserDirectZipRoute,
+} from './browser-receive/direct-zip'
 
 export type { BrowserReceiveWindow } from './browser-receive/contracts'
 export type { BrowserRetainedContinuationExecutor } from './browser-receive/retained'
 
 export interface BrowserReceiveCompositionOptions extends BrowserRetainedCompositionOptions {
   readonly onTrace?: WorkspaceStageTraceListener
+  readonly directZip?: BrowserDirectZipCompositionPort
 }
 
 interface InstalledBrowserRouteRegistry {
@@ -60,6 +71,10 @@ interface InstalledBrowserRouteRegistry {
   readonly handoffTarget: BrowserHandoffTargetOffer | null
   readonly workspaceOffer: WorkspaceEnvironmentOffer | null
   readonly portableOffer: PortableEnvironmentOffer | null
+  readonly directZipTarget: EnvironmentTargetOfferInput | null
+  readonly directZipSupport: DirectZipSupportFacts
+  readonly zipRecommendationPolicy: ZipRouteRecommendationPolicyV1 | null
+  readonly installedDirectZip: InstalledBrowserDirectZipRoute | undefined
 }
 
 /**
@@ -70,6 +85,7 @@ export function createBrowserReceiveComposition(
   windowPort: BrowserReceiveWindow,
   options: BrowserReceiveCompositionOptions = {},
 ): V2ReceiveCompositionPort {
+  let installedDirectZip: InstalledBrowserDirectZipRoute | undefined
   const composition: V2ReceiveCompositionPort = {
     retained: Object.freeze({
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
@@ -77,18 +93,26 @@ export function createBrowserReceiveComposition(
         readBrowserCompatibleNameRepairSummary(options, operationId, signal),
     }),
     environment: async (signal) => {
-      const registry = await inspectBrowserRouteRegistry(windowPort, signal)
+      const registry = await inspectBrowserRouteRegistry(windowPort, options.directZip, signal)
+      installedDirectZip = registry.installedDirectZip
       return probeBrowserEnvironment(registry.runtime, {
+        ...(registry.directZipTarget === null ? {} : { targets: [registry.directZipTarget] }),
         ...(registry.workspaceOffer === null ? {} : { workspace: registry.workspaceOffer }),
         ...(registry.portableOffer === null ? {} : { portable: registry.portableOffer }),
+        directZipSupport: registry.directZipSupport,
+        ...(registry.zipRecommendationPolicy === null
+          ? {}
+          : { zipRecommendationPolicy: registry.zipRecommendationPolicy }),
       }).offers
     },
-    startArtifactAuthority: (action, failures) => startProductionAuthority(
+    startArtifactAuthority: (action, preClickRanking, failures) => startProductionAuthority(
       windowPort,
       action,
+      preClickRanking,
       options.onTrace,
       options.outputTrace,
       options.localOutputFailures,
+      installedDirectZip,
       failures,
     ),
   }
@@ -97,6 +121,7 @@ export function createBrowserReceiveComposition(
 
 async function inspectBrowserRouteRegistry(
   windowPort: BrowserReceiveWindow,
+  directZip: BrowserDirectZipCompositionPort | undefined,
   signal: AbortSignal,
 ): Promise<InstalledBrowserRouteRegistry> {
   signal.throwIfAborted()
@@ -121,12 +146,28 @@ async function inspectBrowserRouteRegistry(
     ? workspaceEnvironmentOffer(await quotaAvailability(windowPort.navigator.storage, signal))
     : null
   const portableOffer = hasPortableRoute ? portableEnvironmentOffer() : null
+  const directZipContribution = await inspectBrowserDirectZipEnvironment(
+    windowPort,
+    directZip,
+    signal,
+  )
+  const installedDirectZip = directZip !== undefined && directZipContribution.lookup.kind === 'available'
+    ? Object.freeze({ directZip, reviewed: directZipContribution.lookup.facts })
+    : undefined
   return Object.freeze({
     runtime,
     fsaParent: initial.fsaParent,
     handoffTarget: initial.browserHandoff,
     workspaceOffer,
     portableOffer,
+    directZipTarget: directZipContribution.target ?? null,
+    directZipSupport: directZipContribution.lookup.kind === 'available'
+      ? directZipContribution.lookup.facts.support
+      : directZipContribution.lookup.support,
+    zipRecommendationPolicy: directZipContribution.lookup.kind === 'available'
+      ? directZipContribution.lookup.facts.recommendationPolicy
+      : null,
+    installedDirectZip,
   })
 }
 
@@ -160,6 +201,13 @@ function inspectBrowserRouteRegistrySynchronously(
     portableOffer: hasPortableRoute
       ? portableEnvironmentOffer()
       : null,
+    directZipTarget: null,
+    directZipSupport: Object.freeze({
+      kind: 'unavailable',
+      reason: 'support-evidence-missing',
+    }),
+    zipRecommendationPolicy: null,
+    installedDirectZip: undefined,
   })
 }
 
@@ -210,9 +258,11 @@ function bindCommittedOperation(
 function startProductionAuthority(
   windowPort: BrowserReceiveWindow,
   offered: OfferedArtifactChoice,
+  preClickRanking: readonly ArtifactChoiceID[],
   trace: WorkspaceStageTraceListener | undefined,
   outputTrace: BrowserReceiveCompositionOptions['outputTrace'],
   localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
+  installedDirectZip: InstalledBrowserDirectZipRoute | undefined,
   failures?: OutputFailureSinks,
 ): V2ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort)
@@ -236,6 +286,7 @@ function startProductionAuthority(
         new FSAArtifactPresentationAuthority({
           offered,
           picked,
+          preClickRanking,
           ...(diagnostics === undefined ? {} : { diagnostics }),
           ...localOutputFailuresOption(localOutputFailures),
         }),
@@ -254,6 +305,7 @@ function startProductionAuthority(
         startWorkspaceArtifactAuthority({
           windowPort,
           offered,
+          preClickRanking,
           ...(trace === undefined ? {} : { trace }),
           ...(diagnostics === undefined ? {} : { diagnostics }),
         }),
@@ -273,6 +325,11 @@ function startProductionAuthority(
           offered,
           diagnosticsFor('portable', outputTrace, binding.sinks),
         ),
+        binding,
+      )
+    case 'direct-resumable-zip':
+      return bindArtifactAuthorityOutputFailures(
+        startBrowserDirectZipAuthority(windowPort, offered, preClickRanking, installedDirectZip),
         binding,
       )
     case 'direct-atomic':

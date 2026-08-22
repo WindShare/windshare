@@ -24,6 +24,7 @@ var retiredReceiveVectorFiles = []string{
 	"directory-admission-v1.json",
 	"file-checkpoint-v1.json",
 	"receive-intent-v1.json",
+	"receive-intent-v2.json",
 	"transfer-intent-v1.json",
 }
 
@@ -98,9 +99,16 @@ func buildCanonicalReceiveContractVectors(t *testing.T) []canonicalContractVecto
 	return []canonicalContractVectorFile{
 		{
 			Version: 1,
-			Kind:    "receive-intent-v2",
-			Description: "Receiver-local ReceiveIntentV2 values for every legal artifact and materialization-plan family, " +
-				"including canonical nested bytes and the windshare/receive-intent/v2 digest.",
+			Kind:    "artifact-choice-v1",
+			Description: "Stable ArtifactChoiceIdentityV1 tuples, including direct-resumable ZIP whose positive route " +
+				"support remains confined to the exact reviewed runtime and policy evidence tuple.",
+			Cases: buildArtifactChoiceVectorCases(t),
+		},
+		{
+			Version: 1,
+			Kind:    "receive-intent-v3",
+			Description: "Receiver-local ReceiveIntentV3 values for portable materialization families. Direct resumable ZIP " +
+				"is intentionally absent because exact reviewed runtime support is receiver-local, not cross-runtime vector authority.",
 			Cases: intentCases,
 		},
 		{
@@ -194,7 +202,7 @@ func buildReceiveIntentVectorFixtures(t *testing.T) []receiveIntentVectorFixture
 	}
 	catalogTree := receivecontract.NewCatalogRootDirectoryTree()
 
-	fixtures := make([]receiveIntentVectorFixture, 0, 9)
+	fixtures := make([]receiveIntentVectorFixture, 0, 8)
 	fixtures = append(fixtures,
 		newNativeCatalogRootFixture(t, "catalog-root-direct-tree", nodeFixture, catalogTree, 0x60),
 		newFSANamedFixture(
@@ -203,13 +211,69 @@ func buildReceiveIntentVectorFixtures(t *testing.T) []receiveIntentVectorFixture
 		),
 		newFSANamedFixture(t, "result-root-fsa-direct-tree", nodeFixture, resultTree, 0x62, 0, "docs-selection"),
 		newManagedAtomicFixture(t, "original-file-direct-atomic", pathFixture, originalReport, 0x63, receivecontract.NameApplicationChosen, "report.txt", 0),
-		newManagedAtomicFixture(t, "zip-archive-direct-atomic", nodeFixture, directoryArchive, 0x64, receivecontract.NameUserChosen, "chosen.zip", 1),
 		newWorkspaceFixture(t, "original-file-workspace", pathFixture, originalReport, 0x65),
 		newWorkspaceFixture(t, "zip-archive-workspace", nodeFixture, syntheticArchive, 0x66),
 		newPortableFixture(t, "original-file-portable", pathFixture, originalReport, 0x67),
 		newPortableFixture(t, "zip-archive-portable", nodeFixture, directoryArchive, 0x68),
 	)
 	return fixtures
+}
+
+func buildArtifactChoiceVectorCases(t *testing.T) []any {
+	t.Helper()
+	type choiceCase struct {
+		name        string
+		artifact    receivecontract.ArtifactKind
+		plan        receivecontract.MaterializationPlanKind
+		guarantee   receivecontract.GuaranteeProfile
+		preparation receivecontract.PreparationPolicy
+		support     string
+	}
+	cases := []choiceCase{
+		{"directory-tree-native", receivecontract.ArtifactDirectoryTree, receivecontract.PlanDirectTree, receivecontract.GuaranteeNativeTree, receivecontract.PreparationNone, "available"},
+		{"directory-tree-fsa", receivecontract.ArtifactDirectoryTree, receivecontract.PlanDirectTree, receivecontract.GuaranteeFSATree, receivecontract.PreparationNone, "available"},
+		{"original-file-direct-atomic", receivecontract.ArtifactOriginalFile, receivecontract.PlanDirectAtomic, receivecontract.GuaranteeManagedAtomic, receivecontract.PreparationNone, "available"},
+		{"original-file-workspace-managed", receivecontract.ArtifactOriginalFile, receivecontract.PlanWorkspaceThenPublish, receivecontract.GuaranteeManagedAtomic, receivecontract.PreparationNone, "available"},
+		{"original-file-workspace-handoff", receivecontract.ArtifactOriginalFile, receivecontract.PlanWorkspaceThenPublish, receivecontract.GuaranteeBrowserHandoff, receivecontract.PreparationNone, "available"},
+		{"zip-workspace-managed", receivecontract.ArtifactZipArchive, receivecontract.PlanWorkspaceThenPublish, receivecontract.GuaranteeManagedAtomic, receivecontract.PreparationExactZip, "available"},
+		{"zip-workspace-handoff", receivecontract.ArtifactZipArchive, receivecontract.PlanWorkspaceThenPublish, receivecontract.GuaranteeBrowserHandoff, receivecontract.PreparationExactZip, "available"},
+		{"original-file-portable", receivecontract.ArtifactOriginalFile, receivecontract.PlanPortableHandoff, receivecontract.GuaranteeBrowserHandoff, receivecontract.PreparationExactArtifact, "available"},
+		{"zip-portable", receivecontract.ArtifactZipArchive, receivecontract.PlanPortableHandoff, receivecontract.GuaranteeBrowserHandoff, receivecontract.PreparationExactArtifact, "available"},
+		{"zip-direct-resumable", receivecontract.ArtifactZipArchive, receivecontract.PlanDirectResumableZIP, receivecontract.GuaranteeFSAOwnedFile, receivecontract.PreparationNone, "available-exact-reviewed-platform-only"},
+	}
+	result := make([]any, 0, len(cases))
+	for _, current := range cases {
+		identity, err := receivecontract.NewArtifactChoiceIdentity(
+			current.artifact, current.plan, current.guarantee, current.preparation,
+		)
+		if err != nil {
+			t.Fatalf("choice %s: %v", current.name, err)
+		}
+		policyAvailability := any("not-required")
+		if current.plan == receivecontract.PlanDirectResumableZIP {
+			policyAvailability = map[string]any{
+				"directZipEpochPolicyDigest":         directZipEpochPolicyDigestV1(),
+				"zipRouteRecommendationPolicyDigest": zipRouteRecommendationPolicyDigestV1(),
+				"reason":                             "exact-reviewed-runtime-required",
+			}
+		}
+		result = append(result, map[string]any{
+			"name": current.name,
+			"input": map[string]any{
+				"artifactKind":        artifactKindString(current.artifact),
+				"materializationKind": materializationPlanKindString(current.plan),
+				"guaranteeProfile":    guaranteeProfileString(current.guarantee),
+				"preparation":         preparationPolicyString(current.preparation),
+			},
+			"routeSupport":       current.support,
+			"policyAvailability": policyAvailability,
+			"expected": map[string]any{
+				"canonicalBytesB64Url": b64URL(identity.CanonicalBytes()),
+				"artifactChoiceId":     b64URL(identity.ID().Bytes()),
+			},
+		})
+	}
+	return result
 }
 
 func newNativeCatalogRootFixture(
@@ -359,22 +423,28 @@ func newReceiveIntentVectorFixture(
 
 func receiveIntentVectorCase(fixture receiveIntentVectorFixture) map[string]any {
 	bindingBytes := materializationBindingBytes(fixture.plan)
+	choice, err := receivecontract.DeriveArtifactChoiceIdentity(fixture.artifact, fixture.plan)
+	if err != nil {
+		panic("validated intent cannot derive an artifact choice")
+	}
 	return map[string]any{
 		"name":      fixture.name,
 		"selection": fixture.selection.input,
 		"artifact":  artifactVectorInput(fixture.artifact),
 		"plan":      materializationPlanVectorInput(fixture.plan),
 		"expected": map[string]any{
-			"selectionCanonicalBytesB64Url":     b64URL(fixture.selection.spec.CanonicalBytes()),
-			"selectionDigest":                   b64URL(fixture.selection.spec.Digest().Bytes()),
-			"artifactCanonicalBytesB64Url":      b64URL(fixture.artifact.CanonicalBytes()),
-			"artifactDigest":                    b64URL(fixture.artifact.Digest().Bytes()),
-			"bindingCanonicalBytesB64Url":       b64URL(bindingBytes),
-			"bindingDigest":                     b64URL(fixture.plan.BindingDigest().Bytes()),
-			"planCanonicalBytesB64Url":          b64URL(fixture.plan.CanonicalBytes()),
-			"operationId":                       b64URL(fixture.plan.OperationID().Bytes()),
-			"receiveIntentCanonicalBytesB64Url": b64URL(fixture.intent.CanonicalBytes()),
-			"receiveIntentDigest":               b64URL(fixture.intent.Digest().Bytes()),
+			"selectionCanonicalBytesB64Url":      b64URL(fixture.selection.spec.CanonicalBytes()),
+			"selectionDigest":                    b64URL(fixture.selection.spec.Digest().Bytes()),
+			"artifactCanonicalBytesB64Url":       b64URL(fixture.artifact.CanonicalBytes()),
+			"artifactDigest":                     b64URL(fixture.artifact.Digest().Bytes()),
+			"bindingCanonicalBytesB64Url":        b64URL(bindingBytes),
+			"bindingDigest":                      b64URL(fixture.plan.BindingDigest().Bytes()),
+			"artifactChoiceCanonicalBytesB64Url": b64URL(choice.CanonicalBytes()),
+			"artifactChoiceId":                   b64URL(choice.ID().Bytes()),
+			"planCanonicalBytesB64Url":           b64URL(fixture.plan.CanonicalBytes()),
+			"operationId":                        b64URL(fixture.plan.OperationID().Bytes()),
+			"receiveIntentCanonicalBytesB64Url":  b64URL(fixture.intent.CanonicalBytes()),
+			"receiveIntentDigest":                b64URL(fixture.intent.Digest().Bytes()),
 		},
 	}
 }
@@ -435,6 +505,7 @@ func materializationPlanVectorInput(plan receivecontract.MaterializationPlan) ma
 		return result
 	}
 	if workspace, ok := plan.WorkspaceBinding(); ok {
+		result["publicationGuarantee"] = guaranteeProfileString(plan.GuaranteeProfile())
 		result["workspace"] = map[string]any{
 			"operationId":   b64URL(workspace.OperationID().Bytes()),
 			"workspaceId":   b64URL(workspace.WorkspaceID().Bytes()),
@@ -445,20 +516,42 @@ func materializationPlanVectorInput(plan receivecontract.MaterializationPlan) ma
 		return result
 	}
 	portable, ok := plan.PortableBinding()
+	if ok {
+		result["publicationGuarantee"] = "browser-handoff"
+		result["portable"] = map[string]any{
+			"operationId":                b64URL(portable.OperationID().Bytes()),
+			"portablePlanId":             b64URL(portable.PortablePlanID().Bytes()),
+			"maximumArtifactBytes":       strconv.FormatUint(portable.MaximumArtifactBytes(), 10),
+			"assemblyPartBytes":          strconv.FormatUint(portable.AssemblyPartBytes(), 10),
+			"maximumParts":               strconv.FormatUint(portable.MaximumParts(), 10),
+			"objectUrlLeaseMilliseconds": strconv.FormatUint(portable.ObjectURLLeaseMilliseconds(), 10),
+			"preparation":                "exact-artifact",
+		}
+		return result
+	}
+	owned, ok := plan.FSAOwnedFileBinding()
 	if !ok {
 		panic("validated plan has no binding")
 	}
-	result["publicationRoute"] = "browser-handoff"
-	result["portable"] = map[string]any{
-		"operationId":                b64URL(portable.OperationID().Bytes()),
-		"portablePlanId":             b64URL(portable.PortablePlanID().Bytes()),
-		"maximumArtifactBytes":       strconv.FormatUint(portable.MaximumArtifactBytes(), 10),
-		"assemblyPartBytes":          strconv.FormatUint(portable.AssemblyPartBytes(), 10),
-		"maximumParts":               strconv.FormatUint(portable.MaximumParts(), 10),
-		"objectUrlLeaseMilliseconds": strconv.FormatUint(portable.ObjectURLLeaseMilliseconds(), 10),
-		"preparation":                "exact-artifact",
-	}
+	result["binding"] = fsaOwnedFileBindingVectorInput(owned)
 	return result
+}
+
+func fsaOwnedFileBindingVectorInput(binding receivecontract.FSAOwnedFileBinding) map[string]any {
+	policies := binding.PolicyDigests()
+	return map[string]any{
+		"operationId": b64URL(binding.OperationID().Bytes()),
+		"stableName":  binding.StableName(),
+		"targetRef":   b64URL(binding.TargetRef().Bytes()),
+		"guarantees":  guaranteeSetVectorInput(binding.Guarantees()),
+		"policies": map[string]any{
+			"zipEncoding":   b64URL(policies.ZipEncoding.Bytes()),
+			"layout":        b64URL(policies.Layout.Bytes()),
+			"checkpoint":    b64URL(policies.Checkpoint.Bytes()),
+			"journalBudget": b64URL(policies.JournalBudget.Bytes()),
+			"epoch":         b64URL(policies.Epoch.Bytes()),
+		},
+	}
 }
 
 func destinationReservationVectorInput(reservation receivecontract.DestinationReservation) map[string]any {
@@ -488,12 +581,13 @@ func destinationReservationVectorInput(reservation receivecontract.DestinationRe
 
 func guaranteeSetVectorInput(guarantees receivecontract.GuaranteeSet) map[string]any {
 	return map[string]any{
-		"profile":       guaranteeProfileString(guarantees.Profile()),
-		"nameAuthority": nameAuthorityString(guarantees.NameAuthority()),
-		"replacement":   replacementGuaranteeString(guarantees.Replacement()),
-		"delivery":      deliveryModeString(guarantees.Delivery()),
-		"visibility":    commitVisibilityString(guarantees.Visibility()),
-		"rollback":      rollbackGuaranteeString(guarantees.Rollback()),
+		"profile":              guaranteeProfileString(guarantees.Profile()),
+		"nameAuthority":        nameAuthorityString(guarantees.NameAuthority()),
+		"replacement":          replacementGuaranteeString(guarantees.Replacement()),
+		"delivery":             deliveryModeString(guarantees.Delivery()),
+		"targetVisibility":     targetVisibilityString(guarantees.TargetVisibility()),
+		"artifactAvailability": artifactAvailabilityString(guarantees.ArtifactAvailability()),
+		"cleanupAuthority":     cleanupAuthorityString(guarantees.CleanupAuthority()),
 	}
 }
 
@@ -504,11 +598,14 @@ func materializationBindingBytes(plan receivecontract.MaterializationPlan) []byt
 	if workspace, ok := plan.WorkspaceBinding(); ok {
 		return workspace.CanonicalBytes()
 	}
-	portable, ok := plan.PortableBinding()
+	if portable, ok := plan.PortableBinding(); ok {
+		return portable.CanonicalBytes()
+	}
+	owned, ok := plan.FSAOwnedFileBinding()
 	if !ok {
 		panic("validated plan has no binding")
 	}
-	return portable.CanonicalBytes()
+	return owned.CanonicalBytes()
 }
 
 func buildDirectoryAdmissionVectorCases(
@@ -752,190 +849,6 @@ func modifiedTimeVectorInput(modified catalog.ModifiedTime) any {
 	return map[string]any{
 		"seconds":     strconv.FormatInt(modified.Seconds(), 10),
 		"nanoseconds": modified.Nanoseconds(), "precision": uint8(modified.Precision()),
-	}
-}
-
-func directoryTreeLayoutKindString(value receivecontract.DirectoryTreeLayoutKind) string {
-	switch value {
-	case receivecontract.DirectoryTreeSingleFile:
-		return "single-file"
-	case receivecontract.DirectoryTreeResultRoot:
-		return "result-root"
-	case receivecontract.DirectoryTreeCatalogRoot:
-		return "catalog-root"
-	default:
-		panic("unknown directory-tree layout")
-	}
-}
-
-func resultRootClassString(value receivecontract.ResultRootClass) string {
-	switch value {
-	case receivecontract.ResultRootCompleteDirectory:
-		return "complete-directory"
-	case receivecontract.ResultRootDirectorySelection:
-		return "directory-selection"
-	case receivecontract.ResultRootSyntheticSelection:
-		return "synthetic-selection"
-	default:
-		panic("unknown result-root class")
-	}
-}
-
-func materializationPlanKindString(value receivecontract.MaterializationPlanKind) string {
-	switch value {
-	case receivecontract.PlanDirectTree:
-		return "direct-tree"
-	case receivecontract.PlanDirectAtomic:
-		return "direct-atomic"
-	case receivecontract.PlanWorkspaceThenPublish:
-		return "workspace-then-publish"
-	case receivecontract.PlanPortableHandoff:
-		return "portable-handoff"
-	default:
-		panic("unknown materialization plan")
-	}
-}
-
-func preparationPolicyString(value receivecontract.PreparationPolicy) string {
-	switch value {
-	case receivecontract.PreparationNone:
-		return "none"
-	case receivecontract.PreparationExactZip:
-		return "exact-zip"
-	case receivecontract.PreparationExactArtifact:
-		return "exact-artifact"
-	default:
-		panic("unknown preparation policy")
-	}
-}
-
-func destinationReservationKindString(value receivecontract.DestinationReservationKind) string {
-	switch value {
-	case receivecontract.ReservationContainerRoot:
-		return "container-root"
-	case receivecontract.ReservationNamedContainerEntry:
-		return "named-container-entry"
-	case receivecontract.ReservationAtomicTarget:
-		return "atomic-target"
-	default:
-		panic("unknown destination reservation")
-	}
-}
-
-func authorityKindString(value receivecontract.AuthorityKind) string {
-	switch value {
-	case receivecontract.AuthorityNativeContainer:
-		return "native-container"
-	case receivecontract.AuthorityFSAContainer:
-		return "fsa-container"
-	case receivecontract.AuthorityManagedAtomicTarget:
-		return "managed-atomic-target"
-	default:
-		panic("unknown authority kind")
-	}
-}
-
-func containerEntryKindString(value receivecontract.ContainerEntryKind) string {
-	switch value {
-	case receivecontract.ContainerEntrySingleFile:
-		return "single-file"
-	case receivecontract.ContainerEntryResultRoot:
-		return "result-root"
-	default:
-		panic("unknown container entry kind")
-	}
-}
-
-func guaranteeProfileString(value receivecontract.GuaranteeProfile) string {
-	switch value {
-	case receivecontract.GuaranteeNativeTree:
-		return "native-tree"
-	case receivecontract.GuaranteeFSATree:
-		return "fsa-tree"
-	case receivecontract.GuaranteeManagedAtomic:
-		return "managed-atomic"
-	case receivecontract.GuaranteeBrowserHandoff:
-		return "browser-handoff"
-	default:
-		panic("unknown guarantee profile")
-	}
-}
-
-func nameAuthorityString(value receivecontract.NameAuthority) string {
-	switch value {
-	case receivecontract.NameApplicationChosen:
-		return "application-chosen"
-	case receivecontract.NameUserChosen:
-		return "user-chosen"
-	case receivecontract.NameBrowserChosen:
-		return "browser-chosen"
-	default:
-		panic("unknown name authority")
-	}
-}
-
-func replacementGuaranteeString(value receivecontract.ReplacementGuarantee) string {
-	switch value {
-	case receivecontract.ReplacementAtomicNoReplace:
-		return "atomic-no-replace"
-	case receivecontract.ReplacementCoordinatedNoReplace:
-		return "coordinated-no-replace"
-	case receivecontract.ReplacementUserAuthorizedReplace:
-		return "user-authorized-replace"
-	case receivecontract.ReplacementUnknown:
-		return "unknown"
-	default:
-		panic("unknown replacement guarantee")
-	}
-}
-
-func deliveryModeString(value receivecontract.DeliveryMode) string {
-	switch value {
-	case receivecontract.DeliveryManagedTarget:
-		return "managed-target"
-	case receivecontract.DeliveryBrowserHandoff:
-		return "browser-handoff"
-	default:
-		panic("unknown delivery mode")
-	}
-}
-
-func commitVisibilityString(value receivecontract.CommitVisibility) string {
-	switch value {
-	case receivecontract.CommitAtomic:
-		return "atomic-commit"
-	case receivecontract.CommitPrefixVisible:
-		return "prefix-visible"
-	case receivecontract.CommitUnobservable:
-		return "unobservable"
-	default:
-		panic("unknown commit visibility")
-	}
-}
-
-func rollbackGuaranteeString(value receivecontract.RollbackGuarantee) string {
-	switch value {
-	case receivecontract.RollbackToAbsent:
-		return "to-absent"
-	case receivecontract.RollbackNone:
-		return "none"
-	default:
-		panic("unknown rollback guarantee")
-	}
-}
-
-func directoryAdmissionLayoutString(value transfer.DirectoryAdmissionLayout) string {
-	switch value {
-	case transfer.DirectoryAdmissionTreeSingleFile:
-		return "directory-tree-single-file"
-	case transfer.DirectoryAdmissionTreeResultRoot:
-		return "directory-tree-result-root"
-	case transfer.DirectoryAdmissionTreeCatalogRoot:
-		return "directory-tree-catalog-root"
-	case transfer.DirectoryAdmissionZipResultRoot:
-		return "zip-result-root"
-	default:
-		panic("unknown directory admission layout")
 	}
 }
 

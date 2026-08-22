@@ -3,10 +3,14 @@ import {
   type ReceiveLifecycleState,
 } from '../workspace/state'
 
-export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 1 as const
+export const RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION = 2 as const
 
 export type ReceiveOperationContinuation =
   | 'resume-receive'
+  | 'resume-direct-zip'
+  | 'reauthorize-direct-zip'
+  | 'verify-direct-zip-target'
+  | 'retry-direct-zip-space'
   | 'pending-catch-up'
   | 'restoration-available'
   | 'resume-package'
@@ -27,8 +31,8 @@ export interface ReceiveOperationResumeDescriptor {
 }
 
 /**
- * Inventory is a projection of v6 lifecycle truth. It never inspects v5 paused
- * descriptors and never copies FileCheckpoint ranges into aggregate state.
+ * Inventory projects strict Lifecycle V2 truth and never copies checkpoint ranges
+ * into an aggregate byte counter.
  */
 export function receiveOperationResumeDescriptor(
   lifecycle: ReceiveLifecycleState,
@@ -72,7 +76,12 @@ function continuationFor(
   if (deadline !== undefined && nowMilliseconds >= deadline) return 'cleanup-expired'
   switch (lifecycle.kind) {
     case 'receiving': return 'pending-catch-up'
-    case 'resumable-receive': return 'resume-receive'
+    case 'resumable-receive': return lifecycle.payloadKind === 'direct-zip'
+      ? 'resume-direct-zip'
+      : 'resume-receive'
+    case 'authorization-required': return 'reauthorize-direct-zip'
+    case 'target-verification-required': return 'verify-direct-zip-target'
+    case 'destination-space-required': return 'retry-direct-zip-space'
     case 'resumable-package': return 'resume-package'
     case 'waiting-to-save': return 'save-artifact'
     case 'download-started':

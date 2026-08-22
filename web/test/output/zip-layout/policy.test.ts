@@ -4,13 +4,16 @@ import {
   ZIP_UINT16_SENTINEL,
   ZIP_UINT32_SENTINEL,
   ZIP_UINT64_MAXIMUM,
+  ZIP_CRC32_INITIAL_ACCUMULATOR,
   ZipCrc32,
   checkedZipAdd,
   checkedZipMultiply,
   encodeZipCentralDirectoryRecord,
+  encodeZipCentralDirectoryRecordWithTrailingExtraFields,
   encodeZipDataDescriptor,
   encodeZipEndRecords,
   encodeZipLocalHeader,
+  encodeZipLocalHeaderWithTrailingExtraFields,
   normalizeZipEntry,
   planZipEntry,
   requiresZip64End,
@@ -143,7 +146,29 @@ describe('ZipEncodingPolicyV1', () => {
 
   it('uses the frozen IEEE CRC-32 polynomial', () => {
     const crc = new ZipCrc32()
-    crc.update(new TextEncoder().encode('123456789'))
-    expect(crc.digest()).toBe(0xcbf4_3926)
+    crc.update(new TextEncoder().encode('1234'))
+    const resumed = new ZipCrc32(crc.snapshot())
+    resumed.update(new TextEncoder().encode('56789'))
+
+    expect(new ZipCrc32().snapshot()).toBe(ZIP_CRC32_INITIAL_ACCUMULATOR)
+    expect(resumed.digest()).toBe(0xcbf4_3926)
+    expect(() => new ZipCrc32(-1)).toThrow(/accumulator/u)
+  })
+
+  it('appends pre-encoded extra fields without changing the V1 record plan', () => {
+    const plan = planZipEntry(normalizeZipEntry({
+      kind: 'directory',
+      path: ['root'],
+    }), 0n)
+    const extra = Uint8Array.of(0x34, 0x12, 0x02, 0x00, 0xab, 0xcd)
+    const v1Local = encodeZipLocalHeader(plan)
+    const local = encodeZipLocalHeaderWithTrailingExtraFields(plan, extra)
+    const central = encodeZipCentralDirectoryRecordWithTrailingExtraFields(plan, 0, extra)
+
+    expect(new DataView(v1Local.buffer).getUint16(28, true)).toBe(0)
+    expect(new DataView(local.buffer).getUint16(28, true)).toBe(extra.byteLength)
+    expect(local.slice(-extra.byteLength)).toEqual(extra)
+    expect(new DataView(central.buffer).getUint16(30, true)).toBe(extra.byteLength)
+    expect(central.slice(-extra.byteLength)).toEqual(extra)
   })
 })

@@ -860,6 +860,7 @@ function materializationBindingDigest(intent: ReceiveIntent): string {
     case 'direct-atomic': return intent.plan.reservation.digest
     case 'workspace-then-publish': return intent.plan.workspace.digest
     case 'portable-handoff': return intent.plan.portable.digest
+    case 'direct-resumable-zip': return intent.plan.binding.digest
   }
 }
 

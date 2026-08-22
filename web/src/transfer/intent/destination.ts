@@ -1,13 +1,13 @@
 import { sha256 } from '../../crypto/digest'
 import {
   DESTINATION_RESERVATION_DOMAIN,
+  FSA_OWNED_FILE_BINDING_DOMAIN,
   NAME_COLLISION_DOMAIN,
   PORTABLE_BINDING_DOMAIN,
   TEXT_ENCODER,
   WORKSPACE_BINDING_DOMAIN,
   canonicalDigestValue,
   canonicalRecord,
-  concat,
   digestText,
   frame,
   requireSameDigestRecord,
@@ -24,20 +24,24 @@ import {
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
   DESTINATION_RESERVATION_VERSION,
+  DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH,
+  DIRECT_ZIP_STABLE_NAME_INFIX,
+  FSA_OWNED_FILE_BINDING_VERSION,
   MAX_RESULT_COMPONENT_BYTES,
   PORTABLE_BINDING_VERSION,
   STABLE_IDENTITY_BYTES,
+  ARCHIVE_EXTENSION,
   WORKSPACE_BINDING_VERSION,
   type ArtifactSpec,
   type AtomicTargetReservation,
-  type CommitVisibility,
+  type AvailableDirectZipPolicyDigests,
   type ContainerRootReservation,
   type DestinationReservation,
+  type DirectZipPolicyDigests,
   type GuaranteeSet,
-  type NameAuthority,
+  type FSAOwnedFileBinding,
   type NamedContainerEntryReservation,
   type PortableBinding,
-  type ReplacementGuarantee,
   type WorkspaceBinding,
 } from './model'
 import {
@@ -45,58 +49,34 @@ import {
   requireResultName,
   validateArtifactSpec,
 } from './selection'
+import {
+  authorityKindByte,
+  canonicalGuarantees,
+  reservationKindByte,
+} from './destination/codec'
+import {
+  browserHandoffGuarantees,
+  fsaOwnedFileGuarantees,
+  fsaTreeGuarantees,
+  managedAtomicGuarantees,
+  managedNameAuthority,
+  nativeTreeGuarantees,
+  sameGuarantees,
+  snapshotGuarantees,
+} from './destination/validation'
 
-export function nativeTreeGuarantees(): GuaranteeSet {
-  return guaranteeSet({
-    profile: 'native-tree',
-    nameAuthority: 'application-chosen',
-    replacement: 'atomic-no-replace',
-    delivery: 'managed-target',
-    visibility: 'prefix-visible',
-    rollback: 'none',
-  })
-}
-
-export function fsaTreeGuarantees(): GuaranteeSet {
-  return guaranteeSet({
-    profile: 'fsa-tree',
-    nameAuthority: 'application-chosen',
-    replacement: 'coordinated-no-replace',
-    delivery: 'managed-target',
-    visibility: 'prefix-visible',
-    rollback: 'none',
-  })
-}
-
-export function managedAtomicGuarantees(
-  nameAuthority: 'application-chosen' | 'user-chosen',
-): GuaranteeSet {
-  if (nameAuthority !== 'application-chosen' && nameAuthority !== 'user-chosen') {
-    throw new TypeError('managed atomic name authority is invalid')
-  }
-  return guaranteeSet({
-    profile: 'managed-atomic',
-    nameAuthority,
-    replacement: 'atomic-no-replace',
-    delivery: 'managed-target',
-    visibility: 'atomic-commit',
-    rollback: 'to-absent',
-  })
-}
-
-export function browserHandoffGuarantees(): GuaranteeSet {
-  return guaranteeSet({
-    profile: 'browser-handoff',
-    nameAuthority: 'browser-chosen',
-    replacement: 'unknown',
-    delivery: 'browser-handoff',
-    visibility: 'unobservable',
-    rollback: 'none',
-  })
-}
-
-function guaranteeSet(value: GuaranteeSet): GuaranteeSet {
-  return Object.freeze({ ...value })
+export {
+  authorityKindByte,
+  browserHandoffGuarantees,
+  canonicalGuarantees,
+  fsaOwnedFileGuarantees,
+  fsaTreeGuarantees,
+  managedAtomicGuarantees,
+  managedNameAuthority,
+  nativeTreeGuarantees,
+  reservationKindByte,
+  sameGuarantees,
+  snapshotGuarantees,
 }
 
 export async function collisionName(
@@ -506,6 +486,108 @@ export async function validateWorkspaceBinding(
   return requireSameDigestRecord(input, rebuilt, 'workspace binding')
 }
 
+export function unavailableDirectZipPolicyDigests(): DirectZipPolicyDigests {
+  return Object.freeze({
+    zipEncoding: null,
+    layout: null,
+    checkpoint: null,
+    journalBudget: null,
+    epoch: null,
+  })
+}
+
+export async function createFSAOwnedFileBinding(input: {
+  readonly operationId: string
+  readonly artifact: ArtifactSpec
+  readonly stableName: string
+  readonly targetRef: string
+  readonly policies: DirectZipPolicyDigests
+}): Promise<FSAOwnedFileBinding> {
+  const artifact = await validateArtifactSpec(input.artifact)
+  if (artifact.kind !== 'zip-archive') {
+    throw new TypeError('FSA owned-file binding requires a ZIP artifact')
+  }
+  const operationId = requireIdentity(input.operationId, STABLE_IDENTITY_BYTES, 'operation')
+  const stableName = requireDirectZipStableName(input.stableName)
+  const targetRef = requireIdentity(input.targetRef, AUTHORITY_REFERENCE_BYTES, 'FSA owned target')
+  const policies = requireAvailableDirectZipPolicies(input.policies)
+  const guarantees = fsaOwnedFileGuarantees()
+  const canonicalBytes = canonicalRecord(FSA_OWNED_FILE_BINDING_DOMAIN, [
+    frame(requireIdentityBytes(operationId, STABLE_IDENTITY_BYTES, 'operation')),
+    frame(requireIdentityBytes(artifact.digest, AUTHORITY_REFERENCE_BYTES, 'artifact digest')),
+    frame(TEXT_ENCODER.encode(stableName)),
+    frame(requireIdentityBytes(targetRef, AUTHORITY_REFERENCE_BYTES, 'FSA owned target')),
+    frame(canonicalGuarantees(guarantees)),
+    frame(requireIdentityBytes(policies.zipEncoding, AUTHORITY_REFERENCE_BYTES, 'ZIP encoding policy')),
+    frame(requireIdentityBytes(policies.layout, AUTHORITY_REFERENCE_BYTES, 'direct ZIP layout policy')),
+    frame(requireIdentityBytes(policies.checkpoint, AUTHORITY_REFERENCE_BYTES, 'direct ZIP checkpoint policy')),
+    frame(requireIdentityBytes(policies.journalBudget, AUTHORITY_REFERENCE_BYTES, 'direct ZIP journal budget')),
+    frame(requireIdentityBytes(policies.epoch, AUTHORITY_REFERENCE_BYTES, 'direct ZIP epoch policy')),
+  ])
+  return canonicalDigestValue({
+    version: FSA_OWNED_FILE_BINDING_VERSION,
+    operationId,
+    artifactDigest: artifact.digest,
+    stableName,
+    targetRef,
+    guarantees,
+    policies,
+  }, await digestText(canonicalBytes), canonicalBytes)
+}
+
+export async function validateFSAOwnedFileBinding(
+  input: FSAOwnedFileBinding,
+  artifact: ArtifactSpec,
+): Promise<FSAOwnedFileBinding> {
+  if (input.version !== FSA_OWNED_FILE_BINDING_VERSION ||
+      input.artifactDigest !== artifact.digest ||
+      !sameGuarantees(input.guarantees, fsaOwnedFileGuarantees())) {
+    throw new TypeError('FSA owned-file binding contract is invalid')
+  }
+  const rebuilt = await createFSAOwnedFileBinding({
+    operationId: input.operationId,
+    artifact,
+    stableName: input.stableName,
+    targetRef: input.targetRef,
+    policies: input.policies,
+  })
+  return requireSameDigestRecord(input, rebuilt, 'FSA owned-file binding')
+}
+
+function requireAvailableDirectZipPolicies(
+  input: DirectZipPolicyDigests,
+): AvailableDirectZipPolicyDigests {
+  if (input === null || typeof input !== 'object') {
+    throw new TypeError('direct ZIP policy digests are absent')
+  }
+  const available = {
+    zipEncoding: requirePolicyDigest(input.zipEncoding, 'ZIP encoding policy'),
+    layout: requirePolicyDigest(input.layout, 'direct ZIP layout policy'),
+    checkpoint: requirePolicyDigest(input.checkpoint, 'direct ZIP checkpoint policy'),
+    journalBudget: requirePolicyDigest(input.journalBudget, 'direct ZIP journal budget'),
+    epoch: requirePolicyDigest(input.epoch, 'direct ZIP epoch policy'),
+  }
+  return Object.freeze(available)
+}
+
+function requirePolicyDigest(value: string | null, label: string): string {
+  if (value === null) throw new TypeError(label + ' digest is absent')
+  return requireIdentity(value, AUTHORITY_REFERENCE_BYTES, label)
+}
+
+function requireDirectZipStableName(value: string): string {
+  const name = requireResultName(value)
+  if (!name.endsWith(ARCHIVE_EXTENSION)) throw new TypeError('direct ZIP stable name extension is invalid')
+  const withoutExtension = name.slice(0, -ARCHIVE_EXTENSION.length)
+  const separator = withoutExtension.lastIndexOf(DIRECT_ZIP_STABLE_NAME_INFIX)
+  const token = withoutExtension.slice(separator + DIRECT_ZIP_STABLE_NAME_INFIX.length)
+  if (separator <= 0 || token.length !== DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH || token.includes('=')) {
+    throw new TypeError('direct ZIP stable name token is invalid')
+  }
+  requireIdentity(token, STABLE_IDENTITY_BYTES, 'direct ZIP reservation candidate')
+  return name
+}
+
 export async function createPortableBinding(input: {
   readonly operationId: string
   readonly portablePlanId: string
@@ -565,95 +647,4 @@ export async function validatePortableBinding(
     throw new TypeError('portable binding artifact digest is invalid')
   }
   return requireSameDigestRecord(input, rebuilt, 'portable binding')
-}
-
-export function snapshotGuarantees(input: GuaranteeSet): GuaranteeSet {
-  let expected: GuaranteeSet
-  switch (input.profile) {
-    case 'native-tree':
-      expected = nativeTreeGuarantees()
-      break
-    case 'fsa-tree':
-      expected = fsaTreeGuarantees()
-      break
-    case 'managed-atomic':
-      expected = managedAtomicGuarantees(managedNameAuthority(input.nameAuthority))
-      break
-    case 'browser-handoff':
-      expected = browserHandoffGuarantees()
-      break
-    default:
-      throw new TypeError('guarantee profile is invalid')
-  }
-  if (!sameGuarantees(input, expected)) throw new TypeError('guarantee profile fields are invalid')
-  return expected
-}
-
-export function sameGuarantees(left: GuaranteeSet, right: GuaranteeSet): boolean {
-  return left.profile === right.profile &&
-    left.nameAuthority === right.nameAuthority &&
-    left.replacement === right.replacement &&
-    left.delivery === right.delivery &&
-    left.visibility === right.visibility &&
-    left.rollback === right.rollback
-}
-
-export function canonicalGuarantees(value: GuaranteeSet): Uint8Array<ArrayBuffer> {
-  return concat([
-    frame(Uint8Array.of(nameAuthorityByte(value.nameAuthority))),
-    frame(Uint8Array.of(replacementGuaranteeByte(value.replacement))),
-    frame(Uint8Array.of(value.delivery === 'managed-target' ? 1 : 2)),
-    frame(Uint8Array.of(commitVisibilityByte(value.visibility))),
-    frame(Uint8Array.of(value.rollback === 'to-absent' ? 1 : 2)),
-  ])
-}
-
-export function managedNameAuthority(
-  value: NameAuthority,
-): 'application-chosen' | 'user-chosen' {
-  if (value !== 'application-chosen' && value !== 'user-chosen') {
-    throw new TypeError('managed atomic name authority is invalid')
-  }
-  return value
-}
-
-export function reservationKindByte(value: DestinationReservation['kind']): number {
-  switch (value) {
-    case 'container-root': return 1
-    case 'named-container-entry': return 2
-    case 'atomic-target': return 3
-  }
-}
-
-export function authorityKindByte(value: DestinationReservation['authorityKind']): number {
-  switch (value) {
-    case 'native-container': return 1
-    case 'fsa-container': return 2
-    case 'managed-atomic-target': return 3
-  }
-}
-
-function nameAuthorityByte(value: NameAuthority): number {
-  switch (value) {
-    case 'application-chosen': return 1
-    case 'user-chosen': return 2
-    case 'browser-chosen': return 3
-  }
-}
-
-function replacementGuaranteeByte(value: ReplacementGuarantee): number {
-  switch (value) {
-    case 'atomic-no-replace': return 1
-    case 'coordinated-no-replace': return 2
-    case 'user-authorized-replace': return 3
-    case 'unknown': return 4
-  }
-}
-
-function commitVisibilityByte(value: CommitVisibility): number {
-  switch (value) {
-    case 'atomic-commit': return 1
-    case 'prefix-visible': return 2
-    case 'unobservable': return 3
-  }
 }

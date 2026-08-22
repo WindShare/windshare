@@ -22,7 +22,10 @@ export class WorkspaceContinuationStages {
     readonly checkpointSetDigest: string
     readonly completedFileCount: bigint
     readonly completedBytes: bigint
-  }): Promise<Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>> {
+  }): Promise<Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }>> {
     const state = await this.runtime.lifecycle()
     const next = this.runtime.reduce(state, this.runtime.event({
       kind: 'pause-verified',
@@ -31,7 +34,9 @@ export class WorkspaceContinuationStages {
       completedFileCount: input.completedFileCount,
       completedBytes: input.completedBytes,
     }, state))
-    if (next.kind !== 'resumable-receive') throw new TypeError('workspace pause is not resumable')
+    if (next.kind !== 'resumable-receive' || next.payloadKind !== 'file-set') {
+      throw new TypeError('workspace pause is not a file-set continuation')
+    }
     await this.runtime.commitLifecycle(state, next)
     this.runtime.emit({
       name: 'receive.materialization.paused',
@@ -93,8 +98,14 @@ export class WorkspaceContinuationStages {
   }
 
   async restoreReceiveContinuation(
-    fallback: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
-  ): Promise<Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>> {
+    fallback: Extract<ReceiveLifecycleState, {
+      kind: 'resumable-receive'
+      payloadKind: 'file-set'
+    }>,
+  ): Promise<Extract<ReceiveLifecycleState, {
+    kind: 'resumable-receive'
+    payloadKind: 'file-set'
+  }>> {
     const state = await this.runtime.lifecycle()
     if (state.kind !== 'receiving' || state.generation !== fallback.generation + 1n ||
         fallback.operationId !== this.runtime.intent.operationId ||
@@ -111,7 +122,7 @@ export class WorkspaceContinuationStages {
         ? {}
         : { partialReceiptDigest: fallback.partialReceiptDigest }),
     }, state))
-    if (next.kind !== 'resumable-receive') {
+    if (next.kind !== 'resumable-receive' || next.payloadKind !== 'file-set') {
       throw new TypeError('receive admission failure did not restore a stable continuation')
     }
     await this.runtime.commitLifecycle(state, next)

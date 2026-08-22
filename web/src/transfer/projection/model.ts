@@ -87,6 +87,15 @@ export interface ProjectionMetrics {
   readonly byteCountLowerBound: bigint
 }
 
+export interface WorkspaceCostObservationV1 {
+  readonly version: 1
+  readonly rawBytes: bigint
+  readonly packageBytes: bigint
+  readonly centralDirectorySpoolBytes: bigint
+  readonly durableMetadataBytes: bigint
+  readonly peakOwnedBytes: bigint
+}
+
 export interface AuthenticatedGenerationReference {
   readonly directoryId: string
   readonly generation: string
@@ -110,6 +119,7 @@ export interface SelectionProjectionV1 {
   /** Retained only while one authenticated file could still become SingleFile proof. */
   readonly singleFileCandidate?: ProjectedFileFact
   readonly proof: ArtifactShapeProof
+  readonly workspaceCostObservation?: WorkspaceCostObservationV1
 }
 
 export interface SelectionProjectionState {
@@ -146,6 +156,7 @@ export type SelectionProjectionEvent =
       epoch: ProjectionEpoch
       settledTargets?: readonly UnsettledSelectionTarget[]
       layoutBasis?: SettledLayoutBasisProof
+      workspaceCostObservation?: WorkspaceCostObservationV1
     }>
 
 export type ProjectionTraceEvent =

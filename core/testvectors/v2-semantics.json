@@ -497,14 +497,17 @@
         },
         {
           "artifact": "zip-archive",
-          "binding": "atomic-target",
-          "completion": "complete-only",
+          "artifactAvailability": "verified-complete-only",
+          "binding": "fsa-owned-file",
+          "cleanupAuthority": "ownership-proof-required",
+          "completion": "verified-complete-only",
           "guaranteeProfiles": [
-            "managed-atomic"
+            "fsa-owned-file"
           ],
           "layout": "result-root",
-          "plan": "direct-atomic",
-          "preparation": "progressive-immutable-ledger"
+          "plan": "direct-resumable-zip",
+          "preparation": "none",
+          "targetVisibility": "operation-owned-incomplete-file-visible"
         },
         {
           "artifact": "original-file",
@@ -602,18 +605,55 @@
       "deadlineWritingStates": [
         "resumable-receive",
         "resumable-package",
-        "waiting-to-save"
+        "waiting-to-save",
+        "authorization-required",
+        "target-verification-required",
+        "destination-space-required"
       ],
+      "directZipByteSemantics": {
+        "committedArchiveLength": "verified-target-prefix-bytes",
+        "receivedBytes": "selected-source-payload-bytes-received-in-live-attempt",
+        "safeResumeBytes": "selected-source-payload-bytes-covered-by-verified-checkpoint"
+      },
+      "domain": "windshare/receive-lifecycle-state/v2",
       "handoffNeverMeans": "published",
-      "name": "receive-lifecycle-terminal-states",
+      "name": "receive-lifecycle-v2",
+      "nonterminalRecoveryStates": [
+        {
+          "byte": 21,
+          "state": "authorization-required"
+        },
+        {
+          "byte": 22,
+          "state": "target-verification-required"
+        },
+        {
+          "byte": 23,
+          "state": "destination-space-required"
+        }
+      ],
       "publishedCleanupPendingRemains": "published",
-      "states": [
+      "restartReasons": {
+        "content-session-ended": 5,
+        "direct-atomic-rolled-back": 1,
+        "portable-aborted": 2,
+        "preparation-invalidated": 4,
+        "source-revision-changed": 3,
+        "target-deleted": 6
+      },
+      "resumableReceivePayloadKinds": {
+        "direct-zip": 2,
+        "file-set": 1
+      },
+      "schemaVersion": 2,
+      "terminalStates": [
         {
           "byte": 14,
           "plans": [
             "direct-tree",
             "direct-atomic",
-            "workspace-then-publish"
+            "workspace-then-publish",
+            "direct-resumable-zip"
           ],
           "state": "published"
         },
@@ -636,7 +676,8 @@
           "byte": 17,
           "plans": [
             "direct-atomic",
-            "portable-handoff"
+            "portable-handoff",
+            "direct-resumable-zip"
           ],
           "state": "restart-required"
         },
@@ -646,7 +687,8 @@
             "direct-tree",
             "direct-atomic",
             "workspace-then-publish",
-            "portable-handoff"
+            "portable-handoff",
+            "direct-resumable-zip"
           ],
           "state": "discarded"
         },
@@ -654,7 +696,8 @@
           "byte": 19,
           "plans": [
             "direct-tree",
-            "workspace-then-publish"
+            "workspace-then-publish",
+            "direct-resumable-zip"
           ],
           "state": "expired"
         },
@@ -663,11 +706,72 @@
           "plans": [
             "direct-tree",
             "direct-atomic",
-            "workspace-then-publish"
+            "workspace-then-publish",
+            "direct-resumable-zip"
           ],
           "state": "needs-attention"
         }
       ]
+    },
+    {
+      "choiceIdentity": {
+        "directZipArtifactChoiceId": "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
+        "domain": "windshare/artifact-choice/v1",
+        "materializationByte": 5,
+        "workspaceZipArtifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ"
+      },
+      "name": "direct-zip-contract-policy-v1",
+      "ownershipExtraFormat": {
+        "availability": "frozen",
+        "digest": "hnFdK_xeDeYInsyhv5i4YdU57UUcWeAGUYLTakWaZQw",
+        "domain": "windshare/direct-zip-ownership-extra/v1"
+      },
+      "policies": [
+        {
+          "availability": "frozen",
+          "digest": "LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc",
+          "domain": "windshare/zip-encoding/v2-store-data-descriptor-owned-marker",
+          "name": "zip-encoding-v2"
+        },
+        {
+          "availability": "frozen",
+          "digest": "VSV-D1TwhzhxuCZYgx1-ZEE26oFu-mHXA4oWELOgGH4",
+          "domain": "windshare/zip-layout/v2-paged-owned-marker",
+          "name": "direct-zip-layout-v2"
+        },
+        {
+          "availability": "frozen",
+          "domain": "windshare/direct-zip-checkpoint-policy/v1",
+          "name": "direct-zip-checkpoint-v1"
+        },
+        {
+          "availability": "frozen",
+          "domain": "windshare/direct-zip-journal-budget/v1",
+          "name": "direct-zip-journal-budget-v1"
+        },
+        {
+          "automaticMaxCumulativeCopyBytes": "536870912",
+          "automaticMaxModeledPeakTemporaryBytes": "268435456",
+          "automaticMaxPrefixCopyBytes": "268435456",
+          "availability": "frozen",
+          "boundary": "inclusive",
+          "digest": "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo",
+          "domain": "windshare/direct-zip-epoch-policy/v1",
+          "name": "direct-zip-epoch-v1",
+          "units": "committed-archive-bytes"
+        },
+        {
+          "availability": "frozen",
+          "boundary": "inclusive",
+          "digest": "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI",
+          "domain": "windshare/zip-route-recommendation-policy/v1",
+          "exactWorkspaceRecommendationBudget": "1073744986",
+          "name": "zip-route-recommendation-v1",
+          "semantics": "display-ranking-only"
+        }
+      ],
+      "processRestart": "reviewed-exact-platform-only",
+      "routeSupport": "available-exact-reviewed-platform-only"
     },
     {
       "name": "catalog-transaction",

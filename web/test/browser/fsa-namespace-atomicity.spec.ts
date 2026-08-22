@@ -635,7 +635,7 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
   })
 })
 
-test('IndexedDB v8 closes on versionchange and rejects blocked upgrades without leaking a connection', async ({
+test('IndexedDB v9 closes on versionchange and rejects blocked upgrades without leaking a connection', async ({
   browserName,
   page,
 }) => {
@@ -646,52 +646,65 @@ test('IndexedDB v8 closes on versionchange and rejects blocked upgrades without 
       typeof import('../../src/output/browser/indexeddb-database')
     const ledgerModule = await import(modulePaths.ledger) as
       typeof import('../../src/output/browser/indexeddb-compatible-name-ledger')
-    const v7 = await openRaw(upgradeName, 7, (database, transaction) => {
-      databaseModule.installIndexedDbV7Schema(database, transaction)
+    const legacyReceiveLeaseStore = 'receive-operation-v1-leases'
+    const v8 = await openRaw(upgradeName, 8, (database, transaction) => {
+      databaseModule.installIndexedDbV8Schema(database, transaction, 0)
     })
-    const write = v7.transaction(databaseModule.INDEXEDDB_RECEIVE_LEASE_STORE, 'readwrite')
-    write.objectStore(databaseModule.INDEXEDDB_RECEIVE_LEASE_STORE).put({
+    const write = v8.transaction(legacyReceiveLeaseStore, 'readwrite')
+    write.objectStore(legacyReceiveLeaseStore).put({
       id: `legacy-${operationId}`,
       operationId,
     })
     await transactionDone(write)
-    v7.close()
+    v8.close()
 
     const upgraded = await ledgerModule.IndexedDbCompatibleNameLedger.open(upgradeName)
     upgraded.close()
     const reopened = await ledgerModule.IndexedDbCompatibleNameLedger.open(upgradeName)
-    const rawV8 = await openRaw(upgradeName, 8)
-    const countTransaction = rawV8.transaction(
+    const rawV9 = await openRaw(upgradeName, databaseModule.CHECKPOINT_DATABASE_VERSION)
+    const legacyLeaseStorePresent = rawV9.objectStoreNames.contains(legacyReceiveLeaseStore)
+    const countTransaction = rawV9.transaction(
       databaseModule.INDEXEDDB_RECEIVE_LEASE_STORE,
       'readonly',
     )
-    const legacyCount = await requestValue<number>(
+    const currentLeaseCount = await requestValue<number>(
       countTransaction.objectStore(databaseModule.INDEXEDDB_RECEIVE_LEASE_STORE).count(),
     )
     await transactionDone(countTransaction)
-    rawV8.close()
-    const versionNine = await openRaw(upgradeName, 9)
+    rawV9.close()
+    const laterVersion = await openRaw(
+      upgradeName,
+      databaseModule.CHECKPOINT_DATABASE_VERSION + 1,
+    )
     let closedAfterVersionchange = false
     try {
       await reopened.readHeader(operationId)
     } catch (error) {
       closedAfterVersionchange = error instanceof DOMException && error.name === 'InvalidStateError'
     }
-    versionNine.close()
+    laterVersion.close()
     await deleteRaw(upgradeName)
 
-    const blocker = await openRaw(blockedName, 7)
+    const blocker = await openRaw(blockedName, 8, (database, transaction) => {
+      databaseModule.installIndexedDbV8Schema(database, transaction, 0)
+    })
     let blockedRejected = false
     await ledgerModule.IndexedDbCompatibleNameLedger.open(blockedName).catch((error: unknown) => {
       blockedRejected = error instanceof DOMException && error.name === 'InvalidStateError'
     })
     blocker.close()
-    // The rejected v8 request still completes later; its blocked flag must close that late connection
+    // The rejected v9 request still completes later; its blocked flag must close that late connection
     // so a following upgrade can finish without timers or cross-tab cleanup heuristics.
-    const afterBlocked = await openRaw(blockedName, 9)
+    const afterBlocked = await openRaw(blockedName, databaseModule.CHECKPOINT_DATABASE_VERSION)
     afterBlocked.close()
     await deleteRaw(blockedName)
-    return { legacyCount, closedAfterVersionchange, blockedRejected, lateConnectionClosed: true }
+    return {
+      legacyLeaseStorePresent,
+      currentLeaseCount,
+      closedAfterVersionchange,
+      blockedRejected,
+      lateConnectionClosed: true,
+    }
 
     function openRaw(
       databaseName: string,
@@ -747,7 +760,8 @@ test('IndexedDB v8 closes on versionchange and rejects blocked upgrades without 
   })
 
   expect(result).toEqual({
-    legacyCount: 0,
+    legacyLeaseStorePresent: false,
+    currentLeaseCount: 0,
     closedAfterVersionchange: true,
     blockedRejected: true,
     lateConnectionClosed: true,

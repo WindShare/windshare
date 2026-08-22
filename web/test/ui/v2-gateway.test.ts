@@ -295,6 +295,10 @@ describe('v2 joined-share projection authority', () => {
           kind: 'tree',
           layoutBasis: { kind: 'synthetic-selection' },
         },
+        workspaceCostObservation: {
+          version: 1,
+          rawBytes: 68n,
+        },
       },
     })
 
@@ -316,6 +320,10 @@ describe('v2 joined-share projection authority', () => {
         kind: 'workspace-then-publish',
         workspace: { kind: 'origin-private-workspace' },
         publicationTarget: { kind: 'browser-handoff' },
+      },
+      sizeProjection: {
+        raw: { kind: 'exact', bytes: 68n },
+        artifact: { kind: 'exact' },
       },
     })
   })

@@ -57,6 +57,12 @@ export function probeBrowserEnvironment(
     ]),
     ...(supplemental.workspace === undefined ? {} : { workspace: supplemental.workspace }),
     ...(supplemental.portable === undefined ? {} : { portable: supplemental.portable }),
+    ...(supplemental.directZipSupport === undefined
+      ? {}
+      : { directZipSupport: supplemental.directZipSupport }),
+    ...(supplemental.zipRecommendationPolicy === undefined
+      ? {}
+      : { zipRecommendationPolicy: supplemental.zipRecommendationPolicy }),
   })
   return Object.freeze({ offers, fsaParent, browserHandoff })
 }
@@ -74,8 +80,9 @@ export function browserHandoffOffer(
         nameAuthority: guarantees.nameAuthority,
         replacement: guarantees.replacement,
         delivery: guarantees.delivery,
-        visibility: guarantees.visibility,
-        rollback: guarantees.rollback,
+        targetVisibility: guarantees.targetVisibility,
+        artifactAvailability: guarantees.artifactAvailability,
+        cleanupAuthority: guarantees.cleanupAuthority,
       },
       persistence: 'none',
       hardMaximumOutputBytes: null,
@@ -103,8 +110,9 @@ export function fsaParentOffer(
         nameAuthority: guarantees.nameAuthority,
         replacement: guarantees.replacement,
         delivery: guarantees.delivery,
-        visibility: guarantees.visibility,
-        rollback: guarantees.rollback,
+        targetVisibility: guarantees.targetVisibility,
+        artifactAvailability: guarantees.artifactAvailability,
+        cleanupAuthority: guarantees.cleanupAuthority,
       },
       persistence: 'durable-after-repository-commit',
       hardMaximumOutputBytes: null,

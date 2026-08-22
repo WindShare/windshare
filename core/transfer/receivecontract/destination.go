@@ -2,13 +2,15 @@ package receivecontract
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"strings"
 	"unicode/utf8"
 )
 
 const (
-	destinationReservationDomain = "windshare/destination-reservation/v2"
+	destinationReservationDomain = "windshare/destination-reservation/v3"
+	fsaOwnedFileBindingDomain    = "windshare/fsa-owned-file-binding/v1"
 	workspaceBindingDomain       = "windshare/workspace-binding/v1"
 	portableBindingDomain        = "windshare/portable-binding/v1"
 	nameCollisionDomain          = "windshare/name-collision/v1"
@@ -17,64 +19,9 @@ const (
 	DefaultPortableAssemblyPartBytes   = uint64(1_048_576)
 	DefaultPortableMaximumParts        = uint64(64)
 	BrowserHandoffObjectURLLeaseMillis = uint64(60_000)
+	DirectZipCandidateTokenLength      = 22
+	DirectZipStableNameInfix           = ".windshare-"
 )
-
-type NameAuthority uint8
-
-const (
-	NameApplicationChosen NameAuthority = iota + 1
-	NameUserChosen
-	NameBrowserChosen
-)
-
-type ReplacementGuarantee uint8
-
-const (
-	ReplacementAtomicNoReplace ReplacementGuarantee = iota + 1
-	ReplacementCoordinatedNoReplace
-	ReplacementUserAuthorizedReplace
-	ReplacementUnknown
-)
-
-type DeliveryMode uint8
-
-const (
-	DeliveryManagedTarget DeliveryMode = iota + 1
-	DeliveryBrowserHandoff
-)
-
-type CommitVisibility uint8
-
-const (
-	CommitAtomic CommitVisibility = iota + 1
-	CommitPrefixVisible
-	CommitUnobservable
-)
-
-type RollbackGuarantee uint8
-
-const (
-	RollbackToAbsent RollbackGuarantee = iota + 1
-	RollbackNone
-)
-
-type GuaranteeProfile uint8
-
-const (
-	GuaranteeNativeTree GuaranteeProfile = iota + 1
-	GuaranteeFSATree
-	GuaranteeManagedAtomic
-	GuaranteeBrowserHandoff
-)
-
-type GuaranteeSet struct {
-	profile     GuaranteeProfile
-	name        NameAuthority
-	replacement ReplacementGuarantee
-	delivery    DeliveryMode
-	visibility  CommitVisibility
-	rollback    RollbackGuarantee
-}
 
 type DestinationReservationKind uint8
 
@@ -152,39 +99,23 @@ type PortableBinding struct {
 	digest                     BindingDigest
 }
 
-func NativeTreeGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeNativeTree, name: NameApplicationChosen,
-		replacement: ReplacementAtomicNoReplace, delivery: DeliveryManagedTarget,
-		visibility: CommitPrefixVisible, rollback: RollbackNone,
-	}
+type DirectZipPolicyDigests struct {
+	ZipEncoding   PolicyDigest
+	Layout        PolicyDigest
+	Checkpoint    PolicyDigest
+	JournalBudget PolicyDigest
+	Epoch         PolicyDigest
 }
 
-func FSATreeGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeFSATree, name: NameApplicationChosen,
-		replacement: ReplacementCoordinatedNoReplace, delivery: DeliveryManagedTarget,
-		visibility: CommitPrefixVisible, rollback: RollbackNone,
-	}
-}
-
-func ManagedAtomicGuarantees(name NameAuthority) (GuaranteeSet, error) {
-	if name != NameApplicationChosen && name != NameUserChosen {
-		return GuaranteeSet{}, ErrInvalidReceiveContract
-	}
-	return GuaranteeSet{
-		profile: GuaranteeManagedAtomic, name: name,
-		replacement: ReplacementAtomicNoReplace, delivery: DeliveryManagedTarget,
-		visibility: CommitAtomic, rollback: RollbackToAbsent,
-	}, nil
-}
-
-func BrowserHandoffGuarantees() GuaranteeSet {
-	return GuaranteeSet{
-		profile: GuaranteeBrowserHandoff, name: NameBrowserChosen,
-		replacement: ReplacementUnknown, delivery: DeliveryBrowserHandoff,
-		visibility: CommitUnobservable, rollback: RollbackNone,
-	}
+type FSAOwnedFileBinding struct {
+	operation  OperationID
+	artifact   ArtifactDigest
+	stableName string
+	target     FSAOwnedTargetRef
+	guarantees GuaranteeSet
+	policies   DirectZipPolicyDigests
+	encoded    []byte
+	digest     BindingDigest
 }
 
 func NewNativeContainerRootReservation(
@@ -403,6 +334,63 @@ func NewPortableBinding(operation OperationID, id PortablePlanID, artifact Artif
 	}, nil
 }
 
+func NewFSAOwnedFileBinding(
+	operation OperationID,
+	artifact ArtifactSpec,
+	stableName string,
+	target FSAOwnedTargetRef,
+	policies DirectZipPolicyDigests,
+) (FSAOwnedFileBinding, error) {
+	if operation.IsZero() || artifact.IsZero() || artifact.Kind() != ArtifactZipArchive ||
+		target.IsZero() || !policies.Available() || !validDirectZipStableName(stableName) {
+		return FSAOwnedFileBinding{}, ErrInvalidReceiveContract
+	}
+	guarantees := FSAOwnedFileGuarantees()
+	encoded := canonicalRecord(fsaOwnedFileBindingDomain,
+		frame(operation.Bytes()),
+		frame(artifact.Digest().Bytes()),
+		frame([]byte(stableName)),
+		frame(target.Bytes()),
+		frame(guarantees.canonicalBytes()),
+		frame(policies.ZipEncoding.Bytes()),
+		frame(policies.Layout.Bytes()),
+		frame(policies.Checkpoint.Bytes()),
+		frame(policies.JournalBudget.Bytes()),
+		frame(policies.Epoch.Bytes()),
+	)
+	sum := digest(encoded)
+	return FSAOwnedFileBinding{
+		operation: operation, artifact: artifact.Digest(), stableName: stableName,
+		target: target, guarantees: guarantees, policies: policies,
+		encoded: encoded, digest: BindingDigest(sum),
+	}, nil
+}
+
+// Available is deliberately false when any measured policy identity is absent.
+// A zero digest is absence, never a placeholder that can authorize a direct route.
+func (policies DirectZipPolicyDigests) Available() bool {
+	return !policies.ZipEncoding.IsZero() && !policies.Layout.IsZero() &&
+		!policies.Checkpoint.IsZero() && !policies.JournalBudget.IsZero() &&
+		!policies.Epoch.IsZero()
+}
+
+func validDirectZipStableName(value string) bool {
+	if canonicalComponent(value) != nil || !strings.HasSuffix(value, ArchiveExtension) {
+		return false
+	}
+	withoutExtension := strings.TrimSuffix(value, ArchiveExtension)
+	separator := strings.LastIndex(withoutExtension, DirectZipStableNameInfix)
+	if separator <= 0 {
+		return false
+	}
+	token := withoutExtension[separator+len(DirectZipStableNameInfix):]
+	if len(token) != DirectZipCandidateTokenLength || strings.Contains(token, "=") {
+		return false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(token)
+	return err == nil && len(raw) == StableIdentityBytes && nonZero(raw)
+}
+
 func CollisionName(operation OperationID, requestedName string, index uint32, fileLike bool) (string, error) {
 	if operation.IsZero() || canonicalComponent(requestedName) != nil {
 		return "", ErrInvalidReceiveContract
@@ -449,31 +437,6 @@ func completeArtifactName(artifact ArtifactSpec) (string, bool) {
 	return "", false
 }
 
-func (guarantees GuaranteeSet) valid() bool {
-	switch guarantees.profile {
-	case GuaranteeNativeTree:
-		return guarantees == NativeTreeGuarantees()
-	case GuaranteeFSATree:
-		return guarantees == FSATreeGuarantees()
-	case GuaranteeManagedAtomic:
-		expected, err := ManagedAtomicGuarantees(guarantees.name)
-		return err == nil && guarantees == expected
-	case GuaranteeBrowserHandoff:
-		return guarantees == BrowserHandoffGuarantees()
-	default:
-		return false
-	}
-}
-
-func (guarantees GuaranteeSet) canonicalBytes() []byte {
-	return append(append(append(append(
-		frame([]byte{byte(guarantees.name)}),
-		frame([]byte{byte(guarantees.replacement)})...),
-		frame([]byte{byte(guarantees.delivery)})...),
-		frame([]byte{byte(guarantees.visibility)})...),
-		frame([]byte{byte(guarantees.rollback)})...)
-}
-
 func (reservation DestinationReservation) valid() bool {
 	return !reservation.operation.IsZero() && !reservation.id.IsZero() &&
 		!reservation.artifact.IsZero() && !reservation.authority.IsZero() &&
@@ -499,12 +462,13 @@ func (binding PortableBinding) valid() bool {
 		!binding.digest.IsZero() && BindingDigest(digest(binding.encoded)) == binding.digest
 }
 
-func (guarantees GuaranteeSet) Profile() GuaranteeProfile                   { return guarantees.profile }
-func (guarantees GuaranteeSet) NameAuthority() NameAuthority                { return guarantees.name }
-func (guarantees GuaranteeSet) Replacement() ReplacementGuarantee           { return guarantees.replacement }
-func (guarantees GuaranteeSet) Delivery() DeliveryMode                      { return guarantees.delivery }
-func (guarantees GuaranteeSet) Visibility() CommitVisibility                { return guarantees.visibility }
-func (guarantees GuaranteeSet) Rollback() RollbackGuarantee                 { return guarantees.rollback }
+func (binding FSAOwnedFileBinding) valid() bool {
+	return !binding.operation.IsZero() && !binding.artifact.IsZero() &&
+		validDirectZipStableName(binding.stableName) && !binding.target.IsZero() &&
+		binding.guarantees == FSAOwnedFileGuarantees() && binding.policies.Available() &&
+		!binding.digest.IsZero() && BindingDigest(digest(binding.encoded)) == binding.digest
+}
+
 func (reservation DestinationReservation) Kind() DestinationReservationKind { return reservation.kind }
 func (reservation DestinationReservation) OperationID() OperationID         { return reservation.operation }
 func (reservation DestinationReservation) ID() DestinationReservationID     { return reservation.id }
@@ -550,7 +514,16 @@ func (binding PortableBinding) MaximumParts() uint64           { return binding.
 func (binding PortableBinding) ObjectURLLeaseMilliseconds() uint64 {
 	return binding.objectURLLeaseMilliseconds
 }
-func (binding PortableBinding) Preparation() PreparationPolicy { return binding.preparation }
-func (binding PortableBinding) CanonicalBytes() []byte         { return clone(binding.encoded) }
-func (binding PortableBinding) Digest() BindingDigest          { return binding.digest }
-func (binding PortableBinding) IsZero() bool                   { return !binding.valid() }
+func (binding PortableBinding) Preparation() PreparationPolicy            { return binding.preparation }
+func (binding PortableBinding) CanonicalBytes() []byte                    { return clone(binding.encoded) }
+func (binding PortableBinding) Digest() BindingDigest                     { return binding.digest }
+func (binding PortableBinding) IsZero() bool                              { return !binding.valid() }
+func (binding FSAOwnedFileBinding) OperationID() OperationID              { return binding.operation }
+func (binding FSAOwnedFileBinding) ArtifactDigest() ArtifactDigest        { return binding.artifact }
+func (binding FSAOwnedFileBinding) StableName() string                    { return binding.stableName }
+func (binding FSAOwnedFileBinding) TargetRef() FSAOwnedTargetRef          { return binding.target }
+func (binding FSAOwnedFileBinding) Guarantees() GuaranteeSet              { return binding.guarantees }
+func (binding FSAOwnedFileBinding) PolicyDigests() DirectZipPolicyDigests { return binding.policies }
+func (binding FSAOwnedFileBinding) CanonicalBytes() []byte                { return clone(binding.encoded) }
+func (binding FSAOwnedFileBinding) Digest() BindingDigest                 { return binding.digest }
+func (binding FSAOwnedFileBinding) IsZero() bool                          { return !binding.valid() }

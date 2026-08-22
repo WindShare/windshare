@@ -1,10 +1,7 @@
 import type { V2CommittedDirectory } from '../catalog/v2-page-store'
-import {
-  type V2CatalogEntry,
-} from '../catalog/v2-records'
+import type { V2CatalogEntry } from '../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../catalog/v2-selection'
 import { encodeBase64Url } from '../crypto/bytes'
-import type { ReceiveLifecycleState } from '../output/workspace/state'
 import {
   DirectorySettlementKind,
   snapshotMaterializationDirectory,
@@ -25,14 +22,10 @@ import {
   artifactDirectoryPath,
   artifactLayoutClass,
 } from './job/artifact-path'
+import { finalizeV2Directories } from './job/directory-transfer'
 import {
-  finalizeV2Directories,
-} from './job/directory-transfer'
-import {
-  V2ClassifiedTransferFailureError,
   isolatedDirectoryOutputFailure,
   normalizeV2FileTransferFailure,
-  type ClassifiedTransferFailure,
 } from './job/failures'
 import { V2TransferAdmissionFailureError } from './job/admission-error'
 import {
@@ -45,14 +38,6 @@ import {
   snapshotTransferJobId,
   validateTransferJobIntent,
 } from './job/identity'
-import {
-  failedTreeOutcome,
-  requireSuccessfulWorker,
-  validateCompletionLifecycle,
-  validatePauseLifecycle,
-  validateStopLifecycle,
-  validatePreparationRejectionLifecycle,
-} from './job/lifecycle'
 import { transferJobLimits, type TransferJobLimits } from './job/limits'
 import { V2TransferObservers } from './job/observers'
 import { ExactPreparationCollector } from './job/preparation'
@@ -67,36 +52,28 @@ import {
 } from './job/workers'
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
-  EMPTY_TRANSFER_FAILURE_SUMMARY,
-  transferWorkerSettlement,
-  type CompletedTransferWorkerSettlement,
-  type TransferWorkerSettlement,
-} from './outcome'
-import {
   snapshotDirectoryMaterializationRequest,
-  TransferStopRequestedError,
+  type DirectResumableZipExecution,
   type ExactPreparationEvidence,
   type IncrementalDirectoryOutput,
   type MaterializationSummary,
   type PlanExecution,
 } from './output-session'
+import type { DirectZipIntent } from './direct-zip'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
+import { runDirectZipJob } from './v2-job-direct-zip'
 import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
-import {
-  outputSettlementTimeoutMilliseconds,
-  pauseFailedV2Execution,
-  withOutputSettlementTimeout,
-  withQuiescentOutputSettlementTimeout,
-} from './settlement/v2-output'
+import { outputSettlementTimeoutMilliseconds } from './settlement/v2-output'
+import { TransferJobSettlement } from './v2-job-settlement'
 
 export * from './job/public'
 
 
 /**
- * Direct plans retain bounded discovery/content overlap. Prepared plans first
- * freeze exact authenticated catalog evidence; their output port is unreachable
- * until the plan adapter accepts that evidence.
+ * Tree and atomic plans retain bounded discovery/content overlap. Direct ZIP uses
+ * a separate serial coordinator, while prepared plans freeze exact authenticated
+ * catalog evidence before their output port becomes reachable.
  */
 export class TransferJob {
   readonly #options: TransferJobOptions
@@ -109,6 +86,7 @@ export class TransferJob {
   readonly #discovery: V2JobDiscovery
   readonly #root: V2JobRootAuthority
   readonly #materialization: TransferJobMaterialization
+  readonly #settlement: TransferJobSettlement
   readonly #finalizableDirectories: DirectoryAdmission[] = []
   readonly #materializedDirectoryPaths = new Set<string>()
   readonly #transferJobId: string
@@ -122,7 +100,6 @@ export class TransferJob {
   #intent: TransferJobOptions['intent'] | undefined
   #observers: V2TransferObservers | undefined
   #preparation: ExactPreparationEvidence | undefined
-  #lastWorker: TransferWorkerSettlement | undefined
   #externalCancellationRequested = false
   #started = false
 
@@ -168,6 +145,22 @@ export class TransferJob {
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
+    this.#settlement = new TransferJobSettlement({
+      options,
+      lifetime: this.#lifetime,
+      measure: this.#measure,
+      failures: this.#failures,
+      progress: this.#progress,
+      transferJobId: this.#transferJobId,
+      outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      intent: () => this.#requireIntent(),
+      execution: () => this.#execution,
+      preparation: () => this.#preparation,
+      observers: () => this.#observers,
+      externalCancellationRequested: () => this.#externalCancellationRequested,
+      materializationSummary: () => this.#materializationSummary(),
+      emitProgress: () => this.#emitProgress(),
+    })
     this.#materialization = new TransferJobMaterialization({
       signal: this.#lifetime.signal,
       admission: options.plans,
@@ -212,9 +205,12 @@ export class TransferJob {
         materializationStarted: () => this.#observers?.materializationStarted(),
         finalizeDirectories: () => this.#finalizeDirectories(),
         transferPreparedFiles: files => this.#transferPreparedFiles(files),
-        completeWorkers: measure => this.#completeWorkers(measure),
-        settleIncompletePreparation: measure => this.#settleIncompletePreparation(measure),
-        preparationRejected: state => this.#preparationRejected(state),
+        completeWorkers: measure => this.#settlement.completeWorkers(measure),
+        settleIncompletePreparation: measure => this.#settlement.settleIncompletePreparation(measure),
+        preparationRejected: state => this.#settlement.preparationRejected(state),
+      },
+      directZip: {
+        run: execution => this.#runDirectZip(execution),
       },
     })
   }
@@ -254,7 +250,7 @@ export class TransferJob {
         // publish a second ordinary lifecycle over a retained pending outcome.
         throw error
       }
-      return this.#settleRunFailure(error)
+      return this.#settlement.settleRunFailure(error)
     } finally {
       this.#externalAbortCleanup?.()
     }
@@ -289,6 +285,47 @@ export class TransferJob {
       if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
       throw error
     }
+  }
+
+  async #runDirectZip(execution: DirectResumableZipExecution): Promise<SelectionMeasure> {
+    const intent = this.#requireIntent()
+    if (intent.plan.kind !== 'direct-resumable-zip' || intent.artifact.kind !== 'zip-archive') {
+      throw new TypeError('ordered direct ZIP run lost its frozen operation binding')
+    }
+    return runDirectZipJob({
+      catalog: this.#options.catalog,
+      descriptor: this.#options.descriptor,
+      selection: this.#selection,
+      intent: intent as DirectZipIntent,
+      revisions: this.#options.revisions,
+      broker: this.#options.broker,
+      execution,
+      maximumNodeClaims: this.#limits.catalogNodeClaims,
+      signal: this.#lifetime.signal,
+      observeSelectedFile: exactSize => {
+        const measure = this.#measure.observeUniqueFile(exactSize)
+        this.#observers?.measure(measure)
+        this.#emitProgress()
+      },
+      observeReplayedFile: exactSize => {
+        this.#progress.completeFile(exactSize)
+        this.#emitProgress()
+      },
+      acknowledgeWrite: bytes => {
+        this.#progress.acknowledgeWrite(bytes)
+        this.#emitProgress()
+      },
+      completeFile: exactSize => {
+        this.#progress.completeFile(exactSize)
+        this.#emitProgress()
+      },
+      finishMeasure: () => {
+        const measure = this.#measure.complete()
+        this.#observers?.measure(measure)
+        this.#emitProgress()
+        return measure
+      },
+    })
   }
 
   async #admitDirectory(
@@ -416,6 +453,9 @@ export class TransferJob {
 
   async #transferFile(file: PendingFile): Promise<void> {
     const execution = this.#requireExecution()
+    if (execution.planKind === 'direct-resumable-zip') {
+      throw new TypeError('direct ZIP content must pass through its ordered coordinator')
+    }
     await transferV2File({
       descriptor: this.#options.descriptor,
       revisions: this.#options.revisions,
@@ -437,90 +477,6 @@ export class TransferJob {
     }, file)
   }
 
-  async #completeWorkers(measure: SelectionMeasure): Promise<TransferJobResult> {
-    const worker: CompletedTransferWorkerSettlement = this.#failures.failureCount === 0
-      ? transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
-      : transferWorkerSettlement('CompletedWithErrors', this.#failures.snapshot())
-    this.#lastWorker = worker
-    const summary = this.#materializationSummary()
-    const execution = this.#requireExecution()
-    if (execution.planKind !== 'direct-tree' && worker.status !== 'Succeeded') {
-      this.#observers?.materializationFailed(
-        worker.trigger?.materializationFailureReason ?? 'content-read-failed',
-        BigInt(this.#progress.completedFiles),
-        this.#progress.completedBytes,
-      )
-      const failureTrigger = requireWorkerFailureTrigger(worker)
-      const reason = new V2ClassifiedTransferFailureError(failureTrigger)
-      const lifecycle = await this.#pause(worker, reason, failureTrigger)
-      return this.#result(worker, lifecycle, measure, reason, failureTrigger)
-    }
-    this.#observers?.materializationCompleted(summary)
-    const lifecycle = await this.#settleCompleted(execution, worker, summary)
-    if (execution.planKind === 'direct-tree') {
-      this.#observers?.treeFinalized({
-        outcome: lifecycle.kind === 'partial-directory' ? 'partial-directory' : 'published',
-        successCount: BigInt(this.#progress.completedFiles),
-        failureCount: BigInt(worker.failureCount),
-      })
-    }
-    return this.#result(worker, lifecycle, measure)
-  }
-
-  async #settleCompleted(
-    execution: PlanExecution,
-    worker: CompletedTransferWorkerSettlement,
-    summary: MaterializationSummary,
-  ): Promise<ReceiveLifecycleState> {
-    if (execution.planKind === 'direct-tree') {
-      const state = await withQuiescentOutputSettlementTimeout(
-        'settle completed plan execution',
-        this.#outputSettlementTimeoutMilliseconds,
-        signal => execution.settle({
-          transferJobId: this.#transferJobId,
-          worker,
-          materialization: summary,
-        }, signal),
-        this.#options.outputSettlementDeadline,
-      )
-      return validateCompletionLifecycle(this.#requireIntent(), worker, state)
-    }
-
-    const controller = new AbortController()
-    try {
-      const state = await withOutputSettlementTimeout(
-        'settle completed plan execution',
-        this.#outputSettlementTimeoutMilliseconds,
-        () => execution.settle({
-          transferJobId: this.#transferJobId,
-          worker: requireSuccessfulWorker(worker),
-          materialization: summary,
-        }, controller.signal),
-        undefined,
-        this.#options.outputSettlementDeadline,
-      )
-      return validateCompletionLifecycle(this.#requireIntent(), worker, state)
-    } finally {
-      controller.abort(new DOMException('Plan settlement boundary closed', 'AbortError'))
-    }
-  }
-
-  async #settleIncompletePreparation(measure: SelectionMeasure): Promise<TransferJobResult> {
-    const worker = transferWorkerSettlement('CompletedWithErrors', this.#failures.snapshot())
-    this.#lastWorker = worker
-    const failureTrigger = requireWorkerFailureTrigger(worker)
-    const reason = new V2ClassifiedTransferFailureError(failureTrigger)
-    const lifecycle = await this.#pause(worker, reason, failureTrigger)
-    return this.#result(worker, lifecycle, measure, reason, failureTrigger)
-  }
-
-  #preparationRejected(state: ReceiveLifecycleState): TransferJobResult {
-    const lifecycle = validatePreparationRejectionLifecycle(this.#requireIntent(), state)
-    const worker = transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY)
-    this.#lastWorker = worker
-    return this.#result(worker, lifecycle, this.#measure.snapshot())
-  }
-
   #admissionFailure(error: unknown): V2TransferAdmissionFailureError {
     const normalized = normalizeV2FileTransferFailure(error, {
       stage: 'authority_selection',
@@ -535,129 +491,6 @@ export class TransferJob {
           kind: 'fault',
           classification: normalized.diagnostic.classification,
         }))
-  }
-
-  async #settleRunFailure(error: unknown): Promise<TransferJobResult> {
-    const normalized = normalizeV2FileTransferFailure(error, {
-      ...(this.#externalCancellationRequested ? { signal: this.#lifetime.signal } : {}),
-      ...(this.#options.incidentScope === undefined
-        ? {}
-        : { incidentScope: this.#options.incidentScope }),
-    })
-    const abortReason = normalized.diagnostic
-    const failureTrigger = normalized.kind === 'fault'
-      ? normalized.diagnostic.classification
-      : undefined
-    if (!this.#lifetime.signal.aborted) this.#lifetime.abort(abortReason)
-    let measure = this.#measure.snapshot()
-    if (measure.discovery === 'open') {
-      measure = this.#measure.fail()
-      this.#observers?.measure(measure)
-      this.#emitProgress()
-    }
-    const worker = this.#lastWorker ?? transferWorkerSettlement('Paused', this.#failures.snapshot())
-    this.#observers?.materializationFailed(
-      failureTrigger?.materializationFailureReason ??
-        worker.trigger?.materializationFailureReason ??
-        'content-read-failed',
-      BigInt(this.#progress.completedFiles),
-      this.#progress.completedBytes,
-    )
-    const lifecycle = abortReason instanceof TransferStopRequestedError
-      ? await this.#stop(worker, abortReason)
-      : await this.#pause(worker, abortReason, failureTrigger)
-    if (this.#execution?.planKind === 'direct-tree') {
-      const outcome = failedTreeOutcome(lifecycle)
-      if (outcome !== undefined) {
-        this.#observers?.treeFinalized({
-          outcome,
-          successCount: BigInt(this.#progress.completedFiles),
-          failureCount: BigInt(worker.failureCount),
-        })
-      }
-    }
-    return this.#result(worker, lifecycle, measure, abortReason, failureTrigger)
-  }
-
-  async #pause(
-    worker: TransferWorkerSettlement,
-    reason: unknown,
-    failureTrigger?: ClassifiedTransferFailure,
-  ): Promise<ReceiveLifecycleState> {
-    const state = await pauseFailedV2Execution({
-      intent: this.#requireIntent(),
-      ...(this.#execution === undefined ? {} : { execution: this.#execution }),
-      authority: this.#options.plans,
-      worker,
-      materialization: this.#materializationSummary(),
-      reason,
-      ...(failureTrigger === undefined ? {} : { failureTrigger }),
-      ...(this.#options.incidentScope === undefined
-        ? {}
-        : { incidentScope: this.#options.incidentScope }),
-      timeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
-      ...(this.#options.outputSettlementDeadline === undefined
-        ? {}
-        : { deadline: this.#options.outputSettlementDeadline }),
-      validateState: state => validatePauseLifecycle(this.#requireIntent(), worker, state),
-    })
-    return state
-  }
-
-  async #stop(
-    worker: TransferWorkerSettlement,
-    reason: TransferStopRequestedError,
-  ): Promise<ReceiveLifecycleState> {
-    if (worker.status !== 'Paused') {
-      throw new TypeError('Stop-and-keep-partial requires a drained paused worker settlement')
-    }
-    const execution = this.#requireExecution()
-    if (execution.planKind !== 'direct-tree') {
-      throw new TypeError('Stop-and-keep-partial requires DirectTree execution')
-    }
-    const stop = execution.stop
-    if (stop === undefined) {
-      throw new TypeError('DirectTree execution does not implement Stop-and-keep-partial')
-    }
-    return validateStopLifecycle(
-      this.#requireIntent(),
-      await withQuiescentOutputSettlementTimeout(
-        'stop direct-tree execution',
-        this.#outputSettlementTimeoutMilliseconds,
-        signal => stop({
-          transferJobId: this.#transferJobId,
-          worker,
-          materialization: this.#materializationSummary(),
-          reason,
-        }, signal),
-        this.#options.outputSettlementDeadline,
-      ),
-    )
-  }
-
-  #result(
-    worker: TransferWorkerSettlement,
-    lifecycle: ReceiveLifecycleState,
-    measure: SelectionMeasure,
-    abortReason?: unknown,
-    failureTrigger: ClassifiedTransferFailure | undefined = worker.trigger,
-  ): TransferJobResult {
-    const execution = this.#execution
-    const repairSummary = execution?.planKind === 'direct-tree'
-      ? execution.repairSummary?.()
-      : undefined
-    return Object.freeze({
-      worker,
-      lifecycle,
-      measure,
-      transferJobId: this.#transferJobId,
-      intent: this.#requireIntent(),
-      ...(abortReason === undefined ? {} : { abortReason }),
-      ...(failureTrigger === undefined ? {} : { failureTrigger }),
-      ...(execution === undefined ? {} : { outputDurability: execution.output.capabilities.durability }),
-      ...(this.#preparation === undefined ? {} : { preparation: this.#preparation }),
-      ...(repairSummary === undefined ? {} : { repairSummary }),
-    })
   }
 
   #reserveDirectoryAdmission(): void {
@@ -680,6 +513,9 @@ export class TransferJob {
   }
 
   #materializationSummary(): MaterializationSummary {
+    if (this.#execution?.planKind === 'direct-resumable-zip') {
+      return this.#execution.ordered.materializationSummary()
+    }
     const directoryCount = this.#preparation?.directoryCount ??
       BigInt(this.#materializedDirectoryPaths.size)
     const fileCount = BigInt(this.#progress.completedFiles)
@@ -720,13 +556,4 @@ export class TransferJob {
     this.#externalAbortCleanup = () => signal.removeEventListener('abort', abort)
     if (signal.aborted) abort()
   }
-}
-
-function requireWorkerFailureTrigger(
-  worker: TransferWorkerSettlement,
-): ClassifiedTransferFailure {
-  if (worker.trigger === undefined) {
-    throw new TypeError('Failed transfer worker is missing nominated failure authority')
-  }
-  return worker.trigger
 }

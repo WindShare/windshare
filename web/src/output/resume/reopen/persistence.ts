@@ -37,7 +37,9 @@ import type {
   StableLifecycleKind,
 } from './model'
 
-export async function expectedBindingRecord(intent: ReceiveIntent): Promise<PersistedReceiveRecord> {
+export async function expectedBindingRecord(
+  intent: ReceiveIntent,
+): Promise<PersistedReceiveRecord | undefined> {
   if (intent.plan.kind === 'direct-tree') {
     return createPersistedReceiveRecord({
       operationId: intent.operationId,
@@ -52,7 +54,8 @@ export async function expectedBindingRecord(intent: ReceiveIntent): Promise<Pers
       canonicalBytes: intent.plan.workspace.canonicalBytes,
     })
   }
-  throw new TypeError('persisted reopen supports only DirectTree and Workspace plans')
+  if (intent.plan.kind === 'direct-resumable-zip') return undefined
+  throw new TypeError('persisted reopen does not support this materialization plan')
 }
 
 export async function assertDescriptorAuthority(
@@ -273,6 +276,7 @@ export function closeAuthority(
         ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
         lease.release(),
       ])
+      resources.directZipJournal?.close()
       repository.close()
       const failures = releases.filter(
         (result): result is PromiseRejectedResult => result.status === 'rejected',
@@ -291,17 +295,16 @@ export function closeAuthority(
 
 export async function closeAfterFailure(
   repository: ReceiveOperationRepository,
-  lease: BrowserReceiveOperationLease | undefined,
-  claim: WorkspaceBudgetClaim | undefined,
-  packageBackend: import('../../origin-private/session').OriginPrivatePackageContinuationBackend | undefined,
+  resources: ReopenResources,
   failure: unknown,
   observeReleaseFailure?: (failure: unknown) => void,
 ): Promise<never> {
   const releases = await Promise.allSettled([
-    ...(packageBackend === undefined ? [] : [packageBackend.close()]),
-    ...(claim === undefined ? [] : [claim.release()]),
-    ...(lease === undefined ? [] : [lease.release()]),
+    ...(resources.packageBackend === undefined ? [] : [resources.packageBackend.close()]),
+    ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
+    ...(resources.lease === undefined ? [] : [resources.lease.release()]),
   ])
+  resources.directZipJournal?.close()
   repository.close()
   const releaseFailures = releases
     .filter((result): result is PromiseRejectedResult => result.status === 'rejected')
@@ -353,7 +356,10 @@ function stableLifecycleKind(state: ReceiveLifecycleState): StableLifecycleKind 
     case 'resumable-receive':
     case 'resumable-package':
     case 'waiting-to-save':
-    case 'download-started': return state.kind
+    case 'download-started':
+    case 'authorization-required':
+    case 'target-verification-required':
+    case 'destination-space-required': return state.kind
     default: throw new TypeError('receive expiry requires a stable lifecycle')
   }
 }
