@@ -219,15 +219,18 @@ func TestEncodeV3EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
 
 func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
 	snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
-		DiscoveredFiles:    math.MaxUint64,
-		DiscoveredBytes:    math.MaxUint64,
-		PublishedFiles:     math.MaxUint64,
-		PublishedBytes:     math.MaxUint64,
-		VerifiedBytes:      math.MaxUint64,
-		NewlyVerifiedBytes: math.MaxUint64,
-		FileOutcomes:       clievent.FileOutcomes{DownloadedFiles: math.MaxUint64},
-		Discovery:          clievent.DiscoveryFailed,
-		CountersExact:      false,
+		DiscoveredFiles:         math.MaxUint64,
+		DiscoveredBytes:         math.MaxUint64,
+		PublishedFiles:          math.MaxUint64,
+		PublishedBytes:          math.MaxUint64,
+		VerifiedBytes:           math.MaxUint64,
+		NewlyVerifiedBytes:      math.MaxUint64,
+		FileOutcomes:            clievent.FileOutcomes{DownloadedFiles: math.MaxUint64},
+		CapacityActiveWaiters:   math.MaxUint32,
+		CapacityAccumulatedWait: 1250 * time.Millisecond,
+		CapacityWaitAttempts:    math.MaxUint64,
+		Discovery:               clievent.DiscoveryFailed,
+		CountersExact:           false,
 	}))
 	event := mustValue(clievent.NewTransferProgress(
 		mustValue(clievent.NewReceiveOperationID(testIdentity(t, 0xa1))),
@@ -253,7 +256,10 @@ func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
 		payload.Progress.PublishedBytes != max ||
 		payload.Progress.VerifiedBytes != max ||
 		payload.Progress.NewlyVerifiedBytes != max ||
-		payload.Progress.FileOutcomes.DownloadedFiles != max {
+		payload.Progress.FileOutcomes.DownloadedFiles != max ||
+		payload.Progress.CapacityWait.ActiveWaiters != "4294967295" ||
+		payload.Progress.CapacityWait.AccumulatedWaitMS != "1250" ||
+		payload.Progress.CapacityWait.Attempts != max {
 		t.Fatalf("unsafe progress projection: %+v", payload.Progress)
 	}
 	if payload.ReceiveOperationID != base64.RawURLEncoding.EncodeToString(event.ReceiveOperationID().Bytes()) {

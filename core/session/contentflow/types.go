@@ -8,6 +8,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -133,6 +134,8 @@ type RevisionFailure struct {
 	Code       uint16
 	Retryable  bool
 	RetryAfter time.Duration
+
+	capacityDecision revisioncapacity.CapacityDecisionID
 }
 
 func NewRevisionFailure(code uint16, retryable bool, retryAfter time.Duration) (RevisionFailure, error) {
@@ -148,6 +151,19 @@ func NewRevisionFailure(code uint16, retryable bool, retryAfter time.Duration) (
 		return RevisionFailure{}, errors.New("permanent revision failure cannot carry a retry delay")
 	}
 	return RevisionFailure{Code: code, Retryable: retryable, RetryAfter: retryAfter}, nil
+}
+
+func (failure RevisionFailure) CapacityDecisionID() revisioncapacity.CapacityDecisionID {
+	return failure.capacityDecision
+}
+
+func (failure RevisionFailure) withCapacityDecision(
+	decision revisioncapacity.CapacityDecisionID,
+) RevisionFailure {
+	if failure.Code == RevisionCodeQuota && failure.Retryable && decision != "" {
+		failure.capacityDecision = decision
+	}
+	return failure
 }
 
 type OpenResult struct {
@@ -166,9 +182,11 @@ func SuccessfulOpen(file catalog.FileID, lease content.RevisionLease, object []b
 
 func FailedOpen(file catalog.FileID, failure RevisionFailure) (OpenResult, error) {
 	validated, err := NewRevisionFailure(failure.Code, failure.Retryable, failure.RetryAfter)
-	if file.IsZero() || err != nil {
+	if file.IsZero() || err != nil || failure.capacityDecision != "" &&
+		(failure.Code != RevisionCodeQuota || !failure.Retryable) {
 		return OpenResult{}, ErrInvalidOpenResults
 	}
+	validated.capacityDecision = failure.capacityDecision
 	return OpenResult{FileID: file, Failure: &validated}, nil
 }
 
@@ -200,6 +218,9 @@ func NewOpenResults(items []OpenResult) (OpenResults, error) {
 			}
 		} else if _, err := NewRevisionFailure(item.Failure.Code, item.Failure.Retryable, item.Failure.RetryAfter); err != nil {
 			return OpenResults{}, err
+		} else if item.Failure.capacityDecision != "" &&
+			(item.Failure.Code != RevisionCodeQuota || !item.Failure.Retryable) {
+			return OpenResults{}, ErrInvalidOpenResults
 		}
 		owned[index] = item.clone()
 	}

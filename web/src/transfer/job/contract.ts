@@ -28,6 +28,10 @@ import type {
 import { MAX_DIRECTORY_ADMISSIONS } from '../directory-admission-ledger'
 import type { V2OutputSettlementDeadline } from '../settlement/v2-output'
 import type { WorkerFamilyFailureSource } from '../worker-family/supervisor'
+import type {
+  V2RevisionCapacityPolicyOptions,
+  V2RevisionCapacitySurface,
+} from '../revision-capacity/public'
 
 export const V2_MAXIMUM_CONCURRENT_FILES = 4
 export const V2_MAXIMUM_CONCURRENT_DIRECTORIES = 4
@@ -94,6 +98,10 @@ export interface TransferProgress {
   readonly contentLanes: number
   readonly discovery: SelectionMeasure['discovery']
   readonly failedDirectories: number
+  readonly capacityWaitingFiles: number
+  readonly capacityAccumulatedWaitMilliseconds: number
+  readonly capacityWaitAttempts: number
+  readonly capacityWaitVisible: boolean
   readonly partial: boolean
   readonly transferJobId: string
   readonly outputSessionId?: string
@@ -166,6 +174,27 @@ export type TransferTraceEvent =
       outputSessionId?: string
     }>
   | Readonly<{
+      name: 'receive_transition'
+      transition:
+        | 'capacity_retry_scheduled'
+        | 'capacity_retry_succeeded'
+        | 'capacity_wait_budget_paused'
+        | 'capacity_wait_cancelled'
+        | 'capacity_generation_replaced'
+      capacityWaitId: string
+      capacitySurface: V2RevisionCapacitySurface
+      receiveOperationId: string
+      transferJobId: string
+      protocolSessionId: string
+      protocolOperationId: string
+      attempt: bigint
+      senderHintMilliseconds: number
+      jitterMilliseconds: number
+      delayMilliseconds: number
+      accumulatedWaitMilliseconds: number
+      activeWaiters: number
+    }>
+  | Readonly<{
       name: 'transfer_progress'
       discoveredFiles: bigint
       discoveredBytes: bigint
@@ -175,6 +204,10 @@ export type TransferTraceEvent =
       fileErrors: bigint
       selectionErrors: bigint
       failedDirectories: bigint
+      capacityWaitingFiles: bigint
+      capacityAccumulatedWaitMilliseconds: number
+      capacityWaitAttempts: bigint
+      capacityWaitVisible: boolean
       contentLanes: number
       discovery: SelectionMeasure['discovery']
       partial: boolean
@@ -186,6 +219,7 @@ export interface TransferJobOptions {
   readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
   readonly revisions: V2RevisionReader
   readonly broker: V2BlockRangeReader
+  readonly revisionCapacity: V2RevisionCapacityPolicyOptions
   readonly lanes: V2ContentLaneStatus
   readonly plans: V2PlanExecutionAuthority
   readonly intent: ReceiveIntent

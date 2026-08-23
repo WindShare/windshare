@@ -48,6 +48,34 @@ func TestProgressSnapshotEnforcesExactCounterRelationships(t *testing.T) {
 	}
 }
 
+func TestProgressSnapshotKeepsCapacityWaitOutsideFileOutcomes(t *testing.T) {
+	snapshot, err := NewProgressSnapshot(ProgressSpec{
+		Discovery: DiscoveryComplete, CountersExact: true,
+		CapacityActiveWaiters: 1, CapacityAccumulatedWait: 750 * time.Millisecond,
+		CapacityWaitAttempts: 2, CapacityWaitVisible: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.CapacityActiveWaiters() != 1 || snapshot.CapacityAccumulatedWait() != 750*time.Millisecond ||
+		snapshot.CapacityWaitAttempts() != 2 || !snapshot.CapacityWaitVisible() {
+		t.Fatalf("capacity wait facts changed: %+v", snapshot)
+	}
+	if snapshot.FileOutcomes().HasNonSuccess() {
+		t.Fatalf("capacity wait became a file outcome: %+v", snapshot.FileOutcomes())
+	}
+
+	invalid := []ProgressSpec{
+		{Discovery: DiscoveryComplete, CapacityAccumulatedWait: -time.Millisecond},
+		{Discovery: DiscoveryComplete, CapacityWaitVisible: true},
+	}
+	for _, spec := range invalid {
+		if _, err := NewProgressSnapshot(spec); err == nil {
+			t.Fatalf("accepted invalid capacity wait: %+v", spec)
+		}
+	}
+}
+
 func TestResultConstructorsFreezeExitAndDriftSemantics(t *testing.T) {
 	destination := NewDisplayPath("C:/receiver/result")
 	success, err := NewTransferResult(TransferResultSpec{

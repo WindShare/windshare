@@ -471,6 +471,12 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
       revisions: readers.revisions,
       broker: readers.broker,
       lanes: { size: PRODUCT_FIXTURE_LANE_COUNT },
+      revisionCapacity: {
+        generation: {
+          waitForProtocolSessionReplacement: (_identity, waitSignal) =>
+            waitUntilAborted(waitSignal),
+        },
+      },
       transferJobId: runtime.transferJobId,
       trace: {
         current: event => transferTraceNames.push(
@@ -496,6 +502,15 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
       await Promise.resolve(runtime.detach()).catch(() => undefined)
     }
   }
+}
+
+function waitUntilAborted(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException('wait aborted', 'AbortError'))
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+  })
 }
 
 async function commitProductionChoice(

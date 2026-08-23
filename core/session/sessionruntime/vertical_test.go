@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
@@ -435,8 +436,8 @@ func TestOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 
 func testOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	released := make(chan content.LeaseID, 1)
-	fixture.contentStore.released = released
+	ended := make(chan verticalLeaseEnd, 1)
+	fixture.contentStore.ended = ended
 	localFailure := errors.New("local revision descriptor rejected")
 	receiverConfig := fixture.receiverConfig
 	receiverConfig.RecordOpener = failingRecordOpener{err: localFailure}
@@ -451,9 +452,9 @@ func testOpenRevisionLocalFailureCompensatesTheRemoteLease(t *testing.T) {
 		t.Fatalf("local open failure=%v", err)
 	}
 	select {
-	case leaseID := <-released:
-		if leaseID != fixture.contentStore.lease.ID() {
-			t.Fatalf("released lease=%x", leaseID)
+	case ending := <-ended:
+		if ending.id != fixture.contentStore.lease.ID() || ending.kind != content.LeaseRelinquished {
+			t.Fatalf("lease ending=%+v", ending)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("local open failure did not release the completed remote lease")
@@ -530,11 +531,22 @@ type verticalFixture struct {
 	receiverFactory  *ReceiverFactory
 	receiverConfig   ReceiverFactoryConfig
 	contentStore     *verticalContentStore
+	capacityOwner    *revisioncapacity.ProcessOwner
+	capacityStore    *revisioncapacity.StoreRegistration
 	terminal         *verticalTerminalConnectivity
 	scanCalls        atomic.Int32
 	scanStarted      chan struct{}
 	scanGate         chan struct{}
 	scanStopped      chan struct{}
+}
+
+func (fixture *verticalFixture) registerCapacitySession(
+	sessionID protocolsession.ProtocolSessionID,
+) (*revisioncapacity.SessionRegistration, error) {
+	return fixture.capacityStore.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
+		Limits:    revisioncapacity.DefaultSessionLimits(),
+	})
 }
 
 func newVerticalFixture(t *testing.T) *verticalFixture {
@@ -672,17 +684,31 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 		contentflow.RevisionLeaseTTL, contentflow.RevisionLeaseRenewAfter,
 	)
 	fixture.contentStore = &verticalContentStore{descriptor: revisionDescriptor, lease: lease, data: fixture.fileData}
+	fixture.capacityOwner, err = revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.capacityStore, err = fixture.capacityOwner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
+		StoreID: "sessionruntime-vertical-store", ShareID: "sessionruntime-vertical-share",
+		Limits: revisioncapacity.DefaultShareLimits(),
+	}, verticalCapacityTarget{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = fixture.capacityStore.Close()
+		_ = fixture.capacityOwner.Close()
+	})
 	cacheBudget, _ := contentflow.NewProcessCacheBudget(64 << 20)
 	cache, _ := contentflow.NewSharedBlockCache(fixture.share, 16<<20, cacheBudget)
 	t.Cleanup(cache.Close)
-	var quotaSequence atomic.Int32
-	contentFactory := SenderContentFactoryFunc(func() (*contentflow.SenderService, error) {
-		quota, _ := content.NewQuotaAccount(
-			"session-"+time.Now().Format("150405.000000000"), content.DefaultSessionQuotaLimits(),
-		)
-		quotaSequence.Add(1)
+	contentFactory := SenderContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
+		sessionCapacity, err := fixture.registerCapacitySession(sessionID)
+		if err != nil {
+			return nil, err
+		}
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: fixture.contentStore, SessionQuota: quota, Sealer: recordSealer, Cache: cache,
+			Store: fixture.contentStore, SessionCapacity: sessionCapacity, Sealer: recordSealer, Cache: cache,
 		})
 	})
 	fixture.senderFactory, err = NewSenderFactory(SenderFactoryConfig{
@@ -727,7 +753,12 @@ type verticalContentStore struct {
 	blockStop  chan struct{}
 	renewStart chan<- struct{}
 	renewGate  <-chan struct{}
-	released   chan<- content.LeaseID
+	ended      chan<- verticalLeaseEnd
+}
+
+type verticalLeaseEnd struct {
+	id   content.LeaseID
+	kind content.LeaseEndKind
 }
 
 type failingRecordOpener struct{ err error }
@@ -805,7 +836,7 @@ func (*verticalPeerHandler) Run(ctx context.Context) error {
 func (store *verticalContentStore) OpenRevisions(
 	_ context.Context,
 	requests []content.OpenRevisionRequest,
-	_ *content.QuotaAccount,
+	_ *revisioncapacity.SessionRegistration,
 ) ([]content.OpenRevisionResult, error) {
 	results := make([]content.OpenRevisionResult, len(requests))
 	for index, request := range requests {
@@ -819,6 +850,15 @@ func (store *verticalContentStore) OpenRevisions(
 		}
 	}
 	return results, nil
+}
+
+type verticalCapacityTarget struct{}
+
+func (verticalCapacityTarget) ReclaimIdle(
+	_ context.Context,
+	claim revisioncapacity.ReclaimClaim,
+) revisioncapacity.ReclaimResult {
+	return revisioncapacity.ReclaimDeclined(claim)
 }
 
 func (store *verticalContentStore) RenewLease(id content.LeaseID) (content.RevisionLease, error) {
@@ -835,9 +875,9 @@ func (store *verticalContentStore) RenewLease(id content.LeaseID) (content.Revis
 	return store.lease, nil
 }
 
-func (store *verticalContentStore) ReleaseLease(leaseID content.LeaseID) error {
-	if store.released != nil {
-		store.released <- leaseID
+func (store *verticalContentStore) EndLease(leaseID content.LeaseID, kind content.LeaseEndKind) error {
+	if store.ended != nil {
+		store.ended <- verticalLeaseEnd{id: leaseID, kind: kind}
 	}
 	return nil
 }

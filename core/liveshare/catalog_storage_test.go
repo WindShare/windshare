@@ -160,7 +160,8 @@ func TestCatalogStorageTracerPanicCannotInterruptSenderLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		CatalogTracer: CatalogStorageTraceFunc(func(CatalogStorageTrace) {
 			panic("catalog diagnostics must remain observational")
 		}),

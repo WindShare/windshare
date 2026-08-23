@@ -66,8 +66,10 @@ import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
 import { outputSettlementTimeoutMilliseconds } from './settlement/v2-output'
 import { TransferJobSettlement } from './v2-job-settlement'
+import { V2RevisionCapacityCoordinator } from './revision-capacity/public'
 
 export * from './job/public'
+export * from './revision-capacity/public'
 
 
 /**
@@ -92,6 +94,7 @@ export class TransferJob {
   readonly #transferJobId: string
   readonly #outputSettlementTimeoutMilliseconds: number
   readonly #progress = new V2TransferProgressLedger()
+  readonly #capacity: V2RevisionCapacityCoordinator
   #directoryAdmissionClaims = 0
   #externalAbortCleanup: (() => void) | undefined
   #directoryScope: DirectoryAdmissionScope | undefined
@@ -113,6 +116,17 @@ export class TransferJob {
       options.outputSettlementTimeoutMilliseconds,
     )
     this.#transferJobId = snapshotTransferJobId(options.transferJobId ?? createTransferJobId())
+    this.#capacity = new V2RevisionCapacityCoordinator({
+      revisions: options.revisions,
+      broker: options.broker,
+    }, {
+      ...options.revisionCapacity,
+      onProgress: snapshot => {
+        this.#progress.observeCapacityWait(snapshot)
+        this.#emitProgress()
+      },
+      onTrace: event => this.#observers?.capacityWait(event),
+    })
     this.#failures = new V2JobFailureAuthority({
       selection: this.#selection,
       signal: this.#lifetime.signal,
@@ -297,8 +311,8 @@ export class TransferJob {
       descriptor: this.#options.descriptor,
       selection: this.#selection,
       intent: intent as DirectZipIntent,
-      revisions: this.#options.revisions,
-      broker: this.#options.broker,
+      revisions: this.#capacity.revisions,
+      broker: this.#capacity.broker,
       execution,
       maximumNodeClaims: this.#limits.catalogNodeClaims,
       signal: this.#lifetime.signal,
@@ -458,8 +472,8 @@ export class TransferJob {
     }
     await transferV2File({
       descriptor: this.#options.descriptor,
-      revisions: this.#options.revisions,
-      broker: this.#options.broker,
+      revisions: this.#capacity.revisions,
+      broker: this.#capacity.broker,
       output: execution.output,
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,

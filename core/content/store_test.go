@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type testClock struct {
@@ -161,6 +162,65 @@ func generousQuota(t *testing.T, name string) *QuotaAccount {
 	return account
 }
 
+type capacityTestAccount struct {
+	name     string
+	snapshot func() revisioncapacity.ScopeSnapshot
+}
+
+func (a *capacityTestAccount) Snapshot() QuotaSnapshot {
+	snapshot := a.snapshot()
+	limits := snapshot.Limits()
+	used := snapshot.Used()
+	return QuotaSnapshot{
+		Name:   a.name,
+		Limits: QuotaLimits{StableHandles: limits.StableHandles, ActiveLeases: limits.ActiveLeases},
+		Used:   QuotaUsage{StableHandles: used.StableHandles, ActiveLeases: used.ActiveLeases},
+	}
+}
+
+func generousSession(t *testing.T, store *RevisionStore, name string) *revisioncapacity.SessionRegistration {
+	t.Helper()
+	return limitedSession(t, store, name, revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100})
+}
+
+func limitedSession(
+	t *testing.T,
+	store *RevisionStore,
+	name string,
+	limits revisioncapacity.CapacityLimits,
+) *revisioncapacity.SessionRegistration {
+	t.Helper()
+	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: revisioncapacity.SessionID(name), Limits: limits,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = session.Close() })
+	return session
+}
+
+func attachTestCapacity(
+	t *testing.T,
+	config *RevisionStoreConfig,
+	processLimits revisioncapacity.CapacityLimits,
+	shareLimits revisioncapacity.CapacityLimits,
+) *revisioncapacity.ProcessOwner {
+	t.Helper()
+	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
+		Limits: processLimits, RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.CapacityCoordinator = owner.Coordinator()
+	config.CapacityStore = revisioncapacity.StoreConfig{
+		StoreID: "attached-test-store", ShareID: "attached-test-share", Limits: shareLimits,
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+	return owner
+}
+
 func fileRecord(t *testing.T, size uint64) (catalog.FileID, catalog.NodeRecord) {
 	t.Helper()
 	file := catalogID[catalog.FileID](9)
@@ -175,15 +235,25 @@ func fileRecord(t *testing.T, size uint64) (catalog.FileID, catalog.NodeRecord) 
 	return file, record
 }
 
-func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalidator CacheInvalidator, file catalog.FileID, record catalog.NodeRecord) (*RevisionStore, *QuotaAccount, *QuotaAccount) {
+func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalidator CacheInvalidator, file catalog.FileID, record catalog.NodeRecord) (*RevisionStore, *capacityTestAccount, *capacityTestAccount) {
 	t.Helper()
-	process := generousQuota(t, "process")
-	share := generousQuota(t, "share")
+	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
+		Limits:     revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		RetryAfter: revisioncapacity.DefaultCapacityRetryAfter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	deriver := testRevisionDeriver(t)
 	store, err := NewRevisionStore(RevisionStoreConfig{
 		ShareInstance: catalogID[catalog.ShareInstance](1), ChunkSize: catalog.MinChunkSize,
 		Catalog: testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:  source, ProcessQuota: process, ShareQuota: share, Clock: clock,
+		Source:  source, Clock: clock,
+		CapacityCoordinator: owner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "test-store", ShareID: "test-share",
+			Limits: revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		},
 		LeaseIDs: &sequenceIDs{}, RevisionDeriver: deriver,
 		MetadataBudget: testRevisionMetadataBudget(t, DefaultRevisionInvalidationEntries), CacheInvalidator: invalidator,
 	})
@@ -192,8 +262,11 @@ func newRevisionStore(t *testing.T, source RevisionSource, clock Clock, invalida
 	}
 	t.Cleanup(func() {
 		_ = store.Close()
+		_ = owner.Close()
 		deriver.Destroy()
 	})
+	process := &capacityTestAccount{name: "process", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Process() }}
+	share := &capacityTestAccount{name: "share", snapshot: func() revisioncapacity.ScopeSnapshot { return store.CapacitySnapshot().Share() }}
 	return store, process, share
 }
 
@@ -205,7 +278,7 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	reopened := &testStableFile{data: append([]byte(nil), data...)}
 	source := &testRevisionSource{files: []*testStableFile{stable, reopened}, started: make(chan struct{}), release: make(chan struct{})}
 	store, process, share := newRevisionStore(t, source, clock, nil, file, record)
-	session := generousQuota(t, "session")
+	session := generousSession(t, store, "session")
 
 	results := make(chan RevisionLease, 2)
 	errorsOut := make(chan error, 2)
@@ -248,31 +321,35 @@ func TestRevisionStoreSingleflightsOpenAndCreatesIndependentLeases(t *testing.T)
 	if err != nil || renewed.TTL() != LeaseTTL || renewed.RenewAfter() != LeaseTTL-LeaseRenewWindow {
 		t.Fatalf("renewed lease = %+v, %v", renewed, err)
 	}
-	if err := store.ReleaseLease(first.ID()); err != nil {
+	if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ReleaseLease(first.ID()); err != nil {
+	if err := store.EndLease(first.ID(), LeaseRelinquished); err != nil {
 		t.Fatal("release must be idempotent")
 	}
-	if err := store.ReleaseLease(second.ID()); err != nil {
+	if err := store.EndLease(second.ID(), LeaseRelinquished); err != nil {
 		t.Fatal(err)
 	}
-	clock.Advance(RevisionResumeGrace)
 	third, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil || third.ID().IsZero() || third.ID() == second.ID() ||
 		third.Descriptor().FileRevision() != second.Descriptor().FileRevision() || source.Calls() != 2 {
-		t.Fatalf("post-grace reopen = %+v, %v, calls=%d", third, err, source.Calls())
+		t.Fatalf("post-relinquishment reopen = %+v, %v, calls=%d", third, err, source.Calls())
 	}
 	if stable.closed.Load() != 1 {
 		t.Fatalf("stable source closes = %d", stable.closed.Load())
 	}
+	if err := store.EndLease(third.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	for _, account := range []*QuotaAccount{process, share, session} {
-		if account.Snapshot().Used != (QuotaUsage{}) {
-			t.Fatalf("quota leaked from %s: %+v", account.Name(), account.Snapshot().Used)
-		}
+	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatal("capacity leaked after store close")
 	}
 }
 
@@ -281,8 +358,8 @@ func TestSharedRevisionChargesStableHandleToCurrentLeaseSessions(t *testing.T) {
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	store, process, share := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
-	sessionA := generousQuota(t, "session-a")
-	sessionB := generousQuota(t, "session-b")
+	sessionA := generousSession(t, store, "session-a")
+	sessionB := generousSession(t, store, "session-b")
 
 	first, err := store.OpenRevision(context.Background(), file, sessionA)
 	if err != nil {
@@ -302,30 +379,30 @@ func TestSharedRevisionChargesStableHandleToCurrentLeaseSessions(t *testing.T) {
 	if got := share.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 3}) {
 		t.Fatalf("share quota counted a shared handle per session: %+v", got)
 	}
-	if got := sessionA.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 2}) {
+	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 2}) {
 		t.Fatalf("session A quota = %+v", got)
 	}
-	if got := sessionB.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session B quota = %+v", got)
 	}
 
-	_ = store.ReleaseLease(first.ID())
-	if got := sessionA.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) {
+	_ = store.EndLease(first.ID(), LeaseRelinquished)
+	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session A released its handle before its last lease: %+v", got)
 	}
-	_ = store.ReleaseLease(second.ID())
-	if got := sessionA.Snapshot().Used; got != (QuotaUsage{}) {
+	_ = store.EndLease(second.ID(), LeaseRelinquished)
+	if got := sessionA.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{}) {
 		t.Fatalf("session A retained a shared handle after its last lease: %+v", got)
 	}
-	if got := sessionB.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) {
+	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}) {
 		t.Fatalf("session A release changed session B accounting: %+v", got)
 	}
-	_ = store.ReleaseLease(third.ID())
-	if got := sessionB.Snapshot().Used; got != (QuotaUsage{}) {
+	_ = store.EndLease(third.ID(), LeaseRelinquished)
+	if got := sessionB.Snapshot().Used(); got != (revisioncapacity.CapacityUsage{}) {
 		t.Fatalf("session B retained a handle after its last lease: %+v", got)
 	}
-	if got := process.Snapshot().Used; got != (QuotaUsage{StableHandles: 1}) {
-		t.Fatalf("resume grace did not retain exactly one physical handle: %+v", got)
+	if got := process.Snapshot().Used; got != (QuotaUsage{}) {
+		t.Fatalf("final relinquishment retained physical capacity: %+v", got)
 	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
@@ -337,7 +414,7 @@ func TestValidateLeaseGuardsCachedDeliveryAcrossIdentityExpiryAndClose(t *testin
 	file, record := fileRecord(t, 1)
 	stable := &testStableFile{data: []byte{1}}
 	store, _, _ := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
-	session := generousQuota(t, "session")
+	session := generousSession(t, store, "session")
 	lease, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
 		t.Fatal(err)
@@ -378,7 +455,7 @@ func TestRevisionDriftInvalidatesEveryLeaseAndCache(t *testing.T) {
 	source := &testRevisionSource{files: []*testStableFile{stable}}
 	invalidator := &recordingInvalidator{}
 	store, process, share := newRevisionStore(t, source, clock, invalidator, file, record)
-	session := generousQuota(t, "session")
+	session := generousSession(t, store, "session")
 	first, err := store.OpenRevision(context.Background(), file, session)
 	if err != nil {
 		t.Fatal(err)
@@ -398,10 +475,9 @@ func TestRevisionDriftInvalidatesEveryLeaseAndCache(t *testing.T) {
 	if stable.closed.Load() != 1 || len(invalidator.revisions) != 1 {
 		t.Fatalf("drift cleanup: closes=%d invalidations=%d", stable.closed.Load(), len(invalidator.revisions))
 	}
-	for _, account := range []*QuotaAccount{process, share, session} {
-		if account.Snapshot().Used != (QuotaUsage{}) {
-			t.Fatalf("drift leaked quota from %s: %+v", account.Name(), account.Snapshot().Used)
-		}
+	if process.Snapshot().Used != (QuotaUsage{}) || share.Snapshot().Used != (QuotaUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatal("drift leaked capacity")
 	}
 }
 
@@ -410,7 +486,7 @@ func TestOpenRevisionsPreservesOrderAndPerItemFailure(t *testing.T) {
 	file, record := fileRecord(t, uint64(catalog.MinChunkSize))
 	stable := &testStableFile{data: make([]byte, catalog.MinChunkSize)}
 	store, _, _ := newRevisionStore(t, &testRevisionSource{files: []*testStableFile{stable}}, clock, nil, file, record)
-	session := generousQuota(t, "session")
+	session := generousSession(t, store, "session")
 	missing := catalogID[catalog.FileID](77)
 	results, err := store.OpenRevisions(context.Background(), []OpenRevisionRequest{{FileID: missing}, {FileID: file}}, session)
 	if err != nil || len(results) != 2 || results[0].FileID != missing || results[0].Err == nil || results[1].FileID != file || results[1].Err != nil {

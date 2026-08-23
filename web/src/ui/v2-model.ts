@@ -36,6 +36,10 @@ export interface V2ReceiverProgress {
   readonly contentLanes: number
   readonly discovery: 'open' | 'complete' | 'failed'
   readonly failedDirectories: number
+  readonly capacityWaitingFiles: number
+  readonly capacityAccumulatedWaitMilliseconds: number
+  readonly capacityWaitAttempts: number
+  readonly capacityWaitVisible: boolean
   readonly transferJobId: string
   readonly outputSessionId?: string
 }
@@ -124,6 +128,10 @@ export interface V2ProgressDiagnosticSnapshot {
   readonly selectionErrors: bigint
   readonly failedDirectories: bigint
   readonly contentLanes: number
+  readonly capacityWaitingFiles: bigint
+  readonly capacityAccumulatedWaitMilliseconds: bigint
+  readonly capacityWaitAttempts: bigint
+  readonly capacityWaitVisible: boolean
 }
 
 export interface V2OutputDiagnosticSnapshot {
@@ -175,6 +183,10 @@ export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
   contentLanes: 0,
   discovery: 'open',
   failedDirectories: 0,
+  capacityWaitingFiles: 0,
+  capacityAccumulatedWaitMilliseconds: 0,
+  capacityWaitAttempts: 0,
+  capacityWaitVisible: false,
   transferJobId: '',
 })
 

@@ -53,7 +53,10 @@ import {
   type V2PlanExecutionAuthority,
   type WorkspaceExecution,
 } from '../../src/transfer/output-session'
-import { TransferJob } from '../../src/transfer/v2-job'
+import {
+  TransferJob,
+  type V2RevisionCapacityPolicyOptions,
+} from '../../src/transfer/v2-job'
 import { V2FileRevisionChangedError } from '../../src/transfer/job/failures'
 
 export function identity(first: number): Uint8Array<ArrayBuffer> {
@@ -663,9 +666,11 @@ export function transferJobFixture(input: {
   readonly revisions: V2RevisionReader
   readonly broker: V2BlockRangeReader
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
+  readonly onProgress?: ConstructorParameters<typeof TransferJob>[0]['onProgress']
   readonly maximumConcurrentFiles?: number
   readonly outputSettlementTimeoutMilliseconds?: number
   readonly outputSettlementDeadline?: ConstructorParameters<typeof TransferJob>[0]['outputSettlementDeadline']
+  readonly revisionCapacity?: V2RevisionCapacityPolicyOptions
 }): TransferJob {
   return new TransferJob({
     descriptor: {
@@ -679,6 +684,16 @@ export function transferJobFixture(input: {
     revisions: input.revisions,
     broker: input.broker,
     lanes: { size: 1 },
+    revisionCapacity: input.revisionCapacity ?? Object.freeze({
+      generation: Object.freeze({
+        waitForProtocolSessionReplacement: (
+          _identity: Parameters<
+            V2RevisionCapacityPolicyOptions['generation']['waitForProtocolSessionReplacement']
+          >[0],
+          signal: AbortSignal,
+        ) => waitForAbort(signal),
+      }),
+    }),
     plans: input.plans,
     intent: input.intent,
     protocol: Object.freeze({
@@ -686,6 +701,7 @@ export function transferJobFixture(input: {
       generation: 3,
     }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
+    ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
     ...(input.maximumConcurrentFiles === undefined
       ? {}
       : { maximumConcurrentFiles: input.maximumConcurrentFiles }),
@@ -695,6 +711,15 @@ export function transferJobFixture(input: {
     ...(input.outputSettlementDeadline === undefined
       ? {}
       : { outputSettlementDeadline: input.outputSettlementDeadline }),
+  })
+}
+
+function waitForAbort(signal: AbortSignal): Promise<void> {
+  signal.throwIfAborted()
+  return new Promise((_resolve, reject) => {
+    const abort = () => reject(signal.reason ?? new DOMException('wait aborted', 'AbortError'))
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
   })
 }
 

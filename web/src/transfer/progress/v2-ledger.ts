@@ -1,4 +1,5 @@
 import type { SelectionMeasure } from '../measure'
+import type { V2RevisionCapacityWaitSnapshot } from '../revision-capacity/public'
 
 /** Separates received bytes from whole-file settlement and failure evidence. */
 export class V2TransferProgressLedger {
@@ -8,6 +9,10 @@ export class V2TransferProgressLedger {
   #failedDirectories = 0
   #fileErrors = 0
   #selectionErrors = 0
+  #capacityWaitingFiles = 0
+  #capacityAccumulatedWaitMilliseconds = 0
+  #capacityWaitAttempts = 0
+  #capacityWaitVisible = false
 
   get failedDirectories(): number { return this.#failedDirectories }
   get completedFiles(): number { return this.#completedFiles }
@@ -27,6 +32,13 @@ export class V2TransferProgressLedger {
 
   recordSelectionError(): void { this.#selectionErrors += 1 }
 
+  observeCapacityWait(snapshot: V2RevisionCapacityWaitSnapshot): void {
+    this.#capacityWaitingFiles = snapshot.activeWaiters
+    this.#capacityAccumulatedWaitMilliseconds = snapshot.accumulatedWaitMilliseconds
+    this.#capacityWaitAttempts = snapshot.attempts
+    this.#capacityWaitVisible = snapshot.visible
+  }
+
   snapshot(measure: SelectionMeasure, outputSessionId?: string): {
     readonly measure: SelectionMeasure
     readonly writtenBytes: bigint
@@ -35,6 +47,10 @@ export class V2TransferProgressLedger {
     readonly failedDirectories: number
     readonly fileErrors: number
     readonly selectionErrors: number
+    readonly capacityWaitingFiles: number
+    readonly capacityAccumulatedWaitMilliseconds: number
+    readonly capacityWaitAttempts: number
+    readonly capacityWaitVisible: boolean
     readonly outputSessionId?: string
   } {
     return Object.freeze({
@@ -45,6 +61,10 @@ export class V2TransferProgressLedger {
       failedDirectories: this.#failedDirectories,
       fileErrors: this.#fileErrors,
       selectionErrors: this.#selectionErrors,
+      capacityWaitingFiles: this.#capacityWaitingFiles,
+      capacityAccumulatedWaitMilliseconds: this.#capacityAccumulatedWaitMilliseconds,
+      capacityWaitAttempts: this.#capacityWaitAttempts,
+      capacityWaitVisible: this.#capacityWaitVisible,
       ...(outputSessionId === undefined ? {} : { outputSessionId }),
     })
   }

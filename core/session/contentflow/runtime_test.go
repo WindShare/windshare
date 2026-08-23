@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"sync"
 	"sync/atomic"
@@ -15,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -137,16 +139,7 @@ type runtimeFixture struct {
 	cache           *SharedBlockCache
 	service         *SenderService
 	opener          *records.Opener
-	quota           *content.QuotaAccount
-}
-
-func quotaAccount(t *testing.T, name string) *content.QuotaAccount {
-	t.Helper()
-	account, err := content.NewQuotaAccount(name, content.QuotaLimits{StableHandles: 100, ActiveLeases: 100})
-	if err != nil {
-		t.Fatal(err)
-	}
-	return account
+	capacityOwner   *revisioncapacity.ProcessOwner
 }
 
 func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
@@ -179,14 +172,33 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	if err != nil {
+		revisionDeriver.Destroy()
+		t.Fatal(err)
+	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: share, ChunkSize: catalog.MinChunkSize,
 		Catalog: runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:  runtimeSource{file: stable}, ProcessQuota: quotaAccount(t, "process"), ShareQuota: quotaAccount(t, "share"),
+		Source:  runtimeSource{file: stable}, CapacityCoordinator: capacityOwner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "contentflow-runtime-store", ShareID: "contentflow-runtime-share",
+			Limits: revisioncapacity.DefaultShareLimits(),
+		},
 		Clock: clock, LeaseIDs: &runtimeIDs{}, RevisionDeriver: revisionDeriver,
 		MetadataBudget: metadataBudget, CacheInvalidator: cache,
 	})
 	if err != nil {
+		_ = capacityOwner.Close()
+		revisionDeriver.Destroy()
+		t.Fatal(err)
+	}
+	sessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "contentflow-runtime-session", Limits: revisioncapacity.DefaultSessionLimits(),
+	})
+	if err != nil {
+		_ = store.Close()
+		_ = capacityOwner.Close()
 		revisionDeriver.Destroy()
 		t.Fatal(err)
 	}
@@ -202,15 +214,16 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 	opener, _ := records.NewOpener(records.OpenerConfig{
 		ShareInstance: share, Keys: keys, VerificationKey: privateKey.Public().(ed25519.PublicKey),
 	})
-	sessionQuota := quotaAccount(t, "session")
-	service, err := NewSenderService(SenderServiceConfig{Store: store, SessionQuota: sessionQuota, Sealer: sealer, Cache: cache})
+	service, err := NewSenderService(SenderServiceConfig{
+		Store: store, SessionCapacity: sessionCapacity, Sealer: sealer, Cache: cache,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return runtimeFixture{
 		share: share, file: file, stable: stable, clock: clock, store: store,
 		revisionDeriver: revisionDeriver,
-		cache:           cache, service: service, opener: opener, quota: sessionQuota,
+		cache:           cache, service: service, opener: opener, capacityOwner: capacityOwner,
 	}
 }
 
@@ -221,6 +234,9 @@ func (fixture runtimeFixture) close(t *testing.T) {
 	}
 	fixture.cache.Close()
 	if err := fixture.store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := fixture.capacityOwner.Close(); err != nil {
 		t.Fatal(err)
 	}
 	fixture.revisionDeriver.Destroy()
@@ -326,7 +342,7 @@ func TestSenderServicePreservesPerItemOpenLeaseAndBlockSemantics(t *testing.T) {
 }
 
 func TestSenderServiceDriftRetiresEveryOwnedLeaseAndCache(t *testing.T) {
-	fixture := newRuntimeFixture(t, 1)
+	fixture := newRuntimeFixture(t, 2)
 	defer fixture.close(t)
 	request, _ := NewOpenRequest([]OpenItem{{FileID: fixture.file}, {FileID: fixture.file}})
 	results, err := fixture.service.Open(context.Background(), request)
@@ -339,9 +355,8 @@ func TestSenderServiceDriftRetiresEveryOwnedLeaseAndCache(t *testing.T) {
 	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](61), blockRequest, func(context.Context, protocolsession.Message) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
-	fixture.cache.InvalidateRevision(first.Descriptor().FileID(), first.Descriptor().FileRevision())
 	fixture.stable.setDrifted()
-	secondRequest, _ := NewBlockRequest(second.ID(), []uint64{0})
+	secondRequest, _ := NewBlockRequest(second.ID(), []uint64{1})
 	if _, err := fixture.service.ServeBlocks(context.Background(), flowID[protocolsession.OperationID](62), secondRequest, func(context.Context, protocolsession.Message) error { return nil }); !errors.Is(err, content.ErrRevisionDrift) {
 		t.Fatalf("drift error=%v", err)
 	}
@@ -382,7 +397,7 @@ func TestCachedBlockCannotBypassLeaseExpiry(t *testing.T) {
 }
 
 func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
-	fixture := newRuntimeFixture(t, 1)
+	fixture := newRuntimeFixture(t, 2)
 	defer fixture.close(t)
 	results, err := fixture.service.Open(context.Background(), mustOpenRequest(t, fixture.file))
 	if err != nil {
@@ -414,7 +429,14 @@ func TestRevisionInvalidationCancelsActiveCachedDelivery(t *testing.T) {
 		done <- serveErr
 	}()
 	<-started
-	fixture.cache.InvalidateRevision(lease.Descriptor().FileID(), lease.Descriptor().FileRevision())
+	fixture.stable.setDrifted()
+	driftRequest, _ := NewBlockRequest(lease.ID(), []uint64{1})
+	if _, err := fixture.service.ServeBlocks(
+		context.Background(), flowID[protocolsession.OperationID](67), driftRequest,
+		func(context.Context, protocolsession.Message) error { return nil },
+	); !errors.Is(err, content.ErrRevisionDrift) {
+		t.Fatalf("drift trigger error=%v", err)
+	}
 	select {
 	case err := <-done:
 		if !errors.Is(err, content.ErrRevisionDrift) {
@@ -758,7 +780,7 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 		content.ErrRevisionStale:        RevisionCodeStale,
 		content.ErrRevisionNotFound:     RevisionCodeNotFound,
 		content.ErrUnsupportedStability: RevisionCodeUnsupportedStability,
-		content.ErrQuotaExceeded:        RevisionCodeQuota,
+		content.ErrQuotaExceeded:        RevisionCodeUnreadable,
 		content.ErrLeaseExpired:         RevisionCodeLeaseExpired,
 		content.ErrRevisionDrift:        RevisionCodeDrift,
 		content.ErrInvalidLease:         RevisionCodeInvalidLease,
@@ -779,6 +801,96 @@ func TestErrorClassificationPreservesOperationScope(t *testing.T) {
 		if code := classifyBlockError(err); code != expected {
 			t.Fatalf("block error %v code=%#x", err, code)
 		}
+	}
+}
+
+func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *testing.T) {
+	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.ProcessConfig{
+		Limits:     revisioncapacity.CapacityLimits{StableHandles: 1, ActiveLeases: 8},
+		RetryAfter: MaxRevisionFailureRetryAfter,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := owner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
+		StoreID: "contentflow-classification-store", ShareID: "contentflow-classification-share",
+		Limits: revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
+	}, contentflowReclaimTargetFunc(func(_ context.Context, claim revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult {
+		return revisioncapacity.ReclaimDeclined(claim)
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "contentflow-classification-session",
+		Limits:    revisioncapacity.CapacityLimits{StableHandles: 8, ActiveLeases: 8},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	grant, err := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
+		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "resident", Session: session,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	charges, err := grant.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, busyErr := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
+		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "blocked", Session: session,
+	})
+	if _, ok := errors.AsType[*revisioncapacity.CapacityBusyError](busyErr); !ok {
+		t.Fatalf("stable saturation error=%T %v", busyErr, busyErr)
+	}
+	failure := classifyRevisionError(fmt.Errorf("store open: %w", busyErr))
+	if failure.Code != RevisionCodeQuota || !failure.Retryable || failure.RetryAfter != MaxRevisionFailureRetryAfter {
+		t.Fatalf("typed capacity failure=%+v", failure)
+	}
+	descriptor := flowDescriptor(t, uint64(catalog.MinChunkSize))
+	service, cache := stubService(t, descriptor, &stubRevisionStore{results: []content.OpenRevisionResult{{
+		FileID: descriptor.FileID(), Err: fmt.Errorf("store open: %w", busyErr),
+	}}}, stubRecordSealer{revision: []byte{1}})
+	defer cache.Close()
+	defer service.Close()
+	results, err := service.Open(context.Background(), mustOpenRequest(t, descriptor.FileID()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeOpenResults(results)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeOpenResults(encoded, []catalog.FileID{descriptor.FileID()})
+	if err != nil || len(decoded) != 1 || decoded[0].Failure == nil ||
+		decoded[0].Failure.Code != RevisionCodeQuota || !decoded[0].Failure.Retryable ||
+		decoded[0].Failure.RetryAfter != MaxRevisionFailureRetryAfter {
+		t.Fatalf("authenticated capacity response=%+v err=%v", decoded, err)
+	}
+	for name, permanent := range map[string]error{
+		"metadata quota": fmt.Errorf("metadata stopped: %w", content.ErrQuotaExceeded),
+		"seal limit":     records.ErrSealLimit,
+		"missing source": content.ErrRevisionNotFound,
+		"unreadable":     content.ErrRevisionUnreadable,
+		"source drift":   content.ErrSourceDrift,
+	} {
+		classified := classifyRevisionError(permanent)
+		if classified.Retryable || classified.RetryAfter != 0 || classified.Code == RevisionCodeQuota {
+			t.Errorf("%s acquired capacity retry authority: %+v", name, classified)
+		}
+	}
+	if err := charges.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
