@@ -2,6 +2,7 @@ package commandprojection
 
 import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
@@ -55,6 +56,14 @@ func ProjectProtocolOperation(
 	if err != nil {
 		return clievent.ProtocolOperationObserved{}, err
 	}
+	if value.ContentDecision != (contentflow.SenderDecisionTrace{}) &&
+		(value.ContentDecision.OperationID != value.OperationID || value.ContentDecision.RequestKind != value.RequestKind) {
+		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+	}
+	contentDecision, err := projectSenderContentDecision(value.ContentDecision)
+	if err != nil {
+		return clievent.ProtocolOperationObserved{}, err
+	}
 	event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
 		Command: command, Role: role, Stage: stage,
 		ProtocolSession: sessionID, ProtocolOperation: operationID,
@@ -69,11 +78,51 @@ func ProjectProtocolOperation(
 		UsableLanesAtSettlement: value.UsableLanesAtSettlement,
 		Failure:                 protocolFailure,
 		Cause:                   cause,
+		ContentDecision:         contentDecision,
 	})
 	if err != nil {
 		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
 	}
 	return event, nil
+}
+
+func projectSenderContentDecision(
+	value contentflow.SenderDecisionTrace,
+) (clievent.SenderContentDecision, error) {
+	if value == (contentflow.SenderDecisionTrace{}) {
+		return clievent.SenderContentDecision{}, nil
+	}
+	switch value.Stage {
+	case contentflow.SenderDecisionCapacityBusy:
+		if value.CapacityDecisionID == "" || !value.LeaseID.IsZero() {
+			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		}
+		decisionID, err := clievent.NewCapacityDecisionID(string(value.CapacityDecisionID))
+		if err != nil {
+			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		}
+		return clievent.NewSenderCapacityDecision(decisionID)
+	case contentflow.SenderDecisionLeaseRelinquished,
+		contentflow.SenderDecisionLeaseUndelivered,
+		contentflow.SenderDecisionLeaseDetached:
+		if value.CapacityDecisionID != "" || value.LeaseID.IsZero() {
+			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		}
+		kind := clievent.SenderContentLeaseRelinquished
+		switch value.Stage {
+		case contentflow.SenderDecisionLeaseUndelivered:
+			kind = clievent.SenderContentLeaseUndelivered
+		case contentflow.SenderDecisionLeaseDetached:
+			kind = clievent.SenderContentLeaseDetached
+		}
+		leaseID, err := clievent.NewRevisionLeaseID(value.LeaseID.Bytes())
+		if err != nil {
+			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		}
+		return clievent.NewSenderLeaseDecision(kind, leaseID)
+	default:
+		return clievent.SenderContentDecision{}, ErrInvalidProjection
+	}
 }
 
 func projectProtocolFailure(value sessionruntime.ProtocolFailure) (clievent.ProtocolFailure, error) {

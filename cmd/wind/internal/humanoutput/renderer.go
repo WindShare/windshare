@@ -290,6 +290,8 @@ func (eventVisitor) VisitSenderSessionTerminated(clievent.SenderSessionTerminate
 }
 func (eventVisitor) VisitCatalogStorageObserved(clievent.CatalogStorageObserved) error { return nil }
 func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) error     { return nil }
+func (eventVisitor) VisitSenderCapacityObserved(clievent.SenderCapacityObserved) error { return nil }
+func (eventVisitor) VisitSenderRevisionObserved(clievent.SenderRevisionObserved) error { return nil }
 func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {
 	if visitor.verboseVisible() && event.Cause() != clievent.ProtocolOperationCauseNone {
 		visitor.renderer.insert(formatProtocolOperationFailure(event, visitor.symbols()))

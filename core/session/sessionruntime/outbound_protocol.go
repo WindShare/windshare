@@ -170,9 +170,13 @@ func revisionOperationError(failure RemoteOperationFailureSnapshot) error {
 	return classifyRevisionFailure(NewRemoteOperationError(failure), failure.Code(), failure.Retryable())
 }
 
-func remoteRevisionFailureError(failure contentflow.RevisionFailure) error {
+func remoteRevisionFailureError(remote *RemoteRevisionError) error {
+	if remote == nil {
+		return sessionProtocolBoundaryError(protocolsession.ErrInvalidOperationFailure)
+	}
+	failure := remote.Failure()
 	return classifyRevisionFailure(
-		&RemoteRevisionError{failure: failure}, failure.Code, failure.Retryable,
+		remote, failure.Code, failure.Retryable,
 	)
 }
 

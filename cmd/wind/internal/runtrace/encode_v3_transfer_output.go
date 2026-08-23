@@ -23,9 +23,7 @@ func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.Tr
 	if err != nil {
 		return err
 	}
-	correlation, err := projectSessionCorrelation(
-		event.ProtocolSessionID(), clievent.LaneIdentity{}, false,
-	)
+	correlation, err := transferLifecycleCorrelation(event)
 	if err != nil {
 		return err
 	}
@@ -37,6 +35,18 @@ func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.Tr
 		FileSettlement:     fileSettlement,
 		TreeSettlement:     treeSettlement,
 		Progress:           progress,
+	}
+	if capacity, ok := event.CapacityLifecycle(); ok {
+		payload.Capacity = &transferCapacityLifecycleV3{
+			WaitID:              encodeTypedIdentity(capacity.WaitID().Bytes()),
+			GenerationID:        encodeTypedIdentity(capacity.GenerationID().Bytes()),
+			ProtocolOperationID: encodeTypedIdentity(capacity.OperationID().Bytes()),
+			Attempt:             decimal(capacity.Attempt()), HintMS: signedDecimal(capacity.Hint().Milliseconds()),
+			JitterMS:          signedDecimal(capacity.Jitter().Milliseconds()),
+			DelayMS:           signedDecimal(capacity.Delay().Milliseconds()),
+			AccumulatedWaitMS: signedDecimal(capacity.AccumulatedWait().Milliseconds()),
+			ActiveWaiters:     capacity.ActiveWaiters(),
+		}
 	}
 	if reason, ok := event.ItemBlock(); ok {
 		projected, projectErr := namedPointer(reason)
@@ -54,6 +64,15 @@ func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.Tr
 	}
 	visitor.set("transfer_lifecycle", correlation, payload)
 	return nil
+}
+
+func transferLifecycleCorrelation(event clievent.TransferLifecycleObserved) (*CorrelationV1, error) {
+	if capacity, ok := event.CapacityLifecycle(); ok {
+		return projectProtocolCorrelation(
+			event.ProtocolSessionID(), capacity.OperationID(), clievent.LaneIdentity{}, false,
+		)
+	}
+	return projectSessionCorrelation(event.ProtocolSessionID(), clievent.LaneIdentity{}, false)
 }
 
 func (visitor *encodeVisitorV3) VisitFilesystemOutputObserved(event clievent.FilesystemOutputObserved) error {

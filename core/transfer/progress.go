@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 type ConnectionSizeClass uint8
@@ -23,9 +24,10 @@ const (
 	DiscoveryFailed
 )
 
-// ReceiveProgressSnapshot contains only authenticated receive facts. Clocks,
-// rates, and presentation policy remain outside core so polling cannot affect
-// transfer authority or introduce I/O on the data path.
+// ReceiveProgressSnapshot combines authenticated receive facts with bounded
+// receiver scheduling state. CapacityWait exposes timestamps but leaves the
+// caller's clock and presentation decision outside core, so polling still
+// cannot affect transfer authority or introduce I/O on the data path.
 type ReceiveProgressSnapshot struct {
 	DiscoveredFiles    uint64
 	DiscoveredBytes    uint64
@@ -34,6 +36,7 @@ type ReceiveProgressSnapshot struct {
 	VerifiedBytes      uint64
 	NewlyVerifiedBytes uint64
 	FileOutcomes       FileOutcomeSummary
+	CapacityWait       revisionwait.Snapshot
 	Discovery          DiscoveryStatus
 	CountersExact      bool
 }
@@ -188,6 +191,13 @@ func (tracker *receiveProgressTracker) acceptFileSettlement(
 		}
 	}
 	tracker.validateExactLocked()
+	tracker.publishLocked()
+}
+
+func (tracker *receiveProgressTracker) setRevisionWait(snapshot revisionwait.Snapshot) {
+	tracker.mu.Lock()
+	defer tracker.mu.Unlock()
+	tracker.snapshot.CapacityWait = snapshot
 	tracker.publishLocked()
 }
 

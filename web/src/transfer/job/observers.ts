@@ -12,6 +12,7 @@ import type {
 } from './contract'
 import { normalizeV2FileTransferFailure } from './failures'
 import type { WorkerFamilyConsequenceFailure } from '../worker-family/supervisor'
+import type { V2RevisionCapacityTrace } from '../revision-capacity/public'
 
 export interface V2TransferObserversOptions {
   readonly intent: ReceiveIntent
@@ -35,6 +36,10 @@ export interface V2TransferProgressState {
   readonly fileErrors: number
   readonly selectionErrors: number
   readonly failedDirectories: number
+  readonly capacityWaitingFiles: number
+  readonly capacityAccumulatedWaitMilliseconds: number
+  readonly capacityWaitAttempts: number
+  readonly capacityWaitVisible: boolean
   readonly outputSessionId?: string
 }
 
@@ -74,6 +79,10 @@ export class V2TransferObservers {
         contentLanes: this.#options.lanes.size,
         discovery: state.measure.discovery,
         failedDirectories: state.failedDirectories,
+        capacityWaitingFiles: state.capacityWaitingFiles,
+        capacityAccumulatedWaitMilliseconds: state.capacityAccumulatedWaitMilliseconds,
+        capacityWaitAttempts: state.capacityWaitAttempts,
+        capacityWaitVisible: state.capacityWaitVisible,
         partial,
         transferJobId: this.#options.transferJobId,
         ...(state.outputSessionId === undefined ? {} : { outputSessionId: state.outputSessionId }),
@@ -92,6 +101,10 @@ export class V2TransferObservers {
       fileErrors: BigInt(state.fileErrors),
       selectionErrors: BigInt(state.selectionErrors),
       failedDirectories: BigInt(state.failedDirectories),
+      capacityWaitingFiles: BigInt(state.capacityWaitingFiles),
+      capacityAccumulatedWaitMilliseconds: state.capacityAccumulatedWaitMilliseconds,
+      capacityWaitAttempts: BigInt(state.capacityWaitAttempts),
+      capacityWaitVisible: state.capacityWaitVisible,
       contentLanes: this.#options.lanes.size,
       discovery: state.measure.discovery,
       partial,
@@ -157,6 +170,25 @@ export class V2TransferObservers {
             protocolGeneration: this.#options.protocol.generation,
           }),
       ...(outputSessionId === undefined ? {} : { outputSessionId }),
+    }))
+  }
+
+  capacityWait(event: V2RevisionCapacityTrace): void {
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition',
+      transition: event.transition,
+      capacityWaitId: event.waitId,
+      capacitySurface: event.surface,
+      receiveOperationId: this.#options.intent.operationId,
+      transferJobId: this.#options.transferJobId,
+      protocolSessionId: event.protocolSessionId,
+      protocolOperationId: event.protocolOperationId,
+      attempt: BigInt(event.attempt),
+      senderHintMilliseconds: event.senderHintMilliseconds,
+      jitterMilliseconds: event.jitterMilliseconds,
+      delayMilliseconds: event.delayMilliseconds,
+      accumulatedWaitMilliseconds: event.accumulatedWaitMilliseconds,
+      activeWaiters: event.activeWaiters,
     }))
   }
 

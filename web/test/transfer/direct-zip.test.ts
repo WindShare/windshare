@@ -2,6 +2,16 @@ import { describe, expect, it, vi } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { V2CommittedDirectory } from '../../src/catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import { FileGeometry } from '../../src/content/geometry'
+import {
+  V2RevisionCapacityBusyError,
+  type V2OpenedRevision,
+} from '../../src/content/v2-session-services'
+import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+import {
+  createFailureIdentity,
+  createProtocolFailure,
+} from '../../src/diagnostics/incident'
 import type { DirectZipWriterCheckpointV1 } from '../../src/output/direct-zip/writer'
 import {
   DirectZipCatalogSourceV1,
@@ -9,7 +19,9 @@ import {
   DirectZipRuntimeUnsupportedError,
   DirectZipTransferOutputV1,
   createDirectZipExecutionV1,
+  transferDirectZipFileV1,
   type DirectZipAuthenticatedRootV1,
+  type DirectZipOutputSessionV1,
   type DirectZipOrderedFileV1,
   type DirectZipOrderedMemberV1,
   type DirectZipOrderedOutputV1,
@@ -17,6 +29,11 @@ import {
   type DirectZipReplayAuthorityV1,
   type DirectZipMemberRollbackAuthorityV1,
 } from '../../src/transfer/direct-zip'
+import {
+  V2RevisionCapacityCoordinator,
+  type V2RevisionCapacityClock,
+  type V2RevisionCapacityWaitSnapshot,
+} from '../../src/transfer/revision-capacity/public'
 import {
   candidateObservation,
   createWriterHarness,
@@ -349,6 +366,143 @@ describe('direct ZIP ordered transfer composition', () => {
     )
   })
 })
+
+describe('direct ZIP revision capacity composition', () => {
+  it('stops charging capacity wait before Direct ZIP consumes the recovered range', async () => {
+    const member = file('root/a.txt', 2n)
+    const clock = new DirectZipCapacityClock()
+    let reads = 0
+    let recoveredSnapshot: V2RevisionCapacityWaitSnapshot | undefined
+    let afterConsumerTime: V2RevisionCapacityWaitSnapshot | undefined
+    const opened = directZipOpenedRevision(member)
+    const coordinator = new V2RevisionCapacityCoordinator({
+      revisions: { open: async () => opened },
+      broker: {
+        readRange: async function* (_descriptor, _lease, range) {
+          reads += 1
+          if (reads === 1) throw directZipCapacityError(10)
+          yield { offset: range.start, data: Uint8Array.of(1) }
+          recoveredSnapshot = coordinator.snapshot()
+          clock.advance(25)
+          afterConsumerTime = coordinator.snapshot()
+          yield { offset: range.start + 1n, data: Uint8Array.of(2) }
+        },
+      },
+    }, {
+      clock,
+      generation: {
+        waitForProtocolSessionReplacement: (_identity, signal) =>
+          new Promise((_resolve, reject) => {
+            const abort = () => reject(signal.reason)
+            signal.addEventListener('abort', abort, { once: true })
+            if (signal.aborted) abort()
+          }),
+      },
+      waitBudgetMilliseconds: 50,
+      additiveJitterLimitMilliseconds: 0,
+      visibilityThresholdMilliseconds: 0,
+      random: () => 0,
+      randomBytes: length => id(9).slice(0, length),
+    })
+
+    await transferDirectZipFileV1({
+      descriptor: {
+        shareInstance: opened.descriptor.shareInstance,
+        chunkSize: 2,
+      } as never,
+      revisions: coordinator.revisions,
+      broker: coordinator.broker,
+      output: directZipContentOutput(),
+      signal: SIGNAL,
+      onWriteAcknowledged: () => undefined,
+      onComplete: () => undefined,
+    }, member)
+
+    expect(reads).toBe(2)
+    expect(recoveredSnapshot).toMatchObject({
+      activeWaiters: 0,
+      accumulatedWaitMilliseconds: 10,
+      attempts: 1,
+    })
+    expect(afterConsumerTime).toMatchObject({
+      activeWaiters: 0,
+      accumulatedWaitMilliseconds: 10,
+      attempts: 1,
+    })
+  })
+})
+
+function directZipOpenedRevision(member: DirectZipOrderedFileV1): V2OpenedRevision {
+  const shareInstance = id(6)
+  const fileRevision = id(7)
+  return Object.freeze({
+    descriptor: Object.freeze({
+      shareInstance,
+      shareInstanceId: base64(shareInstance),
+      fileId: member.pending.entry.id,
+      fileIdText: member.pending.entry.idText,
+      fileRevision,
+      fileRevisionText: base64(fileRevision),
+      exactSize: member.expectedSize,
+      geometry: new FileGeometry(member.expectedSize, 2n),
+    }),
+    leaseId: id(8),
+    release: async () => undefined,
+  })
+}
+
+function directZipContentOutput(): DirectZipOutputSessionV1 {
+  return {
+    identity: { backend: 'direct-zip-capacity-test', outputSessionId: 'capacity-session' },
+    capabilities: {
+      durability: 'None',
+      randomWrite: false,
+      fileFailureIsolation: false,
+      modificationTime: false,
+    },
+    beginFile: async () => ({
+      resumeOffset: 0n,
+      write: async () => undefined,
+      observeCheckpoint: async () => 0n,
+      commit: async () => undefined,
+    }),
+  }
+}
+
+function directZipCapacityError(retryAfterMilliseconds: number): V2RevisionCapacityBusyError {
+  const failure = Object.freeze({
+    code: V2_REVISION_CODE_QUOTA,
+    retryable: true as const,
+    retryAfterMilliseconds,
+  })
+  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
+    requestKind: 'open_revisions',
+    wireScope: 'revision',
+    wireCode: failure.code,
+    retryable: true,
+    retryAfterMilliseconds,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: {
+      protocolSessionId: createFailureIdentity('protocol_session', id(10)),
+      protocolOperationId: createFailureIdentity('protocol_operation', id(11)),
+    },
+  }))
+}
+
+class DirectZipCapacityClock implements V2RevisionCapacityClock {
+  #now = 0
+
+  now(): number { return this.#now }
+
+  async sleep(milliseconds: number, signal: AbortSignal): Promise<void> {
+    signal.throwIfAborted()
+    this.#now += milliseconds
+  }
+
+  advance(milliseconds: number): void {
+    this.#now += milliseconds
+  }
+}
 
 function transferOutput(
   writer: ReturnType<ReturnType<typeof createWriterHarness>['writer']>,

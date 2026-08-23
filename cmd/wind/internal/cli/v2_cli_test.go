@@ -177,7 +177,8 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	app := &App{
 		Stdout: stdout, Stderr: stderr, Stdin: strings.NewReader(""),
-		processTrace: privateTrace,
+		processTrace:     privateTrace,
+		revisionCapacity: newTestRevisionCapacity(t),
 		openUserTrace: func(
 			target runtrace.Target,
 			command clievent.Command,

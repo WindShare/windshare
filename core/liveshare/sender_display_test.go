@@ -115,7 +115,8 @@ func TestNewSelectedRootSummaryValidation(t *testing.T) {
 func prepareDisplaySender(t *testing.T, paths []string) *PreparedSender {
 	t.Helper()
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: paths, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            paths, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		CatalogStorage: CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
 			return catalog.NewMemoryCatalogBackend(), nil
 		}),

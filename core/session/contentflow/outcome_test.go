@@ -61,7 +61,7 @@ func (fixedOutcomeOutbound) SendOperationError(context.Context, protocolsession.
 	return nil
 }
 
-func TestOpenResultsReleaseLeasesOnlyWhenReceiptProvesNoSend(t *testing.T) {
+func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 	base := newRuntimeFixture(t, 1)
 	opened, err := base.service.Open(context.Background(), mustOpenRequest(t, base.file))
 	if err != nil {
@@ -75,14 +75,14 @@ func TestOpenResultsReleaseLeasesOnlyWhenReceiptProvesNoSend(t *testing.T) {
 		name             string
 		outcome          protocolsession.SendOutcome
 		sendErr          error
-		wantReleased     bool
+		wantEnd          content.LeaseEndKind
 		wantProcessError error
 	}{
-		{name: "cancel before send", outcome: protocolsession.SendOutcomeDropped, wantReleased: true},
+		{name: "cancel before send", outcome: protocolsession.SendOutcomeDropped, wantEnd: content.LeaseUndelivered},
 		{name: "send wins cancel", outcome: protocolsession.SendOutcomeDelivered},
-		{name: "writer transport failure", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantProcessError: transportErr},
-		{name: "caller timeout", outcome: protocolsession.SendOutcomeUnknown, sendErr: context.DeadlineExceeded, wantProcessError: context.DeadlineExceeded},
-		{name: "session close before send", outcome: protocolsession.SendOutcomeDropped, sendErr: protocolsession.ErrWriterStopped, wantReleased: true, wantProcessError: protocolsession.ErrWriterStopped},
+		{name: "writer transport failure", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
+		{name: "caller timeout", outcome: protocolsession.SendOutcomeUnknown, sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
+		{name: "session close before send", outcome: protocolsession.SendOutcomeDropped, sendErr: protocolsession.ErrWriterStopped, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -106,26 +106,30 @@ func TestOpenResultsReleaseLeasesOnlyWhenReceiptProvesNoSend(t *testing.T) {
 			}
 
 			_, ownedErr := service.ownedDescriptor(lease.ID())
-			if test.wantReleased && !errors.Is(ownedErr, ErrLeaseNotOwned) {
-				t.Fatalf("definitively dropped result retained lease: %v", ownedErr)
+			if test.wantEnd != 0 && !errors.Is(ownedErr, ErrLeaseNotOwned) {
+				t.Fatalf("settled result retained lease: %v", ownedErr)
 			}
-			if !test.wantReleased && ownedErr != nil {
-				t.Fatalf("uncertain or delivered result released lease: %v", ownedErr)
+			if test.wantEnd == 0 && ownedErr != nil {
+				t.Fatalf("delivered result ended lease: %v", ownedErr)
 			}
 			store.mu.Lock()
-			releasedBeforeClose := len(store.released)
+			endsBeforeClose := append([]recordedLeaseEnd(nil), store.leaseEnds...)
 			store.mu.Unlock()
-			if (releasedBeforeClose == 1) != test.wantReleased {
-				t.Fatalf("release count before close=%d wantReleased=%v", releasedBeforeClose, test.wantReleased)
+			if test.wantEnd == 0 && len(endsBeforeClose) != 0 ||
+				test.wantEnd != 0 && (len(endsBeforeClose) != 1 || endsBeforeClose[0].kind != test.wantEnd) {
+				t.Fatalf("lease endings before close=%+v want=%v", endsBeforeClose, test.wantEnd)
 			}
 			if err := service.Close(); err != nil {
 				t.Fatal(err)
 			}
 			store.mu.Lock()
-			releasedAfterClose := len(store.released)
+			endsAfterClose := append([]recordedLeaseEnd(nil), store.leaseEnds...)
 			store.mu.Unlock()
-			if releasedAfterClose != 1 {
-				t.Fatalf("lease release count after close=%d", releasedAfterClose)
+			if len(endsAfterClose) != 1 {
+				t.Fatalf("lease ending count after close=%d", len(endsAfterClose))
+			}
+			if test.wantEnd == 0 && endsAfterClose[0].kind != content.LeaseDetached {
+				t.Fatalf("delivered lease closed as %v", endsAfterClose[0].kind)
 			}
 		})
 	}
@@ -154,7 +158,7 @@ func TestFragmentOutboundFailureEmitsTheSingleLegalOperationFinal(t *testing.T) 
 	}
 }
 
-func TestRenewResultRetiresLeaseOnlyWhenReceiptProvesNoSend(t *testing.T) {
+func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 	base := newRuntimeFixture(t, 1)
 	opened, err := base.service.Open(context.Background(), mustOpenRequest(t, base.file))
 	if err != nil {
@@ -168,11 +172,11 @@ func TestRenewResultRetiresLeaseOnlyWhenReceiptProvesNoSend(t *testing.T) {
 		name         string
 		outcome      protocolsession.SendOutcome
 		sendErr      error
-		wantReleased bool
+		wantDetached bool
 	}{
-		{name: "definitive drop", outcome: protocolsession.SendOutcomeDropped, wantReleased: true},
+		{name: "definitive drop", outcome: protocolsession.SendOutcomeDropped, wantDetached: true},
 		{name: "delivered", outcome: protocolsession.SendOutcomeDelivered},
-		{name: "transport uncertainty", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr},
+		{name: "transport uncertainty", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantDetached: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -201,14 +205,15 @@ func TestRenewResultRetiresLeaseOnlyWhenReceiptProvesNoSend(t *testing.T) {
 				t.Fatalf("renew process error=%v want=%v", processErr, test.sendErr)
 			}
 			_, ownedErr := service.ownedDescriptor(lease.ID())
-			if test.wantReleased != errors.Is(ownedErr, ErrLeaseNotOwned) {
-				t.Fatalf("renew ownership error=%v wantReleased=%v", ownedErr, test.wantReleased)
+			if test.wantDetached != errors.Is(ownedErr, ErrLeaseNotOwned) {
+				t.Fatalf("renew ownership error=%v wantDetached=%v", ownedErr, test.wantDetached)
 			}
 			store.mu.Lock()
-			released := len(store.released)
+			ends := append([]recordedLeaseEnd(nil), store.leaseEnds...)
 			store.mu.Unlock()
-			if (released == 1) != test.wantReleased {
-				t.Fatalf("renew release count=%d wantReleased=%v", released, test.wantReleased)
+			if test.wantDetached && (len(ends) != 1 || ends[0].kind != content.LeaseDetached) ||
+				!test.wantDetached && len(ends) != 0 {
+				t.Fatalf("renew lease endings=%+v wantDetached=%v", ends, test.wantDetached)
 			}
 		})
 	}
@@ -244,10 +249,10 @@ func TestRenewRetiresLeaseWhenStoreChangesItsIdentity(t *testing.T) {
 		t.Fatalf("malformed renewal retained lease: %v", err)
 	}
 	store.mu.Lock()
-	released := len(store.released)
+	ends := append([]recordedLeaseEnd(nil), store.leaseEnds...)
 	store.mu.Unlock()
-	if released != 1 {
-		t.Fatalf("malformed renewal release count=%d", released)
+	if len(ends) != 1 || ends[0].kind != content.LeaseDetached {
+		t.Fatalf("malformed renewal lease endings=%+v", ends)
 	}
 }
 
@@ -289,6 +294,68 @@ func TestRenewFailureRetiresOnlyTerminalLeaseState(t *testing.T) {
 	}
 	if _, err := service.ownedDescriptor(driftLease.ID()); !errors.Is(err, ErrLeaseNotOwned) {
 		t.Fatalf("drift renewal retained session ownership: %v", err)
+	}
+}
+
+func TestSenderServiceUsesRelinquishedDetachedAndGlobalInvalidationBoundaries(t *testing.T) {
+	base := newRuntimeFixture(t, 1)
+	defer base.close(t)
+	firstOpen, err := base.service.Open(context.Background(), mustOpenRequest(t, base.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondOpen, err := base.service.Open(context.Background(), mustOpenRequest(t, base.file))
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := firstOpen.Items()[0].Lease
+	second := secondOpen.Items()[0].Lease
+	store := &stubRevisionStore{
+		results: []content.OpenRevisionResult{{FileID: base.file, Lease: first}},
+		renew:   first,
+	}
+	service, cache := stubService(t, first.Descriptor(), store, stubRecordSealer{revision: []byte("revision")})
+	defer cache.Close()
+	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Release(first.ID()); err != nil {
+		t.Fatal(err)
+	}
+
+	store.results = []content.OpenRevisionResult{{FileID: base.file, Lease: second}}
+	store.renew = second
+	if _, err := service.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	ends := append([]recordedLeaseEnd(nil), store.leaseEnds...)
+	store.mu.Unlock()
+	if len(ends) != 2 || ends[0].kind != content.LeaseRelinquished || ends[1].kind != content.LeaseDetached {
+		t.Fatalf("service lease endings=%+v", ends)
+	}
+
+	invalidationStore := &stubRevisionStore{
+		results:  []content.OpenRevisionResult{{FileID: base.file, Lease: first}},
+		renewErr: content.ErrRevisionDrift,
+	}
+	invalidationService, invalidationCache := stubService(t, first.Descriptor(), invalidationStore, stubRecordSealer{revision: []byte("revision")})
+	defer invalidationCache.Close()
+	defer invalidationService.Close()
+	if _, err := invalidationService.Open(context.Background(), mustOpenRequest(t, base.file)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invalidationService.Renew(first.ID()); !errors.Is(err, content.ErrRevisionDrift) {
+		t.Fatalf("revision invalidation error=%v", err)
+	}
+	invalidationStore.mu.Lock()
+	ordinaryEnds := len(invalidationStore.leaseEnds)
+	invalidationStore.mu.Unlock()
+	if ordinaryEnds != 0 {
+		t.Fatalf("tuple-global invalidation was rewritten as %d ordinary lease endings", ordinaryEnds)
 	}
 }
 
@@ -343,9 +410,9 @@ func TestReleaseReplayRemainsIdempotentAfterIdentityTombstoneRotation(t *testing
 		t.Fatalf("rotated release replay was not idempotent: %v", err)
 	}
 	store.mu.Lock()
-	released := len(store.released)
+	ended := len(store.leaseEnds)
 	store.mu.Unlock()
-	if released != 0 {
-		t.Fatalf("unknown replay reached the share-scoped store: releases=%d", released)
+	if ended != 0 {
+		t.Fatalf("unknown replay reached the share-scoped store: endings=%d", ended)
 	}
 }

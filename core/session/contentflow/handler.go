@@ -7,6 +7,7 @@ import (
 	"sync"
 	"sync/atomic"
 
+	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -29,10 +30,11 @@ type SemanticOutbound interface {
 }
 
 type SenderHandlerConfig struct {
-	Service    *SenderService
-	Outbound   SemanticOutbound
-	QueueDepth int
-	Workers    int
+	Service        *SenderService
+	Outbound       SemanticOutbound
+	QueueDepth     int
+	Workers        int
+	DecisionTracer SenderDecisionTracer
 }
 
 type queuedOperation struct {
@@ -42,10 +44,11 @@ type queuedOperation struct {
 }
 
 type SenderHandler struct {
-	service  *SenderService
-	outbound SemanticOutbound
-	queue    chan queuedOperation
-	workers  chan struct{}
+	service        *SenderService
+	outbound       SemanticOutbound
+	queue          chan queuedOperation
+	workers        chan struct{}
+	decisionTracer SenderDecisionTracer
 
 	started  atomic.Bool
 	queueMu  sync.Mutex
@@ -100,7 +103,8 @@ func NewSenderHandler(config SenderHandlerConfig) (*SenderHandler, error) {
 	return &SenderHandler{
 		service: config.Service, outbound: config.Outbound,
 		queue: make(chan queuedOperation, config.QueueDepth), workers: make(chan struct{}, config.Workers),
-		active: make(map[handlerOperation]context.CancelFunc),
+		decisionTracer: config.DecisionTracer,
+		active:         make(map[handlerOperation]context.CancelFunc),
 	}, nil
 }
 
@@ -247,13 +251,17 @@ func (h *SenderHandler) processOpen(ctx context.Context, operationID protocolses
 	if err != nil {
 		return wrapServiceError("open revisions", err)
 	}
+	h.traceCapacityDecisions(operationID, results)
 	encoded, err := EncodeOpenResults(results)
 	if err != nil {
-		return errors.Join(err, h.service.releaseOpenResults(results))
+		return errors.Join(err, h.endOpenResults(operationID, results, content.LeaseUndelivered))
 	}
 	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageOpenResults, operationID, encoded)
-	if outcome == protocolsession.SendOutcomeDropped {
-		return errors.Join(wrapOutboundError(err), h.service.releaseOpenResults(results))
+	switch outcome {
+	case protocolsession.SendOutcomeDropped:
+		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseUndelivered))
+	case protocolsession.SendOutcomeUnknown:
+		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseDetached))
 	}
 	return wrapOutboundError(err)
 }
@@ -269,12 +277,14 @@ func (h *SenderHandler) processRenew(ctx context.Context, operationID protocolse
 	}
 	encoded, err := EncodeLeaseResult(lease)
 	if err != nil {
-		h.service.retireLease(leaseID)
+		h.service.detachLease(leaseID)
+		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 		return err
 	}
 	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageLeaseResult, operationID, encoded)
-	if outcome == protocolsession.SendOutcomeDropped {
-		h.service.retireLease(leaseID)
+	if outcome != protocolsession.SendOutcomeDelivered {
+		h.service.detachLease(leaseID)
+		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 	}
 	return wrapOutboundError(err)
 }
@@ -287,6 +297,7 @@ func (h *SenderHandler) processRelease(ctx context.Context, operationID protocol
 	if err := h.service.Release(leaseID); err != nil {
 		return wrapServiceError("release lease", err)
 	}
+	h.traceLeaseDecision(operationID, protocolsession.MessageReleaseLease, leaseID, content.LeaseRelinquished)
 	encoded, _ := EncodeOperationComplete(0)
 	_, err = h.outbound.SendControl(ctx, protocolsession.MessageOperationComplete, operationID, encoded)
 	return wrapOutboundError(err)

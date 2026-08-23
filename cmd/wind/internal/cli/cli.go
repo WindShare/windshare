@@ -13,7 +13,9 @@ import (
 	"os/signal"
 	"strings"
 
+	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -71,10 +73,12 @@ type App struct {
 	openUserTrace        userTraceOpener
 	commandEventCapacity int
 
-	receiverPeerFactory func() (receiverPeerStarter, error)
-	receiverClock       receiverAdmissionClock
-	processTrace        *processTrace
-	getOutputFactory    getOutputAuthorityFactory
+	receiverPeerFactory   func() (receiverPeerStarter, error)
+	receiverClock         receiverAdmissionClock
+	processTrace          *processTrace
+	revisionCapacity      *revisioncapacity.Coordinator
+	revisionCapacityTrace *capacitytrace.Router
+	getOutputFactory      getOutputAuthorityFactory
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
@@ -89,10 +93,22 @@ func Main() int {
 		app.closeTerminalOutput()
 		return ExitFailure
 	}
+	capacityTrace := &capacitytrace.Router{}
+	capacityConfig := revisioncapacity.DefaultProcessConfig()
+	capacityConfig.Tracer = capacityTrace
+	capacityOwner, err := revisioncapacity.NewProcessOwner(capacityConfig)
+	if err != nil {
+		app.writeCompleteLine("%s: initialize process revision capacity: %v", commandmeta.Name, err)
+		_ = trace.close()
+		app.closeTerminalOutput()
+		return ExitFailure
+	}
 	interrupts := make(chan os.Signal, interruptSignalBuffer)
 	signal.Notify(interrupts, os.Interrupt)
 	defer signal.Stop(interrupts)
 	app.processTrace = trace
+	app.revisionCapacity = capacityOwner.Coordinator()
+	app.revisionCapacityTrace = capacityTrace
 	code := runCLIWithInterruptEscalation(
 		interrupts,
 		os.Exit,
@@ -100,6 +116,12 @@ func Main() int {
 	)
 	if err := trace.close(); err != nil {
 		app.writeCompleteLine("%s: publish test trace: %v", commandmeta.Name, err)
+		if code == ExitOK {
+			code = ExitFailure
+		}
+	}
+	if err := capacityOwner.Close(); err != nil {
+		app.writeCompleteLine("%s: close process revision capacity: %v", commandmeta.Name, err)
 		if code == ExitOK {
 			code = ExitFailure
 		}

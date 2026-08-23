@@ -139,6 +139,10 @@ export async function reconstructFSAContinuationFailure(
       selectionErrors: 0n,
       failedDirectories: 0n,
       contentLanes: 1,
+      capacityWaitingFiles: 0n,
+      capacityAccumulatedWaitMilliseconds: 0n,
+      capacityWaitAttempts: 0n,
+      capacityWaitVisible: false,
     }),
     output: Object.freeze({ generation: 7n, planKind: 'direct-tree' }),
   })

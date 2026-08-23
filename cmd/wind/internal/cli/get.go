@@ -342,6 +342,7 @@ func (a *App) runTransferJob(
 				receiveOperation,
 				transferJob,
 				completed.Progress,
+				false,
 			)
 			return getTransferCompletion{
 				result:                  completed,

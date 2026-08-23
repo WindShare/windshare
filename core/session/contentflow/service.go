@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"maps"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -18,9 +20,9 @@ const ReleasedLeaseTombstoneLimit = 4_096
 var errRevisionOperationScope = errors.New("content failure belongs to the file revision")
 
 type RevisionStore interface {
-	OpenRevisions(context.Context, []content.OpenRevisionRequest, *content.QuotaAccount) ([]content.OpenRevisionResult, error)
+	OpenRevisions(context.Context, []content.OpenRevisionRequest, *revisioncapacity.SessionRegistration) ([]content.OpenRevisionResult, error)
 	RenewLease(content.LeaseID) (content.RevisionLease, error)
-	ReleaseLease(content.LeaseID) error
+	EndLease(content.LeaseID, content.LeaseEndKind) error
 	ValidateLease(content.LeaseID, content.FileRevisionDescriptor) error
 	ReadBlock(context.Context, content.LeaseID, content.BlockRef) ([]byte, error)
 }
@@ -31,17 +33,17 @@ type RecordSealer interface {
 }
 
 type SenderServiceConfig struct {
-	Store        RevisionStore
-	SessionQuota *content.QuotaAccount
-	Sealer       RecordSealer
-	Cache        *SharedBlockCache
+	Store           RevisionStore
+	SessionCapacity *revisioncapacity.SessionRegistration
+	Sealer          RecordSealer
+	Cache           *SharedBlockCache
 }
 
 type SenderService struct {
-	store        RevisionStore
-	sessionQuota *content.QuotaAccount
-	sealer       RecordSealer
-	cache        *SharedBlockCache
+	store           RevisionStore
+	sessionCapacity *revisioncapacity.SessionRegistration
+	sealer          RecordSealer
+	cache           *SharedBlockCache
 
 	mu             sync.Mutex
 	closed         bool
@@ -49,14 +51,17 @@ type SenderService struct {
 	released       map[content.LeaseID]struct{}
 	releasedOrder  []content.LeaseID
 	releasedCursor int
+	closeOnce      sync.Once
+	closeErr       error
 }
 
 func NewSenderService(config SenderServiceConfig) (*SenderService, error) {
-	if config.Store == nil || config.SessionQuota == nil || config.Sealer == nil || config.Cache == nil {
-		return nil, errors.New("content sender service requires store, session quota, sealer, and share cache")
+	if config.Store == nil || config.SessionCapacity == nil || config.SessionCapacity.SessionID() == "" ||
+		config.Sealer == nil || config.Cache == nil {
+		return nil, errors.New("content sender service requires store, revision-capacity session, sealer, and share cache")
 	}
 	return &SenderService{
-		store: config.Store, sessionQuota: config.SessionQuota, sealer: config.Sealer, cache: config.Cache,
+		store: config.Store, sessionCapacity: config.SessionCapacity, sealer: config.Sealer, cache: config.Cache,
 		leases: make(map[content.LeaseID]content.FileRevisionDescriptor), released: make(map[content.LeaseID]struct{}),
 	}, nil
 }
@@ -73,33 +78,33 @@ func (s *SenderService) Open(ctx context.Context, request OpenRequest) (OpenResu
 	for index, item := range validated.items {
 		storeRequests[index] = content.OpenRevisionRequest{FileID: item.FileID, InitialRanges: item.InitialRanges}
 	}
-	storeResults, err := s.store.OpenRevisions(ctx, storeRequests, s.sessionQuota)
+	storeResults, err := s.store.OpenRevisions(ctx, storeRequests, s.sessionCapacity)
 	if err != nil {
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, err
 	}
 	if len(storeResults) != len(validated.items) {
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, fmt.Errorf("%w: wrong open result count", ErrRevisionStoreContract)
 	}
 	results, leases, err := s.prepareOpenResults(validated.items, storeResults)
 	if err != nil {
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, err
 	}
 	if err := ctx.Err(); err != nil {
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, err
 	}
 	validatedResults, err := NewOpenResults(results)
 	if err != nil {
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, err
 	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		s.releaseStoreResults(storeResults)
+		s.rollbackUndeliveredStoreResults(storeResults)
 		return OpenResults{}, ErrServiceClosed
 	}
 	for leaseID := range leases {
@@ -107,7 +112,7 @@ func (s *SenderService) Open(ctx context.Context, request OpenRequest) (OpenResu
 		_, released := s.released[leaseID]
 		if active || released {
 			s.mu.Unlock()
-			s.releaseStoreResults(storeResults)
+			s.rollbackUndeliveredStoreResults(storeResults)
 			return OpenResults{}, fmt.Errorf("%w: session lease identity reused", ErrRevisionStoreContract)
 		}
 	}
@@ -161,7 +166,7 @@ func (s *SenderService) prepareOpenResult(
 	seen[result.Lease.ID()] = struct{}{}
 	object, err := s.sealer.SealRevision(result.Lease.Descriptor())
 	if err != nil {
-		_ = s.store.ReleaseLease(result.Lease.ID())
+		_ = s.store.EndLease(result.Lease.ID(), content.LeaseUndelivered)
 		failure := classifyRevisionError(err)
 		prepared, prepareErr := FailedOpen(result.FileID, failure)
 		return prepared, false, prepareErr
@@ -189,23 +194,21 @@ func (s *SenderService) Renew(leaseID content.LeaseID) (content.RevisionLease, e
 		case errors.Is(err, content.ErrRevisionDrift), errors.Is(err, content.ErrSourceDrift):
 			s.invalidateOwnedRevision(descriptor)
 		case errors.Is(err, content.ErrLeaseExpired), errors.Is(err, content.ErrLeaseLifetime), errors.Is(err, content.ErrInvalidLease):
-			s.retireLease(leaseID)
+			s.detachLease(leaseID)
 		}
 		return content.RevisionLease{}, err
 	}
 	if err := validateRenewedLease(leaseID, descriptor, lease); err != nil {
-		s.retireLease(leaseID)
+		s.detachLease(leaseID)
 		return content.RevisionLease{}, err
 	}
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		_ = s.store.ReleaseLease(leaseID)
 		return content.RevisionLease{}, ErrServiceClosed
 	}
 	if current, exists := s.leases[leaseID]; !exists || current != descriptor {
 		s.mu.Unlock()
-		_ = s.store.ReleaseLease(leaseID)
 		return content.RevisionLease{}, ErrLeaseNotOwned
 	}
 	s.mu.Unlock()
@@ -248,7 +251,7 @@ func (s *SenderService) Release(leaseID content.LeaseID) error {
 	delete(s.leases, leaseID)
 	s.rememberReleasedLocked(leaseID)
 	s.mu.Unlock()
-	return s.store.ReleaseLease(leaseID)
+	return s.store.EndLease(leaseID, content.LeaseRelinquished)
 }
 
 func (s *SenderService) ServeBlocks(
@@ -321,7 +324,7 @@ func (s *SenderService) blockObject(
 		if errors.Is(err, content.ErrRevisionDrift) || errors.Is(err, content.ErrSourceDrift) {
 			s.invalidateOwnedRevision(descriptor)
 		} else if errors.Is(err, content.ErrLeaseExpired) || errors.Is(err, content.ErrInvalidLease) {
-			s.retireLease(leaseID)
+			s.detachLease(leaseID)
 		}
 		return nil, errors.Join(errRevisionOperationScope, err)
 	}
@@ -386,51 +389,55 @@ func emitBlockObject(
 	return nil
 }
 
-func (s *SenderService) releaseStoreResults(results []content.OpenRevisionResult) {
+func (s *SenderService) rollbackUndeliveredStoreResults(results []content.OpenRevisionResult) {
 	for _, result := range results {
 		if !result.Lease.ID().IsZero() {
-			_ = s.store.ReleaseLease(result.Lease.ID())
+			_ = s.store.EndLease(result.Lease.ID(), content.LeaseUndelivered)
 		}
 	}
 }
 
-func (s *SenderService) releaseOpenResults(results OpenResults) error {
+func (s *SenderService) endOpenResults(results OpenResults, kind content.LeaseEndKind) error {
 	var result error
 	for _, opened := range results.Items() {
 		if opened.Failure == nil {
-			result = errors.Join(result, s.Release(opened.Lease.ID()))
+			result = errors.Join(result, s.endOwnedLease(opened.Lease.ID(), kind))
 		}
 	}
 	return result
 }
 
-func (s *SenderService) retireLease(leaseID content.LeaseID) {
+func (s *SenderService) detachLease(leaseID content.LeaseID) {
+	_ = s.endOwnedLease(leaseID, content.LeaseDetached)
+}
+
+func (s *SenderService) endOwnedLease(leaseID content.LeaseID, kind content.LeaseEndKind) error {
 	s.mu.Lock()
+	owned := false
 	if _, exists := s.leases[leaseID]; exists {
 		delete(s.leases, leaseID)
+		owned = true
 		if !s.closed {
 			s.rememberReleasedLocked(leaseID)
 		}
 	}
 	s.mu.Unlock()
-	_ = s.store.ReleaseLease(leaseID)
+	if !owned {
+		return nil
+	}
+	return s.store.EndLease(leaseID, kind)
 }
 
 func (s *SenderService) invalidateOwnedRevision(descriptor content.FileRevisionDescriptor) {
 	s.cache.InvalidateRevision(descriptor.FileID(), descriptor.FileRevision())
 	s.mu.Lock()
-	leases := make([]content.LeaseID, 0)
 	for leaseID, owned := range s.leases {
 		if owned.FileID() == descriptor.FileID() && owned.FileRevision() == descriptor.FileRevision() {
 			delete(s.leases, leaseID)
 			s.rememberReleasedLocked(leaseID)
-			leases = append(leases, leaseID)
 		}
 	}
 	s.mu.Unlock()
-	for _, leaseID := range leases {
-		_ = s.store.ReleaseLease(leaseID)
-	}
 }
 
 func (s *SenderService) ownedDescriptor(leaseID content.LeaseID) (content.FileRevisionDescriptor, error) {
@@ -470,26 +477,40 @@ func (s *SenderService) rememberReleasedLocked(leaseID content.LeaseID) {
 }
 
 func (s *SenderService) Close() error {
-	s.mu.Lock()
-	if s.closed {
+	s.closeOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		leases := make([]content.LeaseID, 0, len(s.leases))
+		for leaseID := range s.leases {
+			leases = append(leases, leaseID)
+		}
+		clear(s.leases)
 		s.mu.Unlock()
-		return nil
-	}
-	s.closed = true
-	leases := make([]content.LeaseID, 0, len(s.leases))
-	for leaseID := range s.leases {
-		leases = append(leases, leaseID)
-	}
-	clear(s.leases)
-	s.mu.Unlock()
-	var result error
-	for _, leaseID := range leases {
-		result = errors.Join(result, s.store.ReleaseLease(leaseID))
-	}
-	return result
+		var result error
+		for _, leaseID := range leases {
+			result = errors.Join(result, s.store.EndLease(leaseID, content.LeaseDetached))
+		}
+		s.closeErr = errors.Join(result, s.sessionCapacity.Close())
+	})
+	return s.closeErr
 }
 
 func classifyRevisionError(err error) RevisionFailure {
+	var capacityBusy *revisioncapacity.CapacityBusyError
+	if errors.As(err, &capacityBusy) && capacityBusy != nil {
+		retryAfter := capacityBusy.RetryAfter()
+		if retryAfter < MinRevisionFailureRetryAfter {
+			retryAfter = MinRevisionFailureRetryAfter
+		}
+		if retryAfter > MaxRevisionFailureRetryAfter {
+			retryAfter = MaxRevisionFailureRetryAfter
+		}
+		retryAfter = retryAfter.Truncate(time.Millisecond)
+		failure, failureErr := NewRevisionFailure(RevisionCodeQuota, true, retryAfter)
+		if failureErr == nil {
+			return failure.withCapacityDecision(capacityBusy.DecisionID())
+		}
+	}
 	code := RevisionCodeUnreadable
 	switch {
 	case errors.Is(err, content.ErrRevisionStale):
@@ -498,8 +519,6 @@ func classifyRevisionError(err error) RevisionFailure {
 		code = RevisionCodeNotFound
 	case errors.Is(err, content.ErrUnsupportedStability):
 		code = RevisionCodeUnsupportedStability
-	case errors.Is(err, content.ErrQuotaExceeded), errors.Is(err, records.ErrSealLimit):
-		code = RevisionCodeQuota
 	case errors.Is(err, content.ErrLeaseExpired), errors.Is(err, content.ErrLeaseLifetime):
 		code = RevisionCodeLeaseExpired
 	case errors.Is(err, content.ErrRevisionDrift), errors.Is(err, content.ErrSourceDrift):

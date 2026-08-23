@@ -193,6 +193,7 @@ func BenchmarkReadyScaling(b *testing.B) {
 func BenchmarkReadyRealDisk(b *testing.B) {
 	base := b.TempDir()
 	run := func(b *testing.B, rootForIteration func(int) (string, func(), error)) {
+		revisionCapacity := newTestRevisionCapacity(b)
 		b.ReportAllocs()
 		var registrationMaterialBytes int
 		b.ResetTimer()
@@ -204,7 +205,8 @@ func BenchmarkReadyRealDisk(b *testing.B) {
 			}
 			b.StartTimer()
 			sender, err := PrepareSender(context.Background(), SenderConfig{
-				Paths: []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.DefaultChunkSize,
+				RevisionCapacity: revisionCapacity,
+				Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.DefaultChunkSize,
 				Random: &readyDeterministicReader{}, Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 			})
 			if err == nil {
