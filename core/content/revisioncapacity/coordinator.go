@@ -3,7 +3,7 @@ package revisioncapacity
 import (
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -178,7 +178,7 @@ func (c *Coordinator) snapshotLocked(store *storeState) CapacitySnapshot {
 	for sessionID := range store.sessions {
 		sessionIDs = append(sessionIDs, sessionID)
 	}
-	sort.Slice(sessionIDs, func(left, right int) bool { return sessionIDs[left] < sessionIDs[right] })
+	slices.Sort(sessionIDs)
 	snapshot.sessions = make([]ScopeSnapshot, 0, len(sessionIDs))
 	for _, sessionID := range sessionIDs {
 		session := store.sessions[sessionID]

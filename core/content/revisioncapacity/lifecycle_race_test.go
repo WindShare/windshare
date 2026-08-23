@@ -248,7 +248,7 @@ func TestOwnerCloseReportsLiveRegistrationAndWinsRegisterRaceAtomically(t *testi
 	}
 	closeRegistrationTree(t, owner, session, store)
 
-	for iteration := 0; iteration < 32; iteration++ {
+	for range 32 {
 		tracingOwner := newTestOwner(t, limits)
 		start := make(chan struct{})
 		registered := make(chan *StoreRegistration, 1)
@@ -306,7 +306,7 @@ func publishSingleIdle(t *testing.T, store *StoreRegistration, session *SessionR
 
 func waitForStoreClosing(t *testing.T, store *StoreRegistration) {
 	t.Helper()
-	for attempts := 0; attempts < 10_000; attempts++ {
+	for range 10_000 {
 		store.coordinator.mu.Lock()
 		closing := store.state.closing
 		store.coordinator.mu.Unlock()

@@ -218,7 +218,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 
 	files := make(map[catalog.FileID][]byte, fileCount)
 	children := make([]catalog.ScannedChild, 0, fileCount)
-	for index := uint64(0); index < fileCount; index++ {
+	for index := range fileCount {
 		fileID := syntheticCapacityID[catalog.FileID](index + 10)
 		name := fmt.Sprintf("file-%03d.bin", index)
 		locator, locatorErr := catalog.NewLocator(0, name)
