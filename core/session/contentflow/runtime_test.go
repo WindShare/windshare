@@ -841,8 +841,7 @@ func TestRevisionErrorClassificationGrantsRetryAuthorityOnlyToTypedCapacity(t *t
 	_, busyErr := store.Admit(context.Background(), revisioncapacity.AdmissionRequest{
 		Kind: revisioncapacity.AdmissionNewRevision, RevisionID: "blocked", Session: session,
 	})
-	var busy *revisioncapacity.CapacityBusyError
-	if !errors.As(busyErr, &busy) {
+	if _, ok := errors.AsType[*revisioncapacity.CapacityBusyError](busyErr); !ok {
 		t.Fatalf("stable saturation error=%T %v", busyErr, busyErr)
 	}
 	failure := classifyRevisionError(fmt.Errorf("store open: %w", busyErr))

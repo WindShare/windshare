@@ -90,7 +90,7 @@ func ProjectSenderRevision(value content.RevisionTrace) (clievent.SenderRevision
 	}
 	// Capacity ownership uses this exact transport-neutral tuple. Hashing the
 	// same canonical form keeps coordinator and revision-store traces joinable.
-	revisionMaterial := []byte(fmt.Sprintf("%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes()))
+	revisionMaterial := fmt.Appendf(nil, "%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes())
 	revision, err := clievent.NewSenderRevisionID(revisionMaterial)
 	if err != nil {
 		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
