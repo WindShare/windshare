@@ -66,6 +66,8 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		runtime.FinalizeStaged()
 		runtime.Close()
 	}()
+	releaseCapacityTrace := a.revisionCapacityTrace.Bind(observations.capacityTracer())
+	defer releaseCapacityTrace()
 
 	prepared, code := a.prepareShareSender(ctx, request, runtime.Clock(), runtime, observations)
 	if code != ExitOK {
@@ -108,6 +110,8 @@ func (a *App) prepareShareSender(
 		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
 		Random: rand.Reader, Now: clock.Now,
 		CatalogTracer: observations, RootPrefetchTracer: observations,
+		RevisionTracer:   observations.revisionTracer(),
+		RevisionCapacity: a.revisionCapacity,
 	})
 	if err != nil {
 		emitShareCommandFailure(emitter, ExitUsage, err)

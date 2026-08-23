@@ -4,12 +4,14 @@ import {
   V2BlockOperationError,
   V2RemoteOperationError,
   V2RemoteRevisionError,
+  V2RevisionCapacityBusyError,
   V2RevisionChangedDuringRecoveryError,
   V2RevisionLeaseExpiredError,
 } from '../../content/v2-session-services'
 import {
   faultFailureFact,
   isFailureFact,
+  protocolFailureFact,
   type FailureFact,
   type FailureFactRef,
   type FailureFactRelation,
@@ -58,6 +60,7 @@ import {
   type MaterializationFailureReason,
 } from './contract'
 import { V2SelectionTargetMissingError } from './selection'
+import { V2RevisionCapacityWaitBudgetError } from '../revision-capacity/public'
 
 const REVISION_FAILURE_STALE = 0x3001
 const REVISION_FAILURE_NOT_FOUND = 0x3002
@@ -161,6 +164,28 @@ export function normalizeV2FileTransferFailure(
       diagnostic: options.signal.reason ?? error,
     })
   }
+  if (error instanceof V2RevisionCapacityWaitBudgetError) {
+    return normalizedV2FileTransferClassification(Object.freeze({
+      fault: outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget),
+      fact: error.failureFact,
+      materializationFailureReason: error.surface === 'revision_open'
+        ? 'file-open-failed'
+        : 'content-read-failed',
+    }), options)
+  }
+  if (error instanceof V2RevisionCapacityBusyError) {
+    // This is a defensive terminal seam. Normal transfer composition intercepts
+    // the exact authenticated type in the wrapped content ports before normalization.
+    return normalizedV2FileTransferClassification(Object.freeze({
+      fault: outputFault(FaultScope.OutputPause, OutputFaultCode.ResourceBudget),
+      fact: protocolFailureFact({
+        stage: 'protocol_operation',
+        recoveryDisposition: 'resumable_receive',
+        protocolFailure: error.protocolFailure,
+      }),
+      materializationFailureReason: 'file-open-failed',
+    }), options)
+  }
   if (error instanceof V2ClassifiedTransferFailureError) {
     return normalizedFromClassification(
       materializeClassifiedTransferFailure(
@@ -191,6 +216,17 @@ export function normalizeV2FileTransferFailure(
   const reason = options.materializationFailureReason ?? materializationFailureReason(error)
   const fileOutcomeEvidence = transferFileOutcomeEvidence(error)
   if (error instanceof V2RemoteOperationError) {
+    return normalizedV2FileTransferClassification(
+      Object.freeze({
+        fault,
+        fact: error.failureFact,
+        materializationFailureReason: reason,
+      }),
+      options,
+      fileOutcomeEvidence,
+    )
+  }
+  if (error instanceof V2RemoteRevisionError) {
     return normalizedV2FileTransferClassification(
       Object.freeze({
         fault,

@@ -22,7 +22,8 @@ func TestPreparedSenderStartsRootPrefetchOnlyAtReadyBoundary(t *testing.T) {
 	}
 	traces := make(chan RootPrefetchTrace, 4)
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		RootPrefetchTracer: RootPrefetchTraceFunc(func(event RootPrefetchTrace) { traces <- event }),
 	})
 	if err != nil {

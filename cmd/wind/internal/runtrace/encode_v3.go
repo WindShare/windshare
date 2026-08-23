@@ -183,6 +183,11 @@ func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV3, err
 		VerifiedBytes:      decimal(snapshot.VerifiedBytes()),
 		NewlyVerifiedBytes: decimal(snapshot.NewlyVerifiedBytes()),
 		FileOutcomes:       projectFileOutcomes(snapshot.FileOutcomes()),
+		CapacityWait: capacityWaitV3{
+			ActiveWaiters:     decimal(uint64(snapshot.CapacityActiveWaiters())),
+			AccumulatedWaitMS: signedDecimal(snapshot.CapacityAccumulatedWait().Milliseconds()),
+			Attempts:          decimal(snapshot.CapacityWaitAttempts()),
+		},
 	}, nil
 }
 

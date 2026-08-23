@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
@@ -26,7 +27,7 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 		},
 		Discovery: transfer.DiscoveryComplete, CountersExact: true,
 	}
-	projected, err := ProjectProgress(value)
+	projected, err := ProjectProgress(value, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,13 +44,77 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 		t.Fatalf("progress projection lost facts: %+v files=%+v", projected, files)
 	}
 	value.Discovery = transfer.DiscoveryStatus(255)
-	if _, err := ProjectProgress(value); err == nil {
+	if _, err := ProjectProgress(value, false); err == nil {
 		t.Fatal("projected unknown discovery enum")
 	}
 	value.Discovery = transfer.DiscoveryComplete
 	value.VerifiedBytes = value.DiscoveredBytes + 1
-	if _, err := ProjectProgress(value); err == nil {
+	if _, err := ProjectProgress(value, false); err == nil {
 		t.Fatal("projected contradictory exact progress")
+	}
+}
+
+func TestProgressProjectionKeepsCapacityWaitSeparateFromFailureAccounting(t *testing.T) {
+	value := transfer.ReceiveProgressSnapshot{
+		Discovery: transfer.DiscoveryComplete, CountersExact: true,
+		CapacityWait: revisionwait.Snapshot{
+			ActiveWaiters: 1, AccumulatedWait: 750 * time.Millisecond, Attempts: 3,
+		},
+	}
+	projected, err := ProjectProgress(value, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if projected.CapacityActiveWaiters() != 1 || projected.CapacityAccumulatedWait() != 750*time.Millisecond ||
+		projected.CapacityWaitAttempts() != 3 || !projected.CapacityWaitVisible() {
+		t.Fatalf("capacity wait projection lost facts: %+v", projected)
+	}
+	if outcomes := projected.FileOutcomes(); outcomes.FailedFiles != 0 ||
+		outcomes.PausedFiles != 0 || outcomes.HasNonSuccess() {
+		t.Fatalf("capacity wait changed file accounting: %+v", outcomes)
+	}
+
+	value.CapacityWait.ActiveWaiters = 0
+	if _, err := ProjectProgress(value, true); err == nil {
+		t.Fatal("projected visible wait without an active waiter")
+	}
+}
+
+func TestCapacityBudgetPauseProjectsAsResumableJobWithoutFileFailure(t *testing.T) {
+	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	faultValue, err := transferfault.NewSession(
+		transferfault.ScopeOutputPause,
+		transferfault.SessionResourceBudget,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := ProjectGetResult(GetResultInput{
+		Result: transfer.JobResult{
+			Outcome: transfer.DirectTreeOutcomePaused, Settlement: settlement,
+			TerminationFault: faultValue,
+			Progress: transfer.ReceiveProgressSnapshot{
+				Discovery: transfer.DiscoveryComplete, CountersExact: true,
+				CapacityWait: revisionwait.Snapshot{
+					AccumulatedWait: revisionwait.DefaultWaitBudget, Attempts: 4,
+				},
+			},
+		},
+		Destination: clievent.NewDisplayPath("C:/safe"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	failure, present := result.Failure()
+	if result.Status() != clievent.ResultPaused || !present ||
+		failure.Code() != clievent.FailureSessionResourceBudget {
+		t.Fatalf("capacity pause projection = %+v failure=%+v present=%t", result, failure, present)
+	}
+	if files := result.Files(); files.FailedFiles != 0 || files.PausedFiles != 0 || files.HasNonSuccess() {
+		t.Fatalf("job-level capacity pause became a file failure: %+v", files)
 	}
 }
 

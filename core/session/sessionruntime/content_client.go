@@ -126,7 +126,10 @@ func (client *receiverRevisionClient) OpenRevision(
 		return transfer.OpenedRevision{}, errors.Join(ErrOperationMissing, err)
 	}
 	if results[0].Failure != nil {
-		return transfer.OpenedRevision{}, remoteRevisionFailureError(*results[0].Failure)
+		return transfer.OpenedRevision{}, &RemoteRevisionError{
+			failure: *results[0].Failure, protocolSession: rpc.runtime.sessionID,
+			protocolOperation: call.id,
+		}
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
 		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
@@ -232,11 +235,27 @@ func (client *receiverRevisionClient) failRemoteLeaseCollision() error {
 
 // RemoteRevisionError retains the authenticated OPEN_RESULTS diagnostic without
 // letting observers mutate the semantic authority already assigned to the job.
-type RemoteRevisionError struct{ failure contentflow.RevisionFailure }
+type RemoteRevisionError struct {
+	failure           contentflow.RevisionFailure
+	protocolSession   protocolsession.ProtocolSessionID
+	protocolOperation protocolsession.OperationID
+}
 
 func (err *RemoteRevisionError) Error() string { return "sender could not open the file revision" }
 func (err *RemoteRevisionError) Failure() contentflow.RevisionFailure {
 	return err.failure
+}
+func (err *RemoteRevisionError) ProtocolSessionID() protocolsession.ProtocolSessionID {
+	if err == nil {
+		return protocolsession.ProtocolSessionID{}
+	}
+	return err.protocolSession
+}
+func (err *RemoteRevisionError) OperationID() protocolsession.OperationID {
+	if err == nil {
+		return protocolsession.OperationID{}
+	}
+	return err.protocolOperation
 }
 
 func (client *receiverRevisionClient) ReleaseRevision(ctx context.Context, leaseID content.LeaseID) error {

@@ -1,4 +1,8 @@
 import type { TraceCapacityPolicy } from './capacity'
+import type {
+  CapacityWaitTransitionPayloadV1,
+  TransferProgressPayloadV1,
+} from './transfer-payload'
 import type { CorrelationV1 } from '../export/correlation-v1'
 import type {
   DiagnosticEventEnvelopeV1,
@@ -549,6 +553,7 @@ export interface TraceEventPayloadByNameV1 {
         protocol_generation?: number
         output_session_id?: string
       }>
+    | CapacityWaitTransitionPayloadV1
   readonly lifecycle_action_transition: Readonly<{
     transition: 'started' | 'completed' | 'failed' | 'excluded'
     action:
@@ -563,19 +568,7 @@ export interface TraceEventPayloadByNameV1 {
       | 'expiry'
     lifecycle_state?: LifecycleStateV1
   }>
-  readonly transfer_progress: Readonly<{
-    discovered_files: string
-    discovered_bytes: string
-    written_bytes: string
-    completed_files: string
-    completed_bytes: string
-    file_errors: string
-    selection_errors: string
-    failed_directories: string
-    content_lanes: number
-    discovery: 'open' | 'complete' | 'failed'
-    partial: boolean
-  }>
+  readonly transfer_progress: TransferProgressPayloadV1
   readonly output_reservation: Readonly<{
     backend: OutputBackendV1
     transition: 'started' | 'acquired' | 'reopened' | 'failed'

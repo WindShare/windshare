@@ -52,16 +52,18 @@ func (functions TerminalConnectivityFuncs) Cleanup(ctx context.Context) error {
 }
 
 type SenderContentFactory interface {
-	NewSenderContentService() (*contentflow.SenderService, error)
+	NewSenderContentService(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error)
 }
 
-type SenderContentFactoryFunc func() (*contentflow.SenderService, error)
+type SenderContentFactoryFunc func(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error)
 
-func (function SenderContentFactoryFunc) NewSenderContentService() (*contentflow.SenderService, error) {
-	if function == nil {
+func (function SenderContentFactoryFunc) NewSenderContentService(
+	sessionID protocolsession.ProtocolSessionID,
+) (*contentflow.SenderService, error) {
+	if function == nil || sessionID.IsZero() {
 		return nil, ErrRuntimeConfig
 	}
-	return function()
+	return function(sessionID)
 }
 
 type SenderCatalogFactory interface {
@@ -300,7 +302,7 @@ func (factory *SenderFactory) acceptClient(
 		keys.Destroy()
 		return nil, errors.Join(ErrRuntimeConfig, err)
 	}
-	contentService, err := factory.content.NewSenderContentService()
+	contentService, err := factory.content.NewSenderContentService(sessionID)
 	if err != nil || contentService == nil {
 		keys.Destroy()
 		return nil, errors.Join(ErrRuntimeConfig, err)
@@ -363,6 +365,12 @@ func (factory *SenderFactory) acceptClient(
 	}()
 	contentHandler, err := contentflow.NewSenderHandler(contentflow.SenderHandlerConfig{
 		Service: contentService, Outbound: outbound,
+		DecisionTracer: contentflow.SenderDecisionTraceFunc(func(decision contentflow.SenderDecisionTrace) {
+			runtime.traceProtocolOperation(ProtocolOperationTrace{
+				Stage: ProtocolOperationSenderContentDecision, OperationID: decision.OperationID,
+				RequestKind: decision.RequestKind, ContentDecision: decision,
+			})
+		}),
 	})
 	if err != nil {
 		return nil, err

@@ -15,6 +15,8 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { V2RemoteOperationError } from '../../src/content/v2-session-operations'
+import { V2RevisionCapacityBusyError } from '../../src/content/v2-session-services'
+import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
 import type { V2CatalogScanProgressListener } from '../../src/catalog/v2-client'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import {
@@ -186,6 +188,26 @@ function authenticatedRemoteOperationError(): V2RemoteOperationError {
     correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
+    }),
+  }))
+}
+
+function authenticatedRevisionCapacityError(): V2RevisionCapacityBusyError {
+  const failure = Object.freeze({
+    code: V2_REVISION_CODE_QUOTA,
+    retryable: true as const,
+    retryAfterMilliseconds: 250,
+  })
+  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
+    requestKind: 'open_revisions',
+    wireScope: 'revision',
+    wireCode: failure.code,
+    retryable: failure.retryable,
+    retryAfterMilliseconds: failure.retryAfterMilliseconds,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: Object.freeze({
+      protocolSessionId: createFailureIdentity('protocol_session', identity(11)),
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(12)),
     }),
   }))
 }
@@ -459,6 +481,42 @@ describe('v2 preview incident ownership', () => {
         kind: 'protocol_failure',
         stage: 'protocol_operation',
         recoveryDisposition: 'retryable',
+      },
+      relation: 'contributor',
+    })
+    expect(incidents.owners[0]?.isClosed()).toBe(true)
+  })
+
+  it('retains authenticated revision-capacity evidence when preview open surfaces it', async () => {
+    const failure = authenticatedRevisionCapacityError()
+    const joined = new DiagnosticPreviewJoined({ openFailure: failure })
+    const incidents = new RecordingPreviewIncidents()
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: (next) => { snapshot = next },
+      publicError: () => 'preview failed',
+      incidents,
+    })
+
+    previews.open(joined as unknown as V2JoinedBrowserShare, entry)
+    await turn()
+
+    expect(incidents.facts).toHaveLength(1)
+    expect(incidents.facts[0]?.fact).toBe(failure.failureFact)
+    expect(incidents.facts[0]).toMatchObject({
+      scope: { scopeKind: 'preview_open' },
+      fact: {
+        kind: 'protocol_failure',
+        correlation: failure.failureFact.correlation,
+        payload: {
+          protocolFailure: {
+            wireCode: V2_REVISION_CODE_QUOTA,
+            retryable: true,
+            retryAfterMilliseconds: 250,
+            correlation: failure.protocolFailure.correlation,
+          },
+        },
       },
       relation: 'contributor',
     })

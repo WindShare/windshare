@@ -350,6 +350,10 @@ function projectTransferTraceEvent(
       file_errors: decimal(event.fileErrors),
       selection_errors: decimal(event.selectionErrors),
       failed_directories: decimal(event.failedDirectories),
+      capacity_waiting_files: decimal(event.capacityWaitingFiles),
+      capacity_accumulated_wait_ms: decimal(event.capacityAccumulatedWaitMilliseconds),
+      capacity_wait_attempts: decimal(event.capacityWaitAttempts),
+      capacity_wait_visible: event.capacityWaitVisible,
       content_lanes: event.contentLanes,
       discovery: event.discovery,
       partial: event.partial,
@@ -419,6 +423,26 @@ function projectTransferTraceEvent(
           : { output_session_id: event.outputSessionId }),
       })
     }
+    case 'capacity_retry_scheduled':
+    case 'capacity_retry_succeeded':
+    case 'capacity_wait_budget_paused':
+    case 'capacity_wait_cancelled':
+    case 'capacity_generation_replaced':
+      return observation(event.name, {
+        transition: event.transition,
+        capacity_wait_id: event.capacityWaitId,
+        capacity_surface: event.capacitySurface,
+        receive_operation_id: event.receiveOperationId,
+        transfer_job_id: event.transferJobId,
+        protocol_session_id: event.protocolSessionId,
+        protocol_operation_id: event.protocolOperationId,
+        attempt: decimal(event.attempt),
+        sender_hint_ms: event.senderHintMilliseconds,
+        jitter_ms: event.jitterMilliseconds,
+        delay_ms: event.delayMilliseconds,
+        accumulated_wait_ms: event.accumulatedWaitMilliseconds,
+        active_waiters: event.activeWaiters,
+      })
   }
 }
 

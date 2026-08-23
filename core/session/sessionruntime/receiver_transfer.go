@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"reflect"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -12,6 +13,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 // NewTransferJob binds one confirmed receive intent to a single transfer run.
@@ -31,12 +33,34 @@ func (runtime *ReceiverRuntime) NewTransferJob(
 		intent.SyntheticRoot() != descriptor.SyntheticRoot() {
 		return nil, transfer.ErrInvalidTransferJob
 	}
-	dependencies := receiverTransferDependencies{runtime: runtime}
+	generation, revisionWait, err := newReceiverRevisionWait(runtime)
+	if err != nil {
+		return nil, errors.Join(transfer.ErrInvalidTransferJob, err)
+	}
+	dependencies := receiverTransferDependencies{runtime: runtime, generation: generation}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: jobID,
 		ProtocolSessionID: runtime.ProtocolSessionID(), Tracer: tracer,
 		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Materializer: materializer,
+		RevisionWait: revisionWait,
 	})
+}
+
+func newReceiverRevisionWait(
+	runtime *ReceiverRuntime,
+) (revisionwait.GenerationToken, *revisionwait.Config, error) {
+	if runtime == nil || runtime.runtimeCore == nil || runtime.ctx == nil {
+		return revisionwait.GenerationToken{}, nil, ErrRuntimeClosed
+	}
+	generation, err := revisionwait.GenerationTokenFromBytes(runtime.ProtocolSessionID().Bytes())
+	if err != nil {
+		return revisionwait.GenerationToken{}, nil, err
+	}
+	fence, err := revisionwait.NewLifetimeFence(generation, runtime.ctx)
+	if err != nil {
+		return revisionwait.GenerationToken{}, nil, err
+	}
+	return generation, &revisionwait.Config{GenerationFence: fence}, nil
 }
 
 // ResolveOrdinaryOutputShape consumes only authenticated catalog metadata from
@@ -77,7 +101,8 @@ func (runtime *ReceiverRuntime) ResolveOrdinaryOutputShape(
 // owner is live, but once the runtime closes they all describe the same terminal
 // fact: retrying another file cannot succeed on this authenticated session.
 type receiverTransferDependencies struct {
-	runtime *ReceiverRuntime
+	runtime    *ReceiverRuntime
+	generation revisionwait.GenerationToken
 }
 
 func (dependencies receiverTransferDependencies) OpenDirectoryPages(
@@ -123,7 +148,44 @@ func (dependencies receiverTransferDependencies) OpenRevision(
 	file catalog.FileID,
 ) (transfer.OpenedRevision, error) {
 	opened, err := dependencies.runtime.revisions.OpenRevision(ctx, file)
+	var remote *RemoteRevisionError
+	// Only the authenticated client may return this authority directly. Runtime
+	// type equality rejects diagnostic wrappers before errors.As extracts it.
+	if reflect.TypeOf(err) == reflect.TypeOf(remote) && errors.As(err, &remote) && remote != nil {
+		if !dependencies.generation.IsZero() {
+			if capacity, recognized := dependencies.authenticatedCapacitySignal(remote); recognized {
+				return opened, capacity
+			}
+		}
+		err = remoteRevisionFailureError(remote)
+	}
 	return opened, dependencies.classifySource(ctx, err)
+}
+
+func (dependencies receiverTransferDependencies) authenticatedCapacitySignal(
+	remote *RemoteRevisionError,
+) (error, bool) {
+	if remote == nil {
+		return nil, false
+	}
+	failure := remote.Failure()
+	if failure.Code != contentflow.RevisionCodeQuota || !failure.Retryable || failure.RetryAfter == 0 {
+		return nil, false
+	}
+	runtime := dependencies.runtime
+	if runtime == nil || dependencies.generation.IsZero() ||
+		remote.ProtocolSessionID().IsZero() || remote.OperationID().IsZero() ||
+		!remote.ProtocolSessionID().Equal(runtime.ProtocolSessionID()) {
+		return dependencyBoundaryError(errors.Join(transfer.ErrInvalidTransferJob, remote)), true
+	}
+	signal, err := revisionwait.NewCapacitySignal(revisionwait.CapacitySignalSpec{
+		RetryAfter: failure.RetryAfter, ProtocolSession: remote.ProtocolSessionID(),
+		ProtocolOperation: remote.OperationID(), Generation: dependencies.generation,
+	})
+	if err != nil {
+		return sessionProtocolBoundaryError(errors.Join(protocolsession.ErrInvalidOperationFailure, remote, err)), true
+	}
+	return signal, true
 }
 
 func (dependencies receiverTransferDependencies) ReleaseRevision(

@@ -13,6 +13,7 @@ import (
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
@@ -95,6 +96,7 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationReceiverEnded,
 		sessionruntime.ProtocolOperationSenderRequestReceived,
 		sessionruntime.ProtocolOperationSenderResponseSettled,
+		sessionruntime.ProtocolOperationSenderContentDecision,
 	}, sessionruntime.ProtocolOperationStage(255), projectProtocolOperationStage)
 	assertClosedProjection(t, "protocol message kind", []protocolsession.MessageKind{
 		protocolsession.MessageListChildren, protocolsession.MessageCatalogResult,
@@ -136,6 +138,9 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		transfer.TransferDirectoryFinalized, transfer.TransferFileEnqueued,
 		transfer.TransferFileStarted, transfer.TransferFileAdmitted,
 		transfer.TransferFileFirstWrite, transfer.TransferFileSettled,
+		transfer.TransferCapacityRetryScheduled, transfer.TransferCapacityRetryReady,
+		transfer.TransferCapacityRetrySucceeded, transfer.TransferCapacityBudgetPaused,
+		transfer.TransferCapacityWaitCanceled, transfer.TransferCapacityGenerationEnded,
 		transfer.TransferJobSettled,
 	}, transfer.TransferLifecycleStage(255), projectTransferStage)
 	assertClosedProjection(t, "file selection", []transfer.FileSelectionDecision{
@@ -629,9 +634,19 @@ func TestSharingSubjectProjectionUsesFrozenHumanDisplayFact(t *testing.T) {
 	if err := os.WriteFile(path, []byte("selected-content"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := capacityOwner.Close(); err != nil {
+			t.Errorf("close revision capacity owner: %v", err)
+		}
+	})
 	sender, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{
 		Paths: []string{path}, Relays: []string{"ws://127.0.0.1:8484"},
-		ChunkSize: catalog.MinChunkSize,
+		ChunkSize:        catalog.MinChunkSize,
+		RevisionCapacity: capacityOwner.Coordinator(),
 		CatalogStorage: liveshare.CatalogStorageFactoryFunc(func(context.Context, catalog.ShareInstance) (catalog.CatalogBackend, error) {
 			return catalog.NewMemoryCatalogBackend(), nil
 		}),

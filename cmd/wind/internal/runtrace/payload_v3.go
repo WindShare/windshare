@@ -29,6 +29,12 @@ type fileOutcomesV3 struct {
 	ModifiedTimeWarnings string `json:"modified_time_warnings"`
 }
 
+type capacityWaitV3 struct {
+	ActiveWaiters     string `json:"active_waiters"`
+	AccumulatedWaitMS string `json:"accumulated_wait_ms"`
+	Attempts          string `json:"attempts"`
+}
+
 type progressPayloadV3 struct {
 	Discovery          string         `json:"discovery"`
 	CountersExact      bool           `json:"counters_exact"`
@@ -39,6 +45,7 @@ type progressPayloadV3 struct {
 	VerifiedBytes      string         `json:"verified_bytes"`
 	NewlyVerifiedBytes string         `json:"newly_verified_bytes"`
 	FileOutcomes       fileOutcomesV3 `json:"file_outcomes"`
+	CapacityWait       capacityWaitV3 `json:"capacity_wait"`
 }
 
 type sharingSubjectPayloadV3 struct {
@@ -208,16 +215,60 @@ type peerAttemptPayloadV3 struct {
 
 func (peerAttemptPayloadV3) runTracePayloadV3() {}
 
+type capacityScopeV3 struct {
+	StableHandles            string `json:"stable_handles"`
+	ActiveLeases             string `json:"active_leases"`
+	StableHandleLimit        string `json:"stable_handle_limit"`
+	ActiveLeaseLimit         string `json:"active_lease_limit"`
+	ReclaimableStableHandles string `json:"reclaimable_stable_handles"`
+	QuarantinedStableHandles string `json:"quarantined_stable_handles"`
+	PendingAdmissions        string `json:"pending_admissions"`
+	ActiveReclaims           string `json:"active_reclaims"`
+}
+
+type senderCapacityPayloadV3 struct {
+	Stage      string           `json:"stage"`
+	DecisionID *string          `json:"decision_id,omitempty"`
+	RevisionID *string          `json:"revision_id,omitempty"`
+	Process    capacityScopeV3  `json:"process"`
+	Share      *capacityScopeV3 `json:"share,omitempty"`
+	Session    *capacityScopeV3 `json:"session,omitempty"`
+}
+
+func (senderCapacityPayloadV3) runTracePayloadV3() {}
+
+type senderRevisionPayloadV3 struct {
+	Stage      string  `json:"stage"`
+	Cause      string  `json:"cause"`
+	RevisionID string  `json:"revision_id"`
+	LeaseID    *string `json:"lease_id,omitempty"`
+}
+
+func (senderRevisionPayloadV3) runTracePayloadV3() {}
+
+type transferCapacityLifecycleV3 struct {
+	WaitID              string `json:"wait_id"`
+	GenerationID        string `json:"generation_id"`
+	ProtocolOperationID string `json:"protocol_operation_id"`
+	Attempt             string `json:"attempt"`
+	HintMS              string `json:"hint_ms"`
+	JitterMS            string `json:"jitter_ms"`
+	DelayMS             string `json:"delay_ms"`
+	AccumulatedWaitMS   string `json:"accumulated_wait_ms"`
+	ActiveWaiters       uint32 `json:"active_waiters"`
+}
+
 type transferLifecyclePayloadV3 struct {
-	ReceiveOperationID string            `json:"receive_operation_id"`
-	TransferJobID      string            `json:"transfer_job_id"`
-	Stage              string            `json:"stage"`
-	FileSelection      string            `json:"file_selection"`
-	FileSettlement     string            `json:"file_settlement"`
-	ItemBlockReason    *string           `json:"item_block_reason,omitempty"`
-	TreeSettlement     string            `json:"tree_settlement"`
-	Progress           progressPayloadV3 `json:"progress"`
-	Failure            *failureV3        `json:"failure,omitempty"`
+	ReceiveOperationID string                       `json:"receive_operation_id"`
+	TransferJobID      string                       `json:"transfer_job_id"`
+	Stage              string                       `json:"stage"`
+	FileSelection      string                       `json:"file_selection"`
+	FileSettlement     string                       `json:"file_settlement"`
+	ItemBlockReason    *string                      `json:"item_block_reason,omitempty"`
+	TreeSettlement     string                       `json:"tree_settlement"`
+	Progress           progressPayloadV3            `json:"progress"`
+	Capacity           *transferCapacityLifecycleV3 `json:"capacity,omitempty"`
+	Failure            *failureV3                   `json:"failure,omitempty"`
 }
 
 func (transferLifecyclePayloadV3) runTracePayloadV3() {}
@@ -349,19 +400,26 @@ type responseSendSettlementV1 struct {
 
 func (responseSendSettlementV1) protocolFailureSettlementV1() {}
 
+type senderContentDecisionV3 struct {
+	Kind               string  `json:"kind"`
+	CapacityDecisionID *string `json:"capacity_decision_id,omitempty"`
+	LeaseID            *string `json:"lease_id,omitempty"`
+}
+
 type protocolOperationPayloadV3 struct {
-	Role                    string             `json:"role"`
-	Stage                   string             `json:"stage"`
-	RequestKind             string             `json:"request_kind"`
-	ResponseKind            *string            `json:"response_kind,omitempty"`
-	Send                    *protocolSendV3    `json:"send,omitempty"`
-	ResponseCount           string             `json:"response_count"`
-	DeadlineRemainingMS     *string            `json:"deadline_remaining_ms,omitempty"`
-	OperationElapsedMS      string             `json:"operation_elapsed_ms"`
-	UsableLanesAtSelection  uint32             `json:"usable_lanes_at_selection"`
-	UsableLanesAtSettlement uint32             `json:"usable_lanes_at_settlement"`
-	Cause                   string             `json:"cause"`
-	ProtocolFailure         *ProtocolFailureV1 `json:"protocol_failure,omitempty"`
+	Role                    string                   `json:"role"`
+	Stage                   string                   `json:"stage"`
+	RequestKind             string                   `json:"request_kind"`
+	ResponseKind            *string                  `json:"response_kind,omitempty"`
+	Send                    *protocolSendV3          `json:"send,omitempty"`
+	ResponseCount           string                   `json:"response_count"`
+	DeadlineRemainingMS     *string                  `json:"deadline_remaining_ms,omitempty"`
+	OperationElapsedMS      string                   `json:"operation_elapsed_ms"`
+	UsableLanesAtSelection  uint32                   `json:"usable_lanes_at_selection"`
+	UsableLanesAtSettlement uint32                   `json:"usable_lanes_at_settlement"`
+	Cause                   string                   `json:"cause"`
+	ProtocolFailure         *ProtocolFailureV1       `json:"protocol_failure,omitempty"`
+	ContentDecision         *senderContentDecisionV3 `json:"content_decision,omitempty"`
 }
 
 func (protocolOperationPayloadV3) runTracePayloadV3() {}

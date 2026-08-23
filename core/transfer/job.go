@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 const (
@@ -27,19 +28,20 @@ const (
 )
 
 var (
-	ErrInvalidTransferJob     = errors.New("transfer job configuration is invalid")
-	ErrTransferJobRun         = errors.New("transfer job may only run once")
-	ErrCatalogIdentity        = errors.New("catalog snapshot does not match the requested share and directory")
-	ErrRevisionIdentity       = errors.New("opened revision does not match the selected catalog file")
-	ErrOutputContract         = errors.New("output session violated its file transaction contract")
-	ErrCatalogEntriesOmitted  = errors.New("catalog directory omitted children")
-	ErrCatalogCursorContract  = errors.New("catalog reader returned no page cursor")
-	ErrOutputPublishBlocked   = errors.New("output publication is blocked by an existing final path")
-	ErrOutputQuarantined      = errors.New("output file needs manual ownership review")
-	ErrOutputRetired          = errors.New("output file retirement completed without content transfer")
-	ErrGenerationReplayBudget = errors.New("transfer generation replay page budget exceeded")
-	ErrFrozenSourceDrift      = errors.New("authenticated source no longer matches the frozen output anchor")
-	errRangeReaderContract    = errors.New("range reader violated its requested output interval")
+	ErrInvalidTransferJob      = errors.New("transfer job configuration is invalid")
+	ErrTransferJobRun          = errors.New("transfer job may only run once")
+	ErrCatalogIdentity         = errors.New("catalog snapshot does not match the requested share and directory")
+	ErrRevisionIdentity        = errors.New("opened revision does not match the selected catalog file")
+	ErrOutputContract          = errors.New("output session violated its file transaction contract")
+	ErrCatalogEntriesOmitted   = errors.New("catalog directory omitted children")
+	ErrCatalogCursorContract   = errors.New("catalog reader returned no page cursor")
+	ErrOutputPublishBlocked    = errors.New("output publication is blocked by an existing final path")
+	ErrOutputQuarantined       = errors.New("output file needs manual ownership review")
+	ErrOutputRetired           = errors.New("output file retirement completed without content transfer")
+	ErrGenerationReplayBudget  = errors.New("transfer generation replay page budget exceeded")
+	ErrFrozenSourceDrift       = errors.New("authenticated source no longer matches the frozen output anchor")
+	ErrRevisionWaitUnavailable = errors.New("authenticated revision capacity wait policy is unavailable")
+	errRangeReaderContract     = errors.New("range reader violated its requested output interval")
 )
 
 type DirectTreeOutcome uint8
@@ -201,6 +203,10 @@ type TransferJobConfig struct {
 	Materializer          DirectTreeMaterializer
 	SettlementTimeout     time.Duration
 	Tracer                TransferLifecycleTracer
+	// RevisionWait is required only for runtimes that can produce authenticated
+	// CapacitySignal values. Keeping it explicit prevents generic quota errors
+	// from silently acquiring retry authority.
+	RevisionWait *revisionwait.Config
 }
 
 type TransferJob struct {
@@ -221,6 +227,7 @@ type TransferJob struct {
 	catalogWalkLimits  catalogwalk.Limits
 	projector          ordinaryoutput.ArtifactPathProjector
 	tracer             TransferLifecycleTracer
+	revisionWait       *revisionwait.Coordinator
 	progress           receiveProgressTracker
 
 	mu      sync.Mutex
@@ -266,6 +273,13 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if !ok {
 		return nil, ErrInvalidTransferJob
 	}
+	var revisionWait *revisionwait.Coordinator
+	if config.RevisionWait != nil {
+		revisionWait, err = revisionwait.NewCoordinator(*config.RevisionWait)
+		if err != nil {
+			return nil, errors.Join(ErrInvalidTransferJob, err)
+		}
+	}
 	return &TransferJob{
 		share: intent.ShareInstance(), root: intent.SyntheticRoot(), rules: intent.SelectionRules(),
 		intent: intent, jobID: config.JobID, protocolSessionID: config.ProtocolSessionID,
@@ -274,7 +288,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
 		catalogWalkLimits: walkLimits, projector: projector,
-		tracer: config.Tracer, progress: newReceiveProgressTracker(),
+		tracer: config.Tracer, revisionWait: revisionWait, progress: newReceiveProgressTracker(),
 	}, nil
 }
 
@@ -576,43 +590,6 @@ func (r *jobRun) rejectImmediateSettlement(
 	})
 	r.traceFileSettlement(plan, settlement, joinLifecycleFailures(fault, releaseErr))
 	return fault
-}
-
-func (r *jobRun) openSelectedRevision(ctx context.Context, plan plannedFile) (OpenedRevision, bool, error) {
-	opened, rawOpenErr := r.job.revisions.OpenRevision(ctx, plan.file)
-	err := normalizeSourceBoundary(ctx, rawOpenErr)
-	if err != nil {
-		var releaseErr error
-		if !opened.LeaseID.IsZero() {
-			releaseErr = r.releaseRevision(ctx, opened.LeaseID)
-		}
-		if isJobTerminalError(err) {
-			return OpenedRevision{}, false, joinLifecycleFailures(err, releaseErr)
-		}
-		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionOpen, Cause: err,
-			LeaseReleaseFailure: releaseErr,
-		})
-		if isJobTerminalError(releaseErr) {
-			return OpenedRevision{}, false, releaseErr
-		}
-		return OpenedRevision{}, false, nil
-	}
-	if err := validateOpenedPlanFile(
-		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
-	); err != nil {
-		err = sourceChangedFailure(err)
-		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
-		r.recordFileFailure(FileJobFailure{
-			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionIdentity,
-			Cause: err, LeaseReleaseFailure: releaseErr,
-		})
-		if releaseErr != nil && isJobTerminalError(releaseErr) {
-			return OpenedRevision{}, false, releaseErr
-		}
-		return OpenedRevision{}, false, nil
-	}
-	return opened, true, nil
 }
 
 func (r *jobRun) handleImmediateSettlement(

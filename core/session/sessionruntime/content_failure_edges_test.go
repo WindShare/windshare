@@ -35,8 +35,8 @@ func (invalidRevisionRecordOpener) OpenBlock(
 
 func TestOpenRevisionCompensatesLocallyMalformedDescriptorIdentity(t *testing.T) {
 	fixture := newVerticalFixture(t)
-	released := make(chan content.LeaseID, 1)
-	fixture.contentStore.released = released
+	ended := make(chan verticalLeaseEnd, 1)
+	fixture.contentStore.ended = ended
 	receiverConfig := fixture.receiverConfig
 	receiverConfig.RecordOpener = invalidRevisionRecordOpener{}
 	receiverFactory, err := NewReceiverFactory(receiverConfig)
@@ -51,9 +51,9 @@ func TestOpenRevisionCompensatesLocallyMalformedDescriptorIdentity(t *testing.T)
 		t.Fatalf("malformed local descriptor error=%v", err)
 	}
 	select {
-	case leaseID := <-released:
-		if leaseID != fixture.contentStore.lease.ID() {
-			t.Fatalf("compensated lease=%x", leaseID)
+	case ending := <-ended:
+		if ending.id != fixture.contentStore.lease.ID() || ending.kind != content.LeaseRelinquished {
+			t.Fatalf("compensated lease ending=%+v", ending)
 		}
 	case <-time.After(time.Second):
 		t.Fatal("malformed descriptor did not compensate its completed remote lease")

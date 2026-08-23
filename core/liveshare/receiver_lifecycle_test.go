@@ -127,7 +127,8 @@ func newPreparedReceiverForLifecycleTest(t *testing.T) *PreparedReceiver {
 		t.Fatal(err)
 	}
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
