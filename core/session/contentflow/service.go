@@ -498,10 +498,10 @@ func (s *SenderService) Close() error {
 func classifyRevisionError(err error) RevisionFailure {
 	var capacityBusy *revisioncapacity.CapacityBusyError
 	if errors.As(err, &capacityBusy) && capacityBusy != nil {
-		retryAfter := max(capacityBusy.RetryAfter(), MinRevisionFailureRetryAfter)
-		if retryAfter > MaxRevisionFailureRetryAfter {
-			retryAfter = MaxRevisionFailureRetryAfter
-		}
+		retryAfter := min(
+			max(capacityBusy.RetryAfter(), MinRevisionFailureRetryAfter),
+			MaxRevisionFailureRetryAfter,
+		)
 		retryAfter = retryAfter.Truncate(time.Millisecond)
 		failure, failureErr := NewRevisionFailure(RevisionCodeQuota, true, retryAfter)
 		if failureErr == nil {
