@@ -202,7 +202,8 @@ func TestCapacitySnapshotsAndErrorsExposeLifecycleDecisions(t *testing.T) {
 		t.Fatalf("session snapshot = %+v", sessionA.Snapshot())
 	}
 
-	if _, err := store.Admit(nil, AdmissionRequest{}); err == nil {
+	var nilContext context.Context
+	if _, err := store.Admit(nilContext, AdmissionRequest{}); err == nil {
 		t.Fatal("nil admission context was accepted")
 	}
 	cancelled, cancel := context.WithCancel(context.Background())
