@@ -23,6 +23,7 @@ import type { V2ReceiverController } from './v2-controller'
 import type { V2OutputPresentationSnapshot } from './v2-output'
 import {
   completionProgressDescription,
+  capacityWaitDescription,
   discoveryProgressDescription,
   formatBytes,
   presentDirectZipProgress,
@@ -792,6 +793,11 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
                     <p>{snapshot.progress.selectionErrors} selected target(s) unavailable</p>
                   )}
                 </div>
+              )}
+              {capacityWaitDescription(snapshot.progress) !== null && (
+                <p className="capacity-wait-notice" role="status" aria-live="polite">
+                  {capacityWaitDescription(snapshot.progress)}
+                </p>
               )}
             </aside>
           </div>

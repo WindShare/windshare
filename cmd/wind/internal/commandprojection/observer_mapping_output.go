@@ -31,6 +31,18 @@ func projectTransferStage(value transfer.TransferLifecycleStage) (clievent.Trans
 		return clievent.TransferFileFirstWrite, true
 	case transfer.TransferFileSettled:
 		return clievent.TransferFileSettled, true
+	case transfer.TransferCapacityRetryScheduled:
+		return clievent.TransferCapacityRetryScheduled, true
+	case transfer.TransferCapacityRetryReady:
+		return clievent.TransferCapacityRetryReady, true
+	case transfer.TransferCapacityRetrySucceeded:
+		return clievent.TransferCapacityRetrySucceeded, true
+	case transfer.TransferCapacityBudgetPaused:
+		return clievent.TransferCapacityBudgetPaused, true
+	case transfer.TransferCapacityWaitCanceled:
+		return clievent.TransferCapacityWaitCanceled, true
+	case transfer.TransferCapacityGenerationEnded:
+		return clievent.TransferCapacityGenerationEnded, true
 	case transfer.TransferJobSettled:
 		return clievent.TransferJobSettled, true
 	default:

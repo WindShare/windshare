@@ -14,6 +14,7 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
@@ -531,12 +532,28 @@ func (observation getObservation) progress(
 	transferJob transfer.TransferJobID,
 	value transfer.ReceiveProgressSnapshot,
 ) {
-	event, err := commandprojection.ProjectTransferProgress(receiveOperation, transferJob, value)
+	event, err := commandprojection.ProjectTransferProgress(
+		receiveOperation,
+		transferJob,
+		value,
+		observation.capacityWaitVisible(value.CapacityWait),
+	)
 	if err != nil {
 		observation.lose(clievent.ObserverLossTransferLifecycle, err)
 		return
 	}
 	observation.observe(event)
+}
+
+func (observation getObservation) capacityWaitVisible(value revisionwait.Snapshot) bool {
+	if observation.runtime == nil {
+		return false
+	}
+	clock := observation.runtime.Clock()
+	if clock == nil {
+		return false
+	}
+	return value.Visible(clock.Now())
 }
 
 func (observation getObservation) contentPath(path clievent.ContentPath) {

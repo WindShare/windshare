@@ -132,8 +132,8 @@ func TestRuntimeDonePublishesReceiverAndSenderResourceCleanup(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	released := make(chan content.LeaseID, 1)
-	fixture.contentStore.released = released
+	ended := make(chan verticalLeaseEnd, 1)
+	fixture.contentStore.ended = ended
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, receiverFactory)
 	defer sender.Close()
 	defer receiver.Close()
@@ -152,9 +152,9 @@ func TestRuntimeDonePublishesReceiverAndSenderResourceCleanup(t *testing.T) {
 		t.Fatalf("receiver resource releases at Done=%d", receiverLease.releases.Load())
 	}
 	select {
-	case leaseID := <-released:
-		if leaseID != fixture.contentStore.lease.ID() {
-			t.Fatalf("sender released lease=%x", leaseID)
+	case ending := <-ended:
+		if ending.id != fixture.contentStore.lease.ID() || ending.kind != content.LeaseDetached {
+			t.Fatalf("sender lease ending=%+v", ending)
 		}
 	default:
 		t.Fatal("sender Done retained its per-session content lease")

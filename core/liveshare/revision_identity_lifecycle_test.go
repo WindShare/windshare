@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/contentflow"
 )
 
@@ -173,20 +174,15 @@ func newLifecycleRevisionFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	processQuota, err := content.NewQuotaAccount(
-		"liveshare-lifecycle-process",
-		content.DefaultProcessQuotaLimits(),
-	)
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
 	if err != nil {
 		t.Fatal(err)
 	}
-	shareQuota, err := content.NewQuotaAccount(
-		"liveshare-lifecycle-share",
-		content.DefaultShareQuotaLimits(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Cleanup(func() {
+		if err := capacityOwner.Close(); err != nil {
+			t.Errorf("close lifecycle capacity owner: %v", err)
+		}
+	})
 	metadataBudget, err := content.NewRevisionMetadataBudget(
 		content.DefaultRevisionInvalidationEntries,
 	)
@@ -194,12 +190,15 @@ func newLifecycleRevisionFixture(
 		t.Fatal(err)
 	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
-		ShareInstance:   share,
-		ChunkSize:       catalog.MinChunkSize,
-		Catalog:         lifecycleRevisionCatalog{id: file.NodeID(), record: record},
-		Source:          lifecycleRevisionSource{stable: stable},
-		ProcessQuota:    processQuota,
-		ShareQuota:      shareQuota,
+		ShareInstance:       share,
+		ChunkSize:           catalog.MinChunkSize,
+		Catalog:             lifecycleRevisionCatalog{id: file.NodeID(), record: record},
+		Source:              lifecycleRevisionSource{stable: stable},
+		CapacityCoordinator: capacityOwner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "liveshare-lifecycle-store", ShareID: "liveshare-lifecycle-share",
+			Limits: revisioncapacity.DefaultShareLimits(),
+		},
 		RevisionDeriver: deriver,
 		MetadataBudget:  metadataBudget,
 	})
@@ -217,13 +216,25 @@ func lifecycleIdentity[T ~[catalog.IdentityBytes]byte](seed byte) T {
 	return identity
 }
 
-func lifecycleSessionQuota(t *testing.T, name string) *content.QuotaAccount {
+func lifecycleSessionCapacity(
+	t *testing.T,
+	store *content.RevisionStore,
+	name string,
+) *revisioncapacity.SessionRegistration {
 	t.Helper()
-	quota, err := content.NewQuotaAccount(name, content.DefaultSessionQuotaLimits())
+	registration, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: revisioncapacity.SessionID(name),
+		Limits:    revisioncapacity.DefaultSessionLimits(),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return quota
+	t.Cleanup(func() {
+		if err := registration.Close(); err != nil {
+			t.Errorf("close lifecycle session capacity: %v", err)
+		}
+	})
+	return registration
 }
 
 func TestPreparedSenderKeepsRevisionKeyAliveUntilOpenWorkerDrains(t *testing.T) {
@@ -247,14 +258,14 @@ func TestPreparedSenderKeepsRevisionKeyAliveUntilOpenWorkerDrains(t *testing.T) 
 		}
 		stable := &lifecycleStableFile{data: make([]byte, catalog.MinChunkSize)}
 		fixture := newLifecycleRevisionFixture(t, deriver, stable)
-		sessionQuota := lifecycleSessionQuota(t, "liveshare-lifecycle-open-session")
+		sessionCapacity := lifecycleSessionCapacity(t, fixture.store, "liveshare-lifecycle-open-session")
 
 		openDone := make(chan error, 1)
 		go func() {
 			_, openErr := fixture.store.OpenRevisions(
 				context.Background(),
 				[]content.OpenRevisionRequest{{FileID: fixture.file}},
-				sessionQuota,
+				sessionCapacity,
 			)
 			openDone <- openErr
 		}()
@@ -311,11 +322,11 @@ func TestPreparedSenderKeepsRevisionKeyAliveUntilCacheReadWorkerDrains(t *testin
 			allowRead:   allowRead,
 		}
 		fixture := newLifecycleRevisionFixture(t, deriver, stable)
-		sessionQuota := lifecycleSessionQuota(t, "liveshare-lifecycle-read-session")
+		sessionCapacity := lifecycleSessionCapacity(t, fixture.store, "liveshare-lifecycle-read-session")
 		opened, err := fixture.store.OpenRevisions(
 			context.Background(),
 			[]content.OpenRevisionRequest{{FileID: fixture.file}},
-			sessionQuota,
+			sessionCapacity,
 		)
 		if err != nil {
 			t.Fatal(err)

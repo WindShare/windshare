@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -94,7 +95,7 @@ func (h *resumeAfterGraceHandle) Close() error {
 	return nil
 }
 
-func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *testing.T) {
+func TestResumeAfterRelinquishmentReopensRevisionAndReusesCachedPrefix(t *testing.T) {
 	share := flowID[catalog.ShareInstance](201)
 	file := flowID[catalog.FileID](202)
 	parent := flowID[catalog.DirectoryID](203)
@@ -131,10 +132,10 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 		t.Fatal(err)
 	}
 
-	processQuota := quotaAccount(t, "resume-after-grace-process")
-	shareQuota := quotaAccount(t, "resume-after-grace-share")
-	firstSessionQuota := quotaAccount(t, "resume-after-grace-session-1")
-	secondSessionQuota := quotaAccount(t, "resume-after-grace-session-2")
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
 	processCache, err := NewProcessCacheBudget(uint64(chunkSize) * 4)
 	if err != nil {
 		t.Fatal(err)
@@ -154,17 +155,33 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 		t.Fatal(err)
 	}
 	store, err := content.NewRevisionStore(content.RevisionStoreConfig{
-		ShareInstance:    share,
-		ChunkSize:        chunkSize,
-		Catalog:          runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
-		Source:           source,
-		ProcessQuota:     processQuota,
-		ShareQuota:       shareQuota,
+		ShareInstance:       share,
+		ChunkSize:           chunkSize,
+		Catalog:             runtimeCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
+		Source:              source,
+		CapacityCoordinator: capacityOwner.Coordinator(),
+		CapacityStore: revisioncapacity.StoreConfig{
+			StoreID: "resume-after-grace-store", ShareID: "resume-after-grace-share",
+			Limits: revisioncapacity.DefaultShareLimits(),
+		},
 		Clock:            clock,
 		LeaseIDs:         &runtimeIDs{},
 		RevisionDeriver:  revisionDeriver,
 		MetadataBudget:   metadataBudget,
 		CacheInvalidator: cache,
+	})
+	if err != nil {
+		_ = capacityOwner.Close()
+		t.Fatal(err)
+	}
+	firstSessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "resume-after-grace-session-1", Limits: revisioncapacity.DefaultSessionLimits(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondSessionCapacity, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: "resume-after-grace-session-2", Limits: revisioncapacity.DefaultSessionLimits(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -185,7 +202,7 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 		t.Fatal(err)
 	}
 	firstService, err := NewSenderService(SenderServiceConfig{
-		Store: store, SessionQuota: firstSessionQuota, Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: firstSessionCapacity, Sealer: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +215,7 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 		_ = firstService.Close()
 		cache.Close()
 		_ = store.Close()
+		_ = capacityOwner.Close()
 		revisionDeriver.Destroy()
 		keys.Destroy()
 	})
@@ -229,9 +247,9 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 	if cache.UsedBytes() == 0 {
 		t.Fatal("partial transfer did not populate the shared block cache")
 	}
-	requireResumeQuotaUsage(t, processQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeQuotaUsage(t, shareQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeQuotaUsage(t, firstSessionQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 
 	checkpointPrefix, err := content.NewRangeSet([]content.Range{{Offset: 0, End: uint64(chunkSize)}})
 	if err != nil {
@@ -240,28 +258,24 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 	if err := firstService.Release(firstLease.ID()); err != nil {
 		t.Fatal(err)
 	}
-	requireResumeQuotaUsage(t, processQuota, content.QuotaUsage{StableHandles: 1})
-	requireResumeQuotaUsage(t, shareQuota, content.QuotaUsage{StableHandles: 1})
-	requireResumeQuotaUsage(t, firstSessionQuota, content.QuotaUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, firstSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{})
 
-	clock.Advance(content.RevisionResumeGrace + time.Nanosecond)
-	// A validation of the released lease is only a deterministic maintenance
-	// trigger: it proves grace cleanup independently, before a replacement open
-	// can reserve the same quota slots and obscure whether the old handle drained.
 	if err := store.ValidateLease(firstLease.ID(), firstLease.Descriptor()); !errors.Is(err, content.ErrLeaseExpired) {
-		t.Fatalf("released lease after grace error=%v", err)
+		t.Fatalf("relinquished lease validation error=%v", err)
 	}
 	if opens, closes, reads := source.snapshot(); opens != 1 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
-		t.Fatalf("post-grace source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
+		t.Fatalf("post-relinquishment source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeQuotaUsage(t, processQuota, content.QuotaUsage{})
-	requireResumeQuotaUsage(t, shareQuota, content.QuotaUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{})
 	if cache.UsedBytes() == 0 {
-		t.Fatal("clean grace release revoked cached progress")
+		t.Fatal("relinquishment revoked cached progress")
 	}
 
 	secondService, err = NewSenderService(SenderServiceConfig{
-		Store: store, SessionQuota: secondSessionQuota, Sealer: sealer, Cache: cache,
+		Store: store, SessionCapacity: secondSessionCapacity, Sealer: sealer, Cache: cache,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -284,7 +298,7 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 	}
 	if secondLease.Descriptor().FileRevision() != firstLease.Descriptor().FileRevision() {
 		t.Errorf(
-			"identical frozen evidence changed revision after grace: first=%x second=%x",
+			"identical frozen evidence changed revision after reopen: first=%x second=%x",
 			firstLease.Descriptor().FileRevision(),
 			secondLease.Descriptor().FileRevision(),
 		)
@@ -292,9 +306,9 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 	if opens, closes, reads := source.snapshot(); opens != 2 || closes != 1 || !slices.Equal(reads, []uint64{0}) {
 		t.Errorf("reopen source lifecycle opens=%d closes=%d reads=%v", opens, closes, reads)
 	}
-	requireResumeQuotaUsage(t, processQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeQuotaUsage(t, shareQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
-	requireResumeQuotaUsage(t, secondSessionQuota, content.QuotaUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Process(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, store.CapacitySnapshot().Share(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
+	requireResumeCapacityUsage(t, secondSessionCapacity.Snapshot(), revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1})
 
 	cachedBytes := cache.UsedBytes()
 	resumedPrefix, err := NewBlockRequest(secondLease.ID(), []uint64{0})
@@ -333,9 +347,9 @@ func TestResumeAfterGraceReusesRevisionAndCachedPrefixAcrossSenderServices(t *te
 	}
 }
 
-func requireResumeQuotaUsage(t *testing.T, account *content.QuotaAccount, expected content.QuotaUsage) {
+func requireResumeCapacityUsage(t *testing.T, snapshot revisioncapacity.ScopeSnapshot, expected revisioncapacity.CapacityUsage) {
 	t.Helper()
-	if actual := account.Snapshot().Used; actual != expected {
-		t.Fatalf("quota %q usage=%+v, want %+v", account.Name(), actual, expected)
+	if actual := snapshot.Used(); actual != expected {
+		t.Fatalf("capacity %q usage=%+v, want %+v", snapshot.Identity(), actual, expected)
 	}
 }

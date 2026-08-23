@@ -20,6 +20,7 @@ func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T)
 		reflect.TypeFor[SenderSessionTerminated](), reflect.TypeFor[ProtocolOperationObserved](),
 		reflect.TypeFor[CatalogStorageObserved](),
 		reflect.TypeFor[RootPrefetchObserved](),
+		reflect.TypeFor[SenderCapacityObserved](), reflect.TypeFor[SenderRevisionObserved](),
 	}
 	seen := make(map[reflect.Type]bool)
 	for _, eventType := range eventTypes {

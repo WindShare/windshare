@@ -84,6 +84,10 @@ export interface ProgressContextSnapshot {
   readonly selectionErrors: bigint
   readonly failedDirectories: bigint
   readonly contentLanes: number
+  readonly capacityWaitingFiles: bigint
+  readonly capacityAccumulatedWaitMilliseconds: bigint
+  readonly capacityWaitAttempts: bigint
+  readonly capacityWaitVisible: boolean
 }
 
 export interface OutputContextSnapshot {
@@ -151,6 +155,10 @@ export interface DiagnosticContextV1 {
     selection_errors: string
     failed_directories: string
     content_lanes: number
+    capacity_waiting_files: string
+    capacity_accumulated_wait_ms: string
+    capacity_wait_attempts: string
+    capacity_wait_visible: boolean
   }>
   readonly output?: Readonly<{
     generation: string
@@ -220,6 +228,9 @@ function readProgress(
     if (!isMember(PROGRESS_DISCOVERY_STATES, snapshot.discovery)) {
       throw new TypeError('progress discovery state is invalid')
     }
+    if (typeof snapshot.capacityWaitVisible !== 'boolean') {
+      throw new TypeError('capacity wait visibility is invalid')
+    }
     return {
       generation: decimalUint64(snapshot.generation, 'progress generation'),
       discovery: snapshot.discovery,
@@ -250,6 +261,19 @@ function readProgress(
         'failed directory count',
       ),
       content_lanes: uint32(snapshot.contentLanes, 'content lane count'),
+      capacity_waiting_files: decimalUint64(
+        snapshot.capacityWaitingFiles,
+        'capacity waiting file count',
+      ),
+      capacity_accumulated_wait_ms: decimalUint64(
+        snapshot.capacityAccumulatedWaitMilliseconds,
+        'capacity accumulated wait milliseconds',
+      ),
+      capacity_wait_attempts: decimalUint64(
+        snapshot.capacityWaitAttempts,
+        'capacity wait attempt count',
+      ),
+      capacity_wait_visible: snapshot.capacityWaitVisible,
     }
   })
 }

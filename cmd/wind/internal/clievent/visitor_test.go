@@ -70,6 +70,12 @@ func (visitor *exhaustiveVisitor) VisitCatalogStorageObserved(CatalogStorageObse
 func (visitor *exhaustiveVisitor) VisitRootPrefetchObserved(RootPrefetchObserved) error {
 	return visitor.mark("root_prefetch")
 }
+func (visitor *exhaustiveVisitor) VisitSenderCapacityObserved(SenderCapacityObserved) error {
+	return visitor.mark("sender_capacity")
+}
+func (visitor *exhaustiveVisitor) VisitSenderRevisionObserved(SenderRevisionObserved) error {
+	return visitor.mark("sender_revision")
+}
 func (visitor *exhaustiveVisitor) VisitProtocolOperationObserved(ProtocolOperationObserved) error {
 	return visitor.mark("protocol_operation")
 }

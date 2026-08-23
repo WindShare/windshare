@@ -14,6 +14,12 @@ export interface DirectZipProgressPresentation {
   readonly percentage: bigint | null
 }
 
+export function capacityWaitDescription(progress: V2ReceiverProgress): string | null {
+  return progress.capacityWaitVisible && progress.capacityWaitingFiles > 0
+    ? 'Waiting for sender capacity'
+    : null
+}
+
 export function formatBytes(bytes: bigint): string {
   let value = bytes
   let unit = 0

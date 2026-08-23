@@ -133,8 +133,9 @@ func newSenderPreparationHarness(t *testing.T) senderPreparationHarness {
 		sender:    sender,
 		authority: authority,
 		config: SenderConfig{
-			ChunkSize: catalog.MinChunkSize,
-			Now:       func() time.Time { return time.Unix(1_700_000_000, 0) },
+			RevisionCapacity: newTestRevisionCapacity(t),
+			ChunkSize:        catalog.MinChunkSize,
+			Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
 			CatalogStorage: CatalogStorageFactoryFunc(func(
 				context.Context,
 				catalog.ShareInstance,
@@ -152,9 +153,10 @@ func TestPrepareSenderRejectsPartiallyInjectedDependencies(t *testing.T) {
 	dependencies.newRecordSealer = nil
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths:       []string{"unused"},
-		Relays:      []string{"ws://127.0.0.1:8484"},
-		preparation: dependencies,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{"unused"},
+		Relays:           []string{"ws://127.0.0.1:8484"},
+		preparation:      dependencies,
 	})
 	if sender != nil || err == nil || !strings.Contains(err.Error(), "dependencies are incomplete") {
 		t.Fatalf("partial dependency injection result = %v, %v", sender, err)
@@ -296,7 +298,8 @@ func TestPrepareSenderContentRejectsZeroShareAuthority(t *testing.T) {
 		t.Fatal(err)
 	}
 	config := SenderConfig{
-		Paths: []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 		Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
 	}
 	random := &lockedReader{reader: mathrand.New(mathrand.NewSource(29))}
@@ -345,11 +348,12 @@ func TestPrepareSenderRollsBackRecordSealerConstructorFailure(t *testing.T) {
 	}
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths:       []string{filename},
-		Relays:      []string{"ws://127.0.0.1:8484"},
-		ChunkSize:   catalog.MinChunkSize,
-		Random:      mathrand.New(mathrand.NewSource(23)),
-		preparation: dependencies,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename},
+		Relays:           []string{"ws://127.0.0.1:8484"},
+		ChunkSize:        catalog.MinChunkSize,
+		Random:           mathrand.New(mathrand.NewSource(23)),
+		preparation:      dependencies,
 	})
 	if sender != nil || !errors.Is(err, injected) {
 		t.Fatalf("record sealer constructor result = %v, %v", sender, err)

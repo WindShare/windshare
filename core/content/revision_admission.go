@@ -1,10 +1,13 @@
 package content
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
 	"time"
+
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type randomLeaseIDs struct{}
@@ -17,113 +20,86 @@ func (randomLeaseIDs) NewLeaseID() (LeaseID, error) {
 	return lease, nil
 }
 
-type openAdmission struct {
-	leaseQuota         *QuotaReservation
-	sessionHandleQuota *QuotaReservation
+type capacityChargeRelease struct {
+	active        revisioncapacity.ActiveLeaseCharge
+	sessionHandle revisioncapacity.SessionHandleCharge
 }
 
-func (a *openAdmission) release() {
-	if a == nil {
-		return
+func (r capacityChargeRelease) run() error {
+	var err error
+	if r.active.Valid() {
+		err = errors.Join(err, r.active.Release())
 	}
-	a.leaseQuota.Release()
-	a.leaseQuota = nil
-	a.sessionHandleQuota.Release()
-	a.sessionHandleQuota = nil
+	if r.sessionHandle.Valid() {
+		err = errors.Join(err, r.sessionHandle.Release())
+	}
+	return err
 }
 
-// reserveOpenAdmissionLocked keeps shutdown from overtaking quota admission
-// before the attempt is registered in s.opening. The caller must hold s.mu.
-func (s *RevisionStore) reserveOpenAdmissionLocked(sessionQuota *QuotaAccount) (*openAdmission, error) {
-	leaseQuota, err := ReserveQuota(QuotaHierarchy{Process: s.processQuota, Share: s.shareQuota, Session: sessionQuota}, QuotaUsage{ActiveLeases: 1})
-	if err != nil {
-		return nil, err
-	}
-	handleQuota, err := reserveQuotaAccounts([]*QuotaAccount{sessionQuota}, QuotaUsage{StableHandles: 1})
-	if err != nil {
-		leaseQuota.Release()
-		return nil, err
-	}
-	return &openAdmission{leaseQuota: leaseQuota, sessionHandleQuota: handleQuota}, nil
+func capacityRevisionID(identity revisionIdentity) revisioncapacity.RevisionID {
+	return revisioncapacity.RevisionID(fmt.Sprintf("%x:%x", identity.file.Bytes(), identity.revision.Bytes()))
 }
 
-// acquireLeaseLocked publishes every lease, per-session handle charge, and
-// revision grace transition atomically with invalidation and shutdown.
-func (s *RevisionStore) acquireLeaseLocked(revision *revisionState, sessionQuota *QuotaAccount, now time.Time, admission *openAdmission) (RevisionLease, error) {
-	defer admission.release()
-	if revision.lifecycle != revisionLifecycleActive || revision.closed {
-		return RevisionLease{}, ErrRevisionDrift
-	}
-	var leaseQuota *QuotaReservation
-	if admission != nil {
-		leaseQuota = admission.leaseQuota
-		admission.leaseQuota = nil
-	}
-	if leaseQuota == nil {
-		var err error
-		leaseQuota, err = ReserveQuota(QuotaHierarchy{Process: s.processQuota, Share: s.shareQuota, Session: sessionQuota}, QuotaUsage{ActiveLeases: 1})
-		if err != nil {
-			return RevisionLease{}, err
-		}
-	}
-	sessionHandle := revision.sessionHandles[sessionQuota]
-	newSessionHandle := sessionHandle == nil
-	if newSessionHandle {
-		var handleQuota *QuotaReservation
-		if admission != nil {
-			handleQuota = admission.sessionHandleQuota
-			admission.sessionHandleQuota = nil
-		}
-		if handleQuota == nil {
-			var reserveErr error
-			handleQuota, reserveErr = reserveQuotaAccounts([]*QuotaAccount{sessionQuota}, QuotaUsage{StableHandles: 1})
-			if reserveErr != nil {
-				leaseQuota.Release()
-				return RevisionLease{}, reserveErr
-			}
-		}
-		sessionHandle = &sessionHandleState{quota: handleQuota}
-	}
+func (s *RevisionStore) newLeaseIDLocked() (LeaseID, error) {
 	leaseID, err := s.leaseIDs.NewLeaseID()
 	if err != nil {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, err
+		return LeaseID{}, err
 	}
 	if leaseID.IsZero() {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, errors.New("revision lease generator returned a zero identity")
+		return LeaseID{}, errors.New("revision lease generator returned a zero identity")
 	}
 	if _, exists := s.leases[leaseID]; exists {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
-		}
-		return RevisionLease{}, errors.New("revision lease generator reused an identity")
+		return LeaseID{}, errors.New("revision lease generator reused an identity")
 	}
 	if _, exists := s.leaseTombstones[leaseID]; exists {
-		leaseQuota.Release()
-		if newSessionHandle {
-			sessionHandle.quota.Release()
+		return LeaseID{}, errors.New("revision lease generator reused an identity")
+	}
+	return leaseID, nil
+}
+
+// publishLeaseLocked performs only store-owned publication. Coordinator charges
+// have already been committed outside s.mu, keeping both lock domains unnested.
+func (s *RevisionStore) publishLeaseLocked(
+	revision *revisionState,
+	session *revisioncapacity.SessionRegistration,
+	now time.Time,
+	leaseID LeaseID,
+	activeCharge revisioncapacity.ActiveLeaseCharge,
+	sessionCharge revisioncapacity.SessionHandleCharge,
+) (RevisionLease, error) {
+	if revision.lifecycle != revisionLifecycleActive || revision.closed || revision.closing {
+		return RevisionLease{}, ErrRevisionDrift
+	}
+	sessionHandle := revision.sessionHandles[session]
+	newSessionHandle := sessionHandle == nil
+	if newSessionHandle {
+		if !sessionCharge.Valid() {
+			return RevisionLease{}, errors.New("revision capacity admission omitted the first session-handle charge")
 		}
-		return RevisionLease{}, errors.New("revision lease generator reused an identity")
+		sessionHandle = &sessionHandleState{charge: sessionCharge}
+	} else if sessionCharge.Valid() {
+		return RevisionLease{}, errors.New("revision capacity admission duplicated a session-handle charge")
 	}
 	lease := RevisionLease{id: leaseID, descriptor: revision.descriptor, ttl: LeaseTTL, renewAfter: LeaseTTL - LeaseRenewWindow}
 	state := &leaseState{
-		lease: lease, revision: revision, quota: leaseQuota, sessionQuota: sessionQuota, status: leaseActive,
+		lease: lease, revision: revision, activeCharge: activeCharge, session: session, status: leaseActive,
 		createdAt: now, expiresAt: now.Add(LeaseTTL),
 	}
 	if newSessionHandle {
-		revision.sessionHandles[sessionQuota] = sessionHandle
+		revision.sessionHandles[session] = sessionHandle
 	}
 	sessionHandle.leases++
+	revision.activeLeases++
 	revision.leases[leaseID] = state
-	revision.graceUntil = time.Time{}
 	s.leases[leaseID] = state
 	return lease, nil
+}
+
+func (s *RevisionStore) capacityAdmissionContext(ctx context.Context) (context.Context, func()) {
+	admissionContext, cancel := context.WithCancel(ctx)
+	stop := context.AfterFunc(s.capacityContext, cancel)
+	return admissionContext, func() {
+		stop()
+		cancel()
+	}
 }

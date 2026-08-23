@@ -1,11 +1,18 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
-import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
+import {
+  createProtocolFailure,
+  type ProtocolFailure,
+} from '../../src/diagnostics/incident/fact'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { FileGeometry } from '../../src/content/geometry'
 import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
+import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
 import {
+  V2RemoteOperationError,
+  V2RemoteRevisionError,
+  V2RevisionCapacityBusyError,
   V2RevisionService,
   V2SessionBlockLane,
 } from '../../src/content/v2-session-services'
@@ -116,6 +123,193 @@ function responseOperation(
     cancel: () => undefined,
   }
 }
+
+function revisionOperationCorrelation(
+  operation: V2SessionOperation,
+): ProtocolFailure['correlation'] {
+  return Object.freeze({
+    protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
+    protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
+    lane: Object.freeze({ id: 1, epoch: 9 }),
+  })
+}
+
+async function openRevisionFailure(input: {
+  readonly code: number
+  readonly retryable: boolean
+  readonly retryAfterMilliseconds?: number
+}): Promise<{ readonly error: unknown; readonly correlationCapturedBeforeFinal: boolean }> {
+  const operationId = identity(26)
+  let finalRead = false
+  let correlationCapturedBeforeFinal = false
+  const operation: V2SessionOperation = {
+    id: operationId,
+    requestKind: V2_MESSAGE_KIND.openRevisions,
+    next: async () => {
+      finalRead = true
+      return encodeV2Message(
+        V2_MESSAGE_KIND.openResults,
+        operationId,
+        encodeV2Body(new Map<number, unknown>([
+          [0, 1],
+          [1, [[
+            revision.fileId,
+            1,
+            input.code,
+            input.retryable,
+            input.retryAfterMilliseconds ?? null,
+          ]]],
+        ])),
+      )
+    },
+    cancel: () => undefined,
+  }
+  const session = {
+    beginOperation: async () => operation,
+    operationCorrelation: (candidate: V2SessionOperation) => {
+      correlationCapturedBeforeFinal = !finalRead
+      return revisionOperationCorrelation(candidate)
+    },
+  } as unknown as V2ReceiverSessionRuntime
+  const lanes = new V2LaneSet()
+  lanes.add({
+    id: 1,
+    fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
+  }, 'relay')
+  const revisions = new V2RevisionService(
+    session,
+    share,
+    new Uint8Array(16).fill(9),
+    lanes,
+  )
+  let error: unknown
+  try {
+    await revisions.open(revision.fileId, ALL_ROUTES)
+  } catch (caught) {
+    error = caught
+  } finally {
+    revisions.close()
+    lanes.close()
+  }
+  if (error === undefined) throw new Error('Expected revision open to fail')
+  return { error, correlationCapturedBeforeFinal }
+}
+
+describe('v2 authenticated revision capacity results', () => {
+  it('creates retry authority only for the exact authenticated quota tuple', async () => {
+    const { error, correlationCapturedBeforeFinal } = await openRevisionFailure({
+      code: V2_REVISION_CODE_QUOTA,
+      retryable: true,
+      retryAfterMilliseconds: 275,
+    })
+
+    expect(error).toBeInstanceOf(V2RevisionCapacityBusyError)
+    if (!(error instanceof V2RevisionCapacityBusyError)) throw error
+    expect(correlationCapturedBeforeFinal).toBe(true)
+    expect(error.retryAfterMilliseconds).toBe(275)
+    expect(error.failure).toEqual({
+      code: V2_REVISION_CODE_QUOTA,
+      retryable: true,
+      retryAfterMilliseconds: 275,
+    })
+    expect(error.protocolFailure).toMatchObject({
+      requestKind: 'open_revisions',
+      wireScope: 'revision',
+      wireCode: V2_REVISION_CODE_QUOTA,
+      retryable: true,
+      retryAfterMilliseconds: 275,
+      settlement: { kind: 'received_authenticated' },
+      correlation: { lane: { id: 1, epoch: 9 } },
+    })
+    expect(error.protocolFailure.correlation.protocolSessionId.copyBytes()).toEqual(identity(7))
+    expect(error.protocolFailure.correlation.protocolOperationId.copyBytes()).toEqual(identity(26))
+    expect(error.failureFact.recoveryDisposition).toBe('none')
+    expect(error.failureFact.payload.protocolFailure).toEqual(error.protocolFailure)
+  })
+
+  it('does not promote a generic authenticated operation error into capacity authority', async () => {
+    const operation = responseOperation(
+      V2_MESSAGE_KIND.openRevisions,
+      V2_MESSAGE_KIND.operationError,
+      encodeV2Body(new Map<number, unknown>([
+        [0, 1], [1, 3], [2, V2_REVISION_CODE_QUOTA], [3, true], [4, 275],
+        [5, 'sender operation is busy'],
+      ])),
+    )
+    const protocolFailure = createProtocolFailure({
+      requestKind: 'open_revisions',
+      wireScope: 'revision',
+      wireCode: V2_REVISION_CODE_QUOTA,
+      retryable: true,
+      retryAfterMilliseconds: 275,
+      settlement: Object.freeze({ kind: 'received_authenticated' }),
+      correlation: revisionOperationCorrelation(operation),
+    })
+    const session = {
+      beginOperation: async () => operation,
+      operationCorrelation: revisionOperationCorrelation,
+      authenticatedProtocolFailure: () => protocolFailure,
+    } as unknown as V2ReceiverSessionRuntime
+    const lanes = new V2LaneSet()
+    lanes.add({
+      id: 1,
+      fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
+    }, 'relay')
+    const revisions = new V2RevisionService(
+      session,
+      share,
+      new Uint8Array(16).fill(9),
+      lanes,
+    )
+
+    let error: unknown
+    try {
+      await revisions.open(revision.fileId, ALL_ROUTES)
+    } catch (caught) {
+      error = caught
+    } finally {
+      revisions.close()
+      lanes.close()
+    }
+    expect(error).toBeInstanceOf(V2RemoteOperationError)
+    expect(error).not.toBeInstanceOf(V2RevisionCapacityBusyError)
+  })
+
+  it.each([
+    ['non-retryable quota or seal budget', V2_REVISION_CODE_QUOTA, false, undefined],
+    ['source missing', 0x3002, false, undefined],
+    ['source unreadable', 0x3003, false, undefined],
+    ['unsupported source stability', 0x3004, false, undefined],
+    ['source drift', 0x3007, false, undefined],
+    ['retryable non-capacity revision result', 0x3001, true, 50],
+  ] as const)(
+    'keeps %s as an ordinary correlated revision failure',
+    async (_label, code, retryable, retryAfterMilliseconds) => {
+      const { error } = await openRevisionFailure({
+        code,
+        retryable,
+        ...(retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds }),
+      })
+
+      expect(error).toBeInstanceOf(V2RemoteRevisionError)
+      expect(error).not.toBeInstanceOf(V2RevisionCapacityBusyError)
+      if (!(error instanceof V2RemoteRevisionError)) throw error
+      expect(error.failure).toEqual({
+        code,
+        retryable,
+        ...(retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds }),
+      })
+      expect(error.protocolFailure).toMatchObject({
+        requestKind: 'open_revisions',
+        wireScope: 'revision',
+        wireCode: code,
+        retryable,
+        settlement: { kind: 'received_authenticated' },
+      })
+      expect(error.failureFact.recoveryDisposition).toBe('none')
+    },
+  )
+})
 
 describe('v2 session block lane deadlines', () => {
   it('uses relay immediately while rejecting a closed route authority', async () => {
@@ -403,6 +597,7 @@ describe('v2 session block lane deadlines', () => {
     })
     let renewAttempts = 0
     const session = {
+      operationCorrelation: revisionOperationCorrelation,
       beginOperation: async (kind: number) => {
         if (kind === V2_MESSAGE_KIND.openRevisions) {
           return responseOperation(kind, V2_MESSAGE_KIND.openResults, encodeV2Body(

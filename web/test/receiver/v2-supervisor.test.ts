@@ -538,6 +538,8 @@ describe('v2 receiver reconnect supervisor', () => {
     await supervisor.close()
   })
 
+  registerProtocolSessionReplacementWaitTests()
+
   it('publishes stop before lane cleanup can request another dial', async () => {
     const session = new FakeSession([1, 2])
     const relay = new TrackedRelay(1)
@@ -617,6 +619,68 @@ describe('v2 receiver reconnect supervisor', () => {
     await Promise.all([first.close(), second.close()])
   })
 })
+
+function registerProtocolSessionReplacementWaitTests(): void {
+  it('waits by issuing ProtocolSession identity and resolves immediately when already stale', async () => {
+    const firstSession = new FakeSession([1])
+    const firstRelay = new TrackedRelay(1)
+    const secondSession = new FakeSession([10])
+    const secondRelay = new TrackedRelay(10)
+    const fresh = deferred<V2ProtocolGenerationCore>()
+    const factory = new FakeSessionFactory()
+    factory.connectFreshImpl = () => fresh.promise
+    const { supervisor } = supervisorFixture(firstSession, firstRelay, factory)
+    const replacement = supervisor.waitForProtocolSessionReplacement(
+      firstSession.protocolSessionIdentity,
+      new AbortController().signal,
+    )
+
+    firstSession.detach(1)
+    await flushReconciliation()
+    fresh.resolve(core(secondSession, secondRelay))
+    await replacement
+    await expect(supervisor.waitForProtocolSessionReplacement(
+      firstSession.protocolSessionIdentity,
+      new AbortController().signal,
+    )).resolves.toBeUndefined()
+
+    const controller = new AbortController()
+    const reason = new DOMException('capacity wait canceled', 'AbortError')
+    const canceled = supervisor.waitForProtocolSessionReplacement(
+      secondSession.protocolSessionIdentity,
+      controller.signal,
+    )
+    controller.abort(reason)
+    await expect(canceled).rejects.toBe(reason)
+    await supervisor.close()
+  })
+
+  it('does not treat same-generation relay reattachment as ProtocolSession replacement', async () => {
+    const session = new FakeSession([1, 2])
+    const initialRelay = new TrackedRelay(1)
+    const replacementRelay = new TrackedRelay(3)
+    const factory = new FakeSessionFactory()
+    factory.attachRelayImpl = async () => {
+      session.attach(3)
+      return { relay: replacementRelay.connection, laneId: 3 }
+    }
+    const { supervisor } = supervisorFixture(session, initialRelay, factory)
+    const controller = new AbortController()
+    let replaced = false
+    const waiting = supervisor.waitForProtocolSessionReplacement(
+      session.protocolSessionIdentity,
+      controller.signal,
+    ).then(() => { replaced = true })
+
+    session.detach(1)
+    await flushReconciliation()
+    expect(supervisor.generationId).toBe(1)
+    expect(replaced).toBe(false)
+    controller.abort(new DOMException('test completed', 'AbortError'))
+    await expect(waiting).rejects.toMatchObject({ name: 'AbortError' })
+    await supervisor.close()
+  })
+}
 
 describe('v2 browser session factory descriptor continuity', () => {
   it('owns one named relay admission deadline outside the session runtime', async () => {

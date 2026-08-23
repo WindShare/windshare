@@ -25,7 +25,7 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 	if !ok {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
 	}
-	progress, err := ProjectProgress(value.Progress)
+	progress, err := ProjectProgress(value.Progress, false)
 	if err != nil {
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
 	}
@@ -51,6 +51,9 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 		FileSettlement: fileSettlement, ItemBlockReason: itemBlockReason,
 		TreeSettlement: treeSettlement,
 	}
+	if err := projectTransferCapacityLifecycle(value, &spec); err != nil {
+		return clievent.TransferLifecycleObserved{}, err
+	}
 	if value.Failed {
 		if spec.Failure, ok = ProjectFault(value.Fault); !ok {
 			if spec.Failure, ok = ProjectTransferInterruption(value.Interruption); !ok {
@@ -65,4 +68,43 @@ func ProjectTransferLifecycle(value transfer.TransferLifecycleTrace) (clievent.T
 		return clievent.TransferLifecycleObserved{}, ErrInvalidProjection
 	}
 	return event, nil
+}
+
+func projectTransferCapacityLifecycle(
+	value transfer.TransferLifecycleTrace,
+	spec *clievent.TransferLifecycleSpec,
+) error {
+	capacityStage := value.Stage >= transfer.TransferCapacityRetryScheduled &&
+		value.Stage <= transfer.TransferCapacityGenerationEnded
+	if !capacityStage {
+		if !value.CapacityWaitID.IsZero() || !value.CapacityGeneration.IsZero() ||
+			!value.CapacityOperationID.IsZero() || value.CapacityAttempt != 0 ||
+			value.CapacityHint != 0 || value.CapacityJitter != 0 || value.CapacityDelay != 0 ||
+			value.CapacityAccumulated != 0 || value.CapacityActiveWaiters != 0 {
+			return ErrInvalidProjection
+		}
+		return nil
+	}
+	waitID, err := clievent.NewCapacityWaitID(value.CapacityWaitID.Bytes())
+	if err != nil {
+		return ErrInvalidProjection
+	}
+	generation, err := clievent.NewCapacityGenerationID(value.CapacityGeneration.Bytes())
+	if err != nil {
+		return ErrInvalidProjection
+	}
+	operation, err := ProtocolOperationID(value.CapacityOperationID)
+	if err != nil {
+		return ErrInvalidProjection
+	}
+	spec.CapacityWait = waitID
+	spec.CapacityGeneration = generation
+	spec.CapacityOperation = operation
+	spec.CapacityAttempt = value.CapacityAttempt
+	spec.CapacityHint = value.CapacityHint
+	spec.CapacityJitter = value.CapacityJitter
+	spec.CapacityDelay = value.CapacityDelay
+	spec.CapacityAccumulatedWait = value.CapacityAccumulated
+	spec.CapacityActiveWaiters = value.CapacityActiveWaiters
+	return nil
 }

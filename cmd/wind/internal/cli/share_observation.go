@@ -8,6 +8,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -88,6 +90,30 @@ func (observations *shareObservations) TraceCatalogStorage(value liveshare.Catal
 func (observations *shareObservations) TraceRootPrefetch(value liveshare.RootPrefetchTrace) {
 	event, err := commandprojection.ProjectRootPrefetch(value)
 	observations.emitProjected(clievent.ObserverLossRootPrefetch, event, err)
+}
+
+func (observations *shareObservations) TraceCapacity(value revisioncapacity.TraceEvent) {
+	event, err := commandprojection.ProjectSenderCapacity(value)
+	observations.emitProjected(clievent.ObserverLossSenderCapacity, event, err)
+}
+
+func (observations *shareObservations) TraceRevision(value content.RevisionTrace) {
+	event, err := commandprojection.ProjectSenderRevision(value)
+	observations.emitProjected(clievent.ObserverLossSenderRevision, event, err)
+}
+
+func (observations *shareObservations) revisionTracer() content.RevisionTracer {
+	if !observations.detailedDiagnosticsEnabled() {
+		return nil
+	}
+	return observations
+}
+
+func (observations *shareObservations) capacityTracer() revisioncapacity.Tracer {
+	if !observations.detailedDiagnosticsEnabled() {
+		return nil
+	}
+	return observations
 }
 
 func (observations *shareObservations) TraceRelayLifecycle(value relayv2.LifecycleTrace) {

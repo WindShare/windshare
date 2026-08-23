@@ -234,7 +234,8 @@ func TestPreparedSenderRollbackDestroysPartiallyBuiltSealers(t *testing.T) {
 	}
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
 		ChunkSize: catalog.MinChunkSize, Random: mathrand.New(mathrand.NewSource(7)),
 		preparation: dependencies,
 	})

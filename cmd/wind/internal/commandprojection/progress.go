@@ -6,7 +6,10 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-func ProjectProgress(value transfer.ReceiveProgressSnapshot) (clievent.ProgressSnapshot, error) {
+func ProjectProgress(
+	value transfer.ReceiveProgressSnapshot,
+	capacityWaitVisible bool,
+) (clievent.ProgressSnapshot, error) {
 	discovery, ok := projectDiscovery(value.Discovery)
 	if !ok {
 		return clievent.ProgressSnapshot{}, ErrInvalidProjection
@@ -16,7 +19,11 @@ func ProjectProgress(value transfer.ReceiveProgressSnapshot) (clievent.ProgressS
 		PublishedFiles: value.PublishedFiles, PublishedBytes: value.PublishedBytes,
 		VerifiedBytes: value.VerifiedBytes, NewlyVerifiedBytes: value.NewlyVerifiedBytes,
 		FileOutcomes: projectFileOutcomes(value.FileOutcomes), Discovery: discovery,
-		CountersExact: value.CountersExact,
+		CapacityActiveWaiters:   value.CapacityWait.ActiveWaiters,
+		CapacityAccumulatedWait: value.CapacityWait.AccumulatedWait,
+		CapacityWaitAttempts:    value.CapacityWait.Attempts,
+		CapacityWaitVisible:     capacityWaitVisible,
+		CountersExact:           value.CountersExact,
 	})
 	if err != nil {
 		return clievent.ProgressSnapshot{}, ErrInvalidProjection
@@ -28,6 +35,7 @@ func ProjectTransferProgress(
 	receiveOperation receivecontract.OperationID,
 	transferJob transfer.TransferJobID,
 	progress transfer.ReceiveProgressSnapshot,
+	capacityWaitVisible bool,
 ) (clievent.TransferProgress, error) {
 	receiveID, err := ReceiveOperationID(receiveOperation)
 	if err != nil {
@@ -37,7 +45,7 @@ func ProjectTransferProgress(
 	if err != nil {
 		return clievent.TransferProgress{}, ErrInvalidProjection
 	}
-	snapshot, err := ProjectProgress(progress)
+	snapshot, err := ProjectProgress(progress, capacityWaitVisible)
 	if err != nil {
 		return clievent.TransferProgress{}, ErrInvalidProjection
 	}
