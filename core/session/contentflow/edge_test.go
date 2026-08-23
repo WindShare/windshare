@@ -4,14 +4,17 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -299,18 +302,23 @@ type stubRevisionStore struct {
 	read        []byte
 	readErr     error
 	validateErr error
-	released    []content.LeaseID
+	leaseEnds   []recordedLeaseEnd
 }
 
-func (store *stubRevisionStore) OpenRevisions(context.Context, []content.OpenRevisionRequest, *content.QuotaAccount) ([]content.OpenRevisionResult, error) {
+type recordedLeaseEnd struct {
+	id   content.LeaseID
+	kind content.LeaseEndKind
+}
+
+func (store *stubRevisionStore) OpenRevisions(context.Context, []content.OpenRevisionRequest, *revisioncapacity.SessionRegistration) ([]content.OpenRevisionResult, error) {
 	return slices.Clone(store.results), store.openErr
 }
 func (store *stubRevisionStore) RenewLease(content.LeaseID) (content.RevisionLease, error) {
 	return store.renew, store.renewErr
 }
-func (store *stubRevisionStore) ReleaseLease(id content.LeaseID) error {
+func (store *stubRevisionStore) EndLease(id content.LeaseID, kind content.LeaseEndKind) error {
 	store.mu.Lock()
-	store.released = append(store.released, id)
+	store.leaseEnds = append(store.leaseEnds, recordedLeaseEnd{id: id, kind: kind})
 	store.mu.Unlock()
 	return nil
 }
@@ -339,11 +347,59 @@ func stubService(t *testing.T, descriptor content.FileRevisionDescriptor, store 
 	t.Helper()
 	process, _ := NewProcessCacheBudget(1 << 20)
 	cache, _ := NewSharedBlockCache(descriptor.ShareInstance(), 1<<20, process)
-	service, err := NewSenderService(SenderServiceConfig{Store: store, SessionQuota: quotaAccount(t, "stub-session"), Sealer: sealer, Cache: cache})
+	service, err := NewSenderService(SenderServiceConfig{
+		Store: store, SessionCapacity: testSessionCapacity(t), Sealer: sealer, Cache: cache,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return service, cache
+}
+
+var contentflowCapacityTestSequence atomic.Uint64
+
+type contentflowReclaimTargetFunc func(context.Context, revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult
+
+func (function contentflowReclaimTargetFunc) ReclaimIdle(
+	ctx context.Context,
+	claim revisioncapacity.ReclaimClaim,
+) revisioncapacity.ReclaimResult {
+	return function(ctx, claim)
+}
+
+func testSessionCapacity(t *testing.T) *revisioncapacity.SessionRegistration {
+	t.Helper()
+	sequence := contentflowCapacityTestSequence.Add(1)
+	owner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := owner.Coordinator().RegisterStore(revisioncapacity.StoreConfig{
+		StoreID: revisioncapacity.StoreID(fmt.Sprintf("contentflow-test-store-%d", sequence)),
+		ShareID: revisioncapacity.ShareID(fmt.Sprintf("contentflow-test-share-%d", sequence)),
+		Limits:  revisioncapacity.DefaultShareLimits(),
+	}, contentflowReclaimTargetFunc(func(_ context.Context, claim revisioncapacity.ReclaimClaim) revisioncapacity.ReclaimResult {
+		return revisioncapacity.ReclaimDeclined(claim)
+	}))
+	if err != nil {
+		_ = owner.Close()
+		t.Fatal(err)
+	}
+	session, err := store.RegisterSession(revisioncapacity.SessionConfig{
+		SessionID: revisioncapacity.SessionID(fmt.Sprintf("contentflow-test-session-%d", sequence)),
+		Limits:    revisioncapacity.DefaultSessionLimits(),
+	})
+	if err != nil {
+		_ = store.Close()
+		_ = owner.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = session.Close()
+		_ = store.Close()
+		_ = owner.Close()
+	})
+	return session
 }
 
 func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
@@ -379,6 +435,11 @@ func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
 			if _, err := service.Open(context.Background(), requests); err == nil {
 				t.Fatal("malformed store result accepted")
 			}
+			for _, ending := range store.leaseEnds {
+				if ending.kind != content.LeaseUndelivered {
+					t.Fatalf("rollback used lease ending %v", ending.kind)
+				}
+			}
 		})
 	}
 
@@ -388,11 +449,12 @@ func TestSenderServiceRollsBackMalformedStoreAndSealOutcomes(t *testing.T) {
 	defer service.Close()
 	one, _ := NewOpenRequest([]OpenItem{{FileID: file}})
 	result, err := service.Open(context.Background(), one)
-	if err != nil || result.Items()[0].Failure == nil || result.Items()[0].Failure.Code != RevisionCodeQuota {
+	if err != nil || result.Items()[0].Failure == nil || result.Items()[0].Failure.Code != RevisionCodeUnreadable ||
+		result.Items()[0].Failure.Retryable {
 		t.Fatalf("seal failure result=%+v err=%v", result.Items(), err)
 	}
-	if len(sealStore.released) != 1 {
-		t.Fatal("failed seal did not release its lease")
+	if len(sealStore.leaseEnds) != 1 || sealStore.leaseEnds[0].kind != content.LeaseUndelivered {
+		t.Fatalf("failed seal lease endings=%+v", sealStore.leaseEnds)
 	}
 
 	reuseStore := &stubRevisionStore{results: []content.OpenRevisionResult{{FileID: file, Lease: lease}}}

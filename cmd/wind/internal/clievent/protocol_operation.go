@@ -23,12 +23,13 @@ const (
 	ProtocolOperationReceiverEnded
 	ProtocolOperationSenderRequestReceived
 	ProtocolOperationSenderResponseSettled
+	ProtocolOperationSenderContentDecision
 )
 
 func (value ProtocolOperationStage) Name() (string, bool) {
 	names := [...]string{
 		"", "receiver_completed", "receiver_failed", "receiver_ended",
-		"sender_request_received", "sender_response_settled",
+		"sender_request_received", "sender_response_settled", "sender_content_decision",
 	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
@@ -327,6 +328,61 @@ func (value ProtocolFailure) Lane() (LaneIdentity, bool) {
 }
 func (value ProtocolFailure) Settlement() ProtocolFailureSettlement { return value.settlement }
 
+type SenderContentDecisionKind uint8
+
+const (
+	SenderContentCapacityBusy SenderContentDecisionKind = iota + 1
+	SenderContentLeaseRelinquished
+	SenderContentLeaseUndelivered
+	SenderContentLeaseDetached
+)
+
+func (value SenderContentDecisionKind) Name() (string, bool) {
+	names := [...]string{"", "capacity_busy", "lease_relinquished", "lease_undelivered", "lease_detached"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SenderContentDecision struct {
+	kind               SenderContentDecisionKind
+	capacityDecisionID CapacityDecisionID
+	leaseID            RevisionLeaseID
+}
+
+func NewSenderCapacityDecision(id CapacityDecisionID) (SenderContentDecision, error) {
+	if !id.Valid() {
+		return SenderContentDecision{}, ErrInvalidEvent
+	}
+	return SenderContentDecision{kind: SenderContentCapacityBusy, capacityDecisionID: id}, nil
+}
+
+func NewSenderLeaseDecision(kind SenderContentDecisionKind, leaseID RevisionLeaseID) (SenderContentDecision, error) {
+	if kind < SenderContentLeaseRelinquished || kind > SenderContentLeaseDetached || !leaseID.Valid() {
+		return SenderContentDecision{}, ErrInvalidEvent
+	}
+	return SenderContentDecision{kind: kind, leaseID: leaseID}, nil
+}
+
+func (value SenderContentDecision) Kind() SenderContentDecisionKind { return value.kind }
+func (value SenderContentDecision) CapacityDecisionID() (CapacityDecisionID, bool) {
+	return value.capacityDecisionID, value.kind == SenderContentCapacityBusy
+}
+func (value SenderContentDecision) LeaseID() (RevisionLeaseID, bool) {
+	return value.leaseID, value.kind >= SenderContentLeaseRelinquished && value.kind <= SenderContentLeaseDetached
+}
+func (value SenderContentDecision) Valid() bool {
+	_, kindOK := value.kind.Name()
+	if !kindOK {
+		return false
+	}
+	if value.kind == SenderContentCapacityBusy {
+		return value.capacityDecisionID.Valid() && !value.leaseID.Valid()
+	}
+	return !value.capacityDecisionID.Valid() && value.leaseID.Valid()
+}
+
 type ProtocolOperationSpec struct {
 	Command                 Command
 	Role                    ProtocolRole
@@ -350,6 +406,7 @@ type ProtocolOperationSpec struct {
 	UsableLanesAtSettlement uint32
 	Failure                 ProtocolFailure
 	Cause                   ProtocolOperationCause
+	ContentDecision         SenderContentDecision
 }
 
 type ProtocolOperationObserved struct{ spec ProtocolOperationSpec }
@@ -369,6 +426,11 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 	_, sendOK := spec.SendOutcome.Name()
 	_, causeOK := spec.Cause.Name()
 	protocolFailureOK := validProtocolOperationFailure(spec)
+	contentDecisionOK := spec.ContentDecision.Valid()
+	if spec.Stage != ProtocolOperationSenderContentDecision &&
+		(contentDecisionOK || spec.ContentDecision != (SenderContentDecision{})) {
+		return false
+	}
 	if !spec.Command.Valid() || !roleOK || !stageOK || !requestOK || !spec.RequestKind.Request() ||
 		!sendOK || !causeOK || !protocolFailureOK ||
 		!spec.ProtocolSession.Valid() || !spec.ProtocolOperation.Valid() ||
@@ -388,10 +450,15 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderRequestReceived:
-		return spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
+		return !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
+			spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
 			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderResponseSettled:
-		return spec.Command == CommandShare && spec.Role == ProtocolRoleSender && spec.HasResponse
+		return !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
+			spec.Command == CommandShare && spec.Role == ProtocolRoleSender && spec.HasResponse
+	case ProtocolOperationSenderContentDecision:
+		return contentDecisionOK && spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
+			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone && spec.Failure.IsZero()
 	default:
 		return false
 	}
@@ -468,6 +535,9 @@ func (value ProtocolOperationObserved) Failure() (ProtocolFailure, bool) {
 	return value.spec.Failure, !value.spec.Failure.IsZero()
 }
 func (value ProtocolOperationObserved) Cause() ProtocolOperationCause { return value.spec.Cause }
+func (value ProtocolOperationObserved) ContentDecision() (SenderContentDecision, bool) {
+	return value.spec.ContentDecision, value.spec.ContentDecision.Valid()
+}
 func (value ProtocolOperationObserved) Accept(visitor Visitor) error {
 	return acceptProtocolOperationObserved(visitor, value)
 }

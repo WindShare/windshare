@@ -1,6 +1,7 @@
 package clievent
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 )
@@ -14,6 +15,8 @@ var ErrInvalidIdentity = errors.New("CLI event identity is invalid")
 type identity [IdentityBytes]byte
 type relaySessionIdentity [RelaySessionIdentityBytes]byte
 type receiveIntentDigest [ReceiveIntentDigestBytes]byte
+type capacityDecisionDigest [sha256.Size]byte
+type senderRevisionDigest [sha256.Size]byte
 
 func newIdentity(raw []byte) (identity, error) {
 	var value identity
@@ -62,11 +65,38 @@ func newReceiveIntentDigest(raw []byte) (receiveIntentDigest, error) {
 func (value receiveIntentDigest) hex() string { return hex.EncodeToString(value[:]) }
 func (value receiveIntentDigest) valid() bool { return value != (receiveIntentDigest{}) }
 
+func newCapacityDecisionDigest(raw string) (capacityDecisionDigest, error) {
+	if raw == "" {
+		return capacityDecisionDigest{}, ErrInvalidIdentity
+	}
+	return sha256.Sum256([]byte(raw)), nil
+}
+
+func (value capacityDecisionDigest) bytes() []byte { return append([]byte(nil), value[:]...) }
+func (value capacityDecisionDigest) hex() string   { return hex.EncodeToString(value[:]) }
+func (value capacityDecisionDigest) valid() bool   { return value != (capacityDecisionDigest{}) }
+
+func newSenderRevisionDigest(raw []byte) (senderRevisionDigest, error) {
+	if len(raw) == 0 {
+		return senderRevisionDigest{}, ErrInvalidIdentity
+	}
+	return sha256.Sum256(raw), nil
+}
+
+func (value senderRevisionDigest) bytes() []byte { return append([]byte(nil), value[:]...) }
+func (value senderRevisionDigest) hex() string   { return hex.EncodeToString(value[:]) }
+func (value senderRevisionDigest) valid() bool   { return value != (senderRevisionDigest{}) }
+
 // Each identity remains a distinct type so a protocol operation can never be
 // serialized under the receive-operation field merely because both are 16 bytes.
 type ReceiveOperationID struct{ value identity }
 type ProtocolSessionID struct{ value identity }
 type ProtocolOperationID struct{ value identity }
+type CapacityWaitID struct{ value identity }
+type CapacityGenerationID struct{ value identity }
+type CapacityDecisionID struct{ value capacityDecisionDigest }
+type RevisionLeaseID struct{ value identity }
+type SenderRevisionID struct{ value senderRevisionDigest }
 type TransferJobID struct{ value identity }
 type PeerPathID struct{ value identity }
 type PeerAttemptID struct{ value identity }
@@ -87,6 +117,31 @@ func NewProtocolSessionID(raw []byte) (ProtocolSessionID, error) {
 func NewProtocolOperationID(raw []byte) (ProtocolOperationID, error) {
 	value, err := newIdentity(raw)
 	return ProtocolOperationID{value: value}, err
+}
+
+func NewCapacityWaitID(raw []byte) (CapacityWaitID, error) {
+	value, err := newIdentity(raw)
+	return CapacityWaitID{value: value}, err
+}
+
+func NewCapacityGenerationID(raw []byte) (CapacityGenerationID, error) {
+	value, err := newIdentity(raw)
+	return CapacityGenerationID{value: value}, err
+}
+
+func NewCapacityDecisionID(raw string) (CapacityDecisionID, error) {
+	value, err := newCapacityDecisionDigest(raw)
+	return CapacityDecisionID{value: value}, err
+}
+
+func NewRevisionLeaseID(raw []byte) (RevisionLeaseID, error) {
+	value, err := newIdentity(raw)
+	return RevisionLeaseID{value: value}, err
+}
+
+func NewSenderRevisionID(raw []byte) (SenderRevisionID, error) {
+	value, err := newSenderRevisionDigest(raw)
+	return SenderRevisionID{value: value}, err
 }
 
 func NewTransferJobID(raw []byte) (TransferJobID, error) {
@@ -119,34 +174,49 @@ func NewReceiveIntentDigest(raw []byte) (ReceiveIntentDigest, error) {
 	return ReceiveIntentDigest{value: value}, err
 }
 
-func (id ReceiveOperationID) Bytes() []byte  { return id.value.bytes() }
-func (id ProtocolSessionID) Bytes() []byte   { return id.value.bytes() }
-func (id ProtocolOperationID) Bytes() []byte { return id.value.bytes() }
-func (id TransferJobID) Bytes() []byte       { return id.value.bytes() }
-func (id PeerPathID) Bytes() []byte          { return id.value.bytes() }
-func (id PeerAttemptID) Bytes() []byte       { return id.value.bytes() }
-func (id RelaySessionID) Bytes() []byte      { return id.value.bytes() }
-func (id OutputSessionID) Bytes() []byte     { return id.value.bytes() }
+func (id ReceiveOperationID) Bytes() []byte   { return id.value.bytes() }
+func (id ProtocolSessionID) Bytes() []byte    { return id.value.bytes() }
+func (id ProtocolOperationID) Bytes() []byte  { return id.value.bytes() }
+func (id CapacityWaitID) Bytes() []byte       { return id.value.bytes() }
+func (id CapacityGenerationID) Bytes() []byte { return id.value.bytes() }
+func (id CapacityDecisionID) Bytes() []byte   { return id.value.bytes() }
+func (id RevisionLeaseID) Bytes() []byte      { return id.value.bytes() }
+func (id SenderRevisionID) Bytes() []byte     { return id.value.bytes() }
+func (id TransferJobID) Bytes() []byte        { return id.value.bytes() }
+func (id PeerPathID) Bytes() []byte           { return id.value.bytes() }
+func (id PeerAttemptID) Bytes() []byte        { return id.value.bytes() }
+func (id RelaySessionID) Bytes() []byte       { return id.value.bytes() }
+func (id OutputSessionID) Bytes() []byte      { return id.value.bytes() }
 
-func (id ReceiveOperationID) Hex() string  { return id.value.hex() }
-func (id ProtocolSessionID) Hex() string   { return id.value.hex() }
-func (id ProtocolOperationID) Hex() string { return id.value.hex() }
-func (id TransferJobID) Hex() string       { return id.value.hex() }
-func (id PeerPathID) Hex() string          { return id.value.hex() }
-func (id PeerAttemptID) Hex() string       { return id.value.hex() }
-func (id RelaySessionID) Hex() string      { return id.value.hex() }
-func (id OutputSessionID) Hex() string     { return id.value.hex() }
-func (id ReceiveIntentDigest) Hex() string { return id.value.hex() }
+func (id ReceiveOperationID) Hex() string   { return id.value.hex() }
+func (id ProtocolSessionID) Hex() string    { return id.value.hex() }
+func (id ProtocolOperationID) Hex() string  { return id.value.hex() }
+func (id CapacityWaitID) Hex() string       { return id.value.hex() }
+func (id CapacityGenerationID) Hex() string { return id.value.hex() }
+func (id CapacityDecisionID) Hex() string   { return id.value.hex() }
+func (id RevisionLeaseID) Hex() string      { return id.value.hex() }
+func (id SenderRevisionID) Hex() string     { return id.value.hex() }
+func (id TransferJobID) Hex() string        { return id.value.hex() }
+func (id PeerPathID) Hex() string           { return id.value.hex() }
+func (id PeerAttemptID) Hex() string        { return id.value.hex() }
+func (id RelaySessionID) Hex() string       { return id.value.hex() }
+func (id OutputSessionID) Hex() string      { return id.value.hex() }
+func (id ReceiveIntentDigest) Hex() string  { return id.value.hex() }
 
-func (id ReceiveOperationID) Valid() bool  { return id.value.valid() }
-func (id ProtocolSessionID) Valid() bool   { return id.value.valid() }
-func (id ProtocolOperationID) Valid() bool { return id.value.valid() }
-func (id TransferJobID) Valid() bool       { return id.value.valid() }
-func (id PeerPathID) Valid() bool          { return id.value.valid() }
-func (id PeerAttemptID) Valid() bool       { return id.value.valid() }
-func (id RelaySessionID) Valid() bool      { return id.value.valid() }
-func (id OutputSessionID) Valid() bool     { return id.value.valid() }
-func (id ReceiveIntentDigest) Valid() bool { return id.value.valid() }
+func (id ReceiveOperationID) Valid() bool   { return id.value.valid() }
+func (id ProtocolSessionID) Valid() bool    { return id.value.valid() }
+func (id ProtocolOperationID) Valid() bool  { return id.value.valid() }
+func (id CapacityWaitID) Valid() bool       { return id.value.valid() }
+func (id CapacityGenerationID) Valid() bool { return id.value.valid() }
+func (id CapacityDecisionID) Valid() bool   { return id.value.valid() }
+func (id RevisionLeaseID) Valid() bool      { return id.value.valid() }
+func (id SenderRevisionID) Valid() bool     { return id.value.valid() }
+func (id TransferJobID) Valid() bool        { return id.value.valid() }
+func (id PeerPathID) Valid() bool           { return id.value.valid() }
+func (id PeerAttemptID) Valid() bool        { return id.value.valid() }
+func (id RelaySessionID) Valid() bool       { return id.value.valid() }
+func (id OutputSessionID) Valid() bool      { return id.value.valid() }
+func (id ReceiveIntentDigest) Valid() bool  { return id.value.valid() }
 
 type LaneIdentity struct {
 	id    uint32

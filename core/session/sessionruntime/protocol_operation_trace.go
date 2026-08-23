@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -18,6 +19,7 @@ const (
 	ProtocolOperationReceiverEnded
 	ProtocolOperationSenderRequestReceived
 	ProtocolOperationSenderResponseSettled
+	ProtocolOperationSenderContentDecision
 )
 
 // ProtocolOperationCause is deliberately closed and text-free. Raw transport
@@ -36,9 +38,9 @@ const (
 	ProtocolOperationCauseProtocolFailure
 )
 
-// ProtocolOperationTrace summarizes one RPC boundary. The operation identity is
-// random correlation authority; request bodies, file identities, lease identities,
-// catalog paths, and raw errors are intentionally absent.
+// ProtocolOperationTrace summarizes one RPC boundary. Content decisions carry
+// only opaque coordinator/lease join keys; request bodies, file identities,
+// catalog paths, and raw errors remain intentionally absent.
 type ProtocolOperationTrace struct {
 	Stage                   ProtocolOperationStage
 	Role                    protocolsession.Role
@@ -61,6 +63,7 @@ type ProtocolOperationTrace struct {
 	UsableLanesAtSettlement uint32
 	Failure                 ProtocolFailure
 	Cause                   ProtocolOperationCause
+	ContentDecision         contentflow.SenderDecisionTrace
 }
 
 type ProtocolOperationTracer interface {
@@ -206,6 +209,9 @@ func retainProtocolOperationTrace(event ProtocolOperationTrace) bool {
 	}
 	if event.Stage == ProtocolOperationSenderResponseSettled {
 		return senderResponseFinal(event.ResponseKind)
+	}
+	if event.Stage == ProtocolOperationSenderContentDecision {
+		return true
 	}
 	return true
 }

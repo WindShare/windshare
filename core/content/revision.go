@@ -17,6 +17,7 @@ var (
 	ErrRevisionDrift        = errors.New("file revision drifted")
 	ErrLeaseExpired         = errors.New("file revision lease expired")
 	ErrInvalidLease         = errors.New("file revision lease is invalid")
+	ErrInvalidLeaseEnd      = errors.New("file revision lease ending is invalid")
 	ErrRenewTooEarly        = errors.New("file revision lease does not need renewal yet")
 	ErrLeaseLifetime        = errors.New("file revision lease reached its maximum lifetime")
 	ErrOpenBatchLimit       = errors.New("open revision batch exceeds its item limit")

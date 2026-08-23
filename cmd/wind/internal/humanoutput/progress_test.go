@@ -3,9 +3,45 @@ package humanoutput
 import (
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
+
+func TestCapacityWaitOverridesOrdinaryProgressOnlyWhileVisible(t *testing.T) {
+	spec := clievent.ProgressSpec{
+		DiscoveredFiles: 2, DiscoveredBytes: 100,
+		PublishedFiles: 1, PublishedBytes: 20,
+		VerifiedBytes: 40, NewlyVerifiedBytes: 40,
+		FileOutcomes:          clievent.FileOutcomes{DownloadedFiles: 1},
+		CapacityActiveWaiters: 1, CapacityAccumulatedWait: time.Second, CapacityWaitAttempts: 2,
+		Discovery: clievent.DiscoveryComplete, CountersExact: true,
+	}
+	metrics := ProgressMetrics{RateBytesPerSecond: 10, RateValid: true, RateStable: true}
+
+	hidden := mustSnapshot(t, spec)
+	hiddenText := lineText(FormatProgress(hidden, metrics, ProgressLayout{}))
+	if !strings.Contains(hiddenText, "40%") || strings.Contains(hiddenText, "Waiting for sender capacity") {
+		t.Fatalf("hidden capacity wait changed ordinary progress: %q", hiddenText)
+	}
+
+	spec.CapacityWaitVisible = true
+	visible := mustSnapshot(t, spec)
+	visibleText := lineText(FormatProgress(visible, metrics, ProgressLayout{}))
+	if visibleText != "Waiting for sender capacity" || strings.Contains(visibleText, "%") ||
+		strings.Contains(visibleText, "/s") || strings.Contains(visibleText, "left") {
+		t.Fatalf("visible capacity wait was not concise: %q", visibleText)
+	}
+
+	spec.CapacityActiveWaiters = 0
+	spec.CapacityWaitVisible = false
+	spec.VerifiedBytes = 50
+	cleared := mustSnapshot(t, spec)
+	clearedText := lineText(FormatProgress(cleared, metrics, ProgressLayout{}))
+	if !strings.Contains(clearedText, "50%") || strings.Contains(clearedText, "Waiting for sender capacity") {
+		t.Fatalf("cleared capacity wait did not restore ordinary progress: %q", clearedText)
+	}
+}
 
 func TestProgressTruthEligibility(t *testing.T) {
 	t.Parallel()

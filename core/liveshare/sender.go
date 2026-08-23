@@ -9,21 +9,26 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/senderobject"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
+	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
-const defaultSharedBlockCacheBytes = uint64(64) << 20
+const (
+	defaultSharedBlockCacheBytes  = uint64(64) << 20
+	revisionCapacityStoreIDPrefix = "liveshare-store:"
+	revisionCapacityShareIDPrefix = "liveshare-share:"
+)
 
 type SenderConfig struct {
 	Paths              []string
@@ -36,6 +41,7 @@ type SenderConfig struct {
 	CatalogTracer      CatalogStorageTracer
 	RootPrefetchTracer RootPrefetchTracer
 	RevisionTracer     content.RevisionTracer
+	RevisionCapacity   *revisioncapacity.Coordinator
 
 	preparation senderPreparationDependencies
 }
@@ -117,7 +123,6 @@ type PreparedSender struct {
 	closed          bool
 	closeDone       chan struct{}
 	closeResult     error
-	sessionSequence atomic.Uint64
 }
 
 type senderAuthority struct {
@@ -169,6 +174,9 @@ func prepareSender(
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+	if config.RevisionCapacity == nil {
+		return nil, errors.New("live share sender requires application revision capacity")
 	}
 	if len(config.Paths) == 0 || len(config.Relays) == 0 {
 		return nil, errors.New("live share sender requires selected paths and at least one relay")
@@ -407,14 +415,6 @@ func prepareSenderContent(
 	authority senderAuthority,
 	dependencies senderPreparationDependencies,
 ) error {
-	processQuota, err := content.NewQuotaAccount("live-share-content-process", content.DefaultProcessQuotaLimits())
-	if err != nil {
-		return err
-	}
-	shareQuota, err := content.NewQuotaAccount("live-share-content", content.DefaultShareQuotaLimits())
-	if err != nil {
-		return err
-	}
 	metadataBudget, err := content.NewRevisionMetadataBudget(content.DefaultRevisionInvalidationEntries)
 	if err != nil {
 		return err
@@ -441,7 +441,8 @@ func prepareSenderContent(
 	}
 	sender.revisionStore, err = dependencies.newRevisionStore(content.RevisionStoreConfig{
 		ShareInstance: authority.shareInstance, ChunkSize: config.ChunkSize, Catalog: sender.catalogStore,
-		Source: sender.revisionSource, ProcessQuota: processQuota, ShareQuota: shareQuota,
+		Source: sender.revisionSource, CapacityCoordinator: config.RevisionCapacity,
+		CapacityStore:   senderRevisionCapacityStoreConfig(authority.shareInstance),
 		RevisionDeriver: sender.revisionDeriver, MetadataBudget: metadataBudget,
 		CacheInvalidator: sender.cache, Tracer: config.RevisionTracer,
 	})
@@ -462,6 +463,15 @@ func prepareSenderContent(
 	defer sessionAuthKey.Destroy()
 	sender.sessionAuthKey = sessionAuthKey.Bytes()
 	return nil
+}
+
+func senderRevisionCapacityStoreConfig(share catalog.ShareInstance) revisioncapacity.StoreConfig {
+	identity := base64.RawURLEncoding.EncodeToString(share.Bytes())
+	return revisioncapacity.StoreConfig{
+		StoreID: revisioncapacity.StoreID(revisionCapacityStoreIDPrefix + identity),
+		ShareID: revisioncapacity.ShareID(revisionCapacityShareIDPrefix + identity),
+		Limits:  revisioncapacity.DefaultShareLimits(),
+	}
 }
 
 func commitSenderPreparation(sender *PreparedSender, authority senderAuthority, catalogState senderCatalog) {
@@ -546,15 +556,21 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 	if sender.closed || sender.runtimeFactory != nil || config.TerminalConnectivity == nil || config.PeerHandlers == nil {
 		return nil, errors.New("live share sender runtime factory is unavailable")
 	}
-	contentFactory := sessionruntime.SenderContentFactoryFunc(func() (*contentflow.SenderService, error) {
-		sequence := sender.sessionSequence.Add(1)
-		quota, err := content.NewQuotaAccount(fmt.Sprintf("live-share-session-%d", sequence), content.DefaultSessionQuotaLimits())
+	contentFactory := sessionruntime.SenderContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
+		sessionCapacity, err := sender.revisionStore.RegisterSession(revisioncapacity.SessionConfig{
+			SessionID: revisioncapacity.SessionID(base64.RawURLEncoding.EncodeToString(sessionID.Bytes())),
+			Limits:    revisioncapacity.DefaultSessionLimits(),
+		})
 		if err != nil {
 			return nil, err
 		}
-		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: sender.revisionStore, SessionQuota: quota, Sealer: sender.recordSealer, Cache: sender.cache,
+		service, err := contentflow.NewSenderService(contentflow.SenderServiceConfig{
+			Store: sender.revisionStore, SessionCapacity: sessionCapacity, Sealer: sender.recordSealer, Cache: sender.cache,
 		})
+		if err != nil {
+			return nil, errors.Join(err, sessionCapacity.Close())
+		}
+		return service, nil
 	})
 	factory, err := sessionruntime.NewSenderFactory(sessionruntime.SenderFactoryConfig{
 		ShareInstance: sender.descriptor.ShareInstance(), SessionAuthKey: sender.sessionAuthKey,

@@ -370,6 +370,29 @@ export function validateReceive(payload: UnknownRecord): void {
       }
       return
     }
+    case 'capacity_retry_scheduled':
+    case 'capacity_retry_succeeded':
+    case 'capacity_wait_budget_paused':
+    case 'capacity_wait_cancelled':
+    case 'capacity_generation_replaced':
+      exactKeys(payload, [
+        'transition', 'capacity_wait_id', 'capacity_surface', 'receive_operation_id',
+        'transfer_job_id', 'protocol_session_id', 'protocol_operation_id', 'attempt',
+        'sender_hint_ms', 'jitter_ms', 'delay_ms', 'accumulated_wait_ms', 'active_waiters',
+      ], [], 'capacity wait payload')
+      canonicalIdentity(payload.capacity_wait_id, 'capacity wait ID')
+      member(payload.capacity_surface, ['revision_open', 'block_range'], 'capacity wait surface')
+      canonicalIdentity(payload.receive_operation_id, 'capacity receive operation ID')
+      canonicalIdentity(payload.transfer_job_id, 'capacity transfer job ID')
+      canonicalIdentity(payload.protocol_session_id, 'capacity ProtocolSession ID')
+      canonicalIdentity(payload.protocol_operation_id, 'capacity protocol operation ID')
+      decimalUint64(payload.attempt, 'capacity wait attempt')
+      uint32(payload.sender_hint_ms, 'capacity sender hint')
+      uint32(payload.jitter_ms, 'capacity jitter')
+      uint32(payload.delay_ms, 'capacity delay')
+      uint32(payload.accumulated_wait_ms, 'capacity accumulated wait')
+      uint32(payload.active_waiters, 'capacity active waiters')
+      return
     default:
       throw new TypeError('receive_transition discriminant is invalid')
   }
@@ -393,11 +416,16 @@ export function validateTransferProgress(payload: UnknownRecord): void {
   const decimalKeys = [
     'discovered_files', 'discovered_bytes', 'written_bytes', 'completed_files',
     'completed_bytes', 'file_errors', 'selection_errors', 'failed_directories',
+    'capacity_waiting_files', 'capacity_accumulated_wait_ms', 'capacity_wait_attempts',
   ] as const
-  exactKeys(payload, [...decimalKeys, 'content_lanes', 'discovery', 'partial'], [],
+  exactKeys(payload, [
+    ...decimalKeys, 'content_lanes', 'capacity_wait_visible',
+    'discovery', 'partial',
+  ], [],
     'transfer_progress payload')
   decimalFields(payload, decimalKeys, 'transfer progress')
   uint32(payload.content_lanes, 'transfer progress content lanes')
+  booleanValue(payload.capacity_wait_visible, 'capacity wait visibility')
   member(payload.discovery, ['open', 'complete', 'failed'], 'transfer discovery state')
   booleanValue(payload.partial, 'transfer partial flag')
 }

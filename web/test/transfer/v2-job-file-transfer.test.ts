@@ -11,7 +11,21 @@ import {
   type V2BlockRouteEligibility,
 } from '../../src/content/v2-broker'
 import type { V2BlockRecord } from '../../src/content/v2-records'
+import {
+  V2RevisionCapacityBusyError,
+  type V2RevisionReader,
+} from '../../src/content/v2-session-services'
+import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+import {
+  createFailureIdentity,
+  createProtocolFailure,
+} from '../../src/diagnostics/incident'
 import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
+import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/v2-job'
+import type {
+  V2ProtocolSessionReplacementWaiter,
+  V2RevisionCapacityClock,
+} from '../../src/transfer/revision-capacity/public'
 import type { TestOutput } from './v2-job-fixture'
 import {
   catalogFixture,
@@ -105,6 +119,8 @@ describe('v2 authenticated file transfer', () => {
     expect(readers.releases).toEqual([file.idText])
     expect(plans.settlements).toEqual(['direct-atomic:Succeeded'])
   })
+
+  registerRevisionCapacityJobTests()
 
   it('isolates a checkpoint decision while an independent sibling completes', async () => {
     const root = identity(2)
@@ -384,3 +400,140 @@ describe('v2 authenticated file transfer', () => {
     expect(plans.pauses).toEqual(['direct-atomic'])
   })
 })
+
+function registerRevisionCapacityJobTests(): void {
+  it('retries authenticated capacity behind one output transaction and records no file error', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const output = testOutput()
+    const plans = planAuthorityFixture({ output })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+    })
+    let opens = 0
+    const revisions: V2RevisionReader = {
+      open: async (fileId, signal) => {
+        opens += 1
+        if (opens === 1) throw capacityFailure(25)
+        return readers.revisions.open(fileId, signal)
+      },
+    }
+    const traces: TransferTraceEvent[] = []
+    const progress: TransferProgress[] = []
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans, revisions, broker: readers.broker,
+      revisionCapacity: immediateCapacityPolicy(1_000),
+      onProgress: value => progress.push(value),
+      trace: { current: event => traces.push(event) },
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(opens).toBe(2)
+    expect(output.requests).toHaveLength(1)
+    expect(output.commits).toEqual([file.idText])
+    expect(readers.revisionRequests).toEqual([file.idText])
+    expect(progress.at(-1)).toMatchObject({
+      fileErrors: 0,
+      capacityWaitingFiles: 0,
+      capacityAccumulatedWaitMilliseconds: 25,
+      capacityWaitAttempts: 1,
+      capacityWaitVisible: false,
+    })
+    expect(traces.filter(event => event.name === 'receive_transition').map(event => event.transition))
+      .toEqual(expect.arrayContaining(['capacity_retry_scheduled', 'capacity_retry_succeeded']))
+  })
+
+  it('turns capacity wait budget exhaustion into a resumable pause with zero file errors', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const output = testOutput()
+    const plans = planAuthorityFixture({ output })
+    const intent = await receiveIntentFixture({
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
+    })
+    let opens = 0
+    const progress: TransferProgress[] = []
+    const traces: TransferTraceEvent[] = []
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans,
+      revisions: { open: async () => { opens += 1; throw capacityFailure(100) } },
+      broker: readers.broker,
+      revisionCapacity: immediateCapacityPolicy(50),
+      onProgress: value => progress.push(value),
+      trace: { current: event => traces.push(event) },
+    }).run()
+
+    expect(opens).toBe(1)
+    expect(result.worker).toMatchObject({ status: 'Paused', failureCount: 0 })
+    expect(result.lifecycle.kind).toBe('resumable-receive')
+    expect(result.failureTrigger).toMatchObject({
+      fault: { scope: 'output-pause' },
+      fact: { kind: 'protocol_failure', recoveryDisposition: 'resumable_receive' },
+    })
+    expect(output.requests).toHaveLength(1)
+    expect(output.commits).toEqual([])
+    expect(progress.at(-1)).toMatchObject({
+      fileErrors: 0,
+      capacityWaitingFiles: 0,
+      capacityAccumulatedWaitMilliseconds: 50,
+      capacityWaitAttempts: 1,
+      capacityWaitVisible: false,
+    })
+    expect(traces).toContainEqual(expect.objectContaining({
+      name: 'receive_transition', transition: 'capacity_wait_budget_paused',
+    }))
+  })
+}
+
+function capacityFailure(retryAfterMilliseconds: number): V2RevisionCapacityBusyError {
+  const failure = Object.freeze({
+    code: V2_REVISION_CODE_QUOTA,
+    retryable: true as const,
+    retryAfterMilliseconds,
+  })
+  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
+    requestKind: 'open_revisions',
+    wireScope: 'revision',
+    wireCode: failure.code,
+    retryable: true,
+    retryAfterMilliseconds,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: {
+      protocolSessionId: createFailureIdentity('protocol_session', identity(91)),
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(92)),
+    },
+  }))
+}
+
+function immediateCapacityPolicy(waitBudgetMilliseconds: number) {
+  let currentTime = 0
+  const clock: V2RevisionCapacityClock = {
+    now: () => currentTime,
+    sleep: async (milliseconds, signal) => {
+      signal.throwIfAborted()
+      currentTime += milliseconds
+    },
+  }
+  const generation: V2ProtocolSessionReplacementWaiter = {
+    waitForProtocolSessionReplacement: (_identity, signal) => new Promise((_resolve, reject) => {
+      const abort = () => reject(signal.reason)
+      signal.addEventListener('abort', abort, { once: true })
+      if (signal.aborted) abort()
+    }),
+  }
+  return Object.freeze({
+    generation,
+    clock,
+    waitBudgetMilliseconds,
+    additiveJitterLimitMilliseconds: 0,
+    visibilityThresholdMilliseconds: 0,
+    random: () => 0,
+    randomBytes: (length: number) => identity(93).slice(0, length),
+  })
+}

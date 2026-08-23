@@ -35,7 +35,7 @@ func TestRuntimeDependencyAdaptersAndStableErrors(t *testing.T) {
 	if err := (TerminalConnectivityFuncs{}).Cleanup(context.Background()); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil cleanup error = %v", err)
 	}
-	if _, err := (SenderContentFactoryFunc(nil)).NewSenderContentService(); !errors.Is(err, ErrRuntimeConfig) {
+	if _, err := (SenderContentFactoryFunc(nil)).NewSenderContentService(id16[protocolsession.ProtocolSessionID](1)); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil content factory error = %v", err)
 	}
 	if _, err := (InitialLaneIDSourceFunc(nil)).NextInitialLaneID(); !errors.Is(err, ErrRuntimeConfig) {
@@ -352,12 +352,12 @@ func testSenderAcceptDependencyFailures(t *testing.T, base SenderFactoryConfig) 
 			})
 		}},
 		{"content", func(config *SenderFactoryConfig) {
-			config.Content = SenderContentFactoryFunc(func() (*contentflow.SenderService, error) {
+			config.Content = SenderContentFactoryFunc(func(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
 				return nil, io.ErrUnexpectedEOF
 			})
 		}},
 		{"nil content", func(config *SenderFactoryConfig) {
-			config.Content = SenderContentFactoryFunc(func() (*contentflow.SenderService, error) {
+			config.Content = SenderContentFactoryFunc(func(protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
 				return nil, nil
 			})
 		}},

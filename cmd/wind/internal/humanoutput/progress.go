@@ -8,7 +8,10 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/terminalcanvas"
 )
 
-const progressBarSegments = 10
+const (
+	progressBarSegments = 10
+	capacityWaitPhase   = "Waiting for sender capacity"
+)
 
 type ProgressMetrics struct {
 	RateBytesPerSecond   uint64
@@ -72,6 +75,9 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 	if metrics.RateValid && metrics.RateBytesPerSecond != 0 && snapshot.CountersExact() &&
 		snapshot.Discovery() != clievent.DiscoveryFailed {
 		rate = FormatRate(metrics.RateBytesPerSecond)
+	}
+	if snapshot.CapacityWaitVisible() {
+		return progressComponents{phase: capacityWaitPhase}
 	}
 
 	switch snapshot.Discovery() {

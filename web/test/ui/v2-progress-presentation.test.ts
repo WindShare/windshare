@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import type { V2ReceiverProgress } from '../../src/ui/v2-model'
 import {
+  capacityWaitDescription,
   completionProgressDescription,
   discoveryProgressDescription,
   presentDirectZipProgress,
@@ -67,6 +68,21 @@ describe('v2 progress presentation', () => {
     expect(presented.primary).toContain('estimated selection is at least 1.0 KiB')
     expect(presented.primary).not.toContain('%')
   })
+
+  it('presents capacity waiting only after policy visibility and clears it with active waiters', () => {
+    expect(capacityWaitDescription(receiverProgress({
+      capacityWaitingFiles: 1,
+      capacityWaitVisible: false,
+    }))).toBeNull()
+    expect(capacityWaitDescription(receiverProgress({
+      capacityWaitingFiles: 1,
+      capacityWaitVisible: true,
+    }))).toBe('Waiting for sender capacity')
+    expect(capacityWaitDescription(receiverProgress({
+      capacityWaitingFiles: 0,
+      capacityWaitVisible: true,
+    }))).toBeNull()
+  })
 })
 
 function directZipProgress(
@@ -114,6 +130,10 @@ function receiverProgress(overrides: Partial<V2ReceiverProgress>): V2ReceiverPro
     contentLanes: 1,
     discovery: 'open',
     failedDirectories: 0,
+    capacityWaitingFiles: 0,
+    capacityAccumulatedWaitMilliseconds: 0,
+    capacityWaitAttempts: 0,
+    capacityWaitVisible: false,
     transferJobId: 'job',
     ...overrides,
   })

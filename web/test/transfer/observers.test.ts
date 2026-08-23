@@ -34,6 +34,10 @@ describe('transfer observer separation', () => {
       fileErrors: 0,
       selectionErrors: 0,
       failedDirectories: 0,
+      capacityWaitingFiles: 0,
+      capacityAccumulatedWaitMilliseconds: 125,
+      capacityWaitAttempts: 2,
+      capacityWaitVisible: false,
     })
 
     let payloadFieldRead = false
@@ -47,7 +51,14 @@ describe('transfer observer separation', () => {
         throw new Error('trace payload was built while disabled')
       },
     })).not.toThrow()
-    expect(progress).toHaveLength(1)
+    expect(progress).toEqual([
+      expect.objectContaining({
+        capacityWaitingFiles: 0,
+        capacityAccumulatedWaitMilliseconds: 125,
+        capacityWaitAttempts: 2,
+        capacityWaitVisible: false,
+      }),
+    ])
     expect(payloadFieldRead).toBe(false)
 
     const events: TransferTraceEvent[] = []

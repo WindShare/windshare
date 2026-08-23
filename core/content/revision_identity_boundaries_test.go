@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 func TestRevisionEvidenceRejectsIdentityAndGeometryBoundaries(t *testing.T) {
@@ -242,6 +243,8 @@ func TestRevisionTraceImmutableProjections(t *testing.T) {
 		shareInstance: catalogID[catalog.ShareInstance](1),
 		fileID:        catalogID[catalog.FileID](2),
 		fileRevision:  contentID[FileRevision](3),
+		leaseID:       contentID[LeaseID](4),
+		sessionID:     revisioncapacity.SessionID("session-5"),
 	}
 	projections := []struct {
 		name string
@@ -253,6 +256,8 @@ func TestRevisionTraceImmutableProjections(t *testing.T) {
 		{name: "share", got: trace.ShareInstance(), want: trace.shareInstance},
 		{name: "file", got: trace.FileID(), want: trace.fileID},
 		{name: "revision", got: trace.FileRevision(), want: trace.fileRevision},
+		{name: "lease", got: trace.LeaseID(), want: trace.leaseID},
+		{name: "session", got: trace.SessionID(), want: trace.sessionID},
 	}
 	for _, projection := range projections {
 		t.Run(projection.name, func(t *testing.T) {
@@ -294,28 +299,29 @@ func (d *failOnceRevisionDeriver) DeriveRevision(evidence RevisionEvidence) (Fil
 
 func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *testing.T) {
 	file, record := fileRecord(t, 1)
-	process := generousQuota(t, "process")
-	share := generousQuota(t, "share")
-	session := generousQuota(t, "session")
 	stable := &testStableFile{data: []byte{1}}
 	source := &testRevisionSource{files: []*testStableFile{stable}}
 	delegate := testRevisionDeriver(t)
 	sentinel := errors.New("injected revision derivation failure")
 	deriver := &failOnceRevisionDeriver{delegate: delegate, failure: sentinel}
-	store, err := NewRevisionStore(RevisionStoreConfig{
+	config := RevisionStoreConfig{
 		ShareInstance:   catalogID[catalog.ShareInstance](1),
 		ChunkSize:       catalog.MinChunkSize,
 		Catalog:         testCatalog{records: map[catalog.NodeID]catalog.NodeRecord{file.NodeID(): record}},
 		Source:          source,
-		ProcessQuota:    process,
-		ShareQuota:      share,
 		LeaseIDs:        &sequenceIDs{},
 		RevisionDeriver: deriver,
 		MetadataBudget:  testRevisionMetadataBudget(t, 1),
-	})
+	}
+	attachTestCapacity(t, &config,
+		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+		revisioncapacity.CapacityLimits{StableHandles: 100, ActiveLeases: 100},
+	)
+	store, err := NewRevisionStore(config)
 	if err != nil {
 		t.Fatal(err)
 	}
+	session := generousSession(t, store, "session")
 	closed := false
 	t.Cleanup(func() {
 		if !closed {
@@ -327,10 +333,9 @@ func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *tes
 	if _, openErr := store.OpenRevision(context.Background(), file, session); !errors.Is(openErr, sentinel) {
 		t.Fatalf("first open error = %v", openErr)
 	}
-	for _, account := range []*QuotaAccount{process, share, session} {
-		if got := account.Snapshot().Used; got != (QuotaUsage{}) {
-			t.Fatalf("failed derivation leaked %s quota: %+v", account.Name(), got)
-		}
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		snapshot.Share().Used() != (revisioncapacity.CapacityUsage{}) || session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatalf("failed derivation leaked capacity: %+v", snapshot)
 	}
 	if source.Calls() != 0 {
 		t.Fatalf("derivation failure opened %d physical sources", source.Calls())
@@ -343,19 +348,23 @@ func TestRevisionStoreDeriverFailureRollsBackAdmissionAndRemainsRetryable(t *tes
 	if lease.ID().IsZero() || source.Calls() != 1 {
 		t.Fatalf("retry did not publish exactly one source-backed lease: lease=%x calls=%d", lease.ID(), source.Calls())
 	}
-	for _, account := range []*QuotaAccount{process, share, session} {
-		if got := account.Snapshot().Used; got != (QuotaUsage{StableHandles: 1, ActiveLeases: 1}) {
-			t.Fatalf("successful retry charged %s quota = %+v", account.Name(), got)
-		}
+	want := revisioncapacity.CapacityUsage{StableHandles: 1, ActiveLeases: 1}
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != want || snapshot.Share().Used() != want || session.Snapshot().Used() != want {
+		t.Fatalf("successful retry capacity = %+v", snapshot)
 	}
 
+	if err := store.EndLease(lease.ID(), LeaseRelinquished); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if err := store.Close(); err != nil {
 		t.Fatal(err)
 	}
 	closed = true
-	for _, account := range []*QuotaAccount{process, share, session} {
-		if got := account.Snapshot().Used; got != (QuotaUsage{}) {
-			t.Fatalf("store close leaked %s quota: %+v", account.Name(), got)
-		}
+	if snapshot := store.CapacitySnapshot(); snapshot.Process().Used() != (revisioncapacity.CapacityUsage{}) ||
+		session.Snapshot().Used() != (revisioncapacity.CapacityUsage{}) {
+		t.Fatalf("store close leaked capacity: %+v", snapshot)
 	}
 }

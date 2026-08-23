@@ -325,13 +325,13 @@ func newContextCapturingContentFactory(
 		keys.Destroy()
 	})
 	store := &contextCapturingContentStore{verticalContentStore: fixture.contentStore, started: started}
-	return SenderContentFactoryFunc(func() (*contentflow.SenderService, error) {
-		quota, err := content.NewQuotaAccount("local-failure-session", content.DefaultSessionQuotaLimits())
+	return SenderContentFactoryFunc(func(sessionID protocolsession.ProtocolSessionID) (*contentflow.SenderService, error) {
+		sessionCapacity, err := fixture.registerCapacitySession(sessionID)
 		if err != nil {
 			return nil, err
 		}
 		return contentflow.NewSenderService(contentflow.SenderServiceConfig{
-			Store: store, SessionQuota: quota, Sealer: sealer, Cache: cache,
+			Store: store, SessionCapacity: sessionCapacity, Sealer: sealer, Cache: cache,
 		})
 	})
 }

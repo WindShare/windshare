@@ -1,41 +1,47 @@
 package content
 
 import (
+	"context"
 	"errors"
+	"fmt"
+	"runtime/debug"
 	"sync"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 )
 
 type RevisionStoreConfig struct {
-	ShareInstance    catalog.ShareInstance
-	ChunkSize        uint32
-	Catalog          CatalogNodeSource
-	Source           RevisionSource
-	ProcessQuota     *QuotaAccount
-	ShareQuota       *QuotaAccount
-	Clock            Clock
-	LeaseIDs         LeaseIDGenerator
-	RevisionDeriver  RevisionIdentityDeriver
-	MetadataBudget   *RevisionMetadataBudget
-	CacheInvalidator CacheInvalidator
-	Tracer           RevisionTracer
+	ShareInstance       catalog.ShareInstance
+	ChunkSize           uint32
+	Catalog             CatalogNodeSource
+	Source              RevisionSource
+	CapacityCoordinator *revisioncapacity.Coordinator
+	CapacityStore       revisioncapacity.StoreConfig
+	Clock               Clock
+	LeaseIDs            LeaseIDGenerator
+	RevisionDeriver     RevisionIdentityDeriver
+	MetadataBudget      *RevisionMetadataBudget
+	CacheInvalidator    CacheInvalidator
+	Tracer              RevisionTracer
 }
 
 type RevisionStore struct {
-	shareInstance   catalog.ShareInstance
-	chunkSize       uint32
-	catalog         CatalogNodeSource
-	source          RevisionSource
-	processQuota    *QuotaAccount
-	shareQuota      *QuotaAccount
-	clock           Clock
-	leaseIDs        LeaseIDGenerator
-	revisionDeriver RevisionIdentityDeriver
-	metadataBudget  *RevisionMetadataBudget
-	invalidator     CacheInvalidator
-	tracer          RevisionTracer
+	shareInstance    catalog.ShareInstance
+	chunkSize        uint32
+	catalog          CatalogNodeSource
+	source           RevisionSource
+	capacity         *revisioncapacity.StoreRegistration
+	capacitySessions map[*revisioncapacity.SessionRegistration]struct{}
+	capacityContext  context.Context
+	capacityCancel   context.CancelFunc
+	clock            Clock
+	leaseIDs         LeaseIDGenerator
+	revisionDeriver  RevisionIdentityDeriver
+	metadataBudget   *RevisionMetadataBudget
+	invalidator      CacheInvalidator
+	tracer           RevisionTracer
 
 	mu                       sync.Mutex
 	closed                   bool
@@ -44,12 +50,18 @@ type RevisionStore struct {
 	readingRevisions         map[*revisionState]struct{}
 	leases                   map[LeaseID]*leaseState
 	opening                  map[catalog.FileID]*openAttempt
+	idleRevisions            map[revisioncapacity.CandidateToken]*revisionState
 	invalidated              map[revisionIdentity]*revisionMetadataReservation
 	leaseTombstones          map[LeaseID]leaseStatus
 	leaseOrder               []LeaseID
 	leaseCursor              int
 	openWG                   sync.WaitGroup
 	readWG                   sync.WaitGroup
+	capacityWG               sync.WaitGroup
+	closeMu                  sync.Mutex
+	localCloseComplete       bool
+	localCloseErr            error
+	capacityCloseComplete    bool
 }
 
 const IdentityTombstoneLimit = 4_096
@@ -71,16 +83,21 @@ type revisionIdentity struct {
 func (i revisionIdentity) isZero() bool { return i.file.IsZero() || i.revision.IsZero() }
 
 type revisionState struct {
-	descriptor     FileRevisionDescriptor
-	source         StableFile
-	handleQuota    *QuotaReservation
-	leases         map[LeaseID]*leaseState
-	sessionHandles map[*QuotaAccount]*sessionHandleState
-	graceUntil     time.Time
-	readers        int
-	closePending   bool
-	closed         bool
-	lifecycle      revisionLifecycle
+	descriptor          FileRevisionDescriptor
+	source              StableFile
+	handleCharge        revisioncapacity.StableHandleCharge
+	leases              map[LeaseID]*leaseState
+	activeLeases        uint64
+	sessionHandles      map[*revisioncapacity.SessionRegistration]*sessionHandleState
+	recoveryUntil       time.Time
+	lifecycleGeneration uint64
+	idleToken           revisioncapacity.CandidateToken
+	admissionDone       chan struct{}
+	readers             int
+	closePending        bool
+	closing             bool
+	closed              bool
+	lifecycle           revisionLifecycle
 }
 
 func (r *revisionState) identity() revisionIdentity {
@@ -88,7 +105,7 @@ func (r *revisionState) identity() revisionIdentity {
 }
 
 type sessionHandleState struct {
-	quota  *QuotaReservation
+	charge revisioncapacity.SessionHandleCharge
 	leases uint64
 }
 
@@ -96,15 +113,15 @@ type leaseStatus uint8
 
 const (
 	leaseActive leaseStatus = iota
-	leaseExpired
+	leaseEnded
 	leaseDrifted
 )
 
 type leaseState struct {
 	lease        RevisionLease
 	revision     *revisionState
-	quota        *QuotaReservation
-	sessionQuota *QuotaAccount
+	activeCharge revisioncapacity.ActiveLeaseCharge
+	session      *revisioncapacity.SessionRegistration
 	status       leaseStatus
 	createdAt    time.Time
 	expiresAt    time.Time
@@ -112,31 +129,71 @@ type leaseState struct {
 }
 
 type revisionCleanup struct {
-	source      StableFile
-	reservation *QuotaReservation
+	store        *RevisionStore
+	revision     *revisionState
+	idleToken    revisioncapacity.CandidateToken
+	source       StableFile
+	stableCharge revisioncapacity.StableHandleCharge
 }
 
-func (c revisionCleanup) run() {
+type stableClosePanicError struct {
+	recovered any
+	stack     []byte
+}
+
+func (e *stableClosePanicError) Error() string {
+	return fmt.Sprintf("stable file close panicked: %v\n%s", e.recovered, e.stack)
+}
+
+func (c revisionCleanup) run() (err error) {
+	if c.idleToken != "" && c.store != nil && c.revision != nil {
+		c.store.capacity.WithdrawIdle(c.idleToken)
+		if waitErr := c.store.capacity.WaitForReclaims(); waitErr != nil {
+			return waitErr
+		}
+		c.store.mu.Lock()
+		if c.revision.source != nil && !c.revision.closing && !c.revision.closed {
+			c.revision.closing = true
+			c.source = c.revision.source
+			c.stableCharge = c.revision.handleCharge
+			c.revision.source = nil
+			c.revision.handleCharge = revisioncapacity.StableHandleCharge{}
+		}
+		c.store.mu.Unlock()
+	}
+	terminal := c.source == nil
 	if c.source != nil {
-		// A backend panic must not skip quota release and permanently deny
-		// unrelated revisions.
 		func() {
-			defer func() { _ = recover() }()
-			_ = c.source.Close()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					err = &stableClosePanicError{recovered: recovered, stack: debug.Stack()}
+				}
+			}()
+			err = c.source.Close()
+			terminal = true
 		}()
 	}
-	if c.reservation != nil {
-		c.reservation.Release()
+	if c.stableCharge.Valid() {
+		if terminal {
+			err = errors.Join(err, c.stableCharge.Release())
+		} else {
+			err = errors.Join(err, c.stableCharge.Quarantine(err))
+		}
 	}
+	if c.store != nil && c.revision != nil {
+		var panicErr *stableClosePanicError
+		c.store.mu.Lock()
+		c.revision.closing = false
+		c.revision.closed = !errors.As(err, &panicErr)
+		c.store.mu.Unlock()
+	}
+	return err
 }
 
 func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	if config.ShareInstance.IsZero() || config.Catalog == nil || config.Source == nil ||
-		config.ProcessQuota == nil || config.ShareQuota == nil || config.RevisionDeriver == nil || config.MetadataBudget == nil {
-		return nil, errors.New("revision store requires share identity, catalog, source, process/share quotas, revision deriver, and metadata budget")
-	}
-	if config.ProcessQuota == config.ShareQuota {
-		return nil, errors.New("revision store process and share quotas must be distinct")
+		config.CapacityCoordinator == nil || config.RevisionDeriver == nil || config.MetadataBudget == nil {
+		return nil, errors.New("revision store requires share identity, catalog, source, capacity coordinator, revision deriver, and metadata budget")
 	}
 	if _, err := NewFileGeometry(0, config.ChunkSize); err != nil {
 		return nil, err
@@ -147,15 +204,62 @@ func NewRevisionStore(config RevisionStoreConfig) (*RevisionStore, error) {
 	if config.LeaseIDs == nil {
 		config.LeaseIDs = randomLeaseIDs{}
 	}
-	return &RevisionStore{
+	capacityContext, capacityCancel := context.WithCancel(context.Background())
+	store := &RevisionStore{
 		shareInstance: config.ShareInstance, chunkSize: config.ChunkSize,
-		catalog: config.Catalog, source: config.Source, processQuota: config.ProcessQuota, shareQuota: config.ShareQuota,
+		catalog: config.Catalog, source: config.Source,
 		clock: config.Clock, leaseIDs: config.LeaseIDs, revisionDeriver: config.RevisionDeriver,
 		metadataBudget: config.MetadataBudget, invalidator: config.CacheInvalidator, tracer: config.Tracer,
-		revisions: make(map[catalog.FileID]*revisionState), readingRevisions: make(map[*revisionState]struct{}),
+		capacityContext: capacityContext, capacityCancel: capacityCancel,
+		capacitySessions: make(map[*revisioncapacity.SessionRegistration]struct{}),
+		revisions:        make(map[catalog.FileID]*revisionState), readingRevisions: make(map[*revisionState]struct{}),
 		leases: make(map[LeaseID]*leaseState), opening: make(map[catalog.FileID]*openAttempt),
-		invalidated: make(map[revisionIdentity]*revisionMetadataReservation), leaseTombstones: make(map[LeaseID]leaseStatus),
-	}, nil
+		idleRevisions: make(map[revisioncapacity.CandidateToken]*revisionState),
+		invalidated:   make(map[revisionIdentity]*revisionMetadataReservation), leaseTombstones: make(map[LeaseID]leaseStatus),
+	}
+	registration, err := config.CapacityCoordinator.RegisterStore(config.CapacityStore, store)
+	if err != nil {
+		capacityCancel()
+		return nil, fmt.Errorf("register revision store capacity: %w", err)
+	}
+	store.capacity = registration
+	return store, nil
+}
+
+func (s *RevisionStore) RegisterSession(config revisioncapacity.SessionConfig) (*revisioncapacity.SessionRegistration, error) {
+	if s == nil || s.capacity == nil {
+		return nil, errors.New("revision store has no capacity registration")
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return nil, ErrRevisionStoreClosed
+	}
+	// Add while holding s.mu so Close cannot observe closed=true and begin its
+	// wait before this registration rollback is part of the joined lifecycle.
+	s.capacityWG.Add(1)
+	s.mu.Unlock()
+	defer s.capacityWG.Done()
+	session, err := s.capacity.RegisterSession(config)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		_ = session.Close()
+		return nil, ErrRevisionStoreClosed
+	}
+	s.capacitySessions[session] = struct{}{}
+	s.mu.Unlock()
+	return session, nil
+}
+
+func (s *RevisionStore) CapacitySnapshot() revisioncapacity.CapacitySnapshot {
+	if s == nil || s.capacity == nil {
+		return revisioncapacity.CapacitySnapshot{}
+	}
+	return s.capacity.Snapshot()
 }
 
 func (s *RevisionStore) rememberLeaseTombstoneLocked(id LeaseID, status leaseStatus) {
@@ -170,55 +274,92 @@ func (s *RevisionStore) rememberLeaseTombstoneLocked(id LeaseID, status leaseSta
 }
 
 func (s *RevisionStore) Close() error {
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return nil
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if !s.localCloseComplete {
+		s.localCloseErr = s.closeLocal()
+		s.localCloseComplete = true
 	}
+	if s.capacityCloseComplete || s.capacity == nil {
+		return s.localCloseErr
+	}
+	capacityErr := s.capacity.Close()
+	if capacityErr == nil {
+		s.capacityCloseComplete = true
+	}
+	return errors.Join(s.localCloseErr, capacityErr)
+}
+
+func (s *RevisionStore) closeLocal() error {
+	s.mu.Lock()
 	s.closed = true
+	s.capacityCancel()
 	attempts := make([]*openAttempt, 0, len(s.opening))
-	admissions := make([]*openAdmission, 0, len(s.opening))
 	for _, attempt := range s.opening {
 		attempts = append(attempts, attempt)
-		if attempt.ownerAdmission != nil {
-			admissions = append(admissions, attempt.ownerAdmission)
-			attempt.ownerAdmission = nil
-		}
 	}
-	s.opening = make(map[catalog.FileID]*openAttempt)
-	cleanups := make([]revisionCleanup, 0, len(s.revisions))
+	idleTokens := make([]revisioncapacity.CandidateToken, 0, len(s.revisions))
+	chargeReleases := make([]capacityChargeRelease, 0)
 	for _, revision := range s.revisions {
+		revision.lifecycleGeneration++
+		if revision.idleToken != "" {
+			idleTokens = append(idleTokens, revision.idleToken)
+			delete(s.idleRevisions, revision.idleToken)
+			revision.idleToken = ""
+		}
 		for _, lease := range revision.leases {
 			if lease.status == leaseActive {
-				lease.status = leaseExpired
-				lease.quota.Release()
-				lease.quota = nil
+				lease.status = leaseEnded
+				chargeReleases = append(chargeReleases, capacityChargeRelease{active: lease.activeCharge})
+				lease.activeCharge = revisioncapacity.ActiveLeaseCharge{}
 			}
-			lease.sessionQuota = nil
+			lease.session = nil
 		}
-		releaseAllSessionHandlesLocked(revision)
+		revision.activeLeases = 0
+		chargeReleases = append(chargeReleases, releaseAllSessionHandlesLocked(revision)...)
 		revision.lifecycle = revisionLifecycleReleased
 		revision.closePending = true
-		if revision.readers == 0 && !revision.closed {
-			revision.closed = true
-			cleanups = append(cleanups, revisionCleanup{source: revision.source, reservation: revision.handleQuota})
-			revision.source = nil
-			revision.handleQuota = nil
-		}
 	}
-	s.revisions = make(map[catalog.FileID]*revisionState)
 	s.leases = make(map[LeaseID]*leaseState)
 	s.mu.Unlock()
-	for _, admission := range admissions {
-		admission.release()
+	for _, token := range idleTokens {
+		s.capacity.WithdrawIdle(token)
 	}
 	for _, attempt := range attempts {
 		attempt.cancel()
 	}
+	var closeErr error
+	for _, release := range chargeReleases {
+		closeErr = errors.Join(closeErr, release.run())
+	}
 	s.openWG.Wait()
+	s.capacityWG.Wait()
 	s.readWG.Wait()
+	closeErr = errors.Join(closeErr, s.capacity.WaitForReclaims())
+	s.mu.Lock()
+	cleanups := make([]revisionCleanup, 0, len(s.revisions))
+	for _, revision := range s.revisions {
+		if revision.source != nil && !revision.closing && !revision.closed {
+			revision.closing = true
+			cleanups = append(cleanups, revisionCleanup{store: s, revision: revision, source: revision.source, stableCharge: revision.handleCharge})
+			revision.source = nil
+			revision.handleCharge = revisioncapacity.StableHandleCharge{}
+		}
+	}
+	s.revisions = make(map[catalog.FileID]*revisionState)
+	s.mu.Unlock()
 	for _, cleanup := range cleanups {
-		cleanup.run()
+		closeErr = errors.Join(closeErr, cleanup.run())
+	}
+	s.mu.Lock()
+	sessions := make([]*revisioncapacity.SessionRegistration, 0, len(s.capacitySessions))
+	for session := range s.capacitySessions {
+		sessions = append(sessions, session)
+	}
+	s.capacitySessions = make(map[*revisioncapacity.SessionRegistration]struct{})
+	s.mu.Unlock()
+	for _, session := range sessions {
+		closeErr = errors.Join(closeErr, session.Close())
 	}
 	s.mu.Lock()
 	metadata := make([]*revisionMetadataReservation, 0, len(s.invalidated))
@@ -230,5 +371,5 @@ func (s *RevisionStore) Close() error {
 	for _, reservation := range metadata {
 		reservation.release()
 	}
-	return nil
+	return closeErr
 }

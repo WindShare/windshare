@@ -155,8 +155,33 @@ func (visitor *encodeVisitorV3) VisitProtocolOperationObserved(
 			return err
 		}
 	}
+	if decision, ok := event.ContentDecision(); ok {
+		payload.ContentDecision, err = projectSenderContentDecision(decision)
+		if err != nil {
+			return err
+		}
+	}
 	visitor.set("protocol_operation", correlation, payload)
 	return nil
+}
+
+func projectSenderContentDecision(
+	decision clievent.SenderContentDecision,
+) (*senderContentDecisionV3, error) {
+	kind, err := nameOf(decision.Kind())
+	if err != nil || !decision.Valid() {
+		return nil, errInvalidSchemaEvent
+	}
+	projected := &senderContentDecisionV3{Kind: kind}
+	if id, ok := decision.CapacityDecisionID(); ok {
+		encoded := id.Hex()
+		projected.CapacityDecisionID = &encoded
+	}
+	if id, ok := decision.LeaseID(); ok {
+		encoded := id.Hex()
+		projected.LeaseID = &encoded
+	}
+	return projected, nil
 }
 
 func projectProtocolFailure(failure clievent.ProtocolFailure) (*ProtocolFailureV1, error) {

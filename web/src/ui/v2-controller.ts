@@ -255,6 +255,12 @@ export class V2ReceiverController {
         selectionErrors: BigInt(progress.selectionErrors),
         failedDirectories: BigInt(progress.failedDirectories),
         contentLanes: progress.contentLanes,
+        capacityWaitingFiles: BigInt(progress.capacityWaitingFiles),
+        capacityAccumulatedWaitMilliseconds: BigInt(
+          progress.capacityAccumulatedWaitMilliseconds,
+        ),
+        capacityWaitAttempts: BigInt(progress.capacityWaitAttempts),
+        capacityWaitVisible: progress.capacityWaitVisible,
       }),
       ...(plan === null
         ? {}
@@ -606,6 +612,10 @@ export class V2ReceiverController {
       contentLanes: progress.contentLanes,
       discovery: progress.discovery,
       failedDirectories: progress.failedDirectories,
+      capacityWaitingFiles: progress.capacityWaitingFiles,
+      capacityAccumulatedWaitMilliseconds: progress.capacityAccumulatedWaitMilliseconds,
+      capacityWaitAttempts: progress.capacityWaitAttempts,
+      capacityWaitVisible: progress.capacityWaitVisible,
       transferJobId: progress.transferJobId,
       ...(progress.outputSessionId === undefined
         ? {}

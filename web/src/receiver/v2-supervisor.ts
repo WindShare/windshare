@@ -26,7 +26,10 @@ import {
 } from '../content/v2-session-services'
 import { V2SessionRuntimeError, type V2LaneChange } from '../session/v2-runtime-types'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
-import type { V2ProtocolSessionIdentity } from '../session/v2-identities'
+import {
+  equalV2DiagnosticIdentities,
+  type V2ProtocolSessionIdentity,
+} from '../session/v2-identities'
 import { encodeBase64Url } from '../crypto/bytes'
 import {
   V2RelayReceiverError,
@@ -252,6 +255,17 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   waitForGenerationAfter(generationId: number, signal?: AbortSignal): Promise<void> {
     return this.#waitForGenerationAfter(generationId, signal)
+  }
+
+  waitForProtocolSessionReplacement(
+    issuingIdentity: V2ProtocolSessionIdentity,
+    signal: AbortSignal,
+  ): Promise<void> {
+    signal.throwIfAborted()
+    if (!equalV2DiagnosticIdentities(issuingIdentity, this.#current.session.protocolSessionIdentity)) {
+      return Promise.resolve()
+    }
+    return this.#waitForGenerationAfter(this.#current.id, signal)
   }
 
   subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
