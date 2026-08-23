@@ -23,6 +23,8 @@ type Visitor interface {
 	VisitSenderSessionTerminated(SenderSessionTerminated) error
 	VisitCatalogStorageObserved(CatalogStorageObserved) error
 	VisitRootPrefetchObserved(RootPrefetchObserved) error
+	VisitSenderCapacityObserved(SenderCapacityObserved) error
+	VisitSenderRevisionObserved(SenderRevisionObserved) error
 	VisitProtocolOperationObserved(ProtocolOperationObserved) error
 	VisitLaneSettlementObserved(LaneSettlementObserved) error
 	VisitObserverLossObserved(ObserverLossObserved) error
@@ -200,6 +202,22 @@ func acceptRootPrefetchObserved(visitor Visitor, value RootPrefetchObserved) err
 		return ErrInvalidEvent
 	}
 	return visitor.VisitRootPrefetchObserved(value)
+}
+
+func acceptSenderCapacityObserved(visitor Visitor, value SenderCapacityObserved) error {
+	if visitor == nil || !validSenderCapacitySpec(value.spec) {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitSenderCapacityObserved(value)
+}
+
+func acceptSenderRevisionObserved(visitor Visitor, value SenderRevisionObserved) error {
+	if visitor == nil || !validSenderRevisionObserved(
+		value.stage, value.cause, value.revision, value.lease, value.session,
+	) {
+		return ErrInvalidEvent
+	}
+	return visitor.VisitSenderRevisionObserved(value)
 }
 
 func acceptProtocolOperationObserved(visitor Visitor, value ProtocolOperationObserved) error {

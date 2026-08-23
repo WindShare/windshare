@@ -14,6 +14,7 @@ import (
 	"github.com/coder/websocket"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
@@ -64,19 +65,27 @@ func newRegistrationContractFixture(tb testing.TB) (registrationContractFixture,
 	// while using the real descriptor prevents a toy payload from understating
 	// the production registration transcript.
 	root := tb.TempDir()
-	prepared, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{
-		Paths: []string{root}, Relays: []string{registrationCapabilityRelayURL},
-		ChunkSize: catalog.DefaultChunkSize, Random: &registrationContractRandom{},
-		Now: func() time.Time { return time.Unix(1_700_000_000, 0) },
-	})
+	capacityOwner, err := revisioncapacity.NewProcessOwner(revisioncapacity.DefaultProcessConfig())
 	if err != nil {
 		return registrationContractFixture{}, err
 	}
+	prepared, err := liveshare.PrepareSender(context.Background(), liveshare.SenderConfig{
+		Paths: []string{root}, Relays: []string{registrationCapabilityRelayURL},
+		ChunkSize: catalog.DefaultChunkSize, Random: &registrationContractRandom{},
+		Now:              func() time.Time { return time.Unix(1_700_000_000, 0) },
+		RevisionCapacity: capacityOwner.Coordinator(),
+	})
+	if err != nil {
+		return registrationContractFixture{}, errors.Join(err, capacityOwner.Close())
+	}
 	if err := prepared.AuthorizeRegistration(); err != nil {
-		return registrationContractFixture{}, errors.Join(err, prepared.Close())
+		return registrationContractFixture{}, errors.Join(err, prepared.Close(), capacityOwner.Close())
 	}
 	material := prepared.Registration()
 	if err := prepared.Close(); err != nil {
+		return registrationContractFixture{}, errors.Join(err, capacityOwner.Close())
+	}
+	if err := capacityOwner.Close(); err != nil {
 		return registrationContractFixture{}, err
 	}
 	privateKey := material.SenderPrivateKey

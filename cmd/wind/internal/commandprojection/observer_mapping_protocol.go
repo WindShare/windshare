@@ -23,6 +23,7 @@ var protocolOperationStageProjections = map[sessionruntime.ProtocolOperationStag
 	sessionruntime.ProtocolOperationReceiverEnded:         clievent.ProtocolOperationReceiverEnded,
 	sessionruntime.ProtocolOperationSenderRequestReceived: clievent.ProtocolOperationSenderRequestReceived,
 	sessionruntime.ProtocolOperationSenderResponseSettled: clievent.ProtocolOperationSenderResponseSettled,
+	sessionruntime.ProtocolOperationSenderContentDecision: clievent.ProtocolOperationSenderContentDecision,
 }
 
 var protocolMessageKindProjections = map[protocolsession.MessageKind]clievent.ProtocolMessageKind{

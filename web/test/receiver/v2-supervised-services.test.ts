@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
   type V2BlockRouteEligibility,
@@ -8,8 +9,10 @@ import {
   type V2LaneSet,
   type V2RouteAuthorizedBlockRangeReader,
 } from '../../src/content/v2-broker'
+import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
 import {
   type V2OpenedRevision,
+  V2RevisionCapacityBusyError,
   V2RevisionChangedDuringRecoveryError,
   type V2RevisionService,
 } from '../../src/content/v2-session-services'
@@ -26,6 +29,10 @@ import {
   V2SupervisedContent,
 } from '../../src/receiver/v2-supervised-content'
 import { V2SupervisedConnectivity } from '../../src/receiver/v2-supervised-connectivity'
+import {
+  createV2ProtocolOperationIdentity,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
 
 interface GenerationFixture {
   readonly generation: V2ContentGeneration
@@ -116,6 +123,27 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
+function capacityBusyError(retryAfterMilliseconds = 400): V2RevisionCapacityBusyError {
+  const failure = Object.freeze({
+    code: V2_REVISION_CODE_QUOTA,
+    retryable: true,
+    retryAfterMilliseconds,
+  })
+  const protocolFailure = createProtocolFailure({
+    requestKind: 'open_revisions',
+    wireScope: 'revision',
+    wireCode: failure.code,
+    retryable: failure.retryable,
+    retryAfterMilliseconds: failure.retryAfterMilliseconds,
+    settlement: Object.freeze({ kind: 'received_authenticated' }),
+    correlation: Object.freeze({
+      protocolSessionId: createV2ProtocolSessionIdentity(identity(30)),
+      protocolOperationId: createV2ProtocolOperationIdentity(identity(31)),
+    }),
+  })
+  return new V2RevisionCapacityBusyError(failure, protocolFailure)
+}
+
 function revision(revisionSeed = 3): V2FileRevisionDescriptor {
   return Object.freeze({
     shareInstance: identity(1),
@@ -133,6 +161,7 @@ function generationFixture(
   id: number,
   descriptor: V2FileRevisionDescriptor,
   serve: (range: ByteRange) => AsyncGenerator<V2BlockSlice>,
+  openRevision?: () => Promise<V2OpenedRevision>,
 ): GenerationFixture {
   const fixture = {
     opens: 0,
@@ -143,6 +172,7 @@ function generationFixture(
   const revisions = {
     open: async (): Promise<V2OpenedRevision> => {
       fixture.opens += 1
+      if (openRevision !== undefined) return openRevision()
       const leaseId = identity(20 + id + fixture.opens)
       return {
         descriptor,
@@ -225,6 +255,52 @@ describe('v2 supervised content generations', () => {
     await opened.release()
     expect(first.releases).toBe(0)
     expect(second.releases).toBe(1)
+    content.close()
+  })
+
+  it('preserves capacity authority when a mid-range generation reopen is busy', async () => {
+    const stable = revision()
+    const capacity = capacityBusyError(425)
+    const first = generationFixture(1, stable, async function* (range) {
+      expect(range).toEqual(byteRange(0n, 4n))
+      yield { offset: 0n, data: Uint8Array.of(1, 2) }
+      throw new V2BlockLaneAttemptsError([new Error('generation lost after partial delivery')])
+    })
+    const second = generationFixture(
+      2,
+      stable,
+      async function* () {
+        yield* ([] as V2BlockSlice[])
+      },
+      async () => Promise.reject(capacity),
+    )
+    const provider = new SwitchingGenerationProvider(first.generation, second.generation)
+    const content = new V2SupervisedContent(
+      provider,
+      (length) => new Uint8Array(length).fill(8),
+    )
+    const scoped = content.forRoutes(new V2ConnectivityRouteAuthority())
+    const opened = await scoped.revisions.open(stable.fileId)
+    const reader = scoped.broker.readRange(
+      opened.descriptor,
+      opened.leaseId,
+      byteRange(0n, 4n),
+    )
+
+    await expect(reader.next()).resolves.toMatchObject({
+      done: false,
+      value: { offset: 0n, data: Uint8Array.of(1, 2) },
+    })
+    await expect(reader.next()).rejects.toBe(capacity)
+    expect(capacity.retryAfterMilliseconds).toBe(425)
+    expect(provider.recoveries).toBe(1)
+    expect(first.opens).toBe(1)
+    expect(second.opens).toBe(1)
+    expect(second.ranges).toHaveLength(0)
+    expect(first.releases).toBe(0)
+    expect(second.releases).toBe(0)
+
+    await opened.release()
     content.close()
   })
 

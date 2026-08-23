@@ -55,7 +55,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"catalog cause", int(CatalogStorageCauseNone), int(CatalogStorageCauseUnexpected), func(value int) (string, bool) { return CatalogStorageCause(value).Name() }},
 		{"root prefetch", int(RootPrefetchAttemptStarted), int(RootPrefetchStopped), func(value int) (string, bool) { return RootPrefetchDecision(value).Name() }},
 		{"protocol role", int(ProtocolRoleReceiver), int(ProtocolRoleSender), func(value int) (string, bool) { return ProtocolRole(value).Name() }},
-		{"protocol operation stage", int(ProtocolOperationReceiverCompleted), int(ProtocolOperationSenderResponseSettled), func(value int) (string, bool) { return ProtocolOperationStage(value).Name() }},
+		{"protocol operation stage", int(ProtocolOperationReceiverCompleted), int(ProtocolOperationSenderContentDecision), func(value int) (string, bool) { return ProtocolOperationStage(value).Name() }},
 		{"protocol message", int(ProtocolMessageListChildren), int(ProtocolMessagePeerCandidate), func(value int) (string, bool) { return ProtocolMessageKind(value).Name() }},
 		{"protocol send outcome", int(ProtocolSendUnknown), int(ProtocolSendDropped), func(value int) (string, bool) { return ProtocolSendOutcome(value).Name() }},
 		{"protocol operation cause", int(ProtocolOperationCauseNone), int(ProtocolOperationCauseProtocolFailure), func(value int) (string, bool) { return ProtocolOperationCause(value).Name() }},

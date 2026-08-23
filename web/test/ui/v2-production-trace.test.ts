@@ -257,6 +257,75 @@ describe('browser diagnostics production composition', () => {
     })
   })
 
+  it('projects complete capacity scheduling progress independently from file outcomes', () => {
+    const projected = projectV2ReceiverTraceEvent(Object.freeze({
+      name: 'transfer_progress',
+      discoveredFiles: 2n,
+      discoveredBytes: 10n,
+      writtenBytes: 4n,
+      completedFiles: 1n,
+      completedBytes: 4n,
+      fileErrors: 0n,
+      selectionErrors: 0n,
+      failedDirectories: 0n,
+      capacityWaitingFiles: 1n,
+      capacityAccumulatedWaitMilliseconds: 125,
+      capacityWaitAttempts: 2n,
+      capacityWaitVisible: true,
+      contentLanes: 2,
+      discovery: 'open',
+      partial: false,
+    }))
+
+    expect(projected.payload).toMatchObject({
+      capacity_waiting_files: '1',
+      capacity_accumulated_wait_ms: '125',
+      capacity_wait_attempts: '2',
+      capacity_wait_visible: true,
+      file_errors: '0',
+      partial: false,
+    })
+  })
+
+  it('exports authenticated capacity retry scheduling without file or path data', () => {
+    const projected = projectV2ReceiverTraceEvent(Object.freeze({
+      name: 'receive_transition',
+      transition: 'capacity_retry_scheduled',
+      capacityWaitId: 'BwAAAAAAAAAAAAAAAAAAAA',
+      capacitySurface: 'revision_open',
+      receiveOperationId: 'BQAAAAAAAAAAAAAAAAAAAA',
+      transferJobId: 'BgAAAAAAAAAAAAAAAAAAAA',
+      protocolSessionId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      protocolOperationId: 'AgAAAAAAAAAAAAAAAAAAAA',
+      attempt: 2n,
+      senderHintMilliseconds: 300,
+      jitterMilliseconds: 17,
+      delayMilliseconds: 317,
+      accumulatedWaitMilliseconds: 125,
+      activeWaiters: 2,
+    }))
+
+    expect(projected).toEqual({
+      eventName: 'receive_transition',
+      payload: {
+        transition: 'capacity_retry_scheduled',
+        capacity_wait_id: 'BwAAAAAAAAAAAAAAAAAAAA',
+        capacity_surface: 'revision_open',
+        receive_operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+        transfer_job_id: 'BgAAAAAAAAAAAAAAAAAAAA',
+        protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+        protocol_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+        attempt: '2',
+        sender_hint_ms: 300,
+        jitter_ms: 17,
+        delay_ms: 317,
+        accumulated_wait_ms: 125,
+        active_waiters: 2,
+      },
+    })
+    expect(JSON.stringify(projected)).not.toMatch(/file|path/iu)
+  })
+
   it('retains and exports an incident even when the console sink throws', () => {
     const error = vi.fn(() => {
       throw new Error('console unavailable')

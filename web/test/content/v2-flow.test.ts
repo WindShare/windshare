@@ -7,6 +7,7 @@ import {
   V2FragmentAssembler,
   V2_LEASE_RENEW_AFTER_MILLISECONDS,
   V2_LEASE_TTL_MILLISECONDS,
+  V2_REVISION_CODE_QUOTA,
   V2_REVISION_RETRY_MAXIMUM_MILLISECONDS,
 } from '../../src/content/v2-flow'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
@@ -21,17 +22,35 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 describe('v2 content result frozen bounds', () => {
   const fileId = identity(1)
 
-  it('accepts revision retry delays only from 1 through 30000 milliseconds', () => {
-    const failedOpen = (delay: number) => encodeCanonicalCbor(new Map<number, unknown>([
-      [0, 1],
-      [1, [[fileId, 1, 0x3005, true, delay]]],
-    ]))
-    expect(() => decodeV2OpenResults(failedOpen(0), fileId)).toThrow(/frozen range/i)
-    expect(
-      decodeV2OpenResults(failedOpen(V2_REVISION_RETRY_MAXIMUM_MILLISECONDS), fileId)
-        .failure?.retryAfterMilliseconds,
-    ).toBe(V2_REVISION_RETRY_MAXIMUM_MILLISECONDS)
-    expect(() => decodeV2OpenResults(failedOpen(30_001), fileId)).toThrow(/frozen range/i)
+  it('preserves the exact quota tuple while enforcing the frozen retry bounds', () => {
+    const failedOpen = (code: number, delay: number) => encodeCanonicalCbor(
+      new Map<number, unknown>([
+        [0, 1],
+        [1, [[fileId, 1, code, true, delay]]],
+      ]),
+    )
+    expect(() => decodeV2OpenResults(
+      failedOpen(V2_REVISION_CODE_QUOTA, 0),
+      fileId,
+    )).toThrow(/frozen range/i)
+    expect(decodeV2OpenResults(
+      failedOpen(V2_REVISION_CODE_QUOTA, V2_REVISION_RETRY_MAXIMUM_MILLISECONDS),
+      fileId,
+    ).failure).toEqual({
+      code: V2_REVISION_CODE_QUOTA,
+      retryable: true,
+      retryAfterMilliseconds: V2_REVISION_RETRY_MAXIMUM_MILLISECONDS,
+    })
+    expect(() => decodeV2OpenResults(
+      failedOpen(V2_REVISION_CODE_QUOTA, 30_001),
+      fileId,
+    )).toThrow(/frozen range/i)
+
+    expect(decodeV2OpenResults(failedOpen(0x3001, 25), fileId).failure).toEqual({
+      code: 0x3001,
+      retryable: true,
+      retryAfterMilliseconds: 25,
+    })
   })
 
   it('requires exact authenticated lease timing', () => {

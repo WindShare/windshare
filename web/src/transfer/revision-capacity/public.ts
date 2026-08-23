@@ -1,0 +1,17 @@
+export {
+  V2_REVISION_CAPACITY_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
+  V2_REVISION_CAPACITY_MAXIMUM_ADDITIVE_JITTER_LIMIT_MILLISECONDS,
+  V2_REVISION_CAPACITY_MAXIMUM_VISIBILITY_THRESHOLD_MILLISECONDS,
+  V2_REVISION_CAPACITY_MAXIMUM_WAIT_BUDGET_MILLISECONDS,
+  V2_REVISION_CAPACITY_VISIBILITY_THRESHOLD_MILLISECONDS,
+  V2_REVISION_CAPACITY_WAIT_BUDGET_MILLISECONDS,
+  V2RevisionCapacityCoordinator,
+  V2RevisionCapacityWaitBudgetError,
+  type V2ProtocolSessionReplacementWaiter,
+  type V2RevisionCapacityClock,
+  type V2RevisionCapacityCoordinatorOptions,
+  type V2RevisionCapacityPolicyOptions,
+  type V2RevisionCapacitySurface,
+  type V2RevisionCapacityTrace,
+  type V2RevisionCapacityWaitSnapshot,
+} from './coordinator'

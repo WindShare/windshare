@@ -1,6 +1,9 @@
 package clievent
 
-import "errors"
+import (
+	"errors"
+	"time"
+)
 
 var ErrInvalidProgress = errors.New("CLI receive progress is invalid")
 
@@ -30,24 +33,35 @@ type ProgressSpec struct {
 	VerifiedBytes      uint64
 	NewlyVerifiedBytes uint64
 	FileOutcomes       FileOutcomes
-	Discovery          DiscoveryStatus
-	CountersExact      bool
+	// Capacity pressure is receiver scheduling state, not file settlement, so it
+	// must remain outside the exact counter relationships above.
+	CapacityActiveWaiters   uint32
+	CapacityAccumulatedWait time.Duration
+	CapacityWaitAttempts    uint64
+	CapacityWaitVisible     bool
+	Discovery               DiscoveryStatus
+	CountersExact           bool
 }
 
 type ProgressSnapshot struct {
-	discoveredFiles    uint64
-	discoveredBytes    uint64
-	publishedFiles     uint64
-	publishedBytes     uint64
-	verifiedBytes      uint64
-	newlyVerifiedBytes uint64
-	fileOutcomes       FileOutcomes
-	discovery          DiscoveryStatus
-	countersExact      bool
+	discoveredFiles         uint64
+	discoveredBytes         uint64
+	publishedFiles          uint64
+	publishedBytes          uint64
+	verifiedBytes           uint64
+	newlyVerifiedBytes      uint64
+	fileOutcomes            FileOutcomes
+	capacityActiveWaiters   uint32
+	capacityAccumulatedWait time.Duration
+	capacityWaitAttempts    uint64
+	capacityWaitVisible     bool
+	discovery               DiscoveryStatus
+	countersExact           bool
 }
 
 func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
-	if !spec.Discovery.Valid() {
+	if !spec.Discovery.Valid() || spec.CapacityAccumulatedWait < 0 ||
+		(spec.CapacityWaitVisible && spec.CapacityActiveWaiters == 0) {
 		return ProgressSnapshot{}, ErrInvalidProgress
 	}
 	if spec.CountersExact {
@@ -68,8 +82,13 @@ func NewProgressSnapshot(spec ProgressSpec) (ProgressSnapshot, error) {
 		discoveredFiles: spec.DiscoveredFiles, discoveredBytes: spec.DiscoveredBytes,
 		publishedFiles: spec.PublishedFiles, publishedBytes: spec.PublishedBytes,
 		verifiedBytes: spec.VerifiedBytes, newlyVerifiedBytes: spec.NewlyVerifiedBytes,
-		fileOutcomes: spec.FileOutcomes, discovery: spec.Discovery,
-		countersExact: spec.CountersExact,
+		fileOutcomes:            spec.FileOutcomes,
+		capacityActiveWaiters:   spec.CapacityActiveWaiters,
+		capacityAccumulatedWait: spec.CapacityAccumulatedWait,
+		capacityWaitAttempts:    spec.CapacityWaitAttempts,
+		capacityWaitVisible:     spec.CapacityWaitVisible,
+		discovery:               spec.Discovery,
+		countersExact:           spec.CountersExact,
 	}, nil
 }
 
@@ -91,6 +110,16 @@ func (snapshot ProgressSnapshot) PublishedBytes() uint64     { return snapshot.p
 func (snapshot ProgressSnapshot) VerifiedBytes() uint64      { return snapshot.verifiedBytes }
 func (snapshot ProgressSnapshot) NewlyVerifiedBytes() uint64 { return snapshot.newlyVerifiedBytes }
 func (snapshot ProgressSnapshot) FileOutcomes() FileOutcomes { return snapshot.fileOutcomes }
+func (snapshot ProgressSnapshot) CapacityActiveWaiters() uint32 {
+	return snapshot.capacityActiveWaiters
+}
+func (snapshot ProgressSnapshot) CapacityAccumulatedWait() time.Duration {
+	return snapshot.capacityAccumulatedWait
+}
+func (snapshot ProgressSnapshot) CapacityWaitAttempts() uint64 {
+	return snapshot.capacityWaitAttempts
+}
+func (snapshot ProgressSnapshot) CapacityWaitVisible() bool  { return snapshot.capacityWaitVisible }
 func (snapshot ProgressSnapshot) Discovery() DiscoveryStatus { return snapshot.discovery }
 func (snapshot ProgressSnapshot) CountersExact() bool        { return snapshot.countersExact }
 func (snapshot ProgressSnapshot) Valid() bool {
@@ -98,8 +127,13 @@ func (snapshot ProgressSnapshot) Valid() bool {
 		DiscoveredFiles: snapshot.discoveredFiles, DiscoveredBytes: snapshot.discoveredBytes,
 		PublishedFiles: snapshot.publishedFiles, PublishedBytes: snapshot.publishedBytes,
 		VerifiedBytes: snapshot.verifiedBytes, NewlyVerifiedBytes: snapshot.newlyVerifiedBytes,
-		FileOutcomes: snapshot.fileOutcomes, Discovery: snapshot.discovery,
-		CountersExact: snapshot.countersExact,
+		FileOutcomes:            snapshot.fileOutcomes,
+		CapacityActiveWaiters:   snapshot.capacityActiveWaiters,
+		CapacityAccumulatedWait: snapshot.capacityAccumulatedWait,
+		CapacityWaitAttempts:    snapshot.capacityWaitAttempts,
+		CapacityWaitVisible:     snapshot.capacityWaitVisible,
+		Discovery:               snapshot.discovery,
+		CountersExact:           snapshot.countersExact,
 	})
 	return err == nil
 }

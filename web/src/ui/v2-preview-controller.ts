@@ -1,5 +1,6 @@
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import { V2RemoteOperationError } from '../content/v2-session-operations'
+import { V2RemoteRevisionError } from '../content/v2-session-services'
 import { unclassifiedFailureFact } from '../diagnostics/incident/fact'
 import {
   excludedPresentationDecision,
@@ -366,11 +367,11 @@ export class V2PreviewController {
       active.seekAttempt?.attempt ??
       active.mediaAttempt?.attempt ??
       active.openAttempt
+    const authenticatedFailure = authenticatedPreviewFailureFact(error)
     try {
       attempt.scope?.facts.record(
-        error instanceof V2RemoteOperationError
-          ? error.failureFact
-          : unclassifiedFailureFact({
+        authenticatedFailure ??
+          unclassifiedFailureFact({
               stage: 'cleanup',
               recoveryDisposition: 'none',
             }),
@@ -401,11 +402,11 @@ export class V2PreviewController {
   ): void {
     const scope = attempt.scope
     if (scope === undefined || attempt.decisionSettled) return
+    const authenticatedFailure = authenticatedPreviewFailureFact(error)
     try {
       const trigger = scope.facts.record(
-        error instanceof V2RemoteOperationError
-          ? error.failureFact
-          : unclassifiedFailureFact({
+        authenticatedFailure ??
+          unclassifiedFailureFact({
               stage,
               recoveryDisposition: 'none',
             }),
@@ -459,4 +460,10 @@ export class V2PreviewController {
   #publishPreview(preview: V2ReceiverSnapshot['preview']): void {
     this.#host.publish({ ...this.#host.snapshot(), preview })
   }
+}
+
+function authenticatedPreviewFailureFact(error: unknown) {
+  return error instanceof V2RemoteOperationError || error instanceof V2RemoteRevisionError
+    ? error.failureFact
+    : undefined
 }

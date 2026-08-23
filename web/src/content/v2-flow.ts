@@ -22,6 +22,7 @@ export const V2_LEASE_TTL_MILLISECONDS = 120_000
 export const V2_LEASE_RENEW_AFTER_MILLISECONDS = 60_000
 export const V2_REVISION_RETRY_MINIMUM_MILLISECONDS = 1
 export const V2_REVISION_RETRY_MAXIMUM_MILLISECONDS = 30_000
+export const V2_REVISION_CODE_QUOTA = 0x3005
 
 export interface V2OpenResult {
   readonly fileId: Uint8Array<ArrayBuffer>

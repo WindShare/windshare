@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 func newGetReportingRuntime(t *testing.T, interactive, verbose bool) (*commandRuntime, *bytes.Buffer) {
@@ -47,7 +48,7 @@ func newGetReportingCompletion(t *testing.T, result transfer.JobResult) getTrans
 	if err != nil {
 		t.Fatal(err)
 	}
-	progress, err := commandprojection.ProjectTransferProgress(receiveID, jobID, result.Progress)
+	progress, err := commandprojection.ProjectTransferProgress(receiveID, jobID, result.Progress, false)
 	if err != nil {
 		progress, err = commandprojection.ProjectTransferProgress(
 			receiveID,
@@ -56,6 +57,7 @@ func newGetReportingCompletion(t *testing.T, result transfer.JobResult) getTrans
 				Discovery:     transfer.DiscoveryComplete,
 				CountersExact: true,
 			},
+			false,
 		)
 	}
 	if err != nil {
@@ -182,6 +184,41 @@ func TestGetNonSuccessNeverUsesCompletedWordingAndKeepsOutcomeCounts(t *testing.
 	}
 }
 
+func TestGetCapacityBudgetPauseReportsResumableJobWithoutFileFailure(t *testing.T) {
+	runtime, stderr := newGetReportingRuntime(t, false, false)
+	settlement, err := transfer.NewDirectTreeSettlement(transfer.DirectTreeSettlementPaused)
+	if err != nil {
+		t.Fatal(err)
+	}
+	faultValue, err := transferfault.NewSession(
+		transferfault.ScopeOutputPause,
+		transferfault.SessionResourceBudget,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := transfer.JobResult{
+		Outcome: transfer.DirectTreeOutcomePaused, Settlement: settlement,
+		TerminationFault: faultValue,
+		Progress: transfer.ReceiveProgressSnapshot{
+			Discovery: transfer.DiscoveryComplete, CountersExact: true,
+			CapacityWait: revisionwait.Snapshot{
+				AccumulatedWait: revisionwait.DefaultWaitBudget, Attempts: 4,
+			},
+		},
+	}
+	code := (&App{}).reportTransferResultWithAdmission(
+		t.Context(), newGetReportingCompletion(t, result), nil, nil, nil,
+		t.TempDir(), false, runtime.Clock().Now(), getObservation{runtime: runtime},
+	)
+	runtime.Close()
+	output := stderr.String()
+	if code != ExitFailure || !strings.Contains(output, "Download paused") ||
+		!strings.Contains(output, "0 downloaded") || strings.Contains(output, "1 failed") {
+		t.Fatalf("capacity-budget pause exit=%d output=%q", code, output)
+	}
+}
+
 func TestGetResultIntegrationPreservesEveryNonSuccessExitClass(t *testing.T) {
 	driftFault, err := transferfault.NewSource(
 		transferfault.ScopeFileLocal,
@@ -270,6 +307,46 @@ func TestGetProgressProjectsVerifiedAndNewBytesWithoutLegacyMeasure(t *testing.T
 	output := stderr.String()
 	if strings.Contains(output, "%") || !strings.Contains(output, "Discovering") || !strings.Contains(output, "10 B ready") {
 		t.Fatalf("open discovery progress=%q", output)
+	}
+}
+
+func TestGetCapacityWaitVisibilityUsesInjectedCommandClockAndClears(t *testing.T) {
+	startedAt := time.Date(2026, 8, 23, 1, 2, 3, 0, time.UTC)
+	visibleAfter := startedAt.Add(revisionwait.DefaultVisibilityThreshold)
+	waiting := revisionwait.Snapshot{
+		ActiveWaiters: 1, ActiveSince: startedAt, VisibleAfter: visibleAfter,
+		AccumulatedWait: revisionwait.DefaultVisibilityThreshold, Attempts: 1,
+	}
+
+	hidden := getObservation{runtime: &commandRuntime{clock: &fakeCommandClock{
+		now: visibleAfter.Add(-time.Nanosecond),
+	}}}
+	if hidden.capacityWaitVisible(waiting) {
+		t.Fatal("capacity wait became visible before the anti-flicker threshold")
+	}
+
+	visible := getObservation{runtime: &commandRuntime{clock: &fakeCommandClock{now: visibleAfter}}}
+	if !visible.capacityWaitVisible(waiting) {
+		t.Fatal("capacity wait remained hidden at the anti-flicker threshold")
+	}
+
+	cleared := waiting
+	cleared.ActiveWaiters = 0
+	cleared.ActiveSince = time.Time{}
+	cleared.VisibleAfter = time.Time{}
+	for _, transition := range []string{
+		"retry success", "cancellation", "capacity-budget pause", "runtime end",
+	} {
+		t.Run(transition, func(t *testing.T) {
+			if visible.capacityWaitVisible(cleared) {
+				t.Fatalf("capacity wait remained visible after %s", transition)
+			}
+		})
+	}
+	if (getObservation{}).capacityWaitVisible(revisionwait.Snapshot{
+		ActiveWaiters: 1, VisibleAfter: startedAt,
+	}) {
+		t.Fatal("observation without a runtime clock projected stale waiting state")
 	}
 }
 

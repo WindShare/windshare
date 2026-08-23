@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/content/revisioncapacity"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
@@ -36,7 +37,8 @@ func TestPreparedSenderAndReceiverOwnSuite02Bootstrap(t *testing.T) {
 		t.Fatal(err)
 	}
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +129,8 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(err)
 	}
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{root}, Relays: []string{"ws://127.0.0.1:8484"}, ChunkSize: catalog.MinChunkSize,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -171,6 +174,10 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 		t.Fatal(acceptedResult.err)
 	}
 	defer acceptedResult.runtime.Close()
+	capacitySessions := sender.revisionStore.CapacitySnapshot().Sessions()
+	if len(capacitySessions) != 1 || capacitySessions[0].Limits() != revisioncapacity.DefaultSessionLimits() {
+		t.Fatalf("authenticated sender session capacity = %+v", capacitySessions)
+	}
 	outputFixture := testoutputroot.New(t)
 	outputRoot := outputFixture.RootPath
 	output, err := osfs.NewFilesystemOutputAuthority(osfs.FilesystemOutputAuthorityConfig{
@@ -413,7 +420,8 @@ func TestPrepareSenderClosesEveryPartiallyBuiltAuthority(t *testing.T) {
 	for _, available := range []int{0, 32, 48, 64, 80, 96, 112, 124} {
 		t.Run(fmt.Sprintf("random-bytes-%d", available), func(t *testing.T) {
 			if sender, err := PrepareSender(context.Background(), SenderConfig{
-				Paths: []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
+				RevisionCapacity: newTestRevisionCapacity(t),
+				Paths:            []string{filename}, Relays: []string{"ws://127.0.0.1:8484"},
 				ChunkSize: catalog.MinChunkSize, Random: &budgetReader{remaining: available},
 			}); err == nil {
 				_ = sender.Close()
@@ -430,12 +438,14 @@ func TestPrepareSenderClosesEveryPartiallyBuiltAuthority(t *testing.T) {
 		t.Fatal("cancelled preparation was accepted")
 	}
 	if _, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{filename}, Relays: []string{"ws://relay"}, ChunkSize: catalog.MinChunkSize + 1,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename}, Relays: []string{"ws://relay"}, ChunkSize: catalog.MinChunkSize + 1,
 	}); err == nil {
 		t.Fatal("invalid chunk geometry was accepted")
 	}
 	if _, err := PrepareSender(context.Background(), SenderConfig{
-		Paths: []string{filename}, Relays: []string{"ws://relay"}, Now: func() time.Time { return time.Unix(-1, 0) },
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename}, Relays: []string{"ws://relay"}, Now: func() time.Time { return time.Unix(-1, 0) },
 	}); err == nil {
 		t.Fatal("non-portable descriptor creation time was accepted")
 	}

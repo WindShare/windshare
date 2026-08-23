@@ -56,12 +56,13 @@ func TestPrepareSenderWiresSharedCacheAndRevisionIdentityAuthorities(t *testing.
 	}
 	tracer := &preparationRevisionTracer{}
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths:          []string{filename},
-		Relays:         []string{"ws://127.0.0.1:8484"},
-		ChunkSize:      catalog.MinChunkSize,
-		Random:         mathrand.New(mathrand.NewSource(71)),
-		RevisionTracer: tracer,
-		preparation:    dependencies,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename},
+		Relays:           []string{"ws://127.0.0.1:8484"},
+		ChunkSize:        catalog.MinChunkSize,
+		Random:           mathrand.New(mathrand.NewSource(71)),
+		RevisionTracer:   tracer,
+		preparation:      dependencies,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -132,11 +133,12 @@ func TestPrepareSenderRollbackDestroysRevisionIdentityAuthority(t *testing.T) {
 	}
 
 	sender, err := PrepareSender(context.Background(), SenderConfig{
-		Paths:       []string{filename},
-		Relays:      []string{"ws://127.0.0.1:8484"},
-		ChunkSize:   catalog.MinChunkSize,
-		Random:      mathrand.New(mathrand.NewSource(73)),
-		preparation: dependencies,
+		RevisionCapacity: newTestRevisionCapacity(t),
+		Paths:            []string{filename},
+		Relays:           []string{"ws://127.0.0.1:8484"},
+		ChunkSize:        catalog.MinChunkSize,
+		Random:           mathrand.New(mathrand.NewSource(73)),
+		preparation:      dependencies,
 	})
 	if sender != nil || !errors.Is(err, lateFailure) {
 		t.Fatalf("late preparation result = %v, %v", sender, err)
