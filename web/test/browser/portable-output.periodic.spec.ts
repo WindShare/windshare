@@ -5,6 +5,9 @@ import { ZIP_OUTPUT_METADATA_BUFFER_BYTES } from '../../src/output/streams/zip-o
 const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
 const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
 const WEEKLY_MILLION_MEMBER_WRITER_TIMEOUT_MILLISECONDS = 150_000
+const WEEKLY_MILLION_MEMBER_PROGRESS_KIND = 'weekly-million-member-zip-progress'
+// These storage probes need a same-origin document, not product-shell rendering work.
+const BROWSER_CONTRACT_HOST_PATH = '/test/browser/contract-host.html'
 
 test('streams one million ZIP members through the production writer and durable spool', async ({
   browserName,
@@ -14,7 +17,13 @@ test('streams one million ZIP members through the production writer and durable 
   // structural stress avoids tripling a deliberately million-entry browser gate.
   test.skip(browserName !== 'chromium', 'The million-member structural stress runs once in Chromium')
   test.setTimeout(WEEKLY_MILLION_MEMBER_WRITER_TIMEOUT_MILLISECONDS)
-  await page.goto('/')
+  page.on('console', (message) => {
+    const text = message.text()
+    if (message.type() === 'info' && text.includes(WEEKLY_MILLION_MEMBER_PROGRESS_KIND)) {
+      console.info(text)
+    }
+  })
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async () => {
     const probePath = '/test/browser/portable-output-periodic-probe.ts'
     const probe = await import(probePath) as typeof import('./portable-output-periodic-probe')
@@ -46,7 +55,7 @@ test('assembles the exact portable ceiling and rejects the first over-limit admi
   page,
 }) => {
   test.setTimeout(120_000)
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const stressBytes = browserName === 'chromium'
     ? FULL_PORTABLE_STRESS_BYTES
     : CROSS_ENGINE_PORTABLE_STRESS_BYTES
