@@ -10,6 +10,8 @@ const DIGEST_BYTES = 32
 const RECEIVE_INTENT_DIGEST_SEED = 1
 const ARTIFACT_DIGEST_SEED = 2
 const DISCOVERY_LEDGER_DIGEST_SEED = 3
+const PROGRESS_ENTRY_INTERVAL = 100_000
+const PROGRESS_EVENT_KIND = 'weekly-million-member-zip-progress'
 
 export interface MillionMemberZipProbe {
   readonly memberCount: number
@@ -24,6 +26,7 @@ export interface MillionMemberZipProbe {
 }
 
 export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipProbe> {
+  const startedAtMilliseconds = performance.now()
   const databaseName = `million-writer-${crypto.randomUUID()}`
   let outputBytes = 0
   let outputWrites = 0
@@ -57,12 +60,19 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
     })
     const member = await archive.beginFile(plan)
     await member.close()
+    const completedEntries = index + 2
+    if (completedEntries % PROGRESS_ENTRY_INTERVAL === 0) {
+      reportProgress('entries', completedEntries, startedAtMilliseconds)
+    }
   }
+  reportProgress('discovery-complete', MILLION_MEMBER_COUNT, startedAtMilliseconds)
   ledger.completeDiscovery(probeDigest(DISCOVERY_LEDGER_DIGEST_SEED))
   const sealedPlan = await ledger.seal()
+  reportProgress('layout-sealed', MILLION_MEMBER_COUNT, startedAtMilliseconds)
   const beforeClose = await countStores(databaseName)
   const outputWritesBeforeClose = outputWrites
   await archive.close(sealedPlan, new AbortController().signal)
+  reportProgress('archive-closed', MILLION_MEMBER_COUNT, startedAtMilliseconds)
   const afterClose = await countStores(databaseName)
   await deleteDatabase(databaseName)
   return {
@@ -76,6 +86,19 @@ export async function probeMillionMemberZipWriter(): Promise<MillionMemberZipPro
     beforeClose,
     afterClose,
   }
+}
+
+function reportProgress(
+  phase: 'entries' | 'discovery-complete' | 'layout-sealed' | 'archive-closed',
+  entryCount: number,
+  startedAtMilliseconds: number,
+): void {
+  console.info(JSON.stringify({
+    kind: PROGRESS_EVENT_KIND,
+    phase,
+    entryCount,
+    elapsedMilliseconds: Math.round(performance.now() - startedAtMilliseconds),
+  }))
 }
 
 function probeDigest(seed: number): string {
