@@ -259,10 +259,7 @@ func (coordinator *Coordinator) planWait() (Snapshot, time.Duration) {
 	coordinator.mu.Lock()
 	coordinator.attempts++
 	snapshot := coordinator.snapshotLocked(now)
-	remaining := coordinator.budget - snapshot.AccumulatedWait
-	if remaining < 0 {
-		remaining = 0
-	}
+	remaining := max(coordinator.budget-snapshot.AccumulatedWait, 0)
 	coordinator.mu.Unlock()
 	return snapshot, remaining
 }

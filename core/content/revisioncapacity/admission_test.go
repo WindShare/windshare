@@ -143,7 +143,7 @@ func TestConcurrentAdmissionsNeverOverbookAndAbortExactly(t *testing.T) {
 	outcomes := make(chan outcome, contenders)
 	var workers sync.WaitGroup
 	workers.Add(contenders)
-	for index := 0; index < contenders; index++ {
+	for index := range contenders {
 		go func(index int) {
 			defer workers.Done()
 			<-start
