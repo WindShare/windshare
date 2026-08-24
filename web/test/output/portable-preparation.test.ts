@@ -40,6 +40,11 @@ import type {
   OutputFileRequest,
 } from '../../src/transfer/output-session'
 import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
 
 const ORIGINAL_BYTES = Uint8Array.of(1, 2, 3)
 const MODIFIED_TIME = Object.freeze({
@@ -402,12 +407,14 @@ describe('portable exact-preparation binding and failure boundaries', () => {
     const file = evidence.entries.find(entry => entry.kind === 'file')
     if (file?.kind !== 'file') throw new TypeError('test preparation lost its file')
     const openRevision = vi.fn(async () => revision(intent, file.fileId, file.exactSize))
+    const wrongPath = Object.freeze([
+      ...(file.artifactPath.slice(0, -1)),
+      'wrong.bin',
+    ])
     const wrong = {
       ...outputRequest(intent, file, ORIGINAL_BYTES),
-      artifactPath: Object.freeze([
-        ...(file.artifactPath.slice(0, -1)),
-        'wrong.bin',
-      ]),
+      logicalArtifactPath: snapshotLogicalArtifactPath(wrongPath),
+      materializationRelativePath: snapshotMaterializationRootRelativePath(wrongPath),
       openRevision,
     }
 
@@ -693,8 +700,9 @@ function outputRequest(
       shareInstance: intent.shareInstance,
       fileId: entry.fileId,
     },
-    sourcePath: entry.sourcePath,
-    artifactPath: entry.artifactPath,
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath(entry.sourcePath),
+    logicalArtifactPath: snapshotLogicalArtifactPath(entry.artifactPath),
+    materializationRelativePath: snapshotMaterializationRootRelativePath(entry.artifactPath),
     expectedSize: entry.exactSize,
     openRevision: async () => revision(intent, entry.fileId, BigInt(bytes.byteLength)),
   }

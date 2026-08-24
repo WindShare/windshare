@@ -15,6 +15,11 @@ import {
   type CompatibleNamePendingTerminalOutcomeV1,
 } from '../../src/output/file-system-access/compatible-name/model'
 import { PhysicalPathResolver } from '../../src/output/file-system-access/compatible-name/resolver'
+import {
+  readMapping,
+  readOperationRow,
+  storedOperationRow,
+} from '../../src/output/browser/indexeddb-compatible-name-records'
 import { initialReceiveLifecycleState } from '../../src/output/workspace/state'
 
 describe('compatible-name ledger model', () => {
@@ -36,6 +41,21 @@ describe('compatible-name ledger model', () => {
       commitState: 'uncommitted',
     })
     expect(Object.isFrozen(mapping.logicalPath)).toBe(true)
+  })
+
+  it('rejects legacy durable ledger, mapping, and pending-outcome versions', () => {
+    const operationId = identity(16, 1)
+    expect(() => readOperationRow({
+      ...storedOperationRow(operationHeader(operationId), 1),
+      formatVersion: 'compatible-name-ledger/v1',
+    })).toThrow('version')
+    expect(() => readMapping({
+      ...selectedMapping(operationId),
+      formatVersion: 'compatible-name-ledger/v1',
+    })).toThrow('version')
+    expect(() => compatibleNamePendingTerminalOutcomeV1({
+      formatVersion: 'compatible-name-pending-outcome/v1',
+    } as unknown as CompatibleNamePendingTerminalOutcomeV1)).toThrow('version')
   })
 
   it('admits only a pristine pair-first bootstrap using the operation token', () => {

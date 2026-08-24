@@ -19,11 +19,10 @@ import (
 )
 
 type liveTransactionFixture struct {
-	authority     *Authority
-	session       transfer.DirectTreeSession
-	rootAdmission transfer.DirectoryAdmission
-	start         transfer.FileStart
-	finalPath     string
+	authority *Authority
+	session   transfer.DirectTreeSession
+	start     transfer.FileStart
+	finalPath string
 }
 
 func openLiveTransactionFixture(
@@ -78,26 +77,10 @@ func openLiveTransactionFixture(
 	t.Cleanup(func() {
 		_, _ = session.PauseTree(context.Background(), transfer.JobPauseInterrupted)
 	})
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector,
-		transfer.AuthenticatedSourceDirectory{
-			DirectoryID: selection.SyntheticRoot(),
-			Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](seed + 3),
-			SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
-		},
-		ordinaryoutput.SourceNodeConnectsSelection,
-		transfer.MaterializedDirectoryClaim{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootAdmission, err := session.AdmitDirectory(ctx, rootRequest)
-	if err != nil {
-		t.Fatal(err)
+	rootSource := transfer.AuthenticatedSourceDirectory{
+		DirectoryID: selection.SyntheticRoot(),
+		Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](seed + 3),
+		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
 	}
 	finalPath := filepath.Join(root, reservation.PhysicalName())
 	if collision {
@@ -120,15 +103,14 @@ func openLiveTransactionFixture(
 	start, err := session.BeginFile(
 		ctx,
 		ordinaryResumeMaterializationFile(
-			t, session, projector, descriptor, "live.bin", rootAdmission,
-			transfer.MaterializedDirectoryClaim{},
+			t, session, intent, descriptor, "live.bin", rootSource, transfer.DirectoryAdmission{}, transfer.MaterializedDirectoryClaim{},
 		),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	return liveTransactionFixture{
-		authority: authority, session: session, rootAdmission: rootAdmission,
+		authority: authority, session: session,
 		start: start, finalPath: finalPath,
 	}
 }
@@ -149,9 +131,6 @@ func TestLiveOnlyFileTransactionPublishesWithoutPersistentInventory(t *testing.T
 	settlement, err := transaction.Commit(context.Background())
 	if err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("live commit = (%d, %v)", settlement.Kind(), err)
-	}
-	if _, err := fixture.session.FinalizeDirectory(context.Background(), fixture.rootAdmission); err != nil {
-		t.Fatal(err)
 	}
 	tree, err := fixture.session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomeSuccess)
 	if err != nil || tree.Kind() != transfer.DirectTreeSettlementSuccess {
@@ -241,9 +220,6 @@ func TestPublishedOrdinaryFileReopensAsVerifiedSiblingThenRetiresPrivateState(t 
 	reopened := reopenOrdinaryResumeFile(t, root, 0xb1, 4)
 	if reopened.transaction != nil || reopened.settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("reopened published file = transaction %T settlement %d", reopened.transaction, reopened.settlement.Kind())
-	}
-	if _, err := reopened.session.FinalizeDirectory(context.Background(), reopened.rootAdmission); err != nil {
-		t.Fatal(err)
 	}
 	tree, err := reopened.session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomeSuccess)
 	if err != nil || tree.Kind() != transfer.DirectTreeSettlementSuccess {

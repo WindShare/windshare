@@ -234,12 +234,8 @@ func TestFilesystemResumeStateAuthorityDoesNotRetainCompletedEmptyDirectoryHisto
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector,
+		intent,
 		transfer.AuthenticatedSourceDirectory{
 			DirectoryID: intent.SyntheticRoot(),
 			Generation:  coverageC6Identity[catalog.DirectoryGeneration](0xe3),

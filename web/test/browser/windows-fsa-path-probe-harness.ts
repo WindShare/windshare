@@ -188,7 +188,7 @@ export async function runWindowsFSAPathProbe(): Promise<unknown> {
       transaction = await instrumentation.withStage(
         'windshare.begin-file:.git/hooks/applypatch-msg.sample',
         () => runtime!.session.beginFile({
-          artifactPath: PROBE_PATH,
+          materializationRelativePath: PROBE_PATH,
           openRevision: async () => ({
             fileId: identity(93),
             fileRevision: identity(94),

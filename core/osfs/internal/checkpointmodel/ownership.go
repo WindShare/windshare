@@ -37,13 +37,15 @@ type MaterializerKind uint8
 
 const (
 	MaterializerNativeTree MaterializerKind = iota + 1
-	MaterializerFSATree
+	MaterializerLegacyFSATree
 	MaterializerOriginPrivate
 	MaterializerAtomicFile
+	// A distinct identity fences legacy logical-root paths from the current reserved-root coordinate.
+	MaterializerFSATree
 )
 
 func (kind MaterializerKind) Valid() bool {
-	return kind >= MaterializerNativeTree && kind <= MaterializerAtomicFile
+	return kind >= MaterializerNativeTree && kind <= MaterializerFSATree
 }
 
 type CertificationID string

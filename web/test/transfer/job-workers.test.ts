@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest'
 import type { DirectoryWork, PendingFile } from '../../src/transfer/job/contract'
 import type { TransferJobLimits } from '../../src/transfer/job/limits'
 import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
+import {
   newFileQueue,
   runDiscoveryWorkers,
   runPreparedFileWorkers,
@@ -243,13 +248,15 @@ function pendingFile(firstIdentityByte: number, name: string): PendingFile {
   const entry = fileEntry(identity(firstIdentityByte), name, 1n)
   return Object.freeze({
     entry,
-    sourcePath: Object.freeze([name]),
-    artifactPath: Object.freeze([name]),
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath([name]),
+    logicalArtifactPath: snapshotLogicalArtifactPath([name]),
+    materializationRelativePath: snapshotMaterializationRootRelativePath([name]),
     parent: Object.freeze({
+      kind: 'reference',
       directoryId: identityText(2),
       generation: identityText(90),
-      sourcePath: Object.freeze([]),
-      artifactPath: Object.freeze([]),
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath([]),
+      logicalArtifactPath: snapshotLogicalArtifactPath([]),
     }),
     ready: Promise.resolve(),
   })
@@ -267,10 +274,11 @@ function directoryWork(firstIdentityByte: number, path: readonly string[]): Dire
       selected: true,
     }),
     materializeParent: async () => Object.freeze({
+      kind: 'reference' as const,
       directoryId: idText,
       generation: identityText(90),
-      sourcePath: Object.freeze([...path]),
-      artifactPath: Object.freeze([...path]),
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(path),
+      logicalArtifactPath: snapshotLogicalArtifactPath(path),
     }),
   })
 }

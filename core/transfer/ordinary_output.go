@@ -11,6 +11,158 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
+// MaterializationRootRelativePath names an object below the output authority's
+// already-reserved root. The empty value is a valid directory-root coordinate;
+// keeping it typed prevents catalog and logical paths from crossing this boundary.
+type MaterializationRootRelativePath struct {
+	value string
+	valid bool
+}
+
+func NewMaterializationRootRelativePath(value string) (MaterializationRootRelativePath, error) {
+	if value == "" {
+		return MaterializationRootRelativePath{valid: true}, nil
+	}
+	canonical, err := catalog.CanonicalPath(value)
+	if err != nil || canonical != value {
+		return MaterializationRootRelativePath{}, errors.Join(ErrInvalidOutputBinding, err)
+	}
+	return MaterializationRootRelativePath{value: canonical, valid: true}, nil
+}
+
+func (path MaterializationRootRelativePath) String() string { return path.value }
+func (path MaterializationRootRelativePath) IsRoot() bool   { return path.valid && path.value == "" }
+func (path MaterializationRootRelativePath) Valid() bool    { return path.valid }
+
+// MaterializationDirectory contains only destination-root-relative admission
+// coordinates. Sender authentication remains in AuthenticatedSourceDirectory.
+type MaterializationDirectory struct {
+	directory  catalog.DirectoryID
+	generation catalog.DirectoryGeneration
+	path       MaterializationRootRelativePath
+	parent     DirectoryAdmission
+	modified   catalog.ModifiedTime
+}
+
+func NewMaterializationDirectory(
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	path MaterializationRootRelativePath,
+	parent DirectoryAdmission,
+	modified catalog.ModifiedTime,
+) (MaterializationDirectory, error) {
+	value := MaterializationDirectory{
+		directory: directory, generation: generation, path: path, parent: parent, modified: modified,
+	}
+	if directory.IsZero() || generation.IsZero() || !path.Valid() {
+		return MaterializationDirectory{}, ErrInvalidDirectoryAdmission
+	}
+	return value, nil
+}
+
+func (directory MaterializationDirectory) DirectoryID() catalog.DirectoryID {
+	return directory.directory
+}
+func (directory MaterializationDirectory) Generation() catalog.DirectoryGeneration {
+	return directory.generation
+}
+func (directory MaterializationDirectory) Path() MaterializationRootRelativePath {
+	return directory.path
+}
+func (directory MaterializationDirectory) ParentAdmission() DirectoryAdmission {
+	return directory.parent
+}
+func (directory MaterializationDirectory) ModifiedTime() catalog.ModifiedTime {
+	return directory.modified
+}
+func (directory MaterializationDirectory) Valid() bool {
+	return !directory.directory.IsZero() && !directory.generation.IsZero() && directory.path.Valid()
+}
+
+type MaterializationFileParentKind uint8
+
+const (
+	MaterializationFileParentReference MaterializationFileParentKind = iota + 1
+	MaterializationFileParentDirectory
+)
+
+// MaterializationFileParent makes a single-file authentication reference
+// structurally different from a file whose destination ancestry is admitted.
+type MaterializationFileParent struct {
+	kind            MaterializationFileParentKind
+	directory       catalog.DirectoryID
+	generation      catalog.DirectoryGeneration
+	sourcePath      ordinaryoutput.SourceCatalogPath
+	admission       DirectoryAdmission
+	materialization MaterializedDirectoryClaim
+}
+
+func NewReferenceMaterializationFileParent(
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	sourcePath ordinaryoutput.SourceCatalogPath,
+) (MaterializationFileParent, error) {
+	parent := MaterializationFileParent{
+		kind:      MaterializationFileParentReference,
+		directory: directory, generation: generation, sourcePath: sourcePath,
+	}
+	if !parent.valid() {
+		return MaterializationFileParent{}, ErrInvalidOutputBinding
+	}
+	return parent, nil
+}
+
+func NewDirectoryMaterializationFileParent(
+	directory catalog.DirectoryID,
+	generation catalog.DirectoryGeneration,
+	sourcePath ordinaryoutput.SourceCatalogPath,
+	admission DirectoryAdmission,
+	materialization MaterializedDirectoryClaim,
+) (MaterializationFileParent, error) {
+	parent := MaterializationFileParent{
+		kind:      MaterializationFileParentDirectory,
+		directory: directory, generation: generation, sourcePath: sourcePath,
+		admission: admission, materialization: materialization,
+	}
+	if !parent.valid() {
+		return MaterializationFileParent{}, ErrInvalidOutputBinding
+	}
+	return parent, nil
+}
+
+func (parent MaterializationFileParent) Kind() MaterializationFileParentKind { return parent.kind }
+func (parent MaterializationFileParent) DirectoryID() catalog.DirectoryID    { return parent.directory }
+func (parent MaterializationFileParent) Generation() catalog.DirectoryGeneration {
+	return parent.generation
+}
+func (parent MaterializationFileParent) SourcePath() ordinaryoutput.SourceCatalogPath {
+	return parent.sourcePath
+}
+func (parent MaterializationFileParent) Admission() DirectoryAdmission { return parent.admission }
+func (parent MaterializationFileParent) Materialization() MaterializedDirectoryClaim {
+	return parent.materialization
+}
+
+func (parent MaterializationFileParent) valid() bool {
+	if parent.directory.IsZero() || parent.generation.IsZero() || !parent.sourcePath.Valid() {
+		return false
+	}
+	switch parent.kind {
+	case MaterializationFileParentReference:
+		return parent.admission.IsZero() && !parent.materialization.Valid()
+	case MaterializationFileParentDirectory:
+		materializationMatches := parent.materialization.Valid() &&
+			parent.materialization.Admission().Equal(parent.admission)
+		catalogRootReference := !parent.materialization.Valid() &&
+			parent.admission.Layout() == DirectoryAdmissionTreeCatalogRoot && parent.admission.Path() == ""
+		return !parent.admission.IsZero() && (materializationMatches || catalogRootReference) &&
+			parent.admission.DirectoryID() == parent.directory &&
+			parent.admission.Generation() == parent.generation
+	default:
+		return false
+	}
+}
+
 func (selection SelectionSpec) OrdinaryOutputSelection() (ordinaryoutput.Selection, error) {
 	if selection.IsZero() {
 		return ordinaryoutput.Selection{}, ErrInvalidSelectionRules
@@ -116,6 +268,8 @@ type DirectoryMaterializationRequest struct {
 	source                AuthenticatedSourceDirectory
 	role                  ordinaryoutput.SourceNodeRole
 	projection            ordinaryoutput.ArtifactPathProjection
+	directory             MaterializationDirectory
+	materialized          bool
 	parentMaterialization MaterializedDirectoryClaim
 }
 
@@ -131,6 +285,10 @@ func (request DirectoryMaterializationRequest) Projection() ordinaryoutput.Artif
 	return request.projection
 }
 
+func (request DirectoryMaterializationRequest) Directory() (MaterializationDirectory, bool) {
+	return request.directory, request.materialized && request.directory.Valid()
+}
+
 func (request DirectoryMaterializationRequest) ParentMaterialization() MaterializedDirectoryClaim {
 	return request.parentMaterialization
 }
@@ -139,11 +297,15 @@ func (request DirectoryMaterializationRequest) ParentMaterialization() Materiali
 // transfer-to-output boundary. Traverse-only requests carry no artifact claim,
 // and rejected source values never become output requests.
 func NewDirectoryMaterializationRequest(
-	projector ordinaryoutput.ArtifactPathProjector,
+	intent ReceiveIntent,
 	source AuthenticatedSourceDirectory,
 	role ordinaryoutput.SourceNodeRole,
 	parent MaterializedDirectoryClaim,
 ) (DirectoryMaterializationRequest, error) {
+	projector, coordinateErr := newDirectTreeCoordinateProjector(intent)
+	if coordinateErr != nil {
+		return DirectoryMaterializationRequest{}, coordinateErr
+	}
 	request, projection, err := projectDirectoryMaterializationRequest(projector, source, role, parent)
 	if err != nil {
 		return DirectoryMaterializationRequest{}, err
@@ -155,34 +317,30 @@ func NewDirectoryMaterializationRequest(
 }
 
 func projectDirectoryMaterializationRequest(
-	projector ordinaryoutput.ArtifactPathProjector,
+	projector directTreeCoordinateProjector,
 	source AuthenticatedSourceDirectory,
 	role ordinaryoutput.SourceNodeRole,
 	parent MaterializedDirectoryClaim,
 ) (DirectoryMaterializationRequest, ordinaryoutput.ArtifactPathProjection, error) {
-	sourcePath := source.SourcePath
-	if !sourcePath.Valid() {
+	if !source.SourcePath.Valid() {
 		return DirectoryMaterializationRequest{}, ordinaryoutput.ArtifactPathProjection{},
 			ordinaryoutput.ErrInvalidSourceCatalogPath
 	}
-	node, err := OrdinaryOutputSourceNode(
-		catalog.NodeKindDirectory, source.DirectoryID, catalog.FileID{}, sourcePath, role,
-	)
+	projection, directory, materialized, err := projector.projectDirectory(source, role)
 	if err != nil {
 		return DirectoryMaterializationRequest{}, ordinaryoutput.ArtifactPathProjection{}, err
 	}
-	source.SourcePath = sourcePath
-	projection := projector.Project(node)
 	if projection.Kind() == ordinaryoutput.ArtifactReject {
 		return DirectoryMaterializationRequest{}, projection, nil
 	}
 	return DirectoryMaterializationRequest{
-		source: source, role: role, projection: projection, parentMaterialization: parent,
+		source: source, role: role, projection: projection, directory: directory,
+		materialized: materialized, parentMaterialization: parent,
 	}, projection, nil
 }
 
 func (request DirectoryMaterializationRequest) matchesProjector(
-	projector ordinaryoutput.ArtifactPathProjector,
+	projector directTreeCoordinateProjector,
 ) bool {
 	projected, projection, err := projectDirectoryMaterializationRequest(
 		projector, request.source, request.role, request.parentMaterialization,
@@ -197,12 +355,12 @@ func DirectoryMaterializationMatchesIntent(
 	intent ReceiveIntent,
 	request DirectoryMaterializationRequest,
 ) bool {
-	projector, err := OrdinaryOutputArtifactPathProjector(intent)
-	return err == nil && DirectoryMaterializationMatchesProjector(projector, request)
+	coordinates, err := newDirectTreeCoordinateProjector(intent)
+	return err == nil && directoryMaterializationMatchesProjector(coordinates, request)
 }
 
-func DirectoryMaterializationMatchesProjector(
-	projector ordinaryoutput.ArtifactPathProjector,
+func directoryMaterializationMatchesProjector(
+	projector directTreeCoordinateProjector,
 	request DirectoryMaterializationRequest,
 ) bool {
 	return request.matchesProjector(projector)
@@ -211,37 +369,38 @@ func DirectoryMaterializationMatchesProjector(
 // MaterializedDirectoryClaim can only be derived from the exact projected
 // directory request that produced its authenticated admission.
 type MaterializedDirectoryClaim struct {
-	admission    DirectoryAdmission
-	artifactPath ordinaryoutput.ArtifactPath
+	admission DirectoryAdmission
+	path      MaterializationRootRelativePath
 }
 
 func NewMaterializedDirectoryClaim(
 	admission DirectoryAdmission,
 	request DirectoryMaterializationRequest,
 ) (MaterializedDirectoryClaim, error) {
-	artifactPath, materialized := request.projection.ArtifactPath()
 	source := request.source
+	directory, materialized := request.Directory()
+	_, projectedArtifact := request.projection.ArtifactPath()
 	var expectedParentToken []byte
-	if !source.ParentAdmission.IsZero() {
-		expectedParentToken = source.ParentAdmission.Bytes()
+	if materialized && !directory.ParentAdmission().IsZero() {
+		expectedParentToken = directory.ParentAdmission().Bytes()
 	}
-	if !materialized || admission.IsZero() || admission.DirectoryID() != source.DirectoryID ||
-		admission.Generation() != source.Generation || admission.Path() != source.SourcePath.String() ||
+	if !materialized || !projectedArtifact || admission.IsZero() ||
+		admission.DirectoryID() != source.DirectoryID || admission.DirectoryID() != directory.DirectoryID() ||
+		admission.Generation() != source.Generation || admission.Generation() != directory.Generation() ||
+		admission.Path() != directory.Path().String() ||
 		admission.ModifiedTime() != source.ModifiedTime ||
 		!bytes.Equal(admission.ParentToken(), expectedParentToken) {
 		return MaterializedDirectoryClaim{}, ErrInvalidOutputBinding
 	}
-	return MaterializedDirectoryClaim{admission: admission, artifactPath: artifactPath}, nil
+	return MaterializedDirectoryClaim{admission: admission, path: directory.Path()}, nil
 }
 
 func (claim MaterializedDirectoryClaim) Admission() DirectoryAdmission { return claim.admission }
 
-func (claim MaterializedDirectoryClaim) ArtifactPath() ordinaryoutput.ArtifactPath {
-	return claim.artifactPath
-}
+func (claim MaterializedDirectoryClaim) Path() MaterializationRootRelativePath { return claim.path }
 
 func (claim MaterializedDirectoryClaim) Valid() bool {
-	return !claim.admission.IsZero() && claim.artifactPath.Valid()
+	return !claim.admission.IsZero() && claim.path.Valid() && claim.admission.Path() == claim.path.String()
 }
 
 // MaterializationFile is a closed projected request. The logical artifact path
@@ -249,35 +408,44 @@ func (claim MaterializedDirectoryClaim) Valid() bool {
 // reinterpret a source path as a second mapping authority. Physical destination
 // coordinates are intentionally added only by the executor's private claim.
 type MaterializationFile struct {
-	sourcePath            ordinaryoutput.SourceCatalogPath
-	artifactPath          ordinaryoutput.ArtifactPath
-	descriptor            content.FileRevisionDescriptor
-	target                FileMaterializationTarget
-	sourceParentAdmission DirectoryAdmission
-	parentMaterialization MaterializedDirectoryClaim
+	sourcePath                  ordinaryoutput.SourceCatalogPath
+	artifactPath                ordinaryoutput.ArtifactPath
+	materializationRelativePath MaterializationRootRelativePath
+	descriptor                  content.FileRevisionDescriptor
+	target                      FileMaterializationTarget
+	parent                      MaterializationFileParent
 }
 
 func NewMaterializationFile(
-	projector ordinaryoutput.ArtifactPathProjector,
+	intent ReceiveIntent,
 	sourcePath ordinaryoutput.SourceCatalogPath,
+	materializationRelativePath MaterializationRootRelativePath,
 	descriptor content.FileRevisionDescriptor,
 	session OutputSessionID,
-	sourceParent DirectoryAdmission,
-	parentMaterialization MaterializedDirectoryClaim,
+	parent MaterializationFileParent,
 ) (MaterializationFile, error) {
-	node, err := OrdinaryOutputSourceNode(
-		catalog.NodeKindFile, catalog.DirectoryID{}, descriptor.FileID(), sourcePath,
-		ordinaryoutput.SourceNodeSelected,
+	projector, err := newDirectTreeCoordinateProjector(intent)
+	if err != nil {
+		return MaterializationFile{}, ErrInvalidOutputBinding
+	}
+	return newMaterializationFile(
+		projector, sourcePath, materializationRelativePath, descriptor, session, parent,
 	)
-	if err != nil || sourceParent.IsZero() {
+}
+
+func newMaterializationFile(
+	projector directTreeCoordinateProjector,
+	sourcePath ordinaryoutput.SourceCatalogPath,
+	materializationRelativePath MaterializationRootRelativePath,
+	descriptor content.FileRevisionDescriptor,
+	session OutputSessionID,
+	parent MaterializationFileParent,
+) (MaterializationFile, error) {
+	artifactPath, projectedRelativePath, err := projector.projectFile(sourcePath, descriptor.FileID(), parent)
+	if err != nil || !materializationRelativePath.Valid() || projectedRelativePath != materializationRelativePath {
 		return MaterializationFile{}, ErrInvalidOutputBinding
 	}
-	projection := projector.Project(node)
-	artifactPath, materialized := projection.ArtifactPath()
-	if !materialized {
-		return MaterializationFile{}, ErrInvalidOutputBinding
-	}
-	locator, err := NewPathMaterializationLocator(artifactPath.String())
+	locator, err := NewPathMaterializationLocator(materializationRelativePath.String())
 	if err != nil {
 		return MaterializationFile{}, err
 	}
@@ -286,30 +454,33 @@ func NewMaterializationFile(
 		return MaterializationFile{}, err
 	}
 	return MaterializationFile{
-		sourcePath: sourcePath, artifactPath: artifactPath, descriptor: descriptor, target: target,
-		sourceParentAdmission: sourceParent, parentMaterialization: parentMaterialization,
+		sourcePath: sourcePath, artifactPath: artifactPath,
+		materializationRelativePath: materializationRelativePath,
+		descriptor:                  descriptor, target: target, parent: parent,
 	}, nil
 }
 
 func (file MaterializationFile) SourcePath() ordinaryoutput.SourceCatalogPath { return file.sourcePath }
 func (file MaterializationFile) ArtifactPath() ordinaryoutput.ArtifactPath    { return file.artifactPath }
-func (file MaterializationFile) ExpectedSize() uint64                         { return file.descriptor.ExactSize() }
-func (file MaterializationFile) Descriptor() content.FileRevisionDescriptor   { return file.descriptor }
-func (file MaterializationFile) Target() FileMaterializationTarget            { return file.target }
-func (file MaterializationFile) SourceParentAdmission() DirectoryAdmission {
-	return file.sourceParentAdmission
+func (file MaterializationFile) MaterializationRelativePath() MaterializationRootRelativePath {
+	return file.materializationRelativePath
 }
+func (file MaterializationFile) ExpectedSize() uint64                       { return file.descriptor.ExactSize() }
+func (file MaterializationFile) Descriptor() content.FileRevisionDescriptor { return file.descriptor }
+func (file MaterializationFile) Target() FileMaterializationTarget          { return file.target }
+func (file MaterializationFile) Parent() MaterializationFileParent          { return file.parent }
 func (file MaterializationFile) ParentMaterialization() MaterializedDirectoryClaim {
-	return file.parentMaterialization
+	return file.parent.Materialization()
 }
 
 func (file MaterializationFile) validProjected() bool {
-	if !file.sourcePath.Valid() || !file.artifactPath.Valid() || file.sourceParentAdmission.IsZero() ||
+	if !file.sourcePath.Valid() || !file.artifactPath.Valid() ||
+		!file.materializationRelativePath.Valid() || !file.parent.valid() ||
 		file.descriptor.ShareInstance().IsZero() || file.descriptor.FileID().IsZero() ||
 		file.descriptor.FileRevision().IsZero() || !file.target.valid() ||
 		file.target.Descriptor() != file.descriptor ||
 		file.target.Locator().Kind() != MaterializationPathLocator ||
-		file.target.Locator().CanonicalPath() != file.artifactPath.String() {
+		file.target.Locator().CanonicalPath() != file.materializationRelativePath.String() {
 		return false
 	}
 	return true
@@ -318,26 +489,19 @@ func (file MaterializationFile) validProjected() bool {
 // MaterializationFileMatchesIntent re-projects the authenticated source against
 // the session's intent and compares every logical/checkpoint coordinate.
 func MaterializationFileMatchesIntent(intent ReceiveIntent, file MaterializationFile) bool {
-	projector, err := OrdinaryOutputArtifactPathProjector(intent)
-	return err == nil && MaterializationFileMatchesProjector(projector, file)
+	projector, err := newDirectTreeCoordinateProjector(intent)
+	return err == nil && materializationFileMatchesProjector(projector, file)
 }
 
-func MaterializationFileMatchesProjector(
-	projector ordinaryoutput.ArtifactPathProjector,
+func materializationFileMatchesProjector(
+	projector directTreeCoordinateProjector,
 	file MaterializationFile,
 ) bool {
 	if !file.validProjected() {
 		return false
 	}
-	node, err := OrdinaryOutputSourceNode(
-		catalog.NodeKindFile, catalog.DirectoryID{}, file.descriptor.FileID(), file.sourcePath,
-		ordinaryoutput.SourceNodeSelected,
-	)
-	if err != nil {
-		return false
-	}
-	projected, materialized := projector.Project(node).ArtifactPath()
-	return materialized && projected == file.artifactPath
+	artifact, relative, err := projector.projectFile(file.sourcePath, file.descriptor.FileID(), file.parent)
+	return err == nil && artifact == file.artifactPath && relative == file.materializationRelativePath
 }
 
 func OrdinaryOutputArtifactPathProjector(

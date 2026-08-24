@@ -292,19 +292,13 @@ func TestOrdinaryOutputShapeDecisionAndProjectorValidation(t *testing.T) {
 func TestOrdinaryOutputMaterializationRequestAndClaimAccessors(t *testing.T) {
 	// Zero claim accessors
 	zeroClaim := MaterializedDirectoryClaim{}
-	if zeroClaim.Valid() || !zeroClaim.Admission().IsZero() || zeroClaim.ArtifactPath().Valid() {
+	if zeroClaim.Valid() || !zeroClaim.Admission().IsZero() || zeroClaim.Path().Valid() {
 		t.Fatalf("zero claim invalidity semantics drifted: %+v", zeroClaim)
 	}
 
 	// NewDirectoryMaterializationRequest with invalid source path
-	projector, err := ordinaryoutput.NewArtifactPathProjector(
-		ordinaryID[catalog.DirectoryID](1),
-		receivecontract.NewCatalogRootDirectoryTree(),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := NewDirectoryMaterializationRequest(projector, AuthenticatedSourceDirectory{}, ordinaryoutput.SourceNodeSelected, zeroClaim); err == nil {
+	intent := admissionTestIntent(t, ordinaryID[catalog.DirectoryID](1), 0x91)
+	if _, err := NewDirectoryMaterializationRequest(intent, AuthenticatedSourceDirectory{}, ordinaryoutput.SourceNodeSelected, zeroClaim); err == nil {
 		t.Fatal("invalid source path request succeeded")
 	}
 
@@ -312,20 +306,14 @@ func TestOrdinaryOutputMaterializationRequestAndClaimAccessors(t *testing.T) {
 	if DirectoryMaterializationMatchesIntent(ReceiveIntent{}, DirectoryMaterializationRequest{}) {
 		t.Fatal("zero intent matched materialization")
 	}
-	if DirectoryMaterializationMatchesProjector(projector, DirectoryMaterializationRequest{}) {
-		t.Fatal("empty request matched projector")
-	}
 	if MaterializationFileMatchesIntent(ReceiveIntent{}, MaterializationFile{}) {
 		t.Fatal("zero intent matched file")
-	}
-	if MaterializationFileMatchesProjector(projector, MaterializationFile{}) {
-		t.Fatal("empty file matched projector")
 	}
 
 	// File accessors on zero MaterializationFile
 	zeroFile := MaterializationFile{}
 	if zeroFile.SourcePath().Valid() || zeroFile.ArtifactPath().Valid() || zeroFile.ExpectedSize() != 0 ||
-		!zeroFile.Descriptor().ShareInstance().IsZero() || !zeroFile.SourceParentAdmission().IsZero() ||
+		!zeroFile.Descriptor().ShareInstance().IsZero() || zeroFile.Parent().Kind() != 0 ||
 		zeroFile.ParentMaterialization().Valid() {
 		t.Fatalf("zero file accessors drifted: %+v", zeroFile)
 	}

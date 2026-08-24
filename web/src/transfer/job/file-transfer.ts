@@ -47,6 +47,7 @@ import {
   promoteFaultScope,
 } from '../fault'
 import { validateOpenedFileRevision } from './file-authority'
+import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
 import { withOutputSettlementTimeout } from '../settlement/v2-output'
 
 export class V2RangeReaderContractError extends Error {
@@ -61,6 +62,7 @@ export interface V2FileTransferOptions {
   readonly revisions: V2RevisionReader
   readonly broker: V2BlockRangeReader
   readonly output: OutputSession
+  readonly directTreeCoordinates?: DirectTreeCoordinateContract
   readonly signal: AbortSignal
   readonly outputSettlementTimeoutMilliseconds: number
   readonly incidentScope?: IncidentScopeHandle
@@ -87,12 +89,13 @@ export async function transferV2File(
         shareInstance: encodeBase64Url(options.descriptor.shareInstance),
         fileId: pending.entry.idText,
       },
-      sourcePath: pending.sourcePath,
-      artifactPath: pending.artifactPath,
+      sourceAuthenticationPath: pending.sourceAuthenticationPath,
+      logicalArtifactPath: pending.logicalArtifactPath,
+      materializationRelativePath: pending.materializationRelativePath,
       expectedSize: pending.entry.expectedSize,
-      ...(pending.parent.admission === undefined
-        ? {}
-        : { parentAdmission: pending.parent.admission }),
+      ...(pending.parent.kind === 'materialized'
+        ? { parentAdmission: pending.parent.admission }
+        : {}),
       ...(pending.modifiedTime === undefined || !options.output.capabilities.modificationTime
         ? {}
         : { modifiedTime: pending.modifiedTime }),
@@ -120,7 +123,7 @@ export async function transferV2File(
           throw reason
         }
       },
-    })
+    }, options.directTreeCoordinates)
     const begun = await outputOperation(
       options.signal,
       'Unable to begin the output file transaction',
@@ -133,7 +136,12 @@ export async function transferV2File(
         'output adapter created a transaction without opening an authenticated revision',
       )
     }
-    const outputFile = outputFileFor(options.output, pending, opened)
+    const outputFile = outputFileFor(
+      options.output,
+      pending,
+      opened,
+      options.directTreeCoordinates,
+    )
     transaction = ownOutputFileTransaction(begun)
     const bound = bindOutputFileTransaction(begun, outputFile, options.output)
     transaction = bound.transaction
@@ -181,7 +189,8 @@ async function settleFailedFileTransfer(
   transaction: BoundOutputFileTransaction | undefined,
   failure: NormalizedV2FileTransferFailure,
 ): Promise<NormalizedV2FileTransferFailure> {
-  if (transaction === undefined || failure.kind === 'canceled') return failure
+  if (transaction === undefined) return failure
+  if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
   const authorization = authorizeFileRetirement(failure.fault)
   if (authorization === undefined) {
     if (failure.fault.scope === FaultScope.OutputPause ||
@@ -233,6 +242,39 @@ async function settleFailedFileTransfer(
         },
       )
     : failure
+}
+
+async function pauseCanceledFileTransfer(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'canceled' }>,
+): Promise<NormalizedV2FileTransferFailure> {
+  try {
+    await withOutputSettlementTimeout(
+      'pause output file transaction',
+      options.outputSettlementTimeoutMilliseconds,
+      () => transaction.pause(failure.diagnostic),
+    )
+    return failure
+  } catch (pauseFailure) {
+    normalizeV2FileTransferFailure(pauseFailure, {
+      ...(options.incidentScope === undefined
+        ? {}
+        : { incidentScope: options.incidentScope }),
+      relation: 'consequence',
+      stage: 'settlement',
+    })
+    return normalizedV2FileTransferFault(
+      outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
+      {
+        ...(options.incidentScope === undefined
+          ? {}
+          : { incidentScope: options.incidentScope }),
+        stage: 'settlement',
+        materializationFailureReason: 'output-write-failed',
+      },
+    )
+  }
 }
 
 async function releaseRevisionLease(
@@ -308,6 +350,7 @@ function outputFileFor(
   output: OutputSession,
   pending: PendingFile,
   opened: V2OpenedRevision,
+  directTreeCoordinates: DirectTreeCoordinateContract | undefined,
 ): OutputFile {
   return snapshotOutputFile({
     source: {
@@ -315,16 +358,17 @@ function outputFileFor(
       fileId: opened.descriptor.fileIdText,
       fileRevision: opened.descriptor.fileRevisionText,
     },
-    sourcePath: pending.sourcePath,
-    artifactPath: pending.artifactPath,
+    sourceAuthenticationPath: pending.sourceAuthenticationPath,
+    logicalArtifactPath: pending.logicalArtifactPath,
+    materializationRelativePath: pending.materializationRelativePath,
     exactSize: opened.descriptor.exactSize,
-    ...(pending.parent.admission === undefined
-      ? {}
-      : { parentAdmission: pending.parent.admission }),
+    ...(pending.parent.kind === 'materialized'
+      ? { parentAdmission: pending.parent.admission }
+      : {}),
     ...(pending.modifiedTime === undefined || !output.capabilities.modificationTime
       ? {}
       : { modifiedTime: pending.modifiedTime }),
-  })
+  }, directTreeCoordinates)
 }
 
 async function transferMissingRange(

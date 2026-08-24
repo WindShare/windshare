@@ -883,16 +883,12 @@ func projectedDirectoryRequest(
 	parent transfer.MaterializedDirectoryClaim,
 ) transfer.DirectoryMaterializationRequest {
 	t.Helper()
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request, err := transfer.NewDirectoryMaterializationRequest(
-		projector, directory, ordinaryoutput.SourceNodeSelected, parent,
+		intent, directory, ordinaryoutput.SourceNodeSelected, parent,
 	)
 	if err != nil {
 		request, err = transfer.NewDirectoryMaterializationRequest(
-			projector, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
+			intent, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
 		)
 	}
 	if err != nil {

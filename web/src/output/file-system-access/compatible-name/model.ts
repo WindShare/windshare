@@ -22,9 +22,9 @@ import {
   decodeReceiveLifecycleState,
 } from '../../workspace/state-codec'
 
-export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v1' as const
+export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v2' as const
 export const COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION =
-  'compatible-name-pending-outcome/v1' as const
+  'compatible-name-pending-outcome/v2' as const
 export const MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS = 1_048_576
 export const MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS = 8
 

@@ -111,8 +111,9 @@ describe('v2 authenticated file transfer', () => {
     expect(output.requests).toHaveLength(1)
     expect(output.requests[0]).toMatchObject({
       source: { fileId: file.idText },
-      sourcePath: ['payload.bin'],
-      artifactPath: ['payload.bin'],
+      sourceAuthenticationPath: ['payload.bin'],
+      logicalArtifactPath: ['payload.bin'],
+      materializationRelativePath: ['payload.bin'],
       expectedSize: 4n,
     })
     expect(readers.revisionRequests).toEqual([file.idText])

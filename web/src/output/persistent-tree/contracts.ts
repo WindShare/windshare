@@ -17,7 +17,7 @@ export interface OpenedFileRevision {
 }
 
 export interface PersistentFileRequest {
-  readonly artifactPath: readonly string[]
+  readonly materializationRelativePath: readonly string[]
   readonly openRevision: () => Promise<OpenedFileRevision>
 }
 
@@ -36,7 +36,7 @@ export interface PersistentDirectoryMaterialization {
   readonly created: boolean
 }
 
-/** All paths are canonical artifact-path segments rooted in one immutable plan. */
+/** Paths locate output objects relative to the materialization root selected by the immutable plan. */
 export interface PersistentOutputTree {
   authorize(): Promise<void>
   prepareRoot(): Promise<void>
@@ -73,7 +73,7 @@ export interface PersistentMaterializationPort {
 }
 
 export interface PersistentDirectoryNamespaceClaim {
-  readonly artifactPath: readonly string[]
+  readonly materializationRelativePath: readonly string[]
   readonly logicalSiblingMembership: AuthenticatedLogicalSiblingMembership
 }
 

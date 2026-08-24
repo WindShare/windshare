@@ -1,6 +1,8 @@
-import type {
-  NamedContainerEntryReservation,
-  ReceiveIntent,
+import {
+  FSA_RESERVED_ROOT_LAYOUT_VERSION,
+  validateReceiveIntent,
+  type FSANamedContainerEntryReservation,
+  type ReceiveIntent,
 } from '../../transfer/intent'
 import { IndexedDbFileCheckpointRepository } from '../browser/indexeddb-repository'
 import {
@@ -33,14 +35,23 @@ export interface FSAFileCheckpointRepositoryOptions {
 export async function openFSAFileCheckpointRepository(
   options: FSAFileCheckpointRepositoryOptions,
   intent: ReceiveIntent,
-  reservation: NamedContainerEntryReservation,
+  reservation: FSANamedContainerEntryReservation,
 ): Promise<FSAFileCheckpointRepository> {
+  const validated = await validateReceiveIntent(intent)
+  if (validated.plan.kind !== 'direct-tree' ||
+      validated.plan.reservation.kind !== 'named-container-entry' ||
+      validated.plan.reservation.authorityKind !== 'fsa-container' ||
+      validated.plan.reservation.fsaLayoutVersion !== FSA_RESERVED_ROOT_LAYOUT_VERSION ||
+      validated.plan.reservation.digest !== reservation.digest) {
+    throw new TypeError('FSA checkpoint repository requires the current reserved-root layout binding')
+  }
+  const boundReservation = validated.plan.reservation
   const binding = durableCheckpointNamespaceIdentity({
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    materializationBindingDigest: reservation.digest,
+    operationId: validated.operationId,
+    receiveIntentDigest: validated.digest,
+    materializationBindingDigest: boundReservation.digest,
     materializerKind: FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
-    authorityRef: reservation.authorityRef,
+    authorityRef: boundReservation.authorityRef,
   })
   if (options.checkpointRepositoryFactory !== undefined) {
     return options.checkpointRepositoryFactory(binding)

@@ -34,7 +34,7 @@ test.beforeEach(async ({ browserName, page }) => {
   await requireOriginPrivateStorage(page, browserName)
 })
 
-test('reopens compatible-name translation without changing logical checkpoint lineage', async ({
+test('reopens compatible-name translation without changing materialization-relative checkpoint lineage', async ({
   page,
 }) => {
   const key = `compatible-${crypto.randomUUID()}`
@@ -43,7 +43,7 @@ test('reopens compatible-name translation without changing logical checkpoint li
     return harness.createCompatibleNameRecoveryCut(fixtureKey)
   }, { path: RECOVERY_HARNESS_PATH, fixtureKey: key }) as CompatibleNameRecoveryCut
   expect(cut).toMatchObject({
-    logicalCheckpointPath: ['logical-checkpoint.bin'],
+    materializationRelativeCheckpointPath: ['logical-checkpoint.bin'],
     physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
     rejectedEntriesBefore: [],
     logicalEntryAbsent: true,
@@ -61,7 +61,7 @@ test('reopens compatible-name translation without changing logical checkpoint li
   }, { path: RECOVERY_HARNESS_PATH, fixture: cut.fixture }) as CompatibleNameRecoveryProof
   expect(proof).toEqual({
     headerPointRead: true,
-    logicalCheckpointPath: ['logical-checkpoint.bin'],
+    materializationRelativeCheckpointPath: ['logical-checkpoint.bin'],
     physicalComponent: 'logical-checkpoint-bin.windshare-aaaaaa',
     committedOrdinal: 1,
     resumedRanges: ['0:2'],

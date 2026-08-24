@@ -439,9 +439,8 @@ func (o *jobOutput) OpenDirectTree(_ context.Context, intent ReceiveIntent) (Dir
 
 func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMaterializationRequest) (DirectoryAdmission, error) {
 	directory := request.Source()
-	directory, err := normalizeAuthenticatedSourceDirectory(directory)
-	if err != nil {
-		return DirectoryAdmission{}, err
+	if !directory.SourcePath.Valid() {
+		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
 	}
 	if o.admitErr != nil {
 		return DirectoryAdmission{}, o.admitErr
@@ -460,7 +459,11 @@ func (o *jobOutput) AdmitDirectory(_ context.Context, request DirectoryMateriali
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(o.directorySecret[:], scope, directory)
+	materialization, projected := request.Directory()
+	if !projected {
+		return DirectoryAdmission{}, ErrInvalidDirectoryAdmission
+	}
+	admission, err := NewDirectoryAdmissionWithSecret(o.directorySecret[:], scope, materialization)
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}

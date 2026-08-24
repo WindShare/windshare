@@ -1,4 +1,3 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import type {
   PersistentHandleRecord,
   PersistentHandleRepository,
@@ -12,6 +11,7 @@ import {
   type PersistentOutputStageScope,
 } from '../persistent-tree/stage-diagnostics'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
+import { snapshotRelativePath } from './filesystem-directory-authority'
 import { captureFSAFailureFacts } from './filesystem-failure-facts'
 import {
   createOwnedObjectId,
@@ -424,11 +424,10 @@ export class BrowserFileLineageAuthority {
   }
 
   #filePath(path: readonly string[]): readonly string[] {
-    const canonical = snapshotPortableCatalogPath(path)
-    if (this.#binding.reservation.entryKind === 'single-file' &&
-        (canonical.length !== 1 ||
-         canonical[0] !== this.#binding.reservation.requestedName)) {
-      throw new TypeError('Single-file DirectoryTree must write directly below its parent')
+    const singleFile = this.#binding.reservation.entryKind === 'single-file'
+    const canonical = snapshotRelativePath(path, singleFile)
+    if (singleFile && canonical.length !== 0) {
+      throw new TypeError('Single-file DirectoryTree must write at its materialization root')
     }
     return canonical
   }

@@ -3,11 +3,12 @@ import { V2_MAXIMUM_SELECTION_RULE_OVERRIDES } from '../../catalog/v2-selection'
 
 export type CanonicalBytes = Uint8Array<ArrayBuffer>
 
-export const RECEIVE_INTENT_VERSION = 3 as const
+export const RECEIVE_INTENT_VERSION = 4 as const
 export const SELECTION_SPEC_VERSION = 1 as const
 export const ARTIFACT_SPEC_VERSION = 1 as const
-export const MATERIALIZATION_PLAN_VERSION = 3 as const
-export const DESTINATION_RESERVATION_VERSION = 3 as const
+export const MATERIALIZATION_PLAN_VERSION = 4 as const
+export const DESTINATION_RESERVATION_VERSION = 4 as const
+export const FSA_RESERVED_ROOT_LAYOUT_VERSION = 1 as const
 export const FSA_OWNED_FILE_BINDING_VERSION = 1 as const
 export const ARTIFACT_CHOICE_IDENTITY_VERSION = 1 as const
 export const WORKSPACE_BINDING_VERSION = 1 as const
@@ -201,15 +202,27 @@ export interface ContainerRootReservation extends DestinationReservationBase {
   readonly authorityKind: 'native-container'
 }
 
-export interface NamedContainerEntryReservation extends DestinationReservationBase {
+interface NamedContainerEntryReservationBase extends DestinationReservationBase {
   readonly kind: 'named-container-entry'
-  readonly authorityKind: 'native-container' | 'fsa-container'
   readonly entryKind: 'single-file' | 'result-root'
   readonly requestedName: string
   readonly logicalReservedName: string
   readonly physicalName: string
   readonly collisionIndex: number
 }
+
+export interface NativeNamedContainerEntryReservation extends NamedContainerEntryReservationBase {
+  readonly authorityKind: 'native-container'
+}
+
+export interface FSANamedContainerEntryReservation extends NamedContainerEntryReservationBase {
+  readonly authorityKind: 'fsa-container'
+  readonly fsaLayoutVersion: typeof FSA_RESERVED_ROOT_LAYOUT_VERSION
+}
+
+export type NamedContainerEntryReservation =
+  | NativeNamedContainerEntryReservation
+  | FSANamedContainerEntryReservation
 
 export interface AtomicTargetReservation extends DestinationReservationBase {
   readonly kind: 'atomic-target'

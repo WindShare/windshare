@@ -261,8 +261,21 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 		NativeTreeGuarantees(), fsaReservation.EntryKind(), fsaReservation.RequestedName(),
 		fsaReservation.LogicalReservedName(), fsaReservation.CollisionIndex(),
 	)
-	if _, err := decodeDestinationReservation(fsaWrongGuarantee, fsa.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
-		t.Fatalf("FSA guarantee error=%v", err)
+	fsaWrongLayout := fsaReservation.CanonicalBytes()
+	fsaWrongLayout[len(fsaWrongLayout)-1] = 0
+	fsaMissingLayout := fsaReservation.CanonicalBytes()
+	layoutFieldBytes := len(frame([]byte{FSAReservedRootLayoutV1}))
+	fsaMissingLayout = fsaMissingLayout[:len(fsaMissingLayout)-layoutFieldBytes]
+	for name, encoded := range map[string][]byte{
+		"wrong-guarantee": fsaWrongGuarantee,
+		"wrong-layout":    fsaWrongLayout,
+		"missing-layout":  fsaMissingLayout,
+	} {
+		t.Run("FSA-reservation-"+name, func(t *testing.T) {
+			if _, err := decodeDestinationReservation(encoded, fsa.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
+				t.Fatalf("decode error=%v", err)
+			}
+		})
 	}
 
 	atomic := fixture.plans["direct-atomic-original"]
@@ -349,6 +362,9 @@ func decoderReservationImage(
 		encoded = append(encoded, frame([]byte(reservedName))...)
 		encoded = append(encoded, frame([]byte(reservation.PhysicalName()))...)
 		encoded = append(encoded, frame(uint32Bytes(collisionIndex))...)
+		if authorityKind == AuthorityFSAContainer {
+			encoded = append(encoded, frame([]byte{FSAReservedRootLayoutV1})...)
+		}
 	case ReservationAtomicTarget:
 		encoded = append(encoded, frame([]byte(requestedName))...)
 		encoded = append(encoded, frame([]byte(reservedName))...)

@@ -55,9 +55,10 @@ const (
 	FileCheckpointQuarantinedCommit = checkpointmodel.CommitQuarantined
 
 	FileCheckpointMaterializerNativeTree    = checkpointmodel.MaterializerNativeTree
-	FileCheckpointMaterializerFSATree       = checkpointmodel.MaterializerFSATree
+	FileCheckpointMaterializerLegacyFSATree = checkpointmodel.MaterializerLegacyFSATree
 	FileCheckpointMaterializerOriginPrivate = checkpointmodel.MaterializerOriginPrivate
 	FileCheckpointMaterializerAtomicFile    = checkpointmodel.MaterializerAtomicFile
+	FileCheckpointMaterializerFSATree       = checkpointmodel.MaterializerFSATree
 
 	FileCheckpointCallerProvidedContainer = checkpointmodel.CallerProvidedContainer
 	FileCheckpointAuthorityCreatedRoot    = checkpointmodel.AuthorityCreatedRoot

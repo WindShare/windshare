@@ -148,8 +148,12 @@ func (output *immediateSmallOutputSession) AdmitDirectory(
 	// mutable authority to the test.
 	secret := make([]byte, 32)
 	secret[0] = 1
+	directory, ok := request.Directory()
+	if !ok {
+		return transfer.DirectoryAdmission{}, transfer.ErrInvalidDirectoryAdmission
+	}
 	return transfer.NewDirectoryAdmissionWithSecret(
-		secret, output.scope, request.Source(),
+		secret, output.scope, directory,
 	)
 }
 func (*immediateSmallOutputSession) FinalizeDirectory(
