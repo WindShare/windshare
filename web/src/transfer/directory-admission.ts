@@ -1,5 +1,4 @@
 import {
-  snapshotPortableCatalogPath,
   V2_CATALOG_NAME_BYTES,
   V2_CATALOG_PATH_BYTES,
   V2_CATALOG_PATH_DEPTH,
@@ -19,11 +18,17 @@ import {
   validateReceiveIntent,
   type ReceiveIntent,
 } from './intent'
+import {
+  createDirectTreeCoordinateContract,
+  snapshotMaterializationRootRelativePath,
+  type DirectTreeRootExpectation,
+  type MaterializationRootRelativePath,
+} from './job/coordinate/direct-tree'
 
 type CanonicalBytes = Uint8Array<ArrayBuffer>
 
 export const DIRECTORY_ADMISSION_SCHEMA_VERSION = 2 as const
-export const DIRECTORY_ADMISSION_LAYOUT_VERSION = 1 as const
+export const DIRECTORY_ADMISSION_LAYOUT_VERSION = 2 as const
 export const DIRECTORY_ADMISSION_SECRET_BYTES = 32
 export const DIRECTORY_ADMISSION_TOKEN_BYTES = 32
 export const CATALOG_IDENTITY_BYTES = STABLE_IDENTITY_BYTES
@@ -53,7 +58,7 @@ export interface CanonicalModifiedTime {
 export interface MaterializationDirectory {
   readonly directoryId: string
   readonly generation: string
-  readonly path: readonly string[]
+  readonly path: MaterializationRootRelativePath
   readonly parentAdmission?: DirectoryAdmission
   readonly modifiedTime?: CanonicalModifiedTime
 }
@@ -62,7 +67,7 @@ export interface DirectoryAdmissionScope {
   readonly receiveIntentDigest: string
   readonly layoutVersion: typeof DIRECTORY_ADMISSION_LAYOUT_VERSION
   readonly layout: DirectoryAdmissionLayout
-  readonly syntheticRoot: string
+  readonly rootExpectation: DirectTreeRootExpectation
 }
 
 export interface DirectoryAdmission {
@@ -73,7 +78,7 @@ export interface DirectoryAdmission {
   readonly token: string
   readonly directoryId: string
   readonly generation: string
-  readonly path: readonly string[]
+  readonly path: MaterializationRootRelativePath
   readonly parentToken?: string
   readonly modifiedTime?: CanonicalModifiedTime
 }
@@ -106,8 +111,9 @@ export async function createDirectoryAdmissionScope(
 ): Promise<DirectoryAdmissionScope> {
   const intent = await validateReceiveIntent(input)
   let layout: DirectoryAdmissionLayout
+  let rootExpectation: DirectTreeRootExpectation
   switch (intent.plan.kind) {
-    case 'direct-tree':
+    case 'direct-tree': {
       if (intent.artifact.kind !== 'directory-tree') {
         throw new DirectoryAdmissionBindingError('direct-tree intent has no directory-tree artifact')
       }
@@ -122,13 +128,22 @@ export async function createDirectoryAdmissionScope(
           layout = 'directory-tree-catalog-root'
           break
       }
+      rootExpectation = (await createDirectTreeCoordinateContract(intent)).rootExpectation
       break
-    case 'direct-resumable-zip':
+    }
+    case 'direct-resumable-zip': {
       if (intent.artifact.kind !== 'zip-archive') {
         throw new DirectoryAdmissionBindingError('Direct ZIP directory admission requires a ZIP')
       }
       layout = 'zip-result-root'
+      const anchor = intent.artifact.layout.anchor
+      rootExpectation = materializedRootExpectation(
+        anchor.kind,
+        anchor.kind === 'directory' ? anchor.directoryId : intent.syntheticRoot,
+        [],
+      )
       break
+    }
     case 'direct-atomic':
       throw new DirectoryAdmissionBindingError(
         'DirectAtomic original-file output does not use directory admission',
@@ -147,7 +162,7 @@ export async function createDirectoryAdmissionScope(
     ),
     layoutVersion: DIRECTORY_ADMISSION_LAYOUT_VERSION,
     layout,
-    syntheticRoot: requireIdentity(intent.syntheticRoot, CATALOG_IDENTITY_BYTES, 'synthetic root'),
+    rootExpectation: snapshotRootExpectation(rootExpectation),
   })
   VALID_SCOPES.add(scope)
   return scope
@@ -171,12 +186,6 @@ export function snapshotMaterializationDirectory(
   const parentAdmission = input.parentAdmission === undefined
     ? undefined
     : snapshotDirectoryAdmission(input.parentAdmission)
-  if (path.length === 0 && parentAdmission !== undefined) {
-    throw new DirectoryAdmissionBindingError('synthetic root admission must not have a parent')
-  }
-  if (path.length > 0 && parentAdmission === undefined) {
-    throw new DirectoryAdmissionBindingError('child directory admission requires its parent receipt')
-  }
   if (parentAdmission !== undefined && !isImmediateChildPath(parentAdmission.path, path)) {
     throw new DirectoryAdmissionBindingError('directory is not an immediate child of its parent receipt')
   }
@@ -198,12 +207,6 @@ export function snapshotDirectoryAdmission(input: DirectoryAdmission): Directory
     throw new DirectoryAdmissionBindingError('directory admission version is invalid')
   }
   const path = snapshotMaterializationPath(input.path)
-  if (path.length === 0 && input.parentToken !== undefined) {
-    throw new DirectoryAdmissionBindingError('synthetic root receipt must not have a parent token')
-  }
-  if (path.length > 0 && input.parentToken === undefined) {
-    throw new DirectoryAdmissionBindingError('child receipt requires a parent token')
-  }
   const modifiedTime = input.modifiedTime === undefined
     ? undefined
     : snapshotCanonicalModifiedTime(input.modifiedTime)
@@ -272,6 +275,7 @@ export function canonicalDirectoryAdmissionMessageV2(
     )),
     frame(Uint8Array.of(scope.layoutVersion)),
     frame(Uint8Array.of(directoryAdmissionLayoutByte(scope.layout))),
+    ...canonicalRootExpectationFields(scope.rootExpectation),
     frame(requireIdentityBytes(directory.directoryId, CATALOG_IDENTITY_BYTES, 'directory')),
     frame(requireIdentityBytes(directory.generation, CATALOG_IDENTITY_BYTES, 'directory generation')),
     frame(parent),
@@ -460,10 +464,10 @@ export function validateDirectorySettlement(
   return settlement
 }
 
-export function snapshotMaterializationPath(input: readonly string[]): readonly string[] {
-  if (!Array.isArray(input)) throw new TypeError('materialization path must be segmented')
-  if (input.length === 0) return Object.freeze([])
-  return snapshotPortableCatalogPath(input)
+export function snapshotMaterializationPath(
+  input: readonly string[],
+): MaterializationRootRelativePath {
+  return snapshotMaterializationRootRelativePath(input)
 }
 
 export function sameMaterializationPath(
@@ -518,19 +522,87 @@ function validateDirectoryAdmissionScopeBinding(
   scope: DirectoryAdmissionScope,
   directory: MaterializationDirectory,
 ): void {
-  if (directory.path.length === 0) {
-    if (directory.parentAdmission !== undefined || directory.directoryId !== scope.syntheticRoot) {
-      throw new DirectoryAdmissionBindingError('synthetic root does not match the receive intent')
+  const parent = directory.parentAdmission
+  if (parent === undefined) {
+    const root = scope.rootExpectation
+    if (root.kind !== 'materialized-directory' ||
+        directory.directoryId !== root.directoryId ||
+        !sameMaterializationPath(directory.path, root.relativePath)) {
+      throw new DirectoryAdmissionBindingError(
+        'parentless directory does not match the expected materialized root',
+      )
     }
     return
   }
-  const parent = directory.parentAdmission
-  if (parent === undefined ||
+  if (scope.rootExpectation.kind === 'none' ||
       parent.receiveIntentDigest !== scope.receiveIntentDigest ||
       parent.layoutVersion !== scope.layoutVersion ||
       parent.layout !== scope.layout ||
       !isImmediateChildPath(parent.path, directory.path)) {
     throw new DirectoryAdmissionBindingError('child directory receipt is outside its frozen scope')
+  }
+}
+
+function materializedRootExpectation(
+  anchorKind: 'directory' | 'synthetic-root' | 'catalog-root',
+  directoryId: string,
+  relativePath: readonly string[],
+): DirectTreeRootExpectation {
+  return snapshotRootExpectation({
+    kind: 'materialized-directory',
+    anchorKind,
+    directoryId,
+    relativePath: snapshotMaterializationRootRelativePath(relativePath),
+  })
+}
+
+function snapshotRootExpectation(
+  input: DirectTreeRootExpectation,
+): DirectTreeRootExpectation {
+  if (input.kind === 'none') {
+    if (input.anchorKind !== 'single-file') {
+      throw new DirectoryAdmissionBindingError('directory root expectation is invalid')
+    }
+    return Object.freeze({ kind: 'none', anchorKind: 'single-file' })
+  }
+  if (input.anchorKind !== 'directory' &&
+      input.anchorKind !== 'synthetic-root' &&
+      input.anchorKind !== 'catalog-root') {
+    throw new DirectoryAdmissionBindingError('directory root anchor kind is invalid')
+  }
+  return Object.freeze({
+    kind: 'materialized-directory',
+    anchorKind: input.anchorKind,
+    directoryId: requireIdentity(input.directoryId, CATALOG_IDENTITY_BYTES, 'expected root directory'),
+    relativePath: snapshotMaterializationRootRelativePath(input.relativePath),
+  })
+}
+
+function canonicalRootExpectationFields(
+  input: DirectTreeRootExpectation,
+): readonly CanonicalBytes[] {
+  const root = snapshotRootExpectation(input)
+  if (root.kind === 'none') {
+    return Object.freeze([
+      frame(Uint8Array.of(1)),
+      frame(new Uint8Array()),
+      frame(new Uint8Array()),
+    ])
+  }
+  return Object.freeze([
+    frame(Uint8Array.of(directoryRootAnchorByte(root.anchorKind))),
+    frame(requireIdentityBytes(root.directoryId, CATALOG_IDENTITY_BYTES, 'expected root directory')),
+    frame(canonicalDirectoryAdmissionPath(root.relativePath)),
+  ])
+}
+
+function directoryRootAnchorByte(
+  anchorKind: 'directory' | 'synthetic-root' | 'catalog-root',
+): number {
+  switch (anchorKind) {
+    case 'directory': return 2
+    case 'synthetic-root': return 3
+    case 'catalog-root': return 4
   }
 }
 

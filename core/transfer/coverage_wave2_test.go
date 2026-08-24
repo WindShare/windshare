@@ -63,7 +63,9 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	parentOutput := admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0x62), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	parent, err := NewDirectoryAdmissionWithSecret(secret, scope, parentOutput)
+	parent, err := NewDirectoryAdmissionWithSecret(
+		secret, scope, admissionTestMaterializationDirectory(t, parentOutput),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +73,8 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		t, transferID[catalog.DirectoryID](0x63), transferID[catalog.DirectoryGeneration](0x64),
 		parent, "child", catalog.ModifiedTime{},
 	)
-	child, err := NewDirectoryAdmissionWithSecret(secret, scope, childOutput)
+	childMaterialization := admissionTestMaterializationDirectory(t, childOutput)
+	child, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +92,7 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 	if !bytes.Equal(child.ParentToken(), parent.Bytes()) || parent.ParentToken() != nil {
 		t.Fatalf("parent tokens child=%x root=%x", child.ParentToken(), parent.ParentToken())
 	}
-	if err := ValidateDirectoryAdmissionBinding(scope, child, childOutput); err != nil {
+	if err := ValidateDirectoryAdmissionBinding(scope, child, childMaterialization); err != nil {
 		t.Fatalf("valid admission binding = %v", err)
 	}
 	for name, invalid := range map[string]AuthenticatedSourceDirectory{
@@ -112,7 +115,9 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		}(),
 	} {
 		t.Run("mismatch/"+name, func(t *testing.T) {
-			if !errors.Is(ValidateDirectoryAdmissionBinding(scope, child, invalid), ErrDirectoryAdmissionMismatch) {
+			if !errors.Is(ValidateDirectoryAdmissionBinding(
+				scope, child, admissionTestMaterializationDirectory(t, invalid),
+			), ErrDirectoryAdmissionMismatch) {
 				t.Fatalf("mismatch %s was accepted", name)
 			}
 		})
@@ -123,7 +128,9 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		make([]byte, directoryAdmissionSecretBytes),
 		make([]byte, directoryAdmissionSecretBytes+1),
 	} {
-		if _, err := NewDirectoryAdmissionWithSecret(badSecret, scope, parentOutput); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+		if _, err := NewDirectoryAdmissionWithSecret(
+			badSecret, scope, admissionTestMaterializationDirectory(t, parentOutput),
+		); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 			t.Fatalf("secret length %d error = %v", len(badSecret), err)
 		}
 	}
@@ -142,7 +149,17 @@ func TestTransferWave2DirectoryAdmissionProjection(t *testing.T) {
 		),
 	} {
 		t.Run("invalid/"+name, func(t *testing.T) {
-			if _, err := NewDirectoryAdmissionWithSecret(secret, scope, invalid); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+			path, pathErr := NewMaterializationRootRelativePath(invalid.SourcePath.String())
+			if pathErr != nil {
+				t.Fatal(pathErr)
+			}
+			directory := MaterializationDirectory{
+				directory: invalid.DirectoryID, generation: invalid.Generation,
+				path: path, parent: invalid.ParentAdmission, modified: invalid.ModifiedTime,
+			}
+			if _, err := NewDirectoryAdmissionWithSecret(
+				secret, scope, directory,
+			); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 				t.Fatalf("invalid directory %s error = %v", name, err)
 			}
 		})

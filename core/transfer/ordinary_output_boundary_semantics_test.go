@@ -56,7 +56,7 @@ func TestOrdinaryOutputBoundaryRejectsUnfrozenAuthority(t *testing.T) {
 		})
 	}
 	if _, err := NewDirectoryMaterializationRequest(
-		ordinaryoutput.ArtifactPathProjector{},
+		admissionTestIntent(t, directory, 0xa5),
 		AuthenticatedSourceDirectory{DirectoryID: directory},
 		ordinaryoutput.SourceNodeSelected,
 		MaterializedDirectoryClaim{},
@@ -69,17 +69,23 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 	share := admissionTestShare(t, 0xb3)
 	rootID := ordinaryID[catalog.DirectoryID](0xb2)
 	intent := admissionTestIntent(t, rootID, 0xb3)
-	projector, err := OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	scope := admissionTestScope(t, intent)
 	secret := admissionTestSequence(0x31, directoryAdmissionSecretBytes)
 	rootSource := admissionTestDirectory(
 		t, rootID, ordinaryID[catalog.DirectoryGeneration](0xb4),
 		DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootSource)
+	rootRequest, err := NewDirectoryMaterializationRequest(
+		intent, rootSource, ordinaryoutput.SourceNodeConnectsSelection, MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDirectory, ok := rootRequest.Directory()
+	if !ok {
+		t.Fatal("catalog root did not project materialization authority")
+	}
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,16 +94,27 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 		rootAdmission, "folder", catalog.ModifiedTime{},
 	)
 	request, err := NewDirectoryMaterializationRequest(
-		projector, childSource, ordinaryoutput.SourceNodeSelected, MaterializedDirectoryClaim{},
+		intent, childSource, ordinaryoutput.SourceNodeSelected, MaterializedDirectoryClaim{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	artifact, materialized := request.Projection().ArtifactPath()
 	if !materialized || artifact.String() != "folder" ||
-		!DirectoryMaterializationMatchesIntent(intent, request) ||
-		DirectoryMaterializationMatchesProjector(ordinaryoutput.ArtifactPathProjector{}, request) {
+		!DirectoryMaterializationMatchesIntent(intent, request) {
 		t.Fatalf("closed directory projection = (%q, %t)", artifact.String(), materialized)
+	}
+	childDirectory, ok := request.Directory()
+	if !ok {
+		t.Fatal("child directory did not project materialization authority")
+	}
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childClaim, err := NewMaterializedDirectoryClaim(childAdmission, request)
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	fileSource, err := ordinaryoutput.NewSourceCatalogPath("folder/file.bin")
@@ -105,9 +122,18 @@ func TestOrdinaryOutputRequestsExposeNoSecondPathMappingAuthority(t *testing.T) 
 		t.Fatal(err)
 	}
 	descriptor := jobDescriptor(t, share, ordinaryID[catalog.FileID](0xb7), 0xb8, 17)
+	fileParent, err := NewDirectoryMaterializationFileParent(
+		childSource.DirectoryID, childSource.Generation, childSource.SourcePath, childAdmission, childClaim,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	relativePath, err := NewMaterializationRootRelativePath("folder/file.bin")
+	if err != nil {
+		t.Fatal(err)
+	}
 	file, err := NewMaterializationFile(
-		projector, fileSource, descriptor, newJobOutput(share).session,
-		rootAdmission, MaterializedDirectoryClaim{},
+		intent, fileSource, relativePath, descriptor, newJobOutput(share).session, fileParent,
 	)
 	if err != nil {
 		t.Fatal(err)

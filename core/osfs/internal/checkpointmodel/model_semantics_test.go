@@ -104,6 +104,43 @@ func TestRecordConstructorOwnsIdentityRangesAndLifecycleClaims(t *testing.T) {
 	}
 }
 
+func TestCurrentFSAMaterializerOwnsEmptyRootRelativeCoordinate(t *testing.T) {
+	spec := canonicalRecordSpec(t)
+	spec.MaterializerKind = MaterializerFSATree
+	spec.CanonicalPath = ""
+
+	record, err := NewRecord(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := EncodeRecord(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := DecodeRecord(encoded)
+	if err != nil || restored.CanonicalPath() != "" {
+		t.Fatalf("root-relative checkpoint round trip = %q, %v", restored.CanonicalPath(), err)
+	}
+	lineage, err := record.CheckpointLineageSpec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DeriveCheckpointLineageID(lineage); err != nil {
+		t.Fatalf("root-relative lineage = %v", err)
+	}
+
+	legacy := spec
+	legacy.MaterializerKind = MaterializerLegacyFSATree
+	if _, err := NewRecord(legacy); !errors.Is(err, ErrRecordBinding) {
+		t.Fatalf("legacy empty path error = %v", err)
+	}
+	legacyLineage := lineage
+	legacyLineage.MaterializerKind = MaterializerLegacyFSATree
+	if _, err := DeriveCheckpointLineageID(legacyLineage); !errors.Is(err, ErrRecordBinding) {
+		t.Fatalf("legacy empty lineage error = %v", err)
+	}
+}
+
 func TestRecordLifecycleClaimsAreClosed(t *testing.T) {
 	valid := []RecordSpec{
 		func() RecordSpec {

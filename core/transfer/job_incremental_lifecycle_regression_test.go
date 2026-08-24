@@ -273,7 +273,9 @@ func TestTransferJobRejectsDirectoryAdmissionFromAnotherIntentScope(t *testing.T
 		directory AuthenticatedSourceDirectory,
 		_ DirectoryAdmission,
 	) (DirectoryAdmission, error) {
-		return NewDirectoryAdmissionWithSecret(output.directorySecret[:], foreignScope, directory)
+		return NewDirectoryAdmissionWithSecret(
+			output.directorySecret[:], foreignScope, admissionTestMaterializationDirectory(t, directory),
+		)
 	}
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,

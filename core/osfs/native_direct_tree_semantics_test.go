@@ -139,12 +139,8 @@ func openNativeDirectTreeTestSession(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector,
+		intent,
 		transfer.AuthenticatedSourceDirectory{
 			DirectoryID: intent.SyntheticRoot(),
 			Generation:  coverageC6Identity[catalog.DirectoryGeneration](seed + 1),
@@ -191,12 +187,8 @@ func nativeDirectTreeTestFile(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	parentRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector,
+		intent,
 		transfer.AuthenticatedSourceDirectory{
 			DirectoryID: parent.DirectoryID(), Generation: parent.Generation(),
 			SourcePath: ordinaryoutput.EmptySourceCatalogPath(), ModifiedTime: parent.ModifiedTime(),
@@ -211,8 +203,22 @@ func nativeDirectTreeTestFile(
 	if err != nil {
 		t.Fatal(err)
 	}
+	parentSource := parentRequest.Source()
+	fileParent, err := transfer.NewDirectoryMaterializationFileParent(
+		parentSource.DirectoryID, parentSource.Generation, parentSource.SourcePath,
+		parent, parentMaterialization,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializationPath, err := transfer.NewMaterializationRootRelativePath(
+		parent.Path() + "/" + filepath.Base(path),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, session.SessionID(), parent, parentMaterialization,
+		intent, sourcePath, materializationPath, descriptor, session.SessionID(), fileParent,
 	)
 	if err != nil {
 		t.Fatal(err)

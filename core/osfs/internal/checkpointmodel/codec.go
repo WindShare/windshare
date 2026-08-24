@@ -328,8 +328,12 @@ func decodeRecordRanges(cursor *recordCursor) ([]Range, error) {
 }
 
 func canonicalPathBytes(path string) []byte {
-	components := strings.Split(path, "/")
 	var encoded bytes.Buffer
+	if path == "" {
+		writeRecordU64(&encoded, 0)
+		return encoded.Bytes()
+	}
+	components := strings.Split(path, "/")
 	writeRecordU64(&encoded, uint64(len(components)))
 	for _, component := range components {
 		writeRecordFrame(&encoded, []byte(component))
@@ -340,8 +344,14 @@ func canonicalPathBytes(path string) []byte {
 func decodeCanonicalPath(encoded []byte) (string, error) {
 	cursor := recordCursor{bytes: encoded}
 	count, err := cursor.rawU64()
-	if err != nil || count == 0 || count > catalog.MaxPathDepth {
+	if err != nil || count > catalog.MaxPathDepth {
 		return "", fmt.Errorf("%w: canonical path count", ErrRecordBinding)
+	}
+	if count == 0 {
+		if cursor.off != len(encoded) {
+			return "", ErrRecordNonCanonical
+		}
+		return "", nil
 	}
 	components := make([]string, int(count))
 	for index := range components {

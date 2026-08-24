@@ -9,6 +9,7 @@ import {
 import { FileCheckpointError } from './checkpoint-lifecycle'
 import {
   FILE_CHECKPOINT_ID_BYTES,
+  FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
   FILE_CHECKPOINT_MAX_FILE_SIZE,
   FILE_ID_BYTES,
   FILE_REVISION_BYTES,
@@ -138,9 +139,14 @@ export function classifyCheckpointLineage(
 function normalizeCheckpointLineageSpec(
   input: CheckpointLineageSpec,
 ): NormalizedCheckpointLineageSpec {
+  const materializerKind = checkpointMaterializerKind(input.materializerKind)
   let canonicalPath: readonly string[]
   try {
-    canonicalPath = snapshotPortableCatalogPath(input.canonicalPath)
+    // Only the current FSA identity may encode the named root entry as [].
+    canonicalPath = materializerKind === FILE_CHECKPOINT_MATERIALIZER_FSA_TREE &&
+        Array.isArray(input.canonicalPath) && input.canonicalPath.length === 0
+      ? Object.freeze([])
+      : snapshotPortableCatalogPath(input.canonicalPath)
   } catch (cause) {
     throw new FileCheckpointError(
       'binding',
@@ -163,7 +169,7 @@ function normalizeCheckpointLineageSpec(
     ),
     fileId: identityBytes(input.fileId, FILE_ID_BYTES, 'file ID'),
     canonicalPath,
-    materializerKind: checkpointMaterializerKind(input.materializerKind),
+    materializerKind,
     authorityRef: identityBytes(
       input.authorityRef,
       FILE_CHECKPOINT_ID_BYTES,

@@ -5,6 +5,7 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+  FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE,
   FILE_CHECKPOINT_NAMESPACE,
   FILE_CHECKPOINT_OWNERSHIP_MARKER,
   FILE_CHECKPOINT_PHASE_ACTIVE,
@@ -24,6 +25,8 @@ import {
   type CheckpointLineageSpec,
   type FileCheckpointSpec,
 } from '../../src/output/persistence/checkpoint'
+import { validateFileCheckpointPage } from '../../src/output/persistence/journal'
+import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 
 describe('FileCheckpointV2', () => {
   it('round-trips the frozen v2 envelope and keeps range authority file-local', () => {
@@ -83,6 +86,35 @@ describe('FileCheckpointV2', () => {
     })
     expect(() => validateFileCheckpointTransition(previous, changed))
       .toThrow('without a generation')
+  })
+
+  it('rejects legacy FSA coordinates from the current durable namespace', () => {
+    const current = checkpoint()
+    const legacy = checkpoint({ materializerKind: FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE })
+    const binding = durableCheckpointNamespaceIdentity(current)
+
+    expect(() => validateFileCheckpointPage(
+      { records: [legacy] },
+      { direction: 'ascending' },
+      binding,
+    )).toThrow('escaped its operation namespace')
+  })
+
+  it('admits an empty root-relative coordinate only for the current FSA materializer', () => {
+    const rootFile = checkpoint({ canonicalPath: [] })
+    const encoded = encodeFileCheckpointV2(rootFile)
+
+    expect(decodeFileCheckpointV2(encoded)).toEqual(rootFile)
+    expect(() => deriveCheckpointLineageID(rootFile)).not.toThrow()
+    expect(() => checkpoint({
+      canonicalPath: [],
+      materializerKind: FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE,
+    })).toThrow('path')
+    expect(() => deriveCheckpointLineageID({
+      ...lineageSpec(),
+      canonicalPath: [],
+      materializerKind: FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE,
+    })).toThrow('path')
   })
 
   it('does not claim complete aggregate evidence from candidate or partial coverage', () => {

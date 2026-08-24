@@ -387,15 +387,16 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
       }
       const file = snapshotOutputFile({
         source: revision,
-        sourcePath: request.sourcePath,
-        artifactPath: request.artifactPath,
+        sourceAuthenticationPath: request.sourceAuthenticationPath,
+        logicalArtifactPath: request.logicalArtifactPath,
+        materializationRelativePath: request.materializationRelativePath,
         exactSize: revision.exactSize,
         ...(request.parentAdmission === undefined ? {} : { parentAdmission: request.parentAdmission }),
         ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
       })
       const ownership = Object.freeze({
         ...identity,
-        canonicalPath: file.artifactPath,
+        canonicalPath: file.materializationRelativePath,
         ownedFileIdentity: `owned:${file.source.fileId}`,
       })
       let durable = new ByteRangeSet(file.exactSize, options.initialRanges ?? [])
@@ -644,7 +645,7 @@ async function directoryOutput(
   const ledger = new DirectoryAdmissionLedger(scope)
   const port: IncrementalDirectoryOutput = {
     admitDirectory: (request, signal) =>
-      ledger.admitDirectory(request.source, signal),
+      ledger.admitDirectory(request.directory, signal),
     finalizeDirectory: async (admission, signal) => {
       const settled = await ledger.finalizeDirectory(admission, signal)
       return admission.path.join('/') === failFinalizePath

@@ -347,6 +347,12 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		atomic.ReservedName() != atomicName || atomic.Guarantees().NameAuthority() != NameUserChosen {
 		t.Fatal("reservation variant fields mismatch")
 	}
+	if layoutVersion, ok := fsaEntry.FSALayoutVersion(); !ok || layoutVersion != FSAReservedRootLayoutV1 {
+		t.Fatalf("FSA reserved-root layout = (%d, %t)", layoutVersion, ok)
+	}
+	if _, ok := nativeEntry.FSALayoutVersion(); ok {
+		t.Fatal("native named entry exposed an FSA layout version")
+	}
 	if atomic.Guarantees().Profile() != GuaranteeManagedAtomic ||
 		atomic.Guarantees().Replacement() != ReplacementAtomicNoReplace ||
 		atomic.Guarantees().Delivery() != DeliveryManagedTarget ||

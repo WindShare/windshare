@@ -226,6 +226,7 @@ type TransferJob struct {
 	replayPageCapacity int
 	catalogWalkLimits  catalogwalk.Limits
 	projector          ordinaryoutput.ArtifactPathProjector
+	coordinates        directTreeCoordinateProjector
 	tracer             TransferLifecycleTracer
 	revisionWait       *revisionwait.Coordinator
 	progress           receiveProgressTracker
@@ -265,6 +266,10 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	if err != nil {
 		return nil, ErrInvalidTransferJob
 	}
+	coordinates, err := newDirectTreeCoordinateProjector(intent)
+	if err != nil || coordinates.artifact != projector {
+		return nil, ErrInvalidTransferJob
+	}
 	walkLimits, ok := catalogwalk.NewLimits(
 		uint32(replayPageCapacity),
 		catalog.MaxDirectoryEntries,
@@ -287,7 +292,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 		catalog:       config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
 		outputAuthority:   config.Materializer,
 		settlementTimeout: timeout, queueCapacity: queueCapacity, replayPageCapacity: replayPageCapacity,
-		catalogWalkLimits: walkLimits, projector: projector,
+		catalogWalkLimits: walkLimits, projector: projector, coordinates: coordinates,
 		tracer: config.Tracer, revisionWait: revisionWait, progress: newReceiveProgressTracker(),
 	}, nil
 }
@@ -377,11 +382,11 @@ func (j *TransferJob) admitRunOutput(ctx context.Context, state *jobRun) *lifecy
 		failure = admitInternalFailure(validateDirectTreeSession(j.intent, nil))
 	}
 	if failure == nil {
-		admissionScope, err := NewDirectoryAdmissionScope(j.intent)
-		if err != nil {
+		admissionScope := j.coordinates.scope
+		if !admissionScope.valid() {
 			// Intent validation precedes OpenDirectTree, so failure to project its receipt
 			// scope is an internal boundary violation rather than backend authority.
-			failure = dependencyContractFailure(err)
+			failure = dependencyContractFailure(ErrInvalidDirectoryAdmission)
 		} else {
 			state.directoryAdmissionScope = admissionScope
 		}
@@ -484,12 +489,9 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	if err != nil || !ready {
 		return err
 	}
-	if plan.parentAdmission.IsZero() {
-		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(ErrDirectoryAdmissionMismatch))
-	}
-	file, err := NewMaterializationFile(
-		r.job.projector, plan.sourcePath, opened.Descriptor, r.output.SessionID(),
-		plan.parentAdmission, plan.parentMaterialization,
+	file, err := newMaterializationFile(
+		r.job.coordinates, plan.sourcePath, plan.materializationRelativePath,
+		opened.Descriptor, r.output.SessionID(), plan.parent,
 	)
 	if err != nil || file.ArtifactPath() != plan.artifactPath || file.ExpectedSize() != plan.expectedSize {
 		return r.rejectUnstartedFile(ctx, plan, opened, dependencyContractFailure(errors.Join(ErrOutputContract, err)))

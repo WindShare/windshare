@@ -46,6 +46,7 @@ import {
   outputFileRequest,
   persistFreshFixtureExpiry,
   resultRootArtifact,
+  rootDirectoryMaterializationRequest,
   resumeReceiving,
   singleFileArtifact,
   startReceiving,
@@ -293,7 +294,7 @@ describe('File System Access DirectTree lifecycle', () => {
     expect(parent.directoryNames()).toEqual(['photos', first.reservation.physicalName].sort())
     await first.ensureDirectory(['nested'])
     const firstFile = await first.beginFile({
-      artifactPath: ['nested', 'photo.bin'],
+      materializationRelativePath: ['nested', 'photo.bin'],
       openRevision: async () => ({
         fileId: identity(80),
         fileRevision: identity(81),
@@ -319,7 +320,7 @@ describe('File System Access DirectTree lifecycle', () => {
     expect(await parent.getDirectoryHandle(reopened.reservation.physicalName)).toBe(taskRoot)
     await expect(reopened.ensureDirectory(['nested'])).resolves.toMatchObject({ created: false })
     const reopenedFile = await reopened.beginFile({
-      artifactPath: ['nested', 'photo.bin'],
+      materializationRelativePath: ['nested', 'photo.bin'],
       openRevision: async () => ({
         fileId: identity(80),
         fileRevision: identity(81),
@@ -362,7 +363,7 @@ describe('File System Access DirectTree lifecycle', () => {
     const ordering: string[] = []
     parent.onFileCreated = () => ordering.push('created')
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => {
         ordering.push('revision-opened')
         return {
@@ -392,7 +393,7 @@ describe('File System Access DirectTree lifecycle', () => {
       openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
     const resumed = await reopened.beginFile({
-      artifactPath: [reopened.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
@@ -424,7 +425,7 @@ describe('File System Access DirectTree lifecycle', () => {
     expect(session.reservation.physicalName).toBe(session.reservation.logicalReservedName)
 
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(34),
@@ -453,7 +454,7 @@ describe('File System Access DirectTree lifecycle', () => {
     await parent.getFileHandle(session.reservation.physicalName, { create: true })
 
     await expect(session.beginFile({
-      artifactPath: [session.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
@@ -523,7 +524,7 @@ describe('File System Access DirectTree lifecycle', () => {
       trace: (event) => trace.push(event),
     })
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(34),
@@ -562,19 +563,15 @@ describe('File System Access settlement authority', () => {
     const transferJobId = identity(62)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(63))
-    const root = await execution.directories.admitDirectory({
-      source: {
-        directoryId: directoryId(session.intent.syntheticRoot),
-        generation: identity(64),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-    }, SIGNAL)
-    const opened = await execution.output.beginFile(outputFileRequest({
+    const root = await execution.directories.admitDirectory(
+      await rootDirectoryMaterializationRequest(session.intent, identity(64)),
+      SIGNAL,
+    )
+    const opened = await execution.output.beginFile(await outputFileRequest({
       intent: session.intent,
       fileId: identity(65),
       fileRevision: identity(66),
-      artifactPath: ['payload.bin'],
+      sourceRelativePath: ['payload.bin'],
       exactSize: 2n,
       parentAdmission: root,
     }), SIGNAL)
@@ -607,24 +604,21 @@ describe('File System Access settlement authority', () => {
     const transferJobId = identity(72)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(73))
-    const root = await execution.directories.admitDirectory({
-      source: {
-        directoryId: session.intent.syntheticRoot,
-        generation: identity(74),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-    }, SIGNAL)
-    const opened = await execution.output.beginFile(outputFileRequest({
+    const root = await execution.directories.admitDirectory(
+      await rootDirectoryMaterializationRequest(session.intent, identity(74)),
+      SIGNAL,
+    )
+    const opened = await execution.output.beginFile(await outputFileRequest({
       intent: session.intent,
       fileId: identity(75),
       fileRevision: identity(76),
-      artifactPath: ['kept.bin'],
+      sourceRelativePath: ['kept.bin'],
       exactSize: 1n,
       parentAdmission: root,
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(8), SIGNAL)
     await opened.transaction.commit(SIGNAL)
+    await execution.directories.finalizeDirectory(root, SIGNAL)
     const classification = classificationForTransferFailure(
       new Error('directory metadata failed'),
       {
@@ -637,7 +631,7 @@ describe('File System Access settlement authority', () => {
     const worker = transferWorkerSettlement('CompletedWithErrors', {
       failures: Object.freeze([{
         kind: 'directory' as const,
-        directoryId: directoryId(session.intent.syntheticRoot),
+        directoryId: directoryId(identity(70)),
         classification,
       }]),
       failureCount: 1,
@@ -674,11 +668,10 @@ describe('File System Access settlement authority', () => {
     const transferJobId = identity(82)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(83))
-    const opened = await execution.output.beginFile(outputFileRequest({
+    const opened = await execution.output.beginFile(await outputFileRequest({
       intent: session.intent,
       fileId: identity(3),
       fileRevision: identity(84),
-      artifactPath: [session.reservation.requestedName],
       exactSize: 1n,
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(1), SIGNAL)
@@ -714,11 +707,10 @@ describe('File System Access settlement authority', () => {
     const transferJobId = identity(92)
     await startReceiving(repository, first.intent, leaseId)
     const firstExecution = await fsaExecution(first, repository, leaseId, transferJobId, identity(93))
-    const opened = await firstExecution.output.beginFile(outputFileRequest({
+    const opened = await firstExecution.output.beginFile(await outputFileRequest({
       intent: first.intent,
       fileId: identity(3),
       fileRevision: identity(94),
-      artifactPath: [first.reservation.requestedName],
       exactSize: 4n,
     }), SIGNAL)
     await opened.transaction.writeRange(0n, Uint8Array.of(1, 2), SIGNAL)
@@ -751,11 +743,10 @@ describe('File System Access settlement authority', () => {
       transferJobId,
       identity(95),
     )
-    const resumed = await reopenedExecution.output.beginFile(outputFileRequest({
+    const resumed = await reopenedExecution.output.beginFile(await outputFileRequest({
       intent: reopened.intent,
       fileId: identity(3),
       fileRevision: identity(94),
-      artifactPath: [reopened.reservation.requestedName],
       exactSize: 4n,
     }), SIGNAL)
     expect(resumed.durableRanges.ranges).toEqual([{ start: 0n, end: 2n }])

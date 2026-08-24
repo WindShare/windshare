@@ -3,8 +3,6 @@ import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import { discoverV2DirectoryGeneration } from '../discovery/v2-generation-replay'
-import type { ReceiveIntent } from '../intent'
-import { artifactFilePath } from './artifact-path'
 import type {
   AuthenticatedDirectory,
   AuthenticatedLogicalSiblingMembership,
@@ -13,6 +11,7 @@ import type {
   PendingFile,
   TransferJobOptions,
 } from './contract'
+import type { DirectTreeFileProjection } from './coordinate/direct-tree'
 import type { ExactPreparationCollector } from './preparation'
 import { AsyncBoundedQueue } from './scheduler'
 import type { V2ExplicitSelectionTargetLedger } from './selection'
@@ -38,14 +37,14 @@ export class V2JobDiscovery {
   readonly #explicitTargets: V2ExplicitSelectionTargetLedger
   readonly #signal: AbortSignal
   readonly #rootCommitted: () => V2CommittedDirectory | undefined
-  readonly #intent: () => ReceiveIntent
   readonly #observeSelectedFile: (entry: Extract<V2CatalogEntry, { kind: 'file' }>) => void
   readonly #recordDirectoryFailure: (identity: string, error: unknown) => void
-  readonly #admitDirectory: (
+  readonly #authenticateDirectory: (
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
     parent?: AuthenticatedDirectory,
   ) => Promise<AuthenticatedDirectory>
+  readonly #projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
   readonly #prepareDirectory: (
     collector: ExactPreparationCollector,
     cursor: DirectoryCursor,
@@ -60,14 +59,14 @@ export class V2JobDiscovery {
     readonly explicitTargets: V2ExplicitSelectionTargetLedger
     readonly signal: AbortSignal
     readonly rootCommitted: () => V2CommittedDirectory | undefined
-    readonly intent: () => ReceiveIntent
     readonly observeSelectedFile: (entry: Extract<V2CatalogEntry, { kind: 'file' }>) => void
     readonly recordDirectoryFailure: (identity: string, error: unknown) => void
-    readonly admitDirectory: (
+    readonly authenticateDirectory: (
       cursor: DirectoryCursor,
       committed: V2CommittedDirectory,
       parent?: AuthenticatedDirectory,
     ) => Promise<AuthenticatedDirectory>
+    readonly projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
     readonly prepareDirectory: (
       collector: ExactPreparationCollector,
       cursor: DirectoryCursor,
@@ -81,10 +80,10 @@ export class V2JobDiscovery {
     this.#explicitTargets = input.explicitTargets
     this.#signal = input.signal
     this.#rootCommitted = input.rootCommitted
-    this.#intent = input.intent
     this.#observeSelectedFile = input.observeSelectedFile
     this.#recordDirectoryFailure = input.recordDirectoryFailure
-    this.#admitDirectory = input.admitDirectory
+    this.#authenticateDirectory = input.authenticateDirectory
+    this.#projectFile = input.projectFile
     this.#prepareDirectory = input.prepareDirectory
   }
 
@@ -148,11 +147,16 @@ export class V2JobDiscovery {
     if (entry.kind === 'file') {
       if (!this.#selection.selected(entry, cursor.ancestry)) return undefined
       const parent = await materialize('ancestor')
-      const artifactPath = artifactFilePath(this.#intent(), sourcePath)
+      const projection = this.#projectFile(sourcePath)
       if (collector !== undefined) {
-        collector.addFile(entry, sourcePath, artifactPath, parent)
+        collector.addFile(
+          entry,
+          projection.sourceAuthenticationPath,
+          projection.logicalArtifactPath,
+          parent,
+        )
       } else {
-        await this.#enqueueFile(entry, sourcePath, artifactPath, parent, files)
+        await this.#enqueueFile(entry, projection, parent, files)
       }
       return undefined
     }
@@ -174,8 +178,7 @@ export class V2JobDiscovery {
 
   async #enqueueFile(
     entry: Extract<V2CatalogEntry, { kind: 'file' }>,
-    sourcePath: readonly string[],
-    artifactPath: readonly string[],
+    projection: DirectTreeFileProjection,
     parent: AuthenticatedDirectory,
     files: AsyncBoundedQueue<PendingFile>,
   ): Promise<void> {
@@ -184,8 +187,9 @@ export class V2JobDiscovery {
     try {
       await files.push(Object.freeze({
         entry,
-        sourcePath,
-        artifactPath,
+        sourceAuthenticationPath: projection.sourceAuthenticationPath,
+        logicalArtifactPath: projection.logicalArtifactPath,
+        materializationRelativePath: projection.relativePath,
         parent,
         ready,
         ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),
@@ -210,7 +214,7 @@ export class V2JobDiscovery {
         materialized = (async () => {
           const parent = await work.materializeParent('ancestor')
           return collector === undefined
-            ? this.#admitDirectory(cursor, committed, parent)
+            ? this.#authenticateDirectory(cursor, committed, parent)
             : this.#prepareDirectory(collector, cursor, committed, role)
         })()
       }

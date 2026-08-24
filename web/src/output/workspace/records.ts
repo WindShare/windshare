@@ -547,7 +547,7 @@ export function operationRecordId(
 export function receiveRecordDomain(kind: ReceiveRecordKind): string {
   switch (kind) {
     case RECEIVE_RECORD_OPERATION: return 'windshare/receive-operation/v2'
-    case RECEIVE_RECORD_RESERVATION: return 'windshare/destination-reservation/v3'
+    case RECEIVE_RECORD_RESERVATION: return 'windshare/destination-reservation/v4'
     case RECEIVE_RECORD_WORKSPACE_BINDING: return 'windshare/workspace-binding/v1'
     case RECEIVE_RECORD_PREPARATION: return 'windshare/preparation-manifest/v1'
     case RECEIVE_RECORD_MATERIALIZED_MANIFEST: return 'windshare/materialized-manifest/v1'

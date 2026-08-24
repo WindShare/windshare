@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import { inspectFileSystemComponent } from '../../browser/filesystem-component-inspection'
 import { createOwnedObjectId, requireOwnedObjectId } from '../../browser/filesystem-file-record'
 import {
@@ -683,7 +683,7 @@ export class CompatibleNameCoordinator {
     artifactPathInput: readonly string[],
     entryKind: CompatibleNameEntryKind,
   ): readonly string[] {
-    const artifactPath = snapshotPortableCatalogPath(artifactPathInput)
+    const artifactPath = snapshotMaterializationRootRelativePath(artifactPathInput)
     if (this.#rootMapping?.entryKind === 'file' && entryKind === 'file') {
       return this.#rootMapping.logicalPath
     }
@@ -695,7 +695,7 @@ export class CompatibleNameCoordinator {
   #ledgerParentPath(parentArtifactPathInput: readonly string[]): readonly string[] {
     const parentArtifactPath = parentArtifactPathInput.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(parentArtifactPathInput)
+      : snapshotMaterializationRootRelativePath(parentArtifactPathInput)
     return this.pairPlacement === 'beside-mapped-root'
       ? Object.freeze([this.resolver.header.root.logicalName, ...parentArtifactPath])
       : parentArtifactPath

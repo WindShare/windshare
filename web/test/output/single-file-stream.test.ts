@@ -6,6 +6,11 @@ import type {
   OpenedOutputRevision,
   OutputFileRequest,
 } from '../../src/transfer/output-session'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
 
 const ACTIVE_SIGNAL = new AbortController().signal
 const SHARE_INSTANCE = identityText(1)
@@ -156,8 +161,9 @@ function request(
 ): OutputFileRequest {
   return {
     source: { shareInstance: SHARE_INSTANCE, fileId: FILE_ID },
-    sourcePath,
-    artifactPath,
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath(sourcePath),
+    logicalArtifactPath: snapshotLogicalArtifactPath(artifactPath),
+    materializationRelativePath: snapshotMaterializationRootRelativePath(artifactPath),
     expectedSize,
     openRevision,
   }

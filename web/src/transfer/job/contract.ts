@@ -21,6 +21,11 @@ import type { SelectionMeasure } from '../measure'
 import type { TransferWorkerSettlement } from '../outcome'
 import type { ClassifiedTransferFailure } from './failures'
 import type {
+  LogicalArtifactPath,
+  MaterializationRootRelativePath,
+  SourceAuthenticationPath,
+} from './coordinate/direct-tree'
+import type {
   DurabilityLevel,
   ExactPreparationEvidence,
   V2PlanExecutionAuthority,
@@ -253,14 +258,23 @@ export interface DirectoryCursor {
   readonly modifiedTime?: V2CatalogModifiedTime
 }
 
-export interface AuthenticatedDirectory {
+interface AuthenticatedDirectoryBase {
   readonly directoryId: string
   readonly generation: string
-  readonly sourcePath: readonly string[]
-  readonly artifactPath: readonly string[]
+  readonly sourceAuthenticationPath: SourceAuthenticationPath
+  readonly logicalArtifactPath: LogicalArtifactPath
   readonly modifiedTime?: CanonicalModifiedTime
-  readonly admission?: DirectoryAdmission
 }
+
+export type AuthenticatedDirectory =
+  | (AuthenticatedDirectoryBase & Readonly<{
+      kind: 'reference'
+    }>)
+  | (AuthenticatedDirectoryBase & Readonly<{
+      kind: 'materialized'
+      materializationRelativePath: MaterializationRootRelativePath
+      admission: DirectoryAdmission
+    }>)
 
 /**
  * Exact committed-generation authority for the logical children of one directory.
@@ -280,8 +294,9 @@ export interface DirectoryWork {
 
 export interface PendingFile {
   readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
-  readonly sourcePath: readonly string[]
-  readonly artifactPath: readonly string[]
+  readonly sourceAuthenticationPath: SourceAuthenticationPath
+  readonly logicalArtifactPath: LogicalArtifactPath
+  readonly materializationRelativePath: MaterializationRootRelativePath
   readonly parent: AuthenticatedDirectory
   readonly modifiedTime?: V2CatalogModifiedTime
   /** Producer trace publication must happen before a woken worker can start. */

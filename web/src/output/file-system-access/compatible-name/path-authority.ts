@@ -1,4 +1,4 @@
-import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import type { PersistentDirectoryNamespaceClaim } from '../../persistent-tree/contracts'
 import type { PathComponentRejectedError } from '../../browser/filesystem-component-inspection'
 import type {
@@ -211,7 +211,7 @@ export class CompatibleNamePathAuthority {
     artifactPathInput: readonly string[],
     entryKind: CompatibleNameEntryKind,
   ): string {
-    const artifactPath = snapshotPortableCatalogPath(artifactPathInput)
+    const artifactPath = snapshotMaterializationRootRelativePath(artifactPathInput)
     return this.#coordinator?.physicalComponent(artifactPath, entryKind) ?? artifactPath.at(-1)!
   }
 
@@ -223,7 +223,7 @@ export class CompatibleNamePathAuthority {
     artifactPathInput: readonly string[],
     entryKind: CompatibleNameEntryKind,
   ): boolean {
-    const artifactPath = snapshotPortableCatalogPath(artifactPathInput)
+    const artifactPath = snapshotMaterializationRootRelativePath(artifactPathInput)
     const coordinator = this.#coordinator
     return coordinator !== undefined && coordinator.mapping(artifactPath, entryKind) === undefined &&
       coordinator.hasClaimedLogicalSibling(artifactPath.slice(0, -1), artifactPath.at(-1)!)

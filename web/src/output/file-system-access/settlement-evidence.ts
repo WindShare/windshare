@@ -25,6 +25,7 @@ import {
   type ObservedSettlementEvidence,
   type SettlementReceiptEvidence,
 } from './settlement-proof'
+import { validateFSASettlementRootEvidence } from './settlement-root-evidence'
 
 type MaterializedFileEntry = Extract<MaterializedManifestEntry, { kind: 'file' }>
 type MaterializedDirectoryEntry = Extract<MaterializedManifestEntry, { kind: 'directory' }>
@@ -45,6 +46,12 @@ export interface ObserveFSASettlementEvidenceOptions {
 export async function snapshotQuiescentFSASettlementEvidence(
   options: Omit<ObserveFSASettlementEvidenceOptions, 'observation'>,
 ): Promise<SettlementReceiptEvidence> {
+  validateFSASettlementRootEvidence({
+    directoryScope: options.directoryScope,
+    directories: directoryEntriesOf(options.evidence.entries),
+    directorySettlements: options.evidence.directorySettlements,
+    requireComplete: options.requireComplete,
+  })
   const entries = snapshotEntries(options.evidence.entries)
   const fileEntries = entries.filter(
     (entry): entry is MaterializedFileEntry => entry.kind === 'file',
@@ -62,7 +69,6 @@ export async function snapshotQuiescentFSASettlementEvidence(
         value.settlement.kind !== DirectorySettlementKind.Finalized))) {
     throw new TypeError('published FSA settlement lacks finalized directory evidence')
   }
-  validateLayout(options.intent, directoryEntries, options.requireComplete)
   const measured = materializationSummary(entries)
   if (!sameSummary(measured, options.summary)) {
     throw new TypeError('FSA settlement summary differs from owned evidence')
@@ -102,6 +108,12 @@ export async function observeFSASettlementEvidence(
     throw new TargetOwnershipUnknownError('settlement', options.intent.operationId)
   }
   const checkpoints = await options.observation.committedCheckpoints()
+  validateFSASettlementRootEvidence({
+    directoryScope: options.directoryScope,
+    directories: directoryEntriesOf(options.evidence.entries),
+    directorySettlements: options.evidence.directorySettlements,
+    requireComplete: options.requireComplete,
+  })
   const entries = snapshotEntries(options.evidence.entries)
   const fileEntries = entries.filter(
     (entry): entry is MaterializedFileEntry => entry.kind === 'file',
@@ -123,7 +135,6 @@ export async function observeFSASettlementEvidence(
     options.directoryScope,
     options.requireComplete,
   )
-  validateLayout(options.intent, directoryEntries, options.requireComplete)
   const measured = materializationSummary(entries)
   if (!sameSummary(measured, options.summary)) {
     throw new TypeError('FSA settlement summary differs from owned evidence')
@@ -204,20 +215,10 @@ async function verifyDirectoryEvidence(
   return directorySettlements
 }
 
-function validateLayout(
-  intent: DirectTreeIntent,
-  directories: readonly MaterializedDirectoryEntry[],
-  requireComplete: boolean,
-): void {
-  if (intent.artifact.layout.kind === 'single-file') {
-    if (directories.length !== 0) {
-      throw new TypeError('single-file FSA settlement contains an extra result root')
-    }
-    return
-  }
-  const roots = directories.filter(entry => entry.artifactPath.length === 0)
-  if (roots.length > 1 || (requireComplete && roots.length !== 1) ||
-      roots.some(entry => entry.directoryId !== intent.syntheticRoot)) {
-    throw new TypeError('FSA result-root settlement has invalid root evidence')
-  }
+function directoryEntriesOf(
+  entries: readonly MaterializedManifestEntry[],
+): readonly MaterializedDirectoryEntry[] {
+  return entries.filter(
+    (entry): entry is MaterializedDirectoryEntry => entry.kind === 'directory',
+  )
 }

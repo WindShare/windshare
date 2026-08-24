@@ -5,6 +5,7 @@ import {
 } from '../workspace/records'
 import type { PreparedReceiveOperationTransition } from '../workspace/repository'
 import {
+  COMPATIBLE_NAME_LEDGER_FORMAT_VERSION,
   MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS,
   MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS,
   compatibleNameMappingId,
@@ -145,6 +146,9 @@ export async function operationMappingValues(
 
 export function readOperationRow(value: unknown): CompatibleNameOperationRowV1 {
   const row = value as StoredCompatibleNameOperationRowV1
+  if (row?.formatVersion !== COMPATIBLE_NAME_LEDGER_FORMAT_VERSION) {
+    throw new TypeError('compatible-name operation row version is invalid')
+  }
   const header = compatibleNameOperationHeaderV1(row)
   const nextCommitOrdinal = boundedOrdinal(
     row?.nextCommitOrdinal,
@@ -158,8 +162,11 @@ export function readOperationRow(value: unknown): CompatibleNameOperationRowV1 {
 
 export function readMapping(value: unknown): CompatibleNameMappingV1 {
   const row = value as CompatibleNameMappingV1
+  if (row?.formatVersion !== COMPATIBLE_NAME_LEDGER_FORMAT_VERSION) {
+    throw new TypeError('compatible-name mapping row version is invalid')
+  }
   const mapping = compatibleNameMappingV1(row)
-  if (row?.formatVersion !== mapping.formatVersion || row.id !== mapping.id ||
+  if (row.id !== mapping.id ||
       !sameValue(value, mapping)) {
     throw new TypeError('compatible-name mapping row is invalid')
   }

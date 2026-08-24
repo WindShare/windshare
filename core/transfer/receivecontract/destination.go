@@ -9,18 +9,19 @@ import (
 )
 
 const (
-	destinationReservationDomain = "windshare/destination-reservation/v3"
+	destinationReservationDomain = "windshare/destination-reservation/v4"
 	fsaOwnedFileBindingDomain    = "windshare/fsa-owned-file-binding/v1"
 	workspaceBindingDomain       = "windshare/workspace-binding/v1"
 	portableBindingDomain        = "windshare/portable-binding/v1"
 	nameCollisionDomain          = "windshare/name-collision/v1"
 
-	DefaultPortableArtifactLimit       = uint64(67_108_864)
-	DefaultPortableAssemblyPartBytes   = uint64(1_048_576)
-	DefaultPortableMaximumParts        = uint64(64)
-	BrowserHandoffObjectURLLeaseMillis = uint64(60_000)
-	DirectZipCandidateTokenLength      = 22
-	DirectZipStableNameInfix           = ".windshare-"
+	DefaultPortableArtifactLimit             = uint64(67_108_864)
+	DefaultPortableAssemblyPartBytes         = uint64(1_048_576)
+	DefaultPortableMaximumParts              = uint64(64)
+	BrowserHandoffObjectURLLeaseMillis       = uint64(60_000)
+	DirectZipCandidateTokenLength            = 22
+	DirectZipStableNameInfix                 = ".windshare-"
+	FSAReservedRootLayoutV1            uint8 = 1
 )
 
 type DestinationReservationKind uint8
@@ -70,6 +71,7 @@ type DestinationReservation struct {
 	physicalName        string
 	reservedName        string
 	collisionIndex      uint32
+	fsaLayoutVersion    uint8
 	encoded             []byte
 	digest              BindingDigest
 }
@@ -248,6 +250,7 @@ func newDestinationReservation(
 		frame(operation.Bytes()), frame(id.Bytes()), frame(artifact.Digest().Bytes()),
 		frame([]byte{byte(authorityKind)}), frame(authority.Bytes()), frame(guarantees.canonicalBytes()),
 	)
+	var fsaLayoutVersion uint8
 	switch kind {
 	case ReservationContainerRoot:
 		if authorityKind != AuthorityNativeContainer || guarantees.profile != GuaranteeNativeTree ||
@@ -265,6 +268,10 @@ func newDestinationReservation(
 		encoded = append(encoded, frame([]byte(logicalReservedName))...)
 		encoded = append(encoded, frame([]byte(physicalName))...)
 		encoded = append(encoded, frame(uint32Bytes(collisionIndex))...)
+		if authorityKind == AuthorityFSAContainer {
+			fsaLayoutVersion = FSAReservedRootLayoutV1
+			encoded = append(encoded, frame([]byte{fsaLayoutVersion})...)
+		}
 	case ReservationAtomicTarget:
 		if authorityKind != AuthorityManagedAtomicTarget || guarantees.profile != GuaranteeManagedAtomic || entryKind != 0 ||
 			logicalReservedName != "" || physicalName != "" {
@@ -282,7 +289,8 @@ func newDestinationReservation(
 		authorityKind: authorityKind, authority: authority, guarantees: guarantees,
 		entryKind: entryKind, requestedName: requestedName,
 		logicalReservedName: logicalReservedName, physicalName: physicalName, reservedName: reservedName,
-		collisionIndex: collisionIndex, encoded: encoded, digest: BindingDigest(sum),
+		collisionIndex: collisionIndex, fsaLayoutVersion: fsaLayoutVersion,
+		encoded: encoded, digest: BindingDigest(sum),
 	}, nil
 }
 
@@ -438,7 +446,13 @@ func completeArtifactName(artifact ArtifactSpec) (string, bool) {
 }
 
 func (reservation DestinationReservation) valid() bool {
-	return !reservation.operation.IsZero() && !reservation.id.IsZero() &&
+	expectedFSALayoutVersion := uint8(0)
+	if reservation.kind == ReservationNamedContainerEntry &&
+		reservation.authorityKind == AuthorityFSAContainer {
+		expectedFSALayoutVersion = FSAReservedRootLayoutV1
+	}
+	return reservation.fsaLayoutVersion == expectedFSALayoutVersion &&
+		!reservation.operation.IsZero() && !reservation.id.IsZero() &&
 		!reservation.artifact.IsZero() && !reservation.authority.IsZero() &&
 		reservation.guarantees.valid() && !reservation.digest.IsZero() &&
 		BindingDigest(digest(reservation.encoded)) == reservation.digest
@@ -487,9 +501,13 @@ func (reservation DestinationReservation) RequestedName() string { return reserv
 func (reservation DestinationReservation) LogicalReservedName() string {
 	return reservation.logicalReservedName
 }
-func (reservation DestinationReservation) PhysicalName() string      { return reservation.physicalName }
-func (reservation DestinationReservation) ReservedName() string      { return reservation.reservedName }
-func (reservation DestinationReservation) CollisionIndex() uint32    { return reservation.collisionIndex }
+func (reservation DestinationReservation) PhysicalName() string   { return reservation.physicalName }
+func (reservation DestinationReservation) ReservedName() string   { return reservation.reservedName }
+func (reservation DestinationReservation) CollisionIndex() uint32 { return reservation.collisionIndex }
+func (reservation DestinationReservation) FSALayoutVersion() (uint8, bool) {
+	return reservation.fsaLayoutVersion,
+		reservation.valid() && reservation.authorityKind == AuthorityFSAContainer
+}
 func (reservation DestinationReservation) CanonicalBytes() []byte    { return clone(reservation.encoded) }
 func (reservation DestinationReservation) Digest() BindingDigest     { return reservation.digest }
 func (reservation DestinationReservation) IsZero() bool              { return !reservation.valid() }

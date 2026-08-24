@@ -55,7 +55,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
 
       const ownership: OutputFileOwnership = Object.freeze({
         ...this.identity,
-        canonicalPath: request.artifactPath,
+        canonicalPath: request.materializationRelativePath,
         ownedFileIdentity: `${this.identity.outputSessionId}:stream`,
       })
       const durableRanges = new VerifiedDurableRanges(
