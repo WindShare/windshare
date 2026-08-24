@@ -20,6 +20,7 @@ import {
 } from './job/contract'
 import {
   artifactDirectoryPath,
+  artifactFilePath,
   artifactLayoutClass,
 } from './job/artifact-path'
 import { finalizeV2Directories } from './job/directory-transfer'
@@ -33,6 +34,15 @@ import {
   V2JobDiscovery,
 } from './job/discovery'
 import { transferV2File } from './job/file-transfer'
+import {
+  createDirectTreeCoordinateContract,
+  sameMaterializationRootRelativePath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+  type DirectTreeCoordinateContract,
+  type DirectTreeDirectoryProjection,
+  type DirectTreeFileProjection,
+} from './job/coordinate/direct-tree'
 import {
   createTransferJobId,
   snapshotTransferJobId,
@@ -53,6 +63,7 @@ import {
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
   snapshotDirectoryMaterializationRequest,
+  type DirectTreeExecution,
   type DirectResumableZipExecution,
   type ExactPreparationEvidence,
   type IncrementalDirectoryOutput,
@@ -99,6 +110,7 @@ export class TransferJob {
   #externalAbortCleanup: (() => void) | undefined
   #directoryScope: DirectoryAdmissionScope | undefined
   #directoryOutput: IncrementalDirectoryOutput | undefined
+  #directTreeCoordinates: DirectTreeCoordinateContract | undefined
   #execution: PlanExecution | undefined
   #intent: TransferJobOptions['intent'] | undefined
   #observers: V2TransferObservers | undefined
@@ -148,14 +160,15 @@ export class TransferJob {
       explicitTargets: this.#failures.explicitTargets,
       signal: this.#lifetime.signal,
       rootCommitted: () => this.#root.committed,
-      intent: () => this.#requireIntent(),
       observeSelectedFile: (entry) => {
         const measure = this.#measure.observeUniqueFile(entry.expectedSize)
         this.#observers?.measure(measure)
         this.#emitProgress()
       },
       recordDirectoryFailure: (identity, error) => this.#recordDirectoryFailure(identity, error),
-      admitDirectory: (cursor, committed, parent) => this.#admitDirectory(cursor, committed, parent),
+      authenticateDirectory: (cursor, committed, parent) =>
+        this.#authenticateDirectory(cursor, committed, parent),
+      projectFile: sourcePath => this.#projectFile(sourcePath),
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
@@ -183,7 +196,7 @@ export class TransferJob {
         cursor: () => this.#root.cursor(),
         authenticated: committed => this.#root.authenticated(committed),
         direct: () => this.#root.direct(
-          (cursor, committed) => this.#admitDirectory(cursor, committed),
+          (cursor, committed) => this.#authenticateDirectory(cursor, committed),
         ),
         singleFileEvidence: (intent, committed) => collectExactSingleFileEvidence({
           catalog: this.#options.catalog,
@@ -204,7 +217,7 @@ export class TransferJob {
       },
       execution: {
         bind: execution => {
-          this.#execution = execution
+          this.#execution = this.#stabilizeDirectTreeLifecycle(execution)
         },
         bindDirectoryOutput: output => {
           this.#directoryOutput = output
@@ -240,6 +253,9 @@ export class TransferJob {
         this.#selection,
       )
       this.#intent = intent
+      this.#directTreeCoordinates = intent.plan.kind === 'direct-tree'
+        ? await createDirectTreeCoordinateContract(intent)
+        : undefined
       this.#observers = new V2TransferObservers({
         intent,
         transferJobId: this.#transferJobId,
@@ -301,6 +317,30 @@ export class TransferJob {
     }
   }
 
+  #stabilizeDirectTreeLifecycle(execution: PlanExecution): PlanExecution {
+    if (execution.planKind !== 'direct-tree') return execution
+    const directExecution: DirectTreeExecution = execution
+    return Object.freeze({
+      ...directExecution,
+      pause: async (
+        request: Parameters<DirectTreeExecution['pause']>[0],
+        signal: AbortSignal,
+      ) => {
+        if (this.#externalCancellationRequested) await this.#finalizeDirectories(signal)
+        return directExecution.pause(request, signal)
+      },
+      ...(directExecution.stop === undefined ? {} : {
+        stop: async (
+          request: Parameters<NonNullable<DirectTreeExecution['stop']>>[0],
+          signal: AbortSignal,
+        ) => {
+          if (this.#externalCancellationRequested) await this.#finalizeDirectories(signal)
+          return directExecution.stop!(request, signal)
+        },
+      }),
+    })
+  }
+
   async #runDirectZip(execution: DirectResumableZipExecution): Promise<SelectionMeasure> {
     const intent = this.#requireIntent()
     if (intent.plan.kind !== 'direct-resumable-zip' || intent.artifact.kind !== 'zip-archive') {
@@ -342,9 +382,23 @@ export class TransferJob {
     })
   }
 
+  async #authenticateDirectory(
+    cursor: DirectoryCursor,
+    committed: V2CommittedDirectory,
+    parent?: AuthenticatedDirectory,
+  ): Promise<AuthenticatedDirectory> {
+    const coordinates = this.#directTreeCoordinates
+    if (coordinates === undefined) return this.#authenticatedReference(cursor, committed)
+    const projection = coordinates.projectDirectory(cursor.path)
+    return projection.kind === 'reference'
+      ? this.#authenticatedReference(cursor, committed, projection)
+      : this.#admitDirectory(cursor, committed, projection, parent)
+  }
+
   async #admitDirectory(
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
+    projection: Extract<DirectTreeDirectoryProjection, { kind: 'materialize' }>,
     parent?: AuthenticatedDirectory,
   ): Promise<AuthenticatedDirectory> {
     this.#reserveDirectoryAdmission()
@@ -354,20 +408,29 @@ export class TransferJob {
     if (output === undefined || scope === undefined || execution === undefined) {
       throw new V2OutputPausedError('incremental directory authority is unavailable')
     }
-    if (cursor.path.length > 0 && parent?.admission === undefined) {
+    const root = this.#requireDirectTreeCoordinates().rootExpectation
+    const isExpectedRoot = root.kind === 'materialized-directory' &&
+      root.directoryId === cursor.idText &&
+      sameMaterializationRootRelativePath(root.relativePath, projection.relativePath)
+    if (!isExpectedRoot && parent?.kind !== 'materialized') {
       throw new V2OutputPausedError('child directory lacks its authenticated parent receipt')
     }
-    const source = snapshotMaterializationDirectory({
+    if (isExpectedRoot && parent?.kind === 'materialized') {
+      throw new V2OutputPausedError('materialized root unexpectedly inherited a parent receipt')
+    }
+    const directory = snapshotMaterializationDirectory({
       directoryId: cursor.idText,
       generation: encodeBase64Url(committed.generation),
-      path: cursor.path,
-      ...(parent?.admission === undefined ? {} : { parentAdmission: parent.admission }),
+      path: projection.relativePath,
+      ...(!isExpectedRoot && parent?.kind === 'materialized'
+        ? { parentAdmission: parent.admission }
+        : {}),
       ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
     })
-    const artifactPath = artifactDirectoryPath(this.#requireIntent(), cursor.path)
     const request = snapshotDirectoryMaterializationRequest({
-      source,
-      artifactPath,
+      directory,
+      sourceAuthenticationPath: projection.sourceAuthenticationPath,
+      logicalArtifactPath: projection.logicalArtifactPath,
       logicalSiblingMembership: createAuthenticatedLogicalSiblingMembership(
         this.#options.catalog,
         committed,
@@ -386,20 +449,55 @@ export class TransferJob {
       )
       throw isolated ?? error
     }
-    const admission = validateDirectoryAdmissionBinding(scope, source, returned)
+    const admission = validateDirectoryAdmissionBinding(scope, directory, returned)
     this.#finalizableDirectories.push(admission)
-    if (artifactPath.length > 0) this.#materializedDirectoryPaths.add(artifactPath.join('/'))
+    if (projection.relativePath.length > 0) {
+      this.#materializedDirectoryPaths.add(projection.relativePath.join('/'))
+    }
     this.#observers?.directoryAdmitted({
       admittedDirectoryCount: BigInt(this.#directoryAdmissionClaims),
       layoutClass: scope.layout,
     })
     return Object.freeze({
+      kind: 'materialized',
       directoryId: cursor.idText,
       generation: encodeBase64Url(committed.generation),
-      sourcePath: source.path,
-      artifactPath,
+      sourceAuthenticationPath: projection.sourceAuthenticationPath,
+      logicalArtifactPath: projection.logicalArtifactPath,
+      materializationRelativePath: projection.relativePath,
       admission,
+      ...(directory.modifiedTime === undefined ? {} : { modifiedTime: directory.modifiedTime }),
+    })
+  }
+
+  #authenticatedReference(
+    cursor: DirectoryCursor,
+    committed: V2CommittedDirectory,
+    projection?: Extract<DirectTreeDirectoryProjection, { kind: 'reference' }>,
+  ): AuthenticatedDirectory {
+    const sourceAuthenticationPath = projection?.sourceAuthenticationPath ??
+      snapshotSourceAuthenticationPath(cursor.path)
+    const logicalArtifactPath = projection?.logicalArtifactPath ??
+      artifactDirectoryPath(this.#requireIntent(), cursor.path)
+    return Object.freeze({
+      kind: 'reference',
+      directoryId: cursor.idText,
+      generation: encodeBase64Url(committed.generation),
+      sourceAuthenticationPath,
+      logicalArtifactPath,
       ...(cursor.modifiedTime === undefined ? {} : { modifiedTime: cursor.modifiedTime }),
+    })
+  }
+
+  #projectFile(sourcePath: readonly string[]): DirectTreeFileProjection {
+    const coordinates = this.#directTreeCoordinates
+    if (coordinates !== undefined) return coordinates.projectFile(sourcePath)
+    const sourceAuthenticationPath = snapshotSourceAuthenticationPath(sourcePath)
+    const logicalArtifactPath = artifactFilePath(this.#requireIntent(), sourceAuthenticationPath)
+    return Object.freeze({
+      sourceAuthenticationPath,
+      logicalArtifactPath,
+      relativePath: snapshotMaterializationRootRelativePath(logicalArtifactPath),
     })
   }
 
@@ -411,17 +509,17 @@ export class TransferJob {
   ): AuthenticatedDirectory {
     const artifactPath = artifactDirectoryPath(this.#requireIntent(), cursor.path)
     return artifactPath.length === 0
-      ? collector.referenceDirectory(cursor, committed)
+      ? collector.referenceDirectory(cursor, committed, artifactPath)
       : collector.materializeDirectory(cursor, committed, artifactPath, role)
   }
 
-  async #finalizeDirectories(): Promise<void> {
+  async #finalizeDirectories(signal: AbortSignal = this.#lifetime.signal): Promise<void> {
     const output = this.#directoryOutput
     if (output === undefined) return
     await finalizeV2Directories({
       admissions: this.#finalizableDirectories,
       output,
-      signal: this.#lifetime.signal,
+      signal,
       settled: (admission, settlement) => {
         if (settlement.kind === DirectorySettlementKind.IsolatedFailure) {
           this.#recordDirectoryFailure(admission.directoryId, settlement.fault)
@@ -475,6 +573,9 @@ export class TransferJob {
       revisions: this.#capacity.revisions,
       broker: this.#capacity.broker,
       output: execution.output,
+      ...(execution.planKind === 'direct-tree'
+        ? { directTreeCoordinates: this.#requireDirectTreeCoordinates() }
+        : {}),
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
       ...(this.#options.incidentScope === undefined
@@ -552,6 +653,13 @@ export class TransferJob {
   #requireIntent(): TransferJobOptions['intent'] {
     if (this.#intent === undefined) throw new Error('validated receive intent is unavailable')
     return this.#intent
+  }
+
+  #requireDirectTreeCoordinates(): DirectTreeCoordinateContract {
+    if (this.#directTreeCoordinates === undefined) {
+      throw new Error('DirectTree coordinate contract is unavailable')
+    }
+    return this.#directTreeCoordinates
   }
 
   #requireExecution(): PlanExecution {

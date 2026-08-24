@@ -44,6 +44,12 @@ import {
 } from '../output-session'
 import { V2OutputPausedError } from '../job/contract'
 import {
+  createDirectTreeCoordinateContract,
+  snapshotMaterializationRootRelativePath,
+  type DirectTreeCoordinateContract,
+  type MaterializationRootRelativePath,
+} from '../job/coordinate/direct-tree'
+import {
   snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
 } from './v2-plan-authority'
@@ -98,6 +104,7 @@ export async function createPersistentDirectTreeExecution(input: {
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
 }): Promise<DirectTreeExecution> {
   const scope = await createDirectoryAdmissionScope(input.intent)
+  const coordinates = await createDirectTreeCoordinateContract(input.intent)
   const adapter = new PersistentMaterializationOutput({
     materialization: input.materialization,
     checkpointNamespace: checkpointNamespace(input.intent),
@@ -107,6 +114,7 @@ export async function createPersistentDirectTreeExecution(input: {
       ...input.capabilities,
     }),
     directoryLedger: new DirectoryAdmissionLedger(scope),
+    directTreeCoordinates: coordinates,
     ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
   })
   let terminalSettlementInitiated = false
@@ -265,8 +273,9 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #checkpointNamespace: PersistentCheckpointNamespaceEvidence
   readonly #directoryLedger: DirectoryAdmissionLedger | undefined
   readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
+  readonly #directTreeCoordinates: DirectTreeCoordinateContract | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
-  readonly #directoryPathByAdmission = new Map<string, readonly string[]>()
+  readonly #directoryPathByAdmission = new Map<string, MaterializationRootRelativePath>()
   readonly #directorySettlements = new Map<string, PersistentDirectorySettlementEvidence>()
   #closePromise: Promise<void> | undefined
 
@@ -277,6 +286,7 @@ class PersistentMaterializationOutput implements OutputSession {
     readonly capabilities: OutputCapabilities
     readonly directoryLedger?: DirectoryAdmissionLedger
     readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
+    readonly directTreeCoordinates?: DirectTreeCoordinateContract
   }) {
     this.#materialization = input.materialization
     this.#checkpointNamespace = Object.freeze({ ...input.checkpointNamespace })
@@ -284,6 +294,7 @@ class PersistentMaterializationOutput implements OutputSession {
     this.capabilities = outputCapabilities(input.capabilities)
     this.#directoryLedger = input.directoryLedger
     this.#namespaceClaims = input.namespaceClaims
+    this.#directTreeCoordinates = input.directTreeCoordinates
   }
 
   directories(): IncrementalDirectoryOutput {
@@ -292,8 +303,9 @@ class PersistentMaterializationOutput implements OutputSession {
     const directories: IncrementalDirectoryOutput = {
       admitDirectory: async (request, signal) => {
         const snapshot = snapshotDirectoryMaterializationRequest(request)
+        const materializationRelativePath = snapshot.directory.path
         const admission = await ledger.admitDirectory(
-          snapshot.source,
+          snapshot.directory,
           signal,
           async () => {
             if (this.#namespaceClaims !== undefined) {
@@ -303,12 +315,12 @@ class PersistentMaterializationOutput implements OutputSession {
                 )
               }
               this.#namespaceClaims.bindDirectoryNamespace(Object.freeze({
-                artifactPath: snapshot.artifactPath,
+                materializationRelativePath,
                 logicalSiblingMembership: snapshot.logicalSiblingMembership,
               }))
             }
             const materialized = await this.#materialization
-              .ensureDirectory(snapshot.artifactPath)
+              .ensureDirectory(materializationRelativePath)
               .catch((cause: unknown) => {
                 // Directory writes need the same output-wide state-I/O boundary as file writes;
                 // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
@@ -316,19 +328,21 @@ class PersistentMaterializationOutput implements OutputSession {
               })
             this.#recordDirectory({
               kind: 'directory',
-              artifactPath: snapshot.artifactPath,
-              directoryId: snapshot.source.directoryId,
-              generation: snapshot.source.generation,
+              artifactPath: materializationRelativePath,
+              directoryId: snapshot.directory.directoryId,
+              generation: snapshot.directory.generation,
               ownedObjectId: materialized.ownedObjectId,
             })
           },
         )
-        const artifactPath = Object.freeze([...snapshot.artifactPath])
-        const existingPath = this.#directoryPathByAdmission.get(admission.token)
-        if (existingPath !== undefined && !samePath(existingPath, artifactPath)) {
-          throw new TypeError('directory admission changed its materialized artifact path')
+        if (!samePath(admission.path, materializationRelativePath)) {
+          throw new TypeError('directory admission path disagrees with materialized relative path')
         }
-        this.#directoryPathByAdmission.set(admission.token, artifactPath)
+        const existingPath = this.#directoryPathByAdmission.get(admission.token)
+        if (existingPath !== undefined && !samePath(existingPath, materializationRelativePath)) {
+          throw new TypeError('directory admission changed its materialized relative path')
+        }
+        this.#directoryPathByAdmission.set(admission.token, materializationRelativePath)
         return admission
       },
       finalizeDirectory: async (admission, signal) => {
@@ -336,18 +350,21 @@ class PersistentMaterializationOutput implements OutputSession {
           admission,
           await ledger.finalizeDirectory(admission, signal),
         )
-        const artifactPath = this.#directoryPathByAdmission.get(admission.token)
-        if (artifactPath === undefined) {
-          throw new TypeError('directory settlement has no materialized artifact binding')
+        const materializationRelativePath = this.#directoryPathByAdmission.get(admission.token)
+        if (materializationRelativePath === undefined) {
+          throw new TypeError('directory settlement has no materialized relative-path binding')
         }
-        const materialized = this.#entries.get(JSON.stringify(artifactPath))
+        if (!samePath(admission.path, materializationRelativePath)) {
+          throw new TypeError('directory settlement admission changed its materialized relative path')
+        }
+        const materialized = this.#entries.get(JSON.stringify(materializationRelativePath))
         if (materialized?.kind !== 'directory' ||
             materialized.directoryId !== admission.directoryId ||
             materialized.generation !== admission.generation) {
           throw new TypeError('directory settlement escaped its materialized ownership proof')
         }
         this.#directorySettlements.set(admission.token, Object.freeze({
-          artifactPath,
+          artifactPath: materializationRelativePath,
           settlement,
         }))
         return settlement
@@ -363,10 +380,13 @@ class PersistentMaterializationOutput implements OutputSession {
     for (const entry of entries) {
       if (entry.kind !== 'directory') continue
       signal.throwIfAborted()
-      const materialized = await this.#materialization.ensureDirectory(entry.artifactPath)
+      const materializationRelativePath = snapshotMaterializationRootRelativePath(
+        entry.artifactPath,
+      )
+      const materialized = await this.#materialization.ensureDirectory(materializationRelativePath)
       this.#recordDirectory({
         kind: 'directory',
-        artifactPath: entry.artifactPath,
+        artifactPath: materializationRelativePath,
         directoryId: entry.directoryId,
         generation: entry.generation,
         ownedObjectId: materialized.ownedObjectId,
@@ -376,18 +396,18 @@ class PersistentMaterializationOutput implements OutputSession {
 
   async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
-    const request = snapshotOutputFileRequest(input)
+    const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
     const mutation = request.parentAdmission === undefined || this.#directoryLedger === undefined
       ? undefined
       : this.#directoryLedger.acquireFileMutation({
-          path: request.sourcePath,
+          path: request.materializationRelativePath,
           parentAdmission: request.parentAdmission,
         })
     let callbackInvoked = false
     let opened: OpenedOutputRevision | undefined
     try {
       const transaction = await this.#materialization.beginFile({
-        artifactPath: request.artifactPath,
+        materializationRelativePath: request.materializationRelativePath,
         openRevision: async () => {
           if (callbackInvoked) {
             throw new TypeError('persistent materializer invoked revision authority more than once')
@@ -409,7 +429,7 @@ class PersistentMaterializationOutput implements OutputSession {
       requireMatchingPersistentRevision(opened, transaction)
       const ownership: OutputFileOwnership = Object.freeze({
         ...this.identity,
-        canonicalPath: request.artifactPath,
+        canonicalPath: request.materializationRelativePath,
         ownedFileIdentity: transaction.ownedObjectId,
       })
       const durableRanges = verifiedRanges(ownership, opened, transaction.verifiedRanges)

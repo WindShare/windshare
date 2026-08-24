@@ -84,6 +84,10 @@ async function reconcilePendingTerminalLifecycle(
   clock: () => number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'published' | 'partial-directory' }>> {
   const desired = requirePendingTerminalLifecycle(pending)
+  if (receipt.operationId !== operation.intent.operationId ||
+      receipt.digest !== desired.receiptDigest) {
+    throw new TypeError('pending FSA receipt disagrees with its bound terminal lifecycle')
+  }
   let current = operation.lifecycle
   if (terminalLifecycleSemanticsMatch(current, desired)) return current as typeof desired
   if (current.kind !== 'receiving') {

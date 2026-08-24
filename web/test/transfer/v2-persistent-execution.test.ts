@@ -16,9 +16,15 @@ import {
   type AuthenticatedLogicalSiblingMembership,
 } from '../../src/transfer/job/contract'
 import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
+import {
   OutputDirectoryMutationError,
   outputSessionIdentity,
   snapshotDirectoryMaterializationRequest,
+  type DirectoryMaterializationRequest,
   type ExactPreparationEvidence,
   type OutputFileRequest,
 } from '../../src/transfer/output-session'
@@ -51,19 +57,15 @@ const PAUSED = transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY
 
 describe('persistent namespace claim bridge', () => {
   it('rejects membership authority from another committed generation', () => {
-    expect(() => snapshotDirectoryMaterializationRequest({
-      source: {
-        directoryId: identityText(2),
-        generation: identityText(90),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-      logicalSiblingMembership: {
+    expect(() => snapshotDirectoryMaterializationRequest(rootDirectoryRequest(
+      identityText(2),
+      identityText(90),
+      {
         directoryId: identityText(2),
         generation: identityText(91),
         hasCommittedName: async () => false,
       },
-    })).toThrow('does not match the admitted directory generation')
+    ))).toThrow('does not match the admitted directory generation')
   })
 
   it('binds lazy authenticated membership without querying it on an ordinary directory admission', async () => {
@@ -106,15 +108,10 @@ describe('persistent namespace claim bridge', () => {
       },
     })
 
-    await execution.directories.admitDirectory({
-      source: {
-        directoryId: intent.syntheticRoot,
-        generation: identityText(90),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-      logicalSiblingMembership: membership,
-    }, SIGNAL)
+    await execution.directories.admitDirectory(
+      rootDirectoryRequest(intent.syntheticRoot, identityText(90), membership),
+      SIGNAL,
+    )
 
     expect(materialization.events.slice(0, 2)).toEqual([
       'namespace-bound',
@@ -162,14 +159,10 @@ describe('persistent namespace claim bridge', () => {
 
     let failure: unknown
     try {
-      await execution.directories.admitDirectory({
-        source: {
-          directoryId: intent.syntheticRoot,
-          generation: identityText(90),
-          path: Object.freeze([]),
-        },
-        artifactPath: Object.freeze([]),
-      }, SIGNAL)
+      await execution.directories.admitDirectory(
+        rootDirectoryRequest(intent.syntheticRoot, identityText(90)),
+        SIGNAL,
+      )
     } catch (error) {
       failure = error
     }
@@ -220,14 +213,10 @@ describe('persistent production execution bridge', () => {
       }),
       settlement,
     })
-    const admission = await execution.directories.admitDirectory({
-      source: {
-        directoryId: intent.syntheticRoot,
-        generation: identityText(90),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-    }, SIGNAL)
+    const admission = await execution.directories.admitDirectory(
+      rootDirectoryRequest(intent.syntheticRoot, identityText(90)),
+      SIGNAL,
+    )
     const opened = await execution.output.beginFile(outputRequest({
       fileId: file.idText,
       sourcePath: [file.name],
@@ -302,14 +291,10 @@ describe('persistent production execution bridge', () => {
 
     let backendFailure: unknown
     try {
-      await execution.directories.admitDirectory({
-        source: {
-          directoryId: intent.syntheticRoot,
-          generation: identityText(90),
-          path: Object.freeze([]),
-        },
-        artifactPath: Object.freeze([]),
-      }, SIGNAL)
+      await execution.directories.admitDirectory(
+        rootDirectoryRequest(intent.syntheticRoot, identityText(90)),
+        SIGNAL,
+      )
     } catch (error) {
       backendFailure = error
     }
@@ -318,14 +303,10 @@ describe('persistent production execution bridge', () => {
 
     let contractFailure: unknown
     try {
-      await execution.directories.admitDirectory({
-        source: {
-          directoryId: identityText(99),
-          generation: identityText(91),
-          path: Object.freeze([]),
-        },
-        artifactPath: Object.freeze([]),
-      }, SIGNAL)
+      await execution.directories.admitDirectory(
+        rootDirectoryRequest(identityText(99), identityText(91)),
+        SIGNAL,
+      )
     } catch (error) {
       contractFailure = error
     }
@@ -410,14 +391,10 @@ describe('persistent production execution bridge', () => {
         settle,
       },
     })
-    await execution.directories.admitDirectory({
-      source: {
-        directoryId: intent.syntheticRoot,
-        generation: identityText(90),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-    }, SIGNAL)
+    await execution.directories.admitDirectory(
+      rootDirectoryRequest(intent.syntheticRoot, identityText(90)),
+      SIGNAL,
+    )
 
     await expect(execution.settle({
       transferJobId: 'transfer-job-missing-directory-proof',
@@ -803,18 +780,39 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
   }
 }
 
+function rootDirectoryRequest(
+  directoryId: string,
+  generation: string,
+  logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership,
+): DirectoryMaterializationRequest {
+  return Object.freeze({
+    directory: Object.freeze({
+      directoryId,
+      generation,
+      path: snapshotMaterializationRootRelativePath([]),
+    }),
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath([]),
+    logicalArtifactPath: snapshotLogicalArtifactPath(['windshare']),
+    ...(logicalSiblingMembership === undefined ? {} : { logicalSiblingMembership }),
+  })
+}
+
 function outputRequest(input: {
   readonly fileId: string
   readonly sourcePath: readonly string[]
   readonly artifactPath: readonly string[]
+  readonly materializationRelativePath?: readonly string[]
   readonly expectedSize: bigint
   readonly parentAdmission?: OutputFileRequest['parentAdmission']
   readonly events: string[]
 }): OutputFileRequest {
   return {
     source: { shareInstance: identityText(1), fileId: input.fileId },
-    sourcePath: input.sourcePath,
-    artifactPath: input.artifactPath,
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath(input.sourcePath),
+    logicalArtifactPath: snapshotLogicalArtifactPath(input.artifactPath),
+    materializationRelativePath: snapshotMaterializationRootRelativePath(
+      input.materializationRelativePath ?? input.artifactPath,
+    ),
     expectedSize: input.expectedSize,
     ...(input.parentAdmission === undefined ? {} : { parentAdmission: input.parentAdmission }),
     openRevision: async (signal) => {
@@ -847,7 +845,7 @@ function finalProof(input: {
     checkpointGeneration: 1n,
     fileId: input.revision.fileId,
     fileRevision: input.revision.fileRevision,
-    canonicalPath: Object.freeze([...input.request.artifactPath]),
+    canonicalPath: Object.freeze([...input.request.materializationRelativePath]),
     exactSize: input.revision.exactSize,
     ownedObjectId: input.ownedObjectId,
     complete: true,

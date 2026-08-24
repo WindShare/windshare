@@ -14,7 +14,7 @@ import (
 
 const (
 	DirectoryAdmissionV2       uint8 = 2
-	DirectoryAdmissionLayoutV1 uint8 = 1
+	DirectoryAdmissionLayoutV2 uint8 = 2
 
 	directoryAdmissionTokenBytes  = sha256.Size
 	directoryAdmissionSecretBytes = sha256.Size
@@ -22,6 +22,7 @@ const (
 )
 
 type DirectoryAdmissionLayout uint8
+type DirectoryAdmissionRootKind uint8
 
 const (
 	DirectoryAdmissionTreeSingleFile DirectoryAdmissionLayout = iota + 1
@@ -29,6 +30,19 @@ const (
 	DirectoryAdmissionTreeCatalogRoot
 	DirectoryAdmissionZipResultRoot
 )
+
+const (
+	DirectoryAdmissionNoRoot DirectoryAdmissionRootKind = iota + 1
+	DirectoryAdmissionDirectoryAnchor
+	DirectoryAdmissionSyntheticRoot
+	DirectoryAdmissionCatalogRoot
+)
+
+type DirectoryAdmissionRootExpectation struct {
+	kind      DirectoryAdmissionRootKind
+	directory catalog.DirectoryID
+	path      string
+}
 
 // DirectoryAdmission is an immutable, runtime-only capability for one frozen
 // directory claim. The token authenticates the fields but cannot be imported
@@ -46,8 +60,6 @@ type DirectoryAdmission struct {
 	modified      catalog.ModifiedTime
 }
 
-func (admission DirectoryAdmission) SourcePath() string { return admission.path }
-
 // DirectoryAdmissionScope is the one-time projection of an already validated
 // intent needed by the receipt codec. Keeping full intent validation out of the
 // per-directory path prevents selection size from becoming admission cost.
@@ -55,7 +67,7 @@ type DirectoryAdmissionScope struct {
 	intent        ReceiveIntentDigest
 	layoutVersion uint8
 	layout        DirectoryAdmissionLayout
-	syntheticRoot catalog.DirectoryID
+	root          DirectoryAdmissionRootExpectation
 }
 
 func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, error) {
@@ -65,6 +77,7 @@ func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, 
 	artifact := intent.ArtifactSpec()
 	plan := intent.MaterializationPlan()
 	var layout DirectoryAdmissionLayout
+	var root DirectoryAdmissionRootExpectation
 	switch plan.Kind() {
 	case receivecontract.PlanDirectTree:
 		tree, ok := artifact.DirectoryTree()
@@ -74,36 +87,101 @@ func NewDirectoryAdmissionScope(intent ReceiveIntent) (DirectoryAdmissionScope, 
 		switch tree.Kind() {
 		case receivecontract.DirectoryTreeSingleFile:
 			layout = DirectoryAdmissionTreeSingleFile
+			root = DirectoryAdmissionRootExpectation{kind: DirectoryAdmissionNoRoot}
 		case receivecontract.DirectoryTreeResultRoot:
 			layout = DirectoryAdmissionTreeResultRoot
+			resultRoot, ok := tree.ResultRoot()
+			if !ok {
+				return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
+			}
+			root = directoryAdmissionResultRootExpectation(intent, plan, resultRoot)
 		case receivecontract.DirectoryTreeCatalogRoot:
 			layout = DirectoryAdmissionTreeCatalogRoot
+			root = DirectoryAdmissionRootExpectation{
+				kind: DirectoryAdmissionCatalogRoot, directory: intent.SyntheticRoot(),
+			}
 		default:
 			return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 		}
-	case receivecontract.PlanDirectAtomic:
-		if artifact.Kind() != receivecontract.ArtifactZipArchive {
+	case receivecontract.PlanDirectResumableZIP:
+		zip, ok := artifact.ZipArchive()
+		if !ok {
 			return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 		}
 		layout = DirectoryAdmissionZipResultRoot
+		root = directoryAdmissionArchiveRootExpectation(intent, zip.Layout)
 	default:
 		return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
 	}
-	return DirectoryAdmissionScope{
-		intent: intent.Digest(), layoutVersion: DirectoryAdmissionLayoutV1,
-		layout: layout, syntheticRoot: intent.SyntheticRoot(),
-	}, nil
+	scope := DirectoryAdmissionScope{
+		intent: intent.Digest(), layoutVersion: DirectoryAdmissionLayoutV2,
+		layout: layout, root: root,
+	}
+	if !scope.valid() {
+		return DirectoryAdmissionScope{}, ErrInvalidDirectoryAdmission
+	}
+	return scope, nil
+}
+
+func directoryAdmissionResultRootExpectation(
+	intent ReceiveIntent,
+	plan receivecontract.MaterializationPlan,
+	root receivecontract.ResultRootLayout,
+) DirectoryAdmissionRootExpectation {
+	expectation := directoryAdmissionArchiveRootExpectation(intent, root)
+	if reservation, ok := plan.DestinationReservation(); ok &&
+		reservation.AuthorityKind() != receivecontract.AuthorityFSAContainer {
+		expectation.path = root.Name()
+	}
+	return expectation
+}
+
+func directoryAdmissionArchiveRootExpectation(
+	intent ReceiveIntent,
+	root receivecontract.ResultRootLayout,
+) DirectoryAdmissionRootExpectation {
+	if root.AnchorKind() == receivecontract.ResultRootDirectoryAnchor {
+		return DirectoryAdmissionRootExpectation{
+			kind: DirectoryAdmissionDirectoryAnchor, directory: root.DirectoryID(),
+		}
+	}
+	return DirectoryAdmissionRootExpectation{
+		kind: DirectoryAdmissionSyntheticRoot, directory: intent.SyntheticRoot(),
+	}
 }
 
 func (scope DirectoryAdmissionScope) ReceiveIntentDigest() ReceiveIntentDigest { return scope.intent }
 func (scope DirectoryAdmissionScope) LayoutVersion() uint8                     { return scope.layoutVersion }
 func (scope DirectoryAdmissionScope) Layout() DirectoryAdmissionLayout         { return scope.layout }
-func (scope DirectoryAdmissionScope) SyntheticRoot() catalog.DirectoryID       { return scope.syntheticRoot }
+func (scope DirectoryAdmissionScope) RootExpectation() DirectoryAdmissionRootExpectation {
+	return scope.root
+}
+
+func (root DirectoryAdmissionRootExpectation) Kind() DirectoryAdmissionRootKind { return root.kind }
+func (root DirectoryAdmissionRootExpectation) DirectoryID() catalog.DirectoryID {
+	return root.directory
+}
+func (root DirectoryAdmissionRootExpectation) Path() string { return root.path }
 
 func (scope DirectoryAdmissionScope) valid() bool {
-	return !scope.intent.IsZero() && scope.layoutVersion == DirectoryAdmissionLayoutV1 &&
+	return !scope.intent.IsZero() && scope.layoutVersion == DirectoryAdmissionLayoutV2 &&
 		scope.layout >= DirectoryAdmissionTreeSingleFile && scope.layout <= DirectoryAdmissionZipResultRoot &&
-		!scope.syntheticRoot.IsZero()
+		scope.root.valid()
+}
+
+func (root DirectoryAdmissionRootExpectation) valid() bool {
+	if root.kind == DirectoryAdmissionNoRoot {
+		return root.directory.IsZero() && root.path == ""
+	}
+	if root.kind < DirectoryAdmissionDirectoryAnchor || root.kind > DirectoryAdmissionCatalogRoot ||
+		root.directory.IsZero() {
+		return false
+	}
+	if root.path == "" {
+		return true
+	}
+	canonical, err := catalog.CanonicalPath(root.path)
+	return err == nil && canonical == root.path
 }
 
 func (admission DirectoryAdmission) SchemaVersion() uint8 { return admission.version }
@@ -148,9 +226,9 @@ func (admission DirectoryAdmission) Equal(other DirectoryAdmission) bool {
 func NewDirectoryAdmissionWithSecret(
 	secret []byte,
 	scope DirectoryAdmissionScope,
-	directory AuthenticatedSourceDirectory,
+	directory MaterializationDirectory,
 ) (DirectoryAdmission, error) {
-	directory, err := normalizeAuthenticatedSourceDirectory(directory)
+	directory, err := normalizeMaterializationDirectory(directory)
 	if err != nil {
 		return DirectoryAdmission{}, err
 	}
@@ -171,11 +249,11 @@ func NewDirectoryAdmissionWithSecret(
 		layoutVersion: scope.LayoutVersion(),
 		layout:        scope.Layout(),
 		token:         token,
-		directory:     directory.DirectoryID,
-		generation:    directory.Generation,
-		parent:        directory.ParentAdmission.token,
-		path:          directory.SourcePath.String(),
-		modified:      directory.ModifiedTime,
+		directory:     directory.DirectoryID(),
+		generation:    directory.Generation(),
+		parent:        directory.ParentAdmission().token,
+		path:          directory.Path().String(),
+		modified:      directory.ModifiedTime(),
 	}, nil
 }
 
@@ -184,85 +262,100 @@ func NewDirectoryAdmissionWithSecret(
 // the framed caller-controlled claim fields.
 func CanonicalDirectoryAdmissionMessageV2(
 	scope DirectoryAdmissionScope,
-	directory AuthenticatedSourceDirectory,
+	directory MaterializationDirectory,
 ) ([]byte, error) {
 	return canonicalAuthenticatedDirectoryAdmissionMessageV2(scope, directory)
 }
 
 func canonicalAuthenticatedDirectoryAdmissionMessageV2(
 	scope DirectoryAdmissionScope,
-	directory AuthenticatedSourceDirectory,
+	directory MaterializationDirectory,
 ) ([]byte, error) {
-	directory, normalizationErr := normalizeAuthenticatedSourceDirectory(directory)
+	directory, normalizationErr := normalizeMaterializationDirectory(directory)
 	if normalizationErr != nil {
 		return nil, normalizationErr
 	}
-	if err := validateSourceDirectoryForScope(scope, directory); err != nil {
+	if err := validateMaterializationDirectoryForScope(scope, directory); err != nil {
 		return nil, err
 	}
-	modified := canonicalDirectoryAdmissionModifiedTime(directory.ModifiedTime)
-	sourcePath := directory.SourcePath.String()
-	path := canonicalDirectoryAdmissionPath(sourcePath)
+	modified := canonicalDirectoryAdmissionModifiedTime(directory.ModifiedTime())
+	materializationPath := directory.Path().String()
+	path := canonicalDirectoryAdmissionPath(materializationPath)
 	message := make([]byte, 0, 10*8+2+len(directoryAdmissionDomain)+
 		ReceiveIntentDigestBytes+2*catalog.IdentityBytes+directoryAdmissionTokenBytes+
-		len(sourcePath)+len(modified))
+		len(materializationPath)+len(modified))
 	message = append(message, directoryAdmissionDomain...)
 	message = append(message, 0, DirectoryAdmissionV2)
 	message = appendCanonicalField(message, scope.ReceiveIntentDigest().Bytes())
 	message = appendCanonicalField(message, []byte{scope.LayoutVersion()})
 	message = appendCanonicalField(message, []byte{byte(scope.Layout())})
-	message = appendDirectoryAdmissionFrame(message, directory.DirectoryID.Bytes())
-	message = appendDirectoryAdmissionFrame(message, directory.Generation.Bytes())
-	if directory.ParentAdmission.IsZero() {
+	message = appendDirectoryAdmissionRootExpectation(message, scope.RootExpectation())
+	message = appendDirectoryAdmissionFrame(message, directory.DirectoryID().Bytes())
+	message = appendDirectoryAdmissionFrame(message, directory.Generation().Bytes())
+	parentAdmission := directory.ParentAdmission()
+	if parentAdmission.IsZero() {
 		message = appendDirectoryAdmissionFrame(message, nil)
 	} else {
-		message = appendDirectoryAdmissionFrame(message, directory.ParentAdmission.token[:])
+		message = appendDirectoryAdmissionFrame(message, parentAdmission.token[:])
 	}
 	message = appendDirectoryAdmissionFrame(message, path)
 	message = appendDirectoryAdmissionFrame(message, modified)
 	return message, nil
 }
 
-func validateSourceDirectoryForScope(scope DirectoryAdmissionScope, directory AuthenticatedSourceDirectory) error {
-	directory, err := normalizeAuthenticatedSourceDirectory(directory)
+func validateMaterializationDirectoryForScope(scope DirectoryAdmissionScope, directory MaterializationDirectory) error {
+	directory, err := normalizeMaterializationDirectory(directory)
 	if err != nil {
 		return err
 	}
-	if !scope.valid() || directory.DirectoryID.IsZero() || directory.Generation.IsZero() {
+	if !scope.valid() || directory.DirectoryID().IsZero() || directory.Generation().IsZero() {
 		return ErrInvalidDirectoryAdmission
 	}
-	if !directory.SourcePath.Valid() {
+	if !directory.Path().Valid() {
 		return ErrInvalidDirectoryAdmission
 	}
-	sourcePath := directory.SourcePath.String()
-	if sourcePath == "" {
-		if !directory.ParentAdmission.IsZero() || directory.DirectoryID != scope.SyntheticRoot() {
+	materializationPath := directory.Path().String()
+	if directory.ParentAdmission().IsZero() {
+		root := scope.RootExpectation()
+		if root.Kind() == DirectoryAdmissionNoRoot ||
+			directory.DirectoryID() != root.DirectoryID() ||
+			materializationPath != root.Path() {
 			return ErrInvalidDirectoryAdmission
 		}
 		return nil
 	}
-	canonical, err := catalog.CanonicalPath(sourcePath)
-	if err != nil || canonical != sourcePath || directory.ParentAdmission.IsZero() ||
-		!directory.ParentAdmission.validSnapshot() ||
-		directory.ParentAdmission.intent != scope.ReceiveIntentDigest() ||
-		directory.ParentAdmission.layoutVersion != scope.LayoutVersion() ||
-		directory.ParentAdmission.layout != scope.Layout() ||
-		!immediateDirectoryChild(directory.ParentAdmission.path, sourcePath) {
+	if scope.RootExpectation().Kind() == DirectoryAdmissionNoRoot {
+		return ErrInvalidDirectoryAdmission
+	}
+	if materializationPath != "" {
+		canonical, err := catalog.CanonicalPath(materializationPath)
+		if err != nil || canonical != materializationPath {
+			return ErrInvalidDirectoryAdmission
+		}
+	}
+	if !directory.ParentAdmission().validSnapshot() ||
+		directory.ParentAdmission().intent != scope.ReceiveIntentDigest() ||
+		directory.ParentAdmission().layoutVersion != scope.LayoutVersion() ||
+		directory.ParentAdmission().layout != scope.Layout() ||
+		!immediateDirectoryChild(directory.ParentAdmission().path, materializationPath) {
 		return ErrInvalidDirectoryAdmission
 	}
 	return nil
 }
 
-func normalizeAuthenticatedSourceDirectory(
-	directory AuthenticatedSourceDirectory,
-) (AuthenticatedSourceDirectory, error) {
-	if !directory.SourcePath.Valid() {
-		return AuthenticatedSourceDirectory{}, ErrInvalidDirectoryAdmission
+func normalizeMaterializationDirectory(
+	directory MaterializationDirectory,
+) (MaterializationDirectory, error) {
+	if !directory.Valid() {
+		return MaterializationDirectory{}, ErrInvalidDirectoryAdmission
 	}
 	return directory, nil
 }
 
 func immediateDirectoryChild(parent, child string) bool {
+	if child == "" {
+		return false
+	}
 	separator := strings.LastIndexByte(child, '/')
 	if separator < 0 {
 		return parent == ""
@@ -272,37 +365,37 @@ func immediateDirectoryChild(parent, child string) bool {
 
 func (admission DirectoryAdmission) validSnapshot() bool {
 	if admission.version != DirectoryAdmissionV2 || admission.intent.IsZero() || admission.IsZero() ||
-		admission.layoutVersion != DirectoryAdmissionLayoutV1 ||
+		admission.layoutVersion != DirectoryAdmissionLayoutV2 ||
 		admission.layout < DirectoryAdmissionTreeSingleFile || admission.layout > DirectoryAdmissionZipResultRoot ||
 		admission.directory.IsZero() || admission.generation.IsZero() {
 		return false
 	}
 	if admission.path == "" {
-		return admission.parent == [directoryAdmissionTokenBytes]byte{}
+		return true
 	}
 	canonical, err := catalog.CanonicalPath(admission.path)
-	return err == nil && canonical == admission.path &&
-		admission.parent != [directoryAdmissionTokenBytes]byte{}
+	return err == nil && canonical == admission.path
 }
 
 func admissionMatchesDirectory(
 	scope DirectoryAdmissionScope,
 	admission DirectoryAdmission,
-	directory AuthenticatedSourceDirectory,
+	directory MaterializationDirectory,
 ) bool {
 	var err error
-	directory, err = normalizeAuthenticatedSourceDirectory(directory)
+	directory, err = normalizeMaterializationDirectory(directory)
 	if err != nil {
 		return false
 	}
-	if !admission.validSnapshot() || validateSourceDirectoryForScope(scope, directory) != nil ||
+	if !admission.validSnapshot() || validateMaterializationDirectoryForScope(scope, directory) != nil ||
 		admission.version != DirectoryAdmissionV2 || admission.intent != scope.ReceiveIntentDigest() ||
 		admission.layoutVersion != scope.LayoutVersion() || admission.layout != scope.Layout() ||
-		admission.directory != directory.DirectoryID || admission.generation != directory.Generation ||
-		admission.path != directory.SourcePath.String() || admission.modified != directory.ModifiedTime {
+		admission.directory != directory.DirectoryID() || admission.generation != directory.Generation() ||
+		admission.path != directory.Path().String() || admission.modified != directory.ModifiedTime() {
 		return false
 	}
-	return subtle.ConstantTimeCompare(admission.parent[:], directory.ParentAdmission.token[:]) == 1
+	parentAdmission := directory.ParentAdmission()
+	return subtle.ConstantTimeCompare(admission.parent[:], parentAdmission.token[:]) == 1
 }
 
 // ValidateDirectoryAdmissionBinding treats an output adapter's receipt as
@@ -311,7 +404,7 @@ func admissionMatchesDirectory(
 func ValidateDirectoryAdmissionBinding(
 	scope DirectoryAdmissionScope,
 	admission DirectoryAdmission,
-	directory AuthenticatedSourceDirectory,
+	directory MaterializationDirectory,
 ) error {
 	if !admissionMatchesDirectory(scope, admission, directory) {
 		return ErrDirectoryAdmissionMismatch
@@ -343,6 +436,19 @@ func canonicalDirectoryAdmissionModifiedTime(modified catalog.ModifiedTime) []by
 	encoded = appendCanonicalField(encoded, nanoseconds)
 	encoded = appendCanonicalField(encoded, []byte{byte(modified.Precision())})
 	return encoded
+}
+
+func appendDirectoryAdmissionRootExpectation(
+	target []byte,
+	root DirectoryAdmissionRootExpectation,
+) []byte {
+	target = appendDirectoryAdmissionFrame(target, []byte{byte(root.Kind())})
+	if root.Kind() == DirectoryAdmissionNoRoot {
+		target = appendDirectoryAdmissionFrame(target, nil)
+		return appendDirectoryAdmissionFrame(target, nil)
+	}
+	target = appendDirectoryAdmissionFrame(target, root.DirectoryID().Bytes())
+	return appendDirectoryAdmissionFrame(target, canonicalDirectoryAdmissionPath(root.Path()))
 }
 
 func appendDirectoryAdmissionFrame(target, value []byte) []byte {

@@ -1,4 +1,3 @@
-import { directoryId } from '../../src/catalog/model'
 import {
   createCompleteDirectoryResultRoot,
   createDirectTreePlan,
@@ -13,6 +12,7 @@ import {
   type SelectionSpec,
 } from '../../src/transfer/intent'
 import type { DirectoryAdmission } from '../../src/transfer/directory-admission'
+import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coordinate/direct-tree'
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
 import {
@@ -162,19 +162,15 @@ export async function freshDiscardFixture(input: Readonly<{
 
   let parentAdmission: DirectoryAdmission | undefined
   if (input.successfulFile) {
-    parentAdmission = await execution.directories.admitDirectory({
-      source: {
-        directoryId: directoryId(session.intent.syntheticRoot),
-        generation: identity(input.seed + 6),
-        path: Object.freeze([]),
-      },
-      artifactPath: Object.freeze([]),
-    }, SIGNAL)
-    const complete = await execution.output.beginFile(outputFileRequest({
+    parentAdmission = await execution.directories.admitDirectory(
+      await rootDirectoryMaterializationRequest(session.intent, identity(input.seed + 6)),
+      SIGNAL,
+    )
+    const complete = await execution.output.beginFile(await outputFileRequest({
       intent: session.intent,
       fileId: identity(input.seed + 7),
       fileRevision: identity(input.seed + 8),
-      artifactPath: ['kept.bin'],
+      sourceRelativePath: ['kept.bin'],
       exactSize: 2n,
       parentAdmission,
     }), SIGNAL)
@@ -182,18 +178,21 @@ export async function freshDiscardFixture(input: Readonly<{
     await complete.transaction.commit(SIGNAL)
   }
 
-  const unfinished = await execution.output.beginFile(outputFileRequest({
+  const unfinished = await execution.output.beginFile(await outputFileRequest({
     intent: session.intent,
     fileId: input.successfulFile ? identity(input.seed + 9) : identity(3),
     fileRevision: identity(input.seed + 10),
-    artifactPath: input.successfulFile
-      ? ['unfinished.bin']
-      : [session.reservation.requestedName],
+    ...(input.successfulFile
+      ? { sourceRelativePath: ['unfinished.bin'] }
+      : {}),
     exactSize: 2n,
     ...(parentAdmission === undefined ? {} : { parentAdmission }),
   }), SIGNAL)
   await unfinished.transaction.writeRange(0n, Uint8Array.of(1), SIGNAL)
   await unfinished.transaction.pause('fresh-page-discard')
+  if (parentAdmission !== undefined) {
+    await execution.directories.finalizeDirectory(parentAdmission, SIGNAL)
+  }
   await execution.pause({
     worker: PAUSED,
     materialization: input.successfulFile
@@ -662,18 +661,66 @@ export async function fsaExecution(
   })
 }
 
-export function outputFileRequest(input: Readonly<{
+export async function rootDirectoryMaterializationRequest(
+  intent: ReceiveIntent,
+  generation: string,
+) {
+  const contract = await createDirectTreeCoordinateContract(intent)
+  const expected = contract.rootExpectation
+  if (expected.kind !== 'materialized-directory') {
+    throw new TypeError('test intent has no materialized directory root')
+  }
+  const layout = contract.intent.artifact.layout
+  const sourcePath = layout.kind === 'result-root' && layout.root.anchor.kind === 'directory'
+    ? layout.root.anchor.sourcePath.split('/')
+    : []
+  const projection = contract.projectDirectory(sourcePath)
+  if (projection.kind !== 'materialize' ||
+      projection.relativePath.length !== expected.relativePath.length ||
+      !projection.relativePath.every((segment, index) => segment === expected.relativePath[index])) {
+    throw new TypeError('test root projection disagrees with its intent-derived expectation')
+  }
+  return Object.freeze({
+    directory: Object.freeze({
+      directoryId: expected.directoryId,
+      generation,
+      path: projection.relativePath,
+    }),
+    sourceAuthenticationPath: projection.sourceAuthenticationPath,
+    logicalArtifactPath: projection.logicalArtifactPath,
+  })
+}
+
+export async function outputFileRequest(input: Readonly<{
   intent: ReceiveIntent
   fileId: string
   fileRevision: string
-  artifactPath: readonly string[]
+  sourceRelativePath?: readonly string[]
   exactSize: bigint
   parentAdmission?: DirectoryAdmission
 }>) {
+  const contract = await createDirectTreeCoordinateContract(input.intent)
+  const layout = contract.intent.artifact.layout
+  let sourcePath: readonly string[]
+  if (layout.kind === 'single-file') {
+    if (input.sourceRelativePath !== undefined) {
+      throw new TypeError('single-file source identity comes from its frozen receive intent')
+    }
+    sourcePath = layout.sourcePath.split('/')
+  } else {
+    if (input.sourceRelativePath === undefined) {
+      throw new TypeError('directory-tree file fixture requires a source-relative path')
+    }
+    sourcePath = layout.kind === 'result-root' && layout.root.anchor.kind === 'directory'
+      ? [...layout.root.anchor.sourcePath.split('/'), ...input.sourceRelativePath]
+      : [...input.sourceRelativePath]
+  }
+  const projection = contract.projectFile(sourcePath)
   return Object.freeze({
     source: Object.freeze({ shareInstance: input.intent.shareInstance, fileId: input.fileId }),
-    sourcePath: Object.freeze([...input.artifactPath]),
-    artifactPath: Object.freeze([...input.artifactPath]),
+    sourceAuthenticationPath: projection.sourceAuthenticationPath,
+    logicalArtifactPath: projection.logicalArtifactPath,
+    materializationRelativePath: projection.relativePath,
     expectedSize: input.exactSize,
     ...(input.parentAdmission === undefined ? {} : { parentAdmission: input.parentAdmission }),
     openRevision: async () => Object.freeze({

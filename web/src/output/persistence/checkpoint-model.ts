@@ -37,15 +37,18 @@ export const FILE_REVISION_BYTES = 16
 export const FILE_CHECKPOINT_MAX_FILE_SIZE = 0xffff_ffff_ffff_ffffn
 
 export const FILE_CHECKPOINT_MATERIALIZER_NATIVE_TREE = 1 as const
-export const FILE_CHECKPOINT_MATERIALIZER_FSA_TREE = 2 as const
+export const FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE = 2 as const
 export const FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE = 3 as const
 export const FILE_CHECKPOINT_MATERIALIZER_ATOMIC_FILE = 4 as const
+/** A new identity prevents legacy logical-root paths from authorizing reserved-root-relative FSA output. */
+export const FILE_CHECKPOINT_MATERIALIZER_FSA_TREE = 5 as const
 
 export type FileCheckpointMaterializerKind =
   | typeof FILE_CHECKPOINT_MATERIALIZER_NATIVE_TREE
-  | typeof FILE_CHECKPOINT_MATERIALIZER_FSA_TREE
+  | typeof FILE_CHECKPOINT_MATERIALIZER_LEGACY_FSA_TREE
   | typeof FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE
   | typeof FILE_CHECKPOINT_MATERIALIZER_ATOMIC_FILE
+  | typeof FILE_CHECKPOINT_MATERIALIZER_FSA_TREE
 
 export interface FileCheckpointRange {
   readonly start: bigint
@@ -163,6 +166,7 @@ export function normalizeFileCheckpointSpec(
     quarantineOrigin,
     retirementReason,
   )
+  const materializerKind = checkpointMaterializerKind(spec.materializerKind)
   return Object.freeze({
     ownershipMarker,
     namespace,
@@ -179,9 +183,9 @@ export function normalizeFileCheckpointSpec(
     ),
     fileId: identityBytes(spec.fileId, FILE_ID_BYTES, 'file ID'),
     fileRevision: identityBytes(spec.fileRevision, FILE_REVISION_BYTES, 'file revision'),
-    canonicalPath: snapshotCheckpointPath(spec.canonicalPath),
+    canonicalPath: snapshotCheckpointPath(spec.canonicalPath, materializerKind),
     exactSize,
-    materializerKind: checkpointMaterializerKind(spec.materializerKind),
+    materializerKind,
     authorityRef: identityBytes(spec.authorityRef, FILE_CHECKPOINT_ID_BYTES, 'authority reference'),
     ownedObjectId: identityBytes(spec.ownedObjectId, FILE_CHECKPOINT_ID_BYTES, 'owned object ID'),
     stateGeneration,
@@ -198,7 +202,7 @@ export function normalizeFileCheckpointSpec(
 export function checkpointMaterializerKind(value: number): FileCheckpointMaterializerKind {
   if (Number.isInteger(value) &&
       value >= FILE_CHECKPOINT_MATERIALIZER_NATIVE_TREE &&
-      value <= FILE_CHECKPOINT_MATERIALIZER_ATOMIC_FILE) {
+      value <= FILE_CHECKPOINT_MATERIALIZER_FSA_TREE) {
     return value as FileCheckpointMaterializerKind
   }
   throw new FileCheckpointError('binding', 'checkpoint materializer kind is invalid')
@@ -297,8 +301,15 @@ function nonZeroUint64(value: bigint, label: string): bigint {
   return checked
 }
 
-function snapshotCheckpointPath(path: readonly string[]): readonly string[] {
+function snapshotCheckpointPath(
+  path: readonly string[],
+  materializerKind: FileCheckpointMaterializerKind,
+): readonly string[] {
   try {
+    // A named single-file FSA reservation is itself the materialization root.
+    // Its coordinate is therefore empty; legacy kind 2 remains fenced out.
+    if (materializerKind === FILE_CHECKPOINT_MATERIALIZER_FSA_TREE &&
+        Array.isArray(path) && path.length === 0) return Object.freeze([])
     return snapshotPortableCatalogPath(path)
   } catch (cause) {
     throw new FileCheckpointError(

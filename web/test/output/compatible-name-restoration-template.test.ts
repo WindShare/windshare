@@ -10,7 +10,7 @@ const WINDOWS_TEMPLATE_URL = new URL(
   import.meta.url,
 )
 const WINDOWS_TEMPLATE_SHA256 =
-  '5f405744ae8b39a15403bbe67d51a930f65c1189ea8082594d5ed3a9fdb394c0'
+  'd7f68dbea04e69210a8236ba2aeaac71e93611483906953b0e6e430b70adbffb'
 const templateBytes = readFileSync(WINDOWS_TEMPLATE_URL)
 const template = templateBytes.toString('utf8')
 
@@ -23,7 +23,7 @@ describe('Windows compatible-name restoration template', () => {
       "$script:WindShareRestorationTemplateId = 'windows-powershell-v1'",
     )
     expect(template).toContain(
-      "$script:WindShareSidecarVersion = 'windshare-name-restoration/v1'",
+      "$script:WindShareSidecarVersion = 'windshare-name-restoration/v2'",
     )
   })
 

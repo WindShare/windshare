@@ -243,12 +243,8 @@ func admitRetainedCandidateRoot(
 	seed byte,
 ) transfer.DirectoryAdmission {
 	t.Helper()
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	request, err := transfer.NewDirectoryMaterializationRequest(
-		projector,
+		intent,
 		transfer.AuthenticatedSourceDirectory{
 			DirectoryID: intent.SyntheticRoot(),
 			Generation:  coverageC6Identity[catalog.DirectoryGeneration](seed),

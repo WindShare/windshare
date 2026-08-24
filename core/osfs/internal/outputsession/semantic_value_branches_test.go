@@ -74,14 +74,12 @@ func TestOutputSessionClosedProjectionAndBranchVocabulary(t *testing.T) {
 	fixture := newTestFixture(t, nil)
 	root := fixture.admitRoot(context.Background())
 	file := fixture.outputFile(root, 0x72, "dir/file.bin")
-	if !transfer.MaterializationFileMatchesProjector(fixture.session.projector, file) ||
+	if !transfer.MaterializationFileMatchesIntent(fixture.intent, file) ||
 		file.SourcePath().String() != "dir/file.bin" ||
 		file.ArtifactPath().String() != receivecontract.DefaultResultRootName+"/dir/file.bin" {
 		t.Fatalf("closed file projection = (%q, %q)", file.SourcePath().String(), file.ArtifactPath().String())
 	}
-	if transfer.MaterializationFileMatchesProjector(
-		fixture.session.projector, transfer.MaterializationFile{},
-	) {
+	if transfer.MaterializationFileMatchesIntent(fixture.intent, transfer.MaterializationFile{}) {
 		t.Fatal("zero file request matched the frozen projector")
 	}
 	if _, err := fixture.session.BeginFile(

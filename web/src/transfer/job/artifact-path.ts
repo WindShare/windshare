@@ -1,6 +1,7 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import type { ResultRootLayout, ReceiveIntent } from '../intent'
 import type { ArtifactLayoutClass } from './contract'
+import type { LogicalArtifactPath } from './coordinate/direct-tree'
 
 export function artifactLayoutClass(intent: ReceiveIntent): ArtifactLayoutClass {
   switch (intent.artifact.kind) {
@@ -20,23 +21,23 @@ export function artifactLayoutClass(intent: ReceiveIntent): ArtifactLayoutClass 
 export function artifactFilePath(
   intent: ReceiveIntent,
   sourcePath: readonly string[],
-): readonly string[] {
+): LogicalArtifactPath {
   const source = snapshotPortableCatalogPath(sourcePath)
   switch (intent.artifact.kind) {
     case 'original-file':
       requireSourcePath(intent.artifact.sourcePath, source)
-      return snapshotPortableCatalogPath([intent.artifact.suggestedName])
+      return logicalArtifactPath([intent.artifact.suggestedName])
     case 'zip-archive':
       return resultRootArtifactPath(intent.artifact.layout, source)
     case 'directory-tree':
       switch (intent.artifact.layout.kind) {
         case 'single-file':
           requireSourcePath(intent.artifact.layout.sourcePath, source)
-          return snapshotPortableCatalogPath([intent.artifact.layout.outputName])
+          return logicalArtifactPath([intent.artifact.layout.outputName])
         case 'result-root':
           return resultRootArtifactPath(intent.artifact.layout.root, source)
         case 'catalog-root':
-          return source
+          return logicalArtifactPath(source)
       }
   }
 }
@@ -44,29 +45,29 @@ export function artifactFilePath(
 export function artifactDirectoryPath(
   intent: ReceiveIntent,
   sourcePath: readonly string[],
-): readonly string[] {
+): LogicalArtifactPath {
   if (sourcePath.length === 0) {
     if (intent.artifact.kind === 'directory-tree' && intent.artifact.layout.kind === 'result-root' &&
         intent.artifact.layout.root.anchor.kind === 'synthetic-root') {
-      return snapshotPortableCatalogPath([intent.artifact.layout.root.name])
+      return logicalArtifactPath([intent.artifact.layout.root.name])
     }
     if (intent.artifact.kind === 'zip-archive' &&
         intent.artifact.layout.anchor.kind === 'synthetic-root') {
-      return snapshotPortableCatalogPath([intent.artifact.layout.name])
+      return logicalArtifactPath([intent.artifact.layout.name])
     }
-    return Object.freeze([])
+    return logicalArtifactPath([])
   }
   const source = snapshotPortableCatalogPath(sourcePath)
   switch (intent.artifact.kind) {
     case 'original-file':
-      return Object.freeze([])
+      return logicalArtifactPath([])
     case 'zip-archive':
       return resultRootDirectoryPath(intent.artifact.layout, source)
     case 'directory-tree':
       switch (intent.artifact.layout.kind) {
-        case 'single-file': return Object.freeze([])
+        case 'single-file': return logicalArtifactPath([])
         case 'result-root': return resultRootDirectoryPath(intent.artifact.layout.root, source)
-        case 'catalog-root': return source
+        case 'catalog-root': return logicalArtifactPath(source)
       }
   }
 }
@@ -74,12 +75,12 @@ export function artifactDirectoryPath(
 function resultRootDirectoryPath(
   root: ResultRootLayout,
   sourcePath: readonly string[],
-): readonly string[] {
+): LogicalArtifactPath {
   if (root.anchor.kind === 'synthetic-root') {
-    return snapshotPortableCatalogPath([root.name, ...sourcePath])
+    return logicalArtifactPath([root.name, ...sourcePath])
   }
   const anchor = root.anchor.sourcePath.split('/')
-  if (sourcePath.length < anchor.length && startsWith(anchor, sourcePath)) return Object.freeze([])
+  if (sourcePath.length < anchor.length && startsWith(anchor, sourcePath)) return logicalArtifactPath([])
   return resultRootArtifactPath(root, sourcePath)
 }
 
@@ -100,15 +101,20 @@ export function directoryIsResultRoot(
 function resultRootArtifactPath(
   root: ResultRootLayout,
   sourcePath: readonly string[],
-): readonly string[] {
+): LogicalArtifactPath {
   if (root.anchor.kind === 'synthetic-root') {
-    return snapshotPortableCatalogPath([root.name, ...sourcePath])
+    return logicalArtifactPath([root.name, ...sourcePath])
   }
   const anchor = root.anchor.sourcePath.split('/')
   if (!startsWith(sourcePath, anchor)) {
     throw new TypeError('selected source path escapes the frozen result-root anchor')
   }
-  return snapshotPortableCatalogPath([root.name, ...sourcePath.slice(anchor.length)])
+  return logicalArtifactPath([root.name, ...sourcePath.slice(anchor.length)])
+}
+
+function logicalArtifactPath(input: readonly string[]): LogicalArtifactPath {
+  if (input.length === 0) return Object.freeze([]) as unknown as LogicalArtifactPath
+  return snapshotPortableCatalogPath(input) as LogicalArtifactPath
 }
 
 function requireSourcePath(expected: string, actual: readonly string[]): void {

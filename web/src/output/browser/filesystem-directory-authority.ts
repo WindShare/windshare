@@ -1,6 +1,9 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import { encodeBase64Url } from '../../crypto/bytes'
-import type { NamedContainerEntryReservation } from '../../transfer/intent'
+import type { FSANamedContainerEntryReservation } from '../../transfer/intent'
+import {
+  snapshotMaterializationRootRelativePath,
+  type MaterializationRootRelativePath,
+} from '../../transfer/job/coordinate/direct-tree'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
   runPersistentOutputStage,
@@ -9,13 +12,14 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import { fsaOwnedDirectoryHandleId } from './indexeddb-root-binding'
 
-const FSA_DIRECTORY_LOCATOR_DOMAIN = 'windshare/fsa-directory-locator/v1'
+export const FSA_DIRECTORY_LOCATOR_DOMAIN = 'windshare/fsa-directory-locator/v2'
 
 export async function fsaDirectoryHandleId(
-  reservation: NamedContainerEntryReservation,
+  reservation: FSANamedContainerEntryReservation,
   path: readonly string[],
 ): Promise<string> {
-  const encodedPath = path.map(segment => `${segment.length}:${segment}`).join('/')
+  const relativePath = snapshotMaterializationRootRelativePath(path)
+  const encodedPath = relativePath.map(segment => `${segment.length}:${segment}`).join('/')
   const material = new TextEncoder().encode(
     `${FSA_DIRECTORY_LOCATOR_DOMAIN}\0${reservation.digest}\0${encodedPath}`,
   )
@@ -23,9 +27,14 @@ export async function fsaDirectoryHandleId(
   return fsaOwnedDirectoryHandleId(reservation.operationId, digest)
 }
 
-export function snapshotRelativePath(path: readonly string[], allowEmpty: boolean): readonly string[] {
-  if (allowEmpty && path.length === 0) return Object.freeze([])
-  return snapshotPortableCatalogPath(path)
+export function snapshotRelativePath(
+  path: readonly string[],
+  allowEmpty: boolean,
+): MaterializationRootRelativePath {
+  if (!allowEmpty && path.length === 0) {
+    throw new TypeError('non-root FSA path is empty')
+  }
+  return snapshotMaterializationRootRelativePath(path)
 }
 
 export async function openDirectoryEntry(

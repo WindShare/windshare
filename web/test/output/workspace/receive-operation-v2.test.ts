@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
+import { canonicalRecord } from '../../../src/output/workspace/canonical'
 import {
   createDirectorySelectionResultRoot,
   createDirectResumableZipPlan,
@@ -12,6 +13,8 @@ import {
 } from '../../../src/transfer/intent'
 import {
   RECEIVE_RECORD_OPERATION,
+  RECEIVE_RECORD_RESERVATION,
+  createPersistedReceiveRecord,
   createReceiveOperationV2,
   decodeStoredReceiveOperation,
   storedReceiveOperationRecord,
@@ -33,6 +36,23 @@ describe('ReceiveOperation V2', () => {
     })
     await expect(decodeStoredReceiveOperation(storedReceiveOperationRecord(operation)))
       .resolves.toEqual(operation)
+  })
+
+  it('persists only the current reservation domain and rejects legacy records', async () => {
+    const operationId = identity(16, 10)
+    const canonicalBytes = canonicalRecord('windshare/destination-reservation/v4', 1, [])
+    const record = await createPersistedReceiveRecord({
+      operationId,
+      kind: RECEIVE_RECORD_RESERVATION,
+      canonicalBytes,
+    })
+
+    expect(record.canonicalBytes).toEqual(canonicalBytes)
+    await expect(createPersistedReceiveRecord({
+      operationId,
+      kind: RECEIVE_RECORD_RESERVATION,
+      canonicalBytes: canonicalRecord('windshare/destination-reservation/v3', 1, []),
+    })).rejects.toThrow('domain')
   })
 
   it('rejects a record whose indexed V2 envelope disagrees with canonical authority', async () => {

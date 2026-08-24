@@ -22,22 +22,22 @@ import (
 )
 
 type ordinaryResumeSessionFixture struct {
-	authority     *Authority
-	session       transfer.DirectTreeSession
-	intent        transfer.ReceiveIntent
-	transaction   transfer.FileTransaction
-	durable       transfer.VerifiedDurableRanges
-	settlement    transfer.FileSettlement
-	rootAdmission transfer.DirectoryAdmission
-	finalPath     string
+	authority   *Authority
+	session     transfer.DirectTreeSession
+	intent      transfer.ReceiveIntent
+	transaction transfer.FileTransaction
+	durable     transfer.VerifiedDurableRanges
+	settlement  transfer.FileSettlement
+	finalPath   string
 }
 
 func ordinaryResumeMaterializationFile(
 	t *testing.T,
 	session transfer.DirectTreeSession,
-	projector ordinaryoutput.ArtifactPathProjector,
+	intent transfer.ReceiveIntent,
 	descriptor content.FileRevisionDescriptor,
 	path string,
+	parentSource transfer.AuthenticatedSourceDirectory,
 	parent transfer.DirectoryAdmission,
 	parentClaim transfer.MaterializedDirectoryClaim,
 ) transfer.MaterializationFile {
@@ -46,8 +46,25 @@ func ordinaryResumeMaterializationFile(
 	if err != nil {
 		t.Fatal(err)
 	}
+	var fileParent transfer.MaterializationFileParent
+	if parent.IsZero() {
+		fileParent, err = transfer.NewReferenceMaterializationFileParent(
+			parentSource.DirectoryID, parentSource.Generation, parentSource.SourcePath,
+		)
+	} else {
+		fileParent, err = transfer.NewDirectoryMaterializationFileParent(
+			parentSource.DirectoryID, parentSource.Generation, parentSource.SourcePath, parent, parentClaim,
+		)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializationPath, err := transfer.NewMaterializationRootRelativePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, session.SessionID(), parent, parentClaim,
+		intent, sourcePath, materializationPath, descriptor, session.SessionID(), fileParent,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -153,25 +170,10 @@ func openOrdinaryResumeFileWithTracer(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	rootSource := transfer.AuthenticatedSourceDirectory{
 		DirectoryID: selection.SyntheticRoot(),
 		Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](seed + 2),
 		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
-	}
-	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector, rootSource, ordinaryoutput.SourceNodeConnectsSelection,
-		transfer.MaterializedDirectoryClaim{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootAdmission, err := session.AdmitDirectory(context.Background(), rootRequest)
-	if err != nil {
-		t.Fatal(err)
 	}
 	geometry, err := content.NewFileGeometry(exactSize, catalog.DefaultChunkSize)
 	if err != nil {
@@ -186,8 +188,7 @@ func openOrdinaryResumeFileWithTracer(
 		t.Fatal(err)
 	}
 	file := ordinaryResumeMaterializationFile(
-		t, session, projector, descriptor, name, rootAdmission,
-		transfer.MaterializedDirectoryClaim{},
+		t, session, intent, descriptor, name, rootSource, transfer.DirectoryAdmission{}, transfer.MaterializedDirectoryClaim{},
 	)
 	start, err := session.BeginFile(context.Background(), file)
 	if err != nil {
@@ -201,8 +202,7 @@ func openOrdinaryResumeFileWithTracer(
 	return ordinaryResumeSessionFixture{
 		authority: authority, session: session, intent: intent,
 		transaction: transaction, durable: durable, settlement: settlement,
-		rootAdmission: rootAdmission,
-		finalPath:     filepath.Join(root, reservation.PhysicalName()),
+		finalPath: filepath.Join(root, reservation.PhysicalName()),
 	}
 }
 func pauseOrdinaryResumeFixture(t *testing.T, fixture ordinaryResumeSessionFixture) {

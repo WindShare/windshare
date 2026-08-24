@@ -186,16 +186,22 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 
 	rootID := admissionTestDirectoryID(t, 0x71)
 	intent := admissionTestIntent(t, rootID, 0x72)
-	projector, err := OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	scope := admissionTestScope(t, intent)
 	secret := admissionTestSequence(0x73, directoryAdmissionSecretBytes)
 	rootSource := admissionTestDirectory(
 		t, rootID, admissionTestGeneration(t, 0x74), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootSource)
+	rootRequest, err := NewDirectoryMaterializationRequest(
+		intent, rootSource, ordinaryoutput.SourceNodeConnectsSelection, MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootDirectory, ok := rootRequest.Directory()
+	if !ok {
+		t.Fatal("root materialization is unavailable")
+	}
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,12 +210,16 @@ func TestPublishedSettlementWarningsProvenanceAndDestinationCoordinatesAreExplic
 		rootAdmission, "folder", catalog.ModifiedTime{},
 	)
 	request, err := NewDirectoryMaterializationRequest(
-		projector, directory, ordinaryoutput.SourceNodeSelected, MaterializedDirectoryClaim{},
+		intent, directory, ordinaryoutput.SourceNodeSelected, MaterializedDirectoryClaim{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, directory)
+	materialization, ok := request.Directory()
+	if !ok {
+		t.Fatal("child materialization is unavailable")
+	}
+	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, materialization)
 	if err != nil {
 		t.Fatal(err)
 	}

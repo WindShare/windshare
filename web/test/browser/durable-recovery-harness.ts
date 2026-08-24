@@ -120,7 +120,7 @@ export interface CompatibleNameRecoveryFixture {
 
 export interface CompatibleNameRecoveryCut {
   readonly fixture: CompatibleNameRecoveryFixture
-  readonly logicalCheckpointPath: readonly string[]
+  readonly materializationRelativeCheckpointPath: readonly string[]
   readonly physicalComponent: string
   readonly rejectedEntriesBefore: readonly string[]
   readonly logicalEntryAbsent: boolean
@@ -133,7 +133,7 @@ export interface CompatibleNameRecoveryCut {
 
 export interface CompatibleNameRecoveryProof {
   readonly headerPointRead: boolean
-  readonly logicalCheckpointPath: readonly string[]
+  readonly materializationRelativeCheckpointPath: readonly string[]
   readonly physicalComponent: string
   readonly committedOrdinal: number
   readonly resumedRanges: readonly string[]
@@ -209,7 +209,7 @@ export async function createCompatibleNameRecoveryCut(
       contentBlockRequestCount: () => contentBlockRequestCount,
     })
     const transaction = await session.beginFile({
-      artifactPath: [logicalComponent],
+      materializationRelativePath: [logicalComponent],
       openRevision: async () => ({
         fileId: ids.fileId,
         fileRevision: ids.fileRevision,
@@ -225,7 +225,7 @@ export async function createCompatibleNameRecoveryCut(
     contentBlockRequestCount += 1
     await transaction.writeRange(0n, Uint8Array.of(1, 2))
     const checkpointRanges = await transaction.checkpoint()
-    const logicalCheckpointPath = await readFsaLogicalCheckpointPath(session.intent, databaseName)
+    const materializationRelativeCheckpointPath = await readFsaMaterializationRelativeCheckpointPath(session.intent, databaseName)
     const physicalPrefixBytes = await readFileBytes(
       await resultRoot.getFileHandle(mapping.physicalComponent),
     )
@@ -254,7 +254,7 @@ export async function createCompatibleNameRecoveryCut(
         fileId: ids.fileId,
         fileRevision: ids.fileRevision,
       }),
-      logicalCheckpointPath,
+      materializationRelativeCheckpointPath,
       physicalComponent: mapping.physicalComponent,
       rejectedEntriesBefore: rejection?.entriesBefore ?? Object.freeze([]),
       logicalEntryAbsent,
@@ -286,7 +286,7 @@ export async function reopenCompatibleNameRecovery(
     })
     const reopenedRepairSummaryCount = session.repairSummary()?.committedCount ?? -1
     const resumed = await session.beginFile({
-      artifactPath: [fixture.logicalComponent],
+      materializationRelativePath: [fixture.logicalComponent],
       openRevision: async () => ({
         fileId: fixture.fileId,
         fileRevision: fixture.fileRevision,
@@ -309,14 +309,14 @@ export async function reopenCompatibleNameRecovery(
     const sidecar = await decodeSidecarFile(
       await resultRoot.getFileHandle(snapshot.header.pair.sidecar.physicalName),
     )
-    const logicalCheckpointPath = await readFsaLogicalCheckpointPath(fixture.intent, fixture.databaseName)
+    const materializationRelativeCheckpointPath = await readFsaMaterializationRelativeCheckpointPath(fixture.intent, fixture.databaseName)
     const physicalBytes = await readFileBytes(
       await resultRoot.getFileHandle(mapping.physicalComponent),
     )
     const headerPointRead = await readCompatibleHeader(fixture.databaseName, fixture.operationId)
     return Object.freeze({
       headerPointRead,
-      logicalCheckpointPath,
+      materializationRelativeCheckpointPath,
       physicalComponent: mapping.physicalComponent,
       committedOrdinal: mapping.commitOrdinal,
       resumedRanges,
@@ -572,7 +572,7 @@ export async function createOriginPrivateReceiveCrashCut(
     checkpointDatabaseName,
   })
   const transaction = await backend.materialization.beginFile({
-    artifactPath: [intent.artifact.suggestedName],
+    materializationRelativePath: [intent.artifact.suggestedName],
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({
@@ -657,7 +657,7 @@ export async function recoverReceiveAndSealPackage(
     checkpointDatabaseName: fixture.checkpointDatabaseName,
   })
   const transaction = await backend.materialization.beginFile({
-    artifactPath: [intent.artifact.suggestedName],
+    materializationRelativePath: [intent.artifact.suggestedName],
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({
@@ -916,7 +916,7 @@ async function appendIncompleteSidecarTail(handle: FileSystemFileHandle): Promis
   }
 }
 
-async function readFsaLogicalCheckpointPath(
+async function readFsaMaterializationRelativeCheckpointPath(
   intent: ReceiveIntent,
   databaseName: string,
 ): Promise<readonly string[]> {
@@ -935,7 +935,7 @@ async function readFsaLogicalCheckpointPath(
     const page = await checkpoints.scanCommitted({ direction: 'ascending' })
     const record = page.records[0]
     if (record === undefined || page.records.length !== 1) {
-      throw new TypeError('compatible-name recovery lacks its unique logical checkpoint')
+      throw new TypeError('compatible-name recovery lacks its unique materialization-relative checkpoint')
     }
     return record.canonicalPath
   } finally {

@@ -66,7 +66,7 @@ func TestReceiveIntentCrossRuntimeCanonicalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const expectedDigest = "_-zVJFYomTUJqymN56HiUL1q6NyF_a69IEmAdVUMLl0"
+	const expectedDigest = "Ba2NNvQt_PzBm9ybyhyXHSFPrGSDE_Q2SXCH1YH7fPM"
 	if encoded := base64.RawURLEncoding.EncodeToString(intent.Digest().Bytes()); encoded != expectedDigest {
 		t.Fatalf("digest=%s want=%s", encoded, expectedDigest)
 	}
@@ -97,7 +97,7 @@ func TestReceiveIntentCanonicalBindsSelectionArtifactAndPlan(t *testing.T) {
 		t.Fatal("equivalent selection maps produced different ReceiveIntent identity")
 	}
 
-	expected := append([]byte(receiveIntentDomain), 0, ReceiveIntentV3)
+	expected := append([]byte(receiveIntentDomain), 0, ReceiveIntentV4)
 	expected = appendCanonicalField(expected, left.SelectionSpec().CanonicalBytes())
 	expected = appendCanonicalField(expected, left.ArtifactSpec().CanonicalBytes())
 	expected = appendCanonicalField(expected, left.MaterializationPlan().CanonicalBytes())
