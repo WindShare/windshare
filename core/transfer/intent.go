@@ -12,12 +12,12 @@ import (
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
 
-const ReceiveIntentV3 uint8 = 3
+const ReceiveIntentV4 uint8 = 4
 
 const (
 	ReceiveIntentDigestBytes = sha256.Size
 	TransferJobIdentityBytes = catalog.IdentityBytes
-	receiveIntentDomain      = "windshare/receive-intent/v3"
+	receiveIntentDomain      = "windshare/receive-intent/v4"
 )
 
 var (
@@ -108,7 +108,7 @@ func canonicalReceiveIntentBytes(
 	encoded := make([]byte, 0, len(receiveIntentDomain)+2+
 		len(selection.encoded)+len(artifact.CanonicalBytes())+len(plan.CanonicalBytes())+24)
 	encoded = append(encoded, receiveIntentDomain...)
-	encoded = append(encoded, 0, ReceiveIntentV3)
+	encoded = append(encoded, 0, ReceiveIntentV4)
 	encoded = appendCanonicalField(encoded, selection.CanonicalBytes())
 	encoded = appendCanonicalField(encoded, artifact.CanonicalBytes())
 	encoded = appendCanonicalField(encoded, plan.CanonicalBytes())
@@ -157,11 +157,11 @@ func (intent ReceiveIntent) valid() bool {
 	return bytes.Equal(intent.encoded, canonical) && intent.digest == ReceiveIntentDigest(digest)
 }
 
-// DecodeReceiveIntent is the only persistence decoder for ReceiveIntentV3. It
+// DecodeReceiveIntent is the only persistence decoder for ReceiveIntentV4. It
 // reconstructs every nested value through the validated constructors and then
 // requires an exact canonical re-encode before returning durable authority.
 func DecodeReceiveIntent(encoded []byte) (ReceiveIntent, error) {
-	cursor, err := newReceiveIntentDecoder(encoded, receiveIntentDomain, ReceiveIntentV3)
+	cursor, err := newReceiveIntentDecoder(encoded, receiveIntentDomain, ReceiveIntentV4)
 	if err != nil {
 		return ReceiveIntent{}, err
 	}

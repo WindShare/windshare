@@ -31,10 +31,10 @@ export class LogicalSiblingNamespaceAuthority implements PersistentOutputNamespa
   readonly #claims = new Map<string, PersistentDirectoryNamespaceClaim['logicalSiblingMembership']>()
 
   bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void {
-    const artifactPath = claim.artifactPath.length === 0
+    const materializationRelativePath = claim.materializationRelativePath.length === 0
       ? Object.freeze([])
-      : snapshotPortableCatalogPath(claim.artifactPath)
-    const key = pathKey(artifactPath)
+      : snapshotPortableCatalogPath(claim.materializationRelativePath)
+    const key = pathKey(materializationRelativePath)
     const existing = this.#claims.get(key)
     if (existing !== undefined &&
         (existing.directoryId !== claim.logicalSiblingMembership.directoryId ||

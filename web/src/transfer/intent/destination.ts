@@ -27,6 +27,7 @@ import {
   DIRECT_ZIP_CANDIDATE_TOKEN_LENGTH,
   DIRECT_ZIP_STABLE_NAME_INFIX,
   FSA_OWNED_FILE_BINDING_VERSION,
+  FSA_RESERVED_ROOT_LAYOUT_VERSION,
   MAX_RESULT_COMPONENT_BYTES,
   PORTABLE_BINDING_VERSION,
   STABLE_IDENTITY_BYTES,
@@ -40,7 +41,9 @@ import {
   type DirectZipPolicyDigests,
   type GuaranteeSet,
   type FSAOwnedFileBinding,
+  type FSANamedContainerEntryReservation,
   type NamedContainerEntryReservation,
+  type NativeNamedContainerEntryReservation,
   type PortableBinding,
   type WorkspaceBinding,
 } from './model'
@@ -142,12 +145,12 @@ export async function createNativeNamedEntryReservation(input: {
   readonly authorityRef: string
   readonly logicalReservedName: string
   readonly collisionIndex: number
-}): Promise<NamedContainerEntryReservation> {
+}): Promise<NativeNamedContainerEntryReservation> {
   return createNamedEntryReservation({
     ...input,
     authorityKind: 'native-container',
     physicalName: input.logicalReservedName,
-  })
+  }) as Promise<NativeNamedContainerEntryReservation>
 }
 
 export async function createFSANamedEntryReservation(input: {
@@ -158,8 +161,11 @@ export async function createFSANamedEntryReservation(input: {
   readonly logicalReservedName: string
   readonly physicalName: string
   readonly collisionIndex: number
-}): Promise<NamedContainerEntryReservation> {
-  return createNamedEntryReservation({ ...input, authorityKind: 'fsa-container' })
+}): Promise<FSANamedContainerEntryReservation> {
+  return createNamedEntryReservation({
+    ...input,
+    authorityKind: 'fsa-container',
+  }) as Promise<FSANamedContainerEntryReservation>
 }
 
 async function createNamedEntryReservation(input: {
@@ -323,6 +329,9 @@ async function createDestinationReservation(
       fields.push(frame(TEXT_ENCODER.encode(input.logicalReservedName)))
       fields.push(frame(TEXT_ENCODER.encode(input.physicalName)))
       fields.push(frame(uint32(input.collisionIndex)))
+      if (input.authorityKind === 'fsa-container') {
+        fields.push(frame(Uint8Array.of(FSA_RESERVED_ROOT_LAYOUT_VERSION)))
+      }
       variant = {
         kind: input.kind,
         entryKind: input.entryKind,
@@ -330,6 +339,9 @@ async function createDestinationReservation(
         logicalReservedName: input.logicalReservedName,
         physicalName: input.physicalName,
         collisionIndex: input.collisionIndex,
+        ...(input.authorityKind === 'fsa-container'
+          ? { fsaLayoutVersion: FSA_RESERVED_ROOT_LAYOUT_VERSION }
+          : {}),
       }
       break
     case 'atomic-target':
@@ -380,6 +392,13 @@ export async function validateDestinationReservation(
       })
       break
     case 'named-container-entry': {
+      if (input.authorityKind === 'fsa-container') {
+        if (input.fsaLayoutVersion !== FSA_RESERVED_ROOT_LAYOUT_VERSION) {
+          throw new TypeError('FSA reserved-root layout version is invalid')
+        }
+      } else if ('fsaLayoutVersion' in input) {
+        throw new TypeError('native named-entry reservation cannot carry an FSA layout version')
+      }
       const options = {
         operationId: input.operationId,
         reservationId: input.reservationId,

@@ -42,6 +42,7 @@ import {
   DEFAULT_PORTABLE_ARTIFACT_LIMIT,
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
+  FSA_RESERVED_ROOT_LAYOUT_VERSION,
   MAX_RESULT_COMPONENT_BYTES,
   MAX_SELECTION_RULES,
   MAX_SELECTION_TARGET_UTF8_BYTES,
@@ -340,6 +341,10 @@ async function decodeNamedContainerEntryReservationBytes(
   const logicalReservedName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
   const physicalName = decodeCanonicalText(cursor.readFrame(MAX_RESULT_COMPONENT_BYTES))
   const collisionIndex = cursor.readFramedUint32()
+  if (common.authorityKind === 2 &&
+      cursor.readFramedByte() !== FSA_RESERVED_ROOT_LAYOUT_VERSION) {
+    return invalidDecodedCanonicalBytes()
+  }
   const options = { ...common, logicalReservedName, physicalName, collisionIndex }
   let reservation: NamedContainerEntryReservation
   if (common.authorityKind === 1 &&

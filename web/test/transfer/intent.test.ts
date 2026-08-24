@@ -9,6 +9,7 @@ import {
   DEFAULT_PORTABLE_ASSEMBLY_PART_BYTES,
   DEFAULT_PORTABLE_MAXIMUM_PARTS,
   DESTINATION_RESERVATION_VERSION,
+  FSA_RESERVED_ROOT_LAYOUT_VERSION,
   MATERIALIZATION_PLAN_VERSION,
   RECEIVE_INTENT_VERSION,
   browserHandoffGuarantees,
@@ -44,6 +45,7 @@ import {
   nativeTreeGuarantees,
   receiveIntentDigest,
   unavailableDirectZipPolicyDigests,
+  validateDestinationReservation,
   validateReceiveIntent,
 } from '../../src/transfer/intent'
 import type { ReceiveIntent, SelectionSpec } from '../../src/transfer/intent'
@@ -94,7 +96,7 @@ describe('ReceiveIntent canonical authority', () => {
       plan,
     }))
     expect(intent.digest).toBe(encodeBase64Url(await sha256(intent.canonicalBytes)))
-    expect(intent.digest).toBe('_-zVJFYomTUJqymN56HiUL1q6NyF_a69IEmAdVUMLl0')
+    expect(intent.digest).toBe('Ba2NNvQt_PzBm9ybyhyXHSFPrGSDE_Q2SXCH1YH7fPM')
     expect(await receiveIntentDigest(intent)).toBe(intent.digest)
     const decoded = await decodeReceiveIntent(intent.canonicalBytes)
     expect(decoded).toEqual(intent)
@@ -102,7 +104,7 @@ describe('ReceiveIntent canonical authority', () => {
     expect(canonicalReceiveIntentBytes(decoded)).toEqual(intent.canonicalBytes)
     await expect(validateReceiveIntent(decoded)).resolves.toEqual(decoded)
 
-    expectReceiveIntentV3Prefix(intent, selectionSpec.canonicalBytes.byteLength)
+    expectReceiveIntentV4Prefix(intent, selectionSpec.canonicalBytes.byteLength)
     const callerBytes = intent.canonicalBytes
     const firstByte = callerBytes[0]
     if (firstByte === undefined) {
@@ -206,9 +208,14 @@ describe('ReceiveIntent canonical authority', () => {
     expect(directTree.version).toBe(MATERIALIZATION_PLAN_VERSION)
     expect(fsaReservation).toMatchObject({
       version: DESTINATION_RESERVATION_VERSION,
+      fsaLayoutVersion: FSA_RESERVED_ROOT_LAYOUT_VERSION,
       logicalReservedName: 'docs-selection',
       physicalName: 'docs-selection.windshare-abcdef',
     })
+    await expect(validateDestinationReservation({
+      ...fsaReservation,
+      fsaLayoutVersion: 0,
+    } as never, resultTree)).rejects.toThrow(/layout version/u)
     expect(directAtomic.kind).toBe('direct-atomic')
     expect(atomicReservation.requestedName).toBe('report.txt')
     expect(directZip.kind).toBe('direct-resumable-zip')
@@ -348,7 +355,7 @@ describe('ReceiveIntent canonical authority', () => {
       ['trailing intent byte', appendBytes(directBytes, Uint8Array.of(0))],
       ['truncated intent', directBytes.slice(0, directBytes.byteLength - 1)],
       ['wrong intent domain', mutateByte(directBytes, 0, directBytes[0]! ^ 1)],
-      ['legacy V2 envelope', legacyReceiveIntentV2Bytes(directBytes)],
+      ['legacy V3 envelope', legacyReceiveIntentV3Bytes(directBytes)],
       ['unknown artifact kind', mutateByte(
         directBytes,
         directFrames.artifact.payloadOffset + recordFieldsOffset(ARTIFACT_SPEC_TEST_DOMAIN),
@@ -489,8 +496,8 @@ describe('ReceiveIntent input integrity', () => {
   })
 })
 
-function expectReceiveIntentV3Prefix(intent: ReceiveIntent, selectionBytes: number): void {
-  const prefix = new TextEncoder().encode('windshare/receive-intent/v3\0')
+function expectReceiveIntentV4Prefix(intent: ReceiveIntent, selectionBytes: number): void {
+  const prefix = new TextEncoder().encode('windshare/receive-intent/v4\0')
   expect(intent.canonicalBytes.slice(0, prefix.byteLength)).toEqual(prefix)
   expect(intent.canonicalBytes[prefix.byteLength]).toBe(RECEIVE_INTENT_VERSION)
   const firstFrame = intent.canonicalBytes.slice(prefix.byteLength + 1)
@@ -502,12 +509,12 @@ function readUint64(value: Uint8Array): bigint {
 }
 
 const TEST_TEXT_ENCODER = new TextEncoder()
-const RECEIVE_INTENT_TEST_DOMAIN = 'windshare/receive-intent/v3'
+const RECEIVE_INTENT_TEST_DOMAIN = 'windshare/receive-intent/v4'
 const SELECTION_SPEC_TEST_DOMAIN = 'windshare/selection-spec/v1'
 const ARTIFACT_SPEC_TEST_DOMAIN = 'windshare/artifact-spec/v1'
-const DESTINATION_RESERVATION_TEST_DOMAIN = 'windshare/destination-reservation/v3'
+const DESTINATION_RESERVATION_TEST_DOMAIN = 'windshare/destination-reservation/v4'
 const PORTABLE_BINDING_TEST_DOMAIN = 'windshare/portable-binding/v1'
-const MATERIALIZATION_PLAN_TEST_DOMAIN = 'windshare/materialization-plan/v3'
+const MATERIALIZATION_PLAN_TEST_DOMAIN = 'windshare/materialization-plan/v4'
 
 interface FrameLocation {
   readonly payloadOffset: number
@@ -523,11 +530,11 @@ function recordVersionOffset(domain: string): number {
   return TEST_TEXT_ENCODER.encode(domain).byteLength + 1
 }
 
-function legacyReceiveIntentV2Bytes(value: Uint8Array): Uint8Array {
-  const domainV2 = mutateByte(
-    value, TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN).byteLength - 1, '2'.charCodeAt(0),
+function legacyReceiveIntentV3Bytes(value: Uint8Array): Uint8Array {
+  const domainV3 = mutateByte(
+    value, TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN).byteLength - 1, '3'.charCodeAt(0),
   )
-  return mutateByte(domainV2, recordVersionOffset(RECEIVE_INTENT_TEST_DOMAIN), 2)
+  return mutateByte(domainV3, recordVersionOffset(RECEIVE_INTENT_TEST_DOMAIN), 3)
 }
 
 function locateFrame(value: Uint8Array, offset: number): FrameLocation {
@@ -658,7 +665,7 @@ function malformedReceiveIntentEnvelope(
 ): Uint8Array {
   return appendMany([
     TEST_TEXT_ENCODER.encode(RECEIVE_INTENT_TEST_DOMAIN),
-    Uint8Array.of(0, 3),
+    Uint8Array.of(0, RECEIVE_INTENT_VERSION),
     testFrame(selection),
     testFrame(artifact),
     testFrame(plan),

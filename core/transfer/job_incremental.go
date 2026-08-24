@@ -435,20 +435,36 @@ func (discovery *incrementalDirectoryDiscovery) admitDirectory(
 	if projectionErr != nil {
 		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, dependencyContractFailure(projectionErr)
 	}
-	if projection.Kind() == ordinaryoutput.ArtifactReject {
+	// Projection is the admission discriminant: a rejected source deliberately
+	// carries no materialization request, but that absence never grants reference authority.
+	_, materialized := request.Directory()
+	switch projection.Kind() {
+	case ordinaryoutput.ArtifactReject:
 		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
 			discovery.run.recordSelectedProjectionRejection(projection)
+	case ordinaryoutput.ArtifactTraverseOnly:
+		if !materialized {
+			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, true, nil
+		}
+	case ordinaryoutput.ArtifactMaterialize:
+		if !materialized {
+			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
+				dependencyContractFailure(ErrOutputContract)
+		}
+	default:
+		return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false,
+			dependencyContractFailure(ErrOutputContract)
 	}
 	admission, err := discovery.run.admitIncrementalDirectory(ctx, request)
 	if err == nil {
-		if _, materialized := request.Projection().ArtifactPath(); materialized {
-			claim, claimErr := NewMaterializedDirectoryClaim(admission, request)
-			if claimErr != nil {
-				return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, dependencyContractFailure(claimErr)
-			}
-			return admission, claim, true, nil
+		if _, projectedArtifact := request.Projection().ArtifactPath(); !projectedArtifact {
+			return admission, MaterializedDirectoryClaim{}, true, nil
 		}
-		return admission, MaterializedDirectoryClaim{}, true, nil
+		claim, claimErr := NewMaterializedDirectoryClaim(admission, request)
+		if claimErr != nil {
+			return DirectoryAdmission{}, MaterializedDirectoryClaim{}, false, dependencyContractFailure(claimErr)
+		}
+		return admission, claim, true, nil
 	}
 	policy := lifecyclePolicyFor(err)
 	if discovery.request.path == "" {
@@ -478,7 +494,7 @@ func (discovery *incrementalDirectoryDiscovery) outputDirectoryRequest() (
 		role = ordinaryoutput.SourceNodeSelected
 	}
 	return projectDirectoryMaterializationRequest(
-		discovery.run.job.projector,
+		discovery.run.job.coordinates,
 		AuthenticatedSourceDirectory{
 			DirectoryID: discovery.request.directory, Generation: discovery.generation,
 			ParentAdmission: discovery.request.parentAdmission,
@@ -515,13 +531,6 @@ func (r *jobRun) recordSelectedProjectionRejection(
 	}
 }
 
-func sourceCatalogPath(path string) (ordinaryoutput.SourceCatalogPath, error) {
-	if path == "" {
-		return ordinaryoutput.EmptySourceCatalogPath(), nil
-	}
-	return ordinaryoutput.NewSourceCatalogPath(path)
-}
-
 func projectedFailurePath(projection ordinaryoutput.ArtifactPathProjection) string {
 	path, materialized := projection.ArtifactPath()
 	if !materialized {
@@ -546,8 +555,11 @@ func (r *jobRun) recordIncrementalAdmissionFailure(
 }
 
 func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request DirectoryMaterializationRequest) (DirectoryAdmission, error) {
-	source := request.Source()
-	if err := validateSourceDirectoryForScope(r.directoryAdmissionScope, source); err != nil {
+	directory, materialized := request.Directory()
+	if !materialized {
+		return DirectoryAdmission{}, dependencyContractFailure(ErrInvalidDirectoryAdmission)
+	}
+	if err := validateMaterializationDirectoryForScope(r.directoryAdmissionScope, directory); err != nil {
 		return DirectoryAdmission{}, dependencyContractFailure(err)
 	}
 	admission, rawAdmissionErr := r.output.AdmitDirectory(ctx, request)
@@ -555,7 +567,7 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 	if err != nil {
 		if !admission.IsZero() {
 			if bindingErr := ValidateDirectoryAdmissionBinding(
-				r.directoryAdmissionScope, admission, source,
+				r.directoryAdmissionScope, admission, directory,
 			); bindingErr != nil {
 				err = joinLifecycleFailures(err, outputContractFault(bindingErr))
 			}
@@ -564,7 +576,7 @@ func (r *jobRun) admitIncrementalDirectory(ctx context.Context, request Director
 		r.traceDirectoryAdmission(request, err)
 		return DirectoryAdmission{}, err
 	}
-	if err := ValidateDirectoryAdmissionBinding(r.directoryAdmissionScope, admission, source); err != nil {
+	if err := ValidateDirectoryAdmissionBinding(r.directoryAdmissionScope, admission, directory); err != nil {
 		contractFailure := outputContractFault(err)
 		r.traceDirectoryAdmission(request, contractFailure)
 		return DirectoryAdmission{}, contractFailure
@@ -627,16 +639,5 @@ func (r *jobRun) artifactPathForAdmission(admission DirectoryAdmission) string {
 	if admission.IsZero() {
 		return ""
 	}
-	sourcePath, err := sourceCatalogPath(admission.SourcePath())
-	if err != nil {
-		return ""
-	}
-	node, err := OrdinaryOutputSourceNode(
-		catalog.NodeKindDirectory, admission.DirectoryID(), catalog.FileID{}, sourcePath,
-		ordinaryoutput.SourceNodeSelected,
-	)
-	if err != nil {
-		return ""
-	}
-	return projectedFailurePath(r.job.projector.Project(node))
+	return admission.Path()
 }

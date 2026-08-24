@@ -217,7 +217,7 @@ function requireOutputBinding(
       durableRanges.fileSize !== file.exactSize ||
       durableRanges.ownership.backend !== session.backend ||
       durableRanges.ownership.outputSessionId !== session.outputSessionId ||
-      !samePath(durableRanges.ownership.canonicalPath, file.artifactPath) ||
+      !samePath(durableRanges.ownership.canonicalPath, file.materializationRelativePath) ||
       (ownership !== undefined && !sameOutputOwnership(durableRanges.ownership, ownership))) {
     throw new OutputTransactionContractError(
       'output durable ranges belong to a different output or source revision',

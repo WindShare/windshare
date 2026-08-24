@@ -32,6 +32,35 @@ export interface OutputTracePayloadByName {
     transition: 'started' | 'completed' | 'failed' | 'ownership_unknown'
     outcome?: 'published' | 'partial_directory' | 'resumable_receive' | 'discarded' | 'needs_attention'
   }>
+  readonly settlement_root_evidence_mismatch: Readonly<{
+    validation_pass: 'anticipated' | 'observed'
+    operation_id: string
+    receive_intent_digest: string
+    transfer_job_id: string
+    layout: 'directory-tree-single-file' | 'directory-tree-result-root' |
+      'directory-tree-catalog-root' | 'zip-result-root'
+    anchor_kind: 'single-file' | 'directory' | 'synthetic-root' | 'catalog-root'
+    expected_root_kind: 'none' | 'materialized-directory'
+    expected_directory_id?: string
+    expected_relative_path?: readonly string[]
+    actual_candidates: readonly Readonly<{
+      directory_id: string
+      relative_path: readonly string[]
+      settlement_kind: 'finalized' | 'isolated-failure' | 'missing'
+      admission_path: readonly string[] | null
+    }>[]
+    require_complete: boolean
+    reason:
+      | 'unexpected-single-file-directory-evidence'
+      | 'missing-root-entry'
+      | 'duplicate-root-entry'
+      | 'root-identity-mismatch'
+      | 'root-path-mismatch'
+      | 'missing-root-receipt'
+      | 'duplicate-root-receipt'
+      | 'root-receipt-binding-mismatch'
+      | 'root-receipt-not-finalized'
+  }>
   readonly publication: Readonly<{
     backend: OutputDiagnosticBackend
     transition: 'started' | 'committed' | 'not_committed' | 'unknown'

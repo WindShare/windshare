@@ -181,7 +181,7 @@ async function writerFixture(closeFailure?: unknown): Promise<Readonly<{
     verifyParent: async () => parent as unknown as FileSystemDirectoryHandle,
     resolveParent: async (path) => Object.freeze({
       parent: parent as unknown as FileSystemDirectoryHandle,
-      name: path.at(-1) ?? '',
+      name: path.at(-1) ?? reservation.physicalName,
     }),
   })
   const revision: OpenedFileRevision = Object.freeze({
@@ -199,10 +199,10 @@ async function writerFixture(closeFailure?: unknown): Promise<Readonly<{
     artifactId: artifact.digest,
   })!
   const stageScope = stageAuthority
-    .fileScope(revision.fileId, ['payload.bin'])
+    .fileScope(revision.fileId, [])
     .withCorrelation({ ownedObjectId })
   const file = await lineage.createAfterRevisionOpen(
-    ['payload.bin'],
+    [],
     revision,
     ownedObjectId,
     stageScope,

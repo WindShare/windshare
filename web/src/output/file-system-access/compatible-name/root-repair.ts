@@ -1,4 +1,5 @@
-import { catalogNameCollisionKey, snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { catalogNameCollisionKey } from '../../../catalog/path-policy'
+import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import {
   PathComponentRejectedError,
   inspectFileSystemComponent,
@@ -204,7 +205,7 @@ export function assertDescendantRejection(input: CompatibleNameRejectedComponent
   const expectedStage = input.entryKind === 'directory'
     ? 'fsa.directory.entry.inspect'
     : 'fsa.file.entry.inspect'
-  const canonicalPath = snapshotPortableCatalogPath(input.artifactPath)
+  const canonicalPath = snapshotMaterializationRootRelativePath(input.artifactPath)
   if (!(input.rejection instanceof PathComponentRejectedError) || !input.rejection.preMutation ||
       input.rejection.stage !== expectedStage ||
       input.rejection.canonicalComponent !== canonicalPath.at(-1) ||

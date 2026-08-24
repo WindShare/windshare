@@ -320,11 +320,11 @@ func (fixture testFixture) directoryRequest(
 		}
 	}
 	request, err := transfer.NewDirectoryMaterializationRequest(
-		fixture.session.projector, directory, ordinaryoutput.SourceNodeSelected, parent,
+		fixture.intent, directory, ordinaryoutput.SourceNodeSelected, parent,
 	)
 	if err != nil {
 		request, err = transfer.NewDirectoryMaterializationRequest(
-			fixture.session.projector, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
+			fixture.intent, directory, ordinaryoutput.SourceNodeConnectsSelection, parent,
 		)
 	}
 	if err != nil {
@@ -525,9 +525,30 @@ func (fixture testFixture) outputFile(
 	if value, ok := fixture.materialized.Load(receiptKey(parent)); ok {
 		parentMaterialization = value.(transfer.MaterializedDirectoryClaim)
 	}
+	fixture.session.mu.Lock()
+	parentID := fixture.session.receiptClaims[receiptKey(parent)]
+	parentEntry := fixture.session.directoryClaims[parentID]
+	fixture.session.mu.Unlock()
+	if parentEntry == nil {
+		fixture.t.Fatal("file parent admission is not retained")
+	}
+	fileParent, err := transfer.NewDirectoryMaterializationFileParent(
+		parentEntry.claim.source.DirectoryID, parentEntry.claim.source.Generation,
+		parentEntry.claim.source.SourcePath, parent, parentMaterialization,
+	)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
+	relative := claimName(path)
+	if parent.Path() != "" {
+		relative = parent.Path() + "/" + relative
+	}
+	relativePath, err := transfer.NewMaterializationRootRelativePath(relative)
+	if err != nil {
+		fixture.t.Fatal(err)
+	}
 	file, err := transfer.NewMaterializationFile(
-		fixture.session.projector, sourcePath, descriptor, fixture.sessionID,
-		parent, parentMaterialization,
+		fixture.intent, sourcePath, relativePath, descriptor, fixture.sessionID, fileParent,
 	)
 	if err != nil {
 		fixture.t.Fatal(err)

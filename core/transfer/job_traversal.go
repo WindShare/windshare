@@ -27,22 +27,156 @@ var (
 	ErrOpaqueSelectionEvidenceBudget = errors.New("transfer opaque selection evidence budget exceeded")
 )
 
+type directTreeCoordinateProjector struct {
+	artifact ordinaryoutput.ArtifactPathProjector
+	scope    DirectoryAdmissionScope
+}
+
+func newDirectTreeCoordinateProjector(intent ReceiveIntent) (directTreeCoordinateProjector, error) {
+	artifact, err := OrdinaryOutputArtifactPathProjector(intent)
+	if err != nil {
+		return directTreeCoordinateProjector{}, err
+	}
+	scope, err := NewDirectoryAdmissionScope(intent)
+	if err != nil {
+		return directTreeCoordinateProjector{}, err
+	}
+	return directTreeCoordinateProjector{artifact: artifact, scope: scope}, nil
+}
+
+func (projector directTreeCoordinateProjector) projectDirectory(
+	source AuthenticatedSourceDirectory,
+	role ordinaryoutput.SourceNodeRole,
+) (ordinaryoutput.ArtifactPathProjection, MaterializationDirectory, bool, error) {
+	node, err := OrdinaryOutputSourceNode(
+		catalog.NodeKindDirectory, source.DirectoryID, catalog.FileID{}, source.SourcePath, role,
+	)
+	if err != nil {
+		return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, err
+	}
+	projection := projector.artifact.Project(node)
+	switch projection.Kind() {
+	case ordinaryoutput.ArtifactReject:
+		return projection, MaterializationDirectory{}, false, nil
+	case ordinaryoutput.ArtifactTraverseOnly:
+		root := projector.scope.RootExpectation()
+		if root.Kind() != DirectoryAdmissionCatalogRoot || !source.SourcePath.IsRoot() ||
+			source.DirectoryID != root.DirectoryID() || !source.ParentAdmission.IsZero() {
+			return projection, MaterializationDirectory{}, false, nil
+		}
+		path, pathErr := NewMaterializationRootRelativePath(root.Path())
+		if pathErr != nil {
+			return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, pathErr
+		}
+		directory, directoryErr := NewMaterializationDirectory(
+			source.DirectoryID, source.Generation, path, source.ParentAdmission, source.ModifiedTime,
+		)
+		return projection, directory, directoryErr == nil, directoryErr
+	case ordinaryoutput.ArtifactMaterialize:
+		artifactPath, ok := projection.ArtifactPath()
+		if !ok {
+			return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, ErrInvalidOutputBinding
+		}
+		path, pathErr := projector.directoryPath(source, artifactPath)
+		if pathErr != nil {
+			return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, pathErr
+		}
+		directory, directoryErr := NewMaterializationDirectory(
+			source.DirectoryID, source.Generation, path, source.ParentAdmission, source.ModifiedTime,
+		)
+		return projection, directory, directoryErr == nil, directoryErr
+	default:
+		return ordinaryoutput.ArtifactPathProjection{}, MaterializationDirectory{}, false, ErrInvalidOutputBinding
+	}
+}
+
+func (projector directTreeCoordinateProjector) directoryPath(
+	source AuthenticatedSourceDirectory,
+	artifact ordinaryoutput.ArtifactPath,
+) (MaterializationRootRelativePath, error) {
+	if source.ParentAdmission.IsZero() {
+		root := projector.scope.RootExpectation()
+		if root.Kind() == DirectoryAdmissionNoRoot || source.DirectoryID != root.DirectoryID() {
+			return MaterializationRootRelativePath{}, ErrInvalidDirectoryAdmission
+		}
+		return NewMaterializationRootRelativePath(root.Path())
+	}
+	if source.ParentAdmission.ReceiveIntentDigest() != projector.scope.ReceiveIntentDigest() {
+		return MaterializationRootRelativePath{}, ErrInvalidDirectoryAdmission
+	}
+	return NewMaterializationRootRelativePath(joinMaterializationPath(
+		source.ParentAdmission.Path(), pathLeaf(artifact.String()),
+	))
+}
+
+func (projector directTreeCoordinateProjector) projectFile(
+	sourcePath ordinaryoutput.SourceCatalogPath,
+	file catalog.FileID,
+	parent MaterializationFileParent,
+) (ordinaryoutput.ArtifactPath, MaterializationRootRelativePath, error) {
+	node, err := OrdinaryOutputSourceNode(
+		catalog.NodeKindFile, catalog.DirectoryID{}, file, sourcePath, ordinaryoutput.SourceNodeSelected,
+	)
+	if err != nil || !parent.valid() {
+		return ordinaryoutput.ArtifactPath{}, MaterializationRootRelativePath{}, ErrInvalidOutputBinding
+	}
+	artifact, materialized := projector.artifact.Project(node).ArtifactPath()
+	if !materialized {
+		return ordinaryoutput.ArtifactPath{}, MaterializationRootRelativePath{}, ErrInvalidOutputBinding
+	}
+	var relative string
+	switch parent.Kind() {
+	case MaterializationFileParentReference:
+		if projector.scope.RootExpectation().Kind() != DirectoryAdmissionNoRoot {
+			return ordinaryoutput.ArtifactPath{}, MaterializationRootRelativePath{}, ErrInvalidOutputBinding
+		}
+		relative = artifact.String()
+	case MaterializationFileParentDirectory:
+		relative = joinMaterializationPath(parent.Admission().Path(), pathLeaf(artifact.String()))
+	default:
+		return ordinaryoutput.ArtifactPath{}, MaterializationRootRelativePath{}, ErrInvalidOutputBinding
+	}
+	path, err := NewMaterializationRootRelativePath(relative)
+	return artifact, path, err
+}
+
+func joinMaterializationPath(parent, leaf string) string {
+	if parent == "" {
+		return leaf
+	}
+	return parent + "/" + leaf
+}
+
+func pathLeaf(path string) string {
+	if separator := strings.LastIndexByte(path, '/'); separator >= 0 {
+		return path[separator+1:]
+	}
+	return path
+}
+
+func sourceCatalogPath(path string) (ordinaryoutput.SourceCatalogPath, error) {
+	if path == "" {
+		return ordinaryoutput.EmptySourceCatalogPath(), nil
+	}
+	return ordinaryoutput.NewSourceCatalogPath(path)
+}
+
 type opaqueSelectionEvidence struct {
 	generation catalog.DirectoryGeneration
 	terminal   catalog.PageCommitment
 }
 
 type plannedFile struct {
-	file                  catalog.FileID
-	sourcePath            ordinaryoutput.SourceCatalogPath
-	artifactPath          ordinaryoutput.ArtifactPath
-	expectedSize          uint64
-	modified              catalog.ModifiedTime
-	parentDirectory       catalog.DirectoryID
-	parentGeneration      catalog.DirectoryGeneration
-	parentAdmission       DirectoryAdmission
-	parentMaterialization MaterializedDirectoryClaim
-	selectionDecision     FileSelectionDecision
+	file                        catalog.FileID
+	sourcePath                  ordinaryoutput.SourceCatalogPath
+	artifactPath                ordinaryoutput.ArtifactPath
+	materializationRelativePath MaterializationRootRelativePath
+	expectedSize                uint64
+	modified                    catalog.ModifiedTime
+	parentDirectory             catalog.DirectoryID
+	parentGeneration            catalog.DirectoryGeneration
+	parent                      MaterializationFileParent
+	selectionDecision           FileSelectionDecision
 }
 
 func (plan plannedFile) failurePath() string { return plan.artifactPath.String() }

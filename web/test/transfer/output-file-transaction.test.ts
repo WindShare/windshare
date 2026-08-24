@@ -11,6 +11,11 @@ import {
   type OutputSession,
 } from '../../src/transfer/output-session'
 import { identityText } from './v2-job-fixture'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
 
 const signal = new AbortController().signal
 const file: OutputFile = Object.freeze({
@@ -19,14 +24,15 @@ const file: OutputFile = Object.freeze({
     fileId: identityText(4),
     fileRevision: identityText(5),
   },
-  sourcePath: ['source.bin'],
-  artifactPath: ['result.bin'],
+  sourceAuthenticationPath: snapshotSourceAuthenticationPath(['source.bin']),
+  logicalArtifactPath: snapshotLogicalArtifactPath(['logical-root', 'result.bin']),
+  materializationRelativePath: snapshotMaterializationRootRelativePath(['result.bin']),
   exactSize: 4n,
 })
 const ownership = Object.freeze({
   backend: 'test',
   outputSessionId: 'session',
-  canonicalPath: file.artifactPath,
+  canonicalPath: file.materializationRelativePath,
   ownedFileIdentity: 'owned-file',
 })
 

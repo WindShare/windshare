@@ -1,4 +1,7 @@
-import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
+import {
+  snapshotMaterializationRootRelativePath,
+  type MaterializationRootRelativePath,
+} from '../../transfer/job/coordinate/direct-tree'
 import {
   emitOutputTrace,
   outputTraceEvent,
@@ -142,8 +145,10 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     try {
       admission = this.#mutationAdmissions.enter()
       this.#requireActivated()
-      const artifactPath = snapshotPortableCatalogPath(request.artifactPath)
-      return this.#beginAdmittedFile(request, artifactPath, admission)
+      const materializationRelativePath = snapshotMaterializationRootRelativePath(
+        request.materializationRelativePath,
+      )
+      return this.#beginAdmittedFile(request, materializationRelativePath, admission)
     } catch (error) {
       admission?.leave()
       return Promise.reject(error)
@@ -152,7 +157,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
 
   async #beginAdmittedFile(
     request: PersistentFileRequest,
-    artifactPath: readonly string[],
+    materializationRelativePath: MaterializationRootRelativePath,
     admission: MutationAdmission,
   ): Promise<PersistentFileTransaction> {
     let handedOff = false
@@ -161,7 +166,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       // Awaiting authenticated source authority before local planning prevents both
       // checkpoint reservations and namespace placeholders for unopened revisions.
       const revision = snapshotOpenedRevision(await request.openRevision())
-      stageScope = this.#stageAuthority?.fileScope(revision.fileId, artifactPath)
+      stageScope = this.#stageAuthority?.fileScope(revision.fileId, materializationRelativePath)
       stageScope?.addFailureFacts(
         'checkpoint',
         context => captureCheckpointFailureFacts(
@@ -171,7 +176,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
         ),
       )
       try {
-        const decision = await this.#selectInitialCheckpoint(revision, artifactPath, stageScope)
+        const decision = await this.#selectInitialCheckpoint(revision, materializationRelativePath, stageScope)
         this.#traceCheckpointDecision(revision.fileId, decision)
         const checkpoint = selectedCheckpoint(decision)
         const fileScope = stageScope?.withCorrelation({
@@ -180,7 +185,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpointGeneration: checkpoint.checkpointGeneration,
         })
         let handle = await this.#tree.openFile(
-          artifactPath,
+          materializationRelativePath,
           checkpoint.ownedObjectId,
           fileScope,
         )
@@ -189,7 +194,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
           }
           handle = await this.#tree.createFileAfterRevisionOpen(
-            artifactPath,
+            materializationRelativePath,
             revision,
             checkpoint.ownedObjectId,
             fileScope,
@@ -235,11 +240,14 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
   }
 
-  ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
+  ensureDirectory(
+    path: readonly string[],
+  ): Promise<PersistentDirectoryMaterialization> {
     const admission = this.#mutationAdmissions.enter()
     try {
       this.#requireActivated()
-      return this.#tree.ensureDirectory(path).finally(() => admission.leave())
+      const materializationRelativePath = snapshotMaterializationRootRelativePath(path)
+      return this.#tree.ensureDirectory(materializationRelativePath).finally(() => admission.leave())
     } catch (error) {
       admission.leave()
       throw error
@@ -256,17 +264,17 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
 
   async #selectInitialCheckpoint(
     revision: OpenedFileRevision,
-    artifactPath: readonly string[],
+    materializationRelativePath: MaterializationRootRelativePath,
     stageScope: PersistentOutputStageScope | undefined,
   ): Promise<InitialCheckpointCASResult | CheckpointLineageDecision> {
     const lookup = {
       lineageId: deriveCheckpointLineageID({
         ...this.#checkpoints.binding,
         fileId: revision.fileId,
-        canonicalPath: artifactPath,
+        canonicalPath: materializationRelativePath,
       }),
       fileId: revision.fileId,
-      canonicalPath: artifactPath,
+      canonicalPath: materializationRelativePath,
       fileRevision: revision.fileRevision,
       exactSize: revision.exactSize,
     } as const
@@ -279,12 +287,12 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     if (decision.kind !== 'absent') return decision
 
     const proposedOwnedObjectId = await this.#tree.proposeFileOwnedObjectId(
-      artifactPath,
+      materializationRelativePath,
       revision,
     )
     const proposedScope = stageScope?.withCorrelation({ ownedObjectId: proposedOwnedObjectId })
     if (await this.#tree.inspectFileDestination(
-      artifactPath,
+      materializationRelativePath,
       proposedOwnedObjectId,
       proposedScope,
     ) === 'occupied') {
@@ -303,7 +311,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     const candidate = initialCheckpoint(
       this.#checkpoints.binding,
       revision,
-      artifactPath,
+      materializationRelativePath,
       proposedOwnedObjectId,
     )
     return runPersistentOutputStage(
@@ -519,7 +527,7 @@ function snapshotOpenedRevision(input: OpenedFileRevision): OpenedFileRevision {
 function initialCheckpoint(
   binding: CheckpointNamespaceBinding,
   revision: OpenedFileRevision,
-  artifactPath: readonly string[],
+  materializationRelativePath: MaterializationRootRelativePath,
   ownedObjectId: string,
 ): FileCheckpointV2 {
   return newFileCheckpointV2({
@@ -528,7 +536,7 @@ function initialCheckpoint(
     materializationBindingDigest: binding.materializationBindingDigest,
     fileId: revision.fileId,
     fileRevision: revision.fileRevision,
-    canonicalPath: artifactPath,
+    canonicalPath: materializationRelativePath,
     exactSize: revision.exactSize,
     materializerKind: binding.materializerKind,
     authorityRef: binding.authorityRef,

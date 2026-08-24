@@ -7,7 +7,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $templatePath = Join-Path $repositoryRoot 'web/src/output/file-system-access/compatible-name/restoration/windows-v1.ps1'
 $expectedTemplateId = 'windows-powershell-v1'
-$expectedSidecarVersion = 'windshare-name-restoration/v1'
+$expectedSidecarVersion = 'windshare-name-restoration/v2'
 $utf8WithoutBom = New-Object Text.UTF8Encoding($false, $true)
 
 function Assert-True {

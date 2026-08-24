@@ -37,8 +37,7 @@ func (spec CheckpointLineageSpec) validate() error {
 		!spec.MaterializerKind.Valid() || spec.AuthorityRef.IsZero() {
 		return fmt.Errorf("%w: checkpoint lineage identity", ErrRecordBinding)
 	}
-	canonical, err := catalog.CanonicalPath(spec.CanonicalPath)
-	if err != nil || canonical != spec.CanonicalPath {
+	if _, err := canonicalCheckpointPath(spec.CanonicalPath, spec.MaterializerKind); err != nil {
 		return fmt.Errorf("%w: checkpoint lineage canonical path", ErrRecordBinding)
 	}
 	return nil

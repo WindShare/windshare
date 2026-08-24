@@ -17,24 +17,25 @@ func (engine *Engine) checkpointKey(file transfer.MaterializationFile) (Checkpoi
 	}
 	descriptor := file.Descriptor()
 	target := file.Target()
-	artifactPath := file.ArtifactPath().String()
-	canonical, err := catalog.CanonicalPath(artifactPath)
-	if err != nil || !file.SourcePath().Valid() || !file.ArtifactPath().Valid() ||
-		canonical != artifactPath || artifactPath == "" || file.SourceParentAdmission().IsZero() ||
-		file.SourceParentAdmission().ReceiveIntentDigest() != engine.intent.Digest() ||
+	materializationPath := file.MaterializationRelativePath().String()
+	canonical, err := catalog.CanonicalPath(materializationPath)
+	if err != nil || !transfer.MaterializationFileMatchesIntent(engine.intent, file) ||
+		!file.SourcePath().Valid() || !file.ArtifactPath().Valid() ||
+		!file.MaterializationRelativePath().Valid() ||
+		canonical != materializationPath || materializationPath == "" ||
 		descriptor.ShareInstance() != engine.intent.ShareInstance() ||
 		descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
 		file.ExpectedSize() != descriptor.ExactSize() || target.OutputSessionID() != engine.sessionID ||
 		target.Descriptor() != descriptor || target.ExactSize() != file.ExpectedSize() ||
 		target.Locator().Kind() != transfer.MaterializationPathLocator ||
-		target.Locator().CanonicalPath() != artifactPath {
+		target.Locator().CanonicalPath() != materializationPath {
 		return CheckpointKey{}, errors.Join(ErrInvalidClaim, err)
 	}
 	ownership := engine.binding.Ownership()
 	key := CheckpointKey{
 		operation: engine.binding.OperationID(), intent: engine.binding.ReceiveIntentDigest(),
 		materialization: engine.binding.MaterializationBindingDigest(),
-		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: artifactPath,
+		fileID:          descriptor.FileID(), revision: descriptor.FileRevision(), path: materializationPath,
 		exactSize: file.ExpectedSize(), materializer: ownership.MaterializerKind(),
 		authority: ownership.AuthorityRef(),
 	}

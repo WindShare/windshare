@@ -100,6 +100,27 @@ func TestOwnershipRejectsMissingUnknownAndTamperedCertification(t *testing.T) {
 	}
 }
 
+func TestMaterializerValuesFenceLegacyFSACoordinates(t *testing.T) {
+	if MaterializerNativeTree != 1 || MaterializerLegacyFSATree != 2 ||
+		MaterializerOriginPrivate != 3 || MaterializerAtomicFile != 4 || MaterializerFSATree != 5 {
+		t.Fatal("materializer encoding changed")
+	}
+	for _, kind := range []MaterializerKind{
+		MaterializerNativeTree,
+		MaterializerLegacyFSATree,
+		MaterializerOriginPrivate,
+		MaterializerAtomicFile,
+		MaterializerFSATree,
+	} {
+		if !kind.Valid() {
+			t.Fatalf("known materializer %d is invalid", kind)
+		}
+	}
+	if MaterializerKind(0).Valid() || MaterializerKind(6).Valid() {
+		t.Fatal("unknown materializer is valid")
+	}
+}
+
 func TestRootOpenDispositionValuesAreClosedAndStable(t *testing.T) {
 	if string(CallerProvidedContainer) != "caller-provided-container" ||
 		string(AuthorityCreatedRoot) != "authority-created-root" {

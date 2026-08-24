@@ -33,6 +33,7 @@ import {
   type DirectoryAdmissionScope,
   type DirectorySettlement,
 } from '../../transfer/directory-admission'
+import type { DirectTreeRootExpectation } from '../../transfer/job/coordinate/direct-tree'
 import {
   validateReceiveIntent,
   type DirectoryTreeArtifact,
@@ -51,8 +52,10 @@ import type {
 } from '../../transfer/outcome'
 import type { PersistentDirectorySettlementEvidence } from '../../transfer/settlement/persistent-execution'
 
-const FSA_SETTLEMENT_RECEIPT = 12
-const FSA_UNOPENED_CLEANUP_RECEIPT = 13
+const RECEIVE_RECEIPT_DOMAIN = 'windshare/receive-receipt/v1'
+const RECEIVE_RECEIPT_SCHEMA_VERSION = 1
+const FSA_SETTLEMENT_RECEIPT_V2 = 14
+const FSA_UNOPENED_CLEANUP_RECEIPT_V2 = 15
 
 export type DirectTreeIntent = ReceiveIntent & Readonly<{
   plan: DirectTreePlan
@@ -120,7 +123,8 @@ export function snapshotDirectorySettlements(
         settlement.admission.layoutVersion !== scope.layoutVersion ||
         settlement.admission.layout !== scope.layout ||
         settlement.admission.directoryId !== entry.directoryId ||
-        settlement.admission.generation !== entry.generation) {
+        settlement.admission.generation !== entry.generation ||
+        !samePath(settlement.admission.path, artifactPath)) {
       throw new TypeError('FSA directory settlement escaped its owned directory evidence')
     }
     return Object.freeze({ artifactPath, settlement })
@@ -230,12 +234,14 @@ export function createFSASettlementReceipt(input: Readonly<{
   outcome: 'published' | 'partial-directory' | 'resumable-receive'
   request: PlanPauseRequest | PlanSettlementRequest<CompletedTransferWorkerSettlement> | PlanStopRequest
   evidence: SettlementReceiptEvidence
+  directoryScope: DirectoryAdmissionScope
 }>): Promise<PersistedReceiveRecord> {
-  const bytes = canonicalRecord('windshare/receive-receipt/v1', 1, [
-    canonicalU8(FSA_SETTLEMENT_RECEIPT),
+  const bytes = canonicalRecord(RECEIVE_RECEIPT_DOMAIN, RECEIVE_RECEIPT_SCHEMA_VERSION, [
+    canonicalU8(FSA_SETTLEMENT_RECEIPT_V2),
     identityFrame(input.intent.operationId, 16, 'operation ID'),
     identityFrame(input.intent.digest, 32, 'receive intent digest'),
     identityFrame(input.intent.plan.reservation.digest, 32, 'reservation digest'),
+    ...canonicalFSASettlementBinding(input.intent, input.directoryScope),
     identityFrame(input.transferJobId, 16, 'transfer job ID'),
     canonicalFrame(canonicalU8(settlementOutcomeByte(input.outcome))),
     identityFrame(input.evidence.checkpointSetDigest, 32, 'checkpoint set digest'),
@@ -270,19 +276,65 @@ export function createFSASettlementReceipt(input: Readonly<{
 export function createFSAUnopenedCleanupReceipt(input: Readonly<{
   intent: DirectTreeIntent
   transferJobId: string
+  directoryScope: DirectoryAdmissionScope
 }>): Promise<PersistedReceiveRecord> {
   return createPersistedReceiveRecord({
     operationId: input.intent.operationId,
     kind: RECEIVE_RECORD_CLEANUP,
-    canonicalBytes: canonicalRecord('windshare/receive-receipt/v1', 1, [
-      canonicalU8(FSA_UNOPENED_CLEANUP_RECEIPT),
+    canonicalBytes: canonicalRecord(RECEIVE_RECEIPT_DOMAIN, RECEIVE_RECEIPT_SCHEMA_VERSION, [
+      canonicalU8(FSA_UNOPENED_CLEANUP_RECEIPT_V2),
       identityFrame(input.intent.operationId, 16, 'operation ID'),
       identityFrame(input.intent.digest, 32, 'receive intent digest'),
       identityFrame(input.intent.plan.reservation.digest, 32, 'reservation digest'),
+      ...canonicalFSASettlementBinding(input.intent, input.directoryScope),
       identityFrame(input.transferJobId, 16, 'transfer job ID'),
       canonicalFrame(canonicalU64(0n)),
     ]),
   })
+}
+
+function canonicalFSASettlementBinding(
+  intent: DirectTreeIntent,
+  scope: DirectoryAdmissionScope,
+): readonly CanonicalBytes[] {
+  const reservation = intent.plan.reservation
+  if (reservation.kind !== 'named-container-entry' ||
+      reservation.authorityKind !== 'fsa-container') {
+    throw new TypeError('FSA receipt requires a reserved-root-relative layout binding')
+  }
+  if (scope.receiveIntentDigest !== intent.digest) {
+    throw new TypeError('FSA receipt root expectation belongs to another receive intent')
+  }
+  return Object.freeze([
+    canonicalFrame(canonicalU8(reservation.fsaLayoutVersion)),
+    canonicalFrame(canonicalU8(scope.layoutVersion)),
+    canonicalFrame(canonicalText(scope.layout)),
+    canonicalFrame(canonicalRootExpectation(scope.rootExpectation)),
+  ])
+}
+
+function canonicalRootExpectation(expectation: DirectTreeRootExpectation): CanonicalBytes {
+  if (expectation.kind === 'none') {
+    return concatCanonicalBytes([
+      canonicalU8(0),
+      canonicalFrame(canonicalU8(rootAnchorKindByte(expectation.anchorKind))),
+    ])
+  }
+  return concatCanonicalBytes([
+    canonicalU8(1),
+    canonicalFrame(canonicalU8(rootAnchorKindByte(expectation.anchorKind))),
+    identityFrame(expectation.directoryId, 16, 'expected root directory ID'),
+    canonicalFrame(canonicalSettlementPath(expectation.relativePath)),
+  ])
+}
+
+function rootAnchorKindByte(anchorKind: DirectTreeRootExpectation['anchorKind']): number {
+  switch (anchorKind) {
+    case 'single-file': return 1
+    case 'directory': return 2
+    case 'synthetic-root': return 3
+    case 'catalog-root': return 4
+  }
 }
 
 function canonicalDirectorySettlement(

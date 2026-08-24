@@ -78,12 +78,16 @@ func (session *Session) BeginFile(
 
 func validateFileRequest(session *Session, file transfer.MaterializationFile) error {
 	artifactPath := file.ArtifactPath().String()
-	canonical, err := catalog.CanonicalPath(artifactPath)
+	materializationPath := file.MaterializationRelativePath().String()
+	canonicalArtifact, artifactErr := catalog.CanonicalPath(artifactPath)
+	canonicalMaterialization, materializationErr := catalog.CanonicalPath(materializationPath)
 	target := file.Target()
 	descriptor := file.Descriptor()
-	if err != nil || !transfer.MaterializationFileMatchesProjector(session.projector, file) ||
+	if artifactErr != nil || materializationErr != nil ||
+		!transfer.MaterializationFileMatchesIntent(session.intent, file) ||
 		!file.SourcePath().Valid() || !file.ArtifactPath().Valid() ||
-		artifactPath == "" || canonical != artifactPath || file.SourceParentAdmission().IsZero() ||
+		!file.MaterializationRelativePath().Valid() || artifactPath == "" || materializationPath == "" ||
+		canonicalArtifact != artifactPath || canonicalMaterialization != materializationPath ||
 		descriptor.ShareInstance() != session.intent.ShareInstance() ||
 		descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() ||
 		file.ExpectedSize() != descriptor.ExactSize() || target.OutputSessionID() != session.sessionID ||
@@ -91,7 +95,8 @@ func validateFileRequest(session *Session, file transfer.MaterializationFile) er
 		target.ExactSize() != file.ExpectedSize() || target.Locator().IsZero() {
 		return ErrDirectoryBinding
 	}
-	if target.Locator().Kind() == transfer.MaterializationPathLocator && target.Locator().CanonicalPath() != artifactPath {
+	if target.Locator().Kind() == transfer.MaterializationPathLocator &&
+		target.Locator().CanonicalPath() != materializationPath {
 		return ErrDirectoryBinding
 	}
 	return nil
@@ -106,13 +111,10 @@ func (session *Session) reserveFile(
 ) (*fileEntry, *fileBeginOperation, bool, TraceEvent, error) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
-	sourceAdmission := file.SourceParentAdmission()
-	sourceParentID, ok := session.receiptClaims[receiptKey(sourceAdmission)]
-	sourceParent := session.directoryClaims[sourceParentID]
-	if !ok || sourceParent == nil || !sameAdmission(sourceParent.admission, file.SourceParentAdmission()) ||
-		sourceParent.claim.source.SourcePath.String() != parentPath(file.SourcePath().String()) {
+	sourceParentID, sourceParent, err := session.validateFileParentLocked(file)
+	if err != nil {
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, sourceParentID),
-			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
+			session.rejectDirectoryBindingLocked(err)
 	}
 	parentID, err := session.destinationParentLocked(file.ParentMaterialization(), destination)
 	if err != nil {
@@ -167,7 +169,7 @@ func (session *Session) reserveFile(
 	if err := session.operationRejectionLocked(); err != nil {
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, 0), err
 	}
-	if sourceParent.state != directoryAdmitted || sourceParent.uncertain {
+	if sourceParent != nil && (sourceParent.state != directoryAdmitted || sourceParent.uncertain) {
 		return nil, nil, false, session.fileBindingTraceLocked(operationID, parentID),
 			session.rejectDirectoryBindingLocked(ErrDirectoryBinding)
 	}
@@ -217,6 +219,34 @@ func (session *Session) reserveFile(
 			ClaimPending, ClaimPending, fault.Fault{}), nil
 }
 
+func (session *Session) validateFileParentLocked(
+	file transfer.MaterializationFile,
+) (ClaimID, *directoryEntry, error) {
+	parent := file.Parent()
+	switch parent.Kind() {
+	case transfer.MaterializationFileParentReference:
+		if session.scope.RootExpectation().Kind() != transfer.DirectoryAdmissionNoRoot ||
+			parent.SourcePath().String() != parentPath(file.SourcePath().String()) ||
+			file.ParentMaterialization().Valid() {
+			return 0, nil, ErrDirectoryBinding
+		}
+		return 0, nil, nil
+	case transfer.MaterializationFileParentDirectory:
+		sourceParentID, ok := session.receiptClaims[receiptKey(parent.Admission())]
+		sourceParent := session.directoryClaims[sourceParentID]
+		if !ok || sourceParent == nil || !sameAdmission(sourceParent.admission, parent.Admission()) ||
+			sourceParent.claim.source.DirectoryID != parent.DirectoryID() ||
+			sourceParent.claim.source.Generation != parent.Generation() ||
+			sourceParent.claim.source.SourcePath != parent.SourcePath() ||
+			parent.SourcePath().String() != parentPath(file.SourcePath().String()) {
+			return sourceParentID, nil, ErrDirectoryBinding
+		}
+		return sourceParentID, sourceParent, nil
+	default:
+		return 0, nil, ErrDirectoryBinding
+	}
+}
+
 func (session *Session) destinationParentLocked(
 	claim transfer.MaterializedDirectoryClaim,
 	destination DestinationPath,
@@ -239,7 +269,7 @@ func (session *Session) destinationParentLocked(
 	}
 	claimID, ok := session.receiptClaims[receiptKey(claim.Admission())]
 	parent := session.directoryClaims[claimID]
-	if !ok || parent == nil || parent.claim.artifact != claim.ArtifactPath() ||
+	if !ok || parent == nil || parent.admission.Path() != claim.Path().String() ||
 		parent.state != directoryAdmitted || parent.uncertain {
 		return 0, ErrDirectoryBinding
 	}

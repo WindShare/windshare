@@ -43,6 +43,15 @@ import type {
   TransferWorkerSettlement,
 } from './outcome'
 import type { AuthenticatedLogicalSiblingMembership } from './job/contract'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+  type DirectTreeCoordinateContract,
+  type LogicalArtifactPath,
+  type MaterializationRootRelativePath,
+  type SourceAuthenticationPath,
+} from './job/coordinate/direct-tree'
 
 export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
 export type FileRetirementDisposition = 'FileIsolated' | 'JobOutputCompromised'
@@ -91,8 +100,9 @@ export interface OutputFileOwnership extends OutputSessionIdentity {
  */
 export interface OutputFileRequest {
   readonly source: OutputCatalogFileIdentity
-  readonly sourcePath: readonly string[]
-  readonly artifactPath: readonly string[]
+  readonly sourceAuthenticationPath: SourceAuthenticationPath
+  readonly logicalArtifactPath: LogicalArtifactPath
+  readonly materializationRelativePath: MaterializationRootRelativePath
   readonly expectedSize: bigint
   readonly parentAdmission?: DirectoryAdmission
   readonly modifiedTime?: CanonicalModifiedTime
@@ -101,8 +111,9 @@ export interface OutputFileRequest {
 
 export interface OutputFile {
   readonly source: OutputSourceIdentity
-  readonly sourcePath: readonly string[]
-  readonly artifactPath: readonly string[]
+  readonly sourceAuthenticationPath: SourceAuthenticationPath
+  readonly logicalArtifactPath: LogicalArtifactPath
+  readonly materializationRelativePath: MaterializationRootRelativePath
   readonly exactSize: bigint
   readonly parentAdmission?: DirectoryAdmission
   readonly modifiedTime?: CanonicalModifiedTime
@@ -156,8 +167,9 @@ export interface OutputSession {
 }
 
 export interface DirectoryMaterializationRequest {
-  readonly source: MaterializationDirectory
-  readonly artifactPath: readonly string[]
+  readonly directory: MaterializationDirectory
+  readonly sourceAuthenticationPath: SourceAuthenticationPath
+  readonly logicalArtifactPath: LogicalArtifactPath
   /** Lazy authority; carrying it must not itself query catalog page storage. */
   readonly logicalSiblingMembership?: AuthenticatedLogicalSiblingMembership
 }
@@ -452,22 +464,37 @@ export function outputSessionIdentity(identity: OutputSessionIdentity): OutputSe
   })
 }
 
-export function snapshotOutputFileRequest(file: OutputFileRequest): OutputFileRequest {
+export function snapshotOutputFileRequest(
+  file: OutputFileRequest,
+  directTreeCoordinates?: DirectTreeCoordinateContract,
+): OutputFileRequest {
   if (typeof file.expectedSize !== 'bigint' || file.expectedSize < 0n) {
     throw new RangeError('expected output file size must not be negative')
   }
   if (typeof file.openRevision !== 'function') {
     throw new TypeError('output file request requires an authenticated revision callback')
   }
-  const sourcePath = snapshotMaterializationPath(file.sourcePath)
-  const artifactPath = snapshotMaterializationPath(file.artifactPath)
-  if (sourcePath.length === 0 || artifactPath.length === 0) {
-    throw new TypeError('output file paths must identify a file')
+  const sourceAuthenticationPath = snapshotSourceAuthenticationPath(file.sourceAuthenticationPath)
+  const logicalArtifactPath = snapshotLogicalArtifactPath(file.logicalArtifactPath)
+  const materializationRelativePath = snapshotMaterializationRootRelativePath(
+    file.materializationRelativePath,
+  )
+  if (sourceAuthenticationPath.length === 0 ||
+      logicalArtifactPath.length === 0 ||
+      !materializationCoordinateIdentifiesFile(
+        file.source,
+        sourceAuthenticationPath,
+        logicalArtifactPath,
+        materializationRelativePath,
+        directTreeCoordinates,
+      )) {
+    throw new TypeError('output file coordinates must identify a file')
   }
   return Object.freeze({
     source: snapshotOutputCatalogFileIdentity(file.source),
-    sourcePath,
-    artifactPath,
+    sourceAuthenticationPath,
+    logicalArtifactPath,
+    materializationRelativePath,
     expectedSize: file.expectedSize,
     ...(file.parentAdmission === undefined
       ? {}
@@ -479,19 +506,34 @@ export function snapshotOutputFileRequest(file: OutputFileRequest): OutputFileRe
   })
 }
 
-export function snapshotOutputFile(file: OutputFile): OutputFile {
+export function snapshotOutputFile(
+  file: OutputFile,
+  directTreeCoordinates?: DirectTreeCoordinateContract,
+): OutputFile {
   if (typeof file.exactSize !== 'bigint' || file.exactSize < 0n) {
     throw new RangeError('output file size must not be negative')
   }
-  const sourcePath = snapshotMaterializationPath(file.sourcePath)
-  const artifactPath = snapshotMaterializationPath(file.artifactPath)
-  if (sourcePath.length === 0 || artifactPath.length === 0) {
-    throw new TypeError('output file paths must identify a file')
+  const sourceAuthenticationPath = snapshotSourceAuthenticationPath(file.sourceAuthenticationPath)
+  const logicalArtifactPath = snapshotLogicalArtifactPath(file.logicalArtifactPath)
+  const materializationRelativePath = snapshotMaterializationRootRelativePath(
+    file.materializationRelativePath,
+  )
+  if (sourceAuthenticationPath.length === 0 ||
+      logicalArtifactPath.length === 0 ||
+      !materializationCoordinateIdentifiesFile(
+        file.source,
+        sourceAuthenticationPath,
+        logicalArtifactPath,
+        materializationRelativePath,
+        directTreeCoordinates,
+      )) {
+    throw new TypeError('output file coordinates must identify a file')
   }
   return Object.freeze({
     source: snapshotOutputSource(file.source),
-    sourcePath,
-    artifactPath,
+    sourceAuthenticationPath,
+    logicalArtifactPath,
+    materializationRelativePath,
     exactSize: file.exactSize,
     ...(file.parentAdmission === undefined
       ? {}
@@ -502,16 +544,43 @@ export function snapshotOutputFile(file: OutputFile): OutputFile {
   })
 }
 
+// An FSA named-file reservation makes the file itself the materialization root.
+// Requiring the validated projector here keeps [] unavailable to portable and
+// native outputs, where an empty coordinate would mean a missing file name.
+function materializationCoordinateIdentifiesFile(
+  source: OutputCatalogFileIdentity,
+  sourceAuthenticationPath: SourceAuthenticationPath,
+  logicalArtifactPath: LogicalArtifactPath,
+  materializationRelativePath: MaterializationRootRelativePath,
+  directTreeCoordinates: DirectTreeCoordinateContract | undefined,
+): boolean {
+  if (materializationRelativePath.length !== 0) return true
+  if (directTreeCoordinates?.coordinate !== 'fsa-reserved-root-relative' ||
+      directTreeCoordinates.intent.artifact.layout.kind !== 'single-file' ||
+      source.shareInstance !== directTreeCoordinates.intent.shareInstance ||
+      source.fileId !== directTreeCoordinates.intent.artifact.layout.fileId) {
+    return false
+  }
+  const projection = directTreeCoordinates.projectFile(sourceAuthenticationPath)
+  return projection.relativePath.length === 0 &&
+    sameCoordinate(projection.logicalArtifactPath, logicalArtifactPath)
+}
+
+function sameCoordinate(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((segment, index) => segment === right[index])
+}
+
 export function snapshotDirectoryMaterializationRequest(
   request: DirectoryMaterializationRequest,
 ): DirectoryMaterializationRequest {
-  const source = snapshotMaterializationDirectory(request.source)
+  const directory = snapshotMaterializationDirectory(request.directory)
   const logicalSiblingMembership = request.logicalSiblingMembership === undefined
     ? undefined
-    : snapshotLogicalSiblingMembership(request.logicalSiblingMembership, source)
+    : snapshotLogicalSiblingMembership(request.logicalSiblingMembership, directory)
   return Object.freeze({
-    source,
-    artifactPath: snapshotMaterializationPath(request.artifactPath),
+    directory,
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath(request.sourceAuthenticationPath),
+    logicalArtifactPath: snapshotLogicalArtifactPath(request.logicalArtifactPath),
     ...(logicalSiblingMembership === undefined ? {} : { logicalSiblingMembership }),
   })
 }

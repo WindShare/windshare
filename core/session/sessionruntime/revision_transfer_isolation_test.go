@@ -179,7 +179,11 @@ func (output *revisionTransferOutput) AdmitDirectory(
 	_ context.Context,
 	request transfer.DirectoryMaterializationRequest,
 ) (transfer.DirectoryAdmission, error) {
-	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, request.Source())
+	directory, ok := request.Directory()
+	if !ok {
+		return transfer.DirectoryAdmission{}, transfer.ErrInvalidDirectoryAdmission
+	}
+	return transfer.NewDirectoryAdmissionWithSecret(output.secret[:], output.scope, directory)
 }
 func (*revisionTransferOutput) FinalizeDirectory(
 	_ context.Context,

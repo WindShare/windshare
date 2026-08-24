@@ -4,9 +4,12 @@ import {
   createOperationID,
   validateArtifactSpec,
   type DirectoryTreeArtifact,
-  type NamedContainerEntryReservation,
+  type FSANamedContainerEntryReservation,
   type ReceiveIntent,
 } from '../../transfer/intent'
+import {
+  snapshotMaterializationRootRelativePath,
+} from '../../transfer/job/coordinate/direct-tree'
 import {
   recordOutputException,
   type OutputDiagnosticsPorts,
@@ -152,7 +155,7 @@ export interface ReservedFileSystemAccessOutput {
   readonly authority: AcquiredFSAParentAuthority
   readonly artifact: DirectoryTreeArtifact
   readonly operationId: string
-  readonly reservation: NamedContainerEntryReservation
+  readonly reservation: FSANamedContainerEntryReservation
   readonly rootLease: FSARootMutationLease
   readonly compatibleNameRepair?: PreparedCompatibleNameRootRepair
 }
@@ -186,7 +189,7 @@ export { createFSAAuthorityReference } from './session-diagnostics'
 export class FileSystemAccessOutputSession implements
   ActivatablePersistentMaterializationPort, PersistentOutputNamespaceClaimPort {
   readonly intent: ReceiveIntent
-  readonly reservation: NamedContainerEntryReservation
+  readonly reservation: FSANamedContainerEntryReservation
   readonly #materialization: PersistentTreeOutputSession
   readonly #tree: BrowserFileSystemTree
   readonly #binding: PersistedFSAOperationBinding
@@ -204,7 +207,7 @@ export class FileSystemAccessOutputSession implements
 
   constructor(input: Readonly<{
     intent: ReceiveIntent
-    reservation: NamedContainerEntryReservation
+    reservation: FSANamedContainerEntryReservation
     materialization: PersistentTreeOutputSession
     tree: BrowserFileSystemTree
     binding: PersistedFSAOperationBinding
@@ -233,11 +236,16 @@ export class FileSystemAccessOutputSession implements
     const transaction = await this.#materialization.beginFile(request)
     return compatibleNameFileTransaction(
       transaction,
-      () => this.#compatibleNames.commitFinalFile(request.artifactPath, transaction.ownedObjectId),
+      () => this.#compatibleNames.commitFinalFile(
+        request.materializationRelativePath,
+        transaction.ownedObjectId,
+      ),
     )
   }
 
-  ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
+  ensureDirectory(
+    path: readonly string[],
+  ): Promise<PersistentDirectoryMaterialization> {
     this.#requireMaterializing()
     return this.#materialization.ensureDirectory(path)
   }
@@ -256,7 +264,9 @@ export class FileSystemAccessOutputSession implements
   async #activate(): Promise<void> {
     await this.#materialization.activate()
     if (this.#compatibleNames.rootEntryKind !== 'directory') return
-    const root = await this.#materialization.ensureDirectory([])
+    const root = await this.#materialization.ensureDirectory(
+      snapshotMaterializationRootRelativePath([]),
+    )
     await this.#compatibleNames.commitVerifiedRootDirectory(root.ownedObjectId)
   }
 

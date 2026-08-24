@@ -592,7 +592,11 @@ func (output *syntheticCapacityOutput) AdmitDirectory(
 	if err != nil {
 		return transfer.DirectoryAdmission{}, err
 	}
-	return transfer.NewDirectoryAdmissionWithSecret(output.directorySecret[:], scope, request.Source())
+	directory, ok := request.Directory()
+	if !ok {
+		return transfer.DirectoryAdmission{}, transfer.ErrInvalidDirectoryAdmission
+	}
+	return transfer.NewDirectoryAdmissionWithSecret(output.directorySecret[:], scope, directory)
 }
 
 func (*syntheticCapacityOutput) FinalizeDirectory(
