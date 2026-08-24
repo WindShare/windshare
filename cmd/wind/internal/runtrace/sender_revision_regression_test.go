@@ -82,6 +82,53 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 	}
 }
 
+func TestRecorderAcceptsSenderCapacityAndRevisionEvents(t *testing.T) {
+	session, _ := clievent.NewProtocolSessionID(identityBytes(0x81))
+	decisionID, _ := clievent.NewCapacityDecisionID("capacity-owner-7-decision-8")
+	revisionID, _ := clievent.NewSenderRevisionID([]byte("revision-two"))
+	scope := clievent.CapacityScopeSnapshot{StableHandleLimit: 2, ActiveLeaseLimit: 2, ActiveLeases: 1}
+	capacityEvent, err := clievent.NewSenderCapacityObserved(clievent.SenderCapacitySpec{
+		Stage: clievent.SenderCapacityAdmissionDenied, Decision: decisionID, Session: session,
+		Revision: revisionID, Process: scope, Share: scope, SessionScope: scope,
+		HasShare: true, HasSessionScope: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, _ := clievent.NewRevisionLeaseID(identityBytes(0x82))
+	revisionEvent, err := clievent.NewSenderRevisionObserved(
+		clievent.SenderRevisionLeaseSettlement, clievent.SenderRevisionCauseRelinquished,
+		revisionID, lease, session,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	file := &memoryTraceFile{}
+	recorder := openTestRecorder(
+		t,
+		clievent.CommandShare,
+		Config{},
+		fixedClock(),
+		file,
+		newManualTicker(),
+	)
+	for _, event := range []clievent.Event{capacityEvent, revisionEvent} {
+		if !recorder.Record(event) {
+			t.Fatalf("sender lifecycle event %T was rejected", event)
+		}
+	}
+	status := recorder.Close()
+	if !status.Complete || status.SchemaLimited || status.LifecycleDropped != 0 {
+		t.Fatalf("sender lifecycle events made trace incomplete: %+v", status)
+	}
+	records := decodeRecords(t, file.Bytes())
+	if len(records) != 3 || records[0].Event != "sender_capacity" ||
+		records[1].Event != "sender_revision" || records[2].Event != "trace_summary" {
+		t.Fatalf("sender lifecycle records = %+v", records)
+	}
+}
+
 func identityBytes(first byte) []byte {
 	raw := make([]byte, clievent.IdentityBytes)
 	raw[0] = first

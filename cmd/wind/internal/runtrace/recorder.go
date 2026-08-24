@@ -351,36 +351,11 @@ func (recorder *Recorder) nextMetadataLocked() (entryMetadata, bool) {
 }
 
 func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
-	switch event.(type) {
-	case clievent.Ready,
-		clievent.SharingSubjectSelected,
-		clievent.RelayConnected,
-		clievent.RelayRecovering,
-		clievent.ContentPathSelected,
-		clievent.Fallback,
-		clievent.Warning,
-		clievent.CommandFailed,
-		clievent.TransferSettled,
-		clievent.SharingStopped,
-		clievent.TraceIncomplete,
-		clievent.LaneAdopted,
-		clievent.RelayLifecycleObserved,
-		clievent.WebRTCLifecycleObserved,
-		clievent.PeerAttemptObserved,
-		clievent.TransferLifecycleObserved,
-		clievent.FilesystemOutputObserved,
-		clievent.SenderTerminalSendObserved,
-		clievent.SenderSessionTerminated,
-		clievent.CatalogStorageObserved,
-		clievent.RootPrefetchObserved,
-		clievent.ProtocolOperationObserved,
-		clievent.LaneSettlementObserved,
-		clievent.ObserverLossObserved,
-		clievent.ReceiverTerminationObserved:
-		return false, true
-	case clievent.TransferProgress:
-		return true, true
-	default:
+	if event == nil {
 		return false, false
 	}
+	// Event is sealed by clievent. Treating every non-nil event as schema-owned avoids
+	// a second event registry that can silently reject newly added visitor-backed events.
+	_, progress = event.(clievent.TransferProgress)
+	return progress, true
 }
