@@ -2,7 +2,7 @@ import {
   fsaTreeGuarantees,
   validateDestinationReservation,
   validateReceiveIntent,
-  type NamedContainerEntryReservation,
+  type FSANamedContainerEntryReservation,
   type ArtifactChoiceID,
   type ReceiveIntent,
 } from '../../transfer/intent'
@@ -47,14 +47,14 @@ const FSA_DIRECTORY_HANDLE_DOMAIN = 'windshare/fsa-directory-handle/v1'
 
 export interface PersistedFSAOperationBinding {
   readonly intent: ReceiveIntent
-  readonly reservation: NamedContainerEntryReservation
+  readonly reservation: FSANamedContainerEntryReservation
   readonly parent: FileSystemDirectoryHandle
   readonly parentHandleId: string
 }
 
 export interface PreparedFSAOperationBindingTransition {
   readonly intent: ReceiveIntent
-  readonly reservation: NamedContainerEntryReservation
+  readonly reservation: FSANamedContainerEntryReservation
   readonly parent: FileSystemDirectoryHandle
   readonly parentHandleId: string
   readonly transition: Pick<ReceiveOperationTransition, 'records' | 'handles'>
@@ -228,7 +228,7 @@ export async function verifyFSAOperationBinding(input: Readonly<{
 
 export async function persistFSAOwnedDirectory(input: Readonly<{
   repository: FSAOperationBindingRepository
-  reservation: NamedContainerEntryReservation
+  reservation: FSANamedContainerEntryReservation
   handleId: string
   ownedObjectId: string
   handle: FileSystemDirectoryHandle
@@ -304,7 +304,7 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
 
 export async function readFSAOwnedDirectory(input: Readonly<{
   repository: FSAOperationBindingRepository
-  reservation: NamedContainerEntryReservation
+  reservation: FSANamedContainerEntryReservation
   handleId: string
   ownedObjectId?: string
   diagnosticTarget?: 'root' | 'directory'
@@ -378,7 +378,7 @@ export function fsaOwnedDirectoryHandleId(
 
 async function validatedFSAIntent(intentInput: ReceiveIntent): Promise<{
   readonly intent: ReceiveIntent
-  readonly reservation: NamedContainerEntryReservation
+  readonly reservation: FSANamedContainerEntryReservation
 }> {
   const intent = await validateReceiveIntent(intentInput)
   if (intent.plan.kind !== 'direct-tree' || intent.artifact.kind !== 'directory-tree' ||
@@ -389,7 +389,7 @@ async function validatedFSAIntent(intentInput: ReceiveIntent): Promise<{
   const reservation = await validateDestinationReservation(
     intent.plan.reservation,
     intent.artifact,
-  ) as NamedContainerEntryReservation
+  ) as FSANamedContainerEntryReservation
   const expected = fsaTreeGuarantees()
   if (!sameGuaranteeFacts(reservation.guarantees, expected) ||
       reservation.guarantees.profile !== 'fsa-tree') {

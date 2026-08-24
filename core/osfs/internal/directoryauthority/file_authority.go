@@ -74,7 +74,7 @@ func (authority *FileAuthority) BindFile(
 		return nil, err
 	}
 	directories := authority.directories
-	artifactPath := file.ArtifactPath().String()
+	materializationPath := file.MaterializationRelativePath().String()
 	canonicalDestination := destinationPath.String()
 	locator, err := directories.canonicalLocator(canonicalDestination)
 	if err != nil || !locator.valid() || locator.isRoot() {
@@ -95,10 +95,10 @@ func (authority *FileAuthority) BindFile(
 		parentPath = lineage[len(lineage)-1].claim.locator.canonicalPath
 	}
 	if !validateImmediateChild(parentPath, locator.canonicalPath) ||
-		artifactPath == "" || file.ExpectedSize() != file.Descriptor().ExactSize() ||
+		materializationPath == "" || file.ExpectedSize() != file.Descriptor().ExactSize() ||
 		file.Target().Descriptor() != file.Descriptor() || file.Target().ExactSize() != file.ExpectedSize() ||
 		file.Target().Locator().Kind() != transfer.MaterializationPathLocator ||
-		file.Target().Locator().CanonicalPath() != artifactPath {
+		file.Target().Locator().CanonicalPath() != materializationPath {
 		return nil, ErrInvalidClaim
 	}
 	return &fileDestination{

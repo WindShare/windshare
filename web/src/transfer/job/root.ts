@@ -4,6 +4,10 @@ import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import type { AuthenticatedDirectory, DirectoryCursor, DirectoryWork, TransferJobOptions } from './contract'
 import { V2CatalogTraversalError } from './contract'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotSourceAuthenticationPath,
+} from './coordinate/direct-tree'
 import { descriptorRootId } from './identity'
 
 export class V2JobRootAuthority {
@@ -88,10 +92,11 @@ export function authenticatedRootWork(
   committed: V2CommittedDirectory,
 ): DirectoryWork {
   const root: AuthenticatedDirectory = Object.freeze({
+    kind: 'reference',
     directoryId: cursor.idText,
     generation: encodeBase64Url(committed.generation),
-    sourcePath: Object.freeze([]),
-    artifactPath: Object.freeze([]),
+    sourceAuthenticationPath: snapshotSourceAuthenticationPath([]),
+    logicalArtifactPath: snapshotLogicalArtifactPath([]),
   })
   return Object.freeze({ cursor, materializeParent: async () => root })
 }

@@ -3,7 +3,6 @@ package checkpointstore
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"testing"
 
@@ -16,11 +15,10 @@ import (
 )
 
 const (
-	replaceExactSize           = 64
-	replaceRevisionFill        = 0xf1
-	replaceSessionFill         = 0xf2
-	replaceAdmissionSecretFill = 0xf3
-	replaceGenerationFill      = 0xf4
+	replaceExactSize      = 64
+	replaceRevisionFill   = 0xf1
+	replaceSessionFill    = 0xf2
+	replaceGenerationFill = 0xf4
 )
 
 var errCheckpointKeyCaptured = errors.New("checkpoint key captured")
@@ -197,27 +195,22 @@ func replacementMaterializationFixture(
 	if err != nil {
 		t.Fatal(err)
 	}
-	scope, err := transfer.NewDirectoryAdmissionScope(intent)
-	if err != nil {
-		t.Fatal(err)
+	rootSource := transfer.AuthenticatedSourceDirectory{
+		DirectoryID: intent.SyntheticRoot(), Generation: generation,
+		SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
 	}
-	admission, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{replaceAdmissionSecretFill}, sha256.Size),
-		scope,
-		transfer.AuthenticatedSourceDirectory{
-			DirectoryID: intent.SyntheticRoot(), Generation: generation,
-			SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
-		},
+	parent, err := transfer.NewReferenceMaterializationFileParent(
+		rootSource.DirectoryID, rootSource.Generation, rootSource.SourcePath,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	materializationPath, err := transfer.NewMaterializationRootRelativePath(original.SourcePath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, session, admission, transfer.MaterializedDirectoryClaim{},
+		intent, sourcePath, materializationPath, descriptor, session, parent,
 	)
 	if err != nil {
 		t.Fatal(err)

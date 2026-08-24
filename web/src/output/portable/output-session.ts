@@ -252,7 +252,7 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
       const member = await this.#archiveWriter().beginFile(entry)
       const ownership: OutputFileOwnership = Object.freeze({
         ...this.identity,
-        canonicalPath: request.artifactPath,
+        canonicalPath: request.materializationRelativePath,
         ownedFileIdentity: `${this.identity.outputSessionId}:${this.#entryIndex}`,
       })
       const durableRanges = new VerifiedDurableRanges(
@@ -631,8 +631,9 @@ function assertPreparedFileRequest(
   if (request.source.shareInstance !== intent.shareInstance ||
       request.source.fileId !== evidence.fileId ||
       request.expectedSize !== evidence.exactSize ||
-      !samePath(request.sourcePath, evidence.sourcePath) ||
-      !samePath(request.artifactPath, evidence.artifactPath) ||
+      !samePath(request.sourceAuthenticationPath, evidence.sourcePath) ||
+      !samePath(request.logicalArtifactPath, evidence.artifactPath) ||
+      !samePath(request.materializationRelativePath, evidence.artifactPath) ||
       request.parentAdmission !== undefined ||
       !matchesPreparedModifiedTime(capabilities, request.modifiedTime, evidence.modifiedTime)) {
     throw new OutputSessionBindingError(

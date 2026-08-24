@@ -13,6 +13,7 @@ import {
   finalizedDirectorySettlement,
   isolatedDirectorySettlement,
   sameDirectoryAdmission,
+  snapshotMaterializationPath,
   validateDirectoryAdmissionBinding,
   validateDirectorySettlement,
   verifyDirectoryAdmissionToken,
@@ -35,6 +36,7 @@ import {
   createReceiveIntent,
   createResultRootDirectoryTreeArtifact,
   createSelectionSpec,
+  createSingleFileDirectoryTreeArtifact,
   createWorkspaceBinding,
   createWorkspaceThenPublishPlan,
   type ReceiveIntent,
@@ -59,35 +61,40 @@ describe('DirectoryAdmission v2 binding', () => {
       precision: 2,
     }
     const rootDirectory: MaterializationDirectory = {
-      directoryId: scope.syntheticRoot,
+      directoryId: identity(10),
       generation: identity(40),
-      path: [],
+      path: snapshotMaterializationPath([]),
     }
     const root = await createDirectoryAdmission(SECRET, scope, rootDirectory)
     const childDirectory: MaterializationDirectory = {
       directoryId: identity(41),
       generation: identity(42),
-      path: ['child'],
+      path: snapshotMaterializationPath(['child']),
       parentAdmission: root,
       modifiedTime,
     }
     const child = await createDirectoryAdmission(SECRET, scope, childDirectory)
 
-    expect(intent.digest).toBe('PKgx50isr9LVzH14HJib08_RPM501Cvw1_G2Y2b_ctQ')
-    expect(root.token).toBe('wciDHOmyvV1fBGC2T_jZZlUN2dbt-T3s7YC1PFXmzI0')
-    expect(child.token).toBe('VfTe1srkTkvVQNeSJS1oaYl8MZ_BBtMPEn4ZiATmL8w')
+    expect(intent.digest).toBe('vhhExXaw0i8sWcgd8Payakwul9IpNWKlE1WyPkMc_M4')
+    expect(root.token).toBe('qVfgMF4KQoXMTFpQu9G0syTxS8w5t9X6K5gnCJCYU6g')
+    expect(child.token).toBe('LXmZtH7L3nXY66NOXhNSliwUHyeAXdt1sClzpXxwvr4')
 
     expect(scope).toMatchObject({
       receiveIntentDigest: intent.digest,
       layoutVersion: DIRECTORY_ADMISSION_LAYOUT_VERSION,
       layout: 'directory-tree-result-root',
-      syntheticRoot: intent.syntheticRoot,
+      rootExpectation: {
+        kind: 'materialized-directory',
+        anchorKind: 'directory',
+        directoryId: identity(10),
+        relativePath: [],
+      },
     })
     expect(child.schemaVersion).toBe(DIRECTORY_ADMISSION_SCHEMA_VERSION)
     const message = canonicalDirectoryAdmissionMessageV2(scope, childDirectory)
     expect(message).toEqual(expectedDirectoryAdmissionMessage(scope, childDirectory))
     expect(encodeBase64Url(await sha256(message)))
-      .toBe('-FfVAg8-AJUOylS_dYhiCz9vF2DrUTncrpE-PhQ7HOc')
+      .toBe('xvYKa9-QLfT5reKn9crdsf0Sth9l-zYdZjWP9nLmuYA')
     expect(validateDirectoryAdmissionBinding(scope, childDirectory, child)).toEqual(child)
     expect(await verifyDirectoryAdmissionToken(SECRET, scope, childDirectory, child.token)).toBe(true)
     expect(await verifyDirectoryAdmissionToken(
@@ -103,7 +110,16 @@ describe('DirectoryAdmission v2 binding', () => {
     await expect(createDirectoryAdmission(SECRET, scope, {
       ...rootDirectory,
       directoryId: identity(43),
-    })).rejects.toThrow(/synthetic root/u)
+    })).rejects.toThrow(/expected materialized root/u)
+    await expect(createDirectoryAdmission(SECRET, scope, {
+      ...rootDirectory,
+      path: snapshotMaterializationPath(['docs-selection']),
+    })).rejects.toThrow(/expected materialized root/u)
+    await expect(createDirectoryAdmission(SECRET, scope, {
+      directoryId: identity(44),
+      generation: identity(45),
+      path: snapshotMaterializationPath(['child']),
+    })).rejects.toThrow(/expected materialized root/u)
     expect('canonicalDirectoryAdmissionMessageV1' in admissionContract).toBe(false)
   })
 
@@ -133,12 +149,23 @@ describe('DirectoryAdmission v2 binding', () => {
       .rejects.toThrow(/DirectAtomic original-file output/u)
   })
 
+  it('rejects every directory admission for a single-file root expectation', async () => {
+    const scope = await createDirectoryAdmissionScope(await singleFileDirectTreeIntent())
+    expect(scope.rootExpectation).toEqual({ kind: 'none', anchorKind: 'single-file' })
+
+    await expect(createDirectoryAdmission(SECRET, scope, {
+      directoryId: identity(2),
+      generation: identity(69),
+      path: snapshotMaterializationPath([]),
+    })).rejects.toThrow(/expected materialized root/u)
+  })
+
   it('retains exact v2 receipts and only the closed isolated metadata settlement', async () => {
     const scope = await createDirectoryAdmissionScope(await directTreeIntent())
     const directory: MaterializationDirectory = {
-      directoryId: scope.syntheticRoot,
+      directoryId: identity(10),
       generation: identity(70),
-      path: [],
+      path: snapshotMaterializationPath([]),
     }
     const admission = await createDirectoryAdmission(SECRET, scope, directory)
     const retry = await createDirectoryAdmission(Uint8Array.from(SECRET), scope, directory)
@@ -172,15 +199,15 @@ describe('DirectoryAdmissionLedger v2', () => {
     })
     const signal = new AbortController().signal
     const rootDirectory: MaterializationDirectory = {
-      directoryId: scope.syntheticRoot,
+      directoryId: identity(10),
       generation: identity(80),
-      path: [],
+      path: snapshotMaterializationPath([]),
     }
     const root = await ledger.admitDirectory(rootDirectory, signal)
     const childDirectory: MaterializationDirectory = {
       directoryId: identity(81),
       generation: identity(82),
-      path: ['child'],
+      path: snapshotMaterializationPath(['child']),
       parentAdmission: root,
     }
     const child = await ledger.admitDirectory(childDirectory, signal)
@@ -189,7 +216,7 @@ describe('DirectoryAdmissionLedger v2', () => {
     await expect(ledger.admitDirectory({
       directoryId: identity(83),
       generation: identity(84),
-      path: ['sibling'],
+      path: snapshotMaterializationPath(['sibling']),
       parentAdmission: root,
     }, signal)).rejects.toMatchObject({
       limitClass: 'directory-admission-count',
@@ -247,6 +274,29 @@ async function directTreeIntent(): Promise<ReceiveIntent> {
   })
 }
 
+async function singleFileDirectTreeIntent(): Promise<ReceiveIntent> {
+  const selection = await selectionSpec()
+  const artifact = await createSingleFileDirectoryTreeArtifact({
+    fileId: identity(20),
+    sourcePath: 'report.txt',
+    outputName: 'report.txt',
+  })
+  const reservation = await createFSANamedEntryReservation({
+    operationId: identity(21),
+    reservationId: identity(22),
+    artifact,
+    authorityRef: identity(23, 32),
+    logicalReservedName: 'report.txt',
+    physicalName: 'report.txt',
+    collisionIndex: 0,
+  })
+  return createReceiveIntent({
+    selection,
+    artifact,
+    plan: await createDirectTreePlan(artifact, reservation),
+  })
+}
+
 async function workspaceIntentForOriginal(): Promise<ReceiveIntent> {
   const selection = await selectionSpec()
   const artifact = await createOriginalFileArtifact({
@@ -286,8 +336,9 @@ function expectedDirectoryAdmissionMessage(
     new TextEncoder().encode('windshare/directory-admission/v2\0'),
     Uint8Array.of(2),
     frame(decodeIdentity(scope.receiveIntentDigest)),
-    frame(Uint8Array.of(1)),
+    frame(Uint8Array.of(DIRECTORY_ADMISSION_LAYOUT_VERSION)),
     frame(Uint8Array.of(layoutByte(scope.layout))),
+    ...rootExpectationFields(scope.rootExpectation),
     frame(decodeIdentity(directory.directoryId)),
     frame(decodeIdentity(directory.generation)),
     frame(parent),
@@ -296,6 +347,24 @@ function expectedDirectoryAdmissionMessage(
       : concat([Uint8Array.of(2), frame(canonicalPath(directory.path))])),
     frame(canonicalModifiedTime(directory.modifiedTime)),
   ])
+}
+
+function rootExpectationFields(
+  root: DirectoryAdmissionScope['rootExpectation'],
+): readonly Uint8Array[] {
+  if (root.kind === 'none') {
+    return [frame(Uint8Array.of(1)), frame(new Uint8Array()), frame(new Uint8Array())]
+  }
+  let anchor = 4
+  if (root.anchorKind === 'directory') anchor = 2
+  if (root.anchorKind === 'synthetic-root') anchor = 3
+  return [
+    frame(Uint8Array.of(anchor)),
+    frame(decodeIdentity(root.directoryId)),
+    frame(root.relativePath.length === 0
+      ? Uint8Array.of(1)
+      : concat([Uint8Array.of(2), frame(canonicalPath(root.relativePath))])),
+  ]
 }
 
 function canonicalPath(path: readonly string[]): Uint8Array {

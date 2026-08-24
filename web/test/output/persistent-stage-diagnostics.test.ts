@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import { decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
 import type { FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import type {
   FileCheckpointJournal,
@@ -24,6 +26,7 @@ import {
 import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
 import { outputSessionIdentity } from '../../src/transfer/output-session'
+import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coordinate/direct-tree'
 import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
 import {
   createCompleteDirectoryResultRoot,
@@ -50,6 +53,7 @@ import {
   planAuthorityFixture,
   readerFixture,
   transferJobFixture,
+  type CatalogDirectoryFixture,
 } from '../transfer/v2-job-fixture'
 
 interface StageFaultCase {
@@ -406,7 +410,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
           outputSessionId,
           target: 'file',
           artifactId: file.idText,
-          artifactPath: ['photos', 'report.bin'],
+          artifactPath: ['report.bin'],
         })
         expect(failure.exception).toMatchObject({
           raw,
@@ -437,7 +441,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
             outputSessionId,
             target: 'file',
             artifactId: file.idText,
-            artifactPath: ['photos', 'report.bin'],
+            artifactPath: ['report.bin'],
           },
           exception: {
             thrownType: 'object',
@@ -603,7 +607,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
     try {
       for (let index = 0; index < 24; index += 1) {
         const transaction = await session.beginFile({
-          artifactPath: [`completed-${index}.bin`],
+          materializationRelativePath: [`completed-${index}.bin`],
           openRevision: async () => ({
             fileId: identityText(100 + index),
             fileRevision: identityText(140 + index),
@@ -615,7 +619,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
 
       armed = true
       await expect(session.beginFile({
-        artifactPath: ['failing.bin'],
+        materializationRelativePath: ['failing.bin'],
         openRevision: async () => ({
           fileId: identityText(200),
           fileRevision: identityText(201),
@@ -643,7 +647,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
     })
 
     const transaction = await session.beginFile({
-      artifactPath: [session.reservation.requestedName],
+      materializationRelativePath: [],
       openRevision: async () => ({
         fileId: identityText(3),
         fileRevision: identityText(4),
@@ -700,9 +704,11 @@ async function expectTreeStageFailure(
   try {
     const selection = new V2SelectionPolicy(true)
     const file = fileEntry(identity(73), 'report.bin', 2n)
-    const catalog = catalogFixture([
-      { id: identity(2), entries: [directoryEntry(identity(70), 'photos')] },
-      { id: identity(70), entries: [directoryEntry(identity(71), '.git')] },
+    const coordinates = await createDirectTreeCoordinateContract(session.intent)
+    const root = requireMaterializedFixtureRoot(coordinates)
+    const catalog = catalogWithSiblingAuthority([
+      { id: identity(2), entries: [directoryEntry(root.id, root.name)] },
+      { id: root.id, entries: [directoryEntry(identity(71), '.git')] },
       { id: identity(71), entries: [directoryEntry(identity(72), 'hooks')] },
       { id: identity(72), entries: [file] },
     ])
@@ -744,7 +750,7 @@ async function expectTreeStageFailure(
     Object.assign(plans, { openDirectTree: async () => persistentExecution })
     const trace: TransferTraceEvent[] = []
     const result = await transferJobFixture({
-      catalog: catalog.catalog,
+      catalog,
       selection,
       intent: session.intent,
       plans,
@@ -767,7 +773,7 @@ async function expectTreeStageFailure(
     expect(failure.correlation.artifactPath).toEqual(
       faultCase.target === 'root'
         ? []
-        : ['photos', '.git', 'hooks'],
+        : ['.git', 'hooks'],
     )
     expect(failure.exception.raw).toBe(raw)
     expect(failure.facts.fsa).toBeDefined()
@@ -859,6 +865,50 @@ function diagnosticCheckpointRecord(index: number, oversized: boolean): FileChec
 function pathHasSuffix(path: readonly string[], suffix: readonly string[]): boolean {
   return suffix.length <= path.length &&
     suffix.every((segment, index) => path[path.length - suffix.length + index] === segment)
+}
+
+function requireMaterializedFixtureRoot(
+  coordinates: Awaited<ReturnType<typeof createDirectTreeCoordinateContract>>,
+): Readonly<{ id: Uint8Array<ArrayBuffer>; name: string }> {
+  const expectation = coordinates.rootExpectation
+  const layout = coordinates.intent.artifact.layout
+  if (expectation.kind !== 'materialized-directory' ||
+      layout.kind !== 'result-root' ||
+      layout.root.anchor.kind !== 'directory') {
+    throw new TypeError('tree-stage fixture requires a materialized directory result root')
+  }
+  const sourcePath = layout.root.anchor.sourcePath.split('/')
+  const projection = coordinates.projectDirectory(sourcePath)
+  if (sourcePath.length !== 1 || projection.kind !== 'materialize' ||
+      projection.relativePath.length !== expectation.relativePath.length ||
+      projection.relativePath.some((segment, index) => segment !== expectation.relativePath[index])) {
+    throw new TypeError('tree-stage fixture root must be the projected synthetic-root child')
+  }
+  const id = decodeBase64Url(expectation.directoryId)
+  if (id === undefined) throw new TypeError('tree-stage fixture root identity is invalid')
+  return Object.freeze({ id, name: sourcePath[0]! })
+}
+
+function catalogWithSiblingAuthority(
+  directories: readonly CatalogDirectoryFixture[],
+): V2CatalogClient {
+  const fixture = catalogFixture(directories)
+  const entriesByDirectory = new Map(directories.map(directory => [
+    encodeBase64Url(directory.id),
+    directory.entries,
+  ]))
+  return Object.freeze({
+    ...fixture.catalog,
+    hasCommittedName: async (
+      directory: Readonly<{ directoryIdText: string }>,
+      name: string,
+      signal?: AbortSignal,
+    ) => {
+      signal?.throwIfAborted()
+      return entriesByDirectory.get(directory.directoryIdText)
+        ?.some(entry => entry.name === name) === true
+    },
+  }) as unknown as V2CatalogClient
 }
 
 function expectFSAFacts(

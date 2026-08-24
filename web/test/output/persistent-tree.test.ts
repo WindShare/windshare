@@ -50,7 +50,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('opens the authenticated revision before creating a visible file', async () => {
     const fixture = await materializationFixture()
     const transaction = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => {
         fixture.events.push('revision-opened')
         return revision(4n)
@@ -70,7 +70,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('keeps prefix writes visible while checkpoint truth advances only after flush', async () => {
     const fixture = await materializationFixture()
     const transaction = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(6n),
     })
     await transaction.writeRange(0n, Uint8Array.of(1, 2, 3))
@@ -84,7 +84,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('reopens the same owned file after restart and completes from its persisted range', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(6n),
     })
     await first.writeRange(0n, Uint8Array.of(1, 2, 3))
@@ -97,7 +97,7 @@ describe('persistent DirectoryTree materialization port', () => {
       checkpoints: fixture.checkpoints,
     })
     const second = await reopened.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(6n),
     })
     expect(second.ownedObjectId).toBe(first.ownedObjectId)
@@ -118,7 +118,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('publishes a genuine zero-byte revision through the ordinary file transaction', async () => {
     const fixture = await materializationFixture()
     const transaction = await fixture.session.beginFile({
-      artifactPath: ['empty.bin'],
+      materializationRelativePath: ['empty.bin'],
       openRevision: async () => revision(0n),
     })
 
@@ -132,7 +132,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('does not create a replacement when the opened revision changes', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(1n),
     })
     await first.writeRange(0n, Uint8Array.of(9))
@@ -140,7 +140,7 @@ describe('persistent DirectoryTree materialization port', () => {
     await first.close()
 
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => ({
         fileId: FILE_ID,
         fileRevision: NEXT_REVISION,
@@ -156,7 +156,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('blocks an invalid same-revision size without creating another object', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(1n),
     })
     await first.writeRange(0n, Uint8Array.of(1))
@@ -164,7 +164,7 @@ describe('persistent DirectoryTree materialization port', () => {
     await first.close()
 
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })).rejects.toMatchObject({
       name: 'CheckpointLineageDecisionError',
@@ -176,7 +176,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('blocks multiple persisted objects for one lineage without moving ranges', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })
     await first.writeRange(0n, Uint8Array.of(1))
@@ -197,7 +197,7 @@ describe('persistent DirectoryTree materialization port', () => {
     }))
 
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })).rejects.toMatchObject({
       name: 'CheckpointLineageDecisionError',
@@ -219,7 +219,7 @@ describe('persistent DirectoryTree materialization port', () => {
     fixture.tree.occupy(['report.bin'], identity(88, 32))
 
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(1n),
     })).rejects.toMatchObject({ name: 'DestinationCollisionError', kind: 'collision' })
     expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
@@ -230,7 +230,7 @@ describe('persistent DirectoryTree materialization port', () => {
     const fixture = await materializationFixture()
     fixture.tree.failNextCreation()
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })).rejects.toThrow('simulated pre-object crash')
     const selected = fixture.tree.proposedOwnedObjectIds[0]!
@@ -243,7 +243,7 @@ describe('persistent DirectoryTree materialization port', () => {
       checkpoints: fixture.checkpoints,
     })
     const resumed = await reopened.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })
     expect(resumed.ownedObjectId).toBe(selected)
@@ -254,7 +254,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('rejects unresolved post-object recovery as operation ownership attention', async () => {
     const fixture = await materializationFixture()
     const transaction = await fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })
     await transaction.writeRange(0n, Uint8Array.of(7))
@@ -297,7 +297,7 @@ describe('persistent DirectoryTree materialization port', () => {
     const fixture = await materializationFixture()
     fixture.checkpoints.failNextCommit()
     await expect(fixture.session.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })).rejects.toThrow('simulated post-object crash')
     const selected = fixture.tree.proposedOwnedObjectIds[0]!
@@ -311,7 +311,7 @@ describe('persistent DirectoryTree materialization port', () => {
     expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
       .toEqual([])
     const resumed = await reopened.beginFile({
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })
     expect(resumed.ownedObjectId).toBe(selected)
@@ -322,7 +322,7 @@ describe('persistent DirectoryTree materialization port', () => {
   it('concurrent callers converge on the repository-selected object identity', async () => {
     const fixture = await materializationFixture()
     const request = {
-      artifactPath: ['report.bin'],
+      materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     } as const
 
@@ -344,7 +344,7 @@ describe('persistent tree diagnostics and mutation admission', () => {
   it('rechecks object identity before writer acquisition and after checkpoint commit', async () => {
     const fixture = await materializationFixture()
     const beforeWriter = await fixture.session.beginFile({
-      artifactPath: ['writer.bin'],
+      materializationRelativePath: ['writer.bin'],
       openRevision: async () => revision(1n),
     })
     fixture.tree.failVerification(['writer.bin'], 'writer-open', 1)
@@ -354,7 +354,7 @@ describe('persistent tree diagnostics and mutation admission', () => {
     expect(beforeWriter.verifiedRanges).toEqual([])
 
     const afterCommit = await fixture.session.beginFile({
-      artifactPath: ['commit.bin'],
+      materializationRelativePath: ['commit.bin'],
       openRevision: async () => ({ ...revision(1n), fileId: identity(31) }),
     })
     await afterCommit.writeRange(0n, Uint8Array.of(7))
@@ -382,7 +382,7 @@ describe('persistent tree diagnostics and mutation admission', () => {
     }
     const fixture = await materializationFixture(diagnostics)
     const transaction = await fixture.session.beginFile({
-      artifactPath: ['bounded.bin'],
+      materializationRelativePath: ['bounded.bin'],
       openRevision: async () => revision(2n),
     })
     await transaction.writeRange(0n, Uint8Array.of(1))
@@ -442,11 +442,11 @@ describe('persistent tree diagnostics and mutation admission', () => {
     const firstBarrier = fixture.tree.deferFileClose(['first.bin'])
     const secondBarrier = fixture.tree.deferFileClose(['second.bin'])
     const first = await fixture.session.beginFile({
-      artifactPath: ['first.bin'],
+      materializationRelativePath: ['first.bin'],
       openRevision: async () => ({ ...revision(0n), fileId: identity(51) }),
     })
     const second = await fixture.session.beginFile({
-      artifactPath: ['second.bin'],
+      materializationRelativePath: ['second.bin'],
       openRevision: async () => ({ ...revision(0n), fileId: identity(52) }),
     })
 
@@ -471,13 +471,13 @@ describe('persistent tree diagnostics and mutation admission', () => {
     const fileCloseBarrier = fixture.tree.deferFileClose(['late.bin'])
 
     const beginning = fixture.session.beginFile({
-      artifactPath: ['late.bin'],
+      materializationRelativePath: ['late.bin'],
       openRevision: () => revisionBarrier.promise,
     })
     let drained = false
     const close = fixture.session.close().then(() => { drained = true })
     await expect(fixture.session.beginFile({
-      artifactPath: ['rejected.bin'],
+      materializationRelativePath: ['rejected.bin'],
       openRevision: async () => revision(0n),
     })).rejects.toMatchObject({ name: 'InvalidStateError' })
     await Promise.resolve()
@@ -497,14 +497,14 @@ describe('persistent tree diagnostics and mutation admission', () => {
   it('isolates one failed file without removing another successful visible file', async () => {
     const fixture = await materializationFixture()
     const good = await fixture.session.beginFile({
-      artifactPath: ['good.bin'],
+      materializationRelativePath: ['good.bin'],
       openRevision: async () => ({ ...revision(1n), fileId: identity(41) }),
     })
     await good.writeRange(0n, Uint8Array.of(1))
     await good.commit()
 
     const bad = await fixture.session.beginFile({
-      artifactPath: ['bad.bin'],
+      materializationRelativePath: ['bad.bin'],
       openRevision: async () => ({ ...revision(1n), fileId: identity(42) }),
     })
     fixture.tree.failVerification(['bad.bin'], 'writer-open', 1)

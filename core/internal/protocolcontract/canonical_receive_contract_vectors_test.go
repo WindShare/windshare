@@ -25,6 +25,7 @@ var retiredReceiveVectorFiles = []string{
 	"file-checkpoint-v1.json",
 	"receive-intent-v1.json",
 	"receive-intent-v2.json",
+	"receive-intent-v3.json",
 	"transfer-intent-v1.json",
 }
 
@@ -106,8 +107,8 @@ func buildCanonicalReceiveContractVectors(t *testing.T) []canonicalContractVecto
 		},
 		{
 			Version: 1,
-			Kind:    "receive-intent-v3",
-			Description: "Receiver-local ReceiveIntentV3 values for portable materialization families. Direct resumable ZIP " +
+			Kind:    "receive-intent-v4",
+			Description: "Receiver-local ReceiveIntentV4 values for portable materialization families. Direct resumable ZIP " +
 				"is intentionally absent because exact reviewed runtime support is receiver-local, not cross-runtime vector authority.",
 			Cases: intentCases,
 		},
@@ -571,6 +572,9 @@ func destinationReservationVectorInput(reservation receivecontract.DestinationRe
 		result["logicalReservedName"] = reservation.LogicalReservedName()
 		result["physicalName"] = reservation.PhysicalName()
 		result["collisionIndex"] = reservation.CollisionIndex()
+		if layoutVersion, ok := reservation.FSALayoutVersion(); ok {
+			result["fsaLayoutVersion"] = layoutVersion
+		}
 	case receivecontract.ReservationAtomicTarget:
 		result["requestedName"] = reservation.RequestedName()
 		result["reservedName"] = reservation.ReservedName()
@@ -624,7 +628,18 @@ func buildDirectoryAdmissionVectorCases(
 		DirectoryID: fixture.intent.SyntheticRoot(), Generation: rootGeneration,
 		SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
 	}
-	rootAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	rootPath, err := transfer.NewMaterializationRootRelativePath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootMaterialization, err := transfer.NewMaterializationDirectory(
+		rootDirectory.DirectoryID, rootDirectory.Generation, rootPath,
+		rootDirectory.ParentAdmission, rootDirectory.ModifiedTime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, rootMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -646,7 +661,18 @@ func buildDirectoryAdmissionVectorCases(
 		Generation:      mustGeneration(t, contractSequence(0x60, catalog.IdentityBytes)),
 		ParentAdmission: rootAdmission, SourcePath: childPath, ModifiedTime: modified,
 	}
-	childAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
+	childRelativePath, err := transfer.NewMaterializationRootRelativePath("photos")
+	if err != nil {
+		t.Fatal(err)
+	}
+	childMaterialization, err := transfer.NewMaterializationDirectory(
+		childDirectory.DirectoryID, childDirectory.Generation, childRelativePath,
+		childDirectory.ParentAdmission, childDirectory.ModifiedTime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	childAdmission, err := transfer.NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -660,11 +686,11 @@ func buildDirectoryAdmissionVectorCases(
 	}
 	return []any{
 		directoryAdmissionVectorCase(
-			t, "synthetic-root", nil, fixture.name, rootAdmission, rootSettlement, secret, scope, rootDirectory,
+			t, "synthetic-root", nil, fixture.name, rootAdmission, rootSettlement, secret, scope, rootMaterialization,
 		),
 		directoryAdmissionVectorCase(
 			t, "child-generation", "synthetic-root", fixture.name,
-			childAdmission, childSettlement, secret, scope, childDirectory,
+			childAdmission, childSettlement, secret, scope, childMaterialization,
 		),
 	}
 }
@@ -678,7 +704,7 @@ func directoryAdmissionVectorCase(
 	settlement transfer.DirectorySettlement,
 	secret []byte,
 	scope transfer.DirectoryAdmissionScope,
-	directory transfer.AuthenticatedSourceDirectory,
+	directory transfer.MaterializationDirectory,
 ) map[string]any {
 	t.Helper()
 	message, err := transfer.CanonicalDirectoryAdmissionMessageV2(scope, directory)
@@ -691,16 +717,36 @@ func directoryAdmissionVectorCase(
 		"scope": map[string]any{
 			"receiveIntentDigest": b64URL(scope.ReceiveIntentDigest().Bytes()),
 			"layoutVersion":       scope.LayoutVersion(), "layout": directoryAdmissionLayoutString(scope.Layout()),
-			"syntheticRoot": b64URL(scope.SyntheticRoot().Bytes()),
+			"rootExpectation": directoryAdmissionRootVectorInput(scope.RootExpectation()),
 		},
 		"directory": map[string]any{
-			"directoryId":  b64URL(directory.DirectoryID.Bytes()),
-			"generation":   b64URL(directory.Generation.Bytes()),
-			"path":         canonicalPathSegments(directory.SourcePath.String()),
-			"modifiedTime": modifiedTimeVectorInput(directory.ModifiedTime),
+			"directoryId":  b64URL(directory.DirectoryID().Bytes()),
+			"generation":   b64URL(directory.Generation().Bytes()),
+			"path":         canonicalPathSegments(directory.Path().String()),
+			"modifiedTime": modifiedTimeVectorInput(directory.ModifiedTime()),
 		},
 		"messageB64Url": b64URL(message), "token": b64URL(admission.Bytes()),
 		"settlement": directorySettlementVectorInput(t, admission, settlement),
+	}
+}
+
+func directoryAdmissionRootVectorInput(
+	root transfer.DirectoryAdmissionRootExpectation,
+) map[string]any {
+	if root.Kind() == transfer.DirectoryAdmissionNoRoot {
+		return map[string]any{"kind": "none", "anchorKind": "single-file"}
+	}
+	anchorKind := "catalog-root"
+	switch root.Kind() {
+	case transfer.DirectoryAdmissionDirectoryAnchor:
+		anchorKind = "directory"
+	case transfer.DirectoryAdmissionSyntheticRoot:
+		anchorKind = "synthetic-root"
+	}
+	return map[string]any{
+		"kind": "materialized-directory", "anchorKind": anchorKind,
+		"directoryId":  b64URL(root.DirectoryID().Bytes()),
+		"relativePath": canonicalPathSegments(root.Path()),
 	}
 }
 

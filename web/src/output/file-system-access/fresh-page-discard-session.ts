@@ -255,8 +255,10 @@ export class FreshPageFileSystemAccessDiscardSession {
     )
 
     if (this.#binding.reservation.entryKind === 'single-file') {
+      // The reserved file is the FSA materialization root; accepting its logical name here
+      // would silently revive the retired pre-fence checkpoint coordinate.
       if (directoryById.size !== 0 || objects.length > 1 ||
-          objects.some(object => !samePath(object.path, [this.#binding.reservation.requestedName]))) {
+          objects.some(object => object.path.length !== 0)) {
         throw new TargetOwnershipUnknownError('cleanup', this.intent.operationId)
       }
       if (objects.length === 0) await requireReservedEntryAbsent(this.#binding)

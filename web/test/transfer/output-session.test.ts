@@ -11,15 +11,30 @@ import {
   type OutputSession,
 } from '../../src/transfer/output-session'
 import {
+  createDirectTreePlan,
+  createFSANamedEntryReservation,
+  createNativeNamedEntryReservation,
+  createReceiveIntent,
+  createSelectionSpec,
+  createSingleFileDirectoryTreeArtifact,
+} from '../../src/transfer/intent'
+import {
+  createDirectTreeCoordinateContract,
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
+import {
   fileEntry,
   identity,
   identityText,
+  digestIdentity,
   planAuthorityFixture,
   receiveIntentFixture,
 } from './v2-job-fixture'
 
 describe('plan-specific output boundary', () => {
-  it('has no representation format and preserves source/artifact path separation', () => {
+  it('has no representation format and preserves every semantic path coordinate', () => {
     const openRevision = vi.fn(async () => snapshotOpenedOutputRevision({
       shareInstance: identityText(1),
       fileId: identityText(4),
@@ -28,15 +43,71 @@ describe('plan-specific output boundary', () => {
     }))
     const request = snapshotOutputFileRequest({
       source: { shareInstance: identityText(1), fileId: identityText(4) },
-      sourcePath: ['source', 'file.bin'],
-      artifactPath: ['result', 'renamed.bin'],
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(['source', 'file.bin']),
+      logicalArtifactPath: snapshotLogicalArtifactPath(['result', 'renamed.bin']),
+      materializationRelativePath: snapshotMaterializationRootRelativePath(['renamed.bin']),
       expectedSize: 3n,
       openRevision,
     })
-    expect(request.sourcePath).toEqual(['source', 'file.bin'])
-    expect(request.artifactPath).toEqual(['result', 'renamed.bin'])
+    expect(request.sourceAuthenticationPath).toEqual(['source', 'file.bin'])
+    expect(request.logicalArtifactPath).toEqual(['result', 'renamed.bin'])
+    expect(request.materializationRelativePath).toEqual(['renamed.bin'])
     expect('format' in request).toBe(false)
     expect(request.openRevision).toBe(openRevision)
+  })
+
+  it('admits the reserved-root file coordinate only from its validated FSA single-file plan', async () => {
+    const artifact = await createSingleFileDirectoryTreeArtifact({
+      fileId: identityText(4),
+      sourcePath: 'source/file.bin',
+      outputName: 'file.bin',
+    })
+    const selection = await createSelectionSpec({
+      shareInstance: identityText(1),
+      syntheticRoot: identityText(2),
+      rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+    })
+    const reservation = await createFSANamedEntryReservation({
+      operationId: identityText(6),
+      reservationId: identityText(7),
+      artifact,
+      authorityRef: digestIdentity(8),
+      logicalReservedName: 'file.bin',
+      physicalName: 'file.bin',
+      collisionIndex: 0,
+    })
+    const intent = await createReceiveIntent({
+      selection,
+      artifact,
+      plan: await createDirectTreePlan(artifact, reservation),
+    })
+    const coordinates = await createDirectTreeCoordinateContract(intent)
+    const nativeReservation = await createNativeNamedEntryReservation({
+      operationId: identityText(9),
+      reservationId: identityText(10),
+      artifact,
+      authorityRef: digestIdentity(11),
+      logicalReservedName: 'file.bin',
+      collisionIndex: 0,
+    })
+    const nativeCoordinates = await createDirectTreeCoordinateContract(await createReceiveIntent({
+      selection,
+      artifact,
+      plan: await createDirectTreePlan(artifact, nativeReservation),
+    }))
+    const request = {
+      source: { shareInstance: identityText(1), fileId: identityText(4) },
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(['source', 'file.bin']),
+      logicalArtifactPath: snapshotLogicalArtifactPath(['file.bin']),
+      materializationRelativePath: snapshotMaterializationRootRelativePath([]),
+      expectedSize: 3n,
+      openRevision: vi.fn(),
+    }
+
+    expect(() => snapshotOutputFileRequest(request)).toThrow(/coordinates must identify a file/u)
+    expect(() => snapshotOutputFileRequest(request, nativeCoordinates))
+      .toThrow(/coordinates must identify a file/u)
+    expect(snapshotOutputFileRequest(request, coordinates).materializationRelativePath).toEqual([])
   })
 
   it('rejects malformed opened revisions and noncanonical output identities', () => {

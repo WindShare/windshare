@@ -225,13 +225,12 @@ func collisionRecoverySiblingFile(
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(fixture.intent)
+	materializationPath, err := transfer.NewMaterializationRootRelativePath(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, fixture.session,
-		fixture.file.SourceParentAdmission(), transfer.MaterializedDirectoryClaim{},
+		fixture.intent, sourcePath, materializationPath, descriptor, fixture.session, fixture.file.Parent(),
 	)
 	if err != nil {
 		t.Fatal(err)

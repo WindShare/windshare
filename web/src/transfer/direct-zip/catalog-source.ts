@@ -6,6 +6,11 @@ import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import { artifactDirectoryPath, artifactFilePath } from '../job/artifact-path'
 import type { AuthenticatedDirectory, PendingFile } from '../job/contract'
+import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../job/coordinate/direct-tree'
 import type {
   DirectZipAuthenticatedRootV1,
   DirectZipIntent,
@@ -251,15 +256,17 @@ export class DirectZipCatalogSourceV1 implements DirectZipOrderedSourceV1 {
     if (candidate.entry.kind !== 'file') throw new TypeError('direct ZIP file candidate changed kind')
     const artifactPath = requireArtifactPath(candidate)
     const parent: AuthenticatedDirectory = Object.freeze({
+      kind: 'reference',
       directoryId: candidate.parent.directoryIdText,
       generation: candidate.parent.generationText,
-      sourcePath: Object.freeze(candidate.sourcePath.slice(0, -1)),
-      artifactPath: Object.freeze(artifactPath.slice(0, -1)),
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(candidate.sourcePath.slice(0, -1)),
+      logicalArtifactPath: snapshotLogicalArtifactPath(artifactPath.slice(0, -1)),
     })
     const pending: PendingFile = Object.freeze({
       entry: candidate.entry,
-      sourcePath: candidate.sourcePath,
-      artifactPath,
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(candidate.sourcePath),
+      logicalArtifactPath: snapshotLogicalArtifactPath(artifactPath),
+      materializationRelativePath: snapshotMaterializationRootRelativePath(artifactPath),
       parent,
       ...(candidate.entry.modifiedTime === undefined ? {} : { modifiedTime: candidate.entry.modifiedTime }),
       ready: Promise.resolve(),

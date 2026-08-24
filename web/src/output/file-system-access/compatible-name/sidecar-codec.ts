@@ -5,7 +5,7 @@ import type {
 } from './model'
 
 export const COMPATIBLE_NAME_SIDECAR_FORMAT_VERSION =
-  'windshare-name-restoration/v1' as const
+  'windshare-name-restoration/v2' as const
 
 const TEXT_ENCODER = new TextEncoder()
 const TEXT_DECODER = new TextDecoder('utf-8', { fatal: true })

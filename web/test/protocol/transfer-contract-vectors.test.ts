@@ -24,6 +24,7 @@ import {
   finalizedDirectorySettlement,
   isolatedDirectorySettlement,
   sameDirectoryAdmission,
+  snapshotMaterializationPath,
   validateDirectorySettlement,
   verifyDirectoryAdmissionToken,
   type CanonicalModifiedTime,
@@ -71,7 +72,7 @@ import {
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 
 const receiveIntentVectors = loadVectorFile(
-  new URL('../../../core/testvectors/receive-intent-v3.json', import.meta.url),
+  new URL('../../../core/testvectors/receive-intent-v4.json', import.meta.url),
 )
 const artifactChoiceVectors = loadVectorFile(
   new URL('../../../core/testvectors/artifact-choice-v1.json', import.meta.url),
@@ -115,7 +116,7 @@ describe('Go↔TypeScript ArtifactChoiceIdentityV1 vectors', () => {
   }
 })
 
-describe('Go↔TypeScript ReceiveIntentV3 vectors', () => {
+describe('Go↔TypeScript ReceiveIntentV4 vectors', () => {
   for (const vector of receiveIntentVectors.cases) {
     it(`replays ${vector.name}`, async () => {
       await replayReceiveIntent(vector)
@@ -135,7 +136,11 @@ describe('Go↔TypeScript DirectoryAdmissionV2 vectors', () => {
       )
 
       expect(scope.receiveIntentDigest).toBe(intent.digest)
-      expect(scope.syntheticRoot).toBe(intent.syntheticRoot)
+      expect(scope.rootExpectation).toMatchObject({
+        kind: 'materialized-directory',
+        directoryId: intent.syntheticRoot,
+        relativePath: [],
+      })
       expect(vector.schemaVersion).toBe(2)
       expect(encodeBase64Url(canonicalDirectoryAdmissionMessageV2(scope, directory)))
         .toBe(requiredString(vector.messageB64Url, 'directory admission message'))
@@ -237,9 +242,11 @@ describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
       'lineage-path-segments-a',
       'lineage-path-segments-b',
       'lineage-path-unicode',
-      'lineage-materializer-fsa',
+      'lineage-materializer-legacy-fsa',
       'lineage-materializer-origin-private',
       'lineage-materializer-atomic',
+      'lineage-materializer-fsa',
+      'lineage-materializer-fsa-root-file',
     ] as const
     const records = new Map<string, FileCheckpointV2>()
 
@@ -277,10 +284,12 @@ describe('Go↔TypeScript FileCheckpointV2 vectors', () => {
       .not.toBe(deriveCheckpointLineageID(records.get('lineage-path-segments-b')!))
     expect([
       baseline.materializerKind,
-      records.get('lineage-materializer-fsa')!.materializerKind,
+      records.get('lineage-materializer-legacy-fsa')!.materializerKind,
       records.get('lineage-materializer-origin-private')!.materializerKind,
       records.get('lineage-materializer-atomic')!.materializerKind,
-    ]).toEqual([1, 2, 3, 4])
+      records.get('lineage-materializer-fsa')!.materializerKind,
+      records.get('lineage-materializer-fsa-root-file')!.materializerKind,
+    ]).toEqual([1, 2, 3, 4, 5, 5])
   })
 })
 
@@ -527,7 +536,14 @@ async function destinationReservation(
           logicalReservedName: named.logicalReservedName,
           collisionIndex: named.collisionIndex,
         })
-        case 'fsa-container': return createFSANamedEntryReservation(named)
+        case 'fsa-container': {
+          const reservation = await createFSANamedEntryReservation(named)
+          expect(reservation.fsaLayoutVersion).toBe(requiredNumber(
+            input.fsaLayoutVersion,
+            'FSA reserved-root layout version',
+          ))
+          return reservation
+        }
         default: throw new Error('named reservation authority kind is invalid')
       }
     }
@@ -566,7 +582,7 @@ async function buildDirectoryAdmission(
     receiveIntentDigest: requiredString(scopeInput.receiveIntentDigest, 'scope ReceiveIntent digest'),
     layoutVersion: requiredLayoutVersion(scopeInput.layoutVersion),
     layout: directoryAdmissionLayout(scopeInput.layout),
-    syntheticRoot: requiredString(scopeInput.syntheticRoot, 'scope synthetic root'),
+    rootExpectation: directoryRootExpectation(scopeInput.rootExpectation),
   } satisfies DirectoryAdmissionScope)
   const parentName = vector.parentCase
   const parentAdmission = parentName === null || parentName === undefined
@@ -581,7 +597,7 @@ async function buildDirectoryAdmission(
   const directory: MaterializationDirectory = {
     directoryId: requiredString(directoryInput.directoryId, 'directory ID'),
     generation: requiredString(directoryInput.generation, 'directory generation'),
-    path: requiredStringArray(directoryInput.path, 'directory path'),
+    path: snapshotMaterializationPath(requiredStringArray(directoryInput.path, 'directory path')),
     ...(parentAdmission === undefined ? {} : { parentAdmission }),
     ...(modifiedTime === undefined ? {} : { modifiedTime }),
   }
@@ -674,8 +690,39 @@ function canonicalModifiedTime(value: unknown): CanonicalModifiedTime | undefine
   }
 }
 
-function requiredLayoutVersion(value: unknown): 1 {
-  if (value !== 1) throw new Error('directory admission layout version is invalid')
+function directoryRootExpectation(
+  value: unknown,
+): DirectoryAdmissionScope['rootExpectation'] {
+  const input = requiredRecord(value, 'directory root expectation')
+  const kind = requiredString(input.kind, 'directory root expectation kind')
+  if (kind === 'none') {
+    if (input.anchorKind !== 'single-file') {
+      throw new Error('no-root expectation must belong to a single-file layout')
+    }
+    return { kind: 'none', anchorKind: 'single-file' }
+  }
+  if (kind !== 'materialized-directory') {
+    throw new Error('directory root expectation kind is invalid')
+  }
+  const anchorKind = requiredString(input.anchorKind, 'directory root anchor kind')
+  if (anchorKind !== 'directory' &&
+      anchorKind !== 'synthetic-root' &&
+      anchorKind !== 'catalog-root') {
+    throw new Error('directory root anchor kind is invalid')
+  }
+  return {
+    kind,
+    anchorKind,
+    directoryId: requiredString(input.directoryId, 'expected root directory'),
+    relativePath: snapshotMaterializationPath(requiredStringArray(
+      input.relativePath,
+      'expected root relative path',
+    )),
+  }
+}
+
+function requiredLayoutVersion(value: unknown): 2 {
+  if (value !== 2) throw new Error('directory admission layout version is invalid')
   return value
 }
 

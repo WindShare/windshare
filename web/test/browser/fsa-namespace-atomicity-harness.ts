@@ -136,7 +136,7 @@ async function exerciseDescendantRefusal(
 
     if (expectedKind === 'file') {
       const transaction = await session.beginFile({
-        artifactPath: [logicalComponent],
+        materializationRelativePath: [logicalComponent],
         openRevision: async () => ({
           fileId: identity(seed + 1),
           fileRevision: identity(seed + 2),
@@ -303,7 +303,7 @@ async function exerciseOrdinaryCompatibleNameDormancy(
     const release = deferred<void>()
     let revisionAdmissions = 0
     const begin = (name: string, fileSeed: number) => session!.beginFile({
-      artifactPath: [name],
+      materializationRelativePath: [name],
       openRevision: async () => {
         revisionAdmissions += 1
         if (revisionAdmissions === 2) admitted.resolve()
@@ -419,7 +419,7 @@ export async function exerciseSingleFileLayout(
   const emptyBeforeRevision = (await entryKinds(parent)).total === 0
   let revisionOpened = false
   const transaction = await session.beginFile({
-    artifactPath: [session.reservation.requestedName],
+    materializationRelativePath: [],
     openRevision: async () => {
       revisionOpened = true
       return { fileId: identity(3), fileRevision: identity(33), exactSize: 4n }
@@ -446,7 +446,7 @@ export async function exerciseSingleFileLayout(
     databaseName: fixture.databaseName,
   })
   const resumed = await reopened.beginFile({
-    artifactPath: [reopened.reservation.requestedName],
+    materializationRelativePath: [],
     openRevision: async () => ({
       fileId: identity(3),
       fileRevision: identity(33),

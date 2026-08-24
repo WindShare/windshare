@@ -568,14 +568,14 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     stageScope?: PersistentOutputStageScope,
     entryKind: 'file' | 'directory' = 'file',
   ): Promise<Readonly<{ parent: FileSystemDirectoryHandle; name: string }>> {
-    const name = path.at(-1)
-    if (name === undefined) throw new TypeError('Output file path has no leaf')
     if (this.#binding.reservation.entryKind === 'single-file') {
       return {
         parent: await this.#verifyParent(stageScope),
         name: this.#binding.reservation.physicalName,
       }
     }
+    const name = path.at(-1)
+    if (name === undefined) throw new TypeError('Output file path has no leaf')
     return {
       parent: await this.#directory(path.slice(0, -1), stageScope),
       name: this.#compatibleNames?.physicalComponent(path, entryKind) ?? name,

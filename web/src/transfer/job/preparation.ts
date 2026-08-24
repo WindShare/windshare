@@ -20,6 +20,12 @@ import type {
   DirectoryCursor,
   PendingFile,
 } from './contract'
+import {
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+  type LogicalArtifactPath,
+  type SourceAuthenticationPath,
+} from './coordinate/direct-tree'
 
 const U64_MAXIMUM = 0xffff_ffff_ffff_ffffn
 const UTF8_ENCODER = new TextEncoder()
@@ -56,7 +62,7 @@ export class ExactPreparationCollector {
   materializeDirectory(
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
-    artifactPath: readonly string[],
+    artifactPath: LogicalArtifactPath,
     requestedRole: 'selected' | 'ancestor',
   ): AuthenticatedDirectory {
     this.observeGeneration(cursor, committed)
@@ -86,10 +92,11 @@ export class ExactPreparationCollector {
     const current = this.#directories.get(cursor.idText)?.entry
     if (current === undefined) throw new TypeError('preparation lost a directory entry')
     return Object.freeze({
+      kind: 'reference',
       directoryId: cursor.idText,
       generation,
-      sourcePath: current.sourcePath,
-      artifactPath: current.artifactPath,
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(current.sourcePath),
+      logicalArtifactPath: artifactPath,
       ...(current.modifiedTime === undefined ? {} : { modifiedTime: current.modifiedTime }),
     })
   }
@@ -97,13 +104,15 @@ export class ExactPreparationCollector {
   referenceDirectory(
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
+    logicalArtifactPath: LogicalArtifactPath,
   ): AuthenticatedDirectory {
     this.observeGeneration(cursor, committed)
     return Object.freeze({
+      kind: 'reference',
       directoryId: cursor.idText,
       generation: encodeBase64Url(committed.generation),
-      sourcePath: snapshotMaterializationPath(cursor.path),
-      artifactPath: Object.freeze([]),
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(cursor.path),
+      logicalArtifactPath,
       ...(cursor.modifiedTime === undefined
         ? {}
         : { modifiedTime: snapshotCanonicalModifiedTime(cursor.modifiedTime) }),
@@ -112,8 +121,8 @@ export class ExactPreparationCollector {
 
   addFile(
     entry: Extract<V2CatalogEntry, { kind: 'file' }>,
-    sourcePath: readonly string[],
-    artifactPath: readonly string[],
+    sourceAuthenticationPath: SourceAuthenticationPath,
+    logicalArtifactPath: LogicalArtifactPath,
     parent: AuthenticatedDirectory,
   ): void {
     const exactSize = checkedU64(entry.expectedSize, 'prepared file size')
@@ -123,8 +132,8 @@ export class ExactPreparationCollector {
       fileId: entry.idText,
       containingDirectoryId: parent.directoryId,
       generation: parent.generation,
-      sourcePath: snapshotMaterializationPath(sourcePath),
-      artifactPath: snapshotMaterializationPath(artifactPath),
+      sourcePath: snapshotMaterializationPath(sourceAuthenticationPath),
+      artifactPath: snapshotMaterializationPath(logicalArtifactPath),
       exactSize,
       ...(entry.modifiedTime === undefined
         ? {}
@@ -133,8 +142,9 @@ export class ExactPreparationCollector {
     this.#files.push(prepared)
     this.#pendingFiles.push(Object.freeze({
       entry,
-      sourcePath: prepared.sourcePath,
-      artifactPath: prepared.artifactPath,
+      sourceAuthenticationPath,
+      logicalArtifactPath,
+      materializationRelativePath: snapshotMaterializationRootRelativePath(logicalArtifactPath),
       parent,
       ready: Promise.resolve(),
       ...(entry.modifiedTime === undefined ? {} : { modifiedTime: entry.modifiedTime }),

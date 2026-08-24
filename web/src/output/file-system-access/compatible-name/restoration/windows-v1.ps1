@@ -12,7 +12,7 @@ Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
 
 $script:WindShareRestorationTemplateId = 'windows-powershell-v1'
-$script:WindShareSidecarVersion = 'windshare-name-restoration/v1'
+$script:WindShareSidecarVersion = 'windshare-name-restoration/v2'
 $script:WindShareTerminalStates = @('completed', 'stopped', 'failed')
 $script:WindShareAllowedStates = @('active') + $script:WindShareTerminalStates
 $script:WindShareAllowedPlacements = @('inside', 'beside')

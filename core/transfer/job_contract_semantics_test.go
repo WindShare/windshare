@@ -145,16 +145,16 @@ func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testin
 	}
 	secret := make([]byte, directoryAdmissionSecretBytes)
 	secret[0] = 1
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestDirectory(
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, root, transferID[catalog.DirectoryGeneration](0xa3), DirectoryAdmission{}, "", catalog.ModifiedTime{},
-	))
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestDirectory(
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, admissionTestMaterializationDirectory(t, admissionTestDirectory(
 		t, transferID[catalog.DirectoryID](0xa4), transferID[catalog.DirectoryGeneration](0xa5),
 		rootAdmission, "child", catalog.ModifiedTime{},
-	))
+	)))
 	if err != nil {
 		t.Fatal(err)
 	}

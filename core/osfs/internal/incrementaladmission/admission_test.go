@@ -21,7 +21,7 @@ func TestValidateDirectoryRejectsUnboundShapes(t *testing.T) {
 	generation := testGeneration(t, 0x31)
 	root := testSourceDirectory(t, intent.SyntheticRoot(), generation, transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{})
 	parent, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x41}, sha256.Size), scope, root,
+		bytes.Repeat([]byte{0x41}, sha256.Size), scope, testMaterializationDirectory(t, root),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -68,13 +68,13 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 		t, intent.SyntheticRoot(), testGeneration(t, 0x55), transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
 	firstParent, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x56}, sha256.Size), scope, parentDirectory,
+		bytes.Repeat([]byte{0x56}, sha256.Size), scope, testMaterializationDirectory(t, parentDirectory),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	secondParent, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x57}, sha256.Size), scope, parentDirectory,
+		bytes.Repeat([]byte{0x57}, sha256.Size), scope, testMaterializationDirectory(t, parentDirectory),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -84,7 +84,7 @@ func TestSameDirectoryComparesTheCommittedCatalogIdentity(t *testing.T) {
 		t.Fatal("identical directory commitments did not compare equal")
 	}
 	childAdmission, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x58}, sha256.Size), scope, directory,
+		bytes.Repeat([]byte{0x58}, sha256.Size), scope, testMaterializationDirectory(t, directory),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +198,24 @@ func testSourceDirectory(
 		DirectoryID: directory, Generation: generation, ParentAdmission: parent,
 		SourcePath: sourcePath, ModifiedTime: modified,
 	}
+}
+
+func testMaterializationDirectory(
+	t *testing.T,
+	source transfer.AuthenticatedSourceDirectory,
+) transfer.MaterializationDirectory {
+	t.Helper()
+	path, err := transfer.NewMaterializationRootRelativePath(source.SourcePath.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := transfer.NewMaterializationDirectory(
+		source.DirectoryID, source.Generation, path, source.ParentAdmission, source.ModifiedTime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
 func testDirectoryID(t *testing.T, fill byte) catalog.DirectoryID {

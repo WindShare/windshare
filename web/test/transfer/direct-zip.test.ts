@@ -9,6 +9,11 @@ import {
 } from '../../src/content/v2-session-services'
 import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
 import {
+  snapshotLogicalArtifactPath,
+  snapshotMaterializationRootRelativePath,
+  snapshotSourceAuthenticationPath,
+} from '../../src/transfer/job/coordinate/direct-tree'
+import {
   createFailureIdentity,
   createProtocolFailure,
 } from '../../src/diagnostics/incident'
@@ -576,13 +581,15 @@ function file(path: string, expectedSize: bigint): DirectZipOrderedFileV1 {
         name: artifactPath.at(-1)!,
         expectedSize,
       }),
-      sourcePath: artifactPath,
-      artifactPath,
+      sourceAuthenticationPath: snapshotSourceAuthenticationPath(artifactPath),
+      logicalArtifactPath: snapshotLogicalArtifactPath(artifactPath),
+      materializationRelativePath: snapshotMaterializationRootRelativePath(artifactPath),
       parent: Object.freeze({
+        kind: 'reference',
         directoryId: 'parent-1',
         generation: 'generation-1',
-        sourcePath: artifactPath.slice(0, -1),
-        artifactPath: artifactPath.slice(0, -1),
+        sourceAuthenticationPath: snapshotSourceAuthenticationPath(artifactPath.slice(0, -1)),
+        logicalArtifactPath: snapshotLogicalArtifactPath(artifactPath.slice(0, -1)),
       }),
       ready: Promise.resolve(),
     }),

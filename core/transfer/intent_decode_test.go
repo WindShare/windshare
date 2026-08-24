@@ -94,7 +94,7 @@ func TestDecodeReceiveIntentRejectsMalformedNonCanonicalAndCrossBoundImages(t *t
 }
 
 func canonicalIntentFromFields(selection, artifact, plan []byte) []byte {
-	encoded := append([]byte(receiveIntentDomain), 0, ReceiveIntentV3)
+	encoded := append([]byte(receiveIntentDomain), 0, ReceiveIntentV4)
 	encoded = appendCanonicalField(encoded, selection)
 	encoded = appendCanonicalField(encoded, artifact)
 	return appendCanonicalField(encoded, plan)

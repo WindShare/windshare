@@ -97,23 +97,38 @@ func newExecutionFixture(t *testing.T, exactSize uint64) executionFixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	admission, err := transfer.NewDirectoryAdmissionWithSecret(
-		bytes.Repeat([]byte{0x25}, 32),
-		scope,
-		transfer.AuthenticatedSourceDirectory{
-			DirectoryID: root, Generation: generation,
-			SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
-		},
+	rootSource := transfer.AuthenticatedSourceDirectory{
+		DirectoryID: root, Generation: generation,
+		SourcePath: ordinaryoutput.EmptySourceCatalogPath(),
+	}
+	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
+		intent, rootSource, ordinaryoutput.SourceNodeConnectsSelection, transfer.MaterializedDirectoryClaim{},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
+	rootDirectory, ok := rootRequest.Directory()
+	if !ok {
+		t.Fatal("catalog root did not produce materialization authority")
+	}
+	admission, err := transfer.NewDirectoryAdmissionWithSecret(
+		bytes.Repeat([]byte{0x25}, 32), scope, rootDirectory,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := transfer.NewDirectoryMaterializationFileParent(
+		root, generation, rootSource.SourcePath, admission, transfer.MaterializedDirectoryClaim{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializationPath, err := transfer.NewMaterializationRootRelativePath("file.bin")
 	if err != nil {
 		t.Fatal(err)
 	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, session, admission, transfer.MaterializedDirectoryClaim{},
+		intent, sourcePath, materializationPath, descriptor, session, parent,
 	)
 	if err != nil {
 		t.Fatal(err)

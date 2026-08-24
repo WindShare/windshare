@@ -11,9 +11,7 @@ import {
   reduceReceiveLifecycle,
   type LifecycleEvent,
 } from '../workspace/lifecycle'
-import {
-  type PersistedReceiveRecord,
-} from '../workspace/records'
+import type { PersistedReceiveRecord } from '../workspace/records'
 import { decodeStoredReceiveLifecycleState, storedReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveLifecycleState } from '../workspace/state'
 import type { DirectoryAdmissionScope } from '../../transfer/directory-admission'
@@ -50,6 +48,10 @@ import {
   observeFSASettlementEvidence,
   snapshotQuiescentFSASettlementEvidence,
 } from './settlement-evidence'
+import {
+  observeFSASettlementRootEvidenceValidation,
+  type FSASettlementEvidenceValidationPass,
+} from './settlement-root-evidence'
 import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
 import type {
   CreateFileSystemAccessSettlementAuthorityOptions,
@@ -204,14 +206,15 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       }
       const evidence = cut.sealEvidence()
       observation.beginEvidenceObservation()
-      const observed = await observeFSASettlementEvidence({
-        intent: this.#intent,
-        directoryScope: this.#directoryScope,
-        observation,
-        evidence,
-        summary: request.materialization,
-        requireComplete: false,
-      })
+      const observed = await this.#observeRootEvidenceValidation('observed', () =>
+        observeFSASettlementEvidence({
+          intent: this.#intent,
+          directoryScope: this.#directoryScope,
+          observation,
+          evidence,
+          summary: request.materialization,
+          requireComplete: false,
+        }))
       const receipt = await this.#settlementReceipt('resumable-receive', request, observed)
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
@@ -286,13 +289,14 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       // every ordinary output entry outside this narrowly proven cleanup.
       await observation.removeVerifiedEmptyCompatibleNameRepair()
       const quiescentEvidence = cut.snapshotQuiescentEvidence()
-      const anticipated = await snapshotQuiescentFSASettlementEvidence({
-        intent: this.#intent,
-        directoryScope: this.#directoryScope,
-        evidence: quiescentEvidence,
-        summary: request.materialization,
-        requireComplete: published,
-      })
+      const anticipated = await this.#observeRootEvidenceValidation('anticipated', () =>
+        snapshotQuiescentFSASettlementEvidence({
+          intent: this.#intent,
+          directoryScope: this.#directoryScope,
+          evidence: quiescentEvidence,
+          summary: request.materialization,
+          requireComplete: published,
+        }))
       const anticipatedReceipt = await this.#settlementReceipt(outcome, request, anticipated)
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
@@ -316,14 +320,15 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       await observation.drainCompatibleNameProjector(footerState)
       const evidence = cut.sealEvidence()
       observation.beginEvidenceObservation()
-      const observed = await observeFSASettlementEvidence({
-        intent: this.#intent,
-        directoryScope: this.#directoryScope,
-        observation,
-        evidence,
-        summary: request.materialization,
-        requireComplete: published,
-      })
+      const observed = await this.#observeRootEvidenceValidation('observed', () =>
+        observeFSASettlementEvidence({
+          intent: this.#intent,
+          directoryScope: this.#directoryScope,
+          observation,
+          evidence,
+          summary: request.materialization,
+          requireComplete: published,
+        }))
       const receipt = await this.#settlementReceipt(outcome, request, observed)
       if (receipt.digest !== anticipatedReceipt.digest ||
           !equalCanonicalBytes(receipt.canonicalBytes, anticipatedReceipt.canonicalBytes)) {
@@ -462,6 +467,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       outcome,
       request,
       evidence,
+      directoryScope: this.#directoryScope,
     })
   }
 
@@ -469,6 +475,22 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     return createFSAUnopenedCleanupReceipt({
       intent: this.#intent,
       transferJobId: this.#transferJobId,
+      directoryScope: this.#directoryScope,
+    })
+  }
+
+  #observeRootEvidenceValidation<Value>(
+    validationPass: FSASettlementEvidenceValidationPass,
+    validate: () => Value | Promise<Value>,
+  ): Promise<Value> {
+    return observeFSASettlementRootEvidenceValidation({
+      validationPass,
+      operationId: this.#intent.operationId,
+      receiveIntentDigest: this.#intent.digest,
+      transferJobId: this.#transferJobId,
+      ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      ...(this.#trace === undefined ? {} : { trace: this.#trace }),
+      validate,
     })
   }
 
