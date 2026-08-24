@@ -69,14 +69,47 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	rootExpectation := scope.RootExpectation()
+	if scope.LayoutVersion() != DirectoryAdmissionLayoutV2 ||
+		rootExpectation.Kind() != DirectoryAdmissionDirectoryAnchor ||
+		rootExpectation.DirectoryID() != resultRoot.DirectoryID() || rootExpectation.Path() != "" {
+		t.Fatalf("FSA root expectation = %+v", rootExpectation)
+	}
+	nativeReservation, err := receivecontract.NewNativeNamedEntryReservation(
+		operation, reservationID, artifact, authority, resultRoot.Name(), 0,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativePlan, err := receivecontract.NewDirectTreePlan(artifact, nativeReservation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeIntent, err := NewReceiveIntent(selection, artifact, nativePlan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nativeScope, err := NewDirectoryAdmissionScope(nativeIntent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nativeRoot := nativeScope.RootExpectation(); nativeRoot.DirectoryID() != resultRoot.DirectoryID() || nativeRoot.Path() != resultRoot.Name() {
+		t.Fatalf("native root expectation = %+v", nativeRoot)
+	}
 	secret := make([]byte, directoryAdmissionSecretBytes)
 	for index := range secret {
 		secret[index] = byte(index + 1)
 	}
 	rootDirectory := admissionTestDirectory(
-		t, syntheticRoot, crossRuntimeID[catalog.DirectoryGeneration](40), DirectoryAdmission{}, "", catalog.ModifiedTime{},
+		t, resultRoot.DirectoryID(), crossRuntimeID[catalog.DirectoryGeneration](40), DirectoryAdmission{}, "docs", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	logicalRootDirectory := admissionTestMaterializationDirectory(t, rootDirectory, resultRoot.Name())
+	if _, err := NewDirectoryAdmissionWithSecret(secret, scope, logicalRootDirectory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+		t.Fatalf("FSA logical root name accepted as a relative root: %v", err)
+	}
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(
+		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory, ""),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -86,13 +119,14 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 	}
 	childDirectory := admissionTestDirectory(
 		t, crossRuntimeID[catalog.DirectoryID](41), crossRuntimeID[catalog.DirectoryGeneration](42),
-		rootAdmission, "child", modified,
+		rootAdmission, "docs/child", modified,
 	)
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childDirectory)
+	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory, "child")
+	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
+	childAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,10 +138,10 @@ func TestDirectoryAdmissionCrossRuntimeCanonicalGolden(t *testing.T) {
 		base64.RawURLEncoding.EncodeToString(childAdmission.Bytes()),
 	}
 	want := []string{
-		"PKgx50isr9LVzH14HJib08_RPM501Cvw1_G2Y2b_ctQ",
-		"-FfVAg8-AJUOylS_dYhiCz9vF2DrUTncrpE-PhQ7HOc",
-		"wciDHOmyvV1fBGC2T_jZZlUN2dbt-T3s7YC1PFXmzI0",
-		"VfTe1srkTkvVQNeSJS1oaYl8MZ_BBtMPEn4ZiATmL8w",
+		"vhhExXaw0i8sWcgd8Payakwul9IpNWKlE1WyPkMc_M4",
+		"xvYKa9-QLfT5reKn9crdsf0Sth9l-zYdZjWP9nLmuYA",
+		"qVfgMF4KQoXMTFpQu9G0syTxS8w5t9X6K5gnCJCYU6g",
+		"LXmZtH7L3nXY66NOXhNSliwUHyeAXdt1sClzpXxwvr4",
 	}
 	if !slices.Equal(got, want) {
 		t.Fatalf("cross-runtime values:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -122,7 +156,9 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 	rootDirectory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x50), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	rootAdmission, err := NewDirectoryAdmissionWithSecret(
+		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -134,23 +170,27 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 		t, admissionTestDirectoryID(t, 0x30), admissionTestGeneration(t, 0x60),
 		rootAdmission, "photos", modified,
 	)
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childDirectory)
+	childMaterialization := admissionTestMaterializationDirectory(t, childDirectory)
+	message, err := CanonicalDirectoryAdmissionMessageV2(scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	fields, version := parseDirectoryAdmissionMessage(t, message)
-	if version != DirectoryAdmissionV2 || len(fields) != 8 {
+	if version != DirectoryAdmissionV2 || len(fields) != 11 {
 		t.Fatalf("version=%d fields=%d", version, len(fields))
 	}
 	wantFields := [][]byte{
 		intent.Digest().Bytes(),
-		{DirectoryAdmissionLayoutV1},
+		{DirectoryAdmissionLayoutV2},
 		{byte(DirectoryAdmissionTreeCatalogRoot)},
+		{byte(DirectoryAdmissionCatalogRoot)},
+		root.Bytes(),
+		canonicalDirectoryAdmissionPath(""),
 		childDirectory.DirectoryID.Bytes(),
 		childDirectory.Generation.Bytes(),
 		rootAdmission.Bytes(),
-		canonicalDirectoryAdmissionPath(childDirectory.SourcePath.String()),
+		canonicalDirectoryAdmissionPath(childMaterialization.Path().String()),
 		canonicalDirectoryAdmissionModifiedTime(modified),
 	}
 	for index, want := range wantFields {
@@ -158,7 +198,7 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 			t.Fatalf("field[%d]=%x want=%x", index, fields[index], want)
 		}
 	}
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, childDirectory)
+	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, childMaterialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,7 +209,7 @@ func TestDirectoryAdmissionV2FramesAndAuthenticatesTheCompleteClaim(t *testing.T
 	}
 	if admission.SchemaVersion() != DirectoryAdmissionV2 ||
 		admission.ReceiveIntentDigest() != intent.Digest() ||
-		admission.LayoutVersion() != DirectoryAdmissionLayoutV1 ||
+		admission.LayoutVersion() != DirectoryAdmissionLayoutV2 ||
 		admission.Layout() != DirectoryAdmissionTreeCatalogRoot ||
 		admission.DirectoryID() != childDirectory.DirectoryID || admission.Generation() != childDirectory.Generation ||
 		admission.Path() != childDirectory.SourcePath.String() || admission.ModifiedTime() != modified ||
@@ -185,14 +225,16 @@ func TestDirectoryAdmissionV2UsesClosedRootAndAbsentTimeUnions(t *testing.T) {
 	directory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x51), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	message, err := CanonicalDirectoryAdmissionMessageV2(scope, directory)
+	message, err := CanonicalDirectoryAdmissionMessageV2(
+		scope, admissionTestMaterializationDirectory(t, directory),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	fields, _ := parseDirectoryAdmissionMessage(t, message)
-	if !bytes.Equal(fields[5], []byte{}) || !bytes.Equal(fields[6], []byte{1}) ||
-		!bytes.Equal(fields[7], []byte{1}) {
-		t.Fatalf("parent=%x path=%x modified=%x", fields[5], fields[6], fields[7])
+	if !bytes.Equal(fields[8], []byte{}) || !bytes.Equal(fields[9], []byte{1}) ||
+		!bytes.Equal(fields[10], []byte{1}) {
+		t.Fatalf("parent=%x path=%x modified=%x", fields[8], fields[9], fields[10])
 	}
 }
 
@@ -210,32 +252,37 @@ func TestDirectoryAdmissionV2BindsIntentLayoutAndSyntheticRoot(t *testing.T) {
 		t, root, admissionTestGeneration(t, 0x52), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
 
-	first, err := NewDirectoryAdmissionWithSecret(secret, firstScope, directory)
+	materialization := admissionTestMaterializationDirectory(t, directory)
+	first, err := NewDirectoryAdmissionWithSecret(secret, firstScope, materialization)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := NewDirectoryAdmissionWithSecret(secret, secondScope, directory)
+	second, err := NewDirectoryAdmissionWithSecret(secret, secondScope, materialization)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if first.Equal(second) || bytes.Equal(first.Bytes(), second.Bytes()) {
 		t.Fatal("two durable intent namespaces shared a receipt")
 	}
-	if err := ValidateDirectoryAdmissionBinding(firstScope, first, directory); err != nil {
+	if err := ValidateDirectoryAdmissionBinding(firstScope, first, materialization); err != nil {
 		t.Fatal(err)
 	}
-	if !errors.Is(ValidateDirectoryAdmissionBinding(secondScope, first, directory), ErrDirectoryAdmissionMismatch) {
+	if !errors.Is(ValidateDirectoryAdmissionBinding(secondScope, first, materialization), ErrDirectoryAdmissionMismatch) {
 		t.Fatal("foreign intent accepted the receipt")
 	}
 
 	wrongRoot := directory
 	wrongRoot.DirectoryID = admissionTestDirectoryID(t, 0x23)
-	if _, err := NewDirectoryAdmissionWithSecret(secret, firstScope, wrongRoot); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	if _, err := NewDirectoryAdmissionWithSecret(
+		secret, firstScope, admissionTestMaterializationDirectory(t, wrongRoot),
+	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 		t.Fatalf("wrong synthetic root error=%v", err)
 	}
 	rootWithParent := directory
 	rootWithParent.ParentAdmission = first
-	if _, err := NewDirectoryAdmissionWithSecret(secret, firstScope, rootWithParent); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	if _, err := NewDirectoryAdmissionWithSecret(
+		secret, firstScope, admissionTestMaterializationDirectory(t, rootWithParent),
+	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 		t.Fatalf("parented synthetic root error=%v", err)
 	}
 }
@@ -250,11 +297,15 @@ func TestDirectoryAdmissionV2RejectsForeignOrNonImmediateParentClaims(t *testing
 	rootDirectory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x54), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	parent, err := NewDirectoryAdmissionWithSecret(secret, scope, rootDirectory)
+	parent, err := NewDirectoryAdmissionWithSecret(
+		secret, scope, admissionTestMaterializationDirectory(t, rootDirectory),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	foreignParent, err := NewDirectoryAdmissionWithSecret(secret, foreignScope, rootDirectory)
+	foreignParent, err := NewDirectoryAdmissionWithSecret(
+		secret, foreignScope, admissionTestMaterializationDirectory(t, rootDirectory),
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +324,9 @@ func TestDirectoryAdmissionV2RejectsForeignOrNonImmediateParentClaims(t *testing
 		),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := NewDirectoryAdmissionWithSecret(secret, scope, directory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+			if _, err := NewDirectoryAdmissionWithSecret(
+				secret, scope, admissionTestMaterializationDirectory(t, directory),
+			); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 				t.Fatalf("error=%v", err)
 			}
 		})
@@ -288,7 +341,8 @@ func TestDirectoryAdmissionV2SnapshotsKeyAndReceiptBytes(t *testing.T) {
 	directory := admissionTestDirectory(
 		t, root, admissionTestGeneration(t, 0x55), DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, directory)
+	materialization := admissionTestMaterializationDirectory(t, directory)
+	admission, err := NewDirectoryAdmissionWithSecret(secret, scope, materialization)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -299,14 +353,18 @@ func TestDirectoryAdmissionV2SnapshotsKeyAndReceiptBytes(t *testing.T) {
 	if !bytes.Equal(admission.Bytes(), want) {
 		t.Fatal("caller mutation changed the immutable receipt")
 	}
-	retry, err := NewDirectoryAdmissionWithSecret(admissionTestSequence(0x70, directoryAdmissionSecretBytes), scope, directory)
+	retry, err := NewDirectoryAdmissionWithSecret(
+		admissionTestSequence(0x70, directoryAdmissionSecretBytes), scope, materialization,
+	)
 	if err != nil || !admission.Equal(retry) {
 		t.Fatalf("exact retry admission=%+v error=%v", retry, err)
 	}
 	if (DirectoryAdmission{}).Equal(DirectoryAdmission{}) {
 		t.Fatal("zero receipts compared as usable authority")
 	}
-	if _, err := NewDirectoryAdmissionWithSecret(make([]byte, directoryAdmissionSecretBytes), scope, directory); !errors.Is(err, ErrInvalidDirectoryAdmission) {
+	if _, err := NewDirectoryAdmissionWithSecret(
+		make([]byte, directoryAdmissionSecretBytes), scope, materialization,
+	); !errors.Is(err, ErrInvalidDirectoryAdmission) {
 		t.Fatalf("zero key error=%v", err)
 	}
 }
@@ -334,8 +392,8 @@ func parseDirectoryAdmissionMessage(t *testing.T, message []byte) ([][]byte, uin
 		offset += int(length)
 		return value
 	}
-	fields := make([][]byte, 0, 8)
-	for range 8 {
+	fields := make([][]byte, 0, 11)
+	for range 11 {
 		fields = append(fields, readFrame())
 	}
 	if offset != len(message) {
@@ -383,6 +441,32 @@ func admissionTestDirectory(
 		DirectoryID: directory, Generation: generation, ParentAdmission: parent,
 		SourcePath: sourcePath, ModifiedTime: modified,
 	}
+}
+
+func admissionTestMaterializationDirectory(
+	t *testing.T,
+	source AuthenticatedSourceDirectory,
+	paths ...string,
+) MaterializationDirectory {
+	t.Helper()
+	path := source.SourcePath.String()
+	if len(paths) > 1 {
+		t.Fatal("at most one materialization path is allowed")
+	}
+	if len(paths) == 1 {
+		path = paths[0]
+	}
+	relative, err := NewMaterializationRootRelativePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory, err := NewMaterializationDirectory(
+		source.DirectoryID, source.Generation, relative, source.ParentAdmission, source.ModifiedTime,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
 }
 
 func admissionTestShare(t *testing.T, first byte) catalog.ShareInstance {

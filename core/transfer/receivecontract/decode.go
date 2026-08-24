@@ -258,40 +258,9 @@ func decodeDestinationReservation(encoded []byte, artifact ArtifactSpec) (Destin
 		}
 		reservation, err = NewNativeContainerRootReservation(operation, id, artifact, authority)
 	case ReservationNamedContainerEntry:
-		entryKind, entryErr := cursor.framedByte()
-		requestedRaw, requestedErr := cursor.frame(MaxResultComponentBytes)
-		logicalReservedRaw, logicalReservedErr := cursor.frame(MaxResultComponentBytes)
-		physicalRaw, physicalErr := cursor.frame(MaxResultComponentBytes)
-		collisionIndex, collisionErr := cursor.framedUint32()
-		if firstDecodeError(entryErr, requestedErr, logicalReservedErr, physicalErr, collisionErr) != nil {
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		switch AuthorityKind(authorityKind) {
-		case AuthorityNativeContainer:
-			if guarantees != NativeTreeGuarantees() {
-				return DestinationReservation{}, ErrInvalidReceiveContract
-			}
-			reservation, err = NewNativeNamedEntryReservation(
-				operation, id, artifact, authority, string(logicalReservedRaw), collisionIndex,
-			)
-			if err == nil && reservation.PhysicalName() != string(physicalRaw) {
-				err = ErrInvalidReceiveContract
-			}
-		case AuthorityFSAContainer:
-			if guarantees != FSATreeGuarantees() {
-				return DestinationReservation{}, ErrInvalidReceiveContract
-			}
-			reservation, err = NewFSANamedEntryReservation(
-				operation, id, artifact, authority,
-				string(logicalReservedRaw), string(physicalRaw), collisionIndex,
-			)
-		default:
-			return DestinationReservation{}, ErrInvalidReceiveContract
-		}
-		if err == nil && (reservation.EntryKind() != ContainerEntryKind(entryKind) ||
-			reservation.RequestedName() != string(requestedRaw)) {
-			err = ErrInvalidReceiveContract
-		}
+		reservation, err = decodeNamedContainerEntryReservation(
+			&cursor, operation, id, artifact, AuthorityKind(authorityKind), authority, guarantees,
+		)
 	case ReservationAtomicTarget:
 		requestedRaw, requestedErr := cursor.frame(MaxResultComponentBytes)
 		reservedRaw, reservedErr := cursor.frame(MaxResultComponentBytes)
@@ -312,6 +281,61 @@ func decodeDestinationReservation(encoded []byte, artifact ArtifactSpec) (Destin
 		return DestinationReservation{}, ErrInvalidReceiveContract
 	}
 	return reservation, nil
+}
+
+func decodeNamedContainerEntryReservation(
+	cursor *contractDecoder,
+	operation OperationID,
+	id DestinationReservationID,
+	artifact ArtifactSpec,
+	authorityKind AuthorityKind,
+	authority AuthorityRef,
+	guarantees GuaranteeSet,
+) (DestinationReservation, error) {
+	entryKind, entryErr := cursor.framedByte()
+	requestedRaw, requestedErr := cursor.frame(MaxResultComponentBytes)
+	logicalReservedRaw, logicalReservedErr := cursor.frame(MaxResultComponentBytes)
+	physicalRaw, physicalErr := cursor.frame(MaxResultComponentBytes)
+	collisionIndex, collisionErr := cursor.framedUint32()
+	if firstDecodeError(entryErr, requestedErr, logicalReservedErr, physicalErr, collisionErr) != nil {
+		return DestinationReservation{}, ErrInvalidReceiveContract
+	}
+	if authorityKind == AuthorityFSAContainer {
+		layoutVersion, layoutErr := cursor.framedByte()
+		if layoutErr != nil || layoutVersion != FSAReservedRootLayoutV1 {
+			return DestinationReservation{}, ErrInvalidReceiveContract
+		}
+	}
+
+	var reservation DestinationReservation
+	var err error
+	switch authorityKind {
+	case AuthorityNativeContainer:
+		if guarantees != NativeTreeGuarantees() {
+			return DestinationReservation{}, ErrInvalidReceiveContract
+		}
+		reservation, err = NewNativeNamedEntryReservation(
+			operation, id, artifact, authority, string(logicalReservedRaw), collisionIndex,
+		)
+		if err == nil && reservation.PhysicalName() != string(physicalRaw) {
+			err = ErrInvalidReceiveContract
+		}
+	case AuthorityFSAContainer:
+		if guarantees != FSATreeGuarantees() {
+			return DestinationReservation{}, ErrInvalidReceiveContract
+		}
+		reservation, err = NewFSANamedEntryReservation(
+			operation, id, artifact, authority,
+			string(logicalReservedRaw), string(physicalRaw), collisionIndex,
+		)
+	default:
+		return DestinationReservation{}, ErrInvalidReceiveContract
+	}
+	if err == nil && (reservation.EntryKind() != ContainerEntryKind(entryKind) ||
+		reservation.RequestedName() != string(requestedRaw)) {
+		err = ErrInvalidReceiveContract
+	}
+	return reservation, err
 }
 
 func decodeWorkspaceBinding(encoded []byte, artifact ArtifactSpec) (WorkspaceBinding, error) {

@@ -153,38 +153,18 @@ func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("named operation omitted intent")
 	}
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	session, err := authority.OpenOperation(context.Background(), operation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootSource := transfer.AuthenticatedSourceDirectory{
-		DirectoryID: selection.SyntheticRoot(),
-		Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](0x38),
-		SourcePath:  ordinaryoutput.EmptySourceCatalogPath(),
-	}
-	rootRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector, rootSource, ordinaryoutput.SourceNodeConnectsSelection, transfer.MaterializedDirectoryClaim{},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootAdmission, err := session.AdmitDirectory(context.Background(), rootRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	anchorSourcePath, _ := ordinaryoutput.NewSourceCatalogPath("docs")
 	anchorSource := transfer.AuthenticatedSourceDirectory{
-		DirectoryID:     anchor,
-		Generation:      incrementalTestIdentity16[catalog.DirectoryGeneration](0x39),
-		ParentAdmission: rootAdmission,
-		SourcePath:      anchorSourcePath,
+		DirectoryID: anchor,
+		Generation:  incrementalTestIdentity16[catalog.DirectoryGeneration](0x39),
+		SourcePath:  anchorSourcePath,
 	}
 	anchorRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector, anchorSource, ordinaryoutput.SourceNodeSelected, transfer.MaterializedDirectoryClaim{},
+		intent, anchorSource, ordinaryoutput.SourceNodeSelected, transfer.MaterializedDirectoryClaim{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -209,7 +189,7 @@ func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 		SourcePath:      childPath,
 	}
 	childRequest, err := transfer.NewDirectoryMaterializationRequest(
-		projector, childSource, ordinaryoutput.SourceNodeSelected, anchorClaim,
+		intent, childSource, ordinaryoutput.SourceNodeSelected, anchorClaim,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -222,9 +202,6 @@ func TestNamedResultRootSessionDoesNotDuplicateReservedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := session.FinalizeDirectory(context.Background(), anchorAdmission); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := session.FinalizeDirectory(context.Background(), rootAdmission); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := session.FinalizeTree(context.Background(), transfer.DirectTreeOutcomeSuccess); err != nil {

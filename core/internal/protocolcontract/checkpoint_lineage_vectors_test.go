@@ -39,7 +39,7 @@ func buildFileCheckpointLineageVectorCases(
 	base osfs.FileCheckpointSpec,
 ) []any {
 	t.Helper()
-	result := make([]any, 0, 13)
+	result := make([]any, 0, 15)
 	appendVariant := func(
 		name string,
 		axis string,
@@ -105,14 +105,21 @@ func buildFileCheckpointLineageVectorCases(
 	appendVariant("lineage-path-unicode", "canonical-path", "different", func(spec *osfs.FileCheckpointSpec) {
 		spec.CanonicalPath = "资料/café.bin"
 	})
-	appendVariant("lineage-materializer-fsa", "materializer", "different", func(spec *osfs.FileCheckpointSpec) {
-		spec.MaterializerKind = osfs.FileCheckpointMaterializerFSATree
+	appendVariant("lineage-materializer-legacy-fsa", "materializer", "different", func(spec *osfs.FileCheckpointSpec) {
+		spec.MaterializerKind = osfs.FileCheckpointMaterializerLegacyFSATree
 	})
 	appendVariant("lineage-materializer-origin-private", "materializer", "different", func(spec *osfs.FileCheckpointSpec) {
 		spec.MaterializerKind = osfs.FileCheckpointMaterializerOriginPrivate
 	})
 	appendVariant("lineage-materializer-atomic", "materializer", "different", func(spec *osfs.FileCheckpointSpec) {
 		spec.MaterializerKind = osfs.FileCheckpointMaterializerAtomicFile
+	})
+	appendVariant("lineage-materializer-fsa", "materializer", "different", func(spec *osfs.FileCheckpointSpec) {
+		spec.MaterializerKind = osfs.FileCheckpointMaterializerFSATree
+	})
+	appendVariant("lineage-materializer-fsa-root-file", "canonical-path", "different", func(spec *osfs.FileCheckpointSpec) {
+		spec.MaterializerKind = osfs.FileCheckpointMaterializerFSATree
+		spec.CanonicalPath = ""
 	})
 	return result
 }

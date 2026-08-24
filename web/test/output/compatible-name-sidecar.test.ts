@@ -80,7 +80,10 @@ describe('compatible-name restoration sidecar codec', () => {
     },
     {
       label: 'unsupported version',
-      sidecar: BASE_HEADER.replace(COMPATIBLE_NAME_SIDECAR_FORMAT_VERSION, 'restoration/v2') +
+      sidecar: BASE_HEADER.replace(
+        COMPATIBLE_NAME_SIDECAR_FORMAT_VERSION,
+        'windshare-name-restoration/v1',
+      ) +
         'F\t0\tactive\n',
     },
     {

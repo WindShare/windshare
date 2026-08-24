@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import { directoryId } from '../../src/catalog/model'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { fsaDirectoryHandleId } from '../../src/output/browser/filesystem-directory-authority'
+import { fsaOwnedDirectoryHandleId } from '../../src/output/browser/indexeddb-root-binding'
 import {
   openFileSystemAccessPendingOutcomeCatchUp,
   reopenFileSystemAccessOutput,
@@ -18,6 +21,9 @@ import {
 } from '../../src/output/workspace/records'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { classificationForTransferFailure } from '../../src/transfer/job/failures'
+import {
+  createDirectTreeCoordinateContract,
+} from '../../src/transfer/job/coordinate/direct-tree'
 import {
   EMPTY_TRANSFER_FILE_OUTCOME_COUNTS,
   transferWorkerSettlement,
@@ -91,6 +97,11 @@ describe('File System Access compatible-name traversal', () => {
       openCompatibleNameLedger: openLedger,
     })
     expect(opens).toBe(0)
+    const currentRootHandleId = await fsaDirectoryHandleId(session.reservation, [])
+    const legacyRootHandleId = await legacyFSADirectoryHandleId(session.reservation)
+    expect(currentRootHandleId).not.toBe(legacyRootHandleId)
+    expect(await repository.readHandle(currentRootHandleId)).toBeDefined()
+    expect(await repository.readHandle(legacyRootHandleId)).toBeUndefined()
     const intent = session.intent
     await session.close()
 
@@ -138,7 +149,7 @@ describe('File System Access compatible-name traversal', () => {
     }
 
     await expect(session.beginFile({
-      artifactPath: ['blocked.txt'],
+      materializationRelativePath: ['blocked.txt'],
       openRevision: async () => ({
         fileId: identity(137),
         fileRevision: identity(138),
@@ -222,7 +233,7 @@ describe('File System Access compatible-name traversal', () => {
     }
 
     const first = await session.beginFile({
-      artifactPath: ['blocked.txt'],
+      materializationRelativePath: ['blocked.txt'],
       openRevision: async () => ({
         fileId: identity(132),
         fileRevision: identity(133),
@@ -277,7 +288,7 @@ describe('File System Access compatible-name traversal', () => {
     const unsubscribeReopened = reopenedProjection.subscribe(summary => reopenedSummaries.push(summary))
     expect(reopenedSummaries.at(-1)).toMatchObject({ committedCount: 1 })
     const resumed = await reopened.beginFile({
-      artifactPath: ['blocked.txt'],
+      materializationRelativePath: ['blocked.txt'],
       openRevision: async () => ({
         fileId: identity(132),
         fileRevision: identity(133),
@@ -330,7 +341,7 @@ describe('File System Access compatible-name sibling claims', () => {
     for (const [index, artifactPath] of [['left', 'blocked.txt'], ['right', 'blocked.txt']]
       .entries()) {
       const transaction = await session.beginFile({
-        artifactPath,
+        materializationRelativePath: artifactPath,
         openRevision: async () => ({
           fileId: identity(140 + index),
           fileRevision: identity(142 + index),
@@ -356,7 +367,7 @@ describe('File System Access compatible-name sibling claims', () => {
 
     const unrelatedPhysicalName = blockedMappings[0]!.physicalComponent
     const ordinaryPhysicalTwin = await session.beginFile({
-      artifactPath: ['ordinary', unrelatedPhysicalName],
+      materializationRelativePath: ['ordinary', unrelatedPhysicalName],
       openRevision: async () => ({
         fileId: identity(146),
         fileRevision: identity(147),
@@ -368,7 +379,7 @@ describe('File System Access compatible-name sibling claims', () => {
 
     const pairName = ledger.header!.pair.script.physicalName
     const ordinaryPairTwin = await session.beginFile({
-      artifactPath: ['ordinary', pairName],
+      materializationRelativePath: ['ordinary', pairName],
       openRevision: async () => ({
         fileId: identity(148),
         fileRevision: identity(149),
@@ -399,7 +410,7 @@ describe('File System Access compatible-name traversal recovery', () => {
     })
     let membershipQueries = 0
     session.bindDirectoryNamespace({
-      artifactPath: [],
+      materializationRelativePath: [],
       logicalSiblingMembership: {
         directoryId: identity(135),
         generation: identity(136),
@@ -456,7 +467,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(153)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(154))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(155))
+    await admitAndFinalizeRoot(execution, session.intent, identity(155))
 
     await expect(execution.stop!({
       transferJobId,
@@ -492,7 +503,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(197)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(198))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(199))
+    await admitAndFinalizeRoot(execution, session.intent, identity(199))
     const worker = completedWithDirectoryError(session.intent.syntheticRoot)
 
     await expect(execution.settle({
@@ -545,7 +556,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(201)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(202))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(203))
+    await admitAndFinalizeRoot(execution, session.intent, identity(203))
 
     const worker = completedWithDirectoryError(session.intent.syntheticRoot)
     await expect(execution.settle({
@@ -593,7 +604,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(157)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(158))
-    const rootAdmission = await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(159))
+    const rootAdmission = await admitAndFinalizeRoot(execution, session.intent, identity(159))
     expect(rootAdmission).toBeDefined()
 
     const settling = execution.settle({
@@ -644,7 +655,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const leaseId = identity(160)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, identity(161), identity(162))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(163))
+    await admitAndFinalizeRoot(execution, session.intent, identity(163))
 
     await expect(execution.pause({
       worker: PAUSED,
@@ -678,7 +689,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(165)
     await startReceiving(repository, session.intent, leaseId)
     const execution = await fsaExecution(session, repository, leaseId, transferJobId, identity(166))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(167))
+    await admitAndFinalizeRoot(execution, session.intent, identity(167))
     const worker = completedWithDirectoryError(session.intent.syntheticRoot)
 
     let failure: unknown
@@ -729,7 +740,7 @@ describe('File System Access compatible-name terminal cut', () => {
     const transferJobId = identity(169)
     await startReceiving(repository, session.intent, priorLeaseId)
     const execution = await fsaExecution(session, repository, priorLeaseId, transferJobId, identity(170))
-    await admitAndFinalizeRoot(execution, session.intent.syntheticRoot, identity(171))
+    await admitAndFinalizeRoot(execution, session.intent, identity(171))
     const worker = completedWithDirectoryError(session.intent.syntheticRoot)
     await expect(execution.settle({
       transferJobId,
@@ -838,18 +849,40 @@ async function activateCompatibleDirectory(
   return root
 }
 
+async function legacyFSADirectoryHandleId(
+  reservation: Awaited<ReturnType<typeof bindTask>>['reservation'],
+): Promise<string> {
+  const material = new TextEncoder().encode(
+    `windshare/fsa-directory-locator/v1\0${reservation.digest}\0`,
+  )
+  const digest = encodeBase64Url(new Uint8Array(await crypto.subtle.digest('SHA-256', material)))
+  return fsaOwnedDirectoryHandleId(reservation.operationId, digest)
+}
+
 async function admitAndFinalizeRoot(
   execution: Awaited<ReturnType<typeof fsaExecution>>,
-  syntheticRoot: string,
+  intent: Awaited<ReturnType<typeof bindTask>>['intent'],
   generation: string,
 ) {
+  const coordinates = await createDirectTreeCoordinateContract(intent)
+  const layout = coordinates.intent.artifact.layout
+  const sourcePath = layout.kind === 'result-root' && layout.root.anchor.kind === 'directory'
+    ? layout.root.anchor.sourcePath.split('/')
+    : []
+  const directory = coordinates.projectDirectory(sourcePath)
+  if (directory.kind !== 'materialize') {
+    throw new TypeError('test root must be materialized')
+  }
   const admission = await execution.directories.admitDirectory({
-    source: {
-      directoryId: directoryId(syntheticRoot),
+    directory: {
+      directoryId: directoryId(coordinates.rootExpectation.kind === 'materialized-directory'
+        ? coordinates.rootExpectation.directoryId
+        : intent.syntheticRoot),
       generation,
-      path: Object.freeze([]),
+      path: directory.relativePath,
     },
-    artifactPath: Object.freeze([]),
+    sourceAuthenticationPath: directory.sourceAuthenticationPath,
+    logicalArtifactPath: directory.logicalArtifactPath,
   }, SIGNAL)
   await execution.directories.finalizeDirectory(admission, SIGNAL)
   return admission

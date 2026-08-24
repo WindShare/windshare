@@ -10,16 +10,18 @@ const PENDING_PATH_SEGMENT_METADATA_BYTES = 8n
 const UTF8_ENCODER = new TextEncoder()
 
 export function pendingFileMetadataBytes(file: PendingFile): bigint {
-  const admission = file.parent.admission
+  const admission = file.parent.kind === 'materialized' ? file.parent.admission : undefined
   const strings = [
     file.entry.idText,
     file.entry.name,
-    ...file.sourcePath,
-    ...file.artifactPath,
+    ...file.sourceAuthenticationPath,
+    ...file.logicalArtifactPath,
+    ...file.materializationRelativePath,
     file.parent.directoryId,
     file.parent.generation,
-    ...file.parent.sourcePath,
-    ...file.parent.artifactPath,
+    ...file.parent.sourceAuthenticationPath,
+    ...file.parent.logicalArtifactPath,
+    ...(file.parent.kind === 'materialized' ? file.parent.materializationRelativePath : []),
     ...(admission === undefined ? [] : [
       admission.token,
       ...(admission.parentToken === undefined ? [] : [admission.parentToken]),

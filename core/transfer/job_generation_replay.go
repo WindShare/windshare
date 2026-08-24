@@ -228,32 +228,48 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 	admission DirectoryAdmission,
 	parentMaterialization MaterializedDirectoryClaim,
 ) error {
-	if admission.IsZero() {
-		return dependencyContractFailure(ErrDirectoryAdmissionMismatch)
-	}
 	sourcePath, err := ordinaryoutput.NewSourceCatalogPath(path)
 	if err != nil {
 		return dependencyContractFailure(err)
 	}
-	node, err := OrdinaryOutputSourceNode(
-		catalog.NodeKindFile, catalog.DirectoryID{}, file, sourcePath, ordinaryoutput.SourceNodeSelected,
-	)
+	parentSourcePath, err := sourceCatalogPath(discovery.request.path)
 	if err != nil {
 		return dependencyContractFailure(err)
 	}
-	projection := discovery.run.job.projector.Project(node)
-	artifactPath, materialized := projection.ArtifactPath()
-	if !materialized {
-		if projection.Kind() == ordinaryoutput.ArtifactReject {
-			return discovery.run.recordSelectedProjectionRejection(projection)
+	var parent MaterializationFileParent
+	if admission.IsZero() {
+		parent, err = NewReferenceMaterializationFileParent(
+			discovery.request.directory, discovery.generation, parentSourcePath,
+		)
+	} else {
+		parent, err = NewDirectoryMaterializationFileParent(
+			discovery.request.directory, discovery.generation, parentSourcePath,
+			admission, parentMaterialization,
+		)
+	}
+	if err != nil {
+		return dependencyContractFailure(err)
+	}
+	artifactPath, materializationRelativePath, projectionErr :=
+		discovery.run.job.coordinates.projectFile(sourcePath, file, parent)
+	if projectionErr != nil {
+		node, nodeErr := OrdinaryOutputSourceNode(
+			catalog.NodeKindFile, catalog.DirectoryID{}, file, sourcePath, ordinaryoutput.SourceNodeSelected,
+		)
+		if nodeErr == nil {
+			projection := discovery.run.job.projector.Project(node)
+			if projection.Kind() == ordinaryoutput.ArtifactReject {
+				return discovery.run.recordSelectedProjectionRejection(projection)
+			}
 		}
-		return dependencyContractFailure(ErrOutputContract)
+		return dependencyContractFailure(projectionErr)
 	}
 	plan := plannedFile{
 		file: file, sourcePath: sourcePath, artifactPath: artifactPath,
-		expectedSize: entry.ExpectedSize(), modified: entry.ModifiedTime(),
+		materializationRelativePath: materializationRelativePath,
+		expectedSize:                entry.ExpectedSize(), modified: entry.ModifiedTime(),
 		parentDirectory: discovery.request.directory, parentGeneration: discovery.generation,
-		parentAdmission: admission, parentMaterialization: parentMaterialization,
+		parent:            parent,
 		selectionDecision: discovery.run.job.rules.selectedFileDecision(file, path),
 	}
 	enqueued := make(chan struct{})

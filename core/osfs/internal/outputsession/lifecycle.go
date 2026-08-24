@@ -211,13 +211,19 @@ func (session *Session) pauseActiveFiles(
 }
 
 func (session *Session) completionReadyLocked() bool {
-	if session.state != sessionOpen || session.requiredFault.Valid() || session.rootClaim == 0 ||
+	if session.state != sessionOpen || session.requiredFault.Valid() ||
 		session.activeFiles != 0 || session.fileSlots != 0 {
 		return false
 	}
-	root := session.directoryClaims[session.rootClaim]
-	if root == nil || root.state != directorySettled || root.uncertain {
-		return false
+	if session.scope.RootExpectation().Kind() == transfer.DirectoryAdmissionNoRoot {
+		if session.rootClaim != 0 || len(session.directoryClaims) != 0 {
+			return false
+		}
+	} else {
+		root := session.directoryClaims[session.rootClaim]
+		if session.rootClaim == 0 || root == nil || root.state != directorySettled || root.uncertain {
+			return false
+		}
 	}
 	for _, entry := range session.directoryClaims {
 		if entry.state != directorySettled || entry.uncertain || entry.finalizationOperation != nil ||

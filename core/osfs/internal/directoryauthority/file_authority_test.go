@@ -401,10 +401,6 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 		t.Fatal(err)
 	}
 	intent := testDirectTreeIntent(t, share, rootID, rules)
-	projector, err := transfer.OrdinaryOutputArtifactPathProjector(intent)
-	if err != nil {
-		t.Fatal(err)
-	}
 	path := "final.bin"
 	if options.nested {
 		path = "folder/final.bin"
@@ -436,17 +432,15 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 		t, rootID, testIdentity[catalog.DirectoryGeneration](161),
 		transfer.DirectoryAdmission{}, "", catalog.ModifiedTime{},
 	)
-	rootAdmission, err := session.AdmitDirectory(
-		context.Background(), projectedDirectoryRequest(
-			t, intent, rootSource, transfer.MaterializedDirectoryClaim{},
-		),
-	)
+	rootRequest := projectedDirectoryRequest(t, intent, rootSource, transfer.MaterializedDirectoryClaim{})
+	rootAdmission, err := session.AdmitDirectory(context.Background(), rootRequest)
 	if err != nil {
 		t.Fatal(err)
 	}
 	parentAdmission := rootAdmission
+	parentSource := rootSource
 	parent := platform.rootNode()
-	var parentMaterialization transfer.MaterializedDirectoryClaim
+	parentMaterialization := transfer.MaterializedDirectoryClaim{}
 	if options.nested {
 		directorySource := testSourceDirectory(
 			t, testIdentity[catalog.DirectoryID](171), testIdentity[catalog.DirectoryGeneration](181),
@@ -459,6 +453,7 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 		if err != nil {
 			t.Fatal(err)
 		}
+		parentSource = directorySource
 		_, materialized := directoryRequest.Projection().ArtifactPath()
 		if !materialized {
 			t.Fatal("nested directory projection did not materialize")
@@ -490,8 +485,19 @@ func newFileAuthorityFixture(t *testing.T, options fileAuthorityFixtureOptions) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	fileParent, err := transfer.NewDirectoryMaterializationFileParent(
+		parentSource.DirectoryID, parentSource.Generation, parentSource.SourcePath,
+		parentAdmission, parentMaterialization,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	materializationPath, err := transfer.NewMaterializationRootRelativePath(path)
+	if err != nil {
+		t.Fatal(err)
+	}
 	file, err := transfer.NewMaterializationFile(
-		projector, sourcePath, descriptor, sessionID, parentAdmission, parentMaterialization,
+		intent, sourcePath, materializationPath, descriptor, sessionID, fileParent,
 	)
 	if err != nil {
 		t.Fatal(err)

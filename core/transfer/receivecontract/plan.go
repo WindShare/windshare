@@ -1,6 +1,6 @@
 package receivecontract
 
-const materializationPlanDomain = "windshare/materialization-plan/v3"
+const materializationPlanDomain = "windshare/materialization-plan/v4"
 
 type MaterializationPlanKind uint8
 

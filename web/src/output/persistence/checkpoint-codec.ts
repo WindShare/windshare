@@ -234,7 +234,7 @@ function decodeRanges(cursor: CheckpointCursor): readonly { start: bigint; end: 
 function decodeCanonicalPath(bytes: Uint8Array): readonly string[] {
   const cursor = new CheckpointCursor(bytes)
   const count = cursor.u64()
-  if (count === 0n || count > 256n) {
+  if (count > 256n) {
     throw new FileCheckpointError('binding', 'checkpoint path segment count is invalid')
   }
   const segments: string[] = []
