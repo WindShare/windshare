@@ -45,30 +45,32 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 ├── core/                         Network-free reusable package subtree
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
-│   ├── content/                  File revisions, ranges, leases, keys, authenticated records
+│   ├── content/                  File revisions, ranges, leases/capacity, keys, authenticated records
 │   ├── session/                  Authenticated protocol engine, catalog/content flows, sender/receiver runtime
 │   ├── framechannel/             Transport-neutral frame contract
-│   ├── transfer/                 Receive intents/plans, selection, jobs, file transactions, settlement
+│   ├── observationstream/        Bounded producer-owned observation queues
+│   ├── transfer/                 Receive contracts/selection, jobs, output transactions/settlement
 │   ├── liveshare/                Sender/receiver runtime assembly
-│   ├── osfs/                     Root-confined sources, native resumable output, checkpoints/recovery
-│   ├── testvectors/              Canonical Go↔TypeScript protocol vectors
-│   └── internal/                 HKDF hierarchy, protocol contracts, and test fixtures
+│   ├── osfs/                     Root-confined sources, native output authority, checkpoints/recovery
+│   ├── testvectors/              Canonical Go↔TypeScript contract vectors
+│   └── internal/                 HKDF, pinned Unicode 15, protocol contracts, and test fixtures
 ├── cmd/
 │   ├── wind/                     Share/get/resume CLI and recovery management
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
-│   ├── v2signal/                 E2EE signaling codec and validation
-│   └── v2peer/                   P2P attempt orchestration and lane adoption
+│   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
+│   └── v2peer/                   Peer negotiation, lane admission, lifecycle diagnostics
 ├── transport/
-│   ├── relayv2/                  WebSocket relay FrameChannel and session lifecycle
-│   └── webrtc/                   Pion DataChannel adapter
+│   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
+│   └── webrtc/                   Pion DataChannel FrameChannel and terminal lifecycle
 ├── relay/
-│   ├── cmd/wsrelay/              Relay server entry point
-│   ├── protocol/v2/              Wire frames and opaque routing envelopes
-│   ├── signaling/v2route/        Registration, ownership, session routing
-│   ├── signaling/v2endpoint/     WebSocket server and connection lifecycle
-│   └── httpapi/, connectionlimit/ Operational endpoints and admission limits
-├── web/                          React/TypeScript browser receiver
+│   ├── cmd/wsrelay/              Relay daemon entry and state/policy assembly
+│   ├── protocol/v2/              Authenticated relay control, proofs, and opaque routes
+│   ├── signaling/v2route/        Registration/resume/STOP authority and session routing
+│   ├── signaling/v2endpoint/     Authenticated WebSocket roles and bounded forwarding
+│   ├── httpapi/                  WebSocket upgrade, Origin policy, and admission hook
+│   └── connectionlimit/          Global and per-source connection limits
+├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
 │   ├── src/catalog/, content/    Progressive catalog, revisions/ranges, leases, lane scheduling
@@ -76,17 +78,18 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
 │   ├── src/connectivity/         Signaling, path policy, and lane adoption
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
-│   ├── src/transfer/             Intent/projection, progressive discovery, jobs, settlement evidence
+│   ├── src/transfer/             Intent/discovery, jobs/direct ZIP, capacity backpressure, settlement
 │   ├── src/output/               Artifact planning/authority, materialization, publication, recovery
-│   ├── src/security/             Capability redaction and bounded diagnostics
-│   ├── src/preview/, ui/         Media preview and React receiver interface
-│   ├── scripts/browser-network-matrix/ Direct browser/Pion interop runner
+│   ├── src/diagnostics/          Bounded tracing, incident correlation, and developer export
+│   ├── src/security/             Capability redaction and bounded diagnostic formatting
+│   ├── src/preview/, ui/         Media preview, receiver UI, and landing portal
+│   ├── scripts/                  Browser/Pion interop and output/diagnostic evidence
 │   ├── test/                     Unit and browser component-contract tests
 │   └── e2e/                      Direct smoke and scheduled product scenarios
 ├── internal/                     Performance evidence, process ownership, test topology, and scenario/trace support
 ├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
-├── testdata/                     Focused test-topology fixtures
-└── scripts/ci/                   Local CI gate implementations
+├── testdata/                     Versioned browser/output evidence and ICE-topology fixtures
+└── scripts/ci/                   CI gates, validation tooling, and release certification
 ```
