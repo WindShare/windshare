@@ -1,9 +1,18 @@
 import type { FinalFileCheckpointProof } from '../../output/persistence/journal'
+import {
+  observePerformance,
+  performanceElapsedMilliseconds,
+  performanceNowMilliseconds,
+  type PerformanceSummaryObservations,
+} from '../../output/diagnostics/performance-summary'
+import { beginPerformanceRevisionOpen } from '../../output/diagnostics/performance-runtime-observations'
 import type {
+  PersistentDirectoryLedgerMaterialization,
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
   PersistentOutputNamespaceClaimPort,
 } from '../../output/persistent-tree/contracts'
+import { MaterializationLedgerDirectoryOutcome } from '../../output/materialization-ledger/model'
 import type { MaterializedManifestEntry } from '../../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../../output/workspace/preparation'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
@@ -21,8 +30,9 @@ import type {
   ZipArchiveArtifact,
 } from '../intent'
 import {
-  VerifiedDurableRanges,
+  disabledOutputExecutionProfile,
   outputCapabilities,
+  outputExecutionProfile,
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
   snapshotDirectoryMaterializationRequest,
@@ -31,13 +41,12 @@ import {
   type DirectTreeExecution,
   type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
-  type FileRetirementDisposition,
   type IncrementalDirectoryOutput,
   type OpenedOutputRevision,
   type OutputCapabilities,
   type OutputFileOwnership,
   type OutputFileRequest,
-  type OutputFileTransaction,
+  type OutputExecutionProfile,
   type OutputSession,
   type OutputSessionIdentity,
   type WorkspaceExecution,
@@ -54,29 +63,35 @@ import {
   snapshotExactSingleFileEvidence,
 } from './v2-plan-authority'
 import {
-  compareDirectorySettlementEvidence,
   compareMaterializedEntries,
-  requireCompleteDirectorySettlement,
   requireCompleteWorkspaceMaterialization,
   requireMatchingMaterializationSummary,
   sameMaterializedEntry,
   samePath,
   type PersistentDirectTreeSettlementAuthority,
-  type PersistentDirectorySettlementEvidence,
+  type PersistentDirectTreeMaterializationEvidence,
   type PersistentMaterializationEvidence,
   type PersistentMaterializationSettlementCut,
+  type PersistentWorkspaceMaterializationEvidence,
   type PersistentWorkspaceSettlementAuthority,
   type WorkspaceMaterializationEvidence,
 } from './persistent-evidence'
+import {
+  PersistentOutputTransaction,
+  verifiedPersistentRanges,
+  type PersistentOutputTransactionNamespace,
+} from './persistent-file-transaction'
 
 export type {
+  PersistentDirectTreeMaterializationEvidence,
   PersistentDirectTreeSettlementAuthority,
-  PersistentDirectorySettlementEvidence,
   PersistentMaterializationEvidence,
   PersistentMaterializationSettlementCut,
   PersistentWorkspaceSettlementAuthority,
   WorkspaceMaterializationEvidence,
 } from './persistent-evidence'
+
+export type { PersistentDirectorySettlementEvidence } from './persistent-evidence'
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
 type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
@@ -88,20 +103,20 @@ type WorkspaceZipIntent = ReceiveIntent & Readonly<{
   artifact: ZipArchiveArtifact
 }>
 
-interface PersistentCheckpointNamespaceEvidence {
-  readonly operationId: string
-  readonly receiveIntentDigest: string
-  readonly materializationBindingDigest: string
-}
+const TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES = 4
+
+type PersistentCheckpointNamespaceEvidence = PersistentOutputTransactionNamespace
 
 export async function createPersistentDirectTreeExecution(input: {
   readonly intent: DirectTreeIntent
   readonly materialization: PersistentMaterializationPort
   readonly outputIdentity: OutputSessionIdentity
+  readonly executionProfile: OutputExecutionProfile
   readonly settlement: PersistentDirectTreeSettlementAuthority
   readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   readonly capabilities?: Partial<OutputCapabilities>
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly performance?: PerformanceSummaryObservations
 }): Promise<DirectTreeExecution> {
   const scope = await createDirectoryAdmissionScope(input.intent)
   const coordinates = await createDirectTreeCoordinateContract(input.intent)
@@ -109,6 +124,7 @@ export async function createPersistentDirectTreeExecution(input: {
     materialization: input.materialization,
     checkpointNamespace: checkpointNamespace(input.intent),
     outputIdentity: input.outputIdentity,
+    executionProfile: input.executionProfile,
     capabilities: persistentCapabilities({
       fileFailureIsolation: true,
       ...input.capabilities,
@@ -116,6 +132,7 @@ export async function createPersistentDirectTreeExecution(input: {
     directoryLedger: new DirectoryAdmissionLedger(scope),
     directTreeCoordinates: coordinates,
     ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
+    ...(input.performance === undefined ? {} : { performance: input.performance }),
   })
   let terminalSettlementInitiated = false
   const stop = input.settlement.stop
@@ -123,35 +140,38 @@ export async function createPersistentDirectTreeExecution(input: {
     planKind: 'direct-tree',
     output: adapter,
     directories: adapter.directories(),
+    ...(input.performance === undefined ? {} : { performance: input.performance }),
+    beginTerminal: kind => {
+      terminalSettlementInitiated = true
+      input.settlement.beginTerminal(kind)
+    },
     ...(input.repairSummary === undefined ? {} : { repairSummary: input.repairSummary }),
     terminalSettlementInitiated: () => terminalSettlementInitiated,
     pause: async (request, signal) => {
-      const cut = new PersistentSettlementCut(() => adapter.evidence(), () => adapter.close())
+      const cut = new PersistentSettlementCut(
+        adapter.directTreeEvidence(),
+        () => adapter.closeForTerminalSettlement(),
+      )
       const state = await input.settlement.pause(request, cut, signal)
       await cut.validateReturnedState(state)
       return state
     },
     ...(stop === undefined ? {} : {
       stop: async (request, signal) => {
-        terminalSettlementInitiated = true
-        const cut = new PersistentSettlementCut(() => {
-          const evidence = adapter.evidence()
-          requireMatchingMaterializationSummary(request, evidence)
-          return evidence
-        }, () => adapter.close())
+        const cut = new PersistentSettlementCut(
+          adapter.directTreeEvidence(),
+          () => adapter.closeForTerminalSettlement(),
+        )
         const state = await stop(request, cut, signal)
         await cut.validateReturnedState(state)
         return state
       },
     }),
     settle: async (request, signal) => {
-      terminalSettlementInitiated = true
-      const cut = new PersistentSettlementCut(() => {
-        const evidence = adapter.evidence()
-        requireMatchingMaterializationSummary(request, evidence)
-        if (request.worker.status === 'Succeeded') requireCompleteDirectorySettlement(evidence)
-        return evidence
-      }, () => adapter.close())
+      const cut = new PersistentSettlementCut(
+        adapter.directTreeEvidence(),
+        () => adapter.closeForTerminalSettlement(),
+      )
       const state = await input.settlement.settle(request, cut, signal)
       await cut.validateReturnedState(state)
       return state
@@ -209,6 +229,9 @@ export async function createPersistentWorkspaceExecution(
     materialization: input.materialization,
     checkpointNamespace: checkpointNamespace(input.intent),
     outputIdentity: input.outputIdentity,
+    executionProfile: disabledOutputExecutionProfile(
+      TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES,
+    ),
     capabilities: persistentCapabilities({
       fileFailureIsolation: false,
       ...input.capabilities,
@@ -237,8 +260,9 @@ export async function createPersistentWorkspaceExecution(
     }
   }
   const evidence = (): WorkspaceMaterializationEvidence => {
-    const materialized = adapter.evidence()
+    const materialized = adapter.workspaceEvidence()
     return Object.freeze({
+      kind: 'workspace-manifest' as const,
       generations,
       entries: materialized.entries,
       directorySettlements: materialized.directorySettlements,
@@ -269,32 +293,43 @@ export async function createPersistentWorkspaceExecution(
 class PersistentMaterializationOutput implements OutputSession {
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
+  readonly executionProfile: OutputExecutionProfile
   readonly #materialization: PersistentMaterializationPort
   readonly #checkpointNamespace: PersistentCheckpointNamespaceEvidence
   readonly #directoryLedger: DirectoryAdmissionLedger | undefined
   readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
   readonly #directTreeCoordinates: DirectTreeCoordinateContract | undefined
+  readonly #performance: PerformanceSummaryObservations | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
   readonly #directoryPathByAdmission = new Map<string, MaterializationRootRelativePath>()
-  readonly #directorySettlements = new Map<string, PersistentDirectorySettlementEvidence>()
+  readonly #directoryLedgerByAdmission = new Map<string, PersistentDirectoryLedgerMaterialization>()
   #closePromise: Promise<void> | undefined
 
   constructor(input: {
     readonly materialization: PersistentMaterializationPort
     readonly checkpointNamespace: PersistentCheckpointNamespaceEvidence
     readonly outputIdentity: OutputSessionIdentity
+    readonly executionProfile: OutputExecutionProfile
     readonly capabilities: OutputCapabilities
     readonly directoryLedger?: DirectoryAdmissionLedger
     readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
     readonly directTreeCoordinates?: DirectTreeCoordinateContract
+    readonly performance?: PerformanceSummaryObservations
   }) {
     this.#materialization = input.materialization
     this.#checkpointNamespace = Object.freeze({ ...input.checkpointNamespace })
     this.identity = outputSessionIdentity(input.outputIdentity)
     this.capabilities = outputCapabilities(input.capabilities)
+    this.executionProfile = outputExecutionProfile(input.executionProfile)
     this.#directoryLedger = input.directoryLedger
     this.#namespaceClaims = input.namespaceClaims
     this.#directTreeCoordinates = input.directTreeCoordinates
+    this.#performance = input.performance
+    if (this.#directTreeCoordinates !== undefined &&
+        (input.materialization.materializeDirectory === undefined ||
+         input.materialization.finalizeDirectory === undefined)) {
+      throw new TypeError('DirectTree persistent output requires durable directory ledger authority')
+    }
   }
 
   directories(): IncrementalDirectoryOutput {
@@ -304,6 +339,7 @@ class PersistentMaterializationOutput implements OutputSession {
       admitDirectory: async (request, signal) => {
         const snapshot = snapshotDirectoryMaterializationRequest(request)
         const materializationRelativePath = snapshot.directory.path
+        let durableDirectory: PersistentDirectoryLedgerMaterialization | undefined
         const admission = await ledger.admitDirectory(
           snapshot.directory,
           signal,
@@ -319,22 +355,43 @@ class PersistentMaterializationOutput implements OutputSession {
                 logicalSiblingMembership: snapshot.logicalSiblingMembership,
               }))
             }
-            const materialized = await this.#materialization
-              .ensureDirectory(materializationRelativePath)
+            const parent = snapshot.directory.parentAdmission === undefined
+              ? undefined
+              : this.#directoryLedgerByAdmission.get(snapshot.directory.parentAdmission.token)
+            if (snapshot.directory.parentAdmission !== undefined && parent === undefined) {
+              throw new TypeError('directory ledger parent has no durable admission')
+            }
+            const materialized = await this.#materialization.materializeDirectory!({
+              relativePath: materializationRelativePath,
+              directoryId: snapshot.directory.directoryId,
+              generation: snapshot.directory.generation,
+              ...(snapshot.directory.modifiedTime === undefined
+                ? {}
+                : { modifiedTime: snapshot.directory.modifiedTime }),
+              ...(parent === undefined
+                ? {}
+                : {
+                    parent: Object.freeze({
+                      relativePath: parent.ledgerAdmission.relativePath,
+                      directoryId: parent.ledgerAdmission.directoryId,
+                      generation: parent.ledgerAdmission.generation,
+                      ownedObjectId: parent.ownedObjectId,
+                    }),
+                  }),
+            })
               .catch((cause: unknown) => {
                 // Directory writes need the same output-wide state-I/O boundary as file writes;
                 // otherwise an untyped browser rejection is mistaken for a collaborator contract bug.
                 throw new V2OutputPausedError('Persistent directory materialization failed', { cause })
               })
-            this.#recordDirectory({
-              kind: 'directory',
-              artifactPath: materializationRelativePath,
-              directoryId: snapshot.directory.directoryId,
-              generation: snapshot.directory.generation,
-              ownedObjectId: materialized.ownedObjectId,
-            })
+            durableDirectory = materialized
           },
         )
+        if (durableDirectory !== undefined) {
+          this.#directoryLedgerByAdmission.set(admission.token, durableDirectory)
+        } else if (!this.#directoryLedgerByAdmission.has(admission.token)) {
+          throw new TypeError('directory admission has no durable ledger entry')
+        }
         if (!samePath(admission.path, materializationRelativePath)) {
           throw new TypeError('directory admission path disagrees with materialized relative path')
         }
@@ -350,6 +407,19 @@ class PersistentMaterializationOutput implements OutputSession {
           admission,
           await ledger.finalizeDirectory(admission, signal),
         )
+        const durableDirectory = this.#directoryLedgerByAdmission.get(admission.token)
+        if (durableDirectory === undefined) {
+          throw new TypeError('directory finalization has no durable ledger admission')
+        }
+        await this.#materialization.finalizeDirectory!(
+          durableDirectory.ledgerAdmission,
+          settlement.kind === 'finalized'
+            ? Object.freeze({ kind: MaterializationLedgerDirectoryOutcome.Finalized })
+            : Object.freeze({
+                kind: MaterializationLedgerDirectoryOutcome.IsolatedFailure,
+                fault: settlement.fault,
+              }),
+        )
         const materializationRelativePath = this.#directoryPathByAdmission.get(admission.token)
         if (materializationRelativePath === undefined) {
           throw new TypeError('directory settlement has no materialized relative-path binding')
@@ -357,16 +427,11 @@ class PersistentMaterializationOutput implements OutputSession {
         if (!samePath(admission.path, materializationRelativePath)) {
           throw new TypeError('directory settlement admission changed its materialized relative path')
         }
-        const materialized = this.#entries.get(JSON.stringify(materializationRelativePath))
-        if (materialized?.kind !== 'directory' ||
-            materialized.directoryId !== admission.directoryId ||
-            materialized.generation !== admission.generation) {
+        if (durableDirectory.ledgerAdmission.directoryId !== admission.directoryId ||
+            durableDirectory.ledgerAdmission.generation !== admission.generation ||
+            !samePath(durableDirectory.ledgerAdmission.relativePath, materializationRelativePath)) {
           throw new TypeError('directory settlement escaped its materialized ownership proof')
         }
-        this.#directorySettlements.set(admission.token, Object.freeze({
-          artifactPath: materializationRelativePath,
-          settlement,
-        }))
         return settlement
       },
     }
@@ -397,6 +462,7 @@ class PersistentMaterializationOutput implements OutputSession {
   async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
+    const revisionQueuedAtMilliseconds = performanceNowMilliseconds(this.#performance)
     const mutation = request.parentAdmission === undefined || this.#directoryLedger === undefined
       ? undefined
       : this.#directoryLedger.acquireFileMutation({
@@ -408,18 +474,45 @@ class PersistentMaterializationOutput implements OutputSession {
     try {
       const transaction = await this.#materialization.beginFile({
         materializationRelativePath: request.materializationRelativePath,
+        shareInstance: request.source.shareInstance,
+        outputSession: this.identity,
+        recovery: this.executionProfile.automaticCheckpoint.kind === 'bounded'
+          ? Object.freeze({
+              kind: 'preserve' as const,
+              costBudget: this.executionProfile.automaticCheckpoint.costBudget,
+            })
+          : Object.freeze({ kind: 'preserve' as const }),
+        ...(request.performancePipeline === undefined
+          ? {}
+          : { performancePipeline: request.performancePipeline }),
         openRevision: async () => {
           if (callbackInvoked) {
             throw new TypeError('persistent materializer invoked revision authority more than once')
           }
           callbackInvoked = true
-          opened = snapshotOpenedOutputRevision(await request.openRevision(signal))
-          requireMatchingOpenedRevision(request, opened)
-          return Object.freeze({
-            fileId: opened.fileId,
-            fileRevision: opened.fileRevision,
-            exactSize: opened.exactSize,
-          })
+          observePerformance(this.#performance, summary =>
+            summary.markMilestone('first_content_request'))
+          const waitMilliseconds = performanceElapsedMilliseconds(
+            revisionQueuedAtMilliseconds,
+            performanceNowMilliseconds(this.#performance),
+          )
+          const revisionObservation = beginPerformanceRevisionOpen(
+            this.#performance,
+            waitMilliseconds,
+          )
+          let succeeded = false
+          try {
+            opened = snapshotOpenedOutputRevision(await request.openRevision(signal))
+            requireMatchingOpenedRevision(request, opened)
+            succeeded = true
+            return Object.freeze({
+              fileId: opened.fileId,
+              fileRevision: opened.fileRevision,
+              exactSize: opened.exactSize,
+            })
+          } finally {
+            revisionObservation?.finish(succeeded)
+          }
         },
       })
       signal.throwIfAborted()
@@ -432,7 +525,11 @@ class PersistentMaterializationOutput implements OutputSession {
         canonicalPath: request.materializationRelativePath,
         ownedFileIdentity: transaction.ownedObjectId,
       })
-      const durableRanges = verifiedRanges(ownership, opened, transaction.verifiedRanges)
+      const durableRanges = verifiedPersistentRanges(
+        ownership,
+        opened,
+        transaction.initialDurableRanges,
+      )
       return Object.freeze({
         revision: opened,
         durableRanges,
@@ -452,13 +549,25 @@ class PersistentMaterializationOutput implements OutputSession {
     }
   }
 
-  evidence(): PersistentMaterializationEvidence {
-    const entries = [...this.#entries.values()].sort(compareMaterializedEntries)
-    const directorySettlements = [...this.#directorySettlements.values()]
-      .sort(compareDirectorySettlementEvidence)
+  directTreeEvidence(): PersistentDirectTreeMaterializationEvidence {
+    if (this.#directTreeCoordinates === undefined) {
+      throw new TypeError('Workspace output cannot expose DirectTree ledger evidence')
+    }
     return Object.freeze({
+      kind: 'direct-tree-ledger' as const,
+      materializationBindingDigest: this.#checkpointNamespace.materializationBindingDigest,
+    })
+  }
+
+  workspaceEvidence(): PersistentWorkspaceMaterializationEvidence {
+    if (this.#directTreeCoordinates !== undefined) {
+      throw new TypeError('DirectTree output cannot expose Workspace manifest evidence')
+    }
+    const entries = [...this.#entries.values()].sort(compareMaterializedEntries)
+    return Object.freeze({
+      kind: 'workspace-manifest' as const,
       entries: Object.freeze(entries),
-      directorySettlements: Object.freeze(directorySettlements),
+      directorySettlements: Object.freeze([]),
     })
   }
 
@@ -467,11 +576,18 @@ class PersistentMaterializationOutput implements OutputSession {
     return this.#closePromise
   }
 
+  closeForTerminalSettlement(): Promise<void> {
+    this.#closePromise ??= this.#materialization.closeForTerminalSettlement?.() ??
+      this.#materialization.close()
+    return this.#closePromise
+  }
+
   #recordDirectory(entry: Extract<MaterializedManifestEntry, { kind: 'directory' }>): void {
     this.#recordEntry(Object.freeze({ ...entry, artifactPath: Object.freeze([...entry.artifactPath]) }))
   }
 
   #recordFile(proof: FinalFileCheckpointProof): void {
+    if (this.#directTreeCoordinates !== undefined) return
     this.#recordEntry(Object.freeze({
       kind: 'file',
       artifactPath: Object.freeze([...proof.canonicalPath]),
@@ -553,82 +669,6 @@ implements PersistentMaterializationSettlementCut<Evidence> {
   }
 }
 
-class PersistentOutputTransaction implements OutputFileTransaction {
-  readonly #transaction: PersistentFileTransactionPort
-  readonly #revision: OpenedOutputRevision
-  readonly #ownership: OutputFileOwnership
-  readonly #checkpointNamespace: PersistentCheckpointNamespaceEvidence
-  readonly #isolated: boolean
-  readonly #releaseMutation: () => void
-  readonly #recordProof: (proof: FinalFileCheckpointProof) => void
-  #settled = false
-
-  constructor(input: {
-    readonly transaction: PersistentFileTransactionPort
-    readonly revision: OpenedOutputRevision
-    readonly ownership: OutputFileOwnership
-    readonly checkpointNamespace: PersistentCheckpointNamespaceEvidence
-    readonly isolated: boolean
-    readonly releaseMutation: () => void
-    readonly recordProof: (proof: FinalFileCheckpointProof) => void
-  }) {
-    this.#transaction = input.transaction
-    this.#revision = input.revision
-    this.#ownership = input.ownership
-    this.#checkpointNamespace = input.checkpointNamespace
-    this.#isolated = input.isolated
-    this.#releaseMutation = input.releaseMutation
-    this.#recordProof = input.recordProof
-  }
-
-  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
-    return this.#transaction.writeRange(offset, data, signal)
-  }
-
-  async checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
-    return verifiedRanges(
-      this.#ownership,
-      this.#revision,
-      await this.#transaction.checkpoint(signal),
-    )
-  }
-
-  async commit(signal: AbortSignal): Promise<void> {
-    if (this.#settled) return
-    const proof = await this.#transaction.commit(signal)
-    requireMatchingFinalProof(
-      this.#revision,
-      this.#ownership,
-      this.#checkpointNamespace,
-      proof,
-    )
-    await this.#transaction.close()
-    this.#recordProof(proof)
-    this.#settle()
-  }
-
-  async retire(): Promise<FileRetirementDisposition> {
-    if (!this.#settled) {
-      await this.#transaction.close()
-      this.#settle()
-    }
-    return this.#isolated ? 'FileIsolated' : 'JobOutputCompromised'
-  }
-
-  async pause(): Promise<void> {
-    if (this.#settled) return
-    await this.#transaction.checkpoint()
-    await this.#transaction.close()
-    this.#settle()
-  }
-
-  #settle(): void {
-    if (this.#settled) return
-    this.#settled = true
-    this.#releaseMutation()
-  }
-}
-
 function persistentCapabilities(
   input: Partial<OutputCapabilities> & Pick<OutputCapabilities, 'fileFailureIsolation'>,
 ): OutputCapabilities {
@@ -638,14 +678,6 @@ function persistentCapabilities(
     fileFailureIsolation: input.fileFailureIsolation,
     modificationTime: input.modificationTime ?? false,
   })
-}
-
-function verifiedRanges(
-  ownership: OutputFileOwnership,
-  revision: OpenedOutputRevision,
-  ranges: readonly Readonly<{ start: bigint; end: bigint }>[],
-): VerifiedDurableRanges {
-  return new VerifiedDurableRanges(ownership, revision, revision.exactSize, ranges)
 }
 
 function requireMatchingOpenedRevision(
@@ -666,22 +698,6 @@ function requireMatchingPersistentRevision(
       transaction.revision.fileRevision !== revision.fileRevision ||
       transaction.revision.exactSize !== revision.exactSize) {
     throw new TypeError('persistent transaction returned another authenticated revision')
-  }
-}
-
-function requireMatchingFinalProof(
-  revision: OpenedOutputRevision,
-  ownership: OutputFileOwnership,
-  namespace: PersistentCheckpointNamespaceEvidence,
-  proof: FinalFileCheckpointProof,
-): void {
-  if (proof.operationId !== namespace.operationId ||
-      proof.receiveIntentDigest !== namespace.receiveIntentDigest ||
-      proof.materializationBindingDigest !== namespace.materializationBindingDigest ||
-      proof.fileId !== revision.fileId || proof.fileRevision !== revision.fileRevision ||
-      proof.exactSize !== revision.exactSize || proof.ownedObjectId !== ownership.ownedFileIdentity ||
-      !samePath(proof.canonicalPath, ownership.canonicalPath) || proof.complete !== true) {
-    throw new TypeError('final checkpoint proof escaped its output transaction')
   }
 }
 

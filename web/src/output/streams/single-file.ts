@@ -1,15 +1,20 @@
 import {
   type BeginOutputFileResult,
+  type AutomaticCheckpointResult,
+  type AutomaticCheckpointTrigger,
   type FileRetirementDisposition,
   type OpenedOutputRevision,
   type OutputCapabilities,
+  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
   type OutputSessionIdentity,
   OutputSessionBindingError,
+  VerifiedFinalOutputFile,
   VerifiedDurableRanges,
+  disabledOutputExecutionProfile,
   outputCapabilities,
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
@@ -29,6 +34,7 @@ export class SingleFileStreamOutputSession implements OutputSession {
     fileFailureIsolation: false,
     modificationTime: false,
   })
+  readonly executionProfile = disabledOutputExecutionProfile(1)
 
   readonly #output: WritableStream<Uint8Array>
   #state: SessionState = 'available'
@@ -129,20 +135,27 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
     })
   }
 
-  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
+  automaticCheckpoint(
+    _trigger: AutomaticCheckpointTrigger,
+    _budget: OutputCheckpointCostBudget,
+    signal: AbortSignal,
+  ): Promise<AutomaticCheckpointResult> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
-      return new VerifiedDurableRanges(
-        this.#ownership,
-        this.#revision,
-        this.#revision.exactSize,
-        [],
-      )
+      return Object.freeze({
+        kind: 'declined' as const,
+        reason: 'cost-evidence-unavailable' as const,
+        estimate: Object.freeze({
+          prefixCopyBytes: 0n,
+          cumulativeWriteAmplificationBytes: 0n,
+          peakTemporaryBytes: 0n,
+        }),
+      })
     })
   }
 
-  commit(signal: AbortSignal): Promise<void> {
+  commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
@@ -152,7 +165,11 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
       this.#started = true
       await this.#commitOutput()
       this.#settled = true
-      signal.throwIfAborted()
+      return new VerifiedFinalOutputFile(
+        this.#ownership,
+        this.#revision,
+        this.#revision.exactSize,
+      )
     })
   }
 
@@ -169,14 +186,21 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
     })
   }
 
-  pause(reason: unknown): Promise<void> {
+  pause(reason: unknown): Promise<VerifiedDurableRanges> {
     return this.#enqueue(async () => {
-      if (this.#settled) return
-      try {
-        await this.#abortOutput(reason)
-      } finally {
-        this.#settled = true
+      if (!this.#settled) {
+        try {
+          await this.#abortOutput(reason)
+        } finally {
+          this.#settled = true
+        }
       }
+      return new VerifiedDurableRanges(
+        this.#ownership,
+        this.#revision,
+        this.#revision.exactSize,
+        [],
+      )
     })
   }
 

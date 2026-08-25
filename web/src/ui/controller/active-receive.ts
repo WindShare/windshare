@@ -35,6 +35,7 @@ import {
   ActiveReceiveLifecycle,
   type ActiveReceiveLifecycleOperation,
 } from './active-receive-lifecycle'
+import { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
 import type { V2PresentationAttempt } from './presentation-attempt'
 
 export interface ActiveReceiveJoinedShare {
@@ -147,9 +148,14 @@ export class ActiveReceiveCoordinator {
     if (this.#operation !== undefined) {
       throw new TypeError('active receive ownership must be cleared before adoption')
     }
+    const settlementPresentation = new ActiveReceiveSettlementPresentation({
+      outputs: this.#outputs,
+      operationIsCurrent: () => this.#operationIsCurrent(operation),
+    })
     const operation: ActiveReceiveOperation = {
       boundary: this.#boundary + 1,
       ...input,
+      settlementPresentation,
     }
     let committed = false
     return Object.freeze({
@@ -228,6 +234,7 @@ export class ActiveReceiveCoordinator {
           },
           ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
           ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),
+          outputSettlementDeadline: active.settlementPresentation,
         },
       )
       task = job.run(transfer.signal).then(

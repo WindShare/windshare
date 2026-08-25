@@ -48,18 +48,23 @@ import {
   snapshotTransferJobId,
   validateTransferJobIntent,
 } from './job/identity'
-import { transferJobLimits, type TransferJobLimits } from './job/limits'
+import {
+  transferJobLimits,
+  type TransferJobLimits,
+} from './job/limits'
 import { V2TransferObservers } from './job/observers'
 import { ExactPreparationCollector } from './job/preparation'
-import { AsyncBoundedQueue } from './job/scheduler'
+import {
+  AsyncBoundedQueue,
+  bindOutputScheduling,
+  type BoundOutputScheduling,
+} from './job/scheduler'
 import { collectExactSingleFileEvidence } from './job/single-file-evidence'
 import { V2JobRootAuthority } from './job/root'
 import { V2CatalogTraversalGuard } from './job/traversal'
-import {
-  newFileQueue,
-  runDiscoveryWorkers,
-  runPreparedFileWorkers,
-} from './job/workers'
+import { newFileQueue, runDiscoveryWorkers, runPreparedFileWorkers } from './job/workers'
+import type { PerformanceFilePipelineObservation } from '../output/diagnostics/performance-runtime-observations'
+import type { PerformanceSummaryObservations } from '../output/diagnostics/performance-summary'
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
   snapshotDirectoryMaterializationRequest,
@@ -112,6 +117,8 @@ export class TransferJob {
   #directoryOutput: IncrementalDirectoryOutput | undefined
   #directTreeCoordinates: DirectTreeCoordinateContract | undefined
   #execution: PlanExecution | undefined
+  #outputScheduling: BoundOutputScheduling | undefined
+  #performance: PerformanceSummaryObservations | undefined
   #intent: TransferJobOptions['intent'] | undefined
   #observers: V2TransferObservers | undefined
   #preparation: ExactPreparationEvidence | undefined
@@ -217,7 +224,7 @@ export class TransferJob {
       },
       execution: {
         bind: execution => {
-          this.#execution = this.#stabilizeDirectTreeLifecycle(execution)
+          this.#bindExecution(execution)
         },
         bindDirectoryOutput: output => {
           this.#directoryOutput = output
@@ -283,6 +290,7 @@ export class TransferJob {
       return this.#settlement.settleRunFailure(error)
     } finally {
       this.#externalAbortCleanup?.()
+      this.#observers?.completePerformance()
     }
   }
 
@@ -296,6 +304,11 @@ export class TransferJob {
         root,
         ...(directFiles === undefined ? {} : { directFiles }),
         limits: this.#limits,
+        ...(directFiles === undefined ? {} : {
+          execution: this.#requireOutputScheduling().limits,
+          resources: this.#requireOutputScheduling().resources,
+          ...(this.#performance === undefined ? {} : { performance: this.#performance }),
+        }),
         signal: this.#lifetime.signal,
         abort: (error) => {
           if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
@@ -303,7 +316,7 @@ export class TransferJob {
         claimRoot: ({ cursor }) => this.#traversal.claimNode(cursor.id),
         discoverDirectory: (work, files) => this.#discovery.discoverDirectory(work, files, collector),
         recordDirectoryFailure: (identity, error) => this.#recordDirectoryFailure(identity, error),
-        transferFile: (file) => this.#transferFile(file),
+        transferFile: (file, pipeline) => this.#transferFile(file, pipeline),
         recordFileFailure: (file, error) => this.#recordFileFailure(file.entry, error),
         observeConsequenceFailure: failure => this.#observers?.workerConsequence(
           'discovery',
@@ -326,7 +339,10 @@ export class TransferJob {
         request: Parameters<DirectTreeExecution['pause']>[0],
         signal: AbortSignal,
       ) => {
-        if (this.#externalCancellationRequested) await this.#finalizeDirectories(signal)
+        if (this.#externalCancellationRequested) {
+          directExecution.beginTerminal('pause')
+          await this.#finalizeDirectories(signal)
+        }
         return directExecution.pause(request, signal)
       },
       ...(directExecution.stop === undefined ? {} : {
@@ -334,10 +350,32 @@ export class TransferJob {
           request: Parameters<NonNullable<DirectTreeExecution['stop']>>[0],
           signal: AbortSignal,
         ) => {
-          if (this.#externalCancellationRequested) await this.#finalizeDirectories(signal)
+          if (this.#externalCancellationRequested) {
+            directExecution.beginTerminal('stop')
+            await this.#finalizeDirectories(signal)
+          }
           return directExecution.stop!(request, signal)
         },
       }),
+    })
+  }
+
+  #bindExecution(execution: PlanExecution): void {
+    if (this.#execution !== undefined) throw new Error('plan execution was bound more than once')
+    const stabilized = this.#stabilizeDirectTreeLifecycle(execution)
+    this.#execution = stabilized
+    if (stabilized.planKind === 'direct-tree') {
+      this.#performance = stabilized.performance
+      this.#observers?.bindPerformance(stabilized.performance)
+    }
+    if (stabilized.planKind === 'direct-resumable-zip') return
+    this.#outputScheduling = bindOutputScheduling({
+      limits: this.#limits,
+      profile: stabilized.output.executionProfile,
+      output: stabilized.output,
+      ...(stabilized.planKind === 'direct-tree' && stabilized.performance !== undefined
+        ? { performance: stabilized.performance }
+        : {}),
     })
   }
 
@@ -545,11 +583,14 @@ export class TransferJob {
       await runPreparedFileWorkers({
         files,
         limits: this.#limits,
+        execution: this.#requireOutputScheduling().limits,
+        resources: this.#requireOutputScheduling().resources,
+        ...(this.#performance === undefined ? {} : { performance: this.#performance }),
         signal: this.#lifetime.signal,
         abort: (error) => {
           if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
         },
-        transferFile: (file) => this.#transferFile(file),
+        transferFile: (file, pipeline) => this.#transferFile(file, pipeline),
         recordFileFailure: (file, error) => this.#recordFileFailure(file.entry, error),
         observeConsequenceFailure: failure => this.#observers?.workerConsequence(
           'prepared-files',
@@ -563,7 +604,10 @@ export class TransferJob {
     }
   }
 
-  async #transferFile(file: PendingFile): Promise<void> {
+  async #transferFile(
+    file: PendingFile,
+    pipeline?: PerformanceFilePipelineObservation,
+  ): Promise<void> {
     const execution = this.#requireExecution()
     if (execution.planKind === 'direct-resumable-zip') {
       throw new TypeError('direct ZIP content must pass through its ordered coordinator')
@@ -572,17 +616,22 @@ export class TransferJob {
       descriptor: this.#options.descriptor,
       revisions: this.#capacity.revisions,
       broker: this.#capacity.broker,
-      output: execution.output,
+      output: this.#requireOutputScheduling().output,
       ...(execution.planKind === 'direct-tree'
         ? { directTreeCoordinates: this.#requireDirectTreeCoordinates() }
         : {}),
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      ...(pipeline === undefined ? {} : { performancePipeline: pipeline }),
       ...(this.#options.incidentScope === undefined
         ? {}
         : { incidentScope: this.#options.incidentScope }),
       onWriteAcknowledged: (bytes) => {
         this.#progress.acknowledgeWrite(bytes)
+        this.#emitProgress()
+      },
+      onRecoverableAcknowledged: (bytes) => {
+        this.#progress.acknowledgeRecoverable(bytes)
         this.#emitProgress()
       },
       onComplete: (exactSize) => {
@@ -665,6 +714,11 @@ export class TransferJob {
   #requireExecution(): PlanExecution {
     if (this.#execution === undefined) throw new Error('plan execution is unavailable')
     return this.#execution
+  }
+
+  #requireOutputScheduling(): BoundOutputScheduling {
+    if (this.#outputScheduling === undefined) throw new Error('output scheduling is unavailable')
+    return this.#outputScheduling
   }
 
   #observeAbort(signal?: AbortSignal): void {

@@ -168,7 +168,7 @@ export async function probeDirectZipBootstrapAtomicity(databaseName: string) {
   }
 }
 
-export async function probeIndexedDbV9Migration(databaseName: string) {
+export async function probeIndexedDbCurrentMigration(databaseName: string) {
   await deleteDatabase(databaseName)
   const legacy = await openRawDatabase(databaseName, 8, (database, transaction) => {
     installIndexedDbV8Schema(database, transaction, 0)

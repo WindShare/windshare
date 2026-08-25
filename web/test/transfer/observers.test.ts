@@ -29,6 +29,7 @@ describe('transfer observer separation', () => {
         sizeClass: 'unknown',
       },
       writtenBytes: 1n,
+      recoverableBytes: 0n,
       completedFiles: 0,
       completedBytes: 0n,
       fileErrors: 0,
@@ -53,6 +54,7 @@ describe('transfer observer separation', () => {
     })).not.toThrow()
     expect(progress).toEqual([
       expect.objectContaining({
+        recoverableBytes: 0n,
         capacityWaitingFiles: 0,
         capacityAccumulatedWaitMilliseconds: 125,
         capacityWaitAttempts: 2,

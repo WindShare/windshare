@@ -21,9 +21,6 @@ import {
   type DirectTreeIntent,
 } from './settlement-proof'
 import { FSAOperationSettlementAuthority } from './settlement-authority'
-import type {
-  FSASettlementRootEvidenceMismatchTraceEvent,
-} from './settlement-root-evidence'
 
 export { fsaCheckpointSetDigest } from './settlement-proof'
 
@@ -33,7 +30,6 @@ export type FSASettlementRepository = Pick<
 >
 
 export type FSASettlementTraceEvent =
-  | FSASettlementRootEvidenceMismatchTraceEvent
   | Readonly<{
       name: 'receive.fsa.settlement.completed'
       operation_id: string

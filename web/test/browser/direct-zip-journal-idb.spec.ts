@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test'
 
+import { CHECKPOINT_DATABASE_VERSION } from '../../src/output/browser/indexeddb-database'
+
 const PROBE_PATH = '/test/browser/direct-zip-journal-idb-probe.ts'
 
 test.beforeEach(async ({ page }) => {
@@ -23,16 +25,16 @@ test('Direct ZIP bootstrap cut rolls back every new authority row on a late stor
   expect(result.startupCandidateDigests).toEqual([result.candidateDigest])
 })
 
-test('v9 migration removes incompatible receive authority and starts Direct ZIP empty', async ({
+test('current migration removes incompatible receive authority and starts Direct ZIP empty', async ({
   page,
 }) => {
   const result = await page.evaluate(async ({ name, path }) => {
     const probe = await import(path) as typeof import('./direct-zip-journal-idb-probe')
-    return probe.probeIndexedDbV9Migration(name)
+    return probe.probeIndexedDbCurrentMigration(name)
   }, { name: `direct-zip-migration-${crypto.randomUUID()}`, path: PROBE_PATH })
 
   expect(result).toEqual({
-    version: 9,
+    version: CHECKPOINT_DATABASE_VERSION,
     legacyStoresPresent: [false, false, false, false],
     currentReceiveCounts: [0, 0, 0],
     invalidatedAuthorityCounts: [0, 0, 0, 0],

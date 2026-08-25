@@ -30,6 +30,7 @@ import type {
   ExactPreparationEvidence,
   V2PlanExecutionAuthority,
 } from '../output-session'
+import { MAXIMUM_OPEN_OUTPUT_FILES } from '../output-file-contract'
 import { MAX_DIRECTORY_ADMISSIONS } from '../directory-admission-ledger'
 import type { V2OutputSettlementDeadline } from '../settlement/v2-output'
 import type { WorkerFamilyFailureSource } from '../worker-family/supervisor'
@@ -38,7 +39,8 @@ import type {
   V2RevisionCapacitySurface,
 } from '../revision-capacity/public'
 
-export const V2_MAXIMUM_CONCURRENT_FILES = 4
+/** Absolute process-safety ceiling; concrete output policy is bound after execution admission. */
+export const V2_MAXIMUM_CONCURRENT_FILES = MAXIMUM_OPEN_OUTPUT_FILES
 export const V2_MAXIMUM_CONCURRENT_DIRECTORIES = 4
 export const V2_MAXIMUM_PENDING_DIRECTORIES = 64
 export const V2_MAXIMUM_PENDING_FILES = 64
@@ -96,6 +98,7 @@ export interface TransferProgress {
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
   readonly writtenBytes: bigint
+  readonly recoverableBytes: bigint
   readonly completedFiles: number
   readonly completedBytes: bigint
   readonly fileErrors: number
