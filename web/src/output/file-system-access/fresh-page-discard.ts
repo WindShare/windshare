@@ -372,7 +372,7 @@ class FreshPageDiscardLifecycleAuthority {
       cut.removedHandleIds,
     )
     try {
-      await cut.retireCheckpoints()
+      await cut.retireRecoveryMetadata()
     } catch (cause) {
       committed = await this.#recordUnknownLifecycle(new TargetOwnershipUnknownError(
         'cleanup',

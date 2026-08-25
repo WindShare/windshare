@@ -2,12 +2,46 @@ import {
   V2OutputPausedError,
   type PendingFile,
 } from './contract'
+import {
+  OutputBudgetExceededError,
+  type OutputFileTransaction,
+  type OutputExecutionProfile,
+  type OutputSession,
+} from '../output-file-contract'
+import {
+  bindTransferExecutionLimits,
+  type TransferExecutionLimits,
+  type TransferJobLimits,
+} from './limits'
+import {
+  observePerformance,
+  performanceElapsedMilliseconds,
+  performanceNowMilliseconds,
+  type PerformanceSummaryObservations,
+} from '../../output/diagnostics/performance-summary'
 
 const PENDING_FILE_STRUCTURAL_METADATA_BYTES = 128n
 const PENDING_FILE_EXACT_SIZE_BYTES = 8n
 const PENDING_FILE_TIMESTAMP_METADATA_BYTES = 24n
 const PENDING_PATH_SEGMENT_METADATA_BYTES = 8n
 const UTF8_ENCODER = new TextEncoder()
+
+export interface BoundOutputScheduling {
+  readonly limits: TransferExecutionLimits
+  readonly resources: OutputResourceBudget
+  readonly output: OutputSession
+}
+
+export function bindOutputScheduling(input: Readonly<{
+  limits: TransferJobLimits
+  profile: OutputExecutionProfile
+  output: OutputSession
+  performance?: PerformanceSummaryObservations
+}>): BoundOutputScheduling {
+  const limits = bindTransferExecutionLimits(input.limits, input.profile)
+  const resources = new OutputResourceBudget(limits, input.performance)
+  return Object.freeze({ limits, resources, output: resources.bind(input.output) })
+}
 
 export function pendingFileMetadataBytes(file: PendingFile): bigint {
   const admission = file.parent.kind === 'materialized' ? file.parent.admission : undefined
@@ -153,4 +187,256 @@ export class AsyncBoundedQueue<T> {
   #wake(): void {
     for (const waiter of [...this.#waiters]) waiter()
   }
+}
+
+export interface OutputResourceBudgetSnapshot {
+  readonly activeFiles: number
+  readonly outstandingWriteBytes: bigint
+  readonly bufferedBytes: bigint
+  readonly peakActiveFiles: number
+  readonly peakOutstandingWriteBytes: bigint
+  readonly peakBufferedBytes: bigint
+  readonly queuedAdmissions: number
+}
+
+interface OutputResourceRequest {
+  readonly activeFiles: number
+  readonly outstandingWriteBytes: bigint
+  readonly bufferedBytes: bigint
+  readonly signal: AbortSignal
+  readonly queuedAtMilliseconds?: number
+  readonly resolve: (lease: OutputResourceLease) => void
+  readonly reject: (reason: unknown) => void
+  readonly abort: () => void
+  pending: boolean
+}
+
+interface OutputResourceLease {
+  release(): void
+}
+
+/** One operation-local admission authority accounts independently bounded output resources. */
+export class OutputResourceBudget {
+  readonly #limits: TransferExecutionLimits
+  readonly #performance: PerformanceSummaryObservations | undefined
+  readonly #requests: OutputResourceRequest[] = []
+  #activeFiles = 0
+  #outstandingWriteBytes = 0n
+  #bufferedBytes = 0n
+  #peakActiveFiles = 0
+  #peakOutstandingWriteBytes = 0n
+  #peakBufferedBytes = 0n
+
+  constructor(
+    limits: TransferExecutionLimits,
+    performance?: PerformanceSummaryObservations,
+  ) {
+    this.#limits = limits
+    this.#performance = performance
+  }
+
+  acquireFile(signal: AbortSignal): Promise<OutputResourceLease> {
+    return this.#acquire(1, 0n, 0n, signal)
+  }
+
+  runWrite<T>(bytes: bigint, signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    return this.#run(bytes, signal, operation)
+  }
+
+  bind(output: OutputSession): OutputSession {
+    const scheduled: OutputSession = {
+      identity: output.identity,
+      capabilities: output.capabilities,
+      executionProfile: output.executionProfile,
+      beginFile: async (file, signal) => {
+        const begun = await output.beginFile(file, signal)
+        return Object.freeze({
+          ...begun,
+          transaction: budgetedOutputTransaction(begun.transaction, this),
+        })
+      },
+    }
+    return Object.freeze(scheduled)
+  }
+
+  snapshot(): OutputResourceBudgetSnapshot {
+    return Object.freeze({
+      activeFiles: this.#activeFiles,
+      outstandingWriteBytes: this.#outstandingWriteBytes,
+      bufferedBytes: this.#bufferedBytes,
+      peakActiveFiles: this.#peakActiveFiles,
+      peakOutstandingWriteBytes: this.#peakOutstandingWriteBytes,
+      peakBufferedBytes: this.#peakBufferedBytes,
+      queuedAdmissions: this.#requests.length,
+    })
+  }
+
+  async #run<T>(bytes: bigint, signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    const lease = await this.#acquire(0, bytes, bytes, signal)
+    try {
+      return await operation()
+    } finally {
+      lease.release()
+    }
+  }
+
+  #acquire(
+    activeFiles: number,
+    outstandingWriteBytes: bigint,
+    bufferedBytes: bigint,
+    signal: AbortSignal,
+  ): Promise<OutputResourceLease> {
+    signal.throwIfAborted()
+    this.#validateRequest(activeFiles, outstandingWriteBytes, bufferedBytes)
+    const queuedAtMilliseconds = performanceNowMilliseconds(this.#performance)
+    return new Promise<OutputResourceLease>((resolve, reject) => {
+      const request: OutputResourceRequest = {
+        activeFiles,
+        outstandingWriteBytes,
+        bufferedBytes,
+        signal,
+        ...(queuedAtMilliseconds === undefined ? {} : { queuedAtMilliseconds }),
+        resolve,
+        reject,
+        abort: () => {
+          if (!request.pending) return
+          request.pending = false
+          const index = this.#requests.indexOf(request)
+          if (index >= 0) this.#requests.splice(index, 1)
+          reject(signal.reason ?? new DOMException('Output resource admission aborted', 'AbortError'))
+          this.#pump()
+        },
+        pending: true,
+      }
+      this.#requests.push(request)
+      signal.addEventListener('abort', request.abort, { once: true })
+      if (signal.aborted) request.abort()
+      else this.#pump()
+    })
+  }
+
+  #validateRequest(activeFiles: number, outstandingWriteBytes: bigint, bufferedBytes: bigint): void {
+    if (activeFiles > this.#limits.concurrentFiles) {
+      throw new OutputBudgetExceededError(
+        'active files',
+        BigInt(this.#limits.concurrentFiles),
+        BigInt(activeFiles),
+      )
+    }
+    if (outstandingWriteBytes < 0n ||
+        outstandingWriteBytes > this.#limits.maximumOutstandingWriteBytes) {
+      throw new OutputBudgetExceededError(
+        'outstanding write bytes',
+        this.#limits.maximumOutstandingWriteBytes,
+        outstandingWriteBytes,
+      )
+    }
+    if (bufferedBytes < 0n || bufferedBytes > this.#limits.maximumBufferedBytes) {
+      throw new OutputBudgetExceededError(
+        'buffered bytes',
+        this.#limits.maximumBufferedBytes,
+        bufferedBytes,
+      )
+    }
+  }
+
+  #pump(): void {
+    while (true) {
+      const index = this.#requests.findIndex(request => this.#canAdmit(request))
+      if (index < 0) return
+      const [request] = this.#requests.splice(index, 1)
+      if (request === undefined) throw new Error('output resource admission queue was corrupted')
+      request.pending = false
+      request.signal.removeEventListener('abort', request.abort)
+      this.#activeFiles += request.activeFiles
+      this.#outstandingWriteBytes += request.outstandingWriteBytes
+      this.#bufferedBytes += request.bufferedBytes
+      this.#peakActiveFiles = Math.max(this.#peakActiveFiles, this.#activeFiles)
+      this.#peakOutstandingWriteBytes = maxBigInt(
+        this.#peakOutstandingWriteBytes,
+        this.#outstandingWriteBytes,
+      )
+      this.#peakBufferedBytes = maxBigInt(this.#peakBufferedBytes, this.#bufferedBytes)
+      this.#observeAdmission(request)
+      request.resolve(this.#lease(request))
+    }
+  }
+
+  #canAdmit(request: OutputResourceRequest): boolean {
+    return this.#activeFiles + request.activeFiles <= this.#limits.concurrentFiles &&
+      this.#outstandingWriteBytes + request.outstandingWriteBytes <=
+        this.#limits.maximumOutstandingWriteBytes &&
+      this.#bufferedBytes + request.bufferedBytes <= this.#limits.maximumBufferedBytes
+  }
+
+  #lease(request: OutputResourceRequest): OutputResourceLease {
+    let released = false
+    return Object.freeze({
+      release: () => {
+        if (released) return
+        released = true
+        this.#activeFiles -= request.activeFiles
+        this.#outstandingWriteBytes -= request.outstandingWriteBytes
+        this.#bufferedBytes -= request.bufferedBytes
+        if (this.#activeFiles < 0 || this.#outstandingWriteBytes < 0n || this.#bufferedBytes < 0n) {
+          throw new Error('output resource accounting underflowed')
+        }
+        this.#pump()
+      },
+    })
+  }
+
+  #observeAdmission(request: OutputResourceRequest): void {
+    const waitMilliseconds = performanceElapsedMilliseconds(
+      request.queuedAtMilliseconds,
+      performanceNowMilliseconds(this.#performance),
+    )
+    if (waitMilliseconds === undefined) return
+    observePerformance(this.#performance, summary => {
+      if (request.activeFiles > 0) {
+        summary.observeOutputResource({
+          resource: 'active_files',
+          waitMilliseconds,
+          peak: this.#peakActiveFiles,
+        })
+      }
+      if (request.outstandingWriteBytes > 0n) {
+        summary.observeOutputResource({
+          resource: 'write_bytes',
+          waitMilliseconds,
+          peak: this.#peakOutstandingWriteBytes,
+        })
+      }
+      if (request.bufferedBytes > 0n) {
+        summary.observeOutputResource({
+          resource: 'buffered_bytes',
+          waitMilliseconds,
+          peak: this.#peakBufferedBytes,
+        })
+      }
+    })
+  }
+}
+
+function budgetedOutputTransaction(
+  transaction: OutputFileTransaction,
+  budget: OutputResourceBudget,
+): OutputFileTransaction {
+  const budgeted: OutputFileTransaction = {
+    writeRange: (offset, data, signal) => budget.runWrite(
+      BigInt(data.byteLength),
+      signal,
+      () => transaction.writeRange(offset, data, signal),
+    ),
+    automaticCheckpoint: (trigger, costBudget, signal) =>
+      transaction.automaticCheckpoint(trigger, costBudget, signal),
+    commit: signal => transaction.commit(signal),
+    retire: reason => transaction.retire(reason),
+    pause: reason => transaction.pause(reason),
+  }
+  return Object.freeze(budgeted)
+}
+
+function maxBigInt(left: bigint, right: bigint): bigint {
+  return left >= right ? left : right
 }
