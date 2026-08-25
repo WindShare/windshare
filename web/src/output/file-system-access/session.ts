@@ -11,6 +11,7 @@ import {
   snapshotMaterializationRootRelativePath,
 } from '../../transfer/job/coordinate/direct-tree'
 import {
+  observePerformance,
   recordOutputException,
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
@@ -29,14 +30,16 @@ import {
 import {
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
-import {
-  fileCheckpointIsComplete,
-  type FileCheckpointV2,
-} from '../persistence/checkpoint'
-import type { FinalFileCheckpointProof } from '../persistence/journal'
+import type {
+  FSATerminalDrain,
+  FSATerminalExclusiveAuthority,
+  FSATerminalMutationKind,
+} from '../browser/mutation-coordination/model'
 import { decideCollisionName } from '../planning'
 import type {
   PersistentDirectoryMaterialization,
+  PersistentDirectoryLedgerMaterialization,
+  PersistentDirectoryLedgerRequest,
   PersistentFileRequest,
   PersistentFileTransactionPort,
   ActivatablePersistentMaterializationPort,
@@ -44,7 +47,16 @@ import type {
   PersistentOutputNamespaceClaimPort,
   PersistentTreeTraceEvent,
 } from '../persistent-tree/contracts'
-import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
+import type {
+  MaterializationDirectoryAdmittedEntryV1,
+  MaterializationDirectoryFinalization,
+  MaterializationDirectoryFinalizedEntryV1,
+} from '../materialization-ledger/model'
+import {
+  type MaterializationLedgerSealPurpose,
+  type MaterializationLedgerSealV1,
+} from '../materialization-ledger/model'
+import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import {
   createPersistentOutputStageAuthority,
@@ -53,10 +65,11 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import {
   openFSAFileCheckpointRepository,
-  scanAllFSAFileCheckpoints,
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
+  type FSASemanticOutputRepository,
 } from './checkpoint-repository'
+import type { PersistentDirectTreeMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
 import type {
   CompatibleNameActivationLedger,
   CompatibleNameCoordinator,
@@ -67,6 +80,7 @@ import type {
   CompatibleNameRepairProjectionSource,
 } from './compatible-name/coordinator'
 import { CompatibleNamePathAuthority } from './compatible-name/coordinator'
+import { compatibleNameFileTransaction } from './compatible-name/file-transaction'
 import type {
   CompatibleNamePendingTerminalOutcomeV1,
   CompatibleNameRepairSummary,
@@ -80,6 +94,11 @@ import {
   outputTrace,
   reservationCreated,
 } from './session-diagnostics'
+import {
+  FSASettlementLedgerAuthority,
+  type FSAResumableCheckpointEvidence,
+} from './settlement-ledger'
+import { closeFailedFSAAssembly } from './assembly-cleanup'
 
 
 export type {
@@ -117,11 +136,6 @@ export type FSAReservationTraceEvent =
 export type FSAOutputTraceEvent = FSAReservationTraceEvent | PersistentTreeTraceEvent
 export type FSAOutputTrace = (event: FSAOutputTraceEvent) => void
 
-/**
- * The settlement observer deliberately exposes proofs instead of browser handles.
- * Its callback is serialized by, and cannot outlive, the operation's root mutation
- * lease, so lifecycle code can make one final ownership decision without a reopen gap.
- */
 export interface FSAFinalSettlementObservation {
   persistCompatibleNamePendingOutcome(outcome: CompatibleNamePendingTerminalOutcomeV1): Promise<void>
   drainCompatibleNameProjector(
@@ -129,14 +143,14 @@ export interface FSAFinalSettlementObservation {
   ): Promise<CompatibleNameRepairSummary | undefined>
   clearCompatibleNamePendingOutcome(): Promise<void>
   removeVerifiedEmptyCompatibleNameRepair(): Promise<CompatibleNameEmptyRepairRemoval>
-  beginEvidenceObservation(): void
   verifyOperationBinding(): Promise<void>
-  verifyDirectory(path: readonly string[], ownedObjectId: string): Promise<void>
-  verifyCheckpointFile(checkpoint: FileCheckpointV2): Promise<void>
-  committedCheckpoints(): Promise<readonly FileCheckpointV2[]>
-  candidateCheckpoints(): Promise<readonly FileCheckpointV2[]>
-  finalCheckpointProof(recordId: string, generation: bigint): Promise<FinalFileCheckpointProof>
-  retireCheckpoints(): Promise<void>
+  sealMaterializationLedger(input: Readonly<{
+    evidence: PersistentDirectTreeMaterializationEvidence
+    sealSequence: bigint
+    purpose: MaterializationLedgerSealPurpose
+  }>): Promise<MaterializationLedgerSealV1>
+  resumableCheckpointEvidence(): Promise<FSAResumableCheckpointEvidence>
+  retireRecoveryMetadata(): Promise<void>
 }
 
 export interface ReserveNewFileSystemAccessOutputOptions {
@@ -164,6 +178,7 @@ export interface AssembleNewFileSystemAccessOutputOptions {
   readonly binding: PersistedFSAOperationBinding
   readonly operationRepository: FSAOperationBindingRepository
   readonly rootLease: FSARootMutationLease
+  readonly maximumConcurrentInitialClaimInspections?: number
   readonly compatibleNameCoordinator?: CompatibleNameCoordinator
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
   readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
@@ -199,10 +214,13 @@ export class FileSystemAccessOutputSession implements
   readonly #compatibleNames: CompatibleNamePathAuthority
   readonly #stageAuthority: PersistentOutputStageAuthority | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #settlementLedger: FSASettlementLedgerAuthority
   #settlementStarted = false
-  #evidenceObservationStarted = false
   #settlementObservationActive = false
+  #terminalDrain: FSATerminalDrain | undefined
   #activationPromise: Promise<void> | undefined
+  #outputClosePromise: Promise<void> | undefined
+  #rootReleasePromise: Promise<void> | undefined
   #closePromise: Promise<void> | undefined
 
   constructor(input: Readonly<{
@@ -229,6 +247,20 @@ export class FileSystemAccessOutputSession implements
     this.#compatibleNames = input.compatibleNames
     this.#stageAuthority = input.stageAuthority
     this.#diagnostics = input.diagnostics
+    const ledgerBinding = createMaterializationLedgerBinding({
+      operationId: input.checkpoints.binding.operationId,
+      receiveIntentDigest: input.checkpoints.binding.receiveIntentDigest,
+      materializationBindingDigest: input.checkpoints.binding.materializationBindingDigest,
+      authorityRef: input.checkpoints.binding.authorityRef,
+    })
+    this.#settlementLedger = new FSASettlementLedgerAuthority({
+      intent: input.intent,
+      checkpoints: input.checkpoints,
+      binding: ledgerBinding,
+      ...(input.diagnostics?.performance === undefined
+        ? {}
+        : { performance: input.diagnostics.performance }),
+    })
   }
 
   async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
@@ -248,6 +280,35 @@ export class FileSystemAccessOutputSession implements
   ): Promise<PersistentDirectoryMaterialization> {
     this.#requireMaterializing()
     return this.#materialization.ensureDirectory(path)
+  }
+
+  materializeDirectory(
+    request: PersistentDirectoryLedgerRequest,
+  ): Promise<PersistentDirectoryLedgerMaterialization> {
+    this.#requireMaterializing()
+    const materialize = this.#materialization.materializeDirectory
+    if (materialize === undefined) {
+      throw new DOMException(
+        'DirectTree materialization requires durable directory-ledger authority',
+        'InvalidStateError',
+      )
+    }
+    return materialize.call(this.#materialization, request)
+  }
+
+  finalizeDirectory(
+    admission: MaterializationDirectoryAdmittedEntryV1,
+    outcome: MaterializationDirectoryFinalization,
+  ): Promise<MaterializationDirectoryFinalizedEntryV1> {
+    this.#requireDirectoryFinalizable()
+    const finalize = this.#materialization.finalizeDirectory
+    if (finalize === undefined) {
+      throw new DOMException(
+        'DirectTree materialization requires durable directory-ledger authority',
+        'InvalidStateError',
+      )
+    }
+    return finalize.call(this.#materialization, admission, outcome)
   }
 
   bindDirectoryNamespace(claim: PersistentDirectoryNamespaceClaim): void {
@@ -292,21 +353,51 @@ export class FileSystemAccessOutputSession implements
     return this.#compatibleNames.active
   }
 
-  async runFinalSettlement<T>(
+  beginTerminal(kind: FSATerminalMutationKind): void {
+    if (this.#terminalDrain !== undefined) {
+      if (this.#terminalDrain.kind !== kind) {
+        throw new DOMException('FSA terminal cut kind cannot change', 'InvalidStateError')
+      }
+      return
+    }
+    if (this.#settlementStarted || this.#outputClosePromise !== undefined ||
+        this.#rootReleasePromise !== undefined) {
+      throw new DOMException('FSA terminal cut is unavailable after shutdown', 'InvalidStateError')
+    }
+    // This method intentionally performs no await: cancellation callers close native admission
+    // before they finish already-admitted directory descendants.
+    this.#terminalDrain = this.#rootLease.scheduler.beginTerminal(kind)
+    if (kind === 'settle-operation') {
+      observePerformance(this.#diagnostics?.performance, summary =>
+        summary.markMilestone('settlement_started'))
+    }
+    outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'started' })
+  }
+
+  runFinalSettlement<T>(
+    kind: FSATerminalMutationKind,
     observe: (authority: FSAFinalSettlementObservation) => Promise<T>,
   ): Promise<T> {
-    if (this.#settlementStarted || this.#closePromise !== undefined) {
+    this.beginTerminal(kind)
+    if (this.#settlementStarted || this.#outputClosePromise !== undefined) {
       throw new DOMException('FSA materialization settlement already started', 'InvalidStateError')
     }
     this.#settlementStarted = true
-    // Quiescing writers precedes the mutation barrier, while repository and Web Lock
-    // resources remain live until the settlement cut explicitly closes the session.
-    await this.#materialization.close()
+    const materializationDrain = this.#materialization.close()
+    return this.#runFinalSettlement(materializationDrain, observe)
+  }
+
+  async #runFinalSettlement<T>(
+    materializationDrain: Promise<void>,
+    observe: (authority: FSAFinalSettlementObservation) => Promise<T>,
+  ): Promise<T> {
+    const terminalDrain = this.#terminalDrain!
+    await Promise.all([materializationDrain, terminalDrain.drained])
+    this.#requireDrainedScheduler()
     this.#settlementObservationActive = true
     try {
-      const result = await this.#rootLease.authority.run(
-        'settle-operation',
-        () => observe(this.#observation()),
+      const result = await terminalDrain.runExclusive(
+        authority => observe(this.#observation(authority)),
       )
       outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'completed' })
       return result
@@ -330,48 +421,74 @@ export class FileSystemAccessOutputSession implements
     return this.#closePromise
   }
 
+  closeForTerminalSettlement(): Promise<void> {
+    if (this.#settlementObservationActive) {
+      return Promise.reject(new DOMException(
+        'FSA output authorities cannot close during final observation',
+        'InvalidStateError',
+      ))
+    }
+    this.#outputClosePromise ??= this.#closeOutputAuthorities()
+    return this.#outputClosePromise
+  }
+
+  releaseRootLease(): Promise<void> {
+    this.#rootReleasePromise ??= this.#rootLease.release()
+    return this.#rootReleasePromise
+  }
+
   async #close(): Promise<void> {
     const failures: unknown[] = []
-    let outerFailureObserved = false
+    try {
+      await this.closeForTerminalSettlement()
+    } catch (error) {
+      failures.push(error)
+    }
+    try {
+      await this.releaseRootLease()
+    } catch (error) {
+      failures.push(error)
+      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
+    }
+    if (failures.length === 0) return
+    outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
+    if (failures.length === 1) throw failures[0]
+    throw new AggregateError(failures, 'FSA output authorities did not close cleanly')
+  }
+
+  async #closeOutputAuthorities(): Promise<void> {
+    const failures: unknown[] = []
     try {
       await this.#materialization.close()
     } catch (error) {
-      // File-transaction cleanup owns its native classification; this layer only
-      // preserves that failure while releasing the remaining FSA authorities.
+      // File-transaction cleanup owns its native classification; this layer preserves
+      // that failure while still releasing repository-backed output authorities.
       failures.push(error)
     }
     try {
       this.#checkpoints.close()
     } catch (error) {
       failures.push(error)
-      outerFailureObserved = true
       recordOutputException(this.#diagnostics?.failures?.cleanup, error)
     }
     try {
       this.#compatibleNames.close()
     } catch (error) {
       failures.push(error)
-      outerFailureObserved = true
-      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-    }
-    try {
-      await this.#rootLease.release()
-    } catch (error) {
-      failures.push(error)
-      outerFailureObserved = true
       recordOutputException(this.#diagnostics?.failures?.cleanup, error)
     }
     if (failures.length !== 0) {
-      if (outerFailureObserved) {
-        outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
-      }
+      outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
       if (failures.length === 1) throw failures[0]
-      throw new AggregateError(failures, 'FSA output authorities did not close cleanly')
+      throw new AggregateError(failures, 'FSA output repositories did not close cleanly')
     }
     outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'completed' })
   }
 
-  #observation(): FSAFinalSettlementObservation {
+  #observation(authority: FSATerminalExclusiveAuthority): FSAFinalSettlementObservation {
+    if (authority.kind !== this.#terminalDrain?.kind) {
+      throw new DOMException('FSA terminal exclusive authority is foreign', 'InvalidStateError')
+    }
     return Object.freeze({
       persistCompatibleNamePendingOutcome: (outcome: CompatibleNamePendingTerminalOutcomeV1) =>
         this.#compatibleNames.persistPendingTerminalOutcome(outcome),
@@ -381,13 +498,6 @@ export class FileSystemAccessOutputSession implements
         this.#compatibleNames.clearPendingTerminalOutcome(),
       removeVerifiedEmptyCompatibleNameRepair: () =>
         this.#compatibleNames.removeVerifiedEmptyRepairWithinMutation(this.#tree.ownedRoot()),
-      beginEvidenceObservation: () => {
-        if (this.#evidenceObservationStarted) {
-          throw new DOMException('FSA settlement evidence observation already started', 'InvalidStateError')
-        }
-        this.#evidenceObservationStarted = true
-        outputTrace(this.#diagnostics, { eventName: 'settlement', transition: 'started' })
-      },
       verifyOperationBinding: async () => {
         await verifyFSAOperationBinding({
           repository: this.#operationRepository,
@@ -398,68 +508,35 @@ export class FileSystemAccessOutputSession implements
             : { stageScope: this.#stageAuthority.bindingScope() }),
         })
       },
-      verifyDirectory: async (path: readonly string[], ownedObjectId: string) => {
-        if (!await this.#tree.validateDirectory(path, ownedObjectId)) {
-          throw new TargetOwnershipUnknownError('settlement', this.intent.operationId)
-        }
-      },
-      verifyCheckpointFile: (checkpoint: FileCheckpointV2) =>
-        this.#verifyCheckpointFile(checkpoint),
-      committedCheckpoints: () => scanAllFSAFileCheckpoints(this.#checkpoints, 'committed'),
-      candidateCheckpoints: () => scanAllFSAFileCheckpoints(this.#checkpoints, 'candidates'),
-      finalCheckpointProof: (recordId: string, generation: bigint) =>
-        this.#checkpoints.finalCheckpointProof(recordId, generation),
-      retireCheckpoints: () => this.#checkpoints.retireOperation(),
+      sealMaterializationLedger: (input: Parameters<
+        FSAFinalSettlementObservation['sealMaterializationLedger']
+      >[0]) => this.#settlementLedger.seal(input),
+      resumableCheckpointEvidence: () => this.#settlementLedger.resumableCheckpointEvidence(),
+      retireRecoveryMetadata: () => this.#settlementLedger.retireRecoveryMetadata(),
     })
   }
 
-  async #verifyCheckpointFile(checkpoint: FileCheckpointV2): Promise<void> {
-    const file = await this.#tree.openFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
-    if (file === undefined) {
-      throw new TargetOwnershipUnknownError('settlement', this.intent.operationId)
-    }
-    try {
-      const size = await file.size()
-      const durableEnd = checkpoint.verifiedRanges.at(-1)?.end ?? 0n
-      const expectedSize = fileCheckpointIsComplete(checkpoint)
-        ? checkpoint.exactSize
-        : undefined
-      if (size < durableEnd || size > checkpoint.exactSize ||
-          (expectedSize !== undefined && size !== expectedSize)) {
-        throw new TargetOwnershipUnknownError('settlement', this.intent.operationId)
-      }
-      await file.verify(fileCheckpointIsComplete(checkpoint) ? 'commit' : 'checkpoint')
-    } finally {
-      await file.close()
+  #requireDrainedScheduler(): void {
+    const diagnostics = this.#rootLease.scheduler.diagnostics()
+    if (diagnostics.activeWriters !== 0 || diagnostics.queuedWriters !== 0 ||
+        diagnostics.activeNamespaceMutations !== 0 || diagnostics.queuedNamespaceMutations !== 0) {
+      throw new DOMException('FSA terminal cut retained active native work', 'InvalidStateError')
     }
   }
 
   #requireMaterializing(): void {
-    if (this.#settlementStarted || this.#closePromise !== undefined) {
+    if (this.#terminalDrain !== undefined || this.#settlementStarted ||
+        this.#outputClosePromise !== undefined || this.#closePromise !== undefined) {
       throw new DOMException('FSA materialization is no longer mutable', 'InvalidStateError')
     }
   }
-}
 
-function compatibleNameFileTransaction(
-  transaction: PersistentFileTransactionPort,
-  commitMapping: () => Promise<void>,
-): PersistentFileTransactionPort {
-  return Object.freeze({
-    revision: transaction.revision,
-    ownedObjectId: transaction.ownedObjectId,
-    get verifiedRanges() { return transaction.verifiedRanges },
-    writeRange: (offset: bigint, data: Uint8Array, signal?: AbortSignal) =>
-      transaction.writeRange(offset, data, signal),
-    checkpoint: (signal?: AbortSignal) => transaction.checkpoint(signal),
-    commit: async (signal?: AbortSignal) => {
-      const proof = await transaction.commit(signal)
-      // The final checkpoint proof is durable before the physical mapping becomes publishable.
-      await commitMapping()
-      return proof
-    },
-    close: () => transaction.close(),
-  })
+  #requireDirectoryFinalizable(): void {
+    if (this.#settlementStarted || this.#outputClosePromise !== undefined ||
+        this.#closePromise !== undefined) {
+      throw new DOMException('FSA directory finalization is no longer mutable', 'InvalidStateError')
+    }
+  }
 }
 
 export async function reserveNewFileSystemAccessOutput(
@@ -529,7 +606,7 @@ export async function assembleNewFileSystemAccessOutput(
       ? {}
       : { coordinator: options.compatibleNameCoordinator }),
   })
-  let checkpoints: FSAFileCheckpointRepository | undefined
+  let checkpoints: FSASemanticOutputRepository | undefined
   try {
     checkpoints = await openFSAFileCheckpointRepository(
       options,
@@ -549,6 +626,13 @@ export async function assembleNewFileSystemAccessOutput(
     const materialization = await PersistentTreeOutputSession.createNew({
       tree,
       checkpoints,
+      semantic: checkpoints,
+      ...(options.maximumConcurrentInitialClaimInspections === undefined
+        ? {}
+        : {
+            maximumConcurrentInitialClaimInspections:
+              options.maximumConcurrentInitialClaimInspections,
+          }),
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
@@ -587,31 +671,6 @@ export async function assembleNewFileSystemAccessOutput(
     }
     throw error
   }
-}
-
-function closeFailedFSAAssembly(
-  checkpoints: FSAFileCheckpointRepository | undefined,
-  compatibleNames: CompatibleNamePathAuthority,
-  diagnostics: OutputDiagnosticsPorts | undefined,
-): unknown {
-  const failures: unknown[] = []
-  for (const close of [
-    () => checkpoints?.close(),
-    () => compatibleNames.close(),
-  ]) {
-    try {
-      close()
-    } catch (error) {
-      failures.push(error)
-      recordOutputException(diagnostics?.failures?.cleanup, error)
-    }
-  }
-  if (failures.length === 0) return undefined
-  if (failures.length === 1) return failures[0]
-  return new AggregateError(
-    failures,
-    'FSA assembly cleanup could not close all compatible-name authorities',
-  )
 }
 
 async function requireDirectoryTreeArtifact(

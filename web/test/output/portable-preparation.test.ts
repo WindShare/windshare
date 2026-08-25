@@ -88,6 +88,7 @@ describe('portable exact-preparation execution routes', () => {
     if (prepared.kind !== 'accepted') return
 
     const request = outputRequest(intent, evidence.entries[0]!, ORIGINAL_BYTES)
+    expect(prepared.execution.output.executionProfile.maximumConcurrentFilePipelines).toBe(1)
     expect(prepared.execution.output.capabilities.modificationTime).toBe(false)
     expect(request.modifiedTime).toBeUndefined()
     const opened = await prepared.execution.output.beginFile(

@@ -364,6 +364,7 @@ describe('File System Access DirectTree lifecycle', () => {
     parent.onFileCreated = () => ordering.push('created')
     const transaction = await session.beginFile({
       materializationRelativePath: [],
+      recovery: confirmedRecoveryPolicy(),
       openRevision: async () => {
         ordering.push('revision-opened')
         return {
@@ -394,6 +395,7 @@ describe('File System Access DirectTree lifecycle', () => {
     })
     const resumed = await reopened.beginFile({
       materializationRelativePath: [],
+      recovery: confirmedRecoveryPolicy(),
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
@@ -584,6 +586,7 @@ describe('File System Access settlement authority', () => {
       worker: SUCCESS,
       materialization: { entryCount: 1n, fileCount: 1n, directoryCount: 0n, rawBytes: 2n },
     }, SIGNAL)).resolves.toMatchObject({ kind: 'published' })
+    await session.releaseRootLease()
     expect(retired).toBe(1)
     expect(locks.releaseCount).toBe(1)
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(1)
@@ -652,7 +655,7 @@ describe('File System Access settlement authority', () => {
     })
   })
 
-  it('reduces a replacement at final observation to NeedsAttention without retiring proof', async () => {
+  it('settles from the durable seal without a successful-path physical rescan', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     let retired = 0
@@ -682,11 +685,9 @@ describe('File System Access settlement authority', () => {
       transferJobId,
       worker: SUCCESS,
       materialization: { entryCount: 1n, fileCount: 1n, directoryCount: 0n, rawBytes: 1n },
-    }, SIGNAL)).resolves.toMatchObject({
-      kind: 'needs-attention',
-      reason: 'target-ownership-unknown',
-    })
-    expect(retired).toBe(0)
+    }, SIGNAL)).resolves.toMatchObject({ kind: 'published' })
+    await session.releaseRootLease()
+    expect(retired).toBe(1)
   })
 
   it('preserves paused ranges, releases once, and publishes a reopened single file', async () => {
@@ -725,6 +726,7 @@ describe('File System Access settlement authority', () => {
       completedFileCount: 0n,
       completedBytes: 0n,
     })
+    await first.releaseRootLease()
     expect(locks.releaseCount).toBe(1)
     expect(retired).toBe(0)
 
@@ -757,6 +759,7 @@ describe('File System Access settlement authority', () => {
       worker: SUCCESS,
       materialization: { entryCount: 1n, fileCount: 1n, directoryCount: 0n, rawBytes: 4n },
     }, SIGNAL)).resolves.toMatchObject({ kind: 'published' })
+    await reopened.releaseRootLease()
     expect(locks.releaseCount).toBe(2)
     expect(retired).toBe(1)
   })
@@ -1111,3 +1114,15 @@ describe('File System Access fresh-page discard authority', () => {
     expect(fixture.retired()).toBe(1)
   })
 })
+
+function confirmedRecoveryPolicy() {
+  return Object.freeze({
+    kind: 'preserve' as const,
+    costBudget: Object.freeze({
+      maximumPrefixCopyBytes: 1_024n,
+      maximumCumulativeWriteAmplificationBytes: 4_096n,
+      maximumPeakTemporaryBytes: 1_024n,
+    }),
+    confirmTemporarySpace: () => true,
+  })
+}

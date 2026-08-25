@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import type { DirectoryWork, PendingFile } from '../../src/transfer/job/contract'
-import type { TransferJobLimits } from '../../src/transfer/job/limits'
+import type {
+  TransferExecutionLimits,
+  TransferJobLimits,
+} from '../../src/transfer/job/limits'
+import { OutputResourceBudget } from '../../src/transfer/job/scheduler'
 import {
   snapshotLogicalArtifactPath,
   snapshotMaterializationRootRelativePath,
@@ -20,12 +24,16 @@ import { fileEntry, identity, identityText } from './v2-job-fixture'
 
 const TEST_PENDING_FILE_METADATA_BYTES = 1024n * 1024n
 const TEST_LIMITS: TransferJobLimits = Object.freeze({
-  concurrentFiles: 2,
   concurrentDirectories: 2,
   pendingFiles: 4,
   pendingFileMetadataBytes: TEST_PENDING_FILE_METADATA_BYTES,
   catalogNodeClaims: 16,
   directoryAdmissions: 16,
+})
+const TEST_EXECUTION_LIMITS: TransferExecutionLimits = Object.freeze({
+  concurrentFiles: 2,
+  maximumOutstandingWriteBytes: 16n,
+  maximumBufferedBytes: 16n,
 })
 
 describe('worker family supervision', () => {
@@ -135,6 +143,8 @@ describe('worker family supervision', () => {
     const running = runPreparedFileWorkers({
       files: [first, second],
       limits: TEST_LIMITS,
+      execution: TEST_EXECUTION_LIMITS,
+      resources: new OutputResourceBudget(TEST_EXECUTION_LIMITS),
       signal: controller.signal,
       abort: (failure) => {
         abortCalls += 1
@@ -193,6 +203,8 @@ describe('worker family supervision', () => {
       root,
       directFiles,
       limits: TEST_LIMITS,
+      execution: TEST_EXECUTION_LIMITS,
+      resources: new OutputResourceBudget(TEST_EXECUTION_LIMITS),
       signal: controller.signal,
       abort: (failure) => {
         abortCalls += 1

@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   CHECKPOINT_DATABASE_VERSION,
-  INDEXEDDB_V9_STORE_SCHEMAS,
+  INDEXEDDB_V10_STORE_SCHEMAS,
 } from '../../../src/output/browser/indexeddb-database'
 import {
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
@@ -21,10 +21,10 @@ import {
   storedReceiveLifecycleState,
 } from '../../../src/output/workspace/state-codec'
 
-describe('IndexedDB v9 operation repository contract', () => {
+describe('IndexedDB v10 operation repository contract', () => {
   it('isolates V2 receive authority and Direct ZIP journal stores', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(9)
-    const stores = new Map(INDEXEDDB_V9_STORE_SCHEMAS.map(value => [value.name, value]))
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(10)
+    const stores = new Map(INDEXEDDB_V10_STORE_SCHEMAS.map(value => [value.name, value]))
     expect([...stores.keys()]).not.toContain('receive-operation-v1-records')
     expect(stores.get('receive-operation-v2-records')).toEqual(schema(
       'receive-operation-v2-records',

@@ -1,375 +1,441 @@
 import { describe, expect, it } from 'vitest'
 
-import { BrowserFileLineageAuthority } from '../../src/output/browser/filesystem-file-lineage'
+import {
+  createBrowserPersistentFile,
+  type BrowserPersistentFile,
+} from '../../src/output/browser/filesystem-persistent-file'
+import {
+  fsaAuthorityCacheForRoot,
+  type FSAAuthorityCache,
+  type FSAVerifiedDirectoryAuthority,
+} from '../../src/output/browser/mutation-coordination/authority-cache'
 import {
   acquireFSARootMutationLease,
+  type BrowserLockHandle,
   type BrowserLockManagerRuntime,
-  type FSANamespaceMutationKind,
-  type FSARootMutationAuthority,
 } from '../../src/output/browser/namespace-mutation'
 import type { PersistedFSAOperationBinding } from '../../src/output/browser/indexeddb-root-binding'
-import type {
-  PersistentHandleRecord,
-  PersistentHandleRepository,
-} from '../../src/output/persistence/journal'
-import type { OpenedFileRevision, PersistentTreeFile } from '../../src/output/persistent-tree/contracts'
 import {
   createPersistentOutputStageAuthority,
   type PersistentOutputStageMilestone,
 } from '../../src/output/persistent-tree/stage-diagnostics'
-import {
-  createFSANamedEntryReservation,
-  createSingleFileDirectoryTreeArtifact,
-  type ReceiveIntent,
-} from '../../src/transfer/intent'
+import type { ReceiveIntent } from '../../src/transfer/intent'
 import { identity } from './planning/fixture'
 
 describe('browser file writer mutation lifecycle', () => {
-  it('serializes writer open/write and close as owned browser mutations', async () => {
+  it('holds the same-parent lane from verification through native close', async () => {
     const fixture = await writerFixture()
-
-    fixture.timeline.length = 0
+    await fixture.file.openWriter('preserve')
     await fixture.file.writeAt(7n, Uint8Array.of(3, 4))
+    let namespaceEntered = false
+    const namespace = fixture.lease.scheduler.runNamespace(
+      [fixture.parent.schedulerIdentity],
+      'create-directory',
+      async () => { namespaceEntered = true },
+    )
+
+    await Promise.resolve()
+    expect(namespaceEntered).toBe(false)
+    expect(fixture.lease.scheduler.diagnostics().activeWriters).toBe(1)
     await fixture.file.flush()
+    await namespace
 
     expect(fixture.timeline).toEqual([
-      'admit:open-writer',
-      'enter:open-writer',
+      'verify:writer-open',
       'browser:createWritable',
       'browser:write',
-      'return:open-writer',
-      'admit:commit-file',
-      'enter:commit-file',
       'browser:close',
-      'return:commit-file',
     ])
-    expect(fixture.writer.writeCalls).toBe(1)
-    expect(fixture.writer.closeCalls).toBe(1)
-    fixture.retire()
-    await fixture.lease.release()
+    expect(namespaceEntered).toBe(true)
+    expect(fixture.lease.scheduler.diagnostics().activeWriters).toBe(0)
+    await fixture.release()
+    expect(fixture.authorities.diagnostics().closed).toBe(true)
   })
 
-  it('keeps close queued behind an earlier root mutation', async () => {
-    const fixture = await writerFixture()
-    await fixture.file.writeAt(0n, Uint8Array.of(5))
-    fixture.timeline.length = 0
-    const entered = deferred<void>()
-    const releaseBlocker = deferred<void>()
-
-    const blocker = fixture.mutations.run('create-directory', async () => {
-      fixture.timeline.push('browser:blocker-enter')
-      entered.resolve()
-      await releaseBlocker.promise
-      fixture.timeline.push('browser:blocker-return')
+  it('allows independent owned files to keep native writers open concurrently', async () => {
+    const firstWrite = deferred<void>()
+    const secondWrite = deferred<void>()
+    const fixture = await writerFixture({
+      maximumActiveWriters: 2,
+      writers: [
+        new InstrumentedWriter([], { writeGate: firstWrite }),
+        new InstrumentedWriter([], { writeGate: secondWrite }),
+      ],
     })
-    await entered.promise
-    const flush = fixture.file.flush()
+    await Promise.all([
+      fixture.file.openWriter('preserve'),
+      fixture.otherFile!.openWriter('preserve'),
+    ])
+    const first = fixture.file.writeAt(0n, Uint8Array.of(1))
+    const second = fixture.otherFile!.writeAt(0n, Uint8Array.of(2))
+    await Promise.all(fixture.writers.map(writer => writer.writeStarted.promise))
 
-    expect(fixture.writer.closeCalls).toBe(0)
-    expect(fixture.timeline).toEqual([
-      'admit:create-directory',
-      'enter:create-directory',
-      'browser:blocker-enter',
-      'admit:commit-file',
-    ])
-    releaseBlocker.resolve()
-    await blocker
-    await flush
-    expect(fixture.timeline).toEqual([
-      'admit:create-directory',
-      'enter:create-directory',
-      'browser:blocker-enter',
-      'admit:commit-file',
-      'browser:blocker-return',
-      'return:create-directory',
-      'enter:commit-file',
-      'browser:close',
-      'return:commit-file',
-    ])
-    fixture.retire()
-    await fixture.lease.release()
+    expect(fixture.lease.scheduler.diagnostics()).toMatchObject({
+      activeWriters: 2,
+      peakActiveWriters: 2,
+    })
+    firstWrite.resolve()
+    secondWrite.resolve()
+    await Promise.all([first, second])
+    await Promise.all([fixture.file.flush(), fixture.otherFile!.flush()])
+    expect(fixture.lease.scheduler.diagnostics().activeWriters).toBe(0)
+    await fixture.release()
   })
 
-  it('retains close-failed evidence and never retries an uncertain writer close', async () => {
+  it('preserves the exact close failure, never retries it, and releases capacity once', async () => {
     const closeFailure = new DOMException('close outcome is uncertain', 'UnknownError')
-    const fixture = await writerFixture(closeFailure)
+    const writer = new InstrumentedWriter([], { closeFailure })
+    const fixture = await writerFixture({ writers: [writer] })
+    await fixture.file.openWriter('truncate')
     await fixture.file.writeAt(0n, Uint8Array.of(9))
-    fixture.timeline.length = 0
 
     await expect(fixture.file.flush()).rejects.toBe(closeFailure)
-    const closeMilestone = fixture.milestones.find(milestone =>
+    const failedClose = fixture.milestones.find(milestone =>
       milestone.transition === 'failed' && milestone.stage === 'fsa.file.writer.close')
-    expect(closeMilestone?.transition).toBe('failed')
-    if (closeMilestone?.transition === 'failed') {
-      expect(closeMilestone.exception.raw).toBe(closeFailure)
-      expect(closeMilestone.facts.fsa?.writer).toMatchObject({
-        state: 'close-failed',
-        closeFailure: { raw: closeFailure },
-      })
+    expect(failedClose?.transition).toBe('failed')
+    if (failedClose?.transition === 'failed') {
+      expect(failedClose.exception.raw).toBe(closeFailure)
     }
-    expect(fixture.timeline).toEqual([
-      'admit:commit-file',
-      'enter:commit-file',
-      'browser:close',
-      'reject:commit-file',
-    ])
-
+    expect(fixture.lease.scheduler.diagnostics()).toMatchObject({
+      activeWriters: 0,
+      acquiredWriterLeases: 1,
+      releasedWriterLeases: 1,
+    })
     await expect(fixture.file.flush()).rejects.toBe(closeFailure)
-    expect(fixture.writer.closeCalls).toBe(1)
-    expect(fixture.milestones.filter(milestone =>
-      milestone.transition === 'failed' &&
-      milestone.stage === 'fsa.file.writer.close')).toHaveLength(1)
-    expect(fixture.timeline).toEqual([
-      'admit:commit-file',
-      'enter:commit-file',
-      'browser:close',
-      'reject:commit-file',
-    ])
-    fixture.retire()
-    await fixture.lease.release()
+    expect(writer.closeCalls).toBe(1)
+    expect(fixture.lease.scheduler.diagnostics().releasedWriterLeases).toBe(1)
+    await fixture.release()
+  })
+
+  it('retains writer ownership after a write failure until close settles', async () => {
+    const writeFailure = new DOMException('write failed', 'UnknownError')
+    const fixture = await writerFixture({
+      writers: [new InstrumentedWriter([], { writeFailure })],
+    })
+    await fixture.file.openWriter('preserve')
+    await expect(fixture.file.writeAt(0n, Uint8Array.of(5))).rejects.toBe(writeFailure)
+    let namespaceEntered = false
+    const namespace = fixture.lease.scheduler.runNamespace(
+      [fixture.parent.schedulerIdentity],
+      'remove-entry',
+      async () => { namespaceEntered = true },
+    )
+
+    await Promise.resolve()
+    expect(namespaceEntered).toBe(false)
+    expect(fixture.lease.scheduler.diagnostics().activeWriters).toBe(1)
+    await fixture.file.close()
+    await namespace
+    expect(namespaceEntered).toBe(true)
+    await fixture.release()
+  })
+
+  it('releases the lane immediately when native writer creation fails', async () => {
+    const createFailure = new DOMException('writer unavailable', 'InvalidStateError')
+    const fixture = await writerFixture({ createFailure })
+
+    await expect(fixture.file.openWriter('preserve')).rejects.toBe(createFailure)
+    expect(fixture.lease.scheduler.diagnostics()).toMatchObject({
+      activeWriters: 0,
+      acquiredWriterLeases: 1,
+      releasedWriterLeases: 1,
+    })
+    await fixture.lease.scheduler.runNamespace(
+      [fixture.parent.schedulerIdentity],
+      'create-file',
+      async () => undefined,
+    )
+    await fixture.release()
+  })
+
+  it('keeps namespace work blocked until a native abort attempt settles', async () => {
+    const abortFinished = deferred<void>()
+    const writer = new InstrumentedWriter([], { abortGate: abortFinished })
+    const fixture = await writerFixture({ writers: [writer] })
+    await fixture.file.openWriter('preserve')
+    const retirement = fixture.file.abort('cancelled')
+    await writer.abortStarted.promise
+    await expect(fixture.file.flush()).rejects.toMatchObject({ name: 'InvalidStateError' })
+    let namespaceEntered = false
+    const namespace = fixture.lease.scheduler.runNamespace(
+      [fixture.parent.schedulerIdentity],
+      'remove-entry',
+      async () => { namespaceEntered = true },
+    )
+
+    await Promise.resolve()
+    expect(namespaceEntered).toBe(false)
+    abortFinished.resolve()
+    await retirement
+    await namespace
+    expect(namespaceEntered).toBe(true)
+    expect(writer.abortReasons).toEqual(['cancelled'])
+    await fixture.release()
+  })
+
+  it('releases writer capacity once and preserves the exact native abort failure', async () => {
+    const abortFailure = new DOMException('abort outcome is uncertain', 'UnknownError')
+    const writer = new InstrumentedWriter([], { abortFailure })
+    const fixture = await writerFixture({ writers: [writer] })
+    await fixture.file.openWriter('preserve')
+
+    await expect(fixture.file.abort(abortFailure)).rejects.toBe(abortFailure)
+    const failedAbort = fixture.milestones.find(milestone =>
+      milestone.transition === 'failed' && milestone.stage === 'fsa.file.writer.abort')
+    expect(failedAbort?.transition).toBe('failed')
+    if (failedAbort?.transition === 'failed') expect(failedAbort.exception.raw).toBe(abortFailure)
+    expect(fixture.lease.scheduler.diagnostics()).toMatchObject({
+      activeWriters: 0,
+      acquiredWriterLeases: 1,
+      releasedWriterLeases: 1,
+    })
+    await expect(fixture.file.abort()).rejects.toBe(abortFailure)
+    expect(writer.abortCalls).toBe(1)
+    expect(fixture.lease.scheduler.diagnostics().releasedWriterLeases).toBe(1)
+    await fixture.release()
+  })
+
+  it('maps explicit open modes and exposes typed prefix-copy preflight', async () => {
+    const preserve = await writerFixture()
+    await preserve.file.openWriter('preserve')
+    expect(preserve.handles[0]!.keepExistingData).toEqual([true])
+    expect(preserve.file.checkpointPreflight(4096n, 1024n)).toEqual({
+      cost: {
+        prefixCopyBytes: 4096n,
+        cumulativeWriteAmplificationBytes: 5120n,
+        peakTemporaryBytes: 4096n,
+      },
+      space: 'requires-user-confirmation',
+    })
+    await preserve.file.close()
+    await preserve.release()
+
+    const truncate = await writerFixture()
+    await truncate.file.openWriter('truncate')
+    expect(truncate.handles[0]!.keepExistingData).toEqual([false])
+    expect(truncate.file.checkpointPreflight(0n, 1024n).space).toBe('within-modeled-budget')
+    await truncate.file.close()
+    await truncate.release()
   })
 })
 
-async function writerFixture(closeFailure?: unknown): Promise<Readonly<{
-  file: PersistentTreeFile
-  writer: InstrumentedWriter
+interface WriterFixtureOptions {
+  readonly maximumActiveWriters?: number
+  readonly writers?: readonly InstrumentedWriter[]
+  readonly createFailure?: unknown
+}
+
+async function writerFixture(options: WriterFixtureOptions = {}): Promise<Readonly<{
+  file: BrowserPersistentFile
+  otherFile: BrowserPersistentFile | undefined
+  writers: readonly InstrumentedWriter[]
+  handles: readonly InstrumentedFileHandle[]
+  parent: FSAVerifiedDirectoryAuthority
+  authorities: FSAAuthorityCache
   lease: Awaited<ReturnType<typeof acquireFSARootMutationLease>>
-  mutations: FSARootMutationAuthority
   timeline: string[]
-  milestones: PersistentOutputStageMilestone[]
-  retire: () => void
+  milestones: readonly PersistentOutputStageMilestone[]
+  release: () => Promise<void>
 }>> {
   const timeline: string[] = []
   const milestones: PersistentOutputStageMilestone[] = []
-  const writer = new InstrumentedWriter(timeline, closeFailure)
-  const fileHandle = new InstrumentedFileHandle('payload.bin', timeline, writer)
-  const parent = new InstrumentedDirectoryHandle('downloads', fileHandle)
-  const locks = new MemoryLockManager()
+  const writers = options.writers === undefined || options.writers.length === 0
+    ? [new InstrumentedWriter(timeline)]
+    : options.writers
+  const handles = writers.map((writer, index) => new InstrumentedFileHandle(
+    `payload-${index}.bin`,
+    timeline,
+    writer,
+    options.createFailure,
+  ))
+  const directory = new InstrumentedDirectoryHandle('downloads')
   const lease = await acquireFSARootMutationLease(
-    parent as unknown as FileSystemDirectoryHandle,
-    locks,
+    directory as unknown as FileSystemDirectoryHandle,
+    new MemoryLockManager(),
+    options.maximumActiveWriters ?? 2,
   )
-  const mutations = recordingMutationAuthority(lease.authority, timeline)
-  const operationId = identity(50)
-  const authorityRef = identity(51, 32)
-  const artifact = await createSingleFileDirectoryTreeArtifact({
-    fileId: identity(53),
-    sourcePath: 'payload.bin',
-    outputName: 'payload.bin',
-  })
-  const reservation = await createFSANamedEntryReservation({
-    operationId,
-    reservationId: identity(56),
-    artifact,
-    authorityRef,
-    logicalReservedName: 'payload.bin',
-    physicalName: 'payload.bin',
-    collisionIndex: 0,
-  })
-  const binding = {
-    intent: { operationId } as ReceiveIntent,
-    reservation,
-    parent: parent as unknown as FileSystemDirectoryHandle,
-    parentHandleId: 'test-parent',
-  } satisfies PersistedFSAOperationBinding
-  const handles = new MemoryHandleRepository()
-  const lineage = new BrowserFileLineageAuthority({
+  const binding = Object.freeze({
+    intent: { operationId: 'writer-lifecycle-operation' } as ReceiveIntent,
+    reservation: Object.freeze({}),
+    parent: directory as unknown as FileSystemDirectoryHandle,
+    parentHandleId: 'picked-parent-handle',
+  }) as PersistedFSAOperationBinding
+  const authorities = fsaAuthorityCacheForRoot({
+    owner: lease.authority,
     binding,
-    fileHandles: handles,
-    mutations,
-    prepareRoot: async () => undefined,
-    verifyParent: async () => parent as unknown as FileSystemDirectoryHandle,
-    resolveParent: async (path) => Object.freeze({
-      parent: parent as unknown as FileSystemDirectoryHandle,
-      name: path.at(-1) ?? reservation.physicalName,
-    }),
+    rootParentIdentity: lease.authority.rootParentIdentity,
   })
-  const revision: OpenedFileRevision = Object.freeze({
-    shareInstance: identity(52),
-    fileId: identity(53),
-    fileRevision: identity(54),
-    exactSize: 9n,
-  })
-  const ownedObjectId = identity(55, 32)
+  const parent = authorities.pickedParent()
   const stageAuthority = createPersistentOutputStageAuthority({
-    outputSessionId: 'writer-mutation-session',
+    outputSessionId: 'writer-lifecycle-session',
     observe: milestone => milestones.push(milestone),
   }, {
-    operationId,
-    artifactId: artifact.digest,
+    operationId: binding.intent.operationId,
+    artifactId: identity(81),
   })!
-  const stageScope = stageAuthority
-    .fileScope(revision.fileId, [])
-    .withCorrelation({ ownedObjectId })
-  const file = await lineage.createAfterRevisionOpen(
-    [],
-    revision,
-    ownedObjectId,
-    stageScope,
-  )
-  expect(timeline).toContain('enter:create-file')
+  const stageScopes = handles.map((_, index) => stageAuthority
+    .fileScope(identity(82 + index), [`payload-${index}.bin`])
+    .withCorrelation({ ownedObjectId: `owned-file-${index}` }))
+  const files = handles.map((handle, index) => createBrowserPersistentFile({
+    authority: authorities.installFile({
+      handleId: `file-handle-${index}`,
+      ownedObjectId: `owned-file-${index}`,
+      parent,
+      canonicalPath: [`payload-${index}.bin`],
+      physicalName: `payload-${index}.bin`,
+      handle: handle as unknown as FileSystemFileHandle,
+    }),
+    persistedHandle: {
+      id: `file-handle-${index}`,
+      operationId: binding.intent.operationId,
+      kind: 1,
+      authorityRef: `writer-authority-${index}`,
+      ownedObjectId: `owned-file-${index}`,
+      handle: handle as unknown as FileSystemFileHandle,
+    },
+    scheduler: lease.scheduler,
+    verify: async stage => { timeline.push(`verify:${stage}`) },
+    stageScope: stageScopes[index]!,
+  }))
   return Object.freeze({
-    file,
-    writer,
+    file: files[0]!,
+    otherFile: files[1],
+    writers,
+    handles,
+    parent,
+    authorities,
     lease,
-    mutations,
     timeline,
     milestones,
-    retire: () => stageScope.retireFileEvidence(),
-  })
-}
-
-function recordingMutationAuthority(
-  authority: FSARootMutationAuthority,
-  timeline: string[],
-): FSARootMutationAuthority {
-  return Object.freeze({
-    async run<T>(
-      kind: FSANamespaceMutationKind,
-      operation: () => Promise<T>,
-    ): Promise<T> {
-      timeline.push(`admit:${kind}`)
-      return authority.run(kind, async () => {
-        timeline.push(`enter:${kind}`)
-        try {
-          const result = await operation()
-          timeline.push(`return:${kind}`)
-          return result
-        } catch (error) {
-          timeline.push(`reject:${kind}`)
-          throw error
-        }
-      })
+    release: async () => {
+      for (const stageScope of stageScopes) stageScope.retireFileEvidence()
+      await lease.release()
     },
   })
 }
 
-class MemoryHandleRepository implements PersistentHandleRepository {
-  readonly #records = new Map<string, PersistentHandleRecord>()
+class InstrumentedWriter {
+  readonly writeStarted = deferred<void>()
+  readonly timeline: string[]
+  readonly options: Readonly<{
+    writeGate?: Deferred<void>
+    writeFailure?: unknown
+    closeFailure?: unknown
+    abortGate?: Deferred<void>
+    abortFailure?: unknown
+  }>
+  writeCalls = 0
+  closeCalls = 0
+  abortCalls = 0
+  readonly abortStarted = deferred<void>()
+  readonly abortReasons: unknown[] = []
 
-  async putHandle(record: PersistentHandleRecord): Promise<void> {
-    this.#records.set(record.id, record)
+  constructor(
+    timeline: string[],
+    options: Readonly<{
+      writeGate?: Deferred<void>
+      writeFailure?: unknown
+      closeFailure?: unknown
+      abortGate?: Deferred<void>
+      abortFailure?: unknown
+    }> = {},
+  ) {
+    this.timeline = timeline
+    this.options = options
   }
 
-  async readHandle(id: string): Promise<PersistentHandleRecord | undefined> {
-    return this.#records.get(id)
+  async write(): Promise<void> {
+    this.writeCalls += 1
+    this.timeline.push('browser:write')
+    this.writeStarted.resolve()
+    if (this.options.writeGate !== undefined) await this.options.writeGate.promise
+    if (this.options.writeFailure !== undefined) throw this.options.writeFailure
   }
 
-  async deleteHandle(id: string): Promise<void> {
-    this.#records.delete(id)
-  }
-}
-
-class InstrumentedDirectoryHandle {
-  readonly kind = 'directory' as const
-  readonly name: string
-  readonly #file: InstrumentedFileHandle
-  #created = false
-
-  constructor(name: string, file: InstrumentedFileHandle) {
-    this.name = name
-    this.#file = file
+  async close(): Promise<void> {
+    this.closeCalls += 1
+    this.timeline.push('browser:close')
+    if (this.options.closeFailure !== undefined) throw this.options.closeFailure
   }
 
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === this as unknown as FileSystemHandle
-  }
-
-  async getFileHandle(
-    name: string,
-    options?: FileSystemGetFileOptions,
-  ): Promise<FileSystemFileHandle> {
-    if (name !== this.#file.name) throw new DOMException('missing', 'NotFoundError')
-    if (!this.#created && options?.create !== true) {
-      throw new DOMException('missing', 'NotFoundError')
-    }
-    this.#created = true
-    return this.#file as unknown as FileSystemFileHandle
-  }
-
-  async getDirectoryHandle(): Promise<FileSystemDirectoryHandle> {
-    throw new DOMException('missing', 'NotFoundError')
+  async abort(reason?: unknown): Promise<void> {
+    this.abortCalls += 1
+    this.abortReasons.push(reason)
+    this.timeline.push('browser:abort')
+    this.abortStarted.resolve()
+    if (this.options.abortGate !== undefined) await this.options.abortGate.promise
+    if (this.options.abortFailure !== undefined) throw this.options.abortFailure
   }
 }
 
 class InstrumentedFileHandle {
   readonly kind = 'file' as const
   readonly name: string
-  readonly #timeline: string[]
-  readonly #writer: InstrumentedWriter
+  readonly timeline: string[]
+  readonly writer: InstrumentedWriter
+  readonly createFailure: unknown
+  readonly keepExistingData: boolean[] = []
 
-  constructor(name: string, timeline: string[], writer: InstrumentedWriter) {
+  constructor(
+    name: string,
+    timeline: string[],
+    writer: InstrumentedWriter,
+    createFailure?: unknown,
+  ) {
     this.name = name
-    this.#timeline = timeline
-    this.#writer = writer
+    this.timeline = timeline
+    this.writer = writer
+    this.createFailure = createFailure
   }
 
-  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
-    return other === this as unknown as FileSystemHandle
-  }
-
-  async createWritable(
-    options?: FileSystemCreateWritableOptions,
-  ): Promise<FileSystemWritableFileStream> {
-    expect(options).toEqual({ keepExistingData: true })
-    this.#timeline.push('browser:createWritable')
-    return this.#writer as unknown as FileSystemWritableFileStream
+  async createWritable(options?: FileSystemCreateWritableOptions): Promise<FileSystemWritableFileStream> {
+    this.timeline.push('browser:createWritable')
+    this.keepExistingData.push(options?.keepExistingData ?? false)
+    if (this.createFailure !== undefined) throw this.createFailure
+    return this.writer as unknown as FileSystemWritableFileStream
   }
 
   async getFile(): Promise<File> {
-    return new Blob([]) as File
+    return new File([], this.name)
+  }
+
+  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other === this
   }
 }
 
-class InstrumentedWriter {
-  readonly #timeline: string[]
-  readonly #closeFailure: unknown
-  writeCalls = 0
-  closeCalls = 0
+class InstrumentedDirectoryHandle {
+  readonly kind = 'directory' as const
+  readonly name: string
 
-  constructor(timeline: string[], closeFailure?: unknown) {
-    this.#timeline = timeline
-    this.#closeFailure = closeFailure
+  constructor(name: string) {
+    this.name = name
   }
 
-  async write(): Promise<void> {
-    this.writeCalls += 1
-    this.#timeline.push('browser:write')
+  async isSameEntry(other: FileSystemHandle): Promise<boolean> {
+    return other === this
   }
-
-  async close(): Promise<void> {
-    this.closeCalls += 1
-    this.#timeline.push('browser:close')
-    if (this.#closeFailure !== undefined) throw this.#closeFailure
-  }
-}
-
-function deferred<T>(): Readonly<{
-  promise: Promise<T>
-  resolve: (value: T) => void
-}> {
-  let resolve!: (value: T) => void
-  const promise = new Promise<T>((complete) => { resolve = complete })
-  return Object.freeze({ promise, resolve })
 }
 
 class MemoryLockManager implements BrowserLockManagerRuntime {
-  #held = false
-
-  async request(
+  request(
     name: string,
     _options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
-    callback: (lock: { readonly name: string } | null) => Promise<void>,
+    callback: (lock: BrowserLockHandle | null) => Promise<void>,
   ): Promise<void> {
-    if (this.#held) {
-      await callback(null)
-      return
-    }
-    this.#held = true
-    try {
-      await callback({ name })
-    } finally {
-      this.#held = false
-    }
+    return callback({ name })
   }
+}
+
+interface Deferred<Value> {
+  readonly promise: Promise<Value>
+  readonly resolve: (value?: Value | PromiseLike<Value>) => void
+}
+
+function deferred<Value>(): Deferred<Value> {
+  let resolve!: (value?: Value | PromiseLike<Value>) => void
+  const promise = new Promise<Value>(complete => {
+    resolve = value => { complete(value as Value | PromiseLike<Value>) }
+  })
+  return { promise, resolve }
 }
