@@ -49,6 +49,7 @@ export type {
   PersistentDirectTreeSettlementAuthority,
   PersistentMaterializationEvidence,
   PersistentMaterializationSettlementCut,
+  PersistentExecutionRecoveryPolicy,
   PersistentWorkspaceExecutionInput,
   PersistentWorkspaceSettlementAuthority,
   WorkspaceMaterializationEvidence,

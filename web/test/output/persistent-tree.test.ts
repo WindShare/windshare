@@ -47,6 +47,7 @@ import {
   MemoryTree,
   beginInitialClaim,
   deferred,
+  preservingRecoveryPolicy,
   seedOccupiedClaim,
 } from './persistent-tree-file-fixture'
 
@@ -251,8 +252,7 @@ describe('persistent DirectoryTree materialization port', () => {
     const restarted = await fixture.session.beginFile({
       materializationRelativePath: ['restart.bin'],
       recovery: {
-        kind: 'restart-owned-file',
-        expectedOwnedObjectId: first.ownedObjectId,
+        pausedFile: 'restart-owned-file',
       },
       openRevision: async () => revision(4n),
     })
@@ -262,6 +262,21 @@ describe('persistent DirectoryTree materialization port', () => {
     expect(fixture.tree.visible(['restart.bin'])).toEqual(Uint8Array.of(1, 2))
     await restarted.writeRange(0n, Uint8Array.of(5, 6, 7, 8))
     expect(fixture.tree.file(['restart.bin']).writerModes.at(-1)).toBe('truncate')
+  })
+
+  it('turns an active crash checkpoint into an exact owned-file restart cut', async () => {
+    const fixture = await materializationFixture()
+    const request = { materializationRelativePath: ['active-restart.bin'], openRevision: async () => revision(4n) }
+    const recovery = preservingRecoveryPolicy()
+    const first = await fixture.session.beginFile({ ...request, recovery })
+    await first.writeRange(0n, Uint8Array.of(1, 2))
+    await expect(first.automaticCheckpoint('pending-bytes', recovery.costBudget)).resolves.toMatchObject({ kind: 'advanced' })
+    await first.retire()
+    const restarted = await fixture.session.beginFile({ ...request, recovery: { pausedFile: 'restart-owned-file' } })
+    expect(restarted.initialDurableRanges).toEqual([])
+    expect(fixture.checkpoints.committed(FILE_ID).phase).toBe(FILE_CHECKPOINT_PHASE_ACTIVE)
+    await restarted.writeRange(0n, Uint8Array.of(5, 6, 7, 8))
+    expect(fixture.tree.file(['active-restart.bin']).writerModes.at(-1)).toBe('truncate')
   })
 
   it('requires typed temporary-space confirmation before non-empty preserving recovery', async () => {
@@ -935,17 +950,6 @@ async function materializationFixture(
 
 function revision(exactSize: bigint): OpenedFileRevision {
   return Object.freeze({ fileId: FILE_ID, fileRevision: FILE_REVISION, exactSize })
-}
-
-function preservingRecoveryPolicy() {
-  return Object.freeze({
-    kind: 'preserve' as const,
-    costBudget: Object.freeze({
-      maximumPrefixCopyBytes: 1_024n,
-      maximumCumulativeWriteAmplificationBytes: 2_048n,
-      maximumPeakTemporaryBytes: 1_024n,
-    }),
-  })
 }
 
 class MemoryCheckpointRepository implements FileCheckpointJournal {

@@ -18,6 +18,17 @@ import { identity } from './planning/fixture'
 
 export type VerificationStage = 'writer-open' | 'checkpoint' | 'commit'
 
+export function preservingRecoveryPolicy() {
+  return Object.freeze({
+    pausedFile: 'preserve' as const,
+    costBudget: Object.freeze({
+      maximumPrefixCopyBytes: 1_024n,
+      maximumCumulativeWriteAmplificationBytes: 2_048n,
+      maximumPeakTemporaryBytes: 1_024n,
+    }),
+  })
+}
+
 export interface Deferred<T> {
   readonly promise: Promise<T>
   readonly resolve: (value: T | PromiseLike<T>) => void
