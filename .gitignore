@@ -80,3 +80,5 @@ review_agent.md
 node_modules/
 .codex-work/
 .codex
+
+web/scripts/browser-evidence/fsa-small-file/
