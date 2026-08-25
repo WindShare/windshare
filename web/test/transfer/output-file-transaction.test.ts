@@ -1,13 +1,15 @@
 import { describe, expect, it, vi } from 'vitest'
-import { byteRange } from '../../src/content/geometry'
 import {
-  OutputCheckpointContractError,
   bindOutputFileTransaction,
 } from '../../src/transfer/output-file-transaction'
 import {
   VerifiedDurableRanges,
+  VerifiedFinalOutputFile,
   type BeginOutputFileResult,
+  type OutputCheckpointCost,
+  type OutputCheckpointCostBudget,
   type OutputFile,
+  type OutputFileOwnership,
   type OutputSession,
 } from '../../src/transfer/output-session'
 import { identityText } from './v2-job-fixture'
@@ -18,6 +20,16 @@ import {
 } from '../../src/transfer/job/coordinate/direct-tree'
 
 const signal = new AbortController().signal
+const budget: OutputCheckpointCostBudget = Object.freeze({
+  maximumPrefixCopyBytes: 8n,
+  maximumCumulativeWriteAmplificationBytes: 8n,
+  maximumPeakTemporaryBytes: 8n,
+})
+const zeroCost = Object.freeze({
+  prefixCopyBytes: 0n,
+  cumulativeWriteAmplificationBytes: 0n,
+  peakTemporaryBytes: 0n,
+})
 const file: OutputFile = Object.freeze({
   source: {
     shareInstance: identityText(1),
@@ -29,7 +41,7 @@ const file: OutputFile = Object.freeze({
   materializationRelativePath: snapshotMaterializationRootRelativePath(['result.bin']),
   exactSize: 4n,
 })
-const ownership = Object.freeze({
+const ownership: OutputFileOwnership = Object.freeze({
   backend: 'test',
   outputSessionId: 'session',
   canonicalPath: file.materializationRelativePath,
@@ -43,75 +55,292 @@ describe('bound output file transaction', () => {
       fileRevision: identityText(6),
       exactSize: file.exactSize,
     })
-    expect(() => bindOutputFileTransaction(begun, file, session('None')))
-      .toThrow(/different authenticated source revision/)
+    expect(() => bindOutputFileTransaction(begun, file, session('None', false)))
+      .toThrow(/different authenticated source revision/u)
   })
 
-  it('requires transient writes to remain contiguous and complete before commit', async () => {
-    const commit = vi.fn(async () => undefined)
-    const begun = result({ ...file.source, exactSize: file.exactSize }, { commit })
-    const bound = bindOutputFileTransaction(begun, file, session('None')).transaction
-    await expect(bound.writeRange(1n, new Uint8Array([1]), signal))
-      .rejects.toThrow(OutputCheckpointContractError)
+  it.each([
+    { label: 'transient sequential', durability: 'None' as const, positioned: false },
+    { label: 'durable sequential-prefix', durability: 'ProcessRestart' as const, positioned: false },
+    { label: 'transient positioned', durability: 'None' as const, positioned: true },
+    { label: 'durable positioned', durability: 'ProcessRestart' as const, positioned: true },
+  ])('commits complete pending coverage for $label without a prior checkpoint', async ({
+    durability,
+    positioned,
+  }) => {
+    const commit = vi.fn(async () => finalProof())
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { commit }),
+      file,
+      session(durability, positioned),
+    ).transaction
+    if (positioned) {
+      await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+      await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+    } else {
+      await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+      await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+    }
+
+    await expect(bound.commit(signal)).resolves.toMatchObject({ fileSize: 4n })
+    expect(commit).toHaveBeenCalledOnce()
+  })
+
+  it('accepts a durable sequential prefix and commits the pending suffix', async () => {
+    const initial = durableRanges([{ start: 0n, end: 2n }])
+    const commit = vi.fn(async () => finalProof())
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { commit }, initial),
+      file,
+      session('ProcessRestart', false),
+    ).transaction
+
+    await expect(bound.writeRange(0n, new Uint8Array([9]), signal)).rejects.toThrow(/overlaps/u)
+    await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+    await expect(bound.commit(signal)).resolves.toBeInstanceOf(VerifiedFinalOutputFile)
+  })
+
+  it('rejects incomplete accepted coverage without making commit terminal', async () => {
+    const commit = vi.fn(async () => finalProof())
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { commit }),
+      file,
+      session('None', false),
+    ).transaction
     await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
-    await expect(bound.commit(signal)).rejects.toThrow(/whole-file durability/)
+    await expect(bound.commit(signal)).rejects.toThrow(/complete durable and pending coverage/u)
     await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
     await bound.commit(signal)
     expect(commit).toHaveBeenCalledOnce()
   })
 
-  it('accepts only the exact durable checkpoint union and prevents overlap', async () => {
-    let checkpoint = new VerifiedDurableRanges(
-      ownership,
-      file.source,
-      file.exactSize,
-      [byteRange(0n, 2n)],
+  it('preserves pending state on decline and advances only with the exact durable union', async () => {
+    let decision: 'declined' | 'advanced' = 'declined'
+    const automaticCheckpoint = vi.fn(async () => decision === 'declined'
+      ? Object.freeze({
+          kind: 'declined' as const,
+          reason: 'cost-evidence-unavailable' as const,
+          estimate: zeroCost,
+        })
+      : Object.freeze({
+          kind: 'advanced' as const,
+          durable: durableRanges([{ start: 0n, end: 2n }]),
+          cost: zeroCost,
+        }))
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { automaticCheckpoint }),
+      file,
+      session('ProcessRestart', true),
+    ).transaction
+    await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+
+    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+      .resolves.toMatchObject({ kind: 'declined' })
+    await expect(bound.writeRange(1n, new Uint8Array([9]), signal)).rejects.toThrow(/overlaps/u)
+    decision = 'advanced'
+    await expect(bound.automaticCheckpoint('pending-time', budget, signal))
+      .resolves.toMatchObject({ kind: 'advanced', durable: { ranges: [{ start: 0n, end: 2n }] } })
+  })
+
+  it('accepts temporary-space confirmation declines only for non-empty modeled space', async () => {
+    let estimate: OutputCheckpointCost = { ...zeroCost, peakTemporaryBytes: 1n }
+    const automaticCheckpoint = async () => Object.freeze({
+      kind: 'declined' as const,
+      reason: 'temporary-space-confirmation-required' as const,
+      estimate,
+    })
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { automaticCheckpoint }),
+      file,
+      session('ProcessRestart', true),
+    ).transaction
+    await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+
+    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+      .resolves.toMatchObject({ kind: 'declined', reason: 'temporary-space-confirmation-required' })
+
+    estimate = zeroCost
+    await expect(bound.automaticCheckpoint('pending-time', budget, signal))
+      .rejects.toThrow(/decline is not justified/u)
+  })
+
+  it('rejects partial automatic checkpoint evidence and an over-budget advance', async () => {
+    let durable = durableRanges([{ start: 0n, end: 1n }])
+    let cost: OutputCheckpointCost = zeroCost
+    const bound = bindOutputFileTransaction(result(
+      { ...file.source, exactSize: file.exactSize },
+      { automaticCheckpoint: async () => Object.freeze({ kind: 'advanced' as const, durable, cost }) },
+    ), file, session('ProcessRestart', true)).transaction
+    await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+      .rejects.toThrow(/every accepted pending write/u)
+
+    const second = bindOutputFileTransaction(result(
+      { ...file.source, exactSize: file.exactSize },
+      { automaticCheckpoint: async () => Object.freeze({ kind: 'advanced' as const, durable, cost }) },
+    ), file, session('ProcessRestart', true)).transaction
+    await second.writeRange(0n, new Uint8Array([1, 2]), signal)
+    durable = durableRanges([{ start: 0n, end: 2n }])
+    cost = { ...zeroCost, prefixCopyBytes: 9n }
+    await expect(second.automaticCheckpoint('pending-bytes', budget, signal))
+      .rejects.toThrow(/beyond its admitted cost budget/u)
+  })
+
+  it('waits for and validates an exact forced durable pause cut', async () => {
+    let resolvePause!: (value: VerifiedDurableRanges) => void
+    const pauseEvidence = new Promise<VerifiedDurableRanges>(resolve => { resolvePause = resolve })
+    const pause = vi.fn(() => pauseEvidence)
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { pause }),
+      file,
+      session('ProcessRestart', false),
+    ).transaction
+    await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+    const pendingPause = bound.pause('pause')
+    let settled = false
+    pendingPause.finally(() => { settled = true }).catch(() => undefined)
+    await Promise.resolve()
+    expect(settled).toBe(false)
+    resolvePause(durableRanges([{ start: 0n, end: 2n }]))
+    await expect(pendingPause).resolves.toMatchObject({ ranges: [{ start: 0n, end: 2n }] })
+    await expect(bound.writeRange(2n, new Uint8Array([3, 4]), signal))
+      .rejects.toThrow(/terminal settlement began/u)
+  })
+
+  it('rejects stale, partial, and foreign pause evidence', async () => {
+    const cases = [
+      durableRanges([]),
+      durableRanges([{ start: 0n, end: 1n }]),
+      durableRanges([{ start: 0n, end: 2n }], { ...ownership, ownedFileIdentity: 'foreign' }),
+    ]
+    for (const evidence of cases) {
+      const bound = bindOutputFileTransaction(result(
+        { ...file.source, exactSize: file.exactSize },
+        { pause: async () => evidence },
+      ), file, session('ProcessRestart', false)).transaction
+      await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
+      await expect(bound.pause('pause')).rejects.toThrow()
+    }
+  })
+
+  it.each(['commit', 'pause', 'retire'] as const)(
+    'rejects every later mutation after %s settlement starts',
+    async (terminal) => {
+      const initial = durableRanges([])
+      const bound = bindOutputFileTransaction(
+        result({ ...file.source, exactSize: file.exactSize }, {}, initial),
+        file,
+        session('None', false),
+      ).transaction
+      if (terminal === 'commit') {
+        await bound.writeRange(0n, new Uint8Array([1, 2, 3, 4]), signal)
+        await bound.commit(signal)
+      } else if (terminal === 'pause') {
+        await bound.writeRange(0n, new Uint8Array([1]), signal)
+        await bound.pause('pause')
+      } else {
+        await bound.retire('retire')
+      }
+
+      await expect(bound.writeRange(0n, new Uint8Array([1]), signal))
+        .rejects.toThrow(/terminal settlement began/u)
+      await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+        .rejects.toThrow(/terminal settlement began/u)
+      await expect(bound.pause('again')).rejects.toThrow(/terminal settlement began/u)
+      await expect(bound.retire('again')).rejects.toThrow(/terminal settlement began/u)
+    },
+  )
+
+  it.each([
+    { ownership: { ...ownership, backend: 'foreign' }, source: file.source, fileSize: 4n },
+    { ownership: { ...ownership, outputSessionId: 'foreign' }, source: file.source, fileSize: 4n },
+    { ownership: { ...ownership, canonicalPath: ['foreign.bin'] }, source: file.source, fileSize: 4n },
+    { ownership: { ...ownership, ownedFileIdentity: 'foreign' }, source: file.source, fileSize: 4n },
+    { ownership, source: { ...file.source, fileRevision: identityText(6) }, fileSize: 4n },
+    { ownership, source: file.source, fileSize: 3n },
+  ])('rejects a foreign final proof %#', async (foreign) => {
+    const commit = async () => new VerifiedFinalOutputFile(
+      foreign.ownership,
+      foreign.source,
+      foreign.fileSize,
     )
-    const begun = result({ ...file.source, exactSize: file.exactSize }, {
-      checkpoint: async () => checkpoint,
-    }, checkpoint)
-    const bound = bindOutputFileTransaction(begun, file, session('ProcessRestart')).transaction
-    await expect(bound.writeRange(1n, new Uint8Array([9]), signal))
-      .rejects.toThrow(/overlaps bytes/)
-    await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
-    await expect(bound.checkpoint(signal)).rejects.toThrow(/prior durability plus every completed write/)
-    checkpoint = new VerifiedDurableRanges(
-      ownership,
-      file.source,
-      file.exactSize,
-      [byteRange(0n, 4n)],
-    )
-    await bound.checkpoint(signal)
-    await bound.commit(signal)
+    const bound = bindOutputFileTransaction(
+      result({ ...file.source, exactSize: file.exactSize }, { commit }),
+      file,
+      session('None', false),
+    ).transaction
+    await bound.writeRange(0n, new Uint8Array([1, 2, 3, 4]), signal)
+    await expect(bound.commit(signal)).rejects.toThrow(/different output or source revision/u)
+  })
+
+  it('never exposes pending ranges as initial recovery truth', () => {
+    expect(() => bindOutputFileTransaction(
+      result(
+        { ...file.source, exactSize: file.exactSize },
+        {},
+        durableRanges([{ start: 0n, end: 1n }]),
+      ),
+      file,
+      session('None', true),
+    )).toThrow(/transient output cannot claim durable/u)
+    expect(() => bindOutputFileTransaction(
+      result(
+        { ...file.source, exactSize: file.exactSize },
+        {},
+        durableRanges([{ start: 1n, end: 2n }]),
+      ),
+      file,
+      session('ProcessRestart', false),
+    )).toThrow(/canonical recovery prefix/u)
   })
 })
 
-function session(durability: 'None' | 'ProcessRestart'): Pick<OutputSession, 'identity' | 'capabilities'> {
+function session(
+  durability: 'None' | 'ProcessRestart',
+  randomWrite: boolean,
+): Pick<OutputSession, 'identity' | 'capabilities'> {
   return {
     identity: { backend: 'test', outputSessionId: 'session' },
     capabilities: {
       durability,
-      randomWrite: durability !== 'None',
+      randomWrite,
       fileFailureIsolation: true,
       modificationTime: false,
     },
   }
 }
 
+function finalProof(
+  proofOwnership: OutputFileOwnership = ownership,
+): VerifiedFinalOutputFile {
+  return new VerifiedFinalOutputFile(proofOwnership, file.source, file.exactSize)
+}
+
+function durableRanges(
+  ranges: readonly Readonly<{ start: bigint; end: bigint }>[],
+  rangeOwnership: OutputFileOwnership = ownership,
+): VerifiedDurableRanges {
+  return new VerifiedDurableRanges(rangeOwnership, file.source, file.exactSize, ranges)
+}
+
 function result(
   revision: BeginOutputFileResult['revision'],
   overrides: Partial<BeginOutputFileResult['transaction']> = {},
-  durableRanges = new VerifiedDurableRanges(ownership, file.source, file.exactSize, []),
+  durable = durableRanges([]),
 ): BeginOutputFileResult {
   return Object.freeze({
     revision,
-    durableRanges,
+    durableRanges: durable,
     transaction: {
       writeRange: async () => undefined,
-      checkpoint: async () => durableRanges,
-      commit: async () => undefined,
+      automaticCheckpoint: async () => Object.freeze({
+        kind: 'declined' as const,
+        reason: 'cost-evidence-unavailable' as const,
+        estimate: zeroCost,
+      }),
+      commit: async () => finalProof(),
       retire: async () => 'FileIsolated' as const,
-      pause: async () => undefined,
+      pause: async () => durable,
       ...overrides,
     },
   })

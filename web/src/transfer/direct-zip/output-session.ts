@@ -15,6 +15,7 @@ import {
 } from '../../output/direct-zip/writer'
 import {
   outputCapabilities,
+  disabledOutputExecutionProfile,
   outputSessionIdentity,
   type MaterializationSummary,
   type OutputCapabilities,
@@ -75,6 +76,7 @@ export class DirectZipTransferOutputV1 implements
   DirectZipOrderedOutputV1, DirectZipOutputSessionV1 {
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
+  readonly executionProfile = disabledOutputExecutionProfile(1)
   readonly #pages: Pick<DirectZipWriterPageSink, 'snapshot'>
   readonly #replay: DirectZipReplayAuthorityV1
   readonly #rollback: DirectZipMemberRollbackAuthorityV1

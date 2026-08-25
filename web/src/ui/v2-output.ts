@@ -34,6 +34,7 @@ import {
   presentReceiveLifecycle,
   type ReceiveLifecyclePresentation,
   type V2ActiveReceiveControl,
+  type V2ReceiveInterruptionPresentation,
   type WorkspaceUsage,
 } from './v2-lifecycle-presentation'
 import {
@@ -62,6 +63,7 @@ export interface V2OutputPresentationSnapshot {
   readonly expiresAt: number | null
   readonly workspaceUsage: WorkspaceUsage | null
   readonly activeControls: readonly V2ActiveReceiveControl[]
+  readonly receiveInterruption: V2ReceiveInterruptionPresentation | null
   readonly directZipProgress: V2DirectZipProgressSnapshot | null
   readonly transferResultPresentation: TransferResultPresentation | null
 }
@@ -84,6 +86,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   expiresAt: null,
   workspaceUsage: null,
   activeControls: Object.freeze([]),
+  receiveInterruption: null,
   directZipProgress: null,
   transferResultPresentation: null,
 })
@@ -224,6 +227,7 @@ export class V2OutputPresentationController {
       plan: intent.plan,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
     }, lifecycle ?? null, nowMilliseconds, workspaceUsage)
     this.#publishWithOwnership(snapshot, commitOwnership)
     return true
@@ -268,6 +272,7 @@ export class V2OutputPresentationController {
       plan: intent.plan,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
     }, lifecycle, nowMilliseconds, workspaceUsage)
     this.#activeOfferedChoice = null
     this.#resolvedAction = null
@@ -293,6 +298,7 @@ export class V2OutputPresentationController {
         repairSummary,
       ),
       activeControls: Object.freeze([...activeControls]),
+      receiveInterruption: null,
     }, state, nowMilliseconds, workspaceUsage)
     return true
   }
@@ -303,6 +309,16 @@ export class V2OutputPresentationController {
     this.#publishLifecycleSnapshot({
       ...this.#snapshot,
       activeControls: Object.freeze([...controls]),
+    }, lifecycle, Date.now(), this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateReceiveInterruption(interruption: V2ReceiveInterruptionPresentation | null): boolean {
+    const lifecycle = this.#snapshot.lifecycle
+    if (lifecycle === null) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot,
+      receiveInterruption: interruption === null ? null : Object.freeze({ ...interruption }),
     }, lifecycle, Date.now(), this.#snapshot.workspaceUsage)
     return true
   }
@@ -357,6 +373,7 @@ export class V2OutputPresentationController {
     const snapshot = this.#buildLifecycleSnapshot({
       ...this.#snapshot,
       repairSummary,
+      receiveInterruption: null,
     }, result.lifecycle, Date.now(), this.#snapshot.workspaceUsage)
     this.#publish(Object.freeze({
       ...snapshot,
@@ -405,6 +422,7 @@ export class V2OutputPresentationController {
         expiresAt: null,
         workspaceUsage: null,
         activeControls: Object.freeze([]),
+        receiveInterruption: null,
       })
     }
     if (artifact === null || plan === null) {
@@ -417,6 +435,7 @@ export class V2OutputPresentationController {
       nowMilliseconds,
       ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
       activeControls: base.activeControls,
+      interruption: base.receiveInterruption,
       repairSummary: base.repairSummary,
       directZipProgress: base.directZipProgress,
     })

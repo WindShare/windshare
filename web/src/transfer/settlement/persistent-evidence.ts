@@ -34,17 +34,27 @@ type WorkspaceZipIntent = ReceiveIntent & Readonly<{
   artifact: ZipArchiveArtifact
 }>
 
-export interface PersistentMaterializationEvidence {
+export interface PersistentDirectTreeMaterializationEvidence {
+  readonly kind: 'direct-tree-ledger'
+  readonly materializationBindingDigest: string
+}
+
+export interface PersistentWorkspaceMaterializationEvidence {
+  readonly kind: 'workspace-manifest'
   readonly entries: readonly MaterializedManifestEntry[]
   readonly directorySettlements: readonly PersistentDirectorySettlementEvidence[]
 }
+
+export type PersistentMaterializationEvidence =
+  | PersistentDirectTreeMaterializationEvidence
+  | PersistentWorkspaceMaterializationEvidence
 
 export interface PersistentDirectorySettlementEvidence {
   readonly artifactPath: readonly string[]
   readonly settlement: DirectorySettlement
 }
 
-export interface WorkspaceMaterializationEvidence extends PersistentMaterializationEvidence {
+export interface WorkspaceMaterializationEvidence extends PersistentWorkspaceMaterializationEvidence {
   readonly generations: readonly AuthenticatedGenerationReference[]
 }
 
@@ -61,19 +71,20 @@ export interface PersistentMaterializationSettlementCut<
 }
 
 export interface PersistentDirectTreeSettlementAuthority {
+  beginTerminal(kind: 'pause' | 'stop' | 'settle'): void
   pause(
     request: PlanPauseRequest,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>
   settle(
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>
   stop?(
     request: PlanStopRequest,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>
 }
@@ -131,7 +142,7 @@ export function requireCompleteWorkspaceMaterialization(
 
 export function requireMatchingMaterializationSummary(
   request: PlanSettlementRequest<CompletedTransferWorkerSettlement> | PlanStopRequest,
-  evidence: PersistentMaterializationEvidence,
+  evidence: PersistentWorkspaceMaterializationEvidence,
 ): void {
   const materializedEntries = evidence.entries.filter(entry =>
     entry.kind === 'file' || entry.artifactPath.length > 0)
@@ -150,7 +161,7 @@ export function requireMatchingMaterializationSummary(
 }
 
 export function requireCompleteDirectorySettlement(
-  evidence: PersistentMaterializationEvidence,
+  evidence: PersistentWorkspaceMaterializationEvidence,
 ): void {
   const materializedDirectories = evidence.entries.filter(entry => entry.kind === 'directory')
   if (evidence.directorySettlements.length !== materializedDirectories.length ||

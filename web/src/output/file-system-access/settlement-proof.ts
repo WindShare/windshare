@@ -1,38 +1,26 @@
 import {
   fileCheckpointDigest,
-  fileCheckpointIsComplete,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
-import type { FinalFileCheckpointProof } from '../persistence/journal'
 import {
   canonicalDigest,
   canonicalFrame,
-  canonicalI64,
   canonicalIdentity,
   canonicalPath,
   canonicalRecord,
   canonicalText,
-  canonicalU32,
   canonicalU64,
   canonicalU8,
   concatCanonicalBytes,
   type CanonicalBytes,
 } from '../workspace/canonical'
-import type { MaterializedManifestEntry } from '../workspace/manifest'
 import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
   createPersistedReceiveRecord,
   type PersistedReceiveRecord,
 } from '../workspace/records'
-import {
-  DirectorySettlementKind,
-  snapshotDirectoryAdmission,
-  snapshotMaterializationPath,
-  type DirectoryAdmission,
-  type DirectoryAdmissionScope,
-  type DirectorySettlement,
-} from '../../transfer/directory-admission'
+import type { DirectoryAdmissionScope } from '../../transfer/directory-admission'
 import type { DirectTreeRootExpectation } from '../../transfer/job/coordinate/direct-tree'
 import {
   validateReceiveIntent,
@@ -41,7 +29,6 @@ import {
   type ReceiveIntent,
 } from '../../transfer/intent'
 import type {
-  MaterializationSummary,
   PlanPauseRequest,
   PlanSettlementRequest,
   PlanStopRequest,
@@ -50,11 +37,10 @@ import type {
   CompletedTransferWorkerSettlement,
   TransferFailure,
 } from '../../transfer/outcome'
-import type { PersistentDirectorySettlementEvidence } from '../../transfer/settlement/persistent-execution'
 
 const RECEIVE_RECEIPT_DOMAIN = 'windshare/receive-receipt/v1'
 const RECEIVE_RECEIPT_SCHEMA_VERSION = 1
-const FSA_SETTLEMENT_RECEIPT_V2 = 14
+const FSA_SEALED_LEDGER_SETTLEMENT_RECEIPT_V1 = 16
 const FSA_UNOPENED_CLEANUP_RECEIPT_V2 = 15
 
 export type DirectTreeIntent = ReceiveIntent & Readonly<{
@@ -63,15 +49,19 @@ export type DirectTreeIntent = ReceiveIntent & Readonly<{
 }>
 
 export interface SettlementReceiptEvidence {
-  readonly entries: readonly MaterializedManifestEntry[]
-  readonly directorySettlements: readonly PersistentDirectorySettlementEvidence[]
-  readonly checkpointSetDigest: string
-  readonly completedFileCount: bigint
+  readonly sealId: string
+  readonly sealDigest: string
+  readonly aggregateRoot: string
+  readonly pageCount: bigint
+  readonly entryEventCount: bigint
+  readonly fileCount: bigint
+  readonly visibleDirectoryCount: bigint
+  readonly materializedDirectoryCount: bigint
+  readonly finalizedDirectoryCount: bigint
+  readonly isolatedDirectoryCount: bigint
   readonly completedBytes: bigint
-}
-
-export interface ObservedSettlementEvidence extends SettlementReceiptEvidence {
-  readonly checkpoints: readonly FileCheckpointV2[]
+  readonly checkpointCount: bigint
+  readonly checkpointSetDigest?: string
 }
 
 export async function requireDirectTreeIntent(input: ReceiveIntent): Promise<DirectTreeIntent> {
@@ -87,113 +77,6 @@ export async function requireDirectTreeIntent(input: ReceiveIntent): Promise<Dir
     )
   }
   return intent as DirectTreeIntent
-}
-
-export function snapshotEntries(
-  entries: readonly MaterializedManifestEntry[],
-): readonly MaterializedManifestEntry[] {
-  const snapshots = entries.map(entry => {
-    canonicalSettlementEntry(entry)
-    return Object.freeze({
-      ...entry,
-      artifactPath: snapshotMaterializationPath(entry.artifactPath),
-      ...(entry.kind === 'file'
-        ? { checkpoint: Object.freeze({ ...entry.checkpoint }) }
-        : {}),
-    }) as MaterializedManifestEntry
-  }).sort(compareEntries)
-  const keys = snapshots.map(entry => JSON.stringify(entry.artifactPath))
-  if (new Set(keys).size !== keys.length) {
-    throw new TypeError('FSA settlement repeats an artifact path')
-  }
-  return Object.freeze(snapshots)
-}
-
-export function snapshotDirectorySettlements(
-  values: readonly PersistentDirectorySettlementEvidence[],
-  directories: readonly Extract<MaterializedManifestEntry, { kind: 'directory' }>[],
-  scope: DirectoryAdmissionScope,
-): readonly PersistentDirectorySettlementEvidence[] {
-  const byPath = new Map(directories.map(entry => [JSON.stringify(entry.artifactPath), entry]))
-  const snapshots = values.map(value => {
-    const artifactPath = snapshotMaterializationPath(value.artifactPath)
-    const settlement = snapshotSettlement(value.settlement)
-    const entry = byPath.get(JSON.stringify(artifactPath))
-    if (entry === undefined || settlement.admission.receiveIntentDigest !== scope.receiveIntentDigest ||
-        settlement.admission.layoutVersion !== scope.layoutVersion ||
-        settlement.admission.layout !== scope.layout ||
-        settlement.admission.directoryId !== entry.directoryId ||
-        settlement.admission.generation !== entry.generation ||
-        !samePath(settlement.admission.path, artifactPath)) {
-      throw new TypeError('FSA directory settlement escaped its owned directory evidence')
-    }
-    return Object.freeze({ artifactPath, settlement })
-  }).sort((left, right) => comparePath(left.artifactPath, right.artifactPath))
-  const paths = snapshots.map(value => JSON.stringify(value.artifactPath))
-  if (new Set(paths).size !== paths.length) {
-    throw new TypeError('FSA settlement repeats a directory receipt')
-  }
-  return Object.freeze(snapshots)
-}
-
-function snapshotSettlement(input: DirectorySettlement): DirectorySettlement {
-  const admission = snapshotDirectoryAdmission(input.admission)
-  switch (input.kind) {
-    case DirectorySettlementKind.Finalized:
-      return Object.freeze({ kind: input.kind, admission })
-    case DirectorySettlementKind.IsolatedFailure:
-      return Object.freeze({ kind: input.kind, admission, fault: input.fault })
-  }
-}
-
-export function sameFileEvidence(
-  entry: Extract<MaterializedManifestEntry, { kind: 'file' }>,
-  checkpoint: FileCheckpointV2,
-): boolean {
-  return fileCheckpointIsComplete(checkpoint) &&
-    checkpoint.operationId.length !== 0 &&
-    checkpoint.recordId === entry.checkpoint.recordId &&
-    fileCheckpointDigest(checkpoint) === entry.checkpoint.recordDigest &&
-    checkpoint.checkpointGeneration === entry.checkpoint.checkpointGeneration &&
-    checkpoint.fileId === entry.fileId && checkpoint.fileRevision === entry.fileRevision &&
-    checkpoint.exactSize === entry.exactSize && checkpoint.ownedObjectId === entry.ownedObjectId &&
-    samePath(checkpoint.canonicalPath, entry.artifactPath)
-}
-
-export function sameFinalProof(
-  proof: FinalFileCheckpointProof,
-  entry: Extract<MaterializedManifestEntry, { kind: 'file' }>,
-  intent: DirectTreeIntent,
-): boolean {
-  return proof.operationId === intent.operationId && proof.receiveIntentDigest === intent.digest &&
-    proof.materializationBindingDigest === intent.plan.reservation.digest && proof.complete === true &&
-    proof.recordId === entry.checkpoint.recordId &&
-    proof.recordDigest === entry.checkpoint.recordDigest &&
-    proof.checkpointGeneration === entry.checkpoint.checkpointGeneration &&
-    proof.fileId === entry.fileId && proof.fileRevision === entry.fileRevision &&
-    proof.exactSize === entry.exactSize && proof.ownedObjectId === entry.ownedObjectId &&
-    samePath(proof.canonicalPath, entry.artifactPath)
-}
-
-export function materializationSummary(
-  entries: readonly MaterializedManifestEntry[],
-): MaterializationSummary {
-  const visible = entries.filter(entry => entry.kind === 'file' || entry.artifactPath.length !== 0)
-  const files = visible.filter(entry => entry.kind === 'file')
-  return Object.freeze({
-    entryCount: BigInt(visible.length),
-    fileCount: BigInt(files.length),
-    directoryCount: BigInt(visible.length - files.length),
-    rawBytes: files.reduce((total, entry) => total + entry.exactSize, 0n),
-  })
-}
-
-export function sameSummary(
-  left: MaterializationSummary,
-  right: MaterializationSummary,
-): boolean {
-  return left.entryCount === right.entryCount && left.fileCount === right.fileCount &&
-    left.directoryCount === right.directoryCount && left.rawBytes === right.rawBytes
 }
 
 export async function fsaCheckpointSetDigest(
@@ -237,14 +120,26 @@ export function createFSASettlementReceipt(input: Readonly<{
   directoryScope: DirectoryAdmissionScope
 }>): Promise<PersistedReceiveRecord> {
   const bytes = canonicalRecord(RECEIVE_RECEIPT_DOMAIN, RECEIVE_RECEIPT_SCHEMA_VERSION, [
-    canonicalU8(FSA_SETTLEMENT_RECEIPT_V2),
+    canonicalU8(FSA_SEALED_LEDGER_SETTLEMENT_RECEIPT_V1),
     identityFrame(input.intent.operationId, 16, 'operation ID'),
     identityFrame(input.intent.digest, 32, 'receive intent digest'),
     identityFrame(input.intent.plan.reservation.digest, 32, 'reservation digest'),
     ...canonicalFSASettlementBinding(input.intent, input.directoryScope),
     identityFrame(input.transferJobId, 16, 'transfer job ID'),
     canonicalFrame(canonicalU8(settlementOutcomeByte(input.outcome))),
-    identityFrame(input.evidence.checkpointSetDigest, 32, 'checkpoint set digest'),
+    identityFrame(input.evidence.sealId, 32, 'materialization ledger seal ID'),
+    identityFrame(input.evidence.sealDigest, 32, 'materialization ledger seal digest'),
+    identityFrame(input.evidence.aggregateRoot, 32, 'materialization ledger aggregate root'),
+    canonicalFrame(canonicalU64(input.evidence.pageCount)),
+    canonicalFrame(canonicalU64(input.evidence.entryEventCount)),
+    canonicalFrame(canonicalU64(input.evidence.fileCount)),
+    canonicalFrame(canonicalU64(input.evidence.visibleDirectoryCount)),
+    canonicalFrame(canonicalU64(input.evidence.materializedDirectoryCount)),
+    canonicalFrame(canonicalU64(input.evidence.finalizedDirectoryCount)),
+    canonicalFrame(canonicalU64(input.evidence.isolatedDirectoryCount)),
+    canonicalFrame(canonicalU64(input.evidence.completedBytes)),
+    canonicalFrame(canonicalU64(input.evidence.checkpointCount)),
+    canonicalOptionalIdentity(input.evidence.checkpointSetDigest, 32, 'checkpoint set digest'),
     canonicalFrame(canonicalU64(input.request.materialization.entryCount)),
     canonicalFrame(canonicalU64(input.request.materialization.fileCount)),
     canonicalFrame(canonicalU64(input.request.materialization.directoryCount)),
@@ -252,17 +147,6 @@ export function createFSASettlementReceipt(input: Readonly<{
     canonicalFrame(canonicalU8(workerStatusByte(input.request.worker.status))),
     canonicalFrame(canonicalU64(BigInt(input.request.worker.failureCount))),
     canonicalFrame(canonicalU64(BigInt(input.request.worker.omittedFailureCount))),
-    canonicalFrame(canonicalU64(BigInt(input.evidence.entries.length))),
-    ...input.evidence.entries.flatMap(entry => [
-      canonicalFrame(canonicalSettlementEntry(entry)),
-      ...(entry.kind === 'file'
-        ? [identityFrame(entry.checkpoint.recordId, 32, 'checkpoint record ID')]
-        : []),
-    ]),
-    canonicalFrame(canonicalU64(BigInt(input.evidence.directorySettlements.length))),
-    ...input.evidence.directorySettlements.map(value => canonicalFrame(
-      canonicalDirectorySettlement(value),
-    )),
     canonicalFrame(canonicalU64(BigInt(input.request.worker.failures.length))),
     ...input.request.worker.failures.map(failure => canonicalFrame(canonicalFailure(failure))),
   ])
@@ -324,7 +208,9 @@ function canonicalRootExpectation(expectation: DirectTreeRootExpectation): Canon
     canonicalU8(1),
     canonicalFrame(canonicalU8(rootAnchorKindByte(expectation.anchorKind))),
     identityFrame(expectation.directoryId, 16, 'expected root directory ID'),
-    canonicalFrame(canonicalSettlementPath(expectation.relativePath)),
+    canonicalFrame(expectation.relativePath.length === 0
+      ? canonicalU64(0n)
+      : canonicalPath(expectation.relativePath)),
   ])
 }
 
@@ -337,72 +223,15 @@ function rootAnchorKindByte(anchorKind: DirectTreeRootExpectation['anchorKind'])
   }
 }
 
-function canonicalDirectorySettlement(
-  value: PersistentDirectorySettlementEvidence,
-): CanonicalBytes {
-  const admission = value.settlement.admission
-  return concatCanonicalBytes([
-    canonicalFrame(canonicalSettlementPath(value.artifactPath)),
-    canonicalFrame(canonicalU8(
-      value.settlement.kind === DirectorySettlementKind.Finalized ? 1 : 2,
-    )),
-    canonicalFrame(canonicalText(admission.layout)),
-    identityFrame(admission.receiveIntentDigest, 32, 'directory receive intent digest'),
-    canonicalFrame(canonicalU8(admission.layoutVersion)),
-    identityFrame(admission.token, 32, 'directory admission token'),
-    identityFrame(admission.directoryId, 16, 'directory ID'),
-    identityFrame(admission.generation, 16, 'directory generation'),
-    canonicalFrame(canonicalSettlementPath(admission.path)),
-    canonicalOptionalIdentity(admission.parentToken, 32, 'parent admission token'),
-    canonicalModifiedTime(admission),
-  ])
-}
-
 function canonicalFailure(failure: TransferFailure): CanonicalBytes {
   return concatCanonicalBytes([
     canonicalU8(failure.kind === 'directory' ? 1 : 2),
     canonicalFrame(canonicalIdentity(
       failure.kind === 'directory' ? failure.directoryId : failure.fileId,
       16,
-      failure.kind + ' failure identity',
+      `${failure.kind} failure identity`,
     )),
   ])
-}
-
-function canonicalSettlementEntry(entry: MaterializedManifestEntry): CanonicalBytes {
-  if (entry.kind === 'directory') {
-    return concatCanonicalBytes([
-      canonicalU8(1),
-      canonicalFrame(canonicalSettlementPath(entry.artifactPath)),
-      identityFrame(entry.directoryId, 16, 'directory ID'),
-      identityFrame(entry.generation, 16, 'directory generation'),
-      identityFrame(entry.ownedObjectId, 32, 'owned object ID'),
-    ])
-  }
-  return concatCanonicalBytes([
-    canonicalU8(2),
-    canonicalFrame(canonicalSettlementPath(entry.artifactPath)),
-    identityFrame(entry.fileId, 16, 'file ID'),
-    identityFrame(entry.fileRevision, 16, 'file revision'),
-    canonicalFrame(canonicalU64(entry.exactSize)),
-    identityFrame(entry.ownedObjectId, 32, 'owned object ID'),
-    identityFrame(entry.checkpoint.recordDigest, 32, 'checkpoint digest'),
-    canonicalFrame(canonicalU64(entry.checkpoint.checkpointGeneration)),
-  ])
-}
-
-function canonicalSettlementPath(path: readonly string[]): CanonicalBytes {
-  return path.length === 0 ? canonicalU64(0n) : canonicalPath(path)
-}
-
-function canonicalModifiedTime(admission: DirectoryAdmission): CanonicalBytes {
-  if (admission.modifiedTime === undefined) return canonicalFrame(canonicalU8(0))
-  return canonicalFrame(concatCanonicalBytes([
-    canonicalU8(1),
-    canonicalFrame(canonicalI64(admission.modifiedTime.seconds)),
-    canonicalFrame(canonicalU32(admission.modifiedTime.nanoseconds)),
-    canonicalFrame(canonicalU8(admission.modifiedTime.precision)),
-  ]))
 }
 
 function canonicalOptionalIdentity(
@@ -412,7 +241,7 @@ function canonicalOptionalIdentity(
 ): CanonicalBytes {
   return canonicalFrame(value === undefined
     ? canonicalU8(0)
-    : concatCanonicalBytes([canonicalU8(1), canonicalFrame(canonicalIdentity(value, width, label))]))
+    : concatCanonicalBytes([canonicalU8(1), identityFrame(value, width, label)]))
 }
 
 function identityFrame(value: string, width: number, label: string): CanonicalBytes {
@@ -436,24 +265,4 @@ function workerStatusByte(status: string): number {
     case 'Paused': return 3
     default: throw new TypeError('FSA worker settlement status is invalid')
   }
-}
-
-function compareEntries(left: MaterializedManifestEntry, right: MaterializedManifestEntry): number {
-  const path = comparePath(left.artifactPath, right.artifactPath)
-  if (path !== 0) return path
-  if (left.kind === right.kind) return 0
-  return left.kind === 'directory' ? -1 : 1
-}
-
-function comparePath(left: readonly string[], right: readonly string[]): number {
-  const limit = Math.min(left.length, right.length)
-  for (let index = 0; index < limit; index += 1) {
-    if (left[index] === right[index]) continue
-    return left[index]! < right[index]! ? -1 : 1
-  }
-  return left.length - right.length
-}
-
-function samePath(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((value, index) => value === right[index])
 }

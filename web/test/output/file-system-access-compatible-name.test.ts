@@ -196,6 +196,63 @@ describe('File System Access compatible-name traversal', () => {
     await reopened.close()
   })
 
+  it('waits for every affected parent before descendant compatible-name activation', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const session = await bindTask({
+      parent,
+      repository,
+      checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(),
+      artifact: await resultRootArtifact(),
+      operationSeed: 39,
+      openCompatibleNameLedger: async () => new MemoryCompatibleNameLedger(repository),
+    })
+    await session.ensureDirectory(['nested'])
+    const root = await parent.getDirectoryHandle(
+      session.reservation.physicalName,
+    ) as unknown as MemoryDirectory
+    const nested = await root.getDirectoryHandle('nested') as unknown as MemoryDirectory
+    const held = await session.beginFile({
+      materializationRelativePath: ['held.bin'],
+      openRevision: async () => ({
+        fileId: identity(141),
+        fileRevision: identity(142),
+        exactSize: 1n,
+      }),
+    })
+    await held.writeRange(0n, Uint8Array.of(1))
+    const rejectedInspected = deferred<void>()
+    nested.onEntryLookup = lookup => {
+      if (lookup.kind === 'file' && lookup.name === 'blocked.txt' && !lookup.create) {
+        rejectedInspected.resolve()
+        throw new TypeError('simulated native refusal')
+      }
+    }
+    let descendantAdmitted = false
+    const descendantPromise = session.beginFile({
+      materializationRelativePath: ['nested', 'blocked.txt'],
+      openRevision: async () => ({
+        fileId: identity(143),
+        fileRevision: identity(144),
+        exactSize: 1n,
+      }),
+    }).then((transaction) => {
+      descendantAdmitted = true
+      return transaction
+    })
+    await rejectedInspected.promise
+    await Promise.resolve()
+    expect(descendantAdmitted).toBe(false)
+
+    await held.commit()
+    const descendant = await descendantPromise
+    await descendant.writeRange(0n, Uint8Array.of(2))
+    await descendant.commit()
+    expect(descendantAdmitted).toBe(true)
+    await session.close()
+  })
+
   it('persists descendant physical translation while checkpoint lineage stays logical across reload', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
@@ -717,12 +774,20 @@ describe('File System Access compatible-name terminal cut', () => {
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
   })
 
-  it('reconciles a pending outcome through local-only catch-up authority', async () => {
+  it('retries retirement before clearing a terminal pending outcome', async () => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     const ledger = new MemoryCompatibleNameLedger(repository)
     let retireCount = 0
-    const checkpointFactory = memoryCheckpointFactory(() => { retireCount += 1 })
+    let retirementAttempts = 0
+    const retirementFailure = new DOMException('retirement interrupted', 'UnknownError')
+    const checkpointFactory = memoryCheckpointFactory(
+      () => { retireCount += 1 },
+      () => {
+        retirementAttempts += 1
+        if (retirementAttempts === 1) throw retirementFailure
+      },
+    )
     const locks = new MemoryLockManager()
     const session = await bindTask({
       parent,
@@ -733,9 +798,8 @@ describe('File System Access compatible-name terminal cut', () => {
       operationSeed: 59,
       openCompatibleNameLedger: async () => ledger,
     })
-    const root = await activateCompatibleDirectory(session, parent, 'blocked-catch-up')
+    await activateCompatibleDirectory(session, parent, 'blocked-catch-up')
     await compatibleProjectionCaughtUp(session)
-    ;(await compatibleSidecar(root, ledger)).setWritableFailure(new Error('terminal write interrupted'))
     const priorLeaseId = identity(168)
     const transferJobId = identity(169)
     await startReceiving(repository, session.intent, priorLeaseId)
@@ -746,11 +810,11 @@ describe('File System Access compatible-name terminal cut', () => {
       transferJobId,
       worker,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
-    }, SIGNAL)).rejects.toThrow('terminal write interrupted')
+    }, SIGNAL)).resolves.toMatchObject({ kind: 'partial-directory', reason: 'failures' })
+    await session.releaseRootLease()
 
     const pending = ledger.header?.pendingTerminalOutcome
     expect(pending).toBeDefined()
-    ;(await compatibleSidecar(root, ledger)).setWritableFailure(undefined)
     const newLeaseId = identity(172)
     await repository.commitTransition({
       operationId: session.intent.operationId,
@@ -805,6 +869,7 @@ describe('File System Access compatible-name terminal cut', () => {
       latestObservedFooter: { state: 'failed', committedCount: 1 },
     })
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
+    expect(retirementAttempts).toBe(2)
     expect(retireCount).toBe(1)
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(1)
   })

@@ -2,8 +2,9 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_QUARANTINED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
+  FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PAUSED,
   MAX_CHECKPOINT_AUXILIARY_ENTRIES_PER_OPERATION,
-  MAX_CHECKPOINT_RECORDS_PER_OPERATION,
   validateFileCheckpoint,
   validateFileCheckpointTransition,
   type FileCheckpointV2,
@@ -15,89 +16,73 @@ import {
   type CheckpointNamespaceBinding,
   type CheckpointLineageDecision,
   type CheckpointLineageLookupRequest,
-  type FileCheckpointJournal,
   type FileCheckpointPage,
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
   type InitialCheckpointCASResult,
+  type OwnedFileRestart,
+  type OwnedFileRestartResult,
+  FILE_CHECKPOINT_BATCH_REQUEST_LIMIT,
+  type CreatedFileCheckpointCommit,
+  type SemanticFileCheckpointJournal,
   type PersistentHandleRecord,
   type PersistentHandleInventoryRepository,
   type PersistentHandleRepository,
 } from '../persistence/journal'
+import { materializationLedgerPathKey } from '../materialization-ledger/codec'
 import {
-  operationRecordId,
-  receiveOperationLeaseId,
-  decodeStoredWorkspaceActivationCandidate,
-  RECEIVE_RECORD_LIFECYCLE_STATE,
-  RECEIVE_RECORD_WORKSPACE_ACTIVATION,
-  validateManifestPageRecord,
-  validateReceiveOperationHandleRecord,
-  validateReceiveOperationLeaseRecord,
-  type ManifestPageRecord,
-  type PersistedReceiveRecord,
-  type ReceiveOperationHandleRecord,
-  type ReceiveOperationLeaseRecord,
-  type ReceiveRecordKind,
-  type WorkspaceActivationCandidateV1,
-} from '../workspace/records'
-import { snapshotIdentity } from '../workspace/canonical'
-import { RECEIVE_STATE_INTENT_FROZEN } from '../workspace/state'
-import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
-import type { CompatibleNameOperationBootstrapV1 } from '../file-system-access/compatible-name/model'
-import type { FSACompatibleNameBootstrapRepository } from './indexeddb-root-binding'
+  type FinalFileMaterializationCommit,
+  type FinalFileMaterializationCommitReceipt,
+  type MaterializationLedgerJournal,
+  type MaterializationLedgerPageSummaryScan,
+  type MaterializationLedgerRetirementResult,
+} from '../materialization-ledger/journal'
 import {
-  prepareReceiveOperationTransition,
-  type ReceiveOperationRepository,
-  type ReceiveOperationHandleInventoryRepository,
-  type ReceiveOperationTransition,
-  type WorkspaceActivationJournalRepository,
-} from '../workspace/repository'
+  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+  type MaterializationDirectoryAdmittedEntryV1,
+  type MaterializationDirectoryFinalizedEntryV1,
+  type MaterializationFinalFileProofV1,
+  type MaterializationLedgerBindingV1,
+  type MaterializationLedgerEntryPage,
+  type MaterializationLedgerPageRequest,
+  type MaterializationLedgerPageSummaryV1,
+  type MaterializationLedgerSealPurpose,
+  type MaterializationLedgerSealV1,
+} from '../materialization-ledger/model'
 import {
   DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  INDEXEDDB_BY_OPERATION_FILE_INDEX,
   INDEXEDDB_BY_OPERATION_INDEX,
-  INDEXEDDB_BY_OPERATION_KIND_INDEX,
-  INDEXEDDB_BY_KIND_INDEX,
-  INDEXEDDB_BY_STATE_INDEX,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
-  INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
-  INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
-  INDEXEDDB_RECEIVE_HANDLE_STORE,
-  INDEXEDDB_RECEIVE_LEASE_STORE,
-  INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
-  INDEXEDDB_RECEIVE_RECORD_STORE,
-  isIndexedDbRecord,
+  INDEXEDDB_FILE_FINAL_PROOF_STORE,
+  INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
   openIndexedDbCheckpointDatabase,
   requestResult,
   transactionCompletion,
 } from './indexeddb-database'
 import {
-  applyCompatibleNameBootstrapTransaction,
-  assertCompatibleNameBootstrapTransaction,
-  assertCompatibleNameBootstrapTransition,
-} from './indexeddb-compatible-name-ledger'
-import {
-  applyOperationTransition,
   abortConcurrency,
   abortIntegrity,
   assertAuxiliaryCapacity,
-  assertCheckpointInstallCapacity,
-  assertOperationConcurrency,
-  assertOperationMutationOwnership,
   checkpointLineageAuthority,
-  checkpointLineageAuthorityForCandidate,
-  classifyCheckpointInventory,
   compareRecordIds,
-  readCheckpointInventory,
   readStoredCheckpoint,
   resolveStoredCheckpointCandidate,
   stageStoredCheckpointUpdate,
-  storedCheckpoint,
   validateCheckpointHandle,
-  validateStoredReceiveRecord,
 } from './indexeddb/repository-transactions'
+import {
+  classifyIndexedCheckpointLineages,
+  commitCreatedFileTransaction,
+  commitDurableCheckpointCas,
+  installIndexedInitialClaims,
+  restartOwnedFileTransaction,
+  scanStoredCheckpointPage,
+} from './indexeddb/checkpoint-authority-transactions'
+import type { IndexedDbSemanticTransactionFaults } from './indexeddb/materialization-ledger-transactions'
+import { IndexedDbMaterializationLedgerParticipant } from './indexeddb/materialization-ledger-repository'
+import { snapshotMaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 
 export { IndexedDbOperationConcurrencyError } from './indexeddb/repository-transactions'
 
@@ -105,47 +90,67 @@ export type IndexedDbCandidateResolution =
   | Readonly<{ kind: 'verified'; committed: FileCheckpointV2 }>
   | Readonly<{ kind: 'quarantined'; checkpoint: FileCheckpointV2 }>
 
-const RECEIVE_OPERATION_RECORD_BOUND = 1_048_576
-const RECEIVE_OPERATION_PAGE_BOUND = 1_048_576
-const RECEIVE_OPERATION_HANDLE_BOUND = 1_048_576
-const WORKSPACE_ACTIVATION_CANDIDATE_BOUND = 4_096
-
 export class IndexedDbFileCheckpointRepository
-implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleInventoryRepository {
+implements SemanticFileCheckpointJournal,
+  MaterializationLedgerJournal,
+  PersistentHandleRepository,
+  PersistentHandleInventoryRepository {
   readonly binding: CheckpointNamespaceBinding
   readonly #database: IDBDatabase
+  readonly #ledger: IndexedDbMaterializationLedgerParticipant
   #closed = false
 
-  private constructor(database: IDBDatabase, binding: CheckpointNamespaceBinding) {
+  private constructor(
+    database: IDBDatabase,
+    binding: CheckpointNamespaceBinding,
+    faults?: IndexedDbSemanticTransactionFaults,
+  ) {
     this.#database = database
     this.binding = binding
+    this.#ledger = new IndexedDbMaterializationLedgerParticipant({
+      database,
+      checkpointBinding: binding,
+      ...(faults === undefined ? {} : { faults }),
+      assertOpen: () => this.#assertOpen(),
+    })
     database.addEventListener('versionchange', () => this.close())
   }
 
   static async open(
     binding: CheckpointNamespaceBinding,
     databaseName = DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
+    faults?: IndexedDbSemanticTransactionFaults,
   ): Promise<IndexedDbFileCheckpointRepository> {
     return new IndexedDbFileCheckpointRepository(
       await openIndexedDbCheckpointDatabase(databaseName),
       binding,
+      faults,
     )
   }
 
   async lookupLineage(
     request: CheckpointLineageLookupRequest,
   ): Promise<CheckpointLineageDecision> {
-    this.#assertOpen()
-    const authority = checkpointLineageAuthority(this.binding, request)
+    return (await this.classifyLineages([request]))[0]!
+  }
+
+  async classifyLineages(
+    requests: readonly CheckpointLineageLookupRequest[],
+  ): Promise<readonly CheckpointLineageDecision[]> {
+    this.#assertBatchSize(requests.length)
+    const authorities = requests.map(request => checkpointLineageAuthority(this.binding, request))
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
     ], 'readonly')
     try {
-      const inventory = await readCheckpointInventory(transaction, this.binding, authority)
-      const decision = classifyCheckpointInventory(authority, inventory)
+      const decisions = await classifyIndexedCheckpointLineages(
+        transaction,
+        this.binding,
+        authorities,
+      )
       await transactionCompletion(transaction)
-      return decision
+      return decisions
     } catch (error) {
       abortQuietly(transaction)
       throw error
@@ -155,29 +160,22 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
   async createInitialCheckpoint(
     candidate: FileCheckpointV2,
   ): Promise<InitialCheckpointCASResult> {
-    this.#assertOpen()
-    this.#assertBinding(candidate)
-    const authority = checkpointLineageAuthorityForCandidate(this.binding, candidate)
+    return (await this.installInitialClaims([candidate]))[0]!
+  }
+
+  async installInitialClaims(
+    candidates: readonly FileCheckpointV2[],
+  ): Promise<readonly InitialCheckpointCASResult[]> {
+    this.#assertBatchSize(candidates.length)
+    for (const candidate of candidates) this.#assertBinding(candidate)
     const transaction = this.#database.transaction([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
     ], 'readwrite')
     try {
-      const inventory = await readCheckpointInventory(transaction, this.binding, authority)
-      const decision = classifyCheckpointInventory(authority, inventory)
-      if (decision.kind !== 'absent') {
-        await transactionCompletion(transaction)
-        return decision
-      }
-      assertCheckpointInstallCapacity(inventory, candidate)
-      transaction.objectStore(INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE)
-        .put(storedCheckpoint(candidate))
+      const results = await installIndexedInitialClaims(transaction, this.binding, candidates)
       await transactionCompletion(transaction)
-      return Object.freeze({
-        kind: 'installed',
-        lineageId: authority.lineageId,
-        record: candidate,
-      })
+      return results
     } catch (error) {
       abortQuietly(transaction)
       throw error
@@ -265,6 +263,71 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
     }
   }
 
+  async commitCreatedFile(input: CreatedFileCheckpointCommit): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(input.candidate)
+    this.#assertBinding(input.committed)
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+    ], 'readwrite')
+    try {
+      await commitCreatedFileTransaction(transaction, this.binding, input)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
+  }
+
+  async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(previous)
+    this.#assertBinding(durable)
+    if (previous.phase !== FILE_CHECKPOINT_PHASE_ACTIVE ||
+        (durable.phase !== FILE_CHECKPOINT_PHASE_ACTIVE &&
+         durable.phase !== FILE_CHECKPOINT_PHASE_PAUSED)) {
+      throw new TypeError('durable cut requires an active predecessor and active or paused successor')
+    }
+    await this.#commitDurableCas(previous, durable)
+  }
+
+  async resumePausedCheckpoint(paused: FileCheckpointV2, active: FileCheckpointV2): Promise<void> {
+    this.#assertOpen()
+    this.#assertBinding(paused)
+    this.#assertBinding(active)
+    if (paused.phase !== FILE_CHECKPOINT_PHASE_PAUSED || active.phase !== FILE_CHECKPOINT_PHASE_ACTIVE ||
+        paused.checkpointGeneration !== active.checkpointGeneration) {
+      throw new TypeError('checkpoint resume requires a paused-to-active lifecycle CAS')
+    }
+    await this.#commitDurableCas(paused, active)
+  }
+
+  async restartOwnedFile(input: OwnedFileRestart): Promise<OwnedFileRestartResult> {
+    this.#assertOpen()
+    this.#assertBinding(input.previous)
+    this.#assertBinding(input.reset)
+    const pathKey = await materializationLedgerPathKey(
+      snapshotMaterializationRootRelativePath(input.previous.canonicalPath),
+    )
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
+      INDEXEDDB_FILE_FINAL_PROOF_STORE,
+      INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
+    ], 'readwrite')
+    try {
+      const result = await restartOwnedFileTransaction(transaction, this.binding, input, pathKey)
+      await transactionCompletion(transaction)
+      return result
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
+  }
+
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
     this.#assertOpen()
     const transaction = this.#database.transaction(
@@ -299,6 +362,80 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
     }
     return finalFileCheckpointProof(record)
   }
+
+  commitFinalFile(input: FinalFileMaterializationCommit): Promise<FinalFileMaterializationCommitReceipt> {
+    return this.#ledger.commitFinalFile(input)
+  }
+
+  appendDirectoryAdmission(
+    binding: MaterializationLedgerBindingV1,
+    entry: MaterializationDirectoryAdmittedEntryV1,
+  ): Promise<'insert' | 'idempotent'> {
+    return this.#ledger.appendDirectoryAdmission(binding, entry)
+  }
+
+  appendDirectoryFinalization(
+    binding: MaterializationLedgerBindingV1,
+    entry: MaterializationDirectoryFinalizedEntryV1,
+  ): Promise<'insert' | 'idempotent'> {
+    return this.#ledger.appendDirectoryFinalization(binding, entry)
+  }
+
+  scanMaterializationLedgerEntries(
+    binding: MaterializationLedgerBindingV1,
+    request: MaterializationLedgerPageRequest,
+  ): Promise<MaterializationLedgerEntryPage> {
+    return this.#ledger.scanMaterializationLedgerEntries(binding, request)
+  }
+
+  countCheckpointCandidates(binding: MaterializationLedgerBindingV1): Promise<bigint> {
+    return this.#ledger.countCheckpointCandidates(binding)
+  }
+
+  persistMaterializationLedgerPage(
+    binding: MaterializationLedgerBindingV1,
+    page: MaterializationLedgerPageSummaryV1,
+  ): Promise<'insert' | 'idempotent'> {
+    return this.#ledger.persistMaterializationLedgerPage(binding, page)
+  }
+
+  scanMaterializationLedgerPages(
+    binding: MaterializationLedgerBindingV1,
+    sealId: string,
+    afterPageOrdinal?: bigint,
+  ): Promise<MaterializationLedgerPageSummaryScan> {
+    return this.#ledger.scanMaterializationLedgerPages(binding, sealId, afterPageOrdinal)
+  }
+
+  persistMaterializationLedgerSeal(
+    binding: MaterializationLedgerBindingV1,
+    seal: MaterializationLedgerSealV1,
+  ): Promise<'insert' | 'idempotent'> {
+    return this.#ledger.persistMaterializationLedgerSeal(binding, seal)
+  }
+
+  sealMaterializationLedger(input: Readonly<{
+    binding: MaterializationLedgerBindingV1
+    sealSequence: bigint
+    purpose: MaterializationLedgerSealPurpose
+  }>): Promise<MaterializationLedgerSealV1> {
+    return this.#ledger.sealMaterializationLedger(input)
+  }
+
+  readMaterializationFinalProof(
+    binding: MaterializationLedgerBindingV1,
+    proofId: string,
+  ): Promise<MaterializationFinalFileProofV1 | undefined> {
+    return this.#ledger.readMaterializationFinalProof(binding, proofId)
+  }
+
+  retireMaterializationLedgerBatch(
+    binding: MaterializationLedgerBindingV1,
+    limit: typeof MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+  ): Promise<MaterializationLedgerRetirementResult> {
+    return this.#ledger.retireMaterializationLedgerBatch(binding, limit)
+  }
+
 
   async putHandle(record: PersistentHandleRecord): Promise<void> {
     this.#assertOpen()
@@ -436,36 +573,16 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
   ): Promise<FileCheckpointPage> {
     this.#assertOpen()
     const transaction = this.#database.transaction(storeName, 'readonly')
-    const store = transaction.objectStore(storeName)
-    const query = scan.fileId === undefined
-      ? IDBKeyRange.only(this.binding.operationId)
-      : IDBKeyRange.only([this.binding.operationId, scan.fileId])
-    const indexName = scan.fileId === undefined
-      ? INDEXEDDB_BY_OPERATION_INDEX
-      : INDEXEDDB_BY_OPERATION_FILE_INDEX
-    const values = await requestResult<unknown[]>(store.index(indexName).getAll(
-      query,
-      MAX_CHECKPOINT_RECORDS_PER_OPERATION + 1,
-    ))
-    await transactionCompletion(transaction)
-    if (values.length > MAX_CHECKPOINT_RECORDS_PER_OPERATION) {
-      throw new DOMException('Checkpoint scan exceeds its operation bound', 'QuotaExceededError')
-    }
-    const records = values.map(readStoredCheckpoint)
-      .sort((left, right) => compareRecordIds(left.recordId, right.recordId))
-    if (scan.direction === 'descending') records.reverse()
-    const afterCursor = scan.cursor === undefined
-      ? records
-      : records.filter((record) => scan.direction === 'ascending'
-        ? record.recordId > scan.cursor!
-        : record.recordId < scan.cursor!)
     const limit = scan.limit ?? 128
-    const pageRecords = afterCursor.slice(0, limit)
-    const nextCursor = afterCursor.length >= limit ? pageRecords.at(-1)?.recordId : undefined
-    return validateFileCheckpointPage({
-      records: pageRecords,
-      ...(nextCursor === undefined ? {} : { nextCursor }),
-    }, scan, this.binding)
+    const page = await scanStoredCheckpointPage(
+      transaction,
+      this.binding,
+      storeName,
+      scan,
+      limit,
+    )
+    await transactionCompletion(transaction)
+    return validateFileCheckpointPage(page, scan, this.binding)
   }
 
   #retiredRecordId(storeName: string, value: unknown): string {
@@ -488,6 +605,27 @@ implements FileCheckpointJournal, PersistentHandleRepository, PersistentHandleIn
     }
   }
 
+  async #commitDurableCas(previous: FileCheckpointV2, next: FileCheckpointV2): Promise<void> {
+    const transaction = this.#database.transaction([
+      INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
+      INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
+    ], 'readwrite')
+    try {
+      await commitDurableCheckpointCas(transaction, previous, next)
+      await transactionCompletion(transaction)
+    } catch (error) {
+      abortQuietly(transaction)
+      throw error
+    }
+  }
+
+  #assertBatchSize(length: number): void {
+    this.#assertOpen()
+    if (!Number.isInteger(length) || length < 1 || length > FILE_CHECKPOINT_BATCH_REQUEST_LIMIT) {
+      throw new TypeError('checkpoint repository batch is outside its fixed bound')
+    }
+  }
+
   #assertOpen(): void {
     if (this.#closed) {
       throw new DOMException('File checkpoint repository is closed', 'InvalidStateError')
@@ -503,244 +641,6 @@ function abortQuietly(transaction: IDBTransaction): void {
   }
 }
 
-export class IndexedDbReceiveOperationRepository
-implements ReceiveOperationRepository,
-  ReceiveOperationHandleInventoryRepository,
-  WorkspaceActivationJournalRepository,
-  FSACompatibleNameBootstrapRepository {
-  readonly #database: IDBDatabase
-  #closed = false
-
-  private constructor(database: IDBDatabase) {
-    this.#database = database
-    database.addEventListener('versionchange', () => this.close())
-  }
-
-  static async open(
-    databaseName = DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME,
-  ): Promise<IndexedDbReceiveOperationRepository> {
-    return new IndexedDbReceiveOperationRepository(
-      await openIndexedDbCheckpointDatabase(databaseName),
-    )
-  }
-
-  async commitTransition(transition: ReceiveOperationTransition): Promise<void> {
-    this.#assertOpen()
-    const prepared = await prepareReceiveOperationTransition(transition)
-    const transaction = this.#database.transaction([
-      INDEXEDDB_RECEIVE_RECORD_STORE,
-      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
-      INDEXEDDB_RECEIVE_HANDLE_STORE,
-      INDEXEDDB_RECEIVE_LEASE_STORE,
-    ], 'readwrite')
-    await assertOperationConcurrency(transaction, prepared)
-    await assertOperationMutationOwnership(transaction, prepared)
-    applyOperationTransition(transaction, prepared)
-    await transactionCompletion(transaction)
-  }
-
-  async commitFSACompatibleNameBootstrap(input: Readonly<{
-    transition: ReceiveOperationTransition
-    bootstrap: CompatibleNameOperationBootstrapV1
-  }>): Promise<void> {
-    this.#assertOpen()
-    const prepared = await prepareReceiveOperationTransition(input.transition)
-    const bootstrap = assertCompatibleNameBootstrapTransition(prepared, input.bootstrap)
-    const transaction = this.#database.transaction([
-      INDEXEDDB_RECEIVE_RECORD_STORE,
-      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
-      INDEXEDDB_RECEIVE_HANDLE_STORE,
-      INDEXEDDB_RECEIVE_LEASE_STORE,
-      INDEXEDDB_COMPATIBLE_NAME_OPERATION_STORE,
-      INDEXEDDB_COMPATIBLE_NAME_MAPPING_STORE,
-    ], 'readwrite')
-    try {
-      await assertOperationConcurrency(transaction, prepared)
-      await assertOperationMutationOwnership(transaction, prepared)
-      const insertBootstrap = await assertCompatibleNameBootstrapTransaction(
-        transaction,
-        bootstrap,
-      )
-      applyOperationTransition(transaction, prepared)
-      if (insertBootstrap) applyCompatibleNameBootstrapTransaction(transaction, bootstrap)
-      await transactionCompletion(transaction)
-    } catch (error) {
-      abortQuietly(transaction)
-      throw error
-    }
-  }
-
-  async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {
-    const value = await this.#read<unknown>(INDEXEDDB_RECEIVE_RECORD_STORE, id)
-    return value === undefined ? undefined : validateStoredReceiveRecord(value)
-  }
-
-  readLifecycle(operationId: string): Promise<PersistedReceiveRecord | undefined> {
-    return this.readRecord(operationRecordId(operationId, RECEIVE_RECORD_LIFECYCLE_STATE))
-  }
-
-  async listRecords(
-    operationId: string,
-    kind?: ReceiveRecordKind,
-  ): Promise<readonly PersistedReceiveRecord[]> {
-    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
-    const values = await this.#listByOperation<unknown>(
-      INDEXEDDB_RECEIVE_RECORD_STORE,
-      canonicalOperationId,
-      kind,
-      RECEIVE_OPERATION_RECORD_BOUND,
-    )
-    return Object.freeze(await Promise.all(values.map(validateStoredReceiveRecord)))
-  }
-
-  async listManifestPages(
-    operationId: string,
-    kind?: ReceiveRecordKind,
-  ): Promise<readonly ManifestPageRecord[]> {
-    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
-    const values = await this.#listByOperation<unknown>(
-      INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE,
-      canonicalOperationId,
-      kind,
-      RECEIVE_OPERATION_PAGE_BOUND,
-    )
-    return Object.freeze(await Promise.all(
-      values.map((value) => validateManifestPageRecord(value as ManifestPageRecord)),
-    ))
-  }
-
-  async readHandle<T = unknown>(
-    id: string,
-  ): Promise<ReceiveOperationHandleRecord<T> | undefined> {
-    const value = await this.#read<unknown>(INDEXEDDB_RECEIVE_HANDLE_STORE, id)
-    return value === undefined
-      ? undefined
-      : validateReceiveOperationHandleRecord(value as ReceiveOperationHandleRecord<T>)
-  }
-
-  async listHandles(operationId: string): Promise<readonly ReceiveOperationHandleRecord[]> {
-    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
-    const values = await this.#listByOperation<unknown>(
-      INDEXEDDB_RECEIVE_HANDLE_STORE,
-      canonicalOperationId,
-      undefined,
-      RECEIVE_OPERATION_HANDLE_BOUND,
-    )
-    const handles = values.map((value) => validateReceiveOperationHandleRecord(
-      value as ReceiveOperationHandleRecord,
-    ))
-    return Object.freeze(handles.sort((left, right) => compareRecordIds(left.id, right.id)))
-  }
-
-  async listWorkspaceActivationCandidates(): Promise<readonly WorkspaceActivationCandidateV1[]> {
-    this.#assertOpen()
-    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
-    const values = await requestResult<unknown[]>(
-      transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
-        .index(INDEXEDDB_BY_KIND_INDEX)
-        .getAll(
-          IDBKeyRange.only(RECEIVE_RECORD_WORKSPACE_ACTIVATION),
-          WORKSPACE_ACTIVATION_CANDIDATE_BOUND + 1,
-        ),
-    )
-    await transactionCompletion(transaction)
-    if (values.length > WORKSPACE_ACTIVATION_CANDIDATE_BOUND) {
-      throw new DOMException('Workspace activation inventory exceeds its bound', 'QuotaExceededError')
-    }
-    return Object.freeze(await Promise.all(values.map(async (value) =>
-      decodeStoredWorkspaceActivationCandidate(await validateStoredReceiveRecord(value)))))
-  }
-
-  async listInitialWorkspaceActivationOperationIds(): Promise<readonly string[]> {
-    this.#assertOpen()
-    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
-    const values = await requestResult<unknown[]>(
-      transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE)
-        .index(INDEXEDDB_BY_STATE_INDEX)
-        .getAll(
-          IDBKeyRange.only(RECEIVE_STATE_INTENT_FROZEN),
-          WORKSPACE_ACTIVATION_CANDIDATE_BOUND + 1,
-        ),
-    )
-    await transactionCompletion(transaction)
-    if (values.length > WORKSPACE_ACTIVATION_CANDIDATE_BOUND) {
-      throw new DOMException('Initial workspace activation inventory exceeds its bound', 'QuotaExceededError')
-    }
-    const operationIds = await Promise.all(values.map(async (value) => {
-      const record = await validateStoredReceiveRecord(value)
-      const lifecycle = decodeStoredReceiveLifecycleState(record)
-      if (lifecycle.kind !== 'intent-frozen') {
-        throw new TypeError('Initial workspace activation index disagrees with lifecycle authority')
-      }
-      return lifecycle.operationId
-    }))
-    if (new Set(operationIds).size !== operationIds.length) {
-      throw new TypeError('Initial workspace activation inventory repeats an operation')
-    }
-    return Object.freeze(operationIds.sort())
-  }
-
-  async readLease(operationId: string): Promise<ReceiveOperationLeaseRecord | undefined> {
-    const canonicalOperationId = snapshotIdentity(operationId, 16, 'operation ID')
-    const value = await this.#read<unknown>(
-      INDEXEDDB_RECEIVE_LEASE_STORE,
-      receiveOperationLeaseId(canonicalOperationId),
-    )
-    if (value === undefined) return undefined
-    const record = validateReceiveOperationLeaseRecord(value as ReceiveOperationLeaseRecord)
-    if (record.operationId !== canonicalOperationId) {
-      throw new TypeError('receive lease escaped its operation')
-    }
-    return record
-  }
-
-  close(): void {
-    if (this.#closed) return
-    this.#closed = true
-    this.#database.close()
-  }
-
-  async #read<T>(storeName: string, id: string): Promise<T | undefined> {
-    this.#assertOpen()
-    const transaction = this.#database.transaction(storeName, 'readonly')
-    const value = await requestResult<T | undefined>(
-      transaction.objectStore(storeName).get(id),
-    )
-    await transactionCompletion(transaction)
-    return value
-  }
-
-  async #listByOperation<T>(
-    storeName: string,
-    operationId: string,
-    kind: ReceiveRecordKind | undefined,
-    bound: number,
-  ): Promise<readonly T[]> {
-    this.#assertOpen()
-    const transaction = this.#database.transaction(storeName, 'readonly')
-    const store = transaction.objectStore(storeName)
-    const values = kind === undefined
-      ? await requestResult<T[]>(store.index(INDEXEDDB_BY_OPERATION_INDEX).getAll(
-          IDBKeyRange.only(operationId),
-          bound + 1,
-        ))
-      : await requestResult<T[]>(store.index(INDEXEDDB_BY_OPERATION_KIND_INDEX).getAll(
-          IDBKeyRange.only([operationId, kind]),
-          bound + 1,
-        ))
-    await transactionCompletion(transaction)
-    if (values.length > bound || values.some((value) =>
-      !isIndexedDbRecord(value) || value.operationId !== operationId)) {
-      throw new DOMException('Receive operation inventory exceeds its bound', 'QuotaExceededError')
-    }
-    return Object.freeze(values)
-  }
-
-  #assertOpen(): void {
-    if (this.#closed) {
-      throw new DOMException('Receive operation repository is closed', 'InvalidStateError')
-    }
-  }
-}
+export { IndexedDbReceiveOperationRepository } from './indexeddb/receive-operation-repository'
 
 export type { PersistentHandleRecord }
