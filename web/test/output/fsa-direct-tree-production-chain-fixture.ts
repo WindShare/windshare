@@ -46,7 +46,6 @@ import {
   type FSAFileCheckpointRepositoryFactory,
 } from '../../src/output/file-system-access/session'
 import type { FSASemanticOutputRepository } from '../../src/output/file-system-access/checkpoint-repository'
-import type { PersistentMaterializationPort } from '../../src/output/persistent-tree/contracts'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
@@ -320,6 +319,7 @@ export async function runFSAProductionChain(
 export async function runFSAProductionPersistenceChain(
   scenarioKind: Exclude<FSAProductionChainScenarioKind, 'single-file'>,
   variant: FSAProductionPersistenceVariant,
+  reopenedRecovery: 'preserve' | 'restart-owned-file' = 'preserve',
 ): Promise<FSAProductionPersistenceObservation> {
   const scenario = await productionScenario(
     scenarioKind,
@@ -457,6 +457,7 @@ export async function runFSAProductionPersistenceChain(
     admissionRecorder: reopenedAdmissionRecorder,
     fileRecorder: reopenedFileRecorder,
     settlementRecorder,
+    recoveryPausedFile: reopenedRecovery,
   })
   const reopenedReaders = readerFixture(scenario.files)
   let reopenedResult: Awaited<ReturnType<TransferJob['run']>>
@@ -551,6 +552,7 @@ async function productionPlanAuthority(input: Readonly<{
   settlementRecorder?: SettlementRecorder
   diagnostics?: OutputDiagnosticsPorts
   maximumConcurrentFilePipelines?: number
+  recoveryPausedFile?: 'preserve' | 'restart-owned-file'
 }>): Promise<V2PlanExecutionAuthority> {
   const settlement = await createFileSystemAccessSettlementAuthority({
     intent: input.intent,
@@ -569,7 +571,7 @@ async function productionPlanAuthority(input: Readonly<{
           const persistentSettlement = settlement.bindMaterialization(input.session)
           const execution = await createPersistentDirectTreeExecution({
             intent,
-            materialization: confirmedRecoveryMaterialization(input.session),
+            materialization: input.session,
             executionProfile: outputExecutionProfile({
               maximumConcurrentFilePipelines: input.maximumConcurrentFilePipelines ?? 1,
               maximumOutstandingWriteBytes: TEST_RECOVERY_BUDGET_BYTES,
@@ -587,6 +589,15 @@ async function productionPlanAuthority(input: Readonly<{
                 },
               },
             }),
+            recovery: {
+              pausedFile: input.recoveryPausedFile ?? 'preserve',
+              costBudget: {
+                maximumPrefixCopyBytes: TEST_RECOVERY_BUDGET_BYTES,
+                maximumCumulativeWriteAmplificationBytes: TEST_RECOVERY_BUDGET_BYTES,
+                maximumPeakTemporaryBytes: TEST_RECOVERY_BUDGET_BYTES,
+              },
+              confirmTemporarySpace: () => true,
+            },
             namespaceClaims: input.session,
             repairSummary: () => input.session.repairSummary(),
             outputIdentity: outputSessionIdentity({
@@ -609,36 +620,6 @@ async function productionPlanAuthority(input: Readonly<{
       },
       lifecycle: settlement,
     },
-  })
-}
-
-function confirmedRecoveryMaterialization(
-  session: Awaited<ReturnType<typeof bindTask>>,
-): PersistentMaterializationPort {
-  return Object.freeze({
-    beginFile: (request: Parameters<PersistentMaterializationPort['beginFile']>[0]) => {
-      const recovery = request.recovery?.kind === 'preserve'
-        ? Object.freeze({
-            ...request.recovery,
-            confirmTemporarySpace: () => true,
-          })
-        : request.recovery
-      return session.beginFile({
-        ...request,
-        ...(recovery === undefined ? {} : { recovery }),
-      })
-    },
-    ensureDirectory: (path: Parameters<PersistentMaterializationPort['ensureDirectory']>[0]) =>
-      session.ensureDirectory(path),
-    materializeDirectory: (
-      request: Parameters<NonNullable<PersistentMaterializationPort['materializeDirectory']>>[0],
-    ) => session.materializeDirectory(request),
-    finalizeDirectory: (
-      admission: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[0],
-      outcome: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[1],
-    ) => session.finalizeDirectory(admission, outcome),
-    closeForTerminalSettlement: () => session.closeForTerminalSettlement(),
-    close: () => session.close(),
   })
 }
 

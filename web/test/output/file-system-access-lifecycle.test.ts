@@ -1117,7 +1117,7 @@ describe('File System Access fresh-page discard authority', () => {
 
 function confirmedRecoveryPolicy() {
   return Object.freeze({
-    kind: 'preserve' as const,
+    pausedFile: 'preserve' as const,
     costBudget: Object.freeze({
       maximumPrefixCopyBytes: 1_024n,
       maximumCumulativeWriteAmplificationBytes: 4_096n,

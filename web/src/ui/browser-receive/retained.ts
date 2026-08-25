@@ -590,6 +590,8 @@ function browserRetainedContinuationExecutor(
               continuation.operation,
               diagnosticsFor('file_system_access', outputTrace, binding.sinks),
               localOutputFailures,
+              undefined,
+              windowPort.confirm.bind(windowPort),
             ),
             binding,
           )

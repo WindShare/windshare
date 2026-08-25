@@ -1,6 +1,8 @@
 import type { FinalFileCheckpointProof } from '../../output/persistence/journal'
 import type { PersistentFileTransactionPort } from '../../output/persistent-tree/contracts'
+import { PersistentRecoveryPreflightError } from '../../output/persistent-tree/recovery'
 import {
+  TransferPauseRequestedError,
   VerifiedDurableRanges,
   type AutomaticCheckpointResult,
   type AutomaticCheckpointTrigger,
@@ -46,8 +48,18 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
     this.#recordProof = input.recordProof
   }
 
-  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
-    return this.#transaction.writeRange(offset, data, signal)
+  async writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
+    try {
+      await this.#transaction.writeRange(offset, data, signal)
+    } catch (cause) {
+      if (cause instanceof PersistentRecoveryPreflightError) {
+        throw new TransferPauseRequestedError(
+          'Persistent output recovery still requires a receiver decision',
+          { cause },
+        )
+      }
+      throw cause
+    }
   }
 
   async automaticCheckpoint(
