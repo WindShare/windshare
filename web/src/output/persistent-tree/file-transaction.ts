@@ -39,6 +39,7 @@ import type {
   PersistentFileTransactionPort,
   PersistentFinalFileCommit,
   PersistentTreeFile,
+  PersistentTemporarySpacePurpose,
   PersistentWriterPreflight,
   SemanticPersistentOutputJournal,
 } from './contracts'
@@ -193,7 +194,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         return Object.freeze({ kind: 'declined' as const, reason, estimate: cost })
       }
       if (preflight.space === 'requires-user-confirmation' &&
-          !(await this.#confirmTemporarySpace(preflight))) {
+          !(await this.#confirmTemporarySpace(preflight, 'automatic-checkpoint'))) {
         return Object.freeze({
           kind: 'declined' as const,
           reason: 'temporary-space-confirmation-required' as const,
@@ -540,7 +541,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       durablePrefix,
       this.#cumulativeWriteAmplificationBytes,
     )
-    const budget = this.#recovery.kind === 'preserve' ? this.#recovery.costBudget : undefined
+    const budget = this.#recovery.costBudget
     if (preflight === undefined || budget === undefined) {
       throw new PersistentRecoveryPreflightError({
         reason: 'cost-evidence-unavailable',
@@ -553,7 +554,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       throw new PersistentRecoveryPreflightError({ reason, preflight, budget })
     }
     if (preflight.space === 'requires-user-confirmation' &&
-        !(await this.#confirmTemporarySpace(preflight))) {
+        !(await this.#confirmTemporarySpace(preflight, 'paused-file-recovery'))) {
       throw new PersistentRecoveryPreflightError({
         reason: 'space-confirmation-required',
         preflight,
@@ -563,10 +564,12 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#cumulativeWriteAmplificationBytes = preflight.cost.cumulativeWriteAmplificationBytes
   }
 
-  async #confirmTemporarySpace(preflight: PersistentWriterPreflight): Promise<boolean> {
-    if (this.#recovery.kind !== 'preserve' ||
-        this.#recovery.confirmTemporarySpace === undefined) return false
-    return this.#recovery.confirmTemporarySpace(preflight)
+  async #confirmTemporarySpace(
+    preflight: PersistentWriterPreflight,
+    purpose: PersistentTemporarySpacePurpose,
+  ): Promise<boolean> {
+    if (this.#recovery.confirmTemporarySpace === undefined) return false
+    return this.#recovery.confirmTemporarySpace(preflight, purpose)
   }
 
   async #closeWriter(): Promise<void> {
