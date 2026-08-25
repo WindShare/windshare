@@ -160,4 +160,20 @@ describe('FSA DirectTree production coordinate chain', () => {
       }
     },
   )
+
+  it('restarts only the selected operation-owned incomplete file when the receiver requests it', async () => {
+    const observed = await runFSAProductionPersistenceChain(
+      'directory-anchor',
+      'pause-resume',
+      'restart-owned-file',
+    )
+
+    expect(observed.firstWorkerStatus).toBe('Paused')
+    expect(observed.reopenedDurableRanges).toEqual([{
+      path: ['image.bin'],
+      ranges: [],
+    }])
+    expect(observed.resumedWorkerStatus).toBe('Succeeded')
+    expect(observed.resumedLifecycleKind).toBe('published')
+  })
 })

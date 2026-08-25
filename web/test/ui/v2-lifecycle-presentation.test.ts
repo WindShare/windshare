@@ -167,6 +167,23 @@ describe('direct ZIP lifecycle presentation', () => {
     expect(attention.description).toContain('No automatic change was made')
   })
 
+  it('offers preserve and explicit owned-file restart choices for DirectTree recovery', () => {
+    const resumable = present(lifecycle({
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest: 'checkpoint-set',
+      completedFileCount: 1n,
+      completedBytes: 1_024n,
+      expiresAt: DEADLINE,
+    }), TREE, 'direct-tree')
+
+    expect(resumable.description).toContain('temporary destination space')
+    expect(resumable.actions).toEqual([
+      { kind: 'continue', label: 'Continue and preserve partial files', destructive: false },
+      { kind: 'redownload', label: 'Restart incomplete files', destructive: true },
+    ])
+  })
+
   it('offers a new-operation route only when the retained ZIP target was deleted', () => {
     const deleted = presentNewReceiveOperation({
       lifecycle: lifecycle({

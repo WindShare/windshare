@@ -81,6 +81,10 @@ import {
   verifiedPersistentRanges,
   type PersistentOutputTransactionNamespace,
 } from './persistent-file-transaction'
+import {
+  bindPersistentTemporarySpaceConfirmation,
+  type PersistentExecutionRecoveryPolicy,
+} from './persistent-recovery-policy'
 
 export type {
   PersistentDirectTreeMaterializationEvidence,
@@ -92,6 +96,7 @@ export type {
 } from './persistent-evidence'
 
 export type { PersistentDirectorySettlementEvidence } from './persistent-evidence'
+export type { PersistentExecutionRecoveryPolicy } from './persistent-recovery-policy'
 
 type DirectTreeIntent = ReceiveIntent & Readonly<{ plan: DirectTreePlan }>
 type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
@@ -116,6 +121,7 @@ export async function createPersistentDirectTreeExecution(input: {
   readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   readonly capabilities?: Partial<OutputCapabilities>
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly recovery?: PersistentExecutionRecoveryPolicy
   readonly performance?: PerformanceSummaryObservations
 }): Promise<DirectTreeExecution> {
   const scope = await createDirectoryAdmissionScope(input.intent)
@@ -131,6 +137,7 @@ export async function createPersistentDirectTreeExecution(input: {
     }),
     directoryLedger: new DirectoryAdmissionLedger(scope),
     directTreeCoordinates: coordinates,
+    ...(input.recovery === undefined ? {} : { recovery: input.recovery }),
     ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
     ...(input.performance === undefined ? {} : { performance: input.performance }),
   })
@@ -299,6 +306,7 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #directoryLedger: DirectoryAdmissionLedger | undefined
   readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
   readonly #directTreeCoordinates: DirectTreeCoordinateContract | undefined
+  readonly #recovery: PersistentExecutionRecoveryPolicy
   readonly #performance: PerformanceSummaryObservations | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
   readonly #directoryPathByAdmission = new Map<string, MaterializationRootRelativePath>()
@@ -314,6 +322,7 @@ class PersistentMaterializationOutput implements OutputSession {
     readonly directoryLedger?: DirectoryAdmissionLedger
     readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
     readonly directTreeCoordinates?: DirectTreeCoordinateContract
+    readonly recovery?: PersistentExecutionRecoveryPolicy
     readonly performance?: PerformanceSummaryObservations
   }) {
     this.#materialization = input.materialization
@@ -324,6 +333,7 @@ class PersistentMaterializationOutput implements OutputSession {
     this.#directoryLedger = input.directoryLedger
     this.#namespaceClaims = input.namespaceClaims
     this.#directTreeCoordinates = input.directTreeCoordinates
+    this.#recovery = input.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
     this.#performance = input.performance
     if (this.#directTreeCoordinates !== undefined &&
         (input.materialization.materializeDirectory === undefined ||
@@ -462,6 +472,15 @@ class PersistentMaterializationOutput implements OutputSession {
   async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
+    const confirmTemporarySpace = bindPersistentTemporarySpaceConfirmation(
+      this.#recovery,
+      request.materializationRelativePath,
+    )
+    let recoveryCostBudget = this.#recovery.costBudget
+    if (recoveryCostBudget === undefined &&
+        this.executionProfile.automaticCheckpoint.kind === 'bounded') {
+      recoveryCostBudget = this.executionProfile.automaticCheckpoint.costBudget
+    }
     const revisionQueuedAtMilliseconds = performanceNowMilliseconds(this.#performance)
     const mutation = request.parentAdmission === undefined || this.#directoryLedger === undefined
       ? undefined
@@ -476,12 +495,13 @@ class PersistentMaterializationOutput implements OutputSession {
         materializationRelativePath: request.materializationRelativePath,
         shareInstance: request.source.shareInstance,
         outputSession: this.identity,
-        recovery: this.executionProfile.automaticCheckpoint.kind === 'bounded'
-          ? Object.freeze({
-              kind: 'preserve' as const,
-              costBudget: this.executionProfile.automaticCheckpoint.costBudget,
-            })
-          : Object.freeze({ kind: 'preserve' as const }),
+        recovery: Object.freeze({
+          pausedFile: this.#recovery.pausedFile,
+          ...(recoveryCostBudget === undefined ? {} : { costBudget: recoveryCostBudget }),
+          ...(confirmTemporarySpace === undefined
+            ? {}
+            : { confirmTemporarySpace }),
+        }),
         ...(request.performancePipeline === undefined
           ? {}
           : { performancePipeline: request.performancePipeline }),

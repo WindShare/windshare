@@ -45,18 +45,18 @@ export interface PersistentFileRequest {
   readonly openRevision: () => Promise<OpenedFileRevision>
 }
 
-export type PersistentFileRecoveryPolicy =
-  | Readonly<{
-      readonly kind: 'preserve'
-      readonly costBudget?: OutputCheckpointCostBudget
-      readonly confirmTemporarySpace?: (
-        preflight: PersistentWriterPreflight,
-      ) => boolean | Promise<boolean>
-    }>
-  | Readonly<{
-      readonly kind: 'restart-owned-file'
-      readonly expectedOwnedObjectId: string
-    }>
+export type PersistentPausedFileRecovery = 'preserve' | 'restart-owned-file'
+
+export type PersistentTemporarySpacePurpose = 'automatic-checkpoint' | 'paused-file-recovery'
+
+export type PersistentFileRecoveryPolicy = Readonly<{
+  readonly pausedFile: PersistentPausedFileRecovery
+  readonly costBudget?: OutputCheckpointCostBudget
+  readonly confirmTemporarySpace?: (
+    preflight: PersistentWriterPreflight,
+    purpose: PersistentTemporarySpacePurpose,
+  ) => boolean | Promise<boolean>
+}>
 
 export type PersistentWriterOpenMode = 'preserve' | 'truncate'
 

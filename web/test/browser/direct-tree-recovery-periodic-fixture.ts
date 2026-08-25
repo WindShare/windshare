@@ -527,7 +527,7 @@ function confirmedRecoveryMaterialization(
 ): PersistentMaterializationPort {
   return Object.freeze({
     beginFile: (request: PersistentBeginFileRequest) => {
-      if (request.recovery?.kind !== 'preserve') return session.beginFile(request)
+      if (request.recovery?.pausedFile !== 'preserve') return session.beginFile(request)
       return session.beginFile({
         ...request,
         recovery: Object.freeze({

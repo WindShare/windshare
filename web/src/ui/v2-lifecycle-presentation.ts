@@ -12,6 +12,7 @@ import type {
   ArtifactSpec,
   MaterializationPlan,
 } from '../transfer/intent'
+import { resumableFileSetDescription } from './resumable-file-set-presentation'
 import { formatBytes } from './v2-progress-presentation'
 import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
 
@@ -337,7 +338,7 @@ function lifecycleCopy(
       }
       return copy(
         'Ready to continue receiving',
-        `${state.completedFileCount} file(s) and ${formatBytes(state.completedBytes)} are complete. Continuing still requires the sender and save permission.`,
+        resumableFileSetDescription(state, plan.kind),
         'warning',
       )
     }
@@ -489,7 +490,10 @@ function lifecycleActions(
             action('continue', 'Continue receiving'),
             action('discard', 'Discard task and clean unfinished content', true),
           ])
-        : Object.freeze([action('continue', 'Continue receiving')])
+        : Object.freeze([
+            action('continue', 'Continue and preserve partial files'),
+            action('redownload', 'Restart incomplete files', true),
+          ])
     case 'resumable-package':
       return Object.freeze([
         action('continue', artifact.kind === 'zip-archive' ? 'Continue generating ZIP' : 'Continue preparing file'),

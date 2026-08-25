@@ -59,7 +59,7 @@ const BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES = 1_024n
 /** Browser recovery fixtures model the explicit user approval required for prefix preservation. */
 export function confirmedBrowserRecoveryPolicy() {
   return Object.freeze({
-    kind: 'preserve' as const,
+    pausedFile: 'preserve' as const,
     costBudget: Object.freeze({
       maximumPrefixCopyBytes: BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES,
       maximumCumulativeWriteAmplificationBytes: BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES,

@@ -24,6 +24,7 @@ import {
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
   snapshotOutputFileRequest,
+  type AutomaticCheckpointResult,
   type AutomaticCheckpointTrigger,
   type OutputFile,
   type OutputExecutionProfileBoundedCheckpoint,
@@ -170,6 +171,7 @@ export async function transferV2File(
       durableBytes: rangeBytes(initialDurable),
       pendingBytes: 0n,
       pendingSince: undefined as number | undefined,
+      automaticCheckpointSuppression: undefined,
     }
     let wrote = false
     for (const missingRange of missing.ranges) {
@@ -525,6 +527,9 @@ interface FileCheckpointController {
   durableBytes: bigint
   pendingBytes: bigint
   pendingSince: number | undefined
+  automaticCheckpointSuppression:
+    | Extract<AutomaticCheckpointResult, { readonly kind: 'declined' }>['reason']
+    | undefined
 }
 
 async function attemptAutomaticCheckpoint(
@@ -533,7 +538,7 @@ async function attemptAutomaticCheckpoint(
   checkpoint: FileCheckpointController,
 ): Promise<void> {
   const policy = options.output.executionProfile.automaticCheckpoint
-  if (policy.kind === 'disabled') return
+  if (policy.kind === 'disabled' || checkpoint.automaticCheckpointSuppression !== undefined) return
   const trigger = automaticCheckpointTrigger(options, policy, checkpoint)
   if (trigger === undefined) return
   const result = await outputOperation(
@@ -542,7 +547,10 @@ async function attemptAutomaticCheckpoint(
     'output-write-failed',
     () => transaction.automaticCheckpoint(trigger, policy.costBudget, options.signal),
   )
-  if (result.kind === 'declined') return
+  if (result.kind === 'declined') {
+    checkpoint.automaticCheckpointSuppression = result.reason
+    return
+  }
   const durableBytes = rangeBytes(result.durable.asRangeSet())
   const advancedBytes = durableBytes - checkpoint.durableBytes
   if (advancedBytes <= 0n) {

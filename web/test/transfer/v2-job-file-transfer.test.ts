@@ -479,7 +479,7 @@ function registerCheckpointSchedulingTests(): void {
     expect(progress.at(-1)).toMatchObject({ recoverableBytes: 4n, completedFiles: 1 })
   })
 
-  it('continues after a budget decline and permits a later cumulative advance', async () => {
+  it('suppresses later automatic checkpoints after the first decline', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 6n)
     const selection = selectOnlyFile(file)
@@ -504,9 +504,9 @@ function registerCheckpointSchedulingTests(): void {
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
-    expect(output.automaticCheckpointAttempts).toEqual([file.idText, file.idText])
+    expect(output.automaticCheckpointAttempts).toEqual([file.idText])
     expect(output.checkpointDeclines).toEqual([file.idText])
-    expect(output.checkpointAdvances).toEqual([file.idText])
+    expect(output.checkpointAdvances).toEqual([])
     expect(output.finalProofs).toHaveLength(1)
   })
 }
