@@ -58,6 +58,11 @@ import {
   unavailableRoute,
 } from './shared'
 import { FSAResourceOwner } from './fsa-resource-owner'
+import {
+  browserFSARecoverySpacePrompt,
+  createFSAExecutionRecoveryPolicy,
+  type FSARecoverySpacePrompt,
+} from './fsa/recovery-policy'
 
 interface FSAAttemptIdentitySource {
   readonly createOutputSessionId: () => string
@@ -113,6 +118,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #attemptIdentities: FSAAttemptIdentitySource
+  readonly #recoverySpacePrompt: FSARecoverySpacePrompt
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
   #transferJobId: string
@@ -129,6 +135,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     plans: V2PlanExecutionAuthority
     transferJobId: string
     attemptIdentities: FSAAttemptIdentitySource
+    recoverySpacePrompt?: FSARecoverySpacePrompt
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   }) {
@@ -142,6 +149,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
+    this.#recoverySpacePrompt = input.recoverySpacePrompt ?? browserFSARecoverySpacePrompt
     this.#settlement = input.settlement
     this.#plans = input.plans
     this.#transferJobId = input.transferJobId
@@ -160,6 +168,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
+    recoverySpacePrompt?: FSARecoverySpacePrompt
   }): Promise<FSAReceiveOperation> {
     const plans = await createFSAPlanAuthority(
       input.intent,
@@ -170,6 +179,11 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       input.settlement,
       input.outputSessionId,
       input.diagnostics,
+      createFSAExecutionRecoveryPolicy({
+        pausedFile: 'preserve',
+        costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+        prompt: input.recoverySpacePrompt ?? browserFSARecoverySpacePrompt,
+      }),
     )
     return new FSAReceiveOperation({ ...input, plans })
   }
@@ -179,6 +193,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     diagnostics?: OutputDiagnosticsPorts,
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
     attemptIdentities: FSAAttemptIdentitySource = defaultAttemptIdentitySource,
+    recoverySpacePrompt: FSARecoverySpacePrompt = browserFSARecoverySpacePrompt,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -233,6 +248,11 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         attemptAuthority.settlement,
         outputSessionId,
         attemptDiagnostics,
+        createFSAExecutionRecoveryPolicy({
+          pausedFile: 'preserve',
+          costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+          prompt: recoverySpacePrompt,
+        }),
       )
       const resources = new FSAResourceOwner({
         outputSession: session,
@@ -250,6 +270,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         plans,
         transferJobId: attemptAuthority.transferJobId,
         attemptIdentities,
+        recoverySpacePrompt,
         ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
@@ -296,8 +317,14 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
-    if (action !== 'continue' || lifecycle.kind !== 'resumable-receive' ||
+    if ((action !== 'continue' && action !== 'redownload') ||
+        lifecycle.kind !== 'resumable-receive' ||
         lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
+    const recovery = createFSAExecutionRecoveryPolicy({
+      pausedFile: action === 'redownload' ? 'restart-owned-file' : 'preserve',
+      costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+      prompt: this.#recoverySpacePrompt,
+    })
     const transferJobId = this.#attemptIdentities.createTransferJobId()
     const outputSessionId = this.#attemptIdentities.createOutputSessionId()
     const attemptDiagnostics = bindOutputPerformanceSummary(
@@ -338,6 +365,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         attemptDiagnostics,
         transferJobId,
         outputSessionId,
+        recovery,
       )
       const resumed = await transitionLifecycle(
         this.#repository,
@@ -491,6 +519,7 @@ async function createFSAAttempt(
   diagnostics: OutputDiagnosticsPorts | undefined,
   transferJobId: string,
   outputSessionId: string,
+  recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
@@ -513,6 +542,7 @@ async function createFSAAttempt(
     attemptAuthority.settlement,
     outputSessionId,
     diagnostics,
+    recovery,
   )
   return Object.freeze({ ...attemptAuthority, plans })
 }
@@ -566,6 +596,7 @@ async function createFSAPlanAuthority(
   settlement: FileSystemAccessOperationSettlementAuthority,
   outputSessionId: string,
   diagnostics: OutputDiagnosticsPorts | undefined,
+  recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
 ): Promise<V2PlanExecutionAuthority> {
   const plans = await createV2PlanExecutionAuthority({
     intent,
@@ -592,6 +623,7 @@ async function createFSAPlanAuthority(
             namespaceClaims: session,
             repairSummary: () => session.repairSummary(),
             executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
+            recovery,
             outputIdentity: outputSessionIdentity({
               backend: 'browser-fsa-tree',
               outputSessionId,

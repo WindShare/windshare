@@ -13,6 +13,7 @@ import {
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
+  fileCheckpointIsComplete,
   identityBytes,
   newFileCheckpointV2,
   type FileCheckpointV2,
@@ -256,7 +257,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpoints: this.#checkpoints,
           ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
           ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: await this.#ledgerBinding }),
-          recovery: request.recovery ?? Object.freeze({ kind: 'preserve' as const }),
+          recovery: request.recovery ?? Object.freeze({ pausedFile: 'preserve' as const }),
           ownership: Object.freeze({
             ...(request.outputSession ?? {
               backend: 'persistent-tree-internal',
@@ -470,18 +471,32 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     selected: FileCheckpointV2,
     stageScope: PersistentOutputStageScope | undefined,
   ): Promise<FileCheckpointV2> {
-    const recovery = request.recovery ?? Object.freeze({ kind: 'preserve' as const })
+    const recovery = request.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
     let checkpoint = selected
-    if (recovery.kind === 'restart-owned-file') {
-      if (checkpoint.phase !== FILE_CHECKPOINT_PHASE_PAUSED ||
-          checkpoint.ownedObjectId !== recovery.expectedOwnedObjectId) {
-        throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
-      }
+    if (recovery.pausedFile === 'restart-owned-file' &&
+        checkpoint.verifiedRanges.length > 0 && !fileCheckpointIsComplete(checkpoint)) {
       if (this.#semantic === undefined || handle.persistedHandle === undefined) {
         throw new DOMException(
           'Explicit restart requires an exact durable handle authority',
           'InvalidStateError',
         )
+      }
+      if (checkpoint.phase === FILE_CHECKPOINT_PHASE_ACTIVE) {
+        const paused = newFileCheckpointV2({
+          ...checkpoint,
+          stateGeneration: checkpoint.stateGeneration + 1n,
+          phase: FILE_CHECKPOINT_PHASE_PAUSED,
+          commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+        })
+        await runPersistentOutputStage(
+          stageScope?.withCorrelation({
+            checkpointRecordId: paused.recordId,
+            checkpointGeneration: paused.checkpointGeneration,
+          }),
+          'indexeddb.checkpoint.pause-commit',
+          () => this.#semantic!.commitDurableCut(checkpoint, paused),
+        )
+        checkpoint = paused
       }
       const reset = newFileCheckpointV2({
         ...checkpoint,
