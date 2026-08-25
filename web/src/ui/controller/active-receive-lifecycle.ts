@@ -18,11 +18,13 @@ import {
   type V2ReceivePresentationAttempt,
 } from './active-receive-observability'
 import type { V2PresentationAttempt } from './presentation-attempt'
+import type { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
 
 const MAXIMUM_TIMER_DELAY_MILLISECONDS = 2_147_483_647
 
 export interface ActiveReceiveLifecycleOperation {
   readonly runtime: V2BoundReceiveOperation
+  readonly settlementPresentation: ActiveReceiveSettlementPresentation
   transfer?: AbortController
   running?: Promise<void>
   receiveAttempt?: V2ReceivePresentationAttempt
@@ -200,6 +202,7 @@ export class ActiveReceiveLifecycle {
 
     this.#outputs.updateActiveControls(Object.freeze([]))
     try {
+      active.settlementPresentation.begin(control)
       active.runtime.interrupt(control, transfer)
       if (!transfer.signal.aborted) {
         throw new TypeError('receive interruption did not synchronously close the transfer lifetime')
@@ -213,6 +216,7 @@ export class ActiveReceiveLifecycle {
         control === 'pause' ? 'user_paused' : 'user_stopped',
       )
     } catch (error) {
+      active.settlementPresentation.cancel(control)
       this.#outputs.updateActiveControls(active.runtime.activeControls)
       this.#finishFailure(pending, error)
     }

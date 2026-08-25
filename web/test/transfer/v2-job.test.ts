@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
+import { disabledOutputExecutionProfile } from '../../src/transfer/output-session'
 import {
   catalogFixture,
   directoryEntry,
@@ -11,6 +12,7 @@ import {
   readerFixture,
   receiveIntentFixture,
   selectOnlyFile,
+  testOutput,
   transferJobFixture,
   type TestArtifactKind,
   type TestPlanKind,
@@ -224,7 +226,9 @@ describe('plan-specific transfer routing', () => {
         }
       },
     })
-    const plans = planAuthorityFixture()
+    const plans = planAuthorityFixture({
+      output: testOutput([], { executionProfile: disabledOutputExecutionProfile(6) }),
+    })
     const intent = await receiveIntentFixture({
       planKind: 'direct-tree',
       artifactKind: 'directory-tree',
@@ -249,6 +253,55 @@ describe('plan-specific transfer routing', () => {
     expect(result.worker.status).toBe('Succeeded')
     expect(startedReaders).toBe(files.length)
     expect(maximumActiveReaders).toBe(2)
+  })
+
+  it('uses the validated output profile when caller concurrency is omitted', async () => {
+    const files = Array.from({ length: 5 }, (_, index) =>
+      fileEntry(identity(40 + index), `profile-${index}.bin`, 2n))
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: identity(2), entries: files }])
+    const profileWorkersStarted = deferred()
+    const releaseReaders = deferred()
+    let activeReaders = 0
+    let peakActiveReaders = 0
+    let startedReaders = 0
+    const readers = readerFixture(files, [], {
+      beforeRead: async () => {
+        activeReaders += 1
+        startedReaders += 1
+        peakActiveReaders = Math.max(peakActiveReaders, activeReaders)
+        if (startedReaders === 3) profileWorkersStarted.resolve()
+        try {
+          await releaseReaders.promise
+        } finally {
+          activeReaders -= 1
+        }
+      },
+    })
+    const plans = planAuthorityFixture({
+      output: testOutput([], { executionProfile: disabledOutputExecutionProfile(3) }),
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+    const running = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    await withExternalBound(profileWorkersStarted.promise, 500)
+    expect(readers.blockRequests).toHaveLength(3)
+    expect(peakActiveReaders).toBe(3)
+    releaseReaders.resolve()
+    await expect(running).resolves.toMatchObject({ worker: { status: 'Succeeded' } })
+    expect(startedReaders).toBe(files.length)
+    expect(peakActiveReaders).toBe(3)
   })
 })
 

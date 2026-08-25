@@ -13,6 +13,35 @@ const COMPATIBLE_NAME_RESOLVER_PATH = '/src/output/file-system-access/compatible
 const WORKSPACE_RECORDS_PATH = '/src/output/workspace/records.ts'
 
 interface NamespaceHarness {
+  exerciseNativeMutationScheduling(fixture: FsaNamespaceFixture): Promise<{
+    sameParentMutationStartedBeforeWriterClose: boolean
+    independentParentCreatedWhileSameParentDrained: boolean
+    laterWriterAdmittedDuringMutation: boolean
+    eventOrder: readonly string[]
+    sameParentFileBytes: readonly number[]
+    independentParentFileBytes: readonly number[]
+    peakActiveWriters: number
+  }>
+  exerciseNativeWriterFailureRelease(fixture: FsaNamespaceFixture): Promise<{
+    closeFailureObserved: boolean
+    abortFailureObserved: boolean
+    successorBytes: readonly number[]
+    acquiredWriterLeases: number
+    releasedWriterLeases: number
+  }>
+  holdNativeRootThroughWriterDrain(fixture: FsaNamespaceFixture): Promise<void>
+  beginHeldNativeRootDrain(fixture: FsaNamespaceFixture): Promise<{
+    schedulerState: string
+    lateWriterRejection: string
+    lateNamespaceRejection: string
+    rootReleasePending: boolean
+  }>
+  probeCompetingNativeRoot(fixture: FsaNamespaceFixture): Promise<{
+    busy: boolean
+    scope: string | null
+  }>
+  finishHeldNativeRootDrain(fixture: FsaNamespaceFixture): Promise<void>
+  cleanupHeldNativeRootDrain(fixture: FsaNamespaceFixture): Promise<void>
   exerciseTaskRootRestart(fixture: FsaNamespaceFixture): Promise<{
     firstCollisionIndex: number
     suffixPersisted: boolean
@@ -64,6 +93,89 @@ interface NamespaceHarness {
     }
   }>
 }
+
+test('native FSA scheduler drains same-parent writers without blocking independent parents', async ({
+  browserName,
+  page,
+}) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  expect(await callHarness(
+    page,
+    'exerciseNativeMutationScheduling',
+    testFixture('native-scheduler'),
+  )).toEqual({
+    sameParentMutationStartedBeforeWriterClose: false,
+    independentParentCreatedWhileSameParentDrained: true,
+    laterWriterAdmittedDuringMutation: false,
+    eventOrder: [
+      'independent-parent-mutation',
+      'same-parent-mutation',
+      'later-writer',
+    ],
+    sameParentFileBytes: [4, 5],
+    independentParentFileBytes: [8, 9],
+    peakActiveWriters: 1,
+  })
+})
+
+test('native writable close and abort failures release scheduler capacity', async ({
+  browserName,
+  page,
+}) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  expect(await callHarness(
+    page,
+    'exerciseNativeWriterFailureRelease',
+    testFixture('native-writer-failure'),
+  )).toEqual({
+    closeFailureObserved: true,
+    abortFailureObserved: true,
+    successorBytes: [21, 22, 23],
+    acquiredWriterLeases: 3,
+    releasedWriterLeases: 3,
+  })
+})
+
+test('FSA parent Web Lock remains held through writer drain and rejects late admission', async ({
+  browserName,
+  context,
+  page,
+}) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  const competitor = await context.newPage()
+  await competitor.goto('/')
+  await requireOriginPrivateStorage(competitor, browserName)
+  const fixture = testFixture('native-cross-tab-drain')
+  try {
+    await callHarness(page, 'holdNativeRootThroughWriterDrain', fixture)
+    expect(await callHarness(competitor, 'probeCompetingNativeRoot', fixture)).toEqual({
+      busy: true,
+      scope: 'fsa-parent',
+    })
+    expect(await callHarness(page, 'beginHeldNativeRootDrain', fixture)).toEqual({
+      schedulerState: 'draining',
+      lateWriterRejection: 'InvalidStateError',
+      lateNamespaceRejection: 'InvalidStateError',
+      rootReleasePending: true,
+    })
+    expect(await callHarness(competitor, 'probeCompetingNativeRoot', fixture)).toEqual({
+      busy: true,
+      scope: 'fsa-parent',
+    })
+
+    await callHarness(page, 'finishHeldNativeRootDrain', fixture)
+    expect(await callHarness(competitor, 'probeCompetingNativeRoot', fixture)).toEqual({
+      busy: false,
+      scope: null,
+    })
+  } finally {
+    await callHarness(page, 'cleanupHeldNativeRootDrain', fixture).catch(() => undefined)
+    await competitor.close()
+  }
+})
 
 test('FSA task roots keep suffix and ownership across restart', async ({ browserName, page }) => {
   await page.goto('/')

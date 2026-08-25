@@ -1,4 +1,8 @@
 import type { DirectZipMilestonePayloadV1 } from '../../diagnostics/trace/model'
+import type {
+  PerformancePhasePayloadV1,
+  PerformanceSummaryPayloadV1,
+} from '../../diagnostics/trace/transfer-payload'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 
 export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
@@ -10,6 +14,8 @@ export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
 export type OutputDiagnosticBackend = (typeof OUTPUT_DIAGNOSTIC_BACKENDS)[number]
 
 export interface OutputTracePayloadByName {
+  readonly performance_phase: PerformancePhasePayloadV1
+  readonly performance_summary: PerformanceSummaryPayloadV1
   readonly output_reservation: Readonly<{
     backend: OutputDiagnosticBackend
     transition: 'started' | 'acquired' | 'reopened' | 'failed'

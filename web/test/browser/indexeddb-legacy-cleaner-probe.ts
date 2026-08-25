@@ -6,14 +6,14 @@ import {
 import {
   CHECKPOINT_DATABASE_VERSION,
   INDEXEDDB_LEGACY_V5_STORES,
-  INDEXEDDB_V9_STORE_SCHEMAS,
-  openIndexedDbCheckpointDatabase,
+  INDEXEDDB_V10_STORE_SCHEMAS,
+  installIndexedDbV10Schema,
   requestResult,
   transactionCompletion,
 } from '../../src/output/browser/indexeddb-database'
 
 const LEGACY_STORE_NAMES = INDEXEDDB_LEGACY_CLEANUP_ORDER
-const CURRENT_STORE_SCHEMAS = INDEXEDDB_V9_STORE_SCHEMAS
+const CURRENT_STORE_SCHEMAS = INDEXEDDB_V10_STORE_SCHEMAS
 const CURRENT_STORE_NAMES = Object.freeze(CURRENT_STORE_SCHEMAS.map(({ name }) => name))
 const RECORDS_PER_LEGACY_STORE = 2
 const LEGACY_FILE_CHECKPOINT_MARKER = 'windshare/file-checkpoint/v1'
@@ -57,14 +57,16 @@ export async function probeIndexedDbLegacyCleanupIsolation(
 }
 
 export async function seedIndexedDbLegacyCleanup(databaseName: string): Promise<void> {
-  const legacy = await openDatabase(databaseName, CHECKPOINT_DATABASE_VERSION - 1, (database) => {
-    for (const storeName of INDEXEDDB_LEGACY_V5_STORES) {
-      database.createObjectStore(storeName, { keyPath: 'id' })
-    }
-  })
-  legacy.close()
-
-  const database = await openIndexedDbCheckpointDatabase(databaseName)
+  const database = await openDatabase(
+    databaseName,
+    CHECKPOINT_DATABASE_VERSION,
+    (upgrading, transaction) => {
+      for (const storeName of INDEXEDDB_LEGACY_V5_STORES) {
+        upgrading.createObjectStore(storeName, { keyPath: 'id' })
+      }
+      installIndexedDbV10Schema(upgrading, transaction, 0)
+    },
+  )
   try {
     const transaction = database.transaction(
       [...LEGACY_STORE_NAMES, ...CURRENT_STORE_NAMES],
@@ -186,11 +188,12 @@ async function readPublishedSentinel(
 function openDatabase(
   name: string,
   version?: number,
-  upgrade?: (database: IDBDatabase) => void,
+  upgrade?: (database: IDBDatabase, transaction: IDBTransaction | undefined) => void,
 ): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
     const request = version === undefined ? indexedDB.open(name) : indexedDB.open(name, version)
-    request.addEventListener('upgradeneeded', () => upgrade?.(request.result), { once: true })
+    request.addEventListener('upgradeneeded', () =>
+      upgrade?.(request.result, request.transaction ?? undefined), { once: true })
     request.addEventListener('success', () => resolve(request.result), { once: true })
     request.addEventListener('error', () => reject(request.error), { once: true })
   })

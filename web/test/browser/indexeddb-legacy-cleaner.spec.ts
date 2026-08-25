@@ -4,7 +4,7 @@ import { requireOriginPrivateStorage } from './browser-storage-support'
 
 const PROBE_PATH = '/test/browser/indexeddb-legacy-cleaner-probe.ts'
 const LEGACY_RECORD_COUNT = 16
-const CURRENT_V9_STORE_COUNT = 15
+const CURRENT_V10_STORE_COUNT = 19
 
 test.beforeEach(async ({ browserName, page }) => {
   await page.goto('/')
@@ -23,7 +23,7 @@ test('legacy IndexedDB cleanup preserves current state and published output', as
     first: { status: 'completed', removed: LEGACY_RECORD_COUNT },
     second: { status: 'nothing-to-clean', removed: 0 },
     legacyCounts: [0, 0, 0, 0, 0, 0, 0, 0],
-    currentStoreCount: CURRENT_V9_STORE_COUNT,
+    currentStoreCount: CURRENT_V10_STORE_COUNT,
     currentSentinelsPreserved: true,
     publishedSentinelBytes: [17, 34, 51, 68],
   })

@@ -51,6 +51,8 @@ interface StoredFileCheckpoint {
   readonly id: string
   readonly operationId: string
   readonly fileId: string
+  readonly lineageId: string
+  readonly ownedObjectId: string
   readonly envelope: Uint8Array<ArrayBuffer>
 }
 
@@ -83,10 +85,13 @@ export class IndexedDbCheckpointRecoveryRequiredError extends DOMException {
 }
 
 export function storedCheckpoint(record: FileCheckpointV2): StoredFileCheckpoint {
+  const lineageId = deriveCheckpointLineageID(checkpointLineageSpec(record))
   return Object.freeze({
     id: record.recordId,
     operationId: record.operationId,
     fileId: record.fileId,
+    lineageId,
+    ownedObjectId: record.ownedObjectId,
     envelope: encodeFileCheckpointV2(record),
   })
 }
@@ -94,12 +99,14 @@ export function storedCheckpoint(record: FileCheckpointV2): StoredFileCheckpoint
 export function readStoredCheckpoint(value: unknown): FileCheckpointV2 {
   if (!isIndexedDbRecord(value) || typeof value.id !== 'string' ||
       typeof value.operationId !== 'string' || typeof value.fileId !== 'string' ||
+      typeof value.lineageId !== 'string' || typeof value.ownedObjectId !== 'string' ||
       !(value.envelope instanceof Uint8Array)) {
     throw new TypeError('IndexedDB file checkpoint row is invalid')
   }
   const record = decodeFileCheckpointV2(value.envelope)
   if (record.recordId !== value.id || record.operationId !== value.operationId ||
-      record.fileId !== value.fileId) {
+      record.fileId !== value.fileId || record.ownedObjectId !== value.ownedObjectId ||
+      deriveCheckpointLineageID(checkpointLineageSpec(record)) !== value.lineageId) {
     throw new TypeError('IndexedDB checkpoint projections disagree with canonical bytes')
   }
   return record
@@ -329,6 +336,8 @@ export function classifyCheckpointInventory(
   })
 }
 
+
+
 export function assertCheckpointInstallCapacity(
   inventory: IndexedDbCheckpointInventory,
   candidate: FileCheckpointV2,
@@ -506,7 +515,8 @@ export function compareRecordIds(left: string, right: string): number {
   return left < right ? -1 : 1
 }
 
-function reconcilePhysicalCheckpoints(
+
+export function reconcilePhysicalCheckpoints(
   candidateValues: readonly unknown[],
   committedValues: readonly unknown[],
   binding: CheckpointNamespaceBinding,
@@ -569,7 +579,7 @@ function readPhysicalStore(
   return records
 }
 
-function checkpointLineageSpec(record: FileCheckpointV2): CheckpointLineageSpec {
+export function checkpointLineageSpec(record: FileCheckpointV2): CheckpointLineageSpec {
   return Object.freeze({
     operationId: record.operationId,
     receiveIntentDigest: record.receiveIntentDigest,

@@ -20,14 +20,8 @@ import type {
   ProductPreparedZipAdmissionProof,
   TransferJobPreparedZipProof,
 } from './durable-preparation-harness'
-import type {
-  IndexedDbCheckpointLineageProbe,
-  IndexedDbV9Probe,
-} from './durable-recovery-idb-probe'
-
 const RECOVERY_HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
 const PREPARATION_HARNESS_PATH = '/test/browser/durable-preparation-harness.ts'
-const IDB_PROBE_PATH = '/test/browser/durable-recovery-idb-probe.ts'
 
 test.beforeEach(async ({ browserName, page }) => {
   await page.goto('/')
@@ -73,25 +67,6 @@ test('reopens compatible-name translation without changing materialization-relat
   })
 })
 
-test('v8 repositories migrate destructively to v9 and fail closed across IndexedDB boundaries', async ({
-  page,
-}) => {
-  const result = await page.evaluate(async (path) => {
-    const probe = await import(path) as typeof import('./durable-recovery-idb-probe')
-    return probe.probeIndexedDbV9Replacement()
-  }, IDB_PROBE_PATH) as IndexedDbV9Probe
-
-  expect(result).toEqual({
-    blockedUpgrade: 'InvalidStateError',
-    blockedRequestClosedLate: true,
-    versionChange: 'InvalidStateError',
-    schemaVersion: 9,
-    v9StoresPresent: true,
-    legacyStoreRetainedForCleanup: true,
-    legacyRowsVisibleToV9: false,
-  })
-})
-
 test('promotes an exactly marked workspace activation candidate after reload', async ({ page }) => {
   const key = `activation-${crypto.randomUUID()}`
   const cut = await page.evaluate(async ({ path, key: fixtureKey }) => {
@@ -110,35 +85,6 @@ test('promotes an exactly marked workspace activation candidate after reload', a
     promotedHandlePresent: true,
     lifecycle: 'needs-attention',
     retainedContinuation: 'needs-attention',
-  })
-})
-
-test('checkpoint lineage claim reconciles physical crash evidence and serializes authorities', async ({
-  page,
-}) => {
-  const result = await page.evaluate(async (path) => {
-    const probe = await import(path) as typeof import('./durable-recovery-idb-probe')
-    return probe.probeIndexedDbCheckpointLineage()
-  }, IDB_PROBE_PATH) as IndexedDbCheckpointLineageProbe
-
-  expect(result).toEqual({
-    putCandidateSurfacePresent: false,
-    unbackedUpdateRejection: 'InvalidStateError',
-    unbackedUpdateCandidateRows: 0,
-    updateConcurrencyOutcomes: ['InvalidStateError', 'resolved'],
-    updateConcurrencyCandidateRows: 1,
-    concurrentKinds: ['exact', 'installed'],
-    concurrentObjectConverged: true,
-    candidateRowsBeforeResolution: 1,
-    candidateBeforeObjectDecision: 'exact',
-    candidateRowsAfterResolution: 0,
-    resolutionReplayDecision: 'exact',
-    revisionDecision: 'revision-conflict',
-    ownershipDecision: 'ownership-conflict',
-    invalidDecision: 'invalid',
-    crossLineageOwnershipDecision: 'ownership-conflict',
-    unresolvedCandidateRejection: 'InvalidStateError',
-    resolvedRange: '0:1',
   })
 })
 

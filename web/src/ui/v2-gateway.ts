@@ -204,7 +204,12 @@ export class V2JoinedBrowserShare {
     connectivity: V2ConnectivityActivation,
     callbacks: Partial<Pick<
       TransferJobOptions,
-      'onProgress' | 'onMeasure' | 'trace' | 'transferJobId' | 'incidentScope'
+      | 'onProgress'
+      | 'onMeasure'
+      | 'trace'
+      | 'transferJobId'
+      | 'incidentScope'
+      | 'outputSettlementDeadline'
     >> & {
       readonly selection?: V2FrozenSelectionPolicy
     } = {},

@@ -1,6 +1,8 @@
-import { OutputDirectoryMutationError } from '../../transfer/output-session'
 import type { CompatibleNamePathAuthority } from '../file-system-access/compatible-name/coordinator'
-import type { PersistentHandleRepository } from '../persistence/journal'
+import type {
+  PersistentHandleRecord,
+  PersistentHandleRepository,
+} from '../persistence/journal'
 import type {
   OpenedFileRevision,
   PersistentDirectoryMaterialization,
@@ -8,10 +10,6 @@ import type {
   PersistentTreeFile,
 } from '../persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
-import {
-  PathComponentRejectedError,
-  inspectFileSystemComponent,
-} from './filesystem-component-inspection'
 import {
   runPersistentOutputStage,
   type PersistentOutputStageAuthority,
@@ -26,6 +24,7 @@ import {
 import { captureFSAFailureFacts } from './filesystem-failure-facts'
 import {
   fsaDirectoryHandleId,
+  admitFSAOwnedDirectory,
   openDirectoryEntry,
   snapshotRelativePath,
   verifySameDirectory,
@@ -33,7 +32,7 @@ import {
 import {
   FSA_OPERATION_HANDLE_DIRECTORY,
   persistFSAOwnedDirectory,
-  readFSAOwnedDirectory,
+  readFSAOwnedDirectoryBinding,
   verifyFSAOperationBinding,
   type FSAOperationBindingRepository,
   type PersistedFSAOperationBinding,
@@ -42,6 +41,12 @@ import type {
   FSARootMutationAuthority,
   FSANamespaceMutationKind,
 } from './namespace-mutation'
+import type { FSATerminalExclusiveAuthority } from './mutation-coordination/model'
+import {
+  fsaAuthorityCacheForRoot,
+  type FSAAuthorityCache,
+  type FSAVerifiedDirectoryAuthority,
+} from './mutation-coordination/authority-cache'
 
 export { FSA_FILE_HANDLE_KIND } from './filesystem-file-lineage'
 export { fsaDirectoryHandleId } from './filesystem-directory-authority'
@@ -67,6 +72,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
   readonly #binding: PersistedFSAOperationBinding
   readonly #operationRepository: FSAOperationBindingRepository
   readonly #mutations: FSARootMutationAuthority
+  readonly #authorities: FSAAuthorityCache
   readonly #stageAuthority: PersistentOutputStageAuthority | undefined
   readonly #compatibleNames: CompatibleNamePathAuthority | undefined
   readonly #randomOwnedObjectId: () => string
@@ -78,6 +84,11 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     this.#binding = options.binding
     this.#operationRepository = options.operationRepository
     this.#mutations = options.mutations
+    this.#authorities = fsaAuthorityCacheForRoot({
+      owner: options.mutations,
+      binding: options.binding,
+      rootParentIdentity: options.mutations.rootParentIdentity,
+    })
     this.#stageAuthority = options.stageAuthority
     this.#compatibleNames = options.compatibleNames
     this.#randomOwnedObjectId = options.randomOwnedObjectId ?? createOwnedObjectId
@@ -85,10 +96,10 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       binding: options.binding,
       fileHandles: options.fileHandles,
       mutations: options.mutations,
+      authorities: this.#authorities,
       prepareRoot: () => this.#requirePreparedRoot(),
-      verifyParent: scope => this.#verifyParent(scope),
       resolveParent: (path, scope) => this.#parent(path, scope),
-      pairParent: () => this.#root,
+      pairParent: () => this.#authorities.directory([]),
       ...(this.#compatibleNames === undefined ? {} : { compatibleNames: this.#compatibleNames }),
       randomOwnedObjectId: this.#randomOwnedObjectId,
     })
@@ -96,22 +107,27 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
 
   async authorize(): Promise<void> {
     const scope = this.#rootScope()
-    const parent = (await this.#verifyParent(scope)) as PermissionCapableDirectoryHandle
+    const parent = this.#authorities.pickedParent().handle as PermissionCapableDirectoryHandle
     if (parent.queryPermission === undefined) return
-    if (await runPersistentOutputStage(
-      scope,
-      'fsa.root.permission.query',
-      () => parent.queryPermission!(READ_WRITE_PERMISSION),
-    ) === 'granted') return
-    if (parent.requestPermission === undefined ||
-        await runPersistentOutputStage(
-          scope,
-          'fsa.root.permission.request',
-          () => parent.requestPermission!(READ_WRITE_PERMISSION),
-        ) !== 'granted') {
-      throw new DOMException('Output permission was not granted', 'NotAllowedError')
+    try {
+      if (await runPersistentOutputStage(
+        scope,
+        'fsa.root.permission.query',
+        () => parent.queryPermission!(READ_WRITE_PERMISSION),
+      ) === 'granted') return
+      if (parent.requestPermission === undefined ||
+          await runPersistentOutputStage(
+            scope,
+            'fsa.root.permission.request',
+            () => parent.requestPermission!(READ_WRITE_PERMISSION),
+          ) !== 'granted') {
+        throw new DOMException('Output permission was not granted', 'NotAllowedError')
+      }
+      await this.#verifyParent(scope)
+    } catch (error) {
+      this.#authorities.invalidateOperation()
+      throw error
     }
-    await this.#verifyParent(scope)
   }
 
   async prepareRoot(): Promise<void> {
@@ -124,10 +140,11 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     if (this.#compatibleNames?.pairPlacement === 'beside-mapped-root') {
       await this.#compatibleNames.ensurePairReady(undefined)
     }
-    await this.#mutate('create-directory', async () => {
-      const parent = await this.#verifyParent(scope)
+    const pickedParent = this.#authorities.pickedParent()
+    await this.#mutations.scheduler.runNamespace([pickedParent.schedulerIdentity], 'create-directory', async () => {
+      const parent = pickedParent.handle
       const handleId = await fsaDirectoryHandleId(this.#binding.reservation, [])
-      const persisted = await readFSAOwnedDirectory({
+      const persisted = await readFSAOwnedDirectoryBinding({
         repository: this.#operationRepository,
         reservation: this.#binding.reservation,
         handleId,
@@ -144,7 +161,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         )
         if (!await verifySameDirectory(
           current,
-          persisted,
+          persisted.handle,
           this.#binding.intent.operationId,
           scope,
           'fsa.root.handle.verify',
@@ -154,19 +171,15 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
             this.#binding.intent.operationId,
           )
         }
-        const stored = await runPersistentOutputStage(
-          scope,
-          'indexeddb.root-handle.read',
-          () => this.#operationRepository.readHandle<FileSystemDirectoryHandle>(handleId),
-        )
-        if (stored?.ownedObjectId === undefined) {
-          throw new TargetOwnershipUnknownError(
-            'parent-authority',
-            this.#binding.intent.operationId,
-          )
-        }
         this.#root = current
-        this.#rootOwnedObjectId = stored.ownedObjectId
+        this.#rootOwnedObjectId = persisted.ownedObjectId
+        this.#authorities.installDirectory({
+          handleId: persisted.handleId,
+          ownedObjectId: persisted.ownedObjectId,
+          canonicalPath: [],
+          physicalName: this.#binding.reservation.physicalName,
+          handle: current,
+        })
         return
       }
       if (await runPersistentOutputStage(
@@ -194,7 +207,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       )
       const ownedObjectId = requireOwnedObjectId(this.#randomOwnedObjectId())
       const ownedScope = scope?.withCorrelation({ ownedObjectId })
-      await persistFSAOwnedDirectory({
+      const committedBinding = await persistFSAOwnedDirectory({
         repository: this.#operationRepository,
         reservation: this.#binding.reservation,
         handleId,
@@ -224,6 +237,12 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       }
       this.#root = current
       this.#rootOwnedObjectId = ownedObjectId
+      this.#authorities.installDirectory({
+        ...committedBinding,
+        canonicalPath: [],
+        physicalName: this.#binding.reservation.physicalName,
+        handle: current,
+      })
     })
     await this.#compatibleNames?.ensurePairReady(this.#root)
   }
@@ -238,19 +257,14 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     await this.#mutate('settle-operation', async () => {
       const parent = await this.#verifyParent(scope)
       const handleId = await fsaDirectoryHandleId(this.#binding.reservation, [])
-      const persisted = await readFSAOwnedDirectory({
+      const persisted = await readFSAOwnedDirectoryBinding({
         repository: this.#operationRepository,
         reservation: this.#binding.reservation,
         handleId,
         diagnosticTarget: 'root',
         ...(scope === undefined ? {} : { stageScope: scope }),
       })
-      const record = await runPersistentOutputStage(
-        scope,
-        'indexeddb.root-handle.read',
-        () => this.#operationRepository.readHandle<FileSystemDirectoryHandle>(handleId),
-      )
-      if (persisted === undefined || record?.ownedObjectId === undefined) {
+      if (persisted === undefined) {
         throw new TargetOwnershipUnknownError('cleanup', this.#binding.intent.operationId)
       }
       const current = await openDirectoryEntry(
@@ -262,7 +276,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       )
       if (!await verifySameDirectory(
         current,
-        persisted,
+        persisted.handle,
         this.#binding.intent.operationId,
         scope,
         'fsa.root.handle.verify',
@@ -273,7 +287,13 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
         )
       }
       this.#root = current
-      this.#rootOwnedObjectId = record.ownedObjectId
+      this.#rootOwnedObjectId = persisted.ownedObjectId
+      this.#authorities.installDirectory({
+        ...persisted,
+        canonicalPath: [],
+        physicalName: this.#binding.reservation.physicalName,
+        handle: current,
+      })
     })
     await this.#compatibleNames?.ensurePairReady(this.#root)
   }
@@ -284,147 +304,72 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     }
     const canonicalPath = snapshotRelativePath(path, true)
     await this.#requirePreparedRoot()
-    if (canonicalPath.length === 0) {
-      if (this.#rootOwnedObjectId === undefined) {
-        throw new TargetOwnershipUnknownError(
-          'parent-authority',
-          this.#binding.intent.operationId,
-        )
-      }
-      return Object.freeze({ ownedObjectId: this.#rootOwnedObjectId, created: false })
-    }
+    const retained = this.#retainedDirectoryMaterialization(canonicalPath)
+    if (retained !== undefined) return retained
     const scope = this.#directoryScope(canonicalPath)
-    return this.#mutate('create-directory', async () => {
-      await this.#verifyParent(scope)
-      const parent = await this.#directory(canonicalPath.slice(0, -1), undefined, true)
-      let name = this.#compatibleNames?.physicalComponent(canonicalPath, 'directory') ??
+    while (true) {
+      const parent = await this.#directoryAuthority(canonicalPath.slice(0, -1), undefined, true)
+      const name = this.#compatibleNames?.physicalComponent(canonicalPath, 'directory') ??
         canonicalPath.at(-1)!
       const handleId = await fsaDirectoryHandleId(
         this.#binding.reservation,
         canonicalPath,
       )
-      const persisted = await readFSAOwnedDirectory({
-        repository: this.#operationRepository,
-        reservation: this.#binding.reservation,
-        handleId,
-        diagnosticTarget: 'directory',
-        ...(scope === undefined ? {} : { stageScope: scope }),
-      })
-      if (persisted !== undefined) {
-        const current = await openDirectoryEntry(
+      try {
+        const outcome = await admitFSAOwnedDirectory({
+          scheduler: this.#mutations.scheduler,
+          authorities: this.#authorities,
+          repository: this.#operationRepository,
+          reservation: this.#binding.reservation,
+          operationId: this.#binding.intent.operationId,
+          canonicalPath,
           parent,
           name,
-          this.#binding.intent.operationId,
-          scope,
-          'fsa.directory.entry.open',
-        )
-        if (!await verifySameDirectory(
-          current,
-          persisted,
-          this.#binding.intent.operationId,
-          scope,
-          'fsa.directory.handle.verify',
-        )) {
-          throw new TargetOwnershipUnknownError(
-            'parent-authority',
-            this.#binding.intent.operationId,
-          )
+          handleId,
+          ...(scope === undefined ? {} : { stageScope: scope }),
+          ...(this.#compatibleNames === undefined
+            ? {}
+            : { compatibleNames: this.#compatibleNames }),
+          recordCompatibleTargetCreated: () =>
+            this.#recordCompatibleDirectoryTargetCreated(canonicalPath),
+          randomOwnedObjectId: this.#randomOwnedObjectId,
+        })
+        if (outcome.kind === 'materialized') return outcome.value
+        const pairParent = this.#authorities.directory([])
+        if (this.#compatibleNames === undefined || pairParent === undefined) {
+          throw outcome.rejection
         }
-        const record = await runPersistentOutputStage(
-          scope,
-          'indexeddb.directory-handle.read',
-          () => this.#operationRepository.readHandle<FileSystemDirectoryHandle>(handleId),
-        )
-        if (record?.ownedObjectId === undefined) {
-          throw new TargetOwnershipUnknownError(
-            'parent-authority',
-            this.#binding.intent.operationId,
-          )
-        }
-        await this.#compatibleNames?.commitVerifiedDirectory(
-          canonicalPath,
-          record.ownedObjectId,
-        )
-        return Object.freeze({ ownedObjectId: record.ownedObjectId, created: false })
-      }
-      if (this.#compatibleNames?.hasLateLogicalCollision(canonicalPath, 'directory')) {
-        throw new OutputDirectoryMutationError(
-          'A logical directory collides with an operation-owned compatible name',
-          false,
-        )
-      }
-      let inspection: 'absent' | 'occupied'
-      try {
-        inspection = await runPersistentOutputStage(
-          scope,
-          'fsa.directory.entry.inspect',
-          () => inspectFileSystemComponent({
-            verifiedParent: parent,
-            component: name,
-            expectedKind: 'directory',
-            stage: 'fsa.directory.entry.inspect',
-            mode: this.#compatibleNames?.hasMapping(canonicalPath, 'directory') === true
-              ? 'diagnostic'
-              : 'classify-rejection',
-          }),
-        )
-      } catch (error) {
-        if (!(error instanceof PathComponentRejectedError) || this.#compatibleNames === undefined ||
-            this.#root === undefined) throw error
-        name = await this.#compatibleNames.resolveRejectedComponent({
-          rejection: error,
+        await this.#compatibleNames.resolveRejectedComponent({
+          rejection: outcome.rejection,
           artifactPath: canonicalPath,
           entryKind: 'directory',
-          parent,
-          pairParent: this.#root,
+          parent: parent.handle,
+          parentAuthority: parent,
+          pairParent: pairParent.handle,
+          pairParentAuthority: pairParent,
         })
-        inspection = 'absent'
+      } catch (error) {
+        this.#authorities.invalidateSubtree(canonicalPath)
+        throw error
       }
-      if (inspection === 'occupied') {
-        throw new TargetOwnershipUnknownError(
-          'namespace-create',
-          this.#binding.intent.operationId,
-        )
-      }
-      const created = await runPersistentOutputStage(
-        scope,
-        'fsa.directory.entry.create',
-        () => parent.getDirectoryHandle(name, { create: true }),
-      )
-      await this.#recordCompatibleDirectoryTargetCreated(canonicalPath)
-      const ownedObjectId = requireOwnedObjectId(this.#randomOwnedObjectId())
-      const ownedScope = scope?.withCorrelation({ ownedObjectId })
-      await persistFSAOwnedDirectory({
-        repository: this.#operationRepository,
-        reservation: this.#binding.reservation,
-        handleId,
-        ownedObjectId,
-        handle: created,
-        diagnosticTarget: 'directory',
-        ...(ownedScope === undefined ? {} : { stageScope: ownedScope }),
-      })
-      const current = await openDirectoryEntry(
-        parent,
-        name,
+    }
+  }
+
+  #retainedDirectoryMaterialization(
+    canonicalPath: readonly string[],
+  ): PersistentDirectoryMaterialization | undefined {
+    const authority = this.#authorities.directory(canonicalPath)
+    if (canonicalPath.length === 0 &&
+        (this.#rootOwnedObjectId === undefined ||
+          authority?.ownedObjectId !== this.#rootOwnedObjectId)) {
+      throw new TargetOwnershipUnknownError(
+        'parent-authority',
         this.#binding.intent.operationId,
-        ownedScope,
-        'fsa.directory.entry.open',
       )
-      if (!await verifySameDirectory(
-        current,
-        created,
-        this.#binding.intent.operationId,
-        ownedScope,
-        'fsa.directory.handle.verify',
-      )) {
-        throw new TargetOwnershipUnknownError(
-          'namespace-create',
-          this.#binding.intent.operationId,
-        )
-      }
-      await this.#compatibleNames?.commitVerifiedDirectory(canonicalPath, ownedObjectId)
-      return Object.freeze({ ownedObjectId, created: true })
-    })
+    }
+    return authority?.ownedObjectId === undefined
+      ? undefined
+      : Object.freeze({ ownedObjectId: authority.ownedObjectId, created: false })
   }
 
   async #recordCompatibleDirectoryTargetCreated(canonicalPath: readonly string[]): Promise<void> {
@@ -443,7 +388,7 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       ? this.#rootScope()?.withCorrelation({ ownedObjectId })
       : this.#directoryScope(canonicalPath)?.withCorrelation({ ownedObjectId })
     const handleId = await fsaDirectoryHandleId(this.#binding.reservation, canonicalPath)
-    const persisted = await readFSAOwnedDirectory({
+    const persisted = await readFSAOwnedDirectoryBinding({
       repository: this.#operationRepository,
       reservation: this.#binding.reservation,
       handleId,
@@ -452,24 +397,31 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
       ...(scope === undefined ? {} : { stageScope: scope }),
     })
     if (persisted === undefined) return false
-    const current = canonicalPath.length === 0
-      ? await openDirectoryEntry(
-          await this.#verifyParent(scope),
-          this.#binding.reservation.physicalName,
-          this.#binding.intent.operationId,
-          scope,
-          'fsa.root.entry.open',
-        )
-      : await this.#directory(canonicalPath, scope, true)
-    return verifySameDirectory(
-      current,
-      persisted,
-      this.#binding.intent.operationId,
-      scope,
-      canonicalPath.length === 0
-        ? 'fsa.root.handle.verify'
-        : 'fsa.directory.handle.verify',
-    )
+    try {
+      const current = canonicalPath.length === 0
+        ? await openDirectoryEntry(
+            await this.#verifyParent(scope),
+            this.#binding.reservation.physicalName,
+            this.#binding.intent.operationId,
+            scope,
+            'fsa.root.entry.open',
+          )
+        : (await this.#directoryAuthority(canonicalPath, scope, true)).handle
+      const verified = await verifySameDirectory(
+        current,
+        persisted.handle,
+        this.#binding.intent.operationId,
+        scope,
+        canonicalPath.length === 0
+          ? 'fsa.root.handle.verify'
+          : 'fsa.directory.handle.verify',
+      )
+      if (!verified) this.#authorities.invalidateSubtree(canonicalPath)
+      return verified
+    } catch (error) {
+      this.#authorities.invalidateSubtree(canonicalPath)
+      throw error
+    }
   }
 
   proposeFileOwnedObjectId(
@@ -492,12 +444,14 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     revision: OpenedFileRevision,
     selectedOwnedObjectId: string,
     stageScope?: PersistentOutputStageScope,
+    commitCreatedFile?: (handle: PersistentHandleRecord<unknown>) => Promise<void>,
   ): Promise<PersistentTreeFile> {
     return this.#files.createAfterRevisionOpen(
       path,
       revision,
       selectedOwnedObjectId,
       stageScope,
+      commitCreatedFile,
     )
   }
 
@@ -513,6 +467,14 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return this.#files.remove(path, ownedObjectId)
   }
 
+  removeFileWithinTerminal(
+    authority: FSATerminalExclusiveAuthority,
+    path: readonly string[],
+    ownedObjectId: string,
+  ): Promise<void> {
+    return this.#files.removeWithinTerminal(authority, path, ownedObjectId)
+  }
+
   async removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void> {
     if (this.#binding.reservation.entryKind === 'single-file') {
       throw new TypeError('Single-file DirectoryTree has no owned directory')
@@ -521,15 +483,22 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     if (!await this.validateDirectory(canonicalPath, ownedObjectId)) {
       throw new TargetOwnershipUnknownError('cleanup', this.#binding.intent.operationId)
     }
-    await this.#mutate('remove-entry', async () => {
-      if (canonicalPath.length === 0) {
-        const parent = await this.#verifyParent()
-        await parent.removeEntry(this.#binding.reservation.physicalName, { recursive: true })
-        return
-      }
-      const { parent, name } = await this.#parent(canonicalPath, undefined, 'directory')
-      await parent.removeEntry(name, { recursive: true })
-    })
+    await this.#mutate('remove-entry', () => this.#removeDirectoryAuthority(canonicalPath))
+  }
+
+  async removeDirectoryWithinTerminal(
+    _authority: FSATerminalExclusiveAuthority,
+    path: readonly string[],
+    ownedObjectId: string,
+  ): Promise<void> {
+    if (this.#binding.reservation.entryKind === 'single-file') {
+      throw new TypeError('Single-file DirectoryTree has no owned directory')
+    }
+    const canonicalPath = snapshotRelativePath(path, true)
+    if (!await this.validateDirectory(canonicalPath, ownedObjectId)) {
+      throw new TargetOwnershipUnknownError('cleanup', this.#binding.intent.operationId)
+    }
+    await this.#removeDirectoryAuthority(canonicalPath)
   }
 
   physicalChild(
@@ -545,16 +514,33 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return this.#root
   }
 
+  async #removeDirectoryAuthority(canonicalPath: readonly string[]): Promise<void> {
+    if (canonicalPath.length === 0) {
+      const parent = await this.#verifyParent()
+      await parent.removeEntry(this.#binding.reservation.physicalName, { recursive: true })
+      this.#authorities.invalidateSubtree([])
+      return
+    }
+    const { authority: parent, name } = await this.#parent(canonicalPath, undefined, 'directory')
+    await parent.handle.removeEntry(name, { recursive: true })
+    this.#authorities.invalidateSubtree(canonicalPath)
+  }
+
   async #verifyParent(
     stageScope?: PersistentOutputStageScope,
   ): Promise<FileSystemDirectoryHandle> {
-    const verified = await verifyFSAOperationBinding({
-      repository: this.#operationRepository,
-      intent: this.#binding.intent,
-      expectedParent: this.#binding.parent,
-      ...(stageScope === undefined ? {} : { stageScope }),
-    })
-    return verified.parent
+    try {
+      const verified = await verifyFSAOperationBinding({
+        repository: this.#operationRepository,
+        intent: this.#binding.intent,
+        expectedParent: this.#binding.parent,
+        ...(stageScope === undefined ? {} : { stageScope }),
+      })
+      return verified.parent
+    } catch (error) {
+      this.#authorities.invalidateOperation()
+      throw error
+    }
   }
 
   async #requirePreparedRoot(): Promise<void> {
@@ -567,33 +553,34 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     path: readonly string[],
     stageScope?: PersistentOutputStageScope,
     entryKind: 'file' | 'directory' = 'file',
-  ): Promise<Readonly<{ parent: FileSystemDirectoryHandle; name: string }>> {
+  ): Promise<Readonly<{ authority: FSAVerifiedDirectoryAuthority; name: string }>> {
     if (this.#binding.reservation.entryKind === 'single-file') {
       return {
-        parent: await this.#verifyParent(stageScope),
+        authority: this.#authorities.pickedParent(),
         name: this.#binding.reservation.physicalName,
       }
     }
     const name = path.at(-1)
     if (name === undefined) throw new TypeError('Output file path has no leaf')
     return {
-      parent: await this.#directory(path.slice(0, -1), stageScope),
+      authority: await this.#directoryAuthority(path.slice(0, -1), stageScope),
       name: this.#compatibleNames?.physicalComponent(path, entryKind) ?? name,
     }
   }
 
-  async #directory(
+  async #directoryAuthority(
     path: readonly string[],
     stageScope?: PersistentOutputStageScope,
     correlateWalkedPath = false,
-  ): Promise<FileSystemDirectoryHandle> {
-    if (this.#root === undefined) {
+  ): Promise<FSAVerifiedDirectoryAuthority> {
+    const retainedRoot = this.#authorities.directory([])
+    if (retainedRoot === undefined) {
       throw new TargetOwnershipUnknownError(
         'parent-authority',
         this.#binding.intent.operationId,
       )
     }
-    let current = this.#root
+    let current = retainedRoot
     const walked: string[] = []
     for (const segment of path) {
       walked.push(segment)
@@ -602,40 +589,56 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
           (walked.length !== path.length || operationScope === undefined)) {
         operationScope = this.#directoryScope(walked)
       }
-      const handleId = await fsaDirectoryHandleId(this.#binding.reservation, walked)
-      const persisted = await readFSAOwnedDirectory({
-        repository: this.#operationRepository,
-        reservation: this.#binding.reservation,
-        handleId,
-        diagnosticTarget: 'directory',
-        ...(operationScope === undefined ? {} : { stageScope: operationScope }),
-      })
-      if (persisted === undefined) {
-        throw new TargetOwnershipUnknownError(
-          'parent-authority',
-          this.#binding.intent.operationId,
-        )
+      const parent = current
+      const canonicalWalked = snapshotRelativePath(walked, false)
+      try {
+        current = await this.#authorities.resolveDirectory(canonicalWalked, 1, async () => {
+          const handleId = await fsaDirectoryHandleId(this.#binding.reservation, canonicalWalked)
+          const persisted = await readFSAOwnedDirectoryBinding({
+            repository: this.#operationRepository,
+            reservation: this.#binding.reservation,
+            handleId,
+            diagnosticTarget: 'directory',
+            ...(operationScope === undefined ? {} : { stageScope: operationScope }),
+          })
+          if (persisted === undefined) {
+            throw new TargetOwnershipUnknownError(
+              'parent-authority',
+              this.#binding.intent.operationId,
+            )
+          }
+          const physicalName = this.#compatibleNames
+            ?.physicalComponent(canonicalWalked, 'directory') ?? segment
+          const next = await openDirectoryEntry(
+            parent.handle,
+            physicalName,
+            this.#binding.intent.operationId,
+            operationScope,
+            'fsa.directory.entry.open',
+          )
+          if (!await verifySameDirectory(
+            next,
+            persisted.handle,
+            this.#binding.intent.operationId,
+            operationScope,
+            'fsa.directory.handle.verify',
+          )) {
+            throw new TargetOwnershipUnknownError(
+              'parent-authority',
+              this.#binding.intent.operationId,
+            )
+          }
+          return {
+            ...persisted,
+            canonicalPath: canonicalWalked,
+            physicalName,
+            handle: next,
+          }
+        })
+      } catch (error) {
+        this.#authorities.invalidateSubtree(canonicalWalked)
+        throw error
       }
-      const next = await openDirectoryEntry(
-        current,
-        this.#compatibleNames?.physicalComponent(walked, 'directory') ?? segment,
-        this.#binding.intent.operationId,
-        operationScope,
-        'fsa.directory.entry.open',
-      )
-      if (!await verifySameDirectory(
-        next,
-        persisted,
-        this.#binding.intent.operationId,
-        operationScope,
-        'fsa.directory.handle.verify',
-      )) {
-        throw new TargetOwnershipUnknownError(
-          'parent-authority',
-          this.#binding.intent.operationId,
-        )
-      }
-      current = next
     }
     return current
   }
@@ -668,7 +671,10 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     scope.addFailureFacts('fsa', async context => captureFSAFailureFacts({
       target: {
         kind: 'named-entry',
-        resolve: () => this.#parent(path, undefined, 'directory'),
+        resolve: async () => {
+          const resolved = await this.#parent(path, undefined, 'directory')
+          return { parent: resolved.authority.handle, name: resolved.name }
+        },
       },
       permissionFallback: this.#binding.parent,
       expectedKind: 'directory',

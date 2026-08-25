@@ -10,6 +10,7 @@ import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../src/output/persiste
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import {
   bindTask as bindFsaNamespaceTask,
+  confirmedBrowserRecoveryPolicy,
   installNativeLookupInterceptor,
   resultRootArtifact as fsaResultRootArtifact,
   type FsaNamespaceFixture,
@@ -287,6 +288,7 @@ export async function reopenCompatibleNameRecovery(
     const reopenedRepairSummaryCount = session.repairSummary()?.committedCount ?? -1
     const resumed = await session.beginFile({
       materializationRelativePath: [fixture.logicalComponent],
+      recovery: confirmedBrowserRecoveryPolicy(),
       openRevision: async () => ({
         fileId: fixture.fileId,
         fileRevision: fixture.fileRevision,
@@ -573,6 +575,7 @@ export async function createOriginPrivateReceiveCrashCut(
   })
   const transaction = await backend.materialization.beginFile({
     materializationRelativePath: [intent.artifact.suggestedName],
+    recovery: confirmedBrowserRecoveryPolicy(),
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({
@@ -658,6 +661,7 @@ export async function recoverReceiveAndSealPackage(
   })
   const transaction = await backend.materialization.beginFile({
     materializationRelativePath: [intent.artifact.suggestedName],
+    recovery: confirmedBrowserRecoveryPolicy(),
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({

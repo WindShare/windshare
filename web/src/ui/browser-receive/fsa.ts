@@ -9,10 +9,16 @@ import {
   reopenFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
 } from '../../output/file-system-access/session'
-import type {
-  LocalOutputOperationFailureDiagnosticsPort,
-  OutputDiagnosticsPorts,
+import {
+  bindOutputPerformanceSummary,
+  observePerformance,
+  type LocalOutputOperationFailureDiagnosticsPort,
+  type OutputDiagnosticsPorts,
 } from '../../output/diagnostics'
+import type {
+  TraceClock,
+} from '../../diagnostics/trace/ports'
+import { SYSTEM_TRACE_CLOCK } from '../../diagnostics/trace/ports'
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
 import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
@@ -31,7 +37,10 @@ import {
 import {
   TransferPauseRequestedError,
   TransferStopRequestedError,
+  outputCheckpointCostBudget,
+  outputExecutionProfile,
   outputSessionIdentity,
+  type OutputExecutionProfileBoundedCheckpoint,
   type V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
 import type {
@@ -53,11 +62,43 @@ import { FSAResourceOwner } from './fsa-resource-owner'
 interface FSAAttemptIdentitySource {
   readonly createOutputSessionId: () => string
   readonly createTransferJobId: () => string
+  readonly clock?: TraceClock
 }
 
 const defaultAttemptIdentitySource: FSAAttemptIdentitySource = Object.freeze({
   createOutputSessionId: createOutputSessionID,
   createTransferJobId: createTransferJobID,
+  clock: SYSTEM_TRACE_CLOCK,
+})
+
+const MEBIBYTE_BYTES = 1024n * 1024n
+
+export const WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES = 15
+export const WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS = 8
+export const WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS = 3
+export const WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES = 8n * MEBIBYTE_BYTES
+export const WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES = 8n * MEBIBYTE_BYTES
+// Small transfers stay final-only; large transfers periodically bound restart loss
+// without admitting unbounded native prefix copies or temporary disk usage.
+export const FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER:
+  OutputExecutionProfileBoundedCheckpoint['trigger'] = Object.freeze({
+  pendingBytes: 64n * MEBIBYTE_BYTES,
+  pendingMilliseconds: 30_000,
+})
+export const FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET = outputCheckpointCostBudget({
+  maximumPrefixCopyBytes: 256n * MEBIBYTE_BYTES,
+  maximumCumulativeWriteAmplificationBytes: 512n * MEBIBYTE_BYTES,
+  maximumPeakTemporaryBytes: 256n * MEBIBYTE_BYTES,
+})
+export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
+  maximumConcurrentFilePipelines: WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
+  maximumOutstandingWriteBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES,
+  maximumBufferedBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES,
+  automaticCheckpoint: {
+    kind: 'bounded',
+    trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
+    costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+  },
 })
 
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
@@ -69,7 +110,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #resources: FSAResourceOwner
-  readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #attemptIdentities: FSAAttemptIdentitySource
   #settlement: FileSystemAccessOperationSettlementAuthority
@@ -128,6 +169,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       'start',
       input.settlement,
       input.outputSessionId,
+      input.diagnostics,
     )
     return new FSAReceiveOperation({ ...input, plans })
   }
@@ -146,28 +188,42 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       throw new TypeError('Direct-tree continuation omitted its admission fallback')
     }
     const transferJobId = attemptIdentities.createTransferJobId()
-    const attemptAuthority = await createFSAAttemptSettlement(
-      operation.intent,
-      operation.repository,
-      operation.lease,
-      admissionFallback,
-      diagnostics,
-      transferJobId,
-    )
-    let session: FileSystemAccessOutputSession | undefined
     const outputSessionId = attemptIdentities.createOutputSessionId()
+    const attemptDiagnostics = bindOutputPerformanceSummary(
+      diagnostics,
+      {
+        receiveOperationId: operation.intent.operationId,
+        transferJobId,
+        outputSessionId,
+      },
+      attemptIdentities.clock ?? SYSTEM_TRACE_CLOCK,
+    )
+    let attemptAuthority: Awaited<ReturnType<typeof createFSAAttemptSettlement>> | undefined
+    let session: FileSystemAccessOutputSession | undefined
     try {
+      attemptAuthority = await createFSAAttemptSettlement(
+        operation.intent,
+        operation.repository,
+        operation.lease,
+        admissionFallback,
+        attemptDiagnostics,
+        transferJobId,
+      )
       session = await reopenFileSystemAccessOutput({
         intent: operation.intent,
         operationRepository: operation.repository,
-        ...(diagnostics === undefined ? {} : { diagnostics }),
+        maximumConcurrentInitialClaimInspections:
+          WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...stageDiagnosticsOption(
           localOutputFailures,
-          diagnostics?.failures?.attempt,
+          attemptDiagnostics?.failures?.attempt,
           transferJobId,
           outputSessionId,
         ),
       })
+      observePerformance(attemptDiagnostics?.performance, summary =>
+        summary.markMilestone('authority_acquired'))
       const plans = await createFSAPlanAuthority(
         operation.intent,
         operation.repository,
@@ -176,11 +232,12 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         'resume',
         attemptAuthority.settlement,
         outputSessionId,
+        attemptDiagnostics,
       )
       const resources = new FSAResourceOwner({
         outputSession: session,
         closeOperationAuthority: () => operation.close(),
-        ...(diagnostics === undefined ? {} : { diagnostics }),
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
       })
       return new FSAReceiveOperation({
         intent: operation.intent,
@@ -193,10 +250,12 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         plans,
         transferJobId: attemptAuthority.transferJobId,
         attemptIdentities,
-        ...(diagnostics === undefined ? {} : { diagnostics }),
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
     } catch (error) {
+      observePerformance(attemptDiagnostics?.performance, summary => summary.complete())
+      if (attemptAuthority === undefined) throw error
       return settleFailedFSAReopen(
         attemptAuthority.settlement,
         operation.intent,
@@ -241,20 +300,32 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
     const transferJobId = this.#attemptIdentities.createTransferJobId()
     const outputSessionId = this.#attemptIdentities.createOutputSessionId()
-    const session = await reopenFileSystemAccessOutput({
-      intent: this.intent,
-      operationRepository: this.#repository,
-      ...(this.#diagnostics === undefined
-        ? {}
-        : { diagnostics: this.#diagnostics }),
-      ...stageDiagnosticsOption(
-        this.#localOutputFailures,
-        this.#diagnostics?.failures?.attempt,
+    const attemptDiagnostics = bindOutputPerformanceSummary(
+      this.#diagnostics,
+      {
+        receiveOperationId: this.intent.operationId,
         transferJobId,
         outputSessionId,
-      ),
-    })
+      },
+      this.#attemptIdentities.clock ?? SYSTEM_TRACE_CLOCK,
+    )
+    let session: FileSystemAccessOutputSession | undefined
     try {
+      session = await reopenFileSystemAccessOutput({
+        intent: this.intent,
+        operationRepository: this.#repository,
+        maximumConcurrentInitialClaimInspections:
+          WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
+        ...stageDiagnosticsOption(
+          this.#localOutputFailures,
+          attemptDiagnostics?.failures?.attempt,
+          transferJobId,
+          outputSessionId,
+        ),
+      })
+      observePerformance(attemptDiagnostics?.performance, summary =>
+        summary.markMilestone('authority_acquired'))
       // Acquire the attempt before leaving the stable state so setup failures retain
       // the exact checkpoint deadline and never require compensating durable writes.
       const attempt = await createFSAAttempt(
@@ -264,7 +335,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         session,
         'resume',
         lifecycle,
-        this.#diagnostics,
+        attemptDiagnostics,
         transferJobId,
         outputSessionId,
       )
@@ -279,12 +350,15 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       this.#settlement = attempt.settlement
       this.#plans = attempt.plans
       this.#transferJobId = attempt.transferJobId
+      this.#diagnostics = attemptDiagnostics
       return Object.freeze({
         lifecycle: resumed,
         activeControls: this.activeControls,
         resumeTransfer: true,
       })
     } catch (error) {
+      observePerformance(attemptDiagnostics?.performance, summary => summary.complete())
+      if (session === undefined) throw error
       return closeFSAContinuationAfterFailure(session, error)
     }
   }
@@ -438,6 +512,7 @@ async function createFSAAttempt(
     lifecycleEntry,
     attemptAuthority.settlement,
     outputSessionId,
+    diagnostics,
   )
   return Object.freeze({ ...attemptAuthority, plans })
 }
@@ -490,6 +565,7 @@ async function createFSAPlanAuthority(
   lifecycleEntry: 'start' | 'resume',
   settlement: FileSystemAccessOperationSettlementAuthority,
   outputSessionId: string,
+  diagnostics: OutputDiagnosticsPorts | undefined,
 ): Promise<V2PlanExecutionAuthority> {
   const plans = await createV2PlanExecutionAuthority({
     intent,
@@ -512,14 +588,18 @@ async function createFSAPlanAuthority(
           signal.throwIfAborted()
           return createPersistentDirectTreeExecution({
             intent: boundIntent,
-             materialization: session,
-             namespaceClaims: session,
-             repairSummary: () => session.repairSummary(),
-             outputIdentity: outputSessionIdentity({
+            materialization: session,
+            namespaceClaims: session,
+            repairSummary: () => session.repairSummary(),
+            executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
+            outputIdentity: outputSessionIdentity({
               backend: 'browser-fsa-tree',
               outputSessionId,
             }),
             settlement: materializationSettlement,
+            ...(diagnostics?.performance === undefined
+              ? {}
+              : { performance: diagnostics.performance }),
           })
         },
       },

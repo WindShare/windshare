@@ -20,6 +20,7 @@ import {
   type BrowserLockManagerRuntime,
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
+import type { FSATerminalExclusiveAuthority } from '../browser/mutation-coordination/model'
 import {
   fileCheckpointIsComplete,
   type FileCheckpointV2,
@@ -37,6 +38,9 @@ import {
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
 } from './checkpoint-repository'
+import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
+import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import { IndexedDbCompatibleNameLedger } from '../browser/indexeddb-compatible-name-ledger'
 import {
   CompatibleNamePathAuthority,
@@ -61,7 +65,7 @@ export interface FSAFreshPageDiscardCut {
   readonly successfulCheckpoints: readonly FileCheckpointV2[]
   readonly removedObjectIds: readonly string[]
   readonly removedHandleIds: readonly string[]
-  retireCheckpoints(): Promise<void>
+  retireRecoveryMetadata(): Promise<void>
 }
 
 interface CheckpointObject {
@@ -100,6 +104,7 @@ export class FreshPageFileSystemAccessDiscardSession {
   readonly #checkpoints: FSAFileCheckpointRepository
   readonly #rootLease: FSARootMutationLease
   readonly #compatibleNames: CompatibleNamePathAuthority
+  readonly #ledgerBinding: Promise<MaterializationLedgerBindingV1>
   #discardStarted = false
   #closePromise: Promise<void> | undefined
 
@@ -119,6 +124,12 @@ export class FreshPageFileSystemAccessDiscardSession {
     this.#checkpoints = input.checkpoints
     this.#rootLease = input.rootLease
     this.#compatibleNames = input.compatibleNames
+    this.#ledgerBinding = createMaterializationLedgerBinding({
+      operationId: input.checkpoints.binding.operationId,
+      receiveIntentDigest: input.checkpoints.binding.receiveIntentDigest,
+      materializationBindingDigest: input.checkpoints.binding.materializationBindingDigest,
+      authorityRef: input.checkpoints.binding.authorityRef,
+    })
   }
 
   usesOperationRepository(repository: ReceiveOperationRepository): boolean {
@@ -132,6 +143,8 @@ export class FreshPageFileSystemAccessDiscardSession {
     this.#discardStarted = true
     await this.#verifyBinding()
     await this.#tree.reopenOwnedRootForCleanup()
+    const terminal = this.#rootLease.scheduler.beginTerminal('discard-operation')
+    await terminal.drained
 
     const [committed, candidates, checkpointHandles, operationHandles] = await Promise.all([
       scanAllFSAFileCheckpoints(this.#checkpoints, 'committed'),
@@ -146,43 +159,65 @@ export class FreshPageFileSystemAccessDiscardSession {
     )
     const directories = await this.#verifyNamespaceInventory(objects, operationHandles)
 
+    return terminal.runExclusive(authority => this.#discardVerifiedObjects({
+      authority,
+      committed,
+      candidates,
+      objects,
+      directories,
+    }))
+  }
+
+  async #discardVerifiedObjects(input: Readonly<{
+    authority: FSATerminalExclusiveAuthority
+    committed: readonly FileCheckpointV2[]
+    candidates: readonly FileCheckpointV2[]
+    objects: readonly OwnedCheckpointObject[]
+    directories: readonly OwnedDirectoryObservation[]
+  }>): Promise<FSAFreshPageDiscardCut> {
     const removedObjectIds: string[] = []
-    for (const object of objects) {
+    for (const object of input.objects) {
       if (object.successful !== undefined) continue
       await cleanupMutation(this.intent.operationId, async () => {
-        await this.#tree.removeFile(object.path, object.ownedObjectId)
+        await this.#tree.removeFileWithinTerminal(input.authority, object.path, object.ownedObjectId)
       })
       removedObjectIds.push(object.ownedObjectId)
     }
 
-    const successful = objects.flatMap(object =>
+    const successful = input.objects.flatMap(object =>
       object.successful === undefined ? [] : [object.successful])
     const removedHandleIds: string[] = []
-    const removableDirectories = directories
+    const removableDirectories = input.directories
       .filter(directory => !successful.some(checkpoint =>
         pathStartsWith(checkpoint.canonicalPath, directory.path)))
       .sort((left, right) => right.path.length - left.path.length ||
         comparePaths(right.path, left.path))
     for (const directory of removableDirectories) {
       await cleanupMutation(this.intent.operationId, async () => {
-        await this.#tree.removeDirectory(directory.path, directory.ownedObjectId)
+        await this.#tree.removeDirectoryWithinTerminal(
+          input.authority,
+          directory.path,
+          directory.ownedObjectId,
+        )
       })
       removedObjectIds.push(directory.ownedObjectId)
       removedHandleIds.push(directory.handleId)
     }
-    const removedRepair = await this.#compatibleNames.removeVerifiedEmptyRepair(this.#tree.ownedRoot())
+    const removedRepair = await this.#compatibleNames.removeVerifiedEmptyRepairWithinMutation(
+      this.#tree.ownedRoot(),
+    )
     if (removedRepair.kind === 'removed') {
       removedObjectIds.push(...removedRepair.removedObjectIds)
       removedHandleIds.push(...removedRepair.removedHandleIds)
     }
 
     return Object.freeze({
-      committedCheckpoints: committed,
-      candidateCheckpoints: candidates,
+      committedCheckpoints: input.committed,
+      candidateCheckpoints: input.candidates,
       successfulCheckpoints: Object.freeze(successful),
       removedObjectIds: Object.freeze(removedObjectIds.sort()),
       removedHandleIds: Object.freeze(removedHandleIds.sort()),
-      retireCheckpoints: () => this.#checkpoints.retireOperation(),
+      retireRecoveryMetadata: () => this.#retireRecoveryMetadata(),
     })
   }
 
@@ -201,6 +236,10 @@ export class FreshPageFileSystemAccessDiscardSession {
         verified.reservation.digest !== this.#binding.reservation.digest) {
       throw new TargetOwnershipUnknownError('reservation', this.intent.operationId)
     }
+  }
+
+  async #retireRecoveryMetadata(): Promise<void> {
+    await retireFSAMaterializationRecoveryMetadata(this.#checkpoints, await this.#ledgerBinding)
   }
 
   async #verifyCheckpointObjects(

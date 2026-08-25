@@ -5,7 +5,17 @@ import type {
   FSACompatibleNamePairHandleRepository,
   PersistedFSAOperationBinding,
 } from '../../browser/indexeddb-root-binding'
+import { readFSAOwnedDirectoryBinding } from '../../browser/indexeddb-root-binding'
+import {
+  fsaDirectoryHandleId,
+  verifySameDirectory,
+} from '../../browser/filesystem-directory-authority'
 import type { FSARootMutationAuthority } from '../../browser/namespace-mutation'
+import {
+  fsaAuthorityCacheForRoot,
+  type FSAAuthorityCache,
+  type FSAVerifiedDirectoryAuthority,
+} from '../../browser/mutation-coordination/authority-cache'
 import type { CompatibleNameLedger } from './ledger'
 import type {
   CompatibleNameEntryKind,
@@ -99,7 +109,9 @@ export interface CompatibleNameRejectedComponentInput {
   readonly artifactPath: readonly string[]
   readonly entryKind: CompatibleNameEntryKind
   readonly parent: FileSystemDirectoryHandle
+  readonly parentAuthority: FSAVerifiedDirectoryAuthority
   readonly pairParent: FileSystemDirectoryHandle
+  readonly pairParentAuthority: FSAVerifiedDirectoryAuthority
 }
 
 interface CompatibleNamePathAuthorityOptions {
@@ -120,6 +132,7 @@ export class CompatibleNamePathAuthority {
   readonly namespaceClaims = new LogicalSiblingNamespaceAuthority()
   readonly #binding: PersistedFSAOperationBinding
   readonly #mutations: FSARootMutationAuthority
+  readonly #authorities: FSAAuthorityCache
   readonly #pairHandles: FSACompatibleNamePairHandleRepository
   readonly #openLedger: () => Promise<CompatibleNameActivationLedger>
   readonly #preparation: CompatibleNameRootRepairPreparationOptions
@@ -130,6 +143,11 @@ export class CompatibleNamePathAuthority {
   private constructor(options: CompatibleNamePathAuthorityOptions) {
     this.#binding = options.binding
     this.#mutations = options.mutations
+    this.#authorities = fsaAuthorityCacheForRoot({
+      owner: options.mutations,
+      binding: options.binding,
+      rootParentIdentity: options.mutations.rootParentIdentity,
+    })
     this.#pairHandles = options.pairHandles
     this.#openLedger = options.openLedger
     this.#preparation = options.preparation
@@ -247,21 +265,36 @@ export class CompatibleNamePathAuthority {
 
   async resolveRejectedComponent(input: CompatibleNameRejectedComponentInput): Promise<string> {
     this.#assertOpen()
-    let coordinator = this.#coordinator
-    if (coordinator === undefined) {
-      coordinator = await CompatibleNameCoordinator.activateDescendant({
-        binding: this.#binding,
-        rejected: input,
-        namespaceClaims: this.namespaceClaims,
-        pairHandles: this.#pairHandles,
-        openLedger: this.#openLedger,
-        preparation: this.#preparation,
-      })
-      this.#coordinator = coordinator
-      this.#publishActivation(coordinator.repairProjection)
-      return coordinator.physicalComponent(input.artifactPath, input.entryKind)
-    }
-    return coordinator.claimRejectedComponent(input, this.namespaceClaims)
+    const parents = input.parentAuthority.schedulerIdentity ===
+      input.pairParentAuthority.schedulerIdentity
+      ? [input.parentAuthority.schedulerIdentity]
+      : [
+          input.parentAuthority.schedulerIdentity,
+          input.pairParentAuthority.schedulerIdentity,
+        ]
+    const physicalName = await this.#mutations.scheduler.runNamespace(
+      parents,
+      'repair-compatible-name',
+      async () => {
+        let coordinator = this.#coordinator
+        if (coordinator === undefined) {
+          coordinator = await CompatibleNameCoordinator.activateDescendant({
+            binding: this.#binding,
+            rejected: input,
+            namespaceClaims: this.namespaceClaims,
+            pairHandles: this.#pairHandles,
+            openLedger: this.#openLedger,
+            preparation: this.#preparation,
+          })
+          this.#coordinator = coordinator
+          this.#publishActivation(coordinator.repairProjection)
+          return coordinator.physicalComponent(input.artifactPath, input.entryKind)
+        }
+        return coordinator.claimRejectedComponent(input, this.namespaceClaims)
+      },
+    )
+    this.#authorities.invalidateSubtree(input.artifactPath)
+    return physicalName
   }
 
   async ensurePairReady(root: FileSystemDirectoryHandle | undefined): Promise<void> {
@@ -274,7 +307,42 @@ export class CompatibleNamePathAuthority {
     if (pairParent === undefined) {
       throw new DOMException('Compatible-name pair parent is unavailable', 'InvalidStateError')
     }
-    await this.#mutations.run('create-file', () => coordinator.ensurePairReady(pairParent))
+    let pairParentAuthority = coordinator.pairPlacement === 'inside-logical-root'
+      ? this.#authorities.directory([])
+      : this.#authorities.pickedParent()
+    if (pairParentAuthority === undefined && root !== undefined) {
+      const handleId = await fsaDirectoryHandleId(this.#binding.reservation, [])
+      const persisted = await readFSAOwnedDirectoryBinding({
+        repository: this.#pairHandles,
+        reservation: this.#binding.reservation,
+        handleId,
+        diagnosticTarget: 'root',
+      })
+      if (persisted === undefined || !await verifySameDirectory(
+        root,
+        persisted.handle,
+        this.#binding.intent.operationId,
+        undefined,
+        'fsa.root.handle.verify',
+      )) {
+        this.#authorities.invalidateOperation()
+        throw new DOMException('Compatible-name pair authority is unavailable', 'InvalidStateError')
+      }
+      pairParentAuthority = this.#authorities.installDirectory({
+        ...persisted,
+        canonicalPath: [],
+        physicalName: this.#binding.reservation.physicalName,
+        handle: root,
+      })
+    }
+    if (pairParentAuthority === undefined) {
+      throw new DOMException('Compatible-name pair authority is unavailable', 'InvalidStateError')
+    }
+    await this.#mutations.scheduler.runNamespace(
+      [pairParentAuthority.schedulerIdentity],
+      'repair-compatible-name',
+      () => coordinator.ensurePairReady(pairParent),
+    )
   }
 
   async recordCompatibleTargetCreated(

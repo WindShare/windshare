@@ -25,7 +25,10 @@ import {
 } from '../../src/output/persistent-tree/stage-diagnostics'
 import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
 import type { TransferTraceEvent } from '../../src/transfer/v2-job'
-import { outputSessionIdentity } from '../../src/transfer/output-session'
+import {
+  disabledOutputExecutionProfile,
+  outputSessionIdentity,
+} from '../../src/transfer/output-session'
 import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coordinate/direct-tree'
 import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
 import {
@@ -103,57 +106,11 @@ const STAGE_FAULT_CASES: readonly StageFaultCase[] = Object.freeze([
     committedGenerations: [],
   },
   {
-    stage: 'indexeddb.file-handle.persist',
+    stage: 'indexeddb.checkpoint.created-file-commit',
+    checkpointGeneration: 0n,
     entry: 'file',
     committedBytes: 0n,
     persistedHandle: 'absent',
-    writer: 'not-created',
-    candidateGenerations: [0n],
-    committedGenerations: [],
-  },
-  {
-    stage: 'fsa.file.entry.open',
-    entry: 'file',
-    committedBytes: 0n,
-    persistedHandle: 'matches-entry',
-    writer: 'not-created',
-    candidateGenerations: [0n],
-    committedGenerations: [],
-  },
-  {
-    stage: 'fsa.file.handle.verify',
-    entry: 'file',
-    committedBytes: 0n,
-    persistedHandle: 'matches-entry',
-    writer: 'not-created',
-    candidateGenerations: [0n],
-    committedGenerations: [],
-  },
-  {
-    stage: 'fsa.file.committed-bytes.read',
-    entry: 'file',
-    committedBytes: 0n,
-    persistedHandle: 'matches-entry',
-    writer: 'not-created',
-    candidateGenerations: [0n],
-    committedGenerations: [],
-  },
-  {
-    stage: 'indexeddb.checkpoint.commit',
-    checkpointGeneration: 0n,
-    entry: 'file',
-    committedBytes: 0n,
-    persistedHandle: 'matches-entry',
-    writer: 'not-created',
-    candidateGenerations: [0n],
-    committedGenerations: [],
-  },
-  {
-    stage: 'indexeddb.checkpoint.committed-read',
-    checkpointGeneration: 0n,
-    entry: 'file',
-    committedBytes: 0n,
-    persistedHandle: 'matches-entry',
     writer: 'not-created',
     candidateGenerations: [0n],
     committedGenerations: [],
@@ -187,7 +144,6 @@ const STAGE_FAULT_CASES: readonly StageFaultCase[] = Object.freeze([
   },
   {
     stage: 'fsa.file.committed-bytes.read',
-    occurrence: 2,
     entry: 'file',
     committedBytes: 2n,
     persistedHandle: 'matches-entry',
@@ -196,33 +152,14 @@ const STAGE_FAULT_CASES: readonly StageFaultCase[] = Object.freeze([
     committedGenerations: [0n],
   },
   {
-    stage: 'indexeddb.checkpoint.candidate-stage',
-    entry: 'file',
-    committedBytes: 2n,
-    persistedHandle: 'matches-entry',
-    writer: 'closed',
-    candidateGenerations: [],
-    committedGenerations: [0n],
-  },
-  {
-    stage: 'indexeddb.checkpoint.commit',
-    checkpointGeneration: 1n,
-    entry: 'file',
-    committedBytes: 2n,
-    persistedHandle: 'matches-entry',
-    writer: 'closed',
-    candidateGenerations: [1n],
-    committedGenerations: [0n],
-  },
-  {
-    stage: 'indexeddb.checkpoint.committed-read',
+    stage: 'indexeddb.checkpoint.final-commit',
     checkpointGeneration: 1n,
     entry: 'file',
     committedBytes: 2n,
     persistedHandle: 'matches-entry',
     writer: 'closed',
     candidateGenerations: [],
-    committedGenerations: [1n],
+    committedGenerations: [0n],
   },
 ])
 
@@ -244,26 +181,6 @@ const TREE_STAGE_FAULT_CASES: readonly TreeStageFaultCase[] = Object.freeze([
     target: 'root',
     artifactPathSuffix: [],
     queryPermissionState: 'prompt',
-  },
-  {
-    stage: 'indexeddb.binding.operation.read',
-    target: 'root',
-    artifactPathSuffix: [],
-  },
-  {
-    stage: 'indexeddb.binding.reservation.read',
-    target: 'root',
-    artifactPathSuffix: [],
-  },
-  {
-    stage: 'indexeddb.binding.parent-handle.read',
-    target: 'root',
-    artifactPathSuffix: [],
-  },
-  {
-    stage: 'fsa.binding.parent-handle.verify',
-    target: 'root',
-    artifactPathSuffix: [],
   },
   {
     stage: 'indexeddb.root-handle.read',
@@ -317,7 +234,7 @@ const TREE_STAGE_FAULT_CASES: readonly TreeStageFaultCase[] = Object.freeze([
 
 describe('persistent DirectTree native stage diagnostics', () => {
   it.each(STAGE_FAULT_CASES.map((faultCase, caseIndex) => ({ faultCase, caseIndex })))(
-    'preserves $faultCase.stage failure and pauses before acknowledging its range',
+    'preserves $faultCase.stage failure and acknowledges only accepted writes',
     async ({ faultCase, caseIndex }) => {
       const outputSessionId = `stage-diagnostic-session-${caseIndex}`
       const milestones: PersistentOutputStageMilestone[] = []
@@ -369,6 +286,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
           new AbortController().signal,
         )
         const persistentExecution = await createPersistentDirectTreeExecution({
+          executionProfile: disabledOutputExecutionProfile(1),
           intent: directTreeIntent(session.intent),
           materialization: session,
           outputIdentity: outputSessionIdentity({
@@ -376,6 +294,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
             outputSessionId,
           }),
           settlement: {
+            beginTerminal: () => undefined,
             pause: async (request, cut, signal) => {
               await cut.closeMaterialization()
               return lifecycleExecution.pause(request, signal)
@@ -461,7 +380,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
           { readonly name: 'transfer_progress' }
         > => event.name === 'transfer_progress')
         expect(progress.length).toBeGreaterThan(0)
-        expect(progress.every(event => event.writtenBytes === 0n)).toBe(true)
+        expect(progress.at(-1)?.writtenBytes).toBe(faultCase.committedBytes === 2n ? 2n : 0n)
       } finally {
         await session.close().catch(() => undefined)
       }
@@ -727,9 +646,21 @@ async function expectTreeStageFailure(
         await session.activate()
         return session.ensureDirectory(path)
       },
+      materializeDirectory: async (
+        request: Parameters<NonNullable<PersistentMaterializationPort['materializeDirectory']>>[0],
+      ) => {
+        await session.activate()
+        return session.materializeDirectory(request)
+      },
+      finalizeDirectory: (
+        admission: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[0],
+        outcome: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[1],
+      ) =>
+        session.finalizeDirectory(admission, outcome),
       close: () => session.close(),
     })
     const persistentExecution = await createPersistentDirectTreeExecution({
+      executionProfile: disabledOutputExecutionProfile(1),
       intent: directTreeIntent(session.intent),
       materialization,
       outputIdentity: outputSessionIdentity({
@@ -737,6 +668,7 @@ async function expectTreeStageFailure(
         outputSessionId,
       }),
       settlement: {
+        beginTerminal: () => undefined,
         pause: async (request, cut, signal) => {
           await cut.closeMaterialization()
           return lifecycleExecution.pause(request, signal)
