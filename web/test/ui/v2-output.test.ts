@@ -24,6 +24,7 @@ import {
   activationLocksSelection,
   presentArtifactOffers,
 } from '../../src/ui/v2-artifact-presentation'
+import { ActiveReceiveSettlementPresentation } from '../../src/ui/controller/active-receive-settlement-presentation'
 import { V2OutputPresentationController } from '../../src/ui/v2-output'
 import {
   COMPLETE_DISCOVERY,
@@ -354,6 +355,76 @@ describe('derived output presentation', () => {
       .toThrow(/does not match the coordinator-owned resolved action/u)
   })
 
+})
+
+describe('receive interruption presentation', () => {
+  it.each([
+    { control: 'pause', foreground: 'Pausing', background: 'Pausing in the background' },
+    { control: 'stop', foreground: 'Stopping', background: 'Stopping in the background' },
+  ] as const)('presents $control without changing durable lifecycle truth', async ({
+    control,
+    foreground,
+    background,
+  }) => {
+    vi.useFakeTimers()
+    try {
+      const observation = await singleFileObservation(19n)
+      const outputs = new V2OutputPresentationController()
+      outputs.updateProjection(1, observation.state, observation.offers)
+      outputs.updateActivation(waitingResolution(
+        observation.offered,
+        observation.state.projection,
+        1,
+      ))
+      const intent = receiveIntent(observation.action)
+      const receiving = lifecycle(intent, 1n, {
+        kind: 'receiving',
+        activeLeaseId: 'lease',
+      })
+      expect(outputs.adoptReceiveIntent(
+        observation.offered.choice,
+        intent,
+        receiving,
+      )).toBe(true)
+      const presentation = new ActiveReceiveSettlementPresentation({
+        outputs,
+        operationIsCurrent: () => true,
+      })
+
+      presentation.begin(control)
+      expect(outputs.getSnapshot()).toMatchObject({
+        lifecycle: { kind: 'receiving', generation: 1n },
+        lifecyclePresentation: { title: foreground },
+        receiveInterruption: { control, phase: 'waiting' },
+      })
+
+      let expired = false
+      presentation.schedule(25, () => { expired = true })
+      await vi.advanceTimersByTimeAsync(25)
+      expect(expired).toBe(true)
+      expect(outputs.getSnapshot()).toMatchObject({
+        lifecycle: { kind: 'receiving', generation: 1n },
+        lifecyclePresentation: { title: background, tone: 'warning' },
+        receiveInterruption: { control, phase: 'background' },
+      })
+
+      const stable = lifecycle(intent, 2n, {
+        kind: 'restart-required',
+        reason: 'portable-aborted',
+      })
+      expect(outputs.updateLifecycle(stable)).toBe(true)
+      expect(outputs.getSnapshot()).toMatchObject({
+        lifecycle: { kind: 'restart-required', generation: 2n },
+        lifecyclePresentation: { title: 'Start again required' },
+        receiveInterruption: null,
+      })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+describe('derived output lifecycle and recovery presentation', () => {
   it('keeps compatible-name repair separate, persistent, monotonic, and terminally qualified', async () => {
     const observation = await singleFileObservation(7n)
     const outputs = new V2OutputPresentationController()

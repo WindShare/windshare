@@ -24,7 +24,7 @@ export function fileHandleRecord(
   reservation: NamedContainerEntryReservation,
   ownedObjectId: string,
   handle: FileSystemFileHandle,
-): PersistentHandleRecord {
+): PersistentHandleRecord<FileSystemFileHandle> {
   return Object.freeze({
     id: fileHandleId(reservation.operationId, ownedObjectId),
     operationId: reservation.operationId,

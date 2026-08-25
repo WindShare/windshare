@@ -44,6 +44,11 @@ export type LifecycleUserAction =
 
 export type V2ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
 
+export type V2ReceiveInterruptionPresentation = Readonly<{
+  readonly control: V2ActiveReceiveControl
+  readonly phase: 'waiting' | 'background'
+}>
+
 export interface LifecycleActionPresentation {
   readonly kind: LifecycleUserAction
   readonly label: string
@@ -173,6 +178,7 @@ export function presentReceiveLifecycle(input: Readonly<{
   nowMilliseconds: number
   workspaceUsage?: WorkspaceUsage | null
   activeControls?: readonly V2ActiveReceiveControl[]
+  interruption?: V2ReceiveInterruptionPresentation | null
   repairSummary?: CompatibleNameRepairSummary | null
   directZipProgress?: V2DirectZipProgressSnapshot | null
 }>): ReceiveLifecyclePresentation {
@@ -181,13 +187,15 @@ export function presentReceiveLifecycle(input: Readonly<{
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
     ? null
     : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary })
-  const copy = lifecycleCopy(
-    input.state,
-    input.artifact,
-    input.plan,
-    input.directZipProgress ?? null,
-    compatibleNameRepair,
-  )
+  const copy = input.interruption === undefined || input.interruption === null
+    ? lifecycleCopy(
+        input.state,
+        input.artifact,
+        input.plan,
+        input.directZipProgress ?? null,
+        compatibleNameRepair,
+      )
+    : interruptionCopy(input.interruption)
   const actions = presentedLifecycleActions(input, retention)
   return Object.freeze({
     stateKind: input.state.kind,
@@ -204,6 +212,39 @@ export function presentReceiveLifecycle(input: Readonly<{
     actions,
     compatibleNameRepair,
   })
+}
+
+function interruptionCopy(
+  interruption: V2ReceiveInterruptionPresentation,
+): Readonly<{
+  title: string
+  description: string
+  tone: ReceiveLifecyclePresentation['tone']
+}> {
+  if (interruption.control === 'pause') {
+    return interruption.phase === 'waiting'
+      ? copy(
+          'Pausing',
+          'WindShare is stopping new transfers and making accepted file data safe to continue.',
+          'neutral',
+        )
+      : copy(
+          'Pausing in the background',
+          'The wait was detached, but WindShare still owns the save location until native writes and recovery records finish.',
+          'warning',
+        )
+  }
+  return interruption.phase === 'waiting'
+    ? copy(
+        'Stopping',
+        'WindShare is stopping new transfers and closing accepted output work.',
+        'neutral',
+      )
+    : copy(
+        'Stopping in the background',
+        'The wait was detached, but WindShare still owns the save location until native writes and task records finish.',
+        'warning',
+      )
 }
 
 function compatibleNameRepairActionMode(

@@ -4,6 +4,7 @@ import type { V2RevisionCapacityWaitSnapshot } from '../revision-capacity/public
 /** Separates received bytes from whole-file settlement and failure evidence. */
 export class V2TransferProgressLedger {
   #writtenBytes = 0n
+  #recoverableBytes = 0n
   #completedFiles = 0
   #completedBytes = 0n
   #failedDirectories = 0
@@ -18,8 +19,11 @@ export class V2TransferProgressLedger {
   get completedFiles(): number { return this.#completedFiles }
   get completedBytes(): bigint { return this.#completedBytes }
   get writtenBytes(): bigint { return this.#writtenBytes }
+  get recoverableBytes(): bigint { return this.#recoverableBytes }
 
   acknowledgeWrite(bytes: bigint): void { this.#writtenBytes += bytes }
+
+  acknowledgeRecoverable(bytes: bigint): void { this.#recoverableBytes += bytes }
 
   completeFile(exactSize: bigint): void {
     this.#completedFiles += 1
@@ -42,6 +46,7 @@ export class V2TransferProgressLedger {
   snapshot(measure: SelectionMeasure, outputSessionId?: string): {
     readonly measure: SelectionMeasure
     readonly writtenBytes: bigint
+    readonly recoverableBytes: bigint
     readonly completedFiles: number
     readonly completedBytes: bigint
     readonly failedDirectories: number
@@ -56,6 +61,7 @@ export class V2TransferProgressLedger {
     return Object.freeze({
       measure,
       writtenBytes: this.#writtenBytes,
+      recoverableBytes: this.#recoverableBytes,
       completedFiles: this.#completedFiles,
       completedBytes: this.#completedBytes,
       failedDirectories: this.#failedDirectories,

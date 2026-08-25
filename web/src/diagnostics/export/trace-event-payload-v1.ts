@@ -29,6 +29,10 @@ import {
   validateSettlement,
   validateTransferProgress,
 } from './trace-payload-product'
+import {
+  validatePerformancePhase,
+  validatePerformanceSummary,
+} from './trace-payload-performance'
 import { recordValue } from './trace-payload-validation'
 
 export { validateCorrelationV1 } from './trace-payload-validation'
@@ -51,6 +55,8 @@ export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>
     case 'receive_transition': validateReceive(payload); return
     case 'lifecycle_action_transition': validateLifecycleAction(payload); return
     case 'transfer_progress': validateTransferProgress(payload); return
+    case 'performance_phase': validatePerformancePhase(payload); return
+    case 'performance_summary': validatePerformanceSummary(payload); return
     case 'output_reservation': validateOutputReservation(payload); return
     case 'output_write': validateOutputWrite(payload); return
     case 'checkpoint': validateCheckpoint(payload); return

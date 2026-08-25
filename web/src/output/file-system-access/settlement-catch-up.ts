@@ -37,24 +37,26 @@ export async function catchUpFileSystemAccessPendingOutcome(input: Readonly<{
     | Readonly<{ succeeded: true; result: FileSystemAccessPendingOutcomeCatchUpResult }>
     | Readonly<{ succeeded: false; error: unknown }>
   try {
-    const pending = session.pendingOutcome
-    if (pending.ordinaryLifecycle.operationId !== input.operation.intent.operationId ||
-        pending.ordinaryLifecycle.receiveIntentDigest !== input.operation.intent.digest) {
-      throw new TypeError('pending compatible-name outcome escaped its receive operation')
-    }
-    const receipt = await validatePersistedReceiveRecord(pending.terminalReceipt)
-    const repairSummary = await session.drainTerminalProjector()
-    const lifecycle = await reconcilePendingTerminalLifecycle(
-      input.operation,
-      pending,
-      receipt,
-      input.clock ?? Date.now,
-    )
-    await session.clearPendingOutcome()
-    await session.retireCheckpoints()
-    attempt = Object.freeze({
-      succeeded: true,
-      result: Object.freeze({ lifecycle, repairSummary }),
+    attempt = await session.runExclusive(async () => {
+      const pending = session.pendingOutcome
+      if (pending.ordinaryLifecycle.operationId !== input.operation.intent.operationId ||
+          pending.ordinaryLifecycle.receiveIntentDigest !== input.operation.intent.digest) {
+        throw new TypeError('pending compatible-name outcome escaped its receive operation')
+      }
+      const receipt = await validatePersistedReceiveRecord(pending.terminalReceipt)
+      const repairSummary = await session.drainTerminalProjector()
+      const lifecycle = await reconcilePendingTerminalLifecycle(
+        input.operation,
+        pending,
+        receipt,
+        input.clock ?? Date.now,
+      )
+      await session.retireRecoveryMetadata()
+      await session.clearPendingOutcome()
+      return Object.freeze({
+        succeeded: true as const,
+        result: Object.freeze({ lifecycle, repairSummary }),
+      })
     })
   } catch (error) {
     attempt = Object.freeze({ succeeded: false, error })

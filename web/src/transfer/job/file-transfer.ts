@@ -24,7 +24,9 @@ import {
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
   snapshotOutputFileRequest,
+  type AutomaticCheckpointTrigger,
   type OutputFile,
+  type OutputExecutionProfileBoundedCheckpoint,
   type OutputSession,
 } from '../output-session'
 import { V2OutputPausedError, type PendingFile } from './contract'
@@ -49,6 +51,7 @@ import {
 import { validateOpenedFileRevision } from './file-authority'
 import type { DirectTreeCoordinateContract } from './coordinate/direct-tree'
 import { withOutputSettlementTimeout } from '../settlement/v2-output'
+import type { PerformanceFilePipelineObservation } from '../../output/diagnostics/performance-runtime-observations'
 
 export class V2RangeReaderContractError extends Error {
   constructor(message: string) {
@@ -66,8 +69,14 @@ export interface V2FileTransferOptions {
   readonly signal: AbortSignal
   readonly outputSettlementTimeoutMilliseconds: number
   readonly incidentScope?: IncidentScopeHandle
+  readonly performancePipeline?: PerformanceFilePipelineObservation
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
+  readonly onRecoverableAcknowledged?: (
+    bytes: bigint,
+    transition: 'automatic-checkpoint' | 'final',
+  ) => void
   readonly onComplete: (exactSize: bigint) => void
+  readonly now?: () => number
 }
 
 type BoundOutputFileTransaction = ReturnType<typeof bindOutputFileTransaction>['transaction']
@@ -99,6 +108,9 @@ export async function transferV2File(
       ...(pending.modifiedTime === undefined || !options.output.capabilities.modificationTime
         ? {}
         : { modifiedTime: pending.modifiedTime }),
+      ...(options.performancePipeline === undefined
+        ? {}
+        : { performancePipeline: options.performancePipeline }),
       openRevision: async (signal) => {
         if (revisionOpenAttempted) {
           throw new OutputTransactionContractError(
@@ -106,6 +118,7 @@ export async function transferV2File(
           )
         }
         revisionOpenAttempted = true
+        options.performancePipeline?.transition('revision_open')
         try {
           acquired = await options.revisions.open(pending.entry.id, signal)
           opened = validateOpenedFileRevision(options.descriptor, pending.entry, acquired)
@@ -121,6 +134,8 @@ export async function transferV2File(
           // into an output mutation fault merely because the adapter awaited it.
           revisionOpenFailure = Object.freeze({ reason })
           throw reason
+        } finally {
+          options.performancePipeline?.transition('initial_lineage')
         }
       },
     }, options.directTreeCoordinates)
@@ -145,24 +160,39 @@ export async function transferV2File(
     transaction = ownOutputFileTransaction(begun)
     const bound = bindOutputFileTransaction(begun, outputFile, options.output)
     transaction = bound.transaction
+    const activeTransaction = bound.transaction
+    options.performancePipeline?.transition('block_read_authentication')
     const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
-    const missing = bound.durableRanges.asRangeSet().missingFrom(wanted)
+    const initialDurable = bound.initialDurable.asRangeSet()
+    const missing = initialDurable.missingFrom(wanted)
+    const checkpoint = {
+      remainingWriteBytes: rangeBytes(missing),
+      durableBytes: rangeBytes(initialDurable),
+      pendingBytes: 0n,
+      pendingSince: undefined as number | undefined,
+    }
     let wrote = false
     for (const missingRange of missing.ranges) {
       wrote = await transferMissingRange(
         options,
         opened,
-        bound.transaction,
+        activeTransaction,
         missingRange,
         wrote,
+        checkpoint,
       )
     }
+    options.performancePipeline?.transition('final_transaction')
     await outputOperation(
       options.signal,
       'Unable to commit the output file',
       'output-commit-failed',
-      () => transaction?.commit(options.signal) ?? Promise.resolve(),
+      () => activeTransaction.commit(options.signal),
     )
+    const finalDurableBytes = outputFile.exactSize - checkpoint.durableBytes
+    if (finalDurableBytes > 0n) {
+      options.onRecoverableAcknowledged?.(finalDurableBytes, 'final')
+    }
     options.onComplete(outputFile.exactSize)
   } catch (error) {
     primaryFailure = await settleFailedFileTransfer(
@@ -377,6 +407,7 @@ async function transferMissingRange(
   transaction: BoundOutputFileTransaction,
   requested: ByteRange,
   wrote: boolean,
+  checkpoint: FileCheckpointController,
 ): Promise<boolean> {
   if (requested.start >= requested.end) {
     throw new V2RangeReaderContractError('requested transfer range is empty')
@@ -418,9 +449,14 @@ async function transferMissingRange(
       sliceOffset += consumed
       covered += BigInt(consumed)
       if (filled !== data.byteLength) continue
-      await writeAtomicRange(options, transaction, atomic.start, data)
-      options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
-      wrote = true
+      wrote = await acceptAtomicOutputRange(
+        options,
+        transaction,
+        atomic.start,
+        data,
+        wrote,
+        checkpoint,
+      )
       if (covered < requested.end) {
         atomic = atomicRangeAt(geometry.blockSize, covered, requested.end)
         data = new Uint8Array(bigintToSafeNumber(atomic.end - atomic.start, 'atomic output range'))
@@ -433,6 +469,33 @@ async function transferMissingRange(
     throw new V2RangeReaderContractError('range reader returned before covering the requested interval')
   }
   return wrote
+}
+
+async function acceptAtomicOutputRange(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  offset: bigint,
+  data: Uint8Array<ArrayBuffer>,
+  wrote: boolean,
+  checkpoint: FileCheckpointController,
+): Promise<boolean> {
+  const writtenBytes = BigInt(data.byteLength)
+  options.performancePipeline?.transition('writer_lifecycle')
+  try {
+    await writeAtomicRange(options, transaction, offset, data)
+    checkpoint.remainingWriteBytes -= writtenBytes
+    checkpoint.pendingBytes += writtenBytes
+    if (options.output.executionProfile.automaticCheckpoint.kind === 'bounded') {
+      checkpoint.pendingSince ??= checkpointTime(options)
+    }
+    options.onWriteAcknowledged(writtenBytes, !wrote)
+    if (checkpoint.remainingWriteBytes > 0n) {
+      await attemptAutomaticCheckpoint(options, transaction, checkpoint)
+    }
+    return true
+  } finally {
+    options.performancePipeline?.transition('block_read_authentication')
+  }
 }
 
 function atomicRangeAt(blockSize: bigint, offset: bigint, requestedEnd: bigint): ByteRange {
@@ -455,12 +518,67 @@ async function writeAtomicRange(
     'output-write-failed',
     () => transaction.writeRange(offset, data, options.signal),
   )
-  await outputOperation(
+}
+
+interface FileCheckpointController {
+  remainingWriteBytes: bigint
+  durableBytes: bigint
+  pendingBytes: bigint
+  pendingSince: number | undefined
+}
+
+async function attemptAutomaticCheckpoint(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  checkpoint: FileCheckpointController,
+): Promise<void> {
+  const policy = options.output.executionProfile.automaticCheckpoint
+  if (policy.kind === 'disabled') return
+  const trigger = automaticCheckpointTrigger(options, policy, checkpoint)
+  if (trigger === undefined) return
+  const result = await outputOperation(
     options.signal,
     'Unable to checkpoint the output file',
     'output-write-failed',
-    () => transaction.checkpoint(options.signal),
+    () => transaction.automaticCheckpoint(trigger, policy.costBudget, options.signal),
   )
+  if (result.kind === 'declined') return
+  const durableBytes = rangeBytes(result.durable.asRangeSet())
+  const advancedBytes = durableBytes - checkpoint.durableBytes
+  if (advancedBytes <= 0n) {
+    throw new OutputTransactionContractError('advanced checkpoint did not increase durable coverage')
+  }
+  checkpoint.durableBytes = durableBytes
+  checkpoint.pendingBytes = 0n
+  checkpoint.pendingSince = undefined
+  options.onRecoverableAcknowledged?.(advancedBytes, 'automatic-checkpoint')
+}
+
+function automaticCheckpointTrigger(
+  options: V2FileTransferOptions,
+  policy: OutputExecutionProfileBoundedCheckpoint,
+  checkpoint: FileCheckpointController,
+): AutomaticCheckpointTrigger | undefined {
+  if (checkpoint.pendingBytes >= policy.trigger.pendingBytes) return 'pending-bytes'
+  const pendingSince = checkpoint.pendingSince
+  if (pendingSince === undefined) return undefined
+  const elapsed = checkpointTime(options) - pendingSince
+  if (elapsed < 0) {
+    throw new OutputTransactionContractError('output checkpoint clock moved backwards')
+  }
+  return elapsed >= policy.trigger.pendingMilliseconds ? 'pending-time' : undefined
+}
+
+function checkpointTime(options: V2FileTransferOptions): number {
+  const current = (options.now ?? Date.now)()
+  if (!Number.isFinite(current)) {
+    throw new OutputTransactionContractError('output checkpoint clock returned a non-finite time')
+  }
+  return current
+}
+
+function rangeBytes(ranges: ByteRangeSet): bigint {
+  return ranges.ranges.reduce((total, range) => total + range.end - range.start, 0n)
 }
 
 async function outputOperation<T>(

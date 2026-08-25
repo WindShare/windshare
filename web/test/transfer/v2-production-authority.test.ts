@@ -8,6 +8,11 @@ import {
   type FileSystemAccessOperationSettlementAuthority,
   type FSASettlementRepository,
 } from '../../src/output/file-system-access/settlement'
+import { createMaterializationLedgerBinding } from '../../src/output/materialization-ledger/codec'
+import {
+  createMaterializationDirectoryAdmittedEntry,
+  createMaterializationDirectoryFinalizedEntry,
+} from '../../src/output/materialization-ledger/journal'
 import type { BrowserHandoffPublisher } from '../../src/output/portable/browser-download'
 import {
   createPortableExecutionRoutes,
@@ -29,7 +34,9 @@ import {
   createSyntheticSelectionResultRoot,
   type ReceiveIntent,
 } from '../../src/transfer/intent'
+import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
 import {
+  disabledOutputExecutionProfile,
   outputSessionIdentity,
   type DirectAtomicExecution,
   type DirectTreeExecution,
@@ -70,6 +77,20 @@ describe('production plan execution authority', () => {
       transferJobId: identityText(102),
     })
     const session = fsaMaterializationPort(intent, repository)
+    const admittedRoot = await session.materializeDirectory({
+      relativePath: [],
+      directoryId: identityText(104),
+      generation: identityText(105),
+    })
+    const repeatedRoot = await session.materializeDirectory({
+      relativePath: [],
+      directoryId: identityText(104),
+      generation: identityText(105),
+    })
+    const finalizedRoot = await session.finalizeDirectory(
+      admittedRoot.ledgerAdmission,
+      { kind: 'finalized' },
+    )
     const outputIdentity = outputSessionIdentity({
       backend: 'file-system-access',
       outputSessionId: identityText(103),
@@ -90,6 +111,17 @@ describe('production plan execution authority', () => {
       admitDirectory: expect.any(Function),
       finalizeDirectory: expect.any(Function),
     }))
+    expect(repeatedRoot).toMatchObject({
+      ownedObjectId: admittedRoot.ownedObjectId,
+      created: false,
+      ledgerAdmission: admittedRoot.ledgerAdmission,
+    })
+    expect(finalizedRoot).toMatchObject({
+      kind: 'directory-finalized',
+      admissionEntryId: admittedRoot.ledgerAdmission.entryId,
+      admissionEntryDigest: admittedRoot.ledgerAdmission.entryDigest,
+      outcome: { kind: 'finalized' },
+    })
   })
 
   it('composes real portable Original and ZIP routes into operation-bound authorities', async () => {
@@ -409,6 +441,7 @@ function fileSystemAccessRouteRegistry(input: Readonly<{
       ) => createPersistentDirectTreeExecution({
         intent,
         materialization: input.session,
+        executionProfile: disabledOutputExecutionProfile(1),
         outputIdentity: input.outputIdentity,
         settlement: input.settlement.bindMaterialization(input.session),
       }),
@@ -457,11 +490,58 @@ function fsaMaterializationPort(
   intent: ReceiveIntent,
   repository: FSASettlementRepository,
 ): FileSystemAccessOutputSession {
+  const directoryOwnedObjects = new Map<string, string>()
+  let nextDirectoryIdentity = 120
+  const ensureDirectory = async (path: readonly string[]) => {
+    const relativePath = snapshotMaterializationRootRelativePath(path)
+    const pathKey = JSON.stringify(relativePath)
+    const existingOwnedObjectId = directoryOwnedObjects.get(pathKey)
+    const ownedObjectId = existingOwnedObjectId ?? digestIdentity(nextDirectoryIdentity++)
+    directoryOwnedObjects.set(pathKey, ownedObjectId)
+    return Object.freeze({
+      ownedObjectId,
+      created: existingOwnedObjectId === undefined,
+    })
+  }
+  const ledgerBinding = () => {
+    if (intent.plan.kind !== 'direct-tree') {
+      throw new TypeError('FSA materialization fixture requires a DirectTree intent')
+    }
+    return createMaterializationLedgerBinding({
+      operationId: intent.operationId,
+      receiveIntentDigest: intent.digest,
+      materializationBindingDigest: intent.plan.reservation.digest,
+      authorityRef: intent.plan.reservation.authorityRef,
+    })
+  }
   return {
     intent,
     usesOperationRepository: (candidate: unknown) => candidate === repository,
     beginFile: async () => { throw new Error('composition proof does not open content') },
-    ensureDirectory: async () => { throw new Error('composition proof does not create output') },
+    ensureDirectory,
+    materializeDirectory: async (
+      request: Parameters<FileSystemAccessOutputSession['materializeDirectory']>[0],
+    ) => {
+      const relativePath = snapshotMaterializationRootRelativePath(request.relativePath)
+      const materialized = await ensureDirectory(relativePath)
+      const ledgerAdmission = await createMaterializationDirectoryAdmittedEntry(
+        await ledgerBinding(),
+        {
+          relativePath,
+          directoryId: request.directoryId,
+          generation: request.generation,
+          ownedObjectId: materialized.ownedObjectId,
+          ...(request.parent === undefined ? {} : { parent: request.parent }),
+          ...(request.modifiedTime === undefined ? {} : { modifiedTime: request.modifiedTime }),
+        },
+      )
+      return Object.freeze({ ...materialized, ledgerAdmission })
+    },
+    finalizeDirectory: async (
+      admission: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[0],
+      outcome: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[1],
+    ) =>
+      createMaterializationDirectoryFinalizedEntry(await ledgerBinding(), admission, outcome),
     close: async () => undefined,
   } as unknown as FileSystemAccessOutputSession
 }
@@ -663,6 +743,7 @@ function directTreeExecution(intent: ReceiveIntent): DirectTreeExecution {
       admitDirectory: async () => { throw new Error('not used') },
       finalizeDirectory: async () => { throw new Error('not used') },
     },
+    beginTerminal: () => undefined,
     pause: async () => discardedState(intent),
     settle: async () => publishedState(intent),
   }

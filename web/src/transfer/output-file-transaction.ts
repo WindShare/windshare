@@ -1,8 +1,18 @@
 import { ByteRangeSet, byteRange } from '../content/geometry'
-import { snapshotOpenedOutputRevision, VerifiedDurableRanges } from './output-session'
+import {
+  outputCheckpointCost,
+  outputCheckpointCostBudget,
+  snapshotOpenedOutputRevision,
+  VerifiedDurableRanges,
+  VerifiedFinalOutputFile,
+} from './output-session'
 import type {
+  AutomaticCheckpointResult,
+  AutomaticCheckpointTrigger,
   BeginOutputFileResult,
   FileRetirementDisposition,
+  OutputCheckpointCost,
+  OutputCheckpointCostBudget,
   OutputFile,
   OutputFileOwnership,
   OutputFileTransaction,
@@ -13,7 +23,7 @@ import type {
 
 export interface BoundOutputFileTransaction {
   readonly transaction: OutputFileTransaction
-  readonly durableRanges: VerifiedDurableRanges
+  readonly initialDurable: VerifiedDurableRanges
 }
 
 /**
@@ -33,21 +43,23 @@ export function bindOutputFileTransaction(
         'output transaction opened a different authenticated source revision',
       )
     }
-    const durableRanges = requireOutputBinding(begun.durableRanges, file, session.identity)
-    const resumable = session.capabilities.durability !== 'None' && session.capabilities.randomWrite
-    if (!resumable && !durableRanges.asRangeSet().empty) {
+    const initialDurable = requireOutputBinding(begun.durableRanges, file, session.identity)
+    const durable = session.capabilities.durability !== 'None'
+    if (!durable && !initialDurable.asRangeSet().empty) {
       throw new OutputCheckpointContractError('transient output cannot claim durable resumable ranges')
     }
+    if (!session.capabilities.randomWrite) requireCanonicalPrefix(initialDurable.asRangeSet())
     return Object.freeze({
       transaction: new SourceBoundOutputTransaction(
         transaction,
         file,
         session.identity,
-        durableRanges.ownership,
-        durableRanges,
-        resumable,
+        initialDurable.ownership,
+        initialDurable,
+        durable,
+        session.capabilities.randomWrite,
       ),
-      durableRanges,
+      initialDurable,
     })
   } catch (cause) {
     if (cause instanceof OutputTransactionContractError) throw cause
@@ -60,7 +72,7 @@ export function ownOutputFileTransaction(begun: BeginOutputFileResult): OutputFi
   try {
     const candidate = (begun as unknown as { readonly transaction?: unknown } | null)?.transaction
     if (typeof candidate !== 'object' || candidate === null ||
-        !hasFunction(candidate, 'writeRange') || !hasFunction(candidate, 'checkpoint') ||
+        !hasFunction(candidate, 'writeRange') || !hasFunction(candidate, 'automaticCheckpoint') ||
          !hasFunction(candidate, 'commit') || !hasFunction(candidate, 'retire') ||
          !hasFunction(candidate, 'pause')) {
       throw new OutputTransactionContractError('BeginFile did not return a complete output transaction')
@@ -88,10 +100,12 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
   readonly #file: OutputFile
   readonly #session: OutputSessionIdentity
   readonly #ownership: OutputFileOwnership
-  readonly #resumable: boolean
+  readonly #durable: boolean
+  readonly #positioned: boolean
   #durableRanges: VerifiedDurableRanges
   #pendingRanges: ByteRangeSet
-  #streamOffset = 0n
+  #nextSequentialOffset: bigint
+  #state: 'open' | 'committing' | 'pausing' | 'retiring' | 'committed' | 'paused' | 'retired' | 'failed' = 'open'
 
   constructor(
     transaction: OutputFileTransaction,
@@ -99,81 +113,157 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
     session: OutputSessionIdentity,
     ownership: OutputFileOwnership,
     durableRanges: VerifiedDurableRanges,
-    resumable: boolean,
+    durable: boolean,
+    positioned: boolean,
   ) {
     this.#transaction = transaction
     this.#file = file
     this.#session = session
     this.#ownership = ownership
-    this.#resumable = resumable
+    this.#durable = durable
+    this.#positioned = positioned
     this.#durableRanges = durableRanges
     this.#pendingRanges = new ByteRangeSet(file.exactSize, [])
+    this.#nextSequentialOffset = positioned ? 0n : requireCanonicalPrefix(durableRanges.asRangeSet())
   }
 
   async writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
+    this.#requireOpen('write')
     const end = offset + BigInt(data.byteLength)
     if (data.byteLength === 0 || offset < 0n || end > this.#file.exactSize) {
       throw new RangeError('output write range exceeds its file transaction')
     }
     const written = byteRange(offset, end)
-    if (this.#resumable) {
-      if (overlapsAny(written, this.#durableRanges.ranges) || overlapsAny(written, this.#pendingRanges.ranges)) {
-        throw new OutputCheckpointContractError('output write overlaps bytes already supplied or durable')
-      }
-    } else if (offset !== this.#streamOffset) {
-      throw new OutputCheckpointContractError('transient output writes must be contiguous and sequential')
+    if (overlapsAny(written, this.#durableRanges.ranges) || overlapsAny(written, this.#pendingRanges.ranges)) {
+      throw new OutputCheckpointContractError('output write overlaps bytes already accepted or durable')
+    }
+    if (!this.#positioned && offset !== this.#nextSequentialOffset) {
+      throw new OutputCheckpointContractError('sequential output writes must extend its durable and pending prefix')
     }
     await this.#transaction.writeRange(offset, data, signal)
-    signal.throwIfAborted()
-    if (this.#resumable) {
-      this.#pendingRanges = this.#pendingRanges.union(new ByteRangeSet(this.#file.exactSize, [written]))
-    } else {
-      this.#streamOffset = end
-    }
+    // A resolved write is accepted state even if cancellation raced its completion;
+    // pause must therefore include it in the forced cut rather than lose ownership truth.
+    this.#pendingRanges = this.#pendingRanges.union(new ByteRangeSet(this.#file.exactSize, [written]))
+    if (!this.#positioned) this.#nextSequentialOffset = end
   }
 
-  async checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
+  async automaticCheckpoint(
+    trigger: AutomaticCheckpointTrigger,
+    budget: OutputCheckpointCostBudget,
+    signal: AbortSignal,
+  ): Promise<AutomaticCheckpointResult> {
     signal.throwIfAborted()
-    const checkpoint = requireOutputBinding(
-      await this.#transaction.checkpoint(signal),
-      this.#file,
-      this.#session,
-      this.#ownership,
-    )
-    const next = checkpoint.asRangeSet()
-    const expected = this.#resumable
-      ? this.#durableRanges.asRangeSet().union(this.#pendingRanges)
-      : this.#durableRanges.asRangeSet()
-    if (!sameRanges(next, expected)) {
+    this.#requireOpen('checkpoint')
+    if (trigger !== 'pending-bytes' && trigger !== 'pending-time') {
+      throw new OutputCheckpointContractError('output checkpoint trigger is invalid')
+    }
+    if (this.#pendingRanges.empty) {
+      throw new OutputCheckpointContractError('automatic checkpoint requires accepted pending ranges')
+    }
+    const validatedBudget = outputCheckpointCostBudget(budget)
+    const result = await this.#transaction.automaticCheckpoint(trigger, validatedBudget, signal)
+    if (typeof result !== 'object' || result === null) {
+      throw new OutputCheckpointContractError('output checkpoint returned a malformed decision')
+    }
+    if (result.kind === 'declined') {
+      const estimate = outputCheckpointCost(result.estimate)
+      requireCheckpointDecline(result.reason, estimate, validatedBudget)
+      return Object.freeze({ kind: 'declined', reason: result.reason, estimate })
+    }
+    if (result.kind !== 'advanced') {
+      throw new OutputCheckpointContractError('output checkpoint returned an unknown decision')
+    }
+    if (!this.#durable) {
+      throw new OutputCheckpointContractError('transient output cannot advance durable recovery evidence')
+    }
+    const checkpoint = requireOutputBinding(result.durable, this.#file, this.#session, this.#ownership)
+    const expected = this.#acceptedRanges()
+    if (!sameRanges(checkpoint.asRangeSet(), expected)) {
       throw new OutputCheckpointContractError(
-        'output checkpoint does not equal prior durability plus every completed write',
+        'output checkpoint does not equal prior durability plus every accepted pending write',
       )
     }
+    const cost = outputCheckpointCost(result.cost)
+    requireCheckpointWithinBudget(cost, validatedBudget)
     this.#durableRanges = checkpoint
-    if (this.#resumable) this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
-    return checkpoint
+    this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
+    return Object.freeze({ kind: 'advanced', durable: checkpoint, cost })
   }
 
-  async commit(signal: AbortSignal): Promise<void> {
+  async commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile> {
     signal.throwIfAborted()
-    const complete = this.#resumable
-      ? this.#pendingRanges.empty && this.#durableRanges.covers(byteRange(0n, this.#file.exactSize))
-      : this.#streamOffset === this.#file.exactSize
-    if (!complete) {
+    this.#requireOpen('commit')
+    if (!coversWholeFile(this.#acceptedRanges())) {
       throw new OutputCheckpointContractError(
-        'output transaction cannot commit without verified whole-file durability',
+        'output transaction cannot commit without complete durable and pending coverage',
       )
     }
-    return this.#transaction.commit(signal)
+    this.#state = 'committing'
+    try {
+      const proof = requireFinalBinding(
+        await this.#transaction.commit(signal),
+        this.#file,
+        this.#session,
+        this.#ownership,
+      )
+      this.#state = 'committed'
+      return proof
+    } catch (error) {
+      this.#state = 'failed'
+      throw error
+    }
   }
 
   async retire(reason: unknown): Promise<'FileIsolated' | 'JobOutputCompromised'> {
-    return retireOutputFileTransaction(this.#transaction, reason)
+    this.#requireOpen('retire')
+    this.#state = 'retiring'
+    try {
+      const disposition = await retireOutputFileTransaction(this.#transaction, reason)
+      this.#state = 'retired'
+      return disposition
+    } catch (error) {
+      this.#state = 'failed'
+      throw error
+    }
   }
 
-  pause(reason: unknown): Promise<void> {
-    return this.#transaction.pause(reason)
+  async pause(reason: unknown): Promise<VerifiedDurableRanges> {
+    this.#requireOpen('pause')
+    this.#state = 'pausing'
+    const expected = this.#durable ? this.#acceptedRanges() : this.#durableRanges.asRangeSet()
+    try {
+      const durable = requireOutputBinding(
+        await this.#transaction.pause(reason),
+        this.#file,
+        this.#session,
+        this.#ownership,
+      )
+      if (!sameRanges(durable.asRangeSet(), expected)) {
+        throw new OutputCheckpointContractError(
+          'output pause did not return the exact forced durable cut',
+        )
+      }
+      this.#durableRanges = durable
+      this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
+      this.#state = 'paused'
+      return durable
+    } catch (error) {
+      this.#state = 'failed'
+      throw error
+    }
+  }
+
+  #acceptedRanges(): ByteRangeSet {
+    return this.#durableRanges.asRangeSet().union(this.#pendingRanges)
+  }
+
+  #requireOpen(operation: string): void {
+    if (this.#state !== 'open') {
+      throw new OutputCheckpointContractError(
+        `output transaction cannot ${operation} after terminal settlement began`,
+      )
+    }
   }
 }
 
@@ -197,6 +287,51 @@ function sameRanges(left: ByteRangeSet, right: ByteRangeSet): boolean {
       const other = right.ranges[index]
       return other !== undefined && range.start === other.start && range.end === other.end
     })
+}
+
+function coversWholeFile(ranges: ByteRangeSet): boolean {
+  if (ranges.fileSize === 0n) return ranges.empty
+  return ranges.ranges.length === 1 && ranges.ranges[0]?.start === 0n &&
+    ranges.ranges[0].end === ranges.fileSize
+}
+
+function requireCanonicalPrefix(ranges: ByteRangeSet): bigint {
+  if (ranges.empty) return 0n
+  const prefix = ranges.ranges[0]
+  if (ranges.ranges.length !== 1 || prefix?.start !== 0n) {
+    throw new OutputCheckpointContractError(
+      'sequential durable output requires one canonical recovery prefix',
+    )
+  }
+  return prefix.end
+}
+
+function requireCheckpointWithinBudget(
+  cost: OutputCheckpointCost,
+  budget: OutputCheckpointCostBudget,
+): void {
+  if (cost.prefixCopyBytes > budget.maximumPrefixCopyBytes ||
+      cost.cumulativeWriteAmplificationBytes > budget.maximumCumulativeWriteAmplificationBytes ||
+      cost.peakTemporaryBytes > budget.maximumPeakTemporaryBytes) {
+    throw new OutputCheckpointContractError('output advanced a checkpoint beyond its admitted cost budget')
+  }
+}
+
+function requireCheckpointDecline(
+  reason: Extract<AutomaticCheckpointResult, { readonly kind: 'declined' }>['reason'],
+  estimate: OutputCheckpointCost,
+  budget: OutputCheckpointCostBudget,
+): void {
+  const justified = reason === 'cost-evidence-unavailable' ||
+    (reason === 'temporary-space-confirmation-required' && estimate.peakTemporaryBytes > 0n) ||
+    (reason === 'prefix-copy-budget' && estimate.prefixCopyBytes > budget.maximumPrefixCopyBytes) ||
+    (reason === 'cumulative-write-amplification-budget' &&
+      estimate.cumulativeWriteAmplificationBytes > budget.maximumCumulativeWriteAmplificationBytes) ||
+    (reason === 'peak-temporary-space-budget' &&
+      estimate.peakTemporaryBytes > budget.maximumPeakTemporaryBytes)
+  if (!justified) {
+    throw new OutputCheckpointContractError('output checkpoint decline is not justified by its estimate')
+  }
 }
 
 function overlapsAny(candidate: { readonly start: bigint; readonly end: bigint }, ranges: readonly {
@@ -224,6 +359,26 @@ function requireOutputBinding(
     )
   }
   return durableRanges
+}
+
+function requireFinalBinding(
+  proof: VerifiedFinalOutputFile,
+  file: OutputFile,
+  session: OutputSessionIdentity,
+  ownership: OutputFileOwnership,
+): VerifiedFinalOutputFile {
+  if (!(proof instanceof VerifiedFinalOutputFile) ||
+      !sameOutputSource(proof.source, file.source) ||
+      proof.fileSize !== file.exactSize ||
+      proof.ownership.backend !== session.backend ||
+      proof.ownership.outputSessionId !== session.outputSessionId ||
+      !samePath(proof.ownership.canonicalPath, file.materializationRelativePath) ||
+      !sameOutputOwnership(proof.ownership, ownership)) {
+    throw new OutputTransactionContractError(
+      'final output proof belongs to a different output or source revision',
+    )
+  }
+  return proof
 }
 
 function hasFunction(value: object, property: string): boolean {

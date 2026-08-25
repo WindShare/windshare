@@ -69,6 +69,14 @@ describe('origin-private selected file authority', () => {
     })
     const reopened = await reopenedTree.openFile(path, selected)
     expect(reopened?.ownedObjectId).toBe(created.ownedObjectId)
+    expect(reopened?.checkpointPreflight?.(3n, 5n)).toEqual({
+      cost: {
+        prefixCopyBytes: 3n,
+        cumulativeWriteAmplificationBytes: 8n,
+        peakTemporaryBytes: 3n,
+      },
+      space: 'requires-user-confirmation',
+    })
     expect(root.createCount).toBe(1)
     expect(root.file(selected)?.writableOpenCount).toBe(0)
     await expect(reopenedTree.inspectFileDestination(path, selected)).resolves.toBe('occupied')

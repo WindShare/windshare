@@ -128,6 +128,7 @@ export class DeliveryBuffer {
 export class DirectAtomicStreamOutput implements OutputSession {
   readonly identity
   readonly capabilities
+  readonly executionProfile
   readonly #session: OutputSession
   #transaction: OutputFileTransaction | undefined
 
@@ -135,6 +136,7 @@ export class DirectAtomicStreamOutput implements OutputSession {
     this.#session = session
     this.identity = session.identity
     this.capabilities = session.capabilities
+    this.executionProfile = session.executionProfile
   }
 
   async beginFile(

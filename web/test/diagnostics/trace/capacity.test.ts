@@ -85,6 +85,8 @@ describe('trace frozen contract', () => {
       'receive_transition',
       'lifecycle_action_transition',
       'transfer_progress',
+      'performance_phase',
+      'performance_summary',
       'output_reservation',
       'output_write',
       'checkpoint',

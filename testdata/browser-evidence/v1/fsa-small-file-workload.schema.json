@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "windshare/fsa-small-file-workload/v1",
+  "title": "WindShare canonical FSA small-file workload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "contentAlgorithm", "facts", "digests", "directories", "files"],
+  "properties": {
+    "schema": { "const": "windshare/fsa-small-file-workload/v1" },
+    "contentAlgorithm": { "const": "windshare/ordinal-offset-mod251/v1" },
+    "facts": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fileCount", "directoryCount", "totalBytes", "emptyFileCount", "medianFileSizeBytes", "atMost16KiBCount", "atMost64KiBCount", "maximumFileSizeBytes", "maximumDirectoryDepth"],
+      "properties": {
+        "fileCount": { "const": 582 },
+        "directoryCount": { "const": 105 },
+        "totalBytes": { "const": 6762858 },
+        "emptyFileCount": { "const": 31 },
+        "medianFileSizeBytes": { "const": 3961 },
+        "atMost16KiBCount": { "const": 478 },
+        "atMost64KiBCount": { "const": 568 },
+        "maximumFileSizeBytes": { "const": 121863 },
+        "maximumDirectoryDepth": { "const": 8 }
+      }
+    },
+    "digests": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pathsSha256", "sizesSha256", "contentsSha256"],
+      "properties": {
+        "pathsSha256": { "$ref": "#/$defs/sha256" },
+        "sizesSha256": { "$ref": "#/$defs/sha256" },
+        "contentsSha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+    "directories": {
+      "type": "array",
+      "minItems": 105,
+      "maxItems": 105,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/relativePath" }
+    },
+    "files": {
+      "type": "array",
+      "minItems": 582,
+      "maxItems": 582,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["ordinal", "path", "sizeBytes", "contentSha256"],
+        "properties": {
+          "ordinal": { "type": "integer", "minimum": 0, "maximum": 581 },
+          "path": { "$ref": "#/$defs/relativePath" },
+          "sizeBytes": { "type": "integer", "minimum": 0, "maximum": 121863 },
+          "contentSha256": { "$ref": "#/$defs/sha256" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "relativePath": { "type": "string", "pattern": "^(?:[a-z0-9][a-z0-9._-]*/)*[a-z0-9][a-z0-9._-]*$" }
+  }
+}

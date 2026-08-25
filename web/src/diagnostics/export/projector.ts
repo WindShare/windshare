@@ -21,6 +21,15 @@ import type { IncidentDiagnosticsHealthSnapshot } from '../incident/health'
 import { projectCorrelationV1 } from './correlation-v1'
 import type { DiagnosticContextV1 } from './context'
 import {
+  PERFORMANCE_MILESTONES_V1,
+  type PerformancePhasePayloadV1,
+  type PerformancePhaseProjectionInput,
+} from '../trace/transfer-payload'
+import {
+  projectPerformanceCorrelationV1,
+} from './performance-projection'
+export { projectPerformanceSummaryPayloadV1 } from './performance-projection'
+import {
   INCIDENT_RECORD_EVENT,
   INCIDENT_RECORD_SCHEMA_VERSION,
   type BuildIdentityV1,
@@ -469,6 +478,22 @@ function pruneList(
     if (removed !== undefined) removedCount += BigInt(removed.count)
   }
   return removedCount
+}
+
+export function projectPerformancePhasePayloadV1(
+  input: PerformancePhaseProjectionInput,
+): PerformancePhasePayloadV1 {
+  if (!PERFORMANCE_MILESTONES_V1.includes(input.milestone)) {
+    throw new TypeError('performance milestone is outside its closed vocabulary')
+  }
+  return deepFreezeJson({
+    correlation: projectPerformanceCorrelationV1(input.correlation),
+    milestone: input.milestone,
+    observer_elapsed_ms: decimalUint64(
+      input.observerElapsedMilliseconds,
+      'performance phase observer elapsed milliseconds',
+    ),
+  })
 }
 
 export function projectDiagnosticsHealthV1(

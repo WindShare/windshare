@@ -227,7 +227,7 @@ export class CompatibleNameCoordinator {
         template,
         pairHandles: input.pairHandles,
       })
-      // The caller already holds the root mutation tail; nesting that authority would deadlock.
+      // Descendant activation is entered only through the caller's ordered multi-parent scope.
       await coordinator.ensurePairReady(input.rejected.pairParent)
       return coordinator
     } catch (error) {
