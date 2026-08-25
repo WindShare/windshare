@@ -298,8 +298,8 @@ function hasDirectoryPort(execution: PlanExecution): boolean {
 }
 
 export class TransferPauseRequestedError extends Error {
-  constructor(message = 'Transfer paused by receiver') {
-    super(message)
+  constructor(message = 'Transfer paused by receiver', options?: ErrorOptions) {
+    super(message, options)
     this.name = 'TransferPauseRequestedError'
   }
 }

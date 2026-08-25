@@ -654,7 +654,7 @@ export function confirmedRecoveryMaterialization(
 ): PersistentMaterializationPort {
   return Object.freeze({
     beginFile: (request: Parameters<PersistentMaterializationPort['beginFile']>[0]) => {
-      const recovery = request.recovery?.kind === 'preserve'
+      const recovery = request.recovery?.pausedFile === 'preserve'
         ? Object.freeze({
             ...request.recovery,
             costBudget: request.recovery.costBudget ?? Object.freeze({
@@ -746,7 +746,7 @@ export async function outputFileRequest(input: Readonly<{
     materializationRelativePath: projection.relativePath,
     expectedSize: input.exactSize,
     recovery: Object.freeze({
-      kind: 'preserve' as const,
+      pausedFile: 'preserve' as const,
       costBudget: Object.freeze({
         maximumPrefixCopyBytes: 1_024n,
         maximumCumulativeWriteAmplificationBytes: 4_096n,
