@@ -18,7 +18,9 @@ import {
 import { authorizeFSAParent } from '../../output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../output/capability/contract'
 import {
+  bindOutputPerformanceSummary,
   emitOutputTrace,
+  observePerformance,
   outputTraceEvent,
   recordOutputException,
   type LocalOutputOperationFailureDiagnosticsPort,
@@ -75,7 +77,11 @@ import type {
   V2RouteCommitResult,
 } from '../v2-receive-runtime'
 import { V2PresentationSourceError } from '../v2-receive-runtime'
-import { FSAReceiveOperation } from './fsa'
+import {
+  FSAReceiveOperation,
+  WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
+  WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+} from './fsa'
 import { FSAResourceOwner } from './fsa-resource-owner'
 import { snapshotPreClickRanking } from './shared'
 
@@ -91,6 +97,8 @@ export interface FSARouteDependencies {
   readonly authorizeParent: typeof authorizeFSAParent
   readonly acquireRootLease: (
     parent: FileSystemDirectoryHandle,
+    maximumActiveWriters: number,
+    performance?: NonNullable<OutputDiagnosticsPorts['performance']>,
   ) => Promise<FSARootMutationLease>
   readonly acquireOperationLease: (
     repository: ReceiveOperationRepository,
@@ -159,26 +167,46 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
     let repository: FSARouteRepository | undefined
     let rootLease: FSARootMutationLease | undefined
     let receiverOperationId: string | undefined
+    let attemptDiagnostics: OutputDiagnosticsPorts | undefined
     try {
       const authority = await this.#picked
+      this.#requireCommitting(input.signal)
+      const attemptOperationId = this.#dependencies.createOperationId()
+      const transferJobId = this.#dependencies.createTransferJobId()
+      const outputSessionId = this.#dependencies.createOutputSessionId()
+      attemptDiagnostics = bindOutputPerformanceSummary(
+        this.#diagnostics,
+        {
+          receiveOperationId: attemptOperationId,
+          transferJobId,
+          outputSessionId,
+        },
+        { nowMilliseconds: this.#dependencies.clock },
+      )
+      observePerformance(attemptDiagnostics?.performance, summary =>
+        summary.markMilestone('authority_acquired'))
       this.#requireCommitting(input.signal)
       const artifact = requireResolvedFSAAction(input.action, this.#offered, authority)
       await this.#dependencies.authorizeParent(authority)
       this.#requireCommitting(input.signal)
       repository = await this.#dependencies.openRepository()
       this.#requireCommitting(input.signal)
-      rootLease = await this.#dependencies.acquireRootLease(authority.parent)
+      rootLease = await this.#dependencies.acquireRootLease(
+        authority.parent,
+        WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
+        attemptDiagnostics?.performance,
+      )
       this.#requireCommitting(input.signal)
-      receiverOperationId = this.#dependencies.createOperationId()
+      receiverOperationId = attemptOperationId
       const reserved = await reserveNewFileSystemAccessOutput({
         authority,
         artifact,
         rootLease,
-        operationId: receiverOperationId,
+        operationId: attemptOperationId,
         reservationId: this.#dependencies.createReservationId(),
         authorityRef: this.#dependencies.createAuthorityRef(),
         prepareCompatibleNameRootRepair: this.#dependencies.prepareCompatibleNameRootRepair,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
       })
       const bound = await input.freezeAtFence(Object.freeze({
         kind: 'destination-reservation',
@@ -198,8 +226,6 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         parent: authority.parent,
         preClickRanking: this.#preClickRanking,
       })
-      const transferJobId = this.#dependencies.createTransferJobId()
-      const outputSessionId = this.#dependencies.createOutputSessionId()
       const preparedSettlement = await prepareFileSystemAccessSettlement(bound.intent)
       this.#requireCommitting(input.signal)
 
@@ -229,7 +255,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         repository: durableRepository,
         operationLease: lease,
         rootLease,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+        ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
       })
       const owned = new FSAOwnedActivationAuthority(
         bound.intent,
@@ -240,7 +266,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
           lifecycleLeaseId: lease.leaseId,
           transferJobId,
           clock: this.#dependencies.clock,
-          ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+          ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         }),
       )
 
@@ -259,16 +285,19 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
             : { compatibleNameRepair: reserved.compatibleNameRepair }),
           transferJobId,
           outputSessionId,
+          ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
           signal: input.signal,
         })
         this.#state = 'transferred'
         return Object.freeze({ kind: 'bound-operation', operation })
       } catch (cause) {
+        observePerformance(attemptDiagnostics?.performance, summary => summary.complete())
         this.#state = 'transferred'
         return Object.freeze({ kind: 'owned-effects', cause, authority: owned })
       }
     } catch (error) {
-      const cleanupFailures = await releasePreCutResources(rootLease, repository, this.#diagnostics)
+      const cleanupFailures = await releasePreCutResources(rootLease, repository, attemptDiagnostics)
+      observePerformance(attemptDiagnostics?.performance, summary => summary.complete())
       if (cleanupFailures.length !== 0) {
         this.#state = 'released'
         throw new AggregateError(
@@ -301,6 +330,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
     compatibleNameRepair?: PreparedCompatibleNameRootRepair
     transferJobId: string
     outputSessionId: string
+    diagnostics?: OutputDiagnosticsPorts
     signal: AbortSignal
   }>) {
     let unadoptedCompatibleNameCoordinator: CompatibleNameCoordinator | undefined
@@ -327,6 +357,8 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         binding,
         operationRepository: input.repository,
         rootLease: input.rootLease,
+        maximumConcurrentInitialClaimInspections:
+          WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
         openCompatibleNameLedger: this.#dependencies.openCompatibleNameLedger,
         compatibleNamePreparation: { platform: browserRestorationPlatform() },
         ...(unadoptedCompatibleNameCoordinator === undefined
@@ -335,10 +367,10 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         ...(this.#dependencies.checkpointRepositoryFactory === undefined
           ? {}
           : { checkpointRepositoryFactory: this.#dependencies.checkpointRepositoryFactory }),
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+        ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
         ...stageDiagnosticsOption(
           this.#localOutputFailures,
-          this.#diagnostics?.failures?.attempt,
+          input.diagnostics?.failures?.attempt,
           input.transferJobId,
           input.outputSessionId,
         ),
@@ -357,9 +389,10 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
         attemptIdentities: Object.freeze({
           createOutputSessionId: this.#dependencies.createOutputSessionId,
           createTransferJobId: this.#dependencies.createTransferJobId,
+          clock: { nowMilliseconds: this.#dependencies.clock },
         }),
         resources: input.resources,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+        ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
         ...localOutputFailuresOption(this.#localOutputFailures),
       })
       this.#requireCommitting(input.signal)
@@ -603,7 +636,11 @@ function routeDependencies(
   return Object.freeze({
     openRepository: () => IndexedDbReceiveOperationRepository.open(),
     authorizeParent: authorizeFSAParent,
-    acquireRootLease: (parent: FileSystemDirectoryHandle) => acquireFSARootMutationLease(parent),
+    acquireRootLease: (
+      parent: FileSystemDirectoryHandle,
+      maximumActiveWriters: number,
+      performance?: NonNullable<OutputDiagnosticsPorts['performance']>,
+    ) => acquireFSARootMutationLease(parent, undefined, maximumActiveWriters, performance),
     acquireOperationLease: acquireBrowserReceiveOperationLease,
     prepareCompatibleNameRootRepair: (input: CompatibleNameRootRepairRequest) =>
       prepareCompatibleNameRootRepair(input, {

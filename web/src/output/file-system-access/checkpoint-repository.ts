@@ -12,7 +12,9 @@ import {
 import type {
   FileCheckpointJournal,
   PersistentHandleInventoryRepository,
+  SemanticFileCheckpointJournal,
 } from '../persistence/journal'
+import type { MaterializationLedgerJournal } from '../materialization-ledger/journal'
 import { validateFileCheckpointPage } from '../persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../persistence/namespace'
 import type { FileCheckpointRecoveryRepository } from '../persistent-tree/recovery'
@@ -23,9 +25,14 @@ extends FileCheckpointJournal, PersistentHandleInventoryRepository,
   close(): void
 }
 
+export interface FSASemanticOutputRepository extends
+  FSAFileCheckpointRepository,
+  SemanticFileCheckpointJournal<FileSystemFileHandle>,
+  MaterializationLedgerJournal {}
+
 export type FSAFileCheckpointRepositoryFactory = (
   binding: FileCheckpointJournal['binding'],
-) => Promise<FSAFileCheckpointRepository>
+) => Promise<FSASemanticOutputRepository>
 
 export interface FSAFileCheckpointRepositoryOptions {
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
@@ -36,7 +43,7 @@ export async function openFSAFileCheckpointRepository(
   options: FSAFileCheckpointRepositoryOptions,
   intent: ReceiveIntent,
   reservation: FSANamedContainerEntryReservation,
-): Promise<FSAFileCheckpointRepository> {
+): Promise<FSASemanticOutputRepository> {
   const validated = await validateReceiveIntent(intent)
   if (validated.plan.kind !== 'direct-tree' ||
       validated.plan.reservation.kind !== 'named-container-entry' ||
@@ -59,6 +66,19 @@ export async function openFSAFileCheckpointRepository(
   return options.databaseName === undefined
     ? IndexedDbFileCheckpointRepository.open(binding)
     : IndexedDbFileCheckpointRepository.open(binding, options.databaseName)
+}
+
+export async function openFSASemanticOutputRepository(
+  options: Pick<FSAFileCheckpointRepositoryOptions, 'databaseName'>,
+  intent: ReceiveIntent,
+  reservation: FSANamedContainerEntryReservation,
+): Promise<FSASemanticOutputRepository> {
+  const repository = await openFSAFileCheckpointRepository(
+    options.databaseName === undefined ? {} : { databaseName: options.databaseName },
+    intent,
+    reservation,
+  )
+  return repository as FSASemanticOutputRepository
 }
 
 export async function scanAllFSAFileCheckpoints(

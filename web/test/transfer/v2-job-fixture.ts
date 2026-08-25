@@ -37,7 +37,10 @@ import {
 } from '../../src/transfer/intent'
 import {
   VerifiedDurableRanges,
+  VerifiedFinalOutputFile,
+  disabledOutputExecutionProfile,
   outputCapabilities,
+  outputExecutionProfile,
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
@@ -47,6 +50,7 @@ import {
   type ExactSingleFileEvidence,
   type IncrementalDirectoryOutput,
   type OutputFileRequest,
+  type OutputExecutionProfile,
   type OutputSession,
   type PlanStopRequest,
   type PortableExecution,
@@ -268,6 +272,7 @@ export interface ReaderFixtureOptions {
   readonly beforeOpen?: (fileId: string) => void | Promise<void>
   readonly observeOpenSignal?: (fileId: string, signal: AbortSignal | undefined) => void
   readonly beforeRead?: (fileId: string) => void | Promise<void>
+  readonly deriveRevisionAuthorityFromFileIdentity?: boolean
 }
 
 export function readerFixture(
@@ -298,7 +303,11 @@ export function readerFixture(
       }
       const file = byId.get(idText)
       if (file === undefined) throw new Error('fixture opened an unknown file')
-      return openedRevision(file, async () => { releases.push(idText) })
+      return openedRevision(
+        file,
+        async () => { releases.push(idText) },
+        options.deriveRevisionAuthorityFromFileIdentity === true,
+      )
     },
   }
   const broker: V2BlockRangeReader = {
@@ -318,8 +327,11 @@ export function readerFixture(
 function openedRevision(
   file: Extract<V2CatalogEntry, { kind: 'file' }>,
   release: () => Promise<void>,
+  deriveAuthorityFromFileIdentity = false,
 ): V2OpenedRevision {
-  const revision = identity((file.id[0] ?? 1) + 40)
+  const revision = deriveAuthorityFromFileIdentity
+    ? derivedIdentity(file.id, 40)
+    : identity((file.id[0] ?? 1) + 40)
   return Object.freeze({
     descriptor: Object.freeze({
       shareInstance: identity(1),
@@ -332,13 +344,20 @@ function openedRevision(
       geometry: new FileGeometry(file.expectedSize, 2n),
       ...(file.modifiedTime === undefined ? {} : { modifiedTime: file.modifiedTime }),
     }),
-    leaseId: identity(13),
+    leaseId: deriveAuthorityFromFileIdentity ? derivedIdentity(file.id, 13) : identity(13),
     release,
   })
 }
 
+function derivedIdentity(source: Uint8Array, domain: number): Uint8Array<ArrayBuffer> {
+  const value = source.slice()
+  value[value.byteLength - 1] = (value.at(-1) ?? 0) ^ domain
+  return value
+}
+
 export interface TestOutputOptions {
   readonly durability?: 'None' | 'ProcessRestart'
+  readonly randomWrite?: boolean
   readonly initialRanges?: readonly ByteRange[]
   readonly failBegin?: boolean
   readonly failBeginFor?: string
@@ -346,6 +365,10 @@ export interface TestOutputOptions {
   readonly failWrite?: boolean
   readonly failCommit?: boolean
   readonly retirement?: 'FileIsolated' | 'JobOutputCompromised'
+  readonly executionProfile?: OutputExecutionProfile
+  readonly automaticCheckpointDecisions?: readonly ('advanced' | 'declined')[]
+  readonly beforeAutomaticCheckpoint?: (attempt: number) => void | Promise<void>
+  readonly beforePause?: () => void | Promise<void>
 }
 
 export interface TestOutput extends OutputSession {
@@ -354,6 +377,12 @@ export interface TestOutput extends OutputSession {
   readonly writes: ReadonlyArray<Readonly<{ offset: bigint; bytes: number }>>
   readonly commits: string[]
   readonly retirements: unknown[]
+  readonly automaticCheckpointAttempts: string[]
+  readonly checkpointAdvances: string[]
+  readonly checkpointDeclines: string[]
+  readonly pauses: string[]
+  readonly pauseEvidence: VerifiedDurableRanges[]
+  readonly finalProofs: VerifiedFinalOutputFile[]
 }
 
 export function testOutput(events: string[] = [], options: TestOutputOptions = {}): TestOutput {
@@ -361,22 +390,36 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
   const durability = options.durability ?? 'None'
   const capabilities = outputCapabilities({
     durability,
-    randomWrite: durability !== 'None',
+    randomWrite: options.randomWrite ?? (durability !== 'None'),
     fileFailureIsolation: true,
     modificationTime: true,
   })
+  const executionProfile = options.executionProfile ?? disabledOutputExecutionProfile(1)
   const requests: OutputFileRequest[] = []
   const writes: Array<Readonly<{ offset: bigint; bytes: number }>> = []
   const commits: string[] = []
   const retirements: unknown[] = []
+  const automaticCheckpointAttempts: string[] = []
+  const checkpointAdvances: string[] = []
+  const checkpointDeclines: string[] = []
+  const pauses: string[] = []
+  const pauseEvidence: VerifiedDurableRanges[] = []
+  const finalProofs: VerifiedFinalOutputFile[] = []
   return {
     identity,
     capabilities,
+    executionProfile: outputExecutionProfile(executionProfile),
     events,
     requests,
     writes,
     commits,
     retirements,
+    automaticCheckpointAttempts,
+    checkpointAdvances,
+    checkpointDeclines,
+    pauses,
+    pauseEvidence,
+    finalProofs,
     beginFile: async (request, signal) => {
       requests.push(request)
       events.push('begin-request')
@@ -416,35 +459,80 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
             events.push('write')
             if (options.failWrite === true) throw new Error('fixture write failure')
             writes.push(Object.freeze({ offset, bytes: data.byteLength }))
-            if (durability !== 'None') {
-              pending = pending.union(new ByteRangeSet(
-                file.exactSize,
-                [byteRange(offset, offset + BigInt(data.byteLength))],
-              ))
-            }
-          },
-          checkpoint: async () => {
-            if (durability !== 'None') {
-              durable = durable.union(pending)
-              pending = new ByteRangeSet(file.exactSize, [])
-            }
-            return new VerifiedDurableRanges(
-              ownership,
-              file.source,
+            pending = pending.union(new ByteRangeSet(
               file.exactSize,
-              durable.ranges,
-            )
+              [byteRange(offset, offset + BigInt(data.byteLength))],
+            ))
+          },
+          automaticCheckpoint: async () => {
+            const attempt = automaticCheckpointAttempts.length
+            automaticCheckpointAttempts.push(file.source.fileId)
+            events.push('checkpoint-attempt')
+            await options.beforeAutomaticCheckpoint?.(attempt)
+            const decision = options.automaticCheckpointDecisions?.[attempt] ??
+              (durability === 'None' ? 'declined' : 'advanced')
+            if (decision === 'declined') {
+              checkpointDeclines.push(file.source.fileId)
+              events.push('checkpoint-declined')
+              return Object.freeze({
+                kind: 'declined' as const,
+                reason: 'cost-evidence-unavailable' as const,
+                estimate: Object.freeze({
+                  prefixCopyBytes: 0n,
+                  cumulativeWriteAmplificationBytes: 0n,
+                  peakTemporaryBytes: 0n,
+                }),
+              })
+            }
+            durable = durable.union(pending)
+            pending = new ByteRangeSet(file.exactSize, [])
+            checkpointAdvances.push(file.source.fileId)
+            events.push('checkpoint-advanced')
+            return Object.freeze({
+              kind: 'advanced' as const,
+              durable: new VerifiedDurableRanges(
+                ownership,
+                file.source,
+                file.exactSize,
+                durable.ranges,
+              ),
+              cost: Object.freeze({
+                prefixCopyBytes: 0n,
+                cumulativeWriteAmplificationBytes: 0n,
+                peakTemporaryBytes: 0n,
+              }),
+            })
           },
           commit: async () => {
             events.push('commit')
             if (options.failCommit === true) throw new Error('fixture commit failure')
+            if (durability !== 'None') durable = durable.union(pending)
+            pending = new ByteRangeSet(file.exactSize, [])
+            const proof = new VerifiedFinalOutputFile(ownership, file.source, file.exactSize)
+            finalProofs.push(proof)
             commits.push(file.source.fileId)
+            return proof
           },
           retire: async (reason: unknown) => {
             retirements.push(reason)
             return options.retirement ?? 'FileIsolated'
           },
-          pause: async () => undefined,
+          pause: async () => {
+            pauses.push(file.source.fileId)
+            events.push('pause-started')
+            await options.beforePause?.()
+            if (durability !== 'None') durable = durable.union(pending)
+            pending = new ByteRangeSet(file.exactSize, [])
+            events.push('pause-completed')
+            const evidence = new VerifiedDurableRanges(
+              ownership,
+              file.source,
+              file.exactSize,
+              durable.ranges,
+            )
+            pauseEvidence.push(evidence)
+            return evidence
+          },
         },
       })
     },
@@ -457,6 +545,7 @@ export interface TestPlanAuthority extends V2PlanExecutionAuthority {
   readonly singleFileAdmissions: ExactSingleFileEvidence[]
   readonly settlements: string[]
   readonly settlementSignals: readonly AbortSignal[]
+  readonly terminalCuts: readonly TestTerminalCutKind[]
   readonly pauses: string[]
   readonly stops: readonly PlanStopRequest[]
   readonly stopSignals: readonly AbortSignal[]
@@ -465,6 +554,8 @@ export interface TestPlanAuthority extends V2PlanExecutionAuthority {
   readonly pauseSignals: AbortSignal[]
   readonly output: TestOutput
 }
+
+type TestTerminalCutKind = 'pause' | 'stop' | 'settle'
 
 export function planAuthorityFixture(input: {
   readonly output?: TestOutput
@@ -478,6 +569,8 @@ export function planAuthorityFixture(input: {
   readonly invalidPauseLifecycle?: boolean
   readonly beforeDirectTreeSettlement?: (signal: AbortSignal) => void | Promise<void>
   readonly beforeDirectTreeStop?: (signal: AbortSignal) => void | Promise<void>
+  readonly onDirectTreeBeginTerminal?: (kind: TestTerminalCutKind) => void
+  readonly beforeDirectoryFinalize?: (path: readonly string[]) => void | Promise<void>
   readonly onWorkspaceOriginalAdmission?: (evidence: ExactSingleFileEvidence) => void
 } = {}): TestPlanAuthority {
   const output = input.output ?? testOutput()
@@ -486,6 +579,7 @@ export function planAuthorityFixture(input: {
   const singleFileAdmissions: ExactSingleFileEvidence[] = []
   const settlements: string[] = []
   const settlementSignals: AbortSignal[] = []
+  const terminalCuts: TestTerminalCutKind[] = []
   const pauses: string[] = []
   const stops: PlanStopRequest[] = []
   const stopSignals: AbortSignal[] = []
@@ -516,12 +610,21 @@ export function planAuthorityFixture(input: {
   const authority: V2PlanExecutionAuthority = {
     openDirectTree: async (intent) => {
       routes.push('direct-tree')
-      const directories = await directoryOutput(intent, input.failDirectoryFinalizePath)
+      const directories = await directoryOutput(
+        intent,
+        input.failDirectoryFinalizePath,
+        input.beforeDirectoryFinalize,
+      )
       let terminalSettlementInitiated = false
       const execution: DirectTreeExecution = {
         planKind: 'direct-tree',
         output,
         directories,
+        beginTerminal: kind => {
+          terminalSettlementInitiated = true
+          terminalCuts.push(kind)
+          input.onDirectTreeBeginTerminal?.(kind)
+        },
         terminalSettlementInitiated: () => terminalSettlementInitiated,
         settle: async ({ worker }, signal) => {
           terminalSettlementInitiated = true
@@ -627,6 +730,7 @@ export function planAuthorityFixture(input: {
     singleFileAdmissions,
     settlements,
     settlementSignals,
+    terminalCuts,
     pauses,
     stops,
     stopSignals,
@@ -640,6 +744,7 @@ export function planAuthorityFixture(input: {
 async function directoryOutput(
   intent: ReceiveIntent,
   failFinalizePath?: string,
+  beforeFinalize?: (path: readonly string[]) => void | Promise<void>,
 ): Promise<IncrementalDirectoryOutput> {
   const scope = await createDirectoryAdmissionScope(intent)
   const ledger = new DirectoryAdmissionLedger(scope)
@@ -647,6 +752,7 @@ async function directoryOutput(
     admitDirectory: (request, signal) =>
       ledger.admitDirectory(request.directory, signal),
     finalizeDirectory: async (admission, signal) => {
+      await beforeFinalize?.(admission.path)
       const settled = await ledger.finalizeDirectory(admission, signal)
       return admission.path.join('/') === failFinalizePath
         ? isolatedDirectorySettlement(

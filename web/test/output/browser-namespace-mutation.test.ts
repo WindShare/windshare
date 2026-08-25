@@ -21,6 +21,9 @@ import {
   fsaRootMutationLockName,
   type BrowserLockManagerRuntime,
 } from '../../src/output/browser/namespace-mutation'
+import type {
+  FSAParentMutationIdentity,
+} from '../../src/output/browser/mutation-coordination/model'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import type {
   PersistedReceiveRecord,
@@ -48,6 +51,40 @@ describe('FSA namespace and persisted parent authority', () => {
     )
     await first.release()
     const reopened = await acquireFSARootMutationLease(secondParent, manager)
+    await reopened.release()
+  })
+
+  it('keeps the Web Lock until scheduler writer lifetimes drain after close rejection', async () => {
+    const manager = new MemoryLockManager()
+    const firstParent = directoryHandle('shared-parent', 'first')
+    const secondParent = directoryHandle('shared-parent', 'second')
+    const lease = await acquireFSARootMutationLease(firstParent, manager, 1)
+    const writerParent = Symbol('verified-parent') as FSAParentMutationIdentity
+    const writer = await lease.scheduler.acquireWriter(writerParent)
+    let released = false
+    const firstRelease = lease.release()
+    expect(lease.release()).toBe(firstRelease)
+    const release = firstRelease.then(() => { released = true })
+
+    await Promise.resolve()
+    expect(released).toBe(false)
+    await expect(acquireFSARootMutationLease(secondParent, manager, 1)).rejects.toBeInstanceOf(
+      FSARootMutationBusyError,
+    )
+
+    const closeFailure = new Error('native close rejected')
+    const closeAttempt = (async () => {
+      try {
+        await Promise.reject(closeFailure)
+      } finally {
+        writer.release()
+      }
+    })()
+    await expect(closeAttempt).rejects.toBe(closeFailure)
+    await release
+    expect(released).toBe(true)
+
+    const reopened = await acquireFSARootMutationLease(secondParent, manager, 1)
     await reopened.release()
   })
 

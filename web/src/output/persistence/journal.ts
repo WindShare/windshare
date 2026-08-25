@@ -13,6 +13,7 @@ import {
 } from './namespace'
 
 export const FILE_CHECKPOINT_PAGE_RECORD_LIMIT = 128
+export const FILE_CHECKPOINT_BATCH_REQUEST_LIMIT = 64
 
 export type CheckpointNamespaceBinding = DurableCheckpointNamespaceIdentity
 
@@ -92,6 +93,39 @@ export interface FileCheckpointJournal {
   scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage>
   finalCheckpointProof(recordId: string, generation: bigint): Promise<FinalFileCheckpointProof>
   retireOperation(): Promise<void>
+}
+
+export interface CreatedFileCheckpointCommit<T = unknown> {
+  readonly candidate: FileCheckpointV2
+  readonly committed: FileCheckpointV2
+  readonly handle: PersistentHandleRecord<T>
+}
+
+export interface OwnedFileRestart<T = unknown> {
+  readonly previous: FileCheckpointV2
+  readonly reset: FileCheckpointV2
+  readonly expectedHandle: PersistentHandleRecord<T>
+}
+
+export type OwnedFileRestartResult = 'restart' | 'idempotent'
+
+/**
+ * These transitions keep repository races below the physical-file layer. A caller
+ * may validate a native handle before entering IndexedDB, but only this CAS can
+ * make that handle and its durable checkpoint jointly authoritative.
+ */
+export interface SemanticFileCheckpointJournal<T = unknown> extends FileCheckpointJournal {
+  classifyLineages(
+    requests: readonly CheckpointLineageLookupRequest[],
+  ): Promise<readonly CheckpointLineageDecision[]>
+  installInitialClaims(
+    candidates: readonly FileCheckpointV2[],
+  ): Promise<readonly InitialCheckpointCASResult[]>
+  commitCreatedFile(input: CreatedFileCheckpointCommit<T>): Promise<void>
+  commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void>
+  resumePausedCheckpoint(paused: FileCheckpointV2, active: FileCheckpointV2): Promise<void>
+  /** W3 supplies the explicit user decision; this CAS changes recovery metadata only. */
+  restartOwnedFile(input: OwnedFileRestart<T>): Promise<OwnedFileRestartResult>
 }
 
 export interface PersistentHandleRecord<T = unknown> {

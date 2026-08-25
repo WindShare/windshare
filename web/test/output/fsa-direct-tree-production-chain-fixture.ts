@@ -1,13 +1,13 @@
 import type { V2CatalogClient } from '../../src/catalog/v2-client'
-import type { V2CatalogEntry } from '../../src/catalog/v2-records'
+import {
+  V2_CATALOG_PAGE_ENTRIES,
+  type V2CatalogEntry,
+} from '../../src/catalog/v2-records'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import type { FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
+import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
 import {
-  fileCheckpointIsComplete,
-  type FileCheckpointV2,
-} from '../../src/output/persistence/checkpoint'
-import {
-  createDirectoryAdmissionScope,
   type DirectoryAdmission,
 } from '../../src/transfer/directory-admission'
 import {
@@ -21,11 +21,14 @@ import {
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 import {
+  outputExecutionProfile,
   outputSessionIdentity,
   type BeginOutputFileResult,
   type DirectoryMaterializationRequest,
   type DirectTreeExecution,
   type IncrementalDirectoryOutput,
+  type AutomaticCheckpointTrigger,
+  type OutputCheckpointCostBudget,
   type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
@@ -34,7 +37,7 @@ import {
 import {
   createPersistentDirectTreeExecution,
   type PersistentDirectTreeSettlementAuthority,
-  type PersistentMaterializationEvidence,
+  type PersistentDirectTreeMaterializationEvidence,
 } from '../../src/transfer/settlement/persistent-execution'
 import { createV2PlanExecutionAuthority } from '../../src/transfer/settlement/v2-plan-authority'
 import { TransferJob } from '../../src/transfer/v2-job'
@@ -42,12 +45,11 @@ import {
   reopenFileSystemAccessOutput,
   type FSAFileCheckpointRepositoryFactory,
 } from '../../src/output/file-system-access/session'
+import type { FSASemanticOutputRepository } from '../../src/output/file-system-access/checkpoint-repository'
+import type { PersistentMaterializationPort } from '../../src/output/persistent-tree/contracts'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
-import {
-  createFSASettlementReceipt,
-  fsaCheckpointSetDigest,
-} from '../../src/output/file-system-access/settlement-proof'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
+import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import {
   MemoryDirectory,
   MemoryFile,
@@ -100,6 +102,13 @@ export interface FSAProductionChainObservation {
   }>
 }
 
+export interface FSAProductionChainOptions {
+  readonly diagnostics?: OutputDiagnosticsPorts
+  readonly syntheticRootFileCount?: number
+  readonly maximumConcurrentFilePipelines?: number
+  readonly maximumActiveNativeWriters?: number
+}
+
 export interface ObservedPhaseCoordinate {
   readonly phase: ProductionPhase
   readonly path: readonly string[]
@@ -135,10 +144,10 @@ export interface FSAProductionPersistenceObservation {
     readonly path: readonly string[]
     readonly ranges: readonly Readonly<{ readonly start: bigint; readonly end: bigint }>[]
   }>[]
-  readonly pauseManifestPaths: readonly (readonly string[])[]
-  readonly manifestPaths: readonly (readonly string[])[]
-  readonly finalizedDirectoryPaths: readonly (readonly string[])[]
-  readonly settlementReceiptPaths: readonly (readonly string[])[]
+  readonly pauseEvidenceKind: PersistentDirectTreeMaterializationEvidence['kind']
+  readonly settlementEvidenceKind: PersistentDirectTreeMaterializationEvidence['kind']
+  readonly materializationSealCount: number
+  readonly settlementFinalProofReadCount: number
   readonly settlementReceiptPersisted: boolean
   readonly physicalLookups: readonly ObservedPhysicalLookup[]
   readonly parentPhysicalEntries: readonly string[]
@@ -170,15 +179,16 @@ interface FileCoordinateRecorder {
     readonly ranges: readonly Readonly<{ readonly start: bigint; readonly end: bigint }>[]
   }>>
   readonly pauseAfterFirstCheckpoint?: AbortController
+  transactionFailure?: unknown
   pauseRequested: boolean
 }
 
 interface SettlementRecorder {
-  pauseEvidence?: PersistentMaterializationEvidence
+  pauseEvidence?: PersistentDirectTreeMaterializationEvidence
   pauseFailure?: unknown
   final?: Readonly<{
     readonly request: Parameters<PersistentDirectTreeSettlementAuthority['settle']>[0]
-    readonly evidence: PersistentMaterializationEvidence
+    readonly evidence: PersistentDirectTreeMaterializationEvidence
   }>
 }
 
@@ -187,6 +197,8 @@ interface CheckpointRecorder {
   readonly lookups: ObservedPhaseCoordinate[]
   readonly writes: ObservedPhaseCoordinate[]
   readonly committed: FileCheckpointV2[]
+  sealCount: number
+  finalProofReadCount: number
 }
 
 const DESCRIPTOR_SHARE_INSTANCE_SEED = 1
@@ -200,6 +212,9 @@ const TRANSFER_JOB_SEED = 124
 const OUTPUT_SESSION_SEED = 125
 const PROTOCOL_SESSION_SEED = 126
 const CATALOG_CHUNK_BYTES = 2
+const TEST_RECOVERY_BUDGET_BYTES = 1_024n
+const TEST_CHECKPOINT_TRIGGER_BYTES = 1_024n
+const TEST_CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
 const PERSISTENCE_PAUSE_RESUME_ORDINAL = 10
 const PERSISTENCE_COLLISION_ORDINAL = 20
 const PERSISTENCE_COMPATIBLE_NAME_ORDINAL = 30
@@ -208,8 +223,13 @@ const COMPATIBLE_NAME_LOGICAL_FILE = 'blocked.txt'
 
 export async function runFSAProductionChain(
   scenarioKind: FSAProductionChainScenarioKind,
+  options: FSAProductionChainOptions = {},
 ): Promise<FSAProductionChainObservation> {
-  const scenario = await productionScenario(scenarioKind)
+  const scenario = await productionScenario(
+    scenarioKind,
+    undefined,
+    options.syntheticRootFileCount,
+  )
   const parent = new MemoryDirectory(`downloads-${scenarioKind}`)
   const repository = new MemoryOperationRepository()
   const locks = new MemoryLockManager()
@@ -226,6 +246,10 @@ export async function runFSAProductionChain(
       rules: { mode: 'node-id', defaultSelected: true, rules: [] },
     }),
     openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+    ...(options.maximumActiveNativeWriters === undefined
+      ? {}
+      : { maximumActiveWriters: options.maximumActiveNativeWriters }),
   })
   const lifecycleLeaseId = identityText(LIFECYCLE_LEASE_SEED + scenarioOrdinal(scenarioKind))
   const transferJobId = identityText(TRANSFER_JOB_SEED + scenarioOrdinal(scenarioKind))
@@ -241,9 +265,19 @@ export async function runFSAProductionChain(
     transferJobId,
     outputSessionId,
     admissionRecorder,
+    ...(options.diagnostics === undefined ? {} : { diagnostics: options.diagnostics }),
+    ...(options.maximumConcurrentFilePipelines === undefined
+      ? {}
+      : { maximumConcurrentFilePipelines: options.maximumConcurrentFilePipelines }),
   })
   const catalog = catalogWithSiblingAuthority(scenario.catalogDirectories)
-  const readers = readerFixture(scenario.files)
+  const readers = readerFixture(
+    scenario.files,
+    [],
+    options.syntheticRootFileCount === undefined
+      ? {}
+      : { deriveRevisionAuthorityFromFileIdentity: true },
+  )
   const job = productionTransferJob({
     catalog,
     revisions: readers.revisions,
@@ -302,6 +336,8 @@ export async function runFSAProductionPersistenceChain(
     lookups: [],
     writes: [],
     committed: [],
+    sealCount: 0,
+    finalProofReadCount: 0,
   }
   const checkpointFactory = observeCheckpointPersistence(
     memoryCheckpointFactory(),
@@ -441,14 +477,20 @@ export async function runFSAProductionPersistenceChain(
 
   const finalSettlement = settlementRecorder.final
   if (finalSettlement === undefined) {
-    throw new TypeError('production resume did not expose final settlement evidence')
+    throw new TypeError(
+      `production resume did not expose final settlement evidence: ` +
+      `${reopenedResult.lifecycle.kind}/${reopenedResult.worker.status}; ` +
+      `${JSON.stringify(reopenedResult.worker.failures)}; ` +
+      `requests=${JSON.stringify(reopenedFileRecorder.requests)}; ` +
+      `ranges=${JSON.stringify(reopenedFileRecorder.durableRanges, (_key, value) =>
+        typeof value === 'bigint' ? value.toString() : value)}; ` +
+      `transactionFailure=${errorChain(reopenedFileRecorder.transactionFailure)}; ` +
+      `pauseFailure=${errorChain(settlementRecorder.pauseFailure)}`,
+    )
   }
   const settlementReceiptPersisted = await verifyPersistedSettlementReceipt({
-    intent: directTreeIntent(reopened.intent),
-    transferJobId,
     repository,
-    checkpoints: checkpointRecorder.committed,
-    settlement: finalSettlement,
+    lifecycle: reopenedResult.lifecycle,
   })
   const compatibleNameMapping = compatibleNames === undefined
     ? undefined
@@ -479,11 +521,10 @@ export async function runFSAProductionPersistenceChain(
     checkpointWrites: Object.freeze([...checkpointRecorder.writes]),
     reopenedDurableRanges: Object.freeze(reopenedFileRecorder.durableRanges.map(value =>
       Object.freeze({ path: value.path, ranges: value.ranges }))),
-    pauseManifestPaths: evidencePaths(settlementRecorder.pauseEvidence),
-    manifestPaths: evidencePaths(finalSettlement.evidence),
-    finalizedDirectoryPaths: Object.freeze(finalSettlement.evidence.directorySettlements.map(value =>
-      Object.freeze([...value.artifactPath]))),
-    settlementReceiptPaths: evidencePaths(finalSettlement.evidence),
+    pauseEvidenceKind: requireDirectTreeEvidence(settlementRecorder.pauseEvidence).kind,
+    settlementEvidenceKind: finalSettlement.evidence.kind,
+    materializationSealCount: checkpointRecorder.sealCount,
+    settlementFinalProofReadCount: checkpointRecorder.finalProofReadCount,
     settlementReceiptPersisted,
     physicalLookups: Object.freeze([...physicalLookups]),
     parentPhysicalEntries: Object.freeze(await physicalEntries(parent)),
@@ -508,6 +549,8 @@ async function productionPlanAuthority(input: Readonly<{
   admissionRecorder: AdmissionRecorder
   fileRecorder?: FileCoordinateRecorder
   settlementRecorder?: SettlementRecorder
+  diagnostics?: OutputDiagnosticsPorts
+  maximumConcurrentFilePipelines?: number
 }>): Promise<V2PlanExecutionAuthority> {
   const settlement = await createFileSystemAccessSettlementAuthority({
     intent: input.intent,
@@ -515,6 +558,7 @@ async function productionPlanAuthority(input: Readonly<{
     lifecycleLeaseId: input.lifecycleLeaseId,
     transferJobId: input.transferJobId,
     clock: () => 1_000,
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
   return createV2PlanExecutionAuthority({
     intent: input.intent,
@@ -525,7 +569,24 @@ async function productionPlanAuthority(input: Readonly<{
           const persistentSettlement = settlement.bindMaterialization(input.session)
           const execution = await createPersistentDirectTreeExecution({
             intent,
-            materialization: input.session,
+            materialization: confirmedRecoveryMaterialization(input.session),
+            executionProfile: outputExecutionProfile({
+              maximumConcurrentFilePipelines: input.maximumConcurrentFilePipelines ?? 1,
+              maximumOutstandingWriteBytes: TEST_RECOVERY_BUDGET_BYTES,
+              maximumBufferedBytes: TEST_RECOVERY_BUDGET_BYTES,
+              automaticCheckpoint: {
+                kind: 'bounded',
+                trigger: {
+                  pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES,
+                  pendingMilliseconds: TEST_CHECKPOINT_TRIGGER_MILLISECONDS,
+                },
+                costBudget: {
+                  maximumPrefixCopyBytes: TEST_RECOVERY_BUDGET_BYTES,
+                  maximumCumulativeWriteAmplificationBytes: TEST_RECOVERY_BUDGET_BYTES,
+                  maximumPeakTemporaryBytes: TEST_RECOVERY_BUDGET_BYTES,
+                },
+              },
+            }),
             namespaceClaims: input.session,
             repairSummary: () => input.session.repairSummary(),
             outputIdentity: outputSessionIdentity({
@@ -535,6 +596,9 @@ async function productionPlanAuthority(input: Readonly<{
             settlement: input.settlementRecorder === undefined
               ? persistentSettlement
               : observeSettlement(persistentSettlement, input.settlementRecorder),
+            ...(input.diagnostics?.performance === undefined
+              ? {}
+              : { performance: input.diagnostics.performance }),
           })
           return observeProductionExecution(
             execution,
@@ -545,6 +609,36 @@ async function productionPlanAuthority(input: Readonly<{
       },
       lifecycle: settlement,
     },
+  })
+}
+
+function confirmedRecoveryMaterialization(
+  session: Awaited<ReturnType<typeof bindTask>>,
+): PersistentMaterializationPort {
+  return Object.freeze({
+    beginFile: (request: Parameters<PersistentMaterializationPort['beginFile']>[0]) => {
+      const recovery = request.recovery?.kind === 'preserve'
+        ? Object.freeze({
+            ...request.recovery,
+            confirmTemporarySpace: () => true,
+          })
+        : request.recovery
+      return session.beginFile({
+        ...request,
+        ...(recovery === undefined ? {} : { recovery }),
+      })
+    },
+    ensureDirectory: (path: Parameters<PersistentMaterializationPort['ensureDirectory']>[0]) =>
+      session.ensureDirectory(path),
+    materializeDirectory: (
+      request: Parameters<NonNullable<PersistentMaterializationPort['materializeDirectory']>>[0],
+    ) => session.materializeDirectory(request),
+    finalizeDirectory: (
+      admission: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[0],
+      outcome: Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>[1],
+    ) => session.finalizeDirectory(admission, outcome),
+    closeForTerminalSettlement: () => session.closeForTerminalSettlement(),
+    close: () => session.close(),
   })
 }
 
@@ -584,6 +678,7 @@ function observeFileCoordinates(
   return Object.freeze({
     identity: output.identity,
     capabilities: output.capabilities,
+    executionProfile: output.executionProfile,
     beginFile: async (request: OutputFileRequest, signal: AbortSignal) => {
       const path = Object.freeze([...request.materializationRelativePath])
       recorder.requests.push(Object.freeze({ phase: recorder.phase, path }))
@@ -606,18 +701,33 @@ function observeCheckpointBoundary(
   recorder: FileCoordinateRecorder,
 ): OutputFileTransaction {
   return Object.freeze({
-    writeRange: (offset: bigint, data: Uint8Array, signal: AbortSignal) =>
-      transaction.writeRange(offset, data, signal),
-    checkpoint: async (signal: AbortSignal) => {
-      const durable = await transaction.checkpoint(signal)
+    writeRange: async (offset: bigint, data: Uint8Array, signal: AbortSignal) => {
+      try {
+        await transaction.writeRange(offset, data, signal)
+      } catch (error) {
+        recorder.transactionFailure = error
+        throw error
+      }
       const controller = recorder.pauseAfterFirstCheckpoint
       if (controller !== undefined && !recorder.pauseRequested) {
         recorder.pauseRequested = true
-        controller.abort(new DOMException('production persistence checkpoint reached', 'AbortError'))
+        controller.abort(new DOMException('production persistence write reached', 'AbortError'))
       }
-      return durable
     },
-    commit: (signal: AbortSignal) => transaction.commit(signal),
+    automaticCheckpoint: (
+      trigger: AutomaticCheckpointTrigger,
+      budget: OutputCheckpointCostBudget,
+      signal: AbortSignal,
+    ) =>
+      transaction.automaticCheckpoint(trigger, budget, signal),
+    commit: async (signal: AbortSignal) => {
+      try {
+        return await transaction.commit(signal)
+      } catch (error) {
+        recorder.transactionFailure = error
+        throw error
+      }
+    },
     retire: (reason: unknown) => transaction.retire(reason),
     pause: (reason: unknown) => transaction.pause(reason),
   })
@@ -637,6 +747,8 @@ function observeSettlement(
   recorder: SettlementRecorder,
 ): PersistentDirectTreeSettlementAuthority {
   return Object.freeze({
+    beginTerminal: (kind: Parameters<PersistentDirectTreeSettlementAuthority['beginTerminal']>[0]) =>
+      settlement.beginTerminal(kind),
     pause: async (
       request: Parameters<PersistentDirectTreeSettlementAuthority['pause']>[0],
       cut: Parameters<PersistentDirectTreeSettlementAuthority['pause']>[1],
@@ -675,6 +787,7 @@ function observeSettlement(
 async function productionScenario(
   kind: FSAProductionChainScenarioKind,
   fileNameOverride?: string,
+  syntheticRootFileCount?: number,
 ): Promise<ProductionScenario> {
   switch (kind) {
     case 'single-file': {
@@ -717,23 +830,71 @@ async function productionScenario(
       })
     }
     case 'synthetic-root': {
-      const file = fileEntry(
-        identity(SYNTHETIC_ROOT_FILE_SEED),
-        fileNameOverride ?? 'payload.bin',
-        4n,
-      )
+      if (syntheticRootFileCount === undefined) {
+        const file = fileEntry(
+          identity(SYNTHETIC_ROOT_FILE_SEED),
+          fileNameOverride ?? 'payload.bin',
+          4n,
+        )
+        return Object.freeze({
+          artifact: await createResultRootDirectoryTreeArtifact(
+            createSyntheticSelectionResultRoot(),
+          ),
+          catalogDirectories: Object.freeze([{
+            id: identity(DESCRIPTOR_SYNTHETIC_ROOT_SEED),
+            entries: Object.freeze([file]),
+          }]),
+          files: Object.freeze([file]),
+        })
+      }
+      const files = Array.from({ length: syntheticRootFileCount }, (_, ordinal) => fileEntry(
+        performanceFileIdentity(ordinal),
+        `payload-${ordinal.toString().padStart(4, '0')}.bin`,
+        1n,
+      ))
+      const rootEntries: V2CatalogEntry[] = []
+      const catalogDirectories: CatalogDirectoryFixture[] = []
+      for (let offset = 0; offset < files.length; offset += V2_CATALOG_PAGE_ENTRIES) {
+        const ordinal = offset / V2_CATALOG_PAGE_ENTRIES
+        const directoryId = performanceDirectoryIdentity(ordinal)
+        rootEntries.push(directoryEntry(
+          directoryId,
+          `batch-${ordinal.toString().padStart(4, '0')}`,
+        ))
+        catalogDirectories.push(Object.freeze({
+          id: directoryId,
+          entries: Object.freeze(files.slice(offset, offset + V2_CATALOG_PAGE_ENTRIES)),
+        }))
+      }
       return Object.freeze({
         artifact: await createResultRootDirectoryTreeArtifact(
           createSyntheticSelectionResultRoot(),
         ),
-        catalogDirectories: Object.freeze([{
-          id: identity(DESCRIPTOR_SYNTHETIC_ROOT_SEED),
-          entries: Object.freeze([file]),
-        }]),
-        files: Object.freeze([file]),
+        catalogDirectories: Object.freeze([
+          Object.freeze({
+            id: identity(DESCRIPTOR_SYNTHETIC_ROOT_SEED),
+            entries: Object.freeze(rootEntries),
+          }),
+          ...catalogDirectories,
+        ]),
+        files: Object.freeze(files),
       })
     }
   }
+}
+
+function performanceFileIdentity(ordinal: number): Uint8Array<ArrayBuffer> {
+  const identity = new Uint8Array(16)
+  identity[0] = 0x80
+  identity[1] = ordinal >>> 8
+  identity[2] = ordinal
+  return identity
+}
+
+function performanceDirectoryIdentity(ordinal: number): Uint8Array<ArrayBuffer> {
+  const identity = performanceFileIdentity(ordinal)
+  identity[0] = 0x70
+  return identity
 }
 
 function productionTransferJob(input: Readonly<{
@@ -779,12 +940,21 @@ function observeCheckpointPersistence(
 ): FSAFileCheckpointRepositoryFactory {
   return async binding => {
     const repository = await factory(binding)
+    const semantic = repository as FSASemanticOutputRepository
     return new Proxy(repository, {
       get(target, property) {
         if (property === 'lookupLineage') {
           return async (request: Parameters<typeof target.lookupLineage>[0]) => {
             recorder.lookups.push(phaseCoordinate(recorder.phase, request.canonicalPath))
             return target.lookupLineage(request)
+          }
+        }
+        if (property === 'classifyLineages') {
+          return async (...args: Parameters<typeof semantic.classifyLineages>) => {
+            for (const request of args[0]) {
+              recorder.lookups.push(phaseCoordinate(recorder.phase, request.canonicalPath))
+            }
+            return semantic.classifyLineages(...args)
           }
         }
         if (property === 'commitCheckpointCandidate') {
@@ -797,6 +967,50 @@ function observeCheckpointPersistence(
             recorder.committed.push(committed)
           }
         }
+        if (property === 'commitCreatedFile') {
+          return async (...args: Parameters<typeof semantic.commitCreatedFile>) => {
+            await semantic.commitCreatedFile(...args)
+            recorder.writes.push(phaseCoordinate(recorder.phase, args[0].committed.canonicalPath))
+            recorder.committed.push(args[0].committed)
+          }
+        }
+        if (property === 'commitDurableCut') {
+          return async (...args: Parameters<typeof semantic.commitDurableCut>) => {
+            await semantic.commitDurableCut(...args)
+            recorder.writes.push(phaseCoordinate(recorder.phase, args[1].canonicalPath))
+            recorder.committed.push(args[1])
+          }
+        }
+        if (property === 'resumePausedCheckpoint') {
+          return async (...args: Parameters<typeof semantic.resumePausedCheckpoint>) => {
+            await semantic.resumePausedCheckpoint(...args)
+            recorder.writes.push(phaseCoordinate(recorder.phase, args[1].canonicalPath))
+            recorder.committed.push(args[1])
+          }
+        }
+        if (property === 'commitFinalFile') {
+          return async (...args: Parameters<typeof semantic.commitFinalFile>) => {
+            const result = await semantic.commitFinalFile(...args)
+            recorder.writes.push(phaseCoordinate(
+              recorder.phase,
+              args[0].records.finalCheckpoint.canonicalPath,
+            ))
+            recorder.committed.push(args[0].records.finalCheckpoint)
+            return result
+          }
+        }
+        if (property === 'sealMaterializationLedger') {
+          return async (...args: Parameters<typeof semantic.sealMaterializationLedger>) => {
+            recorder.sealCount += 1
+            return semantic.sealMaterializationLedger(...args)
+          }
+        }
+        if (property === 'readMaterializationFinalProof') {
+          return async (...args: Parameters<typeof semantic.readMaterializationFinalProof>) => {
+            recorder.finalProofReadCount += 1
+            return semantic.readMaterializationFinalProof(...args)
+          }
+        }
         const value = Reflect.get(target, property, target) as unknown
         return typeof value === 'function' ? value.bind(target) : value
       },
@@ -805,33 +1019,15 @@ function observeCheckpointPersistence(
 }
 
 async function verifyPersistedSettlementReceipt(input: Readonly<{
-  intent: ReturnType<typeof directTreeIntent>
-  transferJobId: string
   repository: MemoryOperationRepository
-  checkpoints: readonly FileCheckpointV2[]
-  settlement: NonNullable<SettlementRecorder['final']>
+  lifecycle: ReceiveLifecycleState
 }>): Promise<boolean> {
-  const latestByRecord = new Map<string, FileCheckpointV2>()
-  for (const checkpoint of input.checkpoints) latestByRecord.set(checkpoint.recordId, checkpoint)
-  const checkpoints = [...latestByRecord.values()].filter(fileCheckpointIsComplete)
-  const checkpointSetDigest = await fsaCheckpointSetDigest(input.intent, checkpoints)
-  const completedFiles = input.settlement.evidence.entries.filter(entry => entry.kind === 'file')
-  const expected = await createFSASettlementReceipt({
-    intent: input.intent,
-    transferJobId: input.transferJobId,
-    outcome: 'published',
-    request: input.settlement.request,
-    evidence: Object.freeze({
-      entries: input.settlement.evidence.entries,
-      directorySettlements: input.settlement.evidence.directorySettlements,
-      checkpointSetDigest,
-      completedFileCount: BigInt(completedFiles.length),
-      completedBytes: completedFiles.reduce((total, entry) => total + entry.exactSize, 0n),
-    }),
-    directoryScope: await createDirectoryAdmissionScope(input.intent),
-  })
+  if (!('receiptDigest' in input.lifecycle) || typeof input.lifecycle.receiptDigest !== 'string') {
+    return false
+  }
+  const receiptDigest = input.lifecycle.receiptDigest
   return input.repository.recordsOfKind(RECEIVE_RECORD_RECEIPT).some(record =>
-    record.digest === expected.digest && sameBytes(record.canonicalBytes, expected.canonicalBytes))
+    record.digest === receiptDigest)
 }
 
 function phaseCoordinate(
@@ -848,11 +1044,13 @@ function phaseAdmissions(
   return Object.freeze(admissions.map(admission => Object.freeze({ phase, ...admission })))
 }
 
-function evidencePaths(
-  evidence: PersistentMaterializationEvidence | undefined,
-): readonly (readonly string[])[] {
-  if (evidence === undefined) return Object.freeze([])
-  return Object.freeze(evidence.entries.map(entry => Object.freeze([...entry.artifactPath])))
+function requireDirectTreeEvidence(
+  evidence: PersistentDirectTreeMaterializationEvidence | undefined,
+): PersistentDirectTreeMaterializationEvidence {
+  if (evidence === undefined) {
+    throw new TypeError('production pause did not expose its immutable ledger locator')
+  }
+  return evidence
 }
 
 function resultRootName(artifact: DirectoryTreeArtifact): string {
@@ -875,10 +1073,6 @@ function compatibleNamePreparation() {
     }),
     randomBits: () => 0,
   })
-}
-
-function sameBytes(left: Uint8Array, right: Uint8Array): boolean {
-  return left.byteLength === right.byteLength && left.every((value, index) => value === right[index])
 }
 
 function catalogWithSiblingAuthority(

@@ -12,7 +12,6 @@ import {
   type BrowserLockManagerRuntime,
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
-import { fileCheckpointIsComplete } from '../persistence/checkpoint'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import {
@@ -21,10 +20,16 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import {
   openFSAFileCheckpointRepository,
-  scanAllFSAFileCheckpoints,
   type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
+  type FSASemanticOutputRepository,
 } from './checkpoint-repository'
+import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import {
+  MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+  MaterializationLedgerEntryKind,
+  type MaterializationLedgerBindingV1,
+} from '../materialization-ledger/model'
 import {
   CompatibleNamePathAuthority,
   type CompatibleNameActivationLedger,
@@ -48,6 +53,7 @@ import {
 export interface ReopenFileSystemAccessOutputOptions {
   readonly intent: ReceiveIntent
   readonly operationRepository: FSAOperationBindingRepository
+  readonly maximumConcurrentInitialClaimInspections?: number
   readonly lockManager?: BrowserLockManagerRuntime
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
@@ -73,7 +79,8 @@ export interface FileSystemAccessPendingOutcomeCatchUpSession {
   readonly pendingOutcome: CompatibleNamePendingTerminalOutcomeV1
   drainTerminalProjector(): Promise<CompatibleNameRepairSummary>
   clearPendingOutcome(): Promise<void>
-  retireCheckpoints(): Promise<void>
+  retireRecoveryMetadata(): Promise<void>
+  runExclusive<T>(operation: () => Promise<T>): Promise<T>
   close(): Promise<void>
 }
 
@@ -106,7 +113,7 @@ export async function reopenFileSystemAccessOutput(
     throw error
   }
   const rootLease = await acquireReopenRootLease(firstBinding.parent, options)
-  let checkpoints: FSAFileCheckpointRepository | undefined
+  let checkpoints: FSASemanticOutputRepository | undefined
   let compatibleNames: CompatibleNamePathAuthority | undefined
   let materializationOpening = false
   try {
@@ -139,13 +146,19 @@ export async function reopenFileSystemAccessOutput(
     const materialization = await PersistentTreeOutputSession.open({
       tree,
       checkpoints,
+      semantic: checkpoints,
+      ...initialClaimInspectionSessionOption(options.maximumConcurrentInitialClaimInspections),
       ...(options.diagnostics === undefined
         ? {}
         : { diagnostics: options.diagnostics }),
       ...(stageAuthority === undefined ? {} : { stageAuthority }),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
-    await reconcileCommittedFileMappings(checkpoints, compatibleNames)
+    await reconcileCommittedFileMappings(
+      semanticRepository(checkpoints),
+      await ledgerBinding(intent, binding),
+      compatibleNames,
+    )
     emitFSAOutputTrace(options.trace, Object.freeze({
       name: 'receive.reservation.reopened',
       operation_id: intent.operationId,
@@ -187,6 +200,14 @@ export async function reopenFileSystemAccessOutput(
   }
 }
 
+function initialClaimInspectionSessionOption(
+  maximumConcurrentInitialClaimInspections: number | undefined,
+): Readonly<{ maximumConcurrentInitialClaimInspections?: number }> {
+  return maximumConcurrentInitialClaimInspections === undefined
+    ? {}
+    : { maximumConcurrentInitialClaimInspections }
+}
+
 export async function openFileSystemAccessPendingOutcomeCatchUp(
   options: OpenFileSystemAccessPendingOutcomeCatchUpOptions,
 ): Promise<FileSystemAccessPendingOutcomeCatchUpSession> {
@@ -221,6 +242,13 @@ export async function openFileSystemAccessPendingOutcomeCatchUp(
       : undefined
     await compatibleNames.ensurePairReady(pairRoot)
     checkpoints = await openFSAFileCheckpointRepository(options, intent, binding.reservation)
+    const semantic = semanticRepository(checkpoints)
+    const materializationBinding = await ledgerBinding(intent, binding)
+    const terminalDrain = rootLease.scheduler.beginTerminal('repair-operation')
+    const runExclusive = async <T>(operation: () => Promise<T>): Promise<T> => {
+      await terminalDrain.drained
+      return terminalDrain.runExclusive(() => operation())
+    }
     let closed = false
     const close = async () => {
       if (closed) return
@@ -244,7 +272,8 @@ export async function openFileSystemAccessPendingOutcomeCatchUp(
         return summary
       },
       clearPendingOutcome: () => compatibleNames!.clearPendingTerminalOutcome(),
-      retireCheckpoints: () => checkpoints!.retireOperation(),
+      retireRecoveryMetadata: () => retireRecoveryMetadata(semantic, materializationBinding),
+      runExclusive,
       close,
     })
   } catch (error) {
@@ -271,8 +300,13 @@ async function acquireReopenRootLease(
 ): Promise<FSARootMutationLease> {
   try {
     return options.lockManager === undefined
-      ? await acquireFSARootMutationLease(parent)
-      : await acquireFSARootMutationLease(parent, options.lockManager)
+      ? await acquireFSARootMutationLease(parent, undefined, undefined, options.diagnostics?.performance)
+      : await acquireFSARootMutationLease(
+          parent,
+          options.lockManager,
+          undefined,
+          options.diagnostics?.performance,
+        )
   } catch (error) {
     recordOutputException(options.diagnostics?.failures?.reopen, error)
     outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })
@@ -327,13 +361,63 @@ async function releaseFailedFSAOpen(
 }
 
 async function reconcileCommittedFileMappings(
-  checkpoints: FSAFileCheckpointRepository,
+  repository: FSASemanticOutputRepository,
+  binding: MaterializationLedgerBindingV1,
   compatibleNames: CompatibleNamePathAuthority,
 ): Promise<void> {
   if (!compatibleNames.active) return
-  const committed = await scanAllFSAFileCheckpoints(checkpoints, 'committed')
-  for (const checkpoint of committed) {
-    if (!fileCheckpointIsComplete(checkpoint)) continue
-    await compatibleNames.commitFinalFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
+  let after: Parameters<FSASemanticOutputRepository['scanMaterializationLedgerEntries']>[1]['after']
+  do {
+    const page = await repository.scanMaterializationLedgerEntries(binding, {
+      ...(after === undefined ? {} : { after }),
+      limit: MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+    })
+    for (const entry of page.entries) {
+      if (entry.kind !== MaterializationLedgerEntryKind.FileFinalized) continue
+      await compatibleNames.commitFinalFile(entry.relativePath, entry.ownedFileIdentity)
+    }
+    after = page.continuation
+  } while (after !== undefined)
+}
+
+async function ledgerBinding(
+  intent: ReceiveIntent,
+  binding: PersistedFSAOperationBinding,
+): Promise<MaterializationLedgerBindingV1> {
+  return createMaterializationLedgerBinding({
+    operationId: intent.operationId,
+    receiveIntentDigest: intent.digest,
+    materializationBindingDigest: binding.reservation.digest,
+    authorityRef: binding.reservation.authorityRef,
+  })
+}
+
+function semanticRepository(
+  repository: FSAFileCheckpointRepository,
+): FSASemanticOutputRepository {
+  const candidate = repository as Partial<FSASemanticOutputRepository>
+  if (typeof candidate.scanMaterializationLedgerEntries !== 'function' ||
+      typeof candidate.retireMaterializationLedgerBatch !== 'function') {
+    throw new DOMException(
+      'DirectTree recovery requires semantic ledger repository authority',
+      'InvalidStateError',
+    )
+  }
+  return candidate as FSASemanticOutputRepository
+}
+
+async function retireRecoveryMetadata(
+  repository: FSASemanticOutputRepository,
+  binding: MaterializationLedgerBindingV1,
+): Promise<void> {
+  for (;;) {
+    const result = await repository.retireMaterializationLedgerBatch(
+      binding,
+      MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
+    )
+    if (result.state === 'complete') return
+    if (result.deletedRows === 0) {
+      throw new DOMException('FSA recovery metadata retirement made no progress', 'OperationError')
+    }
   }
 }

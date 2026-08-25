@@ -9,11 +9,19 @@ import {
 import type { FileSystemAccessOutputSession } from '../../output/file-system-access/session'
 import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
 
+export type FSAOwnedOutputSession = Pick<
+  FileSystemAccessOutputSession,
+  | 'closeForTerminalSettlement'
+  | 'releaseRootLease'
+  | 'repairProjection'
+  | 'subscribeRepairProjectionActivation'
+>
+
 export interface FSAResourceOwnerOptions {
   readonly repository?: Readonly<{ close(): void }>
   readonly operationLease?: BrowserReceiveOperationLease
   readonly rootLease?: FSARootMutationLease
-  readonly outputSession?: FileSystemAccessOutputSession
+  readonly outputSession?: FSAOwnedOutputSession
   readonly closeOperationAuthority?: () => Promise<void>
   readonly diagnostics?: OutputDiagnosticsPorts
 }
@@ -28,8 +36,7 @@ export class FSAResourceOwner {
   readonly #rootLease: FSARootMutationLease | undefined
   readonly #closeOperationAuthority: (() => Promise<void>) | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #outputSession: FileSystemAccessOutputSession | undefined
-  #rootTransferred = false
+  #outputSession: FSAOwnedOutputSession | undefined
   #closePromise: Promise<void> | undefined
 
   constructor(options: FSAResourceOwnerOptions) {
@@ -41,12 +48,11 @@ export class FSAResourceOwner {
     this.#operationLease = options.operationLease
     this.#rootLease = options.rootLease
     this.#outputSession = options.outputSession
-    this.#rootTransferred = options.outputSession !== undefined
     this.#closeOperationAuthority = options.closeOperationAuthority
     this.#diagnostics = options.diagnostics
   }
 
-  adoptOutputSession(session: FileSystemAccessOutputSession): void {
+  adoptOutputSession(session: FSAOwnedOutputSession): void {
     if (this.#closePromise !== undefined) {
       throw new DOMException('FSA resources are already closing', 'InvalidStateError')
     }
@@ -54,15 +60,13 @@ export class FSAResourceOwner {
       throw new DOMException('FSA output session authority was already transferred', 'InvalidStateError')
     }
     this.#outputSession = session
-    this.#rootTransferred = true
   }
 
-  replaceOutputSession(session: FileSystemAccessOutputSession): void {
+  replaceOutputSession(session: FSAOwnedOutputSession): void {
     if (this.#closePromise !== undefined) {
       throw new DOMException('FSA resources are already closing', 'InvalidStateError')
     }
     this.#outputSession = session
-    this.#rootTransferred = true
   }
 
   get repairProjection(): CompatibleNameRepairProjectionSource | undefined {
@@ -86,19 +90,14 @@ export class FSAResourceOwner {
 
   async #close(): Promise<void> {
     const failures: unknown[] = []
+    const outputSession = this.#outputSession
+    // Repository authority must survive output drain, and the parent Web Lock must
+    // outlive both so a same-parent contender cannot observe half-settled ownership.
     try {
-      await this.#outputSession?.close()
+      await outputSession?.closeForTerminalSettlement()
     } catch (error) {
       // The output session already classified file/checkpoint/root consequences.
       failures.push(error)
-    }
-    if (!this.#rootTransferred) {
-      try {
-        await this.#rootLease?.release()
-      } catch (error) {
-        failures.push(error)
-        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-      }
     }
     try {
       await (this.#closeOperationAuthority?.() ?? this.#operationLease?.release())
@@ -113,6 +112,12 @@ export class FSAResourceOwner {
         failures.push(error)
         recordOutputException(this.#diagnostics?.failures?.cleanup, error)
       }
+    }
+    try {
+      await (outputSession?.releaseRootLease() ?? this.#rootLease?.release())
+    } catch (error) {
+      failures.push(error)
+      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
     }
     if (failures.length === 0) return
     emitOutputTrace(this.#diagnostics?.trace, () => outputTraceEvent('cleanup', {

@@ -208,10 +208,11 @@ describe('v2 receiver active operation orchestration', () => {
   })
 
   it.each([
-    ['pause', 'resumable-receive', 'Ready to continue receiving'],
-    ['stop', 'restart-required', 'Start again required'],
-  ] as const)('interrupts active %s synchronously and publishes %s', async (
+    ['pause', 'Pausing', 'resumable-receive', 'Ready to continue receiving'],
+    ['stop', 'Stopping', 'restart-required', 'Start again required'],
+  ] as const)('presents %s as %s before publishing %s', async (
     control,
+    waitingTitle,
     expectedKind,
     expectedTitle,
   ) => {
@@ -225,12 +226,18 @@ describe('v2 receiver active operation orchestration', () => {
     if (runtime === undefined || run === undefined) throw new Error('active receive was not started')
     let inClickStack = true
     runtime.controlStack = () => inClickStack
+    const durableKindBeforeInterruption = controller.getSnapshot().output.lifecycle?.kind
 
     controller.performLifecycleAction(control)
     inClickStack = false
 
     expect(runtime.interruptions).toEqual([{ control, inClickStack: true }])
     expect(run.signal?.aborted).toBe(true)
+    expect(controller.getSnapshot().output.lifecycle?.kind).toBe(durableKindBeforeInterruption)
+    expect(controller.getSnapshot().output.lifecyclePresentation).toMatchObject({
+      title: waitingTitle,
+      actions: [],
+    })
     await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === expectedKind)
     expect(controller.getSnapshot().output.lifecyclePresentation?.title).toBe(expectedTitle)
     expect(runtime.admissionFailures).toEqual([])

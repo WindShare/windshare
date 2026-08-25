@@ -1,5 +1,7 @@
-export const CHECKPOINT_DATABASE_VERSION = 9
-export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = 'windshare-output-checkpoints'
+export const OUTPUT_DATABASE_VERSION = 10
+export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
+export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
+export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
 
 export const INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE = 'file-checkpoint-v2-candidates'
 export const INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE = 'file-checkpoint-v2-committed'
@@ -16,6 +18,10 @@ export const INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE = 'direct-zip-candidates-v1'
 export const INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE = 'direct-zip-layout-pages-v1'
 export const INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE = 'direct-zip-central-pages-v1'
 export const INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE = 'direct-zip-epoch-pages-v1'
+export const INDEXEDDB_FILE_FINAL_PROOF_STORE = 'file-final-proof-v1'
+export const INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE = 'materialization-ledger-v1-entries'
+export const INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE = 'materialization-ledger-v1-pages'
+export const INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE = 'materialization-ledger-v1-seals'
 
 const INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE = 'receive-operation-v1-records'
 const INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE = 'receive-operation-v1-manifest-pages'
@@ -32,6 +38,14 @@ export const INDEXEDDB_BY_EXPIRY_INDEX = 'by-expiry'
 export const INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX = 'by-operation-commit-ordinal'
 export const INDEXEDDB_BY_KIND_CANDIDATE_INDEX = 'by-kind-candidate'
 export const INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX = 'by-operation-chain-page'
+export const INDEXEDDB_BY_OPERATION_LINEAGE_INDEX = 'by-operation-lineage'
+export const INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX = 'by-operation-owned-object'
+export const INDEXEDDB_BY_OPERATION_RECORD_INDEX = 'by-operation-record'
+export const INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX = 'by-operation-file-record'
+export const INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX = 'by-operation-path-order'
+export const INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX = 'by-operation-seal-page'
+export const INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX = 'by-operation-record-proof'
+export const INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX = 'by-operation-seal-sequence'
 
 export const INDEXEDDB_LEGACY_V5_STORES = Object.freeze([
   'file-checkpoint-v1-candidates',
@@ -50,6 +64,7 @@ export interface IndexedDbStoreSchema {
   readonly indexes: readonly Readonly<{
     name: string
     keyPath: string | readonly string[]
+    unique?: boolean
   }>[]
 }
 
@@ -154,6 +169,64 @@ export const INDEXEDDB_V9_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Objec
   ])),
 ])
 
+export const INDEXEDDB_V10_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Object.freeze([
+  ...INDEXEDDB_V9_STORE_SCHEMAS.map((schema) => {
+    if (schema.name === INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE ||
+        schema.name === INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE) {
+      return storeSchema(schema.name, schema.keyPath, [
+        ...schema.indexes,
+        indexSchema(INDEXEDDB_BY_OPERATION_LINEAGE_INDEX, ['operationId', 'lineageId']),
+        indexSchema(
+          INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
+          ['operationId', 'ownedObjectId'],
+          true,
+        ),
+        indexSchema(INDEXEDDB_BY_OPERATION_RECORD_INDEX, ['operationId', 'id']),
+        indexSchema(INDEXEDDB_BY_OPERATION_FILE_RECORD_INDEX, ['operationId', 'fileId', 'id']),
+      ])
+    }
+    if (schema.name === INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE) {
+      return storeSchema(schema.name, schema.keyPath, [
+        ...schema.indexes,
+        indexSchema(
+          INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
+          ['operationId', 'ownedObjectId'],
+          true,
+        ),
+      ])
+    }
+    return schema
+  }),
+  storeSchema(INDEXEDDB_FILE_FINAL_PROOF_STORE, 'proofId', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(INDEXEDDB_BY_OPERATION_RECORD_PROOF_INDEX, ['operationId', 'recordId'], true),
+  ]),
+  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE, 'entryId', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(
+      INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
+      ['operationId', 'pathKey', 'entryOrder'],
+      true,
+    ),
+  ]),
+  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE, 'pageId', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(
+      INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX,
+      ['operationId', 'sealId', 'pageOrdinal'],
+      true,
+    ),
+  ]),
+  storeSchema(INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE, 'sealId', [
+    indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
+    indexSchema(
+      INDEXEDDB_BY_OPERATION_SEAL_SEQUENCE_INDEX,
+      ['operationId', 'sealSequence'],
+      true,
+    ),
+  ]),
+])
+
 export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDBDatabase> {
   if (name.length === 0) throw new TypeError('IndexedDB name must not be empty')
   if (typeof indexedDB === 'undefined') {
@@ -161,7 +234,7 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
   }
   const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
   request.addEventListener('upgradeneeded', (event) =>
-    installIndexedDbV9Schema(
+    installIndexedDbV10Schema(
       request.result,
       request.transaction ?? undefined,
       event.oldVersion,
@@ -181,6 +254,37 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
       else resolve(request.result)
     }, { once: true })
   })
+}
+
+export function installIndexedDbV10Schema(
+  database: IDBDatabase,
+  transaction?: IDBTransaction,
+  oldVersion = OUTPUT_DATABASE_VERSION,
+): void {
+  if (oldVersion <= 0 || oldVersion >= OUTPUT_DATABASE_VERSION) {
+    installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
+    return
+  }
+  if (transaction === undefined) {
+    throw new DOMException('IndexedDB v10 migration lacks its versionchange transaction', 'InvalidStateError')
+  }
+
+  // Pre-v1 recovery facts cannot be upgraded into atomic proof/ledger authority.
+  // Recreating origin stores prevents corrupt legacy projections from blocking the
+  // new unique indexes. No filesystem capability is opened or invoked here.
+  for (const schema of INDEXEDDB_V9_STORE_SCHEMAS) {
+    if (database.objectStoreNames.contains(schema.name)) database.deleteObjectStore(schema.name)
+  }
+  for (const name of [
+    ...INDEXEDDB_LEGACY_V5_STORES,
+    INDEXEDDB_LEGACY_RECEIVE_RECORD_STORE,
+    INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE,
+    INDEXEDDB_LEGACY_RECEIVE_HANDLE_STORE,
+    INDEXEDDB_LEGACY_RECEIVE_LEASE_STORE,
+  ]) {
+    if (database.objectStoreNames.contains(name)) database.deleteObjectStore(name)
+  }
+  installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
 }
 
 export function installIndexedDbV9Schema(
@@ -221,7 +325,7 @@ export function installIndexedDbV6Schema(database: IDBDatabase): void {
     if (database.objectStoreNames.contains(schema.name)) continue
     const store = database.createObjectStore(schema.name, { keyPath: schema.keyPath })
     for (const index of schema.indexes) {
-      store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+      store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
     }
   }
 }
@@ -239,7 +343,7 @@ export function installIndexedDbV7Schema(
     }
     for (const index of schema.indexes) {
       if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
       }
     }
   }
@@ -259,7 +363,7 @@ export function installIndexedDbV8Schema(
     }
     for (const index of schema.indexes) {
       if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
       }
     }
   }
@@ -289,7 +393,7 @@ function installSchemas(
     }
     for (const index of schema.indexes) {
       if (!store.indexNames.contains(index.name)) {
-        store.createIndex(index.name, index.keyPath, { unique: false, multiEntry: false })
+        store.createIndex(index.name, index.keyPath, { unique: index.unique ?? false, multiEntry: false })
       }
     }
   }
@@ -325,6 +429,7 @@ function storeSchema(
 function indexSchema(
   name: string,
   keyPath: string | readonly string[],
+  unique = false,
 ): IndexedDbStoreSchema['indexes'][number] {
-  return Object.freeze({ name, keyPath })
+  return Object.freeze({ name, keyPath, ...(unique ? { unique: true } : {}) })
 }

@@ -1,5 +1,6 @@
 import {
   emitOutputTrace,
+  observePerformance,
   outputTraceEvent,
   recordOutputException,
   type OutputDiagnosticsPorts,
@@ -7,6 +8,9 @@ import {
 import { TargetOwnershipUnknownError } from '../persistent-tree/errors'
 import { verifyFSAOperationBinding } from '../browser/indexeddb-root-binding'
 import { equalCanonicalBytes } from '../workspace/canonical'
+import { MaterializationLedgerEvidenceOutcome } from '../materialization-ledger/evidence'
+import { MaterializationLedgerSealPurpose } from '../materialization-ledger/model'
+import type { FSATerminalMutationKind } from '../browser/mutation-coordination/model'
 import {
   reduceReceiveLifecycle,
   type LifecycleEvent,
@@ -26,7 +30,7 @@ import {
 import type { CompletedTransferWorkerSettlement } from '../../transfer/outcome'
 import type {
   PersistentDirectTreeSettlementAuthority,
-  PersistentMaterializationEvidence,
+  PersistentDirectTreeMaterializationEvidence,
   PersistentMaterializationSettlementCut,
 } from '../../transfer/settlement/persistent-execution'
 import {
@@ -44,14 +48,8 @@ import {
   type DirectTreeIntent,
   type SettlementReceiptEvidence,
 } from './settlement-proof'
-import {
-  observeFSASettlementEvidence,
-  snapshotQuiescentFSASettlementEvidence,
-} from './settlement-evidence'
-import {
-  observeFSASettlementRootEvidenceValidation,
-  type FSASettlementEvidenceValidationPass,
-} from './settlement-root-evidence'
+import { validateSealedFSASettlementEvidence } from './settlement-evidence'
+import { normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
 import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
 import type {
   CreateFileSystemAccessSettlementAuthorityOptions,
@@ -110,6 +108,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     this.#materializationActivationStarted = true
     this.#boundMaterialization = session
     const authority: PersistentDirectTreeSettlementAuthority = {
+      beginTerminal: kind => session.beginTerminal(terminalMutationKind(kind)),
       pause: (request, cut, signal) => this.#pause(session, request, cut, signal),
       stop: (request, cut, signal) => this.#stop(session, request, cut, signal),
       settle: (request, cut, signal) => this.#settle(session, request, cut, signal),
@@ -194,38 +193,43 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
   async #pause(
     session: FileSystemAccessOutputSession,
     request: PlanPauseRequest,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
-    return this.#withMaterializationCut(session, cut, async (observation) => {
+    return this.#withMaterializationCut(session, 'pause-operation', cut, async (observation) => {
       if (signal.aborted) {
         // A requested pause is a cancellation shield: its durable cut must still finish.
       }
       if (request.worker.status !== 'Paused') {
         throw new TypeError('FSA pause requires a paused worker settlement')
       }
-      const evidence = cut.sealEvidence()
-      observation.beginEvidenceObservation()
-      const observed = await this.#observeRootEvidenceValidation('observed', () =>
-        observeFSASettlementEvidence({
-          intent: this.#intent,
-          directoryScope: this.#directoryScope,
-          observation,
-          evidence,
-          summary: request.materialization,
-          requireComplete: false,
-        }))
-      const receipt = await this.#settlementReceipt('resumable-receive', request, observed)
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
         throw new TypeError('FSA pause requires Receiving lifecycle state')
       }
+      await observation.verifyOperationBinding()
+      const seal = await observation.sealMaterializationLedger({
+        evidence: cut.sealEvidence(),
+        sealSequence: current.state.generation + 1n,
+        purpose: MaterializationLedgerSealPurpose.ResumableSnapshot,
+      })
+      const validated = validateSealedFSASettlementEvidence({
+        intent: this.#intent,
+        directoryScope: this.#directoryScope,
+        evidence: cut.evidence,
+        seal,
+        summary: request.materialization,
+        outcome: MaterializationLedgerEvidenceOutcome.Resumable,
+      })
+      const checkpointEvidence = await observation.resumableCheckpointEvidence()
+      const evidence = Object.freeze({ ...validated, ...checkpointEvidence })
+      const receipt = await this.#settlementReceipt('resumable-receive', request, evidence)
       const next = this.#reduce(current.state, {
         kind: 'pause-verified',
         stage: 'receive',
-        checkpointSetDigest: observed.checkpointSetDigest,
-        completedFileCount: observed.completedFileCount,
-        completedBytes: observed.completedBytes,
+        checkpointSetDigest: checkpointEvidence.checkpointSetDigest,
+        completedFileCount: validated.fileCount,
+        completedBytes: validated.completedBytes,
         partialReceiptDigest: receipt.digest,
         expectedGeneration: current.state.generation,
         leaseId: this.#lifecycleLeaseId,
@@ -233,9 +237,9 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       const committed = await this.#commitLifecycle(current, next, [receipt])
       this.#emit(
         'resumable-receive',
-        BigInt(observed.checkpoints.length),
-        observed.completedFileCount,
-        observed.completedBytes,
+        checkpointEvidence.checkpointCount,
+        validated.fileCount,
+        validated.completedBytes,
       )
       return committed.state
     })
@@ -244,7 +248,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
   async #settle(
     session: FileSystemAccessOutputSession,
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
     const footerState = request.worker.status === 'Succeeded' ? 'completed' : 'failed'
@@ -254,7 +258,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
   async #stop(
     session: FileSystemAccessOutputSession,
     request: PlanStopRequest,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
     if (!(request.reason instanceof TransferStopRequestedError) ||
@@ -268,11 +272,15 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     session: FileSystemAccessOutputSession,
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement> | PlanStopRequest,
     footerState: 'completed' | 'failed' | 'stopped',
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState> {
-    return this.#withMaterializationCut(session, cut, async (observation) => {
-      signal.throwIfAborted()
+    const terminalKind = footerState === 'stopped' ? 'stop-operation' as const : 'settle-operation' as const
+    return this.#withMaterializationCut(session, terminalKind, cut, async (observation) => {
+      if (signal.aborted) {
+        // Once terminal settlement owns the exclusive cut, cancellation cannot make its
+        // durable lifecycle and publication projection disagree.
+      }
       if (snapshotTransferJobId(request.transferJobId) !== this.#transferJobId) {
         throw new TypeError('FSA settlement escaped its transfer job')
       }
@@ -288,63 +296,72 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       // verified owned pair here prevents a false repaired result while keeping
       // every ordinary output entry outside this narrowly proven cleanup.
       await observation.removeVerifiedEmptyCompatibleNameRepair()
-      const quiescentEvidence = cut.snapshotQuiescentEvidence()
-      const anticipated = await this.#observeRootEvidenceValidation('anticipated', () =>
-        snapshotQuiescentFSASettlementEvidence({
-          intent: this.#intent,
-          directoryScope: this.#directoryScope,
-          evidence: quiescentEvidence,
-          summary: request.materialization,
-          requireComplete: published,
-        }))
-      const anticipatedReceipt = await this.#settlementReceipt(outcome, request, anticipated)
       const current = await this.#lifecycle()
       if (current.state.kind !== 'receiving') {
         throw new TypeError('FSA completion requires Receiving lifecycle state')
       }
+      await observation.verifyOperationBinding()
+      const seal = await observation.sealMaterializationLedger({
+        evidence: cut.sealEvidence(),
+        sealSequence: current.state.generation + 1n,
+        purpose: MaterializationLedgerSealPurpose.Terminal,
+      })
+      const validated = validateSealedFSASettlementEvidence({
+        intent: this.#intent,
+        directoryScope: this.#directoryScope,
+        evidence: cut.evidence,
+        seal,
+        summary: request.materialization,
+        outcome: published
+          ? MaterializationLedgerEvidenceOutcome.Published
+          : MaterializationLedgerEvidenceOutcome.Partial,
+      })
+      const evidence = Object.freeze({
+        ...validated,
+        checkpointCount: validated.fileCount,
+      })
+      const receipt = await this.#settlementReceipt(outcome, request, evidence)
       const transition = footerState === 'stopped' && stopped
-        ? this.#stoppedTransition(current.state, request, anticipatedReceipt.digest)
+        ? this.#stoppedTransition(current.state, request, receipt.digest)
         : this.#completedTransition(
             current.state,
             request as PlanSettlementRequest<CompletedTransferWorkerSettlement>,
-            anticipatedReceipt.digest,
-            anticipated,
+            receipt.digest,
+            evidence,
           )
       const next = transition.terminal
       await observation.persistCompatibleNamePendingOutcome(Object.freeze({
         formatVersion: COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION,
         footerState,
         ordinaryLifecycle: next,
-        terminalReceipt: anticipatedReceipt,
+        terminalReceipt: receipt,
       }))
       await observation.drainCompatibleNameProjector(footerState)
-      const evidence = cut.sealEvidence()
-      observation.beginEvidenceObservation()
-      const observed = await this.#observeRootEvidenceValidation('observed', () =>
-        observeFSASettlementEvidence({
-          intent: this.#intent,
-          directoryScope: this.#directoryScope,
-          observation,
-          evidence,
-          summary: request.materialization,
-          requireComplete: published,
-        }))
-      const receipt = await this.#settlementReceipt(outcome, request, observed)
-      if (receipt.digest !== anticipatedReceipt.digest ||
-          !equalCanonicalBytes(receipt.canonicalBytes, anticipatedReceipt.canonicalBytes)) {
-        throw new TargetOwnershipUnknownError('settlement', this.#intent.operationId)
-      }
       const terminalBase = transition.intermediate === undefined
         ? current
         : await this.#commitLifecycle(current, transition.intermediate)
       const committed = await this.#commitLifecycle(terminalBase, next, [receipt])
-      await observation.clearCompatibleNamePendingOutcome()
-      await observation.retireCheckpoints()
+      observePerformance(this.#diagnostics?.performance, summary => {
+        if (committed.state.kind === 'published') summary.markMilestone('published')
+        else summary.complete()
+      })
+      try {
+        await observation.retireRecoveryMetadata()
+        await observation.clearCompatibleNamePendingOutcome()
+      } catch (cleanupFailure) {
+        // The receipt and terminal lifecycle are already durable. Leaving metadata for
+        // catch-up is safer than reporting a contradictory non-terminal result.
+        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
+        emitOutputTrace(this.#diagnostics?.trace, () => outputTraceEvent('cleanup', {
+          backend: 'file_system_access',
+          transition: 'failed',
+        }))
+      }
       this.#emit(
         outcome,
-        BigInt(observed.checkpoints.length),
-        observed.completedFileCount,
-        observed.completedBytes,
+        evidence.checkpointCount,
+        evidence.fileCount,
+        evidence.completedBytes,
       )
       return committed.state
     })
@@ -372,7 +389,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       kind: 'tree-finalization-completed',
       outcome: published ? 'published' : 'partial-directory',
       receiptDigest,
-      completedFileCount: evidence.completedFileCount,
+      completedFileCount: evidence.fileCount,
       completedBytes: evidence.completedBytes,
       successCount: request.materialization.entryCount,
       failureCount: BigInt(request.worker.failureCount),
@@ -413,13 +430,14 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
 
   async #withMaterializationCut(
     session: FileSystemAccessOutputSession,
-    cut: PersistentMaterializationSettlementCut<PersistentMaterializationEvidence>,
+    kind: FSATerminalMutationKind,
+    cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,
     operation: (observation: FSAFinalSettlementObservation) => Promise<ReceiveLifecycleState>,
   ): Promise<ReceiveLifecycleState> {
     let result: ReceiveLifecycleState | undefined
     let failure: unknown
     try {
-      result = await session.runFinalSettlement(async (observation) => {
+      result = await session.runFinalSettlement(kind, async (observation) => {
         try {
           return await operation(observation)
         } catch (cause) {
@@ -476,21 +494,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       intent: this.#intent,
       transferJobId: this.#transferJobId,
       directoryScope: this.#directoryScope,
-    })
-  }
-
-  #observeRootEvidenceValidation<Value>(
-    validationPass: FSASettlementEvidenceValidationPass,
-    validate: () => Value | Promise<Value>,
-  ): Promise<Value> {
-    return observeFSASettlementRootEvidenceValidation({
-      validationPass,
-      operationId: this.#intent.operationId,
-      receiveIntentDigest: this.#intent.digest,
-      transferJobId: this.#transferJobId,
-      ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
-      ...(this.#trace === undefined ? {} : { trace: this.#trace }),
-      validate,
     })
   }
 
@@ -722,21 +725,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         ...(outcome === undefined ? {} : { outcome }),
       }))
   }
-}
-
-function normalizedSettlementOutcome(
-  outcome: Extract<
-    FSASettlementTraceEvent,
-    { name: 'receive.fsa.settlement.completed' }
-  >['outcome'],
-): 'published' | 'partial_directory' | 'resumable_receive' | 'discarded' | 'needs_attention' {
-  return outcome === 'partial-directory' || outcome === 'resumable-receive' ||
-      outcome === 'needs-attention'
-    ? outcome.replace('-', '_') as
-      | 'partial_directory'
-      | 'resumable_receive'
-      | 'needs_attention'
-    : outcome
 }
 
 interface VerifiedLifecycle {

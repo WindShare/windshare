@@ -3,7 +3,10 @@ import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import {
   OutputSessionBindingError,
   VerifiedDurableRanges,
+  VerifiedFinalOutputFile,
+  disabledOutputExecutionProfile,
   outputCapabilities,
+  outputExecutionProfile,
   snapshotOpenedOutputRevision,
   snapshotOutputFileRequest,
   validatePlanExecutionBinding,
@@ -130,6 +133,55 @@ describe('plan-specific output boundary', () => {
       .toThrow(/sorted, non-overlapping/)
   })
 
+  it('validates and snapshots execution policy independently from capabilities', () => {
+    const profile = {
+      maximumConcurrentFilePipelines: 3,
+      maximumOutstandingWriteBytes: 8n,
+      maximumBufferedBytes: 5n,
+      automaticCheckpoint: {
+        kind: 'bounded' as const,
+        trigger: { pendingBytes: 4n, pendingMilliseconds: 50 },
+        costBudget: {
+          maximumPrefixCopyBytes: 2n,
+          maximumCumulativeWriteAmplificationBytes: 3n,
+          maximumPeakTemporaryBytes: 4n,
+        },
+      },
+    }
+    const validated = outputExecutionProfile(profile)
+    profile.automaticCheckpoint.trigger.pendingBytes = 7n
+    expect(validated).toMatchObject({
+      maximumConcurrentFilePipelines: 3,
+      automaticCheckpoint: { trigger: { pendingBytes: 4n } },
+    })
+    expect(() => outputExecutionProfile({ ...profile, maximumConcurrentFilePipelines: 0 }))
+      .toThrow(/concurrent file-pipeline limit/u)
+    expect(() => outputExecutionProfile({
+      ...profile,
+      automaticCheckpoint: {
+        ...profile.automaticCheckpoint,
+        trigger: { ...profile.automaticCheckpoint.trigger, pendingMilliseconds: 0 },
+      },
+    })).toThrow(/checkpoint trigger/u)
+  })
+
+  it('snapshots final proof identity for durable ledger consumers', () => {
+    const canonicalPath = ['chosen', 'result.bin']
+    const proof = new VerifiedFinalOutputFile({
+      backend: 'test',
+      outputSessionId: 'session',
+      canonicalPath,
+      ownedFileIdentity: 'owned',
+    }, {
+      shareInstance: identityText(1),
+      fileId: identityText(4),
+      fileRevision: identityText(5),
+    }, 4n)
+    canonicalPath[0] = 'mutated'
+    expect(proof.ownership.canonicalPath).toEqual(['chosen', 'result.bin'])
+    expect(Object.isFrozen(proof)).toBe(true)
+  })
+
   it('requires DirectTree to expose incremental directory authority', async () => {
     const selection = new V2SelectionPolicy()
     const intent = await receiveIntentFixture({
@@ -145,6 +197,7 @@ describe('plan-specific output boundary', () => {
         fileFailureIsolation: true,
         modificationTime: false,
       }),
+      executionProfile: disabledOutputExecutionProfile(1),
       beginFile: async () => { throw new Error('not used') },
     }
     const malformed = {

@@ -125,10 +125,10 @@ describe('FSA DirectTree production coordinate chain', () => {
         path: filePath,
         ranges: [{ start: 0n, end: FSA_PRODUCTION_PARTIAL_FILE_BYTES }],
       }])
-      expect.soft(observed.pauseManifestPaths).toEqual([[]])
-      expect.soft(observed.manifestPaths).toEqual([[], filePath])
-      expect.soft(observed.finalizedDirectoryPaths).toEqual([[]])
-      expect.soft(observed.settlementReceiptPaths).toEqual(observed.manifestPaths)
+      expect.soft(observed.pauseEvidenceKind).toBe('direct-tree-ledger')
+      expect.soft(observed.settlementEvidenceKind).toBe('direct-tree-ledger')
+      expect.soft(observed.materializationSealCount).toBe(2)
+      expect.soft(observed.settlementFinalProofReadCount).toBe(0)
       expect.soft(observed.settlementReceiptPersisted).toBe(true)
 
       if (variant === 'collision-reserved-root') {
