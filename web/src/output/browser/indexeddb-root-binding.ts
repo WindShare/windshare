@@ -52,6 +52,12 @@ export interface PersistedFSAOperationBinding {
   readonly parentHandleId: string
 }
 
+export interface PersistedFSAOwnedDirectoryBinding {
+  readonly handleId: string
+  readonly ownedObjectId: string
+  readonly handle: FileSystemDirectoryHandle
+}
+
 export interface PreparedFSAOperationBindingTransition {
   readonly intent: ReceiveIntent
   readonly reservation: FSANamedContainerEntryReservation
@@ -66,6 +72,11 @@ export type FSAOperationBindingRepository = Pick<
 >
 
 export type FSACompatibleNamePairHandleRepository = Pick<
+  ReceiveOperationRepository,
+  'readHandle'
+>
+
+export type FSAOwnedDirectoryBindingRepository = Pick<
   ReceiveOperationRepository,
   'readHandle'
 >
@@ -234,7 +245,7 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
   handle: FileSystemDirectoryHandle
   diagnosticTarget?: 'root' | 'directory'
   stageScope?: PersistentOutputStageScope
-}>): Promise<void> {
+}>): Promise<PersistedFSAOwnedDirectoryBinding> {
   requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
   const record = receiveOperationHandleRecord({
     id: input.handleId,
@@ -300,16 +311,33 @@ export async function persistFSAOwnedDirectory(input: Readonly<{
       )) {
     throw new TargetOwnershipUnknownError('namespace-create', input.reservation.operationId)
   }
+  return Object.freeze({
+    handleId: input.handleId,
+    ownedObjectId: input.ownedObjectId,
+    handle: input.handle,
+  })
 }
 
 export async function readFSAOwnedDirectory(input: Readonly<{
-  repository: FSAOperationBindingRepository
+  repository: FSAOwnedDirectoryBindingRepository
   reservation: FSANamedContainerEntryReservation
   handleId: string
   ownedObjectId?: string
   diagnosticTarget?: 'root' | 'directory'
   stageScope?: PersistentOutputStageScope
 }>): Promise<FileSystemDirectoryHandle | undefined> {
+  return (await readFSAOwnedDirectoryBinding(input))?.handle
+}
+
+/** Returns the complete validated ownership record without a second repository point-read. */
+export async function readFSAOwnedDirectoryBinding(input: Readonly<{
+  repository: FSAOwnedDirectoryBindingRepository
+  reservation: FSANamedContainerEntryReservation
+  handleId: string
+  ownedObjectId?: string
+  diagnosticTarget?: 'root' | 'directory'
+  stageScope?: PersistentOutputStageScope
+}>): Promise<PersistedFSAOwnedDirectoryBinding | undefined> {
   requireOwnedDirectoryHandleId(input.handleId, input.reservation.operationId)
   let record: ReceiveOperationHandleRecord<FileSystemDirectoryHandle> | undefined
   try {
@@ -333,7 +361,14 @@ export async function readFSAOwnedDirectory(input: Readonly<{
       (input.ownedObjectId !== undefined && record.ownedObjectId !== input.ownedObjectId)) {
     throw new TargetOwnershipUnknownError('parent-authority', input.reservation.operationId)
   }
-  return handle
+  if (record.ownedObjectId === undefined) {
+    throw new TargetOwnershipUnknownError('parent-authority', input.reservation.operationId)
+  }
+  return Object.freeze({
+    handleId: input.handleId,
+    ownedObjectId: record.ownedObjectId,
+    handle,
+  })
 }
 
 /** Reopen verifies the exact persisted pair handle instead of trusting its claimed physical name. */

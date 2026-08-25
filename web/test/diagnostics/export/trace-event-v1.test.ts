@@ -5,6 +5,10 @@ import {
   projectDiagnosticsStatusV1,
 } from '../../../src/diagnostics/export/diagnostic-bundle-v1'
 import { isDeeplyFrozen } from '../../../src/diagnostics/export/json'
+import {
+  projectPerformancePhasePayloadV1,
+  projectPerformanceSummaryPayloadV1,
+} from '../../../src/diagnostics/export/projector'
 import { encodeDiagnosticBundleNdjson } from '../../../src/diagnostics/export/ndjson'
 import {
   snapshotTraceEventObservationV1,
@@ -20,6 +24,12 @@ import type {
   TraceEventPayloadByNameV1,
 } from '../../../src/diagnostics/trace/model'
 import {
+  PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1,
+  PERFORMANCE_CLAIM_PHASES_V1,
+  PERFORMANCE_FILE_PIPELINE_STAGES_V1,
+  PERFORMANCE_NAMESPACE_KINDS_V1,
+} from '../../../src/diagnostics/trace/transfer-payload'
+import {
   TEST_BUNDLE_IDENTITY,
   diagnosticsHealthV1,
   traceStatus,
@@ -33,6 +43,147 @@ const ACTIVATION_ID = 'BQAAAAAAAAAAAAAAAAAAAA'
 const SHARE_INSTANCE_ID = 'BgAAAAAAAAAAAAAAAAAAAA'
 const SELECTION_DIGEST = 'BwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA'
 const PRIVATE_TEXT = 'C:/private/provider-message.txt'
+
+const PERFORMANCE_CORRELATION = Object.freeze({
+  receiveOperationId: OPERATION_ID,
+  transferJobId: PATH_ID,
+  outputSessionId: ATTEMPT_ID,
+  protocolSessionId: SESSION_ID,
+  protocolGeneration: 1,
+})
+
+const EMPTY_PERFORMANCE_HISTOGRAM = Object.freeze({
+  upperBoundsMilliseconds: Object.freeze([1, 4, 16, 64, 256, 1_024, 4_096] as const),
+  bucketCounts: Object.freeze([0n, 0n, 0n, 0n, 0n, 0n, 0n, 0n]),
+  sampleCount: 0n,
+  totalMilliseconds: 0n,
+  maximumMilliseconds: 0n,
+})
+
+const PERFORMANCE_SUMMARY = projectPerformanceSummaryPayloadV1({
+  correlation: PERFORMANCE_CORRELATION,
+  queue: {
+    writer: { wait: EMPTY_PERFORMANCE_HISTOGRAM, run: EMPTY_PERFORMANCE_HISTOGRAM },
+    namespace: { wait: EMPTY_PERFORMANCE_HISTOGRAM, run: EMPTY_PERFORMANCE_HISTOGRAM },
+  },
+  namespaceByKind: Object.fromEntries(PERFORMANCE_NAMESPACE_KINDS_V1.map(kind => [
+    kind,
+    { wait: EMPTY_PERFORMANCE_HISTOGRAM, run: EMPTY_PERFORMANCE_HISTOGRAM },
+  ])) as never,
+  filePipeline: {
+    workerStarts: 0n,
+    workerStops: 0n,
+    workerMilliseconds: 0n,
+    stages: Object.fromEntries(PERFORMANCE_FILE_PIPELINE_STAGES_V1.map(stage => [
+      stage,
+      { entries: 0n, occupancyMilliseconds: 0n, peakActive: 0, activeAtCompletion: 0 },
+    ])) as never,
+  },
+  peaks: {
+    activeWriters: 0,
+    queuedWriters: 0,
+    activeNamespace: 0,
+    queuedNamespace: 0,
+  },
+  authorityCache: {
+    directoryHits: 0n,
+    directoryMisses: 0n,
+    fileHits: 0n,
+    fileMisses: 0n,
+    invalidations: 0n,
+    evictions: 0n,
+    walkedSegments: 0n,
+    maximumWalkDepth: 0,
+  },
+  bytes: { pending: 0n, durable: 0n, final: 0n },
+  checkpoints: {
+    automaticTriggers: 0n,
+    forcedPauseTriggers: 0n,
+    advanced: 0n,
+    declined: 0n,
+    constantCost: 0n,
+    prefixCopyCost: 0n,
+    spacePreflightCost: 0n,
+    estimatedCopyBytes: 0n,
+    elapsed: EMPTY_PERFORMANCE_HISTOGRAM,
+  },
+  finalTransactions: { count: 0n, elapsed: EMPTY_PERFORMANCE_HISTOGRAM },
+  ledger: {
+    entries: 0n,
+    pages: 0n,
+    seals: 0n,
+    recoveryScanFallbacks: 0n,
+    sealElapsed: EMPTY_PERFORMANCE_HISTOGRAM,
+  },
+  revisionOpens: {
+    attempts: 0n,
+    count: 0n,
+    wait: EMPTY_PERFORMANCE_HISTOGRAM,
+    run: EMPTY_PERFORMANCE_HISTOGRAM,
+    overlapMilliseconds: 0n,
+    maximumActive: 0,
+    activeAtCompletion: 0,
+  },
+  claimBatches: {
+    count: 0n,
+    members: 0n,
+    maximumSize: 0,
+    oldestWait: EMPTY_PERFORMANCE_HISTOGRAM,
+    newestWait: EMPTY_PERFORMANCE_HISTOGRAM,
+    run: EMPTY_PERFORMANCE_HISTOGRAM,
+    phases: Object.fromEntries(PERFORMANCE_CLAIM_PHASES_V1.map(phase => [phase, {
+      batchCount: 0n,
+      memberCount: 0n,
+      queue: EMPTY_PERFORMANCE_HISTOGRAM,
+      run: EMPTY_PERFORMANCE_HISTOGRAM,
+      activeMilliseconds: 0n,
+      overlapMilliseconds: 0n,
+      maximumActive: 0,
+      activeAtCompletion: 0,
+    }])) as never,
+    inspector: {
+      drains: 0n,
+      wallMilliseconds: 0n,
+      maximumWidth: 0,
+      atCapacityMilliseconds: 0n,
+      activeMilliseconds: 0n,
+      queuedMemberMilliseconds: 0n,
+      pendingMemberMilliseconds: 0n,
+      contextMilliseconds: {
+        resident: 0n,
+        unfinishedInspection: 0n,
+        orderedSettlement: 0n,
+      },
+      maximum: {
+        active: 0,
+        queuedMembers: 0,
+        pendingMembers: 0,
+        residentContexts: 0,
+        unfinishedInspectionContexts: 0,
+        orderedSettlementContexts: 0,
+      },
+      atCompletion: {
+        active: 0,
+        queuedMembers: 0,
+        pendingMembers: 0,
+        residentContexts: 0,
+        unfinishedInspectionContexts: 0,
+        orderedSettlementContexts: 0,
+      },
+      underCapacity: Object.fromEntries(PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1.map(reason => [
+        reason,
+        { wallMilliseconds: 0n, idleSlotMilliseconds: 0n },
+      ])) as never,
+    },
+  },
+  outputResources: {
+    activeFiles: { wait: EMPTY_PERFORMANCE_HISTOGRAM, peak: 0 },
+    writeBytes: { wait: EMPTY_PERFORMANCE_HISTOGRAM, peak: 0n },
+    bufferedBytes: { wait: EMPTY_PERFORMANCE_HISTOGRAM, peak: 0n },
+  },
+  milestones: {},
+  counterOverflowed: false,
+})
 
 const CORRELATION = Object.freeze({
   protocol_session_id: SESSION_ID,
@@ -343,6 +494,12 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
     discovery: 'open',
     partial: false,
   }),
+  observation('performance_phase', projectPerformancePhasePayloadV1({
+    correlation: PERFORMANCE_CORRELATION,
+    milestone: 'first_write',
+    observerElapsedMilliseconds: 12n,
+  })),
+  observation('performance_summary', PERFORMANCE_SUMMARY),
   observation('output_reservation', { backend: 'file_system_access', transition: 'acquired' }),
   observation('output_write', { backend: 'origin_private', transition: 'transaction_committed' }),
   observation('checkpoint', { backend: 'origin_private', transition: 'persisted' }),
@@ -471,6 +628,85 @@ describe('closed TraceEventObservationV1 boundary', () => {
     }
 
     for (const candidate of crossVariantFields()) expectRejected(candidate)
+  })
+
+  it('keeps performance correlation, nested keys, histogram bounds, and totals closed', () => {
+    const performance = VALID_OBSERVATIONS.find(
+      (candidate) => candidate.eventName === 'performance_summary',
+    )
+    if (performance === undefined) throw new Error('performance summary fixture is missing')
+
+    const extraCorrelation = clone(performance)
+    ;(extraCorrelation.payload.correlation as UnknownRecord).artifact_path = PRIVATE_TEXT
+    expectRejected(extraCorrelation)
+
+    const missingMilestone = clone(performance)
+    delete (missingMilestone.payload.milestones as UnknownRecord).published
+    expectRejected(missingMilestone)
+
+    const wrongBounds = clone(performance)
+    const writer = (wrongBounds.payload.queue as UnknownRecord).writer as UnknownRecord
+    const wait = writer.wait_ms as UnknownRecord
+    ;(wait.upper_bounds_ms as number[])[0] = 2
+    expectRejected(wrongBounds)
+
+    const extraHistogramField = clone(performance)
+    const extraWriter = (extraHistogramField.payload.queue as UnknownRecord)
+      .writer as UnknownRecord
+    ;(extraWriter.wait_ms as UnknownRecord).path = PRIVATE_TEXT
+    expectRejected(extraHistogramField)
+
+    const contradictoryCount = clone(performance)
+    ;(contradictoryCount.payload.revision_opens as UnknownRecord).count = '1'
+    expectRejected(contradictoryCount)
+
+    const contradictoryNamespace = clone(performance)
+    const namespace = (contradictoryNamespace.payload.queue as UnknownRecord)
+      .namespace as UnknownRecord
+    const namespaceWait = namespace.wait_ms as UnknownRecord
+    namespaceWait.bucket_counts = ['1', '0', '0', '0', '0', '0', '0', '0']
+    namespaceWait.sample_count = '1'
+    namespaceWait.total_ms = '1'
+    namespaceWait.maximum_ms = '1'
+    expectRejected(contradictoryNamespace)
+
+    const contradictoryPipeline = clone(performance)
+    ;(contradictoryPipeline.payload.file_pipeline as UnknownRecord).worker_ms = '1'
+    expectRejected(contradictoryPipeline)
+
+    const contradictoryClaimBatch = clone(performance)
+    ;(contradictoryClaimBatch.payload.claim_batches as UnknownRecord).count = '1'
+    expectRejected(contradictoryClaimBatch)
+
+    const contradictoryClaimPhases = clone(performance)
+    const phases = (contradictoryClaimPhases.payload.claim_batches as UnknownRecord)
+      .phases as UnknownRecord
+    ;(phases.installation as UnknownRecord).active_ms = '1'
+    expectRejected(contradictoryClaimPhases)
+
+    const missingInspectorReason = clone(performance)
+    const missingReasons = (((missingInspectorReason.payload.claim_batches as UnknownRecord)
+      .inspector as UnknownRecord).under_capacity as UnknownRecord)
+    delete missingReasons.ordered_settlement
+    expectRejected(missingInspectorReason)
+
+    const openInspector = clone(performance)
+    const completion = (((openInspector.payload.claim_batches as UnknownRecord)
+      .inspector as UnknownRecord).at_completion as UnknownRecord)
+    completion.active = 1
+    expectRejected(openInspector)
+
+    const nonConservedInspector = clone(performance)
+    const inspector = (nonConservedInspector.payload.claim_batches as UnknownRecord)
+      .inspector as UnknownRecord
+    inspector.drains = '1'
+    inspector.wall_ms = '1'
+    inspector.maximum_width = 3
+    const noPending = (inspector.under_capacity as UnknownRecord)
+      .no_pending_arrival as UnknownRecord
+    noPending.wall_ms = '1'
+    noPending.idle_slot_ms = '2'
+    expectRejected(nonConservedInspector)
   })
 
   it('rejects open text at every represented string and array-item position', () => {

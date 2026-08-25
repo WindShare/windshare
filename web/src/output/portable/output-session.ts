@@ -7,16 +7,21 @@ import {
 import type { PreparationFileEntry } from '../workspace/preparation'
 import {
   type BeginOutputFileResult,
+  type AutomaticCheckpointResult,
+  type AutomaticCheckpointTrigger,
   type FileRetirementDisposition,
   type OpenedOutputRevision,
   type OutputCapabilities,
+  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
   type OutputSessionIdentity,
   OutputSessionBindingError,
+  VerifiedFinalOutputFile,
   VerifiedDurableRanges,
+  disabledOutputExecutionProfile,
   outputCapabilities,
   outputSessionIdentity,
   snapshotOpenedOutputRevision,
@@ -52,6 +57,7 @@ export type PortableZipArchiveWriterFactory = (
 export class PortableOriginalOutputSession implements PortablePreparedOutput {
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
+  readonly executionProfile
   readonly #intent: ReceiveIntent
   readonly #entry: PreparationFileEntry
   readonly #handoff: PortableHandoffSession
@@ -78,6 +84,7 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
     )
     this.identity = this.#inner.identity
     this.capabilities = this.#inner.capabilities
+    this.executionProfile = this.#inner.executionProfile
   }
 
   get cleanupPending(): boolean {
@@ -165,6 +172,7 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
     fileFailureIsolation: false,
     modificationTime: false,
   })
+  readonly executionProfile = disabledOutputExecutionProfile(1)
 
   readonly #intent: ReceiveIntent
   readonly #entriesByPath: ReadonlyMap<string, PreparationFileEntry>
@@ -464,20 +472,27 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
     })
   }
 
-  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges> {
+  automaticCheckpoint(
+    _trigger: AutomaticCheckpointTrigger,
+    _budget: OutputCheckpointCostBudget,
+    signal: AbortSignal,
+  ): Promise<AutomaticCheckpointResult> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
-      return new VerifiedDurableRanges(
-        this.#ownership,
-        this.#revision,
-        this.#revision.exactSize,
-        [],
-      )
+      return Object.freeze({
+        kind: 'declined' as const,
+        reason: 'cost-evidence-unavailable' as const,
+        estimate: Object.freeze({
+          prefixCopyBytes: 0n,
+          cumulativeWriteAmplificationBytes: 0n,
+          peakTemporaryBytes: 0n,
+        }),
+      })
     })
   }
 
-  commit(signal: AbortSignal): Promise<void> {
+  commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
@@ -493,7 +508,11 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
         this.#failed(error)
         throw error
       }
-      signal.throwIfAborted()
+      return new VerifiedFinalOutputFile(
+        this.#ownership,
+        this.#revision,
+        this.#revision.exactSize,
+      )
     })
   }
 
@@ -514,8 +533,14 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
     })
   }
 
-  pause(reason: unknown): Promise<void> {
-    return this.retire(reason).then(() => undefined)
+  async pause(reason: unknown): Promise<VerifiedDurableRanges> {
+    await this.retire(reason)
+    return new VerifiedDurableRanges(
+      this.#ownership,
+      this.#revision,
+      this.#revision.exactSize,
+      [],
+    )
   }
 
   #enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -558,15 +583,16 @@ function observePortableTransaction(
   const observed: OutputFileTransaction = {
     writeRange: (offset, data, signal) =>
       observe('output_write', () => transaction.writeRange(offset, data, signal)),
-    checkpoint: signal =>
-      observe('output_write', () => transaction.checkpoint(signal)),
+    automaticCheckpoint: (trigger, budget, signal) =>
+      observe('output_write', () => transaction.automaticCheckpoint(trigger, budget, signal)),
     commit: async signal => {
-      await observe('output_commit', () => transaction.commit(signal))
+      const proof = await observe('output_commit', () => transaction.commit(signal))
       emitOutputTrace(diagnostics?.trace, () =>
         outputTraceEvent('output_write', {
           backend: 'portable',
           transition: 'transaction_committed',
         }))
+      return proof
     },
     retire: reason =>
       observe('cleanup', () => transaction.retire(reason)),

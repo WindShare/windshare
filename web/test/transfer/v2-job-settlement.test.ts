@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import {
+  disabledOutputExecutionProfile,
   TransferPauseRequestedError,
   TransferStopRequestedError,
 } from '../../src/transfer/output-session'
@@ -21,6 +22,7 @@ import {
   readerFixture,
   receiveIntentFixture,
   selectOnlyFile,
+  testOutput,
   transferJobFixture,
 } from './v2-job-fixture'
 
@@ -74,6 +76,67 @@ describe('v2 plan settlement', () => {
     expect(plans.stopSignals[0]?.aborted).toBe(true)
   })
 
+  it.each([
+    { control: 'pause', reason: () => new DOMException('pause transfer', 'AbortError') },
+    { control: 'stop', reason: () => new TransferStopRequestedError() },
+  ] as const)('closes DirectTree admission before cancellation directory finalization for $control', async ({
+    control,
+    reason,
+  }) => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readStarted = deferred<void>()
+    const releaseRead = deferred<void>()
+    const finalizeStarted = deferred<void>()
+    const releaseFinalize = deferred<void>()
+    const order: string[] = []
+    const readers = readerFixture([file], [], {
+      beforeRead: async () => {
+        readStarted.resolve()
+        await releaseRead.promise
+      },
+    })
+    const plans = planAuthorityFixture({
+      onDirectTreeBeginTerminal: kind => { order.push(`begin:${kind}`) },
+      beforeDirectoryFinalize: async () => {
+        order.push('finalize-directory')
+        finalizeStarted.resolve()
+        await releaseFinalize.promise
+      },
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+    const controller = new AbortController()
+    const running = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run(controller.signal)
+
+    await readStarted.promise
+    controller.abort(reason())
+    releaseRead.resolve()
+    await finalizeStarted.promise
+
+    expect(order).toEqual([`begin:${control}`, 'finalize-directory'])
+    expect(plans.terminalCuts).toEqual([control])
+    expect(plans.pauses).toEqual([])
+    expect(plans.stops).toEqual([])
+
+    releaseFinalize.resolve()
+    const result = await running
+    expect(result.worker.status).toBe('Paused')
+    expect(control === 'pause' ? plans.pauses : plans.stops).toHaveLength(1)
+  })
+
   it('settles DirectTree progressively as a partial directory after a file-local failure', async () => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
@@ -101,6 +164,36 @@ describe('v2 plan settlement', () => {
     expect(result.lifecycle.kind).toBe('partial-directory')
     expect(plans.settlements).toEqual(['direct-tree:CompletedWithErrors'])
     expect(plans.pauses).toEqual([])
+  })
+
+  it('keeps ordinary DirectTree settlement after directory finalization', async () => {
+    const root = identity(2)
+    const selection = new V2SelectionPolicy(true)
+    const catalog = catalogFixture([{ id: root, entries: [] }])
+    const readers = readerFixture([])
+    const order: string[] = []
+    const plans = planAuthorityFixture({
+      beforeDirectoryFinalize: () => { order.push('finalize-directory') },
+      beforeDirectTreeSettlement: () => { order.push('settle') },
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-tree',
+      artifactKind: 'directory-tree',
+      selection,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans,
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.lifecycle.kind).toBe('published')
+    expect(order).toEqual(['finalize-directory', 'settle'])
+    expect(plans.terminalCuts).toEqual([])
   })
 
   it.each([
@@ -145,7 +238,11 @@ describe('v2 plan settlement', () => {
           throw laterFailure
         },
       })
-      const plans = planAuthorityFixture()
+      const plans = planAuthorityFixture({
+        output: testOutput([], {
+          executionProfile: disabledOutputExecutionProfile(2),
+        }),
+      })
       const intent = await receiveIntentFixture({ planKind, artifactKind, selection })
       const traces: TransferTraceEvent[] = []
       const running = transferJobFixture({

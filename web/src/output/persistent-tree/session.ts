@@ -12,32 +12,43 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
-  deriveCheckpointLineageID,
+  FILE_CHECKPOINT_PHASE_PAUSED,
   identityBytes,
   newFileCheckpointV2,
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import type {
   CheckpointLineageDecision,
-  CheckpointNamespaceBinding,
   InitialCheckpointCASResult,
 } from '../persistence/journal'
+import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import type {
   OpenedFileRevision,
   PersistentDirectoryMaterialization,
+  PersistentDirectoryLedgerMaterialization,
+  PersistentDirectoryLedgerRequest,
   PersistentFileRequest,
   PersistentMaterializationPort,
   PersistentTreeSessionOptions,
   PersistentTreeFile,
   RecoverableFileCheckpointJournal,
+  SemanticPersistentOutputJournal,
 } from './contracts'
-import {
-  CheckpointLineageDecisionError,
-  DestinationCollisionError,
-  TargetOwnershipUnknownError,
-} from './errors'
+import { CheckpointLineageDecisionError, DestinationCollisionError, TargetOwnershipUnknownError } from './errors'
 import { PersistentFileTransaction } from './file-transaction'
-import { recoverFileCheckpointCandidates } from './recovery'
+import {
+  PersistentInitialClaimCoordinator,
+  DEFAULT_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+  persistentCheckpointLookup,
+  persistentInitialCheckpoint,
+  recoverFileCheckpointCandidates,
+} from './recovery'
+import {
+  isPristinePreObjectCandidate,
+  openPersistentSelectedFile,
+  PersistentDirectoryLedgerCoordinator,
+} from './materialization-authority'
 import {
   captureCheckpointFailureFacts,
   runPersistentOutputStage,
@@ -45,25 +56,23 @@ import {
 } from './stage-diagnostics'
 import { MutationAdmissionBarrier, type MutationAdmission } from './admission-barrier'
 
-type PersistentTreeTraceInput =
-  | Readonly<{
-      eventName: 'output_reservation'
-      transition: 'acquired' | 'failed'
-    }>
-  | Readonly<{
-      eventName: 'checkpoint'
-      transition: 'restored' | 'persisted' | 'failed'
-      decision?: 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid'
-    }>
+type PersistentTreeTraceInput = Readonly<{
+  eventName: 'output_reservation'; transition: 'acquired' | 'failed' }> |
+  Readonly<{ eventName: 'checkpoint'; transition: 'restored' | 'persisted' | 'failed';
+      decision?: 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid' }>
 
 export class PersistentTreeOutputSession implements PersistentMaterializationPort {
   readonly #tree: PersistentTreeSessionOptions['tree']
   readonly #checkpoints: RecoverableFileCheckpointJournal
+  readonly #semantic: SemanticPersistentOutputJournal | undefined
+  readonly #ledgerBinding: Promise<MaterializationLedgerBindingV1> | undefined
+  readonly #directoryLedger: PersistentDirectoryLedgerCoordinator | undefined
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #stageAuthority: PersistentTreeSessionOptions['stageAuthority']
   readonly #legacyTrace: PersistentTreeSessionOptions['trace']
   readonly #mutationAdmissions = new MutationAdmissionBarrier()
   readonly #recreatablePreObjectCandidates = new Set<string>()
+  readonly #initialClaims: PersistentInitialClaimCoordinator | undefined
   #needsAttentionReported = false
   #activated = false
   #activation: Promise<void> | undefined
@@ -73,6 +82,35 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
   private constructor(options: PersistentTreeSessionOptions) {
     this.#tree = options.tree
     this.#checkpoints = options.checkpoints
+    // Semantic final-file/ledger transactions belong to DirectTree composition.
+    // Workspace supplies only the recovery journal even when its concrete store
+    // happens to implement the wider repository interface.
+    this.#semantic = options.semantic
+    this.#initialClaims = this.#semantic === undefined
+      ? undefined
+        : new PersistentInitialClaimCoordinator(
+          options.tree,
+          this.#semantic,
+          options.maximumConcurrentInitialClaimInspections ??
+            DEFAULT_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+          options.diagnostics?.performance,
+        )
+    this.#ledgerBinding = this.#semantic === undefined
+      ? undefined
+      : createMaterializationLedgerBinding({
+          operationId: options.checkpoints.binding.operationId,
+          receiveIntentDigest: options.checkpoints.binding.receiveIntentDigest,
+          materializationBindingDigest: options.checkpoints.binding.materializationBindingDigest,
+          authorityRef: options.checkpoints.binding.authorityRef,
+        })
+    this.#directoryLedger = this.#semantic === undefined || this.#ledgerBinding === undefined
+      ? undefined
+        : new PersistentDirectoryLedgerCoordinator(
+          options.tree,
+          this.#semantic,
+          this.#ledgerBinding,
+          options.diagnostics?.performance,
+        )
     this.#diagnostics = options.diagnostics
     this.#stageAuthority = options.stageAuthority
     this.#legacyTrace = options.trace
@@ -175,8 +213,12 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           context,
         ),
       )
-      try {
-        const decision = await this.#selectInitialCheckpoint(revision, materializationRelativePath, stageScope)
+       const decision = await this.#selectInitialCheckpoint(
+         revision,
+         materializationRelativePath,
+         stageScope,
+         request.performancePipeline,
+       )
         this.#traceCheckpointDecision(revision.fileId, decision)
         const checkpoint = selectedCheckpoint(decision)
         const fileScope = stageScope?.withCorrelation({
@@ -184,26 +226,25 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpointRecordId: checkpoint.recordId,
           checkpointGeneration: checkpoint.checkpointGeneration,
         })
-        let handle = await this.#tree.openFile(
-          materializationRelativePath,
-          checkpoint.ownedObjectId,
+        const selected = await openPersistentSelectedFile({
+          tree: this.#tree,
+          ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
+          revision,
+          path: materializationRelativePath,
+          checkpoint,
+          ...(request.performancePipeline === undefined
+            ? {}
+            : { performancePipeline: request.performancePipeline }),
+          ...(fileScope === undefined ? {} : { stageScope: fileScope }),
+          promote: (candidate, scope) => this.#promoteInitialCheckpoint(candidate, scope),
+        })
+        const handle = selected.handle
+        const committed = await this.#prepareRecovery(
+          request,
+          handle,
+          selected.checkpoint,
           fileScope,
         )
-        if (handle === undefined) {
-          if (!isPristinePreObjectCandidate(checkpoint)) {
-            throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
-          }
-          handle = await this.#tree.createFileAfterRevisionOpen(
-            materializationRelativePath,
-            revision,
-            checkpoint.ownedObjectId,
-            fileScope,
-          )
-        }
-        await verifySelectedFile(handle, checkpoint, revision)
-        const committed = checkpoint.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE
-          ? await this.#promoteInitialCheckpoint(checkpoint, fileScope)
-          : checkpoint
         const transactionScope = fileScope?.withCorrelation({
           checkpointRecordId: committed.recordId,
           checkpointGeneration: committed.checkpointGeneration,
@@ -213,6 +254,22 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           handle,
           checkpoint: committed,
           checkpoints: this.#checkpoints,
+          ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
+          ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: await this.#ledgerBinding }),
+          recovery: request.recovery ?? Object.freeze({ kind: 'preserve' as const }),
+          ownership: Object.freeze({
+            ...(request.outputSession ?? {
+              backend: 'persistent-tree-internal',
+              outputSessionId: this.#checkpoints.binding.operationId,
+            }),
+            canonicalPath: materializationRelativePath,
+            ownedFileIdentity: committed.ownedObjectId,
+          }),
+          source: Object.freeze({
+            shareInstance: request.shareInstance ?? revision.fileId,
+            fileId: revision.fileId,
+            fileRevision: revision.fileRevision,
+          }),
           onClose: () => {
             admission.leave()
             transactionScope?.retireFileEvidence()
@@ -223,15 +280,16 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
             ? {}
             : { diagnostics: this.#diagnostics }),
         })
-        admission.transferTo(() => transaction.close())
+        admission.transferTo(async () => {
+          await transaction.pause(new DOMException('Persistent tree session paused', 'AbortError'))
+        })
         handedOff = true
-        return transaction
-      } catch (error) {
-        recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
-        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
-        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
-        throw error
-      }
+      return transaction
+    } catch (error) {
+      recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+      this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+      if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+      throw error
     } finally {
       if (!handedOff) {
         admission.leave()
@@ -254,6 +312,31 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
   }
 
+  async materializeDirectory(
+    request: PersistentDirectoryLedgerRequest,
+  ): Promise<PersistentDirectoryLedgerMaterialization> {
+    const admission = this.#mutationAdmissions.enter()
+    try {
+      this.#requireActivated()
+      return await this.#requireDirectoryLedger().materialize(request)
+    } finally {
+      admission.leave()
+    }
+  }
+
+  async finalizeDirectory(
+    ledgerAdmission: PersistentDirectoryLedgerMaterialization['ledgerAdmission'],
+    outcome: Parameters<PersistentDirectoryLedgerCoordinator['finalize']>[1],
+  ): ReturnType<PersistentDirectoryLedgerCoordinator['finalize']> {
+    const admission = this.#mutationAdmissions.enter()
+    try {
+      this.#requireActivated()
+      return this.#requireDirectoryLedger().finalize(ledgerAdmission, outcome)
+    } finally {
+      admission.leave()
+    }
+  }
+
   close(): Promise<void> {
     if (this.#closePromise !== undefined) return this.#closePromise
     this.#closed = true
@@ -266,18 +349,29 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     revision: OpenedFileRevision,
     materializationRelativePath: MaterializationRootRelativePath,
     stageScope: PersistentOutputStageScope | undefined,
+    performancePipeline: PersistentFileRequest['performancePipeline'],
   ): Promise<InitialCheckpointCASResult | CheckpointLineageDecision> {
-    const lookup = {
-      lineageId: deriveCheckpointLineageID({
-        ...this.#checkpoints.binding,
-        fileId: revision.fileId,
-        canonicalPath: materializationRelativePath,
-      }),
-      fileId: revision.fileId,
-      canonicalPath: materializationRelativePath,
-      fileRevision: revision.fileRevision,
-      exactSize: revision.exactSize,
-    } as const
+    if (this.#initialClaims === undefined) {
+      return this.#selectLegacyInitialCheckpoint(revision, materializationRelativePath, stageScope)
+    }
+    return this.#initialClaims.select(
+      revision,
+      materializationRelativePath,
+      stageScope,
+      performancePipeline,
+    )
+  }
+
+  async #selectLegacyInitialCheckpoint(
+    revision: OpenedFileRevision,
+    materializationRelativePath: MaterializationRootRelativePath,
+    stageScope: PersistentOutputStageScope | undefined,
+  ): Promise<InitialCheckpointCASResult | CheckpointLineageDecision> {
+    const lookup = persistentCheckpointLookup(
+      this.#checkpoints.binding,
+      revision,
+      materializationRelativePath,
+    )
     let decision: InitialCheckpointCASResult | CheckpointLineageDecision =
       await runPersistentOutputStage(
         stageScope,
@@ -308,7 +402,7 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
     if (decision.kind !== 'absent') return decision
 
-    const candidate = initialCheckpoint(
+    const candidate = persistentInitialCheckpoint(
       this.#checkpoints.binding,
       revision,
       materializationRelativePath,
@@ -368,6 +462,76 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       throw new TargetOwnershipUnknownError('checkpoint', candidate.operationId)
     }
     return reread
+  }
+
+  async #prepareRecovery(
+    request: PersistentFileRequest,
+    handle: PersistentTreeFile,
+    selected: FileCheckpointV2,
+    stageScope: PersistentOutputStageScope | undefined,
+  ): Promise<FileCheckpointV2> {
+    const recovery = request.recovery ?? Object.freeze({ kind: 'preserve' as const })
+    let checkpoint = selected
+    if (recovery.kind === 'restart-owned-file') {
+      if (checkpoint.phase !== FILE_CHECKPOINT_PHASE_PAUSED ||
+          checkpoint.ownedObjectId !== recovery.expectedOwnedObjectId) {
+        throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
+      }
+      if (this.#semantic === undefined || handle.persistedHandle === undefined) {
+        throw new DOMException(
+          'Explicit restart requires an exact durable handle authority',
+          'InvalidStateError',
+        )
+      }
+      const reset = newFileCheckpointV2({
+        ...checkpoint,
+        stateGeneration: checkpoint.stateGeneration + 1n,
+        checkpointGeneration: checkpoint.checkpointGeneration + 1n,
+        verifiedRanges: [],
+        phase: FILE_CHECKPOINT_PHASE_PAUSED,
+        commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+      })
+      await runPersistentOutputStage(
+        stageScope?.withCorrelation({
+          checkpointRecordId: reset.recordId,
+          checkpointGeneration: reset.checkpointGeneration,
+        }),
+        'indexeddb.checkpoint.restart-commit',
+        () => this.#semantic!.restartOwnedFile({
+          previous: checkpoint,
+          reset,
+          expectedHandle: handle.persistedHandle!,
+        }),
+      )
+      checkpoint = reset
+    }
+    if (checkpoint.phase !== FILE_CHECKPOINT_PHASE_PAUSED) return checkpoint
+    const active = newFileCheckpointV2({
+      ...checkpoint,
+      stateGeneration: checkpoint.stateGeneration + 1n,
+      checkpointGeneration: checkpoint.checkpointGeneration +
+        (this.#semantic === undefined ? 1n : 0n),
+      phase: FILE_CHECKPOINT_PHASE_ACTIVE,
+      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    })
+    if (this.#semantic !== undefined) {
+      await runPersistentOutputStage(
+        stageScope?.withCorrelation({
+          checkpointRecordId: active.recordId,
+          checkpointGeneration: active.checkpointGeneration,
+        }),
+        'indexeddb.checkpoint.resume-commit',
+        () => this.#semantic!.resumePausedCheckpoint(checkpoint, active),
+      )
+      return active
+    }
+    const candidate = newFileCheckpointV2({
+      ...active,
+      commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
+    })
+    await this.#checkpoints.stageCheckpointUpdate(checkpoint, candidate)
+    await this.#checkpoints.commitCheckpointCandidate(candidate, active)
+    return active
   }
 
   async #observeCandidate(
@@ -464,6 +628,13 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
     }
   }
 
+  #requireDirectoryLedger(): PersistentDirectoryLedgerCoordinator {
+    if (this.#directoryLedger === undefined) {
+      throw new DOMException('DirectTree materialization requires durable ledger authority', 'InvalidStateError')
+    }
+    return this.#directoryLedger
+  }
+
   #reportLegacyNeedsAttention(): void {
     if (this.#needsAttentionReported) return
     this.#needsAttentionReported = true
@@ -524,31 +695,6 @@ function snapshotOpenedRevision(input: OpenedFileRevision): OpenedFileRevision {
   return Object.freeze({ ...input })
 }
 
-function initialCheckpoint(
-  binding: CheckpointNamespaceBinding,
-  revision: OpenedFileRevision,
-  materializationRelativePath: MaterializationRootRelativePath,
-  ownedObjectId: string,
-): FileCheckpointV2 {
-  return newFileCheckpointV2({
-    operationId: binding.operationId,
-    receiveIntentDigest: binding.receiveIntentDigest,
-    materializationBindingDigest: binding.materializationBindingDigest,
-    fileId: revision.fileId,
-    fileRevision: revision.fileRevision,
-    canonicalPath: materializationRelativePath,
-    exactSize: revision.exactSize,
-    materializerKind: binding.materializerKind,
-    authorityRef: binding.authorityRef,
-    ownedObjectId,
-    stateGeneration: 1n,
-    checkpointGeneration: 0n,
-    verifiedRanges: [],
-    phase: FILE_CHECKPOINT_PHASE_ACTIVE,
-    commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
-  })
-}
-
 function selectedCheckpoint(
   decision: InitialCheckpointCASResult | CheckpointLineageDecision,
 ): FileCheckpointV2 {
@@ -563,30 +709,6 @@ function selectedCheckpoint(
     case 'absent':
       throw new TypeError('checkpoint lineage remained absent after atomic creation')
   }
-}
-
-function isPristinePreObjectCandidate(checkpoint: FileCheckpointV2): boolean {
-  return checkpoint.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE &&
-    checkpoint.phase === FILE_CHECKPOINT_PHASE_ACTIVE &&
-    checkpoint.stateGeneration === 1n &&
-    checkpoint.checkpointGeneration === 0n &&
-    checkpoint.verifiedRanges.length === 0
-}
-
-async function verifySelectedFile(
-  handle: PersistentTreeFile,
-  checkpoint: FileCheckpointV2,
-  revision: OpenedFileRevision,
-): Promise<void> {
-  if (handle.ownedObjectId !== checkpoint.ownedObjectId) {
-    throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
-  }
-  const actualSize = await handle.size()
-  const durableEnd = checkpoint.verifiedRanges.at(-1)?.end ?? 0n
-  if (actualSize < durableEnd || actualSize > revision.exactSize) {
-    throw new TargetOwnershipUnknownError('checkpoint', checkpoint.operationId)
-  }
-  await handle.verify('checkpoint')
 }
 
 export type {

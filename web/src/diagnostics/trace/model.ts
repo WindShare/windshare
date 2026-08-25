@@ -1,6 +1,8 @@
 import type { TraceCapacityPolicy } from './capacity'
 import type {
   CapacityWaitTransitionPayloadV1,
+  PerformancePhasePayloadV1,
+  PerformanceSummaryPayloadV1,
   TransferProgressPayloadV1,
 } from './transfer-payload'
 import type { CorrelationV1 } from '../export/correlation-v1'
@@ -45,6 +47,8 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'receive_transition',
   'lifecycle_action_transition',
   'transfer_progress',
+  'performance_phase',
+  'performance_summary',
   'output_reservation',
   'output_write',
   'checkpoint',
@@ -569,6 +573,8 @@ export interface TraceEventPayloadByNameV1 {
     lifecycle_state?: LifecycleStateV1
   }>
   readonly transfer_progress: TransferProgressPayloadV1
+  readonly performance_phase: PerformancePhasePayloadV1
+  readonly performance_summary: PerformanceSummaryPayloadV1
   readonly output_reservation: Readonly<{
     backend: OutputBackendV1
     transition: 'started' | 'acquired' | 'reopened' | 'failed'

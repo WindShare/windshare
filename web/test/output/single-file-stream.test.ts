@@ -18,6 +18,13 @@ const FILE_ID = identityText(2)
 const FILE_REVISION = identityText(3)
 
 describe('single-file stream output session', () => {
+  it('advertises its explicit single-writer execution profile', () => {
+    const output = recordingStream()
+    const session = new SingleFileStreamOutputSession('profile', output.stream)
+
+    expect(session.executionProfile.maximumConcurrentFilePipelines).toBe(1)
+  })
+
   it('does not acquire output authority when revision authentication fails or retry it', async () => {
     const output = recordingStream()
     const failure = new Error('revision unavailable')
@@ -95,8 +102,20 @@ describe('single-file stream output session', () => {
     callerBytes.fill(9)
     await firstWrite
     await begun.transaction.writeRange(2n, Uint8Array.of(3), ACTIVE_SIGNAL)
-    await expect(begun.transaction.checkpoint(ACTIVE_SIGNAL)).resolves.toMatchObject({ ranges: [] })
-    await begun.transaction.commit(ACTIVE_SIGNAL)
+    await expect(begun.transaction.automaticCheckpoint('pending-bytes', {
+      maximumPrefixCopyBytes: 0n,
+      maximumCumulativeWriteAmplificationBytes: 0n,
+      maximumPeakTemporaryBytes: 0n,
+    }, ACTIVE_SIGNAL)).resolves.toMatchObject({ kind: 'declined' })
+    await expect(begun.transaction.commit(ACTIVE_SIGNAL)).resolves.toMatchObject({
+      source: {
+        shareInstance: revision.shareInstance,
+        fileId: revision.fileId,
+        fileRevision: revision.fileRevision,
+      },
+      fileSize: 3n,
+      ownership: { canonicalPath: ['chosen', 'result.bin'] },
+    })
 
     expect(output.bytes()).toEqual(Uint8Array.of(1, 2, 3))
     expect(output.closed).toBe(true)

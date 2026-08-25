@@ -1,20 +1,15 @@
-import { ByteRangeSet, type ByteRange } from '../content/geometry'
-import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import type { AuthenticatedGenerationReference } from '../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../output/workspace/preparation'
 import type { ReceiveLifecycleState } from '../output/workspace/state'
 import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
+import type { PerformanceSummaryObservations } from '../output/diagnostics/performance-summary'
 import {
   FaultScope,
   isFault,
   type Fault,
 } from './fault'
 import {
-  MAX_MATERIALIZATION_PATH_BYTES,
-  snapshotCanonicalModifiedTime,
-  snapshotDirectoryAdmission,
   snapshotMaterializationDirectory,
-  snapshotMaterializationPath,
   type CanonicalModifiedTime,
   type DirectoryAdmission,
   type DirectorySettlement,
@@ -45,126 +40,19 @@ import type {
 import type { AuthenticatedLogicalSiblingMembership } from './job/contract'
 import {
   snapshotLogicalArtifactPath,
-  snapshotMaterializationRootRelativePath,
   snapshotSourceAuthenticationPath,
-  type DirectTreeCoordinateContract,
   type LogicalArtifactPath,
-  type MaterializationRootRelativePath,
   type SourceAuthenticationPath,
 } from './job/coordinate/direct-tree'
+import {
+  OutputSessionBindingError,
+  outputCapabilities,
+  outputExecutionProfile,
+  outputSessionIdentity,
+  type OutputSession,
+} from './output-file-contract'
 
-export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
-export type FileRetirementDisposition = 'FileIsolated' | 'JobOutputCompromised'
-
-export const MAXIMUM_OPEN_OUTPUT_FILES = 32
-export const MAXIMUM_OUTPUT_IDENTITY_BYTES = 128
-export const MAXIMUM_OWNED_FILE_IDENTITY_BYTES = MAX_MATERIALIZATION_PATH_BYTES + 256
-export const MAXIMUM_VERIFIED_DURABLE_RANGES = 16_384
-const OUTPUT_CATALOG_IDENTITY_BYTES = 16
-
-export interface OutputCapabilities {
-  readonly durability: DurabilityLevel
-  readonly randomWrite: boolean
-  readonly fileFailureIsolation: boolean
-  readonly modificationTime: boolean
-}
-
-export interface OutputCatalogFileIdentity {
-  readonly shareInstance: string
-  readonly fileId: string
-}
-
-export interface OutputSourceIdentity extends OutputCatalogFileIdentity {
-  readonly fileRevision: string
-}
-
-export interface OpenedOutputRevision extends OutputSourceIdentity {
-  readonly exactSize: bigint
-}
-
-export interface OutputSessionIdentity {
-  readonly backend: string
-  readonly outputSessionId: string
-}
-
-export interface OutputFileOwnership extends OutputSessionIdentity {
-  readonly canonicalPath: readonly string[]
-  /** Prevents a journal-owned path from matching a pre-existing file at the same path. */
-  readonly ownedFileIdentity: string
-}
-
-/**
- * The adapter must invoke openRevision and await it before creating or opening an
- * output object. This callback boundary keeps failed preparation/revision opens
- * from leaving placeholders in a destination namespace.
- */
-export interface OutputFileRequest {
-  readonly source: OutputCatalogFileIdentity
-  readonly sourceAuthenticationPath: SourceAuthenticationPath
-  readonly logicalArtifactPath: LogicalArtifactPath
-  readonly materializationRelativePath: MaterializationRootRelativePath
-  readonly expectedSize: bigint
-  readonly parentAdmission?: DirectoryAdmission
-  readonly modifiedTime?: CanonicalModifiedTime
-  readonly openRevision: (signal: AbortSignal) => Promise<OpenedOutputRevision>
-}
-
-export interface OutputFile {
-  readonly source: OutputSourceIdentity
-  readonly sourceAuthenticationPath: SourceAuthenticationPath
-  readonly logicalArtifactPath: LogicalArtifactPath
-  readonly materializationRelativePath: MaterializationRootRelativePath
-  readonly exactSize: bigint
-  readonly parentAdmission?: DirectoryAdmission
-  readonly modifiedTime?: CanonicalModifiedTime
-}
-
-/** Only a backend may return this value after reopening and validating output. */
-export class VerifiedDurableRanges {
-  readonly ownership: OutputFileOwnership
-  readonly source: OutputSourceIdentity
-  readonly #ranges: ByteRangeSet
-
-  constructor(
-    ownership: OutputFileOwnership,
-    source: OutputSourceIdentity,
-    fileSize: bigint,
-    ranges: readonly ByteRange[],
-  ) {
-    this.ownership = snapshotOutputOwnership(ownership)
-    this.source = snapshotOutputSource(source)
-    this.#ranges = verifiedDurableRangeSet(fileSize, ranges)
-  }
-
-  get fileSize(): bigint { return this.#ranges.fileSize }
-  get ranges(): readonly ByteRange[] { return this.#ranges.ranges }
-  covers(range: ByteRange): boolean { return this.#ranges.covers(range) }
-  asRangeSet(): ByteRangeSet { return new ByteRangeSet(this.fileSize, this.ranges) }
-}
-
-export interface OutputFileTransaction {
-  writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void>
-  /** Durable sessions report journaled ranges; transient streams retain an empty range set. */
-  checkpoint(signal: AbortSignal): Promise<VerifiedDurableRanges>
-  commit(signal: AbortSignal): Promise<void>
-  /** A streaming backend may still retire a failed member when no bytes were emitted. */
-  retire(reason: unknown): Promise<FileRetirementDisposition>
-  /** Reaches the backend's stable resumable cut without deleting owned output. */
-  pause(reason: unknown): Promise<void>
-}
-
-export interface BeginOutputFileResult {
-  readonly revision: OpenedOutputRevision
-  readonly transaction: OutputFileTransaction
-  readonly durableRanges: VerifiedDurableRanges
-}
-
-/** A materializer owns bytes and checkpoints only; artifact semantics stay in the plan execution. */
-export interface OutputSession {
-  readonly identity: OutputSessionIdentity
-  readonly capabilities: OutputCapabilities
-  beginFile(file: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult>
-}
+export * from './output-file-contract'
 
 export interface DirectoryMaterializationRequest {
   readonly directory: MaterializationDirectory
@@ -224,8 +112,10 @@ interface PlanExecutionBase<
 export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   readonly planKind: 'direct-tree'
   readonly directories: IncrementalDirectoryOutput
+  readonly performance?: PerformanceSummaryObservations
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
   readonly terminalSettlementInitiated?: () => boolean
+  beginTerminal(kind: 'pause' | 'stop' | 'settle'): void
   settle(
     request: PlanSettlementRequest<CompletedTransferWorkerSettlement>,
     signal: AbortSignal,
@@ -353,13 +243,6 @@ export interface V2PlanExecutionAuthority {
   ): Promise<Extract<ReceiveLifecycleState, { readonly kind: 'needs-attention' }>>
 }
 
-export class OutputSessionBindingError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'OutputSessionBindingError'
-  }
-}
-
 /** Backend-authored classification for a directory mutation that may be isolated safely. */
 export class OutputDirectoryMutationError extends Error {
   readonly sessionCompromised: boolean
@@ -388,6 +271,9 @@ export function validatePlanExecutionBinding<Execution extends PlanExecution>(
   }
   outputSessionIdentity(execution.output.identity)
   outputCapabilities(execution.output.capabilities)
+  if (execution.planKind !== 'direct-resumable-zip') {
+    outputExecutionProfile(execution.output.executionProfile)
+  }
   if (intent.plan.kind === 'direct-tree' && !hasDirectoryPort(execution)) {
     throw new OutputSessionBindingError('DirectTree execution requires incremental directory authority')
   }
@@ -426,150 +312,6 @@ export class TransferStopRequestedError extends Error {
   }
 }
 
-/** A finite output-operation budget was exhausted before accepting more state. */
-export class OutputBudgetExceededError extends Error {
-  readonly budget: string
-  readonly limit: bigint
-  readonly attempted: bigint
-
-  constructor(budget: string, limit: bigint, attempted: bigint) {
-    super(`Output budget ${budget} permits ${limit.toString()}, attempted ${attempted.toString()}`)
-    this.name = 'OutputBudgetExceededError'
-    this.budget = budget
-    this.limit = limit
-    this.attempted = attempted
-  }
-}
-
-export function outputCapabilities(capabilities: OutputCapabilities): OutputCapabilities {
-  if ((capabilities.durability !== 'None' &&
-       capabilities.durability !== 'ProcessRestart' &&
-       capabilities.durability !== 'PowerLoss') ||
-      typeof capabilities.randomWrite !== 'boolean' ||
-      typeof capabilities.fileFailureIsolation !== 'boolean' ||
-      typeof capabilities.modificationTime !== 'boolean') {
-    throw new OutputSessionBindingError('output session reported malformed capabilities')
-  }
-  return Object.freeze({ ...capabilities })
-}
-
-export function outputSessionIdentity(identity: OutputSessionIdentity): OutputSessionIdentity {
-  return Object.freeze({
-    backend: requireIdentityPart(identity.backend, 'output backend', MAXIMUM_OUTPUT_IDENTITY_BYTES),
-    outputSessionId: requireIdentityPart(
-      identity.outputSessionId,
-      'output session',
-      MAXIMUM_OUTPUT_IDENTITY_BYTES,
-    ),
-  })
-}
-
-export function snapshotOutputFileRequest(
-  file: OutputFileRequest,
-  directTreeCoordinates?: DirectTreeCoordinateContract,
-): OutputFileRequest {
-  if (typeof file.expectedSize !== 'bigint' || file.expectedSize < 0n) {
-    throw new RangeError('expected output file size must not be negative')
-  }
-  if (typeof file.openRevision !== 'function') {
-    throw new TypeError('output file request requires an authenticated revision callback')
-  }
-  const sourceAuthenticationPath = snapshotSourceAuthenticationPath(file.sourceAuthenticationPath)
-  const logicalArtifactPath = snapshotLogicalArtifactPath(file.logicalArtifactPath)
-  const materializationRelativePath = snapshotMaterializationRootRelativePath(
-    file.materializationRelativePath,
-  )
-  if (sourceAuthenticationPath.length === 0 ||
-      logicalArtifactPath.length === 0 ||
-      !materializationCoordinateIdentifiesFile(
-        file.source,
-        sourceAuthenticationPath,
-        logicalArtifactPath,
-        materializationRelativePath,
-        directTreeCoordinates,
-      )) {
-    throw new TypeError('output file coordinates must identify a file')
-  }
-  return Object.freeze({
-    source: snapshotOutputCatalogFileIdentity(file.source),
-    sourceAuthenticationPath,
-    logicalArtifactPath,
-    materializationRelativePath,
-    expectedSize: file.expectedSize,
-    ...(file.parentAdmission === undefined
-      ? {}
-      : { parentAdmission: snapshotDirectoryAdmission(file.parentAdmission) }),
-    ...(file.modifiedTime === undefined
-      ? {}
-      : { modifiedTime: snapshotCanonicalModifiedTime(file.modifiedTime) }),
-    openRevision: file.openRevision,
-  })
-}
-
-export function snapshotOutputFile(
-  file: OutputFile,
-  directTreeCoordinates?: DirectTreeCoordinateContract,
-): OutputFile {
-  if (typeof file.exactSize !== 'bigint' || file.exactSize < 0n) {
-    throw new RangeError('output file size must not be negative')
-  }
-  const sourceAuthenticationPath = snapshotSourceAuthenticationPath(file.sourceAuthenticationPath)
-  const logicalArtifactPath = snapshotLogicalArtifactPath(file.logicalArtifactPath)
-  const materializationRelativePath = snapshotMaterializationRootRelativePath(
-    file.materializationRelativePath,
-  )
-  if (sourceAuthenticationPath.length === 0 ||
-      logicalArtifactPath.length === 0 ||
-      !materializationCoordinateIdentifiesFile(
-        file.source,
-        sourceAuthenticationPath,
-        logicalArtifactPath,
-        materializationRelativePath,
-        directTreeCoordinates,
-      )) {
-    throw new TypeError('output file coordinates must identify a file')
-  }
-  return Object.freeze({
-    source: snapshotOutputSource(file.source),
-    sourceAuthenticationPath,
-    logicalArtifactPath,
-    materializationRelativePath,
-    exactSize: file.exactSize,
-    ...(file.parentAdmission === undefined
-      ? {}
-      : { parentAdmission: snapshotDirectoryAdmission(file.parentAdmission) }),
-    ...(file.modifiedTime === undefined
-      ? {}
-      : { modifiedTime: snapshotCanonicalModifiedTime(file.modifiedTime) }),
-  })
-}
-
-// An FSA named-file reservation makes the file itself the materialization root.
-// Requiring the validated projector here keeps [] unavailable to portable and
-// native outputs, where an empty coordinate would mean a missing file name.
-function materializationCoordinateIdentifiesFile(
-  source: OutputCatalogFileIdentity,
-  sourceAuthenticationPath: SourceAuthenticationPath,
-  logicalArtifactPath: LogicalArtifactPath,
-  materializationRelativePath: MaterializationRootRelativePath,
-  directTreeCoordinates: DirectTreeCoordinateContract | undefined,
-): boolean {
-  if (materializationRelativePath.length !== 0) return true
-  if (directTreeCoordinates?.coordinate !== 'fsa-reserved-root-relative' ||
-      directTreeCoordinates.intent.artifact.layout.kind !== 'single-file' ||
-      source.shareInstance !== directTreeCoordinates.intent.shareInstance ||
-      source.fileId !== directTreeCoordinates.intent.artifact.layout.fileId) {
-    return false
-  }
-  const projection = directTreeCoordinates.projectFile(sourceAuthenticationPath)
-  return projection.relativePath.length === 0 &&
-    sameCoordinate(projection.logicalArtifactPath, logicalArtifactPath)
-}
-
-function sameCoordinate(left: readonly string[], right: readonly string[]): boolean {
-  return left.length === right.length && left.every((segment, index) => segment === right[index])
-}
-
 export function snapshotDirectoryMaterializationRequest(
   request: DirectoryMaterializationRequest,
 ): DirectoryMaterializationRequest {
@@ -602,80 +344,6 @@ function snapshotLogicalSiblingMembership(
     generation: source.generation,
     hasCommittedName: (candidate: string) => membership.hasCommittedName(candidate),
   })
-}
-
-export function snapshotOpenedOutputRevision(revision: OpenedOutputRevision): OpenedOutputRevision {
-  if (typeof revision.exactSize !== 'bigint' || revision.exactSize < 0n) {
-    throw new TypeError('opened output revision size is invalid')
-  }
-  return Object.freeze({
-    ...snapshotOutputSource(revision),
-    exactSize: revision.exactSize,
-  })
-}
-
-function snapshotOutputCatalogFileIdentity(source: OutputCatalogFileIdentity): OutputCatalogFileIdentity {
-  return Object.freeze({
-    shareInstance: requireSourceIdentity(source.shareInstance, 'shareInstance'),
-    fileId: requireSourceIdentity(source.fileId, 'fileId'),
-  })
-}
-
-function snapshotOutputSource(source: OutputSourceIdentity): OutputSourceIdentity {
-  return Object.freeze({
-    ...snapshotOutputCatalogFileIdentity(source),
-    fileRevision: requireSourceIdentity(source.fileRevision, 'fileRevision'),
-  })
-}
-
-function snapshotOutputOwnership(ownership: OutputFileOwnership): OutputFileOwnership {
-  const identity = outputSessionIdentity(ownership)
-  return Object.freeze({
-    ...identity,
-    canonicalPath: snapshotMaterializationPath(ownership.canonicalPath),
-    ownedFileIdentity: requireIdentityPart(
-      ownership.ownedFileIdentity,
-      'owned output file',
-      MAXIMUM_OWNED_FILE_IDENTITY_BYTES,
-    ),
-  })
-}
-
-function requireIdentityPart(value: string, label: string, maximumBytes: number): string {
-  if (typeof value !== 'string' || value.length === 0 ||
-      new TextEncoder().encode(value).byteLength > maximumBytes) {
-    throw new TypeError(`${label} identity must contain at most ${maximumBytes} bytes`)
-  }
-  return value
-}
-
-function requireSourceIdentity(value: string, label: string): string {
-  const decoded = decodeBase64Url(value)
-  if (decoded === undefined || decoded.byteLength !== OUTPUT_CATALOG_IDENTITY_BYTES ||
-      decoded.every((byte) => byte === 0) || encodeBase64Url(decoded) !== value) {
-    throw new OutputSessionBindingError(
-      `output source ${label} must be a canonical non-zero ${OUTPUT_CATALOG_IDENTITY_BYTES}-byte identity`,
-    )
-  }
-  return value
-}
-
-function verifiedDurableRangeSet(fileSize: bigint, ranges: readonly ByteRange[]): ByteRangeSet {
-  if (!Array.isArray(ranges) || ranges.length > MAXIMUM_VERIFIED_DURABLE_RANGES) {
-    throw new OutputSessionBindingError('output durable ranges exceed their canonical count limit')
-  }
-  let previousEnd: bigint | undefined
-  for (const range of ranges) {
-    if (typeof range?.start !== 'bigint' || typeof range.end !== 'bigint' ||
-        range.start < 0n || range.start >= range.end || range.end > fileSize ||
-        (previousEnd !== undefined && range.start <= previousEnd)) {
-      throw new OutputSessionBindingError(
-        'output durable ranges must be sorted, non-overlapping, non-adjacent, and within the file',
-      )
-    }
-    previousEnd = range.end
-  }
-  return new ByteRangeSet(fileSize, ranges)
 }
 
 export function needsAttentionFault(fault: Fault): Fault {

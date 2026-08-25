@@ -28,7 +28,13 @@ import {
 } from '../../src/output/workspace/records'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
 import {
+  FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
+  FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+  FSA_DIRECT_TREE_EXECUTION_PROFILE,
   FSAReceiveOperation,
+  WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
+  WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
+  WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
 } from '../../src/ui/browser-receive/fsa'
 import {
   MemoryDirectory,
@@ -54,6 +60,29 @@ import {
   routeFixture,
 } from './fsa-route-activation-fixture'
 
+const MEBIBYTE_BYTES = 1024n * 1024n
+
+describe('FSA DirectTree execution policy', () => {
+  it('publishes static checkpoint and recovery-preflight budgets', () => {
+    expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES).toBe(15)
+    expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS).toBe(8)
+    expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS).toBe(3)
+    expect(FSA_DIRECT_TREE_EXECUTION_PROFILE).toMatchObject({
+      maximumConcurrentFilePipelines: WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
+      maximumOutstandingWriteBytes: 8n * MEBIBYTE_BYTES,
+      maximumBufferedBytes: 8n * MEBIBYTE_BYTES,
+    })
+    expect(FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER).toEqual({
+      pendingBytes: 64n * MEBIBYTE_BYTES,
+      pendingMilliseconds: 30_000,
+    })
+    expect(FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET).toEqual({
+      maximumPrefixCopyBytes: 256n * MEBIBYTE_BYTES,
+      maximumCumulativeWriteAmplificationBytes: 512n * MEBIBYTE_BYTES,
+      maximumPeakTemporaryBytes: 256n * MEBIBYTE_BYTES,
+    })
+  })
+})
 
 describe('FSA presentation route activation', () => {
   it('starts no route work while the one picker is pending and drains late success after release', async () => {
@@ -433,6 +462,7 @@ describe('FSA compatible-name route activation', () => {
     const transferJobId = identity(43)
     const observedSessionIds: string[] = []
     const observedTransferJobIds: string[] = []
+    const observedWriterCeilings: number[] = []
     const localOutputFailures: LocalOutputOperationFailureDiagnosticsPort = {
       forAttempt: (input) => {
         observedSessionIds.push(input.outputSessionId)
@@ -450,6 +480,14 @@ describe('FSA compatible-name route activation', () => {
       parent,
       new TestRepository(),
       {
+        acquireRootLease: (handle, maximumActiveWriters) => {
+          observedWriterCeilings.push(maximumActiveWriters)
+          return acquireFSARootMutationLease(
+            handle,
+            new MemoryLockManager(),
+            maximumActiveWriters,
+          )
+        },
         createOutputSessionId: () => outputSessionId,
         createTransferJobId: () => transferJobId,
       },
@@ -466,7 +504,15 @@ describe('FSA compatible-name route activation', () => {
 
     expect(observedSessionIds).toEqual([outputSessionId])
     expect(observedTransferJobIds).toEqual([transferJobId])
+    expect(observedWriterCeilings).toEqual([8])
     expect(execution.output.identity.outputSessionId).toBe(outputSessionId)
+    expect(execution.output.executionProfile).toEqual(FSA_DIRECT_TREE_EXECUTION_PROFILE)
+    expect(execution.output.executionProfile.maximumConcurrentFilePipelines).toBe(15)
+    expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
+      kind: 'bounded',
+      trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
+      costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
+    })
     await result.operation.detach()
   })
 })

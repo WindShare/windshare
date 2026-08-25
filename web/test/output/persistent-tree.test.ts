@@ -9,6 +9,8 @@ import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
+  FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PAUSED,
   classifyCheckpointLineage,
   deriveCheckpointLineageID,
   fileCheckpointIsComplete,
@@ -19,6 +21,7 @@ import {
   type FileCheckpointV2,
 } from '../../src/output/persistence/checkpoint'
 import {
+  FILE_CHECKPOINT_BATCH_REQUEST_LIMIT,
   checkpointMatchesNamespace,
   finalFileCheckpointProof,
   type CheckpointLineageDecision,
@@ -28,19 +31,24 @@ import {
   type FileCheckpointPage,
   type FileCheckpointScan,
   type FinalFileCheckpointProof,
+  type PersistentHandleRecord,
 } from '../../src/output/persistence/journal'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import type {
   OpenedFileRevision,
-  PersistentDirectoryMaterialization,
-  PersistentOutputTree,
-  PersistentTreeFile,
   PersistentTreeTraceEvent,
+  SemanticPersistentOutputJournal,
 } from '../../src/output/persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import type { FileCheckpointCandidateObservation } from '../../src/output/persistent-tree/recovery'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import { identity } from './planning/fixture'
+import {
+  MemoryTree,
+  beginInitialClaim,
+  deferred,
+  seedOccupiedClaim,
+} from './persistent-tree-file-fixture'
 
 const FILE_ID = identity(21)
 const FILE_REVISION = identity(22)
@@ -81,6 +89,28 @@ describe('persistent DirectoryTree materialization port', () => {
     expect(transaction.verifiedRanges).toEqual([{ start: 0n, end: 3n }])
   })
 
+  it('keeps a natively accepted write pending when cancellation arrives before its return', async () => {
+    const fixture = await materializationFixture()
+    const write = fixture.tree.deferFileWrite(['cancelled.bin'])
+    const transaction = await fixture.session.beginFile({
+      materializationRelativePath: ['cancelled.bin'],
+      openRevision: async () => revision(2n),
+    })
+    const controller = new AbortController()
+
+    const writing = transaction.writeRange(0n, Uint8Array.of(1, 2), controller.signal)
+    await write.accepted
+    controller.abort(new DOMException('cancel after native acceptance', 'AbortError'))
+    write.release()
+
+    const writeOutcome = await writing.then(() => 'accepted' as const, () => 'rejected' as const)
+    const durable = await transaction.pause()
+    expect({ writeOutcome, durable }).toEqual({
+      writeOutcome: 'accepted',
+      durable: [{ start: 0n, end: 2n }],
+    })
+  })
+
   it('reopens the same owned file after restart and completes from its persisted range', async () => {
     const fixture = await materializationFixture()
     const first = await fixture.session.beginFile({
@@ -88,16 +118,16 @@ describe('persistent DirectoryTree materialization port', () => {
       openRevision: async () => revision(6n),
     })
     await first.writeRange(0n, Uint8Array.of(1, 2, 3))
-    await first.checkpoint()
-    await first.close()
+    await first.pause()
     await fixture.session.close()
 
     const reopened = await PersistentTreeOutputSession.open({
       tree: fixture.tree,
-      checkpoints: fixture.checkpoints,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
     })
     const second = await reopened.beginFile({
       materializationRelativePath: ['report.bin'],
+      recovery: preservingRecoveryPolicy(),
       openRevision: async () => revision(6n),
     })
     expect(second.ownedObjectId).toBe(first.ownedObjectId)
@@ -128,6 +158,370 @@ describe('persistent DirectoryTree materialization port', () => {
     expect(transaction.verifiedRanges).toEqual([])
     expect(fixture.tree.visible(['empty.bin'])).toEqual(new Uint8Array())
   })
+
+  it('uses one native final cut and one atomic final transaction for a small file', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      materializationRelativePath: ['small.bin'],
+      shareInstance: identity(24),
+      outputSession: { backend: 'direct-tree-test', outputSessionId: identity(1) },
+      openRevision: async () => revision(3n),
+    })
+    const file = fixture.tree.file(['small.bin'])
+    await transaction.writeRange(0n, Uint8Array.of(1, 2, 3))
+    await transaction.commit()
+
+    expect(file.writerModes).toEqual(['truncate'])
+    expect(file.flushCount).toBe(1)
+    expect(file.sizeCount).toBe(1)
+    expect(file.verificationCount('commit')).toBe(1)
+    expect(fixture.checkpoints.commitCreatedFileCount).toBe(1)
+    expect(fixture.checkpoints.commitFinalFileCount).toBe(1)
+    expect(fixture.checkpoints.readCommittedCount).toBe(0)
+    expect(fixture.checkpoints.finalCheckpointProofCount).toBe(0)
+  })
+
+  it('finalizes a zero-byte file without opening a writer', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      materializationRelativePath: ['zero.bin'],
+      openRevision: async () => revision(0n),
+    })
+    const file = fixture.tree.file(['zero.bin'])
+    await transaction.commit()
+
+    expect(file.writerOpenCount).toBe(0)
+    expect(file.flushCount).toBe(0)
+    expect(file.sizeCount).toBe(1)
+    expect(file.verificationCount('commit')).toBe(1)
+    expect(fixture.checkpoints.commitFinalFileCount).toBe(1)
+  })
+
+  it('advances one queued automatic checkpoint and reopens preserving the durable prefix', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      materializationRelativePath: ['periodic.bin'],
+      recovery: preservingRecoveryPolicy(),
+      openRevision: async () => revision(6n),
+    })
+    const file = fixture.tree.file(['periodic.bin'])
+    await transaction.writeRange(0n, Uint8Array.of(1, 2, 3))
+    await expect(transaction.automaticCheckpoint(
+      'pending-bytes',
+      preservingRecoveryPolicy().costBudget,
+    )).resolves.toMatchObject({ kind: 'advanced' })
+    await transaction.writeRange(3n, Uint8Array.of(4, 5, 6))
+    await transaction.commit()
+
+    expect(file.writerModes).toEqual(['truncate', 'preserve'])
+    expect(file.preflightCount).toBe(1)
+    expect(file.flushCount).toBe(2)
+  })
+
+  it('declines an over-budget automatic checkpoint without closing its writer', async () => {
+    const fixture = await materializationFixture()
+    const transaction = await fixture.session.beginFile({
+      materializationRelativePath: ['declined.bin'],
+      openRevision: async () => revision(4n),
+    })
+    const file = fixture.tree.file(['declined.bin'])
+    await transaction.writeRange(0n, Uint8Array.of(1, 2))
+    await expect(transaction.automaticCheckpoint('pending-bytes', {
+      maximumPrefixCopyBytes: 1n,
+      maximumCumulativeWriteAmplificationBytes: 1n,
+      maximumPeakTemporaryBytes: 1n,
+    })).resolves.toMatchObject({ kind: 'declined', reason: 'prefix-copy-budget' })
+    expect(file.flushCount).toBe(0)
+    expect(file.writerOpenCount).toBe(1)
+    await transaction.writeRange(2n, Uint8Array.of(3, 4))
+    expect(file.writerOpenCount).toBe(1)
+  })
+
+  it('persists PAUSED, resumes ACTIVE, and restarts only after exact user authority', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      materializationRelativePath: ['restart.bin'],
+      openRevision: async () => revision(4n),
+    })
+    await first.writeRange(0n, Uint8Array.of(1, 2))
+    await first.pause()
+    expect(fixture.checkpoints.committed(FILE_ID).phase).toBe(FILE_CHECKPOINT_PHASE_PAUSED)
+    expect(fixture.tree.visible(['restart.bin'])).toEqual(Uint8Array.of(1, 2))
+
+    const restarted = await fixture.session.beginFile({
+      materializationRelativePath: ['restart.bin'],
+      recovery: {
+        kind: 'restart-owned-file',
+        expectedOwnedObjectId: first.ownedObjectId,
+      },
+      openRevision: async () => revision(4n),
+    })
+    expect(restarted.initialDurableRanges).toEqual([])
+    expect(fixture.checkpoints.committed(FILE_ID).phase).toBe(FILE_CHECKPOINT_PHASE_ACTIVE)
+    // The metadata CAS cannot erase bytes; truncate occurs only when the authorized writer opens.
+    expect(fixture.tree.visible(['restart.bin'])).toEqual(Uint8Array.of(1, 2))
+    await restarted.writeRange(0n, Uint8Array.of(5, 6, 7, 8))
+    expect(fixture.tree.file(['restart.bin']).writerModes.at(-1)).toBe('truncate')
+  })
+
+  it('requires typed temporary-space confirmation before non-empty preserving recovery', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      materializationRelativePath: ['preserve.bin'],
+      openRevision: async () => revision(4n),
+    })
+    await first.writeRange(0n, Uint8Array.of(1, 2))
+    await first.pause()
+    const file = fixture.tree.file(['preserve.bin'])
+    file.requiresSpaceConfirmation = true
+
+    const unconfirmed = await fixture.session.beginFile({
+      materializationRelativePath: ['preserve.bin'],
+      recovery: preservingRecoveryPolicy(),
+      openRevision: async () => revision(4n),
+    })
+    await expect(unconfirmed.writeRange(2n, Uint8Array.of(3, 4))).rejects.toMatchObject({
+      name: 'PersistentRecoveryPreflightError',
+      reason: 'space-confirmation-required',
+    })
+    await unconfirmed.retire()
+    const confirmations: bigint[] = []
+    const confirmed = await fixture.session.beginFile({
+      materializationRelativePath: ['preserve.bin'],
+      recovery: {
+        ...preservingRecoveryPolicy(),
+        confirmTemporarySpace: (preflight) => {
+          confirmations.push(preflight.cost.peakTemporaryBytes)
+          return true
+        },
+      },
+      openRevision: async () => revision(4n),
+    })
+    await confirmed.writeRange(2n, Uint8Array.of(3, 4))
+    expect(confirmations).toEqual([2n])
+    expect(file.writerModes.at(-1)).toBe('preserve')
+  })
+
+  it('replays the final transaction after a pre-commit crash and redownloads from zero', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      materializationRelativePath: ['pre-final.bin'],
+      openRevision: async () => revision(3n),
+    })
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3))
+    fixture.checkpoints.failNextFinalCommit('before')
+    await expect(first.commit()).rejects.toThrow('pre-final-transaction')
+    await first.retire()
+    await fixture.session.close()
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
+    })
+    const retry = await reopened.beginFile({
+      materializationRelativePath: ['pre-final.bin'],
+      openRevision: async () => revision(3n),
+    })
+    expect(retry.initialDurableRanges).toEqual([])
+    await retry.writeRange(0n, Uint8Array.of(4, 5, 6))
+    expect(fixture.tree.file(['pre-final.bin']).writerModes).toEqual(['truncate', 'truncate'])
+  })
+
+  it('recovers an ambiguously committed final without reopening a writer or redownloading', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      materializationRelativePath: ['post-final.bin'],
+      openRevision: async () => revision(3n),
+    })
+    const file = fixture.tree.file(['post-final.bin'])
+    await first.writeRange(0n, Uint8Array.of(1, 2, 3))
+    fixture.checkpoints.failNextFinalCommit('after')
+    await expect(first.commit()).rejects.toThrow('ambiguous final')
+    await first.retire()
+    await fixture.session.close()
+    const writerOpenCount = file.writerOpenCount
+
+    const reopened = await PersistentTreeOutputSession.open({
+      tree: fixture.tree,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
+    })
+    const retry = await reopened.beginFile({
+      materializationRelativePath: ['post-final.bin'],
+      openRevision: async () => revision(3n),
+    })
+    expect(retry.initialDurableRanges).toEqual([{ start: 0n, end: 3n }])
+    await retry.commit()
+    expect(file.writerOpenCount).toBe(writerOpenCount)
+    expect(fixture.checkpoints.commitFinalFileCount).toBe(1)
+  })
+
+  it('keeps writer-close failure non-durable and aborts before a zero-range retry', async () => {
+    const fixture = await materializationFixture()
+    const first = await fixture.session.beginFile({
+      materializationRelativePath: ['close-crash.bin'],
+      openRevision: async () => revision(2n),
+    })
+    const file = fixture.tree.file(['close-crash.bin'])
+    await first.writeRange(0n, Uint8Array.of(1, 2))
+    file.failNextFlush()
+    await expect(first.commit()).rejects.toThrow('writer close failure')
+    await first.retire()
+    expect(file.abortCount).toBe(1)
+    expect(fixture.checkpoints.committed(FILE_ID).verifiedRanges).toEqual([])
+  })
+
+  it('bounds ready lineage claims without delaying the first file on complete discovery', async () => {
+    const fixture = await materializationFixture()
+    const transactions = await Promise.all(Array.from({ length: 100 }, (_, index) =>
+      fixture.session.beginFile({
+        materializationRelativePath: [`batched-${index}.bin`],
+        openRevision: async () => ({ ...revision(0n), fileId: identity(80 + index) }),
+      })))
+    expect(Math.max(...fixture.checkpoints.lineageBatchSizes)).toBeLessThanOrEqual(64)
+    expect(fixture.checkpoints.lineageBatchSizes.length).toBeLessThan(100)
+    await Promise.all(transactions.map(transaction => transaction.retire()))
+  })
+
+})
+
+describe('persistent initial claim inspection coordination', () => {
+
+  it('starts the first discovered file and bounds different-parent claim inspections at two', async () => {
+    const fixture = await materializationFixture(undefined, 2)
+    const gate = fixture.tree.deferFileInspection(['gate', 'first.bin'])
+    const first = beginInitialClaim(fixture.session, ['gate', 'first.bin'],
+      { ...revision(0n), fileId: identity(110) })
+    await gate.started
+    const paths = [['a', '1.bin'], ['b', '2.bin'], ['c', '3.bin']] as const
+    const inspections = paths.map(path => fixture.tree.deferFileInspection(path))
+    const later = paths.map((path, index) => beginInitialClaim(fixture.session, path,
+      { ...revision(0n), fileId: identity(111 + index) }))
+    await Promise.resolve()
+    gate.resolve()
+    const firstTransaction = await first
+    await Promise.all([inspections[0]!.started, inspections[1]!.started])
+    let thirdStarted = false
+    inspections[2]!.started.then(() => { thirdStarted = true }).catch(() => undefined)
+    await Promise.resolve()
+    expect({ thirdStarted, active: fixture.tree.activeInspections }).toEqual({
+      thirdStarted: false,
+      active: 2,
+    })
+    inspections[0]!.resolve()
+    await inspections[2]!.started
+    expect(fixture.tree.peakActiveInspections).toBe(2)
+    inspections[1]!.resolve()
+    inspections[2]!.resolve()
+    const transactions = await Promise.all(later)
+    expect(fixture.checkpoints.installedClaimBatches.at(-1)).toEqual(paths.map(path => path.join('/')))
+    await Promise.all([firstTransaction, ...transactions].map(transaction => transaction.retire()))
+  })
+
+  it('keeps same-parent claim inspections serialized inside the bounded group', async () => {
+    const fixture = await materializationFixture(undefined, 2)
+    const gate = fixture.tree.deferFileInspection(['gate', 'same-parent.bin'])
+    const first = beginInitialClaim(fixture.session, ['gate', 'same-parent.bin'],
+      { ...revision(0n), fileId: identity(120) })
+    await gate.started
+    const left = fixture.tree.deferFileInspection(['same', 'left.bin'])
+    const right = fixture.tree.deferFileInspection(['same', 'right.bin'])
+    const claims = [left, right].map((_inspection, index) => beginInitialClaim(fixture.session,
+      ['same', index === 0 ? 'left.bin' : 'right.bin'],
+      { ...revision(0n), fileId: identity(121 + index) }))
+    await Promise.resolve()
+    gate.resolve()
+    await left.started
+    let rightStarted = false
+    right.started.then(() => { rightStarted = true }).catch(() => undefined)
+    await Promise.resolve()
+    expect({ rightStarted, active: fixture.tree.activeInspections }).toEqual({
+      rightStarted: false,
+      active: 1,
+    })
+    left.resolve()
+    await right.started
+    right.resolve()
+    const transactions = await Promise.all([first, ...claims])
+    expect(fixture.tree.inspectionStarts.slice(-2)).toEqual(['same/left.bin', 'same/right.bin'])
+    await Promise.all(transactions.map(transaction => transaction.retire()))
+  })
+
+  it('drains active inspection siblings before rejecting a failed batch without installing it', async () => {
+    const fixture = await materializationFixture(undefined, 2)
+    const gate = fixture.tree.deferFileInspection(['gate', 'failure.bin'])
+    const first = beginInitialClaim(fixture.session, ['gate', 'failure.bin'],
+      { ...revision(0n), fileId: identity(130) })
+    await gate.started
+    const left = fixture.tree.deferFileInspection(['left', 'failed.bin'])
+    const right = fixture.tree.deferFileInspection(['right', 'drained.bin'])
+    const claims = [left, right].map((_inspection, index) => beginInitialClaim(fixture.session,
+      [index === 0 ? 'left' : 'right', index === 0 ? 'failed.bin' : 'drained.bin'],
+      { ...revision(0n), fileId: identity(131 + index) }))
+    await Promise.resolve()
+    gate.resolve()
+    const firstTransaction = await first
+    const installedBeforeFailure = fixture.checkpoints.installedClaimBatches.length
+    await Promise.all([left.started, right.started])
+    const raw = new Error('injected inspection failure')
+    left.reject(raw)
+    let batchSettled = false
+    const settled = Promise.allSettled(claims).then((results) => {
+      batchSettled = true
+      return results
+    })
+    await Promise.resolve()
+    expect(batchSettled).toBe(false)
+    right.resolve()
+    const results = await settled
+    expect(results.map(result => result.status === 'rejected' ? result.reason : undefined))
+      .toEqual([raw, raw])
+    expect(fixture.checkpoints.installedClaimBatches).toHaveLength(installedBeforeFailure)
+    await firstTransaction.retire()
+  })
+
+  it('batch-reclassifies occupied destinations and installs absent claims in original order', async () => {
+    const fixture = await materializationFixture(undefined, 2)
+    const gate = fixture.tree.deferFileInspection(['gate', 'reclassify.bin'])
+    const first = beginInitialClaim(fixture.session, ['gate', 'reclassify.bin'],
+      { ...revision(0n), fileId: identity(140) })
+    await gate.started
+    const paths = [['p0', '0.bin'], ['p1', '1.bin'], ['p2', '2.bin'], ['p3', '3.bin']] as const
+    const revisions = paths.map((_path, index) => ({ ...revision(0n), fileId: identity(141 + index) }))
+    const inspections = paths.map(path => fixture.tree.deferFileInspection(path))
+    const claims = paths.map((path, index) =>
+      beginInitialClaim(fixture.session, path, revisions[index]!))
+    await Promise.resolve()
+    gate.resolve()
+    const firstTransaction = await first
+    await Promise.all([inspections[0]!.started, inspections[1]!.started])
+    seedOccupiedClaim(fixture, paths[0], revisions[0]!)
+    inspections[0]!.resolve('occupied')
+    await inspections[2]!.started
+    inspections[1]!.resolve()
+    await inspections[3]!.started
+    seedOccupiedClaim(fixture, paths[2], revisions[2]!)
+    inspections[2]!.resolve('occupied')
+    inspections[3]!.resolve()
+    const transactions = await Promise.all(claims)
+    expect(fixture.checkpoints.lineageBatches.slice(-2)).toEqual([
+      paths.map(path => path.join('/')),
+      ['p0/0.bin', 'p2/2.bin'],
+    ])
+    expect(fixture.checkpoints.installedClaimBatches.at(-1)).toEqual(['p1/1.bin', 'p3/3.bin'])
+    await Promise.all([firstTransaction, ...transactions].map(transaction => transaction.retire()))
+  })
+
+  it.each([0, 1.5, FILE_CHECKPOINT_BATCH_REQUEST_LIMIT + 1])(
+    'rejects invalid initial claim inspection width %s',
+    async (maximumConcurrentInitialClaimInspections) => {
+      await expect(materializationFixture(undefined, maximumConcurrentInitialClaimInspections))
+        .rejects.toThrow('maximum concurrent initial claim inspections is invalid')
+    },
+  )
+
+})
+
+describe('persistent DirectoryTree recovery authority', () => {
 
   it('does not create a replacement when the opened revision changes', async () => {
     const fixture = await materializationFixture()
@@ -240,7 +634,7 @@ describe('persistent DirectoryTree materialization port', () => {
 
     const reopened = await PersistentTreeOutputSession.open({
       tree: fixture.tree,
-      checkpoints: fixture.checkpoints,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
     })
     const resumed = await reopened.beginFile({
       materializationRelativePath: ['report.bin'],
@@ -276,7 +670,7 @@ describe('persistent DirectoryTree materialization port', () => {
 
     await expect(PersistentTreeOutputSession.open({
       tree: fixture.tree,
-      checkpoints: fixture.checkpoints,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
       trace: event => trace.push(event),
     })).rejects.toMatchObject({
       name: 'InvalidStateError',
@@ -293,27 +687,27 @@ describe('persistent DirectoryTree materialization port', () => {
       .toEqual([expect.objectContaining({ recordId: committed.recordId })])
   })
 
-  it('recovers the same object when restart occurs after creation but before promotion', async () => {
+  it('recovers the same object when restart occurs before atomic handle promotion', async () => {
     const fixture = await materializationFixture()
-    fixture.checkpoints.failNextCommit()
+    fixture.checkpoints.failNextCreatedFileCommit()
     await expect(fixture.session.beginFile({
       materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
-    })).rejects.toThrow('simulated post-object crash')
+    })).rejects.toThrow('simulated atomic created-file commit failure')
     const selected = fixture.tree.proposedOwnedObjectIds[0]!
     expect(fixture.tree.visible(['report.bin'])).toEqual(new Uint8Array())
     await fixture.session.close()
 
     const reopened = await PersistentTreeOutputSession.open({
       tree: fixture.tree,
-      checkpoints: fixture.checkpoints,
+      checkpoints: fixture.checkpoints, semantic: fixture.checkpoints,
     })
-    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
-      .toEqual([])
     const resumed = await reopened.beginFile({
       materializationRelativePath: ['report.bin'],
       openRevision: async () => revision(2n),
     })
+    expect((await fixture.checkpoints.scanCandidates({ direction: 'ascending' })).records)
+      .toEqual([])
     expect(resumed.ownedObjectId).toBe(selected)
     expect(fixture.tree.proposedOwnedObjectIds).toEqual([selected])
     expect(fixture.events.filter(event => event === 'create:report.bin')).toHaveLength(1)
@@ -358,7 +752,7 @@ describe('persistent tree diagnostics and mutation admission', () => {
       openRevision: async () => ({ ...revision(1n), fileId: identity(31) }),
     })
     await afterCommit.writeRange(0n, Uint8Array.of(7))
-    fixture.tree.failVerification(['commit.bin'], 'commit', 2)
+    fixture.tree.failVerification(['commit.bin'], 'commit', 1)
     await expect(afterCommit.commit()).rejects.toBeInstanceOf(TargetOwnershipUnknownError)
   })
 
@@ -383,6 +777,7 @@ describe('persistent tree diagnostics and mutation admission', () => {
     const fixture = await materializationFixture(diagnostics)
     const transaction = await fixture.session.beginFile({
       materializationRelativePath: ['bounded.bin'],
+      recovery: preservingRecoveryPolicy(),
       openRevision: async () => revision(2n),
     })
     await transaction.writeRange(0n, Uint8Array.of(1))
@@ -437,18 +832,20 @@ describe('persistent tree diagnostics and mutation admission', () => {
     expect(drained).toBe(true)
   })
 
-  it('closes transferred file transactions concurrently before completing the drain', async () => {
+  it('pauses transferred file transactions concurrently before completing the drain', async () => {
     const fixture = await materializationFixture()
     const firstBarrier = fixture.tree.deferFileClose(['first.bin'])
     const secondBarrier = fixture.tree.deferFileClose(['second.bin'])
     const first = await fixture.session.beginFile({
       materializationRelativePath: ['first.bin'],
-      openRevision: async () => ({ ...revision(0n), fileId: identity(51) }),
+      openRevision: async () => ({ ...revision(1n), fileId: identity(51) }),
     })
     const second = await fixture.session.beginFile({
       materializationRelativePath: ['second.bin'],
-      openRevision: async () => ({ ...revision(0n), fileId: identity(52) }),
+      openRevision: async () => ({ ...revision(1n), fileId: identity(52) }),
     })
+    await first.writeRange(0n, Uint8Array.of(1))
+    await second.writeRange(0n, Uint8Array.of(2))
 
     let drained = false
     const close = fixture.session.close().then(() => { drained = true })
@@ -468,8 +865,6 @@ describe('persistent tree diagnostics and mutation admission', () => {
   it('keeps a file admitted across its first await when close takes the external cut', async () => {
     const fixture = await materializationFixture()
     const revisionBarrier = deferred<OpenedFileRevision>()
-    const fileCloseBarrier = fixture.tree.deferFileClose(['late.bin'])
-
     const beginning = fixture.session.beginFile({
       materializationRelativePath: ['late.bin'],
       openRevision: () => revisionBarrier.promise,
@@ -485,11 +880,8 @@ describe('persistent tree diagnostics and mutation admission', () => {
 
     revisionBarrier.resolve(revision(0n))
     const transaction = await beginning
-    await fileCloseBarrier.started
-    expect(drained).toBe(false)
-
-    fileCloseBarrier.release()
     await close
+    expect(drained).toBe(true)
     await expect(transaction.writeRange(0n, new Uint8Array()))
       .rejects.toMatchObject({ kind: 'output-state' })
   })
@@ -516,7 +908,10 @@ describe('persistent tree diagnostics and mutation admission', () => {
   })
 })
 
-async function materializationFixture(diagnostics?: OutputDiagnosticsPorts) {
+async function materializationFixture(
+  diagnostics?: OutputDiagnosticsPorts,
+  maximumConcurrentInitialClaimInspections?: number,
+) {
   const binding = durableCheckpointNamespaceIdentity({
     operationId: identity(1),
     receiveIntentDigest: identity(2, 32),
@@ -525,11 +920,14 @@ async function materializationFixture(diagnostics?: OutputDiagnosticsPorts) {
     authorityRef: identity(4, 32),
   })
   const events: string[] = []
-  const tree = new MemoryTree(events)
+  const tree = new MemoryTree(events, binding)
   const checkpoints = new MemoryCheckpointRepository(binding)
   const session = await PersistentTreeOutputSession.open({
     tree,
-    checkpoints,
+    checkpoints, semantic: checkpoints,
+    ...(maximumConcurrentInitialClaimInspections === undefined
+      ? {}
+      : { maximumConcurrentInitialClaimInspections }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   })
   return { binding, events, tree, checkpoints, session }
@@ -539,215 +937,37 @@ function revision(exactSize: bigint): OpenedFileRevision {
   return Object.freeze({ fileId: FILE_ID, fileRevision: FILE_REVISION, exactSize })
 }
 
-class MemoryTree implements PersistentOutputTree {
-  readonly #events: string[]
-  readonly #files = new Map<string, MemoryFile>()
-  readonly #directoryBarriers = new Map<string, FileCloseBarrier>()
-  readonly #fileCloseBarriers = new Map<string, FileCloseBarrier>()
-  readonly proposedOwnedObjectIds: string[] = []
-  #failNextCreation = false
-  #nextObject = 60
-
-  constructor(events: string[]) {
-    this.#events = events
-  }
-
-  async authorize(): Promise<void> {
-    this.#events.push('authorize')
-  }
-
-  async prepareRoot(): Promise<void> {
-    this.#events.push('prepare-root')
-  }
-
-  async ensureDirectory(path: readonly string[]): Promise<PersistentDirectoryMaterialization> {
-    if (path.some((component) => component.length === 0)) throw new TypeError('empty path component')
-    const barrier = this.#directoryBarriers.get(path.join('/'))
-    barrier?.started.resolve()
-    await barrier?.release.promise
-    return Object.freeze({ ownedObjectId: identity(this.#nextObject++, 32), created: true })
-  }
-
-  async validateDirectory(): Promise<boolean> {
-    return true
-  }
-
-  async proposeFileOwnedObjectId(
-    _path: readonly string[],
-    revision: OpenedFileRevision,
-  ): Promise<string> {
-    if (revision.exactSize < 0n) throw new RangeError('negative revision size')
-    const proposed = identity(this.#nextObject++, 32)
-    this.proposedOwnedObjectIds.push(proposed)
-    return proposed
-  }
-
-  async inspectFileDestination(
-    path: readonly string[],
-  ): Promise<'absent' | 'occupied'> {
-    return this.#files.has(path.join('/')) ? 'occupied' : 'absent'
-  }
-
-  async createFileAfterRevisionOpen(
-    path: readonly string[],
-    revision: OpenedFileRevision,
-    selectedOwnedObjectId: string,
-  ): Promise<PersistentTreeFile> {
-    if (revision.exactSize < 0n) throw new RangeError('negative revision size')
-    const key = path.join('/')
-    const existing = this.#files.get(key)
-    if (existing !== undefined) {
-      if (existing.ownedObjectId === selectedOwnedObjectId) return existing
-      throw new DOMException('collision', 'InvalidModificationError')
-    }
-    if (this.#failNextCreation) {
-      this.#failNextCreation = false
-      throw new Error('simulated pre-object crash')
-    }
-    this.#events.push(`create:${key}`)
-    const file = new MemoryFile(selectedOwnedObjectId, this.#fileCloseBarriers.get(key))
-    this.#files.set(key, file)
-    return file
-  }
-
-  async openFile(
-    path: readonly string[],
-    ownedObjectId: string,
-  ): Promise<PersistentTreeFile | undefined> {
-    const file = this.#files.get(path.join('/'))
-    return file?.ownedObjectId === ownedObjectId ? file : undefined
-  }
-
-  async removeFile(path: readonly string[], ownedObjectId: string): Promise<void> {
-    const key = path.join('/')
-    if (this.#files.get(key)?.ownedObjectId !== ownedObjectId) {
-      throw new TargetOwnershipUnknownError('cleanup', identity(1))
-    }
-    this.#files.delete(key)
-  }
-
-  async removeDirectory(): Promise<void> {}
-
-  failNextCreation(): void {
-    this.#failNextCreation = true
-  }
-
-  deferDirectory(path: readonly string[]): ControlledBarrier {
-    const started = deferred<void>()
-    const release = deferred<void>()
-    this.#directoryBarriers.set(path.join('/'), { started, release })
-    return Object.freeze({ started: started.promise, release: () => release.resolve() })
-  }
-
-  deferFileClose(path: readonly string[]): ControlledBarrier {
-    const started = deferred<void>()
-    const release = deferred<void>()
-    this.#fileCloseBarriers.set(path.join('/'), { started, release })
-    return Object.freeze({ started: started.promise, release: () => release.resolve() })
-  }
-
-  occupy(path: readonly string[], ownedObjectId: string): void {
-    this.#files.set(path.join('/'), new MemoryFile(ownedObjectId))
-  }
-
-  visible(path: readonly string[]): Uint8Array | undefined {
-    return this.#files.get(path.join('/'))?.snapshot()
-  }
-
-  failVerification(
-    path: readonly string[],
-    stage: 'writer-open' | 'checkpoint' | 'commit',
-    occurrence: number,
-  ): void {
-    this.#files.get(path.join('/'))?.failVerification(stage, occurrence)
-  }
-}
-
-class MemoryFile implements PersistentTreeFile {
-  readonly ownedObjectId: string
-  readonly #closeBarrier: FileCloseBarrier | undefined
-  #bytes = new Uint8Array()
-  readonly #verificationCounts = new Map<string, number>()
-  #failure: { readonly stage: string; readonly occurrence: number } | undefined
-
-  constructor(ownedObjectId: string, closeBarrier?: FileCloseBarrier) {
-    this.ownedObjectId = ownedObjectId
-    this.#closeBarrier = closeBarrier
-  }
-
-  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
-    await this.verify('writer-open')
-    const start = Number(offset)
-    const size = Math.max(this.#bytes.byteLength, start + data.byteLength)
-    const next = new Uint8Array(size)
-    next.set(this.#bytes)
-    next.set(data, start)
-    this.#bytes = next
-  }
-
-  async flush(): Promise<void> {}
-
-  async size(): Promise<bigint> {
-    return BigInt(this.#bytes.byteLength)
-  }
-
-  async verify(stage: 'writer-open' | 'checkpoint' | 'commit'): Promise<void> {
-    const count = (this.#verificationCounts.get(stage) ?? 0) + 1
-    this.#verificationCounts.set(stage, count)
-    if (this.#failure?.stage === stage && this.#failure.occurrence === count) {
-      throw new TargetOwnershipUnknownError(stage, identity(1))
-    }
-  }
-
-  async close(): Promise<void> {
-    this.#closeBarrier?.started.resolve()
-    await this.#closeBarrier?.release.promise
-  }
-
-  async read(): Promise<Blob> {
-    return new Blob([this.#bytes])
-  }
-
-  snapshot(): Uint8Array {
-    return this.#bytes.slice()
-  }
-
-  failVerification(stage: string, occurrence: number): void {
-    this.#failure = { stage, occurrence }
-  }
-}
-
-interface Deferred<T> {
-  readonly promise: Promise<T>
-  readonly resolve: (value: T | PromiseLike<T>) => void
-  readonly reject: (reason?: unknown) => void
-}
-
-interface FileCloseBarrier {
-  readonly started: Deferred<void>
-  readonly release: Deferred<void>
-}
-
-interface ControlledBarrier {
-  readonly started: Promise<void>
-  readonly release: () => void
-}
-
-function deferred<T>(): Deferred<T> {
-  let resolve!: Deferred<T>['resolve']
-  let reject!: Deferred<T>['reject']
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise
-    reject = rejectPromise
+function preservingRecoveryPolicy() {
+  return Object.freeze({
+    kind: 'preserve' as const,
+    costBudget: Object.freeze({
+      maximumPrefixCopyBytes: 1_024n,
+      maximumCumulativeWriteAmplificationBytes: 2_048n,
+      maximumPeakTemporaryBytes: 1_024n,
+    }),
   })
-  return { promise, resolve, reject }
 }
 
 class MemoryCheckpointRepository implements FileCheckpointJournal {
   readonly binding: FileCheckpointJournal['binding']
   readonly #candidates = new Map<string, FileCheckpointV2>()
   readonly #committed = new Map<string, FileCheckpointV2>()
+  readonly #handles = new Map<string, PersistentHandleRecord<unknown>>()
+  readonly #finalProofs = new Map<string, NonNullable<Awaited<ReturnType<
+    SemanticPersistentOutputJournal['readMaterializationFinalProof']
+  >>>>()
+  readonly #directoryAdmissions = new Map<string, string>()
+  readonly #directoryFinalizations = new Map<string, string>()
   #failNextCommit = false
+  #failCreatedFile = false
+  #failFinal: 'before' | 'after' | undefined
+  commitCreatedFileCount = 0
+  commitFinalFileCount = 0
+  readCommittedCount = 0
+  finalCheckpointProofCount = 0
+  readonly lineageBatchSizes: number[] = []
+  readonly lineageBatches: string[][] = []
+  readonly installedClaimBatches: string[][] = []
 
   constructor(binding: FileCheckpointJournal['binding']) {
     this.binding = binding
@@ -757,6 +977,22 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
     request: CheckpointLineageLookupRequest,
   ): Promise<CheckpointLineageDecision> {
     return this.#lineageDecision(request)
+  }
+
+  async classifyLineages(
+    requests: readonly CheckpointLineageLookupRequest[],
+  ): Promise<readonly CheckpointLineageDecision[]> {
+    this.lineageBatchSizes.push(requests.length)
+    this.lineageBatches.push(requests.map(request => request.canonicalPath.join('/')))
+    await Promise.resolve()
+    return Promise.all(requests.map(request => this.lookupLineage(request)))
+  }
+
+  installInitialClaims(
+    candidates: readonly FileCheckpointV2[],
+  ): Promise<readonly InitialCheckpointCASResult[]> {
+    this.installedClaimBatches.push(candidates.map(candidate => candidate.canonicalPath.join('/')))
+    return Promise.all(candidates.map(candidate => this.createInitialCheckpoint(candidate)))
   }
 
   async createInitialCheckpoint(
@@ -774,6 +1010,120 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
     if (decision.kind !== 'absent') return decision
     this.#candidates.set(candidate.recordId, candidate)
     return Object.freeze({ kind: 'installed', lineageId, record: candidate })
+  }
+
+  async commitCreatedFile(
+    input: Parameters<SemanticPersistentOutputJournal['commitCreatedFile']>[0],
+  ): Promise<void> {
+    this.commitCreatedFileCount += 1
+    if (this.#failCreatedFile) {
+      this.#failCreatedFile = false
+      throw new Error('simulated atomic created-file commit failure')
+    }
+    validateFileCheckpointTransition(input.candidate, input.committed)
+    if (this.#candidates.get(input.candidate.recordId)?.checksum !== input.candidate.checksum) {
+      throw new DOMException('created-file candidate missing', 'InvalidStateError')
+    }
+    this.#handles.set(input.handle.id, input.handle)
+    this.#committed.set(input.committed.recordId, input.committed)
+    this.#candidates.delete(input.candidate.recordId)
+  }
+
+  async commitDurableCut(previous: FileCheckpointV2, durable: FileCheckpointV2): Promise<void> {
+    await this.#replaceCommitted(previous, durable)
+  }
+
+  async resumePausedCheckpoint(paused: FileCheckpointV2, active: FileCheckpointV2): Promise<void> {
+    await this.#replaceCommitted(paused, active)
+  }
+
+  async restartOwnedFile(
+    input: Parameters<SemanticPersistentOutputJournal['restartOwnedFile']>[0],
+  ) {
+    const current = this.#committed.get(input.previous.recordId)
+    if (current?.checksum === input.reset.checksum) return 'idempotent' as const
+    if (current?.checksum !== input.previous.checksum ||
+        this.#handles.get(input.expectedHandle.id)?.ownedObjectId !== input.previous.ownedObjectId) {
+      throw new DOMException('owned-file restart authority changed', 'InvalidStateError')
+    }
+    validateFileCheckpoint(input.reset)
+    this.#committed.set(input.reset.recordId, input.reset)
+    return 'restart' as const
+  }
+
+  async commitFinalFile(
+    input: Parameters<SemanticPersistentOutputJournal['commitFinalFile']>[0],
+  ) {
+    this.commitFinalFileCount += 1
+    if (this.#failFinal === 'before') {
+      this.#failFinal = undefined
+      throw new Error('simulated pre-final-transaction crash')
+    }
+    const current = this.#committed.get(input.expectedCommittedCheckpoint.recordId)
+    const final = input.records.finalCheckpoint
+    const existingProof = this.#finalProofs.get(input.records.finalProof.proofId)
+    const idempotent = current?.checksum === final.checksum &&
+      existingProof?.proofDigest === input.records.finalProof.proofDigest
+    if (!idempotent) {
+      if (current?.checksum !== input.expectedCommittedCheckpoint.checksum) {
+        throw new DOMException('final checkpoint predecessor changed', 'InvalidStateError')
+      }
+      this.#committed.set(final.recordId, final)
+      this.#finalProofs.set(input.records.finalProof.proofId, input.records.finalProof)
+    }
+    const receipt = Object.freeze({
+      classification: idempotent ? 'idempotent' as const : 'insert' as const,
+      finalCheckpoint: final,
+      finalProof: input.records.finalProof,
+      ledgerEntry: input.records.ledgerEntry,
+    })
+    if (this.#failFinal === 'after') {
+      this.#failFinal = undefined
+      throw new Error('simulated ambiguous final transaction response')
+    }
+    return receipt
+  }
+
+  async readMaterializationFinalProof(
+    _binding: Parameters<SemanticPersistentOutputJournal['readMaterializationFinalProof']>[0],
+    proofId: string,
+  ) {
+    return this.#finalProofs.get(proofId)
+  }
+
+  async appendDirectoryAdmission(
+    _binding: Parameters<SemanticPersistentOutputJournal['appendDirectoryAdmission']>[0],
+    entry: Parameters<SemanticPersistentOutputJournal['appendDirectoryAdmission']>[1],
+  ) {
+    const existing = this.#directoryAdmissions.get(entry.entryId)
+    if (existing !== undefined && existing !== entry.entryDigest) {
+      throw new DOMException('directory admission changed', 'ConstraintError')
+    }
+    this.#directoryAdmissions.set(entry.entryId, entry.entryDigest)
+    return existing === undefined ? 'insert' as const : 'idempotent' as const
+  }
+
+  async appendDirectoryFinalization(
+    _binding: Parameters<SemanticPersistentOutputJournal['appendDirectoryFinalization']>[0],
+    entry: Parameters<SemanticPersistentOutputJournal['appendDirectoryFinalization']>[1],
+  ) {
+    const existing = this.#directoryFinalizations.get(entry.entryId)
+    if (existing !== undefined && existing !== entry.entryDigest) {
+      throw new DOMException('directory finalization changed', 'ConstraintError')
+    }
+    this.#directoryFinalizations.set(entry.entryId, entry.entryDigest)
+    return existing === undefined ? 'insert' as const : 'idempotent' as const
+  }
+
+  failNextCreatedFileCommit(): void { this.#failCreatedFile = true }
+  failNextFinalCommit(cut: 'before' | 'after'): void { this.#failFinal = cut }
+
+  committed(fileId: string): FileCheckpointV2 {
+    const records = [...this.#committed.values()].filter(record => record.fileId === fileId)
+    const latest = records.sort((left, right) =>
+      left.stateGeneration < right.stateGeneration ? 1 : -1)[0]
+    if (latest === undefined) throw new Error('test checkpoint is missing')
+    return latest
   }
 
   async resolveCandidate(
@@ -887,6 +1237,7 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
   }
 
   async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
+    this.readCommittedCount += 1
     return this.#committed.get(recordId)
   }
 
@@ -902,6 +1253,7 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
     recordId: string,
     generation: bigint,
   ): Promise<FinalFileCheckpointProof> {
+    this.finalCheckpointProofCount += 1
     const record = this.#committed.get(recordId)
     if (record === undefined || record.checkpointGeneration !== generation ||
         !fileCheckpointIsComplete(record)) {
@@ -917,6 +1269,14 @@ class MemoryCheckpointRepository implements FileCheckpointJournal {
   async retireOperation(): Promise<void> {
     this.#candidates.clear()
     this.#committed.clear()
+  }
+
+  async #replaceCommitted(previous: FileCheckpointV2, next: FileCheckpointV2): Promise<void> {
+    validateFileCheckpointTransition(previous, next)
+    if (this.#committed.get(previous.recordId)?.checksum !== previous.checksum) {
+      throw new DOMException('durable checkpoint predecessor changed', 'InvalidStateError')
+    }
+    this.#committed.set(next.recordId, next)
   }
 
   #scan(

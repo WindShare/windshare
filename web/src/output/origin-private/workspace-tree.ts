@@ -1,5 +1,6 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import { bigintToSafeNumber } from '../../content/geometry'
+import { outputCheckpointCost } from '../../transfer/output-file-contract'
 import type {
   PersistentHandleRecord,
   PersistentHandleRepository,
@@ -9,6 +10,8 @@ import type {
   PersistentDirectoryMaterialization,
   PersistentOutputTree,
   PersistentTreeFile,
+  PersistentWriterOpenMode,
+  PersistentWriterPreflight,
 } from '../persistent-tree/contracts'
 import {
   TargetOwnershipUnknownError,
@@ -378,14 +381,43 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
     this.#verifyIdentity = input.verify
   }
 
-  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
+  async openWriter(mode: PersistentWriterOpenMode): Promise<void> {
+    if (this.#writer !== undefined) {
+      throw new DOMException('The origin-private writer is already open', 'InvalidStateError')
+    }
     if (!this.#writeAdmitted) {
       await this.#beforeFirstWrite()
       this.#writeAdmitted = true
     }
     await this.#verifyIdentity('writer-open')
-    this.#writer ??= await this.#handle.createWritable({ keepExistingData: true })
-    await this.#writer.write({
+    this.#writer = await this.#handle.createWritable({ keepExistingData: mode === 'preserve' })
+  }
+
+  checkpointPreflight(
+    durablePrefixBytes: bigint,
+    cumulativeWriteAmplificationBytes: bigint,
+  ): PersistentWriterPreflight {
+    const cost = outputCheckpointCost({
+      prefixCopyBytes: durablePrefixBytes,
+      cumulativeWriteAmplificationBytes:
+        cumulativeWriteAmplificationBytes + durablePrefixBytes,
+      peakTemporaryBytes: durablePrefixBytes,
+    })
+    return Object.freeze({
+      cost,
+      // OPFS exposes quota estimates, not an authoritative per-write capacity reservation.
+      space: durablePrefixBytes === 0n
+        ? 'within-modeled-budget' as const
+        : 'requires-user-confirmation' as const,
+    })
+  }
+
+  async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
+    const writer = this.#writer
+    if (writer === undefined) {
+      throw new DOMException('The origin-private writer is not open', 'InvalidStateError')
+    }
+    await writer.write({
       type: 'write',
       position: bigintToSafeNumber(offset, 'origin-private output offset'),
       data: data.slice(),
@@ -410,6 +442,13 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
 
   close(): Promise<void> {
     return this.flush()
+  }
+
+  async abort(reason?: unknown): Promise<void> {
+    const writer = this.#writer
+    if (writer === undefined) return
+    this.#writer = undefined
+    await writer.abort(reason)
   }
 
   async read(): Promise<Blob> {

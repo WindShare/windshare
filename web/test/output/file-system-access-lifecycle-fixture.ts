@@ -28,12 +28,12 @@ import {
 import {
   assembleNewFileSystemAccessOutput,
   reserveNewFileSystemAccessOutput,
-  type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
   type FSAOutputTraceEvent,
   type FileSystemAccessOutputSession,
 } from '../../src/output/file-system-access/session'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
+import { memoryCheckpointFactory } from './fsa-memory-semantic-repository'
 import type {
   CompatibleNameActivationLedger,
   CompatibleNameRootRepairFactory,
@@ -52,34 +52,10 @@ import {
   discardReopenedFileSystemAccessOutput,
   type ReopenedFileSystemAccessDiscardOperation,
 } from '../../src/output/file-system-access/fresh-page-discard'
-import {
-  FILE_CHECKPOINT_COMMIT_CANDIDATE,
-  FILE_CHECKPOINT_COMMIT_VERIFIED,
-  classifyCheckpointLineage,
-  deriveCheckpointLineageID,
-  fileCheckpointIsComplete,
-  sameCheckpointLineageSpec,
-  validateFileCheckpoint,
-  validateFileCheckpointTransition,
-  type FileCheckpointV2,
-} from '../../src/output/persistence/checkpoint'
-import {
-  finalFileCheckpointProof,
-  type CheckpointLineageDecision,
-  type CheckpointLineageLookupRequest,
-  type CheckpointNamespaceBinding,
-  type FileCheckpointPage,
-  type FileCheckpointScan,
-  type FinalFileCheckpointProof,
-  type InitialCheckpointCASResult,
-  type PersistentHandleRecord,
-} from '../../src/output/persistence/journal'
-import type {
-  FileCheckpointCandidateObservation,
-} from '../../src/output/persistent-tree/recovery'
 import type {
   PersistentOutputStageDiagnostics,
 } from '../../src/output/persistent-tree/stage-diagnostics'
+import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   receiveOperationHandleRecord,
@@ -97,12 +73,16 @@ import {
 import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../src/output/workspace/state'
-import { outputSessionIdentity } from '../../src/transfer/output-session'
+import {
+  disabledOutputExecutionProfile,
+  outputSessionIdentity,
+} from '../../src/transfer/output-session'
 import {
   EMPTY_TRANSFER_FAILURE_SUMMARY,
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
 import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
+import type { PersistentMaterializationPort } from '../../src/output/persistent-tree/contracts'
 import { identity } from './planning/fixture'
 import {
   MemoryDirectory,
@@ -200,6 +180,7 @@ export async function freshDiscardFixture(input: Readonly<{
       : { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
     reason: new DOMException('page closed', 'AbortError'),
   }, SIGNAL)
+  await session.releaseRootLease()
 
   // A distinct repository object proves that cleanup does not depend on the old page's runtime.
   const repository = new MemoryOperationRepository({
@@ -570,6 +551,8 @@ export async function bindTask(input: Readonly<{
   prepareCompatibleNameRootRepair?: CompatibleNameRootRepairFactory
   openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
   stageDiagnostics?: PersistentOutputStageDiagnostics
+  diagnostics?: OutputDiagnosticsPorts
+  maximumActiveWriters?: number
   trace?: (event: FSAOutputTraceEvent) => void
 }>) {
   const selection = input.selection ?? await selectionSpec()
@@ -577,6 +560,8 @@ export async function bindTask(input: Readonly<{
   const rootLease = await acquireFSARootMutationLease(
     input.parent as unknown as FileSystemDirectoryHandle,
     input.locks,
+    input.maximumActiveWriters,
+    input.diagnostics?.performance,
   )
   const reserved = await reserveNewFileSystemAccessOutput({
     authority,
@@ -589,6 +574,7 @@ export async function bindTask(input: Readonly<{
       ? {}
       : { prepareCompatibleNameRootRepair: input.prepareCompatibleNameRootRepair }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
   const intent = await createReceiveIntent({
     selection,
@@ -632,7 +618,8 @@ export async function bindTask(input: Readonly<{
         }),
     ...(input.stageDiagnostics === undefined
       ? {}
-      : { stageDiagnostics: input.stageDiagnostics }),
+       : { stageDiagnostics: input.stageDiagnostics }),
+    ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
   })
   if (input.activate !== false) await session.activate()
@@ -655,9 +642,45 @@ export async function fsaExecution(
   })
   return createPersistentDirectTreeExecution({
     intent: directTreeIntent(session.intent),
-    materialization: session,
+    materialization: confirmedRecoveryMaterialization(session),
+    executionProfile: disabledOutputExecutionProfile(1),
     outputIdentity: outputSessionIdentity({ backend: 'fsa-test', outputSessionId }),
     settlement: settlement.bindMaterialization(session),
+  })
+}
+
+export function confirmedRecoveryMaterialization(
+  session: FileSystemAccessOutputSession,
+): PersistentMaterializationPort {
+  return Object.freeze({
+    beginFile: (request: Parameters<PersistentMaterializationPort['beginFile']>[0]) => {
+      const recovery = request.recovery?.kind === 'preserve'
+        ? Object.freeze({
+            ...request.recovery,
+            costBudget: request.recovery.costBudget ?? Object.freeze({
+              maximumPrefixCopyBytes: 1_024n,
+              maximumCumulativeWriteAmplificationBytes: 4_096n,
+              maximumPeakTemporaryBytes: 1_024n,
+            }),
+            confirmTemporarySpace: () => true,
+          })
+        : request.recovery
+      return session.beginFile({
+        ...request,
+        ...(recovery === undefined ? {} : { recovery }),
+      })
+    },
+    ensureDirectory: (path: Parameters<FileSystemAccessOutputSession['ensureDirectory']>[0]) =>
+      session.ensureDirectory(path),
+    materializeDirectory: (
+      request: Parameters<FileSystemAccessOutputSession['materializeDirectory']>[0],
+    ) => session.materializeDirectory(request),
+    finalizeDirectory: (
+      admission: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[0],
+      outcome: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[1],
+    ) => session.finalizeDirectory(admission, outcome),
+    closeForTerminalSettlement: () => session.closeForTerminalSettlement(),
+    close: () => session.close(),
   })
 }
 
@@ -722,6 +745,15 @@ export async function outputFileRequest(input: Readonly<{
     logicalArtifactPath: projection.logicalArtifactPath,
     materializationRelativePath: projection.relativePath,
     expectedSize: input.exactSize,
+    recovery: Object.freeze({
+      kind: 'preserve' as const,
+      costBudget: Object.freeze({
+        maximumPrefixCopyBytes: 1_024n,
+        maximumCumulativeWriteAmplificationBytes: 4_096n,
+        maximumPeakTemporaryBytes: 1_024n,
+      }),
+      confirmTemporarySpace: () => true,
+    }),
     ...(input.parentAdmission === undefined ? {} : { parentAdmission: input.parentAdmission }),
     openRevision: async () => Object.freeze({
       shareInstance: input.intent.shareInstance,
@@ -962,221 +994,5 @@ export class MemoryLockManager implements BrowserLockManagerRuntime {
   }
 }
 
-interface MemoryCheckpointStore {
-  readonly candidates: Map<string, FileCheckpointV2>
-  readonly committed: Map<string, FileCheckpointV2>
-  readonly handles: Map<string, PersistentHandleRecord>
-}
 
-export function memoryCheckpointFactory(onRetire?: () => void): FSAFileCheckpointRepositoryFactory {
-  const stores = new Map<string, MemoryCheckpointStore>()
-  return async (binding) => {
-    let store = stores.get(binding.operationId)
-    if (store === undefined) {
-      store = { candidates: new Map(), committed: new Map(), handles: new Map() }
-      stores.set(binding.operationId, store)
-    }
-    return new MemoryCheckpointRepository(binding, store, onRetire)
-  }
-}
-
-class MemoryCheckpointRepository implements FSAFileCheckpointRepository {
-  readonly binding: CheckpointNamespaceBinding
-  readonly #store: MemoryCheckpointStore
-  readonly #onRetire: (() => void) | undefined
-
-  constructor(
-    binding: CheckpointNamespaceBinding,
-    store: MemoryCheckpointStore,
-    onRetire?: () => void,
-  ) {
-    this.binding = binding
-    this.#store = store
-    this.#onRetire = onRetire
-  }
-
-  async lookupLineage(
-    request: CheckpointLineageLookupRequest,
-  ): Promise<CheckpointLineageDecision> {
-    return this.#lineageDecision(request)
-  }
-
-  async createInitialCheckpoint(
-    candidate: FileCheckpointV2,
-  ): Promise<InitialCheckpointCASResult> {
-    validateFileCheckpoint(candidate)
-    const lineageId = deriveCheckpointLineageID(candidate)
-    const decision = this.#lineageDecision({
-      lineageId,
-      fileId: candidate.fileId,
-      canonicalPath: candidate.canonicalPath,
-      fileRevision: candidate.fileRevision,
-      exactSize: candidate.exactSize,
-    })
-    if (decision.kind !== 'absent') return decision
-    this.#store.candidates.set(candidate.recordId, candidate)
-    return Object.freeze({ kind: 'installed', lineageId, record: candidate })
-  }
-
-  async resolveCandidate(
-    candidate: FileCheckpointV2,
-    observation: Exclude<FileCheckpointCandidateObservation, { kind: 'ownership-unknown' }>,
-  ): Promise<void> {
-    if (this.#store.candidates.get(candidate.recordId)?.checksum !== candidate.checksum) {
-      throw new DOMException('candidate changed during recovery', 'InvalidStateError')
-    }
-    const resolved = observation.kind === 'verified'
-      ? observation.committed
-      : observation.checkpoint
-    this.#store.committed.set(candidate.recordId, resolved)
-    this.#store.candidates.delete(candidate.recordId)
-  }
-
-  #lineageDecision(request: CheckpointLineageLookupRequest): CheckpointLineageDecision {
-    const spec = Object.freeze({
-      ...this.binding,
-      fileId: request.fileId,
-      canonicalPath: request.canonicalPath,
-    })
-    if (deriveCheckpointLineageID(spec) !== request.lineageId) {
-      throw new TypeError('lineage lookup ID does not match its coordinates')
-    }
-    const physical = new Map(this.#store.committed)
-    for (const [recordId, candidate] of this.#store.candidates) {
-      if (!physical.has(recordId)) physical.set(recordId, candidate)
-    }
-    const records = [...physical.values()].filter(record =>
-      sameCheckpointLineageSpec(record, spec))
-    const kind = classifyCheckpointLineage(
-      { fileRevision: request.fileRevision, exactSize: request.exactSize },
-      records.map(record => ({
-        fileRevision: record.fileRevision,
-        exactSize: record.exactSize,
-        ownedObjectId: record.ownedObjectId,
-      })),
-    )
-    if (kind === 'absent') {
-      return Object.freeze({ kind, lineageId: request.lineageId })
-    }
-    if (kind === 'exact') {
-      return Object.freeze({ kind, lineageId: request.lineageId, record: records[0]! })
-    }
-    return Object.freeze({
-      kind,
-      lineageId: request.lineageId,
-      records: Object.freeze(records),
-    })
-  }
-
-  async stageCheckpointUpdate(
-    previous: FileCheckpointV2,
-    candidate: FileCheckpointV2,
-  ): Promise<void> {
-    validateFileCheckpointTransition(previous, candidate)
-    if (previous.commitState === FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-        candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-        this.#store.committed.get(previous.recordId)?.checksum !== previous.checksum) {
-      throw new DOMException('committed checkpoint predecessor missing', 'InvalidStateError')
-    }
-    const current = this.#store.candidates.get(candidate.recordId)
-    if (current !== undefined && current.checksum !== candidate.checksum) {
-      throw new DOMException('checkpoint candidate changed', 'InvalidStateError')
-    }
-    this.#store.candidates.set(candidate.recordId, candidate)
-  }
-
-  async commitCheckpointCandidate(
-    candidate: FileCheckpointV2,
-    committed: FileCheckpointV2,
-  ): Promise<void> {
-    validateFileCheckpointTransition(candidate, committed)
-    if (candidate.commitState !== FILE_CHECKPOINT_COMMIT_CANDIDATE ||
-        committed.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED) {
-      throw new TypeError('memory repository commits only verified checkpoints')
-    }
-    const currentCandidate = this.#store.candidates.get(candidate.recordId)
-    const previous = this.#store.committed.get(candidate.recordId)
-    if (currentCandidate === undefined && previous?.checksum === committed.checksum) return
-    if (currentCandidate?.checksum !== candidate.checksum) {
-      throw new DOMException('checkpoint candidate missing', 'InvalidStateError')
-    }
-    if (previous !== undefined) validateFileCheckpointTransition(previous, committed)
-    this.#store.committed.set(committed.recordId, committed)
-    this.#store.candidates.delete(committed.recordId)
-  }
-
-  async readCommitted(recordId: string): Promise<FileCheckpointV2 | undefined> {
-    return this.#store.committed.get(recordId)
-  }
-
-  async scanCommitted(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
-    return scanRecords(this.#store.committed, scan)
-  }
-
-  async scanCandidates(scan: FileCheckpointScan): Promise<FileCheckpointPage> {
-    return scanRecords(this.#store.candidates, scan)
-  }
-
-  async finalCheckpointProof(
-    recordId: string,
-    generation: bigint,
-  ): Promise<FinalFileCheckpointProof> {
-    const record = this.#store.committed.get(recordId)
-    if (record === undefined || record.checkpointGeneration !== generation ||
-        !fileCheckpointIsComplete(record)) {
-      throw new DOMException('final checkpoint missing', 'NotFoundError')
-    }
-    return finalFileCheckpointProof(record)
-  }
-
-  async retireOperation(): Promise<void> {
-    this.#store.candidates.clear()
-    this.#store.committed.clear()
-    this.#store.handles.clear()
-    this.#onRetire?.()
-  }
-
-  async putHandle(record: PersistentHandleRecord): Promise<void> {
-    this.#store.handles.set(record.id, record)
-  }
-
-  async readHandle(id: string): Promise<PersistentHandleRecord | undefined> {
-    return this.#store.handles.get(id)
-  }
-
-  async listHandles(): Promise<readonly PersistentHandleRecord[]> {
-    return [...this.#store.handles.values()].sort((left, right) => left.id.localeCompare(right.id))
-  }
-
-  async deleteHandle(id: string): Promise<void> {
-    this.#store.handles.delete(id)
-  }
-
-  close(): void {}
-}
-
-function scanRecords(
-  records: ReadonlyMap<string, FileCheckpointV2>,
-  scan: FileCheckpointScan,
-): FileCheckpointPage {
-  const sorted = [...records.values()]
-    .filter((record) => scan.fileId === undefined || record.fileId === scan.fileId)
-    .sort((left, right) => {
-      if (left.recordId === right.recordId) return 0
-      return left.recordId < right.recordId ? -1 : 1
-    })
-  if (scan.direction === 'descending') sorted.reverse()
-  const after = scan.cursor === undefined
-    ? sorted
-    : sorted.filter((record) => scan.direction === 'ascending'
-        ? record.recordId > scan.cursor!
-        : record.recordId < scan.cursor!)
-  const limit = scan.limit ?? 128
-  const page = after.slice(0, limit)
-  return Object.freeze({
-    records: Object.freeze(page),
-    ...(after.length >= limit && page.at(-1) !== undefined
-      ? { nextCursor: page.at(-1)!.recordId }
-      : {}),
-  })
-}
+export { memoryCheckpointFactory }

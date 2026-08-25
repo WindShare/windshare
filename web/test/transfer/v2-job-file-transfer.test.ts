@@ -16,6 +16,7 @@ import {
   type V2RevisionReader,
 } from '../../src/content/v2-session-services'
 import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
+import { outputExecutionProfile } from '../../src/transfer/output-session'
 import {
   createFailureIdentity,
   createProtocolFailure,
@@ -122,6 +123,7 @@ describe('v2 authenticated file transfer', () => {
   })
 
   registerRevisionCapacityJobTests()
+  registerCheckpointSchedulingTests()
 
   it('isolates a checkpoint decision while an independent sibling completes', async () => {
     const root = identity(2)
@@ -229,6 +231,7 @@ describe('v2 authenticated file transfer', () => {
     ])
     expect(readers.blockRequests).toEqual([file.idText, file.idText])
     expect(output.commits).toEqual([file.idText])
+    expect(output.finalProofs).toHaveLength(1)
   })
 
   it('pipelines one large file across relay and peer lanes', async () => {
@@ -402,6 +405,112 @@ describe('v2 authenticated file transfer', () => {
   })
 })
 
+function registerCheckpointSchedulingTests(): void {
+  it.each([
+    { label: 'no trigger fires', pendingBytes: 8n },
+    { label: 'only the final block reaches the trigger', pendingBytes: 4n },
+  ])('commits a normal multi-block file without an automatic checkpoint when $label', async ({
+    pendingBytes,
+  }) => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const output = testOutput([], {
+      durability: 'ProcessRestart',
+      executionProfile: boundedCheckpointProfile(pendingBytes),
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans: planAuthorityFixture({ output }),
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(output.writes).toHaveLength(2)
+    expect(output.automaticCheckpointAttempts).toEqual([])
+    expect(output.finalProofs).toHaveLength(1)
+  })
+
+  it('acknowledges written progress before waiting for a delayed automatic checkpoint', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const checkpoint = deferred<void>()
+    const output = testOutput([], {
+      durability: 'ProcessRestart',
+      executionProfile: boundedCheckpointProfile(2n),
+      beforeAutomaticCheckpoint: () => checkpoint.promise,
+    })
+    const progress: TransferProgress[] = []
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+    })
+    const running = transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans: planAuthorityFixture({ output }),
+      revisions: readers.revisions,
+      broker: readers.broker,
+      onProgress: value => progress.push(value),
+    }).run()
+
+    await expect.poll(() => output.automaticCheckpointAttempts.length).toBe(1)
+    expect(progress.at(-1)).toMatchObject({
+      writtenBytes: 2n,
+      recoverableBytes: 0n,
+      completedFiles: 0,
+    })
+    expect(output.checkpointAdvances).toEqual([])
+    checkpoint.resolve()
+    await expect(running).resolves.toMatchObject({ worker: { status: 'Succeeded' } })
+    expect(output.checkpointAdvances).toEqual([file.idText])
+    expect(progress.at(-1)).toMatchObject({ recoverableBytes: 4n, completedFiles: 1 })
+  })
+
+  it('continues after a budget decline and permits a later cumulative advance', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 6n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const output = testOutput([], {
+      durability: 'ProcessRestart',
+      executionProfile: boundedCheckpointProfile(2n),
+      automaticCheckpointDecisions: ['declined', 'advanced'],
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans: planAuthorityFixture({ output }),
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(output.automaticCheckpointAttempts).toEqual([file.idText, file.idText])
+    expect(output.checkpointDeclines).toEqual([file.idText])
+    expect(output.checkpointAdvances).toEqual([file.idText])
+    expect(output.finalProofs).toHaveLength(1)
+  })
+}
+
 function registerRevisionCapacityJobTests(): void {
   it('retries authenticated capacity behind one output transaction and records no file error', async () => {
     const root = identity(2)
@@ -537,4 +646,30 @@ function immediateCapacityPolicy(waitBudgetMilliseconds: number) {
     random: () => 0,
     randomBytes: (length: number) => identity(93).slice(0, length),
   })
+}
+
+function boundedCheckpointProfile(pendingBytes: bigint) {
+  return outputExecutionProfile({
+    maximumConcurrentFilePipelines: 1,
+    maximumOutstandingWriteBytes: 8n,
+    maximumBufferedBytes: 8n,
+    automaticCheckpoint: {
+      kind: 'bounded',
+      trigger: { pendingBytes, pendingMilliseconds: 60_000 },
+      costBudget: {
+        maximumPrefixCopyBytes: 8n,
+        maximumCumulativeWriteAmplificationBytes: 8n,
+        maximumPeakTemporaryBytes: 8n,
+      },
+    },
+  })
+}
+
+function deferred<T>(): {
+  readonly promise: Promise<T>
+  readonly resolve: (value: T) => void
+} {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(next => { resolve = next })
+  return { promise, resolve }
 }
