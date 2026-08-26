@@ -10,6 +10,7 @@ import type { V2RevisionReader } from '../../content/v2-session-services'
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
 import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type {
   CanonicalModifiedTime,
@@ -311,6 +312,8 @@ export interface TransferJobResult {
   readonly lifecycle: ReceiveLifecycleState
   /** Repair qualifies output independently, so ordinary lifecycle kinds remain canonical. */
   readonly repairSummary?: CompatibleNameRepairSummary
+  /** Choice costs are exposed only after the resumable lifecycle authenticates its checkpoint set. */
+  readonly recoverySummary?: RecoverySummary
   readonly measure: SelectionMeasure
   readonly abortReason?: unknown
   readonly failureTrigger?: ClassifiedTransferFailure

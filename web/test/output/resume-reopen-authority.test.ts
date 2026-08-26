@@ -96,7 +96,12 @@ describe('persisted receive operation reopen authority', () => {
       trace,
     })
 
-    const reopened = await authority.reopen(descriptor, 'continue')
+    const reopened = await authority.reopen(
+      descriptor,
+      'continue',
+      undefined,
+      'restart-owned-file',
+    )
 
     expect(repositoryInstances).toBe(1)
     expect(reopened).toMatchObject({
@@ -104,6 +109,7 @@ describe('persisted receive operation reopen authority', () => {
       intent: { operationId: intent.operationId, digest: intent.digest },
       lifecycle: { kind: 'receiving', generation: 5n },
       binding: { parent: parent.asHandle() },
+      retainedFileRecovery: 'restart-owned-file',
     })
     expect(reopened.lease.leaseId).not.toBe(staleLeaseId)
     expect(reopened.lifecycle).toMatchObject({ activeLeaseId: reopened.lease.leaseId })
@@ -112,6 +118,7 @@ describe('persisted receive operation reopen authority', () => {
     expect(trace).toHaveBeenCalledWith(expect.objectContaining({
       name: 'receive.operation.reopen_authorized',
       operation_id: intent.operationId,
+      retained_file_recovery: 'restart-owned-file',
       lease_id: reopened.lease.leaseId,
     }))
 

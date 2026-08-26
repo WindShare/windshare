@@ -1,4 +1,5 @@
 import type { TraceCapacityPolicy } from './capacity'
+import type { CheckpointPayloadV1 } from './checkpoint-payload'
 import type {
   CapacityWaitTransitionPayloadV1,
   PerformancePhasePayloadV1,
@@ -587,11 +588,7 @@ export interface TraceEventPayloadByNameV1 {
       | 'transaction_committed'
       | 'commit_failed'
   }>
-  readonly checkpoint: Readonly<{
-    backend: Exclude<OutputBackendV1, 'portable'>
-    transition: 'restored' | 'persisted' | 'quarantined' | 'failed'
-    decision?: 'absent' | 'installed' | 'exact' | 'revision_conflict' | 'ownership_conflict' | 'invalid'
-  }>
+  readonly checkpoint: CheckpointPayloadV1
   readonly settlement: Readonly<{
     backend: OutputBackendV1
     transition: 'started' | 'completed' | 'failed' | 'ownership_unknown'

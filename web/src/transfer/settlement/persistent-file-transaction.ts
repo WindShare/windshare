@@ -1,6 +1,6 @@
 import type { FinalFileCheckpointProof } from '../../output/persistence/journal'
 import type { PersistentFileTransactionPort } from '../../output/persistent-tree/contracts'
-import { PersistentRecoveryPreflightError } from '../../output/persistent-tree/recovery'
+import { PersistentPreservingWriterOpenError } from '../../output/persistent-tree/recovery'
 import {
   TransferPauseRequestedError,
   VerifiedDurableRanges,
@@ -8,7 +8,6 @@ import {
   type AutomaticCheckpointTrigger,
   type FileRetirementDisposition,
   type OpenedOutputRevision,
-  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputFileTransaction,
   type VerifiedFinalOutputFile,
@@ -18,6 +17,24 @@ export interface PersistentOutputTransactionNamespace {
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly materializationBindingDigest: string
+}
+
+/** Operation-level pause with the exact preserving open that can be retried. */
+export class PersistentWriterOpenPauseRequestedError extends TransferPauseRequestedError {
+  readonly materializationRelativePath: readonly string[]
+  readonly cost: PersistentPreservingWriterOpenError['cost']
+  readonly purpose: PersistentPreservingWriterOpenError['purpose']
+
+  constructor(cause: PersistentPreservingWriterOpenError) {
+    super(
+      `Persistent output preserving writer failed for ${cause.materializationRelativePath.join('/')}`,
+      { cause },
+    )
+    this.name = 'PersistentWriterOpenPauseRequestedError'
+    this.materializationRelativePath = Object.freeze([...cause.materializationRelativePath])
+    this.cost = cause.cost
+    this.purpose = cause.purpose
+  }
 }
 
 export class PersistentOutputTransaction implements OutputFileTransaction {
@@ -52,25 +69,30 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
     try {
       await this.#transaction.writeRange(offset, data, signal)
     } catch (cause) {
-      if (cause instanceof PersistentRecoveryPreflightError) {
-        throw new TransferPauseRequestedError(
-          'Persistent output recovery still requires a receiver decision',
-          { cause },
-        )
-      }
+      if (cause instanceof PersistentPreservingWriterOpenError) throw resumableWriterOpenPause(cause)
       throw cause
     }
   }
 
   async automaticCheckpoint(
     trigger: AutomaticCheckpointTrigger,
-    budget: OutputCheckpointCostBudget,
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult> {
     signal.throwIfAborted()
     if (this.#settled) throw new Error('persistent output transaction is already settled')
-    const result = await this.#transaction.automaticCheckpoint(trigger, budget, signal)
-    if (result.kind === 'declined') return result
+    let result: Awaited<ReturnType<PersistentFileTransactionPort['automaticCheckpoint']>>
+    try {
+      result = await this.#transaction.automaticCheckpoint(trigger, signal)
+    } catch (cause) {
+      if (cause instanceof PersistentPreservingWriterOpenError) throw resumableWriterOpenPause(cause)
+      throw cause
+    }
+    if (result.kind === 'deferred') {
+      return Object.freeze({ kind: 'deferred' as const, reason: result.reason })
+    }
+    if (result.kind === 'finished') {
+      return Object.freeze({ kind: 'finished' as const, reason: result.reason })
+    }
     return Object.freeze({
       kind: 'advanced' as const,
       durable: verifiedPersistentRanges(
@@ -78,7 +100,6 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
         this.#revision,
         result.durableRanges,
       ),
-      cost: result.cost,
     })
   }
 
@@ -120,6 +141,12 @@ export class PersistentOutputTransaction implements OutputFileTransaction {
     this.#settled = true
     this.#releaseMutation()
   }
+}
+
+function resumableWriterOpenPause(
+  cause: PersistentPreservingWriterOpenError,
+): PersistentWriterOpenPauseRequestedError {
+  return new PersistentWriterOpenPauseRequestedError(cause)
 }
 
 export function verifiedPersistentRanges(

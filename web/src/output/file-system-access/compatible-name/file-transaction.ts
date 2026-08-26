@@ -14,9 +14,8 @@ export function compatibleNameFileTransaction(
     checkpoint: (signal?: AbortSignal) => transaction.checkpoint(signal),
     automaticCheckpoint: (
       trigger: Parameters<PersistentFileTransactionPort['automaticCheckpoint']>[0],
-      budget: Parameters<PersistentFileTransactionPort['automaticCheckpoint']>[1],
       signal?: AbortSignal,
-    ) => transaction.automaticCheckpoint(trigger, budget, signal),
+    ) => transaction.automaticCheckpoint(trigger, signal),
     commit: async (signal?: AbortSignal) => {
       const proof = await transaction.commit(signal)
       // A compatible physical name becomes publishable only after its final proof is durable.

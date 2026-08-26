@@ -101,6 +101,11 @@ function continuationStates() {
     checkpointSetDigest: identity(5, 32),
     completedFileCount: 19n,
     completedBytes: 35_020n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 19n,
+      discoveredBytes: 35_020n,
+      discovery: 'complete',
+    }),
     expiresAt: 86_401_000,
   })
   if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
@@ -116,6 +121,7 @@ function continuationStates() {
     checkpointSetDigest: fallback.checkpointSetDigest,
     completedFileCount: fallback.completedFileCount,
     completedBytes: fallback.completedBytes,
+    selectionFacts: fallback.selectionFacts,
     expiresAt: fallback.expiresAt,
   })
   if (restored.kind !== 'resumable-receive' || restored.payloadKind !== 'file-set') {

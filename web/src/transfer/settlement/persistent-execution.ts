@@ -7,15 +7,16 @@ import {
 } from '../../output/diagnostics/performance-summary'
 import { beginPerformanceRevisionOpen } from '../../output/diagnostics/performance-runtime-observations'
 import type {
+  AutomaticCheckpointAdmissionAuthority,
   PersistentDirectoryLedgerMaterialization,
   PersistentFileTransactionPort,
   PersistentMaterializationPort,
   PersistentOutputNamespaceClaimPort,
+  PreservingWriterCapacityAuthority,
 } from '../../output/persistent-tree/contracts'
 import { MaterializationLedgerDirectoryOutcome } from '../../output/materialization-ledger/model'
 import type { MaterializedManifestEntry } from '../../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../../output/workspace/preparation'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import {
   createDirectoryAdmissionScope,
@@ -70,8 +71,6 @@ import {
   samePath,
   type PersistentDirectTreeSettlementAuthority,
   type PersistentDirectTreeMaterializationEvidence,
-  type PersistentMaterializationEvidence,
-  type PersistentMaterializationSettlementCut,
   type PersistentWorkspaceMaterializationEvidence,
   type PersistentWorkspaceSettlementAuthority,
   type WorkspaceMaterializationEvidence,
@@ -81,10 +80,8 @@ import {
   verifiedPersistentRanges,
   type PersistentOutputTransactionNamespace,
 } from './persistent-file-transaction'
-import {
-  bindPersistentTemporarySpaceConfirmation,
-  type PersistentExecutionRecoveryPolicy,
-} from './persistent-recovery-policy'
+import type { PersistentExecutionRecoveryPolicy } from './persistent-recovery-policy'
+import { PersistentSettlementCut } from './persistent-settlement-cut'
 
 export type {
   PersistentDirectTreeMaterializationEvidence,
@@ -118,6 +115,8 @@ export async function createPersistentDirectTreeExecution(input: {
   readonly outputIdentity: OutputSessionIdentity
   readonly executionProfile: OutputExecutionProfile
   readonly settlement: PersistentDirectTreeSettlementAuthority
+  readonly automaticCheckpointAdmission: AutomaticCheckpointAdmissionAuthority
+  readonly preservingWriterCapacity: PreservingWriterCapacityAuthority
   readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
   readonly capabilities?: Partial<OutputCapabilities>
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
@@ -137,12 +136,15 @@ export async function createPersistentDirectTreeExecution(input: {
     }),
     directoryLedger: new DirectoryAdmissionLedger(scope),
     directTreeCoordinates: coordinates,
+    automaticCheckpointAdmission: input.automaticCheckpointAdmission,
+    preservingWriterCapacity: input.preservingWriterCapacity,
     ...(input.recovery === undefined ? {} : { recovery: input.recovery }),
     ...(input.namespaceClaims === undefined ? {} : { namespaceClaims: input.namespaceClaims }),
     ...(input.performance === undefined ? {} : { performance: input.performance }),
   })
   let terminalSettlementInitiated = false
   const stop = input.settlement.stop
+  const recoverySummary = input.settlement.recoverySummary
   const execution: DirectTreeExecution = {
     planKind: 'direct-tree',
     output: adapter,
@@ -150,9 +152,13 @@ export async function createPersistentDirectTreeExecution(input: {
     ...(input.performance === undefined ? {} : { performance: input.performance }),
     beginTerminal: kind => {
       terminalSettlementInitiated = true
+      adapter.closeCheckpointAuthorities()
       input.settlement.beginTerminal(kind)
     },
     ...(input.repairSummary === undefined ? {} : { repairSummary: input.repairSummary }),
+    ...(recoverySummary === undefined
+      ? {}
+      : { recoverySummary }),
     terminalSettlementInitiated: () => terminalSettlementInitiated,
     pause: async (request, signal) => {
       const cut = new PersistentSettlementCut(
@@ -307,6 +313,8 @@ class PersistentMaterializationOutput implements OutputSession {
   readonly #namespaceClaims: PersistentOutputNamespaceClaimPort | undefined
   readonly #directTreeCoordinates: DirectTreeCoordinateContract | undefined
   readonly #recovery: PersistentExecutionRecoveryPolicy
+  readonly #automaticCheckpointAdmission: AutomaticCheckpointAdmissionAuthority | undefined
+  readonly #preservingWriterCapacity: PreservingWriterCapacityAuthority | undefined
   readonly #performance: PerformanceSummaryObservations | undefined
   readonly #entries = new Map<string, MaterializedManifestEntry>()
   readonly #directoryPathByAdmission = new Map<string, MaterializationRootRelativePath>()
@@ -323,6 +331,8 @@ class PersistentMaterializationOutput implements OutputSession {
     readonly namespaceClaims?: PersistentOutputNamespaceClaimPort
     readonly directTreeCoordinates?: DirectTreeCoordinateContract
     readonly recovery?: PersistentExecutionRecoveryPolicy
+    readonly automaticCheckpointAdmission?: AutomaticCheckpointAdmissionAuthority
+    readonly preservingWriterCapacity?: PreservingWriterCapacityAuthority
     readonly performance?: PerformanceSummaryObservations
   }) {
     this.#materialization = input.materialization
@@ -334,6 +344,12 @@ class PersistentMaterializationOutput implements OutputSession {
     this.#namespaceClaims = input.namespaceClaims
     this.#directTreeCoordinates = input.directTreeCoordinates
     this.#recovery = input.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
+    this.#automaticCheckpointAdmission = input.automaticCheckpointAdmission
+    this.#preservingWriterCapacity = input.preservingWriterCapacity
+    if ((this.#automaticCheckpointAdmission === undefined) !==
+        (this.#preservingWriterCapacity === undefined)) {
+      throw new TypeError('Persistent checkpoint authorities must be bound as one attempt pair')
+    }
     this.#performance = input.performance
     if (this.#directTreeCoordinates !== undefined &&
         (input.materialization.materializeDirectory === undefined ||
@@ -472,15 +488,9 @@ class PersistentMaterializationOutput implements OutputSession {
   async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
-    const confirmTemporarySpace = bindPersistentTemporarySpaceConfirmation(
-      this.#recovery,
+    const automaticCheckpointAdmission = this.#automaticCheckpointAdmission?.enrollFile(
       request.materializationRelativePath,
     )
-    let recoveryCostBudget = this.#recovery.costBudget
-    if (recoveryCostBudget === undefined &&
-        this.executionProfile.automaticCheckpoint.kind === 'bounded') {
-      recoveryCostBudget = this.executionProfile.automaticCheckpoint.costBudget
-    }
     const revisionQueuedAtMilliseconds = performanceNowMilliseconds(this.#performance)
     const mutation = request.parentAdmission === undefined || this.#directoryLedger === undefined
       ? undefined
@@ -497,11 +507,13 @@ class PersistentMaterializationOutput implements OutputSession {
         outputSession: this.identity,
         recovery: Object.freeze({
           pausedFile: this.#recovery.pausedFile,
-          ...(recoveryCostBudget === undefined ? {} : { costBudget: recoveryCostBudget }),
-          ...(confirmTemporarySpace === undefined
-            ? {}
-            : { confirmTemporarySpace }),
         }),
+        ...(automaticCheckpointAdmission === undefined
+          ? {}
+          : { automaticCheckpointAdmission }),
+        ...(this.#preservingWriterCapacity === undefined
+          ? {}
+          : { preservingWriterCapacity: this.#preservingWriterCapacity }),
         ...(request.performancePipeline === undefined
           ? {}
           : { performancePipeline: request.performancePipeline }),
@@ -564,6 +576,7 @@ class PersistentMaterializationOutput implements OutputSession {
         }),
       })
     } catch (error) {
+      automaticCheckpointAdmission?.retire('unused')
       mutation?.release()
       throw error
     }
@@ -592,14 +605,21 @@ class PersistentMaterializationOutput implements OutputSession {
   }
 
   close(): Promise<void> {
+    this.closeCheckpointAuthorities()
     this.#closePromise ??= this.#materialization.close()
     return this.#closePromise
   }
 
   closeForTerminalSettlement(): Promise<void> {
+    this.closeCheckpointAuthorities()
     this.#closePromise ??= this.#materialization.closeForTerminalSettlement?.() ??
       this.#materialization.close()
     return this.#closePromise
+  }
+
+  closeCheckpointAuthorities(): void {
+    this.#automaticCheckpointAdmission?.close('terminal-drain')
+    this.#preservingWriterCapacity?.close('terminal-drain')
   }
 
   #recordDirectory(entry: Extract<MaterializedManifestEntry, { kind: 'directory' }>): void {
@@ -636,58 +656,6 @@ class PersistentMaterializationOutput implements OutputSession {
   }
 }
 
-class PersistentSettlementCut<Evidence extends PersistentMaterializationEvidence>
-implements PersistentMaterializationSettlementCut<Evidence> {
-  readonly #evidence: Evidence | (() => Evidence)
-  readonly #close: () => Promise<void>
-  #snapshot: Evidence | undefined
-  #sealed = false
-  #closePromise: Promise<void> | undefined
-
-  constructor(evidence: Evidence | (() => Evidence), close: () => Promise<void>) {
-    this.#evidence = evidence
-    this.#close = close
-  }
-
-  get evidence(): Evidence {
-    return this.snapshotQuiescentEvidence()
-  }
-
-  snapshotQuiescentEvidence(): Evidence {
-    this.#snapshot ??= typeof this.#evidence === 'function'
-      ? (this.#evidence as () => Evidence)()
-      : this.#evidence
-    return this.#snapshot
-  }
-
-  sealEvidence(): Evidence {
-    const evidence = this.snapshotQuiescentEvidence()
-    this.#sealed = true
-    return evidence
-  }
-
-  closeMaterialization(): Promise<void> {
-    this.#closePromise ??= this.#close()
-    return this.#closePromise
-  }
-
-  async validateReturnedState(state: ReceiveLifecycleState): Promise<void> {
-    if (this.#closePromise === undefined) {
-      throw new TypeError('persistent lifecycle settlement returned before closing materialization')
-    }
-    if (!this.#sealed) this.sealEvidence()
-    try {
-      await this.#closePromise
-    } catch (cause) {
-      if (state.kind !== 'needs-attention') {
-        throw new TypeError(
-          'persistent lifecycle settlement hid materialization close uncertainty',
-          { cause },
-        )
-      }
-    }
-  }
-}
 
 function persistentCapabilities(
   input: Partial<OutputCapabilities> & Pick<OutputCapabilities, 'fileFailureIsolation'>,

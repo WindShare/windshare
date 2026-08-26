@@ -330,6 +330,11 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
           checkpointSetDigest: identityText(74, 32),
           completedFileCount: 0n,
           completedBytes: 0n,
+          selectionFacts: Object.freeze({
+            discoveredFileCount: 0n,
+            discoveredBytes: 0n,
+            discovery: 'complete',
+          }),
           expiresAt: Date.now() + 60_000,
         }),
         workspaceUsage: this.initialWorkspaceUsage,
@@ -524,6 +529,11 @@ export class FakeTransferRun {
             checkpointSetDigest: identityText(74, 32),
             completedFileCount: 0n,
             completedBytes: 0n,
+            selectionFacts: Object.freeze({
+              discoveredFileCount: 0n,
+              discoveredBytes: 0n,
+              discovery: 'complete',
+            }),
             expiresAt: Date.now() + 60_000,
           })
         : next(lifecycle, {
@@ -737,6 +747,11 @@ export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
     checkpointSetDigest: identityText(93, 32),
     completedFileCount: 1n,
     completedBytes: 64n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 1n,
+      discoveredBytes: 64n,
+      discovery: 'complete',
+    }),
     expiresAt: Date.now() + 60_000,
   })
   const receiving = next(retained, {
@@ -830,6 +845,11 @@ export function stableLifecycle(
         checkpointSetDigest: identityText(50, 32),
         completedFileCount: 1n,
         completedBytes: 128n,
+        selectionFacts: Object.freeze({
+          discoveredFileCount: 1n,
+          discoveredBytes: 128n,
+          discovery: 'complete',
+        }),
         expiresAt: Date.now() + 60_000,
       })
     case 'waiting-to-save':

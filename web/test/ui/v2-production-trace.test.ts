@@ -13,6 +13,7 @@ import type {
 } from '../../src/diagnostics/trace/ports'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
+  createOutputTraceSource,
   createV2ReceiverTraceSource,
   projectV2ReceiverTraceEvent,
 } from '../../src/ui/v2-production-trace'
@@ -373,6 +374,51 @@ describe('browser diagnostics production composition', () => {
       value: api,
     })
     expect(api.status()).toMatchObject({ state: 'idle', enabled: false })
+  })
+})
+
+describe('checkpoint authority production trace', () => {
+  it('accepts stable decisions through the production recorder', () => {
+    const composition = productionComposition()
+    const source = createOutputTraceSource(composition.trace)
+    composition.runtime.enable()
+
+    source.current?.({
+      eventName: 'checkpoint',
+      payload: Object.freeze({
+        backend: 'file_system_access',
+        transition: 'authority_decision',
+        authority: 'automatic_admission',
+        receive_operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+        transfer_job_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+        output_session_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+        materialization_relative_path: Object.freeze(['folder', 'large.bin']),
+        trigger: 'pending_bytes',
+        checkpoint_ordinal: 1,
+        prefix_copy_bytes: '67108864',
+        write_amplification_bytes: '67108864',
+        temporary_bytes: '67108864',
+        remaining_automatic_write_amplification_bytes: '2080374784',
+        decision: 'admitted',
+      }),
+    })
+
+    const lines = composition.runtime.export().trimEnd().split('\n').map(
+      line => JSON.parse(line) as Record<string, unknown>,
+    )
+    expect(lines.at(-1)).toMatchObject({
+      line_type: 'trace_event',
+      record: {
+        event: 'checkpoint',
+        payload: {
+          transition: 'authority_decision',
+          receive_operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+          transfer_job_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+          output_session_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+          decision: 'admitted',
+        },
+      },
+    })
   })
 })
 

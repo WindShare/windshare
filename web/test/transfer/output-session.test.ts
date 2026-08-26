@@ -141,11 +141,6 @@ describe('plan-specific output boundary', () => {
       automaticCheckpoint: {
         kind: 'bounded' as const,
         trigger: { pendingBytes: 4n, pendingMilliseconds: 50 },
-        costBudget: {
-          maximumPrefixCopyBytes: 2n,
-          maximumCumulativeWriteAmplificationBytes: 3n,
-          maximumPeakTemporaryBytes: 4n,
-        },
       },
     }
     const validated = outputExecutionProfile(profile)
@@ -154,6 +149,7 @@ describe('plan-specific output boundary', () => {
       maximumConcurrentFilePipelines: 3,
       automaticCheckpoint: { trigger: { pendingBytes: 4n } },
     })
+    expect(validated.automaticCheckpoint).not.toHaveProperty('costBudget')
     expect(() => outputExecutionProfile({ ...profile, maximumConcurrentFilePipelines: 0 }))
       .toThrow(/concurrent file-pipeline limit/u)
     expect(() => outputExecutionProfile({

@@ -443,6 +443,57 @@ export function validateOutputWrite(payload: UnknownRecord): void {
 }
 
 export function validateCheckpoint(payload: UnknownRecord): void {
+  if (payload.transition === 'authority_decision') {
+    exactKeys(payload, [
+      'backend', 'transition', 'authority', 'receive_operation_id', 'transfer_job_id',
+      'output_session_id', 'materialization_relative_path', 'trigger', 'prefix_copy_bytes',
+      'write_amplification_bytes', 'temporary_bytes', 'decision',
+    ], [
+      'checkpoint_ordinal', 'remaining_automatic_write_amplification_bytes', 'release_reason',
+    ], 'checkpoint authority payload')
+    member(payload.backend, ['file_system_access'], 'checkpoint authority backend')
+    member(payload.authority, ['automatic_admission', 'preserving_capacity'],
+      'checkpoint authority kind')
+    canonicalIdentity(payload.receive_operation_id, 'checkpoint receive operation ID')
+    canonicalIdentity(payload.transfer_job_id, 'checkpoint transfer job ID')
+    canonicalIdentity(payload.output_session_id, 'checkpoint output session ID')
+    if (!Array.isArray(payload.materialization_relative_path) ||
+        payload.materialization_relative_path.some(segment =>
+          typeof segment !== 'string' || segment.length === 0)) {
+      throw new TypeError('checkpoint materialization path must contain non-empty segments')
+    }
+    member(payload.trigger, ['pending_bytes', 'pending_time', 'paused_file_recovery'],
+      'checkpoint authority trigger')
+    if (payload.checkpoint_ordinal !== undefined &&
+        uint32(payload.checkpoint_ordinal, 'checkpoint ordinal') === 0) {
+      throw new RangeError('checkpoint ordinal must be positive')
+    }
+    decimalFields(payload, [
+      'prefix_copy_bytes', 'write_amplification_bytes', 'temporary_bytes',
+    ], 'checkpoint authority cost')
+    if (payload.remaining_automatic_write_amplification_bytes !== undefined) {
+      decimalUint64(
+        payload.remaining_automatic_write_amplification_bytes,
+        'checkpoint remaining automatic write amplification',
+      )
+    }
+    member(payload.decision, [
+      'admitted', 'checkpoint_priority', 'prefix_copy_budget',
+      'cumulative_write_amplification_budget', 'capacity_unavailable',
+      'paused_recovery_queued', 'paused_recovery_admitted', 'committed', 'released',
+    ], 'checkpoint authority decision')
+    if ((payload.decision === 'released') !== (payload.release_reason !== undefined)) {
+      throw new TypeError('checkpoint release reason must accompany exactly a released decision')
+    }
+    if (payload.release_reason !== undefined) {
+      member(payload.release_reason, [
+        'unused', 'capacity_unavailable', 'replacement_open_failed', 'writer_closed',
+        'writer_aborted', 'file_committed', 'file_paused', 'file_retired', 'cancelled',
+        'terminal_drain', 'automatic_handoff',
+      ], 'checkpoint authority release reason')
+    }
+    return
+  }
   exactKeys(payload, ['backend', 'transition'], ['decision'], 'checkpoint payload')
   member(payload.backend, CHECKPOINT_BACKENDS, 'checkpoint backend')
   member(payload.transition, [

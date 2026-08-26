@@ -10,6 +10,7 @@ import {
   compatibleNameRepairSummary,
   type CompatibleNameRepairSummary,
 } from '../output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
 import {
   isTerminalLifecycleState,
   lifecycleDeadline,
@@ -22,6 +23,7 @@ import type {
 } from '../transfer/intent'
 import type { SelectionProjectionState } from '../transfer/projection'
 import type { TransferJobResult } from '../transfer/job/contract'
+import { PersistentWriterOpenPauseRequestedError } from '../transfer/settlement/persistent-file-transaction'
 import type { V2AuthorityActivationSnapshot } from './controller/activation-model'
 import {
   activationPresentsChoice,
@@ -36,6 +38,7 @@ import {
   type V2ActiveReceiveControl,
   type V2ReceiveInterruptionPresentation,
   type WorkspaceUsage,
+  type PersistentWriterOpenPauseFact,
 } from './v2-lifecycle-presentation'
 import {
   presentTransferResult,
@@ -59,6 +62,8 @@ export interface V2OutputPresentationSnapshot {
   readonly plan: MaterializationPlan | null
   readonly lifecycle: ReceiveLifecycleState | null
   readonly repairSummary: CompatibleNameRepairSummary | null
+  readonly recoverySummary: RecoverySummary | null
+  readonly writerOpenPause: PersistentWriterOpenPauseFact | null
   readonly lifecyclePresentation: ReceiveLifecyclePresentation | null
   readonly expiresAt: number | null
   readonly workspaceUsage: WorkspaceUsage | null
@@ -82,6 +87,8 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   plan: null,
   lifecycle: null,
   repairSummary: null,
+  recoverySummary: null,
+  writerOpenPause: null,
   lifecyclePresentation: null,
   expiresAt: null,
   workspaceUsage: null,
@@ -93,7 +100,8 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
 
 export type TransferResultProjection = Pick<
   TransferJobResult,
-  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary'
+  'worker' | 'intent' | 'transferJobId' | 'lifecycle' | 'repairSummary' | 'recoverySummary' |
+    'abortReason'
 >
 
 /**
@@ -226,6 +234,8 @@ export class V2OutputPresentationController {
       receiveIntent: intent,
       plan: intent.plan,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      recoverySummary: null,
+      writerOpenPause: null,
       activeControls: Object.freeze([...activeControls]),
       receiveInterruption: null,
     }, lifecycle ?? null, nowMilliseconds, workspaceUsage)
@@ -271,6 +281,8 @@ export class V2OutputPresentationController {
       receiveIntent: intent,
       plan: intent.plan,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
+      recoverySummary: null,
+      writerOpenPause: null,
       activeControls: Object.freeze([...activeControls]),
       receiveInterruption: null,
     }, lifecycle, nowMilliseconds, workspaceUsage)
@@ -285,6 +297,7 @@ export class V2OutputPresentationController {
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
     repairSummary?: CompatibleNameRepairSummary | null,
+    recoverySummary?: RecoverySummary | null,
   ): boolean {
     const intent = this.#snapshot.receiveIntent
     if (intent === null || state.operationId !== intent.operationId ||
@@ -297,6 +310,10 @@ export class V2OutputPresentationController {
         this.#snapshot.repairSummary,
         repairSummary,
       ),
+      // Recovery costs authenticate one exact stable generation and cannot flow
+      // through a later lifecycle observation without a new checkpoint snapshot.
+      recoverySummary: recoverySummary ?? null,
+      writerOpenPause: null,
       activeControls: Object.freeze([...activeControls]),
       receiveInterruption: null,
     }, state, nowMilliseconds, workspaceUsage)
@@ -370,9 +387,13 @@ export class V2OutputPresentationController {
       this.#snapshot.repairSummary,
       terminalRepairSummary,
     )
+    const recoverySummary = result.recoverySummary ?? null
+    const writerOpenPause = persistentWriterOpenPauseFact(result.abortReason)
     const snapshot = this.#buildLifecycleSnapshot({
       ...this.#snapshot,
       repairSummary,
+      recoverySummary,
+      writerOpenPause,
       receiveInterruption: null,
     }, result.lifecycle, Date.now(), this.#snapshot.workspaceUsage)
     this.#publish(Object.freeze({
@@ -418,6 +439,8 @@ export class V2OutputPresentationController {
       return Object.freeze({
         ...base,
         lifecycle: null,
+        recoverySummary: null,
+        writerOpenPause: null,
         lifecyclePresentation: null,
         expiresAt: null,
         workspaceUsage: null,
@@ -437,11 +460,15 @@ export class V2OutputPresentationController {
       activeControls: base.activeControls,
       interruption: base.receiveInterruption,
       repairSummary: base.repairSummary,
+      recoverySummary: matchingRecoverySummary(lifecycle, base.recoverySummary),
+      writerOpenPause: base.writerOpenPause,
       directZipProgress: base.directZipProgress,
     })
+    const recoverySummary = matchingRecoverySummary(lifecycle, base.recoverySummary)
     return Object.freeze({
       ...base,
       lifecycle,
+      recoverySummary,
       lifecyclePresentation,
       expiresAt: lifecycleDeadline(lifecycle) ??
         (lifecycle.kind === 'expired' ? lifecycle.expiresAt : null),
@@ -468,6 +495,15 @@ export class V2OutputPresentationController {
   }
 }
 
+function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPauseFact | null {
+  if (!(reason instanceof PersistentWriterOpenPauseRequestedError)) return null
+  return Object.freeze({
+    materializationRelativePath: Object.freeze([...reason.materializationRelativePath]),
+    cost: Object.freeze({ ...reason.cost }),
+    purpose: reason.purpose,
+  })
+}
+
 function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
   if (progress.operationId.length === 0 || progress.generation < 0n ||
       progress.receivedSelectedBytes < 0n || progress.safeResumeBytes < 0n ||
@@ -476,6 +512,21 @@ function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
        progress.resumeTemporarySpaceUpperBound < 0n)) {
     throw new TypeError('direct ZIP progress snapshot is invalid')
   }
+}
+
+function matchingRecoverySummary(
+  lifecycle: ReceiveLifecycleState,
+  summary: RecoverySummary | null,
+): RecoverySummary | null {
+  if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set') return null
+  if (summary === null) return null
+  if (summary.lifecycleGeneration !== lifecycle.generation ||
+      summary.checkpointSetDigest !== lifecycle.checkpointSetDigest ||
+      summary.completedFileCount !== lifecycle.completedFileCount ||
+      summary.completedBytes !== lifecycle.completedBytes) {
+    throw new TypeError('recovery summary escaped its lifecycle generation')
+  }
+  return summary
 }
 
 function assertObservationRevision(revision: number): void {

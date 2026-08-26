@@ -6,8 +6,6 @@ import {
   VerifiedDurableRanges,
   VerifiedFinalOutputFile,
   type BeginOutputFileResult,
-  type OutputCheckpointCost,
-  type OutputCheckpointCostBudget,
   type OutputFile,
   type OutputFileOwnership,
   type OutputSession,
@@ -20,16 +18,6 @@ import {
 } from '../../src/transfer/job/coordinate/direct-tree'
 
 const signal = new AbortController().signal
-const budget: OutputCheckpointCostBudget = Object.freeze({
-  maximumPrefixCopyBytes: 8n,
-  maximumCumulativeWriteAmplificationBytes: 8n,
-  maximumPeakTemporaryBytes: 8n,
-})
-const zeroCost = Object.freeze({
-  prefixCopyBytes: 0n,
-  cumulativeWriteAmplificationBytes: 0n,
-  peakTemporaryBytes: 0n,
-})
 const file: OutputFile = Object.freeze({
   source: {
     shareInstance: identityText(1),
@@ -114,18 +102,16 @@ describe('bound output file transaction', () => {
     expect(commit).toHaveBeenCalledOnce()
   })
 
-  it('preserves pending state on decline and advances only with the exact durable union', async () => {
-    let decision: 'declined' | 'advanced' = 'declined'
-    const automaticCheckpoint = vi.fn(async () => decision === 'declined'
+  it('preserves pending state on a retryable deferral and advances only with the exact durable union', async () => {
+    let decision: 'deferred' | 'advanced' = 'deferred'
+    const automaticCheckpoint = vi.fn(async () => decision === 'deferred'
       ? Object.freeze({
-          kind: 'declined' as const,
-          reason: 'cost-evidence-unavailable' as const,
-          estimate: zeroCost,
+          kind: 'deferred' as const,
+          reason: 'capacity-unavailable' as const,
         })
       : Object.freeze({
           kind: 'advanced' as const,
           durable: durableRanges([{ start: 0n, end: 2n }]),
-          cost: zeroCost,
         }))
     const bound = bindOutputFileTransaction(
       result({ ...file.source, exactSize: file.exactSize }, { automaticCheckpoint }),
@@ -134,21 +120,19 @@ describe('bound output file transaction', () => {
     ).transaction
     await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
 
-    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
-      .resolves.toMatchObject({ kind: 'declined' })
+    await expect(bound.automaticCheckpoint('pending-bytes', signal))
+      .resolves.toMatchObject({ kind: 'deferred' })
     await expect(bound.writeRange(1n, new Uint8Array([9]), signal)).rejects.toThrow(/overlaps/u)
     decision = 'advanced'
-    await expect(bound.automaticCheckpoint('pending-time', budget, signal))
+    await expect(bound.automaticCheckpoint('pending-time', signal))
       .resolves.toMatchObject({ kind: 'advanced', durable: { ranges: [{ start: 0n, end: 2n }] } })
   })
 
-  it('accepts temporary-space confirmation declines only for non-empty modeled space', async () => {
-    let estimate: OutputCheckpointCost = { ...zeroCost, peakTemporaryBytes: 1n }
-    const automaticCheckpoint = async () => Object.freeze({
-      kind: 'declined' as const,
-      reason: 'temporary-space-confirmation-required' as const,
-      estimate,
-    })
+  it('makes a terminal automatic outcome sticky without preventing final commit', async () => {
+    const automaticCheckpoint = vi.fn(async () => Object.freeze({
+      kind: 'finished' as const,
+      reason: 'cumulative-write-amplification-budget' as const,
+    }))
     const bound = bindOutputFileTransaction(
       result({ ...file.source, exactSize: file.exactSize }, { automaticCheckpoint }),
       file,
@@ -156,34 +140,24 @@ describe('bound output file transaction', () => {
     ).transaction
     await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
 
-    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
-      .resolves.toMatchObject({ kind: 'declined', reason: 'temporary-space-confirmation-required' })
-
-    estimate = zeroCost
-    await expect(bound.automaticCheckpoint('pending-time', budget, signal))
-      .rejects.toThrow(/decline is not justified/u)
+    await expect(bound.automaticCheckpoint('pending-bytes', signal))
+      .resolves.toMatchObject({ kind: 'finished' })
+    await expect(bound.automaticCheckpoint('pending-time', signal))
+      .rejects.toThrow(/already finished/u)
+    await bound.writeRange(2n, new Uint8Array([3, 4]), signal)
+    await expect(bound.commit(signal)).resolves.toBeInstanceOf(VerifiedFinalOutputFile)
+    expect(automaticCheckpoint).toHaveBeenCalledOnce()
   })
 
-  it('rejects partial automatic checkpoint evidence and an over-budget advance', async () => {
-    let durable = durableRanges([{ start: 0n, end: 1n }])
-    let cost: OutputCheckpointCost = zeroCost
+  it('rejects partial automatic checkpoint evidence', async () => {
+    const durable = durableRanges([{ start: 0n, end: 1n }])
     const bound = bindOutputFileTransaction(result(
       { ...file.source, exactSize: file.exactSize },
-      { automaticCheckpoint: async () => Object.freeze({ kind: 'advanced' as const, durable, cost }) },
+      { automaticCheckpoint: async () => Object.freeze({ kind: 'advanced' as const, durable }) },
     ), file, session('ProcessRestart', true)).transaction
     await bound.writeRange(0n, new Uint8Array([1, 2]), signal)
-    await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+    await expect(bound.automaticCheckpoint('pending-bytes', signal))
       .rejects.toThrow(/every accepted pending write/u)
-
-    const second = bindOutputFileTransaction(result(
-      { ...file.source, exactSize: file.exactSize },
-      { automaticCheckpoint: async () => Object.freeze({ kind: 'advanced' as const, durable, cost }) },
-    ), file, session('ProcessRestart', true)).transaction
-    await second.writeRange(0n, new Uint8Array([1, 2]), signal)
-    durable = durableRanges([{ start: 0n, end: 2n }])
-    cost = { ...zeroCost, prefixCopyBytes: 9n }
-    await expect(second.automaticCheckpoint('pending-bytes', budget, signal))
-      .rejects.toThrow(/beyond its admitted cost budget/u)
   })
 
   it('waits for and validates an exact forced durable pause cut', async () => {
@@ -244,7 +218,7 @@ describe('bound output file transaction', () => {
 
       await expect(bound.writeRange(0n, new Uint8Array([1]), signal))
         .rejects.toThrow(/terminal settlement began/u)
-      await expect(bound.automaticCheckpoint('pending-bytes', budget, signal))
+      await expect(bound.automaticCheckpoint('pending-bytes', signal))
         .rejects.toThrow(/terminal settlement began/u)
       await expect(bound.pause('again')).rejects.toThrow(/terminal settlement began/u)
       await expect(bound.retire('again')).rejects.toThrow(/terminal settlement began/u)
@@ -334,9 +308,8 @@ function result(
     transaction: {
       writeRange: async () => undefined,
       automaticCheckpoint: async () => Object.freeze({
-        kind: 'declined' as const,
+        kind: 'finished' as const,
         reason: 'cost-evidence-unavailable' as const,
-        estimate: zeroCost,
       }),
       commit: async () => finalProof(),
       retire: async () => 'FileIsolated' as const,
