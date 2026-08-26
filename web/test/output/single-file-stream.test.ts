@@ -102,11 +102,8 @@ describe('single-file stream output session', () => {
     callerBytes.fill(9)
     await firstWrite
     await begun.transaction.writeRange(2n, Uint8Array.of(3), ACTIVE_SIGNAL)
-    await expect(begun.transaction.automaticCheckpoint('pending-bytes', {
-      maximumPrefixCopyBytes: 0n,
-      maximumCumulativeWriteAmplificationBytes: 0n,
-      maximumPeakTemporaryBytes: 0n,
-    }, ACTIVE_SIGNAL)).resolves.toMatchObject({ kind: 'declined' })
+    await expect(begun.transaction.automaticCheckpoint('pending-bytes', ACTIVE_SIGNAL))
+      .resolves.toEqual({ kind: 'finished', reason: 'cost-evidence-unavailable' })
     await expect(begun.transaction.commit(ACTIVE_SIGNAL)).resolves.toMatchObject({
       source: {
         shareInstance: revision.shareInstance,

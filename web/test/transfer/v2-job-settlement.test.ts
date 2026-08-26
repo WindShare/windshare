@@ -263,6 +263,12 @@ describe('v2 plan settlement', () => {
       const result = await running
 
       expect(result.abortReason).toBe(initiatingFailure)
+      expect(plans.pauseRequests).toHaveLength(1)
+      expect(plans.pauseRequests[0]?.selectionFacts).toEqual({
+        discoveredFileCount: 2n,
+        discoveredBytes: 4n,
+        discovery: workerFamily === 'discovery' ? 'failed' : 'complete',
+      })
       const consequences = traces.filter((event): event is Extract<
         TransferTraceEvent,
         { transition: 'worker_consequence_observed' }

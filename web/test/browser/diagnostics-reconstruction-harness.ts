@@ -195,6 +195,7 @@ export async function reconstructFSAContinuationFailure(
         requiredDescriptor(stableLifecycle, clockMilliseconds),
         'continue',
         failures,
+        'preserve',
       )
       if (reopened.kind !== 'direct-tree') {
         throw new TypeError('FSA reconstruction reopened a non-FSA operation')
@@ -376,6 +377,11 @@ function resumableReceive(
     checkpointSetDigest: identity(60, 32),
     completedFileCount: 1n,
     completedBytes: 16n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 1n,
+      discoveredBytes: 16n,
+      discovery: 'complete',
+    }),
     expiresAt: EVIDENCE_CLOCK_MILLISECONDS + STABLE_RETENTION_MILLISECONDS,
   })
 }

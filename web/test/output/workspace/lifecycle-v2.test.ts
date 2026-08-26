@@ -23,6 +23,47 @@ import {
 } from '../../../src/output/workspace/state-codec'
 
 describe('receive lifecycle V2 durable states', () => {
+  it('round-trips pause selection facts in the same canonical lifecycle record', async () => {
+    const lifecycle: ReceiveLifecycleState = Object.freeze({
+      ...base(),
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest: identity(32, 9),
+      completedFileCount: 2n,
+      completedBytes: 12n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 5n,
+        discoveredBytes: 90n,
+        discovery: 'failed',
+      }),
+      expiresAt: 123_456,
+    })
+
+    const canonical = canonicalReceiveLifecycleStateBytes(lifecycle)
+    expect(decodeReceiveLifecycleState(canonical)).toEqual(lifecycle)
+    expect(decodeStoredReceiveLifecycleState(await storedReceiveLifecycleState(lifecycle)))
+      .toEqual(lifecycle)
+  })
+
+  it('rejects selection facts that cannot contain completed output', () => {
+    const lifecycle: ReceiveLifecycleState = Object.freeze({
+      ...base(),
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest: identity(32, 9),
+      completedFileCount: 2n,
+      completedBytes: 12n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 1n,
+        discoveredBytes: 11n,
+        discovery: 'complete',
+      }),
+      expiresAt: 123_456,
+    })
+
+    expect(() => canonicalReceiveLifecycleStateBytes(lifecycle)).toThrow(/do not contain completed output/)
+  })
+
   it('round-trips Direct ZIP coordinates without reinterpreting selected payload as archive bytes', async () => {
     const lifecycle: ReceiveLifecycleState = Object.freeze({
       ...base(),

@@ -364,6 +364,11 @@ export async function proveProductPreparedZipAdmission(
     const paused = await admission.execution.pause(Object.freeze({
       worker: transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY),
       materialization: EMPTY_MATERIALIZATION_SUMMARY,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 1n,
+        discoveredBytes: PRODUCT_ZIP_FILE_BYTES,
+        discovery: 'complete',
+      }),
       reason: 'product admission proof completed',
     }), signal)
     const discarded = await runtime.startLifecycleAction('discard', paused)

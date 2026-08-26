@@ -428,8 +428,7 @@ function budgetedOutputTransaction(
       signal,
       () => transaction.writeRange(offset, data, signal),
     ),
-    automaticCheckpoint: (trigger, costBudget, signal) =>
-      transaction.automaticCheckpoint(trigger, costBudget, signal),
+    automaticCheckpoint: (trigger, signal) => transaction.automaticCheckpoint(trigger, signal),
     commit: signal => transaction.commit(signal),
     retire: reason => transaction.retire(reason),
     pause: reason => transaction.pause(reason),

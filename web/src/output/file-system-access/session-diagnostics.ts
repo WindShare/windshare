@@ -4,12 +4,17 @@ import {
   emitOutputTrace,
   outputTraceEvent,
   type OutputDiagnosticsPorts,
+  type OutputTracePayloadByName,
 } from '../diagnostics'
 import {
   FILE_CHECKPOINT_ID_BYTES,
   identityBytes,
 } from '../persistence/checkpoint'
-import type { PersistentTreeTraceEvent } from '../persistent-tree/contracts'
+import type {
+  CheckpointAuthorityObservation,
+  CheckpointAuthorityObserver,
+  PersistentTreeTraceEvent,
+} from '../persistent-tree/contracts'
 import type { CompatibleNameRootRepairPreparationOptions } from './compatible-name/coordinator'
 import type {
   FSAOutputTrace,
@@ -76,6 +81,57 @@ export function outputTrace(
       transition: input.transition,
     }))
 }
+
+export function checkpointAuthorityObserver(
+  diagnostics: OutputDiagnosticsPorts | undefined,
+): CheckpointAuthorityObserver | undefined {
+  if (diagnostics?.trace === undefined) return undefined
+  return observation => emitOutputTrace(diagnostics.trace, () =>
+    outputTraceEvent('checkpoint', checkpointAuthorityPayload(observation)))
+}
+
+function checkpointAuthorityPayload(
+  observation: CheckpointAuthorityObservation,
+): Extract<OutputTracePayloadByName['checkpoint'], {
+  readonly transition: 'authority_decision'
+}> {
+  return Object.freeze({
+    backend: 'file_system_access',
+    transition: 'authority_decision',
+    authority: snakeCase(observation.authority),
+    receive_operation_id: observation.receiveOperationId,
+    transfer_job_id: observation.transferJobId,
+    output_session_id: observation.outputSessionId,
+    materialization_relative_path: Object.freeze([...observation.materializationRelativePath]),
+    trigger: snakeCase(observation.trigger),
+    ...(observation.checkpointOrdinal === undefined
+      ? {}
+      : { checkpoint_ordinal: observation.checkpointOrdinal }),
+    prefix_copy_bytes: observation.cost.prefixCopyBytes.toString(),
+    write_amplification_bytes: observation.cost.writeAmplificationBytes.toString(),
+    temporary_bytes: observation.cost.temporaryBytes.toString(),
+    ...(observation.remainingAutomaticWriteAmplificationBytes === undefined
+      ? {}
+      : {
+          remaining_automatic_write_amplification_bytes:
+            observation.remainingAutomaticWriteAmplificationBytes.toString(),
+        }),
+    decision: snakeCase(observation.decision),
+    ...(observation.releaseReason === undefined
+      ? {}
+      : { release_reason: snakeCase(observation.releaseReason) }),
+  }) as Extract<OutputTracePayloadByName['checkpoint'], {
+    readonly transition: 'authority_decision'
+  }>
+}
+
+function snakeCase<Value extends string>(value: Value): ReplaceHyphen<Value> {
+  return value.replaceAll('-', '_') as ReplaceHyphen<Value>
+}
+
+type ReplaceHyphen<Value extends string> = Value extends `${infer Head}-${infer Tail}`
+  ? `${Head}_${ReplaceHyphen<Tail>}`
+  : Value
 
 export function emitFSAOutputTrace(
   trace: FSAOutputTrace | undefined,

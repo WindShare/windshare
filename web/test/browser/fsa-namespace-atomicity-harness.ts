@@ -54,19 +54,8 @@ export interface FsaNamespaceFixture {
   readonly parentName: string
 }
 
-const BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES = 1_024n
-
-/** Browser recovery fixtures model the explicit user approval required for prefix preservation. */
-export function confirmedBrowserRecoveryPolicy() {
-  return Object.freeze({
-    pausedFile: 'preserve' as const,
-    costBudget: Object.freeze({
-      maximumPrefixCopyBytes: BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES,
-      maximumCumulativeWriteAmplificationBytes: BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES,
-      maximumPeakTemporaryBytes: BROWSER_CONTRACT_RECOVERY_BUDGET_BYTES,
-    }),
-    confirmTemporarySpace: () => true,
-  })
+export function preservingBrowserRecoveryPolicy() {
+  return Object.freeze({ pausedFile: 'preserve' as const })
 }
 
 interface HeldTask {
@@ -734,7 +723,7 @@ export async function exerciseSingleFileLayout(
   })
   const resumed = await reopened.beginFile({
     materializationRelativePath: [],
-    recovery: confirmedBrowserRecoveryPolicy(),
+    recovery: preservingBrowserRecoveryPolicy(),
     openRevision: async () => ({
       fileId: identity(3),
       fileRevision: identity(33),

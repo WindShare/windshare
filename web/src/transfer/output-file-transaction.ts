@@ -1,7 +1,5 @@
 import { ByteRangeSet, byteRange } from '../content/geometry'
 import {
-  outputCheckpointCost,
-  outputCheckpointCostBudget,
   snapshotOpenedOutputRevision,
   VerifiedDurableRanges,
   VerifiedFinalOutputFile,
@@ -11,8 +9,6 @@ import type {
   AutomaticCheckpointTrigger,
   BeginOutputFileResult,
   FileRetirementDisposition,
-  OutputCheckpointCost,
-  OutputCheckpointCostBudget,
   OutputFile,
   OutputFileOwnership,
   OutputFileTransaction,
@@ -105,6 +101,7 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
   #durableRanges: VerifiedDurableRanges
   #pendingRanges: ByteRangeSet
   #nextSequentialOffset: bigint
+  #automaticCheckpointFinished = false
   #state: 'open' | 'committing' | 'pausing' | 'retiring' | 'committed' | 'paused' | 'retired' | 'failed' = 'open'
 
   constructor(
@@ -150,26 +147,30 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
 
   async automaticCheckpoint(
     trigger: AutomaticCheckpointTrigger,
-    budget: OutputCheckpointCostBudget,
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult> {
     signal.throwIfAborted()
     this.#requireOpen('checkpoint')
+    if (this.#automaticCheckpointFinished) {
+      throw new OutputCheckpointContractError('automatic checkpoint evaluation already finished')
+    }
     if (trigger !== 'pending-bytes' && trigger !== 'pending-time') {
       throw new OutputCheckpointContractError('output checkpoint trigger is invalid')
     }
     if (this.#pendingRanges.empty) {
       throw new OutputCheckpointContractError('automatic checkpoint requires accepted pending ranges')
     }
-    const validatedBudget = outputCheckpointCostBudget(budget)
-    const result = await this.#transaction.automaticCheckpoint(trigger, validatedBudget, signal)
+    const result = await this.#transaction.automaticCheckpoint(trigger, signal)
     if (typeof result !== 'object' || result === null) {
       throw new OutputCheckpointContractError('output checkpoint returned a malformed decision')
     }
-    if (result.kind === 'declined') {
-      const estimate = outputCheckpointCost(result.estimate)
-      requireCheckpointDecline(result.reason, estimate, validatedBudget)
-      return Object.freeze({ kind: 'declined', reason: result.reason, estimate })
+    if (result.kind === 'deferred') {
+      return snapshotAutomaticCheckpointDeferral(result.reason)
+    }
+    if (result.kind === 'finished') {
+      const finished = snapshotAutomaticCheckpointFinish(result.reason)
+      this.#automaticCheckpointFinished = true
+      return finished
     }
     if (result.kind !== 'advanced') {
       throw new OutputCheckpointContractError('output checkpoint returned an unknown decision')
@@ -184,11 +185,9 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
         'output checkpoint does not equal prior durability plus every accepted pending write',
       )
     }
-    const cost = outputCheckpointCost(result.cost)
-    requireCheckpointWithinBudget(cost, validatedBudget)
     this.#durableRanges = checkpoint
     this.#pendingRanges = new ByteRangeSet(this.#file.exactSize, [])
-    return Object.freeze({ kind: 'advanced', durable: checkpoint, cost })
+    return Object.freeze({ kind: 'advanced', durable: checkpoint })
   }
 
   async commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile> {
@@ -306,32 +305,24 @@ function requireCanonicalPrefix(ranges: ByteRangeSet): bigint {
   return prefix.end
 }
 
-function requireCheckpointWithinBudget(
-  cost: OutputCheckpointCost,
-  budget: OutputCheckpointCostBudget,
-): void {
-  if (cost.prefixCopyBytes > budget.maximumPrefixCopyBytes ||
-      cost.cumulativeWriteAmplificationBytes > budget.maximumCumulativeWriteAmplificationBytes ||
-      cost.peakTemporaryBytes > budget.maximumPeakTemporaryBytes) {
-    throw new OutputCheckpointContractError('output advanced a checkpoint beyond its admitted cost budget')
+function snapshotAutomaticCheckpointDeferral(
+  reason: unknown,
+): Extract<AutomaticCheckpointResult, { readonly kind: 'deferred' }> {
+  if (reason !== 'capacity-unavailable' && reason !== 'checkpoint-priority') {
+    throw new OutputCheckpointContractError('output checkpoint returned an invalid deferral reason')
   }
+  return Object.freeze({ kind: 'deferred', reason })
 }
 
-function requireCheckpointDecline(
-  reason: Extract<AutomaticCheckpointResult, { readonly kind: 'declined' }>['reason'],
-  estimate: OutputCheckpointCost,
-  budget: OutputCheckpointCostBudget,
-): void {
-  const justified = reason === 'cost-evidence-unavailable' ||
-    (reason === 'temporary-space-confirmation-required' && estimate.peakTemporaryBytes > 0n) ||
-    (reason === 'prefix-copy-budget' && estimate.prefixCopyBytes > budget.maximumPrefixCopyBytes) ||
-    (reason === 'cumulative-write-amplification-budget' &&
-      estimate.cumulativeWriteAmplificationBytes > budget.maximumCumulativeWriteAmplificationBytes) ||
-    (reason === 'peak-temporary-space-budget' &&
-      estimate.peakTemporaryBytes > budget.maximumPeakTemporaryBytes)
-  if (!justified) {
-    throw new OutputCheckpointContractError('output checkpoint decline is not justified by its estimate')
+function snapshotAutomaticCheckpointFinish(
+  reason: unknown,
+): Extract<AutomaticCheckpointResult, { readonly kind: 'finished' }> {
+  if (reason !== 'prefix-copy-budget' &&
+      reason !== 'cumulative-write-amplification-budget' &&
+      reason !== 'cost-evidence-unavailable') {
+    throw new OutputCheckpointContractError('output checkpoint returned an invalid terminal reason')
   }
+  return Object.freeze({ kind: 'finished', reason })
 }
 
 function overlapsAny(candidate: { readonly start: bigint; readonly end: bigint }, ranges: readonly {

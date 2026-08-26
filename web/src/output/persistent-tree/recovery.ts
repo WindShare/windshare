@@ -20,17 +20,14 @@ import {
   type FileCheckpointV2,
 } from '../persistence/checkpoint'
 import type {
-  AutomaticCheckpointResult,
-  OutputCheckpointCost,
-  OutputCheckpointCostBudget,
-} from '../../transfer/output-session'
-import type {
   OpenedFileRevision,
   PersistentOutputTree,
-  PersistentWriterPreflight,
+  PreservingWriterCapacityPurpose,
+  PreservingWriterCost,
   SemanticPersistentOutputJournal,
 } from './contracts'
 import {
+  snapshotMaterializationRootRelativePath,
   type MaterializationRootRelativePath,
 } from '../../transfer/job/coordinate/direct-tree'
 import type { PersistentOutputStageScope } from './stage-diagnostics'
@@ -57,42 +54,26 @@ import {
   inspectInitialClaimGroup,
 } from './initial-claim-inspection-group'
 
-export type PersistentCheckpointDeclineReason = Extract<
-  AutomaticCheckpointResult,
-  { readonly kind: 'declined' }
->['reason']
-
-export class PersistentRecoveryPreflightError extends Error {
-  readonly reason: PersistentCheckpointDeclineReason | 'space-confirmation-required'
-  readonly preflight: PersistentWriterPreflight
-  readonly budget: OutputCheckpointCostBudget | undefined
+/** A preserving open failed after its durable prefix was already committed. */
+export class PersistentPreservingWriterOpenError extends Error {
+  readonly materializationRelativePath: MaterializationRootRelativePath
+  readonly cost: PreservingWriterCost
+  readonly purpose: PreservingWriterCapacityPurpose
 
   constructor(input: Readonly<{
-    reason: PersistentRecoveryPreflightError['reason']
-    preflight: PersistentWriterPreflight
-    budget?: OutputCheckpointCostBudget
+    materializationRelativePath: MaterializationRootRelativePath
+    cost: PreservingWriterCost
+    purpose: PreservingWriterCapacityPurpose
+    cause: unknown
   }>) {
-    super('Persistent output recovery requires an explicit prefix-copy and temporary-space decision')
-    this.name = 'PersistentRecoveryPreflightError'
-    this.reason = input.reason
-    this.preflight = snapshotPreflight(input.preflight)
-    this.budget = input.budget === undefined ? undefined : Object.freeze({ ...input.budget })
+    super('Persistent output could not reopen its preserving writer', { cause: input.cause })
+    this.name = 'PersistentPreservingWriterOpenError'
+    this.materializationRelativePath = snapshotMaterializationRootRelativePath(
+      input.materializationRelativePath,
+    )
+    this.cost = Object.freeze({ ...input.cost })
+    this.purpose = input.purpose
   }
-}
-
-export function persistentCheckpointDeclineReason(
-  cost: OutputCheckpointCost,
-  budget: OutputCheckpointCostBudget,
-): PersistentCheckpointDeclineReason | undefined {
-  if (cost.prefixCopyBytes > budget.maximumPrefixCopyBytes) return 'prefix-copy-budget'
-  if (cost.cumulativeWriteAmplificationBytes >
-      budget.maximumCumulativeWriteAmplificationBytes) {
-    return 'cumulative-write-amplification-budget'
-  }
-  if (cost.peakTemporaryBytes > budget.maximumPeakTemporaryBytes) {
-    return 'peak-temporary-space-budget'
-  }
-  return undefined
 }
 
 interface PendingInitialClaim {
@@ -470,13 +451,6 @@ export function persistentInitialCheckpoint(
     verifiedRanges: [],
     phase: FILE_CHECKPOINT_PHASE_ACTIVE,
     commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
-  })
-}
-
-function snapshotPreflight(input: PersistentWriterPreflight): PersistentWriterPreflight {
-  return Object.freeze({
-    cost: Object.freeze({ ...input.cost }),
-    space: input.space,
   })
 }
 
