@@ -1,4 +1,7 @@
 import {
+  RECEIVE_RECORD_OPERATION,
+  decodeStoredReceiveOperation,
+  operationRecordId,
   validatePersistedReceiveRecord,
   type PersistedReceiveRecord,
 } from '../workspace/records'
@@ -19,6 +22,11 @@ import {
 } from '../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
+import type { RecoverySummary } from '../file-system-access/recovery-summary'
+import { readFSARecoverySummary } from '../file-system-access/recovery-summary'
+import { openFSAFileCheckpointRepository } from '../file-system-access/checkpoint-repository'
+import { requireDirectTreeIntent } from '../file-system-access/settlement-proof'
+import { FSA_RESERVED_ROOT_LAYOUT_VERSION } from '../../transfer/intent'
 import {
   DIRECT_ZIP_CANDIDATE_BOOTSTRAP,
   type DirectZipBootstrapCandidateV1,
@@ -35,6 +43,7 @@ import {
   INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
   INDEXEDDB_RECEIVE_RECORD_STORE,
   openIndexedDbCheckpointDatabase,
+  requestResult,
   transactionCompletion,
 } from './indexeddb-database'
 
@@ -60,10 +69,12 @@ const INVENTORIED_STATE_BYTES = Object.freeze([
  */
 export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSource {
   readonly #database: IDBDatabase
+  readonly #databaseName: string
   #closed = false
 
-  private constructor(database: IDBDatabase) {
+  private constructor(database: IDBDatabase, databaseName: string) {
     this.#database = database
+    this.#databaseName = databaseName
     database.addEventListener('versionchange', () => this.close())
   }
 
@@ -72,6 +83,7 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
   ): Promise<IndexedDbReceiveResumeSource> {
     return new IndexedDbReceiveResumeSource(
       await openIndexedDbCheckpointDatabase(databaseName),
+      databaseName,
     )
   }
 
@@ -131,6 +143,51 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     }
     states.sort((left, right) => left.operationId.localeCompare(right.operationId))
     return Object.freeze(states)
+  }
+
+  async readRecoverySummary(
+    lifecycle: Extract<ReceiveLifecycleState, {
+      kind: 'resumable-receive'
+      payloadKind: 'file-set'
+    }>,
+  ): Promise<RecoverySummary | undefined> {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const stored = await requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(
+      operationRecordId(lifecycle.operationId, RECEIVE_RECORD_OPERATION),
+    ))
+    await transactionCompletion(transaction)
+    if (stored === undefined) {
+      throw new TypeError('FSA recovery summary requires its persisted receive operation')
+    }
+    const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
+    if (operation.receiveIntent.operationId !== lifecycle.operationId ||
+        operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) {
+      throw new TypeError('FSA recovery lifecycle does not belong to its persisted receive intent')
+    }
+    if (operation.receiveIntent.plan.kind !== 'direct-tree') return undefined
+    const intent = await requireDirectTreeIntent(operation.receiveIntent)
+    const reservation = intent.plan.reservation
+    if (reservation.kind !== 'named-container-entry' ||
+        !('fsaLayoutVersion' in reservation) ||
+        reservation.fsaLayoutVersion !== FSA_RESERVED_ROOT_LAYOUT_VERSION) {
+      throw new TypeError('FSA recovery summary requires the reserved-root destination binding')
+    }
+
+    const checkpoints = await openFSAFileCheckpointRepository(
+      { databaseName: this.#databaseName },
+      intent,
+      reservation,
+    )
+    try {
+      return readFSARecoverySummary({
+        intent,
+        lifecycle,
+        checkpoints,
+      })
+    } finally {
+      checkpoints.close()
+    }
   }
 
   close(): void {

@@ -65,6 +65,7 @@ import {
   selectOnlyFile,
   testOutput,
 } from './v2-job-fixture'
+import { createTestCheckpointAuthorities } from '../output/persistent-tree-file-fixture'
 
 describe('production plan execution authority', () => {
   it('composes the FSA settlement owner into the real DirectTree execution route', async () => {
@@ -439,6 +440,7 @@ function fileSystemAccessRouteRegistry(input: Readonly<{
       open: (
         intent: Parameters<NonNullable<V2PlanExecutionRouteRegistry['directTree']>['open']>[0],
       ) => createPersistentDirectTreeExecution({
+        ...createTestCheckpointAuthorities(),
         intent,
         materialization: input.session,
         executionProfile: disabledOutputExecutionProfile(1),
@@ -609,6 +611,11 @@ function portablePauseRequest(): PlanPauseRequest {
       fileCount: 0n,
       directoryCount: 0n,
       rawBytes: 0n,
+    }),
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 1n,
+      discoveredBytes: 4n,
+      discovery: 'complete',
     }),
     reason: new DOMException('composition proof complete', 'AbortError'),
   })

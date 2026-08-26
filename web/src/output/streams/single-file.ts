@@ -5,7 +5,6 @@ import {
   type FileRetirementDisposition,
   type OpenedOutputRevision,
   type OutputCapabilities,
-  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputFileRequest,
   type OutputFileTransaction,
@@ -137,20 +136,14 @@ class SingleFileStreamTransaction implements OutputFileTransaction {
 
   automaticCheckpoint(
     _trigger: AutomaticCheckpointTrigger,
-    _budget: OutputCheckpointCostBudget,
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
       return Object.freeze({
-        kind: 'declined' as const,
+        kind: 'finished' as const,
         reason: 'cost-evidence-unavailable' as const,
-        estimate: Object.freeze({
-          prefixCopyBytes: 0n,
-          cumulativeWriteAmplificationBytes: 0n,
-          peakTemporaryBytes: 0n,
-        }),
       })
     })
   }

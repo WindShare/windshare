@@ -1,5 +1,6 @@
 import type { IncidentScopeHandle } from '../../diagnostics/incident'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { RecoverySelectionFacts } from '../../output/workspace/state'
 import { dependencyContractFault } from '../fault'
 import type { ReceiveIntent } from '../intent'
 import {
@@ -153,6 +154,7 @@ export async function pauseFailedV2Execution(options: {
   readonly authority: V2PlanExecutionAuthority
   readonly worker: TransferWorkerSettlement
   readonly materialization: MaterializationSummary
+  readonly selectionFacts: RecoverySelectionFacts
   readonly reason: unknown
   readonly failureTrigger?: ClassifiedTransferFailure
   readonly incidentScope?: IncidentScopeHandle
@@ -182,6 +184,7 @@ export async function pauseFailedV2Execution(options: {
       signal => options.execution!.pause({
         worker: options.worker,
         materialization: options.materialization,
+        selectionFacts: options.selectionFacts,
         reason: options.reason,
       }, signal),
       options.deadline,

@@ -50,6 +50,8 @@ import {
 } from './settlement-proof'
 import { validateSealedFSASettlementEvidence } from './settlement-evidence'
 import { normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
+import type { RecoverySummary } from './recovery-summary'
+import { deriveSettledFSARecoverySummary } from './recovery-settlement'
 import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
 import type {
   CreateFileSystemAccessSettlementAuthorityOptions,
@@ -70,6 +72,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
   readonly #admissionFallback: ReceiveAdmissionFallback | undefined
   #materializationActivationStarted = false
   #boundMaterialization: FileSystemAccessOutputSession | undefined
+  #recoverySummary: RecoverySummary | undefined
 
   constructor(input: Readonly<{
     intent: DirectTreeIntent
@@ -109,6 +112,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     this.#boundMaterialization = session
     const authority: PersistentDirectTreeSettlementAuthority = {
       beginTerminal: kind => session.beginTerminal(terminalMutationKind(kind)),
+      recoverySummary: () => this.#recoverySummary,
       pause: (request, cut, signal) => this.#pause(session, request, cut, signal),
       stop: (request, cut, signal) => this.#stop(session, request, cut, signal),
       settle: (request, cut, signal) => this.#settle(session, request, cut, signal),
@@ -147,6 +151,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         checkpointSetDigest: fallback.checkpointSetDigest,
         completedFileCount: fallback.completedFileCount,
         completedBytes: fallback.completedBytes,
+        selectionFacts: fallback.selectionFacts,
         expiresAt: fallback.expiresAt,
         ...(fallback.partialReceiptDigest === undefined
           ? {}
@@ -230,11 +235,19 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         checkpointSetDigest: checkpointEvidence.checkpointSetDigest,
         completedFileCount: validated.fileCount,
         completedBytes: validated.completedBytes,
+        selectionFacts: request.selectionFacts,
         partialReceiptDigest: receipt.digest,
         expectedGeneration: current.state.generation,
         leaseId: this.#lifecycleLeaseId,
       })
+      const recoverySummary = await deriveSettledFSARecoverySummary({
+        intent: this.#intent,
+        lifecycle: next,
+        checkpointEvidence,
+      })
       const committed = await this.#commitLifecycle(current, next, [receipt])
+      // UI authority is published only after the exact lifecycle generation is durable.
+      this.#recoverySummary = recoverySummary
       this.#emit(
         'resumable-receive',
         checkpointEvidence.checkpointCount,

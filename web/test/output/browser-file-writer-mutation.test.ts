@@ -195,17 +195,14 @@ describe('browser file writer mutation lifecycle', () => {
     await fixture.release()
   })
 
-  it('maps explicit open modes and exposes typed prefix-copy preflight', async () => {
+  it('maps explicit open modes and reports one incremental preserving-open cost', async () => {
     const preserve = await writerFixture()
     await preserve.file.openWriter('preserve')
     expect(preserve.handles[0]!.keepExistingData).toEqual([true])
-    expect(preserve.file.checkpointPreflight(4096n, 1024n)).toEqual({
-      cost: {
-        prefixCopyBytes: 4096n,
-        cumulativeWriteAmplificationBytes: 5120n,
-        peakTemporaryBytes: 4096n,
-      },
-      space: 'requires-user-confirmation',
+    expect(preserve.file.preservingWriterCost(4096n)).toEqual({
+      prefixCopyBytes: 4096n,
+      writeAmplificationBytes: 4096n,
+      temporaryBytes: 4096n,
     })
     await preserve.file.close()
     await preserve.release()
@@ -213,7 +210,11 @@ describe('browser file writer mutation lifecycle', () => {
     const truncate = await writerFixture()
     await truncate.file.openWriter('truncate')
     expect(truncate.handles[0]!.keepExistingData).toEqual([false])
-    expect(truncate.file.checkpointPreflight(0n, 1024n).space).toBe('within-modeled-budget')
+    expect(truncate.file.preservingWriterCost(0n)).toEqual({
+      prefixCopyBytes: 0n,
+      writeAmplificationBytes: 0n,
+      temporaryBytes: 0n,
+    })
     await truncate.file.close()
     await truncate.release()
   })

@@ -18,6 +18,7 @@ import {
   type OutputFailureSinks,
 } from '../../diagnostics'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
+import type { PersistentPausedFileRecovery } from '../../persistent-tree/contracts'
 import {
   RECEIVE_RECORD_OPERATION,
   decodeStoredReceiveOperation,
@@ -123,7 +124,11 @@ export class PersistedReceiveOperationReopenAuthority {
     descriptor: ReceiveOperationResumeDescriptor,
     purpose: PersistedReceiveOperationReopenPurpose,
     failures?: OutputFailureSinks,
+    retainedFileRecovery?: PersistentPausedFileRecovery,
   ): Promise<ReopenedReceiveOperation> {
+    if (purpose !== 'continue' && retainedFileRecovery !== undefined) {
+      throw new TypeError('retained file recovery is exclusive to receive continuation')
+    }
     const diagnostics = this.#diagnosticsFor(failures)
     this.#emitReviewedReopen('started')
     const repository = await this.#repositoryFactory().catch((error: unknown) => {
@@ -146,6 +151,7 @@ export class PersistedReceiveOperationReopenAuthority {
         descriptor,
         resources,
       )
+      requireMatchingRetainedFileRecovery(target, descriptor, retainedFileRecovery)
       if (target.kind === 'direct-zip') resources.directZipJournal = target.journal
       const lifecycleAuthority = await this.#advanceLifecycle({
         repository,
@@ -164,6 +170,7 @@ export class PersistedReceiveOperationReopenAuthority {
         target,
         lifecycleAuthority,
         resources,
+        ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
         ...(diagnostics === undefined ? {} : { diagnostics }),
       })
       this.#emitReviewedReopen('authorized')
@@ -173,6 +180,9 @@ export class PersistedReceiveOperationReopenAuthority {
         receive_intent_digest: descriptor.receiveIntentDigest,
         lifecycle_generation: lifecycleAuthority.lifecycle.generation,
         continuation: descriptor.continuation,
+        ...(retainedFileRecovery === undefined
+          ? {}
+          : { retained_file_recovery: retainedFileRecovery }),
         lease_id: lease.leaseId,
       }))
       return operation
@@ -429,6 +439,7 @@ export class PersistedReceiveOperationReopenAuthority {
     target: ReopenedReceiveTarget
     lifecycleAuthority: ReopenLifecycleAuthority
     resources: ReopenResources
+    retainedFileRecovery?: PersistentPausedFileRecovery
     diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenedReceiveOperation> {
     const base = {
@@ -448,6 +459,9 @@ export class PersistedReceiveOperationReopenAuthority {
       return Object.freeze({
         ...base,
         ...input.target,
+        ...(input.retainedFileRecovery === undefined
+          ? {}
+          : { retainedFileRecovery: input.retainedFileRecovery }),
         ...(fallback === undefined ? {} : { receiveAdmissionFallback: fallback }),
       })
     }
@@ -567,5 +581,16 @@ export class PersistedReceiveOperationReopenAuthority {
     } catch {
       // Durable ownership decisions remain authoritative when telemetry is unavailable.
     }
+  }
+}
+
+function requireMatchingRetainedFileRecovery(
+  target: ReopenedReceiveTarget,
+  descriptor: ReceiveOperationResumeDescriptor,
+  retainedFileRecovery: PersistentPausedFileRecovery | undefined,
+): void {
+  if (retainedFileRecovery === undefined) return
+  if (target.kind !== 'direct-tree' || descriptor.continuation !== 'resume-receive') {
+    throw new TypeError('retained file recovery belongs only to a DirectTree receive continuation')
   }
 }

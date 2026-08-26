@@ -24,6 +24,11 @@ describe('abandoned receive recovery', () => {
       checkpointSetDigest: identity(32, 4),
       completedFileCount: 2n,
       completedBytes: 10n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 4n,
+        discoveredBytes: 30n,
+        discovery: 'failed' as const,
+      }),
       lastVerifiedRecordDigest: identity(32, 5),
     }, context('workspace-then-publish', NOW))
 
@@ -31,6 +36,11 @@ describe('abandoned receive recovery', () => {
       decision: 'resume-receive',
       state: expect.objectContaining({
         kind: 'resumable-receive',
+        selectionFacts: {
+          discoveredFileCount: 4n,
+          discoveredBytes: 30n,
+          discovery: 'failed',
+        },
         expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
       }),
     }))

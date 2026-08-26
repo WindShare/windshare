@@ -28,6 +28,7 @@ import {
   formatBytes,
   presentDirectZipProgress,
 } from './v2-progress-presentation'
+import { recoverySummaryDescription } from './resumable-file-set-presentation'
 
 function SelectionCheckbox(props: {
   readonly row: V2BrowseRow
@@ -116,7 +117,9 @@ function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<
     case 'resume-receive':
       return Object.freeze({
         title: 'Receive can continue',
-        description: 'File checkpoints are retained for this task.',
+        description: operation.recoverySummary === undefined
+          ? 'File checkpoints are retained for this task.'
+          : recoverySummaryDescription(operation.recoverySummary),
       })
     case 'resume-direct-zip':
       return Object.freeze({
@@ -179,11 +182,15 @@ function retainedActionLabel(
     case 'catch-up':
       return 'Finish local restoration catch-up'
     case 'continue':
-      return 'Continue'
+      return operation.recoverySummary === undefined
+        ? 'Continue'
+        : 'Continue and preserve partial files'
     case 'save':
       return 'Save'
     case 'redownload':
-      return 'Download again'
+      return operation.recoverySummary === undefined
+        ? 'Download again'
+        : 'Restart incomplete files'
     case 'discard':
       return 'Discard task and delete retained content'
     case 'delete':
@@ -306,7 +313,8 @@ function RetainedReceivePanel(props: {
                   {operation.actions.map((action) => (
                     <button
                       key={action}
-                      className={action === 'discard' || action === 'delete'
+                      className={action === 'discard' || action === 'delete' ||
+                          (action === 'redownload' && operation.recoverySummary !== undefined)
                         ? 'abort-action'
                         : undefined}
                       type="button"
@@ -570,6 +578,12 @@ function LifecyclePanel(props: {
     <section className={`lifecycle-panel lifecycle-${presentation.tone}`} aria-live="polite">
       <strong>{presentation.title}</strong>
       <p>{presentation.description}</p>
+      {presentation.writerOpenPause !== null && (
+        <div className="writer-open-pause">
+          <strong>{presentation.writerOpenPause.title}</strong>
+          <p>{presentation.writerOpenPause.description}</p>
+        </div>
+      )}
       {retention !== null && timestamp !== null && (
         <p>
           {retention.elapsed ? 'Retention ended at ' : 'Available until '}

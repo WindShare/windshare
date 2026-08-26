@@ -27,7 +27,8 @@ import {
 } from '../../src/output/persistence/checkpoint'
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import { scanAllFSAFileCheckpoints } from '../../src/output/file-system-access/checkpoint-repository'
-import type { PersistentMaterializationPort } from '../../src/output/persistent-tree/contracts'
+import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
+import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
 import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
 import { recoverAbandonedOperation } from '../../src/output/workspace/recovery'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
@@ -90,7 +91,7 @@ const FILE_CONTENT_BYTE = 7
 const OUTPUT_SESSION_ID = identityText(210)
 const TRANSFER_JOB_ID = identityText(220)
 const EXPIRY_RECEIPT_DIGEST = digestIdentity(222)
-const RECOVERY_BUDGET_BYTES = 1_024n
+const OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const CHECKPOINT_TRIGGER_BYTES = 1_024n
 const CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
 const OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 20_000
@@ -104,6 +105,11 @@ const FILES = Object.freeze([
   fileEntry(identity(82), LARGE_NAME, LARGE_SIZE),
   fileEntry(identity(83), PENDING_SMALL_NAME, PENDING_SMALL_SIZE),
 ])
+const RECOVERY_SELECTION_FACTS = Object.freeze({
+  discoveredFileCount: BigInt(FILES.length),
+  discoveredBytes: FILES.reduce((total, file) => total + file.expectedSize, 0n),
+  discovery: 'complete' as const,
+})
 
 interface FsaNamespaceFixture {
   readonly databaseName: string
@@ -271,6 +277,7 @@ export async function recoverDirectTreeAfterProcessTermination(
       checkpointSetDigest,
       completedFileCount: 1n,
       completedBytes: COMPLETED_SIZE,
+      selectionFacts: RECOVERY_SELECTION_FACTS,
       lastVerifiedRecordDigest: lastVerified.checksum,
     }, {
       planKind: 'direct-tree',
@@ -308,10 +315,19 @@ export async function recoverDirectTreeAfterProcessTermination(
       transferJobId: TRANSFER_JOB_ID,
       clock: () => RECOVERY_TIME_MILLISECONDS,
     })
+    const checkpointIdentity = Object.freeze({
+      receiveOperationId: fixture.intent.operationId,
+      transferJobId: TRANSFER_JOB_ID,
+      outputSessionId: OUTPUT_SESSION_ID,
+    })
     const persistentExecution = await createPersistentDirectTreeExecution({
       intent: requireDirectTreeIntent(fixture.intent),
-      materialization: confirmedRecoveryMaterialization(reopenedSession),
+      materialization: reopenedSession,
       executionProfile: recoveryExecutionProfile(),
+      automaticCheckpointAdmission:
+        createAutomaticCheckpointAdmissionAuthority({ identity: checkpointIdentity }),
+      preservingWriterCapacity:
+        createPreservingWriterCapacityAuthority({ identity: checkpointIdentity }),
       namespaceClaims: reopenedSession,
       repairSummary: () => reopenedSession.repairSummary(),
       outputIdentity: OUTPUT_IDENTITY,
@@ -496,55 +512,15 @@ async function beginFixtureFile(
 function recoveryExecutionProfile() {
   return outputExecutionProfile({
     maximumConcurrentFilePipelines: FILES.length,
-    maximumOutstandingWriteBytes: RECOVERY_BUDGET_BYTES,
-    maximumBufferedBytes: RECOVERY_BUDGET_BYTES,
+    maximumOutstandingWriteBytes: OUTPUT_WRITE_BUDGET_BYTES,
+    maximumBufferedBytes: OUTPUT_WRITE_BUDGET_BYTES,
     automaticCheckpoint: {
       kind: 'bounded',
       trigger: {
         pendingBytes: CHECKPOINT_TRIGGER_BYTES,
         pendingMilliseconds: CHECKPOINT_TRIGGER_MILLISECONDS,
       },
-      costBudget: {
-        maximumPrefixCopyBytes: RECOVERY_BUDGET_BYTES,
-        maximumCumulativeWriteAmplificationBytes: RECOVERY_BUDGET_BYTES,
-        maximumPeakTemporaryBytes: RECOVERY_BUDGET_BYTES,
-      },
     },
-  })
-}
-
-type PersistentBeginFileRequest =
-  Parameters<PersistentMaterializationPort['beginFile']>[0]
-type PersistentDirectoryPath =
-  Parameters<PersistentMaterializationPort['ensureDirectory']>[0]
-type PersistentDirectoryRequest =
-  Parameters<NonNullable<PersistentMaterializationPort['materializeDirectory']>>[0]
-type PersistentDirectoryFinalizationParameters =
-  Parameters<NonNullable<PersistentMaterializationPort['finalizeDirectory']>>
-
-function confirmedRecoveryMaterialization(
-  session: FileSystemAccessOutputSession,
-): PersistentMaterializationPort {
-  return Object.freeze({
-    beginFile: (request: PersistentBeginFileRequest) => {
-      if (request.recovery?.pausedFile !== 'preserve') return session.beginFile(request)
-      return session.beginFile({
-        ...request,
-        recovery: Object.freeze({
-          ...request.recovery,
-          confirmTemporarySpace: () => true,
-        }),
-      })
-    },
-    ensureDirectory: (path: PersistentDirectoryPath) => session.ensureDirectory(path),
-    materializeDirectory: (request: PersistentDirectoryRequest) =>
-      session.materializeDirectory(request),
-    finalizeDirectory: (
-      admission: PersistentDirectoryFinalizationParameters[0],
-      outcome: PersistentDirectoryFinalizationParameters[1],
-    ) => session.finalizeDirectory(admission, outcome),
-    closeForTerminalSettlement: () => session.closeForTerminalSettlement(),
-    close: () => session.close(),
   })
 }
 

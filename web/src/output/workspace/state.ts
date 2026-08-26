@@ -2,6 +2,7 @@ import type { MaterializationPlan } from '../../transfer/intent'
 import { snapshotIdentity } from './canonical'
 
 export const STABLE_RETENTION_MILLISECONDS = 86_400_000
+const MAXIMUM_RECOVERY_SELECTION_VALUE = 0xffff_ffff_ffff_ffffn
 
 export type PlanKind = MaterializationPlan['kind']
 export type ResumableStage = 'receive' | 'package'
@@ -29,6 +30,14 @@ export type RetainedLifecycleKind =
   | 'download-started'
   | RecoveryGateKind
 export type PartialDirectoryReason = 'failures' | 'stopped'
+export type RecoveryDiscoveryState = 'complete' | 'failed'
+
+/** Selection evidence is retained with the lifecycle so a checkpoint snapshot cannot redefine its scope. */
+export interface RecoverySelectionFacts {
+  readonly discoveredFileCount: bigint
+  readonly discoveredBytes: bigint
+  readonly discovery: RecoveryDiscoveryState
+}
 export type PreparationAdmissionReason =
   | 'entry-limit'
   | 'metadata-limit'
@@ -117,6 +126,7 @@ export type ReceiveLifecycleState =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
       expiresAt: number
       partialReceiptDigest?: string
     }>
@@ -241,12 +251,50 @@ export function nextReceiveLifecycleState(
   if (current.generation >= 0xffff_ffff_ffff_ffffn) {
     throw new TypeError('receive lifecycle generation overflow')
   }
+  const durablePayload = payload.kind === 'resumable-receive' && payload.payloadKind === 'file-set'
+    ? Object.freeze({
+        ...payload,
+        selectionFacts: snapshotRecoverySelectionFacts(
+          payload.selectionFacts,
+          payload.completedFileCount,
+          payload.completedBytes,
+        ),
+      })
+    : payload
   return Object.freeze({
-    ...payload,
+    ...durablePayload,
     operationId: current.operationId,
     receiveIntentDigest: current.receiveIntentDigest,
     generation: current.generation + 1n,
   }) as ReceiveLifecycleState
+}
+
+export function snapshotRecoverySelectionFacts(
+  input: RecoverySelectionFacts,
+  completedFileCount: bigint = 0n,
+  completedBytes: bigint = 0n,
+): RecoverySelectionFacts {
+  if (typeof input !== 'object' || input === null ||
+      typeof input.discoveredFileCount !== 'bigint' ||
+      input.discoveredFileCount < 0n ||
+      input.discoveredFileCount > MAXIMUM_RECOVERY_SELECTION_VALUE ||
+      typeof input.discoveredBytes !== 'bigint' || input.discoveredBytes < 0n ||
+      input.discoveredBytes > MAXIMUM_RECOVERY_SELECTION_VALUE ||
+      (input.discovery !== 'complete' && input.discovery !== 'failed')) {
+    throw new TypeError('recovery selection facts are invalid')
+  }
+  if (typeof completedFileCount !== 'bigint' || completedFileCount < 0n ||
+      typeof completedBytes !== 'bigint' || completedBytes < 0n ||
+      completedFileCount > input.discoveredFileCount || completedBytes > input.discoveredBytes ||
+      (completedFileCount === 0n && completedBytes !== 0n) ||
+      (input.discoveredFileCount === 0n && input.discoveredBytes !== 0n)) {
+    throw new TypeError('recovery selection facts do not contain completed output')
+  }
+  return Object.freeze({
+    discoveredFileCount: input.discoveredFileCount,
+    discoveredBytes: input.discoveredBytes,
+    discovery: input.discovery,
+  })
 }
 
 export function stableDeadline(nowMilliseconds: number): number {

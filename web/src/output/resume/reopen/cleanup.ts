@@ -12,9 +12,11 @@ import {
   type OriginPrivateRetainedArtifactBackend,
 } from '../../origin-private/session'
 import type { ReceiveLifecycleState } from '../../workspace/state'
+import type { PersistentPausedFileRecovery } from '../../persistent-tree/contracts'
 import type {
   ReceiveOperationDiscardResult,
   ReceiveOperationMutationPort,
+  ReceiveOperationResumeRequest,
 } from '../authority'
 import type { ReceiveOperationResumeDescriptor } from '../descriptor'
 import { PersistedReceiveOperationReopenAuthority } from './authority'
@@ -38,6 +40,7 @@ export interface PersistedReceiveOperationReopenPort {
     descriptor: ReceiveOperationResumeDescriptor,
     purpose: 'continue' | 'cleanup',
     failures?: OutputFailureSinks,
+    retainedFileRecovery?: PersistentPausedFileRecovery,
   ): Promise<ReopenedReceiveOperation>
 }
 
@@ -181,9 +184,14 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
 
   async resume(
     descriptor: ReceiveOperationResumeDescriptor,
-    failures?: OutputFailureSinks,
+    request?: ReceiveOperationResumeRequest,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
-    const operation = await this.#reopen.reopen(descriptor, 'continue', failures)
+    const operation = await this.#reopen.reopen(
+      descriptor,
+      'continue',
+      request?.failures,
+      request?.retainedFileRecovery,
+    )
     return Object.freeze({
       kind: 'continuation',
       continuation: classifyReopenedContinuation(operation),

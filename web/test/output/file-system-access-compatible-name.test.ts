@@ -717,6 +717,7 @@ describe('File System Access compatible-name terminal cut', () => {
     await expect(execution.pause({
       worker: PAUSED,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      selectionFacts: emptySelectionFacts(),
       reason: new Error('requested pause'),
     }, SIGNAL)).resolves.toMatchObject({ kind: 'resumable-receive' })
 
@@ -987,4 +988,12 @@ function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void
   const promise = new Promise<T>(complete => { resolve = complete })
   return Object.freeze({ promise, resolve })
+}
+
+function emptySelectionFacts() {
+  return Object.freeze({
+    discoveredFileCount: 0n,
+    discoveredBytes: 0n,
+    discovery: 'complete' as const,
+  })
 }

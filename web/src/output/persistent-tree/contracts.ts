@@ -20,8 +20,6 @@ import type { FileCheckpointRecoveryRepository } from './recovery'
 import type { AuthenticatedLogicalSiblingMembership } from '../../transfer/job/contract'
 import type {
   AutomaticCheckpointTrigger,
-  OutputCheckpointCost,
-  OutputCheckpointCostBudget,
   OutputSessionIdentity,
   VerifiedFinalOutputFile,
 } from '../../transfer/output-session'
@@ -41,38 +39,168 @@ export interface PersistentFileRequest {
   readonly shareInstance?: string
   readonly outputSession?: OutputSessionIdentity
   readonly recovery?: PersistentFileRecoveryPolicy
+  readonly automaticCheckpointAdmission?: AutomaticCheckpointFileAdmission
+  readonly preservingWriterCapacity?: PreservingWriterCapacityAuthority
   readonly performancePipeline?: PerformanceFilePipelineObservation
   readonly openRevision: () => Promise<OpenedFileRevision>
 }
 
 export type PersistentPausedFileRecovery = 'preserve' | 'restart-owned-file'
 
-export type PersistentTemporarySpacePurpose = 'automatic-checkpoint' | 'paused-file-recovery'
-
 export type PersistentFileRecoveryPolicy = Readonly<{
   readonly pausedFile: PersistentPausedFileRecovery
-  readonly costBudget?: OutputCheckpointCostBudget
-  readonly confirmTemporarySpace?: (
-    preflight: PersistentWriterPreflight,
-    purpose: PersistentTemporarySpacePurpose,
-  ) => boolean | Promise<boolean>
 }>
 
 export type PersistentWriterOpenMode = 'preserve' | 'truncate'
 
-export interface PersistentWriterPreflight {
-  readonly cost: OutputCheckpointCost
-  readonly space: 'within-modeled-budget' | 'requires-user-confirmation'
+/** Incremental cost of one preserving open; attempt authorities alone own cumulative totals. */
+export interface PreservingWriterCost {
+  readonly prefixCopyBytes: bigint
+  readonly writeAmplificationBytes: bigint
+  readonly temporaryBytes: bigint
+}
+
+export interface CheckpointAttemptIdentity {
+  readonly receiveOperationId: string
+  readonly transferJobId: string
+  readonly outputSessionId: string
+}
+
+export type CheckpointResourceReleaseReason =
+  | 'unused'
+  | 'capacity-unavailable'
+  | 'replacement-open-failed'
+  | 'writer-closed'
+  | 'writer-aborted'
+  | 'file-committed'
+  | 'file-paused'
+  | 'file-retired'
+  | 'cancelled'
+  | 'terminal-drain'
+  | 'automatic-handoff'
+
+export type CheckpointAuthorityObservation = Readonly<{
+  readonly authority: 'automatic-admission' | 'preserving-capacity'
+  readonly receiveOperationId: string
+  readonly transferJobId: string
+  readonly outputSessionId: string
+  readonly materializationRelativePath: readonly string[]
+  readonly trigger: AutomaticCheckpointTrigger | 'paused-file-recovery'
+  readonly checkpointOrdinal?: number
+  readonly cost: PreservingWriterCost
+  readonly remainingAutomaticWriteAmplificationBytes?: bigint
+  readonly decision:
+    | 'admitted'
+    | 'checkpoint-priority'
+    | 'prefix-copy-budget'
+    | 'cumulative-write-amplification-budget'
+    | 'capacity-unavailable'
+    | 'paused-recovery-queued'
+    | 'paused-recovery-admitted'
+    | 'committed'
+    | 'released'
+  readonly releaseReason?: CheckpointResourceReleaseReason
+}>
+
+export type CheckpointAuthorityObserver = (observation: CheckpointAuthorityObservation) => void
+
+export interface AutomaticCheckpointBudgetHold {
+  readonly checkpointOrdinal: number
+  readonly cost: PreservingWriterCost
+  commit(): void
+  release(reason: CheckpointResourceReleaseReason): void
+}
+
+export type AutomaticCheckpointAdmissionDecision =
+  | Readonly<{
+      readonly kind: 'admitted'
+      readonly hold: AutomaticCheckpointBudgetHold
+      readonly remainingWriteAmplificationBytes: bigint
+    }>
+  | Readonly<{
+      readonly kind: 'deferred'
+      readonly reason: 'checkpoint-priority'
+      readonly estimate: PreservingWriterCost
+      readonly remainingWriteAmplificationBytes: bigint
+    }>
+  | Readonly<{
+      readonly kind: 'finished'
+      readonly reason: 'prefix-copy-budget' | 'cumulative-write-amplification-budget'
+      readonly estimate: PreservingWriterCost
+      readonly remainingWriteAmplificationBytes: bigint
+    }>
+
+export interface AutomaticCheckpointFileAdmission {
+  readonly materializationRelativePath: readonly string[]
+  request(
+    trigger: AutomaticCheckpointTrigger,
+    cost: PreservingWriterCost,
+  ): AutomaticCheckpointAdmissionDecision
+  retire(reason?: CheckpointResourceReleaseReason): void
+}
+
+export interface AutomaticCheckpointAdmissionSnapshot {
+  readonly accepting: boolean
+  readonly enrolledFiles: number
+  readonly committedWriteAmplificationBytes: bigint
+  readonly remainingWriteAmplificationBytes: bigint
+  readonly tentativeHolds: number
+  readonly cumulativelyExhausted: boolean
+}
+
+export interface AutomaticCheckpointAdmissionAuthority {
+  enrollFile(materializationRelativePath: readonly string[]): AutomaticCheckpointFileAdmission
+  close(reason?: CheckpointResourceReleaseReason): void
+  snapshot(): AutomaticCheckpointAdmissionSnapshot
+}
+
+export type PreservingWriterCapacityPurpose = 'automatic-checkpoint' | 'paused-file-recovery'
+
+export interface PreservingWriterCapacityToken {
+  readonly purpose: PreservingWriterCapacityPurpose
+  readonly reservedTemporaryBytes: bigint
+  commit(): void
+  release(reason: CheckpointResourceReleaseReason): void
+}
+
+export interface PreservingWriterCapacityRequest {
+  readonly materializationRelativePath: readonly string[]
+  readonly trigger: AutomaticCheckpointTrigger | 'paused-file-recovery'
+  readonly checkpointOrdinal?: number
+  readonly cost: PreservingWriterCost
+  readonly remainingAutomaticWriteAmplificationBytes?: bigint
+}
+
+export type AutomaticCapacityHandoffResult =
+  | Readonly<{ readonly kind: 'reserved'; readonly token: PreservingWriterCapacityToken }>
+  | Readonly<{ readonly kind: 'unavailable'; readonly reason: 'capacity-unavailable' }>
+
+export interface PreservingWriterCapacitySnapshot {
+  readonly accepting: boolean
+  readonly heldTemporaryBytes: bigint
+  readonly heldTokens: number
+  readonly queuedPausedRecoveries: number
+  readonly oversizedExclusive: boolean
+}
+
+export interface PreservingWriterCapacityAuthority {
+  tryHandoff(
+    request: PreservingWriterCapacityRequest,
+    current?: PreservingWriterCapacityToken,
+  ): AutomaticCapacityHandoffResult
+  reservePaused(
+    request: PreservingWriterCapacityRequest,
+    signal?: AbortSignal,
+  ): Promise<PreservingWriterCapacityToken>
+  close(reason?: CheckpointResourceReleaseReason): void
+  snapshot(): PreservingWriterCapacitySnapshot
 }
 
 export interface PersistentTreeFile {
   readonly ownedObjectId: string
   readonly persistedHandle?: PersistentHandleRecord<unknown>
   openWriter?(mode: PersistentWriterOpenMode): Promise<void>
-  checkpointPreflight?(
-    durablePrefixBytes: bigint,
-    cumulativeWriteAmplificationBytes: bigint,
-  ): PersistentWriterPreflight
+  preservingWriterCost?(durablePrefixBytes: bigint): PreservingWriterCost
   writeAt(offset: bigint, data: Uint8Array): Promise<void>
   flush(): Promise<void>
   size(): Promise<bigint>
@@ -171,7 +299,6 @@ export interface PersistentFileTransactionPort {
   writeRange(offset: bigint, data: Uint8Array, signal?: AbortSignal): Promise<void>
   automaticCheckpoint(
     trigger: AutomaticCheckpointTrigger,
-    budget: OutputCheckpointCostBudget,
     signal?: AbortSignal,
   ): Promise<PersistentAutomaticCheckpointResult>
   checkpoint(signal?: AbortSignal): Promise<readonly PersistentByteRange[]>
@@ -185,17 +312,20 @@ export type PersistentAutomaticCheckpointResult =
   | Readonly<{
       readonly kind: 'advanced'
       readonly durableRanges: readonly PersistentByteRange[]
-      readonly cost: OutputCheckpointCost
+      readonly cost: PreservingWriterCost
     }>
   | Readonly<{
-      readonly kind: 'declined'
+      readonly kind: 'deferred'
+      readonly reason: 'capacity-unavailable' | 'checkpoint-priority'
+      readonly estimate: PreservingWriterCost
+    }>
+  | Readonly<{
+      readonly kind: 'finished'
       readonly reason:
         | 'prefix-copy-budget'
         | 'cumulative-write-amplification-budget'
-        | 'peak-temporary-space-budget'
         | 'cost-evidence-unavailable'
-        | 'temporary-space-confirmation-required'
-      readonly estimate: OutputCheckpointCost
+      readonly estimate: PreservingWriterCost
     }>
 
 export interface PersistentFinalFileCommit extends FinalFileCheckpointProof {

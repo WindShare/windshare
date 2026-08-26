@@ -13,6 +13,7 @@ import type {
 import type { ReceiveOperationContinuation } from '../output/resume/descriptor'
 import type { ReceiveLifecycleState } from '../output/workspace'
 import type { CompatibleNameRepairProjectionSource } from '../output/file-system-access/compatible-name/coordinator'
+import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
 import type { ArtifactChoiceID, ReceiveIntent } from '../transfer/intent'
 import type { V2PlanExecutionAuthority } from '../transfer/output-session'
 import type {
@@ -165,6 +166,7 @@ export interface V2RetainedReceiveOperation {
   readonly continuation: ReceiveOperationContinuation
   readonly expiresAt?: number
   readonly actions: readonly V2RetainedReceiveAction[]
+  readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }
 

@@ -257,7 +257,13 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           checkpoints: this.#checkpoints,
           ...(this.#semantic === undefined ? {} : { semantic: this.#semantic }),
           ...(this.#ledgerBinding === undefined ? {} : { ledgerBinding: await this.#ledgerBinding }),
-          recovery: request.recovery ?? Object.freeze({ pausedFile: 'preserve' as const }),
+          materializationRelativePath,
+          ...(request.automaticCheckpointAdmission === undefined
+            ? {}
+            : { automaticCheckpointAdmission: request.automaticCheckpointAdmission }),
+          ...(request.preservingWriterCapacity === undefined
+            ? {}
+            : { preservingWriterCapacity: request.preservingWriterCapacity }),
           ownership: Object.freeze({
             ...(request.outputSession ?? {
               backend: 'persistent-tree-internal',
@@ -667,15 +673,19 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
 
   #trace(input: PersistentTreeTraceInput): void {
     const diagnostics = this.#diagnostics
+    const backend = diagnostics?.backend === 'file_system_access'
+      ? 'file_system_access' as const
+      : 'origin_private' as const
+    if (input.eventName === 'output_reservation') {
+      emitOutputTrace(diagnostics?.trace, () =>
+        outputTraceEvent('output_reservation', { backend, transition: input.transition }))
+      return
+    }
     emitOutputTrace(diagnostics?.trace, () =>
-      outputTraceEvent(input.eventName, {
-        backend: diagnostics?.backend === 'file_system_access'
-          ? 'file_system_access'
-          : 'origin_private',
+      outputTraceEvent('checkpoint', {
+        backend,
         transition: input.transition,
-        ...('decision' in input && input.decision !== undefined
-          ? { decision: input.decision }
-          : {}),
+        ...(input.decision === undefined ? {} : { decision: input.decision }),
       }))
   }
 }
