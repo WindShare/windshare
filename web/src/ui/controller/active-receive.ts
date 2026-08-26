@@ -313,6 +313,7 @@ export class ActiveReceiveCoordinator {
         usage,
         Object.freeze([]),
         repairSummaryAtResultBoundary(result),
+        result.recoverySummary ?? null,
       )) {
         throw new TypeError('transfer lifecycle did not advance the active receive operation')
       }

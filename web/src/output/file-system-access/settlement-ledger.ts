@@ -12,6 +12,7 @@ import type {
   FSASemanticOutputRepository,
 } from './checkpoint-repository'
 import { fsaCheckpointSetDigest, type DirectTreeIntent } from './settlement-proof'
+import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import {
   observePerformance,
   performanceElapsedMilliseconds,
@@ -22,6 +23,7 @@ import {
 export interface FSAResumableCheckpointEvidence {
   readonly checkpointCount: bigint
   readonly checkpointSetDigest: string
+  readonly checkpoints: readonly FileCheckpointV2[]
 }
 
 export class FSASettlementLedgerAuthority {
@@ -83,6 +85,7 @@ export class FSASettlementLedgerAuthority {
         this.#intent as DirectTreeIntent,
         checkpoints,
       ),
+      checkpoints,
     })
   }
 

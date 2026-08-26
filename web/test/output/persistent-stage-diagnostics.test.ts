@@ -47,6 +47,7 @@ import {
   resultRootArtifact,
   singleFileArtifact,
 } from './file-system-access-lifecycle-fixture'
+import { createTestCheckpointAuthorities } from './persistent-tree-file-fixture'
 import {
   catalogFixture,
   directoryEntry,
@@ -286,6 +287,7 @@ describe('persistent DirectTree native stage diagnostics', () => {
           new AbortController().signal,
         )
         const persistentExecution = await createPersistentDirectTreeExecution({
+          ...createTestCheckpointAuthorities(),
           executionProfile: disabledOutputExecutionProfile(1),
           intent: directTreeIntent(session.intent),
           materialization: session,
@@ -660,6 +662,7 @@ async function expectTreeStageFailure(
       close: () => session.close(),
     })
     const persistentExecution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent: directTreeIntent(session.intent),
       materialization,

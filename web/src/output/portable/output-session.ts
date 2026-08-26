@@ -12,7 +12,6 @@ import {
   type FileRetirementDisposition,
   type OpenedOutputRevision,
   type OutputCapabilities,
-  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputFileRequest,
   type OutputFileTransaction,
@@ -474,20 +473,14 @@ class PortableZipMemberTransaction implements OutputFileTransaction {
 
   automaticCheckpoint(
     _trigger: AutomaticCheckpointTrigger,
-    _budget: OutputCheckpointCostBudget,
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult> {
     return this.#enqueue(async () => {
       signal.throwIfAborted()
       this.#requireOpen()
       return Object.freeze({
-        kind: 'declined' as const,
+        kind: 'finished' as const,
         reason: 'cost-evidence-unavailable' as const,
-        estimate: Object.freeze({
-          prefixCopyBytes: 0n,
-          cumulativeWriteAmplificationBytes: 0n,
-          peakTemporaryBytes: 0n,
-        }),
       })
     })
   }
@@ -583,8 +576,8 @@ function observePortableTransaction(
   const observed: OutputFileTransaction = {
     writeRange: (offset, data, signal) =>
       observe('output_write', () => transaction.writeRange(offset, data, signal)),
-    automaticCheckpoint: (trigger, budget, signal) =>
-      observe('output_write', () => transaction.automaticCheckpoint(trigger, budget, signal)),
+    automaticCheckpoint: (trigger, signal) =>
+      observe('output_write', () => transaction.automaticCheckpoint(trigger, signal)),
     commit: async signal => {
       const proof = await observe('output_commit', () => transaction.commit(signal))
       emitOutputTrace(diagnostics?.trace, () =>

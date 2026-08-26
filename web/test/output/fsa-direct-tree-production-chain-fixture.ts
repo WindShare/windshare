@@ -7,6 +7,8 @@ import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { FileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import type { OutputDiagnosticsPorts } from '../../src/output/diagnostics'
+import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
+import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
 import {
   type DirectoryAdmission,
 } from '../../src/transfer/directory-admission'
@@ -28,7 +30,6 @@ import {
   type DirectTreeExecution,
   type IncrementalDirectoryOutput,
   type AutomaticCheckpointTrigger,
-  type OutputCheckpointCostBudget,
   type OutputFileRequest,
   type OutputFileTransaction,
   type OutputSession,
@@ -211,7 +212,7 @@ const TRANSFER_JOB_SEED = 124
 const OUTPUT_SESSION_SEED = 125
 const PROTOCOL_SESSION_SEED = 126
 const CATALOG_CHUNK_BYTES = 2
-const TEST_RECOVERY_BUDGET_BYTES = 1_024n
+const TEST_OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const TEST_CHECKPOINT_TRIGGER_BYTES = 1_024n
 const TEST_CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
 const PERSISTENCE_PAUSE_RESUME_ORDINAL = 10
@@ -569,35 +570,33 @@ async function productionPlanAuthority(input: Readonly<{
         open: async (intent, signal) => {
           signal.throwIfAborted()
           const persistentSettlement = settlement.bindMaterialization(input.session)
+          const checkpointIdentity = Object.freeze({
+            receiveOperationId: intent.operationId,
+            transferJobId: input.transferJobId,
+            outputSessionId: input.outputSessionId,
+          })
           const execution = await createPersistentDirectTreeExecution({
             intent,
             materialization: input.session,
             executionProfile: outputExecutionProfile({
               maximumConcurrentFilePipelines: input.maximumConcurrentFilePipelines ?? 1,
-              maximumOutstandingWriteBytes: TEST_RECOVERY_BUDGET_BYTES,
-              maximumBufferedBytes: TEST_RECOVERY_BUDGET_BYTES,
+              maximumOutstandingWriteBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
+              maximumBufferedBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
               automaticCheckpoint: {
                 kind: 'bounded',
                 trigger: {
                   pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES,
                   pendingMilliseconds: TEST_CHECKPOINT_TRIGGER_MILLISECONDS,
                 },
-                costBudget: {
-                  maximumPrefixCopyBytes: TEST_RECOVERY_BUDGET_BYTES,
-                  maximumCumulativeWriteAmplificationBytes: TEST_RECOVERY_BUDGET_BYTES,
-                  maximumPeakTemporaryBytes: TEST_RECOVERY_BUDGET_BYTES,
-                },
               },
             }),
             recovery: {
               pausedFile: input.recoveryPausedFile ?? 'preserve',
-              costBudget: {
-                maximumPrefixCopyBytes: TEST_RECOVERY_BUDGET_BYTES,
-                maximumCumulativeWriteAmplificationBytes: TEST_RECOVERY_BUDGET_BYTES,
-                maximumPeakTemporaryBytes: TEST_RECOVERY_BUDGET_BYTES,
-              },
-              confirmTemporarySpace: () => true,
             },
+            automaticCheckpointAdmission:
+              createAutomaticCheckpointAdmissionAuthority({ identity: checkpointIdentity }),
+            preservingWriterCapacity:
+              createPreservingWriterCapacityAuthority({ identity: checkpointIdentity }),
             namespaceClaims: input.session,
             repairSummary: () => input.session.repairSummary(),
             outputIdentity: outputSessionIdentity({
@@ -697,10 +696,8 @@ function observeCheckpointBoundary(
     },
     automaticCheckpoint: (
       trigger: AutomaticCheckpointTrigger,
-      budget: OutputCheckpointCostBudget,
       signal: AbortSignal,
-    ) =>
-      transaction.automaticCheckpoint(trigger, budget, signal),
+    ) => transaction.automaticCheckpoint(trigger, signal),
     commit: async (signal: AbortSignal) => {
       try {
         return await transaction.commit(signal)

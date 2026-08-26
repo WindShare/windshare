@@ -6,6 +6,7 @@ import type {
   PlanKind,
   PreparationAdmissionReason,
   ReceiveLifecycleState,
+  RecoverySelectionFacts,
   RecoveryGateKind,
   RestartRequiredReason,
 } from '../state'
@@ -30,6 +31,7 @@ export type LifecycleEvent =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
     }>
   | Readonly<LifecycleEventAuthority & {
@@ -60,6 +62,7 @@ export type LifecycleEvent =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
       expiresAt: number
       partialReceiptDigest?: string
     }>
@@ -78,14 +81,24 @@ export type LifecycleEvent =
     }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'tree-finalization-completed'
-      outcome: 'published' | 'resumable' | 'partial-directory' | 'discarded'
+      outcome: 'published' | 'partial-directory' | 'discarded'
       receiptDigest: string
-      checkpointSetDigest?: string
       completedFileCount: bigint
       completedBytes: bigint
       successCount: bigint
       failureCount: bigint
-      retryable?: boolean
+    }>
+  | Readonly<LifecycleEventAuthority & {
+      kind: 'tree-finalization-completed'
+      outcome: 'resumable'
+      receiptDigest: string
+      checkpointSetDigest: string
+      completedFileCount: bigint
+      completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
+      successCount: bigint
+      failureCount: bigint
+      retryable: true
     }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'materialization-failed'

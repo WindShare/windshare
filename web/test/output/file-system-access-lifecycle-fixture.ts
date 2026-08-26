@@ -33,6 +33,8 @@ import {
   type FileSystemAccessOutputSession,
 } from '../../src/output/file-system-access/session'
 import { createFileSystemAccessSettlementAuthority } from '../../src/output/file-system-access/settlement'
+import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
+import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
 import { memoryCheckpointFactory } from './fsa-memory-semantic-repository'
 import type {
   CompatibleNameActivationLedger,
@@ -82,7 +84,6 @@ import {
   transferWorkerSettlement,
 } from '../../src/transfer/outcome'
 import { createPersistentDirectTreeExecution } from '../../src/transfer/settlement/persistent-execution'
-import type { PersistentMaterializationPort } from '../../src/output/persistent-tree/contracts'
 import { identity } from './planning/fixture'
 import {
   MemoryDirectory,
@@ -178,6 +179,11 @@ export async function freshDiscardFixture(input: Readonly<{
     materialization: input.successfulFile
       ? { entryCount: 1n, fileCount: 1n, directoryCount: 0n, rawBytes: 2n }
       : { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+    selectionFacts: Object.freeze({
+      discoveredFileCount: input.successfulFile ? 2n : 1n,
+      discoveredBytes: input.successfulFile ? 4n : 2n,
+      discovery: 'complete' as const,
+    }),
     reason: new DOMException('page closed', 'AbortError'),
   }, SIGNAL)
   await session.releaseRootLease()
@@ -640,47 +646,21 @@ export async function fsaExecution(
     transferJobId,
     clock: () => 1_000,
   })
+  const checkpointIdentity = Object.freeze({
+    receiveOperationId: session.intent.operationId,
+    transferJobId,
+    outputSessionId,
+  })
   return createPersistentDirectTreeExecution({
     intent: directTreeIntent(session.intent),
-    materialization: confirmedRecoveryMaterialization(session),
+    materialization: session,
     executionProfile: disabledOutputExecutionProfile(1),
+    automaticCheckpointAdmission:
+      createAutomaticCheckpointAdmissionAuthority({ identity: checkpointIdentity }),
+    preservingWriterCapacity:
+      createPreservingWriterCapacityAuthority({ identity: checkpointIdentity }),
     outputIdentity: outputSessionIdentity({ backend: 'fsa-test', outputSessionId }),
     settlement: settlement.bindMaterialization(session),
-  })
-}
-
-export function confirmedRecoveryMaterialization(
-  session: FileSystemAccessOutputSession,
-): PersistentMaterializationPort {
-  return Object.freeze({
-    beginFile: (request: Parameters<PersistentMaterializationPort['beginFile']>[0]) => {
-      const recovery = request.recovery?.pausedFile === 'preserve'
-        ? Object.freeze({
-            ...request.recovery,
-            costBudget: request.recovery.costBudget ?? Object.freeze({
-              maximumPrefixCopyBytes: 1_024n,
-              maximumCumulativeWriteAmplificationBytes: 4_096n,
-              maximumPeakTemporaryBytes: 1_024n,
-            }),
-            confirmTemporarySpace: () => true,
-          })
-        : request.recovery
-      return session.beginFile({
-        ...request,
-        ...(recovery === undefined ? {} : { recovery }),
-      })
-    },
-    ensureDirectory: (path: Parameters<FileSystemAccessOutputSession['ensureDirectory']>[0]) =>
-      session.ensureDirectory(path),
-    materializeDirectory: (
-      request: Parameters<FileSystemAccessOutputSession['materializeDirectory']>[0],
-    ) => session.materializeDirectory(request),
-    finalizeDirectory: (
-      admission: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[0],
-      outcome: Parameters<FileSystemAccessOutputSession['finalizeDirectory']>[1],
-    ) => session.finalizeDirectory(admission, outcome),
-    closeForTerminalSettlement: () => session.closeForTerminalSettlement(),
-    close: () => session.close(),
   })
 }
 
@@ -745,15 +725,7 @@ export async function outputFileRequest(input: Readonly<{
     logicalArtifactPath: projection.logicalArtifactPath,
     materializationRelativePath: projection.relativePath,
     expectedSize: input.exactSize,
-    recovery: Object.freeze({
-      pausedFile: 'preserve' as const,
-      costBudget: Object.freeze({
-        maximumPrefixCopyBytes: 1_024n,
-        maximumCumulativeWriteAmplificationBytes: 4_096n,
-        maximumPeakTemporaryBytes: 1_024n,
-      }),
-      confirmTemporarySpace: () => true,
-    }),
+    recovery: Object.freeze({ pausedFile: 'preserve' as const }),
     ...(input.parentAdmission === undefined ? {} : { parentAdmission: input.parentAdmission }),
     openRevision: async () => Object.freeze({
       shareInstance: input.intent.shareInstance,

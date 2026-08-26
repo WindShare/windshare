@@ -1,13 +1,11 @@
 import { ByteRangeSet, byteRange } from '../../content/geometry'
 import {
   type AutomaticCheckpointTrigger,
-  type OutputCheckpointCost,
-  type OutputCheckpointCostBudget,
   type OutputFileOwnership,
   type OutputSourceIdentity,
   VerifiedFinalOutputFile,
-  outputCheckpointCost,
 } from '../../transfer/output-session'
+import type { MaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 import {
   emitOutputTrace,
   observePerformance,
@@ -16,13 +14,11 @@ import {
   performanceNowMilliseconds,
   recordOutputException,
   type OutputDiagnosticsPorts,
-  type PerformanceCheckpointCost,
 } from '../diagnostics'
 import { createFinalizedFileMaterializationRecords } from '../materialization-ledger/journal'
 import type { MaterializationLedgerBindingV1 } from '../materialization-ledger/model'
 import {
   FILE_CHECKPOINT_COMMIT_CANDIDATE,
-  FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
   FILE_CHECKPOINT_PHASE_PAUSED,
   fileCheckpointIsComplete,
@@ -33,20 +29,30 @@ import {
 import { finalFileCheckpointProof, type FileCheckpointJournal } from '../persistence/journal'
 import type {
   OpenedFileRevision,
+  AutomaticCheckpointFileAdmission,
   PersistentAutomaticCheckpointResult,
   PersistentByteRange,
-  PersistentFileRecoveryPolicy,
   PersistentFileTransactionPort,
   PersistentFinalFileCommit,
+  PreservingWriterCapacityAuthority,
+  PreservingWriterCapacityToken,
+  PreservingWriterCost,
   PersistentTreeFile,
-  PersistentTemporarySpacePurpose,
-  PersistentWriterPreflight,
   SemanticPersistentOutputJournal,
 } from './contracts'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
 import {
-  PersistentRecoveryPreflightError,
-  persistentCheckpointDeclineReason,
+  checkpointPerformanceCost,
+  durableByteAdvance,
+  nextCheckpoint,
+  rangeBytes,
+  sameRanges,
+  throwIfAborted,
+  writtenBoundary,
+  zeroPreservingWriterCost,
+} from './file-transaction-calculations'
+import {
+  PersistentPreservingWriterOpenError,
 } from './recovery'
 import { runPersistentOutputStage, type PersistentOutputStageScope } from './stage-diagnostics'
 
@@ -75,7 +81,9 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   readonly #ledgerBinding: MaterializationLedgerBindingV1 | undefined
   readonly #ownership: OutputFileOwnership
   readonly #source: OutputSourceIdentity
-  readonly #recovery: PersistentFileRecoveryPolicy
+  readonly #materializationRelativePath: MaterializationRootRelativePath
+  readonly #automaticCheckpointAdmission: AutomaticCheckpointFileAdmission | undefined
+  readonly #preservingWriterCapacity: PreservingWriterCapacityAuthority | undefined
   readonly #onClose: (transaction: PersistentFileTransaction) => void
   readonly #onOwnershipUnknown: (error: TargetOwnershipUnknownError) => void
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
@@ -87,8 +95,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   #finalCommit: PersistentFinalFileCommit | undefined
   #state: PersistentTransactionState = 'active'
   #writerOpen = false
-  #nextPreservingOpenApproved = false
-  #cumulativeWriteAmplificationBytes = 0n
+  #writerCapacityToken: PreservingWriterCapacityToken | undefined
   #observedDurableBytes: bigint
   #released = false
 
@@ -101,7 +108,9 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     ledgerBinding?: MaterializationLedgerBindingV1
     ownership: OutputFileOwnership
     source: OutputSourceIdentity
-    recovery: PersistentFileRecoveryPolicy
+    materializationRelativePath: MaterializationRootRelativePath
+    automaticCheckpointAdmission?: AutomaticCheckpointFileAdmission
+    preservingWriterCapacity?: PreservingWriterCapacityAuthority
     onClose?: (transaction: PersistentFileTransaction) => void
     onOwnershipUnknown?: (error: TargetOwnershipUnknownError) => void
     diagnostics?: OutputDiagnosticsPorts
@@ -119,7 +128,9 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       canonicalPath: Object.freeze([...input.ownership.canonicalPath]),
     })
     this.#source = Object.freeze({ ...input.source })
-    this.#recovery = input.recovery
+    this.#materializationRelativePath = input.materializationRelativePath
+    this.#automaticCheckpointAdmission = input.automaticCheckpointAdmission
+    this.#preservingWriterCapacity = input.preservingWriterCapacity
     this.#onClose = input.onClose ?? (() => undefined)
     this.#onOwnershipUnknown = input.onOwnershipUnknown ?? (() => undefined)
     this.#diagnostics = input.diagnostics
@@ -148,7 +159,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         throw new RangeError('Persistent output write exceeds its opened revision')
       }
       if (snapshot.byteLength === 0) return
-      await this.#ensureWriter()
+      await this.#ensureWriter(signal)
       await this.#handle.writeAt(offset, snapshot)
       // Native resolution is the irrevocable acceptance boundary. Cancellation
       // arriving afterward is observed by the next transfer/control operation so
@@ -163,8 +174,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   }
 
   automaticCheckpoint(
-    _trigger: AutomaticCheckpointTrigger,
-    budget: OutputCheckpointCostBudget,
+    trigger: AutomaticCheckpointTrigger,
     signal?: AbortSignal,
   ): Promise<PersistentAutomaticCheckpointResult> {
     return this.#enqueue('checkpoint', () => this.#observeAutomaticCheckpoint(async () => {
@@ -174,41 +184,77 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         return Object.freeze({
           kind: 'advanced' as const,
           durableRanges: this.#checkpoint.verifiedRanges,
-          cost: zeroCheckpointCost(),
+          cost: zeroPreservingWriterCost(),
         })
       }
-      const preflight = this.#handle.checkpointPreflight?.(
-        writtenBoundary(this.#ranges.ranges),
-        this.#cumulativeWriteAmplificationBytes,
-      )
-      if (preflight === undefined) {
+      const cost = this.#preservingWriterCost(writtenBoundary(this.#ranges.ranges))
+      const admission = this.#automaticCheckpointAdmission
+      const capacity = this.#preservingWriterCapacity
+      if (cost === undefined || admission === undefined || capacity === undefined) {
         return Object.freeze({
-          kind: 'declined' as const,
+          kind: 'finished' as const,
           reason: 'cost-evidence-unavailable' as const,
-          estimate: zeroCheckpointCost(),
+          estimate: cost ?? zeroPreservingWriterCost(),
         })
       }
-      const cost = outputCheckpointCost(preflight.cost)
-      const reason = persistentCheckpointDeclineReason(cost, budget)
-      if (reason !== undefined) {
-        return Object.freeze({ kind: 'declined' as const, reason, estimate: cost })
-      }
-      if (preflight.space === 'requires-user-confirmation' &&
-          !(await this.#confirmTemporarySpace(preflight, 'automatic-checkpoint'))) {
+      const decision = admission.request(trigger, cost)
+      if (decision.kind === 'deferred') {
         return Object.freeze({
-          kind: 'declined' as const,
-          reason: 'temporary-space-confirmation-required' as const,
+          kind: 'deferred' as const,
+          reason: decision.reason,
+          estimate: decision.estimate,
+        })
+      }
+      if (decision.kind === 'finished') {
+        return Object.freeze({
+          kind: 'finished' as const,
+          reason: decision.reason,
+          estimate: decision.estimate,
+        })
+      }
+      const handoff = capacity.tryHandoff({
+        materializationRelativePath: this.#materializationRelativePath,
+        trigger,
+        checkpointOrdinal: decision.hold.checkpointOrdinal,
+        cost,
+        remainingAutomaticWriteAmplificationBytes:
+          decision.remainingWriteAmplificationBytes,
+      }, this.#writerCapacityToken)
+      if (handoff.kind === 'unavailable') {
+        decision.hold.release('capacity-unavailable')
+        return Object.freeze({
+          kind: 'deferred' as const,
+          reason: handoff.reason,
           estimate: cost,
         })
       }
-      const durable = await this.#commitDurableCut(FILE_CHECKPOINT_PHASE_ACTIVE, signal)
-      this.#cumulativeWriteAmplificationBytes = cost.cumulativeWriteAmplificationBytes
-      this.#nextPreservingOpenApproved = true
-      return Object.freeze({
-        kind: 'advanced' as const,
-        durableRanges: durable,
-        cost,
-      })
+      const replacementToken = handoff.token
+      let durable: readonly PersistentByteRange[]
+      try {
+        durable = await this.#commitDurableCut(
+          FILE_CHECKPOINT_PHASE_ACTIVE,
+          signal,
+          'automatic-handoff',
+        )
+      } catch (error) {
+        decision.hold.release('unused')
+        replacementToken.release('unused')
+        throw error
+      }
+      try {
+        await this.#openPreservingWriter(replacementToken, cost, 'automatic-checkpoint')
+        replacementToken.commit()
+        decision.hold.commit()
+        return Object.freeze({
+          kind: 'advanced' as const,
+          durableRanges: durable,
+          cost,
+        })
+      } catch (error) {
+        decision.hold.release('replacement-open-failed')
+        replacementToken.release('replacement-open-failed')
+        throw error
+      }
     }))
   }
 
@@ -243,7 +289,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       if (!alreadyDurable || !fileCheckpointIsComplete(this.#checkpoint) ||
           this.revision.exactSize === 0n) {
         if (this.revision.exactSize !== 0n) {
-          await this.#ensureWriter()
+          await this.#ensureWriter(signal)
           await this.#closeWriter()
         }
         const size = await this.#handle.size()
@@ -299,6 +345,8 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         this.#state = 'paused'
         return durable
       } finally {
+        this.#automaticCheckpointAdmission?.retire('file-paused')
+        this.#releaseWriterCapacity('writer-closed')
         this.#release()
       }
     }).catch((error: unknown) => {
@@ -317,12 +365,10 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       }
       this.#state = 'retired'
       try {
-        if (this.#writerOpen) {
-          if (this.#handle.abort !== undefined) await this.#handle.abort(reason)
-          else await this.#handle.close()
-          this.#writerOpen = false
-        }
+        if (this.#writerOpen) await this.#abortWriter(reason)
       } finally {
+        this.#automaticCheckpointAdmission?.retire('file-retired')
+        this.#releaseWriterCapacity('writer-aborted')
         this.#release()
       }
     })
@@ -338,6 +384,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   async #commitDurableCut(
     phase: FileCheckpointPhase,
     signal?: AbortSignal,
+    closeReason: 'writer-closed' | 'automatic-handoff' = 'writer-closed',
   ): Promise<readonly PersistentByteRange[]> {
     throwIfAborted(signal)
     const rangesChanged = !sameRanges(this.#ranges.ranges, this.#checkpoint.verifiedRanges)
@@ -346,7 +393,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     // pause cut so the writer lease cannot outlive the transaction.
     if (!rangesChanged && this.#writerOpen) await this.#abortWriter()
     if (rangesChanged) {
-      await this.#closeWriter()
+      await this.#closeWriter(closeReason)
       const actualSize = await this.#handle.size()
       const writtenEnd = writtenBoundary(this.#ranges.ranges)
       if (actualSize < writtenEnd || actualSize > this.revision.exactSize) {
@@ -396,7 +443,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       observePerformance(this.#diagnostics?.performance, summary => {
         summary.observeCheckpoint({
           trigger: 'automatic',
-          decision: result.kind,
+          decision: result.kind === 'advanced' ? 'advanced' : 'declined',
           cost: checkpointPerformanceCost(cost),
           elapsedMilliseconds,
           estimatedCopyBytes: cost.prefixCopyBytes,
@@ -524,70 +571,89 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     })
   }
 
-  async #ensureWriter(): Promise<void> {
+  async #ensureWriter(signal?: AbortSignal): Promise<void> {
     if (this.#writerOpen) return
     const durablePrefix = writtenBoundary(this.#checkpoint.verifiedRanges)
     const mode = durablePrefix === 0n ? 'truncate' as const : 'preserve' as const
-    if (mode === 'preserve' && !this.#nextPreservingOpenApproved) {
-      await this.#approvePreservingWriter(durablePrefix)
+    if (mode === 'truncate') {
+      await this.#handle.openWriter?.(mode)
+      this.#writerOpen = true
+      return
     }
-    await this.#handle.openWriter?.(mode)
-    this.#writerOpen = true
-    this.#nextPreservingOpenApproved = false
+    const cost = this.#preservingWriterCost(durablePrefix)
+    const capacity = this.#preservingWriterCapacity
+    if (cost === undefined || capacity === undefined) {
+      // Non-FSA persistent backends do not model a shared preserving-open capacity.
+      await this.#handle.openWriter?.(mode)
+      this.#writerOpen = true
+      return
+    }
+    const token = await capacity.reservePaused({
+      materializationRelativePath: this.#materializationRelativePath,
+      trigger: 'paused-file-recovery',
+      cost,
+    }, signal)
+    await this.#openPreservingWriter(token, cost, 'paused-file-recovery')
+    token.commit()
   }
 
-  async #approvePreservingWriter(durablePrefix: bigint): Promise<void> {
-    const preflight = this.#handle.checkpointPreflight?.(
-      durablePrefix,
-      this.#cumulativeWriteAmplificationBytes,
-    )
-    const budget = this.#recovery.costBudget
-    if (preflight === undefined || budget === undefined) {
-      throw new PersistentRecoveryPreflightError({
-        reason: 'cost-evidence-unavailable',
-        preflight: preflight ?? unavailablePreflight(durablePrefix),
-        ...(budget === undefined ? {} : { budget }),
+  #preservingWriterCost(durablePrefix: bigint): PreservingWriterCost | undefined {
+    return this.#handle.preservingWriterCost?.(durablePrefix)
+  }
+
+  async #openPreservingWriter(
+    token: PreservingWriterCapacityToken,
+    cost: PreservingWriterCost,
+    purpose: 'automatic-checkpoint' | 'paused-file-recovery',
+  ): Promise<void> {
+    try {
+      await this.#handle.openWriter?.('preserve')
+      this.#writerCapacityToken = token
+      this.#writerOpen = true
+    } catch (cause) {
+      token.release('replacement-open-failed')
+      throw new PersistentPreservingWriterOpenError({
+        materializationRelativePath: this.#materializationRelativePath,
+        cost,
+        purpose,
+        cause,
       })
     }
-    const reason = persistentCheckpointDeclineReason(preflight.cost, budget)
-    if (reason !== undefined) {
-      throw new PersistentRecoveryPreflightError({ reason, preflight, budget })
-    }
-    if (preflight.space === 'requires-user-confirmation' &&
-        !(await this.#confirmTemporarySpace(preflight, 'paused-file-recovery'))) {
-      throw new PersistentRecoveryPreflightError({
-        reason: 'space-confirmation-required',
-        preflight,
-        budget,
-      })
-    }
-    this.#cumulativeWriteAmplificationBytes = preflight.cost.cumulativeWriteAmplificationBytes
   }
 
-  async #confirmTemporarySpace(
-    preflight: PersistentWriterPreflight,
-    purpose: PersistentTemporarySpacePurpose,
-  ): Promise<boolean> {
-    if (this.#recovery.confirmTemporarySpace === undefined) return false
-    return this.#recovery.confirmTemporarySpace(preflight, purpose)
-  }
-
-  async #closeWriter(): Promise<void> {
+  async #closeWriter(reason: 'writer-closed' | 'automatic-handoff' = 'writer-closed'): Promise<void> {
     if (!this.#writerOpen) return
-    await this.#handle.flush()
-    this.#writerOpen = false
+    try {
+      await this.#handle.flush()
+      this.#writerOpen = false
+    } finally {
+      this.#releaseWriterCapacity(reason)
+    }
   }
 
-  async #abortWriter(): Promise<void> {
+  async #abortWriter(reason?: unknown): Promise<void> {
     if (!this.#writerOpen) return
-    if (this.#handle.abort !== undefined) await this.#handle.abort()
-    else await this.#handle.close()
-    this.#writerOpen = false
+    try {
+      if (this.#handle.abort !== undefined) await this.#handle.abort(reason)
+      else await this.#handle.close()
+    } finally {
+      this.#writerOpen = false
+      this.#releaseWriterCapacity('writer-aborted')
+    }
+  }
+
+  #releaseWriterCapacity(reason: 'writer-closed' | 'writer-aborted' | 'automatic-handoff'): void {
+    const token = this.#writerCapacityToken
+    if (token === undefined) return
+    this.#writerCapacityToken = undefined
+    token.release(reason)
   }
 
   #finishCommit(commit: PersistentFinalFileCommit): PersistentFinalFileCommit {
     this.#finalCommit = commit
     this.#state = 'committed'
+    this.#automaticCheckpointAdmission?.retire('file-committed')
+    this.#releaseWriterCapacity('writer-closed')
     this.#release()
     const durableBytes = rangeBytes(this.#checkpoint.verifiedRanges)
     observePerformance(this.#diagnostics?.performance, summary => {
@@ -670,73 +736,4 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       throw new PersistentOutputError('output-state', 'Persistent file transaction is settled')
     }
   }
-}
-
-function nextCheckpoint(
-  previous: FileCheckpointV2,
-  ranges: readonly PersistentByteRange[],
-  phase: FileCheckpointPhase,
-  forceCheckpointGeneration: boolean,
-): FileCheckpointV2 {
-  const rangesChanged = !sameRanges(ranges, previous.verifiedRanges)
-  return newFileCheckpointV2({
-    ...previous,
-    stateGeneration: previous.stateGeneration + 1n,
-    checkpointGeneration: previous.checkpointGeneration +
-      (rangesChanged || forceCheckpointGeneration ? 1n : 0n),
-    verifiedRanges: ranges,
-    phase,
-    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
-  })
-}
-
-function writtenBoundary(ranges: readonly PersistentByteRange[]): bigint {
-  return ranges.at(-1)?.end ?? 0n
-}
-
-function rangeBytes(ranges: readonly PersistentByteRange[]): bigint {
-  return ranges.reduce((total, range) => total + (range.end - range.start), 0n)
-}
-
-function durableByteAdvance(previous: bigint, current: bigint): bigint {
-  return current > previous ? current - previous : 0n
-}
-
-function checkpointPerformanceCost(cost: OutputCheckpointCost): PerformanceCheckpointCost {
-  if (cost.peakTemporaryBytes > 0n) return 'space_preflight'
-  if (cost.prefixCopyBytes > 0n || cost.cumulativeWriteAmplificationBytes > 0n) {
-    return 'prefix_copy'
-  }
-  return 'constant'
-}
-
-function sameRanges(
-  left: readonly PersistentByteRange[],
-  right: readonly PersistentByteRange[],
-): boolean {
-  return left.length === right.length && left.every((range, index) =>
-    range.start === right[index]?.start && range.end === right[index]?.end)
-}
-
-function zeroCheckpointCost(): OutputCheckpointCost {
-  return Object.freeze({
-    prefixCopyBytes: 0n,
-    cumulativeWriteAmplificationBytes: 0n,
-    peakTemporaryBytes: 0n,
-  })
-}
-
-function unavailablePreflight(prefix: bigint): PersistentWriterPreflight {
-  return Object.freeze({
-    cost: Object.freeze({
-      prefixCopyBytes: prefix,
-      cumulativeWriteAmplificationBytes: prefix,
-      peakTemporaryBytes: prefix,
-    }),
-    space: prefix === 0n ? 'within-modeled-budget' : 'requires-user-confirmation',
-  })
-}
-
-function throwIfAborted(signal: AbortSignal | undefined): void {
-  signal?.throwIfAborted()
 }

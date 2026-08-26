@@ -442,7 +442,7 @@ function registerCheckpointSchedulingTests(): void {
 
   it('acknowledges written progress before waiting for a delayed automatic checkpoint', async () => {
     const root = identity(2)
-    const file = fileEntry(identity(11), 'payload.bin', 4n)
+    const file = fileEntry(identity(11), 'payload.bin', 6n)
     const selection = selectOnlyFile(file)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readers = readerFixture([file])
@@ -476,19 +476,50 @@ function registerCheckpointSchedulingTests(): void {
     checkpoint.resolve()
     await expect(running).resolves.toMatchObject({ worker: { status: 'Succeeded' } })
     expect(output.checkpointAdvances).toEqual([file.idText])
-    expect(progress.at(-1)).toMatchObject({ recoverableBytes: 4n, completedFiles: 1 })
+    expect(progress.at(-1)).toMatchObject({ recoverableBytes: 6n, completedFiles: 1 })
   })
 
-  it('suppresses later automatic checkpoints after the first decline', async () => {
+  it('retries a transient checkpoint deferral only after the next schedule threshold', async () => {
     const root = identity(2)
-    const file = fileEntry(identity(11), 'payload.bin', 6n)
+    const file = fileEntry(identity(11), 'payload.bin', 10n)
     const selection = selectOnlyFile(file)
     const catalog = catalogFixture([{ id: root, entries: [file] }])
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
       executionProfile: boundedCheckpointProfile(2n),
-      automaticCheckpointDecisions: ['declined', 'advanced'],
+      automaticCheckpointDecisions: ['deferred', 'advanced'],
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
+    })
+
+    const result = await transferJobFixture({
+      catalog: catalog.catalog,
+      selection,
+      intent,
+      plans: planAuthorityFixture({ output }),
+      revisions: readers.revisions,
+      broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(output.automaticCheckpointAttempts).toEqual([file.idText, file.idText])
+    expect(output.checkpointDeferrals).toEqual([file.idText])
+    expect(output.checkpointAdvances).toEqual([file.idText])
+    expect(output.finalProofs).toHaveLength(1)
+  })
+
+  it('makes a terminal checkpoint outcome sticky while final transfer commit continues', async () => {
+    const root = identity(2)
+    const file = fileEntry(identity(11), 'payload.bin', 8n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: root, entries: [file] }])
+    const readers = readerFixture([file])
+    const output = testOutput([], {
+      durability: 'ProcessRestart',
+      executionProfile: boundedCheckpointProfile(2n),
+      automaticCheckpointDecisions: ['finished', 'advanced'],
     })
     const intent = await receiveIntentFixture({
       planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
@@ -505,7 +536,7 @@ function registerCheckpointSchedulingTests(): void {
 
     expect(result.worker.status).toBe('Succeeded')
     expect(output.automaticCheckpointAttempts).toEqual([file.idText])
-    expect(output.checkpointDeclines).toEqual([file.idText])
+    expect(output.checkpointFinishes).toEqual([file.idText])
     expect(output.checkpointAdvances).toEqual([])
     expect(output.finalProofs).toHaveLength(1)
   })
@@ -656,11 +687,6 @@ function boundedCheckpointProfile(pendingBytes: bigint) {
     automaticCheckpoint: {
       kind: 'bounded',
       trigger: { pendingBytes, pendingMilliseconds: 60_000 },
-      costBudget: {
-        maximumPrefixCopyBytes: 8n,
-        maximumCumulativeWriteAmplificationBytes: 8n,
-        maximumPeakTemporaryBytes: 8n,
-      },
     },
   })
 }

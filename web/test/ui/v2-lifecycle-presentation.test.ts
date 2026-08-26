@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
 import type {
   ReceiveLifecycleState,
   ReceiveLifecycleStatePayload,
@@ -20,6 +21,14 @@ const TREE = {
   kind: 'directory-tree',
   layout: { kind: 'result-root', root: { name: 'photos' } },
 } as ArtifactSpec
+
+type ResumableFileSetPayload = Extract<ReceiveLifecycleStatePayload, {
+  kind: 'resumable-receive'
+  payloadKind: 'file-set'
+}>
+type TestLifecyclePayload = Exclude<ReceiveLifecycleStatePayload, ResumableFileSetPayload> |
+  (Omit<ResumableFileSetPayload, 'selectionFacts'> &
+    Readonly<{ selectionFacts?: ResumableFileSetPayload['selectionFacts'] }>)
 
 describe('receive lifecycle product phases', () => {
   it.each([
@@ -168,6 +177,50 @@ describe('direct ZIP lifecycle presentation', () => {
   })
 
   it('offers preserve and explicit owned-file restart choices for DirectTree recovery', () => {
+    const state = lifecycle({
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest: 'checkpoint-set',
+      completedFileCount: 1n,
+      completedBytes: 1_024n,
+      expiresAt: DEADLINE,
+    })
+    const resumable = present(
+      state,
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      undefined,
+      undefined,
+      recoverySummary({ discovery: 'complete' }),
+    )
+
+    expect(resumable.description).toBe(
+      'Selection complete. Completed: 1 file, 1.0 KiB. Verified partial data: 2 files, 512 B. ' +
+      'Preserve partial files: 2.0 KiB remaining; up to 384 B of temporary destination space. ' +
+      'Restart incomplete files: 2.5 KiB remaining, including 512 B of verified data to redownload.',
+    )
+    expect(resumable.actions).toEqual([
+      { kind: 'continue', label: 'Continue and preserve partial files', destructive: false },
+      { kind: 'redownload', label: 'Restart incomplete files', destructive: true },
+    ])
+
+    const incomplete = present(
+      state,
+      TREE,
+      'direct-tree',
+      NOW,
+      undefined,
+      undefined,
+      undefined,
+      recoverySummary({ discovery: 'known-so-far' }),
+    )
+    expect(incomplete.description).toContain('Known so far (discovery incomplete)')
+    expect(incomplete.description).toContain('These totals can grow')
+  })
+
+  it('withholds DirectTree recovery actions until exact checkpoint costs are validated', () => {
     const resumable = present(lifecycle({
       kind: 'resumable-receive',
       payloadKind: 'file-set',
@@ -177,11 +230,8 @@ describe('direct ZIP lifecycle presentation', () => {
       expiresAt: DEADLINE,
     }), TREE, 'direct-tree')
 
-    expect(resumable.description).toContain('temporary destination space')
-    expect(resumable.actions).toEqual([
-      { kind: 'continue', label: 'Continue and preserve partial files', destructive: false },
-      { kind: 'redownload', label: 'Restart incomplete files', destructive: true },
-    ])
+    expect(resumable.description).toContain('Recovery costs are being validated')
+    expect(resumable.actions).toEqual([])
   })
 
   it('offers a new-operation route only when the retained ZIP target was deleted', () => {
@@ -412,6 +462,7 @@ function present(
   workspaceUsage?: { readonly ownedBytes: bigint; readonly maximumBytes?: bigint },
   repairSummary?: CompatibleNameRepairSummary,
   directZipProgress?: V2DirectZipProgressSnapshot,
+  recoverySummaryInput?: RecoverySummary,
 ) {
   return presentReceiveLifecycle({
     state,
@@ -421,6 +472,7 @@ function present(
     ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
     ...(repairSummary === undefined ? {} : { repairSummary }),
     ...(directZipProgress === undefined ? {} : { directZipProgress }),
+    ...(recoverySummaryInput === undefined ? {} : { recoverySummary: recoverySummaryInput }),
   })
 }
 
@@ -448,10 +500,18 @@ function planForTest(kind: MaterializationPlan['kind']): MaterializationPlan {
 }
 
 function lifecycle(
-  payload: ReceiveLifecycleStatePayload,
+  payload: TestLifecyclePayload,
 ): ReceiveLifecycleState {
+  const selectionFacts = payload.kind === 'resumable-receive' && payload.payloadKind === 'file-set'
+    ? payload.selectionFacts ?? Object.freeze({
+        discoveredFileCount: payload.completedFileCount,
+        discoveredBytes: payload.completedBytes,
+        discovery: 'failed' as const,
+      })
+    : undefined
   return Object.freeze({
     ...payload,
+    ...(selectionFacts === undefined ? {} : { selectionFacts }),
     operationId: 'operation',
     receiveIntentDigest: 'intent',
     generation: 1n,
@@ -477,5 +537,28 @@ function repairSummary(
     runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
     pendingCatchUp,
+  })
+}
+
+function recoverySummary(
+  override: Pick<RecoverySummary, 'discovery'>,
+): RecoverySummary {
+  return Object.freeze({
+    lifecycleGeneration: 1n,
+    checkpointSetDigest: 'checkpoint-set',
+    discoveredFileCount: 5n,
+    discoveredBytes: 3_584n,
+    discovery: override.discovery,
+    completedFileCount: 1n,
+    completedBytes: 1_024n,
+    incompleteFileCount: 2n,
+    verifiedPartialFileCount: 2n,
+    verifiedPartialBytes: 512n,
+    unstartedFileCount: 2n,
+    unstartedBytes: 1_024n,
+    preservingRemainingBytes: 2_048n,
+    restartRemainingBytes: 2_560n,
+    restartRedownloadBytes: 512n,
+    maximumPreservingTemporaryBytes: 384n,
   })
 }

@@ -6,7 +6,10 @@ import { ByteRangeSet, FileGeometry, byteRange, type ByteRange } from '../../src
 import type { V2BlockRangeReader } from '../../src/content/v2-broker'
 import type { V2OpenedRevision, V2RevisionReader } from '../../src/content/v2-session-services'
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import type {
+  ReceiveLifecycleState,
+  RecoverySelectionFacts,
+} from '../../src/output/workspace/state'
 import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission-ledger'
 import {
   createDirectoryAdmissionScope,
@@ -52,6 +55,7 @@ import {
   type OutputFileRequest,
   type OutputExecutionProfile,
   type OutputSession,
+  type PlanPauseRequest,
   type PlanStopRequest,
   type PortableExecution,
   type V2PlanExecutionAuthority,
@@ -366,7 +370,7 @@ export interface TestOutputOptions {
   readonly failCommit?: boolean
   readonly retirement?: 'FileIsolated' | 'JobOutputCompromised'
   readonly executionProfile?: OutputExecutionProfile
-  readonly automaticCheckpointDecisions?: readonly ('advanced' | 'declined')[]
+  readonly automaticCheckpointDecisions?: readonly ('advanced' | 'deferred' | 'finished')[]
   readonly beforeAutomaticCheckpoint?: (attempt: number) => void | Promise<void>
   readonly beforePause?: () => void | Promise<void>
 }
@@ -379,7 +383,8 @@ export interface TestOutput extends OutputSession {
   readonly retirements: unknown[]
   readonly automaticCheckpointAttempts: string[]
   readonly checkpointAdvances: string[]
-  readonly checkpointDeclines: string[]
+  readonly checkpointDeferrals: string[]
+  readonly checkpointFinishes: string[]
   readonly pauses: string[]
   readonly pauseEvidence: VerifiedDurableRanges[]
   readonly finalProofs: VerifiedFinalOutputFile[]
@@ -401,7 +406,8 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
   const retirements: unknown[] = []
   const automaticCheckpointAttempts: string[] = []
   const checkpointAdvances: string[] = []
-  const checkpointDeclines: string[] = []
+  const checkpointDeferrals: string[] = []
+  const checkpointFinishes: string[] = []
   const pauses: string[] = []
   const pauseEvidence: VerifiedDurableRanges[] = []
   const finalProofs: VerifiedFinalOutputFile[] = []
@@ -416,7 +422,8 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
     retirements,
     automaticCheckpointAttempts,
     checkpointAdvances,
-    checkpointDeclines,
+    checkpointDeferrals,
+    checkpointFinishes,
     pauses,
     pauseEvidence,
     finalProofs,
@@ -470,18 +477,21 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
             events.push('checkpoint-attempt')
             await options.beforeAutomaticCheckpoint?.(attempt)
             const decision = options.automaticCheckpointDecisions?.[attempt] ??
-              (durability === 'None' ? 'declined' : 'advanced')
-            if (decision === 'declined') {
-              checkpointDeclines.push(file.source.fileId)
-              events.push('checkpoint-declined')
+              (durability === 'None' ? 'finished' : 'advanced')
+            if (decision === 'deferred') {
+              checkpointDeferrals.push(file.source.fileId)
+              events.push('checkpoint-deferred')
               return Object.freeze({
-                kind: 'declined' as const,
+                kind: 'deferred' as const,
+                reason: 'capacity-unavailable' as const,
+              })
+            }
+            if (decision === 'finished') {
+              checkpointFinishes.push(file.source.fileId)
+              events.push('checkpoint-finished')
+              return Object.freeze({
+                kind: 'finished' as const,
                 reason: 'cost-evidence-unavailable' as const,
-                estimate: Object.freeze({
-                  prefixCopyBytes: 0n,
-                  cumulativeWriteAmplificationBytes: 0n,
-                  peakTemporaryBytes: 0n,
-                }),
               })
             }
             durable = durable.union(pending)
@@ -496,11 +506,6 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
                 file.exactSize,
                 durable.ranges,
               ),
-              cost: Object.freeze({
-                prefixCopyBytes: 0n,
-                cumulativeWriteAmplificationBytes: 0n,
-                peakTemporaryBytes: 0n,
-              }),
             })
           },
           commit: async () => {
@@ -547,6 +552,7 @@ export interface TestPlanAuthority extends V2PlanExecutionAuthority {
   readonly settlementSignals: readonly AbortSignal[]
   readonly terminalCuts: readonly TestTerminalCutKind[]
   readonly pauses: string[]
+  readonly pauseRequests: readonly PlanPauseRequest[]
   readonly stops: readonly PlanStopRequest[]
   readonly stopSignals: readonly AbortSignal[]
   readonly admissionFailures: unknown[]
@@ -581,18 +587,23 @@ export function planAuthorityFixture(input: {
   const settlementSignals: AbortSignal[] = []
   const terminalCuts: TestTerminalCutKind[] = []
   const pauses: string[] = []
+  const pauseRequests: PlanPauseRequest[] = []
   const stops: PlanStopRequest[] = []
   const stopSignals: AbortSignal[] = []
   const admissionFailures: unknown[] = []
   const unknownSettlements: string[] = []
   const pauseSignals: AbortSignal[] = []
 
-  const pause = async (intent: ReceiveIntent): Promise<ReceiveLifecycleState> => {
+  const pause = async (
+    intent: ReceiveIntent,
+    request: PlanPauseRequest,
+  ): Promise<ReceiveLifecycleState> => {
     pauses.push(intent.plan.kind)
+    pauseRequests.push(request)
     if (input.hangPause === true) return new Promise<never>(() => undefined)
     if (input.failPause === true) throw new Error('fixture pause failure')
     if (input.invalidPauseLifecycle === true) return downloadStartedState(intent)
-    return pauseState(intent)
+    return pauseState(intent, request.selectionFacts)
   }
   const workspaceExecution = (intent: ReceiveIntent): WorkspaceExecution => ({
     planKind: 'workspace-then-publish',
@@ -602,9 +613,9 @@ export function planAuthorityFixture(input: {
       if (input.failSettlement === true) throw new Error('fixture settlement failure')
       return materializationSealedState(intent)
     },
-    pause: async (_request, signal) => {
+    pause: async (request, signal) => {
       pauseSignals.push(signal)
-      return pause(intent)
+      return pause(intent, request)
     },
   })
   const authority: V2PlanExecutionAuthority = {
@@ -642,9 +653,9 @@ export function planAuthorityFixture(input: {
           await input.beforeDirectTreeStop?.(signal)
           return stoppedState(intent, request.materialization.entryCount)
         },
-        pause: async (_request, signal) => {
+        pause: async (request, signal) => {
           pauseSignals.push(signal)
-          return pause(intent)
+          return pause(intent, request)
         },
       }
       return execution
@@ -662,9 +673,9 @@ export function planAuthorityFixture(input: {
           if (input.failSettlement === true) throw new Error('fixture settlement failure')
           return publishedState(intent)
         },
-        pause: async (_request, signal) => {
+        pause: async (request, signal) => {
           pauseSignals.push(signal)
-          return pause(intent)
+          return pause(intent, request)
         },
       }
       return execution
@@ -705,9 +716,9 @@ export function planAuthorityFixture(input: {
           if (input.failSettlement === true) throw new Error('fixture settlement failure')
           return downloadStartedState(intent)
         },
-        pause: async (_request, signal) => {
+        pause: async (request, signal) => {
           pauseSignals.push(signal)
-          return pause(intent)
+          return pause(intent, request)
         },
       }
       return Object.freeze({ kind: 'accepted', execution })
@@ -732,6 +743,7 @@ export function planAuthorityFixture(input: {
     settlementSignals,
     terminalCuts,
     pauses,
+    pauseRequests,
     stops,
     stopSignals,
     admissionFailures,
@@ -907,7 +919,10 @@ function needsAttentionState(intent: ReceiveIntent): Extract<ReceiveLifecycleSta
   })
 }
 
-function pauseState(intent: ReceiveIntent): ReceiveLifecycleState {
+function pauseState(
+  intent: ReceiveIntent,
+  selectionFacts: RecoverySelectionFacts,
+): ReceiveLifecycleState {
   switch (intent.plan.kind) {
     case 'direct-tree': return partialState(intent, 1)
     case 'workspace-then-publish':
@@ -918,6 +933,7 @@ function pauseState(intent: ReceiveIntent): ReceiveLifecycleState {
         checkpointSetDigest: digestIdentity(77),
         completedFileCount: 0n,
         completedBytes: 0n,
+        selectionFacts,
         expiresAt: 1000,
       })
     case 'direct-atomic': return restartState(intent, 'direct-atomic-rolled-back')

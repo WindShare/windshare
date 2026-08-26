@@ -522,6 +522,11 @@ function resumableLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleSta
     checkpointSetDigest: identity(30, 32),
     completedFileCount: 0n,
     completedBytes: 0n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 0n,
+      discoveredBytes: 0n,
+      discovery: 'complete',
+    }),
     expiresAt: Date.now() + 60_000,
   })
 }

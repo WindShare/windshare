@@ -364,7 +364,7 @@ describe('File System Access DirectTree lifecycle', () => {
     parent.onFileCreated = () => ordering.push('created')
     const transaction = await session.beginFile({
       materializationRelativePath: [],
-      recovery: confirmedRecoveryPolicy(),
+      recovery: preservingRecoveryPolicy(),
       openRevision: async () => {
         ordering.push('revision-opened')
         return {
@@ -395,7 +395,7 @@ describe('File System Access DirectTree lifecycle', () => {
     })
     const resumed = await reopened.beginFile({
       materializationRelativePath: [],
-      recovery: confirmedRecoveryPolicy(),
+      recovery: preservingRecoveryPolicy(),
       openRevision: async () => ({
         fileId: identity(3),
         fileRevision: identity(33),
@@ -720,11 +720,13 @@ describe('File System Access settlement authority', () => {
     await expect(firstExecution.pause({
       worker: PAUSED,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      selectionFacts: recoverySelectionFacts(1n, 4n),
       reason: new DOMException('cancelled', 'AbortError'),
     }, SIGNAL)).resolves.toMatchObject({
       kind: 'resumable-receive',
       completedFileCount: 0n,
       completedBytes: 0n,
+      selectionFacts: recoverySelectionFacts(1n, 4n),
     })
     await first.releaseRootLease()
     expect(locks.releaseCount).toBe(1)
@@ -787,6 +789,7 @@ describe('File System Access settlement authority', () => {
     const fallback = await firstExecution.pause({
       worker: PAUSED,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      selectionFacts: recoverySelectionFacts(0n, 0n),
       reason: new Error('first attempt paused'),
     }, SIGNAL)
     if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
@@ -815,6 +818,7 @@ describe('File System Access settlement authority', () => {
       checkpointSetDigest: fallback.checkpointSetDigest,
       completedFileCount: fallback.completedFileCount,
       completedBytes: fallback.completedBytes,
+      selectionFacts: fallback.selectionFacts,
       expiresAt: fallback.expiresAt,
       partialReceiptDigest: fallback.partialReceiptDigest,
     })
@@ -944,6 +948,7 @@ describe('File System Access admission ownership recovery', () => {
     const fallback = await execution.pause({
       worker: PAUSED,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
+      selectionFacts: recoverySelectionFacts(0n, 0n),
       reason: new Error('first attempt paused'),
     }, SIGNAL)
     if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
@@ -1115,14 +1120,14 @@ describe('File System Access fresh-page discard authority', () => {
   })
 })
 
-function confirmedRecoveryPolicy() {
+function recoverySelectionFacts(discoveredFileCount: bigint, discoveredBytes: bigint) {
   return Object.freeze({
-    pausedFile: 'preserve' as const,
-    costBudget: Object.freeze({
-      maximumPrefixCopyBytes: 1_024n,
-      maximumCumulativeWriteAmplificationBytes: 4_096n,
-      maximumPeakTemporaryBytes: 1_024n,
-    }),
-    confirmTemporarySpace: () => true,
+    discoveredFileCount,
+    discoveredBytes,
+    discovery: 'failed' as const,
   })
+}
+
+function preservingRecoveryPolicy() {
+  return Object.freeze({ pausedFile: 'preserve' as const })
 }

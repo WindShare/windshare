@@ -1,7 +1,8 @@
 import type { AuthenticatedGenerationReference } from '../output/workspace/manifest'
 import type { PreparationManifestEntry } from '../output/workspace/preparation'
-import type { ReceiveLifecycleState } from '../output/workspace/state'
+import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../output/workspace/state'
 import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
 import type { PerformanceSummaryObservations } from '../output/diagnostics/performance-summary'
 import {
   FaultScope,
@@ -89,6 +90,7 @@ export interface PlanSettlementRequest<
 export interface PlanPauseRequest {
   readonly worker: TransferWorkerSettlement
   readonly materialization: MaterializationSummary
+  readonly selectionFacts: RecoverySelectionFacts
   readonly reason: unknown
 }
 
@@ -114,6 +116,7 @@ export interface DirectTreeExecution extends PlanExecutionBase<DirectTreePlan> {
   readonly directories: IncrementalDirectoryOutput
   readonly performance?: PerformanceSummaryObservations
   readonly repairSummary?: () => CompatibleNameRepairSummary | undefined
+  readonly recoverySummary?: () => RecoverySummary | undefined
   readonly terminalSettlementInitiated?: () => boolean
   beginTerminal(kind: 'pause' | 'stop' | 'settle'): void
   settle(
