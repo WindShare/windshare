@@ -1,4 +1,6 @@
 import type { OutputFailureSinks } from '../diagnostics'
+import type { RecoverySummary } from '../file-system-access/recovery-summary'
+import type { PersistentPausedFileRecovery } from '../persistent-tree/contracts'
 import type { ReceiveLifecycleState } from '../workspace/state'
 import type { DirectZipBootstrapResumeDescriptorV1 } from '../direct-zip/journal/repository'
 import {
@@ -14,6 +16,17 @@ export interface ResumeOperationClock {
 export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
+  readRecoverySummary?(
+    lifecycle: Extract<ReceiveLifecycleState, {
+      kind: 'resumable-receive'
+      payloadKind: 'file-set'
+    }>,
+  ): Promise<RecoverySummary | undefined>
+}
+
+export interface ReceiveOperationResumeRequest {
+  readonly retainedFileRecovery?: PersistentPausedFileRecovery
+  readonly failures?: OutputFailureSinks
 }
 
 export type ReceiveOperationDiscardResult =
@@ -33,7 +46,7 @@ export type ReceiveOperationDiscardResult =
 export interface ReceiveOperationMutationPort<TResult = unknown> {
   resume(
     descriptor: ReceiveOperationResumeDescriptor,
-    failures?: OutputFailureSinks,
+    request?: ReceiveOperationResumeRequest,
   ): Promise<TResult>
   expire(
     descriptor: ReceiveOperationResumeDescriptor,
@@ -55,12 +68,18 @@ interface ResumeReferenceOwner {
 
 export class ReceiveOperationResumeRef {
   readonly descriptor: ReceiveOperationResumeDescriptor
+  readonly recoverySummary: RecoverySummary | undefined
   readonly #owner: ResumeReferenceOwner
   #consumed = false
 
-  constructor(owner: ResumeReferenceOwner, descriptor: ReceiveOperationResumeDescriptor) {
+  constructor(
+    owner: ResumeReferenceOwner,
+    descriptor: ReceiveOperationResumeDescriptor,
+    recoverySummary?: RecoverySummary,
+  ) {
     this.#owner = owner
     this.descriptor = descriptor
+    this.recoverySummary = recoverySummary
   }
 
   consume(owner: ResumeReferenceOwner): ReceiveOperationResumeDescriptor {
@@ -123,7 +142,13 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     for (const lifecycle of lifecycles) {
       const descriptor = receiveOperationResumeDescriptor(lifecycle, now)
       if (descriptor === undefined) continue
-      const reference = new ReceiveOperationResumeRef(owner, descriptor)
+      const recoverySummary = lifecycle.kind === 'resumable-receive' &&
+          lifecycle.payloadKind === 'file-set' &&
+          this.#source.readRecoverySummary !== undefined
+        ? await this.#source.readRecoverySummary(lifecycle)
+        : undefined
+      requireMatchingRecoverySummary(lifecycle, recoverySummary)
+      const reference = new ReceiveOperationResumeRef(owner, descriptor, recoverySummary)
       this.#owners.set(reference, owner)
       references.push(reference)
     }
@@ -134,15 +159,16 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
 
   async resume(
     reference: ReceiveOperationResumeRef,
-    failures?: OutputFailureSinks,
+    request?: ReceiveOperationResumeRequest,
   ): Promise<TResult> {
+    requireMatchingRetainedFileRecovery(reference, request?.retainedFileRecovery)
     const descriptor = this.#consume(reference)
     const now = this.#clock.now()
     if (descriptor.expiresAt !== undefined && now >= descriptor.expiresAt) {
-      return this.#mutations.expire(descriptor, failures)
+      return this.#mutations.expire(descriptor, request?.failures)
     }
     assertReceiveOperationCanContinue(descriptor, now)
-    return this.#mutations.resume(descriptor, failures)
+    return this.#mutations.resume(descriptor, request)
   }
 
   async discard(
@@ -191,6 +217,38 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     }
     this.#owners.delete(reference)
     return reference.consume(owner)
+  }
+}
+
+function requireMatchingRetainedFileRecovery(
+  reference: ReceiveOperationResumeRef,
+  retainedFileRecovery: PersistentPausedFileRecovery | undefined,
+): void {
+  if (reference.descriptor.continuation !== 'resume-receive') {
+    if (retainedFileRecovery !== undefined) {
+      throw new TypeError('retained file recovery is exclusive to receive continuation')
+    }
+    return
+  }
+  if (reference.recoverySummary === undefined && retainedFileRecovery !== undefined) {
+    throw new TypeError('retained file recovery requires a validated recovery summary')
+  }
+  if (reference.recoverySummary !== undefined && retainedFileRecovery === undefined) {
+    throw new TypeError('DirectTree continuation requires a retained-file recovery choice')
+  }
+}
+
+function requireMatchingRecoverySummary(
+  lifecycle: ReceiveLifecycleState,
+  summary: RecoverySummary | undefined,
+): void {
+  if (summary === undefined) return
+  if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set' ||
+      summary.lifecycleGeneration !== lifecycle.generation ||
+      summary.checkpointSetDigest !== lifecycle.checkpointSetDigest ||
+      summary.completedFileCount !== lifecycle.completedFileCount ||
+      summary.completedBytes !== lifecycle.completedBytes) {
+    throw new TypeError('recovery summary does not match its resume inventory lifecycle')
   }
 }
 

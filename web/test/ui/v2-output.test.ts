@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
 import {
   WorkspaceCostObservationAccumulatorV1,
   materializationRouteIdentity,
@@ -13,7 +14,10 @@ import {
   type ResolvedArtifactAction,
 } from '../../src/output/planning'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'
+import { PersistentPreservingWriterOpenError } from '../../src/output/persistent-tree/recovery'
 import { createSelectionSpec, type ReceiveIntent } from '../../src/transfer/intent'
+import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
+import { PersistentWriterOpenPauseRequestedError } from '../../src/transfer/settlement/persistent-file-transaction'
 import type { TransferWorkerSettlement } from '../../src/transfer/outcome'
 import type { SelectionProjectionState } from '../../src/transfer/projection'
 import type {
@@ -425,6 +429,122 @@ describe('receive interruption presentation', () => {
 })
 
 describe('derived output lifecycle and recovery presentation', () => {
+  it('publishes the validated recovery summary from a live DirectTree pause result', async () => {
+    const observation = await directTreeObservation(9n)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(1, observation.state, observation.offers)
+    outputs.updateActivation(waitingResolution(
+      observation.offered,
+      observation.state.projection,
+      1,
+    ))
+    const intent = receiveIntent(observation.action)
+    const checkpointSetDigest = identity(94, 32)
+    const paused = lifecycle(intent, 2n, {
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest,
+      completedFileCount: 2n,
+      completedBytes: 1_024n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 5n,
+        discoveredBytes: 4_096n,
+        discovery: 'complete',
+      }),
+    })
+    const recoverySummary = recoverySummaryFixture(2n, checkpointSetDigest)
+    expect(outputs.adoptReceiveIntent(
+      observation.offered.choice,
+      intent,
+      paused,
+    )).toBe(true)
+
+    expect(outputs.adoptTransferResult({
+      worker: pausedWorker(),
+      lifecycle: paused,
+      intent,
+      transferJobId: 'paused-transfer-job',
+      recoverySummary,
+    })).toBe(true)
+    expect(outputs.getSnapshot()).toMatchObject({
+      recoverySummary,
+      lifecyclePresentation: {
+        description: expect.stringContaining('Completed: 2 files'),
+        actions: [
+          { kind: 'continue', label: 'Continue and preserve partial files' },
+          { kind: 'redownload', label: 'Restart incomplete files' },
+        ],
+      },
+    })
+  })
+
+  it('retains the exact preserving-open failure and modeled cost in the paused presentation', async () => {
+    const observation = await directTreeObservation(10n)
+    const outputs = new V2OutputPresentationController()
+    outputs.updateProjection(1, observation.state, observation.offers)
+    outputs.updateActivation(waitingResolution(
+      observation.offered,
+      observation.state.projection,
+      1,
+    ))
+    const intent = receiveIntent(observation.action)
+    const checkpointSetDigest = identity(95, 32)
+    const paused = lifecycle(intent, 2n, {
+      kind: 'resumable-receive',
+      payloadKind: 'file-set',
+      checkpointSetDigest,
+      completedFileCount: 2n,
+      completedBytes: 1_024n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 5n,
+        discoveredBytes: 4_096n,
+        discovery: 'complete',
+      }),
+    })
+    outputs.adoptReceiveIntent(observation.offered.choice, intent, paused)
+    const abortReason = new PersistentWriterOpenPauseRequestedError(
+      new PersistentPreservingWriterOpenError({
+        materializationRelativePath: snapshotMaterializationRootRelativePath([
+          'photos',
+          'blocked.bin',
+        ]),
+        cost: {
+          prefixCopyBytes: 128n * 1024n * 1024n,
+          writeAmplificationBytes: 128n * 1024n * 1024n,
+          temporaryBytes: 96n * 1024n * 1024n,
+        },
+        purpose: 'automatic-checkpoint',
+        cause: new DOMException('Native writer open failed', 'QuotaExceededError'),
+      }),
+    )
+
+    expect(outputs.adoptTransferResult({
+      worker: pausedWorker(),
+      lifecycle: paused,
+      intent,
+      transferJobId: 'paused-transfer-job',
+      recoverySummary: recoverySummaryFixture(2n, checkpointSetDigest),
+      abortReason,
+    })).toBe(true)
+    expect(outputs.getSnapshot()).toMatchObject({
+      writerOpenPause: {
+        materializationRelativePath: ['photos', 'blocked.bin'],
+        purpose: 'automatic-checkpoint',
+        cost: {
+          prefixCopyBytes: 134_217_728n,
+          writeAmplificationBytes: 134_217_728n,
+          temporaryBytes: 100_663_296n,
+        },
+      },
+      lifecyclePresentation: {
+        writerOpenPause: {
+          title: 'Could not reopen photos/blocked.bin',
+          description: expect.stringMatching(/128\.0 MiB.*128\.0 MiB.*96\.0 MiB/u),
+        },
+      },
+    })
+  })
+
   it('keeps compatible-name repair separate, persistent, monotonic, and terminally qualified', async () => {
     const observation = await singleFileObservation(7n)
     const outputs = new V2OutputPresentationController()
@@ -619,6 +739,42 @@ async function singleFileObservation(epoch: bigint): Promise<Readonly<{
   })
 }
 
+async function directTreeObservation(epoch: bigint): Promise<Readonly<{
+  state: SelectionProjectionState
+  offers: ArtifactOffers
+  offered: OfferedArtifactChoice
+  action: ResolvedArtifactAction
+}>> {
+  const selection = await selectionSpec()
+  const projected = projection(selection, treeProof(), 4_096n, epoch)
+  const outputEnvironment = environment({ targets: [fsaTarget()] })
+  const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, outputEnvironment)
+  if (offers.kind !== 'artifact-actions') {
+    throw new Error(`expected artifact choices, received ${offers.kind}`)
+  }
+  const offered = [offers.primary, ...offers.alternatives]
+    .find(candidate => candidate.route.kind === 'direct-tree')
+  if (offered === undefined) throw new Error('expected DirectTree artifact choice')
+  const reconciled = await reconcileArtifactChoice({
+    choice: offered.choice,
+    preferredRoute: materializationRouteIdentity(offered.route),
+    expectedSelectionDigest: projected.selectionDigest,
+    projection: projected,
+    discovery: COMPLETE_DISCOVERY,
+    environment: outputEnvironment,
+    previousObservation: null,
+  })
+  if (reconciled.kind !== 'resolved') {
+    throw new Error(`expected resolved action, received ${reconciled.kind}`)
+  }
+  return Object.freeze({
+    state: state(projected, COMPLETE_DISCOVERY),
+    offers,
+    offered,
+    action: reconciled.action,
+  })
+}
+
 function waitingResolution(
   offered: OfferedArtifactChoice,
   projected: SelectionProjectionState['projection'],
@@ -717,6 +873,34 @@ function successfulWorker(): TransferWorkerSettlement {
       collisionFiles: 0,
       failedFiles: 0,
     }),
+  })
+}
+
+function pausedWorker(): TransferWorkerSettlement {
+  return Object.freeze({ ...successfulWorker(), status: 'Paused' })
+}
+
+function recoverySummaryFixture(
+  lifecycleGeneration: bigint,
+  checkpointSetDigest: string,
+): RecoverySummary {
+  return Object.freeze({
+    lifecycleGeneration,
+    checkpointSetDigest,
+    discoveredFileCount: 5n,
+    discoveredBytes: 4_096n,
+    discovery: 'complete',
+    completedFileCount: 2n,
+    completedBytes: 1_024n,
+    incompleteFileCount: 2n,
+    verifiedPartialFileCount: 2n,
+    verifiedPartialBytes: 512n,
+    unstartedFileCount: 1n,
+    unstartedBytes: 1_024n,
+    preservingRemainingBytes: 2_560n,
+    restartRemainingBytes: 3_072n,
+    restartRedownloadBytes: 512n,
+    maximumPreservingTemporaryBytes: 384n,
   })
 }
 

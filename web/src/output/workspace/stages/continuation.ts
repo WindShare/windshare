@@ -4,7 +4,7 @@ import {
   persistedReceiptRecord,
 } from '../receipts'
 import type { ReceiveOperationHandleRecord } from '../records'
-import type { ReceiveLifecycleState } from '../state'
+import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../state'
 import {
   WORKSPACE_HANDLE_PACKAGE_OBJECT,
   type PackageTemporaryCleanupEvidence,
@@ -22,6 +22,7 @@ export class WorkspaceContinuationStages {
     readonly checkpointSetDigest: string
     readonly completedFileCount: bigint
     readonly completedBytes: bigint
+    readonly selectionFacts: RecoverySelectionFacts
   }): Promise<Extract<ReceiveLifecycleState, {
     kind: 'resumable-receive'
     payloadKind: 'file-set'
@@ -33,6 +34,7 @@ export class WorkspaceContinuationStages {
       checkpointSetDigest: input.checkpointSetDigest,
       completedFileCount: input.completedFileCount,
       completedBytes: input.completedBytes,
+      selectionFacts: input.selectionFacts,
     }, state))
     if (next.kind !== 'resumable-receive' || next.payloadKind !== 'file-set') {
       throw new TypeError('workspace pause is not a file-set continuation')
@@ -117,6 +119,7 @@ export class WorkspaceContinuationStages {
       checkpointSetDigest: fallback.checkpointSetDigest,
       completedFileCount: fallback.completedFileCount,
       completedBytes: fallback.completedBytes,
+      selectionFacts: fallback.selectionFacts,
       expiresAt: fallback.expiresAt,
       ...(fallback.partialReceiptDigest === undefined
         ? {}

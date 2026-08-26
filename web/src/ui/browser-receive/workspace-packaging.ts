@@ -110,7 +110,7 @@ export class WorkspaceReceivePackaging {
   ): PersistentWorkspaceSettlementAuthority {
     return Object.freeze({
       pause: async (
-        _request: PlanPauseRequest,
+        request: PlanPauseRequest,
         cut: PersistentMaterializationSettlementCut<WorkspaceMaterializationEvidence>,
       ) => {
         await cut.closeMaterialization()
@@ -120,6 +120,7 @@ export class WorkspaceReceivePackaging {
           checkpointSetDigest: await checkpointSetDigest(this.#intent, cut.evidence),
           completedFileCount: BigInt(files.length),
           completedBytes,
+          selectionFacts: request.selectionFacts,
         })
       },
       settle: async (

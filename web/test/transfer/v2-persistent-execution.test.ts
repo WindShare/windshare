@@ -58,6 +58,7 @@ import {
   receiveIntentFixture,
   selectOnlyFile,
 } from './v2-job-fixture'
+import { createTestCheckpointAuthorities } from '../output/persistent-tree-file-fixture'
 
 const SIGNAL = new AbortController().signal
 const SUCCESS = transferWorkerSettlement('Succeeded', EMPTY_TRANSFER_FAILURE_SUMMARY)
@@ -97,6 +98,7 @@ describe('persistent namespace claim bridge', () => {
       },
     }
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -145,6 +147,7 @@ describe('persistent namespace claim bridge', () => {
     )
     const ensureDirectory = vi.fn(async () => { throw collision })
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization: {
@@ -221,6 +224,7 @@ describe('persistent production execution bridge', () => {
       },
     }
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -288,6 +292,7 @@ describe('persistent production execution bridge', () => {
       close: async () => undefined,
     }
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -342,6 +347,7 @@ describe('persistent production execution bridge', () => {
     }))
     const materialization = new PersistentMaterializationFixture(intent)
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -378,6 +384,11 @@ describe('persistent production execution bridge', () => {
         directoryCount: 0n,
         rawBytes: 0n,
       },
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 0n,
+        discoveredBytes: 0n,
+        discovery: 'failed',
+      }),
       reason: new Error('settlement invariant'),
     }, SIGNAL)).resolves.toMatchObject({ kind: 'partial-directory' })
     expect(materialization.closeCount).toBe(1)
@@ -402,6 +413,7 @@ describe('persistent production execution bridge', () => {
       throw new TypeError('sealed ledger requires every directory to finalize')
     })
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -451,6 +463,7 @@ describe('persistent production execution bridge', () => {
       closeFailure,
     )
     const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(),
       executionProfile: disabledOutputExecutionProfile(1),
       intent,
       materialization,
@@ -778,7 +791,6 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
       },
       automaticCheckpoint: async (
         _trigger: Parameters<PersistentFileTransactionPort['automaticCheckpoint']>[0],
-        _budget: Parameters<PersistentFileTransactionPort['automaticCheckpoint']>[1],
         signal?: AbortSignal,
       ) => {
         signal?.throwIfAborted()
@@ -789,8 +801,8 @@ class PersistentMaterializationFixture implements PersistentMaterializationPort 
           durableRanges: checkpointRanges,
           cost: Object.freeze({
             prefixCopyBytes: 0n,
-            cumulativeWriteAmplificationBytes: 0n,
-            peakTemporaryBytes: 0n,
+            writeAmplificationBytes: 0n,
+            temporaryBytes: 0n,
           }),
         })
       },

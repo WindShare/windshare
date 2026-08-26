@@ -5,6 +5,7 @@ import {
   type NeedsAttentionReason,
   type PlanKind,
   type ReceiveLifecycleState,
+  type RecoverySelectionFacts,
 } from './state'
 import {
   observeRecovery,
@@ -18,17 +19,37 @@ export type AbandonedOperationObservation =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
       lastVerifiedRecordDigest: string
     }>
   | Readonly<{
       kind: 'tree-finalized'
-      outcome: 'published' | 'partial-directory' | 'resumable'
+      outcome: 'published'
       receiptDigest: string
       successCount: bigint
       failureCount: bigint
-      checkpointSetDigest?: string
       completedBytes: bigint
+      lastVerifiedRecordDigest: string
+    }>
+  | Readonly<{
+      kind: 'tree-finalized'
+      outcome: 'partial-directory'
+      receiptDigest: string
+      successCount: bigint
+      failureCount: bigint
+      completedBytes: bigint
+      lastVerifiedRecordDigest: string
+    }>
+  | Readonly<{
+      kind: 'tree-finalized'
+      outcome: 'resumable'
+      receiptDigest: string
+      successCount: bigint
+      failureCount: bigint
+      checkpointSetDigest: string
+      completedBytes: bigint
+      selectionFacts: RecoverySelectionFacts
       lastVerifiedRecordDigest: string
     }>
   | Readonly<{
@@ -205,15 +226,13 @@ function recoverFinalizingTree(
       receiptDigest: observation.receiptDigest,
     }), 'published')
   }
-  if (observation.checkpointSetDigest === undefined) {
-    throw new TypeError('retryable tree recovery lacks checkpoint evidence')
-  }
   return reduction(nextReceiveLifecycleState(state, {
     kind: 'resumable-receive',
     payloadKind: 'file-set',
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.successCount,
     completedBytes: observation.completedBytes,
+    selectionFacts: observation.selectionFacts,
     expiresAt: stableDeadline(context.nowMilliseconds),
     partialReceiptDigest: observation.receiptDigest,
   }), 'resume-receive')
@@ -398,6 +417,7 @@ function resumableReceive(
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.completedFileCount,
     completedBytes: observation.completedBytes,
+    selectionFacts: observation.selectionFacts,
     expiresAt: stableDeadline(nowMilliseconds),
     ...(observation.partialReceiptDigest === undefined
       ? {}

@@ -1,6 +1,5 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import { bigintToSafeNumber } from '../../content/geometry'
-import { outputCheckpointCost } from '../../transfer/output-file-contract'
 import type {
   PersistentHandleRecord,
   PersistentHandleRepository,
@@ -11,7 +10,7 @@ import type {
   PersistentOutputTree,
   PersistentTreeFile,
   PersistentWriterOpenMode,
-  PersistentWriterPreflight,
+  PreservingWriterCost,
 } from '../persistent-tree/contracts'
 import {
   TargetOwnershipUnknownError,
@@ -393,22 +392,14 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
     this.#writer = await this.#handle.createWritable({ keepExistingData: mode === 'preserve' })
   }
 
-  checkpointPreflight(
-    durablePrefixBytes: bigint,
-    cumulativeWriteAmplificationBytes: bigint,
-  ): PersistentWriterPreflight {
-    const cost = outputCheckpointCost({
-      prefixCopyBytes: durablePrefixBytes,
-      cumulativeWriteAmplificationBytes:
-        cumulativeWriteAmplificationBytes + durablePrefixBytes,
-      peakTemporaryBytes: durablePrefixBytes,
-    })
+  preservingWriterCost(durablePrefixBytes: bigint): PreservingWriterCost {
+    if (typeof durablePrefixBytes !== 'bigint' || durablePrefixBytes < 0n) {
+      throw new RangeError('Preserving writer durable prefix bytes must not be negative')
+    }
     return Object.freeze({
-      cost,
-      // OPFS exposes quota estimates, not an authoritative per-write capacity reservation.
-      space: durablePrefixBytes === 0n
-        ? 'within-modeled-budget' as const
-        : 'requires-user-confirmation' as const,
+      prefixCopyBytes: durablePrefixBytes,
+      writeAmplificationBytes: durablePrefixBytes,
+      temporaryBytes: durablePrefixBytes,
     })
   }
 

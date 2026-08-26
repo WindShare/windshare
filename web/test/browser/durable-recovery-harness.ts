@@ -10,7 +10,7 @@ import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../src/output/persiste
 import { durableCheckpointNamespaceIdentity } from '../../src/output/persistence/namespace'
 import {
   bindTask as bindFsaNamespaceTask,
-  confirmedBrowserRecoveryPolicy,
+  preservingBrowserRecoveryPolicy,
   installNativeLookupInterceptor,
   resultRootArtifact as fsaResultRootArtifact,
   type FsaNamespaceFixture,
@@ -288,7 +288,7 @@ export async function reopenCompatibleNameRecovery(
     const reopenedRepairSummaryCount = session.repairSummary()?.committedCount ?? -1
     const resumed = await session.beginFile({
       materializationRelativePath: [fixture.logicalComponent],
-      recovery: confirmedBrowserRecoveryPolicy(),
+      recovery: preservingBrowserRecoveryPolicy(),
       openRevision: async () => ({
         fileId: fixture.fileId,
         fileRevision: fixture.fileRevision,
@@ -449,6 +449,11 @@ export async function createFreshPageWorkspaceResumeCut(
     checkpointSetDigest: ids.expiryReceiptDigest,
     completedFileCount: 0n,
     completedBytes: 0n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 1n,
+      discoveredBytes: BigInt(FILE_BYTES.byteLength),
+      discovery: 'complete',
+    }),
   })
   ;(globalThis as Record<string, unknown>).__windshareW3cFreshResumeCut = Object.freeze({
     repository,
@@ -575,7 +580,7 @@ export async function createOriginPrivateReceiveCrashCut(
   })
   const transaction = await backend.materialization.beginFile({
     materializationRelativePath: [intent.artifact.suggestedName],
-    recovery: confirmedBrowserRecoveryPolicy(),
+    recovery: preservingBrowserRecoveryPolicy(),
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({
@@ -661,7 +666,7 @@ export async function recoverReceiveAndSealPackage(
   })
   const transaction = await backend.materialization.beginFile({
     materializationRelativePath: [intent.artifact.suggestedName],
-    recovery: confirmedBrowserRecoveryPolicy(),
+    recovery: preservingBrowserRecoveryPolicy(),
     openRevision: async () => {
       contentRequests += 1n
       return Object.freeze({
@@ -689,6 +694,11 @@ export async function recoverReceiveAndSealPackage(
     checkpointSetDigest: checkpoint.checksum,
     completedFileCount: 0n,
     completedBytes: 0n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 1n,
+      discoveredBytes: BigInt(FILE_BYTES.byteLength),
+      discovery: 'complete',
+    }),
     lastVerifiedRecordDigest: checkpoint.checksum,
   }, {
     planKind: 'workspace-then-publish',

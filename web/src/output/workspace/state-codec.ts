@@ -12,8 +12,10 @@ import {
 import {
   lifecycleDeadline,
   receiveStateByte,
+  snapshotRecoverySelectionFacts,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
+  type RecoveryDiscoveryState,
   type RetainedLifecycleKind,
   type RestartRequiredReason,
 } from './state'
@@ -156,11 +158,19 @@ function resumableReceivePayload(
       millisecondsFrame(state.expiresAt),
     ]
   }
+  const selectionFacts = snapshotRecoverySelectionFacts(
+    state.selectionFacts,
+    state.completedFileCount,
+    state.completedBytes,
+  )
   return [
     canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_FILE_SET)),
     digestFrame(state.checkpointSetDigest, 'checkpoint set digest'),
     canonicalFrame(canonicalU64(state.completedFileCount)),
     canonicalFrame(canonicalU64(state.completedBytes)),
+    canonicalFrame(canonicalU64(selectionFacts.discoveredFileCount)),
+    canonicalFrame(canonicalU64(selectionFacts.discoveredBytes)),
+    canonicalFrame(canonicalU8(recoveryDiscoveryStateByte(selectionFacts.discovery))),
     millisecondsFrame(state.expiresAt),
     canonicalFrame(state.partialReceiptDigest === undefined
       ? canonicalU8(1)
@@ -225,6 +235,21 @@ function attentionReasonByte(reason: NeedsAttentionReason): number {
     case 'target-ownership-unknown': return 1
     case 'publication-unknown': return 2
     case 'cleanup-unknown': return 3
+  }
+}
+
+function recoveryDiscoveryStateByte(state: RecoveryDiscoveryState): number {
+  switch (state) {
+    case 'complete': return 1
+    case 'failed': return 2
+  }
+}
+
+function recoveryDiscoveryStateFromByte(value: number): RecoveryDiscoveryState {
+  switch (value) {
+    case 1: return 'complete'
+    case 2: return 'failed'
+    default: throw new TypeError('recovery discovery state is invalid')
   }
 }
 
@@ -413,6 +438,11 @@ function decodeResumableReceiveState(
       checkpointSetDigest: reader.identity(32, 'checkpoint set digest'),
       completedFileCount: reader.u64('completed file count'),
       completedBytes: reader.u64('completed bytes'),
+      selectionFacts: Object.freeze({
+        discoveredFileCount: reader.u64('discovered file count'),
+        discoveredBytes: reader.u64('discovered bytes'),
+        discovery: recoveryDiscoveryStateFromByte(reader.byte('recovery discovery state')),
+      }),
       expiresAt: reader.milliseconds(),
       ...optionalDigest(reader.frame(), 'partial receipt digest', 'partialReceiptDigest'),
     })

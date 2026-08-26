@@ -36,25 +36,12 @@ export interface OutputCapabilities {
   readonly modificationTime: boolean
 }
 
-export interface OutputCheckpointCost {
-  readonly prefixCopyBytes: bigint
-  readonly cumulativeWriteAmplificationBytes: bigint
-  readonly peakTemporaryBytes: bigint
-}
-
-export interface OutputCheckpointCostBudget {
-  readonly maximumPrefixCopyBytes: bigint
-  readonly maximumCumulativeWriteAmplificationBytes: bigint
-  readonly maximumPeakTemporaryBytes: bigint
-}
-
 export interface OutputExecutionProfileBoundedCheckpoint {
   readonly kind: 'bounded'
   readonly trigger: Readonly<{
     readonly pendingBytes: bigint
     readonly pendingMilliseconds: number
   }>
-  readonly costBudget: OutputCheckpointCostBudget
 }
 
 export interface OutputExecutionProfile {
@@ -72,17 +59,17 @@ export type AutomaticCheckpointResult =
   | Readonly<{
       readonly kind: 'advanced'
       readonly durable: VerifiedDurableRanges
-      readonly cost: OutputCheckpointCost
     }>
   | Readonly<{
-      readonly kind: 'declined'
+      readonly kind: 'deferred'
+      readonly reason: 'capacity-unavailable' | 'checkpoint-priority'
+    }>
+  | Readonly<{
+      readonly kind: 'finished'
       readonly reason:
         | 'prefix-copy-budget'
         | 'cumulative-write-amplification-budget'
-        | 'peak-temporary-space-budget'
-        | 'temporary-space-confirmation-required'
         | 'cost-evidence-unavailable'
-      readonly estimate: OutputCheckpointCost
     }>
 
 export interface OutputCatalogFileIdentity {
@@ -184,7 +171,6 @@ export interface OutputFileTransaction {
   writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void>
   automaticCheckpoint(
     trigger: AutomaticCheckpointTrigger,
-    budget: OutputCheckpointCostBudget,
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult>
   commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile>
@@ -267,7 +253,6 @@ export function outputExecutionProfile(profile: OutputExecutionProfile): OutputE
       checkpoint.trigger.pendingMilliseconds <= 0) {
     throw new OutputSessionBindingError('output execution profile reported an invalid checkpoint trigger')
   }
-  const costBudget = outputCheckpointCostBudget(checkpoint.costBudget)
   return Object.freeze({
     maximumConcurrentFilePipelines: profile.maximumConcurrentFilePipelines,
     maximumOutstandingWriteBytes: profile.maximumOutstandingWriteBytes,
@@ -275,19 +260,7 @@ export function outputExecutionProfile(profile: OutputExecutionProfile): OutputE
     automaticCheckpoint: Object.freeze({
       kind: 'bounded' as const,
       trigger: Object.freeze({ ...checkpoint.trigger }),
-      costBudget,
     }),
-  })
-}
-
-export function outputCheckpointCost(cost: OutputCheckpointCost): OutputCheckpointCost {
-  return Object.freeze({
-    prefixCopyBytes: requireNonNegativeCost(cost?.prefixCopyBytes, 'prefix copy'),
-    cumulativeWriteAmplificationBytes: requireNonNegativeCost(
-      cost?.cumulativeWriteAmplificationBytes,
-      'cumulative write amplification',
-    ),
-    peakTemporaryBytes: requireNonNegativeCost(cost?.peakTemporaryBytes, 'peak temporary space'),
   })
 }
 
@@ -302,35 +275,9 @@ export function disabledOutputExecutionProfile(
   })
 }
 
-export function outputCheckpointCostBudget(
-  budget: OutputCheckpointCostBudget,
-): OutputCheckpointCostBudget {
-  return Object.freeze({
-    maximumPrefixCopyBytes: requireNonNegativeCost(
-      budget?.maximumPrefixCopyBytes,
-      'maximum prefix copy',
-    ),
-    maximumCumulativeWriteAmplificationBytes: requireNonNegativeCost(
-      budget?.maximumCumulativeWriteAmplificationBytes,
-      'maximum cumulative write amplification',
-    ),
-    maximumPeakTemporaryBytes: requireNonNegativeCost(
-      budget?.maximumPeakTemporaryBytes,
-      'maximum peak temporary space',
-    ),
-  })
-}
-
 function requirePositiveBudget(value: bigint, label: string): bigint {
   if (typeof value !== 'bigint' || value <= 0n) {
     throw new OutputSessionBindingError(`${label} budget must be positive`)
-  }
-  return value
-}
-
-function requireNonNegativeCost(value: bigint, label: string): bigint {
-  if (typeof value !== 'bigint' || value < 0n) {
-    throw new OutputSessionBindingError(`${label} cost must not be negative`)
   }
   return value
 }

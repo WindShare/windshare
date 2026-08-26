@@ -1,8 +1,10 @@
 import { artifactRequestedName } from '../output/planning'
-import {
-  compatibleNameRepairSummary,
-  type CompatibleNameRepairSummary,
-} from '../output/file-system-access/compatible-name/model'
+import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
+import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
+import type {
+  PreservingWriterCapacityPurpose,
+  PreservingWriterCost,
+} from '../output/persistent-tree/contracts'
 import {
   isTerminalLifecycleState,
   lifecycleDeadline,
@@ -13,6 +15,10 @@ import type {
   MaterializationPlan,
 } from '../transfer/intent'
 import { resumableFileSetDescription } from './resumable-file-set-presentation'
+import {
+  presentCompatibleNameRepair,
+  type CompatibleNameRepairPresentation,
+} from './compatible-name-repair-presentation'
 import { formatBytes } from './v2-progress-presentation'
 import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
 
@@ -92,30 +98,15 @@ export function presentNewReceiveOperation(input: Readonly<{
   return null
 }
 
-export type CompatibleNameRepairActionMode =
-  | 'abnormal-stop-recovery'
-  | 'catch-up-required'
-  | 'routine-restoration'
-
-export type CompatibleNameRepairPresentationContext =
-  | 'receive-lifecycle'
-  | 'pending-catch-up'
-
-export interface CompatibleNameRepairPresentation {
-  readonly noticeTitle: string
-  readonly noticeDescription: string
-  readonly replacementCount: number
-  readonly replacementCountLabel: string
-  readonly logicalPathSample: readonly string[]
-  readonly omittedLogicalPathCount: number
-  readonly scriptName: string
-  readonly sidecarName: string
-  readonly placementLabel: string
-  readonly runCommand: string | null
-  readonly actionMode: CompatibleNameRepairActionMode
-  readonly actionTitle: string
-  readonly actionDescription: string
-}
+export {
+  hasValidatedTerminalCompatibleNameRepair,
+  presentCompatibleNameRepair,
+} from './compatible-name-repair-presentation'
+export type {
+  CompatibleNameRepairActionMode,
+  CompatibleNameRepairPresentation,
+  CompatibleNameRepairPresentationContext,
+} from './compatible-name-repair-presentation'
 
 export interface ReceiveLifecyclePresentation {
   readonly stateKind: ReceiveLifecycleState['kind']
@@ -127,49 +118,19 @@ export interface ReceiveLifecyclePresentation {
   readonly usage: WorkspaceUsagePresentation | null
   readonly actions: readonly LifecycleActionPresentation[]
   readonly compatibleNameRepair: CompatibleNameRepairPresentation | null
+  readonly writerOpenPause: PersistentWriterOpenPausePresentation | null
 }
 
-export function presentCompatibleNameRepair(input: Readonly<{
-  state: ReceiveLifecycleState | null
-  summary: CompatibleNameRepairSummary
-  context?: CompatibleNameRepairPresentationContext
-}>): CompatibleNameRepairPresentation {
-  const summary = compatibleNameRepairSummary(input.summary)
-  const actionMode = compatibleNameRepairActionMode(
-    input.state,
-    summary,
-    input.context ?? 'receive-lifecycle',
-  )
-  const logicalPathSample = Object.freeze(summary.logicalPathSample.map(path => path.join('/')))
-  return Object.freeze({
-    noticeTitle: 'Compatible names are in use',
-    noticeDescription: 'The browser rejected an original name. WindShare saved the affected entry under a compatible name and prepared a restoration tool. The saved names remain compatible until that tool runs.',
-    replacementCount: summary.committedCount,
-    replacementCountLabel: `${summary.committedCount} verified/committed name ${
-      summary.committedCount === 1 ? 'replacement' : 'replacements'}`,
-    logicalPathSample,
-    omittedLogicalPathCount: summary.committedCount - logicalPathSample.length,
-    scriptName: summary.pairDisplayNames.script,
-    sidecarName: summary.pairDisplayNames.sidecar,
-    placementLabel: summary.placement === 'inside-logical-root'
-      ? 'Inside the received folder'
-      : 'Beside the received result',
-    // Catch-up still needs the compatible physical namespace, so exposing a runnable
-    // restoration command at that boundary would invite an irreversible ordering error.
-    runCommand: actionMode === 'catch-up-required' ? null : summary.runCommand,
-    actionMode,
-    actionTitle: repairActionTitle(actionMode),
-    actionDescription: repairActionDescription(actionMode),
-  })
+export interface PersistentWriterOpenPauseFact {
+  readonly materializationRelativePath: readonly string[]
+  readonly cost: PreservingWriterCost
+  readonly purpose: PreservingWriterCapacityPurpose
 }
 
-export function hasValidatedTerminalCompatibleNameRepair(
-  summary: CompatibleNameRepairSummary,
-): boolean {
-  const footer = summary.latestObservedFooter
-  return summary.committedCount > 0 && !summary.pendingCatchUp &&
-    footer !== undefined && footer.state !== 'active' &&
-    footer.committedCount === summary.committedCount
+export interface PersistentWriterOpenPausePresentation {
+  readonly materializationPath: string
+  readonly title: string
+  readonly description: string
 }
 
 export function presentReceiveLifecycle(input: Readonly<{
@@ -181,6 +142,8 @@ export function presentReceiveLifecycle(input: Readonly<{
   activeControls?: readonly V2ActiveReceiveControl[]
   interruption?: V2ReceiveInterruptionPresentation | null
   repairSummary?: CompatibleNameRepairSummary | null
+  recoverySummary?: RecoverySummary | null
+  writerOpenPause?: PersistentWriterOpenPauseFact | null
   directZipProgress?: V2DirectZipProgressSnapshot | null
 }>): ReceiveLifecyclePresentation {
   requireClock(input.nowMilliseconds)
@@ -195,9 +158,11 @@ export function presentReceiveLifecycle(input: Readonly<{
         input.plan,
         input.directZipProgress ?? null,
         compatibleNameRepair,
+        input.recoverySummary ?? null,
       )
     : interruptionCopy(input.interruption)
   const actions = presentedLifecycleActions(input, retention)
+  const writerOpenPause = presentPersistentWriterOpenPause(input)
   return Object.freeze({
     stateKind: input.state.kind,
     category: lifecycleCategory(input.state),
@@ -212,6 +177,29 @@ export function presentReceiveLifecycle(input: Readonly<{
     usage: workspaceUsagePresentation(input),
     actions,
     compatibleNameRepair,
+    writerOpenPause,
+  })
+}
+
+function presentPersistentWriterOpenPause(input: Readonly<{
+  state: ReceiveLifecycleState
+  plan: MaterializationPlan
+  writerOpenPause?: PersistentWriterOpenPauseFact | null
+}>): PersistentWriterOpenPausePresentation | null {
+  const fact = input.writerOpenPause
+  if (fact === undefined || fact === null || input.plan.kind !== 'direct-tree' ||
+      input.state.kind !== 'resumable-receive' || input.state.payloadKind !== 'file-set') return null
+  const materializationPath = fact.materializationRelativePath.join('/')
+  const context = fact.purpose === 'automatic-checkpoint'
+    ? 'The automatic checkpoint replacement failed.'
+    : 'The preserving recovery writer failed to open.'
+  return Object.freeze({
+    materializationPath,
+    title: `Could not reopen ${materializationPath}`,
+    description: `${context} The durable checkpoint is safe. Reopening this file would copy ` +
+      `${formatBytes(fact.cost.prefixCopyBytes)}, add ` +
+      `${formatBytes(fact.cost.writeAmplificationBytes)} of write amplification, and may use up to ` +
+      `${formatBytes(fact.cost.temporaryBytes)} of temporary destination space.`,
   })
 }
 
@@ -248,51 +236,25 @@ function interruptionCopy(
       )
 }
 
-function compatibleNameRepairActionMode(
-  state: ReceiveLifecycleState | null,
-  summary: CompatibleNameRepairSummary,
-  context: CompatibleNameRepairPresentationContext,
-): CompatibleNameRepairActionMode {
-  if (context === 'pending-catch-up') return 'catch-up-required'
-  if (state === null || lifecycleCategory(state) !== 'terminal') {
-    return 'abnormal-stop-recovery'
-  }
-  return hasValidatedTerminalCompatibleNameRepair(summary)
-    ? 'routine-restoration'
-    : 'catch-up-required'
-}
-
-function repairActionTitle(mode: CompatibleNameRepairActionMode): string {
-  switch (mode) {
-    case 'abnormal-stop-recovery': return 'Abnormal-stop recovery only'
-    case 'catch-up-required': return 'Restoration tool catch-up required'
-    case 'routine-restoration': return 'Restore the original names'
-  }
-}
-
-function repairActionDescription(mode: CompatibleNameRepairActionMode): string {
-  switch (mode) {
-    case 'abnormal-stop-recovery':
-      return 'Do not run this command while WindShare is receiving or while this task remains resumable. Use it only after an abnormal stop and after deciding not to resume.'
-    case 'catch-up-required':
-      return 'Do not run the restoration tool yet. WindShare must finish the local sidecar checkpoint before restoration becomes the routine action.'
-    case 'routine-restoration':
-      return 'Receiving has ended and the terminal sidecar checkpoint is complete. Run this command when you are ready to restore the logical names.'
-  }
-}
-
 function presentedLifecycleActions(
   input: Readonly<{
     state: ReceiveLifecycleState
     artifact: ArtifactSpec
     plan: MaterializationPlan
     activeControls?: readonly V2ActiveReceiveControl[]
+    recoverySummary?: RecoverySummary | null
   }>,
   retention: RetentionPresentation | null,
 ): readonly LifecycleActionPresentation[] {
   if (retention?.elapsed === true && isStableState(input.state)) return Object.freeze([])
   if (input.activeControls !== undefined && input.activeControls.length > 0) {
     return activeControlActions(input.state, input.activeControls, input.plan.kind)
+  }
+  if (input.state.kind === 'resumable-receive' &&
+      input.state.payloadKind === 'file-set' &&
+      input.plan.kind === 'direct-tree' &&
+      (input.recoverySummary === undefined || input.recoverySummary === null)) {
+    return Object.freeze([])
   }
   return lifecycleActions(input.state, input.artifact, input.plan.kind)
 }
@@ -303,6 +265,7 @@ function lifecycleCopy(
   plan: MaterializationPlan,
   directZipProgress: V2DirectZipProgressSnapshot | null,
   compatibleNameRepair: CompatibleNameRepairPresentation | null,
+  recoverySummary: RecoverySummary | null,
 ): Readonly<{
   title: string
   description: string
@@ -338,7 +301,7 @@ function lifecycleCopy(
       }
       return copy(
         'Ready to continue receiving',
-        resumableFileSetDescription(state, plan.kind),
+        resumableFileSetDescription(state, plan.kind, recoverySummary),
         'warning',
       )
     }

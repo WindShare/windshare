@@ -11,6 +11,8 @@ import type {
   PersistentOutputTree,
   PersistentTreeFile,
 } from '../../src/output/persistent-tree/contracts'
+import { createAutomaticCheckpointAdmissionAuthority } from '../../src/output/persistent-tree/automatic-checkpoint-admission'
+import { createPreservingWriterCapacityAuthority } from '../../src/output/persistent-tree/preserving-writer-capacity'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
 import { persistentInitialCheckpoint } from '../../src/output/persistent-tree/recovery'
 import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
@@ -19,13 +21,21 @@ import { identity } from './planning/fixture'
 export type VerificationStage = 'writer-open' | 'checkpoint' | 'commit'
 
 export function preservingRecoveryPolicy() {
+  return Object.freeze({ pausedFile: 'preserve' as const })
+}
+
+let nextCheckpointAuthorityIdentity = 0
+
+export function createTestCheckpointAuthorities() {
+  nextCheckpointAuthorityIdentity += 1
+  const identity = Object.freeze({
+    receiveOperationId: `test-operation-${nextCheckpointAuthorityIdentity}`,
+    transferJobId: `test-job-${nextCheckpointAuthorityIdentity}`,
+    outputSessionId: `test-output-${nextCheckpointAuthorityIdentity}`,
+  })
   return Object.freeze({
-    pausedFile: 'preserve' as const,
-    costBudget: Object.freeze({
-      maximumPrefixCopyBytes: 1_024n,
-      maximumCumulativeWriteAmplificationBytes: 2_048n,
-      maximumPeakTemporaryBytes: 1_024n,
-    }),
+    automaticCheckpointAdmission: createAutomaticCheckpointAdmissionAuthority({ identity }),
+    preservingWriterCapacity: createPreservingWriterCapacityAuthority({ identity }),
   })
 }
 
@@ -74,8 +84,7 @@ export class MemoryFile implements PersistentTreeFile {
   flushCount = 0
   sizeCount = 0
   abortCount = 0
-  preflightCount = 0
-  requiresSpaceConfirmation = false
+  preservingCostCount = 0
   readonly writerModes: string[] = []
 
   constructor(
@@ -108,18 +117,12 @@ export class MemoryFile implements PersistentTreeFile {
     if (mode === 'truncate') this.#bytes = new Uint8Array()
   }
 
-  checkpointPreflight(durablePrefixBytes: bigint, cumulativeWriteAmplificationBytes: bigint) {
-    this.preflightCount += 1
+  preservingWriterCost(durablePrefixBytes: bigint) {
+    this.preservingCostCount += 1
     return Object.freeze({
-      cost: Object.freeze({
-        prefixCopyBytes: durablePrefixBytes,
-        cumulativeWriteAmplificationBytes:
-          cumulativeWriteAmplificationBytes + durablePrefixBytes,
-        peakTemporaryBytes: durablePrefixBytes,
-      }),
-      space: this.requiresSpaceConfirmation
-        ? 'requires-user-confirmation' as const
-        : 'within-modeled-budget' as const,
+      prefixCopyBytes: durablePrefixBytes,
+      writeAmplificationBytes: durablePrefixBytes,
+      temporaryBytes: durablePrefixBytes,
     })
   }
 

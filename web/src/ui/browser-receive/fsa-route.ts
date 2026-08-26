@@ -83,10 +83,6 @@ import {
   WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
 } from './fsa'
 import { FSAResourceOwner } from './fsa-resource-owner'
-import {
-  browserFSARecoverySpacePrompt,
-  type FSARecoverySpacePrompt,
-} from './fsa/recovery-policy'
 import { snapshotPreClickRanking } from './shared'
 
 type FSARouteRepository = ReceiveOperationRepository & Partial<FSACompatibleNameBootstrapRepository>
@@ -117,7 +113,6 @@ export interface FSARouteDependencies {
   readonly createOutputSessionId: () => string
   readonly createTransferJobId: () => string
   readonly clock: () => number
-  readonly recoverySpacePrompt: FSARecoverySpacePrompt
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
 }
 
@@ -396,7 +391,6 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
           createTransferJobId: this.#dependencies.createTransferJobId,
           clock: { nowMilliseconds: this.#dependencies.clock },
         }),
-        recoverySpacePrompt: this.#dependencies.recoverySpacePrompt,
         resources: input.resources,
         ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
         ...localOutputFailuresOption(this.#localOutputFailures),
@@ -659,7 +653,6 @@ function routeDependencies(
     createOutputSessionId: createOutputSessionID,
     createTransferJobId: createTransferJobID,
     clock: Date.now,
-    recoverySpacePrompt: browserFSARecoverySpacePrompt,
     ...overrides,
   })
 }
