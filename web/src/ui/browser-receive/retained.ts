@@ -38,6 +38,7 @@ import { FSAReceiveOperation } from './fsa'
 import { unavailableRoute } from './shared'
 import type { BrowserDirectZipCompositionPort } from './direct-zip'
 import { diagnosticsFor } from './retained-diagnostics'
+import { retainedOperationAuthority } from './retained-operation-authority'
 import {
   continueRetainedWorkspaceOperation,
   continuationMismatch,
@@ -45,8 +46,6 @@ import {
 } from './retained-workspace'
 
 
-const RESUME_AUTHORITY_UNAVAILABLE =
-  'Saved actions are unavailable because this browser has no persisted-operation authority.'
 const READ_ONLY_RESUME_MUTATIONS:
   ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> =
   Object.freeze({
@@ -101,6 +100,13 @@ type WorkspaceRetainedContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'workspace-retained' }
 >
+type RetainedAuthorityDispatch =
+  | Readonly<{ kind: 'completed' }>
+  | Readonly<{
+      kind: 'continuation'
+      continuation: AuthorityOwnedReceiveOperationContinuation
+      directZipAction: boolean
+    }>
 
 export interface BrowserRetainedContinuationExecutor {
   catchUpTerminal?(
@@ -214,6 +220,7 @@ export async function listBrowserRetainedOperations(
           descriptor.continuation,
           hasMutationAuthority,
           options.directZip !== undefined,
+          reference.recoverySummary !== undefined,
         )
         const operation: V2RetainedReceiveOperation = Object.freeze({
           operationId: descriptor.operationId,
@@ -223,6 +230,9 @@ export async function listBrowserRetainedOperations(
           continuation: descriptor.continuation,
           ...(descriptor.expiresAt === undefined ? {} : { expiresAt: descriptor.expiresAt }),
           actions: presentation.actions,
+          ...(reference.recoverySummary === undefined
+            ? {}
+            : { recoverySummary: reference.recoverySummary }),
           ...(presentation.unavailableReason === undefined
             ? {}
             : { unavailableReason: presentation.unavailableReason }),
@@ -302,59 +312,6 @@ function retainedInventoryPresentationFailures(
       : []))
 }
 
-function retainedActions(
-  ...actions: V2RetainedReceiveAction[]
-): readonly V2RetainedReceiveAction[] {
-  return Object.freeze(actions)
-}
-
-function retainedOperationAuthority(
-  continuation: V2RetainedReceiveOperation['continuation'],
-  hasMutationAuthority: boolean,
-  hasDirectZipAuthority: boolean,
-): Readonly<{
-  actions: readonly V2RetainedReceiveAction[]
-  unavailableReason?: string
-}> {
-  if (!hasMutationAuthority) {
-    return Object.freeze({
-      actions: retainedActions(),
-      unavailableReason: RESUME_AUTHORITY_UNAVAILABLE,
-    })
-  }
-  switch (continuation) {
-    case 'pending-catch-up':
-    case 'restoration-available':
-      return Object.freeze({ actions: retainedActions('catch-up') })
-    case 'resume-receive':
-    case 'resume-package':
-      return Object.freeze({ actions: retainedActions('continue', 'discard') })
-    case 'resume-direct-zip':
-    case 'reauthorize-direct-zip':
-    case 'verify-direct-zip-target':
-    case 'retry-direct-zip-space':
-      return hasDirectZipAuthority
-        ? Object.freeze({ actions: retainedActions('continue', 'delete') })
-        : Object.freeze({
-            actions: retainedActions(),
-            unavailableReason: 'Direct ZIP recovery authority is not installed.',
-          })
-    case 'save-artifact':
-      return Object.freeze({ actions: retainedActions('save', 'discard') })
-    case 'retry-download':
-      return Object.freeze({ actions: retainedActions('redownload', 'delete') })
-    case 'cleanup-expired':
-      return Object.freeze({ actions: retainedActions('delete') })
-    case 'retry-cleanup':
-      return Object.freeze({ actions: retainedActions('catch-up', 'delete') })
-    case 'needs-attention':
-      return Object.freeze({
-        actions: retainedActions(),
-        unavailableReason: 'Ownership needs attention; no automatic action is safe.',
-      })
-  }
-}
-
 async function performRetainedAction(
   windowPort: BrowserReceiveWindow,
   options: BrowserRetainedCompositionOptions,
@@ -365,28 +322,16 @@ async function performRetainedAction(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<V2RetainedReceiveActionResult> {
-  const directZipAction = isDirectZipContinuation(operation.continuation)
-  if (!directZipAction && (action === 'discard' || (action === 'delete' &&
-      operation.continuation !== 'cleanup-expired' &&
-      operation.continuation !== 'retry-cleanup'))) {
-    await authority.discard(reference, failures)
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' })
-  }
-  let result: AuthorityOwnedReceiveOperationMutationResult
-  if (action === 'delete' &&
-      (operation.continuation === 'cleanup-expired' ||
-       operation.continuation === 'retry-cleanup')) {
-    result = await authority.cleanup(reference, failures)
-  } else if (action === 'catch-up') {
-    result = await authority.catchUp(reference, failures)
-  } else {
-    result = await authority.resume(reference, failures)
-  }
-  if (result.kind === 'retention-cleanup') {
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' })
-  }
+  const dispatch = await dispatchRetainedAuthorityAction(
+    authority,
+    reference,
+    operation,
+    action,
+    signal,
+    failures,
+  )
+  if (dispatch.kind === 'completed') return dispatch
+  const { continuation, directZipAction } = dispatch
   const executor = options.continuationExecutor ??
     browserRetainedContinuationExecutor(
       windowPort,
@@ -395,7 +340,6 @@ async function performRetainedAction(
       options.localOutputFailures,
       options.directZip,
     )
-  const { continuation } = result
   if (continuation.kind === 'direct-zip-retained-cleanup') {
     return deleteRetainedDirectZip(options.directZip, continuation, signal, failures)
   }
@@ -444,6 +388,51 @@ async function performRetainedAction(
   }
 }
 
+async function dispatchRetainedAuthorityAction(
+  authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
+  reference: ReceiveOperationResumeRef,
+  operation: V2RetainedReceiveOperation,
+  action: V2RetainedReceiveAction,
+  signal: AbortSignal,
+  failures?: OutputFailureSinks,
+): Promise<RetainedAuthorityDispatch> {
+  const directZipAction = isDirectZipContinuation(operation.continuation)
+  if (!directZipAction && (action === 'discard' || (action === 'delete' &&
+      operation.continuation !== 'cleanup-expired' &&
+      operation.continuation !== 'retry-cleanup'))) {
+    await authority.discard(reference, failures)
+    signal.throwIfAborted()
+    return Object.freeze({ kind: 'completed' })
+  }
+  let result: AuthorityOwnedReceiveOperationMutationResult
+  if (action === 'delete' &&
+      (operation.continuation === 'cleanup-expired' ||
+       operation.continuation === 'retry-cleanup')) {
+    result = await authority.cleanup(reference, failures)
+  } else if (action === 'catch-up') {
+    result = await authority.catchUp(reference, failures)
+  } else {
+    const retainedFileRecovery = retainedFileRecoveryFor(operation, action)
+    result = await authority.resume(reference, {
+      ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
+      ...(failures === undefined ? {} : { failures }),
+    })
+  }
+  if (result.kind === 'retention-cleanup') {
+    signal.throwIfAborted()
+    return Object.freeze({ kind: 'completed' })
+  }
+  return Object.freeze({ kind: 'continuation', continuation: result.continuation, directZipAction })
+}
+
+function retainedFileRecoveryFor(
+  operation: V2RetainedReceiveOperation,
+  action: V2RetainedReceiveAction,
+): 'preserve' | 'restart-owned-file' | undefined {
+  if (operation.recoverySummary === undefined) return undefined
+  return action === 'redownload' ? 'restart-owned-file' : 'preserve'
+}
+
 function deleteRetainedDirectZip(
   directZip: BrowserDirectZipCompositionPort | undefined,
   continuation: DirectZipReceiveContinuation | DirectZipRetainedCleanupContinuation,
@@ -468,7 +457,9 @@ async function continueRetainedReceive(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<V2RetainedReceiveActionResult> {
-  if (action !== 'continue') {
+  const directTreeRecovery = continuation.kind === 'direct-tree-receive' &&
+    (action === 'continue' || action === 'redownload')
+  if (action !== 'continue' && !directTreeRecovery) {
     return withRetainedOperationClose(continuation.operation, async () => {
       throw continuationMismatch()
     })
@@ -590,8 +581,6 @@ function browserRetainedContinuationExecutor(
               continuation.operation,
               diagnosticsFor('file_system_access', outputTrace, binding.sinks),
               localOutputFailures,
-              undefined,
-              windowPort.confirm.bind(windowPort),
             ),
             binding,
           )
@@ -666,6 +655,11 @@ function sourceWithoutBootstrapCandidates(
   return Object.freeze({
     listDirectZipBootstrapCandidates: () => Promise.resolve(Object.freeze([])),
     listLifecycleStates: () => source.listLifecycleStates(),
+    ...(source.readRecoverySummary === undefined
+      ? {}
+      : { readRecoverySummary: (lifecycle: Parameters<NonNullable<
+          ReceiveOperationResumeSource['readRecoverySummary']
+        >>[0]) => source.readRecoverySummary!(lifecycle) }),
   })
 }
 

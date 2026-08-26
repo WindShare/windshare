@@ -21,6 +21,7 @@ import {
   type OutputTraceSource,
 } from '../../src/output/diagnostics'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
+import { checkpointAuthorityObserver } from '../../src/output/file-system-access/session-diagnostics'
 
 describe('output diagnostics', () => {
   it('records a stage-fixed privacy-safe consequence without retaining the exception', () => {
@@ -282,5 +283,53 @@ describe('output diagnostics', () => {
         },
       },
     ])
+  })
+
+  it('projects checkpoint authority identities, decisions, costs, and releases into output trace', () => {
+    const events: OutputTraceEvent[] = []
+    const observe = checkpointAuthorityObserver({
+      backend: 'file_system_access',
+      trace: { current: event => events.push(event) },
+    })
+    expect(observe).toBeTypeOf('function')
+
+    observe!({
+      authority: 'preserving-capacity',
+      receiveOperationId: 'receive-operation',
+      transferJobId: 'transfer-job',
+      outputSessionId: 'output-session',
+      materializationRelativePath: ['folder', 'large.bin'],
+      trigger: 'pending-bytes',
+      checkpointOrdinal: 2,
+      cost: Object.freeze({
+        prefixCopyBytes: 134_217_728n,
+        writeAmplificationBytes: 134_217_728n,
+        temporaryBytes: 100_663_296n,
+      }),
+      remainingAutomaticWriteAmplificationBytes: 536_870_912n,
+      decision: 'released',
+      releaseReason: 'replacement-open-failed',
+    })
+
+    expect(events).toEqual([{
+      eventName: 'checkpoint',
+      payload: {
+        backend: 'file_system_access',
+        transition: 'authority_decision',
+        authority: 'preserving_capacity',
+        receive_operation_id: 'receive-operation',
+        transfer_job_id: 'transfer-job',
+        output_session_id: 'output-session',
+        materialization_relative_path: ['folder', 'large.bin'],
+        trigger: 'pending_bytes',
+        checkpoint_ordinal: 2,
+        prefix_copy_bytes: '134217728',
+        write_amplification_bytes: '134217728',
+        temporary_bytes: '100663296',
+        remaining_automatic_write_amplification_bytes: '536870912',
+        decision: 'released',
+        release_reason: 'replacement_open_failed',
+      },
+    }])
   })
 })

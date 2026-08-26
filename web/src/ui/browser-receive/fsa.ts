@@ -21,6 +21,9 @@ import type {
 import { SYSTEM_TRACE_CLOCK } from '../../diagnostics/trace/ports'
 import type { ReopenedDirectTreeOperation } from '../../output/resume/reopen-authority'
 import type { CompatibleNameRepairProjectionSource } from '../../output/file-system-access/compatible-name/coordinator'
+import { createAutomaticCheckpointAdmissionAuthority } from '../../output/persistent-tree/automatic-checkpoint-admission'
+import { createPreservingWriterCapacityAuthority } from '../../output/persistent-tree/preserving-writer-capacity'
+import { checkpointAuthorityObserver } from '../../output/file-system-access/session-diagnostics'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
@@ -37,7 +40,6 @@ import {
 import {
   TransferPauseRequestedError,
   TransferStopRequestedError,
-  outputCheckpointCostBudget,
   outputExecutionProfile,
   outputSessionIdentity,
   type OutputExecutionProfileBoundedCheckpoint,
@@ -59,9 +61,7 @@ import {
 } from './shared'
 import { FSAResourceOwner } from './fsa-resource-owner'
 import {
-  browserFSARecoverySpacePrompt,
   createFSAExecutionRecoveryPolicy,
-  type FSARecoverySpacePrompt,
 } from './fsa/recovery-policy'
 
 interface FSAAttemptIdentitySource {
@@ -90,11 +90,6 @@ export const FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER:
   pendingBytes: 64n * MEBIBYTE_BYTES,
   pendingMilliseconds: 30_000,
 })
-export const FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET = outputCheckpointCostBudget({
-  maximumPrefixCopyBytes: 256n * MEBIBYTE_BYTES,
-  maximumCumulativeWriteAmplificationBytes: 512n * MEBIBYTE_BYTES,
-  maximumPeakTemporaryBytes: 256n * MEBIBYTE_BYTES,
-})
 export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
   maximumConcurrentFilePipelines: WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
   maximumOutstandingWriteBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES,
@@ -102,7 +97,6 @@ export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
   automaticCheckpoint: {
     kind: 'bounded',
     trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
-    costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
   },
 })
 
@@ -118,9 +112,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #attemptIdentities: FSAAttemptIdentitySource
-  readonly #recoverySpacePrompt: FSARecoverySpacePrompt
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
+  #closeCheckpointAuthorities: () => void
   #transferJobId: string
   #detached = false
 
@@ -133,9 +127,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     settlement: FileSystemAccessOperationSettlementAuthority
     resources: FSAResourceOwner
     plans: V2PlanExecutionAuthority
+    closeCheckpointAuthorities: () => void
     transferJobId: string
     attemptIdentities: FSAAttemptIdentitySource
-    recoverySpacePrompt?: FSARecoverySpacePrompt
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
   }) {
@@ -149,9 +143,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
-    this.#recoverySpacePrompt = input.recoverySpacePrompt ?? browserFSARecoverySpacePrompt
     this.#settlement = input.settlement
     this.#plans = input.plans
+    this.#closeCheckpointAuthorities = input.closeCheckpointAuthorities
     this.#transferJobId = input.transferJobId
   }
 
@@ -168,24 +162,22 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
-    recoverySpacePrompt?: FSARecoverySpacePrompt
   }): Promise<FSAReceiveOperation> {
-    const plans = await createFSAPlanAuthority(
+    const checkpointAttempt = await createFSAPlanAuthority(
       input.intent,
       input.repository,
       input.lease,
       input.session,
       'start',
       input.settlement,
+      input.transferJobId,
       input.outputSessionId,
       input.diagnostics,
       createFSAExecutionRecoveryPolicy({
         pausedFile: 'preserve',
-        costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
-        prompt: input.recoverySpacePrompt ?? browserFSARecoverySpacePrompt,
       }),
     )
-    return new FSAReceiveOperation({ ...input, plans })
+    return new FSAReceiveOperation({ ...input, ...checkpointAttempt })
   }
 
   static async reopen(
@@ -193,7 +185,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     diagnostics?: OutputDiagnosticsPorts,
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
     attemptIdentities: FSAAttemptIdentitySource = defaultAttemptIdentitySource,
-    recoverySpacePrompt: FSARecoverySpacePrompt = browserFSARecoverySpacePrompt,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -201,6 +192,10 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     const admissionFallback = operation.receiveAdmissionFallback
     if (admissionFallback === undefined) {
       throw new TypeError('Direct-tree continuation omitted its admission fallback')
+    }
+    const retainedFileRecovery = operation.retainedFileRecovery
+    if (retainedFileRecovery === undefined) {
+      throw new TypeError('Direct-tree continuation requires a retained-file recovery choice')
     }
     const transferJobId = attemptIdentities.createTransferJobId()
     const outputSessionId = attemptIdentities.createOutputSessionId()
@@ -239,19 +234,18 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       })
       observePerformance(attemptDiagnostics?.performance, summary =>
         summary.markMilestone('authority_acquired'))
-      const plans = await createFSAPlanAuthority(
+      const checkpointAttempt = await createFSAPlanAuthority(
         operation.intent,
         operation.repository,
         operation.lease,
         session,
         'resume',
         attemptAuthority.settlement,
+        transferJobId,
         outputSessionId,
         attemptDiagnostics,
         createFSAExecutionRecoveryPolicy({
-          pausedFile: 'preserve',
-          costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
-          prompt: recoverySpacePrompt,
+          pausedFile: retainedFileRecovery,
         }),
       )
       const resources = new FSAResourceOwner({
@@ -267,10 +261,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         session,
         resources,
         settlement: attemptAuthority.settlement,
-        plans,
+        ...checkpointAttempt,
         transferJobId: attemptAuthority.transferJobId,
         attemptIdentities,
-        recoverySpacePrompt,
         ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
@@ -322,8 +315,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
     const recovery = createFSAExecutionRecoveryPolicy({
       pausedFile: action === 'redownload' ? 'restart-owned-file' : 'preserve',
-      costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
-      prompt: this.#recoverySpacePrompt,
     })
     const transferJobId = this.#attemptIdentities.createTransferJobId()
     const outputSessionId = this.#attemptIdentities.createOutputSessionId()
@@ -377,6 +368,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       this.#resources.replaceOutputSession(session)
       this.#settlement = attempt.settlement
       this.#plans = attempt.plans
+      this.#closeCheckpointAuthorities()
+      this.#closeCheckpointAuthorities = attempt.closeCheckpointAuthorities
       this.#transferJobId = attempt.transferJobId
       this.#diagnostics = attemptDiagnostics
       return Object.freeze({
@@ -426,6 +419,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#detached) return
     this.#detached = true
+    this.#closeCheckpointAuthorities()
     await this.#resources.close()
   }
 
@@ -523,6 +517,7 @@ async function createFSAAttempt(
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
+  closeCheckpointAuthorities: () => void
   transferJobId: string
 }>> {
   const attemptAuthority = await createFSAAttemptSettlement(
@@ -540,11 +535,12 @@ async function createFSAAttempt(
     session,
     lifecycleEntry,
     attemptAuthority.settlement,
+    transferJobId,
     outputSessionId,
     diagnostics,
     recovery,
   )
-  return Object.freeze({ ...attemptAuthority, plans })
+  return Object.freeze({ ...attemptAuthority, ...plans })
 }
 
 async function createFSAAttemptSettlement(
@@ -594,10 +590,28 @@ async function createFSAPlanAuthority(
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
   settlement: FileSystemAccessOperationSettlementAuthority,
+  transferJobId: string,
   outputSessionId: string,
   diagnostics: OutputDiagnosticsPorts | undefined,
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
-): Promise<V2PlanExecutionAuthority> {
+): Promise<Readonly<{
+  plans: V2PlanExecutionAuthority
+  closeCheckpointAuthorities: () => void
+}>> {
+  const checkpointIdentity = Object.freeze({
+    receiveOperationId: intent.operationId,
+    transferJobId,
+    outputSessionId,
+  })
+  const observeCheckpointAuthority = checkpointAuthorityObserver(diagnostics)
+  const automaticCheckpointAdmission = createAutomaticCheckpointAdmissionAuthority({
+    identity: checkpointIdentity,
+    ...(observeCheckpointAuthority === undefined ? {} : { observe: observeCheckpointAuthority }),
+  })
+  const preservingWriterCapacity = createPreservingWriterCapacityAuthority({
+    identity: checkpointIdentity,
+    ...(observeCheckpointAuthority === undefined ? {} : { observe: observeCheckpointAuthority }),
+  })
   const plans = await createV2PlanExecutionAuthority({
     intent,
     routes: {
@@ -624,6 +638,8 @@ async function createFSAPlanAuthority(
             repairSummary: () => session.repairSummary(),
             executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
             recovery,
+            automaticCheckpointAdmission,
+            preservingWriterCapacity,
             outputIdentity: outputSessionIdentity({
               backend: 'browser-fsa-tree',
               outputSessionId,
@@ -638,5 +654,11 @@ async function createFSAPlanAuthority(
       lifecycle: settlement,
     },
   })
-  return plans
+  return Object.freeze({
+    plans,
+    closeCheckpointAuthorities: () => {
+      automaticCheckpointAdmission.close('terminal-drain')
+      preservingWriterCapacity.close('terminal-drain')
+    },
+  })
 }

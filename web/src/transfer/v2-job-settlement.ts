@@ -1,4 +1,8 @@
-import type { ReceiveLifecycleState } from '../output/workspace/state'
+import {
+  snapshotRecoverySelectionFacts,
+  type ReceiveLifecycleState,
+  type RecoverySelectionFacts,
+} from '../output/workspace/state'
 import type { TransferJobOptions, TransferJobResult } from './job/contract'
 import {
   V2ClassifiedTransferFailureError,
@@ -82,7 +86,7 @@ export class TransferJobSettlement {
       )
       const failureTrigger = requireWorkerFailureTrigger(worker)
       const reason = new V2ClassifiedTransferFailureError(failureTrigger)
-      const lifecycle = await this.#pause(worker, reason, failureTrigger)
+      const lifecycle = await this.#pause(worker, reason, measure, failureTrigger)
       return this.#result(worker, lifecycle, measure, reason, failureTrigger)
     }
     this.#context.observers()?.materializationCompleted(summary)
@@ -102,7 +106,7 @@ export class TransferJobSettlement {
     this.#lastWorker = worker
     const failureTrigger = requireWorkerFailureTrigger(worker)
     const reason = new V2ClassifiedTransferFailureError(failureTrigger)
-    const lifecycle = await this.#pause(worker, reason, failureTrigger)
+    const lifecycle = await this.#pause(worker, reason, measure, failureTrigger)
     return this.#result(worker, lifecycle, measure, reason, failureTrigger)
   }
 
@@ -146,7 +150,7 @@ export class TransferJobSettlement {
     )
     const lifecycle = abortReason instanceof TransferStopRequestedError
       ? await this.#stop(worker, abortReason)
-      : await this.#pause(worker, abortReason, failureTrigger)
+      : await this.#pause(worker, abortReason, measure, failureTrigger)
     if (this.#context.execution()?.planKind === 'direct-tree') {
       const outcome = failedTreeOutcome(lifecycle)
       if (outcome !== undefined) {
@@ -201,6 +205,7 @@ export class TransferJobSettlement {
   async #pause(
     worker: TransferWorkerSettlement,
     reason: unknown,
+    measure: SelectionMeasure,
     failureTrigger?: ClassifiedTransferFailure,
   ): Promise<ReceiveLifecycleState> {
     const execution = this.#context.execution()
@@ -210,6 +215,7 @@ export class TransferJobSettlement {
       authority: this.#context.options.plans,
       worker,
       materialization: this.#context.materializationSummary(),
+      selectionFacts: recoverySelectionFacts(measure),
       reason,
       ...(failureTrigger === undefined ? {} : { failureTrigger }),
       ...(this.#context.options.incidentScope === undefined
@@ -266,6 +272,9 @@ export class TransferJobSettlement {
     const repairSummary = execution?.planKind === 'direct-tree'
       ? execution.repairSummary?.()
       : undefined
+    const recoverySummary = execution?.planKind === 'direct-tree'
+      ? execution.recoverySummary?.()
+      : undefined
     return Object.freeze({
       worker,
       lifecycle,
@@ -277,6 +286,7 @@ export class TransferJobSettlement {
       ...(execution === undefined ? {} : { outputDurability: execution.output.capabilities.durability }),
       ...(preparation === undefined ? {} : { preparation }),
       ...(repairSummary === undefined ? {} : { repairSummary }),
+      ...(recoverySummary === undefined ? {} : { recoverySummary }),
     })
   }
 
@@ -285,6 +295,20 @@ export class TransferJobSettlement {
     if (execution === undefined) throw new Error('plan execution is unavailable')
     return execution
   }
+}
+
+function recoverySelectionFacts(measure: SelectionMeasure): RecoverySelectionFacts {
+  if (!Number.isSafeInteger(measure.discoveredFiles) || measure.discoveredFiles < 0) {
+    throw new TypeError('pause selection file count must be an exact non-negative integer')
+  }
+  if (measure.discoveredBytes < 0n || measure.discovery === 'open') {
+    throw new TypeError('pause selection facts require terminal non-negative discovery evidence')
+  }
+  return snapshotRecoverySelectionFacts({
+    discoveredFileCount: BigInt(measure.discoveredFiles),
+    discoveredBytes: measure.discoveredBytes,
+    discovery: measure.discovery,
+  })
 }
 
 function requireWorkerFailureTrigger(

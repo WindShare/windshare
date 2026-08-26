@@ -278,6 +278,11 @@ describe('portable exact-preparation binding and failure boundaries', () => {
         directoryCount: evidence.directoryCount,
         rawBytes: 0n,
       },
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 1n,
+        discoveredBytes: BigInt(ORIGINAL_BYTES.byteLength),
+        discovery: 'complete',
+      }),
       reason: new DOMException('cancelled', 'AbortError'),
     }, new AbortController().signal)
 

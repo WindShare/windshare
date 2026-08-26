@@ -1,10 +1,9 @@
 import { bigintToSafeNumber } from '../../content/geometry'
-import { outputCheckpointCost } from '../../transfer/output-file-contract'
 import type { PersistentHandleRecord } from '../persistence/journal'
 import type {
   PersistentTreeFile,
   PersistentWriterOpenMode,
-  PersistentWriterPreflight,
+  PreservingWriterCost,
 } from '../persistent-tree/contracts'
 import {
   runPersistentOutputStage,
@@ -27,10 +26,7 @@ type BrowserFileWriterState =
 export interface BrowserPersistentFile extends PersistentTreeFile {
   readonly persistedHandle: PersistentHandleRecord<unknown>
   openWriter(mode: PersistentWriterOpenMode): Promise<void>
-  checkpointPreflight(
-    durablePrefixBytes: bigint,
-    cumulativeWriteAmplificationBytes: bigint,
-  ): PersistentWriterPreflight
+  preservingWriterCost(durablePrefixBytes: bigint): PreservingWriterCost
   abort(reason?: unknown): Promise<void>
 }
 
@@ -77,27 +73,16 @@ class BrowserPersistentFileAuthority implements BrowserPersistentFile {
     await this.#requireWriter(mode)
   }
 
-  checkpointPreflight(
-    durablePrefixBytes: bigint,
-    cumulativeWriteAmplificationBytes: bigint,
-  ): PersistentWriterPreflight {
-    const current = outputCheckpointCost({
-      prefixCopyBytes: durablePrefixBytes,
-      cumulativeWriteAmplificationBytes,
-      peakTemporaryBytes: 0n,
-    })
-    const cost = outputCheckpointCost({
-      prefixCopyBytes: current.prefixCopyBytes,
-      cumulativeWriteAmplificationBytes:
-        current.cumulativeWriteAmplificationBytes + current.prefixCopyBytes,
-      peakTemporaryBytes: current.prefixCopyBytes,
-    })
+  preservingWriterCost(durablePrefixBytes: bigint): PreservingWriterCost {
+    if (typeof durablePrefixBytes !== 'bigint' || durablePrefixBytes < 0n) {
+      throw new RangeError('Preserving writer durable prefix bytes must not be negative')
+    }
+    // FSA's keepExistingData open may copy the durable prefix. Each open reports
+    // only its own cost so attempt authorities remain the sole cumulative ledger.
     return Object.freeze({
-      cost,
-      // Native FSA exposes no authoritative capacity query for a user-picked directory.
-      space: current.prefixCopyBytes === 0n
-        ? 'within-modeled-budget' as const
-        : 'requires-user-confirmation' as const,
+      prefixCopyBytes: durablePrefixBytes,
+      writeAmplificationBytes: durablePrefixBytes,
+      temporaryBytes: durablePrefixBytes,
     })
   }
 

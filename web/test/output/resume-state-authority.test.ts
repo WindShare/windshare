@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { OutputFailureSinks } from '../../src/output/diagnostics'
+import type { RecoverySummary } from '../../src/output/file-system-access/recovery-summary'
 import {
   ReceiveOperationResumeAuthority,
   type ReceiveOperationMutationPort,
@@ -31,10 +32,39 @@ describe('receive operation resume authority', () => {
     expect(inventory.operations[0]!.descriptor.lifecycle)
       .not.toHaveProperty('verifiedRanges')
 
+    await expect(authority.resume(inventory.operations[0]!, {
+      retainedFileRecovery: 'preserve',
+    })).rejects.toThrow('requires a validated recovery summary')
     await expect(authority.resume(inventory.operations[0]!)).resolves.toBe('resumed')
     await expect(authority.resume(inventory.operations[0]!))
       .rejects.toThrow('another authority')
     expect(resume).toHaveBeenCalledTimes(1)
+  })
+
+  it('binds a validated recovery summary and the selected retained-file action to one resume reference', async () => {
+    const lifecycle = resumableReceive(10_000)
+    const summary = recoverySummary(lifecycle)
+    const resume = vi.fn(async () => 'resumed')
+    const authority = new ReceiveOperationResumeAuthority({
+      source: {
+        listLifecycleStates: async () => [lifecycle],
+        readRecoverySummary: async () => summary,
+      },
+      mutations: mutations({ resume }),
+      clock: { now: () => 10_001 },
+    })
+    const inventory = await authority.listResumeState()
+    const reference = inventory.operations[0]!
+
+    expect(reference.recoverySummary).toBe(summary)
+    await expect(authority.resume(reference)).rejects.toThrow(
+      'requires a retained-file recovery choice',
+    )
+    await authority.resume(reference, { retainedFileRecovery: 'restart-owned-file' })
+    expect(resume).toHaveBeenCalledWith(
+      reference.descriptor,
+      { retainedFileRecovery: 'restart-owned-file' },
+    )
   })
 
   it('routes an elapsed 24-hour deadline to the output expiry owner', async () => {
@@ -69,8 +99,8 @@ describe('receive operation resume authority', () => {
     const failures = Object.freeze({}) as OutputFailureSinks
 
     const resumeInventory = await authority.listResumeState()
-    await authority.resume(resumeInventory.operations[0]!, failures)
-    expect(resume).toHaveBeenCalledWith(expect.any(Object), failures)
+    await authority.resume(resumeInventory.operations[0]!, { failures })
+    expect(resume).toHaveBeenCalledWith(expect.any(Object), { failures })
 
     const discardInventory = await authority.listResumeState()
     await authority.discard(discardInventory.operations[0]!, failures)
@@ -82,7 +112,7 @@ describe('receive operation resume authority', () => {
       clock: { now: () => 10_000 + STABLE_RETENTION_MILLISECONDS },
     })
     const expiryInventory = await expiredAuthority.listResumeState()
-    await expiredAuthority.resume(expiryInventory.operations[0]!, failures)
+    await expiredAuthority.resume(expiryInventory.operations[0]!, { failures })
     expect(expire).toHaveBeenCalledWith(expect.any(Object), failures)
   })
 
@@ -161,10 +191,39 @@ function resumableReceive(enteredAt: number): ReceiveLifecycleState {
     checkpointSetDigest: identity(32, 3),
     completedFileCount: 2n,
     completedBytes: 12n,
+    selectionFacts: Object.freeze({
+      discoveredFileCount: 3n,
+      discoveredBytes: 20n,
+      discovery: 'failed',
+    }),
     expiresAt: enteredAt + STABLE_RETENTION_MILLISECONDS,
   })
 }
 
 function identity(width: number, value: number): string {
   return encodeBase64Url(new Uint8Array(width).fill(value))
+}
+
+function recoverySummary(lifecycle: ReceiveLifecycleState): RecoverySummary {
+  if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set') {
+    throw new TypeError('recovery summary fixture requires a resumable file set')
+  }
+  return Object.freeze({
+    lifecycleGeneration: lifecycle.generation,
+    checkpointSetDigest: lifecycle.checkpointSetDigest,
+    discoveredFileCount: 3n,
+    discoveredBytes: 20n,
+    discovery: 'known-so-far',
+    completedFileCount: lifecycle.completedFileCount,
+    completedBytes: lifecycle.completedBytes,
+    incompleteFileCount: 1n,
+    verifiedPartialFileCount: 1n,
+    verifiedPartialBytes: 4n,
+    unstartedFileCount: 1n,
+    unstartedBytes: 4n,
+    preservingRemainingBytes: 4n,
+    restartRemainingBytes: 8n,
+    restartRedownloadBytes: 4n,
+    maximumPreservingTemporaryBytes: 4n,
+  })
 }

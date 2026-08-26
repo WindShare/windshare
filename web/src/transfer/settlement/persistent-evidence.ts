@@ -3,6 +3,7 @@ import type {
   MaterializedManifestEntry,
 } from '../../output/workspace/manifest'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
 import {
   DirectorySettlementKind,
   type DirectorySettlement,
@@ -72,6 +73,8 @@ export interface PersistentMaterializationSettlementCut<
 
 export interface PersistentDirectTreeSettlementAuthority {
   beginTerminal(kind: 'pause' | 'stop' | 'settle'): void
+  /** Becomes available only after the pause lifecycle and checkpoint digest commit together. */
+  recoverySummary?(): RecoverySummary | undefined
   pause(
     request: PlanPauseRequest,
     cut: PersistentMaterializationSettlementCut<PersistentDirectTreeMaterializationEvidence>,

@@ -1,5 +1,8 @@
 import { snapshotIdentity } from '../workspace/canonical'
-import type { ReceiveLifecycleState } from '../workspace/state'
+import {
+  snapshotRecoverySelectionFacts,
+  type ReceiveLifecycleState,
+} from '../workspace/state'
 import type { DirectTreeIntent } from './settlement-proof'
 
 export type ReceiveAdmissionFallback = Extract<
@@ -29,6 +32,11 @@ export function snapshotReceiveAdmissionFallback(
     checkpointSetDigest: snapshotIdentity(input.checkpointSetDigest, 32, 'checkpoint set digest'),
     completedFileCount: input.completedFileCount,
     completedBytes: input.completedBytes,
+    selectionFacts: snapshotRecoverySelectionFacts(
+      input.selectionFacts,
+      input.completedFileCount,
+      input.completedBytes,
+    ),
     expiresAt: input.expiresAt,
     ...(input.partialReceiptDigest === undefined
       ? {}
@@ -44,6 +52,9 @@ export function sameReceiveAdmissionFallback(
     state.checkpointSetDigest === fallback.checkpointSetDigest &&
     state.completedFileCount === fallback.completedFileCount &&
     state.completedBytes === fallback.completedBytes &&
+    state.selectionFacts.discoveredFileCount === fallback.selectionFacts.discoveredFileCount &&
+    state.selectionFacts.discoveredBytes === fallback.selectionFacts.discoveredBytes &&
+    state.selectionFacts.discovery === fallback.selectionFacts.discovery &&
     state.expiresAt === fallback.expiresAt &&
     state.partialReceiptDigest === fallback.partialReceiptDigest
 }

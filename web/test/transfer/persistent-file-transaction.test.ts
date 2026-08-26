@@ -1,27 +1,24 @@
 import { describe, expect, it, vi } from 'vitest'
 
 import type { PersistentFileTransactionPort } from '../../src/output/persistent-tree/contracts'
-import { PersistentRecoveryPreflightError } from '../../src/output/persistent-tree/recovery'
-import { TransferPauseRequestedError } from '../../src/transfer/output-session'
-import { PersistentOutputTransaction } from '../../src/transfer/settlement/persistent-file-transaction'
+import { PersistentPreservingWriterOpenError } from '../../src/output/persistent-tree/recovery'
+import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/coordinate/direct-tree'
+import {
+  PersistentOutputTransaction,
+  PersistentWriterOpenPauseRequestedError,
+} from '../../src/transfer/settlement/persistent-file-transaction'
 
 describe('persistent output transaction recovery boundary', () => {
-  it('turns a declined preserving-open preflight into a recoverable transfer pause', async () => {
-    const cause = new PersistentRecoveryPreflightError({
-      reason: 'space-confirmation-required',
-      preflight: {
-        cost: {
-          prefixCopyBytes: 2n,
-          cumulativeWriteAmplificationBytes: 2n,
-          peakTemporaryBytes: 2n,
-        },
-        space: 'requires-user-confirmation',
+  it('retains the exact failed preserving open in a typed resumable pause', async () => {
+    const cause = new PersistentPreservingWriterOpenError({
+      materializationRelativePath: snapshotMaterializationRootRelativePath(['payload.bin']),
+      cost: {
+        prefixCopyBytes: 2n,
+        writeAmplificationBytes: 2n,
+        temporaryBytes: 2n,
       },
-      budget: {
-        maximumPrefixCopyBytes: 4n,
-        maximumCumulativeWriteAmplificationBytes: 4n,
-        maximumPeakTemporaryBytes: 4n,
-      },
+      purpose: 'automatic-checkpoint',
+      cause: new DOMException('destination has no capacity', 'QuotaExceededError'),
     })
     const lowLevel: PersistentFileTransactionPort = {
       revision: { fileId: 'file', fileRevision: 'revision', exactSize: 4n },
@@ -66,7 +63,16 @@ describe('persistent output transaction recovery boundary', () => {
       new AbortController().signal,
     ).catch((error: unknown) => error)
 
-    expect(rejection).toBeInstanceOf(TransferPauseRequestedError)
-    expect(rejection).toMatchObject({ cause })
+    expect(rejection).toBeInstanceOf(PersistentWriterOpenPauseRequestedError)
+    expect(rejection).toMatchObject({
+      cause,
+      materializationRelativePath: ['payload.bin'],
+      cost: {
+        prefixCopyBytes: 2n,
+        writeAmplificationBytes: 2n,
+        temporaryBytes: 2n,
+      },
+      purpose: 'automatic-checkpoint',
+    })
   })
 })

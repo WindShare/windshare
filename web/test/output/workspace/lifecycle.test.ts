@@ -12,6 +12,11 @@ import {
 
 const NOW = 1_000_000
 const LEASE = identity(16, 7)
+const SELECTION_FACTS = Object.freeze({
+  discoveredFileCount: 3n,
+  discoveredBytes: 40n,
+  discovery: 'failed' as const,
+})
 
 describe('receive lifecycle reducer', () => {
   it('starts the 24-hour clock only after verified pause and clears it on resume', () => {
@@ -32,6 +37,7 @@ describe('receive lifecycle reducer', () => {
       checkpointSetDigest: identity(32, 3),
       completedFileCount: 1n,
       completedBytes: 12n,
+      selectionFacts: SELECTION_FACTS,
     }, context('direct-tree', NOW)).state
 
     expect(stable).toEqual(expect.objectContaining({
@@ -63,12 +69,14 @@ describe('receive lifecycle reducer', () => {
         : identity(32, 4),
       completedFileCount: 1n,
       completedBytes: 12n,
+      selectionFacts: SELECTION_FACTS,
       expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }, context('direct-tree', NOW + 600)).state
     expect(restored).toEqual(expect.objectContaining({
       kind: 'resumable-receive',
       completedFileCount: 1n,
       completedBytes: 12n,
+      selectionFacts: SELECTION_FACTS,
       expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }))
   })

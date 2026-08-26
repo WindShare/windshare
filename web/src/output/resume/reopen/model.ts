@@ -20,7 +20,10 @@ import type {
   OriginPrivateWorkspaceBackend,
   openOriginPrivateWorkspaceBackend,
 } from '../../origin-private/session'
-import type { PersistentTreeTrace } from '../../persistent-tree/contracts'
+import type {
+  PersistentPausedFileRecovery,
+  PersistentTreeTrace,
+} from '../../persistent-tree/contracts'
 import type {
   DirectZipCandidateV1,
   DirectZipCheckpointV1,
@@ -62,6 +65,7 @@ export type PersistedReceiveOperationReopenTraceEvent =
       receive_intent_digest: string
       lifecycle_generation: bigint
       continuation: ReceiveOperationResumeDescriptor['continuation']
+      retained_file_recovery?: PersistentPausedFileRecovery
       lease_id: string
     }>
   | Readonly<{
@@ -92,6 +96,8 @@ export interface ReopenedReceiveOperationBase {
 export interface ReopenedDirectTreeOperation extends ReopenedReceiveOperationBase {
   readonly kind: 'direct-tree'
   readonly binding: PersistedFSAOperationBinding
+  /** Exact pause-level choice consumed by the next DirectTree execution attempt. */
+  readonly retainedFileRecovery?: PersistentPausedFileRecovery
   readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
     kind: 'resumable-receive'
     payloadKind: 'file-set'

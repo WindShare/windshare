@@ -189,6 +189,7 @@ function pauseVerified(
       checkpointSetDigest: event.checkpointSetDigest,
       completedFileCount: event.completedFileCount,
       completedBytes: event.completedBytes,
+      selectionFacts: event.selectionFacts,
       expiresAt,
       ...(event.partialReceiptDigest === undefined
         ? {}
@@ -257,6 +258,7 @@ function restoreReceiveContinuation(
     checkpointSetDigest: event.checkpointSetDigest,
     completedFileCount: event.completedFileCount,
     completedBytes: event.completedBytes,
+    selectionFacts: event.selectionFacts,
     expiresAt: event.expiresAt,
     ...(event.partialReceiptDigest === undefined
       ? {}
@@ -328,7 +330,7 @@ function finalizeTree(
         cleanupState: 'cleanup-pending',
       })
     case 'resumable':
-      if (event.retryable !== true || event.checkpointSetDigest === undefined) {
+      if (event.retryable !== true) {
         throw new TypeError('resumable tree lacks retryable checkpoint evidence')
       }
       return nextReceiveLifecycleState(state, {
@@ -337,6 +339,7 @@ function finalizeTree(
         checkpointSetDigest: event.checkpointSetDigest,
         completedFileCount: event.completedFileCount,
         completedBytes: event.completedBytes,
+        selectionFacts: event.selectionFacts,
         expiresAt: stableDeadline(context.nowMilliseconds),
         partialReceiptDigest: event.receiptDigest,
       })

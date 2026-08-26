@@ -23,13 +23,19 @@ import {
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {
+  MAXIMUM_AUTOMATIC_PREFIX_COPY_BYTES,
+  MAXIMUM_AUTOMATIC_WRITE_AMPLIFICATION_BYTES,
+} from '../../src/output/persistent-tree/automatic-checkpoint-admission'
+import {
+  MAXIMUM_AGGREGATE_PRESERVING_WRITER_TEMPORARY_BYTES,
+} from '../../src/output/persistent-tree/preserving-writer-capacity'
+import {
   decodeStoredReceiveOperation,
   RECEIVE_RECORD_OPERATION,
 } from '../../src/output/workspace/records'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
 import {
   FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
-  FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
   FSA_DIRECT_TREE_EXECUTION_PROFILE,
   FSAReceiveOperation,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
@@ -63,7 +69,7 @@ import {
 const MEBIBYTE_BYTES = 1024n * 1024n
 
 describe('FSA DirectTree execution policy', () => {
-  it('publishes static checkpoint and recovery-preflight budgets', () => {
+  it('publishes the trigger, attempt budgets, and established concurrency boundary', () => {
     expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES).toBe(15)
     expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS).toBe(8)
     expect(WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS).toBe(3)
@@ -76,11 +82,11 @@ describe('FSA DirectTree execution policy', () => {
       pendingBytes: 64n * MEBIBYTE_BYTES,
       pendingMilliseconds: 30_000,
     })
-    expect(FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET).toEqual({
-      maximumPrefixCopyBytes: 256n * MEBIBYTE_BYTES,
-      maximumCumulativeWriteAmplificationBytes: 512n * MEBIBYTE_BYTES,
-      maximumPeakTemporaryBytes: 256n * MEBIBYTE_BYTES,
-    })
+    expect(MAXIMUM_AUTOMATIC_PREFIX_COPY_BYTES).toBe(128n * MEBIBYTE_BYTES)
+    expect(MAXIMUM_AUTOMATIC_WRITE_AMPLIFICATION_BYTES).toBe(2n * 1024n * MEBIBYTE_BYTES)
+    expect(MAXIMUM_AGGREGATE_PRESERVING_WRITER_TEMPORARY_BYTES).toBe(
+      1024n * MEBIBYTE_BYTES,
+    )
   })
 })
 
@@ -511,7 +517,6 @@ describe('FSA compatible-name route activation', () => {
     expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
       kind: 'bounded',
       trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
-      costBudget: FSA_DIRECT_TREE_CHECKPOINT_COST_BUDGET,
     })
     await result.operation.detach()
   })
@@ -566,6 +571,11 @@ describe('FSA output diagnostic correlation', () => {
       checkpointSetDigest: identity(47, 32),
       completedFileCount: 0n,
       completedBytes: 0n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 0n,
+        discoveredBytes: 0n,
+        discovery: 'complete' as const,
+      }),
       expiresAt: 5_000,
     })
 
@@ -614,6 +624,11 @@ describe('FSA output diagnostic correlation', () => {
       checkpointSetDigest: identity(48, 32),
       completedFileCount: 0n,
       completedBytes: 0n,
+      selectionFacts: Object.freeze({
+        discoveredFileCount: 0n,
+        discoveredBytes: 0n,
+        discovery: 'complete' as const,
+      }),
       expiresAt: 5_000,
     })
     const retainedOperation = Object.freeze({
@@ -621,6 +636,7 @@ describe('FSA output diagnostic correlation', () => {
       intent: committed.operation.intent,
       lifecycle: receiving,
       receiveAdmissionFallback: fallback,
+      retainedFileRecovery: 'preserve',
       repository,
       lease: Object.freeze({
         operationId: committed.operation.intent.operationId,
