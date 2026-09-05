@@ -280,7 +280,8 @@ func TestReceiverInitialStartingUsesBoundedClockAndAllFailuresSettle(t *testing.
 	if len(clock.waits) != 2 || clock.waits[0] != receiverRetryDelay {
 		t.Fatal(clock.waits)
 	}
-	if _, err = NewReceiver(nil, ReceiverConfig{}); err == nil {
+	var missingContext context.Context // Constructors reject missing lifetime ownership.
+	if _, err = NewReceiver(missingContext, ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability}}); err == nil {
 		t.Fatal("nil context accepted")
 	}
 	if _, err = NewReceiver(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: link.Link{Relays: []string{"one"}, ShareID: "invalid!"}}}); err == nil {

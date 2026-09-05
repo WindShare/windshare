@@ -151,8 +151,7 @@ func (s *Sender) Cleanup(ctx context.Context) error {
 			failures := make(chan error, len(endpoints))
 			var cleanup sync.WaitGroup
 			for _, endpoint := range endpoints {
-				cleanup.Add(1)
-				go func() { defer cleanup.Done(); endpoint.StopRecovery(); failures <- endpoint.Cleanup(ctx) }()
+				cleanup.Go(func() { endpoint.StopRecovery(); failures <- endpoint.Cleanup(ctx) })
 			}
 			cleanup.Wait()
 			close(failures)

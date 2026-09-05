@@ -263,8 +263,7 @@ func TestConcurrentReconcileCreatesOnce(t *testing.T) {
 	now = now.Add(DefaultHeadStart)
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() { defer wg.Done(); a.Reconcile(context.Background()) }()
+		wg.Go(func() { a.Reconcile(context.Background()) })
 	}
 	wg.Wait()
 	if g.creates != 1 {

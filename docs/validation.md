@@ -14,6 +14,13 @@ packages or concrete networking and transport implementations. `internal/perfevi
 `spikes/webrtc` are separate evidence modules and are not part of the production package set. Go gates
 use `GOWORK=off` so a developer's ambient workspace does not change what is tested.
 
+`make gopls` checks every existing tracked Go source at hint severity, except the exact pinned Pion
+projection after source hashes, root replacements, and upstream patch reproduction pass. Both host
+launchers use the same selector; adapters, CI helpers, evidence modules, and tests remain included.
+Pion is compiled through the root native dependency graph and exercised by the provider/socket race
+tests. Its standalone upstream module graph and JavaScript/Wasm provider view are not supported targets.
+Stage new Go files before final validation so the tracked-source gate includes them.
+
 Go coverage is blocking:
 
 - core packages total at least 90%;

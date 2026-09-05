@@ -46,7 +46,7 @@ func TestLocalFixedSTUNSocketLifecycleBaseline(t *testing.T) {
 			pending := metrics.Pending()
 			defer pending()
 			var pairs []PairFacts
-			for attempt := 0; attempt < 2; attempt++ {
+			for attempt := range 2 {
 				var left, right *Connection
 				if stable {
 					left = testConnection(t, leftLease, []string{url}, nil)

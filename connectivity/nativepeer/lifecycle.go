@@ -46,9 +46,7 @@ func (n *NativePeerConnectivity) scheduleCleanupLocked(authority *reachability.A
 	if authority == nil {
 		return
 	}
-	n.cleanup.Add(1)
-	go func() {
-		defer n.cleanup.Done()
+	n.cleanup.Go(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), reachability.DefaultGrace+reachability.DefaultOperationTimeout)
 		defer cancel()
 		if retired {
@@ -63,7 +61,7 @@ func (n *NativePeerConnectivity) scheduleCleanupLocked(authority *reachability.A
 		case <-timer.C:
 			authority.Reconcile(ctx)
 		}
-	}()
+	})
 }
 func (n *NativePeerConnectivity) Close(ctx context.Context) error {
 	n.mu.Lock()

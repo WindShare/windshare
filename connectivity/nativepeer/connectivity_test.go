@@ -174,8 +174,13 @@ func TestNativeDemandAdmissionBoundsAndMonitorFailure(t *testing.T) {
 	if _, err := h.native.NewPeerConnection(context.Background(), request(1)); err == nil {
 		t.Fatal("monitor error swallowed")
 	}
-	if _, err := h.native.NewPeerConnection(nil, request(1)); err == nil {
+	h.monitor.err = nil
+	var missingContext context.Context // Invalid caller input must not start a provider.
+	if _, err := h.native.NewPeerConnection(missingContext, request(1)); err == nil {
 		t.Fatal("nil context")
+	}
+	if len(h.requests) != 0 {
+		t.Fatal("invalid context allocated a provider")
 	}
 }
 func TestProfileFactsComeFromProviderCandidatesWithoutInventedEndpointSuccess(t *testing.T) {
