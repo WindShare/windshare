@@ -503,8 +503,11 @@ func TestSenderHandlerCapacityFailureEndsOnlyRejectedOperation(t *testing.T) {
 	}
 
 	rejectedOperation := testOperationID(122)
+	rejectedBinding := testBinding(123)
+	rejectedBinding.PeerPathID = firstBinding.PeerPathID
+	rejectedBinding.AttemptSequence = 2
 	rejectedBody, _ := v2signal.EncodeOffer(v2signal.Offer{
-		Binding: testBinding(123), SDP: "v=0\r\n",
+		Binding: rejectedBinding, SDP: "v=0\r\n",
 	})
 	rejectedMessage := testMessage(t, protocolsession.MessagePeerOffer, rejectedOperation, rejectedBody)
 	if err := handler.HandleMessage(
@@ -723,7 +726,7 @@ func TestSenderHandlerBoundsTimeoutAndCandidateFlood(t *testing.T) {
 					t.Fatalf("first bounded candidate kind = %d", control.kind)
 				}
 			},
-			wantCode: protocolsession.PeerOperationCodeCandidates,
+			wantCode: 0,
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -753,6 +756,16 @@ func TestSenderHandlerBoundsTimeoutAndCandidateFlood(t *testing.T) {
 			}
 			receiveTest(t, session.controls)
 			test.stimulate(t, peer, session)
+			if test.wantCode == 0 {
+				select {
+				case failure := <-session.failures:
+					t.Fatalf("local candidate pruning failed attempt: %#v", failure)
+				default:
+				}
+				cancel()
+				receiveTest(t, runDone)
+				return
+			}
 			failure := receiveTest(t, session.failures)
 			if failure.operation != operation || failure.code != test.wantCode {
 				t.Fatalf("bounded failure = %#v", failure)
@@ -886,6 +899,7 @@ func newDirectTestHandler(t *testing.T, factory *Factory, session *testPeerSessi
 
 func testBinding(seed byte) v2signal.Binding {
 	var binding v2signal.Binding
+	binding.AttemptSequence = 1
 	copy(binding.PeerPathID[:], bytes.Repeat([]byte{seed}, v2signal.IdentityBytes))
 	copy(binding.AttemptID[:], bytes.Repeat([]byte{seed + 1}, v2signal.IdentityBytes))
 	return binding

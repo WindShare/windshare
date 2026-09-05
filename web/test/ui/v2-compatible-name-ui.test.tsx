@@ -133,6 +133,7 @@ function snapshot(
   patch: Partial<V2ReceiverSnapshot>,
 ): V2ReceiverSnapshot {
   return Object.freeze({
+    pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'browsing',
     status: 'Ready.',
     error: null,

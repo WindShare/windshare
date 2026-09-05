@@ -9,7 +9,7 @@ test('continues on an authenticated peer lane after the relay is cut', async ({
   expect(browserName).toBe('chromium')
   await runHotSwitchScenario({
     browserName,
-    mode: 'peer',
+    mode: 'direct',
     page,
     testInfo,
   })

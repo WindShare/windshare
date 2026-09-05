@@ -50,11 +50,11 @@ git -C "$fixture_repository" add -- core/README.md
 install -d -m 0700 -- "$release_environment"
 source scripts/ci/release-environment.sh
 windshare_prepare_release_go_environment "$release_environment"
-go run ./scripts/ci/_modulezip/main.go \
+go run ./scripts/ci/_sourcebundle \
   -repo "$fixture_repository" \
   -commit "$commit_sha" \
   -stage "$test_root/committed-module" \
-  -zip "$test_root/module.zip" \
+  -zip "$test_root/source.zip" \
   -extract "$test_root/extracted-module" \
   -version "$artifact_version" >/dev/null
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -76,7 +77,7 @@ func connectAuditedVerticalPair(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatalf("connect receiver: %v", err)
 	}

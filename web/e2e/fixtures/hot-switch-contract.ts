@@ -2,19 +2,19 @@ import type {
   V2PeerAttemptTraceEvent,
   V2PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
-import type { V2PeerRecoveryPolicy } from '../../src/connectivity/v2-peer-recovery'
+import type { V2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
 
 export interface HotSwitchDispatch {
   readonly dispatchSequence: number
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'relay' | 'peer'
+  readonly route: 'application-relay' | 'direct' | 'turn'
 }
 
 export interface HotSwitchLaneObservation {
   readonly laneId: number
   readonly laneEpoch: number
-  readonly route: 'relay' | 'peer'
+  readonly route: 'application-relay' | 'direct' | 'turn'
 }
 
 export interface ObservedTransferFailure {

@@ -33,6 +33,7 @@ const (
 	ObserverLossSenderCapacity
 	ObserverLossSenderRevision
 	ObserverLossCommandAdapter
+	ObserverLossNativeConnectivity
 	ObserverLossCategoryLimit
 )
 
@@ -41,7 +42,7 @@ func (value ObserverLossCategory) Name() (string, bool) {
 		"", "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination",
 		"lane_settlement", "protocol_operation", "transfer_lifecycle", "filesystem_output",
 		"catalog_storage", "root_prefetch", "sender_terminal_send", "sender_session_terminal",
-		"sender_capacity", "sender_revision", "command_adapter",
+		"sender_capacity", "sender_revision", "command_adapter", "native_connectivity",
 	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
@@ -61,13 +62,13 @@ const (
 	ObserverLossRecorderClosed
 	ObserverLossStreamCapacity
 	ObserverLossReaderNotJoined
-	ObserverLossEvidenceCapacity
+	ObserverLossPathCapacity
 	ObserverLossCleanupResidue
 	ObserverLossReasonLimit
 )
 
 func (value ObserverLossReason) Name() (string, bool) {
-	names := [...]string{"", "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection", "adapter_capacity_timeout", "trace_queue", "recorder_closed", "stream_capacity", "reader_not_joined", "evidence_capacity", "cleanup_residue"}
+	names := [...]string{"", "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection", "adapter_capacity_timeout", "trace_queue", "recorder_closed", "stream_capacity", "reader_not_joined", "path_capacity", "cleanup_residue"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}

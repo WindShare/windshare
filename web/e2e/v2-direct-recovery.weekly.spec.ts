@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { expect, test, type TestInfo } from '@playwright/test'
 
 import { V2_BLOCK_BROKER_PARALLEL_READS } from '../src/content/v2-broker'
-import { createV2PeerRecoveryPolicy } from '../src/connectivity/v2-peer-recovery'
+import { createV2PeerRecoveryPolicy } from '../src/connectivity/peer-set/path'
 import type { HotSwitchPageEvent } from './fixtures/hot-switch-contract'
 import {
   advancePageOutput,
@@ -96,7 +96,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     )
     const firstRelayDispatch = await events.waitFor(
       'dispatch',
-      (event) => event.observation.route === 'relay',
+      (event) => event.observation.route === 'application-relay',
       'relay dispatch while first peer admission is pending',
     )
     await events.waitFor(
@@ -177,7 +177,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const recoveredAttemptLane = requireEvidenceLane(recoveredAttempt.evidence)
     const recoveredLane = await events.waitFor(
       'lane-admitted',
-      (event) => event.observation.route === 'peer' &&
+      (event) => event.observation.route === 'direct' &&
         event.observation.laneId === recoveredAttemptLane.laneId &&
         event.observation.laneEpoch === recoveredAttemptLane.laneEpoch,
       'recovered peer content lane',
@@ -188,20 +188,20 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     await advancePageOutput(page)
     const recoveredPeerDispatch = await events.waitFor(
       'dispatch',
-      (event) => event.observation.route === 'peer' &&
+      (event) => event.observation.route === 'direct' &&
         event.observation.dispatchSequence > recoveredTrafficBoundary,
       'authenticated peer traffic after recovery',
     )
     expect(recoveredPeerDispatch.observation).toMatchObject({
       laneId: recoveredLane.observation.laneId,
       laneEpoch: recoveredLane.observation.laneEpoch,
-      route: 'peer',
+      route: 'direct',
     })
 
     await detachPagePeer(page)
     const detachedLane = await events.waitFor(
       'lane-detached',
-      (event) => event.observation.route === 'peer' &&
+      (event) => event.observation.route === 'direct' &&
         event.observation.laneId === recoveredLane.observation.laneId &&
         event.observation.laneEpoch === recoveredLane.observation.laneEpoch,
       'page-controlled peer detachment',
@@ -265,7 +265,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     await advancePageOutput(page)
     const relayDuringDetachment = await events.waitFor(
       'dispatch',
-      (event) => event.observation.route === 'relay' &&
+      (event) => event.observation.route === 'application-relay' &&
         event.observation.dispatchSequence > detachmentRelayBoundary,
       'relay dispatch during detachment recovery',
     )
@@ -286,7 +286,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     requireAttemptStage(readoptedAttempt, 'admitted')
     const readoptedLane = await events.waitFor(
       'lane-admitted',
-      (event) => event.observation.route === 'peer' &&
+      (event) => event.observation.route === 'direct' &&
         event.observation.laneId === recoveredLane.observation.laneId &&
         event.observation.laneEpoch > recoveredLane.observation.laneEpoch,
       'reattached logical peer lane',
@@ -316,7 +316,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     })
     expect(runtime.error).toBeUndefined()
     expect(events.snapshot().some((event) =>
-      event.kind === 'lane-detached' && event.observation.route === 'relay'
+      event.kind === 'lane-detached' && event.observation.route === 'application-relay'
     )).toBe(false)
     expect(events.snapshot().some((event) => event.kind === 'relay-ineligible')).toBe(false)
     expect(stackTraces.length).toBeGreaterThan(0)

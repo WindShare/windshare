@@ -1,4 +1,5 @@
 import type { FailureCorrelation } from '../diagnostics/incident/fact'
+import type { PeerProviderFact } from './peer-set/provider-facts'
 import { V2_PEER_OPERATION_CODE } from '../session/v2-message'
 import type {
   V2PeerAttemptIdentity,
@@ -40,7 +41,7 @@ export const V2_BROWSER_CONNECTIVITY_RECOVERY_STAGES = Object.freeze([
   'session-stopped',
 ] as const)
 
-export const V2_CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt', 'session'] as const)
+export const V2_CONNECTIVITY_FAILURE_SCOPES = Object.freeze(['attempt-transient', 'path-terminal', 'session-terminal'] as const)
 
 export const V2_TYPED_PEER_ERROR_CODES = Object.freeze([
   'peer-negotiation',
@@ -120,6 +121,7 @@ type V2PeerAttemptBase = Readonly<{
 }>
 
 export type V2PeerAttemptTraceEvent = V2PeerAttemptBase & (
+  | Readonly<{ stage: 'provider-fact'; fact: PeerProviderFact }>
   | Readonly<{ stage: 'started' }>
   | Readonly<{
       stage: 'negotiation-deadline-armed' | 'negotiation-deadline-expired'

@@ -358,6 +358,7 @@ export interface TraceEventPayloadByNameV1 {
         settlement: 'remote_final' | 'local_cancel' | 'session_terminal'
       }>
   readonly peer_attempt:
+    | Readonly<{ stage: 'provider_fact'; fact: import('../../connectivity/peer-set/provider-facts').PeerProviderFact }>
     | Readonly<{
         stage: 'started'
         wave_ordinal: string
@@ -414,7 +415,7 @@ export interface TraceEventPayloadByNameV1 {
           | 'admission_response_settled'
           | 'lane_attached'
           | 'admitted'
-        failure_scope: 'attempt' | 'session'
+        failure_scope: 'attempt-transient' | 'path-terminal' | 'session-terminal'
         code: PeerFailureCodeV1
         retryable: boolean
       }>
@@ -500,6 +501,11 @@ export interface TraceEventPayloadByNameV1 {
         detachment_class: 'closed' | 'physical_failure' | 'authenticated_failure'
       }>
   readonly receive_transition:
+    | Readonly<{
+        transition: 'download_connectivity'
+        transfer_job_id: string
+        connectivity: import('./transfer-payload').DownloadConnectivitySnapshot
+      }>
     | Readonly<{
         transition: 'intent_frozen'
         artifact_kind: ArtifactKindV1

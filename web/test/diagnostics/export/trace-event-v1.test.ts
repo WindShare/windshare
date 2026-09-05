@@ -390,7 +390,7 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
   correlated('peer_attempt', {
     stage: 'failed',
     failed_at_stage: 'offer_sent',
-    failure_scope: 'attempt',
+    failure_scope: 'attempt-transient',
     code: 'peer_negotiation',
     retryable: true,
   }),

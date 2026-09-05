@@ -33,6 +33,7 @@ const (
 	MessagePeerOffer         MessageKind = 16
 	MessagePeerAnswer        MessageKind = 17
 	MessagePeerCandidate     MessageKind = 18
+	MessagePeerPathControl   MessageKind = 19
 )
 
 const fragmentRoutingHeaderBytes = 20
@@ -235,9 +236,9 @@ func decodeOperationID(encoded cbor.RawMessage) (*OperationID, error) {
 }
 
 func validateMessageIdentity(kind MessageKind, operationID *OperationID) error {
-	if kind == MessageSessionTerminal {
+	if kind == MessageSessionTerminal || kind == MessagePeerPathControl {
 		if operationID != nil {
-			return fmt.Errorf("%w: session terminal must not have an operation identity", ErrInvalidOperationID)
+			return fmt.Errorf("%w: session control must not have an operation identity", ErrInvalidOperationID)
 		}
 		return nil
 	}
@@ -337,7 +338,7 @@ func (m Message) operationFingerprintBody(direction Direction) []byte {
 }
 
 func (kind MessageKind) valid() bool {
-	return kind >= MessageListChildren && kind <= MessagePeerCandidate
+	return kind >= MessageListChildren && kind <= MessagePeerPathControl
 }
 
 func (kind MessageKind) isRequest() bool {

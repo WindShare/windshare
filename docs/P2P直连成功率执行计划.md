@@ -1,12 +1,16 @@
 # P2P 直连成功率执行计划
 
-状态：待批准
+状态：本轮机制实现与独立复审完成；`make ci-parallel` 全部通过（2026-09-05，Windows）。
 范围：无人工端口映射时，尽可能提高浏览器接收端与 Go 发送端、Go 接收端与 Go 发送端的 WebRTC 直连率。提高 STUN 可用性，特别是中国大陆。
 
-## 当前基线
+已接入统一恢复、稳定 socket、按需映射、多 relay、同进程 wsrelay STUN、平台首次设置和下载诊断。最终覆盖率：core 90.3%、non-core 83.5%，每个 package 均通过 70% 门槛。可重复的[本地 provider 证据](../testdata/provider-capabilities/README.md)只验证受控拓扑中的机制，不代表公网直连率提升。公网节点与真实网络样本仍可后续补充；本轮未执行 hosted release 或发布。源码包与二进制安装入口见 [installation.md](installation.md)。
 
-- 浏览器内容 activation 已让 relay 立即传输并在后台有限重试 P2P；纯目录浏览不启动 ICE。
-- 两端使用单一 `PeerConnection + 固定 STUN`，支持 Trickle ICE；Go CLI 目前只启动一次 attempt，大文件或大小未知时 relay 最多等待 8 秒。
+## 实施前基线
+
+以下描述本轮改造前的行为：
+
+- 浏览器内容 activation 已让 relay 立即传输并在后台有限重试 P2P；当时纯目录浏览不启动 ICE。
+- 两端使用单一 `PeerConnection + 固定 STUN`，支持 Trickle ICE；当时 Go CLI 只启动一次 attempt，大文件或大小未知时 relay 最多等待 8 秒。
 - 接收端固定创建 Offer/DataChannel，发送端固定 Answer；双方均为 Full ICE agent，都会收集 candidate、发送 connectivity check。固定协商角色不等于发送端被动打洞。
 - 本计划沿用浏览器恢复框架并补齐 Go 接收端恢复，不新建第二套 retry、detach、identity 或 lane admission 所有者。
 
@@ -54,7 +58,7 @@ PeerConnectivity
 - 沿用浏览器会话代际恢复，在 Go 接收端补齐：全部 lane 因网络丢失时退役旧 session，在恢复预算内重新握手、获取 lease，并由下载任务保留仍有效的进度；不复活旧 session 权限，不因换代重置总预算。`PeerSet` 只负责代际内的 P2P 恢复，`p2p-only` 仍受当前 wave 上限约束。
 - `OPERATION_ERROR` 对当前 negotiation identity 始终终态；typed reason 决定是否扩大到 path 或 session。`attempt-transient` 以新的 `AttemptID` 恢复，不得用通用 `Retryable` 重跑同一 operation。
 - Go 与浏览器使用同一份封闭 reason-to-scope 向量；未知 reason 只停止 peer path，错误文本或通用 `Retryable` 不得产生 retry 或 session authority。
-- 当前两端以 15 秒覆盖协商到 DataChannel Open。由现有 attempt 所有者分别管理信令准备、ICE 检查、DTLS/DataChannel 建立与 lane admission 预算；保留 attempt、wave 总上限，将 session 累计总上限改为可补充的单位时间尝试次数与耗时预算。两端统一策略，阶段推进不重置 attempt/wave 预算。
+- 替换实施前以 15 秒覆盖协商到 DataChannel Open 的预算。由现有 attempt 所有者分别管理信令准备、ICE 检查、DTLS/DataChannel 建立与 lane admission 预算；保留 attempt、wave 总上限，将 session 累计总上限改为可补充的单位时间尝试次数与耗时预算。两端统一策略，阶段推进不重置 attempt/wave 预算。
 - 同步重构现有 attempt 身份记录与重放防护，采用可推进的退役边界和有界保留；回收记录后旧 attempt 仍不可接纳，正常重试不得因累计身份数耗尽而终止 session。
 - ICE 检查开始后按 [RFC 8863](https://www.rfc-editor.org/rfc/rfc8863.html)保留等待晚到候选和 `prflx` 的机会；39.5 秒是默认重传参数下的参考值，不统一套用所有阶段。验证并协调 provider 内部失败时机、ICE 等待窗口与总预算，避免任一层提前结束；首次连接等待与已连接后的断线检测分开配置。平台缺少里程碑时明确记录预算归属，不伪造阶段事实。
 
@@ -65,7 +69,7 @@ PeerConnectivity
 - candidate 事实包含 `host/srflx/prflx/relay`、UDP/TCP、IPv4/IPv6、接口类别、去重/裁剪原因和可得的 STUN endpoint；浏览器无法归因时写 `unknown`，且不记录 ICE/TURN credential。
 - WebRTC selected pair 记录 candidate 类型、协议、地址族、RTT、存活时间和切换原因；结合 lane transport 将路径分类为 `direct`、`turn` 或 `application-relay`，selected-pair RTT 不得冒充 STUN RTT。
 - 失败使用封闭阶段/原因码；provider 原始错误只作附属诊断。观察使用有界非阻塞队列，丢失汇总为 `observer_loss`。
-- 先形成当前固定 STUN、默认 per-attempt socket 生命周期的本地可重复基线，公网基线随使用补充；按下载记录首次可用直连耗时、直连有效内容字节占比和回退停顿，不预先承诺成功率数字。
+- 形成实施前固定 STUN、默认 per-attempt socket 生命周期的本地可重复基线，公网基线随使用补充；按下载记录首次可用直连耗时、直连有效内容字节占比和回退停顿，不预先承诺成功率数字。
 
 ### 2. 验证 Pion 的 socket、外部端口与 ICE-TCP 能力
 

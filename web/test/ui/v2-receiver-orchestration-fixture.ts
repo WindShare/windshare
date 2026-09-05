@@ -414,6 +414,8 @@ export class FakeJoinedShare {
     return this.protocolSessionId
   }
 
+  subscribePathActivity(): () => void { return () => undefined }
+
   subscribeProtocolGeneration(listener: V2ProtocolGenerationListener): () => void {
     this.#generationListeners.add(listener)
     return () => this.#generationListeners.delete(listener)

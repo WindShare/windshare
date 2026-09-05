@@ -63,7 +63,7 @@ function runtime(bytes: Uint8Array<ArrayBuffer>, blockSize: bigint) {
   })
   const lane = new ByteLane(bytes)
   const lanes = new V2LaneSet()
-  lanes.add(lane, 'relay')
+  lanes.add(lane, 'application-relay')
   const upstreamBroker = new V2BlockBroker(lanes)
   const routes = new V2ConnectivityRouteAuthority()
   const broker: V2BlockRangeReader = Object.freeze({

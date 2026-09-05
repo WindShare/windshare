@@ -24,21 +24,23 @@ const (
 	MinOperationFailureRetryAfter   = time.Millisecond
 	MaxOperationFailureRetryAfter   = 30 * time.Second
 
-	operationFailureSchemaVersion = uint64(1)
-	directoryOperationCodeFirst   = uint16(0x2001)
-	directoryOperationCodeLast    = uint16(0x2008)
-	revisionOperationCodeFirst    = uint16(0x3001)
-	revisionOperationCodeLast     = uint16(0x3008)
-	blockOperationCodeFirst       = uint16(0x4001)
-	blockOperationCodeLast        = uint16(0x4006)
+	operationFailureSchemaVersion     = uint64(1)
+	peerOperationFailureSchemaVersion = uint64(2)
+	directoryOperationCodeFirst       = uint16(0x2001)
+	directoryOperationCodeLast        = uint16(0x2008)
+	revisionOperationCodeFirst        = uint16(0x3001)
+	revisionOperationCodeLast         = uint16(0x3008)
+	blockOperationCodeFirst           = uint16(0x4001)
+	blockOperationCodeLast            = uint16(0x4006)
 )
 
 type OperationFailure struct {
-	Scope      uint8
-	Code       uint16
-	Retryable  bool
-	RetryAfter time.Duration
-	Message    string
+	Scope       uint8
+	Code        uint16
+	Retryable   bool
+	RetryAfter  time.Duration
+	Message     string
+	PeerAttempt *PeerAttemptBinding
 }
 
 var ErrInvalidOperationFailure = errors.New("operation failure body is invalid")
@@ -68,10 +70,20 @@ func EncodeOperationFailure(failure OperationFailure) ([]byte, error) {
 	} else if failure.RetryAfter != 0 {
 		return nil, errors.New("permanent operation failure cannot carry a retry delay")
 	}
-	return EncodeBody(map[uint64]any{
+	fields := map[uint64]any{
 		0: operationFailureSchemaVersion, 1: uint64(failure.Scope), 2: uint64(failure.Code),
 		3: failure.Retryable, 4: retryAfter, 5: failure.Message,
-	})
+	}
+	if failure.Scope == OperationScopePeer {
+		if failure.PeerAttempt == nil || !failure.PeerAttempt.valid() {
+			return nil, ErrInvalidOperationFailure
+		}
+		fields[0] = peerOperationFailureSchemaVersion
+		fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence}
+	} else if failure.PeerAttempt != nil {
+		return nil, ErrInvalidOperationFailure
+	}
+	return EncodeBody(fields)
 }
 
 // DecodeOperationFailure is the receive-side authority for signed OPERATION_ERROR
@@ -82,7 +94,7 @@ func DecodeOperationFailure(encoded []byte) (OperationFailure, error) {
 		return OperationFailure{}, errors.Join(ErrInvalidOperationFailure, err)
 	}
 	var fields map[uint64]any
-	if err := messageDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 6 {
+	if err := messageDecMode.Unmarshal(encoded, &fields); err != nil || (len(fields) != 6 && len(fields) != 7) {
 		return OperationFailure{}, ErrInvalidOperationFailure
 	}
 	for key := uint64(0); key <= 5; key++ {
@@ -95,7 +107,7 @@ func DecodeOperationFailure(encoded []byte) (OperationFailure, error) {
 	code, codeOK := fields[2].(uint64)
 	retryable, retryableOK := fields[3].(bool)
 	message, messageOK := fields[5].(string)
-	if !versionOK || version != operationFailureSchemaVersion || !scopeOK || scope > 255 ||
+	if !versionOK || !scopeOK || scope > 255 ||
 		!codeOK || code > 65_535 || !retryableOK || !messageOK {
 		return OperationFailure{}, ErrInvalidOperationFailure
 	}
@@ -114,6 +126,18 @@ func DecodeOperationFailure(encoded []byte) (OperationFailure, error) {
 		Scope: uint8(scope), Code: uint16(code), Retryable: retryable,
 		RetryAfter: retryAfter, Message: message,
 	}
+	if failure.Scope == OperationScopePeer {
+		if version != peerOperationFailureSchemaVersion || len(fields) != 7 {
+			return OperationFailure{}, ErrInvalidOperationFailure
+		}
+		binding, err := decodePeerAttemptBinding(fields[6])
+		if err != nil {
+			return OperationFailure{}, err
+		}
+		failure.PeerAttempt = &binding
+	} else if version != operationFailureSchemaVersion || len(fields) != 6 {
+		return OperationFailure{}, ErrInvalidOperationFailure
+	}
 	canonical, err := EncodeOperationFailure(failure)
 	if err != nil || !bytes.Equal(canonical, encoded) {
 		return OperationFailure{}, errors.Join(ErrInvalidOperationFailure, err)
@@ -130,7 +154,7 @@ func operationFailureCodeInScope(scope uint8, code uint16) bool {
 	case OperationScopeBlock:
 		return code >= blockOperationCodeFirst && code <= blockOperationCodeLast
 	case OperationScopePeer:
-		return code >= PeerOperationCodeNegotiation && code <= PeerOperationCodeAdmission
+		return code >= PeerOperationCodeFirst && code <= PeerOperationCodeLast
 	default:
 		return false
 	}
@@ -457,6 +481,10 @@ func (table *OperationTable) bindPreemptivelyCancelledRequestLocked(
 		)
 		return OperationDrop, ErrConflictingContinuation
 	}
+	if err := table.admitPeerAttemptLocked(authority); err != nil {
+		return OperationDrop, err
+	}
+	table.retirePeerAttemptLocked(authority)
 	// A preemptive CANCEL learns the request family from the raced request.
 	// Retaining it narrows every later drop to that operation's continuations.
 	tombstone.requestKind = message.kind

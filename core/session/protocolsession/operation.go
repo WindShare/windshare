@@ -81,6 +81,7 @@ type OperationTable struct {
 	active        map[OperationID]activeOperation
 	tombstones    map[OperationID]operationTombstone
 	terminal      bool
+	peerPaths     map[[16]byte]*retiredPeerPath
 }
 
 func NewOperationTable(limits OperationLimits, now func() time.Time) (*OperationTable, error) {
@@ -104,6 +105,7 @@ func NewOperationTableWithContinuations(
 		continuations: continuations,
 		active:        make(map[OperationID]activeOperation),
 		tombstones:    make(map[OperationID]operationTombstone),
+		peerPaths:     make(map[[16]byte]*retiredPeerPath),
 	}, nil
 }
 
@@ -205,6 +207,9 @@ func (table *OperationTable) observeAdmissionLocked(
 	if err := validateKindDirection(direction, message.kind); err != nil {
 		return OperationDrop, nil, err
 	}
+	if message.kind == MessagePeerPathControl {
+		return OperationDeliver, nil, nil
+	}
 	if message.kind == MessageSessionTerminal {
 		table.terminal = true
 		clear(table.active)
@@ -215,6 +220,9 @@ func (table *OperationTable) observeAdmissionLocked(
 	operationID, ok := message.OperationID()
 	if !ok {
 		return OperationDrop, nil, ErrInvalidOperationID
+	}
+	if err := table.validatePeerAttemptLocked(table.operationAuthority(operationID), direction, message); err != nil {
+		return OperationDrop, nil, err
 	}
 	if tombstone, found := table.tombstones[operationID]; found {
 		if tracked, err := table.acceptLateContinuationLocked(tombstone.authority, direction, message); tracked {
@@ -233,6 +241,9 @@ func (table *OperationTable) observeAdmissionLocked(
 
 	active, found := table.active[operationID]
 	if !found {
+		if table.dropsRetiredPeerLocked(direction, message) {
+			return OperationDrop, nil, nil
+		}
 		disposition, err := table.beginOperation(operationID, direction, message)
 		return disposition, nil, err
 	}
@@ -266,7 +277,7 @@ func (table *OperationTable) AdmitOutbound(
 	defer table.mu.Unlock()
 	requiresPermit := direction == DirectionSenderToReceiver ||
 		(direction == DirectionReceiverToSender && !message.kind.isRequest() && message.kind != MessageLaneAttach)
-	if requiresPermit {
+	if requiresPermit && message.kind != MessagePeerPathControl {
 		table.pruneExpired()
 		operationID, ok := message.OperationID()
 		if !ok || permit.table != table || permit.authority == nil ||
@@ -399,6 +410,9 @@ func (table *OperationTable) beginOperation(
 	if err != nil {
 		return OperationDrop, err
 	}
+	if err := table.admitPeerAttemptLocked(authority); err != nil {
+		return OperationDrop, err
+	}
 	table.active[operationID] = activeOperation{
 		requestKind: message.kind, requestFingerprint: message.operationFingerprint(direction),
 		authority: authority,
@@ -497,6 +511,7 @@ func (table *OperationTable) finishOperation(
 	); err != nil {
 		return err
 	}
+	table.retirePeerAttemptLocked(active.authority)
 	clearContinuationReplayLocked(active.authority)
 	delete(table.active, operationID)
 	return nil
@@ -541,7 +556,7 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 	switch direction {
 	case DirectionReceiverToSender:
 		if kind.isRequest() || kind == MessageCancel || kind == MessageOperationError || kind == MessageLaneAttach ||
-			kind == MessagePeerCandidate {
+			kind == MessagePeerCandidate || kind == MessagePeerPathControl {
 			return nil
 		}
 	case DirectionSenderToReceiver:
@@ -549,7 +564,7 @@ func validateKindDirection(direction Direction, kind MessageKind) error {
 		case MessageCatalogResult, MessageOpenResults, MessageBlockFragment,
 			MessageOperationError, MessageSessionTerminal, MessageLaneAttach,
 			MessageScanProgress, MessageOperationComplete, MessageLeaseResult,
-			MessagePeerAnswer, MessagePeerCandidate:
+			MessagePeerAnswer, MessagePeerCandidate, MessagePeerPathControl:
 			return nil
 		}
 	}

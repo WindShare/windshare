@@ -350,7 +350,7 @@ func (writer *SessionWriter) decideDeliveryAdmission(
 		}
 	}
 	if admission.err == nil && admission.disposition == OperationDeliver &&
-		writer.policy.OutboundDirection() == DirectionSenderToReceiver && admission.replay.IsZero() {
+		writer.policy.OutboundDirection() == DirectionSenderToReceiver && item.message.kind != MessagePeerPathControl && admission.replay.IsZero() {
 		admission.err = ErrOutboundReplayPermit
 	}
 	if admission.err == nil && admission.disposition != OperationDeliver &&

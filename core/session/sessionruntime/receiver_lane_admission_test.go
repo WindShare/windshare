@@ -34,7 +34,7 @@ func TestAttachLaneRetainsAuthenticatedAcceptanceWhenInstallationFails(t *testin
 		}{identity: identity, err: err}
 	}()
 
-	admission, err := receiver.AttachLane(ctx, grant, receiverChannel)
+	admission, err := receiver.AttachLane(ctx, grant, receiverChannel, transfer.LaneRouteDirect)
 	if !errors.Is(err, transfer.ErrLaneClosed) {
 		t.Fatalf("receiver installation error = %v", err)
 	}

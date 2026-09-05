@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DownloadMetrics } from '../../src/receiver/download-metrics'
 
 import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
@@ -209,6 +210,41 @@ async function collect(reader: AsyncGenerator<V2BlockSlice>): Promise<V2BlockSli
 }
 
 describe('v2 supervised content generations', () => {
+  it('attributes delivered slices across generations while output suspension never becomes stall', async () => {
+    let now = 0
+    const metrics = new DownloadMetrics('download', true, () => now)
+    const stable = revision()
+    const loss = new V2BlockLaneAttemptsError([new Error('lost direct')])
+    const first = generationFixture(1, stable, async function* () {
+      yield { offset: 0n, data: Uint8Array.of(1, 2), authenticatedRoute: 'direct' }
+      now += 30
+      throw loss
+    })
+    const second = generationFixture(2, stable, async function* () {
+      now += 20
+      yield { offset: 2n, data: Uint8Array.of(3, 4), authenticatedRoute: 'turn' }
+    })
+    const provider = Object.assign(new SwitchingGenerationProvider(first.generation, second.generation), {
+      downloadMetrics: () => metrics,
+    })
+    const content = new V2SupervisedContent(provider, length => new Uint8Array(length).fill(9))
+    const routes = new V2ConnectivityRouteAuthority()
+    const scoped = content.forRoutes(routes)
+    const opened = await scoped.revisions.open(stable.fileId)
+    const reader = scoped.broker.readRange(opened.descriptor, opened.leaseId, byteRange(0n, 4n))
+    await reader.next()
+    metrics.availability(false)
+    now += 60_000 // The generator is suspended in the output consumer.
+    await reader.next()
+    await reader.next()
+    expect(scoped.lanes.downloadConnectivity?.(true)).toMatchObject({
+      direct_bytes: '2', turn_bytes: '2', direct_fraction: 0.5,
+      fallback_stall_ms: 50, first_direct_elapsed_ms: 0, final: true, incomplete: false,
+    })
+    await opened.release()
+    content.close()
+  })
+
   it('resumes at the first byte after the consumer has durably checkpointed a slice', async () => {
     const stable = revision()
     const loss = new V2BlockLaneAttemptsError([new Error('all generation-one lanes left')])
@@ -446,8 +482,8 @@ describe('v2 supervised connectivity activation ownership', () => {
 
     const activation = supervised.begin('preview')
     expect(first.begins[0]?.routeAuthority).toBe(activation.routes)
-    expect(activation.routes.allows('relay')).toBe(true)
-    expect(activation.routes.allows('peer')).toBe(true)
+    expect(activation.routes.allows('application-relay')).toBe(true)
+    expect(activation.routes.allows('direct')).toBe(true)
 
     supervised.bind(second as unknown as V2ReceiverConnectivity)
     expect(first.begins[0]?.delegateCloses).toBe(1)

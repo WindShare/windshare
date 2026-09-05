@@ -33,7 +33,7 @@ import type {
   V2PeerAttemptHandle,
   V2PeerRecoveryAttemptFactory,
   V2PeerRecoveryClock,
-} from './v2-peer-recovery'
+} from './peer-set/path'
 import type { V2ConnectivityTraceSource } from './diagnostics'
 import {
   V2AuthenticatedPeerOperationError,
@@ -41,6 +41,10 @@ import {
   V2SessionSignalingRoute,
 } from './v2-session-signaling'
 import type { V2PeerBinding } from './v2-signaling-codec'
+import { V2_PEER_SIGNALING_BUDGET_MILLISECONDS, V2_PEER_ICE_CHECK_BUDGET_MILLISECONDS,
+  V2_PEER_DTLS_BUDGET_MILLISECONDS } from './peer-set/contract'
+import type { V2PeerOfferAttemptObserver } from './peer-offer'
+import { browserPeerTabAdmission, PeerTabCapacityTimeoutError, type PeerTabAdmission, type PeerTabAdmissionPermit } from './peer-set/tab-admission'
 
 export interface V2PeerCandidatePublication {
   readonly protocolSessionId: V2ProtocolSessionIdentity
@@ -55,6 +59,8 @@ export interface V2PeerCandidatePublication {
 export type V2PeerCandidatePublisher = (candidate: V2PeerCandidatePublication) => boolean
 
 export interface V2BrowserPeerAttemptExecutorOptions {
+  readonly tabAdmission?: PeerTabAdmission
+  readonly admissionReceiver?: object
   readonly session: V2ReceiverSessionRuntime
   readonly offers: OfferChannelFactory
   readonly peerPathIdentity: Uint8Array
@@ -120,6 +126,8 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   readonly #publish: V2PeerCandidatePublisher
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #trace: V2ConnectivityTraceSource | undefined
+  readonly #tabAdmission: PeerTabAdmission
+  readonly #admissionReceiver: object
 
   constructor(options: V2BrowserPeerAttemptExecutorOptions) {
     if (
@@ -133,12 +141,13 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
     this.#publish = options.publish
     this.#randomBytes = options.randomBytes
     this.#trace = options.trace
+    this.#tabAdmission = options.tabAdmission ?? browserPeerTabAdmission()
+    this.#admissionReceiver = options.admissionReceiver ?? this
   }
 
   createAttempt(context: V2PeerAttemptContext): V2PeerAttemptHandle {
-    const binding = this.#randomBytes === undefined
-      ? createV2PeerBindingForPath(this.#peerPathIdentity)
-      : createV2PeerBindingForPath(this.#peerPathIdentity, this.#randomBytes)
+    const binding = createV2PeerBindingForPath(this.#peerPathIdentity, this.#randomBytes,
+      BigInt(context.sessionAttemptOrdinal))
     const attemptId = createV2PeerAttemptIdentity(binding.attemptId)
     const controller = new AbortController()
     let cancellationOwner: Parameters<V2PeerAttemptHandle['cancel']>[0] | undefined
@@ -162,6 +171,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
   ): Promise<V2PeerAttemptResult> {
     const resources: AttemptResources = { peerOwner: 'attempt' }
     let terminalError: unknown
+    let permit: PeerTabAdmissionPermit | undefined
     try {
       signal.throwIfAborted()
       const route = new V2SessionSignalingRoute(
@@ -175,6 +185,12 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
         },
       )
       resources.route = route
+      permit = await this.#tabAdmission.acquire(this.#admissionReceiver,
+        context.iceProfile?.endpointIDs.length ?? 2, context.admissionWaitBudgetMilliseconds ?? 0, signal)
+      signal.throwIfAborted()
+      if (context.iceProfile !== undefined) route.providerFact({ kind: 'profile',
+        profileID: context.iceProfile.id, networkGenerationID: context.iceProfile.networkGenerationID,
+        endpointIDs: context.iceProfile.endpointIDs.join(','), side: 'receiver' })
       const negotiation = await this.#runPhase(
         'negotiation',
         context.negotiationBudgetMilliseconds,
@@ -182,7 +198,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
         route.attemptFailureSignal,
         route,
         (phaseSignal) => settlePhaseWork(
-          () => this.#offers.offer(route, phaseSignal, route),
+          () => this.#negotiate(context, route, phaseSignal),
           route.attemptFailureSignal,
         ),
       )
@@ -226,6 +242,7 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
           terminalError ?? new DOMException('Peer attempt ended before publication', 'AbortError'),
         ).catch(() => undefined)
       }
+      permit?.release()
     }
   }
 
@@ -352,6 +369,38 @@ export class V2BrowserPeerAttemptExecutor implements V2PeerRecoveryAttemptFactor
       timerController.abort()
       phaseController.close()
     }
+  }
+
+  async #negotiate(context: V2PeerAttemptContext, route: V2SessionSignalingRoute,
+    signal: AbortSignal): Promise<PeerChannel> {
+    const owner = linkedController(signal)
+    let timer: AbortController | undefined
+    let stageOrdinal = -1
+    const phases = ['signaling', 'ice-check', 'dtls-datachannel'] as const
+    const budgets = [V2_PEER_SIGNALING_BUDGET_MILLISECONDS,
+      V2_PEER_ICE_CHECK_BUDGET_MILLISECONDS, V2_PEER_DTLS_BUDGET_MILLISECONDS] as const
+    const phaseChanged = (phase: typeof phases[number]) => {
+      const ordinal = phases.indexOf(phase)
+      if (ordinal <= stageOrdinal) return
+      stageOrdinal = ordinal
+      timer?.abort()
+      timer = new AbortController()
+      route.providerFact({ kind: 'state', phase, state: 'budget-armed', elapsedMs: budgets[ordinal]! })
+      const current = timer
+      this.#clock.sleep(budgets[ordinal]!, current.signal).then(() => {
+        if (!current.signal.aborted) owner.abort(new V2PeerPhaseTimeoutError('negotiation'))
+      }).catch(() => undefined)
+    }
+    const observer: V2PeerOfferAttemptObserver = {
+      offerCreated: (counts) => route.offerCreated(counts),
+      offerSent: (counts) => route.offerSent(counts),
+      answerReceived: (counts) => { route.answerReceived(counts); phaseChanged('ice-check') },
+      dataChannelOpened: (counts) => route.dataChannelOpened(counts),
+      providerFact: (fact) => { route.providerFact(fact); context.observeICEFact?.(fact) }, phaseChanged,
+    }
+    phaseChanged('signaling')
+    try { return await this.#offers.offer(route, owner.signal, observer, context.iceProfile) }
+    finally { timer?.abort(); owner.close() }
   }
 
   #classifyFailure(error: unknown): V2PeerAttemptFailure {
@@ -493,6 +542,9 @@ function inconsistentAdmissionSettlement(): PhaseWorkSettlement<never> {
 }
 
 function classifyAttemptError(error: unknown): V2PeerAttemptFailure {
+  if (error instanceof PeerTabCapacityTimeoutError) {
+    return Object.freeze({ kind: 'local-transient', phase: 'negotiation', reason: 'tab-capacity-timeout' })
+  }
   if (error instanceof V2AuthenticatedPeerOperationError) {
     return Object.freeze({
       kind: 'authenticated-peer-operation',

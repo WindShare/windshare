@@ -1,0 +1,124 @@
+{
+  "kind": "local-fixed-stun-socket-lifecycle-comparison",
+  "recorded_at_utc": "2026-09-05T08:52:08.9362909Z",
+  "platform": "windows",
+  "architecture": "amd64",
+  "go": "go version go1.27.0 windows/amd64",
+  "reconstruction": "Historical single-STUN/default per-attempt socket policy reconstructed on current pinned Pion sources; not a historical application binary.",
+  "scope": "Two sequential real ICE/DTLS/SCTP attempts per arm over IPv4 loopback, one local STUN service, exact payload verification and one 8192-byte fixture download per arm.",
+  "measurement_limits": "Fixture readiness follows its proof payload. SDP candidates are held until gathering completes for controlled srflx advertisement. No ProtocolSession, application relay, public NAT, browser, or product timing/success-rate measurement. Forced direct loss remains pending until replacement becomes usable; fallback stall is that local interruption, not a relay measurement. Timing and ephemeral endpoints vary between runs.",
+  "command": "go test -race ./transport/webrtc/provider -run ^TestLocalFixedSTUNSocketLifecycleBaseline$ -count=1 -timeout 30s -v",
+  "source_head": "c859c0d70b32b4b8b77b0eebedab3c33366f182d",
+  "source_state": "uncommitted working tree",
+  "pinned_modules": [
+    {
+      "path": "github.com/pion/ice/v4",
+      "version": "v4.2.7",
+      "revision": "e7d9f20c538ccc41e88a34291a2b3bfd7b887e07"
+    },
+    {
+      "path": "github.com/pion/webrtc/v4",
+      "version": "v4.2.16",
+      "revision": "3acb04c0bedcc57d2b9ddea102cb7b3787179400"
+    }
+  ],
+  "source_sha256": {
+    "transport/webrtc/provider/baseline_test.go": "ba6455d90e20af4d2cd15a6013d6209503e35755e20d8326aed4f0be47ab0759",
+    "transport/webrtc/provider/connection_test.go": "82446e0041b3ad7308f0b3ba9d6f1c4f919884ece1013410a3ac0e9e54d6d9b8",
+    "transport/webrtc/provider/connection.go": "f6e548a75db28bce51cdb678b521e124253b1f996e613409b44dab80b04d0929",
+    "transport/webrtc/provider/priority.go": "6189660436b054a78c08df2404b3113e5e2a94f394f19b927b03719f70115bd4",
+    "connectivity/socketauthority/authority.go": "acdc323920ef498de10719a3f0ff3953245a7359faad6ee4ea49784d8489ff9f",
+    "core/downloadmetrics/metrics.go": "d4d8a1a6eaa7a72970c67eabedfcdabdc9b64a75b094d6502c1210d0ad6b6d9d",
+    "third_party/pion/manifest.json": "5686212bc3cc4aac526546c609675ec49e87ba67f7c27f418234a77582af4e53"
+  },
+  "outcomes": [
+    {
+      "download_connectivity": {
+        "application_relay_bytes": "0",
+        "direct_bytes": "8192",
+        "direct_fraction": 1,
+        "download_id": "historical-default-per-attempt",
+        "fallback_stall_ms": "1159",
+        "final": true,
+        "first_direct_elapsed_ms": "1209",
+        "incomplete": false,
+        "turn_bytes": "0",
+        "unknown_bytes": "0"
+      },
+      "fixture": "historical-default-per-attempt",
+      "scope": "transport-payload-download-reconstruction",
+      "selected_pairs": [
+        {
+          "LocalType": "host",
+          "RemoteType": "prflx",
+          "Protocol": "udp",
+          "LocalAddress": "127.0.0.1",
+          "RemoteAddress": "127.0.0.1",
+          "LocalPort": 65215,
+          "RemotePort": 65219,
+          "RoundTripTime": 0
+        },
+        {
+          "LocalType": "host",
+          "RemoteType": "prflx",
+          "Protocol": "udp",
+          "LocalAddress": "127.0.0.1",
+          "RemoteAddress": "127.0.0.1",
+          "LocalPort": 65223,
+          "RemotePort": 65227,
+          "RoundTripTime": 0
+        }
+      ],
+      "stun_sources": [
+        "127.0.0.1:65216",
+        "127.0.0.1:65220",
+        "127.0.0.1:65224",
+        "127.0.0.1:65228"
+      ],
+      "topology": "local-udp4-loopback-single-stun"
+    },
+    {
+      "download_connectivity": {
+        "application_relay_bytes": "0",
+        "direct_bytes": "8192",
+        "direct_fraction": 1,
+        "download_id": "stable-path-socket",
+        "fallback_stall_ms": "771",
+        "final": true,
+        "first_direct_elapsed_ms": "758",
+        "incomplete": false,
+        "turn_bytes": "0",
+        "unknown_bytes": "0"
+      },
+      "fixture": "stable-path-socket",
+      "scope": "transport-payload-download-reconstruction",
+      "selected_pairs": [
+        {
+          "LocalType": "host",
+          "RemoteType": "srflx",
+          "Protocol": "udp",
+          "LocalAddress": "127.0.0.1",
+          "RemoteAddress": "127.0.0.1",
+          "LocalPort": 65230,
+          "RemotePort": 65231,
+          "RoundTripTime": 0
+        },
+        {
+          "LocalType": "host",
+          "RemoteType": "srflx",
+          "Protocol": "udp",
+          "LocalAddress": "127.0.0.1",
+          "RemoteAddress": "127.0.0.1",
+          "LocalPort": 65230,
+          "RemotePort": 65231,
+          "RoundTripTime": 0
+        }
+      ],
+      "stun_sources": [
+        "127.0.0.1:65230",
+        "127.0.0.1:65231"
+      ],
+      "topology": "local-udp4-loopback-single-stun"
+    }
+  ]
+}

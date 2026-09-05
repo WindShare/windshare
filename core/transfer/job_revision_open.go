@@ -52,7 +52,8 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	signal *revisionwait.CapacitySignal,
 ) error {
 	run := attempt.run
-	if !run.job.protocolSessionID.IsZero() && signal.ProtocolSession() != run.job.protocolSessionID {
+	sessionID := run.job.protocolSessionID()
+	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
 		return dependencyContractFailure(ErrRevisionIdentity)
 	}
 	if !opened.LeaseID.IsZero() {

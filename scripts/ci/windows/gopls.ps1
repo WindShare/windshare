@@ -10,12 +10,11 @@ Import-Module (Join-Path $ciRoot 'hygiene/native-argument-batches.psm1') -Force
 Set-Location $repositoryRoot
 $gateStopwatch = [Diagnostics.Stopwatch]::StartNew()
 
-$trackedGoFiles = @(
-    git -c core.quotepath=false ls-files -- '*.go' |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
-)
+# Both launchers use the verified dependency boundary before opening maintained
+# sources in their owning modules, preserving the root provider replacements.
+$trackedGoFiles = @(go run ./scripts/ci/_piondeps -maintained-go-files)
 if ($LASTEXITCODE -ne 0) {
-    throw "git ls-files exited with code $LASTEXITCODE"
+    throw "maintained Go source selection exited with code $LASTEXITCODE"
 }
 
 $batches = @(Split-WindowsNativeArguments -Arguments $trackedGoFiles)
