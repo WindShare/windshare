@@ -1,6 +1,8 @@
 package nativepeer
 
 import (
+	"slices"
+
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
@@ -44,11 +46,8 @@ func (n *NativePeerConnectivity) mappingFactsLocked(path *pathResources) []reach
 		if fact.Scope.Remote.IsValid() {
 			continue
 		}
-		for _, endpoint := range endpoints {
-			if fact.Endpoint == endpoint {
-				facts = append(facts, fact)
-				break
-			}
+		if slices.Contains(endpoints, fact.Endpoint) {
+			facts = append(facts, fact)
 		}
 	}
 	return facts

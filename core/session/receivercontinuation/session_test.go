@@ -316,8 +316,12 @@ func TestContinuationRequiresWinningNetworkRetirementAndFreshIdentity(t *testing
 	if err = s.recover(context.Background(), runtime); err == nil || called {
 		t.Fatalf("caller close authorized recovery: %v called=%v", err, called)
 	}
-	if _, err = New(nil, runtime, nil); !errors.Is(err, ErrReplacement) {
+	var missingContext context.Context // Continuation requires an explicit receive-intent lifetime.
+	if _, err = New(missingContext, runtime, s.replace); !errors.Is(err, ErrReplacement) {
 		t.Fatal(err)
+	}
+	if _, err = New(t.Context(), runtime, nil); !errors.Is(err, ErrReplacement) {
+		t.Fatal("missing replacement accepted", err)
 	}
 	token := s.Current()
 	s.Close()

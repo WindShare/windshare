@@ -135,7 +135,7 @@ func connectPayload(t *testing.T, left, right *Connection, filter func(pion.ICEC
 }
 func withoutCandidates(sdp string) string {
 	var lines []string
-	for _, line := range strings.Split(sdp, "\r\n") {
+	for line := range strings.SplitSeq(sdp, "\r\n") {
 		if !strings.HasPrefix(line, "a=candidate:") && line != "a=end-of-candidates" {
 			lines = append(lines, line)
 		}

@@ -21,7 +21,7 @@ func TestRepeatedMappingAndRemoteNetworkNoticesSpendOnlyCurrentWave(t *testing.T
 	path := &Path{owner: owner, config: PathConfig{Native: native, StopAfterWave: true}, key: pathKey{path: v2signal.PeerPathID{3}}, ctx: ctx, cancel: cancel, demand: ContentDemand, wake: make(chan struct{}, 1), resourceChanges: make(chan struct{}, 1)}
 	wave := recoveryWave{started: clock.Now()}
 	started := wave.started
-	for attempt := 0; attempt < AttemptsPerWave; attempt++ {
+	for attempt := range AttemptsPerWave {
 		if attempt > 0 {
 			for range 12 {
 				path.handleNativeChange(ctx, nativepeer.Change{Remote: true, MappingReady: true, RemoteNetworkChanged: true})

@@ -58,7 +58,7 @@ func TestProfilesRotateOnceAndNeverLoseSingletonSTUNOnLaterAttempts(t *testing.T
 		t.Run(fmt.Sprint(count), func(t *testing.T) {
 			h := newHarness(t)
 			var endpoints []icepolicy.Endpoint
-			for i := 0; i < count; i++ {
+			for i := range count {
 				id := fmt.Sprint(i)
 				endpoints = append(endpoints, icepolicy.Endpoint{ID: id, URL: "stun:stun" + id + ".example:3478", Family: "any", Trust: "local", Enabled: true, FailureDomain: id})
 			}

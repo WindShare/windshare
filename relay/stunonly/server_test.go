@@ -103,8 +103,13 @@ func TestListenerLifecycleRateLimitsAndHealth(t *testing.T) {
 func TestRateLimitCapacityWindowAndClock(t *testing.T) {
 	now := time.Unix(100, 0)
 	limiter := newRateLimiter(Config{RequestsPerSecond: 3, SourceRequestsPerSecond: 2, MaximumSources: 2})
-	if !limiter.allow("a", now) || !limiter.allow("a", now) || limiter.allow("a", now) {
-		t.Fatal("source")
+	for request := range 2 {
+		if !limiter.allow("a", now) {
+			t.Fatalf("source request %d rejected before its limit", request+1)
+		}
+	}
+	if limiter.allow("a", now) {
+		t.Fatal("source request accepted beyond its limit")
 	}
 	if !limiter.allow("b", now) || limiter.allow("b", now) {
 		t.Fatal("global")

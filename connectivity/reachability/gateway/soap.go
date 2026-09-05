@@ -45,14 +45,24 @@ func (u *UPnP) call(ctx context.Context, request r.Request, action string, args 
 		return nil, r.ErrUnavailable
 	}
 	var body bytes.Buffer
-	body.WriteString("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:" + action + " xmlns:u=\"" + u.Service.Type + "\">")
+	body.WriteString("<?xml version=\"1.0\"?><s:Envelope xmlns:s=\"http://schemas.xmlsoap.org/soap/envelope/\" s:encodingStyle=\"http://schemas.xmlsoap.org/soap/encoding/\"><s:Body><u:")
+	body.WriteString(action)
+	body.WriteString(" xmlns:u=\"")
+	body.WriteString(u.Service.Type)
+	body.WriteString("\">")
 	keys := soapArgumentOrder(action)
 	for _, key := range keys {
-		body.WriteString("<" + key + ">")
+		body.WriteByte('<')
+		body.WriteString(key)
+		body.WriteByte('>')
 		_ = xml.EscapeText(&body, []byte(args[key]))
-		body.WriteString("</" + key + ">")
+		body.WriteString("</")
+		body.WriteString(key)
+		body.WriteByte('>')
 	}
-	body.WriteString("</u:" + action + "></s:Body></s:Envelope>")
+	body.WriteString("</u:")
+	body.WriteString(action)
+	body.WriteString("></s:Body></s:Envelope>")
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.Service.URL, &body)
 	if err != nil {
 		return nil, err

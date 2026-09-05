@@ -12,7 +12,7 @@ import (
 func testPool(t *testing.T) ICEEndpointPool {
 	t.Helper()
 	var entries []Endpoint
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		entries = append(entries, Endpoint{ID: fmt.Sprint(i), URL: fmt.Sprintf("stun:node%d.test:3478", i), Region: fmt.Sprint(i % 2), FailureDomain: fmt.Sprint(i), Family: "any", Trust: "reviewed", Priority: 6 - i, Enabled: true})
 	}
 	pool, err := NewICEEndpointPool(entries)
@@ -137,7 +137,7 @@ func TestSharedCandidateVectorsAndLateReservations(t *testing.T) {
 		}
 	}
 	flood := NewCandidateBudget(12)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if !flood.Accept(fmt.Sprintf("candidate:%d 1 udp 100 192.168.1.2 %d typ host", i, 5000+i)).Accepted {
 			t.Fatal("initial LAN")
 		}
@@ -160,7 +160,7 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 	store.SetGeneration("network")
 	pool := testPool(t)
 	request := selection()
-	for i := 0; i < MaximumProfileFacts+1; i++ {
+	for i := range MaximumProfileFacts + 1 {
 		request.Sequence = uint64(i)
 		profile := SelectAttemptProfile(pool, request, GenerationFacts{})
 		store.RecordProfile(profile, true, time.Millisecond)
@@ -185,7 +185,7 @@ func TestFactStoreBoundedAndSnapshotsDetached(t *testing.T) {
 
 func TestOrthogonalFamilyAndMappedReservations(t *testing.T) {
 	budget := NewCandidateBudget(12)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		if !budget.Accept(fmt.Sprintf("candidate:1 1 udp 100 192.168.1.2 %d typ host", 5000+i)).Accepted {
 			t.Fatal("initial host")
 		}

@@ -4,6 +4,7 @@ package windowsjob
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -32,7 +33,7 @@ func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 		if len(statuses) != 2 || statuses[0].State != processowner.StatusStarted ||
 			statuses[1].Result == nil || statuses[1].Result.Reason != processowner.ReasonNatural ||
 			statuses[1].Result.ExitCode == nil || *statuses[1].Result.ExitCode != 0 {
-			t.Fatalf("natural statuses = %+v", statuses)
+			t.Fatalf("natural statuses = %s", windowsStatusesDiagnostic(statuses))
 		}
 	})
 
@@ -44,10 +45,18 @@ func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 		if len(statuses) != 2 || statuses[1].Result == nil ||
 			statuses[1].Result.Reason != processowner.ReasonDeadline ||
 			statuses[1].Result.ExitCode == nil || *statuses[1].Result.ExitCode == 0 ||
-			statuses[1].Result.CleanupError != "" {
-			t.Fatalf("deadline statuses = %+v", statuses)
+			statuses[1].Result.Error != "" || statuses[1].Result.CleanupError != "" {
+			t.Fatalf("deadline statuses = %s", windowsStatusesDiagnostic(statuses))
 		}
 	})
+}
+
+func windowsStatusesDiagnostic(statuses []processowner.Status) string {
+	encoded, err := json.Marshal(statuses)
+	if err != nil {
+		return fmt.Sprintf("encode supervisor statuses: %v", err)
+	}
+	return string(encoded)
 }
 
 func TestRunReportsSpawnFailure(t *testing.T) {
@@ -59,7 +68,7 @@ func TestRunReportsSpawnFailure(t *testing.T) {
 	}
 	if len(statuses) != 1 || statuses[0].Result == nil ||
 		statuses[0].Result.Reason != processowner.ReasonSpawnFailed || statuses[0].Result.Error == "" {
-		t.Fatalf("spawn failure statuses = %+v", statuses)
+		t.Fatalf("spawn failure statuses = %s", windowsStatusesDiagnostic(statuses))
 	}
 }
 

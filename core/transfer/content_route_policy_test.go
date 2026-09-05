@@ -25,7 +25,7 @@ func TestContentRoutePolicyCoversInitialAdditionalAndReplacementLanes(t *testing
 				}
 				return transferRecord(t, descriptor, 0), nil
 			})
-			for epoch := uint32(0); epoch < 3; epoch++ {
+			for epoch := range uint32(3) {
 				if err := lanes.Add(LaneIdentity{ID: uint32(route), Epoch: epoch}, route, lane); err != nil {
 					t.Fatal(err)
 				}

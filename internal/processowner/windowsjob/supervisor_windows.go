@@ -22,9 +22,8 @@ import (
 )
 
 const (
-	jobPollInterval           = 10 * time.Millisecond
-	jobEmptyConfirmationPolls = 5
-	forcedTerminationCode     = uint32(windows.STATUS_CONTROL_C_EXIT)
+	jobPollInterval       = 10 * time.Millisecond
+	forcedTerminationCode = uint32(windows.STATUS_CONTROL_C_EXIT)
 )
 
 type trigger struct {
@@ -375,7 +374,6 @@ func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration
 	deadline := time.Now().Add(maximum)
 	outcome := rootResult{exitCode: -1}
 	rootSettled := false
-	emptyPolls := 0
 	var active uint32
 	for {
 		if !rootSettled {
@@ -394,12 +392,16 @@ func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration
 		}
 		active = observedActive
 		if active == 0 {
-			emptyPolls++
-		} else {
-			emptyPolls = 0
-		}
-		if rootSettled && emptyPolls >= jobEmptyConfirmationPolls {
-			return outcome, nil
+			// The root may have exited between its first observation and the
+			// accounting query. Confirm its result without spending another poll.
+			if !rootSettled {
+				if observed, settled := waitRootFor(root, 0); settled {
+					outcome, rootSettled = observed, true
+				}
+			}
+			if rootSettled {
+				return outcome, nil
+			}
 		}
 		if !time.Now().Before(deadline) {
 			if !rootSettled {
@@ -407,13 +409,10 @@ func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration
 					"windows target did not signal during forced retirement",
 				))
 			}
-			if emptyPolls >= jobEmptyConfirmationPolls {
-				return outcome, nil
-			}
 			return outcome, fmt.Errorf(
-				"windows Job Object did not become stably empty during forced retirement: active_processes=%d stable_empty_polls=%d",
+				"windows Job Object did not settle during forced retirement: active_processes=%d root_settled=%t",
 				active,
-				emptyPolls,
+				rootSettled,
 			)
 		}
 		time.Sleep(jobPollInterval)
@@ -424,32 +423,26 @@ func retireJob(job windows.Handle, maximum time.Duration) error {
 	deadline := time.Now().Add(maximum)
 	var terminateErr error
 	terminationRequested := false
-	emptyPolls := 0
 	for {
 		active, err := activeProcessCount(job)
 		if err != nil {
 			return errors.Join(terminateErr, err)
 		}
+		// Unlike subreaper adoption, Windows assigns children to this private,
+		// non-breakaway job during process creation. Once its root has exited
+		// and accounting is empty, no member can create another descendant.
+		// Requiring repeated empty polls only charges scheduler delay to cleanup.
 		if active == 0 {
-			emptyPolls++
-			// Job accounting can briefly report zero while a newly inherited
-			// descendant becomes visible. A short stable-empty window keeps the
-			// terminal status causally after descendant adoption.
-			if emptyPolls >= jobEmptyConfirmationPolls {
-				return terminateErr
-			}
-		} else {
-			emptyPolls = 0
-			if !terminationRequested {
-				terminateErr = windows.TerminateJobObject(job, forcedTerminationCode)
-				terminationRequested = true
-			}
+			return terminateErr
+		}
+		if !terminationRequested {
+			terminateErr = windows.TerminateJobObject(job, forcedTerminationCode)
+			terminationRequested = true
 		}
 		if !time.Now().Before(deadline) {
 			return errors.Join(terminateErr, fmt.Errorf(
-				"windows Job Object did not become stably empty: active_processes=%d stable_empty_polls=%d",
+				"windows Job Object did not become empty: active_processes=%d",
 				active,
-				emptyPolls,
 			))
 		}
 		time.Sleep(jobPollInterval)

@@ -26,7 +26,8 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 			captured <- request
 			return provider.NewPeerConnection(config, request)
 		}})
-	defer native.Close(context.Background())
+	// The test context is canceled before cleanup joins outstanding preparations.
+	t.Cleanup(func() { _ = native.Close(context.Background()) })
 	binding := v2signal.Binding{PeerPathID: v2signal.PeerPathID{1}, AttemptID: v2signal.AttemptID{1}, AttemptSequence: 1}
 	var blockers []*provider.Connection
 	for i := byte(1); i <= nativepeer.ProcessConcurrentAttempts; i++ {
@@ -38,8 +39,7 @@ func TestProcessQueueUsesWaveTimeAndPreservesCompleteNativeCheckingOpportunity(t
 		receive(t, captured)
 	}
 	owner, _ := New(Config{Clock: clock})
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	path := &Path{owner: owner, ctx: ctx}
 	var activeUsed time.Duration
 	started := make(chan struct{})
