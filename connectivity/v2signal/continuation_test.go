@@ -9,7 +9,7 @@ import (
 )
 
 func TestOperationContinuationClassifierBindsCanonicalCandidateAndConfiguredLimit(t *testing.T) {
-	binding := Binding{
+	binding := Binding{AttemptSequence: 1,
 		PeerPathID: PeerPathID(bytes.Repeat([]byte{0x31}, IdentityBytes)),
 		AttemptID:  AttemptID(bytes.Repeat([]byte{0x32}, IdentityBytes)),
 	}
@@ -66,7 +66,7 @@ func TestOperationContinuationClassifierBindsCanonicalCandidateAndConfiguredLimi
 }
 
 func TestReceiverControlValidatorPropagatesLowerContinuationLimitAndRejectsAboveProtocol(t *testing.T) {
-	binding := Binding{
+	binding := Binding{AttemptSequence: 1,
 		PeerPathID: PeerPathID(bytes.Repeat([]byte{0x41}, IdentityBytes)),
 		AttemptID:  AttemptID(bytes.Repeat([]byte{0x42}, IdentityBytes)),
 	}
@@ -87,5 +87,28 @@ func TestReceiverControlValidatorPropagatesLowerContinuationLimitAndRejectsAbove
 	}).BeginOperationContinuation(protocolsession.MessagePeerOffer, offerBody); !tracked ||
 		!errors.Is(err, ErrContinuationLimit) {
 		t.Fatalf("above-protocol continuation limit: tracked=%v error=%v", tracked, err)
+	}
+}
+
+func TestAttemptSequenceIsCanonicalAndPartOfContinuationScope(t *testing.T) {
+	binding := testBinding()
+	original := peerContinuationScope(binding)
+	for _, sequence := range []uint64{1, 2, ^uint64(0)} {
+		binding.AttemptSequence = sequence
+		encoded, err := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		decoded, err := DecodeOffer(encoded)
+		if err != nil || decoded.Binding != binding {
+			t.Fatal(decoded, err)
+		}
+		if sequence != 1 && peerContinuationScope(binding) == original {
+			t.Fatal("sequence did not change continuation scope")
+		}
+	}
+	binding.AttemptSequence = 0
+	if _, err := EncodeOffer(Offer{Binding: binding, SDP: "v=0"}); err == nil {
+		t.Fatal("zero attempt sequence accepted")
 	}
 }

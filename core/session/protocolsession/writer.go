@@ -213,7 +213,7 @@ func (writer *SessionWriter) tryControlWithViolationHandler(
 		return SendReceipt{}, ErrMessageClass
 	}
 	if writer.policy.OutboundDirection() == DirectionSenderToReceiver &&
-		(isOperationControl(message.kind) || message.kind == MessageLaneAttach) {
+		(isOperationControl(message.kind) || message.kind == MessageLaneAttach || message.kind == MessagePeerPathControl) {
 		return SendReceipt{}, ErrSequenceBoundControl
 	}
 	item, err := prepareQueuedMessage(message, classControl)

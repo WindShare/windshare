@@ -7,6 +7,7 @@ import (
 
 func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T) {
 	eventTypes := []reflect.Type{
+		reflect.TypeFor[PlatformSetupObserved](),
 		reflect.TypeFor[Ready](), reflect.TypeFor[SharingSubjectSelected](),
 		reflect.TypeFor[RelayConnected](), reflect.TypeFor[RelayRecovering](),
 		reflect.TypeFor[ContentPathSelected](), reflect.TypeFor[Fallback](),

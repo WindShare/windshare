@@ -1,6 +1,8 @@
 package clievent
 
 type Visitor interface {
+	VisitNativeConnectivityObserved(NativeConnectivityObserved) error
+	VisitPlatformSetupObserved(PlatformSetupObserved) error
 	VisitReady(Ready) error
 	VisitSharingSubjectSelected(SharingSubjectSelected) error
 	VisitRelayConnected(RelayConnected) error

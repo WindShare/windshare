@@ -50,8 +50,8 @@ func ProjectPeerDiagnostic(value v2peer.PeerDiagnosticObservation) (clievent.Obs
 	switch value.Reason {
 	case v2peer.PeerDiagnosticStreamCapacity:
 		reason = clievent.ObserverLossStreamCapacity
-	case v2peer.PeerDiagnosticEvidenceCapacity:
-		reason = clievent.ObserverLossEvidenceCapacity
+	case v2peer.PeerDiagnosticPathCapacity:
+		reason = clievent.ObserverLossPathCapacity
 	case v2peer.PeerDiagnosticCleanupResidue:
 		reason = clievent.ObserverLossCleanupResidue
 	default:

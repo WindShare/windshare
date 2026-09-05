@@ -2,86 +2,54 @@ package v2peer
 
 import "github.com/windshare/windshare/connectivity/v2signal"
 
-type evidenceClaim struct {
-	acquired        bool
-	sessionTerminal bool
-}
+type evidenceClaim struct{ acquired, capacity bool }
 
-const (
-	senderEvidenceTerminalIdentityReserve = 1
-	minimumSessionEvidenceIdentities      = SenderMaxActivePeerAttemptsPerSession +
-		senderEvidenceTerminalIdentityReserve
-)
+const minimumPeerPaths = 1
 
-// senderEvidenceAuthority is protected by senderHandler.mu. Exact membership
-// must outlive replay tombstones, but its memory cannot. One identity is reserved
-// for the capacity terminal so ordinary claims and their terminal boundary share
-// the same session-wide ceiling.
+// The bounded watermark is per stable path, never per attempt. A new path that
+// exceeds membership cannot poison already admitted paths or the file session.
 type senderEvidenceAuthority struct {
-	maximumIdentities int
-	claims            map[v2signal.Binding]peerOperation
-	terminal          bool
-	terminalBinding   v2signal.Binding
+	maximumPaths int
+	claims       map[v2signal.Binding]peerOperation
+	latest       map[v2signal.PeerPathID]v2signal.Binding
 }
 
-func newSenderEvidenceAuthority(maximumIdentities int) senderEvidenceAuthority {
-	return senderEvidenceAuthority{
-		maximumIdentities: maximumIdentities,
-		claims: make(
-			map[v2signal.Binding]peerOperation,
-			maximumIdentities-senderEvidenceTerminalIdentityReserve,
-		),
-	}
+func newSenderEvidenceAuthority(maximumPaths int) senderEvidenceAuthority {
+	return senderEvidenceAuthority{maximumPaths: maximumPaths, claims: make(map[v2signal.Binding]peerOperation), latest: make(map[v2signal.PeerPathID]v2signal.Binding)}
 }
-
-func (authority *senderEvidenceAuthority) claim(
-	operation peerOperation,
-	binding v2signal.Binding,
-) evidenceClaim {
-	if authority == nil || binding.Validate() != nil {
+func (a *senderEvidenceAuthority) claim(operation peerOperation, binding v2signal.Binding) evidenceClaim {
+	if a == nil || binding.Validate() != nil {
 		return evidenceClaim{}
 	}
-	if _, exists := authority.claims[binding]; exists {
-		return evidenceClaim{sessionTerminal: authority.terminal}
+	previous, exists := a.latest[binding.PeerPathID]
+	if exists {
+		if binding.AttemptSequence <= previous.AttemptSequence {
+			return evidenceClaim{}
+		}
+		delete(a.claims, previous)
+	} else if len(a.latest) >= a.maximumPaths {
+		return evidenceClaim{capacity: true}
 	}
-	if authority.terminal {
-		return evidenceClaim{sessionTerminal: true}
-	}
-	if len(authority.claims)+senderEvidenceTerminalIdentityReserve < authority.maximumIdentities {
-		authority.claims[binding] = operation
-		return evidenceClaim{acquired: true}
-	}
-	authority.terminal = true
-	authority.terminalBinding = binding
-	return evidenceClaim{acquired: true, sessionTerminal: true}
+	a.latest[binding.PeerPathID] = binding
+	a.claims[binding] = operation
+	return evidenceClaim{acquired: true}
 }
-
-func (authority *senderEvidenceAuthority) claimed(binding v2signal.Binding) bool {
-	if authority == nil {
+func (a *senderEvidenceAuthority) claimed(binding v2signal.Binding) bool {
+	if a == nil {
 		return false
 	}
-	if _, exists := authority.claims[binding]; exists {
-		return true
-	}
-	return authority.terminal && authority.terminalBinding == binding
+	latest, exists := a.latest[binding.PeerPathID]
+	return exists && binding.AttemptSequence <= latest.AttemptSequence
 }
-
-func (authority *senderEvidenceAuthority) reset() {
-	if authority == nil {
-		return
+func (a *senderEvidenceAuthority) reset() {
+	if a != nil {
+		clear(a.claims)
+		clear(a.latest)
 	}
-	clear(authority.claims)
-	authority.terminal = false
-	authority.terminalBinding = v2signal.Binding{}
 }
-
-func (authority *senderEvidenceAuthority) retainedIdentityCount() int {
-	if authority == nil {
+func (a *senderEvidenceAuthority) retainedIdentityCount() int {
+	if a == nil {
 		return 0
 	}
-	count := len(authority.claims)
-	if authority.terminal {
-		count++
-	}
-	return count
+	return len(a.latest)
 }

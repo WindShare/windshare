@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer"
 	"strings"
 	"sync"
 	"testing"
@@ -167,7 +168,7 @@ func TestTerminalCallbacksCanReenterNonblockingStopInitiation(t *testing.T) {
 				err     error
 			}{runtime: runtime, err: err}
 		}()
-		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -418,7 +419,7 @@ func TestSenderFactoryStopWaitsForContextIgnoringTerminalTransport(t *testing.T)
 				err     error
 			}{runtime: runtime, err: err}
 		}()
-		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+		receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -489,7 +490,7 @@ func TestSenderFactoryStopTreatsTransportRetirementBeforePhysicalAdmissionAsNatu
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -566,7 +567,7 @@ func TestSenderFactoryStopTreatsLastLaneDetachBeforeTerminalAdmissionAsComplete(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -657,7 +658,7 @@ func TestSenderFactoryStopPropagatesAcceptedTerminalDeliveryFailure(t *testing.T
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}

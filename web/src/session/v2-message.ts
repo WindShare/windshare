@@ -1,3 +1,4 @@
+import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
 import { concatBytes, equalBytes } from '../crypto/bytes'
 import { verifyEd25519Signature } from '../crypto/curve25519'
 import { sha256 } from '../crypto/digest'
@@ -34,6 +35,7 @@ export const V2_MESSAGE_KIND = Object.freeze({
   peerOffer: 16,
   peerAnswer: 17,
   peerCandidate: 18,
+  peerPathControl: 19,
 } as const)
 
 export const V2_PEER_OPERATION_CODE = Object.freeze({
@@ -41,6 +43,13 @@ export const V2_PEER_OPERATION_CODE = Object.freeze({
   timeout: 0x5002,
   candidates: 0x5003,
   admission: 0x5004,
+  ice: 0x5005,
+  stun: 0x5006,
+  transport: 0x5007,
+  dtls: 0x5008,
+  policy: 0x5009,
+  authentication: 0x500a,
+  sessionInvariant: 0x500b,
 } as const)
 
 export type V2MessageKind = (typeof V2_MESSAGE_KIND)[keyof typeof V2_MESSAGE_KIND]
@@ -66,6 +75,7 @@ const CONTROL_DOMAIN = Object.freeze({
   operation: 'windshare/v2 control/operation',
   terminal: 'windshare/v2 control/session-terminal',
   lane: 'windshare/v2 control/lane-attach',
+  peerPath: 'windshare/v2 control/peer-path',
 })
 
 export interface V2SessionMessage {
@@ -191,7 +201,14 @@ export interface V2ScanProgress {
   readonly discoveredEntries: bigint
 }
 
+export interface V2PeerAttemptBinding {
+  readonly peerPathId: Uint8Array<ArrayBuffer>
+  readonly attemptId: Uint8Array<ArrayBuffer>
+  readonly attemptSequence: bigint
+}
+
 export interface V2OperationErrorControl {
+  readonly peerAttempt: V2PeerAttemptBinding | undefined
   readonly scope: 'directory' | 'revision' | 'block' | 'peer'
   readonly code: number
   readonly retryable: boolean
@@ -200,12 +217,14 @@ export interface V2OperationErrorControl {
 }
 
 export function decodeV2OperationErrorControl(body: Uint8Array): V2OperationErrorControl {
-  const fields = requireNumericMap(
-    decodeCanonicalCbor(body, MAXIMUM_PLAINTEXT_BYTES, 'operation error'),
-    [0, 1, 2, 3, 4, 5],
-    'operation error',
-  )
-  requireSchema(fields.get(0), 'operation error')
+  const decoded = decodeCanonicalCbor(body, MAXIMUM_PLAINTEXT_BYTES, 'operation error')
+  const peer = decoded instanceof Map && requireUnsigned(decoded.get(1), 'operation error scope') === 5n
+  const fields = requireNumericMap(decoded, peer ? [0, 1, 2, 3, 4, 5, 6] : [0, 1, 2, 3, 4, 5], 'operation error')
+  if (peer) {
+    if (requireUnsigned(fields.get(0), 'peer operation error schema') !== 2n) throw new V2MessageError('Invalid peer operation error schema')
+  } else {
+    requireSchema(fields.get(0), 'operation error')
+  }
   const scope = operationErrorScope(requireUnsigned(fields.get(1), 'operation error scope'))
   const codeValue = requireUnsigned(fields.get(2), 'operation error code')
   const [lower, upper] = operationErrorCodeRange(scope)
@@ -218,7 +237,20 @@ export function decodeV2OperationErrorControl(body: Uint8Array): V2OperationErro
   }
   const retryAfterMilliseconds = operationRetryDelay(retryable, fields.get(4))
   const message = requireBoundedMessage(fields.get(5), 'operation error message')
-  return Object.freeze({ scope, code: Number(codeValue), retryable, retryAfterMilliseconds, message })
+  const peerAttempt = peer ? decodeErrorPeerAttempt(fields.get(6)) : undefined
+  return Object.freeze({ scope, code: Number(codeValue), retryable, retryAfterMilliseconds, message, peerAttempt })
+}
+
+function decodeErrorPeerAttempt(value: unknown): V2PeerAttemptBinding {
+  const fields = requireArray(value, 3, 'peer operation error binding')
+  if (fields.length !== 3) throw new V2MessageError('Invalid peer operation error binding')
+  const attemptSequence = requireUnsigned(fields[2], 'peer attempt sequence')
+  if (attemptSequence === 0n || attemptSequence > 0xffffffffffffffffn) throw new V2MessageError('Invalid peer attempt sequence')
+  return Object.freeze({
+    peerPathId: requireBytes(fields[0], 16, 'peer path ID', true),
+    attemptId: requireBytes(fields[1], 16, 'peer attempt ID', true),
+    attemptSequence,
+  })
 }
 
 function operationErrorScope(value: bigint): V2OperationErrorControl['scope'] {
@@ -247,7 +279,7 @@ function operationErrorCodeRange(
     case 'block':
       return [0x4001n, 0x4006n]
     case 'peer':
-      return [BigInt(V2_PEER_OPERATION_CODE.negotiation), BigInt(V2_PEER_OPERATION_CODE.admission)]
+      return [0x5000n, 0x5fffn]
   }
 }
 
@@ -345,6 +377,8 @@ async function controlPreimage(
 
 function controlDomain(kind: V2MessageKind): string {
   switch (kind) {
+    case V2_MESSAGE_KIND.peerPathControl:
+      return CONTROL_DOMAIN.peerPath
     case V2_MESSAGE_KIND.sessionTerminal:
       return CONTROL_DOMAIN.terminal
     case V2_MESSAGE_KIND.laneAttach:
@@ -373,6 +407,9 @@ export function validateV2SenderControlBody(kind: V2MessageKind, body: Uint8Arra
       return
     case V2_MESSAGE_KIND.operationError:
       decodeV2OperationErrorControl(body)
+      return
+    case V2_MESSAGE_KIND.peerPathControl:
+      decodeV2PeerPathControl(body)
       return
     case V2_MESSAGE_KIND.sessionTerminal:
       validateSessionTerminal(body)
@@ -500,18 +537,18 @@ function validateLeaseTiming(ttlValue: unknown, renewValue: unknown, label: stri
 }
 
 function validatePeerAnswer(body: Uint8Array): void {
-  const fields = requireExactArray(body, 4, 'peer answer')
+  const fields = requireExactArray(body, 5, 'peer answer')
   validatePeerBinding(fields, 'peer answer')
-  requireNormalizedText(fields[3], MAXIMUM_SIGNALING_SDP_BYTES, false, 'peer answer SDP')
+  requireNormalizedText(fields[4], MAXIMUM_SIGNALING_SDP_BYTES, false, 'peer answer SDP')
 }
 
 function validatePeerCandidate(body: Uint8Array): void {
-  const fields = requireExactArray(body, 7, 'peer candidate')
+  const fields = requireExactArray(body, 8, 'peer candidate')
   validatePeerBinding(fields, 'peer candidate')
-  requireNormalizedText(fields[3], MAXIMUM_SIGNALING_CANDIDATE_BYTES, false, 'ICE candidate')
-  requireOptionalNormalizedText(fields[4], MAXIMUM_SIGNALING_TEXT_BYTES, 'SDP mid')
-  if (fields[5] !== null) requireUint16(fields[5], 'SDP m-line index')
-  requireOptionalNormalizedText(fields[6], MAXIMUM_SIGNALING_TEXT_BYTES, 'ICE username fragment')
+  requireNormalizedText(fields[4], MAXIMUM_SIGNALING_CANDIDATE_BYTES, false, 'ICE candidate')
+  requireOptionalNormalizedText(fields[5], MAXIMUM_SIGNALING_TEXT_BYTES, 'SDP mid')
+  if (fields[6] !== null) requireUint16(fields[6], 'SDP m-line index')
+  requireOptionalNormalizedText(fields[7], MAXIMUM_SIGNALING_TEXT_BYTES, 'ICE username fragment')
 }
 
 function requireExactArray(body: Uint8Array, length: number, label: string): readonly unknown[] {
@@ -521,7 +558,13 @@ function requireExactArray(body: Uint8Array, length: number, label: string): rea
 }
 
 function validatePeerBinding(fields: readonly unknown[], label: string): void {
-  requireSchema(fields[0], label)
+  if (requireUnsigned(fields[0], label) !== 2n) {
+    throw new V2MessageError('invalid peer schema')
+  }
+  const sequence = requireUnsigned(fields[3], 'attempt sequence')
+  if (sequence === 0n || sequence > 0xffffffffffffffffn) {
+    throw new V2MessageError('invalid attempt sequence')
+  }
   requireBytes(fields[1], 16, `${label} peer path ID`, true)
   requireBytes(fields[2], 16, `${label} attempt ID`, true)
 }
@@ -596,8 +639,8 @@ function requireSchema(value: unknown, label: string): void {
 }
 
 function requireMessageIdentity(kind: V2MessageKind, operationId: Uint8Array | undefined): void {
-  if (kind < 1 || kind > 18) throw new V2MessageError('Message kind is outside the wire registry')
-  if (kind === V2_MESSAGE_KIND.sessionTerminal) {
+  if (kind < 1 || kind > 19) throw new V2MessageError('Message kind is outside the wire registry')
+  if (kind === V2_MESSAGE_KIND.sessionTerminal || kind === V2_MESSAGE_KIND.peerPathControl) {
     if (operationId !== undefined) throw new V2MessageError('Session terminal has an operation ID')
     return
   }
@@ -628,5 +671,25 @@ export function encodeV2Body(value: unknown): Uint8Array<ArrayBuffer> {
   } catch (cause) {
     if (cause instanceof V2CborError) throw cause
     throw new V2MessageError('Unable to encode operation body', { cause })
+  }
+}
+
+export type PeerFailureRecoveryScope = 'attempt-transient' | 'path-terminal' | 'session-terminal'
+
+// Only closed typed reasons grant recovery or session authority.
+export function peerFailureScope(code: number): PeerFailureRecoveryScope {
+  switch (code) {
+    case V2_PEER_OPERATION_CODE.negotiation:
+    case V2_PEER_OPERATION_CODE.timeout:
+    case V2_PEER_OPERATION_CODE.ice:
+    case V2_PEER_OPERATION_CODE.stun:
+    case V2_PEER_OPERATION_CODE.transport:
+    case V2_PEER_OPERATION_CODE.dtls:
+      return 'attempt-transient'
+    case V2_PEER_OPERATION_CODE.authentication:
+    case V2_PEER_OPERATION_CODE.sessionInvariant:
+      return 'session-terminal'
+    default:
+      return 'path-terminal'
   }
 }

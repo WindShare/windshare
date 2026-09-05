@@ -3,12 +3,7 @@ package cli
 import (
 	"errors"
 	"sync"
-	"time"
-
-	"github.com/windshare/windshare/core/transfer"
 )
-
-const receiverRelayAdmissionWindow = 8 * time.Second
 
 var (
 	ErrInvalidReceiverAdmission      = errors.New("receiver content admission signal is invalid")
@@ -31,7 +26,6 @@ type receiverContentSuspension interface {
 }
 
 type receiverContentAdmission interface {
-	ObserveConnectionSize(transfer.ConnectionSizeClass) error
 	ObservePeer(receiverPeerSignal) error
 	AdmitRelayOnly() error
 	Decision() <-chan receiverAdmissionDecision
@@ -53,11 +47,9 @@ const (
 type receiverAdmissionTrigger string
 
 const (
-	receiverAdmissionTriggerDeadline        receiverAdmissionTrigger = "deadline"
-	receiverAdmissionTriggerConnectionSmall receiverAdmissionTrigger = "small_connection_size"
-	receiverAdmissionTriggerPeerFailed      receiverAdmissionTrigger = "peer_failed"
-	receiverAdmissionTriggerPeerDetached    receiverAdmissionTrigger = "peer_detached"
-	receiverAdmissionTriggerRelayOnly       receiverAdmissionTrigger = "relay_only_policy"
+	receiverAdmissionTriggerPeerFailed   receiverAdmissionTrigger = "peer_failed"
+	receiverAdmissionTriggerPeerDetached receiverAdmissionTrigger = "peer_detached"
+	receiverAdmissionTriggerRelayOnly    receiverAdmissionTrigger = "relay_only_policy"
 )
 
 type receiverAdmissionTerminalOwner string
@@ -91,41 +83,11 @@ type receiverAdmissionDecision struct {
 	TerminalOwner receiverAdmissionTerminalOwner
 }
 
-type receiverAdmissionTimer interface {
-	C() <-chan time.Time
-	Stop() bool
-}
-
-type receiverAdmissionClock interface {
-	Now() time.Time
-	NewTimer(time.Duration) receiverAdmissionTimer
-}
-
-type wallReceiverAdmissionClock struct{}
-
-func (wallReceiverAdmissionClock) Now() time.Time { return time.Now() }
-func (wallReceiverAdmissionClock) NewTimer(delay time.Duration) receiverAdmissionTimer {
-	return wallReceiverAdmissionTimer{Timer: time.NewTimer(delay)}
-}
-
-type wallReceiverAdmissionTimer struct{ *time.Timer }
-
-func (timer wallReceiverAdmissionTimer) C() <-chan time.Time { return timer.Timer.C }
-
-func (a *App) admissionClock() receiverAdmissionClock {
-	if a.receiverClock != nil {
-		return a.receiverClock
-	}
-	return wallReceiverAdmissionClock{}
-}
-
 type relayContentAdmission struct {
 	relay receiverContentSuspension
-	timer receiverAdmissionTimer
 	exec  receiverAdmissionExecution
 
 	done         chan struct{}
-	finished     chan struct{}
 	decisions    chan receiverAdmissionDecision
 	decisionDone chan struct{}
 	closeOnce    sync.Once
@@ -140,14 +102,12 @@ type relayContentAdmission struct {
 
 func newReceiverContentAdmissionWithExecution(
 	mode receiverRelayContentMode,
-	downloadT0 time.Time,
-	clock receiverAdmissionClock,
 	relay receiverContentSuspension,
 	execution receiverAdmissionExecution,
 ) (receiverContentAdmission, error) {
 	switch mode {
-	case receiverRelayContentImmediate, receiverRelayContentAdaptive:
-		return newRelayContentAdmissionWithExecution(downloadT0, clock, relay, execution)
+	case receiverRelayContentImmediate:
+		return newRelayContentAdmissionWithExecution(relay, execution)
 	case receiverRelayContentProhibited:
 		return newP2POnlyContentAdmission(relay)
 	default:
@@ -156,65 +116,26 @@ func newReceiverContentAdmissionWithExecution(
 }
 
 func newRelayContentAdmission(
-	downloadT0 time.Time,
-	clock receiverAdmissionClock,
 	relay receiverContentSuspension,
 ) (*relayContentAdmission, error) {
 	return newRelayContentAdmissionWithExecution(
-		downloadT0,
-		clock,
 		relay,
 		receiverAdmissionExecution{},
 	)
 }
 
 func newRelayContentAdmissionWithExecution(
-	downloadT0 time.Time,
-	clock receiverAdmissionClock,
 	relay receiverContentSuspension,
 	execution receiverAdmissionExecution,
 ) (*relayContentAdmission, error) {
-	if downloadT0.IsZero() || clock == nil || relay == nil {
+	if relay == nil {
 		return nil, ErrInvalidReceiverAdmission
 	}
-	delay := max(downloadT0.Add(receiverRelayAdmissionWindow).Sub(clock.Now()), 0)
-	timer := clock.NewTimer(delay)
-	if timer == nil || timer.C() == nil {
-		// Timer construction is part of admission setup. Roll back the suspension
-		// so a broken injected clock cannot strand every subsequent content fetch.
-		return nil, errors.Join(ErrInvalidReceiverAdmission, resumeReceiverContent(relay))
-	}
-	admission := &relayContentAdmission{
-		relay: relay, timer: timer, exec: execution,
-		done: make(chan struct{}), finished: make(chan struct{}),
-		decisions:     make(chan receiverAdmissionDecision, 1),
-		decisionDone:  make(chan struct{}),
+	return &relayContentAdmission{
+		relay: relay, exec: execution, done: make(chan struct{}),
+		decisions: make(chan receiverAdmissionDecision, 1), decisionDone: make(chan struct{}),
 		terminalOwner: receiverAdmissionTerminalNone,
-	}
-	go admission.runDeadline()
-	return admission, nil
-}
-
-func (admission *relayContentAdmission) runDeadline() {
-	defer close(admission.finished)
-	select {
-	case <-admission.done:
-		return
-	case <-admission.timer.C():
-		admission.beginDecision(receiverAdmissionTriggerDeadline)
-	}
-}
-
-func (admission *relayContentAdmission) ObserveConnectionSize(size transfer.ConnectionSizeClass) error {
-	switch size {
-	case transfer.ConnectionSizeSmall:
-		admission.beginDecision(receiverAdmissionTriggerConnectionSmall)
-		return nil
-	case transfer.ConnectionSizeUnknown, transfer.ConnectionSizeLarge:
-		return nil
-	default:
-		return ErrInvalidReceiverAdmission
-	}
+	}, nil
 }
 
 func (admission *relayContentAdmission) AdmitRelayOnly() error {
@@ -400,9 +321,7 @@ func (admission *relayContentAdmission) close(owner receiverAdmissionTerminalOwn
 		case receiverAdmissionRevoked:
 		}
 		admission.mu.Unlock()
-		admission.timer.Stop()
 		close(admission.done)
-		<-admission.finished
 		if joinableWorkerDone != nil {
 			// Revoked workers cannot call external code, so joining them here makes
 			// Close leak-free without risking a Resume reentrancy deadlock. A
@@ -442,17 +361,6 @@ func newP2POnlyContentAdmission(
 		decisions: make(chan receiverAdmissionDecision, 1),
 	}
 	return admission, nil
-}
-
-func (admission *p2pOnlyContentAdmission) ObserveConnectionSize(
-	size transfer.ConnectionSizeClass,
-) error {
-	switch size {
-	case transfer.ConnectionSizeUnknown, transfer.ConnectionSizeSmall, transfer.ConnectionSizeLarge:
-		return nil
-	default:
-		return ErrInvalidReceiverAdmission
-	}
 }
 
 func (admission *p2pOnlyContentAdmission) ObservePeer(signal receiverPeerSignal) error {

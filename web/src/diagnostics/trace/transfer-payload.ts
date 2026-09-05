@@ -1,3 +1,16 @@
+export interface DownloadConnectivitySnapshot {
+  readonly download_id: string
+  readonly first_direct_elapsed_ms: number | null
+  readonly direct_bytes: string
+  readonly turn_bytes: string
+  readonly application_relay_bytes: string
+  readonly unknown_bytes: string
+  readonly direct_fraction: number | null
+  readonly fallback_stall_ms: number
+  readonly incomplete: boolean
+  readonly final: boolean
+}
+
 export type CapacityWaitTransitionPayloadV1 = Readonly<{
   transition:
     | 'capacity_retry_scheduled'

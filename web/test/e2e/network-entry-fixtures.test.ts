@@ -44,7 +44,7 @@ describe('direct weekly network fixtures', () => {
     const log = new NetworkEventLog()
     log.accept({
       kind: 'dispatch',
-      observation: { dispatchSequence: 7, laneId: 1, laneEpoch: 1, route: 'relay' },
+      observation: { dispatchSequence: 7, laneId: 1, laneEpoch: 1, route: 'application-relay' },
     })
     await expect(log.waitFor(
       'dispatch',
@@ -54,15 +54,15 @@ describe('direct weekly network fixtures', () => {
 
     const admitted = log.waitFor(
       'lane-admitted',
-      (event) => event.observation.route === 'peer',
+      (event) => event.observation.route === 'direct',
       'peer admission',
     )
     log.accept({
       kind: 'lane-admitted',
-      observation: { laneId: 2, laneEpoch: 3, route: 'peer' },
+      observation: { laneId: 2, laneEpoch: 3, route: 'direct' },
     })
     await expect(admitted).resolves.toMatchObject({
-      observation: { laneId: 2, laneEpoch: 3, route: 'peer' },
+      observation: { laneId: 2, laneEpoch: 3, route: 'direct' },
     })
     expect(log.latestDispatchSequence()).toBe(7)
     expect(log.snapshot()).toHaveLength(2)

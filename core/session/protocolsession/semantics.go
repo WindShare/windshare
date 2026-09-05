@@ -151,6 +151,8 @@ func validateSenderControlSemantic(
 		_, err = DecodeOperationFailure(semantic)
 	case MessageScanProgress:
 		_, err = DecodeScanProgress(semantic)
+	case MessagePeerPathControl:
+		_, err = DecodePeerPathControl(semantic)
 	case MessageSessionTerminal:
 		_, err = DecodeSessionTerminal(semantic)
 	default:

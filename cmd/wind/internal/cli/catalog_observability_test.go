@@ -33,7 +33,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 	prepared, code := (&App{revisionCapacity: newTestRevisionCapacity(t)}).prepareShareSender(
 		context.Background(),
 		shareRequest{
-			paths: []string{sharedPath}, relayURL: DefaultRelayURL, chunkSize: catalog.MinChunkSize,
+			paths: []string{sharedPath}, relayURLs: []string{DefaultRelayURL}, chunkSize: catalog.MinChunkSize,
 		},
 		newSystemCommandClock(time.Now),
 		emitter,

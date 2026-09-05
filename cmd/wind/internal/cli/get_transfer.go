@@ -3,6 +3,9 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"path/filepath"
 	"time"
 
@@ -15,6 +18,8 @@ import (
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
+	"github.com/windshare/windshare/internal/testrun"
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
@@ -26,11 +31,11 @@ var (
 )
 
 type getOutputPreparation struct {
-	authority   getOutputAuthority
-	mode        getOutputMode
-	displayRoot string
-	clock       receiverAdmissionClock
-	startedAt   time.Time
+	contentReady chan struct{}
+	paths        *receiverContentPaths
+	authority    getOutputAuthority
+	mode         getOutputMode
+	displayRoot  string
 }
 
 func (a *App) prepareGetOutput(
@@ -42,11 +47,9 @@ func (a *App) prepareGetOutput(
 	if err != nil {
 		return getOutputPreparation{}, observation.commandFailure(ExitFailure, err)
 	}
-	clock := a.admissionClock()
 	// Starting the command certifies the caller-provided container. The operation
 	// identity is resolved later, after selection is frozen, so a repeated command
 	// can reopen exactly one compatible owned reservation.
-	startedAt := clock.Now()
 	factory := a.getOutputFactory
 	if factory == nil {
 		factory = getOutputAuthorityFactoryFunc(newFilesystemGetOutputAuthority)
@@ -65,11 +68,12 @@ func (a *App) prepareGetOutput(
 	}
 	return getOutputPreparation{
 		authority: authority, mode: mode, displayRoot: outputRoot,
-		clock: clock, startedAt: startedAt,
+		contentReady: make(chan struct{}), paths: newReceiverContentPaths(observation),
 	}, ExitOK
 }
 
 type getReceiverSession struct {
+	relays     *relayset.Receiver
 	connection *relayv2.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
 	runtime    *sessionruntime.ReceiverRuntime
@@ -77,6 +81,10 @@ type getReceiverSession struct {
 
 func (session *getReceiverSession) Close() {
 	if session == nil {
+		return
+	}
+	if session.relays != nil {
+		session.relays.Close()
 		return
 	}
 	if session.runtime != nil {
@@ -93,38 +101,54 @@ func (session *getReceiverSession) Close() {
 func (a *App) connectGetReceiver(
 	ctx context.Context,
 	capability link.Link,
+	policy ConnectivityPolicy,
 	observation getObservation,
 ) (*getReceiverSession, int) {
-	connection, code := a.dialV2Receiver(ctx, capability, observation)
-	if code != ExitOK {
-		return nil, code
-	}
-	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{
-		Capability: capability, DescriptorObject: connection.Descriptor(),
-		PeerControls:                      v2signal.ReceiverControlValidator{},
-		ProtocolTracer:                    observation.protocolTracer(),
-		LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
-	})
+	session, err := a.openGetReceiver(ctx, capability, policy, observation)
 	if err != nil {
-		_ = connection.Close()
-		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureCapabilityInvalid)
-	}
-	runtime, err := prepared.Connect(ctx, connection.Channel())
-	if err != nil {
-		prepared.Close()
-		_ = connection.Close()
-		if ctx.Err() != nil {
-			return nil, observation.commandFailure(ExitFailure, ctx.Err())
-		}
 		return nil, observation.commandFailure(ExitNetwork, err)
 	}
+	return session, ExitOK
+}
+
+func (a *App) openGetReceiver(ctx context.Context, capability link.Link, policy ConnectivityPolicy, observation getObservation, join ...context.Context) (*getReceiverSession, error) {
+	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
+		Dial: a.receiverDial,
+		Receiver: liveshare.ReceiverConfig{
+			Capability: capability, ContentRoutePolicy: receiverRoutePolicy(policy),
+			PeerControls: v2signal.ReceiverControlValidator{}, ProtocolTracer: observation.protocolTracer(),
+			LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
+		},
+		DialOptions: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
+		Connected: func(connection *relayv2.ReceiverConnection) {
+			observation.registerRelayConnection(connection)
+			observation.relayConnected(connection.Endpoint())
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
+	wait := ctx
+	if len(join) != 0 {
+		wait = join[0]
+	}
+	runtime, connection, err := set.WaitReady(wait)
+	if err != nil {
+		set.Close()
+		var rejection *relayv2.RelayError
+		var joined *relayset.ReceiverJoinFailure
+		if errors.As(err, &joined) && len(joined.RetryEndpoints()) == 0 && errors.As(err, &rejection) && rejection.Code == v2.ErrorStopped {
+			a.recordProcessTrace(processTraceGetComponent, processTraceReceiverJoinStopped, testrun.OutcomeFailed)
+		}
+		return nil, err
+	}
 	observation.registerLaneSet(runtime.LaneSet())
-	return &getReceiverSession{
-		connection: connection, prepared: prepared, runtime: runtime,
-	}, ExitOK
+	return &getReceiverSession{relays: set, connection: connection, runtime: runtime}, nil
 }
 
 type getTransferExecution struct {
+	contentReady        chan struct{}
+	paths               *receiverContentPaths
 	runtime             *sessionruntime.ReceiverRuntime
 	admission           receiverContentAdmission
 	monitorDone         <-chan struct{}
@@ -136,6 +160,12 @@ type getTransferExecution struct {
 	job                 *transfer.TransferJob
 	settled             bool
 	closed              bool
+}
+
+func (execution *getTransferExecution) inheritTransfer(previous *getTransferExecution) {
+	execution.job = previous.job
+	execution.destination = previous.destination
+	execution.destinationAdjusted = previous.destinationAdjusted
 }
 
 func (execution *getTransferExecution) Close() {
@@ -163,13 +193,7 @@ func (execution *getTransferExecution) SettleAdmission() {
 	<-execution.monitorDone
 }
 
-func (a *App) prepareGetTransfer(
-	ctx context.Context,
-	request getRequest,
-	output getOutputPreparation,
-	runtime *sessionruntime.ReceiverRuntime,
-	observation getObservation,
-) (*getTransferExecution, int) {
+func (a *App) prepareGetConnectivity(ctx context.Context, request getRequest, output getOutputPreparation, runtime *sessionruntime.ReceiverRuntime, observation getObservation, options receiverPeerOptions) (*getTransferExecution, int) {
 	connectivity, err := request.connectivity.receiverPlan()
 	if err != nil {
 		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureInvalidInput)
@@ -181,12 +205,16 @@ func (a *App) prepareGetTransfer(
 	if err != nil {
 		return nil, observation.commandFailure(ExitFailure, err)
 	}
-	contentReady := make(chan struct{})
-	paths := newReceiverContentPaths(observation)
+	contentReady := output.contentReady
+	if contentReady == nil {
+		contentReady = make(chan struct{})
+	}
+	paths := output.paths
+	if paths == nil {
+		paths = newReceiverContentPaths(observation)
+	}
 	admission, err := newReceiverContentAdmissionWithExecution(
 		connectivity.relayContent,
-		output.startedAt,
-		output.clock,
 		relaySuspension,
 		receiverAdmissionExecution{
 			claimGate: contentReady,
@@ -200,22 +228,27 @@ func (a *App) prepareGetTransfer(
 	}
 	localStop := &receiverLocalStop{}
 	execution := &getTransferExecution{
-		runtime: runtime, admission: admission,
+		runtime: runtime, admission: admission, contentReady: contentReady, paths: paths,
 		monitorDone: a.monitorReceiverAdmission(admission, runtime, observation, localStop),
 		localStop:   localStop,
 	}
 	observePeer := func(signal receiverPeerSignal) {
-		paths.observePeer(signal)
 		if observeErr := admission.ObservePeer(signal); observeErr != nil {
 			observation.warning(observeErr)
 			localStop.record(clievent.ReceiverLocalStopOutputAdmission)
 			runtime.Close()
 		}
 	}
-	peer, rules, err := beginReceiverPlanning(
+	peer, _, err := beginReceiverPlanning(
 		connectivity,
 		func() *activeReceiverPeer {
-			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop)
+			options.demand = peerset.BrowseDemand
+			select {
+			case <-contentReady:
+				options.demand = peerset.ContentDemand
+			default:
+			}
+			return a.startReceiverPeer(ctx, runtime, observation, observePeer, localStop, connectivity.peer, options)
 		},
 		admission.AdmitRelayOnly,
 		func() (transfer.SelectionRules, error) { return selectionRules(request.only) },
@@ -231,12 +264,26 @@ func (a *App) prepareGetTransfer(
 		execution.CloseWithReason(clievent.ReceiverLocalStopCaller)
 		return nil, ExitUsage
 	}
+	return execution, ExitOK
+}
+
+type getTransferDependencies interface {
+	getShapeResolver
+	NewTransferJob(transfer.ReceiveIntent, transfer.TransferJobID, transfer.DirectTreeMaterializer, transfer.TransferLifecycleTracer) (*transfer.TransferJob, error)
+}
+
+func (a *App) finishGetTransfer(ctx context.Context, request getRequest, output getOutputPreparation, dependencies getTransferDependencies, execution *getTransferExecution, observation getObservation) (*getTransferExecution, int) {
+	rules, err := selectionRules(request.only)
+	if err != nil {
+		execution.Close()
+		return nil, observation.commandFailure(ExitUsage, err)
+	}
 	job, operation, destination, adjusted, code := a.buildGetTransferJob(
-		ctx, runtime, output, rules, observation,
+		ctx, execution.runtime, output, rules, observation, dependencies,
 	)
 	if code != ExitOK {
 		execution.CloseWithReason(clievent.ReceiverLocalStopOutputAdmission)
-		if errors.Is(admission.Err(), errReceiverP2PPathUnavailable) {
+		if errors.Is(execution.admission.Err(), errReceiverP2PPathUnavailable) {
 			return nil, ExitNetwork
 		}
 		return nil, code
@@ -251,7 +298,11 @@ func (a *App) prepareGetTransfer(
 	// Lane timing may queue relay admission while shape and destination authority
 	// are being resolved. Releasing this separate gate only after the immutable
 	// operation and job exist prevents any content request from outrunning them.
-	close(contentReady)
+	if observation.state != nil && observation.state.downloadMetrics != nil {
+		observation.state.downloadMetrics.Activate(fmt.Sprintf("%x", job.JobID().Bytes()))
+	}
+	close(execution.contentReady)
+	execution.peer.SetDemand(peerset.ContentDemand)
 	return execution, ExitOK
 }
 
@@ -261,6 +312,7 @@ func (a *App) buildGetTransferJob(
 	output getOutputPreparation,
 	rules transfer.SelectionRules,
 	observation getObservation,
+	overrides ...getTransferDependencies,
 ) (*transfer.TransferJob, getOutputOperation, string, bool, int) {
 	selection, err := transfer.NewSelectionSpec(
 		runtime.Descriptor().ShareInstance(), runtime.Descriptor().SyntheticRoot(), rules,
@@ -268,7 +320,11 @@ func (a *App) buildGetTransferJob(
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, observation.commandFailure(ExitFailure, err)
 	}
-	admission, err := resolveGetOutputOperation(ctx, output.authority, runtime, selection)
+	var dependencies getTransferDependencies = runtime
+	if len(overrides) != 0 {
+		dependencies = overrides[0]
+	}
+	admission, err := resolveGetOutputOperation(ctx, output.authority, dependencies, selection)
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, reportGetOutputAdmissionFailure(observation, err)
 	}
@@ -284,7 +340,7 @@ func (a *App) buildGetTransferJob(
 	if err != nil {
 		return nil, getOutputOperation{}, "", false, observation.commandFailure(ExitFailure, err)
 	}
-	job, err := runtime.NewTransferJob(
+	job, err := dependencies.NewTransferJob(
 		admission.operation.intent,
 		jobID,
 		getOperationMaterializer{authority: output.authority, operation: admission.operation},
@@ -402,5 +458,41 @@ func reportGetOutputAdmissionFailure(observation getObservation, err error) int 
 		return observation.commandFailureCode(ExitFailure, clievent.FailureOutputContract)
 	default:
 		return observation.commandFailure(ExitFailure, err)
+	}
+}
+func receiverRoutePolicy(policy ConnectivityPolicy) transfer.ContentRoutePolicy {
+	switch policy {
+	case ConnectivityP2POnly:
+		return transfer.ContentRouteDirectOnly
+	case ConnectivityRelayOnly:
+		return transfer.ContentRouteRelayOnly
+	default:
+		return transfer.ContentRouteAll
+	}
+}
+
+func (a *App) recoverGetReceiver(ctx context.Context, request getRequest, observation getObservation) (*getReceiverSession, error) {
+	lifetime, cancel := context.WithTimeout(ctx, getSessionRecoveryWindow)
+	defer cancel()
+	for {
+		session, err := a.openGetReceiver(ctx, request.link, request.connectivity, observation, lifetime)
+		if err == nil {
+			return session, nil
+		}
+		var joinFailure *relayset.ReceiverJoinFailure
+		if !errors.As(err, &joinFailure) {
+			return nil, err
+		}
+		request.link.Relays = joinFailure.RetryEndpoints()
+		if len(request.link.Relays) == 0 {
+			return nil, err
+		}
+		timer := time.NewTimer(getRelayStartingRetryDelay)
+		select {
+		case <-lifetime.Done():
+			timer.Stop()
+			return nil, errors.Join(err, lifetime.Err())
+		case <-timer.C:
+		}
 	}
 }

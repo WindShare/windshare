@@ -77,6 +77,7 @@ describe('incident frozen contracts', () => {
       'peer_offer',
       'peer_answer',
       'peer_candidate',
+      'peer_path_control',
     ])
     expect(PROTOCOL_REQUEST_KINDS_V1).toEqual([
       'list_children',

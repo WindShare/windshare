@@ -114,6 +114,7 @@ func (table *OperationTable) CancelGeneration(generation OperationGeneration) er
 	if len(table.tombstones) >= table.limits.MaxTombstones {
 		return ErrTombstoneBudget
 	}
+	table.retirePeerAttemptLocked(generation.authority)
 	delete(table.active, operationID)
 	clearContinuationReplayLocked(generation.authority)
 	table.tombstones[operationID] = operationTombstone{

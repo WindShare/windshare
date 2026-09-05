@@ -299,8 +299,19 @@ func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.Protoc
 	return nil
 }
 
+func (eventVisitor) VisitNativeConnectivityObserved(clievent.NativeConnectivityObserved) error {
+	return nil
+}
+
 func (eventVisitor) VisitLaneSettlementObserved(clievent.LaneSettlementObserved) error { return nil }
 func (eventVisitor) VisitObserverLossObserved(clievent.ObserverLossObserved) error     { return nil }
+
+func (visitor eventVisitor) VisitPlatformSetupObserved(event clievent.PlatformSetupObserved) error {
+	if visitor.verboseVisible() {
+		visitor.renderer.insert(terminalcanvas.Plain("Firewall setup: " + event.State() + " (" + event.Reason() + ")"))
+	}
+	return nil
+}
 func (eventVisitor) VisitReceiverTerminationObserved(clievent.ReceiverTerminationObserved) error {
 	return nil
 }

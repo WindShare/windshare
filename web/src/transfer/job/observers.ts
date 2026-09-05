@@ -67,6 +67,11 @@ export class V2TransferObservers {
 
   completePerformance(): void {
     observePerformance(this.#performance, summary => summary.complete())
+    const connectivity = this.#options.lanes.downloadConnectivity?.(true)
+    if (connectivity !== undefined) this.#emit(() => Object.freeze({
+      name: 'receive_transition', transition: 'download_connectivity',
+      transferJobId: this.#options.transferJobId, connectivity,
+    }))
   }
 
   measure(value: SelectionMeasure): void {

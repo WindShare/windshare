@@ -100,7 +100,7 @@ func (j *TransferJob) trace(event TransferLifecycleTrace) {
 		event.TransferJobID = j.jobID
 	}
 	if event.ProtocolSessionID.IsZero() {
-		event.ProtocolSessionID = j.protocolSessionID
+		event.ProtocolSessionID = j.protocolSessionID()
 	}
 	if event.ReceiveIntentDigest.IsZero() {
 		event.ReceiveIntentDigest = j.intent.Digest()

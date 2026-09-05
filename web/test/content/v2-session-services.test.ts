@@ -175,7 +175,7 @@ async function openRevisionFailure(input: {
   lanes.add({
     id: 1,
     fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
-  }, 'relay')
+  }, 'application-relay')
   const revisions = new V2RevisionService(
     session,
     share,
@@ -254,7 +254,7 @@ describe('v2 authenticated revision capacity results', () => {
     lanes.add({
       id: 1,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
-    }, 'relay')
+    }, 'application-relay')
     const revisions = new V2RevisionService(
       session,
       share,
@@ -318,7 +318,7 @@ describe('v2 session block lane deadlines', () => {
       id,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
     })
-    lanes.add(unusedLane(1), 'relay')
+    lanes.add(unusedLane(1), 'application-relay')
     const beginFailure = new Error('stop after lane provenance observation')
     let observedLaneId: number | undefined
     const session = {
@@ -513,7 +513,7 @@ describe('v2 session block lane deadlines', () => {
     )
     let peerCalls = 0
     const lanes = new V2LaneSet()
-    lanes.add(incomplete, 'relay')
+    lanes.add(incomplete, 'application-relay')
     lanes.add({
       id: 2,
       fetchBlock: async (input) => {
@@ -524,7 +524,7 @@ describe('v2 session block lane deadlines', () => {
           data: Uint8Array.of(2),
         }
       },
-    }, 'peer')
+    }, 'direct')
 
     await expect(lanes.fetch({
       descriptor: revision,
@@ -556,14 +556,14 @@ describe('v2 session block lane deadlines', () => {
     )
     let peerCalls = 0
     const lanes = new V2LaneSet()
-    lanes.add(invalid, 'relay')
+    lanes.add(invalid, 'application-relay')
     lanes.add({
       id: 2,
       fetchBlock: async () => {
         peerCalls += 1
         throw new Error('wrong-result-count fallback must not run')
       },
-    }, 'peer')
+    }, 'direct')
 
     await expect(lanes.fetch({
       descriptor: revision,
@@ -645,7 +645,7 @@ describe('v2 session block lane deadlines', () => {
     lanes.add({
       id: 1,
       fetchBlock: async () => Promise.reject(new Error('unused test content lane')),
-    }, 'relay')
+    }, 'application-relay')
     const revisions = new V2RevisionService(
       session,
       vectorShare,

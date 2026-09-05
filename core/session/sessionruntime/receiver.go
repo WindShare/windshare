@@ -53,6 +53,7 @@ type ReceiverPeerSemantics interface {
 }
 
 type ReceiverFactoryConfig struct {
+	ContentRoutePolicy                transfer.ContentRoutePolicy
 	Descriptor                        catalog.ShareDescriptor
 	SessionAuthKey                    []byte
 	SenderPublicKey                   ed25519.PublicKey
@@ -76,6 +77,7 @@ type ReceiverFactoryConfig struct {
 }
 
 type ReceiverFactory struct {
+	contentRoutePolicy                transfer.ContentRoutePolicy
 	descriptor                        catalog.ShareDescriptor
 	authKey                           []byte
 	publicKey                         ed25519.PublicKey
@@ -143,8 +145,9 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		processReassembly: config.ReassemblyProcess, shareReassembly: config.ReassemblyShare,
 		plaintextProcess: config.PlaintextProcess, random: lockedRandom,
 		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
-		instances:       config.ReceiverInstances,
-		catalogProgress: config.CatalogProgress, semantic: semantic, peerSemantics: config.PeerControls,
+		instances:          config.ReceiverInstances,
+		contentRoutePolicy: config.ContentRoutePolicy,
+		catalogProgress:    config.CatalogProgress, semantic: semantic, peerSemantics: config.PeerControls,
 		resources:       config.RuntimeResources,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits,
 		raceWidth: config.LaneRaceWidth, now: config.Now, after: config.After,
@@ -154,7 +157,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	}, nil
 }
 
-func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel) (*ReceiverRuntime, error) {
+func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolsession.FrameChannel, route transfer.LaneRoute) (*ReceiverRuntime, error) {
 	if factory == nil || channel == nil || ctx == nil {
 		return nil, ErrRuntimeConfig
 	}
@@ -242,6 +245,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	lanes, err := transfer.NewLaneSet(transfer.LaneSetConfig{
 		ProtocolSessionID: keys.ProtocolSessionID(), RaceWidth: factory.raceWidth, Now: factory.now,
 		SettlementObservationCapacity: factory.laneSettlementObservationCapacity,
+		ContentRoutePolicy:            factory.contentRoutePolicy,
 	})
 	if err != nil {
 		return nil, err
@@ -254,7 +258,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	}()
 	if err := lanes.Add(
 		transfer.LaneIdentity{ID: initialLane.ID, Epoch: initialLane.Epoch},
-		transfer.LaneRouteRelay,
+		route,
 		blockLane,
 	); err != nil {
 		return nil, err

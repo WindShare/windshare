@@ -335,6 +335,20 @@ func (visitor *encodeVisitorV3) VisitTransferSettled(event clievent.TransferSett
 		PublishedBytes:      decimal(result.PublishedBytes()),
 		CountersExact:       result.CountersExact(),
 	}
+	if metrics, ok := event.DownloadConnectivity(); ok {
+		summary := &downloadConnectivityV3{
+			DownloadID: metrics.DownloadID, DirectBytes: decimal(metrics.DirectBytes),
+			TURNBytes: decimal(metrics.TURNBytes), ApplicationRelayBytes: decimal(metrics.ApplicationRelayBytes),
+			UnknownBytes: decimal(metrics.UnknownBytes), DirectFraction: metrics.DirectFraction,
+			FallbackStallMS: signedDecimal(metrics.FallbackStall.Milliseconds()),
+			Incomplete:      metrics.Incomplete, Final: metrics.Final,
+		}
+		if metrics.FirstDirectElapsed != nil {
+			value := signedDecimal(metrics.FirstDirectElapsed.Milliseconds())
+			summary.FirstDirectElapsedMS = &value
+		}
+		payload.DownloadConnectivity = summary
+	}
 	if failure, ok := result.Failure(); ok {
 		projected, projectErr := projectFailure(failure)
 		if projectErr != nil {

@@ -16,6 +16,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/internal/platformsetup"
+	"github.com/windshare/windshare/transport/relayv2"
 )
 
 // 退出码语义(§6.9 工程要求):脚本据此区分"该重试"(网络)与"该改命令"
@@ -74,18 +76,21 @@ type App struct {
 	commandEventCapacity int
 
 	receiverPeerFactory   func() (receiverPeerStarter, error)
-	receiverClock         receiverAdmissionClock
+	receiverDial          func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
 	processTrace          *processTrace
 	revisionCapacity      *revisioncapacity.Coordinator
 	revisionCapacityTrace *capacitytrace.Router
 	getOutputFactory      getOutputAuthorityFactory
+	platformSetupStatus   *platformsetup.Status
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"
 // /"中断下载"语义,§6.9)。
 func Main() int {
+	setupStatus := platformsetup.Read()
 	app := &App{
 		Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin,
+		platformSetupStatus: &setupStatus,
 	}
 	trace, err := newProcessTrace(os.LookupEnv)
 	if err != nil {

@@ -67,6 +67,10 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
 
 export function validatePeerAttempt(payload: UnknownRecord): void {
   switch (payload.stage) {
+    case 'provider_fact':
+      exactKeys(payload, ['stage', 'fact'], [], 'peer provider fact payload')
+      validateProviderFact(payload.fact)
+      return
     case 'started':
       exactKeys(payload, [
         'stage', 'wave_ordinal', 'wave_attempt_ordinal', 'session_attempt_ordinal',
@@ -117,12 +121,32 @@ export function validatePeerAttempt(payload: UnknownRecord): void {
         'admission_response_received', 'admission_response_settled', 'lane_attached',
         'admitted',
       ], 'peer failed-at stage')
-      member(payload.failure_scope, ['attempt', 'session'], 'peer failure scope')
+      member(payload.failure_scope, ['attempt-transient', 'path-terminal', 'session-terminal'], 'peer failure scope')
       member(payload.code, PEER_FAILURE_CODES, 'peer failure code')
       booleanValue(payload.retryable, 'peer retryable')
       return
     default:
       throw new TypeError('peer_attempt discriminant is invalid')
+  }
+}
+
+function validateProviderFact(input: unknown): void {
+  const fact = recordValue(input, 'peer provider fact')
+  const fields: Readonly<Record<string, readonly string[]>> = {
+    state: ['kind', 'phase', 'state', 'elapsedMs'],
+    candidate: ['kind', 'candidateType', 'protocol', 'family', 'interfaceClass', 'endpoint', 'disposition'],
+    'selected-pair': ['kind', 'route', 'localType', 'remoteType', 'protocol', 'family', 'rttMs', 'ageMs', 'switchReason'],
+    'ice-error': ['kind', 'code', 'endpoint'],
+    profile: ['kind', 'networkGenerationID', 'profileID', 'side', 'endpointIDs'],
+    'observer-loss': ['kind', 'count'],
+  }
+  if (typeof fact.kind !== 'string' || !Object.hasOwn(fields, fact.kind)) throw new TypeError('invalid provider fact kind')
+  exactKeys(fact, fields[fact.kind]!, [], 'peer provider fact')
+  for (const [key, value] of Object.entries(fact)) {
+    if (key === 'rttMs' && value === null) continue
+    if (['elapsedMs', 'rttMs', 'ageMs', 'code', 'count'].includes(key)) {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) throw new TypeError('invalid provider measurement')
+    } else if (typeof value !== 'string' || value.length > 512) throw new TypeError('invalid provider label')
   }
 }
 

@@ -13,7 +13,8 @@ import type {
   V2PeerOfferAttemptObserver,
 } from '../../src/connectivity/peer-offer'
 import type { PeerChannel } from '../../src/connectivity/peer-channel'
-import { PeerNegotiationError } from '../../src/connectivity/errors'
+import { CandidateLimitExceededError, PeerNegotiationError } from '../../src/connectivity/errors'
+import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import { SIGNAL_KIND_OFFER } from '../../src/connectivity/signaling'
 import {
   V2AuthenticatedPeerOperationError,
@@ -37,12 +38,120 @@ import type {
   V2LaneChange,
   V2OperationCancellation,
 } from '../../src/session/v2-runtime-types'
+import { createV2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/contract'
 import type {
   V2PeerRecoveryClock,
   V2PeerRecoveryDependencies,
-} from '../../src/connectivity/v2-peer-recovery'
+} from '../../src/connectivity/peer-set/path'
+
+describe('content path policy authority', () => {
+  it('terminates p2p-only within one wave despite repeated network notices during ICE', async () => {
+    const clock = new ManualRecoveryClock()
+    let notice = () => undefined as void
+    let rejectFirst!: (reason: unknown) => void
+    let attempts = 0
+    const events: V2PeerRecoveryTraceEvent[] = []
+    const { connectivity } = fixture({
+      offer: async () => {
+        attempts++
+        if (attempts === 1) return new Promise<PeerChannel>((_resolve, reject) => { rejectFirst = reject })
+        throw new PeerNegotiationError('temporary loss')
+      },
+    }, undefined, { policy: 'p2p-only', recoveryTraceObserver: (event) => events.push(event),
+      peerRecovery: { clock, random: () => 1,
+        rearmSource: { subscribe: (listener) => { notice = listener; return () => undefined } },
+        policy: createV2PeerRecoveryPolicy({ retryInitialBackoffMilliseconds: 1, retryBackoffMaximumMilliseconds: 1 }),
+      },
+    })
+    const activation = connectivity.begin('download')
+    await waitForMicrotaskCondition('initial ICE', () => attempts === 1)
+    for (let index = 0; index < 5; index++) { await clock.advance(1); notice() }
+    expect(attempts).toBe(1)
+    rejectFirst(new PeerNegotiationError('temporary loss'))
+    await waitForMicrotaskCondition('first retry', () => events.filter((event) => event.stage === 'backoff-scheduled').length === 1)
+    await clock.advance(1)
+    await waitForMicrotaskCondition('second retry', () => events.filter((event) => event.stage === 'backoff-scheduled').length === 2)
+    await clock.advance(1)
+    await waitForMicrotaskCondition('bounded p2p-only failure', () => !activation.routes.active)
+    expect(attempts).toBe(3)
+    expect(events.filter((event) => event.stage === 'wave-started')).toHaveLength(1)
+    activation.close()
+    await connectivity.close()
+  })
+
+  it('retires a direct lane synchronously when its selected pair changes to TURN', async () => {
+    let calls = 0
+    const listeners = new Set<(route: 'direct' | 'turn' | undefined) => void>()
+    const close = vi.fn(async () => undefined)
+    const { connectivity, lanes } = fixture({
+      offer: async (route, signal, observer) => {
+        calls += 1
+        if (calls > 1) return pendingPeer(signal)
+        await completeSuccessfulSignaling(route, signal, observer)
+        observer?.dataChannelOpened(CANDIDATE_COUNTS)
+        return {
+          ...fakePeer(), close,
+          subscribePathRoute: (listener) => {
+            listeners.add(listener)
+            return () => { listeners.delete(listener) }
+          },
+        }
+      },
+    }, undefined, { policy: 'p2p-only' })
+    const activation = connectivity.begin('download')
+    await waitForMicrotaskCondition('direct lane publication', () => lanes.eligibleSize(activation.routes) === 1)
+    await turn()
+    for (const listener of listeners) listener('turn')
+    expect(lanes.eligibleSize(activation.routes)).toBe(0)
+    expect(listeners.size).toBe(0)
+    await waitForMicrotaskCondition('same-owner route replacement', () => calls === 2)
+    expect(close).toHaveBeenCalledOnce()
+    activation.close()
+    await connectivity.close()
+  })
+
+  it('ends p2p-only waiting when the direct path reaches a terminal outcome', async () => {
+    const { connectivity, lanes } = fixture({
+      offer: async () => { throw new CandidateLimitExceededError(64) },
+    }, undefined, { policy: 'p2p-only' })
+    const activation = connectivity.begin('download')
+    const fetched = lanes.fetch(relayDemand(), activation.routes, new AbortController().signal)
+    await expect(fetched).rejects.toThrow('No authenticated direct path is available')
+    await connectivity.close()
+  })
+
+  it('keeps relay-only browse and content entirely outside the ICE owner', async () => {
+    const offers = new SuccessfulOffers()
+    const { connectivity } = fixture(offers, undefined, { policy: 'relay-only' })
+    connectivity.beginBrowse()
+    const activation = connectivity.begin('download')
+    await turn()
+    expect(offers.calls).toBe(0)
+    expect(activation.routes.allows('application-relay')).toBe(true)
+    expect(activation.routes.allows('direct')).toBe(false)
+    expect(activation.routes.allows('turn')).toBe(false)
+    activation.close()
+    await connectivity.close()
+  })
+
+  it('keeps initial and additional relays ineligible for p2p-only content', async () => {
+    const { connectivity, lanes, session } = fixture(new PendingOffers(), undefined, { policy: 'p2p-only' })
+    const activation = connectivity.begin('download')
+    const grant = await session.requestLaneGrant(0)
+    await session.adoptGrantedLane(fakePeer(), grant)
+    connectivity.addRelayLane(grant.laneId)
+    expect(lanes.laneIds()).toEqual([1, grant.laneId])
+    expect(lanes.eligibleSize(activation.routes)).toBe(0)
+    expect(activation.routes.allows('direct')).toBe(true)
+    expect(activation.routes.allows('turn')).toBe(false)
+    activation.close()
+    await connectivity.close()
+  })
+})
 
 class FakeSession {
+  subscribePeerPathControls(): () => void { return () => undefined }
+  async sendPeerPathControl(): Promise<void> {}
   readonly initialLaneId = 1
   readonly keys = Object.freeze({
     protocolSessionId: identity(90),
@@ -344,6 +453,7 @@ function authenticatedPeerFailure(code: number): V2AuthenticatedPeerOperationErr
 
 function fakePeer(): PeerChannel {
   return {
+    pathRoute: 'direct',
     state: 'open',
     frames: new ReadableStream<Uint8Array>(),
     opened: Promise.resolve(),
@@ -407,6 +517,7 @@ function fixture(
   offers: OfferChannelFactory,
   onContentLaneAdmitted?: (observation: V2ContentLaneAdmissionObservation) => void,
   options: {
+    readonly policy?: 'auto' | 'relay-only' | 'p2p-only'
     readonly nativePeerUsable?: () => boolean
     readonly attemptTraceObserver?: (event: V2PeerAttemptTraceEvent) => void
     readonly recoveryTraceObserver?: (event: V2PeerRecoveryTraceEvent) => void
@@ -420,6 +531,7 @@ function fixture(
   const errors: unknown[] = []
   let identitySeed = 7
   const connectivity = new V2ReceiverConnectivity({
+    ...(options.policy === undefined ? {} : { policy: options.policy }),
     session: session as unknown as V2ReceiverSessionRuntime,
     lanes,
     createBlockLane: (laneId) => new FakeLane(laneId),
@@ -439,7 +551,7 @@ function fixture(
     ...(options.onContentLaneDetached === undefined
       ? {}
       : { onContentLaneDetached: options.onContentLaneDetached }),
-    ...(options.peerRecovery === undefined ? {} : { peerRecovery: options.peerRecovery }),
+    peerRecovery: { tabAdmission: new PeerTabAdmission(), ...options.peerRecovery },
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
   })
   return { connectivity, errors, lanes, session }
@@ -557,7 +669,7 @@ describe('v2 receiver content activation policy', () => {
     expect(randomCalls).toBe(0)
     expect(diagnostics).toEqual([])
     expect(lanes.laneIds()).toEqual([1])
-    expect(preview.routes.allows('relay')).toBe(true)
+    expect(preview.routes.allows('application-relay')).toBe(true)
 
     preview.close()
     await connectivity.close()
@@ -576,7 +688,7 @@ describe('v2 receiver content activation policy', () => {
 
     expect(offers.calls).toBe(0)
     expect(lanes.laneIds()).toEqual([1])
-    expect(preview.routes.allows('relay')).toBe(true)
+    expect(preview.routes.allows('application-relay')).toBe(true)
 
     preview.close()
     await expect(connectivity.close()).resolves.toBeUndefined()
@@ -593,7 +705,7 @@ describe('v2 receiver content activation policy', () => {
     await turn()
 
     expect(lanes.laneIds()).toEqual([1, 2])
-    expect(diagnostics.map((event) => event.stage)).toEqual([
+    expect(diagnostics.filter((event) => event.stage !== 'provider-fact').map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
       'offer-created',
@@ -659,7 +771,7 @@ describe('v2 receiver content activation policy', () => {
     session.failPeerOperation(authenticatedPeerFailure(0x5004))
     await turn()
 
-    expect(diagnostics.map((event) => event.stage)).toEqual([
+    expect(diagnostics.filter((event) => event.stage !== 'provider-fact').map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
       'offer-created',
@@ -697,18 +809,18 @@ describe('v2 receiver content activation policy', () => {
     const preview = connectivity.begin('preview')
     await turn()
 
-    expect(diagnostics.map((event) => event.stage)).toEqual([
+    expect(diagnostics.filter((event) => event.stage !== 'provider-fact').map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
       'failed',
     ])
     expect(diagnostics.at(-1)).toMatchObject({
       failedAtStage: 'offer-created',
-      failureScope: 'attempt',
+      failureScope: 'path-terminal',
       typedErrorCode: 'signaling-contract',
     })
     expect(lanes.laneIds()).toEqual([1])
-    expect(preview.routes.allows('relay')).toBe(true)
+    expect(preview.routes.allows('application-relay')).toBe(true)
 
     preview.close()
     await connectivity.close()
@@ -728,7 +840,7 @@ describe('v2 receiver content activation policy', () => {
     await connectivity.close()
 
     expect(offers.aborts).toBe(1)
-    expect(diagnostics.map((event) => event.stage)).toEqual([
+    expect(diagnostics.filter((event) => event.stage !== 'provider-fact').map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
     ])
@@ -748,14 +860,14 @@ describe('v2 receiver immediate dual-path policy', () => {
 
     const preview = connectivity.begin('preview')
 
-    expect(order).toEqual(['relay-admitted'])
+    expect(order).toEqual(['application-relay-admitted'])
     await turn()
-    expect(order).toEqual(['relay-admitted', 'peer-offer'])
+    expect(order).toEqual(['application-relay-admitted', 'peer-offer'])
     expect(offers.calls).toBe(1)
     expect(lanes.laneIds()).toEqual([1])
-    expect(preview.routes.allows('relay')).toBe(true)
-    expect(preview.routes.allows('peer')).toBe(true)
-    expect(vi.getTimerCount()).toBe(2)
+    expect(preview.routes.allows('application-relay')).toBe(true)
+    expect(preview.routes.allows('direct')).toBe(true)
+    expect(vi.getTimerCount()).toBe(4)
 
     preview.close()
     expect(preview.routes.active).toBe(false)
@@ -772,8 +884,8 @@ describe('v2 receiver immediate dual-path policy', () => {
     await turn()
     expect(offers.calls).toBe(1)
     expect(lanes.laneIds()).toEqual([1])
-    expect(download.routes.allows('relay')).toBe(true)
-    expect(download.routes.allows('peer')).toBe(true)
+    expect(download.routes.allows('application-relay')).toBe(true)
+    expect(download.routes.allows('direct')).toBe(true)
 
     download.close()
     await connectivity.close()
@@ -823,8 +935,8 @@ describe('v2 receiver immediate dual-path policy', () => {
     await turn()
 
     expect(observations).toEqual([
-      { laneId: 1, laneEpoch: 0, route: 'relay' },
-      { laneId: 2, laneEpoch: 1, route: 'peer' },
+      { laneId: 1, laneEpoch: 0, route: 'application-relay' },
+      { laneId: 2, laneEpoch: 1, route: 'direct' },
     ])
     expect(visibleLaneIds).toEqual([[1], [1, 2]])
     expect(observations.every(Object.isFrozen)).toBe(true)
@@ -869,7 +981,7 @@ describe('v2 receiver immediate dual-path policy', () => {
     first.close()
     const replacement = connectivity.begin('preview')
     expect(offers.calls).toBe(1)
-    expect(replacement.routes.allows('relay')).toBe(true)
+    expect(replacement.routes.allows('application-relay')).toBe(true)
     await turn()
     expect(offers.calls).toBe(2)
     replacement.close()
@@ -881,7 +993,7 @@ describe('v2 receiver immediate dual-path policy', () => {
     const pending = fixture(new PendingOffers())
     const download = pending.connectivity.begin('download')
     expect(pending.lanes.laneIds()).toEqual([1])
-    expect(download.routes.allows('relay')).toBe(true)
+    expect(download.routes.allows('application-relay')).toBe(true)
     download.close()
     await pending.connectivity.close()
 
@@ -891,7 +1003,7 @@ describe('v2 receiver immediate dual-path policy', () => {
     const preview = failures.connectivity.begin('preview')
     await turn()
     expect(failures.lanes.laneIds()).toEqual([1])
-    expect(preview.routes.allows('relay')).toBe(true)
+    expect(preview.routes.allows('application-relay')).toBe(true)
     expect(failures.errors).toEqual([])
     preview.close()
     await failures.connectivity.close()
@@ -931,10 +1043,10 @@ describe('v2 receiver immediate dual-path policy', () => {
       'detached logical lane to be readopted',
       () => lanes.laneIds().includes(2),
     )
-    expect(detached).toEqual([{ laneId: 2, laneEpoch: 1, route: 'peer' }])
+    expect(detached).toEqual([{ laneId: 2, laneEpoch: 1, route: 'direct' }])
     expect(visibleLaneIds).toEqual([[1]])
     expect(lanes.laneIds()).toEqual([1, 2])
-    expect(preview.routes.allows('relay')).toBe(true)
+    expect(preview.routes.allows('application-relay')).toBe(true)
     expect(offers.calls).toBe(2)
     expect(session.requestedLaneIds).toEqual([0, 2])
     preview.close()
@@ -1019,7 +1131,11 @@ describe('v2 receiver immediate dual-path policy', () => {
 
     const first = result.connectivity.begin('preview')
     await turn()
-    await clock.advance(1)
+    await waitForMicrotaskCondition('reserved delayed retry', () =>
+      events.some((event) => event.stage === 'backoff-scheduled'))
+    await clock.advance(9_800)
+    await waitForMicrotaskCondition('wave exhaustion', () =>
+      events.some((event) => event.stage === 'wave-quiesced'))
     expect(attempts).toBe(2)
     expect(events).toContainEqual(expect.objectContaining({
       stage: 'wave-quiesced',
@@ -1045,4 +1161,42 @@ describe('v2 receiver immediate dual-path policy', () => {
     first.close()
     await result.connectivity.close()
   })
+})
+
+it('a second p2p-only activation fails immediately after terminal path rejection', async () => {
+  const { connectivity, lanes } = fixture({
+    offer: async () => { throw new CandidateLimitExceededError(64) },
+  }, undefined, { policy: 'p2p-only' })
+  const first = connectivity.begin('download')
+  await expect(lanes.fetch(relayDemand(), first.routes, new AbortController().signal))
+    .rejects.toThrow('No authenticated direct path is available')
+  await turn()
+  const second = connectivity.begin('download')
+  await turn()
+  const remainsActive = second.routes.active
+  second.close()
+  await connectivity.close()
+  expect(remainsActive).toBe(false)
+})
+
+it('route retirement racing publication must not leave the path admitted without a lane', async () => {
+  let calls = 0
+  const { connectivity, lanes } = fixture({
+    offer: async (route, signal, observer) => {
+      calls++
+      if (calls > 1) return pendingPeer(signal)
+      await completeSuccessfulSignaling(route, signal, observer)
+      observer?.dataChannelOpened(CANDIDATE_COUNTS)
+      return { ...fakePeer(), subscribePathRoute: (listener) => {
+        queueMicrotask(() => listener(undefined))
+        return () => undefined
+      } }
+    },
+  }, undefined, { policy: 'p2p-only' })
+  const activation = connectivity.begin('download')
+  for (let i = 0; i < 20; i++) await turn()
+  const observed = { calls, eligible: lanes.eligibleSize(activation.routes) }
+  activation.close()
+  await connectivity.close()
+  expect(observed).toEqual({ calls: 2, eligible: 0 })
 })

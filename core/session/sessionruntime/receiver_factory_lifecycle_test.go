@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -45,7 +46,7 @@ func TestReceiverFactoryCloseCancelsAndJoinsConnectAdmissions(t *testing.T) {
 	})
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := factory.Connect(context.Background(), receiverChannel)
+		_, connectErr := factory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 		connectResult <- connectErr
 	}()
 	select {
@@ -100,7 +101,7 @@ func TestReceiverFactoryCloseCancelsAndJoinsConnectAdmissions(t *testing.T) {
 	if retainedAuthKey != nil {
 		t.Fatal("closed factory retained its authentication key slice")
 	}
-	if _, err := factory.Connect(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrRuntimeClosed) {
+	if _, err := factory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrRuntimeClosed) {
 		t.Fatalf("Connect after Close error=%v", err)
 	}
 	if acquisitions.Load() != 1 {
@@ -151,7 +152,7 @@ func TestReceiverFactoryAdmissionCallbackCanReenterBeginClose(t *testing.T) {
 	channel := newMemoryChannel(t)
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := factory.Connect(context.Background(), channel)
+		_, connectErr := factory.Connect(context.Background(), channel, transfer.LaneRouteRelay)
 		connectResult <- connectErr
 	}()
 	select {

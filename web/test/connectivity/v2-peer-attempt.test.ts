@@ -3,10 +3,11 @@ import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import type { OfferChannelFactory } from '../../src/connectivity/peer-offer'
 import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import { V2BrowserPeerAttemptExecutor } from '../../src/connectivity/v2-peer-attempt'
+import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import type {
   V2PeerAttemptContext,
   V2PeerRecoveryClock,
-} from '../../src/connectivity/v2-peer-recovery'
+} from '../../src/connectivity/peer-set/path'
 import {
   V2LaneAdmissionRejectedError,
   V2LaneAdmissionTransportError,
@@ -49,7 +50,7 @@ class ManualClock implements V2PeerRecoveryClock {
   }
 
   expire(index: number): void {
-    this.sleeps[index]?.resolve()
+    this.sleeps.filter((sleep) => sleep.milliseconds < 100)[index]?.resolve()
   }
 }
 
@@ -207,7 +208,7 @@ class CountingPeer implements PeerChannel {
   }
 }
 
-function fixture() {
+function fixture(tabAdmission?: PeerTabAdmission) {
   const session = new FakeSession()
   const offers = new ControlledOffers()
   const clock = new ManualClock()
@@ -215,6 +216,7 @@ function fixture() {
   const publications: unknown[] = []
   let randomSeed = 10
   const executor = new V2BrowserPeerAttemptExecutor({
+    tabAdmission: tabAdmission ?? new PeerTabAdmission({}, clock),
     session: session as unknown as V2ReceiverSessionRuntime,
     offers,
     peerPathIdentity: identity(7),
@@ -244,17 +246,44 @@ function attemptContext(phases: string[] = []): V2PeerAttemptContext {
 }
 
 describe('browser peer attempt phase executor', () => {
+  it('keeps queued receivers outside the provider and releases capacity after exact-owner cancellation', async () => {
+    const admission = new PeerTabAdmission({ concurrentAttempts: 1 })
+    const first = fixture(admission)
+    const cancelled = fixture(admission)
+    const survivor = fixture(admission)
+    const context = { ...attemptContext(), admissionWaitBudgetMilliseconds: 1_000 }
+    const active = first.executor.createAttempt(context)
+    await turns()
+    const queued = cancelled.executor.createAttempt(context)
+    const next = survivor.executor.createAttempt(context)
+    await turns()
+    expect(first.offers.signal).toBeDefined()
+    expect(cancelled.offers.signal).toBeUndefined()
+    expect(survivor.offers.signal).toBeUndefined()
+    expect(cancelled.clock.sleeps).toEqual([])
+    queued.cancel('last-activation')
+    await expect(queued.result).resolves.toEqual({ type: 'lifecycle-cancelled', owner: 'last-activation' })
+    expect(first.offers.signal?.aborted).toBe(false)
+    active.cancel('last-activation')
+    await active.result
+    await turns()
+    expect(survivor.offers.signal).toBeDefined()
+    next.cancel('last-activation')
+    await next.result
+  })
+
   it('starts a fresh admission deadline only after local DataChannel Open', async () => {
     const phases: string[] = []
     const { clock, diagnostics, executor, offers, publications } = fixture()
     const peer = new CountingPeer()
     const attempt = executor.createAttempt(attemptContext(phases))
+    await turns()
 
-    expect(clock.sleeps.map((sleep) => sleep.milliseconds)).toEqual([10])
+    expect(clock.sleeps.filter((sleep) => sleep.milliseconds < 100).map((sleep) => sleep.milliseconds)).toEqual([10])
     offers.opened.resolve(peer)
     await turns()
     expect(phases).toEqual(['admission'])
-    expect(clock.sleeps.map((sleep) => sleep.milliseconds)).toEqual([10, 20])
+    expect(clock.sleeps.filter((sleep) => sleep.milliseconds < 100).map((sleep) => sleep.milliseconds)).toEqual([10, 20])
 
     await expect(attempt.result).resolves.toEqual({
       type: 'admitted',
@@ -262,7 +291,7 @@ describe('browser peer attempt phase executor', () => {
     })
     expect(publications).toHaveLength(1)
     expect(peer.closes).toBe(0)
-    expect(diagnostics.map((event) => event.stage)).toEqual([
+    expect(diagnostics.filter((event) => event.stage !== 'provider-fact').map((event) => event.stage)).toEqual([
       'started',
       'negotiation-deadline-armed',
       'offer-created',
@@ -301,6 +330,7 @@ describe('browser peer attempt phase executor', () => {
   it('returns a typed negotiation timeout and never starts admission', async () => {
     const { clock, executor } = fixture()
     const attempt = executor.createAttempt(attemptContext())
+    await turns()
     clock.expire(0)
 
     await expect(attempt.result).resolves.toMatchObject({

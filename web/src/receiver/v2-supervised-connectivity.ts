@@ -3,6 +3,7 @@ import {
   V2ConnectivityRouteAuthority,
   type V2ContentIntent,
   V2ReceiverConnectivity,
+  type V2ConnectivityPolicy,
 } from '../connectivity/v2-receiver-policy'
 
 interface V2StableActivation {
@@ -14,10 +15,13 @@ interface V2StableActivation {
 
 /** Keeps click-scoped route authority stable while ProtocolSession generations change. */
 export class V2SupervisedConnectivity {
+  readonly #policy: V2ConnectivityPolicy
   readonly #activations = new Map<number, V2StableActivation>()
   #current: V2ReceiverConnectivity | undefined
   #nextActivation = 1
   #closed = false
+
+  constructor(policy: V2ConnectivityPolicy = 'auto') { this.#policy = policy }
 
   bind(connectivity: V2ReceiverConnectivity): void {
     if (this.#closed) {
@@ -40,7 +44,7 @@ export class V2SupervisedConnectivity {
     const activation: V2StableActivation = {
       id: this.#nextActivation++,
       intent,
-      routes: new V2ConnectivityRouteAuthority(),
+      routes: new V2ConnectivityRouteAuthority(this.#policy),
     }
     if (this.#current !== undefined) {
       activation.delegate = this.#beginDelegate(this.#current, activation)

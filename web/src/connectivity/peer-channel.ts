@@ -1,7 +1,11 @@
 import type { FrameChannel } from '../contracts/channel'
 import type { WebRTCFrameChannel } from '../transport/webrtc'
 
+export type PeerPathRoute = 'direct' | 'turn' | undefined
+
 export interface PeerChannel extends FrameChannel {
+  readonly pathRoute?: PeerPathRoute
+  subscribePathRoute?(listener: (route: PeerPathRoute) => void): () => void
   readonly opened: Promise<void>
   readonly done: Promise<void>
   readonly reason: unknown
@@ -18,6 +22,8 @@ export class OwnedPeerChannel implements PeerChannel {
   readonly done: Promise<void>
   readonly #channel: WebRTCFrameChannel
   readonly #failure: () => PeerOwnerFailure | undefined
+  readonly #pathRoute: () => PeerPathRoute
+  readonly #subscribePathRoute: (listener: (route: PeerPathRoute) => void) => () => void
   #cachedOwner: unknown
   #cachedTransport: unknown
   #cachedCombined: AggregateError | undefined
@@ -26,9 +32,13 @@ export class OwnedPeerChannel implements PeerChannel {
     channel: WebRTCFrameChannel,
     ownerDone: Promise<void>,
     failure: () => PeerOwnerFailure | undefined,
+    pathRoute: () => PeerPathRoute = () => undefined,
+    subscribePathRoute: (listener: (route: PeerPathRoute) => void) => () => void = () => () => undefined,
   ) {
     this.#channel = channel
     this.#failure = failure
+    this.#pathRoute = pathRoute
+    this.#subscribePathRoute = subscribePathRoute
     this.frames = channel.frames
     this.opened = channel.opened
     this.done = ownerDone
@@ -36,6 +46,12 @@ export class OwnedPeerChannel implements PeerChannel {
 
   get state() {
     return this.#channel.state
+  }
+
+  get pathRoute(): PeerPathRoute { return this.#pathRoute() }
+
+  subscribePathRoute(listener: (route: PeerPathRoute) => void): () => void {
+    return this.#subscribePathRoute(listener)
   }
 
   get reason(): unknown {

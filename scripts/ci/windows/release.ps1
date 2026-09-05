@@ -1,5 +1,5 @@
 # Deterministic root module release gate (Windows). The gate reads one exact
-# commit object, extracts its canonical module zip outside the repository, and
+# commit object, extracts its complete source bundle outside the repository, and
 # validates it without workspace or worktree state. The optional native profile
 # is reserved for certified CI runners and turns any missing or skipped
 # certification test into a hard error.
@@ -359,7 +359,7 @@ try {
         New-Item -ItemType Directory -Path $temporaryRoot | Out-Null
     }
     $stageDirectory = Join-Path $temporaryRoot 'committed-module'
-    $zipPath = Join-Path $temporaryRoot 'module.zip'
+    $zipPath = Join-Path $temporaryRoot 'source.zip'
     $artifactRoot = Join-Path $temporaryRoot 'extracted-module'
     $releaseRepository = Join-Path $temporaryRoot 'release-repository'
     $releaseEnvironmentState = Enter-ReleaseGoEnvironment -ReleaseRoot $temporaryRoot
@@ -378,10 +378,13 @@ try {
             (Join-Path $ciRoot 'release-archive.tests.ps1')
     }
     Invoke-Step 'GOWORK=off go vet release helper' {
-        & $goExecutable vet ./scripts/ci/_modulezip
+        & $goExecutable vet ./scripts/ci/_sourcebundle
     }
     Invoke-Step 'GOWORK=off go test release helper' {
-        & $goExecutable test -count=1 ./scripts/ci/_modulezip
+        & $goExecutable test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
+    }
+    Invoke-Step 'Windows first-setup contract (fake firewall commands)' {
+        & $currentPowerShell -NoLogo -NoProfile -NonInteractive -File ./scripts/install/windows/firewall.tests.ps1
     }
     # Helper tests execute repository code. Re-proving the clean exact checkout
     # prevents a test from replacing the later archive builder in place.
@@ -393,9 +396,9 @@ try {
             -Destination $releaseRepository `
             -VerifierPaths (Get-ReleaseVerifierPaths)
     }
-    Invoke-Step "construct deterministic root module zip ($Version at $CommitSHA)" {
+    Invoke-Step "construct deterministic source bundle ($Version at $CommitSHA)" {
         Set-Location $releaseRepository
-        & $goExecutable run ./scripts/ci/_modulezip/main.go `
+        & $goExecutable run ./scripts/ci/_sourcebundle `
             -repo $releaseRepository `
             -commit $CommitSHA `
             -stage $stageDirectory `
@@ -416,6 +419,7 @@ try {
     }
 
     Set-Location $artifactRoot
+    Invoke-Step 'pinned provider source and patch reproduction (source bundle)' { & $goExecutable run ./scripts/ci/_piondeps -reproduce }
     Invoke-Step 'GOWORK=off go mod tidy -diff (extracted module)' { & $goExecutable mod tidy -diff }
     Invoke-Step 'GOWORK=off go mod verify (extracted module)' { & $goExecutable mod verify }
     Invoke-Step 'GOWORK=off go list ./... (extracted module)' { & $goExecutable list ./... }
@@ -431,28 +435,23 @@ try {
     }
     $cliInstallRoot = Join-Path $temporaryRoot 'installed-cli'
     New-Item -ItemType Directory -Path $cliInstallRoot | Out-Null
-    $originalGOBIN = [Environment]::GetEnvironmentVariable(
-        'GOBIN',
-        [EnvironmentVariableTarget]::Process
-    )
-    try {
-        $env:GOBIN = $cliInstallRoot
-        Invoke-Step 'install wind CLI from the extracted release revision' {
-            & $goExecutable install ./cmd/wind
-        }
-        Invoke-Step 'execute the installed wind CLI' {
-            & (Join-Path $cliInstallRoot 'wind.exe') --help | Out-Null
-        }
-    } finally {
-        if ($null -eq $originalGOBIN) {
-            Remove-Item -LiteralPath Env:GOBIN -ErrorAction SilentlyContinue
-        } else {
-            $env:GOBIN = $originalGOBIN
-        }
+    Invoke-Step 'install wind from the supported source installation entry' {
+        & ./scripts/install/windows/install.ps1 -Destination $cliInstallRoot -Firewall Skip `
+            -StateDirectory (Join-Path $temporaryRoot 'setup-state')
+    }
+    Invoke-Step 'execute the installed wind CLI' {
+        & (Join-Path $cliInstallRoot 'wind.exe') --help | Out-Null
     }
     if ($NativeProfile -ceq 'windows-ntfs') {
         Invoke-RequiredWindowsNativeTestsAsStandardUser
     }
+    $assetsRoot = if ([string]::IsNullOrEmpty($env:WINDSHARE_RELEASE_ASSETS)) { Join-Path $temporaryRoot 'assets' } else { $env:WINDSHARE_RELEASE_ASSETS }
+    Invoke-Step 'build release binaries and preserve verified source bundle' {
+        Set-Location $releaseRepository
+        & $goExecutable run ./scripts/ci/_releaseassets -source $artifactRoot -source-zip $zipPath `
+            -out $assetsRoot -version $Version -commit $CommitSHA
+    }
+    Set-Location $artifactRoot
     # Module tests execute arbitrary repository code and can mutate their source tree.
     # Keeping them last prevents later consumers from silently validating changed bytes.
     Invoke-Step 'GOWORK=off go test ./... (extracted module)' {

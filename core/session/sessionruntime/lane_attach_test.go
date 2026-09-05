@@ -107,7 +107,7 @@ func TestSuspendedInitialContentLanePreservesCatalogAndRoutesBlocksPeerFirst(t *
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -561,7 +561,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), initialReceiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +594,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	receiverAdmission, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel)
+	receiverAdmission, err := receiver.AttachLane(context.Background(), grant, attachedReceiverChannel, transfer.LaneRouteDirect)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -688,7 +688,7 @@ func TestAdmitChannelSeparatesLaneRecoveryFromProtocolSessionReplacement(t *test
 			err   error
 		}{value: value, err: err}
 	}()
-	freshReceiver, err := fixture.receiverFactory.Connect(context.Background(), freshReceiverChannel)
+	freshReceiver, err := fixture.receiverFactory.Connect(context.Background(), freshReceiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1050,7 +1050,7 @@ func connectObservedVerticalPair(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1117,7 +1117,7 @@ func attachGrantedLaneWithChannels(
 			err      error
 		}{identity: identity, err: err}
 	}()
-	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel)
+	receiverAdmission, receiverErr := receiver.AttachLane(ctx, grant, receiverChannel, transfer.LaneRouteDirect)
 	senderAttached := <-senderResult
 	if receiverErr == nil && senderAttached.err == nil && receiverAdmission.Lane != senderAttached.identity {
 		return LaneIdentity{}, errors.New("lane identities differ"), nil

@@ -87,16 +87,19 @@ func senderRuntimeStoppedFailure() SenderAttemptFailure {
 	}
 }
 
-func senderEvidenceCapacityFailure() SenderAttemptFailure {
+func senderPathCapacityFailure() SenderAttemptFailure {
 	return SenderAttemptFailure{
-		Scope: AttemptFailureScopeSession, TypedPeerErrorCode: TypedPeerErrorStopped,
-		Message: peerEvidenceCapacityFailureMessage,
+		Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorStopped,
+		Message: peerPathCapacityFailureMessage,
 	}
 }
 
 func rejectionForEvent(event handlerEvent, cause error) *peerOperationRejection {
 	if event.rejection != nil {
 		return event.rejection
+	}
+	if errors.Is(cause, ErrPeerPathCapacity) || errors.Is(cause, ErrPeerPathRetired) {
+		return &peerOperationRejection{code: protocolsession.PeerOperationCodePolicy, message: peerPathCapacityFailureMessage, cause: cause}
 	}
 	if event.kind == handlerCandidate {
 		return &peerOperationRejection{
@@ -144,15 +147,14 @@ func (handler *senderHandler) rejectOperation(
 		claim = handler.claimRejectedOffer(operation, *binding)
 		if claim.acquired {
 			failure := senderOperationAttemptFailure(rejection.code, rejection.message, rejection)
-			if claim.sessionTerminal {
-				failure = senderEvidenceCapacityFailure()
+			if claim.capacity {
+				failure = senderPathCapacityFailure()
 			}
 			handler.emitRejectedOfferTerminal(*binding, failure)
 		}
 	}
-	if claim.sessionTerminal || handler.evidenceSessionTerminal() {
-		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticEvidenceCapacity)
-		return ErrEvidenceIdentityCapacity
+	if claim.capacity {
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticPathCapacity)
 	}
 	failureContext, cancel := context.WithTimeout(context.WithoutCancel(ctx), failureDeliveryTimeout)
 	err := handler.session.FailPeerOperation(
@@ -180,14 +182,13 @@ func (handler *senderHandler) terminalizeUnstartedOffer(
 	}
 	claim := handler.claimRejectedOffer(event.operation, *binding)
 	if claim.acquired {
-		if claim.sessionTerminal {
-			failure = senderEvidenceCapacityFailure()
+		if claim.capacity {
+			failure = senderPathCapacityFailure()
 		}
 		handler.emitRejectedOfferTerminal(*binding, failure)
 	}
-	if claim.sessionTerminal {
-		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticEvidenceCapacity)
-		return ErrEvidenceIdentityCapacity
+	if claim.capacity {
+		handler.factory.reportDiagnostic(PeerDiagnosticSenderAttempt, PeerDiagnosticPathCapacity)
 	}
 	return nil
 }
@@ -220,10 +221,4 @@ func (handler *senderHandler) unstartedOfferFailure() SenderAttemptFailure {
 		return senderRuntimeStoppedFailure()
 	}
 	return senderAttemptCancelledFailure()
-}
-
-func (handler *senderHandler) evidenceSessionTerminal() bool {
-	handler.mu.Lock()
-	defer handler.mu.Unlock()
-	return handler.evidenceAuthority.terminal
 }

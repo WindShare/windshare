@@ -3,22 +3,16 @@ package cli
 import (
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
 
 func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallback(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	claimGate := make(chan struct{})
 	admission, err := newRelayContentAdmissionWithExecution(
-		downloadT0,
-		clock,
 		relay,
 		receiverAdmissionExecution{claimGate: claimGate},
 	)
@@ -30,7 +24,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 		admission.Wait()
 	})
 
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatal(err)
 	}
 	workerDone := admission.decisionWorkerDone()
@@ -89,7 +83,7 @@ func TestMonitorReceiverPeerUnsafeDispositionRevokesQueuedAdmissionWithoutFallba
 	if calls := receiverRuntime.calls.Load(); calls != 1 {
 		t.Fatalf("fatal monitor branch Close calls=%d, want 1", calls)
 	}
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatalf("closed admission accepted follow-up selection with error: %v", err)
 	}
 

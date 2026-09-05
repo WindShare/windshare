@@ -164,7 +164,7 @@ func TestLiveShareFacadeTransfersProgressiveDirectoryToDurableOutput(t *testing.
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiverRuntime, err := receiver.Connect(context.Background(), receiverChannel)
+	receiverRuntime, err := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -406,7 +406,7 @@ func (channel *facadeChannel) Close() error {
 
 func TestPreparedReceiverRejectsConnectAfterClose(t *testing.T) {
 	receiver := &PreparedReceiver{closed: true}
-	if _, err := receiver.Connect(context.Background(), nil); err == nil {
+	if _, err := receiver.Connect(context.Background(), nil, transfer.LaneRouteRelay); err == nil {
 		t.Fatal("closed receiver accepted a channel")
 	}
 	receiver.Close()
