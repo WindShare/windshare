@@ -191,11 +191,9 @@ func (a *Authority) Reconcile(ctx context.Context) {
 	a.mu.Unlock()
 	var workers sync.WaitGroup
 	for _, key := range keys {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			a.reconcileResource(ctx, key)
-		}()
+		})
 	}
 	workers.Wait()
 }

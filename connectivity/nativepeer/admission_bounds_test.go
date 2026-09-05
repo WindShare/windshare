@@ -57,7 +57,8 @@ func TestUnstartedPreparationExpiresAndCannotBeReused(t *testing.T) {
 	if !prepared.Matches(attemptFor(1).ProtocolSessionID, attemptFor(1).Binding) || prepared.Matches(attemptFor(2).ProtocolSessionID, attemptFor(1).Binding) {
 		t.Fatal("preparation lost immutable identity")
 	}
-	if _, err := prepared.Start(nil); !errors.Is(err, ErrProcessAdmission) {
+	var missingContext context.Context // Exercise rejection before a preparation can acquire resources.
+	if _, err := prepared.Start(missingContext); !errors.Is(err, ErrProcessAdmission) {
 		t.Fatal(err)
 	}
 	clock.advance(ProcessAttemptBudget)

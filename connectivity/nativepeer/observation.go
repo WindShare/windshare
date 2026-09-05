@@ -1,10 +1,12 @@
 package nativepeer
 
 import (
+	"slices"
+	"time"
+
 	"github.com/windshare/windshare/connectivity/reachability"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/transport/webrtc/provider"
-	"time"
 )
 
 const (
@@ -81,14 +83,7 @@ func (n *NativePeerConnectivity) observeReachability(event reachability.Event) {
 	subject := Subject{NetworkGenerationID: event.Endpoint.Generation, Side: n.config.Side}
 	n.mu.Lock()
 	for key, path := range n.paths {
-		matched := false
-		for _, endpoint := range n.pathEndpointsLocked(path) {
-			if endpoint == event.Endpoint {
-				matched = true
-				break
-			}
-		}
-		if matched {
+		if slices.Contains(n.pathEndpointsLocked(path), event.Endpoint) {
 			subject.ProtocolSessionID = key.session
 			subject.PeerPathID = [16]byte(key.path)
 			break

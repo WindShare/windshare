@@ -178,7 +178,8 @@ func TestSenderSetRejectsUnboundedOrAmbiguousConfiguration(t *testing.T) {
 			t.Fatal("invalid set accepted")
 		}
 	}
-	if _, err := NewSender(nil, []string{"valid"}, dial); !errors.Is(err, ErrConfig) {
+	var missingContext context.Context // Constructors reject missing lifetime ownership.
+	if _, err := NewSender(missingContext, []string{"valid"}, dial); !errors.Is(err, ErrConfig) {
 		t.Fatal(err)
 	}
 	if _, err := NewSender(context.Background(), []string{"valid"}, nil); !errors.Is(err, ErrConfig) {
