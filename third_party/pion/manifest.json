@@ -273,7 +273,7 @@
         {
           "path": "udp_mux.go",
           "upstream_sha256": "7d60ad7f7e96d852791ae3a3e966b23131beefe023322ddf4efb7ed2dac0b73a",
-          "sha256": "7d60ad7f7e96d852791ae3a3e966b23131beefe023322ddf4efb7ed2dac0b73a"
+          "sha256": "94dd9f3fceb4b7b2a309e964c7b8d6a9997037fefee9ac87c4ea0c2df7051aca"
         },
         {
           "path": "udp_mux_multi.go",
@@ -283,7 +283,7 @@
         {
           "path": "udp_mux_universal.go",
           "upstream_sha256": "eab3b19d0176261d80244c85c9130041a2e9ebfca5d7729e3b42e455b871588d",
-          "sha256": "dd5e43bafcda1877f00f2d531f9f279fc4d523d27100ea507912b9205ddeb65f"
+          "sha256": "5587ba9b0dcee61906d48099044a164cbe51a9dd449053191b72e32fb892226c"
         },
         {
           "path": "udp_muxed_conn.go",
