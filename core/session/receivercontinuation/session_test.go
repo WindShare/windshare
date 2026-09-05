@@ -71,19 +71,24 @@ func newFixture(t *testing.T, directory ...bool) *fixture {
 }
 func (f *fixture) connect() (*sessionruntime.ReceiverRuntime, *pipeChannel) {
 	f.t.Helper()
+	a, b := newPipe()
+	return f.connectChannels(a, b), b
+}
+
+func (f *fixture) connectChannels(senderChannel framechannel.Channel, receiverChannel *pipeChannel) *sessionruntime.ReceiverRuntime {
+	f.t.Helper()
 	prepared, err := liveshare.PrepareReceiver(liveshare.ReceiverConfig{Capability: f.sender.Capability(), DescriptorObject: f.sender.Registration().Descriptor})
 	if err != nil {
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(prepared.Close)
-	a, b := newPipe()
 	accepted := make(chan error, 1)
 	go func() {
-		senderRuntime, err := f.factory.Accept(context.Background(), a)
-		b.sender = senderRuntime
+		senderRuntime, err := f.factory.Accept(context.Background(), senderChannel)
+		receiverChannel.sender = senderRuntime
 		accepted <- err
 	}()
-	runtime, err := prepared.Connect(context.Background(), b, transfer.LaneRouteRelay)
+	runtime, err := prepared.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		f.t.Fatal(err)
 	}
@@ -91,7 +96,7 @@ func (f *fixture) connect() (*sessionruntime.ReceiverRuntime, *pipeChannel) {
 		f.t.Fatal(err)
 	}
 	f.t.Cleanup(runtime.Close)
-	return runtime, b
+	return runtime
 }
 
 type terminal struct{}
@@ -125,11 +130,13 @@ func (c *pipeChannel) Send(ctx context.Context, f framechannel.Frame) error {
 	c.pipe.mu.Lock()
 	defer c.pipe.mu.Unlock()
 	if c.pipe.closed {
-		return io.ErrClosedPipe
+		// The pipe lock proves retirement won before transport ownership; raw
+		// errors would incorrectly model an accepted send with unknown delivery.
+		return framechannel.RetireSend(io.ErrClosedPipe)
 	}
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		return framechannel.RejectSend(ctx.Err())
 	case c.pipe.inbox[1-c.index] <- bytes.Clone(f):
 		return nil
 	}
