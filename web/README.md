@@ -30,7 +30,7 @@ activation makes relay content eligible immediately and starts one bounded P2P
 recovery supervisor in the background; direct-path delay or exhaustion never gates
 the healthy relay.
 
-The protocol authority is [`docs/协议规范.md`](../docs/协议规范.md); product
+The protocol overview is [`docs/协议规范.md`](../docs/协议规范.md); product
 semantics are in [`docs/重构功能变化.md`](../docs/重构功能变化.md), and the historical
 closure record is archived in
 [`docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md`](../docs/.archive/2026.08.06/即时分享与文件浏览重构收尾计划.md).
