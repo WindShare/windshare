@@ -15,6 +15,7 @@ The narrow patches in `patches/` add:
 - Initial checking time independent of connected disconnection/failure timers.
 - Local preference applied inside ICE before checklist construction and signaling.
 - Explicit STUN cache-bypassing refresh and response transaction validation.
+- Complete universal UDP mux initialization before its socket reader starts.
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses
 independent sockets per peer path; cross-path shared remote-tuple demultiplexing
