@@ -74,6 +74,21 @@ export function browserReceiveOperationLockName(operationId: string): string {
   return `${RECEIVE_OPERATION_LOCK_DOMAIN}:${identity}`
 }
 
+/** A crashed page releases its Web Lock immediately, even while its durable lease remains. */
+export async function observeBrowserReceiveOperationActivity(
+  operationId: string,
+  manager: BrowserLockManagerRuntime = browserLockManager(),
+): Promise<'active' | 'inactive'> {
+  let activity: 'active' | 'inactive' = 'active'
+  await manager.request(browserReceiveOperationLockName(operationId), {
+    mode: 'exclusive',
+    ifAvailable: true,
+  }, async lock => {
+    activity = lock === null ? 'active' : 'inactive'
+  })
+  return activity
+}
+
 /**
  * The Web Lock is the live cross-tab mutex; the IndexedDB lease is durable
  * evidence used to reject stale writers and to diagnose abandoned operations.

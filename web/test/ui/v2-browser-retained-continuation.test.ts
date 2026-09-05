@@ -159,7 +159,7 @@ describe('browser retained continuation composition', () => {
     const operation = inventory.operations[0]!
 
     expect(operation.recoverySummary).toBe(summary)
-    expect(operation.actions).toEqual(['continue', 'redownload'])
+    expect(operation.actions).toEqual(['continue', 'redownload', 'catch-up'])
     await expect(inventory.act(operation, action, new AbortController().signal))
       .resolves.toEqual({ kind: 'receive-continuation', runtime })
     expect(resume).toHaveBeenCalledWith(

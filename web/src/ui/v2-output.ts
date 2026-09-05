@@ -586,8 +586,7 @@ function assertCompatibleNameRepairProgression(
   }
   if (next.placement !== current.placement ||
       next.pairDisplayNames.script !== current.pairDisplayNames.script ||
-      next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar ||
-      next.runCommand !== current.runCommand) {
+      next.pairDisplayNames.sidecar !== current.pairDisplayNames.sidecar) {
     throw new TypeError('compatible-name restoration identity cannot change')
   }
   for (let index = 0; index < current.logicalPathSample.length; index += 1) {
@@ -608,7 +607,7 @@ function assertCompatibleNameRepairProgression(
        next.logicalPathSample.length !== current.logicalPathSample.length)) {
     throw new TypeError('compatible-name terminal sidecar checkpoint is immutable')
   }
-  if (!current.pendingCatchUp && currentFooter.state !== 'active' && next.pendingCatchUp) {
+  if (current.terminalSettlement === 'complete' && next.terminalSettlement !== 'complete') {
     throw new TypeError('completed compatible-name catch-up cannot become pending')
   }
 }

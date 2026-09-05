@@ -85,10 +85,10 @@ export interface PreparedFileSystemAccessSettlement {
 
 
 export {
-  catchUpFileSystemAccessPendingOutcome,
+  catchUpFileSystemAccessCompatibleNames,
 } from './settlement-catch-up'
 export type {
-  FileSystemAccessPendingOutcomeCatchUpResult,
+  FileSystemAccessCompatibleNameCatchUpResult,
 } from './settlement-catch-up'
 
 export async function prepareFileSystemAccessSettlement(

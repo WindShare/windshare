@@ -22,7 +22,7 @@ import {
   decodeReceiveLifecycleState,
 } from '../../workspace/state-codec'
 
-export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v2' as const
+export const COMPATIBLE_NAME_LEDGER_FORMAT_VERSION = 'compatible-name-ledger/v3' as const
 export const COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION =
   'compatible-name-pending-outcome/v2' as const
 export const MAX_COMPATIBLE_NAME_COMMITTED_MAPPINGS = 1_048_576
@@ -56,6 +56,12 @@ export interface CompatibleNamePairIdentityV1 {
   readonly ownershipState: 'claimed' | 'owned'
 }
 
+export interface CompatibleNameRestorationPairV1 {
+  readonly token: string
+  readonly script: CompatibleNamePairIdentityV1
+  readonly sidecar: CompatibleNamePairIdentityV1
+}
+
 export interface CompatibleNamePendingTerminalOutcomeV1 {
   readonly formatVersion: typeof COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION
   readonly footerState: CompatibleNameTerminalFooterState
@@ -77,9 +83,9 @@ export interface CompatibleNameRepairSummary {
     sidecar: string
   }>
   readonly placement: CompatibleNamePairPlacement
-  readonly runCommand: string
   readonly latestObservedFooter?: CompatibleNameFooterObservationV1
-  readonly pendingCatchUp: boolean
+  readonly sidecarSync: 'pending' | 'current'
+  readonly terminalSettlement: 'none' | 'pending' | 'complete'
 }
 
 export interface CompatibleNameOperationHeaderV1 {
@@ -93,10 +99,7 @@ export interface CompatibleNameOperationHeaderV1 {
   }>
   readonly templateId: string
   readonly pairPlacement: CompatibleNamePairPlacement
-  readonly pair: Readonly<{
-    script: CompatibleNamePairIdentityV1
-    sidecar: CompatibleNamePairIdentityV1
-  }>
+  readonly pair: CompatibleNameRestorationPairV1
   readonly activationState: CompatibleNameActivationState
   readonly pendingTerminalOutcome?: CompatibleNamePendingTerminalOutcomeV1
   readonly repairSummary?: CompatibleNameRepairSummary
@@ -151,16 +154,7 @@ export function compatibleNameOperationHeaderV1(
   if (pairPlacement === 'inside-logical-root' && root.logicalName !== root.physicalName) {
     throw new TypeError('inside-root restoration pair requires an unmapped result root')
   }
-  const pair = Object.freeze({
-    script: compatiblePairIdentity(input.pair.script, 'script'),
-    sidecar: compatiblePairIdentity(input.pair.sidecar, 'sidecar'),
-  })
-  if (catalogNameCollisionKey(pair.script.physicalName) ===
-        catalogNameCollisionKey(pair.sidecar.physicalName) ||
-      pair.script.handleId === pair.sidecar.handleId ||
-      pair.script.ownedObjectId === pair.sidecar.ownedObjectId) {
-    throw new TypeError('restoration pair identities must be distinct')
-  }
+  const pair = compatibleRestorationPair(input.pair)
   const activationState = compatibleActivationState(input.activationState)
   const pairOwned = pair.script.ownershipState === 'owned' &&
     pair.sidecar.ownershipState === 'owned'
@@ -366,6 +360,20 @@ export function compatibleNameRepairSummary(
   if (latestObservedFooter !== undefined && latestObservedFooter.committedCount > committedCount) {
     throw new TypeError('compatible-name footer exceeds the committed ledger prefix')
   }
+  if (input.sidecarSync !== 'pending' && input.sidecarSync !== 'current') {
+    throw new TypeError('invalid sidecar synchronization state')
+  }
+  if (!['none', 'pending', 'complete'].includes(input.terminalSettlement)) {
+    throw new TypeError('invalid terminal settlement state')
+  }
+  if (input.sidecarSync === 'current' &&
+      latestObservedFooter?.committedCount !== committedCount) {
+    throw new TypeError('current sidecar requires a verified complete ledger prefix')
+  }
+  if (input.terminalSettlement === 'complete' &&
+      (input.sidecarSync !== 'current' || latestObservedFooter?.state === 'active')) {
+    throw new TypeError('complete terminal settlement requires a current terminal footer')
+  }
   return Object.freeze({
     committedCount,
     logicalPathSample,
@@ -374,9 +382,9 @@ export function compatibleNameRepairSummary(
       sidecar: portableComponent(input.pairDisplayNames.sidecar, 'sidecar display name'),
     }),
     placement: compatiblePairPlacement(input.placement),
-    runCommand: nonEmptyCanonicalText(input.runCommand, 'restoration run command'),
     ...(latestObservedFooter === undefined ? {} : { latestObservedFooter }),
-    pendingCatchUp: booleanValue(input.pendingCatchUp, 'pending catch-up state'),
+    sidecarSync: input.sidecarSync,
+    terminalSettlement: input.terminalSettlement,
   })
 }
 
@@ -422,6 +430,25 @@ export function compatiblePairPhysicalParent(
   return header.pairPlacement === 'inside-logical-root'
     ? Object.freeze([header.root.logicalName])
     : Object.freeze([])
+}
+
+function compatibleRestorationPair(input: CompatibleNameRestorationPairV1): CompatibleNameRestorationPairV1 {
+  const pair = Object.freeze({
+    token: compatibleToken(input.token, 'restoration pair token'),
+    script: compatiblePairIdentity(input.script, 'script'),
+    sidecar: compatiblePairIdentity(input.sidecar, 'sidecar'),
+  })
+  if (pair.script.physicalName !== `restore.windshare-${pair.token}.ps1` ||
+      pair.sidecar.physicalName !== `restore.windshare-${pair.token}.data`) {
+    throw new TypeError('restoration pair names must share their canonical token')
+  }
+  if (catalogNameCollisionKey(pair.script.physicalName) ===
+        catalogNameCollisionKey(pair.sidecar.physicalName) ||
+      pair.script.handleId === pair.sidecar.handleId ||
+      pair.script.ownedObjectId === pair.sidecar.ownedObjectId) {
+    throw new TypeError('restoration pair identities must be distinct')
+  }
+  return pair
 }
 
 function compatiblePairIdentity(
@@ -532,11 +559,6 @@ function boundedNonNegativeInteger(value: number, label: string): number {
 
 function boundedPositiveInteger(value: number, label: string): number {
   if (boundedNonNegativeInteger(value, label) === 0) throw new TypeError(`${label} is invalid`)
-  return value
-}
-
-function booleanValue(value: boolean, label: string): boolean {
-  if (typeof value !== 'boolean') throw new TypeError(`${label} is invalid`)
   return value
 }
 

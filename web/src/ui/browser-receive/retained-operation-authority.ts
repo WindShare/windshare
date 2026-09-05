@@ -28,13 +28,15 @@ export function retainedOperationAuthority(
     })
   }
   switch (continuation) {
+    case 'cleanup-incompatible':
+      return Object.freeze({ actions: retainedActions('discard') })
     case 'pending-catch-up':
     case 'restoration-available':
       return Object.freeze({ actions: retainedActions('catch-up') })
     case 'resume-receive':
       return hasDirectTreeRecoverySummary
-        ? Object.freeze({ actions: retainedActions('continue', 'redownload') })
-        : Object.freeze({ actions: retainedActions('continue', 'discard') })
+        ? Object.freeze({ actions: retainedActions('continue', 'redownload', 'catch-up') })
+        : Object.freeze({ actions: retainedActions('continue', 'discard', 'catch-up') })
     case 'resume-package':
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
     case 'resume-direct-zip':

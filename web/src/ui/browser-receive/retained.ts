@@ -25,7 +25,7 @@ import type {
 import type { WorkspaceStageTraceListener } from '../../output/workspace/stages'
 import { recoverWorkspaceActivationCandidates } from '../../output/workspace/activation-recovery'
 import type { WorkspaceActivationJournalRepository } from '../../output/workspace/repository'
-import { catchUpFileSystemAccessPendingOutcome } from '../../output/file-system-access/settlement'
+import { catchUpFileSystemAccessCompatibleNames } from '../../output/file-system-access/settlement'
 import type {
   V2BoundReceiveOperation,
   V2RetainedReceiveAction,
@@ -39,6 +39,7 @@ import { unavailableRoute } from './shared'
 import type { BrowserDirectZipCompositionPort } from './direct-zip'
 import { diagnosticsFor } from './retained-diagnostics'
 import { retainedOperationAuthority } from './retained-operation-authority'
+import { observeBrowserReceiveOperationActivity } from '../../output/browser/session-lease'
 import {
   continueRetainedWorkspaceOperation,
   continuationMismatch,
@@ -109,7 +110,7 @@ type RetainedAuthorityDispatch =
     }>
 
 export interface BrowserRetainedContinuationExecutor {
-  catchUpTerminal?(
+  catchUpCompatibleNames?(
     continuation: DirectTreeCatchUpContinuation,
     signal: AbortSignal,
     failures?: OutputFailureSinks,
@@ -211,10 +212,18 @@ export async function listBrowserRetainedOperations(
       clock: { now: options.now ?? Date.now },
     })
     const inventory = await authority.listResumeState()
+    const locks = windowPort.navigator?.locks
+    const activities = locks === undefined
+      ? inventory.operations.map(() => 'inactive' as const)
+      : await Promise.all(inventory.operations.map(reference => observeBrowserReceiveOperationActivity(
+          reference.descriptor.operationId,
+          locks,
+        )))
     const references = new WeakMap<V2RetainedReceiveOperation, ReceiveOperationResumeRef>()
     try {
       signal.throwIfAborted()
-      const operations = Object.freeze(inventory.operations.map((reference) => {
+      const operations = Object.freeze(inventory.operations.filter((_, index) =>
+        activities[index] === 'inactive').map((reference) => {
         const { descriptor } = reference
         const presentation = retainedOperationAuthority(
           descriptor.continuation,
@@ -353,7 +362,7 @@ async function performRetainedAction(
     case 'direct-tree-catch-up':
       return withRetainedOperationClose(continuation.operation, async () => {
         if (action !== 'catch-up') throw continuationMismatch()
-        const catchUp = executor.catchUpTerminal
+        const catchUp = executor.catchUpCompatibleNames
         if (catchUp === undefined) throw unavailableRoute()
         signal.throwIfAborted()
         await (failures === undefined
@@ -552,13 +561,13 @@ function browserRetainedContinuationExecutor(
   directZip?: BrowserDirectZipCompositionPort,
 ): BrowserRetainedContinuationExecutor {
   return Object.freeze({
-    catchUpTerminal: async (
+    catchUpCompatibleNames: async (
       continuation: DirectTreeCatchUpContinuation,
       signal: AbortSignal,
       failures?: OutputFailureSinks,
     ) => {
       try {
-        await catchUpFileSystemAccessPendingOutcome({
+        await catchUpFileSystemAccessCompatibleNames({
           operation: continuation.operation,
           signal,
         })
@@ -655,6 +664,9 @@ function sourceWithoutBootstrapCandidates(
   return Object.freeze({
     listDirectZipBootstrapCandidates: () => Promise.resolve(Object.freeze([])),
     listLifecycleStates: () => source.listLifecycleStates(),
+    ...(source.isCleanupOnly === undefined ? {} : {
+      isCleanupOnly: (operationId: string) => source.isCleanupOnly!(operationId),
+    }),
     ...(source.readRecoverySummary === undefined
       ? {}
       : { readRecoverySummary: (lifecycle: Parameters<NonNullable<
