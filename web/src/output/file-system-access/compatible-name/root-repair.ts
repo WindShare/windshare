@@ -18,8 +18,8 @@ import {
 } from './model'
 import {
   COMPATIBLE_NAME_COLLISION_RETRY_LIMIT,
-  COMPATIBLE_NAME_SUFFIX,
   compatibleNameCandidate,
+  compatibleNameRestorationPairCandidate,
   generateCompatibleNamePrimaryToken,
 } from './naming'
 import {
@@ -37,8 +37,6 @@ import type {
   PreparedCompatibleNameRootRepair,
 } from './path-authority'
 
-export const RESTORATION_PAIR_READABLE_PREFIX = 'restore'
-export const RESTORATION_SIDECAR_EXTENSION = '.data'
 const RESTORATION_PAIR_HANDLE_DOMAIN = 'windshare/fsa-compatible-name-pair/v1'
 
 export async function prepareCompatibleNameRootRepair(
@@ -61,25 +59,8 @@ export async function prepareCompatibleNameRootRepair(
     physicalName: candidate => candidate.physicalComponent,
     diagnosticStage: 'fsa.root.entry.inspect',
   })
-  const scriptCandidate = await allocateCandidate({
-    parent: input.parent,
-    operationId: input.operationId,
-    logicalPath: [`${RESTORATION_PAIR_READABLE_PREFIX}${template.scriptFileExtension}`],
-    entryKind: 'file',
-    primaryToken,
-    claims,
-    physicalName: candidate => pairPhysicalName(candidate.token, template.scriptFileExtension),
-    diagnosticStage: 'fsa.file.entry.inspect',
-  })
-  const sidecarCandidate = await allocateCandidate({
-    parent: input.parent,
-    operationId: input.operationId,
-    logicalPath: [`${RESTORATION_PAIR_READABLE_PREFIX}${RESTORATION_SIDECAR_EXTENSION}`],
-    entryKind: 'file',
-    primaryToken,
-    claims,
-    physicalName: candidate => pairPhysicalName(candidate.token, RESTORATION_SIDECAR_EXTENSION),
-    diagnosticStage: 'fsa.file.entry.inspect',
+  const pairCandidate = await allocateRestorationPair({
+    parent: input.parent, operationId: input.operationId, primaryToken, claims,
   })
   const pairPlacement: CompatibleNamePairPlacement = 'beside-mapped-root'
   const header = compatibleNameOperationHeaderV1({
@@ -93,8 +74,9 @@ export async function prepareCompatibleNameRootRepair(
     templateId: template.id,
     pairPlacement,
     pair: {
-      script: pairIdentity(input.operationId, 'script', scriptCandidate, randomOwnedObjectId),
-      sidecar: pairIdentity(input.operationId, 'sidecar', sidecarCandidate, randomOwnedObjectId),
+      token: pairCandidate.token,
+      script: pairIdentity(input.operationId, 'script', { physicalComponent: pairCandidate.script }, randomOwnedObjectId),
+      sidecar: pairIdentity(input.operationId, 'sidecar', { physicalComponent: pairCandidate.sidecar }, randomOwnedObjectId),
     },
     activationState: 'prepared',
   })
@@ -169,7 +151,7 @@ export async function allocateCandidate(input: Readonly<{
 export function pairIdentity(
   operationId: string,
   pairKind: CompatibleNamePairKind,
-  candidate: AllocatedPhysicalCandidate,
+  candidate: Pick<AllocatedPhysicalCandidate, 'physicalComponent'>,
   randomOwnedObjectId: () => string,
 ) {
   return Object.freeze({
@@ -227,6 +209,7 @@ export function assertPreparedSnapshot(
       snapshot.header.root.physicalName !== bootstrap.header.root.physicalName ||
       snapshot.header.templateId !== bootstrap.header.templateId ||
       snapshot.header.pairPlacement !== bootstrap.header.pairPlacement ||
+      snapshot.header.pair.token !== bootstrap.header.pair.token ||
       snapshot.header.pair.script.physicalName !== bootstrap.header.pair.script.physicalName ||
       snapshot.header.pair.script.handleId !== bootstrap.header.pair.script.handleId ||
       snapshot.header.pair.script.ownedObjectId !== bootstrap.header.pair.script.ownedObjectId ||
@@ -252,10 +235,44 @@ function sameMappingSelection(left: CompatibleNameMappingV1, right: CompatibleNa
     left.logicalPath.every((component, index) => component === right.logicalPath[index])
 }
 
-export function pairPhysicalName(token: string, extension: string): string {
-  return `${RESTORATION_PAIR_READABLE_PREFIX}${COMPATIBLE_NAME_SUFFIX}${token}${extension}`
-}
-
 function pairHandleId(operationId: string, pairKind: CompatibleNamePairKind): string {
   return `${RESTORATION_PAIR_HANDLE_DOMAIN}/${operationId}/${pairKind}`
+}
+
+/** Claim only after both candidates pass the same parent authority and native checks. */
+export async function allocateRestorationPair(input: Readonly<{
+  parent: FileSystemDirectoryHandle
+  operationId: string
+  primaryToken: string
+  claims: WeakMap<FileSystemDirectoryHandle, Set<string>>
+  membership?: ReturnType<LogicalSiblingNamespaceAuthority['membership']>
+}>): Promise<Awaited<ReturnType<typeof compatibleNameRestorationPairCandidate>>> {
+  let parentClaims = input.claims.get(input.parent)
+  if (parentClaims === undefined) {
+    parentClaims = new Set<string>()
+    input.claims.set(input.parent, parentClaims)
+  }
+  for (let attempt = 0; attempt <= COMPATIBLE_NAME_COLLISION_RETRY_LIMIT; attempt += 1) {
+    const pair = await compatibleNameRestorationPairCandidate({ ...input, attempt })
+    const names = [pair.script, pair.sidecar]
+    let occupied = false
+    for (const component of names) {
+      if (parentClaims.has(catalogNameCollisionKey(component)) ||
+          await input.membership?.hasCommittedName(component) === true) {
+        occupied = true
+        break
+      }
+      if (await inspectFileSystemComponent({
+        verifiedParent: input.parent, component, expectedKind: 'file',
+        stage: 'fsa.file.entry.inspect', mode: 'diagnostic',
+      }) === 'occupied') {
+        occupied = true
+        break
+      }
+    }
+    if (occupied) continue
+    for (const name of names) parentClaims.add(catalogNameCollisionKey(name))
+    return pair
+  }
+  throw new DOMException('The restoration pair collision namespace is exhausted', 'InvalidStateError')
 }

@@ -323,7 +323,9 @@ export class RetainedInventoryCoordinator {
     const summaries = repairSource === undefined
       ? loaded.operations.map(() => undefined)
       : await Promise.all(loaded.operations.map(operation =>
-          Promise.resolve(repairSource.readRepairSummary(operation.operationId, signal))))
+          operation.continuation === 'cleanup-incompatible'
+            ? undefined
+            : Promise.resolve(repairSource.readRepairSummary(operation.operationId, signal))))
     signal.throwIfAborted()
 
     const sourceOperations = new Map<
@@ -341,7 +343,7 @@ export class RetainedInventoryCoordinator {
         : compatibleNameRepairSummary(summary)
       const actions = retainedPresentationActions(
         operation,
-        durableSummary?.pendingCatchUp === true,
+        durableSummary,
       )
       const continuation = retainedPresentationContinuation(operation, durableSummary)
       let presented: V2RetainedReceivePresentationOperation
@@ -354,7 +356,8 @@ export class RetainedInventoryCoordinator {
           continuation,
           actions,
           ...(durableSummary === undefined ? {} : { repairSummary: durableSummary }),
-          ...(continuation === 'pending-catch-up' && durableSummary?.pendingCatchUp === false
+          ...(continuation === 'pending-catch-up' && durableSummary?.sidecarSync === 'current' &&
+              durableSummary.terminalSettlement === 'none'
             ? { unavailableReason: 'The prior receive ended abnormally; use the restoration command only after confirming it will not resume.' }
             : {}),
         })

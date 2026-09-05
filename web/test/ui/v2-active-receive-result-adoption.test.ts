@@ -122,12 +122,10 @@ describe('active receive result adoption', () => {
 
     expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 0,
-      actionMode: 'abnormal-stop-recovery',
-      scriptName: 'restore-names.windshare-abc234.ps1',
-      sidecarName: 'restore-names.windshare-abc234.tsv',
-      runCommand: expect.stringContaining(
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File',
-      ),
+      actionMode: 'receiving-notice',
+      scriptName: 'restore.windshare-abc234.ps1',
+      sidecarName: 'restore.windshare-abc234.data',
+      runCommand: null,
     })
 
     const active = repairSummary(2, [
@@ -138,7 +136,7 @@ describe('active receive result adoption', () => {
     expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 2,
       logicalPathSample: ['folder/pyvenv.cfg', 'folder/nested'],
-      actionMode: 'abnormal-stop-recovery',
+      actionMode: 'receiving-notice',
     })
 
     const publishedTitles: string[] = []
@@ -217,7 +215,7 @@ describe('active receive result adoption', () => {
     expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 1,
       actionMode: 'abnormal-stop-recovery',
-      actionTitle: 'Abnormal-stop recovery only',
+      actionTitle: 'Restore names after stopping',
     })
     await fixture.close()
   })
@@ -233,7 +231,7 @@ describe('active receive result adoption', () => {
     expect(fixture.outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 0,
       logicalPathSample: [],
-      actionMode: 'abnormal-stop-recovery',
+      actionMode: 'receiving-notice',
     })
     expect(fixture.runtime.activationSubscriptionCount).toBe(1)
     expect(repair.subscriptionCount).toBe(1)
@@ -548,13 +546,13 @@ function repairSummary(
     committedCount,
     logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    pendingCatchUp: false,
+    sidecarSync: 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : 'complete',
   })
 }
 

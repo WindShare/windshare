@@ -315,11 +315,11 @@ describe('FSA compatible-name route activation', () => {
     expect(ledger.header?.pair.script.ownershipState).toBe('owned')
     expect(ledger.header?.pair.sidecar.ownershipState).toBe('owned')
     expect(parent.entryNames()).toEqual([
-      'restore.windshare-aaaaaa.data',
-      'restore.windshare-aaaaaa.ps1',
+      'restore.windshare-idbee5.data',
+      'restore.windshare-idbee5.ps1',
     ])
     const checkpoint = decodeCompatibleNameSidecar(
-      await parent.fileBytes('restore.windshare-aaaaaa.data'),
+      await parent.fileBytes('restore.windshare-idbee5.data'),
     )
     expect(checkpoint).toMatchObject({
       header: { operationId: result.operation.intent.operationId, placement: 'beside' },
@@ -328,8 +328,8 @@ describe('FSA compatible-name route activation', () => {
       trailingByteLength: 0,
     })
     expect(mutationOrder).toEqual([
-      'file:restore.windshare-aaaaaa.ps1',
-      'file:restore.windshare-aaaaaa.data',
+      'file:restore.windshare-idbee5.ps1',
+      'file:restore.windshare-idbee5.data',
     ])
     const repairSummaries: CompatibleNameRepairSummary[] = []
     const repairProjection = result.operation.repairProjection
@@ -342,16 +342,16 @@ describe('FSA compatible-name route activation', () => {
       new AbortController().signal,
     )
     expect(mutationOrder).toEqual([
-      'file:restore.windshare-aaaaaa.ps1',
-      'file:restore.windshare-aaaaaa.data',
+      'file:restore.windshare-idbee5.ps1',
+      'file:restore.windshare-idbee5.data',
       'directory:photos.windshare-aaaaaa',
     ])
     expect(ledger.mapping?.commitState).toBe('committed')
     expect(ledger.mapping?.ownedObjectId).toBeDefined()
-    expect(repairSummaries[0]).toMatchObject({ committedCount: 0, pendingCatchUp: false })
+    expect(repairSummaries[0]).toMatchObject({ committedCount: 0, sidecarSync: 'current' })
     expect(repairSummaries).toContainEqual(expect.objectContaining({
       committedCount: 1,
-      pendingCatchUp: true,
+      sidecarSync: 'pending',
     }))
     unsubscribeRepair()
     await result.operation.detach()
@@ -361,7 +361,7 @@ describe('FSA compatible-name route activation', () => {
   it('advances root and pair allocation only for candidates proven occupied', async () => {
     const parent = new MemoryDirectory('downloads')
     await parent.getDirectoryHandle('photos.windshare-aaaaaa', { create: true })
-    await parent.getFileHandle('restore.windshare-aaaaaa.ps1', { create: true })
+    await parent.getFileHandle('restore.windshare-idbee5.ps1', { create: true })
     const prepared = await prepareCompatibleNameRootRepair({
       rejection: classifiedRootRejection('photos', 'directory'),
       parent: parent as unknown as FileSystemDirectoryHandle,
@@ -382,12 +382,12 @@ describe('FSA compatible-name route activation', () => {
     expect(prepared.bootstrap.initialMapping.physicalComponent)
       .not.toBe('photos.windshare-aaaaaa')
     expect(prepared.bootstrap.header.pair.script.physicalName)
-      .not.toBe('restore.windshare-aaaaaa.ps1')
+      .not.toBe('restore.windshare-idbee5.ps1')
     expect(prepared.bootstrap.header.pair.sidecar.physicalName)
-      .toBe('restore.windshare-aaaaaa.data')
+      .not.toBe('restore.windshare-idbee5.data')
     expect(parent.entryNames()).toEqual([
       'photos.windshare-aaaaaa',
-      'restore.windshare-aaaaaa.ps1',
+      'restore.windshare-idbee5.ps1',
     ])
   })
 
@@ -427,7 +427,7 @@ describe('FSA compatible-name route activation', () => {
         refused = true
         throw new TypeError('injected native root refusal')
       }
-      if (lookup.create && lookup.name === 'restore.windshare-aaaaaa.data') throw pairFailure
+      if (lookup.create && lookup.name === 'restore.windshare-idbee5.data') throw pairFailure
     }
     const route = routeFixture(
       planning.offered,
@@ -452,7 +452,7 @@ describe('FSA compatible-name route activation', () => {
     if (result.kind !== 'owned-effects') throw new Error('expected owned repair effects')
     expect(result.cause).toBe(pairFailure)
     expect(repository.compatibleBootstrapCommits).toBe(1)
-    expect(parent.entryNames()).toEqual(['restore.windshare-aaaaaa.ps1'])
+    expect(parent.entryNames()).toEqual(['restore.windshare-idbee5.ps1'])
     expect(parent.directoryNames()).not.toContain('photos.windshare-aaaaaa')
     expect(ledger.header?.pair.script.ownershipState).toBe('owned')
     expect(ledger.header?.pair.sidecar.ownershipState).toBe('claimed')

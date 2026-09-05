@@ -263,7 +263,7 @@ describe('direct ZIP lifecycle presentation', () => {
 })
 
 describe('compatible-name repair presentation', () => {
-  it('keeps the first replacement notice non-blocking and labels active or paused use as abnormal-stop recovery', () => {
+  it('keeps receiving notice-only and blocks paused restoration while the sidecar is behind', () => {
     const summary = repairSummary('active', true, 3)
     const active = present(
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
@@ -288,14 +288,14 @@ describe('compatible-name repair presentation', () => {
       replacementCountLabel: '3 verified/committed name replacements',
       logicalPathSample: ['folder/pyvenv.cfg', 'folder/nested'],
       omittedLogicalPathCount: 1,
-      scriptName: 'restore-names.windshare-abc234.ps1',
-      sidecarName: 'restore-names.windshare-abc234.tsv',
-      runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
-      actionMode: 'abnormal-stop-recovery',
+      scriptName: 'restore.windshare-abc234.ps1',
+      sidecarName: 'restore.windshare-abc234.data',
+      runCommand: null,
+      actionMode: 'receiving-notice',
     })
-    expect(paused.compatibleNameRepair?.actionMode).toBe('abnormal-stop-recovery')
-    expect(paused.compatibleNameRepair?.actionDescription).toMatch(/do not run.*resumable/iu)
-    expect(active.compatibleNameRepair?.noticeDescription).toContain('remain compatible')
+    expect(paused.compatibleNameRepair?.actionMode).toBe('catch-up-required')
+    expect(paused.compatibleNameRepair?.runCommand).toBeNull()
+    expect(active.compatibleNameRepair?.visibility).toBe('notice')
 
     const createdTarget = present(
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
@@ -309,7 +309,7 @@ describe('compatible-name repair presentation', () => {
       replacementCount: 0,
       replacementCountLabel: '0 verified/committed name replacements',
       logicalPathSample: [],
-      actionMode: 'abnormal-stop-recovery',
+      actionMode: 'receiving-notice',
     })
   })
 
@@ -520,9 +520,10 @@ function lifecycle(
 
 function repairSummary(
   footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  pendingCatchUp: boolean,
+  sidecarPending: boolean,
   committedCount: number,
 ): CompatibleNameRepairSummary {
+  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
   return Object.freeze({
     committedCount,
     logicalPathSample: Object.freeze([
@@ -530,13 +531,13 @@ function repairSummary(
       Object.freeze(['folder', 'nested']),
     ].slice(0, committedCount)),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    pendingCatchUp,
+    sidecarSync: sidecarPending ? 'pending' : 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
   })
 }
 

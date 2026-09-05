@@ -1,3 +1,4 @@
+import { IndexedDbCompatibleNameLedger } from '../../browser/indexeddb-compatible-name-ledger'
 import {
   verifyFSAOperationBinding,
 } from '../../browser/indexeddb-root-binding'
@@ -65,6 +66,7 @@ import { WorkspaceContinuationAuthority } from './workspace-continuation-authori
  * never supplies an intent, binding, handle, repository row, or lifecycle state.
  */
 export class PersistedReceiveOperationReopenAuthority {
+  readonly #readCompatibleNameHeader: NonNullable<PersistedReceiveOperationReopenAuthorityOptions['readCompatibleNameHeader']>
   readonly #repositoryFactory: () => Promise<ReceiveOperationRepository>
   readonly #clock: { now(): number }
   readonly #leaseOptions: LeaseOptions
@@ -77,6 +79,10 @@ export class PersistedReceiveOperationReopenAuthority {
   readonly #trace: PersistedReceiveOperationReopenTrace | undefined
 
   constructor(options: PersistedReceiveOperationReopenAuthorityOptions) {
+    this.#readCompatibleNameHeader = options.readCompatibleNameHeader ?? (async operationId => {
+      const ledger = await IndexedDbCompatibleNameLedger.open(options.checkpointDatabaseName)
+      try { return await ledger.readHeader(operationId) } finally { ledger.close() }
+    })
     this.#repositoryFactory = options.repositoryFactory
     this.#clock = options.clock ?? SYSTEM_CLOCK
     this.#leaseOptions = options.leaseOptions ?? {}
@@ -365,6 +371,19 @@ export class PersistedReceiveOperationReopenAuthority {
     }>,
     observedAt: number,
   ): Promise<ReopenLifecycleAuthority> {
+    if (input.snapshot.lifecycle.kind === 'receiving' && input.target.kind === 'direct-tree') {
+      const header = await this.#readCompatibleNameHeader(input.snapshot.operation.operationId)
+      if (header?.pendingTerminalOutcome !== undefined ||
+          header?.repairSummary?.terminalSettlement === 'complete') {
+        throw new DOMException('Terminal compatible-name output requires local settlement', 'InvalidStateError')
+      }
+      return Object.freeze({
+        lifecycle: await persistReceiveResume(
+          input.repository, input.snapshot, input.lease, observedAt,
+        ),
+        receiveAdmissionFallback: input.snapshot.lifecycle,
+      })
+    }
     if (input.snapshot.lifecycle.kind !== 'resumable-receive') {
       throw new TypeError('receive continuation lost its stable admission fallback')
     }
@@ -456,18 +475,25 @@ export class PersistedReceiveOperationReopenAuthority {
     }
     if (input.target.kind === 'direct-tree') {
       const fallback = input.lifecycleAuthority.receiveAdmissionFallback
+      // An abrupt interruption has no sealed pause summary for a user choice.
+      // Preserve native checkpoints by default; an explicit paused operation still
+      // carries its separately authorized preserve/restart decision.
+      const retainedFileRecovery = input.retainedFileRecovery ??
+        (fallback?.kind === 'receiving' ? 'preserve' : undefined)
       return Object.freeze({
         ...base,
         ...input.target,
-        ...(input.retainedFileRecovery === undefined
-          ? {}
-          : { retainedFileRecovery: input.retainedFileRecovery }),
+        ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
         ...(fallback === undefined ? {} : { receiveAdmissionFallback: fallback }),
       })
     }
     if (input.target.kind === 'direct-zip') {
       input.resources.directZipJournal = input.target.journal
       return Object.freeze({ ...base, ...input.target })
+    }
+    const workspaceFallback = input.lifecycleAuthority.receiveAdmissionFallback
+    if (workspaceFallback?.kind === 'receiving') {
+      throw new TypeError('workspace continuation requires a stable admission fallback')
     }
     const stages = input.lifecycleAuthority.stages ??
       await this.#workspaceContinuation.openStages(
@@ -489,9 +515,7 @@ export class PersistedReceiveOperationReopenAuthority {
       ...(input.lifecycleAuthority.receiveContinuation === undefined
         ? {}
         : { receiveContinuation: input.lifecycleAuthority.receiveContinuation }),
-      ...(input.lifecycleAuthority.receiveAdmissionFallback === undefined
-        ? {}
-        : { receiveAdmissionFallback: input.lifecycleAuthority.receiveAdmissionFallback }),
+      ...(workspaceFallback === undefined ? {} : { receiveAdmissionFallback: workspaceFallback }),
       ...(input.lifecycleAuthority.packageContinuation === undefined
         ? {}
         : { packageContinuation: input.lifecycleAuthority.packageContinuation }),

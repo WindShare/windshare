@@ -7,7 +7,6 @@ import {
 import {
   presentCompatibleNameRepair,
   presentNewReceiveOperation,
-  type CompatibleNameRepairPresentation,
   type LifecycleActionPresentation,
 } from './v2-lifecycle-presentation'
 import type {
@@ -29,6 +28,7 @@ import {
   presentDirectZipProgress,
 } from './v2-progress-presentation'
 import { recoverySummaryDescription } from './resumable-file-set-presentation'
+import { CompatibleNameRepairPanel } from './compatible-name/CompatibleNameRepairPanel'
 
 function SelectionCheckbox(props: {
   readonly row: V2BrowseRow
@@ -104,6 +104,11 @@ function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<
   description: string
 }> {
   switch (operation.continuation) {
+    case 'cleanup-incompatible':
+      return Object.freeze({
+        title: 'Saved record uses an older format',
+        description: 'Forget this saved record to clear browser metadata. Downloaded files remain unchanged.',
+      })
     case 'pending-catch-up':
       return Object.freeze({
         title: 'Compatible-name finalization needs catch-up',
@@ -192,7 +197,9 @@ function retainedActionLabel(
         ? 'Download again'
         : 'Restart incomplete files'
     case 'discard':
-      return 'Discard task and delete retained content'
+      return operation.continuation === 'cleanup-incompatible'
+        ? 'Forget saved record'
+        : 'Discard task and delete retained content'
     case 'delete':
       if (operation.continuation === 'cleanup-expired') return 'Delete expired data'
       if (operation.continuation === 'resume-direct-zip' ||
@@ -208,57 +215,10 @@ function retainedActionLabel(
   }
 }
 
-function CompatibleNameRepairPanel(props: {
-  readonly repair: CompatibleNameRepairPresentation | null
-}) {
-  const repair = props.repair
-  if (repair === null) return null
-  return (
-    <section
-      className={`compatible-name-repair compatible-name-repair-${repair.actionMode}`}
-      aria-label="Compatible-name restoration"
-      role="status"
-    >
-      <strong>{repair.noticeTitle}</strong>
-      <p>{repair.noticeDescription}</p>
-      <p>{repair.replacementCountLabel}</p>
-      {repair.replacementCount === 0 && (
-        <p>The count updates only after a folder is ownership-verified or a file commits.</p>
-      )}
-      {repair.logicalPathSample.length > 0 && (
-        <>
-          <p>Logical paths awaiting restoration:</p>
-          <ul>
-            {repair.logicalPathSample.map(path => <li key={path}><code>{path}</code></li>)}
-          </ul>
-        </>
-      )}
-      {repair.omittedLogicalPathCount > 0 && (
-        <p>{repair.omittedLogicalPathCount} more replacement(s) are not shown.</p>
-      )}
-      <dl>
-        <dt>Restoration script</dt>
-        <dd><code>{repair.scriptName}</code></dd>
-        <dt>Restoration sidecar</dt>
-        <dd><code>{repair.sidecarName}</code></dd>
-        <dt>Location</dt>
-        <dd>{repair.placementLabel}</dd>
-        {repair.runCommand !== null && (
-          <>
-            <dt>Run command</dt>
-            <dd><code>{repair.runCommand}</code></dd>
-          </>
-        )}
-      </dl>
-      <strong>{repair.actionTitle}</strong>
-      <p>{repair.actionDescription}</p>
-    </section>
-  )
-}
-
 function RetainedReceivePanel(props: {
   readonly inventory: V2RetainedReceiveInventorySnapshot
   readonly controller: V2ReceiverController
+  readonly presentedOperationId: string | null
 }) {
   if (props.inventory.kind === 'loading') return null
   if (props.inventory.kind === 'failed') {
@@ -279,7 +239,8 @@ function RetainedReceivePanel(props: {
       <strong id="retained-receive-title">Stored receive tasks</strong>
       <p>Actions reopen and verify the exact saved operation before changing owned data.</p>
       <ul className="retained-receive-list">
-        {props.inventory.operations.map((operation) => {
+        {props.inventory.operations.filter(operation =>
+          operation.operationId !== props.presentedOperationId).map((operation) => {
           const copy = retainedOperationCopy(operation)
           const retention = operation.expiresAt === undefined
             ? null
@@ -289,10 +250,7 @@ function RetainedReceivePanel(props: {
             : presentCompatibleNameRepair({
                 state: operation.lifecycle,
                 summary: operation.repairSummary,
-                context: operation.continuation === 'pending-catch-up' &&
-                  operation.repairSummary.pendingCatchUp
-                  ? 'pending-catch-up'
-                  : 'receive-lifecycle',
+                context: 'retained-operation',
               })
           return (
             <li key={operation.operationId} className="retained-receive-item">
@@ -307,10 +265,17 @@ function RetainedReceivePanel(props: {
                 </small>
               )}
               {operation.unavailableReason !== undefined && <p>{operation.unavailableReason}</p>}
-              <CompatibleNameRepairPanel repair={repair} />
+              <CompatibleNameRepairPanel
+                repair={repair}
+                {...(operation.actions.includes('catch-up') ? {
+                  catchUp: () => props.controller.performRetainedAction(operation, 'catch-up'),
+                } : {})}
+                busy={props.inventory.pending !== null}
+              />
               {operation.actions.length > 0 && (
                 <div className="lifecycle-actions">
-                  {operation.actions.map((action) => (
+                  {operation.actions.filter(action => action !== 'catch-up' || repair === null ||
+                    repair.replacementCount === 0).map((action) => (
                     <button
                       key={action}
                       className={action === 'discard' || action === 'delete' ||
@@ -703,7 +668,11 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           </div>
         )}
 
-        <RetainedReceivePanel inventory={snapshot.retained} controller={controller} />
+        <RetainedReceivePanel
+          inventory={snapshot.retained}
+          controller={controller}
+          presentedOperationId={snapshot.output.lifecycle?.operationId ?? null}
+        />
 
         {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
 
@@ -786,6 +755,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
               <NewReceiveOperationPanel output={snapshot.output} controller={controller} />
               <CompatibleNameRepairPanel
                 repair={snapshot.output.lifecyclePresentation?.compatibleNameRepair ?? null}
+                catchUp={() => controller.catchUpStoppedCompatibleNames()}
+                busy={retainedActionPending}
               />
               {snapshot.output.transferResultPresentation !== null && (
                 <div className={`transfer-result transfer-result-${snapshot.output.transferResultPresentation.tone}`}>

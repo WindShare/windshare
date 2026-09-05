@@ -191,12 +191,12 @@ export interface AssembleNewFileSystemAccessOutputOptions {
 
 
 export {
-  openFileSystemAccessPendingOutcomeCatchUp,
+  openFileSystemAccessCompatibleNameCatchUp,
   reopenFileSystemAccessOutput,
 } from './session-reopen'
 export type {
-  FileSystemAccessPendingOutcomeCatchUpSession,
-  OpenFileSystemAccessPendingOutcomeCatchUpOptions,
+  FileSystemAccessCompatibleNameCatchUpSession,
+  OpenFileSystemAccessCompatibleNameCatchUpOptions,
   ReopenFileSystemAccessOutputOptions,
 } from './session-reopen'
 export { createFSAAuthorityReference } from './session-diagnostics'
