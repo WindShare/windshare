@@ -1,4 +1,5 @@
 import { snapshotIdentity } from '../workspace/canonical'
+import type { LifecycleEvent } from '../workspace/lifecycle'
 import {
   snapshotRecoverySelectionFacts,
   type ReceiveLifecycleState,
@@ -7,7 +8,7 @@ import type { DirectTreeIntent } from './settlement-proof'
 
 export type ReceiveAdmissionFallback = Extract<
   ReceiveLifecycleState,
-  { kind: 'resumable-receive'; payloadKind: 'file-set' }
+  { kind: 'receiving' } | { kind: 'resumable-receive'; payloadKind: 'file-set' }
 >
 
 export function snapshotReceiveAdmissionFallback(
@@ -15,6 +16,19 @@ export function snapshotReceiveAdmissionFallback(
   input: ReceiveAdmissionFallback | undefined,
 ): ReceiveAdmissionFallback | undefined {
   if (input === undefined) return undefined
+  if (input.kind === 'receiving') {
+    if (input.operationId !== intent.operationId || input.receiveIntentDigest !== intent.digest ||
+        typeof input.generation !== 'bigint' || input.generation < 0n) {
+      throw new TypeError('FSA interrupted admission fallback is foreign')
+    }
+    return Object.freeze({
+      kind: 'receiving',
+      operationId: input.operationId,
+      receiveIntentDigest: input.receiveIntentDigest,
+      generation: input.generation,
+      activeLeaseId: snapshotIdentity(input.activeLeaseId, 16, 'interrupted receive lease'),
+    })
+  }
   if (typeof input !== 'object' || input === null || input.kind !== 'resumable-receive' ||
       input.operationId !== intent.operationId || input.receiveIntentDigest !== intent.digest ||
       typeof input.generation !== 'bigint' || input.generation < 0n ||
@@ -48,7 +62,7 @@ export function sameReceiveAdmissionFallback(
   state: ReceiveLifecycleState,
   fallback: ReceiveAdmissionFallback,
 ): boolean {
-  return state.kind === 'resumable-receive' && state.payloadKind === 'file-set' &&
+  return fallback.kind === 'resumable-receive' && state.kind === 'resumable-receive' && state.payloadKind === 'file-set' &&
     state.checkpointSetDigest === fallback.checkpointSetDigest &&
     state.completedFileCount === fallback.completedFileCount &&
     state.completedBytes === fallback.completedBytes &&
@@ -57,6 +71,27 @@ export function sameReceiveAdmissionFallback(
     state.selectionFacts.discovery === fallback.selectionFacts.discovery &&
     state.expiresAt === fallback.expiresAt &&
     state.partialReceiptDigest === fallback.partialReceiptDigest
+}
+
+/** Admission rollback restores the exact paused evidence, including its original retention deadline. */
+export function receiveAdmissionFailureEvent(
+  state: Extract<ReceiveLifecycleState, { kind: 'receiving' }>,
+  fallback: Extract<ReceiveAdmissionFallback, { kind: 'resumable-receive' }>,
+  leaseId: string,
+): Extract<LifecycleEvent, { kind: 'resume-admission-failed' }> {
+  return Object.freeze({
+    kind: 'resume-admission-failed',
+    checkpointSetDigest: fallback.checkpointSetDigest,
+    completedFileCount: fallback.completedFileCount,
+    completedBytes: fallback.completedBytes,
+    selectionFacts: fallback.selectionFacts,
+    expiresAt: fallback.expiresAt,
+    ...(fallback.partialReceiptDigest === undefined
+      ? {}
+      : { partialReceiptDigest: fallback.partialReceiptDigest }),
+    expectedGeneration: state.generation,
+    leaseId,
+  })
 }
 
 export function isFSAStableOrTerminal(state: ReceiveLifecycleState): boolean {

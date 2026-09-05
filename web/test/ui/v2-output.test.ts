@@ -570,7 +570,7 @@ describe('derived output lifecycle and recovery presentation', () => {
     expect(outputs.updateRepairSummary(intent.operationId, firstReplacement, 1_000)).toBe(true)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 0,
-      actionMode: 'abnormal-stop-recovery',
+      actionMode: 'receiving-notice',
     })
 
     const committed = repairSummary(2, [
@@ -842,19 +842,20 @@ function repairSummary(
   committedCount: number,
   logicalPathSample: readonly (readonly string[])[],
   footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  pendingCatchUp = false,
+  sidecarPending = false,
 ): CompatibleNameRepairSummary {
+  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
   return Object.freeze({
     committedCount,
     logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    pendingCatchUp,
+    sidecarSync: sidecarPending ? 'pending' : 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
   })
 }
 

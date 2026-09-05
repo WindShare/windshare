@@ -95,7 +95,7 @@ export async function persistReceiveResume(
   nowMilliseconds: number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'receiving' }>> {
   const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
-    kind: 'resume-started',
+    kind: snapshot.lifecycle.kind === 'receiving' ? 'receive-authority-reacquired' : 'resume-started',
     expectedGeneration: snapshot.lifecycle.generation,
     leaseId: lease.leaseId,
   }), reducerContext(snapshot.operation.receiveIntent, lease, nowMilliseconds))

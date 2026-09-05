@@ -357,6 +357,28 @@ export class V2ReceiverController {
     this.#retained.perform(operation, action)
   }
 
+  catchUpStoppedCompatibleNames(): void {
+    const output = this.#snapshot.output
+    const repair = output.lifecyclePresentation?.compatibleNameRepair
+    if (this.#disposed || this.#retained.pending || output.lifecycle === null ||
+        !this.#activeReceive.active || repair?.actionMode !== 'catch-up-required' ||
+        repair.visibility === 'notice') return
+    const operationId = output.lifecycle.operationId
+    // Local replay reacquires exclusive output authority. Release the stopped
+    // receiver first, then use the same durable action path as a fresh page.
+    this.#resetReceiveOwnership(new DOMException(
+      'Stopped receive is handing output authority to local restoration catch-up',
+      'AbortError',
+    )).then(async () => {
+      if (this.#disposed) return
+      await this.#retained.load()
+      if (this.#disposed) return
+      const operation = this.#snapshot.retained.operations.find(candidate =>
+        candidate.operationId === operationId)
+      if (operation?.actions.includes('catch-up')) this.#retained.perform(operation, 'catch-up')
+    }).catch(error => this.#publishActionError(error))
+  }
+
   startNewReceiveOperation(): void {
     const joined = this.#joined
     const output = this.#snapshot.output

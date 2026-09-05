@@ -494,7 +494,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
     const operationId = snapshotIdentity(input.operationId, 16, 'operation ID')
     const summary = compatibleNameRepairSummary(input.repairSummary)
     const footer = summary.latestObservedFooter
-    if (summary.pendingCatchUp || footer === undefined || footer.state === 'active' ||
+    if (summary.sidecarSync !== 'current' || summary.terminalSettlement !== 'complete' || footer === undefined || footer.state === 'active' ||
         footer.committedCount !== summary.committedCount) {
       throw new TypeError('pending terminal outcome requires a complete terminal footer')
     }
@@ -521,13 +521,7 @@ export class IndexedDbCompatibleNameLedger implements CompatibleNameLedger {
   }
 
   async readRepairSummary(operationId: string): Promise<CompatibleNameRepairSummary | undefined> {
-    const header = await this.readHeader(operationId)
-    const summary = header?.repairSummary
-    if (header === undefined || summary === undefined || header.pendingTerminalOutcome === undefined ||
-        summary.pendingCatchUp) return summary
-    // A crash after lifecycle publication but before clearing the pending row must
-    // remain retryable in retained presentation even if the terminal footer is valid.
-    return compatibleNameRepairSummary({ ...summary, pendingCatchUp: true })
+    return (await this.readHeader(operationId))?.repairSummary
   }
 
   async removeVerifiedEmptyOperation(

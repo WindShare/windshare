@@ -374,6 +374,10 @@ export class CompatibleNamePathAuthority {
     return this.#coordinator?.drainTerminalProjector(state) ?? Promise.resolve(undefined)
   }
 
+  synchronizeActiveProjector(reconcile?: () => Promise<void>): Promise<CompatibleNameRepairSummary | undefined> {
+    return this.#coordinator?.synchronizeActiveProjector(reconcile) ?? Promise.resolve(undefined)
+  }
+
   clearPendingTerminalOutcome(): Promise<void> {
     return this.#coordinator?.clearPendingTerminalOutcome() ?? Promise.resolve()
   }

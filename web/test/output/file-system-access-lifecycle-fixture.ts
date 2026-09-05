@@ -410,7 +410,7 @@ export class MemoryCompatibleNameLedger implements CompatibleNameActivationLedge
               logicalPathSample: this.header.repairSummary.logicalPathSample.length === 0
                 ? [committed.logicalPath]
                 : this.header.repairSummary.logicalPathSample,
-              pendingCatchUp: true,
+              sidecarSync: 'pending',
             }),
           }),
     })

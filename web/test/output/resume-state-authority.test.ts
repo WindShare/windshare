@@ -13,6 +13,35 @@ import {
 } from '../../src/output/workspace/state'
 
 describe('receive operation resume authority', () => {
+  it('keeps obsolete repair records cleanup-only even after their receive deadline', async () => {
+    const lifecycle = resumableReceive(5_000)
+    const readRecoverySummary = vi.fn(async () => { throw new Error('old repair must not decode') })
+    const resume = vi.fn(async () => 'resumed')
+    const expire = vi.fn(async () => 'expired')
+    const catchUp = vi.fn(async () => 'caught-up')
+    const discard = vi.fn(async () => ({ kind: 'record-forgotten' as const }))
+    const authority = new ReceiveOperationResumeAuthority({
+      source: {
+        listLifecycleStates: async () => [lifecycle],
+        isCleanupOnly: async () => true,
+        readRecoverySummary,
+      },
+      mutations: { ...mutations({ resume, expire, discard }), catchUp },
+      clock: { now: () => 5_000 + STABLE_RETENTION_MILLISECONDS },
+    })
+    const reference = async () => (await authority.listResumeState()).operations[0]!
+    expect((await reference()).descriptor.continuation).toBe('cleanup-incompatible')
+    await expect(authority.resume(await reference())).rejects.toThrow('only be forgotten')
+    await expect(authority.catchUp(await reference())).rejects.toThrow('catch-up authority')
+    await expect(authority.cleanup(await reference())).rejects.toThrow('cleanup authority')
+    await expect(authority.discard(await reference())).resolves.toEqual({ kind: 'record-forgotten' })
+    expect(readRecoverySummary).not.toHaveBeenCalled()
+    expect(resume).not.toHaveBeenCalled()
+    expect(expire).not.toHaveBeenCalled()
+    expect(catchUp).not.toHaveBeenCalled()
+    expect(discard).toHaveBeenCalledOnce()
+  })
+
   it('offers only v6 lifecycle projections and consumes each reference once', async () => {
     const lifecycle = resumableReceive(10_000)
     const resume = vi.fn(async () => 'resumed')

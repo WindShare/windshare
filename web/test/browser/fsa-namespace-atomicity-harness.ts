@@ -47,6 +47,7 @@ import {
   type CompatibleNameActivationLedger,
   type CompatibleNameRootRepairFactory,
 } from '../../src/output/file-system-access/compatible-name/coordinator'
+import { compatibleNameRestorationPairCandidate } from '../../src/output/file-system-access/compatible-name/naming'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 
 export interface FsaNamespaceFixture {
@@ -376,6 +377,56 @@ export async function exerciseCompatibleNameScenarioClosure(
   refusals.push(await exerciseResultRootRefusal(scopedFixture(fixture, 'root'), 91))
   const ordinary = await exerciseOrdinaryCompatibleNameDormancy(scopedFixture(fixture, 'ordinary'))
   return Object.freeze({ refusals: Object.freeze(refusals), ordinary })
+}
+
+export async function exerciseRestorationPairCollisions(fixture: FsaNamespaceFixture) {
+  const results = []
+  for (const occupiedKind of ['script', 'sidecar'] as const) {
+    const scoped = scopedFixture(fixture, occupiedKind)
+    await resetFixture(scoped)
+    const parent = await parentDirectory(scoped, true)
+    const repository = await IndexedDbReceiveOperationRepository.open(scoped.databaseName)
+    const session = await bindTask(scoped, parent, repository, await resultRootArtifact(), 111)
+    const root = await parent.getDirectoryHandle(session.reservation.physicalName)
+    const first = await compatibleNameRestorationPairCandidate({
+      operationId: session.intent.operationId, primaryToken: 'aaaaaa', attempt: 0,
+    })
+    const second = await compatibleNameRestorationPairCandidate({
+      operationId: session.intent.operationId, primaryToken: 'aaaaaa', attempt: 1,
+    })
+    const occupied = await root.getFileHandle(first[occupiedKind], { create: true })
+    const writer = await occupied.createWritable()
+    await writer.write('unrelated existing file')
+    await writer.close()
+    const interceptor = installNativeLookupInterceptor({
+      parent: root,
+      rejection: { kind: 'directory', cause: new TypeError('injected exact native refusal') },
+      contentBlockRequestCount: () => 0,
+    })
+    try {
+      await session.ensureDirectory(['mapped-directory'])
+      await waitForCompatibleProjection(session, 1)
+      const operation = await readCompatibleOperation(scoped, session.intent.operationId)
+      const names = await entryNames(root)
+      results.push(Object.freeze({
+        occupiedKind,
+        pairRetriedTogether: operation.header.pair.token === second.token &&
+          operation.header.pair.script.physicalName === second.script &&
+          operation.header.pair.sidecar.physicalName === second.sidecar,
+        unoccupiedFirstPartnerAbsent: !names.includes(first[occupiedKind === 'script' ? 'sidecar' : 'script']),
+        occupiedFilePreserved: await (await occupied.getFile()).text() === 'unrelated existing file',
+        contentTokenUnchanged: operation.mappings[0]?.token === 'aaaaaa',
+        pairOwned: operation.header.pair.script.ownershipState === 'owned' &&
+          operation.header.pair.sidecar.ownershipState === 'owned',
+      }))
+    } finally {
+      interceptor.restore()
+      await session.close()
+      repository.close()
+      await resetFixture(scoped)
+    }
+  }
+  return Object.freeze(results)
 }
 
 async function exerciseDescendantRefusal(
@@ -1093,7 +1144,7 @@ async function waitForCompatibleProjection(
   let unsubscribe: (() => void) | undefined
   const reached = new Promise<void>(resolve => {
     unsubscribe = source.subscribe(summary => {
-      if (summary.committedCount === committedCount && !summary.pendingCatchUp &&
+      if (summary.committedCount === committedCount && summary.sidecarSync === 'current' &&
           summary.latestObservedFooter?.state === 'active' &&
           summary.latestObservedFooter.committedCount === committedCount) resolve()
     })

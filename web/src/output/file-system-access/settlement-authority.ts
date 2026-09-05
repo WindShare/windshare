@@ -39,6 +39,7 @@ import {
 } from './session'
 import {
   isFSAStableOrTerminal,
+  receiveAdmissionFailureEvent,
   sameReceiveAdmissionFallback,
   type ReceiveAdmissionFallback,
 } from './admission-fallback'
@@ -120,6 +121,12 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     return Object.freeze(authority)
   }
 
+  #isUnopenedInterruptedContinuation(state: ReceiveLifecycleState): boolean {
+    return state.kind === 'receiving' && this.#admissionFallback?.kind === 'receiving' &&
+      state.generation === this.#admissionFallback.generation + 1n &&
+      !this.#materializationActivationStarted
+  }
+
   async settleExecutionAdmissionFailure(
     intent: ReceiveIntent,
     reason: unknown,
@@ -142,23 +149,20 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       return current.state
     }
     if (isFSAStableOrTerminal(current.state)) return current.state
-    if (current.state.kind === 'receiving' && this.#admissionFallback !== undefined &&
+    if (this.#isUnopenedInterruptedContinuation(current.state)) {
+      // An interrupted receive has no invented pause receipt to restore. Its durable
+      // files/checkpoints remain eligible for the next explicit authority reacquisition.
+      return current.state
+    }
+    if (current.state.kind === 'receiving' && this.#admissionFallback?.kind === 'resumable-receive' &&
         current.state.generation === this.#admissionFallback.generation + 1n &&
         !this.#materializationActivationStarted) {
       const fallback = this.#admissionFallback
-      const next = this.#reduce(current.state, {
-        kind: 'resume-admission-failed',
-        checkpointSetDigest: fallback.checkpointSetDigest,
-        completedFileCount: fallback.completedFileCount,
-        completedBytes: fallback.completedBytes,
-        selectionFacts: fallback.selectionFacts,
-        expiresAt: fallback.expiresAt,
-        ...(fallback.partialReceiptDigest === undefined
-          ? {}
-          : { partialReceiptDigest: fallback.partialReceiptDigest }),
-        expectedGeneration: current.state.generation,
-        leaseId: this.#lifecycleLeaseId,
-      })
+      const next = this.#reduce(current.state, receiveAdmissionFailureEvent(
+        current.state,
+        fallback,
+        this.#lifecycleLeaseId,
+      ))
       const committed = await this.#commitLifecycle(current, next)
       this.#emitAdmissionFailureRestored(fallback)
       return committed.state
@@ -690,7 +694,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     }
   }
 
-  #emitAdmissionFailureRestored(fallback: ReceiveAdmissionFallback): void {
+  #emitAdmissionFailureRestored(fallback: Extract<ReceiveAdmissionFallback, { kind: 'resumable-receive' }>): void {
     this.#recordReviewedFailure('continuation', 'resumable_receive')
     emitOutputTrace(this.#diagnostics?.trace, () =>
       outputTraceEvent('continuation', {

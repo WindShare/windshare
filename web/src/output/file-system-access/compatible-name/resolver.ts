@@ -147,6 +147,11 @@ export class PhysicalPathResolver {
         header.pairPlacement !== this.#header.pairPlacement ||
         header.root.logicalName !== this.#header.root.logicalName ||
         header.root.physicalName !== this.#header.root.physicalName ||
+        header.pair.token !== this.#header.pair.token ||
+        header.pair.script.handleId !== this.#header.pair.script.handleId ||
+        header.pair.script.ownedObjectId !== this.#header.pair.script.ownedObjectId ||
+        header.pair.sidecar.handleId !== this.#header.pair.sidecar.handleId ||
+        header.pair.sidecar.ownedObjectId !== this.#header.pair.sidecar.ownedObjectId ||
         header.pair.script.physicalName !== this.#header.pair.script.physicalName ||
         header.pair.sidecar.physicalName !== this.#header.pair.sidecar.physicalName) {
       throw new TypeError('compatible-name resolver header identity changed')

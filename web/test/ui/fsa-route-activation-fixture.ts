@@ -417,7 +417,7 @@ export class MemoryCompatibleNameActivationLedger implements CompatibleNameActiv
               ...this.header.repairSummary,
               committedCount: 1,
               logicalPathSample: [this.mapping.logicalPath],
-              pendingCatchUp: true,
+              sidecarSync: 'pending',
             }),
           }),
     })

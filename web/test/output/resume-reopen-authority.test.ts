@@ -34,6 +34,7 @@ import {
 } from '../../src/output/workspace/records'
 import { WORKSPACE_HANDLE_PACKAGE_OBJECT } from '../../src/output/workspace/stages'
 import { identity } from './planning/fixture'
+import type { CompatibleNameOperationHeaderV1 } from '../../src/output/file-system-access/compatible-name/model'
 import {
   MemoryDirectoryHandle,
   MemoryLockManager,
@@ -122,6 +123,43 @@ describe('persisted receive operation reopen authority', () => {
       lease_id: reopened.lease.leaseId,
     }))
 
+    await reopened.close()
+    expect(state.lease).toBeUndefined()
+  })
+
+  it.each([false, true])('reacquires an interrupted receive only without a pending terminal outcome (%s)', async terminalPending => {
+    const state = new MemoryRepositoryState()
+    const intent = await directTreeIntent()
+    const parent = new MemoryDirectoryHandle('downloads')
+    await seedFSAOperationBinding(new MemoryOperationRepository(state), intent, parent.asHandle())
+    const lifecycle = Object.freeze({
+      kind: 'receiving' as const, operationId: intent.operationId,
+      receiveIntentDigest: intent.digest, generation: 4n, activeLeaseId: identity(80),
+    })
+    await state.seedLifecycle(lifecycle)
+    const authority = new PersistedReceiveOperationReopenAuthority({
+      repositoryFactory: async () => new MemoryOperationRepository(state),
+      clock: { now: () => ENTERED_AT + 1 },
+      leaseOptions: { manager: new MemoryLockManager(), randomBytes: bytesFilled(81) },
+      readCompatibleNameHeader: async () => terminalPending
+        ? { pendingTerminalOutcome: {} } as unknown as CompatibleNameOperationHeaderV1
+        : undefined,
+    })
+    const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
+    expect(descriptor.continuation).toBe('resume-receive')
+    const attempt = authority.reopen(descriptor, 'continue')
+    if (terminalPending) {
+      await expect(attempt).rejects.toThrow('requires local settlement')
+      expect(state.lease).toBeUndefined()
+      return
+    }
+    const reopened = await attempt
+    expect(reopened.lifecycle).toMatchObject({
+      kind: 'receiving', generation: 5n, activeLeaseId: reopened.lease.leaseId,
+    })
+    if (reopened.kind !== 'direct-tree') throw new Error('unexpected route')
+    expect(reopened.receiveAdmissionFallback).toEqual(lifecycle)
+    expect(reopened.retainedFileRecovery).toBe('preserve')
     await reopened.close()
     expect(state.lease).toBeUndefined()
   })

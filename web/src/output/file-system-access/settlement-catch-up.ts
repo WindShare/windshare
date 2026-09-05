@@ -11,34 +11,45 @@ import { storedReceiveLifecycleState } from '../workspace/state-codec'
 import type { ReceiveLifecycleState } from '../workspace/state'
 import type { ReopenedDirectTreeOperation } from '../resume/reopen-authority'
 import {
-  openFileSystemAccessPendingOutcomeCatchUp,
-  type FileSystemAccessPendingOutcomeCatchUpSession,
+  openFileSystemAccessCompatibleNameCatchUp,
+  type FileSystemAccessCompatibleNameCatchUpSession,
 } from './session'
 import type { CompatibleNamePendingTerminalOutcomeV1 } from './compatible-name/model'
 
-export interface FileSystemAccessPendingOutcomeCatchUpResult {
-  readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'published' | 'partial-directory' }>
+export interface FileSystemAccessCompatibleNameCatchUpResult {
+  readonly lifecycle: ReceiveLifecycleState
   readonly repairSummary: import('./compatible-name/model').CompatibleNameRepairSummary
 }
 
-export async function catchUpFileSystemAccessPendingOutcome(input: Readonly<{
+export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{
   operation: ReopenedDirectTreeOperation
   signal: AbortSignal
   openSession?: (
     operation: ReopenedDirectTreeOperation,
-  ) => Promise<FileSystemAccessPendingOutcomeCatchUpSession>
+  ) => Promise<FileSystemAccessCompatibleNameCatchUpSession>
   clock?: () => number
-}>): Promise<FileSystemAccessPendingOutcomeCatchUpResult> {
+}>): Promise<FileSystemAccessCompatibleNameCatchUpResult> {
   input.signal.throwIfAborted()
-  const session = await (input.openSession ?? openPendingCatchUpSession)(input.operation)
+  const session = await (input.openSession ?? openCompatibleNameCatchUpSession)(input.operation)
   // Acquiring local mutation authority is the retry commit point. From here cancellation
   // cannot strand a footer/lifecycle cut halfway through a second time.
   let attempt:
-    | Readonly<{ succeeded: true; result: FileSystemAccessPendingOutcomeCatchUpResult }>
+    | Readonly<{ succeeded: true; result: FileSystemAccessCompatibleNameCatchUpResult }>
     | Readonly<{ succeeded: false; error: unknown }>
   try {
     attempt = await session.runExclusive(async () => {
       const pending = session.pendingOutcome
+      if (pending === undefined) {
+        if (input.operation.lifecycle.kind !== 'receiving' &&
+            input.operation.lifecycle.kind !== 'resumable-receive') {
+          throw new TypeError('active compatible-name catch-up requires a receive continuation')
+        }
+        const repairSummary = await session.synchronizeActiveProjector()
+        return Object.freeze({
+          succeeded: true as const,
+          result: Object.freeze({ lifecycle: input.operation.lifecycle, repairSummary }),
+        })
+      }
       if (pending.ordinaryLifecycle.operationId !== input.operation.intent.operationId ||
           pending.ordinaryLifecycle.receiveIntentDigest !== input.operation.intent.digest) {
         throw new TypeError('pending compatible-name outcome escaped its receive operation')
@@ -55,7 +66,9 @@ export async function catchUpFileSystemAccessPendingOutcome(input: Readonly<{
       await session.clearPendingOutcome()
       return Object.freeze({
         succeeded: true as const,
-        result: Object.freeze({ lifecycle, repairSummary }),
+        result: Object.freeze({
+          lifecycle, repairSummary: Object.freeze({ ...repairSummary, terminalSettlement: 'complete' as const }),
+        }),
       })
     })
   } catch (error) {
@@ -70,10 +83,10 @@ export async function catchUpFileSystemAccessPendingOutcome(input: Readonly<{
   return attempt.result
 }
 
-function openPendingCatchUpSession(
+function openCompatibleNameCatchUpSession(
   operation: ReopenedDirectTreeOperation,
-): Promise<FileSystemAccessPendingOutcomeCatchUpSession> {
-  return openFileSystemAccessPendingOutcomeCatchUp({
+): Promise<FileSystemAccessCompatibleNameCatchUpSession> {
+  return openFileSystemAccessCompatibleNameCatchUp({
     intent: operation.intent,
     operationRepository: operation.repository,
   })
@@ -124,7 +137,7 @@ async function rebindCatchUpLifecycle(
   context: LifecycleReducerContext,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'receiving' }>> {
   const reacquired = reduceReceiveLifecycle(current, {
-    kind: 'terminal-catch-up-reacquired',
+    kind: 'receive-authority-reacquired',
     expectedGeneration: current.generation,
     leaseId: operation.lease.leaseId,
   }, context)

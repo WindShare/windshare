@@ -64,7 +64,7 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly trace?: FSAOutputTrace
 }
 
-export interface OpenFileSystemAccessPendingOutcomeCatchUpOptions {
+export interface OpenFileSystemAccessCompatibleNameCatchUpOptions {
   readonly intent: ReceiveIntent
   readonly operationRepository: FSAOperationBindingRepository
   readonly lockManager?: BrowserLockManagerRuntime
@@ -75,8 +75,9 @@ export interface OpenFileSystemAccessPendingOutcomeCatchUpOptions {
 }
 
 /** Local-only authority: no catalog, revision, content, block, or sender capability is accepted. */
-export interface FileSystemAccessPendingOutcomeCatchUpSession {
-  readonly pendingOutcome: CompatibleNamePendingTerminalOutcomeV1
+export interface FileSystemAccessCompatibleNameCatchUpSession {
+  readonly pendingOutcome: CompatibleNamePendingTerminalOutcomeV1 | undefined
+  synchronizeActiveProjector(): Promise<CompatibleNameRepairSummary>
   drainTerminalProjector(): Promise<CompatibleNameRepairSummary>
   clearPendingOutcome(): Promise<void>
   retireRecoveryMetadata(): Promise<void>
@@ -208,9 +209,9 @@ function initialClaimInspectionSessionOption(
     : { maximumConcurrentInitialClaimInspections }
 }
 
-export async function openFileSystemAccessPendingOutcomeCatchUp(
-  options: OpenFileSystemAccessPendingOutcomeCatchUpOptions,
-): Promise<FileSystemAccessPendingOutcomeCatchUpSession> {
+export async function openFileSystemAccessCompatibleNameCatchUp(
+  options: OpenFileSystemAccessCompatibleNameCatchUpOptions,
+): Promise<FileSystemAccessCompatibleNameCatchUpSession> {
   const intent = await validateReceiveIntent(options.intent)
   const firstBinding = await verifyFSAOperationBinding({
     repository: options.operationRepository,
@@ -234,8 +235,8 @@ export async function openFileSystemAccessPendingOutcomeCatchUp(
       preparation: options.compatibleNamePreparation ?? defaultCompatibleNamePreparation(),
     })
     const pendingOutcome = compatibleNames.pendingTerminalOutcome()
-    if (!compatibleNames.active || pendingOutcome === undefined) {
-      throw new DOMException('Compatible-name terminal catch-up is not pending', 'InvalidStateError')
+    if (!compatibleNames.active) {
+      throw new DOMException('Compatible-name local catch-up is unavailable', 'InvalidStateError')
     }
     const pairRoot = compatibleNames.pairPlacement === 'inside-logical-root'
       ? await binding.parent.getDirectoryHandle(binding.reservation.physicalName)
@@ -264,15 +265,40 @@ export async function openFileSystemAccessPendingOutcomeCatchUp(
     }
     return Object.freeze({
       pendingOutcome,
+      synchronizeActiveProjector: async () => {
+        if (pendingOutcome !== undefined) {
+          throw new DOMException('Active catch-up cannot cross a terminal outcome', 'InvalidStateError')
+        }
+        const summary = await compatibleNames!.synchronizeActiveProjector(
+          () => reconcileCommittedFileMappings(semantic, materializationBinding, compatibleNames!),
+        )
+        if (summary === undefined) {
+          throw new DOMException('Compatible-name active projector is unavailable', 'InvalidStateError')
+        }
+        return summary
+      },
       drainTerminalProjector: async () => {
+        if (pendingOutcome === undefined) {
+          throw new DOMException('Compatible-name terminal outcome is unavailable', 'InvalidStateError')
+        }
         const summary = await compatibleNames!.drainTerminalProjector(pendingOutcome.footerState)
         if (summary === undefined) {
           throw new DOMException('Compatible-name terminal projector is unavailable', 'InvalidStateError')
         }
         return summary
       },
-      clearPendingOutcome: () => compatibleNames!.clearPendingTerminalOutcome(),
-      retireRecoveryMetadata: () => retireRecoveryMetadata(semantic, materializationBinding),
+      clearPendingOutcome: async () => {
+        if (pendingOutcome === undefined) {
+          throw new DOMException('Active catch-up has no terminal outcome to clear', 'InvalidStateError')
+        }
+        await compatibleNames!.clearPendingTerminalOutcome()
+      },
+      retireRecoveryMetadata: async () => {
+        if (pendingOutcome === undefined) {
+          throw new DOMException('Active catch-up must preserve receive metadata', 'InvalidStateError')
+        }
+        await retireRecoveryMetadata(semantic, materializationBinding)
+      },
       runExclusive,
       close,
     })

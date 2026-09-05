@@ -235,7 +235,7 @@ export function headerAfterCommit(
           ? prior.logicalPathSample
           : [...prior.logicalPathSample, mapping.logicalPath]
               .slice(0, MAX_COMPATIBLE_NAME_REPAIR_SUMMARY_PATHS),
-        pendingCatchUp: true,
+        sidecarSync: 'pending',
       })
   return replaceHeader(header, {
     ...(repairSummary === undefined ? {} : { repairSummary }),
@@ -333,7 +333,7 @@ export function isTerminalRepairSummary(summary: CompatibleNameRepairSummary | u
     return false
   }
   const footer = summary.latestObservedFooter
-  return footer !== undefined && footer.state !== 'active' && !summary.pendingCatchUp
+  return footer !== undefined && footer.state !== 'active' && summary.terminalSettlement === 'complete'
 }
 
 export function readPairHandle(value: unknown): ReceiveOperationHandleRecord<FileSystemFileHandle> {

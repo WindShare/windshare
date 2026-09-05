@@ -65,6 +65,7 @@ export interface CompatibleNameProjectorOptions {
 export interface CompatibleNameProjector {
   /** A commit notification never exposes sidecar latency to the committing worker. */
   markDirty(): void
+  synchronizeActive(reconcile?: () => Promise<void>): Promise<CompatibleNameFooterObservationV1>
   /** Returns the latest completely closed and validated footer without forcing catch-up. */
   observeFooter(): CompatibleNameFooterObservationV1
   /** Completion, failure, and explicit Stop share this single terminal reconciliation. */
@@ -89,6 +90,7 @@ class CoalescingCompatibleNameProjector implements CompatibleNameProjector {
   readonly #trace: ((event: CompatibleNameProjectorTraceEvent) => void) | undefined
 
   #checkpoint!: CompatibleNameSidecarCheckpointV1
+  #synchronizing = false
   #dirty = false
   #flushPromise: Promise<void> | undefined
   #terminalState: CompatibleNameTerminalFooterState | undefined
@@ -143,8 +145,30 @@ class CoalescingCompatibleNameProjector implements CompatibleNameProjector {
     return this.#terminalPromise
   }
 
+  async synchronizeActive(reconcile?: () => Promise<void>): Promise<CompatibleNameFooterObservationV1> {
+    if (this.#terminalState !== undefined || this.#synchronizing) {
+      throw new CompatibleNameProjectorError('active synchronization requires exclusive active authority')
+    }
+    this.#synchronizing = true
+    try {
+      await this.#flushPromise?.catch(() => undefined)
+      // Replay can commit several mappings before failing. Keeping all its dirty
+      // notifications inside this scope prevents a writer surviving failed reopen.
+      await reconcile?.()
+      this.#checkpoint = await this.#reconcileStoredCheckpoint('active', 'restart')
+      if (this.#checkpoint.footer.state !== 'active') {
+        throw new CompatibleNameProjectorError('active synchronization encountered a terminal footer')
+      }
+      this.#dirty = false
+      await this.#publishCheckpoint()
+      return this.observeFooter()
+    } finally {
+      this.#synchronizing = false
+    }
+  }
+
   #startBackgroundFlush(): void {
-    if (this.#flushPromise !== undefined || !this.#dirty || this.#terminalState !== undefined) return
+    if (this.#synchronizing || this.#flushPromise !== undefined || !this.#dirty || this.#terminalState !== undefined) return
 
     const flush = this.#flushBackground()
     this.#flushPromise = flush
@@ -244,17 +268,22 @@ class CoalescingCompatibleNameProjector implements CompatibleNameProjector {
     requestedState: CompatibleNameFooterState,
     stage: 'restart' | 'terminal',
   ): Promise<CompatibleNameSidecarCheckpointV1> {
+    // A parseable footer is not proof that its mappings still match durable authority.
+    // Reopen and explicit synchronization validate the complete prefix; background
+    // commits continue using incremental suffix scans.
+    const committed = await this.#scanCommittedMappings(0)
     let checkpoint: CompatibleNameSidecarCheckpointV1
     let suffix: readonly CompatibleNameMappingV1[]
-
     try {
       checkpoint = decodeCompatibleNameSidecar(await this.#writer.readOwnedBytes())
       this.#assertCheckpointIdentity(checkpoint)
-      // The closed footer is the only filesystem publication cursor. The ledger
-      // validates that this cursor is not ahead of durable commit truth.
-      suffix = await this.#scanCommittedMappings(checkpoint.footer.committedCount)
+      const count = checkpoint.footer.committedCount
+      if (count > committed.length ||
+          !sidecarMappingsEqual(checkpoint.mappings, committed.slice(0, count).map(sidecarMapping))) {
+        throw new CompatibleNameProjectorError('sidecar prefix disagrees with the committed ledger')
+      }
+      suffix = committed.slice(count)
     } catch (cause) {
-      const committed = await this.#scanCommittedMappings(0)
       return this.#rebuildAndValidate(committed, requestedState, stage, cause)
     }
 

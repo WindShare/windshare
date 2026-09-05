@@ -155,7 +155,7 @@ function New-OperationRoot {
 
     $operationRoot = Join-Path $Parent $Name
     [void](New-Item -ItemType Directory -Path $operationRoot)
-    $scriptPath = Join-Path $operationRoot 'restore.ps1'
+    $scriptPath = Join-Path $operationRoot 'restore.windshare-aaaaaa.ps1'
     [IO.File]::Copy($templatePath, $scriptPath)
     Assert-Equal `
         -Expected (Get-FileHash -LiteralPath $templatePath -Algorithm SHA256).Hash `
@@ -164,17 +164,14 @@ function New-OperationRoot {
     return [PSCustomObject]@{
         Root = $operationRoot
         Script = $scriptPath
-        Sidecar = (Join-Path $operationRoot 'restore.sidecar-v1')
+        Sidecar = [IO.Path]::ChangeExtension($scriptPath, '.data')
     }
 }
 
 function Invoke-DisplayedRestorationCommand {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ScriptPath,
-
-        [Parameter(Mandatory = $true)]
-        [string]$SidecarPath
+        [string]$ScriptPath
     )
 
     # A fresh process proves the user-facing command owns its policy override instead of inheriting
@@ -182,8 +179,7 @@ function Invoke-DisplayedRestorationCommand {
     & powershell.exe `
         -NoProfile `
         -ExecutionPolicy Bypass `
-        -File $ScriptPath `
-        -SidecarPath $SidecarPath
+        -File $ScriptPath
     if ($LASTEXITCODE -ne 0) {
         throw "Displayed WindShare restoration command failed with exit code $LASTEXITCODE."
     }
@@ -192,25 +188,31 @@ function Invoke-DisplayedRestorationCommand {
 function Invoke-DisplayedRestorationCommandFromRestrictedParent {
     param(
         [Parameter(Mandatory = $true)]
-        [string]$ScriptPath,
-
-        [Parameter(Mandatory = $true)]
-        [string]$SidecarPath
+        [string]$ScriptPath
     )
 
-    $escapedScriptPath = $ScriptPath.Replace('"', '`"')
-    $escapedSidecarPath = $SidecarPath.Replace('"', '`"')
     $displayedCommand = (
-        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "' +
-        $escapedScriptPath + '" -SidecarPath "' + $escapedSidecarPath + '"'
+        'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\' +
+        [IO.Path]::GetFileName($ScriptPath) + '"'
     )
-    & powershell.exe `
-        -NoProfile `
-        -NonInteractive `
-        -ExecutionPolicy Restricted `
-        -Command $displayedCommand
-    if ($LASTEXITCODE -ne 0) {
-        throw "Displayed command failed from a Restricted parent with exit code $LASTEXITCODE."
+    $parentCommand = (
+        "if ((Get-ExecutionPolicy) -ne 'Restricted') { throw 'Expected a Restricted parent.' }; " +
+        $displayedCommand + '; exit $LASTEXITCODE'
+    )
+    # Encoding transports the copied command intact through the outer native argument parser.
+    $encodedParentCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($parentCommand))
+    Push-Location -LiteralPath ([IO.Path]::GetDirectoryName($ScriptPath))
+    try {
+        & powershell.exe `
+            -NoProfile `
+            -NonInteractive `
+            -ExecutionPolicy Restricted `
+            -EncodedCommand $encodedParentCommand
+        if ($LASTEXITCODE -ne 0) {
+            throw "Displayed command failed from a Restricted parent with exit code $LASTEXITCODE."
+        }
+    } finally {
+        Pop-Location
     }
 }
 
@@ -317,7 +319,9 @@ try {
 
     Write-Output '-- production sidecar restoration entry point'
 
-    $complete = New-OperationRoot -Parent $temporaryRoot -Name 'complete-and-rerun'
+    # Build Unicode at runtime because Windows PowerShell reads BOM-less scripts using ANSI.
+    $unicodeFolder = 'complete and rerun ' + [char]0x4E0B + [char]0x8F7D
+    $complete = New-OperationRoot -Parent $temporaryRoot -Name $unicodeFolder
     $compatibleDirectory = Join-Path $complete.Root 'rejected-dir.windshare-dddddd'
     [void](New-Item -ItemType Directory -Path $compatibleDirectory)
     $compatibleFile = Join-Path $compatibleDirectory 'pyvenv.windshare-dddddd'
@@ -342,9 +346,8 @@ try {
         -Records $completeRecords `
         -State completed `
         -IncompleteTail $ignoredTail
-    Invoke-DisplayedRestorationCommand `
-        -ScriptPath $complete.Script `
-        -SidecarPath $complete.Sidecar | Out-Null
+    Invoke-DisplayedRestorationCommandFromRestrictedParent `
+        -ScriptPath $complete.Script | Out-Null
     Assert-Equal `
         -Expected 'nested-content' `
         -Actual ([IO.File]::ReadAllText((Join-Path $complete.Root 'rejected-dir/pyvenv.cfg'))) `
@@ -353,15 +356,85 @@ try {
         -Condition (-not (Test-Path -LiteralPath $compatibleDirectory)) `
         -Message 'the compatible ancestor name is gone after restoration'
     Invoke-DisplayedRestorationCommand `
-        -ScriptPath $complete.Script `
-        -SidecarPath $complete.Sidecar | Out-Null
+        -ScriptPath $complete.Script | Out-Null
     Assert-Equal `
         -Expected 'nested-content' `
         -Actual ([IO.File]::ReadAllText((Join-Path $complete.Root 'rejected-dir/pyvenv.cfg'))) `
         -Message 'rerun treats restored path state as complete'
-    Invoke-DisplayedRestorationCommandFromRestrictedParent `
-        -ScriptPath $complete.Script `
-        -SidecarPath $complete.Sidecar | Out-Null
+
+    $missingPair = New-OperationRoot -Parent $temporaryRoot -Name 'missing exact pair'
+    $pairSource = Join-Path $missingPair.Root 'payload.windshare-bbbbbb'
+    New-ContractFile -Path $pairSource -Contents 'must-remain-compatible'
+    $pairRecords = @(
+        [PSCustomObject]@{
+            Ordinal = 1
+            Kind = 'file'
+            LogicalPath = 'payload.txt'
+            PhysicalComponent = 'payload.windshare-bbbbbb'
+        }
+    )
+    foreach ($hasNeighbor in @($false, $true)) {
+        if ($hasNeighbor) {
+            Write-Sidecar `
+                -Path (Join-Path $missingPair.Root 'restore.windshare-bbbbbb.data') `
+                -Records $pairRecords `
+                -State completed
+        }
+        $missingPairBefore = Get-TreeSnapshot -Path $missingPair.Root
+        $missingPairError = $null
+        try {
+            & $missingPair.Script | Out-Null
+        } catch {
+            $missingPairError = $_.Exception.Message
+        }
+        Assert-True `
+            -Condition ($null -ne $missingPairError -and $missingPairError.Contains($missingPair.Sidecar)) `
+            -Message 'missing exact partner reports its expected absolute path, even with another valid sidecar nearby'
+        Assert-Equal `
+            -Expected $missingPairBefore `
+            -Actual (Get-TreeSnapshot -Path $missingPair.Root) `
+            -Message 'missing exact pair does not use a neighboring operation or mutate content'
+    }
+
+    $active = New-OperationRoot -Parent $temporaryRoot -Name 'active confirmation'
+    New-ContractFile -Path (Join-Path $active.Root 'payload.windshare-bbbbbb') -Contents 'active-content'
+    Write-Sidecar -Path $active.Sidecar -Records $pairRecords -State active
+    $activeBefore = Get-TreeSnapshot -Path $active.Root
+    foreach ($response in @('', 'restore', 'RESTORE')) {
+        # Scoped host injection exercises the exact production function without interactive input.
+        $activeError = $null
+        try {
+            & {
+                param($Operation, $Response)
+                . $Operation.Script
+                function Read-Host {
+                    param([string]$Prompt)
+                    Assert-True `
+                        -Condition ($Prompt.Contains('no longer receiving') -and $Prompt.Contains('will not resume')) `
+                        -Message 'active confirmation explains receiving and resume consequences'
+                    return $Response
+                }
+                Invoke-WindShareRestoration -Path $Operation.Sidecar | Out-Null
+            } $active $response
+        } catch {
+            $activeError = $_.Exception.Message
+        }
+        if ($response -cne 'RESTORE') {
+            Assert-True `
+                -Condition ($null -ne $activeError -and $activeError.Contains('was cancelled')) `
+                -Message 'only exact RESTORE confirms an active checkpoint'
+            Assert-Equal `
+                -Expected $activeBefore `
+                -Actual (Get-TreeSnapshot -Path $active.Root) `
+                -Message 'cancelled active restoration preserves the complete output tree'
+        } else {
+            Assert-True -Condition ($null -eq $activeError) -Message "confirmed active restoration succeeds: $activeError"
+            Assert-Equal `
+                -Expected 'active-content' `
+                -Actual ([IO.File]::ReadAllText((Join-Path $active.Root 'payload.txt'))) `
+                -Message 'confirmed active restoration preserves content'
+        }
+    }
 
     $conflict = New-OperationRoot -Parent $temporaryRoot -Name 'four-state-conflict'
     $conflictSource = Join-Path $conflict.Root 'conflict.windshare-eeeeee'
@@ -381,8 +454,7 @@ try {
     Assert-Throws `
         -Action {
             Invoke-DisplayedRestorationCommand `
-                -ScriptPath $conflict.Script `
-                -SidecarPath $conflict.Sidecar | Out-Null
+                -ScriptPath $conflict.Script | Out-Null
         } `
         -Message 'both-present restoration state must stop'
     Assert-Equal `
@@ -404,8 +476,7 @@ try {
     Assert-Throws `
         -Action {
             Invoke-DisplayedRestorationCommand `
-                -ScriptPath $missing.Script `
-                -SidecarPath $missing.Sidecar | Out-Null
+                -ScriptPath $missing.Script | Out-Null
         } `
         -Message 'both-absent restoration state must stop'
     Assert-Equal `
@@ -427,8 +498,7 @@ try {
     Assert-Throws `
         -Action {
             Invoke-DisplayedRestorationCommand `
-                -ScriptPath $escape.Script `
-                -SidecarPath $escape.Sidecar | Out-Null
+                -ScriptPath $escape.Script | Out-Null
         } `
         -Message 'escaping logical paths must be rejected before restoration'
     Assert-Equal `

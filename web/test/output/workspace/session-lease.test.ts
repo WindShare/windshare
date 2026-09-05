@@ -4,6 +4,7 @@ import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   BrowserReceiveOperationBusyError,
   acquireBrowserReceiveOperationLease,
+  observeBrowserReceiveOperationActivity,
   type BrowserLockManagerRuntime,
 } from '../../../src/output/browser/session-lease'
 import type {
@@ -20,6 +21,11 @@ import type {
 import { initialReceiveLifecycleState } from '../../../src/output/workspace/state'
 
 describe('browser receive operation lease', () => {
+  it.each([true, false])('observes live Web Lock availability %s without acquiring a durable lease', async available => {
+    await expect(observeBrowserReceiveOperationActivity(identity(16, 1), lockManager(available)))
+      .resolves.toBe(available ? 'inactive' : 'active')
+  })
+
   it('atomically replaces an abandoned durable lease, heartbeats, and releases', async () => {
     const operationId = identity(16, 1)
     const repository = new MemoryRepository({

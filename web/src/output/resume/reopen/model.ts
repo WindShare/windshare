@@ -98,10 +98,7 @@ export interface ReopenedDirectTreeOperation extends ReopenedReceiveOperationBas
   readonly binding: PersistedFSAOperationBinding
   /** Exact pause-level choice consumed by the next DirectTree execution attempt. */
   readonly retainedFileRecovery?: PersistentPausedFileRecovery
-  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
-    kind: 'resumable-receive'
-    payloadKind: 'file-set'
-  }>
+  readonly receiveAdmissionFallback?: import('../../file-system-access/admission-fallback').ReceiveAdmissionFallback
 }
 
 export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase {
@@ -196,6 +193,8 @@ export type PersistedWorkspaceBudgetReclaim = (
 
 export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly repositoryFactory: () => Promise<ReceiveOperationRepository>
+  readonly readCompatibleNameHeader?: (operationId: string) =>
+    Promise<import('../../file-system-access/compatible-name/model').CompatibleNameOperationHeaderV1 | undefined>
   readonly openDirectZipJournal?: () => Promise<DirectZipJournalRepository>
   readonly clock?: { now(): number }
   readonly leaseOptions?: LeaseOptions
@@ -244,10 +243,7 @@ export interface ReopenResources {
 
 export interface ReopenLifecycleAuthority {
   readonly lifecycle: ReceiveLifecycleState
-  readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
-    kind: 'resumable-receive'
-    payloadKind: 'file-set'
-  }>
+  readonly receiveAdmissionFallback?: import('../../file-system-access/admission-fallback').ReceiveAdmissionFallback
   readonly stages?: WorkspaceOperationStages
   readonly admittedContent?: AdmittedWorkspaceContent
   readonly preparation?: SealedWorkspaceZipPreparationV1

@@ -3,10 +3,7 @@
 # This file is an immutable product asset. It deliberately contains no receive-specific
 # paths; the adjacent sidecar is the only operation-specific input.
 [CmdletBinding()]
-param(
-    [Parameter()]
-    [string]$SidecarPath
-)
+param()
 
 Set-StrictMode -Version 2.0
 $ErrorActionPreference = 'Stop'
@@ -587,7 +584,7 @@ function Invoke-WindShareRestoration {
     )
 
     if ([string]::IsNullOrWhiteSpace($Path)) {
-        throw 'WindShare restoration requires -SidecarPath.'
+        throw 'WindShare restoration requires a sidecar path.'
     }
 
     $scriptDirectory = [IO.Path]::GetFullPath((Split-Path -Parent $PSCommandPath))
@@ -631,8 +628,10 @@ function Invoke-WindShareRestoration {
 # Dot-sourcing exposes Invoke-WindShareNoReplaceMove and the parser/state-machine
 # functions so the matching Windows host contract exercises this exact asset.
 if ($MyInvocation.InvocationName -ne '.') {
-    if ([string]::IsNullOrWhiteSpace($SidecarPath)) {
-        throw 'Usage: powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script> -SidecarPath <adjacent-sidecar>'
+    # Exact pairing prevents another receive in this folder from supplying the wrong mappings.
+    $pairedSidecarPath = [IO.Path]::ChangeExtension($PSCommandPath, '.data')
+    if (-not (Test-Path -LiteralPath $pairedSidecarPath -PathType Leaf)) {
+        throw "WindShare restoration data file is missing. Expected '$pairedSidecarPath'. Keep the matching .ps1 and .data files together in their original location relative to the downloaded content."
     }
-    Invoke-WindShareRestoration -Path $SidecarPath
+    Invoke-WindShareRestoration -Path $pairedSidecarPath
 }
