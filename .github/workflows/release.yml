@@ -1,4 +1,4 @@
-name: Root Module Release
+name: Source and Binary Release
 
 on:
   workflow_dispatch:
@@ -85,7 +85,13 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
+          WINDSHARE_RELEASE_ASSETS: ${{ runner.temp }}/release-assets
         run: bash scripts/ci/linux/release.sh "$RELEASE_VERSION" "$RELEASE_COMMIT_SHA" linux-ext4
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
 
   windows-ntfs:
     name: Windows NTFS root artifact and restart certification
@@ -138,10 +144,16 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
+          WINDSHARE_RELEASE_ASSETS: ${{ runner.temp }}/release-assets
         run: ./scripts/ci/windows/release.ps1 -Version $env:RELEASE_VERSION -CommitSHA $env:RELEASE_COMMIT_SHA -NativeProfile windows-ntfs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: ${{ runner.temp }}/release-assets/*
+          if-no-files-found: error
 
   publish:
-    name: Publish immutable root tag
+    name: Publish immutable tag and verified artifacts
     needs:
       - release
       - linux-ext4
@@ -161,9 +173,37 @@ jobs:
           fetch-depth: 0
           fetch-tags: true
           persist-credentials: true
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: ${{ runner.temp }}/verified-release
+      - name: Verify both hosts reconstructed the same source bundle
+        env:
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          ASSET_ROOT: ${{ runner.temp }}/verified-release
+        run: |
+          set -euo pipefail
+          cmp "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-source.zip" \
+              "$ASSET_ROOT/release-windows/windshare-$RELEASE_VERSION-source.zip"
+          (cd "$ASSET_ROOT/release-linux" && sha256sum -c SHA256SUMS-linux-amd64)
+          (cd "$ASSET_ROOT/release-windows" && sha256sum -c SHA256SUMS-windows-amd64)
       - name: Create immutable root release tag
         env:
           RELEASE_VERSION: ${{ needs.release.outputs.version }}
           RELEASE_COMMIT_SHA: ${{ needs.release.outputs.commit_sha }}
           DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
         run: bash scripts/ci/release-ref.sh publish
+      - name: Publish source and binary release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ needs.release.outputs.version }}
+          ASSET_ROOT: ${{ runner.temp }}/verified-release
+        run: |
+          set -euo pipefail
+          gh release create "$RELEASE_VERSION" --verify-tag --title "WindShare $RELEASE_VERSION" \
+            --notes 'Includes wind and wsrelay binaries, the complete source bundle with pinned Pion dependencies, and SHA-256 checksums. Follow docs/installation.md inside the bundle for installation and optional first setup.' \
+            "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-source.zip" \
+            "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-linux-amd64.zip" \
+            "$ASSET_ROOT/release-windows/windshare-$RELEASE_VERSION-windows-amd64.zip" \
+            "$ASSET_ROOT/release-linux/SHA256SUMS-linux-amd64" \
+            "$ASSET_ROOT/release-windows/SHA256SUMS-windows-amd64"

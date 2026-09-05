@@ -49,7 +49,7 @@ describe('IncidentRecordV1 projection', () => {
       peerFailureFact({
         stage: 'peer_attempt',
         recoveryDisposition: 'retryable',
-        scope: 'attempt',
+        scope: 'attempt-transient',
         code: 'peer-timeout',
         retryable: true,
         correlation: {
@@ -118,7 +118,7 @@ describe('IncidentRecordV1 projection', () => {
           recovery_disposition: 'retryable',
           payload: {
             peer_failure: {
-              scope: 'attempt',
+              scope: 'attempt-transient',
               code: 'peer_timeout',
               retryable: true,
             },

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"errors"
+	"github.com/windshare/windshare/core/transfer"
 	"io"
 	"sync/atomic"
 	"testing"
@@ -126,10 +127,10 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 	if _, err := NewReceiverFactory(badReceiver); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("invalid receiver error = %v", err)
 	}
-	if _, err := (*ReceiverFactory)(nil).Connect(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrRuntimeConfig) {
+	if _, err := (*ReceiverFactory)(nil).Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil receiver connect error = %v", err)
 	}
-	if _, err := fixture.receiverFactory.Connect(context.Background(), nil); !errors.Is(err, ErrRuntimeConfig) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), nil, transfer.LaneRouteRelay); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("nil receiver channel error = %v", err)
 	}
 	if _, err := (*SenderFactory)(nil).Accept(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrRuntimeConfig) {
@@ -142,7 +143,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 	randomFailure := fixture.receiverConfig
 	randomFailure.Random = edgeErrorReader{}
 	randomFactory, _ := NewReceiverFactory(randomFailure)
-	if _, err := randomFactory.Connect(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrHandshake) {
+	if _, err := randomFactory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("receiver random error = %v", err)
 	}
 	instanceFailure := fixture.receiverConfig
@@ -150,7 +151,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		return protocolsession.ReceiverInstanceID{}, io.ErrUnexpectedEOF
 	})
 	instanceFactory, _ := NewReceiverFactory(instanceFailure)
-	if _, err := instanceFactory.Connect(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrHandshake) {
+	if _, err := instanceFactory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("receiver identity error = %v", err)
 	}
 	zeroInstance := fixture.receiverConfig
@@ -158,14 +159,14 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		return protocolsession.ReceiverInstanceID{}, nil
 	})
 	zeroFactory, _ := NewReceiverFactory(zeroInstance)
-	if _, err := zeroFactory.Connect(context.Background(), newMemoryChannel(t)); !errors.Is(err, ErrHandshake) {
+	if _, err := zeroFactory.Connect(context.Background(), newMemoryChannel(t), transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("zero receiver identity error = %v", err)
 	}
 
 	closed, closedPeer := newMemoryChannelPair()
 	_ = closed.Close()
 	t.Cleanup(func() { _ = closedPeer.Close() })
-	if _, err := fixture.receiverFactory.Connect(context.Background(), closed); !errors.Is(err, ErrHandshake) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), closed, transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("receiver send error = %v", err)
 	}
 	invalidServer, invalidClient := newMemoryChannelPair()
@@ -173,7 +174,7 @@ func TestFactoryDefaultsValidationAndHandshakeFailures(t *testing.T) {
 		<-invalidServer.Recv()
 		_ = invalidServer.Send(context.Background(), framechannel.Frame{1})
 	}()
-	if _, err := fixture.receiverFactory.Connect(context.Background(), invalidClient); !errors.Is(err, ErrHandshake) {
+	if _, err := fixture.receiverFactory.Connect(context.Background(), invalidClient, transfer.LaneRouteRelay); !errors.Is(err, ErrHandshake) {
 		t.Fatalf("invalid server hello error = %v", err)
 	}
 	_ = invalidServer.Close()

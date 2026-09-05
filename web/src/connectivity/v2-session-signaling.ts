@@ -44,6 +44,7 @@ import {
   V2SessionSignalingError,
 } from './v2-session-signaling-errors'
 import { BrowserAttemptLifecycle } from './v2-session-signaling-lifecycle'
+import type { PeerProviderFact } from './peer-set/provider-facts'
 
 export {
   V2AuthenticatedPeerOperationError,
@@ -129,6 +130,8 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
   offerCreated(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
     this.#attempt.offerMilestone('offer-created', candidateCounts)
   }
+
+  providerFact(fact: PeerProviderFact): void { this.#attempt.providerFact(fact) }
 
   offerSent(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void {
     this.#attempt.offerMilestone('offer-sent', candidateCounts)
@@ -348,6 +351,7 @@ export function createV2PeerPathIdentity(
 export function createV2PeerBindingForPath(
   peerPathId: Uint8Array,
   randomBytes: (length: number) => Uint8Array = secureRandomBytes,
+  attemptSequence = 1n,
 ): V2PeerBinding {
   if (peerPathId.byteLength !== 16 || !peerPathId.some((item) => item !== 0)) {
     throw new V2SessionSignalingError('Peer path identity must be a nonzero 16-byte value')
@@ -355,6 +359,7 @@ export function createV2PeerBindingForPath(
   return Object.freeze({
     peerPathId: peerPathId.slice(),
     attemptId: nonzeroIdentity(randomBytes),
+    attemptSequence,
   })
 }
 
@@ -418,6 +423,7 @@ function snapshotBinding(binding: V2PeerBinding): V2PeerBinding {
   return Object.freeze({
     peerPathId: binding.peerPathId.slice(),
     attemptId: binding.attemptId.slice(),
+    attemptSequence: binding.attemptSequence,
   })
 }
 

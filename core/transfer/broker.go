@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/downloadmetrics"
 )
 
 var (
@@ -70,8 +71,16 @@ func (b *PlaintextBudget) Used() uint64 {
 	return b.used
 }
 
+type authenticatedBlock struct {
+	records.BlockRecord
+	route downloadmetrics.Route
+}
+type deliveredBlock struct {
+	data  []byte
+	route downloadmetrics.Route
+}
 type blockFetcher interface {
-	fetch(context.Context, BlockDemand, func(records.BlockRecord) error) (records.BlockRecord, error)
+	fetch(context.Context, BlockDemand, func(records.BlockRecord) error) (authenticatedBlock, error)
 }
 
 type BlockBrokerConfig struct {
@@ -89,11 +98,13 @@ type blockKey struct {
 }
 
 type cachedBlock struct {
-	key  blockKey
-	data []byte
+	route downloadmetrics.Route
+	key   blockKey
+	data  []byte
 }
 
 type blockCall struct {
+	route     downloadmetrics.Route
 	ctx       context.Context
 	cancel    context.CancelFunc
 	done      chan struct{}
@@ -108,6 +119,7 @@ type blockCall struct {
 // shared across receivers. Only the sender's independently authenticated object
 // cache may collapse their upstream source reads.
 type BlockBroker struct {
+	lanes               *LaneSet
 	share               catalog.ShareInstance
 	blocks              blockFetcher
 	maxBytes            uint64
@@ -148,35 +160,40 @@ func newBlockBroker(config BlockBrokerConfig, blocks blockFetcher) (*BlockBroker
 	}
 	lifecycle, stop := context.WithCancel(context.Background())
 	return &BlockBroker{
-		share: config.ShareInstance, blocks: blocks, maxBytes: config.MaxBytes,
+		share: config.ShareInstance, blocks: blocks, lanes: config.Lanes, maxBytes: config.MaxBytes,
 		maxConcurrentBlocks: config.MaxConcurrentBlocks, process: config.ProcessBudget,
 		lifecycle: lifecycle, stop: stop, entries: make(map[blockKey]*list.Element), lru: list.New(),
 		inflight: make(map[blockKey]*blockCall),
 	}, nil
 }
 
-func (b *BlockBroker) GetBlock(
+func (b *BlockBroker) GetBlock(ctx context.Context, leaseID content.LeaseID, descriptor content.FileRevisionDescriptor, index uint64) ([]byte, error) {
+	block, err := b.getBlock(ctx, leaseID, descriptor, index)
+	return block.data, err
+}
+func (b *BlockBroker) getBlock(
 	ctx context.Context,
 	leaseID content.LeaseID,
 	descriptor content.FileRevisionDescriptor,
 	index uint64,
-) ([]byte, error) {
+) (deliveredBlock, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return deliveredBlock{}, err
 	}
 	expected, err := validateDemand(b.share, leaseID, descriptor, index)
 	if err != nil {
-		return nil, err
+		return deliveredBlock{}, err
 	}
 	key := blockKey{file: descriptor.FileID(), revision: descriptor.FileRevision(), index: index}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
-		return nil, ErrBrokerClosed
+		return deliveredBlock{}, ErrBrokerClosed
 	}
 	if element := b.entries[key]; element != nil {
 		b.lru.MoveToFront(element)
-		data := slices.Clone(element.Value.(*cachedBlock).data)
+		cached := element.Value.(*cachedBlock)
+		data := deliveredBlock{data: slices.Clone(cached.data), route: cached.route}
 		b.mu.Unlock()
 		return data, nil
 	}
@@ -184,7 +201,7 @@ func (b *BlockBroker) GetBlock(
 	if call == nil {
 		if err := b.reserveLocked(uint64(expected)); err != nil {
 			b.mu.Unlock()
-			return nil, err
+			return deliveredBlock{}, err
 		}
 		loadContext, cancel := context.WithCancel(context.Background())
 		stopLifecycle := context.AfterFunc(b.lifecycle, cancel)
@@ -233,10 +250,10 @@ func (b *BlockBroker) reserveLocked(bytes uint64) error {
 	return nil
 }
 
-func (b *BlockBroker) await(ctx context.Context, key blockKey, call *blockCall) ([]byte, error) {
+func (b *BlockBroker) await(ctx context.Context, key blockKey, call *blockCall) (deliveredBlock, error) {
 	select {
 	case <-call.done:
-		return slices.Clone(call.data), call.err
+		return deliveredBlock{data: slices.Clone(call.data), route: call.route}, call.err
 	case <-ctx.Done():
 		b.mu.Lock()
 		if b.inflight[key] == call && !call.completed {
@@ -247,7 +264,7 @@ func (b *BlockBroker) await(ctx context.Context, key blockKey, call *blockCall) 
 			}
 		}
 		b.mu.Unlock()
-		return nil, ctx.Err()
+		return deliveredBlock{}, ctx.Err()
 	}
 }
 
@@ -280,11 +297,11 @@ func (b *BlockBroker) runLoad(key blockKey, call *blockCall, demand BlockDemand)
 	if err == nil && active && call.waiters > 0 && !b.closed {
 		b.inflightBytes -= call.reserved
 		call.reserved = 0
-		b.storeReservedLocked(key, data)
+		b.storeReservedLocked(key, data, record.route)
 	} else {
 		b.releaseCallReservationLocked(call)
 	}
-	call.data, call.err = data, err
+	call.data, call.err, call.route = data, err, record.route
 	close(call.done)
 	call.cancel()
 	b.mu.Unlock()
@@ -310,8 +327,8 @@ func (b *BlockBroker) completeAbandonedCallLocked(call *blockCall, err error) {
 	call.cancel()
 }
 
-func (b *BlockBroker) storeReservedLocked(key blockKey, data []byte) {
-	entry := &cachedBlock{key: key, data: data}
+func (b *BlockBroker) storeReservedLocked(key blockKey, data []byte, route downloadmetrics.Route) {
+	entry := &cachedBlock{key: key, data: data, route: route}
 	element := b.lru.PushFront(entry)
 	b.entries[key] = element
 	b.used += uint64(len(data))

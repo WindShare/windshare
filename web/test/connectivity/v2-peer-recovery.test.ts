@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { PeerAttemptBudget } from '../../src/connectivity/peer-set/budget'
+import { V2PeerSet } from '../../src/connectivity/peer-set/peer-set'
 
 import type { V2PeerRecoveryTraceEvent } from '../../src/connectivity/diagnostics'
 import { V2_LANE_REJECT } from '../../src/session/v2-lane-codec'
@@ -26,7 +28,7 @@ import {
   type V2PeerRecoveryClock,
   type V2PeerRecoveryRearmSource,
   type V2PeerRecoverySupervisorOptions,
-} from '../../src/connectivity/v2-peer-recovery'
+} from '../../src/connectivity/peer-set/path'
 
 function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
@@ -36,6 +38,164 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 
 const SESSION_ID = createV2ProtocolSessionIdentity(identity(1))
 const PEER_PATH_ID = createV2PeerPathIdentityValue(identity(2))
+
+describe('demand-driven peer set', () => {
+  it('takes over browse negotiation without replacing it and releases the idle lane at expiry', async () => {
+    const released: number[] = []
+    const { supervisor, attempts, clock } = fixture(['pending'], {
+      releaseLane: (lane) => released.push(lane.laneId),
+    })
+    const browse = supervisor.browse()
+    await turn()
+    const content = supervisor.activate()
+    browse.close()
+    expect(attempts.contexts).toHaveLength(1)
+    expect(attempts.cancellations).toEqual([])
+    attempts.settle(0, admitted())
+    await supervisor.join()
+    content.close()
+    await clock.advance(29_999)
+    expect(released).toEqual([])
+    await clock.advance(1)
+    expect(released).toEqual([7])
+    expect(supervisor.state.kind).toBe('idle')
+    await supervisor.close()
+  })
+
+  it('does not retry browse-only failures or run a second browse prewarm', async () => {
+    const { supervisor, attempts, clock } = fixture([TRANSIENT])
+    const browse = supervisor.browse()
+    await supervisor.join()
+    await clock.advance(600_000)
+    browse.close()
+    supervisor.browse().close()
+    expect(attempts.contexts).toHaveLength(1)
+    await supervisor.close()
+  })
+
+  it('shares admission tokens between independent paths and replacement sessions', async () => {
+    const budget = new PeerAttemptBudget(2, 360_000, 600_000)
+    const clock = new ManualClock()
+    const peers = new V2PeerSet()
+    const first = new ScriptedAttempts(['pending'])
+    const second = new ScriptedAttempts(['pending'])
+    const path = peers.add({ protocolSessionId: SESSION_ID, peerPathId: PEER_PATH_ID,
+      attempts: first, budget, clock })
+    const other = peers.add({ protocolSessionId: SESSION_ID,
+      peerPathId: createV2PeerPathIdentityValue(identity(9)), attempts: second, budget, clock })
+    const content = path.activate()
+    const otherContent = other.activate()
+    await turn()
+    expect(first.contexts).toHaveLength(1)
+    expect(second.contexts).toHaveLength(1)
+    content.close()
+    await path.join()
+    expect(second.cancellations).toEqual([])
+    otherContent.close()
+    await peers.close()
+    const replacement = new V2PeerRecoverySupervisor({
+      protocolSessionId: createV2ProtocolSessionIdentity(identity(10)), peerPathId: PEER_PATH_ID,
+      attempts: new ScriptedAttempts(['pending']), budget, clock,
+    })
+    const nextContent = replacement.activate()
+    expect(replacement.state.kind).toBe('session-exhausted')
+    await clock.advance(300_000)
+    await turn()
+    expect(replacement.state.kind).toBe('attempting')
+    nextContent.close()
+    await replacement.close()
+  })
+})
+
+describe('wave notice and terminal authority', () => {
+  it('replays browse-terminal and session-terminal outcomes to subsequent content activations', async () => {
+    let unavailable = 0
+    const { supervisor, attempts } = fixture([PATH_POLICY], { onUnavailable: () => { unavailable++ } })
+    const browse = supervisor.browse()
+    await supervisor.join()
+    const content = supervisor.activate()
+    expect(unavailable).toBe(2)
+    expect(attempts.contexts).toHaveLength(1)
+    expect(supervisor.state.kind).toBe('path-stopped')
+    content.close()
+    browse.close()
+    await supervisor.close()
+    const later = supervisor.activate()
+    expect(unavailable).toBe(3)
+    expect(supervisor.state.kind).toBe('session-stopped')
+    later.close()
+  })
+
+  it('preserves a delayed final opportunity in the original wave without notices resetting its budget', async () => {
+    const { supervisor, attempts, clock } = fixture([TRANSIENT, TRANSIENT, 'pending'])
+    const activation = supervisor.activate()
+    await turn()
+    await clock.advance(500)
+    expect(attempts.contexts).toHaveLength(2)
+    await clock.advance(9_499)
+    expect(attempts.contexts).toHaveLength(2)
+    supervisor.pathChanged('mapping-ready')
+    supervisor.pathChanged('network-changed')
+    await clock.advance(1)
+    expect(attempts.contexts.map((context) => [context.waveOrdinal, context.waveAttemptOrdinal]))
+      .toEqual([[1, 1], [1, 2], [1, 3]])
+    expect(attempts.cancellations).toEqual([])
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('keeps active ICE and the same wave after repeated authenticated and local network notices', async () => {
+    const { supervisor, attempts, clock } = fixture(['pending', TRANSIENT, 'pending'])
+    const activation = supervisor.activate()
+    await turn()
+    for (let index = 0; index < 5; index++) {
+      await clock.advance(1)
+      supervisor.pathChanged(index % 2 ? 'mapping-ready' : 'network-changed')
+      supervisor.networkChanged()
+    }
+    expect(attempts.contexts).toHaveLength(1)
+    expect(attempts.cancellations).toEqual([])
+    attempts.settle(0, TRANSIENT)
+    await turn()
+    await clock.advance(500)
+    await clock.advance(1000)
+    expect(attempts.contexts.map((context) => context.waveOrdinal)).toEqual([1, 1, 1])
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('suppresses path notices without content demand or after direct admission', async () => {
+    const { supervisor, attempts, clock } = fixture([admitted()])
+    supervisor.pathChanged()
+    supervisor.networkChanged()
+    expect(attempts.contexts).toHaveLength(0)
+    const activation = supervisor.activate()
+    await supervisor.join()
+    for (let index = 0; index < 4; index++) {
+      await clock.advance(1)
+      supervisor.pathChanged()
+      supervisor.networkChanged()
+    }
+    expect(attempts.contexts).toHaveLength(1)
+    expect(supervisor.state.kind).toBe('admitted')
+    activation.close()
+    await supervisor.close()
+  })
+
+  it('never overwrites session termination with a queued admitted result', async () => {
+    const released: number[] = []
+    const { supervisor, attempts } = fixture(['pending'], { releaseLane: (lane) => released.push(lane.laneId) })
+    const activation = supervisor.activate()
+    await turn()
+    attempts.settle(0, admitted())
+    const closed = supervisor.sessionTerminated({ authority: 'protocol-session-terminal', code: 'generation-retired' })
+    await closed
+    expect(supervisor.state.kind).toBe('session-stopped')
+    expect(attempts.contexts).toHaveLength(1)
+    expect(released).toEqual([7])
+    activation.close()
+  })
+})
 
 const TRANSIENT: V2PeerAttemptResult = Object.freeze({
   type: 'failed',
@@ -207,6 +367,9 @@ function fixture(
         if (event.eventName === 'peer_recovery') events.push(event)
       } },
       ...overrides,
+      ...(overrides.policy !== undefined && overrides.policy.waveElapsedBudgetMilliseconds < 85_000
+        ? { policy: createV2PeerRecoveryPolicy({ ...overrides.policy,
+          negotiationBudgetMilliseconds: 1, admissionBudgetMilliseconds: 1 }) } : {}),
     }),
   }
 }
@@ -217,7 +380,7 @@ async function turn(): Promise<void> {
 
 describe('v2 peer recovery policy', () => {
   it('freezes the authoritative phase and cumulative recovery defaults', () => {
-    expect(V2_DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS).toBe(15_000)
+    expect(V2_DEFAULT_PEER_NEGOTIATION_BUDGET_MILLISECONDS).toBe(65_000)
     expect(V2_DEFAULT_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(20_000)
     expect(V2_MAXIMUM_PEER_ADMISSION_BUDGET_MILLISECONDS).toBe(25_000)
     expect(V2_DEFAULT_PEER_RECOVERY_POLICY).toMatchObject({
@@ -273,7 +436,7 @@ describe('v2 peer recovery supervisor', () => {
       waveAttemptOrdinal: 1,
       sessionAttemptOrdinal: 1,
       requestedLaneId: 0,
-      negotiationBudgetMilliseconds: 15_000,
+      negotiationBudgetMilliseconds: 65_000,
       admissionBudgetMilliseconds: 20_000,
     })
     expect(supervisor.sessionAttemptCount).toBe(1)
@@ -396,7 +559,7 @@ describe('v2 peer recovery supervisor', () => {
     const { supervisor, attempts, clock } = fixture([TRANSIENT, 'pending'], { policy })
     const activation = supervisor.activate()
     await turn()
-    await clock.advance(1)
+    await clock.advance(98)
     expect(attempts.contexts).toHaveLength(2)
     expect(supervisor.state).toMatchObject({ kind: 'attempting', phase: 'negotiation' })
 
@@ -425,7 +588,7 @@ describe('v2 peer recovery supervisor', () => {
     ], { policy })
     const first = supervisor.activate()
     await turn()
-    await clock.advance(1)
+    await clock.advance(98)
     await supervisor.join()
 
     expect(attempts.contexts).toHaveLength(2)
@@ -446,7 +609,7 @@ describe('v2 peer recovery supervisor', () => {
     rearm.close()
   })
 
-  it('counts only active wave time and makes session elapsed exhaustion non-rearmable', async () => {
+  it('counts active wave time and temporarily quiesces when elapsed tokens are depleted', async () => {
     const policy = createV2PeerRecoveryPolicy({
       waveElapsedBudgetMilliseconds: 10,
       sessionActiveElapsedBudgetMilliseconds: 15,
@@ -472,7 +635,7 @@ describe('v2 peer recovery supervisor', () => {
     rearm.emit()
     await turn()
     expect(attempts.contexts).toHaveLength(2)
-    await clock.advance(5)
+    await clock.advance(6)
     await supervisor.join()
     expect(supervisor.state).toEqual({
       kind: 'session-exhausted',
@@ -614,4 +777,19 @@ describe('v2 peer recovery supervisor', () => {
       reason: 'protocol-failure',
     })
   })
+})
+
+it('authenticated path notices cannot reset the current wave attempt count', async () => {
+  const { supervisor, attempts, clock } = fixture(['pending'])
+  const activation = supervisor.activate()
+  await turn()
+  for (let i = 0; i < 4; i++) {
+    await clock.advance(1)
+    supervisor.pathChanged()
+    for (let j = 0; j < 6; j++) await turn()
+  }
+  const contexts = attempts.contexts.map(c => ({wave: c.waveOrdinal, attempt: c.waveAttemptOrdinal}))
+  activation.close()
+  await supervisor.close()
+  expect(contexts.length, JSON.stringify(contexts)).toBeLessThanOrEqual(3)
 })

@@ -11,9 +11,7 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"sync"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/transfer"
@@ -102,7 +100,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 			t.Fatalf("parse=%d", parse)
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
-			request.relayURL != "wss://relay.example" ||
+			!reflect.DeepEqual(request.relayURLs, []string{"wss://relay.example"}) ||
 			request.frontURL != "https://app.example" ||
 			request.chunkSize != 65536 ||
 			!request.splitKey {
@@ -116,7 +114,7 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		wantStderr string
 	}{
 		{name: "missing roots", wantStderr: "at least one path"},
-		{name: "empty relay", args: []string{"root", "--relay", ""}, wantStderr: "relay URL"},
+		{name: "empty relay", args: []string{"root", "--relay", ""}, wantStderr: "option value is invalid"},
 		{name: "empty frontend", args: []string{"root", "--front-url", ""}, wantStderr: "frontend URL"},
 		{
 			name:       "negative block size",
@@ -395,98 +393,6 @@ func TestTransferResultEventsPreserveExitCodePrecedence(t *testing.T) {
 	}
 }
 
-func TestRelayContentAdmissionRejectsBrokenDependenciesWithoutStrandingContent(t *testing.T) {
-	t0 := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
-	validClock := &semanticAdmissionClock{now: t0, timer: newSemanticAdmissionTimer()}
-	validRelay := &semanticAdmissionSuspension{}
-
-	for _, test := range []struct {
-		name  string
-		t0    time.Time
-		clock receiverAdmissionClock
-		relay receiverContentSuspension
-	}{
-		{name: "zero T0", clock: validClock, relay: validRelay},
-		{name: "nil clock", t0: t0, relay: validRelay},
-		{name: "nil relay suspension", t0: t0, clock: validClock},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			if _, err := newRelayContentAdmission(test.t0, test.clock, test.relay); !errors.Is(err, ErrInvalidReceiverAdmission) {
-				t.Fatalf("error=%v want=%v", err, ErrInvalidReceiverAdmission)
-			}
-		})
-	}
-
-	t.Run("expired absolute deadline clamps to immediate", func(t *testing.T) {
-		clock := &semanticAdmissionClock{
-			now: t0.Add(receiverRelayAdmissionWindow + time.Second), timer: newSemanticAdmissionTimer(),
-		}
-		relay := &semanticAdmissionSuspension{}
-		admission, err := newRelayContentAdmission(t0, clock, relay)
-		if err != nil {
-			t.Fatal(err)
-		}
-		delays := clock.recordedDelays()
-		if !reflect.DeepEqual(delays, []time.Duration{0}) {
-			t.Fatalf("delays=%v want=[0]", delays)
-		}
-		admission.Close()
-	})
-
-	t.Run("broken timer rolls suspension back", func(t *testing.T) {
-		resumeErr := errors.New("rollback failed")
-		clock := &semanticAdmissionClock{now: t0}
-		relay := &semanticAdmissionSuspension{resumeErr: resumeErr}
-		if _, err := newRelayContentAdmission(t0, clock, relay); !errors.Is(err, ErrInvalidReceiverAdmission) || !errors.Is(err, resumeErr) {
-			t.Fatalf("error=%v must retain setup and rollback failures", err)
-		}
-		if resumes := relay.resumeCount(); resumes != 1 {
-			t.Fatalf("resume calls=%d want=1", resumes)
-		}
-	})
-
-	t.Run("broken timer contains rollback panic", func(t *testing.T) {
-		clock := &semanticAdmissionClock{now: t0}
-		relay := receiverContentSuspensionFunc(func() error { panic("rollback panic") })
-		if _, err := newRelayContentAdmission(t0, clock, relay); !errors.Is(err, ErrInvalidReceiverAdmission) ||
-			!errors.Is(err, errReceiverAdmissionResumePanics) {
-			t.Fatalf("panic rollback error=%v", err)
-		}
-	})
-
-	t.Run("unknown policy signals fail closed", func(t *testing.T) {
-		clock := &semanticAdmissionClock{now: t0, timer: newSemanticAdmissionTimer()}
-		relay := &semanticAdmissionSuspension{}
-		admission, err := newRelayContentAdmission(t0, clock, relay)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := admission.ObserveConnectionSize(transfer.ConnectionSizeClass(255)); !errors.Is(err, ErrInvalidReceiverAdmission) {
-			t.Fatalf("selection error=%v", err)
-		}
-		if err := admission.ObservePeer(receiverPeerSignal(255)); !errors.Is(err, ErrInvalidReceiverAdmission) {
-			t.Fatalf("peer error=%v", err)
-		}
-		if resumes := relay.resumeCount(); resumes != 0 {
-			t.Fatalf("invalid signals resumed content %d time(s)", resumes)
-		}
-		admission.Close()
-	})
-
-	t.Run("injected clock is authoritative", func(t *testing.T) {
-		clock := &semanticAdmissionClock{now: t0, timer: newSemanticAdmissionTimer()}
-		app := &App{receiverClock: clock}
-		if got := app.admissionClock(); got != clock {
-			t.Fatalf("clock=%T want injected clock", got)
-		}
-	})
-
-	t.Run("nil close is safe", func(t *testing.T) {
-		var admission *relayContentAdmission
-		admission.Close()
-	})
-}
-
 func newSemanticTestApp(stdin io.Reader) (*App, *bytes.Buffer, *bytes.Buffer) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
@@ -505,69 +411,4 @@ func newSemanticCapability(t *testing.T, relays ...string) link.Link {
 		t.Fatal(err)
 	}
 	return capability
-}
-
-type semanticAdmissionSuspension struct {
-	mu        sync.Mutex
-	resumeErr error
-	resumes   int
-}
-
-func (relay *semanticAdmissionSuspension) Resume() error {
-	relay.mu.Lock()
-	defer relay.mu.Unlock()
-	relay.resumes++
-	return relay.resumeErr
-}
-
-func (relay *semanticAdmissionSuspension) resumeCount() int {
-	relay.mu.Lock()
-	defer relay.mu.Unlock()
-	return relay.resumes
-}
-
-type semanticAdmissionClock struct {
-	mu     sync.Mutex
-	now    time.Time
-	timer  receiverAdmissionTimer
-	delays []time.Duration
-}
-
-func (clock *semanticAdmissionClock) Now() time.Time {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return clock.now
-}
-
-func (clock *semanticAdmissionClock) NewTimer(delay time.Duration) receiverAdmissionTimer {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	clock.delays = append(clock.delays, delay)
-	return clock.timer
-}
-
-func (clock *semanticAdmissionClock) recordedDelays() []time.Duration {
-	clock.mu.Lock()
-	defer clock.mu.Unlock()
-	return append([]time.Duration(nil), clock.delays...)
-}
-
-type semanticAdmissionTimer struct {
-	channel chan time.Time
-	mu      sync.Mutex
-	stopped bool
-}
-
-func newSemanticAdmissionTimer() *semanticAdmissionTimer {
-	return &semanticAdmissionTimer{channel: make(chan time.Time)}
-}
-
-func (timer *semanticAdmissionTimer) C() <-chan time.Time { return timer.channel }
-
-func (timer *semanticAdmissionTimer) Stop() bool {
-	timer.mu.Lock()
-	defer timer.mu.Unlock()
-	wasActive := !timer.stopped
-	timer.stopped = true
-	return wasActive
 }

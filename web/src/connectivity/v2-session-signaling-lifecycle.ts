@@ -1,4 +1,5 @@
 import type { FailureCorrelation } from '../diagnostics/incident/fact'
+import type { PeerProviderFact } from './peer-set/provider-facts'
 import type { V2ProtocolOperationIdentity } from '../session/v2-identities'
 import {
   V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES,
@@ -51,6 +52,10 @@ export class BrowserAttemptLifecycle {
 
   setOfferOperationId(operationId: V2ProtocolOperationIdentity): void {
     if (!this.#terminal) this.#offerOperationId ??= operationId
+  }
+
+  providerFact(fact: PeerProviderFact): void {
+    this.#emit(() => this.#event({ stage: 'provider-fact', fact }, this.#offerOperationId, this.#lane))
   }
 
   offerMilestone(
@@ -162,7 +167,7 @@ export class BrowserAttemptLifecycle {
         stage: 'failed',
         failedAtStage,
         failure: snapshotFailure(failure),
-        failureScope: failure.kind === 'session-terminal' ? 'session' : 'attempt',
+        failureScope: decisionScope(decision.type),
         typedErrorCode: diagnosticTypedErrorCode(failure),
         retryable: decision.type === 'retry-attempt',
       }, this.#grantOperationId ?? this.#offerOperationId, this.#lane)
@@ -242,4 +247,9 @@ function diagnosticTypedErrorCode(failure: V2PeerAttemptFailure) {
     return 'peer-timeout' as const
   }
   return failure.phase === 'admission' ? 'peer-admission' as const : 'peer-negotiation' as const
+}
+
+function decisionScope(decision: string): 'session-terminal' | 'path-terminal' | 'attempt-transient' {
+  if (decision === 'stop-session') return 'session-terminal'
+  return decision === 'stop-path' ? 'path-terminal' : 'attempt-transient'
 }

@@ -1,3 +1,4 @@
+import type { DownloadMetrics } from './download-metrics'
 import { encodeBase64Url, equalBytes } from '../crypto/bytes'
 import { byteRange, type ByteRange } from '../content/geometry'
 import {
@@ -25,6 +26,7 @@ export interface V2ContentGeneration {
 }
 
 export interface V2ContentGenerationProvider {
+  downloadMetrics?(routes: V2BlockRouteEligibility): DownloadMetrics | undefined
   execute<T>(
     signal: AbortSignal | undefined,
     operation: (generation: V2ContentGeneration) => Promise<T>,
@@ -66,6 +68,8 @@ export class V2SupervisedContent {
   forRoutes(routes: V2BlockRouteEligibility): V2ScopedContent {
     this.#requireOpen()
     routes.assertActive()
+    const metrics = this.#provider.downloadMetrics?.(routes)
+    const status = new V2SupervisedLaneStatus(() => this.#currentLaneCount(routes))
     return Object.freeze({
       revisions: Object.freeze({
         open: (fileId: Uint8Array, signal?: AbortSignal) => this.#open(fileId, routes, signal),
@@ -76,11 +80,12 @@ export class V2SupervisedContent {
           leaseId: Uint8Array,
           range: ByteRange,
           options: V2BlockRangeReaderOptions = {},
-        ) => this.#readRange(descriptor, leaseId, range, routes, options),
+        ) => observeDownloadRange(this.#readRange(descriptor, leaseId, range, routes, options), descriptor, metrics),
       }),
-      lanes: Object.freeze(new V2SupervisedLaneStatus(
-        () => this.#currentLaneCount(routes),
-      )),
+      lanes: Object.freeze({
+        get size() { return status.size },
+        ...(metrics === undefined ? {} : { downloadConnectivity: (final = false) => metrics.snapshot(final) }),
+      }),
     })
   }
 
@@ -196,6 +201,25 @@ export class V2SupervisedContent {
   #requireOpen(): void {
     if (this.#closed) throw new Error('Supervised content is closed')
   }
+}
+
+async function* observeDownloadRange(
+  source: AsyncGenerator<V2BlockSlice>, descriptor: V2FileRevisionDescriptor,
+  metrics: DownloadMetrics | undefined,
+): AsyncGenerator<V2BlockSlice> {
+  const revision = descriptor.shareInstanceId + '/' + descriptor.fileIdText + '/' + descriptor.fileRevisionText
+  try {
+    while (true) {
+      const endWait = metrics?.pending()
+      let next: IteratorResult<V2BlockSlice>
+      try { next = await source.next() } finally { endWait?.() }
+      if (next.done) return
+      const slice = next.value
+      metrics?.delivered(revision, slice.offset, slice.offset + BigInt(slice.data.byteLength), slice.authenticatedRoute)
+      // The caller can spend arbitrary time in output/user work at this yield.
+      yield slice
+    }
+  } finally { await source.return(undefined) }
 }
 
 class V2SupervisedLaneStatus {

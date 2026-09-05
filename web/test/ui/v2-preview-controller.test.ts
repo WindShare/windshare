@@ -110,6 +110,8 @@ class FakeJoined {
     return this.protocolSessionId
   }
 
+  subscribePathActivity(): () => void { return () => undefined }
+
   subscribeProtocolGeneration(): () => void {
     return () => undefined
   }
@@ -713,6 +715,7 @@ describe('v2 preview click controller boundary', () => {
       },
       projectionSource: () => completedProjectionSource(),
       subscribeCatalogScanProgress: () => () => undefined,
+      subscribePathActivity: () => () => undefined,
       subscribeProtocolGeneration: () => () => undefined,
       close: async () => undefined,
     } as unknown as V2JoinedBrowserShare

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"maps"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -13,21 +14,26 @@ func TestOperationFailureSchemaSpansAllFrozenServiceScopes(t *testing.T) {
 		{Scope: OperationScopeDirectory, Code: directoryOperationCodeFirst + 5, Message: "Catalog operation failed"},
 		{Scope: OperationScopeRevision, Code: revisionOperationCodeFirst + 6, Message: "Revision drifted"},
 		{Scope: OperationScopeBlock, Code: blockOperationCodeFirst + 3, Retryable: true, RetryAfter: 250 * time.Millisecond, Message: "Block timed out"},
-		{Scope: OperationScopePeer, Code: PeerOperationCodeAdmission, Message: "Peer channel admission failed"},
+		{Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeAdmission, Message: "Peer channel admission failed"},
 	} {
 		encoded, err := EncodeOperationFailure(failure)
 		if err != nil {
 			t.Fatalf("encode scope %d: %v", failure.Scope, err)
 		}
-		canonical, err := EncodeBody(map[uint64]any{
+		fields := map[uint64]any{
 			0: operationFailureSchemaVersion, 1: uint64(failure.Scope), 2: uint64(failure.Code),
 			3: failure.Retryable, 4: operationFailureRetryValue(failure), 5: failure.Message,
-		})
+		}
+		if failure.PeerAttempt != nil {
+			fields[0] = uint64(2)
+			fields[6] = []any{failure.PeerAttempt.PeerPathID[:], failure.PeerAttempt.AttemptID[:], failure.PeerAttempt.AttemptSequence}
+		}
+		canonical, err := EncodeBody(fields)
 		if err != nil || !bytes.Equal(encoded, canonical) {
 			t.Fatalf("scope %d changed canonical body: %x / %v", failure.Scope, encoded, err)
 		}
 		decoded, err := DecodeOperationFailure(encoded)
-		if err != nil || decoded != failure {
+		if err != nil || !reflect.DeepEqual(decoded, failure) {
 			t.Fatalf("decode scope %d = %+v, want %+v, error %v", failure.Scope, decoded, failure, err)
 		}
 	}
@@ -35,7 +41,7 @@ func TestOperationFailureSchemaSpansAllFrozenServiceScopes(t *testing.T) {
 
 func TestPeerOperationFailureIsPermanentlyBoundToOneNegotiationIdentity(t *testing.T) {
 	failure := OperationFailure{
-		Scope: OperationScopePeer, Code: PeerOperationCodeTimeout,
+		Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeTimeout,
 		Retryable: true, RetryAfter: time.Second, Message: "Peer negotiation timed out",
 	}
 	if _, err := EncodeOperationFailure(failure); err == nil {

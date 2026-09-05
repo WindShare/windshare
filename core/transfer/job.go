@@ -181,15 +181,19 @@ type RangeReader interface {
 	ReadRange(context.Context, content.LeaseID, content.FileRevisionDescriptor, content.Range, RangeSink) error
 }
 
+type SessionIdentity interface {
+	ProtocolSessionID() protocolsession.ProtocolSessionID
+}
+
 type TransferJobConfig struct {
 	// ReceiveIntent and JobID are established before construction so a job can
 	// never open a materialization namespace before destination confirmation or
 	// change either stable operation identity or per-run trace identity.
 	ReceiveIntent ReceiveIntent
 	JobID         TransferJobID
-	// ProtocolSessionID correlates production transfer traces with the
-	// authenticated session. Standalone jobs may leave it zero.
-	ProtocolSessionID protocolsession.ProtocolSessionID
+	// Session supplies the current authenticated generation for capacity authority
+	// and traces. Its lifetime may span replacements; standalone jobs leave it nil.
+	Session SessionIdentity
 	// FileQueueCapacity bounds discovery-to-output buffering. A full queue
 	// deliberately blocks the catalog walk instead of buffering an unbounded
 	// whole-tree selection.
@@ -215,7 +219,7 @@ type TransferJob struct {
 	rules              SelectionRules
 	intent             ReceiveIntent
 	jobID              TransferJobID
-	protocolSessionID  protocolsession.ProtocolSessionID
+	session            SessionIdentity
 	selectionSpec      SelectionSpec
 	catalog            CatalogReader
 	revisions          RevisionClient
@@ -287,7 +291,7 @@ func NewTransferJob(config TransferJobConfig) (*TransferJob, error) {
 	}
 	return &TransferJob{
 		share: intent.ShareInstance(), root: intent.SyntheticRoot(), rules: intent.SelectionRules(),
-		intent: intent, jobID: config.JobID, protocolSessionID: config.ProtocolSessionID,
+		intent: intent, jobID: config.JobID, session: config.Session,
 		selectionSpec: selection,
 		catalog:       config.Catalog, revisions: config.Revisions, blocks: config.Blocks,
 		outputAuthority:   config.Materializer,
@@ -645,4 +649,11 @@ func (r *jobRun) handleImmediateSettlement(
 		return releaseErr
 	}
 	return nil
+}
+
+func (job *TransferJob) protocolSessionID() protocolsession.ProtocolSessionID {
+	if job.session == nil {
+		return protocolsession.ProtocolSessionID{}
+	}
+	return job.session.ProtocolSessionID()
 }

@@ -38,7 +38,7 @@ export const HOT_SWITCH_FILE_NAME = 'hot-switch.bin'
 const EVENT_TIMEOUT_MILLISECONDS = 30_000
 const MAXIMUM_RETAINED_EVENTS = 1_024
 
-export type HotSwitchRouteMode = 'native-capability' | 'peer' | 'relay-fallback'
+export type HotSwitchRouteMode = 'native-capability' | 'direct' | 'relay-fallback'
 
 type ResolvedHotSwitchRoute = Exclude<HotSwitchRouteMode, 'native-capability'>
 type PeerAttemptFailure = {
@@ -52,7 +52,7 @@ type PeerLaneAdmission = Extract<HotSwitchPageEvent, { readonly kind: 'lane-admi
 type NativePeerOutcomeEvent = PeerAttemptFailure | PeerLaneAdmission
 
 type NativePeerOutcome =
-  | { readonly kind: 'peer'; readonly lane: PeerLaneAdmission }
+  | { readonly kind: 'direct'; readonly lane: PeerLaneAdmission }
   | { readonly kind: 'relay-fallback'; readonly failure: PeerAttemptFailure }
 
 export interface HotSwitchScenarioOptions {
@@ -121,7 +121,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     await withCapabilityRedaction(() => startPageTransfer(options.page, {
       expectedHash,
       key: share.key,
-      nativePeerUsable: initialRouteMode === 'peer',
+      nativePeerUsable: initialRouteMode === 'direct',
       rtcConfiguration: { iceServers: [] },
       transferBytes: HOT_SWITCH_TRANSFER_BYTES,
     }), {
@@ -132,7 +132,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
 
     const firstRelayDispatch = await events.waitFor(
       'dispatch',
-      (event) => event.kind === 'dispatch' && event.observation.route === 'relay',
+      (event) => event.kind === 'dispatch' && event.observation.route === 'application-relay',
       'first relay dispatch',
     )
     const settlement = await settleHotSwitchRoute(
@@ -235,18 +235,18 @@ async function settleHotSwitchRoute(
   dynamicWebKitNativeAttempt: boolean,
   firstRelayDispatchSequence: number,
 ): Promise<HotSwitchRouteSettlement> {
-  if (routeMode !== 'peer') {
+  if (routeMode !== 'direct') {
     await releaseRelayOutput(options.page)
     return { routeMode: 'relay-fallback', fallbackFailure: undefined }
   }
 
   if (!dynamicWebKitNativeAttempt) {
     await completePeerHotSwitch(options, proxy, events, firstRelayDispatchSequence)
-    return { routeMode: 'peer', fallbackFailure: undefined }
+    return { routeMode: 'direct', fallbackFailure: undefined }
   }
 
   const outcome = await waitForNativePeerOutcome(events)
-  if (outcome.kind === 'peer') {
+  if (outcome.kind === 'direct') {
     await completePeerHotSwitch(
       options,
       proxy,
@@ -254,7 +254,7 @@ async function settleHotSwitchRoute(
       firstRelayDispatchSequence,
       outcome.lane,
     )
-    return { routeMode: 'peer', fallbackFailure: undefined }
+    return { routeMode: 'direct', fallbackFailure: undefined }
   }
 
   // A typed attempt failure is a product route outcome, not a test failure. The
@@ -278,9 +278,9 @@ function nativeRouteMode(
     // Firefox is a product hot-switch lane, not a relay-only compatibility
     // probe. A broken native API therefore remains visible as a product failure.
     expect(capability.rtcCapability).toBe('available')
-    return 'peer'
+    return 'direct'
   }
-  return capability.rtcCapability === 'available' ? 'peer' : 'relay-fallback'
+  return capability.rtcCapability === 'available' ? 'direct' : 'relay-fallback'
 }
 
 function hotSwitchBlockSize(
@@ -303,8 +303,8 @@ async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<Nati
     isNativePeerOutcomeEvent,
     'peer lane admission or typed native attempt failure',
   )
-  if (event.kind === 'lane-admitted') return { kind: 'peer', lane: event }
-  if (event.evidence.failureScope !== 'attempt' || event.evidence.failedAtStage === 'admitted') {
+  if (event.kind === 'lane-admitted') return { kind: 'direct', lane: event }
+  if (event.evidence.failureScope !== 'attempt-transient' || event.evidence.failedAtStage === 'admitted') {
     throw new Error(
       `Native peer attempt failed outside the pre-admission fallback boundary ` +
       `(scope=${event.evidence.failureScope}, stage=${event.evidence.failedAtStage})`,
@@ -314,7 +314,7 @@ async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<Nati
 }
 
 function isNativePeerOutcomeEvent(event: HotSwitchPageEvent): event is NativePeerOutcomeEvent {
-  if (event.kind === 'lane-admitted') return event.observation.route === 'peer'
+  if (event.kind === 'lane-admitted') return event.observation.route === 'direct'
   if (event.kind !== 'attempt' || event.evidence.stage !== 'failed') return false
   return V2_TYPED_PEER_ERROR_CODES.includes(event.evidence.typedErrorCode)
 }
@@ -333,7 +333,7 @@ async function completePeerHotSwitch(
   )
   const peerLane = peerLaneAdmission ?? await events.waitFor(
     'lane-admitted',
-    (event) => event.kind === 'lane-admitted' && event.observation.route === 'peer',
+    (event) => event.kind === 'lane-admitted' && event.observation.route === 'direct',
     'peer content lane admission',
   )
 
@@ -349,7 +349,7 @@ async function completePeerHotSwitch(
   await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
   expect(events.snapshot().some((event) =>
     event.kind === 'dispatch' &&
-    event.observation.route === 'relay' &&
+    event.observation.route === 'application-relay' &&
     event.observation.dispatchSequence > preCutDispatchBoundary,
   )).toBe(false)
   await releasePageOutput(options.page)
@@ -357,7 +357,7 @@ async function completePeerHotSwitch(
   const peerDispatch = await events.waitFor(
     'dispatch',
     (event) => event.kind === 'dispatch' &&
-      event.observation.route === 'peer' &&
+      event.observation.route === 'direct' &&
       event.observation.dispatchSequence > preCutDispatchBoundary,
     'post-cut peer dispatch',
   )
@@ -375,12 +375,12 @@ async function completePeerHotSwitch(
   expect(peerLane.observation).toMatchObject({
     laneId: admittedLane.laneId,
     laneEpoch: admittedLane.laneEpoch,
-    route: 'peer',
+    route: 'direct',
   })
   expect(peerDispatch.observation).toMatchObject({
     laneId: peerLane.observation.laneId,
     laneEpoch: peerLane.observation.laneEpoch,
-    route: 'peer',
+    route: 'direct',
   })
 }
 
@@ -425,13 +425,13 @@ function assertRelayFallback(
   expect(snapshot.some((event) => event.kind === 'relay-ineligible')).toBe(false)
   expect(snapshot.some((event) =>
     (event.kind === 'lane-admitted' || event.kind === 'lane-detached') &&
-    event.observation.route === 'peer',
+    event.observation.route === 'direct',
   )).toBe(false)
   expect(snapshot.some((event) =>
-    event.kind === 'dispatch' && event.observation.route === 'peer',
+    event.kind === 'dispatch' && event.observation.route === 'direct',
   )).toBe(false)
   expect(snapshot.some((event) =>
-    event.kind === 'dispatch' && event.observation.route === 'relay',
+    event.kind === 'dispatch' && event.observation.route === 'application-relay',
   )).toBe(true)
 }
 

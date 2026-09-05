@@ -25,6 +25,7 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2endpoint"
 	"github.com/windshare/windshare/relay/signaling/v2route"
+	"github.com/windshare/windshare/relay/stunonly"
 )
 
 const (
@@ -144,7 +145,12 @@ func relayReadyReporter(
 }
 
 func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf func(string, ...any)) error {
+	return runWithSTUNListeners(ctx, args, onReady, logf, stunonly.Listeners{})
+}
+
+func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.Addr) error, logf func(string, ...any), stunListeners stunonly.Listeners) error {
 	flags := flag.NewFlagSet("wsrelay", flag.ContinueOnError)
+	stunConfig := registerSTUNFlags(flags)
 	var (
 		listenAddress  = flags.String("listen", defaultListenAddress, "listen address in host:port form")
 		relayBaseURL   = flags.String("relay-base-url", "", "public relay base URL; required when clients do not use the listener address")
@@ -252,14 +258,9 @@ func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf 
 	if err := httpapi.ValidateV2Config(httpConfig); err != nil {
 		return fmt.Errorf("wsrelay: invalid HTTP policy: %w", err)
 	}
-	v2Handler := httpapi.NewV2Handler(httpConfig)
-	mux := http.NewServeMux()
-	mux.Handle("/v2/ws", v2Handler)
-	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
-		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		_, _ = writer.Write([]byte("ok\n"))
-	})
-	server := policy.newServer(mux)
+	stunService := stunonly.StartService(ctx, stunConfig.config(), stunListeners, logf)
+	defer stunService.Close()
+	server := policy.newServer(relayHTTPHandler(httpConfig))
 	serveResult := make(chan error, 1)
 	go func() { serveResult <- server.Serve(listener) }()
 	listenerOwned = false
@@ -294,6 +295,16 @@ func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf 
 	}
 	logf("wsrelay: stopped")
 	return nil
+}
+
+func relayHTTPHandler(config httpapi.V2Config) http.Handler {
+	mux := http.NewServeMux()
+	mux.Handle("/v2/ws", httpapi.NewV2Handler(config))
+	mux.HandleFunc("GET /healthz", func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		_, _ = writer.Write([]byte("ok\n"))
+	})
+	return mux
 }
 
 func publicRelayEndpoint(configured string, address net.Addr) (v2.RelayEndpoint, error) {

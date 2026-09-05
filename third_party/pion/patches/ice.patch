@@ -1,0 +1,372 @@
+diff --git a/agent.go b/agent.go
+index 5350d1d..249729b 100644
+--- a/agent.go
++++ b/agent.go
+@@ -93,7 +93,8 @@ type Agent struct {
+ 
+ 	// How long connectivity checks can fail before the ICE Agent
+ 	// goes to failed
+-	failedTimeout time.Duration
++	failedTimeout  time.Duration
++	providerConfig ProviderConfig
+ 
+ 	// How often should we send keepalive packets?
+ 	// 0 means never
+@@ -687,8 +688,8 @@ func (a *Agent) connectivityChecks() { //nolint:cyclop
+ 					checkingDuration = time.Now()
+ 				}
+ 
+-				// We have been in checking longer then Disconnect+Failed timeout, set the connection to Failed
+-				if time.Since(checkingDuration) > a.disconnectedTimeout+a.failedTimeout {
++				// Initial checking owns the PAC window independently of established-pair failure detection.
++				if time.Since(checkingDuration) > a.initialCheckingTimeout() {
+ 					a.updateConnectionState(ConnectionStateFailed)
+ 
+ 					return
+@@ -1343,6 +1344,11 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn
+ 			}
+ 		}
+ 
++		if policy := a.providerConfig.LocalPreference; policy != nil {
++			if preference, ok := policy(cand); ok {
++				cand.(interface{ setLocalPreference(uint16) }).setLocalPreference(preference)
++			}
++		}
+ 		a.setCandidateExtensions(cand)
+ 		cand.start(a, candidateConn, a.startedCh)
+ 
+diff --git a/candidate_base.go b/candidate_base.go
+index 249fe10..2585233 100644
+--- a/candidate_base.go
++++ b/candidate_base.go
+@@ -43,7 +43,8 @@ type candidateBase struct {
+ 	foundationOverride string
+ 	priorityOverride   uint32
+ 
+-	relayLocalPreference uint16
++	relayLocalPreference    uint16
++	providerLocalPreference *uint16
+ 
+ 	remoteCandidateCaches sync.Map // map[AddrPort]Candidate
+ 	isLocationTracked     bool
+@@ -142,7 +143,12 @@ func (c *candidateBase) SetComponent(component uint16) {
+ }
+ 
+ // LocalPreference returns the local preference for this candidate.
++func (c *candidateBase) setLocalPreference(value uint16) { c.providerLocalPreference = &value }
++
+ func (c *candidateBase) LocalPreference() uint16 { //nolint:cyclop
++	if c.providerLocalPreference != nil {
++		return *c.providerLocalPreference
++	}
+ 	if c.candidateType == CandidateTypeRelay {
+ 		return c.relayLocalPreference
+ 	}
+@@ -886,6 +892,7 @@ func UnmarshalCandidate(raw string) (Candidate, error) { //nolint:cyclop
+ 			foundation,
+ 			raddr,
+ 			rport,
++			tcpType,
+ 		})
+ 		if err != nil {
+ 			return nil, err
+diff --git a/candidate_server_reflexive.go b/candidate_server_reflexive.go
+index 380533e..f999be8 100644
+--- a/candidate_server_reflexive.go
++++ b/candidate_server_reflexive.go
+@@ -24,6 +24,7 @@ type CandidateServerReflexiveConfig struct {
+ 	Foundation  string
+ 	RelAddr     string
+ 	RelPort     int
++	TCPType     TCPType
+ }
+ 
+ // NewCandidateServerReflexive creates a new server reflective candidate.
+@@ -43,18 +44,19 @@ func NewCandidateServerReflexive(config *CandidateServerReflexiveConfig) (*Candi
+ 		candidateID = globalCandidateIDGenerator.Generate()
+ 	}
+ 
++	var resolved net.Addr = &net.UDPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
++	if networkType.IsTCP() {
++		resolved = &net.TCPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
++	}
+ 	return &CandidateServerReflexive{
+ 		candidateBase: candidateBase{
+-			id:            candidateID,
+-			networkType:   networkType,
+-			candidateType: CandidateTypeServerReflexive,
+-			address:       config.Address,
+-			port:          config.Port,
+-			resolvedAddr: &net.UDPAddr{
+-				IP:   ipAddr.AsSlice(),
+-				Port: config.Port,
+-				Zone: ipAddr.Zone(),
+-			},
++			id:                 candidateID,
++			networkType:        networkType,
++			candidateType:      CandidateTypeServerReflexive,
++			address:            config.Address,
++			port:               config.Port,
++			resolvedAddr:       resolved,
++			tcpType:            config.TCPType,
+ 			component:          config.Component,
+ 			foundationOverride: config.Foundation,
+ 			priorityOverride:   config.Priority,
+diff --git a/gather.go b/gather.go
+index 6b9573b..630e63d 100644
+--- a/gather.go
++++ b/gather.go
+@@ -280,6 +280,8 @@ func (a *Agent) gatherCandidatesInternal(ctx context.Context) {
+ 		}
+ 	}
+ 
++	a.gatherProviderEndpoints(ctx)
++
+ 	// Block until all STUN and TURN URLs have been gathered (or timed out)
+ 	wg.Wait()
+ }
+@@ -742,6 +744,9 @@ func (a *Agent) gatherCandidatesSrflxUDPMux(ctx context.Context, urls []*stun.UR
+ 
+ 					continue
+ 				}
++				if (udpAddr.IP.To4() != nil) != networkType.IsIPv4() {
++					continue
++				}
+ 				wg.Add(1)
+ 				go func(url stun.URI, network string, localAddr *net.UDPAddr) {
+ 					defer wg.Done()
+@@ -760,7 +765,14 @@ func (a *Agent) gatherCandidatesSrflxUDPMux(ctx context.Context, urls []*stun.UR
+ 						return
+ 					}
+ 
+-					xorAddr, err := a.udpMuxSrflx.GetXORMappedAddr(serverAddr, a.stunGatherTimeout)
++					var xorAddr *stun.XORMappedAddress
++					if scoped, ok := a.udpMuxSrflx.(interface {
++						GetXORMappedAddrForLocal(net.Addr, net.Addr, time.Duration) (*stun.XORMappedAddress, error)
++					}); ok {
++						xorAddr, err = scoped.GetXORMappedAddrForLocal(serverAddr, localAddr, a.stunGatherTimeout)
++					} else {
++						xorAddr, err = a.udpMuxSrflx.GetXORMappedAddr(serverAddr, a.stunGatherTimeout)
++					}
+ 					if err != nil {
+ 						a.log.Warnf("Failed get server reflexive address %s %s: %v", network, url, err)
+ 
+diff --git a/provider_config.go b/provider_config.go
+new file mode 100644
+index 0000000..85cd03f
+--- /dev/null
++++ b/provider_config.go
+@@ -0,0 +1,108 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package ice
++
++import (
++	"context"
++	"fmt"
++	"net"
++	"net/netip"
++	"slices"
++	"time"
++)
++
++// MappedEndpoint binds a verified externally allocated endpoint to its real
++// local socket. It is immutable for one Agent; late leases need a fresh Agent.
++type MappedEndpoint struct {
++	Local    netip.AddrPort
++	External netip.AddrPort
++}
++
++// ProviderConfig supplies capabilities whose lifetime belongs to the embedding
++// application. No retry, lease renewal, or network monitoring is owned here.
++type ProviderConfig struct {
++	SrflxMux               UniversalUDPMux
++	InitialCheckingTimeout time.Duration
++	MappedUDPEndpoints     []MappedEndpoint
++	MappedTCPEndpoints     []MappedEndpoint
++	TCPMappedMux           interface {
++		GetConnForEndpoint(string, netip.AddrPort) (net.PacketConn, error)
++	}
++	LocalPreference func(Candidate) (uint16, bool)
++}
++
++// WithProviderConfig preserves legacy behavior when the config is empty.
++func WithProviderConfig(config ProviderConfig) AgentOption {
++	config.MappedUDPEndpoints = slices.Clone(config.MappedUDPEndpoints)
++	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
++	return func(a *Agent) error {
++		if config.InitialCheckingTimeout < 0 {
++			return fmt.Errorf("negative initial ICE checking timeout")
++		}
++		for _, endpoint := range config.MappedUDPEndpoints {
++			if !endpoint.Local.IsValid() || !endpoint.External.IsValid() ||
++				endpoint.Local.Port() == 0 || endpoint.External.Port() == 0 ||
++				endpoint.Local.Addr().Is4() != endpoint.External.Addr().Is4() {
++				return fmt.Errorf("invalid mapped UDP endpoint")
++			}
++			if config.SrflxMux == nil {
++				return fmt.Errorf("mapped UDP endpoint requires socket mux")
++			}
++		}
++		for _, endpoint := range config.MappedTCPEndpoints {
++			if !endpoint.Local.IsValid() || !endpoint.External.IsValid() || endpoint.Local.Port() == 0 || endpoint.External.Port() == 0 || endpoint.Local.Addr().Is4() != endpoint.External.Addr().Is4() || config.TCPMappedMux == nil {
++				return fmt.Errorf("invalid mapped TCP endpoint")
++			}
++		}
++		a.providerConfig = config
++		if config.SrflxMux != nil {
++			a.udpMuxSrflx = config.SrflxMux
++		}
++		return nil
++	}
++}
++
++func (a *Agent) initialCheckingTimeout() time.Duration {
++	if a.providerConfig.InitialCheckingTimeout > 0 {
++		return a.providerConfig.InitialCheckingTimeout
++	}
++	return a.disconnectedTimeout + a.failedTimeout
++}
++
++func (a *Agent) gatherProviderEndpoints(ctx context.Context) {
++	a.gatherProviderTCPEndpoints(ctx)
++	for _, endpoint := range a.providerConfig.MappedUDPEndpoints {
++		if ctx.Err() != nil {
++			return
++		}
++		local := net.UDPAddrFromAddrPort(endpoint.Local)
++		network := NetworkTypeUDP6
++		if endpoint.Local.Addr().Is4() {
++			network = NetworkTypeUDP4
++		}
++		if !slices.Contains(a.networkTypes, network) {
++			continue
++		}
++		// A separate mux reference allows candidate disposal without closing either
++		// the physical endpoint or another local candidate's reference.
++		conn, err := a.providerConfig.SrflxMux.GetConnForURL(a.localUfrag, "mapping:"+endpoint.External.String(), local)
++		if err != nil {
++			a.log.Warnf("mapped endpoint socket: %v", err)
++			continue
++		}
++		candidate, err := NewCandidateServerReflexive(&CandidateServerReflexiveConfig{
++			Network: network.String(), Address: endpoint.External.Addr().String(), Port: int(endpoint.External.Port()),
++			Component: ComponentRTP, RelAddr: endpoint.Local.Addr().String(), RelPort: int(endpoint.Local.Port()),
++		})
++		if err != nil {
++			_ = conn.Close()
++			a.log.Warnf("mapped endpoint candidate: %v", err)
++			continue
++		}
++		if err = a.addCandidate(ctx, candidate, conn); err != nil {
++			_ = conn.Close()
++			a.log.Warnf("mapped endpoint admission: %v", err)
++		}
++	}
++}
+diff --git a/provider_tcp.go b/provider_tcp.go
+new file mode 100644
+index 0000000..dfc7000
+--- /dev/null
++++ b/provider_tcp.go
+@@ -0,0 +1,42 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package ice
++
++import (
++	"context"
++	"slices"
++)
++
++func (a *Agent) gatherProviderTCPEndpoints(ctx context.Context) {
++	for _, endpoint := range a.providerConfig.MappedTCPEndpoints {
++		if ctx.Err() != nil {
++			return
++		}
++		network := NetworkTypeTCP4
++		if endpoint.Local.Addr().Is6() {
++			network = NetworkTypeTCP6
++		}
++		if !slices.Contains(a.networkTypes, network) {
++			continue
++		}
++		conn, err := a.providerConfig.TCPMappedMux.GetConnForEndpoint(a.localUfrag, endpoint.Local)
++		if err != nil {
++			a.log.Warnf("mapped TCP endpoint socket: %v", err)
++			continue
++		}
++		candidate, err := NewCandidateServerReflexive(&CandidateServerReflexiveConfig{
++			Network: network.String(), Address: endpoint.External.Addr().String(), Port: int(endpoint.External.Port()),
++			Component: ComponentRTP, RelAddr: endpoint.Local.Addr().String(), RelPort: int(endpoint.Local.Port()), TCPType: TCPTypePassive,
++		})
++		if err != nil {
++			_ = conn.Close()
++			a.log.Warnf("mapped TCP endpoint candidate: %v", err)
++			continue
++		}
++		if err = a.addCandidate(ctx, candidate, conn); err != nil {
++			_ = conn.Close()
++			a.log.Warnf("mapped TCP endpoint admission: %v", err)
++		}
++	}
++}
+diff --git a/udp_mux_universal.go b/udp_mux_universal.go
+index 54d0aaa..da1718f 100644
+--- a/udp_mux_universal.go
++++ b/udp_mux_universal.go
+@@ -141,10 +141,10 @@ func (m *UniversalUDPMuxDefault) isXORMappedResponse(msg *stun.Message, stunAddr
+ 	defer m.mu.Unlock()
+ 	// Check first if it is a STUN server address,
+ 	// because remote peer can also send similar messages but as a BindingSuccess.
+-	_, ok := m.xorMappedMap[stunAddr]
++	mapping, ok := m.xorMappedMap[stunAddr]
+ 	_, err := msg.Get(stun.AttrXORMappedAddress)
+ 
+-	return err == nil && ok
++	return err == nil && ok && msg.Type == stun.BindingSuccess && msg.TransactionID == mapping.transactionID
+ }
+ 
+ // handleXORMappedResponse parses response from the STUN server, extracts XORMappedAddress attribute.
+@@ -207,9 +207,9 @@ func (m *UniversalUDPMuxDefault) GetXORMappedAddr(
+ 	case <-waitAddrReceived:
+ 		// When channel closed, addr was obtained
+ 		m.mu.Lock()
+-		mappedAddr := *m.xorMappedMap[serverAddr.String()]
++		mappedAddr := m.xorMappedMap[serverAddr.String()]
+ 		m.mu.Unlock()
+-		if mappedAddr.addr == nil {
++		if mappedAddr == nil || mappedAddr.addr == nil {
+ 			return nil, errNoXorAddrMapping
+ 		}
+ 
+@@ -243,6 +243,7 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
+ 		return nil, err
+ 	}
+ 
++	addrMap.transactionID = req.TransactionID
+ 	if _, err = m.params.UDPConn.WriteTo(req.Raw, serverAddr); err != nil {
+ 		return nil, err
+ 	}
+@@ -250,7 +251,19 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
+ 	return addrMap.waitAddrReceived, nil
+ }
+ 
++// RefreshXORMappedAddr performs an actual Binding request, bypassing cached
++// discovery. The embedding owner must exclude active gathering while refreshing.
++func (m *UniversalUDPMuxDefault) RefreshXORMappedAddr(server net.Addr, timeout time.Duration) (*stun.XORMappedAddress, error) {
++	m.mu.Lock()
++	if previous := m.xorMappedMap[server.String()]; previous != nil {
++		previous.expiresAt = time.Time{}
++	}
++	m.mu.Unlock()
++	return m.GetXORMappedAddr(server, timeout)
++}
++
+ type xorMapped struct {
++	transactionID    [12]byte
+ 	addr             *stun.XORMappedAddress
+ 	waitAddrReceived chan struct{}
+ 	expiresAt        time.Time

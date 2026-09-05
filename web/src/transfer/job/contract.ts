@@ -132,6 +132,12 @@ export type MaterializationFailureReason =
 export type TransferTraceEvent =
   | Readonly<{
       name: 'receive_transition'
+      transition: 'download_connectivity'
+      transferJobId: string
+      connectivity: import('../../diagnostics/trace/transfer-payload').DownloadConnectivitySnapshot
+    }>
+  | Readonly<{
+      name: 'receive_transition'
       transition: 'intent_frozen'
       artifactKind: ReceiveIntent['artifact']['kind']
       layoutClass: ArtifactLayoutClass

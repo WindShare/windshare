@@ -176,9 +176,9 @@ func newCapacityTransferJob(
 	output := newJobOutput(share)
 	job, err := NewTransferJob(TransferJobConfig{
 		ReceiveIntent: intent, JobID: transferID[TransferJobID](82),
-		ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](91),
-		Catalog:           capacityCatalog{snapshot: jobSnapshot(t, share, root, 83, entries...)},
-		Revisions:         revisions, Blocks: capacityRangeReader{}, Materializer: output,
+		Session:   fixedJobSession(transferID[protocolsession.ProtocolSessionID](91)),
+		Catalog:   capacityCatalog{snapshot: jobSnapshot(t, share, root, 83, entries...)},
+		Revisions: revisions, Blocks: capacityRangeReader{}, Materializer: output,
 		RevisionWait: wait, Tracer: tracer,
 	})
 	if err != nil {

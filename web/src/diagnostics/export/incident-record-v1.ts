@@ -183,7 +183,7 @@ export type FailureFactV1 =
     }>>>
   | Readonly<FailureFactEnvelopeV1<'peer_failure', Readonly<{
       peer_failure: Readonly<{
-        scope: 'attempt' | 'session'
+        scope: 'attempt-transient' | 'path-terminal' | 'session-terminal'
         code: PeerFailureCodeV1
         retryable: boolean
       }>

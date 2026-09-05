@@ -6,16 +6,23 @@ import (
 	"sync"
 	"time"
 
+	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/icepolicy"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 const (
-	DefaultPeerNegotiationBudget          = 15 * time.Second
+	PeerSignalingPreparationBudget     = 10 * time.Second
+	PeerICECheckingBudget              = 40 * time.Second
+	PeerDataChannelEstablishmentBudget = 15 * time.Second
+	// Providers without observable stage boundaries retain the complete checking
+	// opportunity under one explicitly negotiation-owned deadline.
+	DefaultPeerNegotiationBudget          = PeerSignalingPreparationBudget + PeerICECheckingBudget + PeerDataChannelEstablishmentBudget
 	DefaultPeerAdmissionBudget            = 20 * time.Second
 	MinimumLaneGrantCompletionMargin      = 5 * time.Second
 	MaximumPeerAdmissionBudget            = protocolsession.LaneGrantTTL - MinimumLaneGrantCompletionMargin
-	SenderMaxActivePeerAttemptsPerSession = 1
-	SenderMaxSessionEvidenceIdentities    = 64
+	SenderMaxActivePeerAttemptsPerSession = 8
+	SenderMaxPeerPaths                    = 64
 )
 
 var (
@@ -26,8 +33,11 @@ var (
 type PeerAttemptPhase string
 
 const (
-	PeerAttemptPhaseNegotiation PeerAttemptPhase = "negotiation"
-	PeerAttemptPhaseAdmission   PeerAttemptPhase = "lane_admission"
+	PeerAttemptPhaseNegotiation  PeerAttemptPhase = "negotiation"
+	PeerAttemptPhaseAdmission    PeerAttemptPhase = "lane_admission"
+	PeerAttemptPhasePreparation  PeerAttemptPhase = "signaling_preparation"
+	PeerAttemptPhaseChecking     PeerAttemptPhase = "ice_checking"
+	PeerAttemptPhaseEstablishing PeerAttemptPhase = "datachannel_establishment"
 )
 
 type PeerPhaseTimer interface {
@@ -68,7 +78,7 @@ func validPeerPhaseBudgets(negotiation, admission time.Duration) bool {
 
 func peerPhaseTimeout(phase PeerAttemptPhase) error {
 	switch phase {
-	case PeerAttemptPhaseNegotiation:
+	case PeerAttemptPhaseNegotiation, PeerAttemptPhasePreparation, PeerAttemptPhaseChecking, PeerAttemptPhaseEstablishing:
 		return ErrPeerNegotiationTimeout
 	case PeerAttemptPhaseAdmission:
 		return ErrPeerAdmissionTimeout
@@ -116,6 +126,10 @@ func (deadline *peerPhaseDeadline) stop(cause error) {
 }
 
 type peerPhaseLifecycle struct {
+	staged            bool
+	stage             PeerAttemptPhase
+	negotiationParent context.Context
+	negotiationCancel context.CancelCauseFunc
 	mu                sync.Mutex
 	timers            PeerPhaseTimerSource
 	negotiationBudget time.Duration
@@ -147,12 +161,19 @@ func (lifecycle *peerPhaseLifecycle) beginNegotiation(
 	if lifecycle.state != peerPhaseReserved || parent == nil {
 		return nil, ErrConfig
 	}
-	ctx, err := lifecycle.armLocked(parent, PeerAttemptPhaseNegotiation, lifecycle.negotiationBudget)
+	phase, budget := PeerAttemptPhaseNegotiation, lifecycle.negotiationBudget
+	if lifecycle.staged {
+		phase, budget = PeerAttemptPhasePreparation, PeerSignalingPreparationBudget
+	}
+	lifecycle.stage = phase
+	lifecycle.negotiationParent = parent
+	ctx, err := lifecycle.armLocked(parent, phase, budget)
 	if err != nil {
 		lifecycle.state = peerPhaseTerminal
 		return nil, err
 	}
 	lifecycle.state = peerPhaseNegotiating
+	lifecycle.negotiationCancel = lifecycle.deadline.cancel
 	return ctx, nil
 }
 
@@ -248,7 +269,7 @@ func (lifecycle *peerPhaseLifecycle) expire(
 			return false, true
 		}
 	}
-	if expiration.phase != PeerAttemptPhaseNegotiation ||
+	if expiration.phase != lifecycle.stage ||
 		lifecycle.state != peerPhaseNegotiating {
 		return false, false
 	}
@@ -266,6 +287,9 @@ func (lifecycle *peerPhaseLifecycle) deadlineFired(expiration peerPhaseExpiratio
 	lifecycle.pendingExpiration = expiration
 	lifecycle.expirationOwned = false
 	if expiration.phase != PeerAttemptPhaseAdmission {
+		if lifecycle.staged && lifecycle.negotiationCancel != nil {
+			lifecycle.negotiationCancel(expiration.cause)
+		}
 		return
 	}
 	switch lifecycle.state {
@@ -278,6 +302,19 @@ func (lifecycle *peerPhaseLifecycle) deadlineFired(expiration peerPhaseExpiratio
 	default:
 		lifecycle.pendingExpiration = peerPhaseExpiration{}
 	}
+}
+
+// An operation can end while capacity acquisition is still blocking, before
+// an execution loop can consume its cancellation event. Only pre-admission work
+// is cancelled here; authenticated settlement and admitted lanes keep ownership.
+func (lifecycle *peerPhaseLifecycle) cancelBeforeAdmission(cause error) {
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if lifecycle.state != peerPhaseReserved && lifecycle.state != peerPhaseNegotiating {
+		return
+	}
+	lifecycle.state = peerPhaseTerminal
+	lifecycle.stopDeadlineLocked(cause)
 }
 
 func (lifecycle *peerPhaseLifecycle) terminate(cause error) bool {
@@ -427,5 +464,61 @@ func (owner *ownedPeerDataChannel) teardownSnapshot() peerTransportTeardown {
 		transitions:       append([]PeerTeardownTransition(nil), owner.teardown.transitions...),
 		peerShutdownError: owner.teardown.peerShutdownError,
 		channelDrainError: owner.teardown.channelDrainError,
+	}
+}
+
+// Advancing an observed stage stops its timer without canceling ongoing signal
+// I/O. Every later expiration still cancels the original negotiation context.
+func (lifecycle *peerPhaseLifecycle) observeICE(state pion.ICEConnectionState) {
+	lifecycle.mu.Lock()
+	defer lifecycle.mu.Unlock()
+	if !lifecycle.staged || lifecycle.state != peerPhaseNegotiating || lifecycle.pendingExpiration.generation != 0 {
+		return
+	}
+	var phase PeerAttemptPhase
+	var budget time.Duration
+	switch {
+	case state == pion.ICEConnectionStateChecking && lifecycle.stage == PeerAttemptPhasePreparation:
+		phase, budget = PeerAttemptPhaseChecking, PeerICECheckingBudget
+	case (state == pion.ICEConnectionStateConnected || state == pion.ICEConnectionStateCompleted) && (lifecycle.stage == PeerAttemptPhasePreparation || lifecycle.stage == PeerAttemptPhaseChecking):
+		phase, budget = PeerAttemptPhaseEstablishing, PeerDataChannelEstablishmentBudget
+	default:
+		return
+	}
+	previous := lifecycle.deadline
+	previous.stopOnce.Do(func() { close(previous.stopped); previous.timer.Stop() })
+	lifecycle.deadline = nil
+	_, err := lifecycle.armLocked(lifecycle.negotiationParent, phase, budget)
+	if err != nil {
+		lifecycle.negotiationCancel(err)
+		lifecycle.state = peerPhaseTerminal
+		return
+	}
+	nextCancel := lifecycle.deadline.cancel
+	originalCancel := lifecycle.negotiationCancel
+	lifecycle.deadline.cancel = func(cause error) { originalCancel(cause); nextCancel(cause) }
+	lifecycle.stage = phase
+}
+func observePeerICE(peer any, lifecycle *peerPhaseLifecycle) {
+	if observer, ok := peer.(interface {
+		OnICEConnectionStateChange(func(pion.ICEConnectionState))
+	}); ok {
+		observer.OnICEConnectionStateChange(lifecycle.observeICE)
+	}
+}
+func candidateAdmission(peer any, limit int) func(*pion.ICECandidate) bool {
+	budget := icepolicy.NewCandidateBudget(limit)
+	var mu sync.Mutex
+	return func(candidate *pion.ICECandidate) bool {
+		if candidate == nil {
+			return false
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		value := candidate.ToJSON().Candidate
+		if provenance, ok := peer.(interface{ IsMappedCandidate(string) bool }); ok && provenance.IsMappedCandidate(value) {
+			return budget.AcceptMapped(value).Accepted
+		}
+		return budget.Accept(value).Accepted
 	}
 }

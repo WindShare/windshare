@@ -35,7 +35,13 @@ import {
   type V2PeerRecoveryActivation,
   type V2PeerRecoveryDependencies,
   V2PeerRecoverySupervisor,
-} from './v2-peer-recovery'
+} from './peer-set/path'
+import { V2PeerSet } from './peer-set/peer-set'
+import { encodeBase64Url } from '../crypto/bytes'
+import { PeerPathControl } from './peer-set/path-control'
+import { PeerNetworkGeneration } from './peer-set/network-generation'
+
+export type V2ConnectivityPolicy = 'auto' | 'relay-only' | 'p2p-only'
 
 export interface V2ContentLaneAdmissionObservation {
   readonly laneId: number
@@ -46,6 +52,7 @@ export interface V2ContentLaneAdmissionObservation {
 export type V2ContentLaneDetachmentObservation = V2ContentLaneAdmissionObservation
 
 export interface V2ReceiverConnectivityOptions {
+  readonly policy?: V2ConnectivityPolicy
   readonly session: V2ReceiverSessionRuntime
   readonly lanes: V2LaneSet
   readonly createBlockLane: (laneId: number) => V2BlockLane
@@ -68,16 +75,20 @@ export interface V2ConnectivityActivation {
 
 /** Stable click-scoped authority shared by every ProtocolSession generation it spans. */
 export class V2ConnectivityRouteAuthority implements V2BlockRouteEligibility {
+  readonly #policy: V2ConnectivityPolicy
   readonly #listeners = new Set<() => void>()
   #active = true
   #closedReason: unknown
+
+  constructor(policy: V2ConnectivityPolicy = 'auto') { this.#policy = policy }
 
   get active(): boolean {
     return this.#active
   }
 
-  allows(): boolean {
-    return this.#active
+  allows(route: V2BlockTransportRoute): boolean {
+    return this.#active && (this.#policy === 'auto' ||
+      (this.#policy === 'relay-only' ? route === 'application-relay' : route === 'direct'))
   }
 
   assertActive(): void {
@@ -124,10 +135,12 @@ interface V2InstalledPeer {
   readonly peer: PeerChannel
   readonly route: V2SessionSignalingRoute
   closeTask?: Promise<void>
+  unsubscribePathRoute?: () => void
 }
 
 /** Browsing keeps relay control-only; explicit content activation admits both routes. */
 export class V2ReceiverConnectivity {
+  readonly #policy: V2ConnectivityPolicy
   readonly #session: V2ReceiverSessionRuntime
   readonly #lanes: V2LaneSet
   readonly #createBlockLane: (laneId: number) => V2BlockLane
@@ -149,10 +162,12 @@ export class V2ReceiverConnectivity {
   readonly #activations = new Map<number, V2ActiveConnectivity>()
   readonly #peerCleanupTasks = new Map<V2InstalledPeer, Promise<void>>()
   readonly #unsubscribeLaneChanges: () => void
-  #peerRecovery: V2PeerRecoverySupervisor | undefined
+  readonly #peers = new V2PeerSet()
+  readonly #pathControls = new Map<string, PeerPathControl>()
   #peerPathId: V2PeerPathIdentity | undefined
-  #installedPeer: V2InstalledPeer | undefined
-  #relayLaneId: number
+  readonly #installedPeers = new Map<string, V2InstalledPeer>()
+  readonly #relayLaneIds = new Set<number>()
+  #browse: V2PeerRecoveryActivation | undefined
   #closeTask: Promise<void> | undefined
   #nextActivation = 1
 
@@ -160,14 +175,16 @@ export class V2ReceiverConnectivity {
     this.#session = options.session
     this.#lanes = options.lanes
     this.#createBlockLane = options.createBlockLane
-    this.#relayLaneId = options.relayLaneId ?? options.session.initialLaneId
+    this.#policy = options.policy ?? 'auto'
+    this.#relayLaneIds.add(options.relayLaneId ?? options.session.initialLaneId)
     this.#offers = options.offers ?? new BrowserOfferChannelFactory()
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable ?? (() => browserPeerConnectionAvailable())
     this.#connectivityTrace = options.connectivityTrace
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted ?? (() => undefined)
     this.#onContentLaneDetached = options.onContentLaneDetached ?? (() => undefined)
-    this.#peerRecoveryOptions = options.peerRecovery ?? {}
+    this.#peerRecoveryOptions = { ...options.peerRecovery,
+      network: options.peerRecovery?.network ?? new PeerNetworkGeneration() }
     this.#protocolSessionId = options.session.protocolSessionIdentity
     this.#laneEpochs.set(options.session.initialLaneId, options.session.keys.initialLaneEpoch)
     this.#unsubscribeLaneChanges = this.#session.subscribeLaneChanges((change) => {
@@ -183,6 +200,11 @@ export class V2ReceiverConnectivity {
     })
   }
 
+  beginBrowse(): void {
+    if (this.#browse !== undefined || this.#policy !== 'auto' || !this.#capabilityAllowsAttempt()) return
+    this.#browse = this.#ensurePeerRecovery().browse()
+  }
+
   begin(
     _intent: V2ContentIntent,
     options: {
@@ -191,7 +213,7 @@ export class V2ReceiverConnectivity {
   ): V2ConnectivityActivation {
     this.#lifetime.signal.throwIfAborted()
     const id = this.#nextActivation++
-    const routes = options.routeAuthority ?? new V2ConnectivityRouteAuthority()
+    const routes = options.routeAuthority ?? new V2ConnectivityRouteAuthority(this.#policy)
     routes.assertActive()
     const active: {
       routes: V2ConnectivityRouteAuthority
@@ -212,6 +234,7 @@ export class V2ReceiverConnectivity {
       throw error
     }
     active.peerRecovery = this.#activatePeerRecovery()
+    if (!this.#activations.has(id)) active.peerRecovery?.close()
     let closed = false
     return Object.freeze({
       routes,
@@ -223,16 +246,11 @@ export class V2ReceiverConnectivity {
     })
   }
 
-  replaceRelayLane(laneId: number): void {
+  addRelayLane(laneId: number): void {
     if (!this.#session.laneIds().includes(laneId)) {
       throw new Error('Replacement relay lane is not attached to this ProtocolSession')
     }
-    const previous = this.#relayLaneId
-    this.#relayLaneId = laneId
-    if (previous !== laneId && this.#admitted.has(previous)) {
-      const admitted = this.#admitted.get(previous)
-      if (admitted !== undefined) this.#removeAdmittedLane(previous, admitted.laneEpoch)
-    }
+    this.#relayLaneIds.add(laneId)
     if (this.#activations.size > 0) this.#admitRelay()
   }
 
@@ -244,33 +262,45 @@ export class V2ReceiverConnectivity {
   async #close(): Promise<void> {
     const reason = new DOMException('Receiver connectivity closed', 'AbortError')
     this.#lifetime.abort(reason)
-    const recoveryClose = this.#peerRecovery?.close()
+    this.#browse?.close()
+    this.#browse = undefined
+    const recoveryClose = this.#peers.close()
+    const controlsClose = [...this.#pathControls.values()].map((control) => control.close())
+    this.#pathControls.clear()
     for (const activationId of [...this.#activations.keys()]) {
       this.#endActivation(activationId, reason)
     }
     this.#unsubscribeLaneChanges()
-    const installed = this.#installedPeer
-    this.#installedPeer = undefined
-    if (installed !== undefined) this.#startInstalledPeerCleanup(installed)
+    for (const installed of this.#installedPeers.values()) this.#startInstalledPeerCleanup(installed)
+    this.#installedPeers.clear()
     await Promise.allSettled([
+      ...controlsClose,
       ...(recoveryClose === undefined ? [] : [recoveryClose]),
       this.#joinPeerCleanup(),
     ])
   }
 
   #activatePeerRecovery(): V2PeerRecoveryActivation | undefined {
-    if (!this.#capabilityAllowsAttempt()) return undefined
-    return this.#ensurePeerRecovery().activate()
+    if (this.#policy === 'relay-only') return undefined
+    if (!this.#capabilityAllowsAttempt()) {
+      this.#peerUnavailable()
+      return undefined
+    }
+    const path = this.#ensurePeerRecovery()
+    for (const control of this.#pathControls.values()) control.activate()
+    return path.activate()
   }
 
   #ensurePeerRecovery(): V2PeerRecoverySupervisor {
-    if (this.#peerRecovery !== undefined) return this.#peerRecovery
+    if (this.#peerPathId !== undefined) return this.#peers.path(this.#peerPathId)!
     const peerPathIdentity = this.#randomBytes === undefined
       ? createV2PeerPathIdentity()
       : createV2PeerPathIdentity(this.#randomBytes)
     const peerPathId = createV2PeerPathIdentityValue(peerPathIdentity)
     const clock = this.#peerRecoveryOptions.clock ?? browserV2PeerRecoveryClock
     const attempts = new V2BrowserPeerAttemptExecutor({
+      ...(this.#peerRecoveryOptions.tabAdmission === undefined ? {} : { tabAdmission: this.#peerRecoveryOptions.tabAdmission }),
+      admissionReceiver: this.#peerRecoveryOptions.budget ?? this,
       session: this.#session,
       offers: this.#offers,
       peerPathIdentity,
@@ -280,10 +310,15 @@ export class V2ReceiverConnectivity {
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
     this.#peerPathId = peerPathId
-    this.#peerRecovery = new V2PeerRecoverySupervisor({
+    const recovery = this.#peers.add({
       protocolSessionId: this.#protocolSessionId,
       peerPathId,
       attempts,
+      ...(this.#peerRecoveryOptions.network === undefined ? {} : { network: this.#peerRecoveryOptions.network }),
+      ...(this.#peerRecoveryOptions.endpoints === undefined ? {} : { endpoints: this.#peerRecoveryOptions.endpoints }),
+      ...(this.#peerRecoveryOptions.budget === undefined ? {} : { budget: this.#peerRecoveryOptions.budget }),
+      releaseLane: (lane) => this.#releasePeer(lane.laneId, lane.laneEpoch),
+      onUnavailable: () => this.#peerUnavailable(),
       ...(this.#peerRecoveryOptions.policy === undefined
         ? {}
         : { policy: this.#peerRecoveryOptions.policy }),
@@ -294,7 +329,10 @@ export class V2ReceiverConnectivity {
       rearmSource: this.#peerRecoveryOptions.rearmSource ?? new BrowserV2PeerRecoveryRearmSource(),
       ...(this.#connectivityTrace === undefined ? {} : { trace: this.#connectivityTrace }),
     })
-    return this.#peerRecovery
+    this.#pathControls.set(encodeBase64Url(peerPathIdentity), new PeerPathControl(
+      this.#session, peerPathIdentity, this.#peerRecoveryOptions.network!, clock, (notice) => recovery.pathChanged(notice),
+      this.#peerRecoveryOptions.providerProfile))
+    return recovery
   }
 
   #capabilityAllowsAttempt(): boolean {
@@ -308,17 +346,37 @@ export class V2ReceiverConnectivity {
     return false
   }
 
+  #peerUnavailable(): void {
+    if (this.#policy !== 'p2p-only') return
+    const error = new Error('No authenticated direct path is available within the current connection wave')
+    for (const [id, active] of this.#activations) {
+      active.routes.close(error)
+      this.#endActivation(id, error)
+    }
+  }
+
   #publishPeer(candidate: V2PeerCandidatePublication): boolean {
     if (
-      this.#lifetime.signal.aborted || this.#installedPeer !== undefined ||
+      this.#lifetime.signal.aborted || this.#installedPeers.has(encodeBase64Url(candidate.peerPathId.copyBytes())) ||
       !equalV2DiagnosticIdentities(candidate.protocolSessionId, this.#protocolSessionId) ||
       this.#peerPathId === undefined ||
       !equalV2DiagnosticIdentities(candidate.peerPathId, this.#peerPathId) ||
       this.#laneEpochs.get(candidate.laneId) !== candidate.laneEpoch ||
       !this.#session.laneIds().includes(candidate.laneId)
     ) return false
-    if (!this.#admit(candidate.laneId, candidate.laneEpoch, 'peer')) return false
-    this.#installedPeer = { ...candidate }
+    const pathRoute = candidate.peer.pathRoute
+    if (this.#policy === 'p2p-only' && pathRoute !== 'direct') return false
+    if (pathRoute === undefined || !this.#admit(candidate.laneId, candidate.laneEpoch, pathRoute)) return false
+    const installed: V2InstalledPeer = { ...candidate }
+    this.#installedPeers.set(encodeBase64Url(candidate.peerPathId.copyBytes()), installed)
+    const unsubscribe = candidate.peer.subscribePathRoute?.((nextRoute) => {
+      if (nextRoute === pathRoute || this.#lifetime.signal.aborted) return
+      // Route class is authenticated lane metadata. Retiring the old lane also
+      // prevents blocks spanning a direct↔TURN switch from claiming one route.
+      this.#removeAdmittedLane(candidate.laneId, candidate.laneEpoch)
+      this.#peerDetached(candidate.laneId, candidate.laneEpoch)
+    })
+    if (unsubscribe !== undefined) installed.unsubscribePathRoute = unsubscribe
     return true
   }
 
@@ -329,12 +387,14 @@ export class V2ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
+    if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.revoke()
     active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
   }
 
   #peerDetached(laneId: number, laneEpoch: number): void {
-    const installed = this.#installedPeer
+    const installed = [...this.#installedPeers.values()].find((peer) =>
+      peer.laneId === laneId && peer.laneEpoch === laneEpoch)
     if (
       installed === undefined ||
       !equalV2DiagnosticIdentities(installed.protocolSessionId, this.#protocolSessionId) ||
@@ -343,8 +403,9 @@ export class V2ReceiverConnectivity {
       installed.laneId !== laneId ||
       installed.laneEpoch !== laneEpoch
     ) return
-    this.#installedPeer = undefined
-    this.#peerRecovery?.peerDetached({
+    this.#installedPeers.delete(encodeBase64Url(installed.peerPathId.copyBytes()))
+    this.#peers.path(installed.peerPathId)?.peerDetached({
+      attemptId: installed.attemptId,
       protocolSessionId: installed.protocolSessionId,
       peerPathId: installed.peerPathId,
       laneId,
@@ -353,8 +414,18 @@ export class V2ReceiverConnectivity {
     this.#startInstalledPeerCleanup(installed)
   }
 
+  #releasePeer(laneId: number, laneEpoch: number): void {
+    const installed = [...this.#installedPeers.values()].find((peer) =>
+      peer.laneId === laneId && peer.laneEpoch === laneEpoch)
+    if (installed === undefined) return
+    this.#removeAdmittedLane(laneId, laneEpoch)
+    this.#installedPeers.delete(encodeBase64Url(installed.peerPathId.copyBytes()))
+    this.#startInstalledPeerCleanup(installed)
+  }
+
   #startInstalledPeerCleanup(installed: V2InstalledPeer): void {
     if (installed.closeTask !== undefined) return
+    installed.unsubscribePathRoute?.()
     const closeTask = Promise.allSettled([
       Promise.resolve().then(() => installed.peer.close()),
       Promise.resolve().then(() => installed.route.close()),
@@ -388,11 +459,10 @@ export class V2ReceiverConnectivity {
   }
 
   #admitRelay(): void {
-    const laneEpoch = this.#laneEpochs.get(this.#relayLaneId)
-    if (laneEpoch === undefined) {
-      throw new Error('Relay lane epoch is unavailable during content admission')
+    for (const laneId of this.#relayLaneIds) {
+      const laneEpoch = this.#laneEpochs.get(laneId)
+      if (laneEpoch !== undefined) this.#admit(laneId, laneEpoch, 'application-relay')
     }
-    this.#admit(this.#relayLaneId, laneEpoch, 'relay')
   }
 
   #removeAdmittedLane(laneId: number, laneEpoch: number): void {

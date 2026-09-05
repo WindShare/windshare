@@ -15,6 +15,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testloopback"
 	"github.com/windshare/windshare/internal/testrun"
 )
@@ -436,6 +437,7 @@ func (lanes receiverIntegrationLanes) AttachLane(
 	ctx context.Context,
 	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
+	_ transfer.LaneRoute,
 ) (sessionruntime.ReceiverLaneAdmissionResult, error) {
 	select {
 	case <-ctx.Done():
@@ -482,6 +484,7 @@ func (lanes receiverControlledLanes) AttachLane(
 	ctx context.Context,
 	grant sessionruntime.LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
+	_ transfer.LaneRoute,
 ) (admission sessionruntime.ReceiverLaneAdmissionResult, err error) {
 	transferred := false
 	defer func() {

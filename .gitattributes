@@ -17,3 +17,6 @@ Makefile text eol=lf
 
 # Recovery archives preserve byte-exact incident records, including original whitespace.
 docs/.archive/**/.recovered-codex-playwright-recon.*.md binary
+
+# Unified-diff context markers are syntax; preserve checksum-verified patch bytes.
+third_party/pion/patches/*.patch -whitespace

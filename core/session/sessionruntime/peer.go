@@ -56,6 +56,7 @@ const (
 	ReceiverPeerProvenanceRemoteFinalConflict
 	ReceiverPeerProvenanceRemoteContinuationAuthorityViolation
 	ReceiverPeerProvenanceRuntimeStopping
+	ReceiverPeerProvenanceRemoteSessionRejected
 )
 
 type ReceiverPeerDiagnosticCode uint16
@@ -382,6 +383,9 @@ func receiverPeerRemoteFailureEvidence(
 			receiverPeerRemoteDiagnostic(ReceiverPeerDiagnosticRemoteFailureScopeViolation, failure),
 		)
 	}
+	if protocolsession.PeerFailureScope(failure.Code()) == protocolsession.PeerFailureSessionTerminal {
+		return newReceiverPeerTerminalEvidence(ReceiverPeerTerminalAuthorityRemote, ReceiverPeerProvenanceRemoteSessionRejected, ReceiverPeerTerminalSessionUnsafe, receiverPeerRemoteDiagnostic(ReceiverPeerDiagnosticRemoteOperationRejected, failure))
+	}
 	return newReceiverPeerTerminalEvidence(
 		ReceiverPeerTerminalAuthorityRemote,
 		ReceiverPeerProvenanceRemoteOperationRejected,
@@ -613,7 +617,15 @@ func (session senderPeerSession) FailPeerOperation(
 	if session.runtime == nil || operationID.IsZero() {
 		return ErrRuntimeConfig
 	}
+	generation, ok := protocolsession.OperationGenerationFromContext(ctx, operationID)
+	if !ok {
+		return ErrOperationMissing
+	}
+	binding, ok := generation.PeerAttemptBinding()
+	if !ok {
+		return ErrOperationMissing
+	}
 	return session.outbound.SendOperationError(ctx, operationID, protocolsession.OperationFailure{
-		Scope: protocolsession.OperationScopePeer, Code: code, Message: message,
+		Scope: protocolsession.OperationScopePeer, Code: code, Message: message, PeerAttempt: &binding,
 	})
 }

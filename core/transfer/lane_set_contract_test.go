@@ -266,7 +266,7 @@ func TestLaneSetSuspendsRelayContentUntilAnotherLaneArrives(t *testing.T) {
 	result := make(chan fetchResult, 1)
 	go func() {
 		record, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
-		result <- fetchResult{record: record, err: fetchErr}
+		result <- fetchResult{record: record.BlockRecord, err: fetchErr}
 	}()
 
 	var peerCalls atomic.Int32
@@ -330,7 +330,7 @@ func TestLaneSetReassignsCurrentDemandWhenSuspendedRelayResumes(t *testing.T) {
 	result := make(chan fetchResult, 1)
 	go func() {
 		record, fetchErr := lanes.fetch(context.Background(), demand, validateTransferRecord(demand))
-		result <- fetchResult{record: record, err: fetchErr}
+		result <- fetchResult{record: record.BlockRecord, err: fetchErr}
 	}()
 	<-peerFailed
 	if err := relaySuspension.Resume(); err != nil {

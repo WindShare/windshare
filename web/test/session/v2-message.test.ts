@@ -104,8 +104,8 @@ describe('v2 authenticated sender control schemas', () => {
   it('freezes permanent peer failure scope and code bounds', () => {
     const peerError = (code: number, retryable = false) => encodeV2Body(
       new Map<number, unknown>([
-        [0, 1], [1, 5], [2, code], [3, retryable], [4, retryable ? 1 : null],
-        [5, 'Peer negotiation failed'],
+        [0, 2], [1, 5], [2, code], [3, retryable], [4, retryable ? 1 : null],
+        [5, 'Peer negotiation failed'], [6, [identity(8), identity(9), 1n]],
       ]),
     )
     expect(decodeV2OperationErrorControl(
@@ -114,8 +114,8 @@ describe('v2 authenticated sender control schemas', () => {
     expect(decodeV2OperationErrorControl(
       peerError(V2_PEER_OPERATION_CODE.admission),
     ).code).toBe(V2_PEER_OPERATION_CODE.admission)
-    expect(() => decodeV2OperationErrorControl(peerError(0x5000))).toThrow(/inconsistent/i)
-    expect(() => decodeV2OperationErrorControl(peerError(0x5005))).toThrow(/inconsistent/i)
+    expect(() => decodeV2OperationErrorControl(peerError(0x4fff))).toThrow(/inconsistent/i)
+    expect(() => decodeV2OperationErrorControl(peerError(0x6000))).toThrow(/inconsistent/i)
     expect(() => decodeV2OperationErrorControl(
       peerError(V2_PEER_OPERATION_CODE.timeout, true),
     )).toThrow(/permanent/i)
@@ -124,19 +124,19 @@ describe('v2 authenticated sender control schemas', () => {
   it('validates authenticated peer answer and candidate bounds', () => {
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerAnswer,
-      encodeV2Body([1, identity(8), identity(9), 'answer-sdp']),
+      encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp']),
     )).not.toThrow()
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerCandidate,
-      encodeV2Body([1, identity(8), identity(9), 'candidate', null, 0, null]),
+      encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 0, null]),
     )).not.toThrow()
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerAnswer,
-      encodeV2Body([1, identity(8), identity(9), '']),
+      encodeV2Body([2, identity(8), identity(9), 1n, '']),
     )).toThrow(/empty/i)
     expect(() => validateV2SenderControlBody(
       V2_MESSAGE_KIND.peerCandidate,
-      encodeV2Body([1, identity(8), identity(9), 'candidate', null, 65_536, null]),
+      encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 65_536, null]),
     )).toThrow(/unsigned 16-bit/i)
   })
 
@@ -144,9 +144,9 @@ describe('v2 authenticated sender control schemas', () => {
     const keys = await senderControlKeyPair()
     const operationId = identity(10)
     const binding = controlBinding(0n)
-    const answerBody = encodeV2Body([1, identity(8), identity(9), 'answer-sdp'])
+    const answerBody = encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp'])
     const candidateBody = encodeV2Body([
-      1, identity(8), identity(9), 'candidate', 'data', 0, 'windshare',
+      2, identity(8), identity(9), 1n, 'candidate', 'data', 0, 'windshare',
     ])
     const catalogBody = encodeV2Body(new Map<number, unknown>([[0, 1], [1, identity(11)]]))
     const answer = await signSenderOperationControl({
@@ -198,7 +198,7 @@ describe('v2 authenticated sender control schemas', () => {
     const keys = await senderControlKeyPair()
     const operationId = identity(12)
     const binding = controlBinding(7n)
-    const answerBody = encodeV2Body([1, identity(8), identity(9), 'answer-sdp'])
+    const answerBody = encodeV2Body([2, identity(8), identity(9), 1n, 'answer-sdp'])
     const signed = await signSenderOperationControl({
       kind: V2_MESSAGE_KIND.peerAnswer,
       operationId,
@@ -213,7 +213,7 @@ describe('v2 authenticated sender control schemas', () => {
     const bodyChanged = replaceSignedField(
       signed.message,
       1,
-      [1, identity(8), identity(9), 'other-answer'],
+      [2, identity(8), identity(9), 1n, 'other-answer'],
     )
     await expect(verifyV2SenderControl(bodyChanged, binding, keys.publicKey)).rejects
       .toThrow(/signature/i)
@@ -221,7 +221,7 @@ describe('v2 authenticated sender control schemas', () => {
     const wrongSemanticType = await signSenderOperationControl({
       kind: V2_MESSAGE_KIND.peerAnswer,
       operationId,
-      semanticBody: encodeV2Body([1, identity(8), identity(9), 'candidate', null, 0, null]),
+      semanticBody: encodeV2Body([2, identity(8), identity(9), 1n, 'candidate', null, 0, null]),
       binding,
       privateKey: keys.privateKey,
     })

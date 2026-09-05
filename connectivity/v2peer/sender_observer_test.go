@@ -561,49 +561,31 @@ func TestSenderAttemptObservationRejectsCapacityWithCompleteAttemptStream(t *tes
 	stopSenderTestRuntime(t, cancel, runDone)
 }
 
-func TestSenderAttemptObservationCountsOnlyDeliveredCandidatesBeforeLimitFailure(t *testing.T) {
-	collector := &senderObservationCollector{}
+func TestSenderLocalCandidatePruningPreservesAttempt(t *testing.T) {
 	peer := newTestPeerConnection()
-	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		MaxCandidates: 1,
-		PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) {
-			return peer, nil
-		}),
-	})
+	factory := mustTestFactory(t, Config{MaxCandidates: 1, PeerConnections: PeerConnectionFactoryFunc(func(pion.Configuration) (PeerConnection, error) { return peer, nil })})
 	session := newTestPeerSession(101)
-	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
-	_, binding, _ := sendSenderTestOffer(t, handler, ctx, 102)
+	handler, ctx, cancel, done := startSenderTestRuntime(t, factory, session)
+	_, _, _ = sendSenderTestOffer(t, handler, ctx, 102)
 	receiveTest(t, peer.remote)
 	receiveTest(t, session.controls)
-	candidate := &pion.ICECandidate{
-		Address: "10.0.0.8", Port: 43000, Protocol: pion.ICEProtocolUDP,
-		Typ: pion.ICECandidateTypeHost,
-	}
+	candidate := &pion.ICECandidate{Foundation: "1", Priority: 1, Address: "10.0.0.8", Port: 43000, Protocol: pion.ICEProtocolUDP, Typ: pion.ICECandidateTypeHost, Component: 1}
 	peer.emitCandidate(candidate)
-	if control := receiveTest(t, session.controls); control.kind != protocolsession.MessagePeerCandidate {
-		t.Fatalf("first candidate control = %#v", control)
-	}
-	peer.emitCandidate(candidate)
-	failure := receiveTest(t, session.failures)
-	if failure.code != protocolsession.PeerOperationCodeCandidates || failure.message != peerCandidateLimitMessage {
-		t.Fatalf("candidate limit failure = %#v", failure)
-	}
-	receiveTest(t, peer.closed)
-	waitForTest(t, func() bool { return len(collector.forAttempt(binding.AttemptID)) == 6 })
-	observed := collector.forAttempt(binding.AttemptID)
-	terminal := observed[len(observed)-1]
-	if terminal.Stage != SenderAttemptFailed || terminal.Failure == nil ||
-		terminal.Failure.FailedAtStage != SenderAttemptDataChannelOpen ||
-		terminal.Failure.TypedPeerErrorCode != TypedPeerErrorCandidates || terminal.CandidateCounts == nil ||
-		*terminal.CandidateCounts != (SenderCandidateCounts{LocalEmitted: 1}) {
-		t.Fatalf("candidate limit terminal = %#v", terminal)
+	receiveTest(t, session.controls)
+	for i := range 1000 {
+		peer.emitCandidate(candidate)
+		next := *candidate
+		next.Port += uint16(i + 1)
+		peer.emitCandidate(&next)
 	}
 	select {
+	case failure := <-session.failures:
+		t.Fatal(failure)
 	case extra := <-session.controls:
-		t.Fatalf("over-limit candidate was emitted: %#v", extra)
+		t.Fatal(extra)
 	default:
 	}
-	stopSenderTestRuntime(t, cancel, runDone)
+	stopSenderTestRuntime(t, cancel, done)
 }
 
 func TestSenderAttemptObservationTreatsRetiredCandidateAsAttemptCancellation(t *testing.T) {

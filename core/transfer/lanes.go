@@ -11,6 +11,7 @@ import (
 
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -91,6 +92,7 @@ type BlockLane interface {
 }
 
 type LaneSetConfig struct {
+	ContentRoutePolicy            ContentRoutePolicy
 	ProtocolSessionID             protocolsession.ProtocolSessionID
 	RaceWidth                     int
 	Now                           func() time.Time
@@ -124,9 +126,10 @@ type ContentLaneSuspension struct {
 }
 
 type LaneSet struct {
-	sessionID protocolsession.ProtocolSessionID
-	raceWidth int
-	now       func() time.Time
+	contentRoutePolicy ContentRoutePolicy
+	sessionID          protocolsession.ProtocolSessionID
+	raceWidth          int
+	now                func() time.Time
 
 	lifecycle context.Context
 	stop      context.CancelFunc
@@ -145,9 +148,14 @@ type LaneSet struct {
 	settlementProducer  observationstream.Producer[LaneSettlementSummary]
 	settlementConsumer  observationstream.Consumer[LaneSettlementSummary]
 	finalSettlements    []*laneState
+	contentActivity     [LaneRouteTURN + 1]LaneContentActivity
+	downloadMetrics     *downloadmetrics.Metrics
 }
 
 func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
+	if !config.ContentRoutePolicy.valid() {
+		return nil, ErrInvalidLane
+	}
 	if config.ProtocolSessionID.IsZero() {
 		return nil, errors.New("lane set requires a protocol session identity")
 	}
@@ -173,7 +181,8 @@ func NewLaneSet(config LaneSetConfig) (*LaneSet, error) {
 	}
 	lifecycle, stop := context.WithCancel(context.Background())
 	return &LaneSet{
-		sessionID: config.ProtocolSessionID, raceWidth: config.RaceWidth, now: config.Now,
+		contentRoutePolicy: config.ContentRoutePolicy,
+		sessionID:          config.ProtocolSessionID, raceWidth: config.RaceWidth, now: config.Now,
 		lifecycle: lifecycle, stop: stop, lanes: make(map[uint32]*laneState),
 		contentSuspensions:  make(map[uint32]*contentLaneSuspensionPolicy),
 		availabilityChanged: make(chan struct{}),
@@ -349,7 +358,7 @@ func (s *LaneSet) candidates(
 			if _, alreadyAttempted := attempted[state.identity]; alreadyAttempted {
 				continue
 			}
-			if _, suspended := s.contentSuspensions[state.identity.ID]; suspended {
+			if _, suspended := s.contentSuspensions[state.identity.ID]; suspended || !s.contentRoutePolicy.Allows(state.route) {
 				untriedSuspended = true
 				continue
 			}
@@ -419,6 +428,7 @@ func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int) []
 }
 
 func (s *LaneSet) notifyAvailabilityLocked() {
+	s.observeDownloadAvailabilityLocked()
 	close(s.availabilityChanged)
 	s.availabilityChanged = make(chan struct{})
 }
@@ -442,7 +452,7 @@ const (
 
 type laneRoundResult struct {
 	kind     laneRoundKind
-	record   records.BlockRecord
+	record   authenticatedBlock
 	failures []laneResult
 	err      error
 }
@@ -461,12 +471,12 @@ func (s *LaneSet) fetch(
 	ctx context.Context,
 	demand BlockDemand,
 	validate func(records.BlockRecord) error,
-) (records.BlockRecord, error) {
+) (authenticatedBlock, error) {
 	if err := ctx.Err(); err != nil {
-		return records.BlockRecord{}, err
+		return authenticatedBlock{}, err
 	}
 	if !s.beginFetch() {
-		return records.BlockRecord{}, ErrLaneClosed
+		return authenticatedBlock{}, ErrLaneClosed
 	}
 	defer s.fetches.Done()
 	attempted := make(map[LaneIdentity]struct{}, MaxDemandLaneAttempts)
@@ -479,10 +489,10 @@ func (s *LaneSet) fetch(
 		candidates, exhausted, err := s.candidates(ctx, attempted)
 		if err != nil {
 			normalized := admitInternalFailure(normalizeSourceBoundary(ctx, err))
-			return records.BlockRecord{}, collaboratorError(normalized, err)
+			return authenticatedBlock{}, collaboratorError(normalized, err)
 		}
 		if exhausted {
-			return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
+			return authenticatedBlock{}, collaboratorError(failures.failure, failures.diagnostic)
 		}
 		// Reassignment is an admitted action, not an inference from a retryable
 		// error. Candidate selection has already reserved the subsequent round.
@@ -496,17 +506,17 @@ func (s *LaneSet) fetch(
 		case laneRoundSucceeded:
 			return round.record, nil
 		case laneRoundInterrupted:
-			return records.BlockRecord{}, round.err
+			return authenticatedBlock{}, round.err
 		case laneRoundFailed:
 			var reassignable bool
 			failures, reassignable = reduceLaneFailures(failures, round.failures)
 			if !reassignable {
-				return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
+				return authenticatedBlock{}, collaboratorError(failures.failure, failures.diagnostic)
 			}
 			pendingReassignments = round.failures
 		}
 	}
-	return records.BlockRecord{}, collaboratorError(failures.failure, failures.diagnostic)
+	return authenticatedBlock{}, collaboratorError(failures.failure, failures.diagnostic)
 }
 
 func (s *LaneSet) beginFetch() bool {
@@ -551,7 +561,7 @@ func (s *LaneSet) runLaneRound(
 		case result := <-results:
 			if result.err == nil {
 				decision.winner = result.state
-				return laneRoundResult{kind: laneRoundSucceeded, record: result.record}
+				return laneRoundResult{kind: laneRoundSucceeded, record: s.attestBlock(result.state, result.record)}
 			}
 			failures = append(failures, result)
 		}
@@ -623,29 +633,6 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 		reassignable = reassignable && result.reassignable
 	}
 	return current, reassignable
-}
-
-func (s *LaneSet) finish(
-	state *laneState,
-	elapsed time.Duration,
-	record records.BlockRecord,
-	err error,
-	canceled bool,
-	selected bool,
-) {
-	s.mu.Lock()
-	if selected {
-		state.settlement.addDelivered(uint64(record.DataLength()))
-	}
-	state.inflight--
-	if err != nil {
-		state.recordFailure(canceled)
-	} else {
-		state.recordSuccess(elapsed)
-	}
-	settlement := s.settleLaneLocked(state)
-	s.mu.Unlock()
-	s.publishLaneSettlement(settlement)
 }
 
 func (state *laneState) recordFailure(canceled bool) {

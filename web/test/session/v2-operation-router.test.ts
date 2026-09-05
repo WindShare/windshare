@@ -6,6 +6,7 @@ import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities
 import { V2_MAXIMUM_PEER_CANDIDATES } from '../../src/session/v2-operation-continuation'
 import {
   V2_MAXIMUM_ACTIVE_OPERATIONS,
+  V2_OPERATION_TOMBSTONE_MILLISECONDS,
   V2_SESSION_CONTROL_BACKLOG,
   V2OperationRouter,
 } from '../../src/session/v2-operation-router'
@@ -89,7 +90,7 @@ describe('v2 operation replay ownership', () => {
       protocolFailure: router.protocolFailureFor(message),
     }))
     const providerDetail = 'provider detail must never be retained'
-    const routed = router.route(operationError(operationId, 'peer', providerDetail), 4, 0)
+    const routed = router.route(operationError(operationId, 'peer', providerDetail, [peerPathId, attemptId, 1n]), 4, 0)
 
     const delivered = await deliveredFailure
     expect(delivered.protocolFailure).toMatchObject({
@@ -263,7 +264,7 @@ describe('v2 operation replay ownership', () => {
       V2_MESSAGE_KIND.operationError,
       operationId,
       encodeV2Body(new Map<number, unknown>([
-        [0, 1], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'negotiation failed'],
+        [0, 2], [1, 5], [2, 0x5001], [3, false], [4, null], [5, 'negotiation failed'], [6, [peerPathId, attemptId, 1n]],
       ])),
     )
     const raced = await Promise.allSettled([
@@ -320,6 +321,69 @@ describe('v2 operation replay ownership', () => {
 })
 
 describe('v2 operation tombstone and admission ownership', () => {
+  it('drops retired peer traffic after tombstone collection without reviving authority', async () => {
+    let now = 0
+    const router = new V2OperationRouter(() => undefined, () => now)
+    const path = identity(101)
+    const oldId = identity(102)
+    const attempt = identity(103)
+    router.create(oldId, V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)).close()
+    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    const currentId = identity(104)
+    const current = router.create(currentId, V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(105), 2n))
+
+    await expect(router.route(operationError(oldId, 'peer', 'late failure', [path, attempt, 1n]))).resolves.toBeUndefined()
+    await expect(router.route(peerCandidate(oldId, path, attempt, 1))).resolves.toBeUndefined()
+    await expect(router.route(peerAnswer(oldId, path, attempt, 'late answer'))).resolves.toBeUndefined()
+    // Even a fresh random operation ID cannot turn a retired sequence into work.
+    await expect(router.route(peerCandidate(identity(106), path, attempt, 2))).resolves.toBeUndefined()
+    expect(router.active()).toEqual([current])
+    expect(() => router.create(oldId, V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)))
+      .toThrow('sequence was reused or regressed')
+    const currentAnswer = peerAnswer(currentId, path, identity(105), 'current answer', 2n)
+    await router.route(currentAnswer)
+    await expect(current.next()).resolves.toEqual(currentAnswer)
+  })
+
+  it('keeps unknown, malformed, and current wrong-operation traffic invalid after peer GC', async () => {
+    let now = 0
+    const router = new V2OperationRouter(() => undefined, () => now)
+    const path = identity(111)
+    const attempt = identity(112)
+    router.create(identity(113), V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt)).close()
+    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    router.create(identity(114), V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(115), 2n))
+    const unknownId = identity(116)
+    for (const message of [
+      peerAnswer(unknownId, path, identity(115), 'current', 2n),
+      peerAnswer(unknownId, path, attempt, 'future', 3n),
+      peerAnswer(unknownId, identity(117), attempt, 'unknown path'),
+      encodeV2Message(V2_MESSAGE_KIND.peerAnswer, unknownId, encodeV2Body([])),
+      operationError(unknownId, 'peer', 'unknown path'),
+      operationError(unknownId, 'peer', 'current wrong operation', [path, identity(115), 2n]),
+      operationError(unknownId, 'peer', 'future', [path, attempt, 3n]),
+      encodeV2Message(V2_MESSAGE_KIND.operationError, unknownId, encodeV2Body(new Map([[0, 1]]))),
+    ]) {
+      await expect(router.route(message)).rejects.toMatchObject({ scope: 'session' })
+    }
+  })
+
+  it('does not hide a live older sequence behind a later retirement watermark', async () => {
+    let now = 0
+    const router = new V2OperationRouter(() => undefined, () => now)
+    const path = identity(121)
+    const attempt = identity(122)
+    const live = router.create(identity(123), V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, attempt))
+    router.create(identity(124), V2_MESSAGE_KIND.peerOffer, peerOfferBody(path, identity(125), 2n)).close()
+    now = V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    await expect(router.route(peerAnswer(identity(126), path, attempt, 'wrong operation')))
+      .rejects.toMatchObject({ scope: 'session' })
+    live.close()
+    now += V2_OPERATION_TOMBSTONE_MILLISECONDS + 1
+    await expect(router.route(peerAnswer(identity(126), path, attempt, 'now retired')))
+      .resolves.toBeUndefined()
+  })
+
   it('accepts revision authority failures for an active block request', async () => {
     const router = new V2OperationRouter(() => undefined)
     const operationId = identity(7)
@@ -437,7 +501,7 @@ describe('v2 operation tombstone and admission ownership', () => {
       V2_MESSAGE_KIND.peerOffer,
       peerOfferBody(peerPathId, attemptId),
     )
-    const final = operationError(operationId, 'peer', 'negotiation failed')
+    const final = operationError(operationId, 'peer', 'negotiation failed', [peerPathId, attemptId, 1n])
     const candidate = peerCandidate(operationId, peerPathId, attemptId, 1)
 
     const capturedRace = await Promise.allSettled([
@@ -464,7 +528,7 @@ describe('v2 operation tombstone and admission ownership', () => {
       peerCandidate(operationId, peerPathId, identity(80), 2),
     )).rejects.toMatchObject({ scope: 'session' })
     await expect(router.route(
-      operationError(operationId, 'peer', 'different final'),
+      operationError(operationId, 'peer', 'different final', [peerPathId, attemptId, 1n]),
     )).rejects.toMatchObject({ scope: 'session' })
   })
 
@@ -578,19 +642,21 @@ function peerAnswer(
   peerPathId: Uint8Array<ArrayBuffer>,
   attemptId: Uint8Array<ArrayBuffer>,
   sdp: string,
+  sequence = 1n,
 ) {
   return encodeV2Message(
     V2_MESSAGE_KIND.peerAnswer,
     operationId,
-    encodeV2Body([1, peerPathId, attemptId, sdp]),
+    encodeV2Body([2, peerPathId, attemptId, sequence, sdp]),
   )
 }
 
 function peerOfferBody(
   peerPathId: Uint8Array<ArrayBuffer>,
   attemptId: Uint8Array<ArrayBuffer>,
+  sequence = 1n,
 ): Uint8Array<ArrayBuffer> {
-  return encodeV2Body([1, peerPathId, attemptId, 'v=0\r\ns=offer\r\n'])
+  return encodeV2Body([2, peerPathId, attemptId, sequence, 'v=0\r\ns=offer\r\n'])
 }
 
 function peerCandidate(
@@ -603,9 +669,10 @@ function peerCandidate(
     V2_MESSAGE_KIND.peerCandidate,
     operationId,
     encodeV2Body([
-      1,
+      2,
       peerPathId,
       attemptId,
+      1n,
       `candidate:${seed} 1 udp 1 192.0.2.${seed} ${5_000 + seed} typ host`,
       'data',
       0,
@@ -631,13 +698,15 @@ function operationError(
   operationId: Uint8Array<ArrayBuffer>,
   scope: 'block' | 'directory' | 'peer' | 'revision',
   message: string,
+  binding?: readonly [Uint8Array<ArrayBuffer>, Uint8Array<ArrayBuffer>, bigint],
 ) {
   const [scopeId, code] = operationErrorRegistry(scope)
   return encodeV2Message(
     V2_MESSAGE_KIND.operationError,
     operationId,
     encodeV2Body(new Map<number, unknown>([
-      [0, 1], [1, scopeId], [2, code], [3, false], [4, null], [5, message],
+      [0, scope === 'peer' ? 2 : 1], [1, scopeId], [2, code], [3, false], [4, null], [5, message],
+      ...(scope === 'peer' ? [[6, binding ?? [identity(201), identity(202), 1n]]] as [number, unknown][] : []),
     ])),
   )
 }

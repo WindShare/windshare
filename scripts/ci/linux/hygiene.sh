@@ -7,7 +7,7 @@ echo "== hygiene =="
 
 existing_go_files() {
   while IFS= read -r -d '' file; do
-    if [[ -f "$file" ]]; then
+    if [[ -f "$file" && "$file" != third_party/pion/ice/* && "$file" != third_party/pion/webrtc/* ]]; then
       printf '%s\0' "$file"
     fi
   done
@@ -23,6 +23,15 @@ fi
 
 echo "-- whitespace"
 git --no-pager diff --check
+
+echo "-- Release source and binary packaging contracts"
+go test ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
+
+echo "-- Pinned Pion source verifier tests"
+go test ./scripts/ci/_piondeps
+
+echo "-- Pinned Pion source and patch reproduction"
+go run ./scripts/ci/_piondeps -reproduce
 
 echo "-- Web production graph resolver tests"
 node --test scripts/ci/web-forbidden.tests.mjs

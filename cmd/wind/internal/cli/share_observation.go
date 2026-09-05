@@ -7,6 +7,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -47,6 +48,8 @@ type shareObservations struct {
 	relayComplete        []func() relayv2.LifecycleObservationCompletion
 	relayReaders         []*observationbridge.Reader[relayv2.LifecycleTrace]
 	webRTCChannels       *webRTCObservationSet
+	native               *nativepeer.NativePeerConnectivity
+	nativeReader         nativeObservationReader
 	peerFactory          *v2peer.Factory
 	peerAttemptReader    *observationbridge.Reader[v2peer.SenderAttemptObservation]
 	peerDiagnosticReader *observationbridge.Reader[v2peer.PeerDiagnosticObservation]
@@ -439,11 +442,21 @@ func (observations *shareObservations) complete(ctx context.Context) {
 		relayComplete := append([]func() relayv2.LifecycleObservationCompletion(nil), observations.relayComplete...)
 		relayReaders := append([]*observationbridge.Reader[relayv2.LifecycleTrace](nil), observations.relayReaders...)
 		webRTC := observations.webRTCChannels
+		native := observations.native
+		nativeReader := observations.nativeReader
 		peers := observations.peerFactory
 		peerAttemptReader := observations.peerAttemptReader
 		peerDiagnosticReader := observations.peerDiagnosticReader
 		observations.completionMu.Unlock()
 
+		// Sender session owners have stopped before completion; closing the shared
+		// native owner now joins gateway and socket work before cutting its stream.
+		if native != nil {
+			_ = native.Close(context.Background())
+		}
+		nativeCompletion, nativeStatus := nativeReader.complete(ctx)
+		observations.reportCumulativeLoss(observerLossNativeQueue, clievent.ObserverLossNativeConnectivity, clievent.ObserverLossStreamCapacity, nativeCompletion.CapacityDropped)
+		observations.reportReaderStatus(clievent.ObserverLossNativeConnectivity, nativeStatus)
 		var relay relayv2.LifecycleObservationCompletion
 		for _, complete := range relayComplete {
 			mergeRelayCompletion(&relay, complete())

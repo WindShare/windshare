@@ -301,7 +301,7 @@ func TestSenderControlAuthenticatorRequiresSenderAuthorityBeforeDispatch(t *test
 	binding.OperationID = operationID
 	binding.HasOperationID = true
 	unsigned, err := EncodeOperationFailure(OperationFailure{
-		Scope: OperationScopePeer, Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
+		Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
 	})
 	if err != nil {
 		t.Fatalf("encode operation failure: %v", err)

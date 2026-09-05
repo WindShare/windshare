@@ -50,6 +50,21 @@ func receiverLaneSettlement(grant LaneAttachmentGrant) ReceiverLaneAdmissionResu
 	}
 }
 
+// LaneDone identifies exact admitted ownership without consuming transport
+// frames. Connectivity can recover one retired relay while other lanes remain.
+func (runtime *ReceiverRuntime) LaneDone(identity LaneIdentity) (<-chan struct{}, bool) {
+	if runtime == nil || runtime.runtimeCore == nil {
+		return nil, false
+	}
+	runtime.lanes.mu.Lock()
+	defer runtime.lanes.mu.Unlock()
+	lane := runtime.lanes.active[identity.ID]
+	if lane == nil || lane.identity != identity {
+		return nil, false
+	}
+	return lane.done, true
+}
+
 // AttachLane consumes one connectivity-owned candidate channel. Core closes
 // that owner on every failure; successful installation transfers it to the
 // runtime lane that will close it on exact detachment or session termination.
@@ -57,6 +72,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 	ctx context.Context,
 	grant LaneAttachmentGrant,
 	channel protocolsession.FrameChannel,
+	route transfer.LaneRoute,
 ) (ReceiverLaneAdmissionResult, error) {
 	unverified := unverifiedReceiverLaneAdmission()
 	if runtime == nil || channel == nil || ctx == nil || grant.LaneID == 0 ||
@@ -124,7 +140,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 	_, err = runtime.lanes.addWithAdmission(identity, handOff, authenticator, false, func() error {
 		return runtime.laneSet.Add(
 			transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch},
-			transfer.LaneRouteDirect,
+			route,
 			blockLane,
 		)
 	})
