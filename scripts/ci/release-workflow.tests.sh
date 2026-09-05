@@ -62,9 +62,12 @@ for retired in 'core-candidate/' 'refs/tags/core/' 'core/v*'; do
 done
 assert_contains scripts/ci/release-ref.sh 'git merge-base --is-ancestor'
 assert_contains scripts/ci/release-ref.sh 'release_ref_prefix=refs/tags/'
-assert_contains scripts/ci/_modulezip/main.go 'modulePath = "github.com/windshare/windshare"'
-assert_contains scripts/ci/_modulezip/main.go '"internal/perfevidence/"'
-assert_contains scripts/ci/_modulezip/main.go '"spikes/webrtc/"'
+assert_contains scripts/ci/_sourcebundle/main.go 'modulePath = "github.com/windshare/windshare"'
+assert_contains scripts/ci/_sourcebundle/archive.go 'No module-aware archive filter'
+assert_contains scripts/ci/_sourcebundle/main_test.go 'third_party/pion/ice/LICENSE'
+assert_contains "$workflow" 'gh release create "$RELEASE_VERSION" --verify-tag'
+assert_contains "$workflow" 'cmp "$ASSET_ROOT/release-linux/windshare-$RELEASE_VERSION-source.zip"'
+assert_contains "$workflow" 'if-no-files-found: error'
 
 for release_gate in "$linux_gate" "$windows_gate"; do
   assert_contains "$release_gate" 'mod tidy -diff'
@@ -72,7 +75,8 @@ for release_gate in "$linux_gate" "$windows_gate"; do
   assert_contains "$release_gate" './scripts/ci/_coreboundary'
   assert_contains "$release_gate" 'build ./...'
   assert_contains "$release_gate" 'test'
-  assert_contains "$release_gate" 'install ./cmd/wind'
+  assert_contains "$release_gate" './scripts/ci/_piondeps -reproduce'
+  assert_contains "$release_gate" './scripts/ci/_releaseassets -source'
 done
 
 assert_contains "$linux_gate" '"$install_root/wind" --help'
@@ -84,11 +88,11 @@ assert_not_contains "$windows_gate" "Join-Path \$cliInstallRoot 'windshare.exe'"
 # finish first and the Linux certifier itself must come from the proven checkout.
 assert_contains "$linux_gate" 'bash "$release_repository/scripts/ci/native-output/linux/certify.sh"'
 assert_not_contains "$linux_gate" 'bash scripts/ci/native-output/linux/certify.sh'
-assert_precedes "$linux_gate" 'GOBIN="$install_root" go install ./cmd/wind' \
+assert_precedes "$linux_gate" 'bash scripts/install/install.sh "$install_root"' \
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
 assert_precedes "$linux_gate" 'bash "$release_repository/scripts/ci/native-output/linux/certify.sh"' \
   'go test -count=1 -timeout="$module_suite_test_timeout" ./...'
-assert_precedes "$windows_gate" '& $goExecutable install ./cmd/wind' \
+assert_precedes "$windows_gate" './scripts/install/windows/install.ps1 -Destination $cliInstallRoot' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'
 assert_precedes "$windows_gate" '        Invoke-RequiredWindowsNativeTestsAsStandardUser' \
   '& $goExecutable test -count=1 "-timeout=$moduleSuiteTestTimeout" ./...'

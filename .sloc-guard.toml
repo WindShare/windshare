@@ -16,6 +16,10 @@ exclude = [
   "**/node_modules/**",
   "**/dist/**",
   "trash/**",
+  # Exact upstream source projection is separately hash/patch verified in hygiene.
+  # WindShare provider wrappers and tests remain under normal source limits.
+  "third_party/pion/ice/**",
+  "third_party/pion/webrtc/**",
 ]
 
 # =============================================================================

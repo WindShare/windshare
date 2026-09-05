@@ -474,7 +474,7 @@ function createGateway(
           route: observation.route,
         },
       }).catch(() => undefined)
-      if (observation.route === 'relay') peerRelease.release()
+      if (observation.route === 'application-relay') peerRelease.release()
     },
     onContentLaneAdmitted: (observation) => relayCut.admit(observation),
     onContentLaneDetached: (observation) => {

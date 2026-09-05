@@ -3,10 +3,12 @@ import {
   V2_LANE_REJECT,
   type V2LaneRejection,
 } from '../session/v2-lane-codec'
+import { peerFailureScope } from '../session/v2-message'
 
 export type V2PeerAttemptPhase = 'negotiation' | 'admission'
 
 export type V2PeerLocalTransientReason =
+  | 'tab-capacity-timeout'
   | 'negotiation-timeout'
   | 'admission-timeout'
   | 'transport-loss'
@@ -145,9 +147,10 @@ export function classifyV2PeerAttemptFailure(failure: unknown): V2PeerFailureDec
         ? Object.freeze({ type: 'stop-path', reason: 'local-contract' })
         : stopUntypedFailure()
     case 'authenticated-peer-operation':
-      return isAuthenticatedPeerOperation(failure)
-        ? Object.freeze({ type: 'stop-path', reason: 'peer-operation-final' })
-        : stopUntypedFailure()
+      if (!isAuthenticatedPeerOperation(failure)) return stopUntypedFailure()
+      return peerFailureScope(failure.code as number) === 'attempt-transient'
+        ? Object.freeze({ type: 'retry-attempt', reason: 'local-transient' })
+        : Object.freeze({ type: 'stop-path', reason: 'peer-operation-final' })
     case 'authenticated-lane-rejection':
       return classifyLaneRejection(failure)
     case 'session-terminal':
@@ -181,13 +184,14 @@ function classifyLaneRejection(failure: Record<string, unknown>): V2PeerFailureD
 function isLocalTransient(value: Record<string, unknown>): boolean {
   if (!isOneOf(value.phase, ['negotiation', 'admission'])) return false
   if (!isOneOf(value.reason, [
+    'tab-capacity-timeout',
     'negotiation-timeout',
     'admission-timeout',
     'transport-loss',
     'signaling-delivery-loss',
     'lane-installation-failed',
   ])) return false
-  if (value.reason === 'negotiation-timeout') return value.phase === 'negotiation'
+  if (value.reason === 'negotiation-timeout' || value.reason === 'tab-capacity-timeout') return value.phase === 'negotiation'
   if (value.reason === 'admission-timeout' || value.reason === 'lane-installation-failed') {
     return value.phase === 'admission'
   }

@@ -16,10 +16,11 @@ import { v2OperationErrorScopeAllowed } from './v2-operation-error-contract'
 import { V2SessionRuntimeError } from './v2-runtime-types'
 
 export const V2_MAXIMUM_PEER_CANDIDATES = 64
+export const V2_MAXIMUM_PEER_CONTINUATION_PATHS = 4
 
 type ContinuationState = 'active' | 'closed' | 'local-cancel' | 'remote-final'
 
-const V2_CONTINUATION_SCHEMA_VERSION = 1n
+const V2_CONTINUATION_SCHEMA_VERSION = 2n
 const V2_OPERATION_ID_BYTES = 16
 const V2_PEER_IDENTITY_BYTES = 16
 const V2_MAXIMUM_OPERATION_BODY_BYTES = 65_536 - 44
@@ -36,6 +37,64 @@ export type V2OperationMessageReservation =
 interface PeerBinding {
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
+  readonly attemptSequence: bigint
+}
+
+/** Retains only local offer authority when per-operation replay detail is collected. */
+export class V2RetiredPeerContinuations {
+  readonly #paths = new Map<string, {
+    issuedThrough: bigint
+    retiredThrough: bigint
+    active: Set<bigint>
+  }>()
+
+  admit(binding: Readonly<PeerBinding> | undefined): void {
+    if (binding === undefined) return
+    const key = encodeBase64Url(binding.peerPathId)
+    let path = this.#paths.get(key)
+    if (path === undefined) {
+      if (this.#paths.size >= V2_MAXIMUM_PEER_CONTINUATION_PATHS) {
+        throw sessionViolation('Peer continuation path budget is exhausted')
+      }
+      path = { issuedThrough: 0n, retiredThrough: 0n, active: new Set() }
+      this.#paths.set(key, path)
+    }
+    if (binding.attemptSequence <= path.issuedThrough) {
+      throw new V2SessionRuntimeError('operation', 'Peer attempt sequence was reused or regressed')
+    }
+    path.issuedThrough = binding.attemptSequence
+    path.active.add(binding.attemptSequence)
+  }
+
+  retire(binding: Readonly<PeerBinding> | undefined): void {
+    if (binding === undefined) return
+    const path = this.#paths.get(encodeBase64Url(binding.peerPathId))
+    if (path === undefined || !path.active.delete(binding.attemptSequence)) return
+    if (binding.attemptSequence > path.retiredThrough) path.retiredThrough = binding.attemptSequence
+  }
+
+  drops(message: V2SessionMessage): boolean {
+    if (message.kind !== V2_MESSAGE_KIND.peerAnswer && message.kind !== V2_MESSAGE_KIND.peerCandidate &&
+      message.kind !== V2_MESSAGE_KIND.operationError) {
+      return false
+    }
+    try {
+      const length = message.kind === V2_MESSAGE_KIND.peerAnswer ? 5 : 8
+      const binding = message.kind === V2_MESSAGE_KIND.operationError
+        ? decodeV2OperationErrorControl(message.body).peerAttempt
+        : decodePeerBinding(message.body, length, 'retired peer continuation')
+      if (binding === undefined) return false
+      const path = this.#paths.get(encodeBase64Url(binding.peerPathId))
+      // An incoming body can consult a locally established boundary, never create
+      // one. A live sequence still requires its exact operation and attempt binding.
+      return path !== undefined && binding.attemptSequence <= path.retiredThrough &&
+        !path.active.has(binding.attemptSequence)
+    } catch {
+      return false
+    }
+  }
+
+  clear(): void { this.#paths.clear() }
 }
 
 const DROP_RESERVATION = Object.freeze({ disposition: 'drop' as const })
@@ -58,7 +117,7 @@ export class V2OperationContinuationAuthority {
     this.requestKind = requestKind
     if (requestKind === V2_MESSAGE_KIND.peerOffer) {
       try {
-        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 4, 'peer offer')
+        this.#peerBinding = decodePeerBinding(canonicalRequestBody, 5, 'peer offer')
       } catch (cause) {
         throw new V2SessionRuntimeError(
           'operation',
@@ -76,6 +135,7 @@ export class V2OperationContinuationAuthority {
       : Object.freeze({
           peerPathId: binding.peerPathId.slice(),
           attemptId: binding.attemptId.slice(),
+          attemptSequence: binding.attemptSequence,
         })
   }
 
@@ -217,19 +277,26 @@ export class V2OperationContinuationAuthority {
     const expected = this.#peerBinding
     try {
       if (message.kind === V2_MESSAGE_KIND.operationError) {
-        const actualScope = decodeV2OperationErrorControl(message.body).scope
-        if (!v2OperationErrorScopeAllowed(this.requestKind, actualScope)) {
+        const failure = decodeV2OperationErrorControl(message.body)
+        if (!v2OperationErrorScopeAllowed(this.requestKind, failure.scope)) {
           throw new Error('operation received an error from another scope')
+        }
+        if (expected !== undefined && (failure.peerAttempt === undefined ||
+          failure.peerAttempt.attemptSequence !== expected.attemptSequence ||
+          !equalBytes(failure.peerAttempt.peerPathId, expected.peerPathId) ||
+          !equalBytes(failure.peerAttempt.attemptId, expected.attemptId))) {
+          throw new Error('peer failure changed path or attempt identity')
         }
         return
       }
       if (expected === undefined) return
       const actual = decodePeerBinding(
         message.body,
-        message.kind === V2_MESSAGE_KIND.peerAnswer ? 4 : 7,
+        message.kind === V2_MESSAGE_KIND.peerAnswer ? 5 : 8,
         message.kind === V2_MESSAGE_KIND.peerAnswer ? 'peer answer' : 'peer candidate',
       )
       if (
+        actual.attemptSequence !== expected.attemptSequence ||
         !equalBytes(actual.peerPathId, expected.peerPathId) ||
         !equalBytes(actual.attemptId, expected.attemptId)
       ) {
@@ -283,7 +350,10 @@ function decodePeerBinding(body: Uint8Array, length: number, label: string): Pee
   ) {
     throw new Error(`${label} has a non-canonical continuation prefix`)
   }
+  const sequence = requireUnsigned(fields[3], 'attempt sequence')
+  if (sequence === 0n || sequence > 0xffffffffffffffffn) throw new Error('invalid attempt sequence')
   return Object.freeze({
+    attemptSequence: sequence,
     peerPathId: requireBytes(fields[1], V2_PEER_IDENTITY_BYTES, `${label} peer path ID`, true),
     attemptId: requireBytes(fields[2], V2_PEER_IDENTITY_BYTES, `${label} attempt ID`, true),
   })

@@ -26,6 +26,7 @@ const (
 	v3TraceHexDigest
 	v3TraceCorrelationValue
 	v3TraceProtocolSettlement
+	v3TraceFraction
 )
 
 type v3TraceFieldSchema struct {
@@ -33,6 +34,7 @@ type v3TraceFieldSchema struct {
 	kind     v3TraceValueKind
 	object   *v3TraceObjectSchema
 	optional bool
+	nullable bool
 }
 
 type v3TraceObjectSchema struct {
@@ -183,7 +185,9 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 	)
 
 	return map[string]*v3TraceObjectSchema{
-		"ready": v3TraceSchema(),
+		"ready":               v3TraceSchema(),
+		"platform_setup":      v3TraceSchema(v3TraceFields(v3TraceString, "state", "reason")),
+		"native_connectivity": v3NativeConnectivitySchema(),
 		"sharing_subject_selected": v3TraceSchema(
 			v3TraceFields(v3TraceString, "subject_kind"),
 			v3TraceFields(v3TraceDecimal, "selected_items"),
@@ -211,6 +215,7 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 			v3TraceObjectField("failure", failure, false),
 		),
 		"transfer_settled": v3TraceSchema(
+			v3TraceObjectField("download_connectivity", v3DownloadConnectivitySchema(), true),
 			v3TraceFields(v3TraceString, "result_status", "drift"),
 			v3TraceFields(v3TraceInteger, "exit_code"),
 			v3TraceFields(v3TraceDecimal, "result_elapsed_ms", "directory_failures", "omitted_diagnostics", "published_bytes"),

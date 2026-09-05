@@ -5,7 +5,9 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"math"
+	"slices"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
@@ -26,7 +28,7 @@ const (
 
 type shareRequest struct {
 	paths       []string
-	relayURL    string
+	relayURLs   []string
 	frontURL    string
 	chunkSize   uint32
 	splitKey    bool
@@ -39,7 +41,7 @@ type shareSessionFactory interface {
 }
 
 type activeShare struct {
-	lifecycle    *senderRelayLifecycle
+	lifecycle    relayset.SenderEndpoint
 	factory      shareSessionFactory
 	prepared     *liveshare.PreparedSender
 	runtime      *commandRuntime
@@ -74,16 +76,29 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		return code
 	}
 	defer func() { _ = prepared.Close() }()
-	lifecycle, relayAuthority, code := a.connectShareRelay(
-		ctx,
-		prepared,
-		request.relayURL,
-		runtime,
-		observations,
-	)
-	if code != ExitOK {
-		return code
+	authorities := make(chan clievent.RelayAuthority, len(request.relayURLs))
+	lifecycle, err := relayset.NewSender(ctx, request.relayURLs, func(ctx context.Context, relayURL string) (relayset.SenderEndpoint, error) {
+		endpoint, authority, dialErr := a.connectShareRelay(ctx, prepared, relayURL, observations)
+		if dialErr != nil {
+			return nil, dialErr
+		}
+		authorities <- authority
+		return endpoint, nil
+	})
+	if err == nil {
+		err = lifecycle.WaitReady(ctx)
 	}
+	if err != nil {
+		if lifecycle != nil {
+			cleanup, cancel := context.WithTimeout(context.Background(), shareStopTimeout)
+			_ = lifecycle.Cleanup(cleanup)
+			cancel()
+		}
+		emitShareCommandFailure(runtime, ExitNetwork, err)
+		return ExitNetwork
+	}
+	relayAuthority := <-authorities
+	observations.SetRelayAuthority(relayAuthority)
 	active, code := a.activateShare(
 		prepared,
 		lifecycle,
@@ -107,7 +122,7 @@ func (a *App) prepareShareSender(
 	observations *shareObservations,
 ) (*liveshare.PreparedSender, int) {
 	prepared, err := liveshare.PrepareSender(ctx, liveshare.SenderConfig{
-		Paths: request.paths, Relays: []string{request.relayURL}, ChunkSize: request.chunkSize,
+		Paths: request.paths, Relays: request.relayURLs, ChunkSize: request.chunkSize,
 		Random: rand.Reader, Now: clock.Now,
 		CatalogTracer: observations, RootPrefetchTracer: observations,
 		RevisionTracer:   observations.revisionTracer(),
@@ -129,19 +144,16 @@ func (a *App) connectShareRelay(
 	ctx context.Context,
 	prepared *liveshare.PreparedSender,
 	relayURL string,
-	runtime *commandRuntime,
 	observations *shareObservations,
-) (*senderRelayLifecycle, clievent.RelayAuthority, int) {
+) (*senderRelayLifecycle, clievent.RelayAuthority, error) {
 	material := prepared.Registration()
 	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
 	if err != nil {
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return nil, clievent.RelayAuthority{}, ExitFailure
+		return nil, clievent.RelayAuthority{}, err
 	}
 	var resumeToken v2.ResumeToken
 	if _, err := rand.Read(resumeToken[:]); err != nil {
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return nil, clievent.RelayAuthority{}, ExitFailure
+		return nil, clievent.RelayAuthority{}, err
 	}
 	register, err := relayv2.NewFreshRegisterInit(
 		shareID,
@@ -151,8 +163,7 @@ func (a *App) connectShareRelay(
 		resumeToken,
 	)
 	if err != nil {
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return nil, clievent.RelayAuthority{}, ExitFailure
+		return nil, clievent.RelayAuthority{}, err
 	}
 	connection, err := relayv2.DialSender(ctx, relayv2.SenderConfig{
 		RelayBaseURL: relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
@@ -160,22 +171,15 @@ func (a *App) connectShareRelay(
 		Dial:       relayv2.DialOptions{LifecycleObservationCapacity: observations.relayObservationCapacity()},
 	})
 	if err != nil {
-		exit := ExitNetwork
-		if ctx.Err() != nil {
-			exit = ExitFailure
-		}
-		emitShareCommandFailure(runtime, exit, err)
-		return nil, clievent.RelayAuthority{}, exit
+		return nil, clievent.RelayAuthority{}, err
 	}
 	observations.attachRelayStream(connection.LifecycleTrace())
 	relayAuthority, err := commandprojection.RelayAuthority(connection.Endpoint())
 	if err != nil {
 		_ = connection.Close()
 		observations.registerRelayCompletion(connection.CompleteObservations)
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return nil, clievent.RelayAuthority{}, ExitFailure
+		return nil, clievent.RelayAuthority{}, err
 	}
-	observations.SetRelayAuthority(relayAuthority)
 	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
 		relayURL: relayURL, fresh: register, resumeToken: resumeToken,
 		privateKey: material.SenderPrivateKey, initial: connection,
@@ -189,16 +193,15 @@ func (a *App) connectShareRelay(
 	if err != nil {
 		_ = connection.Close()
 		observations.registerRelayCompletion(connection.CompleteObservations)
-		emitShareCommandFailure(runtime, ExitFailure, err)
-		return nil, clievent.RelayAuthority{}, ExitFailure
+		return nil, clievent.RelayAuthority{}, err
 	}
 	observations.registerRelayCompletion(lifecycle.CompleteObservations)
-	return lifecycle, relayAuthority, ExitOK
+	return lifecycle, relayAuthority, nil
 }
 
 func (a *App) activateShare(
 	prepared *liveshare.PreparedSender,
-	lifecycle *senderRelayLifecycle,
+	lifecycle relayset.SenderEndpoint,
 	relayAuthority clievent.RelayAuthority,
 	request shareRequest,
 	runtime *commandRuntime,
@@ -355,7 +358,7 @@ func (a *App) observeSenderRelayRecovery(milestone senderRelayRecoveryMilestone)
 
 func (a *App) newShareRuntimeFactory(
 	prepared *liveshare.PreparedSender,
-	lifecycle *senderRelayLifecycle,
+	lifecycle relayset.SenderEndpoint,
 	observations *shareObservations,
 	clock commandClock,
 ) (*sessionruntime.SenderFactory, error) {
@@ -374,7 +377,20 @@ func (a *App) newShareRuntimeFactory(
 
 func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcome) {
 	flags := a.newFlagSet("share")
-	relayURL := flags.String("relay", DefaultRelayURL, "relay server base URL")
+	var relayURLs []string
+	flags.Func("relay", "relay server base URL; repeat to use multiple relays", func(value string) error {
+		if value == "" {
+			return errors.New("relay URL is empty")
+		}
+		if slices.Contains(relayURLs, value) {
+			return nil
+		}
+		if len(relayURLs) >= relayset.MaximumEndpoints {
+			return errors.New("too many relay endpoints")
+		}
+		relayURLs = append(relayURLs, value)
+		return nil
+	})
 	blockSize := flags.Int64("block-size", 0, "file-local block size in bytes; 0 uses 1 MiB")
 	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
 	frontURL := flags.String("front-url", DefaultFrontURL, "frontend base URL embedded in the link")
@@ -391,7 +407,10 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		_, _ = fmt.Fprintf(a.stderrWriter(), "share: %s\n", observationOptionDiagnostic(err))
 		return shareRequest{}, requestParseUsageFailure
 	}
-	if len(paths) == 0 || *relayURL == "" || *frontURL == "" {
+	if len(relayURLs) == 0 {
+		relayURLs = []string{DefaultRelayURL}
+	}
+	if len(paths) == 0 || *frontURL == "" {
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: at least one path, a relay URL, and a frontend URL are required")
 		return shareRequest{}, requestParseUsageFailure
 	}
@@ -404,7 +423,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
-		paths: paths, relayURL: *relayURL, frontURL: *frontURL,
+		paths: paths, relayURLs: relayURLs, frontURL: *frontURL,
 		chunkSize: uint32(chunkSize), splitKey: *splitKey, observation: observation,
 	}, requestParseReady
 }
@@ -425,7 +444,7 @@ func relayRegistrationIdentity(material liveshare.RegistrationMaterial) (v2.Shar
 func (a *App) serveSessions(
 	ctx context.Context,
 	factory shareSessionFactory,
-	lifecycle *senderRelayLifecycle,
+	lifecycle relayset.SenderEndpoint,
 	observations *shareObservations,
 ) error {
 	for {

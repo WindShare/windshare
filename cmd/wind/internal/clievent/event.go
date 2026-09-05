@@ -1,6 +1,13 @@
 package clievent
 
-import "errors"
+import (
+	"encoding/hex"
+	"errors"
+	"math"
+	"time"
+
+	"github.com/windshare/windshare/core/downloadmetrics"
+)
 
 var ErrInvalidEvent = errors.New("CLI event is invalid")
 
@@ -230,7 +237,68 @@ func (value CommandFailed) ExitCode() ExitCode     { return value.exit }
 func (value CommandFailed) Failure() Failure       { return value.failure }
 func (value CommandFailed) Accept(v Visitor) error { return acceptCommandFailed(v, value) }
 
-type TransferSettled struct{ result TransferResult }
+type downloadConnectivity struct {
+	id                           TransferJobID
+	first                        time.Duration
+	firstKnown                   bool
+	direct, turn, relay, unknown uint64
+	fraction                     float64
+	fractionKnown                bool
+	stall                        time.Duration
+	incomplete, final            bool
+}
+type TransferSettled struct {
+	result       TransferResult
+	connectivity downloadConnectivity
+}
+
+func (value TransferSettled) WithDownloadConnectivity(snapshot downloadmetrics.Snapshot) (TransferSettled, error) {
+	raw, err := hex.DecodeString(snapshot.DownloadID)
+	if err != nil {
+		return TransferSettled{}, ErrInvalidEvent
+	}
+	id, err := NewTransferJobID(raw)
+	if err != nil || snapshot.FallbackStall < 0 {
+		return TransferSettled{}, ErrInvalidEvent
+	}
+	c := downloadConnectivity{id: id, direct: snapshot.DirectBytes, turn: snapshot.TURNBytes,
+		relay: snapshot.ApplicationRelayBytes, unknown: snapshot.UnknownBytes, stall: snapshot.FallbackStall,
+		incomplete: snapshot.Incomplete, final: snapshot.Final}
+	if snapshot.FirstDirectElapsed != nil {
+		if *snapshot.FirstDirectElapsed < 0 {
+			return TransferSettled{}, ErrInvalidEvent
+		}
+		c.firstKnown = true
+		c.first = *snapshot.FirstDirectElapsed
+	}
+	if snapshot.DirectFraction != nil {
+		fraction := *snapshot.DirectFraction
+		if snapshot.Incomplete || math.IsNaN(fraction) || fraction < 0 || fraction > 1 {
+			return TransferSettled{}, ErrInvalidEvent
+		}
+		c.fractionKnown = true
+		c.fraction = fraction
+	}
+	value.connectivity = c
+	return value, nil
+}
+func (value TransferSettled) DownloadConnectivity() (downloadmetrics.Snapshot, bool) {
+	c := value.connectivity
+	if !c.id.Valid() {
+		return downloadmetrics.Snapshot{}, false
+	}
+	result := downloadmetrics.Snapshot{DownloadID: c.id.Hex(), DirectBytes: c.direct, TURNBytes: c.turn,
+		ApplicationRelayBytes: c.relay, UnknownBytes: c.unknown, FallbackStall: c.stall, Incomplete: c.incomplete, Final: c.final}
+	if c.firstKnown {
+		first := c.first
+		result.FirstDirectElapsed = &first
+	}
+	if c.fractionKnown {
+		fraction := c.fraction
+		result.DirectFraction = &fraction
+	}
+	return result, true
+}
 
 func NewTransferSettled(result TransferResult) (TransferSettled, error) {
 	if !result.Valid() {

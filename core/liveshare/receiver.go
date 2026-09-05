@@ -24,6 +24,7 @@ import (
 var errReceiverClosed = errors.New("live share receiver is closed")
 
 type ReceiverConfig struct {
+	ContentRoutePolicy                transfer.ContentRoutePolicy
 	Capability                        link.Link
 	DescriptorObject                  []byte
 	Random                            io.Reader
@@ -122,7 +123,8 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	authKey := sessionAuthKey.Bytes()
 	sessionAuthKey.Destroy()
 	factory, err := sessionruntime.NewReceiverFactory(sessionruntime.ReceiverFactoryConfig{
-		Descriptor: descriptor, SessionAuthKey: authKey, SenderPublicKey: publicKey,
+		ContentRoutePolicy: config.ContentRoutePolicy,
+		Descriptor:         descriptor, SessionAuthKey: authKey, SenderPublicKey: publicKey,
 		CatalogVerifier: verifier, RecordOpener: opener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
@@ -149,7 +151,7 @@ func (receiver *PreparedReceiver) Descriptor() catalog.ShareDescriptor {
 	return receiver.descriptor
 }
 
-func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel) (*sessionruntime.ReceiverRuntime, error) {
+func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechannel.Channel, route transfer.LaneRoute) (*sessionruntime.ReceiverRuntime, error) {
 	receiver.mu.Lock()
 	if receiver.closed {
 		receiver.mu.Unlock()
@@ -157,7 +159,7 @@ func (receiver *PreparedReceiver) Connect(ctx context.Context, channel framechan
 	}
 	factory := receiver.factory
 	receiver.mu.Unlock()
-	return factory.Connect(ctx, channel)
+	return factory.Connect(ctx, channel, route)
 }
 
 // Close is the owner-side join. Dependency callbacks must call BeginClose so

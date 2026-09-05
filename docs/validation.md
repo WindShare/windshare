@@ -14,6 +14,13 @@ packages or concrete networking and transport implementations. `internal/perfevi
 `spikes/webrtc` are separate evidence modules and are not part of the production package set. Go gates
 use `GOWORK=off` so a developer's ambient workspace does not change what is tested.
 
+`make gopls` checks every existing tracked Go source at hint severity, except the exact pinned Pion
+projection after source hashes, root replacements, and upstream patch reproduction pass. Both host
+launchers use the same selector; adapters, CI helpers, evidence modules, and tests remain included.
+Pion is compiled through the root native dependency graph and exercised by the provider/socket race
+tests. Its standalone upstream module graph and JavaScript/Wasm provider view are not supported targets.
+Stage new Go files before final validation so the tracked-source gate includes them.
+
 Go coverage is blocking:
 
 - core packages total at least 90%;
@@ -80,8 +87,16 @@ started manually. It contains:
 
 ## Release workflow
 
-[Root Module Release](../.github/workflows/release.yml) is started manually with an exact commit SHA and a
-root `vX.Y.Z` version. Linux and Windows jobs validate the root artifact. After both jobs pass, the workflow
-creates the immutable version tag. Local release scripts validate an artifact but do not publish a tag.
+[Source and Binary Release](../.github/workflows/release.yml) is started manually with an exact commit SHA
+and root `vX.Y.Z` version. Linux and Windows reconstruct a deterministic complete source bundle,
+including pinned Pion nested modules, licenses, manifest and patches. Each extracted bundle reproduces
+the pinned dependencies and passes the existing build, vet, vulnerability, test and native-output
+certification gates. Production package ownership and coverage thresholds above remain unchanged.
+
+After comparing source-bundle bytes across both hosts, the workflow creates the immutable version tag
+and publishes source and `wind`/`wsrelay` binary ZIPs with checksums. Binaries are built before tests can
+modify extracted sources. Local release scripts validate and package but never publish.
+See [installation](installation.md) for supported clone/source-bundle and binary paths. Canonical Go
+proxy ZIPs and module-version `go install` are unsupported with nested local replacements.
 
 Performance measurements are optional local diagnostics; see [Performance diagnostics](performance.md).

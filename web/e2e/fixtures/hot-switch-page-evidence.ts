@@ -64,12 +64,12 @@ export class RelayCutEvidence {
   }
 
   admit(observation: HotSwitchLaneObservation): void {
-    if (observation.route === 'relay') this.#activeRelayLanes.add(laneKey(observation))
+    if (observation.route === 'application-relay') this.#activeRelayLanes.add(laneKey(observation))
     this.#bridge.publish({ kind: 'lane-admitted', observation }).catch(() => undefined)
   }
 
   detach(observation: HotSwitchLaneObservation): void {
-    if (observation.route === 'relay') this.#activeRelayLanes.delete(laneKey(observation))
+    if (observation.route === 'application-relay') this.#activeRelayLanes.delete(laneKey(observation))
     this.#bridge.publish({ kind: 'lane-detached', observation })
       .then(() => this.#publishIneligibility())
       .catch(() => undefined)

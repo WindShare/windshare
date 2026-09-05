@@ -98,7 +98,7 @@ test('runs production image decode and bounded MP4 seek semantics in the active 
         },
       }
       const lanes = new brokerModule.V2LaneSet()
-      lanes.add(lane, 'relay')
+      lanes.add(lane, 'application-relay')
       const productionBroker = new brokerModule.V2BlockBroker(lanes)
       const routes = new connectivityModule.V2ConnectivityRouteAuthority()
       const recordingBroker: RangeReader = {

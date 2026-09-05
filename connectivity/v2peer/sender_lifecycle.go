@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 )
 
@@ -31,7 +32,7 @@ func (handler *senderHandler) claimRejectedOffer(
 		// that distinct evidence identity, even though it also stops the collision.
 		return claim
 	}
-	if claim.sessionTerminal {
+	if claim.capacity {
 		return claim
 	}
 	_, retiredOperation := handler.retiredOperations[operation]
@@ -68,11 +69,14 @@ func (handler *senderHandler) startAttempt(
 	defer func() {
 		handler.mu.Unlock()
 		if capacityBoundary != nil {
-			handler.emitRejectedOfferTerminal(*capacityBoundary, senderEvidenceCapacityFailure())
+			handler.emitRejectedOfferTerminal(*capacityBoundary, senderPathCapacityFailure())
 		}
 	}()
 	if handler.stopping {
 		return context.Canceled
+	}
+	if handler.factory.native.Retired([16]byte(handler.session.ProtocolSessionID()), offer.Binding.PeerPathID) {
+		return ErrPeerPathRetired
 	}
 	handler.expireRetiredLocked(handler.factory.now())
 	if handler.factory.now().Before(handler.replayBlockedUntil) {
@@ -90,14 +94,24 @@ func (handler *senderHandler) startAttempt(
 	if _, exists := handler.retiredBindings[offer.Binding]; exists {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
-	if handler.evidenceAuthority.terminal {
-		return ErrEvidenceIdentityCapacity
-	}
 	if handler.evidenceAuthority.claimed(offer.Binding) {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
 	}
+	for binding := range handler.bindings {
+		if binding.PeerPathID == offer.Binding.PeerPathID {
+			return ErrAttemptCapacity
+		}
+	}
 	if len(handler.attempts) >= SenderMaxActivePeerAttemptsPerSession {
 		return ErrAttemptCapacity
+	}
+	// Detailed retired operations are dispensable once the path boundary has
+	// advanced. Removing them does not make any old sequence admissible again.
+	for operation, retired := range handler.retiredOperations {
+		if retired.binding.PeerPathID == offer.Binding.PeerPathID {
+			delete(handler.retiredOperations, operation)
+			delete(handler.retiredBindings, retired.binding)
+		}
 	}
 	// Every admitted attempt must be able to leave a replay tombstone. Reserving
 	// that budget up front avoids a security-sensitive eviction race at teardown.
@@ -110,12 +124,12 @@ func (handler *senderHandler) startAttempt(
 		onDone: handler.attemptDone,
 	})
 	claim := handler.claimEvidenceLocked(operation, offer.Binding)
-	if claim.sessionTerminal {
+	if claim.capacity {
 		if claim.acquired {
 			binding := offer.Binding
 			capacityBoundary = &binding
 		}
-		return ErrEvidenceIdentityCapacity
+		return ErrPeerPathCapacity
 	}
 	if !claim.acquired {
 		return errors.Join(ErrProtocol, v2signal.ErrSignalBinding)
@@ -135,6 +149,7 @@ func (handler *senderHandler) acceptCandidate(
 	handler.expireRetiredLocked(handler.factory.now())
 	attempt := handler.attempts[operation]
 	retired, isRetired := handler.retiredOperations[operation]
+	pastBoundary := handler.evidenceAuthority.claimed(candidate.Binding)
 	handler.mu.Unlock()
 	if attempt != nil {
 		if err := attempt.binding().RequireSame(candidate.Binding); err != nil {
@@ -147,6 +162,9 @@ func (handler *senderHandler) acceptCandidate(
 		if err := retired.binding.RequireSame(candidate.Binding); err != nil {
 			return errors.Join(ErrProtocol, err)
 		}
+		return nil
+	}
+	if pastBoundary {
 		return nil
 	}
 	return errors.Join(ErrProtocol, errors.New("peer candidate has no offer operation"))
@@ -219,6 +237,7 @@ func (handler *senderHandler) stopAll() {
 	}
 	handler.ingress.Wait()
 	handler.work.Wait()
+	handler.factory.native.CloseSession([16]byte(handler.session.ProtocolSessionID()))
 	handler.mu.Lock()
 	clear(handler.attempts)
 	clear(handler.bindings)
@@ -248,8 +267,8 @@ func (handler *senderHandler) closeInbox() {
 				claim := handler.claimRejectedOffer(event.operation, *binding)
 				if claim.acquired {
 					failure := senderRuntimeStoppedFailure()
-					if claim.sessionTerminal {
-						failure = senderEvidenceCapacityFailure()
+					if claim.capacity {
+						failure = senderPathCapacityFailure()
 					}
 					abandoned = append(abandoned, abandonedOffer{event: event, failure: failure})
 				}
@@ -265,4 +284,59 @@ func (handler *senderHandler) closeInbox() {
 			return
 		}
 	}
+}
+
+func (attempt *peerAttempt) run(ctx context.Context) error {
+	attempt.recorder.begin()
+	// The received offer already owns its preparation window. Capacity waiting
+	// and answer construction share this one deadline; a grant cannot restart it.
+	attempt.phases.staged = attempt.config.factory.peerConnections == nil
+	negotiationContext, err := attempt.phases.beginNegotiation(ctx)
+	if err != nil {
+		return attempt.finish(ctx, err, nil, false)
+	}
+	defer attempt.phases.terminate(nil)
+	attempt.recorder.negotiationDeadlineArmed()
+	request := nativepeer.AttemptRequest{Configuration: attempt.config.factory.configuration, ProtocolSessionID: [16]byte(attempt.config.session.ProtocolSessionID()), Binding: attempt.binding()}
+	var prepared *nativepeer.PreparedAttempt
+	if attempt.config.factory.peerConnections == nil {
+		prepared, err = attempt.config.factory.native.PrepareAttempt(negotiationContext, request)
+		if err != nil {
+			if cause := context.Cause(negotiationContext); cause != nil {
+				err = cause
+			}
+			return attempt.finish(ctx, errors.Join(ErrNegotiation, err), nil, false)
+		}
+		defer prepared.Close()
+	}
+	var peer PeerConnection
+	if attempt.config.factory.peerConnections != nil {
+		peer, err = attempt.config.factory.peerConnections.NewPeerConnection(negotiationContext, request)
+	} else {
+		connection, startErr := prepared.Start(negotiationContext)
+		err = startErr
+		if connection != nil {
+			peer = connection
+		}
+	}
+	if err != nil || peer == nil {
+		if cause := context.Cause(negotiationContext); cause != nil {
+			err = cause
+		}
+		var cleanup error
+		if peer != nil {
+			cleanup = peer.Close()
+		}
+		attempt.phases.terminate(errors.Join(ErrNegotiation, err))
+		return attempt.finish(ctx, errors.Join(ErrNegotiation, err), cleanup, false)
+	}
+	execution := newAttemptExecution(attempt, ctx, peer)
+	execution.phaseContext = negotiationContext
+	execution.registerCallbacks()
+	result := execution.negotiate()
+	if result == nil {
+		result = execution.runEvents()
+	}
+	cleanup := execution.close(result)
+	return attempt.finish(ctx, result, cleanup, execution.operationCanceled)
 }

@@ -20,6 +20,7 @@ import (
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 )
 
 const (
@@ -196,7 +197,7 @@ func newCandidateRuntimeHarness(t *testing.T, maxCandidates int) *candidateRunti
 		runtime, acceptErr := runtimeFactory.Accept(handshakeContext, initialSenderLane)
 		accepted <- acceptedRuntime{runtime: runtime, err: acceptErr}
 	}()
-	receiverRuntime, err := preparedReceiver.Connect(handshakeContext, initialReceiverLane)
+	receiverRuntime, err := preparedReceiver.Connect(handshakeContext, initialReceiverLane, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +269,7 @@ func TestSenderCandidateDeliveredUnknownMigratesThroughAuthenticatedReceiverOnce
 			err      error
 		}{identity: identity, err: attachErr}
 	}()
-	receiverAdmission, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane)
+	receiverAdmission, err := receiverRuntime.AttachLane(ctx, grant, replacementReceiverLane, transfer.LaneRouteDirect)
 	if err != nil {
 		t.Fatal(err)
 	}

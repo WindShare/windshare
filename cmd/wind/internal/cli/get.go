@@ -3,26 +3,31 @@ package cli
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
+
 	"errors"
 	"fmt"
+	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/v2peer/peerset"
+	"github.com/windshare/windshare/core/session/receivercontinuation"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
-	"github.com/windshare/windshare/internal/testrun"
-	v2 "github.com/windshare/windshare/relay/protocol/v2"
+
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
 const (
-	getJoinWindow              = 10 * time.Second
 	getProgressInterval        = 500 * time.Millisecond
 	getRelayStartingRetryDelay = 250 * time.Millisecond
+	getSessionRecoveryAttempts = 3
+	getSessionRecoveryWindow   = 55 * time.Second
 )
 
 type getRequest struct {
@@ -65,47 +70,89 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	}
 	defer closeOutput()
 
-	session, code := a.connectGetReceiver(ctx, request.link, observation)
+	session, code := a.connectGetReceiver(ctx, request.link, request.connectivity, observation)
 	if code != ExitOK {
 		return code
 	}
-	sessionClosed := false
-	closeSession := func() {
-		if sessionClosed {
-			return
-		}
-		sessionClosed = true
+	nativeConfig := nativepeer.Config{Side: nativepeer.SideReceiver}
+	if runtime.detailedDiagnosticsEnabled() {
+		nativeConfig.ObservationCapacity = nativepeer.DefaultObservationCapacity
+	}
+	options := receiverPeerOptions{budget: peerset.NewBudget(startedAt), native: nativepeer.New(nativeConfig)}
+	observation.registerNative(options.native)
+	defer func() { _ = options.native.Close(context.Background()) }()
+	metrics := downloadmetrics.Prepare(runtime.Clock().Now)
+	observation.state.downloadMetrics = metrics
+	session.runtime.LaneSet().BindDownloadMetrics(metrics)
+	execution, code := a.prepareGetConnectivity(ctx, request, output, session.runtime, observation, options)
+	if code != ExitOK {
 		session.Close()
+		return code
+	}
+	var generationMu sync.Mutex
+	closeSession := func() {
+		generationMu.Lock()
+		currentSession, currentExecution := session, execution
+		generationMu.Unlock()
+		currentExecution.Close()
+		currentSession.Close()
 	}
 	defer closeSession()
-
-	execution, code := a.prepareGetTransfer(ctx, request, output, session.runtime, observation)
+	recoveries := 0
+	continuation, err := receivercontinuation.New(ctx, session.runtime, func(recoverCtx context.Context, previous *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
+		generationMu.Lock()
+		oldSession, oldExecution := session, execution
+		generationMu.Unlock()
+		oldExecution.CloseWithReason(clievent.ReceiverLocalStopRuntimeSessionFailure)
+		oldSession.Close()
+		options.native.CloseSession([16]byte(oldSession.runtime.ProtocolSessionID()))
+		if recoveries >= getSessionRecoveryAttempts {
+			return nil, errors.New("receiver session recovery budget exhausted")
+		}
+		recoveries++
+		next, connectErr := a.recoverGetReceiver(recoverCtx, request, observation)
+		if connectErr != nil {
+			return nil, connectErr
+		}
+		next.runtime.LaneSet().BindDownloadMetrics(metrics)
+		nextExecution, nextCode := a.prepareGetConnectivity(recoverCtx, request, output, next.runtime, observation, options)
+		if nextCode != ExitOK {
+			next.Close()
+			return nil, errors.New("replacement content admission failed")
+		}
+		generationMu.Lock()
+		session = next
+		nextExecution.inheritTransfer(execution)
+		execution = nextExecution
+		generationMu.Unlock()
+		return next.runtime, nil
+	})
+	if err != nil {
+		return observation.commandFailure(ExitFailure, err)
+	}
+	defer continuation.Close()
+	continuation.BindDownloadMetrics(metrics)
+	prepared, code := a.finishGetTransfer(ctx, request, output, continuation, execution, observation)
 	if code != ExitOK {
 		return code
 	}
-	defer execution.Close()
-
-	completion := a.runTransferJob(ctx, execution.job, runtime.Clock(), observation, func(progress transfer.ReceiveProgressSnapshot) {
-		if observeErr := execution.admission.ObserveConnectionSize(progress.ConnectionSizeClass()); observeErr != nil {
-			observation.warning(observeErr)
-			session.runtime.Close()
-		}
+	generationMu.Lock()
+	execution.peer.SetDemand(peerset.ContentDemand)
+	execution.inheritTransfer(prepared)
+	generationMu.Unlock()
+	completion := a.runTransferJob(ctx, prepared.job, runtime.Clock(), observation, func(_ transfer.ReceiveProgressSnapshot) {
+		generationMu.Lock()
+		current := execution
+		generationMu.Unlock()
+		current.paths.observeContent(current.runtime.LaneSet().ContentActivity(), runtime.Clock().Now())
 	})
+	continuation.Close()
 	admissionErr := execution.admission.Err()
 	runtimeErr, connectionErr := receiverTerminationErrors(session.runtime, session.connection)
-	// Settlement diagnostics must describe the state that ended the transfer.
-	// Closing optional paths can discover cleanup residue, but that later residue
-	// cannot retroactively turn a caller interruption into a network failure.
-	stopReason := clievent.ReceiverLocalStopNormalCompletion
-	switch {
-	case ctx.Err() != nil:
-		stopReason = clievent.ReceiverLocalStopCaller
-	case admissionErr != nil:
-		stopReason = clievent.ReceiverLocalStopOutputAdmission
-	case runtimeErr != nil || connectionErr != nil:
-		stopReason = clievent.ReceiverLocalStopRuntimeSessionFailure
+	if !session.runtime.PathsExhausted() {
+		connectionErr = nil
 	}
-	execution.CloseWithReason(stopReason)
+	execution.CloseWithReason(getSettlementStopReason(ctx.Err(), admissionErr, runtimeErr, connectionErr))
 	// A terminal result is meaningful only after every producer has lost the
 	// ability to append a later fact to this run's ordered publication stream.
 	closeSession()
@@ -246,57 +293,6 @@ func (a *App) resolveLink(raw, keyString string) (link.Link, error) {
 	return capability, nil
 }
 
-func (a *App) dialV2Receiver(
-	ctx context.Context,
-	capability link.Link,
-	observation getObservation,
-) (*relayv2.ReceiverConnection, int) {
-	rawShareID, err := base64.RawURLEncoding.Strict().DecodeString(capability.ShareID)
-	if err != nil {
-		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureCapabilityInvalid)
-	}
-	shareID, err := v2.ShareIDFromBytes(rawShareID)
-	if err != nil {
-		return nil, observation.commandFailureCode(ExitUsage, clievent.FailureCapabilityInvalid)
-	}
-	joinContext, cancel := context.WithTimeout(ctx, getJoinWindow)
-	defer cancel()
-	for {
-		connection, err := relayv2.DialReceiver(joinContext, relayv2.ReceiverConfig{
-			RelayBaseURL: capability.Relays[0], ShareID: shareID,
-			Dial: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
-		})
-		if err == nil {
-			observation.registerRelayConnection(connection)
-			observation.relayConnected(connection.Endpoint())
-			return connection, ExitOK
-		}
-		var relayError *relayv2.RelayError
-		if !errors.As(err, &relayError) || relayError.Code != v2.ErrorStarting {
-			if errors.As(err, &relayError) && relayError.Code == v2.ErrorStopped {
-				a.recordProcessTrace(
-					processTraceGetComponent,
-					processTraceReceiverJoinStopped,
-					testrun.OutcomeFailed,
-				)
-			}
-			if ctx.Err() != nil {
-				return nil, observation.commandFailure(ExitFailure, ctx.Err())
-			}
-			return nil, observation.commandFailure(ExitNetwork, err)
-		}
-		delay := relayError.RetryAfter
-		if delay <= 0 {
-			delay = getRelayStartingRetryDelay
-		}
-		select {
-		case <-joinContext.Done():
-			return nil, observation.commandFailure(ExitNetwork, joinContext.Err())
-		case <-time.After(delay):
-		}
-	}
-}
-
 func selectionRules(requested []string) (transfer.SelectionRules, error) {
 	if len(requested) == 0 {
 		return transfer.NewSelectionRules(true, nil)
@@ -411,4 +407,19 @@ func receiverTerminationErrors(
 		connectionErr = connection.Err()
 	}
 	return runtimeErr, connectionErr
+}
+
+// Settlement uses the errors that ended the transfer. Cleanup of optional
+// paths cannot retroactively change caller interruption into network failure.
+func getSettlementStopReason(contextErr, admissionErr, runtimeErr, connectionErr error) clievent.ReceiverLocalStopReason {
+	switch {
+	case contextErr != nil:
+		return clievent.ReceiverLocalStopCaller
+	case admissionErr != nil:
+		return clievent.ReceiverLocalStopOutputAdmission
+	case runtimeErr != nil || connectionErr != nil:
+		return clievent.ReceiverLocalStopRuntimeSessionFailure
+	default:
+		return clievent.ReceiverLocalStopNormalCompletion
+	}
 }

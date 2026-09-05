@@ -198,6 +198,10 @@ func TestValidateModuleLayoutAllowsOnlyReviewedModuleBoundaries(t *testing.T) {
 		"internal/perfevidence/go.sum",
 		"spikes/webrtc/go.mod",
 		"spikes/webrtc/go.sum",
+		"third_party/pion/ice/go.mod",
+		"third_party/pion/ice/go.sum",
+		"third_party/pion/webrtc/go.mod",
+		"third_party/pion/webrtc/go.sum",
 		"README.md",
 	}
 	if err := validateModuleLayout(metadataPaths, validRootGoMod()); err != nil {

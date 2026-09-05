@@ -112,6 +112,13 @@ describe('v2 peer failure classifier', () => {
     })
   })
 
+  it('retries only closed transient peer reasons and keeps unknown reasons path-terminal', () => {
+    expect(classifyV2PeerAttemptFailure({ kind: 'authenticated-peer-operation', code: 0x5002 }))
+      .toMatchObject({ type: 'retry-attempt' })
+    expect(classifyV2PeerAttemptFailure({ kind: 'authenticated-peer-operation', code: 0x5fff }))
+      .toMatchObject({ type: 'stop-path' })
+  })
+
   it('reflects only an explicit sealed ProtocolSession terminal snapshot', () => {
     const terminal = Object.freeze({
       authority: 'protocol-session-terminal',

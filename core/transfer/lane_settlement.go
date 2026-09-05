@@ -1,11 +1,98 @@
 package transfer
 
 import (
+	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/downloadmetrics"
 	"math"
+	"time"
 
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
+
+// BindDownloadMetrics is called before content activation, once per generation.
+func (s *LaneSet) BindDownloadMetrics(metrics *downloadmetrics.Metrics) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.downloadMetrics = metrics
+	s.observeDownloadAvailabilityLocked()
+}
+func (s *LaneSet) observeDownloadAvailabilityLocked() {
+	if s.downloadMetrics == nil {
+		return
+	}
+	direct := false
+	for _, state := range s.lanes {
+		if !state.retired && state.route == LaneRouteDirect && s.contentSuspensions[state.identity.ID] == nil {
+			direct = true
+		}
+	}
+	s.downloadMetrics.Availability(direct)
+}
+func (s *LaneSet) beginDownloadWait() func() {
+	s.mu.Lock()
+	metrics := s.downloadMetrics
+	s.mu.Unlock()
+	if metrics == nil {
+		return func() {}
+	}
+	return metrics.Pending()
+}
+func (s *LaneSet) attestBlock(state *laneState, record records.BlockRecord) authenticatedBlock {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	route := downloadmetrics.Unknown
+	if !state.retired && s.lanes[state.identity.ID] == state {
+		switch state.route {
+		case LaneRouteDirect:
+			route = downloadmetrics.Direct
+		case LaneRouteTURN:
+			route = downloadmetrics.TURN
+		case LaneRouteRelay:
+			route = downloadmetrics.ApplicationRelay
+		}
+	}
+	return authenticatedBlock{BlockRecord: record, route: route}
+}
+
+// LaneContentActivity counts only selected authenticated block results. Open
+// channels, discarded race losers and ciphertext never imply useful traffic.
+type LaneContentActivity struct {
+	Route         LaneRoute
+	UsefulBytes   uint64
+	LastUsefulAt  time.Time
+	AdmittedLanes uint32
+}
+
+func (s *LaneSet) recordContentActivityLocked(route LaneRoute, bytes uint64) {
+	activity := &s.contentActivity[route]
+	activity.Route = route
+	var incomplete bool
+	saturatingLaneCounter(&activity.UsefulBytes, bytes, &incomplete)
+	activity.LastUsefulAt = s.now()
+}
+
+func (s *LaneSet) ContentActivity() []LaneContentActivity {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result := make([]LaneContentActivity, 0, int(LaneRouteTURN))
+	activityByRoute := s.contentActivity
+	for _, lane := range s.lanes {
+		if !lane.retired {
+			activityByRoute[lane.route].Route = lane.route
+			activityByRoute[lane.route].AdmittedLanes++
+		}
+	}
+	for _, activity := range activityByRoute {
+		if activity.UsefulBytes != 0 || activity.AdmittedLanes != 0 {
+			result = append(result, activity)
+		}
+	}
+	return result
+}
 
 // LaneSettlementObservationCapacity is the exact number of summaries retained
 // while the owner-selected consumer is not receiving. Zero disables settlement
@@ -22,10 +109,11 @@ type LaneRoute uint8
 const (
 	LaneRouteRelay LaneRoute = iota + 1
 	LaneRouteDirect
+	LaneRouteTURN
 )
 
 func (route LaneRoute) valid() bool {
-	return route == LaneRouteRelay || route == LaneRouteDirect
+	return route == LaneRouteRelay || route == LaneRouteDirect || route == LaneRouteTURN
 }
 
 // LaneSettlementSummary is deliberately aggregate and text-free. The source
@@ -257,4 +345,56 @@ func (s *LaneSet) finalizeLaneSettlements() []LaneSettlementSummary {
 	}
 	s.finalSettlements = nil
 	return settlements
+}
+
+// ContentRoutePolicy is fixed before a session admits content. Keeping it on
+// the set means replacement epochs and new lane IDs cannot bypass user intent.
+type ContentRoutePolicy uint8
+
+const (
+	ContentRouteAll ContentRoutePolicy = iota
+	ContentRouteDirectOnly
+	ContentRouteRelayOnly
+)
+
+func (policy ContentRoutePolicy) valid() bool { return policy <= ContentRouteRelayOnly }
+
+func (policy ContentRoutePolicy) Allows(route LaneRoute) bool {
+	if !route.valid() {
+		return false
+	}
+	switch policy {
+	case ContentRouteAll:
+		return true
+	case ContentRouteDirectOnly:
+		return route == LaneRouteDirect
+	case ContentRouteRelayOnly:
+		return route == LaneRouteRelay
+	default:
+		return false
+	}
+}
+
+func (s *LaneSet) finish(
+	state *laneState,
+	elapsed time.Duration,
+	record records.BlockRecord,
+	err error,
+	canceled bool,
+	selected bool,
+) {
+	s.mu.Lock()
+	if selected {
+		state.settlement.addDelivered(uint64(record.DataLength()))
+		s.recordContentActivityLocked(state.route, uint64(record.DataLength()))
+	}
+	state.inflight--
+	if err != nil {
+		state.recordFailure(canceled)
+	} else {
+		state.recordSuccess(elapsed)
+	}
+	settlement := s.settleLaneLocked(state)
+	s.mu.Unlock()
+	s.publishLaneSettlement(settlement)
 }

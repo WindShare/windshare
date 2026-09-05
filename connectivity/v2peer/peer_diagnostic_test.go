@@ -133,8 +133,8 @@ func TestPeerDiagnosticStreamIsCumulativeBoundedAndSaturating(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reporter.reportCount(PeerDiagnosticReceiverTermination, PeerDiagnosticEvidenceCapacity, math.MaxUint64)
-	reporter.report(PeerDiagnosticReceiverTermination, PeerDiagnosticEvidenceCapacity)
+	reporter.reportCount(PeerDiagnosticReceiverTermination, PeerDiagnosticPathCapacity, math.MaxUint64)
+	reporter.report(PeerDiagnosticReceiverTermination, PeerDiagnosticPathCapacity)
 	reporter.completeObservations()
 	if observation := <-reporter.observations(); observation.Count != math.MaxUint64 {
 		t.Fatalf("saturating diagnostic = %#v", observation)
@@ -171,7 +171,7 @@ func TestPeerDiagnosticsHaveClosedTextFreeVocabulary(t *testing.T) {
 	} {
 		for _, reason := range []PeerDiagnosticReason{
 			PeerDiagnosticStreamCapacity,
-			PeerDiagnosticEvidenceCapacity,
+			PeerDiagnosticPathCapacity,
 			PeerDiagnosticCleanupResidue,
 		} {
 			if _, valid := peerDiagnosticIndex(category, reason); valid {

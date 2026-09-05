@@ -3,6 +3,8 @@ package v2peer
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/v2signal"
 	"sync"
 	"sync/atomic"
 
@@ -251,4 +253,35 @@ func (attempt *ReceiverAttempt) preOperationCompletionDecision(
 		ReceiverTerminalLocal,
 		ReceiverProvenanceLocalContextEnded,
 	)
+}
+
+// PrepareBinding waits for process resources without arming signaling/ICE timers.
+func (factory *ReceiverFactory) PrepareBinding(parent context.Context, lanes ReceiverLaneSession, binding v2signal.Binding) (*nativepeer.PreparedAttempt, error) {
+	if factory == nil || parent == nil || lanes == nil || binding.Validate() != nil {
+		return nil, ErrConfig
+	}
+	if factory.peerConnections != nil {
+		return nil, nil
+	}
+	var sessionID protocolsession.ProtocolSessionID
+	if session, ok := lanes.(interface {
+		ProtocolSessionID() protocolsession.ProtocolSessionID
+	}); ok {
+		sessionID = session.ProtocolSessionID()
+	}
+	return factory.native.PrepareAttempt(parent, nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding})
+}
+
+// StartBinding executes exactly one immutable attempt. PeerSet supplies the
+// stable path and advancing sequence; a failed operation is never reopened.
+func (factory *ReceiverFactory) StartBinding(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding) (*ReceiverAttempt, error) {
+	if signaling == nil {
+		return nil, ErrConfig
+	}
+	prepared, err := factory.PrepareBinding(parent, lanes, binding)
+	if err != nil {
+		return nil, err
+	}
+	defer prepared.Close()
+	return factory.StartPreparedBinding(parent, signaling, lanes, binding, prepared)
 }

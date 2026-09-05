@@ -28,6 +28,7 @@ import {
   presentDirectZipProgress,
 } from './v2-progress-presentation'
 import { recoverySummaryDescription } from './resumable-file-set-presentation'
+import { presentReceiverPathActivity } from './connection/path-presentation'
 import { CompatibleNameRepairPanel } from './compatible-name/CompatibleNameRepairPanel'
 
 function SelectionCheckbox(props: {
@@ -623,6 +624,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
     controller.getSnapshot,
     controller.getSnapshot,
   )
+  const pathActivity = presentReceiverPathActivity(snapshot.pathActivity)
   const retainedActionPending = snapshot.retained.pending !== null
   const receiveLocked = retainedActionPending ||
     activationLocksSelection(snapshot.output.activation) ||
@@ -659,6 +661,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           {snapshot.status}
         </p>
 
+        {pathActivity !== null && <p className="connection-activity" role="status">{pathActivity}</p>}
         {snapshot.error !== null && (
           <div ref={alert} className="error-banner" role="alert" tabIndex={-1}>
             {snapshot.error}

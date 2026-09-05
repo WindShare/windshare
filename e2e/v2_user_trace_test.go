@@ -241,6 +241,9 @@ func validateV3TraceObject(
 			t.Fatalf("%s contains unknown field %q", context, name)
 		}
 		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			if field.nullable {
+				continue
+			}
 			t.Fatalf("%s field %q is null", context, name)
 		}
 		validateV3TraceValue(t, raw, field, context)
@@ -268,6 +271,11 @@ func validateV3TraceValue(t *testing.T, raw json.RawMessage, field v3TraceFieldS
 		_ = v3TraceDecimalRaw(t, raw, fieldContext)
 	case v3TraceInteger:
 		_ = v3TraceIntegerRaw(t, raw, fieldContext)
+	case v3TraceFraction:
+		var value float64
+		if err := json.Unmarshal(raw, &value); err != nil || value < 0 || value > 1 {
+			t.Fatalf("%s is not a fraction in [0,1]: %s", fieldContext, raw)
+		}
 	case v3TraceBool:
 		var value bool
 		if err := json.Unmarshal(raw, &value); err != nil {
@@ -435,7 +443,7 @@ func v3KnownObserverLossCategory(value string) bool {
 	switch value {
 	case "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement",
 		"protocol_operation", "transfer_lifecycle", "filesystem_output", "catalog_storage", "root_prefetch",
-		"sender_capacity", "sender_revision", "command_adapter":
+		"sender_capacity", "sender_revision", "native_connectivity", "command_adapter":
 		return true
 	default:
 		return false

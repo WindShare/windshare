@@ -84,10 +84,11 @@ type peerAttempt struct {
 	inboxMu  sync.Mutex
 	closed   bool
 
-	cancelMu sync.Mutex
-	cancel   context.CancelCauseFunc
-	attached atomic.Bool
-	done     chan struct{}
+	cancelMu                 sync.Mutex
+	cancel                   context.CancelCauseFunc
+	attached                 atomic.Bool
+	operationCancelRequested atomic.Bool
+	done                     chan struct{}
 
 	phases          *peerPhaseLifecycle
 	admissionMu     sync.Mutex
@@ -168,6 +169,10 @@ func (attempt *peerAttempt) remoteCandidate(
 }
 
 func (attempt *peerAttempt) cancelOperation(ctx context.Context) error {
+	// Cancellation must wake capacity/preparation I/O before the event loop
+	// exists. Admitted lanes still use the existing settlement arbitration.
+	attempt.operationCancelRequested.Store(true)
+	attempt.phases.cancelBeforeAdmission(context.Canceled)
 	completed := make(chan struct{})
 	attempt.push(attemptEvent{kind: attemptOperationCanceled, completed: completed})
 	select {
@@ -232,41 +237,13 @@ func (attempt *peerAttempt) closeInbox() {
 	}
 }
 
-func (attempt *peerAttempt) run(ctx context.Context) error {
-	attempt.recorder.begin()
-	negotiationContext, err := attempt.phases.beginNegotiation(ctx)
-	if err != nil {
-		return attempt.finish(ctx, err, nil, false)
-	}
-	attempt.recorder.negotiationDeadlineArmed()
-	peer, err := attempt.config.factory.peerConnections.NewPeerConnection(
-		attempt.config.factory.configuration,
-	)
-	if err != nil || peer == nil {
-		var cleanup error
-		if peer != nil {
-			cleanup = peer.Close()
-		}
-		attempt.phases.terminate(errors.Join(ErrNegotiation, err))
-		return attempt.finish(ctx, errors.Join(ErrNegotiation, err), cleanup, false)
-	}
-	execution := newAttemptExecution(attempt, ctx, peer)
-	execution.phaseContext = negotiationContext
-	execution.registerCallbacks()
-	result := execution.negotiate()
-	if result == nil {
-		result = execution.runEvents()
-	}
-	cleanup := execution.close(result)
-	return attempt.finish(ctx, result, cleanup, execution.operationCanceled)
-}
-
 func (attempt *peerAttempt) finish(
 	ctx context.Context,
 	primary error,
 	cleanup error,
 	operationCanceled bool,
 ) error {
+	operationCanceled = operationCanceled || attempt.operationCancelRequested.Load()
 	result := errors.Join(primary, cleanup)
 	if !attempt.recorder.admitted() {
 		attempt.recorder.fail(attemptFailure(result, primary, operationCanceled))
@@ -308,8 +285,10 @@ func newAttemptExecution(
 }
 
 func (execution *attemptExecution) registerCallbacks() {
+	observePeerICE(execution.peer, execution.attempt.phases)
+	accept := candidateAdmission(execution.peer, execution.attempt.config.factory.maxCandidates)
 	execution.peer.OnICECandidate(func(candidate *pion.ICECandidate) {
-		if candidate == nil {
+		if !accept(candidate) {
 			return
 		}
 		value := candidate.ToJSON()

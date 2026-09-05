@@ -32,7 +32,7 @@ interface LaneState {
   failed: boolean
 }
 
-export interface V2BlockRouteObservation {
+export interface V2BlockDispatchObservation {
   readonly dispatchSequence: number
   readonly laneId: number
   readonly laneEpoch: number
@@ -41,7 +41,16 @@ export interface V2BlockRouteObservation {
   readonly localBlockIndex: bigint
 }
 
-export type V2BlockDispatchObservation = V2BlockRouteObservation
+// Provenance follows the exact authenticated record through cache/singleflight.
+// A WeakMap releases it with the bounded broker cache and never retains content.
+const deliveredRoutes = new WeakMap<V2BlockRecord, V2BlockTransportRoute>()
+export function authenticatedBlockRoute(record: V2BlockRecord): V2BlockTransportRoute | undefined {
+ return deliveredRoutes.get(record)
+}
+
+export interface V2BlockRouteObservation extends V2BlockDispatchObservation {
+  readonly usefulBytes: number
+}
 
 /** Joined-share authority; protocol generations borrow it instead of resetting evidence order. */
 export class V2BlockDispatchSequenceAuthority {
@@ -168,11 +177,7 @@ export class V2LaneSet {
         // authenticated bytes illicit for another coalesced consumer.
         const record = await state.lane.fetchBlock(demand, signal)
         state.failed = false
-        try {
-          this.#onBlockFetched(Object.freeze({ ...observation }))
-        } catch {
-          // Diagnostics cannot become transfer authority or corrupt an authenticated success.
-        }
+        this.#observeFetched(state, observation, record)
         return record
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? error
@@ -182,6 +187,17 @@ export class V2LaneSet {
       } finally {
         state.inflight -= 1
       }
+    }
+  }
+
+  #observeFetched(state: LaneState, observation: V2BlockDispatchObservation, record: V2BlockRecord): void {
+    // A retired route may finish valid content, but cannot attest which replacement path carried it.
+    if (this.#lanes.get(state.lane.id) !== state) return
+    deliveredRoutes.set(record, state.route)
+    try {
+      this.#onBlockFetched(Object.freeze({ ...observation, usefulBytes: record.data.byteLength }))
+    } catch {
+      // Diagnostics cannot become transfer authority or corrupt an authenticated success.
     }
   }
 

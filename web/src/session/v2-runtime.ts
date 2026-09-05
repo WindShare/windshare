@@ -1,3 +1,4 @@
+import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
 import type { FailureCorrelation, ProtocolFailure } from '../diagnostics/incident/fact'
@@ -200,6 +201,17 @@ export class V2ReceiverSessionRuntime {
   subscribeLaneChanges(listener: (change: V2LaneChange) => void): () => void {
     this.#laneListeners.add(listener)
     return () => this.#laneListeners.delete(listener)
+  }
+
+  subscribePeerPathControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
+    return this.#router.subscribePeerPathControls(listener)
+  }
+
+  async sendPeerPathControl(body: Uint8Array, options: { readonly laneId?: number; readonly signal?: AbortSignal } = {}): Promise<void> {
+    this.#requireOpen()
+    options.signal?.throwIfAborted()
+    decodeV2PeerPathControl(body)
+    await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, body))
   }
 
   async requestLaneGrant(

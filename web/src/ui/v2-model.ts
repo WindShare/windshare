@@ -147,6 +147,7 @@ export interface V2ReceiverDiagnosticSnapshot {
 }
 
 export interface V2ReceiverSnapshot {
+  readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot
   readonly phase: V2ReceiverPhase
   readonly status: string
   readonly error: string | null

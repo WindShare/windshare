@@ -40,7 +40,7 @@ func TestCompositeRuntimesBrowseAndTransferFileLocalBlocks(t *testing.T) {
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := fixture.receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatalf("connect receiver: %v", err)
 	}
@@ -197,14 +197,14 @@ func TestCompositeRuntimeRoutesSignedPeerControlsAndCancellationOnTheOfferOperat
 	remoteCandidateBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: "receiver-candidate"})
 	rejectedOfferBody, _ := protocolsession.EncodeBody(map[uint64]any{0: uint64(1), 1: "reject-offer"})
 	created := make(chan *verticalPeerHandler, 1)
-	fixture.senderFactory.peers = SenderPeerHandlerFactoryFunc(func(session SenderPeerSession) (SenderPeerHandler, error) {
+	fixture.senderFactory.peers = verticalBoundPeerFactory{SenderPeerHandlerFactoryFunc: SenderPeerHandlerFactoryFunc(func(session SenderPeerSession) (SenderPeerHandler, error) {
 		handler := &verticalPeerHandler{
 			session: session, answer: answerBody, localCandidate: localCandidateBody, rejectedOffer: rejectedOfferBody,
 			remoteCandidates: make(chan protocolsession.Message, 1), canceled: make(chan protocolsession.OperationID, 1),
 		}
 		created <- handler
 		return handler, nil
-	})
+	}), rejected: rejectedOfferBody}
 	receiverConfig := fixture.receiverConfig
 	receiverConfig.PeerControls = receiverPeerSemanticsForTest(protocolsession.SenderControlSemanticValidatorFunc(func(
 		kind protocolsession.MessageKind,
@@ -495,7 +495,7 @@ func connectVerticalPair(
 			err     error
 		}{runtime: runtime, err: err}
 	}()
-	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel)
+	receiver, err := receiverFactory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 	if err != nil {
 		t.Fatalf("connect receiver: %v", err)
 	}
@@ -1030,4 +1030,24 @@ func id16[T ~[16]byte](value byte) T {
 		result[index] = value
 	}
 	return result
+}
+
+type verticalBoundPeerFactory struct {
+	SenderPeerHandlerFactoryFunc
+	rejected []byte
+}
+
+func (factory verticalBoundPeerFactory) BeginOperationContinuation(kind protocolsession.MessageKind, body []byte) (protocolsession.OperationContinuationAuthority, bool, error) {
+	if kind != protocolsession.MessagePeerOffer || !bytes.Equal(body, factory.rejected) {
+		return nil, false, nil
+	}
+	return verticalBoundPeerAuthority{}, true, nil
+}
+
+type verticalBoundPeerAuthority struct {
+	testReceiverPeerContinuationAuthority
+}
+
+func (verticalBoundPeerAuthority) PeerAttemptBinding() protocolsession.PeerAttemptBinding {
+	return protocolsession.PeerAttemptBinding{PeerPathID: [16]byte{1}, AttemptID: [16]byte{2}, AttemptSequence: 1}
 }

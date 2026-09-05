@@ -93,6 +93,7 @@ export class V2ReceiverController {
   #joinNavigation: AbortController | undefined
   #unsubscribeScanProgress: (() => void) | undefined
   #unsubscribeProtocolGeneration: (() => void) | undefined
+  #unsubscribePathActivity: (() => void) | undefined
   #disposed = false
   #newOperationPending = false
 
@@ -185,6 +186,7 @@ export class V2ReceiverController {
     this.#snapshot = Object.freeze({
       phase: 'awaiting-key',
       status: 'Waiting for the capability key.',
+      pathActivity: { directConnected: false, content: 'idle' as const },
       error: null,
       rows: Object.freeze([]),
       breadcrumbs: Object.freeze([]),
@@ -416,6 +418,8 @@ export class V2ReceiverController {
     this.#unsubscribeScanProgress = undefined
     this.#unsubscribeProtocolGeneration?.()
     this.#unsubscribeProtocolGeneration = undefined
+    this.#unsubscribePathActivity?.()
+    this.#unsubscribePathActivity = undefined
     const detached = this.#resetReceiveOwnership(new DOMException('Receiver disposed', 'AbortError'))
     this.#unsubscribeAuthority()
     this.#unsubscribeOutput()
@@ -489,6 +493,7 @@ export class V2ReceiverController {
         ...this.#snapshot,
         phase: 'joining',
         status: 'Authenticating the share descriptor…',
+        pathActivity: { directConnected: false, content: 'idle' as const },
         error: null,
         rows: Object.freeze([]),
         preview: EMPTY_V2_PREVIEW,
@@ -499,6 +504,8 @@ export class V2ReceiverController {
       this.#unsubscribeScanProgress = undefined
       this.#unsubscribeProtocolGeneration?.()
       this.#unsubscribeProtocolGeneration = undefined
+      this.#unsubscribePathActivity?.()
+      this.#unsubscribePathActivity = undefined
       navigation.signal.throwIfAborted()
       const activeNavigation = navigation
       const joined = await lease.handoff((ownedInput) =>
@@ -607,6 +614,10 @@ export class V2ReceiverController {
     this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
       progress => this.#browse.catalogScanProgress(joined, progress),
     )
+    this.#unsubscribePathActivity?.()
+    this.#unsubscribePathActivity = joined.subscribePathActivity((pathActivity) => {
+      if (!this.#disposed && this.#joined === joined) this.#publish({ ...this.#snapshot, pathActivity })
+    })
     this.#unsubscribeProtocolGeneration = joined.subscribeProtocolGeneration(() => {
       if (!this.#disposed && this.#joined === joined && this.#joinNavigation === undefined) {
         this.#beginSelectionProjection(joined, 'observation-replacement')

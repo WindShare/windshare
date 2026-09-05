@@ -18,12 +18,14 @@ import {
 } from './v2-identities'
 import {
   decodeV2OperationErrorControl,
+  peerFailureScope,
   type V2MessageKind,
   V2_MESSAGE_KIND,
   type V2SessionMessage,
 } from './v2-message'
 import {
   V2OperationContinuationAuthority,
+  V2RetiredPeerContinuations,
 } from './v2-operation-continuation'
 import { type V2SessionOperation, V2SessionRuntimeError } from './v2-runtime-types'
 
@@ -98,6 +100,7 @@ export class V2OperationQueue implements V2SessionOperation {
   peerBinding(): Readonly<{
     peerPathId: Uint8Array<ArrayBuffer>
     attemptId: Uint8Array<ArrayBuffer>
+    attemptSequence: bigint
   }> | undefined {
     return this.#authority.peerBinding()
   }
@@ -278,8 +281,10 @@ export class V2OperationRouter {
   readonly #onTerminal: (reason: unknown) => void
   readonly #now: () => number
   readonly #tombstones = new Map<string, V2OperationTombstone>()
+  readonly #retiredPeers = new V2RetiredPeerContinuations()
   readonly #admission = new V2SessionQueueAdmission()
   readonly #diagnostics: V2OperationRouterDiagnostics | undefined
+  readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
   readonly #protocolFailures = new WeakMap<V2SessionMessage, ProtocolFailure>()
   #terminal: unknown
 
@@ -318,6 +323,7 @@ export class V2OperationRouter {
       canonicalRequestBody,
       this.#admission,
       (authority, settlement) => {
+        this.#retiredPeers.retire(authority.peerBinding())
         this.#operations.delete(key)
         this.#draining.add(operation)
         this.#tombstones.set(key, new V2OperationTombstone(
@@ -331,8 +337,18 @@ export class V2OperationRouter {
       () => this.#draining.delete(operation),
       (message, laneId, laneEpoch) => {
         this.#captureProtocolFailure(operation, message, laneId, laneEpoch)
+        if (message.kind === V2_MESSAGE_KIND.operationError) {
+          const failure = decodeV2OperationErrorControl(message.body)
+          if (failure.scope === 'peer' && peerFailureScope(failure.code) === 'session-terminal') {
+            const reason = new V2SessionRuntimeError('session', 'Authenticated peer failure ended the session')
+            this.terminate(reason)
+            this.#onTerminal(reason)
+            throw reason
+          }
+        }
       },
     )
+    this.#retiredPeers.admit(operation.peerBinding())
     this.#operations.set(key, operation)
     return operation
   }
@@ -349,6 +365,11 @@ export class V2OperationRouter {
     return this.#protocolFailures.get(message)
   }
 
+  subscribePeerPathControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
+    this.#pathControls.add(listener)
+    return () => this.#pathControls.delete(listener)
+  }
+
   async route(
     message: V2SessionMessage,
     laneId?: number,
@@ -359,6 +380,10 @@ export class V2OperationRouter {
       const reason = new V2SessionRuntimeError('session', 'Sender ended the protocol session')
       this.terminate(reason)
       this.#onTerminal(reason)
+      return
+    }
+    if (message.kind === V2_MESSAGE_KIND.peerPathControl) {
+      for (const listener of this.#pathControls) listener(message.body.slice())
       return
     }
     const operationId = message.operationId
@@ -393,9 +418,14 @@ export class V2OperationRouter {
       }
       return
     }
+    await this.#routeRetired(key, message)
+  }
+
+  async #routeRetired(key: string, message: V2SessionMessage): Promise<void> {
     this.#pruneTombstones()
     const tombstone = this.#tombstones.get(key)
     if (tombstone === undefined) {
+      if (this.#retiredPeers.drops(message)) return
       throw new V2SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
     }
     await tombstone.accept(message)
@@ -410,6 +440,7 @@ export class V2OperationRouter {
     this.#operations.clear()
     this.#draining.clear()
     this.#tombstones.clear()
+    this.#retiredPeers.clear()
   }
 
   #captureProtocolFailure(

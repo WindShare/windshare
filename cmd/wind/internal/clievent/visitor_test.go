@@ -7,6 +7,14 @@ import (
 
 type exhaustiveVisitor struct{ visited string }
 
+func (visitor *exhaustiveVisitor) VisitNativeConnectivityObserved(NativeConnectivityObserved) error {
+	return nil
+}
+
+func (visitor *exhaustiveVisitor) VisitPlatformSetupObserved(PlatformSetupObserved) error {
+	return visitor.mark("platform_setup")
+}
+
 func (visitor *exhaustiveVisitor) mark(name string) error { visitor.visited = name; return nil }
 func (visitor *exhaustiveVisitor) VisitReady(Ready) error { return visitor.mark("ready") }
 func (visitor *exhaustiveVisitor) VisitSharingSubjectSelected(SharingSubjectSelected) error {

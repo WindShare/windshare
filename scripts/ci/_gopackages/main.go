@@ -39,6 +39,12 @@ var approvedModuleMetadataPaths = map[string]struct{}{
 	"internal/perfevidence/go.sum": {},
 	"spikes/webrtc/go.mod":         {},
 	"spikes/webrtc/go.sum":         {},
+	// Pinned upstream dependency projections are owned by _piondeps and its
+	// reproducible patch gate; WindShare wrappers remain in the root sets.
+	"third_party/pion/ice/go.mod":    {},
+	"third_party/pion/ice/go.sum":    {},
+	"third_party/pion/webrtc/go.mod": {},
+	"third_party/pion/webrtc/go.sum": {},
 }
 
 var moduleMetadataPathspecs = []string{

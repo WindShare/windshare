@@ -26,6 +26,7 @@ function inputMarkup(html: string, ariaLabel: string): string {
 
 function createMockController(snapshotOverrides: Partial<V2ReceiverSnapshot> = {}): V2ReceiverController {
   const snapshot: V2ReceiverSnapshot = {
+    pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'awaiting-key',
     status: 'Waiting for the capability key.',
     error: null,
@@ -276,7 +277,8 @@ describe('Portal and App mode routing', () => {
     } as unknown as V2RetainedReceiveOperation
 
     const controller = createMockController({
-      phase: 'awaiting-key',
+      pathActivity: { directConnected: false, content: 'idle' as const },
+    phase: 'awaiting-key',
       retained: {
         kind: 'ready',
         error: null,

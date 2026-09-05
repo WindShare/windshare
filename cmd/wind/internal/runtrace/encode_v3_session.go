@@ -282,6 +282,11 @@ func (visitor *encodeVisitorV3) VisitObserverLossObserved(event clievent.Observe
 	return nil
 }
 
+func (visitor *encodeVisitorV3) VisitPlatformSetupObserved(event clievent.PlatformSetupObserved) error {
+	visitor.set("platform_setup", nil, platformSetupPayloadV3{State: event.State(), Reason: event.Reason()})
+	return nil
+}
+
 func (visitor *encodeVisitorV3) VisitReceiverTerminationObserved(
 	event clievent.ReceiverTerminationObserved,
 ) error {
