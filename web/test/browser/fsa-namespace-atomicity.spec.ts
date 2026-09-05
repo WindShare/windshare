@@ -302,6 +302,23 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
   })
 })
 
+test('retries the whole restoration pair when either exact native sibling is occupied', async ({ page, browserName }) => {
+  await page.goto('/')
+  await requireOriginPrivateStorage(page, browserName)
+  const proof = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./fsa-namespace-atomicity-harness')
+    return harness.exerciseRestorationPairCollisions(fixture)
+  }, { path: HARNESS_PATH, fixture: testFixture('pair-collisions') })
+  expect(proof).toEqual(['script', 'sidecar'].map(occupiedKind => ({
+    occupiedKind,
+    pairRetriedTogether: true,
+    unoccupiedFirstPartnerAbsent: true,
+    occupiedFilePreserved: true,
+    contentTokenUnchanged: true,
+    pairOwned: true,
+  })))
+})
+
 test('compatible-name ledger keeps pair ownership and contiguous commits across reopen', async ({
   browserName,
   page,
@@ -353,6 +370,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       templateId: 'windows-powershell-v1',
       pairPlacement: 'inside-logical-root' as const,
       pair: {
+        token: 'aaaaaa',
         script: {
           physicalName: 'restore.windshare-aaaaaa.ps1',
           handleId: `script-${targetOperation}`,
@@ -402,8 +420,8 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
           sidecar: 'restore.windshare-aaaaaa.data',
         },
         placement: 'inside-logical-root',
-        runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File restore.windshare-aaaaaa.ps1 -SidecarPath restore.windshare-aaaaaa.data',
-        pendingCatchUp: false,
+        sidecarSync: 'pending',
+        terminalSettlement: 'none',
       }),
     })
     await ledger.recordVerifiedDirectoryOwnership({
@@ -435,7 +453,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       ownedObjectId: fileObjectId,
     })
     const committed = await ledger.scanCommittedMappings(operation)
-    const summaryInput = (state: 'active' | 'completed', pendingCatchUp: boolean) => ({
+    const summaryInput = (state: 'active' | 'completed', terminalPending: boolean) => ({
       committedCount: 2,
       logicalPathSample: [
         ['root', 'rejected-directory'],
@@ -446,9 +464,9 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
         sidecar: 'restore.windshare-aaaaaa.data',
       },
       placement: 'inside-logical-root' as const,
-      runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File restore.windshare-aaaaaa.ps1 -SidecarPath restore.windshare-aaaaaa.data',
       latestObservedFooter: { committedCount: 2, state },
-      pendingCatchUp,
+      sidecarSync: 'current' as const,
+      terminalSettlement: terminalPending ? 'pending' as const : 'complete' as const,
     })
     await ledger.persistRepairSummary(
       operation,
@@ -481,6 +499,9 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       repairSummary: model.compatibleNameRepairSummary(summaryInput('active', true)),
     })
     const pendingWasReadable = await ledger.readPendingTerminalOutcome(operation) !== undefined
+    const pendingSummary = await ledger.readRepairSummary(operation)
+    const currentSidecarIndependentOfPendingOutcome = pendingSummary?.sidecarSync === 'current' &&
+      pendingSummary.terminalSettlement === 'pending'
     await ledger.clearPendingTerminalOutcome({
       operationId: operation,
       repairSummary: model.compatibleNameRepairSummary(summaryInput('completed', false)),
@@ -561,6 +582,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
       conflictRejected,
       leaseRolledBack: leaseAfterConflict?.leaseId === leaseId,
       pendingWasReadable,
+      currentSidecarIndependentOfPendingOutcome,
       pendingWasCleared,
       terminalSummaryCount: snapshot?.header.repairSummary?.committedCount,
       terminalSummaryImmutable,
@@ -610,6 +632,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
     conflictRejected: true,
     leaseRolledBack: true,
     pendingWasReadable: true,
+    currentSidecarIndependentOfPendingOutcome: true,
     pendingWasCleared: true,
     terminalSummaryCount: 2,
     terminalSummaryImmutable: true,
@@ -648,6 +671,7 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
         templateId: 'windows-powershell-v1',
         pairPlacement: 'inside-logical-root',
         pair: {
+          token: 'aaaaaa',
           script: {
             physicalName: 'restore.windshare-aaaaaa.ps1',
             handleId: `script-${operation}`,

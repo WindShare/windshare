@@ -274,6 +274,7 @@ export async function createCompatibleNameRecoveryCut(
 
 export async function reopenCompatibleNameRecovery(
   fixture: CompatibleNameRecoveryFixture,
+  committedMappingsBeforeResume = 0,
 ): Promise<CompatibleNameRecoveryProof> {
   const repository = await IndexedDbReceiveOperationRepository.open(fixture.databaseName)
   let session: Awaited<ReturnType<typeof reopenFileSystemAccessOutput>> | undefined
@@ -298,7 +299,7 @@ export async function reopenCompatibleNameRecovery(
     const resumedRanges = Object.freeze(resumed.verifiedRanges.map(rangeText))
     await resumed.writeRange(2n, Uint8Array.of(3, 4))
     await resumed.commit()
-    await waitForCompatibleSidecar(session, 1)
+    await waitForCompatibleSidecar(session, committedMappingsBeforeResume + 1)
 
     const snapshot = await readCompatibleSnapshot(fixture.databaseName, fixture.operationId)
     const mapping = snapshot.mappings.find(value => value.logicalPath[0] === fixture.logicalComponent &&
@@ -966,7 +967,7 @@ async function waitForCompatibleSidecar(
   let unsubscribe: (() => void) | undefined
   const reached = new Promise<void>(resolve => {
     unsubscribe = source.subscribe(summary => {
-      if (summary.committedCount === committedCount && !summary.pendingCatchUp &&
+      if (summary.committedCount === committedCount && summary.sidecarSync === 'current' &&
           summary.latestObservedFooter?.state === 'active' &&
           summary.latestObservedFooter.committedCount === committedCount) resolve()
     })

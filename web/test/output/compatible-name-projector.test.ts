@@ -34,7 +34,7 @@ describe('compatible-name sidecar projector', () => {
     const projector = await createCompatibleNameProjector(projectorOptions(ledger, writer))
 
     expect(projector.observeFooter()).toEqual({ committedCount: 2, state: 'active' })
-    expect(ledger.cursors).toEqual([1])
+    expect(ledger.cursors).toEqual([0])
     expect(writer.mutations.map(mutation => mutation.kind)).toEqual(['truncate', 'append'])
     expect(decodeCompatibleNameSidecar(writer.bytes).mappings.map(mapping => mapping.ordinal))
       .toEqual([1, 2])
@@ -139,6 +139,57 @@ describe('compatible-name sidecar projector', () => {
     expect(writer.maxConcurrentMutations).toBe(1)
   })
 
+  it('synchronizes active mappings after an in-flight batch without sealing future commits', async () => {
+    const writer = new MemoryOwnedSidecarWriter(bytes(sidecar([], 'active')))
+    const ledger = new MemoryProjectorLedger()
+    const projector = await createCompatibleNameProjector(projectorOptions(ledger, writer))
+    ledger.committed.push(committedMapping(1, ['first.txt']))
+    const append = writer.blockNextAppend()
+    projector.markDirty()
+    await append.started
+    ledger.committed.push(committedMapping(2, ['second.txt']))
+    projector.markDirty()
+    const synchronized = projector.synchronizeActive()
+    append.release()
+    await expect(synchronized).resolves.toEqual({ committedCount: 2, state: 'active' })
+    expect(writer.maxConcurrentMutations).toBe(1)
+    ledger.committed.push(committedMapping(3, ['third.txt']))
+    projector.markDirty()
+    await expect(projector.synchronizeActive()).resolves.toEqual({ committedCount: 3, state: 'active' })
+    expect(writer.maxConcurrentMutations).toBe(1)
+  })
+
+  it('does not leave a background writer alive when active ledger replay fails', async () => {
+    const writer = new MemoryOwnedSidecarWriter(bytes(sidecar([], 'active')))
+    const ledger = new MemoryProjectorLedger()
+    let observations = 0
+    const projector = await createCompatibleNameProjector({
+      ...projectorOptions(ledger, writer),
+      checkpointed: async () => { observations += 1 },
+    })
+    await expect(projector.synchronizeActive(async () => {
+      ledger.committed.push(committedMapping(1, ['first.txt']))
+      projector.markDirty()
+      throw new Error('semantic replay failed after a commit')
+    })).rejects.toThrow('semantic replay failed')
+    await Promise.resolve()
+    expect(writer.mutations).toHaveLength(0)
+    expect(observations).toBe(1)
+    await expect(projector.synchronizeActive()).resolves.toEqual({ committedCount: 1, state: 'active' })
+  })
+
+  it('rebuilds a parseable but altered mapping prefix from durable ledger authority', async () => {
+    const committed = committedMapping(1, ['original.txt'])
+    const altered = committedMapping(1, ['different.txt'])
+    const writer = new MemoryOwnedSidecarWriter(bytes(sidecar([altered], 'active')))
+    const projector = await createCompatibleNameProjector(projectorOptions(
+      new MemoryProjectorLedger([committed]), writer,
+    ))
+    expect(projector.observeFooter()).toEqual({ committedCount: 1, state: 'active' })
+    expect(decodeCompatibleNameSidecar(writer.bytes).mappings).toEqual([projectedMapping(committed)])
+    expect(writer.mutations.map(mutation => mutation.kind)).toEqual(['replace'])
+  })
+
   it('accepts an already validated matching terminal footer without appending it again', async () => {
     const mapping = committedMapping(1, ['first.txt'])
     const writer = new MemoryOwnedSidecarWriter(bytes(sidecar([mapping], 'failed')))
@@ -148,7 +199,7 @@ describe('compatible-name sidecar projector', () => {
     await expect(projector.drainTerminal('failed'))
       .resolves.toEqual({ committedCount: 1, state: 'failed' })
     expect(writer.mutations).toHaveLength(0)
-    expect(ledger.cursors).toEqual([1, 1])
+    expect(ledger.cursors).toEqual([0, 0])
 
     const mismatchedWriter = new MemoryOwnedSidecarWriter(bytes(sidecar([mapping], 'failed')))
     const mismatchedProjector = await createCompatibleNameProjector(projectorOptions(

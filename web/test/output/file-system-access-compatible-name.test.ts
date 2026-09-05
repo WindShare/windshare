@@ -5,14 +5,14 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import { fsaDirectoryHandleId } from '../../src/output/browser/filesystem-directory-authority'
 import { fsaOwnedDirectoryHandleId } from '../../src/output/browser/indexeddb-root-binding'
 import {
-  openFileSystemAccessPendingOutcomeCatchUp,
+  openFileSystemAccessCompatibleNameCatchUp,
   reopenFileSystemAccessOutput,
 } from '../../src/output/file-system-access/session'
 import type { CompatibleNameActivationLedger } from '../../src/output/file-system-access/compatible-name/coordinator'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
 import {
-  catchUpFileSystemAccessPendingOutcome,
+  catchUpFileSystemAccessCompatibleNames,
 } from '../../src/output/file-system-access/settlement'
 import type { ReopenedDirectTreeOperation } from '../../src/output/resume/reopen-authority'
 import {
@@ -535,7 +535,7 @@ describe('File System Access compatible-name terminal cut', () => {
 
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
     expect(ledger.header?.repairSummary).toMatchObject({
-      pendingCatchUp: false,
+      sidecarSync: 'current',
       latestObservedFooter: { state: 'stopped', committedCount: 1 },
     })
     expect(decodeCompatibleNameSidecar(await (await compatibleSidecar(root, ledger)).bytes()).footer)
@@ -571,7 +571,7 @@ describe('File System Access compatible-name terminal cut', () => {
 
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
     expect(ledger.header?.repairSummary).toMatchObject({
-      pendingCatchUp: false,
+      sidecarSync: 'current',
       latestObservedFooter: { state: 'failed', committedCount: 1 },
     })
     expect(decodeCompatibleNameSidecar(await (await compatibleSidecar(root, ledger)).bytes()).footer)
@@ -683,7 +683,7 @@ describe('File System Access compatible-name terminal cut', () => {
     await expect(settling).resolves.toMatchObject({ kind: 'published' })
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
     expect(ledger.header?.repairSummary).toMatchObject({
-      pendingCatchUp: false,
+      sidecarSync: 'current',
       latestObservedFooter: { state: 'completed', committedCount: 1 },
     })
     const terminalSidecar = await compatibleSidecar(root, ledger)
@@ -769,7 +769,8 @@ describe('File System Access compatible-name terminal cut', () => {
       ordinaryLifecycle: { kind: 'partial-directory', reason: 'failures' },
     })
     expect(ledger.header?.repairSummary).toMatchObject({
-      pendingCatchUp: true,
+      sidecarSync: 'current',
+      terminalSettlement: 'pending',
       latestObservedFooter: { state: 'active', committedCount: 1 },
     })
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
@@ -840,11 +841,11 @@ describe('File System Access compatible-name terminal cut', () => {
       repository,
     } as unknown as ReopenedDirectTreeOperation
 
-    const result = await catchUpFileSystemAccessPendingOutcome({
+    const result = await catchUpFileSystemAccessCompatibleNames({
       operation,
       signal: SIGNAL,
       clock: () => 2_000,
-      openSession: caughtUpOperation => openFileSystemAccessPendingOutcomeCatchUp({
+      openSession: caughtUpOperation => openFileSystemAccessCompatibleNameCatchUp({
         intent: caughtUpOperation.intent,
         operationRepository: caughtUpOperation.repository,
         lockManager: locks,
@@ -866,13 +867,94 @@ describe('File System Access compatible-name terminal cut', () => {
 
     expect(result.lifecycle).toMatchObject({ kind: 'partial-directory', reason: 'failures' })
     expect(result.repairSummary).toMatchObject({
-      pendingCatchUp: false,
+      sidecarSync: 'current',
       latestObservedFooter: { state: 'failed', committedCount: 1 },
     })
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
     expect(retirementAttempts).toBe(2)
     expect(retireCount).toBe(1)
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(1)
+  })
+
+})
+
+describe('File System Access local compatible-name replay', () => {
+  it('replays a lost mapping commit locally without retiring active resume metadata', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    let retired = 0
+    const checkpointFactory = memoryCheckpointFactory(() => { retired += 1 })
+    const locks = new MemoryLockManager()
+    const ledger = new MemoryCompatibleNameLedger(repository)
+    const session = await bindTask({
+      parent, repository, checkpointFactory, locks,
+      artifact: await resultRootArtifact(), operationSeed: 61,
+      openCompatibleNameLedger: async () => ledger,
+    })
+    const root = await activateCompatibleDirectory(session, parent, 'blocked-local')
+    await compatibleProjectionCaughtUp(session)
+    root.onEntryLookup = lookup => {
+      if (lookup.name === 'blocked.txt' && lookup.create === false) {
+        throw new TypeError('simulated native component refusal')
+      }
+    }
+    const file = await session.beginFile({
+      materializationRelativePath: ['blocked.txt'],
+      openRevision: async () => ({ fileId: identity(180), fileRevision: identity(181), exactSize: 2n }),
+    })
+    await file.writeRange(0n, Uint8Array.of(3, 4))
+    const commitMapping = ledger.commitMapping.bind(ledger)
+    let injectFailure = true
+    ledger.commitMapping = async input => {
+      if (input.entryKind === 'file' && injectFailure) {
+        injectFailure = false
+        throw new Error('crash after final-file ledger commit')
+      }
+      return commitMapping(input)
+    }
+    await expect(file.commit()).rejects.toThrow('crash after final-file ledger commit')
+    const priorLeaseId = identity(182)
+    await startReceiving(repository, session.intent, priorLeaseId)
+    const lifecycleRecord = (await repository.readLifecycle(session.intent.operationId))!
+    const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)
+    const intent = session.intent
+    await session.close()
+    const reopenOptions = {
+      intent, operationRepository: repository, lockManager: locks,
+      checkpointRepositoryFactory: checkpointFactory,
+      openCompatibleNameLedger: async () => ledger,
+      compatibleNamePreparation: {
+        platform: 'windows',
+        templateProvider: { select: () => ({
+          id: 'windows-powershell-v1' as const, scriptFileExtension: '.ps1' as const,
+          source: '# test restoration script\n',
+        }) },
+      },
+    }
+    const result = await catchUpFileSystemAccessCompatibleNames({
+      operation: { intent, repository, lifecycle, lease: { leaseId: priorLeaseId } } as unknown as ReopenedDirectTreeOperation,
+      signal: SIGNAL,
+      openSession: () => openFileSystemAccessCompatibleNameCatchUp(reopenOptions),
+    })
+    expect(result.lifecycle).toBe(lifecycle)
+    expect(await repository.readLifecycle(intent.operationId)).toEqual(lifecycleRecord)
+    expect(result.repairSummary).toMatchObject({
+      committedCount: 2, sidecarSync: 'current', terminalSettlement: 'none',
+      latestObservedFooter: { committedCount: 2, state: 'active' },
+    })
+    expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
+    expect(retired).toBe(0)
+    expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
+    const reopened = await reopenFileSystemAccessOutput(reopenOptions)
+    const resumed = await reopened.beginFile({
+      materializationRelativePath: ['blocked.txt'],
+      openRevision: async () => ({ fileId: identity(180), fileRevision: identity(181), exactSize: 2n }),
+    })
+    expect(resumed.ownedObjectId).toBe(file.ownedObjectId)
+    expect(decodeCompatibleNameSidecar(await (await compatibleSidecar(root, ledger)).bytes()).footer)
+      .toEqual({ committedCount: 2, state: 'active' })
+    await resumed.close()
+    await reopened.close()
   })
 
 })
@@ -972,7 +1054,7 @@ async function compatibleProjectionCaughtUp(
   if (source === undefined) throw new Error('compatible-name repair projection is unavailable')
   const caughtUp = deferred<void>()
   const unsubscribe = source.subscribe(summary => {
-    if (!summary.pendingCatchUp && summary.latestObservedFooter?.state === 'active' &&
+    if (summary.sidecarSync === 'current' && summary.latestObservedFooter?.state === 'active' &&
         summary.latestObservedFooter.committedCount === summary.committedCount) {
       caughtUp.resolve()
     }

@@ -261,3 +261,23 @@ function compatibleNameEntryKind(value: CompatibleNameEntryKind): CompatibleName
   }
   return value
 }
+
+/** A separate domain keeps pair retries independent of every content-path selection. */
+export async function compatibleNameRestorationPairCandidate(input: Readonly<{
+  operationId: string
+  primaryToken: string
+  attempt: number
+}>): Promise<Readonly<{ token: string; script: string; sidecar: string }>> {
+  const attempt = compatibleNameAttempt(input.attempt)
+  const preimage = canonicalRecord('windshare/restoration-pair-token/v1', 1, [
+    canonicalFrame(canonicalIdentity(input.operationId, OPERATION_ID_BYTES, 'operation ID')),
+    canonicalFrame(canonicalText(compatibleNameToken(input.primaryToken, 'primary token'))),
+    canonicalFrame(canonicalU32(attempt)),
+  ])
+  const token = encodeCompatibleNameToken(thirtyBitPrefix(await sha256(preimage)))
+  return Object.freeze({
+    token,
+    script: `restore.windshare-${token}.ps1`,
+    sidecar: `restore.windshare-${token}.data`,
+  })
+}

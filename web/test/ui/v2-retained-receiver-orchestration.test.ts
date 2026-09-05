@@ -1,5 +1,7 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { TransferFailureAccumulator, transferWorkerSettlement } from '../../src/transfer/outcome'
+import type { TransferJobResult } from '../../src/transfer/v2-job'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
 import type { V2BrowserReceiverGateway } from '../../src/ui/v2-gateway'
 import type {
@@ -223,6 +225,63 @@ describe('v2 receiver product orchestration', () => {
     expect(runtime.detachments).toEqual(['detached'])
   })
 
+  it('hands a stopped receiver to local catch-up only after releasing its output ownership', async () => {
+    const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
+    const joined = new FakeJoinedShare(true)
+    const intent = await retainedWorkspaceIntent(joined)
+    const { operation, runtime } = retainedReceiveContinuation(intent)
+    const summary = repairSummary(true, 'active')
+    const transfer = deferred<TransferJobResult>()
+    vi.spyOn(joined, 'transferJob').mockReturnValue({ run: () => transfer.promise })
+    const repairedRuntime = Object.assign(runtime, {
+      repairProjection: {
+        getSnapshot: () => summary,
+        subscribe: () => () => undefined,
+      },
+    })
+    receive.retainedOperations = [operation]
+    receive.retainedActionGate = Promise.resolve({ kind: 'receive-continuation', runtime: repairedRuntime })
+    const controller = controllerFor(joined, receive)
+    await waitFor(() => controller.getSnapshot().retained.kind === 'ready')
+    await waitFor(() => controller.getSnapshot().output.offerPresentation?.kind === 'choices')
+    controller.performRetainedAction(operation, 'continue')
+    await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'receiving')
+    controller.catchUpStoppedCompatibleNames()
+    expect(runtime.detachments).toEqual([])
+
+    const paused = {
+      ...operation.lifecycle,
+      generation: runtime.lifecycle.generation + 1n,
+    }
+    transfer.resolve({
+      worker: transferWorkerSettlement('Paused', new TransferFailureAccumulator().snapshot()),
+      lifecycle: paused,
+      measure: {} as TransferJobResult['measure'],
+      transferJobId: runtime.transferJobId,
+      intent,
+      repairSummary: summary,
+    })
+    await waitFor(() => controller.getSnapshot().output.lifecycle?.kind === 'resumable-receive')
+    const retained = {
+      ...operation, lifecycle: paused, lifecycleGeneration: paused.generation,
+      actions: ['continue', 'catch-up'] as const,
+    }
+    receive.retainedOperations = [retained]
+    receive.repairSummaries.set(intent.operationId, summary)
+    const replay = deferred<V2RetainedReceiveActionResult>()
+    receive.retainedActionGate = replay.promise
+    controller.catchUpStoppedCompatibleNames()
+    await waitFor(() => receive.retainedActionCalls.some(call => call.action === 'catch-up'))
+    expect(runtime.detachments).toEqual(['detached'])
+    expect(controller.getSnapshot().output.receiveIntent).toBeNull()
+    expect(controller.getSnapshot().retained.operations[0]?.actions).toEqual(['continue', 'catch-up'])
+    receive.repairSummaries.set(intent.operationId, { ...summary, sidecarSync: 'current' })
+    replay.resolve({ kind: 'completed' })
+    await waitFor(() => controller.getSnapshot().retained.operations[0]?.actions.length === 1)
+    expect(controller.getSnapshot().retained.operations[0]?.actions).toEqual(['continue'])
+    await controller.dispose()
+  })
+
   it('drops and closes a fresh-page continuation after reconnect changes its action epoch', async () => {
     const gate = deferred<V2RetainedReceiveActionResult>()
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
@@ -303,19 +362,20 @@ describe('v2 receiver product orchestration', () => {
 })
 
 function repairSummary(
-  pendingCatchUp: boolean,
+  sidecarPending: boolean,
   footerState: 'active' | 'completed' | 'stopped' | 'failed',
 ): CompatibleNameRepairSummary {
+  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
   return Object.freeze({
     committedCount: 1,
     logicalPathSample: Object.freeze([Object.freeze(['report.txt'])]),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount: 1, state: footerState }),
-    pendingCatchUp,
+    sidecarSync: sidecarPending ? 'pending' : 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
   })
 }

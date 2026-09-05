@@ -10,7 +10,7 @@ const WINDOWS_TEMPLATE_URL = new URL(
   import.meta.url,
 )
 const WINDOWS_TEMPLATE_SHA256 =
-  'd7f68dbea04e69210a8236ba2aeaac71e93611483906953b0e6e430b70adbffb'
+  'b24f6cef45ae6defa2418e7478eb011474d1fcbde14f37edc4efb1bc02f8218a'
 const templateBytes = readFileSync(WINDOWS_TEMPLATE_URL)
 const template = templateBytes.toString('utf8')
 
@@ -45,11 +45,15 @@ describe('Windows compatible-name restoration template', () => {
     )
   })
 
-  it('documents the one-process command that runs under the default Windows policy', () => {
+  it('derives only its exact adjacent partner without public path parameters', () => {
     expect(template).toContain(
-      'powershell.exe -NoProfile -ExecutionPolicy Bypass -File <script> ' +
-      '-SidecarPath <adjacent-sidecar>',
+      "[IO.Path]::ChangeExtension($PSCommandPath, '.data')",
     )
+    expect(template).toContain('Expected \'$pairedSidecarPath\'')
+    expect(template).toContain('Invoke-WindShareRestoration -Path $pairedSidecarPath')
+    expect(template).not.toContain('-SidecarPath')
+    expect(template).not.toContain('[string]$SidecarPath')
+    expect(template).not.toContain('Get-ChildItem')
   })
 
   it('keeps every path-state branch explicit and non-destructive', () => {

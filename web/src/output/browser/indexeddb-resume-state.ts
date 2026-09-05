@@ -21,6 +21,7 @@ import {
   type ReceiveLifecycleState,
 } from '../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
+import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-legacy-cleanup'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type { RecoverySummary } from '../file-system-access/recovery-summary'
 import { readFSARecoverySummary } from '../file-system-access/recovery-summary'
@@ -143,6 +144,11 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     }
     states.sort((left, right) => left.operationId.localeCompare(right.operationId))
     return Object.freeze(states)
+  }
+
+  async isCleanupOnly(operationId: string): Promise<boolean> {
+    this.#assertOpen()
+    return readLegacyCompatibleNameStatus(this.#database, operationId)
   }
 
   async readRecoverySummary(

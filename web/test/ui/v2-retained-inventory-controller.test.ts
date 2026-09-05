@@ -350,6 +350,58 @@ describe('retained inventory incident ownership', () => {
     })
   })
 
+})
+
+describe('retained repair and incompatible record authority', () => {
+  it('keeps continuation primary when only the sidecar is behind and removes only caught-up replay', async () => {
+    const source = operation(['continue', 'redownload', 'catch-up'], 'resume-receive', 'paused-repair')
+    let summary: CompatibleNameRepairSummary = {
+      ...repairSummary(1, [['pyvenv.cfg']], 'active'),
+      sidecarSync: 'pending',
+    }
+    const harness = retainedHarness(
+      () => Promise.resolve(testInventory([source])),
+      undefined,
+      { repairSource: { readRepairSummary: () => Promise.resolve(summary) } },
+    )
+    await harness.coordinator.load()
+    expect(harness.publications.at(-1)?.operations[0]).toMatchObject({
+      continuation: 'resume-receive',
+      actions: ['continue', 'redownload', 'catch-up'],
+    })
+    summary = { ...summary, sidecarSync: 'current' }
+    await harness.coordinator.load()
+    expect(harness.publications.at(-1)?.operations[0]).toMatchObject({
+      continuation: 'resume-receive',
+      actions: ['continue', 'redownload'],
+    })
+    summary = { ...summary, terminalSettlement: 'pending' }
+    await harness.coordinator.load()
+    expect(harness.publications.at(-1)?.operations[0]).toMatchObject({
+      continuation: 'pending-catch-up',
+      actions: ['catch-up'],
+    })
+  })
+
+  it('keeps incompatible records cleanup-only without reading old repair summaries', async () => {
+    const source = operation(['discard'], 'cleanup-incompatible', 'old-repair')
+    let summaryReads = 0
+    const harness = retainedHarness(
+      () => Promise.resolve(testInventory([source])),
+      undefined,
+      { repairSource: { readRepairSummary: () => {
+        summaryReads += 1
+        return Promise.reject(new Error('old summary must not be decoded'))
+      } } },
+    )
+    await harness.coordinator.load()
+    expect(summaryReads).toBe(0)
+    expect(harness.publications.at(-1)?.operations[0]).toMatchObject({
+      continuation: 'cleanup-incompatible',
+      actions: ['discard'],
+    })
+  })
+
   it('exposes catch-up only for a durable pending repair and preserves source action authority', async () => {
     const ordinaryActive = operation(['catch-up'], 'pending-catch-up', 'ordinary-active')
     const pendingRepair = operation(['catch-up'], 'pending-catch-up', 'pending-repair')
@@ -361,7 +413,7 @@ describe('retained inventory incident ownership', () => {
     })
     const pendingSummary = Object.freeze({
       ...repairSummary(1, [['pyvenv.cfg']], 'active'),
-      pendingCatchUp: true,
+      sidecarSync: 'pending',
     })
     const harness = retainedHarness(
       () => Promise.resolve(inventory),
@@ -809,13 +861,13 @@ function repairSummary(
     committedCount,
     logicalPathSample: Object.freeze(logicalPathSample.map(path => Object.freeze([...path]))),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount, state: footerState }),
-    pendingCatchUp: false,
+    sidecarSync: 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : 'complete',
   })
 }
 

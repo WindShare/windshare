@@ -50,13 +50,11 @@ import type {
   CompatibleNameRootRepairPreparationOptions,
 } from './path-authority'
 import {
-  RESTORATION_PAIR_READABLE_PREFIX,
-  RESTORATION_SIDECAR_EXTENSION,
   allocateCandidate,
+  allocateRestorationPair,
   assertDescendantRejection,
   assertPreparedSnapshot,
   pairIdentity,
-  pairPhysicalName,
 } from './root-repair'
 import {
   DurableCompatibleNameRepairProjection,
@@ -169,27 +167,10 @@ export class CompatibleNameCoordinator {
       physicalName: candidate => candidate.physicalComponent,
       diagnosticStage: input.rejected.rejection.stage,
     })
-    const script = await allocateCandidate({
+    const pair = await allocateRestorationPair({
       parent: input.rejected.pairParent,
       operationId: input.binding.intent.operationId,
-      logicalPath: [`${RESTORATION_PAIR_READABLE_PREFIX}${template.scriptFileExtension}`],
-      entryKind: 'file',
-      primaryToken,
-      claims,
-      membership: input.namespaceClaims.membership([]),
-      physicalName: candidate => pairPhysicalName(candidate.token, template.scriptFileExtension),
-      diagnosticStage: 'fsa.file.entry.inspect',
-    })
-    const sidecar = await allocateCandidate({
-      parent: input.rejected.pairParent,
-      operationId: input.binding.intent.operationId,
-      logicalPath: [`${RESTORATION_PAIR_READABLE_PREFIX}${RESTORATION_SIDECAR_EXTENSION}`],
-      entryKind: 'file',
-      primaryToken,
-      claims,
-      membership: input.namespaceClaims.membership([]),
-      physicalName: candidate => pairPhysicalName(candidate.token, RESTORATION_SIDECAR_EXTENSION),
-      diagnosticStage: 'fsa.file.entry.inspect',
+      primaryToken, claims, membership: input.namespaceClaims.membership([]),
     })
     const header = compatibleNameOperationHeaderV1({
       operationId: input.binding.intent.operationId,
@@ -202,8 +183,9 @@ export class CompatibleNameCoordinator {
       templateId: template.id,
       pairPlacement: 'inside-logical-root',
       pair: {
-        script: pairIdentity(input.binding.intent.operationId, 'script', script, randomOwnedObjectId),
-        sidecar: pairIdentity(input.binding.intent.operationId, 'sidecar', sidecar, randomOwnedObjectId),
+        token: pair.token,
+        script: pairIdentity(input.binding.intent.operationId, 'script', { physicalComponent: pair.script }, randomOwnedObjectId),
+        sidecar: pairIdentity(input.binding.intent.operationId, 'sidecar', { physicalComponent: pair.sidecar }, randomOwnedObjectId),
       },
       activationState: 'prepared',
     })
@@ -357,7 +339,7 @@ export class CompatibleNameCoordinator {
       ? this.#rootMapping
       : this.mapping(artifactPath, entryKind)
     if (mapping === undefined) return
-    const summary = this.#summary(undefined, false)
+    const summary = this.#summary({ committedCount: 0, state: 'active' })
     this.resolver.adoptHeader(await this.#ledger.recordCompatibleTargetCreated({
       operationId: this.resolver.operationId,
       logicalPath: mapping.logicalPath,
@@ -373,7 +355,9 @@ export class CompatibleNameCoordinator {
   ): Promise<void> {
     this.#assertOpen()
     const projector = this.#requireProjector()
-    const summary = this.#summary(projector.observeFooter(), true)
+    const summary = compatibleNameRepairSummary({
+      ...this.#summary(projector.observeFooter()), terminalSettlement: 'pending',
+    })
     this.resolver.adoptHeader(await this.#ledger.persistPendingTerminalOutcome({
       operationId: this.resolver.operationId,
       outcome,
@@ -404,8 +388,15 @@ export class CompatibleNameCoordinator {
     }
     this.resolver.adoptHeader(await this.#ledger.clearPendingTerminalOutcome({
       operationId: this.resolver.operationId,
-      repairSummary: summary,
+      repairSummary: compatibleNameRepairSummary({ ...summary, terminalSettlement: 'complete' }),
     }))
+    this.#adoptRepairSummary(this.resolver.header.repairSummary!)
+  }
+
+  async synchronizeActiveProjector(reconcile?: () => Promise<void>): Promise<CompatibleNameRepairSummary> {
+    this.#assertOpen()
+    await this.#requireProjector().synchronizeActive(reconcile)
+    return this.#repairSummary!
   }
 
   async commitVerifiedRootDirectory(ownedObjectIdInput: string): Promise<void> {
@@ -624,7 +615,7 @@ export class CompatibleNameCoordinator {
 
   #summary(
     footer: CompatibleNameRepairSummary['latestObservedFooter'],
-    pendingCatchUp = footer === undefined
+    sidecarPending = footer === undefined
       ? this.#committedMappings.size !== 0
       : footer.committedCount !== this.#committedMappings.size,
   ): CompatibleNameRepairSummary {
@@ -638,6 +629,9 @@ export class CompatibleNameCoordinator {
         }, []),
     )
     const header = this.resolver.header
+    let terminalSettlement: CompatibleNameRepairSummary['terminalSettlement'] =
+      this.#repairSummary?.terminalSettlement === 'complete' ? 'complete' : 'none'
+    if (header.pendingTerminalOutcome !== undefined) terminalSettlement = 'pending'
     return compatibleNameRepairSummary({
       committedCount: this.#committedMappings.size,
       logicalPathSample,
@@ -646,11 +640,9 @@ export class CompatibleNameCoordinator {
         sidecar: header.pair.sidecar.physicalName,
       },
       placement: header.pairPlacement,
-      runCommand: `powershell.exe -NoProfile -ExecutionPolicy Bypass -File ` +
-        `".\\${header.pair.script.physicalName}" ` +
-        `-SidecarPath ".\\${header.pair.sidecar.physicalName}"`,
       ...(footer === undefined ? {} : { latestObservedFooter: footer }),
-      pendingCatchUp,
+      sidecarSync: sidecarPending ? 'pending' : 'current',
+      terminalSettlement,
     })
   }
 

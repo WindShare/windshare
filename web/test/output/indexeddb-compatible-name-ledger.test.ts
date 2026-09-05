@@ -88,6 +88,35 @@ describe('compatible-name ledger model', () => {
     expect(() => repairSummary([['file.bin']], 1, 2)).toThrow('footer exceeds')
   })
 
+  it('rejects independently named pair files and missing pair tokens', () => {
+    const header = operationHeader(identity(16, 1))
+    expect(() => compatibleNameOperationHeaderV1({
+      ...header, pair: { ...header.pair, token: 'bbbbbb' },
+    })).toThrow('canonical token')
+    expect(() => compatibleNameOperationHeaderV1({
+      ...header, pair: {
+        ...header.pair,
+        sidecar: { ...header.pair.sidecar, physicalName: 'restore.windshare-bbbbbb.data' },
+      },
+    })).toThrow('canonical token')
+    expect(() => compatibleNameOperationHeaderV1({
+      ...header, pair: { ...header.pair, token: undefined as unknown as string },
+    })).toThrow('pair token')
+  })
+
+  it('keeps sidecar synchronization separate from unfinished terminal settlement', () => {
+    const current = repairSummary([['file.bin']], 1)
+    expect(compatibleNameRepairSummary({
+      ...current, terminalSettlement: 'pending',
+    })).toMatchObject({ sidecarSync: 'current', terminalSettlement: 'pending' })
+    expect(() => compatibleNameRepairSummary({
+      ...current, committedCount: 2,
+    })).toThrow('verified complete ledger prefix')
+    expect(() => compatibleNameRepairSummary({
+      ...current, terminalSettlement: 'complete',
+    })).toThrow('terminal footer')
+  })
+
   it('requires pair ownership before a header can leave the prepared state', () => {
     const operationId = identity(16, 1)
     expect(() => compatibleNameOperationHeaderV1({
@@ -102,6 +131,7 @@ describe('compatible-name ledger model', () => {
     const header = compatibleNameOperationHeaderV1({
       ...prepared,
       pair: {
+      token: 'aaaaaa',
         script: { ...prepared.pair.script, ownershipState: 'owned' },
         sidecar: { ...prepared.pair.sidecar, ownershipState: 'owned' },
       },
@@ -162,6 +192,7 @@ function operationHeader(operationId: string): CompatibleNameOperationHeaderV1 {
     templateId: 'windows-powershell-v1',
     pairPlacement: 'inside-logical-root',
     pair: {
+      token: 'aaaaaa',
       script: {
         physicalName: 'restore.windshare-aaaaaa.ps1',
         handleId: 'repair-script-handle',
@@ -209,9 +240,9 @@ function repairSummary(
       sidecar: 'restore.windshare-aaaaaa.data',
     },
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -File restore.windshare-aaaaaa.ps1',
     latestObservedFooter: { committedCount: footerCount, state: 'active' },
-    pendingCatchUp: footerCount !== committedCount,
+    sidecarSync: footerCount !== committedCount ? 'pending' : 'current',
+    terminalSettlement: 'none',
   })
 }
 

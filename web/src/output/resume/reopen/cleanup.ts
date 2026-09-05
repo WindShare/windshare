@@ -1,3 +1,4 @@
+import { forgetLegacyCompatibleNameRecord } from '../../browser/indexeddb/compatible-name-legacy-cleanup'
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-repository'
 import {
   recordOutputException,
@@ -173,19 +174,23 @@ export class AuthorityOwnedReceiveOperationMutationPort
 implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> {
   readonly #reopen: PersistedReceiveOperationReopenPort
   readonly #cleanup: ReceiveOperationOwnedCleanupExecutor
+  readonly #forgetLegacy: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>) | undefined
 
   constructor(input: {
     readonly reopen: PersistedReceiveOperationReopenPort
     readonly cleanup: ReceiveOperationOwnedCleanupExecutor
+    readonly forgetLegacy?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>
   }) {
     this.#reopen = input.reopen
     this.#cleanup = input.cleanup
+    this.#forgetLegacy = input.forgetLegacy
   }
 
   async resume(
     descriptor: ReceiveOperationResumeDescriptor,
     request?: ReceiveOperationResumeRequest,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
+    assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(
       descriptor,
       'continue',
@@ -202,6 +207,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
+    assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     try {
@@ -218,6 +224,12 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
+    if (descriptor.continuation === 'cleanup-incompatible') {
+      if (this.#forgetLegacy === undefined) {
+        throw new DOMException('Saved-record cleanup is unavailable', 'NotSupportedError')
+      }
+      return this.#forgetLegacy(descriptor)
+    }
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     try {
       return await this.#cleanup.cleanup(operation, failures)
@@ -230,6 +242,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
+    assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(descriptor, 'cleanup', failures)
     if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     if (operation.kind !== 'direct-tree') {
@@ -241,6 +254,12 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
       kind: 'continuation',
       continuation: Object.freeze({ kind: 'direct-tree-catch-up', operation }),
     })
+  }
+}
+
+function assertPhysicalOutputAuthority(descriptor: ReceiveOperationResumeDescriptor): void {
+  if (descriptor.continuation === 'cleanup-incompatible') {
+    throw new DOMException('Incompatible saved records have no physical output authority', 'InvalidStateError')
   }
 }
 
@@ -273,6 +292,9 @@ export function createPersistedReceiveOperationMutationPort(
   return new AuthorityOwnedReceiveOperationMutationPort({
     reopen: new PersistedReceiveOperationReopenAuthority(options),
     cleanup: new PersistedReceiveOperationCleanupExecutor(options),
+    forgetLegacy: descriptor => forgetLegacyCompatibleNameRecord(descriptor, {
+      ...(options.checkpointDatabaseName === undefined ? {} : { databaseName: options.checkpointDatabaseName }),
+    }),
   })
 }
 

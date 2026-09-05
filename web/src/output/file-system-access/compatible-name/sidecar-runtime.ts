@@ -126,7 +126,7 @@ export function sameRepairSummary(
 ): boolean {
   if (left === undefined || right === undefined) return left === right
   return left.committedCount === right.committedCount && left.placement === right.placement &&
-    left.runCommand === right.runCommand && left.pendingCatchUp === right.pendingCatchUp &&
+    left.sidecarSync === right.sidecarSync && left.terminalSettlement === right.terminalSettlement &&
     left.pairDisplayNames.script === right.pairDisplayNames.script &&
     left.pairDisplayNames.sidecar === right.pairDisplayNames.sidecar &&
     left.latestObservedFooter?.committedCount === right.latestObservedFooter?.committedCount &&
@@ -143,7 +143,6 @@ function summaryFollows(
   next: CompatibleNameRepairSummary,
 ): boolean {
   if (next.committedCount < prior.committedCount || next.placement !== prior.placement ||
-      next.runCommand !== prior.runCommand ||
       next.pairDisplayNames.script !== prior.pairDisplayNames.script ||
       next.pairDisplayNames.sidecar !== prior.pairDisplayNames.sidecar) return false
   const priorFooter = prior.latestObservedFooter

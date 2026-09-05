@@ -23,7 +23,7 @@ const TREE = {
 } as ArtifactSpec
 
 describe('compatible-name receiver UI', () => {
-  it('renders the persistent active notice with bounded paths and exact restoration artifacts', () => {
+  it('renders only an adjusted-name notice during a live receive', () => {
     const lifecycle = receiveLifecycle('receiving')
     const repairSummary = summary('active', false)
     const lifecyclePresentation = presentReceiveLifecycle({
@@ -44,17 +44,30 @@ describe('compatible-name receiver UI', () => {
       lifecyclePresentation,
     })
     const html = renderToString(
-      <V2ReceiverApp controller={controller(snapshot({ output }))} />,
+      <V2ReceiverApp controller={controller(snapshot({
+        output,
+        retained: {
+          kind: 'ready', error: null, pending: null,
+          operations: [{
+            operationId: lifecycle.operationId,
+            receiveIntentDigest: lifecycle.receiveIntentDigest,
+            lifecycleGeneration: lifecycle.generation,
+            lifecycle,
+            continuation: 'resume-receive',
+            actions: ['continue', 'catch-up'],
+            repairSummary,
+          }],
+        },
+      }))} />,
     )
 
     expect(html).toContain('role="status"')
     expect(html).toContain('Compatible names are in use')
     expect(html).toContain('2 verified/committed name replacements')
-    expect(html).toContain('folder/pyvenv.cfg')
-    expect(html).toContain('restore-names.windshare-abc234.ps1')
-    expect(html).toContain('restore-names.windshare-abc234.tsv')
-    expect(html).toContain('powershell.exe -NoProfile -ExecutionPolicy Bypass -File')
-    expect(html).toContain('Abnormal-stop recovery only')
+    expect(html).not.toContain('restore.windshare-abc234.ps1')
+    expect(html).not.toContain('powershell.exe')
+    expect(html).not.toContain('Copy restoration command')
+    expect(html).not.toContain('<details')
     expect(html).not.toMatch(/names (?:are|were) restored/iu)
   })
 
@@ -81,8 +94,8 @@ describe('compatible-name receiver UI', () => {
 
     expect(html).toContain('Restore the original names')
     expect(html).toContain('terminal sidecar checkpoint is complete')
-    expect(html).toContain('restore-names.windshare-abc234.ps1')
-    expect(html).toContain('restore-names.windshare-abc234.tsv')
+    expect(html).toContain('restore.windshare-abc234.ps1')
+    expect(html).toContain('restore.windshare-abc234.data')
   })
 
   it('requires retained local catch-up without exposing restoration as a runnable command', () => {
@@ -172,8 +185,9 @@ function receiveLifecycle(
 
 function summary(
   footerState: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  pendingCatchUp: boolean,
+  sidecarPending: boolean,
 ): CompatibleNameRepairSummary {
+  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
   return Object.freeze({
     committedCount: 2,
     logicalPathSample: Object.freeze([
@@ -181,12 +195,12 @@ function summary(
       Object.freeze(['folder', 'nested']),
     ]),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount: 2, state: footerState }),
-    pendingCatchUp,
+    sidecarSync: sidecarPending ? 'pending' : 'current',
+    terminalSettlement: footerState === 'active' ? 'none' : terminalSettlement,
   })
 }

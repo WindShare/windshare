@@ -16,6 +16,7 @@ export type ReceiveOperationContinuation =
   | 'resume-package'
   | 'save-artifact'
   | 'retry-download'
+  | 'cleanup-incompatible'
   | 'cleanup-expired'
   | 'retry-cleanup'
   | 'needs-attention'
@@ -58,7 +59,8 @@ export function assertReceiveOperationCanContinue(
   nowMilliseconds: number,
 ): void {
   requireClock(nowMilliseconds)
-  if (descriptor.continuation === 'needs-attention' ||
+  if (descriptor.continuation === 'cleanup-incompatible' ||
+      descriptor.continuation === 'needs-attention' ||
       descriptor.continuation === 'cleanup-expired' ||
       descriptor.continuation === 'retry-cleanup') {
     throw new DOMException('Receive operation cannot continue automatically', 'InvalidStateError')
@@ -75,7 +77,7 @@ function continuationFor(
   const deadline = lifecycleDeadline(lifecycle)
   if (deadline !== undefined && nowMilliseconds >= deadline) return 'cleanup-expired'
   switch (lifecycle.kind) {
-    case 'receiving': return 'pending-catch-up'
+    case 'receiving': return 'resume-receive'
     case 'resumable-receive': return lifecycle.payloadKind === 'direct-zip'
       ? 'resume-direct-zip'
       : 'resume-receive'

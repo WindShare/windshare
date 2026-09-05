@@ -408,7 +408,7 @@ describe('browser production receive composition', () => {
     const operation = inventory.operations[0]
     if (operation === undefined) throw new Error('resumable operation was not projected')
 
-    expect(operation.actions).toEqual(['continue', 'discard'])
+    expect(operation.actions).toEqual(['continue', 'discard', 'catch-up'])
     expect(operation.unavailableReason).toBeUndefined()
     await inventory.act(operation, 'discard', new AbortController().signal)
 
