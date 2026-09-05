@@ -61,7 +61,16 @@ type UDPMuxParams struct {
 }
 
 // NewUDPMuxDefault creates an implementation of UDPMux.
-func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
+func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault {
+	mux := newUDPMuxDefault(params)
+	go mux.connWorker()
+
+	return mux
+}
+
+// Keep initialization separate from reader startup so wrappers can publish all
+// state reached by ReadFrom before the worker takes ownership of the socket.
+func newUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
 	if params.Logger == nil {
 		params.Logger = logging.NewDefaultLoggerFactory().NewLogger("ice")
 	}
@@ -124,8 +133,6 @@ func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
 		},
 		localAddrsForUnspecified: localAddrsForUnspecified,
 	}
-
-	go mux.connWorker()
 
 	return mux
 }

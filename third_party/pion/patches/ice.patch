@@ -313,11 +313,54 @@ index 0000000..dfc7000
 +		}
 +	}
 +}
+diff --git a/udp_mux.go b/udp_mux.go
+index b4beba0..7279064 100644
+--- a/udp_mux.go
++++ b/udp_mux.go
+@@ -61,7 +61,16 @@ type UDPMuxParams struct {
+ }
+ 
+ // NewUDPMuxDefault creates an implementation of UDPMux.
+-func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
++func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault {
++	mux := newUDPMuxDefault(params)
++	go mux.connWorker()
++
++	return mux
++}
++
++// Keep initialization separate from reader startup so wrappers can publish all
++// state reached by ReadFrom before the worker takes ownership of the socket.
++func newUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
+ 	if params.Logger == nil {
+ 		params.Logger = logging.NewDefaultLoggerFactory().NewLogger("ice")
+ 	}
+@@ -125,8 +134,6 @@ func NewUDPMuxDefault(params UDPMuxParams) *UDPMuxDefault { //nolint:cyclop
+ 		localAddrsForUnspecified: localAddrsForUnspecified,
+ 	}
+ 
+-	go mux.connWorker()
+-
+ 	return mux
+ }
+ 
 diff --git a/udp_mux_universal.go b/udp_mux_universal.go
-index 54d0aaa..da1718f 100644
+index 54d0aaa..9982b88 100644
 --- a/udp_mux_universal.go
 +++ b/udp_mux_universal.go
-@@ -141,10 +141,10 @@ func (m *UniversalUDPMuxDefault) isXORMappedResponse(msg *stun.Message, stunAddr
+@@ -71,7 +71,10 @@ func NewUniversalUDPMuxDefault(params UniversalUDPMuxParams) *UniversalUDPMuxDef
+ 		UDPConn: mux.params.UDPConn,
+ 		Net:     mux.params.Net,
+ 	}
+-	mux.UDPMuxDefault = NewUDPMuxDefault(udpMuxParams)
++	// The wrapper uses the embedded mutex while processing queued STUN packets.
++	// Publish the complete mux before starting any reads from the owned socket.
++	mux.UDPMuxDefault = newUDPMuxDefault(udpMuxParams)
++	go mux.connWorker()
+ 
+ 	return mux
+ }
+@@ -141,10 +144,10 @@ func (m *UniversalUDPMuxDefault) isXORMappedResponse(msg *stun.Message, stunAddr
  	defer m.mu.Unlock()
  	// Check first if it is a STUN server address,
  	// because remote peer can also send similar messages but as a BindingSuccess.
@@ -330,7 +373,7 @@ index 54d0aaa..da1718f 100644
  }
  
  // handleXORMappedResponse parses response from the STUN server, extracts XORMappedAddress attribute.
-@@ -207,9 +207,9 @@ func (m *UniversalUDPMuxDefault) GetXORMappedAddr(
+@@ -207,9 +210,9 @@ func (m *UniversalUDPMuxDefault) GetXORMappedAddr(
  	case <-waitAddrReceived:
  		// When channel closed, addr was obtained
  		m.mu.Lock()
@@ -342,7 +385,7 @@ index 54d0aaa..da1718f 100644
  			return nil, errNoXorAddrMapping
  		}
  
-@@ -243,6 +243,7 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
+@@ -243,6 +246,7 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
  		return nil, err
  	}
  
@@ -350,7 +393,7 @@ index 54d0aaa..da1718f 100644
  	if _, err = m.params.UDPConn.WriteTo(req.Raw, serverAddr); err != nil {
  		return nil, err
  	}
-@@ -250,7 +251,19 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
+@@ -250,7 +254,19 @@ func (m *UniversalUDPMuxDefault) writeSTUN(serverAddr net.Addr) (chan struct{},
  	return addrMap.waitAddrReceived, nil
  }
  

@@ -71,7 +71,10 @@ func NewUniversalUDPMuxDefault(params UniversalUDPMuxParams) *UniversalUDPMuxDef
 		UDPConn: mux.params.UDPConn,
 		Net:     mux.params.Net,
 	}
-	mux.UDPMuxDefault = NewUDPMuxDefault(udpMuxParams)
+	// The wrapper uses the embedded mutex while processing queued STUN packets.
+	// Publish the complete mux before starting any reads from the owned socket.
+	mux.UDPMuxDefault = newUDPMuxDefault(udpMuxParams)
+	go mux.connWorker()
 
 	return mux
 }
