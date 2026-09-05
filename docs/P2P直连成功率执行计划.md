@@ -17,7 +17,7 @@
 - `auto` 模式采用直连 + 多个已配置且可用的中转并行，由现有内容调度器分配不同内容块；直连成功不退出中转，公共中转限速限流后续单独实现。
 - 普通用户不选择 STUN、不理解 NAT，也不手工开放端口；`relay-only` 保持零 ICE、零 STUN 和零端口映射。
 - 不凭 CGNAT、自动映射失败或 UDP 不通预判直连失败；由有界 ICE 检查裁决，已验证支持的 TCP 路径也参与尝试。预算耗尽后继续 relay。
-- NAT、provider 和路径成本留在 `connectivity`；`core` 只接收认证后的 `FrameChannel`。
+- NAT、provider 和路径成本留在 `connectivity`；`core` 接收认证后的 `FrameChannel` 与传输无关的路径类别，不依赖具体 provider。
 - 不根据预判 NAT 类型切换 Offerer；角色反转不增加可用 candidate pair，只有真实网络证据证明存在稳定增益时才另行评估。
 - “已直连”依据已接纳 WebRTC lane 的 selected pair；“中转传输”和“两者并行”依据近期实际内容流量，不能仅凭连接已建立显示。candidate 或端口映射成功只进入诊断。
 - 连接流程不得临时提权或阻塞用户操作；防火墙权限不可得时记录原因并继续 relay。
@@ -25,7 +25,7 @@
 
 ## 目标架构
 
-现有 recovery supervisor 与 PeerConnection factories 重构为一个连接所有者：
+现有 P2P recovery supervisor 与 PeerConnection factories 重构为一个连接所有者；会话代际恢复仍由接收端 supervisor 负责：
 
 ```text
 PeerConnectivity
@@ -37,7 +37,7 @@ PeerConnectivity
 └── PathObserver           selected pair、失败阶段与恢复事实
 ```
 
-- `PeerSet` 吸收现有顺序恢复逻辑，按 `ProtocolSessionID + PeerPathID` 独立管理恢复；不同接收者可并行，共享 socket 不共享重试预算或取消状态，不得与另一套 supervisor 并存。进程级对 attempt、socket、STUN 与映射另设容量和速率上限，跨接收者公平分配，网络换代不重置总预算。
+- `PeerSet` 吸收现有顺序恢复逻辑，按 `ProtocolSessionID + PeerPathID` 独立管理恢复；不同接收者可并行，共享 socket 不共享重试预算或取消状态，不得与另一套 P2P 恢复循环并存。进程级对 attempt、socket、STUN 与映射另设容量和速率上限，跨接收者公平分配，网络换代不重置总预算。
 - 每个 Attempt 使用新的 `PeerConnection` 和 `AttemptID`，但同一网络代际内同一 peer path 复用稳定 socket；首版不在失败的 PeerConnection 上叠加原地 ICE restart。
 - 本轮可只建立一条直连，但模型与调度须允许同一接收者未来多个 `PeerPath`/lane 并存；尝试串行限制仅作用于同一 peer path。
 - `SocketAuthority` 的生命周期属于进程级网络代际，通过引用计数覆盖 attempt、已接纳 lane 和映射租约；映射租约不得自行维持无需求的代际。
@@ -49,8 +49,9 @@ PeerConnectivity
 
 - Go 接收端以需求驱动的 `PeerSet` 替换一次性 attempt，与浏览器统一恢复策略；`auto` 在内容需求激活时立即接纳 relay，移除大小判定和 8 秒等待。
 - `auto` 在接收者通过认证进入文件浏览后，每个 session 至多做一次有界 ICE 预热，复用 `PeerSet` 和总预算，不阻塞浏览、不做端口映射。内容激活接管当前 attempt 或已接纳 lane；无内容需求时，浏览结束即取消预热并释放 lane，成功 lane 仅有界保留，纯浏览不重试。
-- 补齐发送端多 relay 配置与并行注册、接收端逐 lane 认证接纳及独立重连/释放，各 lane 加入同一 `ProtocolSession` 的内容调度；额外 relay 不阻塞首条可用路径。
-- 将 peer failure 明确为 `attempt-transient`、`path-terminal`、`session-terminal`。ICE/STUN/超时等可恢复网络失败只结束当前 attempt；协议或策略拒绝终止 peer path；认证与会话不变量失败才终止 session。
+- 补齐发送端多 relay 配置与并行注册、接收端逐 lane 认证接纳及独立重连/释放，各 lane 加入同一 `ProtocolSession` 的内容调度；额外 relay 不阻塞首条可用路径。由 `connectivity` 提供可信路径类别，替换“追加 lane 即 direct”的假设；内容准入统一覆盖现有与后续 lane，重连不得绕过 `p2p-only`。
+- 将 peer failure 明确为 `attempt-transient`、`path-terminal`、`session-terminal`。ICE/STUN/超时等可恢复网络失败只结束当前 attempt；协议或策略拒绝终止 peer path；认证与会话不变量失败终止 session 并停止恢复。
+- 沿用浏览器会话代际恢复，在 Go 接收端补齐：全部 lane 因网络丢失时退役旧 session，在恢复预算内重新握手、获取 lease，并由下载任务保留仍有效的进度；不复活旧 session 权限，不因换代重置总预算。`PeerSet` 只负责代际内的 P2P 恢复，`p2p-only` 仍受当前 wave 上限约束。
 - `OPERATION_ERROR` 对当前 negotiation identity 始终终态；typed reason 决定是否扩大到 path 或 session。`attempt-transient` 以新的 `AttemptID` 恢复，不得用通用 `Retryable` 重跑同一 operation。
 - Go 与浏览器使用同一份封闭 reason-to-scope 向量；未知 reason 只停止 peer path，错误文本或通用 `Retryable` 不得产生 retry 或 session authority。
 - 当前两端以 15 秒覆盖协商到 DataChannel Open。由现有 attempt 所有者分别管理信令准备、ICE 检查、DTLS/DataChannel 建立与 lane admission 预算；保留 attempt、wave 总上限，将 session 累计总上限改为可补充的单位时间尝试次数与耗时预算。两端统一策略，阶段推进不重置 attempt/wave 预算。
@@ -112,9 +113,9 @@ PeerConnectivity
 
 - 首次 attempt 使用主 profile、单一 PeerConnection、Trickle ICE 和第 0 阶段的分阶段预算，不等待 gathering 完成。
 - 有内容需求时，`attempt-transient` 失败后以同一稳定 socket 创建 fresh PeerConnection；备用 profile 可用时每个 wave 内至多旋转一次，同一 peer path 内任何时刻只有一个 PeerConnection 在尝试。
-- 接收端（浏览器或 Go）的 `PeerSet` 统一创建 fresh Offer；Go 发送端只回答当前 attempt，并经认证会话信令通知对应接收端映射就绪或网络代际变化。lane detach 同样由接收端触发恢复，不引入双向 Offer 或第二套 supervisor。
+- 接收端（浏览器或 Go）的 `PeerSet` 统一创建 fresh Offer；Go 发送端只回答当前 attempt，并经认证会话信令通知对应接收端映射就绪或网络代际变化。lane detach 同样由接收端触发恢复，不引入双向 Offer 或第二套 P2P 恢复循环。
 - `auto` 下 direct 失效时健康 relay 持续承载内容。可恢复失败后，只要仍有内容需求且尚未直连，就允许低频退避开启新 wave；网络变化、lane detach 和映射就绪也由同一 `PeerSet` 在单位时间预算内触发。
-- `p2p-only` 禁止 relay 内容传输；首次连接或直连失效均在有界 wave 内尝试，恢复时保留进度，wave 耗尽或 path/session 终止后明确报错结束下载；因网络失败退出前保存已验证数据及可恢复检查点，并提示续传入口。
+- `p2p-only` 禁止 relay 内容传输；首次连接或直连失效均在有界 wave 内尝试，恢复时保留有效进度，wave 耗尽或不可恢复的 path/session 失败后报错结束下载。网络失败退出时按输出模块能力保存进度：支持持久续传的提供续传入口，否则提示重新下载；不为统一续传新增整份临时副本。
 - 已直连即停止后台尝试，无内容需求时仅允许单次浏览预热；暂停后恢复或新下载可在预算内重新激活，`path-terminal`/`session-terminal` 不自动重试。
 - 网络变化使用新 socket 代际；lane admission 转移所有权后及时释放失败 attempt 与无用 candidate。
 - 后台尝试不得让传输进度归零或状态反复闪烁；只有已接纳 lane 的 selected pair 证明后才显示“已直连”。
