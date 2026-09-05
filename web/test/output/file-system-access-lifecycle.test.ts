@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
+import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { directoryId } from '../../src/catalog/model'
 import {
   inspectFileSystemComponent,
@@ -849,6 +851,39 @@ describe('File System Access settlement authority', () => {
       kind: 'needs-attention',
       reason: 'target-ownership-unknown',
     })
+    await session.close()
+  })
+})
+
+describe('interrupted receiving admission fallback', () => {
+  it('preserves interrupted receiving authority when admission fails before materialization', async () => {
+    const parent = new MemoryDirectory('downloads')
+    const repository = new MemoryOperationRepository()
+    const session = await bindTask({
+      parent, repository, checkpointFactory: memoryCheckpointFactory(),
+      locks: new MemoryLockManager(), artifact: await singleFileArtifact(), operationSeed: 113,
+    })
+    const leaseId = identity(114)
+    await startReceiving(repository, session.intent, leaseId)
+    const fallback = decodeStoredReceiveLifecycleState((await repository.readLifecycle(session.intent.operationId))!)
+    if (fallback.kind !== 'receiving') throw new Error('expected interrupted receiving')
+    const reduction = reduceReceiveLifecycle(fallback, {
+      kind: 'receive-authority-reacquired', expectedGeneration: fallback.generation, leaseId,
+    }, { planKind: 'direct-tree', preparationRequired: false, activeLeaseId: leaseId, nowMilliseconds: 1600 })
+    if (reduction.status !== 'applied') throw new Error('expected fresh authority')
+    await repository.commitTransition({
+      operationId: session.intent.operationId, expectedLifecycleGeneration: fallback.generation,
+      expectedLeaseId: leaseId, lifecycle: reduction.state,
+    })
+    const settlement = await createFileSystemAccessSettlementAuthority({
+      intent: session.intent, repository, lifecycleLeaseId: leaseId, transferJobId: identity(115),
+      admissionFallback: fallback, clock: () => 1600,
+    })
+    await expect(settlement.settleExecutionAdmissionFailure(
+      session.intent, new Error('sender remains offline'), SIGNAL,
+    )).resolves.toEqual(reduction.state)
+    expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
+    expect(repository.recordsOfKind(RECEIVE_RECORD_CLEANUP)).toHaveLength(0)
     await session.close()
   })
 })

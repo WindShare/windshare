@@ -16,6 +16,7 @@ export interface ResumeOperationClock {
 export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
+  isCleanupOnly?(operationId: string): Promise<boolean>
   readRecoverySummary?(
     lifecycle: Extract<ReceiveLifecycleState, {
       kind: 'resumable-receive'
@@ -38,6 +39,7 @@ export type ReceiveOperationDiscardResult =
       cleanupReceiptDigest: string
     }>
   | Readonly<{ kind: 'already-absent' }>
+  | Readonly<{ kind: 'record-forgotten' }>
   | Readonly<{
       kind: 'needs-attention'
       reason: 'target-ownership-unknown' | 'cleanup-unknown'
@@ -140,9 +142,13 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     const owner: ResumeReferenceOwner = { open: true }
     const references: ReceiveOperationResumeRef[] = []
     for (const lifecycle of lifecycles) {
-      const descriptor = receiveOperationResumeDescriptor(lifecycle, now)
-      if (descriptor === undefined) continue
-      const recoverySummary = lifecycle.kind === 'resumable-receive' &&
+      const projected = receiveOperationResumeDescriptor(lifecycle, now)
+      if (projected === undefined) continue
+      const cleanupOnly = await this.#source.isCleanupOnly?.(lifecycle.operationId) ?? false
+      const descriptor = cleanupOnly
+        ? Object.freeze({ ...projected, continuation: 'cleanup-incompatible' as const })
+        : projected
+      const recoverySummary = !cleanupOnly && lifecycle.kind === 'resumable-receive' &&
           lifecycle.payloadKind === 'file-set' &&
           this.#source.readRecoverySummary !== undefined
         ? await this.#source.readRecoverySummary(lifecycle)
@@ -164,6 +170,9 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     requireMatchingRetainedFileRecovery(reference, request?.retainedFileRecovery)
     const descriptor = this.#consume(reference)
     const now = this.#clock.now()
+    if (descriptor.continuation === 'cleanup-incompatible') {
+      throw new DOMException('Incompatible saved records can only be forgotten', 'InvalidStateError')
+    }
     if (descriptor.expiresAt !== undefined && now >= descriptor.expiresAt) {
       return this.#mutations.expire(descriptor, request?.failures)
     }
@@ -200,6 +209,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     const descriptor = this.#consume(reference)
     if (descriptor.continuation !== 'pending-catch-up' &&
         descriptor.continuation !== 'restoration-available' &&
+        descriptor.continuation !== 'resume-receive' &&
         descriptor.continuation !== 'retry-cleanup') {
       throw new DOMException('Receive operation has no terminal catch-up authority', 'InvalidStateError')
     }
@@ -207,7 +217,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     if (catchUp === undefined) {
       throw new DOMException('Terminal catch-up authority is unavailable', 'NotSupportedError')
     }
-    return catchUp(descriptor, failures)
+    return catchUp.call(this.#mutations, descriptor, failures)
   }
 
   #consume(reference: ReceiveOperationResumeRef): ReceiveOperationResumeDescriptor {

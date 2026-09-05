@@ -5,6 +5,7 @@ import {
   createFileSystemAccessSettlementAuthority,
   type FileSystemAccessOperationSettlementAuthority,
 } from '../../output/file-system-access/settlement'
+import type { ReceiveAdmissionFallback } from '../../output/file-system-access/admission-fallback'
 import {
   reopenFileSystemAccessOutput,
   type FileSystemAccessOutputSession,
@@ -506,10 +507,7 @@ async function createFSAAttempt(
   lease: BrowserReceiveOperationLease,
   session: FileSystemAccessOutputSession,
   lifecycleEntry: 'start' | 'resume',
-  admissionFallback: Extract<ReceiveLifecycleState, {
-    kind: 'resumable-receive'
-    payloadKind: 'file-set'
-  }> | undefined,
+  admissionFallback: ReceiveAdmissionFallback | undefined,
   diagnostics: OutputDiagnosticsPorts | undefined,
   transferJobId: string,
   outputSessionId: string,
@@ -547,10 +545,7 @@ async function createFSAAttemptSettlement(
   intent: ReceiveIntent,
   repository: ReceiveOperationRepository,
   lease: BrowserReceiveOperationLease,
-  admissionFallback: Extract<ReceiveLifecycleState, {
-    kind: 'resumable-receive'
-    payloadKind: 'file-set'
-  }> | undefined,
+  admissionFallback: ReceiveAdmissionFallback | undefined,
   diagnostics: OutputDiagnosticsPorts | undefined,
   transferJobId: string,
 ): Promise<Readonly<{

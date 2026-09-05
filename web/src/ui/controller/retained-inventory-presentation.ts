@@ -1,4 +1,7 @@
 import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
+import {
+  hasValidatedTerminalCompatibleNameRepair,
+} from '../compatible-name-repair-presentation'
 import type {
   V2RetainedReceiveAction,
   V2RetainedReceiveOperation,
@@ -6,18 +9,16 @@ import type {
 
 export function retainedPresentationActions(
   operation: V2RetainedReceiveOperation,
-  pendingCatchUp: boolean,
+  summary: CompatibleNameRepairSummary | undefined,
 ): readonly V2RetainedReceiveAction[] {
-  if (pendingCatchUp) {
-    return operation.actions.includes('catch-up')
-      ? Object.freeze(['catch-up'])
-      : Object.freeze([])
+  if (summary?.terminalSettlement === 'pending') {
+    return Object.freeze(operation.actions.filter(action => action === 'catch-up'))
   }
-  if (operation.continuation === 'pending-catch-up' ||
-      operation.continuation === 'restoration-available') {
-    return Object.freeze([])
-  }
-  return Object.freeze(operation.actions.filter(action => action !== 'catch-up'))
+  const needsCatchUp = summary?.sidecarSync === 'pending'
+  // Sidecar replay and download continuation have separate authority. A stale
+  // projection must never remove a valid receive continuation.
+  return Object.freeze(operation.actions.filter(action =>
+    action !== 'catch-up' || needsCatchUp))
 }
 
 export function sameRetainedActions(
@@ -31,14 +32,14 @@ export function retainedPresentationContinuation(
   operation: V2RetainedReceiveOperation,
   summary: CompatibleNameRepairSummary | undefined,
 ): V2RetainedReceiveOperation['continuation'] {
-  const repairedTreeState = operation.lifecycle.kind === 'receiving' ||
-    operation.lifecycle.kind === 'published' || operation.lifecycle.kind === 'partial-directory'
-  if (repairedTreeState && summary?.pendingCatchUp === true) return 'pending-catch-up'
-  const footer = summary?.latestObservedFooter
-  if ((operation.lifecycle.kind === 'published' || operation.lifecycle.kind === 'partial-directory') &&
-      summary?.pendingCatchUp === false && footer !== undefined && footer.state !== 'active' &&
-      footer.committedCount === summary.committedCount) {
-    return 'restoration-available'
+  if (summary?.terminalSettlement === 'pending') return 'pending-catch-up'
+  if (operation.lifecycle.kind !== 'published' && operation.lifecycle.kind !== 'partial-directory') {
+    return operation.continuation
   }
-  return operation.continuation
+  if (summary?.sidecarSync === 'pending') {
+    return 'pending-catch-up'
+  }
+  return summary !== undefined && hasValidatedTerminalCompatibleNameRepair(summary)
+    ? 'restoration-available'
+    : operation.continuation
 }

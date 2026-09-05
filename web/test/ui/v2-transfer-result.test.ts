@@ -51,7 +51,7 @@ describe('transfer result presentation', () => {
       tone: 'warning',
     })
     expect(partial.lines.join(' ')).toMatch(/existing destination prevented/u)
-    expect(partial.lines.join(' ')).toContain('restore-names.windshare-abc234.ps1')
+    expect(partial.lines.join(' ')).toContain('restore.windshare-abc234.ps1')
     expect(partial.lines.join(' ')).toContain('remain compatible')
   })
 
@@ -123,18 +123,19 @@ function successfulWorker(): TransferWorkerSettlement {
 
 function repairSummary(
   state: NonNullable<CompatibleNameRepairSummary['latestObservedFooter']>['state'],
-  pendingCatchUp = false,
+  sidecarPending = false,
 ): CompatibleNameRepairSummary {
+  const terminalSettlement = sidecarPending ? 'pending' : 'complete'
   return Object.freeze({
     committedCount: 1,
     logicalPathSample: Object.freeze([Object.freeze(['pyvenv.cfg'])]),
     pairDisplayNames: Object.freeze({
-      script: 'restore-names.windshare-abc234.ps1',
-      sidecar: 'restore-names.windshare-abc234.tsv',
+      script: 'restore.windshare-abc234.ps1',
+      sidecar: 'restore.windshare-abc234.data',
     }),
     placement: 'inside-logical-root',
-    runCommand: 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore-names.windshare-abc234.ps1"',
     latestObservedFooter: Object.freeze({ committedCount: 1, state }),
-    pendingCatchUp,
+    sidecarSync: sidecarPending ? 'pending' : 'current',
+    terminalSettlement: state === 'active' ? 'none' : terminalSettlement,
   })
 }

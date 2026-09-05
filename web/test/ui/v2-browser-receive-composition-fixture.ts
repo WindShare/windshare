@@ -201,7 +201,11 @@ export function capableWindow(
   const candidate = {
     indexedDB: { open: vi.fn() },
     navigator: {
-      locks: { request: vi.fn() },
+      locks: { request: vi.fn(async (
+        name: string,
+        _options: unknown,
+        callback: (lock: { name: string }) => Promise<void>,
+      ) => callback({ name })) },
       storage: {
         getDirectory: vi.fn(),
         estimate: vi.fn(async () => ({ usage: 1_024, quota: 8_192 })),
