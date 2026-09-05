@@ -4,7 +4,9 @@ import {
   SharedV2BlockRouteEligibility,
   type V2BlockRouteEligibility,
 } from './v2-route-policy'
-import { V2LaneSet, type V2BlockDemand } from './v2-lane-set'
+import { V2LaneSet, authenticatedBlockRoute, type V2BlockDemand } from './v2-lane-set'
+import type { V2BlockTransportRoute } from './v2-route-policy'
+import type { DownloadConnectivitySnapshot } from '../diagnostics/trace/transfer-payload'
 
 export type { V2BlockRouteEligibility, V2BlockTransportRoute } from './v2-route-policy'
 export {
@@ -52,6 +54,7 @@ interface CachedBlock {
 }
 
 export interface V2BlockSlice {
+  readonly authenticatedRoute?: V2BlockTransportRoute
   readonly offset: bigint
   readonly data: Uint8Array<ArrayBuffer>
 }
@@ -74,6 +77,7 @@ export interface V2BlockRangeReader {
 }
 
 export interface V2ContentLaneStatus {
+  readonly downloadConnectivity?: (final?: boolean) => DownloadConnectivitySnapshot
   readonly size: number
 }
 
@@ -234,6 +238,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         yield Object.freeze({
           offset: slice.requestedBytes.start,
           data: record.data.slice(start, start + length),
+          ...(authenticatedBlockRoute(record) === undefined ? {} : { authenticatedRoute: authenticatedBlockRoute(record)! }),
         })
         emitted += 1n
       }

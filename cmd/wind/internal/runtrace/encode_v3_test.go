@@ -21,7 +21,7 @@ const (
 
 func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 	events := allTraceEvents(t)
-	if got, want := len(events), 26; got != want {
+	if got, want := len(events), 28; got != want {
 		t.Fatalf("event fixture count = %d, want %d", got, want)
 	}
 	expectedEvents := []string{
@@ -51,6 +51,8 @@ func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 		"lane_settlement",
 		"observer_loss",
 		"receiver_termination",
+		"platform_setup",
+		"native_connectivity",
 	}
 	eventNames := make(map[string]struct{}, len(events))
 	payloadTypes := make(map[reflect.Type]string, len(events))
@@ -749,6 +751,8 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			PeerShutdownFailed: true,
 			ChannelDrainFailed: true,
 		})),
+		mustValue(clievent.NewPlatformSetupObserved(clievent.CommandGet, "declined", "user-skipped")),
+		mustValue(clievent.NewNativeConnectivityObserved(clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Side: "receiver", Kind: "provider_created", State: "unknown"})),
 	}
 }
 

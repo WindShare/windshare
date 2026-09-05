@@ -4,6 +4,26 @@ This workflow rebuilds the current relay source graph and safely replaces the bi
 configured WindShare relay host. It deliberately leaves systemd, Caddy, TLS, state, and origin policy
 under the host's existing configuration.
 
+The single `wsrelay` executable also runs the controlled STUN service in the same process.
+It defaults to UDP 3478 and private STUN admin HTTP at `127.0.0.1:8081`.
+Allow UDP 3478 through the deployment firewall. Existing application relay health and
+rollback checks remain independent of STUN availability. See [STUN configuration](../../../docs/stun.md)
+for rate limits, health, disable flags, and explicit optional UDP 443 deployment.
+
+Build the same product as a container from the repository root:
+
+```sh
+docker build -f deploy/wsrelay/Dockerfile -t windshare-wsrelay .
+docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
+  -v windshare-relay-state:/state windshare-wsrelay \
+  -state-dir /state -relay-base-url wss://relay.example.com
+```
+
+The state volume must be writable by container UID 65532. Terminate TLS at the host
+proxy as usual. The STUN admin port is private and is not published by this command.
+UDP 443 requires an explicit listener, port publication, available bind privileges,
+and no competing UDP service; TCP 443 on the TLS proxy does not supply UDP STUN.
+
 Build from the repository root on Windows:
 
 ```powershell

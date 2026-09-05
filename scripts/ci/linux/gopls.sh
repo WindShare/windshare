@@ -5,15 +5,12 @@ cd "$(dirname "$0")/../../.."
 SECONDS=0
 echo "== gopls =="
 
-existing_go_files() {
-  while IFS= read -r -d '' file; do
-    if [[ -f "$file" ]]; then
-      printf '%s\0' "$file"
-    fi
-  done
-}
-
-diagnostics="$(git ls-files -z -- '*.go' | existing_go_files | xargs -0 -r gopls check -severity=hint)"
+# Verify the complete dependency projection before any file reaches gopls.
+# A failed producer in a pipeline must not launch analysis on a partial set.
+sources="$(mktemp)"
+trap 'rm -f "$sources"' EXIT
+go run ./scripts/ci/_piondeps -maintained-go-files -0 >"$sources"
+diagnostics="$(xargs -0 -r gopls check -severity=hint <"$sources")"
 if [[ -n "$diagnostics" ]]; then
   printf '%s\n' "$diagnostics"
   echo "gopls reported diagnostics" >&2

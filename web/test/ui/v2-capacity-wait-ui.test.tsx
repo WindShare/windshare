@@ -53,6 +53,7 @@ function render(
   output: V2OutputPresentationSnapshot = EMPTY_V2_OUTPUT_PRESENTATION,
 ): string {
   const snapshot: V2ReceiverSnapshot = Object.freeze({
+    pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'browsing',
     status: 'Ready.',
     error: null,

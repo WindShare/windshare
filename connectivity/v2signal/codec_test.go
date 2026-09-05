@@ -123,7 +123,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 	}
 
 	valid, _ := EncodeOffer(Offer{Binding: binding, SDP: "v=0"})
-	nonCanonical := append([]byte{0x98, 0x04}, valid[1:]...)
+	nonCanonical := append([]byte{0x98, 0x05}, valid[1:]...)
 	if _, err := DecodeOffer(nonCanonical); !errors.Is(err, ErrNonCanonicalSignal) {
 		t.Fatalf("noncanonical array error = %v", err)
 	}
@@ -149,7 +149,7 @@ func TestPeerSignalingRejectsHostileBodiesAndBindingSubstitution(t *testing.T) {
 }
 
 func testBinding() Binding {
-	var binding Binding
+	binding := Binding{AttemptSequence: 1}
 	for index := range binding.PeerPathID {
 		binding.PeerPathID[index] = byte(index + 1)
 		binding.AttemptID[index] = byte(index + 0x21)

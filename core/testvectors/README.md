@@ -46,7 +46,10 @@ Receiver-local canonical contracts:
   vectors a broader platform authority.
 
 Other generated v2 files retain sender objects, sessions, fragmentation,
-identity, and peer signaling. `path-policy.json`, `portable-path-vectors.json`,
+identity, and peer signaling. Peer signaling schema 2 includes monotonic attempt
+sequences, the closed peer reason-to-recovery-scope mapping, and signed
+session-bound path controls. Path-control schema 2 also binds an opaque provider
+profile; its capability semantics stay in connectivity. `path-policy.json`, `portable-path-vectors.json`,
 and `envelope-sample.json` remain focused language-neutral fixtures.
 
 Canonical receiver-contract identities and byte fields use unpadded base64url.

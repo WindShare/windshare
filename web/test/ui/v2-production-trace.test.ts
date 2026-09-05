@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { DownloadMetrics } from '../../src/receiver/download-metrics'
+import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
 
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import {
@@ -18,6 +20,29 @@ import {
   projectV2ReceiverTraceEvent,
 } from '../../src/ui/v2-production-trace'
 import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
+
+it('exports a sealed unsampled final per-download record through the existing trace', () => {
+    const metrics = new DownloadMetrics('01010101-0101-4101-8101-010101010101', true, () => 0)
+    metrics.delivered('revision', 0n, 10n, 'direct')
+    const event = {
+      name: 'receive_transition' as const, transition: 'download_connectivity' as const,
+      transferJobId: 'AQAAAAAAAAAAAAAAAAAAAA', connectivity: metrics.snapshot(true),
+    }
+    const projected = projectV2ReceiverTraceEvent(event)
+    expect(projected.eventName).toBe('receive_transition')
+    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(projected.payload).toMatchObject({ transition: 'download_connectivity', connectivity: {
+      direct_bytes: '10', direct_fraction: 1, final: true,
+    } })
+    expect(() => validateTraceEventPayloadV1('receive_transition', {
+      ...projected.payload, connectivity: { ...event.connectivity, incomplete: true },
+    })).toThrow('incomplete')
+    const composition = productionComposition()
+    composition.runtime.enable()
+    const source = createV2ReceiverTraceSource(composition.trace)
+    emit(source, () => event)
+    expect(composition.runtime.status().retained_event_count).toBe('1')
+  })
 
 describe('browser diagnostics production composition', () => {
   it('uses injected package identity and the test build mode', () => {

@@ -320,7 +320,7 @@ func (config testTransferJobConfig) production() TransferJobConfig {
 	return TransferJobConfig{
 		ReceiveIntent:         config.ReceiveIntent,
 		JobID:                 config.JobID,
-		ProtocolSessionID:     config.ProtocolSessionID,
+		Session:               fixedJobSession(config.ProtocolSessionID),
 		FileQueueCapacity:     config.FileQueueCapacity,
 		GenerationReplayPages: config.GenerationReplayPages,
 		Catalog:               config.Catalog,
@@ -773,4 +773,10 @@ func newJobFileSettlement(
 	default:
 		return FileSettlement{}, ErrInvalidOutputSettlement
 	}
+}
+
+type fixedJobSession protocolsession.ProtocolSessionID
+
+func (s fixedJobSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
+	return protocolsession.ProtocolSessionID(s)
 }

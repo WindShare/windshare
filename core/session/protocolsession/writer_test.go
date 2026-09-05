@@ -42,7 +42,7 @@ func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
 	signingKey := vectorSenderSigningKey()
 	publicKey := append(ed25519.PublicKey(nil), signingKey.Public().(ed25519.PublicKey)...)
 	unsigned, err := EncodeOperationFailure(OperationFailure{
-		Scope: OperationScopePeer, Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
+		Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
 	})
 	if err != nil {
 		t.Fatal(err)

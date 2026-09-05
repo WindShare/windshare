@@ -6,7 +6,12 @@
 WINDSHARE_RELEASE_VERIFIER_PATHS=(
   go.mod
   go.sum
-  scripts/ci/_modulezip/main.go
+  scripts/ci/_sourcebundle/main.go
+  scripts/ci/_sourcebundle/git.go
+  scripts/ci/_sourcebundle/metadata.go
+  scripts/ci/_sourcebundle/archive.go
+  scripts/ci/_releaseassets/main.go
+  scripts/ci/_releaseassets/archive.go
   scripts/ci/native-output/linux/certify.sh
   scripts/ci/native-output/linux/root-worker.sh
   scripts/ci/native-output/windows/certify.psm1

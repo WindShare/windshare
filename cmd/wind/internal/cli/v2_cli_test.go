@@ -120,38 +120,9 @@ func TestSelectionRulesKeepWholeShareAndPathIntentDistinct(t *testing.T) {
 
 func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	store := &memoryStopStore{}
-	server := httptest.NewUnstartedServer(nil)
-	endpointIdentity, err := v2.NormalizeRelayEndpoint("http://" + server.Listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	registry, err := v2route.New(context.Background(), v2route.Config{
-		MaxRoutes: 8, MaxSessions: 8, MaxSessionsPerShare: 4, Random: rand.Reader, Tombstones: store,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	challenges, err := v2.NewChallengeLedger(v2.ChallengeLedgerConfig{Capacity: 16, Random: rand.Reader})
-	if err != nil {
-		t.Fatal(err)
-	}
-	endpoint, err := v2endpoint.New(v2endpoint.Config{
-		Registry: registry, Challenges: challenges, RelayIdentity: endpointIdentity.Identity,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	server.Config.Handler = httpapi.NewV2Handler(httpapi.V2Config{
-		Server: endpoint, AllowLocalhost: true,
-		AdmitConnection: func(string) (func(), bool) { return func() {}, true },
-	})
-	server.Start()
-	t.Cleanup(func() {
-		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
-		_ = endpoint.Shutdown(shutdown)
-		cancel()
-		server.Close()
-	})
+	server := newCLIRelayServer(t, store)
+	secondaryStore := &memoryStopStore{}
+	secondaryServer := newCLIRelayServer(t, secondaryStore)
 
 	file := filepath.Join(t.TempDir(), "file.txt")
 	if err := os.WriteFile(file, []byte("stop contract"), 0o600); err != nil {
@@ -195,7 +166,7 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	shareContext, cancelShare := context.WithCancel(context.Background())
 	result := make(chan int, 1)
 	go func() {
-		result <- app.Run(shareContext, []string{"share", file, "--relay", server.URL, "--trace", userTracePath})
+		result <- app.Run(shareContext, []string{"share", file, "--relay", server.URL, "--relay", secondaryServer.URL, "--trace", userTracePath})
 	}()
 	linkLine := waitTestLine(t, stdout, "Link: ")
 	capability, err := link.Parse(strings.TrimPrefix(linkLine, "Link: "))
@@ -204,16 +175,32 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	shareIDBytes, _ := base64.RawURLEncoding.Strict().DecodeString(capability.ShareID)
 	shareID, _ := v2.ShareIDFromBytes(shareIDBytes)
-	joined, err := relayv2.DialReceiver(context.Background(), relayv2.ReceiverConfig{
-		RelayBaseURL: server.URL, ShareID: shareID,
-	})
-	if err != nil {
-		t.Fatalf("link was printed before relay readiness: %v", err)
+	if len(capability.Relays) != 2 {
+		t.Fatalf("advertised relays=%v", capability.Relays)
 	}
-	_ = joined.Close()
+	for _, relayURL := range []string{server.URL, secondaryServer.URL} {
+		deadline := time.Now().Add(time.Second)
+		for {
+			joined, joinErr := relayv2.DialReceiver(context.Background(), relayv2.ReceiverConfig{RelayBaseURL: relayURL, ShareID: shareID})
+			if joinErr == nil {
+				_ = joined.Close()
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("configured relay never registered: %v", joinErr)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	secondaryCapability := capability
+	secondaryCapability.Relays = []string{secondaryServer.URL}
+	secondaryURL, err := secondaryCapability.URL(DefaultFrontURL)
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index, arguments := range [][]string{
 		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath},
-		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath, "--only", filepath.Base(file)},
+		{"get", secondaryURL, "-o", testoutputroot.New(t).RootPath, "--only", filepath.Base(file)},
 	} {
 		getOutput := &lockedTestBuffer{}
 		getErrors := &lockedTestBuffer{}
@@ -241,8 +228,8 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	if userTrace.eventCount() == 0 {
 		t.Fatal("user trace received no events while the private process trace was active")
 	}
-	if store.Count() != 1 {
-		t.Fatalf("durable STOP writes = %d", store.Count())
+	if store.Count() != 1 || secondaryStore.Count() != 1 {
+		t.Fatalf("independent durable STOP writes = %d/%d", store.Count(), secondaryStore.Count())
 	}
 	_, err = relayv2.DialReceiver(context.Background(), relayv2.ReceiverConfig{
 		RelayBaseURL: server.URL, ShareID: shareID,
@@ -413,4 +400,42 @@ func TestRegistrationMaterialUsesEd25519Width(t *testing.T) {
 	if len(privateKey) != ed25519.PrivateKeySize || catalog.IdentityBytes != v2.ShareInstanceBytes {
 		t.Fatal("suite-02 identity widths diverged")
 	}
+}
+
+func newCLIRelayServer(t *testing.T, store *memoryStopStore) *httptest.Server {
+	t.Helper()
+	server := httptest.NewUnstartedServer(nil)
+	endpointIdentity, err := v2.NormalizeRelayEndpoint("http://" + server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry, err := v2route.New(context.Background(), v2route.Config{
+		MaxRoutes: 8, MaxSessions: 8, MaxSessionsPerShare: 4, Random: rand.Reader, Tombstones: store,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenges, err := v2.NewChallengeLedger(v2.ChallengeLedgerConfig{Capacity: 16, Random: rand.Reader})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := v2endpoint.New(v2endpoint.Config{
+		Registry: registry, Challenges: challenges, RelayIdentity: endpointIdentity.Identity,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Config.Handler = httpapi.NewV2Handler(httpapi.V2Config{
+		Server: endpoint, AllowLocalhost: true,
+		AdmitConnection: func(string) (func(), bool) { return func() {}, true },
+	})
+	server.Start()
+	t.Cleanup(func() {
+		shutdown, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = endpoint.Shutdown(shutdown)
+		cancel()
+		server.Close()
+	})
+
+	return server
 }

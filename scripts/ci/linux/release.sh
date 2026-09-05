@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Deterministic root module release gate (POSIX). The gate reads one exact commit
-# object, extracts its canonical module zip outside the repository, and validates
+# object, extracts its complete source bundle outside the repository, and validates
 # it without workspace or worktree state. Linux release evidence ends with an
 # isolated loop-ext4 fixture, where the production receiver runs unprivileged and
 # must prove deterministic inode-reuse rejection.
@@ -80,7 +80,7 @@ else
   temporary_root="$(mktemp -d "$temporary_base/windshare-release.XXXXXXXX")"
 fi
 stage_directory="$temporary_root/committed-module"
-zip_path="$temporary_root/module.zip"
+zip_path="$temporary_root/source.zip"
 artifact_root="$temporary_root/extracted-module"
 release_repository="$temporary_root/release-repository"
 
@@ -123,9 +123,9 @@ echo "-- commit-bound archive contract"
 bash scripts/ci/release-archive.tests.sh
 
 echo "-- GOWORK=off go vet release helper"
-go vet ./scripts/ci/_modulezip
+go vet ./scripts/ci/_sourcebundle
 echo "-- GOWORK=off go test release helper"
-go test -count=1 ./scripts/ci/_modulezip
+go test -count=1 ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets
 # Helper tests are allowed to execute code, so re-prove the verifier checkout
 # before compiling the archive builder that supplies release evidence.
 windshare_assert_exact_release_checkout "$repository_root" "$release_commit"
@@ -137,10 +137,10 @@ windshare_create_exact_release_checkout \
   "$release_repository" \
   "${WINDSHARE_RELEASE_VERIFIER_PATHS[@]}"
 
-echo "-- construct deterministic root module zip ($release_version at $release_commit)"
+echo "-- construct deterministic source bundle ($release_version at $release_commit)"
 (
   cd "$release_repository"
-  go run ./scripts/ci/_modulezip/main.go \
+  go run ./scripts/ci/_sourcebundle \
     -repo "$release_repository" \
     -commit "$release_commit" \
     -stage "$stage_directory" \
@@ -164,6 +164,8 @@ fi
   cd "$artifact_root"
   export GOWORK=off
 
+  echo "-- pinned provider source and patch reproduction (source bundle)"
+  go run ./scripts/ci/_piondeps -reproduce
   echo "-- GOWORK=off go mod tidy -diff (extracted module)"
   go mod tidy -diff
   echo "-- GOWORK=off go mod verify (extracted module)"
@@ -184,7 +186,7 @@ fi
   echo "-- install wind CLI from the extracted release revision"
   install_root="$temporary_root/installed-cli"
   install -d -m 0700 -- "$install_root"
-  GOBIN="$install_root" go install ./cmd/wind
+  bash scripts/install/install.sh "$install_root"
   test -x "$install_root/wind"
   "$install_root/wind" --help >/dev/null
 )
@@ -199,6 +201,14 @@ if [ "$native_profile" = "linux-ext4" ]; then
     "$artifact_root" \
     "$temporary_root"
 fi
+
+# Package verified source bytes before tests can mutate them.
+assets_root="${WINDSHARE_RELEASE_ASSETS:-$temporary_root/assets}"
+(
+  cd "$release_repository"
+  go run ./scripts/ci/_releaseassets -source "$artifact_root" -source-zip "$zip_path" \
+    -out "$assets_root" -version "$release_version" -commit "$release_commit"
+)
 
 # Module tests execute arbitrary repository code and can mutate their source tree.
 # Keeping them last prevents later consumers from silently validating changed bytes.

@@ -23,12 +23,12 @@ func (fetcher *blockingBlockFetcher) fetch(
 	ctx context.Context,
 	_ BlockDemand,
 	_ func(records.BlockRecord) error,
-) (records.BlockRecord, error) {
+) (authenticatedBlock, error) {
 	close(fetcher.started)
 	<-ctx.Done()
 	close(fetcher.cancelled)
 	<-fetcher.release
-	return records.BlockRecord{}, ctx.Err()
+	return authenticatedBlock{}, ctx.Err()
 }
 
 func TestBlockBrokerConcurrentCloseJoinsLoadAndReleasesBudget(t *testing.T) {

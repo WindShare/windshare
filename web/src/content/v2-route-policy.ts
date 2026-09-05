@@ -1,4 +1,4 @@
-export type V2BlockTransportRoute = 'relay' | 'peer'
+export type V2BlockTransportRoute = 'application-relay' | 'direct' | 'turn'
 
 /** Per-consumer authority for starting new upstream content work on a route. */
 export interface V2BlockRouteEligibility {

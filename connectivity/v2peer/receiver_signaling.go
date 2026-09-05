@@ -281,6 +281,16 @@ func receiverSignalingTerminationFromCore(
 	if !ok {
 		return receiverSignalingAdapterFailure(binding, nil)
 	}
+	if decision.transitionProvenance == ReceiverProvenanceRemoteOperationRejected {
+		decision.recoveryScope = protocolsession.PeerFailurePathTerminal
+		for _, diagnostic := range termination.Diagnostics().Components() {
+			if diagnostic.Code() == sessionruntime.ReceiverPeerDiagnosticRemoteOperationRejected {
+				if failure, ok := diagnostic.RemoteFailure(); ok {
+					decision.recoveryScope = protocolsession.PeerFailureScope(failure.Code())
+				}
+			}
+		}
+	}
 	diagnostics, truncated := receiverCoreTerminalDiagnostics(termination.Diagnostics())
 	return ReceiverSignalingTermination{
 		operationToken: binding.token,
@@ -366,6 +376,8 @@ func receiverProvenanceFromCore(
 		return ReceiverProvenanceLocalOperationContract, true
 	case sessionruntime.ReceiverPeerProvenanceRemoteOperationRejected:
 		return ReceiverProvenanceRemoteOperationRejected, true
+	case sessionruntime.ReceiverPeerProvenanceRemoteSessionRejected:
+		return ReceiverProvenanceRemoteSessionRejected, true
 	case sessionruntime.ReceiverPeerProvenanceRemoteUnknownControl:
 		return ReceiverProvenanceRemoteUnknownControl, true
 	case sessionruntime.ReceiverPeerProvenanceRemoteControlMalformed:

@@ -1,0 +1,60 @@
+diff --git a/icecandidate.go b/icecandidate.go
+index 17182a0..593c7cb 100644
+--- a/icecandidate.go
++++ b/icecandidate.go
+@@ -100,6 +100,7 @@ func (c ICECandidate) ToICE() (cand ice.Candidate, err error) {
+ 		cand, err = ice.NewCandidateHost(&config)
+ 	case ICECandidateTypeSrflx:
+ 		config := ice.CandidateServerReflexiveConfig{
++			TCPType:     ice.NewTCPType(c.TCPType),
+ 			CandidateID: candidateID,
+ 			Network:     c.Protocol.String(),
+ 			Address:     c.Address,
+diff --git a/icegatherer.go b/icegatherer.go
+index 7f0294b..451b40b 100644
+--- a/icegatherer.go
++++ b/icegatherer.go
+@@ -256,6 +256,7 @@ func (g *ICEGatherer) baseAgentOptions(mDNSMode ice.MulticastDNSMode) []ice.Agen
+ 		ice.WithMulticastDNSMode(mDNSMode),
+ 		ice.WithTCPMux(g.api.settingEngine.iceTCPMux),
+ 		ice.WithUDPMux(g.api.settingEngine.iceUDPMux),
++		ice.WithProviderConfig(g.api.settingEngine.iceProviderConfig),
+ 		ice.WithProxyDialer(g.api.settingEngine.iceProxyDialer),
+ 		ice.WithBindingRequestHandler(g.api.settingEngine.iceBindingRequestHandler),
+ 	}
+diff --git a/provider_config.go b/provider_config.go
+new file mode 100644
+index 0000000..ca08a47
+--- /dev/null
++++ b/provider_config.go
+@@ -0,0 +1,18 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package webrtc
++
++import (
++	"github.com/pion/ice/v4"
++	"slices"
++)
++
++// SetICEProviderConfig installs one immutable provider capability snapshot.
++// This setting adds capabilities to the normal PeerConnection ICE gatherer;
++// it does not construct a second ICE agent or alter SDP after gathering.
++func (e *SettingEngine) SetICEProviderConfig(config ice.ProviderConfig) {
++	config.MappedUDPEndpoints = slices.Clone(config.MappedUDPEndpoints)
++	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
++	e.iceProviderConfig = config
++}
+diff --git a/settingengine.go b/settingengine.go
+index dda020f..79b0fb4 100644
+--- a/settingengine.go
++++ b/settingengine.go
+@@ -104,6 +104,7 @@ type SettingEngine struct {
+ 	LoggerFactory                             logging.LoggerFactory
+ 	iceTCPMux                                 ice.TCPMux
+ 	iceUDPMux                                 ice.UDPMux
++	iceProviderConfig                         ice.ProviderConfig
+ 	iceProxyDialer                            proxy.Dialer
+ 	iceDisableActiveTCP                       bool
+ 	iceBindingRequestHandler                  func(m *stun.Message, local, remote ice.Candidate, pair *ice.CandidatePair) bool //nolint:lll

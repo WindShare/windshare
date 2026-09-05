@@ -141,7 +141,7 @@ var rejectedOfferIdentityDecoding = func() cbor.DecMode {
 // one terminal stream even though the offer itself must remain unusable.
 func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	var fields []cbor.RawMessage
-	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 3 {
+	if err := rejectedOfferIdentityDecoding.Unmarshal(encoded, &fields); err != nil || len(fields) < 4 {
 		return v2signal.Binding{}, false
 	}
 	var version uint64
@@ -157,6 +157,9 @@ func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	var binding v2signal.Binding
 	copy(binding.PeerPathID[:], pathBytes)
 	copy(binding.AttemptID[:], attemptBytes)
+	if rejectedOfferIdentityDecoding.Unmarshal(fields[3], &binding.AttemptSequence) != nil {
+		return v2signal.Binding{}, false
+	}
 	if binding.Validate() != nil {
 		return v2signal.Binding{}, false
 	}
@@ -248,6 +251,7 @@ func (execution *attemptExecution) acceptAdmission(
 		)
 	}
 	execution.attempt.attached.Store(true)
+	execution.attempt.config.factory.native.SetDirect([16]byte(execution.attempt.config.session.ProtocolSessionID()), execution.attempt.binding().PeerPathID)
 	execution.attempt.recorder.complete(
 		SenderAttemptAdmitted, execution.candidateCounts(), SenderAttemptObservation{
 			Phase:                SenderAttemptPhaseAdmission,

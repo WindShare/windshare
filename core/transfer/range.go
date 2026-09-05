@@ -9,11 +9,13 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/transfer/revisionwait"
 )
 
 type rangeBlockResult struct {
 	index uint64
-	data  []byte
+	block deliveredBlock
 	err   error
 }
 
@@ -177,6 +179,29 @@ func rangeReaderContractError(cause error) error {
 	return dependencyContractFailure(errors.Join(errRangeReaderContract, cause))
 }
 
+func (b *BlockBroker) beginDownloadWait() func() {
+	if b.lanes == nil {
+		return func() {}
+	}
+	return b.lanes.beginDownloadWait()
+}
+
+// The consumer receives only requested bytes; authenticated alignment over-read
+// stays in the broker and cannot inflate per-download route fractions.
+func (b *BlockBroker) observeDownloadSlice(descriptor content.FileRevisionDescriptor, start, end uint64, route downloadmetrics.Route) {
+	if b.lanes == nil {
+		return
+	}
+	b.lanes.mu.Lock()
+	metrics := b.lanes.downloadMetrics
+	b.lanes.mu.Unlock()
+	if metrics == nil {
+		return
+	}
+	revision := fmt.Sprintf("%v/%v/%v", descriptor.ShareInstance(), descriptor.FileID(), descriptor.FileRevision())
+	metrics.Delivered(revision, start, end, route)
+}
+
 // ReadRange requests only the file-local blocks intersecting requested. The
 // sink sees exact requested bytes; first/last block over-read never escapes the
 // broker and is strictly less than two chunk lengths in total.
@@ -204,8 +229,8 @@ func (b *BlockBroker) ReadRange(
 	results := make(chan rangeBlockResult, b.maxConcurrentBlocks)
 	launch := func(index uint64) {
 		go func() {
-			data, err := b.GetBlock(readContext, leaseID, descriptor, index)
-			results <- rangeBlockResult{index: index, data: data, err: err}
+			block, err := b.getBlock(readContext, leaseID, descriptor, index)
+			results <- rangeBlockResult{index: index, block: block, err: err}
 		}()
 	}
 	nextLaunch := first
@@ -216,20 +241,24 @@ func (b *BlockBroker) ReadRange(
 		nextLaunch++
 		inflight++
 	}
-	pending := make(map[uint64][]byte, b.maxConcurrentBlocks)
+	pending := make(map[uint64]deliveredBlock, b.maxConcurrentBlocks)
 	for nextWrite <= last {
+		endWait := b.beginDownloadWait()
 		select {
 		case <-ctx.Done():
+			endWait()
 			return ctx.Err()
 		case result := <-results:
+			endWait()
 			inflight--
 			if result.err != nil {
 				return fmt.Errorf("read file-local block %d: %w", result.index, result.err)
 			}
-			pending[result.index] = result.data
+			pending[result.index] = result.block
 		}
 		for {
-			data, ready := pending[nextWrite]
+			block, ready := pending[nextWrite]
+			data := block.data
 			if !ready {
 				break
 			}
@@ -239,6 +268,7 @@ func (b *BlockBroker) ReadRange(
 			if start >= end || end > uint64(len(data)) {
 				return ErrBlockIdentity
 			}
+			b.observeDownloadSlice(descriptor, blockOffset+start, blockOffset+end, block.route)
 			if err := sink.WriteRange(ctx, blockOffset+start, data[start:end]); err != nil {
 				return err
 			}
@@ -337,11 +367,7 @@ func (r *jobRun) transferRequestedRange(
 	progress *fileTransferProgress,
 	requested content.Range,
 ) (bool, error) {
-	buffered, err := newAtomicRequestedRangeSink(requested, transaction)
-	if err == nil {
-		rawReadErr := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
-		err = normalizeSourceBoundary(ctx, rawReadErr)
-	}
+	buffered, err := r.readRequestedRange(ctx, plan, opened, requested, transaction)
 	if bufferedErr := buffered.Failure(); bufferedErr != nil {
 		err = bufferedErr
 	}
@@ -434,4 +460,28 @@ func rangesContain(available, required content.RangeSet) bool {
 		}
 	}
 	return true
+}
+
+// A fresh lease can encounter the same authenticated capacity constraint as the
+// first open. Reuse the job's single capacity coordinator and trace namespace;
+// only this bounded uncommitted range buffer is rebuilt when it must wait.
+func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opened OpenedRevision, requested content.Range, target RangeSink) (*atomicRequestedRangeSink, error) {
+	attempt := revisionOpenAttempt{run: r, plan: plan}
+	for {
+		buffered, err := newAtomicRequestedRangeSink(requested, target)
+		if err != nil {
+			return buffered, err
+		}
+		rawErr := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+		signal, busy := revisionwait.MatchCapacitySignal(rawErr)
+		if busy {
+			retry, waitErr := attempt.waitForCapacity(ctx, OpenedRevision{}, signal)
+			if retry {
+				continue
+			}
+			return buffered, waitErr
+		}
+		attempt.finishWait(ctx, rawErr)
+		return buffered, normalizeSourceBoundary(ctx, rawErr)
+	}
 }

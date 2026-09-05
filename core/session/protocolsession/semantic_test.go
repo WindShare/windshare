@@ -62,7 +62,7 @@ func TestSenderControlSemanticRegistryDispatchesOnlyRegisteredKind(t *testing.T)
 
 func TestValidateSenderControlSemanticOwnsCoreSchemas(t *testing.T) {
 	failure, err := EncodeOperationFailure(OperationFailure{
-		Scope: OperationScopePeer, Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
+		Scope: OperationScopePeer, PeerAttempt: testPeerAttemptBinding(), Code: PeerOperationCodeNegotiation, Message: "Peer negotiation failed",
 	})
 	if err != nil {
 		t.Fatal(err)

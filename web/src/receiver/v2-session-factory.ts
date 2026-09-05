@@ -8,9 +8,14 @@ import {
   type V2RelayReceiverConnection,
 } from '../transport/relay/v2-receiver'
 
+import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from './relay-race'
+import { V2RelayReceiverError } from '../transport/relay/v2-receiver'
+import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
+
 export const V2_RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
 
 export interface V2ProtocolGenerationCore {
+  readonly relayBase: string
   readonly relay: V2RelayReceiverConnection
   readonly session: V2ReceiverSessionRuntime
   readonly relayLaneId: number
@@ -22,17 +27,19 @@ export interface V2AttachedRelay {
 }
 
 export interface V2ReceiverSessionFactory {
+  readonly relayBases: readonly string[]
   connectFresh(signal: AbortSignal): Promise<V2ProtocolGenerationCore>
   attachRelay(
     session: V2ReceiverSessionRuntime,
     signal: AbortSignal,
+    relayBase: string,
   ): Promise<V2AttachedRelay>
   copyReadSecret(): Uint8Array<ArrayBuffer>
   close(): void
 }
 
 export interface V2BrowserSessionFactoryOptions {
-  readonly relayBase: string
+  readonly relayBases: readonly string[]
   readonly capability: Suite02CapabilityKey
   readonly descriptor: V2ShareDescriptor
   readonly descriptorObject: Uint8Array
@@ -56,7 +63,7 @@ export class V2StaleShareInstanceError extends Error {
  * remain delivery-only; only an authenticated descriptor can enter a generation.
  */
 export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
-  readonly #relayBase: string
+  readonly relayBases: readonly string[]
   readonly #capability: Suite02CapabilityKey
   readonly #descriptor: V2ShareDescriptor
   readonly #descriptorObject: Uint8Array<ArrayBuffer>
@@ -66,10 +73,11 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   readonly #connectSession: (
     options: V2ReceiverSessionOptions,
   ) => Promise<V2ReceiverSessionRuntime>
+  readonly #stoppedRelays = new Map<string, RelayEndpointFailure>()
   #closed = false
 
   constructor(options: V2BrowserSessionFactoryOptions) {
-    this.#relayBase = options.relayBase
+    this.relayBases = receiverRelayBases(options.relayBases)
     this.#capability = Object.freeze({
       suite: options.capability.suite,
       readSecret: options.capability.readSecret.slice(),
@@ -88,7 +96,15 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
 
   async connectFresh(signal: AbortSignal): Promise<V2ProtocolGenerationCore> {
     this.#requireOpen()
-    const relay = await this.#dialValidatedRelay(signal)
+    const eligible = this.relayBases.filter((relayBase) => !this.#stoppedRelays.has(relayBase))
+    if (eligible.length === 0) throw new AggregateError([...this.#stoppedRelays.values()], 'All relay endpoints stopped')
+    return firstUsableRelay(eligible, signal,
+      (relayBase, attemptSignal) => this.#connectFreshRelay(relayBase, attemptSignal),
+      async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) })
+  }
+
+  async #connectFreshRelay(relayBase: string, signal: AbortSignal): Promise<V2ProtocolGenerationCore> {
+    const relay = await this.#dialValidatedRelay(relayBase, signal)
     try {
       const session = await this.#connectSession({
         descriptor: this.#descriptor,
@@ -98,6 +114,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
         ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       })
       return Object.freeze({
+        relayBase,
         relay,
         session,
         relayLaneId: session.initialLaneId,
@@ -111,9 +128,11 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   async attachRelay(
     session: V2ReceiverSessionRuntime,
     signal: AbortSignal,
+    relayBase: string,
   ): Promise<V2AttachedRelay> {
     this.#requireOpen()
-    const relay = await this.#dialValidatedRelay(signal)
+    if (!this.relayBases.includes(relayBase)) throw new TypeError('Relay endpoint is not configured')
+    const relay = await this.#dialValidatedRelay(relayBase, signal)
     const admission = relayAdmissionDeadline(signal)
     try {
       // A redial gets a new delivery route and a new logical lane grant. It
@@ -147,9 +166,17 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     this.#capability.shareIdRaw.fill(0)
   }
 
-  async #dialValidatedRelay(signal: AbortSignal): Promise<V2RelayReceiverConnection> {
+  async #dialValidatedRelay(relayBase: string, signal: AbortSignal): Promise<V2RelayReceiverConnection> {
     signal.throwIfAborted()
-    const relay = await this.#dialRelay(this.#relayBase, this.#capability, { signal })
+    const stopped = this.#stoppedRelays.get(relayBase)
+    if (stopped !== undefined) throw stopped.cause
+    const relay = await this.#dialRelay(relayBase, this.#capability, { signal }).catch((cause: unknown) => {
+      // STOP belongs to this delivery endpoint, and remains disabled across fresh sessions.
+      if (cause instanceof V2RelayReceiverError && cause.relayError?.code === V2_RELAY_ERROR.stopped) {
+        this.#stoppedRelays.set(relayBase, new RelayEndpointFailure(relayBase, cause))
+      }
+      throw cause
+    })
     try {
       const candidate = await this.#openDescriptor(relay.descriptorObject, this.#capability)
       requireSameDescriptor(this.#descriptor, candidate)

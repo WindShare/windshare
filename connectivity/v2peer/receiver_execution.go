@@ -469,6 +469,10 @@ func (execution *receiverExecution) startAttachment() error {
 	if execution.attachStarted {
 		return errors.Join(errChannelAdmission, errors.New("peer DataChannel admission started twice"))
 	}
+	route, err := selectedPeerRoute(execution.attempt.peer)
+	if err != nil {
+		return err
+	}
 	phaseContext, transitioned, err := execution.attempt.phases.beginAdmission(execution.attempt.ctx)
 	if err != nil {
 		return err
@@ -490,7 +494,7 @@ func (execution *receiverExecution) startAttachment() error {
 				err = ErrProtocol
 			} else {
 				admission, err = execution.attempt.lanes.AttachLane(
-					phaseContext, grant, execution.attempt.transport,
+					phaseContext, grant, execution.attempt.transport, route,
 				)
 			}
 		}

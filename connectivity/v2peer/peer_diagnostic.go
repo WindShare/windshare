@@ -25,9 +25,9 @@ const (
 type PeerDiagnosticReason string
 
 const (
-	PeerDiagnosticStreamCapacity   PeerDiagnosticReason = "stream_capacity"
-	PeerDiagnosticEvidenceCapacity PeerDiagnosticReason = "evidence_capacity"
-	PeerDiagnosticCleanupResidue   PeerDiagnosticReason = "cleanup_residue"
+	PeerDiagnosticStreamCapacity PeerDiagnosticReason = "stream_capacity"
+	PeerDiagnosticPathCapacity   PeerDiagnosticReason = "path_capacity"
+	PeerDiagnosticCleanupResidue PeerDiagnosticReason = "cleanup_residue"
 )
 
 // PeerDiagnosticObservation reports the cumulative, saturating count for one
@@ -122,7 +122,7 @@ func peerDiagnosticIndex(category PeerDiagnosticCategory, reason PeerDiagnosticR
 	reasonOffset := 0
 	switch reason {
 	case PeerDiagnosticStreamCapacity:
-	case PeerDiagnosticEvidenceCapacity:
+	case PeerDiagnosticPathCapacity:
 		reasonOffset = 1
 	case PeerDiagnosticCleanupResidue:
 		reasonOffset = 2

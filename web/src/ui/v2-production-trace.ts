@@ -361,6 +361,11 @@ function projectTransferTraceEvent(
   }
 
   switch (event.transition) {
+    case 'download_connectivity':
+      return observation(event.name, {
+        transition: event.transition, transfer_job_id: event.transferJobId,
+        connectivity: event.connectivity,
+      })
     case 'intent_frozen':
       return observation(event.name, {
         transition: event.transition,
@@ -466,6 +471,8 @@ function projectPeerAttemptPayload(
     session_attempt_ordinal: decimal(event.sessionAttemptOrdinal),
   }
   switch (event.stage) {
+    case 'provider-fact':
+      return { stage: 'provider_fact', fact: event.fact }
     case 'started':
       return { stage: event.stage, ...ordinals }
     case 'negotiation-deadline-armed':

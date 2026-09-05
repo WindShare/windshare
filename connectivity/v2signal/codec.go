@@ -14,7 +14,7 @@ import (
 
 const (
 	IdentityBytes          = 16
-	SignalingSchemaVersion = 1
+	SignalingSchemaVersion = 2
 	MaximumSDPBytes        = 60 << 10
 	MaximumCandidateBytes  = 4 << 10
 	MaximumSDPMidBytes     = 256
@@ -43,12 +43,13 @@ type PeerPathID [IdentityBytes]byte
 type AttemptID [IdentityBytes]byte
 
 type Binding struct {
-	PeerPathID PeerPathID
-	AttemptID  AttemptID
+	PeerPathID      PeerPathID
+	AttemptID       AttemptID
+	AttemptSequence uint64
 }
 
 func (binding Binding) Validate() error {
-	if zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
+	if binding.AttemptSequence == 0 || zero(binding.PeerPathID[:]) || zero(binding.AttemptID[:]) {
 		return ErrInvalidSignal
 	}
 	return nil
@@ -151,32 +152,32 @@ func EncodeCandidate(candidate Candidate) ([]byte, error) {
 		return nil, err
 	}
 	return signalEncMode.Marshal([]any{
-		uint64(SignalingSchemaVersion), candidate.Binding.PeerPathID[:], candidate.Binding.AttemptID[:],
+		uint64(SignalingSchemaVersion), candidate.Binding.PeerPathID[:], candidate.Binding.AttemptID[:], candidate.Binding.AttemptSequence,
 		candidate.Candidate, candidate.SDPMid, candidate.SDPMLineIndex, candidate.UsernameFragment,
 	})
 }
 
 func DecodeCandidate(encoded []byte) (Candidate, error) {
 	var fields []cbor.RawMessage
-	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 7 {
+	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 8 {
 		return Candidate{}, ErrInvalidSignal
 	}
-	binding, err := decodePrefix(fields[:3])
+	binding, err := decodePrefix(fields[:4])
 	if err != nil {
 		return Candidate{}, err
 	}
 	var candidate Candidate
 	candidate.Binding = binding
-	if err := signalDecMode.Unmarshal(fields[3], &candidate.Candidate); err != nil {
+	if err := signalDecMode.Unmarshal(fields[4], &candidate.Candidate); err != nil {
 		return Candidate{}, ErrInvalidSignal
 	}
-	if candidate.SDPMid, err = decodeOptionalString(fields[4]); err != nil {
+	if candidate.SDPMid, err = decodeOptionalString(fields[5]); err != nil {
 		return Candidate{}, err
 	}
-	if candidate.SDPMLineIndex, err = decodeOptionalUint16(fields[5]); err != nil {
+	if candidate.SDPMLineIndex, err = decodeOptionalUint16(fields[6]); err != nil {
 		return Candidate{}, err
 	}
-	if candidate.UsernameFragment, err = decodeOptionalString(fields[6]); err != nil {
+	if candidate.UsernameFragment, err = decodeOptionalString(fields[7]); err != nil {
 		return Candidate{}, err
 	}
 	if err := validateCandidate(candidate); err != nil {
@@ -191,28 +192,28 @@ func DecodeCandidate(encoded []byte) (Candidate, error) {
 
 func encodeDescription(binding Binding, sdp string) ([]byte, error) {
 	return signalEncMode.Marshal([]any{
-		uint64(SignalingSchemaVersion), binding.PeerPathID[:], binding.AttemptID[:], sdp,
+		uint64(SignalingSchemaVersion), binding.PeerPathID[:], binding.AttemptID[:], binding.AttemptSequence, sdp,
 	})
 }
 
 func decodeDescription(encoded []byte) (Binding, string, error) {
 	var fields []cbor.RawMessage
-	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 4 {
+	if err := signalDecMode.Unmarshal(encoded, &fields); err != nil || len(fields) != 5 {
 		return Binding{}, "", ErrInvalidSignal
 	}
-	binding, err := decodePrefix(fields[:3])
+	binding, err := decodePrefix(fields[:4])
 	if err != nil {
 		return Binding{}, "", err
 	}
 	var sdp string
-	if err := signalDecMode.Unmarshal(fields[3], &sdp); err != nil || validateDescription(binding, sdp) != nil {
+	if err := signalDecMode.Unmarshal(fields[4], &sdp); err != nil || validateDescription(binding, sdp) != nil {
 		return Binding{}, "", ErrInvalidSignal
 	}
 	return binding, sdp, nil
 }
 
 func decodePrefix(fields []cbor.RawMessage) (Binding, error) {
-	if len(fields) != 3 {
+	if len(fields) != 4 {
 		return Binding{}, ErrInvalidSignal
 	}
 	var version uint64
@@ -227,7 +228,11 @@ func decodePrefix(fields []cbor.RawMessage) (Binding, error) {
 	if err != nil {
 		return Binding{}, err
 	}
-	binding := Binding{PeerPathID: path, AttemptID: attempt}
+	var sequence uint64
+	if err := signalDecMode.Unmarshal(fields[3], &sequence); err != nil {
+		return Binding{}, ErrInvalidSignal
+	}
+	binding := Binding{PeerPathID: path, AttemptID: attempt, AttemptSequence: sequence}
 	return binding, binding.Validate()
 }
 
@@ -298,5 +303,5 @@ func zero(value []byte) bool {
 }
 
 func (binding Binding) String() string {
-	return fmt.Sprintf("peer-path=%x attempt=%x", binding.PeerPathID, binding.AttemptID)
+	return fmt.Sprintf("peer-path=%x attempt=%x sequence=%d", binding.PeerPathID, binding.AttemptID, binding.AttemptSequence)
 }

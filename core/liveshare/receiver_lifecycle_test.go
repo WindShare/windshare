@@ -3,6 +3,7 @@ package liveshare
 import (
 	"context"
 	"errors"
+	"github.com/windshare/windshare/core/transfer"
 	"os"
 	"path/filepath"
 	"sync"
@@ -42,7 +43,7 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 	})
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := receiver.Connect(context.Background(), receiverChannel)
+		_, connectErr := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay)
 		connectResult <- connectErr
 	}()
 	select {
@@ -73,10 +74,10 @@ func TestPreparedReceiverConcurrentCloseJoinsConnectAdmissionBeforeSecretTeardow
 	if retainedFactory != nil || retainedResources != nil {
 		t.Fatal("closed facade retained its factory or secret-resource graph")
 	}
-	if _, err := receiver.Connect(context.Background(), receiverChannel); !errors.Is(err, errReceiverClosed) {
+	if _, err := receiver.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay); !errors.Is(err, errReceiverClosed) {
 		t.Fatalf("facade Connect after Close error=%v", err)
 	}
-	if _, err := factory.Connect(context.Background(), receiverChannel); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
+	if _, err := factory.Connect(context.Background(), receiverChannel, transfer.LaneRouteRelay); !errors.Is(err, sessionruntime.ErrRuntimeClosed) {
 		t.Fatalf("factory Connect after facade Close error=%v", err)
 	}
 }
@@ -95,7 +96,7 @@ func TestPreparedReceiverBeginCloseIsSafeFromConnectSendCallback(t *testing.T) {
 	}}
 	connectResult := make(chan error, 1)
 	go func() {
-		_, connectErr := receiver.Connect(context.Background(), channel)
+		_, connectErr := receiver.Connect(context.Background(), channel, transfer.LaneRouteRelay)
 		connectResult <- connectErr
 	}()
 	select {

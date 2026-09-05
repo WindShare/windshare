@@ -610,7 +610,7 @@ func TestV2PeerSenderNegotiatesRealPionDataChannel(t *testing.T) {
 	protocolOperation, _ := protocolsession.OperationIDFromBytes(
 		bytes.Repeat([]byte{3}, protocolsession.IdentityBytes),
 	)
-	var binding v2signal.Binding
+	binding := v2signal.Binding{AttemptSequence: 1}
 	copy(binding.PeerPathID[:], bytes.Repeat([]byte{4}, v2signal.IdentityBytes))
 	copy(binding.AttemptID[:], bytes.Repeat([]byte{5}, v2signal.IdentityBytes))
 	session := &integrationPeerSession{

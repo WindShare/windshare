@@ -66,8 +66,16 @@ func TestReceiverContentPathsAddsRelayWithoutInventingPeerTimeout(t *testing.T) 
 	runtime, stderr := newGetReportingRuntime(t, true, false)
 	paths := newReceiverContentPaths(getObservation{runtime: runtime})
 
-	paths.observePeer(receiverPeerReady)
-	(&App{}).observeRelayContentAdmission(receiverAdmissionTriggerDeadline, paths)
+	now := time.Now()
+	(&App{}).observeRelayContentAdmission(receiverAdmissionTriggerRelayOnly, paths)
+	if stderr.Len() != 0 {
+		t.Fatal("admission was presented as useful content")
+	}
+	paths.observeContent([]transfer.LaneContentActivity{{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 1}}, now)
+	paths.observeContent([]transfer.LaneContentActivity{
+		{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 1},
+		{Route: transfer.LaneRouteRelay, UsefulBytes: 10, LastUsefulAt: now},
+	}, now)
 	runtime.Close()
 
 	diagnostic := stderr.String()
@@ -81,13 +89,35 @@ func TestReceiverContentPathsAddsRelayWithoutInventingPeerTimeout(t *testing.T) 
 	}
 }
 
+func TestHealthyIdleDirectPathDoesNotInventFallback(t *testing.T) {
+	runtime, stderr := newGetReportingRuntime(t, true, false)
+	paths := newReceiverContentPaths(getObservation{runtime: runtime})
+	now := time.Now()
+	paths.observeContent([]transfer.LaneContentActivity{{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 1}}, now)
+	later := now.Add(receiverContentActivityWindow + time.Second)
+	paths.observeContent([]transfer.LaneContentActivity{
+		{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 1},
+		{Route: transfer.LaneRouteRelay, UsefulBytes: 20, LastUsefulAt: later, AdmittedLanes: 1},
+	}, later)
+	runtime.Close()
+	if diagnostic := stderr.String(); !strings.Contains(diagnostic, "Content path: Relay") || strings.Contains(diagnostic, "unavailable") {
+		t.Fatalf("idle direct attributed as failure: %q", diagnostic)
+	}
+}
+
 func TestReceiverContentPathsReportsRealDirectDetachAfterRelayAdmission(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, true, false)
 	paths := newReceiverContentPaths(getObservation{runtime: runtime})
 
-	paths.observePeer(receiverPeerReady)
-	paths.relayAdmitted()
-	paths.observePeer(receiverPeerDetached)
+	now := time.Now()
+	paths.observeContent([]transfer.LaneContentActivity{
+		{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 1},
+		{Route: transfer.LaneRouteRelay, UsefulBytes: 10, LastUsefulAt: now},
+	}, now)
+	paths.observeContent([]transfer.LaneContentActivity{
+		{Route: transfer.LaneRouteDirect, UsefulBytes: 10, LastUsefulAt: now, AdmittedLanes: 0},
+		{Route: transfer.LaneRouteRelay, UsefulBytes: 20, LastUsefulAt: now.Add(3 * time.Second)},
+	}, now.Add(3*time.Second))
 	runtime.Close()
 
 	diagnostic := stderr.String()
@@ -120,7 +150,7 @@ func TestReceiverPeerSetupFailureLogsSafePhaseAndCauseClass(t *testing.T) {
 	var signal receiverPeerSignal
 	peer := app.startReceiverPeer(context.Background(), nil, getObservation{runtime: runtime}, func(observed receiverPeerSignal) {
 		signal = observed
-	}, &receiverLocalStop{})
+	}, &receiverLocalStop{}, receiverPeerPreferred)
 	runtime.Close()
 	if peer != nil || signal != receiverPeerFailed {
 		t.Fatalf("setup failure peer=%v signal=%v", peer, signal)
@@ -412,7 +442,7 @@ func TestReceiverPeerStartsBeforeBlockingSelectionPlanning(t *testing.T) {
 				return nil
 			},
 			func() error {
-				t.Error("auto planning resumed relay-only path")
+				// Auto admits its authenticated relay before peer setup and selection.
 				return nil
 			},
 			func() (transfer.SelectionRules, error) {

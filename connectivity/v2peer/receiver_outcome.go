@@ -34,6 +34,7 @@ const (
 	ReceiverProvenanceLocalAdmissionTimeout                 ReceiverTerminalProvenance = "local_admission_timeout"
 	ReceiverProvenanceLocalOperationContract                ReceiverTerminalProvenance = "local_operation_contract"
 	ReceiverProvenanceRemoteOperationRejected               ReceiverTerminalProvenance = "remote_operation_rejected"
+	ReceiverProvenanceRemoteSessionRejected                 ReceiverTerminalProvenance = "remote_session_rejected"
 	ReceiverProvenanceRemoteUnknownControl                  ReceiverTerminalProvenance = "remote_unknown_control"
 	ReceiverProvenanceRemoteControlMalformed                ReceiverTerminalProvenance = "remote_control_malformed"
 	ReceiverProvenanceRemoteFailureMalformed                ReceiverTerminalProvenance = "remote_failure_malformed"
@@ -57,6 +58,7 @@ func receiverTimeoutProvenance(phase PeerAttemptPhase) ReceiverTerminalProvenanc
 }
 
 type receiverAttemptDecision struct {
+	recoveryScope         protocolsession.PeerFailureRecoveryScope
 	transitionOwner       ReceiverTerminalOwner
 	transitionProvenance  ReceiverTerminalProvenance
 	disposition           ReceiverAttemptDisposition
@@ -109,6 +111,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 	case ReceiverTerminalRemote:
 		switch decision.transitionProvenance {
 		case ReceiverProvenanceRemoteOperationRejected,
+			ReceiverProvenanceRemoteSessionRejected,
 			ReceiverProvenanceRemoteUnknownControl,
 			ReceiverProvenanceRemoteControlMalformed,
 			ReceiverProvenanceRemoteFailureMalformed,
@@ -147,6 +150,7 @@ func validReceiverBoundDecision(decision receiverAttemptDecision) bool {
 	case ReceiverDispositionSessionUnsafe:
 		switch decision.consequenceProvenance {
 		case ReceiverProvenanceRemoteFailureMalformed,
+			ReceiverProvenanceRemoteSessionRejected,
 			ReceiverProvenanceRemoteFailureScopeViolation,
 			ReceiverProvenanceAuthenticatedSecondAnswer,
 			ReceiverProvenanceAuthenticatedFinalConflict,
@@ -168,6 +172,7 @@ func mergeReceiverAttemptDecisions(
 		second.transitionOwner != "" && second.transitionOwner != ReceiverTerminalUnbound {
 		merged.transitionOwner = second.transitionOwner
 		merged.transitionProvenance = second.transitionProvenance
+		merged.recoveryScope = second.recoveryScope
 	}
 	if strongerReceiverDisposition(merged.disposition, second.disposition) {
 		merged.disposition = second.disposition
@@ -261,6 +266,23 @@ func (outcome ReceiverAttemptOutcome) OperationID() protocolsession.OperationID 
 
 func (outcome ReceiverAttemptOutcome) LocalGeneration() uint64 {
 	return outcome.localGeneration
+}
+
+// RecoveryScope is imported only from authenticated core termination facts.
+// Arbitrary error strings, wrapped diagnostics and Retryable never authorize recovery.
+func (outcome ReceiverAttemptOutcome) RecoveryScope() protocolsession.PeerFailureRecoveryScope {
+	if outcome.Disposition() == ReceiverDispositionSessionUnsafe || outcome.Disposition() == ReceiverDispositionSessionUnavailable {
+		return protocolsession.PeerFailureSessionTerminal
+	}
+	if outcome.decision.recoveryScope != "" {
+		return outcome.decision.recoveryScope
+	}
+	switch outcome.TransitionProvenance() {
+	case ReceiverProvenanceRemoteOperationRejected, ReceiverProvenanceLocalOperationContract, ReceiverProvenanceSignalingAdapterContract:
+		return protocolsession.PeerFailurePathTerminal
+	default:
+		return protocolsession.PeerFailureAttemptTransient
+	}
 }
 
 func (outcome ReceiverAttemptOutcome) Disposition() ReceiverAttemptDisposition {

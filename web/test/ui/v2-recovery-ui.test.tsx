@@ -49,6 +49,7 @@ describe('DirectTree recovery UI', () => {
 
 function snapshot(retained: V2ReceiverSnapshot['retained']): V2ReceiverSnapshot {
   return Object.freeze({
+    pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'browsing',
     status: 'Ready.',
     error: null,

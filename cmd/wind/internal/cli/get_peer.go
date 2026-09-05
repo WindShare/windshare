@@ -5,17 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
-	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2peer"
+	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/internal/testrun"
-	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
 var ErrInvalidConnectivityPolicy = errors.New("invalid connectivity policy")
@@ -73,7 +74,6 @@ type receiverRelayContentMode uint8
 
 const (
 	receiverRelayContentImmediate receiverRelayContentMode = iota + 1
-	receiverRelayContentAdaptive
 	receiverRelayContentProhibited
 )
 
@@ -84,7 +84,7 @@ type receiverConnectivityPlan struct {
 
 func (plan receiverConnectivityPlan) valid() bool {
 	return plan == (receiverConnectivityPlan{
-		peer: receiverPeerPreferred, relayContent: receiverRelayContentAdaptive,
+		peer: receiverPeerPreferred, relayContent: receiverRelayContentImmediate,
 	}) || plan == (receiverConnectivityPlan{
 		peer: receiverPeerDisabled, relayContent: receiverRelayContentImmediate,
 	}) || plan == (receiverConnectivityPlan{
@@ -96,7 +96,7 @@ func (policy ConnectivityPolicy) receiverPlan() (receiverConnectivityPlan, error
 	switch policy {
 	case ConnectivityAuto:
 		return receiverConnectivityPlan{
-			peer: receiverPeerPreferred, relayContent: receiverRelayContentAdaptive,
+			peer: receiverPeerPreferred, relayContent: receiverRelayContentImmediate,
 		}, nil
 	case ConnectivityRelayOnly:
 		return receiverConnectivityPlan{
@@ -145,11 +145,8 @@ func (a *App) monitorReceiverAdmission(
 
 func (a *App) observeRelayContentAdmission(
 	_ receiverAdmissionTrigger,
-	paths *receiverContentPaths,
+	_ *receiverContentPaths,
 ) {
-	if paths != nil {
-		paths.relayAdmitted()
-	}
 	a.recordProcessTrace(
 		processTraceGetComponent,
 		processTraceReceiverRelayContent,
@@ -157,63 +154,60 @@ func (a *App) observeRelayContentAdmission(
 	)
 }
 
-// receiverContentPaths owns the user-visible set of content-capable transports.
-// The relay deadline adds a path; it does not prove that an already-admitted
-// direct lane failed. Publishing the set prevents that policy transition from
-// being rendered as a false P2P timeout.
+// receiverContentPaths projects recent useful delivery separately from admitted
+// connectivity. A ready candidate pair is never evidence of parallel content.
+const receiverContentActivityWindow = 2 * time.Second
+
 type receiverContentPaths struct {
-	mu          sync.Mutex
-	observation getObservation
-	direct      bool
-	relay       bool
-	published   clievent.ContentPath
+	mu               sync.Mutex
+	observation      getObservation
+	direct           bool
+	relay            bool
+	published        clievent.ContentPath
+	directAdmitted   bool
+	hadDirectTraffic bool
+	fallbackPending  bool
 }
 
 func newReceiverContentPaths(observation getObservation) *receiverContentPaths {
 	return &receiverContentPaths{observation: observation}
 }
-
-func (paths *receiverContentPaths) observePeer(signal receiverPeerSignal) {
+func (paths *receiverContentPaths) observeContent(activity []transfer.LaneContentActivity, now time.Time) {
 	if paths == nil {
 		return
 	}
 	paths.mu.Lock()
 	defer paths.mu.Unlock()
-	wasDirect := paths.direct
-	switch signal {
-	case receiverPeerReady:
-		paths.direct = true
-	case receiverPeerFailed, receiverPeerDetached:
-		paths.direct = false
-	default:
-		return
+	wasAdmitted := paths.directAdmitted
+	paths.directAdmitted = false
+	paths.direct = false
+	paths.relay = false
+	for _, entry := range activity {
+		if entry.Route == transfer.LaneRouteDirect {
+			paths.directAdmitted = entry.AdmittedLanes > 0
+			paths.hadDirectTraffic = paths.hadDirectTraffic || entry.UsefulBytes > 0
+		}
+		if entry.UsefulBytes == 0 || entry.LastUsefulAt.IsZero() || now.Sub(entry.LastUsefulAt) > receiverContentActivityWindow {
+			continue
+		}
+		switch entry.Route {
+		case transfer.LaneRouteDirect:
+			paths.direct = true
+		case transfer.LaneRouteRelay, transfer.LaneRouteTURN:
+			paths.relay = true
+		}
 	}
-	path, changed := paths.changedPathLocked()
-	relayAvailable := paths.relay
-
-	// Publication stays inside the state lock so concurrent deadline and peer
-	// callbacks cannot expose an older path snapshot after a newer one.
-	if wasDirect && signal != receiverPeerReady && relayAvailable {
-		paths.observation.fallback(peerPathFailureCode(signal))
+	if wasAdmitted && !paths.directAdmitted && paths.hadDirectTraffic {
+		paths.fallbackPending = true
 	}
-	if changed {
+	if paths.fallbackPending && paths.relay {
+		paths.fallbackPending = false
+		paths.observation.fallback(clievent.FailurePeerStopped)
+	}
+	if path, changed := paths.changedPathLocked(); changed {
 		paths.observation.contentPath(path)
 	}
 }
-
-func (paths *receiverContentPaths) relayAdmitted() {
-	if paths == nil {
-		return
-	}
-	paths.mu.Lock()
-	defer paths.mu.Unlock()
-	paths.relay = true
-	path, changed := paths.changedPathLocked()
-	if changed {
-		paths.observation.contentPath(path)
-	}
-}
-
 func (paths *receiverContentPaths) changedPathLocked() (clievent.ContentPath, bool) {
 	var current clievent.ContentPath
 	switch {
@@ -233,13 +227,6 @@ func (paths *receiverContentPaths) changedPathLocked() (clievent.ContentPath, bo
 	return current, true
 }
 
-func peerPathFailureCode(signal receiverPeerSignal) clievent.FailureCode {
-	if signal == receiverPeerDetached {
-		return clievent.FailurePeerStopped
-	}
-	return clievent.FailurePeerNegotiation
-}
-
 func beginReceiverPlanning(
 	plan receiverConnectivityPlan,
 	startPeer func() *activeReceiverPeer,
@@ -249,12 +236,14 @@ func beginReceiverPlanning(
 	if !plan.valid() {
 		return nil, transfer.SelectionRules{}, ErrInvalidConnectivityPolicy
 	}
-	// Any policy-owned relay deadline is already armed. Starting the peer before
-	// bounded rule validation keeps setup concurrent; authenticated --only path
-	// traversal belongs to the transfer job and cannot shift adaptive policy T0.
+	// Content may use the authenticated relay as soon as output authority is
+	// ready. Peer discovery and file size never delay that first usable path.
 	var peer *activeReceiverPeer
 	switch plan.peer {
 	case receiverPeerPreferred:
+		if err := admitRelayOnly(); err != nil {
+			return nil, transfer.SelectionRules{}, err
+		}
 		peer = startPeer()
 	case receiverPeerDisabled:
 		if err := admitRelayOnly(); err != nil {
@@ -303,37 +292,16 @@ type receiverPeerStarter interface {
 	) (receiverPeerAttempt, error)
 }
 
-type receiverPeerFactoryAdapter struct{ factory *v2peer.ReceiverFactory }
-
-type receiverPeerAttemptAdapter struct{ attempt *v2peer.ReceiverAttempt }
-
-func (adapter *receiverPeerAttemptAdapter) Ready() <-chan struct{} { return adapter.attempt.Ready() }
-func (adapter *receiverPeerAttemptAdapter) Done() <-chan struct{}  { return adapter.attempt.Done() }
-func (adapter *receiverPeerAttemptAdapter) Lane() (sessionruntime.LaneIdentity, bool) {
-	return adapter.attempt.Lane()
+type receiverPeerOptions struct {
+	budget *peerset.Budget
+	native *nativepeer.NativePeerConnectivity
+	demand peerset.Demand
 }
-func (adapter *receiverPeerAttemptAdapter) Err() error   { return adapter.attempt.Err() }
-func (adapter *receiverPeerAttemptAdapter) Close() error { return adapter.attempt.Close() }
-func (adapter *receiverPeerAttemptAdapter) Outcome() receiverPeerMonitorOutcome {
-	outcome := adapter.attempt.Outcome()
-	retainedCause := outcome.RetainedCause()
-	locallyCanceled := outcome.LocallyCanceled()
-	disposition := receiverPeerFallbackAllowed
-	switch outcome.Disposition() {
-	case v2peer.ReceiverDispositionSessionUnsafe:
-		disposition = receiverPeerSessionUnsafe
-	case v2peer.ReceiverDispositionSessionUnavailable:
-		disposition = receiverPeerSessionUnavailable
-	case v2peer.ReceiverDispositionFallbackAllowed:
-		// Local authority owns settlement even when teardown retains diagnostic
-		// residue; cleanup cannot retroactively turn an explicit stop into fallback.
-		if locallyCanceled {
-			disposition = receiverPeerLocalStop
-		}
-	}
-	return receiverPeerMonitorOutcome{
-		disposition: disposition, retainedCause: retainedCause,
-	}
+
+type receiverPeerFactoryAdapter struct {
+	options       receiverPeerOptions
+	factory       *v2peer.ReceiverFactory
+	stopAfterWave bool
 }
 
 func (adapter receiverPeerFactoryAdapter) Start(
@@ -341,11 +309,7 @@ func (adapter receiverPeerFactoryAdapter) Start(
 	signaling v2peer.ReceiverSignaling,
 	lanes v2peer.ReceiverLaneSession,
 ) (receiverPeerAttempt, error) {
-	attempt, err := adapter.factory.Start(ctx, signaling, lanes)
-	if err != nil || attempt == nil {
-		return nil, err
-	}
-	return &receiverPeerAttemptAdapter{attempt: attempt}, nil
+	return adapter.startPeerSet(ctx, signaling, lanes)
 }
 
 func (adapter receiverPeerFactoryAdapter) ReceiverTerminationObservations() <-chan v2peer.ReceiverTerminationTrace {
@@ -409,6 +373,15 @@ func (peer *activeReceiverPeer) Close() {
 	peer.CloseWithReason(clievent.ReceiverLocalStopCaller)
 }
 
+func (peer *activeReceiverPeer) SetDemand(demand peerset.Demand) {
+	if peer == nil {
+		return
+	}
+	if owner, ok := peer.attempt.(interface{ SetDemand(peerset.Demand) error }); ok {
+		_ = owner.SetDemand(demand)
+	}
+}
+
 func (peer *activeReceiverPeer) CloseWithReason(reason clievent.ReceiverLocalStopReason) {
 	if peer == nil {
 		return
@@ -426,8 +399,14 @@ func (a *App) startReceiverPeer(
 	observation getObservation,
 	observe func(receiverPeerSignal),
 	localStop *receiverLocalStop,
+	requirement receiverPeerRequirement,
+	options ...receiverPeerOptions,
 ) *activeReceiverPeer {
-	starter, err := a.newReceiverPeerStarter(observation, localStop)
+	starter, err := a.newReceiverPeerStarter(observation, localStop, requirement == receiverPeerRequired, options...)
+	if adapter, ok := starter.(receiverPeerFactoryAdapter); ok && len(options) > 0 {
+		adapter.options = options[0]
+		starter = adapter
+	}
 	if err != nil || starter == nil {
 		observation.warningCode(receiverPeerSetupFailureCode(receiverPeerSetupFactory))
 		notifyReceiverPeer(observe, receiverPeerFailed)
@@ -464,53 +443,6 @@ func receiverPeerSetupFailureCode(phase receiverPeerSetupPhase) clievent.Failure
 	default:
 		return clievent.FailurePeerNegotiation
 	}
-}
-
-func (a *App) newReceiverPeerStarter(
-	observation getObservation,
-	localStop *receiverLocalStop,
-) (receiverPeerStarter, error) {
-	if a.receiverPeerFactory != nil {
-		starter, err := a.receiverPeerFactory()
-		if err == nil {
-			if completer, ok := starter.(receiverObservationCompleter); ok {
-				observation.registerReceiverFactory(completer, localStop)
-			}
-		}
-		return starter, err
-	}
-	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
-		factory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
-			Configuration: v2peer.DefaultConfiguration(),
-			DataChannels: v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
-				return transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{})
-			}),
-		})
-		if err != nil {
-			return nil, err
-		}
-		return receiverPeerFactoryAdapter{factory: factory}, nil
-	}
-	factory, err := v2peer.NewReceiverFactory(v2peer.ReceiverFactoryConfig{
-		Configuration: v2peer.DefaultConfiguration(),
-		DataChannels: v2peer.DataChannelAdapterFunc(func(channel *pion.DataChannel) (v2peer.PeerDataChannel, error) {
-			wrapped, wrapErr := transportwebrtc.NewChannelWithOptions(channel, transportwebrtc.ChannelOptions{
-				LifecycleObservationCapacity: observation.webRTCObservationCapacity(),
-			})
-			if wrapErr == nil {
-				observation.webRTCObservationSet().registerReceiver(wrapped, observation)
-			}
-			return wrapped, wrapErr
-		}),
-		ReceiverTerminationObservationCapacity: v2peer.DefaultReceiverTerminationObservationCapacity,
-		PeerDiagnosticObservationCapacity:      v2peer.DefaultPeerDiagnosticObservationCapacity,
-	})
-	if err != nil {
-		return nil, err
-	}
-	adapter := receiverPeerFactoryAdapter{factory: factory}
-	observation.registerReceiverFactory(adapter, localStop)
-	return adapter, nil
 }
 
 func (a *App) monitorReceiverPeer(
@@ -608,8 +540,8 @@ func peerDiagnosticLossSource(value v2peer.PeerDiagnosticObservation) observerLo
 		switch value.Reason {
 		case v2peer.PeerDiagnosticStreamCapacity:
 			return observerLossSenderAttemptCapacity
-		case v2peer.PeerDiagnosticEvidenceCapacity:
-			return observerLossSenderEvidenceCapacity
+		case v2peer.PeerDiagnosticPathCapacity:
+			return observerLossSenderPathCapacity
 		default:
 			return observerLossSenderCleanupResidue
 		}
@@ -618,4 +550,37 @@ func peerDiagnosticLossSource(value v2peer.PeerDiagnosticObservation) observerLo
 	default:
 		return 0
 	}
+}
+
+type receiverPeerSetAdapter struct{ path *peerset.Path }
+
+func (adapter receiverPeerSetAdapter) SetDemand(demand peerset.Demand) error {
+	return adapter.path.SetDemand(demand)
+}
+
+func (a *receiverPeerSetAdapter) Ready() <-chan struct{}                    { return a.path.Ready() }
+func (a *receiverPeerSetAdapter) Done() <-chan struct{}                     { return a.path.Done() }
+func (a *receiverPeerSetAdapter) Lane() (sessionruntime.LaneIdentity, bool) { return a.path.Lane() }
+func (a *receiverPeerSetAdapter) Err() error                                { return a.path.Err() }
+func (a *receiverPeerSetAdapter) Close() error                              { return a.path.Close() }
+func (a *receiverPeerSetAdapter) Outcome() receiverPeerMonitorOutcome {
+	result := a.path.Result()
+	disposition := receiverPeerFallbackAllowed
+	if result.Stopped {
+		disposition = receiverPeerLocalStop
+	} else if result.Scope == protocolsession.PeerFailureSessionTerminal {
+		disposition = receiverPeerSessionUnsafe
+	}
+	return receiverPeerMonitorOutcome{disposition: disposition, retainedCause: result.Cause}
+}
+func (adapter receiverPeerFactoryAdapter) startPeerSet(ctx context.Context, signaling v2peer.ReceiverSignaling, lanes v2peer.ReceiverLaneSession) (receiverPeerAttempt, error) {
+	demand := adapter.options.demand
+	if demand == peerset.NoDemand {
+		demand = peerset.ContentDemand
+	}
+	path, err := peerset.OpenReceiver(ctx, peerset.Config{Budget: adapter.options.budget}, peerset.ReceiverConfig{Factory: adapter.factory, Signaling: signaling, Lanes: lanes, Demand: demand, StopAfterWave: adapter.stopAfterWave})
+	if err != nil {
+		return nil, err
+	}
+	return &receiverPeerSetAdapter{path: path}, nil
 }

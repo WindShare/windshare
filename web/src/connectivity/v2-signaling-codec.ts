@@ -9,7 +9,7 @@ import {
   requireUnsigned,
 } from '../protocol/cbor'
 
-export const V2_SIGNALING_SCHEMA_VERSION = 1
+export const V2_SIGNALING_SCHEMA_VERSION = 2
 export const V2_SIGNALING_IDENTITY_BYTES = 16
 export const V2_SIGNALING_MAXIMUM_SDP_BYTES = 60 * 1024
 export const V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES = 4 * 1024
@@ -23,6 +23,7 @@ const TEXT_ENCODER = new TextEncoder()
 export interface V2PeerBinding {
   readonly peerPathId: Uint8Array<ArrayBuffer>
   readonly attemptId: Uint8Array<ArrayBuffer>
+  readonly attemptSequence: bigint
 }
 
 export interface V2PeerDescription extends V2PeerBinding {
@@ -65,6 +66,7 @@ export function encodeV2PeerCandidate(value: V2PeerCandidate): Uint8Array<ArrayB
     V2_SIGNALING_SCHEMA_VERSION,
     binding.peerPathId,
     binding.attemptId,
+    binding.attemptSequence,
     requireBoundedText(
       value.candidate,
       V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES,
@@ -82,20 +84,20 @@ export function encodeV2PeerCandidate(value: V2PeerCandidate): Uint8Array<ArrayB
 }
 
 export function decodeV2PeerCandidate(encoded: Uint8Array): V2PeerCandidate {
-  const fields = exactArray(encoded, 7, 'peer candidate')
+  const fields = exactArray(encoded, 8, 'peer candidate')
   const binding = decodePrefix(fields, 'peer candidate')
   return Object.freeze({
     ...binding,
     candidate: requireBoundedText(
-      requireText(fields[3], 'ICE candidate'),
+      requireText(fields[4], 'ICE candidate'),
       V2_SIGNALING_MAXIMUM_CANDIDATE_BYTES,
       false,
       'ICE candidate',
     ),
-    sdpMid: decodeOptionalText(fields[4], V2_SIGNALING_MAXIMUM_MID_BYTES, 'SDP mid'),
-    sdpMLineIndex: decodeOptionalLineIndex(fields[5]),
+    sdpMid: decodeOptionalText(fields[5], V2_SIGNALING_MAXIMUM_MID_BYTES, 'SDP mid'),
+    sdpMLineIndex: decodeOptionalLineIndex(fields[6]),
     usernameFragment: decodeOptionalText(
-      fields[6],
+      fields[7],
       V2_SIGNALING_MAXIMUM_USERNAME_BYTES,
       'ICE username fragment',
     ),
@@ -103,7 +105,7 @@ export function decodeV2PeerCandidate(encoded: Uint8Array): V2PeerCandidate {
 }
 
 export function sameV2PeerBinding(left: V2PeerBinding, right: V2PeerBinding): boolean {
-  return equalBytes(left.peerPathId, right.peerPathId) && equalBytes(left.attemptId, right.attemptId)
+  return left.attemptSequence === right.attemptSequence && equalBytes(left.peerPathId, right.peerPathId) && equalBytes(left.attemptId, right.attemptId)
 }
 
 function encodeDescription(value: V2PeerDescription): Uint8Array<ArrayBuffer> {
@@ -112,17 +114,18 @@ function encodeDescription(value: V2PeerDescription): Uint8Array<ArrayBuffer> {
     V2_SIGNALING_SCHEMA_VERSION,
     binding.peerPathId,
     binding.attemptId,
+    binding.attemptSequence,
     requireBoundedText(value.sdp, V2_SIGNALING_MAXIMUM_SDP_BYTES, false, 'SDP'),
   ])
 }
 
 function decodeDescription(encoded: Uint8Array, label: string): V2PeerDescription {
-  const fields = exactArray(encoded, 4, label)
+  const fields = exactArray(encoded, 5, label)
   const binding = decodePrefix(fields, label)
   return Object.freeze({
     ...binding,
     sdp: requireBoundedText(
-      requireText(fields[3], `${label} SDP`),
+      requireText(fields[4], `${label} SDP`),
       V2_SIGNALING_MAXIMUM_SDP_BYTES,
       false,
       `${label} SDP`,
@@ -147,6 +150,7 @@ function decodePrefix(fields: readonly unknown[], label: string): V2PeerBinding 
   return Object.freeze({
     peerPathId: requireBytes(fields[1], V2_SIGNALING_IDENTITY_BYTES, 'peer path ID', true),
     attemptId: requireBytes(fields[2], V2_SIGNALING_IDENTITY_BYTES, 'peer attempt ID', true),
+    attemptSequence: requireAttemptSequence(fields[3]),
   })
 }
 
@@ -154,6 +158,7 @@ function snapshotBinding(binding: V2PeerBinding): V2PeerBinding {
   return Object.freeze({
     peerPathId: requireBytes(binding.peerPathId, V2_SIGNALING_IDENTITY_BYTES, 'peer path ID', true),
     attemptId: requireBytes(binding.attemptId, V2_SIGNALING_IDENTITY_BYTES, 'peer attempt ID', true),
+    attemptSequence: requireAttemptSequence(binding.attemptSequence),
   })
 }
 
@@ -200,4 +205,12 @@ function decodeOptionalLineIndex(value: unknown): number | null {
     throw new V2SignalingCodecError('SDP m-line index is outside uint16')
   }
   return Number(decoded)
+}
+
+function requireAttemptSequence(value: unknown): bigint {
+  const sequence = requireUnsigned(value, 'attempt sequence')
+  if (sequence === 0n || sequence > 0xffffffffffffffffn) {
+    throw new V2SignalingCodecError('attempt sequence is outside positive uint64')
+  }
+  return sequence
 }

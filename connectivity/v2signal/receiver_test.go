@@ -8,7 +8,7 @@ import (
 )
 
 func TestReceiverControlValidatorOwnsOnlyTypedSenderSignals(t *testing.T) {
-	binding := Binding{
+	binding := Binding{AttemptSequence: 1,
 		PeerPathID: testSignalIdentity[PeerPathID](1), AttemptID: testSignalIdentity[AttemptID](2),
 	}
 	operation, _ := protocolsession.OperationIDFromBytes(bytes.Repeat([]byte{3}, protocolsession.IdentityBytes))

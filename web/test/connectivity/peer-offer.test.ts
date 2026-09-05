@@ -66,17 +66,6 @@ const FATAL_CALLBACK_CASES = [
     },
   },
   {
-    fatalName: 'local candidate overflow',
-    maximumCandidates: 1,
-    errorType: CandidateLimitExceededError,
-    expectedMessage: /candidate limit 1 exceeded/iu,
-    trigger: (fixture) => {
-      fixture.peer.emitCandidate('fatal-limit-one')
-      fixture.peer.emitCandidate('fatal-limit-two')
-      return undefined
-    },
-  },
-  {
     fatalName: 'local candidate serialization failure',
     maximumCandidates: MAX_ICE_CANDIDATES_PER_PEER,
     errorType: PeerNegotiationError,
@@ -121,13 +110,13 @@ describe('browser offer negotiation', () => {
       payload: { type: 'offer', sdp: 'local-offer' },
     })
 
-    fixture.peer.emitCandidate('local-one')
+    fixture.peer.emitCandidate('candidate:5001 1 UDP 2113937151 192.0.2.1 5001 typ host')
     fixture.route.push(candidateSignal('remote-before-answer'))
     await settle()
     expect(fixture.peer.addedCandidates).toHaveLength(0)
     expect(fixture.route.sent[1]).toMatchObject({
       kind: SIGNAL_KIND_CANDIDATE,
-      payload: { candidate: 'local-one' },
+      payload: { candidate: 'candidate:5001 1 UDP 2113937151 192.0.2.1 5001 typ host' },
     })
 
     fixture.route.push(answerSignal())
@@ -176,7 +165,7 @@ describe('browser offer negotiation', () => {
 
     const opening = fixture.factory.offer(fixture.route, fixture.signal, observer)
     await settle()
-    fixture.peer.emitCandidate('local-observed')
+    fixture.peer.emitCandidate('candidate:5002 1 UDP 2113937151 192.0.2.1 5002 typ host')
     fixture.route.push(candidateSignal('remote-observed'))
     fixture.route.push(answerSignal())
     await settle()
@@ -189,7 +178,26 @@ describe('browser offer negotiation', () => {
       { stage: 'answer-received', counts: { localEmitted: 1, remoteAccepted: 1 } },
       { stage: 'datachannel-open', counts: { localEmitted: 1, remoteAccepted: 1 } },
     ])
-    expect(fixture.peer.statsCalls).toBe(0)
+    expect(fixture.peer.statsCalls).toBe(1)
+    expect(channel.pathRoute).toBe('direct')
+    await channel.close()
+  })
+
+  it('reports a changed selected route and withdraws classification when stats lose the pair', async () => {
+    const fixture = negotiationFixture()
+    const channel = await openChannel(fixture)
+    const routes: unknown[] = []
+    const unsubscribe = channel.subscribePathRoute?.((route) => routes.push(route))
+    fixture.peer.stats.get('remote-1')!.candidateType = 'relay'
+    fixture.peer.dispatchEvent(new Event('connectionstatechange'))
+    await settle()
+    expect(channel.pathRoute).toBe('turn')
+    fixture.peer.stats.delete('remote-1')
+    fixture.peer.dispatchEvent(new Event('connectionstatechange'))
+    await settle()
+    expect(channel.pathRoute).toBeUndefined()
+    expect(routes).toEqual(['turn', undefined])
+    unsubscribe?.()
     await channel.close()
   })
 
@@ -197,8 +205,8 @@ describe('browser offer negotiation', () => {
     const fixture = negotiationFixture(2)
     const opening = fixture.factory.offer(fixture.route, fixture.signal)
     await settle()
-    fixture.route.push(candidateSignal('one'))
-    fixture.route.push(candidateSignal('two'))
+    fixture.route.push(candidateSignal('candidate:5005 1 UDP 2113937151 192.0.2.1 5005 typ host'))
+    fixture.route.push(candidateSignal('candidate:5006 1 UDP 2113937151 192.0.2.1 5006 typ host'))
     fixture.route.push(candidateSignal('three'))
 
     await expect(opening).rejects.toBeInstanceOf(CandidateLimitExceededError)
@@ -211,8 +219,8 @@ describe('browser offer negotiation', () => {
     const channel = await openChannel(fixture)
 
     for (let index = 0; index < LOCAL_CANDIDATE_REPLAY_STRESS_COUNT; index += 1) {
-      if (index % 2 === 0) fixture.peer.emitCandidate('same-local-candidate')
-      else fixture.peer.emitCandidateWithNullOptionals('same-local-candidate')
+      if (index % 2 === 0) fixture.peer.emitCandidate('candidate:5003 1 UDP 2113937151 192.0.2.1 5003 typ host')
+      else fixture.peer.emitCandidateWithNullOptionals('candidate:5003 1 UDP 2113937151 192.0.2.1 5003 typ host')
     }
     await settle()
     expect(fixture.route.sent.filter((message) => (
@@ -221,7 +229,7 @@ describe('browser offer negotiation', () => {
       {
         kind: SIGNAL_KIND_CANDIDATE,
         payload: {
-          candidate: 'same-local-candidate',
+          candidate: 'candidate:5003 1 UDP 2113937151 192.0.2.1 5003 typ host',
           sdpMid: null,
           sdpMLineIndex: null,
           usernameFragment: null,
@@ -231,10 +239,11 @@ describe('browser offer negotiation', () => {
     expect(channel.state).toBe('open')
     expect(fixture.peer.closeCalls).toBe(0)
 
-    fixture.peer.emitCandidate('distinct-local-candidate')
-    await channel.done
-    expect(reasonContains(channel.reason, CandidateLimitExceededError)).toBe(true)
-    expect(fixture.peer.closeCalls).toBe(1)
+    fixture.peer.emitCandidate('candidate:5004 1 UDP 2113937151 192.0.2.1 5004 typ host')
+    await settle()
+    expect(channel.state).toBe('open')
+    expect(fixture.route.sent.filter((message) => message.kind === SIGNAL_KIND_CANDIDATE)).toHaveLength(1)
+    await channel.close()
   })
 
   it('cancels a hung browser SDP operation and closes both ownership layers', async () => {
@@ -384,7 +393,7 @@ describe('browser offer negotiation', () => {
     expect(established.peer.closeCalls).toBe(1)
   })
 
-  it('treats post-Open protocol violations and candidate overflow as peer-fatal', async () => {
+  it('treats post-Open protocol violations as fatal and prunes local candidate overflow', async () => {
     const duplicate = negotiationFixture()
     const duplicateChannel = await openChannel(duplicate)
     duplicate.route.push(answerSignal())
@@ -393,18 +402,19 @@ describe('browser offer negotiation', () => {
 
     const overflow = negotiationFixture(1)
     const overflowChannel = await openChannel(overflow)
-    overflow.peer.emitCandidate('one')
-    overflow.peer.emitCandidate('two')
-    await overflowChannel.done
-    expect(reasonContains(overflowChannel.reason, CandidateLimitExceededError)).toBe(true)
-    expect(overflow.peer.closeCalls).toBe(1)
+    overflow.peer.emitCandidate('candidate:5005 1 UDP 2113937151 192.0.2.1 5005 typ host')
+    overflow.peer.emitCandidate('candidate:5006 1 UDP 2113937151 192.0.2.1 5006 typ host')
+    await settle()
+    expect(overflowChannel.state).toBe('open')
+    expect(overflow.peer.closeCalls).toBe(0)
+    await overflowChannel.close()
   })
 
   it('keeps Open P2P alive when a late candidate cannot use relay signaling', async () => {
     const fixture = negotiationFixture()
     const channel = await openChannel(fixture)
     fixture.route.failSends(new Error('relay signaling lost'))
-    fixture.peer.emitCandidate('late-local')
+    fixture.peer.emitCandidate('candidate:5007 1 UDP 2113937151 192.0.2.1 5007 typ host')
     await settle()
 
     expect(channel.state).toBe('open')
@@ -421,7 +431,7 @@ describe('browser offer negotiation', () => {
     fixture.route.failSends(new Error('same-turn relay loss'))
 
     fixture.peer.raw.open()
-    fixture.peer.emitCandidate('same-turn-candidate')
+    fixture.peer.emitCandidate('candidate:5008 1 UDP 2113937151 192.0.2.1 5008 typ host')
     const channel = await opening
     await settle()
     expect(channel.state).toBe('open')
@@ -470,14 +480,14 @@ describe('browser ICE gathering completion', () => {
     const channel = await openChannel(fixture)
 
     fixture.peer.emitEndOfCandidates()
-    fixture.peer.emitCandidate('only-real-candidate')
+    fixture.peer.emitCandidate('candidate:5009 1 UDP 2113937151 192.0.2.1 5009 typ host')
     await settle()
 
     expect(fixture.route.sent.filter((message) => (
       message.kind === SIGNAL_KIND_CANDIDATE
     ))).toEqual([
       expect.objectContaining({
-        payload: expect.objectContaining({ candidate: 'only-real-candidate' }),
+        payload: expect.objectContaining({ candidate: 'candidate:5009 1 UDP 2113937151 192.0.2.1 5009 typ host' }),
       }),
     ])
     expect(channel.state).toBe('open')
@@ -515,11 +525,11 @@ async function beginFatalWait(
     expect(fixture.peer.addedCandidates.at(-1)).toEqual({ candidate: 'pending-ICE' })
   } else {
     fixture.route.sendOperation = neverSettles()
-    fixture.peer.emitCandidate('pending-signaling')
+    fixture.peer.emitCandidate('candidate:5010 1 UDP 2113937151 192.0.2.1 5010 typ host')
     await settle()
     expect(fixture.route.sent.at(-1)).toMatchObject({
       kind: SIGNAL_KIND_CANDIDATE,
-      payload: { candidate: 'pending-signaling' },
+      payload: { candidate: 'candidate:5010 1 UDP 2113937151 192.0.2.1 5010 typ host' },
     })
   }
 
