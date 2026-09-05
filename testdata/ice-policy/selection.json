@@ -1,0 +1,10 @@
+{
+  "networkGenerationID": "network",
+  "waveID": "wave",
+  "sequence": 1,
+  "endpointIDs": [
+    "0",
+    "1"
+  ],
+  "profileID": "ice-11920c06"
+}

@@ -88,6 +88,8 @@ class NavigableJoinedShare {
     return this.protocolSessionId
   }
 
+  subscribePathActivity(): () => void { return () => undefined }
+
   subscribeProtocolGeneration(): () => void {
     return () => undefined
   }

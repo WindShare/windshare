@@ -1,0 +1,47 @@
+[
+  {
+    "candidate": "candidate:1 1 udp 100 192.168.1.2 5000 typ host",
+    "class": "lan",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "candidate:2 1 udp 200 192.168.1.2 5000 typ host",
+    "class": "lan",
+    "reason": "duplicate"
+  },
+  {
+    "candidate": "candidate:3 1 udp 100 2001:db8::1 5000 typ host",
+    "class": "ipv6",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "candidate:4 1 udp 100 192.0.2.1 5000 typ srflx raddr 10.0.0.1 rport 5000",
+    "class": "srflx",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "candidate:5 1 tcp 100 192.0.2.2 6000 typ host tcptype passive",
+    "class": "tcp",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "candidate:6 1 udp 100 host.local 5000 typ host",
+    "class": "lan",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "candidate:7 1 udp 100 192.0.2.3 5000 typ host",
+    "class": "ipv4",
+    "reason": "accepted"
+  },
+  {
+    "candidate": "garbage",
+    "class": "unknown",
+    "reason": "invalid"
+  },
+  {
+    "candidate": "candidate:8 1 udp 100 192.0.2.3 99999 typ host",
+    "class": "unknown",
+    "reason": "invalid"
+  }
+]

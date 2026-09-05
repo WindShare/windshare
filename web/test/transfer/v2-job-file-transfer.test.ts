@@ -243,8 +243,8 @@ describe('v2 authenticated file transfer', () => {
     const lanes = new V2LaneSet()
     const relay = new DeferredTransferLane(1)
     const peer = new DeferredTransferLane(2)
-    lanes.add(relay, 'relay')
-    lanes.add(peer, 'peer')
+    lanes.add(relay, 'application-relay')
+    lanes.add(peer, 'direct')
     const blockBroker = new V2BlockBroker(lanes)
     const broker: V2BlockRangeReader = {
       readRange: (descriptor, leaseId, range, options = {}) =>

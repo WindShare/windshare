@@ -18,10 +18,10 @@ const ALL_ROUTES: V2BlockRouteEligibility = Object.freeze({
   subscribe: () => () => undefined,
 })
 
-function onlyRoute(route: 'relay' | 'peer'): V2BlockRouteEligibility {
+function onlyRoute(route: 'application-relay' | 'direct' | 'turn'): V2BlockRouteEligibility {
   return Object.freeze({
     active: true,
-    allows: (candidate: 'relay' | 'peer') => candidate === route,
+    allows: (candidate: 'application-relay' | 'direct' | 'turn') => candidate === route,
     assertActive: () => undefined,
     subscribe: () => () => undefined,
   })
@@ -95,7 +95,7 @@ class ControlledLane implements V2BlockLane {
 
 function brokerWith(lane: ControlledLane, options: ConstructorParameters<typeof V2BlockBroker>[1] = {}) {
   const lanes = new V2LaneSet()
-  lanes.add(lane, 'relay')
+  lanes.add(lane, 'application-relay')
   return new V2BlockBroker(lanes, options)
 }
 
@@ -250,11 +250,11 @@ describe('v2 preview/download block broker', () => {
       onBlockFetched: ({ route, localBlockIndex }) => observations.push({ route, localBlockIndex }),
     })
     const relay = new ImmediateRecordingLane(1)
-    lanes.add(relay, 'relay')
+    lanes.add(relay, 'application-relay')
     const broker = new V2BlockBroker(lanes)
     const descriptor = revision()
-    const peerRoutes = onlyRoute('peer')
-    const relayRoutes = onlyRoute('relay')
+    const peerRoutes = onlyRoute('direct')
+    const relayRoutes = onlyRoute('application-relay')
 
     const largeDistinct = broker.readBlock(
       { descriptor, leaseId: identity(10), localBlockIndex: 0n },
@@ -281,13 +281,13 @@ describe('v2 preview/download block broker', () => {
     expect(relay.calls.map((call) => call.localBlockIndex)).toEqual([1n, 2n])
 
     const peer = new ImmediateRecordingLane(2)
-    lanes.add(peer, 'peer')
+    lanes.add(peer, 'direct')
     await expect(largeDistinct).resolves.toMatchObject({ localBlockIndex: 0n })
     expect(peer.calls.map((call) => call.localBlockIndex)).toEqual([0n])
     expect(observations).toEqual([
-      { route: 'relay', localBlockIndex: 1n },
-      { route: 'relay', localBlockIndex: 2n },
-      { route: 'peer', localBlockIndex: 0n },
+      { route: 'application-relay', localBlockIndex: 1n },
+      { route: 'application-relay', localBlockIndex: 2n },
+      { route: 'direct', localBlockIndex: 0n },
     ])
   })
 
@@ -297,11 +297,11 @@ describe('v2 preview/download block broker', () => {
       onBlockFetched: ({ route, localBlockIndex }) => observations.push({ route, localBlockIndex }),
     })
     const relay = new ImmediateRecordingLane(1)
-    lanes.add(relay, 'relay')
+    lanes.add(relay, 'application-relay')
     const broker = new V2BlockBroker(lanes)
     const descriptor = revision()
-    const survivingRoutes = onlyRoute('peer')
-    const canceledRoutes = onlyRoute('relay')
+    const survivingRoutes = onlyRoute('direct')
+    const canceledRoutes = onlyRoute('application-relay')
     const controller = new AbortController()
 
     const surviving = broker.readBlock(
@@ -318,9 +318,9 @@ describe('v2 preview/download block broker', () => {
     expect(relay.calls).toHaveLength(0)
 
     const peer = new ImmediateRecordingLane(2)
-    lanes.add(peer, 'peer')
+    lanes.add(peer, 'direct')
     await expect(surviving).resolves.toMatchObject({ localBlockIndex: 3n })
-    expect(observations).toEqual([{ route: 'peer', localBlockIndex: 3n }])
+    expect(observations).toEqual([{ route: 'direct', localBlockIndex: 3n }])
   })
 
   it('schedules preview before download and prefetch while retaining bounded fairness', async () => {

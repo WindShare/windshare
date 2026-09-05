@@ -21,6 +21,7 @@ const (
 const (
 	controlOperationDomain = "windshare/v2 control/operation"
 	controlTerminalDomain  = "windshare/v2 control/session-terminal"
+	controlPeerPathDomain  = "windshare/v2 control/peer-path"
 	controlLaneDomain      = "windshare/v2 control/lane-attach"
 )
 
@@ -38,6 +39,7 @@ const (
 	ControlDomainOperation ControlDomain = iota + 1
 	ControlDomainSessionTerminal
 	ControlDomainLaneAttach
+	ControlDomainPeerPath
 )
 
 type ControlBinding struct {
@@ -334,6 +336,10 @@ func (b ControlBinding) validate(domain ControlDomain) error {
 		if !b.HasOperationID || !isOperationControl(b.MessageKind) {
 			return ErrControlBinding
 		}
+	case ControlDomainPeerPath:
+		if b.HasOperationID || b.MessageKind != MessagePeerPathControl {
+			return ErrControlBinding
+		}
 	case ControlDomainSessionTerminal:
 		if b.HasOperationID || b.MessageKind != MessageSessionTerminal {
 			return ErrControlBinding
@@ -361,6 +367,8 @@ func isOperationControl(kind MessageKind) bool {
 
 func senderControlDomain(kind MessageKind) (ControlDomain, error) {
 	switch {
+	case kind == MessagePeerPathControl:
+		return ControlDomainPeerPath, nil
 	case kind == MessageSessionTerminal:
 		return ControlDomainSessionTerminal, nil
 	case kind == MessageLaneAttach:
@@ -399,6 +407,8 @@ func buildControlSignaturePreimage(
 
 func (d ControlDomain) value() (string, error) {
 	switch d {
+	case ControlDomainPeerPath:
+		return controlPeerPathDomain, nil
 	case ControlDomainOperation:
 		return controlOperationDomain, nil
 	case ControlDomainSessionTerminal:

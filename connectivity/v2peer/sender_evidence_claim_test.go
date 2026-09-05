@@ -15,9 +15,9 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	collector := &senderObservationCollector{}
 	clock := newManualTestClock(time.Unix(9_000, 0))
 	factory := mustTestFactoryWithSenderCollector(t, collector, Config{
-		Now:                          clock.Now,
-		RetiredBindingTTL:            time.Minute,
-		MaxSessionEvidenceIdentities: 2,
+		Now:               clock.Now,
+		RetiredBindingTTL: time.Minute,
+		MaxPeerPaths:      2,
 	})
 	session := newTestPeerSession(121)
 	handler, ctx, cancel, runDone := startSenderTestRuntime(t, factory, session)
@@ -55,7 +55,7 @@ func TestSenderRecoverableOfferRejectionTerminalizesIdentityOnceForSession(t *te
 	}
 	handler.mu.Lock()
 	claims := len(handler.evidenceAuthority.claims)
-	exhausted := handler.evidenceAuthority.terminal
+	exhausted := len(handler.evidenceAuthority.latest) >= handler.evidenceAuthority.maximumPaths
 	handler.mu.Unlock()
 	if claims != 1 || exhausted {
 		t.Fatalf("expired replay consumed evidence budget: claims=%d terminal=%t", claims, exhausted)
@@ -96,6 +96,7 @@ func recoverableRejectedOffer(t *testing.T, binding v2signal.Binding) []byte {
 		uint64(v2signal.SignalingSchemaVersion),
 		binding.PeerPathID[:],
 		binding.AttemptID[:],
+		binding.AttemptSequence,
 		uint64(7),
 	})
 }

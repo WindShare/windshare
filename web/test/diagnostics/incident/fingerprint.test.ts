@@ -12,7 +12,7 @@ describe('failure fact fingerprinting', () => {
     const left = peerFailureFact({
       stage: 'peer_attempt',
       recoveryDisposition: 'retryable',
-      scope: 'attempt',
+      scope: 'attempt-transient',
       code: 'peer-timeout',
       retryable: true,
       correlation: {
@@ -24,7 +24,7 @@ describe('failure fact fingerprinting', () => {
     const right = peerFailureFact({
       stage: 'peer_attempt',
       recoveryDisposition: 'retryable',
-      scope: 'attempt',
+      scope: 'attempt-transient',
       code: 'peer-timeout',
       retryable: true,
       correlation: {
@@ -36,7 +36,7 @@ describe('failure fact fingerprinting', () => {
 
     expect(fingerprintFailureFact(left)).toBe(fingerprintFailureFact(right))
     expect(fingerprintFailureFact(left)).toBe(
-      'peer_failure:peer_attempt:retryable:attempt:peer-timeout:1',
+      'peer_failure:peer_attempt:retryable:attempt-transient:peer-timeout:1',
     )
   })
 

@@ -48,6 +48,40 @@ func settlementByLane(t *testing.T, summaries []LaneSettlementSummary) map[LaneI
 	return result
 }
 
+func TestUsefulContentActivityDoesNotRequireObservationQueue(t *testing.T) {
+	now := time.Unix(70, 0)
+	lanes, err := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](83), Now: func() time.Time { return now }, RaceWidth: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lanes.Close()
+	descriptor := transferDescriptor(t, 1)
+	identity := LaneIdentity{ID: 1, Epoch: 1}
+	if err = lanes.Add(identity, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+		return transferRecord(t, descriptor, 0), nil
+	})); err != nil {
+		t.Fatal(err)
+	}
+	initial := lanes.ContentActivity()
+	if len(initial) != 1 || initial[0].UsefulBytes != 0 || !initial[0].LastUsefulAt.IsZero() || initial[0].AdmittedLanes != 1 {
+		t.Fatal(initial)
+	}
+	demand := validDemand(t, descriptor, 0)
+	if _, err = lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
+		t.Fatal(err)
+	}
+	lanes.attempts.Wait()
+	activity := lanes.ContentActivity()
+	if len(activity) != 1 || activity[0].UsefulBytes != uint64(catalog.MinChunkSize) || activity[0].LastUsefulAt != now {
+		t.Fatal(activity)
+	}
+	lanes.Remove(identity)
+	retired := lanes.ContentActivity()
+	if len(retired) != 1 || retired[0].AdmittedLanes != 0 || retired[0].UsefulBytes != activity[0].UsefulBytes {
+		t.Fatal(retired)
+	}
+}
+
 func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 	descriptor := transferDescriptor(t, 2)
 	sessionID := transferID[protocolsession.ProtocolSessionID](81)

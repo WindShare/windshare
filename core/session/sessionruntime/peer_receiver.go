@@ -174,7 +174,12 @@ func (operation *ReceiverPeerOperation) Receive(ctx context.Context) ReceiverPee
 		}
 		return operation.completeControlReceive(ReceiverPeerControl{kind: message.Kind(), body: body})
 	case protocolsession.MessageOperationError:
-		return operation.terminateFromReceive(call, receiverPeerRemoteFailureEvidence(message))
+		evidence := receiverPeerRemoteFailureEvidence(message)
+		result := operation.terminateFromReceive(call, evidence)
+		if evidence.consequence.provenance == ReceiverPeerProvenanceRemoteSessionRejected {
+			operation.rpc.runtime.terminateRuntimeFailed(protocolsession.ErrControlSemantic)
+		}
+		return result
 	default:
 		return operation.terminateFromReceive(call, newReceiverPeerTerminalEvidence(
 			ReceiverPeerTerminalAuthorityRemote,
@@ -435,7 +440,7 @@ func validReceiverPeerTransition(transition receiverPeerTerminalTransition) bool
 		}
 	case ReceiverPeerTerminalAuthorityRemote:
 		switch transition.provenance {
-		case ReceiverPeerProvenanceRemoteOperationRejected,
+		case ReceiverPeerProvenanceRemoteSessionRejected, ReceiverPeerProvenanceRemoteOperationRejected,
 			ReceiverPeerProvenanceRemoteUnknownControl,
 			ReceiverPeerProvenanceRemoteControlMalformed,
 			ReceiverPeerProvenanceRemoteFailureMalformed,
@@ -466,7 +471,7 @@ func validReceiverPeerConsequence(consequence receiverPeerTerminalConsequence) b
 	case ReceiverPeerTerminalSessionUnavailable:
 		return consequence.provenance == ReceiverPeerProvenanceRuntimeStopping
 	case ReceiverPeerTerminalSessionUnsafe:
-		return consequence.provenance == ReceiverPeerProvenanceRemoteFailureMalformed ||
+		return consequence.provenance == ReceiverPeerProvenanceRemoteSessionRejected || consequence.provenance == ReceiverPeerProvenanceRemoteFailureMalformed ||
 			consequence.provenance == ReceiverPeerProvenanceRemoteFailureScopeViolation ||
 			consequence.provenance == ReceiverPeerProvenanceRemoteAnswerConflict ||
 			consequence.provenance == ReceiverPeerProvenanceRemoteFinalConflict ||

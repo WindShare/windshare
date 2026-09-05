@@ -4,7 +4,7 @@ import {
   type V2CatalogScanProgressListener,
 } from '../catalog/v2-client'
 import { IndexedDbV2CatalogPageStore } from '../catalog/v2-page-store'
-import { openV2ShareDescriptor, type V2CatalogEntry, type V2ShareDescriptor } from '../catalog/v2-records'
+import { type V2CatalogEntry, type V2ShareDescriptor } from '../catalog/v2-records'
 import {
   frozenV2SelectionPolicy,
   V2SelectionPolicy,
@@ -13,7 +13,7 @@ import {
 import { snapshotPortableCatalogPath } from '../catalog/path-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import type { V2ConnectivityTraceSource } from '../connectivity/diagnostics'
-import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
+import type { V2PeerRecoveryDependencies } from '../connectivity/peer-set/path'
 import type {
   V2ConnectivityActivation,
   V2ContentLaneAdmissionObservation,
@@ -27,11 +27,15 @@ import {
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
+import { joinBrowserRelays } from '../receiver/browser-join'
+import { receiverRelayBases } from '../receiver/relay-race'
+import type { ReceiverPathActivitySnapshot } from '../receiver/path-activity'
+import type { V2ConnectivityPolicy } from '../connectivity/v2-receiver-policy'
 import { V2ReceiverReconnectSupervisor } from '../receiver/v2-supervisor'
 import type { V2ProtocolGenerationListener } from '../receiver/v2-supervisor'
 import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
 import type { V2ProtocolSessionIdentity } from '../session/v2-identities'
-import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
+import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import type {
   V2BlockDispatchObservation,
   V2BlockRouteObservation,
@@ -47,7 +51,7 @@ import {
   type AuthenticatedDiscoverySource,
   type AuthenticatedProjectionEvidence,
 } from '../transfer/projection'
-import { dialV2RelayReceiver, type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
+import { type V2RelayReceiverConnection } from '../transport/relay/v2-receiver'
 import { ProjectionDiscoverySummary } from './v2-projection-summary'
 
 export interface V2BrowseDirectory {
@@ -108,6 +112,10 @@ export class V2JoinedBrowserShare {
     this.recoveryIdentity = options.recoveryIdentity
     this.#supervisor = options.supervisor
     this.#catalog = options.catalog
+  }
+
+  subscribePathActivity(listener: (snapshot: ReceiverPathActivitySnapshot) => void): () => void {
+    return this.#supervisor.pathActivity.subscribe(listener)
   }
 
   rootDirectory(): V2BrowseDirectory {
@@ -466,6 +474,8 @@ function projectionDirectoryRoot(
 }
 
 export interface V2BrowserReceiverGatewayOptions {
+  readonly relayBases?: readonly string[]
+  readonly policy?: V2ConnectivityPolicy
   readonly offersFactory?: () => OfferChannelFactory
   readonly nativePeerUsable?: () => boolean
   readonly protocolTrace?: V2ProtocolTraceSource
@@ -478,6 +488,8 @@ export interface V2BrowserReceiverGatewayOptions {
 }
 
 export class V2BrowserReceiverGateway {
+  readonly #relayBases: readonly string[] | undefined
+  readonly #policy: V2ConnectivityPolicy
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
   readonly #protocolTrace: V2ProtocolTraceSource | undefined
@@ -493,6 +505,8 @@ export class V2BrowserReceiverGateway {
   ) | undefined
 
   constructor(options: V2BrowserReceiverGatewayOptions = {}) {
+    this.#relayBases = options.relayBases === undefined ? undefined : receiverRelayBases(options.relayBases)
+    this.#policy = options.policy ?? 'auto'
     this.#offersFactory = options.offersFactory
     this.#nativePeerUsable = options.nativePeerUsable
     this.#protocolTrace = options.protocolTrace
@@ -515,28 +529,21 @@ export class V2BrowserReceiverGateway {
     try {
       capability = await capabilityFromInput(input, pageUrl)
       signal?.throwIfAborted()
-      const relayBase = capability.relayHints[0] ?? new URL(pageUrl).origin
-      relay = await dialV2RelayReceiver(
-        relayBase,
-        capability,
-        signal === undefined ? {} : { signal },
-      )
-      const descriptor = await openV2ShareDescriptor(relay.descriptorObject, capability)
+      const relayBases = this.#relayBases ?? receiverRelayBases(capability.relayHints.length > 0
+        ? capability.relayHints : [new URL(pageUrl).origin])
+      const initial = await joinBrowserRelays(relayBases, capability,
+        signal ?? new AbortController().signal, this.#protocolTrace)
+      relay = initial.relay
+      session = initial.session
+      const descriptor = initial.descriptor
       signal?.throwIfAborted()
       const recoveryIdentity = [
         capability.shareId,
         encodeBase64Url(capability.pkHash),
         descriptor.shareInstanceId,
       ].join('.')
-      session = await V2ReceiverSessionRuntime.connect({
-        descriptor,
-        readSecret: capability.readSecret,
-        initialChannel: relay.channel,
-        ...(signal === undefined ? {} : { signal }),
-        ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
-      })
       sessionFactory = new V2BrowserSessionFactory({
-        relayBase,
+        relayBases,
         capability,
         descriptor,
         descriptorObject: relay.descriptorObject,
@@ -544,11 +551,8 @@ export class V2BrowserReceiverGateway {
       })
       supervisor = new V2ReceiverReconnectSupervisor({
         descriptor,
-        initial: {
-          relay,
-          session,
-          relayLaneId: session.initialLaneId,
-        },
+        initial,
+        policy: this.#policy,
         sessionFactory,
         ...gatewayConnectivityOptions(
           this.#offersFactory,

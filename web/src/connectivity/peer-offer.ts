@@ -7,18 +7,17 @@ import { abortReason } from './clock'
 import type { V2CandidateCounts } from './diagnostics'
 import { NegotiationEventQueue } from './negotiation-event-queue'
 import {
-  CandidateLimitExceededError,
   PeerNegotiationError,
   UnexpectedDataChannelError,
 } from './errors'
 import {
   OwnedPeerChannel,
   type PeerChannel,
+  type PeerPathRoute,
   type PeerOwnerFailure,
 } from './peer-channel'
 import {
   awaitWithAbort,
-  candidateIdentity,
   RemoteNegotiationState,
 } from './peer-offer-remote'
 import {
@@ -27,6 +26,9 @@ import {
   type ConnectivitySignal,
   type SignalingRoute,
 } from './signaling'
+import { CandidateBudget } from './ice-policy/candidates'
+import type { AttemptICEProfile } from './ice-policy/endpoints'
+import { candidateFact, selectedPairFact, type PeerProviderFact } from './peer-set/provider-facts'
 
 export const DEFAULT_STUN_SERVER = 'stun:stun.l.google.com:19302'
 export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
@@ -34,17 +36,22 @@ export const MAX_ICE_CANDIDATES_PER_PEER = V2_MAXIMUM_PEER_CANDIDATES
 // Lifecycle and description events need their own reserve because candidate limits
 // alone must not let a candidate burst hide cancellation or terminal settlement.
 const NEGOTIATION_EVENT_RESERVE = 16
+const SELECTED_PAIR_SAMPLE_MILLISECONDS = 5_000
+const PROVIDER_OBSERVATION_CAPACITY = 64
 
 export interface OfferChannelFactory {
   offer(
     route: SignalingRoute,
     signal: AbortSignal,
     observer?: V2PeerOfferAttemptObserver,
+    profile?: AttemptICEProfile,
   ): Promise<PeerChannel>
 }
 
 /** Consumer-side milestone port; implementations never receive attempt authority. */
 export interface V2PeerOfferAttemptObserver {
+  providerFact?(fact: PeerProviderFact): void
+  phaseChanged?(phase: 'signaling' | 'ice-check' | 'dtls-datachannel'): void
   offerCreated(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
   offerSent(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
   answerReceived(candidateCounts: V2CandidateCounts | (() => V2CandidateCounts)): void
@@ -100,11 +107,22 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
     route: SignalingRoute,
     signal: AbortSignal,
     observer?: V2PeerOfferAttemptObserver,
+    profile?: AttemptICEProfile,
   ): Promise<PeerChannel> {
     signal.throwIfAborted()
     let peer: RTCPeerConnection
     try {
-      peer = this.#createPeerConnection(cloneConfiguration(this.#configuration))
+      const configuration = cloneConfiguration(this.#configuration)
+      if (profile !== undefined) {
+        const trustedTurn = (configuration.iceServers ?? []).flatMap((server) => {
+          const urls = (typeof server.urls === 'string' ? [server.urls] : server.urls)
+            .filter((url) => /^turns?:/i.test(url))
+          return urls.length === 0 ? [] : [{ ...server, urls }]
+        })
+        configuration.iceServers = [...trustedTurn,
+          ...(profile.urls.length === 0 ? [] : [{ urls: [...profile.urls] }])]
+      }
+      peer = this.#createPeerConnection(configuration)
     } catch (cause) {
       throw new PeerNegotiationError('could not create the PeerConnection', { cause })
     }
@@ -139,7 +157,17 @@ class OfferNegotiation {
   readonly #peer: RTCPeerConnection
   readonly #channel: WebRTCFrameChannel
   readonly #route: SignalingRoute
-  readonly #maximumCandidates: number
+  readonly #candidateBudget: CandidateBudget
+  #pathRoute: PeerPathRoute
+  readonly #routeListeners = new Set<(route: PeerPathRoute) => void>()
+  #selectedPairID: string | undefined
+  #selectedAt = 0
+  #statsPending: Promise<void> | undefined
+  #statsTimer: ReturnType<typeof globalThis.setInterval> | undefined
+  readonly #startedAt = performance.now()
+  readonly #providerFacts: PeerProviderFact[] = []
+  #providerFactsScheduled = false
+  #providerFactsLost = 0
   readonly #observer: V2PeerOfferAttemptObserver | undefined
   readonly #remote: RemoteNegotiationState
   readonly #events: NegotiationEventQueue<NegotiationEvent>
@@ -166,13 +194,15 @@ class OfferNegotiation {
     this.#peer = peer
     this.#channel = channel
     this.#route = route
-    this.#maximumCandidates = maximumCandidates
+    this.#candidateBudget = new CandidateBudget(maximumCandidates)
     this.#observer = observer
     this.#remote = new RemoteNegotiationState(peer, maximumCandidates)
     this.#ownedChannel = new OwnedPeerChannel(
       channel,
       this.#settled.promise,
       () => this.#ownerFailure,
+      () => this.#pathRoute,
+      (listener) => { this.#routeListeners.add(listener); return () => this.#routeListeners.delete(listener) },
     )
     this.#events = new NegotiationEventQueue<NegotiationEvent>(
       maximumCandidates * 2 + NEGOTIATION_EVENT_RESERVE,
@@ -197,6 +227,8 @@ class OfferNegotiation {
     callerSignal.addEventListener('abort', aborted, { once: true })
     this.#peer.addEventListener('icecandidate', this.#onIceCandidate)
     this.#peer.addEventListener('connectionstatechange', this.#onConnectionStateChange)
+    this.#peer.addEventListener('iceconnectionstatechange', this.#onIceStateChange)
+    this.#peer.addEventListener('icecandidateerror', this.#onIceError)
     this.#peer.addEventListener('datachannel', this.#onUnexpectedDataChannel)
     this.#channel.opened.then(
       () => this.#events.push({ type: 'channel-opened' }),
@@ -231,8 +263,12 @@ class OfferNegotiation {
       callerSignal.removeEventListener('abort', aborted)
       this.#peer.removeEventListener('icecandidate', this.#onIceCandidate)
       this.#peer.removeEventListener('connectionstatechange', this.#onConnectionStateChange)
+      this.#peer.removeEventListener('iceconnectionstatechange', this.#onIceStateChange)
+      this.#peer.removeEventListener('icecandidateerror', this.#onIceError)
+      globalThis.clearInterval(this.#statsTimer)
       this.#peer.removeEventListener('datachannel', this.#onUnexpectedDataChannel)
       this.#events.close()
+      this.#routeListeners.clear()
       this.#localCandidateFingerprints.clear()
       // Parent-first teardown prevents a terminal-pending DataChannel from
       // pinning cancellation or a fatal signaling violation.
@@ -297,6 +333,10 @@ class OfferNegotiation {
       return 'done'
     }
     if (event.type === 'channel-opened') {
+      await awaitWithAbort(this.#sampleStats(), signal)
+      this.#statsTimer ??= globalThis.setInterval(() => {
+        this.#sampleStats().catch(() => undefined)
+      }, SELECTED_PAIR_SAMPLE_MILLISECONDS)
       this.#publishOpenedChannel()
       return 'continue'
     }
@@ -314,6 +354,7 @@ class OfferNegotiation {
       const accepted = await this.#remote.accept(event.signal, signal)
       if (accepted === 'answer') {
         this.#observe((observer) => observer.answerReceived(() => this.#candidateCounts()))
+        this.#observe((observer) => observer.phaseChanged?.('ice-check'))
       }
     }
     return 'continue'
@@ -440,16 +481,10 @@ class OfferNegotiation {
       // Pion reports the same end-of-candidates marker as nil, so both adapters
       // keep gathering completion local instead of consuming wire candidate quota.
       if (candidate === undefined) return
-      const fingerprint = candidateIdentity(candidate)
-      if (this.#localCandidateFingerprints.has(fingerprint)) return
-      // Identity admission precedes both lifetime quota and event capacity so a
-      // browser callback replay cannot consume either resource twice.
-      this.#localCandidateFingerprints.add(fingerprint)
-      if (this.#localCandidateFingerprints.size > this.#maximumCandidates) {
-        this.#localCandidateFailureReported = true
-        this.#interrupt(new CandidateLimitExceededError(this.#maximumCandidates))
-        return
-      }
+      const decision = this.#candidateBudget.accept(candidate.candidate ?? '')
+      this.#fact(candidateFact(candidate.candidate ?? '', decision.reason))
+      if (!decision.accepted) return
+      this.#localCandidateFingerprints.add(candidate.candidate ?? '')
       this.#events.push({ type: 'local-candidate', candidate })
     } catch (cause) {
       this.#localCandidateFailureReported = true
@@ -460,8 +495,69 @@ class OfferNegotiation {
   }
 
   #onConnectionStateChange = (): void => {
+    this.#sampleStats().catch(() => undefined)
     if (this.#peer.connectionState === 'failed') {
       this.#interrupt(new PeerNegotiationError('PeerConnection entered failed state'))
+    }
+  }
+
+  #onIceStateChange = (): void => {
+    const state = this.#peer.iceConnectionState
+    const phase = state === 'connected' || state === 'completed' ? 'dtls-datachannel' : 'ice-check'
+    this.#fact({ kind: 'state', phase, state, elapsedMs: performance.now() - this.#startedAt })
+    if (state === 'checking' || state === 'connected' || state === 'completed') this.#observer?.phaseChanged?.(phase)
+    this.#sampleStats().catch(() => undefined)
+  }
+
+  #onIceError = (event: RTCPeerConnectionIceErrorEvent): void => {
+    this.#fact({ kind: 'ice-error', code: event.errorCode, endpoint: event.url?.slice(0, 256) ?? 'unknown' })
+  }
+
+  #fact(fact: PeerProviderFact): void {
+    if (this.#providerFacts.length < PROVIDER_OBSERVATION_CAPACITY) this.#providerFacts.push(fact)
+    else this.#providerFactsLost += 1
+    if (this.#providerFactsScheduled) return
+    this.#providerFactsScheduled = true
+    queueMicrotask(() => this.#flushProviderFacts())
+  }
+
+  #flushProviderFacts(): void {
+    this.#providerFactsScheduled = false
+    const facts = this.#providerFacts.splice(0)
+    if (this.#providerFactsLost > 0) {
+      facts.push({ kind: 'observer-loss', count: this.#providerFactsLost })
+      this.#providerFactsLost = 0
+    }
+    for (const fact of facts) {
+      try { this.#observer?.providerFact?.(fact) } catch { /* Observation has no provider authority. */ }
+    }
+  }
+
+  #sampleStats(): Promise<void> {
+    if (this.#statsPending !== undefined) return this.#statsPending
+    if (typeof this.#peer.getStats !== 'function' || this.#parentClosed) return Promise.resolve()
+    const task = this.#peer.getStats().then((stats) => {
+      const now = performance.now()
+      const selected = selectedPairFact(stats, this.#selectedPairID, this.#selectedAt, now)
+      if (this.#parentClosed) return
+      if (selected === undefined) {
+        this.#setPathRoute(undefined)
+        return
+      }
+      if (selected.id !== this.#selectedPairID) this.#selectedAt = now
+      this.#selectedPairID = selected.id
+      this.#setPathRoute(selected.fact.route)
+      this.#fact(selected.fact)
+    }).catch(() => undefined).finally(() => { if (this.#statsPending === task) this.#statsPending = undefined })
+    this.#statsPending = task
+    return task
+  }
+
+  #setPathRoute(route: PeerPathRoute): void {
+    if (this.#pathRoute === route) return
+    this.#pathRoute = route
+    for (const listener of this.#routeListeners) {
+      try { listener(route) } catch { /* A subscriber cannot own provider settlement. */ }
     }
   }
 

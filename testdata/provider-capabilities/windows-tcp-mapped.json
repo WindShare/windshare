@@ -1,0 +1,57 @@
+{
+  "kind": "local-tcp-capability",
+  "platform": "win32",
+  "pion": {
+    "webrtc": "v4.2.16",
+    "ice": "v4.2.7"
+  },
+  "outcomes": [
+    {
+      "browser": "chromium",
+      "version": "151.0.7922.34",
+      "family": 4,
+      "mapped": true,
+      "status": "supported",
+      "payload": "tcp-proof:authenticated-payload",
+      "baseEndpoint": "127.0.0.1:60412",
+      "pair": {
+        "localAddress": "127.0.0.1",
+        "localPort": 60413,
+        "localType": "srflx",
+        "protocol": "tcp",
+        "remoteAddress": "127.0.0.1",
+        "remotePort": 51342,
+        "remoteType": "prflx"
+      }
+    },
+    {
+      "browser": "chromium",
+      "version": "151.0.7922.34",
+      "family": 6,
+      "mapped": true,
+      "status": "unsupported",
+      "reason": "Error: TCP open timeout"
+    },
+    {
+      "browser": "firefox",
+      "version": "153.0",
+      "family": 4,
+      "mapped": true,
+      "status": "unsupported",
+      "reason": "Error: TCP open timeout"
+    },
+    {
+      "browser": "firefox",
+      "version": "153.0",
+      "family": 6,
+      "mapped": true,
+      "status": "unsupported",
+      "reason": "Error: TCP open timeout"
+    },
+    {
+      "browser": "webkit",
+      "status": "unavailable",
+      "reason": "Error: page.evaluate: ReferenceError: Can't find variable: RTCPeerConnection"
+    }
+  ]
+}

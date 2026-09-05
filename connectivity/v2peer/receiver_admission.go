@@ -2,11 +2,44 @@ package v2peer
 
 import (
 	"errors"
+	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/core/transfer"
 	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
+
+// PeerRouteObserver supplies a local provider witness, never remote signaling.
+type PeerRouteObserver interface {
+	SelectedPeerRoute() (transfer.LaneRoute, bool)
+}
+
+func selectedPeerRoute(peer ReceiverPeerConnection) (transfer.LaneRoute, error) {
+	if observer, ok := peer.(PeerRouteObserver); ok {
+		route, valid := observer.SelectedPeerRoute()
+		if valid && (route == transfer.LaneRouteDirect || route == transfer.LaneRouteTURN) {
+			return route, nil
+		}
+		return 0, ErrNegotiation
+	}
+	provider, ok := peer.(interface{ SCTP() *pion.SCTPTransport })
+	if !ok || provider.SCTP() == nil || provider.SCTP().Transport() == nil {
+		return 0, ErrNegotiation
+	}
+	transport := provider.SCTP().Transport().ICETransport()
+	if transport == nil {
+		return 0, ErrNegotiation
+	}
+	pair, err := transport.GetSelectedCandidatePair()
+	if err != nil || pair == nil || pair.Local == nil || pair.Remote == nil {
+		return 0, errors.Join(ErrNegotiation, err)
+	}
+	if pair.Local.Typ == pion.ICECandidateTypeRelay || pair.Remote.Typ == pion.ICECandidateTypeRelay {
+		return transfer.LaneRouteTURN, nil
+	}
+	return transfer.LaneRouteDirect, nil
+}
 
 type receiverAdmissionSettlement uint8
 

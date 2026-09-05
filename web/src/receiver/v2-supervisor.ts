@@ -1,3 +1,4 @@
+import { RelayEndpointFailure } from './relay-race'
 import type { V2CatalogOperationClient } from '../catalog/v2-client'
 import type { V2CatalogPageRequest, V2ShareDescriptor } from '../catalog/v2-records'
 import {
@@ -6,10 +7,13 @@ import {
   type V2ContentLaneDetachmentObservation,
   type V2ContentIntent,
   V2ReceiverConnectivity,
+  type V2ConnectivityPolicy,
 } from '../connectivity/v2-receiver-policy'
 import type { OfferChannelFactory } from '../connectivity/peer-offer'
 import type { V2ConnectivityTraceSource } from '../connectivity/diagnostics'
-import type { V2PeerRecoveryDependencies } from '../connectivity/v2-peer-recovery'
+import type { V2PeerRecoveryDependencies } from '../connectivity/peer-set/path'
+import { PeerAttemptBudget } from '../connectivity/peer-set/budget'
+import { PeerNetworkGeneration } from '../connectivity/peer-set/network-generation'
 import {
   V2BlockBroker,
   V2BlockDispatchSequenceAuthority,
@@ -33,7 +37,6 @@ import {
 import { encodeBase64Url } from '../crypto/bytes'
 import {
   V2RelayReceiverError,
-  type V2RelayReceiverConnection,
 } from '../transport/relay/v2-receiver'
 import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
 import {
@@ -48,6 +51,14 @@ import {
   V2StaleShareInstanceError,
 } from './v2-session-factory'
 
+import { ReceiverRelaySet } from './relay-set'
+import { ReceiverPathActivity } from './path-activity'
+import { DownloadMetrics } from './download-metrics'
+import {
+  GenerationRecoveryBudget, GenerationRecoveryExhaustedError,
+  runGenerationRecovery, type GenerationRecoveryWave,
+} from './generation-recovery'
+
 export const V2_RECONNECT_INITIAL_BACKOFF_MILLISECONDS = 100
 export const V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS = 5_000
 
@@ -57,10 +68,12 @@ export interface V2ReconnectClock {
 }
 
 export interface V2ReceiverSupervisorOptions {
+  readonly policy?: V2ConnectivityPolicy
   readonly descriptor: V2ShareDescriptor
   readonly initial: V2ProtocolGenerationCore
   readonly sessionFactory: V2ReceiverSessionFactory
   readonly clock?: V2ReconnectClock
+  readonly generationRecovery?: GenerationRecoveryBudget
   readonly backoffMilliseconds?: (attempt: number) => number
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
@@ -76,8 +89,7 @@ export interface V2ReceiverSupervisorOptions {
 
 interface V2ReceiverGeneration extends V2ContentGeneration {
   readonly broker: V2BlockBroker
-  relay: V2RelayReceiverConnection
-  relayLaneId: number
+  readonly relays: ReceiverRelaySet
   readonly session: V2ReceiverSessionRuntime
   readonly connectivity: V2ReceiverConnectivity
   readonly laneSecret: Uint8Array<ArrayBuffer>
@@ -109,11 +121,16 @@ export type V2ProtocolGenerationListener = (
  */
 export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvider {
   readonly descriptor: V2ShareDescriptor
+  readonly pathActivity = new ReceiverPathActivity()
+  readonly #downloads = new Map<V2BlockRouteEligibility, DownloadMetrics>()
+  #directUsable = false
   readonly content: V2SupervisedContent
   readonly connectivity: V2SupervisedConnectivity
   readonly catalogOperations: V2CatalogOperationClient
   readonly #factory: V2ReceiverSessionFactory
+  readonly #policy: V2ConnectivityPolicy
   readonly #clock: V2ReconnectClock
+  readonly #generationRecovery: GenerationRecoveryBudget
   readonly #backoffMilliseconds: (attempt: number) => number
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
@@ -145,22 +162,32 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   constructor(options: V2ReceiverSupervisorOptions) {
     this.descriptor = options.descriptor
+    this.#policy = options.policy ?? 'auto'
     this.#factory = options.sessionFactory
     this.#clock = options.clock ?? systemReconnectClock
+    this.#generationRecovery = options.generationRecovery ?? new GenerationRecoveryBudget()
     this.#backoffMilliseconds = options.backoffMilliseconds ?? defaultReconnectBackoff
     this.#offersFactory = options.offersFactory
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable
     this.#connectivityTrace = options.connectivityTrace
-    this.#peerRecovery = options.peerRecovery
+    this.#peerRecovery = { ...options.peerRecovery,
+      network: options.peerRecovery?.network ?? new PeerNetworkGeneration(),
+      budget: options.peerRecovery?.budget ?? new PeerAttemptBudget() }
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#onBlockDispatched = options.onBlockDispatched
     this.#onBlockFetched = options.onBlockFetched
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
     this.#onContentLaneDetached = options.onContentLaneDetached
-    this.connectivity = new V2SupervisedConnectivity()
+    this.pathActivity.subscribe(snapshot => {
+      this.#directUsable = snapshot.directConnected
+      for (const metrics of this.#downloads.values()) metrics.availability(snapshot.directConnected)
+    })
+    this.connectivity = new V2SupervisedConnectivity(this.#policy)
     this.#current = this.#createGeneration(options.initial)
+    this.pathActivity.generationInstalled(this.#current.id)
     this.connectivity.bind(this.#current.connectivity)
+    this.#current.relays.start()
     this.content = new V2SupervisedContent(this, options.randomBytes)
     this.catalogOperations = Object.freeze({
       fetchPage: (request: V2CatalogPageRequest, signal: AbortSignal) =>
@@ -188,7 +215,22 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   }
 
   beginConnectivity(intent: V2ContentIntent): V2ConnectivityActivation {
-    return this.connectivity.begin(intent)
+    const activation = this.connectivity.begin(intent)
+    if (intent === 'download') {
+      const metrics = new DownloadMetrics(crypto.randomUUID(), this.#directUsable, () => this.#clock.now())
+      this.#downloads.set(activation.routes, metrics)
+      const unsubscribe = activation.routes.subscribe(() => {
+        if (activation.routes.active) return
+        metrics.snapshot(true)
+        this.#downloads.delete(activation.routes)
+        unsubscribe()
+      })
+    }
+    return activation
+  }
+
+  downloadMetrics(routes: V2BlockRouteEligibility): DownloadMetrics | undefined {
+    return this.#downloads.get(routes)
   }
 
   async execute<T>(
@@ -279,13 +321,17 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   }
 
   #createGeneration(core: V2ProtocolGenerationCore): V2ReceiverGeneration {
+    const generationId = this.#nextGeneration++
     const lanes = new V2LaneSet(
       {
         dispatchSequence: this.#dispatchSequence,
         ...(this.#onBlockDispatched === undefined
           ? {}
           : { onBlockDispatched: this.#onBlockDispatched }),
-        ...(this.#onBlockFetched === undefined ? {} : { onBlockFetched: this.#onBlockFetched }),
+        onBlockFetched: (fact) => {
+          this.pathActivity.fetched(generationId, fact)
+          this.#onBlockFetched?.(fact)
+        },
       },
     )
     const brokerOwner: { current?: V2BlockBroker } = {}
@@ -313,6 +359,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       const contentSecret = readSecret.slice()
       laneSecret = contentSecret
       connectivity = new V2ReceiverConnectivity({
+        policy: this.#policy,
         session: core.session,
         lanes,
         relayLaneId: core.relayLaneId,
@@ -332,17 +379,32 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
           ? {}
           : { connectivityTrace: this.#connectivityTrace }),
         ...(this.#peerRecovery === undefined ? {} : { peerRecovery: this.#peerRecovery }),
-        ...(this.#onContentLaneAdmitted === undefined
-          ? {}
-          : { onContentLaneAdmitted: this.#onContentLaneAdmitted }),
-        ...(this.#onContentLaneDetached === undefined
-          ? {}
-          : { onContentLaneDetached: this.#onContentLaneDetached }),
+        onContentLaneAdmitted: (lane) => {
+          this.pathActivity.admitted(generationId, lane)
+          this.#onContentLaneAdmitted?.(lane)
+        },
+        onContentLaneDetached: (lane) => {
+          this.pathActivity.detached(generationId, lane)
+          this.#onContentLaneDetached?.(lane)
+        },
       })
       const generation: V2ReceiverGeneration = {
-        id: this.#nextGeneration++,
-        relay: core.relay,
-        relayLaneId: core.relayLaneId,
+        id: generationId,
+        relays: new ReceiverRelaySet({
+          initial: core,
+          factory: this.#factory,
+          admit: (laneId) => connectivity!.addRelayLane(laneId),
+          sleep: (attempt, signal) => this.#clock.sleep(
+            requireBackoff(this.#backoffMilliseconds(attempt)), signal),
+          failure: (error) => {
+            if (error instanceof V2StaleShareInstanceError) {
+              this.#failTerminal(error)
+              return 'stop'
+            }
+            this.#onRecoveryError(error)
+            return isTerminalRecoveryFailure(error) ? 'stop' : 'retry'
+          },
+        }),
         session: core.session,
         lanes,
         revisions,
@@ -353,6 +415,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       }
       generation.unsubscribe = core.session.subscribeLaneChanges((change) =>
         this.#laneChanged(generation, change))
+      connectivity.beginBrowse()
       return generation
     } catch (error) {
       connectivity?.close().catch(() => undefined)
@@ -374,8 +437,11 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
     if (generation.session.laneIds().length === 0) {
       generation.retired = true
+      this.pathActivity.generationRetired(generation.id)
       generation.session.close().catch(() => undefined)
     }
+    generation.relays.detached(change.laneId)
+    if (generation.retired) generation.relays.close().catch(() => undefined)
     this.#requestReconcile()
     this.#wakeWaiters()
   }
@@ -397,10 +463,11 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 
   async #reconcile(): Promise<void> {
     let attempt = 0
+    const wave = this.#generationRecovery.openWave(this.#clock.now())
     while (!this.#stopped && !this.#failed) {
       this.#reconcileRequested = false
       try {
-        if (!(await this.#reconcileGeneration(this.#current))) return
+        if (!(await this.#reconcileGeneration(this.#current, wave))) return
         attempt = 0
       } catch (error) {
         if (!(await this.#waitAfterRecoveryFailure(error, attempt++))) return
@@ -408,13 +475,9 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
   }
 
-  async #reconcileGeneration(generation: V2ReceiverGeneration): Promise<boolean> {
+  async #reconcileGeneration(generation: V2ReceiverGeneration, wave: GenerationRecoveryWave): Promise<boolean> {
     if (generation.retired || generation.session.laneIds().length === 0) {
-      await this.#replaceGeneration(generation)
-      return true
-    }
-    if (!generation.session.laneIds().includes(generation.relayLaneId)) {
-      await this.#replaceRelay(generation)
+      await this.#replaceGeneration(generation, wave)
       return true
     }
     return false
@@ -436,27 +499,14 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
   }
 
-  async #replaceRelay(generation: V2ReceiverGeneration): Promise<void> {
-    const attached = await this.#factory.attachRelay(generation.session, this.#lifetime.signal)
-    if (!this.isCurrent(generation) || generation.retired) {
-      await attached.relay.close().catch(() => undefined)
-      return
-    }
-    try {
-      generation.connectivity.replaceRelayLane(attached.laneId)
-    } catch (error) {
-      await attached.relay.close().catch(() => undefined)
-      throw error
-    }
-    const previous = generation.relay
-    generation.relay = attached.relay
-    generation.relayLaneId = attached.laneId
-    await previous.close().catch(() => undefined)
-    this.#wakeWaiters()
-  }
-
-  async #replaceGeneration(previous: V2ReceiverGeneration): Promise<void> {
-    const core = await this.#factory.connectFresh(this.#lifetime.signal)
+  async #replaceGeneration(previous: V2ReceiverGeneration, wave: GenerationRecoveryWave): Promise<void> {
+    const core = await runGenerationRecovery({
+      reservation: wave.reserve(this.#clock.now()),
+      parent: this.#lifetime.signal,
+      now: () => this.#clock.now(),
+      connect: (signal) => this.#factory.connectFresh(signal),
+      close: closeCore,
+    })
     if (this.#stopped || this.#current !== previous) {
       await closeCore(core)
       return
@@ -469,7 +519,9 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       throw error
     }
     this.#current = next
+    this.pathActivity.generationInstalled(next.id)
     this.connectivity.bind(next.connectivity)
+    next.relays.start()
     this.#wakeWaiters()
     this.#publishGenerationInstalled(next)
     await this.#closeGeneration(previous)
@@ -547,6 +599,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#current.retired = true
     this.#generationListeners.clear()
     this.content.close()
+    this.pathActivity.close()
     this.connectivity.close().catch(() => undefined)
     this.#factory.close()
     this.#closeGeneration(this.#current).catch(() => undefined)
@@ -567,6 +620,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#current.retired = true
     this.#generationListeners.clear()
     this.content.close()
+    this.pathActivity.close()
     await Promise.allSettled([
       this.connectivity.close(),
       this.#closeGeneration(this.#current),
@@ -582,8 +636,19 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
 }
 
 function isTerminalRecoveryFailure(error: unknown): boolean {
-  return error instanceof V2StaleShareInstanceError ||
+  if (error instanceof RelayEndpointFailure) return isTerminalRecoveryFailure(error.cause)
+  if (error instanceof AggregateError) {
+    return error.errors.some(isSessionRecoveryFailure) ||
+      (error.errors.length > 0 && error.errors.every(isTerminalRecoveryFailure))
+  }
+  return isSessionRecoveryFailure(error) ||
     (error instanceof V2RelayReceiverError && error.relayError?.code === V2_RELAY_ERROR.stopped)
+}
+
+function isSessionRecoveryFailure(error: unknown): boolean {
+  if (error instanceof RelayEndpointFailure) return isSessionRecoveryFailure(error.cause)
+  if (error instanceof AggregateError) return error.errors.some(isSessionRecoveryFailure)
+  return error instanceof GenerationRecoveryExhaustedError || error instanceof V2StaleShareInstanceError
 }
 
 async function closeGeneration(generation: V2ReceiverGeneration): Promise<void> {
@@ -597,7 +662,7 @@ async function closeGeneration(generation: V2ReceiverGeneration): Promise<void> 
   await Promise.allSettled([
     generation.connectivity.close(),
     generation.session.close(),
-    generation.relay.close(),
+    generation.relays.close(),
   ])
 }
 

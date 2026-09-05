@@ -9,9 +9,11 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"github.com/windshare/windshare/core/transfer"
 	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
 )
 
@@ -29,18 +31,18 @@ type ReceiverPeerConnection interface {
 }
 
 type ReceiverPeerConnectionFactory interface {
-	NewReceiverPeerConnection(pion.Configuration) (ReceiverPeerConnection, error)
+	NewReceiverPeerConnection(context.Context, nativepeer.AttemptRequest) (ReceiverPeerConnection, error)
 }
 
 type ReceiverPeerConnectionFactoryFunc func(pion.Configuration) (ReceiverPeerConnection, error)
 
 func (function ReceiverPeerConnectionFactoryFunc) NewReceiverPeerConnection(
-	configuration pion.Configuration,
+	_ context.Context, request nativepeer.AttemptRequest,
 ) (ReceiverPeerConnection, error) {
 	if function == nil {
 		return nil, ErrConfig
 	}
-	return function(configuration)
+	return function(request.Configuration)
 }
 
 type ReceiverLaneSession interface {
@@ -49,6 +51,7 @@ type ReceiverLaneSession interface {
 		context.Context,
 		sessionruntime.LaneAttachmentGrant,
 		protocolsession.FrameChannel,
+		transfer.LaneRoute,
 	) (sessionruntime.ReceiverLaneAdmissionResult, error)
 }
 
@@ -58,6 +61,7 @@ const (
 )
 
 type ReceiverFactoryConfig struct {
+	Native                                 *nativepeer.NativePeerConnectivity
 	Configuration                          pion.Configuration
 	PeerConnections                        ReceiverPeerConnectionFactory
 	DataChannels                           DataChannelAdapter
@@ -71,6 +75,7 @@ type ReceiverFactoryConfig struct {
 }
 
 type ReceiverFactory struct {
+	native                *nativepeer.NativePeerConnectivity
 	configuration         pion.Configuration
 	peerConnections       ReceiverPeerConnectionFactory
 	dataChannels          DataChannelAdapter
@@ -111,12 +116,8 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	if config.PhaseTimers == nil {
 		config.PhaseTimers = systemPeerPhaseTimerSource{}
 	}
-	if config.PeerConnections == nil {
-		config.PeerConnections = ReceiverPeerConnectionFactoryFunc(
-			func(configuration pion.Configuration) (ReceiverPeerConnection, error) {
-				return pion.NewPeerConnection(configuration)
-			},
-		)
+	if config.Native == nil {
+		config.Native = nativepeer.New(nativepeer.Config{})
 	}
 	if config.DataChannels == nil {
 		config.DataChannels = DataChannelAdapterFunc(func(channel *pion.DataChannel) (PeerDataChannel, error) {
@@ -137,6 +138,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		return nil, errors.Join(ErrConfig, err)
 	}
 	factory := &ReceiverFactory{
+		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
 		negotiationBudget: config.NegotiationBudget, admissionBudget: config.AdmissionBudget,
@@ -222,7 +224,19 @@ func (factory *ReceiverFactory) Start(
 	signaling ReceiverSignaling,
 	lanes ReceiverLaneSession,
 ) (*ReceiverAttempt, error) {
-	if factory == nil || signaling == nil || lanes == nil || parent == nil {
+	if factory == nil {
+		return nil, ErrConfig
+	}
+	binding, err := factory.newBinding()
+	if err != nil {
+		return nil, err
+	}
+	return factory.StartBinding(parent, signaling, lanes, binding)
+}
+
+// StartPreparedBinding transfers an admitted preparation into one timed attempt.
+func (factory *ReceiverFactory) StartPreparedBinding(parent context.Context, signaling ReceiverSignaling, lanes ReceiverLaneSession, binding v2signal.Binding, prepared *nativepeer.PreparedAttempt) (*ReceiverAttempt, error) {
+	if factory == nil || signaling == nil || lanes == nil || parent == nil || binding.Validate() != nil {
 		return nil, ErrConfig
 	}
 	ctx, cancel := context.WithCancelCause(parent)
@@ -231,6 +245,7 @@ func (factory *ReceiverFactory) Start(
 		factory.negotiationBudget,
 		factory.admissionBudget,
 	)
+	phases.staged = factory.peerConnections == nil
 	phaseContext, err := phases.beginNegotiation(ctx)
 	if err != nil {
 		cancel(err)
@@ -242,11 +257,26 @@ func (factory *ReceiverFactory) Start(
 		teardown := teardownPeerTransport(peer, channel)
 		return nil, errors.Join(cause, teardown.cause())
 	}
-	binding, err := factory.newBinding()
-	if err != nil {
-		return fail(err, nil, nil)
+	var sessionID protocolsession.ProtocolSessionID
+	if session, ok := lanes.(interface {
+		ProtocolSessionID() protocolsession.ProtocolSessionID
+	}); ok {
+		sessionID = session.ProtocolSessionID()
 	}
-	peer, err := factory.peerConnections.NewReceiverPeerConnection(factory.configuration)
+	request := nativepeer.AttemptRequest{Configuration: factory.configuration, ProtocolSessionID: [16]byte(sessionID), Binding: binding}
+	var peer ReceiverPeerConnection
+	if factory.peerConnections != nil {
+		peer, err = factory.peerConnections.NewReceiverPeerConnection(phaseContext, request)
+	} else {
+		if !prepared.Matches(request.ProtocolSessionID, binding) {
+			return fail(ErrConfig, nil, nil)
+		}
+		connection, startErr := prepared.Start(phaseContext)
+		err = startErr
+		if connection != nil {
+			peer = connection
+		}
+	}
 	if err != nil || peer == nil {
 		return fail(errors.Join(ErrNegotiation, err), peer, nil)
 	}
@@ -285,7 +315,7 @@ func (factory *ReceiverFactory) newBinding() (v2signal.Binding, error) {
 	if err != nil {
 		return v2signal.Binding{}, err
 	}
-	return v2signal.Binding{PeerPathID: pathID, AttemptID: attemptID}, nil
+	return v2signal.Binding{PeerPathID: pathID, AttemptID: attemptID, AttemptSequence: 1}, nil
 }
 
 func readReceiverSignalID[T ~[v2signal.IdentityBytes]byte](source io.Reader) (T, error) {
@@ -376,8 +406,10 @@ type receiverEvent struct {
 }
 
 func (attempt *ReceiverAttempt) registerCallbacks() {
+	observePeerICE(attempt.peer, attempt.phases)
+	accept := candidateAdmission(attempt.peer, attempt.factory.maxCandidates)
 	attempt.peer.OnICECandidate(func(candidate *pion.ICECandidate) {
-		if candidate == nil {
+		if !accept(candidate) {
 			return
 		}
 		value := candidate.ToJSON()
@@ -550,4 +582,11 @@ func (attempt *ReceiverAttempt) closeInbox() {
 			return
 		}
 	}
+}
+
+func (factory *ReceiverFactory) NativeConnectivity() *nativepeer.NativePeerConnectivity {
+	if factory.peerConnections != nil {
+		return nil
+	}
+	return factory.native
 }

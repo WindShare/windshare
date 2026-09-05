@@ -1,5 +1,6 @@
 import {
   booleanValue,
+  recordValue,
   decimalFields,
   decimalUint64,
   exactKeys,
@@ -282,6 +283,12 @@ function canonicalDigest(value: unknown, field: string): void {
 }
 
 export function validateReceive(payload: UnknownRecord): void {
+  if (payload.transition === 'download_connectivity') {
+    exactKeys(payload, ['transition', 'transfer_job_id', 'connectivity'], [], 'download connectivity')
+    canonicalIdentity(payload.transfer_job_id, 'download transfer job')
+    validateDownloadConnectivity(recordValue(payload.connectivity, 'download connectivity'))
+    return
+  }
   switch (payload.transition) {
     case 'intent_frozen':
       exactKeys(payload, ['transition', 'artifact_kind', 'layout_class', 'plan_kind'], [],
@@ -410,6 +417,29 @@ export function validateLifecycleAction(payload: UnknownRecord): void {
   if (payload.lifecycle_state !== undefined) {
     member(payload.lifecycle_state, LIFECYCLE_STATES, 'lifecycle state')
   }
+}
+
+function validateDownloadConnectivity(payload: UnknownRecord): void {
+  const bytes = ['direct_bytes', 'turn_bytes', 'application_relay_bytes', 'unknown_bytes'] as const
+  exactKeys(payload, ['download_id', 'first_direct_elapsed_ms', ...bytes, 'direct_fraction',
+    'fallback_stall_ms', 'incomplete', 'final'], [], 'download connectivity')
+  if (typeof payload.download_id !== 'string' || !/^[0-9a-f-]{36}$/.test(payload.download_id)) {
+    throw new TypeError('download identity must be a UUID')
+  }
+  decimalFields(payload, bytes, 'download bytes')
+  booleanValue(payload.incomplete, 'download incomplete')
+  booleanValue(payload.final, 'download final')
+  for (const key of ['first_direct_elapsed_ms', 'fallback_stall_ms'] as const) {
+    if (key === 'first_direct_elapsed_ms' && payload[key] === null) continue
+    if (typeof payload[key] !== 'number' || !Number.isFinite(payload[key]) || payload[key] < 0) {
+      throw new TypeError('download elapsed time must be nonnegative')
+    }
+  }
+  const fraction = payload.direct_fraction
+  if (fraction !== null && (typeof fraction !== 'number' || !Number.isFinite(fraction) || fraction < 0 || fraction > 1)) {
+    throw new TypeError('download direct fraction is invalid')
+  }
+  if (payload.incomplete && fraction !== null) throw new TypeError('incomplete download cannot assert an exact fraction')
 }
 
 export function validateTransferProgress(payload: UnknownRecord): void {

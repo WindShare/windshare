@@ -23,7 +23,7 @@ Write-Output '== hygiene =='
 
 $goFiles = @(
     git -c core.quotepath=false ls-files --cached --others --exclude-standard -- '*.go' |
-        Where-Object { Test-Path -LiteralPath $_ -PathType Leaf }
+        Where-Object { $_ -notmatch '^third_party/pion/(ice|webrtc)/' -and (Test-Path -LiteralPath $_ -PathType Leaf) }
 )
 if ($LASTEXITCODE -ne 0) {
     throw "git ls-files exited with code $LASTEXITCODE"
@@ -47,6 +47,10 @@ if ($unformatted.Count -ne 0) {
 }
 
 Invoke-Step 'whitespace' { git --no-pager diff --check }
+Invoke-Step 'Release source and binary packaging contracts' { go test ./scripts/ci/_sourcebundle ./scripts/ci/_releaseassets }
+Invoke-Step 'Windows first-setup contract (fake firewall commands)' { & ./scripts/install/windows/firewall.tests.ps1 }
+Invoke-Step 'Pinned Pion source verifier tests' { go test ./scripts/ci/_piondeps }
+Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_piondeps -reproduce }
 Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
 Invoke-Step 'Browser FSA reviewed support artifact syntax' {
     $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip' -Recurse -File -Filter '*.mjs')

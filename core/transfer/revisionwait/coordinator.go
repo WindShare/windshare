@@ -394,9 +394,20 @@ func (operation *Operation) wait(
 		}
 		cause := result.err
 		if cause == nil {
-			if !result.change.validFor(signal.Generation()) {
+			switch {
+			case !result.change.validFor(signal.Generation()):
 				cause = ErrGenerationContract
-			} else {
+			case result.change.Kind() == GenerationReplaced:
+				// The fence certifies fresh authenticated authority. Reopen the
+				// revision while preserving the accumulated capacity wait budget.
+				operation.mu.Lock()
+				operation.generation = result.change.Current()
+				operation.mu.Unlock()
+				snapshot := operation.coordinator.Snapshot()
+				operation.observe(snapshot)
+				operation.traceFromLast(TraceRetryReady, nil, snapshot)
+				return WaitRetry, nil
+			default:
 				cause = result.change.Cause()
 			}
 		}

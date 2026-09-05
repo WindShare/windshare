@@ -12,17 +12,15 @@ import (
 )
 
 func TestRelayContentAdmissionReportsAsynchronousResumeFailure(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 0, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	resumeErr := errors.New("initial lane became stale")
 	relay.resumeError = resumeErr
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admission.Close()
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
+	_ = admission.AdmitRelayOnly()
 	decision := receiveReceiverAdmissionDecision(t, admission)
 	if !errors.Is(decision.Cause, resumeErr) {
 		t.Fatalf("reported error=%v", decision.Cause)
@@ -30,7 +28,7 @@ func TestRelayContentAdmissionReportsAsynchronousResumeFailure(t *testing.T) {
 	if err := admission.ObservePeer(receiverPeerFailed); err != nil {
 		t.Fatalf("peer signal replayed deadline-owned error=%v", err)
 	}
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatalf("selection signal replayed deadline-owned error=%v", err)
 	}
 	if resumed := relay.count(); resumed != 1 {
@@ -42,12 +40,10 @@ func TestRelayContentAdmissionReportsAsynchronousResumeFailure(t *testing.T) {
 }
 
 func TestRelayContentAdmissionRetainsFirstResumeFailure(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 30, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	resumeErr := errors.New("relay suspension could not resume")
 	relay.resumeError = resumeErr
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,8 +54,7 @@ func TestRelayContentAdmissionRetainsFirstResumeFailure(t *testing.T) {
 	if decision := receiveReceiverAdmissionDecision(t, admission); !errors.Is(decision.Cause, resumeErr) {
 		t.Fatalf("first resume failure=%v", decision.Cause)
 	}
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
-	<-admission.finished
+	_ = admission.AdmitRelayOnly()
 	if resumed := relay.count(); resumed != 1 {
 		t.Fatalf("terminal resume failure retried %d times", resumed)
 	}
@@ -69,14 +64,12 @@ func TestRelayContentAdmissionRetainsFirstResumeFailure(t *testing.T) {
 }
 
 func TestRelayContentAdmissionConcurrentFailureReportsOwningTransitionOnce(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 45, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	resumeErr := errors.New("relay suspension lost its lane")
 	resumeGate := make(chan struct{})
 	relay.resumeError = resumeErr
 	relay.resumeGate = resumeGate
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +90,7 @@ func TestRelayContentAdmissionConcurrentFailureReportsOwningTransitionOnce(t *te
 			results <- admission.ObservePeer(receiverPeerDetached)
 		}()
 	}
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
+	_ = admission.AdmitRelayOnly()
 	close(start)
 	close(resumeGate)
 
@@ -125,15 +118,13 @@ func TestRelayContentAdmissionConcurrentFailureReportsOwningTransitionOnce(t *te
 }
 
 func TestRelayContentAdmissionResumeMayReenterWithoutDeadlock(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 50, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	resumeErr := errors.New("reentrant relay resume failed")
 	resumeDone := make(chan struct{})
 	var admission *relayContentAdmission
 	relay := receiverContentSuspensionFunc(func() error {
 		defer close(resumeDone)
 		_ = admission.Err()
-		if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+		if err := admission.AdmitRelayOnly(); err != nil {
 			return errors.Join(resumeErr, err)
 		}
 		if err := admission.ObservePeer(receiverPeerDetached); err != nil {
@@ -143,11 +134,11 @@ func TestRelayContentAdmissionResumeMayReenterWithoutDeadlock(t *testing.T) {
 		return resumeErr
 	})
 	var err error
-	admission, err = newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err = newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -175,20 +166,16 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 		{name: "runtime terminal", signal: receiverPeerRuntimeTerminal, owner: receiverAdmissionTerminalRuntime},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			downloadT0 := time.Date(2026, 7, 18, 7, 52, 0, 0, time.UTC)
-			clock := &fakeReceiverAdmissionClock{now: downloadT0}
 			relay := newFakeReceiverContentSuspension()
 			claimGate := make(chan struct{})
 			admission, err := newRelayContentAdmissionWithExecution(
-				downloadT0,
-				clock,
 				relay,
 				receiverAdmissionExecution{claimGate: claimGate},
 			)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+			if err := admission.AdmitRelayOnly(); err != nil {
 				t.Fatal(err)
 			}
 			workerDone := admission.decisionWorkerDone()
@@ -215,13 +202,9 @@ func TestRelayContentAdmissionCloseRevokesQueuedDecisionBeforeResume(t *testing.
 }
 
 func TestRelayContentAdmissionClaimGateHoldsContentUntilOutputIsReady(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 52, 30, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	contentReady := make(chan struct{})
 	admission, err := newRelayContentAdmissionWithExecution(
-		downloadT0,
-		clock,
 		relay,
 		receiverAdmissionExecution{claimGate: contentReady},
 	)
@@ -229,7 +212,7 @@ func TestRelayContentAdmissionClaimGateHoldsContentUntilOutputIsReady(t *testing
 		t.Fatal(err)
 	}
 	defer admission.Close()
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatal(err)
 	}
 	workerDone := admission.decisionWorkerDone()
@@ -260,17 +243,15 @@ func TestRelayContentAdmissionClaimGateHoldsContentUntilOutputIsReady(t *testing
 }
 
 func TestRelayContentAdmissionTerminalBeforeDecisionQueuesNoWork(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 53, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := admission.ObservePeer(receiverPeerSessionFatal); err != nil {
 		t.Fatal(err)
 	}
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatal(err)
 	}
 	admission.Wait()
@@ -283,21 +264,16 @@ func TestRelayContentAdmissionTerminalBeforeDecisionQueuesNoWork(t *testing.T) {
 }
 
 func TestRelayContentAdmissionTerminalRevokesQueuedDeadline(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 54, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	claimGate := make(chan struct{})
 	admission, err := newRelayContentAdmissionWithExecution(
-		downloadT0,
-		clock,
 		relay,
 		receiverAdmissionExecution{claimGate: claimGate},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
-	<-admission.finished
+	_ = admission.AdmitRelayOnly()
 	workerDone := admission.decisionWorkerDone()
 	if workerDone == nil {
 		t.Fatal("deadline did not publish an owned decision worker")
@@ -314,12 +290,10 @@ func TestRelayContentAdmissionTerminalRevokesQueuedDeadline(t *testing.T) {
 }
 
 func TestRelayContentAdmissionCloseReturnsButWaitJoinsClaimedResume(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 55, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	resumeGate := make(chan struct{})
 	relay.resumeGate = resumeGate
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -368,13 +342,9 @@ func TestRelayContentAdmissionCloseReturnsButWaitJoinsClaimedResume(t *testing.T
 }
 
 func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 56, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	claimGate := make(chan struct{})
 	admission, err := newRelayContentAdmissionWithExecution(
-		downloadT0,
-		clock,
 		relay,
 		receiverAdmissionExecution{claimGate: claimGate},
 	)
@@ -391,7 +361,7 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 			defer contendersDone.Done()
 			<-start
 			if index%2 == 0 {
-				_ = admission.ObserveConnectionSize(transfer.ConnectionSizeSmall)
+				_ = admission.AdmitRelayOnly()
 				return
 			}
 			_ = admission.ObservePeer(receiverPeerFailed)
@@ -428,18 +398,14 @@ func TestRelayContentAdmissionHighContentionPublishesOneRevocableCapability(t *t
 }
 
 func TestRelayContentAdmissionContainsResumePanic(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 57, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	admission, err := newRelayContentAdmission(
-		downloadT0,
-		clock,
 		receiverContentSuspensionFunc(func() error { panic("injected resume panic") }),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer admission.Close()
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
+	if err := admission.AdmitRelayOnly(); err != nil {
 		t.Fatal(err)
 	}
 	decision := receiveReceiverAdmissionDecision(t, admission)
@@ -451,11 +417,9 @@ func TestRelayContentAdmissionContainsResumePanic(t *testing.T) {
 }
 
 func TestReceiverAdmissionMonitorConsumesFailureBeforeJoinReturns(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 59, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	relay.resumeError = errors.New("monitor-owned relay resume failure")
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -477,14 +441,12 @@ func TestReceiverAdmissionMonitorConsumesFailureBeforeJoinReturns(t *testing.T) 
 }
 
 func TestReceiverAdmissionMonitorSuppressesFailureAfterRuntimeTerminal(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 7, 59, 30, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
 	resumeErr := errors.New("late relay resume failure")
 	resumeGate := make(chan struct{})
 	relay.resumeError = resumeErr
 	relay.resumeGate = resumeGate
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -513,15 +475,10 @@ func TestP2POnlyContentAdmissionNeverResumesRelay(t *testing.T) {
 	relay := newFakeReceiverContentSuspension()
 	admission, err := newReceiverContentAdmissionWithExecution(
 		receiverRelayContentProhibited,
-		time.Time{},
-		nil,
 		relay,
 		receiverAdmissionExecution{},
 	)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if err := admission.ObserveConnectionSize(transfer.ConnectionSizeSmall); err != nil {
 		t.Fatal(err)
 	}
 	if err := admission.ObservePeer(receiverPeerReady); err != nil {
@@ -589,65 +546,41 @@ func TestP2POnlyContentAdmissionMakesPeerLossTerminal(t *testing.T) {
 	}
 }
 
-func TestRelayContentAdmissionFatalDisarmsDeadline(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 8, 0, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
+func TestRelayContentAdmissionFatalRevokesPolicyClaim(t *testing.T) {
 	relay := newFakeReceiverContentSuspension()
-	admission, err := newRelayContentAdmission(
-		downloadT0, clock, relay,
-	)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := admission.ObservePeer(receiverPeerSessionFatal); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-admission.finished:
-	default:
-		t.Fatal("fatal peer signal returned before the deadline worker stopped")
-	}
-	clock.timer.mu.Lock()
-	stopped := clock.timer.stopped
-	clock.timer.mu.Unlock()
-	if !stopped {
-		t.Fatal("fatal peer signal left the deadline timer armed")
-	}
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
+	admission.Wait()
+	_ = admission.AdmitRelayOnly()
 	if resumed := relay.count(); resumed != 0 {
 		t.Fatalf("fatal peer signal admitted relay %d time(s)", resumed)
 	}
 }
 
 func TestRelayContentAdmissionRuntimeTerminalDisarmsWithoutResume(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 8, 30, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
 	relay := newFakeReceiverContentSuspension()
-	admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := admission.ObservePeer(receiverPeerRuntimeTerminal); err != nil {
 		t.Fatal(err)
 	}
-	select {
-	case <-admission.finished:
-	default:
-		t.Fatal("runtime-terminal signal returned before the deadline worker stopped")
-	}
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
+	admission.Wait()
+	_ = admission.AdmitRelayOnly()
 	if resumed := relay.count(); resumed != 0 {
 		t.Fatalf("runtime-terminal signal admitted relay %d time(s)", resumed)
 	}
 }
 
-func TestRelayContentAdmissionDeadlineAndPeerFailureResumeExactlyOnce(t *testing.T) {
-	downloadT0 := time.Date(2026, 7, 18, 9, 0, 0, 0, time.UTC)
-	clock := &fakeReceiverAdmissionClock{now: downloadT0}
+func TestRelayContentAdmissionPolicyAndPeerFailureResumeExactlyOnce(t *testing.T) {
 	relay := newFakeReceiverContentSuspension()
-	admission, err := newRelayContentAdmission(
-		downloadT0, clock, relay,
-	)
+	admission, err := newRelayContentAdmission(relay)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -659,11 +592,10 @@ func TestRelayContentAdmissionDeadlineAndPeerFailureResumeExactlyOnce(t *testing
 		done <- admission.ObservePeer(receiverPeerFailed)
 	}()
 	close(start)
-	clock.timer.fire(downloadT0.Add(receiverRelayAdmissionWindow))
+	_ = admission.AdmitRelayOnly()
 	if err := <-done; err != nil {
 		t.Fatal(err)
 	}
-	<-admission.finished
 	if decision := receiveReceiverAdmissionDecision(t, admission); decision.Cause != nil {
 		t.Fatalf("deadline/failure admission=%v", decision.Cause)
 	}
@@ -690,9 +622,7 @@ func TestRelayContentAdmissionPeerFailureSurvivesRelayEpochReplacement(t *testin
 			lanes.Close()
 			t.Fatal(err)
 		}
-		downloadT0 := time.Date(2026, 7, 18, 10, 0, 0, 0, time.UTC)
-		clock := &fakeReceiverAdmissionClock{now: downloadT0}
-		admission, err := newRelayContentAdmission(downloadT0, clock, relay)
+		admission, err := newRelayContentAdmission(relay)
 		if err != nil {
 			lanes.Close()
 			t.Fatal(err)

@@ -66,11 +66,11 @@ try {
 
     $environmentState = Enter-ReleaseGoEnvironment -ReleaseRoot $releaseEnvironment
     Set-Location $repositoryRoot
-    & go run ./scripts/ci/_modulezip/main.go `
+    & go run ./scripts/ci/_sourcebundle `
         -repo $fixtureRepository `
         -commit $commitSHA `
         -stage (Join-Path $testRoot 'committed-module') `
-        -zip (Join-Path $testRoot 'module.zip') `
+        -zip (Join-Path $testRoot 'source.zip') `
         -extract (Join-Path $testRoot 'extracted-module') `
         -version $artifactVersion | Out-Null
     if ($LASTEXITCODE -ne 0) {

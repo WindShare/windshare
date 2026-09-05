@@ -186,7 +186,7 @@ export class PagePeerRecoveryHarness {
   }
 
   observeDetachment(observation: HotSwitchLaneObservation): void {
-    if (observation.route !== 'peer') return
+    if (observation.route !== 'direct') return
     for (const resolve of this.#detachmentWaiters.splice(0)) resolve()
   }
 

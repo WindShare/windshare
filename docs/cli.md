@@ -1,5 +1,7 @@
 # CLI
 
+See [installation and optional first setup](installation.md).
+
 ## Share
 
 ```text
@@ -45,9 +47,11 @@ Existing files are not overwritten. A name collision creates a suffixed destinat
 
 | Mode | Behavior |
 |---|---|
-| `auto` | Uses direct WebRTC and relay as available. |
+| `auto` | Starts on the first available path; direct WebRTC and relay may carry content together. |
 | `relay-only` | Transfers content through the relay. |
-| `p2p-only` | Uses the relay for setup, transfers content directly, and stops if the direct connection fails. |
+| `p2p-only` | Uses relays for setup, transfers content only directly, and stops if direct recovery is exhausted. |
+
+Connection recovery keeps the same output and verified progress while the shared file revision remains unchanged.
 
 The final result is `success`, `partial`, `paused`, or `failed`. Exit codes are: `0` success, `1` runtime failure, `2` invalid command, `3` network failure, and `4` shared content changed.
 

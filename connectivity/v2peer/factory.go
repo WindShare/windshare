@@ -9,6 +9,7 @@ import (
 	"time"
 
 	pion "github.com/pion/webrtc/v4"
+	"github.com/windshare/windshare/connectivity/nativepeer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -27,17 +28,18 @@ const (
 	maximumSenderAttemptObservationCapacity = 4_096
 	handlerEventReserve                     = 16
 	rejectedOfferAuthoritySDP               = "v=0\r\n"
-	peerEvidenceCapacityFailureMessage      = "Sender peer evidence identity capacity exhausted"
+	peerPathCapacityFailureMessage          = "Sender peer path capacity exhausted"
 )
 
 var (
-	ErrConfig                   = errors.New("v2 peer sender configuration is invalid")
-	ErrProtocol                 = errors.New("authenticated v2 peer signaling is invalid")
-	ErrAttemptCapacity          = errors.New("v2 peer attempt capacity is exhausted")
-	ErrReplayCapacity           = errors.New("v2 peer replay tombstone capacity is exhausted")
-	ErrEventCapacity            = errors.New("v2 peer signaling event capacity is exhausted")
-	ErrEvidenceIdentityCapacity = errors.New("v2 peer session evidence identity capacity is exhausted")
-	ErrNegotiation              = errors.New("v2 peer negotiation failed")
+	ErrConfig           = errors.New("v2 peer sender configuration is invalid")
+	ErrProtocol         = errors.New("authenticated v2 peer signaling is invalid")
+	ErrAttemptCapacity  = errors.New("v2 peer attempt capacity is exhausted")
+	ErrReplayCapacity   = errors.New("v2 peer replay tombstone capacity is exhausted")
+	ErrEventCapacity    = errors.New("v2 peer signaling event capacity is exhausted")
+	ErrPeerPathRetired  = errors.New("v2 peer path retired")
+	ErrPeerPathCapacity = errors.New("v2 peer path membership capacity is exhausted")
+	ErrNegotiation      = errors.New("v2 peer negotiation failed")
 )
 
 type PeerConnection interface {
@@ -53,18 +55,18 @@ type PeerConnection interface {
 }
 
 type PeerConnectionFactory interface {
-	NewPeerConnection(pion.Configuration) (PeerConnection, error)
+	NewPeerConnection(context.Context, nativepeer.AttemptRequest) (PeerConnection, error)
 }
 
 type PeerConnectionFactoryFunc func(pion.Configuration) (PeerConnection, error)
 
 func (function PeerConnectionFactoryFunc) NewPeerConnection(
-	configuration pion.Configuration,
+	_ context.Context, request nativepeer.AttemptRequest,
 ) (PeerConnection, error) {
 	if function == nil {
 		return nil, ErrConfig
 	}
-	return function(configuration)
+	return function(request.Configuration)
 }
 
 type PeerDataChannel interface {
@@ -90,6 +92,7 @@ func (function DataChannelAdapterFunc) WrapDataChannel(
 }
 
 type Config struct {
+	Native             *nativepeer.NativePeerConnectivity
 	Configuration      pion.Configuration
 	PeerConnections    PeerConnectionFactory
 	DataChannels       DataChannelAdapter
@@ -99,31 +102,31 @@ type Config struct {
 	MaxCandidates      int
 	RetiredBindingTTL  time.Duration
 	MaxRetiredBindings int
-	// MaxSessionEvidenceIdentities may tighten, but never expand, the total
-	// ordinary-plus-terminal identity ceiling.
-	MaxSessionEvidenceIdentities      int
+	// MaxPeerPaths bounds stable path watermarks for this protocol session.
+	MaxPeerPaths                      int
 	SenderAttemptObservationCapacity  int
 	PeerDiagnosticObservationCapacity int
 	Now                               func() time.Time
 }
 
 type Factory struct {
-	configuration                pion.Configuration
-	peerConnections              PeerConnectionFactory
-	dataChannels                 DataChannelAdapter
-	negotiationBudget            time.Duration
-	admissionBudget              time.Duration
-	phaseTimers                  PeerPhaseTimerSource
-	maxCandidates                int
-	retiredBindingTTL            time.Duration
-	maxRetiredBindings           int
-	maxSessionEvidenceIdentities int
-	now                          func() time.Time
-	diagnostics                  *peerDiagnosticReporter
-	senderAttempts               *observationSource[SenderAttemptObservation]
-	observationMu                sync.Mutex
-	observationsCompleted        bool
-	observationCompletion        SenderObservationCompletion
+	native                *nativepeer.NativePeerConnectivity
+	configuration         pion.Configuration
+	peerConnections       PeerConnectionFactory
+	dataChannels          DataChannelAdapter
+	negotiationBudget     time.Duration
+	admissionBudget       time.Duration
+	phaseTimers           PeerPhaseTimerSource
+	maxCandidates         int
+	retiredBindingTTL     time.Duration
+	maxRetiredBindings    int
+	maxPeerPaths          int
+	now                   func() time.Time
+	diagnostics           *peerDiagnosticReporter
+	senderAttempts        *observationSource[SenderAttemptObservation]
+	observationMu         sync.Mutex
+	observationsCompleted bool
+	observationCompletion SenderObservationCompletion
 }
 
 func DefaultConfiguration() pion.Configuration {
@@ -133,7 +136,7 @@ func DefaultConfiguration() pion.Configuration {
 func NewFactory(config Config) (*Factory, error) {
 	if config.NegotiationBudget < 0 || config.AdmissionBudget < 0 || config.MaxCandidates < 0 ||
 		config.RetiredBindingTTL < 0 || config.MaxRetiredBindings < 0 ||
-		config.MaxSessionEvidenceIdentities < 0 || config.SenderAttemptObservationCapacity < 0 ||
+		config.MaxPeerPaths < 0 || config.SenderAttemptObservationCapacity < 0 ||
 		config.PeerDiagnosticObservationCapacity < 0 {
 		return nil, ErrConfig
 	}
@@ -155,14 +158,14 @@ func NewFactory(config Config) (*Factory, error) {
 	if config.MaxRetiredBindings == 0 {
 		config.MaxRetiredBindings = DefaultMaxRetiredBindings
 	}
-	if config.MaxSessionEvidenceIdentities == 0 {
-		config.MaxSessionEvidenceIdentities = SenderMaxSessionEvidenceIdentities
+	if config.MaxPeerPaths == 0 {
+		config.MaxPeerPaths = SenderMaxPeerPaths
 	}
 	if config.MaxCandidates > maximumConfiguredCandidates ||
 		config.MaxRetiredBindings > maximumRetiredBindings ||
-		config.MaxRetiredBindings < SenderMaxActivePeerAttemptsPerSession ||
-		config.MaxSessionEvidenceIdentities > SenderMaxSessionEvidenceIdentities ||
-		config.MaxSessionEvidenceIdentities < minimumSessionEvidenceIdentities ||
+		config.MaxRetiredBindings < 1 ||
+		config.MaxPeerPaths > SenderMaxPeerPaths ||
+		config.MaxPeerPaths < minimumPeerPaths ||
 		config.SenderAttemptObservationCapacity > maximumSenderAttemptObservationCapacity ||
 		config.PeerDiagnosticObservationCapacity > maximumPeerDiagnosticObservationCapacity {
 		return nil, ErrConfig
@@ -170,10 +173,8 @@ func NewFactory(config Config) (*Factory, error) {
 	if config.PhaseTimers == nil {
 		config.PhaseTimers = systemPeerPhaseTimerSource{}
 	}
-	if config.PeerConnections == nil {
-		config.PeerConnections = PeerConnectionFactoryFunc(func(configuration pion.Configuration) (PeerConnection, error) {
-			return pion.NewPeerConnection(configuration)
-		})
+	if config.Native == nil {
+		config.Native = nativepeer.New(nativepeer.Config{})
 	}
 	if config.DataChannels == nil {
 		config.DataChannels = DataChannelAdapterFunc(func(channel *pion.DataChannel) (PeerDataChannel, error) {
@@ -194,15 +195,16 @@ func NewFactory(config Config) (*Factory, error) {
 		return nil, errors.Join(ErrConfig, err)
 	}
 	factory := &Factory{
+		native:        config.Native,
 		configuration: config.Configuration, peerConnections: config.PeerConnections,
 		dataChannels:      config.DataChannels,
 		negotiationBudget: config.NegotiationBudget, admissionBudget: config.AdmissionBudget,
 		phaseTimers: config.PhaseTimers, maxCandidates: config.MaxCandidates,
 		retiredBindingTTL: config.RetiredBindingTTL, maxRetiredBindings: config.MaxRetiredBindings,
-		maxSessionEvidenceIdentities: config.MaxSessionEvidenceIdentities,
-		now:                          config.Now,
-		diagnostics:                  diagnostics,
-		senderAttempts:               senderAttempts,
+		maxPeerPaths:   config.MaxPeerPaths,
+		now:            config.Now,
+		diagnostics:    diagnostics,
+		senderAttempts: senderAttempts,
 	}
 	return factory, nil
 }
@@ -232,7 +234,7 @@ func (factory *Factory) NewSenderPeerHandler(
 		factory: factory, session: session, events: make(chan handlerEvent, capacity),
 		attempts:          make(map[peerOperation]*peerAttempt),
 		bindings:          make(map[v2signal.Binding]peerOperation),
-		evidenceAuthority: newSenderEvidenceAuthority(factory.maxSessionEvidenceIdentities),
+		evidenceAuthority: newSenderEvidenceAuthority(factory.maxPeerPaths),
 		retiredOperations: make(map[peerOperation]retiredBinding),
 		retiredBindings:   make(map[v2signal.Binding]retiredBinding),
 	}, nil
@@ -515,6 +517,19 @@ func (handler *senderHandler) Run(ctx context.Context) error {
 	handler.runtimeContext = ctx
 	handler.mu.Unlock()
 	defer handler.stopAll()
+	if controls, ok := handler.session.(sessionruntime.PeerPathControlSession); ok {
+		controls.SetPeerPathControlHandler(func(_ context.Context, body []byte) error {
+			handler.factory.native.ApplyControl([16]byte(handler.session.ProtocolSessionID()), body)
+			return nil
+		})
+		child, cancel := context.WithCancel(ctx)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.factory.native.RunSession(child, [16]byte(handler.session.ProtocolSessionID()), controls.SendPeerPathControl)
+		}()
+		defer func() { cancel(); <-done; controls.SetPeerPathControlHandler(nil) }()
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -543,11 +558,7 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 	case handlerOffer:
 		err = handler.startAttempt(eventContext, event.operation, event.offer)
 		if err != nil {
-			rejected = &peerOperationRejection{
-				code:    protocolsession.PeerOperationCodeNegotiation,
-				message: peerNegotiationFailureMessage,
-				cause:   err,
-			}
+			rejected = rejectionForEvent(event, err)
 		}
 	case handlerCandidate:
 		err = handler.acceptCandidate(event.operation, event.candidate)
@@ -584,3 +595,11 @@ func (handler *senderHandler) handleRunEvent(ctx context.Context, event handlerE
 
 var _ sessionruntime.SenderPeerHandlerFactory = (*Factory)(nil)
 var _ sessionruntime.SenderPeerHandler = (*senderHandler)(nil)
+
+func (factory *Factory) ClassifyPeerAttemptContinuation(kind protocolsession.MessageKind, body []byte) (protocolsession.PeerAttemptBinding, bool, error) {
+	return (v2signal.OperationContinuationClassifier{}).ClassifyPeerAttemptContinuation(kind, body)
+}
+
+func (factory *Factory) NativeConnectivity() *nativepeer.NativePeerConnectivity {
+	return factory.native
+}

@@ -99,7 +99,7 @@ func TestBlockBrokerLastCancelledWaiterOwnsAbandonment(t *testing.T) {
 	}
 	waitContext, cancelWait := context.WithCancel(context.Background())
 	cancelWait()
-	if data, err := broker.await(waitContext, key, call); data != nil || !errors.Is(err, context.Canceled) {
+	if data, err := broker.await(waitContext, key, call); data.data != nil || !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled waiter = data %v, err %v", data, err)
 	}
 	if !call.completed || call.waiters != 0 || !errors.Is(call.err, context.Canceled) || broker.inflight[key] != nil {

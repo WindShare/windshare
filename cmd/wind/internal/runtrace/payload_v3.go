@@ -106,18 +106,32 @@ type commandFailedPayloadV3 struct {
 
 func (commandFailedPayloadV3) runTracePayloadV3() {}
 
+type downloadConnectivityV3 struct {
+	DownloadID            string   `json:"download_id"`
+	FirstDirectElapsedMS  *string  `json:"first_direct_elapsed_ms"`
+	DirectBytes           string   `json:"direct_bytes"`
+	TURNBytes             string   `json:"turn_bytes"`
+	ApplicationRelayBytes string   `json:"application_relay_bytes"`
+	UnknownBytes          string   `json:"unknown_bytes"`
+	DirectFraction        *float64 `json:"direct_fraction"`
+	FallbackStallMS       string   `json:"fallback_stall_ms"`
+	Incomplete            bool     `json:"incomplete"`
+	Final                 bool     `json:"final"`
+}
+
 type transferSettledPayloadV3 struct {
-	ResultStatus        string         `json:"result_status"`
-	ExitCode            int            `json:"exit_code"`
-	Drift               string         `json:"drift"`
-	ResultElapsedMS     string         `json:"result_elapsed_ms"`
-	DestinationAdjusted bool           `json:"destination_adjusted"`
-	FileOutcomes        fileOutcomesV3 `json:"file_outcomes"`
-	DirectoryFailures   string         `json:"directory_failures"`
-	OmittedDiagnostics  string         `json:"omitted_diagnostics"`
-	PublishedBytes      string         `json:"published_bytes"`
-	CountersExact       bool           `json:"counters_exact"`
-	Failure             *failureV3     `json:"failure,omitempty"`
+	DownloadConnectivity *downloadConnectivityV3 `json:"download_connectivity,omitempty"`
+	ResultStatus         string                  `json:"result_status"`
+	ExitCode             int                     `json:"exit_code"`
+	Drift                string                  `json:"drift"`
+	ResultElapsedMS      string                  `json:"result_elapsed_ms"`
+	DestinationAdjusted  bool                    `json:"destination_adjusted"`
+	FileOutcomes         fileOutcomesV3          `json:"file_outcomes"`
+	DirectoryFailures    string                  `json:"directory_failures"`
+	OmittedDiagnostics   string                  `json:"omitted_diagnostics"`
+	PublishedBytes       string                  `json:"published_bytes"`
+	CountersExact        bool                    `json:"counters_exact"`
+	Failure              *failureV3              `json:"failure,omitempty"`
 }
 
 func (transferSettledPayloadV3) runTracePayloadV3() {}
@@ -440,6 +454,13 @@ type observerLossPayloadV3 struct {
 	Reason   string `json:"reason"`
 	Count    string `json:"count"`
 }
+
+type platformSetupPayloadV3 struct {
+	State  string `json:"state"`
+	Reason string `json:"reason"`
+}
+
+func (platformSetupPayloadV3) runTracePayloadV3() {}
 
 func (observerLossPayloadV3) runTracePayloadV3() {}
 

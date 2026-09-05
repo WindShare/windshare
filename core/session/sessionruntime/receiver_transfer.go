@@ -40,7 +40,7 @@ func (runtime *ReceiverRuntime) NewTransferJob(
 	dependencies := receiverTransferDependencies{runtime: runtime, generation: generation}
 	return transfer.NewTransferJob(transfer.TransferJobConfig{
 		ReceiveIntent: intent, JobID: jobID,
-		ProtocolSessionID: runtime.ProtocolSessionID(), Tracer: tracer,
+		Session: runtime, Tracer: tracer,
 		Catalog: dependencies, Revisions: dependencies, Blocks: dependencies, Materializer: materializer,
 		RevisionWait: revisionWait,
 	})
@@ -94,6 +94,56 @@ func (runtime *ReceiverRuntime) ResolveOrdinaryOutputShape(
 		budget,
 		ordinaryoutput.BindShapeTracerToSession(runtime.ProtocolSessionID(), tracer),
 	)
+}
+
+// TransferDependencies exposes protocol operations without giving a transfer owner
+// access to the runtime's crypto, grants, or lease registry.
+func (runtime *ReceiverRuntime) TransferDependencies() (ReceiverTransferDependencies, error) {
+	generation, _, err := newReceiverRevisionWait(runtime)
+	return receiverTransferDependencies{runtime: runtime, generation: generation}, err
+}
+
+type ReceiverTransferDependencies = receiverTransferDependencies
+
+// PathsExhausted reports the winning lifecycle authority, never an error-text
+// classification. Protocol failures and caller cleanup cannot authorize recovery.
+func (runtime *ReceiverRuntime) PathsExhausted() bool {
+	if runtime == nil || runtime.runtimeCore == nil {
+		return false
+	}
+	runtime.termination.mu.Lock()
+	defer runtime.termination.mu.Unlock()
+	return runtime.termination.claimed && runtime.termination.cause == runtimeTerminationPathsExhausted
+}
+
+// PathRecoveryFailure preserves the network root after an external replacement
+// budget or handshake fails. Child timeout diagnostics are not caller cancellation.
+func (runtime *ReceiverRuntime) PathRecoveryFailure(cause error) error {
+	if runtime.PathsExhausted() {
+		return sessionTransportBoundaryError(cause)
+	}
+	return dependencyBoundaryError(cause)
+}
+
+// AwaitPathRetirement joins the physical lane owners before inspecting their
+// winning termination. A request can observe no usable lane while its pump is
+// still retiring; that scheduling race must not discard valid output progress.
+func (runtime *ReceiverRuntime) AwaitPathRetirement(ctx context.Context) bool {
+	if runtime == nil || runtime.runtimeCore == nil || ctx == nil {
+		return false
+	}
+	if runtime.PathsExhausted() {
+		return true
+	}
+	if runtime.lanes.hasUsable() {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return false
+	case <-runtime.Done():
+		return runtime.PathsExhausted()
+	}
 }
 
 // receiverTransferDependencies is the semantic boundary between a live session
