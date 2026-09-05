@@ -85,7 +85,7 @@ PeerConnectivity
 - 可归因的 `icecandidateerror` 按 endpoint 记录；srflx 产出和 candidate 到达耗时按 profile 记录，浏览器无法归因时不得猜测 endpoint。事实仅在内存中按 `NetworkGenerationID` 复用，网络变化即清空。
 - 首次 `AttemptICEProfile` 最多激活两个 endpoint；备用 profile 从未使用的故障域选择另外两个。每侧每个 recovery wave 最多触达四个 STUN，浏览器和 Go 可使用不同 profile。
 - 不在应用启动时解析或探测整个目录；同一 profile 由 ICE 并行 gathering 和 Trickle，不等待完整 gathering，也不创建探测专用 PeerConnection。
-- 实现受控 STUN-only 服务及部署支持；面向中国大陆网络的公网节点在资源具备后部署并加入默认池，优先 UDP 3478；UDP 443 仅在独立 listener 不冲突且确实部署时进入池。STUN 使用独立 listener、健康状态、速率限制和指标，不启用 TURN allocation。
+- 将受控 STUN 服务集成到 `wsrelay`，与应用中转共用一个二进制、同一进程，移除独立 `wsstun` 命令并统一部署产物；面向中国大陆网络的公网节点在资源具备后部署并加入默认池，优先 UDP 3478；UDP 443 仅在独立 listener 不冲突且确实部署时进入池。STUN 使用独立 listener、健康状态、速率限制和指标，不启用 TURN allocation。
 - STUN 故障不影响应用 relay；`relay-only` 不加载、解析或访问 STUN endpoint。STUN 的 UDP 443 listener 只改善 STUN 可达性，不代表对端 candidate 使用 443。
 - 两端分离本地候选选择预算与远端信令硬上限；本地超额按路径去重、裁剪，不终止整个 attempt。Trickle 发送前为 LAN、IPv4/IPv6、srflx 与晚到映射/TCP 候选预留名额，不等待完整 gathering；已发送候选仍计入总额，远端超限仍按协议处理。
 - 按 [RFC 8421](https://www.rfc-editor.org/info/rfc8421/)通过 ICE candidate priority 交错安排地址族与接口；不让坏 IPv6 或单一接口耗尽检查机会。Go 在 ICE 层配置，浏览器保留原生调度；无可靠接口事实时不猜测或一刀切过滤。
