@@ -3,7 +3,7 @@
 状态：本轮机制实现与独立复审完成；`make ci-parallel` 全部通过（2026-09-05，Windows）。
 范围：无人工端口映射时，尽可能提高浏览器接收端与 Go 发送端、Go 接收端与 Go 发送端的 WebRTC 直连率。提高 STUN 可用性，特别是中国大陆。
 
-已接入统一恢复、稳定 socket、按需映射、多 relay、同进程 wsrelay STUN、平台首次设置和下载诊断。最终覆盖率：core 90.3%、non-core 83.5%，每个 package 均通过 70% 门槛。可重复的[本地 provider 证据](../testdata/provider-capabilities/README.md)只验证受控拓扑中的机制，不代表公网直连率提升。公网节点与真实网络样本仍可后续补充；本轮未执行 hosted release 或发布。源码包与二进制安装入口见 [installation.md](installation.md)。
+已接入统一恢复、稳定 socket、按需映射、多 relay、同进程 wsrelay STUN、平台首次设置和下载诊断。最终覆盖率：core 90.3%、non-core 83.5%，每个 package 均通过 70% 门槛。可重复的[本地 provider 证据](../../../testdata/provider-capabilities/README.md)只验证受控拓扑中的机制，不代表公网直连率提升。公网节点与真实网络样本仍可后续补充；本轮未执行 hosted release 或发布。源码包与二进制安装入口见 [installation.md](../../installation.md)。
 
 ## 实施前基线
 

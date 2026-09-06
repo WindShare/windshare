@@ -16,6 +16,8 @@ import {
   type V2PreviewRangeSource,
 } from './mp4-range'
 
+import { isAutomaticPhotoCandidate, requireAutomaticPhotoHeader, V2AutomaticPhotoDeferredError } from './automatic-photo'
+
 export interface V2ImageDecodeResult {
   readonly width: number
   readonly height: number
@@ -103,6 +105,31 @@ export class V2FilePreview {
     signal: AbortSignal,
     ports: V2PreviewPorts = {},
   ): Promise<V2FilePreview> {
+    return this.#open(entry, revisions, broker, signal, ports, 'manual')
+  }
+
+  static async openAutomaticPhoto(
+    entry: V2CatalogEntry,
+    revisions: V2RevisionReader,
+    broker: V2BlockRangeReader,
+    signal: AbortSignal,
+    ports: V2PreviewPorts = {},
+  ): Promise<V2FilePreview> {
+    signal.throwIfAborted()
+    if (!isAutomaticPhotoCandidate(entry)) {
+      throw new V2AutomaticPhotoDeferredError('Use Preview for this file')
+    }
+    return this.#open(entry, revisions, broker, signal, ports, 'automatic-photo')
+  }
+
+  static async #open(
+    entry: V2CatalogEntry,
+    revisions: V2RevisionReader,
+    broker: V2BlockRangeReader,
+    signal: AbortSignal,
+    ports: V2PreviewPorts,
+    intent: 'manual' | 'automatic-photo',
+  ): Promise<V2FilePreview> {
     signal.throwIfAborted()
     if (entry.kind !== 'file') throw new TypeError('Only one explicit file can be previewed')
     const opened = await revisions.open(entry.id, signal)
@@ -112,7 +139,7 @@ export class V2FilePreview {
     }
     const preview = new V2FilePreview(entry, opened, broker, ports)
     try {
-      await preview.#initialize(signal)
+      await preview.#initialize(signal, intent)
       return preview
     } catch (error) {
       await preview.close().catch(() => undefined)
@@ -149,12 +176,15 @@ export class V2FilePreview {
     return this.#closeTask
   }
 
-  async #initialize(signal: AbortSignal): Promise<void> {
+  async #initialize(signal: AbortSignal, intent: 'manual' | 'automatic-photo'): Promise<void> {
+    signal.throwIfAborted()
     const headerEnd = this.#source.exactSize < BigInt(V2_IMAGE_HEADER_BYTES)
       ? this.#source.exactSize
       : BigInt(V2_IMAGE_HEADER_BYTES)
     const header = await this.#source.read(byteRange(0n, headerEnd), signal)
     const image = sniffV2ImageHeader(header, this.#source.exactSize)
+    signal.throwIfAborted()
+    if (intent === 'automatic-photo') requireAutomaticPhotoHeader(image)
     if (image !== undefined) {
       await this.#initializeImage(image, signal)
       return

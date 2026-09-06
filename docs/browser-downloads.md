@@ -1,11 +1,13 @@
 # Browser downloads
 
-Select a file or folder and choose Download. Supported browsers automatically start saving when the result is ready. Browser download initiation does not prove that the file was saved; you can save the retained result again.
+Open a share to see its file, photo, video frame preview, or folder browser. Folder names navigate; checkboxes select items across folders and pages. **Download all**, **Download this folder**, and **Download selected** name the current scope. Clearing an explicit selection never downloads everything.
 
-Browser workspace downloads keep their received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder downloads build their ZIP as files arrive; after discovery and receiving finish, ZIP finalization can finish without the sender online.
+Keep browsing and previewing while the current download runs. Expand **Details** for recovery progress, per-file issues, and filename restoration. **Downloads**, available on the share and home pages, keeps identifiable current and retained tasks together. Reopening a task may require the original share link or authorization for the same destination.
 
-Pause keeps progress. Unfinished downloads and results awaiting save confirmation do not expire automatically. Delete removes the task's browser data after active saves release it. A saved copy in your Downloads folder is separate and uses additional device space.
+The primary download action recommends an available result. **Other ways to save** explains alternatives, including ZIP packaging, extra storage, and a later Save step. Supported browsers start the authorized download when ready. ?Download started? means the browser took over; it does not prove the file was saved.
 
-WindShare requests persistent browser storage when a workspace task starts. The receiver shows whether protection is granted, denied, or unavailable. Without protection, the browser may evict workspace data under storage pressure. Available capacity is checked as data grows; storage estimates are advisory.
+Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A saved copy uses additional device space.
 
-For a paused ZIP task with complete files, browsers with a file destination picker offer **Save complete files as partial ZIP**. This creates a separately named ZIP containing only complete entries, preserves the original task for resuming, and uses destination space only when requested.
+Pause preserves the progress supported by the chosen saving method. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
+
+For a paused ZIP with complete files, eligible browsers offer **Save partial ZIP**. It exports only complete files to a separate ZIP, uses destination space when requested, and keeps the original task available to continue.

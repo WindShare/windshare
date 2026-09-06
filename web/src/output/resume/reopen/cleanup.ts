@@ -1,3 +1,5 @@
+import { forgetReceiveOperationHistory } from '../operation-history'
+import type { ReceiveOperationHandleInventoryRepository } from '../../workspace/repository'
 import { forgetLegacyCompatibleNameRecord } from '../../browser/indexeddb/compatible-name-legacy-cleanup'
 import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-repository'
 import {
@@ -187,16 +189,19 @@ export class AuthorityOwnedReceiveOperationMutationPort
 implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> {
   readonly #reopen: PersistedReceiveOperationReopenPort
   readonly #cleanup: ReceiveOperationOwnedCleanupExecutor
+  readonly #forgetHistory: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<void>) | undefined
   readonly #forgetLegacy: ((descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>) | undefined
 
   constructor(input: {
     readonly reopen: PersistedReceiveOperationReopenPort
     readonly cleanup: ReceiveOperationOwnedCleanupExecutor
+    readonly forgetHistory?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<void>
     readonly forgetLegacy?: (descriptor: ReceiveOperationResumeDescriptor) => Promise<ReceiveOperationDiscardResult>
   }) {
     this.#reopen = input.reopen
     this.#cleanup = input.cleanup
     this.#forgetLegacy = input.forgetLegacy
+    this.#forgetHistory = input.forgetHistory
   }
 
   async resume(
@@ -231,6 +236,11 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     } finally {
       await operation.close()
     }
+  }
+
+  async forget(descriptor: ReceiveOperationResumeDescriptor): Promise<void> {
+    if (this.#forgetHistory === undefined) throw new DOMException('Download history removal is unavailable', 'NotSupportedError')
+    await this.#forgetHistory(descriptor)
   }
 
   async discard(
@@ -305,6 +315,18 @@ export function createPersistedReceiveOperationMutationPort(
   return new AuthorityOwnedReceiveOperationMutationPort({
     reopen: new PersistedReceiveOperationReopenAuthority(options),
     cleanup: new PersistedReceiveOperationCleanupExecutor(options),
+    forgetHistory: async descriptor => {
+      const repository = await options.repositoryFactory()
+      try {
+        if (!('listHandles' in repository) || typeof repository.listHandles !== 'function') {
+          throw new DOMException('Download history inventory is unavailable', 'NotSupportedError')
+        }
+        await forgetReceiveOperationHistory(descriptor,
+          repository as ReceiveOperationHandleInventoryRepository, options.leaseOptions)
+      } finally {
+        repository.close()
+      }
+    },
     forgetLegacy: descriptor => forgetLegacyCompatibleNameRecord(descriptor, {
       ...(options.checkpointDatabaseName === undefined ? {} : { databaseName: options.checkpointDatabaseName }),
     }),

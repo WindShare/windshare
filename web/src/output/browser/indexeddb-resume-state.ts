@@ -157,6 +157,23 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     return Object.freeze(states)
   }
 
+  async readOperationIdentity(lifecycle: ReceiveLifecycleState) {
+    this.#assertOpen()
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const stored = await requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(
+      operationRecordId(lifecycle.operationId, RECEIVE_RECORD_OPERATION),
+    ))
+    await transactionCompletion(transaction)
+    if (stored === undefined) return undefined
+    const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
+    if (operation.operationId !== lifecycle.operationId ||
+        operation.receiveIntentDigest !== lifecycle.receiveIntentDigest) {
+      throw new TypeError('Inventory identity does not belong to its receive lifecycle')
+    }
+    return Object.freeze({ shareInstance: operation.receiveIntent.selection.shareInstance,
+      ...(operation.display === undefined ? {} : { display: operation.display }) })
+  }
+
   async readProgressiveRequirement(lifecycle: ReceiveLifecycleState) {
     if (lifecycle.kind !== 'receiving' && lifecycle.kind !== 'resumable-receive') return undefined
     const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')

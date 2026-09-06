@@ -7,6 +7,8 @@ import { FeatureGrid } from './FeatureGrid'
 import { HowItWorksSection } from './HowItWorksSection'
 import { SelfHostSection } from './SelfHostSection'
 import { PortalFooter } from './PortalFooter'
+import { composeTasks } from '../experience/task-composition'
+import { TaskDownloads } from '../experience/TaskDownloads'
 import './portal.css'
 
 export function PortalApp({ controller }: { readonly controller: V2ReceiverController }) {
@@ -20,9 +22,9 @@ export function PortalApp({ controller }: { readonly controller: V2ReceiverContr
     <div className="portal-root">
       <P2PMeshBackground />
       <div className="portal-content-layer">
-        <PortalHeader />
+        <PortalHeader downloads={<TaskDownloads tasks={composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action), action => controller.activeLifecycleActionAdmission(action)).tasks} snapshot={snapshot} controller={controller} home="home" />} />
         <main>
-          <HeroSection controller={controller} snapshot={snapshot} />
+          <HeroSection controller={controller} />
           <FeatureGrid />
           <HowItWorksSection />
           <SelfHostSection />

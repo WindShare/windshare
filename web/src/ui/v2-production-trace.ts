@@ -54,6 +54,18 @@ export function projectV2ReceiverTraceEvent(
   event: V2ReceiverTraceEvent,
 ): TraceEventObservationV1 {
   switch (event.name) {
+    case 'receiver_experience':
+      if (event.transition === 'task') return observation('receiver_experience', {
+        transition: 'task', operation_id: event.operationId, generation: decimal(event.generation),
+        stage: event.stage, reason: event.reason, attention: event.attention,
+        completeness: event.completeness, publication: event.publication,
+      })
+      if (event.transition === 'saving') return observation('receiver_experience', {
+        transition: 'saving', projection_epoch: event.projectionEpoch === null ? null : decimal(event.projectionEpoch),
+        choice_id: event.choiceId, outcome: event.outcome, reason: event.reason,
+      })
+      return observation('receiver_experience', { transition: 'intent', action: event.action,
+        operation_id: event.operationId, generation: decimal(event.generation) })
     case 'join_transition':
       return observation('join_transition', { transition: event.transition })
     case 'projection_transition':

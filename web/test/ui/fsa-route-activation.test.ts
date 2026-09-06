@@ -198,7 +198,8 @@ describe('FSA presentation route activation', () => {
     )
     ranking.splice(1, 1)
 
-    const result = await route.commit(commitInput(planning))
+    const result = await route.commit({ ...commitInput(planning),
+      display: { objectLabel: 'Selected reports', destinationLabel: 'Guessed folder', createdAtMilliseconds: 1234 } })
     if (result.kind !== 'bound-operation') throw new Error('expected a bound FSA operation')
     const records = await repository.listRecords(result.operation.intent.operationId)
     const record = records.find(candidate => candidate.kind === RECEIVE_RECORD_OPERATION)
@@ -206,6 +207,8 @@ describe('FSA presentation route activation', () => {
     const operation = await decodeStoredReceiveOperation(record)
     expect(operation.preClickRanking).toEqual([planning.offered.choice.choiceId, secondary])
     expect(Object.isFrozen(operation.preClickRanking)).toBe(true)
+    expect(operation.display).toEqual({ objectLabel: 'Selected reports', destinationLabel: 'downloads', createdAtMilliseconds: 1234 })
+    expect(result.display).toEqual(operation.display)
     await result.operation.detach()
   })
 

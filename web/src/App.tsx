@@ -16,6 +16,7 @@ export default function App({ controller }: AppProps) {
   )
 
   const isReceivingShare =
+    snapshot.share !== null ||
     snapshot.breadcrumbs.length > 0 ||
     snapshot.phase === 'joining' ||
     snapshot.phase === 'browsing' ||

@@ -52,6 +52,7 @@ import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
 import { V2ReceiverController } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
+  V2BrowsePage,
   V2BrowserReceiverGateway,
   V2JoinedBrowserShare,
 } from '../../src/ui/v2-gateway'
@@ -178,13 +179,19 @@ export class FakeReceiveComposition implements V2ReceiveCompositionPort {
   startArtifactAuthority(
     offered: OfferedArtifactChoice,
     preClickRanking: readonly ArtifactChoiceID[],
+    _failures?: OutputFailureSinks,
+    display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
   ): V2ArtifactPresentationAuthority {
     this.startedChoices.push(offered)
     this.startedRankings.push(Object.freeze([...preClickRanking]))
     this.authorityStartStacks.push(this.clickStack())
     const authority = new FakeStartedAuthority(
       offered,
-      intent => new FakeBoundRuntime(intent),
+      intent => {
+        const runtime = new FakeBoundRuntime(intent)
+        if (display !== undefined) runtime.display = display
+        return runtime
+      },
       this.authorityReady,
     )
     this.startedAuthorities.push(authority)
@@ -236,6 +243,7 @@ class FakeTransferControlError extends DOMException {
 }
 
 export class FakeBoundRuntime implements V2BoundReceiveOperation {
+  display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay
   readonly plans = Object.freeze({}) as V2PlanExecutionAuthority
   readonly transferJobId = identityText(76)
   readonly intent: ReceiveIntent
@@ -356,7 +364,8 @@ export class FakeJoinedShare {
   })
   readonly recoveryIdentity = 'test-share'
   protocolSessionId = SESSION_ID
-  readonly selection: V2SelectionPolicy
+  selection: V2SelectionPolicy
+  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
   readonly projectionRequests: Array<{ readonly signal: AbortSignal }> = []
   readonly transferRuns: FakeTransferRun[] = []
   readonly #projectionGates: Array<PromiseLike<void> | undefined>
@@ -384,7 +393,7 @@ export class FakeJoinedShare {
     })
   }
 
-  async page(directory: V2BrowseDirectory) {
+  async page(directory: V2BrowseDirectory): Promise<V2BrowsePage> {
     return Object.freeze({
       directory,
       pageIndex: 0,
@@ -401,6 +410,11 @@ export class FakeJoinedShare {
 
   get protocolSessionIdentity(): string {
     return this.protocolSessionId
+  }
+
+  subscribeConnection(listener: (snapshot: { kind: 'connected' }) => void): () => void {
+    listener({ kind: 'connected' })
+    return () => undefined
   }
 
   subscribePathActivity(): () => void { return () => undefined }
@@ -467,7 +481,7 @@ export class FakeJoinedShare {
             : {}),
           settledTargets: request.unsettledTargets,
         })
-        return Object.freeze({ settledTargets: request.unsettledTargets })
+        return Object.freeze({ kind: 'complete' as const, settledTargets: Object.freeze([]) })
       },
     })
   }
