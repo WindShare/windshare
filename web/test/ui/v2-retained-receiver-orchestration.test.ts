@@ -216,7 +216,7 @@ describe('v2 receiver product orchestration', () => {
     await waitFor(() => joined.transferRuns.length === 1)
 
     expect(joined.transferRuns[0]?.intent).toBe(intent)
-    expect(controller.getSnapshot().output.projection).toBeNull()
+    expect(controller.getSnapshot().output.projection).not.toBeNull()
     expect(controller.getSnapshot().output.receiveIntent?.digest).toBe(intent.digest)
     expect(controller.getSnapshot().output.lifecycle).toBe(runtime.lifecycle)
     expect(receive.startedAuthorities).toHaveLength(0)
@@ -357,7 +357,7 @@ describe('v2 receiver product orchestration', () => {
     expect(receive.retainedSignals[0]?.aborted).toBe(true)
     expect(lateInventory.close).toHaveBeenCalledTimes(1)
     expect(controller.getSnapshot().retained.kind).toBe('loading')
-    expect(traces).toEqual(['receive.inventory.load.started'])
+    expect(traces.filter(name => name.startsWith('receive.inventory.'))).toEqual(['receive.inventory.load.started'])
   })
 })
 

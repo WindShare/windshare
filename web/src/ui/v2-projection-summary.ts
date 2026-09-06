@@ -12,19 +12,18 @@ import type {
 } from '../transfer/projection'
 
 export class ProjectionDiscoverySummary {
-  readonly #syntheticRootSelected: boolean
   readonly #partialDirectoryRoots = new Set<string>()
   #selectedFileCount = 0
   #selectedDirectoryCount = 0
   #selectedRootCount = 0
+  readonly #rootPaths: string[] = []
   #singleSelectedRoot: SelectedRootFact | undefined
   readonly #syntheticCost = new WorkspaceCostObservationAccumulatorV1()
   #completeDirectoryCost: WorkspaceCostObservationAccumulatorV1 | undefined
   #partialDirectoryCost: WorkspaceCostObservationAccumulatorV1 | undefined
   #costFailed = false
 
-  constructor(syntheticRootSelected: boolean) {
-    this.#syntheticRootSelected = syntheticRootSelected
+  constructor() {
     this.#observeCost(this.#syntheticCost, {
       kind: 'directory', path: [DEFAULT_RESULT_ROOT_NAME],
     })
@@ -39,11 +38,17 @@ export class ProjectionDiscoverySummary {
       1,
       this.#selectedDirectoryCount + evidence.metrics.directoryCountLowerBound,
     )
-    if (this.#selectedRootCount === 0 && evidence.selectedRootCount === 1) {
-      this.#singleSelectedRoot = evidence.selectedRoots[0]
+    for (const root of evidence.selectedRoots) {
+      if (this.#selectedRootCount >= 2) break
+      if (this.#rootPaths.some(path => root.sourcePath === path || root.sourcePath.startsWith(`${path}/`))) continue
+      this.#rootPaths.push(root.sourcePath)
+      this.#selectedRootCount = Math.min(2, this.#selectedRootCount + 1)
+      this.#singleSelectedRoot = this.#selectedRootCount === 1 ? root : undefined
     }
-    this.#selectedRootCount = Math.min(2, this.#selectedRootCount + evidence.selectedRootCount)
-    if (this.#selectedRootCount !== 1) this.#singleSelectedRoot = undefined
+    if (evidence.selectedRootCount > evidence.selectedRoots.length) {
+      this.#selectedRootCount = 2
+      this.#singleSelectedRoot = undefined
+    }
     const root = this.#singleSelectedRoot
     if (this.#completeDirectoryCost === undefined && root?.kind === 'directory') {
       this.#completeDirectoryCost = new WorkspaceCostObservationAccumulatorV1()
@@ -77,7 +82,7 @@ export class ProjectionDiscoverySummary {
     const treeRequired = this.#selectedDirectoryCount > 0 || this.#selectedFileCount > 1
     if (!treeRequired) return undefined
     const root = this.#singleSelectedRoot
-    if (!this.#syntheticRootSelected && this.#selectedRootCount === 1 && root?.kind === 'directory') {
+    if (this.#selectedRootCount === 1 && root?.kind === 'directory') {
       return Object.freeze({
         kind: this.#partialDirectoryRoots.has(root.directoryId)
           ? 'directory-selection' as const

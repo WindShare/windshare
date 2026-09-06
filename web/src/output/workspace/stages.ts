@@ -31,6 +31,7 @@ export * from './stages/contracts'
 export async function journalWorkspaceActivation(input: {
   readonly repository: ReceiveOperationRepository
   readonly receiveIntent: ReceiveIntent
+  readonly display?: import('./operation-display').ReceiveOperationDisplay
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly entryIdentity: string
   readonly workspaceRootHandleId: string
@@ -41,6 +42,7 @@ export async function journalWorkspaceActivation(input: {
   const operation = await createReceiveOperationV2({
     receiveIntent: intent,
     preClickRanking,
+    ...(input.display === undefined ? {} : { display: input.display }),
   })
   const workspaceRecord = await createPersistedReceiveRecord({
     operationId: intent.operationId,

@@ -3,7 +3,6 @@ import type {
   PresentationExclusionReason,
 } from '../../diagnostics/incident'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
-import { compatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import { validateReceiveIntent } from '../../transfer/intent'
 import {
   EMPTY_V2_RETAINED_INVENTORY,
@@ -27,10 +26,14 @@ import {
 } from './contracts'
 import { V2PresentationAttempt } from './presentation-attempt'
 import {
-  retainedPresentationActions,
-  retainedPresentationContinuation,
-  sameRetainedActions,
+  presentRetainedInventory,
+  type PresentedRetainedInventory,
 } from './retained-inventory-presentation'
+
+function retainedActionNeedsShare(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): boolean {
+  return (action === 'continue' || (action === 'redownload' && operation.recoverySummary !== undefined)) &&
+    operation.continuation !== 'resume-package' && operation.continuation !== 'resume-local-finalization'
+}
 
 type RetainedAttempt = V2PresentationAttempt
 
@@ -55,16 +58,6 @@ interface PendingRetainedAction {
   readonly attempt: RetainedAttempt
 }
 
-interface PresentedRetainedInventory {
-  readonly source: V2RetainedReceiveInventory
-  readonly operations: readonly V2RetainedReceivePresentationOperation[]
-  readonly sourceOperations: ReadonlyMap<
-    V2RetainedReceivePresentationOperation,
-    V2RetainedReceiveOperation
-  >
-}
-
-
 export interface RetainedContinuationAdoption {
   readonly retained: V2RetainedReceivePresentationOperation
   readonly joined: V2JoinedBrowserShare
@@ -76,6 +69,8 @@ export interface RetainedInventoryCoordinatorOptions {
   readonly isDisposed: () => boolean
   readonly currentJoinedShare: () => V2JoinedBrowserShare | undefined
   readonly continuationBlocked: () => boolean
+  readonly localFinalizationBlocked?: () => boolean
+  readonly remoteContinuationUnavailable?: () => string | null
   readonly adoptContinuation: (input: RetainedContinuationAdoption) => Promise<void>
   readonly ownsRuntime: (runtime: V2BoundReceiveOperation) => boolean
   readonly publish: (retained: V2ReceiverSnapshot['retained']) => void
@@ -90,6 +85,7 @@ export class RetainedInventoryCoordinator {
   #load: PendingInventoryLoad | undefined
   #inventory: PresentedRetainedInventory | undefined
   #boundary = 0
+  readonly #automaticFinalizations = new Set<string>()
   #pending: PendingRetainedAction | undefined
 
   constructor(options: RetainedInventoryCoordinatorOptions) {
@@ -102,6 +98,34 @@ export class RetainedInventoryCoordinator {
 
   load(): Promise<void> {
     return this.#loadInventory()
+  }
+
+  actionAdmission(
+    operation: V2RetainedReceivePresentationOperation,
+    action: V2RetainedReceiveAction,
+  ): Readonly<{ allowed: boolean; reason: string | null }> {
+    const source = this.#inventory?.sourceOperations.get(operation)
+    if (this.#options.isDisposed() || source === undefined || !operation.actions.includes(action)) {
+      return Object.freeze({ allowed: false, reason: 'This download action is no longer available.' })
+    }
+    if (this.#pending !== undefined) {
+      return Object.freeze({ allowed: false, reason: 'Another download action is in progress.' })
+    }
+    if (retainedActionNeedsShare(operation, action)) {
+      const joined = this.#options.currentJoinedShare()
+      if (joined === undefined || (source.shareInstance !== undefined &&
+          source.shareInstance !== joined.descriptor.shareInstanceId)) {
+        return Object.freeze({ allowed: false, reason: 'Open the matching share before continuing this receive task.' })
+      }
+      const unavailable = this.#options.remoteContinuationUnavailable?.()
+      if (unavailable) return Object.freeze({ allowed: false, reason: unavailable })
+      if (this.#options.continuationBlocked()) {
+        return Object.freeze({ allowed: false, reason: 'Another download is using the receiver. Pause or finish it before continuing this task.' })
+      }
+    } else if (action === 'continue' && this.#options.localFinalizationBlocked?.()) {
+      return Object.freeze({ allowed: false, reason: 'Another download is using the output. Pause or finish it before continuing this task.' })
+    }
+    return Object.freeze({ allowed: true, reason: null })
   }
 
   perform(
@@ -120,21 +144,14 @@ export class RetainedInventoryCoordinator {
       return
     }
 
-    const remoteContinuation = action === 'continue' &&
-      operation.continuation !== 'resume-package' &&
-      operation.continuation !== 'resume-local-finalization'
+    const remoteContinuation = retainedActionNeedsShare(operation, action)
     const joined = remoteContinuation
       ? this.#options.currentJoinedShare()
       : undefined
-    const continuationUnavailable = remoteContinuation && (
-      joined === undefined || this.#options.continuationBlocked()
-    )
+    const admission = this.actionAdmission(operation, action)
     const attempt = this.#newAttempt('retained_action')
-    if (continuationUnavailable) {
-      const error = new DOMException(
-        'Open the matching share before continuing this receive task',
-        'InvalidStateError',
-      )
+    if (!admission.allowed) {
+      const error = new DOMException(admission.reason!, 'InvalidStateError')
       try {
         this.#recordFailure(attempt, 'retained_action')
         this.#options.onActionError(error)
@@ -223,7 +240,7 @@ export class RetainedInventoryCoordinator {
         attempt.outputFailures,
       )
       pending.controller.signal.throwIfAborted()
-      const presented = await this.#presentInventory(loaded, pending.controller.signal)
+      const presented = await presentRetainedInventory(loaded, pending.controller.signal, this.#options.repairSource)
       pending.controller.signal.throwIfAborted()
       if (!this.#isCurrentLoad(pending)) {
         this.#closeLoadedInventory(loaded, attempt)
@@ -236,6 +253,25 @@ export class RetainedInventoryCoordinator {
       this.#settleInventoryLoadFailure(pending, loaded)
     } finally {
       this.#finishInventoryLoad(pending)
+    }
+    this.#startAuthorizedLocalFinalization()
+  }
+
+  #startAuthorizedLocalFinalization(): void {
+    const inventory = this.#inventory
+    if (inventory === undefined || this.#pending !== undefined || this.#load !== undefined ||
+        this.#options.isDisposed() || (this.#options.localFinalizationBlocked?.() ?? true)) return
+    for (const operation of inventory.operations) {
+      const source = inventory.sourceOperations.get(operation)
+      const key = operation.operationId
+      if (source?.continuation !== 'resume-local-finalization' ||
+          !source.actions.includes('continue') || !operation.actions.includes('continue') ||
+          this.#automaticFinalizations.has(key)) continue
+      // Reopen itself advances the lifecycle generation, even if finalization fails.
+      // An operation gets one automatic attempt; subsequent attempts require user intent.
+      this.#automaticFinalizations.add(key)
+      this.perform(operation, 'continue')
+      return
     }
   }
 
@@ -316,63 +352,6 @@ export class RetainedInventoryCoordinator {
       return
     }
     attempt.incident('retained_inventory', 'failed', trigger)
-  }
-
-  async #presentInventory(
-    loaded: V2RetainedReceiveInventory,
-    signal: AbortSignal,
-  ): Promise<PresentedRetainedInventory> {
-    const repairSource = this.#options.repairSource
-    const summaries = repairSource === undefined
-      ? loaded.operations.map(() => undefined)
-      : await Promise.all(loaded.operations.map(operation =>
-          operation.continuation === 'cleanup-incompatible'
-            ? undefined
-            : Promise.resolve(repairSource.readRepairSummary(operation.operationId, signal))))
-    signal.throwIfAborted()
-
-    const sourceOperations = new Map<
-      V2RetainedReceivePresentationOperation,
-      V2RetainedReceiveOperation
-    >()
-    const operations: V2RetainedReceivePresentationOperation[] = []
-    loaded.operations.forEach((operation, index) => {
-      const summary = summaries[index]
-      const specialRepairView = operation.continuation === 'pending-catch-up' ||
-        operation.continuation === 'restoration-available'
-      if (summary === undefined && specialRepairView) return
-      const durableSummary = summary === undefined
-        ? undefined
-        : compatibleNameRepairSummary(summary)
-      const actions = retainedPresentationActions(
-        operation,
-        durableSummary,
-      )
-      const continuation = retainedPresentationContinuation(operation, durableSummary)
-      let presented: V2RetainedReceivePresentationOperation
-      if (durableSummary === undefined && continuation === operation.continuation &&
-          sameRetainedActions(actions, operation.actions)) {
-        presented = operation
-      } else {
-        presented = Object.freeze({
-          ...operation,
-          continuation,
-          actions,
-          ...(durableSummary === undefined ? {} : { repairSummary: durableSummary }),
-          ...(continuation === 'pending-catch-up' && durableSummary?.sidecarSync === 'current' &&
-              durableSummary.terminalSettlement === 'none'
-            ? { unavailableReason: 'The prior receive ended abnormally; use the restoration command only after confirming it will not resume.' }
-            : {}),
-        })
-      }
-      sourceOperations.set(presented, operation)
-      operations.push(presented)
-    })
-    return Object.freeze({
-      source: loaded,
-      operations: Object.freeze(operations),
-      sourceOperations,
-    })
   }
 
   #publishLoadedInventory(loaded: PresentedRetainedInventory): void {
@@ -535,7 +514,7 @@ export class RetainedInventoryCoordinator {
   }
 
   #completeAction(pending: PendingRetainedAction): void {
-    const exclusion = pending.action === 'discard' || pending.action === 'delete'
+    const exclusion = pending.action === 'discard' || pending.action === 'delete' || pending.action === 'forget'
       ? 'user_discarded'
       : 'success'
     this.#exclude(pending.attempt, exclusion)

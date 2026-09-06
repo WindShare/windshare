@@ -34,6 +34,9 @@ export interface V2TransferObserversOptions {
 
 export interface V2TransferProgressState {
   readonly measure: SelectionMeasure
+  readonly phase: 'receiving' | 'finishing'
+  /** Accepted output payload, including authenticated retained coverage; not restart durability. */
+  readonly materializedBytes: bigint
   readonly writtenBytes: bigint
   readonly recoverableBytes: bigint
   readonly completedFiles: number
@@ -91,6 +94,8 @@ export class V2TransferObservers {
       this.#options.onProgress?.(Object.freeze({
         discoveredFiles: state.measure.discoveredFiles,
         discoveredBytes: state.measure.discoveredBytes,
+        phase: state.phase,
+        materializedBytes: state.materializedBytes,
         writtenBytes: state.writtenBytes,
         recoverableBytes: state.recoverableBytes,
         completedFiles: state.completedFiles,

@@ -77,6 +77,7 @@ export interface V2FileTransferOptions {
   readonly outputSettlementTimeoutMilliseconds: number
   readonly incidentScope?: IncidentScopeHandle
   readonly performancePipeline?: PerformanceFilePipelineObservation
+  readonly onInitialDurable?: (bytes: bigint) => void
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
   readonly onRecoverableAcknowledged?: (
     bytes: bigint,
@@ -177,6 +178,7 @@ export async function transferV2File(
     if (opened === undefined && (revisionOpenAttempted || options.output.capabilities.durability === 'None' || !missing.empty)) {
       throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
     }
+    options.onInitialDurable?.(rangeBytes(initialDurable))
     const checkpoint = {
       remainingWriteBytes: rangeBytes(missing),
       durableBytes: rangeBytes(initialDurable),

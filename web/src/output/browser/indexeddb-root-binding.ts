@@ -100,12 +100,14 @@ export async function prepareFSAOperationBindingTransition(input: Readonly<{
   repository: FSAOperationBindingRepository
   intent: ReceiveIntent
   parent: FileSystemDirectoryHandle
+  display?: import('../workspace/operation-display').ReceiveOperationDisplay
   preClickRanking: readonly ArtifactChoiceID[]
 }>): Promise<PreparedFSAOperationBindingTransition> {
   const validated = await validatedFSAIntent(input.intent)
   const operation = await createReceiveOperationV2({
     receiveIntent: validated.intent,
     preClickRanking: input.preClickRanking,
+    ...(input.display === undefined ? {} : { display: input.display }),
   })
   const operationRecord = storedReceiveOperationRecord(operation)
   const reservationRecord = await createPersistedReceiveRecord({

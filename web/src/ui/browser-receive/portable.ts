@@ -1,3 +1,7 @@
+import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
+import { persistPortableDownloadHistory } from '../../output/resume/operation-history'
+import type { ReceiveOperationDisplay } from '../../output/workspace/operation-display'
+import type { ArtifactChoiceID } from '../../transfer/intent'
 import {
   emitOutputTrace,
   outputTraceEvent,
@@ -62,8 +66,10 @@ export async function createPortableReceiveOperation(
   action: PortableResolvedArtifactAction,
   intent: ReceiveIntent,
   diagnostics?: OutputDiagnosticsPorts,
+  display?: ReceiveOperationDisplay,
+  preClickRanking?: readonly ArtifactChoiceID[],
 ): Promise<V2BoundReceiveOperation> {
-  return PortableReceiveOperation.create(windowPort, action, intent, diagnostics)
+  return PortableReceiveOperation.create(windowPort, action, intent, diagnostics, display, preClickRanking)
 }
 
 class PortableReceiveOperation implements
@@ -77,6 +83,9 @@ V2ExecutionAdmissionLifecycle {
   readonly #leaseId = createOperationID()
   readonly #attemptId = createOperationID()
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly display?: ReceiveOperationDisplay
+  readonly #preClickRanking: readonly ArtifactChoiceID[] | undefined
+  readonly #historyAvailable: boolean
   #state: ReceiveLifecycleState
   #plans!: V2PlanExecutionAuthority
   #transferJobId = createTransferJobID()
@@ -85,9 +94,15 @@ V2ExecutionAdmissionLifecycle {
 
   private constructor(
     intent: ReceiveIntent,
+    historyAvailable: boolean,
     diagnostics?: OutputDiagnosticsPorts,
+    display?: ReceiveOperationDisplay,
+    preClickRanking?: readonly ArtifactChoiceID[],
   ) {
     this.intent = intent
+    this.#historyAvailable = historyAvailable
+    if (display !== undefined) this.display = display
+    this.#preClickRanking = preClickRanking
     this.#diagnostics = diagnostics
     this.lifecycle = initialReceiveLifecycleState({
       operationId: intent.operationId,
@@ -101,8 +116,10 @@ V2ExecutionAdmissionLifecycle {
     action: PortableResolvedArtifactAction,
     intent: ReceiveIntent,
     diagnostics?: OutputDiagnosticsPorts,
+    display?: ReceiveOperationDisplay,
+    preClickRanking?: readonly ArtifactChoiceID[],
   ): Promise<PortableReceiveOperation> {
-    const owner = new PortableReceiveOperation(intent, diagnostics)
+    const owner = new PortableReceiveOperation(intent, typeof windowPort.indexedDB?.open === 'function', diagnostics, display, preClickRanking)
     owner.#plans = await portablePlanAuthority(
       windowPort,
       action,
@@ -198,6 +215,19 @@ V2ExecutionAdmissionLifecycle {
       attemptId: record.attemptId,
     })
     this.#state = this.#reduce({ kind: 'handoff-started' })
+    if (this.#historyAvailable) {
+      try {
+        const repository = await IndexedDbReceiveOperationRepository.open()
+        try {
+          await persistPortableDownloadHistory({ repository, intent: this.intent, lifecycle: this.#state,
+            ...(this.display === undefined ? {} : { display: this.display }),
+            ...(this.#preClickRanking === undefined ? {} : { preClickRanking: this.#preClickRanking }) })
+        } finally { repository.close() }
+      } catch {
+        // The browser handoff already occurred. History persistence cannot turn it into a failed download.
+        this.#recordClosedFailure('publication')
+      }
+    }
     return this.#state as Extract<ReceiveLifecycleState, {
       kind: 'download-started'
       attemptKind: 'portable'
