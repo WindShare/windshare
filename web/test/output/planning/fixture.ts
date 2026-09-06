@@ -141,8 +141,6 @@ export function workspaceOffer(routeId = 'workspace'): WorkspaceEnvironmentOffer
     routeId,
     kind: 'origin-private-workspace',
     persistence: 'durable-owned-repository',
-    jobHardLimitBytes: TEST_JOB_WORKSPACE_LIMIT,
-    processHardLimitBytes: TEST_PROCESS_WORKSPACE_LIMIT,
     minimumQuotaReserveBytes: TEST_QUOTA_RESERVE,
     quotaAvailabilityEstimateBytes: null,
   }

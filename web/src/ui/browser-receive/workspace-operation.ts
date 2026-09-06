@@ -1,3 +1,4 @@
+import { BoundaryFaultError } from '../../transfer/fault'
 import type { BrowserReceiveOperationLease } from '../../output/browser/session-lease'
 import {
   emitOutputTrace,
@@ -15,7 +16,7 @@ import {
   type OriginPrivateWorkspaceBackend,
 } from '../../output/origin-private/session'
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../output/resume/reopen-authority'
-import { DEFAULT_OPFS_JOB_WORKSPACE_LIMIT } from '../../output/workspace/budget'
+import { verifyProgressiveZipRecovery } from '../../output/resume/progressive-checkpoint'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
 import {
@@ -23,11 +24,11 @@ import {
   type WorkspaceOperationStages,
   type WorkspaceStageTraceListener,
 } from '../../output/workspace/stages'
-import { sealWorkspaceZipPreparation } from '../../output/workspace/preparation'
+import { openOriginPrivateProgressiveZipBackend, type OriginPrivateProgressiveZipBackend } from '../../output/origin-private/progressive-backend'
+import { createProgressiveWorkspaceExecution } from '../../transfer/settlement/progressive-workspace-execution'
 import { createPersistentWorkspaceExecution } from '../../transfer/settlement/persistent-execution'
 import type { V2ExecutionAdmissionLifecycle } from '../../transfer/settlement/v2-plan-authority'
 import {
-  createOperationID,
   createOutputSessionID,
   createTransferJobID,
   type ReceiveIntent,
@@ -35,7 +36,6 @@ import {
 import {
   TransferPauseRequestedError,
   outputSessionIdentity,
-  type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
   type ExecutionAdmissionResult,
   type V2PlanExecutionAuthority,
@@ -56,11 +56,11 @@ import {
   WorkspaceReceivePackaging,
   type WorkspaceContinuationPort,
 } from './workspace-packaging'
-import { workspacePlanAuthority } from './workspace-publication'
+import { handoffRetainedWorkspacePackage, workspacePlanAuthority } from './workspace-publication'
+import type { TaskCheckpoint } from '../../output/origin-private/task-checkpoint/model'
 import {
   readLifecycle,
   requireMatchingSingleFileAdmission,
-  requirePreparation,
   requireSameIntent,
   unavailableRoute,
 } from './shared'
@@ -105,7 +105,6 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     transferJobId: string
     backend?: OriginPrivateWorkspaceBackend
     admitted?: AdmittedWorkspaceContent
-    preparation?: Parameters<WorkspaceReceivePackaging['setPreparation']>[0]
     receiveAdmissionFallback?: WorkspaceReceiveAdmissionFallback
     closeAuthority?: () => Promise<void>
   }) {
@@ -132,11 +131,11 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       namespace: input.namespace,
       stages: input.stages,
       ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
-      ...(input.preparation === undefined ? {} : { preparation: input.preparation }),
     })
     this.initialWorkspaceUsage = Object.freeze({
-      ownedBytes: 0n,
-      maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
+      ownedBytes: input.backend !== undefined && 'archive' in input.backend
+        ? (input.backend as OriginPrivateProgressiveZipBackend).archive.state.physicalLength
+        : 0n,
     })
     this.#admissionSettlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: this.intent.operationId,
@@ -194,14 +193,30 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       transferJobId: createTransferJobID(),
       backend: input.backend,
       admitted: operation.admittedContent,
-      ...(operation.receiveContinuation.preparation === undefined
-        ? {}
-        : { preparation: operation.receiveContinuation.preparation }),
       ...(operation.receiveAdmissionFallback === undefined
         ? {}
         : { receiveAdmissionFallback: operation.receiveAdmissionFallback }),
       closeAuthority: () => operation.close(),
     })
+    owner.#plans = await workspacePlanAuthority(operation.intent, owner)
+    return owner
+  }
+
+  static async reopenProgressive(input: {
+    windowPort: BrowserReceiveWindow
+    operation: Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-progressive-zip' }>['operation']
+    diagnostics?: OutputDiagnosticsPorts
+  }): Promise<WorkspaceReceiveOperation> {
+    const { operation } = input
+    const owner = new WorkspaceReceiveOperation({
+      windowPort: input.windowPort, intent: operation.intent, lifecycle: operation.lifecycle,
+      repository: operation.repository, namespace: operation.namespace, lease: operation.lease,
+      stages: operation.stages, transferJobId: createTransferJobID(),
+      backend: operation.progressiveContinuation.backend, admitted: operation.admittedContent,
+      closeAuthority: () => operation.close(),
+      ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
+    })
+    owner.#budgetClaim = operation.admittedContent.claim as OriginPrivateWorkspaceBudgetClaim
     owner.#plans = await workspacePlanAuthority(operation.intent, owner)
     return owner
   }
@@ -224,6 +239,9 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
+    if (action === 'continue' && lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'opfs-zip') {
+      return this.#continueProgressive(lifecycle)
+    }
     return this.#packaging.startLifecycleAction(
       action,
       lifecycle,
@@ -270,7 +288,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     if (this.#detached) return
     this.#detached = true
     if (this.#closeAuthority !== undefined) {
-      await this.#closeAuthority()
+      try { await this.#backend?.close() } finally { await this.#closeAuthority() }
       return
     }
     const tasks: {
@@ -347,51 +365,103 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return this.#openWorkspaceExecution(intent, { kind: 'single-file', evidence }, result.content, signal)
   }
 
-  async prepareZip(
+  async admitZip(
     intent: ReceiveIntent,
-    evidence: ExactPreparationEvidence,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>> {
     requireSameIntent(this.intent, intent)
-    if (this.#admitted !== undefined) {
-      const existing = requirePreparation(this.#packaging.preparation)
-      const verified = await sealWorkspaceZipPreparation({
-        receiveIntent: intent,
-        preparationId: existing.manifest.preparationId,
-        generations: evidence.generations,
-        entries: evidence.entries,
-      })
-      if (verified.manifest.digest !== existing.manifest.digest ||
-          verified.zipLayout.digest !== existing.zipLayout.digest) {
-        throw new TypeError('Workspace ZIP continuation changed its admitted preparation')
-      }
-      return this.#reopenWorkspaceExecution(intent, { kind: 'prepared', evidence }, signal)
+    signal.throwIfAborted()
+    if (this.#backend !== undefined && 'archive' in this.#backend) {
+      return this.#createProgressiveExecution(this.#backend as OriginPrivateProgressiveZipBackend)
     }
-    const preparationId = createOperationID()
-    await this.#stages.beginReceive(preparationId)
-    const preparation = await sealWorkspaceZipPreparation({
-      receiveIntent: intent,
-      preparationId,
-      generations: evidence.generations,
-      entries: evidence.entries,
+    const content = await this.#stages.progressive.admit(await this.#budgetAuthority())
+    this.#admitted = content
+    this.#budgetClaim = content.claim as OriginPrivateWorkspaceBudgetClaim
+    await this.#backend?.close()
+    const backend = await openOriginPrivateProgressiveZipBackend({
+      receiveIntent: intent, operationRepository: this.#repository, namespace: this.#namespace,
+      contentGate: content.gate, budgetClaim: this.#budgetClaim,
+      ...(this.#trace === undefined ? {} : { onNativeTrace: this.#trace }),
+      ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
     })
-    const budget = await this.#budgetAuthority()
-    const result = await this.#stages.admitPreparedZip({
-      preparation,
-      authority: budget,
-      durableMetadataBytesExcludingAdmissionRecords: 0n,
-      rejectionCleanup: this.#packaging.cleanupRequest(undefined),
+    this.#backend = backend
+    return this.#createProgressiveExecution(backend)
+  }
+
+  async #continueProgressive(
+    lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-receive'; payloadKind: 'opfs-zip' }>,
+  ): Promise<V2LifecycleMutation> {
+    const previous = this.#backend
+    const content = this.#admitted
+    const claim = this.#budgetClaim
+    if (previous === undefined || !('archive' in previous) || content === undefined || claim === undefined) {
+      throw new DOMException('Native ZIP continuation lost task ownership', 'InvalidStateError')
+    }
+    const owned = previous as OriginPrivateProgressiveZipBackend
+    const recovery = await verifyProgressiveZipRecovery(owned.store, owned.object, lifecycle)
+    await owned.close()
+    const backend = await openOriginPrivateProgressiveZipBackend({
+      receiveIntent: this.intent, operationRepository: this.#repository, namespace: this.#namespace,
+      contentGate: content.gate, budgetClaim: claim,
+      ...(this.#trace === undefined ? {} : { onNativeTrace: this.#trace }),
+      ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
     })
-    if (result.kind === 'rejected') return Object.freeze({ kind: 'rejected', state: result.state })
-    this.#packaging.setPreparation(preparation)
-    return this.#openWorkspaceExecution(intent, { kind: 'prepared', evidence }, result.content, signal)
+    this.#backend = backend
+    if (recovery.requirement === 'local-finalization') {
+      const checkpoint = await backend.archive.finalize()
+      const state = await this.#completeProgressive(backend, checkpoint)
+      return Object.freeze({ lifecycle: state, workspaceUsage: { ownedBytes: checkpoint.sealedLength! } })
+    }
+    const state = await this.#stages.resumeReceive()
+    this.#plans = await workspacePlanAuthority(this.intent, this)
+    this.#transferJobId = createTransferJobID()
+    return Object.freeze({
+      lifecycle: state, activeControls: this.activeControls,
+      workspaceUsage: { ownedBytes: recovery.checkpoint.physicalLength }, resumeTransfer: true,
+    })
+  }
+
+  async #completeProgressive(backend: OriginPrivateProgressiveZipBackend, checkpoint: TaskCheckpoint): Promise<ReceiveLifecycleState> {
+    const state = await this.#stages.progressive.seal(backend.store, checkpoint)
+    this.#packaging.setPackageExactBytes(checkpoint.sealedLength!)
+    return handoffRetainedWorkspacePackage(
+      this.#window, { intent: this.intent, lifecycle: state, stages: this.#stages }, backend, this.#diagnostics,
+    )
+  }
+
+  async #createProgressiveExecution(
+    backend: OriginPrivateProgressiveZipBackend,
+  ): Promise<ExecutionAdmissionResult<WorkspaceExecution>> {
+    const execution = await createProgressiveWorkspaceExecution({
+      intent: this.intent, archive: backend.archive,
+      outputIdentity: outputSessionIdentity({
+        backend: 'browser-origin-private-zip', outputSessionId: createOutputSessionID(),
+      }),
+      settlement: {
+        pause: (request, evidence) => {
+          const fault = request.reason instanceof BoundaryFaultError ? request.reason.fault : request.worker.trigger?.fault
+          if (evidence.kind === 'last-committed-checkpoint') {
+            this.#trace?.({
+              name: 'receive.opfs.checkpoint', operation_id: this.intent.operationId,
+              object_id: backend.object.objectId, stage: 'failed-checkpoint-retained',
+              checkpoint_generation: evidence.checkpoint.generation,
+              reason: evidence.failure instanceof Error ? evidence.failure.message : String(evidence.failure),
+            })
+          }
+          return this.#stages.progressive.pause(backend.store, evidence.checkpoint,
+            fault?.domain === 'output' && fault.code === 'resource-budget'
+              ? 'storage-pressure' : undefined)
+        },
+        settle: (_request, checkpoint) => this.#completeProgressive(backend, checkpoint),
+      },
+    })
+    this.#admissionSettlement.markExecutionAdmitted()
+    return Object.freeze({ kind: 'accepted', execution })
   }
 
   async #reopenWorkspaceExecution(
     intent: ReceiveIntent,
-    admission:
-      | Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-      | Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>,
+    admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>> {
     const admitted = this.#admitted
@@ -415,9 +485,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
 
   async #openWorkspaceExecution(
     intent: ReceiveIntent,
-    admission:
-      | Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-      | Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>,
+    admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>,
     content: AdmittedWorkspaceContent,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>> {
@@ -437,9 +505,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
 
   async #createWorkspaceExecution(
     intent: ReceiveIntent,
-    admission:
-      | Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-      | Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>,
+    admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>,
     backend: OriginPrivateWorkspaceBackend,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>> {
@@ -502,6 +568,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   #budgetAuthority(): Promise<OriginPrivateWorkspaceBudgetAuthority> {
     return OriginPrivateWorkspaceBudgetAuthority.open(this.intent.operationId, {
       estimate: () => this.#window.navigator.storage.estimate(),
+      ...(this.#trace === undefined ? {} : { trace: this.#trace }),
     })
   }
 

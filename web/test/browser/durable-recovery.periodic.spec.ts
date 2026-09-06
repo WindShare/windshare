@@ -78,8 +78,6 @@ test('receive, package, and retained publication survive fresh browser processes
     }) as PublicationRetryResult
     expect(retried).toMatchObject({
       packageDigest: recovered.fixture.package.digest,
-      originalExpiry: recovered.fixture.originalExpiry,
-      restoredExpiry: recovered.fixture.originalExpiry,
       contentRequests: '0',
       packageSeals: 0,
       cleanup: 'clean',

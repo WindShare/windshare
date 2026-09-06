@@ -15,12 +15,12 @@ const PACKAGED_FILE_CAPABILITY_PROBE_NAME = 'windshare-package-capability-probe'
 
 export interface PackagedArtifactReadPort {
   readPackagedArtifact(artifact: PackagedArtifactV1): Promise<Blob>
+  acquireReader?(artifact: PackagedArtifactV1): Promise<{ release(): void }>
 }
 
 export interface PackagedArtifactHandoffRequest {
   readonly artifact: PackagedArtifactV1
   readonly attempt: PublicationAttemptV1
-  readonly retryableUntil: number
 }
 
 export interface PackagedArtifactHandoffPublisher {
@@ -64,32 +64,40 @@ export function createPackagedArtifactHandoffPublisher(
         )
       }
 
-      const source = await ports.packages.readPackagedArtifact(request.artifact)
-      if (!(source instanceof ports.File)) {
-        throw new DOMException(
-          'The packaged artifact reader did not return an immutable File',
-          'NotSupportedError',
-        )
-      }
-      if (BigInt(source.size) !== request.artifact.exactBytes) {
-        throw new TypeError('Packaged artifact File length changed after seal')
-      }
+      const reader = await ports.packages.acquireReader?.(request.artifact)
+      let handedOff = false
+      try {
+        const source = await ports.packages.readPackagedArtifact(request.artifact)
+        if (!(source instanceof ports.File)) {
+          throw new DOMException(
+            'The packaged artifact reader did not return an immutable File',
+            'NotSupportedError',
+          )
+        }
+        if (BigInt(source.size) !== request.artifact.exactBytes) {
+          throw new TypeError('Packaged artifact File length changed after seal')
+        }
 
-      const started = ports.browser.handoffWithLease({
-        context: {
-          attemptKind: 'workspace',
-          operationId: request.artifact.operationId,
-          attemptId: request.attempt.publicationAttemptId,
-          packageDigest: request.artifact.digest,
-          retryableUntil: request.retryableUntil,
-        },
-        source,
-        exactBytes: request.artifact.exactBytes,
-        suggestedName: request.attempt.route.suggestedName,
-        objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
-      })
-      assertPackagedHandoffStarted(started, request)
-      return started
+        const started = ports.browser.handoffWithLease({
+          context: {
+            attemptKind: 'workspace',
+            operationId: request.artifact.operationId,
+            attemptId: request.attempt.publicationAttemptId,
+            packageDigest: request.artifact.digest,
+          },
+          source,
+          exactBytes: request.artifact.exactBytes,
+          suggestedName: request.attempt.route.suggestedName,
+          objectUrlLeaseMilliseconds: BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
+          ...(reader === undefined ? {} : { onSourceReleased: () => reader.release() }),
+        })
+        handedOff = true
+        assertPackagedHandoffStarted(started, request)
+        return started
+      } catch (error) {
+        if (!handedOff) reader?.release()
+        throw error
+      }
     },
   })
 }
@@ -124,9 +132,6 @@ function assertPackagedHandoffRequest(request: PackagedArtifactHandoffRequest): 
       route.objectUrlLeaseMilliseconds !== BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS) {
     throw new TypeError('Packaged handoff attempt does not use the finite browser route')
   }
-  if (!Number.isSafeInteger(request.retryableUntil) || request.retryableUntil < 0) {
-    throw new TypeError('Packaged handoff requires the retained workspace deadline')
-  }
 }
 
 function assertPackagedHandoffStarted(
@@ -139,7 +144,6 @@ function assertPackagedHandoffStarted(
   }
   if (started.result.kind !== 'download-started' ||
       started.result.suggestedName !== route.suggestedName ||
-      started.result.retryableUntil !== request.retryableUntil ||
       !Number.isSafeInteger(started.urlLeaseStartedAt) ||
       started.urlLeaseStartedAt < 0 ||
       !Number.isSafeInteger(started.urlLeaseEndsAt) ||

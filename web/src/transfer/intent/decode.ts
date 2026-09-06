@@ -514,7 +514,7 @@ async function decodeMaterializationPlanBytes(
         workspace,
         requireWorkspacePublicationGuarantee(publicationGuarantee),
       )
-      const expectedPreparation = plan.preparation === 'exact-zip' ? 1 : 0
+      const expectedPreparation = 0
       if (preparation !== expectedPreparation) invalidDecodedCanonicalBytes()
       break
     }

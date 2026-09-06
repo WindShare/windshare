@@ -16,7 +16,6 @@ import { originPrivatePackageHandleId } from '../../src/output/origin-private/pa
 import {
   AuthorityOwnedReceiveOperationMutationPort,
   PersistedReceiveOperationCleanupExecutor,
-  PersistedReceiveOperationDeadlineElapsedError,
   PersistedReceiveOperationNeedsAttentionError,
   PersistedReceiveOperationReopenAuthority,
 } from '../../src/output/resume/reopen-authority'
@@ -25,7 +24,6 @@ import {
   type WorkspaceCapacitySnapshot,
 } from '../../src/output/workspace/budget'
 import { createOriginalFileArtifactVerificationReceipt } from '../../src/output/workspace/receipts'
-import { sealWorkspaceZipPreparation } from '../../src/output/workspace/preparation'
 import {
   RECEIVE_RECORD_CLEANUP,
   RECEIVE_RECORD_RECEIPT,
@@ -53,14 +51,11 @@ import {
   seedWorkspaceZipAdmission,
   workspaceIntent,
   workspaceZipIntent,
-  workspaceZipPreparationInput,
 } from './resume-reopen-authority-fixture'
 
 const ENTERED_AT = 10_000
 const WORKSPACE_CAPACITY = Object.freeze({
-  jobLimitBytes: 1_000_000n,
-  processLimitBytes: 2_000_000n,
-  otherActiveJobPeakBytes: 0n,
+  outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
   estimatedQuotaBytes: 3_000_000n,
   currentUsageBytes: 0n,
   minimumReserveBytes: 0n,
@@ -276,7 +271,7 @@ describe('persisted receive operation reopen authority', () => {
     expect(releaseBudget).toHaveBeenCalledTimes(1)
   })
 
-  it('reopens the exact persisted ZIP preparation before advancing fresh-page receive', async () => {
+  it('rejects obsolete file-set ZIP recovery without a native owned archive', async () => {
     const state = new MemoryRepositoryState()
     const intent = await workspaceZipIntent()
     const storageRoot = new MemoryDirectoryHandle('opfs')
@@ -288,8 +283,7 @@ describe('persisted receive operation reopen authority', () => {
       storage,
       randomOwnedObjectId: () => identity(90, 32),
     })
-    const preparation = await sealWorkspaceZipPreparation(workspaceZipPreparationInput(intent))
-    const admission = await seedWorkspaceZipAdmission(state, intent, preparation)
+    const admission = await seedWorkspaceZipAdmission(state, intent)
     const lifecycle = resumableReceive(intent, 7n)
     await state.seedLifecycle(lifecycle)
     const accepted = admitWorkspaceBudget(admission.budget, WORKSPACE_CAPACITY)
@@ -300,7 +294,6 @@ describe('persisted receive operation reopen authority', () => {
       expect(input).toMatchObject({
         receiveIntent: { operationId: intent.operationId, digest: intent.digest },
         namespace: { operationId: intent.operationId },
-        contentGate: { preparationManifestDigest: preparation.manifest.digest },
       })
       return backend
     })
@@ -328,26 +321,12 @@ describe('persisted receive operation reopen authority', () => {
       openWorkspaceReceiveBackend,
     })
 
-    const reopened = await authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1),
-      'continue',
-    )
+    await expect(authority.reopen(
+      requiredDescriptor(lifecycle, ENTERED_AT + 1), 'continue',
+    )).rejects.toThrow('Retained ZIP object handle is missing')
+    expect(openWorkspaceReceiveBackend).not.toHaveBeenCalled()
+    expect((await state.lifecycle())?.generation).toBe(7n)
 
-    expect(reopened).toMatchObject({
-      kind: 'workspace',
-      lifecycle: { kind: 'receiving', generation: 8n },
-      preparation: {
-        manifest: { digest: preparation.manifest.digest },
-        zipLayout: { digest: preparation.zipLayout.digest },
-      },
-    })
-    if (reopened.kind !== 'workspace' || reopened.receiveContinuation === undefined) {
-      throw new Error('workspace receive continuation is missing')
-    }
-    await expect(reopened.receiveContinuation.openBackend()).resolves.toBe(backend)
-    await reopened.close()
-    expect(openWorkspaceReceiveBackend).toHaveBeenCalledOnce()
-    expect(closeBackend).toHaveBeenCalledOnce()
   })
 
 })
@@ -373,7 +352,7 @@ describe('persisted workspace package continuation', () => {
     const verifyManifestOwnership = vi.fn(async () => undefined)
     const verifyTemporaryCleanup = vi.fn(async () => undefined)
     const closeBackend = vi.fn(async () => undefined)
-    const packageOwnedObjectId = identity(93, 32)
+    const packageOwnedObjectId = seeded.proof.ownedObjectId
     const packageHandleId = originPrivatePackageHandleId(intent.operationId, packageOwnedObjectId)
     const packageHandle = Object.freeze({
       kind: 'file' as const,
@@ -612,7 +591,7 @@ async function selectedRanking(intent: ReceiveIntent) {
 }
 
 describe('persisted receive operation lifecycle and cleanup authority', () => {
-  it('commits Expired before a continuation can cross the exact 24-hour deadline', async () => {
+  it('retains unfinished output and resumes after a long interruption', async () => {
     const state = new MemoryRepositoryState()
     const intent = await directTreeIntent()
     await seedFSAOperationBinding(
@@ -623,20 +602,14 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
     const lifecycle = resumableReceive(intent, 10n)
     await state.seedLifecycle(lifecycle)
     const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
-    const authority = reopenAuthority(state, lifecycle.expiresAt, 74)
+    const authority = reopenAuthority(state, ENTERED_AT + 365 * 24 * 60 * 60 * 1000, 74)
 
-    await expect(authority.reopen(descriptor, 'continue'))
-      .rejects.toBeInstanceOf(PersistedReceiveOperationDeadlineElapsedError)
-
-    expect(await state.lifecycle()).toMatchObject({
-      kind: 'expired',
-      generation: 11n,
-      expiresAt: lifecycle.expiresAt,
-      cleanupState: 'cleanup-pending',
-    })
-    expect([...state.records.values()].filter((record) =>
-      record.kind === RECEIVE_RECORD_RECEIPT)).toHaveLength(1)
+    const reopened = await authority.reopen(descriptor, 'continue')
+    expect(await state.lifecycle()).toMatchObject({ kind: 'receiving', generation: 11n })
+    expect([...state.records.values()].filter(record => record.kind === RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
+    await reopened.close()
     expect(state.lease).toBeUndefined()
+
   })
 
   it('rejects a concurrent lifecycle advance at the acquisition generation fence', async () => {

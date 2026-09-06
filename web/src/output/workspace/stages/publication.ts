@@ -9,7 +9,6 @@ import {
   type PublicationAttemptV1,
 } from '../aggregate'
 import {
-  createExpiryReceipt,
   createHandoffReceipt,
   createManagedPublicationReceipt,
   persistedReceiptRecord,
@@ -43,7 +42,6 @@ export class WorkspacePublicationStages {
     readonly targetHandle: ReceiveOperationHandleRecord
   }): Promise<PublicationAttemptV1> {
     const state = await this.runtime.lifecycle()
-    this.runtime.requireContinuationUnexpired(state)
     const reservation = await validateDestinationReservation(
       input.reservation,
       this.runtime.intent.artifact,
@@ -186,12 +184,7 @@ export class WorkspacePublicationStages {
       publication_attempt_id: input.attempt.publicationAttemptId,
       needs_attention_reason: 'publication-unknown',
     })
-    this.runtime.emit({
-      name: 'receive.operation.needs_attention',
-      operation_id: this.runtime.intent.operationId,
-      prior_state: state.kind,
-      needs_attention_reason: 'publication-unknown',
-    })
+
     return next
   }
 
@@ -223,7 +216,6 @@ export class WorkspacePublicationStages {
     readonly packagedFileSupported: boolean
   }): Promise<PublicationAttemptV1> {
     const state = await this.runtime.lifecycle()
-    this.runtime.requireContinuationUnexpired(state)
     this.#assertRetainedPackage(state, input.package)
     const attempt = await createPublicationAttempt({
       publicationAttemptId: input.publicationAttemptId,
@@ -319,8 +311,6 @@ export class WorkspacePublicationStages {
       attempt_id: input.attempt.publicationAttemptId,
       package_digest_present: true,
       package_digest: input.package.digest,
-      retryable_until_present: true,
-      retryable_until_ms: next.retryableUntil,
     })
     return Object.freeze({ receipt, state: next })
   }
@@ -333,26 +323,14 @@ export class WorkspacePublicationStages {
     const state = await this.runtime.lifecycle()
     this.#assertActiveHandoff(state, input.package, input.attempt)
     const now = this.runtime.now()
-    const expired = now >= state.retainedDeadline
-    const expiryReceipt = expired
-      ? await createExpiryReceipt({
-          operationId: this.runtime.intent.operationId,
-          receiveIntentDigest: this.runtime.intent.digest,
-          priorStableState: 'waiting-to-save',
-          expiresAt: state.retainedDeadline,
-          cleanupState: 'cleanup-pending',
-        })
-      : undefined
     const next = this.runtime.reduceAt(state, this.runtime.event({
       kind: 'handoff-not-started',
       reason: input.reason,
-      ...(expiryReceipt === undefined ? {} : { expiryReceiptDigest: expiryReceipt.digest }),
     }, state), now)
     await this.runtime.repository.commitTransition({
       operationId: this.runtime.intent.operationId,
       expectedLifecycleGeneration: state.generation,
       expectedLeaseId: this.runtime.leaseId,
-      ...(expiryReceipt === undefined ? {} : { records: [await persistedReceiptRecord(expiryReceipt)] }),
       lifecycle: next,
     })
     this.runtime.emit({
@@ -362,16 +340,6 @@ export class WorkspacePublicationStages {
       attempt_id: input.attempt.publicationAttemptId,
       external_attempt_reason: input.reason,
     })
-    if (next.kind === 'expired') {
-      this.runtime.emit({
-        name: 'receive.operation.expired',
-        operation_id: this.runtime.intent.operationId,
-        // This branch expires the waiting-to-save predecessor created above; using
-        // that proof avoids widening publication to unrelated retained states.
-        prior_stable_state: 'waiting-to-save',
-        expires_at_ms: next.expiresAt,
-      })
-    }
     return next
   }
 
@@ -379,14 +347,14 @@ export class WorkspacePublicationStages {
     readonly package: PackagedArtifactV1
     readonly attempt: PublicationAttemptV1
     readonly lastVerifiedRecordDigest: string
-  }): Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>> {
+  }): Promise<Extract<ReceiveLifecycleState, { kind: 'waiting-to-save' }>> {
     const state = await this.runtime.lifecycle()
     this.#assertActiveHandoff(state, input.package, input.attempt)
     const next = this.runtime.reduce(state, this.runtime.event({
       kind: 'handoff-unknown',
       lastVerifiedRecordDigest: input.lastVerifiedRecordDigest,
     }, state))
-    if (next.kind !== 'needs-attention') throw new TypeError('unknown handoff was retried')
+    if (next.kind !== 'waiting-to-save') throw new TypeError('unknown handoff lost its retained artifact')
     await this.runtime.commitLifecycle(state, next)
     this.runtime.emit({
       name: 'receive.handoff.unknown',
@@ -395,12 +363,7 @@ export class WorkspacePublicationStages {
       attempt_id: input.attempt.publicationAttemptId,
       needs_attention_reason: 'publication-unknown',
     })
-    this.runtime.emit({
-      name: 'receive.operation.needs_attention',
-      operation_id: this.runtime.intent.operationId,
-      prior_state: state.kind,
-      needs_attention_reason: 'publication-unknown',
-    })
+
     return next
   }
 

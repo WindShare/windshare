@@ -102,7 +102,12 @@ describe('v2 cancellation settlement', () => {
     expect(readers.blockRequests).toEqual([])
   })
 
-  it('does not report DirectTree Paused until an admitted file has returned exact pause evidence', async () => {
+  it.each([
+    { planKind: 'direct-tree', artifactKind: 'directory-tree', lifecycle: 'partial-directory' },
+    { planKind: 'workspace-then-publish', artifactKind: 'zip-archive', lifecycle: 'resumable-receive' },
+  ] as const)('does not report $planKind Paused until an admitted file has returned exact pause evidence', async ({
+    planKind, artifactKind, lifecycle,
+  }) => {
     const root = identity(2)
     const file = fileEntry(identity(11), 'payload.bin', 4n)
     const selection = new V2SelectionPolicy(true)
@@ -135,8 +140,8 @@ describe('v2 cancellation settlement', () => {
     })
     const plans = planAuthorityFixture({ output })
     const intent = await receiveIntentFixture({
-      planKind: 'direct-tree',
-      artifactKind: 'directory-tree',
+      planKind,
+      artifactKind,
       selection,
     })
     const controller = new AbortController()
@@ -175,13 +180,13 @@ describe('v2 cancellation settlement', () => {
     const result = await observedRunning
 
     expect(result.worker.status).toBe('Paused')
-    expect(result.lifecycle.kind).toBe('partial-directory')
+    expect(result.lifecycle.kind).toBe(lifecycle)
     expect(output.pauseEvidence).toHaveLength(1)
     expect(output.pauseEvidence[0]?.ranges).toEqual([{ start: 0n, end: 2n }])
-    expect(plans.pauses).toEqual(['direct-tree'])
+    expect(plans.pauses).toEqual([planKind])
   })
 
-  it('cancels prepared-plan discovery before preparation can acquire output authority', async () => {
+  it('cancels Portable ZIP discovery before preparation can acquire output authority', async () => {
     const root = identity(2)
     const child = identity(3)
     const selection = new V2SelectionPolicy(true)
@@ -201,7 +206,7 @@ describe('v2 cancellation settlement', () => {
     const readers = readerFixture([])
     const plans = planAuthorityFixture()
     const intent = await receiveIntentFixture({
-      planKind: 'workspace-then-publish',
+      planKind: 'portable-handoff',
       artifactKind: 'zip-archive',
       selection,
     })

@@ -1,5 +1,6 @@
 import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MILLISECONDS } from '../../../transfer/intent'
 import type { PersistentTreeTraceEvent } from '../../persistent-tree/contracts'
+import type { ObjectCapacityTraceEvent } from '../../origin-private/object-capacity'
 import {
   validateReceiveIntent,
   type ReceiveIntent,
@@ -71,7 +72,6 @@ export interface WorkspaceContentGate {
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly workspaceBudgetDigest: string
-  readonly preparationManifestDigest?: string
 }
 
 export interface PackageTemporaryCleanupEvidence {
@@ -87,6 +87,8 @@ export type WorkspaceReceiveIntent = ReceiveIntent & {
 }
 
 export type WorkspaceStageTraceEvent =
+  | ObjectCapacityTraceEvent
+  | Readonly<{ name: 'receive.opfs.checkpoint'; operation_id: string; object_id: string; stage: string; checkpoint_generation?: bigint; reason?: string }>
   | PersistentTreeTraceEvent
   | Readonly<{
       name: 'receive.preparation.started'
@@ -115,8 +117,6 @@ export type WorkspaceStageTraceEvent =
       artifact_bytes: bigint
       metadata_bytes: bigint
       unique_raw_bytes: bigint
-      package_bytes: bigint
-      peak_temporary_bytes: bigint
       durable_metadata_bytes: bigint
       peak_owned_bytes: bigint
       limit_class: 'none'
@@ -130,8 +130,6 @@ export type WorkspaceStageTraceEvent =
       artifact_bytes: bigint
       metadata_bytes: bigint
       unique_raw_bytes: bigint
-      package_bytes: bigint
-      peak_temporary_bytes: bigint
       durable_metadata_bytes: bigint
       peak_owned_bytes: bigint
       limit_class: 'workspace-job' | 'workspace-process' | 'workspace-quota'
@@ -180,7 +178,6 @@ export type WorkspaceStageTraceEvent =
       name: 'receive.waiting_to_save'
       operation_id: string
       package_digest: string
-      expires_at_ms: number
     }>
   | Readonly<{
       name: 'receive.publication.started'
@@ -232,8 +229,6 @@ export type WorkspaceStageTraceEvent =
       attempt_id: string
       package_digest_present: true
       package_digest: string
-      retryable_until_present: true
-      retryable_until_ms: number
     }>
   | Readonly<{
       name: 'receive.handoff.not_started'
@@ -256,7 +251,6 @@ export type WorkspaceStageTraceEvent =
       resumable_stage: 'receive'
       completed_file_count: bigint
       completed_bytes: bigint
-      expires_at_ms: number
     }>
   | Readonly<{
       name: 'receive.continuation.admission_failed'
@@ -265,7 +259,6 @@ export type WorkspaceStageTraceEvent =
       restored_checkpoint_set_digest: string
       restored_completed_file_count: bigint
       restored_completed_bytes: bigint
-      restored_expires_at_ms: number
     }>
   | Readonly<{
       name: 'receive.operation.expired'

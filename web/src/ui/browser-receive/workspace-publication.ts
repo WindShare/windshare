@@ -43,9 +43,6 @@ export async function handoffRetainedWorkspacePackage(
     suggestedName: artifactRequestedName(operation.intent.artifact),
     packagedFileSupported: true,
   })
-  const retryableUntil = lifecycle.kind === 'waiting-to-save'
-    ? lifecycle.expiresAt
-    : lifecycle.retryableUntil
   try {
     const publisher = createPackagedArtifactHandoffPublisher({
       packages: backend.packagedArtifacts,
@@ -56,7 +53,7 @@ export async function handoffRetainedWorkspacePackage(
       ),
       File: windowPort.File,
     })
-    const started = await publisher.handoff({ artifact, attempt, retryableUntil })
+    const started = await publisher.handoff({ artifact, attempt })
     return (await operation.stages.recordHandoffStarted({
       package: artifact,
       attempt,
@@ -93,7 +90,7 @@ export async function workspacePlanAuthority(
     ...(intent.artifact.kind === 'zip-archive'
       ? {
           workspaceZip: {
-            prepare: (boundIntent, evidence, signal) => owner.prepareZip(boundIntent, evidence, signal),
+            admit: (boundIntent, signal) => owner.admitZip(boundIntent, signal),
           },
         }
       : {}),

@@ -198,6 +198,8 @@ export interface PreservingWriterCapacityAuthority {
 
 export interface PersistentTreeFile {
   readonly ownedObjectId: string
+  /** Native flush preserves the open writer; staged FSA flush commits by closing. */
+  readonly durability?: 'native-in-place' | 'close-and-reopen'
   readonly persistedHandle?: PersistentHandleRecord<unknown>
   openWriter?(mode: PersistentWriterOpenMode): Promise<void>
   preservingWriterCost?(durablePrefixBytes: bigint): PreservingWriterCost

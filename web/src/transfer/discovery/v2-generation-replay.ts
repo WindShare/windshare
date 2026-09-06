@@ -28,7 +28,7 @@ export interface V2DirectoryDiscoveryOptions<T> {
   readonly opaqueSearchSatisfied: () => boolean
   readonly observeDirectory: (directoryId: Uint8Array<ArrayBuffer>) => void
   readonly observeEntry: (entry: V2CatalogEntry) => boolean
-  readonly generationCommitted: (committed: V2CommittedDirectory) => void
+  readonly generationCommitted: (committed: V2CommittedDirectory) => void | Promise<void>
   readonly recordDirectoryFailure: (directoryId: string, error: unknown) => void
   readonly replayConsumer: (committed: V2CommittedDirectory) => V2GenerationReplayConsumer<T>
 }
@@ -58,7 +58,7 @@ export async function* discoverV2DirectoryGeneration<T>(
     }
     requireCommittedDirectoryAuthority(cursor, committed)
     options.observeDirectory(committed.directoryId)
-    options.generationCommitted(committed)
+    await options.generationCommitted(committed)
 
     const consumer = options.replayConsumer(committed)
     const observation = await observeCommittedGeneration(options, committed)

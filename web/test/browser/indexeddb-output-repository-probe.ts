@@ -1,6 +1,5 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
-  CHECKPOINT_DATABASE_VERSION,
   INDEXEDDB_BY_OPERATION_LINEAGE_INDEX,
   INDEXEDDB_BY_OPERATION_OWNED_OBJECT_INDEX,
   INDEXEDDB_BY_OPERATION_PATH_ORDER_INDEX,
@@ -39,6 +38,8 @@ import { snapshotMaterializationRootRelativePath } from '../../src/transfer/job/
 import { VerifiedFinalOutputFile } from '../../src/transfer/output-session'
 
 const MIGRATION_SENTINEL_BYTES = Uint8Array.of(91, 92, 93, 94)
+// The seeded rows use the retired v9 schema even when the current database advances.
+const LEGACY_METADATA_DATABASE_VERSION = 9
 const CONCURRENT_FILE_COUNT = 8
 const PAGING_DIRECTORY_COUNT = 130
 
@@ -372,7 +373,7 @@ export async function probeIndexedDbOutputMigration(
   await writer.write(MIGRATION_SENTINEL_BYTES)
   await writer.close()
   try {
-    const legacy = await openDatabase(databaseName, CHECKPOINT_DATABASE_VERSION - 1, request => {
+    const legacy = await openDatabase(databaseName, LEGACY_METADATA_DATABASE_VERSION, request => {
       installIndexedDbV9Schema(request.result, request.transaction ?? undefined, 0)
       for (const name of INDEXEDDB_LEGACY_V5_STORES) {
         request.result.createObjectStore(name, { keyPath: 'id' })
@@ -411,9 +412,10 @@ export async function probeIndexedDbOutputMigration(
       INDEXEDDB_BY_OPERATION_SEAL_PAGE_INDEX,
     ].every(indexName => [...INDEXEDDB_V10_STORE_SCHEMAS]
       .some(schema => schema.indexes.some(index => index.name === indexName)))
+    const storeCount = upgraded.objectStoreNames.length
     upgraded.close()
 
-    const blocker = await openDatabase(`${databaseName}-blocked`, CHECKPOINT_DATABASE_VERSION - 1,
+    const blocker = await openDatabase(`${databaseName}-blocked`, LEGACY_METADATA_DATABASE_VERSION,
       request => installIndexedDbV9Schema(request.result, request.transaction ?? undefined, 0))
     const blockedUpgradeRejected = await openIndexedDbCheckpointDatabase(`${databaseName}-blocked`)
       .then(database => {
@@ -424,7 +426,7 @@ export async function probeIndexedDbOutputMigration(
     const published = await (await root.getFileHandle(sentinelName)).getFile()
     return {
       oldRowsRemaining: counts.reduce((sum, count) => sum + count, legacyStoresRemaining),
-      storeCount: INDEXEDDB_V10_STORE_SCHEMAS.length,
+      storeCount,
       exactIndexesPresent,
       publishedSentinelBytes: [...new Uint8Array(await published.arrayBuffer())],
       blockedUpgradeRejected,

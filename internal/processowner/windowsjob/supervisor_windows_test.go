@@ -22,6 +22,9 @@ import (
 const (
 	windowsSupervisorStartupTimeout  = 30 * time.Second
 	windowsSupervisorCompletionSlack = time.Second
+	// Native process teardown includes asynchronous Windows I/O cancellation.
+	// Budget-boundary behavior is tested separately with controlled observations.
+	windowsSupervisorNativeTerminationGrace = time.Second
 )
 
 func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
@@ -38,7 +41,7 @@ func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
 	})
 
 	t.Run("deadline", func(t *testing.T) {
-		statuses, err := runWindowsSupervisor(t, "deadline", 250*time.Millisecond, 100*time.Millisecond, nil)
+		statuses, err := runWindowsSupervisor(t, "deadline", 250*time.Millisecond, windowsSupervisorNativeTerminationGrace, nil)
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -120,10 +120,13 @@ export class RetainedInventoryCoordinator {
       return
     }
 
-    const joined = action === 'continue'
+    const remoteContinuation = action === 'continue' &&
+      operation.continuation !== 'resume-package' &&
+      operation.continuation !== 'resume-local-finalization'
+    const joined = remoteContinuation
       ? this.#options.currentJoinedShare()
       : undefined
-    const continuationUnavailable = action === 'continue' && (
+    const continuationUnavailable = remoteContinuation && (
       joined === undefined || this.#options.continuationBlocked()
     )
     const attempt = this.#newAttempt('retained_action')

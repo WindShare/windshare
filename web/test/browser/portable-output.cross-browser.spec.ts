@@ -110,7 +110,6 @@ test('supports immutable OPFS packaged File retries without weakening the URL le
   expect(proofs[0]!.packageDigest).toBe(proofs[1]!.packageDigest)
   expect(proofs[0]!.receiveIntentDigest).toBe(proofs[1]!.receiveIntentDigest)
   for (const proof of proofs) {
-    expect(proof.started.result.retryableUntil).toBe(proof.retryableUntil)
     expect(proof.started.urlLeaseEndsAt - proof.started.urlLeaseStartedAt).toBe(60_000)
   }
 })

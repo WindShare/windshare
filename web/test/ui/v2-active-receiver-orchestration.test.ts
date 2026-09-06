@@ -456,7 +456,7 @@ describe('v2 receive attempt observability', () => {
     await controller.dispose()
   })
 
-  it('excludes an invisible expiry AbortError without publishing a product error', async () => {
+  it('does not schedule destructive expiry for an unconfirmed artifact', async () => {
     const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const diagnostics = recordingIncidents()
@@ -470,7 +470,6 @@ describe('v2 receive attempt observability', () => {
     run.resolve(next(runtime.lifecycle, {
       kind: 'waiting-to-save',
       packageDigest: identityText(71, 32),
-      expiresAt: 1_001_000,
     }))
     await turns()
     const priorError = controller.getSnapshot().error
@@ -481,27 +480,14 @@ describe('v2 receive attempt observability', () => {
     await turns()
 
     expect(controller.getSnapshot().error).toBe(priorError)
-    expect(diagnostics.decisions.slice(priorDecisionCount)).toEqual([
-      expect.objectContaining({
-        kind: 'excluded',
-        boundary: 'lifecycle_action',
-        reason: 'not_user_visible',
-      }),
-    ])
-    expect(diagnostics.facts.at(-1)).toMatchObject({
-      scopeKind: 'lifecycle_action',
-      fact: {
-        kind: 'native_output_failure',
-        stage: 'checkpoint',
-        payload: { nativeOutputFailure: { nativeClass: 'abort' } },
-      },
-    })
+    expect(diagnostics.decisions.slice(priorDecisionCount)).toEqual([])
+    expect(runtime.expiryObservations).toEqual([])
     expect(diagnostics.decisions.slice(priorDecisionCount))
       .not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'incident' })]))
     await controller.dispose()
   })
 
-  it('observes retained expiry, exposes cleanup only when required, and leaves NeedsAttention inert', async () => {
+  it('retains unconfirmed artifacts until explicit deletion and leaves cleanup ambiguity inert', async () => {
     const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
     const controller = controllerFor(joined, receive)
@@ -515,7 +501,6 @@ describe('v2 receive attempt observability', () => {
     run.resolve(next(runtime.lifecycle, {
       kind: 'waiting-to-save',
       packageDigest: identityText(71, 32),
-      expiresAt: 1_001_000,
     }))
     await turns()
     expect(controller.getSnapshot().output.lifecyclePresentation?.actions.map(action => action.kind))
@@ -523,15 +508,15 @@ describe('v2 receive attempt observability', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     await turns()
-    expect(runtime.expiryObservations).toHaveLength(1)
+    expect(runtime.expiryObservations).toHaveLength(0)
     expect(controller.getSnapshot().output.lifecyclePresentation).toMatchObject({
-      stateKind: 'expired',
-      title: 'Task expired',
-      actions: [{ kind: 'delete' }],
+      stateKind: 'waiting-to-save',
+      title: 'Ready to save',
+      actions: [{ kind: 'save' }, { kind: 'delete' }],
     })
 
-    const expired = controller.getSnapshot().output.lifecycle
-    if (expired === null) throw new Error('expiry state was not published')
+    const retained = controller.getSnapshot().output.lifecycle
+    if (retained === null) throw new Error('retained state was not published')
     runtime.nextLifecycleAction = (_action, lifecycle) => ({
       lifecycle: next(lifecycle, {
         kind: 'needs-attention',

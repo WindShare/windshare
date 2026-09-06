@@ -108,7 +108,7 @@ describe('artifact offers', () => {
       operation: 'download-zip',
       artifactKind: 'zip-archive',
       recovery: 'workspace-resumable',
-      preparation: { manifest: 'exact-zip', hardAdmission: 'workspace-budget' },
+      preparation: { manifest: 'none', hardAdmission: 'workspace-budget' },
       plan: { kind: 'workspace-then-publish' },
     })
   })

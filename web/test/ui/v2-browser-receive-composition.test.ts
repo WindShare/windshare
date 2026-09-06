@@ -120,6 +120,18 @@ describe('browser production receive composition', () => {
     expect(environment.portable?.kind).toBe('portable-memory')
   })
 
+  it('does not offer OPFS when the Dedicated Worker capability is unavailable', async () => {
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    Object.defineProperty(windowPort, 'Worker', { value: undefined })
+    const composition = createBrowserReceiveComposition(windowPort)
+
+    const environment = await composition.environment(new AbortController().signal)
+
+    expect(environment.workspace).toBeNull()
+    expect(environment.portable?.kind).toBe('portable-memory')
+    expect(environment.targets.some(target => target.kind === 'fsa-parent-directory')).toBe(true)
+  })
+
   it('keeps installed routes available when quota estimation is absent', async () => {
     const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
     Object.defineProperty(windowPort.navigator.storage, 'estimate', { value: undefined })
@@ -295,14 +307,13 @@ describe('browser production receive composition', () => {
     expect(windowPort.URL.createObjectURL).not.toHaveBeenCalled()
   })
 
-  it('turns an elapsed stable deadline into cleanup-only inventory', async () => {
+  it('keeps unfinished receive inventory resumable after elapsed time', async () => {
     const source = new FakeResumeSource([receiveLifecycle(20, {
       kind: 'resumable-receive',
       payloadKind: 'file-set',
       checkpointSetDigest: identity(21, 32),
       completedFileCount: 3n,
       completedBytes: 512n,
-      expiresAt: 1_000,
     })])
     const composition = createBrowserReceiveComposition(
       capableWindow(vi.fn(async () => directoryHandle())),
@@ -312,8 +323,7 @@ describe('browser production receive composition', () => {
     const inventory = await composition.retained.list(new AbortController().signal)
 
     expect(inventory.operations).toMatchObject([{
-      continuation: 'cleanup-expired',
-      expiresAt: 1_000,
+      continuation: 'resume-receive',
       lifecycleGeneration: 1n,
       actions: [],
     }])
@@ -322,18 +332,15 @@ describe('browser production receive composition', () => {
     expect(source.closeCalls).toBe(1)
   })
 
-  it('keeps the live resume reference until expiry cleanup consumes the exact inventory token', async () => {
+  it('keeps the live resume reference until explicit discard consumes the exact inventory token', async () => {
     const source = new FakeResumeSource([receiveLifecycle(22, {
       kind: 'resumable-receive',
       payloadKind: 'file-set',
       checkpointSetDigest: identity(23, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
-      expiresAt: 1_000,
     })])
-    const expiredDescriptors: ReceiveOperationResumeDescriptor[] = []
-    const expire = vi.fn(async (descriptor: ReceiveOperationResumeDescriptor) => {
-      expiredDescriptors.push(descriptor)
+    const expire = vi.fn(async () => {
       return Object.freeze({
         kind: 'retention-cleanup',
         result: Object.freeze({ kind: 'already-absent' }),
@@ -356,21 +363,20 @@ describe('browser production receive composition', () => {
     )
     const inventory = await composition.retained.list(new AbortController().signal)
     const operation = inventory.operations[0]
-    if (operation === undefined) throw new Error('expired operation was not projected')
+    if (operation === undefined) throw new Error('retained operation was not projected')
 
-    expect(operation.actions).toEqual(['delete'])
+    expect(operation.actions).toEqual(['continue', 'discard', 'catch-up'])
     await expect(inventory.act(
       Object.freeze({ ...operation }),
-      'delete',
+      'discard',
       new AbortController().signal,
     )).rejects.toMatchObject({ name: 'InvalidStateError' })
     expect(expire).not.toHaveBeenCalled()
 
-    await inventory.act(operation, 'delete', new AbortController().signal)
+    await inventory.act(operation, 'discard', new AbortController().signal)
 
-    expect(expire).toHaveBeenCalledTimes(1)
-    expect(expiredDescriptors[0]?.operationId).toBe(operation.operationId)
-    expect(discard).not.toHaveBeenCalled()
+    expect(expire).not.toHaveBeenCalled()
+    expect(discard).toHaveBeenCalledOnce()
     expect(source.closeCalls).toBe(0)
     inventory.close()
     expect(source.closeCalls).toBe(1)
@@ -383,7 +389,6 @@ describe('browser production receive composition', () => {
       checkpointSetDigest: identity(27, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
-      expiresAt: 5_000,
     })])
     const discardedDescriptors: ReceiveOperationResumeDescriptor[] = []
     const discard = vi.fn(async (descriptor: ReceiveOperationResumeDescriptor) => {
@@ -430,12 +435,10 @@ describe('browser output attempt ownership', () => {
         checkpointSetDigest: identity(49, 32),
         completedFileCount: 1n,
         completedBytes: 64n,
-        expiresAt: 5_000,
       }),
       receiveLifecycle(50, {
         kind: 'waiting-to-save',
         packageDigest: identity(51, 32),
-        expiresAt: 5_000,
       }),
     ])
     const mutations: ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> =

@@ -146,8 +146,6 @@ export interface WorkspaceEnvironmentOffer {
   readonly routeId: string
   readonly kind: 'origin-private-workspace'
   readonly persistence: 'durable-owned-repository'
-  readonly jobHardLimitBytes: bigint
-  readonly processHardLimitBytes: bigint
   readonly minimumQuotaReserveBytes: bigint
   readonly quotaAvailabilityEstimateBytes: bigint | null
 }
@@ -252,8 +250,6 @@ export type MaterializationTargetSemantics =
 export interface WorkspacePlanSemantics {
   readonly kind: 'origin-private-workspace'
   readonly persistence: 'durable-owned-repository'
-  readonly jobHardLimitBytes: bigint
-  readonly processHardLimitBytes: bigint
   readonly minimumQuotaReserveBytes: bigint
 }
 

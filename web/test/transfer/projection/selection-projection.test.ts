@@ -34,6 +34,21 @@ interface EvidenceInput {
 }
 
 describe('epoch-scoped selection projection', () => {
+  it.each([
+    { archiveBytes: 100n, durableMetadataBytes: 10n, peakOwnedBytes: 210n },
+    { archiveBytes: 100n, durableMetadataBytes: 10n, peakOwnedBytes: 109n },
+    { archiveBytes: (1n << 64n) - 1n, durableMetadataBytes: 1n, peakOwnedBytes: 0n },
+    { archiveBytes: -1n, durableMetadataBytes: 1n, peakOwnedBytes: 0n },
+  ])('rejects invalid native workspace storage costs: $archiveBytes + $durableMetadataBytes != $peakOwnedBytes', async (cost) => {
+    const controller = startedController(await selection())
+    expect(() => controller.apply({
+      kind: 'discovery-completed',
+      epoch: controller.state.projection.epoch,
+      workspaceCostObservation: { version: 1, ...cost },
+    })).toThrow(/workspace cost/u)
+    expect(controller.state.discovery.kind).toBe('discovering')
+  })
+
   const shapeCases: readonly Readonly<{
     name: string
     run: () => Promise<SelectionProjectionState>

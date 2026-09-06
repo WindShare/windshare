@@ -652,7 +652,7 @@ export function validateRetainedAction(payload: UnknownRecord): void {
   exactKeys(payload, ['transition', 'action', 'continuation'], [], 'retained action payload')
   member(payload.transition, ['started', 'completed', 'failed', 'excluded'],
     'retained action transition')
-  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete'],
+  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete', 'save-partial'],
     'retained action')
   member(payload.continuation, [
     'resume_receive', 'pending_catch_up', 'restoration_available',

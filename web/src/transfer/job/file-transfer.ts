@@ -1,3 +1,4 @@
+import { OutputCapacityBlockedError } from '../capacity-pressure/drain'
 import type { V2ShareDescriptor } from '../../catalog/v2-records'
 import { ByteRangeSet, bigintToSafeNumber, byteRange, type ByteRange } from '../../content/geometry'
 import {
@@ -30,6 +31,7 @@ import {
   snapshotOutputFileRequest,
   type AutomaticCheckpointTrigger,
   type OutputFile,
+  type OpenedOutputRevision,
   type OutputExecutionProfileBoundedCheckpoint,
   type OutputSession,
 } from '../output-session'
@@ -46,6 +48,7 @@ import {
 import {
   BoundaryFaultError,
   FaultScope,
+  FaultDomain,
   OutputFaultCode,
   authorizeFileRetirement,
   joinFaults,
@@ -94,6 +97,7 @@ export async function transferV2File(
   let opened: V2OpenedRevision | undefined
   let transaction: BoundOutputFileTransaction | undefined
   let primaryFailure: NormalizedV2FileTransferFailure | undefined
+  let capacityBlocked: OutputCapacityBlockedError | undefined
   try {
     let revisionOpenAttempted = false
     let revisionOpenFailure: Readonly<{ readonly reason: unknown }> | undefined
@@ -150,15 +154,16 @@ export async function transferV2File(
       () => options.output.beginFile(request, options.signal),
       () => revisionOpenFailure,
     )
-    if (opened === undefined) {
-      throw new OutputTransactionContractError(
-        'output adapter created a transaction without opening an authenticated revision',
-      )
+    const revision = snapshotOpenedOutputRevision(begun.revision)
+    if (revision.shareInstance !== request.source.shareInstance || revision.fileId !== request.source.fileId ||
+        (opened !== undefined && (revision.fileRevision !== opened.descriptor.fileRevisionText ||
+          revision.exactSize !== opened.descriptor.exactSize))) {
+      throw new OutputTransactionContractError('output adapter returned a different authenticated revision')
     }
     const outputFile = outputFileFor(
       options.output,
       pending,
-      opened,
+      revision,
       options.directTreeCoordinates,
     )
     transaction = ownOutputFileTransaction(begun)
@@ -169,6 +174,9 @@ export async function transferV2File(
     const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
     const initialDurable = bound.initialDurable.asRangeSet()
     const missing = initialDurable.missingFrom(wanted)
+    if (opened === undefined && (revisionOpenAttempted || options.output.capabilities.durability === 'None' || !missing.empty)) {
+      throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
+    }
     const checkpoint = {
       remainingWriteBytes: rangeBytes(missing),
       durableBytes: rangeBytes(initialDurable),
@@ -179,6 +187,7 @@ export async function transferV2File(
     }
     let wrote = false
     for (const missingRange of missing.ranges) {
+      if (opened === undefined) throw new OutputTransactionContractError('missing bytes require a live revision lease')
       wrote = await transferMissingRange(
         options,
         opened,
@@ -201,22 +210,70 @@ export async function transferV2File(
     }
     options.onComplete(outputFile.exactSize)
   } catch (error) {
-    primaryFailure = await settleFailedFileTransfer(
-      options,
-      transaction,
-      normalizeV2FileTransferFailure(error, {
-        signal: options.signal,
-        ...(options.incidentScope === undefined
-          ? {}
-          : { incidentScope: options.incidentScope }),
-      }),
-    )
+    const settled = await settleTransferError(options, transaction, error)
+    primaryFailure = settled.failure
+    capacityBlocked = settled.capacityBlocked
   } finally {
-    const releaseFailure = await releaseRevisionLease(
-      acquired,
-      options.outputSettlementTimeoutMilliseconds,
-    )
-    throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
+    await finishTransferFile(options, acquired, primaryFailure, capacityBlocked)
+  }
+}
+
+async function settleTransferError(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction | undefined,
+  error: unknown,
+): Promise<{ failure: NormalizedV2FileTransferFailure; capacityBlocked?: OutputCapacityBlockedError }> {
+  if (error instanceof OutputCapacityBlockedError && !options.signal.aborted) {
+    // Unwind the write/buffer lease before waiting: parked payload buffers could
+    // otherwise consume the entire budget needed by still-admitted files.
+    try {
+      if (transaction !== undefined) {
+        await withOutputSettlementTimeout('checkpoint capacity-blocked file',
+          options.outputSettlementTimeoutMilliseconds, () => transaction.pause(error))
+      }
+      return { capacityBlocked: error, failure: normalizeV2FileTransferFailure(error, { stage: 'output_write' }) }
+    } catch (settlementFailure) {
+      return { failure: normalizeV2FileTransferFailure(settlementFailure, { stage: 'settlement' }) }
+    }
+  }
+  return { failure: await settleFailedFileTransfer(options, transaction,
+    normalizeV2FileTransferFailure(error, {
+      signal: options.signal,
+      ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
+    })) }
+}
+
+async function finishTransferFile(
+  options: V2FileTransferOptions,
+  acquired: V2OpenedRevision | undefined,
+  primaryFailure: NormalizedV2FileTransferFailure | undefined,
+  capacityBlocked: OutputCapacityBlockedError | undefined,
+): Promise<void> {
+  const releaseFailure = await releaseRevisionLease(acquired, options.outputSettlementTimeoutMilliseconds)
+  if (capacityBlocked !== undefined && releaseFailure === undefined) {
+    try { await capacityBlocked.waitForDrain(options.signal) } catch (error) {
+      primaryFailure = normalizeV2FileTransferFailure(error, { signal: options.signal })
+    }
+  }
+  throwTransferOrReleaseFailure(options.incidentScope, primaryFailure, releaseFailure)
+}
+
+function isWholeOutputFault(scope: FaultScope): boolean {
+  return scope === FaultScope.OutputPause || scope === FaultScope.SessionTerminal
+}
+
+async function persistSourceFailure(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'fault' }>,
+): Promise<NormalizedV2FileTransferFailure | undefined> {
+  const fault = failure.fault
+  if (fault.domain !== FaultDomain.Source || transaction.recordSourceFailure === undefined) return
+  try {
+    await withOutputSettlementTimeout('persist source revision failure', options.outputSettlementTimeoutMilliseconds,
+      () => transaction.recordSourceFailure!(fault))
+  } catch (error) {
+    return normalizeV2FileTransferFailure(error, { stage: 'settlement' })
   }
 }
 
@@ -227,10 +284,19 @@ async function settleFailedFileTransfer(
 ): Promise<NormalizedV2FileTransferFailure> {
   if (transaction === undefined) return failure
   if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
+  const persistenceFailure = await persistSourceFailure(options, transaction, failure)
+  if (persistenceFailure !== undefined) return persistenceFailure
+  return settleFileFault(options, transaction, failure)
+}
+
+async function settleFileFault(
+  options: V2FileTransferOptions,
+  transaction: BoundOutputFileTransaction,
+  failure: Extract<NormalizedV2FileTransferFailure, { kind: 'fault' }>,
+): Promise<NormalizedV2FileTransferFailure> {
   const authorization = authorizeFileRetirement(failure.fault)
   if (authorization === undefined) {
-    if (failure.fault.scope === FaultScope.OutputPause ||
-        failure.fault.scope === FaultScope.SessionTerminal) return failure
+    if (isWholeOutputFault(failure.fault.scope)) return failure
     const promoted = promoteFaultScope(failure.fault, FaultScope.OutputPause)
     return normalizedV2FileTransferFault(promoted, {
       ...(options.incidentScope === undefined
@@ -385,19 +451,19 @@ function classifiedFailureError(
 function outputFileFor(
   output: OutputSession,
   pending: PendingFile,
-  opened: V2OpenedRevision,
+  revision: OpenedOutputRevision,
   directTreeCoordinates: DirectTreeCoordinateContract | undefined,
 ): OutputFile {
   return snapshotOutputFile({
     source: {
-      shareInstance: opened.descriptor.shareInstanceId,
-      fileId: opened.descriptor.fileIdText,
-      fileRevision: opened.descriptor.fileRevisionText,
+      shareInstance: revision.shareInstance,
+      fileId: revision.fileId,
+      fileRevision: revision.fileRevision,
     },
     sourceAuthenticationPath: pending.sourceAuthenticationPath,
     logicalArtifactPath: pending.logicalArtifactPath,
     materializationRelativePath: pending.materializationRelativePath,
-    exactSize: opened.descriptor.exactSize,
+    exactSize: revision.exactSize,
     ...(pending.parent.kind === 'materialized'
       ? { parentAdmission: pending.parent.admission }
       : {}),

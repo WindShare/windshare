@@ -33,7 +33,6 @@ export class WorkspaceCleanupStages {
         state.kind === 'expired') {
       throw new TypeError('workspace state cannot be discarded')
     }
-    this.runtime.requireContinuationUnexpired(state)
     return this.finishCleanup(state, request, [])
   }
 
@@ -46,8 +45,8 @@ export class WorkspaceCleanupStages {
     cleanup: WorkspaceCleanupResult
   }>> {
     const state = await this.runtime.lifecycle()
-    const expiresAt = lifecycleDeadline(state)
-    if (expiresAt === undefined) throw new TypeError('workspace state has no stable deadline')
+    const expiresAt = lifecycleDeadline()
+    if (expiresAt === undefined) return Object.freeze({ kind: 'not-due', state })
     const now = this.runtime.now()
     if (now < expiresAt) return Object.freeze({ kind: 'not-due', state })
     const priorStableState = stableStateKind(state)

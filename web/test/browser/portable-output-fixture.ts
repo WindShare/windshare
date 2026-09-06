@@ -23,7 +23,6 @@ import {
   type ReceiveIntent,
 } from '../../src/transfer/intent'
 
-const PACKAGED_RETRYABLE_UNTIL = 2_000_000_000_000
 
 export interface PortableBrowserFixture {
   readonly intent: ReceiveIntent
@@ -90,7 +89,6 @@ export interface PackagedBrowserRetryProof {
   readonly sourceFileFresh: boolean
   readonly immutableFileSource: boolean
   readonly freshObjectUrl: boolean
-  readonly retryableUntil: number
 }
 
 let packagedBrowserSession: PackagedBrowserSession | undefined
@@ -172,7 +170,6 @@ export async function handoffNextPackagedFileRetry(): Promise<PackagedBrowserRet
   const started = await publisher.handoff({
     artifact: session.artifact,
     attempt,
-    retryableUntil: PACKAGED_RETRYABLE_UNTIL,
   })
   const source = session.files.at(-1)
   const objectUrl = session.objectUrls.at(-1)
@@ -187,7 +184,6 @@ export async function handoffNextPackagedFileRetry(): Promise<PackagedBrowserRet
     immutableFileSource: source instanceof window.File,
     freshObjectUrl: objectUrl !== undefined &&
       (priorObjectUrl === undefined || objectUrl !== priorObjectUrl),
-    retryableUntil: PACKAGED_RETRYABLE_UNTIL,
   })
 }
 

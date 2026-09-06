@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { CanonicalRecordReader } from '../../src/output/workspace/canonical-reader'
+import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
+import { isTerminalLifecycleState, lifecycleDeadline } from '../../src/output/workspace/state'
 
 import {
   classifyConnectionSize,
@@ -188,7 +192,7 @@ describe('R0 scheduling, recovery, and lifecycle contract', () => {
           plan: 'workspace-then-publish',
           binding: 'origin-private-workspace',
           guaranteeProfiles: ['managed-atomic', 'browser-handoff'],
-          preparation: 'exact-zip',
+          preparation: 'none',
           completion: 'complete-only-sealed-then-waiting-to-save',
         },
         {
@@ -211,24 +215,22 @@ describe('R0 receive recovery and lifecycle contract', () => {
       name: 'workspace-budget-v1',
       components: [
         'uniqueRawBytes',
-        'packageBytes',
-        'peakTemporaryBytes',
         'durableMetadataBytes',
       ],
       derivedPeak: 'checked-sum-components',
       ownedObjectCountedOnce: true,
       quotaEstimateIsReservation: false,
+      quotaUnavailable: 'optimistic-incremental-admission',
+      evidence: { 'single-file': 1, 'progressive-zip': 3 },
       limits: {
-        DEFAULT_OPFS_JOB_WORKSPACE_LIMIT: '8589934592',
-        DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT: '17179869184',
         MINIMUM_OPFS_QUOTA_RESERVE: '536870912',
         DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT: '67108864',
       },
       admissionChecks: [
-        'job-peak',
-        'process-active-job-peaks',
+        'durable-metadata-at-activation',
+        'object-high-water-growth',
+        'cross-tab-outstanding-growth',
         'quota-minus-usage-minus-reserve',
-        'every-allocation',
       ],
     })
     expect(semantics.find((value) => value.name === 'zip-complete-only')).toEqual({
@@ -268,37 +270,56 @@ describe('R0 receive recovery and lifecycle contract', () => {
     expect(lifecycle.domain).toBe('windshare/receive-lifecycle-state/v2')
     expect(lifecycle.terminalStates.map((state) => state.state)).toEqual([
       'published',
-      'download-started',
       'partial-directory',
       'restart-required',
       'discarded',
       'expired',
       'needs-attention',
     ])
-    expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 15, 16, 17, 18, 19, 20])
+    expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 16, 17, 18, 19, 20])
     expect(lifecycle.nonterminalRecoveryStates).toEqual([
+      { state: 'download-started', byte: 15, plans: ['workspace-then-publish', 'portable-handoff'] },
       { state: 'authorization-required', byte: 21 },
       { state: 'target-verification-required', byte: 22 },
       { state: 'destination-space-required', byte: 23 },
     ])
     expect(lifecycle.restartReasons['target-deleted']).toBe(6)
-    expect(lifecycle.resumableReceivePayloadKinds).toEqual({ 'file-set': 1, 'direct-zip': 2 })
+    expect(lifecycle.resumableReceivePayloadKinds).toEqual({ 'file-set': 1, 'direct-zip': 2, 'opfs-zip': 3 })
     expect(lifecycle.directZipByteSemantics).toEqual({
       receivedBytes: 'selected-source-payload-bytes-received-in-live-attempt',
       safeResumeBytes: 'selected-source-payload-bytes-covered-by-verified-checkpoint',
       committedArchiveLength: 'verified-target-prefix-bytes',
     })
-    expect(lifecycle.deadlineWritingStates).toEqual([
-      'resumable-receive',
-      'resumable-package',
-      'waiting-to-save',
-      'authorization-required',
-      'target-verification-required',
-      'destination-space-required',
-    ])
+    expect(lifecycle.deadlineWritingStates).toEqual([])
+    expect(lifecycleDeadline()).toBeUndefined()
     expect(lifecycle.publishedCleanupPendingRemains).toBe('published')
     expect(lifecycle.handoffNeverMeans).toBe('published')
     expect(lifecycle.completeArtifactsExclude).toEqual(['partial-directory'])
+  })
+
+  it('matches the native ZIP persistence tag without creating an expiry deadline', async () => {
+    const lifecycle = requireReceiveLifecycleSemanticsVector(
+      semantics.find((value) => value.name === 'receive-lifecycle-v2'),
+    )
+    const identity = (width: number) => encodeBase64Url(new Uint8Array(width).fill(1))
+    const record = await storedReceiveLifecycleState({
+      kind: 'resumable-receive', payloadKind: 'opfs-zip',
+      operationId: identity(16), receiveIntentDigest: identity(32), generation: 1n,
+      objectId: identity(32), checkpointGeneration: 2n, occupiedBytes: 200n,
+      completedFileCount: 1n, completedBytes: 100n, discoveryComplete: false,
+    })
+    const reader = CanonicalRecordReader.open(record.canonicalBytes, lifecycle.domain, lifecycle.schemaVersion)
+    reader.framedIdentity(16, 'operation')
+    reader.framedIdentity(32, 'intent')
+    reader.framedU64('generation')
+    reader.frame('state')
+    expect(reader.frame('payload kind')).toEqual(Uint8Array.of(lifecycle.resumableReceivePayloadKinds['opfs-zip']!))
+    expect(record.expiresAt).toBeUndefined()
+    expect(isTerminalLifecycleState({
+      kind: 'download-started', attemptKind: 'workspace',
+      operationId: identity(16), receiveIntentDigest: identity(32), generation: 1n,
+      attemptId: identity(16), packageDigest: identity(32),
+    })).toBe(false)
   })
 
   it('freezes both reviewed policies without broadening exact-platform routing', () => {
@@ -315,7 +336,7 @@ describe('R0 receive recovery and lifecycle contract', () => {
         domain: 'windshare/artifact-choice/v1',
         materializationByte: 5,
         directZipArtifactChoiceId: '0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU',
-        workspaceZipArtifactChoiceId: 'RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ',
+        workspaceZipArtifactChoiceId: 'vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k',
       },
       policies: [
         {

@@ -214,6 +214,10 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
     }
   }
 
+  async recordSourceFailure(fault: import('./fault').SourceFault): Promise<void> {
+    await this.#transaction.recordSourceFailure?.(fault)
+  }
+
   async retire(reason: unknown): Promise<'FileIsolated' | 'JobOutputCompromised'> {
     this.#requireOpen('retire')
     this.#state = 'retiring'

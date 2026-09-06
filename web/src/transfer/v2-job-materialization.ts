@@ -51,7 +51,7 @@ type MaterializationPlanAdmission = Pick<
   | 'openDirectAtomic'
   | 'openDirectResumableZip'
   | 'openWorkspaceOriginal'
-  | 'prepareWorkspaceZip'
+  | 'openWorkspaceZip'
   | 'preparePortable'
 >
 
@@ -175,7 +175,7 @@ export class TransferJobMaterialization {
   #runWorkspace(intent: WorkspaceIntent): Promise<TransferJobResult> {
     switch (intent.artifact.kind) {
       case 'original-file': return this.#runWorkspaceOriginal(intent as WorkspaceOriginalIntent)
-      case 'zip-archive': return this.#runPreparedWorkspaceZip(intent as WorkspaceZipIntent)
+      case 'zip-archive': return this.#runWorkspaceZip(intent as WorkspaceZipIntent)
       case 'directory-tree':
         throw new TypeError('WorkspaceThenPublish does not support DirectoryTree artifacts')
     }
@@ -200,23 +200,25 @@ export class TransferJobMaterialization {
     return this.#context.execution.completeWorkers(measure)
   }
 
-  async #runPreparedWorkspaceZip(intent: WorkspaceZipIntent): Promise<TransferJobResult> {
-    const { collector, measure } = await this.#collectExactPreparation(intent)
-    if (this.#context.discovery.hasFailures()) {
-      return this.#context.execution.settleIncompletePreparation(measure)
+  async #runWorkspaceZip(intent: WorkspaceZipIntent): Promise<TransferJobResult> {
+    const admitted = await this.#context.admission.openWorkspaceZip(intent, this.#context.signal)
+    if (admitted.kind === 'rejected') {
+      return this.#context.execution.preparationRejected(admitted.state)
     }
-    const evidence = collector.evidence()
-    this.#context.execution.recordPreparation(evidence)
-    const prepared = await this.#context.admission.prepareWorkspaceZip(
-      intent,
-      evidence,
-      this.#context.signal,
-    )
-    if (prepared.kind === 'rejected') {
-      return this.#context.execution.preparationRejected(prepared.state)
+    const execution = validatePlanExecutionBinding(intent, admitted.execution)
+    if (execution.directories === undefined || execution.discoveryComplete === undefined) {
+      throw new TypeError('Progressive ZIP requires directory and discovery authority')
     }
-    this.#context.execution.bind(validatePlanExecutionBinding(intent, prepared.execution))
-    return this.#runPreparedContent(collector, measure)
+    this.#context.execution.bind(execution)
+    this.#context.execution.bindDirectoryOutput(execution.directories)
+    this.#context.execution.bindDirectoryScope(await createDirectoryAdmissionScope(intent))
+    this.#context.execution.materializationStarted()
+    const root = await this.#context.root.direct()
+    await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
+    const measure = this.#context.discovery.finish()
+    await this.#context.execution.finalizeDirectories()
+    if (measure.discovery === 'complete') await execution.discoveryComplete(this.#context.signal)
+    return this.#context.execution.completeWorkers(measure)
   }
 
   async #runPreparedPortable(intent: PortableIntent): Promise<TransferJobResult> {

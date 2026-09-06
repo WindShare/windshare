@@ -46,7 +46,7 @@ describe('artifact choice reconciliation', () => {
         ...offered.choice.plan,
         workspace: {
           ...offered.choice.plan.workspace,
-          jobHardLimitBytes: offered.choice.plan.workspace.jobHardLimitBytes + 1n,
+          minimumQuotaReserveBytes: offered.choice.plan.workspace.minimumQuotaReserveBytes + 1n,
         },
       },
     })
@@ -58,7 +58,7 @@ describe('artifact choice reconciliation', () => {
     })
     const direct = Object.freeze({ choiceIdentity: directIdentity, choiceId: directIdentity.id })
 
-    expect(workspace.choiceId).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
+    expect(workspace.choiceId).toBe('vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k')
     expect(changedObservations.choiceId).toBe(workspace.choiceId)
     expect(direct.choiceId).toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
     expect(sameStableArtifactChoiceIdentity(workspace, changedObservations)).toBe(true)

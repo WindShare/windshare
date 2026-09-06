@@ -81,7 +81,12 @@ export async function assertDescriptorAuthority(
   if (purpose === 'continue') {
     const crossedDeadline = current.continuation === 'cleanup-expired' &&
       descriptor.expiresAt !== undefined && nowMilliseconds >= descriptor.expiresAt
-    if ((!crossedDeadline && current.continuation !== descriptor.continuation) ||
+    const nativeLocalCandidate = current.continuation === 'resume-receive' &&
+      descriptor.continuation === 'resume-local-finalization' &&
+      snapshot.operation.receiveIntent.plan.kind === 'workspace-then-publish' &&
+      (snapshot.operation.receiveIntent.artifact.kind === 'zip-archive' ||
+       snapshot.operation.receiveIntent.artifact.kind === 'original-file')
+    if ((!crossedDeadline && !nativeLocalCandidate && current.continuation !== descriptor.continuation) ||
         current.continuation === 'retry-cleanup') {
       throw new DOMException('Receive continuation is stale or inert', 'InvalidStateError')
     }
@@ -144,7 +149,7 @@ export async function persistExpiry(
   state: Extract<ReceiveLifecycleState, { kind: 'expired' }>
   receipt: ExpiryReceiptV1
 }>> {
-  const deadline = lifecycleDeadline(snapshot.lifecycle)
+  const deadline = lifecycleDeadline()
   if (deadline === undefined || nowMilliseconds < deadline) {
     throw new TypeError('receive expiry was requested before its stable deadline')
   }
@@ -227,8 +232,6 @@ export async function reclaimOriginPrivateWorkspaceBudget(
   const authority = await OriginPrivateWorkspaceBudgetAuthority.open(input.intent.operationId, {
     estimate: input.estimate,
     verifiedAlreadyOwnedBytes: () => root.verifiedAlreadyOwnedBytes(),
-    jobLimitBytes: input.receipt.jobLimitBytes,
-    processLimitBytes: input.receipt.processLimitBytes,
     minimumReserveBytes: input.receipt.minimumReserveBytes,
     now: input.now,
     ...(input.databaseName === undefined ? {} : { databaseName: input.databaseName }),
@@ -273,6 +276,7 @@ export function closeAuthority(
       const releases = await Promise.allSettled([
         ...(resources.receiveBackend === undefined ? [] : [resources.receiveBackend.close()]),
         ...(resources.packageBackend === undefined ? [] : [resources.packageBackend.close()]),
+        ...(resources.partialReader === undefined ? [] : [resources.partialReader.close()]),
         ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
         lease.release(),
       ])
@@ -301,6 +305,7 @@ export async function closeAfterFailure(
 ): Promise<never> {
   const releases = await Promise.allSettled([
     ...(resources.packageBackend === undefined ? [] : [resources.packageBackend.close()]),
+        ...(resources.partialReader === undefined ? [] : [resources.partialReader.close()]),
     ...(resources.reclaimedClaim === undefined ? [] : [resources.reclaimedClaim.release()]),
     ...(resources.lease === undefined ? [] : [resources.lease.release()]),
   ])
@@ -344,8 +349,7 @@ function reducerContext(
 ): ReducerContext {
   return Object.freeze({
     planKind: intent.plan.kind as PlanKind,
-    preparationRequired: intent.plan.kind === 'workspace-then-publish' &&
-      intent.plan.preparation === 'exact-zip',
+    preparationRequired: false,
     activeLeaseId: lease.leaseId,
     nowMilliseconds,
   })

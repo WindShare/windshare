@@ -74,9 +74,8 @@ export interface V2WorkspaceOriginalExecutionRoute {
 }
 
 export interface V2WorkspaceZipExecutionRoute {
-  prepare(
+  admit(
     intent: WorkspaceZipIntent,
-    evidence: ExactPreparationEvidence,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>>
 }
@@ -197,11 +196,11 @@ export async function createV2PlanExecutionAuthority(input: {
       signal.throwIfAborted()
       return validateExecutionAdmission(intent, result)
     },
-    prepareWorkspaceZip: async (supplied, evidence, signal) => {
+    openWorkspaceZip: async (supplied, signal) => {
       const intent = await claim(supplied, 'workspace-zip', signal)
       const route = routes.workspaceZip
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
-      const result = await route.prepare(intent, snapshotExactPreparationEvidence(evidence), signal)
+      const result = await route.admit(intent, signal)
       signal.throwIfAborted()
       return validateExecutionAdmission(intent, result)
     },
@@ -276,7 +275,7 @@ function snapshotRouteRegistry(input: V2PlanExecutionRouteRegistry): V2PlanExecu
       : { workspaceOriginal: snapshotRoute(input.workspaceOriginal, 'admit') }),
     ...(input.workspaceZip === undefined
       ? {}
-      : { workspaceZip: snapshotRoute(input.workspaceZip, 'prepare') }),
+      : { workspaceZip: snapshotRoute(input.workspaceZip, 'admit') }),
     ...(input.portableOriginal === undefined
       ? {}
       : { portableOriginal: snapshotRoute(input.portableOriginal, 'prepare') }),

@@ -97,7 +97,16 @@ export function v2SelectionPolicyFromIntent(
 export class V2JoinedBrowserShare {
   readonly descriptor: V2ShareDescriptor
   readonly recoveryIdentity: string
-  readonly selection = new V2SelectionPolicy(true)
+  #selection = new V2SelectionPolicy(true)
+
+  get selection(): V2SelectionPolicy { return this.#selection }
+
+  selectOnlyFile(entry: V2CatalogEntry, ancestry: readonly string[]): void {
+    if (entry.kind !== 'file') throw new TypeError('Single-file selection requires a file')
+    const selection = new V2SelectionPolicy(false)
+    selection.toggle(entry, ancestry)
+    this.#selection = selection
+  }
   readonly #supervisor: V2ReceiverReconnectSupervisor
   readonly #catalog: V2CatalogClient
   #closeTask: Promise<void> | undefined

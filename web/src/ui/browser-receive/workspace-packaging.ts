@@ -1,9 +1,4 @@
-import {
-  emitOutputTrace,
-  outputTraceEvent,
-  recordOutputException,
-  type OutputDiagnosticsPorts,
-} from '../../output/diagnostics'
+import type { OutputDiagnosticsPorts } from '../../output/diagnostics'
 import type { OriginPrivateWorkspaceNamespace } from '../../output/origin-private/namespace'
 import type { OriginPrivateWorkspaceBackend } from '../../output/origin-private/session'
 import {
@@ -16,8 +11,6 @@ import {
   type WorkspaceCleanupRequest,
   type WorkspaceOperationStages,
 } from '../../output/workspace/stages'
-import type { SealedWorkspaceZipPreparationV1 } from '../../output/workspace/preparation'
-import { DEFAULT_OPFS_JOB_WORKSPACE_LIMIT } from '../../output/workspace/budget'
 import { createTransferJobID, type ReceiveIntent } from '../../transfer/intent'
 import type {
   PersistentMaterializationSettlementCut,
@@ -38,12 +31,9 @@ import type {
 import type { V2LifecycleMutation } from '../v2-receive-runtime'
 import type { BrowserReceiveWindow } from './contracts'
 import { NamespaceOnlyCleanupPort, handoffRetainedWorkspacePackage } from './workspace-publication'
-import { checkpointSetDigest, requirePreparation, unavailableRoute } from './shared'
-
-const PACKAGE_CLEANUP_RETRY_LIMIT = 3
+import { checkpointSetDigest, unavailableRoute } from './shared'
 
 interface WorkspaceSealBundle {
-  readonly preparation?: SealedWorkspaceZipPreparationV1
   readonly sealed: Awaited<ReturnType<WorkspaceOperationStages['sealMaterialization']>>
 }
 
@@ -69,7 +59,6 @@ export class WorkspaceReceivePackaging {
   readonly #namespace: OriginPrivateWorkspaceNamespace
   readonly #stages: WorkspaceOperationStages
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
-  #preparation: SealedWorkspaceZipPreparationV1 | undefined
   #sealBundle: WorkspaceSealBundle | undefined
   #packageExactBytes: bigint | undefined
 
@@ -80,7 +69,6 @@ export class WorkspaceReceivePackaging {
     readonly namespace: OriginPrivateWorkspaceNamespace
     readonly stages: WorkspaceOperationStages
     readonly diagnostics?: OutputDiagnosticsPorts
-    readonly preparation?: SealedWorkspaceZipPreparationV1
   }) {
     this.#window = input.windowPort
     this.#intent = input.intent
@@ -88,15 +76,10 @@ export class WorkspaceReceivePackaging {
     this.#namespace = input.namespace
     this.#stages = input.stages
     this.#diagnostics = input.diagnostics
-    this.#preparation = input.preparation
   }
 
-  get preparation(): SealedWorkspaceZipPreparationV1 | undefined {
-    return this.#preparation
-  }
-
-  setPreparation(preparation: SealedWorkspaceZipPreparationV1): void {
-    this.#preparation = preparation
+  setPackageExactBytes(exactBytes: bigint): void {
+    this.#packageExactBytes = exactBytes
   }
 
   get sealDigest(): string | undefined {
@@ -137,14 +120,15 @@ export class WorkspaceReceivePackaging {
           generations: cut.evidence.generations,
           entries: cut.evidence.entries,
           checkpoints: backend.finalCheckpoints,
-          ...(this.#preparation === undefined ? {} : { preparation: this.#preparation }),
         })
         this.#sealBundle = Object.freeze({
           sealed,
-          ...(this.#preparation === undefined ? {} : { preparation: this.#preparation }),
         })
-        const result = await this.#package(this.#requireBackend(currentBackend()), sealed, signal)
-        return result.state
+        const ownedBackend = this.#requireBackend(currentBackend())
+        const result = await this.#package(ownedBackend, sealed, signal)
+        return result.state.kind === 'waiting-to-save'
+          ? (await this.#handoff(result.state, ownedBackend)).lifecycle
+          : result.state
       },
     })
   }
@@ -181,8 +165,8 @@ export class WorkspaceReceivePackaging {
     if (lifecycle.kind === 'discarded' ||
         (lifecycle.kind === 'expired' && lifecycle.cleanupState === 'clean')) return null
     let ownedBytes = 0n
-    if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind === 'file-set') {
-      ownedBytes = lifecycle.completedBytes
+    if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
+      ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.completedBytes
     }
     else if (this.#packageExactBytes !== undefined &&
         (lifecycle.kind === 'waiting-to-save' ||
@@ -191,7 +175,7 @@ export class WorkspaceReceivePackaging {
     } else if (this.#sealBundle !== undefined) {
       ownedBytes = this.#sealBundle.sealed.manifest.rawBytes
     }
-    return Object.freeze({ ownedBytes, maximumBytes: DEFAULT_OPFS_JOB_WORKSPACE_LIMIT })
+    return Object.freeze({ ownedBytes })
   }
 
   cleanupRequest(backend: OriginPrivateWorkspaceBackend | undefined): WorkspaceCleanupRequest {
@@ -207,49 +191,20 @@ export class WorkspaceReceivePackaging {
     backend: OriginPrivateWorkspaceBackend,
     sealed: Awaited<ReturnType<WorkspaceOperationStages['sealMaterialization']>>,
     signal: AbortSignal,
-    retry = false,
-  ): Promise<Exclude<OriginPrivatePackageAttemptResult, { kind: 'cleanup-pending' }>> {
+  ): Promise<OriginPrivatePackageAttemptResult> {
     const workflow = new OriginPrivatePackageWorkflow({
       stages: this.#stages,
       store: backend.packages,
       ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
     })
-    let result: OriginPrivatePackageAttemptResult = this.#intent.artifact.kind === 'zip-archive'
-      ? await workflow.buildZip({
-          receiveIntentDigest: this.#intent.digest,
-          sealedMaterialization: sealed.seal,
-          materializedManifest: sealed.manifest,
-          layout: requirePreparation(this.#preparation).zipLayout,
-          signal,
-          retry,
-        })
-      : await workflow.buildOriginalFile({
+    const result = await workflow.buildOriginalFile({
           receiveIntentDigest: this.#intent.digest,
           artifactSpecDigest: this.#intent.artifact.digest,
           sealedMaterialization: sealed.seal,
           materializedManifest: sealed.manifest,
           signal,
-          retry,
         })
-    for (let attempt = 0; result.kind === 'cleanup-pending' &&
-        attempt < PACKAGE_CLEANUP_RETRY_LIMIT; attempt += 1) {
-      result = await result.retryCleanup()
-    }
-    if (result.kind === 'cleanup-pending') {
-      const error = new DOMException('Workspace package cleanup remains pending', 'OperationError')
-      recordOutputException(
-        this.#diagnostics?.failures?.cleanup,
-        error,
-        { recoveryDisposition: 'needs_attention' },
-      )
-      emitOutputTrace(this.#diagnostics?.trace, () =>
-        outputTraceEvent('cleanup', {
-          backend: 'origin_private',
-          transition: 'failed',
-        }))
-      throw error
-    }
-    if (result.kind === 'sealed') this.#packageExactBytes = result.package.exactBytes
+    this.#packageExactBytes = result.package.exactBytes
     return result
   }
 
@@ -266,7 +221,7 @@ export class WorkspaceReceivePackaging {
       if (backend === undefined) {
         throw new DOMException('Workspace backend is unavailable', 'InvalidStateError')
       }
-      const result = await this.#package(backend, seal, new AbortController().signal, true)
+      const result = await this.#package(backend, seal, new AbortController().signal)
       return Object.freeze({
         lifecycle: result.state,
         workspaceUsage: this.resolveWorkspaceUsage(result.state),

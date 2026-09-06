@@ -7,12 +7,12 @@ import {
   type OfferedArtifactChoice,
   type SelectionProjectionV1,
 } from '../../src/output/planning'
+import { BROWSER_HANDOFF_OBJECT_URL_LEASE_MS } from '../../src/output/portable/browser-download'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import { TransferJob } from '../../src/transfer/v2-job'
 import { EMPTY_TRANSFER_FAILURE_SUMMARY, transferWorkerSettlement } from '../../src/transfer/outcome'
 import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
 import type {
-  ExactPreparationEvidence,
   V2PlanExecutionAuthority,
 } from '../../src/transfer/output-session'
 import {
@@ -30,7 +30,7 @@ import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/se
 import { OriginPrivateWorkspaceBudgetAuthority } from '../../src/output/origin-private/admission'
 import { openOriginPrivateRetainedArtifactBackend } from '../../src/output/origin-private/session'
 import { openOriginPrivateWorkspaceNamespace } from '../../src/output/origin-private/namespace'
-import { sealWorkspaceZipPreparation } from '../../src/output/workspace/preparation'
+import { openOriginPrivateProgressiveZipBackend } from '../../src/output/origin-private/progressive-backend'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import {
   createBrowserReceiveComposition,
@@ -41,10 +41,8 @@ import type {
   V2ReceiveCompositionPort,
 } from '../../src/ui/v2-receive-runtime'
 import {
-  WORKSPACE_HANDLE_ZIP_LAYOUT,
   WorkspaceOperationStages,
   type WorkspaceStageTraceEvent,
-  workspaceZipLayoutHandleId,
 } from '../../src/output/workspace/stages'
 import {
   catalogFixture,
@@ -56,7 +54,6 @@ import {
 } from '../transfer/v2-job-fixture'
 import {
   DURABLE_FIXTURE_INITIAL_TIME,
-  durableFixtureIdentity,
   durableIdentities,
   originPrivateClaim,
   readDurableLifecycle,
@@ -72,47 +69,38 @@ const EMPTY_MATERIALIZATION_SUMMARY = Object.freeze({
   rawBytes: 0n,
 })
 
-export interface FreshPreparedZipAdmissionProof {
+export interface FreshProgressiveZipAdmissionProof {
   readonly lifecycle: string
   readonly contentRequests: string
   readonly traceNames: readonly string[]
   readonly receiptCount: number
   readonly manifestPageCount: number
-  readonly layoutHandlePresent: boolean
+  readonly objectHandlePresent: boolean
 }
 
-export interface ProductPreparedZipAdmissionProof {
+export interface ProductProgressiveZipAdmissionProof {
   readonly admission: string
   readonly lifecycle: string
   readonly traceNames: readonly string[]
   readonly cleanup: string
 }
 
-export interface TransferJobPreparedZipProof {
+export interface TransferJobProgressiveZipProof {
   readonly worker: string
   readonly lifecycle: string
   readonly workspaceTraceNames: readonly string[]
   readonly transferTraceNames: readonly string[]
   readonly evidence: Readonly<{
-    readonly entryCount: string
-    readonly fileCount: string
-    readonly directoryCount: string
-    readonly selectedRawBytes: string
-    readonly generationCount: number
-    readonly entries: readonly Readonly<{
-      readonly kind: 'directory' | 'file'
-      readonly role?: string
-      readonly sourceSegmentCount: number
-      readonly artifactSegmentCount: number
-      readonly modifiedTimePresent: boolean
-    }>[]
+    readonly admittedFilePaths: readonly string[]
+    readonly admissionCount: number
+    readonly discoveryCompleteCalls: number
   }>
   readonly cleanup: string
 }
 
-export async function proveFreshPreparedZipAdmission(
+export async function proveFreshProgressiveZipAdmission(
   key: string,
-): Promise<FreshPreparedZipAdmissionProof> {
+): Promise<FreshProgressiveZipAdmissionProof> {
   const ids = await durableIdentities(key)
   const artifact = await createZipArchiveArtifact(createSyntheticSelectionResultRoot())
   const workspace = await createWorkspaceBinding({
@@ -156,103 +144,38 @@ export async function proveFreshPreparedZipAdmission(
   >> | undefined
   let claim: ReturnType<typeof originPrivateClaim> | undefined
   try {
-    const preparationId = await durableFixtureIdentity(key, 'preparation', 16)
-    const rootGeneration = await durableFixtureIdentity(key, 'root-generation', 16)
-    const modifiedTime = Object.freeze({
-      seconds: 1_700_000_000n,
-      nanoseconds: 123_000_000,
-      precision: 3 as const,
-      milliseconds: 1_700_000_000_123n,
-    })
-    await stages.beginReceive(preparationId)
-    const preparation = await sealWorkspaceZipPreparation({
-      receiveIntent: intent,
-      preparationId,
-      generations: [
-        {
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-        },
-        {
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-        },
-      ],
-      entries: [
-        {
-          kind: 'directory',
-          sourcePath: [],
-          artifactPath: [artifact.layout.name],
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-          role: 'result-root',
-        },
-        {
-          kind: 'directory',
-          sourcePath: ['micro-share'],
-          artifactPath: [artifact.layout.name, 'micro-share'],
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-          role: 'necessary-ancestor',
-          modifiedTime,
-        },
-        {
-          kind: 'file',
-          sourcePath: ['micro-share', 'pixel.png'],
-          artifactPath: [artifact.layout.name, 'micro-share', 'pixel.png'],
-          fileId: ids.fileId,
-          containingDirectoryId: ids.directoryId,
-          generation: ids.generation,
-          exactSize: PRODUCT_ZIP_FILE_BYTES,
-          modifiedTime,
-        },
-      ],
-    })
     const authority = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
       estimate: () => navigator.storage.estimate(),
     })
-    const admission = await stages.admitPreparedZip({
-      preparation,
-      authority,
-      durableMetadataBytesExcludingAdmissionRecords: 0n,
-      rejectionCleanup: {
-        targets: Object.freeze([]),
-        port: Object.freeze({
-          removeOwnedObject: async () => Object.freeze({ kind: 'ownership-unknown' as const }),
-          removeFileCheckpoints: async () => Object.freeze({
-            kind: 'ownership-unknown' as const,
-          }),
-        }),
-      },
-    })
-    if (admission.kind !== 'accepted') {
-      throw new DOMException(
-        `prepared ZIP admission rejected: ${admission.reason}`,
-        'QuotaExceededError',
-      )
-    }
-    claim = originPrivateClaim(admission.content.claim)
+    const admission = await stages.progressive.admit(authority)
+    claim = originPrivateClaim(admission.claim)
     cleanupBackend = await openOriginPrivateRetainedArtifactBackend({
       receiveIntent: intent,
       operationRepository: repository,
       namespace,
     })
-    const [lifecycle, receipts, pages, layoutHandle] = await Promise.all([
+    const progressive = await openOriginPrivateProgressiveZipBackend({
+      receiveIntent: intent, operationRepository: repository, namespace,
+      contentGate: admission.gate, budgetClaim: claim,
+    })
+    const checkpoint = await progressive.store.readCheckpoint()
+    const objectHandle = await repository.readHandle(progressive.object.handleId)
+    await progressive.close()
+    if (checkpoint?.entryCount !== 0n || checkpoint.discoveryComplete) {
+      throw new Error('Progressive admission prematurely consumed selection discovery')
+    }
+    const [lifecycle, receipts, pages] = await Promise.all([
       readDurableLifecycle(repository, intent.operationId),
       repository.listRecords(intent.operationId, RECEIVE_RECORD_RECEIPT),
       repository.listManifestPages(intent.operationId),
-      repository.readHandle(workspaceZipLayoutHandleId(intent.operationId, preparationId)),
     ])
-    if (layoutHandle === undefined || layoutHandle.kind !== WORKSPACE_HANDLE_ZIP_LAYOUT) {
-      throw new Error('prepared ZIP admission omitted its durable layout handle')
-    }
     return Object.freeze({
       lifecycle: lifecycle.kind,
       contentRequests: contentRequests.toString(),
       traceNames: Object.freeze(traces.map(event => event.name)),
       receiptCount: receipts.length,
       manifestPageCount: pages.length,
-      layoutHandlePresent: true,
+      objectHandlePresent: objectHandle !== undefined,
     })
   } finally {
     await claim?.release().catch(() => undefined)
@@ -266,9 +189,9 @@ export async function proveFreshPreparedZipAdmission(
   }
 }
 
-export async function proveProductPreparedZipAdmission(
+export async function proveProductProgressiveZipAdmission(
   key: string,
-): Promise<ProductPreparedZipAdmissionProof> {
+): Promise<ProductProgressiveZipAdmissionProof> {
   const ids = await durableIdentities(key)
   const selection = await createSelectionSpec({
     shareInstance: ids.shareInstance,
@@ -309,55 +232,8 @@ export async function proveProductPreparedZipAdmission(
     if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive') {
       throw new TypeError('product binding changed the workspace ZIP route')
     }
-    const rootGeneration = await durableFixtureIdentity(key, 'product-root-generation', 16)
-    const modifiedTime = Object.freeze({
-      seconds: 1_700_000_000n,
-      nanoseconds: 123_000_000,
-      precision: 3 as const,
-      milliseconds: 1_700_000_000_123n,
-    })
-    const workspaceIntent = intent as Parameters<
-      typeof runtime.plans.prepareWorkspaceZip
-    >[0]
-    const admission = await runtime.plans.prepareWorkspaceZip(workspaceIntent, Object.freeze({
-      generations: Object.freeze([
-        Object.freeze({ directoryId: ids.syntheticRoot, generation: rootGeneration }),
-        Object.freeze({ directoryId: ids.directoryId, generation: ids.generation }),
-      ]),
-      entries: Object.freeze([
-        Object.freeze({
-          kind: 'directory' as const,
-          sourcePath: Object.freeze([]),
-          artifactPath: Object.freeze([intent.artifact.layout.name]),
-          directoryId: ids.syntheticRoot,
-          generation: rootGeneration,
-          role: 'result-root' as const,
-        }),
-        Object.freeze({
-          kind: 'directory' as const,
-          sourcePath: Object.freeze(['micro-share']),
-          artifactPath: Object.freeze([intent.artifact.layout.name, 'micro-share']),
-          directoryId: ids.directoryId,
-          generation: ids.generation,
-          role: 'necessary-ancestor' as const,
-          modifiedTime,
-        }),
-        Object.freeze({
-          kind: 'file' as const,
-          sourcePath: Object.freeze(['micro-share', 'pixel.png']),
-          artifactPath: Object.freeze([intent.artifact.layout.name, 'micro-share', 'pixel.png']),
-          fileId: ids.fileId,
-          containingDirectoryId: ids.directoryId,
-          generation: ids.generation,
-          exactSize: PRODUCT_ZIP_FILE_BYTES,
-          modifiedTime,
-        }),
-      ]),
-      entryCount: 3n,
-      fileCount: 1n,
-      directoryCount: 2n,
-      selectedRawBytes: PRODUCT_ZIP_FILE_BYTES,
-    }), signal)
+    const workspaceIntent = intent as Parameters<typeof runtime.plans.openWorkspaceZip>[0]
+    const admission = await runtime.plans.openWorkspaceZip(workspaceIntent, signal)
     if (admission.kind !== 'accepted') {
       throw new DOMException('product workspace ZIP was rejected', 'QuotaExceededError')
     }
@@ -385,7 +261,7 @@ export async function proveProductPreparedZipAdmission(
   }
 }
 
-export async function proveTransferJobPreparedZip(): Promise<TransferJobPreparedZipProof> {
+export async function proveTransferJobProgressiveZip(): Promise<TransferJobProgressiveZipProof> {
   const selection = await createSelectionSpec({
     shareInstance: catalogIdentityText(1),
     syntheticRoot: catalogIdentityText(2),
@@ -408,7 +284,8 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
   const projection = productZipProjection(selection.digest, directory.idText)
   const workspaceTraces: WorkspaceStageTraceEvent[] = []
   const transferTraceNames: string[] = []
-  const composition = createBrowserReceiveComposition(window as BrowserReceiveWindow, {
+  const handoff = controlledHandoffLease()
+  const composition = createBrowserReceiveComposition(handoff.windowPort, {
     onTrace: event => workspaceTraces.push(event),
   })
   const signal = new AbortController().signal
@@ -449,19 +326,28 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
       },
     ])
     const readers = readerFixture([file])
-    let observedEvidence: ExactPreparationEvidence | undefined
-    const prepareWorkspaceZip: V2PlanExecutionAuthority['prepareWorkspaceZip'] = async (
-      intent,
-      evidence,
-      preparationSignal,
-    ) => {
-      observedEvidence = evidence
-      return runtime!.plans.prepareWorkspaceZip(intent, evidence, preparationSignal)
+    const evidence = { admittedFilePaths: [] as string[], admissionCount: 0, discoveryCompleteCalls: 0 }
+    const openWorkspaceZip: V2PlanExecutionAuthority['openWorkspaceZip'] = async (intent, openSignal) => {
+      const admitted = await runtime!.plans.openWorkspaceZip(intent, openSignal)
+      if (admitted.kind !== 'accepted') return admitted
+      evidence.admissionCount++
+      const execution = admitted.execution
+      return { kind: 'accepted', execution: {
+        ...execution,
+        output: {
+          ...execution.output,
+          beginFile: (request, fileSignal) => {
+            evidence.admittedFilePaths.push(request.sourceAuthenticationPath.join('/'))
+            return execution.output.beginFile(request, fileSignal)
+          },
+        },
+        discoveryComplete: async discoverySignal => {
+          evidence.discoveryCompleteCalls++
+          await execution.discoveryComplete!(discoverySignal)
+        },
+      } }
     }
-    const plans: V2PlanExecutionAuthority = Object.freeze({
-      ...runtime.plans,
-      prepareWorkspaceZip,
-    })
+    const plans: V2PlanExecutionAuthority = Object.freeze({ ...runtime.plans, openWorkspaceZip })
     const result = await new TransferJob({
       descriptor: {
         shareInstance: catalogIdentity(1),
@@ -489,23 +375,60 @@ export async function proveTransferJobPreparedZip(): Promise<TransferJobPrepared
         ),
       },
     }).run(signal)
-    const evidence = observedEvidence
-    if (evidence === undefined) {
-      throw new TypeError('TransferJob did not expose exact preparation evidence')
-    }
+    handoff.expire()
     const discarded = await runtime.startLifecycleAction('discard', result.lifecycle)
     return Object.freeze({
       worker: result.worker.status,
       lifecycle: result.lifecycle.kind,
       workspaceTraceNames: Object.freeze(workspaceTraces.map(event => event.name)),
       transferTraceNames: Object.freeze(transferTraceNames),
-      evidence: summarizePreparationEvidence(evidence),
+      evidence,
       cleanup: discarded.lifecycle.kind,
     })
   } finally {
+    handoff.expire()
     if (runtime !== undefined) {
       await Promise.resolve(runtime.detach()).catch(() => undefined)
     }
+  }
+}
+
+function controlledHandoffLease() {
+  const leases = new Map<number, () => void>()
+  const schedule: Window['setTimeout'] = (handler, milliseconds, ...arguments_) => {
+    if (milliseconds !== BROWSER_HANDOFF_OBJECT_URL_LEASE_MS || typeof handler !== 'function') {
+      return window.setTimeout(handler, milliseconds, ...arguments_)
+    }
+    const release = handler as () => void
+    const timer = window.setTimeout(() => {
+      leases.delete(timer)
+      release()
+    }, milliseconds)
+    leases.set(timer, release)
+    return timer
+  }
+  const cancel: Window['clearTimeout'] = timer => {
+    if (timer !== undefined) leases.delete(timer)
+    window.clearTimeout(timer)
+  }
+  const windowPort = new Proxy(window, {
+    get(target, property): unknown {
+      if (property === 'setTimeout') return schedule
+      if (property === 'clearTimeout') return cancel
+      return Reflect.get(target, property, target)
+    },
+  }) as BrowserReceiveWindow
+  return {
+    windowPort,
+    expire() {
+      // This fixture tests reception and owned cleanup. Simulating the browser URL
+      // deadline runs the real revocation/reader-release callback without a minute wait.
+      for (const [timer, release] of leases) {
+        window.clearTimeout(timer)
+        leases.delete(timer)
+        release()
+      }
+    },
   }
 }
 
@@ -559,25 +482,6 @@ async function commitProductionChoice(
     await committed.authority.detach()
   }
   throw committed.cause
-}
-
-function summarizePreparationEvidence(
-  evidence: ExactPreparationEvidence,
-): TransferJobPreparedZipProof['evidence'] {
-  return Object.freeze({
-    entryCount: evidence.entryCount.toString(),
-    fileCount: evidence.fileCount.toString(),
-    directoryCount: evidence.directoryCount.toString(),
-    selectedRawBytes: evidence.selectedRawBytes.toString(),
-    generationCount: evidence.generations.length,
-    entries: Object.freeze(evidence.entries.map(entry => Object.freeze({
-      kind: entry.kind,
-      ...(entry.kind === 'directory' ? { role: entry.role } : {}),
-      sourceSegmentCount: entry.sourcePath.length,
-      artifactSegmentCount: entry.artifactPath.length,
-      modifiedTimePresent: entry.modifiedTime !== undefined,
-    }))),
-  })
 }
 
 function productZipProjection(

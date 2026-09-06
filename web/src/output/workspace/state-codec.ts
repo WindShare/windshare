@@ -22,6 +22,7 @@ import {
 
 const RESUMABLE_RECEIVE_FILE_SET = 1
 const RESUMABLE_RECEIVE_DIRECT_ZIP = 2
+const RESUMABLE_RECEIVE_OPFS_ZIP = 3
 const DIRECT_ZIP_PHASE_BETWEEN_MEMBERS = 1
 const DIRECT_ZIP_PHASE_INSIDE_MEMBER = 2
 const DIRECT_ZIP_PHASE_CLOSING = 3
@@ -49,7 +50,7 @@ export function canonicalReceiveLifecycleStateBytes(
 export function storedReceiveLifecycleState(
   state: ReceiveLifecycleState,
 ): Promise<PersistedReceiveRecord> {
-  const expiresAt = lifecycleDeadline(state)
+  const expiresAt = lifecycleDeadline()
   return createPersistedReceiveRecord({
     operationId: state.operationId,
     kind: RECEIVE_RECORD_LIFECYCLE_STATE,
@@ -70,7 +71,7 @@ export function decodeStoredReceiveLifecycleState(
   if (state.operationId !== record.operationId ||
       state.generation.toString(10) !== record.lifecycleGeneration ||
       receiveStateByte(state) !== record.state ||
-      lifecycleDeadline(state) !== record.expiresAt) {
+      lifecycleDeadline() !== record.expiresAt) {
     throw new TypeError('lifecycle projections disagree with canonical bytes')
   }
   return state
@@ -95,13 +96,11 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
     case 'resumable-package': return [
       digestFrame(state.sealedMaterializationDigest, 'sealed materialization digest'),
       digestFrame(state.tempCleanupProofDigest, 'temporary cleanup proof digest'),
-      millisecondsFrame(state.expiresAt),
     ]
     case 'artifact-sealed':
       return [digestFrame(state.packageDigest, 'package digest')]
     case 'waiting-to-save': return [
       digestFrame(state.packageDigest, 'package digest'),
-      millisecondsFrame(state.expiresAt),
     ]
     case 'publishing-managed': return [
       identityFrame(state.activeLeaseId, 16, 'lease ID'),
@@ -140,7 +139,6 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
     case 'target-verification-required':
     case 'destination-space-required': return [
       digestFrame(state.recoveryGateDigest, 'recovery gate digest'),
-      millisecondsFrame(state.expiresAt),
     ]
   }
 }
@@ -155,7 +153,21 @@ function resumableReceivePayload(
       canonicalFrame(canonicalU64(state.safeSelectedPayloadBytes)),
       canonicalFrame(canonicalU64(state.committedArchiveLength)),
       canonicalFrame(canonicalU8(directZipCheckpointPhaseByte(state.checkpointPhase))),
-      millisecondsFrame(state.expiresAt),
+    ]
+  }
+  if (state.payloadKind === 'opfs-zip') {
+    if (state.checkpointGeneration === 0n || typeof state.discoveryComplete !== 'boolean') {
+      throw new TypeError('native ZIP recovery checkpoint is invalid')
+    }
+    return [
+      canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_OPFS_ZIP)),
+      identityFrame(state.objectId, 32, 'native ZIP object ID'),
+      canonicalFrame(canonicalU64(state.checkpointGeneration)),
+      canonicalFrame(canonicalU64(state.occupiedBytes)),
+      canonicalFrame(canonicalU64(state.completedFileCount)),
+      canonicalFrame(canonicalU64(state.completedBytes)),
+      canonicalFrame(canonicalU8(state.discoveryComplete ? 1 : 0)),
+      canonicalFrame(canonicalU8(state.pauseReason === 'storage-pressure' ? 1 : 0)),
     ]
   }
   const selectionFacts = snapshotRecoverySelectionFacts(
@@ -171,7 +183,6 @@ function resumableReceivePayload(
     canonicalFrame(canonicalU64(selectionFacts.discoveredFileCount)),
     canonicalFrame(canonicalU64(selectionFacts.discoveredBytes)),
     canonicalFrame(canonicalU8(recoveryDiscoveryStateByte(selectionFacts.discovery))),
-    millisecondsFrame(state.expiresAt),
     canonicalFrame(state.partialReceiptDigest === undefined
       ? canonicalU8(1)
       : concatCanonicalBytes([
@@ -190,7 +201,6 @@ function handingOffPayload(
     canonicalFrame(canonicalU8(workspace ? 1 : 2)),
     identityFrame(state.attemptId, 16, 'handoff attempt ID'),
     optionalDigestFrame(workspace ? state.packageDigest : undefined, 'package digest'),
-    optionalMillisecondsFrame(workspace ? state.retainedDeadline : undefined),
   ]
 }
 
@@ -202,7 +212,6 @@ function downloadStartedPayload(
     canonicalFrame(canonicalU8(workspace ? 1 : 2)),
     identityFrame(state.attemptId, 16, 'handoff attempt ID'),
     optionalDigestFrame(workspace ? state.packageDigest : undefined, 'package digest'),
-    optionalMillisecondsFrame(workspace ? state.retryableUntil : undefined),
   ]
 }
 
@@ -210,12 +219,6 @@ function optionalDigestFrame(value: string | undefined, label: string): Canonica
   return canonicalFrame(value === undefined
     ? canonicalU8(1)
     : concatCanonicalBytes([canonicalU8(2), digestFrame(value, label)]))
-}
-
-function optionalMillisecondsFrame(value: number | undefined): CanonicalBytes {
-  return canonicalFrame(value === undefined
-    ? canonicalU8(1)
-    : concatCanonicalBytes([canonicalU8(2), millisecondsFrame(value)]))
 }
 
 function identityFrame(value: string, width: number, label: string): CanonicalBytes {
@@ -347,7 +350,6 @@ function decodeMaterializationState(
       kind: 'resumable-package',
       sealedMaterializationDigest: reader.identity(32, 'sealed materialization digest'),
       tempCleanupProofDigest: reader.identity(32, 'temporary cleanup proof digest'),
-      expiresAt: reader.milliseconds(),
     })
     case 10: return Object.freeze({
       ...base,
@@ -368,7 +370,6 @@ function decodePublicationState(
       ...base,
       kind: 'waiting-to-save',
       packageDigest: reader.identity(32, 'package digest'),
-      expiresAt: reader.milliseconds(),
     })
     case 12: return Object.freeze({
       ...base,
@@ -443,7 +444,6 @@ function decodeResumableReceiveState(
         discoveredBytes: reader.u64('discovered bytes'),
         discovery: recoveryDiscoveryStateFromByte(reader.byte('recovery discovery state')),
       }),
-      expiresAt: reader.milliseconds(),
       ...optionalDigest(reader.frame(), 'partial receipt digest', 'partialReceiptDigest'),
     })
   }
@@ -456,7 +456,22 @@ function decodeResumableReceiveState(
       safeSelectedPayloadBytes: reader.u64('safe selected payload bytes'),
       committedArchiveLength: reader.u64('committed archive length'),
       checkpointPhase: directZipCheckpointPhaseFromByte(reader.byte('direct ZIP checkpoint phase')),
-      expiresAt: reader.milliseconds(),
+    })
+  }
+  if (payloadKind === RESUMABLE_RECEIVE_OPFS_ZIP) {
+    const objectId = reader.identity(32, 'native ZIP object ID')
+    const checkpointGeneration = reader.u64('native ZIP checkpoint generation')
+    const occupiedBytes = reader.u64('native ZIP occupied bytes')
+    const completedFileCount = reader.u64('completed file count')
+    const completedBytes = reader.u64('completed bytes')
+    const discovery = reader.byte('native ZIP discovery completion')
+    const pauseReason = reader.byte('native ZIP pause reason')
+    if (checkpointGeneration === 0n || discovery > 1 || pauseReason > 1) {
+      throw new TypeError('native ZIP recovery checkpoint is invalid')
+    }
+    return Object.freeze({ ...base, kind: 'resumable-receive', payloadKind: 'opfs-zip',
+      objectId, checkpointGeneration, occupiedBytes, completedFileCount, completedBytes, discoveryComplete: discovery === 1,
+      ...(pauseReason === 1 ? { pauseReason: 'storage-pressure' as const } : {}),
     })
   }
   throw new TypeError('resumable receive payload kind is invalid')
@@ -471,7 +486,6 @@ function decodeRecoveryGateState(
     ...base,
     kind,
     recoveryGateDigest: reader.identity(32, 'recovery gate digest'),
-    expiresAt: reader.milliseconds(),
   })
 }
 
@@ -483,10 +497,9 @@ function decodeHandingOffState(
   const attemptKind = attemptKindFromByte(reader.byte('handoff attempt kind'))
   const attemptId = reader.identity(16, 'handoff attempt ID')
   const packageDigest = optionalDigestValue(reader.frame(), 'package digest')
-  const retainedDeadline = optionalMillisecondsValue(reader.frame())
   if (attemptKind === 'workspace') {
-    if (packageDigest === undefined || retainedDeadline === undefined) {
-      throw new TypeError('workspace handoff must retain its package and deadline')
+    if (packageDigest === undefined) {
+      throw new TypeError('workspace handoff must retain its package')
     }
     return Object.freeze({
       ...base,
@@ -495,10 +508,9 @@ function decodeHandingOffState(
       attemptKind,
       attemptId,
       packageDigest,
-      retainedDeadline,
     })
   }
-  if (packageDigest !== undefined || retainedDeadline !== undefined) {
+  if (packageDigest !== undefined) {
     throw new TypeError('portable handoff cannot persist workspace retention authority')
   }
   return Object.freeze({ ...base, kind: 'handing-off', activeLeaseId, attemptKind, attemptId })
@@ -511,10 +523,9 @@ function decodeDownloadStartedState(
   const attemptKind = attemptKindFromByte(reader.byte('handoff attempt kind'))
   const attemptId = reader.identity(16, 'handoff attempt ID')
   const packageDigest = optionalDigestValue(reader.frame(), 'package digest')
-  const retryableUntil = optionalMillisecondsValue(reader.frame())
   if (attemptKind === 'workspace') {
-    if (packageDigest === undefined || retryableUntil === undefined) {
-      throw new TypeError('workspace download must retain its package and deadline')
+    if (packageDigest === undefined) {
+      throw new TypeError('workspace download must retain its package')
     }
     return Object.freeze({
       ...base,
@@ -522,10 +533,9 @@ function decodeDownloadStartedState(
       attemptKind,
       attemptId,
       packageDigest,
-      retryableUntil,
     })
   }
-  if (packageDigest !== undefined || retryableUntil !== undefined) {
+  if (packageDigest !== undefined) {
     throw new TypeError('portable download cannot persist workspace retention authority')
   }
   return Object.freeze({ ...base, kind: 'download-started', attemptKind, attemptId })
@@ -622,17 +632,6 @@ function optionalDigestValue(value: Uint8Array, label: string): string | undefin
   return present === undefined
     ? undefined
     : encodeBase64Url(canonicalIdentity(encodeBase64Url(present), 32, label))
-}
-
-function optionalMillisecondsValue(value: Uint8Array): number | undefined {
-  const present = optionalUnionPayload(value, 'optional lifecycle deadline')
-  if (present === undefined) return undefined
-  if (present.byteLength !== 8) throw new TypeError('optional lifecycle deadline is not a u64')
-  const decoded = new DataView(present.buffer, present.byteOffset, 8).getBigUint64(0, false)
-  if (decoded > BigInt(Number.MAX_SAFE_INTEGER)) {
-    throw new TypeError('optional lifecycle deadline exceeds the safe integer bound')
-  }
-  return Number(decoded)
 }
 
 function optionalUnionPayload(value: Uint8Array, label: string): Uint8Array | undefined {

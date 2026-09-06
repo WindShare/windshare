@@ -205,10 +205,15 @@ describe('v2 plan settlement', () => {
     {
       planKind: 'workspace-then-publish',
       artifactKind: 'zip-archive',
+      workerFamily: 'discovery',
+    },
+    {
+      planKind: 'portable-handoff',
+      artifactKind: 'zip-archive',
       workerFamily: 'prepared-files',
     },
   ] as const)(
-    'records a later $workerFamily worker consequence with stable receive context',
+    'records a later $workerFamily worker consequence for $planKind with stable receive context',
     async ({ planKind, artifactKind, workerFamily }) => {
       const root = identity(2)
       const first = fileEntry(identity(11), 'first.bin', 2n)

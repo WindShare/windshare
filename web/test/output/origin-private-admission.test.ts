@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
@@ -33,8 +33,6 @@ describe('origin-private WorkspaceBudget admission', () => {
       authority,
       estimate: async () => ({ usage: 10, quota: 1_000_000 }),
       verifiedAlreadyOwnedBytes: async () => 0n,
-      jobLimitBytes: 1_000_000n,
-      processLimitBytes: 1_000_000n,
       minimumReserveBytes: 100n,
       now: () => 1_000,
       leaseMilliseconds: 60_000,
@@ -51,7 +49,7 @@ describe('origin-private WorkspaceBudget admission', () => {
     expect(readmission).toEqual(expect.objectContaining({
       kind: 'accepted',
       budgetDigest: budget.digest,
-      incrementalPhysicalPeakBytes: budget.peakOwnedBytes - 40n,
+      incrementalPhysicalPeakBytes: budget.durableMetadataBytes,
     }))
     expect(authority.facts.map((facts) => facts.verifiedAlreadyOwnedBytes)).toEqual([0n, 40n])
     await claim.release()
@@ -84,33 +82,69 @@ describe('origin-private WorkspaceBudget admission', () => {
     ])
   })
 
+  it('reserves only metadata at activation and allows an arbitrarily large known file', async () => {
+    const intent = await originalFileIntent()
+    const budget = await singleFileBudget(intent, 100n * 1024n ** 3n)
+    const subject = await budgetAuthority(intent.operationId, new MemoryLeaseAuthority(), 'large')
+    const result = await subject.claim(budget)
+    expect(result.kind).toBe('accepted')
+    if (result.kind === 'accepted') await result.claim.release()
+  })
+
   it.each([
-    ['job-workspace-limit', { jobLimitBytes: 1n, processLimitBytes: 1_000_000n, quota: 1_000_000 }],
-    ['process-workspace-limit', { jobLimitBytes: 1_000_000n, processLimitBytes: 1n, quota: 1_000_000 }],
-    ['quota-insufficient', { jobLimitBytes: 1_000_000n, processLimitBytes: 1_000_000n, quota: 100 }],
-  ] as const)('rejects exact %s capacity before a claim becomes active', async (reason, limits) => {
+    async () => ({}),
+    async () => { throw new Error('estimate unavailable') },
+    async () => ({ quota: Number.NaN, usage: Number.POSITIVE_INFINITY }),
+  ])('admits optimistically when the quota estimate is unavailable', async (estimate) => {
     const intent = await originalFileIntent()
     const budget = await singleFileBudget(intent, 64n)
+    const leases = new MemoryLeaseAuthority()
     const subject = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
-      authority: new MemoryLeaseAuthority(),
-      estimate: async () => ({ usage: 0, quota: limits.quota }),
-      jobLimitBytes: limits.jobLimitBytes,
-      processLimitBytes: limits.processLimitBytes,
-      minimumReserveBytes: 100n,
-      now: () => 1_000,
-      leaseMilliseconds: 60_000,
-      heartbeatMilliseconds: 30_000,
-      randomToken: () => `claim-${reason}`,
+      authority: leases, estimate, minimumReserveBytes: 100n,
     })
-
-    await expect(subject.claim(budget)).resolves.toEqual(expect.objectContaining({
-      kind: 'rejected',
-      admission: expect.objectContaining({ kind: 'rejected', reason }),
-    }))
+    const result = await subject.claim(budget)
+    expect(result.kind).toBe('accepted')
+    expect(leases.facts[0]?.estimatedQuotaBytes).toBeUndefined()
+    if (result.kind === 'accepted') await result.claim.release()
   })
+
+  it('retains ownership on quota rejection and propagates actual partial growth settlement', async () => {
+    const intent = await originalFileIntent()
+    const leases = new MemoryLeaseAuthority()
+    const subject = await budgetAuthority(intent.operationId, leases, 'writer')
+    const result = await subject.claim(await singleFileBudget(intent, 64n))
+    if (result.kind !== 'accepted') throw new Error('claim rejected')
+    const claim = result.claim as OriginPrivateWorkspaceBudgetClaim
+    const request = { operationId: intent.operationId, objectId: identity(32, 23),
+      currentLength: 0n, targetLength: 1000n, metadataHeadroom: 12n }
+    leases.reserveGrowth.mockRejectedValueOnce(new DOMException('disk full', 'QuotaExceededError'))
+    await expect(claim.reserveGrowth(request)).rejects.toThrow('disk full')
+    const reservation = await claim.reserveGrowth(request)
+    await reservation.settle(500n)
+    await reservation.release()
+    expect(leases.settleGrowth).toHaveBeenCalledExactlyOnceWith(
+      { operationId: intent.operationId, token: 'writer', nowMilliseconds: 1000 },
+      request.objectId, reservation.reservationId, 500n)
+    await claim.release()
+  })
+
+  it('rejects activation when even checkpoint headroom does not fit', async () => {
+    const intent = await originalFileIntent()
+    const subject = await OriginPrivateWorkspaceBudgetAuthority.open(intent.operationId, {
+      authority: new MemoryLeaseAuthority(), estimate: async () => ({ usage: 0, quota: 100 }),
+      minimumReserveBytes: 100n,
+    })
+    await expect(subject.claim(await singleFileBudget(intent, 64n))).resolves.toMatchObject({
+      kind: 'rejected', admission: { reason: 'quota-insufficient' },
+    })
+  })
+
 })
 
 class MemoryLeaseAuthority implements OriginPrivateWorkspaceBudgetLeaseAuthority {
+  readonly reserveGrowth = vi.fn<OriginPrivateWorkspaceBudgetLeaseAuthority['reserveGrowth']>(async () => {})
+  readonly settleGrowth = vi.fn<OriginPrivateWorkspaceBudgetLeaseAuthority['settleGrowth']>(async () => {})
+  readonly reconcileObject = vi.fn<OriginPrivateWorkspaceBudgetLeaseAuthority['reconcileObject']>(async () => {})
   readonly facts: WorkspaceBudgetCapacityFacts[] = []
   readonly released: [string, string][] = []
   reclaimed = 0
@@ -170,10 +204,8 @@ class MemoryLeaseAuthority implements OriginPrivateWorkspaceBudgetLeaseAuthority
   ): Promise<WorkspaceBudgetLeaseDecision> {
     this.facts.push(facts)
     const capacity = Object.freeze({
-      jobLimitBytes: facts.jobLimitBytes,
-      processLimitBytes: facts.processLimitBytes,
-      otherActiveJobPeakBytes: 0n,
-      estimatedQuotaBytes: facts.estimatedQuotaBytes,
+      outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
+      ...(facts.estimatedQuotaBytes === undefined ? {} : { estimatedQuotaBytes: facts.estimatedQuotaBytes }),
       currentUsageBytes: facts.currentUsageBytes,
       minimumReserveBytes: facts.minimumReserveBytes,
       verifiedAlreadyOwnedBytes: facts.verifiedAlreadyOwnedBytes,
@@ -194,8 +226,6 @@ function budgetAuthority(
     authority,
     estimate: async () => ({ usage: 10, quota: 1_000_000 }),
     verifiedAlreadyOwnedBytes: async () => 0n,
-    jobLimitBytes: 1_000_000n,
-    processLimitBytes: 1_000_000n,
     minimumReserveBytes: 100n,
     now: () => 1_000,
     leaseMilliseconds: 60_000,

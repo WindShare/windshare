@@ -26,7 +26,6 @@ describe('MaterializedManifestV1', () => {
       operationId: checkpoint.operationId,
       receiveIntentDigest: checkpoint.receiveIntentDigest,
       materializationBindingDigest: checkpoint.materializationBindingDigest,
-      preparationBinding: { kind: 'absent' },
       generations: [{
         directoryId: identity(16, 8),
         generation: identity(16, 9),
@@ -98,7 +97,6 @@ describe('MaterializedManifestV1', () => {
       operationId: identity(16, 1),
       receiveIntentDigest: identity(32, 2),
       materializationBindingDigest: identity(32, 3),
-      preparationBinding: { kind: 'absent' },
       generations,
       entries: [
         directoryEntry(['z'], 10),
@@ -122,7 +120,6 @@ describe('MaterializedManifestV1', () => {
       operationId: checkpoint.operationId,
       receiveIntentDigest: checkpoint.receiveIntentDigest,
       materializationBindingDigest: checkpoint.materializationBindingDigest,
-      preparationBinding: { kind: 'absent' },
       generations: [],
       entries: [{
         kind: 'file',

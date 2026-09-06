@@ -302,17 +302,7 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
       recordOutputException(this.currentOutputFailures?.checkpoint, this.expiryFailure)
       throw this.expiryFailure
     }
-    const expiresAt = lifecycleDeadlineForTest(lifecycle)
-    return {
-      lifecycle: next(lifecycle, {
-        kind: 'expired',
-        priorStableState: stableKindForExpiry(lifecycle),
-        expiresAt,
-        cleanupState: 'cleanup-pending',
-        expiryReceiptDigest: identityText(73, 32),
-      }),
-      workspaceUsage: this.initialWorkspaceUsage,
-    }
+    return { lifecycle, workspaceUsage: this.initialWorkspaceUsage }
   }
 
   resolveWorkspaceUsage(): WorkspaceUsage {
@@ -335,7 +325,6 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
             discoveredBytes: 0n,
             discovery: 'complete',
           }),
-          expiresAt: Date.now() + 60_000,
         }),
         workspaceUsage: this.initialWorkspaceUsage,
       }
@@ -536,7 +525,6 @@ export class FakeTransferRun {
               discoveredBytes: 0n,
               discovery: 'complete',
             }),
-            expiresAt: Date.now() + 60_000,
           })
         : next(lifecycle, {
             kind: 'restart-required',
@@ -754,7 +742,6 @@ export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
       discoveredBytes: 64n,
       discovery: 'complete',
     }),
-    expiresAt: Date.now() + 60_000,
   })
   const receiving = next(retained, {
     kind: 'receiving',
@@ -852,13 +839,11 @@ export function stableLifecycle(
           discoveredBytes: 128n,
           discovery: 'complete',
         }),
-        expiresAt: Date.now() + 60_000,
       })
     case 'waiting-to-save':
       return next(lifecycle, {
         kind,
         packageDigest: identityText(51, 32),
-        expiresAt: Date.now() + 60_000,
       })
     case 'download-started':
       return next(lifecycle, {
@@ -866,7 +851,6 @@ export function stableLifecycle(
         attemptKind: 'workspace',
         attemptId: identityText(52),
         packageDigest: identityText(53, 32),
-        retryableUntil: Date.now() + 60_000,
       })
   }
 }
@@ -900,7 +884,6 @@ function defaultLifecycleAction(
           attemptKind: 'workspace',
           attemptId: identityText(65),
           packageDigest: identityText(66, 32),
-          retainedDeadline: Date.now() + 60_000,
         }),
       }
     case 'discard':
@@ -919,26 +902,6 @@ export function next(
   payload: ReceiveLifecycleStatePayload,
 ): ReceiveLifecycleState {
   return nextReceiveLifecycleState(lifecycle, payload)
-}
-
-function lifecycleDeadlineForTest(lifecycle: ReceiveLifecycleState): number {
-  if (lifecycle.kind === 'resumable-receive' || lifecycle.kind === 'resumable-package' ||
-      lifecycle.kind === 'waiting-to-save') return lifecycle.expiresAt
-  if (lifecycle.kind === 'download-started' && lifecycle.attemptKind === 'workspace') {
-    return lifecycle.retryableUntil
-  }
-  throw new Error('test lifecycle does not have a stable deadline')
-}
-
-function stableKindForExpiry(
-  lifecycle: ReceiveLifecycleState,
-): Extract<ReceiveLifecycleState, { kind: 'expired' }>['priorStableState'] {
-  if (lifecycle.kind === 'resumable-receive' || lifecycle.kind === 'resumable-package' ||
-      lifecycle.kind === 'waiting-to-save') return lifecycle.kind
-  if (lifecycle.kind === 'download-started' && lifecycle.attemptKind === 'workspace') {
-    return lifecycle.kind
-  }
-  throw new Error('test lifecycle cannot expire')
 }
 
 export function missingChoice(): OfferedArtifactChoice {
