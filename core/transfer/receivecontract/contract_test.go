@@ -26,8 +26,8 @@ func TestArtifactChoiceIdentityFreezesDirectAndWorkspaceZIPChoices(t *testing.T)
 		},
 		{
 			name: "workspace-browser-handoff", artifact: ArtifactZipArchive, plan: PlanWorkspaceThenPublish,
-			guarantee: GuaranteeBrowserHandoff, preparation: PreparationExactZip,
-			wantID: "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
+			guarantee: GuaranteeBrowserHandoff, preparation: PreparationNone,
+			wantID: "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k",
 		},
 	}
 	for _, test := range tests {
@@ -49,7 +49,7 @@ func TestArtifactChoiceIdentityFreezesDirectAndWorkspaceZIPChoices(t *testing.T)
 	}
 
 	if _, err := NewArtifactChoiceIdentity(
-		ArtifactZipArchive, PlanDirectAtomic, GuaranteeManagedAtomic, PreparationExactZip,
+		ArtifactZipArchive, PlanDirectAtomic, GuaranteeManagedAtomic, PreparationNone,
 	); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("legacy direct-atomic ZIP choice error=%v", err)
 	}
@@ -416,7 +416,7 @@ func TestReservationsBindingsAndPlansAreClosed(t *testing.T) {
 		{directTree, PlanDirectTree, PreparationNone},
 		{directAtomic, PlanDirectAtomic, PreparationNone},
 		{workspacePlan, PlanWorkspaceThenPublish, PreparationNone},
-		{workspaceZipPlan, PlanWorkspaceThenPublish, PreparationExactZip},
+		{workspaceZipPlan, PlanWorkspaceThenPublish, PreparationNone},
 		{portablePlan, PlanPortableHandoff, PreparationExactArtifact},
 	}
 	for _, test := range plans {

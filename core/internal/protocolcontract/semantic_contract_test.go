@@ -127,8 +127,6 @@ func semanticCases(t *testing.T) []any {
 		"operationTombstoneSeconds": fmt.Sprint(operationTombstoneSeconds), "applicationRelaySeconds": fmt.Sprint(applicationRelaySeconds),
 		"relaySessionTombstoneSeconds":        fmt.Sprint(relaySessionTombstoneSeconds),
 		"maxOpaqueCiphertextBytes":            fmt.Sprint(maxOpaqueCiphertextBytes),
-		"defaultOpfsJobWorkspaceLimit":        fmt.Sprint(defaultOPFSJobWorkspaceLimit),
-		"defaultOpfsProcessWorkspaceLimit":    fmt.Sprint(defaultOPFSProcessWorkspaceLimit),
 		"minimumOpfsQuotaReserve":             fmt.Sprint(minimumOPFSQuotaReserve),
 		"defaultPortableHandoffArtifactLimit": fmt.Sprint(defaultPortableArtifactLimit),
 	}
@@ -234,27 +232,26 @@ func semanticCases(t *testing.T) []any {
 				"cleanupAuthority":     "ownership-proof-required",
 			},
 			map[string]any{"artifact": "original-file", "layout": "single-file-proof", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "none", "completion": "sealed-then-waiting-to-save"},
-			map[string]any{"artifact": "zip-archive", "layout": "result-root", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "exact-zip", "completion": "complete-only-sealed-then-waiting-to-save"},
+			map[string]any{"artifact": "zip-archive", "layout": "result-root", "plan": "workspace-then-publish", "binding": "origin-private-workspace", "guaranteeProfiles": []string{"managed-atomic", "browser-handoff"}, "preparation": "none", "completion": "complete-only-sealed-then-waiting-to-save"},
 			map[string]any{"artifact": "original-file-or-zip-archive", "layout": "explicit-artifact", "plan": "portable-handoff", "binding": "portable", "guaranteeProfiles": []string{"browser-handoff"}, "preparation": "exact-artifact", "completion": "download-started-only"},
 		}},
 		map[string]any{
 			"name":        "workspace-budget-v1",
-			"components":  []string{"uniqueRawBytes", "packageBytes", "peakTemporaryBytes", "durableMetadataBytes"},
+			"components":  []string{"uniqueRawBytes", "durableMetadataBytes"},
 			"derivedPeak": "checked-sum-components", "ownedObjectCountedOnce": true, "quotaEstimateIsReservation": false,
 			"limits": map[string]string{
-				"DEFAULT_OPFS_JOB_WORKSPACE_LIMIT":        fmt.Sprint(defaultOPFSJobWorkspaceLimit),
-				"DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT":    fmt.Sprint(defaultOPFSProcessWorkspaceLimit),
 				"MINIMUM_OPFS_QUOTA_RESERVE":              fmt.Sprint(minimumOPFSQuotaReserve),
 				"DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT": fmt.Sprint(defaultPortableArtifactLimit),
 			},
-			"admissionChecks": []string{"job-peak", "process-active-job-peaks", "quota-minus-usage-minus-reserve", "every-allocation"},
+			"admissionChecks":  []string{"durable-metadata-at-activation", "object-high-water-growth", "cross-tab-outstanding-growth", "quota-minus-usage-minus-reserve"},
+			"quotaUnavailable": "optimistic-incremental-admission",
+			"evidence":         map[string]int{"single-file": 1, "progressive-zip": 3},
 		},
 		map[string]any{"name": "zip-complete-only", "encoding": "store", "completeness": "complete-only", "cases": zipCompleteOnlyFailureCases()},
 		map[string]any{
 			"name": "receive-lifecycle-v2", "domain": "windshare/receive-lifecycle-state/v2", "schemaVersion": 2,
 			"terminalStates": []any{
 				map[string]any{"state": "published", "byte": 14, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "direct-resumable-zip"}},
-				map[string]any{"state": "download-started", "byte": 15, "plans": []string{"workspace-then-publish", "portable-handoff"}},
 				map[string]any{"state": "partial-directory", "byte": 16, "plans": []string{"direct-tree"}},
 				map[string]any{"state": "restart-required", "byte": 17, "plans": []string{"direct-atomic", "portable-handoff", "direct-resumable-zip"}},
 				map[string]any{"state": "discarded", "byte": 18, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "portable-handoff", "direct-resumable-zip"}},
@@ -262,6 +259,7 @@ func semanticCases(t *testing.T) []any {
 				map[string]any{"state": "needs-attention", "byte": 20, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "direct-resumable-zip"}},
 			},
 			"nonterminalRecoveryStates": []any{
+				map[string]any{"state": "download-started", "byte": 15, "plans": []string{"workspace-then-publish", "portable-handoff"}},
 				map[string]any{"state": "authorization-required", "byte": 21},
 				map[string]any{"state": "target-verification-required", "byte": 22},
 				map[string]any{"state": "destination-space-required", "byte": 23},
@@ -270,16 +268,13 @@ func semanticCases(t *testing.T) []any {
 				"direct-atomic-rolled-back": 1, "portable-aborted": 2, "source-revision-changed": 3,
 				"preparation-invalidated": 4, "content-session-ended": 5, "target-deleted": 6,
 			},
-			"resumableReceivePayloadKinds": map[string]int{"file-set": 1, "direct-zip": 2},
+			"resumableReceivePayloadKinds": map[string]int{"file-set": 1, "direct-zip": 2, "opfs-zip": 3},
 			"directZipByteSemantics": map[string]string{
 				"receivedBytes":          "selected-source-payload-bytes-received-in-live-attempt",
 				"safeResumeBytes":        "selected-source-payload-bytes-covered-by-verified-checkpoint",
 				"committedArchiveLength": "verified-target-prefix-bytes",
 			},
-			"deadlineWritingStates": []string{
-				"resumable-receive", "resumable-package", "waiting-to-save",
-				"authorization-required", "target-verification-required", "destination-space-required",
-			},
+			"deadlineWritingStates":          []string{},
 			"publishedCleanupPendingRemains": "published", "handoffNeverMeans": "published",
 			"completeArtifactsExclude": []string{"partial-directory"},
 		},
@@ -292,7 +287,7 @@ func semanticCases(t *testing.T) []any {
 			"choiceIdentity": map[string]any{
 				"domain": "windshare/artifact-choice/v1", "materializationByte": 5,
 				"directZipArtifactChoiceId":    "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
-				"workspaceZipArtifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
+				"workspaceZipArtifactChoiceId": "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k",
 			},
 			"policies": []any{
 				map[string]any{"name": "zip-encoding-v2", "domain": "windshare/zip-encoding/v2-store-data-descriptor-owned-marker", "availability": "frozen", "digest": "LWNj2jiL6U3tTZNaLy5txjFlDSaoUzhrjT0J44r0drc"},

@@ -132,32 +132,41 @@ describe('browser Direct ZIP route', () => {
   )
 
   it.each(['continue', 'delete'] as const)(
-    'converges deadline-crossing Direct ZIP %s on retained cleanup',
+    'keeps retained Direct ZIP %s available after thirty days',
     async action => {
-      let now = 999
+      let now = 0
       const fixture = directZipRetainedActionFixture(
-        resumableDirectZipLifecycle(1_000),
+        resumableDirectZipLifecycle(),
         () => now,
       )
       const inventory = await listRetainedFixture(fixture)
       const retained = inventory.operations[0]!
       expect(retained.continuation).toBe('resume-direct-zip')
-      now = 1_000
+      const thirtyDaysMilliseconds = 30 * 24 * 60 * 60 * 1_000
+      now = thirtyDaysMilliseconds
 
-      await inventory.act(retained, action, new AbortController().signal)
-
-      expect(fixture.mutations.expire).toHaveBeenCalledOnce()
-      expect(fixture.mutations.resume).not.toHaveBeenCalled()
-      expect(fixture.runtimeResume).not.toHaveBeenCalled()
-      expect(fixture.deleteRetained).toHaveBeenCalledOnce()
+      if (action === 'continue') {
+        const runtimeUnavailable = new Error('retained runtime unavailable')
+        fixture.runtimeResume.mockRejectedValueOnce(runtimeUnavailable)
+        await expect(inventory.act(retained, action, new AbortController().signal))
+          .rejects.toBe(runtimeUnavailable)
+        expect(fixture.runtimeResume).toHaveBeenCalledOnce()
+        expect(fixture.deleteRetained).not.toHaveBeenCalled()
+      } else {
+        await inventory.act(retained, action, new AbortController().signal)
+        expect(fixture.runtimeResume).not.toHaveBeenCalled()
+        expect(fixture.deleteRetained).toHaveBeenCalledOnce()
+      }
+      expect(fixture.mutations.expire).not.toHaveBeenCalled()
+      expect(fixture.mutations.resume).toHaveBeenCalledOnce()
       expect(fixture.operation.close).toHaveBeenCalledOnce()
       inventory.close()
     },
   )
 
-  it('uses retained deletion for an unexpired Direct ZIP instead of opening execution', async () => {
+  it('uses retained deletion for a paused Direct ZIP instead of opening execution', async () => {
     const fixture = directZipRetainedActionFixture(
-      resumableDirectZipLifecycle(3_000),
+      resumableDirectZipLifecycle(),
       () => 2_000,
     )
     const inventory = await listRetainedFixture(fixture)
@@ -256,7 +265,7 @@ function publishedDirectZipLifecycle(): ReceiveLifecycleState {
   })
 }
 
-function resumableDirectZipLifecycle(expiresAt: number): ReceiveLifecycleState {
+function resumableDirectZipLifecycle(): ReceiveLifecycleState {
   return Object.freeze({
     kind: 'resumable-receive',
     payloadKind: 'direct-zip',
@@ -267,7 +276,6 @@ function resumableDirectZipLifecycle(expiresAt: number): ReceiveLifecycleState {
     safeSelectedPayloadBytes: 64n,
     committedArchiveLength: 128n,
     checkpointPhase: 'between-members',
-    expiresAt,
   })
 }
 

@@ -12,10 +12,8 @@ import type {
   OriginalFileArtifact,
   ReceiveIntent,
   WorkspaceThenPublishPlan,
-  ZipArchiveArtifact,
 } from '../intent'
 import type {
-  ExactPreparationEvidence,
   ExactSingleFileEvidence,
   PlanPauseRequest,
   PlanStopRequest,
@@ -29,10 +27,6 @@ import type {
 type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
   plan: WorkspaceThenPublishPlan
   artifact: OriginalFileArtifact
-}>
-type WorkspaceZipIntent = ReceiveIntent & Readonly<{
-  plan: WorkspaceThenPublishPlan
-  artifact: ZipArchiveArtifact
 }>
 
 export interface PersistentDirectTreeMaterializationEvidence {
@@ -106,40 +100,16 @@ export interface PersistentWorkspaceSettlementAuthority {
 }
 
 export function requireCompleteWorkspaceMaterialization(
-  intent: WorkspaceOriginalIntent | WorkspaceZipIntent,
-  admission:
-    | Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-    | Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>,
+  intent: WorkspaceOriginalIntent,
+  admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>,
   evidence: WorkspaceMaterializationEvidence,
 ): void {
-  if (admission.kind === 'single-file') {
-    const entry = evidence.entries[0]
-    if (evidence.entries.length !== 1 || entry?.kind !== 'file' ||
-        entry.fileId !== admission.evidence.fileId ||
-        entry.exactSize !== admission.evidence.catalogSize ||
-        !samePath(entry.artifactPath, [intent.artifact.suggestedName])) {
-      throw new TypeError('Workspace OriginalFile lacks its exact admitted checkpoint proof')
-    }
-    return
-  }
-  if (evidence.entries.length !== admission.evidence.entries.length) {
-    throw new TypeError('prepared Workspace materialization is incomplete')
-  }
-  const byPath = new Map(evidence.entries.map(entry => [JSON.stringify(entry.artifactPath), entry]))
-  for (const expected of admission.evidence.entries) {
-    const materialized = byPath.get(JSON.stringify(expected.artifactPath))
-    if (expected.kind === 'directory') {
-      if (materialized?.kind !== 'directory' ||
-          materialized.directoryId !== expected.directoryId ||
-          materialized.generation !== expected.generation) {
-        throw new TypeError('prepared Workspace directory lacks materialized ownership proof')
-      }
-      continue
-    }
-    if (materialized?.kind !== 'file' || materialized.fileId !== expected.fileId ||
-        materialized.exactSize !== expected.exactSize) {
-      throw new TypeError('prepared Workspace file lacks final checkpoint proof')
-    }
+  const entry = evidence.entries[0]
+  if (evidence.entries.length !== 1 || entry?.kind !== 'file' ||
+      entry.fileId !== admission.evidence.fileId ||
+      entry.exactSize !== admission.evidence.catalogSize ||
+      !samePath(entry.artifactPath, [intent.artifact.suggestedName])) {
+    throw new TypeError('Workspace OriginalFile lacks its exact admitted checkpoint proof')
   }
 }
 

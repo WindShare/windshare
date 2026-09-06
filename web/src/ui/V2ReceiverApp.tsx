@@ -1,4 +1,4 @@
-import { useEffect, useRef, useSyncExternalStore, type FormEvent } from 'react'
+import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 
 import {
   activationLocksSelection,
@@ -100,6 +100,8 @@ function retentionTimestamp(expiresAt: number): Readonly<{
   return Object.freeze({ label: date.toLocaleString(), dateTime: date.toISOString() })
 }
 
+import { SourceRevisionFailuresPanel } from './source-replacement/SourceRevisionFailuresPanel'
+
 function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<{
   title: string
   description: string
@@ -148,9 +150,10 @@ function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<
         description: 'Free space, then retry from the last verified resume position.',
       })
     case 'resume-package':
+    case 'resume-local-finalization':
       return Object.freeze({
-        title: 'Packaging can continue',
-        description: 'The completed materialization is retained for packaging.',
+        title: 'Ready to finish locally',
+        description: 'All selected content is received. Finish and save without reconnecting to the sender.',
       })
     case 'save-artifact':
       return Object.freeze({
@@ -185,6 +188,8 @@ function retainedActionLabel(
   action: V2RetainedReceiveAction,
 ): string {
   switch (action) {
+    case 'save-partial':
+      return 'Save complete files as partial ZIP'
     case 'catch-up':
       return 'Finish local restoration catch-up'
     case 'continue':
@@ -216,6 +221,21 @@ function retainedActionLabel(
   }
 }
 
+function BrowserStorageProtection() {
+  const [protectedStorage, setProtectedStorage] = useState<boolean | undefined>()
+  useEffect(() => {
+    let current = true
+    Promise.resolve(globalThis.navigator?.storage?.persisted?.() ?? false).then(value => {
+      if (current) setProtectedStorage(value)
+    }).catch(() => { if (current) setProtectedStorage(false) })
+    return () => { current = false }
+  }, [])
+  if (protectedStorage === undefined) return <p>Checking browser storage protection…</p>
+  return <p>{protectedStorage === true
+    ? 'Browser storage protection is enabled. Clearing this site’s data still removes retained tasks.'
+    : 'Browser storage protection is unavailable or not granted. The browser may remove retained tasks when space is low; save important files promptly.'}</p>
+}
+
 function RetainedReceivePanel(props: {
   readonly inventory: V2RetainedReceiveInventorySnapshot
   readonly controller: V2ReceiverController
@@ -238,10 +258,12 @@ function RetainedReceivePanel(props: {
       aria-busy={props.inventory.pending !== null}
     >
       <strong id="retained-receive-title">Stored receive tasks</strong>
-      <p>Actions reopen and verify the exact saved operation before changing owned data.</p>
+      <p>Pause keeps received progress. Delete removes this task’s retained data. Saving may use extra disk space for the exported copy.</p>
+      <BrowserStorageProtection />
+      <p>Partial ZIP export saves only complete files from a paused task. It copies them to your chosen location and keeps the original task available to continue.</p>
       <ul className="retained-receive-list">
         {props.inventory.operations.filter(operation =>
-          operation.operationId !== props.presentedOperationId).map((operation) => {
+          operation.operationId !== props.presentedOperationId || operation.sourceRevisionFailures !== undefined).map((operation) => {
           const copy = retainedOperationCopy(operation)
           const retention = operation.expiresAt === undefined
             ? null
@@ -266,6 +288,8 @@ function RetainedReceivePanel(props: {
                 </small>
               )}
               {operation.unavailableReason !== undefined && <p>{operation.unavailableReason}</p>}
+              <SourceRevisionFailuresPanel operation={operation} busy={props.inventory.pending !== null}
+                prepareReplacement={failure => props.controller.prepareReplacementDownload(operation, failure)} />
               <CompatibleNameRepairPanel
                 repair={repair}
                 {...(operation.actions.includes('catch-up') ? {

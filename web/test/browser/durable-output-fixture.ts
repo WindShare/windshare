@@ -114,8 +114,6 @@ export async function workspaceBudgetAuthority(input: {
 }): Promise<OriginPrivateWorkspaceBudgetAuthority> {
   return OriginPrivateWorkspaceBudgetAuthority.open(input.operationId, {
     estimate: async () => ({ usage: 0, quota: Number(DURABLE_FIXTURE_CAPACITY_BYTES) }),
-    jobLimitBytes: DURABLE_FIXTURE_CAPACITY_BYTES,
-    processLimitBytes: DURABLE_FIXTURE_CAPACITY_BYTES,
     minimumReserveBytes: 0n,
     databaseName: input.databaseName,
     now: () => input.now,

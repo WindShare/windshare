@@ -1,7 +1,6 @@
 import {
   lifecycleDeadline,
   nextReceiveLifecycleState,
-  stableDeadline,
   type PlanKind,
   type ReceiveLifecycleState,
   type RetainedLifecycleKind,
@@ -34,7 +33,7 @@ export function reduceReceiveLifecycle(
       (!authorityReacquisition && activeLeaseMismatch(state, context.activeLeaseId))) {
     return Object.freeze({ status: 'stale', state })
   }
-  const deadline = lifecycleDeadline(state)
+  const deadline = lifecycleDeadline()
   if (deadline !== undefined && context.nowMilliseconds >= deadline &&
       (event.kind === 'resume-started' || event.kind === 'save-requested' ||
        event.kind === 'handoff-requested' || event.kind === 'direct-zip-recovery-gated' ||
@@ -65,13 +64,13 @@ export function reduceReceiveLifecycle(
     case 'restart-boundary-verified': return applied(restartRequired(state, event, context.planKind))
     case 'materialization-seal-verified': return applied(sealMaterialization(state, event, context))
     case 'package-started': return applied(startPackage(state, event, context))
-    case 'package-retryable-failure': return applied(pausePackage(state, event, context.nowMilliseconds))
+    case 'package-retryable-failure': return applied(pausePackage(state, event))
     case 'package-seal-verified': return applied(sealPackage(state, event))
-    case 'wait-record-persisted': return applied(waitToSave(state, context.nowMilliseconds))
+    case 'wait-record-persisted': return applied(waitToSave(state))
     case 'save-requested': return applied(startManagedPublication(state, event, context))
     case 'publication-committed': return applied(commitPublication(state, event))
     case 'publication-not-committed':
-      return applied(publicationNotCommitted(state, context.nowMilliseconds))
+      return applied(publicationNotCommitted(state))
     case 'publication-unknown':
       requireWorkspaceState(state, context.planKind, 'publishing-managed')
       return applied(needsAttention(state, 'publication-unknown', event.lastVerifiedRecordDigest))
@@ -80,10 +79,13 @@ export function reduceReceiveLifecycle(
       if (state.attemptKind !== 'workspace') {
         throw new TypeError('portable handoff cannot persist an unknown outcome')
       }
-      return applied(needsAttention(state, 'publication-unknown', event.lastVerifiedRecordDigest))
+      return applied(nextReceiveLifecycleState(state, {
+        kind: 'waiting-to-save',
+        packageDigest: state.packageDigest,
+      }))
     case 'handoff-requested': return applied(startHandoff(state, event, context))
     case 'handoff-started': return applied(handoffStarted(state))
-    case 'handoff-not-started': return handoffNotStarted(state, event, context.nowMilliseconds)
+    case 'handoff-not-started': return handoffNotStarted(state, event)
     case 'cleanup-verified': return applied(cleanupVerified(state, event.cleanupReceiptDigest))
     case 'cleanup-unknown':
       return applied(needsAttention(state, 'cleanup-unknown', event.lastVerifiedRecordDigest))
@@ -108,8 +110,8 @@ function reacquireReceiveAuthority(
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
   requireState(state, 'receiving')
-  if (context.planKind !== 'direct-tree') {
-    throw new TypeError('receive authority reacquisition is exclusive to DirectTree')
+  if (context.planKind !== 'direct-tree' && context.planKind !== 'workspace-then-publish') {
+    throw new TypeError('receive authority reacquisition requires a retained materialization plan')
   }
   return nextReceiveLifecycleState(state, {
     kind: 'receiving',
@@ -176,7 +178,6 @@ function pauseVerified(
   event: Extract<LifecycleEvent, { kind: 'pause-verified' }>,
   context: LifecycleReducerContext,
 ): ReceiveLifecycleState {
-  const expiresAt = stableDeadline(context.nowMilliseconds)
   if (event.stage === 'receive') {
     requireState(state, 'receiving')
     if (context.planKind !== 'direct-tree' &&
@@ -190,7 +191,6 @@ function pauseVerified(
       completedFileCount: event.completedFileCount,
       completedBytes: event.completedBytes,
       selectionFacts: event.selectionFacts,
-      expiresAt,
       ...(event.partialReceiptDigest === undefined
         ? {}
         : { partialReceiptDigest: event.partialReceiptDigest }),
@@ -201,7 +201,6 @@ function pauseVerified(
     kind: 'resumable-package',
     sealedMaterializationDigest: event.sealedMaterializationDigest,
     tempCleanupProofDigest: event.tempCleanupProofDigest,
-    expiresAt,
   })
 }
 
@@ -215,7 +214,8 @@ function resumeStable(
       state.payloadKind === 'direct-zip'
     const fileSetResume = (context.planKind === 'direct-tree' ||
       context.planKind === 'workspace-then-publish') && state.payloadKind === 'file-set'
-    if (!directZipResume && !fileSetResume) {
+    const nativeZipResume = context.planKind === 'workspace-then-publish' && state.payloadKind === 'opfs-zip'
+    if (!directZipResume && !fileSetResume && !nativeZipResume) {
       throw new TypeError('plan cannot resume receive state')
     }
     if (event.packageTempObjectId !== undefined) {
@@ -259,7 +259,6 @@ function restoreReceiveContinuation(
     completedFileCount: event.completedFileCount,
     completedBytes: event.completedBytes,
     selectionFacts: event.selectionFacts,
-    expiresAt: event.expiresAt,
     ...(event.partialReceiptDigest === undefined
       ? {}
       : { partialReceiptDigest: event.partialReceiptDigest }),
@@ -340,7 +339,6 @@ function finalizeTree(
         completedFileCount: event.completedFileCount,
         completedBytes: event.completedBytes,
         selectionFacts: event.selectionFacts,
-        expiresAt: stableDeadline(context.nowMilliseconds),
         partialReceiptDigest: event.receiptDigest,
       })
     case 'partial-directory':
@@ -438,14 +436,12 @@ function startPackage(
 function pausePackage(
   state: ReceiveLifecycleState,
   event: Extract<LifecycleEvent, { kind: 'package-retryable-failure' }>,
-  nowMilliseconds: number,
 ): ReceiveLifecycleState {
   requireState(state, 'packaging')
   return nextReceiveLifecycleState(state, {
     kind: 'resumable-package',
     sealedMaterializationDigest: state.sealedMaterializationDigest,
     tempCleanupProofDigest: event.tempCleanupProofDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   })
 }
 
@@ -453,7 +449,10 @@ function sealPackage(
   state: ReceiveLifecycleState,
   event: Extract<LifecycleEvent, { kind: 'package-seal-verified' }>,
 ): ReceiveLifecycleState {
-  requireState(state, 'packaging')
+  if (state.kind !== 'packaging' && state.kind !== 'materialization-sealed' &&
+      state.kind !== 'resumable-package') {
+    throw new TypeError('artifact sealing requires complete local materialization')
+  }
   return nextReceiveLifecycleState(state, {
     kind: 'artifact-sealed',
     packageDigest: event.packageDigest,
@@ -462,13 +461,11 @@ function sealPackage(
 
 function waitToSave(
   state: ReceiveLifecycleState,
-  nowMilliseconds: number,
 ): ReceiveLifecycleState {
   requireState(state, 'artifact-sealed')
   return nextReceiveLifecycleState(state, {
     kind: 'waiting-to-save',
     packageDigest: state.packageDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   })
 }
 
@@ -508,13 +505,11 @@ function commitPublication(
 
 function publicationNotCommitted(
   state: ReceiveLifecycleState,
-  nowMilliseconds: number,
 ): ReceiveLifecycleState {
   requireState(state, 'publishing-managed')
   return nextReceiveLifecycleState(state, {
     kind: 'waiting-to-save',
     packageDigest: state.packageDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   })
 }
 
@@ -529,15 +524,12 @@ function startHandoff(
         (state.kind === 'download-started' && state.attemptKind !== 'workspace')) {
       throw new TypeError('workspace handoff requires a retained workspace package')
     }
-    const deadline = lifecycleDeadline(state)
-    if (deadline === undefined) throw new TypeError('workspace handoff lost its waiting deadline')
     return nextReceiveLifecycleState(state, {
       kind: 'handing-off',
       activeLeaseId: context.activeLeaseId,
       attemptKind: 'workspace',
       attemptId: event.attemptId,
       packageDigest: state.packageDigest,
-      retainedDeadline: deadline,
     })
   }
   if (context.planKind !== 'portable-handoff' || state.kind !== 'receiving') {
@@ -559,7 +551,6 @@ function handoffStarted(state: ReceiveLifecycleState): ReceiveLifecycleState {
       attemptKind: 'workspace',
       attemptId: state.attemptId,
       packageDigest: state.packageDigest,
-      retryableUntil: state.retainedDeadline,
     })
   }
   return nextReceiveLifecycleState(state, {
@@ -572,7 +563,6 @@ function handoffStarted(state: ReceiveLifecycleState): ReceiveLifecycleState {
 function handoffNotStarted(
   state: ReceiveLifecycleState,
   event: Extract<LifecycleEvent, { kind: 'handoff-not-started' }>,
-  nowMilliseconds: number,
 ): LifecycleReduction {
   requireState(state, 'handing-off')
   if (state.attemptKind === 'portable') {
@@ -582,25 +572,9 @@ function handoffNotStarted(
       receiptDigest: event.expiryReceiptDigest ?? state.attemptId,
     }))
   }
-  if (state.retainedDeadline === undefined || state.packageDigest === undefined) {
-    throw new TypeError('workspace handoff lost retained package state')
-  }
-  if (nowMilliseconds >= state.retainedDeadline) {
-    if (event.expiryReceiptDigest === undefined) {
-      throw new TypeError('elapsed handoff deadline requires an expiry receipt')
-    }
-    return applied(nextReceiveLifecycleState(state, {
-      kind: 'expired',
-      priorStableState: 'waiting-to-save',
-      expiresAt: state.retainedDeadline,
-      cleanupState: 'cleanup-pending',
-      expiryReceiptDigest: event.expiryReceiptDigest,
-    }))
-  }
   return applied(nextReceiveLifecycleState(state, {
     kind: 'waiting-to-save',
     packageDigest: state.packageDigest,
-    expiresAt: state.retainedDeadline,
   }))
 }
 
@@ -635,8 +609,8 @@ function expireState(
   event: Extract<LifecycleEvent, { kind: 'expiry-observed' }>,
   nowMilliseconds: number,
 ): LifecycleReduction {
-  const deadline = lifecycleDeadline(state)
-  if (deadline === undefined) throw new TypeError('expiry applies only to stable durable state')
+  const deadline = lifecycleDeadline()
+  if (deadline === undefined) return Object.freeze({ status: 'not-due', state })
   if (nowMilliseconds < deadline) return Object.freeze({ status: 'not-due', state })
   return applied(nextReceiveLifecycleState(state, {
     kind: 'expired',

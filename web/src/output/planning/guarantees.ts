@@ -302,8 +302,6 @@ function workspaceSemantics(workspace: WorkspaceEnvironmentOffer): WorkspacePlan
   return Object.freeze({
     kind: workspace.kind,
     persistence: workspace.persistence,
-    jobHardLimitBytes: workspace.jobHardLimitBytes,
-    processHardLimitBytes: workspace.processHardLimitBytes,
     minimumQuotaReserveBytes: workspace.minimumQuotaReserveBytes,
   })
 }
@@ -321,8 +319,6 @@ function portableSemantics(portable: PortableEnvironmentOffer): PortablePlanSema
 
 function sameWorkspaceSemantics(left: WorkspacePlanSemantics, right: WorkspacePlanSemantics): boolean {
   return left.kind === right.kind && left.persistence === right.persistence &&
-    left.jobHardLimitBytes === right.jobHardLimitBytes &&
-    left.processHardLimitBytes === right.processHardLimitBytes &&
     left.minimumQuotaReserveBytes === right.minimumQuotaReserveBytes
 }
 
@@ -385,12 +381,7 @@ function snapshotWorkspace(input: WorkspaceEnvironmentOffer): WorkspaceEnvironme
       input.persistence !== 'durable-owned-repository') {
     throw new TypeError('workspace persistence facts are invalid')
   }
-  requirePositiveBytes(input.jobHardLimitBytes, 'workspace job hard limit')
-  requirePositiveBytes(input.processHardLimitBytes, 'workspace process hard limit')
   requirePositiveBytes(input.minimumQuotaReserveBytes, 'workspace quota reserve')
-  if (input.jobHardLimitBytes > input.processHardLimitBytes) {
-    throw new RangeError('workspace job hard limit exceeds the process hard limit')
-  }
   if (input.quotaAvailabilityEstimateBytes !== null && input.quotaAvailabilityEstimateBytes < 0n) {
     throw new RangeError('workspace quota availability estimate must be non-negative')
   }

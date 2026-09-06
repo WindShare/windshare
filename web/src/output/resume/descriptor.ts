@@ -14,6 +14,7 @@ export type ReceiveOperationContinuation =
   | 'pending-catch-up'
   | 'restoration-available'
   | 'resume-package'
+  | 'resume-local-finalization'
   | 'save-artifact'
   | 'retry-download'
   | 'cleanup-incompatible'
@@ -29,6 +30,8 @@ export interface ReceiveOperationResumeDescriptor {
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
   readonly expiresAt?: number
+  readonly recoveryUnavailable?: 'native-checkpoint-unavailable'
+  readonly sourceRevisionFailures?: import('./source-revision-failures').SourceRevisionFailures
 }
 
 /**
@@ -42,7 +45,7 @@ export function receiveOperationResumeDescriptor(
   requireClock(nowMilliseconds)
   const continuation = continuationFor(lifecycle, nowMilliseconds)
   if (continuation === undefined) return undefined
-  const expiresAt = lifecycleDeadline(lifecycle)
+  const expiresAt = lifecycleDeadline()
   return Object.freeze({
     schemaVersion: RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION,
     operationId: lifecycle.operationId,
@@ -74,7 +77,7 @@ function continuationFor(
   lifecycle: ReceiveLifecycleState,
   nowMilliseconds: number,
 ): ReceiveOperationContinuation | undefined {
-  const deadline = lifecycleDeadline(lifecycle)
+  const deadline = lifecycleDeadline()
   if (deadline !== undefined && nowMilliseconds >= deadline) return 'cleanup-expired'
   switch (lifecycle.kind) {
     case 'receiving': return 'resume-receive'
@@ -84,10 +87,14 @@ function continuationFor(
     case 'authorization-required': return 'reauthorize-direct-zip'
     case 'target-verification-required': return 'verify-direct-zip-target'
     case 'destination-space-required': return 'retry-direct-zip-space'
+    case 'materialization-sealed':
+    case 'packaging':
     case 'resumable-package': return 'resume-package'
+    case 'artifact-sealed':
     case 'waiting-to-save': return 'save-artifact'
+    case 'handing-off':
     case 'download-started':
-      return lifecycle.attemptKind === 'workspace' && lifecycle.retryableUntil !== undefined
+      return lifecycle.attemptKind === 'workspace'
         ? 'retry-download'
         : undefined
     case 'expired':

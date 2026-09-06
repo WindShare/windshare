@@ -234,8 +234,7 @@ function chooseWorkspaceRoute(
   byteCountLowerBound: bigint,
 ): WorkspaceThenPublishMaterializationRoute | null {
   const workspace = environment.workspace
-  if (workspace === null || byteCountLowerBound > workspace.jobHardLimitBytes ||
-      byteCountLowerBound > workspace.processHardLimitBytes) return null
+  if (workspace === null) return null
   const publicationTarget = chooseAtomicTarget(environment, byteCountLowerBound) ??
     environment.targets.find((target): target is BrowserHandoffTargetOffer =>
       target.kind === 'browser-handoff' && target.supportsWorkspacePackage &&
@@ -268,7 +267,7 @@ function candidateForCompleteArtifact(
     artifact,
     route,
     recovery: recoveryForCompleteRoute(route),
-    preparation: preparationForCompleteRoute(artifact, route),
+    preparation: preparationForCompleteRoute(route),
   })
 }
 
@@ -290,7 +289,6 @@ function recoveryForCompleteRoute(route: CompleteMaterializationRoute): Recovery
 }
 
 function preparationForCompleteRoute(
-  artifact: Exclude<ArtifactSpec, { kind: 'directory-tree' }>,
   route: CompleteMaterializationRoute,
 ): PreparationRequirement {
   switch (route.kind) {
@@ -298,7 +296,7 @@ function preparationForCompleteRoute(
       return noPreparation()
     case 'workspace-then-publish':
       return Object.freeze({
-        manifest: artifact.kind === 'zip-archive' ? 'exact-zip' : 'none',
+        manifest: 'none',
         hardAdmission: 'workspace-budget',
       })
     case 'portable-handoff':
@@ -416,7 +414,7 @@ function sizeProjection(
   // Workspace packaging evidence cannot prove the byte layout of a distinct direct ZIP target.
   const observedPackage = candidate.choice.artifactKind === 'zip-archive' &&
     candidate.route.kind !== 'direct-resumable-zip'
-    ? projection.workspaceCostObservation?.packageBytes
+    ? projection.workspaceCostObservation?.archiveBytes
     : undefined
   const artifact = observedPackage === undefined
     ? Object.freeze({
@@ -481,23 +479,12 @@ function unavailableReason(
       lowerBound > environment.portable.maximumArtifactBytes) {
     return 'portable-limit-exceeded'
   }
-  if (environment.workspace !== null && hasWorkspacePublicationTarget(environment) &&
-      (lowerBound > environment.workspace.jobHardLimitBytes ||
-       lowerBound > environment.workspace.processHardLimitBytes)) {
-    return 'workspace-limit-exceeded'
-  }
   return 'no-safe-destination'
 }
 
 function hasPortableHandoffTarget(environment: EnvironmentOffers): boolean {
   return environment.targets.some((target) =>
     target.kind === 'browser-handoff' && target.supportsPortableArtifact)
-}
-
-function hasWorkspacePublicationTarget(environment: EnvironmentOffers): boolean {
-  return environment.targets.some((target) =>
-    target.kind === 'managed-atomic-file-target' ||
-    (target.kind === 'browser-handoff' && target.supportsWorkspacePackage))
 }
 
 function disabledDecision(

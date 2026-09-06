@@ -31,7 +31,7 @@ import { PersistedReceiveOperationReopenAuthority } from '../../src/output/resum
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
 import {
   admitWorkspaceBudget,
-  createPreparedZipWorkspaceBudget,
+  createProgressiveZipWorkspaceBudget,
   createSingleFileWorkspaceBudget,
   type WorkspaceCapacitySnapshot,
 } from '../../src/output/workspace/budget'
@@ -49,17 +49,11 @@ import {
 } from '../../src/output/workspace/manifest'
 import { sealWorkspaceMaterialization } from '../../src/output/workspace/aggregate'
 import {
-  createPreparationManifestPages,
-  sealWorkspaceZipPreparation,
-} from '../../src/output/workspace/preparation'
-import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
-  RECEIVE_RECORD_PREPARATION,
   RECEIVE_RECORD_SEALED_MATERIALIZATION,
   createPersistedReceiveRecord,
   operationRecordId,
-  receiveOperationHandleRecord,
   type ManifestPageRecord,
   type PersistedReceiveRecord,
   type ReceiveOperationHandleRecord,
@@ -76,20 +70,12 @@ import {
   storedReceiveLifecycleState,
 } from '../../src/output/workspace/state-codec'
 import {
-  STABLE_RETENTION_MILLISECONDS,
   type ReceiveLifecycleState,
 } from '../../src/output/workspace/state'
-import {
-  WORKSPACE_HANDLE_ZIP_LAYOUT,
-  workspaceZipLayoutHandleId,
-} from '../../src/output/workspace/stages'
 import { identity } from './planning/fixture'
 
-const ENTERED_AT = 10_000
 const WORKSPACE_CAPACITY = Object.freeze({
-  jobLimitBytes: 1_000_000n,
-  processLimitBytes: 2_000_000n,
-  otherActiveJobPeakBytes: 0n,
+  outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
   estimatedQuotaBytes: 3_000_000n,
   currentUsageBytes: 0n,
   minimumReserveBytes: 0n,
@@ -176,7 +162,6 @@ export function resumableReceive(intent: ReceiveIntent, generation: bigint): Ext
       discoveredBytes: 32n,
       discovery: 'failed',
     }),
-    expiresAt: ENTERED_AT + STABLE_RETENTION_MILLISECONDS,
   })
 }
 
@@ -230,8 +215,6 @@ export async function seedWorkspaceAdmission(
     receiveIntentDigest: intent.digest,
     workspaceBudget: budget,
     contentRequestCountAtAdmission: 0n,
-    jobLimitBytes: WORKSPACE_CAPACITY.jobLimitBytes,
-    processLimitBytes: WORKSPACE_CAPACITY.processLimitBytes,
     estimatedQuotaBytes: WORKSPACE_CAPACITY.estimatedQuotaBytes,
     currentUsageBytes: WORKSPACE_CAPACITY.currentUsageBytes,
     minimumReserveBytes: WORKSPACE_CAPACITY.minimumReserveBytes,
@@ -245,52 +228,25 @@ export async function seedWorkspaceAdmission(
 export async function seedWorkspaceZipAdmission(
   state: MemoryRepositoryState,
   intent: ReceiveIntent,
-  preparation: Awaited<ReturnType<typeof sealWorkspaceZipPreparation>>,
 ) {
-  const budget = await createPreparedZipWorkspaceBudget({
+  const budget = await createProgressiveZipWorkspaceBudget({
     receiveIntent: intent,
-    preparation,
-    durableMetadataBytes: preparation.manifest.canonicalMetadataBytes,
+    durableMetadataBytes: 1024n,
   })
   const admission = admitWorkspaceBudget(budget, WORKSPACE_CAPACITY)
   if (admission.kind !== 'accepted') throw new Error('workspace ZIP admission fixture was rejected')
   const receipt = await createPreparationAdmissionReceipt({
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
-    preparationManifestDigest: preparation.manifest.digest,
-    sealedZipLayoutDigest: preparation.zipLayout.digest,
     workspaceBudget: budget,
     contentRequestCountAtAdmission: 0n,
-    jobLimitBytes: WORKSPACE_CAPACITY.jobLimitBytes,
-    processLimitBytes: WORKSPACE_CAPACITY.processLimitBytes,
     estimatedQuotaBytes: WORKSPACE_CAPACITY.estimatedQuotaBytes,
     currentUsageBytes: WORKSPACE_CAPACITY.currentUsageBytes,
     minimumReserveBytes: WORKSPACE_CAPACITY.minimumReserveBytes,
     incrementalPhysicalPeakBytes: admission.incrementalPhysicalPeakBytes,
   })
-  const records = await Promise.all([
-    createPersistedReceiveRecord({
-      operationId: intent.operationId,
-      kind: RECEIVE_RECORD_PREPARATION,
-      canonicalBytes: preparation.manifest.canonicalBytes,
-    }),
-    persistedReceiptRecord(receipt),
-  ])
-  for (const record of records) state.records.set(record.id, record)
-  for (const page of await createPreparationManifestPages(preparation.manifest)) {
-    state.pages.set(page.id, page)
-  }
-  if (intent.plan.kind !== 'workspace-then-publish') {
-    throw new Error('workspace ZIP admission fixture lost its binding')
-  }
-  const handle = receiveOperationHandleRecord({
-    id: workspaceZipLayoutHandleId(intent.operationId, preparation.manifest.preparationId),
-    operationId: intent.operationId,
-    kind: WORKSPACE_HANDLE_ZIP_LAYOUT,
-    authorityRef: intent.plan.workspace.repositoryRef,
-    handle: preparation.zipLayout,
-  })
-  state.handles.set(handle.id, handle)
+  const record = await persistedReceiptRecord(receipt)
+  state.records.set(record.id, record)
   return Object.freeze({ budget, receipt })
 }
 
@@ -321,7 +277,6 @@ export async function seedWorkspacePackage(state: MemoryRepositoryState, intent:
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
     materializationBindingDigest: intent.plan.workspace.digest,
-    preparationBinding: { kind: 'absent' },
     generations: [],
     entries: [{
       kind: 'file',
@@ -349,7 +304,6 @@ export async function seedWorkspacePackage(state: MemoryRepositoryState, intent:
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
     workspaceBindingDigest: intent.plan.workspace.digest,
-    preparationBinding: { kind: 'absent' },
     materializedManifestDigest: manifest.digest,
     generationTableDigest: await materializedGenerationTableDigest(manifest.generations),
     artifactVersion: intent.artifact.version,
@@ -396,7 +350,6 @@ export async function seedWorkspacePackage(state: MemoryRepositoryState, intent:
     generation: 9n,
     sealedMaterializationDigest: seal.digest,
     tempCleanupProofDigest: cleanupReceipt.digest,
-    expiresAt: ENTERED_AT + STABLE_RETENTION_MILLISECONDS,
   })
   await state.seedLifecycle(lifecycle)
   return Object.freeze({ admission, proof, lifecycle })

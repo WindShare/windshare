@@ -3,7 +3,6 @@ import type { V2CatalogEntry } from '../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../catalog/v2-selection'
 import { encodeBase64Url } from '../crypto/bytes'
 import {
-  DirectorySettlementKind,
   snapshotMaterializationDirectory,
   validateDirectoryAdmissionBinding,
   type DirectoryAdmission,
@@ -23,7 +22,6 @@ import {
   artifactFilePath,
   artifactLayoutClass,
 } from './job/artifact-path'
-import { finalizeV2Directories } from './job/directory-transfer'
 import {
   isolatedDirectoryOutputFailure,
   normalizeV2FileTransferFailure,
@@ -68,7 +66,6 @@ import type { PerformanceSummaryObservations } from '../output/diagnostics/perfo
 import { SelectionMeasureTracker, type SelectionMeasure } from './measure'
 import {
   snapshotDirectoryMaterializationRequest,
-  type DirectTreeExecution,
   type DirectResumableZipExecution,
   type ExactPreparationEvidence,
   type IncrementalDirectoryOutput,
@@ -82,6 +79,10 @@ import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
 import { outputSettlementTimeoutMilliseconds } from './settlement/v2-output'
 import { TransferJobSettlement } from './v2-job-settlement'
+import {
+  DirectorySettlementLedger,
+  stabilizeDirectorySettlementLifecycle,
+} from './settlement/directory-ledger'
 import { V2RevisionCapacityCoordinator } from './revision-capacity/public'
 
 export * from './job/public'
@@ -105,13 +106,11 @@ export class TransferJob {
   readonly #root: V2JobRootAuthority
   readonly #materialization: TransferJobMaterialization
   readonly #settlement: TransferJobSettlement
-  readonly #finalizableDirectories: DirectoryAdmission[] = []
-  readonly #materializedDirectoryPaths = new Set<string>()
   readonly #transferJobId: string
   readonly #outputSettlementTimeoutMilliseconds: number
   readonly #progress = new V2TransferProgressLedger()
   readonly #capacity: V2RevisionCapacityCoordinator
-  #directoryAdmissionClaims = 0
+  #directories: DirectorySettlementLedger | undefined
   #externalAbortCleanup: (() => void) | undefined
   #directoryScope: DirectoryAdmissionScope | undefined
   #directoryOutput: IncrementalDirectoryOutput | undefined
@@ -176,6 +175,7 @@ export class TransferJob {
       authenticateDirectory: (cursor, committed, parent) =>
         this.#authenticateDirectory(cursor, committed, parent),
       projectFile: sourcePath => this.#projectFile(sourcePath),
+      generationCommitted: (cursor, committed) => this.#pinDiscoveryGeneration(cursor, committed),
       prepareDirectory: (collector, cursor, committed, role) =>
         this.#preparedDirectory(collector, cursor, committed, role),
     })
@@ -260,6 +260,14 @@ export class TransferJob {
         this.#selection,
       )
       this.#intent = intent
+      this.#directories = new DirectorySettlementLedger({
+        retention: this.#isNativeZip() ? 'durable-at-admission' : 'after-content',
+        maximumAdmissions: this.#limits.directoryAdmissions,
+        recordFailure: (identity, reason) => this.#recordDirectoryFailure(identity, reason),
+        ...(this.#options.incidentScope === undefined
+          ? {}
+          : { incidentScope: this.#options.incidentScope }),
+      })
       this.#directTreeCoordinates = intent.plan.kind === 'direct-tree'
         ? await createDirectTreeCoordinateContract(intent)
         : undefined
@@ -330,39 +338,12 @@ export class TransferJob {
     }
   }
 
-  #stabilizeDirectTreeLifecycle(execution: PlanExecution): PlanExecution {
-    if (execution.planKind !== 'direct-tree') return execution
-    const directExecution: DirectTreeExecution = execution
-    return Object.freeze({
-      ...directExecution,
-      pause: async (
-        request: Parameters<DirectTreeExecution['pause']>[0],
-        signal: AbortSignal,
-      ) => {
-        if (this.#externalCancellationRequested) {
-          directExecution.beginTerminal('pause')
-          await this.#finalizeDirectories(signal)
-        }
-        return directExecution.pause(request, signal)
-      },
-      ...(directExecution.stop === undefined ? {} : {
-        stop: async (
-          request: Parameters<NonNullable<DirectTreeExecution['stop']>>[0],
-          signal: AbortSignal,
-        ) => {
-          if (this.#externalCancellationRequested) {
-            directExecution.beginTerminal('stop')
-            await this.#finalizeDirectories(signal)
-          }
-          return directExecution.stop!(request, signal)
-        },
-      }),
-    })
-  }
-
   #bindExecution(execution: PlanExecution): void {
     if (this.#execution !== undefined) throw new Error('plan execution was bound more than once')
-    const stabilized = this.#stabilizeDirectTreeLifecycle(execution)
+    const stabilized = stabilizeDirectorySettlementLifecycle(execution, {
+      externalCancellationRequested: () => this.#externalCancellationRequested,
+      finalize: signal => this.#finalizeDirectories(signal),
+    })
     this.#execution = stabilized
     if (stabilized.planKind === 'direct-tree') {
       this.#performance = stabilized.performance
@@ -420,13 +401,35 @@ export class TransferJob {
     })
   }
 
+  async #pinDiscoveryGeneration(cursor: DirectoryCursor, committed: V2CommittedDirectory): Promise<void> {
+    const execution = this.#execution
+    if (execution?.planKind === 'workspace-then-publish') {
+      await execution.discoveryGeneration?.(
+        cursor.idText, encodeBase64Url(committed.generation), cursor.path, this.#lifetime.signal,
+      )
+    }
+  }
+
   async #authenticateDirectory(
     cursor: DirectoryCursor,
     committed: V2CommittedDirectory,
     parent?: AuthenticatedDirectory,
   ): Promise<AuthenticatedDirectory> {
+    await this.#pinDiscoveryGeneration(cursor, committed)
     const coordinates = this.#directTreeCoordinates
-    if (coordinates === undefined) return this.#authenticatedReference(cursor, committed)
+    if (coordinates === undefined) {
+      const intent = this.#requireIntent()
+      if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive') {
+        return this.#authenticatedReference(cursor, committed)
+      }
+      const logicalArtifactPath = artifactDirectoryPath(intent, cursor.path)
+      if (logicalArtifactPath.length === 0) return this.#authenticatedReference(cursor, committed)
+      return this.#admitDirectory(cursor, committed, {
+        kind: 'materialize', logicalArtifactPath,
+        sourceAuthenticationPath: snapshotSourceAuthenticationPath(cursor.path),
+        relativePath: snapshotMaterializationRootRelativePath(logicalArtifactPath),
+      }, parent)
+    }
     const projection = coordinates.projectDirectory(cursor.path)
     return projection.kind === 'reference'
       ? this.#authenticatedReference(cursor, committed, projection)
@@ -439,14 +442,14 @@ export class TransferJob {
     projection: Extract<DirectTreeDirectoryProjection, { kind: 'materialize' }>,
     parent?: AuthenticatedDirectory,
   ): Promise<AuthenticatedDirectory> {
-    this.#reserveDirectoryAdmission()
+    this.#requireDirectories().reserveAdmission()
     const output = this.#directoryOutput
     const scope = this.#directoryScope
     const execution = this.#execution
     if (output === undefined || scope === undefined || execution === undefined) {
       throw new V2OutputPausedError('incremental directory authority is unavailable')
     }
-    const root = this.#requireDirectTreeCoordinates().rootExpectation
+    const root = scope.rootExpectation
     const isExpectedRoot = root.kind === 'materialized-directory' &&
       root.directoryId === cursor.idText &&
       sameMaterializationRootRelativePath(root.relativePath, projection.relativePath)
@@ -488,12 +491,9 @@ export class TransferJob {
       throw isolated ?? error
     }
     const admission = validateDirectoryAdmissionBinding(scope, directory, returned)
-    this.#finalizableDirectories.push(admission)
-    if (projection.relativePath.length > 0) {
-      this.#materializedDirectoryPaths.add(projection.relativePath.join('/'))
-    }
+    await this.#requireDirectories().retain(output, admission, this.#lifetime.signal)
     this.#observers?.directoryAdmitted({
-      admittedDirectoryCount: BigInt(this.#directoryAdmissionClaims),
+      admittedDirectoryCount: this.#requireDirectories().admissionClaims,
       layoutClass: scope.layout,
     })
     return Object.freeze({
@@ -554,28 +554,9 @@ export class TransferJob {
   async #finalizeDirectories(signal: AbortSignal = this.#lifetime.signal): Promise<void> {
     const output = this.#directoryOutput
     if (output === undefined) return
-    await finalizeV2Directories({
-      admissions: this.#finalizableDirectories,
-      output,
-      signal,
-      settled: (admission, settlement) => {
-        if (settlement.kind === DirectorySettlementKind.IsolatedFailure) {
-          this.#recordDirectoryFailure(admission.directoryId, settlement.fault)
-        }
-      },
-      failed: (admission, error) => {
-        const isolated = admission.path.length === 0
-          ? undefined
-          : isolatedDirectoryOutputFailure(
-              error,
-              this.#requireExecution().output.capabilities.fileFailureIsolation,
-              admission.directoryId,
-              this.#options.incidentScope,
-            )
-        if (isolated === undefined) throw error
-        this.#recordDirectoryFailure(admission.directoryId, isolated)
-      },
-    })
+    await this.#requireDirectories().finalize(
+      output, signal, this.#requireExecution().output.capabilities.fileFailureIsolation,
+    )
   }
 
   async #transferPreparedFiles(files: readonly PendingFile[]): Promise<void> {
@@ -657,11 +638,8 @@ export class TransferJob {
         }))
   }
 
-  #reserveDirectoryAdmission(): void {
-    if (this.#directoryAdmissionClaims >= this.#limits.directoryAdmissions) {
-      throw new V2OutputPausedError('Directory admission budget was exhausted')
-    }
-    this.#directoryAdmissionClaims += 1
+  #isNativeZip(): boolean {
+    return this.#intent?.plan.kind === 'workspace-then-publish' && this.#intent.artifact.kind === 'zip-archive'
   }
 
   #recordDirectoryFailure(identity: string, reason: unknown): void {
@@ -680,8 +658,8 @@ export class TransferJob {
     if (this.#execution?.planKind === 'direct-resumable-zip') {
       return this.#execution.ordered.materializationSummary()
     }
-    const directoryCount = this.#preparation?.directoryCount ??
-      BigInt(this.#materializedDirectoryPaths.size)
+    const directoryCount = this.#isNativeZip() ? this.#requireDirectories().directoryCount :
+      this.#preparation?.directoryCount ?? this.#requireDirectories().directoryCount
     const fileCount = BigInt(this.#progress.completedFiles)
     return Object.freeze({
       entryCount: directoryCount + fileCount,
@@ -709,6 +687,11 @@ export class TransferJob {
       throw new Error('DirectTree coordinate contract is unavailable')
     }
     return this.#directTreeCoordinates
+  }
+
+  #requireDirectories(): DirectorySettlementLedger {
+    if (this.#directories === undefined) throw new Error('directory settlement ledger is unavailable')
+    return this.#directories
   }
 
   #requireExecution(): PlanExecution {

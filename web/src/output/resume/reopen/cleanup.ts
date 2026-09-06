@@ -39,7 +39,7 @@ export interface ReceiveOperationOwnedCleanupExecutor {
 export interface PersistedReceiveOperationReopenPort {
   reopen(
     descriptor: ReceiveOperationResumeDescriptor,
-    purpose: 'continue' | 'cleanup',
+    purpose: 'continue' | 'cleanup' | 'partial-export',
     failures?: OutputFailureSinks,
     retainedFileRecovery?: PersistentPausedFileRecovery,
   ): Promise<ReopenedReceiveOperation>
@@ -154,8 +154,21 @@ export type AuthorityOwnedReceiveOperationContinuation =
   | Readonly<{
       kind: 'workspace-package'
       operation: ReopenedWorkspaceOperation & {
-        readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-package' }>
+        readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-package' | 'materialization-sealed' }>
         readonly packageContinuation: import('../workspace-continuation').ReopenedWorkspacePackageContinuation
+      }
+    }>
+  | Readonly<{
+      kind: 'workspace-progressive-zip'
+      operation: ReopenedWorkspaceOperation & {
+        readonly progressiveContinuation: import('./model').ReopenedProgressiveZipContinuation
+        readonly admittedContent: import('../../workspace/stages').AdmittedWorkspaceContent
+      }
+    }>
+  | Readonly<{
+      kind: 'workspace-progressive-zip-partial'
+      operation: ReopenedWorkspaceOperation & {
+        readonly partialContinuation: import('./partial-zip-continuation').RetainedZipPartialReader
       }
     }>
   | Readonly<{ kind: 'workspace-retained'; operation: ReopenedWorkspaceOperation }>
@@ -193,7 +206,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     assertPhysicalOutputAuthority(descriptor)
     const operation = await this.#reopen.reopen(
       descriptor,
-      'continue',
+      request?.purpose ?? 'continue',
       request?.failures,
       request?.retainedFileRecovery,
     )
@@ -348,6 +361,16 @@ function classifyReopenedContinuation(
   if (operation.kind === 'direct-zip') {
     return Object.freeze({ kind: 'direct-zip', operation })
   }
+  if (operation.partialContinuation !== undefined) {
+    return { kind: 'workspace-progressive-zip-partial', operation: operation as Extract<
+      AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-progressive-zip-partial' }
+    >['operation'] }
+  }
+  if (operation.progressiveContinuation !== undefined && operation.admittedContent !== undefined) {
+    return Object.freeze({ kind: 'workspace-progressive-zip', operation: operation as Extract<
+      AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-progressive-zip' }
+    >['operation'] })
+  }
   if (operation.lifecycle.kind === 'receiving' && operation.admittedContent !== undefined &&
       operation.receiveContinuation !== undefined) {
     return Object.freeze({
@@ -357,7 +380,7 @@ function classifyReopenedContinuation(
       }>['operation'],
     })
   }
-  if (operation.lifecycle.kind === 'resumable-package' &&
+  if ((operation.lifecycle.kind === 'resumable-package' || operation.lifecycle.kind === 'materialization-sealed') &&
       operation.packageContinuation !== undefined) {
     return Object.freeze({
       kind: 'workspace-package',

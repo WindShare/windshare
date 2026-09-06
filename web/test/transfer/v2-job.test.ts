@@ -52,8 +52,7 @@ describe('plan-specific transfer routing', () => {
     expect(result.outputDurability).toBe('None')
     expect(plans.output.requests).toHaveLength(1)
     expect('format' in plans.output).toBe(false)
-    if (planKind === 'portable-handoff' ||
-        (planKind === 'workspace-then-publish' && artifactKind === 'zip-archive')) {
+    if (planKind === 'portable-handoff') {
       expect(plans.preparations).toHaveLength(1)
       expect(result.preparation?.fileCount).toBe(1n)
     } else {
@@ -147,7 +146,8 @@ describe('plan-specific transfer routing', () => {
     expect(result.preparation).toBeUndefined()
   })
 
-  it('starts DirectTree file content while a later directory is still discovering', async () => {
+  it.each(['direct-tree', 'workspace-then-publish'] as const)(
+    'starts %s file content while a later directory is still discovering', async planKind => {
     const root = identity(2)
     const child = identity(3)
     const file = fileEntry(identity(11), 'a.bin', 2n)
@@ -175,8 +175,8 @@ describe('plan-specific transfer routing', () => {
     })
     const plans = planAuthorityFixture()
     const intent = await receiveIntentFixture({
-      planKind: 'direct-tree',
-      artifactKind: 'directory-tree',
+      planKind,
+      artifactKind: planKind === 'direct-tree' ? 'directory-tree' : 'zip-archive',
       selection,
     })
     const running = transferJobFixture({
@@ -198,7 +198,8 @@ describe('plan-specific transfer routing', () => {
     const result = await running
 
     expect(result.worker.status).toBe('Succeeded')
-    expect(result.lifecycle.kind).toBe('published')
+    expect(result.lifecycle.kind).toBe(planKind === 'direct-tree' ? 'published' : 'materialization-sealed')
+    expect(plans.preparations).toEqual([])
     expect(readers.blockRequests).toEqual([file.idText])
   })
 

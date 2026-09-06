@@ -112,8 +112,10 @@ import {
   type SelectionProjectionState,
 } from '../../src/transfer/projection'
 import {
+  directZipTarget,
   environment,
   handoffTarget,
+  reviewedDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -252,7 +254,7 @@ describe('v2 joined-share projection authority', () => {
     })
   })
 
-  it('settles a share-wide synthetic root once and offers its workspace ZIP', async () => {
+  it('settles a share-wide synthetic root and recommends its single-object workspace ZIP', async () => {
     const fixture = projectionCatalogFixture()
     const supervisor = { protocolSessionId: 'session-1' }
     const joined = new V2JoinedBrowserShare({
@@ -295,19 +297,35 @@ describe('v2 joined-share projection authority', () => {
           kind: 'tree',
           layoutBasis: { kind: 'synthetic-selection' },
         },
-        workspaceCostObservation: {
-          version: 1,
-          rawBytes: 68n,
-        },
+        metrics: { byteCountLowerBound: 68n },
+        workspaceCostObservation: { version: 1 },
       },
     })
 
+    const cost = final.projection.workspaceCostObservation
+    if (cost === undefined) throw new Error('completed discovery omitted workspace costs')
+    expect(cost.archiveBytes).toBeGreaterThan(final.projection.metrics.byteCountLowerBound)
+    expect(cost.peakOwnedBytes).toBe(cost.archiveBytes + cost.durableMetadataBytes)
     const offered = await offerArtifacts(
       final.projection,
       final.discovery,
-      environment({ targets: [handoffTarget()], workspace: workspaceOffer() }),
+      environment({
+        targets: [directZipTarget(), handoffTarget()],
+        workspace: workspaceOffer(),
+        directZipSupport: reviewedDirectZipSupport(),
+        zipRecommendationPolicy: {
+          version: 1,
+          kind: 'available',
+          workspacePeakBytesThreshold: cost.archiveBytes + cost.durableMetadataBytes,
+          policyDigest: reviewedDirectZipSupport().recommendationPolicyDigest,
+        },
+      }),
     )
     if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
+    expect(offered.zip?.recommendation).toMatchObject({
+      kind: 'recommended', reason: 'workspace-within-reviewed-budget',
+    })
+    expect(offered.zip?.secondary?.route.kind).toBe('direct-resumable-zip')
     expect(offered.primary).toMatchObject({
       suggestedName: 'windshare.zip',
       choice: {

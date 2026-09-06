@@ -73,6 +73,7 @@ export interface ActiveReceiveCoordinatorOptions {
   readonly incidents?: V2ReceiverControllerOptions['incidents']
   readonly onActionError: (error: unknown) => void
   readonly onFailure: (error: unknown) => void
+  readonly onRetainedFileFailure?: () => void
 }
 
 export interface ActiveReceiveAdoption {
@@ -96,6 +97,7 @@ export class ActiveReceiveCoordinator {
   readonly #observability: ActiveReceiveObservability
   readonly #lifecycle: ActiveReceiveLifecycle
   readonly #onFailure: (error: unknown) => void
+  readonly #onRetainedFileFailure: (() => void) | undefined
   #boundary = 0
   #operation: ActiveReceiveOperation | undefined
 
@@ -109,6 +111,7 @@ export class ActiveReceiveCoordinator {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
     this.#onFailure = options.onFailure
+    this.#onRetainedFileFailure = options.onRetainedFileFailure
     this.#lifecycle = new ActiveReceiveLifecycle({
       outputs: this.#outputs,
       observability: this.#observability,
@@ -338,6 +341,14 @@ export class ActiveReceiveCoordinator {
     if (result.abortReason !== undefined && trigger !== undefined) {
       this.#reportTransferFailure(result.abortReason)
     }
+    this.#publishRetainedFileFailures(result)
+  }
+
+  #publishRetainedFileFailures(result: TransferJobResult): void {
+    if (result.lifecycle.kind !== 'resumable-receive' || result.lifecycle.payloadKind !== 'opfs-zip' ||
+        result.worker.fileFailureCount === 0) return
+    // Release after settlement so inventory can read durable file failures under its own authority.
+    this.#onRetainedFileFailure?.()
   }
 
   async #settleTransferAdmissionFailure(

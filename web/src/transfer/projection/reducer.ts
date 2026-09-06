@@ -316,17 +316,14 @@ function snapshotWorkspaceCostObservation(
 ): WorkspaceCostObservationV1 {
   if (input.version !== 1) throw new SelectionProjectionError('workspace cost version is invalid')
   const values = [
-    input.rawBytes,
-    input.packageBytes,
-    input.centralDirectorySpoolBytes,
+    input.archiveBytes,
     input.durableMetadataBytes,
     input.peakOwnedBytes,
   ]
   if (values.some((value) => typeof value !== 'bigint' || value < 0n || value > MAXIMUM_PROJECTION_BYTES)) {
     throw new SelectionProjectionError('workspace cost exceeds its unsigned 64-bit domain')
   }
-  const expectedPeak = input.rawBytes + input.packageBytes +
-    input.centralDirectorySpoolBytes + input.durableMetadataBytes
+  const expectedPeak = input.archiveBytes + input.durableMetadataBytes
   if (expectedPeak > MAXIMUM_PROJECTION_BYTES || input.peakOwnedBytes !== expectedPeak) {
     throw new SelectionProjectionError('workspace cost peak is not checked canonical arithmetic')
   }

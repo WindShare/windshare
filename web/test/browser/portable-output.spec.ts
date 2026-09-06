@@ -83,7 +83,6 @@ test('retries one immutable OPFS package through fresh bounded File handoffs', a
     expect(proof.started.result).toEqual({
       kind: 'download-started',
       suggestedName: 'packaged-retry.bin',
-      retryableUntil: proof.retryableUntil,
     })
     expect(proof.started.urlLeaseEndsAt - proof.started.urlLeaseStartedAt).toBe(60_000)
   }
