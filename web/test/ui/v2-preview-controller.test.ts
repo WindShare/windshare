@@ -24,6 +24,7 @@ import {
   V2ConnectivityRouteAuthority,
 } from '../../src/connectivity/v2-receiver-policy'
 import type { V2FilePreview } from '../../src/preview/v2-preview'
+import { V2AutomaticPhotoDeferredError } from '../../src/preview/automatic-photo'
 import type {
   AuthenticatedDiscoveryRequest,
   AuthenticatedDiscoverySource,
@@ -55,7 +56,8 @@ class FakeJoined {
   }
   readonly recoveryIdentity = 'share.recovery'
   readonly protocolSessionId = identityText(8)
-  readonly selection = new V2SelectionPolicy(true)
+  selection = new V2SelectionPolicy(true)
+  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
   readonly entry: Extract<V2CatalogEntry, { kind: 'file' }>
   readonly events: string[] = []
   readonly previewSignals: AbortSignal[] = []
@@ -111,6 +113,7 @@ class FakeJoined {
   }
 
   subscribePathActivity(): () => void { return () => undefined }
+  subscribeConnection(listener: (value: { kind: 'connected' }) => void): () => void { listener({ kind: 'connected' }); return () => undefined }
 
   subscribeProtocolGeneration(): () => void {
     return () => undefined
@@ -227,6 +230,105 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 afterEach(() => vi.unstubAllGlobals())
+
+describe('automatic photo ownership', () => {
+  it('does not fail catalog publication when speculative connectivity admission races replacement', () => {
+    const joined = new FakeJoined()
+    joined.beginPreviewConnectivity = () => { throw new DOMException('Generation replaced', 'AbortError') }
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+    expect(() => previews.openAutomaticPhoto(joined as unknown as V2JoinedBrowserShare, entry)).not.toThrow()
+    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+  })
+
+  it('yields pending speculation synchronously and leaves an explicit preview usable', async () => {
+    const joined = new FakeJoined()
+    const automaticPhotoPreview = joined.preview.bind(joined)
+    const source = Object.assign(joined, { automaticPhotoPreview }) as unknown as V2JoinedBrowserShare
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+    previews.openAutomaticPhoto(source, entry)
+    expect(snapshot.preview.state).toBe('loading')
+    previews.yieldToReceiving()
+    expect(joined.previewSignals[0]?.aborted).toBe(true)
+    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    previews.open(source, entry)
+    previews.yieldToReceiving()
+    await turn()
+    expect(snapshot.preview.state).toBe('image')
+    expect(joined.previewSignals[1]?.aborted).toBe(false)
+    await previews.close()
+  })
+
+  it('retains decoded automatic photo while receiving and closes it on explicit dismissal', async () => {
+    const joined = new FakeJoined()
+    joined.previewCount = 1
+    const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as V2JoinedBrowserShare
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+    previews.openAutomaticPhoto(source, entry)
+    await turn()
+    expect(snapshot.preview.state).toBe('image')
+    previews.yieldToReceiving()
+    expect(snapshot.preview.state).toBe('image')
+    expect(joined.sessionCloses).toBe(0)
+    previews.cancel()
+    await turn()
+    expect(joined.sessionCloses).toBe(1)
+  })
+
+  it('returns to explicit Preview when automatic header inspection exceeds its budget', async () => {
+    const joined = new FakeJoined()
+    const source = Object.assign(joined, {
+      automaticPhotoPreview: () => Promise.reject(new V2AutomaticPhotoDeferredError('Use Preview for this larger image')),
+    }) as unknown as V2JoinedBrowserShare
+    let snapshot = directPreviewSnapshot()
+    const previews = new V2PreviewController({
+      snapshot: () => snapshot,
+      publish: next => { snapshot = next },
+      publicError: () => 'preview failed',
+    })
+    previews.openAutomaticPhoto(source, entry)
+    await turn()
+    expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+    expect(joined.events).toEqual(['begin-preview-connectivity', 'close-preview-connectivity'])
+  })
+
+  it('bounds stalled speculation and does not activate an oversized candidate', async () => {
+    vi.useFakeTimers()
+    try {
+      const joined = new FakeJoined()
+      const source = Object.assign(joined, { automaticPhotoPreview: joined.preview.bind(joined) }) as unknown as V2JoinedBrowserShare
+      let snapshot = directPreviewSnapshot()
+      const previews = new V2PreviewController({
+        snapshot: () => snapshot,
+        publish: next => { snapshot = next },
+        publicError: () => 'preview failed',
+      })
+      previews.openAutomaticPhoto(source, { ...entry, expectedSize: 5n * 1024n * 1024n })
+      expect(joined.events).toEqual([])
+      previews.openAutomaticPhoto(source, entry)
+      await vi.advanceTimersByTimeAsync(5_000)
+      expect(snapshot.preview).toEqual(EMPTY_V2_PREVIEW)
+      expect(joined.previewSignals[0]?.aborted).toBe(true)
+      await previews.close()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
 
 describe('v2 preview incident ownership', () => {
   it('owns browser media failure independently from a successful preview open', async () => {
@@ -596,7 +698,7 @@ describe('v2 preview click controller boundary', () => {
       navigator: { storage: {} },
       showSaveFilePicker,
     })
-    const joined = new FakeJoined()
+    const joined = new FakeJoined({ ...entry, name: 'photo.bin' })
     const gateway = {
       join: async () => joined as unknown as V2JoinedBrowserShare,
     } as unknown as V2BrowserReceiverGateway
@@ -645,9 +747,9 @@ describe('v2 preview click controller boundary', () => {
     } as unknown as V2BrowserReceiverGateway
     const controller = new V2ReceiverController(gateway, { receive: INERT_TEST_RECEIVE_COMPOSITION })
     controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
-    await waitFor(() => controller.getSnapshot().status.includes('257 entries discovered'))
-    expect(controller.getSnapshot().status).toContain('257 entries discovered')
-    expect(controller.getSnapshot().status).toContain('total still unknown')
+    await waitFor(() => controller.getSnapshot().browse.status.includes('257 entries discovered'))
+    expect(controller.getSnapshot().browse.status).toContain('257 entries discovered')
+    expect(controller.getSnapshot().browse.status).toContain('total still unknown')
     releasePage()
     await turn()
     expect(controller.getSnapshot().phase).toBe('browsing')
@@ -700,6 +802,7 @@ describe('v2 preview click controller boundary', () => {
       protocolSessionId: identityText(8),
       protocolSessionIdentity: identityText(8),
       selection,
+      replaceSelection(this: { selection: V2SelectionPolicy }, next: V2SelectionPolicy) { this.selection = next },
       rootDirectory: () => ({
         id: identity(1), idText: identityText(1), name: 'Shared files', path: [], ancestry: [identityText(1)],
       }),
@@ -716,6 +819,7 @@ describe('v2 preview click controller boundary', () => {
       projectionSource: () => completedProjectionSource(),
       subscribeCatalogScanProgress: () => () => undefined,
       subscribePathActivity: () => () => undefined,
+      subscribeConnection: (listener: (value: { kind: 'connected' }) => void) => { listener({ kind: 'connected' }); return () => undefined },
       subscribeProtocolGeneration: () => () => undefined,
       close: async () => undefined,
     } as unknown as V2JoinedBrowserShare
@@ -879,7 +983,7 @@ function completedProjectionSource(): AuthenticatedDiscoverySource {
   return Object.freeze({
     discover: async function* (request: AuthenticatedDiscoveryRequest) {
       yield* []
-      return Object.freeze({ settledTargets: request.unsettledTargets })
+      return Object.freeze({ kind: 'complete' as const, settledTargets: request.unsettledTargets })
     },
   })
 }

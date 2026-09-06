@@ -1,56 +1,17 @@
-import { useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
-
-import {
-  activationLocksSelection,
-  type PresentedArtifactChoice,
-} from './v2-artifact-presentation'
-import {
-  presentCompatibleNameRepair,
-  presentNewReceiveOperation,
-  type LifecycleActionPresentation,
-} from './v2-lifecycle-presentation'
-import type {
-  V2BrowseRow,
-  V2PreviewSnapshot,
-  V2RetainedReceiveInventorySnapshot,
-} from './v2-model'
-import type {
-  V2RetainedReceiveAction,
-  V2RetainedReceiveOperation,
-} from './v2-receive-runtime'
+import { taskActions } from './experience/task-actions'
+import { downloadScopeLabel, shareConnectionLabel } from './experience/share-presentation'
+import { useState, useSyncExternalStore, type FormEvent } from 'react'
 import type { V2ReceiverController } from './v2-controller'
-import type { V2OutputPresentationSnapshot } from './v2-output'
-import {
-  completionProgressDescription,
-  capacityWaitDescription,
-  discoveryProgressDescription,
-  formatBytes,
-  presentDirectZipProgress,
-} from './v2-progress-presentation'
-import { recoverySummaryDescription } from './resumable-file-set-presentation'
-import { presentReceiverPathActivity } from './connection/path-presentation'
-import { CompatibleNameRepairPanel } from './compatible-name/CompatibleNameRepairPanel'
-
-function SelectionCheckbox(props: {
-  readonly row: V2BrowseRow
-  readonly disabled: boolean
-  readonly onToggle: () => void
-}) {
-  const input = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (input.current !== null) input.current.indeterminate = props.row.selection === 'mixed'
-  }, [props.row.selection])
-  return (
-    <input
-      ref={input}
-      type="checkbox"
-      aria-label={`Select ${props.row.name}`}
-      checked={props.row.selection !== 'unselected'}
-      disabled={props.disabled}
-      onChange={props.onToggle}
-    />
-  )
-}
+import { presentNewReceiveOperation } from './v2-lifecycle-presentation'
+import { presentSavingActions } from './saving'
+import { SavingControls } from './saving/SavingControls'
+import { ShareContent } from './share-content/ShareContent'
+import { MediaPreview, type PreviewActions } from './share-content/MediaPreview'
+import { DetailSheet } from './controls/DetailSheet'
+import { TaskCard, TaskDetails } from './tasks/TaskView'
+import { composeTasks } from './experience/task-composition'
+import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
+import { ConnectionDetails } from './experience/ConnectionDetails'
 
 function KeyForm({ controller }: { readonly controller: V2ReceiverController }) {
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -61,762 +22,110 @@ function KeyForm({ controller }: { readonly controller: V2ReceiverController }) 
     input.value = ''
     controller.submitKey(key)
   }
-  return (
-    <form className="key-form" onSubmit={submit}>
-      <label htmlFor="capability-key">Separate key</label>
-      <p id="key-help">Paste the suite-02 key or the complete WindShare link.</p>
-      <div className="key-entry">
-        <input
-          id="capability-key"
-          name="capability-key"
-          type="password"
-          autoComplete="off"
-          spellCheck={false}
-          aria-describedby="key-help"
-          required
-          autoFocus
-        />
-        <button type="submit">Open share</button>
-      </div>
-    </form>
-  )
-}
-
-function formatTime(seconds: number): string {
-  const whole = Math.max(0, Math.floor(seconds))
-  const minutes = Math.floor(whole / 60)
-  const remainder = whole % 60
-  return `${minutes}:${remainder.toString().padStart(2, '0')}`
-}
-
-function retentionTimestamp(expiresAt: number): Readonly<{
-  label: string
-  dateTime: string | null
-}> {
-  const date = new Date(expiresAt)
-  if (Number.isNaN(date.getTime())) {
-    return Object.freeze({ label: `${expiresAt} ms since Unix epoch`, dateTime: null })
-  }
-  return Object.freeze({ label: date.toLocaleString(), dateTime: date.toISOString() })
-}
-
-import { SourceRevisionFailuresPanel } from './source-replacement/SourceRevisionFailuresPanel'
-
-function retainedOperationCopy(operation: V2RetainedReceiveOperation): Readonly<{
-  title: string
-  description: string
-}> {
-  switch (operation.continuation) {
-    case 'cleanup-incompatible':
-      return Object.freeze({
-        title: 'Saved record uses an older format',
-        description: 'Forget this saved record to clear browser metadata. Downloaded files remain unchanged.',
-      })
-    case 'pending-catch-up':
-      return Object.freeze({
-        title: 'Compatible-name finalization needs catch-up',
-        description: 'WindShare can finish the local sidecar and lifecycle without contacting the sender.',
-      })
-    case 'restoration-available':
-      return Object.freeze({
-        title: 'Compatible-name restoration is ready',
-        description: 'The terminal sidecar was validated; the restoration command is ready to run.',
-      })
-    case 'resume-receive':
-      return Object.freeze({
-        title: 'Receive can continue',
-        description: operation.recoverySummary === undefined
-          ? 'File checkpoints are retained for this task.'
-          : recoverySummaryDescription(operation.recoverySummary),
-      })
-    case 'resume-direct-zip':
-      return Object.freeze({
-        title: 'ZIP can continue',
-        description: 'The unfinished target and its verified resume position are retained.',
-      })
-    case 'reauthorize-direct-zip':
-      return Object.freeze({
-        title: 'Save authorization required',
-        description: 'Continue from a trusted action to authorize the same saved target.',
-      })
-    case 'verify-direct-zip-target':
-      return Object.freeze({
-        title: 'Saved target must be verified',
-        description: 'A slower ownership check is required before the unfinished ZIP can change.',
-      })
-    case 'retry-direct-zip-space':
-      return Object.freeze({
-        title: 'More destination space is required',
-        description: 'Free space, then retry from the last verified resume position.',
-      })
-    case 'resume-package':
-    case 'resume-local-finalization':
-      return Object.freeze({
-        title: 'Ready to finish locally',
-        description: 'All selected content is received. Finish and save without reconnecting to the sender.',
-      })
-    case 'save-artifact':
-      return Object.freeze({
-        title: 'Ready to save',
-        description: 'The packaged result is retained and waiting for a save location.',
-      })
-    case 'retry-download':
-      return Object.freeze({
-        title: 'Ready to download again',
-        description: 'The retained package can start another browser download.',
-      })
-    case 'cleanup-expired':
-      return Object.freeze({
-        title: 'Expired task needs cleanup',
-        description: 'Its retention deadline has ended; only owned storage cleanup is safe.',
-      })
-    case 'retry-cleanup':
-      return Object.freeze({
-        title: 'Cleanup needs another attempt',
-        description: 'Publication finished, but owned temporary storage still needs cleanup.',
-      })
-    case 'needs-attention':
-      return Object.freeze({
-        title: 'Needs attention',
-        description: 'WindShare cannot safely infer target ownership or cleanup completion.',
-      })
-  }
-}
-
-function retainedActionLabel(
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
-): string {
-  switch (action) {
-    case 'save-partial':
-      return 'Save complete files as partial ZIP'
-    case 'catch-up':
-      return 'Finish local restoration catch-up'
-    case 'continue':
-      return operation.recoverySummary === undefined
-        ? 'Continue'
-        : 'Continue and preserve partial files'
-    case 'save':
-      return 'Save'
-    case 'redownload':
-      return operation.recoverySummary === undefined
-        ? 'Download again'
-        : 'Restart incomplete files'
-    case 'discard':
-      return operation.continuation === 'cleanup-incompatible'
-        ? 'Forget saved record'
-        : 'Discard task and delete retained content'
-    case 'delete':
-      if (operation.continuation === 'cleanup-expired') return 'Delete expired data'
-      if (operation.continuation === 'resume-direct-zip' ||
-          operation.continuation === 'reauthorize-direct-zip' ||
-          operation.continuation === 'verify-direct-zip-target' ||
-          operation.continuation === 'retry-direct-zip-space') {
-        return 'Verify ownership and delete unfinished ZIP'
-      }
-      if (operation.continuation === 'retry-cleanup' ||
-          (operation.lifecycle.kind === 'published' &&
-           operation.lifecycle.cleanupState === 'cleanup-pending')) return 'Retry cleanup'
-      return 'Delete retained result'
-  }
-}
-
-function BrowserStorageProtection() {
-  const [protectedStorage, setProtectedStorage] = useState<boolean | undefined>()
-  useEffect(() => {
-    let current = true
-    Promise.resolve(globalThis.navigator?.storage?.persisted?.() ?? false).then(value => {
-      if (current) setProtectedStorage(value)
-    }).catch(() => { if (current) setProtectedStorage(false) })
-    return () => { current = false }
-  }, [])
-  if (protectedStorage === undefined) return <p>Checking browser storage protection…</p>
-  return <p>{protectedStorage === true
-    ? 'Browser storage protection is enabled. Clearing this site’s data still removes retained tasks.'
-    : 'Browser storage protection is unavailable or not granted. The browser may remove retained tasks when space is low; save important files promptly.'}</p>
-}
-
-function RetainedReceivePanel(props: {
-  readonly inventory: V2RetainedReceiveInventorySnapshot
-  readonly controller: V2ReceiverController
-  readonly presentedOperationId: string | null
-}) {
-  if (props.inventory.kind === 'loading') return null
-  if (props.inventory.kind === 'failed') {
-    return (
-      <section className="retained-receive-panel" aria-live="polite">
-        <strong>Stored receive tasks are unavailable</strong>
-        <p>{props.inventory.error}</p>
-      </section>
-    )
-  }
-  if (props.inventory.operations.length === 0) return null
-  return (
-    <section
-      className="retained-receive-panel"
-      aria-labelledby="retained-receive-title"
-      aria-busy={props.inventory.pending !== null}
-    >
-      <strong id="retained-receive-title">Stored receive tasks</strong>
-      <p>Pause keeps received progress. Delete removes this task’s retained data. Saving may use extra disk space for the exported copy.</p>
-      <BrowserStorageProtection />
-      <p>Partial ZIP export saves only complete files from a paused task. It copies them to your chosen location and keeps the original task available to continue.</p>
-      <ul className="retained-receive-list">
-        {props.inventory.operations.filter(operation =>
-          operation.operationId !== props.presentedOperationId || operation.sourceRevisionFailures !== undefined).map((operation) => {
-          const copy = retainedOperationCopy(operation)
-          const retention = operation.expiresAt === undefined
-            ? null
-            : retentionTimestamp(operation.expiresAt)
-          const repair = operation.repairSummary === undefined
-            ? null
-            : presentCompatibleNameRepair({
-                state: operation.lifecycle,
-                summary: operation.repairSummary,
-                context: 'retained-operation',
-              })
-          return (
-            <li key={operation.operationId} className="retained-receive-item">
-              <strong>{copy.title}</strong>
-              <p>{copy.description}</p>
-              {retention !== null && (
-                <small>
-                  {operation.continuation === 'cleanup-expired' ? 'Retention ended at ' : 'Retained until '}
-                  <time {...(retention.dateTime === null ? {} : { dateTime: retention.dateTime })}>
-                    {retention.label}
-                  </time>
-                </small>
-              )}
-              {operation.unavailableReason !== undefined && <p>{operation.unavailableReason}</p>}
-              <SourceRevisionFailuresPanel operation={operation} busy={props.inventory.pending !== null}
-                prepareReplacement={failure => props.controller.prepareReplacementDownload(operation, failure)} />
-              <CompatibleNameRepairPanel
-                repair={repair}
-                {...(operation.actions.includes('catch-up') ? {
-                  catchUp: () => props.controller.performRetainedAction(operation, 'catch-up'),
-                } : {})}
-                busy={props.inventory.pending !== null}
-              />
-              {operation.actions.length > 0 && (
-                <div className="lifecycle-actions">
-                  {operation.actions.filter(action => action !== 'catch-up' || repair === null ||
-                    repair.replacementCount === 0).map((action) => (
-                    <button
-                      key={action}
-                      className={action === 'discard' || action === 'delete' ||
-                          (action === 'redownload' && operation.recoverySummary !== undefined)
-                        ? 'abort-action'
-                        : undefined}
-                      type="button"
-                      disabled={props.inventory.pending !== null}
-                      onClick={() => props.controller.performRetainedAction(operation, action)}
-                    >
-                      {retainedActionLabel(operation, action)}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-    </section>
-  )
-}
-
-function VideoPreview(props: {
-  readonly preview: Extract<V2PreviewSnapshot, { state: 'video' }>
-  readonly controller: V2ReceiverController
-}) {
-  const video = useRef<HTMLVideoElement>(null)
-  const position = () => {
-    if (video.current !== null) video.current.currentTime = props.preview.positionSeconds
-  }
-  const presented = () =>
-    props.controller.previewMediaPresented(props.preview.presentationId)
-  return (
-    <>
-      <video
-        key={props.preview.presentationId}
-        ref={video}
-        className="preview-media"
-        src={props.preview.url}
-        aria-label={`Video preview of ${props.preview.name}`}
-        muted
-        playsInline
-        preload="auto"
-        onLoadedMetadata={position}
-        onLoadedData={() => {
-          position()
-          presented()
-        }}
-        onSeeked={presented}
-        onError={() => props.controller.previewMediaFailed(props.preview.presentationId)}
-      />
-      <label className="preview-seek">
-        <span>
-          {formatTime(props.preview.positionSeconds)} / {formatTime(props.preview.durationSeconds)}
-          {props.preview.seeking ? ' · seeking…' : ''}
-        </span>
-        <input
-          type="range"
-          min={0}
-          max={props.preview.durationSeconds}
-          step={Math.max(0.1, props.preview.durationSeconds / 1_000)}
-          value={props.preview.positionSeconds}
-          aria-label={`Seek ${props.preview.name}`}
-          aria-busy={props.preview.seeking}
-          onChange={(event) => props.controller.seekPreview(event.currentTarget.valueAsNumber)}
-        />
-      </label>
-    </>
-  )
-}
-
-function PreviewPanel(props: {
-  readonly preview: V2PreviewSnapshot
-  readonly controller: V2ReceiverController
-}) {
-  if (props.preview.state === 'idle') return null
-  const imagePreview = props.preview.state === 'image' ? props.preview : null
-  const details = props.preview.state === 'image' || props.preview.state === 'video'
-    ? `${props.preview.width} × ${props.preview.height}`
-    : undefined
-  return (
-    <section className="preview-panel" aria-label="File preview" aria-live="polite">
-      <header>
-        <div>
-          <strong>{props.preview.name}</strong>
-          {details !== undefined && <small>{details}</small>}
-        </div>
-        <button type="button" onClick={() => props.controller.cancelPreview()}>Close preview</button>
-      </header>
-      {props.preview.state === 'loading' && <p>Opening a bounded preview…</p>}
-      {props.preview.state === 'error' && <p role="alert">{props.preview.message}</p>}
-      {imagePreview !== null && (
-        <img
-          className="preview-media"
-          src={imagePreview.url}
-          alt={`Preview of ${imagePreview.name}`}
-          onLoad={() => props.controller.previewMediaPresented(imagePreview.presentationId)}
-          onError={() => props.controller.previewMediaFailed(imagePreview.presentationId)}
-        />
-      )}
-      {props.preview.state === 'video' && (
-        <VideoPreview preview={props.preview} controller={props.controller} />
-      )}
-    </section>
-  )
-}
-
-function ArtifactChoiceButton(props: {
-  readonly presented: PresentedArtifactChoice
-  readonly controller: V2ReceiverController
-  readonly disabled: boolean
-}) {
-  return (
-    <li className="artifact-action-card">
-      <button
-        className={props.presented.importance === 'primary' ? 'primary-action' : undefined}
-        type="button"
-        disabled={props.disabled}
-        onClick={() => props.controller.chooseArtifact(props.presented.choice.choiceId)}
-      >{props.presented.label}</button>
-      <p>{props.presented.description}</p>
-      <small>{props.presented.selectedBytes}</small>
-      <small>{props.presented.resultBytes}</small>
-      {props.presented.packageExplanation !== null && (
-        <small>{props.presented.packageExplanation}</small>
-      )}
-    </li>
-  )
-}
-
-function ArtifactOfferPanel(props: {
-  readonly output: V2OutputPresentationSnapshot
-  readonly controller: V2ReceiverController
-  readonly disabled: boolean
-}) {
-  const activation = props.output.activationPresentation
-  if (activation !== null) {
-    return (
-      <div className="output-guidance">
-        <ul className="artifact-action-list" aria-label="Selected result">
-          <ArtifactChoiceButton
-            presented={activation.choice}
-            controller={props.controller}
-            disabled
-          />
-        </ul>
-        <div role="status">
-          <strong>{activation.title}</strong>
-          <p>{activation.description}</p>
-        </div>
-        {activation.kind === 'retry' && (
-          <button
-            type="button"
-            disabled={props.disabled}
-            onClick={() => props.controller.retryOutputConfirmation()}
-          >
-            {activation.label}
-          </button>
-        )}
-      </div>
-    )
-  }
-  const presentation = props.output.offerPresentation
-  if (presentation === null) {
-    return props.output.projection === null
-      ? <p className="output-guidance">Select content to see the available results.</p>
-      : <p className="output-guidance" role="status">Updating available results…</p>
-  }
-  if (presentation.kind === 'status') {
-    return (
-      <div className="output-guidance" role="status">
-        <strong>{presentation.title}</strong>
-        <p>{presentation.description}</p>
-        {presentation.nativeFallback !== null && <p>{presentation.nativeFallback}</p>}
-      </div>
-    )
-  }
-  if (presentation.kind === 'retry') {
-    return (
-      <div className="output-guidance">
-        <strong>{presentation.title}</strong>
-        <p>{presentation.description}</p>
-        <button
-          type="button"
-          disabled={props.disabled}
-          onClick={() => props.controller.retryOutputConfirmation()}
-        >
-          {presentation.label}
-        </button>
-      </div>
-    )
-  }
-  const zip = presentation.zipMode
-  return (
-    <div className="artifact-modes">
-      {presentation.defaultChoices.length > 0 && (
-        <section aria-labelledby="default-result-mode">
-          <strong id="default-result-mode">Original files and folders</strong>
-          <ul className="artifact-action-list" aria-label="Original result choices">
-            {presentation.defaultChoices.map(choice => (
-              <ArtifactChoiceButton
-                key={choice.choice.choiceId}
-                presented={choice}
-                controller={props.controller}
-                disabled={props.disabled}
-              />
-            ))}
-          </ul>
-        </section>
-      )}
-      {zip !== null && (
-        <details className="zip-result-mode" open={presentation.defaultChoices.length === 0}>
-          <summary>Receive as a ZIP package</summary>
-          <p>{zip.description}</p>
-          {zip.kind === 'routes' ? (
-            <>
-              <p>{zip.recommendation}</p>
-              <ul className="artifact-action-list" aria-label="ZIP save routes">
-                <ArtifactChoiceButton
-                  presented={zip.primary}
-                  controller={props.controller}
-                  disabled={props.disabled}
-                />
-                {zip.secondary !== null && (
-                  <ArtifactChoiceButton
-                    presented={zip.secondary}
-                    controller={props.controller}
-                    disabled={props.disabled}
-                  />
-                )}
-              </ul>
-            </>
-          ) : null}
-        </details>
-      )}
-    </div>
-  )
-}
-
-function LifecycleActionButton(props: {
-  readonly action: LifecycleActionPresentation
-  readonly controller: V2ReceiverController
-}) {
-  return (
-    <button
-      className={props.action.destructive ? 'abort-action' : undefined}
-      type="button"
-      onClick={() => props.controller.performLifecycleAction(props.action.kind)}
-    >{props.action.label}</button>
-  )
-}
-
-function LifecyclePanel(props: {
-  readonly output: V2OutputPresentationSnapshot
-  readonly controller: V2ReceiverController
-}) {
-  const presentation = props.output.lifecyclePresentation
-  if (presentation === null) return null
-  const retention = presentation.retention
-  const timestamp = retention === null
-    ? null
-    : retentionTimestamp(retention.expiresAt)
-  return (
-    <section className={`lifecycle-panel lifecycle-${presentation.tone}`} aria-live="polite">
-      <strong>{presentation.title}</strong>
-      <p>{presentation.description}</p>
-      {presentation.writerOpenPause !== null && (
-        <div className="writer-open-pause">
-          <strong>{presentation.writerOpenPause.title}</strong>
-          <p>{presentation.writerOpenPause.description}</p>
-        </div>
-      )}
-      {retention !== null && timestamp !== null && (
-        <p>
-          {retention.elapsed ? 'Retention ended at ' : 'Available until '}
-          <time {...(timestamp.dateTime === null ? {} : { dateTime: timestamp.dateTime })}>
-            {timestamp.label}
-          </time>
-        </p>
-      )}
-      {presentation.usage !== null && <p>{presentation.usage.label}</p>}
-      {presentation.actions.length > 0 && (
-        <div className="lifecycle-actions">
-          {presentation.actions.map((action) => (
-            <LifecycleActionButton key={action.kind} action={action} controller={props.controller} />
-          ))}
-        </div>
-      )}
-    </section>
-  )
-}
-
-function DirectZipProgressPanel(props: {
-  readonly output: V2OutputPresentationSnapshot
-}) {
-  const progress = props.output.directZipProgress
-  if (progress === null) return null
-  const selected = props.output.chosenSizeProjection?.raw
-  if (selected === undefined) {
-    return (
-      <div className="progress-panel" aria-live="polite">
-        <strong>{formatBytes(progress.receivedSelectedBytes)} received</strong>
-        <p>If interrupted, resume from {formatBytes(progress.safeResumeBytes)}.</p>
-      </div>
-    )
-  }
-  const presented = presentDirectZipProgress({
-    progress,
-    selectedBytes: selected,
-    lifecycle: props.output.lifecycle,
-  })
-  return (
-    <div className="progress-panel" aria-live="polite">
-      <strong>{presented.primary}</strong>
-      <p>{presented.safeResume}</p>
-      {presented.temporarySpace !== null && <p>{presented.temporarySpace}</p>}
-    </div>
-  )
-}
-
-function NewReceiveOperationPanel(props: {
-  readonly output: V2OutputPresentationSnapshot
-  readonly controller: V2ReceiverController
-}) {
-  const presentation = presentNewReceiveOperation({
-    plan: props.output.plan,
-    lifecycle: props.output.lifecycle,
-  })
-  if (presentation === null) return null
-  return (
-    <section className="new-operation-panel" aria-label={presentation.ariaLabel}>
-      <strong>{presentation.title}</strong>
-      <p>{presentation.description}</p>
-      <button type="button" onClick={() => props.controller.startNewReceiveOperation()}>
-        {presentation.actionLabel}
-      </button>
-    </section>
-  )
+  return <form className="key-form" onSubmit={submit}>
+    <label htmlFor="capability-key">Separate key</label>
+    <p id="key-help">Paste the key or the complete WindShare link to open this share.</p>
+    <div className="key-entry"><input id="capability-key" name="capability-key" type="password"
+      autoComplete="off" spellCheck={false} aria-describedby="key-help" required autoFocus />
+      <button className="primary-action" type="submit">Open share</button></div>
+  </form>
 }
 
 export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverController }) {
-  const snapshot = useSyncExternalStore(
-    controller.subscribe,
-    controller.getSnapshot,
-    controller.getSnapshot,
-  )
-  const pathActivity = presentReceiverPathActivity(snapshot.pathActivity)
-  const retainedActionPending = snapshot.retained.pending !== null
-  const receiveLocked = retainedActionPending ||
-    activationLocksSelection(snapshot.output.activation) ||
-    snapshot.output.receiveIntent !== null
-  const selectionLocked = receiveLocked || snapshot.phase !== 'browsing'
-  const alert = useRef<HTMLDivElement>(null)
+  const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
+  const [details, setDetails] = useState<'connection' | 'task' | null>(null)
+  const [downloadsOpen, setDownloadsOpen] = useState(false)
+  const { current, tasks } = composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action),
+    action => controller.activeLifecycleActionAdmission(action))
+  const actions = taskActions(controller, snapshot)
+  const openDetails = (next: 'connection' | 'task' | null) => {
+    controller.recordExperienceIntent(next === null ? 'close-details' : 'open-' + next + '-details')
+    setDetails(next)
+  }
+  const share = snapshot.share
+  const single = share !== null && share.kind !== 'browser' ? share : null
+  const actionLabel = downloadScopeLabel(share, snapshot.draft)
+  const saving = presentSavingActions({
+    offers: snapshot.output.offers,
+    actionLabel,
+    disabledReason: snapshot.draft.empty ? 'Select items to download' : snapshot.startAdmission.reason,
+  })
+  const previewActions: PreviewActions = {
+    close: () => controller.cancelPreview(),
+    seek: seconds => controller.seekPreview(seconds),
+    presented: id => controller.previewMediaPresented(id),
+    failed: id => controller.previewMediaFailed(id),
+  }
+  const newOperation = presentNewReceiveOperation({ plan: snapshot.output.plan, lifecycle: snapshot.output.lifecycle })
+  const matching = current === null && share !== null ? tasks.find(task => snapshot.retained.operations.some(operation =>
+    operation.operationId === task.operationId && operation.shareInstance === share?.shareInstance && task.primaryAction !== null)) : undefined
+  const hasContent = share !== null || snapshot.breadcrumbs.length > 0
 
-  useEffect(() => {
-    if (snapshot.phase === 'failed') alert.current?.focus()
-  }, [snapshot.phase])
-
-  return (
-    <main className="receiver-shell">
-      <header className="brand-header">
-        <a className="brand" href="/" aria-label="WindShare home">
-          <span className="brand-mark" aria-hidden="true">W</span>
-          <span>WindShare</span>
-        </a>
-        <span className="privacy-note">End-to-end encrypted · suite 02</span>
-      </header>
-
-      <section className="receiver-card" aria-labelledby="receiver-title">
-        <div className="card-heading">
-          <p className="eyebrow">Receive securely</p>
-          <h1 id="receiver-title">Browse and save shared files</h1>
-          <p className="intro">
-            Directory pages are authenticated on demand. Content opens only after an explicit
-            preview or artifact action.
-          </p>
-        </div>
-
-        <p className="status-line" role="status" aria-live="polite">
-          <span className={`status-dot status-${snapshot.phase}`} aria-hidden="true" />
-          {snapshot.status}
-        </p>
-
-        {pathActivity !== null && <p className="connection-activity" role="status">{pathActivity}</p>}
-        {snapshot.error !== null && (
-          <div ref={alert} className="error-banner" role="alert" tabIndex={-1}>
-            {snapshot.error}
-            {snapshot.directoryRetryable && (
-              <button type="button" onClick={() => controller.retryDirectory()}>Retry directory</button>
-            )}
-          </div>
-        )}
-
-        <RetainedReceivePanel
-          inventory={snapshot.retained}
-          controller={controller}
-          presentedOperationId={snapshot.output.lifecycle?.operationId ?? null}
-        />
-
-        {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
-
-        {snapshot.breadcrumbs.length > 0 && (
-          <div className="download-layout">
-            <section className="selection-panel" aria-label="Shared files">
-              <nav className="selection-pagination" aria-label="Current directory">
-                {snapshot.breadcrumbs.map((crumb, index) => (
-                  <button
-                    type="button"
-                    key={crumb.id}
-                    disabled={index === snapshot.breadcrumbs.length - 1 || receiveLocked}
-                    onClick={() => controller.openBreadcrumb(index)}
-                  >{crumb.name}</button>
-                ))}
-              </nav>
-              <p className="selection-summary">
-                {snapshot.selectedVisibleFiles} selected file(s) on this page · {formatBytes(snapshot.selectedVisibleBytes)}
-              </p>
-              <ul className="selection-list">
-                {snapshot.rows.map((row) => (
-                  <li key={row.id}>
-                    <div className="selection-row">
-                      <SelectionCheckbox
-                        row={row}
-                        disabled={selectionLocked}
-                        onToggle={() => controller.toggleSelection(row.id)}
-                      />
-                      <span className={`entry-icon entry-icon-${row.kind}`} aria-hidden="true" />
-                      <span className="entry-name">{row.name}</span>
-                      <span className="entry-kind">
-                        {row.kind === 'file' && row.expectedSize !== undefined
-                          ? formatBytes(row.expectedSize)
-                          : 'Folder'}
-                      </span>
-                      {row.kind === 'directory' && (
-                        <button
-                          type="button"
-                          disabled={receiveLocked}
-                          onClick={() => controller.openDirectory(row.id)}
-                        >Open</button>
-                      )}
-                      {row.kind === 'file' && (
-                        <button
-                          className="preview-action"
-                          type="button"
-                          onClick={() => controller.previewFile(row.id)}
-                        >Preview</button>
-                      )}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <PreviewPanel preview={snapshot.preview} controller={controller} />
-              {snapshot.pageCount > 1 && (
-                <nav className="selection-pagination" aria-label="Directory pages">
-                  <button
-                    type="button"
-                    disabled={snapshot.pageIndex === 0 || receiveLocked}
-                    onClick={() => controller.showPage(snapshot.pageIndex - 1)}
-                  >Previous</button>
-                  <span>Page {snapshot.pageIndex + 1} of {snapshot.pageCount}</span>
-                  <button
-                    type="button"
-                    disabled={snapshot.pageIndex + 1 >= snapshot.pageCount || receiveLocked}
-                    onClick={() => controller.showPage(snapshot.pageIndex + 1)}
-                  >Next</button>
-                </nav>
-              )}
-            </section>
-
-            <aside className="save-panel" aria-label="Result and receive status">
-              <h2>Receive as</h2>
-              <ArtifactOfferPanel
-                output={snapshot.output}
-                controller={controller}
-                disabled={retainedActionPending}
-              />
-              <LifecyclePanel output={snapshot.output} controller={controller} />
-              <NewReceiveOperationPanel output={snapshot.output} controller={controller} />
-              <CompatibleNameRepairPanel
-                repair={snapshot.output.lifecyclePresentation?.compatibleNameRepair ?? null}
-                catchUp={() => controller.catchUpStoppedCompatibleNames()}
-                busy={retainedActionPending}
-              />
-              {snapshot.output.transferResultPresentation !== null && (
-                <div className={`transfer-result transfer-result-${snapshot.output.transferResultPresentation.tone}`}>
-                  <strong>{snapshot.output.transferResultPresentation.title}</strong>
-                  {snapshot.output.transferResultPresentation.lines.map((line) => (
-                    <p key={line}>{line}</p>
-                  ))}
-                </div>
-              )}
-              <DirectZipProgressPanel output={snapshot.output} />
-              {snapshot.output.directZipProgress === null && snapshot.progress.transferJobId.length > 0 && (
-                <div className="progress-panel">
-                  <strong>{completionProgressDescription(snapshot.progress)}</strong>
-                  <p>{discoveryProgressDescription(snapshot.progress)}</p>
-                  {snapshot.progress.fileErrors > 0 && snapshot.output.transferResultPresentation === null && (
-                    <p>{snapshot.progress.fileErrors} file error(s)</p>
-                  )}
-                  {snapshot.progress.selectionErrors > 0 && (
-                    <p>{snapshot.progress.selectionErrors} selected target(s) unavailable</p>
-                  )}
-                </div>
-              )}
-              {capacityWaitDescription(snapshot.progress) !== null && (
-                <p className="capacity-wait-notice" role="status" aria-live="polite">
-                  {capacityWaitDescription(snapshot.progress)}
-                </p>
-              )}
-            </aside>
-          </div>
-        )}
-      </section>
-
-      <footer>Secrets are removed from the address bar before any network or storage work.</footer>
-    </main>
-  )
+  return <main className="receiver-shell">
+    <header className="receiver-header">
+      <a className="brand" href="/" aria-label="WindShare home"><span className="brand-mark" aria-hidden="true">W</span>WindShare</a>
+      <div className="receiver-header-actions">
+        <button className="encryption-note" type="button" onClick={() => openDetails('connection')}>Encrypted</button>
+        <TaskDownloads tasks={tasks} snapshot={snapshot} controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
+      </div>
+    </header>
+    <div className="share-workspace">
+      <div className="share-heading">
+        <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
+        <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={() => openDetails('connection')}>
+          {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
+        </button>
+      </div>
+      {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error}</div>}
+      {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
+      {!hasContent && snapshot.phase === 'joining' && <p className="share-loading" role="status">Connecting to the sender…</p>}
+      {hasContent && <ShareContent share={share} preview={snapshot.preview} previewActions={previewActions} explorer={{ rows: snapshot.rows, breadcrumbs: snapshot.breadcrumbs,
+        pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
+        browse: snapshot.browse, draft: snapshot.draft, actions: {
+          openDirectory: id => controller.openDirectory(id), openBreadcrumb: index => controller.openBreadcrumb(index),
+          showPage: page => controller.showPage(page), preview: id => controller.previewFile(id),
+          toggle: id => controller.toggleSelection(id), enterSelection: () => controller.enterSelectionMode(),
+          exitSelection: () => controller.exitSelectionMode(), selectPage: () => controller.selectPage(),
+          clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
+        } }} />}
+      {hasContent && <SavingControls model={saving} activation={snapshot.output.activationPresentation}
+        actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId)}
+        retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
+        onIntent={action => controller.recordExperienceIntent(action)} />}
+      {matching !== undefined && <div className="continuation-suggestion">
+        <span>Continue {matching.objectLabel}</span>
+        <button type="button" onClick={() => { if (matching.primaryAction !== null) actions.perform(matching.primaryAction) }}>
+          {matching.primaryAction?.label}
+        </button>
+      </div>}
+      {current !== null && <TaskCard task={current} actions={actions} onDetails={() => openDetails('task')}
+        busy={snapshot.retained.pending !== null} />}
+      {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>Start another download</button></p>}
+      {newOperation !== null && <details className="new-operation">
+        <summary>{newOperation.title}</summary><p>{newOperation.description}</p>
+        <button type="button" onClick={() => controller.startNewReceiveOperation()}>{newOperation.actionLabel}</button>
+      </details>}
+    </div>
+    {single === null && snapshot.preview.state !== 'idle' && <DetailSheet title={snapshot.preview.name}
+      onClose={previewActions.close} className="preview-sheet">
+      <MediaPreview preview={snapshot.preview} actions={previewActions} />
+    </DetailSheet>}
+    {details === 'connection' && <DetailSheet title="Encryption and connection" onClose={() => openDetails(null)}>
+      <ConnectionDetails status={shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)} path={snapshot.pathActivity} />
+    </DetailSheet>}
+    {details === 'task' && current !== null && <DetailSheet title={current.objectLabel} onClose={() => openDetails(null)}>
+      <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
+        <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
+        {controller.canRetainCurrentOperation && <div className="retained-handoff">
+          <p>Keep this paused task in Downloads to continue later or save its complete files as a partial ZIP.</p>
+          <button type="button" onClick={async () => {
+            if (await controller.retainCurrentOperation()) {
+              openDetails(null)
+              setDownloadsOpen(true)
+            }
+          }}>Keep progress in Downloads</button>
+        </div>}
+      </TaskDetails>
+    </DetailSheet>}
+  </main>
 }

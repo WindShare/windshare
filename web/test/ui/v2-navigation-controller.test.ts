@@ -43,7 +43,8 @@ class NavigableJoinedShare {
   }
   readonly recoveryIdentity = 'navigation-share'
   readonly protocolSessionId = identityText(8)
-  readonly selection = new V2SelectionPolicy(true)
+  selection = new V2SelectionPolicy(true)
+  replaceSelection(selection: V2SelectionPolicy): void { this.selection = selection }
   readonly requests: Array<{
     readonly directory: V2BrowseDirectory
     readonly signal: AbortSignal | undefined
@@ -88,6 +89,11 @@ class NavigableJoinedShare {
     return this.protocolSessionId
   }
 
+  subscribeConnection(listener: (snapshot: { kind: 'connected' }) => void): () => void {
+    listener({ kind: 'connected' })
+    return () => undefined
+  }
+
   subscribePathActivity(): () => void { return () => undefined }
 
   subscribeProtocolGeneration(): () => void {
@@ -98,7 +104,7 @@ class NavigableJoinedShare {
     return Object.freeze({
       discover: async function* (request: AuthenticatedDiscoveryRequest) {
         yield* []
-        return Object.freeze({ settledTargets: request.unsettledTargets })
+        return Object.freeze({ kind: 'complete' as const, settledTargets: request.unsettledTargets })
       },
     })
   }
@@ -142,7 +148,8 @@ describe('v2 receiver child navigation publication', () => {
     await turns()
     expect(controller.getSnapshot()).toMatchObject({
       phase: 'browsing',
-      error: 'listing failed',
+      error: null,
+      browse: { kind: 'failed', error: 'listing failed' },
     })
     expect(controller.getSnapshot().breadcrumbs.map((item) => item.name)).toEqual(['Shared files'])
     expect(controller.getSnapshot().rows.map((item) => item.id)).toEqual(['first', 'second'])
@@ -178,7 +185,7 @@ describe('browser navigation incident ownership', () => {
       snapshot: () => snapshot,
       publish: (next) => {
         snapshot = next
-        if (next.error !== null) publicationOrder.push('visible-failure')
+        if (next.browse.error !== null) publicationOrder.push('visible-failure')
       },
       publicError: (error) => error instanceof Error ? error.message : 'failed',
       incidents,
@@ -236,7 +243,7 @@ describe('browser navigation incident ownership', () => {
     joined.requests[0]?.result.reject(new Error('listing failed'))
     await loading
 
-    expect(snapshot.error).toBe('listing failed')
+    expect(snapshot.browse.error).toBe('listing failed')
     expect(incidents.decisions[0]?.decision).toMatchObject({
       kind: 'incident',
       boundary: 'browse',

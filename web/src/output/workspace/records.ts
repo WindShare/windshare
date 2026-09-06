@@ -23,6 +23,7 @@ import {
   type CanonicalBytes,
 } from './canonical'
 import { CanonicalRecordReader } from './canonical-reader'
+import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from './operation-display'
 
 export const RECEIVE_OPERATION_SCHEMA_VERSION = 2 as const
 export const MANIFEST_PAGE_ENTRY_LIMIT = 128
@@ -59,6 +60,7 @@ export type OperationReopenKey =
 export interface ReceiveOperationV2 {
   readonly schemaVersion: typeof RECEIVE_OPERATION_SCHEMA_VERSION
   readonly operationId: string
+  readonly display?: ReceiveOperationDisplay
   readonly receiveIntent: ReceiveIntent
   readonly receiveIntentDigest: string
   readonly planBindingDigest: string
@@ -77,6 +79,7 @@ export interface PersistedReceiveRecord {
   readonly kind: ReceiveRecordKind
   readonly canonicalBytes: CanonicalBytes
   readonly digest: string
+  readonly display?: ReceiveOperationDisplay
   readonly reopenKey?: string
   readonly state?: number
   readonly expiresAt?: number
@@ -134,6 +137,7 @@ export async function createReceiveOperationV2(input: {
   readonly receiveIntent: ReceiveIntent
   readonly preClickRanking: readonly ArtifactChoiceID[]
   readonly reopenKey?: OperationReopenKey
+  readonly display?: ReceiveOperationDisplay
 }): Promise<ReceiveOperationV2> {
   const receiveIntent = await validateReceiveIntent(input.receiveIntent)
   const operationId = snapshotIdentity(receiveIntent.operationId, 16, 'operation ID')
@@ -147,6 +151,7 @@ export async function createReceiveOperationV2(input: {
     32,
     'plan binding digest',
   )
+  const display = snapshotReceiveOperationDisplay(input.display)
   const reopenKey = snapshotReopenKey(input.reopenKey ?? { kind: 'none' })
   const choiceIdentity = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
   const choiceId = choiceIdentity.id
@@ -171,6 +176,7 @@ export async function createReceiveOperationV2(input: {
     choiceId,
     preClickRanking,
     reopenKey,
+    ...(display === undefined ? {} : { display }),
     canonicalBytes,
     digest: await canonicalDigest(canonicalBytes),
   })
@@ -190,6 +196,7 @@ export function storedReceiveOperationRecord(
     canonicalBytes: snapshotCanonicalBytes(operation.canonicalBytes),
     digest: snapshotIdentity(operation.digest, 32, 'operation record digest'),
     ...(reopenKey === undefined ? {} : { reopenKey }),
+    ...(operation.display === undefined ? {} : { display: operation.display }),
   })
 }
 
@@ -225,7 +232,8 @@ export async function decodeStoredReceiveOperation(
     throw new TypeError('decoded receive intent changed its canonical bytes')
   }
   const choiceIdentity = await decodeArtifactChoiceIdentity(choiceIdentityBytes)
-  const rebuilt = await createReceiveOperationV2({ receiveIntent, preClickRanking, reopenKey })
+  const rebuilt = await createReceiveOperationV2({ receiveIntent, preClickRanking, reopenKey,
+    ...(record.display === undefined ? {} : { display: record.display }) })
   const projection = storedReceiveOperationRecord(rebuilt)
   if (rebuilt.operationId !== operationId ||
       rebuilt.receiveIntentDigest !== receiveIntentDigest ||
@@ -693,6 +701,9 @@ function assertExactPersistedRecordShape(record: PersistedReceiveRecord): void {
     'canonicalBytes',
     'digest',
   ]
+  if (record.kind === RECEIVE_RECORD_OPERATION && Object.hasOwn(record, 'display')) {
+    expected.push('display')
+  }
   if (record.kind === RECEIVE_RECORD_OPERATION && record.reopenKey !== undefined) {
     expected.push('reopenKey')
   }

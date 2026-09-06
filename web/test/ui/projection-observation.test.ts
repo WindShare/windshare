@@ -70,7 +70,7 @@ describe('selection projection runtime', () => {
           const iterator = retrySource.discover(request)
           while (true) {
             const step = await iterator.next()
-            if (step.done) return Object.freeze({})
+            if (step.done) return Object.freeze({ kind: 'complete' as const })
             yield step.value
           }
         },

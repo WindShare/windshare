@@ -130,6 +130,21 @@ export class ActiveReceiveCoordinator {
     return this.#operation !== undefined
   }
 
+  get canRetainForLocalOutput(): boolean {
+    const output = this.#outputs.getSnapshot()
+    return this.#operation !== undefined && !this.#lifecycle.pending &&
+      output.lifecycle?.kind === 'resumable-receive' && output.plan?.kind === 'workspace-then-publish' &&
+      output.resolvedArtifact?.kind === 'zip-archive'
+  }
+
+  get canRelease(): boolean {
+    const state = this.#outputs.getSnapshot().lifecycle
+    return this.#operation !== undefined && !this.#lifecycle.pending && state !== null &&
+      (state.kind === 'published' || state.kind === 'partial-directory' ||
+       state.kind === 'restart-required' || state.kind === 'discarded' ||
+       state.kind === 'expired' || state.kind === 'needs-attention' || state.kind === 'download-started')
+  }
+
   ownsRuntime(runtime: V2BoundReceiveOperation): boolean {
     return this.#operation?.runtime === runtime
   }

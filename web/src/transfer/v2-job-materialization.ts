@@ -90,6 +90,7 @@ interface MaterializationExecutionPort {
   recordPreparation(evidence: ExactPreparationEvidence): void
   requireBound(): PlanExecution
   materializationStarted(): void
+  finishingStarted(): void
   finalizeDirectories(): Promise<void>
   transferPreparedFiles(files: readonly PendingFile[]): Promise<void>
   completeWorkers(measure: SelectionMeasure): Promise<TransferJobResult>
@@ -155,6 +156,7 @@ export class TransferJobMaterialization {
     const root = await this.#context.root.direct()
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
     const measure = this.#context.discovery.finish()
+    this.#context.execution.finishingStarted()
     await this.#context.execution.finalizeDirectories()
     return this.#context.execution.completeWorkers(measure)
   }
@@ -169,6 +171,7 @@ export class TransferJobMaterialization {
     const root = this.#context.root.authenticated(await this.#context.root.load())
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
     const measure = this.#context.discovery.finish()
+    this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
 
@@ -197,6 +200,7 @@ export class TransferJobMaterialization {
     const root = this.#context.root.authenticated(committed)
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
     const measure = this.#context.discovery.finish()
+    this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
 
@@ -216,6 +220,7 @@ export class TransferJobMaterialization {
     const root = await this.#context.root.direct()
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
     const measure = this.#context.discovery.finish()
+    this.#context.execution.finishingStarted()
     await this.#context.execution.finalizeDirectories()
     if (measure.discovery === 'complete') await execution.discoveryComplete(this.#context.signal)
     return this.#context.execution.completeWorkers(measure)
@@ -270,6 +275,7 @@ export class TransferJobMaterialization {
     this.#context.execution.requireBound()
     this.#context.execution.materializationStarted()
     await this.#context.execution.transferPreparedFiles(collector.pendingFiles())
+    this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
 }

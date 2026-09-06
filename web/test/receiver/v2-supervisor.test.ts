@@ -966,9 +966,12 @@ it.each(['all-stopped', 'descriptor-conflict'])('ends fresh recovery for %s auth
     descriptor: descriptor(), initial: core(session, new TrackedRelay(1)), sessionFactory: factory,
     policy: 'relay-only', clock: { now: () => 0, sleep: async () => undefined },
   })
+  const connections: string[] = []
+  supervisor.connection.subscribe(snapshot => connections.push(snapshot.kind))
   const outcome = supervisor.waitForGenerationAfter(1).then(() => 'recovered', () => 'terminal')
   session.detach(1)
   expect(await outcome).toBe('terminal')
+  expect(connections).toEqual(['connected', 'reconnecting', 'ended'])
   expect(factory.connectFreshCalls).toBe(1)
   await supervisor.close()
 })

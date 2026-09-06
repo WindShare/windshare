@@ -1,3 +1,4 @@
+import { receiveOperationDisplayFields } from '../../output/workspace/operation-display'
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
 import { IndexedDbCompatibleNameLedger } from '../../output/browser/indexeddb-compatible-name-ledger'
 import {
@@ -217,18 +218,18 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
       requireBoundCandidate(bound, input.action, reserved.reservation.digest)
 
       const lifecycle = initialReceiveLifecycleState({
-        operationId: bound.intent.operationId,
-        receiveIntentDigest: bound.intent.digest,
+        operationId: bound.intent.operationId, receiveIntentDigest: bound.intent.digest,
       })
+      const displayFields = receiveOperationDisplayFields(input.display, authority.parent.name)
       const preparedBinding = await prepareFSAOperationBindingTransition({
         repository,
         intent: bound.intent,
         parent: authority.parent,
         preClickRanking: this.#preClickRanking,
+        ...displayFields,
       })
       const preparedSettlement = await prepareFileSystemAccessSettlement(bound.intent)
       this.#requireCommitting(input.signal)
-
       const lease = await this.#dependencies.acquireOperationLease(
         repository,
         bound.intent.operationId,
@@ -289,7 +290,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
           signal: input.signal,
         })
         this.#state = 'transferred'
-        return Object.freeze({ kind: 'bound-operation', operation })
+        return Object.freeze({ kind: 'bound-operation', operation, ...displayFields })
       } catch (cause) {
         observePerformance(attemptDiagnostics?.performance, summary => summary.complete())
         this.#state = 'transferred'

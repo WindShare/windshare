@@ -151,7 +151,16 @@ export type V2ControllerWorkflowTraceEvent =
       lifecycleKind?: ReceiveLifecycleState['kind']
     }>
 
+export type V2ReceiverExperienceTraceEvent =
+  | Readonly<{ name: 'receiver_experience'; transition: 'task'; operationId: string; generation: bigint;
+      stage: string; reason: string; attention: boolean; completeness: string; publication: string }>
+  | Readonly<{ name: 'receiver_experience'; transition: 'saving'; projectionEpoch: bigint | null;
+      choiceId: string | null; outcome: string | null; reason: string }>
+  | Readonly<{ name: 'receiver_experience'; transition: 'intent'; action: string;
+      operationId: string | null; generation: bigint }>
+
 export type V2ReceiverTraceEvent =
+  | V2ReceiverExperienceTraceEvent
   | ProjectionTraceEvent
   | TransferTraceEvent
   | V2AuthorityOfferTraceEvent

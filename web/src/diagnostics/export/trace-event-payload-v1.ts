@@ -16,6 +16,7 @@ import {
   validateContinuation,
   validateDirectZipMilestone,
   validateJoin,
+  validateReceiverExperience,
   validateLifecycleAction,
   validateOutputReservation,
   validateOutputWrite,
@@ -44,6 +45,7 @@ export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>
   const payload = recordValue(value, `${eventName} payload`)
   switch (eventName) {
     case 'join_transition': validateJoin(payload); return
+    case 'receiver_experience': validateReceiverExperience(payload); return
     case 'browse_transition': validateBrowse(payload); return
     case 'preview_transition': validatePreview(payload); return
     case 'projection_transition': validateProjection(payload); return

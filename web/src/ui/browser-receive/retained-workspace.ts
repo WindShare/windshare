@@ -17,8 +17,7 @@ import type { V2BoundReceiveOperation, V2RetainedReceiveAction } from '../v2-rec
 import type { BrowserReceiveWindow } from './contracts'
 import { WorkspaceReceiveOperation } from './workspace-operation'
 import { handoffRetainedWorkspacePackage } from './workspace-publication'
-import { diagnosticsOption } from './retained-diagnostics'
-import { bindRuntimeOutputFailures } from './retained'
+import { bindRuntimeOutputFailures, diagnosticsOption } from './retained-diagnostics'
 
 type RetainedContinuationAction = Extract<V2RetainedReceiveAction, 'save' | 'redownload'>
 type WorkspaceReceiveContinuation = Extract<

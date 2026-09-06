@@ -441,13 +441,14 @@ function waitUntilAborted(signal: AbortSignal): Promise<void> {
   })
 }
 
-async function commitProductionChoice(
+export async function commitProductionChoice(
   composition: V2ReceiveCompositionPort,
   selection: SelectionSpec,
   projection: SelectionProjectionV1,
   environment: EnvironmentOffers,
   offered: OfferedArtifactChoice,
   signal: AbortSignal,
+  display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay,
 ): Promise<V2BoundReceiveOperation> {
   const resolution = await reconcileArtifactChoice({
     choice: offered.choice,
@@ -461,7 +462,7 @@ async function commitProductionChoice(
   if (resolution.kind !== 'resolved') {
     throw new TypeError('product workspace choice did not resolve')
   }
-  const authority = composition.startArtifactAuthority(offered, [offered.choice.choiceId])
+  const authority = composition.startArtifactAuthority(offered, [offered.choice.choiceId], undefined, display)
   await authority.ready
   const committed = await authority.commit({
     action: resolution.action,
@@ -484,7 +485,7 @@ async function commitProductionChoice(
   throw committed.cause
 }
 
-function productZipProjection(
+export function productZipProjection(
   selectionDigest: string,
   directoryId: string,
 ): SelectionProjectionV1 {

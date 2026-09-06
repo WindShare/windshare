@@ -38,6 +38,7 @@ export interface BrowserNavigationCoordinatorOptions {
   readonly snapshot: () => V2ReceiverSnapshot
   readonly publish: (snapshot: V2ReceiverSnapshot) => void
   readonly publicError: (error: unknown) => string
+  readonly onPageCommitted?: (page: V2BrowsePage) => void
   readonly incidents?: BrowserNavigationIncidentPort
 }
 
@@ -100,9 +101,8 @@ export class BrowserNavigationCoordinator {
         this.#recordFailure(attempt, false, error)
         this.#options.publish({
           ...this.#options.snapshot(),
-          phase: 'browsing',
-          status: 'This directory cannot be opened safely.',
-          error: this.#options.publicError(error),
+          browse: { kind: 'failed', status: 'This directory cannot be opened safely.',
+            error: this.#options.publicError(error) },
           directoryRetryable: false,
         })
       } finally {
@@ -169,6 +169,7 @@ export class BrowserNavigationCoordinator {
       // Route, page, rows, and breadcrumbs publish atomically so stale pages stay invisible.
       this.#directories = [...candidateRoute]
       this.#page = page
+      this.#options.onPageCommitted?.(page)
       this.#retryableBrowse = undefined
       this.publishPage(page)
       this.#exclude(navigation, 'success')
@@ -227,9 +228,7 @@ export class BrowserNavigationCoordinator {
     try {
       this.#options.publish({
         ...this.#options.snapshot(),
-        phase: 'joining',
-        status: `Loading ${directory.name}…`,
-        error: null,
+        browse: { kind: 'loading', status: `Loading ${directory.name}…`, error: null },
         directoryRetryable: false,
       })
     } catch (error) {
@@ -287,8 +286,8 @@ export class BrowserNavigationCoordinator {
     this.#options.publish({
       ...this.#options.snapshot(),
       phase: 'browsing',
-      status: 'This directory could not be listed.',
-      error: this.#options.publicError(error),
+      browse: { kind: 'failed', status: 'This directory could not be listed.',
+        error: this.#options.publicError(error) },
       breadcrumbs: breadcrumbsFor(this.#directories),
       directoryRetryable: retryable,
     })
@@ -319,7 +318,8 @@ export class BrowserNavigationCoordinator {
     }
     this.#options.publish({
       ...this.#options.snapshot(),
-      status: `Scanning ${directory.name}… ${progress.discoveredEntries} entries discovered; total still unknown.`,
+      browse: { kind: 'loading', error: null,
+        status: `Scanning ${directory.name}… ${progress.discoveredEntries} entries discovered; total still unknown.` },
     })
   }
 
