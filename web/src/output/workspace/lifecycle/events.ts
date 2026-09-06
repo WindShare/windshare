@@ -63,7 +63,6 @@ export type LifecycleEvent =
       completedFileCount: bigint
       completedBytes: bigint
       selectionFacts: RecoverySelectionFacts
-      expiresAt: number
       partialReceiptDigest?: string
     }>
   | Readonly<LifecycleEventAuthority & { kind: 'receive-authority-reacquired' }>

@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
+import { canonicalReceiveLifecycleStateBytes, decodeReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import { reduceReceiveLifecycle } from '../../../src/output/workspace/lifecycle'
 import {
-  STABLE_RETENTION_MILLISECONDS,
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
 } from '../../../src/output/workspace/state'
 
+const OBSERVATION_INTERVAL = 86_400_000
 const NOW = 1_000_000
 const LEASE = identity(16, 7)
 const SELECTION_FACTS = Object.freeze({
@@ -19,7 +20,23 @@ const SELECTION_FACTS = Object.freeze({
 })
 
 describe('receive lifecycle reducer', () => {
-  it('starts the 24-hour clock only after verified pause and clears it on resume', () => {
+  it('resumes native ZIP checkpoints only in their workspace plan', () => {
+    const paused = nextReceiveLifecycleState(initialReceiveLifecycleState({
+      operationId: identity(16, 1), receiveIntentDigest: identity(32, 2),
+    }), {
+      kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: identity(32, 9),
+      checkpointGeneration: 4n, completedFileCount: 1n, completedBytes: 12n,
+      discoveryComplete: false, occupiedBytes: 100n, pauseReason: 'storage-pressure',
+    })
+    expect(decodeReceiveLifecycleState(canonicalReceiveLifecycleStateBytes(paused))).toEqual(paused)
+    const event = { kind: 'resume-started' as const, expectedGeneration: paused.generation, leaseId: LEASE }
+    expect(reduceReceiveLifecycle(paused, event, context('workspace-then-publish', NOW)).state)
+      .toMatchObject({ kind: 'receiving', activeLeaseId: LEASE })
+    expect(() => reduceReceiveLifecycle(paused, event, context('direct-tree', NOW)))
+      .toThrow('plan cannot resume')
+  })
+
+  it('retains verified pause evidence without an automatic deadline', () => {
     const initial = initialReceiveLifecycleState({
       operationId: identity(16, 1),
       receiveIntentDigest: identity(32, 2),
@@ -42,7 +59,6 @@ describe('receive lifecycle reducer', () => {
 
     expect(stable).toEqual(expect.objectContaining({
       kind: 'resumable-receive',
-      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }))
 
     const stale = reduceReceiveLifecycle(stable, {
@@ -70,14 +86,12 @@ describe('receive lifecycle reducer', () => {
       completedFileCount: 1n,
       completedBytes: 12n,
       selectionFacts: SELECTION_FACTS,
-      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }, context('direct-tree', NOW + 600)).state
     expect(restored).toEqual(expect.objectContaining({
       kind: 'resumable-receive',
       completedFileCount: 1n,
       completedBytes: 12n,
       selectionFacts: SELECTION_FACTS,
-      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }))
   })
 
@@ -102,12 +116,10 @@ describe('receive lifecycle reducer', () => {
     }))
   })
 
-  it('preserves the original workspace handoff deadline into DownloadStarted', () => {
-    const deadline = NOW + STABLE_RETENTION_MILLISECONDS
+  it('retains artifact identity independently of browser save attempts', () => {
     const waiting = state({
       kind: 'waiting-to-save',
       packageDigest: identity(32, 4),
-      expiresAt: deadline,
     })
     const handingOff = reduceReceiveLifecycle(waiting, {
       kind: 'handoff-requested',
@@ -122,8 +134,9 @@ describe('receive lifecycle reducer', () => {
       leaseId: LEASE,
     }, context('workspace-then-publish', NOW + 200)).state
 
-    expect(handingOff).toEqual(expect.objectContaining({ retainedDeadline: deadline }))
-    expect(downloaded).toEqual(expect.objectContaining({ retryableUntil: deadline }))
+    expect(handingOff).not.toHaveProperty('retainedDeadline')
+    expect(downloaded).toMatchObject({ kind: 'download-started', packageDigest: waiting.kind === 'waiting-to-save' ? waiting.packageDigest : '' })
+    expect(downloaded).not.toHaveProperty('retryableUntil')
   })
 
   it('keeps Stop exclusive to DirectTree', () => {
@@ -172,52 +185,23 @@ describe('receive lifecycle reducer', () => {
     ).state.kind).toBe('preparing')
   })
 
-  it('expires at the exact stable deadline and never during inspection before it', () => {
-    const deadline = NOW + STABLE_RETENTION_MILLISECONDS
-    const waiting = state({
-      kind: 'waiting-to-save',
-      packageDigest: identity(32, 4),
-      expiresAt: deadline,
-    })
-    const event = {
-      kind: 'expiry-observed' as const,
+  it('ignores elapsed time for artifacts whose saving is unconfirmed', () => {
+    const waiting = state({ kind: 'waiting-to-save', packageDigest: identity(32, 4) })
+    const result = reduceReceiveLifecycle(waiting, {
+      kind: 'expiry-observed',
       expectedGeneration: waiting.generation,
       leaseId: LEASE,
       expiryReceiptDigest: identity(32, 5),
-      cleanupState: 'cleanup-pending' as const,
-    }
-
-    expect(reduceReceiveLifecycle(
-      waiting,
-      event,
-      context('workspace-then-publish', deadline - 1),
-    )).toEqual({ status: 'not-due', state: waiting })
-    const expired = reduceReceiveLifecycle(
-      waiting,
-      event,
-      context('workspace-then-publish', deadline),
-    ).state
-    expect(expired.kind).toBe('expired')
-
-    const cleaned = reduceReceiveLifecycle(expired, {
-      kind: 'cleanup-verified',
-      expectedGeneration: expired.generation,
-      leaseId: LEASE,
-      cleanupReceiptDigest: identity(32, 6),
-    }, context('workspace-then-publish', deadline + 1)).state
-    expect(cleaned).toEqual(expect.objectContaining({
-      kind: 'expired',
-      expiresAt: deadline,
-      cleanupState: 'clean',
-    }))
+      cleanupState: 'cleanup-pending',
+    }, context('workspace-then-publish', NOW + OBSERVATION_INTERVAL * 365))
+    expect(result).toEqual({ status: 'not-due', state: waiting })
   })
 
-  it('forbids stable-state continuation at the exact deadline', () => {
-    const deadline = NOW + STABLE_RETENTION_MILLISECONDS
+  it('allows saving and repeated handoff after long retention', () => {
+    const deadline = NOW + OBSERVATION_INTERVAL
     const waiting = state({
       kind: 'waiting-to-save',
       packageDigest: identity(32, 4),
-      expiresAt: deadline,
     })
 
     expect(() => reduceReceiveLifecycle(waiting, {
@@ -225,14 +209,14 @@ describe('receive lifecycle reducer', () => {
       expectedGeneration: waiting.generation,
       leaseId: LEASE,
       publicationAttemptId: identity(16, 5),
-    }, context('workspace-then-publish', deadline))).toThrow('deadline elapsed')
+    }, context('workspace-then-publish', deadline))).not.toThrow()
     expect(() => reduceReceiveLifecycle(waiting, {
       kind: 'handoff-requested',
       expectedGeneration: waiting.generation,
       leaseId: LEASE,
       attemptKind: 'workspace',
       attemptId: identity(16, 6),
-    }, context('workspace-then-publish', deadline))).toThrow('deadline elapsed')
+    }, context('workspace-then-publish', deadline))).not.toThrow()
   })
 
   it('never persists an unknown Portable handoff outcome', () => {

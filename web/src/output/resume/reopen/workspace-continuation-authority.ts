@@ -1,3 +1,6 @@
+import { reopenProgressiveZipContinuation } from './progressive-continuation'
+import { recoverLocalWorkspaceArtifact } from './artifact-recovery'
+import { sealCompletedOriginalFile } from './original-continuation'
 import type { BrowserReceiveOperationLease } from '../../browser/session-lease'
 import type { OutputDiagnosticsPorts } from '../../diagnostics'
 import type { OriginPrivateStorageEstimate } from '../../origin-private/admission'
@@ -16,11 +19,9 @@ import {
   type AdmittedWorkspaceContent,
   type WorkspaceContentRequestCounter,
 } from '../../workspace/stages'
-import type { SealedWorkspaceZipPreparationV1 } from '../../workspace/preparation'
 import {
   readWorkspacePackageCleanupAuthority,
   reopenWorkspacePackageContinuation,
-  reopenWorkspacePreparationAuthority,
   type OpenOriginPrivatePackageContinuation,
 } from '../workspace-continuation'
 import {
@@ -72,6 +73,7 @@ export interface WorkspaceContinuationInput {
  * the enclosing reopen authority.
  */
 export class WorkspaceContinuationAuthority {
+  readonly #options: WorkspaceContinuationAuthorityOptions
   readonly #openWorkspaceStages: typeof WorkspaceOperationStages.open
   readonly #reclaimWorkspaceBudget: PersistedWorkspaceBudgetReclaim
   readonly #estimateWorkspaceStorage: () => Promise<OriginPrivateStorageEstimate>
@@ -84,6 +86,7 @@ export class WorkspaceContinuationAuthority {
   readonly #ownershipAttention: WorkspaceContinuationAuthorityOptions['ownershipAttention']
 
   constructor(options: WorkspaceContinuationAuthorityOptions) {
+    this.#options = options
     this.#openWorkspaceStages = options.openWorkspaceStages
     this.#reclaimWorkspaceBudget = options.reclaimWorkspaceBudget
     this.#estimateWorkspaceStorage = options.estimateWorkspaceStorage
@@ -94,6 +97,16 @@ export class WorkspaceContinuationAuthority {
     this.#contentRequests = options.contentRequests
     this.#now = options.now
     this.#ownershipAttention = options.ownershipAttention
+  }
+
+  async resumeProgressiveZip(input: WorkspaceContinuationInput, localOnly: boolean, partialExport: boolean): Promise<ReopenLifecycleAuthority> {
+    const stages = await this.openStages(input.repository, input.snapshot, input.lease, input.diagnostics)
+    return reopenProgressiveZipContinuation(input, this.#options, stages, localOnly, partialExport)
+  }
+
+  async recoverArtifact(input: WorkspaceContinuationInput): Promise<ReopenLifecycleAuthority> {
+    const stages = await this.openStages(input.repository, input.snapshot, input.lease, input.diagnostics)
+    return recoverLocalWorkspaceArtifact(input, stages, this.#checkpointDatabaseName)
   }
 
   async resumeReceive(
@@ -111,16 +124,6 @@ export class WorkspaceContinuationAuthority {
       input.diagnostics,
     )
     const admission = await this.#reclaimWorkspaceAdmission(input)
-    let preparation: SealedWorkspaceZipPreparationV1 | undefined
-    try {
-      preparation = await reopenWorkspacePreparationAuthority({
-        repository: input.repository,
-        intent: input.snapshot.operation.receiveIntent,
-        admissionReceipt: admission.receipt,
-      })
-    } catch {
-      return this.#ownershipAttention(input)
-    }
     const lifecycle = await persistReceiveResume(
       input.repository,
       input.snapshot,
@@ -136,7 +139,6 @@ export class WorkspaceContinuationAuthority {
     const receiveContinuation = this.#workspaceReceiveContinuation({
       ...input,
       admittedContent,
-      ...(preparation === undefined ? {} : { preparation }),
     })
     return Object.freeze({
       lifecycle,
@@ -144,15 +146,25 @@ export class WorkspaceContinuationAuthority {
       stages,
       admittedContent,
       receiveContinuation,
-      ...(preparation === undefined ? {} : { preparation }),
     })
+  }
+
+  async resumeOriginalFile(input: WorkspaceContinuationInput): Promise<ReopenLifecycleAuthority> {
+    const stages = await this.openStages(input.repository, input.snapshot, input.lease, input.diagnostics)
+    const admission = await readPersistedWorkspaceAdmission(input.repository, input.snapshot.operation.receiveIntent)
+    const lifecycle = await sealCompletedOriginalFile({
+      authority: input, stages, budget: admission.budget, now: this.#now(),
+      ...(this.#checkpointDatabaseName === undefined ? {} : { checkpointDatabaseName: this.#checkpointDatabaseName }),
+    })
+    return this.resumePackage({ ...input, snapshot: { ...input.snapshot, lifecycle } })
   }
 
   async resumePackage(
     input: WorkspaceContinuationInput,
   ): Promise<ReopenLifecycleAuthority> {
-    if (input.snapshot.lifecycle.kind !== 'resumable-package') {
-      throw new TypeError('package continuation requires a stable workspace operation')
+    if (input.snapshot.lifecycle.kind !== 'resumable-package' &&
+        input.snapshot.lifecycle.kind !== 'materialization-sealed' && input.snapshot.lifecycle.kind !== 'packaging') {
+      throw new TypeError('package continuation requires sealed materialization')
     }
     const stages = await this.openStages(
       input.repository,
@@ -168,11 +180,29 @@ export class WorkspaceContinuationAuthority {
         budget: admission.budget,
         claim,
       })
-      const cleanupReceipt = await readWorkspacePackageCleanupAuthority({
-        repository: input.repository,
-        intent: input.snapshot.operation.receiveIntent,
-        lifecycle: input.snapshot.lifecycle,
-      })
+      return await this.#openPackageContinuation(input, stages, admission, admittedContent)
+    } catch {
+      return this.#ownershipAttention(input)
+    }
+  }
+
+  async #openPackageContinuation(
+    input: WorkspaceContinuationInput,
+    stages: WorkspaceOperationStages,
+    admission: Readonly<{ budget: AdmittedWorkspaceContent['budget']; receipt: PreparationAdmissionReceiptV1 }>,
+    admittedContent: AdmittedWorkspaceContent,
+  ): Promise<ReopenLifecycleAuthority> {
+    if (input.snapshot.lifecycle.kind !== 'resumable-package' &&
+        input.snapshot.lifecycle.kind !== 'materialization-sealed' && input.snapshot.lifecycle.kind !== 'packaging') {
+      throw new TypeError('Package recovery lost sealed materialization')
+    }
+      const cleanupReceipt = input.snapshot.lifecycle.kind === 'resumable-package'
+        ? await readWorkspacePackageCleanupAuthority({
+            repository: input.repository,
+            intent: input.snapshot.operation.receiveIntent,
+            lifecycle: input.snapshot.lifecycle,
+          })
+        : undefined
       const reopened = await reopenWorkspacePackageContinuation({
         repository: input.repository,
         intent: input.snapshot.operation.receiveIntent,
@@ -181,7 +211,7 @@ export class WorkspaceContinuationAuthority {
         stages,
         admitted: admittedContent,
         admissionReceipt: admission.receipt,
-        cleanupReceipt,
+        ...(cleanupReceipt === undefined ? {} : { cleanupReceipt }),
         ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
         ...(this.#checkpointDatabaseName === undefined
           ? {}
@@ -192,14 +222,11 @@ export class WorkspaceContinuationAuthority {
       })
       input.resources.packageBackend = reopened.backend
       return Object.freeze({
-        lifecycle: input.snapshot.lifecycle,
+        lifecycle: reopened.lifecycle,
         stages,
         admittedContent,
         packageContinuation: reopened.continuation,
       })
-    } catch {
-      return this.#ownershipAttention(input)
-    }
   }
 
   openStages(
@@ -256,10 +283,8 @@ export class WorkspaceContinuationAuthority {
 
   #workspaceReceiveContinuation(input: WorkspaceContinuationInput & Readonly<{
     admittedContent: AdmittedWorkspaceContent
-    preparation?: SealedWorkspaceZipPreparationV1
   }>): ReopenedWorkspaceReceiveContinuation {
     return Object.freeze({
-      ...(input.preparation === undefined ? {} : { preparation: input.preparation }),
       openBackend: (options?: {
         readonly onTrace?: PersistentTreeTrace
         readonly diagnostics?: OutputDiagnosticsPorts

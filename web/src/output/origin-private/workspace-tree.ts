@@ -1,5 +1,7 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
-import { bigintToSafeNumber } from '../../content/geometry'
+import { openNativeObject } from './native-object/client'
+import type { NativeObjectFactory, NativeObjectIO } from './native-object/contracts'
+import type { ObjectGrowthReservation } from './object-capacity'
 import type {
   PersistentHandleRecord,
   PersistentHandleRepository,
@@ -10,7 +12,6 @@ import type {
   PersistentOutputTree,
   PersistentTreeFile,
   PersistentWriterOpenMode,
-  PreservingWriterCost,
 } from '../persistent-tree/contracts'
 import {
   TargetOwnershipUnknownError,
@@ -33,6 +34,9 @@ import {
 
 export const ORIGIN_PRIVATE_FILE_HANDLE_KIND = 3 as const
 export const ORIGIN_PRIVATE_DIRECTORY_HANDLE_KIND = 4 as const
+// The bounded original-file journal permits 16,384 ranges. Keep room for the
+// replacement checkpoint and its metadata while admitted payload consumes quota.
+const ORIGINAL_CHECKPOINT_HEADROOM_BYTES = 1024n * 1024n
 const RAW_FILE_OBJECT_DOMAIN = 'windshare/origin-private/raw-file-object/v2'
 const DIRECTORY_OBJECT_DOMAIN = 'windshare/origin-private/directory-object/v2'
 const FILE_HANDLE_DOMAIN = 'windshare/origin-private/raw-file-handle/v2'
@@ -43,16 +47,19 @@ type OriginPrivateObjectIdentityStage = Exclude<TargetOwnershipStage, 'reservati
 export interface OriginPrivateWorkspaceTreeOptions {
   readonly root: OriginPrivateWorkspaceRoot
   readonly handles: PersistentHandleRepository
+  readonly nativeObjectFactory?: NativeObjectFactory
 }
 
 /** Flat object names avoid giving mutable artifact paths any namespace authority. */
 export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
   readonly #root: OriginPrivateWorkspaceRoot
   readonly #handles: PersistentHandleRepository
+  readonly #nativeObjectFactory: NativeObjectFactory
 
   constructor(options: OriginPrivateWorkspaceTreeOptions) {
     this.#root = options.root
     this.#handles = options.handles
+    this.#nativeObjectFactory = options.nativeObjectFactory ?? openNativeObject
   }
 
   authorize(): Promise<void> {
@@ -290,7 +297,8 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
     return new OriginPrivatePersistentFile({
       ownedObjectId,
       handle,
-      beforeFirstWrite: () => this.#root.readmit(),
+      root: this.#root,
+      nativeObjectFactory: this.#nativeObjectFactory,
       verify: (stage) => this.#verifyFile(path, ownedObjectId, stage).then(() => undefined),
     })
   }
@@ -361,22 +369,26 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
 }
 
 class OriginPrivatePersistentFile implements PersistentTreeFile {
+  readonly durability = 'native-in-place' as const
   readonly ownedObjectId: string
   readonly #handle: FileSystemFileHandle
-  readonly #beforeFirstWrite: () => Promise<void>
+  readonly #root: OriginPrivateWorkspaceRoot
+  readonly #nativeObjectFactory: NativeObjectFactory
   readonly #verifyIdentity: PersistentTreeFile['verify']
-  #writer: FileSystemWritableFileStream | undefined
-  #writeAdmitted = false
+  #writer: NativeObjectIO | undefined
+  #checkpointHeadroom: ObjectGrowthReservation | undefined
 
   constructor(input: {
     readonly ownedObjectId: string
     readonly handle: FileSystemFileHandle
-    readonly beforeFirstWrite: () => Promise<void>
+    readonly root: OriginPrivateWorkspaceRoot
+    readonly nativeObjectFactory: NativeObjectFactory
     readonly verify: PersistentTreeFile['verify']
   }) {
     this.ownedObjectId = input.ownedObjectId
     this.#handle = input.handle
-    this.#beforeFirstWrite = input.beforeFirstWrite
+    this.#root = input.root
+    this.#nativeObjectFactory = input.nativeObjectFactory
     this.#verifyIdentity = input.verify
   }
 
@@ -384,23 +396,27 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
     if (this.#writer !== undefined) {
       throw new DOMException('The origin-private writer is already open', 'InvalidStateError')
     }
-    if (!this.#writeAdmitted) {
-      await this.#beforeFirstWrite()
-      this.#writeAdmitted = true
-    }
     await this.#verifyIdentity('writer-open')
-    this.#writer = await this.#handle.createWritable({ keepExistingData: mode === 'preserve' })
-  }
-
-  preservingWriterCost(durablePrefixBytes: bigint): PreservingWriterCost {
-    if (typeof durablePrefixBytes !== 'bigint' || durablePrefixBytes < 0n) {
-      throw new RangeError('Preserving writer durable prefix bytes must not be negative')
+    const writer = await this.#nativeObjectFactory(this.#handle)
+    try {
+      // Reclaim starts with an observed task total. Register the object's original
+      // contribution before any shrink so reconciliation can subtract it exactly.
+      let currentLength = await writer.size()
+      await this.#root.reconcileObject(this.ownedObjectId, currentLength)
+      if (mode === 'truncate') {
+        await writer.truncate(0n)
+        currentLength = await writer.size()
+        await this.#root.reconcileObject(this.ownedObjectId, currentLength)
+      }
+      this.#checkpointHeadroom = await this.#root.reserveGrowth({
+        objectId: this.ownedObjectId, currentLength, targetLength: 0n,
+        metadataHeadroom: ORIGINAL_CHECKPOINT_HEADROOM_BYTES,
+      })
+      this.#writer = writer
+    } catch (error) {
+      await writer.close().catch(() => undefined)
+      throw error
     }
-    return Object.freeze({
-      prefixCopyBytes: durablePrefixBytes,
-      writeAmplificationBytes: durablePrefixBytes,
-      temporaryBytes: durablePrefixBytes,
-    })
   }
 
   async writeAt(offset: bigint, data: Uint8Array): Promise<void> {
@@ -408,22 +424,33 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
     if (writer === undefined) {
       throw new DOMException('The origin-private writer is not open', 'InvalidStateError')
     }
-    await writer.write({
-      type: 'write',
-      position: bigintToSafeNumber(offset, 'origin-private output offset'),
-      data: data.slice(),
+    const currentLength = await writer.size()
+    const targetLength = offset + BigInt(data.byteLength)
+    const reservation = await this.#root.reserveGrowth({
+      objectId: this.ownedObjectId, currentLength, targetLength, metadataHeadroom: 0n,
     })
+    try {
+      await writer.writeAt(offset, data)
+      await reservation.settle(await writer.size())
+    } catch (error) {
+      // Worker failure may hide a partially extended file. Preserve the full
+      // admitted high-water length when physical size is no longer observable.
+      const conservativeLength = currentLength > targetLength ? currentLength : targetLength
+      const actualLength = await writer.size().catch(() => conservativeLength)
+      try { await reservation.settle(actualLength) }
+      catch { /* Keep the outstanding reservation fenced until recovery measures it. */ }
+      throw error
+    }
   }
 
   async flush(): Promise<void> {
     const writer = this.#writer
     if (writer === undefined) return
-    this.#writer = undefined
-    await writer.close()
+    await writer.flush()
   }
 
   async size(): Promise<bigint> {
-    await this.flush()
+    if (this.#writer !== undefined) return this.#writer.size()
     return BigInt((await this.#handle.getFile()).size)
   }
 
@@ -431,19 +458,22 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
     return this.#verifyIdentity(stage)
   }
 
-  close(): Promise<void> {
-    return this.flush()
+  async close(): Promise<void> {
+    const writer = this.#writer
+    const headroom = this.#checkpointHeadroom
+    this.#writer = undefined
+    this.#checkpointHeadroom = undefined
+    try { await writer?.close() }
+    finally { await headroom?.release() }
   }
 
-  async abort(reason?: unknown): Promise<void> {
-    const writer = this.#writer
-    if (writer === undefined) return
-    this.#writer = undefined
-    await writer.abort(reason)
+  async abort(): Promise<void> {
+    // Cancellation releases the exclusive handle; it cannot undo native writes.
+    await this.close()
   }
 
   async read(): Promise<Blob> {
-    await this.flush()
+    await this.close()
     return this.#handle.getFile()
   }
 }

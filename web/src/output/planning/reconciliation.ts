@@ -350,9 +350,7 @@ function routeFitsLowerBound(route: OfferedMaterializationRoute, lowerBound: big
     case 'direct-resumable-zip':
       return outputLowerBoundFits(route.target.hardMaximumOutputBytes, lowerBound)
     case 'workspace-then-publish':
-      return lowerBound <= route.workspace.jobHardLimitBytes &&
-        lowerBound <= route.workspace.processHardLimitBytes &&
-        outputLowerBoundFits(route.publicationTarget.hardMaximumOutputBytes, lowerBound)
+      return outputLowerBoundFits(route.publicationTarget.hardMaximumOutputBytes, lowerBound)
     case 'portable-handoff':
       return lowerBound <= route.portable.maximumArtifactBytes &&
         outputLowerBoundFits(route.handoffTarget.hardMaximumOutputBytes, lowerBound)

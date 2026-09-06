@@ -33,7 +33,6 @@ import {
   outputSessionIdentity,
   snapshotDirectoryMaterializationRequest,
   type DirectoryMaterializationRequest,
-  type ExactPreparationEvidence,
   type OutputFileRequest,
 } from '../../src/transfer/output-session'
 import { isolatedDirectoryOutputFailure } from '../../src/transfer/job/failures'
@@ -540,6 +539,7 @@ describe('persistent Workspace production execution bridge', () => {
       settlement,
       signal: SIGNAL,
     })
+    expect(execution.output.executionProfile.automaticCheckpoint.kind).toBe('bounded')
     await expect(execution.settle({
       transferJobId: 'transfer-job-original',
       worker: SUCCESS,
@@ -581,117 +581,6 @@ describe('persistent Workspace production execution bridge', () => {
       checkpoint: { checkpointGeneration: 1n },
     }])
     expect(settlementCalls).toBe(1)
-  })
-
-  it('materializes prepared Workspace ZIP directories and rejects aggregate-only sealing', async () => {
-    const file = fileEntry(identity(13), 'member.bin', 5n)
-    const intent = asWorkspaceZip(await receiveIntentFixture({
-      planKind: 'workspace-then-publish',
-      artifactKind: 'zip-archive',
-      selection: selectOnlyFile(file),
-      file,
-    }))
-    const evidence = preparedEvidence(file)
-    const materialization = new PersistentMaterializationFixture(intent)
-    const settle = vi.fn(async (
-      _request: Parameters<PersistentWorkspaceSettlementAuthority['settle']>[0],
-      cut: Parameters<PersistentWorkspaceSettlementAuthority['settle']>[1],
-    ) => {
-      await cut.closeMaterialization()
-      return waitingToSaveState(intent)
-    })
-    const execution = await createPersistentWorkspaceExecution({
-      intent,
-      admission: { kind: 'prepared', evidence },
-      materialization,
-      outputIdentity: outputSessionIdentity({
-        backend: 'origin-private-test',
-        outputSessionId: 'workspace-zip-session',
-      }),
-      settlement: {
-        pause: async (_request, cut) => {
-          await cut.closeMaterialization()
-          return resumableState(intent)
-        },
-        settle,
-      },
-      signal: SIGNAL,
-    })
-    expect(materialization.directories).toEqual([['windshare']])
-
-    const opened = await execution.output.beginFile(outputRequest({
-      fileId: file.idText,
-      sourcePath: [file.name],
-      artifactPath: ['windshare', file.name],
-      expectedSize: file.expectedSize,
-      events: materialization.events,
-    }), SIGNAL)
-    await opened.transaction.writeRange(0n, new Uint8Array(5), SIGNAL)
-    await opened.transaction.commit(SIGNAL)
-
-    await expect(execution.settle({
-      transferJobId: 'transfer-job-zip',
-      worker: SUCCESS,
-      materialization: {
-        entryCount: 2n,
-        fileCount: 1n,
-        directoryCount: 1n,
-        rawBytes: 4n,
-      },
-    }, SIGNAL)).rejects.toThrow('worker summary cannot substitute')
-    expect(settle).not.toHaveBeenCalled()
-
-    await execution.settle({
-      transferJobId: 'transfer-job-zip',
-      worker: SUCCESS,
-      materialization: {
-        entryCount: 2n,
-        fileCount: 1n,
-        directoryCount: 1n,
-        rawBytes: file.expectedSize,
-      },
-    }, SIGNAL)
-    expect(settle).toHaveBeenCalledOnce()
-    const admitted = settle.mock.calls[0]?.[1].evidence
-    expect(admitted?.generations).toEqual(evidence.generations)
-    expect(admitted?.entries).toHaveLength(2)
-  })
-
-  it('closes prepared Workspace authority when directory materialization fails', async () => {
-    const file = fileEntry(identity(14), 'failed-member.bin', 2n)
-    const intent = asWorkspaceZip(await receiveIntentFixture({
-      planKind: 'workspace-then-publish',
-      artifactKind: 'zip-archive',
-      selection: selectOnlyFile(file),
-      file,
-    }))
-    const failure = new Error('directory materialization failed')
-    const beginFile = vi.fn(async () => {
-      throw new Error('content must not start')
-    })
-    const close = vi.fn(async () => undefined)
-    const materialization: PersistentMaterializationPort = {
-      beginFile,
-      ensureDirectory: async () => { throw failure },
-      close,
-    }
-
-    await expect(createPersistentWorkspaceExecution({
-      intent,
-      admission: { kind: 'prepared', evidence: preparedEvidence(file) },
-      materialization,
-      outputIdentity: outputSessionIdentity({
-        backend: 'origin-private-test',
-        outputSessionId: 'failed-preparation-session',
-      }),
-      settlement: {
-        pause: async () => resumableState(intent),
-        settle: async () => waitingToSaveState(intent),
-      },
-      signal: SIGNAL,
-    })).rejects.toBe(failure)
-    expect(beginFile).not.toHaveBeenCalled()
-    expect(close).toHaveBeenCalledOnce()
   })
 
   it('rejects a final checkpoint proof from another materialization namespace', async () => {
@@ -1014,40 +903,6 @@ function mergeRanges(input: readonly PersistentByteRange[]): readonly Persistent
   return Object.freeze(merged.map(range => Object.freeze(range)))
 }
 
-function preparedEvidence(
-  file: ReturnType<typeof fileEntry>,
-): ExactPreparationEvidence {
-  return Object.freeze({
-    generations: Object.freeze([Object.freeze({
-      directoryId: identityText(2),
-      generation: identityText(90),
-    })]),
-    entries: Object.freeze([
-      Object.freeze({
-        kind: 'directory' as const,
-        sourcePath: Object.freeze([]),
-        artifactPath: Object.freeze(['windshare']),
-        directoryId: identityText(2),
-        generation: identityText(90),
-        role: 'result-root' as const,
-      }),
-      Object.freeze({
-        kind: 'file' as const,
-        sourcePath: Object.freeze([file.name]),
-        artifactPath: Object.freeze(['windshare', file.name]),
-        fileId: file.idText,
-        containingDirectoryId: identityText(2),
-        generation: identityText(90),
-        exactSize: file.expectedSize,
-      }),
-    ]),
-    entryCount: 2n,
-    fileCount: 1n,
-    directoryCount: 1n,
-    selectedRawBytes: file.expectedSize,
-  })
-}
-
 function publishedState(intent: ReceiveIntent): ReceiveLifecycleState {
   return lifecycleState(intent, {
     kind: 'published',
@@ -1110,14 +965,5 @@ function asWorkspaceOriginal(intent: ReceiveIntent): Parameters<
   return intent as Extract<
     PersistentWorkspaceExecutionInput,
     Readonly<{ admission: Readonly<{ kind: 'single-file' }> }>
-  >['intent']
-}
-
-function asWorkspaceZip(intent: ReceiveIntent): Parameters<
-  typeof createPersistentWorkspaceExecution
->[0]['intent'] & Readonly<{ artifact: { readonly kind: 'zip-archive' } }> {
-  return intent as Extract<
-    PersistentWorkspaceExecutionInput,
-    Readonly<{ admission: Readonly<{ kind: 'prepared' }> }>
   >['intent']
 }

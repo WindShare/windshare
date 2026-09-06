@@ -290,21 +290,7 @@ function lifecycleCopy(
       )
     case 'receiving':
       return copy('Receiving files', receivingDescription(artifact, plan), 'neutral')
-    case 'resumable-receive': {
-      if (state.payloadKind === 'direct-zip') {
-        return copy(
-          'Ready to continue the ZIP',
-          `${formatBytes(state.safeSelectedPayloadBytes)} can be resumed safely. ` +
-            `Continuing may require up to ${formatBytes(state.committedArchiveLength)} of additional temporary space.`,
-          'warning',
-        )
-      }
-      return copy(
-        'Ready to continue receiving',
-        resumableFileSetDescription(state, plan.kind, recoverySummary),
-        'warning',
-      )
-    }
+    case 'resumable-receive': return resumableReceiveCopy(state, plan, recoverySummary)
     case 'finalizing-tree':
       return copy(
         'Finishing the folder hierarchy',
@@ -318,8 +304,8 @@ function lifecycleCopy(
     case 'packaging':
       return artifact.kind === 'zip-archive'
         ? copy(
-            'Generating ZIP',
-            'WindShare is creating one ZIP without compression. It cannot be saved until the complete package is sealed.',
+            'Finalizing ZIP',
+            'All selected content is received. WindShare is finishing the ZIP directory locally; the sender can go offline.',
             'neutral',
           )
         : copy('Preparing the complete file', 'WindShare is sealing the file for saving.', 'neutral')
@@ -332,7 +318,7 @@ function lifecycleCopy(
     case 'artifact-sealed':
       return copy('Final result sealed', `${name} is complete and is being made ready to save.`, 'neutral')
     case 'waiting-to-save':
-      return copy('Ready to save', `${name} is complete. Choose where to save it before the retention period ends.`, 'positive')
+      return copy('Ready to save', `${name} is complete and retained in browser storage. Save it now or return later; delete the task when you no longer need its retained copy.`, 'positive')
     case 'publishing-managed':
       return copy(`Saving ${name}`, 'The complete result is being published to the chosen location.', 'neutral')
     case 'handing-off':
@@ -431,6 +417,36 @@ function compatibleNameLifecycleCopy(
   return copy(
     'Partial with compatible names',
     `${partialDirectoryDescription(state)} Saved entries still use compatible names until the restoration tool runs.`,
+    'warning',
+  )
+}
+
+function resumableReceiveCopy(
+  state: Extract<ReceiveLifecycleState, { kind: 'resumable-receive' }>,
+  plan: MaterializationPlan,
+  recoverySummary: RecoverySummary | null,
+) {
+  if (state.payloadKind === 'direct-zip') {
+    return copy(
+      'Ready to continue the ZIP',
+      `${formatBytes(state.safeSelectedPayloadBytes)} can be resumed safely. ` +
+        `Continuing may require up to ${formatBytes(state.committedArchiveLength)} of additional temporary space.`,
+      'warning',
+    )
+  }
+  if (state.payloadKind === 'opfs-zip') {
+    if (state.pauseReason === 'storage-pressure') {
+      return copy('Browser storage is full',
+        `${formatBytes(state.completedBytes)} of received content is retained. Free browser storage, then choose Continue.`, 'warning')
+    }
+    return copy('ZIP progress retained',
+      `${state.completedFileCount.toString()} complete files (${formatBytes(state.completedBytes)}) are retained. ` +
+        (state.discoveryComplete ? 'The saved checkpoint preserves received content for continuation.' :
+          'Selection discovery is unfinished; continue when the sender is available.'), 'warning')
+  }
+  return copy(
+    'Ready to continue receiving',
+    resumableFileSetDescription(state, plan.kind, recoverySummary),
     'warning',
   )
 }
@@ -542,7 +558,7 @@ function retentionPresentation(
   state: ReceiveLifecycleState,
   nowMilliseconds: number,
 ): RetentionPresentation | null {
-  const expiresAt = state.kind === 'expired' ? state.expiresAt : lifecycleDeadline(state)
+  const expiresAt = state.kind === 'expired' ? state.expiresAt : lifecycleDeadline()
   if (expiresAt === undefined) return null
   return Object.freeze({
     expiresAt,

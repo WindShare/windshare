@@ -47,7 +47,6 @@ export class WorkspaceContinuationStages {
       resumable_stage: 'receive',
       completed_file_count: next.completedFileCount,
       completed_bytes: next.completedBytes,
-      expires_at_ms: next.expiresAt,
     })
     return next
   }
@@ -92,7 +91,6 @@ export class WorkspaceContinuationStages {
 
   async resumeReceive(): Promise<Extract<ReceiveLifecycleState, { kind: 'receiving' }>> {
     const state = await this.runtime.lifecycle()
-    this.runtime.requireContinuationUnexpired(state)
     const next = this.runtime.reduce(state, this.runtime.event({ kind: 'resume-started' }, state))
     if (next.kind !== 'receiving') throw new TypeError('receive resume entered the wrong stage')
     await this.runtime.commitLifecycle(state, next)
@@ -120,7 +118,6 @@ export class WorkspaceContinuationStages {
       completedFileCount: fallback.completedFileCount,
       completedBytes: fallback.completedBytes,
       selectionFacts: fallback.selectionFacts,
-      expiresAt: fallback.expiresAt,
       ...(fallback.partialReceiptDigest === undefined
         ? {}
         : { partialReceiptDigest: fallback.partialReceiptDigest }),
@@ -136,7 +133,6 @@ export class WorkspaceContinuationStages {
       restored_checkpoint_set_digest: next.checkpointSetDigest,
       restored_completed_file_count: next.completedFileCount,
       restored_completed_bytes: next.completedBytes,
-      restored_expires_at_ms: next.expiresAt,
     })
     return next
   }
@@ -146,7 +142,6 @@ export class WorkspaceContinuationStages {
     packageHandle: ReceiveOperationHandleRecord,
   ): Promise<Extract<ReceiveLifecycleState, { kind: 'packaging' }>> {
     const state = await this.runtime.lifecycle()
-    this.runtime.requireContinuationUnexpired(state)
     if (state.kind !== 'resumable-package' ||
         state.sealedMaterializationDigest !== sealedMaterialization.digest ||
         packageHandle.kind !== WORKSPACE_HANDLE_PACKAGE_OBJECT ||

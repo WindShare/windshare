@@ -553,12 +553,6 @@ class FreshPageDiscardLifecycleAuthority {
 
   #requireDiscardLifecycle(state: ReceiveLifecycleState): FreshPageDiscardLifecycle {
     if (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') {
-      if (this.#now() >= state.expiresAt) {
-        throw new DOMException(
-          'Elapsed DirectTree retention must be persisted as Expired before cleanup',
-          'InvalidStateError',
-        )
-      }
       return state
     }
     if (state.kind === 'expired' && state.priorStableState === 'resumable-receive' &&

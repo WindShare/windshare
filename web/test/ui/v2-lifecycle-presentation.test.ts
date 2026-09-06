@@ -31,13 +31,26 @@ type TestLifecyclePayload = Exclude<ReceiveLifecycleStatePayload, ResumableFileS
     Readonly<{ selectionFacts?: ResumableFileSetPayload['selectionFacts'] }>)
 
 describe('receive lifecycle product phases', () => {
+  it('explains how to resume a native archive after storage pressure', () => {
+    const state = lifecycle({
+      kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: 'object',
+      checkpointGeneration: 2n, occupiedBytes: 2048n, completedFileCount: 1n,
+      completedBytes: 1024n, discoveryComplete: false, pauseReason: 'storage-pressure',
+    })
+    expect(present(state, ZIP)).toMatchObject({
+      title: 'Browser storage is full',
+      description: expect.stringContaining('Free browser storage, then choose Continue.'),
+    })
+  })
+
+
   it.each([
     [lifecycle({ kind: 'preparing', preparationId: 'preparation' }), ZIP, 'Checking selected content'],
     [lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }), ZIP, 'Receiving files'],
-    [lifecycle({ kind: 'packaging', activeLeaseId: 'lease', sealedMaterializationDigest: 'seal', packageTempObjectId: 'temporary' }), ZIP, 'Generating ZIP'],
-    [lifecycle({ kind: 'waiting-to-save', packageDigest: 'package', expiresAt: DEADLINE }), ZIP, 'Ready to save'],
+    [lifecycle({ kind: 'packaging', activeLeaseId: 'lease', sealedMaterializationDigest: 'seal', packageTempObjectId: 'temporary' }), ZIP, 'Finalizing ZIP'],
+    [lifecycle({ kind: 'waiting-to-save', packageDigest: 'package' }), ZIP, 'Ready to save'],
     [lifecycle({ kind: 'publishing-managed', activeLeaseId: 'lease', packageDigest: 'package', publicationAttemptId: 'attempt' }), ZIP, 'Saving photos.zip'],
-    [lifecycle({ kind: 'handing-off', activeLeaseId: 'lease', attemptKind: 'workspace', attemptId: 'attempt', packageDigest: 'package', retainedDeadline: DEADLINE }), ZIP, 'Starting browser download'],
+    [lifecycle({ kind: 'handing-off', activeLeaseId: 'lease', attemptKind: 'workspace', attemptId: 'attempt', packageDigest: 'package' }), ZIP, 'Starting browser download'],
   ] as const)('presents %s without exposing storage implementation language', (state, artifact, title) => {
     const presentation = present(state, artifact)
 
@@ -50,14 +63,14 @@ describe('receive lifecycle product phases', () => {
     const states = [
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
       lifecycle({ kind: 'packaging', activeLeaseId: 'lease', sealedMaterializationDigest: 'seal', packageTempObjectId: 'temporary' }),
-      lifecycle({ kind: 'waiting-to-save', packageDigest: 'package', expiresAt: DEADLINE }),
+      lifecycle({ kind: 'waiting-to-save', packageDigest: 'package' }),
       lifecycle({ kind: 'publishing-managed', activeLeaseId: 'lease', packageDigest: 'package', publicationAttemptId: 'attempt' }),
-      lifecycle({ kind: 'handing-off', activeLeaseId: 'lease', attemptKind: 'workspace', attemptId: 'attempt', packageDigest: 'package', retainedDeadline: DEADLINE }),
+      lifecycle({ kind: 'handing-off', activeLeaseId: 'lease', attemptKind: 'workspace', attemptId: 'attempt', packageDigest: 'package' }),
     ]
     const titles = states.map((state) => present(state, ZIP).title)
 
     expect(new Set(titles).size).toBe(states.length)
-    expect(present(states[1]!, ZIP).description).toContain('without compression')
+    expect(present(states[1]!, ZIP).description).toContain('sender can go offline')
   })
 })
 
@@ -145,13 +158,11 @@ describe('direct ZIP lifecycle presentation', () => {
       safeSelectedPayloadBytes: 1_024n,
       committedArchiveLength: 2_048n,
       checkpointPhase: 'between-members',
-      expiresAt: DEADLINE,
     }), ZIP, 'direct-resumable-zip')
     const gate = (kind: 'authorization-required' | 'target-verification-required' |
       'destination-space-required') => present(lifecycle({
         kind,
         recoveryGateDigest: `${kind}-digest`,
-        expiresAt: DEADLINE,
       }), ZIP, 'direct-resumable-zip')
     const restart = present(lifecycle({
       kind: 'restart-required',
@@ -183,7 +194,6 @@ describe('direct ZIP lifecycle presentation', () => {
       checkpointSetDigest: 'checkpoint-set',
       completedFileCount: 1n,
       completedBytes: 1_024n,
-      expiresAt: DEADLINE,
     })
     const resumable = present(
       state,
@@ -227,7 +237,6 @@ describe('direct ZIP lifecycle presentation', () => {
       checkpointSetDigest: 'checkpoint-set',
       completedFileCount: 1n,
       completedBytes: 1_024n,
-      expiresAt: DEADLINE,
     }), TREE, 'direct-tree')
 
     expect(resumable.description).toContain('Recovery costs are being validated')
@@ -279,7 +288,6 @@ describe('compatible-name repair presentation', () => {
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 1n,
       completedBytes: 128n,
-      expiresAt: DEADLINE,
     }), TREE, 'direct-tree', NOW, undefined, summary)
 
     expect(active.compatibleNameRepair).toMatchObject({
@@ -370,18 +378,14 @@ describe('compatible-name repair presentation', () => {
 })
 
 describe('retention, usage, and lifecycle-valid actions', () => {
-  it('shows the exact stable deadline and workspace usage only for retained workspace truth', () => {
-    const state = lifecycle({ kind: 'waiting-to-save', packageDigest: 'package', expiresAt: DEADLINE })
+  it('shows retained workspace usage without a deletion deadline', () => {
+    const state = lifecycle({ kind: 'waiting-to-save', packageDigest: 'package' })
     const presentation = present(state, ZIP, 'workspace-then-publish', NOW, {
       ownedBytes: 1_024n,
       maximumBytes: 4_096n,
     })
 
-    expect(presentation.retention).toEqual({
-      expiresAt: DEADLINE,
-      remainingMilliseconds: 86_400_000,
-      elapsed: false,
-    })
+    expect(presentation.retention).toBeNull()
     expect(presentation.usage).toMatchObject({
       ownedBytes: 1_024n,
       maximumBytes: 4_096n,
@@ -392,38 +396,36 @@ describe('retention, usage, and lifecycle-valid actions', () => {
     expect(present(state, ZIP, 'direct-atomic', NOW, { ownedBytes: 1_024n }).usage).toBeNull()
   })
 
-  it('suppresses continuation immediately when a stable deadline has elapsed', () => {
+  it('keeps continuation available after long retention', () => {
     const state = lifecycle({
       kind: 'resumable-receive',
       payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 2n,
       completedBytes: 512n,
-      expiresAt: DEADLINE,
     })
     const before = present(state, TREE, 'workspace-then-publish', DEADLINE - 1)
     const elapsed = present(state, TREE, 'workspace-then-publish', DEADLINE)
 
     expect(before.actions.map((action) => action.kind)).toEqual(['continue', 'discard'])
-    expect(elapsed.retention?.elapsed).toBe(true)
-    expect(elapsed.actions).toEqual([])
-    expect(elapsed.description).toContain('can no longer continue')
+    expect(elapsed.retention).toBeNull()
+    expect(elapsed.actions).toEqual(before.actions)
+    expect(elapsed.description).toBe(before.description)
   })
 
-  it('preserves the original workspace deadline without inventing a managed location action', () => {
+  it('keeps browser handoff repeatable without inventing a managed location action', () => {
     const state = lifecycle({
       kind: 'download-started',
       attemptKind: 'workspace',
       attemptId: 'attempt',
       packageDigest: 'package',
-      retryableUntil: DEADLINE,
     })
     const presentation = present(state, ZIP, 'workspace-then-publish', NOW, {
       ownedBytes: 2_048n,
     })
 
     expect(presentation.category).toBe('retained')
-    expect(presentation.retention?.expiresAt).toBe(DEADLINE)
+    expect(presentation.retention).toBeNull()
     expect(presentation.actions.map((action) => action.kind)).toEqual([
       'redownload',
       'delete',

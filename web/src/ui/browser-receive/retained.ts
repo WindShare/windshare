@@ -1,3 +1,5 @@
+import { pickPartialExport, saveProgressivePartial, supportsPartialExport } from './partial-export'
+import { continueProgressiveZip } from './retained-progressive'
 import { lifecycleFailureFact, type FailureFact } from '../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../output/browser/indexeddb-resume-state'
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
@@ -38,6 +40,11 @@ import { FSAReceiveOperation } from './fsa'
 import { unavailableRoute } from './shared'
 import type { BrowserDirectZipCompositionPort } from './direct-zip'
 import { diagnosticsFor } from './retained-diagnostics'
+import {
+  detachRuntimeAfterFailure,
+  withFailedRetainedClose,
+  withRetainedOperationClose,
+} from './retained-operation-lifetime'
 import { retainedOperationAuthority } from './retained-operation-authority'
 import { observeBrowserReceiveOperationActivity } from '../../output/browser/session-lease'
 import {
@@ -231,6 +238,12 @@ export async function listBrowserRetainedOperations(
           options.directZip !== undefined,
           reference.recoverySummary !== undefined,
         )
+        const availableActions = descriptor.lifecycle.kind === 'resumable-receive' &&
+          descriptor.lifecycle.payloadKind === 'opfs-zip'
+          ? presentation.actions.filter(action => action !== 'catch-up') : presentation.actions
+        const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
+          ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
+          : presentation.unavailableReason
         const operation: V2RetainedReceiveOperation = Object.freeze({
           operationId: descriptor.operationId,
           receiveIntentDigest: descriptor.receiveIntentDigest,
@@ -238,13 +251,17 @@ export async function listBrowserRetainedOperations(
           lifecycle: descriptor.lifecycle,
           continuation: descriptor.continuation,
           ...(descriptor.expiresAt === undefined ? {} : { expiresAt: descriptor.expiresAt }),
-          actions: presentation.actions,
+          actions: hasMutationAuthority && descriptor.recoveryUnavailable === undefined && supportsPartialExport(windowPort) &&
+            descriptor.lifecycle.kind === 'resumable-receive' &&
+            descriptor.lifecycle.payloadKind === 'opfs-zip' &&
+            descriptor.lifecycle.completedFileCount > 0n
+            ? Object.freeze([...availableActions, 'save-partial' as const])
+            : availableActions,
+          ...(descriptor.sourceRevisionFailures === undefined ? {} : { sourceRevisionFailures: descriptor.sourceRevisionFailures }),
           ...(reference.recoverySummary === undefined
             ? {}
             : { recoverySummary: reference.recoverySummary }),
-          ...(presentation.unavailableReason === undefined
-            ? {}
-            : { unavailableReason: presentation.unavailableReason }),
+          ...(unavailableReason === undefined ? {} : { unavailableReason }),
         })
         references.set(operation, reference)
         return operation
@@ -331,6 +348,9 @@ async function performRetainedAction(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<V2RetainedReceiveActionResult> {
+  const partialDestination = action === 'save-partial'
+    ? await pickPartialExport(windowPort)
+    : undefined
   const dispatch = await dispatchRetainedAuthorityAction(
     authority,
     reference,
@@ -359,6 +379,23 @@ async function performRetainedAction(
     return deleteRetainedDirectZip(options.directZip, continuation, signal, failures)
   }
   switch (continuation.kind) {
+    case 'workspace-progressive-zip-partial':
+      if (action === 'save-partial' && partialDestination !== undefined) {
+        return withRetainedOperationClose(continuation.operation, async () => {
+          await saveProgressivePartial(continuation.operation.partialContinuation,
+            partialDestination, signal)
+          return Object.freeze({ kind: 'completed' as const })
+        })
+      }
+      return withFailedRetainedClose(continuation.operation, continuationMismatch())
+    case 'workspace-progressive-zip': {
+      if (action !== 'continue') return withFailedRetainedClose(continuation.operation, continuationMismatch())
+      const binding = createOutputFailureBinding(failures)
+      const result = await continueProgressiveZip(windowPort, continuation.operation, signal,
+        diagnosticsFor('origin_private', options.outputTrace, binding.sinks))
+      return result.kind === 'receive-continuation'
+        ? Object.freeze({ ...result, runtime: bindRuntimeOutputFailures(result.runtime, binding) }) : result
+    }
     case 'direct-tree-catch-up':
       return withRetainedOperationClose(continuation.operation, async () => {
         if (action !== 'catch-up') throw continuationMismatch()
@@ -423,6 +460,7 @@ async function dispatchRetainedAuthorityAction(
   } else {
     const retainedFileRecovery = retainedFileRecoveryFor(operation, action)
     result = await authority.resume(reference, {
+      ...(action === 'save-partial' ? { purpose: 'partial-export' as const } : {}),
       ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
       ...(failures === undefined ? {} : { failures }),
     })
@@ -491,68 +529,6 @@ async function continueRetainedReceive(
   }
 }
 
-async function withFailedRetainedClose(
-  operation: { close(): Promise<void> },
-  error: unknown,
-): Promise<never> {
-  return withRetainedOperationClose(operation, async () => {
-    throw error
-  })
-}
-
-async function detachRuntimeAfterFailure(
-  runtime: V2BoundReceiveOperation,
-  error: unknown,
-): Promise<never> {
-  let cleanupFailure: unknown
-  try {
-    await Promise.resolve(runtime.detach())
-  } catch (caughtCleanupFailure) {
-    cleanupFailure = caughtCleanupFailure
-  }
-  if (cleanupFailure !== undefined) {
-    throw new AggregateError(
-      [error, cleanupFailure],
-      'Receive continuation adoption failed and runtime cleanup also failed',
-      { cause: error },
-    )
-  }
-  throw error
-}
-
-async function withRetainedOperationClose<Result>(
-  operation: { close(): Promise<void> },
-  execute: () => Promise<Result>,
-): Promise<Result> {
-  let failed = false
-  let failure: unknown
-  let result: Result | undefined
-  try {
-    result = await execute()
-  } catch (error) {
-    failed = true
-    failure = error
-  }
-  let cleanupFailed = false
-  let cleanupFailure: unknown
-  try {
-    await operation.close()
-  } catch (error) {
-    cleanupFailed = true
-    cleanupFailure = error
-  }
-  if (failed && cleanupFailed) {
-    throw new AggregateError(
-      [failure, cleanupFailure],
-      'Retained operation and output cleanup both failed',
-      { cause: failure },
-    )
-  }
-  if (failed) throw failure
-  if (cleanupFailed) throw cleanupFailure
-  return result!
-}
-
 function browserRetainedContinuationExecutor(
   windowPort: BrowserReceiveWindow,
   trace: WorkspaceStageTraceListener | undefined,
@@ -617,7 +593,13 @@ function browserRetainedContinuationExecutor(
       failures?: OutputFailureSinks,
     ) => {
       try {
-        await continuation.operation.packageContinuation.execute(signal)
+        const result = await continuation.operation.packageContinuation.execute(signal)
+        if (result.kind === 'sealed') {
+          await continueRetainedWorkspaceOperation(
+            windowPort, { ...continuation.operation, lifecycle: result.state }, 'save', signal,
+            diagnosticsFor('origin_private', outputTrace, failures),
+          )
+        }
       } catch (error) {
         if (!signal.aborted) recordOutputException(failures?.continuation, error)
         throw error
@@ -664,6 +646,10 @@ function sourceWithoutBootstrapCandidates(
   return Object.freeze({
     listDirectZipBootstrapCandidates: () => Promise.resolve(Object.freeze([])),
     listLifecycleStates: () => source.listLifecycleStates(),
+    ...(source.readProgressiveRequirement === undefined ? {} : {
+      readProgressiveRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readProgressiveRequirement']>>[0]) =>
+        source.readProgressiveRequirement!(lifecycle),
+    }),
     ...(source.isCleanupOnly === undefined ? {} : {
       isCleanupOnly: (operationId: string) => source.isCleanupOnly!(operationId),
     }),

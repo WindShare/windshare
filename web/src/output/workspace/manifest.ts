@@ -1,6 +1,5 @@
 import { snapshotPortableCatalogPath } from '../../catalog/path-policy'
 import type { FinalFileCheckpointProof } from '../persistence/journal'
-import type { PreparationManifestV1 } from './preparation'
 import {
   canonicalDigest,
   canonicalFrame,
@@ -25,10 +24,6 @@ import { CanonicalRecordReader } from './canonical-reader'
 const TEXT_ENCODER = new TextEncoder()
 
 export const MAX_ARTIFACT_ENTRIES = 1_000_000
-
-export type PreparationBinding =
-  | Readonly<{ kind: 'absent' }>
-  | Readonly<{ kind: 'present'; preparationDigest: string }>
 
 export interface AuthenticatedGenerationReference {
   readonly directoryId: string
@@ -64,7 +59,6 @@ export interface MaterializedManifestV1 {
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly materializationBindingDigest: string
-  readonly preparationBinding: PreparationBinding
   readonly generations: readonly AuthenticatedGenerationReference[]
   readonly entries: readonly MaterializedManifestEntry[]
   readonly entryCount: bigint
@@ -103,11 +97,9 @@ export async function sealMaterializedManifest(input: {
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly materializationBindingDigest: string
-  readonly preparationBinding: PreparationBinding
   readonly generations: readonly AuthenticatedGenerationReference[]
   readonly entries: readonly MaterializedManifestEntry[]
   readonly checkpoints: FinalCheckpointReader
-  readonly preparation?: PreparationManifestV1
 }): Promise<MaterializedManifestV1> {
   if (input.entries.length > MAX_ARTIFACT_ENTRIES ||
       input.generations.length > MAX_ARTIFACT_ENTRIES) {
@@ -124,7 +116,6 @@ export async function sealMaterializedManifest(input: {
     32,
     'materialization binding digest',
   )
-  const preparationBinding = snapshotPreparationBinding(input.preparationBinding)
   const generations = snapshotGenerations(input.generations)
   const entries = await snapshotAndVerifyEntries(
     input.entries,
@@ -132,7 +123,6 @@ export async function sealMaterializedManifest(input: {
     { operationId, receiveIntentDigest, materializationBindingDigest },
   )
   validateManifestTopology(entries, generations)
-  validatePreparationAuthority(preparationBinding, input.preparation, entries, generations)
   const fileCount = BigInt(entries.filter((entry) => entry.kind === 'file').length)
   const directoryCount = BigInt(entries.length) - fileCount
   const rawBytes = entries.reduce(
@@ -141,7 +131,6 @@ export async function sealMaterializedManifest(input: {
   )
   const canonicalBytes = canonicalMaterializedManifestBytes({
     receiveIntentDigest,
-    preparationBinding,
     generations,
     entries,
     fileCount,
@@ -153,7 +142,6 @@ export async function sealMaterializedManifest(input: {
     operationId,
     receiveIntentDigest,
     materializationBindingDigest,
-    preparationBinding,
     generations,
     entries,
     entryCount: BigInt(entries.length),
@@ -196,7 +184,6 @@ export async function decodeMaterializedManifestV1(input: {
   readonly receiveIntentDigest: string
   readonly materializationBindingDigest: string
   readonly checkpoints: FinalCheckpointRecoveryReader
-  readonly preparation?: PreparationManifestV1
 }): Promise<MaterializedManifestV1> {
   const reader = CanonicalRecordReader.open(
     input.canonicalBytes,
@@ -204,7 +191,6 @@ export async function decodeMaterializedManifestV1(input: {
     1,
   )
   const receiveIntentDigest = reader.framedIdentity(32, 'receive intent digest')
-  const preparationBinding = decodePreparationBinding(reader.frame('preparation binding'))
   const generationCount = boundedManifestCount(reader.u64('materialized generation count'))
   const generations: AuthenticatedGenerationReference[] = []
   for (let index = 0; index < generationCount; index += 1) {
@@ -229,11 +215,9 @@ export async function decodeMaterializedManifestV1(input: {
     operationId: input.operationId,
     receiveIntentDigest: input.receiveIntentDigest,
     materializationBindingDigest: input.materializationBindingDigest,
-    preparationBinding,
     generations,
     entries,
     checkpoints: input.checkpoints,
-    ...(input.preparation === undefined ? {} : { preparation: input.preparation }),
   })
   if (receiveIntentDigest !== input.receiveIntentDigest ||
       projectedEntryCount !== rebuilt.entryCount || projectedFileCount !== rebuilt.fileCount ||
@@ -264,7 +248,6 @@ export function materializedGenerationTableDigest(
 
 function canonicalMaterializedManifestBytes(input: {
   readonly receiveIntentDigest: string
-  readonly preparationBinding: PreparationBinding
   readonly generations: readonly AuthenticatedGenerationReference[]
   readonly entries: readonly MaterializedManifestEntry[]
   readonly fileCount: bigint
@@ -273,7 +256,6 @@ function canonicalMaterializedManifestBytes(input: {
 }): CanonicalBytes {
   const fields = [
     canonicalFrame(canonicalIdentity(input.receiveIntentDigest, 32, 'receive intent digest')),
-    canonicalFrame(canonicalPreparationBinding(input.preparationBinding)),
     canonicalU64(BigInt(input.generations.length)),
     ...input.generations.map((reference) => canonicalFrame(canonicalGeneration(reference))),
     canonicalU64(BigInt(input.entries.length)),
@@ -421,24 +403,6 @@ function validateManifestTopology(
   }
 }
 
-function snapshotPreparationBinding(binding: PreparationBinding): PreparationBinding {
-  if (binding.kind === 'absent') return Object.freeze({ kind: 'absent' })
-  if (binding.kind !== 'present') throw new TypeError('preparation binding kind is invalid')
-  return Object.freeze({
-    kind: 'present',
-    preparationDigest: snapshotIdentity(binding.preparationDigest, 32, 'preparation digest'),
-  })
-}
-
-function canonicalPreparationBinding(binding: PreparationBinding): CanonicalBytes {
-  return binding.kind === 'absent'
-    ? canonicalU8(2)
-    : concatCanonicalBytes([
-        canonicalU8(1),
-        canonicalFrame(canonicalIdentity(binding.preparationDigest, 32, 'preparation digest')),
-      ])
-}
-
 function canonicalGeneration(reference: AuthenticatedGenerationReference): CanonicalBytes {
   return concatCanonicalBytes([
     canonicalFrame(canonicalIdentity(reference.directoryId, 16, 'directory ID')),
@@ -468,19 +432,6 @@ export function canonicalMaterializedManifestEntry(
     canonicalFrame(canonicalIdentity(entry.checkpoint.recordDigest, 32, 'checkpoint digest')),
     canonicalFrame(canonicalU64(entry.checkpoint.checkpointGeneration)),
   ])
-}
-
-function decodePreparationBinding(bytes: Uint8Array): PreparationBinding {
-  const reader = CanonicalRecordReader.value(bytes)
-  const discriminant = reader.byte('preparation binding discriminant')
-  if (discriminant === 2) {
-    reader.finish('absent preparation binding')
-    return Object.freeze({ kind: 'absent' })
-  }
-  if (discriminant !== 1) throw new TypeError('preparation binding discriminant is invalid')
-  const preparationDigest = reader.framedIdentity(32, 'preparation digest')
-  reader.finish('present preparation binding')
-  return Object.freeze({ kind: 'present', preparationDigest })
 }
 
 function decodeMaterializedGeneration(bytes: Uint8Array): AuthenticatedGenerationReference {
@@ -569,57 +520,6 @@ function boundedManifestCount(value: bigint, allowZero = true): number {
     throw new TypeError('persisted materialized aggregate exceeds its entry bound')
   }
   return Number(value)
-}
-
-function validatePreparationAuthority(
-  binding: PreparationBinding,
-  preparation: PreparationManifestV1 | undefined,
-  materializedEntries: readonly MaterializedManifestEntry[],
-  generations: readonly AuthenticatedGenerationReference[],
-): void {
-  if (binding.kind === 'absent') {
-    if (preparation !== undefined) {
-      throw new TypeError('unprepared materialization cannot import preparation evidence')
-    }
-    return
-  }
-  if (preparation === undefined || preparation.digest !== binding.preparationDigest) {
-    throw new TypeError('prepared materialization lacks its sealed preparation authority')
-  }
-  if (preparation.entryCount !== BigInt(materializedEntries.length) ||
-      preparation.fileCount !== BigInt(materializedEntries.filter((entry) => entry.kind === 'file').length) ||
-      preparation.directoryCount !== BigInt(
-        materializedEntries.filter((entry) => entry.kind === 'directory').length,
-      ) || preparation.selectedRawBytes !== materializedEntries.reduce(
-        (total, entry) => checkedAdd(total, entry.kind === 'file' ? entry.exactSize : 0n),
-        0n,
-      )) {
-    throw new TypeError('materialized totals disagree with sealed preparation')
-  }
-  if (generations.length !== preparation.generations.length || generations.some((reference, index) => {
-    const expected = preparation.generations[index]
-    return expected === undefined || reference.directoryId !== expected.directoryId ||
-      reference.generation !== expected.generation
-  })) {
-    throw new TypeError('materialized generation table changed after preparation')
-  }
-  for (let index = 0; index < materializedEntries.length; index += 1) {
-    const prepared = preparation.entries[index]
-    const materialized = materializedEntries[index]
-    if (prepared === undefined || materialized === undefined || prepared.kind !== materialized.kind ||
-        comparePaths(prepared.artifactPath, materialized.artifactPath) !== 0) {
-      throw new TypeError('materialized artifact topology changed after preparation')
-    }
-    if (prepared.kind === 'directory') {
-      if (materialized.kind !== 'directory' || prepared.directoryId !== materialized.directoryId ||
-          prepared.generation !== materialized.generation) {
-        throw new TypeError('materialized directory changed after preparation')
-      }
-    } else if (materialized.kind !== 'file' || prepared.fileId !== materialized.fileId ||
-        prepared.exactSize !== materialized.exactSize) {
-      throw new TypeError('materialized file changed after preparation')
-    }
-  }
 }
 
 function compareManifestEntries(

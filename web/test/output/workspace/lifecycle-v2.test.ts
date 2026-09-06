@@ -36,7 +36,6 @@ describe('receive lifecycle V2 durable states', () => {
         discoveredBytes: 90n,
         discovery: 'failed',
       }),
-      expiresAt: 123_456,
     })
 
     const canonical = canonicalReceiveLifecycleStateBytes(lifecycle)
@@ -58,7 +57,6 @@ describe('receive lifecycle V2 durable states', () => {
         discoveredBytes: 11n,
         discovery: 'complete',
       }),
-      expiresAt: 123_456,
     })
 
     expect(() => canonicalReceiveLifecycleStateBytes(lifecycle)).toThrow(/do not contain completed output/)
@@ -73,7 +71,6 @@ describe('receive lifecycle V2 durable states', () => {
       safeSelectedPayloadBytes: 91n,
       committedArchiveLength: 144n,
       checkpointPhase: 'inside-member',
-      expiresAt: 123_456,
     })
     const bytes = canonicalReceiveLifecycleStateBytes(lifecycle)
     expect(decodeReceiveLifecycleState(bytes)).toEqual(lifecycle)
@@ -101,7 +98,6 @@ describe('receive lifecycle V2 durable states', () => {
         ...base(),
         kind,
         recoveryGateDigest: gate.digest,
-        expiresAt: 123_456,
       })
       expect(receiveStateByte(lifecycle)).toBe(byte)
       await expect(decodeDirectZipRecoveryGateV1(gate.canonicalBytes)).resolves.toEqual(gate)

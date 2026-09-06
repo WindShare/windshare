@@ -45,6 +45,7 @@ export class V2JobDiscovery {
     parent?: AuthenticatedDirectory,
   ) => Promise<AuthenticatedDirectory>
   readonly #projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
+  readonly #generationCommitted: ((cursor: DirectoryCursor, committed: V2CommittedDirectory) => Promise<void>) | undefined
   readonly #prepareDirectory: (
     collector: ExactPreparationCollector,
     cursor: DirectoryCursor,
@@ -67,6 +68,7 @@ export class V2JobDiscovery {
       parent?: AuthenticatedDirectory,
     ) => Promise<AuthenticatedDirectory>
     readonly projectFile: (sourcePath: readonly string[]) => DirectTreeFileProjection
+    readonly generationCommitted?: (cursor: DirectoryCursor, committed: V2CommittedDirectory) => Promise<void>
     readonly prepareDirectory: (
       collector: ExactPreparationCollector,
       cursor: DirectoryCursor,
@@ -84,6 +86,7 @@ export class V2JobDiscovery {
     this.#recordDirectoryFailure = input.recordDirectoryFailure
     this.#authenticateDirectory = input.authenticateDirectory
     this.#projectFile = input.projectFile
+    this.#generationCommitted = input.generationCommitted
     this.#prepareDirectory = input.prepareDirectory
   }
 
@@ -108,7 +111,10 @@ export class V2JobDiscovery {
       opaqueSearchSatisfied: () => this.#explicitTargets.opaqueSearchSatisfied(validateEntireGeneration),
       observeDirectory: (identity) => this.#explicitTargets.observeDirectory(identity),
       observeEntry: (entry) => this.#observeCatalogEntry(cursor, entry),
-      generationCommitted: (committed) => collector?.observeGeneration(cursor, committed),
+      generationCommitted: async committed => {
+        await this.#generationCommitted?.(cursor, committed)
+        collector?.observeGeneration(cursor, committed)
+      },
       recordDirectoryFailure: this.#recordDirectoryFailure,
       replayConsumer: (committed) => {
         const materialize = this.#directoryMaterializer(work, cursor, committed, collector)

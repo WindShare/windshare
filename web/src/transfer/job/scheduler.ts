@@ -430,6 +430,9 @@ function budgetedOutputTransaction(
     ),
     automaticCheckpoint: (trigger, signal) => transaction.automaticCheckpoint(trigger, signal),
     commit: signal => transaction.commit(signal),
+    ...(transaction.recordSourceFailure === undefined ? {} : {
+      recordSourceFailure: (fault: import('../fault').SourceFault) => transaction.recordSourceFailure!(fault),
+    }),
     retire: reason => transaction.retire(reason),
     pause: reason => transaction.pause(reason),
   }

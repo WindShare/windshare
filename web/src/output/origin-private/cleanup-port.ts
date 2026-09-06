@@ -1,3 +1,4 @@
+import { withArtifactCleanup } from './export-readers'
 import type {
   FileCheckpointJournal,
   PersistentHandleRecord,
@@ -78,7 +79,8 @@ export class OriginPrivateWorkspaceCleanupPort implements OriginPrivateWorkspace
   ): Promise<WorkspaceOwnedObjectCleanupObservation> {
     const objectId = snapshotIdentity(target.ownedObjectId, 32, 'cleanup owned object ID')
     try {
-      return await this.#removeOwnedObject(target.handleId, objectId)
+      return await withArtifactCleanup(this.#root.operationId,
+        () => this.#removeOwnedObject(target.handleId, objectId))
     } catch (error) {
       return Object.freeze({
         kind: error instanceof TargetOwnershipUnknownError

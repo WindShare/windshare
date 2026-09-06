@@ -303,14 +303,30 @@ export class PersistedReceiveOperationReopenAuthority {
     diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenLifecycleAuthority> {
     const observedAt = this.#now()
-    const deadline = lifecycleDeadline(input.snapshot.lifecycle)
+    const deadline = lifecycleDeadline()
     if (deadline !== undefined && observedAt >= deadline) {
       return Object.freeze({
         lifecycle: await this.#expire(input, observedAt),
       })
     }
-    if (input.purpose !== 'continue') {
+    if (input.purpose === 'cleanup') {
       return Object.freeze({ lifecycle: input.snapshot.lifecycle })
+    }
+    if (input.target.kind === 'workspace' &&
+        input.snapshot.operation.receiveIntent.artifact.kind === 'original-file' &&
+        input.descriptor.continuation === 'resume-local-finalization' && input.purpose === 'continue') {
+      return this.#workspaceContinuation.resumeOriginalFile({ ...input, target: input.target })
+    }
+    if (input.target.kind === 'workspace' &&
+        input.snapshot.operation.receiveIntent.artifact.kind === 'zip-archive' &&
+        input.snapshot.operation.receiveIntent.plan.preparation === 'none' &&
+        (input.descriptor.continuation === 'resume-receive' ||
+         input.descriptor.continuation === 'resume-local-finalization')) {
+      return this.#workspaceContinuation.resumeProgressiveZip({ ...input, target: input.target },
+        input.descriptor.continuation === 'resume-local-finalization', input.purpose === 'partial-export')
+    }
+    if (input.purpose === 'partial-export') {
+      throw new TypeError('Partial export requires retained native ZIP authority')
     }
     if (input.descriptor.continuation === 'resume-receive') {
       return this.#resumeReceive(input, observedAt)
@@ -327,6 +343,10 @@ export class PersistedReceiveOperationReopenAuthority {
     }
     if (input.descriptor.continuation === 'resume-package') {
       return this.#resumePackage(input)
+    }
+    if (input.target.kind === 'workspace' &&
+        (input.snapshot.lifecycle.kind === 'artifact-sealed' || input.snapshot.lifecycle.kind === 'handing-off')) {
+      return this.#workspaceContinuation.recoverArtifact({ ...input, target: input.target })
     }
     return Object.freeze({ lifecycle: input.snapshot.lifecycle })
   }
@@ -427,7 +447,8 @@ export class PersistedReceiveOperationReopenAuthority {
     resources: ReopenResources
     diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenLifecycleAuthority> {
-    if (input.target.kind !== 'workspace' || input.snapshot.lifecycle.kind !== 'resumable-package') {
+    if (input.target.kind !== 'workspace' ||
+        !['resumable-package', 'materialization-sealed', 'packaging'].includes(input.snapshot.lifecycle.kind)) {
       throw new TypeError('package continuation requires a stable workspace operation')
     }
     return this.#workspaceContinuation.resumePackage(
@@ -478,8 +499,7 @@ export class PersistedReceiveOperationReopenAuthority {
       // An abrupt interruption has no sealed pause summary for a user choice.
       // Preserve native checkpoints by default; an explicit paused operation still
       // carries its separately authorized preserve/restart decision.
-      const retainedFileRecovery = input.retainedFileRecovery ??
-        (fallback?.kind === 'receiving' ? 'preserve' : undefined)
+      const retainedFileRecovery = recoveryForAbandonedReceive(fallback, input.retainedFileRecovery)
       return Object.freeze({
         ...base,
         ...input.target,
@@ -509,9 +529,12 @@ export class PersistedReceiveOperationReopenAuthority {
       ...(input.lifecycleAuthority.admittedContent === undefined
         ? {}
         : { admittedContent: input.lifecycleAuthority.admittedContent }),
-      ...(input.lifecycleAuthority.preparation === undefined
-        ? {}
-        : { preparation: input.lifecycleAuthority.preparation }),
+      ...(input.lifecycleAuthority.partialContinuation === undefined ? {} : {
+        partialContinuation: input.lifecycleAuthority.partialContinuation,
+      }),
+      ...(input.lifecycleAuthority.progressiveContinuation === undefined ? {} : {
+        progressiveContinuation: input.lifecycleAuthority.progressiveContinuation,
+      }),
       ...(input.lifecycleAuthority.receiveContinuation === undefined
         ? {}
         : { receiveContinuation: input.lifecycleAuthority.receiveContinuation }),
@@ -606,6 +629,13 @@ export class PersistedReceiveOperationReopenAuthority {
       // Durable ownership decisions remain authoritative when telemetry is unavailable.
     }
   }
+}
+
+function recoveryForAbandonedReceive(
+  fallback: ReceiveLifecycleState | undefined,
+  requested: PersistentPausedFileRecovery | undefined,
+): PersistentPausedFileRecovery | undefined {
+  return requested ?? (fallback?.kind === 'receiving' ? 'preserve' : undefined)
 }
 
 function requireMatchingRetainedFileRecovery(

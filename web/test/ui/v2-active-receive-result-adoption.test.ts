@@ -68,7 +68,7 @@ const UNAVAILABLE_PLANS: V2PlanExecutionAuthority = Object.freeze({
   openDirectAtomic: unavailableExecution,
   openDirectResumableZip: unavailableExecution,
   openWorkspaceOriginal: unavailableExecution,
-  prepareWorkspaceZip: unavailableExecution,
+  openWorkspaceZip: unavailableExecution,
   preparePortable: unavailableExecution,
   settleExecutionAdmissionFailure: unavailableExecution,
   recordSettlementUnknown: unavailableExecution,
@@ -525,7 +525,6 @@ function resumableLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleSta
       discoveredBytes: 0n,
       discovery: 'complete',
     }),
-    expiresAt: Date.now() + 60_000,
   })
 }
 

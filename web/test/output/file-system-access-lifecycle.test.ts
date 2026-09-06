@@ -46,7 +46,6 @@ import {
   installIntentFrozen,
   memoryCheckpointFactory,
   outputFileRequest,
-  persistFreshFixtureExpiry,
   resultRootArtifact,
   rootDirectoryMaterializationRequest,
   resumeReceiving,
@@ -821,14 +820,12 @@ describe('File System Access settlement authority', () => {
       completedFileCount: fallback.completedFileCount,
       completedBytes: fallback.completedBytes,
       selectionFacts: fallback.selectionFacts,
-      expiresAt: fallback.expiresAt,
       partialReceiptDigest: fallback.partialReceiptDigest,
     })
     expect(restored.generation).toBe(fallback.generation + 2n)
     expect(trace).toEqual([expect.objectContaining({
       name: 'receive.fsa.continuation.admission_failed',
       restored_checkpoint_set_digest: fallback.checkpointSetDigest,
-      restored_expires_at_ms: fallback.expiresAt,
     })])
     if (restored.kind !== 'resumable-receive' || restored.payloadKind !== 'file-set') {
       throw new Error('file-set continuation was not restored')
@@ -1134,16 +1131,12 @@ describe('File System Access fresh-page discard authority', () => {
     })
   })
 
-  it('cleans at the exact retention boundary only after Expired(cleanup-pending)', async () => {
+  it('preserves completed user files during explicit cleanup after long retention', async () => {
     const fixture = await freshDiscardFixture({ seed: 190, successfulFile: true })
-    const expired = await persistFreshFixtureExpiry(fixture)
-    const operation = Object.freeze({ ...fixture.operation, lifecycle: expired })
 
-    await expect(discardFreshFixture(fixture, operation, expired.expiresAt)).resolves.toMatchObject({
+    await expect(discardFreshFixture(fixture, fixture.operation, 86_400_000 * 365)).resolves.toMatchObject({
       lifecycle: {
-        kind: 'expired',
-        priorStableState: 'resumable-receive',
-        cleanupState: 'clean',
+        kind: 'partial-directory',
       },
       receiptDigest: expect.any(String),
     })

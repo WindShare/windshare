@@ -80,14 +80,14 @@
     },
     {
       "expected": {
-        "artifactChoiceId": "NFzu17yuO3Tf1AybKcEmquxReXHtzeX3hLoKs8NXTww",
-        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEB"
+        "artifactChoiceId": "-YYcyJyHArKhhz4M9CzdXJhOTLU5TMIaV-qUXqOiOxo",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEA"
       },
       "input": {
         "artifactKind": "zip-archive",
         "guaranteeProfile": "managed-atomic",
         "materializationKind": "workspace-then-publish",
-        "preparation": "exact-zip"
+        "preparation": "none"
       },
       "name": "zip-workspace-managed",
       "policyAvailability": "not-required",
@@ -95,14 +95,14 @@
     },
     {
       "expected": {
-        "artifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ",
-        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEB"
+        "artifactChoiceId": "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k",
+        "canonicalBytesB64Url": "d2luZHNoYXJlL2FydGlmYWN0LWNob2ljZS92MQABAAAAAAAAAAEDAAAAAAAAAAEDAAAAAAAAAAEEAAAAAAAAAAEA"
       },
       "input": {
         "artifactKind": "zip-archive",
         "guaranteeProfile": "browser-handoff",
         "materializationKind": "workspace-then-publish",
-        "preparation": "exact-zip"
+        "preparation": "none"
       },
       "name": "zip-workspace-handoff",
       "policyAvailability": "not-required",
