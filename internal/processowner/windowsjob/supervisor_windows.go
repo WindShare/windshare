@@ -371,17 +371,29 @@ func interruptThenRetire(
 }
 
 func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration) (rootResult, error) {
+	return awaitForcedRetirement(
+		maximum,
+		func() (rootResult, bool) { return waitRootFor(root, 0) },
+		func() (uint32, error) { return activeProcessCount(job) },
+	)
+}
+
+func awaitForcedRetirement(
+	maximum time.Duration,
+	observeRoot func() (rootResult, bool),
+	observeActive func() (uint32, error),
+) (rootResult, error) {
 	deadline := time.Now().Add(maximum)
 	outcome := rootResult{exitCode: -1}
 	rootSettled := false
 	var active uint32
 	for {
 		if !rootSettled {
-			if observed, settled := waitRootFor(root, 0); settled {
+			if observed, settled := observeRoot(); settled {
 				outcome, rootSettled = observed, true
 			}
 		}
-		observedActive, err := activeProcessCount(job)
+		observedActive, err := observeActive()
 		if err != nil {
 			if !rootSettled {
 				outcome.err = errors.Join(outcome.err, errors.New(
@@ -395,7 +407,7 @@ func retireForcedJob(job windows.Handle, root rootProcess, maximum time.Duration
 			// The root may have exited between its first observation and the
 			// accounting query. Confirm its result without spending another poll.
 			if !rootSettled {
-				if observed, settled := waitRootFor(root, 0); settled {
+				if observed, settled := observeRoot(); settled {
 					outcome, rootSettled = observed, true
 				}
 			}

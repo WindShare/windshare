@@ -3,6 +3,7 @@
 package windowsjob
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -55,6 +56,67 @@ func TestForcedRetirementDoesNotReportALiveRootAsSettled(t *testing.T) {
 	if err == nil || result.err == nil || result.exitCode != -1 ||
 		!strings.Contains(err.Error(), "root_settled=false") {
 		t.Fatalf("live root retirement: result=%+v cleanup=%v", result, err)
+	}
+}
+
+func TestForcedRetirementRequiresBothKernelFactsAtBudgetBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		rootSettlesAt int
+		active        uint32
+		wantRootCalls int
+		wantCleanup   bool
+		wantRootError bool
+	}{
+		{name: "empty job before root signals", wantRootCalls: 2, wantCleanup: true, wantRootError: true},
+		{name: "root signals after empty accounting", rootSettlesAt: 2, wantRootCalls: 2},
+		{name: "settled root and empty job", rootSettlesAt: 1, wantRootCalls: 1},
+		{name: "settled root with remaining descendants", rootSettlesAt: 1, active: 1, wantRootCalls: 1, wantCleanup: true},
+		{name: "live root and descendants", active: 1, wantRootCalls: 1, wantCleanup: true, wantRootError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rootCalls, activeCalls := 0, 0
+			result, cleanupErr := awaitForcedRetirement(
+				0,
+				func() (rootResult, bool) {
+					rootCalls++
+					settled := test.rootSettlesAt > 0 && rootCalls >= test.rootSettlesAt
+					return rootResult{exitCode: int64(forcedTerminationCode)}, settled
+				},
+				func() (uint32, error) {
+					activeCalls++
+					return test.active, nil
+				},
+			)
+			if (cleanupErr != nil) != test.wantCleanup || (result.err != nil) != test.wantRootError {
+				t.Fatalf("retirement: result=%+v cleanup=%v", result, cleanupErr)
+			}
+			wantExitCode := int64(forcedTerminationCode)
+			if test.wantRootError {
+				wantExitCode = -1
+			}
+			if result.exitCode != wantExitCode || rootCalls != test.wantRootCalls || activeCalls != 1 {
+				t.Fatalf("retirement: result=%+v root_calls=%d active_calls=%d", result, rootCalls, activeCalls)
+			}
+		})
+	}
+}
+
+func TestForcedRetirementPreservesObservationErrors(t *testing.T) {
+	rootErr := errors.New("root observation failed")
+	accountingErr := errors.New("accounting observation failed")
+	for _, settled := range []bool{false, true} {
+		result, cleanupErr := awaitForcedRetirement(
+			0,
+			func() (rootResult, bool) { return rootResult{exitCode: -1, err: rootErr}, settled },
+			func() (uint32, error) { return 0, accountingErr },
+		)
+		if !errors.Is(cleanupErr, accountingErr) || result.err == nil || result.exitCode != -1 {
+			t.Fatalf("retirement: settled=%t result=%+v cleanup=%v", settled, result, cleanupErr)
+		}
+		if settled && !errors.Is(result.err, rootErr) {
+			t.Fatalf("root observation error was lost: %v", result.err)
+		}
 	}
 }
 
