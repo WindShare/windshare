@@ -2,7 +2,7 @@
 
 ## Product direction
 
-Follow the [original requirements](../clarifications/原始需求.md): begin transferring while discovering content, preserve substantial progress after interruptions, and avoid duplicate storage, duplicate writes, and a full-file copy after receiving completes. Browser-specific trade-offs are acceptable where the platform requires them.
+Follow the [original requirements](../../clarifications/原始需求.md): begin transferring while discovering content, preserve substantial progress after interruptions, and avoid duplicate storage, duplicate writes, and a full-file copy after receiving completes. Browser-specific trade-offs are acceptable where the platform requires them.
 
 Keep FSA for saving directly into user-selected locations. Make OPFS a first-class browser download path with its own storage semantics. Prioritize ordinary downloads; optional features must not impose duplicate payload storage or extra user steps on every task.
 
@@ -18,27 +18,27 @@ Before step 1, define task-owned objects, checkpoint commits, and step 5's ZIP l
 
 ### 1. Introduce native OPFS writing and durable checkpoints
 
-Replace the [close-to-flush writer](../../web/src/output/origin-private/workspace-tree.ts) with a Worker-owned synchronous access handle. Refactor the [shared file transaction](../../web/src/output/persistent-tree/file-transaction.ts) to separate data flushing from writer closure and reopening. Share authenticated range and recovery semantics while keeping OPFS in-place flushing distinct from FSA close-and-reopen behavior.
+Replace the [close-to-flush writer](../../../web/src/output/origin-private/workspace-tree.ts) with a Worker-owned synchronous access handle. Refactor the [shared file transaction](../../../web/src/output/persistent-tree/file-transaction.ts) to separate data flushing from writer closure and reopening. Share authenticated range and recovery semantics while keeping OPFS in-place flushing distinct from FSA close-and-reopen behavior.
 
-Replace the [disabled automatic checkpoint profile](../../web/src/transfer/settlement/persistent-execution.ts) with batched checkpoints driven by elapsed time and newly written bytes. Keep queues bounded and avoid an expensive operation for every received block. Handle short writes; accept an authenticated block as written only after its full write completes.
+Replace the [disabled automatic checkpoint profile](../../../web/src/transfer/settlement/persistent-execution.ts) with batched checkpoints driven by elapsed time and newly written bytes. Keep queues bounded and avoid an expensive operation for every received block. Handle short writes; accept an authenticated block as written only after its full write completes.
 
 Keep committed payload ranges immutable for their revision. The task-owned object's coordinator establishes a common write boundary, flushes covered data, then atomically commits the corresponding ranges and format state, including ZIP CRC/layout. Entry transactions must not independently flush or close a shared handle. In-place cancellation cannot roll back writes: stop further reception, settle accepted writes, and retain the last committed checkpoint. Recovery trusts only committed ranges and may re-download unrecorded progress.
 
 ### 2. Reuse completed original files
 
-Make the received object itself the downloadable artifact. Replace the full copy in [original-file promotion](../../web/src/output/origin-private/package-store.ts) with an immutable artifact record referencing the same task-owned object. Seal the object against further writes and align [space accounting](../../web/src/output/workspace/budget.ts) with this lifecycle.
+Make the received object itself the downloadable artifact. Replace the full copy in [original-file promotion](../../../web/src/output/origin-private/package-store.ts) with an immutable artifact record referencing the same task-owned object. Seal the object against further writes and align [space accounting](../../../web/src/output/workspace/budget.ts) with this lifecycle.
 
 Keep stable internal object identities and apply the user-facing filename during export. Task ownership remains unchanged through completion and saving; cleanup must respect active export readers. This avoids browser-specific rename support and cross-task sharing machinery.
 
 ### 3. Make local completion independent of the sender
 
-Separate network continuation from local finalization in the task model and [retained-task controller](../../web/src/ui/controller/retained-inventory.ts). Require a connected share only when more remote content or metadata is needed.
+Separate network continuation from local finalization in the task model and [retained-task controller](../../../web/src/ui/controller/retained-inventory.ts). Require a connected share only when more remote content or metadata is needed.
 
 Persist selection discovery completion, selected paths, authenticated file revisions, durable progress, and artifact state. Receiving all currently discovered files does not prove the selection is complete. Once discovery and reception are complete, local finalization, saving, repeated downloads, and cleanup must work after reload with the sender offline. Track save attempts separately so a failed or cancelled save leaves the completed artifact reusable.
 
 ### 4. Establish incremental capacity accounting
 
-Replace repeated full-directory scans in [workspace admission](../../web/src/output/origin-private/workspace-root.ts) with operation-owned incremental accounting and reconciliation during recovery. Include received data, artifacts, temporary writes, metadata, and retained tasks. Track occupied bytes, outstanding growth reservations, and checkpoint/finalization headroom separately to avoid double counting.
+Replace repeated full-directory scans in [workspace admission](../../../web/src/output/origin-private/workspace-root.ts) with operation-owned incremental accounting and reconciliation during recovery. Include received data, artifacts, temporary writes, metadata, and retained tasks. Track occupied bytes, outstanding growth reservations, and checkpoint/finalization headroom separately to avoid double counting.
 
 Remove both the fixed 8 GiB per-task and 16 GiB aggregate workspace limits from admission, routing, and UI. Coordinate reservations across concurrent tasks and tabs using browser quota estimates and observed usage. Use known sizes for early routing advice and incremental reservations during discovery; quota estimates do not reserve disk space.
 
@@ -46,7 +46,7 @@ Reservations must cover file-length growth, including gaps from out-of-order ZIP
 
 ### 5. Receive progressively into a resumable ZIP
 
-Refactor the [receive plan contract](../../web/src/transfer/intent/plan.ts), [discovery scheduling](../../web/src/transfer/v2-job-materialization.ts), [receive-then-package flow](../../web/src/ui/browser-receive/workspace-packaging.ts), [ZIP layout](../../web/src/output/zip-layout/layout.ts), [ZIP builder](../../web/src/output/origin-private/zip-exporter.ts), and persisted recovery model around a ZIP stored directly in OPFS. Remove full-preparation and global path-order prerequisites; allocate fixed offsets in admission order while preserving path uniqueness and directory topology. Start receiving known selected entries while discovery continues.
+Refactor the [receive plan contract](../../../web/src/transfer/intent/plan.ts), [discovery scheduling](../../../web/src/transfer/v2-job-materialization.ts), [receive-then-package flow](../../../web/src/ui/browser-receive/workspace-packaging.ts), [ZIP layout](../../../web/src/output/zip-layout/layout.ts), [ZIP builder](../../../web/src/output/origin-private/zip-exporter.ts), and persisted recovery model around a ZIP stored directly in OPFS. Remove full-preparation and global path-order prerequisites; allocate fixed offsets in admission order while preserving path uniqueness and directory topology. Start receiving known selected entries while discovery continues.
 
 Keep the existing uncompressed STORE encoding and support ZIP64. Allocate each entry only after authenticating its opened revision and exact size; persist its path, revision, size, and fixed offsets before writing payload. If an original revision becomes unavailable, preserve unrelated progress, identify the affected file, and offer an explicit new download of its replacement.
 
@@ -64,4 +64,4 @@ Keep user actions focused on downloading a file, downloading a ZIP, or saving to
 
 Show meaningful receiving, finalizing, and saving progress, including partial discovery and actual retained storage. Hand completed artifacts to the browser automatically where supported, with an explicit save action when needed. Browser handoff must not be presented as confirmed saving. Pause preserves progress; deletion explicitly removes retained data.
 
-Provide retained-task recovery and visible storage cleanup, attempt persistent storage when a real task needs it, and explain when browser storage protection is unavailable. Replace the blanket [24-hour expiry](../../web/src/output/workspace/state.ts): preserve unfinished tasks and artifacts whose saving is unconfirmed, prompting users to choose what to delete when space is low. Apply automatic expiry only after verifiable saving or explicit user confirmation.
+Provide retained-task recovery and visible storage cleanup, attempt persistent storage when a real task needs it, and explain when browser storage protection is unavailable. Replace the blanket [24-hour expiry](../../../web/src/output/workspace/state.ts): preserve unfinished tasks and artifacts whose saving is unconfirmed, prompting users to choose what to delete when space is low. Apply automatic expiry only after verifiable saving or explicit user confirmation.
