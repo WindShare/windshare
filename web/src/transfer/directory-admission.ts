@@ -25,6 +25,18 @@ import {
   type MaterializationRootRelativePath,
 } from './job/coordinate/direct-tree'
 
+import {
+  snapshotCanonicalModifiedTime,
+  sameModifiedTime,
+  type CanonicalModifiedTime,
+} from './metadata/modified-time'
+
+export {
+  snapshotCanonicalModifiedTime,
+  sameModifiedTime,
+  type CanonicalModifiedTime,
+} from './metadata/modified-time'
+
 type CanonicalBytes = Uint8Array<ArrayBuffer>
 
 export const DIRECTORY_ADMISSION_SCHEMA_VERSION = 2 as const
@@ -38,9 +50,6 @@ export const MAX_MATERIALIZATION_PATH_BYTES = V2_CATALOG_PATH_BYTES
 
 const DIRECTORY_ADMISSION_DOMAIN = 'windshare/directory-admission/v2'
 const TEXT_ENCODER = new TextEncoder()
-const MAX_PORTABLE_MODIFIED_SECONDS = 9_007_199_254_740_991n
-const NANOSECONDS_PER_SECOND = 1_000_000_000
-const NANOSECONDS_PER_MILLISECOND = 1_000_000
 const VALID_SCOPES = new WeakSet<object>()
 
 export type DirectoryAdmissionLayout =
@@ -48,12 +57,6 @@ export type DirectoryAdmissionLayout =
   | 'directory-tree-result-root'
   | 'directory-tree-catalog-root'
   | 'zip-result-root'
-
-export interface CanonicalModifiedTime {
-  readonly seconds: bigint
-  readonly nanoseconds: number
-  readonly precision: 1 | 2 | 3
-}
 
 export interface MaterializationDirectory {
   readonly directoryId: string
@@ -148,7 +151,19 @@ export async function createDirectoryAdmissionScope(
       throw new DirectoryAdmissionBindingError(
         'DirectAtomic original-file output does not use directory admission',
       )
-    case 'workspace-then-publish':
+    case 'workspace-then-publish': {
+      if (intent.artifact.kind !== 'zip-archive') {
+        throw new DirectoryAdmissionBindingError('Original files do not use directory admission')
+      }
+      const anchor = intent.artifact.layout.anchor
+      layout = 'zip-result-root'
+      rootExpectation = materializedRootExpectation(
+        anchor.kind,
+        anchor.kind === 'directory' ? anchor.directoryId : intent.syntheticRoot,
+        [intent.artifact.layout.name],
+      )
+      break
+    }
     case 'portable-handoff':
       throw new DirectoryAdmissionBindingError(
         'prepared materialization uses its sealed manifest rather than directory admission',
@@ -258,10 +273,20 @@ export function canonicalDirectoryAdmissionMessageV2(
   const scope = snapshotDirectoryAdmissionScope(inputScope)
   const directory = snapshotMaterializationDirectory(inputDirectory)
   validateDirectoryAdmissionScopeBinding(scope, directory)
-  const parent = directory.parentAdmission === undefined
+  return canonicalDirectoryReceiptFields(scope, {
+    ...directory,
+    ...(directory.parentAdmission === undefined ? {} : { parentToken: directory.parentAdmission.token }),
+  })
+}
+
+function canonicalDirectoryReceiptFields(
+  scope: DirectoryAdmissionScope,
+  directory: Pick<DirectoryAdmission, 'directoryId' | 'generation' | 'path' | 'parentToken' | 'modifiedTime'>,
+): CanonicalBytes {
+  const parent = directory.parentToken === undefined
     ? new Uint8Array()
     : requireIdentityBytes(
-        directory.parentAdmission.token,
+        directory.parentToken,
         DIRECTORY_ADMISSION_TOKEN_BYTES,
         'parent admission token',
       )
@@ -382,6 +407,22 @@ export async function verifyDirectoryAdmissionToken(
   )
 }
 
+/** ZIP topology lives in the task store; authenticated receipts need no retained in-memory claim ledger. */
+export async function verifyDirectoryAdmissionReceipt(
+  secretInput: Uint8Array<ArrayBufferLike>,
+  inputScope: DirectoryAdmissionScope,
+  input: DirectoryAdmission,
+): Promise<boolean> {
+  const scope = snapshotDirectoryAdmissionScope(inputScope)
+  const receipt = snapshotDirectoryAdmission(input)
+  if (receipt.receiveIntentDigest !== scope.receiveIntentDigest ||
+      receipt.layout !== scope.layout || receipt.layoutVersion !== scope.layoutVersion) return false
+  const key = await importHMACKey(snapshotAdmissionSecret(secretInput), ['verify'])
+  return globalThis.crypto.subtle.verify('HMAC', key,
+    requireIdentityBytes(receipt.token, DIRECTORY_ADMISSION_TOKEN_BYTES, 'directory admission token'),
+    canonicalDirectoryReceiptFields(scope, receipt))
+}
+
 export function sameDirectoryAdmissionToken(
   left: string | undefined,
   right: string | undefined,
@@ -483,39 +524,6 @@ export function isImmediateChildPath(
 ): boolean {
   return child.length === parent.length + 1 &&
     parent.every((segment, index) => segment === child[index])
-}
-
-export function snapshotCanonicalModifiedTime(
-  input: CanonicalModifiedTime,
-): CanonicalModifiedTime {
-  if (typeof input.seconds !== 'bigint' ||
-      input.seconds < -MAX_PORTABLE_MODIFIED_SECONDS ||
-      input.seconds > MAX_PORTABLE_MODIFIED_SECONDS ||
-      !Number.isInteger(input.nanoseconds) ||
-      input.nanoseconds < 0 ||
-      input.nanoseconds >= NANOSECONDS_PER_SECOND ||
-      (input.precision !== 1 && input.precision !== 2 && input.precision !== 3) ||
-      (input.precision === 1 && input.nanoseconds !== 0) ||
-      (input.precision === 2 && input.nanoseconds % NANOSECONDS_PER_MILLISECOND !== 0)) {
-    throw new TypeError('modified time violates the canonical portable representation')
-  }
-  return Object.freeze({
-    seconds: input.seconds,
-    nanoseconds: input.nanoseconds,
-    precision: input.precision,
-  })
-}
-
-export function sameModifiedTime(
-  left: { readonly modifiedTime?: CanonicalModifiedTime },
-  right: { readonly modifiedTime?: CanonicalModifiedTime },
-): boolean {
-  if (left.modifiedTime === undefined || right.modifiedTime === undefined) {
-    return left.modifiedTime === right.modifiedTime
-  }
-  return left.modifiedTime.seconds === right.modifiedTime.seconds &&
-    left.modifiedTime.nanoseconds === right.modifiedTime.nanoseconds &&
-    left.modifiedTime.precision === right.modifiedTime.precision
 }
 
 function validateDirectoryAdmissionScopeBinding(

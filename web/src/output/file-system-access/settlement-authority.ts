@@ -710,7 +710,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         restored_checkpoint_set_digest: fallback.checkpointSetDigest,
         restored_completed_file_count: fallback.completedFileCount,
         restored_completed_bytes: fallback.completedBytes,
-        restored_expires_at_ms: fallback.expiresAt,
       }))
     } catch {
       // Durable lifecycle restoration remains authoritative when telemetry is unavailable.

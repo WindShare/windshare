@@ -20,7 +20,6 @@ import {
   storedReceiveLifecycleState,
 } from '../../src/output/workspace/state-codec'
 import {
-  STABLE_RETENTION_MILLISECONDS,
   type ReceiveLifecycleState,
 } from '../../src/output/workspace'
 import {
@@ -382,7 +381,6 @@ function resumableReceive(
       discoveredBytes: 16n,
       discovery: 'complete',
     }),
-    expiresAt: EVIDENCE_CLOCK_MILLISECONDS + STABLE_RETENTION_MILLISECONDS,
   })
 }
 

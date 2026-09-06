@@ -470,7 +470,7 @@ export class V2OutputPresentationController {
       lifecycle,
       recoverySummary,
       lifecyclePresentation,
-      expiresAt: lifecycleDeadline(lifecycle) ??
+      expiresAt: lifecycleDeadline() ??
         (lifecycle.kind === 'expired' ? lifecycle.expiresAt : null),
       workspaceUsage: lifecyclePresentation.usage === null
         ? null

@@ -73,7 +73,6 @@ export interface DurablePackageFixture extends DurableReceiveFixture {
     layoutDigest: string
     digest: string
   }>
-  readonly originalExpiry: number
 }
 
 export interface FreshPageWorkspaceResumeFixture {
@@ -146,6 +145,7 @@ export interface CompatibleNameRecoveryProof {
 }
 
 export interface ReceiveCrashCutResult {
+  readonly completedObjectId?: string
   readonly fixture: DurableReceiveFixture
   readonly ranges: readonly string[]
   readonly lifecycle: string
@@ -166,8 +166,6 @@ export interface RecoveredPackageResult {
 export interface PublicationRetryResult {
   readonly packageBytes: readonly number[]
   readonly packageDigest: string
-  readonly originalExpiry: number
-  readonly restoredExpiry: number
   readonly contentRequests: string
   readonly packageSeals: number
   readonly publicationAttempts: number
@@ -523,6 +521,7 @@ export async function reopenFreshPageWorkspaceResume(
 
 export async function createOriginPrivateReceiveCrashCut(
   key: string,
+  checkpointCut: 'partial' | 'complete' = 'partial',
 ): Promise<ReceiveCrashCutResult> {
   const ids = await durableIdentities(key)
   const intent = await durableIntent(ids)
@@ -591,8 +590,9 @@ export async function createOriginPrivateReceiveCrashCut(
       })
     },
   })
-  await transaction.writeRange(0n, FILE_BYTES.subarray(0, CHECKPOINT_PREFIX_BYTES), ACTIVE_SIGNAL)
+  await transaction.writeRange(0n, checkpointCut === 'complete' ? FILE_BYTES : FILE_BYTES.subarray(0, CHECKPOINT_PREFIX_BYTES), ACTIVE_SIGNAL)
   const ranges = await transaction.checkpoint(ACTIVE_SIGNAL)
+  const completedProof = checkpointCut === 'complete' ? await transaction.commit(ACTIVE_SIGNAL) : undefined
   await transaction.close()
   const lifecycle = await readDurableLifecycle(repository, intent.operationId)
   ;(globalThis as Record<string, unknown>).__windshareW3cCrashCut = {
@@ -609,6 +609,7 @@ export async function createOriginPrivateReceiveCrashCut(
       durableMetadataBytes: admission.content.budget.durableMetadataBytes.toString(),
     }),
     ranges: ranges.map(rangeText),
+    ...(completedProof === undefined ? {} : { completedObjectId: completedProof.ownedObjectId }),
     lifecycle: lifecycle.kind,
     contentRequests: contentRequests.toString(),
   })
@@ -770,7 +771,6 @@ export async function recoverReceiveAndSealPackage(
       ...fixture,
       rawOwnedObjectId: proof.ownedObjectId,
       package: serializedPackage(packaged.package),
-      originalExpiry: waiting.expiresAt,
     }),
     recoveredRanges,
     packageBytes: Object.freeze([...new Uint8Array(await packageBlob.arrayBuffer())]),
@@ -856,8 +856,6 @@ export async function retryRetainedPackagePublication(
   return Object.freeze({
     packageBytes,
     packageDigest: artifact.digest,
-    originalExpiry: fixture.originalExpiry,
-    restoredExpiry: waiting.expiresAt,
     contentRequests: contentRequests.toString(),
     packageSeals: traces.filter((event) => event.name === 'receive.package.sealed').length,
     publicationAttempts: traces.filter((event) => event.name === 'receive.publication.started').length,

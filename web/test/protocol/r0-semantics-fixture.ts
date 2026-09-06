@@ -25,7 +25,6 @@ export interface SemanticsVector extends VectorCase {
 
 export type ReceiveLifecycleTerminalStateName =
   | 'published'
-  | 'download-started'
   | 'partial-directory'
   | 'restart-required'
   | 'discarded'
@@ -51,20 +50,14 @@ export interface ReceiveLifecycleSemanticsVector extends SemanticsVector {
   readonly schemaVersion: 2
   readonly terminalStates: readonly ReceiveLifecycleTerminalState[]
   readonly nonterminalRecoveryStates: readonly {
-    readonly state: 'authorization-required' | 'target-verification-required' | 'destination-space-required'
-    readonly byte: 21 | 22 | 23
+    readonly state: 'download-started' | 'authorization-required' | 'target-verification-required' | 'destination-space-required'
+    readonly byte: 15 | 21 | 22 | 23
+    readonly plans?: readonly ReceiveLifecyclePlanName[]
   }[]
   readonly restartReasons: Readonly<Record<string, number>>
   readonly resumableReceivePayloadKinds: Readonly<Record<string, number>>
   readonly directZipByteSemantics: Readonly<Record<string, string>>
-  readonly deadlineWritingStates: readonly (
-    | 'resumable-receive'
-    | 'resumable-package'
-    | 'waiting-to-save'
-    | 'authorization-required'
-    | 'target-verification-required'
-    | 'destination-space-required'
-  )[]
+  readonly deadlineWritingStates: readonly []
   readonly publishedCleanupPendingRemains: 'published'
   readonly handoffNeverMeans: 'published'
   readonly completeArtifactsExclude: readonly 'partial-directory'[]
@@ -86,7 +79,6 @@ export function classifyConnectionSize(value: ConnectionSizeCase): string {
 
 const RECEIVE_TERMINAL_STATES = new Set<string>([
   'published',
-  'download-started',
   'partial-directory',
   'restart-required',
   'discarded',
@@ -100,15 +92,6 @@ const RECEIVE_PLAN_NAMES = new Set<string>([
   'workspace-then-publish',
   'portable-handoff',
   'direct-resumable-zip',
-])
-
-const DEADLINE_WRITING_STATES = new Set<string>([
-  'resumable-receive',
-  'resumable-package',
-  'waiting-to-save',
-  'authorization-required',
-  'target-verification-required',
-  'destination-space-required',
 ])
 
 export function requireReceiveLifecycleSemanticsVector(
@@ -129,7 +112,7 @@ export function requireReceiveLifecycleSemanticsVector(
       !isStringRecord(value.directZipByteSemantics)) {
     throw new Error('receive lifecycle direct-resume projections are malformed')
   }
-  if (!isArrayOf(value.deadlineWritingStates, isDeadlineWritingState)) {
+  if (!Array.isArray(value.deadlineWritingStates) || value.deadlineWritingStates.length !== 0) {
     throw new Error('receive lifecycle deadline-writing states are malformed')
   }
   if (value.publishedCleanupPendingRemains !== 'published' ||
@@ -145,7 +128,9 @@ function isNonterminalRecoveryState(
 ): value is ReceiveLifecycleSemanticsVector['nonterminalRecoveryStates'][number] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false
   const state = value as Record<string, unknown>
-  return (state.state === 'authorization-required' && state.byte === 21) ||
+  return (state.state === 'download-started' && state.byte === 15 &&
+      isArrayOf(state.plans, isReceivePlanName)) ||
+    (state.state === 'authorization-required' && state.byte === 21) ||
     (state.state === 'target-verification-required' && state.byte === 22) ||
     (state.state === 'destination-space-required' && state.byte === 23)
 }
@@ -170,12 +155,6 @@ function isReceiveLifecycleTerminalState(value: unknown): value is ReceiveLifecy
 
 function isReceivePlanName(value: unknown): value is ReceiveLifecyclePlanName {
   return typeof value === 'string' && RECEIVE_PLAN_NAMES.has(value)
-}
-
-function isDeadlineWritingState(
-  value: unknown,
-): value is ReceiveLifecycleSemanticsVector['deadlineWritingStates'][number] {
-  return typeof value === 'string' && DEADLINE_WRITING_STATES.has(value)
 }
 
 function isPartialDirectoryState(value: unknown): value is 'partial-directory' {

@@ -106,12 +106,12 @@ export async function createWorkspaceThenPublishPlan(
   }
   const artifact = await validateArtifactSpec(artifactInput)
   const workspace = await validateWorkspaceBinding(workspaceInput, artifact)
-  const preparation = artifact.kind === 'zip-archive' ? 'exact-zip' : 'none'
+  const preparation = 'none' as const
   const canonicalBytes = canonicalRecord(MATERIALIZATION_PLAN_DOMAIN, [
     Uint8Array.of(3),
     frame(workspace.canonicalBytes),
     frame(Uint8Array.of(guaranteeProfileByte(publicationGuarantee))),
-    frame(Uint8Array.of(preparation === 'exact-zip' ? 1 : 0)),
+    frame(Uint8Array.of(0)),
   ])
   return canonicalValue({
     version: MATERIALIZATION_PLAN_VERSION,

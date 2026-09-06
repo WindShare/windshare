@@ -49,7 +49,6 @@ export type FSASettlementTraceEvent =
       restored_checkpoint_set_digest: string
       restored_completed_file_count: bigint
       restored_completed_bytes: bigint
-      restored_expires_at_ms: number
     }>
 
 export interface FileSystemAccessOperationSettlementAuthority {

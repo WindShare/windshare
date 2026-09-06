@@ -7,7 +7,7 @@ import { snapshotIdentity } from '../canonical'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../lifecycle'
 import type { ReceiveOperationRepository } from '../repository'
 import { decodeStoredReceiveLifecycleState } from '../state-codec'
-import { lifecycleDeadline, type ReceiveLifecycleState } from '../state'
+import type { ReceiveLifecycleState } from '../state'
 import type {
   WorkspaceContentRequestCounter,
   WorkspaceReceiveIntent,
@@ -78,7 +78,7 @@ export class WorkspaceStageRuntime {
   ): ReceiveLifecycleState {
     const reduction = reduceReceiveLifecycle(state, event, {
       planKind: 'workspace-then-publish',
-      preparationRequired: this.intent.plan.preparation === 'exact-zip',
+      preparationRequired: false,
       activeLeaseId: this.leaseId,
       nowMilliseconds,
     })
@@ -106,16 +106,6 @@ export class WorkspaceStageRuntime {
   requireZeroContentRequests(): void {
     if (this.contentRequests.count() !== 0n) {
       throw new TypeError('workspace content was requested before durable budget admission')
-    }
-  }
-
-  requireContinuationUnexpired(state: ReceiveLifecycleState): void {
-    const deadline = lifecycleDeadline(state)
-    if (deadline !== undefined && this.now() >= deadline) {
-      throw new DOMException(
-        'Workspace deadline elapsed; expiry must be reduced before continuation',
-        'InvalidStateError',
-      )
     }
   }
 

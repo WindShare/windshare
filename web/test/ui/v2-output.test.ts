@@ -127,7 +127,7 @@ describe('artifact product presentation', () => {
     }))
     const zip = requireZipRoutes(requireChoices(presentArtifactOffers(offers)))
 
-    expect(zip.primary.choice.choiceId).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
+    expect(zip.primary.choice.choiceId).toBe('vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k')
     expect(zip.secondary?.choice.choiceId).toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
     expect(zip.primary.selectedBytes).toBe('Selected content: 1.0 KiB (exact)')
     expect(zip.primary.resultBytes).toMatch(/^ZIP package: .* \(exact\)$/u)

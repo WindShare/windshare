@@ -11,8 +11,6 @@ import {
 } from '../../../src/transfer/intent'
 import { admitWorkspaceBudget } from '../../../src/output/workspace/budget'
 import { sealPackagedArtifact } from '../../../src/output/workspace/aggregate'
-import type { WorkspaceOwnedCleanupPort } from '../../../src/output/workspace/cleanup'
-import { sealWorkspaceZipPreparation } from '../../../src/output/workspace/preparation'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   type ManifestPageRecord,
@@ -28,7 +26,6 @@ import type {
 import {
   assertWorkspaceContentGate,
   stableStateKind,
-  workspaceZipLayoutHandleId,
   WorkspaceOperationStages,
   type WorkspaceBudgetAuthority,
   type WorkspaceStageTraceEvent,
@@ -40,9 +37,8 @@ import {
 } from '../../../src/output/workspace/state-codec'
 
 describe('workspace stage admission gate', () => {
-  it('issues zero content requests and durably discards an over-budget preparation', async () => {
+  it('rejects metadata admission before opening any content', async () => {
     const intent = await zipIntent()
-    const preparation = await sealWorkspaceZipPreparation(preparationInput(intent))
     const repository = new MemoryReceiveOperationRepository()
     await repository.commitTransition({
       operationId: intent.operationId,
@@ -59,20 +55,11 @@ describe('workspace stage admission gate', () => {
       clock: () => 1_000,
       contentRequests: { count: () => contentRequests },
     })
-    await stages.beginReceive(identity(16, 12))
-    const cleanup: WorkspaceOwnedCleanupPort = {
-      removeOwnedObject: async () => Object.freeze({ kind: 'already-absent' }),
-      removeFileCheckpoints: async () => Object.freeze({
-        kind: 'clean',
-        removedRecordDigests: [],
-      }),
-    }
+    await stages.beginReceive()
     const authority: WorkspaceBudgetAuthority = {
       claim: async (budget) => {
         const capacity = Object.freeze({
-          jobLimitBytes: 1n,
-          processLimitBytes: 1n,
-          otherActiveJobPeakBytes: 0n,
+          outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
           estimatedQuotaBytes: 1n,
           currentUsageBytes: 0n,
           minimumReserveBytes: 0n,
@@ -84,25 +71,16 @@ describe('workspace stage admission gate', () => {
       },
     }
 
-    const result = await stages.admitPreparedZip({
-      preparation,
-      authority,
-      durableMetadataBytesExcludingAdmissionRecords: 0n,
-      rejectionCleanup: { targets: [], metadataHandleIds: [], port: cleanup },
+    await expect(stages.progressive.admit(authority)).rejects.toMatchObject({
+      name: 'QuotaExceededError',
     })
-
-    expect(result).toEqual(expect.objectContaining({
-      kind: 'rejected',
-      state: expect.objectContaining({ kind: 'discarded' }),
-    }))
     const lifecycle = await repository.readLifecycle(intent.operationId)
     expect(lifecycle === undefined ? undefined : decodeStoredReceiveLifecycleState(lifecycle).kind)
-      .toBe('discarded')
+      .toBe('receiving')
   })
 
   it('reissues only a durably admitted gate and releases a rejected recovery claim', async () => {
     const intent = await zipIntent()
-    const preparation = await sealWorkspaceZipPreparation(preparationInput(intent))
     const repository = new MemoryReceiveOperationRepository()
     await repository.commitTransition({
       operationId: intent.operationId,
@@ -125,11 +103,9 @@ describe('workspace stage admission gate', () => {
         throw new Error('telemetry unavailable')
       },
     })
-    await stages.beginReceive(identity(16, 12))
+    await stages.beginReceive()
     const capacity = Object.freeze({
-      jobLimitBytes: 1_000_000n,
-      processLimitBytes: 2_000_000n,
-      otherActiveJobPeakBytes: 0n,
+      outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
       estimatedQuotaBytes: 3_000_000n,
       currentUsageBytes: 0n,
       minimumReserveBytes: 0n,
@@ -150,49 +126,28 @@ describe('workspace stage admission gate', () => {
         })
       },
     }
-    const cleanup: WorkspaceOwnedCleanupPort = {
-      removeOwnedObject: async () => Object.freeze({ kind: 'already-absent' }),
-      removeFileCheckpoints: async () => Object.freeze({ kind: 'clean', removedRecordDigests: [] }),
-    }
-    const admitted = await stages.admitPreparedZip({
-      preparation,
-      authority,
-      durableMetadataBytesExcludingAdmissionRecords: 0n,
-      rejectionCleanup: { targets: [], metadataHandleIds: [], port: cleanup },
-    })
-    if (admitted.kind !== 'accepted') throw new Error('test admission unexpectedly rejected')
-    await expect(repository.readHandle(workspaceZipLayoutHandleId(
-      intent.operationId,
-      preparation.manifest.preparationId,
-    ))).resolves.toEqual(expect.objectContaining({
-      kind: 19,
-      handle: preparation.zipLayout,
-    }))
-    expect(traceNames).toEqual([
-      'receive.preparation.started',
-      'receive.preparation.sealed',
-      'receive.preparation_admission.accepted',
-    ])
+    const admitted = await stages.progressive.admit(authority)
+    expect(traceNames).toEqual(['receive.preparation_admission.accepted'])
 
     const reopened = await stages.reopenAdmittedContent({
-      budget: admitted.content.budget,
-      claim: admitted.content.claim,
+      budget: admitted.budget,
+      claim: admitted.claim,
     })
     assertWorkspaceContentGate(reopened.gate, {
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
-      workspaceBudgetDigest: admitted.content.budget.digest,
+      workspaceBudgetDigest: admitted.budget.digest,
     })
 
     contentRequests = 1n
     await expect(stages.reopenAdmittedContent({
-      budget: admitted.content.budget,
-      claim: admitted.content.claim,
+      budget: admitted.budget,
+      claim: admitted.claim,
     })).rejects.toThrow('before durable budget admission')
     expect(releases).toBe(1)
   })
 
-  it('expires a not-started handoff from the exact waiting-to-save predecessor', async () => {
+  it('retains a canceled handoff without assigning an automatic deadline', async () => {
     const intent = await zipIntent()
     const packaged = await sealPackagedArtifact({
       operationId: intent.operationId,
@@ -204,14 +159,12 @@ describe('workspace stage admission gate', () => {
       artifactReceiptDigest: identity(32, 22),
       layoutDigest: identity(32, 23),
     })
-    const expiresAt = 2_000
     const waiting = Object.freeze({
       kind: 'waiting-to-save' as const,
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
       generation: 1n,
       packageDigest: packaged.digest,
-      expiresAt,
     })
     expect(stableStateKind(waiting)).toBe('waiting-to-save')
     expect(() => stableStateKind(initialReceiveLifecycleState({
@@ -242,30 +195,19 @@ describe('workspace stage admission gate', () => {
       packagedFileSupported: true,
     })
 
-    now = expiresAt
-    const expired = await stages.recordHandoffNotStarted({
+    now = 2_000
+    const retained = await stages.recordHandoffNotStarted({
       package: packaged,
       attempt,
       reason: 'user-cancelled',
     })
     const stored = await repository.readLifecycle(intent.operationId)
 
-    expect(expired).toMatchObject({
-      kind: 'expired',
-      priorStableState: 'waiting-to-save',
-      expiresAt,
-    })
+    expect(retained).toMatchObject({ kind: 'waiting-to-save', packageDigest: packaged.digest })
     expect(stored === undefined ? undefined : decodeStoredReceiveLifecycleState(stored))
-      .toMatchObject({
-        kind: 'expired',
-        priorStableState: 'waiting-to-save',
-        expiresAt,
-      })
-    expect(trace).toContainEqual(expect.objectContaining({
-      name: 'receive.operation.expired',
-      prior_stable_state: 'waiting-to-save',
-      expires_at_ms: expiresAt,
-    }))
+      .toMatchObject({ kind: 'waiting-to-save', packageDigest: packaged.digest })
+    expect(retained).not.toHaveProperty('expiresAt')
+    expect(trace.some(event => event.name === 'receive.operation.expired')).toBe(false)
   })
 })
 
@@ -318,36 +260,6 @@ class MemoryReceiveOperationRepository implements ReceiveOperationRepository {
 
   readLease(): Promise<ReceiveOperationLeaseRecord | undefined> {
     return Promise.resolve(undefined)
-  }
-}
-
-function preparationInput(intent: Awaited<ReturnType<typeof zipIntent>>) {
-  const directoryId = intent.selection.syntheticRoot
-  const generation = identity(16, 8)
-  const rootName = intent.artifact.kind === 'zip-archive' ? intent.artifact.layout.name : 'WindShare'
-  return {
-    receiveIntent: intent,
-    preparationId: identity(16, 9),
-    generations: [{ directoryId, generation }],
-    entries: [
-      {
-        kind: 'directory' as const,
-        sourcePath: [],
-        artifactPath: [rootName],
-        directoryId,
-        generation,
-        role: 'result-root' as const,
-      },
-      {
-        kind: 'file' as const,
-        sourcePath: ['file.bin'],
-        artifactPath: [rootName, 'file.bin'],
-        fileId: identity(16, 10),
-        containingDirectoryId: directoryId,
-        generation,
-        exactSize: 3n,
-      },
-    ],
   }
 }
 

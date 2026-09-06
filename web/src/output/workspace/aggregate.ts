@@ -15,7 +15,6 @@ import {
   snapshotIdentity,
   type CanonicalBytes,
 } from './canonical'
-import { type PreparationBinding } from './manifest'
 
 interface AggregateRecordBase {
   readonly schemaVersion: 1
@@ -30,7 +29,6 @@ const TEXT_ENCODER = new TextEncoder()
 
 export interface SealedMaterializationV1 extends AggregateRecordBase {
   readonly workspaceBindingDigest: string
-  readonly preparationBinding: PreparationBinding
   readonly materializedManifestDigest: string
   readonly generationTableDigest: string
   readonly artifactVersion: number
@@ -66,7 +64,6 @@ export async function sealWorkspaceMaterialization(input: {
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly workspaceBindingDigest: string
-  readonly preparationBinding: PreparationBinding
   readonly materializedManifestDigest: string
   readonly generationTableDigest: string
   readonly artifactVersion: number
@@ -84,12 +81,10 @@ export async function sealWorkspaceMaterialization(input: {
     input.rawWorkspaceReceiptDigest,
     'raw workspace receipt digest',
   )
-  const preparationBinding = snapshotPreparationBinding(input.preparationBinding)
   const canonicalBytes = canonicalRecord('windshare/sealed-materialization/v1', 1, [
     canonicalFrame(canonicalIdentity(identity.operationId, 16, 'operation ID')),
     canonicalFrame(canonicalIdentity(identity.receiveIntentDigest, 32, 'receive intent digest')),
     canonicalFrame(canonicalIdentity(workspaceBindingDigest, 32, 'workspace binding digest')),
-    canonicalFrame(canonicalPreparationBinding(preparationBinding)),
     canonicalFrame(canonicalIdentity(materializedManifestDigest, 32, 'manifest digest')),
     canonicalFrame(canonicalIdentity(generationTableDigest, 32, 'generation table digest')),
     canonicalFrame(canonicalU8(input.artifactVersion)),
@@ -100,7 +95,6 @@ export async function sealWorkspaceMaterialization(input: {
     schemaVersion: 1,
     ...identity,
     workspaceBindingDigest,
-    preparationBinding,
     materializedManifestDigest,
     generationTableDigest,
     artifactVersion: input.artifactVersion,
@@ -122,7 +116,6 @@ export async function decodeSealedMaterializationV1(
     operationId: reader.identity(16, 'operation ID'),
     receiveIntentDigest: reader.identity(32, 'receive intent digest'),
     workspaceBindingDigest: reader.identity(32, 'workspace binding digest'),
-    preparationBinding: decodeAggregatePreparationBinding(reader.frame('preparation binding')),
     materializedManifestDigest: reader.identity(32, 'manifest digest'),
     generationTableDigest: reader.identity(32, 'generation table digest'),
     artifactVersion: reader.u8('artifact version'),
@@ -239,37 +232,6 @@ function snapshotAggregateIdentity(input: {
     operationId: snapshotIdentity(input.operationId, 16, 'operation ID'),
     receiveIntentDigest: digest(input.receiveIntentDigest, 'receive intent digest'),
   })
-}
-
-function snapshotPreparationBinding(binding: PreparationBinding): PreparationBinding {
-  return binding.kind === 'absent'
-    ? Object.freeze({ kind: 'absent' })
-    : Object.freeze({
-        kind: 'present',
-        preparationDigest: digest(binding.preparationDigest, 'preparation digest'),
-      })
-}
-
-function canonicalPreparationBinding(binding: PreparationBinding): CanonicalBytes {
-  return binding.kind === 'absent'
-    ? canonicalU8(2)
-    : concatCanonicalBytes([
-        canonicalU8(1),
-        canonicalFrame(canonicalIdentity(binding.preparationDigest, 32, 'preparation digest')),
-      ])
-}
-
-function decodeAggregatePreparationBinding(bytes: Uint8Array): PreparationBinding {
-  const reader = new AggregateReader(bytes)
-  const discriminant = reader.rawU8('preparation binding discriminant')
-  if (discriminant === 2) {
-    reader.end()
-    return Object.freeze({ kind: 'absent' })
-  }
-  if (discriminant !== 1) throw new TypeError('preparation binding discriminant is invalid')
-  const preparationDigest = reader.identity(32, 'preparation digest')
-  reader.end()
-  return Object.freeze({ kind: 'present', preparationDigest })
 }
 
 function snapshotPublicationRoute(route: PublicationAttemptRoute): PublicationAttemptRoute {

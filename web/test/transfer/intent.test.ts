@@ -227,9 +227,9 @@ describe('ReceiveIntent canonical authority', () => {
       artifactKind: 'zip-archive',
       materializationKind: 'workspace-then-publish',
       guaranteeProfile: 'browser-handoff',
-      preparation: 'exact-zip',
-    })).id).toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
-    expect(workspacePlan.preparation).toBe('exact-zip')
+      preparation: 'none',
+    })).id).toBe((await deriveArtifactChoiceIdentity(archive, workspacePlan)).id)
+    expect(workspacePlan.preparation).toBe('none')
     expect(portablePlan.publicationGuarantee).toBe('browser-handoff')
     expect(portable).toMatchObject({
       maximumArtifactBytes: DEFAULT_PORTABLE_ARTIFACT_LIMIT,

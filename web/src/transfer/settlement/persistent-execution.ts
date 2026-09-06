@@ -16,7 +16,6 @@ import type {
 } from '../../output/persistent-tree/contracts'
 import { MaterializationLedgerDirectoryOutcome } from '../../output/materialization-ledger/model'
 import type { MaterializedManifestEntry } from '../../output/workspace/manifest'
-import type { PreparationManifestEntry } from '../../output/workspace/preparation'
 import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import {
   createDirectoryAdmissionScope,
@@ -28,10 +27,8 @@ import type {
   OriginalFileArtifact,
   ReceiveIntent,
   WorkspaceThenPublishPlan,
-  ZipArchiveArtifact,
 } from '../intent'
 import {
-  disabledOutputExecutionProfile,
   outputCapabilities,
   outputExecutionProfile,
   outputSessionIdentity,
@@ -40,7 +37,6 @@ import {
   snapshotOutputFileRequest,
   type BeginOutputFileResult,
   type DirectTreeExecution,
-  type ExactPreparationEvidence,
   type ExactSingleFileEvidence,
   type IncrementalDirectoryOutput,
   type OpenedOutputRevision,
@@ -55,12 +51,10 @@ import {
 import { V2OutputPausedError } from '../job/contract'
 import {
   createDirectTreeCoordinateContract,
-  snapshotMaterializationRootRelativePath,
   type DirectTreeCoordinateContract,
   type MaterializationRootRelativePath,
 } from '../job/coordinate/direct-tree'
 import {
-  snapshotExactPreparationEvidence,
   snapshotExactSingleFileEvidence,
 } from './v2-plan-authority'
 import {
@@ -100,12 +94,11 @@ type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
   plan: WorkspaceThenPublishPlan
   artifact: OriginalFileArtifact
 }>
-type WorkspaceZipIntent = ReceiveIntent & Readonly<{
-  plan: WorkspaceThenPublishPlan
-  artifact: ZipArchiveArtifact
-}>
 
 const TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES = 4
+const WORKSPACE_WRITE_BUDGET_BYTES = 8n * 1024n * 1024n
+const WORKSPACE_CHECKPOINT_PENDING_BYTES = 16n * 1024n * 1024n
+const WORKSPACE_CHECKPOINT_PENDING_MILLISECONDS = 5_000
 
 type PersistentCheckpointNamespaceEvidence = PersistentOutputTransactionNamespace
 
@@ -201,77 +194,40 @@ interface PersistentWorkspaceExecutionInputBase {
   readonly capabilities?: Partial<OutputCapabilities>
 }
 
-export type PersistentWorkspaceExecutionInput = PersistentWorkspaceExecutionInputBase & (
-  | Readonly<{
-      intent: WorkspaceOriginalIntent
-      admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-    }>
-  | Readonly<{
-      intent: WorkspaceZipIntent
-      admission: Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>
-    }>
-)
+export type PersistentWorkspaceExecutionInput = PersistentWorkspaceExecutionInputBase & Readonly<{
+  intent: WorkspaceOriginalIntent
+  admission: Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
+}>
 
 export async function createPersistentWorkspaceExecution(
   input: PersistentWorkspaceExecutionInput,
 ): Promise<WorkspaceExecution> {
-  let admission:
-    | Readonly<{ kind: 'single-file'; evidence: ExactSingleFileEvidence }>
-    | Readonly<{ kind: 'prepared'; evidence: ExactPreparationEvidence }>
-  if (input.intent.artifact.kind === 'original-file') {
-    if (input.admission.kind !== 'single-file') {
-      throw new TypeError('Workspace OriginalFile requires exact single-file admission')
-    }
-    admission = Object.freeze({
-      kind: 'single-file' as const,
-      evidence: snapshotExactSingleFileEvidence(
-        input.intent as WorkspaceOriginalIntent,
-        input.admission.evidence,
-      ),
-    })
-  } else {
-    if (input.admission.kind !== 'prepared') {
-      throw new TypeError('Workspace ZIP requires sealed preparation evidence')
-    }
-    admission = Object.freeze({
-      kind: 'prepared' as const,
-      evidence: snapshotExactPreparationEvidence(input.admission.evidence),
-    })
-  }
+  const admission = Object.freeze({
+    kind: 'single-file' as const,
+    evidence: snapshotExactSingleFileEvidence(input.intent, input.admission.evidence),
+  })
   const adapter = new PersistentMaterializationOutput({
     materialization: input.materialization,
     checkpointNamespace: checkpointNamespace(input.intent),
     outputIdentity: input.outputIdentity,
-    executionProfile: disabledOutputExecutionProfile(
-      TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES,
-    ),
+    executionProfile: outputExecutionProfile({
+      maximumConcurrentFilePipelines: TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES,
+      maximumOutstandingWriteBytes: WORKSPACE_WRITE_BUDGET_BYTES,
+      maximumBufferedBytes: WORKSPACE_WRITE_BUDGET_BYTES,
+      automaticCheckpoint: { kind: 'bounded', trigger: {
+        pendingBytes: WORKSPACE_CHECKPOINT_PENDING_BYTES,
+        pendingMilliseconds: WORKSPACE_CHECKPOINT_PENDING_MILLISECONDS,
+      } },
+    }),
     capabilities: persistentCapabilities({
       fileFailureIsolation: false,
       ...input.capabilities,
     }),
   })
-  const generations = admission.kind === 'prepared'
-    ? admission.evidence.generations
-    : Object.freeze([Object.freeze({
-        directoryId: admission.evidence.containingDirectoryId,
-        generation: admission.evidence.generation,
-      })])
-  if (admission.kind === 'prepared') {
-    try {
-      await adapter.materializePreparedDirectories(admission.evidence.entries, input.signal)
-    } catch (cause) {
-      try {
-        await adapter.close()
-      } catch (releaseFailure) {
-        throw new AggregateError(
-          [cause, releaseFailure],
-          'prepared workspace materialization and resource release both failed',
-          { cause: releaseFailure },
-        )
-      }
-      throw cause
-    }
-  }
+  const generations = Object.freeze([Object.freeze({
+    directoryId: admission.evidence.containingDirectoryId,
+    generation: admission.evidence.generation,
+  })])
   const evidence = (): WorkspaceMaterializationEvidence => {
     const materialized = adapter.workspaceEvidence()
     return Object.freeze({
@@ -464,27 +420,6 @@ class PersistentMaterializationOutput implements OutputSession {
     return Object.freeze(directories)
   }
 
-  async materializePreparedDirectories(
-    entries: readonly PreparationManifestEntry[],
-    signal: AbortSignal,
-  ): Promise<void> {
-    for (const entry of entries) {
-      if (entry.kind !== 'directory') continue
-      signal.throwIfAborted()
-      const materializationRelativePath = snapshotMaterializationRootRelativePath(
-        entry.artifactPath,
-      )
-      const materialized = await this.#materialization.ensureDirectory(materializationRelativePath)
-      this.#recordDirectory({
-        kind: 'directory',
-        artifactPath: materializationRelativePath,
-        directoryId: entry.directoryId,
-        generation: entry.generation,
-        ownedObjectId: materialized.ownedObjectId,
-      })
-    }
-  }
-
   async beginFile(input: OutputFileRequest, signal: AbortSignal): Promise<BeginOutputFileResult> {
     signal.throwIfAborted()
     const request = snapshotOutputFileRequest(input, this.#directTreeCoordinates)
@@ -622,10 +557,6 @@ class PersistentMaterializationOutput implements OutputSession {
     this.#preservingWriterCapacity?.close('terminal-drain')
   }
 
-  #recordDirectory(entry: Extract<MaterializedManifestEntry, { kind: 'directory' }>): void {
-    this.#recordEntry(Object.freeze({ ...entry, artifactPath: Object.freeze([...entry.artifactPath]) }))
-  }
-
   #recordFile(proof: FinalFileCheckpointProof): void {
     if (this.#directTreeCoordinates !== undefined) return
     this.#recordEntry(Object.freeze({
@@ -690,7 +621,7 @@ function requireMatchingPersistentRevision(
 }
 
 function checkpointNamespace(
-  intent: DirectTreeIntent | WorkspaceOriginalIntent | WorkspaceZipIntent,
+  intent: DirectTreeIntent | WorkspaceOriginalIntent,
 ): PersistentCheckpointNamespaceEvidence {
   return Object.freeze({
     operationId: intent.operationId,

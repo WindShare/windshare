@@ -172,7 +172,7 @@ export class ActiveReceiveLifecycle {
     this.cancelExpiry(active)
     const lifecycle = this.#outputs.getSnapshot().lifecycle
     if (!this.#operationIsCurrent(active) || lifecycle === null) return
-    const deadline = lifecycleDeadline(lifecycle)
+    const deadline = lifecycleDeadline()
     if (deadline === undefined) return
     const delay = Math.min(
       MAXIMUM_TIMER_DELAY_MILLISECONDS,

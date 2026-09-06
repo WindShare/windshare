@@ -490,6 +490,22 @@ describe('retained terminal repair presentation', () => {
 })
 
 describe('retained action incident ownership', () => {
+  it.each(['resume-package', 'resume-local-finalization'] as const)(
+    'performs %s without a joined sender', async continuation => {
+      const source = operation(['continue'], continuation)
+      let acted = false
+      const inventory = testInventory([source], async () => {
+        acted = true
+        return Object.freeze({ kind: 'completed' as const })
+      })
+      const harness = retainedHarness(() => Promise.resolve(inventory))
+      await harness.coordinator.load()
+      harness.coordinator.perform(source, 'continue')
+      await turns()
+      expect(acted).toBe(true)
+      expect(harness.actionErrors).toEqual([])
+    },
+  )
   it.each([
     ['continue', 'resume-receive'],
     ['save', 'save-artifact'],
