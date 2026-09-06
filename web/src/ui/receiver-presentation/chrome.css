@@ -1,0 +1,134 @@
+.receiver-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0 max(32px, calc((100% - 1120px) / 2)) 48px;
+  background: var(--receiver-page);
+  line-height: 1.5;
+  isolation: isolate;
+}
+.receiver-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  min-height: 80px;
+  padding-block: 10px;
+  border-bottom: 1px solid var(--receiver-rule);
+}
+.receiver-shell .brand {
+  color: inherit;
+  text-decoration: none;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -.055em;
+  min-width: 0;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+/* Enlarged text may need a second header row; neither entry can lose its label. */
+.receiver-header-actions { display: flex; align-items: center; gap: 20px; min-width: 0; max-width: 100%; margin-left: auto; }
+.receiver-shell .downloads-entry {
+  min-height: 40px;
+  max-width: 100%;
+  flex-wrap: wrap;
+  white-space: normal;
+  border: 0;
+  border-radius: 4px;
+  padding: 8px 0;
+  background: transparent;
+  color: var(--receiver-ink);
+  font-size: .8125rem;
+}
+.receiver-shell .downloads-entry:hover:not(:disabled) {
+  background: transparent;
+  color: var(--receiver-accent);
+}
+.receiver-shell .attention-count {
+  background: var(--receiver-warning-wash);
+  color: var(--receiver-warning);
+}
+.share-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 182px;
+  align-items: center;
+  gap: 26px;
+  min-height: 188px;
+  padding-block: 29px 30px;
+  border-bottom: 2px solid var(--receiver-ink);
+}
+.share-heading-copy { min-width: 0; }
+.share-heading h1 {
+  margin: 0;
+  max-width: 760px;
+  overflow-wrap: anywhere;
+  font-size: clamp(1.875rem, 4.1vw, 2.75rem);
+  line-height: 1.07;
+  letter-spacing: -.055em;
+  font-weight: 500;
+}
+.share-metadata { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 10px; }
+.receiver-shell .share-metadata button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  max-width: 100%;
+  padding: 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--receiver-muted);
+  font-size: .75rem;
+  text-align: left;
+}
+.receiver-shell .share-metadata button:hover:not(:disabled) { color: var(--receiver-accent); background: transparent; }
+.share-metadata .receiver-icon { width: 14px; height: 14px; }
+.receiver-shell .share-metadata .connection-reconnecting,
+.receiver-shell .share-metadata .connection-ended,
+.receiver-shell .share-metadata .connection-unavailable { color: var(--receiver-warning); }
+.receiver-content-photo .share-heading,
+.receiver-content-video .share-heading { min-height: 144px; grid-template-columns: minmax(0, 1fr) 104px; }
+.share-error {
+  margin-block: 16px;
+  padding: 14px 16px;
+  background: var(--receiver-error-wash);
+  color: var(--receiver-error);
+  border-radius: 4px;
+  overflow-wrap: anywhere;
+}
+.share-loading { padding: 48px 0; color: var(--receiver-muted); }
+.key-form { max-width: 640px; margin-block: 32px; }
+.key-form label { font-weight: 600; }
+.key-form p { color: var(--receiver-muted); }
+.key-entry { display: flex; gap: 10px; }
+.key-entry input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--receiver-rule);
+  border-radius: 4px;
+  padding: 12px;
+  background: var(--receiver-paper);
+}
+@media (max-width: 650px) {
+  .receiver-shell { padding-inline: 22px; padding-bottom: 30px; }
+  .receiver-header { min-height: 70px; }
+  .share-heading { min-height: 156px; grid-template-columns: minmax(0, 1fr) 100px; gap: 12px; padding-block: 24px; }
+  .receiver-content-photo .share-heading,
+  .receiver-content-video .share-heading { min-height: 132px; grid-template-columns: minmax(0, 1fr) 100px; }
+}
+@media (max-width: 430px) {
+  .receiver-shell { padding-inline: 16px; }
+  .receiver-header { min-height: 65px; gap: 10px; }
+  .receiver-header-actions { gap: 10px; }
+  .share-heading,
+  .receiver-content-photo .share-heading,
+  .receiver-content-video .share-heading { min-height: 136px; grid-template-columns: minmax(0, 1fr) 64px; gap: 10px; padding-block: 22px; }
+  .share-heading h1 { font-size: 1.875rem; }
+  .share-metadata { column-gap: 10px; }
+  .receiver-shell .share-metadata button { min-height: 44px; }
+  .key-entry { flex-direction: column; }
+}
+@media (pointer: coarse) {
+  .receiver-shell .share-metadata button,
+  .receiver-shell .downloads-entry { min-height: 44px; }
+}

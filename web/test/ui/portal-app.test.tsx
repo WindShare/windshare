@@ -4,11 +4,34 @@ import App from '../../src/App'
 import { experienceController, experienceSnapshot } from './receiver-experience-fixture'
 
 describe('Portal and receiver experience', () => {
-  it('keeps Downloads available on the landing portal without promoting unrelated history', () => {
-    const html = renderToString(<App controller={experienceController(experienceSnapshot())} />)
+  it.each([
+    { kind: 'loading', operations: [], error: null, pending: null },
+    { kind: 'ready', operations: [], error: null, pending: null },
+    { kind: 'failed', operations: [], error: 'Stored receive tasks could not be loaded.', pending: null },
+  ] as const)('keeps a quiet browser download-records entry while inventory is $kind', retained => {
+    const html = renderToString(<App controller={experienceController(experienceSnapshot({ retained }))} />)
     expect(html).toContain('无需上传云端')
-    expect(html).toContain('Downloads')
+    expect(html).toContain('下载记录')
+    expect(html).toContain('当前浏览器的下载任务与记录')
+    expect(html).toMatch(/<div class="portal-downloads-utility"><button[^>]*class="downloads-entry"/)
+    expect(html).not.toContain('attention-count')
     expect(html).not.toContain('一键恢复任务')
+    expect(html).not.toContain('<dialog')
+  })
+
+  it('keeps the original homepage navigation separate from browser download records', () => {
+    const html = renderToString(<App controller={experienceController(experienceSnapshot())} />)
+    const header = html.match(/<header class="portal-header">[\s\S]*?<\/header>/)?.[0]
+    expect(header).toContain('WindShare 首页')
+    expect(header).toContain('E2EE Suite-02')
+    expect(header).toContain('主要导航')
+    expect(header).toContain('href="#features"')
+    expect(header).toContain('href="#how-it-works"')
+    expect(header).toContain('href="#cli"')
+    expect(header).toContain('href="#self-host"')
+    expect(header).toContain('查看 GitHub 开源仓库')
+    expect(header).not.toContain('downloads-entry')
+    expect(html).toMatch(/<\/form><\/div><\/div><div class="portal-downloads-utility">/)
   })
 
   it('gives authenticated share identity the main heading and keeps browsing available during local work', () => {
@@ -36,7 +59,7 @@ describe('Portal and receiver experience', () => {
       phase: 'browsing', breadcrumbs: [{ id: 'root', name: 'Shared files' }],
       draft: { mode: 'selection', scope: 'selected', label: 'Selected items', summary: 'No items selected', empty: true },
     }))} />)
-    expect(html).toMatch(/<button[^>]*disabled[^>]*>Download selected<\/button>/)
+    expect(html.replace(/<svg\b[^>]*>[\s\S]*?<\/svg>/g, '')).toMatch(/<button[^>]*disabled[^>]*>Download selected<\/button>/)
     expect(html).toContain('Select items to download')
     expect(html).toContain('Select this page')
     expect(html).toContain('Done selecting')
