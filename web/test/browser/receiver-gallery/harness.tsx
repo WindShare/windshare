@@ -1,5 +1,6 @@
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
+import { PortalApp } from '../../../src/ui/portal/PortalApp'
 import { V2ReceiverApp } from '../../../src/ui/V2ReceiverApp'
 import type { V2ReceiverController } from '../../../src/ui/v2-controller'
 import type { V2ReceiverSnapshot } from '../../../src/ui/v2-model'
@@ -98,6 +99,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   root?.unmount()
   active?.close()
   active = new GalleryController(await gallerySnapshot(scenario))
+  // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
+  Object.assign(window, { windshareGalleryEvidence: galleryEvidence })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
   const toolbar = document.createElement('nav')
@@ -115,7 +118,8 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   root = createRoot(container)
   // Test data supplies snapshots and records intents; every rendered control is
   // the production receiver, with no networking or destination authority.
-  flushSync(() => root!.render(<V2ReceiverApp controller={active as unknown as V2ReceiverController} />))
+  const Surface = scenario.startsWith('portal') ? PortalApp : V2ReceiverApp
+  flushSync(() => root!.render(<Surface controller={active as unknown as V2ReceiverController} />))
 }
 
 export function galleryEvidence() {
