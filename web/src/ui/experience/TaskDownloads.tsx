@@ -17,17 +17,18 @@ export function TaskSourceDetails({ operationId, snapshot, controller }: {
     prepareReplacement={failure => controller.prepareReplacementDownload(operation, failure)} />
 }
 
-export function TaskDownloads({ tasks, snapshot, controller, home = 'share', open, onOpenChange }: {
+export function TaskDownloads({ tasks, snapshot, controller, entryLabel, entryDescription, open, onOpenChange }: {
   readonly tasks: readonly TaskPresentation[]
   readonly snapshot: V2ReceiverSnapshot
   readonly controller: V2ReceiverController
-  readonly home?: 'share' | 'home'
+  readonly entryLabel?: string
+  readonly entryDescription?: string
   readonly open?: boolean
   readonly onOpenChange?: (open: boolean) => void
 }) {
   const [localOpen, setLocalOpen] = useState(false)
   return <Downloads open={open ?? localOpen} onOpenChange={onOpenChange ?? setLocalOpen} tasks={tasks} actions={taskActions(controller, snapshot)}
     loading={snapshot.retained.kind === 'loading'} error={snapshot.retained.error}
-    busy={snapshot.retained.pending !== null} home={home} onIntent={action => controller.recordExperienceIntent(action)}
+    busy={snapshot.retained.pending !== null} {...(entryLabel === undefined ? {} : { entryLabel })} {...(entryDescription === undefined ? {} : { entryDescription })} onIntent={action => controller.recordExperienceIntent(action)}
     details={operationId => <TaskSourceDetails operationId={operationId} snapshot={snapshot} controller={controller} />} />
 }

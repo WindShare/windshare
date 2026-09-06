@@ -12,6 +12,8 @@ import { TaskCard, TaskDetails } from './tasks/TaskView'
 import { composeTasks } from './experience/task-composition'
 import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
 import { ConnectionDetails } from './experience/ConnectionDetails'
+import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
+import { ReceiverFold } from './receiver-presentation/ReceiverFold'
 
 function KeyForm({ controller }: { readonly controller: V2ReceiverController }) {
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -61,20 +63,28 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
     operation.operationId === task.operationId && operation.shareInstance === share?.shareInstance && task.primaryAction !== null)) : undefined
   const hasContent = share !== null || snapshot.breadcrumbs.length > 0
 
-  return <main className="receiver-shell">
+  return <main className={`receiver-shell receiver-content-${share?.kind ?? 'pending'}`}>
     <header className="receiver-header">
-      <a className="brand" href="/" aria-label="WindShare home"><span className="brand-mark" aria-hidden="true">W</span>WindShare</a>
+      <a className="brand" href="/" aria-label="WindShare home">WindShare</a>
       <div className="receiver-header-actions">
-        <button className="encryption-note" type="button" onClick={() => openDetails('connection')}>Encrypted</button>
         <TaskDownloads tasks={tasks} snapshot={snapshot} controller={controller} open={downloadsOpen} onOpenChange={setDownloadsOpen} />
       </div>
     </header>
     <div className="share-workspace">
       <div className="share-heading">
-        <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
-        <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={() => openDetails('connection')}>
-          {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
-        </button>
+        <div className="share-heading-copy">
+          <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
+          <div className="share-metadata">
+            <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={() => openDetails('connection')}>
+              <ReceiverIcon name="connection" />
+              {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
+            </button>
+            <button className="encryption-note" type="button" onClick={() => openDetails('connection')}>
+              <ReceiverIcon name="lock" />Encrypted
+            </button>
+          </div>
+        </div>
+        <ReceiverFold compact={single?.kind === 'photo' || single?.kind === 'video'} />
       </div>
       {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error}</div>}
       {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
@@ -89,6 +99,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
         } }} />}
       {hasContent && <SavingControls model={saving} activation={snapshot.output.activationPresentation}
+        currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
+          ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
         actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId)}
         retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
         onIntent={action => controller.recordExperienceIntent(action)} />}

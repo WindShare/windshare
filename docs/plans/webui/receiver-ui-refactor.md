@@ -46,7 +46,7 @@ Current download: object name · stage · useful progress
 
 The header keeps the brand small. Encryption explanation, connection details, and diagnostic export are available without occupying the main flow. Joining shows “Connecting to the sender…”; after connection, ordinary status becomes quiet. A delay or interruption becomes prominent when it affects an action or the current task.
 
-Downloads is accessible from the receiver and landing portal. It lists current and retained operations, with an attention count for decisions. Browsing within the current share and opening Downloads or task details preserve the current task without expanding unrelated history. The current task and Downloads use the same identity, stage, and actions.
+Downloads stays available in the receiver header and as a quiet “下载记录” utility below the homepage console, outside its tabs. The portal describes it as “当前浏览器的下载任务与记录”; only decisions needing attention create a badge. Opening it is always explicit. The list and its internal task-detail view preserve the current task and share the same identity, stage, and actions.
 
 Information has three levels:
 
@@ -135,7 +135,7 @@ Pause means keeping supported progress. Cancellation explains the actual disposi
 
 ## Downloads and recovery
 
-Each row begins with the shared object or selection label, followed by stage, destination when known, creation time, and the relevant action. Stable labels make similar operations distinguishable. A matching operation from the current share may produce one compact continuation suggestion; matching uses share and operation identity rather than a filename alone.
+Each row begins with the shared object or selection label, followed by stage, destination when known, creation time, and the relevant action. Stable labels make similar operations distinguishable. Loading and inventory errors appear inside the drawer; empty copy appears only after a successful inventory load. Details drills into the same drawer, with separate return-to-list and close controls. A matching operation from the current share may produce one compact continuation suggestion; matching uses share and operation identity rather than a filename alone.
 
 After refresh or reopening, rows distinguish local Save/finalization, share reconnection, reopening the original link when credentials are missing, and destination reauthorization. A record alone does not imply a running transfer. Local finalization proceeds automatically when authorized and safe; otherwise show the required action and consequence. Local work blocks only competing operations, leaving browsing and preview available.
 
@@ -170,7 +170,7 @@ Emit structured events for presentation transitions, recommendation decisions, p
 
 ## Visual and responsive design
 
-Use a neutral background, high-contrast text, fine separators, and the existing green as a restrained action accent. Let filenames and media carry the hierarchy. Replace the marketing-scale heading, nested cards, heavy shadows, and narrow permanent save rail with one content workspace.
+Use the approved Jade palette. The receiver follows the system’s light or dark appearance live; the homepage and dialogs opened from it stay dark, including nested confirmations. Give the receiver a clear share title, fine separators, opaque file and task surfaces, and a small decorative fold. Filenames and uncropped media carry the hierarchy; icons and selection treatments supplement native controls. Preserve the homepage’s hero, console, branding, colors, and effects, and restore its original brand / navigation / repository header composition.
 
 Desktop gives the explorer useful width and opens list previews in a side sheet. Single-file media stays inline. Tablet uses overlay details; mobile uses touch-sized rows and full-screen preview or task details. Keep download actions within easy reach without covering the media, player controls, or the end of the list. Selection and task controls remain clearly associated with their own object or draft.
 
