@@ -1,0 +1,123 @@
+.detail-sheet {
+  position: fixed;
+  inset: 0 0 0 auto;
+  margin: 0;
+  width: min(580px, 92vw);
+  max-width: 100%;
+  height: 100dvh;
+  max-height: 100dvh;
+  padding: 0;
+  border: 0;
+  border-left: 1px solid var(--receiver-rule);
+  background: var(--receiver-paper);
+  color: var(--receiver-ink);
+  text-align: start;
+  box-shadow: -15px 0 70px var(--receiver-shadow);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.detail-sheet::backdrop { background: var(--receiver-backdrop); }
+.detail-sheet-body { min-height: 100%; padding: 0 28px 42px; overflow-wrap: anywhere; }
+.detail-sheet-heading {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px 16px;
+  padding-block: 22px 20px;
+  border-bottom: 1px solid var(--receiver-rule);
+  margin-bottom: 20px;
+  background: var(--receiver-paper);
+}
+.detail-sheet-titles { flex: 1; min-width: 0; }
+.detail-sheet-heading h2 {
+  min-width: 0;
+  font-size: 1.625rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: -.04em;
+  overflow-wrap: anywhere;
+  margin: 5px 0 0;
+}
+.detail-sheet-heading .detail-sheet-return { flex: none; width: 44px; min-height: 44px; padding: 10px; margin-right: -10px; }
+.detail-sheet-heading .detail-sheet-subtitle { margin: 8px 0 0; color: var(--receiver-muted); font-size: .8125rem; line-height: 1.5; }
+.detail-sheet.preview-sheet { width: min(820px, 85vw); }
+.detail-sheet p { line-height: 1.6; font-size: .875rem; }
+.detail-sheet details { margin-top: 22px; line-height: 1.6; }
+.detail-sheet summary { cursor: pointer; font-size: .875rem; font-weight: 550; padding-block: 10px; }
+.detail-sheet h3 { font-size: 1.0625rem; font-weight: 550; letter-spacing: -.02em; }
+.detail-sheet small { display: block; color: var(--receiver-muted); font-size: .8125rem; line-height: 1.55; margin-top: 7px; }
+.detail-sheet .task-detail-stage { font-size: 1.0625rem; font-weight: 550; }
+.detail-sheet :is(.task-facts, .connection-details dl, .compatible-name-repair dl) {
+  display: grid;
+  grid-template-columns: minmax(80px, auto) minmax(0, 1fr);
+  gap: 10px 18px;
+  margin-block: 24px;
+  font-size: .8125rem;
+  line-height: 1.6;
+}
+.detail-sheet dt { color: var(--receiver-muted); }
+.detail-sheet dd { margin: 0; overflow-wrap: anywhere; }
+.detail-sheet .task-detail-list { padding-left: 20px; color: var(--receiver-muted); font-size: .875rem; line-height: 1.7; }
+.detail-sheet .task-detail-list:empty { display: none; }
+.detail-sheet .task-detail-list li + li { margin-top: 6px; }
+.detail-sheet .task-removal { border-top: 1px solid var(--receiver-rule); padding-top: 12px; color: var(--receiver-muted); }
+.detail-sheet .task-removal p { font-size: .8125rem; }
+.detail-sheet .task-details > .task-actions { margin-block: 24px; gap: 18px; }
+.detail-sheet .downloads-list .task-card { padding-block: 17px; }
+.detail-sheet .downloads-list .task-card:first-child { padding-top: 0; }
+.detail-sheet .downloads-list .task-summary { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 18px; }
+.detail-sheet .downloads-list .task-identity { gap: 4px; }
+.detail-sheet .downloads-list .task-identity small { margin: 0; }
+.detail-sheet .downloads-list .task-actions { flex-direction: column; align-items: stretch; max-width: 180px; gap: 2px; }
+.detail-sheet .downloads-list .task-actions .quiet-action { align-self: flex-end; }
+.detail-sheet .downloads-list .task-actions .primary-action { min-height: 40px; padding: 9px 13px; }
+.detail-sheet .downloads-list .task-progress { flex-direction: column; align-items: stretch; gap: 8px; margin-top: 12px; }
+.detail-sheet .downloads-list .task-progress progress { width: 100%; }
+.detail-sheet .downloads-back { justify-content: flex-start; padding-left: 0; margin: -8px 0 8px; font-size: .8125rem; }
+.detail-sheet .downloads-index:focus { outline: none; }
+.detail-sheet .downloads-empty { padding-block: 20px 28px; color: var(--receiver-muted); }
+.detail-sheet .downloads-empty p { margin: 0; }
+.detail-sheet .downloads-empty p:first-child { color: var(--receiver-ink); font-weight: 550; margin-bottom: 6px; }
+.detail-sheet .downloads-error { padding: 14px; background: var(--receiver-error-wash); color: var(--receiver-error); border-left: 2px solid currentColor; }
+.detail-sheet .storage-details { color: var(--receiver-muted); font-size: .8125rem; margin-top: 12px; }
+.detail-sheet .retained-handoff { padding: 16px; margin-top: 24px; background: var(--receiver-wash); border-left: 2px solid var(--receiver-accent); }
+.detail-sheet .retained-handoff p { margin-top: 0; }
+.detail-sheet .task-details > section[aria-label="Files requiring a new download"] { margin-top: 24px; border-top: 1px solid var(--receiver-rule); padding-top: 16px; }
+.detail-sheet .task-details > section[aria-label="Files requiring a new download"] li { margin-block: 12px; font-size: .8125rem; }
+.detail-sheet .task-details > section[aria-label="Files requiring a new download"] button { max-width: 100%; overflow-wrap: anywhere; text-align: left; }
+.detail-sheet .saving-outcome { padding-bottom: 24px; border-bottom: 1px solid var(--receiver-rule); }
+.detail-sheet .saving-choice + .saving-choice { margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--receiver-rule); }
+.detail-sheet .saving-choice p { margin-block: 10px; }
+.detail-sheet .saving-choice > button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; margin-top: 16px; }
+.detail-sheet .saving-choice .action-reason { color: var(--receiver-warning); }
+.detail-sheet .saving-recommendation { background: var(--receiver-wash); padding: 14px; }
+.detail-sheet .compatible-name-repair { margin-top: 24px; border-top: 1px solid var(--receiver-rule); padding-top: 20px; font-size: .8125rem; overflow-wrap: anywhere; }
+.detail-sheet .compatible-name-repair-catch-up-required > [role=status] > strong { color: var(--receiver-warning); }
+.detail-sheet .compatible-name-repair code { overflow-wrap: anywhere; white-space: pre-wrap; }
+.detail-sheet .compatible-name-repair pre { max-width: 100%; overflow-x: auto; background: var(--receiver-stage); color: var(--receiver-ink); padding: 14px; border: 1px solid var(--receiver-rule); border-radius: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .detail-sheet[open] .detail-sheet-body { animation: receiver-sheet-enter 160ms ease-out; }
+  @keyframes receiver-sheet-enter { from { opacity: .8; } to { opacity: 1; } }
+}
+@media (max-width: 1000px) {
+  .detail-sheet { inset: 6dvh auto auto 50%; transform: translateX(-50%); width: min(700px, 90vw); height: auto; max-height: 88dvh; border: 1px solid var(--receiver-rule); border-radius: 4px; }
+  .detail-sheet.preview-sheet { width: 90vw; }
+}
+@media (max-width: 600px) {
+  .detail-sheet,
+  .detail-sheet.preview-sheet { inset: 0; transform: none; width: 100%; height: 100dvh; max-height: 100dvh; max-width: 100%; border: 0; border-radius: 0; }
+  .detail-sheet-body { padding: 0 18px calc(30px + env(safe-area-inset-bottom)); }
+  .detail-sheet-heading { padding-block: calc(16px + env(safe-area-inset-top)) 16px; gap: 8px 12px; }
+  .detail-sheet-heading h2 { font-size: 1.375rem; }
+  .detail-sheet .downloads-list .task-actions { max-width: 132px; }
+  .detail-sheet .downloads-list .task-actions .primary-action { min-height: 44px; }
+}
+@media (max-width: 380px) {
+  .detail-sheet .downloads-list .task-summary { grid-template-columns: minmax(0, 1fr); gap: 8px; }
+  .detail-sheet .downloads-list .task-actions { flex-direction: row; max-width: 100%; gap: 10px; }
+  .detail-sheet :is(.task-facts, .connection-details dl, .compatible-name-repair dl) { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+  .detail-sheet :is(.task-facts, .connection-details dl, .compatible-name-repair dl) dd + dt { margin-top: 10px; }
+}

@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import type { V2ReceiverController } from '../v2-controller'
 
 function ReceiveTab({
@@ -200,8 +200,10 @@ function DesktopTab() {
 
 export function HeroSection({
   controller,
+  downloads,
 }: {
   readonly controller: V2ReceiverController
+  readonly downloads: ReactNode
 }) {
   const [activeTab, setActiveTab] = useState<'receive' | 'cli' | 'desktop'>('receive')
 
@@ -275,6 +277,7 @@ export function HeroSection({
             {activeTab === 'desktop' && <DesktopTab />}
           </div>
         </div>
+        <div className="portal-downloads-utility">{downloads}</div>
       </div>
     </section>
   )

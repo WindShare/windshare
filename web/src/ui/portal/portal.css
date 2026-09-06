@@ -210,6 +210,38 @@
   line-height: 1.6;
 }
 
+.portal-downloads-utility {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+.portal-downloads-utility .downloads-entry {
+  min-height: 44px;
+  padding: 8px 12px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--portal-text-muted);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: color 0.2s ease, background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.portal-downloads-utility .downloads-entry:hover {
+  background: var(--portal-surface-hover);
+  border-color: var(--portal-card-border);
+  color: #6ee7b7;
+}
+
+.portal-downloads-utility .downloads-entry:focus-visible {
+  outline: 2px solid var(--portal-primary);
+  outline-offset: 3px;
+  color: #6ee7b7;
+}
+
 /* Dual Console Card */
 .portal-console-card {
   max-width: 780px;

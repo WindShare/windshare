@@ -1,0 +1,66 @@
+.receiver-fold {
+  --receiver-fold-light: color-mix(in srgb, var(--receiver-accent) 40%, var(--receiver-paper));
+  --receiver-fold-mid: color-mix(in srgb, var(--receiver-accent) 75%, #182b22);
+  --receiver-fold-deep: color-mix(in srgb, var(--receiver-accent) 30%, #182b22);
+  --receiver-fold-silver: color-mix(in srgb, var(--receiver-paper) 80%, var(--receiver-muted));
+  width: 182px;
+  height: 137px;
+  position: relative;
+  pointer-events: none;
+  justify-self: end;
+}
+.receiver-fold-airfoil {
+  position: absolute;
+  inset: 0;
+  transform: rotate(-12deg);
+  filter: drop-shadow(7px 15px 9px var(--receiver-shadow));
+}
+.receiver-fold-vane,
+.receiver-fold-airfoil::after {
+  position: absolute;
+  width: 182px;
+  height: 137px;
+  inset: 0;
+}
+.receiver-fold-vane-a {
+  clip-path: polygon(0 8%, 23% 20%, 41% 96%, 21% 79%);
+  background: linear-gradient(108deg, var(--receiver-fold-light) 0%, var(--receiver-accent) 20%, var(--receiver-fold-mid) 46%, var(--receiver-fold-deep) 97%);
+  z-index: 3;
+}
+.receiver-fold-vane-b {
+  clip-path: polygon(23% 20%, 42% 4%, 60% 79%, 41% 96%);
+  background: linear-gradient(112deg, var(--receiver-muted) 18%, var(--receiver-fold-silver) 29%, var(--receiver-paper) 44%, var(--receiver-fold-silver) 65%);
+  z-index: 2;
+}
+.receiver-fold-vane-c {
+  clip-path: polygon(42% 4%, 61% 16%, 79% 90%, 60% 79%);
+  background: linear-gradient(108deg, var(--receiver-fold-light) 18%, var(--receiver-accent) 40%, var(--receiver-fold-mid) 65%, var(--receiver-fold-deep) 99%);
+  z-index: 1;
+}
+.receiver-fold-airfoil::after {
+  content: '';
+  clip-path: polygon(61% 16%, 100% 0, 79% 90%, 60% 79%);
+  background: linear-gradient(100deg, var(--receiver-fold-deep) 53%, var(--receiver-accent) 72%, var(--receiver-fold-light) 97%);
+}
+.receiver-fold-vane::after {
+  content: '';
+  position: absolute;
+  inset: 1px 0 0;
+  background: linear-gradient(143deg, var(--receiver-highlight), transparent 28%, transparent 67%, var(--receiver-shadow));
+  clip-path: polygon(0 0, 100% 17%, 59% 52%);
+}
+.receiver-fold-compact {
+  width: 104px;
+  height: 80px;
+}
+.receiver-fold-compact .receiver-fold-airfoil { transform: scale(.57) rotate(-12deg); transform-origin: top left; }
+@media (max-width: 650px) {
+  .receiver-fold { width: 100px; height: 80px; }
+  .receiver-fold-airfoil { transform: scale(.55) rotate(-12deg); transform-origin: top left; }
+}
+@media (max-width: 430px) {
+  .receiver-fold,
+  .receiver-fold-compact { width: 64px; height: 55px; }
+  .receiver-fold-airfoil,
+  .receiver-fold-compact .receiver-fold-airfoil { transform: scale(.35) rotate(-12deg); transform-origin: top left; }
+}

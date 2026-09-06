@@ -1,7 +1,14 @@
-import { useState, type ReactNode } from 'react'
+import { useState, type ReactNode, type Ref } from 'react'
 import type { TaskAction, TaskPresentation } from './index'
 import { CompatibleNameRepairPanel } from '../compatible-name/CompatibleNameRepairPanel'
 import { DetailSheet } from '../controls/DetailSheet'
+import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
+
+const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>> = {
+  preparing: 'clock', downloading: 'download', waiting: 'clock', paused: 'pause',
+  finishing: 'clock', 'ready-to-save': 'download', 'handed-to-browser': 'download',
+  saved: 'check', 'needs-action': 'alert', cancelled: 'close', failed: 'alert',
+}
 
 export interface TaskViewActions {
   readonly perform: (action: TaskAction) => void
@@ -22,7 +29,7 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
     else perform(action)
   }
   const buttonClass = action.destructive ? 'danger-action' : ''
-  return <>
+  return <div className="task-action">
     <button type="button" className={primary ? 'primary-action' : buttonClass}
       disabled={busy || action.disabledReason !== null} title={action.disabledReason ?? undefined}
       onClick={dispatch}>{action.label}</button>
@@ -35,29 +42,33 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
         {action.label}
       </button>
     </DetailSheet>}
-  </>
+  </div>
 }
 
-export function TaskCard({ task, actions, onDetails, busy = false }: {
+export function TaskCard({ task, actions, onDetails, detailsRef, busy = false }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly onDetails: () => void
+  readonly detailsRef?: Ref<HTMLButtonElement>
   readonly busy?: boolean
 }) {
-  return <section className={`task-card task-tone-${task.tone}`} aria-label={`Download: ${task.objectLabel}`}>
+  return <section className={`task-card task-tone-${task.tone}`} aria-label={`Download: ${task.objectLabel}`}
+    data-task-stage={task.stage} data-operation-id={task.operationId}>
     <div className="task-summary">
       <div className="task-identity"><strong title={task.objectLabel}>{task.objectLabel}</strong>
-        <span className="task-stage" role="status" aria-live="polite">{task.headline}</span>
+        <span className="task-stage" role="status" aria-live="polite">
+          <ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}
+        </span>
         {task.destinationLabel !== null && <small>{task.destinationLabel}</small>}
         {task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
       </div>
       <div className="task-actions">
         {task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
           perform={actions.perform} primary busy={busy} />}
-        <button type="button" onClick={onDetails}>Details</button>
+        <button ref={detailsRef} className="quiet-action" type="button" onClick={onDetails}>Details<ReceiverIcon name="chevron-right" /></button>
       </div>
     </div>
-    {task.progress !== null && <div className="task-progress">
+    {task.progress !== null && <div className="task-progress" data-progress-mode={task.progress.mode}>
       <progress aria-label="Download progress" {...(task.progress.percentage === null
         ? {} : { max: 100, value: task.progress.percentage })} />
       <span>{task.progress.label}</span>
@@ -75,8 +86,8 @@ export function TaskDetails({ task, actions, busy = false, children }: {
   readonly busy?: boolean
   readonly children?: ReactNode
 }) {
-  return <div className="task-details">
-    <p className="task-detail-stage" role="status">{task.headline}</p>
+  return <div className={`task-details task-tone-${task.tone}`} data-task-stage={task.stage}>
+    <p className="task-detail-stage" role="status"><ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}</p>
     <p>{task.description}</p>
     <dl className="task-facts">
       <dt>Result</dt><dd>{task.objectLabel}</dd>
