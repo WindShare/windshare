@@ -1,3 +1,8 @@
+import { initialReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './v2-controller-state'
+import { ReceiverExperienceObservability } from './experience/observability'
+import { V2SelectionPolicy } from '../catalog/v2-selection'
+import { EMPTY_SELECTION_DRAFT, projectDraft, scopeSelection, shareIdentityFromRoot } from './draft/model'
+import type { V2BrowsePage } from './v2-gateway'
 import {
   createSelectionSpec,
   selectionRulesSpecFromPolicy,
@@ -13,9 +18,7 @@ import {
 import {
   EMPTY_V2_PROGRESS,
   EMPTY_V2_PREVIEW,
-  EMPTY_V2_RETAINED_INVENTORY,
   type V2ReceiverDiagnosticSnapshot,
-  type V2ReceiverProgress,
   type V2ReceiverSnapshot,
 } from './v2-model'
 import {
@@ -24,11 +27,9 @@ import {
   type V2CapturedLocation,
 } from './v2-capability-lifecycle'
 import {
-  presentNewReceiveOperation,
   type LifecycleUserAction,
 } from './v2-lifecycle-presentation'
 import {
-  EMPTY_V2_OUTPUT_PRESENTATION,
   V2OutputPresentationController,
 } from './v2-output'
 import { V2PreviewController } from './v2-preview-controller'
@@ -71,7 +72,7 @@ export type {
   V2RetainedInventoryTraceEvent,
 } from './controller/contracts'
 
-import { findReplacementFile } from './source-replacement/selection'
+import { ReceiveOperationTransitions } from './operation-ownership/transitions'
 import type { SourceRevisionFailure } from '../output/resume/source-revision-failures'
 
 export class V2ReceiverController {
@@ -80,6 +81,7 @@ export class V2ReceiverController {
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
   readonly #listeners = new Set<() => void>()
   readonly #observability: V2ControllerObservability
+  readonly #experienceTrace: ReceiverExperienceObservability
   readonly #outputs: V2OutputPresentationController
   readonly #projectionObservation: SelectionProjectionRuntime
   readonly #previews: V2PreviewController
@@ -97,8 +99,9 @@ export class V2ReceiverController {
   #unsubscribeScanProgress: (() => void) | undefined
   #unsubscribeProtocolGeneration: (() => void) | undefined
   #unsubscribePathActivity: (() => void) | undefined
+  #unsubscribeConnection: (() => void) | undefined
   #disposed = false
-  #newOperationPending = false
+  readonly #operationTransitions: ReceiveOperationTransitions
 
   constructor(
     gateway: V2BrowserReceiverGateway,
@@ -106,6 +109,7 @@ export class V2ReceiverController {
   ) {
     this.#gateway = gateway
     this.#receive = options.receive
+    this.#experienceTrace = new ReceiverExperienceObservability(options.trace)
     this.#observability = new V2ControllerObservability({
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
@@ -119,7 +123,7 @@ export class V2ReceiverController {
       ...(options.trace === undefined ? {} : { trace: options.trace }),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
       onActionError: (error) => this.#publishActionError(error),
-      onFailure: (error) => this.#fail(error),
+      onFailure: (error) => this.#publishActionError(error),
       onRetainedFileFailure: () => {
         this.#resetReceiveOwnership(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
           .then(() => this.#retained.load()).catch(error => this.#publishActionError(error))
@@ -131,7 +135,7 @@ export class V2ReceiverController {
       observability: this.#observability,
       currentProjection: () => this.#projectionObservation.current,
       currentJoinedShare: () => this.#joined,
-      choiceBlocked: () => this.#newOperationPending || this.#retained.pending || this.#activeReceive.active,
+      choiceBlocked: () => this.#operationTransitions.startBlockedReason() !== null,
       retryProjection: (projection) => {
         this.#projectionObservation.retry(projection).catch(() => undefined)
       },
@@ -142,7 +146,11 @@ export class V2ReceiverController {
         this.#outputs.adoptReceiveIntentAtomically(
           choice,
           intent,
-          commitOwnership,
+          () => {
+            commitOwnership()
+            this.#snapshot = Object.freeze({ ...this.#snapshot,
+              progress: EMPTY_V2_PROGRESS, taskDisplay: runtime.display ?? null })
+          },
           runtime.lifecycle,
           Date.now(),
           runtime.initialWorkspaceUsage,
@@ -159,14 +167,16 @@ export class V2ReceiverController {
       observability: this.#observability,
       currentJoinedShare: () => this.#joined,
       isDisposed: () => this.#disposed,
-      onFailure: error => this.#fail(error),
+      onFailure: error => this.#publishActionError(error),
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
     this.#retained = new RetainedInventoryCoordinator({
       receive: this.#receive,
       isDisposed: () => this.#disposed,
       currentJoinedShare: () => this.#joined,
-      continuationBlocked: () => this.#activeReceive.active || this.#authority.pending,
+      continuationBlocked: () => this.#activeReceive.active || this.#authority.pending || this.#operationTransitions.pending,
+      remoteContinuationUnavailable: () => this.#operationTransitions.remoteContinuationUnavailable(),
+      localFinalizationBlocked: () => this.#activeReceive.active || this.#authority.pending || this.#operationTransitions.pending,
       adoptContinuation: (input) => this.#adoptRetainedReceiveContinuation(input),
       ownsRuntime: (runtime) => this.#activeReceive.ownsRuntime(runtime),
       publish: (retained) => this.#publish({ ...this.#snapshot, retained }),
@@ -183,6 +193,7 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
     this.#browse = new BrowserNavigationCoordinator({
+      onPageCommitted: (page) => this.#pageCommitted(page),
       currentJoinedShare: () => this.#joined,
       isDisposed: () => this.#disposed,
       snapshot: () => this.#snapshot,
@@ -190,25 +201,7 @@ export class V2ReceiverController {
       publicError: (error) => this.#publicError(error),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
-    this.#snapshot = Object.freeze({
-      phase: 'awaiting-key',
-      status: 'Waiting for the capability key.',
-      pathActivity: { directConnected: false, content: 'idle' as const },
-      error: null,
-      rows: Object.freeze([]),
-      breadcrumbs: Object.freeze([]),
-      pageIndex: 0,
-      pageCount: 0,
-      entryCount: 0,
-      omittedCount: 0n,
-      selectedVisibleFiles: 0,
-      selectedVisibleBytes: 0n,
-      directoryRetryable: false,
-      progress: EMPTY_V2_PROGRESS,
-      preview: EMPTY_V2_PREVIEW,
-      output: EMPTY_V2_OUTPUT_PRESENTATION,
-      retained: EMPTY_V2_RETAINED_INVENTORY,
-    })
+    this.#snapshot = initialReceiverSnapshot()
     this.#unsubscribeOutput = this.#outputs.subscribe(() => {
       if (!this.#disposed) this.#publish({ ...this.#snapshot, output: this.#outputs.getSnapshot() })
     })
@@ -220,6 +213,15 @@ export class V2ReceiverController {
       publish: (snapshot) => this.#publish(snapshot),
       publicError: (error) => this.#publicError(error),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
+    })
+    this.#operationTransitions = new ReceiveOperationTransitions({
+      snapshot: () => this.#snapshot, joined: () => this.#joined, disposed: () => this.#disposed,
+      publish: snapshot => this.#publish(snapshot), actionError: error => this.#publishActionError(error),
+      recordIntent: action => this.recordExperienceIntent(action),
+      resetOwnership: reason => this.#resetReceiveOwnership(reason),
+      beginProjection: (joined, reason) => this.#beginSelectionProjection(joined, reason),
+      activeReceive: this.#activeReceive, authority: this.#authority, retained: this.#retained,
+      outputs: this.#outputs, browse: this.#browse, previews: this.#previews, experienceTrace: this.#experienceTrace,
     })
   }
 
@@ -235,52 +237,8 @@ export class V2ReceiverController {
     receiveOperationActive: this.#activeReceive.active,
   })
 
-  readonly getDiagnosticSnapshot = (): V2ReceiverDiagnosticSnapshot => {
-    const lifecycle = this.#snapshot.output.lifecycle
-    const plan = this.#snapshot.output.plan
-    const progress = this.#snapshot.progress
-    return Object.freeze({
-      controller: Object.freeze({
-        generation: this.#diagnosticGeneration,
-        phase: this.#snapshot.phase,
-      }),
-      ...(lifecycle === null
-        ? {}
-        : {
-            lifecycle: Object.freeze({
-              generation: lifecycle.generation,
-              state: lifecycle.kind,
-            }),
-          }),
-      progress: Object.freeze({
-        generation: this.#diagnosticGeneration,
-        discovery: progress.discovery,
-        discoveredFiles: BigInt(progress.discoveredFiles),
-        discoveredBytes: progress.discoveredBytes,
-        writtenBytes: progress.writtenBytes,
-        completedFiles: BigInt(progress.completedFiles),
-        completedBytes: progress.completedBytes,
-        fileErrors: BigInt(progress.fileErrors),
-        selectionErrors: BigInt(progress.selectionErrors),
-        failedDirectories: BigInt(progress.failedDirectories),
-        contentLanes: progress.contentLanes,
-        capacityWaitingFiles: BigInt(progress.capacityWaitingFiles),
-        capacityAccumulatedWaitMilliseconds: BigInt(
-          progress.capacityAccumulatedWaitMilliseconds,
-        ),
-        capacityWaitAttempts: BigInt(progress.capacityWaitAttempts),
-        capacityWaitVisible: progress.capacityWaitVisible,
-      }),
-      ...(plan === null
-        ? {}
-        : {
-            output: Object.freeze({
-              generation: this.#diagnosticGeneration,
-              planKind: plan.kind,
-            }),
-          }),
-    })
-  }
+  readonly getDiagnosticSnapshot = (): V2ReceiverDiagnosticSnapshot =>
+    receiverDiagnosticSnapshot(this.#snapshot, this.#diagnosticGeneration)
 
   initialize(captured: V2CapturedLocation): void {
     this.#pageUrl = captured.pageUrl
@@ -298,33 +256,85 @@ export class V2ReceiverController {
     this.#capabilityLifecycle.notify('key-cleared')
   }
 
+  recordExperienceIntent(action: string): void {
+    this.#experienceTrace.intent(action, this.#snapshot)
+  }
+
   toggleSelection(id: string): void {
+    this.recordExperienceIntent('toggle-selection')
     const joined = this.#joined
     const page = this.#browse.page
     const entry = this.#browse.entry(id)
-    if (joined === undefined || page === undefined || entry === undefined || this.#selectionLocked()) return
+    if (this.#disposed || joined === undefined || page === undefined || entry === undefined) return
+    if (this.#snapshot.draft.mode !== 'selection') joined.replaceSelection(new V2SelectionPolicy(false))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'selection' as const } })
     joined.selection.toggle(entry, page.directory.ancestry)
-    this.#browse.publishPage(page)
-    this.#beginSelectionProjection(joined)
+    this.#refreshDraft(joined, page)
+  }
+
+  enterSelectionMode(): void {
+    this.recordExperienceIntent('enter-selection')
+    const joined = this.#joined
+    const page = this.#browse.page
+    if (this.#disposed || joined === undefined || page === undefined || this.#snapshot.draft.mode === 'selection') return
+    joined.replaceSelection(new V2SelectionPolicy(false))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'selection' as const } })
+    this.#refreshDraft(joined, page)
+  }
+
+  exitSelectionMode(): void {
+    this.recordExperienceIntent('exit-selection')
+    const joined = this.#joined
+    const page = this.#browse.page
+    if (this.#disposed || joined === undefined || page === undefined) return
+    joined.replaceSelection(scopeSelection(page))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'scope' as const } })
+    this.#refreshDraft(joined, page)
+  }
+
+  selectPage(): void {
+    this.recordExperienceIntent('select-page')
+    const joined = this.#joined
+    const page = this.#browse.page
+    if (this.#disposed || joined === undefined || page === undefined) return
+    if (this.#snapshot.draft.mode !== 'selection') joined.replaceSelection(new V2SelectionPolicy(false))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'selection' as const } })
+    for (const entry of page.entries) joined.selection.set(entry, page.directory.ancestry, true)
+    this.#refreshDraft(joined, page)
+  }
+
+  clearSelection(): void {
+    this.recordExperienceIntent('clear-selection')
+    const joined = this.#joined
+    const page = this.#browse.page
+    if (this.#disposed || joined === undefined || page === undefined) return
+    joined.replaceSelection(new V2SelectionPolicy(false))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'selection' as const } })
+    this.#refreshDraft(joined, page)
   }
 
   openDirectory(id: string): void {
+    this.recordExperienceIntent('open-directory')
     this.#browse.openDirectory(id)
   }
 
   openBreadcrumb(index: number): void {
+    this.recordExperienceIntent('open-breadcrumb')
     this.#browse.openBreadcrumb(index)
   }
 
   showPage(index: number): void {
+    this.recordExperienceIntent('show-page')
     this.#browse.showPage(index)
   }
 
   retryDirectory(): void {
+    this.recordExperienceIntent('retry-directory')
     this.#browse.retryDirectory()
   }
 
   previewFile(id: string): void {
+    this.recordExperienceIntent('preview-file')
     const joined = this.#joined
     const entry = this.#browse.entry(id)
     if (joined === undefined || entry?.kind !== 'file') return
@@ -348,102 +358,52 @@ export class V2ReceiverController {
   }
 
   chooseArtifact(choiceId: ArtifactChoiceID): void {
-    this.#authority.choose(choiceId)
+    this.recordExperienceIntent('choose-saving-outcome')
+    if (this.#operationTransitions.startBlockedReason() !== null) return
+    this.#previews.yieldToReceiving()
+    this.#authority.choose(choiceId, Object.freeze({
+      objectLabel: this.#snapshot.draft.label, createdAtMilliseconds: Date.now(),
+    }))
+  }
+
+  cancelPreparing(): void {
+    this.recordExperienceIntent('cancel-preparing')
+    this.#authority.invalidate(new DOMException('Output preparation cancelled', 'AbortError'), 'caller-cancelled')
+    this.#outputs.resetDraft()
+    if (this.#joined !== undefined) this.#beginSelectionProjection(this.#joined, 'observation-replacement')
   }
 
   retryOutputConfirmation(): void {
     this.#authority.retry()
   }
 
-  performLifecycleAction(action: LifecycleUserAction): void {
-    this.#activeReceive.performLifecycleAction(action)
+  activeLifecycleActionAdmission(action: LifecycleUserAction) {
+    return this.#operationTransitions.activeLifecycleActionAdmission(action)
   }
 
-  performRetainedAction(
-    operation: V2RetainedReceiveOperation,
-    action: V2RetainedReceiveAction,
-  ): void {
-    this.#retained.perform(operation, action)
+  performLifecycleAction(action: LifecycleUserAction): void {
+    this.#operationTransitions.performLifecycleAction(action)
+  }
+
+  get canRetainCurrentOperation(): boolean { return this.#operationTransitions.canRetainCurrentOperation }
+
+  retainCurrentOperation(): Promise<boolean> { return this.#operationTransitions.retainCurrentOperation() }
+
+  retainedActionAdmission(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction) {
+    return this.#operationTransitions.retainedActionAdmission(operation, action)
+  }
+
+  performRetainedAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): void {
+    this.#operationTransitions.performRetainedAction(operation, action)
   }
 
   prepareReplacementDownload(operation: V2RetainedReceiveOperation, failure: SourceRevisionFailure): void {
-    const joined = this.#joined
-    if (this.#disposed || this.#newOperationPending || this.#retained.pending ||
-        this.#activeReceive.active || this.#authority.pending ||
-        !this.#snapshot.retained.operations.includes(operation)) return
-    if (joined === undefined) {
-      this.#publishActionError(new DOMException(
-        'Open the matching share before downloading the current version', 'InvalidStateError'))
-      return
-    }
-    this.#newOperationPending = true
-    const controller = new AbortController()
-    const protocolSessionId = joined.protocolSessionId
-    this.#publish({ ...this.#snapshot, error: null, status: `Finding the current version of ${failure.path.join('/')}…` })
-    const current = () => !this.#disposed && this.#joined === joined && joined.protocolSessionId === protocolSessionId &&
-      this.#snapshot.retained.operations.includes(operation) && !this.#activeReceive.active && !this.#retained.pending
-    findReplacementFile(joined, operation, failure, controller.signal).then(async found => {
-      if (!current()) return
-      await this.#resetReceiveOwnership(new DOMException('Preparing a separate replacement download', 'AbortError'))
-      if (!current()) return
-      joined.selectOnlyFile(found.entry, found.page.directory.ancestry)
-      await this.#browse.loadPage(found.page.directory, found.page.pageIndex, found.directories)
-      if (!current()) return
-      this.#publish({ ...this.#snapshot, error: null,
-        status: 'Current version selected. Choose Download to create a separate task; the original ZIP progress is retained.' })
-      this.#beginSelectionProjection(joined)
-    }).catch(error => {
-      if (current()) this.#publishActionError(error)
-    }).finally(() => { this.#newOperationPending = false })
+    this.#operationTransitions.prepareReplacementDownload(operation, failure)
   }
 
-  catchUpStoppedCompatibleNames(): void {
-    const output = this.#snapshot.output
-    const repair = output.lifecyclePresentation?.compatibleNameRepair
-    if (this.#disposed || this.#retained.pending || output.lifecycle === null ||
-        !this.#activeReceive.active || repair?.actionMode !== 'catch-up-required' ||
-        repair.visibility === 'notice') return
-    const operationId = output.lifecycle.operationId
-    // Local replay reacquires exclusive output authority. Release the stopped
-    // receiver first, then use the same durable action path as a fresh page.
-    this.#resetReceiveOwnership(new DOMException(
-      'Stopped receive is handing output authority to local restoration catch-up',
-      'AbortError',
-    )).then(async () => {
-      if (this.#disposed) return
-      await this.#retained.load()
-      if (this.#disposed) return
-      const operation = this.#snapshot.retained.operations.find(candidate =>
-        candidate.operationId === operationId)
-      if (operation?.actions.includes('catch-up')) this.#retained.perform(operation, 'catch-up')
-    }).catch(error => this.#publishActionError(error))
-  }
+  catchUpStoppedCompatibleNames(): void { this.#operationTransitions.catchUpStoppedCompatibleNames() }
 
-  startNewReceiveOperation(): void {
-    const joined = this.#joined
-    const output = this.#snapshot.output
-    const presentation = presentNewReceiveOperation({
-      lifecycle: output.lifecycle,
-      plan: output.plan,
-    })
-    if (this.#disposed || this.#newOperationPending || joined === undefined ||
-        presentation === null) return
-    this.#newOperationPending = true
-    const boundary = new DOMException(
-      presentation.kind === 'direct-tree-to-zip'
-        ? 'The completed DirectTree receive is being replaced by a new ZIP operation'
-        : 'The deleted Direct ZIP target is being replaced by a new receive operation',
-      'AbortError',
-    )
-    this.#resetReceiveOwnership(boundary).then(() => {
-      if (!this.#disposed && this.#joined === joined) {
-        this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS, error: null })
-        this.#beginSelectionProjection(joined, 'observation-replacement')
-      }
-    }, error => this.#publishActionError(error)).finally(() => {
-      this.#newOperationPending = false
-    })
-  }
+  startNewReceiveOperation(): void { this.#operationTransitions.startNewReceiveOperation() }
 
   async dispose(): Promise<void> {
     if (this.#disposed) return
@@ -456,6 +416,8 @@ export class V2ReceiverController {
     this.#unsubscribeScanProgress = undefined
     this.#unsubscribeProtocolGeneration?.()
     this.#unsubscribeProtocolGeneration = undefined
+    this.#unsubscribeConnection?.()
+    this.#unsubscribeConnection = undefined
     this.#unsubscribePathActivity?.()
     this.#unsubscribePathActivity = undefined
     const detached = this.#resetReceiveOwnership(new DOMException('Receiver disposed', 'AbortError'))
@@ -478,7 +440,6 @@ export class V2ReceiverController {
     const intent = await validateReceiveIntent(runtime.intent)
     if (this.#disposed || this.#joined !== joined) throw new StaleReceiveBoundaryError()
     const selection = v2SelectionPolicyFromIntent(intent)
-    this.#projectionObservation.stop(new StaleReceiveBoundaryError())
     this.#authority.invalidate(new StaleReceiveBoundaryError(), 'caller-cancelled')
     const prepared = this.#activeReceive.prepareAdoption({
       joined,
@@ -491,7 +452,11 @@ export class V2ReceiverController {
     this.#outputs.adoptRetainedReceiveIntentAtomically(
       intent,
       runtime.lifecycle,
-      prepared.commit,
+      () => {
+        prepared.commit()
+        this.#snapshot = Object.freeze({ ...this.#snapshot,
+          progress: EMPTY_V2_PROGRESS, taskDisplay: runtime.display ?? input.retained.display ?? null })
+      },
       Date.now(),
       runtime.initialWorkspaceUsage,
       runtime.activeControls,
@@ -519,6 +484,7 @@ export class V2ReceiverController {
     try {
       this.#retained.cancelPending(new StaleReceiveBoundaryError())
       this.#activeReceive.reset(new StaleReceiveBoundaryError()).catch(() => undefined)
+      if (this.#snapshot.output.receiveIntent !== null) this.#outputs.reset()
       this.#authority.suspendForJoin()
       this.#stopProjectionObservation(new StaleReceiveBoundaryError())
       await this.#previews.close()
@@ -534,6 +500,11 @@ export class V2ReceiverController {
         pathActivity: { directConnected: false, content: 'idle' as const },
         error: null,
         rows: Object.freeze([]),
+        connection: { kind: 'idle' as const },
+        share: null,
+        draft: EMPTY_SELECTION_DRAFT,
+        browse: { kind: 'idle' as const, status: '', error: null },
+        taskDisplay: null,
         preview: EMPTY_V2_PREVIEW,
         progress: EMPTY_V2_PROGRESS,
       })
@@ -582,7 +553,10 @@ export class V2ReceiverController {
       this.#browse.clearCatalog()
       await this.#browse.loadPage(root, 0, Object.freeze([root]))
       if (this.#joined === joined && this.#browse.pageMatches(root)) {
-        this.#beginSelectionProjection(joined, 'observation-replacement')
+        const share = this.#snapshot.share
+        if (share?.kind === 'browser' && share.singleFolder) {
+          this.#browse.openDirectory(share.homeDirectoryId)
+        }
       }
     } catch (error) {
       this.#handleJoinFailure(
@@ -637,8 +611,7 @@ export class V2ReceiverController {
     joined: V2JoinedBrowserShare,
     replacement: 'selection-change' | 'observation-replacement' = 'selection-change',
   ): void {
-    if (replacement === 'selection-change') this.#outputs.reset()
-    this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS })
+    if (replacement === 'selection-change') this.#outputs.resetDraft()
     this.#projectionObservation.start(joined, replacement)
   }
 
@@ -649,6 +622,10 @@ export class V2ReceiverController {
   #subscribeJoinedNotifications(joined: V2JoinedBrowserShare): void {
     this.#unsubscribeScanProgress?.()
     this.#unsubscribeProtocolGeneration?.()
+    this.#unsubscribeConnection?.()
+    this.#unsubscribeConnection = joined.subscribeConnection((connection) => {
+      if (!this.#disposed && this.#joined === joined) this.#publish({ ...this.#snapshot, connection })
+    })
     this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
       progress => this.#browse.catalogScanProgress(joined, progress),
     )
@@ -667,37 +644,44 @@ export class V2ReceiverController {
     this.#stopProjectionObservation(reason)
     this.#authority.invalidate(reason, 'caller-cancelled')
     this.#outputs.reset()
+    this.#publish({ ...this.#snapshot, progress: EMPTY_V2_PROGRESS, taskDisplay: null })
     return this.#activeReceive.reset(reason)
   }
 
   #transferProgress(progress: TransferProgress): void {
     if (progress.transferJobId.length === 0) return
-    const snapshot: V2ReceiverProgress = Object.freeze({
-      discoveredFiles: progress.discoveredFiles,
-      discoveredBytes: progress.discoveredBytes,
-      writtenBytes: progress.writtenBytes,
-      completedFiles: progress.completedFiles,
-      completedBytes: progress.completedBytes,
-      fileErrors: progress.fileErrors,
-      selectionErrors: progress.selectionErrors,
-      contentLanes: progress.contentLanes,
-      discovery: progress.discovery,
-      failedDirectories: progress.failedDirectories,
-      capacityWaitingFiles: progress.capacityWaitingFiles,
-      capacityAccumulatedWaitMilliseconds: progress.capacityAccumulatedWaitMilliseconds,
-      capacityWaitAttempts: progress.capacityWaitAttempts,
-      capacityWaitVisible: progress.capacityWaitVisible,
-      transferJobId: progress.transferJobId,
-      ...(progress.outputSessionId === undefined
-        ? {}
-        : { outputSessionId: progress.outputSessionId }),
-    })
+    const snapshot = receiverProgressSnapshot(progress)
     this.#publish({ ...this.#snapshot, progress: snapshot })
   }
 
-  #selectionLocked(): boolean {
-    return this.#newOperationPending || this.#retained.pending ||
-      this.#authority.pending || this.#snapshot.output.receiveIntent !== null
+  #pageCommitted(page: V2BrowsePage): void {
+    const joined = this.#joined
+    if (joined === undefined) return
+    let share = this.#snapshot.share
+    if (page.directory.idText === joined.descriptor.syntheticRootId) {
+      share = shareIdentityFromRoot(page, joined.descriptor.shareInstanceId)
+    }
+    const mode = this.#snapshot.draft.mode
+    const scopeChanged = mode === 'scope' && this.#snapshot.breadcrumbs.at(-1)?.id !== page.directory.idText
+    if (scopeChanged) joined.replaceSelection(scopeSelection(page))
+    this.#snapshot = Object.freeze({ ...this.#snapshot, share, status: '',
+      draft: projectDraft(mode, page, joined.selection, share) })
+    if (scopeChanged || this.#projectionObservation.current === undefined) {
+      this.#beginSelectionProjection(joined,
+        this.#joinNavigation === undefined ? 'selection-change' : 'observation-replacement')
+    }
+    if (share?.kind === 'photo' && page.directory.idText === joined.descriptor.syntheticRootId &&
+        !this.#activeReceive.active && !this.#authority.pending && !this.#retained.pending) {
+      const entry = page.entries[0]
+      if (entry?.kind === 'file') this.#previews.openAutomaticPhoto(joined, entry)
+    }
+  }
+
+  #refreshDraft(joined: V2JoinedBrowserShare, page: V2BrowsePage): void {
+    this.#snapshot = Object.freeze({ ...this.#snapshot,
+      draft: projectDraft(this.#snapshot.draft.mode, page, joined.selection, this.#snapshot.share) })
+    this.#browse.publishPage(page)
+    this.#beginSelectionProjection(joined)
   }
 
   #publishActionError(error: unknown): void {
@@ -722,7 +706,12 @@ export class V2ReceiverController {
 
   #publish(snapshot: V2ReceiverSnapshot): void {
     this.#diagnosticGeneration += 1n
-    this.#snapshot = Object.freeze(snapshot)
+    const reason = this.#operationTransitions.startBlockedReason(snapshot)
+    this.#snapshot = Object.freeze({ ...snapshot,
+      startAdmission: Object.freeze({ allowed: reason === null, reason,
+        canReleaseCurrent: !this.#operationTransitions.pending && !this.#retained.pending &&
+          !this.#authority.pending && this.#activeReceive.canRelease }) })
+    this.#experienceTrace.publish(this.#snapshot)
     for (const listener of this.#listeners) listener()
   }
 }

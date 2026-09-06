@@ -19,11 +19,14 @@ export interface AuthenticatedDiscoveryRequest {
   readonly signal: AbortSignal
 }
 
-export interface AuthenticatedDiscoveryCompletion {
-  readonly settledTargets?: readonly UnsettledSelectionTarget[]
-  readonly layoutBasis?: SettledLayoutBasisProof
-  readonly workspaceCostObservation?: WorkspaceCostObservationV1
-}
+export type AuthenticatedDiscoveryCompletion =
+  | Readonly<{ kind: 'bounded' }>
+  | Readonly<{
+      kind: 'complete'
+      settledTargets?: readonly UnsettledSelectionTarget[]
+      layoutBasis?: SettledLayoutBasisProof
+      workspaceCostObservation?: WorkspaceCostObservationV1
+    }>
 
 export interface AuthenticatedDiscoverySource {
   /** Every yielded batch must derive only from committed, validated catalog generations. */
@@ -94,7 +97,7 @@ async function* consumeDiscovery(
     switch (step.kind) {
       case 'stale':
         controller.dropStaleAsyncEvent(epoch, step.eventClass)
-        await iterator.return(Object.freeze({}))
+        await iterator.return(Object.freeze({ kind: 'bounded' }))
         return controller.state
       case 'evidence': {
         const before = controller.state
@@ -156,6 +159,9 @@ function applyCompletion(
   epoch: ProjectionEpoch,
   completion: AuthenticatedDiscoveryCompletion,
 ): SelectionProjectionState {
+  if (completion.kind === 'bounded') {
+    return controller.apply(Object.freeze({ kind: 'discovery-bounded', epoch }))
+  }
   return controller.apply(Object.freeze({
     kind: 'discovery-completed',
     epoch,

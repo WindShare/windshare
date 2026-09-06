@@ -28,6 +28,8 @@ export function retainedOperationAuthority(
     })
   }
   switch (continuation) {
+    case 'history-only':
+      return Object.freeze({ actions: retainedActions() })
     case 'cleanup-incompatible':
       return Object.freeze({ actions: retainedActions('discard') })
     case 'pending-catch-up':

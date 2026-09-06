@@ -254,7 +254,7 @@ describe('v2 joined-share projection authority', () => {
     })
   })
 
-  it('settles a share-wide synthetic root and recommends its single-object workspace ZIP', async () => {
+  it('preserves the sole shared folder identity and recommends its single-object workspace ZIP', async () => {
     const fixture = projectionCatalogFixture()
     const supervisor = { protocolSessionId: 'session-1' }
     const joined = new V2JoinedBrowserShare({
@@ -295,7 +295,7 @@ describe('v2 joined-share projection authority', () => {
         unsettledTargets: [],
         proof: {
           kind: 'tree',
-          layoutBasis: { kind: 'synthetic-selection' },
+          layoutBasis: { kind: 'complete-directory', anchor: { sourcePath: 'shared' } },
         },
         metrics: { byteCountLowerBound: 68n },
         workspaceCostObservation: { version: 1 },
@@ -327,7 +327,7 @@ describe('v2 joined-share projection authority', () => {
     })
     expect(offered.zip?.secondary?.route.kind).toBe('direct-resumable-zip')
     expect(offered.primary).toMatchObject({
-      suggestedName: 'windshare.zip',
+      suggestedName: 'shared.zip',
       choice: {
         operation: 'download-zip',
         artifactKind: 'zip-archive',

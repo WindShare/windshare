@@ -120,6 +120,8 @@ function lifecycle(kind: 'receiving' | 'published'): ReceiveLifecycleState {
 
 function receiverProgress(overrides: Partial<V2ReceiverProgress>): V2ReceiverProgress {
   return Object.freeze({
+    phase: 'receiving',
+    materializedBytes: 512n,
     discoveredFiles: 2,
     discoveredBytes: 1_024n,
     writtenBytes: 512n,

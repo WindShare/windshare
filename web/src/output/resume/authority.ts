@@ -17,6 +17,10 @@ export interface ResumeOperationClock {
 export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
+  readOperationIdentity?(lifecycle: ReceiveLifecycleState): Promise<Readonly<{
+    display?: import('../workspace/operation-display').ReceiveOperationDisplay
+    shareInstance: string
+  }> | undefined>
   readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
   readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('./source-revision-failures').SourceRevisionFailures | undefined>
   isCleanupOnly?(operationId: string): Promise<boolean>
@@ -50,6 +54,7 @@ export type ReceiveOperationDiscardResult =
     }>
 
 export interface ReceiveOperationMutationPort<TResult = unknown> {
+  forget?(descriptor: ReceiveOperationResumeDescriptor): Promise<void>
   resume(
     descriptor: ReceiveOperationResumeDescriptor,
     request?: ReceiveOperationResumeRequest,
@@ -149,7 +154,8 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
       const projected = receiveOperationResumeDescriptor(lifecycle, now)
       if (projected === undefined) continue
       const cleanupOnly = await this.#source.isCleanupOnly?.(lifecycle.operationId) ?? false
-      const descriptor = await this.#projectDescriptor(projected, lifecycle, cleanupOnly)
+      const identity = cleanupOnly ? undefined : await this.#source.readOperationIdentity?.(lifecycle)
+      const descriptor = await this.#projectDescriptor(Object.freeze({ ...projected, ...identity }), lifecycle, cleanupOnly)
       const recoverySummary = !cleanupOnly && lifecycle.kind === 'resumable-receive' &&
           lifecycle.payloadKind === 'file-set' &&
           this.#source.readRecoverySummary !== undefined
@@ -161,6 +167,8 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
       references.push(reference)
     }
     references.sort((left, right) =>
+      (right.descriptor.display?.createdAtMilliseconds ?? 0) -
+        (left.descriptor.display?.createdAtMilliseconds ?? 0) ||
       left.descriptor.operationId.localeCompare(right.descriptor.operationId))
     return new ReceiveOperationResumeInventory(owner, references, directZipBootstrapCandidates)
   }
@@ -203,6 +211,12 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     }
     assertReceiveOperationCanContinue(descriptor, now)
     return this.#mutations.resume(descriptor, request)
+  }
+
+  async forget(reference: ReceiveOperationResumeRef): Promise<void> {
+    const forget = this.#mutations.forget
+    if (forget === undefined) throw new DOMException('Download history removal is unavailable', 'NotSupportedError')
+    await forget.call(this.#mutations, this.#consume(reference))
   }
 
   async discard(

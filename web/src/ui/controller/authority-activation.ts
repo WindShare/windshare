@@ -148,7 +148,7 @@ export class V2AuthorityActivationCoordinator {
     this.#beginObservationReplacement(activation, reason)
   }
 
-  choose(choiceId: ArtifactChoiceID): boolean {
+  choose(choiceId: ArtifactChoiceID, display?: import('../../output/workspace/operation-display').ReceiveOperationDisplay): boolean {
     const current = this.#options.currentProjection()
     const planned = this.#planning.latestOffers
     if (current === undefined || planned === undefined || planned.request.active !== current ||
@@ -188,6 +188,7 @@ export class V2AuthorityActivationCoordinator {
         offered,
         preClickRanking,
         attempt.outputFailures,
+        display,
       )
       record.authority = authority
     } catch (error) {

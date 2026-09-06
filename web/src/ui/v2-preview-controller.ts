@@ -1,3 +1,4 @@
+import { isAutomaticPhotoCandidate, V2AutomaticPhotoDeferredError, V2_AUTOMATIC_PHOTO_TIMEOUT_MILLISECONDS } from '../preview/automatic-photo'
 import type { V2CatalogEntry } from '../catalog/v2-records'
 import { V2RemoteOperationError } from '../content/v2-session-operations'
 import { V2RemoteRevisionError } from '../content/v2-session-services'
@@ -44,7 +45,9 @@ interface PendingMediaPresentation {
 }
 
 interface ScopedActiveV2Preview extends ActiveV2Preview {
+  readonly intent: 'manual' | 'automatic-photo'
   readonly openAttempt: PreviewAttempt
+  automaticDeadline?: ReturnType<typeof setTimeout>
   seekAttempt?: PendingPreviewSeek
   mediaAttempt?: PendingMediaPresentation
   incidentAttempt?: PreviewAttempt
@@ -70,6 +73,36 @@ export class V2PreviewController {
     joined: V2JoinedBrowserShare,
     entry: Extract<V2CatalogEntry, { kind: 'file' }>,
   ): void {
+    this.#open(joined, entry, 'manual')
+  }
+
+  openAutomaticPhoto(
+    joined: V2JoinedBrowserShare,
+    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+  ): void {
+    if (this.#active !== undefined || !isAutomaticPhotoCandidate(entry)) return
+    try {
+      this.#open(joined, entry, 'automatic-photo')
+    } catch {
+      // Optional media admission must not turn an authenticated directory
+      // publication into a browse failure if connectivity was replaced.
+      try { this.cancel() } catch { /* The browse owner still publishes its page. */ }
+    }
+  }
+
+  yieldToReceiving(): void {
+    const active = this.#active
+    // A decoded still owns no network lease; retain its URL while receiving.
+    // Pending speculation yields synchronously, without awaiting remote cleanup.
+    if (active?.intent !== 'automatic-photo' || active.session !== undefined) return
+    this.cancel()
+  }
+
+  #open(
+    joined: V2JoinedBrowserShare,
+    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
+    intent: 'manual' | 'automatic-photo',
+  ): void {
     // Connectivity must be the first post-guard action so the user's click
     // remains the activation boundary even when it replaces another preview.
     const connectivity = joined.beginPreviewConnectivity()
@@ -80,6 +113,7 @@ export class V2PreviewController {
       controller: new AbortController(),
       connectivity,
       seekId: 0,
+      intent,
       openAttempt: this.#newAttempt('preview_open'),
     }
     this.#active = active
@@ -93,6 +127,12 @@ export class V2PreviewController {
       this.#exclude(active.openAttempt, 'not_user_visible')
       this.#closeAllAttempts(active)
       throw error
+    }
+    if (this.#active !== active) return
+    if (intent === 'automatic-photo') {
+      active.automaticDeadline = setTimeout(() => {
+        if (this.#active === active) this.yieldToReceiving()
+      }, V2_AUTOMATIC_PHOTO_TIMEOUT_MILLISECONDS)
     }
     this.#run(joined, active).catch(() => undefined)
   }
@@ -246,11 +286,10 @@ export class V2PreviewController {
     active: ScopedActiveV2Preview,
   ): Promise<void> {
     try {
-      const session = await joined.preview(
-        active.entry,
-        active.connectivity,
-        active.controller.signal,
-      )
+      const session = await (active.intent === 'automatic-photo'
+        ? joined.automaticPhotoPreview(active.entry, active.connectivity, active.controller.signal)
+        : joined.preview(active.entry, active.connectivity, active.controller.signal))
+      clearTimeout(active.automaticDeadline)
       if (this.#active !== active || active.controller.signal.aborted) {
         try {
           await session.close()
@@ -274,6 +313,11 @@ export class V2PreviewController {
           active.controller.signal.aborted ? 'cancelled' : 'stale_replacement',
         )
         this.#closeAttempt(active.openAttempt)
+        return
+      }
+      if (active.intent === 'automatic-photo' && error instanceof V2AutomaticPhotoDeferredError) {
+        this.#exclude(active.openAttempt, 'not_user_visible')
+        this.cancel()
         return
       }
       this.#recordFailure(active.openAttempt, 'preview_open', error)
@@ -311,6 +355,7 @@ export class V2PreviewController {
     const active = this.#active
     if (active === undefined) return Promise.resolve()
     this.#active = undefined
+    clearTimeout(active.automaticDeadline)
     active.controller.abort(new DOMException('Preview closed', 'AbortError'))
     this.#excludeUndecided(active, reason)
 

@@ -26,6 +26,9 @@ export interface V2Breadcrumb {
 }
 
 export interface V2ReceiverProgress {
+  readonly phase: 'receiving' | 'finishing'
+  /** Accepted output payload includes retained coverage; it does not assert restart durability. */
+  readonly materializedBytes: bigint
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
   readonly writtenBytes: bigint
@@ -146,7 +149,31 @@ export interface V2ReceiverDiagnosticSnapshot {
   readonly output?: V2OutputDiagnosticSnapshot
 }
 
+export type V2ShareIdentity =
+  | Readonly<{ kind: 'photo' | 'video' | 'file'; shareInstance: string; name: string; file: V2BrowseRow }>
+  | Readonly<{ kind: 'browser'; shareInstance: string; name: string; homeDirectoryId: string; singleFolder: boolean }>
+
+export interface V2BrowseState {
+  readonly kind: 'idle' | 'loading' | 'ready' | 'failed'
+  readonly status: string
+  readonly error: string | null
+}
+
+export interface V2SelectionDraft {
+  readonly mode: 'scope' | 'selection'
+  readonly scope: 'whole-share' | 'current-folder' | 'selected'
+  readonly label: string
+  readonly summary: string
+  readonly empty: boolean
+}
+
 export interface V2ReceiverSnapshot {
+  readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot | Readonly<{ kind: 'idle' }>
+  readonly share: V2ShareIdentity | null
+  readonly browse: V2BrowseState
+  readonly draft: V2SelectionDraft
+  readonly startAdmission: Readonly<{ allowed: boolean; reason: string | null; canReleaseCurrent: boolean }>
+  readonly taskDisplay: import('../output/workspace/operation-display').ReceiveOperationDisplay | null
   readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot
   readonly phase: V2ReceiverPhase
   readonly status: string
@@ -174,6 +201,8 @@ export const EMPTY_V2_RETAINED_INVENTORY: V2RetainedReceiveInventorySnapshot = O
 })
 
 export const EMPTY_V2_PROGRESS: V2ReceiverProgress = Object.freeze({
+  phase: 'receiving',
+  materializedBytes: 0n,
   discoveredFiles: 0,
   discoveredBytes: 0n,
   writtenBytes: 0n,

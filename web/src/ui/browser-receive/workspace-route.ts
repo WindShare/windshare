@@ -171,6 +171,7 @@ export class WorkspaceArtifactPresentationAuthority implements V2ArtifactPresent
       attempt.namespace = await this.#dependencies.openNamespace({
         receiveIntent: attempt.frozen!.intent,
         preClickRanking: this.#preClickRanking,
+        ...(input.display === undefined ? {} : { display: input.display }),
         repository: attempt.repository!,
         storage: this.#window.navigator.storage,
         signal: input.signal,

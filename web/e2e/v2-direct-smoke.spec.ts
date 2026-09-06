@@ -26,8 +26,7 @@ const FILE_BYTES = Uint8Array.from(Buffer.from(
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
   'base64',
 ))
-const ARCHIVE_NAME = 'windshare.zip'
-const SYNTHETIC_RESULT_ROOT_NAME = 'windshare'
+const ARCHIVE_NAME = `${DIRECTORY_NAME}.zip`
 const DOWNLOAD_TIMEOUT_MILLISECONDS = 20_000
 const TRACE_CORRELATION_TIMEOUT_MILLISECONDS = 10_000
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
@@ -114,25 +113,24 @@ test('receives an explicit directory artifact from the real sender and relay', a
       enabled: true,
     })
 
-    const browseStatus = page.locator('.status-line')
-    await expect(page.getByRole('heading', { name: 'Browse and save shared files' })).toBeVisible()
-    await expect(browseStatus).toHaveText('Choose what to receive.')
-    await expect(page.getByText(DIRECTORY_NAME, { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Open' }).click()
-    await expect(browseStatus).toHaveText('Choose what to receive.')
-    await expect(page.getByText(FILE_NAME, { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Preview' }).click()
+    // An authenticated sole-folder share opens its contents directly. Names own
+    // navigation/preview; selection remains a separate control.
+    await expect(page.getByRole('heading', { name: DIRECTORY_NAME, exact: true })).toBeVisible()
+    const filePreview = page.getByRole('button', { name: FILE_NAME, exact: true })
+    await expect(filePreview).toBeVisible()
+    await filePreview.click()
     const preview = page.getByRole('img', { name: `Preview of ${FILE_NAME}` })
     await expect(preview).toBeVisible()
     expect(await preview.evaluate(async (image) => {
       const response = await fetch((image as HTMLImageElement).src)
       return [...new Uint8Array(await response.arrayBuffer())]
     })).toEqual([...FILE_BYTES])
-    await page.getByRole('button', { name: 'Close preview' }).click()
-    const artifactAction = page.getByRole('button', { name: 'Check then download' })
-    await expect(artifactAction).toBeVisible()
+    await page.getByRole('dialog').getByRole('button', { name: 'Back to share', exact: true }).click()
+    await expect(filePreview).toBeFocused()
+    const artifactAction = page.getByRole('button', { name: 'Download this folder', exact: true })
+    await expect(artifactAction).toBeEnabled()
     await expect(page.getByText(
-      'Checks that the complete ZIP fits before receiving any file content. The browser takes over when the package is ready.',
+      'Checks the complete result fits before receiving. The browser download starts automatically when allowed; otherwise choose Save.',
       { exact: true },
     )).toBeVisible()
     await expect.poll(() => new URL(page.url()).hash).toBe('')
@@ -142,16 +140,18 @@ test('receives an explicit directory artifact from the real sender and relay', a
     })
     await artifactAction.click()
     const download = await downloadStarted
-    await expect(page.getByText('Download started', { exact: true })).toBeVisible({
+    const task = page.locator('.share-workspace > .task-card')
+    await expect(task.getByText('Download started \u2014 check browser downloads', { exact: true })).toBeVisible({
       timeout: DOWNLOAD_TIMEOUT_MILLISECONDS,
     })
-    await expect(page.getByText(
-      'The browser took over the download. WindShare cannot confirm where or whether it was saved.',
+    await task.getByRole('button', { name: 'Details', exact: true }).click()
+    await expect(page.getByRole('dialog').getByText(
+      'The browser took over. WindShare cannot confirm where or whether the file was saved.',
       { exact: true },
     )).toBeVisible()
     await expect(page.getByText('Ready to save', { exact: true })).toHaveCount(0)
     await expect(page.getByText('Saved', { exact: true })).toHaveCount(0)
-    await expect(page.getByText(/1 file\(s\), .* total/u)).toBeVisible()
+    await expect(page.getByRole('dialog').getByText(/1 files \u00b7 .* total/u)).toBeVisible()
     await assertDirectoryDownload(download)
 
     const browserDiagnostics = await page.evaluate(() => {
@@ -499,7 +499,7 @@ async function assertDirectoryDownload(download: Download): Promise<void> {
     const file = entries.find(
       (entry): entry is FileEntry =>
         'getData' in entry && entry.filename ===
-          `${SYNTHETIC_RESULT_ROOT_NAME}/${DIRECTORY_NAME}/${FILE_NAME}`,
+          `${DIRECTORY_NAME}/${FILE_NAME}`,
     )
     if (file === undefined) {
       throw new Error('Downloaded directory archive is missing the expected file')

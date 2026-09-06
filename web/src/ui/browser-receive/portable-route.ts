@@ -39,6 +39,8 @@ export interface PortableRouteDependencies {
     action: PortableResolvedArtifactAction,
     intent: BoundReceiveIntent['intent'],
     diagnostics?: OutputDiagnosticsPorts,
+    display?: V2RouteCommitInput['display'],
+    preClickRanking?: readonly import('../../transfer/intent').ArtifactChoiceID[],
   ) => Promise<V2BoundReceiveOperation>
 }
 
@@ -46,6 +48,7 @@ export interface PortableArtifactPresentationAuthorityOptions {
   readonly windowPort: BrowserReceiveWindow
   readonly offered: OfferedArtifactChoice
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly preClickRanking?: readonly import('../../transfer/intent').ArtifactChoiceID[]
   readonly dependencies?: Partial<PortableRouteDependencies>
 }
 
@@ -55,10 +58,12 @@ export function startPortableArtifactAuthority(
   windowPort: BrowserReceiveWindow,
   offered: OfferedArtifactChoice,
   diagnostics?: OutputDiagnosticsPorts,
+  preClickRanking?: readonly import('../../transfer/intent').ArtifactChoiceID[],
 ): V2ArtifactPresentationAuthority {
   return new PortableArtifactPresentationAuthority({
     windowPort,
     offered,
+    ...(preClickRanking === undefined ? {} : { preClickRanking }),
     ...(diagnostics === undefined ? {} : { diagnostics }),
   })
 }
@@ -70,12 +75,14 @@ export class PortableArtifactPresentationAuthority implements V2ArtifactPresenta
   readonly #routeIdentity: MaterializationRouteIdentity
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #dependencies: PortableRouteDependencies
+  readonly #preClickRanking: readonly import('../../transfer/intent').ArtifactChoiceID[] | undefined
   #state: PortableActivationState = 'open'
   #releaseReason: unknown
 
   constructor(options: PortableArtifactPresentationAuthorityOptions) {
     assertPortableOffer(options.offered)
     this.#window = options.windowPort
+    this.#preClickRanking = options.preClickRanking === undefined ? undefined : Object.freeze([...options.preClickRanking])
     this.#choice = options.offered.choice
     this.#routeIdentity = materializationRouteIdentity(options.offered.route)
     this.#diagnostics = options.diagnostics
@@ -112,6 +119,8 @@ export class PortableArtifactPresentationAuthority implements V2ArtifactPresenta
         fencedAction,
         bound.intent,
         this.#diagnostics,
+        input.display,
+        this.#preClickRanking,
       )
       this.#requireCommitting(input.signal)
       this.#state = 'transferred'
