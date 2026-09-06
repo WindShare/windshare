@@ -22,6 +22,8 @@ export interface V2CanonicalSelectionRule {
 export interface V2FrozenSelectionPolicy {
   readonly defaultSelected: boolean
   readonly canonicalRules: readonly V2CanonicalSelectionRule[]
+  /** Draft paths are hints; discovery must validate every edge against authenticated pages. */
+  readonly draftRules?: readonly (V2CanonicalSelectionRule & { readonly ancestry: readonly string[] })[]
   selected(entry: V2CatalogEntry, directoryAncestry: readonly string[]): boolean
   directorySelected(directoryId: string, directoryAncestry: readonly string[]): boolean
   decision(entry: V2CatalogEntry, directoryAncestry: readonly string[]): V2SelectionDecision
@@ -147,26 +149,39 @@ export class V2SelectionPolicy extends SelectionPolicyEvaluator {
   }
 
   toggle(entry: V2CatalogEntry, directoryAncestry: readonly string[]): void {
-    const next = !this.selected(entry, directoryAncestry)
-    const existing = entry.kind === 'directory'
-      ? this.directoryOverrides.has(entry.idText)
-      : this.fileOverrides.has(entry.idText)
-    if (!existing && this.explicitRuleCount >= V2_MAXIMUM_SELECTION_RULE_OVERRIDES) {
+    this.set(entry, directoryAncestry, this.state(entry, directoryAncestry) !== 'selected')
+  }
+
+  set(entry: V2CatalogEntry, directoryAncestry: readonly string[], selected: boolean): void {
+    const ancestry = snapshotSelectionAncestry(entry.kind === 'directory'
+      ? [...directoryAncestry, entry.idText] : directoryAncestry)
+    if (entry.kind === 'directory') this.clearDescendantOverrides(entry.idText)
+    const overrides = entry.kind === 'directory' ? this.directoryOverrides : this.fileOverrides
+    if (selected === this.selectedByDirectories(directoryAncestry)) {
+      this.removeOverride(overrides, entry.idText)
+      return
+    }
+    if (!overrides.has(entry.idText) && this.explicitRuleCount >= V2_MAXIMUM_SELECTION_RULE_OVERRIDES) {
       throw new RangeError('Catalog selection rule count exceeds the protocol limit')
     }
-    if (entry.kind === 'directory') {
-      this.replaceOverride(this.directoryOverrides, entry.idText, Object.freeze({
-        selected: next,
-        ancestry: snapshotSelectionAncestry([...directoryAncestry, entry.idText]),
-        id: entry.id.slice(),
-      }))
-    } else {
-      this.replaceOverride(this.fileOverrides, entry.idText, Object.freeze({
-        selected: next,
-        ancestry: snapshotSelectionAncestry(directoryAncestry),
-        id: entry.id.slice(),
-      }))
+    this.replaceOverride(overrides, entry.idText, Object.freeze({
+      selected, ancestry, id: entry.id.slice(),
+    }))
+  }
+
+  private clearDescendantOverrides(directoryId: string): void {
+    for (const overrides of [this.directoryOverrides, this.fileOverrides]) {
+      for (const [identity, override] of overrides) {
+        if (identity !== directoryId && override.ancestry.includes(directoryId)) {
+          this.removeOverride(overrides, identity)
+        }
+      }
     }
+  }
+
+  private removeOverride(overrides: Map<string, SelectionOverride>, identity: string): void {
+    if (overrides.get(identity)?.selected === true) this.selectedOverrideCount -= 1
+    overrides.delete(identity)
   }
 
   private replaceOverride(
@@ -180,6 +195,42 @@ export class V2SelectionPolicy extends SelectionPolicyEvaluator {
     overrides.set(identity, replacement)
   }
 
+  intentSummary(): Readonly<{
+    allSelected: boolean
+    selectedFiles: number
+    selectedFolders: number
+    excludedItems: number
+    empty: boolean
+  }> {
+    const selectedCounts = { file: 0, directory: 0 }
+    let excludedItems = 0
+    for (const [kind, overrides] of [
+      ['directory', this.directoryOverrides], ['file', this.fileOverrides],
+    ] as const) {
+      for (const [identity, override] of overrides) {
+        const ancestry = override.ancestry.filter(id => id !== identity)
+        const inherited = this.selectedByDirectories(ancestry)
+        if (override.selected === inherited) continue
+        if (!override.selected) excludedItems += 1
+        else if (this.isSelectionRoot(ancestry)) {
+          selectedCounts[kind] += 1
+        }
+      }
+    }
+    return Object.freeze({
+      allSelected: this.defaultSelected,
+      selectedFiles: selectedCounts.file,
+      selectedFolders: selectedCounts.directory,
+      excludedItems,
+      empty: !this.defaultSelected && this.selectedOverrideCount === 0,
+    })
+  }
+
+  private isSelectionRoot(ancestry: readonly string[]): boolean {
+    return !this.defaultSelected &&
+      !ancestry.some(id => this.directoryOverrides.get(id)?.selected === true)
+  }
+
   snapshot(): V2FrozenSelectionPolicy {
     return new FrozenV2SelectionPolicy(
       this.defaultSelected,
@@ -191,6 +242,8 @@ export class V2SelectionPolicy extends SelectionPolicyEvaluator {
 
 class FrozenV2SelectionPolicy extends SelectionPolicyEvaluator implements V2FrozenSelectionPolicy {
   readonly canonicalRules: readonly V2CanonicalSelectionRule[]
+  /** Draft paths are hints; discovery must validate every edge against authenticated pages. */
+  readonly draftRules?: readonly (V2CanonicalSelectionRule & { readonly ancestry: readonly string[] })[]
 
   constructor(
     defaultSelected: boolean,
@@ -200,6 +253,16 @@ class FrozenV2SelectionPolicy extends SelectionPolicyEvaluator implements V2Froz
     const frozenDirectories = snapshotOverrides(directories)
     const frozenFiles = snapshotOverrides(files)
     super(defaultSelected, frozenDirectories, frozenFiles)
+    this.draftRules = Object.freeze([
+      ...[...frozenDirectories.values()].map(override => Object.freeze({
+        kind: 'directory' as const, id: override.id.slice(), selected: override.selected,
+        ancestry: override.ancestry,
+      })),
+      ...[...frozenFiles.values()].map(override => Object.freeze({
+        kind: 'file' as const, id: override.id.slice(), selected: override.selected,
+        ancestry: override.ancestry,
+      })),
+    ])
     this.canonicalRules = Object.freeze([
       ...[...frozenDirectories.values()].map((override) => Object.freeze({
         kind: 'directory' as const,

@@ -1,3 +1,4 @@
+import { experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -21,7 +22,7 @@ describe('receiver capacity wait UI', () => {
 
     expect(hidden).not.toContain('Waiting for sender capacity')
     expect(visible).toContain('Waiting for sender capacity')
-    expect(visible).toContain('capacity-wait-notice')
+    expect(visible).toContain('task-stage')
     expect(cleared).not.toContain('Waiting for sender capacity')
   })
 
@@ -42,7 +43,7 @@ describe('receiver capacity wait UI', () => {
       output,
     )
 
-    expect(html).toContain('If interrupted, resume from')
+    expect(html).toContain('Download progress')
     expect(html).toContain('32')
     expect(html).toContain('Waiting for sender capacity')
   })
@@ -53,6 +54,7 @@ function render(
   output: V2OutputPresentationSnapshot = EMPTY_V2_OUTPUT_PRESENTATION,
 ): string {
   const snapshot: V2ReceiverSnapshot = Object.freeze({
+    ...experienceSnapshot(),
     pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'browsing',
     status: 'Ready.',
@@ -68,7 +70,7 @@ function render(
     directoryRetryable: false,
     progress: transferProgress,
     preview: EMPTY_V2_PREVIEW,
-    output,
+    output: { ...output, lifecycle: { kind: 'receiving' as const, operationId: 'operation', receiveIntentDigest: 'intent', generation: 1n, activeLeaseId: 'lease' } },
     retained: Object.freeze({
       kind: 'ready',
       operations: Object.freeze([]),

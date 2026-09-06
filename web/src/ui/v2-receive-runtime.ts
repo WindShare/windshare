@@ -1,3 +1,4 @@
+import type { ReceiveOperationDisplay } from '../output/workspace/operation-display'
 import type { FailureFact } from '../diagnostics/incident'
 import type {
   OutputFailureBindingLease,
@@ -50,6 +51,7 @@ export interface V2LifecycleMutation {
 }
 
 export interface V2BoundReceiveOperation {
+  readonly display?: ReceiveOperationDisplay
   readonly intent: ReceiveIntent
   /** Plans and job identity are replaced together only at an explicit continuation boundary. */
   readonly plans: V2PlanExecutionAuthority
@@ -108,6 +110,7 @@ export type V2RouteCommitResult =
   | Readonly<{
       kind: 'bound-operation'
       operation: V2BoundReceiveOperation
+      display?: ReceiveOperationDisplay
     }>
   | Readonly<{
       kind: 'owned-effects'
@@ -121,6 +124,7 @@ export type V2RouteCommitResult =
     }>
 
 export interface V2RouteCommitInput {
+  readonly display?: ReceiveOperationDisplay
   readonly action: ResolvedArtifactAction
   /** Attempt cancellation is separate from releasing the reusable presentation authority. */
   readonly signal: AbortSignal
@@ -151,6 +155,7 @@ export type V2RetainedReceiveAction =
   | 'redownload'
   | 'discard'
   | 'delete'
+  | 'forget'
 
 export type V2RetainedReceiveActionResult =
   | Readonly<{ kind: 'completed' }>
@@ -160,6 +165,8 @@ export type V2RetainedReceiveActionResult =
     }>
 
 export interface V2RetainedReceiveOperation {
+  readonly display?: ReceiveOperationDisplay
+  readonly shareInstance?: string
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly lifecycleGeneration: bigint
@@ -211,6 +218,7 @@ export interface V2ReceiveCompositionPort {
     offered: OfferedArtifactChoice,
     preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
+    display?: ReceiveOperationDisplay,
   ): V2ArtifactPresentationAuthority
 }
 

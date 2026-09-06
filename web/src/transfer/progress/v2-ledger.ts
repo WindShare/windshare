@@ -4,6 +4,9 @@ import type { V2RevisionCapacityWaitSnapshot } from '../revision-capacity/public
 /** Separates received bytes from whole-file settlement and failure evidence. */
 export class V2TransferProgressLedger {
   #writtenBytes = 0n
+  #phase: 'receiving' | 'finishing' = 'receiving'
+  #activeMaterializedBytes = 0n
+  readonly #materializingFiles = new Map<string, bigint>()
   #recoverableBytes = 0n
   #completedFiles = 0
   #completedBytes = 0n
@@ -25,7 +28,18 @@ export class V2TransferProgressLedger {
 
   acknowledgeRecoverable(bytes: bigint): void { this.#recoverableBytes += bytes }
 
-  completeFile(exactSize: bigint): void {
+  beginFinishing(): void { this.#phase = 'finishing' }
+
+  // Absolute per-file coverage replaces a retried transaction's observation;
+  // completed files leave this bounded active-worker map and count exactly once.
+  observeMaterializedFile(fileId: string, bytes: bigint): void {
+    this.#activeMaterializedBytes += bytes - (this.#materializingFiles.get(fileId) ?? 0n)
+    if (bytes === 0n) this.#materializingFiles.delete(fileId)
+    else this.#materializingFiles.set(fileId, bytes)
+  }
+
+  completeFile(exactSize: bigint, fileId?: string): void {
+    if (fileId !== undefined) this.observeMaterializedFile(fileId, 0n)
     this.#completedFiles += 1
     this.#completedBytes += exactSize
   }
@@ -45,6 +59,8 @@ export class V2TransferProgressLedger {
 
   snapshot(measure: SelectionMeasure, outputSessionId?: string): {
     readonly measure: SelectionMeasure
+    readonly phase: 'receiving' | 'finishing'
+    readonly materializedBytes: bigint
     readonly writtenBytes: bigint
     readonly recoverableBytes: bigint
     readonly completedFiles: number
@@ -60,6 +76,8 @@ export class V2TransferProgressLedger {
   } {
     return Object.freeze({
       measure,
+      phase: this.#phase,
+      materializedBytes: this.#completedBytes + this.#activeMaterializedBytes,
       writtenBytes: this.#writtenBytes,
       recoverableBytes: this.#recoverableBytes,
       completedFiles: this.#completedFiles,

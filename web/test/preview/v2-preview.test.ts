@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
@@ -125,6 +125,65 @@ function urlPorts(extra: V2PreviewPorts = {}) {
 }
 
 describe('v2 file preview runtime', () => {
+  it('rejects oversized automatic candidates before opening a revision', async () => {
+    const fixture = runtime(new Uint8Array(1), 1n)
+    const revisions = { open: vi.fn(fixture.revisions.open) }
+    await expect(V2FilePreview.openAutomaticPhoto(
+      fileEntry(4n * 1024n * 1024n + 1n, 'large.png'),
+      revisions, fixture.broker, new AbortController().signal,
+    )).rejects.toThrow('Use Preview')
+    expect(revisions.open).not.toHaveBeenCalled()
+    expect(fixture.lane.calls).toEqual([])
+  })
+
+  it('checks automatic decoded size before a full read, then reuses the header for manual preview', async () => {
+    const bytes = pngFile(100 * 1024, 4000, 3000)
+    const fixture = runtime(bytes, 32n * 1024n)
+    const decodeImage = vi.fn(async () => ({ width: 4000, height: 3000 }))
+    const urls = urlPorts({ decodeImage })
+    const entry = fileEntry(BigInt(bytes.byteLength), 'portrait.png')
+    await expect(V2FilePreview.openAutomaticPhoto(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )).rejects.toThrow('larger image')
+    expect(fixture.lane.calls).toEqual([0n, 1n])
+    expect(decodeImage).not.toHaveBeenCalled()
+    expect(fixture.releases()).toBe(1)
+    const manual = await V2FilePreview.open(
+      entry, fixture.revisions, fixture.broker, new AbortController().signal, urls.ports,
+    )
+    expect(manual.current.kind).toBe('image')
+    expect(fixture.lane.calls).toEqual([0n, 1n, 2n, 3n])
+    await manual.close()
+  })
+
+  it('never promotes an image extension to automatic MP4 decoding', async () => {
+    const bytes = mp4ShapedFile(100 * 1024)
+    const fixture = runtime(bytes, 64n * 1024n)
+    const openVideo = vi.fn()
+    await expect(V2FilePreview.openAutomaticPhoto(
+      fileEntry(BigInt(bytes.byteLength), 'disguised.png'),
+      fixture.revisions, fixture.broker, new AbortController().signal, { openVideo },
+    )).rejects.toThrow('Use Preview')
+    expect(openVideo).not.toHaveBeenCalled()
+    expect(fixture.lane.calls).toEqual([0n])
+    expect(fixture.releases()).toBe(1)
+  })
+
+  it('aborts speculative decoding without publishing or leaking an object URL', async () => {
+    const bytes = pngFile(128, 20, 10)
+    const fixture = runtime(bytes, 64n)
+    const controller = new AbortController()
+    const urls = urlPorts({ decodeImage: async () => {
+      controller.abort(new DOMException('Download admitted', 'AbortError'))
+      return { width: 20, height: 10 }
+    } })
+    await expect(V2FilePreview.openAutomaticPhoto(
+      fileEntry(128n, 'photo.png'), fixture.revisions, fixture.broker, controller.signal, urls.ports,
+    )).rejects.toMatchObject({ name: 'AbortError' })
+    expect(urls.created).toEqual([])
+    expect(fixture.releases()).toBe(1)
+  })
+
   it('sniffs before decode, reuses cached header blocks, and revokes its image URL', async () => {
     const bytes = pngFile(70 * 1024, 320, 200)
     const fixture = runtime(bytes, 32n * 1024n)

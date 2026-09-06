@@ -1,3 +1,4 @@
+import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
 import type { CheckpointPayloadV1 } from './checkpoint-payload'
 import type {
@@ -37,6 +38,7 @@ export type TraceSealReason = (typeof TRACE_SEAL_REASONS)[number]
 
 export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'join_transition',
+  'receiver_experience',
   'browse_transition',
   'preview_transition',
   'projection_transition',
@@ -254,6 +256,7 @@ export type DirectZipMilestonePayloadV1 = Readonly<{
  * authority-bearing values to an exported event.
  */
 export interface TraceEventPayloadByNameV1 {
+  readonly receiver_experience: ReceiverExperiencePayloadV1
   readonly join_transition: Readonly<{
     transition: 'started' | 'joined' | 'failed' | 'stale_replacement'
   }>
@@ -270,7 +273,7 @@ export interface TraceEventPayloadByNameV1 {
         transition: 'refined'
         projection_epoch: string
         shape_proof: ProjectionShapeProofV1
-        discovery_state: 'idle' | 'discovering' | 'retryable_failure' | 'complete'
+        discovery_state: 'idle' | 'discovering' | 'bounded' | 'retryable_failure' | 'complete'
         file_count_lower_bound: string
         directory_count_lower_bound: string
         byte_count_lower_bound: string
@@ -627,11 +630,12 @@ export interface TraceEventPayloadByNameV1 {
     | Readonly<{ transition: 'load_completed'; operation_count: string }>
   readonly retained_action: Readonly<{
     transition: 'started' | 'completed' | 'failed' | 'excluded'
-    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete' | 'save-partial'
+    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete' | 'save-partial' | 'forget'
     continuation:
       | 'resume_receive'
       | 'pending_catch_up'
       | 'restoration_available'
+      | 'history_only'
       | 'resume_package'
       | 'save_artifact'
       | 'retry_download'

@@ -21,8 +21,11 @@ export type ReceiveOperationContinuation =
   | 'cleanup-expired'
   | 'retry-cleanup'
   | 'needs-attention'
+  | 'history-only'
 
 export interface ReceiveOperationResumeDescriptor {
+  readonly display?: import('../workspace/operation-display').ReceiveOperationDisplay
+  readonly shareInstance?: string
   readonly schemaVersion: typeof RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION
   readonly operationId: string
   readonly receiveIntentDigest: string
@@ -62,7 +65,7 @@ export function assertReceiveOperationCanContinue(
   nowMilliseconds: number,
 ): void {
   requireClock(nowMilliseconds)
-  if (descriptor.continuation === 'cleanup-incompatible' ||
+  if (descriptor.continuation === 'history-only' || descriptor.continuation === 'cleanup-incompatible' ||
       descriptor.continuation === 'needs-attention' ||
       descriptor.continuation === 'cleanup-expired' ||
       descriptor.continuation === 'retry-cleanup') {
@@ -94,9 +97,8 @@ function continuationFor(
     case 'waiting-to-save': return 'save-artifact'
     case 'handing-off':
     case 'download-started':
-      return lifecycle.attemptKind === 'workspace'
-        ? 'retry-download'
-        : undefined
+      if (lifecycle.attemptKind === 'workspace') return 'retry-download'
+      return lifecycle.kind === 'download-started' ? 'history-only' : undefined
     case 'expired':
       return lifecycle.cleanupState === 'cleanup-pending' ? 'cleanup-expired' : undefined
     case 'published':

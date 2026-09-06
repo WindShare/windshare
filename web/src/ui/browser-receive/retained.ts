@@ -1,3 +1,4 @@
+import { canForgetReceiveOperationHistory } from '../../output/resume/operation-history'
 import { pickPartialExport, saveProgressivePartial, supportsPartialExport } from './partial-export'
 import { continueProgressiveZip } from './retained-progressive'
 import { lifecycleFailureFact, type FailureFact } from '../../diagnostics/incident'
@@ -10,7 +11,6 @@ import {
   createOutputFailureBinding,
   recordOutputException,
   type LocalOutputOperationFailureDiagnosticsPort,
-  type OutputFailureBinding,
   type OutputFailureSinks,
   type OutputTraceSource,
 } from '../../output/diagnostics'
@@ -39,7 +39,7 @@ import type { BrowserReceiveWindow } from './contracts'
 import { FSAReceiveOperation } from './fsa'
 import { unavailableRoute } from './shared'
 import type { BrowserDirectZipCompositionPort } from './direct-zip'
-import { diagnosticsFor } from './retained-diagnostics'
+import { bindRuntimeOutputFailures, diagnosticsFor } from './retained-diagnostics'
 import {
   detachRuntimeAfterFailure,
   withFailedRetainedClose,
@@ -238,14 +238,19 @@ export async function listBrowserRetainedOperations(
           options.directZip !== undefined,
           reference.recoverySummary !== undefined,
         )
+        const routeActions = options.resumeMutations?.forget !== undefined &&
+          canForgetReceiveOperationHistory(descriptor.lifecycle)
+          ? Object.freeze([...presentation.actions, 'forget' as const]) : presentation.actions
         const availableActions = descriptor.lifecycle.kind === 'resumable-receive' &&
           descriptor.lifecycle.payloadKind === 'opfs-zip'
-          ? presentation.actions.filter(action => action !== 'catch-up') : presentation.actions
+          ? routeActions.filter(action => action !== 'catch-up') : routeActions
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
           : presentation.unavailableReason
         const operation: V2RetainedReceiveOperation = Object.freeze({
           operationId: descriptor.operationId,
+          ...(descriptor.display === undefined ? {} : { display: descriptor.display }),
+          ...(descriptor.shareInstance === undefined ? {} : { shareInstance: descriptor.shareInstance }),
           receiveIntentDigest: descriptor.receiveIntentDigest,
           lifecycleGeneration: descriptor.lifecycleGeneration,
           lifecycle: descriptor.lifecycle,
@@ -284,7 +289,7 @@ export async function listBrowserRetainedOperations(
             throw new DOMException('Retained action escaped its inventory authority', 'InvalidStateError')
           }
           references.delete(operation)
-          return performRetainedAction(
+          const result = await performRetainedAction(
             windowPort,
             options,
             authority,
@@ -294,6 +299,9 @@ export async function listBrowserRetainedOperations(
             actionSignal,
             failures,
           )
+          return result.kind === 'receive-continuation' && operation.display !== undefined
+            ? Object.freeze({ ...result, runtime: bindRuntimeOutputFailures(result.runtime, undefined, operation.display) })
+            : result
         },
         close: () => {
           if (!open) return
@@ -394,7 +402,7 @@ async function performRetainedAction(
       const result = await continueProgressiveZip(windowPort, continuation.operation, signal,
         diagnosticsFor('origin_private', options.outputTrace, binding.sinks))
       return result.kind === 'receive-continuation'
-        ? Object.freeze({ ...result, runtime: bindRuntimeOutputFailures(result.runtime, binding) }) : result
+        ? Object.freeze({ ...result, runtime: bindRuntimeOutputFailures(result.runtime, binding, operation.display) }) : result
     }
     case 'direct-tree-catch-up':
       return withRetainedOperationClose(continuation.operation, async () => {
@@ -442,6 +450,11 @@ async function dispatchRetainedAuthorityAction(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<RetainedAuthorityDispatch> {
+  if (action === 'forget') {
+    await authority.forget(reference)
+    signal.throwIfAborted()
+    return Object.freeze({ kind: 'completed' })
+  }
   const directZipAction = isDirectZipContinuation(operation.continuation)
   if (!directZipAction && (action === 'discard' || (action === 'delete' &&
       operation.continuation !== 'cleanup-expired' &&
@@ -646,6 +659,14 @@ function sourceWithoutBootstrapCandidates(
   return Object.freeze({
     listDirectZipBootstrapCandidates: () => Promise.resolve(Object.freeze([])),
     listLifecycleStates: () => source.listLifecycleStates(),
+    ...(source.readOperationIdentity === undefined ? {} : {
+      readOperationIdentity: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readOperationIdentity']>>[0]) =>
+        source.readOperationIdentity!(lifecycle),
+    }),
+    ...(source.readSourceRevisionFailures === undefined ? {} : {
+      readSourceRevisionFailures: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readSourceRevisionFailures']>>[0]) =>
+        source.readSourceRevisionFailures!(lifecycle),
+    }),
     ...(source.readProgressiveRequirement === undefined ? {} : {
       readProgressiveRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readProgressiveRequirement']>>[0]) =>
         source.readProgressiveRequirement!(lifecycle),
@@ -666,48 +687,4 @@ function isDirectZipContinuation(
 ): boolean {
   return continuation === 'resume-direct-zip' || continuation === 'reauthorize-direct-zip' ||
     continuation === 'verify-direct-zip-target' || continuation === 'retry-direct-zip-space'
-}
-
-
-
-export function bindRuntimeOutputFailures(
-  runtime: V2BoundReceiveOperation,
-  binding: OutputFailureBinding,
-): V2BoundReceiveOperation {
-  const bound: V2BoundReceiveOperation = {
-    intent: runtime.intent,
-    get plans() {
-      return runtime.plans
-    },
-    get transferJobId() {
-      return runtime.transferJobId
-    },
-    lifecycle: runtime.lifecycle,
-    activeControls: runtime.activeControls,
-    ...(runtime.outputProgress === undefined ? {} : { outputProgress: runtime.outputProgress }),
-    ...(runtime.repairProjection === undefined
-      ? {}
-      : { repairProjection: runtime.repairProjection }),
-    ...(runtime.subscribeRepairProjectionActivation === undefined
-      ? {}
-      : {
-          subscribeRepairProjectionActivation: (
-            listener: Parameters<NonNullable<
-              V2BoundReceiveOperation['subscribeRepairProjectionActivation']
-            >>[0],
-          ) => runtime.subscribeRepairProjectionActivation!(listener),
-        }),
-    ...(runtime.initialWorkspaceUsage === undefined
-      ? {}
-      : { initialWorkspaceUsage: runtime.initialWorkspaceUsage }),
-    bindOutputFailures: failures => binding.bind(failures),
-    interrupt: (control, transfer) => runtime.interrupt(control, transfer),
-    startLifecycleAction: (action, lifecycle) =>
-      runtime.startLifecycleAction(action, lifecycle),
-    observeExpiry: lifecycle => runtime.observeExpiry(lifecycle),
-    resolveWorkspaceUsage: lifecycle => runtime.resolveWorkspaceUsage(lifecycle),
-    settleTransferAdmissionFailure: reason => runtime.settleTransferAdmissionFailure(reason),
-    detach: () => runtime.detach(),
-  }
-  return Object.freeze(bound)
 }

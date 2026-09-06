@@ -81,6 +81,12 @@ export function reduceSelectionProjection(
   if (event.epoch !== state.projection.epoch) return state
   switch (event.kind) {
     case 'discovery-started': return startDiscovery(state)
+    case 'discovery-bounded': {
+      if (state.discovery.kind !== 'discovering') {
+        throw new SelectionProjectionError('bounded discovery requires active discovery')
+      }
+      return withDiscovery(state, Object.freeze({ kind: 'bounded' }))
+    }
     case 'authenticated-evidence': return reduceAuthenticatedEvidence(state, event.evidence)
     case 'retryable-failure': return failRetryably(state, event.reason)
     case 'retry-started': return retryDiscovery(state)
@@ -375,7 +381,7 @@ function refineProof(input: {
   readonly selectedRootsTruncated: boolean
   readonly unsettledTargets: readonly UnsettledSelectionTarget[]
   readonly singleFileCandidate?: ProjectedFileFact
-  readonly earlyLayoutBasis?: Readonly<{ kind: 'synthetic-selection' }>
+  readonly earlyLayoutBasis?: SettledLayoutBasisProof
 }): ArtifactShapeProof {
   if (input.previous.kind === 'tree') {
     const layoutBasis = mergeLayoutBasis(input.previous.layoutBasis, input.earlyLayoutBasis)

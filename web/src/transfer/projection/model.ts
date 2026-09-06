@@ -33,6 +33,7 @@ export type RetryableDiscoveryReason =
 export type DiscoveryState =
   | Readonly<{ kind: 'idle' }>
   | Readonly<{ kind: 'discovering' }>
+  | Readonly<{ kind: 'bounded' }>
   | Readonly<{ kind: 'retryable-failure'; reason: RetryableDiscoveryReason }>
   | Readonly<{ kind: 'complete' }>
 
@@ -133,8 +134,8 @@ export interface AuthenticatedProjectionEvidence {
   readonly selectedRoots: readonly SelectedRootFact[]
   readonly selectedRootCount: number
   readonly settledTargets: readonly UnsettledSelectionTarget[]
-  /** Synthetic layout is the only basis that cannot be invalidated by later roots. */
-  readonly earlyLayoutBasis?: Readonly<{ kind: 'synthetic-selection' }>
+  /** All selected roots and exclusion paths must be authenticated before settling layout. */
+  readonly earlyLayoutBasis?: SettledLayoutBasisProof
 }
 
 export type SelectionProjectionEvent =
@@ -150,6 +151,7 @@ export type SelectionProjectionEvent =
       reason: RetryableDiscoveryReason
     }>
   | Readonly<{ kind: 'retry-started'; epoch: ProjectionEpoch }>
+  | Readonly<{ kind: 'discovery-bounded'; epoch: ProjectionEpoch }>
   | Readonly<{
       kind: 'discovery-completed'
       epoch: ProjectionEpoch
@@ -271,7 +273,7 @@ export function createAuthenticatedProjectionEvidence(input: {
   readonly selectedRoots?: readonly SelectedRootFact[]
   readonly selectedRootCount?: number
   readonly settledTargets?: readonly UnsettledSelectionTarget[]
-  readonly earlyLayoutBasis?: Readonly<{ kind: 'synthetic-selection' }>
+  readonly earlyLayoutBasis?: SettledLayoutBasisProof
 }): AuthenticatedProjectionEvidence {
   if (input.generations.length === 0 ||
       input.generations.length > MAX_PROJECTION_GENERATION_REFERENCES) {
@@ -305,7 +307,7 @@ export function createAuthenticatedProjectionEvidence(input: {
     settledTargets,
     ...(input.earlyLayoutBasis === undefined
       ? {}
-      : { earlyLayoutBasis: Object.freeze({ kind: 'synthetic-selection' as const }) }),
+      : { earlyLayoutBasis: snapshotSettledLayoutBasis(input.earlyLayoutBasis) }),
   })
   AUTHENTICATED_EVIDENCE.add(evidence)
   return evidence
@@ -317,6 +319,14 @@ export function requireAuthenticatedProjectionEvidence(
   if (!AUTHENTICATED_EVIDENCE.has(evidence)) {
     throw new SelectionProjectionError('projection evidence did not cross authenticated construction')
   }
+}
+
+function snapshotSettledLayoutBasis(basis: SettledLayoutBasisProof): SettledLayoutBasisProof {
+  const snapshot = snapshotLayoutBasis(basis)
+  if (snapshot.kind === 'unsettled') {
+    throw new SelectionProjectionError('early layout evidence must prove a settled basis')
+  }
+  return snapshot
 }
 
 export function snapshotLayoutBasis(basis: LayoutBasisProof): LayoutBasisProof {

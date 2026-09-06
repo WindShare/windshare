@@ -109,7 +109,7 @@ async function* completedDiscovery(): AsyncGenerator<
   AuthenticatedDiscoveryCompletion
 > {
   yield* NO_EVIDENCE
-  return Object.freeze({})
+  return Object.freeze({ kind: 'complete' })
 }
 
 async function* gatedDiscovery(gate: Promise<void>): AsyncGenerator<
@@ -118,7 +118,7 @@ async function* gatedDiscovery(gate: Promise<void>): AsyncGenerator<
 > {
   yield* NO_EVIDENCE
   await gate
-  return Object.freeze({})
+  return Object.freeze({ kind: 'complete' })
 }
 
 async function collect(

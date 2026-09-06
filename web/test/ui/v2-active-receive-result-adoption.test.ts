@@ -99,13 +99,15 @@ describe('active receive result adoption', () => {
     await fixture.close()
   })
 
-  it('publishes the exact result behind the retained null-projection fence', async () => {
+  it('publishes the exact retained result while preserving the independent draft projection', async () => {
     const fixture = await resultAdoptionFixture('retained')
+    const draftProjection = fixture.outputs.getSnapshot().projection
+    expect(draftProjection).not.toBeNull()
 
     fixture.settle('destination-collision')
     await waitFor(() => fixture.outputs.getSnapshot().transferResultPresentation !== null)
 
-    expect(fixture.outputs.getSnapshot().projection).toBeNull()
+    expect(fixture.outputs.getSnapshot().projection).toBe(draftProjection)
     expect(fixture.outputs.getSnapshot().transferResultPresentation).toMatchObject({
       title: 'Existing destinations prevented completion',
       tone: 'warning',

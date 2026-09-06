@@ -171,18 +171,21 @@ export class V2OutputPresentationController {
     } else if (activation.kind !== 'terminal' || activation.outcome.kind !== 'bound-operation') {
       this.#resolvedAction = null
     }
+    const choicePresented = activationPresentsChoice(activation) ||
+      (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
+    let chosenChoice = this.#snapshot.chosenChoice
+    let chosenSizeProjection = this.#snapshot.chosenSizeProjection
+    if (this.#snapshot.receiveIntent === null) {
+      chosenChoice = choicePresented ? activation.choice : null
+      chosenSizeProjection = choicePresented
+        ? this.#activeOfferedChoice?.sizeProjection ?? chosenSizeProjection : null
+    }
     this.#publish(Object.freeze({
       ...this.#snapshot,
       activation,
       activationPresentation: presentArtifactActivation(activation, this.#activeOfferedChoice),
-      chosenChoice: activationPresentsChoice(activation) ||
-        (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
-        ? activation.choice
-        : null,
-      chosenSizeProjection: activationPresentsChoice(activation) ||
-        (activation.kind === 'terminal' && activation.outcome.kind === 'bound-operation')
-        ? this.#activeOfferedChoice?.sizeProjection ?? this.#snapshot.chosenSizeProjection
-        : null,
+      chosenChoice,
+      chosenSizeProjection,
       resolvedArtifact: this.#snapshot.receiveIntent?.artifact ?? this.#resolvedAction?.artifact ?? null,
     }))
   }
@@ -276,7 +279,11 @@ export class V2OutputPresentationController {
       throw new TypeError('retained lifecycle does not belong to its validated receive intent')
     }
     const snapshot = this.#buildLifecycleSnapshot({
-      ...EMPTY_V2_OUTPUT_PRESENTATION,
+      ...this.#snapshot,
+      activation: INACTIVE_ACTIVATION,
+      activationPresentation: null,
+      chosenChoice: null,
+      chosenSizeProjection: null,
       resolvedArtifact: intent.artifact,
       receiveIntent: intent,
       plan: intent.plan,
@@ -405,6 +412,25 @@ export class V2OutputPresentationController {
       ),
     }))
     return true
+  }
+
+  clearTask(): void {
+    const { projectionRevision, projection, offers, offerPresentation } = this.#snapshot
+    this.#activeOfferedChoice = null
+    this.#resolvedAction = null
+    this.#publish(Object.freeze({ ...EMPTY_V2_OUTPUT_PRESENTATION,
+      projectionRevision, projection, offers, offerPresentation }))
+  }
+
+  resetDraft(): void {
+    // A replaceable catalog estimate owns no committed output or progress.
+    this.#publish(Object.freeze({
+      ...this.#snapshot,
+      projectionRevision: null,
+      projection: null,
+      offers: null,
+      offerPresentation: null,
+    }))
   }
 
   reset(): void {
