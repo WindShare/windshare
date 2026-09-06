@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 import { join } from 'node:path'
 import type { Scenario } from './receiver-gallery/fixtures'
+import { galleryEvidence as evidence } from './receiver-gallery/assertions'
 
 const GALLERY_PATH = '/test/browser/receiver-gallery/index.html'
 const EVIDENCE_DIRECTORY = process.env.WINDSHARE_GALLERY_EVIDENCE_DIR
@@ -11,14 +12,6 @@ async function scenario(page: Page, value: Scenario) {
   await page.getByLabel('Synthetic scenario').selectOption(value)
   await expect(page.locator('[data-gallery-scenario]')).toHaveAttribute('data-gallery-scenario', value)
   await expect(page.locator('.receiver-shell')).toBeVisible()
-}
-
-async function evidence(page: Page) {
-  return page.evaluate(async () => {
-    const path = '/test/browser/receiver-gallery/harness.tsx'
-    const gallery = await import(path) as { galleryEvidence(): { intents: string[]; taskId: string | null; taskLabel: string | null; taskBytes: string; draftEmpty: boolean } }
-    return gallery.galleryEvidence()
-  })
 }
 
 async function screenshot(page: Page, name: string) {
@@ -75,6 +68,7 @@ test('production explorer keeps semantic selection, preview focus and current ta
   await page.getByRole('dialog').getByRole('button', { name: 'Details', exact: true }).last().click()
   await expect(page.getByRole('dialog')).toContainText('Created')
   await page.getByRole('button', { name: 'All downloads', exact: true }).click()
+  await expect(page.getByRole('dialog').getByRole('button', { name: 'Details', exact: true }).last()).toBeFocused()
   await page.keyboard.press('Escape')
   await expect(downloads).toBeFocused()
   expect(await evidence(page)).toMatchObject({ taskId: before.taskId, taskLabel: before.taskLabel, taskBytes: before.taskBytes })
@@ -89,7 +83,7 @@ test('production responsive gallery keeps media uncropped and controls reachable
   await page.getByRole('button', { name: /^Downloads/ }).tap()
   await expect(page.getByRole('dialog')).toBeVisible()
   await screenshot(page, 'mobile-downloads')
-  await page.getByRole('button', { name: 'Back to share', exact: true }).tap()
+  await page.getByRole('button', { name: 'Close downloads', exact: true }).tap()
   await expect(page.locator('.share-workspace > .task-card')).toContainText('Downloading')
 
   for (const [device, width, height] of [['desktop', 1440, 1000], ['tablet', 820, 1180], ['mobile', 390, 844]] as const) {

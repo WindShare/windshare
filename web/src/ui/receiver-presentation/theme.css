@@ -1,0 +1,35 @@
+/* Appearance belongs to the opening surface; descendant dialogs inherit it. */
+.receiver-shell,
+.portal-root {
+  --receiver-page: light-dark(#f2f7f4, #070c09);
+  --receiver-paper: light-dark(#fff, #122019);
+  --receiver-ink: light-dark(#182b22, #f3f4f6);
+  --receiver-muted: light-dark(#57685e, #a4b5ab);
+  --receiver-rule: light-dark(#d6e3db, #304d3d);
+  --receiver-accent: light-dark(#087a55, #10b981);
+  --receiver-on-accent: light-dark(#fff, #042a1d);
+  --receiver-wash: light-dark(#e4f4ec, #193a2b);
+  --receiver-stage: light-dark(#eaf3ee, #0c1812);
+  --receiver-accent-hover: light-dark(#066847, #34d399);
+  --receiver-secondary: light-dark(#0b7f8c, #22b8c5);
+  --receiver-disabled: light-dark(#e5ece7, #24362c);
+  --receiver-disabled-ink: light-dark(#526258, #a4b5ab);
+  --receiver-success: light-dark(#187044, #75de9f);
+  --receiver-success-wash: light-dark(#e8f4ec, #193b2b);
+  --receiver-warning: light-dark(#845617, #efcd81);
+  --receiver-warning-wash: light-dark(#fff2d9, #3a3020);
+  --receiver-error: light-dark(#ad393d, #ffa4a9);
+  --receiver-error-wash: light-dark(#fcebec, #42242a);
+  --receiver-shadow: light-dark(#223c3326, #00000080);
+  --receiver-backdrop: light-dark(#182b2259, #00000099);
+  --receiver-highlight: light-dark(#ffffff88, #ffffff44);
+}
+.receiver-shell { color-scheme: light dark; }
+.portal-root { color-scheme: dark; }
+.receiver-shell,
+.detail-sheet {
+  color: var(--receiver-ink);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  scrollbar-color: var(--receiver-muted) var(--receiver-stage);
+}
+.detail-sheet { color-scheme: inherit; }

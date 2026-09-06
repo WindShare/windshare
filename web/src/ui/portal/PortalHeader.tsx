@@ -1,6 +1,4 @@
-import type { ReactNode } from 'react'
-
-export function PortalHeader({ downloads }: { readonly downloads?: ReactNode }) {
+export function PortalHeader() {
   return (
     <header className="portal-header">
       <div className="portal-container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -19,7 +17,6 @@ export function PortalHeader({ downloads }: { readonly downloads?: ReactNode }) 
           </span>
         </a>
 
-        {downloads}
         <nav className="portal-nav" aria-label="主要导航">
           <a href="#features">核心优势</a>
           <a href="#how-it-works">工作原理</a>

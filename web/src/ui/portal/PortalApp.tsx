@@ -22,9 +22,18 @@ export function PortalApp({ controller }: { readonly controller: V2ReceiverContr
     <div className="portal-root">
       <P2PMeshBackground />
       <div className="portal-content-layer">
-        <PortalHeader downloads={<TaskDownloads tasks={composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action), action => controller.activeLifecycleActionAdmission(action)).tasks} snapshot={snapshot} controller={controller} home="home" />} />
+        <PortalHeader />
         <main>
-          <HeroSection controller={controller} />
+          <HeroSection
+            controller={controller}
+            downloads={<TaskDownloads
+              tasks={composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action), action => controller.activeLifecycleActionAdmission(action)).tasks}
+              snapshot={snapshot}
+              controller={controller}
+              entryLabel="下载记录"
+              entryDescription="当前浏览器的下载任务与记录"
+            />}
+          />
           <FeatureGrid />
           <HowItWorksSection />
           <SelfHostSection />
