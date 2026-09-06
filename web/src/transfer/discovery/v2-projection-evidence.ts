@@ -119,7 +119,7 @@ class GenerationProjectionAccumulator {
     )
     if (!this.#input.selection.selected(entry, this.#input.directoryAncestry)) return
     this.#observeSelectedEntry(entry, sourcePath)
-    if (this.#input.containingDirectorySelected) return
+    if (this.#input.containingDirectorySelected && this.#directoryPath.length !== 0) return
     this.#selectedRootCount = addCount(this.#selectedRootCount, 1, 'selected root count')
     if (this.#selectedRoots.length < MAX_PROJECTION_SELECTED_ROOT_FACTS) {
       this.#selectedRoots.push(selectedRoot(entry, sourcePath))

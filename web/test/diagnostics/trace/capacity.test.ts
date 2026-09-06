@@ -74,6 +74,7 @@ describe('trace frozen contract', () => {
     ])
     expect(TRACE_EVENT_NAMES_V1).toEqual([
       'join_transition',
+      'receiver_experience',
       'browse_transition',
       'preview_transition',
       'projection_transition',

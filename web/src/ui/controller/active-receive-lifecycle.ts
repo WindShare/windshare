@@ -75,6 +75,8 @@ export class ActiveReceiveLifecycle {
     this.#onFailure = options.onFailure
   }
 
+  get pending(): boolean { return this.#pending !== undefined }
+
   perform(action: LifecycleUserAction): void {
     const active = this.#currentOperation()
     const output = this.#outputs.getSnapshot()

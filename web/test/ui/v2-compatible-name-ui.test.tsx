@@ -1,3 +1,6 @@
+import { TaskDetails } from '../../src/ui/tasks/TaskView'
+import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
+import { experienceSnapshot } from './receiver-experience-fixture'
 import { renderToString } from 'react-dom/server'
 import { describe, expect, it, vi } from 'vitest'
 
@@ -62,8 +65,8 @@ describe('compatible-name receiver UI', () => {
     )
 
     expect(html).toContain('role="status"')
-    expect(html).toContain('Compatible names are in use')
-    expect(html).toContain('2 verified/committed name replacements')
+    expect(html).toContain('adjusted for this device.')
+    expect(html).toContain('filenames were')
     expect(html).not.toContain('restore.windshare-abc234.ps1')
     expect(html).not.toContain('powershell.exe')
     expect(html).not.toContain('Copy restoration command')
@@ -89,7 +92,7 @@ describe('compatible-name receiver UI', () => {
       })]),
     })
     const html = renderToString(
-      <V2ReceiverApp controller={controller(snapshot({ retained }))} />,
+      <TaskDetails task={presentTask(retainedTaskFacts(retained.operations[0]!, 'local'))} actions={{ perform: vi.fn(), catchUp: vi.fn() }} />,
     )
 
     expect(html).toContain('Restore the original names')
@@ -116,10 +119,9 @@ describe('compatible-name receiver UI', () => {
       })]),
     })
     const html = renderToString(
-      <V2ReceiverApp controller={controller(snapshot({ retained }))} />,
+      <TaskDetails task={presentTask(retainedTaskFacts(retained.operations[0]!, 'local'))} actions={{ perform: vi.fn(), catchUp: vi.fn() }} />,
     )
 
-    expect(html).toContain('Compatible-name finalization needs catch-up')
     expect(html).toContain('Finish local restoration catch-up')
     expect(html).toContain('Restoration tool catch-up required')
     expect(html).toContain('Do not run the restoration tool yet')
@@ -133,6 +135,7 @@ function snapshot(
   patch: Partial<V2ReceiverSnapshot>,
 ): V2ReceiverSnapshot {
   return Object.freeze({
+    ...experienceSnapshot(),
     pathActivity: { directConnected: false, content: 'idle' as const },
     phase: 'browsing',
     status: 'Ready.',
@@ -163,6 +166,8 @@ function controller(value: V2ReceiverSnapshot): V2ReceiverController {
   return {
     subscribe: vi.fn(() => () => undefined),
     getSnapshot: vi.fn(() => value),
+    retainedActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),
+    activeLifecycleActionAdmission: vi.fn(() => ({ allowed: true, reason: null })),
   } as unknown as V2ReceiverController
 }
 

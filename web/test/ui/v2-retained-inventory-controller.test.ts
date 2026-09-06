@@ -26,6 +26,87 @@ import type {
   V2RetainedReceiveOperation,
 } from '../../src/ui/v2-receive-runtime'
 
+describe('retained inventory local finalization and identity admission', () => {
+  it('automatically finalizes only source-confirmed local content after competing work releases admission', async () => {
+    const original = operation(['continue'], 'resume-local-finalization')
+    let blocked = true
+    let dispatches = 0
+    const action = deferred<V2RetainedReceiveActionResult>()
+    const inventory = testInventory([original], candidate => {
+      expect(candidate).toBe(original)
+      dispatches += 1
+      return action.promise
+    })
+    const harness = retainedHarness(() => Promise.resolve(inventory), undefined, {
+      localFinalizationBlocked: () => blocked,
+    })
+    await harness.coordinator.load()
+    expect(dispatches).toBe(0)
+    blocked = false
+    await harness.coordinator.load()
+    expect(dispatches).toBe(1)
+    expect(harness.publications.at(-1)?.pending).toEqual({ operationId: original.operationId, action: 'continue' })
+    action.resolve({ kind: 'completed' })
+    await Promise.resolve()
+    await harness.coordinator.load()
+    expect(dispatches).toBe(1)
+  })
+
+  it('does not repeat failed automatic finalization after reopen advances the lifecycle generation', async () => {
+    const original = operation(['continue'], 'resume-local-finalization')
+    let generation = original.lifecycleGeneration
+    let dispatches = 0
+    const harness = retainedHarness(() => Promise.resolve(testInventory([
+      Object.freeze({ ...original, lifecycleGeneration: generation }),
+    ], async () => {
+      dispatches += 1
+      generation += 1n
+      throw new DOMException('Local output is full', 'QuotaExceededError')
+    })), undefined, { localFinalizationBlocked: () => false })
+    await harness.coordinator.load()
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    await harness.coordinator.load()
+    expect(dispatches).toBe(1)
+    const row = harness.publications.at(-1)!.operations[0]!
+    expect(row.lifecycleGeneration).toBe(2n)
+    expect(harness.coordinator.actionAdmission(row, 'continue').allowed).toBe(true)
+    harness.coordinator.perform(row, 'continue')
+    for (let index = 0; index < 8; index += 1) await Promise.resolve()
+    expect(dispatches).toBe(2)
+  })
+
+  it.each(['resume-package', 'resume-receive', 'reauthorize-direct-zip'] as const)(
+    'keeps %s behind its explicit action', async continuation => {
+      let dispatches = 0
+      const source = operation(['continue'], continuation)
+      const harness = retainedHarness(() => Promise.resolve(testInventory([source], async () => {
+        dispatches += 1
+        return { kind: 'completed' }
+      })), undefined, { localFinalizationBlocked: () => false })
+      await harness.coordinator.load()
+      expect(dispatches).toBe(0)
+    },
+  )
+
+  it('rejects mismatched shares and copied presentation rows before consuming the original token', async () => {
+    const original = Object.freeze({ ...operation(['continue'], 'resume-receive'),
+      shareInstance: 'original-share', display: { objectLabel: 'Same name', createdAtMilliseconds: 1 } })
+    let dispatches = 0
+    const harness = retainedHarness(() => Promise.resolve(testInventory([original], async () => {
+      dispatches += 1
+      return { kind: 'completed' }
+    })), { descriptor: { shareInstanceId: 'different-share' } } as V2JoinedBrowserShare)
+    await harness.coordinator.load()
+    const projected = harness.publications.at(-1)!.operations[0]!
+    harness.coordinator.perform({ ...projected }, 'continue')
+    expect(dispatches).toBe(0)
+    harness.coordinator.perform(projected, 'continue')
+    expect(dispatches).toBe(0)
+    expect(harness.actionErrors).toHaveLength(1)
+  })
+
+})
+
 describe('retained inventory incident ownership', () => {
   it('gives successful and failed loads distinct closed presentation scopes', async () => {
     const ready = testInventory([])
@@ -429,9 +510,10 @@ describe('retained repair and incompatible record authority', () => {
 
     await harness.coordinator.load()
     const ready = harness.publications.at(-1)
-    expect(ready?.operations.map(candidate => candidate.operationId)).toEqual(['pending-repair'])
-    expect(ready?.operations[0]?.actions).toEqual(['catch-up'])
-    harness.coordinator.perform(ready!.operations[0]!, 'catch-up')
+    expect(ready?.operations.map(candidate => candidate.operationId)).toEqual(['ordinary-active', 'pending-repair'])
+    expect(ready?.operations[0]?.actions).toEqual([])
+    expect(ready?.operations[1]?.actions).toEqual(['catch-up'])
+    harness.coordinator.perform(ready!.operations[1]!, 'catch-up')
     expect(actedWith).toBe(pendingRepair)
     harness.coordinator.cancelPending(new DOMException('test complete', 'AbortError'))
   })
@@ -817,6 +899,7 @@ function retainedHarness(
   joined?: V2JoinedBrowserShare,
   options: Readonly<{
     traceEnabled?: boolean
+    localFinalizationBlocked?: () => boolean
     onPublish?: (retained: Parameters<RetainedInventoryCoordinatorOptions['publish']>[0]) => void
     repairSource?: V2RetainedCompatibleNameRepairSource
   }> = {},
@@ -835,6 +918,7 @@ function retainedHarness(
     isDisposed: () => false,
     currentJoinedShare: () => joined,
     continuationBlocked: () => false,
+    ...(options.localFinalizationBlocked === undefined ? {} : { localFinalizationBlocked: options.localFinalizationBlocked }),
     adoptContinuation: async () => undefined,
     ownsRuntime: () => false,
     publish: (retained) => {

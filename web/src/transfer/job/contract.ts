@@ -98,6 +98,9 @@ export class V2DirectoryAncestry {
 export interface TransferProgress {
   readonly discoveredFiles: number
   readonly discoveredBytes: bigint
+  readonly phase: 'receiving' | 'finishing'
+  /** Accepted output payload, including authenticated retained coverage; not restart durability. */
+  readonly materializedBytes: bigint
   readonly writtenBytes: bigint
   readonly recoverableBytes: bigint
   readonly completedFiles: number

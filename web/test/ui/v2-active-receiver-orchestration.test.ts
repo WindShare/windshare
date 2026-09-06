@@ -107,7 +107,7 @@ describe('v2 receiver active operation orchestration', () => {
     const controller = controllerFor(joined, receive)
 
     await waitFor(() => joined.projectionRequests.length === 1)
-    expect(controller.getSnapshot().rows[0]?.selection).toBe('unselected')
+    expect(controller.getSnapshot().rows[0]?.selection).toBe('selected')
     expect(receive.startedAuthorities).toHaveLength(0)
 
     controller.toggleSelection(FILE_ID)

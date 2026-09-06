@@ -47,6 +47,7 @@ const EMPTY_FILE_PIPELINE_STAGES = Object.fromEntries(
 
 const PAYLOAD_FOR_EVERY_EVENT = {
   join_transition: { transition: 'started' },
+  receiver_experience: { transition: 'intent', action: 'open-downloads', operation_id: null, generation: '0' },
   browse_transition: { transition: 'started' },
   preview_transition: { attempt: 'open', transition: 'started' },
   projection_transition: { transition: 'started', projection_epoch: '1' },

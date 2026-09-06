@@ -237,6 +237,10 @@ export class TransferJob {
         },
         requireBound: () => this.#requireExecution(),
         materializationStarted: () => this.#observers?.materializationStarted(),
+        finishingStarted: () => {
+          this.#progress.beginFinishing()
+          this.#emitProgress()
+        },
         finalizeDirectories: () => this.#finalizeDirectories(),
         transferPreparedFiles: files => this.#transferPreparedFiles(files),
         completeWorkers: measure => this.#settlement.completeWorkers(measure),
@@ -593,6 +597,7 @@ export class TransferJob {
     if (execution.planKind === 'direct-resumable-zip') {
       throw new TypeError('direct ZIP content must pass through its ordered coordinator')
     }
+    let materializedBytes = 0n
     await transferV2File({
       descriptor: this.#options.descriptor,
       revisions: this.#capacity.revisions,
@@ -607,7 +612,14 @@ export class TransferJob {
       ...(this.#options.incidentScope === undefined
         ? {}
         : { incidentScope: this.#options.incidentScope }),
+      onInitialDurable: bytes => {
+        materializedBytes = bytes
+        this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
+        this.#emitProgress()
+      },
       onWriteAcknowledged: (bytes) => {
+        materializedBytes += bytes
+        this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
         this.#progress.acknowledgeWrite(bytes)
         this.#emitProgress()
       },
@@ -616,10 +628,15 @@ export class TransferJob {
         this.#emitProgress()
       },
       onComplete: (exactSize) => {
-        this.#progress.completeFile(exactSize)
+        this.#progress.completeFile(exactSize, file.entry.idText)
         this.#emitProgress()
       },
-    }, file)
+    }, file).finally(() => {
+      // Failed/parked transactions cannot contribute speculative live coverage.
+      // A retry reinstates only the durable coverage its adapter authenticates.
+      this.#progress.observeMaterializedFile(file.entry.idText, 0n)
+      this.#emitProgress()
+    })
   }
 
   #admissionFailure(error: unknown): V2TransferAdmissionFailureError {

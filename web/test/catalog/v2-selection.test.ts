@@ -52,6 +52,39 @@ describe('v2 progressive selection rules', () => {
     expect(frozen.shouldDiscover('candidate', ['root', 'unrelated-hint'])).toBe(true)
   })
 
+  it('selects an entire mixed subtree and discards all descendant overrides', () => {
+    const policy = new V2SelectionPolicy(false)
+    const parent = directory('parent')
+    const child = directory('child')
+    policy.set(parent, ['root'], true)
+    policy.set(child, ['root', 'parent'], false)
+    policy.set(file('kept'), ['root', 'parent', 'child'], true)
+    expect(policy.state(parent, ['root'])).toBe('mixed')
+    expect(policy.intentSummary()).toEqual({
+      allSelected: false, selectedFiles: 0, selectedFolders: 1, excludedItems: 1, empty: false,
+    })
+    const frozen = policy.snapshot()
+    policy.toggle(parent, ['root'])
+    expect(policy.state(parent, ['root'])).toBe('selected')
+    expect(policy.explicitRuleCount).toBe(1)
+    expect(policy.selected(file('late'), ['root', 'parent', 'child'])).toBe(true)
+    expect(frozen.selected(file('other'), ['root', 'parent', 'child'])).toBe(false)
+    policy.set(parent, ['root'], false)
+    expect(policy.intentSummary().empty).toBe(true)
+    expect(policy.selected(file('late'), ['root', 'parent', 'child'])).toBe(false)
+  })
+
+  it('summarizes selections and exclusions across pages without counting inherited descendants twice', () => {
+    const policy = new V2SelectionPolicy(false)
+    policy.set(directory('parent'), ['root'], true)
+    policy.set(file('selected'), ['root', 'parent'], true)
+    policy.set(file('excluded'), ['root', 'parent'], false)
+    policy.set(file('elsewhere'), ['root'], true)
+    expect(policy.intentSummary()).toEqual({
+      allSelected: false, selectedFiles: 1, selectedFolders: 1, excludedItems: 1, empty: false,
+    })
+  })
+
   it('retains only explicit rules while evaluating a million sibling identities', () => {
     const policy = new V2SelectionPolicy(true)
     let selectedSiblings = 0

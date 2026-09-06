@@ -1,3 +1,4 @@
+import { ReceiverConnectionState } from './connection-state'
 import { RelayEndpointFailure } from './relay-race'
 import type { V2CatalogOperationClient } from '../catalog/v2-client'
 import type { V2CatalogPageRequest, V2ShareDescriptor } from '../catalog/v2-records'
@@ -122,6 +123,7 @@ export type V2ProtocolGenerationListener = (
 export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvider {
   readonly descriptor: V2ShareDescriptor
   readonly pathActivity = new ReceiverPathActivity()
+  readonly connection = new ReceiverConnectionState()
   readonly #downloads = new Map<V2BlockRouteEligibility, DownloadMetrics>()
   #directUsable = false
   readonly content: V2SupervisedContent
@@ -437,6 +439,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
     if (generation.session.laneIds().length === 0) {
       generation.retired = true
+      this.connection.reconnecting()
       this.pathActivity.generationRetired(generation.id)
       generation.session.close().catch(() => undefined)
     }
@@ -519,6 +522,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       throw error
     }
     this.#current = next
+    this.connection.connected()
     this.pathActivity.generationInstalled(next.id)
     this.connectivity.bind(next.connectivity)
     next.relays.start()
@@ -593,6 +597,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     if (this.#failed || this.#stopped) return
     this.#failed = true
     this.#terminal = reason
+    this.connection.failed(reason)
     this.#lifetime.abort(reason)
     for (const waiter of this.#waiters) waiter.reject(reason)
     this.#waiters.clear()
@@ -614,6 +619,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     if (this.#stopped) return
     // Stop authority is published before any close can emit lane events.
     this.#stopped = true
+    this.connection.close()
     this.#lifetime.abort(new DOMException('Receiver supervisor stopped', 'AbortError'))
     for (const waiter of this.#waiters) waiter.reject(this.#lifetime.signal.reason)
     this.#waiters.clear()

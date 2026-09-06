@@ -1,14 +1,10 @@
 import { useState, type FormEvent } from 'react'
 import type { V2ReceiverController } from '../v2-controller'
-import type { V2ReceiverSnapshot } from '../v2-model'
-import type { V2RetainedReceiveOperation } from '../v2-receive-runtime'
 
 function ReceiveTab({
   controller,
-  retainedOp,
 }: {
   readonly controller: V2ReceiverController
-  readonly retainedOp: V2RetainedReceiveOperation | null
 }) {
   const [keyInput, setKeyInput] = useState('')
 
@@ -69,26 +65,6 @@ function ReceiveTab({
         💡 密钥与解密过程完全在您的本地浏览器内存中运行，地址栏与中转服务器绝不接触任何明文密钥。
       </p>
 
-      {retainedOp && retainedOp.actions.length > 0 && retainedOp.actions[0] && (
-        <div className="portal-retained-alert">
-          <div className="portal-retained-info">
-            <strong>发现本地未完成的接收任务</strong>
-            <p>浏览器保留了断点检查点或等待保存的文件产物。</p>
-          </div>
-          <button
-            type="button"
-            className="portal-btn-resume"
-            onClick={() => {
-              const action = retainedOp.actions[0]
-              if (action) {
-                controller.performRetainedAction(retainedOp, action)
-              }
-            }}
-          >
-            一键恢复任务 →
-          </button>
-        </div>
-      )}
     </form>
   )
 }
@@ -224,17 +200,11 @@ function DesktopTab() {
 
 export function HeroSection({
   controller,
-  snapshot,
 }: {
   readonly controller: V2ReceiverController
-  readonly snapshot: V2ReceiverSnapshot
 }) {
   const [activeTab, setActiveTab] = useState<'receive' | 'cli' | 'desktop'>('receive')
 
-  const retainedOp: V2RetainedReceiveOperation | null =
-    snapshot.retained.kind === 'ready' && snapshot.retained.operations.length > 0
-      ? (snapshot.retained.operations[0] ?? null)
-      : null
 
   return (
     <section className="portal-hero">
@@ -300,7 +270,7 @@ export function HeroSection({
           </div>
 
           <div className="portal-console-body">
-            {activeTab === 'receive' && <ReceiveTab controller={controller} retainedOp={retainedOp} />}
+            {activeTab === 'receive' && <ReceiveTab controller={controller} />}
             {activeTab === 'cli' && <CliTab />}
             {activeTab === 'desktop' && <DesktopTab />}
           </div>

@@ -1,3 +1,5 @@
+import { bindRuntimeOutputFailures } from './browser-receive/retained-diagnostics'
+import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from '../output/workspace/operation-display'
 import {
   probeBrowserEnvironment,
   startFSAParentPicker,
@@ -39,7 +41,6 @@ import type { BrowserReceiveWindow } from './browser-receive/contracts'
 import { FSAArtifactPresentationAuthority } from './browser-receive/fsa-route'
 import { startPortableArtifactAuthority } from './browser-receive/portable-route'
 import {
-  bindRuntimeOutputFailures,
   listBrowserRetainedOperations,
   readBrowserCompatibleNameRepairSummary,
   type BrowserRetainedCompositionOptions,
@@ -111,7 +112,7 @@ export function createBrowserReceiveComposition(
           : { zipRecommendationPolicy: registry.zipRecommendationPolicy }),
       }).offers
     },
-    startArtifactAuthority: (action, preClickRanking, failures) => startProductionAuthority(
+    startArtifactAuthority: (action, preClickRanking, failures, display) => startProductionAuthority(
       windowPort,
       action,
       preClickRanking,
@@ -121,6 +122,7 @@ export function createBrowserReceiveComposition(
       installedDirectZip,
       nativeObjectSupported,
       failures,
+      display,
     ),
   }
   return Object.freeze(composition)
@@ -244,11 +246,13 @@ function diagnosticsFor(
 function bindArtifactAuthorityOutputFailures(
   authority: V2ArtifactPresentationAuthority,
   binding: OutputFailureBinding,
+  display?: ReceiveOperationDisplay,
 ): V2ArtifactPresentationAuthority {
   return Object.freeze({
     ready: authority.ready,
     commit: async (input: V2RouteCommitInput) =>
-      bindCommittedOperation(await authority.commit(input), binding),
+      bindCommittedOperation(await authority.commit({ ...input,
+        ...(display === undefined ? {} : { display }) }), binding, display),
     release: (reason: unknown) => authority.release(reason),
   })
 }
@@ -256,11 +260,12 @@ function bindArtifactAuthorityOutputFailures(
 function bindCommittedOperation(
   result: V2RouteCommitResult,
   binding: OutputFailureBinding,
+  display?: ReceiveOperationDisplay,
 ): V2RouteCommitResult {
   if (result.kind !== 'bound-operation') return result
   return Object.freeze({
     kind: 'bound-operation',
-    operation: bindRuntimeOutputFailures(result.operation, binding),
+    operation: bindRuntimeOutputFailures(result.operation, binding, result.display ?? display),
   })
 }
 
@@ -274,9 +279,11 @@ function startProductionAuthority(
   installedDirectZip: InstalledBrowserDirectZipRoute | undefined,
   nativeObjectSupported: boolean,
   failures?: OutputFailureSinks,
+  displayInput?: ReceiveOperationDisplay,
 ): V2ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)
+  const display = displayForRoute(offered, displayInput)
   switch (offered.route.kind) {
     case 'direct-tree': {
       if (offered.route.target.kind !== 'fsa-parent-directory' ||
@@ -301,6 +308,7 @@ function startProductionAuthority(
           ...localOutputFailuresOption(localOutputFailures),
         }),
         binding,
+        display,
       )
     }
     case 'workspace-then-publish': {
@@ -320,6 +328,7 @@ function startProductionAuthority(
           ...(diagnostics === undefined ? {} : { diagnostics }),
         }),
         binding,
+        display,
       )
     }
     case 'portable-handoff':
@@ -334,17 +343,28 @@ function startProductionAuthority(
           windowPort,
           offered,
           diagnosticsFor('portable', outputTrace, binding.sinks),
+          preClickRanking,
         ),
         binding,
+        display,
       )
     case 'direct-resumable-zip':
       return bindArtifactAuthorityOutputFailures(
         startBrowserDirectZipAuthority(windowPort, offered, preClickRanking, installedDirectZip),
         binding,
+        display,
       )
     case 'direct-atomic':
       throw unavailableRoute()
   }
+}
+
+function displayForRoute(offered: OfferedArtifactChoice, input: ReceiveOperationDisplay | undefined) {
+  if (input === undefined) return undefined
+  const browserDownload = offered.route.kind === 'portable-handoff' || offered.route.kind === 'workspace-then-publish'
+  return snapshotReceiveOperationDisplay({
+    ...input, ...(browserDownload ? { destinationLabel: 'Browser downloads' } : {}),
+  })
 }
 
 function pickerPresentationError(error: unknown): unknown {

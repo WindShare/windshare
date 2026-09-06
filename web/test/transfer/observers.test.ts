@@ -28,6 +28,8 @@ describe('transfer observer separation', () => {
         discoveredBytes: 2n,
         sizeClass: 'unknown',
       },
+      phase: 'receiving',
+      materializedBytes: 1n,
       writtenBytes: 1n,
       recoverableBytes: 0n,
       completedFiles: 0,

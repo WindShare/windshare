@@ -38,6 +38,24 @@ describe('ReceiveOperation V2', () => {
       .resolves.toEqual(operation)
   })
 
+  it('restores immutable display metadata without changing receive authority', async () => {
+    const receiveIntent = await directZipIntent()
+    const choice = await deriveArtifactChoiceIdentity(receiveIntent.artifact, receiveIntent.plan)
+    const display = { objectLabel: 'Reports selected', destinationLabel: 'Projects', createdAtMilliseconds: 123456 }
+    const operation = await createReceiveOperationV2({ receiveIntent, preClickRanking: [choice.id], display })
+    const baseline = await createReceiveOperationV2({ receiveIntent, preClickRanking: [choice.id] })
+    display.objectLabel = 'Later draft'
+    const restored = await decodeStoredReceiveOperation(structuredClone(storedReceiveOperationRecord(operation)))
+    expect(restored.display).toEqual({ objectLabel: 'Reports selected', destinationLabel: 'Projects', createdAtMilliseconds: 123456 })
+    expect(restored.digest).toBe(baseline.digest)
+    expect(restored.receiveIntent.canonicalBytes).toEqual(receiveIntent.canonicalBytes)
+    expect(Object.isFrozen(restored.display)).toBe(true)
+    const invalid = { ...storedReceiveOperationRecord(operation), display: { objectLabel: '', createdAtMilliseconds: -1 } }
+    const repaired = await decodeStoredReceiveOperation(invalid)
+    expect(repaired.display).toBeUndefined()
+    expect(repaired.receiveIntent.digest).toBe(receiveIntent.digest)
+  })
+
   it('persists only the current reservation domain and rejects legacy records', async () => {
     const operationId = identity(16, 10)
     const canonicalBytes = canonicalRecord('windshare/destination-reservation/v4', 1, [])

@@ -89,6 +89,8 @@ export class TransferJobSettlement {
       const lifecycle = await this.#pause(worker, reason, measure, failureTrigger)
       return this.#result(worker, lifecycle, measure, reason, failureTrigger)
     }
+    this.#context.progress.beginFinishing()
+    this.#context.emitProgress()
     this.#context.observers()?.materializationCompleted(summary)
     const lifecycle = await this.#settleCompleted(execution, worker, summary)
     if (execution.planKind === 'direct-tree') {

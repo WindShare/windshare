@@ -69,6 +69,34 @@ const LIFECYCLE_STATES = [
   'destination_space_required',
 ] as const
 
+const MAXIMUM_EXPERIENCE_TRACE_FIELD_LENGTH = 512
+
+export function validateReceiverExperience(payload: UnknownRecord): void {
+  switch (payload.transition) {
+    case 'task':
+      exactKeys(payload, ['transition', 'operation_id', 'generation', 'stage', 'reason',
+        'attention', 'completeness', 'publication'], [], 'receiver task payload')
+      decimalUint64(payload.generation, 'receiver task generation')
+      booleanValue(payload.attention, 'receiver task attention')
+      break
+    case 'saving':
+      exactKeys(payload, ['transition', 'projection_epoch', 'choice_id', 'outcome', 'reason'], [], 'receiver saving payload')
+      if (payload.projection_epoch !== null) decimalUint64(payload.projection_epoch, 'receiver saving epoch')
+      break
+    case 'intent':
+      exactKeys(payload, ['transition', 'action', 'operation_id', 'generation'], [], 'receiver intent payload')
+      decimalUint64(payload.generation, 'receiver intent generation')
+      break
+    default: throw new TypeError('unknown receiver experience transition')
+  }
+  for (const [key, value] of Object.entries(payload)) {
+    if (key === 'attention' || value === null) continue
+    if (typeof value !== 'string' || value.length > MAXIMUM_EXPERIENCE_TRACE_FIELD_LENGTH) {
+      throw new TypeError('receiver experience fields must be bounded text')
+    }
+  }
+}
+
 export function validateJoin(payload: UnknownRecord): void {
   exactKeys(payload, ['transition'], [], 'join_transition payload')
   member(payload.transition, ['started', 'joined', 'failed', 'stale_replacement'],
@@ -652,10 +680,10 @@ export function validateRetainedAction(payload: UnknownRecord): void {
   exactKeys(payload, ['transition', 'action', 'continuation'], [], 'retained action payload')
   member(payload.transition, ['started', 'completed', 'failed', 'excluded'],
     'retained action transition')
-  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete', 'save-partial'],
+  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete', 'save-partial', 'forget'],
     'retained action')
   member(payload.continuation, [
-    'resume_receive', 'pending_catch_up', 'restoration_available',
+    'resume_receive', 'pending_catch_up', 'restoration_available', 'history_only',
     'resume_package', 'save_artifact', 'retry_download',
     'cleanup_expired', 'retry_cleanup', 'needs_attention',
   ], 'retained action continuation')
