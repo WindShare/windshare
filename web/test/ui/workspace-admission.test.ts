@@ -106,7 +106,6 @@ function continuationStates() {
       discoveredBytes: 35_020n,
       discovery: 'complete',
     }),
-    expiresAt: 86_401_000,
   })
   if (fallback.kind !== 'resumable-receive' || fallback.payloadKind !== 'file-set') {
     throw new Error('test fallback changed payload kind')
@@ -122,7 +121,6 @@ function continuationStates() {
     completedFileCount: fallback.completedFileCount,
     completedBytes: fallback.completedBytes,
     selectionFacts: fallback.selectionFacts,
-    expiresAt: fallback.expiresAt,
   })
   if (restored.kind !== 'resumable-receive' || restored.payloadKind !== 'file-set') {
     throw new Error('test restoration changed payload kind')

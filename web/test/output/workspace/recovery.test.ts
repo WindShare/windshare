@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import { recoverAbandonedOperation } from '../../../src/output/workspace/recovery'
 import {
-  STABLE_RETENTION_MILLISECONDS,
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
   type PlanKind,
@@ -11,6 +10,7 @@ import {
 } from '../../../src/output/workspace/state'
 import type { ReceiveOperationTraceEvent } from '../../../src/output/workspace/trace'
 
+const OBSERVATION_INTERVAL = 86_400_000
 const NOW = 50_000
 
 describe('abandoned receive recovery', () => {
@@ -41,7 +41,6 @@ describe('abandoned receive recovery', () => {
           discoveredBytes: 30n,
           discovery: 'failed',
         },
-        expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
       }),
     }))
   })
@@ -76,13 +75,11 @@ describe('abandoned receive recovery', () => {
     }))
   })
 
-  it('expires at the exact deadline before any resume recovery', () => {
-    const expiresAt = NOW + STABLE_RETENTION_MILLISECONDS
+  it('preserves unfinished package recovery after long retention', () => {
+    const expiresAt = NOW + OBSERVATION_INTERVAL
     const stable = state({
-      kind: 'resumable-package',
+      kind: 'materialization-sealed',
       sealedMaterializationDigest: identity(32, 4),
-      tempCleanupProofDigest: identity(32, 5),
-      expiresAt,
     })
     const reduction = recoverAbandonedOperation(stable, {
       kind: 'verified-package',
@@ -91,11 +88,9 @@ describe('abandoned receive recovery', () => {
       lastVerifiedRecordDigest: identity(32, 6),
     }, context('workspace-then-publish', expiresAt))
 
-    expect(reduction.decision).toBe('expired')
+    expect(reduction.decision).toBe('resume-package')
     expect(reduction.state).toEqual(expect.objectContaining({
-      kind: 'expired',
-      priorStableState: 'resumable-package',
-      expiresAt,
+      kind: 'resumable-package',
     }))
   })
 
@@ -148,7 +143,6 @@ describe('abandoned receive recovery', () => {
     }, context('workspace-then-publish', NOW)).state
     expect(waiting).toEqual(expect.objectContaining({
       kind: 'waiting-to-save',
-      expiresAt: NOW + STABLE_RETENTION_MILLISECONDS,
     }))
 
     const handingOff = nextReceiveLifecycleState(waiting, {
@@ -157,7 +151,6 @@ describe('abandoned receive recovery', () => {
       attemptKind: 'workspace',
       attemptId: identity(16, 7),
       packageDigest: identity(32, 4),
-      retainedDeadline: NOW + STABLE_RETENTION_MILLISECONDS,
     })
     const downloaded = recoverAbandonedOperation(handingOff, {
       kind: 'handoff',
@@ -167,7 +160,6 @@ describe('abandoned receive recovery', () => {
     }, context('workspace-then-publish', NOW + 1)).state
     expect(downloaded).toEqual(expect.objectContaining({
       kind: 'download-started',
-      retryableUntil: NOW + STABLE_RETENTION_MILLISECONDS,
     }))
   })
 

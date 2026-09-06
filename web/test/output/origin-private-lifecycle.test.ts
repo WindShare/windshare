@@ -8,12 +8,12 @@ import {
 import {
   initialReceiveLifecycleState,
   nextReceiveLifecycleState,
-  STABLE_RETENTION_MILLISECONDS,
   type ReceiveLifecycleState,
   type ReceiveLifecycleStatePayload,
 } from '../../src/output/workspace/state'
 
 const NOW = 10_000
+const AFTER_THIRTY_DAYS = NOW + 30 * 24 * 60 * 60 * 1_000
 const OPERATION_ID = identity(16, 1)
 const INTENT_DIGEST = identity(32, 2)
 const LEASE_ID = identity(16, 3)
@@ -21,8 +21,7 @@ const PACKAGE_DIGEST = identity(32, 4)
 
 describe('origin-private aggregate lifecycle', () => {
   it('retries publication from WaitingToSave without rebuilding the package', () => {
-    const expiresAt = NOW + STABLE_RETENTION_MILLISECONDS
-    const waiting = state({ kind: 'waiting-to-save', packageDigest: PACKAGE_DIGEST, expiresAt })
+    const waiting = state({ kind: 'waiting-to-save', packageDigest: PACKAGE_DIGEST })
     const first = apply(waiting, {
       kind: 'save-requested',
       publicationAttemptId: identity(16, 5),
@@ -34,13 +33,13 @@ describe('origin-private aggregate lifecycle', () => {
     const retried = apply(restored, {
       kind: 'save-requested',
       publicationAttemptId: identity(16, 6),
-    }, NOW + 3)
+    }, AFTER_THIRTY_DAYS)
 
     expect(restored).toEqual(expect.objectContaining({
       kind: 'waiting-to-save',
       packageDigest: PACKAGE_DIGEST,
-      expiresAt: NOW + 2 + STABLE_RETENTION_MILLISECONDS,
     }))
+    expect(restored).not.toHaveProperty('expiresAt')
     expect(retried).toEqual(expect.objectContaining({
       kind: 'publishing-managed',
       packageDigest: PACKAGE_DIGEST,

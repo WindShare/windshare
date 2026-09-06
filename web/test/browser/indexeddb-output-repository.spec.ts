@@ -70,7 +70,7 @@ test('explicit owned-file restart is atomic, idempotent, and metadata-only', asy
   })
 })
 
-test('v10 migration clears only origin metadata and fails closed when blocked', async ({ page }) => {
+test('pre-v10 migration clears only obsolete origin metadata and fails closed when blocked', async ({ page }) => {
   const result = await page.evaluate(async (path) => {
     const probe = await import(path) as typeof import('./indexeddb-output-repository-probe')
     return probe.probeIndexedDbOutputMigration(`output-migration-${crypto.randomUUID()}`)
@@ -78,7 +78,7 @@ test('v10 migration clears only origin metadata and fails closed when blocked', 
 
   expect(result).toEqual({
     oldRowsRemaining: 0,
-    storeCount: 19,
+    storeCount: 23,
     exactIndexesPresent: true,
     publishedSentinelBytes: [91, 92, 93, 94],
     blockedUpgradeRejected: true,

@@ -29,12 +29,11 @@ describe('PackagedArtifactV1 repository codec', () => {
 })
 
 describe('SealedMaterializationV1 repository codec', () => {
-  it('rehydrates the exact preparation and generation binding', async () => {
+  it('rehydrates the exact manifest and generation binding', async () => {
     const seal = await sealWorkspaceMaterialization({
       operationId: identity(16, 1),
       receiveIntentDigest: identity(32, 2),
       workspaceBindingDigest: identity(32, 3),
-      preparationBinding: { kind: 'present', preparationDigest: identity(32, 4) },
       materializedManifestDigest: identity(32, 5),
       generationTableDigest: identity(32, 6),
       artifactVersion: 1,

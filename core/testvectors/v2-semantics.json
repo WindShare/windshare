@@ -25,8 +25,6 @@
         "controlQueueFrames": "256",
         "dataQueueBytes": "67108864",
         "dataQueueFrames": "1024",
-        "defaultOpfsJobWorkspaceLimit": "8589934592",
-        "defaultOpfsProcessWorkspaceLimit": "17179869184",
         "defaultPortableHandoffArtifactLimit": "67108864",
         "joinStartingSeconds": "5",
         "leaseMaximumSeconds": "7200",
@@ -531,7 +529,7 @@
           ],
           "layout": "result-root",
           "plan": "workspace-then-publish",
-          "preparation": "exact-zip"
+          "preparation": "none"
         },
         {
           "artifact": "original-file-or-zip-archive",
@@ -548,27 +546,28 @@
     },
     {
       "admissionChecks": [
-        "job-peak",
-        "process-active-job-peaks",
-        "quota-minus-usage-minus-reserve",
-        "every-allocation"
+        "durable-metadata-at-activation",
+        "object-high-water-growth",
+        "cross-tab-outstanding-growth",
+        "quota-minus-usage-minus-reserve"
       ],
       "components": [
         "uniqueRawBytes",
-        "packageBytes",
-        "peakTemporaryBytes",
         "durableMetadataBytes"
       ],
       "derivedPeak": "checked-sum-components",
+      "evidence": {
+        "progressive-zip": 3,
+        "single-file": 1
+      },
       "limits": {
-        "DEFAULT_OPFS_JOB_WORKSPACE_LIMIT": "8589934592",
-        "DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT": "17179869184",
         "DEFAULT_PORTABLE_HANDOFF_ARTIFACT_LIMIT": "67108864",
         "MINIMUM_OPFS_QUOTA_RESERVE": "536870912"
       },
       "name": "workspace-budget-v1",
       "ownedObjectCountedOnce": true,
-      "quotaEstimateIsReservation": false
+      "quotaEstimateIsReservation": false,
+      "quotaUnavailable": "optimistic-incremental-admission"
     },
     {
       "cases": [
@@ -602,14 +601,7 @@
       "completeArtifactsExclude": [
         "partial-directory"
       ],
-      "deadlineWritingStates": [
-        "resumable-receive",
-        "resumable-package",
-        "waiting-to-save",
-        "authorization-required",
-        "target-verification-required",
-        "destination-space-required"
-      ],
+      "deadlineWritingStates": [],
       "directZipByteSemantics": {
         "committedArchiveLength": "verified-target-prefix-bytes",
         "receivedBytes": "selected-source-payload-bytes-received-in-live-attempt",
@@ -619,6 +611,14 @@
       "handoffNeverMeans": "published",
       "name": "receive-lifecycle-v2",
       "nonterminalRecoveryStates": [
+        {
+          "byte": 15,
+          "plans": [
+            "workspace-then-publish",
+            "portable-handoff"
+          ],
+          "state": "download-started"
+        },
         {
           "byte": 21,
           "state": "authorization-required"
@@ -643,7 +643,8 @@
       },
       "resumableReceivePayloadKinds": {
         "direct-zip": 2,
-        "file-set": 1
+        "file-set": 1,
+        "opfs-zip": 3
       },
       "schemaVersion": 2,
       "terminalStates": [
@@ -656,14 +657,6 @@
             "direct-resumable-zip"
           ],
           "state": "published"
-        },
-        {
-          "byte": 15,
-          "plans": [
-            "workspace-then-publish",
-            "portable-handoff"
-          ],
-          "state": "download-started"
         },
         {
           "byte": 16,
@@ -718,7 +711,7 @@
         "directZipArtifactChoiceId": "0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU",
         "domain": "windshare/artifact-choice/v1",
         "materializationByte": 5,
-        "workspaceZipArtifactChoiceId": "RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ"
+        "workspaceZipArtifactChoiceId": "vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k"
       },
       "name": "direct-zip-contract-policy-v1",
       "ownershipExtraFormat": {

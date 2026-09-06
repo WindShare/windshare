@@ -30,7 +30,6 @@ export const MANIFEST_PAGE_ENTRY_LIMIT = 128
 export const RECEIVE_RECORD_OPERATION = 1 as const
 export const RECEIVE_RECORD_RESERVATION = 2 as const
 export const RECEIVE_RECORD_WORKSPACE_BINDING = 3 as const
-export const RECEIVE_RECORD_PREPARATION = 4 as const
 export const RECEIVE_RECORD_MATERIALIZED_MANIFEST = 5 as const
 export const RECEIVE_RECORD_SEALED_MATERIALIZATION = 6 as const
 export const RECEIVE_RECORD_PACKAGE = 7 as const
@@ -44,7 +43,6 @@ export type ReceiveRecordKind =
   | typeof RECEIVE_RECORD_OPERATION
   | typeof RECEIVE_RECORD_RESERVATION
   | typeof RECEIVE_RECORD_WORKSPACE_BINDING
-  | typeof RECEIVE_RECORD_PREPARATION
   | typeof RECEIVE_RECORD_MATERIALIZED_MANIFEST
   | typeof RECEIVE_RECORD_SEALED_MATERIALIZATION
   | typeof RECEIVE_RECORD_PACKAGE
@@ -549,7 +547,6 @@ export function receiveRecordDomain(kind: ReceiveRecordKind): string {
     case RECEIVE_RECORD_OPERATION: return 'windshare/receive-operation/v2'
     case RECEIVE_RECORD_RESERVATION: return 'windshare/destination-reservation/v4'
     case RECEIVE_RECORD_WORKSPACE_BINDING: return 'windshare/workspace-binding/v1'
-    case RECEIVE_RECORD_PREPARATION: return 'windshare/preparation-manifest/v1'
     case RECEIVE_RECORD_MATERIALIZED_MANIFEST: return 'windshare/materialized-manifest/v1'
     case RECEIVE_RECORD_SEALED_MATERIALIZATION: return 'windshare/sealed-materialization/v1'
     case RECEIVE_RECORD_PACKAGE: return 'windshare/packaged-artifact/v1'

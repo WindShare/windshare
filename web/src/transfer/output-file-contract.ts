@@ -1,3 +1,4 @@
+import type { SourceFault } from './fault'
 import { ByteRangeSet, type ByteRange } from '../content/geometry'
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import {
@@ -174,6 +175,8 @@ export interface OutputFileTransaction {
     signal: AbortSignal,
   ): Promise<AutomaticCheckpointResult>
   commit(signal: AbortSignal): Promise<VerifiedFinalOutputFile>
+  /** Persist source failure facts without granting authority to delete retained bytes. */
+  recordSourceFailure?(fault: SourceFault): Promise<void>
   /** A streaming backend may still retire a failed member when no bytes were emitted. */
   retire(reason: unknown): Promise<FileRetirementDisposition>
   /** Durable output must include every accepted pending range before pause resolves. */

@@ -627,7 +627,7 @@ export interface TraceEventPayloadByNameV1 {
     | Readonly<{ transition: 'load_completed'; operation_count: string }>
   readonly retained_action: Readonly<{
     transition: 'started' | 'completed' | 'failed' | 'excluded'
-    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete'
+    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete' | 'save-partial'
     continuation:
       | 'resume_receive'
       | 'pending_catch_up'

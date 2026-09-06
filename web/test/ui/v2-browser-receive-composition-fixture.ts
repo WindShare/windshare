@@ -105,25 +105,21 @@ export function retainedLifecycles(): readonly ReceiveLifecycleState[] {
       checkpointSetDigest: identity(30, 32),
       completedFileCount: 2n,
       completedBytes: 256n,
-      expiresAt: 5_000,
     }),
     receiveLifecycle(2, {
       kind: 'resumable-package',
       sealedMaterializationDigest: identity(31, 32),
       tempCleanupProofDigest: identity(32, 32),
-      expiresAt: 5_000,
     }),
     receiveLifecycle(3, {
       kind: 'waiting-to-save',
       packageDigest: identity(33, 32),
-      expiresAt: 5_000,
     }),
     receiveLifecycle(4, {
       kind: 'download-started',
       attemptKind: 'workspace',
       attemptId: identity(34),
       packageDigest: identity(35, 32),
-      retryableUntil: 5_000,
     }),
     receiveLifecycle(5, {
       kind: 'expired',
@@ -198,7 +194,17 @@ export function capableWindow(
     click: vi.fn(),
     remove: vi.fn(),
   }
+  class SupportedNativeWorker {
+    onmessage: ((event: MessageEvent<boolean>) => void) | null = null
+    onerror = null
+    onmessageerror = null
+    terminate = vi.fn()
+    constructor() {
+      queueMicrotask(() => this.onmessage?.({ data: true } as MessageEvent<boolean>))
+    }
+  }
   const candidate = {
+    Worker: SupportedNativeWorker,
     indexedDB: { open: vi.fn() },
     navigator: {
       locks: { request: vi.fn(async (

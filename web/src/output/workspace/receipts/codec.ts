@@ -7,7 +7,6 @@ import {
   canonicalText,
   canonicalU8,
   canonicalUnixMilliseconds,
-  concatCanonicalBytes,
   equalCanonicalBytes,
   snapshotCanonicalBytes,
   snapshotIdentity,
@@ -87,19 +86,6 @@ export class ReceiptReader {
     return snapshotIdentity(encodeBase64Url(bytes), width, label)
   }
 
-  optionalDigest(label: string): string | undefined {
-    const optional = new ReceiptReader(this.frame())
-    const discriminant = optional.byte()
-    if (discriminant === 2) {
-      optional.end()
-      return undefined
-    }
-    if (discriminant !== 1) throw new TypeError(`${label} optional discriminant is invalid`)
-    const value = optional.identity(32, label)
-    optional.end()
-    return value
-  }
-
   u64(label: string): bigint {
     const bytes = this.frame()
     if (bytes.byteLength !== 8) throw new TypeError(`${label} width is invalid`)
@@ -167,25 +153,19 @@ export function snapshotSortedDigests(input: readonly string[], label: string): 
 }
 
 export function snapshotAdmissionLimits(input: {
-  readonly jobLimitBytes: bigint
-  readonly processLimitBytes: bigint
-  readonly estimatedQuotaBytes: bigint
+  readonly estimatedQuotaBytes: bigint | null | undefined
   readonly currentUsageBytes: bigint
   readonly minimumReserveBytes: bigint
   readonly incrementalPhysicalPeakBytes: bigint
 }): Pick<
   PreparationAdmissionReceiptV1,
-  | 'jobLimitBytes'
-  | 'processLimitBytes'
   | 'estimatedQuotaBytes'
   | 'currentUsageBytes'
   | 'minimumReserveBytes'
   | 'incrementalPhysicalPeakBytes'
 > {
   return Object.freeze({
-    jobLimitBytes: checkedU64(input.jobLimitBytes, 'job workspace limit'),
-    processLimitBytes: checkedU64(input.processLimitBytes, 'process workspace limit'),
-    estimatedQuotaBytes: checkedU64(input.estimatedQuotaBytes, 'estimated quota'),
+    estimatedQuotaBytes: input.estimatedQuotaBytes == null ? null : checkedU64(input.estimatedQuotaBytes, 'estimated quota'),
     currentUsageBytes: checkedU64(input.currentUsageBytes, 'current quota usage'),
     minimumReserveBytes: checkedU64(input.minimumReserveBytes, 'quota reserve'),
     incrementalPhysicalPeakBytes: checkedU64(
@@ -193,19 +173,6 @@ export function snapshotAdmissionLimits(input: {
       'incremental physical peak',
     ),
   })
-}
-
-export function canonicalOptionalDigest(value: string | undefined): CanonicalBytes {
-  return value === undefined
-    ? canonicalU8(2)
-    : concatCanonicalBytes([
-        canonicalU8(1),
-        canonicalFrame(canonicalIdentity(value, 32, 'optional digest')),
-      ])
-}
-
-export function optionalDigest(value: string | undefined, label: string): string | undefined {
-  return value === undefined ? undefined : digest(value, label)
 }
 
 export function canonicalTextValue(value: string, label: string): string {

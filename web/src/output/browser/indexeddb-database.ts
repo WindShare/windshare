@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 10
+export const OUTPUT_DATABASE_VERSION = 11
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -234,7 +234,7 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
   }
   const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
   request.addEventListener('upgradeneeded', (event) =>
-    installIndexedDbV10Schema(
+    installIndexedDbV11Schema(
       request.result,
       request.transaction ?? undefined,
       event.oldVersion,
@@ -254,6 +254,29 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
       else resolve(request.result)
     }, { once: true })
   })
+}
+
+export const INDEXEDDB_OPFS_TASK_STORE = 'opfs-task-checkpoints-v1'
+export const INDEXEDDB_OPFS_ENTRY_STORE = 'opfs-task-entries-v1'
+export const INDEXEDDB_OPFS_PATH_STORE = 'opfs-task-paths-v1'
+export const INDEXEDDB_OPFS_DIRECTORY_STORE = 'opfs-task-directories-v1'
+
+export function installIndexedDbV11Schema(
+  database: IDBDatabase,
+  transaction?: IDBTransaction,
+  oldVersion = OUTPUT_DATABASE_VERSION,
+): void {
+  // Version ten's durable authorities remain valid; only older formats need its reset.
+  if (oldVersion < 10) installIndexedDbV10Schema(database, transaction, oldVersion)
+  else installSchemas(database, INDEXEDDB_V10_STORE_SCHEMAS, transaction)
+  installSchemas(database, [
+    storeSchema(INDEXEDDB_OPFS_TASK_STORE, 'id', []),
+    storeSchema(INDEXEDDB_OPFS_ENTRY_STORE, 'id', [
+      indexSchema('by-object-sequence', ['objectKey', 'sequenceKey'], true),
+    ]),
+    storeSchema(INDEXEDDB_OPFS_PATH_STORE, 'id', []),
+    storeSchema(INDEXEDDB_OPFS_DIRECTORY_STORE, 'id', []),
+  ], transaction)
 }
 
 export function installIndexedDbV10Schema(

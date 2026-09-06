@@ -15,31 +15,20 @@ import {
   type CanonicalBytes,
 } from './canonical'
 import { CanonicalRecordReader } from './canonical-reader'
-import {
-  validateWorkspaceZipPreparation,
-  type SealedWorkspaceZipPreparationV1,
-} from './preparation'
-import type { PreparationAdmissionReason } from './state'
 
-export const DEFAULT_OPFS_JOB_WORKSPACE_LIMIT = 8_589_934_592n
-export const DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT = 17_179_869_184n
 export const MINIMUM_OPFS_QUOTA_RESERVE = 536_870_912n
 
 const WORKSPACE_BUDGET_SCHEMA_VERSION = 1 as const
 const U64_MAXIMUM = 0xffff_ffff_ffff_ffffn
 
 export type WorkspaceBudgetEvidence =
+  | Readonly<{ kind: 'progressive-zip' }>
   | Readonly<{
       kind: 'single-file'
       fileId: string
       containingDirectoryId: string
       generation: string
       catalogSize: bigint
-    }>
-  | Readonly<{
-      kind: 'prepared-zip'
-      preparationManifestDigest: string
-      sealedZipLayoutDigest: string
     }>
 
 export interface WorkspaceBudgetV1 {
@@ -49,8 +38,6 @@ export interface WorkspaceBudgetV1 {
   readonly workspaceBindingDigest: string
   readonly evidence: WorkspaceBudgetEvidence
   readonly uniqueRawBytes: bigint
-  readonly packageBytes: bigint
-  readonly peakTemporaryBytes: bigint
   readonly durableMetadataBytes: bigint
   readonly peakOwnedBytes: bigint
   readonly canonicalBytes: CanonicalBytes
@@ -58,10 +45,9 @@ export interface WorkspaceBudgetV1 {
 }
 
 export interface WorkspaceCapacitySnapshot {
-  readonly jobLimitBytes: bigint
-  readonly processLimitBytes: bigint
-  readonly otherActiveJobPeakBytes: bigint
-  readonly estimatedQuotaBytes: bigint
+  readonly outstandingGrowthBytes: bigint
+  readonly metadataHeadroomBytes: bigint
+  readonly estimatedQuotaBytes?: bigint
   readonly currentUsageBytes: bigint
   readonly minimumReserveBytes: bigint
   readonly verifiedAlreadyOwnedBytes: bigint
@@ -77,43 +63,24 @@ export type WorkspaceBudgetAdmission =
   | Readonly<{
       kind: 'rejected'
       budgetDigest: string
-      reason: Extract<
-        PreparationAdmissionReason,
-        'job-workspace-limit' | 'process-workspace-limit' | 'quota-insufficient'
-      >
-      limitClass: 'workspace-job' | 'workspace-process' | 'workspace-quota'
+      reason: 'quota-insufficient'
+      limitClass: 'workspace-quota'
       incrementalPhysicalPeakBytes: bigint
     }>
 
-export async function createPreparedZipWorkspaceBudget(input: {
+export async function createProgressiveZipWorkspaceBudget(input: {
   readonly receiveIntent: ReceiveIntent
-  readonly preparation: SealedWorkspaceZipPreparationV1
   readonly durableMetadataBytes: bigint
 }): Promise<WorkspaceBudgetV1> {
   const intent = await validateReceiveIntent(input.receiveIntent)
-  if (intent.plan.kind !== 'workspace-then-publish' ||
-      intent.artifact.kind !== 'zip-archive' ||
-      intent.plan.preparation !== 'exact-zip') {
-    throw new TypeError('prepared ZIP workspace budget requires an exact workspace ZIP intent')
-  }
-  const preparation = await validateWorkspaceZipPreparation(input.preparation, intent)
-  if (preparation.manifest.operationId !== intent.operationId ||
-      preparation.manifest.receiveIntentDigest !== intent.digest ||
-      preparation.manifest.artifactSpecDigest !== intent.artifact.digest) {
-    throw new TypeError('workspace budget preparation escaped its receive intent')
+  if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive' ||
+      intent.plan.preparation !== 'none') {
+    throw new TypeError('Progressive ZIP budget requires a progressive workspace ZIP intent')
   }
   return createWorkspaceBudget({
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    workspaceBindingDigest: intent.plan.workspace.digest,
-    evidence: Object.freeze({
-      kind: 'prepared-zip',
-      preparationManifestDigest: preparation.manifest.digest,
-      sealedZipLayoutDigest: preparation.zipLayout.digest,
-    }),
-    uniqueRawBytes: preparation.manifest.selectedRawBytes,
-    packageBytes: preparation.zipLayout.exactArchiveBytes,
-    peakTemporaryBytes: preparation.zipLayout.maximumSpoolBytes,
+    operationId: intent.operationId, receiveIntentDigest: intent.digest,
+    workspaceBindingDigest: intent.plan.workspace.digest, evidence: { kind: 'progressive-zip' },
+    uniqueRawBytes: 0n,
     durableMetadataBytes: input.durableMetadataBytes,
   })
 }
@@ -151,8 +118,6 @@ export async function createSingleFileWorkspaceBudget(input: {
     }),
     uniqueRawBytes: catalogSize,
     // Promoting the sole raw object changes its accounting class without allocating it twice.
-    packageBytes: 0n,
-    peakTemporaryBytes: 0n,
     durableMetadataBytes: input.durableMetadataBytes,
   })
 }
@@ -170,16 +135,17 @@ export async function validateWorkspaceBudget(
       candidate.workspaceBindingDigest !== intent.plan.workspace.digest) {
     throw new TypeError('workspace budget escaped its receive intent')
   }
-  if ((candidate.evidence.kind === 'single-file' &&
+  if (candidate.evidence.kind === 'single-file' &&
        (intent.artifact.kind !== 'original-file' ||
         intent.plan.preparation !== 'none' ||
         candidate.evidence.fileId !== intent.artifact.fileId ||
-        candidate.uniqueRawBytes !== candidate.evidence.catalogSize ||
-        candidate.packageBytes !== 0n ||
-        candidate.peakTemporaryBytes !== 0n)) ||
-      (candidate.evidence.kind === 'prepared-zip' &&
-       (intent.artifact.kind !== 'zip-archive' || intent.plan.preparation !== 'exact-zip'))) {
+        candidate.uniqueRawBytes !== candidate.evidence.catalogSize)) {
     throw new TypeError('workspace budget evidence disagrees with the artifact')
+  }
+  if (candidate.evidence.kind === 'progressive-zip' &&
+      (intent.artifact.kind !== 'zip-archive' || intent.plan.preparation !== 'none' ||
+       candidate.uniqueRawBytes !== 0n)) {
+    throw new TypeError('Progressive workspace budget cannot claim unknown future payload')
   }
   const rebuilt = await createWorkspaceBudget({
     operationId: candidate.operationId,
@@ -187,8 +153,6 @@ export async function validateWorkspaceBudget(
     workspaceBindingDigest: candidate.workspaceBindingDigest,
     evidence: candidate.evidence,
     uniqueRawBytes: candidate.uniqueRawBytes,
-    packageBytes: candidate.packageBytes,
-    peakTemporaryBytes: candidate.peakTemporaryBytes,
     durableMetadataBytes: candidate.durableMetadataBytes,
   })
   if (candidate.peakOwnedBytes !== rebuilt.peakOwnedBytes ||
@@ -214,8 +178,6 @@ export async function decodeWorkspaceBudgetV1(
   const workspaceBindingDigest = reader.framedIdentity(32, 'workspace binding digest')
   const evidence = decodeBudgetEvidence(reader.frame('workspace budget evidence'))
   const uniqueRawBytes = reader.framedU64('unique raw bytes')
-  const packageBytes = reader.framedU64('package bytes')
-  const peakTemporaryBytes = reader.framedU64('peak temporary bytes')
   const durableMetadataBytes = reader.framedU64('durable metadata bytes')
   const peakOwnedBytes = reader.framedU64('peak owned bytes')
   reader.finish('workspace budget')
@@ -225,8 +187,6 @@ export async function decodeWorkspaceBudgetV1(
     workspaceBindingDigest,
     evidence,
     uniqueRawBytes,
-    packageBytes,
-    peakTemporaryBytes,
     durableMetadataBytes,
   })
   if (rebuilt.peakOwnedBytes !== peakOwnedBytes ||
@@ -241,39 +201,13 @@ export function admitWorkspaceBudget(
   capacity: WorkspaceCapacitySnapshot,
 ): WorkspaceBudgetAdmission {
   const snapshot = snapshotCapacity(capacity)
-  const incrementalPhysicalPeakBytes = budget.peakOwnedBytes > snapshot.verifiedAlreadyOwnedBytes
-    ? budget.peakOwnedBytes - snapshot.verifiedAlreadyOwnedBytes
-    : 0n
-  if (budget.peakOwnedBytes > snapshot.jobLimitBytes) {
-    return rejection(
-      budget,
-      incrementalPhysicalPeakBytes,
-      'job-workspace-limit',
-      'workspace-job',
-    )
-  }
-  if (checkedAdd(snapshot.otherActiveJobPeakBytes, budget.peakOwnedBytes) >
-      snapshot.processLimitBytes) {
-    return rejection(
-      budget,
-      incrementalPhysicalPeakBytes,
-      'process-workspace-limit',
-      'workspace-process',
-    )
-  }
-  const available = snapshot.estimatedQuotaBytes >= snapshot.currentUsageBytes
-    ? snapshot.estimatedQuotaBytes - snapshot.currentUsageBytes
-    : 0n
-  const afterReserve = available >= snapshot.minimumReserveBytes
-    ? available - snapshot.minimumReserveBytes
-    : 0n
-  if (afterReserve < incrementalPhysicalPeakBytes) {
-    return rejection(
-      budget,
-      incrementalPhysicalPeakBytes,
-      'quota-insufficient',
-      'workspace-quota',
-    )
+  // Known content sizes inform routing; acquisition reserves only durable metadata.
+  // Payload growth is admitted when a writer knows its authenticated final offset.
+  const incrementalPhysicalPeakBytes = budget.durableMetadataBytes
+  const required = snapshot.currentUsageBytes + snapshot.outstandingGrowthBytes +
+    snapshot.metadataHeadroomBytes + snapshot.minimumReserveBytes + incrementalPhysicalPeakBytes
+  if (snapshot.estimatedQuotaBytes !== undefined && required > snapshot.estimatedQuotaBytes) {
+    return rejection(budget, incrementalPhysicalPeakBytes, 'quota-insufficient', 'workspace-quota')
   }
   return Object.freeze({
     kind: 'accepted',
@@ -289,8 +223,6 @@ async function createWorkspaceBudget(input: {
   readonly workspaceBindingDigest: string
   readonly evidence: WorkspaceBudgetEvidence
   readonly uniqueRawBytes: bigint
-  readonly packageBytes: bigint
-  readonly peakTemporaryBytes: bigint
   readonly durableMetadataBytes: bigint
 }): Promise<WorkspaceBudgetV1> {
   const operationId = snapshotIdentity(input.operationId, 16, 'operation ID')
@@ -302,13 +234,9 @@ async function createWorkspaceBudget(input: {
   )
   const evidence = snapshotEvidence(input.evidence)
   const uniqueRawBytes = checkedU64(input.uniqueRawBytes, 'unique raw bytes')
-  const packageBytes = checkedU64(input.packageBytes, 'package bytes')
-  const peakTemporaryBytes = checkedU64(input.peakTemporaryBytes, 'peak temporary bytes')
   const durableMetadataBytes = checkedU64(input.durableMetadataBytes, 'durable metadata bytes')
   const peakOwnedBytes = checkedAdd(
     uniqueRawBytes,
-    packageBytes,
-    peakTemporaryBytes,
     durableMetadataBytes,
   )
   const canonicalBytes = canonicalRecord('windshare/workspace-budget/v1', 1, [
@@ -317,8 +245,6 @@ async function createWorkspaceBudget(input: {
     canonicalFrame(canonicalIdentity(workspaceBindingDigest, 32, 'workspace binding digest')),
     canonicalFrame(canonicalBudgetEvidence(evidence)),
     canonicalFrame(canonicalU64(uniqueRawBytes)),
-    canonicalFrame(canonicalU64(packageBytes)),
-    canonicalFrame(canonicalU64(peakTemporaryBytes)),
     canonicalFrame(canonicalU64(durableMetadataBytes)),
     canonicalFrame(canonicalU64(peakOwnedBytes)),
   ])
@@ -329,8 +255,6 @@ async function createWorkspaceBudget(input: {
     workspaceBindingDigest,
     evidence,
     uniqueRawBytes,
-    packageBytes,
-    peakTemporaryBytes,
     durableMetadataBytes,
     peakOwnedBytes,
     canonicalBytes,
@@ -339,6 +263,7 @@ async function createWorkspaceBudget(input: {
 }
 
 function snapshotEvidence(evidence: WorkspaceBudgetEvidence): WorkspaceBudgetEvidence {
+  if (evidence.kind === 'progressive-zip') return Object.freeze({ kind: 'progressive-zip' })
   if (evidence.kind === 'single-file') {
     return Object.freeze({
       kind: 'single-file',
@@ -352,20 +277,7 @@ function snapshotEvidence(evidence: WorkspaceBudgetEvidence): WorkspaceBudgetEvi
       catalogSize: checkedU64(evidence.catalogSize, 'catalog size'),
     })
   }
-  if (evidence.kind !== 'prepared-zip') throw new TypeError('workspace budget evidence is invalid')
-  return Object.freeze({
-    kind: 'prepared-zip',
-    preparationManifestDigest: snapshotIdentity(
-      evidence.preparationManifestDigest,
-      32,
-      'preparation manifest digest',
-    ),
-    sealedZipLayoutDigest: snapshotIdentity(
-      evidence.sealedZipLayoutDigest,
-      32,
-      'sealed ZIP layout digest',
-    ),
-  })
+  throw new TypeError('workspace budget evidence is invalid')
 }
 
 function decodeBudgetEvidence(canonicalBytes: Uint8Array): WorkspaceBudgetEvidence {
@@ -382,17 +294,15 @@ function decodeBudgetEvidence(canonicalBytes: Uint8Array): WorkspaceBudgetEviden
     reader.finish('single-file workspace budget evidence')
     return evidence
   }
-  if (discriminant !== 2) throw new TypeError('workspace budget evidence discriminant is invalid')
-  const evidence = Object.freeze({
-    kind: 'prepared-zip' as const,
-    preparationManifestDigest: reader.framedIdentity(32, 'preparation manifest digest'),
-    sealedZipLayoutDigest: reader.framedIdentity(32, 'sealed ZIP layout digest'),
-  })
-  reader.finish('prepared ZIP workspace budget evidence')
-  return evidence
+  if (discriminant === 3) {
+    reader.finish('progressive ZIP workspace budget evidence')
+    return Object.freeze({ kind: 'progressive-zip' })
+  }
+  throw new TypeError('workspace budget evidence discriminant is invalid')
 }
 
 function canonicalBudgetEvidence(evidence: WorkspaceBudgetEvidence): CanonicalBytes {
+  if (evidence.kind === 'progressive-zip') return canonicalU8(3)
   if (evidence.kind === 'single-file') {
     return concatCanonicalBytes([
       canonicalU8(1),
@@ -406,30 +316,16 @@ function canonicalBudgetEvidence(evidence: WorkspaceBudgetEvidence): CanonicalBy
       canonicalFrame(canonicalU64(evidence.catalogSize)),
     ])
   }
-  return concatCanonicalBytes([
-    canonicalU8(2),
-    canonicalFrame(canonicalIdentity(
-      evidence.preparationManifestDigest,
-      32,
-      'preparation manifest digest',
-    )),
-    canonicalFrame(canonicalIdentity(
-      evidence.sealedZipLayoutDigest,
-      32,
-      'sealed ZIP layout digest',
-    )),
-  ])
+  throw new TypeError('workspace budget evidence is invalid')
 }
 
 function snapshotCapacity(input: WorkspaceCapacitySnapshot): WorkspaceCapacitySnapshot {
   const snapshot = Object.freeze({
-    jobLimitBytes: checkedU64(input.jobLimitBytes, 'workspace job limit'),
-    processLimitBytes: checkedU64(input.processLimitBytes, 'workspace process limit'),
-    otherActiveJobPeakBytes: checkedU64(
-      input.otherActiveJobPeakBytes,
-      'other active workspace peaks',
-    ),
-    estimatedQuotaBytes: checkedU64(input.estimatedQuotaBytes, 'estimated quota'),
+    outstandingGrowthBytes: checkedU64(input.outstandingGrowthBytes, 'outstanding growth'),
+    metadataHeadroomBytes: checkedU64(input.metadataHeadroomBytes, 'metadata headroom'),
+    ...(input.estimatedQuotaBytes === undefined ? {} : {
+      estimatedQuotaBytes: checkedU64(input.estimatedQuotaBytes, 'estimated quota'),
+    }),
     currentUsageBytes: checkedU64(input.currentUsageBytes, 'current quota usage'),
     minimumReserveBytes: checkedU64(input.minimumReserveBytes, 'minimum quota reserve'),
     verifiedAlreadyOwnedBytes: checkedU64(
@@ -437,20 +333,14 @@ function snapshotCapacity(input: WorkspaceCapacitySnapshot): WorkspaceCapacitySn
       'verified already-owned bytes',
     ),
   })
-  if (snapshot.jobLimitBytes === 0n || snapshot.processLimitBytes === 0n) {
-    throw new TypeError('workspace capacity limits must be positive')
-  }
   return snapshot
 }
 
 function rejection(
   budget: WorkspaceBudgetV1,
   incrementalPhysicalPeakBytes: bigint,
-  reason: Extract<
-    PreparationAdmissionReason,
-    'job-workspace-limit' | 'process-workspace-limit' | 'quota-insufficient'
-  >,
-  limitClass: 'workspace-job' | 'workspace-process' | 'workspace-quota',
+  reason: 'quota-insufficient',
+  limitClass: 'workspace-quota',
 ): WorkspaceBudgetAdmission {
   return Object.freeze({
     kind: 'rejected',

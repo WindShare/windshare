@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
+import { canonicalFrame, canonicalIdentity, canonicalRecord, canonicalU8, canonicalU64 } from '../../../src/output/workspace/canonical'
+import {
+  createPreparationAdmissionReceipt,
+  decodePreparationAdmissionAuthority,
+} from '../../../src/output/workspace/receipts/admission'
+import { createPersistedReceiveRecord, RECEIVE_RECORD_RECEIPT } from '../../../src/output/workspace/records'
 import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   createReceiveIntent,
@@ -11,39 +17,31 @@ import {
 } from '../../../src/transfer/intent'
 import {
   admitWorkspaceBudget,
-  createPreparedZipWorkspaceBudget,
+  createProgressiveZipWorkspaceBudget,
   decodeWorkspaceBudgetV1,
 } from '../../../src/output/workspace/budget'
-import { sealWorkspaceZipPreparation } from '../../../src/output/workspace/preparation'
 
 describe('WorkspaceBudgetV1', () => {
-  it('accounts raw, package, spool, and durable metadata with checked additive peak semantics', async () => {
+  it('reserves durable metadata without inventing unknown payload or copies', async () => {
     const intent = await zipIntent()
-    const preparation = await sealWorkspaceZipPreparation(preparationInput(intent))
-    const budget = await createPreparedZipWorkspaceBudget({
+    const budget = await createProgressiveZipWorkspaceBudget({
       receiveIntent: intent,
-      preparation,
       durableMetadataBytes: 100n,
     })
 
     expect(budget).toEqual(expect.objectContaining({
-      uniqueRawBytes: preparation.manifest.selectedRawBytes,
-      packageBytes: preparation.zipLayout.exactArchiveBytes,
-      peakTemporaryBytes: preparation.zipLayout.maximumSpoolBytes,
+      uniqueRawBytes: 0n,
       durableMetadataBytes: 100n,
     }))
     expect(budget.peakOwnedBytes).toBe(
-      budget.uniqueRawBytes + budget.packageBytes +
-      budget.peakTemporaryBytes + budget.durableMetadataBytes,
+      budget.uniqueRawBytes + budget.durableMetadataBytes,
     )
   })
 
   it('decodes only the canonical budget bound to the persisted ReceiveIntent', async () => {
     const intent = await zipIntent()
-    const preparation = await sealWorkspaceZipPreparation(preparationInput(intent))
-    const budget = await createPreparedZipWorkspaceBudget({
+    const budget = await createProgressiveZipWorkspaceBudget({
       receiveIntent: intent,
-      preparation,
       durableMetadataBytes: 100n,
     })
 
@@ -56,18 +54,53 @@ describe('WorkspaceBudgetV1', () => {
       .rejects.toThrow()
   })
 
-  it('subtracts only reverified owned bytes from quota while retaining job and process peaks', async () => {
+  it('rejects the removed prepared ZIP evidence wire tag', async () => {
     const intent = await zipIntent()
-    const preparation = await sealWorkspaceZipPreparation(preparationInput(intent))
-    const budget = await createPreparedZipWorkspaceBudget({
+    const budget = await createProgressiveZipWorkspaceBudget({
+      receiveIntent: intent, durableMetadataBytes: 100n,
+    })
+    // The removed tag must fail before persisted claims can reacquire content authority.
+    const altered = canonicalRecord('windshare/workspace-budget/v1', 1, [
+      canonicalFrame(canonicalIdentity(budget.operationId, 16, 'operation')),
+      canonicalFrame(canonicalIdentity(budget.receiveIntentDigest, 32, 'intent')),
+      canonicalFrame(canonicalIdentity(budget.workspaceBindingDigest, 32, 'workspace')),
+      canonicalFrame(canonicalU8(2)),
+      canonicalFrame(canonicalU64(0n)),
+      canonicalFrame(canonicalU64(100n)),
+      canonicalFrame(canonicalU64(100n)),
+    ])
+    await expect(decodeWorkspaceBudgetV1(altered, intent))
+      .rejects.toThrow('workspace budget evidence discriminant is invalid')
+  })
+
+  it.each([null, 1_000_000n])('reopens admission with quota estimate %s', async (estimatedQuotaBytes) => {
+    const intent = await zipIntent()
+    const budget = await createProgressiveZipWorkspaceBudget({
+      receiveIntent: intent, durableMetadataBytes: 100n,
+    })
+    const receipt = await createPreparationAdmissionReceipt({
+      operationId: intent.operationId, receiveIntentDigest: intent.digest, workspaceBudget: budget,
+      contentRequestCountAtAdmission: 0n, estimatedQuotaBytes, currentUsageBytes: 0n,
+      minimumReserveBytes: 0n, incrementalPhysicalPeakBytes: 100n,
+    })
+    const record = await createPersistedReceiveRecord({
+      operationId: intent.operationId, kind: RECEIVE_RECORD_RECEIPT,
+      canonicalBytes: receipt.canonicalBytes,
+    })
+    await expect(decodePreparationAdmissionAuthority(record, intent)).resolves.toEqual({ budget, receipt })
+    await expect(decodePreparationAdmissionAuthority(
+      { ...record, digest: identity(32, 9) }, intent,
+    )).rejects.toThrow('preparation admission receipt authority changed')
+  })
+
+  it('admits metadata independently of future payload sizes', async () => {
+    const intent = await zipIntent()
+    const budget = await createProgressiveZipWorkspaceBudget({
       receiveIntent: intent,
-      preparation,
       durableMetadataBytes: 100n,
     })
     const accepted = admitWorkspaceBudget(budget, {
-      jobLimitBytes: budget.peakOwnedBytes,
-      processLimitBytes: budget.peakOwnedBytes,
-      otherActiveJobPeakBytes: 0n,
+      outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
       estimatedQuotaBytes: budget.peakOwnedBytes,
       currentUsageBytes: budget.uniqueRawBytes,
       minimumReserveBytes: 0n,
@@ -77,53 +110,32 @@ describe('WorkspaceBudgetV1', () => {
     expect(accepted).toEqual({
       kind: 'accepted',
       budgetDigest: budget.digest,
-      incrementalPhysicalPeakBytes: budget.peakOwnedBytes - budget.uniqueRawBytes,
+      incrementalPhysicalPeakBytes: budget.durableMetadataBytes,
       limitClass: 'none',
     })
     expect(admitWorkspaceBudget(budget, {
-      jobLimitBytes: budget.peakOwnedBytes - 1n,
-      processLimitBytes: budget.peakOwnedBytes * 2n,
-      otherActiveJobPeakBytes: 0n,
+      outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n,
       estimatedQuotaBytes: budget.peakOwnedBytes * 2n,
       currentUsageBytes: 0n,
       minimumReserveBytes: 0n,
       verifiedAlreadyOwnedBytes: budget.peakOwnedBytes,
     })).toEqual(expect.objectContaining({
-      kind: 'rejected',
-      reason: 'job-workspace-limit',
+      kind: 'accepted',
     }))
   })
-})
+  it('canonically binds progressive discovery without guessing future payload bytes', async () => {
+    const intent = await zipIntent()
+    const budget = await createProgressiveZipWorkspaceBudget({ receiveIntent: intent, durableMetadataBytes: 4096n })
+    expect(budget.evidence).toEqual({ kind: 'progressive-zip' })
+    expect(budget.peakOwnedBytes).toBe(4096n)
+    await expect(decodeWorkspaceBudgetV1(budget.canonicalBytes, intent)).resolves.toEqual(budget)
+    expect(admitWorkspaceBudget(budget, {
+      outstandingGrowthBytes: 0n, metadataHeadroomBytes: 0n, currentUsageBytes: 0n,
+      minimumReserveBytes: 0n, verifiedAlreadyOwnedBytes: 0n,
+    }).kind).toBe('accepted')
+  })
 
-function preparationInput(intent: Awaited<ReturnType<typeof zipIntent>>) {
-  const directoryId = intent.selection.syntheticRoot
-  const generation = identity(16, 8)
-  const rootName = intent.artifact.kind === 'zip-archive' ? intent.artifact.layout.name : 'WindShare'
-  return {
-    receiveIntent: intent,
-    preparationId: identity(16, 9),
-    generations: [{ directoryId, generation }],
-    entries: [
-      {
-        kind: 'directory' as const,
-        sourcePath: [],
-        artifactPath: [rootName],
-        directoryId,
-        generation,
-        role: 'result-root' as const,
-      },
-      {
-        kind: 'file' as const,
-        sourcePath: ['file.bin'],
-        artifactPath: [rootName, 'file.bin'],
-        fileId: identity(16, 10),
-        containingDirectoryId: directoryId,
-        generation,
-        exactSize: 3n,
-      },
-    ],
-  }
-}
+})
 
 async function zipIntent() {
   const artifact = await createZipArchiveArtifact(createSyntheticSelectionResultRoot())

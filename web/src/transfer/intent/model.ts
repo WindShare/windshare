@@ -306,7 +306,7 @@ export interface WorkspaceThenPublishPlan extends MaterializationPlanBase {
   readonly kind: 'workspace-then-publish'
   readonly workspace: WorkspaceBinding
   readonly publicationGuarantee: 'managed-atomic' | 'browser-handoff'
-  readonly preparation: 'none' | 'exact-zip'
+  readonly preparation: 'none'
 }
 
 export interface PortableHandoffPlan extends MaterializationPlanBase {

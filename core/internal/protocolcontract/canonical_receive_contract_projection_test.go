@@ -65,8 +65,6 @@ func preparationPolicyString(value receivecontract.PreparationPolicy) string {
 	switch value {
 	case receivecontract.PreparationNone:
 		return "none"
-	case receivecontract.PreparationExactZip:
-		return "exact-zip"
 	case receivecontract.PreparationExactArtifact:
 		return "exact-artifact"
 	default:

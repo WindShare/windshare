@@ -99,7 +99,7 @@ function legalArtifactChoiceTuple(input: {
     case 'workspace-then-publish':
       return (input.artifactKind === 'original-file' || input.artifactKind === 'zip-archive') &&
         (input.guaranteeProfile === 'managed-atomic' || input.guaranteeProfile === 'browser-handoff') &&
-        input.preparation === (input.artifactKind === 'zip-archive' ? 'exact-zip' : 'none')
+        input.preparation === 'none'
     case 'portable-handoff':
       return (input.artifactKind === 'original-file' || input.artifactKind === 'zip-archive') &&
         input.guaranteeProfile === 'browser-handoff' && input.preparation === 'exact-artifact'

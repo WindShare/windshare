@@ -144,6 +144,7 @@ export interface V2ArtifactPresentationAuthority {
 }
 
 export type V2RetainedReceiveAction =
+  | 'save-partial'
   | 'continue'
   | 'catch-up'
   | 'save'
@@ -166,6 +167,7 @@ export interface V2RetainedReceiveOperation {
   readonly continuation: ReceiveOperationContinuation
   readonly expiresAt?: number
   readonly actions: readonly V2RetainedReceiveAction[]
+  readonly sourceRevisionFailures?: import('../output/resume/source-revision-failures').SourceRevisionFailures
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }

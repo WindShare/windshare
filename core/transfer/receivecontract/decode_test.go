@@ -321,7 +321,7 @@ func TestNestedCanonicalDecodersRejectOpenUnionsAndPolicyDrift(t *testing.T) {
 	}
 
 	workspacePlan := workspace.plan.CanonicalBytes()
-	workspacePlan[len(workspacePlan)-1] = byte(PreparationExactZip)
+	workspacePlan[len(workspacePlan)-1] = 1 // Former exact-ZIP preparation is not a legal workspace plan.
 	if _, err := DecodeMaterializationPlan(workspacePlan, workspace.artifact); !errors.Is(err, ErrInvalidReceiveContract) {
 		t.Fatalf("workspace preparation error=%v", err)
 	}

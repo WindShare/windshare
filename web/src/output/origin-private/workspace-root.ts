@@ -7,6 +7,7 @@ import {
 import { snapshotIdentity } from '../workspace/canonical'
 import { TargetOwnershipUnknownError, type TargetOwnershipStage } from '../persistent-tree/errors'
 import type { OriginPrivateWorkspaceBudgetClaim } from './admission'
+import type { ObjectGrowthRequest, ObjectGrowthReservation } from './object-capacity'
 
 export const ORIGIN_PRIVATE_RAW_FILE_CONTAINER = 'raw-files-v2' as const
 export const ORIGIN_PRIVATE_DIRECTORY_OBJECT_CONTAINER = 'directory-objects-v2' as const
@@ -110,7 +111,9 @@ export class OriginPrivateWorkspaceRoot {
     if (claim === undefined) {
       throw new DOMException('Workspace allocation requires an active budget claim', 'InvalidStateError')
     }
-    const admission = await claim.readmit(await this.verifiedAlreadyOwnedBytes())
+    // The lease owns incremental totals. Physical inventory belongs to recovery,
+    // otherwise a block admission becomes an O(number of retained objects) disk walk.
+    const admission = await claim.readmit(0n)
     if (admission.budgetDigest !== claim.budgetDigest) {
       throw new TargetOwnershipUnknownError('reservation', this.operationId)
     }
@@ -122,6 +125,22 @@ export class OriginPrivateWorkspaceRoot {
     }
   }
 
+  async reserveGrowth(
+    input: Omit<ObjectGrowthRequest, 'operationId'>,
+  ): Promise<ObjectGrowthReservation> {
+    await this.#verifyRoot('reservation')
+    if (this.#budgetClaim === undefined) {
+      throw new DOMException('Object growth requires an active workspace claim', 'InvalidStateError')
+    }
+    return this.#budgetClaim.reserveGrowth({ ...input, operationId: this.operationId })
+  }
+
+  async reconcileObject(objectId: string, actualLength: bigint): Promise<void> {
+    await this.#verifyRoot('reservation')
+    await this.#budgetClaim?.reconcileObject(objectId, actualLength)
+  }
+
+  /** Recovery measures existing lengths once before reclaiming the operation lease. */
   async verifiedAlreadyOwnedBytes(): Promise<bigint> {
     const root = await this.#verifyRoot('reservation')
     let count = 0
@@ -200,7 +219,16 @@ export class OriginPrivateWorkspaceRoot {
     if (!await sameEntry(current, expected, this.operationId, 'cleanup')) {
       throw new TargetOwnershipUnknownError('cleanup', this.operationId)
     }
-    await container.removeEntry(objectId)
+    await this.reconcileObject(objectId, BigInt((await current.getFile()).size))
+    try {
+      await container.removeEntry(objectId)
+    } catch (cause) {
+      // A rejected deletion may still have reached storage. Reconcile only this object.
+      const remaining = await optionalFile(container, objectId)
+      await this.reconcileObject(objectId, remaining === undefined ? 0n : BigInt((await remaining.getFile()).size))
+      throw cause
+    }
+    await this.reconcileObject(objectId, 0n)
     return 'removed'
   }
 

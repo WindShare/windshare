@@ -39,7 +39,6 @@ import type {
   WorkspaceContentRequestCounter,
   WorkspaceOperationStages,
 } from '../../workspace/stages'
-import type { SealedWorkspaceZipPreparationV1 } from '../../workspace/preparation'
 import type {
   OpenOriginPrivatePackageContinuation,
   ReopenedWorkspacePackageContinuation,
@@ -47,7 +46,7 @@ import type {
 import type { ReceiveOperationResumeDescriptor } from '../descriptor'
 import type { PreparationAdmissionReceiptV1 } from '../../workspace/receipts'
 
-export type PersistedReceiveOperationReopenPurpose = 'continue' | 'cleanup'
+export type PersistedReceiveOperationReopenPurpose = 'continue' | 'cleanup' | 'partial-export'
 
 export type StableLifecycleKind =
   | 'resumable-receive'
@@ -107,12 +106,13 @@ export interface ReopenedWorkspaceOperation extends ReopenedReceiveOperationBase
   readonly stages: WorkspaceOperationStages
   /** Present only when resume-receive reclaimed the exact durable admission authority. */
   readonly admittedContent?: AdmittedWorkspaceContent
-  readonly preparation?: SealedWorkspaceZipPreparationV1
   readonly receiveContinuation?: ReopenedWorkspaceReceiveContinuation
   readonly receiveAdmissionFallback?: Extract<ReceiveLifecycleState, {
     kind: 'resumable-receive'
     payloadKind: 'file-set'
   }>
+  readonly partialContinuation?: import('./partial-zip-continuation').RetainedZipPartialReader
+  readonly progressiveContinuation?: ReopenedProgressiveZipContinuation
   readonly packageContinuation?: ReopenedWorkspacePackageContinuation
 }
 
@@ -123,8 +123,12 @@ export interface ReopenedDirectZipOperation extends ReopenedReceiveOperationBase
   readonly candidate?: DirectZipCandidateV1
 }
 
+export interface ReopenedProgressiveZipContinuation {
+  readonly backend: import('../../origin-private/progressive-backend').OriginPrivateProgressiveZipBackend
+  readonly requirement: import('../progressive-checkpoint').ProgressiveZipRecoveryRequirement
+}
+
 export interface ReopenedWorkspaceReceiveContinuation {
-  readonly preparation?: SealedWorkspaceZipPreparationV1
   openBackend(options?: {
     readonly onTrace?: PersistentTreeTrace
     readonly diagnostics?: OutputDiagnosticsPorts
@@ -237,6 +241,7 @@ export interface ReopenResources {
   packageBackend?: OriginPrivatePackageContinuationBackend
   receiveBackend?: OriginPrivateWorkspaceBackend
   receiveBackendOpening?: Promise<OriginPrivateWorkspaceBackend>
+  partialReader?: import('./partial-zip-continuation').RetainedZipPartialReader
   directZipJournal?: DirectZipJournalRepository
   closed?: boolean
 }
@@ -246,7 +251,8 @@ export interface ReopenLifecycleAuthority {
   readonly receiveAdmissionFallback?: import('../../file-system-access/admission-fallback').ReceiveAdmissionFallback
   readonly stages?: WorkspaceOperationStages
   readonly admittedContent?: AdmittedWorkspaceContent
-  readonly preparation?: SealedWorkspaceZipPreparationV1
+  readonly partialContinuation?: import('./partial-zip-continuation').RetainedZipPartialReader
+  readonly progressiveContinuation?: ReopenedProgressiveZipContinuation
   readonly packageContinuation?: ReopenedWorkspacePackageContinuation
   readonly receiveContinuation?: ReopenedWorkspaceReceiveContinuation
 }

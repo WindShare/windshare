@@ -1,3 +1,4 @@
+import { NativeZipRecoveryUnavailableError } from './progressive-checkpoint'
 import type { OutputFailureSinks } from '../diagnostics'
 import type { RecoverySummary } from '../file-system-access/recovery-summary'
 import type { PersistentPausedFileRecovery } from '../persistent-tree/contracts'
@@ -16,6 +17,8 @@ export interface ResumeOperationClock {
 export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
+  readProgressiveRequirement?(lifecycle: ReceiveLifecycleState): Promise<import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined>
+  readSourceRevisionFailures?(lifecycle: ReceiveLifecycleState): Promise<import('./source-revision-failures').SourceRevisionFailures | undefined>
   isCleanupOnly?(operationId: string): Promise<boolean>
   readRecoverySummary?(
     lifecycle: Extract<ReceiveLifecycleState, {
@@ -26,6 +29,7 @@ export interface ReceiveOperationResumeSource {
 }
 
 export interface ReceiveOperationResumeRequest {
+  readonly purpose?: 'partial-export'
   readonly retainedFileRecovery?: PersistentPausedFileRecovery
   readonly failures?: OutputFailureSinks
 }
@@ -145,9 +149,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
       const projected = receiveOperationResumeDescriptor(lifecycle, now)
       if (projected === undefined) continue
       const cleanupOnly = await this.#source.isCleanupOnly?.(lifecycle.operationId) ?? false
-      const descriptor = cleanupOnly
-        ? Object.freeze({ ...projected, continuation: 'cleanup-incompatible' as const })
-        : projected
+      const descriptor = await this.#projectDescriptor(projected, lifecycle, cleanupOnly)
       const recoverySummary = !cleanupOnly && lifecycle.kind === 'resumable-receive' &&
           lifecycle.payloadKind === 'file-set' &&
           this.#source.readRecoverySummary !== undefined
@@ -161,6 +163,29 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     references.sort((left, right) =>
       left.descriptor.operationId.localeCompare(right.descriptor.operationId))
     return new ReceiveOperationResumeInventory(owner, references, directZipBootstrapCandidates)
+  }
+
+  async #projectDescriptor(
+    projected: ReceiveOperationResumeDescriptor, lifecycle: ReceiveLifecycleState, cleanupOnly: boolean,
+  ): Promise<ReceiveOperationResumeDescriptor> {
+    let descriptor = projected
+    let nativeRequirement: import('./progressive-checkpoint').ProgressiveZipRecoveryRequirement | undefined
+    try {
+      nativeRequirement = cleanupOnly ? undefined : await this.#source.readProgressiveRequirement?.(lifecycle)
+    } catch (error) {
+      if (!(error instanceof NativeZipRecoveryUnavailableError)) throw error
+      descriptor = Object.freeze({ ...projected, continuation: 'needs-attention',
+        recoveryUnavailable: 'native-checkpoint-unavailable' })
+    }
+    if (cleanupOnly) descriptor = Object.freeze({ ...projected, continuation: 'cleanup-incompatible' as const })
+    else if (nativeRequirement === 'local-finalization') {
+      descriptor = Object.freeze({ ...projected, continuation: 'resume-local-finalization' as const })
+    }
+    if (!cleanupOnly && descriptor.recoveryUnavailable === undefined) {
+      const sourceRevisionFailures = await this.#source.readSourceRevisionFailures?.(lifecycle)
+      if (sourceRevisionFailures !== undefined) descriptor = Object.freeze({ ...descriptor, sourceRevisionFailures })
+    }
+    return descriptor
   }
 
   async resume(

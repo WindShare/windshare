@@ -38,6 +38,7 @@ export function retainedOperationAuthority(
         ? Object.freeze({ actions: retainedActions('continue', 'redownload', 'catch-up') })
         : Object.freeze({ actions: retainedActions('continue', 'discard', 'catch-up') })
     case 'resume-package':
+    case 'resume-local-finalization':
       return Object.freeze({ actions: retainedActions('continue', 'discard') })
     case 'resume-direct-zip':
     case 'reauthorize-direct-zip':
