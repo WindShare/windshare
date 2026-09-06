@@ -33,8 +33,7 @@ export function snapshotReceiveAdmissionFallback(
       input.operationId !== intent.operationId || input.receiveIntentDigest !== intent.digest ||
       typeof input.generation !== 'bigint' || input.generation < 0n ||
       typeof input.completedFileCount !== 'bigint' || input.completedFileCount < 0n ||
-      typeof input.completedBytes !== 'bigint' || input.completedBytes < 0n ||
-      !Number.isSafeInteger(input.expiresAt) || input.expiresAt < 0) {
+      typeof input.completedBytes !== 'bigint' || input.completedBytes < 0n) {
     throw new TypeError('FSA admission fallback does not belong to the receive continuation')
   }
   return Object.freeze({
@@ -51,7 +50,6 @@ export function snapshotReceiveAdmissionFallback(
       input.completedFileCount,
       input.completedBytes,
     ),
-    expiresAt: input.expiresAt,
     ...(input.partialReceiptDigest === undefined
       ? {}
       : { partialReceiptDigest: snapshotIdentity(input.partialReceiptDigest, 32, 'partial receipt digest') }),
@@ -69,11 +67,10 @@ export function sameReceiveAdmissionFallback(
     state.selectionFacts.discoveredFileCount === fallback.selectionFacts.discoveredFileCount &&
     state.selectionFacts.discoveredBytes === fallback.selectionFacts.discoveredBytes &&
     state.selectionFacts.discovery === fallback.selectionFacts.discovery &&
-    state.expiresAt === fallback.expiresAt &&
     state.partialReceiptDigest === fallback.partialReceiptDigest
 }
 
-/** Admission rollback restores the exact paused evidence, including its original retention deadline. */
+/** Admission rollback restores the exact paused evidence, without changing its authenticated selection. */
 export function receiveAdmissionFailureEvent(
   state: Extract<ReceiveLifecycleState, { kind: 'receiving' }>,
   fallback: Extract<ReceiveAdmissionFallback, { kind: 'resumable-receive' }>,
@@ -85,7 +82,6 @@ export function receiveAdmissionFailureEvent(
     completedFileCount: fallback.completedFileCount,
     completedBytes: fallback.completedBytes,
     selectionFacts: fallback.selectionFacts,
-    expiresAt: fallback.expiresAt,
     ...(fallback.partialReceiptDigest === undefined
       ? {}
       : { partialReceiptDigest: fallback.partialReceiptDigest }),

@@ -22,13 +22,9 @@ export interface ReceiveReceiptBase {
 
 export interface PreparationAdmissionReceiptV1 extends ReceiveReceiptBase {
   readonly kind: 'preparation-admission'
-  readonly preparationManifestDigest?: string
-  readonly sealedZipLayoutDigest?: string
   readonly workspaceBudgetDigest: string
   readonly contentRequestCountAtAdmission: 0n
-  readonly jobLimitBytes: bigint
-  readonly processLimitBytes: bigint
-  readonly estimatedQuotaBytes: bigint
+  readonly estimatedQuotaBytes: bigint | null
   readonly currentUsageBytes: bigint
   readonly minimumReserveBytes: bigint
   readonly incrementalPhysicalPeakBytes: bigint

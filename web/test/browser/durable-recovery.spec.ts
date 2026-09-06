@@ -16,9 +16,9 @@ import type {
   WorkspaceActivationReloadProof,
 } from './durable-recovery-harness'
 import type {
-  FreshPreparedZipAdmissionProof,
-  ProductPreparedZipAdmissionProof,
-  TransferJobPreparedZipProof,
+  FreshProgressiveZipAdmissionProof,
+  ProductProgressiveZipAdmissionProof,
+  TransferJobProgressiveZipProof,
 } from './durable-preparation-harness'
 const RECOVERY_HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
 const PREPARATION_HARNESS_PATH = '/test/browser/durable-preparation-harness.ts'
@@ -160,26 +160,22 @@ test('promotes an exactly marked workspace activation candidate after reload', a
   })
 })
 
-test('commits prepared ZIP admission through fresh browser durability authorities', async ({
+test('commits progressive ZIP admission through fresh browser durability authorities', async ({
   page,
 }) => {
   const key = crypto.randomUUID()
   const result = await page.evaluate(async ({ path, fixtureKey }) => {
     const harness = await import(path) as typeof import('./durable-preparation-harness')
-    return harness.proveFreshPreparedZipAdmission(fixtureKey)
-  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as FreshPreparedZipAdmissionProof
+    return harness.proveFreshProgressiveZipAdmission(fixtureKey)
+  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as FreshProgressiveZipAdmissionProof
 
   expect(result).toEqual({
     lifecycle: 'receiving',
     contentRequests: '0',
-    traceNames: [
-      'receive.preparation.started',
-      'receive.preparation.sealed',
-      'receive.preparation_admission.accepted',
-    ],
+    traceNames: ['receive.preparation_admission.accepted'],
     receiptCount: 1,
-    manifestPageCount: 1,
-    layoutHandlePresent: true,
+    manifestPageCount: 0,
+    objectHandlePresent: true,
   })
 })
 
@@ -187,16 +183,20 @@ test('admits product-bound workspace ZIP before requesting content', async ({ pa
   const key = crypto.randomUUID()
   const result = await page.evaluate(async ({ path, fixtureKey }) => {
     const harness = await import(path) as typeof import('./durable-preparation-harness')
-    return harness.proveProductPreparedZipAdmission(fixtureKey)
-  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as ProductPreparedZipAdmissionProof
+    return harness.proveProductProgressiveZipAdmission(fixtureKey)
+  }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as ProductProgressiveZipAdmissionProof
 
   expect(result).toEqual({
     admission: 'accepted',
     lifecycle: 'receiving',
     traceNames: [
-      'receive.preparation.started',
-      'receive.preparation.sealed',
       'receive.preparation_admission.accepted',
+      'receive.capacity.reserved',
+      'receive.opfs.checkpoint',
+      'receive.opfs.checkpoint',
+      'receive.opfs.checkpoint',
+      'receive.opfs.checkpoint',
+      'receive.capacity.released',
       'receive.materialization.paused',
       'receive.operation.discarded',
     ],
@@ -204,50 +204,25 @@ test('admits product-bound workspace ZIP before requesting content', async ({ pa
   })
 })
 
-test('admits catalog-derived TransferJob evidence before requesting workspace content', async ({
+test('receives catalog-discovered TransferJob files through progressive workspace output', async ({
   page,
 }) => {
   const result = await page.evaluate(async (path) => {
     const harness = await import(path) as typeof import('./durable-preparation-harness')
-    return harness.proveTransferJobPreparedZip()
-  }, PREPARATION_HARNESS_PATH) as TransferJobPreparedZipProof
+    return harness.proveTransferJobProgressiveZip()
+  }, PREPARATION_HARNESS_PATH) as TransferJobProgressiveZipProof
 
   expect(result).toMatchObject({
     worker: 'Succeeded',
-    lifecycle: 'waiting-to-save',
+    lifecycle: 'download-started',
     evidence: {
-      entryCount: '3',
-      fileCount: '1',
-      directoryCount: '2',
-      selectedRawBytes: '68',
-      generationCount: 2,
-      entries: [
-        {
-          kind: 'directory',
-          role: 'result-root',
-          sourceSegmentCount: 0,
-          artifactSegmentCount: 1,
-          modifiedTimePresent: false,
-        },
-        {
-          kind: 'directory',
-          role: 'necessary-ancestor',
-          sourceSegmentCount: 1,
-          artifactSegmentCount: 2,
-          modifiedTimePresent: true,
-        },
-        {
-          kind: 'file',
-          sourceSegmentCount: 2,
-          artifactSegmentCount: 3,
-          modifiedTimePresent: true,
-        },
-      ],
+      admittedFilePaths: ['micro-share/pixel.png'],
+      admissionCount: 1,
+      discoveryCompleteCalls: 1,
     },
     cleanup: 'discarded',
   })
-  expect(result.workspaceTraceNames).toContain('receive.preparation.sealed')
-  expect(result.workspaceTraceNames).toContain('receive.preparation_admission.accepted')
+  expect(result.workspaceTraceNames).not.toContain('receive.preparation.started')
   expect(result.transferTraceNames).toContain('materialization_completed')
   expect(result.transferTraceNames).not.toContain('materialization_failed')
 })
@@ -276,8 +251,72 @@ test('reopens workspace admission authority from a fresh page', async ({ page })
   })
 })
 
-test('recovers a FileCheckpoint, seals once, and retries the retained package after reload', async ({
+for (const cut of ['receiving', 'materialization-sealed'] as const) {
+  test(`completed original ${cut} crash cut saves the same object offline`, async ({ page, context }) => {
+    const created = await page.evaluate(async ({ path, key }) => {
+      const harness = await import(path) as typeof import('./durable-recovery-harness')
+      return harness.createOriginPrivateReceiveCrashCut(key, 'complete')
+    }, { path: RECOVERY_HARNESS_PATH, key: crypto.randomUUID() })
+    expect(created).toMatchObject({ lifecycle: 'receiving', ranges: ['0:5'] })
+    const crashPath = '/test/browser/opfs/opfs-publication-crash-harness.ts'
+    await page.reload()
+    if (cut === 'materialization-sealed') {
+      const sealed = await page.evaluate(async ({ path, fixture }) => {
+        const harness = await import(path) as typeof import('./opfs/opfs-publication-crash-harness')
+        return harness.recoverCompletedOriginal(fixture, true)
+      }, { path: crashPath, fixture: created.fixture })
+      expect(sealed).toMatchObject({ continuation: 'resume-local-finalization', state: cut })
+      await page.reload()
+    }
+    await page.evaluate(async path => { await import(path) }, crashPath)
+    await context.setOffline(true)
+    const downloaded = page.waitForEvent('download')
+    const recovered = await page.evaluate(async ({ path, fixture }) => {
+      const harness = await import(path) as typeof import('./opfs/opfs-publication-crash-harness')
+      return harness.recoverCompletedOriginal(fixture)
+    }, { path: crashPath, fixture: created.fixture })
+    expect(recovered).toMatchObject({
+      priorState: cut, state: 'download-started',
+      objectId: created.completedObjectId, bytes: [1, 2, 3, 4, 5],
+    })
+    expect(await (await downloaded).failure()).toBeNull()
+  })
+}
+
+test('fresh inventory recovers an interrupted browser handoff and saves the same object offline', async ({ page, context }) => {
+  const cut = await page.evaluate(async ({ path, key }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.createOriginPrivateReceiveCrashCut(key)
+  }, { path: RECOVERY_HARNESS_PATH, key: crypto.randomUUID() })
+  await page.reload()
+  const fixture = await page.evaluate(async ({ path, cut }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return (await harness.recoverReceiveAndSealPackage(cut.fixture)).fixture
+  }, { path: RECOVERY_HARNESS_PATH, cut })
+  const crashPath = '/test/browser/opfs/opfs-publication-crash-harness.ts'
+  await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./opfs/opfs-publication-crash-harness')
+    return harness.interruptRetainedHandoff(fixture)
+  }, { path: crashPath, fixture })
+  await page.reload()
+  await page.evaluate(async path => { await import(path) }, crashPath)
+  await context.setOffline(true)
+  const downloaded = page.waitForEvent('download')
+  const recovered = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./opfs/opfs-publication-crash-harness')
+    return harness.recoverAndSaveInterruptedHandoff(fixture)
+  }, { path: crashPath, fixture })
+  expect(recovered).toEqual({
+    priorState: 'handing-off', normalizedState: 'waiting-to-save', state: 'download-started',
+    packageDigest: fixture.package.digest, objectId: fixture.rawOwnedObjectId,
+  })
+  const download = await downloaded
+  expect(await download.failure()).toBeNull()
+})
+
+test('recovers a FileCheckpoint, reuses its original object, and retries offline after reload', async ({
   page,
+  context,
 }) => {
   const key = crypto.randomUUID()
   const crashCut = await page.evaluate(async ({ path, fixtureKey }) => {
@@ -308,7 +347,10 @@ test('recovers a FileCheckpoint, seals once, and retries the retained package af
     publicationAttempts: 1,
   })
 
+  expect(recovered.fixture.package.packageOwnedObjectId).toBe(recovered.fixture.rawOwnedObjectId)
   await page.reload()
+  await page.evaluate(async path => { await import(path) }, RECOVERY_HARNESS_PATH)
+  await context.setOffline(true)
   const retried = await page.evaluate(async ({ path, fixture }) => {
     const harness = await import(path) as typeof import('./durable-recovery-harness')
     return harness.retryRetainedPackagePublication(fixture)
@@ -319,8 +361,6 @@ test('recovers a FileCheckpoint, seals once, and retries the retained package af
   expect(retried).toEqual({
     packageBytes: [1, 2, 3, 4, 5],
     packageDigest: recovered.fixture.package.digest,
-    originalExpiry: recovered.fixture.originalExpiry,
-    restoredExpiry: recovered.fixture.originalExpiry,
     contentRequests: '0',
     packageSeals: 0,
     publicationAttempts: 1,

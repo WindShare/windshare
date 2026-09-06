@@ -136,10 +136,8 @@ const (
 )
 
 const (
-	defaultOPFSJobWorkspaceLimit     uint64 = 8 << 30
-	defaultOPFSProcessWorkspaceLimit uint64 = 16 << 30
-	minimumOPFSQuotaReserve                 = 512 << 20
-	defaultPortableArtifactLimit            = 64 << 20
+	minimumOPFSQuotaReserve      = 512 << 20
+	defaultPortableArtifactLimit = 64 << 20
 )
 
 type vectorFile struct {

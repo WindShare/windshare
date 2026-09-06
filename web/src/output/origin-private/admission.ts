@@ -1,7 +1,7 @@
+import type { ObjectCapacityFence, ObjectGrowthRequest, ObjectGrowthReservation,
+  ObjectCapacityTrace, ObjectCapacityTraceEvent } from './object-capacity'
 import type { BrowserReceiveOperationLease } from '../browser/session-lease'
 import {
-  DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
-  DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT,
   MINIMUM_OPFS_QUOTA_RESERVE,
   type WorkspaceBudgetAdmission,
   type WorkspaceBudgetV1,
@@ -32,8 +32,6 @@ export interface OriginPrivateStorageEstimate {
 export interface OriginPrivateWorkspaceBudgetOptions {
   readonly estimate: () => Promise<OriginPrivateStorageEstimate>
   readonly verifiedAlreadyOwnedBytes?: () => Promise<bigint>
-  readonly jobLimitBytes?: bigint
-  readonly processLimitBytes?: bigint
   readonly minimumReserveBytes?: bigint
   readonly authority?: OriginPrivateWorkspaceBudgetLeaseAuthority
   readonly databaseName?: string
@@ -41,10 +39,13 @@ export interface OriginPrivateWorkspaceBudgetOptions {
   readonly leaseMilliseconds?: number
   readonly heartbeatMilliseconds?: number
   readonly randomToken?: () => string
+  readonly trace?: ObjectCapacityTrace
 }
 
 export interface OriginPrivateWorkspaceBudgetClaim extends WorkspaceBudgetClaim {
   readmit(verifiedAlreadyOwnedBytes: bigint): Promise<WorkspaceBudgetAdmission>
+  reserveGrowth(input: ObjectGrowthRequest): Promise<ObjectGrowthReservation>
+  reconcileObject(objectId: string, actualLength: bigint): Promise<void>
 }
 
 export class OriginPrivateWorkspaceBudgetAuthority implements WorkspaceBudgetAuthority {
@@ -53,13 +54,12 @@ export class OriginPrivateWorkspaceBudgetAuthority implements WorkspaceBudgetAut
   readonly #ownsAuthority: boolean
   readonly #estimate: OriginPrivateWorkspaceBudgetOptions['estimate']
   readonly #verifiedAlreadyOwnedBytes: () => Promise<bigint>
-  readonly #jobLimitBytes: bigint
-  readonly #processLimitBytes: bigint
   readonly #minimumReserveBytes: bigint
   readonly #now: () => number
   readonly #leaseMilliseconds: number
   readonly #heartbeatMilliseconds: number
   readonly #token: string
+  readonly #trace: ObjectCapacityTrace | undefined
   #activeClaim: ActiveOriginPrivateWorkspaceBudgetClaim | undefined
   #settled = false
 
@@ -73,15 +73,8 @@ export class OriginPrivateWorkspaceBudgetAuthority implements WorkspaceBudgetAut
     this.#authority = authority
     this.#ownsAuthority = ownsAuthority
     this.#estimate = options.estimate
+    this.#trace = options.trace
     this.#verifiedAlreadyOwnedBytes = options.verifiedAlreadyOwnedBytes ?? (async () => 0n)
-    this.#jobLimitBytes = checkedPositiveU64(
-      options.jobLimitBytes ?? DEFAULT_OPFS_JOB_WORKSPACE_LIMIT,
-      'workspace job limit',
-    )
-    this.#processLimitBytes = checkedPositiveU64(
-      options.processLimitBytes ?? DEFAULT_OPFS_PROCESS_WORKSPACE_LIMIT,
-      'workspace process limit',
-    )
     this.#minimumReserveBytes = checkedU64(
       options.minimumReserveBytes ?? MINIMUM_OPFS_QUOTA_RESERVE,
       'workspace quota reserve',
@@ -175,6 +168,7 @@ export class OriginPrivateWorkspaceBudgetAuthority implements WorkspaceBudgetAut
         heartbeatMilliseconds: this.#heartbeatMilliseconds,
         now: this.#now,
         token: this.#token,
+        ...(this.#trace === undefined ? {} : { trace: this.#trace }),
         onReleased: () => {
           this.#settled = true
           this.#activeClaim = undefined
@@ -203,12 +197,12 @@ export class OriginPrivateWorkspaceBudgetAuthority implements WorkspaceBudgetAut
   }
 
   async #capacityFacts(verifiedAlreadyOwnedBytes: bigint): Promise<WorkspaceBudgetCapacityFacts> {
-    const estimate = await this.#estimate()
+    const estimate = await this.#estimate().catch(() => ({} as OriginPrivateStorageEstimate))
     return Object.freeze({
-      jobLimitBytes: this.#jobLimitBytes,
-      processLimitBytes: this.#processLimitBytes,
-      estimatedQuotaBytes: storageEstimateBytes(estimate.quota, 'estimated quota'),
-      currentUsageBytes: storageEstimateBytes(estimate.usage, 'current quota usage'),
+      ...(storageEstimateBytes(estimate.quota) === undefined ? {} : {
+        estimatedQuotaBytes: storageEstimateBytes(estimate.quota)!,
+      }),
+      currentUsageBytes: storageEstimateBytes(estimate.usage) ?? 0n,
       minimumReserveBytes: this.#minimumReserveBytes,
       verifiedAlreadyOwnedBytes: checkedU64(
         verifiedAlreadyOwnedBytes,
@@ -236,6 +230,7 @@ class ActiveOriginPrivateWorkspaceBudgetClaim implements OriginPrivateWorkspaceB
   readonly #heartbeatMilliseconds: number
   readonly #now: () => number
   readonly #token: string
+  readonly #trace: ObjectCapacityTrace | undefined
   readonly #onReleased: () => void
   #heartbeatTimer: ReturnType<typeof setInterval> | undefined
   #failure: unknown
@@ -251,6 +246,7 @@ class ActiveOriginPrivateWorkspaceBudgetClaim implements OriginPrivateWorkspaceB
     readonly now: () => number
     readonly token: string
     readonly onReleased: () => void
+    readonly trace?: ObjectCapacityTrace
   }) {
     this.#budget = input.budget
     this.budgetDigest = input.budget.digest
@@ -263,6 +259,7 @@ class ActiveOriginPrivateWorkspaceBudgetClaim implements OriginPrivateWorkspaceB
     this.#now = input.now
     this.#token = input.token
     this.#onReleased = input.onReleased
+    this.#trace = input.trace
   }
 
   startHeartbeat(): void {
@@ -288,6 +285,54 @@ class ActiveOriginPrivateWorkspaceBudgetClaim implements OriginPrivateWorkspaceB
     return decision.admission
   }
 
+  async reserveGrowth(input: ObjectGrowthRequest): Promise<ObjectGrowthReservation> {
+    this.#assertHealthy()
+    const reservationId = crypto.randomUUID()
+    const context = { operation_id: input.operationId, object_id: input.objectId,
+      reservation_id: reservationId, lease_id: this.#token, current_length: input.currentLength,
+      target_length: input.targetLength, metadata_headroom: input.metadataHeadroom }
+    try {
+      await this.#authority.reserveGrowth(this.#fence(), input, reservationId,
+        await this.#capacityFacts(0n))
+      this.#emit({ ...context, name: 'receive.capacity.reserved' })
+    } catch (error) {
+      this.#emit({ ...context, name: 'receive.capacity.rejected',
+        failure_name: error instanceof Error ? error.name : 'unknown' })
+      throw error
+    }
+    let settled = false
+    return Object.freeze({
+      reservationId,
+      settle: async (actualLength: bigint) => {
+        if (settled) return
+        await this.#authority.settleGrowth(this.#fence(), input.objectId, reservationId, actualLength)
+        settled = true
+        this.#emit({ ...context, name: 'receive.capacity.settled', actual_length: actualLength })
+      },
+      release: async () => {
+        if (settled) return
+        await this.#authority.settleGrowth(this.#fence(), input.objectId, reservationId)
+        settled = true
+        this.#emit({ ...context, name: 'receive.capacity.released' })
+      },
+    })
+  }
+
+  async reconcileObject(objectId: string, actualLength: bigint): Promise<void> {
+    this.#assertHealthy()
+    await this.#authority.reconcileObject(this.#fence(), objectId, actualLength)
+  }
+
+  #emit(event: ObjectCapacityTraceEvent): void {
+    try { this.#trace?.(event) } catch { /* Observations cannot change capacity ownership. */ }
+  }
+
+  #fence(): ObjectCapacityFence {
+    this.#assertHealthy()
+    return { operationId: this.#budget.operationId, token: this.#token,
+      nowMilliseconds: checkedClock(this.#now()) }
+  }
+
   release(): Promise<void> {
     if (this.#releasePromise !== undefined) return this.#releasePromise
     if (this.#heartbeatTimer !== undefined) clearInterval(this.#heartbeatTimer)
@@ -309,9 +354,8 @@ class ActiveOriginPrivateWorkspaceBudgetClaim implements OriginPrivateWorkspaceB
   }
 }
 
-function storageEstimateBytes(value: number | undefined, label: string): bigint {
-  if (value === undefined) return 0n
-  if (!Number.isSafeInteger(value) || value < 0) throw new TypeError(`${label} is invalid`)
+function storageEstimateBytes(value: number | undefined): bigint | undefined {
+  if (value === undefined || !Number.isSafeInteger(value) || value < 0) return undefined
   return BigInt(value)
 }
 
@@ -330,12 +374,6 @@ function checkedClock(value: number): number {
 function positiveSafeInteger(value: number, label: string): number {
   if (!Number.isSafeInteger(value) || value <= 0) throw new TypeError(`${label} is invalid`)
   return value
-}
-
-function checkedPositiveU64(value: bigint, label: string): bigint {
-  const result = checkedU64(value, label)
-  if (result === 0n) throw new TypeError(`${label} must be positive`)
-  return result
 }
 
 function checkedU64(value: bigint, label: string): bigint {

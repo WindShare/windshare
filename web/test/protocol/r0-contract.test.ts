@@ -805,8 +805,6 @@ describe('R0 resource and state-machine contract', () => {
       controlQueueFrames: '256',
       dataQueueBytes: '67108864',
       dataQueueFrames: '1024',
-      defaultOpfsJobWorkspaceLimit: '8589934592',
-      defaultOpfsProcessWorkspaceLimit: '17179869184',
       defaultPortableHandoffArtifactLimit: '67108864',
       joinStartingSeconds: '5',
       leaseMaximumSeconds: '7200',

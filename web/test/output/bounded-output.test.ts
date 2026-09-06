@@ -75,16 +75,10 @@ describe('bounded PortableHandoff structure', () => {
 
 function downloadStartedPublisher(): BrowserHandoffPublisher {
   return {
-    handoff: (request) => request.context.attemptKind === 'workspace'
-      ? Object.freeze({
-          kind: 'download-started',
-          suggestedName: request.suggestedName,
-          retryableUntil: request.context.retryableUntil,
-        })
-      : Object.freeze({
-          kind: 'download-started',
-          suggestedName: request.suggestedName,
-        }),
+    handoff: (request) => Object.freeze({
+      kind: 'download-started',
+      suggestedName: request.suggestedName,
+    }),
   }
 }
 

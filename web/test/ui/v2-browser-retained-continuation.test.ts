@@ -26,7 +26,6 @@ describe('browser retained continuation composition', () => {
     const source = new FakeResumeSource([receiveLifecycle(24, {
       kind: 'waiting-to-save',
       packageDigest: identity(25, 32),
-      expiresAt: 5_000,
     })])
     const close = vi.fn(async () => undefined)
     const continuation = fakeContinuation('workspace-retained', close)
@@ -74,7 +73,6 @@ describe('browser retained continuation composition', () => {
         checkpointSetDigest: identity(41, 32),
         completedFileCount: 1n,
         completedBytes: 64n,
-        expiresAt: 5_000,
       })])
       const close = vi.fn(async () => undefined)
       const continuation = fakeContinuation(kind, close)
@@ -134,7 +132,6 @@ describe('browser retained continuation composition', () => {
       checkpointSetDigest: identity(61, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
-      expiresAt: 5_000,
     })
     const summary = retainedRecoverySummary(lifecycle)
     const source = new FakeResumeSource([lifecycle], summary)
@@ -181,7 +178,6 @@ describe('browser retained continuation composition', () => {
       checkpointSetDigest: identity(42, 32),
       completedFileCount: 1n,
       completedBytes: 64n,
-      expiresAt: 5_000,
     })
     if (fallback.kind !== 'resumable-receive') throw new Error('test fallback changed kind')
     const failure = new TargetOwnershipUnknownError('checkpoint', fallback.operationId)
@@ -269,7 +265,6 @@ describe('browser retained continuation composition', () => {
       kind: 'resumable-package',
       sealedMaterializationDigest: identity(43, 32),
       tempCleanupProofDigest: identity(44, 32),
-      expiresAt: 5_000,
     })])
     const close = vi.fn(async () => undefined)
     const continuation = fakeContinuation('workspace-package', close)
@@ -303,7 +298,6 @@ describe('browser retained continuation composition', () => {
       kind: 'resumable-package',
       sealedMaterializationDigest: identity(46, 32),
       tempCleanupProofDigest: identity(47, 32),
-      expiresAt: 5_000,
     })])
     const close = vi.fn(async () => undefined)
     const continuation = fakeContinuation('workspace-package', close)
@@ -336,7 +330,6 @@ describe('browser retained continuation composition', () => {
       kind: 'resumable-package',
       sealedMaterializationDigest: identity(49, 32),
       tempCleanupProofDigest: identity(50, 32),
-      expiresAt: 5_000,
     })])
     const trigger = new DOMException('package continuation failed', 'OperationError')
     const consequence = new DOMException('checkpoint close failed', 'InvalidStateError')

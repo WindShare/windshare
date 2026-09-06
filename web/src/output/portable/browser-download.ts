@@ -45,7 +45,6 @@ export interface DownloadStarted {
   readonly kind: 'download-started'
   readonly suggestedName: string
   // Portable results omit this field because no durable recovery state exists.
-  readonly retryableUntil?: number
 }
 
 export interface PortableHandoffContext {
@@ -59,7 +58,6 @@ export interface PackagedArtifactHandoffContext {
   readonly operationId: string
   readonly attemptId: string
   readonly packageDigest: string
-  readonly retryableUntil: number
 }
 
 export type BrowserHandoffContext =
@@ -74,6 +72,7 @@ export interface BrowserHandoffRequest {
   readonly exactBytes: bigint
   readonly suggestedName: string
   readonly objectUrlLeaseMilliseconds: number
+  readonly onSourceReleased?: () => void
 }
 
 export type BrowserHandoffTraceEvent =
@@ -93,8 +92,6 @@ export type BrowserHandoffTraceEvent =
       attemptId: string
       packageDigestPresent: boolean
       packageDigest?: string
-      retryableUntilPresent: boolean
-      retryableUntilMilliseconds?: number
     }>
   | Readonly<{
       name: 'receive.handoff.not_started'
@@ -448,8 +445,7 @@ function createPortableAssembly(input: Readonly<{
           objectUrlLeaseMilliseconds: Number(input.objectUrlLeaseMilliseconds),
         })
         if (handoff.kind !== 'download-started' ||
-            handoff.suggestedName !== input.suggestedName ||
-            handoff.retryableUntil !== undefined) {
+            handoff.suggestedName !== input.suggestedName) {
           throw new TypeError('Portable publisher returned an invalid terminal result')
         }
         settled = true
@@ -494,6 +490,8 @@ function publishBrowserHandoff(
     } catch {
       // Revocation is best-effort after the finite lease. It cannot change an
       // already-started browser handoff into a claimed failure.
+    } finally {
+      request.onSourceReleased?.()
     }
   }
 
@@ -553,16 +551,9 @@ function publishBrowserHandoff(
       backend: ports.diagnostics?.backend ?? 'portable',
       transition: 'committed',
     }))
-  const result: DownloadStarted = request.context.attemptKind === 'workspace'
-    ? Object.freeze({
-        kind: 'download-started' as const,
-        suggestedName: request.suggestedName,
-        retryableUntil: request.context.retryableUntil,
-      })
-    : Object.freeze({
-        kind: 'download-started' as const,
-        suggestedName: request.suggestedName,
-      })
+  const result: DownloadStarted = Object.freeze({
+    kind: 'download-started', suggestedName: request.suggestedName,
+  })
   trace(ports.trace, handoffDownloadStartedTrace(request))
   return Object.freeze({
     result,
@@ -605,9 +596,7 @@ function validateHandoffRequest(request: BrowserHandoffRequest): void {
     throw new TypeError('Browser handoff requires stable operation and attempt identities')
   }
   if (request.context.attemptKind === 'portable') return
-  if (request.context.packageDigest.length === 0 ||
-      !Number.isSafeInteger(request.context.retryableUntil) ||
-      request.context.retryableUntil < 0) {
+  if (request.context.packageDigest.length === 0) {
     throw new TypeError('Packaged artifact handoff context is invalid')
   }
 }
@@ -639,8 +628,6 @@ function handoffDownloadStartedTrace(
       attemptId: request.context.attemptId,
       packageDigestPresent: true,
       packageDigest: request.context.packageDigest,
-      retryableUntilPresent: true,
-      retryableUntilMilliseconds: request.context.retryableUntil,
     })
   }
   return Object.freeze({
@@ -649,7 +636,6 @@ function handoffDownloadStartedTrace(
     attemptKind: request.context.attemptKind,
     attemptId: request.context.attemptId,
     packageDigestPresent: false,
-    retryableUntilPresent: false,
   })
 }
 

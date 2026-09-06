@@ -23,6 +23,7 @@ import {
   type WorkspaceStageTraceListener,
 } from './stages/contracts'
 import { WorkspacePublicationStages } from './stages/publication'
+import { WorkspaceProgressiveStages } from './stages/progressive'
 import { WorkspaceStageRuntime } from './stages/runtime'
 
 export * from './stages/contracts'
@@ -103,6 +104,7 @@ export class WorkspaceOperationStages {
   readonly #cleanup: WorkspaceCleanupStages
   readonly #continuation: WorkspaceContinuationStages
   readonly #publication: WorkspacePublicationStages
+  readonly progressive: WorkspaceProgressiveStages
 
   private constructor(runtime: WorkspaceStageRuntime) {
     this.#cleanup = new WorkspaceCleanupStages(runtime)
@@ -110,6 +112,7 @@ export class WorkspaceOperationStages {
     this.#artifact = new WorkspaceArtifactStages(runtime)
     this.#continuation = new WorkspaceContinuationStages(runtime)
     this.#publication = new WorkspacePublicationStages(runtime)
+    this.progressive = new WorkspaceProgressiveStages(runtime)
   }
 
   static async open(input: {
@@ -132,22 +135,16 @@ export class WorkspaceOperationStages {
     }))
   }
 
-  beginReceive(
-    ...args: Parameters<WorkspaceAdmissionStages['beginReceive']>
-  ): ReturnType<WorkspaceAdmissionStages['beginReceive']> {
-    return this.#admission.beginReceive(...args)
-  }
-
-  admitPreparedZip(
-    ...args: Parameters<WorkspaceAdmissionStages['admitPreparedZip']>
-  ): ReturnType<WorkspaceAdmissionStages['admitPreparedZip']> {
-    return this.#admission.admitPreparedZip(...args)
-  }
-
   admitSingleFile(
     ...args: Parameters<WorkspaceAdmissionStages['admitSingleFile']>
   ): ReturnType<WorkspaceAdmissionStages['admitSingleFile']> {
     return this.#admission.admitSingleFile(...args)
+  }
+
+  beginReceive(
+    ...args: Parameters<WorkspaceAdmissionStages['beginReceive']>
+  ): ReturnType<WorkspaceAdmissionStages['beginReceive']> {
+    return this.#admission.beginReceive(...args)
   }
 
   reopenAdmittedContent(

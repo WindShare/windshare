@@ -16,7 +16,6 @@ type PreparationPolicy uint8
 
 const (
 	PreparationNone          PreparationPolicy = 0
-	PreparationExactZip      PreparationPolicy = 1
 	PreparationExactArtifact PreparationPolicy = 2
 )
 
@@ -94,9 +93,6 @@ func NewWorkspaceThenPublishPlan(
 		return MaterializationPlan{}, ErrInvalidReceiveContract
 	}
 	preparation := PreparationNone
-	if artifact.Kind() == ArtifactZipArchive {
-		preparation = PreparationExactZip
-	}
 	encoded := canonicalRecord(materializationPlanDomain,
 		[]byte{byte(PlanWorkspaceThenPublish)}, frame(workspace.CanonicalBytes()),
 		frame([]byte{byte(profile)}), frame([]byte{byte(preparation)}),
@@ -149,7 +145,7 @@ func (plan MaterializationPlan) valid() bool {
 		return plan.reservation.IsZero() && plan.workspace.valid() && plan.portable.IsZero() &&
 			plan.ownedFile.IsZero() &&
 			(plan.publication == GuaranteeManagedAtomic || plan.publication == GuaranteeBrowserHandoff) &&
-			(plan.preparation == PreparationNone || plan.preparation == PreparationExactZip)
+			plan.preparation == PreparationNone
 	case PlanPortableHandoff:
 		return plan.reservation.IsZero() && plan.workspace.IsZero() && plan.portable.valid() &&
 			plan.ownedFile.IsZero() && plan.publication == GuaranteeBrowserHandoff &&

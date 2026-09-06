@@ -14,9 +14,7 @@ import {
   type FinalCheckpointReader,
   type MaterializedManifestEntry,
   type MaterializedManifestV1,
-  type PreparationBinding,
 } from '../manifest'
-import type { SealedWorkspaceZipPreparationV1 } from '../preparation'
 import {
   createPackageReceipt,
   createPackageTemporaryCleanupReceipt,
@@ -37,10 +35,6 @@ import {
 } from '../records'
 import type { PackageFailureReason, ReceiveLifecycleState } from '../state'
 import {
-  validateSealedZipLayoutPlan,
-  type SealedZipLayoutPlanV1,
-} from '../../zip-layout/layout'
-import {
   WORKSPACE_HANDLE_PACKAGE_OBJECT,
   type PackageTemporaryCleanupEvidence,
 } from './contracts'
@@ -56,8 +50,8 @@ export class WorkspaceArtifactStages {
   async readRetainedPackage(): Promise<PackagedArtifactV1> {
     const state = await this.runtime.lifecycle()
     let packageDigest: string | undefined
-    if (state.kind === 'waiting-to-save' ||
-        (state.kind === 'download-started' && state.attemptKind === 'workspace')) {
+    if (state.kind === 'waiting-to-save' || state.kind === 'artifact-sealed' ||
+        ((state.kind === 'download-started' || state.kind === 'handing-off') && state.attemptKind === 'workspace')) {
       packageDigest = state.packageDigest
     }
     if (packageDigest === undefined) {
@@ -92,7 +86,6 @@ export class WorkspaceArtifactStages {
     readonly generations: readonly AuthenticatedGenerationReference[]
     readonly entries: readonly MaterializedManifestEntry[]
     readonly checkpoints: FinalCheckpointReader
-    readonly preparation?: SealedWorkspaceZipPreparationV1
   }): Promise<Readonly<{
     manifest: MaterializedManifestV1
     receipt: WorkspaceSealReceiptV1
@@ -100,21 +93,15 @@ export class WorkspaceArtifactStages {
   }>> {
     const state = await this.runtime.lifecycle()
     if (state.kind !== 'receiving') throw new TypeError('materialization seal requires receiving state')
-    const preparationBinding: PreparationBinding = input.preparation === undefined
-      ? Object.freeze({ kind: 'absent' })
-      : Object.freeze({ kind: 'present', preparationDigest: input.preparation.manifest.digest })
-    if ((this.runtime.intent.plan.preparation === 'exact-zip') !== (input.preparation !== undefined)) {
-      throw new TypeError('materialization preparation binding disagrees with the receive intent')
-    }
+
     const manifest = await sealMaterializedManifest({
       operationId: this.runtime.intent.operationId,
       receiveIntentDigest: this.runtime.intent.digest,
       materializationBindingDigest: this.runtime.intent.plan.workspace.digest,
-      preparationBinding,
       generations: input.generations,
       entries: input.entries,
       checkpoints: input.checkpoints,
-      ...(input.preparation === undefined ? {} : { preparation: input.preparation.manifest }),
+
     })
     const pages = await createMaterializedManifestPages(manifest)
     const rawReceipt = await createRawWorkspaceReceipt({
@@ -134,7 +121,6 @@ export class WorkspaceArtifactStages {
       operationId: this.runtime.intent.operationId,
       receiveIntentDigest: this.runtime.intent.digest,
       workspaceBindingDigest: this.runtime.intent.plan.workspace.digest,
-      preparationBinding,
       materializedManifestDigest: manifest.digest,
       generationTableDigest: await materializedGenerationTableDigest(manifest.generations),
       artifactVersion: this.runtime.intent.artifact.version,
@@ -274,7 +260,6 @@ export class WorkspaceArtifactStages {
     readonly sealedMaterialization: SealedMaterializationV1
     readonly materializedManifest: MaterializedManifestV1
     readonly artifactVerification: ArtifactVerificationReceiptV1
-    readonly zipLayout?: SealedZipLayoutPlanV1
   }): Promise<Readonly<{
     receipt: PackageReceiptV1
     package: PackagedArtifactV1
@@ -282,7 +267,10 @@ export class WorkspaceArtifactStages {
   }>> {
     const state = await this.runtime.lifecycle()
     const verification = await validateArtifactVerificationReceipt(input.artifactVerification)
-    if (state.kind !== 'packaging' ||
+    const originalPromotion = verification.kind === 'original-file-promotion' &&
+      (state.kind === 'materialization-sealed' || state.kind === 'resumable-package')
+    if ((!originalPromotion && state.kind !== 'packaging') ||
+        !('sealedMaterializationDigest' in state) ||
         state.sealedMaterializationDigest !== input.sealedMaterialization.digest ||
         input.sealedMaterialization.operationId !== this.runtime.intent.operationId ||
         input.sealedMaterialization.receiveIntentDigest !== this.runtime.intent.digest ||
@@ -290,10 +278,10 @@ export class WorkspaceArtifactStages {
         verification.operationId !== this.runtime.intent.operationId ||
         verification.receiveIntentDigest !== this.runtime.intent.digest ||
         verification.sealedMaterializationDigest !== input.sealedMaterialization.digest ||
-        state.packageTempObjectId !== verification.packageOwnedObjectId) {
+        (state.kind === 'packaging' && state.packageTempObjectId !== verification.packageOwnedObjectId)) {
       throw new TypeError('package proof escaped its active allocation')
     }
-    await this.#verifyPackageArtifact(input.materializedManifest, verification, input.zipLayout)
+    await this.#verifyPackageArtifact(input.materializedManifest, verification)
     const packaged = await sealPackagedArtifact({
       operationId: this.runtime.intent.operationId,
       receiveIntentDigest: this.runtime.intent.digest,
@@ -346,7 +334,6 @@ export class WorkspaceArtifactStages {
       name: 'receive.waiting_to_save',
       operation_id: this.runtime.intent.operationId,
       package_digest: packaged.digest,
-      expires_at_ms: waiting.expiresAt,
     })
     return Object.freeze({ receipt, package: packaged, state: waiting })
   }
@@ -356,34 +343,17 @@ export class WorkspaceArtifactStages {
   async #verifyPackageArtifact(
     manifest: MaterializedManifestV1,
     verification: ArtifactVerificationReceiptV1,
-    zipLayout: SealedZipLayoutPlanV1 | undefined,
   ): Promise<void> {
     if (manifest.operationId !== this.runtime.intent.operationId ||
         manifest.receiveIntentDigest !== this.runtime.intent.digest ||
         await canonicalDigest(manifest.canonicalBytes) !== manifest.digest) {
       throw new TypeError('package materialized manifest is not the sealed authority')
     }
-    if (this.runtime.intent.artifact.kind === 'zip-archive') {
-      if (verification.kind !== 'zip-writer' || zipLayout === undefined) {
-        throw new TypeError('ZIP package lacks its writer and layout proof')
-      }
-      const layout = await validateSealedZipLayoutPlan(zipLayout)
-      if (layout.receiveIntentDigest !== this.runtime.intent.digest ||
-          layout.artifactDigest !== this.runtime.intent.artifact.digest ||
-          layout.evidence.kind !== 'prepared' ||
-          manifest.preparationBinding.kind !== 'present' ||
-          layout.evidence.preparationManifestDigest !== manifest.preparationBinding.preparationDigest ||
-          verification.layoutDigest !== layout.digest ||
-          verification.exactBytes !== layout.exactArchiveBytes) {
-        throw new TypeError('ZIP package observations disagree with the sealed layout')
-      }
-      return
-    }
     const entry = manifest.entries[0]
-    if (verification.kind !== 'original-file-promotion' || zipLayout !== undefined ||
+    if (verification.kind !== 'original-file-promotion' || this.runtime.intent.artifact.kind !== 'original-file' ||
         manifest.entries.length !== 1 || entry?.kind !== 'file' ||
-        manifest.preparationBinding.kind !== 'absent' ||
         verification.layoutDigest !== this.runtime.intent.artifact.digest ||
+        verification.packageOwnedObjectId !== entry.ownedObjectId ||
         verification.exactBytes !== entry.exactSize ||
         verification.finalCheckpointDigest !== entry.checkpoint.recordDigest ||
         verification.finalCheckpointGeneration !== entry.checkpoint.checkpointGeneration) {

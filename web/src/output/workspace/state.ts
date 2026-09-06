@@ -1,7 +1,6 @@
 import type { MaterializationPlan } from '../../transfer/intent'
 import { snapshotIdentity } from './canonical'
 
-export const STABLE_RETENTION_MILLISECONDS = 86_400_000
 const MAXIMUM_RECOVERY_SELECTION_VALUE = 0xffff_ffff_ffff_ffffn
 
 export type PlanKind = MaterializationPlan['kind']
@@ -127,8 +126,18 @@ export type ReceiveLifecycleState =
       completedFileCount: bigint
       completedBytes: bigint
       selectionFacts: RecoverySelectionFacts
-      expiresAt: number
       partialReceiptDigest?: string
+    }>
+  | Readonly<LifecycleStateBase & {
+      kind: 'resumable-receive'
+      payloadKind: 'opfs-zip'
+      objectId: string
+      checkpointGeneration: bigint
+      occupiedBytes: bigint
+      completedFileCount: bigint
+      completedBytes: bigint
+      discoveryComplete: boolean
+      pauseReason?: 'storage-pressure'
     }>
   | Readonly<LifecycleStateBase & {
       kind: 'resumable-receive'
@@ -137,7 +146,6 @@ export type ReceiveLifecycleState =
       safeSelectedPayloadBytes: bigint
       committedArchiveLength: bigint
       checkpointPhase: DirectZipCheckpointPhase
-      expiresAt: number
     }>
   | Readonly<LifecycleStateBase & { kind: 'finalizing-tree'; activeLeaseId: string }>
   | Readonly<LifecycleStateBase & { kind: 'committing-atomic'; activeLeaseId: string }>
@@ -155,10 +163,9 @@ export type ReceiveLifecycleState =
       kind: 'resumable-package'
       sealedMaterializationDigest: string
       tempCleanupProofDigest: string
-      expiresAt: number
     }>
   | Readonly<LifecycleStateBase & { kind: 'artifact-sealed'; packageDigest: string }>
-  | Readonly<LifecycleStateBase & { kind: 'waiting-to-save'; packageDigest: string; expiresAt: number }>
+  | Readonly<LifecycleStateBase & { kind: 'waiting-to-save'; packageDigest: string }>
   | Readonly<LifecycleStateBase & {
       kind: 'publishing-managed'
       activeLeaseId: string
@@ -171,7 +178,6 @@ export type ReceiveLifecycleState =
       attemptKind: 'workspace'
       attemptId: string
       packageDigest: string
-      retainedDeadline: number
     }>
   | Readonly<LifecycleStateBase & {
       kind: 'handing-off'
@@ -189,7 +195,6 @@ export type ReceiveLifecycleState =
       attemptKind: 'workspace'
       attemptId: string
       packageDigest: string
-      retryableUntil: number
     }>
   | Readonly<LifecycleStateBase & {
       kind: 'download-started'
@@ -224,7 +229,6 @@ export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & {
       kind: RecoveryGateKind
       recoveryGateDigest: string
-      expiresAt: number
     }>
 
 type StatePayload<T> = T extends LifecycleStateBase
@@ -297,14 +301,6 @@ export function snapshotRecoverySelectionFacts(
   })
 }
 
-export function stableDeadline(nowMilliseconds: number): number {
-  if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0 ||
-      nowMilliseconds > Number.MAX_SAFE_INTEGER - STABLE_RETENTION_MILLISECONDS) {
-    throw new TypeError('stable-state clock cannot represent the retention deadline')
-  }
-  return nowMilliseconds + STABLE_RETENTION_MILLISECONDS
-}
-
 export function receiveStateByte(state: ReceiveLifecycleState): ReceiveStateByte {
   switch (state.kind) {
     case 'intent-frozen': return RECEIVE_STATE_INTENT_FROZEN
@@ -333,20 +329,10 @@ export function receiveStateByte(state: ReceiveLifecycleState): ReceiveStateByte
   }
 }
 
-export function lifecycleDeadline(state: ReceiveLifecycleState): number | undefined {
-  switch (state.kind) {
-    case 'resumable-receive':
-    case 'resumable-package':
-    case 'waiting-to-save':
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required':
-      return state.expiresAt
-    case 'download-started':
-      return state.attemptKind === 'workspace' ? state.retryableUntil : undefined
-    default:
-      return undefined
-  }
+export function lifecycleDeadline(): number | undefined {
+  // Neither unfinished work nor browser handoff proves a saved external copy.
+  // Only explicit deletion or verified publication may retire retained payload.
+  return undefined
 }
 
 export function isTerminalLifecycleState(state: ReceiveLifecycleState): boolean {

@@ -3,6 +3,7 @@ import {
   startFSAParentPicker,
 } from '../output/capability/acquisition'
 import type { BrowserCapabilityRuntime } from '../output/capability/contract'
+import { probeNativeObjectSupport, type NativeSupportRuntime } from '../output/origin-private/native-object/support'
 import {
   createOutputFailureBinding,
   type LocalOutputOperationFailureDiagnosticsPort,
@@ -86,6 +87,8 @@ export function createBrowserReceiveComposition(
   options: BrowserReceiveCompositionOptions = {},
 ): V2ReceiveCompositionPort {
   let installedDirectZip: InstalledBrowserDirectZipRoute | undefined
+  let nativeObjectSupported = false
+  let nativeSupportProbe: Promise<boolean> | undefined
   const composition: V2ReceiveCompositionPort = {
     retained: Object.freeze({
       list: (signal: AbortSignal) => listBrowserRetainedOperations(windowPort, options, signal),
@@ -93,7 +96,10 @@ export function createBrowserReceiveComposition(
         readBrowserCompatibleNameRepairSummary(options, operationId, signal),
     }),
     environment: async (signal) => {
-      const registry = await inspectBrowserRouteRegistry(windowPort, options.directZip, signal)
+      signal.throwIfAborted()
+      nativeSupportProbe ??= probeNativeObjectSupport(windowPort as unknown as NativeSupportRuntime)
+      nativeObjectSupported = await nativeSupportProbe
+      const registry = await inspectBrowserRouteRegistry(windowPort, options.directZip, nativeObjectSupported, signal)
       installedDirectZip = registry.installedDirectZip
       return probeBrowserEnvironment(registry.runtime, {
         ...(registry.directZipTarget === null ? {} : { targets: [registry.directZipTarget] }),
@@ -113,6 +119,7 @@ export function createBrowserReceiveComposition(
       options.outputTrace,
       options.localOutputFailures,
       installedDirectZip,
+      nativeObjectSupported,
       failures,
     ),
   }
@@ -122,6 +129,7 @@ export function createBrowserReceiveComposition(
 async function inspectBrowserRouteRegistry(
   windowPort: BrowserReceiveWindow,
   directZip: BrowserDirectZipCompositionPort | undefined,
+  nativeObjectSupported: boolean,
   signal: AbortSignal,
 ): Promise<InstalledBrowserRouteRegistry> {
   signal.throwIfAborted()
@@ -132,7 +140,7 @@ async function inspectBrowserRouteRegistry(
   const handoffFacts = probeBrowserHandoffCapabilities(
     windowPort as unknown as BrowserHandoffCapabilityRuntime,
   )
-  const hasWorkspaceRoute = hasRepository && hasLocks && hasWorkspaceDirectory &&
+  const hasWorkspaceRoute = nativeObjectSupported && hasRepository && hasLocks && hasWorkspaceDirectory &&
     handoffFacts.supportsWorkspacePackage
   const hasPortableRoute = hasRepository && handoffFacts.supportsPortableArtifact
   const runtime: BrowserCapabilityRuntime = Object.freeze({
@@ -173,6 +181,7 @@ async function inspectBrowserRouteRegistry(
 
 function inspectBrowserRouteRegistrySynchronously(
   windowPort: BrowserReceiveWindow,
+  nativeObjectSupported: boolean,
 ): InstalledBrowserRouteRegistry {
   const hasRepository = typeof windowPort.indexedDB?.open === 'function'
   const hasLocks = typeof windowPort.navigator.locks?.request === 'function'
@@ -188,7 +197,7 @@ function inspectBrowserRouteRegistrySynchronously(
     browserHandoff: windowPort as unknown as BrowserHandoffCapabilityRuntime,
   })
   const environment = probeBrowserEnvironment(runtime)
-  const hasWorkspaceRoute = hasRepository && hasLocks && hasWorkspaceDirectory &&
+  const hasWorkspaceRoute = nativeObjectSupported && hasRepository && hasLocks && hasWorkspaceDirectory &&
     handoffFacts.supportsWorkspacePackage
   const hasPortableRoute = hasRepository && handoffFacts.supportsPortableArtifact
   return Object.freeze({
@@ -263,9 +272,10 @@ function startProductionAuthority(
   outputTrace: BrowserReceiveCompositionOptions['outputTrace'],
   localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined,
   installedDirectZip: InstalledBrowserDirectZipRoute | undefined,
+  nativeObjectSupported: boolean,
   failures?: OutputFailureSinks,
 ): V2ArtifactPresentationAuthority {
-  const registry = inspectBrowserRouteRegistrySynchronously(windowPort)
+  const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)
   switch (offered.route.kind) {
     case 'direct-tree': {

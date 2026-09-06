@@ -1,7 +1,6 @@
 import {
   lifecycleDeadline,
   nextReceiveLifecycleState,
-  stableDeadline,
   type NeedsAttentionReason,
   type PlanKind,
   type ReceiveLifecycleState,
@@ -128,7 +127,7 @@ export function recoverAbandonedOperation(
 ): RecoveryReduction {
   requireRecoveryClock(context.nowMilliseconds)
   assertDurableRecoveryPlan(state, context.planKind)
-  const deadline = lifecycleDeadline(state)
+  const deadline = lifecycleDeadline()
   let reduction: RecoveryReduction
   if (deadline !== undefined && context.nowMilliseconds >= deadline) {
     reduction = Object.freeze({
@@ -162,16 +161,16 @@ function recoverUnexpired(
   }
   switch (state.kind) {
     case 'receiving': return recoverReceiving(state, observation, context)
-    case 'finalizing-tree': return recoverFinalizingTree(state, observation, context)
+    case 'finalizing-tree': return recoverFinalizingTree(state, observation)
     case 'committing-atomic': return recoverAtomicCommit(state, observation)
-    case 'preparing': return recoverPreparation(state, observation, context.nowMilliseconds)
+    case 'preparing': return recoverPreparation(state, observation)
     case 'materialization-sealed':
-    case 'packaging': return recoverPackaging(state, observation, context.nowMilliseconds)
-    case 'artifact-sealed': return recoverArtifact(state, observation, context.nowMilliseconds)
+    case 'packaging': return recoverPackaging(state, observation)
+    case 'artifact-sealed': return recoverArtifact(state, observation)
     case 'publishing-managed':
-      return recoverPublication(state, observation, context.nowMilliseconds)
-    case 'handing-off': return recoverHandoff(state, observation, context.nowMilliseconds)
-    case 'download-started': return recoverDownload(state, observation, context.nowMilliseconds)
+      return recoverPublication(state, observation)
+    case 'handing-off': return recoverHandoff(state, observation)
+    case 'download-started': return recoverDownload(state, observation)
     case 'published': return recoverPublished(state, observation)
     default:
       throw new TypeError(`state ${state.kind} is not an abandoned active operation`)
@@ -199,13 +198,12 @@ function recoverReceiving(
       : 'cleanup-unknown'
     return attentionReduction(state, reason, lastDigest(observation))
   }
-  return reduction(resumableReceive(state, observation, context.nowMilliseconds), 'resume-receive')
+  return reduction(resumableReceive(state, observation), 'resume-receive')
 }
 
 function recoverFinalizingTree(
   state: Extract<ReceiveLifecycleState, { kind: 'finalizing-tree' }>,
   observation: AbandonedOperationObservation,
-  context: RecoveryContext,
 ): RecoveryReduction {
   if (observation.kind !== 'tree-finalized') {
     return attentionReduction(state, 'target-ownership-unknown', lastDigest(observation))
@@ -233,7 +231,6 @@ function recoverFinalizingTree(
     completedFileCount: observation.successCount,
     completedBytes: observation.completedBytes,
     selectionFacts: observation.selectionFacts,
-    expiresAt: stableDeadline(context.nowMilliseconds),
     partialReceiptDigest: observation.receiptDigest,
   }), 'resume-receive')
 }
@@ -262,10 +259,9 @@ function recoverAtomicCommit(
 function recoverPreparation(
   state: Extract<ReceiveLifecycleState, { kind: 'preparing' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
   if (observation.kind === 'verified-receive') {
-    return reduction(resumableReceive(state, observation, nowMilliseconds), 'resume-receive')
+    return reduction(resumableReceive(state, observation), 'resume-receive')
   }
   if (observation.kind !== 'restart-preparation') {
     return attentionReduction(state, 'cleanup-unknown', lastDigest(observation))
@@ -279,7 +275,6 @@ function recoverPreparation(
 function recoverPackaging(
   state: Extract<ReceiveLifecycleState, { kind: 'materialization-sealed' | 'packaging' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
   if (observation.kind !== 'verified-package' ||
       observation.sealedMaterializationDigest !== state.sealedMaterializationDigest) {
@@ -289,14 +284,12 @@ function recoverPackaging(
     kind: 'resumable-package',
     sealedMaterializationDigest: observation.sealedMaterializationDigest,
     tempCleanupProofDigest: observation.tempCleanupProofDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   }), 'resume-package')
 }
 
 function recoverArtifact(
   state: Extract<ReceiveLifecycleState, { kind: 'artifact-sealed' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
   if (observation.kind !== 'verified-artifact' ||
       observation.packageDigest !== state.packageDigest) {
@@ -305,14 +298,12 @@ function recoverArtifact(
   return reduction(nextReceiveLifecycleState(state, {
     kind: 'waiting-to-save',
     packageDigest: observation.packageDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   }), 'waiting-to-save')
 }
 
 function recoverPublication(
   state: Extract<ReceiveLifecycleState, { kind: 'publishing-managed' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
   if (observation.kind !== 'publication' || observation.outcome === 'unknown') {
     return attentionReduction(state, 'publication-unknown', lastDigest(observation))
@@ -327,26 +318,16 @@ function recoverPublication(
   return reduction(nextReceiveLifecycleState(state, {
     kind: 'waiting-to-save',
     packageDigest: state.packageDigest,
-    expiresAt: stableDeadline(nowMilliseconds),
   }), 'waiting-to-save')
 }
 
 function recoverHandoff(
   state: Extract<ReceiveLifecycleState, { kind: 'handing-off' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
   if (state.attemptKind !== 'workspace' || observation.kind !== 'handoff' ||
-      observation.outcome === 'unknown' || state.packageDigest === undefined ||
-      state.retainedDeadline === undefined) {
+      observation.outcome === 'unknown' || state.packageDigest === undefined) {
     return attentionReduction(state, 'publication-unknown', lastDigest(observation))
-  }
-  if (nowMilliseconds >= state.retainedDeadline) {
-    return reduction(expiredState(
-      state,
-      state.retainedDeadline,
-      observation.expiryReceiptDigest,
-    ), 'expired')
   }
   const payload = observation.outcome === 'started'
     ? {
@@ -354,12 +335,10 @@ function recoverHandoff(
         attemptKind: 'workspace' as const,
         attemptId: state.attemptId,
         packageDigest: state.packageDigest,
-        retryableUntil: state.retainedDeadline,
       }
     : {
         kind: 'waiting-to-save' as const,
         packageDigest: state.packageDigest,
-        expiresAt: state.retainedDeadline,
       }
   return reduction(
     nextReceiveLifecycleState(state, payload),
@@ -370,18 +349,9 @@ function recoverHandoff(
 function recoverDownload(
   state: Extract<ReceiveLifecycleState, { kind: 'download-started' }>,
   observation: AbandonedOperationObservation,
-  nowMilliseconds: number,
 ): RecoveryReduction {
-  if (state.attemptKind !== 'workspace' || observation.kind !== 'verified-download' ||
-      state.retryableUntil === undefined) {
+  if (state.attemptKind !== 'workspace' || observation.kind !== 'verified-download') {
     return attentionReduction(state, 'cleanup-unknown', lastDigest(observation))
-  }
-  if (nowMilliseconds >= state.retryableUntil) {
-    return reduction(expiredState(
-      state,
-      state.retryableUntil,
-      observation.expiryReceiptDigest,
-    ), 'expired')
   }
   return reduction(state, 'download-started')
 }
@@ -409,7 +379,6 @@ function recoverPublished(
 function resumableReceive(
   state: ReceiveLifecycleState,
   observation: Extract<AbandonedOperationObservation, { kind: 'verified-receive' }>,
-  nowMilliseconds: number,
 ): ReceiveLifecycleState {
   return nextReceiveLifecycleState(state, {
     kind: 'resumable-receive',
@@ -418,7 +387,6 @@ function resumableReceive(
     completedFileCount: observation.completedFileCount,
     completedBytes: observation.completedBytes,
     selectionFacts: observation.selectionFacts,
-    expiresAt: stableDeadline(nowMilliseconds),
     ...(observation.partialReceiptDigest === undefined
       ? {}
       : { partialReceiptDigest: observation.partialReceiptDigest }),

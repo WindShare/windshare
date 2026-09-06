@@ -14,6 +14,10 @@ import {
   RECEIVE_STATE_PARTIAL_DIRECTORY,
   RECEIVE_STATE_PUBLISHED,
   RECEIVE_STATE_RECEIVING,
+  RECEIVE_STATE_MATERIALIZATION_SEALED,
+  RECEIVE_STATE_PACKAGING,
+  RECEIVE_STATE_ARTIFACT_SEALED,
+  RECEIVE_STATE_HANDING_OFF,
   RECEIVE_STATE_RESUMABLE_PACKAGE,
   RECEIVE_STATE_RESUMABLE_RECEIVE,
   RECEIVE_STATE_WAITING_TO_SAVE,
@@ -22,6 +26,9 @@ import {
 } from '../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../workspace/state-codec'
 import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-legacy-cleanup'
+import { readSourceRevisionFailures } from '../resume/source-revision-failures'
+import { readProgressiveZipRecoveryRequirement } from '../resume/progressive-checkpoint'
+import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoint'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type { RecoverySummary } from '../file-system-access/recovery-summary'
 import { readFSARecoverySummary } from '../file-system-access/recovery-summary'
@@ -51,6 +58,10 @@ import {
 const RESUME_INVENTORY_BOUND = 1_048_576
 const INVENTORIED_STATE_BYTES = Object.freeze([
   RECEIVE_STATE_RECEIVING,
+  RECEIVE_STATE_MATERIALIZATION_SEALED,
+  RECEIVE_STATE_PACKAGING,
+  RECEIVE_STATE_ARTIFACT_SEALED,
+  RECEIVE_STATE_HANDING_OFF,
   RECEIVE_STATE_RESUMABLE_RECEIVE,
   RECEIVE_STATE_RESUMABLE_PACKAGE,
   RECEIVE_STATE_WAITING_TO_SAVE,
@@ -144,6 +155,34 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     }
     states.sort((left, right) => left.operationId.localeCompare(right.operationId))
     return Object.freeze(states)
+  }
+
+  async readProgressiveRequirement(lifecycle: ReceiveLifecycleState) {
+    if (lifecycle.kind !== 'receiving' && lifecycle.kind !== 'resumable-receive') return undefined
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const stored = await requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(
+      operationRecordId(lifecycle.operationId, RECEIVE_RECORD_OPERATION),
+    ))
+    await transactionCompletion(transaction)
+    if (stored === undefined) throw new TypeError('Recovery requires its persisted receive operation')
+    const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
+    if (operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) throw new TypeError('Recovery intent mismatch')
+    return operation.receiveIntent.artifact.kind === 'original-file'
+      ? readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+      : readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+  }
+
+  async readSourceRevisionFailures(lifecycle: ReceiveLifecycleState) {
+    if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'opfs-zip') return undefined
+    const transaction = this.#database.transaction(INDEXEDDB_RECEIVE_RECORD_STORE, 'readonly')
+    const stored = await requestResult(transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).get(
+      operationRecordId(lifecycle.operationId, RECEIVE_RECORD_OPERATION),
+    ))
+    await transactionCompletion(transaction)
+    if (stored === undefined) throw new TypeError('Revision failure projection requires its receive operation')
+    const operation = await decodeStoredReceiveOperation(stored as PersistedReceiveRecord)
+    if (operation.receiveIntent.digest !== lifecycle.receiveIntentDigest) throw new TypeError('Recovery intent mismatch')
+    return readSourceRevisionFailures(operation.receiveIntent, lifecycle, this.#databaseName)
   }
 
   async isCleanupOnly(operationId: string): Promise<boolean> {

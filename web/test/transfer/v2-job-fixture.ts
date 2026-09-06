@@ -14,6 +14,7 @@ import { DirectoryAdmissionLedger } from '../../src/transfer/directory-admission
 import {
   createDirectoryAdmissionScope,
   isolatedDirectorySettlement,
+  finalizedDirectorySettlement,
 } from '../../src/transfer/directory-admission'
 import { FaultScope, OutputFaultCode, outputFault } from '../../src/transfer/fault'
 import {
@@ -665,9 +666,6 @@ export function planAuthorityFixture(input: {
       const execution: DirectAtomicExecution = {
         planKind: 'direct-atomic',
         output,
-        ...(intent.artifact.kind === 'zip-archive'
-          ? { directories: await directoryOutput(intent, input.failDirectoryFinalizePath) }
-          : {}),
         settle: async ({ worker }) => {
           settlements.push(`direct-atomic:${worker.status}`)
           if (input.failSettlement === true) throw new Error('fixture settlement failure')
@@ -693,13 +691,19 @@ export function planAuthorityFixture(input: {
       }
       return Object.freeze({ kind: 'accepted', execution: workspaceExecution(intent) })
     },
-    prepareWorkspaceZip: async (intent, evidence) => {
+    openWorkspaceZip: async (intent) => {
       routes.push('workspace-then-publish')
-      preparations.push(evidence)
       if (input.rejectPreparation === true) {
         return Object.freeze({ kind: 'rejected', state: discardedState(intent) })
       }
-      const execution = workspaceExecution(intent)
+      const execution: WorkspaceExecution = {
+        ...workspaceExecution(intent),
+        directories: {
+          ...await directoryOutput(intent, input.failDirectoryFinalizePath),
+          finalizeDirectory: async admission => finalizedDirectorySettlement(admission),
+        },
+        discoveryComplete: async () => {},
+      }
       return Object.freeze({ kind: 'accepted', execution })
     },
     preparePortable: async (intent, evidence) => {
@@ -787,6 +791,8 @@ export function transferJobFixture(input: {
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
   readonly onProgress?: ConstructorParameters<typeof TransferJob>[0]['onProgress']
   readonly maximumConcurrentFiles?: number
+  readonly maximumDirectoryAdmissions?: number
+  readonly chunkSize?: number
   readonly outputSettlementTimeoutMilliseconds?: number
   readonly outputSettlementDeadline?: ConstructorParameters<typeof TransferJob>[0]['outputSettlementDeadline']
   readonly revisionCapacity?: V2RevisionCapacityPolicyOptions
@@ -796,7 +802,7 @@ export function transferJobFixture(input: {
       shareInstance: identity(1),
       syntheticRoot: identity(2),
       syntheticRootId: identityText(2),
-      chunkSize: 2,
+      chunkSize: input.chunkSize ?? 2,
     } as never,
     catalog: input.catalog,
     selection: input.selection,
@@ -821,6 +827,7 @@ export function transferJobFixture(input: {
     }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+    ...(input.maximumDirectoryAdmissions === undefined ? {} : { maximumDirectoryAdmissions: input.maximumDirectoryAdmissions }),
     ...(input.maximumConcurrentFiles === undefined
       ? {}
       : { maximumConcurrentFiles: input.maximumConcurrentFiles }),

@@ -1,3 +1,6 @@
+import { IndexedDbTaskCheckpointStore } from './task-checkpoint/indexeddb-store'
+import { withArtifactCleanup } from './export-readers'
+import { forgetDeletedWorkspaceCapacity } from './admission-authority'
 import { encodeBase64Url } from '../../crypto/bytes'
 import {
   validateReceiveIntent,
@@ -100,7 +103,11 @@ export async function openOriginPrivateWorkspaceNamespace(input: {
   let namespace: OriginPrivateWorkspaceNamespace | undefined
   try {
     input.signal?.throwIfAborted()
-    const parent = await (input.storage ?? requireOriginPrivateStorage()).getDirectory()
+    const storage = input.storage ?? requireOriginPrivateStorage()
+    // A real task merits eviction protection; denial must not block an ordinary download.
+    await storage.persist?.().catch(() => false)
+    input.signal?.throwIfAborted()
+    const parent = await storage.getDirectory()
     const entryName = originPrivateWorkspaceActivationEntryName(candidate)
     if (await optionalDirectory(parent, entryName) !== undefined) {
       throw new TargetOwnershipUnknownError('namespace-create', intent.operationId)
@@ -243,6 +250,22 @@ export async function inspectOriginPrivateWorkspaceNamespace(input: {
 }
 
 export async function removeOriginPrivateWorkspaceNamespace(
+  namespace: OriginPrivateWorkspaceNamespace,
+  repository: ReceiveOperationRepository,
+): Promise<'removed' | 'already-absent'> {
+  return withArtifactCleanup(namespace.operationId, async () => {
+    const result = await removeVerifiedWorkspaceNamespace(namespace, repository)
+    // Physical deletion is authoritative even if the former writer lease has not
+    // expired yet. Revoking its account also fences any delayed reservation reply.
+    await forgetDeletedWorkspaceCapacity(namespace.operationId)
+    if (globalThis.indexedDB !== undefined) {
+      await IndexedDbTaskCheckpointStore.retireOperation(namespace.operationId)
+    }
+    return result
+  })
+}
+
+async function removeVerifiedWorkspaceNamespace(
   namespace: OriginPrivateWorkspaceNamespace,
   repository: ReceiveOperationRepository,
 ): Promise<'removed' | 'already-absent'> {

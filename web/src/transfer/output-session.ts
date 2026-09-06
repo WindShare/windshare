@@ -146,6 +146,9 @@ export interface DirectResumableZipExecution extends
 
 export interface WorkspaceExecution extends PlanExecutionBase<WorkspaceThenPublishPlan> {
   readonly planKind: 'workspace-then-publish'
+  readonly directories?: IncrementalDirectoryOutput
+  discoveryGeneration?(directoryId: string, generation: string, sourcePath: readonly string[], signal: AbortSignal): Promise<void>
+  discoveryComplete?(signal: AbortSignal): Promise<void>
   settle(
     request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
     signal: AbortSignal,
@@ -225,9 +228,8 @@ export interface V2PlanExecutionAuthority {
     evidence: ExactSingleFileEvidence,
     signal: AbortSignal,
   ): Promise<ExecutionAdmissionResult<WorkspaceExecution>>
-  prepareWorkspaceZip(
+  openWorkspaceZip(
     intent: ReceiveIntentForPlanArtifact<WorkspaceThenPublishPlan, ZipArchiveArtifact>,
-    evidence: ExactPreparationEvidence,
     signal: AbortSignal,
   ): Promise<PreparationExecutionResult<WorkspaceExecution>>
   preparePortable(

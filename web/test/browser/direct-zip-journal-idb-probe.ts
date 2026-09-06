@@ -408,7 +408,6 @@ export async function probeDirectZipJournalPromotion(databaseName: string) {
     const authorizationRequired = nextReceiveLifecycleState(resumable, {
       kind: 'authorization-required',
       recoveryGateDigest: gate.digest,
-      expiresAt: 86_400_002,
     })
     await repository.commitRecoveryLifecycle({
       fence: recoveryFence,
@@ -431,7 +430,6 @@ export async function probeDirectZipJournalPromotion(databaseName: string) {
       safeSelectedPayloadBytes: recoveredCheckpoint.committedSelectedPayloadBytes,
       committedArchiveLength: recoveredCheckpoint.committedArchiveLength,
       checkpointPhase: recoveredCheckpoint.phase,
-      expiresAt: 86_400_003,
     })
     await repository.promoteCandidate({
       fence: recoveryFence,
@@ -490,7 +488,6 @@ export async function probeDirectZipJournalPromotion(databaseName: string) {
       safeSelectedPayloadBytes: truncatedCheckpoint.committedSelectedPayloadBytes,
       committedArchiveLength: truncatedCheckpoint.committedArchiveLength,
       checkpointPhase: truncatedCheckpoint.phase,
-      expiresAt: 86_400_004,
     })
     await repository.retireCandidate({
       fence: truncateFence,
@@ -658,7 +655,6 @@ async function promoteFirstEpoch(input: Readonly<{
     safeSelectedPayloadBytes: promoted.committedSelectedPayloadBytes,
     committedArchiveLength: promoted.committedArchiveLength,
     checkpointPhase: promoted.phase,
-    expiresAt: 86_400_001,
   })
   await input.repository.promoteCandidate({
     fence: input.fence,

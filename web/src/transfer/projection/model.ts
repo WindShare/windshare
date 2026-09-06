@@ -87,11 +87,10 @@ export interface ProjectionMetrics {
   readonly byteCountLowerBound: bigint
 }
 
+/** Native OPFS recommendation costs; payload is already contained in the archive. */
 export interface WorkspaceCostObservationV1 {
   readonly version: 1
-  readonly rawBytes: bigint
-  readonly packageBytes: bigint
-  readonly centralDirectorySpoolBytes: bigint
+  readonly archiveBytes: bigint
   readonly durableMetadataBytes: bigint
   readonly peakOwnedBytes: bigint
 }

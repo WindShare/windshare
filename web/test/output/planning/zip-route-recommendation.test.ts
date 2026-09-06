@@ -74,12 +74,12 @@ describe('ZIP route recommendation policy V1', () => {
       kind: 'recommended', reason: 'workspace-within-reviewed-budget',
     })
     expect(actions.zip?.primary.choice.choiceId)
-      .toBe('RW0aXukzHVFiMjNEaoYb8qGKTN-AKAhw7u-Yi_-WsoQ')
+      .toBe('vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k')
     expect(actions.zip?.secondary?.choice.choiceId)
       .toBe('0dkx9vDTzvH7B7a9EUoJBOWLCWgmVwLoFH3jjRmfHFU')
     expect(actions.zip?.primary.sizeProjection).toMatchObject({
       raw: { kind: 'exact', bytes: 10n },
-      artifact: { kind: 'exact', bytes: workspaceCostObservation.packageBytes },
+      artifact: { kind: 'exact', bytes: workspaceCostObservation.archiveBytes },
     })
     expect(actions.zip?.secondary?.sizeProjection).toEqual({
       raw: { kind: 'exact', bytes: 10n },
@@ -102,16 +102,26 @@ describe('ZIP route recommendation policy V1', () => {
     })?.primary.route.kind).toBe('direct-resumable-zip')
   })
 
-  it('accumulates checked raw, ZIP, spool, metadata, and peak observations without a manifest', () => {
+  it('counts the one archive plus metadata without a retained raw copy or directory spool', () => {
     const observation = costObservation()
 
-    expect(observation).toMatchObject({ version: 1, rawBytes: 10n })
-    expect(observation.packageBytes).toBeGreaterThan(observation.rawBytes)
+    expect(Object.keys(observation).sort()).toEqual([
+      'archiveBytes', 'durableMetadataBytes', 'peakOwnedBytes', 'version',
+    ])
+    expect(observation.archiveBytes).toBeGreaterThan(10n)
     expect(observation.peakOwnedBytes).toBe(
-      observation.rawBytes + observation.packageBytes +
-      observation.centralDirectorySpoolBytes + observation.durableMetadataBytes,
+      observation.archiveBytes + observation.durableMetadataBytes,
     )
   })
+})
+
+it('keeps large ZIP64 recommendations available beyond the former workspace limits', () => {
+  const accumulator = new WorkspaceCostObservationAccumulatorV1()
+  const exactSize = 20n * 1024n ** 3n
+  accumulator.observe({ kind: 'file', path: ['large.bin'], exactSize })
+  const observation = accumulator.complete()
+  expect(observation.archiveBytes).toBeGreaterThan(exactSize)
+  expect(observation.peakOwnedBytes).toBe(observation.archiveBytes + observation.durableMetadataBytes)
 })
 
 function costObservation() {

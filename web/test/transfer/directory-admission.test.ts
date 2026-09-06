@@ -17,6 +17,7 @@ import {
   validateDirectoryAdmissionBinding,
   validateDirectorySettlement,
   verifyDirectoryAdmissionToken,
+  verifyDirectoryAdmissionReceipt,
   type CanonicalModifiedTime,
   type DirectoryAdmissionScope,
   type MaterializationDirectory,
@@ -74,6 +75,10 @@ describe('DirectoryAdmission v2 binding', () => {
       modifiedTime,
     }
     const child = await createDirectoryAdmission(SECRET, scope, childDirectory)
+    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, child)).toBe(true)
+    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, { ...child, parentToken: child.token })).toBe(false)
+    expect(await verifyDirectoryAdmissionReceipt(SECRET, scope, { ...child, path: snapshotMaterializationPath(['other']) })).toBe(false)
+    expect(await verifyDirectoryAdmissionReceipt(SECRET.slice().fill(1), scope, child)).toBe(false)
 
     expect(intent.digest).toBe('vhhExXaw0i8sWcgd8Payakwul9IpNWKlE1WyPkMc_M4')
     expect(root.token).toBe('qVfgMF4KQoXMTFpQu9G0syTxS8w5t9X6K5gnCJCYU6g')
@@ -126,7 +131,7 @@ describe('DirectoryAdmission v2 binding', () => {
   it('rejects prepared and original-file plans', async () => {
     const workspaceIntent = await workspaceIntentForOriginal()
     await expect(createDirectoryAdmissionScope(workspaceIntent))
-      .rejects.toThrow(/sealed manifest/u)
+      .rejects.toThrow(/Original files/u)
 
     const original = workspaceIntent.artifact
     if (original.kind !== 'original-file') throw new Error('fixture artifact mismatch')

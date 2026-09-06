@@ -19,15 +19,7 @@ import {
   type MaterializedManifestV1,
 } from '../workspace/manifest'
 import {
-  canonicalSealedZipLayoutStorageBytes,
-  createPreparationManifestPages,
-  decodePreparationManifestV1,
-  validateWorkspaceZipPreparation,
-  type SealedWorkspaceZipPreparationV1,
-} from '../workspace/preparation'
-import {
   RECEIVE_RECORD_MATERIALIZED_MANIFEST,
-  RECEIVE_RECORD_PREPARATION,
   RECEIVE_RECORD_RECEIPT,
   RECEIVE_RECORD_SEALED_MATERIALIZATION,
   validateManifestPageRecord,
@@ -42,80 +34,22 @@ import {
 import type { ReceiveOperationRepository } from '../workspace/repository'
 import type { ReceiveLifecycleState } from '../workspace/state'
 import {
-  WORKSPACE_HANDLE_ZIP_LAYOUT,
-  workspaceZipLayoutHandleId,
   type AdmittedWorkspaceContent,
   type WorkspaceOperationStages,
 } from '../workspace/stages'
 
+export type WorkspacePackageRecoveryLifecycle = Extract<ReceiveLifecycleState, {
+  kind: 'resumable-package' | 'materialization-sealed' | 'packaging'
+}>
+
 export interface ReopenedWorkspacePackageContinuation {
   readonly sealedMaterialization: SealedMaterializationV1
   readonly materializedManifest: MaterializedManifestV1
-  readonly preparation?: SealedWorkspaceZipPreparationV1
   execute(signal: AbortSignal): Promise<OriginPrivatePackageAttemptResult>
 }
 
 export type OpenOriginPrivatePackageContinuation =
   typeof openOriginPrivatePackageContinuationBackend
-
-export async function reopenWorkspacePreparationAuthority(input: {
-  readonly repository: ReceiveOperationRepository
-  readonly intent: ReceiveIntent
-  readonly admissionReceipt: PreparationAdmissionReceiptV1
-}): Promise<SealedWorkspaceZipPreparationV1 | undefined> {
-  if (input.intent.plan.kind !== 'workspace-then-publish') {
-    throw new TypeError('workspace preparation reopen requires a workspace intent')
-  }
-  if (input.intent.plan.preparation !== 'exact-zip') {
-    if (input.admissionReceipt.preparationManifestDigest !== undefined ||
-        input.admissionReceipt.sealedZipLayoutDigest !== undefined) {
-      throw new TypeError('unprepared workspace retained ZIP preparation evidence')
-    }
-    return undefined
-  }
-  const manifestDigest = input.admissionReceipt.preparationManifestDigest
-  const layoutDigest = input.admissionReceipt.sealedZipLayoutDigest
-  if (manifestDigest === undefined || layoutDigest === undefined) {
-    throw new TypeError('workspace ZIP admission omitted preparation authority')
-  }
-  const records = await input.repository.listRecords(
-    input.intent.operationId,
-    RECEIVE_RECORD_PREPARATION,
-  )
-  if (records.length !== 1) throw new TypeError('workspace preparation record is ambiguous')
-  const record = await validatePersistedReceiveRecord(records[0]!)
-  const manifest = await decodePreparationManifestV1(record.canonicalBytes, input.intent)
-  if (record.operationId !== input.intent.operationId || record.digest !== manifest.digest ||
-      manifest.digest !== manifestDigest) {
-    throw new TypeError('workspace preparation record escaped its admission receipt')
-  }
-  const pages = await readExactManifestPages(
-    input.repository,
-    input.intent.operationId,
-    RECEIVE_RECORD_PREPARATION,
-    await createPreparationManifestPages(manifest),
-  )
-  const handleId = workspaceZipLayoutHandleId(input.intent.operationId, manifest.preparationId)
-  const layoutHandle = await input.repository.readHandle(handleId)
-  if (layoutHandle === undefined || layoutHandle.id !== handleId ||
-      layoutHandle.operationId !== input.intent.operationId ||
-      layoutHandle.kind !== WORKSPACE_HANDLE_ZIP_LAYOUT ||
-      layoutHandle.authorityRef !== input.intent.plan.workspace.repositoryRef ||
-      layoutHandle.ownedObjectId !== undefined || typeof layoutHandle.handle !== 'object' ||
-      layoutHandle.handle === null) {
-    throw new TypeError('workspace ZIP layout handle authority is missing')
-  }
-  const zipLayout = layoutHandle.handle as SealedWorkspaceZipPreparationV1['zipLayout']
-  if (zipLayout.digest !== layoutDigest) {
-    throw new TypeError('workspace ZIP layout escaped its admission receipt')
-  }
-  return validateWorkspaceZipPreparation({
-    manifest,
-    pages,
-    zipLayout,
-    zipLayoutCanonicalBytes: canonicalSealedZipLayoutStorageBytes(zipLayout),
-  }, input.intent)
-}
 
 export async function readWorkspacePackageCleanupAuthority(input: {
   readonly repository: ReceiveOperationRepository
@@ -141,17 +75,18 @@ export async function readWorkspacePackageCleanupAuthority(input: {
 export async function reopenWorkspacePackageContinuation(input: {
   readonly repository: ReceiveOperationRepository
   readonly intent: ReceiveIntent
-  readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-package' }>
+  readonly lifecycle: WorkspacePackageRecoveryLifecycle
   readonly namespace: OriginPrivateWorkspaceNamespace
   readonly stages: WorkspaceOperationStages
   readonly admitted: AdmittedWorkspaceContent
   readonly admissionReceipt: PreparationAdmissionReceiptV1
-  readonly cleanupReceipt: PackageTemporaryCleanupReceiptV1
+  readonly cleanupReceipt?: PackageTemporaryCleanupReceiptV1
   readonly checkpointDatabaseName?: string
   readonly openBackend?: OpenOriginPrivatePackageContinuation
   readonly diagnostics?: OutputDiagnosticsPorts
 }): Promise<Readonly<{
   backend: OriginPrivatePackageContinuationBackend
+  lifecycle: WorkspacePackageRecoveryLifecycle
   continuation: ReopenedWorkspacePackageContinuation
 }>> {
   if (input.intent.plan.kind !== 'workspace-then-publish') {
@@ -174,16 +109,11 @@ export async function reopenWorkspacePackageContinuation(input: {
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
   try {
-    const preparation = await reopenWorkspacePreparationAuthority({
-      repository: input.repository,
-      intent: input.intent,
-      admissionReceipt: input.admissionReceipt,
-    })
     const seal = await readSealedMaterialization(input)
-    const manifest = await readMaterializedManifest(input, backend, seal, preparation)
+    const manifest = await readMaterializedManifest(input, backend, seal)
     await validateSealReceiptAndObjects(input, seal, manifest)
     await backend.verifyManifestOwnership(manifest)
-    await backend.verifyTemporaryCleanup(input.cleanupReceipt)
+    const lifecycle = await recoverPackageCut(input, backend)
     let executed = false
     const workflow = new OriginPrivatePackageWorkflow({
       stages: input.stages,
@@ -193,23 +123,11 @@ export async function reopenWorkspacePackageContinuation(input: {
     const continuation: ReopenedWorkspacePackageContinuation = Object.freeze({
       sealedMaterialization: seal,
       materializedManifest: manifest,
-      ...(preparation === undefined ? {} : { preparation }),
       execute: async (signal: AbortSignal) => {
         if (executed) throw new DOMException('Package continuation was already consumed', 'InvalidStateError')
         executed = true
         signal.throwIfAborted()
-        if (input.intent.artifact.kind === 'zip-archive') {
-          if (preparation === undefined) throw new TypeError('ZIP package continuation lacks preparation')
-          return workflow.buildZip({
-            receiveIntentDigest: input.intent.digest,
-            sealedMaterialization: seal,
-            materializedManifest: manifest,
-            layout: preparation.zipLayout,
-            signal,
-            retry: true,
-          })
-        }
-        if (input.intent.artifact.kind !== 'original-file' || preparation !== undefined) {
+        if (input.intent.artifact.kind !== 'original-file') {
           throw new TypeError('package continuation artifact authority is invalid')
         }
         return workflow.buildOriginalFile({
@@ -218,11 +136,10 @@ export async function reopenWorkspacePackageContinuation(input: {
           sealedMaterialization: seal,
           materializedManifest: manifest,
           signal,
-          retry: true,
         })
       },
     })
-    return Object.freeze({ backend, continuation })
+    return Object.freeze({ backend, continuation, lifecycle })
   } catch (error) {
     let cleanupFailed = false
     let cleanupFailure: unknown
@@ -243,10 +160,27 @@ export async function reopenWorkspacePackageContinuation(input: {
   }
 }
 
+async function recoverPackageCut(
+  input: Parameters<typeof reopenWorkspacePackageContinuation>[0],
+  backend: OriginPrivatePackageContinuationBackend,
+): Promise<WorkspacePackageRecoveryLifecycle> {
+  if (input.lifecycle.kind === 'packaging') {
+    const temporaryCleanup = await backend.packages.cleanupPackage(input.lifecycle.packageTempObjectId)
+    const state = await input.stages.recordRetryablePackageFailure({ reason: 'writer-failed', temporaryCleanup })
+    if (state.kind !== 'resumable-package') throw new TypeError('Interrupted package lost its verified cleanup cut')
+    return state
+  }
+  if (input.lifecycle.kind === 'resumable-package') {
+    if (input.cleanupReceipt === undefined) throw new TypeError('Package retry lacks temporary cleanup proof')
+    await backend.verifyTemporaryCleanup(input.cleanupReceipt)
+  }
+  return input.lifecycle
+}
+
 async function readSealedMaterialization(input: {
   readonly repository: ReceiveOperationRepository
   readonly intent: ReceiveIntent
-  readonly lifecycle: Extract<ReceiveLifecycleState, { kind: 'resumable-package' }>
+  readonly lifecycle: WorkspacePackageRecoveryLifecycle
 }): Promise<SealedMaterializationV1> {
   const records = await input.repository.listRecords(
     input.intent.operationId,
@@ -273,7 +207,6 @@ async function readMaterializedManifest(
   },
   backend: OriginPrivatePackageContinuationBackend,
   seal: SealedMaterializationV1,
-  preparation: SealedWorkspaceZipPreparationV1 | undefined,
 ): Promise<MaterializedManifestV1> {
   const records = await input.repository.listRecords(
     input.intent.operationId,
@@ -290,14 +223,9 @@ async function readMaterializedManifest(
     receiveIntentDigest: input.intent.digest,
     materializationBindingDigest: input.intent.plan.workspace.digest,
     checkpoints: backend.finalCheckpoints,
-    ...(preparation === undefined ? {} : { preparation: preparation.manifest }),
   })
   if (record.operationId !== input.intent.operationId || record.digest !== manifest.digest ||
       manifest.digest !== seal.materializedManifestDigest ||
-      manifest.preparationBinding.kind !== seal.preparationBinding.kind ||
-      (manifest.preparationBinding.kind === 'present' &&
-       (seal.preparationBinding.kind !== 'present' ||
-        manifest.preparationBinding.preparationDigest !== seal.preparationBinding.preparationDigest)) ||
       await materializedGenerationTableDigest(manifest.generations) !== seal.generationTableDigest) {
     throw new TypeError('materialized manifest escaped its seal')
   }
@@ -351,7 +279,7 @@ async function validateSealReceiptAndObjects(
 async function readExactManifestPages(
   repository: ReceiveOperationRepository,
   operationId: string,
-  kind: typeof RECEIVE_RECORD_PREPARATION | typeof RECEIVE_RECORD_MATERIALIZED_MANIFEST,
+  kind: typeof RECEIVE_RECORD_MATERIALIZED_MANIFEST,
   expected: readonly Awaited<ReturnType<typeof validateManifestPageRecord>>[],
 ): Promise<readonly Awaited<ReturnType<typeof validateManifestPageRecord>>[]> {
   const actual = await Promise.all((await repository.listManifestPages(operationId, kind))

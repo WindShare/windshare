@@ -103,13 +103,8 @@ func legalArtifactChoiceTuple(
 		return artifactKind == ArtifactOriginalFile && guaranteeProfile == GuaranteeManagedAtomic &&
 			preparation == PreparationNone
 	case PlanWorkspaceThenPublish:
-		expected := PreparationNone
-		if artifactKind == ArtifactZipArchive {
-			expected = PreparationExactZip
-		} else if artifactKind != ArtifactOriginalFile {
-			return false
-		}
-		return preparation == expected &&
+		return (artifactKind == ArtifactOriginalFile || artifactKind == ArtifactZipArchive) &&
+			preparation == PreparationNone &&
 			(guaranteeProfile == GuaranteeManagedAtomic || guaranteeProfile == GuaranteeBrowserHandoff)
 	case PlanPortableHandoff:
 		return (artifactKind == ArtifactOriginalFile || artifactKind == ArtifactZipArchive) &&

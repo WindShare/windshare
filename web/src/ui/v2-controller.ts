@@ -71,6 +71,9 @@ export type {
   V2RetainedInventoryTraceEvent,
 } from './controller/contracts'
 
+import { findReplacementFile } from './source-replacement/selection'
+import type { SourceRevisionFailure } from '../output/resume/source-revision-failures'
+
 export class V2ReceiverController {
   readonly #gateway: V2BrowserReceiverGateway
   readonly #receive: V2ReceiveCompositionPort
@@ -117,6 +120,10 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
       onActionError: (error) => this.#publishActionError(error),
       onFailure: (error) => this.#fail(error),
+      onRetainedFileFailure: () => {
+        this.#resetReceiveOwnership(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
+          .then(() => this.#retained.load()).catch(error => this.#publishActionError(error))
+      },
     })
     this.#authority = new V2AuthorityActivationCoordinator({
       receive: this.#receive,
@@ -124,7 +131,7 @@ export class V2ReceiverController {
       observability: this.#observability,
       currentProjection: () => this.#projectionObservation.current,
       currentJoinedShare: () => this.#joined,
-      choiceBlocked: () => this.#retained.pending || this.#activeReceive.active,
+      choiceBlocked: () => this.#newOperationPending || this.#retained.pending || this.#activeReceive.active,
       retryProjection: (projection) => {
         this.#projectionObservation.retry(projection).catch(() => undefined)
       },
@@ -357,6 +364,37 @@ export class V2ReceiverController {
     action: V2RetainedReceiveAction,
   ): void {
     this.#retained.perform(operation, action)
+  }
+
+  prepareReplacementDownload(operation: V2RetainedReceiveOperation, failure: SourceRevisionFailure): void {
+    const joined = this.#joined
+    if (this.#disposed || this.#newOperationPending || this.#retained.pending ||
+        this.#activeReceive.active || this.#authority.pending ||
+        !this.#snapshot.retained.operations.includes(operation)) return
+    if (joined === undefined) {
+      this.#publishActionError(new DOMException(
+        'Open the matching share before downloading the current version', 'InvalidStateError'))
+      return
+    }
+    this.#newOperationPending = true
+    const controller = new AbortController()
+    const protocolSessionId = joined.protocolSessionId
+    this.#publish({ ...this.#snapshot, error: null, status: `Finding the current version of ${failure.path.join('/')}…` })
+    const current = () => !this.#disposed && this.#joined === joined && joined.protocolSessionId === protocolSessionId &&
+      this.#snapshot.retained.operations.includes(operation) && !this.#activeReceive.active && !this.#retained.pending
+    findReplacementFile(joined, operation, failure, controller.signal).then(async found => {
+      if (!current()) return
+      await this.#resetReceiveOwnership(new DOMException('Preparing a separate replacement download', 'AbortError'))
+      if (!current()) return
+      joined.selectOnlyFile(found.entry, found.page.directory.ancestry)
+      await this.#browse.loadPage(found.page.directory, found.page.pageIndex, found.directories)
+      if (!current()) return
+      this.#publish({ ...this.#snapshot, error: null,
+        status: 'Current version selected. Choose Download to create a separate task; the original ZIP progress is retained.' })
+      this.#beginSelectionProjection(joined)
+    }).catch(error => {
+      if (current()) this.#publishActionError(error)
+    }).finally(() => { this.#newOperationPending = false })
   }
 
   catchUpStoppedCompatibleNames(): void {
@@ -658,7 +696,7 @@ export class V2ReceiverController {
   }
 
   #selectionLocked(): boolean {
-    return this.#retained.pending ||
+    return this.#newOperationPending || this.#retained.pending ||
       this.#authority.pending || this.#snapshot.output.receiveIntent !== null
   }
 

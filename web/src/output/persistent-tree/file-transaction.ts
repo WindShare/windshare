@@ -40,12 +40,10 @@ import type {
   PersistentTreeFile,
   SemanticPersistentOutputJournal,
 } from './contracts'
+import { PersistentCheckpointObservation } from './checkpoint-observation'
 import { PersistentOutputError, TargetOwnershipUnknownError } from './errors'
 import {
-  checkpointPerformanceCost,
-  durableByteAdvance,
   nextCheckpoint,
-  rangeBytes,
   sameRanges,
   throwIfAborted,
   writtenBoundary,
@@ -96,7 +94,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   #state: PersistentTransactionState = 'active'
   #writerOpen = false
   #writerCapacityToken: PreservingWriterCapacityToken | undefined
-  #observedDurableBytes: bigint
+  readonly #checkpointObservation: PersistentCheckpointObservation
   #released = false
 
   constructor(input: Readonly<{
@@ -138,7 +136,10 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#initialDurable = Object.freeze(input.checkpoint.verifiedRanges.map(range =>
       Object.freeze({ ...range })))
     this.#ranges = new ByteRangeSet(input.revision.exactSize, input.checkpoint.verifiedRanges)
-    this.#observedDurableBytes = rangeBytes(input.checkpoint.verifiedRanges)
+    this.#checkpointObservation = new PersistentCheckpointObservation(
+      input.diagnostics?.performance,
+      input.checkpoint.verifiedRanges,
+    )
   }
 
   get initialDurableRanges(): readonly PersistentByteRange[] {
@@ -159,6 +160,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         throw new RangeError('Persistent output write exceeds its opened revision')
       }
       if (snapshot.byteLength === 0) return
+      if (this.#handle.durability === 'native-in-place') {
+        const requested = byteRange(offset, end)
+        if (this.#ranges.covers(requested)) return
+        if (this.#ranges.ranges.some(range => range.start < end && offset < range.end)) {
+          throw new RangeError('Native output cannot overwrite accepted revision ranges')
+        }
+      }
       await this.#ensureWriter(signal)
       await this.#handle.writeAt(offset, snapshot)
       // Native resolution is the irrevocable acceptance boundary. Cancellation
@@ -177,7 +185,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     trigger: AutomaticCheckpointTrigger,
     signal?: AbortSignal,
   ): Promise<PersistentAutomaticCheckpointResult> {
-    return this.#enqueue('checkpoint', () => this.#observeAutomaticCheckpoint(async () => {
+    return this.#enqueue('checkpoint', () => this.#checkpointObservation.observeAutomatic(async () => {
       throwIfAborted(signal)
       this.#requireActive()
       if (sameRanges(this.#ranges.ranges, this.#checkpoint.verifiedRanges)) {
@@ -186,6 +194,10 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
           durableRanges: this.#checkpoint.verifiedRanges,
           cost: zeroPreservingWriterCost(),
         })
+      }
+      if (this.#handle.durability === 'native-in-place') {
+        const durableRanges = await this.#commitDurableCut(FILE_CHECKPOINT_PHASE_ACTIVE, signal)
+        return Object.freeze({ kind: 'advanced' as const, durableRanges, cost: zeroPreservingWriterCost() })
       }
       const cost = this.#preservingWriterCost(writtenBoundary(this.#ranges.ranges))
       const admission = this.#automaticCheckpointAdmission
@@ -288,7 +300,12 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
 
       if (!alreadyDurable || !fileCheckpointIsComplete(this.#checkpoint) ||
           this.revision.exactSize === 0n) {
-        if (this.revision.exactSize !== 0n) {
+        if (this.#handle.durability === 'native-in-place') {
+          // Native closure also releases checkpoint headroom. Keep both owned
+          // until the final metadata transaction has acknowledged this flush.
+          await this.#ensureWriter(signal)
+          await this.#handle.flush()
+        } else if (this.revision.exactSize !== 0n) {
           await this.#ensureWriter(signal)
           await this.#closeWriter()
         }
@@ -324,6 +341,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         await this.#commitLegacyCheckpoint(finalCheckpoint)
         this.#checkpoint = finalCheckpoint
       }
+      await this.#releaseNativeWriter()
       throwIfAborted(signal)
       const checkpointProof = finalFileCheckpointProof(this.#checkpoint)
       return this.#finishCommit(Object.freeze({
@@ -339,7 +357,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       if (this.#state === 'paused') return this.#checkpoint.verifiedRanges
       this.#requireActive()
       try {
-        const durable = await this.#observeForcedPauseCheckpoint(
+        const durable = await this.#checkpointObservation.observeForcedPause(
           () => this.#commitDurableCut(FILE_CHECKPOINT_PHASE_PAUSED),
         )
         this.#state = 'paused'
@@ -391,15 +409,13 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     // A rejected native write may have opened or partially mutated a private writer
     // without producing accepted range evidence. Abort that unowned state before the
     // pause cut so the writer lease cannot outlive the transaction.
-    if (!rangesChanged && this.#writerOpen) await this.#abortWriter()
+    if (!rangesChanged && this.#writerOpen && this.#handle.durability !== 'native-in-place') {
+      await this.#abortWriter()
+    }
     if (rangesChanged) {
-      await this.#closeWriter(closeReason)
-      const actualSize = await this.#handle.size()
-      const writtenEnd = writtenBoundary(this.#ranges.ranges)
-      if (actualSize < writtenEnd || actualSize > this.revision.exactSize) {
-        throw new TargetOwnershipUnknownError('checkpoint', this.#checkpoint.operationId)
-      }
-      await this.#handle.verify('checkpoint')
+      if (this.#handle.durability === 'native-in-place') await this.#handle.flush()
+      else await this.#closeWriter(closeReason)
+      await this.#verifyCheckpointSize()
     }
     if (!rangesChanged && phase === this.#checkpoint.phase) {
       return this.#checkpoint.verifiedRanges
@@ -422,70 +438,21 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
       await this.#commitLegacyCheckpoint(durable)
     }
     this.#checkpoint = durable
+    if (phase === FILE_CHECKPOINT_PHASE_PAUSED && this.#handle.durability === 'native-in-place') {
+      await this.#handle.close()
+      this.#writerOpen = false
+    }
     throwIfAborted(signal)
     return durable.verifiedRanges
   }
 
-  async #observeAutomaticCheckpoint(
-    operation: () => Promise<PersistentAutomaticCheckpointResult>,
-  ): Promise<PersistentAutomaticCheckpointResult> {
-    const startedAtMilliseconds = performanceNowMilliseconds(this.#diagnostics?.performance)
-    const result = await operation()
-    const durableBytes = result.kind === 'advanced'
-      ? rangeBytes(result.durableRanges)
-      : this.#observedDurableBytes
-    const elapsedMilliseconds = performanceElapsedMilliseconds(
-      startedAtMilliseconds,
-      performanceNowMilliseconds(this.#diagnostics?.performance),
-    )
-    if (elapsedMilliseconds !== undefined) {
-      const cost = result.kind === 'advanced' ? result.cost : result.estimate
-      observePerformance(this.#diagnostics?.performance, summary => {
-        summary.observeCheckpoint({
-          trigger: 'automatic',
-          decision: result.kind === 'advanced' ? 'advanced' : 'declined',
-          cost: checkpointPerformanceCost(cost),
-          elapsedMilliseconds,
-          estimatedCopyBytes: cost.prefixCopyBytes,
-        })
-        if (result.kind === 'advanced') {
-          summary.observeByteTransition(
-            'durable',
-            durableByteAdvance(this.#observedDurableBytes, durableBytes),
-          )
-        }
-      })
+  async #verifyCheckpointSize(): Promise<void> {
+    const actualSize = await this.#handle.size()
+    const writtenEnd = writtenBoundary(this.#ranges.ranges)
+    if (actualSize < writtenEnd || actualSize > this.revision.exactSize) {
+      throw new TargetOwnershipUnknownError('checkpoint', this.#checkpoint.operationId)
     }
-    this.#observedDurableBytes = durableBytes
-    return result
-  }
-
-  async #observeForcedPauseCheckpoint(
-    operation: () => Promise<readonly PersistentByteRange[]>,
-  ): Promise<readonly PersistentByteRange[]> {
-    const startedAtMilliseconds = performanceNowMilliseconds(this.#diagnostics?.performance)
-    const durable = await operation()
-    const durableBytes = rangeBytes(durable)
-    const elapsedMilliseconds = performanceElapsedMilliseconds(
-      startedAtMilliseconds,
-      performanceNowMilliseconds(this.#diagnostics?.performance),
-    )
-    if (elapsedMilliseconds !== undefined) {
-      observePerformance(this.#diagnostics?.performance, summary => {
-        summary.observeCheckpoint({
-          trigger: 'forced_pause',
-          decision: 'advanced',
-          cost: 'constant',
-          elapsedMilliseconds,
-        })
-        summary.observeByteTransition(
-          'durable',
-          durableByteAdvance(this.#observedDurableBytes, durableBytes),
-        )
-      })
-    }
-    this.#observedDurableBytes = durableBytes
-    return durable
+    await this.#handle.verify('checkpoint')
   }
 
   async #commitLegacyCheckpoint(committed: FileCheckpointV2): Promise<void> {
@@ -575,7 +542,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     if (this.#writerOpen) return
     const durablePrefix = writtenBoundary(this.#checkpoint.verifiedRanges)
     const mode = durablePrefix === 0n ? 'truncate' as const : 'preserve' as const
-    if (mode === 'truncate') {
+    if (mode === 'truncate' || this.#handle.durability === 'native-in-place') {
       await this.#handle.openWriter?.(mode)
       this.#writerOpen = true
       return
@@ -625,10 +592,17 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     if (!this.#writerOpen) return
     try {
       await this.#handle.flush()
+      if (this.#handle.durability === 'native-in-place') await this.#handle.close()
       this.#writerOpen = false
     } finally {
       this.#releaseWriterCapacity(reason)
     }
+  }
+
+  async #releaseNativeWriter(): Promise<void> {
+    if (this.#handle.durability !== 'native-in-place' || !this.#writerOpen) return
+    await this.#handle.close()
+    this.#writerOpen = false
   }
 
   async #abortWriter(reason?: unknown): Promise<void> {
@@ -655,15 +629,7 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
     this.#automaticCheckpointAdmission?.retire('file-committed')
     this.#releaseWriterCapacity('writer-closed')
     this.#release()
-    const durableBytes = rangeBytes(this.#checkpoint.verifiedRanges)
-    observePerformance(this.#diagnostics?.performance, summary => {
-      summary.observeByteTransition(
-        'durable',
-        durableByteAdvance(this.#observedDurableBytes, durableBytes),
-      )
-      summary.observeByteTransition('final', this.revision.exactSize)
-    })
-    this.#observedDurableBytes = durableBytes
+    this.#checkpointObservation.observeFinal(this.#checkpoint.verifiedRanges, this.revision.exactSize)
     this.#trace({ eventName: 'output_write', transition: 'transaction_committed' })
     return commit
   }
@@ -684,6 +650,14 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
         return await operation()
       } catch (error) {
         this.#recordFailure(stage, error)
+        if (this.#handle.durability === 'native-in-place' && this.#state === 'active') {
+          // A failed in-place cut may have durable but unrecorded bytes. Freeze
+          // authority at the previous checkpoint and require recovery to retry.
+          this.#state = 'paused'
+          await this.#abortWriter(error).catch(() => undefined)
+          this.#automaticCheckpointAdmission?.retire('file-paused')
+          this.#release()
+        }
         if (error instanceof TargetOwnershipUnknownError) this.#onOwnershipUnknown(error)
         throw error
       }

@@ -260,15 +260,14 @@ describe('production plan execution authority', () => {
       intent: workspaceZipIntent,
       routes: routeRegistry({
         workspaceZip: {
-          prepare: async (intent, evidence) => {
-            routes.push(`workspace-zip:${evidence.entryCount.toString()}`)
+          admit: async (intent) => {
+            routes.push('workspace-zip:progressive')
             return Object.freeze({ kind: 'accepted', execution: workspaceExecution(intent) })
           },
         },
       }),
-    })).prepareWorkspaceZip(
+    })).openWorkspaceZip(
       asWorkspaceZip(workspaceZipIntent),
-      exactPreparationEvidence(file),
       new AbortController().signal,
     )
 
@@ -322,7 +321,7 @@ describe('production plan execution authority', () => {
     expect(routes).toEqual([
       'direct-tree',
       `workspace-original:${identityText(90)}`,
-      'workspace-zip:2',
+      'workspace-zip:progressive',
       'portable-original',
       'portable-zip',
     ])
@@ -862,10 +861,10 @@ function asWorkspaceOriginal(intent: ReceiveIntent): Parameters<
 }
 
 function asWorkspaceZip(intent: ReceiveIntent): Parameters<
-  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['prepareWorkspaceZip']
+  Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceZip']
 >[0] {
   return intent as Parameters<
-    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['prepareWorkspaceZip']
+    Awaited<ReturnType<typeof createV2PlanExecutionAuthority>>['openWorkspaceZip']
   >[0]
 }
 

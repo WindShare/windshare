@@ -66,7 +66,6 @@ import {
   type ReceiveOperationHandleRecord,
   type ReceiveOperationLeaseRecord,
 } from '../../src/output/workspace/records'
-import { createExpiryReceipt, persistedReceiptRecord } from '../../src/output/workspace/receipts'
 import {
   prepareReceiveOperationTransition,
   type ReceiveOperationRepository,
@@ -503,46 +502,6 @@ export class MemoryCompatibleNameLedger implements CompatibleNameActivationLedge
     if (mapping === undefined) throw new Error('memory compatible mapping is missing')
     return mapping
   }
-}
-
-export async function persistFreshFixtureExpiry(
-  fixture: FreshDiscardFixture,
-): Promise<Extract<ReceiveLifecycleState, { kind: 'expired' }>> {
-  const current = await lifecycleState(fixture.repository, fixture.intent.operationId)
-  if (current.kind !== 'resumable-receive' || current.payloadKind !== 'file-set') {
-    throw new TypeError('fresh discard expiry fixture is not resumable')
-  }
-  const receipt = await createExpiryReceipt({
-    operationId: fixture.intent.operationId,
-    receiveIntentDigest: fixture.intent.digest,
-    priorStableState: 'resumable-receive',
-    expiresAt: current.expiresAt,
-    retainedSuccessCount: current.completedFileCount,
-    cleanupState: 'cleanup-pending',
-  })
-  const reduction = reduceReceiveLifecycle(current, {
-    kind: 'expiry-observed',
-    expiryReceiptDigest: receipt.digest,
-    cleanupState: 'cleanup-pending',
-    expectedGeneration: current.generation,
-    leaseId: fixture.leaseId,
-  }, {
-    planKind: 'direct-tree',
-    preparationRequired: false,
-    activeLeaseId: fixture.leaseId,
-    nowMilliseconds: current.expiresAt,
-  })
-  if (reduction.status !== 'applied' || reduction.state.kind !== 'expired') {
-    throw new TypeError('fresh discard expiry fixture did not become Expired')
-  }
-  await fixture.repository.commitTransition({
-    operationId: fixture.intent.operationId,
-    expectedLifecycleGeneration: current.generation,
-    expectedLeaseId: fixture.leaseId,
-    records: [await persistedReceiptRecord(receipt)],
-    lifecycle: reduction.state,
-  })
-  return reduction.state
 }
 
 export async function bindTask(input: Readonly<{

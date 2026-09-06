@@ -39,10 +39,138 @@ import {
   OriginPrivateWorkspaceTree,
   rawFileObjectId,
 } from '../../src/output/origin-private/workspace-tree'
+import type { NativeObjectIO } from '../../src/output/origin-private/native-object/contracts'
+import type { ObjectGrowthRequest } from '../../src/output/origin-private/object-capacity'
 import type { OriginPrivateWorkspaceRoot } from '../../src/output/origin-private/workspace-root'
 import { identity } from './planning/fixture'
 
 describe('origin-private selected file authority', () => {
+  it('uses in-place native flush and reserves high-water growth including gaps', async () => {
+    const root = new MemoryWorkspaceRoot()
+    const settle = vi.fn<(length: bigint) => Promise<void>>(async () => undefined)
+    const release = vi.fn(async () => undefined)
+    const reserveGrowth = vi.fn(async () => ({ reservationId: 'reservation', settle, release }))
+    const reconcileObject = vi.fn(async () => undefined)
+    Object.assign(root, { reserveGrowth, reconcileObject })
+    let size = 0n
+    const flush = vi.fn(async () => undefined)
+    const close = vi.fn(async () => undefined)
+    const nativeObjectFactory = vi.fn(async () => ({
+      writeAt: async (offset: bigint, bytes: Uint8Array) => {
+        size = offset + BigInt(bytes.byteLength)
+      },
+      truncate: async (length: bigint) => { size = length },
+      size: async () => size, flush, close,
+    }))
+    const tree = new OriginPrivateWorkspaceTree({
+      root: root as unknown as OriginPrivateWorkspaceRoot,
+      handles: new MemoryHandleRepository(), nativeObjectFactory,
+    })
+    const revision = { fileId: identity(21), fileRevision: identity(22), exactSize: 12n }
+    const objectId = await tree.proposeFileOwnedObjectId(['native'], revision)
+    const file = await tree.createFileAfterRevisionOpen(['native'], revision, objectId)
+    await file.openWriter?.('truncate')
+    await file.writeAt(10n, Uint8Array.of(1, 2))
+    expect(reserveGrowth).toHaveBeenCalledWith({
+      objectId, currentLength: 0n, targetLength: 12n, metadataHeadroom: 0n,
+    })
+    expect(settle).toHaveBeenCalledWith(12n)
+    expect(release).not.toHaveBeenCalled()
+    await file.flush()
+    expect(flush).toHaveBeenCalledOnce()
+    expect(close).not.toHaveBeenCalled()
+    expect(await file.size()).toBe(12n)
+    await file.close()
+    expect(close).toHaveBeenCalledOnce()
+    expect(release).toHaveBeenCalledOnce()
+    expect(root.file(objectId)?.writableOpenCount).toBe(0)
+  })
+
+  it.each([false, true])('retains uncertain growth after Worker death (settlement unavailable: %s)', async settlementFails => {
+    const fixture = await nativeCapacityFixture()
+    await fixture.file.openWriter?.('preserve')
+    fixture.io.writeAt.mockImplementationOnce(async () => {
+      fixture.physicalLength = 200n
+      fixture.io.size.mockRejectedValue(new Error('Worker terminated'))
+      throw new Error('partial write then Worker terminated')
+    })
+    if (settlementFails) fixture.growth.settle.mockRejectedValue(new Error('account transaction failed'))
+    await expect(fixture.file.writeAt(499n, Uint8Array.of(1)))
+      .rejects.toThrow('partial write then Worker terminated')
+    expect(fixture.physicalLength).toBe(200n)
+    expect(fixture.growth.settle).toHaveBeenCalledWith(500n)
+    expect(fixture.growth.release).not.toHaveBeenCalled()
+    await fixture.file.close()
+    expect(fixture.headroom.release).toHaveBeenCalledOnce()
+    // Even terminal close must not erase an unobservable attempted payload write.
+    expect(fixture.growth.release).not.toHaveBeenCalled()
+  })
+
+  it('settles only observed partial growth when the failed writer remains inspectable', async () => {
+    const fixture = await nativeCapacityFixture()
+    await fixture.file.openWriter?.('preserve')
+    fixture.io.writeAt.mockImplementationOnce(async () => {
+      fixture.physicalLength = 200n
+      throw new DOMException('disk full', 'QuotaExceededError')
+    })
+    await expect(fixture.file.writeAt(499n, Uint8Array.of(1))).rejects.toThrow('disk full')
+    expect(fixture.growth.settle).toHaveBeenCalledWith(200n)
+    expect(fixture.growth.release).not.toHaveBeenCalled()
+    await fixture.file.close()
+  })
+
+  it('registers the recovered object contribution before truncating it under a fresh lease', async () => {
+    const fixture = await nativeCapacityFixture(200n)
+    await fixture.file.openWriter?.('truncate')
+    expect(fixture.reconciliations).toEqual([200n, 0n])
+    expect(fixture.milestones).toEqual(['reconcile:200', 'truncate:0', 'reconcile:0', 'reserve-headroom'])
+    expect(fixture.physicalLength).toBe(0n)
+    await fixture.file.close()
+  })
+
+  it('keeps the pre-truncate occupancy when the Worker dies during recovery shrink', async () => {
+    const fixture = await nativeCapacityFixture(200n)
+    fixture.io.truncate.mockImplementationOnce(async () => {
+      fixture.physicalLength = 0n
+      fixture.io.size.mockRejectedValue(new Error('Worker terminated'))
+      throw new Error('truncate reply lost')
+    })
+    await expect(fixture.file.openWriter?.('truncate')).rejects.toThrow('truncate reply lost')
+    expect(fixture.reconciliations).toEqual([200n])
+    expect(fixture.reserveGrowth).not.toHaveBeenCalled()
+    expect(fixture.io.close).toHaveBeenCalledOnce()
+  })
+
+  it('holds checkpoint capacity across in-place flush while quota pressure permits gap filling', async () => {
+    const fixture = await nativeCapacityFixture()
+    await fixture.file.openWriter?.('truncate')
+    expect(fixture.reserveGrowth).toHaveBeenCalledWith({
+      objectId: fixture.file.ownedObjectId, currentLength: 0n, targetLength: 0n,
+      metadataHeadroom: 1024n * 1024n,
+    })
+    await fixture.file.writeAt(499n, Uint8Array.of(1))
+    fixture.quotaPressure = true
+    await fixture.file.writeAt(0n, Uint8Array.of(2))
+    await fixture.file.flush()
+    expect(fixture.headroom.release).not.toHaveBeenCalled()
+    expect(fixture.io.flush).toHaveBeenCalledOnce()
+    await expect(fixture.file.writeAt(500n, Uint8Array.of(3))).rejects.toThrow('quota pressure')
+    await fixture.file.flush()
+    expect(fixture.io.close).not.toHaveBeenCalled()
+    await fixture.file.close()
+    expect(fixture.headroom.release).toHaveBeenCalledOnce()
+    expect(fixture.headroom.settle).not.toHaveBeenCalled()
+  })
+
+  it('releases metadata headroom even when closing a failed Worker rejects', async () => {
+    const fixture = await nativeCapacityFixture()
+    await fixture.file.openWriter?.('preserve')
+    fixture.io.close.mockRejectedValueOnce(new Error('Worker close reply lost'))
+    await expect(fixture.file.close()).rejects.toThrow('Worker close reply lost')
+    await fixture.file.close()
+    expect(fixture.headroom.release).toHaveBeenCalledOnce()
+  })
+
   it('plans without mutation and reopens the repository-selected object without resetting it', async () => {
     const root = new MemoryWorkspaceRoot()
     const handles = new MemoryHandleRepository()
@@ -69,11 +197,8 @@ describe('origin-private selected file authority', () => {
     })
     const reopened = await reopenedTree.openFile(path, selected)
     expect(reopened?.ownedObjectId).toBe(created.ownedObjectId)
-    expect(reopened?.preservingWriterCost?.(3n)).toEqual({
-      prefixCopyBytes: 3n,
-      writeAmplificationBytes: 3n,
-      temporaryBytes: 3n,
-    })
+    expect(reopened?.durability).toBe('native-in-place')
+    expect(reopened?.preservingWriterCost).toBeUndefined()
     expect(root.createCount).toBe(1)
     expect(root.file(selected)?.writableOpenCount).toBe(0)
     await expect(reopenedTree.inspectFileDestination(path, selected)).resolves.toBe('occupied')
@@ -295,6 +420,58 @@ describe('origin-private workspace activation commit cut', () => {
     )
   })
 })
+
+async function nativeCapacityFixture(initialLength = 0n) {
+  const root = new MemoryWorkspaceRoot()
+  const state = { physicalLength: initialLength, quotaPressure: false }
+  const reconciliations: bigint[] = []
+  const milestones: string[] = []
+  const reservation = (reservationId: string) => ({
+    reservationId,
+    settle: vi.fn<(length: bigint) => Promise<void>>(async () => undefined),
+    release: vi.fn(async () => undefined),
+  })
+  const growth = reservation('growth')
+  const headroom = reservation('headroom')
+  const reserveGrowth = vi.fn(async (request: Omit<ObjectGrowthRequest, 'operationId'>) => {
+    if (state.quotaPressure && (request.targetLength > state.physicalLength || request.metadataHeadroom > 0n)) {
+      throw new DOMException('quota pressure', 'QuotaExceededError')
+    }
+    if (request.metadataHeadroom > 0n) {
+      milestones.push('reserve-headroom')
+      return headroom
+    }
+    return growth
+  })
+  Object.assign(root, {
+    reserveGrowth,
+    reconcileObject: async (_objectId: string, length: bigint) => {
+      reconciliations.push(length)
+      milestones.push(`reconcile:${length}`)
+    },
+  })
+  const io = {
+    writeAt: vi.fn<NativeObjectIO['writeAt']>(async (offset, bytes) => {
+      const end = offset + BigInt(bytes.byteLength)
+      if (end > state.physicalLength) state.physicalLength = end
+    }),
+    size: vi.fn<NativeObjectIO['size']>(async () => state.physicalLength),
+    truncate: vi.fn<NativeObjectIO['truncate']>(async length => {
+      milestones.push(`truncate:${length}`)
+      state.physicalLength = length
+    }),
+    flush: vi.fn<NativeObjectIO['flush']>(async () => undefined),
+    close: vi.fn<NativeObjectIO['close']>(async () => undefined),
+  }
+  const tree = new OriginPrivateWorkspaceTree({
+    root: root as unknown as OriginPrivateWorkspaceRoot,
+    handles: new MemoryHandleRepository(), nativeObjectFactory: async () => io,
+  })
+  const revision = { fileId: identity(21), fileRevision: identity(22), exactSize: 1000n }
+  const objectId = await tree.proposeFileOwnedObjectId(['native'], revision)
+  const file = await tree.createFileAfterRevisionOpen(['native'], revision, objectId)
+  return Object.assign(state, { file, io, growth, headroom, reserveGrowth, reconciliations, milestones })
+}
 
 class MemoryHandleRepository implements PersistentHandleRepository {
   readonly #records = new Map<string, PersistentHandleRecord>()

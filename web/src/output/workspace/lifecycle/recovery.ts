@@ -1,6 +1,5 @@
 import {
   nextReceiveLifecycleState,
-  stableDeadline,
   type PlanKind,
   type ReceiveLifecycleState,
 } from '../state'
@@ -23,7 +22,6 @@ export function pauseDirectZip(
     safeSelectedPayloadBytes: event.safeSelectedPayloadBytes,
     committedArchiveLength: event.committedArchiveLength,
     checkpointPhase: event.checkpointPhase,
-    expiresAt: stableDeadline(context.nowMilliseconds),
   })
 }
 
@@ -36,7 +34,6 @@ export function gateDirectZipRecovery(
   return nextReceiveLifecycleState(state, {
     kind: event.gateKind,
     recoveryGateDigest: event.recoveryGateDigest,
-    expiresAt: stableDeadline(context.nowMilliseconds),
   })
 }
 

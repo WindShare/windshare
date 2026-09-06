@@ -43,16 +43,10 @@ describe('explicit portable browser handoff', () => {
     const publisher: BrowserHandoffPublisher = {
       handoff(input) {
         request = input
-        return input.context.attemptKind === 'workspace'
-          ? Object.freeze({
-              kind: 'download-started',
-              suggestedName: input.suggestedName,
-              retryableUntil: input.context.retryableUntil,
-            })
-          : Object.freeze({
-              kind: 'download-started',
-              suggestedName: input.suggestedName,
-            })
+        return Object.freeze({
+          kind: 'download-started',
+          suggestedName: input.suggestedName,
+        })
       },
     }
     const snapshots: Array<{ bufferedBytes: number; retainedParts: number }> = []
@@ -378,14 +372,12 @@ describe('browser handoff publisher integration seam', () => {
       appendAnchor: () => {},
       scheduleObjectUrlLease: () => ({ cancel: () => {} }),
     })
-    const retryableUntil = 1_800_000_000_000
     const result = publisher.handoff({
       context: {
         attemptKind: 'workspace',
         operationId: identity(6),
         attemptId: identity(9),
         packageDigest: identity(10, 32),
-        retryableUntil,
       },
       source: new Blob([Uint8Array.of(7, 8)]),
       exactBytes: 2n,
@@ -396,7 +388,6 @@ describe('browser handoff publisher integration seam', () => {
     expect(result).toEqual({
       kind: 'download-started',
       suggestedName: 'sealed.bin',
-      retryableUntil,
     })
   })
 
@@ -426,7 +417,6 @@ describe('immutable packaged File browser handoff', () => {
     const artifact = await packagedArtifact(3n)
     const firstAttempt = await packagedAttempt(artifact, 21, true)
     const secondAttempt = await packagedAttempt(artifact, 22, true)
-    const retryableUntil = 1_800_000_000_000
     const files: TestFile[] = []
     const sources: Blob[] = []
     const objectUrls: string[] = []
@@ -475,19 +465,16 @@ describe('immutable packaged File browser handoff', () => {
     const first = await publisher.handoff({
       artifact,
       attempt: firstAttempt,
-      retryableUntil,
     })
     const second = await publisher.handoff({
       artifact,
       attempt: secondAttempt,
-      retryableUntil,
     })
 
     expect(first).toEqual({
       result: {
         kind: 'download-started',
         suggestedName: 'sealed-result.bin',
-        retryableUntil,
       },
       urlLeaseStartedAt: 4_000,
       urlLeaseEndsAt: 64_000,
@@ -496,7 +483,6 @@ describe('immutable packaged File browser handoff', () => {
       result: {
         kind: 'download-started',
         suggestedName: 'sealed-result.bin',
-        retryableUntil,
       },
       urlLeaseStartedAt: 9_000,
       urlLeaseEndsAt: 69_000,
@@ -547,7 +533,6 @@ describe('immutable packaged File browser handoff', () => {
     await expect(unsupported.handoff({
       artifact,
       attempt: unsupportedAttempt,
-      retryableUntil: 10_000,
     })).rejects.toMatchObject({ name: 'NotSupportedError' })
     expect(unsupportedRead).not.toHaveBeenCalled()
 
@@ -561,7 +546,6 @@ describe('immutable packaged File browser handoff', () => {
     await expect(blobOnly.handoff({
       artifact,
       attempt: supportedAttempt,
-      retryableUntil: 10_000,
     })).rejects.toMatchObject({ name: 'NotSupportedError' })
     expect(createObjectUrl).not.toHaveBeenCalled()
   })

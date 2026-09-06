@@ -78,16 +78,10 @@ test('assembles the exact portable ceiling and rejects the first over-limit admi
       publisher: {
         handoff: (request) => {
           publishCount += 1
-          return request.context.attemptKind === 'workspace'
-            ? {
-                kind: 'download-started' as const,
-                suggestedName: request.suggestedName,
-                retryableUntil: request.context.retryableUntil,
-              }
-            : {
-                kind: 'download-started' as const,
-                suggestedName: request.suggestedName,
-              }
+          return {
+            kind: 'download-started' as const,
+            suggestedName: request.suggestedName,
+          }
         },
       },
       assembly: {
