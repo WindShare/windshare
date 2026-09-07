@@ -603,10 +603,10 @@ func (router laneInboundRouter) prepareInboundRoute(
 	if receiverRequestKind(message.Kind()) {
 		return router.reserveInboundRequest(binding, message)
 	}
+	// Response routes end with the final send or cancellation, while operation
+	// tombstones still classify in-flight continuations. A missing response route
+	// cannot reject ingress before the operation table checks that authority.
 	binding.bound = router.runtime.routes.current(operationID)
-	if binding.bound == nil && message.Kind() != protocolsession.MessageCancel {
-		return binding, ErrOperationMissing
-	}
 	if binding.bound != nil {
 		binding.ctx = bindOutboundRoute(ctx, operationID, binding.bound)
 	}
