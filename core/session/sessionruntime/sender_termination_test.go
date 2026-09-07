@@ -151,11 +151,12 @@ func TestSenderTerminalPumpCausePrecedesLaneCompletion(t *testing.T) {
 				},
 			)
 			runtime.lanes.markClosing(lane)
-			runtime.lanes.settleRun(
+			runtime.lanes.retireRun(
 				lane,
 				laneRunResult{component: "pump", err: test.pumpError},
 				laneRunResult{component: "writer", err: context.Canceled},
 			)
+			runtime.lanes.completeLane(lane)
 
 			event := awaitSenderSessionTermination(t, observed)
 			assertSenderSessionTermination(
