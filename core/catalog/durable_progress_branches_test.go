@@ -449,7 +449,7 @@ func TestFileBackendLoadNodePropagatesNamespaceAndObjectFailures(t *testing.T) {
 		if err := os.RemoveAll(backend.committedDir); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](70)); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](91)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing committed namespace = %v", err)
 		}
 	})
@@ -460,7 +460,7 @@ func TestFileBackendLoadNodePropagatesNamespaceAndObjectFailures(t *testing.T) {
 		if err := os.Remove(filepath.Join(path, fileCatalogMetaName)); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](71)); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](91)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing node namespace metadata = %v", err)
 		}
 	})
@@ -471,7 +471,7 @@ func TestFileBackendLoadNodePropagatesNamespaceAndObjectFailures(t *testing.T) {
 		if err := os.Remove(filepath.Join(path, fileCatalogDirectoryName)); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](72)); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](91)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing directory record = %v", err)
 		}
 	})
@@ -482,7 +482,7 @@ func TestFileBackendLoadNodePropagatesNamespaceAndObjectFailures(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(path, fileCatalogDirectoryName), []byte{0xff}, 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](73)); !errors.Is(err, ErrCorruptCatalogStorage) {
+		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](91)); !errors.Is(err, ErrCorruptCatalogStorage) {
 			t.Fatalf("corrupt directory record = %v", err)
 		}
 	})
@@ -493,7 +493,7 @@ func TestFileBackendLoadNodePropagatesNamespaceAndObjectFailures(t *testing.T) {
 		if err := os.Remove(filepath.Join(path, fileCatalogChildrenName)); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](74)); !errors.Is(err, os.ErrNotExist) {
+		if _, _, err := backend.LoadNode(context.Background(), idValue[NodeID](92)); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("missing child stream = %v", err)
 		}
 	})
