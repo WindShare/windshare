@@ -37,6 +37,7 @@ import {
 } from './active-receive-lifecycle'
 import { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
 import type { V2PresentationAttempt } from './presentation-attempt'
+import { isReceiveOutputDelivered } from '../operation-ownership/completion'
 
 export interface ActiveReceiveJoinedShare {
   beginDownloadConnectivity(): V2ConnectivityActivation
@@ -74,6 +75,7 @@ export interface ActiveReceiveCoordinatorOptions {
   readonly onActionError: (error: unknown) => void
   readonly onFailure: (error: unknown) => void
   readonly onRetainedFileFailure?: () => void
+  readonly onOwnershipReleased?: () => void
 }
 
 export interface ActiveReceiveAdoption {
@@ -98,6 +100,7 @@ export class ActiveReceiveCoordinator {
   readonly #lifecycle: ActiveReceiveLifecycle
   readonly #onFailure: (error: unknown) => void
   readonly #onRetainedFileFailure: (() => void) | undefined
+  readonly #onOwnershipReleased: (() => void) | undefined
   #boundary = 0
   #operation: ActiveReceiveOperation | undefined
 
@@ -112,6 +115,7 @@ export class ActiveReceiveCoordinator {
     })
     this.#onFailure = options.onFailure
     this.#onRetainedFileFailure = options.onRetainedFileFailure
+    this.#onOwnershipReleased = options.onOwnershipReleased
     this.#lifecycle = new ActiveReceiveLifecycle({
       outputs: this.#outputs,
       observability: this.#observability,
@@ -123,11 +127,16 @@ export class ActiveReceiveCoordinator {
         this.#replaceDetachConsequence(operation as ActiveReceiveOperation, attempt),
       onActionError: options.onActionError,
       onFailure: error => this.#reportTransferFailure(error),
+      onIdle: operation => this.#releaseDeliveredOutput(operation as ActiveReceiveOperation),
     })
   }
 
   get active(): boolean {
     return this.#operation !== undefined
+  }
+
+  get operationId(): string | null {
+    return this.#operation?.runtime.intent.operationId ?? null
   }
 
   get canRetainForLocalOutput(): boolean {
@@ -140,9 +149,8 @@ export class ActiveReceiveCoordinator {
   get canRelease(): boolean {
     const state = this.#outputs.getSnapshot().lifecycle
     return this.#operation !== undefined && !this.#lifecycle.pending && state !== null &&
-      (state.kind === 'published' || state.kind === 'partial-directory' ||
-       state.kind === 'restart-required' || state.kind === 'discarded' ||
-       state.kind === 'expired' || state.kind === 'needs-attention' || state.kind === 'download-started')
+      (state.kind === 'restart-required' || state.kind === 'discarded' ||
+       state.kind === 'expired' || state.kind === 'needs-attention')
   }
 
   ownsRuntime(runtime: V2BoundReceiveOperation): boolean {
@@ -268,7 +276,7 @@ export class ActiveReceiveCoordinator {
 
     const ownedConnectivity = connectivity
     const ownedTransfer = transfer
-    active.running = task.finally(async () => {
+    const running = task.finally(async () => {
       try {
         ownedConnectivity?.close()
       } catch (error) {
@@ -293,6 +301,33 @@ export class ActiveReceiveCoordinator {
       }
       this.#closeAttempt(attempt)
       if (active.receiveAttempt === attempt) delete active.receiveAttempt
+    })
+    active.running = running
+    running.then(() => {
+      if (active.running === running) delete active.running
+      this.#releaseDeliveredOutput(active)
+    }, error => {
+      if (this.#operationIsCurrent(active)) this.#reportTransferFailure(error)
+    })
+  }
+
+  #releaseDeliveredOutput(active: ActiveReceiveOperation): void {
+    const state = this.#outputs.getSnapshot().lifecycle
+    if (!this.#operationIsCurrent(active) || active.running !== undefined || this.#lifecycle.pending ||
+        active.detachment !== undefined || !isReceiveOutputDelivered(state) || state === null) return
+    // Keep ownership until detach resolves, while leaving the delivered result on screen.
+    // A lifecycle observation or 100% progress alone does not settle the writer lifetime.
+    this.#stopRepairProjection(active)
+    this.#lifecycle.cancelExpiry(active)
+    this.#observability.emitOwnershipTrace('releasing', state)
+    this.#detachOperation(active).then(() => {
+      this.#observability.emitOwnershipTrace('released', state)
+      if (!this.#operationIsCurrent(active)) return
+      this.#operation = undefined
+      try { this.#onOwnershipReleased?.() } catch (error) { this.#reportTransferFailure(error) }
+    }, error => {
+      this.#observability.emitOwnershipTrace('release-failed', state)
+      this.#reportTransferFailure(error)
     })
   }
 

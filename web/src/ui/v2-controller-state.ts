@@ -183,6 +183,7 @@ export function initialReceiverSnapshot(): V2ReceiverSnapshot {
     browse: { kind: 'idle' as const, status: '', error: null },
     draft: EMPTY_SELECTION_DRAFT,
     startAdmission: { allowed: false, reason: 'Connect to the share first.', canReleaseCurrent: false },
+    activeReceiveOperationId: null,
     taskDisplay: null,
     phase: 'awaiting-key',
     status: 'Waiting for the capability key.',

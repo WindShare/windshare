@@ -53,7 +53,7 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
 function taskTone(stage: TaskStage, attention: boolean, facts: TaskFacts): TaskPresentation['tone'] {
   if (stage === 'failed') return 'critical'
   if (attention || stage === 'paused' || stage === 'waiting') return 'warning'
-  return facts.publication !== 'unpublished' ? 'positive' : 'neutral'
+  return facts.publication === 'saved' ? 'positive' : 'neutral'
 }
 
 function preferredAction(actions: readonly TaskAction[], taskStage: TaskStage): TaskAction | null {

@@ -69,7 +69,7 @@ older in-progress run for the same ref.
 | Core Go | Vet, short race tests, coverage, and protocol vectors. |
 | Web | Lint, build, and unit tests. |
 | Go E2E | Critical sender/relay/receiver process test. |
-| Chromium | Relay smoke and short browser contracts. |
+| Chromium | Relay smoke, sustained native-size block bursts, and short browser contracts. |
 | Windows | Native build, vet, short tests, and compatible-name restoration checks. |
 
 ## Weekly CI

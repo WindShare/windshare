@@ -260,8 +260,11 @@ export class DirectProductStack {
   async #startWebServer(): Promise<void> {
     const vite = await createViteServer({
       root: WEB_ROOT,
+      // Each stack owns its optimizer cache. Another local Vite instance must
+      // not reload a receiver after its one-time capability fragment is consumed.
+      cacheDir: join(this.#requireRoot(), 'vite-cache'),
       logLevel: 'error',
-      server: { host: '127.0.0.1', port: 0, strictPort: true },
+      server: { host: '127.0.0.1', port: 0, strictPort: true, hmr: false, watch: null },
     })
     this.#vite = vite
     await vite.listen()

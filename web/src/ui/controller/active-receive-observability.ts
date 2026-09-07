@@ -164,6 +164,15 @@ export class ActiveReceiveObservability {
     }
   }
 
+  emitOwnershipTrace(state: 'releasing' | 'released' | 'release-failed', lifecycle: ReceiveLifecycleState): void {
+    try {
+      this.#traceSource?.current?.(Object.freeze({ name: 'receiver_experience', transition: 'ownership',
+        state, operationId: lifecycle.operationId, generation: lifecycle.generation, lifecycleKind: lifecycle.kind }))
+    } catch {
+      // Observers cannot delay release of a settled output authority.
+    }
+  }
+
   static receiveOutcome(lifecycle: ReceiveLifecycleState): PresentationOutcome {
     switch (lifecycle.kind) {
       case 'partial-directory':

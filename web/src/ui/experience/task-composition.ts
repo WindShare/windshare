@@ -33,6 +33,16 @@ export function composeTasks(snapshot: V2ReceiverSnapshot, admission?: RetainedA
   if (pendingLocal !== undefined && (current === null || current.operationId === pendingLocal.operationId)) {
     current = pendingLocal
   }
+  if (current !== null && snapshot.activeReceiveOperationId !== current.operationId && pendingLocal === undefined) {
+    const stored = retained.find(task => task.operationId === current?.operationId)
+    // A displayed result has no live runtime. Local actions belong to the reloaded durable record.
+    if (stored !== undefined && stored.generation > current.generation) current = stored
+    else {
+      const actions = stored?.generation === current.generation ? stored : null
+      current = { ...current, primaryAction: actions?.primaryAction ?? null,
+        secondaryActions: actions?.secondaryActions ?? [], destructiveActions: actions?.destructiveActions ?? [] }
+    }
+  }
   const tasks = retained.filter(task => task.operationId !== current?.operationId)
   if (current !== null) tasks.unshift(current)
   tasks.sort((left, right) => {

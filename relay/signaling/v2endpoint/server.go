@@ -26,10 +26,10 @@ const (
 )
 
 var (
-	ErrConfig          = errors.New("relay v2 endpoint: invalid configuration")
-	ErrConnection      = errors.New("relay v2 endpoint: connection failed")
-	ErrProtocol        = errors.New("relay v2 endpoint: protocol violation")
-	ErrForwardOverflow = errors.New("relay v2 endpoint: destination queue is full")
+	ErrConfig         = errors.New("relay v2 endpoint: invalid configuration")
+	ErrConnection     = errors.New("relay v2 endpoint: connection failed")
+	ErrProtocol       = errors.New("relay v2 endpoint: protocol violation")
+	ErrForwardTimeout = errors.New("relay v2 endpoint: destination queue did not drain")
 )
 
 // BinaryConnection is defined at the protocol consumer. The coder WebSocket
@@ -107,6 +107,7 @@ type Config struct {
 	RelayIdentity    v2.RelayIdentity
 	ConnectionIDs    ConnectionIDSource
 	RetirementTracer RetirementTracer
+	ForwardTracer    ForwardTracer
 	WriteTimeout     time.Duration
 }
 
@@ -116,6 +117,7 @@ type Server struct {
 	relayIdentity    v2.RelayIdentity
 	connectionIDs    ConnectionIDSource
 	retirementTracer RetirementTracer
+	forwardTracer    ForwardTracer
 	writeTimeout     time.Duration
 
 	connections *connectionRegistry
@@ -136,7 +138,7 @@ func New(config Config) (*Server, error) {
 	}
 	return &Server{
 		registry: config.Registry, challenges: config.Challenges, relayIdentity: config.RelayIdentity,
-		connectionIDs: config.ConnectionIDs, retirementTracer: config.RetirementTracer,
+		connectionIDs: config.ConnectionIDs, retirementTracer: config.RetirementTracer, forwardTracer: config.ForwardTracer,
 		writeTimeout: config.WriteTimeout, connections: newConnectionRegistry(),
 	}, nil
 }
@@ -470,53 +472,6 @@ func (s *Server) serveStop(ctx context.Context, peer *connection, first []byte) 
 	stopped, _ := (v2.Stopped{StopID: init.StopID}).MarshalBinary()
 	if err := peer.sendControl(ctx, stopped); err != nil {
 		return err
-	}
-	return nil
-}
-
-func (s *Server) forwardLoop(ctx context.Context, source *connection) error {
-	for {
-		encoded, err := readBinary(ctx, source.socket)
-		if err != nil {
-			return err
-		}
-		if err := s.forwardFrame(source, encoded); err != nil {
-			return err
-		}
-	}
-}
-
-func (s *Server) forwardFrame(source *connection, encoded []byte) error {
-	route, err := v2.ParseOpaqueRoute(encoded)
-	if err != nil {
-		return ErrProtocol
-	}
-	resolution, err := s.registry.ResolveSession(route.RelaySessionID, source.ref)
-	if err != nil {
-		return ErrProtocol
-	}
-	if resolution.Disposition == v2route.SessionRetired {
-		// Only the exact former participant receives this disposition. Unknown
-		// IDs and tombstoned outsiders remain protocol-fatal above.
-		return nil
-	}
-	if resolution.Disposition != v2route.SessionForward || !resolution.Destination.Valid() {
-		return ErrProtocol
-	}
-	destination, _, _ := s.connections.resolve(resolution.Destination)
-	if destination == nil || !destination.enqueueForward(route.RelaySessionID, encoded) {
-		if retirement, ended := s.endSession(route.RelaySessionID, source.ref); ended {
-			if receiver, _, _ := s.connections.resolve(retirement.Receiver); receiver != nil {
-				receiver.requestClose()
-			}
-		}
-		if source.roleValue() == roleSender {
-			// A receiver can disappear after active resolution but before peer
-			// lookup. Retiring that exact session must not tear down unrelated
-			// sessions multiplexed by the authenticated sender connection.
-			return nil
-		}
-		return ErrForwardOverflow
 	}
 	return nil
 }
