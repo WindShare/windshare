@@ -5,10 +5,9 @@ export function SelfHostSection() {
         <div className="portal-selfhost-box">
           <div className="portal-selfhost-text">
             <span className="portal-section-tag">OPEN & DECENTRALIZED</span>
-            <h2>100% 开源 · 人人皆可自建中转</h2>
+            <h2>100% 开源 · 亦可自由私有化部署</h2>
             <p>
-              WindShare 完全开源，拒绝任何云端锁定。所有中转服务器均可独立部署在您的私有 VPS、
-              局域网或 Cloudflare 上。配合官方或私有前端，构建完全受您掌控的数据直传网络。
+              WindShare 架构对中转保持「零信任」，中转服务器仅承载不透明密文转发。所有节点代码完全开源，任何人均可部署在私有服务器或 Cloudflare，构建独享带宽且自主受控的数据通道。
             </p>
             <div style={{ display: 'flex', gap: '14px', flexWrap: 'wrap' }}>
               <a
