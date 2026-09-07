@@ -87,6 +87,12 @@ export function validateReceiverExperience(payload: UnknownRecord): void {
       exactKeys(payload, ['transition', 'action', 'operation_id', 'generation'], [], 'receiver intent payload')
       decimalUint64(payload.generation, 'receiver intent generation')
       break
+    case 'ownership':
+      exactKeys(payload, ['transition', 'operation_id', 'generation', 'state', 'lifecycle_state'], [], 'receiver ownership payload')
+      decimalUint64(payload.generation, 'receiver ownership generation')
+      member(payload.state, ['releasing', 'released', 'release-failed'], 'receiver ownership state')
+      member(payload.lifecycle_state, LIFECYCLE_STATES, 'receiver ownership lifecycle')
+      break
     default: throw new TypeError('unknown receiver experience transition')
   }
   for (const [key, value] of Object.entries(payload)) {

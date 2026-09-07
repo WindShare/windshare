@@ -51,6 +51,7 @@ export interface ActiveReceiveLifecycleOptions {
   ) => void
   readonly onActionError: (error: unknown) => void
   readonly onFailure: (error: unknown) => void
+  readonly onIdle: (operation: ActiveReceiveLifecycleOperation) => void
 }
 
 export class ActiveReceiveLifecycle {
@@ -62,6 +63,7 @@ export class ActiveReceiveLifecycle {
   readonly #replaceDetachConsequence: ActiveReceiveLifecycleOptions['replaceDetachConsequence']
   readonly #onActionError: (error: unknown) => void
   readonly #onFailure: (error: unknown) => void
+  readonly #onIdle: ActiveReceiveLifecycleOptions['onIdle']
   #pending: PendingLifecycleAction | undefined
 
   constructor(options: ActiveReceiveLifecycleOptions) {
@@ -73,6 +75,7 @@ export class ActiveReceiveLifecycle {
     this.#replaceDetachConsequence = options.replaceDetachConsequence
     this.#onActionError = options.onActionError
     this.#onFailure = options.onFailure
+    this.#onIdle = options.onIdle
   }
 
   get pending(): boolean { return this.#pending !== undefined }
@@ -258,6 +261,7 @@ export class ActiveReceiveLifecycle {
       return
     }
     this.#closeAttempt(pending)
+    this.#onIdle(pending.operation)
   }
 
   #finishFailure(

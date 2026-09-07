@@ -289,20 +289,17 @@ export function P2PMeshBackground() {
 
     window.addEventListener('resize', onResize)
 
-    let isVisible = !document.hidden
-    const onVisibilityChange = () => {
-      isVisible = !document.hidden
-    }
-    document.addEventListener('visibilitychange', onVisibilityChange)
+    const timer = new THREE.Timer()
+    // Hidden time must not advance the animation when the tab becomes visible again.
+    timer.connect(document)
 
     let animationFrameId: number
-    const clock = new THREE.Clock()
-
     const animate = () => {
       animationFrameId = requestAnimationFrame(animate)
-      if (!isVisible || !renderer) return
+      if (document.hidden || !renderer) return
 
-      const delta = Math.min(clock.getDelta(), 0.1)
+      timer.update()
+      const delta = Math.min(timer.getDelta(), 0.1)
 
       currentMouseX += (targetMouseX - currentMouseX) * 0.04
       currentMouseY += (targetMouseY - currentMouseY) * 0.04
@@ -311,7 +308,7 @@ export function P2PMeshBackground() {
       camera.lookAt(0, 0, 0)
 
       scene.rotation.y += delta * 0.03
-      scene.rotation.x = Math.sin(clock.getElapsedTime() * 0.2) * 0.05
+      scene.rotation.x = Math.sin(timer.getElapsed() * 0.2) * 0.05
 
       updateNodePhysics(nodes, pointsPosAttr.array as Float32Array, delta)
       pointsPosAttr.needsUpdate = true
@@ -332,7 +329,7 @@ export function P2PMeshBackground() {
       cancelAnimationFrame(animationFrameId)
       window.removeEventListener('pointermove', onPointerMove)
       window.removeEventListener('resize', onResize)
-      document.removeEventListener('visibilitychange', onVisibilityChange)
+      timer.dispose()
 
       pointsGeometry.dispose()
       pointsMaterial.dispose()

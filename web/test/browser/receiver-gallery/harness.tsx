@@ -7,6 +7,7 @@ import type { V2ReceiverSnapshot } from '../../../src/ui/v2-model'
 import { EMPTY_V2_PREVIEW } from '../../../src/ui/v2-model'
 import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type Scenario } from './fixtures'
 import { syntheticVideo } from './video'
+import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import '../../../src/index.css'
 import '../../../src/App.css'
 
@@ -18,6 +19,7 @@ class GalleryController {
   readonly #listeners = new Set<() => void>()
   readonly intents: string[] = []
   #videoUrl: string | undefined
+  holdVideoSeeks = false
   close = () => { if (this.#videoUrl !== undefined) URL.revokeObjectURL(this.#videoUrl) }
   constructor(snapshot: V2ReceiverSnapshot) { this.#snapshot = snapshot }
   getSnapshot = () => this.#snapshot
@@ -76,8 +78,24 @@ class GalleryController {
       : photoPreview(true, id) })
   }
   cancelPreview = () => this.#publish({ preview: EMPTY_V2_PREVIEW })
-  seekPreview = (seconds: number) => { this.intents.push('seek:' + seconds) }
-  previewMediaPresented = () => undefined
+  seekPreview = (seconds: number) => {
+    this.intents.push('seek:' + seconds)
+    const preview = this.#snapshot.preview
+    if (preview.state !== 'video') return
+    this.#publish({ preview: { ...preview, seeking: true } })
+    if (!this.holdVideoSeeks) this.completeVideoSeek(seconds).catch(() => this.previewMediaFailed())
+  }
+  completeVideoSeek = async (seconds: number, decoderUrl?: string) => {
+    const preview = this.#snapshot.preview
+    if (preview.state !== 'video') throw new Error('No video preview is open')
+    const bytes = await fetch(this.#videoUrl!).then(response => response.blob())
+    if (this.#snapshot.preview !== preview) return
+    URL.revokeObjectURL(this.#videoUrl!)
+    this.#videoUrl = URL.createObjectURL(bytes)
+    this.#publish({ preview: { ...preview, seeking: false, positionSeconds: seconds,
+      presentationId: preview.presentationId + 1, url: decoderUrl ?? this.#videoUrl } })
+  }
+  previewMediaPresented = (id: number) => { this.intents.push('presented:' + id) }
   previewMediaFailed = () => {
     this.#publish({ preview: { state: 'error', fileId: 'photo', name: 'Photo', message: 'The browser could not decode this preview.' } })
   }
@@ -91,6 +109,19 @@ class GalleryController {
   retainCurrentOperation = async () => false
   performRetainedAction = () => { this.intents.push('retained-action') }
   catchUpStoppedCompatibleNames = () => undefined
+  completeDownload = (kind: 'published' | 'download-started') => {
+    const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
+    const source = facts.lifecycle
+    const lifecycle = source.kind === 'published' ? { ...source, cleanupState: 'clean' as const } : source
+    this.#publish({
+      activeReceiveOperationId: null,
+      startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
+      taskDisplay: { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
+        createdAtMilliseconds: facts.display!.createdAtMilliseconds,
+        ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) },
+      output: { ...this.#snapshot.output, lifecycle, lifecyclePresentation: null },
+    })
+  }
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -100,7 +131,9 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   active?.close()
   active = new GalleryController(await gallerySnapshot(scenario))
   // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
-  Object.assign(window, { windshareGalleryEvidence: galleryEvidence })
+  Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
+    windshareCompleteDownload: active.completeDownload,
+    windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
   const toolbar = document.createElement('nav')
@@ -120,6 +153,12 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   // the production receiver, with no networking or destination authority.
   const Surface = scenario.startsWith('portal') ? PortalApp : V2ReceiverApp
   flushSync(() => root!.render(<Surface controller={active as unknown as V2ReceiverController} />))
+}
+
+export function holdVideoSeeks() { active!.holdVideoSeeks = true }
+
+export function completeVideoSeek(seconds: number, decoderUrl?: string) {
+  return active!.completeVideoSeek(seconds, decoderUrl)
 }
 
 export function galleryEvidence() {
