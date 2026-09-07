@@ -5,7 +5,7 @@ const SMOKE_HARD_TIMEOUT_MILLISECONDS = 90_000
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['v2-direct-smoke.spec.ts'],
+  testMatch: ['v2-direct-smoke.spec.ts', 'v2-relay-burst.spec.ts'],
   outputDir: 'test-results/direct-smoke',
   fullyParallel: false,
   forbidOnly: true,

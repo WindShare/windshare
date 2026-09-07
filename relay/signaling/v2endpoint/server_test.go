@@ -333,10 +333,10 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.forwardFrame(sender, oldFrame); err != nil {
+	if err := server.forwardFrame(context.Background(), sender, oldFrame); err != nil {
 		t.Fatalf("active route with vanished receiver closed sender: %v", err)
 	}
-	if err := server.forwardFrame(sender, oldFrame); err != nil {
+	if err := server.forwardFrame(context.Background(), sender, oldFrame); err != nil {
 		t.Fatalf("exact retired sender frame was not isolated: %v", err)
 	}
 	retired, err := registry.ResolveSession(oldSession.RelaySessionID, sender.ref)
@@ -350,7 +350,7 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.forwardFrame(sender, healthyFrame); err != nil {
+	if err := server.forwardFrame(context.Background(), sender, healthyFrame); err != nil {
 		t.Fatalf("healthy sibling route after retirement: %v", err)
 	}
 	forwarded, ok := receiverB.takeForward()
@@ -369,7 +369,8 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 			t.Fatal("could not fill the exact receiver session queue")
 		}
 	}
-	if err := server.forwardFrame(sender, overflowFrame); err != nil {
+	server.writeTimeout = time.Millisecond
+	if err := server.forwardFrame(context.Background(), sender, overflowFrame); err != nil {
 		t.Fatalf("receiver queue overflow closed multiplexed sender: %v", err)
 	}
 	select {
@@ -381,7 +382,7 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 		resolution.Disposition != v2route.SessionRetired {
 		t.Fatalf("overflowing session retirement = %+v, %v", resolution, err)
 	}
-	if err := server.forwardFrame(sender, healthyFrame); err != nil {
+	if err := server.forwardFrame(context.Background(), sender, healthyFrame); err != nil {
 		t.Fatalf("healthy sibling route after overflow: %v", err)
 	}
 	if forwarded, ok := receiverB.takeForward(); !ok || !bytes.Equal(forwarded, healthyFrame) {
@@ -390,7 +391,7 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 
 	outsider := newEndpointTestConnection("replacement-sender", nil, func() {})
 	outsider.setRole(roleSender, fixture.init.ShareID)
-	if err := server.forwardFrame(outsider, oldFrame); !errors.Is(err, ErrProtocol) {
+	if err := server.forwardFrame(context.Background(), outsider, oldFrame); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("retired outsider error = %v", err)
 	}
 	unknownID := oldSession.RelaySessionID
@@ -401,11 +402,11 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := server.forwardFrame(sender, unknownFrame); !errors.Is(err, ErrProtocol) {
+	if err := server.forwardFrame(context.Background(), sender, unknownFrame); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("never-authorized session error = %v", err)
 	}
 	clientRetirement, _ := (v2.SessionRetired{RelaySessionID: oldSession.RelaySessionID}).MarshalBinary()
-	if err := server.forwardFrame(sender, clientRetirement); !errors.Is(err, ErrProtocol) {
+	if err := server.forwardFrame(context.Background(), sender, clientRetirement); !errors.Is(err, ErrProtocol) {
 		t.Fatalf("client-origin SESSION_RETIRED error = %v", err)
 	}
 }

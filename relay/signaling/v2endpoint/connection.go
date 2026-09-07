@@ -37,12 +37,13 @@ type connection struct {
 	control chan controlWrite
 	wake    chan struct{}
 
-	forwardMu     sync.Mutex
-	forward       map[v2.RelaySessionID]*forwardQueue
-	forwardOrder  []v2.RelaySessionID
-	forwardCursor int
-	forwardFrames int
-	forwardBytes  int
+	forwardMu      sync.Mutex
+	forward        map[v2.RelaySessionID]*forwardQueue
+	forwardOrder   []v2.RelaySessionID
+	forwardCursor  int
+	forwardFrames  int
+	forwardBytes   int
+	forwardChanged chan struct{}
 
 	sessionMu sync.Mutex
 	sessions  map[v2.RelaySessionID]struct{}
@@ -144,6 +145,10 @@ func (peer *connection) requestClose() bool {
 	applied := false
 	peer.cancelOnce.Do(func() {
 		applied = true
+		peer.closed.Store(true)
+		peer.forwardMu.Lock()
+		peer.forwardCapacityChangedLocked()
+		peer.forwardMu.Unlock()
 		peer.cancel()
 	})
 	return applied
@@ -196,6 +201,7 @@ func (peer *connection) removeSession(id v2.RelaySessionID) bool {
 			}
 		}
 	}
+	peer.forwardCapacityChangedLocked()
 	peer.forwardMu.Unlock()
 	peer.sessionMu.Unlock()
 	return existed
