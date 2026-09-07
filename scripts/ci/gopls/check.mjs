@@ -6,9 +6,9 @@ import { LspConnection } from './jsonrpc.mjs'
 
 const DIAGNOSE_COMMAND = 'gopls.diagnose_files'
 const VIEWS_COMMAND = 'gopls.views'
-// gopls recomputes build views on each open/close. A small working set bounds
-// that cost as repositories grow, while one retained file keeps each view alive.
-const MAX_OPEN_BATCH_FILES = 64
+// Each open/close makes gopls reconsider every open file across build views.
+// Keep that working set small; retained witnesses still keep each view loaded.
+const MAX_OPEN_BATCH_FILES = 8
 const HINT_SEVERITY = 4
 const DOCUMENT_VERSION = 1
 const ANALYSIS_TIMEOUT_MS = 15 * 60 * 1000
