@@ -1,82 +1,37 @@
-# Local test timing snapshot — 2026-08-05
+# Local CI timing snapshot — 2026-09-07
 
-This is a single warm-cache diagnostic run, not a p95 baseline or a validation budget. Timings from
-different hosts, toolchains, cache states, or test ownership layouts are not directly comparable.
+One before/after pair on the same Windows amd64 checkout, using existing caches and installed tools.
+This is a local diagnostic, not a p95 baseline or a performance guarantee.
 
-Environment: Windows 11 10.0.26200, Intel Core i7-14700KF (28 logical processors), 31.8 GiB RAM,
-Go 1.26.5, Node.js 24.16.0, and pnpm 11.8.0.
+Host: Intel Core i7-14700KF (28 logical processors), 31.8 GiB RAM; Go 1.27.0, gopls 0.23.0,
+Node.js 24.16.0, pnpm 11.8.0. Other developer applications remained open.
 
-Counts below use top-level Go tests, Vitest assertions, and Playwright project/test identities. Go package
-parallelism means individual test durations are useful for finding outliers but are not additive wall time.
-
-## Ordinary local CI tests
-
-| Owner | Tests | Wall time |
+| Measurement | Before | After |
 |---|---:|---:|
-| Root short Go race/coverage sweep | 465 | 14.81 s + 1.39 s coverage verdict |
-| Core short Go race/coverage sweep | 1,269 | 35.37 s + 0.13 s coverage verdict |
-| Vitest, 65 files | 450 | 13.51 s |
-| Critical process E2E | 1 | 6.59 s |
-| Chromium product smoke | 1 | 3.48 s |
-| **Test-only total** | **2,186** | **75.30 s** |
+| Complete `make ci-parallel` | 708.1 s | 286.4 s |
+| gopls within that run | 624.0 s | 278.6 s |
+| Web gate | 145 s | 110 s |
+| Vitest within the Web gate | 78.64 s | 38.97 s |
+| Hygiene gate | 79 s | 16 s |
+| Browser gate | 115 s | 97 s |
 
-The slowest ordinary top-level tests were the progressive liveshare transfer (15.97 s), Windows NTFS
-restart recovery (15.69 s), composite runtime durable publication (12.50 s), and output-runtime retirement
-cleanup (11.17 s). Vitest assertions consumed 2.41 s in aggregate; most of its 13.51 s wall time was runner
-startup, file loading, and transformation.
+The complete run saved 421.7 seconds (59.6%). Gate timers are reported by their launchers and do not
+always include package discovery; concurrent gate durations must not be added to estimate total time.
 
-## Scheduled test owners
+Both complete runs passed the same ordinary gates: 92 production Go packages with unchanged race and
+coverage requirements, 1,297 maintained Go files across six gopls views, 2,018 Vitest tests in 249 files,
+and 86 Chromium smoke/short-contract tests.
 
-| Owner | Tests | Wall time |
-|---|---:|---:|
-| Long process E2E | 6 | 34.92 s |
-| Native integration packages | 8 | 1.10 s |
-| Catalog long tests | 4 | 48.05 s |
-| Output-runtime long tests | 2 | 3.77 s |
-| Browser weekly supplement | 10 | 41.42 s |
-| **Additional scheduled total** | **30** | **129.26 s** |
+The comparison combines three changes:
 
-`browser-weekly` also owns the ordinary Chromium smoke, so its complete current-host cost was 44.90 s.
+- Move 86,747 historical experiment files from `tmp/` into `.tmp/legacy-tmp/`, preserving them. Go's
+  `./...` traversal skips dot directories but does not read `.gitignore`. Package discovery after the
+  move took 1.0 second and returned the identical package set. The native FSA evidence runner now writes
+  new browser profiles and materialized trees below `.tmp/fsa-small-file-native/`.
+- Reduce the gopls open batch from 64 to 8 files. Each open/close recomputes views over the open set;
+  smaller batches bound that work while retaining view witnesses and explicit diagnostic completion.
+- Run Vitest with two workers and explicit file isolation instead of one worker. Browser concurrency
+  and the three CI lanes are unchanged.
 
-## Browser contracts without a current owner
-
-The seven `web/test/browser/*.spec.ts` files contain 40 logical tests, or 120 identities across Chromium,
-Firefox, and WebKit. Existing dormant configurations discover 75 identities; a temporary local-only
-configuration measured the remaining 45 and was removed after the run.
-
-| Group | Result | Wall time |
-|---|---:|---:|
-| R0 storage contract | 7 passed, 2 skipped | 12.15 s |
-| Curve25519 fallback | 3 passed | 5.25 s |
-| R5 output contracts | 50 passed, 13 skipped | 109.27 s |
-| Remaining catalog, preview, and scaffold specs | 45 passed | 29.66 s |
-| **Total** | **105 passed, 15 skipped** | **156.34 s** |
-
-R5 dominates this cost: its million-member ZIP, exact portable-boundary, and real recovery scenarios belong
-in a scheduled long owner rather than an ordinary short browser gate.
-
-## Validation observation
-
-All suites above passed when timed independently. A later `make ci` run stopped after 39.45 s in the core
-short sweep because two Windows placement-guard tests received `Access is denied`. A focused race-enabled
-rerun reproduced `TestWindowsV3RecoveryRetainsFullPlacementGuardThroughFinalObservation`; the companion
-`TestWindowsResumeDiscardRetainsPlacementThroughFinalRevalidation` passed on focused rerun. Therefore this
-snapshot does not establish that the full local CI was green or that its p95 goal was met.
-
-## Follow-up after browser contract ownership changes
-
-The follow-up was measured on the same host after the browser contract projects became owned by the local
-gates. No Go source, Go test, or Go module files changed in the comparison worktree, so the Go rows above
-remain the reference values.
-
-| Scope | Previous | Current | Change |
-|---|---:|---:|---:|
-| Vitest | 450 tests / 13.51 s | 459 tests / 14.21 s | +9 / +0.70 s (+5.2%) |
-| Ordinary browser owner | 1 test / 3.48 s | 31 tests / 13.78 s | +30 / +10.30 s |
-| **Ordinary test-only total** | **2,186 / 75.30 s** | **2,225 / 79.69 s** | **+39 / +4.39 s (+5.8%)** |
-| Browser weekly full sweep | 11 tests / 44.90 s | 58 tests / 101.46 s | +47 / +56.56 s (+126%) |
-
-The new weekly supplement measured 27 tests in 87.68 s. Its largest new owners were Firefox/WebKit component
-contracts (12 tests, 9.88 s) and Chromium periodic contracts (5 tests, 24.83 s); the million-member ZIP
-periodic case alone took 10.06 s and the exact-boundary case 9.03 s. The new Web gate's lint and build steps
-took 8.00 s and 5.08 s respectively, in addition to the 14.21 s Vitest run.
+These measurements do not isolate each change's contribution. Raw local logs are in
+`.tmp/ci-parallel-before.log`, `.tmp/ci-parallel-after.log`, and `.tmp/ci-parallel-after-summary.json`.
