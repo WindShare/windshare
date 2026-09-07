@@ -1,6 +1,6 @@
 # Pinned Pion provider adaptation
 
-WindShare carries source projections of Pion ICE v4.2.7 and WebRTC v4.2.16. Exact
+WindShare carries source projections of Pion ICE v4.4.2 and WebRTC v4.2.20. Exact
 upstream commits, Go checksums and file hashes are in `manifest.json`; upstream
 MIT licenses and SPDX notices remain beside the sources. These nested dependency
 modules are separate from WindShare's single production Go module and coverage set.
@@ -14,7 +14,8 @@ The narrow patches in `patches/` add:
 - Correct TCP type and socket address preservation for mapped server-reflexive candidates.
 - Initial checking time independent of connected disconnection/failure timers.
 - Local preference applied inside ICE before checklist construction and signaling.
-- Explicit STUN cache-bypassing refresh and response transaction validation.
+- Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
+- Context cancellation preserved through local-endpoint STUN gathering.
 - Complete universal UDP mux initialization before its socket reader starts.
 
 Socket, demand, mapping and retry policy remain in WindShare. Production uses

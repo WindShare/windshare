@@ -11,7 +11,7 @@ index 17182a0..593c7cb 100644
  			Network:     c.Protocol.String(),
  			Address:     c.Address,
 diff --git a/icegatherer.go b/icegatherer.go
-index 7f0294b..451b40b 100644
+index c5c5ecc..815ab78 100644
 --- a/icegatherer.go
 +++ b/icegatherer.go
 @@ -256,6 +256,7 @@ func (g *ICEGatherer) baseAgentOptions(mDNSMode ice.MulticastDNSMode) []ice.Agen
@@ -47,7 +47,7 @@ index 0000000..ca08a47
 +	e.iceProviderConfig = config
 +}
 diff --git a/settingengine.go b/settingengine.go
-index dda020f..79b0fb4 100644
+index 65e7c28..c4e3415 100644
 --- a/settingengine.go
 +++ b/settingengine.go
 @@ -104,6 +104,7 @@ type SettingEngine struct {
@@ -57,4 +57,4 @@ index dda020f..79b0fb4 100644
 +	iceProviderConfig                         ice.ProviderConfig
  	iceProxyDialer                            proxy.Dialer
  	iceDisableActiveTCP                       bool
- 	iceBindingRequestHandler                  func(m *stun.Message, local, remote ice.Candidate, pair *ice.CandidatePair) bool //nolint:lll
+ 	iceUseCandidateCheckPriority              bool

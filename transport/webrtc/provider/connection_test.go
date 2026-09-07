@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/pion/ice/v4"
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 	pion "github.com/pion/webrtc/v4"
 	"github.com/windshare/windshare/connectivity/socketauthority"
 )

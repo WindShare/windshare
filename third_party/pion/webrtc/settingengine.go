@@ -18,7 +18,7 @@ import (
 	"github.com/pion/dtls/v3/pkg/protocol/handshake"
 	"github.com/pion/ice/v4"
 	"github.com/pion/logging"
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 	"github.com/pion/transport/v4"
 	"github.com/pion/transport/v4/packetio"
 	"golang.org/x/net/proxy"
@@ -107,6 +107,7 @@ type SettingEngine struct {
 	iceProviderConfig                         ice.ProviderConfig
 	iceProxyDialer                            proxy.Dialer
 	iceDisableActiveTCP                       bool
+	iceUseCandidateCheckPriority              bool
 	iceBindingRequestHandler                  func(m *stun.Message, local, remote ice.Candidate, pair *ice.CandidatePair) bool //nolint:lll
 	disableMediaEngineCopy                    bool
 	disableMediaEngineMultipleCodecs          bool
@@ -507,6 +508,12 @@ func (e *SettingEngine) SetICEProxyDialer(d proxy.Dialer) {
 // that can be sent on a candidate before it is considered invalid.
 func (e *SettingEngine) SetICEMaxBindingRequests(d uint16) {
 	e.iceMaxBindingRequests = &d
+}
+
+// SetICEUseCandidateCheckPriority enables checking pair priority before switching
+// selected candidate pair when an ICE Lite agent receives USE-CANDIDATE.
+func (e *SettingEngine) SetICEUseCandidateCheckPriority(enabled bool) {
+	e.iceUseCandidateCheckPriority = enabled
 }
 
 // DisableActiveTCP disables using active TCP for ICE. Active TCP is enabled by default.

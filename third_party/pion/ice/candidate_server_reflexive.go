@@ -44,18 +44,13 @@ func NewCandidateServerReflexive(config *CandidateServerReflexiveConfig) (*Candi
 		candidateID = globalCandidateIDGenerator.Generate()
 	}
 
-	var resolved net.Addr = &net.UDPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
-	if networkType.IsTCP() {
-		resolved = &net.TCPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
-	}
-	return &CandidateServerReflexive{
+	candidate := &CandidateServerReflexive{
 		candidateBase: candidateBase{
 			id:                 candidateID,
 			networkType:        networkType,
 			candidateType:      CandidateTypeServerReflexive,
 			address:            config.Address,
 			port:               config.Port,
-			resolvedAddr:       resolved,
 			tcpType:            config.TCPType,
 			component:          config.Component,
 			foundationOverride: config.Foundation,
@@ -65,5 +60,13 @@ func NewCandidateServerReflexive(config *CandidateServerReflexiveConfig) (*Candi
 				Port:    config.RelPort,
 			},
 		},
-	}, nil
+	}
+	// TCP candidates must retain both their socket type and Pion's cached endpoint.
+	var resolved net.Addr = &net.UDPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
+	if networkType.IsTCP() {
+		resolved = &net.TCPAddr{IP: ipAddr.AsSlice(), Port: config.Port, Zone: ipAddr.Zone()}
+	}
+	candidate.setResolvedAddr(resolved)
+
+	return candidate, nil
 }
