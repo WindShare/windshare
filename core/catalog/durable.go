@@ -29,6 +29,7 @@ const (
 	FileFaultStageChild      FileBackendFaultPoint = "stage-child"
 	FileFaultStagePage       FileBackendFaultPoint = "stage-page"
 	FileFaultStagePageObject FileBackendFaultPoint = "stage-page-object"
+	FileFaultStageNodeIndex  FileBackendFaultPoint = "stage-node-index"
 	FileFaultPrepare         FileBackendFaultPoint = "prepare"
 	FileFaultPublish         FileBackendFaultPoint = "publish"
 	FileFaultStageFailure    FileBackendFaultPoint = "stage-failure"
@@ -54,6 +55,7 @@ type FileCatalogBackend struct {
 	share        ShareInstance
 	faults       FileBackendFaults
 	closed       bool
+	nodeIndexes  map[DirectoryID]fileNodeIndex
 }
 
 func NewFileCatalogBackend(config FileCatalogBackendConfig) (*FileCatalogBackend, error) {
@@ -96,6 +98,7 @@ func (b *FileCatalogBackend) Recover(ctx context.Context) (ResourceUsage, error)
 	if err != nil {
 		return ResourceUsage{}, err
 	}
+	b.nodeIndexes = nil
 	var usage ResourceUsage
 	for _, entry := range entries {
 		if !entry.IsDir() {
@@ -122,6 +125,8 @@ func (b *FileCatalogBackend) Recover(ctx context.Context) (ResourceUsage, error)
 	if !ok {
 		return ResourceUsage{}, ErrBudgetExceeded
 	}
+	// CatalogStore admits recovered memory before the first lookup allocates
+	// filters, so a large recovered share cannot allocate past its budget here.
 	return usage, nil
 }
 
@@ -255,6 +260,7 @@ func (b *FileCatalogBackend) LoadPageObject(ctx context.Context, directory Direc
 func (b *FileCatalogBackend) Close() error {
 	b.mu.Lock()
 	b.closed = true
+	b.nodeIndexes = nil
 	b.mu.Unlock()
 	return nil
 }
@@ -262,6 +268,7 @@ func (b *FileCatalogBackend) Close() error {
 func (b *FileCatalogBackend) Destroy() error {
 	b.mu.Lock()
 	b.closed = true
+	b.nodeIndexes = nil
 	root := b.root
 	b.mu.Unlock()
 	if err := os.RemoveAll(root); err != nil {

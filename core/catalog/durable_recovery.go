@@ -39,7 +39,7 @@ func (m fileCatalogMeta) committed() CommittedDirectory {
 }
 
 func (m fileCatalogMeta) usage() ResourceUsage {
-	return ResourceUsage{Entries: m.entryCount, SpillBytes: m.spillBytes}
+	return ResourceUsage{Entries: m.entryCount, MemoryBytes: nodeIndexMemoryBytes(m.entryCount), SpillBytes: m.spillBytes}
 }
 
 func encodeFileCatalogMeta(meta fileCatalogMeta) []byte {
@@ -101,6 +101,9 @@ func (b *FileCatalogBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecor
 	if err := ctx.Err(); err != nil {
 		return NodeRecord{}, false, err
 	}
+	if err := b.ensureNodeIndexes(ctx); err != nil {
+		return NodeRecord{}, false, err
+	}
 	b.mu.RLock()
 	defer b.mu.RUnlock()
 	if b.closed {
@@ -110,47 +113,17 @@ func (b *FileCatalogBackend) LoadNode(ctx context.Context, id NodeID) (NodeRecor
 }
 
 func (b *FileCatalogBackend) loadNodeLocked(ctx context.Context, id NodeID, exclude DirectoryID) (NodeRecord, bool, error) {
-	directories, err := os.ReadDir(b.committedDir)
-	if err != nil {
-		return NodeRecord{}, false, err
-	}
-	for _, directory := range directories {
+	digest := nodeIndexHash(id)
+	for directory, index := range b.nodeIndexes {
 		if err := ctx.Err(); err != nil {
 			return NodeRecord{}, false, err
 		}
-		meta, err := readFileCatalogMeta(filepath.Join(b.committedDir, directory.Name(), fileCatalogMetaName))
-		if err != nil {
-			return NodeRecord{}, false, err
-		}
-		if meta.directory == exclude {
+		if directory == exclude || !index.filterContains(digest) {
 			continue
 		}
-		path := filepath.Join(b.committedDir, directory.Name())
-		encoded, err := readCatalogObject(filepath.Join(path, fileCatalogDirectoryName))
-		if err != nil {
-			return NodeRecord{}, false, err
-		}
-		record, err := decodeNodeRecord(encoded)
-		if err != nil {
-			return NodeRecord{}, false, err
-		}
-		if record.NodeID() == id {
-			return record, true, nil
-		}
-		children, err := os.Open(filepath.Join(path, fileCatalogChildrenName))
-		if err != nil {
-			return NodeRecord{}, false, err
-		}
-		record, found, scanErr := findNodeInFile(ctx, children, id)
-		closeErr := children.Close()
-		if scanErr != nil {
-			return NodeRecord{}, false, scanErr
-		}
-		if closeErr != nil {
-			return NodeRecord{}, false, closeErr
-		}
-		if found {
-			return record, true, nil
+		record, found, err := b.loadIndexedNode(ctx, directory, index, id, digest)
+		if err != nil || found {
+			return record, found, err
 		}
 	}
 	return NodeRecord{}, false, nil
@@ -226,6 +199,10 @@ func validateCommittedContents(
 	committed, err := sequence.Finish()
 	if err != nil || committed != meta.committed() {
 		return [sha256.Size]byte{}, ErrCorruptCatalogStorage
+	}
+	filterBytes, slots := nodeIndexGeometry(meta.entryCount)
+	if err := hashFileNodeIndex(ctx, digest, filepath.Join(path, fileCatalogNodeIndexName), filterBytes+slots*nodeIndexSlotBytes); err != nil {
+		return [sha256.Size]byte{}, err
 	}
 	var computed [sha256.Size]byte
 	copy(computed[:], digest.Sum(nil))
@@ -317,25 +294,6 @@ func readNodeFrame(reader io.Reader) ([]byte, bool, error) {
 		return nil, false, err
 	}
 	return encoded, true, nil
-}
-
-func findNodeInFile(ctx context.Context, reader io.Reader, id NodeID) (NodeRecord, bool, error) {
-	for {
-		if err := ctx.Err(); err != nil {
-			return NodeRecord{}, false, err
-		}
-		encoded, ok, err := readNodeFrame(reader)
-		if err != nil || !ok {
-			return NodeRecord{}, false, err
-		}
-		record, err := decodeNodeRecord(encoded)
-		if err != nil {
-			return NodeRecord{}, false, err
-		}
-		if record.NodeID() == id {
-			return record, true, nil
-		}
-	}
 }
 
 func directoryTreeBytes(root string) (uint64, error) {
