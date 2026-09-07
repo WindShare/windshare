@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
+import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
+import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../../src/diagnostics/trace/lane-payload'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
 import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
 
@@ -16,6 +18,8 @@ import type {
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
   createOutputTraceSource,
+  createProtocolTraceSource,
+  projectProtocolTraceEvent,
   createV2ReceiverTraceSource,
   projectV2ReceiverTraceEvent,
 } from '../../src/ui/v2-production-trace'
@@ -42,6 +46,41 @@ it('exports a sealed unsampled final per-download record through the existing tr
     const source = createV2ReceiverTraceSource(composition.trace)
     emit(source, () => event)
     expect(composition.runtime.status().retained_event_count).toBe('1')
+  })
+
+it('exports lane exception causes and bounded stacks without mutating the failure', () => {
+    const cause = new Error('Peer continuation binding changed')
+    const failure = new Error('Authenticated session lane failed', { cause })
+    const event = {
+      eventName: 'lane_transition' as const,
+      transition: 'detached' as const,
+      detachmentClass: 'authenticated_failure' as const,
+      failure,
+      correlation: {
+        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        lane: { id: 2, epoch: 0 },
+      },
+    }
+    const composition = productionComposition()
+    composition.runtime.enable()
+    createProtocolTraceSource(composition.trace).current?.(event)
+    const exported = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+    const detail = exported.find(line => line.record?.event === 'lane_transition').record.payload.failure_detail
+    expect(JSON.parse(detail)).toMatchObject({
+      message: 'Authenticated session lane failed',
+      stack: expect.any(String),
+      cause: { message: 'Peer continuation binding changed', stack: expect.any(String) },
+    })
+    expect(failure.cause).toBe(cause)
+
+    Object.defineProperty(failure, 'cause', { value: failure })
+    failure.message = 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS * 2)
+    const projected = projectProtocolTraceEvent(event)
+    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV1('lane_transition', {
+      transition: 'detached', detachment_class: 'authenticated_failure',
+      failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1),
+    })).toThrow('bounded text')
   })
 
 describe('browser diagnostics production composition', () => {

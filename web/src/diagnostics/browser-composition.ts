@@ -32,7 +32,7 @@ import {
   type TraceClock,
   type TraceScheduler,
 } from './trace/ports'
-import { TraceSwitch } from './trace/switch'
+import { TraceSwitch, type TraceActivationStore } from './trace/switch'
 import {
   BoundedLocalOutputOperationFailureHistory,
   type LocalOutputOperationFailureDiagnosticsPort,
@@ -52,6 +52,7 @@ export interface BrowserDiagnosticsCompositionOptions {
   readonly randomBytes?: (byteLength: number) => Uint8Array
   readonly clock?: BrowserDiagnosticsClock
   readonly scheduler?: TraceScheduler
+  readonly activationStore?: TraceActivationStore
 }
 
 export interface BrowserDiagnosticsComposition {
@@ -87,6 +88,7 @@ export function createBrowserDiagnosticsComposition(
   >({
     clock,
     scheduler: options.scheduler ?? SYSTEM_TRACE_SCHEDULER,
+    ...(options.activationStore === undefined ? {} : { activationStore: options.activationStore }),
     eventName: traceEventObservationNameV1,
     snapshotEvent: snapshotTraceEventObservationV1,
     eventBytes: traceEventObservationBytesV1,

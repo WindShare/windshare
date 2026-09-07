@@ -1,3 +1,4 @@
+import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
 import type { CheckpointPayloadV1 } from './checkpoint-payload'
@@ -484,25 +485,7 @@ export interface TraceEventPayloadByNameV1 {
           | 'continuation_conflict'
           | 'protocol_failure'
       }>
-  readonly lane_transition:
-    | Readonly<{
-        transition:
-          | 'attached'
-          | 'grant_requested'
-          | 'grant_received'
-          | 'hello_sent'
-          | 'admission_accepted'
-          | 'installed'
-      }>
-    | Readonly<{
-        transition: 'admission_rejected'
-        rejection_code: number
-        retry_after_ms: number
-      }>
-    | Readonly<{
-        transition: 'detached'
-        detachment_class: 'closed' | 'physical_failure' | 'authenticated_failure'
-      }>
+  readonly lane_transition: LaneTransitionPayloadV1
   readonly receive_transition:
     | Readonly<{
         transition: 'download_connectivity'

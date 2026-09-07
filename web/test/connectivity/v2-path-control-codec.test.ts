@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { decodeV2PeerPathControl, encodeV2PeerPathControl } from '../../src/connectivity/v2-path-control-codec'
-import { decodeV2OperationErrorControl, encodeV2Body, encodeV2Message, peerFailureScope, V2_MESSAGE_KIND, verifyV2SenderControl } from '../../src/session/v2-message'
+import { decodeV2Message, decodeV2OperationErrorControl, encodeV2Body, encodeV2Message, peerFailureScope, V2_MESSAGE_KIND, verifyV2SenderControl } from '../../src/session/v2-message'
 import { V2OperationRouter } from '../../src/session/v2-operation-router'
 
 const vector = JSON.parse(readFileSync(new URL('../../../core/testvectors/v2-peer-signaling.json', import.meta.url), 'utf8')) as {
@@ -24,7 +24,9 @@ it('verifies all Go-authored session-bound signed path controls and canonical bo
  for (const item of vector.pathControls) {
   const body = bytes(item.bodyB64)
   expect(encodeV2PeerPathControl(decodeV2PeerPathControl(body))).toEqual(body)
-  const message = encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, bytes(item.signedBodyB64))
+  const encoded = encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, bytes(item.signedBodyB64))
+  // Transport delivery decodes the outer registry before verifying the signed body.
+  const message = decodeV2Message(encoded.plaintext)
   expect(await verifyV2SenderControl(message, {
    shareInstance: bytes(vector.controlBinding.shareInstanceB64), protocolSessionId: bytes(vector.controlBinding.protocolSessionIdB64),
    laneId: vector.controlBinding.laneId, laneEpoch: vector.controlBinding.laneEpoch, direction: 1, sequence: BigInt(item.sequence),

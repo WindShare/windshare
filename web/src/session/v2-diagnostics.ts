@@ -80,6 +80,7 @@ export type V2LaneTransitionTraceEvent =
       eventName: 'lane_transition'
       transition: 'detached'
       detachmentClass: V2LaneDetachmentClass
+      failure?: unknown
       correlation: FailureCorrelation
     }>
 
