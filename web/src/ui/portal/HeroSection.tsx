@@ -216,7 +216,7 @@ export function HeroSection({
             <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
             <path d="M7 11V7a5 5 0 0 1 10 0v4" />
           </svg>
-          端到端加密 · WebRTC P2P 直连 · 零云端中转
+          端到端加密 · WebRTC P2P 直连 · 零云端存储
         </div>
 
         <h1>无需上传云端 · 秒出任意文件分享链接</h1>
