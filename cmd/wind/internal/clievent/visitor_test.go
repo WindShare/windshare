@@ -2,6 +2,7 @@ package clievent
 
 import (
 	"errors"
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"testing"
 )
 
@@ -153,6 +154,7 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	)
 	senderSessionTerminated, _ := NewSenderSessionTerminated(
 		sessionID, SenderSessionTerminalGracefulStop, SenderSessionTerminalNormalStop,
+		diagnosticerror.Snapshot{},
 	)
 	catalogStorage, _ := NewCatalogStorageObserved(
 		CatalogStorageRecovered, CatalogStorageCauseNone, CatalogUsage{}, 0,

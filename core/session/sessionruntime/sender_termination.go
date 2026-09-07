@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -30,12 +31,13 @@ const (
 )
 
 // SenderSessionTerminated is the single causal root for a sender session. The
-// closed pair records who owned the terminal decision without retaining errors,
-// terminal text, or provider details.
+// closed pair owns lifecycle classification; Failure is independent, immutable
+// diagnostic evidence captured by the winning failure decision.
 type SenderSessionTerminated struct {
 	ProtocolSessionID protocolsession.ProtocolSessionID
 	Trigger           SenderSessionTerminalTrigger
 	Provenance        SenderSessionTerminalProvenance
+	Failure           diagnosticerror.Snapshot
 }
 
 func (terminated SenderSessionTerminated) Valid() bool {
@@ -111,8 +113,9 @@ func (cause runtimeTerminationCause) senderTerminalPair() (
 }
 
 type runtimeTerminationClaim struct {
-	cause runtimeTerminationCause
-	won   bool
+	cause   runtimeTerminationCause
+	won     bool
+	failure diagnosticerror.Snapshot
 }
 
 type runtimeTerminationArbiter struct {
@@ -157,6 +160,7 @@ func (runtime *runtimeCore) publishTermination(claim runtimeTerminationClaim) {
 		ProtocolSessionID: runtime.sessionID,
 		Trigger:           trigger,
 		Provenance:        provenance,
+		Failure:           claim.failure,
 	}
 	if !terminated.Valid() {
 		return
@@ -189,18 +193,34 @@ func (runtime *runtimeCore) terminate(cause runtimeTerminationCause) {
 	if runtime == nil {
 		return
 	}
+	if cause == runtimeTerminationFailed {
+		runtime.terminateWithFailure(cause, runtime.Err(), runtimeFailureSourceRuntime)
+		return
+	}
 	claim := runtime.claimTermination(cause)
 	runtime.completeTermination(claim, true)
 }
 
 func (runtime *runtimeCore) terminateRuntimeFailed(err error) {
+	runtime.terminateWithFailure(runtimeTerminationFailed, err, runtimeFailureSourceRuntime)
+}
+
+func (runtime *runtimeCore) terminateWithFailure(
+	cause runtimeTerminationCause, err error, source runtimeFailureSource,
+) {
 	if runtime == nil {
 		return
 	}
+	claim := runtime.claimTermination(cause)
 	if err != nil {
 		runtime.recordError(err)
 	}
-	runtime.terminate(runtimeTerminationFailed)
+	// Cancellation cannot depend on error inspection or a diagnostic consumer.
+	runtime.cancelContext()
+	if claim.won && runtime.sessionTerminalObserver != nil {
+		claim.failure = diagnosticerror.Capture(err, string(source))
+	}
+	runtime.publishTermination(claim)
 }
 
 type senderTerminalObservers struct {

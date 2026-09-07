@@ -3,6 +3,8 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -163,6 +165,10 @@ func TestSenderTerminalPumpCausePrecedesLaneCompletion(t *testing.T) {
 				test.trigger,
 				test.provenance,
 			)
+			nodes := event.Failure.Nodes()
+			if event.Failure.Source() != "lane_pump" || len(nodes) != 2 || nodes[1].Message != test.pumpError.Error() {
+				t.Fatalf("pump failure detail was lost: %#v", event.Failure)
+			}
 			if !errors.Is(runtime.Err(), test.pumpError) {
 				t.Fatalf("runtime error=%v, want pump cause %v", runtime.Err(), test.pumpError)
 			}
@@ -373,5 +379,86 @@ func assertSenderSessionTermination(
 			trigger,
 			provenance,
 		)
+	}
+}
+
+func TestSenderTerminationSnapshotKeepsWinningErrorBeforeCleanup(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+	observed := make(chan SenderSessionTerminated, 2)
+	runtime.sessionTerminalObserver = SenderSessionTerminalObserverFunc(func(event SenderSessionTerminated) { observed <- event })
+	root := errors.New("original native failure")
+	runtime.terminateRuntimeFailed(fmt.Errorf("peer response: %w", root))
+	runtime.terminateRuntimeFailed(errors.New("later cleanup failure"))
+	event := awaitSenderSessionTermination(t, observed)
+	nodes := event.Failure.Nodes()
+	if event.Trigger != SenderSessionTerminalTriggerRuntimeFailed || len(nodes) != 2 ||
+		nodes[1].Message != root.Error() || nodes[1].Parent != 0 {
+		t.Fatalf("wrong terminal error snapshot: %#v", event)
+	}
+	foundCaller := false
+	for _, frame := range event.Failure.CaptureStack() {
+		foundCaller = foundCaller || strings.HasSuffix(frame.Function, ".TestSenderTerminationSnapshotKeepsWinningErrorBeforeCleanup")
+	}
+	if !foundCaller {
+		t.Fatal("terminal snapshot lost failure call site")
+	}
+	assertNoSenderSessionTermination(t, observed)
+	if !errors.Is(runtime.Err(), root) || runtime.ctx.Err() == nil {
+		t.Fatal("diagnostics changed lifecycle outcome")
+	}
+}
+
+type terminalInspectionError struct {
+	calls              *atomic.Uint32
+	canceled           <-chan struct{}
+	beforeCancellation *atomic.Bool
+}
+
+func (err terminalInspectionError) Error() string {
+	err.calls.Add(1)
+	select {
+	case <-err.canceled:
+	default:
+		err.beforeCancellation.Store(true)
+	}
+	panic("custom Error method failed")
+}
+
+func TestSenderTerminationInspectionCannotPreventCancellationOrRunWithoutObserver(t *testing.T) {
+	for _, enabled := range []bool{false, true} {
+		runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+		observed := make(chan SenderSessionTerminated, 1)
+		if enabled {
+			runtime.sessionTerminalObserver = SenderSessionTerminalObserverFunc(func(event SenderSessionTerminated) { observed <- event })
+		}
+		calls := &atomic.Uint32{}
+		beforeCancellation := &atomic.Bool{}
+		runtime.terminateRuntimeFailed(terminalInspectionError{calls: calls, canceled: runtime.ctx.Done(), beforeCancellation: beforeCancellation})
+		if runtime.ctx.Err() == nil || beforeCancellation.Load() {
+			t.Fatal("error inspection preceded cancellation")
+		}
+		if enabled {
+			event := awaitSenderSessionTermination(t, observed)
+			if !event.Failure.Nodes()[0].InspectionFailed || calls.Load() != 1 {
+				t.Fatal("inspection panic was not isolated")
+			}
+		} else if calls.Load() != 0 {
+			t.Fatal("disabled diagnostics inspected the error")
+		}
+	}
+}
+
+func TestSenderTerminationLosingFailureCannotAddEvidenceToGracefulRoot(t *testing.T) {
+	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+	observed := make(chan SenderSessionTerminated, 1)
+	runtime.sessionTerminalObserver = SenderSessionTerminalObserverFunc(func(event SenderSessionTerminated) { observed <- event })
+	claim := runtime.claimTermination(runtimeTerminationGracefulStop)
+	calls := &atomic.Uint32{}
+	beforeCancellation := &atomic.Bool{}
+	runtime.terminateRuntimeFailed(terminalInspectionError{calls: calls, canceled: runtime.ctx.Done(), beforeCancellation: beforeCancellation})
+	runtime.publishTermination(claim)
+	event := awaitSenderSessionTermination(t, observed)
+	if event.Failure.Present() || calls.Load() != 0 || event.Trigger != SenderSessionTerminalTriggerGracefulStop {
+		t.Fatal("losing failure contaminated the graceful root")
 	}
 }

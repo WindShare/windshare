@@ -1,6 +1,7 @@
 package humanoutput
 
 import (
+	"encoding/base64"
 	"strconv"
 	"strings"
 	"time"
@@ -73,14 +74,61 @@ func transportName(transport clievent.Transport) string {
 }
 
 func formatPeerAttempt(event clievent.PeerAttemptObserved, symbols Symbols) terminalcanvas.Line {
-	message := "Direct connection attempt " + strconv.FormatUint(event.Sequence(), 10) +
-		": " + eventName(event.Stage()) + "."
+	// The event sequence advances within an attempt. Its immutable identity keeps
+	// interleaved attempts distinguishable and matches peer_attempt_id in the trace.
+	identity := base64.RawURLEncoding.EncodeToString(event.PeerAttemptID().Bytes())
+	status, warning := peerAttemptStatus(event)
+	message := "Direct connection [" + identity + "]: " + status
 	style, symbol := terminalcanvas.StyleMuted, symbols.Path
-	if _, failure, ok := event.Failure(); ok {
-		message += " " + failureMessage(failure)
+	if event.Stage() == clievent.PeerAttemptAdmitted {
+		style, symbol = terminalcanvas.StyleSuccess, symbols.Success
+	}
+	if warning {
 		style, symbol = terminalcanvas.StyleWarning, symbols.Warning
 	}
 	return statusLine(symbol, message, style)
+}
+
+func peerAttemptStatus(event clievent.PeerAttemptObserved) (string, bool) {
+	if _, failure, ok := event.Failure(); ok {
+		return "failed. " + failureMessage(failure), true
+	}
+	switch event.Stage() {
+	case clievent.PeerNegotiationDeadlineArmed:
+		return "negotiating.", false
+	case clievent.PeerNegotiationDeadlineExpired:
+		return "negotiation timed out.", true
+	case clievent.PeerDataChannelOpen:
+		return "transport connected; awaiting admission.", false
+	case clievent.PeerAdmissionDeadlineArmed:
+		return "waiting for admission.", false
+	case clievent.PeerAdmissionDeadlineExpired:
+		return "admission timed out.", true
+	case clievent.PeerAdmissionResponseSettled:
+		return peerAdmissionStatus(event)
+	case clievent.PeerAttemptAdmitted:
+		return "connected.", false
+	default:
+		return strings.ReplaceAll(eventName(event.Stage()), "-", " ") + ".", false
+	}
+}
+
+func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
+	disposition, delivery, _ := event.Admission()
+	message := "admission accepted."
+	warning := disposition == clievent.PeerAdmissionRejected
+	if warning {
+		code, retryMillis, _ := event.Rejection()
+		message = "admission rejected (" + strings.ReplaceAll(eventName(code), "-", " ") + ")."
+		if retryMillis != 0 {
+			message += " Retry after " + strconv.FormatUint(retryMillis, 10) + " ms."
+		}
+	}
+	if delivery == clievent.PeerResponseDeliveryFailed {
+		message += " Admission response delivery failed."
+		warning = true
+	}
+	return message, warning
 }
 
 func formatProtocolOperationFailure(

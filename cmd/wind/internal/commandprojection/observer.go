@@ -94,7 +94,7 @@ func ProjectSenderSessionTerminated(
 	if !ok {
 		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
 	}
-	event, err := clievent.NewSenderSessionTerminated(session, trigger, provenance)
+	event, err := clievent.NewSenderSessionTerminated(session, trigger, provenance, value.Failure)
 	if err != nil {
 		return clievent.SenderSessionTerminated{}, ErrInvalidProjection
 	}

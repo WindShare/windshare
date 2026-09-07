@@ -1,4 +1,23 @@
-# Browser diagnostics
+# Diagnostics
+
+## Sender trace
+
+Add `--trace-dir sender_trace --verbose` to `wind share` and keep the resulting NDJSON file.
+On `sender_session_terminated`, `trigger` and `provenance` remain stable classifications.
+Its optional `failure` captures the winning terminal decision's error evidence:
+
+- `source` identifies the failing runtime component or lane pump.
+- `nodes` preserves error types, messages, and cause branches through `parent_index`.
+- `capture_stack` records functions, files, and lines at capture time. Ordinary Go errors do
+  not retain their creation stack, so this is the termination capture location.
+- `truncated` marks bounded evidence; `inspection_failed` marks an error method that panicked.
+  `error_available: false` means no underlying error was available at termination.
+
+Snapshots retain at most 16 error nodes, 8 cause levels, 12 frames, and 8 KiB of text; they do
+not retain original error objects. Later cleanup cannot replace the winning failure snapshot.
+Use `runtime_run_id` and `protocol_session_id` to correlate it with surrounding trace events.
+
+## Browser diagnostics
 
 To capture a problem that happens when reopening a share:
 

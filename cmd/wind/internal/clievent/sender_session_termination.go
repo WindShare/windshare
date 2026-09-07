@@ -1,21 +1,25 @@
 package clievent
 
+import "github.com/windshare/windshare/core/diagnosticerror"
+
 type SenderSessionTerminated struct {
 	session    ProtocolSessionID
 	trigger    SenderSessionTerminalTrigger
 	provenance SenderSessionTerminalProvenance
+	failure    diagnosticerror.Snapshot
 }
 
 func NewSenderSessionTerminated(
 	session ProtocolSessionID,
 	trigger SenderSessionTerminalTrigger,
 	provenance SenderSessionTerminalProvenance,
+	failure diagnosticerror.Snapshot,
 ) (SenderSessionTerminated, error) {
 	if !session.Valid() || !validSenderSessionTerminalPair(trigger, provenance) {
 		return SenderSessionTerminated{}, ErrInvalidEvent
 	}
 	return SenderSessionTerminated{
-		session: session, trigger: trigger, provenance: provenance,
+		session: session, trigger: trigger, provenance: provenance, failure: failure,
 	}, nil
 }
 
@@ -53,4 +57,8 @@ func (value SenderSessionTerminated) Provenance() SenderSessionTerminalProvenanc
 }
 func (value SenderSessionTerminated) Accept(visitor Visitor) error {
 	return acceptSenderSessionTerminated(visitor, value)
+}
+
+func (value SenderSessionTerminated) FailureSnapshot() diagnosticerror.Snapshot {
+	return value.failure
 }

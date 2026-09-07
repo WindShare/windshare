@@ -2,6 +2,7 @@ package humanoutput
 
 import (
 	"errors"
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"io"
 	"strings"
 	"sync"
@@ -218,6 +219,7 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 		sessionID,
 		clievent.SenderSessionTerminalGracefulStop,
 		clievent.SenderSessionTerminalNormalStop,
+		diagnosticerror.Snapshot{},
 	)
 	if err != nil {
 		t.Fatal(err)

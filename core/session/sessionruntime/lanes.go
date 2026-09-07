@@ -367,12 +367,11 @@ func (lanes *runtimeLanes) settleRun(lane *runtimeLane, results ...laneRunResult
 	if cause != nil && lanes.runtime.ctx.Err() == nil {
 		// The pump owns authenticated peer-terminal and local protocol failures.
 		// Claim that cause before completeLane can publish last-path retirement.
-		lanes.runtime.recordError(cause)
+		trigger := runtimeTerminationFailed
 		if errors.Is(cause, protocolsession.ErrPeerSessionTerminal) {
-			lanes.runtime.terminate(runtimeTerminationPeerTerminal)
-		} else {
-			lanes.runtime.terminate(runtimeTerminationFailed)
+			trigger = runtimeTerminationPeerTerminal
 		}
+		lanes.runtime.terminateWithFailure(trigger, cause, runtimeFailureSourceLanePump)
 	}
 	lanes.completeLane(lane)
 }
