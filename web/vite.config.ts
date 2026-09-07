@@ -3,6 +3,7 @@ import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vitest/config'
 
 const UNIT_TEST_PATTERN = 'test/**/*.test.{ts,tsx}'
+const MAX_UNIT_TEST_WORKERS = 2
 const BUILD_REVISION_PATTERN = /^[0-9a-f]{7,64}$/
 const LOCAL_DEVELOPMENT_MODE = 'windshare-local'
 const LOCAL_RELAY_PROXY_TARGET = 'http://127.0.0.1:8484'
@@ -49,12 +50,13 @@ export default defineConfig(({ command, mode }) => {
         }
       : {}),
     test: {
-      // A single worker and explicit cleanup make order or leaked globals unable to
-      // turn a passing unit suite into a runner-dependent result.
+      // File isolation contains globals; two workers overlap startup and analysis
+      // while leaving resources for the Go lanes in ci-parallel.
       include: [UNIT_TEST_PATTERN],
       environment: 'node',
-      fileParallelism: false,
-      maxWorkers: 1,
+      isolate: true,
+      fileParallelism: true,
+      maxWorkers: MAX_UNIT_TEST_WORKERS,
       clearMocks: true,
       restoreMocks: true,
       unstubEnvs: true,
