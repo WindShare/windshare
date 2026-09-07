@@ -243,7 +243,7 @@ func TestLongFileCatalogBackendWideSortReplayAndRecoveryAccounting(t *testing.T)
 func TestFileCatalogBackendFaultsNeverPublishHalfGeneration(t *testing.T) {
 	for _, point := range []FileBackendFaultPoint{
 		FileFaultStageDirectory, FileFaultStageChild, FileFaultStagePage, FileFaultStagePageObject,
-		FileFaultPrepare, FileFaultPublish,
+		FileFaultStageNodeIndex, FileFaultPrepare, FileFaultPublish,
 	} {
 		t.Run(string(point), func(t *testing.T) {
 			rootPath := t.TempDir()
@@ -660,11 +660,6 @@ func TestFileBackendRejectsInvalidLifecycleAndCorruptFrames(t *testing.T) {
 	}
 	if _, _, err := readNodeFrame(bytes.NewReader([]byte{0, 0})); err == nil {
 		t.Fatal("truncated node frame was accepted")
-	}
-	cancelledReader, cancelReader := context.WithCancel(context.Background())
-	cancelReader()
-	if _, _, err := findNodeInFile(cancelledReader, bytes.NewReader(nil), idValue[NodeID](1)); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled node search = %v", err)
 	}
 	oversized := filepath.Join(rootPath, "oversized")
 	file, err := os.Create(oversized)

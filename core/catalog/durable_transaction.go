@@ -30,6 +30,7 @@ type fileCatalogTransaction struct {
 	stagedBytes     uint64
 	preparation     BackendPreparation
 	preparedMeta    fileCatalogMeta
+	nodeIndex       fileNodeIndex
 	prepared        bool
 	finished        bool
 }
@@ -222,6 +223,9 @@ func (t *fileCatalogTransaction) Prepare(ctx context.Context) (BackendPreparatio
 		return BackendPreparation{}, err
 	}
 	t.children = nil
+	if err := t.buildNodeIndex(ctx, committed.EntryCount()); err != nil {
+		return BackendPreparation{}, err
+	}
 	var digest [sha256.Size]byte
 	copy(digest[:], t.digest.Sum(nil))
 	meta := fileCatalogMeta{
@@ -259,8 +263,15 @@ func (t *fileCatalogTransaction) existingMeta() (fileCatalogMeta, bool, error) {
 }
 
 func (t *fileCatalogTransaction) rejectForeignNodeCollisions(ctx context.Context) error {
+	if err := t.backend.ensureNodeIndexes(ctx); err != nil {
+		return err
+	}
 	t.backend.mu.RLock()
 	defer t.backend.mu.RUnlock()
+	return t.rejectForeignNodeCollisionsLocked(ctx)
+}
+
+func (t *fileCatalogTransaction) rejectForeignNodeCollisionsLocked(ctx context.Context) error {
 	if existing, found, err := t.backend.loadNodeLocked(ctx, t.directoryRecord.NodeID(), t.directory); err != nil {
 		return err
 	} else if found && existing != t.directoryRecord {
@@ -325,6 +336,11 @@ func (t *fileCatalogTransaction) Publish(ctx context.Context) (CommittedDirector
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return CommittedDirectory{}, err
 	}
+	// Preparation may overlap another backend transaction. Recheck membership
+	// under the publication lock before making either generation visible.
+	if err := t.rejectForeignNodeCollisionsLocked(ctx); err != nil {
+		return CommittedDirectory{}, err
+	}
 	// No reader can observe target while the backend write lock is held. That
 	// lets a failed parent-directory sync roll the rename back without exposing a
 	// generation which the caller was told had failed.
@@ -345,6 +361,7 @@ func (t *fileCatalogTransaction) Publish(ctx context.Context) (CommittedDirector
 		// cannot be rolled back; returning success keeps budget and visibility in
 		// agreement, and recovery will validate or reject it after a crash.
 	}
+	t.backend.nodeIndexes[t.directory] = t.nodeIndex
 	t.finished = true
 	return t.preparation.Directory, nil
 }

@@ -27,6 +27,16 @@ The workloads cover liveshare ready scaling and real-disk readiness, file-local 
 transfer, extreme-width catalog spill, relay registration wire cost, and Pion chunk transfer. Exact
 benchmark rows, metrics, and behavioral oracles are versioned with the runner.
 
+## Progressive discovery
+
+The sender publishes a NodeID hash index with each immutable directory generation. Budgeted
+membership filters skip unrelated generations; exact records remain on disk. Index bytes share
+the generation's atomic publication, integrity validation, and spill accounting.
+
+When a folder download pauses, compare file-queue starvation with directory request latency.
+A completed-file count equal to the discovered-file count can mean discovery has fallen behind;
+it does not imply the entire selected folder is complete.
+
 ## Output
 
 Standard output is one schema-versioned JSON report with environment context, command outcomes,
