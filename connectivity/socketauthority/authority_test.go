@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 )
 
 func TestPathIsolationReferencesRetirementAndBounds(t *testing.T) {
@@ -145,6 +145,50 @@ func TestAllocationValidationAndCleanup(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+func TestLocalSTUNGatherStopsWhenContextIsCanceled(t *testing.T) {
+	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	authority := New(Config{})
+	defer authority.Close()
+	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	mux, release, err := lease.Claim()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	result := make(chan error, 1)
+	go func() {
+		_, lookupErr := mux.GetXORMappedAddrForLocal(ctx, server.LocalAddr(), mux.GetListenAddresses()[0], time.Minute)
+		result <- lookupErr
+	}()
+	// Cancel an in-flight request so a lost STUN response cannot hold up agent retirement.
+	if err = server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	var packet [1500]byte
+	if _, _, err = server.ReadFrom(packet[:]); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	select {
+	case err = <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("gather cancellation: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("gather ignored cancellation")
+	}
+}
+
 func TestIdleHandoffRefreshesActualSTUNAndStopsBeforeICE(t *testing.T) {
 	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
@@ -214,7 +258,7 @@ func TestIdleHandoffRefreshesActualSTUNAndStopsBeforeICE(t *testing.T) {
 	if _, err = mux.GetConnForURL("x", "stun:x", &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1}); err == nil {
 		t.Fatal("foreign endpoint accepted")
 	}
-	if _, err = mux.GetXORMappedAddrForLocal(server.LocalAddr(), mux.GetListenAddresses()[0], time.Millisecond); err != nil {
+	if _, err = mux.GetXORMappedAddrForLocal(context.Background(), server.LocalAddr(), mux.GetListenAddresses()[0], time.Millisecond); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = mux.GetXORMappedAddr(server.LocalAddr(), time.Millisecond); err != nil {

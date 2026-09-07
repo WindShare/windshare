@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/pion/ice/v4"
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 )
 
 // A bound socket may already have queued peer checks when a new mux takes

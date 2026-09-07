@@ -1,5 +1,5 @@
 import { execFile, spawn } from 'node:child_process'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { createInterface } from 'node:readline'
@@ -14,6 +14,8 @@ const mapped = process.argv.includes('--mapped')
 const outputPath = process.argv.slice(2).find(argument => !argument.startsWith('--'))
 let server
 try {
+  const { modules } = JSON.parse(await readFile(join(root, 'third_party/pion/manifest.json'), 'utf8'))
+  const pion = Object.fromEntries(modules.map(({ name, version }) => [name, version]))
   await promisify(execFile)('go', ['build', '-o', executable, './transport/webrtc/provider/testdata/tcpserver'], {
     cwd: root, windowsHide: true, timeout: 60_000,
     env: { ...process.env, GOWORK: 'off', GOTOOLCHAIN: 'local' },
@@ -74,7 +76,7 @@ try {
       await browser?.close()
     }
   }
-  const evidence = { kind: 'local-tcp-capability', platform: process.platform, pion: { webrtc: 'v4.2.16', ice: 'v4.2.7' }, outcomes }
+  const evidence = { kind: 'local-tcp-capability', platform: process.platform, pion, outcomes }
   console.log(JSON.stringify(evidence, null, 2))
   if (outputPath) await writeFile(resolve(outputPath), JSON.stringify(evidence, null, 2) + '\n')
 } finally {
