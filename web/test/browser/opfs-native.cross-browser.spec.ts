@@ -17,8 +17,8 @@ test('recovers a real Worker ZIP cut and finalizes offline without staging anoth
     const harness = await import(path) as typeof import('./opfs/opfs-native-harness')
     return harness.probeNativeObjectSupport(window)
   }, HARNESS_PATH)
-  // Unsupported engines offer portable output; this test specifically requires the native Worker route.
-  test.skip(!supported, `${browserName} does not support native OPFS in a Dedicated Worker`)
+  // This scenario needs the native Worker route; a failed probe only describes this test environment.
+  test.skip(!supported, `Current ${browserName} test environment did not pass the Dedicated Worker OPFS capability probe`)
   expect(workers.some(url => url.includes('/native-object/support-worker.ts'))).toBe(true)
   const cut = await page.evaluate(async ({ path, key }) => {
     const harness = await import(path) as typeof import('./opfs/opfs-native-harness')
