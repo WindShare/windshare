@@ -92,8 +92,8 @@ test('production responsive gallery keeps media uncropped and controls reachable
       await scenario(page, value)
       if (value === 'video') {
         await page.getByRole('button', { name: 'Preview a frame', exact: true }).click()
-        await expect(page.locator('video')).toBeVisible()
-        await expect.poll(() => page.locator('video').evaluate(video => (video as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2)
+        await expect(page.getByRole('img', { name: 'Video preview of Summer afternoon.mp4' })).toBeVisible()
+        await expect(page.locator('.preview-frame-stage')).toHaveAttribute('aria-busy', 'false')
         await expect(page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })).toBeVisible()
       }
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)

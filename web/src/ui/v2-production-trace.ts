@@ -64,6 +64,10 @@ export function projectV2ReceiverTraceEvent(
         transition: 'saving', projection_epoch: event.projectionEpoch === null ? null : decimal(event.projectionEpoch),
         choice_id: event.choiceId, outcome: event.outcome, reason: event.reason,
       })
+      if (event.transition === 'ownership') return observation('receiver_experience', {
+        transition: 'ownership', state: event.state, operation_id: event.operationId,
+        generation: decimal(event.generation), lifecycle_state: snake(event.lifecycleKind),
+      })
       return observation('receiver_experience', { transition: 'intent', action: event.action,
         operation_id: event.operationId, generation: decimal(event.generation) })
     case 'join_transition':

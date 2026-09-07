@@ -45,11 +45,12 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   </div>
 }
 
-export function TaskCard({ task, actions, onDetails, detailsRef, busy = false }: {
+export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, primaryAction }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
   readonly onDetails: () => void
   readonly detailsRef?: Ref<HTMLButtonElement>
+  readonly primaryAction?: ReactNode
   readonly busy?: boolean
 }) {
   return <section className={`task-card task-tone-${task.tone}`} aria-label={`Download: ${task.objectLabel}`}
@@ -63,8 +64,8 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false }:
         {task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
       </div>
       <div className="task-actions">
-        {task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
-          perform={actions.perform} primary busy={busy} />}
+        {primaryAction ?? (task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
+          perform={actions.perform} primary busy={busy} />)}
         <button ref={detailsRef} className="quiet-action" type="button" onClick={onDetails}>Details<ReceiverIcon name="chevron-right" /></button>
       </div>
     </div>

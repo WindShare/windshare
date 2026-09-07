@@ -1,5 +1,12 @@
 export type ReceiverExperiencePayloadV1 =
   | Readonly<{
+      transition: 'ownership'
+      operation_id: string
+      generation: string
+      state: 'releasing' | 'released' | 'release-failed'
+      lifecycle_state: string
+    }>
+  | Readonly<{
       transition: 'task'
       operation_id: string
       generation: string

@@ -47,8 +47,16 @@
 :where(.receiver-shell, .detail-sheet) .preview-media { display: block; width: auto; max-width: 100%; height: auto; max-height: 65dvh; object-fit: contain; margin: auto; }
 :where(.receiver-shell, .detail-sheet) .media-preview-inline { text-align: center; }
 :where(.receiver-shell, .detail-sheet) .media-preview-inline .quiet-action { margin-top: .75rem; font-size: .75rem; }
-:where(.receiver-shell, .detail-sheet) .preview-seek { display: flex; flex-direction: column; gap: .65rem; max-width: 47.5rem; margin: 1rem auto 0; color: var(--receiver-muted); font-size: .8125rem; text-align: left; }
-:where(.receiver-shell, .detail-sheet) .preview-seek input { width: 100%; min-height: 2.75rem; margin: 0; accent-color: var(--receiver-accent); }
+/* Metadata fixes geometry before decoding; a seek cannot move the page or its controls. */
+:where(.receiver-shell, .detail-sheet) .preview-frame-stage { --preview-height: 65dvh; position: relative; width: min(100%, calc(var(--preview-height) * var(--preview-ratio))); aspect-ratio: var(--preview-ratio); margin: auto; background: var(--receiver-paper); }
+:where(.receiver-shell, .detail-sheet) .preview-frame { display: block; width: 100%; height: 100%; object-fit: contain; }
+:where(.receiver-shell, .detail-sheet) .preview-frame-status { position: absolute; inset: auto .75rem .75rem auto; padding: .4rem .65rem; border-radius: .35rem; background: var(--receiver-paper); color: var(--receiver-muted); font-size: .75rem; pointer-events: none; }
+:where(.receiver-shell, .detail-sheet) .preview-frame-status:empty { visibility: hidden; }
+:where(.receiver-shell, .detail-sheet) .preview-seek { display: flex; flex-direction: column; gap: .25rem; max-width: 47.5rem; margin: 1rem auto 0; color: var(--receiver-muted); font-size: .8125rem; text-align: left; }
+:where(.receiver-shell, .detail-sheet) .preview-seek-heading { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .25rem 1rem; }
+:where(.receiver-shell, .detail-sheet) .preview-time { font-variant-numeric: tabular-nums; }
+:where(.receiver-shell, .detail-sheet) .preview-seek input { width: 100%; min-height: 2.75rem; margin: 0; accent-color: var(--receiver-accent); cursor: pointer; touch-action: pan-y; }
+:where(.receiver-shell, .detail-sheet) .preview-seek-hint { margin: 0; font-size: .75rem; line-height: 1.5; }
 :where(.receiver-shell, .detail-sheet) .preview-failure { display: grid; place-items: center; min-height: 12rem; padding: 1rem; color: var(--receiver-muted); text-align: center; overflow-wrap: anywhere; }
 :where(.receiver-shell, .detail-sheet) .preview-failure > .receiver-icon { width: 2.5rem; height: 2.5rem; color: var(--receiver-accent); }
 :where(.receiver-shell, .detail-sheet) .preview-failure p { margin: .5rem 0; }
@@ -66,6 +74,7 @@
   .receiver-shell :is(.single-file-photo, .single-file-video) .single-file-placeholder { min-height: 17.5rem; }
   :where(.receiver-shell, .detail-sheet) .media-preview { padding: 1rem .85rem; }
   :where(.receiver-shell, .detail-sheet) .preview-media { max-height: 50dvh; }
+  :where(.receiver-shell, .detail-sheet) .preview-frame-stage { --preview-height: 50dvh; }
 }
 @media (max-width: 430px) {
   .receiver-shell .explorer-toolbar { gap: .5rem; align-items: center; }

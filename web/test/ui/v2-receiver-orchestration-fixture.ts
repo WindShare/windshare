@@ -49,7 +49,7 @@ import {
   type AuthenticatedDiscoverySource,
 } from '../../src/transfer/projection'
 import type { V2ReceiverIncidentPort } from '../../src/ui/controller/contracts'
-import { V2ReceiverController } from '../../src/ui/v2-controller'
+import { V2ReceiverController, type V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 import type {
   V2BrowseDirectory,
   V2BrowsePage,
@@ -591,11 +591,13 @@ export function controllerFor(
   joined: FakeJoinedShare,
   receive: V2ReceiveCompositionPort,
   incidents?: V2ReceiverIncidentPort,
+  trace?: (event: V2ReceiverTraceEvent) => void,
 ): V2ReceiverController {
   const gateway = new FakeGateway([joined])
   const controller = new V2ReceiverController(gateway as unknown as V2BrowserReceiverGateway, {
     receive,
     ...(incidents === undefined ? {} : { incidents }),
+    ...(trace === undefined ? {} : { trace: { current: trace } }),
   })
   controller.initialize({ capabilityInput: 'key', pageUrl: 'https://receiver.invalid/s/share' })
   return controller

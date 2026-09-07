@@ -109,7 +109,7 @@ describe('draft, browsing and committed output ownership', () => {
     await controller.dispose()
   })
 
-  it('keeps picker cancellation as a draft and releases a finished task only on explicit next-task intent', async () => {
+  it('keeps picker cancellation as a draft and releases completed ownership without clearing the result', async () => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const readiness = deferred<void>()
     receive.authorityReady = readiness.promise
@@ -133,11 +133,11 @@ describe('draft, browsing and committed output ownership', () => {
     joined.transferRuns[0]?.resolve(next(runtime.lifecycle, {
       kind: 'download-started', attemptKind: 'portable', attemptId: identityText(92),
     }))
-    await waitFor(() => controller.getSnapshot().startAdmission.canReleaseCurrent)
-    expect(controller.getSnapshot().output.receiveIntent).toEqual(runtime.intent)
-    controller.startNewReceiveOperation()
     await waitFor(() => controller.getSnapshot().startAdmission.allowed)
-    expect(controller.getSnapshot().output.receiveIntent).toBeNull()
+    expect(controller.getSnapshot().output.receiveIntent).toEqual(runtime.intent)
+    expect(controller.getSnapshot().output.lifecycle?.kind).toBe('download-started')
+    expect(controller.getSnapshot().startAdmission.canReleaseCurrent).toBe(false)
+    expect(controller.getSnapshot().activeReceiveOperationId).toBeNull()
     expect(runtime.detachments).toEqual(['detached'])
     expect(controller.getSnapshot().draft.label).toBe('report.txt')
     await controller.dispose()
