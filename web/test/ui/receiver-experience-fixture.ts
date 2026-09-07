@@ -10,6 +10,7 @@ export function experienceSnapshot(patch: Partial<V2ReceiverSnapshot> = {}): V2R
     browse: { kind: 'ready', status: 'Ready.', error: null },
     draft: { mode: 'scope', scope: 'whole-share', label: 'Shared files', summary: 'All items', empty: false },
     startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
+    activeReceiveOperationId: patch.output?.lifecycle?.operationId ?? null,
     taskDisplay: null,
     pathActivity: { directConnected: false, content: 'idle' },
     phase: 'awaiting-key', status: 'Waiting for a link.', error: null,

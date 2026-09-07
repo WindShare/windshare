@@ -152,6 +152,8 @@ export type V2ControllerWorkflowTraceEvent =
     }>
 
 export type V2ReceiverExperienceTraceEvent =
+  | Readonly<{ name: 'receiver_experience'; transition: 'ownership'; operationId: string; generation: bigint;
+      state: 'releasing' | 'released' | 'release-failed'; lifecycleKind: ReceiveLifecycleState['kind'] }>
   | Readonly<{ name: 'receiver_experience'; transition: 'task'; operationId: string; generation: bigint;
       stage: string; reason: string; attention: boolean; completeness: string; publication: string }>
   | Readonly<{ name: 'receiver_experience'; transition: 'saving'; projectionEpoch: bigint | null;

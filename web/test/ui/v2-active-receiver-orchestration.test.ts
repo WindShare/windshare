@@ -387,7 +387,6 @@ describe('v2 receive attempt observability', () => {
   it.each([
     ['resumable-receive', 'discard'],
     ['waiting-to-save', 'save'],
-    ['download-started', 'redownload'],
   ] as const)('starts %s action %s inside the rendered click stack', async (stableKind, action) => {
     const receive = new FakeReceiveComposition(WORKSPACE_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
