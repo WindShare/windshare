@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/pion/logging"
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 	"github.com/pion/transport/v4"
 	"golang.org/x/net/proxy"
 )
@@ -386,6 +386,7 @@ func WithDisconnectedTimeout(timeout time.Duration) AgentOption {
 		}
 
 		a.disconnectedTimeout = timeout
+		a.disconnectedTimeoutExplicit = true
 
 		return nil
 	}
@@ -562,11 +563,8 @@ func WithLocalCredentials(ufrag, pwd string) AgentOption {
 			return ErrAgentOptionNotUpdatable
 		}
 
-		if ufrag != "" && len([]rune(ufrag))*8 < 24 {
-			return ErrLocalUfragInsufficientBits
-		}
-		if pwd != "" && len([]rune(pwd))*8 < 128 {
-			return ErrLocalPwdInsufficientBits
+		if err := validateLocalCredentials(ufrag, pwd); err != nil {
+			return err
 		}
 
 		a.localUfrag = ufrag

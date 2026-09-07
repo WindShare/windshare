@@ -2,23 +2,25 @@
   "kind": "local-tcp-capability",
   "platform": "win32",
   "pion": {
-    "webrtc": "v4.2.16",
-    "ice": "v4.2.7"
+    "ice": "v4.4.2",
+    "webrtc": "v4.2.20"
   },
   "outcomes": [
     {
       "browser": "chromium",
       "version": "151.0.7922.34",
       "family": 4,
+      "mapped": false,
       "status": "supported",
       "payload": "tcp-proof:authenticated-payload",
+      "baseEndpoint": "127.0.0.1:62593",
       "pair": {
         "localAddress": "127.0.0.1",
-        "localPort": 57666,
+        "localPort": 62593,
         "localType": "host",
         "protocol": "tcp",
         "remoteAddress": "127.0.0.1",
-        "remotePort": 59973,
+        "remotePort": 51945,
         "remoteType": "prflx"
       }
     },
@@ -26,6 +28,7 @@
       "browser": "chromium",
       "version": "151.0.7922.34",
       "family": 6,
+      "mapped": false,
       "status": "unsupported",
       "reason": "Error: TCP open timeout"
     },
@@ -33,6 +36,7 @@
       "browser": "firefox",
       "version": "153.0",
       "family": 4,
+      "mapped": false,
       "status": "unsupported",
       "reason": "Error: TCP open timeout"
     },
@@ -40,6 +44,7 @@
       "browser": "firefox",
       "version": "153.0",
       "family": 6,
+      "mapped": false,
       "status": "unsupported",
       "reason": "Error: TCP open timeout"
     },

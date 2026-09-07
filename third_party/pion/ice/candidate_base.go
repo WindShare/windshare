@@ -10,13 +10,14 @@ import (
 	"hash/crc32"
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 )
 
 type candidateBase struct {
@@ -30,15 +31,21 @@ type candidateBase struct {
 	relatedAddress *CandidateRelatedAddress
 	tcpType        TCPType
 
-	resolvedAddr net.Addr
+	resolvedAddr     net.Addr
+	resolvedAddrPort netip.AddrPort
 
 	lastSent     atomic.Int64
 	lastReceived atomic.Int64
 	conn         net.PacketConn
 
+	// addrPortConn is non-nil when conn opts in to AddrPortReaderWriter.
+	addrPortConn AddrPortReaderWriter
+
 	currAgent *Agent
 	closeCh   chan struct{}
 	closedCh  chan struct{}
+	closeOnce sync.Once
+	closeErr  error
 
 	foundationOverride string
 	priorityOverride   uint32
@@ -49,6 +56,10 @@ type candidateBase struct {
 	remoteCandidateCaches sync.Map // map[AddrPort]Candidate
 	isLocationTracked     bool
 	extensions            []CandidateExtension
+}
+
+type writeAborter interface {
+	abortWrite() error
 }
 
 // Save a time reference to calculate monotonic time for candidate last sent/received.
@@ -246,8 +257,10 @@ func (c *candidateBase) start(a *Agent, conn net.PacketConn, initializedCh <-cha
 	}
 	c.currAgent = a
 	c.conn = conn
+	c.addrPortConn = asAddrPortReaderWriter(conn)
 	c.closeCh = make(chan struct{})
 	c.closedCh = make(chan struct{})
+	a.registerStartedCandidate(c)
 
 	go c.recvLoop(initializedCh)
 }
@@ -279,7 +292,18 @@ func (c *candidateBase) recvLoop(initializedCh <-chan struct{}) {
 	buf := *bufPtr
 
 	for {
-		n, srcAddr, err := c.conn.ReadFrom(buf)
+		var n int
+		var srcAddr netip.AddrPort
+		var err error
+		if c.addrPortConn != nil {
+			n, srcAddr, err = c.addrPortConn.ReadFromAddrPort(buf)
+		} else {
+			var netAddr net.Addr
+			n, netAddr, err = c.conn.ReadFrom(buf)
+			if err == nil {
+				srcAddr = netAddrToAddrPort(netAddr)
+			}
+		}
 		if err != nil {
 			if !errors.Is(err, io.EOF) && !errors.Is(err, net.ErrClosed) {
 				agent.log.Warnf("Failed to read from candidate %s: %v", c, err)
@@ -292,8 +316,8 @@ func (c *candidateBase) recvLoop(initializedCh <-chan struct{}) {
 	}
 }
 
-func (c *candidateBase) validateSTUNTrafficCache(addr net.Addr) bool {
-	if candidate, ok := c.remoteCandidateCaches.Load(toAddrPort(addr)); ok {
+func (c *candidateBase) validateSTUNTrafficCache(addr netip.AddrPort) bool {
+	if candidate, ok := c.remoteCandidateCaches.Load(toAddrPortKey(addr)); ok {
 		remoteCandidate, ok := candidate.(Candidate)
 		if !ok {
 			return false
@@ -307,11 +331,11 @@ func (c *candidateBase) validateSTUNTrafficCache(addr net.Addr) bool {
 	return false
 }
 
-func (c *candidateBase) addRemoteCandidateCache(candidate Candidate, srcAddr net.Addr) {
+func (c *candidateBase) addRemoteCandidateCache(candidate Candidate, srcAddr netip.AddrPort) {
 	if c.validateSTUNTrafficCache(srcAddr) {
 		return
 	}
-	c.remoteCandidateCaches.Store(toAddrPort(srcAddr), candidate)
+	c.remoteCandidateCaches.Store(toAddrPortKey(srcAddr), candidate)
 }
 
 func (c *candidateBase) replaceRemoteCandidateCacheValues(oldRemote, newRemote Candidate) {
@@ -325,29 +349,11 @@ func (c *candidateBase) replaceRemoteCandidateCacheValues(oldRemote, newRemote C
 	})
 }
 
-func (c *candidateBase) handleInboundPacket(buf []byte, srcAddr net.Addr) {
+func (c *candidateBase) handleInboundPacket(buf []byte, srcAddr netip.AddrPort) {
 	agent := c.agent()
 
 	if stun.IsMessage(buf) {
-		msg := &stun.Message{
-			Raw: make([]byte, len(buf)),
-		}
-
-		// Explicitly copy raw buffer so Message can own the memory.
-		copy(msg.Raw, buf)
-
-		if err := msg.Decode(); err != nil {
-			agent.log.Warnf("Failed to handle decode ICE from %s to %s: %v", c.addr(), srcAddr, err)
-
-			return
-		}
-
-		if err := agent.loop.Run(c, func(_ context.Context) {
-			// nolint: contextcheck
-			agent.handleInbound(msg, c, srcAddr)
-		}); err != nil {
-			agent.log.Warnf("Failed to handle message: %v", err)
-		}
+		c.handleInboundSTUNMessage(buf, srcAddr)
 
 		return
 	}
@@ -355,7 +361,7 @@ func (c *candidateBase) handleInboundPacket(buf []byte, srcAddr net.Addr) {
 	if !c.validateSTUNTrafficCache(srcAddr) {
 		remoteCandidate, valid := agent.validateNonSTUNTraffic(c, srcAddr) //nolint:contextcheck
 		if !valid {
-			agent.log.Warnf("Discarded message from %s, not a valid remote candidate", c.addr())
+			agent.log.Warnf("Discarded message from %s, not a valid remote candidate", srcAddr)
 
 			return
 		}
@@ -378,6 +384,34 @@ func (c *candidateBase) handleInboundPacket(buf []byte, srcAddr net.Addr) {
 	}
 }
 
+// handleInboundSTUNMessage decodes buf and hands it to the agent loop.
+// Note: keep this out of handleInboundPacket. The closure captures srcAddr,
+// which would otherwise be heap-allocated on every inbound packet instead of
+// only for STUN messages.
+func (c *candidateBase) handleInboundSTUNMessage(buf []byte, srcAddr netip.AddrPort) {
+	agent := c.agent()
+
+	msg := &stun.Message{
+		Raw: make([]byte, len(buf)),
+	}
+
+	// Explicitly copy raw buffer so Message can own the memory.
+	copy(msg.Raw, buf)
+
+	if err := msg.Decode(); err != nil {
+		agent.log.Warnf("Failed to handle decode ICE from %s to %s: %v", c.addr(), srcAddr, err)
+
+		return
+	}
+
+	if err := agent.loop.Run(c, func(_ context.Context) {
+		// nolint: contextcheck
+		agent.handleInbound(msg, c, srcAddr)
+	}); err != nil {
+		agent.log.Warnf("Failed to handle message: %v", err)
+	}
+}
+
 // close stops the recvLoop.
 func (c *candidateBase) close() error {
 	// If conn has never been started will be nil
@@ -385,38 +419,56 @@ func (c *candidateBase) close() error {
 		return nil
 	}
 
-	// Assert that conn has not already been closed
-	select {
-	case <-c.Done():
-		return nil
-	default:
-	}
-
-	var firstErr error
-
-	// Unblock recvLoop
-	close(c.closeCh)
-	if err := c.conn.SetDeadline(time.Now()); err != nil {
-		firstErr = err
-	}
-
-	// Close the conn
-	if err := c.conn.Close(); err != nil && firstErr == nil {
-		firstErr = err
-	}
-
-	if firstErr != nil {
-		return firstErr
-	}
+	err := c.abortIO()
 
 	// Wait until the recvLoop is closed
 	<-c.closedCh
 
-	return nil
+	if c.currAgent != nil {
+		c.currAgent.unregisterStartedCandidate(c)
+	}
+
+	return err
+}
+
+func (c *candidateBase) abortIO() error {
+	// If conn has never been started will be nil.
+	if c.Done() == nil {
+		return nil
+	}
+
+	c.closeOnce.Do(func() {
+		// Unblock recvLoop.
+		close(c.closeCh)
+
+		if err := c.conn.SetDeadline(time.Now()); err != nil {
+			c.closeErr = err
+		}
+
+		if aborter, ok := c.conn.(writeAborter); ok {
+			if err := aborter.abortWrite(); err != nil && c.closeErr == nil {
+				c.closeErr = err
+			}
+		}
+
+		// Close the conn to abort in-flight socket I/O before the task loop
+		// waits for the current task to finish.
+		if err := c.conn.Close(); err != nil && c.closeErr == nil {
+			c.closeErr = err
+		}
+	})
+
+	return c.closeErr
 }
 
 func (c *candidateBase) writeTo(raw []byte, dst Candidate) (int, error) {
-	n, err := c.conn.WriteTo(raw, dst.addr())
+	var n int
+	var err error
+	if ap := dst.addrPort(); c.addrPortConn != nil && ap.IsValid() {
+		n, err = c.addrPortConn.WriteToAddrPort(raw, ap)
+	} else {
+		n, err = c.conn.WriteTo(raw, dst.addr())
+	}
 	if err != nil {
 		// If the connection is closed, we should return the error
 		if errors.Is(err, io.ErrClosedPipe) {
@@ -467,6 +519,10 @@ func (c *candidateBase) Priority() uint32 {
 	return (1<<24)*uint32(c.TypePreference()) +
 		(1<<8)*uint32(c.LocalPreference()) +
 		(1<<0)*uint32(256-c.Component())
+}
+
+func (c *candidateBase) setPriority(priority uint32) {
+	c.priorityOverride = priority
 }
 
 // transportAddressEqual checks if the transport address (IP, Port, NetworkType, TCPType) is equal to another
@@ -549,6 +605,15 @@ func (c *candidateBase) seen(outbound bool) {
 
 func (c *candidateBase) addr() net.Addr {
 	return c.resolvedAddr
+}
+
+func (c *candidateBase) addrPort() netip.AddrPort {
+	return c.resolvedAddrPort
+}
+
+func (c *candidateBase) setResolvedAddr(addr net.Addr) {
+	c.resolvedAddr = addr
+	c.resolvedAddrPort = netAddrToAddrPort(addr)
 }
 
 func (c *candidateBase) filterForLocationTracking() bool {

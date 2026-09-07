@@ -1,13 +1,14 @@
 package socketauthority
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net"
 	"time"
 
 	"github.com/pion/ice/v4"
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
 )
 
 // Mux routes each local interface/family to its own physical endpoint. It is
@@ -64,12 +65,12 @@ func (m *Mux) GetXORMappedAddr(server net.Addr, deadline time.Duration) (*stun.X
 	}
 	return m.endpoints[0].GetXORMappedAddr(server, deadline)
 }
-func (m *Mux) GetXORMappedAddrForLocal(server, local net.Addr, deadline time.Duration) (*stun.XORMappedAddress, error) {
+func (m *Mux) GetXORMappedAddrForLocal(ctx context.Context, server, local net.Addr, deadline time.Duration) (*stun.XORMappedAddress, error) {
 	endpoint, err := m.endpoint(local)
 	if err != nil {
 		return nil, err
 	}
-	return endpoint.GetXORMappedAddr(server, deadline)
+	return endpoint.GetXORMappedAddrContext(ctx, server, deadline)
 }
 func (m *Mux) GetRelayedAddr(net.Addr, time.Duration) (*net.Addr, error) {
 	return nil, errors.New("TURN is not supported")

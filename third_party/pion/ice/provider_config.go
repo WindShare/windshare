@@ -63,13 +63,6 @@ func WithProviderConfig(config ProviderConfig) AgentOption {
 	}
 }
 
-func (a *Agent) initialCheckingTimeout() time.Duration {
-	if a.providerConfig.InitialCheckingTimeout > 0 {
-		return a.providerConfig.InitialCheckingTimeout
-	}
-	return a.disconnectedTimeout + a.failedTimeout
-}
-
 func (a *Agent) gatherProviderEndpoints(ctx context.Context) {
 	a.gatherProviderTCPEndpoints(ctx)
 	for _, endpoint := range a.providerConfig.MappedUDPEndpoints {
