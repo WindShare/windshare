@@ -2,6 +2,7 @@ package clievent
 
 import (
 	"errors"
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"testing"
 )
 
@@ -99,7 +100,7 @@ func TestSenderTerminalEventsSeparateRootFromSendConsequence(t *testing.T) {
 		{SenderSessionTerminalRuntimeFailed, SenderSessionTerminalLocalFault},
 	}
 	for _, pair := range pairs {
-		root, err := NewSenderSessionTerminated(session, pair.trigger, pair.provenance)
+		root, err := NewSenderSessionTerminated(session, pair.trigger, pair.provenance, diagnosticerror.Snapshot{})
 		if err != nil {
 			t.Fatalf("valid root %v/%v: %v", pair.trigger, pair.provenance, err)
 		}
@@ -113,6 +114,7 @@ func TestSenderTerminalEventsSeparateRootFromSendConsequence(t *testing.T) {
 		session,
 		SenderSessionTerminalGracefulStop,
 		SenderSessionTerminalLocalFault,
+		diagnosticerror.Snapshot{},
 	); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("invalid terminal pair error = %v", err)
 	}

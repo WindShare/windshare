@@ -190,21 +190,41 @@ func TestSelectedLaneSnapshotOutlivesNaturalOwnerRelease(t *testing.T) {
 }
 
 func TestRuntimeComponentFailureCancelsPhysicalLaneBeforeFinish(t *testing.T) {
-	runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
-	componentFailure := errors.New("component failed")
-	runtime.start(func(context.Context) error { return componentFailure })
-	select {
-	case <-runtime.Done():
-	case <-time.After(time.Second):
-		t.Fatal("runtime did not finish after a component failure")
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"native failure", errors.New("component failed")},
+		{"unexpected cancellation", context.Canceled},
+		{"joined cancellation", errors.Join(errors.New("component interrupted"), context.Canceled)},
+		{"unexpected normal return", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			runtime, initialChannel := newUnstartedRuntime(t, protocolsession.RoleSender)
+			observed := make(chan SenderSessionTerminated, 1)
+			runtime.sessionTerminalObserver = SenderSessionTerminalObserverFunc(func(event SenderSessionTerminated) { observed <- event })
+			runtime.start(runtimeComponent{runtimeFailureSourcePeer, func(context.Context) error { return test.err }})
+			select {
+			case <-runtime.Done():
+			case <-time.After(time.Second):
+				t.Fatal("runtime did not finish after a component failure")
+			}
+			event := awaitSenderSessionTermination(t, observed)
+			nodes := event.Failure.Nodes()
+			if !event.Failure.Present() || event.Failure.Source() != "peer" ||
+				(test.err == nil && len(nodes) != 0) ||
+				(test.err != nil && (len(nodes) == 0 || nodes[0].Message != test.err.Error())) {
+				t.Fatalf("component failure detail = %#v", event.Failure)
+			}
+			if !errors.Is(runtime.Err(), test.err) {
+				t.Fatalf("runtime retained error = %v", runtime.Err())
+			}
+			if initialChannel.State() != framechannel.Closed {
+				t.Fatal("runtime finished before closing its physical lane")
+			}
+			runtime.close()
+		})
 	}
-	if !errors.Is(runtime.Err(), componentFailure) {
-		t.Fatalf("runtime retained error = %v", runtime.Err())
-	}
-	if initialChannel.State() != framechannel.Closed {
-		t.Fatal("runtime finished before closing its physical lane")
-	}
-	runtime.close()
 }
 
 func TestRuntimeCleanCloseDrainsFullServiceQueue(t *testing.T) {
@@ -215,7 +235,7 @@ func TestRuntimeCleanCloseDrainsFullServiceQueue(t *testing.T) {
 		// transition; Run must suppress it without touching the closed service.
 		handler.queue <- catalogOperation{}
 	}
-	runtime.start(handler.Run)
+	runtime.start(runtimeComponent{runtimeFailureSourceCatalog, handler.Run})
 	runtime.close()
 	if runtime.Err() != nil {
 		t.Fatalf("clean close retained component error=%v", runtime.Err())

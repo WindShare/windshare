@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"os"
 	"path/filepath"
 	"strings"
@@ -571,10 +572,12 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		ProtocolSessionID: sessionID,
 		Trigger:           sessionruntime.SenderSessionTerminalTriggerRuntimeFailed,
 		Provenance:        sessionruntime.SenderSessionTerminalProvenanceLocalFault,
+		Failure:           diagnosticerror.Capture(fmt.Errorf("native peer failure"), "peer"),
 	})
 	if err != nil || terminalRoot.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
 		terminalRoot.Trigger() != clievent.SenderSessionTerminalRuntimeFailed ||
-		terminalRoot.Provenance() != clievent.SenderSessionTerminalLocalFault {
+		terminalRoot.Provenance() != clievent.SenderSessionTerminalLocalFault ||
+		!terminalRoot.FailureSnapshot().Present() || terminalRoot.FailureSnapshot().Nodes()[0].Message != "native peer failure" {
 		t.Fatalf("terminal root projection = %#v, err %v", terminalRoot, err)
 	}
 	if _, err := ProjectSenderSessionTerminated(sessionruntime.SenderSessionTerminated{

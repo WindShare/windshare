@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/windshare/windshare/core/diagnosticerror"
 	"math"
 	"reflect"
 	"strings"
@@ -177,7 +178,11 @@ func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 			case reflect.Map, reflect.Func, reflect.Chan:
 				t.Fatalf("payload field %v.%s has open type %v", value, field.Name, field.Type)
 			case reflect.Slice:
-				if fieldType.Elem().Kind() != reflect.String {
+				switch fieldType.Elem().Kind() {
+				case reflect.String:
+				case reflect.Struct:
+					inspect(fieldType.Elem())
+				default:
 					t.Fatalf("payload field %v.%s has open slice %v", value, field.Name, field.Type)
 				}
 			case reflect.Uint64, reflect.Int64:
@@ -430,6 +435,7 @@ func TestEncodeV3SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 		session,
 		clievent.SenderSessionTerminalGracefulStop,
 		clievent.SenderSessionTerminalNormalStop,
+		diagnosticerror.Snapshot{},
 	))
 	sendRecord, err := encodeV3(
 		testRunIdentity(0x25),
@@ -674,6 +680,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			protocolSession,
 			clievent.SenderSessionTerminalGracefulStop,
 			clievent.SenderSessionTerminalNormalStop,
+			diagnosticerror.Snapshot{},
 		)),
 		mustValue(clievent.NewCatalogStorageObserved(
 			clievent.CatalogStorageBudgetRejected,
