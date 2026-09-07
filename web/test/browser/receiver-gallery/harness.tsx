@@ -7,6 +7,7 @@ import type { V2ReceiverSnapshot } from '../../../src/ui/v2-model'
 import { EMPTY_V2_PREVIEW } from '../../../src/ui/v2-model'
 import { gallerySnapshot, photoPreview, ROOT_ROWS, SCENARIOS, type Scenario } from './fixtures'
 import { syntheticVideo } from './video'
+import { TASK_FIXTURES } from '../../../src/ui/tasks/fixtures'
 import '../../../src/index.css'
 import '../../../src/App.css'
 
@@ -108,6 +109,19 @@ class GalleryController {
   retainCurrentOperation = async () => false
   performRetainedAction = () => { this.intents.push('retained-action') }
   catchUpStoppedCompatibleNames = () => undefined
+  completeDownload = (kind: 'published' | 'download-started') => {
+    const facts = TASK_FIXTURES[kind === 'published' ? 'saved-cleanup' : 'browser-handoff']!
+    const source = facts.lifecycle
+    const lifecycle = source.kind === 'published' ? { ...source, cleanupState: 'clean' as const } : source
+    this.#publish({
+      activeReceiveOperationId: null,
+      startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
+      taskDisplay: { objectLabel: this.#snapshot.share?.name ?? 'Shared files',
+        createdAtMilliseconds: facts.display!.createdAtMilliseconds,
+        ...(kind === 'published' ? { destinationLabel: 'Downloads' } : {}) },
+      output: { ...this.#snapshot.output, lifecycle, lifecyclePresentation: null },
+    })
+  }
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -118,6 +132,7 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   active = new GalleryController(await gallerySnapshot(scenario))
   // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
   Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
+    windshareCompleteDownload: active.completeDownload,
     windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario

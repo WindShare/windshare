@@ -40,7 +40,7 @@
   overflow-wrap: anywhere;
 }
 .receiver-shell .saving-context > .action-reason {
-  color: var(--receiver-warning);
+  color: var(--receiver-muted);
   border-left: 2px solid currentColor;
   padding-left: 10px;
 }
