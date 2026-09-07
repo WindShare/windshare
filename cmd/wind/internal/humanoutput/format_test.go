@@ -53,6 +53,7 @@ func TestFailureMessagesCoverClosedVocabulary(t *testing.T) {
 		clievent.FailureInvalidInput, clievent.FailureCapabilityInvalid, clievent.FailureSelectionMissing,
 		clievent.FailurePublication, clievent.FailureTraceWrite, clievent.FailureRelayMalformed,
 		clievent.FailureRelayStarting, clievent.FailurePeerNegotiation, clievent.FailureSourceUnavailable,
+		clievent.FailurePeerPolicy, clievent.FailurePeerBusy, clievent.FailurePeerAdmission,
 		clievent.FailureSourceRevisionChanged, clievent.FailureCatalogUnavailable,
 		clievent.FailureSessionProtocol, clievent.FailureOutputStateIO, clievent.FailureCheckpointBusy,
 	}

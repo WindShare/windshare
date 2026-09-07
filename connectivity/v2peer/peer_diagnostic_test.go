@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/connectivity/v2signal"
+	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
 func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
@@ -51,6 +53,11 @@ func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 			wantCode: TypedPeerErrorStopped, wantScope: AttemptFailureScopeSession,
 		},
 		{
+			name: "rejection owns cancellation", result: context.Canceled,
+			primary:           &sessionruntime.LaneRejectedError{Rejection: protocolsession.LaneRejection{Code: protocolsession.LaneRejectAdmissionLimited}},
+			operationCanceled: true, wantCode: TypedPeerErrorAdmission, wantScope: AttemptFailureScopeAttempt,
+		},
+		{
 			name: "unexpected", wantCode: TypedPeerErrorUnexpected,
 			wantScope: AttemptFailureScopeAttempt,
 		},
@@ -61,6 +68,24 @@ func TestSenderAttemptTerminalTypedCodeTable(t *testing.T) {
 				t.Fatalf("terminal failure = %#v", failure)
 			}
 		})
+	}
+}
+
+func TestRejectedOfferPreservesPolicyAndBusyReasons(t *testing.T) {
+	for _, test := range []struct {
+		cause error
+		wire  uint16
+		typed TypedPeerErrorCode
+	}{
+		{ErrPeerPathRetired, protocolsession.PeerOperationCodePolicy, TypedPeerErrorPolicy},
+		{ErrPeerPathCapacity, protocolsession.PeerOperationCodePolicy, TypedPeerErrorPolicy},
+		{ErrAttemptCapacity, protocolsession.PeerOperationCodeNegotiation, TypedPeerErrorBusy},
+	} {
+		rejection := rejectionForEvent(handlerEvent{kind: handlerOffer}, test.cause)
+		failure := senderOperationAttemptFailure(rejection.code, rejection.message, rejection)
+		if failure.TypedPeerErrorCode != test.typed || failure.Operation == nil || failure.Operation.Code != test.wire {
+			t.Fatalf("%v lost its rejection reason: %+v", test.cause, failure)
+		}
 	}
 }
 

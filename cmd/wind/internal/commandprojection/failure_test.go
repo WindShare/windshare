@@ -37,6 +37,7 @@ func TestEveryRelayAndPeerCodeHasAnExplicitSafeMapping(t *testing.T) {
 	peerCodes := []v2peer.TypedPeerErrorCode{
 		v2peer.TypedPeerErrorNegotiation, v2peer.TypedPeerErrorTimeout,
 		v2peer.TypedPeerErrorCandidates, v2peer.TypedPeerErrorAdmission,
+		v2peer.TypedPeerErrorPolicy, v2peer.TypedPeerErrorBusy,
 		v2peer.TypedPeerErrorSignaling, v2peer.TypedPeerErrorCancelled,
 		v2peer.TypedPeerErrorStopped, v2peer.TypedPeerErrorUnexpected,
 	}

@@ -61,16 +61,24 @@ describe('authenticated cross-attempt path control', () => {
     waits[0]?.()
     for (let index = 0; index < 6; index += 1) await Promise.resolve()
     expect(decodeV2PeerPathControl(sent[1]!).controlSequence).toBe(2n)
-    control.revoke()
-    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({ kind: KIND.revoke, validForMilliseconds: 0 })
+    control.deactivate()
+    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({
+      peerPathId: path, kind: KIND.demand, validForMilliseconds: 120_000, holdForMilliseconds: 0,
+    })
     receive?.(notice(3n))
     expect(hints).toBe(1)
     control.activate()
+    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({
+      peerPathId: path, kind: KIND.demand, holdForMilliseconds: 85_000,
+    })
     receive?.(notice(3n))
     expect(hints).toBe(1)
     receive?.(notice(4n))
     expect(hints).toBe(2)
+    control.deactivate()
     await control.close()
+    expect(decodeV2PeerPathControl(sent.at(-1)!)).toMatchObject({ kind: KIND.revoke, validForMilliseconds: 0 })
+    expect(sent.map((body) => decodeV2PeerPathControl(body).kind).filter((kind) => kind === KIND.revoke)).toHaveLength(1)
     expect(receive).toBeUndefined()
   })
 })

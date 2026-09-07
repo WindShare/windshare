@@ -64,6 +64,8 @@ const (
 	TypedPeerErrorTimeout     TypedPeerErrorCode = "peer-timeout"
 	TypedPeerErrorCandidates  TypedPeerErrorCode = "peer-candidates"
 	TypedPeerErrorAdmission   TypedPeerErrorCode = "peer-admission"
+	TypedPeerErrorPolicy      TypedPeerErrorCode = "peer-policy"
+	TypedPeerErrorBusy        TypedPeerErrorCode = "peer-busy"
 	TypedPeerErrorSignaling   TypedPeerErrorCode = "signaling-contract"
 	TypedPeerErrorCancelled   TypedPeerErrorCode = "attempt-cancelled"
 	TypedPeerErrorStopped     TypedPeerErrorCode = "runtime-stopped"
@@ -494,6 +496,8 @@ func typedPeerErrorForOperationCode(code uint16) TypedPeerErrorCode {
 		return TypedPeerErrorCandidates
 	case protocolsession.PeerOperationCodeAdmission:
 		return TypedPeerErrorAdmission
+	case protocolsession.PeerOperationCodePolicy:
+		return TypedPeerErrorPolicy
 	default:
 		return TypedPeerErrorUnexpected
 	}

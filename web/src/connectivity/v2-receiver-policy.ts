@@ -387,7 +387,7 @@ export class V2ReceiverConnectivity {
     const active = this.#activations.get(id)
     if (active === undefined) return
     this.#activations.delete(id)
-    if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.revoke()
+    if (this.#activations.size === 0) for (const control of this.#pathControls.values()) control.deactivate()
     active.peerRecovery?.close()
     if (active.ownsRoutes) active.routes.close(reason)
   }
