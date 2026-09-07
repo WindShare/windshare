@@ -91,26 +91,33 @@ func (peer *connection) enqueueControl(data []byte) bool {
 	}
 }
 
-func (peer *connection) enqueueForward(sessionID v2.RelaySessionID, encoded []byte) bool {
+func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) (bool, <-chan struct{}, ForwardTrace) {
 	peer.sessionMu.Lock()
 	defer peer.sessionMu.Unlock()
 	if peer.closed.Load() {
-		return false
+		return false, nil, ForwardTrace{}
 	}
 	if _, active := peer.sessions[sessionID]; !active {
-		return false
+		return false, nil, ForwardTrace{}
 	}
 	peer.forwardMu.Lock()
 	defer peer.forwardMu.Unlock()
 	queue := peer.forward[sessionID]
+	trace := ForwardTrace{ConnectionFrames: peer.forwardFrames, ConnectionBytes: peer.forwardBytes}
+	if queue != nil {
+		trace.SessionFrames, trace.SessionBytes = len(queue.frames), queue.bytes
+	}
+	if trace.SessionFrames >= MaximumSessionQueueFrames || trace.SessionBytes+len(encoded) > MaximumSessionQueueBytes ||
+		peer.forwardFrames >= MaximumForwardQueueFrames || peer.forwardBytes+len(encoded) > MaximumForwardQueueBytes {
+		if peer.forwardChanged == nil {
+			peer.forwardChanged = make(chan struct{})
+		}
+		return false, peer.forwardChanged, trace
+	}
 	if queue == nil {
 		queue = &forwardQueue{}
 		peer.forward[sessionID] = queue
 		peer.forwardOrder = append(peer.forwardOrder, sessionID)
-	}
-	if len(queue.frames) >= MaximumSessionQueueFrames || queue.bytes+len(encoded) > MaximumSessionQueueBytes ||
-		peer.forwardFrames >= MaximumForwardQueueFrames || peer.forwardBytes+len(encoded) > MaximumForwardQueueBytes {
-		return false
 	}
 	queue.frames = append(queue.frames, bytes.Clone(encoded))
 	queue.bytes += len(encoded)
@@ -120,7 +127,14 @@ func (peer *connection) enqueueForward(sessionID v2.RelaySessionID, encoded []by
 	case peer.wake <- struct{}{}:
 	default:
 	}
-	return true
+	return true, nil, trace
+}
+
+func (peer *connection) forwardCapacityChangedLocked() {
+	if peer.forwardChanged != nil {
+		close(peer.forwardChanged)
+		peer.forwardChanged = nil
+	}
 }
 
 func (peer *connection) takeForward() ([]byte, bool) {
@@ -145,6 +159,7 @@ func (peer *connection) takeForward() ([]byte, bool) {
 		queue.bytes -= len(frame)
 		peer.forwardFrames--
 		peer.forwardBytes -= len(frame)
+		peer.forwardCapacityChangedLocked()
 		return frame, true
 	}
 	return nil, false

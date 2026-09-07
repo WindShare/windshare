@@ -231,6 +231,11 @@ func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.A
 	endpointServer, err := v2endpoint.New(v2endpoint.Config{
 		Registry: registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
 		WriteTimeout: *endpointWriteTimeout,
+		ForwardTracer: v2endpoint.ForwardTraceFunc(func(event v2endpoint.ForwardTrace) {
+			logf("wsrelay: forward_pressure session_id=%x source_id=%s destination_id=%s stage=%s wait_ms=%d session_frames=%d session_bytes=%d connection_frames=%d connection_bytes=%d",
+				event.SessionID, event.Source.ConnectionID(), event.Destination.ConnectionID(), event.Stage, event.Wait.Milliseconds(),
+				event.SessionFrames, event.SessionBytes, event.ConnectionFrames, event.ConnectionBytes)
+		}),
 		RetirementTracer: v2endpoint.RetirementTraceFunc(func(event v2endpoint.RetirementTrace) {
 			// A generation mismatch is expected during same-ID replacement races;
 			// retaining both labels makes the safety decision reconstructable.
