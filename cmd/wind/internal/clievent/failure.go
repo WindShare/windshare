@@ -16,6 +16,9 @@ const (
 	MessageRelayRejected
 	MessageRelayUnavailable
 	MessageDirectUnavailable
+	MessageDirectPolicy
+	MessageDirectBusy
+	MessageDirectAdmission
 	MessageSourceUnavailable
 	MessageSourceChanged
 	MessageCatalogUnavailable
@@ -52,6 +55,12 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "relay_unavailable", true
 	case MessageDirectUnavailable:
 		return "direct_unavailable", true
+	case MessageDirectPolicy:
+		return "direct_policy", true
+	case MessageDirectBusy:
+		return "direct_busy", true
+	case MessageDirectAdmission:
+		return "direct_admission", true
 	case MessageSourceUnavailable:
 		return "source_unavailable", true
 	case MessageSourceChanged:
@@ -119,6 +128,8 @@ const (
 	FailurePeerTimeout
 	FailurePeerCandidates
 	FailurePeerAdmission
+	FailurePeerPolicy
+	FailurePeerBusy
 	FailurePeerSignaling
 	FailurePeerCanceled
 	FailurePeerStopped
@@ -257,7 +268,11 @@ func peerFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailurePeerCandidates:
 		return failureDefinition{"peer_candidates", MessageDirectUnavailable}, true
 	case FailurePeerAdmission:
-		return failureDefinition{"peer_admission", MessageDirectUnavailable}, true
+		return failureDefinition{"peer_admission", MessageDirectAdmission}, true
+	case FailurePeerPolicy:
+		return failureDefinition{"peer_policy", MessageDirectPolicy}, true
+	case FailurePeerBusy:
+		return failureDefinition{"peer_busy", MessageDirectBusy}, true
 	case FailurePeerSignaling:
 		return failureDefinition{"peer_signaling", MessageDirectUnavailable}, true
 	case FailurePeerCanceled:

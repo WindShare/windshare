@@ -6,6 +6,7 @@ import (
 
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
 func (attempt *peerAttempt) deliverFailure(
@@ -47,7 +48,9 @@ func peerFailure(err error) (uint16, string) {
 func senderOperationAttemptFailure(code uint16, message string, cause error) SenderAttemptFailure {
 	operation := &PeerOperationFailure{Code: code, Message: message}
 	typedCode := typedPeerErrorForOperationCode(code)
-	if isSenderSignalingContractFailure(cause) {
+	if errors.Is(cause, ErrAttemptCapacity) {
+		typedCode = TypedPeerErrorBusy
+	} else if isSenderSignalingContractFailure(cause) {
 		typedCode = TypedPeerErrorSignaling
 	}
 	return SenderAttemptFailure{
@@ -57,6 +60,14 @@ func senderOperationAttemptFailure(code uint16, message string, cause error) Sen
 }
 
 func attemptFailure(result, primary error, operationCanceled bool) SenderAttemptFailure {
+	// Authenticated admission owns the decision even when the receiver cancels
+	// its signaling operation while the rejected channel is still draining.
+	if _, rejected := errors.AsType[*sessionruntime.LaneRejectedError](primary); rejected {
+		return SenderAttemptFailure{
+			Scope: AttemptFailureScopeAttempt, TypedPeerErrorCode: TypedPeerErrorAdmission,
+			Message: peerAdmissionFailureMessage,
+		}
+	}
 	switch {
 	case operationCanceled || errors.Is(primary, errAnswerDropped) || errors.Is(primary, errCandidateDropped):
 		return senderAttemptCancelledFailure()

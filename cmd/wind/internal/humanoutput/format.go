@@ -143,6 +143,12 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The relay is unavailable."
 	case clievent.MessageDirectUnavailable:
 		message = "The direct connection is unavailable."
+	case clievent.MessageDirectPolicy:
+		message = "The direct path was rejected by connection policy."
+	case clievent.MessageDirectBusy:
+		message = "A previous direct connection attempt is still finishing."
+	case clievent.MessageDirectAdmission:
+		message = "The direct channel could not be admitted."
 	case clievent.MessageSourceUnavailable:
 		message = "The source content is unavailable."
 	case clievent.MessageSourceChanged:

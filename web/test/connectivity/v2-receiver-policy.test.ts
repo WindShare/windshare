@@ -16,6 +16,7 @@ import type { PeerChannel } from '../../src/connectivity/peer-channel'
 import { CandidateLimitExceededError, PeerNegotiationError } from '../../src/connectivity/errors'
 import { PeerTabAdmission } from '../../src/connectivity/peer-set/tab-admission'
 import { SIGNAL_KIND_OFFER } from '../../src/connectivity/signaling'
+import { decodeV2PeerPathControl, V2_PEER_PATH_CONTROL_KIND } from '../../src/connectivity/v2-path-control-codec'
 import {
   V2AuthenticatedPeerOperationError,
   V2SessionSignalingRoute,
@@ -151,7 +152,10 @@ describe('content path policy authority', () => {
 
 class FakeSession {
   subscribePeerPathControls(): () => void { return () => undefined }
-  async sendPeerPathControl(): Promise<void> {}
+  readonly pathControls: ReturnType<typeof decodeV2PeerPathControl>[] = []
+  async sendPeerPathControl(body: Uint8Array): Promise<void> {
+    this.pathControls.push(decodeV2PeerPathControl(body))
+  }
   readonly initialLaneId = 1
   readonly keys = Object.freeze({
     protocolSessionId: identity(90),
@@ -975,7 +979,7 @@ describe('v2 receiver immediate dual-path policy', () => {
   it('starts a replacement P2P attempt when a new click races old-attempt cleanup', async () => {
     vi.useFakeTimers()
     const offers = new PendingOffers()
-    const { connectivity } = fixture(offers)
+    const { connectivity, session } = fixture(offers)
     const first = connectivity.begin('preview')
     await turn()
     first.close()
@@ -984,8 +988,17 @@ describe('v2 receiver immediate dual-path policy', () => {
     expect(replacement.routes.allows('application-relay')).toBe(true)
     await turn()
     expect(offers.calls).toBe(2)
+    const [active, idle, reactivated] = session.pathControls
+    expect(active?.holdForMilliseconds).toBeGreaterThan(0)
+    expect(idle).toMatchObject({ kind: V2_PEER_PATH_CONTROL_KIND.demand, holdForMilliseconds: 0 })
+    expect(reactivated).toMatchObject({
+      kind: V2_PEER_PATH_CONTROL_KIND.demand, peerPathId: active?.peerPathId,
+      holdForMilliseconds: active?.holdForMilliseconds,
+    })
     replacement.close()
     await connectivity.close()
+    expect(session.pathControls.at(-1)?.kind).toBe(V2_PEER_PATH_CONTROL_KIND.revoke)
+    expect(session.pathControls.filter((control) => control.kind === V2_PEER_PATH_CONTROL_KIND.revoke)).toHaveLength(1)
   })
 
   it('keeps relay admitted through an explicit P2P failure', async () => {

@@ -107,6 +107,31 @@ func controlBytes(t *testing.T, sequence uint64, kind protocolsession.PeerPathCo
 	}
 	return body
 }
+func TestAuthenticatedIdleDemandAllowsSamePathReactivation(t *testing.T) {
+	h := newHarness(t)
+	session := [16]byte{1}
+	pathID := v2signal.PeerPathID{2}
+	key := pathKey{session, pathID}
+	for index, hold := range []time.Duration{ControlLifetime, 0, ControlLifetime} {
+		body := controlBytes(t, uint64(index+1), protocolsession.PeerPathDemand, hold)
+		if _, ok := h.native.ApplyControl(session, body); !ok {
+			t.Fatalf("demand transition %d rejected", index)
+		}
+		if h.native.Retired(session, pathID) || h.native.paths[key].content != (hold != 0) {
+			t.Fatalf("content demand changed path lifetime at transition %d", index)
+		}
+	}
+	if _, ok := h.native.ApplyControl(session, controlBytes(t, 4, protocolsession.PeerPathRevoke, 0)); !ok {
+		t.Fatal("final revoke rejected")
+	}
+	if !h.native.Retired(session, pathID) {
+		t.Fatal("final revoke did not retire path")
+	}
+	if _, ok := h.native.ApplyControl(session, controlBytes(t, 5, protocolsession.PeerPathDemand, ControlLifetime)); ok {
+		t.Fatal("final retirement allowed path resurrection")
+	}
+}
+
 func TestAuthenticatedDemandExpiresAndWatermarkPreventsResurrection(t *testing.T) {
 	h := newHarness(t)
 	session := [16]byte{1}

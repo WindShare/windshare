@@ -39,6 +39,7 @@ type runtimeLane struct {
 	done         chan struct{}
 	closeOnce    sync.Once
 	cryptoOnce   sync.Once
+	retireOnce   sync.Once
 	completeOnce sync.Once
 	started      bool
 	closing      bool
@@ -357,12 +358,21 @@ func (lanes *runtimeLanes) run(lane *runtimeLane) {
 	first := <-results
 	lanes.markClosing(lane)
 	lane.cancel()
-	lane.closeChannel()
+	// Physical shutdown may wait on provider callbacks. It must unblock I/O,
+	// but cannot hold a quiescent epoch's admission slot during that drain.
+	channel := lane.channel
+	drained := make(chan struct{})
+	go func() {
+		defer close(drained)
+		lane.closeChannelReference(channel)
+	}()
 	second := <-results
-	lanes.settleRun(lane, first, second)
+	lanes.retireRun(lane, first, second)
+	<-drained
+	lanes.completeLane(lane)
 }
 
-func (lanes *runtimeLanes) settleRun(lane *runtimeLane, results ...laneRunResult) {
+func (lanes *runtimeLanes) retireRun(lane *runtimeLane, results ...laneRunResult) {
 	cause := fatalLaneError(results...)
 	if cause != nil && lanes.runtime.ctx.Err() == nil {
 		// The pump owns authenticated peer-terminal and local protocol failures.
@@ -373,7 +383,7 @@ func (lanes *runtimeLanes) settleRun(lane *runtimeLane, results ...laneRunResult
 		}
 		lanes.runtime.terminateWithFailure(trigger, cause, runtimeFailureSourceLanePump)
 	}
-	lanes.completeLane(lane)
+	lanes.retireLane(lane)
 }
 
 func fatalLaneError(results ...laneRunResult) error {
@@ -415,15 +425,21 @@ func (lanes *runtimeLanes) finishLane(lane *runtimeLane) {
 	}
 }
 
+func (lanes *runtimeLanes) retireLane(lane *runtimeLane) {
+	lane.retireOnce.Do(func() {
+		// No old-epoch consumer survives retirement. Physical cleanup remains
+		// owned by lane.done and the runtime wait group after membership ends.
+		lane.destroyCrypto()
+		lanes.finishLane(lane)
+	})
+}
+
 func (lanes *runtimeLanes) completeLane(lane *runtimeLane) {
 	if lane == nil {
 		return
 	}
 	lane.completeOnce.Do(func() {
-		// Both exclusive crypto consumers have returned—or were never started—so
-		// completion can publish detach semantics before releasing opaque owners.
-		lane.destroyCrypto()
-		lanes.finishLane(lane)
+		lanes.retireLane(lane)
 		lane.releaseRuntimeReferences()
 		close(lane.done)
 	})

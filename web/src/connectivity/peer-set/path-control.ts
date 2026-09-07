@@ -57,16 +57,20 @@ export class PeerPathControl {
 
   get remoteProviderProfile(): string { return this.#remoteProviderProfile }
 
-  revoke(): void {
+  deactivate(): void {
     if (this.#demand === undefined) return
     this.#demand.abort()
     this.#demand = undefined
-    this.#track(this.#send(V2_PEER_PATH_CONTROL_KIND.revoke))
+    // Idle content withdraws its hold; revoke permanently retires this identity
+    // at the sender and belongs only to the path owner's final close.
+    this.#track(this.#send(V2_PEER_PATH_CONTROL_KIND.demand))
   }
 
   async close(): Promise<void> {
     if (!this.#closed) {
-      this.revoke()
+      this.#demand?.abort()
+      this.#demand = undefined
+      if (this.#sequence !== 0n) this.#track(this.#send(V2_PEER_PATH_CONTROL_KIND.revoke))
       this.#closed = true
       this.#unsubscribe()
       this.#lifetime.abort()
@@ -95,7 +99,7 @@ export class PeerPathControl {
       peerPathId: this.#path, networkGenerationId: this.#network.copyBytes(),
       controlSequence: ++this.#sequence, kind,
       validForMilliseconds: revoke ? 0 : DEMAND_LIFETIME_MILLISECONDS,
-      holdForMilliseconds: revoke ? 0 : ATTEMPT_HOLD_MILLISECONDS,
+      holdForMilliseconds: this.#demand === undefined ? 0 : ATTEMPT_HOLD_MILLISECONDS,
       providerProfile: this.#providerProfile,
     }), { signal }), signal)
   }
