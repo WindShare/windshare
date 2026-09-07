@@ -50,7 +50,7 @@ func (visitor *encodeVisitorV3) VisitSenderSessionTerminated(
 		return err
 	}
 	visitor.set("sender_session_terminated", correlation, senderSessionTerminatedPayloadV3{
-		Trigger: trigger, Provenance: provenance,
+		Trigger: trigger, Provenance: provenance, Failure: projectDiagnosticFailure(event.FailureSnapshot()),
 	})
 	return nil
 }

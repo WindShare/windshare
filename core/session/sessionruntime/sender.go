@@ -409,7 +409,12 @@ func (factory *SenderFactory) acceptClient(
 	factory.sessions[sessionID] = sender
 	factory.mu.Unlock()
 	sender.trackComposite(factory, sessionID)
-	runtime.start(contentHandler.Run, catalogHandler.Run, laneHandler.Run, peerHandler.Run)
+	runtime.start(
+		runtimeComponent{runtimeFailureSourceContent, contentHandler.Run},
+		runtimeComponent{runtimeFailureSourceCatalog, catalogHandler.Run},
+		runtimeComponent{runtimeFailureSourceLaneAdmission, laneHandler.Run},
+		runtimeComponent{runtimeFailureSourcePeer, peerHandler.Run},
+	)
 	started = true
 	return sender, nil
 }

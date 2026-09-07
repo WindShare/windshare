@@ -155,27 +155,38 @@ func trafficKey(keys protocolsession.SessionKeys, direction protocolsession.Dire
 	return keys.SenderToReceiver()
 }
 
-type runtimeComponent func(context.Context) error
+type runtimeFailureSource string
+
+const (
+	runtimeFailureSourceRuntime       runtimeFailureSource = "runtime"
+	runtimeFailureSourceDispatch      runtimeFailureSource = "dispatch"
+	runtimeFailureSourceContent       runtimeFailureSource = "content"
+	runtimeFailureSourceCatalog       runtimeFailureSource = "catalog"
+	runtimeFailureSourceLaneAdmission runtimeFailureSource = "lane_admission"
+	runtimeFailureSourcePeer          runtimeFailureSource = "peer"
+	runtimeFailureSourceLanePump      runtimeFailureSource = "lane_pump"
+)
+
+type runtimeComponent struct {
+	source runtimeFailureSource
+	run    func(context.Context) error
+}
 
 func (runtime *runtimeCore) start(additional ...runtimeComponent) {
 	components := make([]runtimeComponent, 0, 1+len(additional))
-	components = append(components, runtime.dispatch)
+	components = append(components, runtimeComponent{runtimeFailureSourceDispatch, runtime.dispatch})
 	components = append(components, additional...)
 	runtime.work.Add(len(components))
 	for _, component := range components {
 		go func() {
 			defer runtime.work.Done()
-			err := component(runtime.ctx)
+			err := component.run(runtime.ctx)
 			if runtime.ctx.Err() != nil {
 				return
 			}
-			if err != nil && !errors.Is(err, context.Canceled) {
-				runtime.terminateRuntimeFailed(err)
-				return
-			}
-			// A component has no independent normal terminal state. Returning while
-			// the runtime is live means the shared session can no longer make progress.
-			runtime.terminate(runtimeTerminationFailed)
+			// A component has no independent normal terminal state. Even a cancellation
+			// error is unexpected while the shared context is live and must keep its cause.
+			runtime.terminateWithFailure(runtimeTerminationFailed, err, component.source)
 		}()
 	}
 	runtime.lanes.start()

@@ -303,6 +303,12 @@ func TestCompositeRuntimeRoutesSignedPeerControlsAndCancellationOnTheOfferOperat
 	if _, err := receiver.Catalog().LoadDirectory(context.Background(), fixture.syntheticRoot); err != nil {
 		t.Fatalf("catalog failed after isolated peer rejection: %v", err)
 	}
+	// A cached catalog cannot prove the sender still serves the relay lane.
+	probeContext, cancelProbe := context.WithTimeout(context.Background(), time.Second)
+	defer cancelProbe()
+	if _, err := receiver.RequestLane(probeContext, 0); err != nil {
+		t.Fatalf("relay request failed after isolated peer rejection (sender: %v): %v", sender.Err(), err)
+	}
 }
 
 func TestCompositeRuntimeMultiReceiverStopAndAccessors(t *testing.T) {

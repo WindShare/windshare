@@ -347,8 +347,9 @@ type senderTerminalSendPayloadV3 struct {
 func (senderTerminalSendPayloadV3) runTracePayloadV3() {}
 
 type senderSessionTerminatedPayloadV3 struct {
-	Trigger    string `json:"trigger"`
-	Provenance string `json:"provenance"`
+	Trigger    string               `json:"trigger"`
+	Provenance string               `json:"provenance"`
+	Failure    *diagnosticFailureV3 `json:"failure,omitempty"`
 }
 
 func (senderSessionTerminatedPayloadV3) runTracePayloadV3() {}
