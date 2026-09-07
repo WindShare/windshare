@@ -108,6 +108,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
       : { kind: 'browser', shareInstance: identity(1), name: 'Summer photos', homeDirectoryId: 'root', singleFolder: true },
     browse: { kind: 'ready', status: 'Ready', error: null },
     draft: { mode: 'scope', scope: 'current-folder', label: 'Summer photos', summary: '1 folder selected, excluding 2 items', empty: false },
+    activeReceiveOperationId: output.lifecycle?.operationId ?? null,
     startAdmission: { allowed: single, reason: single ? null : 'Pause the current download before starting another.', canReleaseCurrent: false },
     taskDisplay: single ? null : facts.display,
     connection: { kind: scenario === 'reconnecting' ? 'reconnecting' : 'connected' },

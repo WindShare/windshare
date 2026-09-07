@@ -124,6 +124,12 @@ export class V2ReceiverController {
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
       onActionError: (error) => this.#publishActionError(error),
       onFailure: (error) => this.#publishActionError(error),
+      onOwnershipReleased: () => {
+        if (this.#disposed) return
+        if (this.#joined !== undefined) this.#beginSelectionProjection(this.#joined)
+        this.#publish(this.#snapshot)
+        this.#retained.load().catch(() => undefined)
+      },
       onRetainedFileFailure: () => {
         this.#resetReceiveOwnership(new DOMException('Retained file failures require a recovery choice', 'AbortError'))
           .then(() => this.#retained.load()).catch(error => this.#publishActionError(error))
@@ -180,6 +186,7 @@ export class V2ReceiverController {
       adoptContinuation: (input) => this.#adoptRetainedReceiveContinuation(input),
       ownsRuntime: (runtime) => this.#activeReceive.ownsRuntime(runtime),
       publish: (retained) => this.#publish({ ...this.#snapshot, retained }),
+      onActionCompleted: (operationId, action) => this.#retainedActionCompleted(operationId, action),
       ...(options.receive.retained.readRepairSummary === undefined
         ? {}
         : {
@@ -704,10 +711,20 @@ export class V2ReceiverController {
     return this.#capabilityLifecycle.publicError(error)
   }
 
+  #retainedActionCompleted(operationId: string, action: V2RetainedReceiveAction): void {
+    if (this.#disposed || this.#activeReceive.active ||
+        this.#snapshot.output.lifecycle?.operationId !== operationId ||
+        (action !== 'forget' && action !== 'delete' && action !== 'discard')) return
+    // Removing a durable result must also retire its remaining in-page presentation.
+    this.#outputs.clearTask()
+    this.#publish({ ...this.#snapshot, taskDisplay: null, progress: EMPTY_V2_PROGRESS })
+  }
+
   #publish(snapshot: V2ReceiverSnapshot): void {
     this.#diagnosticGeneration += 1n
     const reason = this.#operationTransitions.startBlockedReason(snapshot)
     this.#snapshot = Object.freeze({ ...snapshot,
+      activeReceiveOperationId: this.#activeReceive.operationId,
       startAdmission: Object.freeze({ allowed: reason === null, reason,
         canReleaseCurrent: !this.#operationTransitions.pending && !this.#retained.pending &&
           !this.#authority.pending && this.#activeReceive.canRelease }) })

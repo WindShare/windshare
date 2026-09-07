@@ -173,6 +173,7 @@ export interface V2ReceiverSnapshot {
   readonly browse: V2BrowseState
   readonly draft: V2SelectionDraft
   readonly startAdmission: Readonly<{ allowed: boolean; reason: string | null; canReleaseCurrent: boolean }>
+  readonly activeReceiveOperationId: string | null
   readonly taskDisplay: import('../output/workspace/operation-display').ReceiveOperationDisplay | null
   readonly pathActivity: import('../receiver/path-activity').ReceiverPathActivitySnapshot
   readonly phase: V2ReceiverPhase

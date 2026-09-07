@@ -125,7 +125,7 @@ A task keeps its object/selection label and destination throughout its lifetime.
 | Needs action | A resolvable obstacle and its concrete next action |
 | Cancelled / Failed | Why receiving ended, any usable retained output, and whether a new attempt is possible |
 
-The current task stays compact under the content and expands for progress details. Mobile opens task details as a full-page view with an obvious return to the share. Preparing and terminal results replace the task's controls without replacing the shared content. When receiving is paused or finished, starting another task follows the runtime's resource and output-authority state.
+The current task stays compact under the content and expands for progress details. Mobile opens task details as a full-page view with an obvious return to the share. Preparing and terminal results replace the task's controls without replacing the shared content. After delivery and runtime detachment finish, the result stays visible and another download is immediately available. Single-file results offer “Download again”; browser handoff remains distinct from confirmed saving. Paused and ready-to-save work retains its ownership until continued or settled.
 
 Open discovery uses an indeterminate indicator with bytes and completed-file counts. A determinate bar requires an exact closed denominator; changing estimates do not become an apparent percentage of the whole task. Distinguish network receipt, durable recovery progress, and final publication. Show one headline and keep supplementary counters in details. Do not derive a whole-task ETA from incomplete discovery.
 

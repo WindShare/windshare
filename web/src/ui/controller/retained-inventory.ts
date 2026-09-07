@@ -77,6 +77,7 @@ export interface RetainedInventoryCoordinatorOptions {
   readonly repairSource?: V2RetainedCompatibleNameRepairSource
   readonly trace?: DomainTraceSource<V2RetainedInventoryTraceEvent>
   readonly onActionError: (error: unknown) => void
+  readonly onActionCompleted?: (operationId: string, action: V2RetainedReceiveAction) => void
   readonly incidents?: V2ReceiverIncidentPort
 }
 
@@ -525,6 +526,7 @@ export class RetainedInventoryCoordinator {
         continuation: pending.operation.continuation,
       }))
       this.#clearPending(pending, false)
+      this.#options.onActionCompleted?.(pending.operation.operationId, pending.action)
       this.#loadInventory().catch(() => undefined)
     } finally {
       this.#closeAttempt(pending.attempt)

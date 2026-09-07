@@ -12,6 +12,7 @@ import type { ReceiverExperienceObservability } from '../experience/observabilit
 import { findReplacementFile } from '../source-replacement/selection'
 import type { SourceRevisionFailure } from '../../output/resume/source-revision-failures'
 import { projectDraft } from '../draft/model'
+import { isReceiveOutputDelivered } from './completion'
 
 interface OperationTransitionOptions {
   readonly snapshot: () => V2ReceiverSnapshot
@@ -41,7 +42,8 @@ export class ReceiveOperationTransitions {
   get pending(): boolean { return this.#pending }
 
   activeLifecycleActionAdmission(action: LifecycleUserAction): Readonly<{ allowed: boolean; reason: string | null }> {
-    if (!this.#options.activeReceive.active || this.#pending) {
+    if (!this.#options.activeReceive.active || this.#pending ||
+        isReceiveOutputDelivered(this.#options.snapshot().output.lifecycle)) {
       return { allowed: false, reason: 'This download is managed in Downloads.' }
     }
     if (action === 'continue' && this.#options.snapshot().output.lifecycle?.kind === 'resumable-receive') {
@@ -201,11 +203,12 @@ export class ReceiveOperationTransitions {
     if (this.#options.disposed() || this.#options.joined() === undefined) return 'Connect to the share first.'
     if (this.#pending || this.#options.retained.pending) return 'Another download is using the saving destination.'
     if (this.#options.activeReceive.active) {
-      if (this.#options.activeReceive.canRelease) return 'Choose Start another download to release the current task.'
+      if (isReceiveOutputDelivered(snapshot.output.lifecycle)) return 'Finishing the current download.'
+      if (this.#options.activeReceive.canRelease) return 'Choose Start another download to try again.'
       const kind = snapshot.output.lifecycle?.kind
       if (kind === 'resumable-receive') return 'The paused download still owns its destination. Continue or stop it first.'
       if (kind === 'waiting-to-save') return 'Save or discard the prepared result before starting another download.'
-      return 'The current download still owns its saving destination.'
+      return 'A download is in progress.'
     }
     if (this.#options.authority.pending) return 'Finish or cancel the current saving choice.'
     if (snapshot.connection.kind === 'ended') return 'This share has ended. Open a new share link to download more.'
