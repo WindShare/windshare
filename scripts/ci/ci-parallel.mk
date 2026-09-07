@@ -9,6 +9,8 @@ include scripts/ci/ci-gates.mk
 ci-parallel: $(CI_PARALLEL_LANES)
 	@echo "ci-parallel: all production source gates passed"
 
+# Long-running gates report their own milestones; buffering an entire recipe
+# hides useful progress until after the gate has finished.
 $(CI_PARALLEL_LANES):
 	@echo "== $@: START =="
-	+@$(MAKE) --no-print-directory --output-sync=target -C "$(REPOSITORY_ROOT)" $@
+	+@$(MAKE) --no-print-directory --output-sync=none -C "$(REPOSITORY_ROOT)" $@

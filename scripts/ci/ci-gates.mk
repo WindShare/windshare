@@ -2,11 +2,12 @@
 # entry point surfaces them before slower-to-act-on static diagnostics.
 CI_GATES := short-go vectors web e2e browser hygiene workflow-lint lint vet gopls sloc
 
-# Parallel lanes separate the principal local resource domains. Web build and
-# browser work intentionally share a lane because both own the same Web tree.
-CI_PARALLEL_RUNTIME_GATES := short-go vectors e2e
+# Start the longest analyzer immediately. Housekeeping follows runtime tests so
+# it cannot delay gopls, while concurrency stays bounded to three lanes. Web build
+# and browser work share a lane because both own the same Web tree.
+CI_PARALLEL_RUNTIME_GATES := short-go vectors e2e hygiene workflow-lint sloc
 CI_PARALLEL_WEB_GATES := web browser
-CI_PARALLEL_STATIC_GATES := hygiene workflow-lint lint vet gopls sloc
+CI_PARALLEL_STATIC_GATES := gopls lint vet
 CI_PARALLEL_GATES := $(CI_PARALLEL_RUNTIME_GATES) $(CI_PARALLEL_WEB_GATES) $(CI_PARALLEL_STATIC_GATES)
 CI_PARALLEL_LANES := ci-parallel-runtime ci-parallel-web ci-parallel-static
 

@@ -20,6 +20,9 @@ launchers use the same selector; adapters, CI helpers, evidence modules, and tes
 Pion is compiled through the root native dependency graph and exercised by the provider/socket race
 tests. Its standalone upstream module graph and JavaScript/Wasm provider view are not supported targets.
 Stage new Go files before final validation so the tracked-source gate includes them.
+Both hosts use one owned gopls session for all selected files, including inferred platform and nested
+module views. Small batches wait for explicit diagnostic completion before files close; retained files
+keep each build view loaded. Progress reports include elapsed time. Each invocation checks fresh sources.
 
 Go coverage is blocking:
 
@@ -36,7 +39,7 @@ analysis tools; they do not install or update prerequisites.
 |---|---|
 | `make check` | Fast Go and Web feedback. |
 | `make ci` | All ordinary gates serially. |
-| `make ci-parallel` | The same ordinary gates in bounded runtime, Web, and static-analysis lanes. |
+| `make ci-parallel` | The same gates in three bounded lanes; gopls starts immediately and progress streams live. |
 | `make ci-full` | Ordinary gates plus the weekly suites available on the current host. |
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |

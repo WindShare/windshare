@@ -33,6 +33,9 @@ go test ./scripts/ci/_piondeps
 echo "-- Pinned Pion source and patch reproduction"
 go run ./scripts/ci/_piondeps -reproduce
 
+echo "-- Go diagnostic session contracts"
+node --test scripts/ci/gopls/*.test.mjs
+
 echo "-- Web production graph resolver tests"
 node --test scripts/ci/web-forbidden.tests.mjs
 
