@@ -73,6 +73,7 @@ review_agent.md
 .trash
 /.webrtc/
 .orchestration
+.archive_orchestration
 
 原始需求.md
 
