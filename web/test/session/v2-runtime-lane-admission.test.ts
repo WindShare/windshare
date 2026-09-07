@@ -46,6 +46,10 @@ class ScriptedChannel implements FrameChannel {
     })
   }
 
+  receive(frame: Uint8Array): void {
+    this.#controller.enqueue(frame)
+  }
+
   async send(frame: Uint8Array, signal?: AbortSignal): Promise<void> {
     signal?.throwIfAborted()
     this.sent.push(frame.slice())
@@ -76,6 +80,28 @@ const lane = named<LaneVector>('sender-granted-lane-attach')
 afterEach(() => vi.useRealTimers())
 
 describe('receiver runtime caller-owned lane admission', () => {
+  it('retains the underlying authenticated lane failure before retiring the session', async () => {
+    const events: V2ProtocolTraceEvent[] = []
+    const { runtime, initialChannel } = runtimeFixture({ current: event => events.push(event) })
+    initialChannel.receive(new Uint8Array([0]))
+
+    await vi.waitFor(() => expect(runtime.isClosed).toBe(true))
+    expect(events.find(event => event.transition === 'detached')).toMatchObject({
+      eventName: 'lane_transition',
+      transition: 'detached',
+      detachmentClass: 'authenticated_failure',
+      correlation: { lane: { id: 0x0102_0304, epoch: 0 } },
+      failure: {
+        name: 'V2SessionRuntimeError',
+        cause: {
+          name: 'V2EnvelopeError',
+          message: 'Envelope header is malformed or has the wrong direction',
+        },
+      },
+    })
+    await runtime.close()
+  })
+
   it('publishes authenticated milestones and transfers an accepted channel to the runtime', async () => {
     const events: V2ProtocolTraceEvent[] = []
     const { runtime } = runtimeFixture({
@@ -186,7 +212,7 @@ describe('receiver runtime caller-owned lane admission', () => {
 
 function runtimeFixture(
   protocolTrace?: V2ReceiverSessionOptions['protocolTrace'],
-): { readonly runtime: V2ReceiverSessionRuntime } {
+): { readonly runtime: V2ReceiverSessionRuntime; readonly initialChannel: ScriptedChannel } {
   const initialChannel = new ScriptedChannel()
   const initialReader = initialChannel.frames.getReader()
   const descriptor = {
@@ -216,6 +242,7 @@ function runtimeFixture(
   ) => V2ReceiverSessionRuntime
   return {
     runtime: new Runtime(options, keys, new Uint8Array(16).fill(2), initialReader),
+    initialChannel,
   }
 }
 

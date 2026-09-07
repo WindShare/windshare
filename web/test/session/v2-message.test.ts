@@ -6,6 +6,7 @@ import {
 	decodeV2OperationErrorControl,
 	encodeV2Message,
   encodeV2Body,
+  decodeV2Message,
   type V2ControlBinding,
   validateV2SenderControlBody,
   verifyV2SenderControl,
@@ -19,6 +20,23 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   value[0] = first
   return value
 }
+
+describe('v2 session wire registry', () => {
+  it.each(Object.entries(V2_MESSAGE_KIND).filter(([, kind]) => kind !== V2_MESSAGE_KIND.blockFragment))(
+    'decodes the registered %s control message', (_name, kind) => {
+      const sessionControl = kind === V2_MESSAGE_KIND.sessionTerminal || kind === V2_MESSAGE_KIND.peerPathControl
+      const encoded = encodeV2Message(kind, sessionControl ? undefined : identity(1), encodeV2Body(null))
+      expect(decodeV2Message(encoded.plaintext)).toEqual(encoded)
+    },
+  )
+
+  it.each([0n, 20n, 255n, 0xffffffffffffffffn, BigInt(V2_MESSAGE_KIND.blockFragment)])(
+    'rejects unknown kinds and the data codec on the control path: %s', kind => {
+      const plaintext = encodeCanonicalCbor(new Map<number, unknown>([[0, kind], [1, null], [2, null]]))
+      expect(() => decodeV2Message(plaintext)).toThrow('unknown or uses the wrong codec')
+    },
+  )
+})
 
 describe('v2 authenticated sender control schemas', () => {
   it('freezes operation retry delays to 1 through 30000 milliseconds', () => {

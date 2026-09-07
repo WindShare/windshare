@@ -1,17 +1,19 @@
 import { describe, expect, it } from 'vitest'
 
-import { TraceSwitch } from '../../../src/diagnostics/trace/switch'
+import { TraceSwitch, type TraceActivationStore } from '../../../src/diagnostics/trace/switch'
 import {
   FakeTraceTime,
   testEvent,
+  testIncident,
   testTraceCapacity,
   type TestEvent,
   type TestIncident,
   type TestScope,
 } from './test-support'
 
-function makeSwitch(time: FakeTraceTime) {
+function makeSwitch(time: FakeTraceTime, activationStore?: TraceActivationStore) {
   return new TraceSwitch<TestEvent, TestIncident, TestScope>({
+    ...(activationStore === undefined ? {} : { activationStore }),
     capacity: testTraceCapacity(),
     clock: time,
     scheduler: time,
@@ -26,6 +28,14 @@ function makeSwitch(time: FakeTraceTime) {
     incidentScope: (incident) => incident.scope,
     sameScope: (left, right) => left.kind === right.kind && left.sequence === right.sequence,
   })
+}
+
+function activationStore(expiresAt?: number): TraceActivationStore {
+  return {
+    readExpiry: () => expiresAt,
+    writeExpiry: value => { expiresAt = value },
+    clear: () => { expiresAt = undefined },
+  }
 }
 
 describe('trace switch', () => {
@@ -111,6 +121,82 @@ describe('trace switch', () => {
     })
     expect(trace.captureSnapshot()).toBeUndefined()
   })
+
+  it('restores startup capture with the original deadline and fresh evidence', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    const first = makeSwitch(time, store)
+    expect(first.status().state).toBe('idle')
+    const enabled = first.enable()
+    first.current?.(testEvent(1))
+    time.advance(40)
+
+    const reopened = makeSwitch(time, store)
+    expect(reopened.status()).toMatchObject({
+      enabled: true,
+      expiresAtMilliseconds: enabled.expiresAtMilliseconds,
+      retainedEventCount: 0n,
+    })
+    reopened.current?.(testEvent(2))
+    expect(reopened.captureSnapshot()?.retainedEventCount).toBe(1n)
+    time.advance(59)
+    expect(reopened.current).toBeDefined()
+    time.advance(1)
+    expect(reopened.status()).toMatchObject({ enabled: false, sealReason: 'expired' })
+    expect(makeSwitch(time, store).status().state).toBe('idle')
+    expect(store.readExpiry()).toBeUndefined()
+  })
+
+  it('keeps re-entry activated when a failure seals the current page evidence', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    const first = makeSwitch(time, store)
+    const enabled = first.enable()
+    first.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
+    time.advance(testTraceCapacity().postFailureSilenceMs)
+    expect(first.status().state).toBe('sealed')
+    first.clear()
+
+    const reopened = makeSwitch(time, store)
+    expect(reopened.status()).toMatchObject({
+      enabled: true, expiresAtMilliseconds: enabled.expiresAtMilliseconds,
+    })
+    reopened.disable()
+    expect(store.readExpiry()).toBeUndefined()
+    expect(makeSwitch(time, store).status().state).toBe('idle')
+  })
+
+  it('clears activation even when disabling a page that has no capture', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    const idlePage = makeSwitch(time, store)
+    makeSwitch(time, store).enable()
+    idlePage.disable()
+    expect(makeSwitch(time, store).status().state).toBe('idle')
+  })
+
+  it.each([NaN, Infinity, -1, 0, 1_000, 1_000.5, 1_101])(
+    'does not activate an expired or invalid deadline: %s', expiresAt => {
+      const store = activationStore(expiresAt)
+      const trace = makeSwitch(new FakeTraceTime(), store)
+      expect(trace.current).toBeUndefined()
+      expect(trace.status().state).toBe('idle')
+      expect(store.readExpiry()).toBeUndefined()
+    },
+  )
+
+  it.each(['readExpiry', 'writeExpiry', 'clear'] as const)(
+    'isolates storage failure in %s from capture and revocation', method => {
+      const time = new FakeTraceTime()
+      const store = activationStore()
+      store[method] = () => { throw new Error('Storage unavailable') }
+      const trace = makeSwitch(time, store)
+      expect(trace.enable().enabled).toBe(true)
+      trace.current?.(testEvent(1))
+      expect(trace.disable().enabled).toBe(false)
+      expect(trace.captureSnapshot()?.retainedEventCount).toBe(1n)
+    },
+  )
 
   it('keeps trace health cumulative when enable replaces retained trace data', () => {
     const time = new FakeTraceTime()

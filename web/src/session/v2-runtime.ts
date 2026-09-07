@@ -616,6 +616,7 @@ export class V2ReceiverSessionRuntime {
       eventName: 'lane_transition',
       transition: 'detached',
       detachmentClass,
+      ...(failure === undefined ? {} : { failure }),
       correlation: Object.freeze({
         protocolSessionId: this.protocolSessionIdentity,
         lane: Object.freeze({ id: lane.id, epoch: lane.epoch }),
