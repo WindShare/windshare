@@ -109,7 +109,7 @@ test('dark media remains uncropped and unsupported previews retain an immediate 
       }
       if (scenario === 'video') {
         await page.getByRole('button', { name: 'Preview a frame', exact: true }).click()
-        await expect.poll(() => page.locator('video').evaluate(video => (video as HTMLVideoElement).readyState)).toBeGreaterThanOrEqual(2)
+        await expect(page.locator('.preview-frame-stage')).toHaveAttribute('aria-busy', 'false')
         const seek = page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })
         await seek.focus()
         await page.keyboard.press('ArrowRight')
