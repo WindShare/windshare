@@ -11,6 +11,8 @@ import type {
   TraceEventObservationV1,
   TraceEventPayloadByNameV1,
 } from '../diagnostics/trace/model'
+import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
+import { formatDiagnosticText } from '../security/diagnostic-formatter'
 import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import type {
   OutputTraceEvent,
@@ -23,6 +25,12 @@ import type {
   V2ProtocolTraceSource,
 } from '../session/v2-diagnostics'
 import type { V2ReceiverTraceEvent } from './v2-controller'
+
+const FAILURE_DETAIL_FORMAT = Object.freeze({
+  maxDepth: 6,
+  maxEntries: 8,
+  maxStringCharacters: 256,
+})
 
 type BrowserTraceSource = DomainTraceSource<TraceEventObservationV1>
 
@@ -151,6 +159,12 @@ export function projectProtocolTraceEvent(
         return correlatedObservation(event.eventName, correlation, {
           transition: event.transition,
           detachment_class: event.detachmentClass,
+          // Error causes are non-enumerable; preserving them here makes an
+          // authenticated failure distinguishable from ordinary transport loss.
+          ...(event.failure === undefined ? {} : {
+            failure_detail: formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT)
+              .slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
+          }),
         })
       default:
         return correlatedObservation(event.eventName, correlation, {

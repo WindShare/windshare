@@ -54,6 +54,9 @@ export const V2_PEER_OPERATION_CODE = Object.freeze({
 
 export type V2MessageKind = (typeof V2_MESSAGE_KIND)[keyof typeof V2_MESSAGE_KIND]
 
+// Encoding and decoding must recognize the same registry when protocol controls grow.
+const MESSAGE_KINDS: ReadonlySet<number> = new Set(Object.values(V2_MESSAGE_KIND))
+
 const MAXIMUM_PLAINTEXT_BYTES = 65_536 - 44
 export const V2_SENDER_CONTROL_SCHEMA_VERSION = 1
 const CONTROL_SCHEMA_KEY = 0
@@ -138,11 +141,11 @@ export function decodeV2Message(plaintext: Uint8Array): V2SessionMessage {
     [0, 1, 2],
     'session message',
   )
-  const kindValue = requireUnsigned(fields.get(0), 'session message kind')
-  if (kindValue < 1n || kindValue > 18n || kindValue === 8n) {
+  const kindValue = Number(requireUnsigned(fields.get(0), 'session message kind'))
+  if (!MESSAGE_KINDS.has(kindValue) || kindValue === V2_MESSAGE_KIND.blockFragment) {
     throw new V2MessageError('Session message kind is unknown or uses the wrong codec')
   }
-  const kind = Number(kindValue) as V2MessageKind
+  const kind = kindValue as V2MessageKind
   const rawOperation = fields.get(1)
   const operationId = rawOperation === null
     ? undefined
@@ -639,7 +642,7 @@ function requireSchema(value: unknown, label: string): void {
 }
 
 function requireMessageIdentity(kind: V2MessageKind, operationId: Uint8Array | undefined): void {
-  if (kind < 1 || kind > 19) throw new V2MessageError('Message kind is outside the wire registry')
+  if (!MESSAGE_KINDS.has(kind)) throw new V2MessageError('Message kind is outside the wire registry')
   if (kind === V2_MESSAGE_KIND.sessionTerminal || kind === V2_MESSAGE_KIND.peerPathControl) {
     if (operationId !== undefined) throw new V2MessageError('Session terminal has an operation ID')
     return

@@ -4,6 +4,7 @@ import App from './App.tsx'
 import './index.css'
 import { browserBuildSnapshot } from './diagnostics/build-identity'
 import { createBrowserDiagnosticsComposition } from './diagnostics/browser-composition'
+import { createBrowserTraceActivationStore } from './diagnostics/browser-trace-activation'
 import { installWindShareDiagnostics } from './diagnostics/export/developer-api'
 import type { IncidentRecordV1 } from './diagnostics/export/incident-record-v1'
 import { createBrowserReceiveOperationMutationPort } from './output/resume/reopen-authority'
@@ -35,6 +36,7 @@ const controllerContext: {
 
 const diagnostics = createBrowserDiagnosticsComposition({
   build: browserBuildSnapshot(),
+  activationStore: createBrowserTraceActivationStore(() => window.localStorage),
   secureContext: window.isSecureContext,
   consoleSink: Object.freeze({
     error: (record: IncidentRecordV1) => console.error(record),

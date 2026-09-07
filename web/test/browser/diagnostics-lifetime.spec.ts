@@ -11,7 +11,7 @@ const EXPECTED_API_METHODS = Object.freeze([
   'status',
 ])
 
-test('diagnostics are installed for one page lifetime and never survive reload', async ({ page }) => {
+test('diagnostic evidence stays page-local and manual disable survives reload', async ({ page }) => {
   const detailedTraceConsoleMessages: string[] = []
   page.on('console', (message) => {
     if (message.text().startsWith('windshare.receive')) {
@@ -144,6 +144,65 @@ test('diagnostics are installed for one page lifetime and never survive reload',
   expect(reloadedBundle.runtimeRunId).toMatch(BASE64URL_IDENTITY_PATTERN)
   expect(reloadedBundle.runtimeRunId).not.toBe(initialBundle.runtimeRunId)
   expect(detailedTraceConsoleMessages).toEqual([])
+})
+
+test('enabled diagnostics capture startup after reload and share-link navigation in a new tab', async ({ page, context }) => {
+  await page.goto('/')
+  const enabled = await page.evaluate(() => ({
+    status: window.windshareDiagnostics.enable(),
+    bundle: window.windshareDiagnostics.export(),
+  }))
+  const initialIdentity = parseBundle(enabled.bundle).runtimeRunId
+
+  await page.reload()
+  expect(await page.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
+    enabled: true, expires_at: enabled.status.expires_at,
+  })
+  const reloadedIdentity = parseBundle(
+    await page.evaluate(() => window.windshareDiagnostics.export()),
+  ).runtimeRunId
+  expect(reloadedIdentity).not.toBe(initialIdentity)
+
+  const reopened = await context.newPage()
+  await reopened.goto('/')
+  expect(await reopened.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
+    enabled: true, expires_at: enabled.status.expires_at,
+  })
+  // Invalid key material fails during controller startup without external networking.
+  await reopened.goto('/AAAAAAAAAAAAAAAA#invalid-key')
+  await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.status().state))
+    .toBe('sealed')
+  const restored = await reopened.evaluate(() => ({
+    status: window.windshareDiagnostics.status(),
+    bundle: window.windshareDiagnostics.export(),
+  }))
+  expect(restored.status).toMatchObject({ capture_generation: '1', seal_reason: 'scope_terminal' })
+  expect(restored.bundle).toContain('"event":"join_transition"')
+  expect(restored.bundle).toContain('"transition":"started"')
+  expect(parseBundle(restored.bundle).runtimeRunId).not.toBe(reloadedIdentity)
+
+  await reopened.evaluate(() => window.windshareDiagnostics.disable())
+  await page.reload()
+  expect(await page.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
+    enabled: false, state: 'idle',
+  })
+})
+
+test('blocked browser storage does not break startup or manual capture', async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(window, 'localStorage', {
+      get() { throw new DOMException('Storage denied', 'SecurityError') },
+    })
+  })
+  await page.goto('/')
+  const statuses = await page.evaluate(() => ({
+    initial: window.windshareDiagnostics.status(),
+    enabled: window.windshareDiagnostics.enable(),
+    disabled: window.windshareDiagnostics.disable(),
+  }))
+  expect(statuses.initial.enabled).toBe(false)
+  expect(statuses.enabled.enabled).toBe(true)
+  expect(statuses.disabled.enabled).toBe(false)
 })
 
 function parseBundle(encoded: string): Readonly<{

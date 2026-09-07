@@ -20,10 +20,19 @@ import type {
   TraceScheduledTask,
 } from './ports'
 
+export interface TraceActivationStore {
+  readExpiry(): number | undefined
+  writeExpiry(expiresAtMilliseconds: number): void
+  clear(): void
+}
+
 export type TraceSwitchOptions<Event, Incident, Scope> = Omit<
   BoundedTraceRecorderOptions<Event, Incident, Scope>,
   'captureGeneration' | 'capacity' | 'health' | 'onSealed'
-> & Readonly<{ capacity?: TraceCapacityPolicy }>
+> & Readonly<{
+  capacity?: TraceCapacityPolicy
+  activationStore?: TraceActivationStore
+}>
 
 interface ActiveTraceCapture<Event, Incident, Scope> {
   readonly generation: bigint
@@ -45,6 +54,7 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
   constructor(options: TraceSwitchOptions<Event, Incident, Scope>) {
     this.#options = options
     this.#capacity = createTraceCapacityPolicy(options.capacity)
+    this.#restoreActivation()
   }
 
   get current(): TraceObserver<Event> | undefined {
@@ -53,6 +63,19 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
   }
 
   enable(): TraceCoreStatus {
+    const now = this.#readNow()
+    const expiresAt = Math.min(Number.MAX_SAFE_INTEGER, now + this.#capacity.captureExpiryMs)
+    const status = this.#startCapture(now, expiresAt)
+    try {
+      if (status.enabled) this.#options.activationStore?.writeExpiry(expiresAt)
+      else this.#options.activationStore?.clear()
+    } catch {
+      // Denied storage must not prevent collecting evidence in the current page.
+    }
+    return status
+  }
+
+  #startCapture(now: number, expiresAt: number): TraceCoreStatus {
     this.#discardPriorCapture()
     const generation = this.#captureGeneration + 1n
     this.#captureGeneration = generation
@@ -69,14 +92,10 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
       observer: (event) => recorder.record(event),
     }
     this.#active = active
-    const now = this.#readNow()
-    active.expiresAtMilliseconds = Math.min(
-      Number.MAX_SAFE_INTEGER,
-      now + this.#capacity.captureExpiryMs,
-    )
+    active.expiresAtMilliseconds = expiresAt
     try {
       active.expiryTask = this.#options.scheduler.schedule(
-        this.#capacity.captureExpiryMs,
+        expiresAt - now,
         () => this.#expire(generation, recorder),
       )
     } catch {
@@ -87,6 +106,11 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
 
   disable(): TraceCoreStatus {
     this.#active?.recorder.seal('manual_disable')
+    try {
+      this.#options.activationStore?.clear()
+    } catch {
+      // Revocation of this page's observer is independent of browser storage.
+    }
     return this.status()
   }
 
@@ -142,6 +166,24 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
 
   traceHealthSnapshot(): TraceHealthSnapshot {
     return this.#health.traceHealthSnapshot()
+  }
+
+  #restoreActivation(): void {
+    try {
+      const expiresAt = this.#options.activationStore?.readExpiry()
+      if (expiresAt === undefined) return
+      const now = this.#readNow()
+      if (!Number.isSafeInteger(expiresAt) || expiresAt <= now ||
+          expiresAt - now > this.#capacity.captureExpiryMs) {
+        this.#options.activationStore?.clear()
+        return
+      }
+      // Activation outlives a page's recorder, including a sealed failure capture.
+      // Re-entry needs startup evidence without renewing the user's capture window.
+      this.#startCapture(now, expiresAt)
+    } catch {
+      // A blocked or corrupt preference cannot interrupt receiver startup.
+    }
   }
 
   #discardPriorCapture(): void {
