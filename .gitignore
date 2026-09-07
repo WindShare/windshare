@@ -36,6 +36,7 @@ TODO
 .trash_*
 .cursor/
 .claude/
+.debug/
 
 # Coverage output directories
 web/coverage/
