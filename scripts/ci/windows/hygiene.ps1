@@ -51,6 +51,7 @@ Invoke-Step 'Release source and binary packaging contracts' { go test ./scripts/
 Invoke-Step 'Windows first-setup contract (fake firewall commands)' { & ./scripts/install/windows/firewall.tests.ps1 }
 Invoke-Step 'Pinned Pion source verifier tests' { go test ./scripts/ci/_piondeps }
 Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_piondeps -reproduce }
+Invoke-Step 'Go diagnostic session contracts' { node --test scripts/ci/gopls/*.test.mjs }
 Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
 Invoke-Step 'Browser FSA reviewed support artifact syntax' {
     $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip' -Recurse -File -Filter '*.mjs')
