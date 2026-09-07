@@ -18,8 +18,8 @@ export async function requireOriginPrivateStorage(
       navigator.storage as Partial<OriginPrivateStorageManager> | undefined
     )?.getDirectory === 'function',
   )
-  // OPFS recovery has no truthful substitute on unsupported engines; portable output is matrix-tested.
-  test.skip(!available, `${browserName} does not expose the Origin Private File System API`)
+  // Recovery needs real OPFS; portable output is matrix-tested when this environment lacks it.
+  test.skip(!available, `Current ${browserName} test environment does not expose navigator.storage.getDirectory()`)
 }
 
 export async function removePersistentBrowserProfile(profile: string): Promise<void> {
