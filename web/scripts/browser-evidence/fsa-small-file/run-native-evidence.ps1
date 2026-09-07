@@ -167,7 +167,9 @@ $sessionId = [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ') + '-' + [guid]::New
     [void](New-Item -ItemType Directory -Path $evidenceRoot -ErrorAction Stop)
   }
   $evidenceDirectory = New-ReplayChildDirectory -Parent $evidenceRoot -Name $SessionId
-  $workParent = Join-Path $RepositoryRoot 'tmp\fsa-small-file-native'
+  # Go's ./... traversal ignores dot directories, but does not honor .gitignore.
+  # Keep large browser profiles and output trees out of every package discovery.
+  $workParent = Join-Path $RepositoryRoot '.tmp\fsa-small-file-native'
   if (-not (Test-Path -LiteralPath $workParent -PathType Container)) {
     [void](New-Item -ItemType Directory -Path $workParent -ErrorAction Stop)
   }

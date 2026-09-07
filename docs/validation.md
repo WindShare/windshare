@@ -35,6 +35,10 @@ Go coverage is blocking:
 Run commands from the repository root. Local gates use the installed Go, Node.js, pnpm, browser, and
 analysis tools; they do not install or update prerequisites.
 
+Keep local experiment workspaces, browser profiles, and generated file trees in `.tmp/` or the system
+temporary directory. Go's `./...` traversal ignores dot directories but does not read `.gitignore`;
+large artifacts under `tmp/` slow package discovery and every gopls build view.
+
 | Command | Runs |
 |---|---|
 | `make check` | Fast Go and Web feedback. |
@@ -44,7 +48,7 @@ analysis tools; they do not install or update prerequisites.
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |
 | `make vectors-update` | Regenerate protocol vectors for review. |
-| `make web` | ESLint, TypeScript/Vite build, and Vitest. |
+| `make web` | ESLint, TypeScript/Vite build, and Vitest with two isolated workers. |
 | `make e2e` | Critical sender, relay, and receiver process path. |
 | `make browser` | Chromium relay smoke and short browser contracts. |
 | `make browser-weekly` | Current-host browser suites, including the ordinary browser checks. |
