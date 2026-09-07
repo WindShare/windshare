@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process'
+import { once } from 'node:events'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { connect, createServer, type Server, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
@@ -267,9 +268,16 @@ export class DirectProductStack {
       server: { host: '127.0.0.1', port: 0, strictPort: true, hmr: false, watch: null },
     })
     this.#vite = vite
-    await vite.listen()
-    const address = vite.httpServer?.address()
-    if (address === null || address === undefined || typeof address === 'string') {
+    const listener = vite.httpServer
+    if (listener === null) throw new Error('Vite did not create its direct browser listener')
+    // Vite's listen helper treats port zero as its default development port.
+    // Bind the owned HTTP server directly so the OS reserves an ephemeral port
+    // without racing another stack or disturbing a local development server.
+    const listening = once(listener, 'listening')
+    listener.listen(0, '127.0.0.1')
+    await listening
+    const address = listener.address()
+    if (address === null || typeof address === 'string') {
       throw new Error('Vite did not expose its direct browser listener')
     }
     this.baseURL = `http://127.0.0.1:${address.port}`
