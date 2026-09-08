@@ -22,9 +22,10 @@ import (
 const (
 	windowsSupervisorStartupTimeout  = 30 * time.Second
 	windowsSupervisorCompletionSlack = time.Second
-	// Native process teardown includes asynchronous Windows I/O cancellation.
-	// Budget-boundary behavior is tested separately with controlled observations.
-	windowsSupervisorNativeTerminationGrace = time.Second
+	// Native completion includes host scheduling and asynchronous I/O cancellation.
+	// The cooperative probe exits immediately on interrupt; only a stuck host spends
+	// this allowance. Budget-boundary behavior uses controlled observations instead.
+	windowsSupervisorNativeTerminationGrace = windowsSupervisorStartupTimeout
 )
 
 func TestRunSupervisesNaturalExitAndDeadline(t *testing.T) {
@@ -206,17 +207,14 @@ func windowsSupervisorConfig(
 	grace time.Duration,
 ) processowner.Config {
 	t.Helper()
-	executable, err := filepath.Abs(os.Getenv("ComSpec"))
+	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	arguments := []string{"/d", "/s", "/c", "exit 0"}
-	if mode == "deadline" {
-		arguments = []string{"/d", "/s", "/c", "ping -t 127.0.0.1 >nul"}
-	}
+	environment := cleanTestEnvironment(append(os.Environ(), windowsSupervisorProbeEnvironment+"="+mode))
 	return processowner.Config{
-		Executable: executable, Arguments: arguments,
-		WorkingDirectory: filepath.Dir(executable), Environment: cleanTestEnvironment(os.Environ()),
+		Executable: executable, Arguments: []string{"-test.run=^TestWindowsSupervisorProbe$"},
+		WorkingDirectory: filepath.Dir(executable), Environment: environment,
 		DeadlineMilliseconds: deadline.Milliseconds(), TerminationGraceMilliseconds: grace.Milliseconds(),
 	}
 }
@@ -272,8 +270,9 @@ func collectWindowsSupervisor(
 	// Run starts the configured deadline only after the OS process is contained
 	// and ready. The harness therefore composes an independent startup budget
 	// instead of charging process creation and host scanning to child execution.
+	// Interruption and forced retirement each receive the configured grace period.
 	maximum := windowsSupervisorStartupTimeout + time.Duration(
-		config.DeadlineMilliseconds+config.TerminationGraceMilliseconds,
+		config.DeadlineMilliseconds+2*config.TerminationGraceMilliseconds,
 	)*time.Millisecond + windowsSupervisorCompletionSlack
 	timer := time.NewTimer(maximum)
 	defer timer.Stop()
