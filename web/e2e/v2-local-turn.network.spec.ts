@@ -78,7 +78,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     )
     const lane = await events.waitFor(
       'lane-admitted',
-      (event) => event.observation.route === 'direct',
+      (event) => event.observation.route === 'turn',
       'TURN peer lane admission',
     )
 
@@ -90,7 +90,7 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
 
     const peerDispatch = await events.waitFor(
       'dispatch',
-      (event) => event.observation.route === 'direct' &&
+      (event) => event.observation.route === 'turn' &&
         event.observation.dispatchSequence > cutBoundary,
       'post-cut TURN dispatch',
     )
@@ -125,12 +125,12 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
     expect(lane.observation).toMatchObject({
       laneId: admittedLane.laneId,
       laneEpoch: admittedLane.laneEpoch,
-      route: 'direct',
+      route: 'turn',
     })
     expect(peerDispatch.observation).toMatchObject({
       laneId: lane.observation.laneId,
       laneEpoch: lane.observation.laneEpoch,
-      route: 'direct',
+      route: 'turn',
     })
     expect(delivery).toMatchObject({
       outcome: 'succeeded',
