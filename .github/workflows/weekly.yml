@@ -156,6 +156,12 @@ jobs:
         run: pnpm -C web exec playwright install --with-deps chromium
       - name: Run direct and TURN relay-cut routes
         run: pnpm -C web test:browser:network
+      - name: Preserve network failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-network-diagnostics
+          path: web/test-results/network-routes/
 
   browser-interop:
     name: D1/D2 browser-Pion interop (Linux)
