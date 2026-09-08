@@ -3,6 +3,13 @@
 WindShare has local validation commands, ordinary GitHub CI, weekly suites, and a manual release workflow.
 This document lists those entry points and what they run.
 
+Production wiring is checked through behavior: `make e2e` exercises the real CLI processes, and the
+smoke test in `make browser` exercises the browser UI, preview, downloaded contents, and Chromium's
+retained downloads after reloading and going offline. Longer recovery and connectivity scenarios belong
+to `make long-go` and the weekly browser suites; unit and component contracts cover individual decisions
+and failure paths. Static architecture gates protect dependency and capability boundaries, not
+historical filenames, symbol names, or required internal module lists.
+
 ## Go package checks
 
 The root `go.mod` owns all production Go packages. Validation obtains the full package set with

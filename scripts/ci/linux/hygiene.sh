@@ -36,9 +36,6 @@ go run ./scripts/ci/_piondeps -reproduce
 echo "-- Go diagnostic session contracts"
 node --test scripts/ci/gopls/*.test.mjs
 
-echo "-- Web production graph resolver tests"
-node --test scripts/ci/web-forbidden.tests.mjs
-
 echo "-- Browser FSA reviewed support artifact syntax"
 while IFS= read -r -d '' script; do
   node --check "$script"
@@ -58,12 +55,6 @@ node --test web/scripts/browser-evidence/workspace-zip-recommendation/tests/*.te
 
 echo "-- Frozen Unicode Go tables"
 node scripts/unicode15/generate-go.mjs --check
-
-echo "-- Web retired paths and production graph"
-node scripts/ci/web-forbidden.mjs
-
-echo "-- Go retired paths and production graph"
-node scripts/ci/go-v1-forbidden.mjs
 
 echo "-- Core production dependency boundary tests"
 go test ./scripts/ci/_coreboundary

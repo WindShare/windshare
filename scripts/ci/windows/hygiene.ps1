@@ -52,7 +52,6 @@ Invoke-Step 'Windows first-setup contract (fake firewall commands)' { & ./script
 Invoke-Step 'Pinned Pion source verifier tests' { go test ./scripts/ci/_piondeps }
 Invoke-Step 'Pinned Pion source and patch reproduction' { go run ./scripts/ci/_piondeps -reproduce }
 Invoke-Step 'Go diagnostic session contracts' { node --test scripts/ci/gopls/*.test.mjs }
-Invoke-Step 'Web production graph resolver tests' { node --test scripts/ci/web-forbidden.tests.mjs }
 Invoke-Step 'Browser FSA reviewed support artifact syntax' {
     $evidenceScripts = @(Get-ChildItem 'web/scripts/browser-evidence-review/fsa-resumable-zip' -Recurse -File -Filter '*.mjs')
     foreach ($script in $evidenceScripts) {
@@ -78,8 +77,6 @@ Invoke-Step 'Browser workspace ZIP review contracts' {
     & node --test @($evidenceTests.FullName)
 }
 Invoke-Step 'Frozen Unicode Go tables' { node scripts/unicode15/generate-go.mjs --check }
-Invoke-Step 'Web retired paths and production graph' { node scripts/ci/web-forbidden.mjs }
-Invoke-Step 'Go retired paths and production graph' { node scripts/ci/go-v1-forbidden.mjs }
 Invoke-Step 'Core production dependency boundary tests' { go test ./scripts/ci/_coreboundary }
 Invoke-Step 'Core production dependency boundary' { go run ./scripts/ci/_coreboundary }
 Invoke-Step 'Go validation package ownership tests' { go test ./scripts/ci/_gopackages }

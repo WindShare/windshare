@@ -6,7 +6,6 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "forbidden": "node ../scripts/ci/web-forbidden.mjs",
     "lint": "eslint .",
     "preview": "vite preview",
     "test": "vitest run",
