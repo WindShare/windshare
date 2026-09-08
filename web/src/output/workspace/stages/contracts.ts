@@ -88,7 +88,11 @@ export type WorkspaceReceiveIntent = ReceiveIntent & {
 
 export type WorkspaceStageTraceEvent =
   | ObjectCapacityTraceEvent
-  | Readonly<{ name: 'receive.opfs.checkpoint'; operation_id: string; object_id: string; stage: string; checkpoint_generation?: bigint; reason?: string }>
+  | Readonly<{
+      name: 'receive.opfs.checkpoint'; operation_id: string; object_id: string; stage: string
+      checkpoint_generation?: bigint; reason?: string
+      next_entry?: bigint; entry_count?: bigint; committed_length?: bigint
+    }>
   | PersistentTreeTraceEvent
   | Readonly<{
       name: 'receive.preparation.started'

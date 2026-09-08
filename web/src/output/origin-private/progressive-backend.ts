@@ -100,6 +100,9 @@ export async function openOriginPrivateProgressiveZipBackend(options:
       trace: (event, detail) => options.onNativeTrace?.({
         name: 'receive.opfs.checkpoint', operation_id: object.operationId, object_id: object.objectId,
         stage: event, ...(typeof detail.generation === 'bigint' ? { checkpoint_generation: detail.generation } : {}),
+        ...(typeof detail.nextEntry === 'bigint' ? { next_entry: detail.nextEntry } : {}),
+        ...(typeof detail.entryCount === 'bigint' ? { entry_count: detail.entryCount } : {}),
+        ...(typeof detail.committedLength === 'bigint' ? { committed_length: detail.committedLength } : {}),
       }),
       selectedPaths: intent.selection.rules.mode === 'catalog-path'
         ? intent.selection.rules.paths.map(path => path.split('/')) : [],
