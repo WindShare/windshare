@@ -15,6 +15,7 @@ import {
   type FileSystemAccessCompatibleNameCatchUpSession,
 } from './session'
 import type { CompatibleNamePendingTerminalOutcomeV1 } from './compatible-name/model'
+import { completeFileSystemAccessPublishedCleanup } from './published-cleanup'
 
 export interface FileSystemAccessCompatibleNameCatchUpResult {
   readonly lifecycle: ReceiveLifecycleState
@@ -56,14 +57,28 @@ export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{
       }
       const receipt = await validatePersistedReceiveRecord(pending.terminalReceipt)
       const repairSummary = await session.drainTerminalProjector()
-      const lifecycle = await reconcilePendingTerminalLifecycle(
+      let lifecycle = await reconcilePendingTerminalLifecycle(
         input.operation,
         pending,
         receipt,
         input.clock ?? Date.now,
       )
-      await session.retireRecoveryMetadata()
-      await session.clearPendingOutcome()
+      const cleanup = async () => {
+        await session.retireRecoveryMetadata()
+        await session.clearPendingOutcome()
+      }
+      if (lifecycle.kind === 'published') {
+        lifecycle = (await completeFileSystemAccessPublishedCleanup({
+          intent: input.operation.intent,
+          lifecycle,
+          repository: input.operation.repository,
+          leaseId: input.operation.lease.leaseId,
+          ...(input.clock === undefined ? {} : { clock: input.clock }),
+          cleanup,
+        })).lifecycle
+      } else {
+        await cleanup()
+      }
       return Object.freeze({
         succeeded: true as const,
         result: Object.freeze({

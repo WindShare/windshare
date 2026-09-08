@@ -11,6 +11,7 @@ import {
 import type { CompatibleNameActivationLedger } from '../../src/output/file-system-access/compatible-name/coordinator'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import { decodeCompatibleNameSidecar } from '../../src/output/file-system-access/compatible-name/sidecar-codec'
+import { cleanupReopenedPublishedFileSystemAccessOutput } from '../../src/output/file-system-access/published-cleanup'
 import {
   catchUpFileSystemAccessCompatibleNames,
 } from '../../src/output/file-system-access/settlement'
@@ -776,7 +777,15 @@ describe('File System Access compatible-name terminal cut', () => {
     expect(repository.recordsOfKind(RECEIVE_RECORD_RECEIPT)).toHaveLength(0)
   })
 
-  it('retries retirement before clearing a terminal pending outcome', async () => {
+})
+
+describe('File System Access terminal metadata retirement', () => {
+  it.each([
+    { outcome: 'partial-directory', recovery: 'catch-up' },
+    { outcome: 'published', recovery: 'catch-up' },
+    { outcome: 'published', recovery: 'cleanup' },
+  ] as const)(
+    'retries retirement before clearing $outcome with $recovery', async ({ outcome, recovery }) => {
     const parent = new MemoryDirectory('downloads')
     const repository = new MemoryOperationRepository()
     const ledger = new MemoryCompatibleNameLedger(repository)
@@ -807,12 +816,14 @@ describe('File System Access compatible-name terminal cut', () => {
     await startReceiving(repository, session.intent, priorLeaseId)
     const execution = await fsaExecution(session, repository, priorLeaseId, transferJobId, identity(170))
     await admitAndFinalizeRoot(execution, session.intent, identity(171))
-    const worker = completedWithDirectoryError(session.intent.syntheticRoot)
+    const worker = outcome === 'published' ? SUCCESS : completedWithDirectoryError(session.intent.syntheticRoot)
     await expect(execution.settle({
       transferJobId,
       worker,
       materialization: { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n },
-    }, SIGNAL)).resolves.toMatchObject({ kind: 'partial-directory', reason: 'failures' })
+    }, SIGNAL)).resolves.toMatchObject(outcome === 'published'
+      ? { kind: 'published', cleanupState: 'cleanup-pending' }
+      : { kind: 'partial-directory', reason: 'failures' })
     await session.releaseRootLease()
 
     const pending = ledger.header?.pendingTerminalOutcome
@@ -841,7 +852,17 @@ describe('File System Access compatible-name terminal cut', () => {
       repository,
     } as unknown as ReopenedDirectTreeOperation
 
-    const result = await catchUpFileSystemAccessCompatibleNames({
+    const cleanupPublished = async () => {
+      if (lifecycle.kind !== 'published') throw new Error('cleanup requires a published fixture')
+      const result = await cleanupReopenedPublishedFileSystemAccessOutput({
+        intent: session.intent, lifecycle, repository, leaseId: newLeaseId,
+        checkpointRepositoryFactory: checkpointFactory,
+        openCompatibleNameLedger: async () => ledger,
+        clock: () => 2_000,
+      })
+      return { ...result, repairSummary: ledger.header?.repairSummary }
+    }
+    const result = recovery === 'cleanup' ? await cleanupPublished() : await catchUpFileSystemAccessCompatibleNames({
       operation,
       signal: SIGNAL,
       clock: () => 2_000,
@@ -865,10 +886,12 @@ describe('File System Access compatible-name terminal cut', () => {
       }),
     })
 
-    expect(result.lifecycle).toMatchObject({ kind: 'partial-directory', reason: 'failures' })
+    expect(result.lifecycle).toMatchObject(outcome === 'published'
+      ? { kind: 'published', cleanupState: 'clean' }
+      : { kind: 'partial-directory', reason: 'failures' })
     expect(result.repairSummary).toMatchObject({
       sidecarSync: 'current',
-      latestObservedFooter: { state: 'failed', committedCount: 1 },
+      latestObservedFooter: { state: outcome === 'published' ? 'completed' : 'failed', committedCount: 1 },
     })
     expect(ledger.header?.pendingTerminalOutcome).toBeUndefined()
     expect(retirementAttempts).toBe(2)

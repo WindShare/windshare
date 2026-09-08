@@ -25,6 +25,7 @@ import {
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
 import { createMaterializationLedgerBinding } from '../materialization-ledger/codec'
+import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import {
   MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
   MaterializationLedgerEntryKind,
@@ -297,7 +298,7 @@ export async function openFileSystemAccessCompatibleNameCatchUp(
         if (pendingOutcome === undefined) {
           throw new DOMException('Active catch-up must preserve receive metadata', 'InvalidStateError')
         }
-        await retireRecoveryMetadata(semantic, materializationBinding)
+        await retireFSAMaterializationRecoveryMetadata(semantic, materializationBinding)
       },
       runExclusive,
       close,
@@ -430,20 +431,4 @@ function semanticRepository(
     )
   }
   return candidate as FSASemanticOutputRepository
-}
-
-async function retireRecoveryMetadata(
-  repository: FSASemanticOutputRepository,
-  binding: MaterializationLedgerBindingV1,
-): Promise<void> {
-  for (;;) {
-    const result = await repository.retireMaterializationLedgerBatch(
-      binding,
-      MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-    )
-    if (result.state === 'complete') return
-    if (result.deletedRows === 0) {
-      throw new DOMException('FSA recovery metadata retirement made no progress', 'OperationError')
-    }
-  }
 }
