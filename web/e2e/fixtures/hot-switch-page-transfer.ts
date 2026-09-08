@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test'
 
-import type { PeerChannel } from '../../src/connectivity/peer-channel'
+import type { PeerChannel, PeerPathRoute } from '../../src/connectivity/peer-channel'
 import type {
   HotSwitchLaneObservation,
   HotSwitchPageEvent,
@@ -131,6 +131,15 @@ class AdmissionGatedPeerChannel implements PeerChannel {
 
   get reason(): unknown {
     return this.#channel.reason
+  }
+
+  // Delaying admission must preserve the selected path that authorizes lane publication.
+  get pathRoute(): PeerPathRoute {
+    return this.#channel.pathRoute
+  }
+
+  subscribePathRoute(listener: (route: PeerPathRoute) => void): () => void {
+    return this.#channel.subscribePathRoute?.(listener) ?? (() => undefined)
   }
 
   send(frame: Uint8Array, signal?: AbortSignal): Promise<void> {
