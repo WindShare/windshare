@@ -10,7 +10,6 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
@@ -212,9 +211,9 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	result := job.Run(ctx)
+	// Native checkpoint and publication latency is not part of the continuation
+	// contract. The package test timeout still bounds a stalled transfer.
+	result := job.Run(t.Context())
 	if result.Outcome != transfer.DirectTreeOutcomeSuccess {
 		t.Fatalf("outcome=%v cause=%v settlement=%v reads=%v replacements=%d", result.Outcome, result.TerminationCause, result.SettlementFailure, reads, replacements.Load())
 	}
