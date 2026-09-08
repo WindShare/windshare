@@ -50,8 +50,7 @@ type candidateBase struct {
 	foundationOverride string
 	priorityOverride   uint32
 
-	relayLocalPreference    uint16
-	providerLocalPreference *uint16
+	relayLocalPreference uint16
 
 	remoteCandidateCaches sync.Map // map[AddrPort]Candidate
 	isLocationTracked     bool
@@ -154,12 +153,7 @@ func (c *candidateBase) SetComponent(component uint16) {
 }
 
 // LocalPreference returns the local preference for this candidate.
-func (c *candidateBase) setLocalPreference(value uint16) { c.providerLocalPreference = &value }
-
 func (c *candidateBase) LocalPreference() uint16 { //nolint:cyclop
-	if c.providerLocalPreference != nil {
-		return *c.providerLocalPreference
-	}
 	if c.candidateType == CandidateTypeRelay {
 		return c.relayLocalPreference
 	}
@@ -485,6 +479,10 @@ func (c *candidateBase) writeTo(raw []byte, dst Candidate) (int, error) {
 
 // TypePreference returns the type preference for this candidate.
 func (c *candidateBase) TypePreference() uint16 {
+	return c.typePreferenceForAgent(c.agent())
+}
+
+func (c *candidateBase) typePreferenceForAgent(agent *Agent) uint16 {
 	pref := c.Type().Preference()
 	if pref == 0 {
 		return 0
@@ -492,8 +490,8 @@ func (c *candidateBase) TypePreference() uint16 {
 
 	if c.NetworkType().IsTCP() {
 		var tcpPriorityOffset uint16 = defaultTCPPriorityOffset
-		if c.agent() != nil {
-			tcpPriorityOffset = c.agent().tcpPriorityOffset
+		if agent != nil {
+			tcpPriorityOffset = agent.tcpPriorityOffset
 		}
 
 		pref -= tcpPriorityOffset
@@ -505,6 +503,12 @@ func (c *candidateBase) TypePreference() uint16 {
 // Priority computes the priority for this ICE Candidate
 // See: https://www.rfc-editor.org/rfc/rfc8445#section-5.1.2.1
 func (c *candidateBase) Priority() uint32 {
+	return c.priorityForAgent(c.agent())
+}
+
+// Admission needs the destination Agent's TCP offset before starting socket IO;
+// using an unattached candidate's default would freeze the wrong type preference.
+func (c *candidateBase) priorityForAgent(agent *Agent) uint32 {
 	if c.priorityOverride != 0 {
 		return c.priorityOverride
 	}
@@ -516,7 +520,7 @@ func (c *candidateBase) Priority() uint32 {
 	// that have the same type, the local preference MUST be unique for each
 	// one.
 
-	return (1<<24)*uint32(c.TypePreference()) +
+	return (1<<24)*uint32(c.typePreferenceForAgent(agent)) +
 		(1<<8)*uint32(c.LocalPreference()) +
 		(1<<0)*uint32(256-c.Component())
 }

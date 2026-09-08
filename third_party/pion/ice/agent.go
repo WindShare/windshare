@@ -7,6 +7,7 @@ package ice
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"net"
@@ -1147,8 +1148,12 @@ func (a *Agent) addRemotePassiveTCPCandidate(remoteCandidate Candidate) {
 			continue
 		}
 
+		if err = a.setLocalCandidatePriority(localCandidate); err != nil {
+			closeConnAndLog(conn, a.log, "Active ICE-TCP candidate priority: %v", err)
+
+			continue
+		}
 		localCandidate.start(a, conn, a.startedCh)
-		a.setUniqueLiteCandidatePriority(localCandidate)
 		a.localCandidates[localCandidate.NetworkType()] = append(
 			a.localCandidates[localCandidate.NetworkType()],
 			localCandidate,
@@ -1407,7 +1412,8 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn 
 		return err
 	}
 
-	return a.loop.Run(ctx, func(context.Context) {
+	var admissionErr error
+	err := a.loop.Run(ctx, func(context.Context) {
 		set := a.localCandidates[cand.NetworkType()]
 		for _, candidate := range set {
 			if candidate.Equal(cand) {
@@ -1423,14 +1429,11 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn 
 			}
 		}
 
-		if policy := a.providerConfig.LocalPreference; policy != nil {
-			if preference, ok := policy(cand); ok {
-				cand.(interface{ setLocalPreference(uint16) }).setLocalPreference(preference)
-			}
+		if admissionErr = a.setLocalCandidatePriority(cand); admissionErr != nil {
+			return
 		}
 		a.setCandidateExtensions(cand)
 		cand.start(a, candidateConn, a.startedCh)
-		a.setUniqueLiteCandidatePriority(cand)
 
 		set = append(set, cand)
 		a.localCandidates[cand.NetworkType()] = set
@@ -1447,6 +1450,8 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn 
 			a.candidateNotifier.EnqueueCandidate(cand)
 		}
 	})
+
+	return errors.Join(err, admissionErr)
 }
 
 func (a *Agent) setCandidateExtensions(cand Candidate) {

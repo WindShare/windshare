@@ -2,7 +2,7 @@
 
 更新：2026-09-08。基线：WindShare `bd1df255`，ICE `v4.4.2`，WebRTC `v4.2.20`。
 
-目标是先消除本地正确性和重连延迟问题，再把通用修复与能力接口逐项反哺，减少 fork 的长期维护成本。第 1 项本地修复已完成，其上游提案及其余项目仍待处理；PR 标题是建议，没有创建上游 issue 或 PR。
+目标是先消除本地正确性和重连延迟问题，再把通用修复与能力接口逐项反哺，减少 fork 的长期维护成本。第 1–2 项本地修复已完成，其上游提案及其余项目仍待处理；PR 标题是建议，没有创建上游 issue 或 PR。
 
 ## 当前范围
 
@@ -12,12 +12,12 @@
 
 ## 处理顺序与你需要做的事
 
-第 1 项本地修复已完成，继续按 2–3 修本地问题，再按 4–5 提交通用 bugfix，最后逐项推进 6–8 的能力接口。上游 review 等待期间可以继续下一项本地工作，无须暂停整个项目。
+第 1–2 项本地修复已完成，继续修第 3 项本地问题，再按 4–5 提交通用 bugfix，最后逐项推进 6–8 的能力接口。上游 review 等待期间可以继续下一项本地工作，无须暂停整个项目。
 
 | 顺序 | 工作 | 你需要做什么 | 去向 |
 | --- | --- | --- | --- |
 | 1 | 空闲 STUN 刷新取消与 socket 交接（本地已完成） | 后续确认刷新 API 的提案内容 | WindShare；成熟后向 `pion/ice` 提 API PR |
-| 2 | 保留 TCP 方向偏好的候选优先级 | 本地修复；之后参与优先级扩展接口讨论 | WindShare；按需向 `pion/ice` 提 issue |
+| 2 | 修复网卡排序覆盖 TCP 方向偏好（本地已完成） | 后续参与优先级扩展接口讨论 | WindShare；按需向 `pion/ice` 提 issue |
 | 3 | 映射候选遵守候选类型限制 | 本地修复，随端点映射提案一起解释 | WindShare；并入第 8 项 |
 | 4 | UDP mux 初始化竞态 | 用你的 GitHub 账号提交独立修复，处理 review | `pion/ice` PR |
 | 5 | TCP srflx 类型和地址保真 | 先提交 ICE PR；其可用版本发布后，再提交 WebRTC PR | `pion/ice` → `pion/webrtc` |
@@ -39,13 +39,13 @@
 
 ## 2. 候选优先级保留协议语义
 
-**问题。** [本地策略](../transport/webrtc/provider/priority.go)按 IP 分配完整 LocalPreference，[候选实现](../third_party/pion/ice/candidate_base.go)在 TCP 方向偏好计算前直接返回覆盖值。同一 IP 的 active/passive 候选可能得到相同优先级；目前测试主要覆盖 UDP 的网卡和地址族排序。
+**原问题。** 按 IP 分配完整 LocalPreference 会覆盖 TCP 方向偏好；收到远端 passive 候选后动态创建的 active TCP 又绕过了该策略，导致普通候选和动态候选评分不一致。
 
-**本地处理。** 把网络接口机会排序与协议优先级组合分开建模。保留 TCP 的方向偏好，在适当的低位偏好空间加入接口/地址顺序，并处理同类型候选的区分；不要用只按 IP 的值覆盖全部协议维度。只在候选入队和对外发布之前计算一次，保证检查表与信令一致。
+**本地已完成。** [产品策略](../transport/webrtc/provider/priority.go)只提供冻结的基址顺序；[ICE 评分入口](../third_party/pion/ice/provider_priority.go)在启动候选、构造检查表和发布之前组合一次最终分数。保留类型、UDP/TCP、TCP 方向及 TURN 自身偏好；每个协议偏好组先为各基址保留首次机会，重复端口、映射和未列出的基址使用余下独立分数。空间耗尽显式报告，禁止回绕到另一个方向。动态 active TCP 走同一入口。
 
-增加同一 IP 的 TCP active/passive，以及多接口混合 UDP/TCP 的回归用例。具体方向偏好值遵循既有协议策略；[RFC 6544 §4.2](https://www.rfc-editor.org/rfc/rfc6544.html#section-4.2)区分推荐排序和值域、唯一性约束，不应把推荐值描述成不可配置的硬要求。
+回归覆盖同 IP active/passive、重复 active、多基址双栈 UDP/TCP 映射、迟到基址、非默认 TCP 类型偏移、配置快照、发布/统计一致性和分数边界，无长时间等待。最终优先级和 TCP 方向进入现有 native connectivity trace，沿用 session、path、attempt 标识。此修复不调整中转等待或重试期限；实际直连成功率收益仍需网络证据。[RFC 6544 §4.2](https://www.rfc-editor.org/rfc/rfc6544.html#section-4.2)中的方向排序是可调整的推荐值，并非不可配置的硬要求。
 
-**上游处理。** 先修 WindShare 策略，再讨论上游真正需要暴露的扩展点。网卡顺序、IPv4/IPv6 选择策略留在产品层，不把整个 `ProviderConfig` 或 WindShare 的具体排序移入上游。建议 issue 标题：`Support application-defined interface preference while preserving ICE-TCP priorities`。
+**上游处理。** 本地策略已修复，后续讨论上游真正需要暴露的扩展点。网卡顺序、IPv4/IPv6 选择策略留在产品层，不把整个 `ProviderConfig` 或 WindShare 的具体排序移入上游。建议 issue 标题：`Support application-defined interface preference while preserving ICE-TCP priorities`。
 
 ## 3. 映射候选遵守候选类型限制
 
@@ -106,4 +106,4 @@
 - PR 使用独立分支，每份只解决一个问题。正文写触发场景、失败原因、修复理由和实际执行的测试；不带其他依赖升级或 WindShare 配置。提交信息不添加任何 attribution trailers。
 - 上游合并后，等修改进入项目决定采用的上游版本，再升级并删除对应补丁，更新 manifest 和复现结果。PR 合并本身不代表本地已经摆脱该补丁。
 
-第 1 项已通过补丁重建、受影响 Go 包的短测试与 race 检测、`make check` 和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。其上游 API 提案尚未提交，其余条目仍为待办。
+第 1 项已通过补丁重建、受影响 Go 包的短测试与 race 检测、`make check` 和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。第 2 项已通过受影响包的短测试、race 检测、补丁重建和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。两项上游提案尚未提交，其余条目仍为待办。

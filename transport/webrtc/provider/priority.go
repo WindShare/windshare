@@ -1,46 +1,31 @@
 package provider
 
-import (
-	"net/netip"
+import "net/netip"
 
-	"github.com/pion/ice/v4"
-)
-
-// Keep interface opportunity interleaved between families instead of assigning
-// every IPv6 candidate a higher preference than every IPv4 candidate.
-func localPreference(endpoints []netip.AddrPort) func(ice.Candidate) (uint16, bool) {
-	const highest = uint16(65535)
+// Socket order carries the network snapshot's interface opportunities. Preserve
+// it within each family and interleave families so one cannot monopolize checks.
+func localAddressOrder(endpoints []netip.AddrPort) []netip.Addr {
 	families := [2][]netip.Addr{}
 	seen := make(map[netip.Addr]bool)
 	for _, endpoint := range endpoints {
-		if seen[endpoint.Addr()] {
+		address := endpoint.Addr().Unmap()
+		if seen[address] {
 			continue
 		}
-		seen[endpoint.Addr()] = true
+		seen[address] = true
 		family := 0
-		if endpoint.Addr().Is6() {
+		if address.Is6() {
 			family = 1
 		}
-		families[family] = append(families[family], endpoint.Addr())
+		families[family] = append(families[family], address)
 	}
-	// Socket order carries the network snapshot's interface opportunities.
-	// Sorting by IP here would let one interface consume the early checks.
-	preferences := make(map[netip.Addr]uint16)
-	for family, addresses := range families {
-		for index, address := range addresses {
-			preferences[address] = highest - uint16(index*2+family)
+	ordered := make([]netip.Addr, 0, len(seen))
+	for index := 0; index < max(len(families[0]), len(families[1])); index++ {
+		for _, addresses := range families {
+			if index < len(addresses) {
+				ordered = append(ordered, addresses[index])
+			}
 		}
 	}
-	return func(candidate ice.Candidate) (uint16, bool) {
-		address := candidate.Address()
-		if related := candidate.RelatedAddress(); related != nil && related.Address != "" {
-			address = related.Address
-		}
-		ip, err := netip.ParseAddr(address)
-		if err != nil {
-			return 0, false
-		}
-		preference, ok := preferences[ip]
-		return preference, ok
-	}
+	return ordered
 }

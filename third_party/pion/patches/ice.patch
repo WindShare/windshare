@@ -1,8 +1,16 @@
 diff --git a/agent.go b/agent.go
-index 8d6c278..c6294d5 100644
+index 8d6c278..67746f1 100644
 --- a/agent.go
 +++ b/agent.go
-@@ -98,7 +98,8 @@ type Agent struct {
+@@ -7,6 +7,7 @@ package ice
+ 
+ import (
+ 	"context"
++	"errors"
+ 	"fmt"
+ 	"math"
+ 	"net"
+@@ -98,7 +99,8 @@ type Agent struct {
  
  	// How long connectivity checks can fail before the ICE Agent
  	// goes to failed
@@ -12,7 +20,7 @@ index 8d6c278..c6294d5 100644
  
  	// How often should we send keepalive packets?
  	// 0 means never
-@@ -761,6 +762,10 @@ func (a *Agent) connectivityChecks() { //nolint:cyclop
+@@ -761,6 +763,10 @@ func (a *Agent) connectivityChecks() { //nolint:cyclop
  }
  
  func (a *Agent) initialCheckingTimeout() time.Duration {
@@ -23,46 +31,113 @@ index 8d6c278..c6294d5 100644
  	// A zero value disables transitions to failed.
  	if a.failedTimeout == 0 {
  		return 0
-@@ -1418,6 +1423,11 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn
+@@ -1142,8 +1148,12 @@ func (a *Agent) addRemotePassiveTCPCandidate(remoteCandidate Candidate) {
+ 			continue
+ 		}
+ 
++		if err = a.setLocalCandidatePriority(localCandidate); err != nil {
++			closeConnAndLog(conn, a.log, "Active ICE-TCP candidate priority: %v", err)
++
++			continue
++		}
+ 		localCandidate.start(a, conn, a.startedCh)
+-		a.setUniqueLiteCandidatePriority(localCandidate)
+ 		a.localCandidates[localCandidate.NetworkType()] = append(
+ 			a.localCandidates[localCandidate.NetworkType()],
+ 			localCandidate,
+@@ -1402,7 +1412,8 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn
+ 		return err
+ 	}
+ 
+-	return a.loop.Run(ctx, func(context.Context) {
++	var admissionErr error
++	err := a.loop.Run(ctx, func(context.Context) {
+ 		set := a.localCandidates[cand.NetworkType()]
+ 		for _, candidate := range set {
+ 			if candidate.Equal(cand) {
+@@ -1418,9 +1429,11 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn
  			}
  		}
  
-+		if policy := a.providerConfig.LocalPreference; policy != nil {
-+			if preference, ok := policy(cand); ok {
-+				cand.(interface{ setLocalPreference(uint16) }).setLocalPreference(preference)
-+			}
++		if admissionErr = a.setLocalCandidatePriority(cand); admissionErr != nil {
++			return
 +		}
  		a.setCandidateExtensions(cand)
  		cand.start(a, candidateConn, a.startedCh)
- 		a.setUniqueLiteCandidatePriority(cand)
-diff --git a/candidate_base.go b/candidate_base.go
-index 38990e3..052e8c5 100644
---- a/candidate_base.go
-+++ b/candidate_base.go
-@@ -50,7 +50,8 @@ type candidateBase struct {
- 	foundationOverride string
- 	priorityOverride   uint32
+-		a.setUniqueLiteCandidatePriority(cand)
  
--	relayLocalPreference uint16
-+	relayLocalPreference    uint16
-+	providerLocalPreference *uint16
- 
- 	remoteCandidateCaches sync.Map // map[AddrPort]Candidate
- 	isLocationTracked     bool
-@@ -153,7 +154,12 @@ func (c *candidateBase) SetComponent(component uint16) {
+ 		set = append(set, cand)
+ 		a.localCandidates[cand.NetworkType()] = set
+@@ -1437,6 +1450,8 @@ func (a *Agent) addCandidate(ctx context.Context, cand Candidate, candidateConn
+ 			a.candidateNotifier.EnqueueCandidate(cand)
+ 		}
+ 	})
++
++	return errors.Join(err, admissionErr)
  }
  
- // LocalPreference returns the local preference for this candidate.
-+func (c *candidateBase) setLocalPreference(value uint16) { c.providerLocalPreference = &value }
+ func (a *Agent) setCandidateExtensions(cand Candidate) {
+diff --git a/candidate.go b/candidate.go
+index 091d4d6..1542617 100644
+--- a/candidate.go
++++ b/candidate.go
+@@ -99,6 +99,7 @@ type Candidate interface {
+ 	start(a *Agent, conn net.PacketConn, initializedCh <-chan struct{})
+ 	writeTo(raw []byte, dst Candidate) (int, error)
+ 	setPriority(uint32)
++	priorityForAgent(*Agent) uint32
+ 
+ 	replaceRemoteCandidateCacheValues(oldRemote, newRemote Candidate)
+ }
+diff --git a/candidate_base.go b/candidate_base.go
+index 38990e3..281e813 100644
+--- a/candidate_base.go
++++ b/candidate_base.go
+@@ -479,6 +479,10 @@ func (c *candidateBase) writeTo(raw []byte, dst Candidate) (int, error) {
+ 
+ // TypePreference returns the type preference for this candidate.
+ func (c *candidateBase) TypePreference() uint16 {
++	return c.typePreferenceForAgent(c.agent())
++}
 +
- func (c *candidateBase) LocalPreference() uint16 { //nolint:cyclop
-+	if c.providerLocalPreference != nil {
-+		return *c.providerLocalPreference
-+	}
- 	if c.candidateType == CandidateTypeRelay {
- 		return c.relayLocalPreference
++func (c *candidateBase) typePreferenceForAgent(agent *Agent) uint16 {
+ 	pref := c.Type().Preference()
+ 	if pref == 0 {
+ 		return 0
+@@ -486,8 +490,8 @@ func (c *candidateBase) TypePreference() uint16 {
+ 
+ 	if c.NetworkType().IsTCP() {
+ 		var tcpPriorityOffset uint16 = defaultTCPPriorityOffset
+-		if c.agent() != nil {
+-			tcpPriorityOffset = c.agent().tcpPriorityOffset
++		if agent != nil {
++			tcpPriorityOffset = agent.tcpPriorityOffset
+ 		}
+ 
+ 		pref -= tcpPriorityOffset
+@@ -499,6 +503,12 @@ func (c *candidateBase) TypePreference() uint16 {
+ // Priority computes the priority for this ICE Candidate
+ // See: https://www.rfc-editor.org/rfc/rfc8445#section-5.1.2.1
+ func (c *candidateBase) Priority() uint32 {
++	return c.priorityForAgent(c.agent())
++}
++
++// Admission needs the destination Agent's TCP offset before starting socket IO;
++// using an unattached candidate's default would freeze the wrong type preference.
++func (c *candidateBase) priorityForAgent(agent *Agent) uint32 {
+ 	if c.priorityOverride != 0 {
+ 		return c.priorityOverride
  	}
-@@ -951,6 +957,7 @@ func UnmarshalCandidate(raw string) (Candidate, error) { //nolint:cyclop
+@@ -510,7 +520,7 @@ func (c *candidateBase) Priority() uint32 {
+ 	// that have the same type, the local preference MUST be unique for each
+ 	// one.
+ 
+-	return (1<<24)*uint32(c.TypePreference()) +
++	return (1<<24)*uint32(c.typePreferenceForAgent(agent)) +
+ 		(1<<8)*uint32(c.LocalPreference()) +
+ 		(1<<0)*uint32(256-c.Component())
+ }
+@@ -951,6 +961,7 @@ func UnmarshalCandidate(raw string) (Candidate, error) { //nolint:cyclop
  			foundation,
  			raddr,
  			rport,
@@ -149,10 +224,10 @@ index 524f5cb..82ef8d7 100644
  
 diff --git a/provider_config.go b/provider_config.go
 new file mode 100644
-index 0000000..37d7024
+index 0000000..028ec70
 --- /dev/null
 +++ b/provider_config.go
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,110 @@
 +// SPDX-FileCopyrightText: 2026 WindShare contributors
 +// SPDX-License-Identifier: MIT
 +
@@ -184,14 +259,23 @@ index 0000000..37d7024
 +	TCPMappedMux           interface {
 +		GetConnForEndpoint(string, netip.AddrPort) (net.PacketConn, error)
 +	}
-+	LocalPreference func(Candidate) (uint16, bool)
++	// LocalAddressOrder ranks base addresses, most preferred first. ICE combines
++	// this snapshot with transport/type/TCP-direction preferences at admission.
++	// Within each protocol preference group, repeated candidates on one base
++	// follow every base's first candidate.
++	// Unlisted bases follow listed bases; an empty snapshot keeps Pion defaults.
++	LocalAddressOrder []netip.Addr
 +}
 +
 +// WithProviderConfig preserves legacy behavior when the config is empty.
 +func WithProviderConfig(config ProviderConfig) AgentOption {
++	config.LocalAddressOrder = slices.Clone(config.LocalAddressOrder)
 +	config.MappedUDPEndpoints = slices.Clone(config.MappedUDPEndpoints)
 +	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
 +	return func(a *Agent) error {
++		if err := validateLocalAddressOrder(config.LocalAddressOrder); err != nil {
++			return err
++		}
 +		if config.InitialCheckingTimeout < 0 {
 +			return fmt.Errorf("negative initial ICE checking timeout")
 +		}
@@ -253,6 +337,105 @@ index 0000000..37d7024
 +			a.log.Warnf("mapped endpoint admission: %v", err)
 +		}
 +	}
++}
+diff --git a/provider_priority.go b/provider_priority.go
+new file mode 100644
+index 0000000..034ddda
+--- /dev/null
++++ b/provider_priority.go
+@@ -0,0 +1,93 @@
++// SPDX-FileCopyrightText: 2026 WindShare contributors
++// SPDX-License-Identifier: MIT
++
++package ice
++
++import (
++	"fmt"
++	"net/netip"
++	"slices"
++)
++
++const (
++	candidateLocalPreferenceShift = 8
++	tcpOtherPreferenceBits        = 13
++	maxTCPAddressPreference       = (1 << tcpOtherPreferenceBits) - 1
++)
++
++func validateLocalAddressOrder(addresses []netip.Addr) error {
++	// Reserve at least one score per base even in TCP's narrower other-pref
++	// space. Never truncate a rank into a different direction preference.
++	if len(addresses) > maxTCPAddressPreference+1 {
++		return fmt.Errorf("local address order exceeds TCP preference space")
++	}
++	seen := make(map[netip.Addr]bool, len(addresses))
++	for _, address := range addresses {
++		if !address.IsValid() || address.Is4In6() || seen[address] {
++			return fmt.Errorf("invalid or duplicate local preference address: %s", address)
++		}
++		seen[address] = true
++	}
++	return nil
++}
++
++// setLocalCandidatePriority runs on the agent loop before either admission path
++// starts the candidate, creates pairs, or publishes it. A published score must
++// never change when another interface or another active TCP connection arrives.
++func (a *Agent) setLocalCandidatePriority(candidate Candidate) error {
++	addresses := a.providerConfig.LocalAddressOrder
++	if len(addresses) == 0 || candidate.Type() == CandidateTypeRelay {
++		// TURN has its own relay-protocol preference; base-address ordering must
++		// not overwrite that policy either.
++		candidate.setPriority(candidate.priorityForAgent(a))
++		a.setUniqueLiteCandidatePriority(candidate)
++		return nil
++	}
++
++	maxPreference := uint32(defaultLocalPreference)
++	if candidate.NetworkType().IsTCP() {
++		maxPreference = maxTCPAddressPreference
++	}
++	mask := maxPreference << candidateLocalPreferenceShift
++	prefix := candidate.priorityForAgent(a) &^ mask
++	used := make(map[uint32]bool)
++	for _, candidates := range a.localCandidates {
++		for _, existing := range candidates {
++			if priority := existing.Priority(); priority&^mask == prefix {
++				used[(priority&mask)>>candidateLocalPreferenceShift] = true
++			}
++		}
++	}
++
++	base := candidate.addrPort().Addr().Unmap()
++	if related := candidate.RelatedAddress(); related != nil && related.Address != "" {
++		address, err := netip.ParseAddr(related.Address)
++		if err != nil {
++			return fmt.Errorf("candidate %s has invalid preference base: %w", candidate.ID(), err)
++		}
++		base = address.Unmap()
++	}
++	rank := slices.Index(addresses, base)
++	preference := int(maxPreference) - rank
++	secondary := rank < 0 || used[uint32(preference)]
++	if secondary {
++		// Each listed base owns its first slot regardless of arrival order.
++		// Extra ports/mappings and unlisted bases share the remaining space;
++		// they cannot steal a late interface's first opportunity.
++		preference = int(maxPreference) - len(addresses)
++		for preference >= 0 && used[uint32(preference)] {
++			preference--
++		}
++	}
++	if preference < 0 {
++		a.log.Warnf("candidate_priority_exhausted ufrag=%s candidate_id=%s base=%s tcp_type=%s prefix=%d address_rank=%d",
++			a.localUfrag, candidate.ID(), base, candidate.TCPType(), prefix, rank)
++		return fmt.Errorf("candidate %s exhausted local preference space", candidate.ID())
++	}
++
++	priority := prefix | uint32(preference)<<candidateLocalPreferenceShift
++	candidate.setPriority(priority)
++	a.log.Tracef("candidate_priority ufrag=%s candidate_id=%s base=%s tcp_type=%s priority=%d address_rank=%d secondary=%t",
++		a.localUfrag, candidate.ID(), base, candidate.TCPType(), priority, rank, secondary)
++	return nil
 +}
 diff --git a/provider_tcp.go b/provider_tcp.go
 new file mode 100644

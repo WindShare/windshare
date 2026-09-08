@@ -14,7 +14,7 @@ func TestNativeConnectivityExactPayloadAndCorrelation(t *testing.T) {
 	session, _ := clievent.NewProtocolSessionID(append([]byte{1}, make([]byte, 15)...))
 	path, _ := clievent.NewPeerPathID(append([]byte{2}, make([]byte, 15)...))
 	attempt, _ := clievent.NewPeerAttemptID(append([]byte{3}, make([]byte, 15)...))
-	spec := clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Session: session, Path: path, Attempt: attempt, AttemptSequence: 9007199254740993, NetworkGeneration: 9007199254740994, Profile: "ice-0123abcd", Side: "receiver", Kind: "candidate", State: "unknown", At: time.Unix(0, 0), Candidate: &clievent.NativeCandidateFacts{Type: "srflx", Protocol: "udp", Address: "8.8.8.8", Port: 123, Family: "ipv4", Origin: "ordinary"}}
+	spec := clievent.NativeConnectivitySpec{Command: clievent.CommandGet, Session: session, Path: path, Attempt: attempt, AttemptSequence: 9007199254740993, NetworkGeneration: 9007199254740994, Profile: "ice-0123abcd", Side: "receiver", Kind: "candidate", State: "unknown", At: time.Unix(0, 0), Candidate: &clievent.NativeCandidateFacts{Priority: 1224736767, TCPType: "passive", Type: "srflx", Protocol: "tcp", Address: "8.8.8.8", Port: 123, Family: "ipv4", Origin: "ordinary"}}
 	event, err := clievent.NewNativeConnectivityObserved(spec)
 	if err != nil {
 		t.Fatal(err)
@@ -27,7 +27,7 @@ func TestNativeConnectivityExactPayloadAndCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"kind":"candidate","state":"unknown","side":"receiver","attempt_sequence":"9007199254740993","network_generation_id":"9007199254740994","ice_profile_id":"ice-0123abcd","observed_at":"1970-01-01T00:00:00Z","candidate":{"type":"srflx","protocol":"udp","address":"8.8.8.8","port":123,"family":"ipv4","origin":"ordinary","interface_class":"unknown","stun_endpoint":"unknown","stun_rtt_ms":"unknown","policy_decision":"unknown"}}`
+	want := `{"kind":"candidate","state":"unknown","side":"receiver","attempt_sequence":"9007199254740993","network_generation_id":"9007199254740994","ice_profile_id":"ice-0123abcd","observed_at":"1970-01-01T00:00:00Z","candidate":{"priority":1224736767,"tcp_type":"passive","type":"srflx","protocol":"tcp","address":"8.8.8.8","port":123,"family":"ipv4","origin":"ordinary","interface_class":"unknown","stun_endpoint":"unknown","stun_rtt_ms":"unknown","policy_decision":"unknown"}}`
 	if string(raw) != want {
 		t.Fatalf("payload=%s", raw)
 	}
