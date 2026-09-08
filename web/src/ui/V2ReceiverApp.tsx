@@ -1,6 +1,6 @@
 import { taskActions } from './experience/task-actions'
 import { downloadScopeLabel, shareConnectionLabel } from './experience/share-presentation'
-import { useState, useSyncExternalStore, type FormEvent } from 'react'
+import { useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import type { V2ReceiverController } from './v2-controller'
 import { presentNewReceiveOperation } from './v2-lifecycle-presentation'
 import { presentSavingActions } from './saving'
@@ -38,12 +38,19 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
   const snapshot = useSyncExternalStore(controller.subscribe, controller.getSnapshot, controller.getSnapshot)
   const [details, setDetails] = useState<'connection' | 'task' | null>(null)
   const [downloadsOpen, setDownloadsOpen] = useState(false)
+  const previewInvoker = useRef<HTMLButtonElement>(null)
+  const detailsInvoker = useRef<HTMLButtonElement>(null)
   const { current, tasks } = composeTasks(snapshot, (operation, action) => controller.retainedActionAdmission(operation, action),
     action => controller.activeLifecycleActionAdmission(action))
   const actions = taskActions(controller, snapshot)
-  const openDetails = (next: 'connection' | 'task' | null) => {
-    controller.recordExperienceIntent(next === null ? 'close-details' : 'open-' + next + '-details')
+  const openDetails = (next: 'connection' | 'task', invoker: HTMLButtonElement) => {
+    detailsInvoker.current = invoker
+    controller.recordExperienceIntent('open-' + next + '-details')
     setDetails(next)
+  }
+  const closeDetails = () => {
+    controller.recordExperienceIntent('close-details')
+    setDetails(null)
   }
   const share = snapshot.share
   const single = share !== null && share.kind !== 'browser' ? share : null
@@ -79,11 +86,11 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         <div className="share-heading-copy">
           <h1 title={share?.name}>{share?.name ?? (snapshot.phase === 'awaiting-key' ? 'Open your share' : 'Shared files')}</h1>
           <div className="share-metadata">
-            <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={() => openDetails('connection')}>
+            <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={event => openDetails('connection', event.currentTarget)}>
               <ReceiverIcon name="connection" />
               {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
             </button>
-            <button className="encryption-note" type="button" onClick={() => openDetails('connection')}>
+            <button className="encryption-note" type="button" onClick={event => openDetails('connection', event.currentTarget)}>
               <ReceiverIcon name="lock" />Encrypted
             </button>
           </div>
@@ -97,7 +104,10 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
         browse: snapshot.browse, draft: snapshot.draft, actions: {
           openDirectory: id => controller.openDirectory(id), openBreadcrumb: index => controller.openBreadcrumb(index),
-          showPage: page => controller.showPage(page), preview: id => controller.previewFile(id),
+          showPage: page => controller.showPage(page), preview: (id, invoker) => {
+            previewInvoker.current = invoker
+            controller.previewFile(id)
+          },
           toggle: id => controller.toggleSelection(id), enterSelection: () => controller.enterSelectionMode(),
           exitSelection: () => controller.exitSelectionMode(), selectPage: () => controller.selectPage(),
           clearSelection: () => controller.clearSelection(), retry: () => controller.retryDirectory(),
@@ -114,7 +124,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
           {matching.primaryAction?.label}
         </button>
       </div>}
-      {current !== null && <TaskCard task={current} actions={actions} onDetails={() => openDetails('task')}
+      {current !== null && <TaskCard task={current} actions={actions} onDetails={invoker => openDetails('task', invoker)}
         busy={snapshot.retained.pending !== null}
         primaryAction={singleResult ? <button className="quiet-action" type="button"
           disabled={saving.primary === null || saving.primary.disabledReason !== null}
@@ -128,20 +138,20 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
       </details>}
     </div>
     {single === null && snapshot.preview.state !== 'idle' && <DetailSheet title={snapshot.preview.name}
-      onClose={previewActions.close} className="preview-sheet">
+      onClose={previewActions.close} returnFocus={previewInvoker} className="preview-sheet">
       <MediaPreview preview={snapshot.preview} actions={previewActions} />
     </DetailSheet>}
-    {details === 'connection' && <DetailSheet title="Encryption and connection" onClose={() => openDetails(null)}>
+    {details === 'connection' && <DetailSheet title="Encryption and connection" onClose={closeDetails} returnFocus={detailsInvoker}>
       <ConnectionDetails status={shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)} path={snapshot.pathActivity} />
     </DetailSheet>}
-    {details === 'task' && current !== null && <DetailSheet title={current.objectLabel} onClose={() => openDetails(null)}>
+    {details === 'task' && current !== null && <DetailSheet title={current.objectLabel} onClose={closeDetails} returnFocus={detailsInvoker}>
       <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
         <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
         {controller.canRetainCurrentOperation && <div className="retained-handoff">
           <p>Keep this paused task in Downloads to continue later or save its complete files as a partial ZIP.</p>
           <button type="button" onClick={async () => {
             if (await controller.retainCurrentOperation()) {
-              openDetails(null)
+              closeDetails()
               setDownloadsOpen(true)
             }
           }}>Keep progress in Downloads</button>

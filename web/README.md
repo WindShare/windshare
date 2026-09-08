@@ -101,10 +101,16 @@ multiple contract projects concurrently on one host.
 | `pnpm -C web test:browser:progressive` | Progressive catalog paging across the authenticated page boundary. |
 | `pnpm -C web test:browser:network` | Authenticated direct and TURN peer adoption after relay loss. |
 | `pnpm -C web test:browser:interop` | Direct D1/D2 browser/Pion adapter interoperability. |
-| `pnpm -C web test:browser:cross` | The relay smoke plus native peer hot-switch or a relay-only route when peer capability is unavailable in Firefox and WebKit. |
+| `pnpm -C web test:browser:cross` | Relay smoke, Firefox native peer hot-switch, and WebKit native peer or relay fallback. |
 | `pnpm -C web test:browser:contract:short` | Chromium short component contracts for browser storage, output, catalog, crypto, and media behavior. |
 | `pnpm -C web test:browser:contract:cross` | The `*.cross-browser.spec.ts` component contracts in Firefox and WebKit. |
 | `pnpm -C web test:browser:contract:periodic` | Chromium-only periodic scale and full-recovery component contracts. |
+
+Cross-browser product scenarios run the sender and browser on one host. Their Firefox
+profile permits ICE loopback and exempts the `127.0.0.1` test origin from mDNS host
+obfuscation, so the local route does not depend on VPN multicast routing.
+Component contracts also cover modal focus return across
+pointer, keyboard, and touch activation.
 
 Ordinary GitHub CI runs `make browser` on Linux, which includes the Chromium smoke and
 `chromium-short` contracts. The weekly workflow owns progressive, network, interop,

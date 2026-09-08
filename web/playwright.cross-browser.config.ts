@@ -16,7 +16,20 @@ export default defineConfig({
   globalTimeout: CROSS_BROWSER_HARD_TIMEOUT_MILLISECONDS,
   expect: { timeout: 20_000 },
   projects: [
-    { name: 'firefox', use: { browserName: 'firefox' } },
+    {
+      name: 'firefox',
+      use: {
+        browserName: 'firefox',
+        // Both peers run on this host. Local test origins use literal host
+        // candidates so VPN multicast routing cannot replace that topology.
+        launchOptions: {
+          firefoxUserPrefs: {
+            'media.peerconnection.ice.loopback': true,
+            'media.peerconnection.ice.obfuscate_host_addresses.blocklist': '127.0.0.1',
+          },
+        },
+      },
+    },
     { name: 'webkit', use: { browserName: 'webkit' } },
   ],
   use: {

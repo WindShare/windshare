@@ -1,4 +1,4 @@
-import { useState, type ReactNode, type Ref } from 'react'
+import { useRef, useState, type ReactNode, type Ref } from 'react'
 import type { TaskAction, TaskPresentation } from './index'
 import { CompatibleNameRepairPanel } from '../compatible-name/CompatibleNameRepairPanel'
 import { DetailSheet } from '../controls/DetailSheet'
@@ -23,6 +23,7 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   readonly busy?: boolean
 }) {
   const [confirm, setConfirm] = useState(false)
+  const actionButton = useRef<HTMLButtonElement>(null)
   const dispatch = () => {
     if (action.disabledReason !== null || busy) return
     if (action.destructive) setConfirm(true)
@@ -30,13 +31,13 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
   }
   const buttonClass = action.destructive ? 'danger-action' : ''
   return <div className="task-action">
-    <button type="button" className={primary ? 'primary-action' : buttonClass}
+    <button ref={actionButton} type="button" className={primary ? 'primary-action' : buttonClass}
       disabled={busy || action.disabledReason !== null} title={action.disabledReason ?? undefined}
       onClick={dispatch}>{action.label}</button>
     {action.disabledReason !== null && <small className="action-reason">{action.disabledReason}</small>}
     {!action.destructive && action.consequence !== null && (detailed || action.target.action !== 'pause') &&
       <small className="action-reason">{action.consequence}</small>}
-    {confirm && <DetailSheet title={action.label} onClose={() => setConfirm(false)} returnLabel="Keep task">
+    {confirm && <DetailSheet title={action.label} onClose={() => setConfirm(false)} returnFocus={actionButton} returnLabel="Keep task">
       <p>{action.consequence ?? 'This removes this task’s owned retained data. Files already exported remain separate.'}</p>
       <button type="button" className="danger-action" onClick={() => { setConfirm(false); perform(action) }}>
         {action.label}
@@ -48,7 +49,7 @@ export function TaskActionButton({ action, perform, primary = false, busy = fals
 export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, primaryAction }: {
   readonly task: TaskPresentation
   readonly actions: TaskViewActions
-  readonly onDetails: () => void
+  readonly onDetails: (invoker: HTMLButtonElement) => void
   readonly detailsRef?: Ref<HTMLButtonElement>
   readonly primaryAction?: ReactNode
   readonly busy?: boolean
@@ -66,7 +67,7 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, p
       <div className="task-actions">
         {primaryAction ?? (task.primaryAction !== null && <TaskActionButton action={task.primaryAction}
           perform={actions.perform} primary busy={busy} />)}
-        <button ref={detailsRef} className="quiet-action" type="button" onClick={onDetails}>Details<ReceiverIcon name="chevron-right" /></button>
+        <button ref={detailsRef} className="quiet-action" type="button" onClick={event => onDetails(event.currentTarget)}>Details<ReceiverIcon name="chevron-right" /></button>
       </div>
     </div>
     {task.progress !== null && <div className="task-progress" data-progress-mode={task.progress.mode}>

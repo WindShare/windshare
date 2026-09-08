@@ -7,7 +7,7 @@ export interface ExplorerActions {
   readonly openDirectory: (id: string) => void
   readonly openBreadcrumb: (index: number) => void
   readonly showPage: (page: number) => void
-  readonly preview: (id: string) => void
+  readonly preview: (id: string, invoker: HTMLButtonElement) => void
   readonly toggle: (id: string) => void
   readonly enterSelection: () => void
   readonly exitSelection: () => void
@@ -81,7 +81,7 @@ export function Explorer({ rows, breadcrumbs, pageIndex, pageCount, omittedCount
           data-selection={draft.mode === 'selection' ? row.selection : 'unselected'}>
           <SelectionCheckbox row={row} active={draft.mode === 'selection'} toggle={() => actions.toggle(row.id)} />
           <button type="button" className="entry-name" title={row.name} aria-label={row.name}
-            onClick={() => row.kind === 'directory' ? actions.openDirectory(row.id) : actions.preview(row.id)}>
+            onClick={event => row.kind === 'directory' ? actions.openDirectory(row.id) : actions.preview(row.id, event.currentTarget)}>
             <ReceiverIcon name={entryIcon(row)} className="entry-icon" />
             <span className="entry-label"><span className="entry-filename">{row.name}</span>
               <span className="entry-type">{row.kind === 'directory' ? 'Folder' : 'File'}
