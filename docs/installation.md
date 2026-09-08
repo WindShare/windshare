@@ -28,8 +28,9 @@ explicit block rules retain precedence. A created rule does not prove reachabili
 
 The decision (`configured`, `declined`, or `unavailable`) is saved under
 `%LOCALAPPDATA%/WindShare/connectivity-setup.json` for diagnostics. Reinstalling at
-the same path keeps that decision. Retry explicitly with `-Firewall Configure`,
-or skip first setup with `-Firewall Skip`. Daily `share` and `get` only read status.
+the same path (including its Windows 8.3 short form) keeps that decision. Retry
+explicitly with `-Firewall Configure`, or skip first setup with `-Firewall Skip`.
+Daily `share` and `get` only read status.
 Use `-Uninstall` with the same `-Destination` to remove that installation's owned
 rule and executable. Other firewall rules are never removed. Automatic firewall
 setup is currently supported only on Windows. TCP follows the pinned provider's

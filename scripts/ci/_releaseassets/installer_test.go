@@ -49,16 +49,15 @@ func TestInstallersSourceAuthority(t *testing.T) {
 		t.Run(platform.name, func(t *testing.T) {
 			for _, scenario := range []string{"checkout", "source-bundle", "verification-failure", "build-failure", "binary-bundle", "missing-distribution"} {
 				t.Run(scenario, func(t *testing.T) {
-					testInstallerFixture(t, repository, platform, scenario)
+					testInstallerFixture(t, repository, platform, scenario, t.TempDir())
 				})
 			}
 		})
 	}
 }
 
-func testInstallerFixture(t *testing.T, repository string, platform installerPlatform, scenario string) {
+func testInstallerFixture(t *testing.T, repository string, platform installerPlatform, scenario, root string) {
 	t.Helper()
-	root := t.TempDir()
 	source := filepath.Join(root, "distribution with spaces")
 	destination := filepath.Join(root, "installed app")
 	state := filepath.Join(root, "private setup state")
@@ -128,12 +127,24 @@ func testInstallerFixture(t *testing.T, repository string, platform installerPla
 			if err := json.Unmarshal(statusBytes, &status); err != nil {
 				t.Fatal(err)
 			}
-			if status.State != "declined" || status.Reason != "user-skipped" || status.Executable != installed {
+			if status.State != "declined" || status.Reason != "user-skipped" {
 				t.Fatalf("skip status: %s", statusBytes)
+			}
+			reportedFile, err := os.Stat(status.Executable)
+			if err != nil {
+				t.Fatalf("stat reported executable %q: %v", status.Executable, err)
+			}
+			installedFile, err := os.Stat(installed)
+			if err != nil {
+				t.Fatalf("stat installed executable %q: %v", installed, err)
+			}
+			// PowerShell expands the 8.3 aliases used by Windows runner temp paths.
+			if !os.SameFile(reportedFile, installedFile) {
+				t.Fatalf("reported executable %q is not installed executable %q", status.Executable, installed)
 			}
 			if scenario == "binary-bundle" {
 				// A saved choice must avoid an interactive prompt even in a noninteractive install.
-				output, err := runInstallerFixture(t, platform, source, destination, state, "Ask")
+				output, err := runInstallerFixture(t, platform, source, filepath.Dir(status.Executable), state, "Ask")
 				if err != nil {
 					t.Fatalf("reuse setup choice: %v\n%s", err, output)
 				}
