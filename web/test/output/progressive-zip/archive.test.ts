@@ -450,3 +450,35 @@ describe('progressive native ZIP archive', () => {
     expect(f.io.data).toHaveLength(0)
   })
 })
+
+describe('progressive ZIP finalization capacity', () => {
+  it('finalizes many small entries with page-sized capacity admissions and no payload rewrite', async () => {
+    const f = fixture()
+    const archive = await f.open()
+    const entryCount = 686
+    for (let index = 0; index < entryCount; index++) {
+      await admit(archive, String(index), 1n)
+      await archive.writeRange(String(index), 0n, new Uint8Array([index % 256]))
+    }
+    await archive.markDiscoveryComplete()
+    const admissionsBefore = f.growth.length
+    const writesBefore = f.io.writes.length
+    const result = await archive.finalize()
+    // The regression was thousands of strict capacity transactions for a tiny archive.
+    expect(f.growth.length - admissionsBefore).toBeLessThanOrEqual(8)
+    const metadataWrites = f.io.writes.slice(writesBefore)
+    for (const entry of f.store.entries.values()) {
+      const payload = entry.zipLayout!.payloadOffset
+      expect(metadataWrites.every(write => write.offset >= payload + 1n ||
+        write.offset + write.length <= payload)).toBe(true)
+    }
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data), { checkSignature: true })
+    const entries = await reader.getEntries()
+    expect(entries).toHaveLength(entryCount)
+    const lastFile = entries.at(-1)!
+    if (lastFile.directory) throw new Error('Expected the last payload file')
+    expect(await lastFile.getData!(new Uint8ArrayWriter())).toEqual(new Uint8Array([(entryCount - 1) % 256]))
+    expect(result.sealedLength).toBe(BigInt(f.io.data.length))
+    await reader.close()
+  })
+})

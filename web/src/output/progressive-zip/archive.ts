@@ -1,11 +1,12 @@
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
+import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
+import { zipFinalizationBatches } from './finalization'
 import type { ObjectCheckpointCoordinator } from '../origin-private/native-object/coordinator'
 import type { TaskCheckpoint, TaskEntry, TaskObjectRef, TaskDirectoryPin } from '../origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../origin-private/task-checkpoint/store'
 import {
-  checkedZipAdd, encodeZipCentralDirectoryRecord, encodeZipDataDescriptor,
-  encodeZipEndRecords, encodeZipLocalHeader, normalizeZipEntry, planZipEntry,
+  checkedZipAdd, encodeZipEndRecords, normalizeZipEntry, planZipEntry,
   requiresZip64End,
 } from '../zip-layout/policy'
 import { completeZipEntryCrc, insertZipCrcRange, zipBytesCrc32, zipRangeDisposition } from './crc-ranges'
@@ -17,12 +18,7 @@ const MAX_ENTRY_RANGES = 16_384
 const RANGE_METADATA_BYTES = 64n
 const ENTRY_METADATA_BYTES = 4096n
 
-export interface ZipObjectCapacity {
-  reserveGrowth(input: {
-    operationId: string; objectId: string; currentLength: bigint; targetLength: bigint
-    metadataHeadroom: bigint
-  }): Promise<{ settle(actualLength: bigint): Promise<void>; release(): Promise<void> }>
-}
+export type ZipObjectCapacity = ObjectWriteBatchCapacity
 
 export interface ProgressiveZipInput {
   readonly store: TaskCheckpointStore
@@ -298,37 +294,27 @@ export class ProgressiveZipArchive {
     const start = this.#checkpoint.finalization!
     // Only the uncommitted central-directory tail is discarded after interrupted finalization.
     await this.#input.coordinator.mutate(io => this.#truncateTail(io, start.committedLength))
-    let nextEntry = start.nextEntry
     let committedLength = start.committedLength
-    let sinceCheckpoint = 0
-    for await (const entry of this.#entries(nextEntry === 0n ? undefined : nextEntry - 1n)) {
-      const layout = entry.zipLayout!
-      const plan = entry.zipPlan!
-      const crc = completeZipEntryCrc(entry.ranges, layout.exactSize)!
-      const central = encodeZipCentralDirectoryRecord(plan, crc)
-      await this.#input.coordinator.mutate(async io => {
-        await this.#write(io, layout.localHeaderOffset, encodeZipLocalHeader(plan))
-        await this.#write(io, layout.descriptorOffset, encodeZipDataDescriptor(plan, crc))
-        await this.#write(io, committedLength, central)
+    const entries = this.#entries(start.nextEntry === 0n ? undefined : start.nextEntry - 1n)
+    for await (const batch of zipFinalizationBatches(entries, committedLength)) {
+      await this.#writeBatch(batch.writes)
+      committedLength = batch.committedLength
+      await this.#finalizationCheckpoint(batch.nextEntry, committedLength)
+      this.#trace('zip_finalization_progress', {
+        nextEntry: batch.nextEntry, entryCount: this.#checkpoint.entryCount, committedLength,
       })
-      committedLength = checkedZipAdd(committedLength, BigInt(central.byteLength))
-      nextEntry = layout.sequence + 1n
-      sinceCheckpoint++
-      if (sinceCheckpoint >= ENTRY_PAGE_SIZE) {
-        await this.#finalizationCheckpoint(nextEntry, committedLength)
-        sinceCheckpoint = 0
-      }
     }
-    await this.#finalizationCheckpoint(nextEntry, committedLength)
     const endLayout = { entryCount: this.#checkpoint.entryCount,
       centralDirectoryOffset: start.centralDirectoryOffset,
       centralDirectoryBytes: committedLength - start.centralDirectoryOffset }
     const ends = encodeZipEndRecords({ ...endLayout, zip64EndRequired: requiresZip64End(endLayout) })
+    const endWrites: NativeObjectWrite[] = []
     for (const bytes of [ends.zip64End, ends.zip64Locator, ends.classicEnd]) {
       if (bytes === undefined) continue
-      await this.#input.coordinator.mutate(io => this.#write(io, committedLength, bytes))
+      endWrites.push({ offset: committedLength, bytes })
       committedLength = checkedZipAdd(committedLength, BigInt(bytes.byteLength))
     }
+    await this.#writeBatch(endWrites)
     const sealed = await this.#input.coordinator.checkpoint('zip-sealed', () =>
       this.#commit({ artifactState: 'sealed', sealedLength: committedLength }))
     this.#trace('zip_sealed', { sealedLength: committedLength, entryCount: sealed.entryCount })
@@ -375,29 +361,12 @@ export class ProgressiveZipArchive {
     }
   }
 
-  async #write(io: NativeObjectIO, offset: bigint, bytes: Uint8Array): Promise<void> {
-    const currentLength = await io.size()
-    const targetLength = checkedZipAdd(offset, BigInt(bytes.byteLength))
-    const reservation = await this.#input.capacity.reserveGrowth({
-      operationId: this.#checkpoint.object.operationId, objectId: this.#checkpoint.object.objectId,
-      currentLength, targetLength, metadataHeadroom: 0n,
+  async #writeBatch(writes: readonly NativeObjectWrite[]): Promise<void> {
+    await this.#input.coordinator.mutate(async io => {
+      this.#physicalLength = await writeObjectBatch(io, {
+        object: this.#checkpoint.object, capacity: this.#input.capacity, writes,
+      })
     })
-    const occupiedBound = currentLength > targetLength ? currentLength : targetLength
-    let charged = false
-    try {
-      await io.writeAt(offset, bytes)
-      this.#physicalLength = occupiedBound
-      await reservation.settle(occupiedBound)
-      charged = true
-    } catch (error) {
-      try {
-        await reservation.settle(occupiedBound)
-        charged = true
-      } catch { /* Keep the outstanding reservation fenced until physical recovery. */ }
-      throw error
-    } finally {
-      if (charged) await reservation.release()
-    }
   }
 
   async #commit(
