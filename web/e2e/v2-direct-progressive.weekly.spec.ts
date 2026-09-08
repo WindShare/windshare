@@ -30,18 +30,40 @@ test('browses a catalog directory across authenticated pages', async ({ page }) 
       fragment: new URL(navigationUrl).hash,
       separateKey: share.key,
     })
-    await expect(page.getByText(DIRECTORY_NAME, { exact: true })).toBeVisible()
-    await page.getByRole('button', { name: 'Open' }).click()
+    // A sole shared folder opens automatically; its heading can coexist with the
+    // root entry while that navigation is loading, so readiness belongs to the page.
+    await expect(page.getByRole('heading', { name: DIRECTORY_NAME, exact: true })).toBeVisible()
+    const explorer = page.getByRole('region', { name: 'Shared files', exact: true })
+    const contents = explorer.getByRole('list', { name: 'Folder contents', exact: true })
+    const pagination = explorer.getByRole('navigation', { name: 'Directory pages', exact: true })
+    const previous = pagination.getByRole('button', { name: 'Previous', exact: true })
+    const next = pagination.getByRole('button', { name: 'Next', exact: true })
+    const firstFile = contents.getByRole('button', { name: fileName(0), exact: true })
+    const lastFile = contents.getByRole('button', { name: fileName(FINAL_FILE_INDEX), exact: true })
 
-    await expect(page.getByText('Page 1 of 2', { exact: true })).toBeVisible()
-    await expect(page.getByText(fileName(0), { exact: true })).toBeVisible()
-    await expect(page.getByText(fileName(V2_CATALOG_PAGE_ENTRIES - 1), { exact: true })).toBeVisible()
-    await expect(page.getByText(fileName(FINAL_FILE_INDEX), { exact: true })).toHaveCount(0)
+    await expect(pagination.getByText('Page 1 of 2', { exact: true })).toBeVisible()
+    await expect(contents.getByRole('listitem')).toHaveCount(V2_CATALOG_PAGE_ENTRIES)
+    await expect(firstFile).toBeVisible()
+    await expect(contents.getByRole('button', {
+      name: fileName(V2_CATALOG_PAGE_ENTRIES - 1), exact: true,
+    })).toBeVisible()
+    await expect(lastFile).toHaveCount(0)
+    await expect(previous).toBeDisabled()
 
-    await page.getByRole('button', { name: 'Next' }).click()
-    await expect(page.getByText('Page 2 of 2', { exact: true })).toBeVisible()
-    await expect(page.getByText(fileName(FINAL_FILE_INDEX), { exact: true })).toBeVisible()
-    await expect(page.getByText(fileName(0), { exact: true })).toHaveCount(0)
+    await next.click()
+    await expect(pagination.getByText('Page 2 of 2', { exact: true })).toBeVisible()
+    await expect(contents.getByRole('listitem')).toHaveCount(1)
+    await expect(lastFile).toBeVisible()
+    await expect(firstFile).toHaveCount(0)
+    await expect(next).toBeDisabled()
+
+    await previous.click()
+    await expect(pagination.getByText('Page 1 of 2', { exact: true })).toBeVisible()
+    await expect(contents.getByRole('listitem')).toHaveCount(V2_CATALOG_PAGE_ENTRIES)
+    await expect(firstFile).toBeVisible()
+    await expect(lastFile).toHaveCount(0)
+    await expect(previous).toBeDisabled()
+    await expect(next).toBeEnabled()
   } finally {
     await stack.dispose()
   }
