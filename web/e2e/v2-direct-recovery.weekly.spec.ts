@@ -114,14 +114,14 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     requireAttemptStage(firstFailed, 'failed')
     expect(firstFailed.evidence).toMatchObject({
       peerPathIdBytes: firstStarted.evidence.peerPathIdBytes,
-      failureScope: 'attempt',
+      failureScope: 'attempt-transient',
       typedErrorCode: 'peer-timeout',
       failure: {
         kind: 'local-transient',
         phase: 'admission',
         reason: 'admission-timeout',
       },
-    })
+    } satisfies Partial<typeof firstFailed.evidence>)
     expect(eventPosition(events, firstStarted)).toBeLessThan(
       eventPosition(events, firstRelayDispatch),
     )

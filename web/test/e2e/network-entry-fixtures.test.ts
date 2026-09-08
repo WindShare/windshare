@@ -1,9 +1,50 @@
 import { describe, expect, it } from 'vitest'
 
+import type { PeerChannel, PeerPathRoute } from '../../src/connectivity/peer-channel'
+import { PagePeerRecoveryHarness } from '../../e2e/fixtures/hot-switch-page-transfer'
 import { parseLocalTurnReadyRecord } from '../../e2e/fixtures/local-turn-server'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
 
 describe('direct weekly network fixtures', () => {
+  it('preserves live path evidence while recovery admission is gated', async () => {
+    const listeners = new Set<(route: PeerPathRoute) => void>()
+    let pathRoute: PeerPathRoute = 'direct'
+    const peer: PeerChannel = {
+      state: 'open',
+      frames: new ReadableStream<Uint8Array>({ start: (controller) => controller.close() }),
+      opened: Promise.resolve(),
+      done: Promise.resolve(),
+      reason: undefined,
+      get pathRoute() { return pathRoute },
+      subscribePathRoute(listener) {
+        listeners.add(listener)
+        return () => { listeners.delete(listener) }
+      },
+      send: async () => undefined,
+      sendTerminal: async () => undefined,
+      close: async () => undefined,
+    }
+    const harness = new PagePeerRecoveryHarness({ publish: async () => undefined }, true)
+    const gated = harness.wrap(peer)
+    expect(gated).not.toBe(peer)
+    expect(gated.pathRoute).toBe('direct')
+
+    const observed: PeerPathRoute[] = []
+    const unsubscribe = gated.subscribePathRoute?.((route) => observed.push(route))
+    try {
+      for (const nextRoute of ['turn', undefined] as const) {
+        pathRoute = nextRoute
+        for (const listener of listeners) listener(nextRoute)
+        expect(gated.pathRoute).toBe(nextRoute)
+      }
+      expect(observed).toEqual(['turn', undefined])
+    } finally {
+      unsubscribe?.()
+      await gated.close()
+    }
+    expect(listeners.size).toBe(0)
+  })
+
   it('accepts only the owned TURN readiness identity and loopback endpoint', () => {
     expect(parseLocalTurnReadyRecord(JSON.stringify({
       component: 'browser-local-turn-server',
