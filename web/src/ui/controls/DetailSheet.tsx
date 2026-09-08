@@ -1,10 +1,11 @@
-import { useEffect, useId, useRef, type ReactNode } from 'react'
+import { useEffect, useId, useRef, type ReactNode, type RefObject } from 'react'
 import { ReceiverIcon } from '../receiver-presentation/ReceiverIcon'
 
 export interface DetailSheetProps {
   readonly title: string
   readonly children: ReactNode
   readonly onClose: () => void
+  readonly returnFocus: RefObject<HTMLElement | null>
   readonly className?: string
   readonly returnLabel?: string
   readonly subtitle?: string
@@ -12,20 +13,22 @@ export interface DetailSheetProps {
 }
 
 /** Native modal ownership keeps keyboard focus and background interaction aligned. */
-export function DetailSheet({ title, children, onClose, className = '', returnLabel = 'Back to share', subtitle, navigation }: DetailSheetProps) {
+export function DetailSheet({ title, children, onClose, returnFocus, className = '', returnLabel = 'Back to share', subtitle, navigation }: DetailSheetProps) {
   const dialog = useRef<HTMLDialogElement>(null)
   const titleId = useId()
   const close = useRef(onClose)
   useEffect(() => { close.current = onClose }, [onClose])
   useEffect(() => {
     const element = dialog.current
-    const origin = document.activeElement instanceof HTMLElement ? document.activeElement : null
+    // Pointer activation does not focus buttons in every browser. The caller owns
+    // the return target; snapshot it before nested sheets or later actions can change it.
+    const origin = returnFocus.current
     element?.showModal()
     return () => {
       element?.close()
       if (origin?.isConnected) origin.focus()
     }
-  }, [])
+  }, [returnFocus])
   return (
     <dialog ref={dialog} className={`detail-sheet ${className}`} aria-labelledby={titleId}
       onCancel={event => {
