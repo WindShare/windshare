@@ -5,11 +5,13 @@ import { IndexedDbReceiveOperationRepository } from '../../browser/indexeddb-rep
 import {
   recordOutputException,
   type OutputFailureSinks,
+  type OutputTraceSource,
 } from '../../diagnostics'
 import {
   discardReopenedFileSystemAccessOutput,
   type FreshPageFileSystemAccessDiscardResult,
 } from '../../file-system-access/fresh-page-discard'
+import { cleanupReopenedPublishedFileSystemAccessOutput } from '../../file-system-access/published-cleanup'
 import {
   openOriginPrivateRetainedArtifactBackend,
   type OriginPrivateRetainedArtifactBackend,
@@ -50,6 +52,8 @@ export interface PersistedReceiveOperationReopenPort {
 export interface PersistedReceiveOperationCleanupExecutorOptions {
   readonly checkpointDatabaseName?: string
   readonly discardDirectTree?: typeof discardReopenedFileSystemAccessOutput
+  readonly cleanupPublishedDirectTree?: typeof cleanupReopenedPublishedFileSystemAccessOutput
+  readonly outputTrace?: OutputTraceSource
   readonly openWorkspaceBackend?: typeof openOriginPrivateRetainedArtifactBackend
 }
 
@@ -58,11 +62,15 @@ export class PersistedReceiveOperationCleanupExecutor
 implements ReceiveOperationOwnedCleanupExecutor {
   readonly #checkpointDatabaseName: string | undefined
   readonly #discardDirectTree: typeof discardReopenedFileSystemAccessOutput
+  readonly #cleanupPublishedDirectTree: typeof cleanupReopenedPublishedFileSystemAccessOutput
+  readonly #outputTrace: OutputTraceSource | undefined
   readonly #openWorkspaceBackend: typeof openOriginPrivateRetainedArtifactBackend
 
   constructor(options: PersistedReceiveOperationCleanupExecutorOptions = {}) {
     this.#checkpointDatabaseName = options.checkpointDatabaseName
     this.#discardDirectTree = options.discardDirectTree ?? discardReopenedFileSystemAccessOutput
+    this.#cleanupPublishedDirectTree = options.cleanupPublishedDirectTree ?? cleanupReopenedPublishedFileSystemAccessOutput
+    this.#outputTrace = options.outputTrace
     this.#openWorkspaceBackend = options.openWorkspaceBackend ?? openOriginPrivateRetainedArtifactBackend
   }
 
@@ -70,21 +78,7 @@ implements ReceiveOperationOwnedCleanupExecutor {
     operation: ReopenedReceiveOperation,
     failures?: OutputFailureSinks,
   ): Promise<ReceiveOperationDiscardResult> {
-    if (operation.kind === 'direct-tree') {
-      try {
-        return projectDirectTreeDiscard(await this.#discardDirectTree({
-          operation,
-          ...(this.#checkpointDatabaseName === undefined
-            ? {}
-            : { databaseName: this.#checkpointDatabaseName }),
-        }))
-      } catch (error) {
-        recordOutputException(failures?.cleanup, error, {
-          recoveryDisposition: 'needs_attention',
-        })
-        throw error
-      }
-    }
+    if (operation.kind === 'direct-tree') return this.#cleanupDirectTree(operation, failures)
     if (operation.kind === 'direct-zip') {
       throw new DOMException(
         'Direct ZIP cleanup requires the owned-file target proof authority',
@@ -131,6 +125,35 @@ implements ReceiveOperationOwnedCleanupExecutor {
       throw new TypeError('workspace cleanup returned a non-terminal lifecycle')
     } finally {
       await backend?.close()
+    }
+  }
+
+  async #cleanupDirectTree(
+    operation: ReopenedDirectTreeOperation,
+    failures?: OutputFailureSinks,
+  ): Promise<ReceiveOperationDiscardResult> {
+    const database = this.#checkpointDatabaseName === undefined
+      ? {} : { databaseName: this.#checkpointDatabaseName }
+    try {
+      if (operation.lifecycle.kind === 'published') {
+        const result = await this.#cleanupPublishedDirectTree({
+          intent: operation.intent,
+          lifecycle: operation.lifecycle,
+          repository: operation.repository,
+          leaseId: operation.lease.leaseId,
+          ...database,
+          ...(this.#outputTrace === undefined ? {} : { trace: this.#outputTrace }),
+        })
+        return Object.freeze({
+          kind: 'cleanup-completed',
+          terminalState: 'published',
+          cleanupReceiptDigest: result.receiptDigest,
+        })
+      }
+      return projectDirectTreeDiscard(await this.#discardDirectTree({ operation, ...database }))
+    } catch (error) {
+      recordOutputException(failures?.cleanup, error, { recoveryDisposition: 'needs_attention' })
+      throw error
     }
   }
 }

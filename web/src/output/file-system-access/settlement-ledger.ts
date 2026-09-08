@@ -1,6 +1,6 @@
 import type { ReceiveIntent } from '../../transfer/intent'
 import type { PersistentDirectTreeMaterializationEvidence } from '../../transfer/settlement/persistent-execution'
-import { MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT } from '../materialization-ledger/model'
+import { retireFSAMaterializationRecoveryMetadata } from './recovery-metadata-retirement'
 import type {
   MaterializationLedgerBindingV1,
   MaterializationLedgerSealPurpose,
@@ -90,18 +90,7 @@ export class FSASettlementLedgerAuthority {
   }
 
   async retireRecoveryMetadata(): Promise<void> {
-    const repository = this.#repository()
-    const binding = await this.#binding
-    for (;;) {
-      const result = await repository.retireMaterializationLedgerBatch(
-        binding,
-        MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
-      )
-      if (result.state === 'complete') return
-      if (result.deletedRows === 0) {
-        throw new DOMException('FSA recovery metadata retirement made no progress', 'OperationError')
-      }
-    }
+    await retireFSAMaterializationRecoveryMetadata(this.#repository(), await this.#binding)
   }
 
   #repository(): FSASemanticOutputRepository {

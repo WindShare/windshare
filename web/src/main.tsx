@@ -48,7 +48,7 @@ const outputTrace = createOutputTraceSource(diagnostics.trace)
 const protocolTrace = createProtocolTraceSource(diagnostics.trace)
 const connectivityTrace = createConnectivityTraceSource(diagnostics.trace)
 
-const receiveMutations = createBrowserReceiveOperationMutationPort()
+const receiveMutations = createBrowserReceiveOperationMutationPort({ outputTrace })
 const receiveComposition = createBrowserReceiveComposition(
   window as BrowserReceiveWindow,
   {
