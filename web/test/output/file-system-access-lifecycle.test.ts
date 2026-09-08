@@ -586,7 +586,11 @@ describe('File System Access settlement authority', () => {
       transferJobId,
       worker: SUCCESS,
       materialization: { entryCount: 1n, fileCount: 1n, directoryCount: 0n, rawBytes: 2n },
-    }, SIGNAL)).resolves.toMatchObject({ kind: 'published' })
+    }, SIGNAL)).resolves.toMatchObject({ kind: 'published', cleanupState: 'clean' })
+    const record = await repository.readLifecycle(session.intent.operationId)
+    expect(decodeStoredReceiveLifecycleState(record!)).toMatchObject({
+      kind: 'published', cleanupState: 'clean',
+    })
     await session.releaseRootLease()
     expect(retired).toBe(1)
     expect(locks.releaseCount).toBe(1)

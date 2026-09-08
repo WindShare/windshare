@@ -50,7 +50,7 @@ import {
   type SettlementReceiptEvidence,
 } from './settlement-proof'
 import { validateSealedFSASettlementEvidence } from './settlement-evidence'
-import { normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
+import { cleanupTerminalFSAMetadata, normalizedSettlementOutcome, terminalMutationKind } from './settlement-terminal'
 import type { RecoverySummary } from './recovery-summary'
 import { deriveSettledFSARecoverySummary } from './recovery-settlement'
 import { COMPATIBLE_NAME_PENDING_OUTCOME_FORMAT_VERSION } from './compatible-name/model'
@@ -362,25 +362,18 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         if (committed.state.kind === 'published') summary.markMilestone('published')
         else summary.complete()
       })
-      try {
-        await observation.retireRecoveryMetadata()
-        await observation.clearCompatibleNamePendingOutcome()
-      } catch (cleanupFailure) {
-        // The receipt and terminal lifecycle are already durable. Leaving metadata for
-        // catch-up is safer than reporting a contradictory non-terminal result.
-        recordOutputException(this.#diagnostics?.failures?.cleanup, cleanupFailure)
-        emitOutputTrace(this.#diagnostics?.trace, () => outputTraceEvent('cleanup', {
-          backend: 'file_system_access',
-          transition: 'failed',
-        }))
-      }
+      const lifecycle = await cleanupTerminalFSAMetadata({
+        intent: this.#intent, lifecycle: committed.state, repository: this.#repository,
+        lifecycleLeaseId: this.#lifecycleLeaseId, clock: this.#clock, observation,
+        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      })
       this.#emit(
         outcome,
         evidence.checkpointCount,
         evidence.fileCount,
         evidence.completedBytes,
       )
-      return committed.state
+      return lifecycle
     })
   }
 

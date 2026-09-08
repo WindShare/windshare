@@ -121,6 +121,10 @@ export interface OutputTracePayloadByName {
   readonly cleanup: Readonly<{
     backend: OutputDiagnosticBackend
     transition: 'started' | 'completed' | 'retryable_failure' | 'ownership_unknown' | 'failed'
+    operation_id?: string
+    receive_intent_digest?: string
+    lifecycle_generation?: string
+    cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
 }
