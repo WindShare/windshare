@@ -78,13 +78,10 @@ func (l *Lease) PrepareTCP(includeIPv6 bool) error {
 	a := l.authority
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if l.released || a.closed {
-		return ErrClosed
+	if err := l.unavailableLocked(); err != nil {
+		return err
 	}
-	if l.entry.key.generation <= a.retiredThrough {
-		return ErrRetired
-	}
-	if l.entry.active {
+	if l.entry.owner != iceUnclaimed {
 		return ErrActive
 	}
 	var needed []netip.Addr

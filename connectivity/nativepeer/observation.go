@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/connectivity/reachability"
+	"github.com/windshare/windshare/connectivity/socketauthority"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/transport/webrtc/provider"
 )
@@ -33,6 +34,7 @@ type Observation struct {
 	Reachability *reachability.Event
 	Lifecycle    *LifecycleFacts
 	Admission    *AdmissionFacts
+	Socket       *socketauthority.Event
 }
 
 type LifecycleKind string
@@ -79,6 +81,11 @@ func (n *NativePeerConnectivity) observeProvider(subject Subject, event provider
 	}
 	n.producer.TryPublish(Observation{Subject: subject, Provider: &event})
 }
+func (n *NativePeerConnectivity) observeSocket(event socketauthority.Event) {
+	subject := Subject{ProtocolSessionID: event.ProtocolSessionID, PeerPathID: event.PeerPathID, NetworkGenerationID: event.NetworkGenerationID, Side: n.config.Side}
+	n.producer.TryPublish(Observation{Subject: subject, Socket: &event})
+}
+
 func (n *NativePeerConnectivity) observeReachability(event reachability.Event) {
 	subject := Subject{NetworkGenerationID: event.Endpoint.Generation, Side: n.config.Side}
 	n.mu.Lock()

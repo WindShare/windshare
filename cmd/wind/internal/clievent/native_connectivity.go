@@ -27,6 +27,13 @@ type NativeConnectivitySpec struct {
 	Reachability      *NativeReachabilityFacts
 	Lifecycle         *NativeLifecycleFacts
 	Admission         *NativeAdmissionFacts
+	Socket            *NativeSocketFacts
+}
+
+type NativeSocketFacts struct {
+	Local, Server netip.AddrPort
+	Duration      time.Duration
+	Result        string
 }
 
 type NativeAdmissionFacts struct {
@@ -84,6 +91,10 @@ func NewNativeConnectivityObserved(spec NativeConnectivitySpec) (NativeConnectiv
 		copied := *spec.Admission
 		spec.Admission = &copied
 	}
+	if spec.Socket != nil {
+		copied := *spec.Socket
+		spec.Socket = &copied
+	}
 	return NativeConnectivityObserved{spec: spec}, nil
 }
 func (NativeConnectivityObserved) event()                 {}
@@ -111,6 +122,10 @@ func (value NativeConnectivityObserved) Facts() NativeConnectivitySpec {
 		copied := *spec.Admission
 		spec.Admission = &copied
 	}
+	if spec.Socket != nil {
+		copied := *spec.Socket
+		spec.Socket = &copied
+	}
 	return spec
 }
 func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
@@ -121,7 +136,7 @@ func (value NativeConnectivityObserved) Accept(visitor Visitor) error {
 }
 func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	if !spec.Command.Valid() || !slices.Contains([]string{"sender", "receiver", "unknown"}, spec.Side) ||
-		!slices.Contains([]string{"provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected"}, spec.Kind) ||
+		!slices.Contains([]string{"provider_created", "provider_closed", "tcp_unavailable", "gathering_complete", "candidate", "selected_pair", "ice", "peerconnection", "gateway-unavailable", "lease-superseded", "lease-lost", "lease-failed", "lease-ready", "lease-revoked", "demand_changed", "network_changed", "path_closed", "admission_queued", "admission_granted", "admission_released", "admission_rejected", "stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind) ||
 		!slices.Contains([]string{"unknown", "new", "checking", "connected", "completed", "disconnected", "failed", "closed", "connecting"}, spec.State) {
 		return false
 	}
@@ -139,6 +154,16 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	isAdmission := slices.Contains([]string{"admission_queued", "admission_granted", "admission_released", "admission_rejected"}, spec.Kind)
 	if isAdmission != (spec.Admission != nil) {
 		return false
+	}
+	isSocket := slices.Contains([]string{"stun_refresh_finished", "socket_handoff_started", "socket_handoff_finished"}, spec.Kind)
+	if isSocket != (spec.Socket != nil) {
+		return false
+	}
+	if s := spec.Socket; s != nil {
+		if s.Duration < 0 || !slices.Contains([]string{"pending", "completed", "canceled", "deadline", "retired", "closed", "failed"}, s.Result) ||
+			(spec.Kind == "socket_handoff_started") != (s.Result == "pending") {
+			return false
+		}
 	}
 	if a := spec.Admission; a != nil && (a.Wait < 0 || a.ActiveTimeRemaining < 0 || !nativeAllowance(a.StartsRemaining) || !nativeAllowance(a.STUNRemaining)) {
 		return false

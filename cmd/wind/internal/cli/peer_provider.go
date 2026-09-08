@@ -289,8 +289,16 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 	if value.Admission != nil {
 		count++
 	}
+	if value.Socket != nil {
+		count++
+	}
 	if count != 1 {
 		return clievent.NativeConnectivityObserved{}, clievent.ErrInvalidEvent
+	}
+	if socket := value.Socket; socket != nil {
+		spec.Kind = string(socket.Kind)
+		spec.At = socket.At
+		spec.Socket = &clievent.NativeSocketFacts{Local: socket.Local, Server: socket.Server, Duration: socket.Duration, Result: socket.Result}
 	}
 	if admission := value.Admission; admission != nil {
 		if admission.Active < 0 || admission.Queued < 0 {

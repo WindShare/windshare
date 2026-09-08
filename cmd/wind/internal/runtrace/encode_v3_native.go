@@ -21,9 +21,17 @@ type nativeConnectivityPayloadV3 struct {
 	Reachability      *nativeReachabilityPayloadV3 `json:"reachability,omitempty"`
 	Lifecycle         *nativeLifecyclePayloadV3    `json:"lifecycle,omitempty"`
 	Admission         *nativeAdmissionPayloadV3    `json:"admission,omitempty"`
+	Socket            *nativeSocketPayloadV3       `json:"socket,omitempty"`
 }
 
 func (nativeConnectivityPayloadV3) runTracePayloadV3() {}
+
+type nativeSocketPayloadV3 struct {
+	Local    string `json:"local_endpoint"`
+	Server   string `json:"stun_server"`
+	Duration string `json:"duration_ms"`
+	Result   string `json:"result"`
+}
 
 type nativeAdmissionPayloadV3 struct {
 	Wait                string `json:"wait_ms"`
@@ -105,6 +113,9 @@ func (visitor *encodeVisitorV3) VisitNativeConnectivityObserved(event clievent.N
 	}
 	if a := facts.Admission; a != nil {
 		payload.Admission = &nativeAdmissionPayloadV3{Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}
+	}
+	if s := facts.Socket; s != nil {
+		payload.Socket = &nativeSocketPayloadV3{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
 	}
 	visitor.set("native_connectivity", correlation, payload)
 	return nil
