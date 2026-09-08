@@ -115,7 +115,7 @@
         {
           "path": "gather.go",
           "upstream_sha256": "7347acf4562ea983103cb88d26cd1061cdf6adbf5771534bd872b5c7ea47f274",
-          "sha256": "3897735fae7e70b04f17e96f0621d1a0e954beed447d82a400261e1ac3e89ca6"
+          "sha256": "7cf471c75188ae4a7558440d24e296fd8193c1c40a2c091a58d858fb133b0a78"
         },
         {
           "path": "go.mod",

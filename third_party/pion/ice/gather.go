@@ -285,8 +285,6 @@ func (a *Agent) gatherCandidatesInternal(ctx context.Context) {
 		}
 	}
 
-	a.gatherProviderEndpoints(ctx)
-
 	// Block until all STUN and TURN URLs have been gathered (or timed out)
 	wg.Wait()
 }
@@ -311,6 +309,9 @@ func (a *Agent) gatherServerReflexiveCandidates(ctx context.Context, wg *sync.Wa
 			wg.Done()
 		}()
 	}
+	// Verified external allocations are srflx candidates even without a STUN
+	// lookup, so they share its type policy but retain their own socket binding.
+	a.gatherProviderEndpoints(ctx)
 }
 
 //nolint:gocognit,gocyclo,cyclop,maintidx
