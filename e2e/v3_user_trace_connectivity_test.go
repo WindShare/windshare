@@ -36,6 +36,9 @@ func v3NativeConnectivitySchema() *v3TraceObjectSchema {
 		v3TraceFields(v3TraceDecimal, "active", "queued"),
 		v3TraceFields(v3TraceString, "wait_ms", "starts_remaining", "stun_remaining", "active_time_remaining_ms"),
 	)
+	socket := v3TraceSchema(
+		v3TraceFields(v3TraceString, "local_endpoint", "stun_server", "duration_ms", "result"),
+	)
 	// Provider-unavailable facts remain explicit "unknown" strings; the exported
 	// envelope and every nested record still reject additional fields.
 	return v3TraceSchema(
@@ -46,5 +49,6 @@ func v3NativeConnectivitySchema() *v3TraceObjectSchema {
 		v3TraceObjectField("reachability", reachability, true),
 		v3TraceObjectField("lifecycle", lifecycle, true),
 		v3TraceObjectField("admission", admission, true),
+		v3TraceObjectField("socket", socket, true),
 	)
 }

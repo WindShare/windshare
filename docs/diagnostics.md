@@ -17,6 +17,14 @@ Snapshots retain at most 16 error nodes, 8 cause levels, 12 frames, and 8 KiB of
 not retain original error objects. Later cleanup cannot replace the winning failure snapshot.
 Use `runtime_run_id` and `protocol_session_id` to correlate it with surrounding trace events.
 
+## Native socket handoff
+
+Native connectivity records include `stun_refresh_finished`, `socket_handoff_started`,
+and `socket_handoff_finished`. Correlate them by session, peer path, and network generation;
+idle work has no ICE attempt ID. The `socket` facts report result and elapsed milliseconds,
+plus local and STUN endpoints for refreshes. A canceled refresh followed by a completed
+handoff means the existing socket was transferred to the next ICE owner.
+
 ## Browser diagnostics
 
 To capture a problem that happens when reopening a share:

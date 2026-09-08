@@ -11,6 +11,11 @@ import (
 const MaxIdleServers = 2
 const MaxIdleHold = 2 * time.Minute
 
+type idleTask struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+}
+
 // StartIdle holds NAT discovery mappings only until the caller's already
 // budgeted fresh attempt deadline. It does not retain a demand reference and
 // therefore cannot keep an otherwise unused endpoint or generation alive.
@@ -25,33 +30,53 @@ func (l *Lease) StartIdle(ctx context.Context, servers []netip.AddrPort, deadlin
 			return ErrInvalid
 		}
 	}
+	// The deadline also bounds a repeated StartIdle waiting for its predecessor.
+	idleContext, cancel := context.WithDeadline(ctx, deadline)
 	a := l.authority
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if l.released || a.closed {
-		return ErrClosed
+waitForIdle:
+	for {
+		if err := l.unavailableLocked(); err != nil {
+			cancel()
+			return err
+		}
+		if l.entry.owner != iceUnclaimed {
+			cancel()
+			return ErrActive
+		}
+		if err := idleContext.Err(); err != nil {
+			cancel()
+			return err
+		}
+		previous := l.entry.idle
+		if previous == nil {
+			break
+		}
+		select {
+		case <-previous.done:
+			// Only an exited task can be replaced. Recheck the latest task after
+			// every unlocked wait so simultaneous replacements never overlap.
+			break waitForIdle
+		default:
+		}
+		previous.cancel()
+		a.mu.Unlock()
+		select {
+		case <-previous.done:
+		case <-idleContext.Done():
+		}
+		a.mu.Lock()
 	}
-	if l.entry.key.generation <= a.retiredThrough {
-		return ErrRetired
-	}
-	if l.entry.active {
-		return ErrActive
-	}
-	if l.entry.idleCancel != nil {
-		l.entry.idleCancel()
-		<-l.entry.idleDone
-	}
-	idleContext, cancel := context.WithDeadline(ctx, deadline)
-	done := make(chan struct{})
-	l.entry.idleCancel = cancel
-	l.entry.idleDone = done
-	go l.runIdle(idleContext, cancel, done, servers, deadline)
+	task := &idleTask{cancel: cancel, done: make(chan struct{})}
+	l.entry.idle = task
+	go l.runIdle(idleContext, task, servers, deadline)
 	return nil
 }
 
-func (l *Lease) runIdle(ctx context.Context, cancel context.CancelFunc, done chan<- struct{}, servers []netip.AddrPort, deadline time.Time) {
-	defer close(done)
-	defer cancel()
+func (l *Lease) runIdle(ctx context.Context, task *idleTask, servers []netip.AddrPort, deadline time.Time) {
+	defer close(task.done)
+	defer task.cancel()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 	for {
@@ -86,8 +111,10 @@ func (l *Lease) refreshIdle(ctx context.Context, servers []netip.AddrPort, deadl
 			if timeout <= 0 {
 				return false
 			}
-			_, _ = endpoint.RefreshXORMappedAddr(net.UDPAddrFromAddrPort(server), timeout)
+			started := time.Now()
+			_, err := endpoint.RefreshXORMappedAddr(ctx, net.UDPAddrFromAddrPort(server), timeout)
+			l.observe(Event{Kind: STUNRefreshFinished, Local: local, Server: server, Duration: time.Since(started), Result: socketResult(err)})
 		}
 	}
-	return true
+	return ctx.Err() == nil
 }
