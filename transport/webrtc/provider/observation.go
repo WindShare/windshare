@@ -8,6 +8,8 @@ import (
 )
 
 type CandidateFacts struct {
+	Priority uint32
+	TCPType  string
 	Type     string
 	Protocol string
 	Address  string
@@ -80,6 +82,6 @@ func (c *Connection) observeCandidate(candidate *pion.ICECandidate) {
 		origin = "mapped"
 	}
 	event := c.event("candidate", "")
-	event.Candidate = &CandidateFacts{Type: candidate.Typ.String(), Protocol: candidate.Protocol.String(), Address: candidate.Address, Port: candidate.Port, Family: family, Origin: origin}
+	event.Candidate = &CandidateFacts{Priority: candidate.Priority, TCPType: candidate.TCPType, Type: candidate.Typ.String(), Protocol: candidate.Protocol.String(), Address: candidate.Address, Port: candidate.Port, Family: family, Origin: origin}
 	c.request.Observe(event)
 }

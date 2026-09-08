@@ -30,7 +30,7 @@
         {
           "path": "agent.go",
           "upstream_sha256": "d1a2e31ab8d4d499a18f6463ea2ccda2924abb671168e49487e8e888d2f2dd87",
-          "sha256": "42d00f64e81b5161d2723befa7300c623224d2286f8eda999df9f66507bc32ff"
+          "sha256": "ca14505d9451682c6213e7c073e4f866beb6e3fae96b811024789e1b8d6482a9"
         },
         {
           "path": "agent_config.go",
@@ -55,12 +55,12 @@
         {
           "path": "candidate.go",
           "upstream_sha256": "dad59b912ebf62d781f89fa4c42464be4c3f6622ff2f454dda9a38fc8e858e55",
-          "sha256": "dad59b912ebf62d781f89fa4c42464be4c3f6622ff2f454dda9a38fc8e858e55"
+          "sha256": "f388e887e9b22db50178fb99a087a9431111591184f1018996f2d338106d8cb7"
         },
         {
           "path": "candidate_base.go",
           "upstream_sha256": "d48a95150ab03534943f83d7622abac0c9a409aee9cdaa8fcd97058ffadc2ba4",
-          "sha256": "18e03c39206c3f4a6072fcf7bcaba80c7c051f42742c45182c5f0b578bc2063c"
+          "sha256": "5cda6c26dffe52c924bbd76a6eaeb735e43f9fda4d4967d5d890ea3069ba3814"
         },
         {
           "path": "candidate_host.go",
@@ -209,7 +209,11 @@
         },
         {
           "path": "provider_config.go",
-          "sha256": "6b79ca81b86701f6e6bbd952688714f26af8bbd054a28d04ea3cc8192ccfa0fb"
+          "sha256": "fc6dc2ca70464a35f14d0c7b945e0d099f2fab07df67166a10fb91556e4f560d"
+        },
+        {
+          "path": "provider_priority.go",
+          "sha256": "fa3bc4b851491ef010bb5d46cd2221ff3b478f1aeaf905f316861da96c48deb6"
         },
         {
           "path": "provider_tcp.go",
@@ -846,7 +850,7 @@
         },
         {
           "path": "provider_config.go",
-          "sha256": "2c6fdfe446f86767b4c525522f7afdde9f9859fcd97eaddb118b0475544dc39d"
+          "sha256": "4e668174f7dd932c03b15f3a86aa27833e38628a0a5be86b36ad223a6b4dd371"
         },
         {
           "path": "rtcpfeedback.go",

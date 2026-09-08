@@ -49,6 +49,8 @@ type NativeLifecycleFacts struct {
 }
 
 type NativeCandidateFacts struct {
+	Priority                                uint32
+	TCPType                                 string
 	Type, Protocol, Address, Family, Origin string
 	Port                                    uint16
 }
@@ -170,6 +172,7 @@ func validNativeConnectivity(spec NativeConnectivitySpec) bool {
 	}
 	if c := spec.Candidate; c != nil {
 		if !nativeType(c.Type) || !nativeProtocol(c.Protocol) || !nativeAddress(c.Address) ||
+			!slices.Contains([]string{"", "active", "passive", "so"}, c.TCPType) ||
 			!slices.Contains([]string{"unknown", "ipv4", "ipv6"}, c.Family) || !slices.Contains([]string{"unknown", "ordinary", "mapped"}, c.Origin) {
 			return false
 		}

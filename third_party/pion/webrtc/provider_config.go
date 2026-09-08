@@ -12,6 +12,7 @@ import (
 // This setting adds capabilities to the normal PeerConnection ICE gatherer;
 // it does not construct a second ICE agent or alter SDP after gathering.
 func (e *SettingEngine) SetICEProviderConfig(config ice.ProviderConfig) {
+	config.LocalAddressOrder = slices.Clone(config.LocalAddressOrder)
 	config.MappedUDPEndpoints = slices.Clone(config.MappedUDPEndpoints)
 	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
 	e.iceProviderConfig = config

@@ -16,7 +16,8 @@ func v3NativeConnectivitySchema() *v3TraceObjectSchema {
 	candidate := v3TraceSchema(
 		v3TraceFields(v3TraceString, "type", "protocol", "address", "family", "origin",
 			"interface_class", "stun_endpoint", "stun_rtt_ms", "policy_decision"),
-		v3TraceFields(v3TraceInteger, "port"),
+		v3TraceFields(v3TraceInteger, "port", "priority"),
+		[]v3TraceFieldSchema{{name: "tcp_type", kind: v3TraceString, optional: true}},
 	)
 	pair := v3TraceSchema(
 		v3TraceFields(v3TraceString, "local_type", "remote_type", "protocol", "local_address", "remote_address",

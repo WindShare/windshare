@@ -29,14 +29,23 @@ type ProviderConfig struct {
 	TCPMappedMux           interface {
 		GetConnForEndpoint(string, netip.AddrPort) (net.PacketConn, error)
 	}
-	LocalPreference func(Candidate) (uint16, bool)
+	// LocalAddressOrder ranks base addresses, most preferred first. ICE combines
+	// this snapshot with transport/type/TCP-direction preferences at admission.
+	// Within each protocol preference group, repeated candidates on one base
+	// follow every base's first candidate.
+	// Unlisted bases follow listed bases; an empty snapshot keeps Pion defaults.
+	LocalAddressOrder []netip.Addr
 }
 
 // WithProviderConfig preserves legacy behavior when the config is empty.
 func WithProviderConfig(config ProviderConfig) AgentOption {
+	config.LocalAddressOrder = slices.Clone(config.LocalAddressOrder)
 	config.MappedUDPEndpoints = slices.Clone(config.MappedUDPEndpoints)
 	config.MappedTCPEndpoints = slices.Clone(config.MappedTCPEndpoints)
 	return func(a *Agent) error {
+		if err := validateLocalAddressOrder(config.LocalAddressOrder); err != nil {
+			return err
+		}
 		if config.InitialCheckingTimeout < 0 {
 			return fmt.Errorf("negative initial ICE checking timeout")
 		}

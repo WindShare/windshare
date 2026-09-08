@@ -115,7 +115,7 @@ func NewPeerConnection(configuration pion.Configuration, request AttemptConfig) 
 	settings.SetICEProviderConfig(ice.ProviderConfig{
 		SrflxMux: mux, InitialCheckingTimeout: initialTimeout, MappedUDPEndpoints: mapped,
 		MappedTCPEndpoints: mappedTCP, TCPMappedMux: lease.TCP(),
-		LocalPreference: localPreference(endpoints),
+		LocalAddressOrder: localAddressOrder(endpoints),
 	})
 	networks := []pion.NetworkType{pion.NetworkTypeUDP4, pion.NetworkTypeUDP6}
 	if capability.IPv4 {

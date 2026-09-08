@@ -67,6 +67,9 @@ func TestCandidateFactsPreserveMappedProvenanceAndActualMilestones(t *testing.T)
 			t.Fatal("lost provider identity")
 		}
 		if event.Candidate != nil {
+			if event.Candidate.Priority == 0 || event.Candidate.TCPType != "" {
+				t.Fatalf("UDP candidate lost its priority or acquired TCP direction: %+v", event.Candidate)
+			}
 			if event.Candidate.Origin == "mapped" {
 				sawMapped = true
 			} else if event.Candidate.Type == "host" {
