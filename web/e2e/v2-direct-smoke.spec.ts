@@ -19,6 +19,10 @@ import {
   createCapabilityRedactor,
   withCapabilityRedaction,
 } from './fixtures/capability-redactor'
+import {
+  assertRetainedDirectoryDownload,
+  RETAINED_DIRECTORY_CAPABILITY_KEY,
+} from './fixtures/retained-directory-smoke'
 
 const DIRECTORY_NAME = 'micro-share'
 const FILE_NAME = 'pixel.png'
@@ -52,7 +56,7 @@ test('receives an explicit directory artifact from the real sender and relay', a
 
     // The portable path avoids an operating-system picker while still exercising
     // the production UI, output authority, ZIP writer, and browser download.
-    await page.addInitScript(() => {
+    await page.addInitScript((retainedCapabilityKey) => {
       const reconstructionDirectory = navigator.storage?.getDirectory?.bind(navigator.storage)
       Object.defineProperty(window, '__windshareReconstructionDirectory', {
         configurable: false,
@@ -67,13 +71,13 @@ test('receives an explicit directory artifact from the real sender and relay', a
         showDirectoryPicker: { configurable: true, value: undefined },
         showSaveFilePicker: { configurable: true, value: undefined },
       })
-      if (navigator.storage !== undefined) {
+      if (navigator.storage !== undefined && window.sessionStorage.getItem(retainedCapabilityKey) !== 'enabled') {
         Object.defineProperty(navigator.storage, 'getDirectory', {
           configurable: true,
           value: undefined,
         })
       }
-    })
+    }, RETAINED_DIRECTORY_CAPABILITY_KEY)
     const navigationUrl = capabilityUrl(share)
     redactor = createCapabilityRedactor({
       completeUrl: navigationUrl,
@@ -213,6 +217,7 @@ test('receives an explicit directory artifact from the real sender and relay', a
       },
     })
     if (reconstructionAttempt.kind === 'unavailable') {
+      expect(browserName, 'Chromium smoke requires native storage for retained artifact recovery').not.toBe('chromium')
       expect(reconstructionStorageAvailable).toBe(false)
       expect(reconstructionAttempt.reason).toBe('origin-private-storage-unavailable')
       await testInfo.attach('fsa-continuation-reconstruction-capability', {
@@ -258,6 +263,9 @@ test('receives an explicit directory artifact from the real sender and relay', a
       body: senderArtifact,
       contentType: 'application/x-ndjson',
     })
+    if (browserName === 'chromium') {
+      await assertRetainedDirectoryDownload(page, navigationUrl, assertDirectoryDownload)
+    }
   } catch (error) {
     const pageDiagnostic = await page.evaluate(() => ({
       status: document.querySelector('[role="status"]')?.textContent ?? null,
