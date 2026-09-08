@@ -10,7 +10,8 @@ The narrow patches in `patches/` add:
 - A PeerConnection setting for the ICE provider capability snapshot.
 - Shared physical socket gathering for host and server-reflexive candidates,
   including explicit local-endpoint selection for multiple interfaces/families.
-- Immutable allocated external UDP/TCP IP **and port** candidates bound to the real base.
+- Immutable allocated external UDP/TCP IP **and port** candidates bound to the real base,
+  collected only when server-reflexive candidates and their network types are enabled.
 - Correct TCP type and socket address preservation for mapped server-reflexive candidates.
 - Initial checking time independent of connected disconnection/failure timers.
 - Base-address ordering composed with ICE-TCP direction preferences before candidate

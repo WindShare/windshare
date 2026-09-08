@@ -2,7 +2,7 @@
 
 更新：2026-09-08。基线：WindShare `bd1df255`，ICE `v4.4.2`，WebRTC `v4.2.20`。
 
-目标是先消除本地正确性和重连延迟问题，再把通用修复与能力接口逐项反哺，减少 fork 的长期维护成本。第 1–2 项本地修复已完成，其上游提案及其余项目仍待处理；PR 标题是建议，没有创建上游 issue 或 PR。
+目标是先消除本地正确性和重连延迟问题，再把通用修复与能力接口逐项反哺，减少 fork 的长期维护成本。第 1–3 项本地修复已完成，其上游提案及其余项目仍待处理；PR 标题是建议，没有创建上游 issue 或 PR。
 
 ## 当前范围
 
@@ -12,13 +12,13 @@
 
 ## 处理顺序与你需要做的事
 
-第 1–2 项本地修复已完成，继续修第 3 项本地问题，再按 4–5 提交通用 bugfix，最后逐项推进 6–8 的能力接口。上游 review 等待期间可以继续下一项本地工作，无须暂停整个项目。
+第 1–3 项本地修复已完成，接下来按 4–5 提交通用 bugfix，最后逐项推进 6–8 的能力接口。上游 review 等待期间可以继续下一项本地工作，无须暂停整个项目。
 
 | 顺序 | 工作 | 你需要做什么 | 去向 |
 | --- | --- | --- | --- |
 | 1 | 空闲 STUN 刷新取消与 socket 交接（本地已完成） | 后续确认刷新 API 的提案内容 | WindShare；成熟后向 `pion/ice` 提 API PR |
 | 2 | 修复网卡排序覆盖 TCP 方向偏好（本地已完成） | 后续参与优先级扩展接口讨论 | WindShare；按需向 `pion/ice` 提 issue |
-| 3 | 映射候选遵守候选类型限制 | 本地修复，随端点映射提案一起解释 | WindShare；并入第 8 项 |
+| 3 | 映射候选遵守候选类型限制（本地已完成） | 随端点映射提案一起解释配置语义 | WindShare；并入第 8 项 |
 | 4 | UDP mux 初始化竞态 | 用你的 GitHub 账号提交独立修复，处理 review | `pion/ice` PR |
 | 5 | TCP srflx 类型和地址保真 | 先提交 ICE PR；其可用版本发布后，再提交 WebRTC PR | `pion/ice` → `pion/webrtc` |
 | 6 | 暴露 srflx mux，补齐多本地端点选择 | 先讨论 API，再拆分提交 | `pion/webrtc`、`pion/ice` |
@@ -49,11 +49,13 @@
 
 ## 3. 映射候选遵守候选类型限制
 
-**问题。** [gatherProviderEndpoints](../third_party/pion/ice/gather.go)在候选类型筛选循环之外无条件执行。配置了映射端点时，即使只允许 relay 候选，也可能额外生成 srflx 候选。这是本地扩展与 Pion 配置契约不一致；当前常规调用未必触发。
+**原问题。** [映射候选收集](../third_party/pion/ice/gather.go)在候选类型筛选循环之外无条件执行，导致 host-only、relay-only 等显式禁用 srflx 的配置仍会领取映射 socket 并发布 srflx 候选。这是本地扩展与 Pion 配置契约不一致。
 
-**本地处理。** 把映射候选接入所属候选类型的 gathering 流程，统一遵守类型和网络限制。已经冻结并验证的映射继续绑定原本的真实 socket，不用信令层过滤掩盖 ICE 内部已收集错误候选的问题。
+**本地已完成。** 映射候选归入 srflx gathering 流程，只有启用该类型时才收集；继续按 UDP/TCP、IPv4/IPv6 网络配置筛选，并绑定已验证映射的真实 socket。没有 STUN URL 时也保留有效映射。
 
-用同一组映射输入对比允许 srflx、host-only、relay-only 的结果。修复随本地补丁维护；上游原版没有这条本地路径，不单独声称这是上游已有 bug，后续并入第 8 项。
+**用户体验边界。** WindShare 默认配置允许 srflx，正常分享继续尝试映射直连。这里的 ICE relay-only 指仅允许 TURN 候选，不代表“5 秒后中转先传”；中转传输期间仍应继续探索 P2P，不改变中转等待、重试或切换策略。这项属于底层配置正确性修复，不宣称提高默认直连成功率。
+
+同一组双栈 UDP/TCP 映射覆盖默认配置、srflx-only、host-only、relay-only、host＋relay 及各网络限制；检查 socket 领取、发布、内部候选、统计和真实 base，禁用时不靠信令过滤。上游原版没有这条本地路径，不单独声称这是上游已有 bug，后续并入第 8 项。
 
 ## 4. 反哺 UDP mux 初始化竞态
 
@@ -106,4 +108,4 @@
 - PR 使用独立分支，每份只解决一个问题。正文写触发场景、失败原因、修复理由和实际执行的测试；不带其他依赖升级或 WindShare 配置。提交信息不添加任何 attribution trailers。
 - 上游合并后，等修改进入项目决定采用的上游版本，再升级并删除对应补丁，更新 manifest 和复现结果。PR 合并本身不代表本地已经摆脱该补丁。
 
-第 1 项已通过补丁重建、受影响 Go 包的短测试与 race 检测、`make check` 和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。第 2 项已通过受影响包的短测试、race 检测、补丁重建和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。两项上游提案尚未提交，其余条目仍为待办。
+第 1 项已通过补丁重建、受影响 Go 包的短测试与 race 检测、`make check` 和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。第 2 项已通过受影响包的短测试、race 检测、补丁重建和最终 `make ci-parallel`（含 E2E trace 契约与全仓 gopls）。第 3 项已通过受影响包的短测试、race 检测、补丁重建和最终 `make ci-parallel`（含映射 payload、浏览器契约与全仓 gopls）。三项上游提案尚未提交，其余条目仍为待办。
