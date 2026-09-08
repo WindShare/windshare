@@ -9,7 +9,7 @@ function SingleFile({ share, preview, actions, openPreview }: {
   readonly share: Exclude<V2ShareIdentity, { kind: 'browser' }>
   readonly preview: V2ReceiverSnapshot['preview']
   readonly actions: PreviewActions
-  readonly openPreview: (id: string) => void
+  readonly openPreview: (id: string, invoker: HTMLButtonElement) => void
 }) {
   const kind = { photo: 'Photo', video: 'Video', file: 'File' }[share.kind]
   const icons: Readonly<Record<typeof share.kind, ReceiverIconName>> = { photo: 'image', video: 'video', file: 'file' }
@@ -18,7 +18,7 @@ function SingleFile({ share, preview, actions, openPreview }: {
       {' · '}{kind}</p>
     {preview.state === 'idle' ? <div className="single-file-placeholder">
       <ReceiverIcon name={icons[share.kind]} className="single-file-icon" />
-      <button type="button" onClick={() => openPreview(share.file.id)}>
+      <button type="button" onClick={event => openPreview(share.file.id, event.currentTarget)}>
         {share.kind === 'video' ? 'Preview a frame' : 'Preview'}
       </button>
     </div> : <MediaPreview preview={preview} actions={actions} inline />}

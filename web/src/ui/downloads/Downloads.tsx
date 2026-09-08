@@ -19,6 +19,7 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
 }) {
   const [expanded, setExpanded] = useState<string | null>(null)
   const descriptionId = useId()
+  const entryButton = useRef<HTMLButtonElement>(null)
   const detailsButtons = useRef(new Map<string, HTMLButtonElement>())
   const backButton = useRef<HTMLButtonElement>(null)
   const index = useRef<HTMLDivElement>(null)
@@ -37,12 +38,12 @@ export function Downloads({ tasks, actions, loading, error, busy, details, entry
   }, [open, selectedId])
   const close = () => { onIntent('close-downloads'); onOpenChange(false); setExpanded(null) }
   return <>
-    <button className="downloads-entry" type="button" aria-describedby={entryDescription === undefined ? undefined : descriptionId}
+    <button ref={entryButton} className="downloads-entry" type="button" aria-describedby={entryDescription === undefined ? undefined : descriptionId}
       onClick={() => { onIntent('open-downloads'); onOpenChange(true) }}>
       <ReceiverIcon name="download" />{entryLabel}{attention > 0 && <span className="attention-count" aria-label={`${attention} need attention`}>{attention}</span>}
     </button>
     {entryDescription !== undefined && <span id={descriptionId} hidden>{entryDescription}</span>}
-    {open && <DetailSheet title={selected?.objectLabel ?? 'Downloads'} onClose={close}
+    {open && <DetailSheet title={selected?.objectLabel ?? 'Downloads'} onClose={close} returnFocus={entryButton}
       returnLabel="Close downloads" className="downloads-sheet"
       {...(selected === undefined ? { subtitle: 'Tasks and saved records in this browser.' } : {})}
       navigation={selected === undefined ? undefined : <button ref={backButton} className="quiet-action downloads-back" type="button"
