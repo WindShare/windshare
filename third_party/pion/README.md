@@ -13,7 +13,8 @@ The narrow patches in `patches/` add:
 - Immutable allocated external UDP/TCP IP **and port** candidates bound to the real base.
 - Correct TCP type and socket address preservation for mapped server-reflexive candidates.
 - Initial checking time independent of connected disconnection/failure timers.
-- Local preference applied inside ICE before checklist construction and signaling.
+- Base-address ordering composed with ICE-TCP direction preferences before candidate
+  admission and signaling, including dynamic active TCP; repeated candidates keep unique scores.
 - Explicit STUN cache-bypassing refresh; upstream owns response transaction validation.
 - Context cancellation preserved through local-endpoint gathering and idle STUN refresh.
 - Complete universal UDP mux initialization before its socket reader starts.

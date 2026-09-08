@@ -80,12 +80,12 @@ func TestNativeObservationBridgeRejectsOpenProviderFacts(t *testing.T) {
 func TestNativeObservationProjectionPreservesAttributionAndUnknowns(t *testing.T) {
 	subject := nativepeer.Subject{ProtocolSessionID: [16]byte{1}, PeerPathID: [16]byte{2}, AttemptID: [16]byte{3}, AttemptSequence: 4, NetworkGenerationID: 5, ICEProfileID: "ice-0123abcd", Side: nativepeer.SideReceiver}
 	at := time.Unix(100, 42)
-	event, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{Subject: subject, Provider: &provider.Event{Milestone: "candidate", At: at, Candidate: &provider.CandidateFacts{Type: "host", Protocol: "udp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
+	event, err := projectNativeObservation(clievent.CommandGet, nativepeer.Observation{Subject: subject, Provider: &provider.Event{Milestone: "candidate", At: at, Candidate: &provider.CandidateFacts{Priority: 12345, TCPType: "active", Type: "host", Protocol: "tcp", Address: "opaque.local", Family: "unknown", Origin: "ordinary", Port: 123}}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	facts := event.Facts()
-	if facts.Session.Bytes()[0] != 1 || facts.Path.Bytes()[0] != 2 || facts.Attempt.Bytes()[0] != 3 || facts.AttemptSequence != 4 || facts.NetworkGeneration != 5 || facts.Profile != subject.ICEProfileID || facts.Side != "receiver" || facts.At != at || facts.Candidate.Address != "unknown" {
+	if facts.Session.Bytes()[0] != 1 || facts.Path.Bytes()[0] != 2 || facts.Attempt.Bytes()[0] != 3 || facts.AttemptSequence != 4 || facts.NetworkGeneration != 5 || facts.Profile != subject.ICEProfileID || facts.Side != "receiver" || facts.At != at || facts.Candidate.Address != "unknown" || facts.Candidate.Priority != 12345 || facts.Candidate.TCPType != "active" {
 		t.Fatalf("facts=%+v", facts)
 	}
 	for _, value := range []nativepeer.Observation{

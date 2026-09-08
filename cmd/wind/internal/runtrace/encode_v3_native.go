@@ -48,6 +48,8 @@ type nativeLifecyclePayloadV3 struct {
 	PreviousGeneration string `json:"previous_network_generation_id"`
 }
 type nativeCandidatePayloadV3 struct {
+	Priority       uint32 `json:"priority"`
+	TCPType        string `json:"tcp_type,omitempty"`
 	Type           string `json:"type"`
 	Protocol       string `json:"protocol"`
 	Address        string `json:"address"`
@@ -96,7 +98,7 @@ func (visitor *encodeVisitorV3) VisitNativeConnectivityObserved(event clievent.N
 		payload.ObservedAt = facts.At.UTC().Format(time.RFC3339Nano)
 	}
 	if c := facts.Candidate; c != nil {
-		payload.Candidate = &nativeCandidatePayloadV3{Type: c.Type, Protocol: c.Protocol, Address: c.Address, Port: c.Port, Family: c.Family, Origin: c.Origin, InterfaceClass: "unknown", STUNEndpoint: "unknown", STUNRTT: "unknown", PolicyDecision: "unknown"}
+		payload.Candidate = &nativeCandidatePayloadV3{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: c.Address, Port: c.Port, Family: c.Family, Origin: c.Origin, InterfaceClass: "unknown", STUNEndpoint: "unknown", STUNRTT: "unknown", PolicyDecision: "unknown"}
 	}
 	if p := facts.Pair; p != nil {
 		rtt := "unknown"

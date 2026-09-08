@@ -329,26 +329,6 @@ func TestProviderRejectsMismatchedAndConcurrentResources(t *testing.T) {
 	}
 }
 
-func TestPriorityInterleavesFamiliesAndInterfaces(t *testing.T) {
-	endpoints := []netip.AddrPort{netip.MustParseAddrPort("192.168.1.1:1"), netip.MustParseAddrPort("192.168.2.1:2"), netip.MustParseAddrPort("[2001:db8::1]:3")}
-	policy := localPreference(endpoints)
-	want := []uint16{65535, 65533, 65534}
-	for i, endpoint := range endpoints {
-		candidate, err := ice.NewCandidateHost(&ice.CandidateHostConfig{Network: "udp", Address: endpoint.Addr().String(), Port: int(endpoint.Port()), Component: 1})
-		if err != nil {
-			t.Fatal(err)
-		}
-		got, ok := policy(candidate)
-		if !ok || got != want[i] {
-			t.Fatalf("preference=%d,%v", got, ok)
-		}
-	}
-	candidate, _ := ice.NewCandidateServerReflexive(&ice.CandidateServerReflexiveConfig{Network: "udp", Address: "203.0.113.1", Port: 4, RelAddr: "192.168.1.1", RelPort: 1, Component: 1})
-	if got, ok := policy(candidate); !ok || got != 65535 {
-		t.Fatal("srflx lost base preference")
-	}
-}
-
 func TestInitialCheckingWindowIndependentOfConnectedTimeout(t *testing.T) {
 	const pac = 200 * time.Millisecond
 	disconnected, failed := 10*time.Millisecond, 10*time.Millisecond

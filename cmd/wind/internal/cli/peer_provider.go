@@ -322,7 +322,7 @@ func projectNativeObservation(command clievent.Command, value nativepeer.Observa
 			spec.State = p.State
 		}
 		if c := p.Candidate; c != nil {
-			spec.Candidate = &clievent.NativeCandidateFacts{Type: c.Type, Protocol: c.Protocol, Address: nativeObservedAddress(c.Address), Port: c.Port, Family: c.Family, Origin: c.Origin}
+			spec.Candidate = &clievent.NativeCandidateFacts{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: nativeObservedAddress(c.Address), Port: c.Port, Family: c.Family, Origin: c.Origin}
 		}
 		if pair := p.Pair; pair != nil {
 			spec.Pair = &clievent.NativePairFacts{LocalType: pair.LocalType, RemoteType: pair.RemoteType, Protocol: pair.Protocol, LocalAddress: nativeObservedAddress(pair.LocalAddress), RemoteAddress: nativeObservedAddress(pair.RemoteAddress), LocalPort: pair.LocalPort, RemotePort: pair.RemotePort, PairRTT: pair.RoundTripTime}

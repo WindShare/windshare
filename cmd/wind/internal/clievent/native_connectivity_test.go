@@ -48,6 +48,7 @@ func TestNativeConnectivitySealsFactsAndRejectsUnboundedInput(t *testing.T) {
 		func(s *NativeConnectivitySpec) { s.Profile = "ice-xxxxxxxx" },
 		func(s *NativeConnectivitySpec) { s.Candidate = nil },
 		func(s *NativeConnectivitySpec) { s.Candidate.Type = "unexpected" },
+		func(s *NativeConnectivitySpec) { s.Candidate.TCPType = "unexpected" },
 		func(s *NativeConnectivitySpec) { s.Candidate.Address = "credential.local" },
 		func(s *NativeConnectivitySpec) { s.Reachability = &NativeReachabilityFacts{} },
 	}
