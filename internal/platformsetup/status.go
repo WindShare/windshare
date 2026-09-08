@@ -5,9 +5,6 @@ package platformsetup
 import (
 	"encoding/json"
 	"os"
-	"path/filepath"
-	"runtime"
-	"strings"
 )
 
 const (
@@ -38,13 +35,7 @@ func ReadForExecutable(path, executable string) Status {
 	if !validDecision(status.State, status.Reason) {
 		return unavailable("status-invalid")
 	}
-	installed := filepath.Clean(status.Executable)
-	current := filepath.Clean(executable)
-	equal := installed == current
-	if runtime.GOOS == "windows" {
-		equal = strings.EqualFold(installed, current)
-	}
-	if !equal {
+	if !sameInstallationPath(status.Executable, executable) {
 		return unavailable("install-path-changed")
 	}
 	return status
