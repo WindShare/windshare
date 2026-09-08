@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 
 import { expect, test, type TestInfo } from '@playwright/test'
 
@@ -322,7 +323,7 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     expect(stackTraces.length).toBeGreaterThan(0)
     expect(stackTraces.every((trace) => trace.scenarioId === SCENARIO_ID)).toBe(true)
   } catch (error) {
-    await attachDiagnostic(testInfo, events, stack, stackTraces, redactor)
+    await attachDiagnostic(testInfo, events, stack, stackTraces, redactor).catch(() => undefined)
     failure = redactedFailure(error, redactor)
   } finally {
     await releasePageOutput(page).catch(() => undefined)
@@ -405,10 +406,15 @@ async function attachDiagnostic(
     stackTraces,
     processes: stack.diagnostic(),
   } as const
+  // The event log already owns its bound. Formatting the whole array would
+  // discard the late recovery attempts that explain an intermittent failure.
+  const body = JSON.stringify(diagnostic, null, 2)
+  const path = testInfo.outputPath('direct-recovery-diagnostic.json')
+  await writeFile(path, redactor?.redactText(body) ?? body)
   await testInfo.attach('direct-recovery-diagnostic', {
-    body: redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2),
+    path,
     contentType: 'application/json',
-  }).catch(() => undefined)
+  })
 }
 
 function redactedFailure(error: unknown, redactor: CapabilityRedactor | undefined): Error {

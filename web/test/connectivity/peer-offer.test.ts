@@ -183,17 +183,15 @@ describe('browser offer negotiation', () => {
     await channel.close()
   })
 
-  it('reports a changed selected route and withdraws classification when stats lose the pair', async () => {
+  it('follows live pair changes and loss without waiting for a statistics sample', async () => {
     const fixture = negotiationFixture()
     const channel = await openChannel(fixture)
     const routes: unknown[] = []
     const unsubscribe = channel.subscribePathRoute?.((route) => routes.push(route))
-    fixture.peer.stats.get('remote-1')!.candidateType = 'relay'
-    fixture.peer.dispatchEvent(new Event('connectionstatechange'))
+    fixture.peer.ice.select('relay')
     await settle()
     expect(channel.pathRoute).toBe('turn')
-    fixture.peer.stats.delete('remote-1')
-    fixture.peer.dispatchEvent(new Event('connectionstatechange'))
+    fixture.peer.ice.select(null)
     await settle()
     expect(channel.pathRoute).toBeUndefined()
     expect(routes).toEqual(['turn', undefined])
@@ -474,6 +472,57 @@ describe('browser offer negotiation', () => {
   })
 })
 
+describe('browser peer route readiness', () => {
+  it('opens on the live pair while statistics are pending and ignores a later empty snapshot', async () => {
+    const fixture = negotiationFixture()
+    let completeStats!: (report: RTCStatsReport) => void
+    fixture.peer.statsOperation = new Promise((resolve) => { completeStats = resolve })
+    const channel = await openChannel(fixture)
+    expect(channel.pathRoute).toBe('direct')
+    const changes: unknown[] = []
+    channel.subscribePathRoute?.((route) => changes.push(route))
+    completeStats(new Map() as unknown as RTCStatsReport)
+    await settle()
+    expect(channel.pathRoute).toBe('direct')
+    expect(changes).toEqual([])
+    await channel.close()
+  })
+
+  it('waits for a live route when DataChannel open precedes pair visibility', async () => {
+    const fixture = negotiationFixture()
+    fixture.peer.ice.select(null)
+    const opening = fixture.factory.offer(fixture.route, fixture.signal)
+    let resolved = false
+    const observedOpening = opening.then((channel) => { resolved = true; return channel })
+    await settle()
+    fixture.route.push(answerSignal())
+    await settle()
+    fixture.peer.raw.open()
+    await settle()
+    expect(resolved).toBe(false)
+    fixture.peer.ice.select('host')
+    const channel = await observedOpening
+    expect(channel.pathRoute).toBe('direct')
+    await channel.close()
+  })
+
+  it('joins cancellation while an open DataChannel has no selected route', async () => {
+    const fixture = negotiationFixture()
+    fixture.peer.ice.select(null)
+    const opening = fixture.factory.offer(fixture.route, fixture.signal)
+    const cancellation = new DOMException('route discovery cancelled', 'AbortError')
+    const rejected = expect(opening).rejects.toBe(cancellation)
+    await settle()
+    fixture.route.push(answerSignal())
+    await settle()
+    fixture.peer.raw.open()
+    await settle()
+    fixture.controller.abort(cancellation)
+    await rejected
+    expect(fixture.peer.closeCalls).toBe(1)
+  })
+})
+
 describe('browser ICE gathering completion', () => {
   it('treats Firefox end-of-candidates as completion rather than a wire candidate', async () => {
     const fixture = negotiationFixture(1)
@@ -650,9 +699,26 @@ class ControlledRoute implements SignalingRoute {
   }
 }
 
+class FakeSelectedPairTransport extends EventTarget {
+  #remoteType: RTCIceCandidateType | null = 'host'
+
+  getSelectedCandidatePair(): RTCIceCandidatePair | null {
+    return this.#remoteType === null ? null : {
+      local: { type: 'host' },
+      remote: { type: this.#remoteType },
+    } as RTCIceCandidatePair
+  }
+
+  select(remoteType: RTCIceCandidateType | null): void {
+    this.#remoteType = remoteType
+    this.dispatchEvent(new Event('selectedcandidatepairchange'))
+  }
+}
+
 class FakeNegotiationPeer extends EventTarget {
   readonly raw = new FakeRTCDataChannel({ readyState: 'connecting' })
-  readonly sctp = { maxMessageSize: 256 * 1024 }
+  readonly ice = new FakeSelectedPairTransport()
+  readonly sctp = { maxMessageSize: 256 * 1024, transport: { iceTransport: this.ice } }
   readonly remoteDescriptions: RTCSessionDescriptionInit[] = []
   readonly addedCandidates: RTCIceCandidateInit[] = []
   connectionState: RTCPeerConnectionState = 'new'
@@ -663,6 +729,7 @@ class FakeNegotiationPeer extends EventTarget {
   readonly lifecycle: string[] = []
   closeCalls = 0
   statsCalls = 0
+  statsOperation: Promise<RTCStatsReport> | undefined
   readonly stats = new Map<string, Record<string, unknown>>([
     ['transport-1', {
       id: 'transport-1',
@@ -728,7 +795,7 @@ class FakeNegotiationPeer extends EventTarget {
 
   getStats(): Promise<RTCStatsReport> {
     this.statsCalls += 1
-    return Promise.resolve(this.stats as unknown as RTCStatsReport)
+    return this.statsOperation ?? Promise.resolve(this.stats as unknown as RTCStatsReport)
   }
 
   close(): void {

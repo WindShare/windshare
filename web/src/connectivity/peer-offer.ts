@@ -26,6 +26,7 @@ import {
   type ConnectivitySignal,
   type SignalingRoute,
 } from './signaling'
+import { BrowserPeerRoute } from './peer-route/route'
 import { CandidateBudget } from './ice-policy/candidates'
 import type { AttemptICEProfile } from './ice-policy/endpoints'
 import { candidateFact, selectedPairFact, type PeerProviderFact } from './peer-set/provider-facts'
@@ -148,6 +149,7 @@ export class BrowserOfferChannelFactory implements OfferChannelFactory {
 type NegotiationEvent =
   | { readonly type: 'channel-done' }
   | { readonly type: 'channel-opened' }
+  | { readonly type: 'path-changed' }
   | { readonly type: 'failure'; readonly reason: unknown }
   | { readonly type: 'local-candidate'; readonly candidate: RTCIceCandidateInit }
   | { readonly type: 'route-closed'; readonly reason?: unknown }
@@ -158,7 +160,7 @@ class OfferNegotiation {
   readonly #channel: WebRTCFrameChannel
   readonly #route: SignalingRoute
   readonly #candidateBudget: CandidateBudget
-  #pathRoute: PeerPathRoute
+  readonly #path: BrowserPeerRoute
   readonly #routeListeners = new Set<(route: PeerPathRoute) => void>()
   #selectedPairID: string | undefined
   #selectedAt = 0
@@ -196,12 +198,13 @@ class OfferNegotiation {
     this.#route = route
     this.#candidateBudget = new CandidateBudget(maximumCandidates)
     this.#observer = observer
+    this.#path = new BrowserPeerRoute(() => peer.sctp?.transport?.iceTransport, (route) => this.#pathChanged(route))
     this.#remote = new RemoteNegotiationState(peer, maximumCandidates)
     this.#ownedChannel = new OwnedPeerChannel(
       channel,
       this.#settled.promise,
       () => this.#ownerFailure,
-      () => this.#pathRoute,
+      () => this.#path.current,
       (listener) => { this.#routeListeners.add(listener); return () => this.#routeListeners.delete(listener) },
     )
     this.#events = new NegotiationEventQueue<NegotiationEvent>(
@@ -268,6 +271,7 @@ class OfferNegotiation {
       globalThis.clearInterval(this.#statsTimer)
       this.#peer.removeEventListener('datachannel', this.#onUnexpectedDataChannel)
       this.#events.close()
+      this.#path.close()
       this.#routeListeners.clear()
       this.#localCandidateFingerprints.clear()
       // Parent-first teardown prevents a terminal-pending DataChannel from
@@ -332,8 +336,13 @@ class OfferNegotiation {
       }
       return 'done'
     }
+    if (event.type === 'path-changed') {
+      this.#publishOpenedChannel()
+      return 'continue'
+    }
     if (event.type === 'channel-opened') {
-      await awaitWithAbort(this.#sampleStats(), signal)
+      this.#path.refresh()
+      this.#sampleStats().catch(() => undefined)
       this.#statsTimer ??= globalThis.setInterval(() => {
         this.#sampleStats().catch(() => undefined)
       }, SELECTED_PAIR_SAMPLE_MILLISECONDS)
@@ -361,7 +370,7 @@ class OfferNegotiation {
   }
 
   #publishOpenedChannel(): void {
-    if (!this.#openedChannel) {
+    if (!this.#openedChannel && this.#channel.state === 'open' && this.#path.current !== undefined) {
       this.#openedChannel = true
       this.#observe((observer) => observer.dataChannelOpened(() => this.#candidateCounts()))
       this.#opened.resolve(this.#ownedChannel)
@@ -425,9 +434,10 @@ class OfferNegotiation {
 
   #reconcileOpenedChannel(): boolean {
     if (!this.#openedChannel && this.#channel.state === 'open') {
+      this.#path.refresh()
       this.#publishOpenedChannel()
     }
-    return this.#openedChannel
+    return this.#openedChannel || this.#channel.state === 'open'
   }
 
   async #readSignals(
@@ -495,6 +505,7 @@ class OfferNegotiation {
   }
 
   #onConnectionStateChange = (): void => {
+    this.#path.refresh()
     this.#sampleStats().catch(() => undefined)
     if (this.#peer.connectionState === 'failed') {
       this.#interrupt(new PeerNegotiationError('PeerConnection entered failed state'))
@@ -503,6 +514,7 @@ class OfferNegotiation {
 
   #onIceStateChange = (): void => {
     const state = this.#peer.iceConnectionState
+    this.#path.refresh()
     const phase = state === 'connected' || state === 'completed' ? 'dtls-datachannel' : 'ice-check'
     this.#fact({ kind: 'state', phase, state, elapsedMs: performance.now() - this.#startedAt })
     if (state === 'checking' || state === 'connected' || state === 'completed') this.#observer?.phaseChanged?.(phase)
@@ -540,22 +552,19 @@ class OfferNegotiation {
       const now = performance.now()
       const selected = selectedPairFact(stats, this.#selectedPairID, this.#selectedAt, now)
       if (this.#parentClosed) return
-      if (selected === undefined) {
-        this.#setPathRoute(undefined)
-        return
-      }
+      this.#path.observeStats(selected?.fact.route)
+      if (selected === undefined) return
       if (selected.id !== this.#selectedPairID) this.#selectedAt = now
       this.#selectedPairID = selected.id
-      this.#setPathRoute(selected.fact.route)
       this.#fact(selected.fact)
     }).catch(() => undefined).finally(() => { if (this.#statsPending === task) this.#statsPending = undefined })
     this.#statsPending = task
     return task
   }
 
-  #setPathRoute(route: PeerPathRoute): void {
-    if (this.#pathRoute === route) return
-    this.#pathRoute = route
+  #pathChanged(route: PeerPathRoute): void {
+    this.#fact({ kind: 'state', phase: 'ice-check', state: route === undefined ? 'route-unavailable' : `route-${route}`, elapsedMs: performance.now() - this.#startedAt })
+    if (!this.#openedChannel && route !== undefined) this.#events.push({ type: 'path-changed' })
     for (const listener of this.#routeListeners) {
       try { listener(route) } catch { /* A subscriber cannot own provider settlement. */ }
     }
