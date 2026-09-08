@@ -288,7 +288,7 @@
         {
           "path": "udp_mux_universal.go",
           "upstream_sha256": "f316f42b4e717159ac5aecc801c8c4ead320900ba54fe08f0adb0a178a0b2613",
-          "sha256": "b80f5c5e858597cd4d71afdf24bde6363dbc00c295ddefee6cb65e4a497cfc66"
+          "sha256": "ff2f7ab5bab8ad17d2412da386fb703faafcbf482d2a0ec8a5a751a9886ed419"
         },
         {
           "path": "udp_muxed_conn.go",

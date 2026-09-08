@@ -4,7 +4,6 @@
 package socketauthority
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"net"
@@ -16,14 +15,18 @@ import (
 	"github.com/pion/ice/v4"
 )
 
-const DefaultCapacity = 64
-const MaxAddressesPerPath = 16
+const (
+	DefaultCapacity       = 64
+	MaxAddressesPerPath   = 16
+	DefaultIdleInterval   = 15 * time.Second
+	DefaultRefreshTimeout = 500 * time.Millisecond
+)
 
 var (
 	ErrClosed   = errors.New("socket authority closed")
 	ErrCapacity = errors.New("socket capacity exhausted")
 	ErrRetired  = errors.New("network generation retired")
-	ErrActive   = errors.New("peer path already has an active ICE owner")
+	ErrActive   = errors.New("peer path already has an ICE owner")
 	ErrInvalid  = errors.New("invalid socket lease request")
 )
 
@@ -36,6 +39,8 @@ type Config struct {
 	ListenTCP      func(network, address string) (net.Listener, error)
 	IdleInterval   time.Duration
 	RefreshTimeout time.Duration
+	// Observe must publish promptly; it is never called while holding the authority lock.
+	Observe func(Event)
 }
 
 type pathKey struct {
@@ -43,15 +48,16 @@ type pathKey struct {
 	generation uint64
 	path       [16]byte
 }
+
 type pathSockets struct {
-	key        pathKey
-	addresses  []netip.Addr
-	mux        *Mux
-	tcp        *TCPMux
-	refs       int
-	active     bool
-	idleCancel context.CancelFunc
-	idleDone   <-chan struct{}
+	key       pathKey
+	addresses []netip.Addr
+	mux       *Mux
+	tcp       *TCPMux
+	refs      int
+	owner     iceOwnership
+	idle      *idleTask
+	closing   *socketClosure
 }
 
 // Authority owns physical sockets; leases own only demand references.
@@ -61,7 +67,7 @@ type Authority struct {
 	paths          map[pathKey]*pathSockets
 	retiredThrough uint64
 	socketCount    int
-	closed         bool
+	closing        *socketClosure
 }
 
 func New(config Config) *Authority {
@@ -69,10 +75,10 @@ func New(config Config) *Authority {
 		config.Capacity = DefaultCapacity
 	}
 	if config.IdleInterval <= 0 {
-		config.IdleInterval = 15 * time.Second
+		config.IdleInterval = DefaultIdleInterval
 	}
 	if config.RefreshTimeout <= 0 {
-		config.RefreshTimeout = 500 * time.Millisecond
+		config.RefreshTimeout = DefaultRefreshTimeout
 	}
 	if config.ListenTCP == nil {
 		config.ListenTCP = net.Listen
@@ -103,18 +109,29 @@ func (a *Authority) Acquire(session [16]byte, generation uint64, path [16]byte, 
 			return nil, ErrInvalid
 		}
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
-		return nil, ErrClosed
-	}
-	if generation <= a.retiredThrough {
-		return nil, ErrRetired
-	}
 	// PeerPathID is session-scoped; equal values in independent authenticated
 	// sessions must never share socket or exclusive ICE ownership.
 	key := pathKey{session, generation, path}
-	if entry := a.paths[key]; entry != nil {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for {
+		if a.closing != nil {
+			return nil, ErrClosed
+		}
+		if generation <= a.retiredThrough {
+			return nil, ErrRetired
+		}
+		entry := a.paths[key]
+		if entry == nil {
+			break
+		}
+		if entry.closing != nil {
+			closing := entry.closing
+			a.mu.Unlock()
+			_ = closing.wait()
+			a.mu.Lock()
+			continue
+		}
 		if !slices.Equal(addresses, entry.addresses) {
 			return nil, ErrInvalid
 		}
@@ -150,30 +167,11 @@ func (a *Authority) Retire(generation uint64) {
 	if generation > a.retiredThrough {
 		a.retiredThrough = generation
 		for _, entry := range a.paths {
-			if entry.key.generation <= generation && entry.idleCancel != nil {
-				entry.idleCancel()
+			if entry.key.generation <= generation && entry.idle != nil {
+				entry.idle.cancel()
 			}
 		}
 	}
-}
-
-func (a *Authority) Close() error {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if a.closed {
-		return nil
-	}
-	a.closed = true
-	var err error
-	for _, entry := range a.paths {
-		if entry.idleCancel != nil {
-			entry.idleCancel()
-		}
-		err = errors.Join(err, entry.close())
-	}
-	a.paths = make(map[pathKey]*pathSockets)
-	a.socketCount = 0
-	return err
 }
 
 // Lease is a separately releasable demand reference. Retain never revives a
@@ -191,37 +189,11 @@ func (l *Lease) Retain() (*Lease, error) {
 	a := l.authority
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if l.released || a.closed {
-		return nil, ErrClosed
-	}
-	if l.entry.key.generation <= a.retiredThrough {
-		return nil, ErrRetired
+	if err := l.unavailableLocked(); err != nil {
+		return nil, err
 	}
 	l.entry.refs++
 	return &Lease{authority: a, entry: l.entry}, nil
-}
-
-func (l *Lease) Close() error {
-	if l == nil {
-		return nil
-	}
-	a := l.authority
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if l.released {
-		return nil
-	}
-	l.released = true
-	l.entry.refs--
-	if l.entry.refs != 0 || a.closed {
-		return nil
-	}
-	if l.entry.idleCancel != nil {
-		l.entry.idleCancel()
-	}
-	delete(a.paths, l.entry.key)
-	a.socketCount -= l.entry.socketCount()
-	return l.entry.close()
 }
 
 func (l *Lease) SessionID() [16]byte  { return l.entry.key.session }
@@ -234,33 +206,4 @@ func (l *Lease) Endpoints() []netip.AddrPort {
 		result = append(result, addr.(*net.UDPAddr).AddrPort())
 	}
 	return result
-}
-
-// Claim transfers exclusive keepalive ownership to one ICE agent. The returned
-// release must run after PeerConnection.Close completes, before replacement.
-func (l *Lease) Claim() (*Mux, func(), error) {
-	if l == nil {
-		return nil, nil, ErrInvalid
-	}
-	a := l.authority
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	if l.released || a.closed {
-		return nil, nil, ErrClosed
-	}
-	if l.entry.key.generation <= a.retiredThrough {
-		return nil, nil, ErrRetired
-	}
-	if l.entry.active {
-		return nil, nil, ErrActive
-	}
-	l.entry.active = true
-	if l.entry.idleCancel != nil {
-		l.entry.idleCancel()
-		<-l.entry.idleDone
-		l.entry.idleCancel = nil
-		l.entry.idleDone = nil
-	}
-	var once sync.Once
-	return l.entry.mux, func() { once.Do(func() { a.mu.Lock(); l.entry.active = false; a.mu.Unlock() }) }, nil
 }

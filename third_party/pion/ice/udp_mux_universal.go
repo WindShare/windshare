@@ -249,7 +249,10 @@ func (m *UniversalUDPMuxDefault) GetXORMappedAddrContext(
 
 // RefreshXORMappedAddr performs an actual Binding request, bypassing cached
 // discovery. The embedding owner must exclude active gathering while refreshing.
-func (m *UniversalUDPMuxDefault) RefreshXORMappedAddr(server net.Addr, timeout time.Duration) (*stun.XORMappedAddress, error) {
+func (m *UniversalUDPMuxDefault) RefreshXORMappedAddr(ctx context.Context, server net.Addr, timeout time.Duration) (*stun.XORMappedAddress, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	serverAddr := netAddrToAddrPort(server)
 	if !serverAddr.IsValid() {
 		return nil, errInvalidAddress
@@ -257,7 +260,7 @@ func (m *UniversalUDPMuxDefault) RefreshXORMappedAddr(server net.Addr, timeout t
 	m.mu.Lock()
 	delete(m.xorMappedMap, canonicalAddrPort(serverAddr))
 	m.mu.Unlock()
-	return m.GetXORMappedAddr(server, timeout)
+	return m.GetXORMappedAddrContext(ctx, server, timeout)
 }
 
 func (m *UniversalUDPMuxDefault) writePacket(ctx context.Context, packet []byte, addr net.Addr) (int, error) {

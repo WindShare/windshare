@@ -105,9 +105,6 @@ func New(config Config) *NativePeerConnectivity {
 	if config.Monitor == nil {
 		config.Monitor = networkstate.NewMonitor(nil, networkstate.DefaultDebounce)
 	}
-	if config.Sockets == nil {
-		config.Sockets = socketauthority.New(socketauthority.Config{})
-	}
 	if config.Discovery == nil {
 		config.Discovery = gateway.NewDiscovery(nil)
 	}
@@ -121,6 +118,13 @@ func New(config Config) *NativePeerConnectivity {
 	if config.ObservationCapacity > 0 {
 		capacity := min(config.ObservationCapacity, DefaultObservationCapacity)
 		owner.producer, owner.observations, _ = observationstream.New[Observation](observationstream.Capacity(capacity))
+	}
+	if owner.config.Sockets == nil {
+		sockets := socketauthority.Config{}
+		if config.ObservationCapacity > 0 {
+			sockets.Observe = owner.observeSocket
+		}
+		owner.config.Sockets = socketauthority.New(sockets)
 	}
 	return owner
 }
