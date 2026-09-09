@@ -301,7 +301,7 @@ func TestReceiverPeerCancelReconcilesTombstonedWireSuppressionLocally(t *testing
 
 func TestDroppedPeerCancelRetiresLocallyActiveOperation(t *testing.T) {
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

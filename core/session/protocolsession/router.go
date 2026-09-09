@@ -170,11 +170,17 @@ type RoleRouter struct {
 	handlerMu sync.RWMutex
 	handlers  map[MessageKind]MessageHandler
 
-	queueMu     sync.Mutex
-	pendingData map[OperationGeneration]uint32
-	ingressMu   sync.Mutex
-	lifecycleMu sync.RWMutex
-	closed      bool
+	queueMu             sync.Mutex
+	pendingData         map[OperationGeneration]uint32
+	ingressMu           sync.Mutex
+	deferred            map[OperationID][]RouteEvent
+	deferredOrder       []OperationID
+	deferredFrames      int
+	deferredBytes       int
+	deferredCancelBytes int
+	admissionWake       chan struct{}
+	lifecycleMu         sync.RWMutex
+	closed              bool
 
 	nextActive   atomic.Bool
 	controlBurst int
@@ -200,13 +206,15 @@ func NewRoleRouterWithLimits(
 		return nil, fmt.Errorf("protocolsession: invalid router limits: %+v", limits)
 	}
 	return &RoleRouter{
-		role:        role,
-		operations:  operations,
-		control:     make(chan RouteEvent, limits.ControlFrames),
-		data:        make(chan RouteEvent, limits.DataFrames),
-		done:        make(chan struct{}),
-		handlers:    make(map[MessageKind]MessageHandler),
-		pendingData: make(map[OperationGeneration]uint32),
+		role:          role,
+		operations:    operations,
+		control:       make(chan RouteEvent, limits.ControlFrames),
+		data:          make(chan RouteEvent, limits.DataFrames),
+		done:          make(chan struct{}),
+		handlers:      make(map[MessageKind]MessageHandler),
+		pendingData:   make(map[OperationGeneration]uint32),
+		deferred:      make(map[OperationID][]RouteEvent),
+		admissionWake: make(chan struct{}, 1),
 	}, nil
 }
 
@@ -221,64 +229,85 @@ func (router *RoleRouter) Next(ctx context.Context) (RouteEvent, error) {
 		return RouteEvent{}, ErrRouterConsumerBusy
 	}
 	defer router.nextActive.Store(false)
+	for {
+		capacity, err := router.promoteDeferred()
+		if err != nil {
+			return RouteEvent{}, err
+		}
+		event, ready, err := router.nextEvent(ctx, capacity)
+		if ready || err != nil {
+			return event, err
+		}
+	}
+}
+
+func (router *RoleRouter) nextEvent(ctx context.Context, capacity operationCapacity) (RouteEvent, bool, error) {
 	if err := router.nextError(ctx); err != nil {
-		return RouteEvent{}, err
+		return RouteEvent{}, true, err
 	}
 	if router.controlBurst >= RouterMaximumControlBurst {
 		select {
 		case event := <-router.data:
 			router.retireQueuedData(event)
 			if err := router.nextError(ctx); err != nil {
-				return RouteEvent{}, err
+				return RouteEvent{}, true, err
 			}
 			router.controlBurst = 0
-			return event, nil
+			return event, true, nil
 		default:
 		}
 	}
 	if err := router.nextError(ctx); err != nil {
-		return RouteEvent{}, err
+		return RouteEvent{}, true, err
 	}
 	select {
 	case event := <-router.control:
 		if err := router.nextError(ctx); err != nil {
-			return RouteEvent{}, err
+			return RouteEvent{}, true, err
 		}
 		router.controlBurst++
-		return event, nil
+		return event, true, nil
 	default:
 	}
 	if err := router.nextError(ctx); err != nil {
-		return RouteEvent{}, err
+		return RouteEvent{}, true, err
 	}
 	select {
 	case event := <-router.data:
 		router.retireQueuedData(event)
 		if err := router.nextError(ctx); err != nil {
-			return RouteEvent{}, err
+			return RouteEvent{}, true, err
 		}
 		router.controlBurst = 0
-		return event, nil
+		return event, true, nil
 	default:
 	}
+	expiry, stop := capacity.timer()
+	defer stop()
 	select {
+	case <-router.admissionWake:
+		return RouteEvent{}, false, nil
+	case <-capacity.changed:
+		return RouteEvent{}, false, nil
+	case <-expiry:
+		return RouteEvent{}, false, nil
 	case <-router.done:
-		return RouteEvent{}, ErrSessionTerminated
+		return RouteEvent{}, true, ErrSessionTerminated
 	case <-ctx.Done():
-		return RouteEvent{}, ctx.Err()
+		return RouteEvent{}, true, ctx.Err()
 	case event := <-router.control:
 		if err := router.nextError(ctx); err != nil {
-			return RouteEvent{}, err
+			return RouteEvent{}, true, err
 		}
 		router.controlBurst++
-		return event, nil
+		return event, true, nil
 	case event := <-router.data:
 		router.retireQueuedData(event)
 		if err := router.nextError(ctx); err != nil {
-			return RouteEvent{}, err
+			return RouteEvent{}, true, err
 		}
 		router.controlBurst = 0
-		return event, nil
+		return event, true, nil
 	}
 }
 
@@ -395,6 +424,17 @@ func (router *RoleRouter) RouteInbound(
 	// the request whose generation it canceled.
 	router.ingressMu.Lock()
 	defer router.ingressMu.Unlock()
+	if router.shouldDeferInbound(message) {
+		return router.deferInboundLocked(ctx, message)
+	}
+	disposition, err := router.routeAdmittedLocked(ctx, message)
+	if IsOperationCapacityError(err) {
+		return router.deferInboundLocked(ctx, message)
+	}
+	return disposition, err
+}
+
+func (router *RoleRouter) routeAdmittedLocked(ctx context.Context, message Message) (OperationDisposition, error) {
 	admission, err := router.operations.ObserveInbound(router.InboundDirection(), message)
 	disposition := admission.Disposition
 	if err != nil || disposition == OperationDrop {
@@ -487,6 +527,11 @@ func (router *RoleRouter) Close() {
 	router.closed = true
 	close(router.done)
 	_ = router.operations.TerminateLocal()
+	clear(router.deferred)
+	router.deferredOrder = nil
+	router.deferredFrames = 0
+	router.deferredBytes = 0
+	router.deferredCancelBytes = 0
 
 	for {
 		select {

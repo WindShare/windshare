@@ -17,7 +17,7 @@ import (
 
 const (
 	DefaultActiveOperations     = 256
-	DefaultOperationTombstones  = 4_096
+	DefaultTrackedOperations    = 4_096
 	SessionStoppedCode          = protocolsession.SessionTerminalCodeLast
 	MaximumTerminalMessageBytes = protocolsession.MaxSessionTerminalMessageBytes
 )
@@ -100,7 +100,7 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 	}
 	if config.OperationLimits == (protocolsession.OperationLimits{}) {
 		config.OperationLimits = protocolsession.OperationLimits{
-			MaxActive: DefaultActiveOperations, MaxTombstones: DefaultOperationTombstones,
+			MaxActive: DefaultActiveOperations, MaxTracked: DefaultTrackedOperations,
 		}
 	}
 	if config.RouterLimits == (protocolsession.RouterLimits{}) {

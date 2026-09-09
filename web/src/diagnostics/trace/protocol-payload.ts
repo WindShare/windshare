@@ -1,0 +1,30 @@
+import type { ProtocolMessageKindV1 } from '../incident/fact'
+import type { ProtocolFailureV1 } from '../export/incident-record-v1'
+
+export type ProtocolOperationPayloadV1 =
+  | Readonly<{
+      transition: 'request_sent' | 'request_send_failed' | 'cancelled' | 'admission_ready' | 'admission_abandoned'
+      request_kind: ProtocolMessageKindV1
+    }>
+  | Readonly<{
+      transition: 'admission_waiting'
+      request_kind: ProtocolMessageKindV1
+      capacity: 'active' | 'retained'
+      active_operations: string
+      tracked_operations: string
+    }>
+  | Readonly<{
+      transition: 'response_received'
+      request_kind: ProtocolMessageKindV1
+      response_kind: ProtocolMessageKindV1
+    }>
+  | Readonly<{
+      transition: 'authenticated_failure'
+      request_kind: ProtocolMessageKindV1
+      protocol_failure: ProtocolFailureV1
+    }>
+  | Readonly<{
+      transition: 'settled'
+      request_kind: ProtocolMessageKindV1
+      settlement: 'remote_final' | 'local_cancel' | 'session_terminal'
+    }>

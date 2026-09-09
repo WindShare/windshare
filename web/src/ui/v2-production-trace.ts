@@ -186,6 +186,14 @@ export function projectProtocolTraceEvent(
   }
 
   switch (event.transition) {
+    case 'admission_waiting':
+      return correlatedObservation(event.eventName, correlation, {
+        transition: event.transition,
+        request_kind: event.requestKind,
+        capacity: event.capacity,
+        active_operations: decimal(event.activeOperations),
+        tracked_operations: decimal(event.trackedOperations),
+      })
     case 'response_received':
       return correlatedObservation(event.eventName, correlation, {
         transition: event.transition,

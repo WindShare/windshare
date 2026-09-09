@@ -163,7 +163,7 @@ func newTestContinuationTable(
 ) *OperationTable {
 	t.Helper()
 	table, err := NewOperationTableWithContinuations(
-		OperationLimits{MaxActive: 8, MaxTombstones: 8},
+		OperationLimits{MaxActive: 8, MaxTracked: 8},
 		now,
 		testContinuationClassifier{maximum: maximum},
 	)

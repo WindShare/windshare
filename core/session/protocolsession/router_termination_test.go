@@ -19,7 +19,7 @@ func (ctx *nextBarrierContext) Err() error {
 }
 
 func TestRoleRouterLocalTerminationClosesSharedOperationState(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 1}, nil)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 1}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -39,7 +39,7 @@ func TestRoleRouterLocalTerminationClosesSharedOperationState(t *testing.T) {
 }
 
 func TestRoleRouterNextDoesNotDispatchBacklogAfterLifetimeCancellation(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	router, _ := NewRoleRouter(RoleSender, table)
 	operationID := testOperationID(211)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
@@ -58,7 +58,7 @@ func TestRoleRouterNextDoesNotDispatchBacklogAfterLifetimeCancellation(t *testin
 }
 
 func TestRoleRouterCloseWakesNextAndDrainsFullQueues(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	router, _ := NewRoleRouterWithLimits(RoleReceiver, table, RouterLimits{ControlFrames: 1, DataFrames: 1})
 
 	operationID := testOperationID(212)
@@ -91,7 +91,7 @@ func TestRoleRouterCloseWakesNextAndDrainsFullQueues(t *testing.T) {
 		t.Fatalf("Next after close error=%v", err)
 	}
 
-	wakeTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 1}, nil)
+	wakeTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 1}, nil)
 	wakeRouter, _ := NewRoleRouter(RoleSender, wakeTable)
 	barrier := &nextBarrierContext{Context: context.Background(), entered: make(chan struct{})}
 	result := make(chan error, 1)

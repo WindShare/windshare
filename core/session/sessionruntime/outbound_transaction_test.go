@@ -152,7 +152,7 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 	runtime, initialChannel := newUnstartedRuntimeWithPolicy(
 		t,
 		protocolsession.RoleSender,
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4},
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
 		now,
 	)
 	if err := initialChannel.Close(); err != nil {

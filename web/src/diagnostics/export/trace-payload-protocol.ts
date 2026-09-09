@@ -53,8 +53,17 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
     case 'request_sent':
     case 'request_send_failed':
     case 'cancelled':
+    case 'admission_ready':
+    case 'admission_abandoned':
       exactKeys(payload, ['transition', 'request_kind'], [], 'protocol request payload')
       member(payload.request_kind, PROTOCOL_MESSAGE_KINDS_V1, 'protocol request kind')
+      return
+    case 'admission_waiting':
+      exactKeys(payload, ['transition', 'request_kind', 'capacity', 'active_operations', 'tracked_operations'], [],
+        'protocol admission payload')
+      member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'protocol request kind')
+      member(payload.capacity, ['active', 'retained'], 'operation admission capacity')
+      decimalFields(payload, ['active_operations', 'tracked_operations'], 'operation admission')
       return
     case 'response_received':
       exactKeys(payload, ['transition', 'request_kind', 'response_kind'], [],

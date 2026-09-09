@@ -69,7 +69,7 @@ func TestSessionWriterSettlementLeaseAnchorsTombstoneAfterPhysicalSend(t *testin
 			initialTime := time.Unix(1_900_000_000, 0)
 			clock := &settlementTestClock{now: initialTime}
 			operations, err := NewOperationTable(
-				OperationLimits{MaxActive: 2, MaxTombstones: 2},
+				OperationLimits{MaxActive: 2, MaxTracked: 2},
 				clock.Now,
 			)
 			if err != nil {
@@ -177,7 +177,7 @@ func TestSessionWriterDropsQueuedStaleGenerationBeforePolicyMutation(t *testing.
 	initialTime := time.Unix(1_910_000_000, 0)
 	clock := &settlementTestClock{now: initialTime}
 	operations, err := NewOperationTable(
-		OperationLimits{MaxActive: 2, MaxTombstones: 2},
+		OperationLimits{MaxActive: 2, MaxTracked: 2},
 		clock.Now,
 	)
 	if err != nil {

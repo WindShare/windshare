@@ -18,12 +18,15 @@ func projectProtocolRole(value protocolsession.Role) (clievent.ProtocolRole, boo
 }
 
 var protocolOperationStageProjections = map[sessionruntime.ProtocolOperationStage]clievent.ProtocolOperationStage{
-	sessionruntime.ProtocolOperationReceiverCompleted:     clievent.ProtocolOperationReceiverCompleted,
-	sessionruntime.ProtocolOperationReceiverFailed:        clievent.ProtocolOperationReceiverFailed,
-	sessionruntime.ProtocolOperationReceiverEnded:         clievent.ProtocolOperationReceiverEnded,
-	sessionruntime.ProtocolOperationSenderRequestReceived: clievent.ProtocolOperationSenderRequestReceived,
-	sessionruntime.ProtocolOperationSenderResponseSettled: clievent.ProtocolOperationSenderResponseSettled,
-	sessionruntime.ProtocolOperationSenderContentDecision: clievent.ProtocolOperationSenderContentDecision,
+	sessionruntime.ProtocolOperationReceiverCompleted:               clievent.ProtocolOperationReceiverCompleted,
+	sessionruntime.ProtocolOperationReceiverFailed:                  clievent.ProtocolOperationReceiverFailed,
+	sessionruntime.ProtocolOperationReceiverEnded:                   clievent.ProtocolOperationReceiverEnded,
+	sessionruntime.ProtocolOperationSenderRequestReceived:           clievent.ProtocolOperationSenderRequestReceived,
+	sessionruntime.ProtocolOperationSenderResponseSettled:           clievent.ProtocolOperationSenderResponseSettled,
+	sessionruntime.ProtocolOperationSenderContentDecision:           clievent.ProtocolOperationSenderContentDecision,
+	sessionruntime.ProtocolOperationReceiverWaitingActiveCapacity:   clievent.ProtocolOperationReceiverWaitingActiveCapacity,
+	sessionruntime.ProtocolOperationReceiverWaitingRetainedCapacity: clievent.ProtocolOperationReceiverWaitingRetainedCapacity,
+	sessionruntime.ProtocolOperationReceiverAdmissionReady:          clievent.ProtocolOperationReceiverAdmissionReady,
 }
 
 var protocolMessageKindProjections = map[protocolsession.MessageKind]clievent.ProtocolMessageKind{

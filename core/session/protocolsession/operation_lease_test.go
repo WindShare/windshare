@@ -7,7 +7,7 @@ import (
 
 func TestOutboundOperationLeaseConcurrentReleaseAndSettlementIsIdempotent(t *testing.T) {
 	for iteration := range 128 {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		operationID := testOperationID(byte(iteration + 1))
 		request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
 		admission, err := table.ObserveInbound(DirectionReceiverToSender, request)
@@ -45,7 +45,7 @@ func TestOutboundOperationLeaseConcurrentReleaseAndSettlementIsIdempotent(t *tes
 }
 
 func TestSendReceiptRetainsAtMostOneSettlementLease(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(180)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
 	admission, _ := table.ObserveInbound(DirectionReceiverToSender, request)

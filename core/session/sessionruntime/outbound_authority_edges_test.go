@@ -62,7 +62,7 @@ func TestOutboundTransactionRequiresExactLiveGenerationAuthority(t *testing.T) {
 		runtime, _ := newUnstartedRuntimeWithPolicy(
 			t,
 			protocolsession.RoleSender,
-			protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2},
+			protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
 			now,
 		)
 		operationID := id16[protocolsession.OperationID](133)
@@ -177,11 +177,11 @@ func TestOutboundTransactionDoesNotRetryDefinitiveOrUnsettledDrops(t *testing.T)
 	}
 }
 
-func TestAbandonOutboundOperationFailClosesWhenCancellationCannotBeRetained(t *testing.T) {
+func TestAbandonOutboundOperationUsesReservedCancellationCapacity(t *testing.T) {
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t,
 		protocolsession.RoleSender,
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 1},
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 2},
 		nil,
 	)
 	targetID := id16[protocolsession.OperationID](136)
@@ -220,15 +220,15 @@ func TestAbandonOutboundOperationFailClosesWhenCancellationCannotBeRetained(t *t
 	}
 
 	abandonErr := runtime.abandonOutboundOperation(targetID, route, targetGeneration)
-	if !errors.Is(abandonErr, protocolsession.ErrTombstoneBudget) {
+	if abandonErr != nil {
 		t.Fatalf("abandon error=%v", abandonErr)
 	}
 	select {
 	case <-runtime.ctx.Done():
+		t.Fatal("reserved cancellation ended the runtime")
 	default:
-		t.Fatal("unrecordable cancellation did not fail-close the runtime")
 	}
-	if !runtime.operations.Terminated() || runtime.routes.len() != 0 {
+	if runtime.operations.Terminated() || runtime.routes.len() != 0 || runtime.operations.TombstoneCount() != 2 {
 		t.Fatalf("terminal=%t routes=%d", runtime.operations.Terminated(), runtime.routes.len())
 	}
 	if err := runtime.abandonBoundOutboundOperation(context.Background(), targetID); !errors.Is(err, ErrOperationMissing) {

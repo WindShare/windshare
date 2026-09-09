@@ -21,7 +21,7 @@ func TestSenderHandlerSuppressesRequestWhoseGenerationWasCanceledBeforePublicati
 	operationID := flowID[protocolsession.OperationID](201)
 	request := operationMessage(t, protocolsession.MessageOpenRevisions, operationID, body)
 	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
 	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, request)
 	if err != nil {

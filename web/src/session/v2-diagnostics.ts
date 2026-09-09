@@ -12,6 +12,9 @@ export type V2ProtocolOperationTransition =
   | 'authenticated_failure'
   | 'cancelled'
   | 'settled'
+  | 'admission_waiting'
+  | 'admission_ready'
+  | 'admission_abandoned'
 
 export type V2ProtocolOperationSettlement =
   | 'remote_final'
@@ -36,8 +39,17 @@ export type V2LaneDetachmentClass =
 export type V2ProtocolOperationTraceEvent =
   | Readonly<{
       eventName: 'protocol_operation'
-      transition: 'request_sent' | 'request_send_failed' | 'cancelled'
+      transition: 'request_sent' | 'request_send_failed' | 'cancelled' | 'admission_ready' | 'admission_abandoned'
       requestKind: ProtocolMessageKindV1
+      correlation: FailureCorrelation
+    }>
+  | Readonly<{
+      eventName: 'protocol_operation'
+      transition: 'admission_waiting'
+      requestKind: ProtocolMessageKindV1
+      capacity: 'active' | 'retained'
+      activeOperations: number
+      trackedOperations: number
       correlation: FailureCorrelation
     }>
   | Readonly<{

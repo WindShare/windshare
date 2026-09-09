@@ -11,7 +11,7 @@ import (
 
 func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 	now := time.Unix(1, 0)
-	table, err := protocolsession.NewOperationTableWithContinuations(protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, func() time.Time { return now }, ReceiverControlValidator{})
+	table, err := protocolsession.NewOperationTableWithContinuations(protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, func() time.Time { return now }, ReceiverControlValidator{})
 	if err != nil {
 		t.Fatal(err)
 	}

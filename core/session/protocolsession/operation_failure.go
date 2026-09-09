@@ -355,8 +355,13 @@ func (table *OperationTable) addTombstone(
 	requestFingerprint [32]byte,
 	authority *operationAuthority,
 ) error {
-	if _, exists := table.tombstones[operationID]; !exists && len(table.tombstones) >= table.limits.MaxTombstones {
-		return ErrTombstoneBudget
+	if _, exists := table.tombstones[operationID]; !exists {
+		// An admitted operation already owns this slot. Only a cancel racing
+		// ahead of its request must acquire a new retained identity.
+		if _, reserved := table.active[operationID]; !reserved &&
+			len(table.active)+len(table.tombstones) >= table.limits.MaxTracked {
+			return ErrTrackedOperationBudget
+		}
 	}
 	if authority == nil {
 		authority = &operationAuthority{}
@@ -378,6 +383,7 @@ func (table *OperationTable) pruneExpired() {
 	for operationID, tombstone := range table.tombstones {
 		if !now.Before(tombstone.expiresAt) && tombstone.authority.pins == 0 {
 			delete(table.tombstones, operationID)
+			table.notifyCapacityLocked()
 		}
 	}
 }

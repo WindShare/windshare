@@ -19,7 +19,7 @@ func TestOperationTombstoneDropsOnlyRequestCompatibleLateContinuations(t *testin
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			table, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+			table, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -53,7 +53,7 @@ func TestOperationTombstoneDropsOnlyRequestCompatibleLateContinuations(t *testin
 }
 
 func TestCatalogTombstoneRejectsUnrelatedLateBlockFragment(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(199)
 	request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
 	final := mustMessage(t, MessageCatalogResult, &operationID, map[uint64]any{0: uint64(1)})
@@ -65,7 +65,7 @@ func TestCatalogTombstoneRejectsUnrelatedLateBlockFragment(t *testing.T) {
 }
 
 func TestCancelledTombstoneScopesLateTrafficAndFingerprintsRacedFinal(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(200)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
 	cancel := mustMessage(t, MessageCancel, &operationID, map[uint64]any{0: uint64(1)})
@@ -95,7 +95,7 @@ func TestCancelledTombstoneScopesLateTrafficAndFingerprintsRacedFinal(t *testing
 }
 
 func TestPreemptiveCancelLearnsOnlyTheRacedRequestFamily(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(201)
 	cancel := mustMessage(t, MessageCancel, &operationID, map[uint64]any{0: uint64(1)})
 	if disposition, err := table.Observe(DirectionReceiverToSender, cancel); err != nil || disposition != OperationDeliver {
@@ -125,7 +125,7 @@ func TestPreemptiveCancelLearnsOnlyTheRacedRequestFamily(t *testing.T) {
 }
 
 func TestPreemptiveCancelRejectsUnsolicitedResponseBeforeRequest(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(202)
 	cancel := mustMessage(t, MessageCancel, &operationID, map[uint64]any{0: uint64(1)})
 	_, _ = table.Observe(DirectionReceiverToSender, cancel)

@@ -598,7 +598,7 @@ func operationMessage(t *testing.T, kind protocolsession.MessageKind, operation 
 func senderMessageContext(t *testing.T, message protocolsession.Message) context.Context {
 	t.Helper()
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -679,7 +679,7 @@ func TestSenderHandlerDispatchesWithoutOwningRouterOrWriter(t *testing.T) {
 		t.Fatalf("release final kind=%d", kind)
 	}
 
-	operations, _ := protocolsession.NewOperationTable(protocolsession.OperationLimits{MaxActive: 16, MaxTombstones: 32}, nil)
+	operations, _ := protocolsession.NewOperationTable(protocolsession.OperationLimits{MaxActive: 16, MaxTracked: 32}, nil)
 	router, _ := protocolsession.NewRoleRouter(protocolsession.RoleSender, operations)
 	if err := RegisterSenderHandlers(router, handler); err != nil {
 		t.Fatalf("register content handlers: %v", err)

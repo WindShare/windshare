@@ -229,7 +229,7 @@ func TestRegisterSenderHandlersPropagatesEveryOwnershipConflict(t *testing.T) {
 	for _, duplicate := range duplicateKinds {
 		t.Run(fmt.Sprintf("kind-%d", duplicate), func(t *testing.T) {
 			operations, err := protocolsession.NewOperationTable(
-				protocolsession.OperationLimits{MaxActive: 16, MaxTombstones: 16}, nil,
+				protocolsession.OperationLimits{MaxActive: 16, MaxTracked: 16}, nil,
 			)
 			if err != nil {
 				t.Fatal(err)

@@ -111,9 +111,6 @@ func (table *OperationTable) CancelGeneration(generation OperationGeneration) er
 	if !exists || active.authority != generation.authority {
 		return nil
 	}
-	if len(table.tombstones) >= table.limits.MaxTombstones {
-		return ErrTombstoneBudget
-	}
 	table.retirePeerAttemptLocked(generation.authority)
 	delete(table.active, operationID)
 	clearContinuationReplayLocked(generation.authority)
@@ -125,6 +122,7 @@ func (table *OperationTable) CancelGeneration(generation OperationGeneration) er
 		cancelled:          true,
 		authority:          generation.authority,
 	}
+	table.notifyCapacityLocked()
 	return nil
 }
 
@@ -230,6 +228,9 @@ func (pin *outboundAdmissionPin) release() {
 		}
 		if pin.authority.pins > 0 {
 			pin.authority.pins--
+		}
+		if pin.authority.pins == 0 {
+			pin.table.notifyCapacityLocked()
 		}
 		pin.table.mu.Unlock()
 	})
