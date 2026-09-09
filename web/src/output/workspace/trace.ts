@@ -12,7 +12,6 @@ export type RecoveryDecision =
   | 'download-started'
   | 'restart-required'
   | 'published-cleanup-retry'
-  | 'expired'
   | 'needs-attention'
 
 export type ReceiveOperationTraceEvent =
@@ -24,15 +23,6 @@ export type ReceiveOperationTraceEvent =
         observed_state: ReceiveLifecycleState['kind']
         reduced_state: ReceiveLifecycleState['kind']
         recovery_decision: RecoveryDecision
-      }>
-    }>
-  | Readonly<{
-      name: 'receive.operation.expired'
-      atMilliseconds: number
-      context: Readonly<{
-        operation_id: string
-        prior_stable_state: string
-        expires_at_ms: number
       }>
     }>
   | Readonly<{
@@ -64,17 +54,7 @@ export function observeRecovery(input: {
       recovery_decision: input.decision,
     }),
   }))
-  if (input.reduced.kind === 'expired') {
-    input.listener?.(Object.freeze({
-      name: 'receive.operation.expired',
-      atMilliseconds: input.atMilliseconds,
-      context: Object.freeze({
-        operation_id: input.reduced.operationId,
-        prior_stable_state: input.reduced.priorStableState,
-        expires_at_ms: input.reduced.expiresAt,
-      }),
-    }))
-  } else if (input.reduced.kind === 'needs-attention') {
+  if (input.reduced.kind === 'needs-attention') {
     input.listener?.(Object.freeze({
       name: 'receive.operation.needs_attention',
       atMilliseconds: input.atMilliseconds,

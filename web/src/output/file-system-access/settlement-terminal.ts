@@ -7,7 +7,7 @@ import type { FSAFinalSettlementObservation } from './session'
 
 export async function cleanupTerminalFSAMetadata(
   input: Pick<CreateFileSystemAccessSettlementAuthorityOptions,
-    'intent' | 'repository' | 'lifecycleLeaseId' | 'clock' | 'diagnostics'> & {
+    'intent' | 'repository' | 'lifecycleLeaseId' | 'diagnostics'> & {
     readonly lifecycle: ReceiveLifecycleState
     readonly observation: Pick<FSAFinalSettlementObservation,
       'retireRecoveryMetadata' | 'clearCompatibleNamePendingOutcome'>
@@ -23,7 +23,6 @@ export async function cleanupTerminalFSAMetadata(
       return (await completeFileSystemAccessPublishedCleanup({
         intent: input.intent, lifecycle, repository: input.repository,
         leaseId: input.lifecycleLeaseId,
-        ...(input.clock === undefined ? {} : { clock: input.clock }),
         ...(diagnostics?.trace === undefined ? {} : { trace: diagnostics.trace }),
         cleanup,
       })).lifecycle

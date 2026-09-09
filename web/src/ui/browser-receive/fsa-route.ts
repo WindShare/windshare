@@ -266,7 +266,6 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
           repository: durableRepository,
           lifecycleLeaseId: lease.leaseId,
           transferJobId,
-          clock: this.#dependencies.clock,
           ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         }),
       )

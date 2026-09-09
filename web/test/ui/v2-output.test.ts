@@ -593,7 +593,7 @@ describe('derived output lifecycle and recovery presentation', () => {
 
     const firstReplacement = repairSummary(0, [], 'active')
     expect(outputs.updateRepairSummary('another-operation', firstReplacement)).toBe(false)
-    expect(outputs.updateRepairSummary(intent.operationId, firstReplacement, 1_000)).toBe(true)
+    expect(outputs.updateRepairSummary(intent.operationId, firstReplacement)).toBe(true)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair).toMatchObject({
       replacementCount: 0,
       actionMode: 'receiving-notice',
@@ -607,7 +607,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       kind: 'receiving',
       activeLeaseId: 'lease',
     })
-    expect(outputs.updateLifecycle(receivingUpdate, 2_000, null, [], committed)).toBe(true)
+    expect(outputs.updateLifecycle(receivingUpdate, null, [], committed)).toBe(true)
     expect(outputs.getSnapshot().repairSummary?.committedCount).toBe(2)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
       .toMatchObject({ replacementCount: 2 })
@@ -620,7 +620,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(92, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.updateLifecycle(published, 3_000, null, [], terminalRepair)).toBe(true)
+    expect(outputs.updateLifecycle(published, null, [], terminalRepair)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       lifecycle: { kind: 'published' },
       lifecyclePresentation: {
@@ -673,7 +673,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(93, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.updateLifecycle(published, 2_000, null, [], null)).toBe(true)
+    expect(outputs.updateLifecycle(published, null, [], null)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       repairSummary: null,
       lifecyclePresentation: {

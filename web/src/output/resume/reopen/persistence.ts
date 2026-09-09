@@ -17,15 +17,12 @@ import {
   type PersistedReceiveRecord,
 } from '../../workspace/records'
 import {
-  createExpiryReceipt,
   decodePreparationAdmissionAuthority,
-  persistedReceiptRecord,
-  type ExpiryReceiptV1,
   type PreparationAdmissionReceiptV1,
 } from '../../workspace/receipts'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import { storedReceiveLifecycleState } from '../../workspace/state-codec'
-import { lifecycleDeadline, type PlanKind, type ReceiveLifecycleState } from '../../workspace/state'
+import type { PlanKind, ReceiveLifecycleState } from '../../workspace/state'
 import type { AdmittedWorkspaceContent, WorkspaceBudgetClaim } from '../../workspace/stages'
 import { receiveOperationResumeDescriptor, type ReceiveOperationResumeDescriptor } from '../descriptor'
 import type {
@@ -34,7 +31,6 @@ import type {
   PersistedWorkspaceBudgetReclaimInput,
   ReducerContext,
   ReopenResources,
-  StableLifecycleKind,
 } from './model'
 
 export async function expectedBindingRecord(
@@ -61,7 +57,6 @@ export async function expectedBindingRecord(
 export async function assertDescriptorAuthority(
   descriptor: ReceiveOperationResumeDescriptor,
   snapshot: PersistedReopenSnapshot,
-  nowMilliseconds: number,
   purpose: PersistedReceiveOperationReopenPurpose,
 ): Promise<void> {
   const lifecycleProjection = await storedReceiveLifecycleState(descriptor.lifecycle)
@@ -71,7 +66,7 @@ export async function assertDescriptorAuthority(
       !samePersistedRecord(snapshot.lifecycleRecord, lifecycleProjection)) {
     throw new DOMException('Receive resume descriptor is stale or foreign', 'InvalidStateError')
   }
-  const current = receiveOperationResumeDescriptor(snapshot.lifecycle, nowMilliseconds)
+  const current = receiveOperationResumeDescriptor(snapshot.lifecycle)
   if (current === undefined) {
     throw new DOMException('Receive lifecycle has no reopen authority', 'InvalidStateError')
   }
@@ -79,14 +74,12 @@ export async function assertDescriptorAuthority(
     throw new DOMException('Receive continuation requires explicit owner recovery', 'InvalidStateError')
   }
   if (purpose === 'continue') {
-    const crossedDeadline = current.continuation === 'cleanup-expired' &&
-      descriptor.expiresAt !== undefined && nowMilliseconds >= descriptor.expiresAt
     const nativeLocalCandidate = current.continuation === 'resume-receive' &&
       descriptor.continuation === 'resume-local-finalization' &&
       snapshot.operation.receiveIntent.plan.kind === 'workspace-then-publish' &&
       (snapshot.operation.receiveIntent.artifact.kind === 'zip-archive' ||
        snapshot.operation.receiveIntent.artifact.kind === 'original-file')
-    if ((!crossedDeadline && !nativeLocalCandidate && current.continuation !== descriptor.continuation) ||
+    if ((!nativeLocalCandidate && current.continuation !== descriptor.continuation) ||
         current.continuation === 'retry-cleanup') {
       throw new DOMException('Receive continuation is stale or inert', 'InvalidStateError')
     }
@@ -97,13 +90,12 @@ export async function persistReceiveResume(
   repository: ReceiveOperationRepository,
   snapshot: PersistedReopenSnapshot,
   lease: BrowserReceiveOperationLease,
-  nowMilliseconds: number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'receiving' }>> {
   const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
     kind: snapshot.lifecycle.kind === 'receiving' ? 'receive-authority-reacquired' : 'resume-started',
     expectedGeneration: snapshot.lifecycle.generation,
     leaseId: lease.leaseId,
-  }), reducerContext(snapshot.operation.receiveIntent, lease, nowMilliseconds))
+  }), reducerContext(snapshot.operation.receiveIntent, lease))
   if (reduction.status !== 'applied' || reduction.state.kind !== 'receiving') {
     throw new TypeError('receive reopen did not enter Receiving')
   }
@@ -120,14 +112,13 @@ export async function persistOwnershipAttention(
   repository: ReceiveOperationRepository,
   snapshot: PersistedReopenSnapshot,
   lease: BrowserReceiveOperationLease,
-  nowMilliseconds: number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>> {
   const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
     kind: 'ownership-unknown',
     expectedGeneration: snapshot.lifecycle.generation,
     leaseId: lease.leaseId,
     lastVerifiedRecordDigest: snapshot.operationRecord.digest,
-  }), reducerContext(snapshot.operation.receiveIntent, lease, nowMilliseconds))
+  }), reducerContext(snapshot.operation.receiveIntent, lease))
   if (reduction.status !== 'applied' || reduction.state.kind !== 'needs-attention') {
     throw new TypeError('unknown reopen ownership did not become NeedsAttention')
   }
@@ -138,46 +129,6 @@ export async function persistOwnershipAttention(
     lifecycle: reduction.state,
   })
   return reduction.state
-}
-
-export async function persistExpiry(
-  repository: ReceiveOperationRepository,
-  snapshot: PersistedReopenSnapshot,
-  lease: BrowserReceiveOperationLease,
-  nowMilliseconds: number,
-): Promise<Readonly<{
-  state: Extract<ReceiveLifecycleState, { kind: 'expired' }>
-  receipt: ExpiryReceiptV1
-}>> {
-  const deadline = lifecycleDeadline()
-  if (deadline === undefined || nowMilliseconds < deadline) {
-    throw new TypeError('receive expiry was requested before its stable deadline')
-  }
-  const receipt = await createExpiryReceipt({
-    operationId: snapshot.operation.operationId,
-    receiveIntentDigest: snapshot.operation.receiveIntentDigest,
-    priorStableState: stableLifecycleKind(snapshot.lifecycle),
-    expiresAt: deadline,
-    cleanupState: 'cleanup-pending',
-  })
-  const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
-    kind: 'expiry-observed',
-    expectedGeneration: snapshot.lifecycle.generation,
-    leaseId: lease.leaseId,
-    expiryReceiptDigest: receipt.digest,
-    cleanupState: 'cleanup-pending',
-  }), reducerContext(snapshot.operation.receiveIntent, lease, nowMilliseconds))
-  if (reduction.status !== 'applied' || reduction.state.kind !== 'expired') {
-    throw new TypeError('elapsed receive operation did not become Expired')
-  }
-  await repository.commitTransition({
-    operationId: snapshot.operation.operationId,
-    expectedLifecycleGeneration: snapshot.lifecycle.generation,
-    expectedLeaseId: lease.leaseId,
-    records: [await persistedReceiptRecord(receipt)],
-    lifecycle: reduction.state,
-  })
-  return Object.freeze({ state: reduction.state, receipt })
 }
 
 export async function readPersistedWorkspaceAdmission(
@@ -246,7 +197,6 @@ export function samePersistedRecord(
   if (actual === undefined || expected.id !== actual.id || expected.kind !== actual.kind ||
       expected.operationId !== actual.operationId || expected.digest !== actual.digest ||
       expected.reopenKey !== actual.reopenKey || expected.state !== actual.state ||
-      expected.expiresAt !== actual.expiresAt ||
       expected.lifecycleGeneration !== actual.lifecycleGeneration ||
       expected.canonicalBytes.byteLength !== actual.canonicalBytes.byteLength) return false
   return expected.canonicalBytes.every((byte, index) => byte === actual.canonicalBytes[index])
@@ -345,25 +295,10 @@ export const ZERO_CONTENT_REQUESTS = Object.freeze({ count: () => 0n })
 function reducerContext(
   intent: ReceiveIntent,
   lease: BrowserReceiveOperationLease,
-  nowMilliseconds: number,
 ): ReducerContext {
   return Object.freeze({
     planKind: intent.plan.kind as PlanKind,
     preparationRequired: false,
     activeLeaseId: lease.leaseId,
-    nowMilliseconds,
   })
-}
-
-function stableLifecycleKind(state: ReceiveLifecycleState): StableLifecycleKind {
-  switch (state.kind) {
-    case 'resumable-receive':
-    case 'resumable-package':
-    case 'waiting-to-save':
-    case 'download-started':
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required': return state.kind
-    default: throw new TypeError('receive expiry requires a stable lifecycle')
-  }
 }

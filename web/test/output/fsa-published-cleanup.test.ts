@@ -74,12 +74,11 @@ async function publishedFile(retirementFailures = 1) {
     cleanupPublishedDirectTree: input => cleanupReopenedPublishedFileSystemAccessOutput({
       ...input, checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
-      clock: CLOCK.now,
     }),
   })
   const authority = new ReceiveOperationResumeAuthority({
     source: { listLifecycleStates: async () => [await current()] },
-    mutations, clock: CLOCK,
+    mutations,
   })
   const retry = async () => {
     const inventory = await authority.listResumeState()
@@ -103,7 +102,6 @@ async function cleanupInput(fixture: Awaited<ReturnType<typeof publishedFile>>) 
     repository: fixture.repository, leaseId: fixture.leaseId,
     checkpointRepositoryFactory: fixture.checkpointFactory,
     openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
-    clock: CLOCK.now,
   }
 }
 
@@ -117,7 +115,7 @@ describe('published DirectTree metadata cleanup', () => {
 
     const result = await fixture.retry()
     expect(result).toMatchObject({
-      kind: 'retention-cleanup', result: { kind: 'cleanup-completed', terminalState: 'published' },
+      kind: 'cleanup', result: { kind: 'published-cleanup-completed' },
     })
     const after = await fixture.current()
     expect(after).toMatchObject({
@@ -129,7 +127,7 @@ describe('published DirectTree metadata cleanup', () => {
     expect(fixture.snapshots[0]).not.toBe(fixture.repository)
     expect(await fixture.repository.readLease(fixture.intent.operationId)).toBeUndefined()
     expect(fixture.repository.recordsOfKind(RECEIVE_RECORD_CLEANUP)).toHaveLength(1)
-    const continuation = receiveOperationResumeDescriptor(after, CLOCK.now())!.continuation
+    const continuation = receiveOperationResumeDescriptor(after)!.continuation
     expect(retainedOperationAuthority(continuation, true, false, false).actions).not.toContain('delete')
     expect(fixture.trace).toContainEqual(expect.objectContaining({
       eventName: 'cleanup', payload: expect.objectContaining({

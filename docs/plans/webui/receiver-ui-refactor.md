@@ -119,7 +119,7 @@ A task keeps its object/selection label and destination throughout its lifetime.
 | Waiting | The dependency preventing progress, what remains usable, and automatic reconnect or an appropriate action |
 | Paused | Retained progress and Continue; describe route-specific recovery limits |
 | Finishing | Local packaging, integrity checks, or final writing; keep the task visibly unfinished |
-| Ready to save | User action is required to save the retained result; Save is primary and retention timing is visible when relevant |
+| Ready to save | User action is required to save the retained result; Save is primary; retained data stays available until explicit deletion or verified publication |
 | Handed to browser | “Download started — check browser downloads”; WindShare cannot claim the browser saved the file |
 | Saved | A settled result and destination, with any remaining fidelity notice |
 | Needs action | A resolvable obstacle and its concrete next action |

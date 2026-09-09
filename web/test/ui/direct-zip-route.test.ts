@@ -107,8 +107,7 @@ describe('browser Direct ZIP route', () => {
   })
 
   it.each([
-    ['expired cleanup', expiredDirectZipLifecycle(), 'delete', 'expire'],
-    ['published cleanup retry', publishedDirectZipLifecycle(), 'delete', 'expire'],
+    ['published cleanup retry', publishedDirectZipLifecycle(), 'delete', 'cleanup'],
     ['published cleanup catch-up', publishedDirectZipLifecycle(), 'catch-up', 'catchUp'],
   ] as const)(
     'dispatches %s through the retained Direct ZIP runtime',
@@ -157,7 +156,7 @@ describe('browser Direct ZIP route', () => {
         expect(fixture.runtimeResume).not.toHaveBeenCalled()
         expect(fixture.deleteRetained).toHaveBeenCalledOnce()
       }
-      expect(fixture.mutations.expire).not.toHaveBeenCalled()
+      expect(fixture.mutations.cleanup).not.toHaveBeenCalled()
       expect(fixture.mutations.resume).toHaveBeenCalledOnce()
       expect(fixture.operation.close).toHaveBeenCalledOnce()
       inventory.close()
@@ -206,7 +205,7 @@ function directZipRetainedActionFixture(
   })
   const mutations = {
     resume: vi.fn(async () => active),
-    expire: vi.fn(async () => cleanup),
+    cleanup: vi.fn(async () => cleanup),
     discard: vi.fn(async () => ({ kind: 'already-absent' as const })),
     catchUp: vi.fn(async () => cleanup),
   } satisfies ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult>
@@ -239,19 +238,6 @@ async function listRetainedFixture(
     },
     new AbortController().signal,
   )
-}
-
-function expiredDirectZipLifecycle(): ReceiveLifecycleState {
-  return Object.freeze({
-    kind: 'expired',
-    operationId: 'expired-direct-zip',
-    receiveIntentDigest: 'intent',
-    generation: 3n,
-    priorStableState: 'resumable-receive',
-    expiresAt: 1_000,
-    cleanupState: 'cleanup-pending',
-    expiryReceiptDigest: 'expiry',
-  })
 }
 
 function publishedDirectZipLifecycle(): ReceiveLifecycleState {

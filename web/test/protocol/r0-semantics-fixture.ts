@@ -28,7 +28,6 @@ export type ReceiveLifecycleTerminalStateName =
   | 'partial-directory'
   | 'restart-required'
   | 'discarded'
-  | 'expired'
   | 'needs-attention'
 
 export type ReceiveLifecyclePlanName =
@@ -57,7 +56,6 @@ export interface ReceiveLifecycleSemanticsVector extends SemanticsVector {
   readonly restartReasons: Readonly<Record<string, number>>
   readonly resumableReceivePayloadKinds: Readonly<Record<string, number>>
   readonly directZipByteSemantics: Readonly<Record<string, string>>
-  readonly deadlineWritingStates: readonly []
   readonly publishedCleanupPendingRemains: 'published'
   readonly handoffNeverMeans: 'published'
   readonly completeArtifactsExclude: readonly 'partial-directory'[]
@@ -82,7 +80,6 @@ const RECEIVE_TERMINAL_STATES = new Set<string>([
   'partial-directory',
   'restart-required',
   'discarded',
-  'expired',
   'needs-attention',
 ])
 
@@ -111,9 +108,6 @@ export function requireReceiveLifecycleSemanticsVector(
       !isIntegerRecord(value.resumableReceivePayloadKinds) ||
       !isStringRecord(value.directZipByteSemantics)) {
     throw new Error('receive lifecycle direct-resume projections are malformed')
-  }
-  if (!Array.isArray(value.deadlineWritingStates) || value.deadlineWritingStates.length !== 0) {
-    throw new Error('receive lifecycle deadline-writing states are malformed')
   }
   if (value.publishedCleanupPendingRemains !== 'published' ||
       value.handoffNeverMeans !== 'published' ||

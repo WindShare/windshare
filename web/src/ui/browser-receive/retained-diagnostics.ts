@@ -68,7 +68,6 @@ export function bindRuntimeOutputFailures(
     interrupt: (control, transfer) => runtime.interrupt(control, transfer),
     startLifecycleAction: (action, lifecycle) =>
       runtime.startLifecycleAction(action, lifecycle),
-    observeExpiry: lifecycle => runtime.observeExpiry(lifecycle),
     resolveWorkspaceUsage: lifecycle => runtime.resolveWorkspaceUsage(lifecycle),
     settleTransferAdmissionFailure: reason => runtime.settleTransferAdmissionFailure(reason),
     detach: () => runtime.detach(),

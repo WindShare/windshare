@@ -17,7 +17,6 @@ import {
 import { snapshotIdentity } from '../canonical'
 import type {
   CleanupReceiptV1,
-  ExpiryReceiptV1,
   PreparationAdmissionReceiptV1,
 } from '../receipts'
 import {
@@ -265,12 +264,6 @@ export type WorkspaceStageTraceEvent =
       restored_completed_bytes: bigint
     }>
   | Readonly<{
-      name: 'receive.operation.expired'
-      operation_id: string
-      prior_stable_state: ExpiryReceiptV1['priorStableState']
-      expires_at_ms: number
-    }>
-  | Readonly<{
       name: 'receive.operation.discarded' | 'receive.operation.cleanup_completed'
       operation_id: string
       cleanup_generation: bigint
@@ -374,19 +367,4 @@ export function mergeHandleIds(...groups: readonly (readonly string[])[]): reado
   }
   values.sort()
   return Object.freeze(values)
-}
-
-export function stableStateKind(
-  state: ReceiveLifecycleState,
-): ExpiryReceiptV1['priorStableState'] {
-  switch (state.kind) {
-    case 'resumable-receive':
-    case 'resumable-package':
-    case 'waiting-to-save':
-      return state.kind
-    case 'download-started':
-      if (state.attemptKind === 'workspace') return state.kind
-      break
-  }
-  throw new TypeError('workspace state is not durably expirable')
 }

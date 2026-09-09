@@ -255,11 +255,9 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
   })
   readonly interruptions: Array<{ control: V2ActiveReceiveControl; inClickStack: boolean }> = []
   readonly lifecycleActions: Array<{ action: LifecycleUserAction; inClickStack: boolean }> = []
-  readonly expiryObservations: ReceiveLifecycleState[] = []
   readonly detachments: unknown[] = []
   readonly admissionFailures: unknown[] = []
   currentOutputFailures: OutputFailureSinks | undefined
-  expiryFailure: unknown
   detachFailure: unknown
   controlStack: () => boolean = () => true
   lifecycleActionStack: () => boolean = () => true
@@ -302,15 +300,6 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
   ): V2LifecycleMutation {
     this.lifecycleActions.push({ action, inClickStack: this.lifecycleActionStack() })
     return this.nextLifecycleAction(action, lifecycle)
-  }
-
-  async observeExpiry(lifecycle: ReceiveLifecycleState): Promise<V2LifecycleMutation> {
-    this.expiryObservations.push(lifecycle)
-    if (this.expiryFailure !== undefined) {
-      recordOutputException(this.currentOutputFailures?.checkpoint, this.expiryFailure)
-      throw this.expiryFailure
-    }
-    return { lifecycle, workspaceUsage: this.initialWorkspaceUsage }
   }
 
   resolveWorkspaceUsage(): WorkspaceUsage {

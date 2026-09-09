@@ -1,5 +1,4 @@
 import {
-  lifecycleDeadline,
   nextReceiveLifecycleState,
   type NeedsAttentionReason,
   type PlanKind,
@@ -89,12 +88,10 @@ export type AbandonedOperationObservation =
       kind: 'handoff'
       outcome: 'started' | 'not-started' | 'unknown'
       lastVerifiedRecordDigest: string
-      expiryReceiptDigest: string
     }>
   | Readonly<{
       kind: 'verified-download'
       lastVerifiedRecordDigest: string
-      expiryReceiptDigest: string
     }>
   | Readonly<{
       kind: 'published-cleanup'
@@ -111,7 +108,6 @@ export type AbandonedOperationObservation =
 export interface RecoveryContext {
   readonly planKind: PlanKind
   readonly nowMilliseconds: number
-  readonly expiryReceiptDigest: string
   readonly onTrace?: ReceiveOperationTraceListener
 }
 
@@ -127,16 +123,7 @@ export function recoverAbandonedOperation(
 ): RecoveryReduction {
   requireRecoveryClock(context.nowMilliseconds)
   assertDurableRecoveryPlan(state, context.planKind)
-  const deadline = lifecycleDeadline()
-  let reduction: RecoveryReduction
-  if (deadline !== undefined && context.nowMilliseconds >= deadline) {
-    reduction = Object.freeze({
-      state: expiredState(state, deadline, context.expiryReceiptDigest),
-      decision: 'expired',
-    })
-  } else {
-    reduction = recoverUnexpired(state, observation, context)
-  }
+  const reduction = recoverObservedState(state, observation, context)
   observeRecovery({
     ...(context.onTrace === undefined ? {} : { listener: context.onTrace }),
     atMilliseconds: context.nowMilliseconds,
@@ -147,7 +134,7 @@ export function recoverAbandonedOperation(
   return reduction
 }
 
-function recoverUnexpired(
+function recoverObservedState(
   state: ReceiveLifecycleState,
   observation: AbandonedOperationObservation,
   context: RecoveryContext,
@@ -393,21 +380,6 @@ function resumableReceive(
   })
 }
 
-function expiredState(
-  state: ReceiveLifecycleState,
-  expiresAt: number,
-  expiryReceiptDigest: string,
-): ReceiveLifecycleState {
-  const priorStableState = stableStateKind(state)
-  return nextReceiveLifecycleState(state, {
-    kind: 'expired',
-    priorStableState,
-    expiresAt,
-    cleanupState: 'cleanup-pending',
-    expiryReceiptDigest,
-  })
-}
-
 function attentionReduction(
   state: ReceiveLifecycleState,
   reason: NeedsAttentionReason,
@@ -472,16 +444,4 @@ function assertDurableRecoveryPlan(
        state.kind === 'restart-required')) {
     throw new TypeError('lifecycle state does not belong to Workspace recovery')
   }
-}
-
-function stableStateKind(
-  state: ReceiveLifecycleState,
-): import('./state').RetainedLifecycleKind {
-  if (state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
-      state.kind === 'waiting-to-save' || state.kind === 'download-started' ||
-      state.kind === 'authorization-required' ||
-      state.kind === 'target-verification-required' ||
-      state.kind === 'destination-space-required') return state.kind
-  if (state.kind === 'handing-off') return 'waiting-to-save'
-  throw new TypeError('recovery expiry requires a stable state')
 }

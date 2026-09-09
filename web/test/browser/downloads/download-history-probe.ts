@@ -77,7 +77,7 @@ export async function rejectUnfinishedHistoryRemoval(key: string) {
   try {
     await repository.commitTransition({ operationId: intent.operationId,
       records: [storedReceiveOperationRecord(operation), await storedReceiveLifecycleState(lifecycle)] })
-    const descriptor = receiveOperationResumeDescriptor(lifecycle, 1)!
+    const descriptor = receiveOperationResumeDescriptor(lifecycle)!
     let rejected = false
     try { await forgetReceiveOperationHistory(descriptor, repository) } catch { rejected = true }
     return { rejected, retained: (await repository.readLifecycle(intent.operationId)) !== undefined }

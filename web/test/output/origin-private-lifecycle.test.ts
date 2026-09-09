@@ -12,8 +12,6 @@ import {
   type ReceiveLifecycleStatePayload,
 } from '../../src/output/workspace/state'
 
-const NOW = 10_000
-const AFTER_THIRTY_DAYS = NOW + 30 * 24 * 60 * 60 * 1_000
 const OPERATION_ID = identity(16, 1)
 const INTENT_DIGEST = identity(32, 2)
 const LEASE_ID = identity(16, 3)
@@ -25,15 +23,15 @@ describe('origin-private aggregate lifecycle', () => {
     const first = apply(waiting, {
       kind: 'save-requested',
       publicationAttemptId: identity(16, 5),
-    }, NOW + 1)
+    })
     const restored = apply(first, {
       kind: 'publication-not-committed',
       reason: 'user-cancelled',
-    }, NOW + 2)
+    })
     const retried = apply(restored, {
       kind: 'save-requested',
       publicationAttemptId: identity(16, 6),
-    }, AFTER_THIRTY_DAYS)
+    })
 
     expect(restored).toEqual(expect.objectContaining({
       kind: 'waiting-to-save',
@@ -116,7 +114,6 @@ function state(payload: ReceiveLifecycleStatePayload): ReceiveLifecycleState {
 function apply(
   current: ReceiveLifecycleState,
   event: EventPayload,
-  nowMilliseconds = NOW,
 ): ReceiveLifecycleState {
   return reduceReceiveLifecycle(current, {
     ...event,
@@ -125,7 +122,6 @@ function apply(
   } as Parameters<typeof reduceReceiveLifecycle>[1], {
     planKind: 'workspace-then-publish',
     preparationRequired: false,
-    nowMilliseconds,
     activeLeaseId: LEASE_ID,
   }).state
 }

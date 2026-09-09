@@ -290,14 +290,13 @@ describe('browser production receive composition', () => {
 
     expect(continuations).toEqual({
       'download-started': 'retry-download',
-      expired: 'cleanup-expired',
       'needs-attention': 'needs-attention',
       published: 'restoration-available',
       'resumable-package': 'resume-package',
       'resumable-receive': 'resume-receive',
       'waiting-to-save': 'save-artifact',
     })
-    expect(operations).toHaveLength(8)
+    expect(operations).toHaveLength(7)
     expect(operations[0]?.lifecycle).not.toHaveProperty('verifiedRanges')
     expect(operations.every(operation => operation.actions.length === 0)).toBe(true)
     expect(source.closeCalls).toBe(0)
@@ -340,9 +339,9 @@ describe('browser production receive composition', () => {
       completedFileCount: 1n,
       completedBytes: 64n,
     })])
-    const expire = vi.fn(async () => {
+    const cleanup = vi.fn(async () => {
       return Object.freeze({
-        kind: 'retention-cleanup',
+        kind: 'cleanup',
         result: Object.freeze({ kind: 'already-absent' }),
       }) as AuthorityOwnedReceiveOperationMutationResult
     })
@@ -350,7 +349,7 @@ describe('browser production receive composition', () => {
     const mutations: ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> =
       Object.freeze({
         resume: () => Promise.reject(new Error('unexpected resume')),
-        expire,
+        cleanup,
         discard,
       })
     const composition = createBrowserReceiveComposition(
@@ -371,11 +370,11 @@ describe('browser production receive composition', () => {
       'discard',
       new AbortController().signal,
     )).rejects.toMatchObject({ name: 'InvalidStateError' })
-    expect(expire).not.toHaveBeenCalled()
+    expect(cleanup).not.toHaveBeenCalled()
 
     await inventory.act(operation, 'discard', new AbortController().signal)
 
-    expect(expire).not.toHaveBeenCalled()
+    expect(cleanup).not.toHaveBeenCalled()
     expect(discard).toHaveBeenCalledOnce()
     expect(source.closeCalls).toBe(0)
     inventory.close()
@@ -398,7 +397,7 @@ describe('browser production receive composition', () => {
     const mutations: ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> =
       Object.freeze({
         resume: () => Promise.reject(new Error('unexpected resume')),
-        expire: () => Promise.reject(new Error('unexpected expiry')),
+        cleanup: () => Promise.reject(new Error('unexpected cleanup')),
         discard,
       })
     const composition = createBrowserReceiveComposition(
@@ -450,7 +449,7 @@ describe('browser output attempt ownership', () => {
           recordOutputException(request?.failures?.reopen, reopenFailure)
           return Promise.reject(reopenFailure)
         },
-        expire: () => Promise.reject(new Error('unexpected expiry')),
+        cleanup: () => Promise.reject(new Error('unexpected cleanup')),
         discard: (
           _descriptor: ReceiveOperationResumeDescriptor,
           failures?: OutputFailureSinks,

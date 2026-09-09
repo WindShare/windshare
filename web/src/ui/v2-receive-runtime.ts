@@ -80,7 +80,6 @@ export interface V2BoundReceiveOperation {
     lifecycle: ReceiveLifecycleState,
   ): V2LifecycleMutation | PromiseLike<V2LifecycleMutation>
 
-  observeExpiry(lifecycle: ReceiveLifecycleState): Promise<V2LifecycleMutation>
   resolveWorkspaceUsage(
     lifecycle: ReceiveLifecycleState,
   ): WorkspaceUsage | null | PromiseLike<WorkspaceUsage | null>
@@ -172,7 +171,6 @@ export interface V2RetainedReceiveOperation {
   readonly lifecycleGeneration: bigint
   readonly lifecycle: ReceiveLifecycleState
   readonly continuation: ReceiveOperationContinuation
-  readonly expiresAt?: number
   readonly actions: readonly V2RetainedReceiveAction[]
   readonly sourceRevisionFailures?: import('../output/resume/source-revision-failures').SourceRevisionFailures
   readonly recoverySummary?: RecoverySummary

@@ -473,14 +473,15 @@ describe('v2 receive attempt observability', () => {
     await turns()
     const priorError = controller.getSnapshot().error
     const priorDecisionCount = diagnostics.decisions.length
-    runtime.expiryFailure = new DOMException('private expiry detail', 'AbortError')
+    const retained = controller.getSnapshot().output.lifecycle
+    vi.setSystemTime(new Date('2030-01-01'))
 
     await vi.advanceTimersByTimeAsync(1_000)
     await turns()
 
     expect(controller.getSnapshot().error).toBe(priorError)
     expect(diagnostics.decisions.slice(priorDecisionCount)).toEqual([])
-    expect(runtime.expiryObservations).toEqual([])
+    expect(controller.getSnapshot().output.lifecycle).toBe(retained)
     expect(diagnostics.decisions.slice(priorDecisionCount))
       .not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'incident' })]))
     await controller.dispose()
@@ -507,7 +508,6 @@ describe('v2 receive attempt observability', () => {
 
     await vi.advanceTimersByTimeAsync(1_000)
     await turns()
-    expect(runtime.expiryObservations).toHaveLength(0)
     expect(controller.getSnapshot().output.lifecyclePresentation).toMatchObject({
       stateKind: 'waiting-to-save',
       title: 'Ready to save',

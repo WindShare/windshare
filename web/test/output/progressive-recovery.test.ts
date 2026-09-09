@@ -66,7 +66,7 @@ describe('native ZIP retained recovery authority', () => {
           return 'remote-content-needed'
         },
       },
-      mutations: { resume: async () => undefined, expire: async () => undefined,
+      mutations: { resume: async () => undefined, cleanup: async () => undefined,
         discard: async () => ({ kind: 'already-absent' }) },
     })
     const inventory = await authority.listResumeState()
@@ -80,7 +80,7 @@ describe('native ZIP retained recovery authority', () => {
     const resume = vi.fn(async () => 'complete')
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle], readProgressiveRequirement: async () => 'local-finalization' },
-      mutations: { resume, expire: async () => 'expired', discard: async () => ({ kind: 'already-absent' }) },
+      mutations: { resume, cleanup: async () => 'expired', discard: async () => ({ kind: 'already-absent' }) },
     })
     const reference = (await authority.listResumeState()).operations[0]!
     expect(reference.descriptor.continuation).toBe('resume-local-finalization')

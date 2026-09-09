@@ -560,7 +560,6 @@ async function productionPlanAuthority(input: Readonly<{
     repository: input.repository,
     lifecycleLeaseId: input.lifecycleLeaseId,
     transferJobId: input.transferJobId,
-    clock: () => 1_000,
     ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
   })
   return createV2PlanExecutionAuthority({

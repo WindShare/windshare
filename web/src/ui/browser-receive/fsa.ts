@@ -55,7 +55,6 @@ import type {
   V2LifecycleMutation,
 } from '../v2-receive-runtime'
 import {
-  operationDigest,
   readLifecycle,
   transitionLifecycle,
   unavailableRoute,
@@ -383,23 +382,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       if (session === undefined) throw error
       return closeFSAContinuationAfterFailure(session, error)
     }
-  }
-
-  async observeExpiry(lifecycle: ReceiveLifecycleState): Promise<V2LifecycleMutation> {
-    this.#requireAttached()
-    const expiryReceiptDigest = await operationDigest(this.intent, 'fsa-expiry')
-    const expired = await transitionLifecycle(
-      this.#repository,
-      this.intent,
-      this.#lease.leaseId,
-      {
-        kind: 'expiry-observed',
-        expiryReceiptDigest,
-        cleanupState: 'clean',
-      },
-      lifecycle,
-    )
-    return Object.freeze({ lifecycle: expired, workspaceUsage: null })
   }
 
   resolveWorkspaceUsage(): null {

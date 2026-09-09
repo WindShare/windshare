@@ -28,7 +28,6 @@ export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{
   openSession?: (
     operation: ReopenedDirectTreeOperation,
   ) => Promise<FileSystemAccessCompatibleNameCatchUpSession>
-  clock?: () => number
 }>): Promise<FileSystemAccessCompatibleNameCatchUpResult> {
   input.signal.throwIfAborted()
   const session = await (input.openSession ?? openCompatibleNameCatchUpSession)(input.operation)
@@ -61,7 +60,6 @@ export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{
         input.operation,
         pending,
         receipt,
-        input.clock ?? Date.now,
       )
       const cleanup = async () => {
         await session.retireRecoveryMetadata()
@@ -73,7 +71,6 @@ export async function catchUpFileSystemAccessCompatibleNames(input: Readonly<{
           lifecycle,
           repository: input.operation.repository,
           leaseId: input.operation.lease.leaseId,
-          ...(input.clock === undefined ? {} : { clock: input.clock }),
           cleanup,
         })).lifecycle
       } else {
@@ -111,7 +108,6 @@ async function reconcilePendingTerminalLifecycle(
   operation: ReopenedDirectTreeOperation,
   pending: CompatibleNamePendingTerminalOutcomeV1,
   receipt: PersistedReceiveRecord,
-  clock: () => number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'published' | 'partial-directory' }>> {
   const desired = requirePendingTerminalLifecycle(pending)
   if (receipt.operationId !== operation.intent.operationId ||
@@ -127,7 +123,6 @@ async function reconcilePendingTerminalLifecycle(
     planKind: 'direct-tree' as const,
     preparationRequired: false,
     activeLeaseId: operation.lease.leaseId,
-    nowMilliseconds: clock(),
   }
   current = await rebindCatchUpLifecycle(operation, current, context)
   if (pending.footerState === 'stopped') {

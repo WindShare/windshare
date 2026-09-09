@@ -10,10 +10,6 @@ import {
   type ReceiveOperationResumeDescriptor,
 } from './descriptor'
 
-export interface ResumeOperationClock {
-  now(): number
-}
-
 export interface ReceiveOperationResumeSource {
   listDirectZipBootstrapCandidates?(): Promise<readonly DirectZipBootstrapResumeDescriptorV1[]>
   listLifecycleStates(): Promise<readonly ReceiveLifecycleState[]>
@@ -42,8 +38,7 @@ export type ReceiveOperationDiscardResult =
   | Readonly<{ kind: 'discarded'; cleanupReceiptDigest: string }>
   | Readonly<{ kind: 'partial-directory'; receiptDigest: string }>
   | Readonly<{
-      kind: 'cleanup-completed'
-      terminalState: 'published' | 'expired'
+      kind: 'published-cleanup-completed'
       cleanupReceiptDigest: string
     }>
   | Readonly<{ kind: 'already-absent' }>
@@ -59,7 +54,7 @@ export interface ReceiveOperationMutationPort<TResult = unknown> {
     descriptor: ReceiveOperationResumeDescriptor,
     request?: ReceiveOperationResumeRequest,
   ): Promise<TResult>
-  expire(
+  cleanup(
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<TResult>
@@ -128,21 +123,17 @@ export class ReceiveOperationResumeInventory {
 export class ReceiveOperationResumeAuthority<TResult = unknown> {
   readonly #source: ReceiveOperationResumeSource
   readonly #mutations: ReceiveOperationMutationPort<TResult>
-  readonly #clock: ResumeOperationClock
   readonly #owners = new WeakMap<ReceiveOperationResumeRef, ResumeReferenceOwner>()
 
   constructor(input: {
     readonly source: ReceiveOperationResumeSource
     readonly mutations: ReceiveOperationMutationPort<TResult>
-    readonly clock?: ResumeOperationClock
   }) {
     this.#source = input.source
     this.#mutations = input.mutations
-    this.#clock = input.clock ?? SYSTEM_CLOCK
   }
 
   async listResumeState(): Promise<ReceiveOperationResumeInventory> {
-    const now = this.#clock.now()
     // Pre-intent filesystem effects must be surfaced before intent-backed retained work.
     const directZipBootstrapCandidates = this.#source.listDirectZipBootstrapCandidates === undefined
       ? []
@@ -151,7 +142,7 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     const owner: ResumeReferenceOwner = { open: true }
     const references: ReceiveOperationResumeRef[] = []
     for (const lifecycle of lifecycles) {
-      const projected = receiveOperationResumeDescriptor(lifecycle, now)
+      const projected = receiveOperationResumeDescriptor(lifecycle)
       if (projected === undefined) continue
       const cleanupOnly = await this.#source.isCleanupOnly?.(lifecycle.operationId) ?? false
       const identity = cleanupOnly ? undefined : await this.#source.readOperationIdentity?.(lifecycle)
@@ -202,14 +193,10 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
   ): Promise<TResult> {
     requireMatchingRetainedFileRecovery(reference, request?.retainedFileRecovery)
     const descriptor = this.#consume(reference)
-    const now = this.#clock.now()
     if (descriptor.continuation === 'cleanup-incompatible') {
       throw new DOMException('Incompatible saved records can only be forgotten', 'InvalidStateError')
     }
-    if (descriptor.expiresAt !== undefined && now >= descriptor.expiresAt) {
-      return this.#mutations.expire(descriptor, request?.failures)
-    }
-    assertReceiveOperationCanContinue(descriptor, now)
+    assertReceiveOperationCanContinue(descriptor)
     return this.#mutations.resume(descriptor, request)
   }
 
@@ -232,13 +219,11 @@ export class ReceiveOperationResumeAuthority<TResult = unknown> {
     failures?: OutputFailureSinks,
   ): Promise<TResult> {
     const descriptor = this.#consume(reference)
-    if (descriptor.continuation !== 'cleanup-expired' &&
-        descriptor.continuation !== 'retry-cleanup') {
+    if (descriptor.continuation !== 'retry-cleanup') {
       throw new DOMException('Receive operation has no retained cleanup authority', 'InvalidStateError')
     }
-    // Expiry owns the cleanup-purpose reopen. Keeping that cut behind this
-    // single-use reference prevents presentation from replaying a descriptor.
-    return this.#mutations.expire(descriptor, failures)
+    // The single-use reference prevents presentation from replaying cleanup authority.
+    return this.#mutations.cleanup(descriptor, failures)
   }
 
   async catchUp(
@@ -300,5 +285,3 @@ function requireMatchingRecoverySummary(
     throw new TypeError('recovery summary does not match its resume inventory lifecycle')
   }
 }
-
-const SYSTEM_CLOCK: ResumeOperationClock = Object.freeze({ now: () => Date.now() })

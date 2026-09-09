@@ -147,7 +147,7 @@ export class ActiveReceiveObservability {
     transition: Extract<V2ReceiverTraceEvent, {
       name: 'lifecycle_action_transition'
     }>['transition'],
-    action: LifecycleUserAction | 'expiry',
+    action: LifecycleUserAction,
     lifecycleKind?: ReceiveLifecycleState['kind'],
   ): void {
     const observer = this.#traceSource?.current

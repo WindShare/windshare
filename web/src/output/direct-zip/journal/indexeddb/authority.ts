@@ -448,7 +448,7 @@ export function samePersistedRecordRow(
 ): boolean {
   return isObjectRow(input) && input.id === expected.id && input.kind === expected.kind &&
     input.operationId === expected.operationId && input.digest === expected.digest &&
-    input.state === expected.state && input.expiresAt === expected.expiresAt &&
+    input.state === expected.state &&
     input.lifecycleGeneration === expected.lifecycleGeneration &&
     input.canonicalBytes instanceof Uint8Array &&
     equalCanonicalBytes(input.canonicalBytes, expected.canonicalBytes)

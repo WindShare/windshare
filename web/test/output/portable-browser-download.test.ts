@@ -436,7 +436,7 @@ describe('immutable packaged File browser handoff', () => {
     expect(release).toHaveBeenCalledOnce()
   })
 
-  it('creates a fresh bounded URL for each attempt without changing package or expiry identity', async () => {
+  it('creates a fresh bounded URL for each attempt without changing package identity', async () => {
     const artifact = await packagedArtifact(3n)
     const firstAttempt = await packagedAttempt(artifact, 21, true)
     const secondAttempt = await packagedAttempt(artifact, 22, true)

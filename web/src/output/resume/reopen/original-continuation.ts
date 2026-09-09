@@ -42,7 +42,7 @@ export async function sealCompletedOriginalFile(input: {
     // Metadata alone cannot authorize a missing or replaced OPFS object.
     const file = await packages.readOwnedFile(proof.ownedObjectId)
     if (BigInt(file.size) !== proof.exactSize) throw new TargetOwnershipUnknownError('commit', intent.operationId)
-    await persistReceiveResume(authority.repository, authority.snapshot, authority.lease, input.now)
+    await persistReceiveResume(authority.repository, authority.snapshot, authority.lease)
     await stages.sealMaterialization({
       transferJobId: intent.operationId,
       generations: [{

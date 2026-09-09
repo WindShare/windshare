@@ -54,8 +54,6 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/resu
       'Receiving is inactive. Review the retained output and available filename restoration actions.', continuation)
     case 'cleanup-incompatible': return stage('needs-action', 'Saved record needs removal',
       'This record cannot be continued. Removing it leaves exported files untouched.', continuation)
-    case 'cleanup-expired': return stage('cancelled', 'Retention ended',
-      'Only cleanup of owned retained data is available.', continuation)
     case 'retry-cleanup': return stage('needs-action', 'Cleanup needs attention',
       'Review the retained result before retrying cleanup of owned temporary data.', continuation)
     case 'reauthorize-direct-zip': return stage('needs-action', 'Authorize the save destination',
@@ -109,7 +107,6 @@ function executionStage(facts: TaskFacts): StageCopy {
     case 'needs-attention': return stage('needs-action', 'Needs action', attentionDescription(state.reason), state.reason)
     case 'restart-required': return stage('failed', 'Download needs a new attempt', restartDescription(state.reason), state.reason)
     case 'discarded': return stage('cancelled', 'Cancelled', 'Task-owned unfinished data and records were removed.', state.kind)
-    case 'expired': return stage('cancelled', 'Retention ended', 'This task can no longer continue.', state.kind)
     default: throw new TypeError('settled task must be resolved before execution stage')
   }
 }

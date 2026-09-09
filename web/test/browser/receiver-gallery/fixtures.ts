@@ -86,8 +86,7 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
     repositoryRef: identity(42, 32), artifact })
   const plan = await createWorkspaceThenPublishPlan(artifact, binding)
   const lifecyclePresentation = presentReceiveLifecycle({
-    state: facts.lifecycle, artifact, plan, nowMilliseconds: 1_700_000_000_000,
-    activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
+    state: facts.lifecycle, artifact, plan, activeControls: facts.lifecycle.kind === 'receiving' ? ['pause', 'stop'] : [],
     repairSummary: scenario === 'saved-cleanup' ? {
       committedCount: 1, logicalPathSample: [['project', 'settings.cfg']],
       pairDisplayNames: { script: 'restore.windshare-abc234.ps1', sidecar: 'restore.windshare-abc234.data' },

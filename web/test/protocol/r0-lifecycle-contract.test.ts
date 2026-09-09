@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { CanonicalRecordReader } from '../../src/output/workspace/canonical-reader'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import { isTerminalLifecycleState, lifecycleDeadline } from '../../src/output/workspace/state'
+import { isTerminalLifecycleState } from '../../src/output/workspace/state'
 
 import {
   classifyConnectionSize,
@@ -273,10 +273,9 @@ describe('R0 receive recovery and lifecycle contract', () => {
       'partial-directory',
       'restart-required',
       'discarded',
-      'expired',
       'needs-attention',
     ])
-    expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 16, 17, 18, 19, 20])
+    expect(lifecycle.terminalStates.map((state) => state.byte)).toEqual([14, 16, 17, 18, 20])
     expect(lifecycle.nonterminalRecoveryStates).toEqual([
       { state: 'download-started', byte: 15, plans: ['workspace-then-publish', 'portable-handoff'] },
       { state: 'authorization-required', byte: 21 },
@@ -290,8 +289,6 @@ describe('R0 receive recovery and lifecycle contract', () => {
       safeResumeBytes: 'selected-source-payload-bytes-covered-by-verified-checkpoint',
       committedArchiveLength: 'verified-target-prefix-bytes',
     })
-    expect(lifecycle.deadlineWritingStates).toEqual([])
-    expect(lifecycleDeadline()).toBeUndefined()
     expect(lifecycle.publishedCleanupPendingRemains).toBe('published')
     expect(lifecycle.handoffNeverMeans).toBe('published')
     expect(lifecycle.completeArtifactsExclude).toEqual(['partial-directory'])
@@ -314,7 +311,7 @@ describe('R0 receive recovery and lifecycle contract', () => {
     reader.framedU64('generation')
     reader.frame('state')
     expect(reader.frame('payload kind')).toEqual(Uint8Array.of(lifecycle.resumableReceivePayloadKinds['opfs-zip']!))
-    expect(record.expiresAt).toBeUndefined()
+    expect(record).not.toHaveProperty('expiresAt')
     expect(isTerminalLifecycleState({
       kind: 'download-started', attemptKind: 'workspace',
       operationId: identity(16), receiveIntentDigest: identity(32), generation: 1n,

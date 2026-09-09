@@ -99,9 +99,8 @@ implements ReceiveOperationOwnedCleanupExecutor {
           : { diagnostics: { backend: 'origin_private', failures } as const }),
       })
       const request = await backend.cleanup.cleanupRequest()
-      const result = operation.lifecycle.kind === 'expired' ||
-          (operation.lifecycle.kind === 'published' && operation.lifecycle.cleanupState === 'cleanup-pending')
-        ? await operation.stages.retryTerminalCleanup(request)
+      const result = operation.lifecycle.kind === 'published' && operation.lifecycle.cleanupState === 'cleanup-pending'
+        ? await operation.stages.retryPublishedCleanup(request)
         : await operation.stages.discard(request)
       if (result.kind === 'retryable-failure') {
         throw new DOMException('Owned workspace cleanup must be retried', 'OperationError')
@@ -115,10 +114,9 @@ implements ReceiveOperationOwnedCleanupExecutor {
           cleanupReceiptDigest: result.receipt.digest,
         })
       }
-      if (result.state.kind === 'published' || result.state.kind === 'expired') {
+      if (result.state.kind === 'published') {
         return Object.freeze({
-          kind: 'cleanup-completed',
-          terminalState: result.state.kind,
+          kind: 'published-cleanup-completed',
           cleanupReceiptDigest: result.receipt.digest,
         })
       }
@@ -145,8 +143,7 @@ implements ReceiveOperationOwnedCleanupExecutor {
           ...(this.#outputTrace === undefined ? {} : { trace: this.#outputTrace }),
         })
         return Object.freeze({
-          kind: 'cleanup-completed',
-          terminalState: 'published',
+          kind: 'published-cleanup-completed',
           cleanupReceiptDigest: result.receiptDigest,
         })
       }
@@ -163,7 +160,7 @@ export type AuthorityOwnedReceiveOperationMutationResult =
       kind: 'continuation'
       continuation: AuthorityOwnedReceiveOperationContinuation
     }>
-  | Readonly<{ kind: 'retention-cleanup'; result: ReceiveOperationDiscardResult }>
+  | Readonly<{ kind: 'cleanup'; result: ReceiveOperationDiscardResult }>
 
 export type AuthorityOwnedReceiveOperationContinuation =
   | Readonly<{ kind: 'direct-tree-receive'; operation: ReopenedDirectTreeOperation }>
@@ -244,7 +241,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     })
   }
 
-  async expire(
+  async cleanup(
     descriptor: ReceiveOperationResumeDescriptor,
     failures?: OutputFailureSinks,
   ): Promise<AuthorityOwnedReceiveOperationMutationResult> {
@@ -253,7 +250,7 @@ implements ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationRe
     if (operation.kind === 'direct-zip') return directZipRetainedCleanup(operation)
     try {
       return Object.freeze({
-        kind: 'retention-cleanup',
+        kind: 'cleanup',
         result: await this.#cleanup.cleanup(operation, failures),
       })
     } finally {
@@ -390,11 +387,7 @@ function projectDirectTreeDiscard(
   if (result.lifecycle.kind === 'discarded') {
     return Object.freeze({ kind: 'discarded', cleanupReceiptDigest: result.receiptDigest })
   }
-  return Object.freeze({
-    kind: 'cleanup-completed',
-    terminalState: 'expired',
-    cleanupReceiptDigest: result.receiptDigest,
-  })
+  throw new TypeError('DirectTree discard returned a non-terminal lifecycle')
 }
 
 function classifyReopenedContinuation(

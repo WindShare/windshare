@@ -281,15 +281,9 @@ export class WorkspaceOperationStages {
     return this.#cleanup.discard(...args)
   }
 
-  expireIfDue(
-    ...args: Parameters<WorkspaceCleanupStages['expireIfDue']>
-  ): ReturnType<WorkspaceCleanupStages['expireIfDue']> {
-    return this.#cleanup.expireIfDue(...args)
-  }
-
-  retryTerminalCleanup(
-    ...args: Parameters<WorkspaceCleanupStages['retryTerminalCleanup']>
-  ): ReturnType<WorkspaceCleanupStages['retryTerminalCleanup']> {
-    return this.#cleanup.retryTerminalCleanup(...args)
+  retryPublishedCleanup(
+    ...args: Parameters<WorkspaceCleanupStages['retryPublishedCleanup']>
+  ): ReturnType<WorkspaceCleanupStages['retryPublishedCleanup']> {
+    return this.#cleanup.retryPublishedCleanup(...args)
   }
 }

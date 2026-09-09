@@ -35,7 +35,7 @@ export interface DurableIdentities {
   readonly generation: string
   readonly rootOwnedObjectId: string
   readonly transferJobId: string
-  readonly expiryReceiptDigest: string
+  readonly checkpointSetDigest: string
   readonly firstPublicationAttemptId: string
   readonly secondPublicationAttemptId: string
 }
@@ -54,7 +54,7 @@ export async function durableIdentities(key: string): Promise<DurableIdentities>
     generation: await durableFixtureIdentity(key, 'generation', 16),
     rootOwnedObjectId: await durableFixtureIdentity(key, 'workspace-root-object', 32),
     transferJobId: await durableFixtureIdentity(key, 'transfer-job', 16),
-    expiryReceiptDigest: await durableFixtureIdentity(key, 'expiry-receipt', 32),
+    checkpointSetDigest: await durableFixtureIdentity(key, 'checkpoint-set', 32),
     firstPublicationAttemptId: await durableFixtureIdentity(key, 'publication-one', 16),
     secondPublicationAttemptId: await durableFixtureIdentity(key, 'publication-two', 16),
   })

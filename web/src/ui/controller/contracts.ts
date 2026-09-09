@@ -147,7 +147,7 @@ export type V2ControllerWorkflowTraceEvent =
   | Readonly<{
       name: 'lifecycle_action_transition'
       transition: 'started' | 'completed' | 'failed' | 'excluded'
-      action: LifecycleUserAction | 'expiry'
+      action: LifecycleUserAction
       lifecycleKind?: ReceiveLifecycleState['kind']
     }>
 

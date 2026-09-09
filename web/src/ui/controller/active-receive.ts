@@ -58,7 +58,6 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   receiveAttempt?: V2ReceivePresentationAttempt
   latestReceiveAttempt?: V2ReceivePresentationAttempt
   receiveOutputLease?: OutputFailureBindingLease
-  expiryTimer?: ReturnType<typeof setTimeout>
   detachOutputCapability?: LateOutputFailureConsequenceCapability
   detachment?: Promise<void>
   unsubscribeRepairProjection?: () => void
@@ -126,7 +125,6 @@ export class ActiveReceiveCoordinator {
       replaceDetachConsequence: (operation, attempt) =>
         this.#replaceDetachConsequence(operation as ActiveReceiveOperation, attempt),
       onActionError: options.onActionError,
-      onFailure: error => this.#reportTransferFailure(error),
       onIdle: operation => this.#releaseDeliveredOutput(operation as ActiveReceiveOperation),
     })
   }
@@ -150,7 +148,7 @@ export class ActiveReceiveCoordinator {
     const state = this.#outputs.getSnapshot().lifecycle
     return this.#operation !== undefined && !this.#lifecycle.pending && state !== null &&
       (state.kind === 'restart-required' || state.kind === 'discarded' ||
-       state.kind === 'expired' || state.kind === 'needs-attention')
+       state.kind === 'needs-attention')
   }
 
   ownsRuntime(runtime: V2BoundReceiveOperation): boolean {
@@ -213,7 +211,6 @@ export class ActiveReceiveCoordinator {
     if (active === undefined) return Promise.resolve()
     this.#stopRepairProjection(active)
     this.#stopOutputProgress(active)
-    this.#lifecycle.cancelExpiry(active)
     active.transfer?.abort(reason)
     this.#observability.receiveExclusion(
       active.receiveAttempt,
@@ -318,7 +315,6 @@ export class ActiveReceiveCoordinator {
     // Keep ownership until detach resolves, while leaving the delivered result on screen.
     // A lifecycle observation or 100% progress alone does not settle the writer lifetime.
     this.#stopRepairProjection(active)
-    this.#lifecycle.cancelExpiry(active)
     this.#observability.emitOwnershipTrace('releasing', state)
     this.#detachOperation(active).then(() => {
       this.#observability.emitOwnershipTrace('released', state)
@@ -362,7 +358,6 @@ export class ActiveReceiveCoordinator {
     try {
       if (!this.#outputs.updateLifecycle(
         result.lifecycle,
-        Date.now(),
         usage,
         Object.freeze([]),
         repairSummaryAtResultBoundary(result),
@@ -387,7 +382,6 @@ export class ActiveReceiveCoordinator {
     }
 
     if (!attempt.decisionSettled) this.#observability.receiveExclusion(attempt, 'success')
-    this.#lifecycle.scheduleExpiry(active)
     if (result.abortReason !== undefined && trigger !== undefined) {
       this.#reportTransferFailure(result.abortReason)
     }

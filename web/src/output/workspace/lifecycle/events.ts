@@ -146,7 +146,6 @@ export type LifecycleEvent =
   | Readonly<LifecycleEventAuthority & {
       kind: 'handoff-not-started'
       reason: ExternalAttemptReason
-      expiryReceiptDigest?: string
     }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'handoff-unknown'
@@ -163,11 +162,6 @@ export type LifecycleEvent =
       lastVerifiedRecordDigest: string
     }>
   | Readonly<LifecycleEventAuthority & {
-      kind: 'expiry-observed'
-      expiryReceiptDigest: string
-      cleanupState: 'clean' | 'cleanup-pending'
-    }>
-  | Readonly<LifecycleEventAuthority & {
       kind: 'ownership-unknown'
       lastVerifiedRecordDigest: string
     }>
@@ -177,10 +171,9 @@ export interface LifecycleReducerContext {
   readonly planKind: PlanKind
   readonly preparationRequired: boolean
   readonly activeLeaseId: string
-  readonly nowMilliseconds: number
 }
 
 export interface LifecycleReduction {
-  readonly status: 'applied' | 'stale' | 'not-due'
+  readonly status: 'applied' | 'stale'
   readonly state: ReceiveLifecycleState
 }

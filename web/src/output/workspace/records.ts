@@ -22,6 +22,7 @@ import {
   snapshotIdentity,
   type CanonicalBytes,
 } from './canonical'
+import { isReceiveStateByte } from './state'
 import { CanonicalRecordReader } from './canonical-reader'
 import { snapshotReceiveOperationDisplay, type ReceiveOperationDisplay } from './operation-display'
 
@@ -82,7 +83,6 @@ export interface PersistedReceiveRecord {
   readonly display?: ReceiveOperationDisplay
   readonly reopenKey?: string
   readonly state?: number
-  readonly expiresAt?: number
   readonly lifecycleGeneration?: string
 }
 
@@ -253,7 +253,6 @@ export async function createPersistedReceiveRecord(input: {
   readonly kind: Exclude<ReceiveRecordKind, typeof RECEIVE_RECORD_OPERATION>
   readonly canonicalBytes: Uint8Array
   readonly state?: number
-  readonly expiresAt?: number
   readonly lifecycleGeneration?: bigint
 }): Promise<PersistedReceiveRecord> {
   const operationId = snapshotIdentity(input.operationId, 16, 'operation ID')
@@ -266,7 +265,6 @@ export async function createPersistedReceiveRecord(input: {
   validateIndexedProjections(
     input.kind,
     input.state,
-    input.expiresAt,
     input.lifecycleGeneration,
   )
   const digest = await canonicalDigest(canonicalBytes)
@@ -278,7 +276,6 @@ export async function createPersistedReceiveRecord(input: {
     canonicalBytes,
     digest,
     ...(input.state === undefined ? {} : { state: input.state }),
-    ...(input.expiresAt === undefined ? {} : { expiresAt: input.expiresAt }),
     ...(input.lifecycleGeneration === undefined
       ? {}
       : { lifecycleGeneration: canonicalU64Text(input.lifecycleGeneration) }),
@@ -306,7 +303,6 @@ export async function validatePersistedReceiveRecord(
   validateIndexedProjections(
     record.kind,
     record.state,
-    record.expiresAt,
     record.lifecycleGeneration,
   )
   if (record.kind !== RECEIVE_RECORD_OPERATION && record.reopenKey !== undefined) {
@@ -663,17 +659,15 @@ function decodeCanonicalReopenKey(bytes: Uint8Array): OperationReopenKey {
 function validateIndexedProjections(
   kind: ReceiveRecordKind,
   state: number | undefined,
-  expiresAt: number | undefined,
   lifecycleGeneration: string | bigint | undefined,
 ): void {
   if (kind !== RECEIVE_RECORD_LIFECYCLE_STATE &&
-      (state !== undefined || expiresAt !== undefined || lifecycleGeneration !== undefined)) {
-    throw new TypeError('state and expiry projections exist only on lifecycle records')
+      (state !== undefined || lifecycleGeneration !== undefined)) {
+    throw new TypeError('state and generation projections exist only on lifecycle records')
   }
-  if (state !== undefined && (!Number.isInteger(state) || state < 1 || state > 23)) {
+  if (state !== undefined && !isReceiveStateByte(state)) {
     throw new TypeError('lifecycle state projection is invalid')
   }
-  if (expiresAt !== undefined) unixMilliseconds(expiresAt, 'lifecycle expiry')
   if (kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
     if (state === undefined) {
       throw new TypeError('lifecycle state projection is required')
@@ -709,7 +703,6 @@ function assertExactPersistedRecordShape(record: PersistedReceiveRecord): void {
   }
   if (record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
     expected.push('state', 'lifecycleGeneration')
-    if (record.expiresAt !== undefined) expected.push('expiresAt')
   }
   const actual = Object.keys(record).sort()
   expected.sort()

@@ -322,11 +322,10 @@ export class WorkspacePublicationStages {
   }): Promise<ReceiveLifecycleState> {
     const state = await this.runtime.lifecycle()
     this.#assertActiveHandoff(state, input.package, input.attempt)
-    const now = this.runtime.now()
-    const next = this.runtime.reduceAt(state, this.runtime.event({
+    const next = this.runtime.reduce(state, this.runtime.event({
       kind: 'handoff-not-started',
       reason: input.reason,
-    }, state), now)
+    }, state))
     await this.runtime.repository.commitTransition({
       operationId: this.runtime.intent.operationId,
       expectedLifecycleGeneration: state.generation,

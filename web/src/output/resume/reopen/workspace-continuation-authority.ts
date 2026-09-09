@@ -69,7 +69,7 @@ export interface WorkspaceContinuationInput {
 
 /**
  * Progresses only an already-fenced workspace target. Repository acquisition,
- * lease ownership, deadlines, and cross-backend lifecycle selection remain with
+ * lease ownership and cross-backend lifecycle selection remain with
  * the enclosing reopen authority.
  */
 export class WorkspaceContinuationAuthority {
@@ -111,7 +111,6 @@ export class WorkspaceContinuationAuthority {
 
   async resumeReceive(
     input: WorkspaceContinuationInput,
-    observedAt: number,
     admissionFallback: Extract<ReceiveLifecycleState, {
       kind: 'resumable-receive'
       payloadKind: 'file-set'
@@ -128,7 +127,6 @@ export class WorkspaceContinuationAuthority {
       input.repository,
       input.snapshot,
       input.lease,
-      observedAt,
     )
     const claim = input.resources.reclaimedClaim
     if (claim === undefined) throw new TypeError('workspace reopen omitted its budget claim')

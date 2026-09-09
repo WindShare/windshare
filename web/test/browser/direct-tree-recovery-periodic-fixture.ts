@@ -90,7 +90,6 @@ const PENDING_ACCEPTED_BYTES = 2
 const FILE_CONTENT_BYTE = 7
 const OUTPUT_SESSION_ID = identityText(210)
 const TRANSFER_JOB_ID = identityText(220)
-const EXPIRY_RECEIPT_DIGEST = digestIdentity(222)
 const OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const CHECKPOINT_TRIGGER_BYTES = 1_024n
 const CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
@@ -282,7 +281,6 @@ export async function recoverDirectTreeAfterProcessTermination(
     }, {
       planKind: 'direct-tree',
       nowMilliseconds: RECOVERY_TIME_MILLISECONDS,
-      expiryReceiptDigest: EXPIRY_RECEIPT_DIGEST,
     })
     await repository.commitTransition({
       operationId: fixture.intent.operationId,
@@ -313,7 +311,6 @@ export async function recoverDirectTreeAfterProcessTermination(
       repository,
       lifecycleLeaseId: lease.leaseId,
       transferJobId: TRANSFER_JOB_ID,
-      clock: () => RECOVERY_TIME_MILLISECONDS,
     })
     const checkpointIdentity = Object.freeze({
       receiveOperationId: fixture.intent.operationId,
@@ -643,7 +640,6 @@ async function startReceiving(
     planKind: 'direct-tree',
     preparationRequired: false,
     activeLeaseId: leaseId,
-    nowMilliseconds: INITIAL_TIME_MILLISECONDS,
   }).state
   await repository.commitTransition({
     operationId: intent.operationId,
@@ -666,7 +662,6 @@ function resumeReceiving(
     planKind: 'direct-tree',
     preparationRequired: false,
     activeLeaseId: leaseId,
-    nowMilliseconds: RECOVERY_TIME_MILLISECONDS,
   }).state
 }
 

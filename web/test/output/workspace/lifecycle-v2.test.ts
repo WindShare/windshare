@@ -132,7 +132,6 @@ describe('receive lifecycle V2 durable states', () => {
       planKind: 'direct-resumable-zip' as const,
       preparationRequired: false,
       activeLeaseId: identity(16, 5),
-      nowMilliseconds: 100,
     }
     const initial = initialReceiveLifecycleState({
       operationId: base().operationId,

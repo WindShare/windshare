@@ -603,7 +603,6 @@ function fakeBoundOperation(intent: ReceiveIntent): V2BoundReceiveOperation {
     activeControls: Object.freeze(['pause'] as const),
     interrupt: () => undefined,
     startLifecycleAction: async () => ({ lifecycle }),
-    observeExpiry: async () => ({ lifecycle }),
     resolveWorkspaceUsage: () => null,
     settleTransferAdmissionFailure: async () => ({ lifecycle }),
     detach: () => undefined,
