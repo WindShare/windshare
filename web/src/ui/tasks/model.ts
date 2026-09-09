@@ -43,7 +43,7 @@ export interface TaskFacts {
   readonly directZipProgress: V2DirectZipProgressSnapshot | null
   readonly fidelity: CompatibleNameRepairPresentation | null
   readonly details: readonly string[]
-  readonly interruption: 'pause' | 'stop' | null
+  readonly interruption: 'pause' | 'stop' | 'finish' | null
   readonly execution: Readonly<{ kind: 'active' }> |
     Readonly<{ kind: 'retained'; continuation: import('../../output/resume/descriptor').ReceiveOperationContinuation }> |
     Readonly<{ kind: 'local-finalization' }>

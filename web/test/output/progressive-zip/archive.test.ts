@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { deferred, manualSettlementDeadline } from '../../transfer/settlement-deadline'
 import { BoundaryFaultError, FaultScope, SourceFaultCode, sourceFault } from '../../../src/transfer/fault'
 import { V2SelectionPolicy } from '../../../src/catalog/v2-selection'
 import { createProgressiveWorkspaceExecution } from '../../../src/transfer/settlement/progressive-workspace-execution'
@@ -113,6 +114,138 @@ function fixture(store = new MemoryStore(), io = new MemoryIO(), maximumLength?:
 
 const admit = (archive: ProgressiveZipArchive, id: string, size: bigint) => archive.admitFile({
   entryId: id, path: [id], source, revision: { fileId: id, fileRevision: 'revision', exactSize: size },
+})
+
+describe('progressive ZIP settlement and cancellation', () => {
+  it('drains a timed-out finalization before pausing and resumes locally without losing payload', async () => {
+    const file = fileEntry(identity(19), 'file.bin', 6n)
+    const selection = new V2SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const entered = deferred()
+    const release = deferred()
+    const checkpoint = archive.checkpoint.bind(archive)
+    vi.spyOn(archive, 'checkpoint').mockImplementation(async reason => {
+      const state = await checkpoint(reason)
+      if (reason === 'zip-before-finalization') { entered.resolve(); await release.promise }
+      return state
+    })
+    const close = vi.spyOn(archive, 'close')
+    const pause = vi.fn(async (_request, evidence) => ({
+      kind: 'resumable-receive' as const, payloadKind: 'opfs-zip' as const,
+      operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+      objectId: identity(33).toString(), checkpointGeneration: evidence.checkpoint.generation,
+      occupiedBytes: evidence.checkpoint.physicalLength, completedFileCount: 1n, completedBytes: 6n,
+      discoveryComplete: true,
+    }))
+    const publish = vi.fn(async () => { throw new Error('Canceled finalization must not publish') })
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'timeout-session' },
+      settlement: { pause, settle: publish },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const readers = readerFixture([file])
+    const deadline = manualSettlementDeadline()
+    const running = transferJobFixture({
+      catalog: catalogFixture([{ id: identity(2), entries: [file] }]).catalog,
+      selection, intent, plans, revisions: readers.revisions, broker: readers.broker,
+      outputSettlementDeadline: deadline,
+    }).run()
+    let exposed = false
+    const observation = running.then(() => { exposed = true })
+    await entered.promise
+    deadline.expire()
+    // The deadline callback and its promise observers run before this turn yields.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(close).not.toHaveBeenCalled()
+    expect(pause).not.toHaveBeenCalled()
+    expect(exposed).toBe(false)
+    release.resolve()
+    const result = await running
+    await observation
+    expect(result.lifecycle).toMatchObject({ kind: 'resumable-receive', payloadKind: 'opfs-zip' })
+    expect(pause).toHaveBeenCalledOnce()
+    expect(close).toHaveBeenCalledOnce()
+    expect(publish).not.toHaveBeenCalled()
+    expect(plans.unknownSettlements).toEqual([])
+    const reopened = await f.open()
+    await reopened.finalize()
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
+    const entries = (await reader.getEntries()).filter(entry => !entry.directory)
+    expect(entries).toHaveLength(1)
+    expect(entries[0]!.uncompressedSize).toBe(6)
+    expect(await entries[0]!.getData!(new Uint8ArrayWriter())).toHaveLength(6)
+    await reader.close()
+  })
+
+  it('retains a committed result when publication drains after the deadline', async () => {
+    const selection = new V2SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const entered = deferred()
+    const release = deferred()
+    const pause = vi.fn(async () => { throw new Error('Completed ZIP must not pause') })
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'published-session' },
+      settlement: {
+        pause,
+        settle: async () => {
+          entered.resolve()
+          await release.promise
+          return { kind: 'waiting-to-save', operationId: intent.operationId,
+            receiveIntentDigest: intent.digest, generation: 2n, packageDigest: 'package' }
+        },
+      },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const readers = readerFixture([])
+    const deadline = manualSettlementDeadline()
+    const running = transferJobFixture({
+      catalog: catalogFixture([{ id: identity(2), entries: [] }]).catalog,
+      selection, intent, plans, revisions: readers.revisions, broker: readers.broker,
+      outputSettlementDeadline: deadline,
+    }).run()
+    await entered.promise
+    deadline.expire()
+    await Promise.resolve()
+    expect(pause).not.toHaveBeenCalled()
+    release.resolve()
+    expect((await running).lifecycle.kind).toBe('waiting-to-save')
+    expect(pause).not.toHaveBeenCalled()
+    expect(plans.unknownSettlements).toEqual([])
+  })
+
+  it('stops finalization between committed batches and preserves the cursor for local continuation', async () => {
+    const f = fixture()
+    const archive = await f.open()
+    await admit(archive, 'a', 3n)
+    await archive.writeRange('a', 0n, bytes('abc'))
+    await archive.markDiscoveryComplete()
+    const controller = new AbortController()
+    const commit = f.store.commit.bind(f.store)
+    vi.spyOn(f.store, 'commit').mockImplementation(async input => {
+      await commit(input)
+      if (input.checkpoint.finalization?.nextEntry === 1n) controller.abort(new Error('deadline'))
+    })
+    await expect(archive.finalize(controller.signal)).rejects.toThrow('deadline')
+    expect(archive.state.artifactState).toBe('finalizing')
+    expect(archive.state.finalization?.nextEntry).toBe(1n)
+    await archive.close()
+    vi.mocked(f.store.commit).mockRestore()
+    const reopened = await f.open()
+    await reopened.finalize()
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
+    const entry = (await reader.getEntries())[0]!
+    if (entry.directory) throw new Error('Expected retained file')
+    expect(await entry.getData!(new Uint8ArrayWriter())).toEqual(bytes('abc'))
+    await reader.close()
+  })
+
 })
 
 describe('progressive native ZIP archive', () => {

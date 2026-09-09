@@ -22,6 +22,9 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
       ? 'The partial result is retained locally. Save it without reconnecting to the sender.'
       : 'The result is retained locally. Save it without reconnecting to the sender.', state.kind)
   if (facts.execution.kind === 'retained') return retainedStage(facts, facts.execution.continuation)
+  if (facts.interruption === 'finish') return stage('finishing', 'Finishing is taking longer than expected',
+    'WindShare is waiting for current save operations to finish safely. Keep this page open; you can continue browsing.',
+    'settlement-deadline')
   if (facts.interruption !== null) return stage('finishing',
     facts.interruption === 'pause' ? 'Pausing' : 'Stopping',
     'Accepted writes and recovery records are settling before this task releases its destination.', facts.interruption)

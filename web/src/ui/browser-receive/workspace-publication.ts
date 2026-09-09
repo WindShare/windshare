@@ -30,13 +30,16 @@ export async function handoffRetainedWorkspacePackage(
   operation: RetainedWorkspaceHandoffOperation,
   backend: OriginPrivateRetainedArtifactBackend,
   diagnostics?: OutputDiagnosticsPorts,
+  signal?: AbortSignal,
 ): Promise<ReceiveLifecycleState> {
   const { lifecycle } = operation
   if (lifecycle.kind !== 'waiting-to-save' &&
       !(lifecycle.kind === 'download-started' && lifecycle.attemptKind === 'workspace')) {
     throw unavailableRoute()
   }
+  if (signal?.aborted) return lifecycle
   const artifact = await operation.stages.readRetainedPackage()
+  if (signal?.aborted) return lifecycle
   const attempt = await operation.stages.startHandoff({
     package: artifact,
     publicationAttemptId: createOperationID(),
@@ -53,7 +56,7 @@ export async function handoffRetainedWorkspacePackage(
       ),
       File: windowPort.File,
     })
-    const started = await publisher.handoff({ artifact, attempt })
+    const started = await publisher.handoff({ artifact, attempt, ...(signal === undefined ? {} : { signal }) })
     return (await operation.stages.recordHandoffStarted({
       package: artifact,
       attempt,

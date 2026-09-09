@@ -50,7 +50,7 @@ import type { V2BoundReceiveOperation, V2LifecycleMutation } from '../v2-receive
 import type { BrowserReceiveWindow } from './contracts'
 import {
   WorkspaceExecutionAdmissionSettlement,
-  type WorkspaceReceiveAdmissionFallback,
+  type WorkspaceReceiveAdmission,
 } from './workspace-admission'
 import {
   WorkspaceReceivePackaging,
@@ -105,7 +105,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     transferJobId: string
     backend?: OriginPrivateWorkspaceBackend
     admitted?: AdmittedWorkspaceContent
-    receiveAdmissionFallback?: WorkspaceReceiveAdmissionFallback
+    admission: WorkspaceReceiveAdmission
     closeAuthority?: () => Promise<void>
   }) {
     this.#window = input.windowPort
@@ -140,11 +140,10 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     this.#admissionSettlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: this.intent.operationId,
       currentLifecycle: () => readLifecycle(this.#repository, this.intent.operationId),
-      restoreContinuation: fallback => this.#stages.restoreReceiveContinuation(fallback),
       discard: () => this.#discard(),
       recordUnknown: () => this.recordSettlementUnknown(this.intent),
       workspaceUsage: state => this.resolveWorkspaceUsage(state),
-    }, input.receiveAdmissionFallback)
+    }, input.admission)
   }
 
   static async create(input: {
@@ -167,6 +166,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       ...(input.trace === undefined ? {} : { trace: input.trace }),
       ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
       transferJobId: createTransferJobID(),
+      admission: { kind: 'fresh' },
     })
     owner.#plans = await workspacePlanAuthority(input.intent, owner)
     return owner
@@ -193,9 +193,14 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       transferJobId: createTransferJobID(),
       backend: input.backend,
       admitted: operation.admittedContent,
-      ...(operation.receiveAdmissionFallback === undefined
-        ? {}
-        : { receiveAdmissionFallback: operation.receiveAdmissionFallback }),
+      admission: {
+        kind: 'continuation',
+        restore: () => {
+          const fallback = operation.receiveAdmissionFallback
+          if (fallback === undefined) throw new TypeError('Workspace continuation lost its recovery authority')
+          return operation.stages.restoreReceiveContinuation(fallback)
+        },
+      },
       closeAuthority: () => operation.close(),
     })
     owner.#plans = await workspacePlanAuthority(operation.intent, owner)
@@ -213,6 +218,14 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       repository: operation.repository, namespace: operation.namespace, lease: operation.lease,
       stages: operation.stages, transferJobId: createTransferJobID(),
       backend: operation.progressiveContinuation.backend, admitted: operation.admittedContent,
+      admission: {
+        kind: 'continuation',
+        restore: async () => {
+          const backend = operation.progressiveContinuation.backend
+          await backend.archive.close()
+          return operation.stages.progressive.pause(backend.store, backend.archive.state)
+        },
+      },
       closeAuthority: () => operation.close(),
       ...(input.diagnostics === undefined ? {} : { diagnostics: input.diagnostics }),
     })
@@ -412,6 +425,10 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
       const state = await this.#completeProgressive(backend, checkpoint)
       return Object.freeze({ lifecycle: state, workspaceUsage: { ownedBytes: checkpoint.sealedLength! } })
     }
+    this.#admissionSettlement.beginContinuation(async () => {
+      await backend.archive.close()
+      return this.#stages.progressive.pause(backend.store, backend.archive.state)
+    })
     const state = await this.#stages.resumeReceive()
     this.#plans = await workspacePlanAuthority(this.intent, this)
     this.#transferJobId = createTransferJobID()
@@ -421,11 +438,14 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     })
   }
 
-  async #completeProgressive(backend: OriginPrivateProgressiveZipBackend, checkpoint: TaskCheckpoint): Promise<ReceiveLifecycleState> {
+  async #completeProgressive(
+    backend: OriginPrivateProgressiveZipBackend, checkpoint: TaskCheckpoint, signal?: AbortSignal,
+  ): Promise<ReceiveLifecycleState> {
     const state = await this.#stages.progressive.seal(backend.store, checkpoint)
     this.#packaging.setPackageExactBytes(checkpoint.sealedLength!)
+    if (signal?.aborted) return state
     return handoffRetainedWorkspacePackage(
-      this.#window, { intent: this.intent, lifecycle: state, stages: this.#stages }, backend, this.#diagnostics,
+      this.#window, { intent: this.intent, lifecycle: state, stages: this.#stages }, backend, this.#diagnostics, signal,
     )
   }
 
@@ -452,7 +472,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
             fault?.domain === 'output' && fault.code === 'resource-budget'
               ? 'storage-pressure' : undefined)
         },
-        settle: (_request, checkpoint) => this.#completeProgressive(backend, checkpoint),
+        settle: (_request, checkpoint, signal) => this.#completeProgressive(backend, checkpoint, signal),
       },
     })
     this.#admissionSettlement.markExecutionAdmitted()
@@ -545,7 +565,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
           readonly payloadKind: 'file-set'
         }>,
       ) =>
-        this.#admissionSettlement.beginContinuation(lifecycle),
+        this.#admissionSettlement.beginContinuation(() => this.#stages.restoreReceiveContinuation(lifecycle)),
       installTransferAttempt: (
         plans: V2PlanExecutionAuthority,
         transferJobId: string,

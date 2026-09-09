@@ -52,7 +52,7 @@ export type LifecycleUserAction =
 export type V2ActiveReceiveControl = Extract<LifecycleUserAction, 'pause' | 'stop'>
 
 export type V2ReceiveInterruptionPresentation = Readonly<{
-  readonly control: V2ActiveReceiveControl
+  readonly operation: V2ActiveReceiveControl | 'finish'
   readonly phase: 'waiting' | 'background'
 }>
 
@@ -210,7 +210,14 @@ function interruptionCopy(
   description: string
   tone: ReceiveLifecyclePresentation['tone']
 }> {
-  if (interruption.control === 'pause') {
+  if (interruption.operation === 'finish') {
+    return copy(
+      'Finishing is taking longer than expected',
+      'WindShare is waiting for current save operations to finish safely. Keep this page open; you can continue browsing.',
+      'warning',
+    )
+  }
+  if (interruption.operation === 'pause') {
     return interruption.phase === 'waiting'
       ? copy(
           'Pausing',
