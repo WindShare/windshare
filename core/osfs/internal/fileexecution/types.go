@@ -197,7 +197,8 @@ type FinalCondition uint8
 const (
 	FinalAbsent FinalCondition = iota + 1
 	FinalCollision
-	FinalOwnedExact
+	// Object identity and length are not authentication of current bytes.
+	FinalOwnedAtExpectedSize
 	FinalUnsafe
 )
 

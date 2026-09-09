@@ -93,14 +93,12 @@ func TestLongNativeOrdinaryRestartReusesPublishedFile(t *testing.T) {
 	}
 
 	reopened := reopenOrdinaryResumeFile(t, root, 0x79, uint64(len(payload)))
-	if reopened.transaction != nil || reopened.settlement.Kind() != transfer.FilePublished {
+	if reopened.transaction != nil || reopened.settlement.Kind() != transfer.FilePreviouslyPublished {
 		t.Fatalf("published file reopened as transaction=%t settlement=%d", reopened.transaction != nil, reopened.settlement.Kind())
 	}
-	checkpoint, ok := reopened.settlement.VerifiedCheckpoint()
-	if !ok {
-		t.Fatal("published settlement omitted its verified checkpoint")
+	if _, verified := reopened.settlement.VerifiedCheckpoint(); verified {
+		t.Fatal("delivery receipt exposed a verified checkpoint")
 	}
-	assertSingleDurableRange(t, checkpoint, content.Range{Offset: 0, End: uint64(len(payload))})
 	actual, err := os.ReadFile(reopened.finalPath)
 	if err != nil || !bytes.Equal(actual, payload) {
 		t.Fatalf("reused final = %q, %v", actual, err)

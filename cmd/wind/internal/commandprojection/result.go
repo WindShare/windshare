@@ -108,7 +108,8 @@ func successfulGetResult(result transfer.JobResult) bool {
 		progress.PublishedFiles == result.SucceededFiles &&
 		progress.PublishedFiles == progress.DiscoveredFiles &&
 		progress.PublishedBytes == progress.DiscoveredBytes &&
-		progress.VerifiedBytes == progress.DiscoveredBytes
+		progress.PreviouslyPublishedBytes <= progress.DiscoveredBytes &&
+		progress.VerifiedBytes == progress.DiscoveredBytes-progress.PreviouslyPublishedBytes
 }
 
 func resultHasTerminalNetworkFault(result transfer.JobResult) bool {

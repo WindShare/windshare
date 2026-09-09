@@ -196,7 +196,7 @@ func TestRecoveredCollisionIsolatesSiblingAndRetriesSameOperation(t *testing.T) 
 	if err != nil || retrySettlement.Kind() != transfer.FilePublished {
 		t.Fatalf("collision retry commit = (%d, %v)", retrySettlement.Kind(), err)
 	}
-	if firstDestination.final != FinalOwnedExact || siblingDestination.final != FinalOwnedExact {
+	if firstDestination.final != FinalOwnedAtExpectedSize || siblingDestination.final != FinalOwnedAtExpectedSize {
 		t.Fatalf("final observations = first %d sibling %d",
 			firstDestination.final, siblingDestination.final)
 	}

@@ -211,19 +211,7 @@ func TestTransferJobCountsRecoveredImmediatePublicationWithoutInventingNewBytes(
 	if err != nil {
 		t.Fatal(err)
 	}
-	full, err := content.NewRangeSet([]content.Range{{Offset: 0, End: binding.ExactSize()}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	checkpoint, err := VerifyDurableRanges(binding, 1, full)
-	if err != nil {
-		t.Fatal(err)
-	}
-	published, err := NewVerifiedFileSettlement(FilePublished, checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	published, err = published.WithPublicationProvenance(FileResumed)
+	published, err := NewPreviouslyPublishedFileSettlement(binding)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -232,9 +220,10 @@ func TestTransferJobCountsRecoveredImmediatePublicationWithoutInventingNewBytes(
 	result := job.Run(context.Background())
 	progress := result.Progress
 	if result.Outcome != DirectTreeOutcomeSuccess || blocks.calls != 0 ||
-		progress.VerifiedBytes != binding.ExactSize() || progress.NewlyVerifiedBytes != 0 ||
+		progress.VerifiedBytes != 0 || progress.NewlyVerifiedBytes != 0 ||
+		progress.PreviouslyPublishedBytes != binding.ExactSize() || progress.CompletedBytes() != binding.ExactSize() ||
 		progress.PublishedFiles != 1 || progress.PublishedBytes != binding.ExactSize() ||
-		progress.FileOutcomes.ResumedFiles != 1 || !progress.CountersExact {
+		progress.FileOutcomes.PreviouslyPublishedFiles != 1 || progress.FileOutcomes.ResumedFiles != 0 || !progress.CountersExact {
 		t.Fatalf("recovered publication result=%+v progress=%+v rangeCalls=%d", result, progress, blocks.calls)
 	}
 }

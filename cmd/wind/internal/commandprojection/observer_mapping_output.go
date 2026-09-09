@@ -69,6 +69,8 @@ func projectFileSettlement(value transfer.FileSettlementKind) (clievent.FileSett
 	switch value {
 	case 0:
 		return clievent.FileSettlementNone, true
+	case transfer.FilePreviouslyPublished:
+		return clievent.FilePreviouslyPublished, true
 	case transfer.FilePublished:
 		return clievent.FilePublished, true
 	case transfer.FilePaused:

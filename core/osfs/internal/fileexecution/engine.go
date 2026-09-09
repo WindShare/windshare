@@ -128,7 +128,7 @@ func (engine *Engine) beginNew(
 	switch final.Condition() {
 	case FinalAbsent:
 		return engine.beginInitialCheckpoint(ctx, sequence, file, key, destination)
-	case FinalCollision, FinalOwnedExact:
+	case FinalCollision, FinalOwnedAtExpectedSize:
 		settlement, settlementErr := transfer.NewCollisionFileSettlement(file.Target())
 		return settlementStart(settlement, joinFailures(ctx, settlementErr, closeDestination(destination)))
 	default:
@@ -192,6 +192,9 @@ func (engine *Engine) transactionStart(
 	if err != nil {
 		return transfer.FileStart{}, err
 	}
+	// Best-effort resume trusts private staged ranges across restarts. Detecting
+	// arbitrary external edits would require rereading them; public delivery
+	// receipts never enter this path.
 	durable, err := durableRanges(binding, record)
 	if err != nil {
 		return transfer.FileStart{}, err

@@ -238,7 +238,7 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 	if final.Condition() == FinalUnsafe {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantineFinalUnsafe)
 	}
-	if final.Condition() != FinalOwnedExact {
+	if final.Condition() != FinalOwnedAtExpectedSize {
 		return transaction.quarantineAndSettleLocked(ctx, checkpointmodel.QuarantinePublicationHistory)
 	}
 	if err := transaction.destination.SyncFinalParent(ctx); err != nil {
@@ -253,6 +253,13 @@ func (transaction *resumablePartialFileTransaction) publishFromDurableState(
 		return transfer.FileSettlement{}, err
 	}
 	transaction.record = published
+	// A final found after restart establishes past delivery only. Keep normal
+	// resume fast rather than rereading public bytes that users may have edited.
+	if !retry {
+		settlement, settlementErr := transfer.NewPreviouslyPublishedFileSettlement(transaction.binding)
+		_ = transaction.closeResourcesLocked(ctx)
+		return settlement, settlementErr
+	}
 	settlement, err := verifiedSettlement(transfer.FilePublished, transaction.binding, published)
 	if err == nil {
 		provenance := transfer.FileDownloaded

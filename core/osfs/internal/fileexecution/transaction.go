@@ -279,7 +279,7 @@ func (transaction *livePartialFileStrategy) Commit(ctx context.Context) (transfe
 		}
 		return settlement, nil
 	}
-	if final.Condition() != FinalOwnedExact {
+	if final.Condition() != FinalOwnedAtExpectedSize {
 		return transaction.blockPublicationLocked()
 	}
 	if err := transaction.destination.SyncFinalParent(ctx); err != nil {

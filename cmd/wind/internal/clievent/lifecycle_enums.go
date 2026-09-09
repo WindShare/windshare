@@ -333,6 +333,7 @@ type FileSettlement uint8
 const (
 	FileSettlementNone FileSettlement = iota
 	FilePublished
+	FilePreviouslyPublished
 	FilePaused
 	FileCollision
 	FileItemBlocked
@@ -340,7 +341,7 @@ const (
 )
 
 func (value FileSettlement) Name() (string, bool) {
-	names := [...]string{"none", "published", "paused", "collision", "item_blocked", "failed"}
+	names := [...]string{"none", "published", "previously_published", "paused", "collision", "item_blocked", "failed"}
 	if int(value) >= len(names) {
 		return "", false
 	}

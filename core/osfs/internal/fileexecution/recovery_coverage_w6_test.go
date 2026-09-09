@@ -79,7 +79,7 @@ func TestRecoveryReducerSeparatesDefiniteTamperFromUnknownOwnership(t *testing.T
 		{"active collision", active, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
 		{"paused incomplete collision", paused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
 		{"paused complete collision", fullPaused, OwnedReady, FinalCollision, RecoveryReturnCollision, 0},
-		{"active final exact", active, OwnedReady, FinalOwnedExact, RecoveryInstallQuarantine, checkpointmodel.QuarantinePublicationHistory},
+		{"active final exact", active, OwnedReady, FinalOwnedAtExpectedSize, RecoveryInstallQuarantine, checkpointmodel.QuarantinePublicationHistory},
 		{"active final unsafe", active, OwnedReady, FinalUnsafe, RecoveryInstallQuarantine, checkpointmodel.QuarantineFinalUnsafe},
 		{"active owned unsafe", active, OwnedStageUnsafe, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageUnsafe},
 		{"publishing missing owned", publishing, OwnedStageMissing, FinalAbsent, RecoveryInstallQuarantine, checkpointmodel.QuarantineStageMissing},
@@ -575,7 +575,7 @@ func TestBeginNewRejectsPortViolationsAndAmbiguousOwnedCreation(t *testing.T) {
 
 	for name, final := range map[string]FinalCondition{
 		"foreign collision": FinalCollision,
-		"owned collision":   FinalOwnedExact,
+		"owned collision":   FinalOwnedAtExpectedSize,
 	} {
 		t.Run(name, func(t *testing.T) {
 			engine, repository, _, destination := newEngine()
@@ -810,7 +810,7 @@ func TestExistingCollisionRetainsCheckpointAndRetriesAfterForeignFinalRemoval(t 
 	}
 	settlement, err = transaction.Commit(context.Background())
 	if err != nil || settlement.Kind() != transfer.FilePublished ||
-		repository.record.RecordID() != active.RecordID() || destination.final != FinalOwnedExact {
+		repository.record.RecordID() != active.RecordID() || destination.final != FinalOwnedAtExpectedSize {
 		t.Fatalf("retry commit = (kind %d record %x final %d, %v)",
 			settlement.Kind(), repository.record.RecordID().Bytes(), destination.final, err)
 	}

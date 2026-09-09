@@ -91,7 +91,7 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 	case clievent.DiscoveryFailed:
 		return progressComponents{
 			phase:     symbols.Failure + " Discovery failed",
-			primary:   exactPrefix + FormatBytes(snapshot.VerifiedBytes()) + " verified",
+			primary:   exactPrefix + FormatBytes(snapshot.CompletedBytes()) + " completed",
 			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles()) + " published",
 		}
 	}
@@ -99,7 +99,7 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 	if !snapshot.CountersExact() {
 		return progressComponents{
 			phase:     "Transferring" + symbols.Ellipsis,
-			primary:   exactPrefix + FormatBytes(snapshot.VerifiedBytes()) + " verified",
+			primary:   exactPrefix + FormatBytes(snapshot.CompletedBytes()) + " completed",
 			secondary: exactPrefix + formatFiles(snapshot.PublishedFiles()) + " published",
 			rate:      rate,
 		}
@@ -120,7 +120,7 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 		}
 	}
 
-	if snapshot.VerifiedBytes() == snapshot.DiscoveredBytes() &&
+	if snapshot.CompletedBytes() == snapshot.DiscoveredBytes() &&
 		(snapshot.PublishedBytes() < snapshot.DiscoveredBytes() || snapshot.PublishedFiles() < snapshot.DiscoveredFiles()) {
 		return progressComponents{
 			phase:     "Finalizing" + symbols.Ellipsis,
@@ -129,15 +129,15 @@ func progressView(snapshot clievent.ProgressSnapshot, metrics ProgressMetrics, u
 		}
 	}
 
-	percent := percentage(snapshot.VerifiedBytes(), snapshot.DiscoveredBytes())
+	percent := percentage(snapshot.CompletedBytes(), snapshot.DiscoveredBytes())
 	components := progressComponents{
 		phase:     formatCount(percent) + "%",
-		primary:   FormatBytes(snapshot.VerifiedBytes()) + "/" + FormatBytes(snapshot.DiscoveredBytes()),
+		primary:   FormatBytes(snapshot.CompletedBytes()) + "/" + FormatBytes(snapshot.DiscoveredBytes()),
 		secondary: formatCount(snapshot.PublishedFiles()) + "/" + formatFiles(snapshot.DiscoveredFiles()),
 		bar:       formatProgressBar(percent, unicode),
 		rate:      rate,
 	}
-	remaining := snapshot.DiscoveredBytes() - snapshot.VerifiedBytes()
+	remaining := snapshot.DiscoveredBytes() - snapshot.CompletedBytes()
 	if remaining != 0 && metrics.RateValid && metrics.RateStable &&
 		metrics.RateBytesPerSecond != 0 && !snapshot.FileOutcomes().HasNonSuccess() {
 		seconds := remaining / metrics.RateBytesPerSecond
@@ -219,7 +219,7 @@ func formatProgressBar(percent uint64, unicode bool) string {
 func terminalFileOutcomes(outcomes clievent.FileOutcomes) uint64 {
 	total := outcomes.DownloadedFiles
 	for _, value := range []uint64{
-		outcomes.ResumedFiles, outcomes.PausedFiles, outcomes.CollisionFiles,
+		outcomes.ResumedFiles, outcomes.PreviouslyPublishedFiles, outcomes.PausedFiles, outcomes.CollisionFiles,
 		outcomes.ItemBlockedFiles, outcomes.FailedFiles,
 	} {
 		if ^uint64(0)-total < value {

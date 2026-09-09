@@ -208,6 +208,9 @@ func (binding MaterializedFileBinding) valid() bool {
 	return binding.target.valid() && !binding.objectIdentity.IsZero()
 }
 
+// VerifiedDurableRanges records authenticated, persisted writes. Reusing private
+// staged ranges assumes no external edits; it does not certify the current bytes
+// of an editable public file or stand in for a historical delivery receipt.
 type VerifiedDurableRanges struct {
 	binding              MaterializedFileBinding
 	checkpointGeneration CheckpointGeneration

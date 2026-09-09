@@ -92,9 +92,11 @@ func v3CapacityProgressVector() map[string]any {
 		"discovered_files": "2", "discovered_bytes": "8192",
 		"published_files": "1", "published_bytes": "4096",
 		"verified_bytes": "4096", "newly_verified_bytes": "4096",
+		"previously_published_bytes": "0",
 		"file_outcomes": map[string]any{
 			"downloaded_files": "1", "resumed_files": "0", "paused_files": "0",
-			"collision_files": "0", "item_blocked_files": "0", "failed_files": "0",
+			"previously_published_files": "0",
+			"collision_files":            "0", "item_blocked_files": "0", "failed_files": "0",
 			"modified_time_warnings": "0",
 		},
 		"capacity_wait": map[string]any{
