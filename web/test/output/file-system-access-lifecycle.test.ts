@@ -808,7 +808,6 @@ describe('File System Access settlement authority', () => {
       lifecycleLeaseId: leaseId,
       transferJobId: identity(107),
       admissionFallback: fallback,
-      clock: () => 1_600,
       trace: event => trace.push(event),
     })
 
@@ -841,7 +840,6 @@ describe('File System Access settlement authority', () => {
       lifecycleLeaseId: leaseId,
       transferJobId: identity(108),
       admissionFallback: restored,
-      clock: () => 1_700,
     })
     boundSettlement.bindMaterialization(session)
     await expect(boundSettlement.settleExecutionAdmissionFailure(
@@ -870,7 +868,7 @@ describe('interrupted receiving admission fallback', () => {
     if (fallback.kind !== 'receiving') throw new Error('expected interrupted receiving')
     const reduction = reduceReceiveLifecycle(fallback, {
       kind: 'receive-authority-reacquired', expectedGeneration: fallback.generation, leaseId,
-    }, { planKind: 'direct-tree', preparationRequired: false, activeLeaseId: leaseId, nowMilliseconds: 1600 })
+    }, { planKind: 'direct-tree', preparationRequired: false, activeLeaseId: leaseId })
     if (reduction.status !== 'applied') throw new Error('expected fresh authority')
     await repository.commitTransition({
       operationId: session.intent.operationId, expectedLifecycleGeneration: fallback.generation,
@@ -878,7 +876,7 @@ describe('interrupted receiving admission fallback', () => {
     })
     const settlement = await createFileSystemAccessSettlementAuthority({
       intent: session.intent, repository, lifecycleLeaseId: leaseId, transferJobId: identity(115),
-      admissionFallback: fallback, clock: () => 1600,
+      admissionFallback: fallback,
     })
     await expect(settlement.settleExecutionAdmissionFailure(
       session.intent, new Error('sender remains offline'), SIGNAL,
@@ -913,7 +911,6 @@ describe('File System Access activation boundary settlement', () => {
         repository,
         lifecycleLeaseId: leaseId,
         transferJobId: identity(102 + offset),
-        clock: () => 1_000,
       })
 
       await expect(settlement.settleExecutionAdmissionFailure(session.intent, 'cancelled', SIGNAL))
@@ -943,7 +940,6 @@ describe('File System Access activation boundary settlement', () => {
       repository,
       lifecycleLeaseId: leaseId,
       transferJobId: identity(117),
-      clock: () => 1_000,
     })
     settlement.bindMaterialization(session)
     await parent.getDirectoryHandle(session.reservation.physicalName, { create: true })
@@ -998,7 +994,6 @@ describe('File System Access admission ownership recovery', () => {
       lifecycleLeaseId: leaseId,
       transferJobId: identity(113),
       admissionFallback: fallback,
-      clock: () => 1_800,
       trace: event => trace.push(event),
     })
 
@@ -1138,7 +1133,7 @@ describe('File System Access fresh-page discard authority', () => {
   it('preserves completed user files during explicit cleanup after long retention', async () => {
     const fixture = await freshDiscardFixture({ seed: 190, successfulFile: true })
 
-    await expect(discardFreshFixture(fixture, fixture.operation, 86_400_000 * 365)).resolves.toMatchObject({
+    await expect(discardFreshFixture(fixture, fixture.operation)).resolves.toMatchObject({
       lifecycle: {
         kind: 'partial-directory',
       },

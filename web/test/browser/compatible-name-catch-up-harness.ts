@@ -165,7 +165,7 @@ async function startReceiving(
     kind: 'receive-started', expectedGeneration: initial.generation, leaseId: lease.leaseId,
   }, {
     planKind: 'direct-tree', preparationRequired: false,
-    activeLeaseId: lease.leaseId, nowMilliseconds: Date.now(),
+    activeLeaseId: lease.leaseId,
   })
   if (receiving.status !== 'applied' || receiving.state.kind !== 'receiving') {
     throw new TypeError('crash fixture failed to enter the production receiving lifecycle')
@@ -232,7 +232,7 @@ async function retainedActions(fixture: CompatibleNameRecoveryFixture) {
 async function readDescriptor(fixture: CompatibleNameRecoveryFixture, repository: IndexedDbReceiveOperationRepository) {
   const record = await repository.readLifecycle(fixture.operationId)
   if (record === undefined) throw new TypeError('missing receive lifecycle')
-  const descriptor = receiveOperationResumeDescriptor(decodeStoredReceiveLifecycleState(record), Date.now())
+  const descriptor = receiveOperationResumeDescriptor(decodeStoredReceiveLifecycleState(record))
   if (descriptor === undefined) throw new TypeError('missing retained receive descriptor')
   return descriptor
 }

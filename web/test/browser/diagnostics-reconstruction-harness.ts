@@ -191,7 +191,7 @@ export async function reconstructFSAContinuationFailure(
         diagnostics: outputDiagnostics,
       })
       const reopened = await reopen.reopen(
-        requiredDescriptor(stableLifecycle, clockMilliseconds),
+        requiredDescriptor(stableLifecycle),
         'continue',
         failures,
         'preserve',
@@ -386,9 +386,8 @@ function resumableReceive(
 
 function requiredDescriptor(
   lifecycle: ReceiveLifecycleState,
-  now: number,
 ) {
-  const descriptor = receiveOperationResumeDescriptor(lifecycle, now)
+  const descriptor = receiveOperationResumeDescriptor(lifecycle)
   if (descriptor === undefined) throw new Error('reconstruction lifecycle has no continuation')
   return descriptor
 }

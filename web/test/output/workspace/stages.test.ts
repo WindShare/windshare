@@ -25,7 +25,6 @@ import type {
 } from '../../../src/output/workspace/repository'
 import {
   assertWorkspaceContentGate,
-  stableStateKind,
   WorkspaceOperationStages,
   type WorkspaceBudgetAuthority,
   type WorkspaceStageTraceEvent,
@@ -166,16 +165,6 @@ describe('workspace stage admission gate', () => {
       generation: 1n,
       packageDigest: packaged.digest,
     })
-    expect(stableStateKind(waiting)).toBe('waiting-to-save')
-    expect(() => stableStateKind(initialReceiveLifecycleState({
-      operationId: intent.operationId,
-      receiveIntentDigest: intent.digest,
-    }))).toThrow('not durably expirable')
-    expect(() => stableStateKind(Object.freeze({
-      ...waiting,
-      kind: 'artifact-sealed' as const,
-    }))).toThrow('not durably expirable')
-
     const repository = new MemoryReceiveOperationRepository()
     await repository.commitTransition({ operationId: intent.operationId, lifecycle: waiting })
     let now = 1_000
@@ -207,7 +196,11 @@ describe('workspace stage admission gate', () => {
     expect(stored === undefined ? undefined : decodeStoredReceiveLifecycleState(stored))
       .toMatchObject({ kind: 'waiting-to-save', packageDigest: packaged.digest })
     expect(retained).not.toHaveProperty('expiresAt')
-    expect(trace.some(event => event.name === 'receive.operation.expired')).toBe(false)
+    expect(trace.at(-1)).toMatchObject({
+      name: 'receive.handoff.not_started',
+      operation_id: intent.operationId,
+      external_attempt_reason: 'user-cancelled',
+    })
   })
 })
 

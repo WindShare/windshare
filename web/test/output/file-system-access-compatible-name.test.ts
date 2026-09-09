@@ -858,14 +858,12 @@ describe('File System Access terminal metadata retirement', () => {
         intent: session.intent, lifecycle, repository, leaseId: newLeaseId,
         checkpointRepositoryFactory: checkpointFactory,
         openCompatibleNameLedger: async () => ledger,
-        clock: () => 2_000,
       })
       return { ...result, repairSummary: ledger.header?.repairSummary }
     }
     const result = recovery === 'cleanup' ? await cleanupPublished() : await catchUpFileSystemAccessCompatibleNames({
       operation,
       signal: SIGNAL,
-      clock: () => 2_000,
       openSession: caughtUpOperation => openFileSystemAccessCompatibleNameCatchUp({
         intent: caughtUpOperation.intent,
         operationRepository: caughtUpOperation.repository,

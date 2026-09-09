@@ -29,11 +29,11 @@ describe('obsolete compatible-name metadata authority', () => {
         generation: 1n,
         kind: 'receiving',
         activeLeaseId: identity(16, 3),
-      }, 1)!,
+      })!,
       continuation: 'cleanup-incompatible' as const,
     }
     await expect(mutation.resume(descriptor)).rejects.toThrow('no physical output authority')
-    await expect(mutation.expire(descriptor)).rejects.toThrow('no physical output authority')
+    await expect(mutation.cleanup(descriptor)).rejects.toThrow('no physical output authority')
     await expect(mutation.catchUp(descriptor)).rejects.toThrow('no physical output authority')
     await expect(mutation.discard(descriptor)).resolves.toEqual({ kind: 'record-forgotten' })
     expect(forgetLegacy).toHaveBeenCalledWith(descriptor)

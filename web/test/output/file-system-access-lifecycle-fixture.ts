@@ -251,14 +251,12 @@ export async function freshDiscardFixture(input: Readonly<{
 export function discardFreshFixture(
   fixture: FreshDiscardFixture,
   operation: ReopenedFileSystemAccessDiscardOperation = fixture.operation,
-  nowMilliseconds = 2_000,
 ) {
   return discardReopenedFileSystemAccessOutput({
     operation,
     lockManager: fixture.locks,
     checkpointRepositoryFactory: fixture.checkpointFactory,
     openCompatibleNameLedger: async () => new AbsentCompatibleNameLedger(),
-    clock: () => nowMilliseconds,
   })
 }
 
@@ -603,7 +601,6 @@ export async function fsaExecution(
     repository,
     lifecycleLeaseId,
     transferJobId,
-    clock: () => 1_000,
   })
   const checkpointIdentity = Object.freeze({
     receiveOperationId: session.intent.operationId,
@@ -739,7 +736,6 @@ export async function startReceiving(
     planKind: 'direct-tree',
     preparationRequired: false,
     activeLeaseId: leaseId,
-    nowMilliseconds: 1_000,
   })
   await repository.commitTransition({
     operationId: intent.operationId,
@@ -763,7 +759,6 @@ export async function resumeReceiving(
     planKind: 'direct-tree',
     preparationRequired: false,
     activeLeaseId: leaseId,
-    nowMilliseconds: 1_500,
   })
   await repository.commitTransition({
     operationId: intent.operationId,

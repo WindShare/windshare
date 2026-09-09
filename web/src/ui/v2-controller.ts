@@ -158,7 +158,6 @@ export class V2ReceiverController {
               progress: EMPTY_V2_PROGRESS, taskDisplay: runtime.display ?? null })
           },
           runtime.lifecycle,
-          Date.now(),
           runtime.initialWorkspaceUsage,
           runtime.activeControls,
         ),
@@ -464,7 +463,6 @@ export class V2ReceiverController {
         this.#snapshot = Object.freeze({ ...this.#snapshot,
           progress: EMPTY_V2_PROGRESS, taskDisplay: runtime.display ?? input.retained.display ?? null })
       },
-      Date.now(),
       runtime.initialWorkspaceUsage,
       runtime.activeControls,
       input.retained.repairSummary,

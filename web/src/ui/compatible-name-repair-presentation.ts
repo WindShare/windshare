@@ -102,7 +102,7 @@ function compatibleNameRepairActionMode(
 function terminalRepairLifecycle(state: ReceiveLifecycleState): boolean {
   return state.kind === 'published' || state.kind === 'partial-directory' ||
     state.kind === 'restart-required' || state.kind === 'discarded' ||
-    state.kind === 'expired' || state.kind === 'needs-attention' ||
+    state.kind === 'needs-attention' ||
     state.kind === 'download-started'
 }
 

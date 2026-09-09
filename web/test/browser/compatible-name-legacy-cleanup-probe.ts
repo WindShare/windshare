@@ -51,7 +51,7 @@ export async function probeLegacyCompatibleNameCleanup(databaseName: string) {
       source,
       mutations: {
         resume: async () => { throw new Error('must not resume') },
-        expire: async () => { throw new Error('must not expire physically') },
+        cleanup: async () => { throw new Error('must not expire physically') },
         discard: descriptor => forgetLegacyCompatibleNameRecord(descriptor, { databaseName }),
       },
     })

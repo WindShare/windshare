@@ -83,7 +83,7 @@ describe('Direct ZIP retained session', () => {
     expect(fixture.lifecycle.deleteOwnedTarget).toHaveBeenCalledOnce()
   })
 
-  it('cleans an expired retained target without activating transfer execution', async () => {
+  it('deletes an explicitly selected retained target without activating transfer execution', async () => {
     const target = targetSequence([], { kind: 'ready', value: { disposition: 'deleted' } })
     const fixture = recoveryFixture(undefined, target)
     const input = { ...fixture.input, candidate: { id: 'candidate-proof' } as never }

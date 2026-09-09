@@ -36,7 +36,6 @@ export const PRESENTATION_EXCLUSION_REASONS = Object.freeze([
   'user_paused',
   'user_stopped',
   'user_discarded',
-  'normal_expiry',
   'picker_refused',
   'authority_invalidated',
   'not_user_visible',

@@ -9,7 +9,7 @@ import {
 } from '../../src/output/resume/reopen-authority'
 
 describe('retained Direct ZIP cleanup routing', () => {
-  it.each(['expire', 'catchUp'] as const)(
+  it.each(['cleanup', 'catchUp'] as const)(
     'preserves Direct ZIP target-proof ownership through %s instead of generic cleanup',
     async method => {
       const operation = directZipOperation()
@@ -52,16 +52,13 @@ function descriptor(): ReceiveOperationResumeDescriptor {
     receiveIntentDigest: 'intent',
     lifecycleGeneration: 1n,
     lifecycle: Object.freeze({
-      kind: 'expired',
+      kind: 'published',
       operationId: 'operation',
       receiveIntentDigest: 'intent',
       generation: 1n,
-      priorStableState: 'resumable-receive',
-      expiresAt: 1,
+      receiptDigest: 'publication',
       cleanupState: 'cleanup-pending',
-      expiryReceiptDigest: 'expiry',
     }),
-    continuation: 'cleanup-expired',
-    expiresAt: 1,
+    continuation: 'retry-cleanup',
   })
 }

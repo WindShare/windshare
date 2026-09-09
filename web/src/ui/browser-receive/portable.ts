@@ -151,10 +151,6 @@ V2ExecutionAdmissionLifecycle {
     throw unavailableRoute()
   }
 
-  observeExpiry(): Promise<V2LifecycleMutation> {
-    return Promise.reject(unavailableRoute())
-  }
-
   resolveWorkspaceUsage(): null {
     return null
   }
@@ -331,7 +327,6 @@ V2ExecutionAdmissionLifecycle {
       planKind: 'portable-handoff',
       preparationRequired: true,
       activeLeaseId: this.#leaseId,
-      nowMilliseconds: Date.now(),
     })
     if (reduction.status !== 'applied') throw new TypeError('portable lifecycle transition became stale')
     return reduction.state

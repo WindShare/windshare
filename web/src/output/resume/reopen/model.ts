@@ -48,15 +48,6 @@ import type { PreparationAdmissionReceiptV1 } from '../../workspace/receipts'
 
 export type PersistedReceiveOperationReopenPurpose = 'continue' | 'cleanup' | 'partial-export'
 
-export type StableLifecycleKind =
-  | 'resumable-receive'
-  | 'resumable-package'
-  | 'waiting-to-save'
-  | 'download-started'
-  | 'authorization-required'
-  | 'target-verification-required'
-  | 'destination-space-required'
-
 export type PersistedReceiveOperationReopenTraceEvent =
   | Readonly<{
       name: 'receive.operation.reopen_authorized'
@@ -66,12 +57,6 @@ export type PersistedReceiveOperationReopenTraceEvent =
       continuation: ReceiveOperationResumeDescriptor['continuation']
       retained_file_recovery?: PersistentPausedFileRecovery
       lease_id: string
-    }>
-  | Readonly<{
-      name: 'receive.operation.expired'
-      operation_id: string
-      prior_stable_state: StableLifecycleKind
-      expires_at_ms: number
     }>
   | Readonly<{
       name: 'receive.operation.needs_attention'
@@ -139,20 +124,6 @@ export type ReopenedReceiveOperation =
   | ReopenedDirectTreeOperation
   | ReopenedWorkspaceOperation
   | ReopenedDirectZipOperation
-
-export class PersistedReceiveOperationDeadlineElapsedError extends DOMException {
-  readonly state: Extract<ReceiveLifecycleState, { kind: 'expired' }>
-  readonly receipt: import('../../workspace/receipts').ExpiryReceiptV1
-
-  constructor(
-    state: Extract<ReceiveLifecycleState, { kind: 'expired' }>,
-    receipt: import('../../workspace/receipts').ExpiryReceiptV1,
-  ) {
-    super('Receive operation retention deadline elapsed before reopen', 'InvalidStateError')
-    this.state = state
-    this.receipt = receipt
-  }
-}
 
 export class PersistedReceiveOperationNeedsAttentionError extends DOMException {
   readonly state: Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>
@@ -261,7 +232,6 @@ export interface ReducerContext {
   readonly planKind: PlanKind
   readonly preparationRequired: boolean
   readonly activeLeaseId: string
-  readonly nowMilliseconds: number
 }
 
 export type { OriginPrivateWorkspaceBudgetClaim }

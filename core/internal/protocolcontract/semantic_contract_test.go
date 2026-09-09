@@ -261,7 +261,6 @@ func semanticCases(t *testing.T) []any {
 				map[string]any{"state": "partial-directory", "byte": 16, "plans": []string{"direct-tree"}},
 				map[string]any{"state": "restart-required", "byte": 17, "plans": []string{"direct-atomic", "portable-handoff", "direct-resumable-zip"}},
 				map[string]any{"state": "discarded", "byte": 18, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "portable-handoff", "direct-resumable-zip"}},
-				map[string]any{"state": "expired", "byte": 19, "plans": []string{"direct-tree", "workspace-then-publish", "direct-resumable-zip"}},
 				map[string]any{"state": "needs-attention", "byte": 20, "plans": []string{"direct-tree", "direct-atomic", "workspace-then-publish", "direct-resumable-zip"}},
 			},
 			"nonterminalRecoveryStates": []any{
@@ -280,7 +279,6 @@ func semanticCases(t *testing.T) []any {
 				"safeResumeBytes":        "selected-source-payload-bytes-covered-by-verified-checkpoint",
 				"committedArchiveLength": "verified-target-prefix-bytes",
 			},
-			"deadlineWritingStates":          []string{},
 			"publishedCleanupPendingRemains": "published", "handoffNeverMeans": "published",
 			"completeArtifactsExclude": []string{"partial-directory"},
 		},

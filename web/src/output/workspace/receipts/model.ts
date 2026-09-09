@@ -7,7 +7,6 @@ export const RECEIPT_WORKSPACE_SEAL = 6 as const
 export const RECEIPT_PACKAGE = 7 as const
 export const RECEIPT_MANAGED_PUBLICATION = 8 as const
 export const RECEIPT_HANDOFF = 9 as const
-export const RECEIPT_EXPIRY = 10 as const
 export const RECEIPT_CLEANUP = 11 as const
 export const RECEIPT_PACKAGE_TEMPORARY_CLEANUP = 12 as const
 export const RAW_WORKSPACE_RECEIPT_DOMAIN = 'windshare/raw-workspace-receipt/v1'
@@ -107,21 +106,6 @@ export interface HandoffReceiptV1 extends ReceiveReceiptBase {
   readonly handoffStarted: true
 }
 
-export interface ExpiryReceiptV1 extends ReceiveReceiptBase {
-  readonly kind: 'expiry'
-  readonly priorStableState:
-    | 'resumable-receive'
-    | 'resumable-package'
-    | 'waiting-to-save'
-    | 'download-started'
-    | 'authorization-required'
-    | 'target-verification-required'
-    | 'destination-space-required'
-  readonly expiresAt: number
-  readonly retainedSuccessCount: bigint
-  readonly cleanupState: 'clean' | 'cleanup-pending'
-}
-
 export interface CleanupReceiptV1 extends ReceiveReceiptBase {
   readonly kind: 'cleanup'
   readonly removedObjectIds: readonly string[]
@@ -144,7 +128,6 @@ export type WorkspaceReceiveReceiptV1 =
   | PackageReceiptV1
   | ManagedPublicationReceiptV1
   | HandoffReceiptV1
-  | ExpiryReceiptV1
   | CleanupReceiptV1
   | PackageTemporaryCleanupReceiptV1
 

@@ -138,8 +138,8 @@ export async function seedFSAOperationBinding(
   })
 }
 
-export function requiredDescriptor(lifecycle: ReceiveLifecycleState, now: number) {
-  const descriptor = receiveOperationResumeDescriptor(lifecycle, now)
+export function requiredDescriptor(lifecycle: ReceiveLifecycleState) {
+  const descriptor = receiveOperationResumeDescriptor(lifecycle)
   if (descriptor === undefined) throw new Error('lifecycle fixture has no descriptor')
   return descriptor
 }

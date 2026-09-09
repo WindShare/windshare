@@ -33,7 +33,6 @@ export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
   'partial-directory',
   'restart-required',
   'discarded',
-  'expired',
   'needs-attention',
   'authorization-required',
   'target-verification-required',
@@ -137,7 +136,6 @@ export interface DiagnosticContextV1 {
       | 'partial_directory'
       | 'restart_required'
       | 'discarded'
-      | 'expired'
       | 'needs_attention'
       | 'authorization_required'
       | 'target_verification_required'

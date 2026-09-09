@@ -386,7 +386,7 @@ export async function recoverWorkspaceActivationReloadCut(
       candidateCount: candidates.length,
       promotedHandlePresent: root !== undefined,
       lifecycle: lifecycle.kind,
-      retainedContinuation: receiveOperationResumeDescriptor(lifecycle, Date.now())?.continuation ?? null,
+      retainedContinuation: receiveOperationResumeDescriptor(lifecycle)?.continuation ?? null,
     })
   } finally {
     repository.close()
@@ -445,7 +445,7 @@ export async function createFreshPageWorkspaceResumeCut(
   }
   const claim = originPrivateClaim(admission.content.claim)
   const paused = await stages.pauseReceive({
-    checkpointSetDigest: ids.expiryReceiptDigest,
+    checkpointSetDigest: ids.checkpointSetDigest,
     completedFileCount: 0n,
     completedBytes: 0n,
     selectionFacts: Object.freeze({
@@ -474,7 +474,7 @@ export async function reopenFreshPageWorkspaceResume(
   const ids = await durableIdentities(fixture.key)
   const intent = await durableIntent(ids)
   const stable = await readDurableLifecycle(descriptorRepository, intent.operationId)
-  const descriptor = receiveOperationResumeDescriptor(stable, FRESH_PAGE_RECOVERY_TIME)
+  const descriptor = receiveOperationResumeDescriptor(stable)
   descriptorRepository.close()
   if (descriptor === undefined || descriptor.continuation !== 'resume-receive') {
     throw new TypeError('fresh-page workspace did not retain resume authority')
@@ -705,7 +705,6 @@ export async function recoverReceiveAndSealPackage(
   }, {
     planKind: 'workspace-then-publish',
     nowMilliseconds: RECOVERY_TIME,
-    expiryReceiptDigest: ids.expiryReceiptDigest,
   })
   await repository.commitTransition({
     operationId: intent.operationId,

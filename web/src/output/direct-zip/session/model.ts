@@ -78,7 +78,7 @@ export interface DirectZipRecoveryLifecyclePort<FileHandle, Runtime> {
   retain(runtime: Runtime): Promise<void>
   /** Closes writer authority while retaining target/checkpoint proof for cleanup. */
   prepareCleanup(runtime: Runtime): Promise<void>
-  /** Retained expiry owns no live writer; this cut fences cleanup without opening execution. */
+  /** Retained cleanup owns no live writer; this cut fences deletion without opening execution. */
   prepareRetainedCleanup(signal: AbortSignal): Promise<void>
   deleteOwnedTarget(): Promise<void>
 }

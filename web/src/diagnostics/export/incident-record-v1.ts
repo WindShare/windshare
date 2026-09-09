@@ -140,7 +140,6 @@ export type LifecycleStateV1 =
   | 'partial_directory'
   | 'restart_required'
   | 'discarded'
-  | 'expired'
   | 'needs_attention'
   | 'authorization_required'
   | 'target_verification_required'

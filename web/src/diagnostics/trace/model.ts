@@ -573,7 +573,6 @@ export interface TraceEventPayloadByNameV1 {
       | 'change_location'
       | 'discard'
       | 'delete'
-      | 'expiry'
     lifecycle_state?: LifecycleStateV1
   }>
   readonly transfer_progress: TransferProgressPayloadV1
@@ -637,7 +636,6 @@ export interface TraceEventPayloadByNameV1 {
       | 'resume_package'
       | 'save_artifact'
       | 'retry_download'
-      | 'cleanup_expired'
       | 'retry_cleanup'
       | 'needs_attention'
   }>

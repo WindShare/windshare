@@ -5,18 +5,15 @@ import {
   canonicalRecord,
   canonicalU8,
   canonicalU64,
-  canonicalUnixMilliseconds,
   concatCanonicalBytes,
   type CanonicalBytes,
 } from './canonical'
 import {
-  lifecycleDeadline,
   receiveStateByte,
   snapshotRecoverySelectionFacts,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
   type RecoveryDiscoveryState,
-  type RetainedLifecycleKind,
   type RestartRequiredReason,
 } from './state'
 
@@ -50,14 +47,12 @@ export function canonicalReceiveLifecycleStateBytes(
 export function storedReceiveLifecycleState(
   state: ReceiveLifecycleState,
 ): Promise<PersistedReceiveRecord> {
-  const expiresAt = lifecycleDeadline()
   return createPersistedReceiveRecord({
     operationId: state.operationId,
     kind: RECEIVE_RECORD_LIFECYCLE_STATE,
     canonicalBytes: canonicalReceiveLifecycleStateBytes(state),
     state: receiveStateByte(state),
     lifecycleGeneration: state.generation,
-    ...(expiresAt === undefined ? {} : { expiresAt }),
   })
 }
 
@@ -70,8 +65,7 @@ export function decodeStoredReceiveLifecycleState(
   const state = decodeReceiveLifecycleState(record.canonicalBytes)
   if (state.operationId !== record.operationId ||
       state.generation.toString(10) !== record.lifecycleGeneration ||
-      receiveStateByte(state) !== record.state ||
-      lifecycleDeadline() !== record.expiresAt) {
+      receiveStateByte(state) !== record.state) {
     throw new TypeError('lifecycle projections disagree with canonical bytes')
   }
   return state
@@ -125,12 +119,6 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
     ]
     case 'discarded':
       return [digestFrame(state.cleanupReceiptDigest, 'cleanup receipt digest')]
-    case 'expired': return [
-      canonicalFrame(canonicalU8(stableStateByte(state.priorStableState))),
-      millisecondsFrame(state.expiresAt),
-      canonicalFrame(canonicalU8(state.cleanupState === 'clean' ? 1 : 2)),
-      digestFrame(state.expiryReceiptDigest, 'expiry receipt digest'),
-    ]
     case 'needs-attention': return [
       canonicalFrame(canonicalU8(attentionReasonByte(state.reason))),
       digestFrame(state.lastVerifiedRecordDigest, 'last verified record digest'),
@@ -229,10 +217,6 @@ function digestFrame(value: string, label: string): CanonicalBytes {
   return identityFrame(value, 32, label)
 }
 
-function millisecondsFrame(value: number): CanonicalBytes {
-  return canonicalFrame(canonicalUnixMilliseconds(value))
-}
-
 function attentionReasonByte(reason: NeedsAttentionReason): number {
   switch (reason) {
     case 'target-ownership-unknown': return 1
@@ -264,20 +248,6 @@ function restartReasonByte(reason: RestartRequiredReason): number {
     case 'preparation-invalidated': return 4
     case 'content-session-ended': return 5
     case 'target-deleted': return 6
-  }
-}
-
-function stableStateByte(
-  state: RetainedLifecycleKind,
-): number {
-  switch (state) {
-    case 'resumable-receive': return 4
-    case 'resumable-package': return 9
-    case 'waiting-to-save': return 11
-    case 'download-started': return 15
-    case 'authorization-required': return 21
-    case 'target-verification-required': return 22
-    case 'destination-space-required': return 23
   }
 }
 
@@ -404,14 +374,6 @@ function decodePublicationState(
       ...base,
       kind: 'discarded',
       cleanupReceiptDigest: reader.identity(32, 'cleanup receipt digest'),
-    })
-    case 19: return Object.freeze({
-      ...base,
-      kind: 'expired',
-      priorStableState: stableStateFromByte(reader.byte('prior stable state')),
-      expiresAt: reader.milliseconds(),
-      cleanupState: cleanupStateFromByte(reader.byte('cleanup state')),
-      expiryReceiptDigest: reader.identity(32, 'expiry receipt digest'),
     })
     case 20: return Object.freeze({
       ...base,
@@ -601,14 +563,6 @@ class LifecycleFrameReader {
     return new DataView(value.buffer, value.byteOffset, 8).getBigUint64(0, false)
   }
 
-  milliseconds(): number {
-    const value = this.u64('lifecycle deadline')
-    if (value > BigInt(Number.MAX_SAFE_INTEGER)) {
-      throw new TypeError('lifecycle deadline exceeds the safe integer bound')
-    }
-    return Number(value)
-  }
-
   finish(): void {
     if (this.#offset !== this.#bytes.byteLength) {
       throw new TypeError('lifecycle record contains trailing fields')
@@ -675,21 +629,6 @@ function restartReasonFromByte(value: number): RestartRequiredReason {
   const reason = reasons[value - 1]
   if (reason === undefined) throw new TypeError('restart reason is invalid')
   return reason
-}
-
-function stableStateFromByte(
-  value: number,
-): RetainedLifecycleKind {
-  switch (value) {
-    case 4: return 'resumable-receive'
-    case 9: return 'resumable-package'
-    case 11: return 'waiting-to-save'
-    case 15: return 'download-started'
-    case 21: return 'authorization-required'
-    case 22: return 'target-verification-required'
-    case 23: return 'destination-space-required'
-    default: throw new TypeError('prior stable state is invalid')
-  }
 }
 
 function directZipCheckpointPhaseByte(

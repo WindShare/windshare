@@ -22,12 +22,6 @@ export type RecoveryGateKind =
   | 'authorization-required'
   | 'target-verification-required'
   | 'destination-space-required'
-export type RetainedLifecycleKind =
-  | 'resumable-receive'
-  | 'resumable-package'
-  | 'waiting-to-save'
-  | 'download-started'
-  | RecoveryGateKind
 export type PartialDirectoryReason = 'failures' | 'stopped'
 export type RecoveryDiscoveryState = 'complete' | 'failed'
 
@@ -78,36 +72,39 @@ export const RECEIVE_STATE_DOWNLOAD_STARTED = 15 as const
 export const RECEIVE_STATE_PARTIAL_DIRECTORY = 16 as const
 export const RECEIVE_STATE_RESTART_REQUIRED = 17 as const
 export const RECEIVE_STATE_DISCARDED = 18 as const
-export const RECEIVE_STATE_EXPIRED = 19 as const
 export const RECEIVE_STATE_NEEDS_ATTENTION = 20 as const
 export const RECEIVE_STATE_AUTHORIZATION_REQUIRED = 21 as const
 export const RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED = 22 as const
 export const RECEIVE_STATE_DESTINATION_SPACE_REQUIRED = 23 as const
 
-export type ReceiveStateByte =
-  | typeof RECEIVE_STATE_INTENT_FROZEN
-  | typeof RECEIVE_STATE_PREPARING
-  | typeof RECEIVE_STATE_RECEIVING
-  | typeof RECEIVE_STATE_RESUMABLE_RECEIVE
-  | typeof RECEIVE_STATE_FINALIZING_TREE
-  | typeof RECEIVE_STATE_COMMITTING_ATOMIC
-  | typeof RECEIVE_STATE_MATERIALIZATION_SEALED
-  | typeof RECEIVE_STATE_PACKAGING
-  | typeof RECEIVE_STATE_RESUMABLE_PACKAGE
-  | typeof RECEIVE_STATE_ARTIFACT_SEALED
-  | typeof RECEIVE_STATE_WAITING_TO_SAVE
-  | typeof RECEIVE_STATE_PUBLISHING_MANAGED
-  | typeof RECEIVE_STATE_HANDING_OFF
-  | typeof RECEIVE_STATE_PUBLISHED
-  | typeof RECEIVE_STATE_DOWNLOAD_STARTED
-  | typeof RECEIVE_STATE_PARTIAL_DIRECTORY
-  | typeof RECEIVE_STATE_RESTART_REQUIRED
-  | typeof RECEIVE_STATE_DISCARDED
-  | typeof RECEIVE_STATE_EXPIRED
-  | typeof RECEIVE_STATE_NEEDS_ATTENTION
-  | typeof RECEIVE_STATE_AUTHORIZATION_REQUIRED
-  | typeof RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED
-  | typeof RECEIVE_STATE_DESTINATION_SPACE_REQUIRED
+const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
+  'intent-frozen': RECEIVE_STATE_INTENT_FROZEN,
+  'preparing': RECEIVE_STATE_PREPARING,
+  'receiving': RECEIVE_STATE_RECEIVING,
+  'resumable-receive': RECEIVE_STATE_RESUMABLE_RECEIVE,
+  'finalizing-tree': RECEIVE_STATE_FINALIZING_TREE,
+  'committing-atomic': RECEIVE_STATE_COMMITTING_ATOMIC,
+  'materialization-sealed': RECEIVE_STATE_MATERIALIZATION_SEALED,
+  'packaging': RECEIVE_STATE_PACKAGING,
+  'resumable-package': RECEIVE_STATE_RESUMABLE_PACKAGE,
+  'artifact-sealed': RECEIVE_STATE_ARTIFACT_SEALED,
+  'waiting-to-save': RECEIVE_STATE_WAITING_TO_SAVE,
+  'publishing-managed': RECEIVE_STATE_PUBLISHING_MANAGED,
+  'handing-off': RECEIVE_STATE_HANDING_OFF,
+  'published': RECEIVE_STATE_PUBLISHED,
+  'download-started': RECEIVE_STATE_DOWNLOAD_STARTED,
+  'partial-directory': RECEIVE_STATE_PARTIAL_DIRECTORY,
+  'restart-required': RECEIVE_STATE_RESTART_REQUIRED,
+  'discarded': RECEIVE_STATE_DISCARDED,
+  'needs-attention': RECEIVE_STATE_NEEDS_ATTENTION,
+  'authorization-required': RECEIVE_STATE_AUTHORIZATION_REQUIRED,
+  'target-verification-required': RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
+  'destination-space-required': RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
+} satisfies Readonly<Record<ReceiveLifecycleState['kind'], number>>)
+
+export type ReceiveStateByte = (typeof RECEIVE_STATE_BYTES_BY_KIND)[ReceiveLifecycleState['kind']]
+
+const VALID_RECEIVE_STATE_BYTES: ReadonlySet<number> = new Set(Object.values(RECEIVE_STATE_BYTES_BY_KIND))
 
 interface LifecycleStateBase {
   readonly operationId: string
@@ -115,6 +112,7 @@ interface LifecycleStateBase {
   readonly generation: bigint
 }
 
+/** Retained payload is retired by explicit deletion or verified publication; browser handoff proves neither. */
 export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & { kind: 'intent-frozen' }>
   | Readonly<LifecycleStateBase & { kind: 'preparing'; preparationId: string }>
@@ -215,13 +213,6 @@ export type ReceiveLifecycleState =
     }>
   | Readonly<LifecycleStateBase & { kind: 'discarded'; cleanupReceiptDigest: string }>
   | Readonly<LifecycleStateBase & {
-      kind: 'expired'
-      priorStableState: RetainedLifecycleKind
-      expiresAt: number
-      cleanupState: OwnedCleanupState
-      expiryReceiptDigest: string
-    }>
-  | Readonly<LifecycleStateBase & {
       kind: 'needs-attention'
       reason: NeedsAttentionReason
       lastVerifiedRecordDigest: string
@@ -302,41 +293,15 @@ export function snapshotRecoverySelectionFacts(
 }
 
 export function receiveStateByte(state: ReceiveLifecycleState): ReceiveStateByte {
-  switch (state.kind) {
-    case 'intent-frozen': return RECEIVE_STATE_INTENT_FROZEN
-    case 'preparing': return RECEIVE_STATE_PREPARING
-    case 'receiving': return RECEIVE_STATE_RECEIVING
-    case 'resumable-receive': return RECEIVE_STATE_RESUMABLE_RECEIVE
-    case 'finalizing-tree': return RECEIVE_STATE_FINALIZING_TREE
-    case 'committing-atomic': return RECEIVE_STATE_COMMITTING_ATOMIC
-    case 'materialization-sealed': return RECEIVE_STATE_MATERIALIZATION_SEALED
-    case 'packaging': return RECEIVE_STATE_PACKAGING
-    case 'resumable-package': return RECEIVE_STATE_RESUMABLE_PACKAGE
-    case 'artifact-sealed': return RECEIVE_STATE_ARTIFACT_SEALED
-    case 'waiting-to-save': return RECEIVE_STATE_WAITING_TO_SAVE
-    case 'publishing-managed': return RECEIVE_STATE_PUBLISHING_MANAGED
-    case 'handing-off': return RECEIVE_STATE_HANDING_OFF
-    case 'published': return RECEIVE_STATE_PUBLISHED
-    case 'download-started': return RECEIVE_STATE_DOWNLOAD_STARTED
-    case 'partial-directory': return RECEIVE_STATE_PARTIAL_DIRECTORY
-    case 'restart-required': return RECEIVE_STATE_RESTART_REQUIRED
-    case 'discarded': return RECEIVE_STATE_DISCARDED
-    case 'expired': return RECEIVE_STATE_EXPIRED
-    case 'needs-attention': return RECEIVE_STATE_NEEDS_ATTENTION
-    case 'authorization-required': return RECEIVE_STATE_AUTHORIZATION_REQUIRED
-    case 'target-verification-required': return RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED
-    case 'destination-space-required': return RECEIVE_STATE_DESTINATION_SPACE_REQUIRED
-  }
+  return RECEIVE_STATE_BYTES_BY_KIND[state.kind]
 }
 
-export function lifecycleDeadline(): number | undefined {
-  // Neither unfinished work nor browser handoff proves a saved external copy.
-  // Only explicit deletion or verified publication may retire retained payload.
-  return undefined
+export function isReceiveStateByte(value: number): value is ReceiveStateByte {
+  return VALID_RECEIVE_STATE_BYTES.has(value)
 }
 
 export function isTerminalLifecycleState(state: ReceiveLifecycleState): boolean {
   return state.kind === 'published' || state.kind === 'partial-directory' ||
     state.kind === 'restart-required' || state.kind === 'discarded' ||
-    state.kind === 'expired' || state.kind === 'needs-attention'
+    state.kind === 'needs-attention'
 }

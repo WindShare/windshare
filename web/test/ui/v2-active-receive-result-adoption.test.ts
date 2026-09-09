@@ -481,10 +481,6 @@ class ResultRuntime implements V2BoundReceiveOperation {
     })
   }
 
-  observeExpiry(lifecycle: ReceiveLifecycleState): Promise<V2LifecycleMutation> {
-    return unexpectedFixtureCall('result-adoption fixture cannot expire', lifecycle)
-  }
-
   resolveWorkspaceUsage(lifecycle: ReceiveLifecycleState): null {
     if (lifecycle.operationId !== this.lifecycle.operationId) {
       return unexpectedFixtureCall('coordinator changed the adopted operation', lifecycle)

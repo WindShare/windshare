@@ -263,11 +263,6 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     )
   }
 
-  async observeExpiry(): Promise<V2LifecycleMutation> {
-    this.#requireAttached()
-    return this.#packaging.observeExpiry(this.#backend)
-  }
-
   resolveWorkspaceUsage(lifecycle: ReceiveLifecycleState): WorkspaceUsage | null {
     return this.#packaging.resolveWorkspaceUsage(lifecycle)
   }

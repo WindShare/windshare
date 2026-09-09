@@ -68,19 +68,10 @@ export class WorkspaceStageRuntime {
   }
 
   reduce(state: ReceiveLifecycleState, event: LifecycleEvent): ReceiveLifecycleState {
-    return this.reduceAt(state, event, this.now())
-  }
-
-  reduceAt(
-    state: ReceiveLifecycleState,
-    event: LifecycleEvent,
-    nowMilliseconds: number,
-  ): ReceiveLifecycleState {
     const reduction = reduceReceiveLifecycle(state, event, {
       planKind: 'workspace-then-publish',
       preparationRequired: false,
       activeLeaseId: this.leaseId,
-      nowMilliseconds,
     })
     if (reduction.status !== 'applied' || reduction.state === state) {
       throw new TypeError('workspace lifecycle transition was stale or side-effect free')

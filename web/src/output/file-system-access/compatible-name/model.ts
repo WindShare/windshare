@@ -45,7 +45,6 @@ export type CompatibleNameOrdinaryTerminalLifecycle = Extract<
     | 'partial-directory'
     | 'restart-required'
     | 'discarded'
-    | 'expired'
     | 'needs-attention' }
 >
 
@@ -317,7 +316,6 @@ function terminalLifecycleReceiptDigest(
     case 'restart-required':
       return lifecycle.receiptDigest
     case 'discarded': return lifecycle.cleanupReceiptDigest
-    case 'expired': return lifecycle.expiryReceiptDigest
     case 'needs-attention': return lifecycle.lastVerifiedRecordDigest
   }
 }
@@ -330,7 +328,6 @@ function isOrdinaryTerminalLifecycle(
     case 'partial-directory':
     case 'restart-required':
     case 'discarded':
-    case 'expired':
     case 'needs-attention':
       return true
     default:

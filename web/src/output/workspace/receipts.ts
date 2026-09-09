@@ -31,13 +31,11 @@ import {
   receiptIdentity,
   snapshotOwnedObjects,
   snapshotSortedDigests,
-  stableStateByte,
   unixMilliseconds,
 } from './receipts/codec'
 import {
   RAW_WORKSPACE_RECEIPT_DOMAIN,
   RECEIPT_CLEANUP,
-  RECEIPT_EXPIRY,
   RECEIPT_HANDOFF,
   RECEIPT_MANAGED_PUBLICATION,
   RECEIPT_PACKAGE,
@@ -46,7 +44,6 @@ import {
   RECEIPT_WORKSPACE_SEAL,
   type ArtifactVerificationReceiptV1,
   type CleanupReceiptV1,
-  type ExpiryReceiptV1,
   type HandoffReceiptV1,
   type ManagedPublicationReceiptV1,
   type OriginalFileArtifactVerificationReceiptV1,
@@ -67,7 +64,6 @@ export {
 export type {
   ArtifactVerificationReceiptV1,
   CleanupReceiptV1,
-  ExpiryReceiptV1,
   HandoffReceiptV1,
   ManagedPublicationReceiptV1,
   OriginalFileArtifactVerificationReceiptV1,
@@ -399,40 +395,6 @@ export async function createHandoffReceipt(input: {
     suggestedName,
     urlLeaseEndsAt,
     handoffStarted: true,
-  })
-}
-
-export async function createExpiryReceipt(input: {
-  readonly operationId: string
-  readonly receiveIntentDigest: string
-  readonly priorStableState: ExpiryReceiptV1['priorStableState']
-  readonly expiresAt: number
-  readonly retainedSuccessCount?: bigint
-  readonly cleanupState: 'clean' | 'cleanup-pending'
-}): Promise<ExpiryReceiptV1> {
-  const identity = receiptIdentity(input)
-  const expiresAt = unixMilliseconds(input.expiresAt, 'expiry deadline')
-  const retainedSuccessCount = checkedU64(
-    input.retainedSuccessCount ?? 0n,
-    'retained success count',
-  )
-  const cleanupState = input.cleanupState
-  if (cleanupState !== 'clean' && cleanupState !== 'cleanup-pending') {
-    throw new TypeError('expiry cleanup state is invalid')
-  }
-  const completed = await completeReceipt(identity, RECEIPT_EXPIRY, [
-    canonicalFrame(canonicalU8(stableStateByte(input.priorStableState))),
-    canonicalFrame(canonicalUnixMilliseconds(expiresAt)),
-    canonicalFrame(canonicalU64(retainedSuccessCount)),
-    canonicalFrame(canonicalU8(cleanupState === 'clean' ? 1 : 2)),
-  ])
-  return Object.freeze({
-    ...completed,
-    kind: 'expiry',
-    priorStableState: input.priorStableState,
-    expiresAt,
-    retainedSuccessCount,
-    cleanupState,
   })
 }
 
