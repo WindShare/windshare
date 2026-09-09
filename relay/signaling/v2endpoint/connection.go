@@ -45,9 +45,13 @@ type connection struct {
 	forwardBytes   int
 	forwardChanged chan struct{}
 
-	sessionMu sync.Mutex
-	sessions  map[v2.RelaySessionID]struct{}
-	closed    atomic.Bool
+	sessionMu   sync.Mutex
+	sessions    map[v2.RelaySessionID]struct{}
+	windows     map[v2.RelaySessionID]*senderWindow
+	retirements map[v2.RelaySessionID]struct{}
+	closed      atomic.Bool
+	admitted    chan struct{}
+	admitOnce   sync.Once
 }
 
 func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel context.CancelFunc) *connection {
@@ -55,6 +59,9 @@ func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel co
 		ref: ref, socket: socket, cancel: cancel,
 		control: make(chan controlWrite, MaximumControlQueueFrames), wake: make(chan struct{}, 1),
 		forward: make(map[v2.RelaySessionID]*forwardQueue), sessions: make(map[v2.RelaySessionID]struct{}),
+		windows:     make(map[v2.RelaySessionID]*senderWindow),
+		retirements: make(map[v2.RelaySessionID]struct{}),
+		admitted:    make(chan struct{}),
 	}
 }
 
@@ -129,13 +136,36 @@ func (s *Server) notifySessionRetired(peer *connection, sessionID v2.RelaySessio
 	if peer == nil {
 		return
 	}
-	encoded, err := (v2.SessionRetired{RelaySessionID: sessionID}).MarshalBinary()
-	if err != nil || !peer.enqueueControl(encoded) {
-		// Without an exact retirement delivery, the client could retain an
-		// unbounded runtime past the relay tombstone. Closing the link is the only
-		// bounded fail-safe and lets its existing teardown close every channel.
-		peer.requestClose()
+	peer.sessionMu.Lock()
+	if peer.closed.Load() {
+		peer.sessionMu.Unlock()
+		return
 	}
+	// Admission expiry can retire more sessions at once than the handshake queue
+	// can hold. Coalesce notices separately, bounded by the registry's ID budget.
+	if len(peer.retirements) >= s.registry.SessionCapacity() {
+		if _, duplicate := peer.retirements[sessionID]; !duplicate {
+			peer.sessionMu.Unlock()
+			peer.requestClose()
+			return
+		}
+	}
+	peer.retirements[sessionID] = struct{}{}
+	peer.sessionMu.Unlock()
+	select {
+	case peer.wake <- struct{}{}:
+	default:
+	}
+}
+
+func (peer *connection) takeSessionRetirement() (v2.SessionRetired, bool) {
+	peer.sessionMu.Lock()
+	defer peer.sessionMu.Unlock()
+	for id := range peer.retirements {
+		delete(peer.retirements, id)
+		return v2.SessionRetired{RelaySessionID: id}, true
+	}
+	return v2.SessionRetired{}, false
 }
 
 func (peer *connection) requestClose() bool {
@@ -178,7 +208,13 @@ func (peer *connection) addSession(id v2.RelaySessionID) bool {
 	if peer.closed.Load() {
 		return false
 	}
+	if _, exists := peer.sessions[id]; exists {
+		return true
+	}
 	peer.sessions[id] = struct{}{}
+	if peer.roleValue() == roleSender {
+		peer.windows[id] = &senderWindow{frames: v2.SenderWindowFrames, bytes: v2.SenderWindowBytes}
+	}
 	return true
 }
 
@@ -186,6 +222,7 @@ func (peer *connection) removeSession(id v2.RelaySessionID) bool {
 	peer.sessionMu.Lock()
 	_, existed := peer.sessions[id]
 	delete(peer.sessions, id)
+	delete(peer.windows, id)
 	peer.forwardMu.Lock()
 	if queue := peer.forward[id]; queue != nil {
 		peer.forwardFrames -= len(queue.frames)

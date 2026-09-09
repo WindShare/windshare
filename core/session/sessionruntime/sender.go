@@ -400,6 +400,9 @@ func (factory *SenderFactory) acceptClient(
 	runtime.lanes.setDetachHook(func(identity LaneIdentity) {
 		laneRegistry.Release(identity.ID, identity.Epoch)
 	})
+	if err := confirmChannelAdmission(ctx, channel); err != nil {
+		return nil, err
+	}
 	factory.mu.Lock()
 	if factory.stopping {
 		factory.mu.Unlock()
@@ -454,6 +457,19 @@ func (factory *SenderFactory) completeSenderHandshake(
 		return protocolsession.SessionKeys{}, 0, errors.Join(ErrHandshake, err)
 	}
 	return keys, laneID, nil
+}
+
+// Some transports reserve provisional resources before E2E authentication.
+// Only the authenticator can authorize retaining them; byte traffic is no proof.
+type channelAdmissionConfirmer interface {
+	ConfirmAdmission(context.Context) error
+}
+
+func confirmChannelAdmission(ctx context.Context, channel protocolsession.FrameChannel) error {
+	if admission, ok := channel.(channelAdmissionConfirmer); ok {
+		return admission.ConfirmAdmission(ctx)
+	}
+	return nil
 }
 
 type handedOffChannel struct {

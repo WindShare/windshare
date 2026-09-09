@@ -54,6 +54,8 @@ import {
   decodeV2RelayError,
   decodeV2ResumeCredential,
   decodeV2SessionRetired,
+  decodeV2SessionCredit,
+  decodeV2SessionAdmitted,
   decodeV2StopInit,
   decodeV2StopProof,
   decodeV2Stopped,
@@ -68,6 +70,8 @@ import {
   encodeV2RelayError,
   encodeV2ResumeCredential,
   encodeV2SessionRetired,
+  encodeV2SessionCredit,
+  encodeV2SessionAdmitted,
   encodeV2StopInit,
   encodeV2StopProof,
   encodeV2Stopped,
@@ -151,6 +155,8 @@ interface RegistrationVector extends VectorCase {
   readonly opaqueCiphertextB64: string
   readonly opaqueRouteB64: string
   readonly sessionRetiredB64: string
+  readonly sessionCreditB64: string
+  readonly sessionAdmittedB64: string
   readonly sessionRetiredRelaySessionIdB64: string
   readonly stoppedErrorB64: string
 }
@@ -623,6 +629,11 @@ describe('suite-02 relay and lane runtime contract', () => {
     }
     expect(encodeV2SessionRetired(sessionRetired)).toEqual(bytes(vector.sessionRetiredB64))
     expect(decodeV2SessionRetired(bytes(vector.sessionRetiredB64))).toEqual(sessionRetired)
+    const credit = { relaySessionId: opaque.relaySessionId, frames: 2, bytes: 100 }
+    expect(encodeV2SessionCredit(credit)).toEqual(bytes(vector.sessionCreditB64))
+    expect(decodeV2SessionCredit(bytes(vector.sessionCreditB64))).toEqual(credit)
+    expect(encodeV2SessionAdmitted(sessionRetired)).toEqual(bytes(vector.sessionAdmittedB64))
+    expect(decodeV2SessionAdmitted(bytes(vector.sessionAdmittedB64))).toEqual(sessionRetired)
     expect(encodeV2RelayError({ code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0 })).toEqual(
       bytes(vector.stoppedErrorB64),
     )
@@ -632,8 +643,14 @@ describe('suite-02 relay and lane runtime contract', () => {
       crashGraceSeconds: '60',
       sessionTombstoneSeconds: '60',
       routeBudgetCounts: ['starting', 'live', 'crash-grace', 'stopped-tombstone'],
-      sessionBudgetCounts: ['active', 'ended-id-tombstone'],
-      sessionBudgetScopes: ['global', 'per-share'],
+      sessionBudgets: {
+        global: ['provisional', 'active', 'ended-id-tombstone'],
+        'per-share': ['provisional', 'active'],
+      },
+      sessionAdmissionSeconds: '30',
+      sessionAdmissionPhases: ['awaiting_receiver', 'awaiting_sender', 'active'],
+      senderWindowFrames: 64,
+      senderWindowBytes: 4 << 20,
       stopStoreOutcomes: ['committed', 'definitely-not-committed', 'unknown'],
       explicitStop: [
         'per-route-storage-transaction',
@@ -727,6 +744,13 @@ describe('suite-02 relay and lane runtime contract', () => {
     expect(() => decodeV2OpaqueRoute(flip(bytes(vector.opaqueRouteB64), 5))).toThrow()
     expect(() => decodeV2OpaqueRoute(bytes(vector.sessionRetiredB64))).toThrow()
     expect(() => decodeV2SessionRetired(flip(bytes(vector.sessionRetiredB64), 5))).toThrow()
+    expect(() => decodeV2SessionCredit(flip(bytes(vector.sessionCreditB64), 5))).toThrow()
+    expect(() => decodeV2SessionAdmitted(flip(bytes(vector.sessionAdmittedB64), 5))).toThrow()
+    expect(() => decodeV2SessionCredit(new Uint8Array(24))).toThrow()
+    expect(() => decodeV2SessionAdmitted(new Uint8Array(16))).toThrow()
+    for (const [frames, creditBytes] of [[0, 0], [65, 2000], [1, 1], [1, 4 << 20], [1.5, 100]] as const) {
+      expect(() => encodeV2SessionCredit({ relaySessionId: bytes(vector.opaqueRelaySessionIdB64), frames, bytes: creditBytes })).toThrow()
+    }
     expect(() => decodeV2SessionRetired(bytes(vector.sessionRetiredB64).subarray(0, 15))).toThrow()
     expect(() => decodeV2SessionRetired(new Uint8Array(16))).toThrow()
     expect(() => encodeV2SessionRetired({ relaySessionId: new Uint8Array(8) })).toThrow()

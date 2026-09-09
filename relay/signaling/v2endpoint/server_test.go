@@ -411,21 +411,44 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 	}
 }
 
-func TestSessionRetiredControlQueueFailureClosesPeer(t *testing.T) {
-	cancelled := make(chan struct{})
-	var cancel sync.Once
-	peer := newEndpointTestConnection("sender", nil, func() {
-		cancel.Do(func() { close(cancelled) })
+func TestSessionRetirementNoticesCoalesceOutsideHandshakeQueue(t *testing.T) {
+	const capacity = MaximumControlQueueFrames * 2
+	registry, err := v2route.New(t.Context(), v2route.Config{
+		MaxRoutes: 1, MaxSessions: capacity, MaxSessionsPerShare: capacity,
+		Random: &sequenceReader{next: 1}, Tombstones: &memoryTombstoneStore{},
 	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := newEndpointTestConnection("sender", nil, func() {})
 	for range cap(peer.control) {
 		peer.control <- controlWrite{data: []byte{1}, done: make(chan error, 1)}
 	}
-	server := &Server{}
-	server.notifySessionRetired(peer, relaySessionIDForEndpointTest(91))
-	select {
-	case <-cancelled:
-	default:
-		t.Fatal("undeliverable SESSION_RETIRED did not fail-close the peer")
+	server := &Server{registry: registry}
+	for index := range capacity {
+		id := relaySessionIDForEndpointTest(byte(index + 1))
+		server.notifySessionRetired(peer, id)
+		server.notifySessionRetired(peer, id)
+	}
+	if peer.closed.Load() || len(peer.retirements) != capacity {
+		t.Fatal("batch retirement closed sender or failed to coalesce exact IDs")
+	}
+	seen := make(map[v2.RelaySessionID]bool)
+	for range capacity {
+		notice, ok := peer.takeSessionRetirement()
+		if !ok || seen[notice.RelaySessionID] {
+			t.Fatal("lost or duplicated retirement")
+		}
+		seen[notice.RelaySessionID] = true
+	}
+	if _, ok := peer.takeSessionRetirement(); ok {
+		t.Fatal("retirement queue did not drain")
+	}
+	for index := range capacity + 1 {
+		server.notifySessionRetired(peer, relaySessionIDForEndpointTest(byte(index+1)))
+	}
+	if !peer.closed.Load() {
+		t.Fatal("undeliverable lifecycle notices exceeded ID memory budget")
 	}
 }
 

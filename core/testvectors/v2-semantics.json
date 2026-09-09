@@ -157,14 +157,25 @@
         "crash-grace",
         "stopped-tombstone"
       ],
-      "sessionBudgetCounts": [
-        "active",
-        "ended-id-tombstone"
+      "senderWindowBytes": 4194304,
+      "senderWindowFrames": 64,
+      "sessionAdmissionPhases": [
+        "awaiting_receiver",
+        "awaiting_sender",
+        "active"
       ],
-      "sessionBudgetScopes": [
-        "global",
-        "per-share"
-      ],
+      "sessionAdmissionSeconds": "30",
+      "sessionBudgets": {
+        "global": [
+          "provisional",
+          "active",
+          "ended-id-tombstone"
+        ],
+        "per-share": [
+          "provisional",
+          "active"
+        ]
+      },
       "sessionTombstoneSeconds": "60",
       "stopStoreOutcomes": [
         "committed",

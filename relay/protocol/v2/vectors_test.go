@@ -56,6 +56,8 @@ type v2RegistrationVector struct {
 	OpaqueCiphertextB64     string `json:"opaqueCiphertextB64"`
 	OpaqueRouteB64          string `json:"opaqueRouteB64"`
 	StoppedErrorB64         string `json:"stoppedErrorB64"`
+	SessionCreditB64        string `json:"sessionCreditB64"`
+	SessionAdmittedB64      string `json:"sessionAdmittedB64"`
 }
 
 func loadV2VectorCase(t *testing.T, fileName, name string, destination any) {
@@ -146,6 +148,8 @@ func TestRuntimeReconstructsGeneratedRegistrationResumeStopAndOpaqueVectors(t *t
 	copy(session[:], testB64(t, vector.OpaqueRelaySessionIDB64))
 	opaque := OpaqueRoute{RelaySessionID: session, Ciphertext: testB64(t, vector.OpaqueCiphertextB64)}
 	assertBinaryVector(t, "OPAQUE_ROUTE", opaque.MarshalBinary, vector.OpaqueRouteB64)
+	assertBinaryVector(t, "SESSION_CREDIT", (SessionCredit{RelaySessionID: session, Frames: 2, Bytes: 100}).MarshalBinary, vector.SessionCreditB64)
+	assertBinaryVector(t, "SESSION_ADMITTED", (SessionAdmitted{RelaySessionID: session}).MarshalBinary, vector.SessionAdmittedB64)
 	assertBinaryVector(t, "STOPPED_ERROR", (ErrorFrame{Code: ErrorStopped}).MarshalBinary, vector.StoppedErrorB64)
 }
 

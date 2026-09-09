@@ -717,6 +717,12 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	sessionRetired := slices.Concat(
 		[]byte("WS2F"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID,
 	)
+	sessionCredit := slices.Concat(
+		[]byte("WS2W"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID, u32(2), u32(100),
+	)
+	sessionAdmitted := slices.Concat(
+		[]byte("WS2M"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID,
+	)
 	stoppedError := slices.Concat(
 		[]byte("WS2E"), []byte{wireVersion, 0}, u16(11), u32(0),
 	)
@@ -758,6 +764,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"stopSignatureB64": b64(stopSignature), "stopProofB64": b64(stopProof), "stoppedB64": b64(stopped),
 			"opaqueRelaySessionIdB64": b64(opaqueRelaySessionID), "opaqueCiphertextB64": b64(opaqueCiphertext),
 			"opaqueRouteB64": b64(opaqueRoute), "sessionRetiredB64": b64(sessionRetired),
+			"sessionCreditB64": b64(sessionCredit), "sessionAdmittedB64": b64(sessionAdmitted),
 			"sessionRetiredRelaySessionIdB64": b64(opaqueRelaySessionID), "stoppedErrorB64": b64(stoppedError),
 		},
 		map[string]any{

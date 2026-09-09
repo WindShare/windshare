@@ -167,8 +167,14 @@ func semanticCases(t *testing.T) []any {
 			"name": "relay-route-lifecycle", "crashGraceSeconds": fmt.Sprint(senderCrashGraceSeconds),
 			"sessionTombstoneSeconds": fmt.Sprint(relaySessionTombstoneSeconds),
 			"routeBudgetCounts":       []string{"starting", "live", "crash-grace", "stopped-tombstone"},
-			"sessionBudgetCounts":     []string{"active", "ended-id-tombstone"},
-			"sessionBudgetScopes":     []string{"global", "per-share"},
+			"sessionBudgets": map[string][]string{
+				"global":    {"provisional", "active", "ended-id-tombstone"},
+				"per-share": {"provisional", "active"},
+			},
+			"sessionAdmissionSeconds": "30",
+			"sessionAdmissionPhases":  []string{"awaiting_receiver", "awaiting_sender", "active"},
+			"senderWindowFrames":      64,
+			"senderWindowBytes":       4 << 20,
 			"stopStoreOutcomes":       []string{"committed", "definitely-not-committed", "unknown"},
 			"explicitStop": []string{
 				"per-route-storage-transaction", "durable-tombstone-before-ack", "exact-participant-cleanup-before-ack",

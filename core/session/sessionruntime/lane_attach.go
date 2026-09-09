@@ -287,6 +287,10 @@ func newCandidateChannelOwnerWithReceive(
 
 func (owner *candidateChannelOwner) Recv() <-chan framechannel.Frame { return owner.receive() }
 
+func (owner *candidateChannelOwner) ConfirmAdmission(ctx context.Context) error {
+	return confirmChannelAdmission(ctx, owner.FrameChannel)
+}
+
 func (owner *candidateChannelOwner) Close() error {
 	owner.closeOnce.Do(func() { owner.closeErr = owner.FrameChannel.Close() })
 	return owner.closeErr
@@ -484,6 +488,11 @@ func (runtime *SenderRuntime) acceptCandidate(
 	)
 	if _, err := runtime.lanes.add(identity, channel, authenticator, false); err != nil {
 		runtime.lanesRegistry.Release(identity.ID, identity.Epoch)
+		result.LaneAttachment = SenderPeerLaneAttachmentFailed
+		return result, err
+	}
+	if err := confirmChannelAdmission(ctx, channel); err != nil {
+		runtime.lanes.detach(identity)
 		result.LaneAttachment = SenderPeerLaneAttachmentFailed
 		return result, err
 	}
