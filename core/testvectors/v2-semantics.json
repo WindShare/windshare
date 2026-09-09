@@ -612,7 +612,6 @@
       "completeArtifactsExclude": [
         "partial-directory"
       ],
-      "deadlineWritingStates": [],
       "directZipByteSemantics": {
         "committedArchiveLength": "verified-target-prefix-bytes",
         "receivedBytes": "selected-source-payload-bytes-received-in-live-attempt",
@@ -695,15 +694,6 @@
             "direct-resumable-zip"
           ],
           "state": "discarded"
-        },
-        {
-          "byte": 19,
-          "plans": [
-            "direct-tree",
-            "workspace-then-publish",
-            "direct-resumable-zip"
-          ],
-          "state": "expired"
         },
         {
           "byte": 20,

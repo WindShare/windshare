@@ -102,7 +102,7 @@ describe('incident frozen contracts', () => {
     ])
     expect(PRESENTATION_BOUNDARIES).toHaveLength(8)
     expect(PRESENTATION_OUTCOMES).toHaveLength(6)
-    expect(PRESENTATION_EXCLUSION_REASONS).toHaveLength(10)
+    expect(PRESENTATION_EXCLUSION_REASONS).toHaveLength(9)
     expect(presentationBoundaryForScope('preview_seek')).toBe('preview')
     expect(presentationBoundaryForScope('projection')).toBe(
       'projection_authority',

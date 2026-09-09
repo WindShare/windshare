@@ -33,7 +33,6 @@ describe('IndexedDB v11 operation repository contract', () => {
         ['by-operation-kind', ['operationId', 'kind']],
         ['by-reopen-key', 'reopenKey'],
         ['by-state', 'state'],
-        ['by-expiry', 'expiresAt'],
         ['by-kind', 'kind'],
       ],
     ))
@@ -62,7 +61,10 @@ describe('IndexedDB v11 operation repository contract', () => {
     expect(() => decodeReceiveLifecycleState(truncated)).toThrow()
   })
 
-  it('rejects lifecycle index projections that disagree with canonical authority', async () => {
+  it.each([
+    [19, 'state projection is invalid'],
+    [20, 'projections disagree'],
+  ] as const)('rejects unsupported or mismatched lifecycle index %s', async (state, message) => {
     const lifecycle = initialReceiveLifecycleState({
       operationId: identity(16, 1),
       receiveIntentDigest: identity(32, 2),
@@ -70,8 +72,8 @@ describe('IndexedDB v11 operation repository contract', () => {
     const record = await storedReceiveLifecycleState(lifecycle)
     await expect(prepareReceiveOperationTransition({
       operationId: lifecycle.operationId,
-      records: [{ ...record, state: 20 }],
-    })).rejects.toThrow('projections disagree')
+      records: [{ ...record, state }],
+    })).rejects.toThrow(message)
   })
 
   it('rebuilds manifest pages before accepting their indexed projections', async () => {

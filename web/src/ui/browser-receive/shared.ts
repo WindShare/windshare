@@ -51,7 +51,6 @@ export async function transitionLifecycle(
     planKind: intent.plan.kind,
     preparationRequired: intent.plan.preparation !== 'none',
     activeLeaseId: leaseId,
-    nowMilliseconds: Date.now(),
   })
   if (reduction.status !== 'applied') {
     throw new DOMException('Receive lifecycle transition was stale', 'InvalidStateError')
@@ -191,6 +190,6 @@ export function unavailableRoute(): DOMException {
 export function isWorkspaceTerminal(state: ReceiveLifecycleState): boolean {
   return state.kind === 'published' || state.kind === 'partial-directory' ||
     state.kind === 'restart-required' || state.kind === 'discarded' ||
-    state.kind === 'expired' || state.kind === 'needs-attention' ||
+    state.kind === 'needs-attention' ||
     (state.kind === 'download-started' && state.attemptKind === 'portable')
 }

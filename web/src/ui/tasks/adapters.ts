@@ -67,7 +67,6 @@ export function retainedTaskFacts(
     ? 'finalizing' : 'idle'
   if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary))
   if (operation.unavailableReason !== undefined) details.push(operation.unavailableReason)
-  if (operation.expiresAt !== undefined) details.push(`Retained until ${new Date(operation.expiresAt).toLocaleString()}.`)
   return Object.freeze({
     lifecycle: operation.lifecycle,
     display: operation.display ?? null,

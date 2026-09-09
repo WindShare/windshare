@@ -593,7 +593,6 @@ describe('retained action incident ownership', () => {
     ['save', 'save-artifact'],
     ['redownload', 'retry-download'],
     ['discard', 'needs-attention'],
-    ['delete', 'cleanup-expired'],
   ] as const)(
     'publishes pending %s authority before invoking the retained inventory',
     async (action, continuation) => {
@@ -666,7 +665,6 @@ describe('retained action incident ownership', () => {
     ['save', 'save-artifact'],
     ['redownload', 'retry-download'],
     ['discard', 'save-artifact'],
-    ['delete', 'cleanup-expired'],
   ] as const)(
     'constructs no retained trace payloads for disabled %s transitions',
     async (action, continuation) => {

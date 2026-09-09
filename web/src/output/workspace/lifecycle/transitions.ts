@@ -28,12 +28,6 @@ export function requireState<K extends ReceiveLifecycleState['kind']>(
   if (state.kind !== kind) throw new TypeError(`event is not legal from ${state.kind}`)
 }
 
-export function requireClock(nowMilliseconds: number): void {
-  if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) {
-    throw new TypeError('lifecycle clock must be a non-negative safe integer')
-  }
-}
-
 export function applied(state: ReceiveLifecycleState): LifecycleReduction {
   return Object.freeze({ status: 'applied', state })
 }

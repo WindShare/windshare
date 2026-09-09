@@ -34,7 +34,6 @@ export const INDEXEDDB_BY_OPERATION_KIND_INDEX = 'by-operation-kind'
 export const INDEXEDDB_BY_KIND_INDEX = 'by-kind'
 export const INDEXEDDB_BY_REOPEN_KEY_INDEX = 'by-reopen-key'
 export const INDEXEDDB_BY_STATE_INDEX = 'by-state'
-export const INDEXEDDB_BY_EXPIRY_INDEX = 'by-expiry'
 export const INDEXEDDB_BY_OPERATION_COMMIT_ORDINAL_INDEX = 'by-operation-commit-ordinal'
 export const INDEXEDDB_BY_KIND_CANDIDATE_INDEX = 'by-kind-candidate'
 export const INDEXEDDB_BY_OPERATION_CHAIN_PAGE_INDEX = 'by-operation-chain-page'
@@ -89,7 +88,6 @@ export const INDEXEDDB_V6_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Objec
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
     indexSchema(INDEXEDDB_BY_REOPEN_KEY_INDEX, 'reopenKey'),
     indexSchema(INDEXEDDB_BY_STATE_INDEX, 'state'),
-    indexSchema(INDEXEDDB_BY_EXPIRY_INDEX, 'expiresAt'),
   ]),
   storeSchema(INDEXEDDB_LEGACY_RECEIVE_MANIFEST_PAGE_STORE, 'id', [
     indexSchema(INDEXEDDB_BY_OPERATION_INDEX, 'operationId'),
@@ -133,7 +131,6 @@ export const INDEXEDDB_V9_STORE_SCHEMAS: readonly IndexedDbStoreSchema[] = Objec
     indexSchema(INDEXEDDB_BY_OPERATION_KIND_INDEX, ['operationId', 'kind']),
     indexSchema(INDEXEDDB_BY_REOPEN_KEY_INDEX, 'reopenKey'),
     indexSchema(INDEXEDDB_BY_STATE_INDEX, 'state'),
-    indexSchema(INDEXEDDB_BY_EXPIRY_INDEX, 'expiresAt'),
     indexSchema(INDEXEDDB_BY_KIND_INDEX, 'kind'),
   ]),
   storeSchema(INDEXEDDB_RECEIVE_MANIFEST_PAGE_STORE, 'id', [

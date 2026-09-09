@@ -67,7 +67,6 @@ type FreshPageDiscardLifecycle =
       readonly kind: 'resumable-receive'
       readonly payloadKind: 'file-set'
     }>
-  | Extract<ReceiveLifecycleState, { readonly kind: 'expired' }>
 
 export interface ReopenedFileSystemAccessDiscardOperation {
   readonly kind: 'direct-tree'
@@ -84,7 +83,6 @@ export type FreshPageFileSystemAccessDiscardResult =
       lifecycle:
         | Extract<ReceiveLifecycleState, { readonly kind: 'partial-directory' }>
         | Extract<ReceiveLifecycleState, { readonly kind: 'discarded' }>
-        | Extract<ReceiveLifecycleState, { readonly kind: 'expired' }>
       receiptDigest: string
     }>
   | Readonly<{
@@ -95,7 +93,7 @@ export type FSAFreshPageDiscardTraceEvent = Readonly<{
   name: 'receive.fsa.fresh_discard.completed'
   operation_id: string
   receive_intent_digest: string
-  outcome: 'partial-directory' | 'discarded' | 'expired' | 'needs-attention'
+  outcome: 'partial-directory' | 'discarded' | 'needs-attention'
   completed_file_count: bigint
   completed_bytes: bigint
   removed_object_count: bigint
@@ -109,7 +107,6 @@ export interface DiscardReopenedFileSystemAccessOutputOptions {
   readonly databaseName?: string
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
   readonly compatibleNamePreparation?: CompatibleNameRootRepairPreparationOptions
-  readonly clock?: () => number
   readonly trace?: (event: FSAFreshPageDiscardTraceEvent) => void
 }
 
@@ -254,7 +251,6 @@ class FreshPageDiscardLifecycleAuthority {
   readonly #operation: ReopenedFileSystemAccessDiscardOperation
   readonly #repository: ReceiveOperationRepository
   readonly #leaseId: string
-  readonly #clock: () => number
   readonly #trace: DiscardReopenedFileSystemAccessOutputOptions['trace']
   #initial: VerifiedLifecycle | undefined
 
@@ -262,14 +258,12 @@ class FreshPageDiscardLifecycleAuthority {
     intent: DirectTreeIntent
     operation: ReopenedFileSystemAccessDiscardOperation
     leaseId: string
-    clock: () => number
     trace?: (event: FSAFreshPageDiscardTraceEvent) => void
   }>) {
     this.intent = input.intent
     this.#operation = input.operation
     this.#repository = input.operation.repository
     this.#leaseId = input.leaseId
-    this.#clock = input.clock
     this.#trace = input.trace
   }
 
@@ -288,7 +282,6 @@ class FreshPageDiscardLifecycleAuthority {
       intent,
       operation: options.operation,
       leaseId: snapshotIdentity(options.operation.lease.leaseId, 16, 'lifecycle lease ID'),
-      clock: options.clock ?? Date.now,
       ...(options.trace === undefined ? {} : { trace: options.trace }),
     })
   }
@@ -390,8 +383,7 @@ class FreshPageDiscardLifecycleAuthority {
       )
       return Object.freeze({ lifecycle: committed.state })
     }
-    if (committed.state.kind !== 'partial-directory' && committed.state.kind !== 'discarded' &&
-        committed.state.kind !== 'expired') {
+    if (committed.state.kind !== 'partial-directory' && committed.state.kind !== 'discarded') {
       throw new TypeError('Fresh-page FSA discard persisted a non-terminal lifecycle')
     }
     this.#emit(committed.state.kind, completedFileCount, completedBytes, cut)
@@ -443,9 +435,7 @@ class FreshPageDiscardLifecycleAuthority {
   }
 
   async #verifyReferencedReceipt(state: FreshPageDiscardLifecycle): Promise<void> {
-    const digest = state.kind === 'resumable-receive'
-      ? state.partialReceiptDigest
-      : state.expiryReceiptDigest
+    const digest = state.partialReceiptDigest
     if (digest === undefined) return
     const id = operationRecordId(this.intent.operationId, RECEIVE_RECORD_RECEIPT, digest)
     let record: PersistedReceiveRecord | undefined
@@ -555,8 +545,6 @@ class FreshPageDiscardLifecycleAuthority {
     if (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') {
       return state
     }
-    if (state.kind === 'expired' && state.priorStableState === 'resumable-receive' &&
-        state.cleanupState === 'cleanup-pending') return state
     throw new DOMException('Fresh-page FSA discard requires retained DirectTree cleanup', 'InvalidStateError')
   }
 
@@ -565,20 +553,11 @@ class FreshPageDiscardLifecycleAuthority {
       planKind: 'direct-tree',
       preparationRequired: false,
       activeLeaseId: this.#leaseId,
-      nowMilliseconds: this.#now(),
     })
     if (reduced.status !== 'applied' || reduced.state === state) {
       throw new TypeError('Fresh-page FSA lifecycle transition was stale or side-effect free')
     }
     return reduced.state
-  }
-
-  #now(): number {
-    const value = this.#clock()
-    if (!Number.isSafeInteger(value) || value < 0) {
-      throw new TypeError('Fresh-page FSA discard clock is invalid')
-    }
-    return value
   }
 
   #emit(

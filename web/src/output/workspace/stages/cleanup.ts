@@ -1,19 +1,16 @@
 import { executeWorkspaceCleanup } from '../cleanup'
 import {
   createCleanupReceipt,
-  createExpiryReceipt,
   persistedReceiptRecord,
   type CleanupReceiptV1,
-  type ExpiryReceiptV1,
 } from '../receipts'
 import {
   RECEIVE_RECORD_LIFECYCLE_STATE,
   RECEIVE_RECORD_OPERATION,
 } from '../records'
-import { lifecycleDeadline, type PreparationAdmissionReason, type ReceiveLifecycleState } from '../state'
+import type { PreparationAdmissionReason, ReceiveLifecycleState } from '../state'
 import {
   mergeHandleIds,
-  stableStateKind,
   type WorkspaceCleanupRequest,
   type WorkspaceCleanupResult,
 } from './contracts'
@@ -29,69 +26,18 @@ export class WorkspaceCleanupStages {
   async discard(request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> {
     const state = await this.runtime.lifecycle()
     if (state.kind === 'published' || state.kind === 'partial-directory' ||
-        state.kind === 'restart-required' || state.kind === 'discarded' ||
-        state.kind === 'expired') {
+        state.kind === 'restart-required' || state.kind === 'discarded') {
       throw new TypeError('workspace state cannot be discarded')
     }
     return this.finishCleanup(state, request, [])
   }
 
-  async expireIfDue(request: WorkspaceCleanupRequest): Promise<Readonly<{
-    kind: 'not-due'
-    state: ReceiveLifecycleState
-  }> | Readonly<{
-    kind: 'expired'
-    expiryReceipt: ExpiryReceiptV1
-    cleanup: WorkspaceCleanupResult
-  }>> {
+  async retryPublishedCleanup(request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> {
     const state = await this.runtime.lifecycle()
-    const expiresAt = lifecycleDeadline()
-    if (expiresAt === undefined) return Object.freeze({ kind: 'not-due', state })
-    const now = this.runtime.now()
-    if (now < expiresAt) return Object.freeze({ kind: 'not-due', state })
-    const priorStableState = stableStateKind(state)
-    const expiryReceipt = await createExpiryReceipt({
-      operationId: this.runtime.intent.operationId,
-      receiveIntentDigest: this.runtime.intent.digest,
-      priorStableState,
-      expiresAt,
-      cleanupState: 'cleanup-pending',
-    })
-    const expired = this.runtime.reduceAt(state, this.runtime.event({
-      kind: 'expiry-observed',
-      expiryReceiptDigest: expiryReceipt.digest,
-      cleanupState: 'cleanup-pending',
-    }, state), now)
-    if (expired.kind !== 'expired') throw new TypeError('elapsed workspace did not become Expired')
-    await this.runtime.repository.commitTransition({
-      operationId: this.runtime.intent.operationId,
-      expectedLifecycleGeneration: state.generation,
-      expectedLeaseId: this.runtime.leaseId,
-      records: [await persistedReceiptRecord(expiryReceipt)],
-      lifecycle: expired,
-    })
-    this.runtime.emit({
-      name: 'receive.operation.expired',
-      operation_id: this.runtime.intent.operationId,
-      prior_stable_state: expiryReceipt.priorStableState,
-      expires_at_ms: expiryReceipt.expiresAt,
-    })
-    const cleanup = await this.finishCleanup(expired, request, [expiryReceipt.digest])
-    return Object.freeze({ kind: 'expired', expiryReceipt, cleanup })
-  }
-
-  async retryTerminalCleanup(request: WorkspaceCleanupRequest): Promise<WorkspaceCleanupResult> {
-    const state = await this.runtime.lifecycle()
-    let keepReceiptDigests: readonly string[] | undefined
-    if (state.kind === 'published' && state.cleanupState === 'cleanup-pending') {
-      keepReceiptDigests = [state.receiptDigest]
-    } else if (state.kind === 'expired' && state.cleanupState === 'cleanup-pending') {
-      keepReceiptDigests = [state.expiryReceiptDigest]
+    if (state.kind !== 'published' || state.cleanupState !== 'cleanup-pending') {
+      throw new TypeError('workspace has no retryable publication cleanup')
     }
-    if (keepReceiptDigests === undefined) {
-      throw new TypeError('workspace has no retryable terminal cleanup')
-    }
-    return this.finishCleanup(state, request, keepReceiptDigests)
+    return this.finishCleanup(state, request, [state.receiptDigest])
   }
 
   async finishCleanup(

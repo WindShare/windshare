@@ -61,7 +61,7 @@ const READ_ONLY_RESUME_MUTATIONS:
       'Persisted receive reopen authority is not installed',
       'NotSupportedError',
     )),
-    expire: () => Promise.reject(new DOMException(
+    cleanup: () => Promise.reject(new DOMException(
       'Persisted receive expiry authority is not installed',
       'NotSupportedError',
     )),
@@ -216,7 +216,6 @@ export async function listBrowserRetainedOperations(
     const authority = new ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>({
       source: sourceWithoutBootstrapCandidates(source),
       mutations: options.resumeMutations ?? READ_ONLY_RESUME_MUTATIONS,
-      clock: { now: options.now ?? Date.now },
     })
     const inventory = await authority.listResumeState()
     const locks = windowPort.navigator?.locks
@@ -255,7 +254,6 @@ export async function listBrowserRetainedOperations(
           lifecycleGeneration: descriptor.lifecycleGeneration,
           lifecycle: descriptor.lifecycle,
           continuation: descriptor.continuation,
-          ...(descriptor.expiresAt === undefined ? {} : { expiresAt: descriptor.expiresAt }),
           actions: hasMutationAuthority && descriptor.recoveryUnavailable === undefined && supportsPartialExport(windowPort) &&
             descriptor.lifecycle.kind === 'resumable-receive' &&
             descriptor.lifecycle.payloadKind === 'opfs-zip' &&
@@ -457,7 +455,6 @@ async function dispatchRetainedAuthorityAction(
   }
   const directZipAction = isDirectZipContinuation(operation.continuation)
   if (!directZipAction && (action === 'discard' || (action === 'delete' &&
-      operation.continuation !== 'cleanup-expired' &&
       operation.continuation !== 'retry-cleanup'))) {
     await authority.discard(reference, failures)
     signal.throwIfAborted()
@@ -465,8 +462,7 @@ async function dispatchRetainedAuthorityAction(
   }
   let result: AuthorityOwnedReceiveOperationMutationResult
   if (action === 'delete' &&
-      (operation.continuation === 'cleanup-expired' ||
-       operation.continuation === 'retry-cleanup')) {
+      operation.continuation === 'retry-cleanup') {
     result = await authority.cleanup(reference, failures)
   } else if (action === 'catch-up') {
     result = await authority.catchUp(reference, failures)
@@ -478,7 +474,7 @@ async function dispatchRetainedAuthorityAction(
       ...(failures === undefined ? {} : { failures }),
     })
   }
-  if (result.kind === 'retention-cleanup') {
+  if (result.kind === 'cleanup') {
     signal.throwIfAborted()
     return Object.freeze({ kind: 'completed' })
   }

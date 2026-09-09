@@ -76,7 +76,7 @@ describe('persisted receive operation reopen authority', () => {
       leaseId: staleLeaseId,
       acquiredAt: ENTERED_AT - 1,
     })
-    const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
+    const descriptor = requiredDescriptor(lifecycle)
     let repositoryInstances = 0
     const trace = vi.fn()
     const authority = new PersistedReceiveOperationReopenAuthority({
@@ -140,7 +140,7 @@ describe('persisted receive operation reopen authority', () => {
         ? { pendingTerminalOutcome: {} } as unknown as CompatibleNameOperationHeaderV1
         : undefined,
     })
-    const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
+    const descriptor = requiredDescriptor(lifecycle)
     expect(descriptor.continuation).toBe('resume-receive')
     const attempt = authority.reopen(descriptor, 'continue')
     if (terminalPending) {
@@ -192,7 +192,7 @@ describe('persisted receive operation reopen authority', () => {
       cleanup: new PersistedReceiveOperationCleanupExecutor({ discardDirectTree }),
     })
 
-    await expect(mutation.discard(requiredDescriptor(lifecycle, ENTERED_AT + 1)))
+    await expect(mutation.discard(requiredDescriptor(lifecycle)))
       .resolves.toEqual({ kind: 'partial-directory', receiptDigest })
     expect(discardDirectTree).toHaveBeenCalledOnce()
     expect(state.lease).toBeUndefined()
@@ -244,7 +244,7 @@ describe('persisted receive operation reopen authority', () => {
     })
 
     const reopened = await authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1),
+      requiredDescriptor(lifecycle),
       'continue',
     )
 
@@ -322,7 +322,7 @@ describe('persisted receive operation reopen authority', () => {
     })
 
     await expect(authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1), 'continue',
+      requiredDescriptor(lifecycle), 'continue',
     )).rejects.toThrow('Retained ZIP object handle is missing')
     expect(openWorkspaceReceiveBackend).not.toHaveBeenCalled()
     expect((await state.lifecycle())?.generation).toBe(7n)
@@ -435,7 +435,7 @@ describe('persisted workspace package continuation', () => {
       cleanup: { cleanup: async () => { throw new Error('cleanup was not requested') } },
     })
 
-    const result = await mutation.resume(requiredDescriptor(seeded.lifecycle, ENTERED_AT + 1))
+    const result = await mutation.resume(requiredDescriptor(seeded.lifecycle))
     expect(result).toMatchObject({
       kind: 'continuation',
       continuation: { kind: 'workspace-package' },
@@ -501,7 +501,7 @@ describe('persisted workspace package continuation', () => {
     })
 
     await expect(authority.reopen(
-      requiredDescriptor(seeded.lifecycle, ENTERED_AT + 1),
+      requiredDescriptor(seeded.lifecycle),
       'continue',
     )).rejects.toBeInstanceOf(PersistedReceiveOperationNeedsAttentionError)
     expect(await state.lifecycle()).toMatchObject({
@@ -542,7 +542,7 @@ describe('persisted workspace package continuation', () => {
     })
 
     await expect(authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1),
+      requiredDescriptor(lifecycle),
       'continue',
     )).rejects.toBeInstanceOf(PersistedReceiveOperationNeedsAttentionError)
 
@@ -573,7 +573,7 @@ describe('persisted workspace package continuation', () => {
     const authority = reopenAuthority(state, ENTERED_AT + 1, 73)
 
     await expect(authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1),
+      requiredDescriptor(lifecycle),
       'continue',
     )).rejects.toBeInstanceOf(PersistedReceiveOperationNeedsAttentionError)
 
@@ -601,7 +601,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
     )
     const lifecycle = resumableReceive(intent, 10n)
     await state.seedLifecycle(lifecycle)
-    const descriptor = requiredDescriptor(lifecycle, ENTERED_AT + 1)
+    const descriptor = requiredDescriptor(lifecycle)
     const authority = reopenAuthority(state, ENTERED_AT + 365 * 24 * 60 * 60 * 1000, 74)
 
     const reopened = await authority.reopen(descriptor, 'continue')
@@ -638,7 +638,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
     })
 
     await expect(authority.reopen(
-      requiredDescriptor(lifecycle, ENTERED_AT + 1),
+      requiredDescriptor(lifecycle),
       'continue',
     )).rejects.toThrow('concurrent')
     expect(verifyBinding).not.toHaveBeenCalled()
@@ -678,7 +678,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
       }),
     })
 
-    const result = await mutation.discard(requiredDescriptor(lifecycle, ENTERED_AT + 1))
+    const result = await mutation.discard(requiredDescriptor(lifecycle))
 
     expect(result).toMatchObject({ kind: 'discarded' })
     expect(await state.lifecycle()).toMatchObject({
@@ -726,7 +726,7 @@ describe('persisted receive operation lifecycle and cleanup authority', () => {
       }),
     })
 
-    await expect(mutation.discard(requiredDescriptor(lifecycle, ENTERED_AT + 1)))
+    await expect(mutation.discard(requiredDescriptor(lifecycle)))
       .resolves.toEqual({ kind: 'needs-attention', reason: 'cleanup-unknown' })
     expect(await state.lifecycle()).toMatchObject({
       kind: 'needs-attention',

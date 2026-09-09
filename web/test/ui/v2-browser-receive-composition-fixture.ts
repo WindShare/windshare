@@ -45,7 +45,7 @@ export function mutationPort(
 ): ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult> {
   return Object.freeze({
     resume,
-    expire: () => Promise.reject(new Error('unexpected expiry')),
+    cleanup: () => Promise.reject(new Error('unexpected cleanup')),
     discard: () => Promise.resolve(Object.freeze({ kind: 'already-absent' })),
   })
 }
@@ -120,13 +120,6 @@ export function retainedLifecycles(): readonly ReceiveLifecycleState[] {
       attemptKind: 'workspace',
       attemptId: identity(34),
       packageDigest: identity(35, 32),
-    }),
-    receiveLifecycle(5, {
-      kind: 'expired',
-      priorStableState: 'waiting-to-save',
-      expiresAt: 900,
-      cleanupState: 'cleanup-pending',
-      expiryReceiptDigest: identity(36, 32),
     }),
     receiveLifecycle(6, {
       kind: 'published',

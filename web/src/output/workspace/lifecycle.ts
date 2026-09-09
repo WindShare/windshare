@@ -1,9 +1,7 @@
 import {
-  lifecycleDeadline,
   nextReceiveLifecycleState,
   type PlanKind,
   type ReceiveLifecycleState,
-  type RetainedLifecycleKind,
 } from './state'
 import type { LifecycleEvent, LifecycleReducerContext, LifecycleReduction } from './lifecycle/events'
 import {
@@ -15,7 +13,6 @@ import {
   activeLeaseMismatch,
   applied,
   needsAttention,
-  requireClock,
   requireState,
   requireWorkspaceState,
 } from './lifecycle/transitions'
@@ -27,18 +24,10 @@ export function reduceReceiveLifecycle(
   event: LifecycleEvent,
   context: LifecycleReducerContext,
 ): LifecycleReduction {
-  requireClock(context.nowMilliseconds)
   const authorityReacquisition = event.kind === 'receive-authority-reacquired'
   if (event.expectedGeneration !== state.generation || event.leaseId !== context.activeLeaseId ||
       (!authorityReacquisition && activeLeaseMismatch(state, context.activeLeaseId))) {
     return Object.freeze({ status: 'stale', state })
-  }
-  const deadline = lifecycleDeadline()
-  if (deadline !== undefined && context.nowMilliseconds >= deadline &&
-      (event.kind === 'resume-started' || event.kind === 'save-requested' ||
-       event.kind === 'handoff-requested' || event.kind === 'direct-zip-recovery-gated' ||
-       event.kind === 'direct-zip-recovery-resumed')) {
-    throw new TypeError('stable lifecycle deadline elapsed before continuation')
   }
   if (event.kind === 'direct-zip-pause-verified') {
     return applied(pauseDirectZip(state, event, context))
@@ -85,11 +74,10 @@ export function reduceReceiveLifecycle(
       }))
     case 'handoff-requested': return applied(startHandoff(state, event, context))
     case 'handoff-started': return applied(handoffStarted(state))
-    case 'handoff-not-started': return handoffNotStarted(state, event)
+    case 'handoff-not-started': return handoffNotStarted(state)
     case 'cleanup-verified': return applied(cleanupVerified(state, event.cleanupReceiptDigest))
     case 'cleanup-unknown':
       return applied(needsAttention(state, 'cleanup-unknown', event.lastVerifiedRecordDigest))
-    case 'expiry-observed': return expireState(state, event, context.nowMilliseconds)
     case 'ownership-unknown':
       return applied(needsAttention(
         state,
@@ -562,14 +550,13 @@ function handoffStarted(state: ReceiveLifecycleState): ReceiveLifecycleState {
 
 function handoffNotStarted(
   state: ReceiveLifecycleState,
-  event: Extract<LifecycleEvent, { kind: 'handoff-not-started' }>,
 ): LifecycleReduction {
   requireState(state, 'handing-off')
   if (state.attemptKind === 'portable') {
     return applied(nextReceiveLifecycleState(state, {
       kind: 'restart-required',
       reason: 'portable-aborted',
-      receiptDigest: event.expiryReceiptDigest ?? state.attemptId,
+      receiptDigest: state.attemptId,
     }))
   }
   return applied(nextReceiveLifecycleState(state, {
@@ -589,53 +576,10 @@ function cleanupVerified(
       cleanupState: 'clean',
     })
   }
-  if (state.kind === 'expired') {
-    return nextReceiveLifecycleState(state, {
-      kind: 'expired',
-      priorStableState: state.priorStableState,
-      expiresAt: state.expiresAt,
-      cleanupState: 'clean',
-      expiryReceiptDigest: state.expiryReceiptDigest,
-    })
-  }
   if (state.kind === 'partial-directory' || state.kind === 'restart-required') {
     throw new TypeError('cleanup cannot erase a retained terminal outcome')
   }
   return nextReceiveLifecycleState(state, { kind: 'discarded', cleanupReceiptDigest })
-}
-
-function expireState(
-  state: ReceiveLifecycleState,
-  event: Extract<LifecycleEvent, { kind: 'expiry-observed' }>,
-  nowMilliseconds: number,
-): LifecycleReduction {
-  const deadline = lifecycleDeadline()
-  if (deadline === undefined) return Object.freeze({ status: 'not-due', state })
-  if (nowMilliseconds < deadline) return Object.freeze({ status: 'not-due', state })
-  return applied(nextReceiveLifecycleState(state, {
-    kind: 'expired',
-    priorStableState: priorStableStateKind(state),
-    expiresAt: deadline,
-    cleanupState: event.cleanupState,
-    expiryReceiptDigest: event.expiryReceiptDigest,
-  }))
-}
-
-function priorStableStateKind(
-  state: ReceiveLifecycleState,
-): RetainedLifecycleKind {
-  switch (state.kind) {
-    case 'resumable-receive':
-    case 'resumable-package':
-    case 'waiting-to-save':
-    case 'download-started':
-    case 'authorization-required':
-    case 'target-verification-required':
-    case 'destination-space-required':
-      return state.kind
-    default:
-      throw new TypeError('state has no stable expiry identity')
-  }
 }
 
 export type {

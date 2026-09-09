@@ -28,11 +28,10 @@ import {
 } from '../../workspace/records'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
-import { lifecycleDeadline, type ReceiveLifecycleState } from '../../workspace/state'
+import type { ReceiveLifecycleState } from '../../workspace/state'
 import { WorkspaceOperationStages } from '../../workspace/stages'
 import type { ReceiveOperationResumeDescriptor } from '../descriptor'
 import {
-  PersistedReceiveOperationDeadlineElapsedError,
   PersistedReceiveOperationNeedsAttentionError,
   type LeaseOptions,
   type PersistedReceiveOperationReopenAuthorityOptions,
@@ -53,7 +52,6 @@ import {
   closeAuthority,
   estimateOriginPrivateStorage,
   expectedBindingRecord,
-  persistExpiry,
   persistOwnershipAttention,
   persistReceiveResume,
   reclaimOriginPrivateWorkspaceBudget,
@@ -214,7 +212,7 @@ export class PersistedReceiveOperationReopenAuthority {
     lease: BrowserReceiveOperationLease
   }>> {
     let snapshot = await this.#readSnapshot(repository, descriptor)
-    await assertDescriptorAuthority(descriptor, snapshot, this.#now(), purpose)
+    await assertDescriptorAuthority(descriptor, snapshot, purpose)
     const directZipJournal = snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
       ? await this.#openDirectZipJournal()
       : undefined
@@ -242,7 +240,7 @@ export class PersistedReceiveOperationReopenAuthority {
     // The acquisition transaction fences generation, lease replacement, and both
     // immutable records. This reread prevents a caller from observing a pre-fence cut.
     snapshot = await this.#readSnapshot(repository, descriptor)
-    await assertDescriptorAuthority(descriptor, snapshot, this.#now(), purpose)
+    await assertDescriptorAuthority(descriptor, snapshot, purpose)
     return Object.freeze({ snapshot, lease })
   }
 
@@ -302,13 +300,6 @@ export class PersistedReceiveOperationReopenAuthority {
     resources: ReopenResources
     diagnostics?: OutputDiagnosticsPorts
   }>): Promise<ReopenLifecycleAuthority> {
-    const observedAt = this.#now()
-    const deadline = lifecycleDeadline()
-    if (deadline !== undefined && observedAt >= deadline) {
-      return Object.freeze({
-        lifecycle: await this.#expire(input, observedAt),
-      })
-    }
     if (input.purpose === 'cleanup') {
       return Object.freeze({ lifecycle: input.snapshot.lifecycle })
     }
@@ -329,7 +320,7 @@ export class PersistedReceiveOperationReopenAuthority {
       throw new TypeError('Partial export requires retained native ZIP authority')
     }
     if (input.descriptor.continuation === 'resume-receive') {
-      return this.#resumeReceive(input, observedAt)
+      return this.#resumeReceive(input)
     }
     if (input.descriptor.continuation === 'resume-direct-zip' ||
         input.descriptor.continuation === 'reauthorize-direct-zip' ||
@@ -351,34 +342,6 @@ export class PersistedReceiveOperationReopenAuthority {
     return Object.freeze({ lifecycle: input.snapshot.lifecycle })
   }
 
-  async #expire(
-    input: Readonly<{
-      repository: ReceiveOperationRepository
-      snapshot: PersistedReopenSnapshot
-      lease: BrowserReceiveOperationLease
-      descriptor: ReceiveOperationResumeDescriptor
-      purpose: PersistedReceiveOperationReopenPurpose
-    }>,
-    observedAt: number,
-  ): Promise<Extract<ReceiveLifecycleState, { kind: 'expired' }>> {
-    const expired = await persistExpiry(
-      input.repository,
-      input.snapshot,
-      input.lease,
-      observedAt,
-    )
-    this.#emit(Object.freeze({
-      name: 'receive.operation.expired',
-      operation_id: input.descriptor.operationId,
-      prior_stable_state: expired.receipt.priorStableState,
-      expires_at_ms: expired.receipt.expiresAt,
-    }))
-    if (input.purpose === 'continue') {
-      throw new PersistedReceiveOperationDeadlineElapsedError(expired.state, expired.receipt)
-    }
-    return expired.state
-  }
-
   async #resumeReceive(
     input: Readonly<{
       repository: ReceiveOperationRepository
@@ -389,7 +352,6 @@ export class PersistedReceiveOperationReopenAuthority {
       resources: ReopenResources
       diagnostics?: OutputDiagnosticsPorts
     }>,
-    observedAt: number,
   ): Promise<ReopenLifecycleAuthority> {
     if (input.snapshot.lifecycle.kind === 'receiving' && input.target.kind === 'direct-tree') {
       const header = await this.#readCompatibleNameHeader(input.snapshot.operation.operationId)
@@ -399,7 +361,7 @@ export class PersistedReceiveOperationReopenAuthority {
       }
       return Object.freeze({
         lifecycle: await persistReceiveResume(
-          input.repository, input.snapshot, input.lease, observedAt,
+          input.repository, input.snapshot, input.lease,
         ),
         receiveAdmissionFallback: input.snapshot.lifecycle,
       })
@@ -416,7 +378,6 @@ export class PersistedReceiveOperationReopenAuthority {
           input.repository,
           input.snapshot,
           input.lease,
-          observedAt,
         ),
         receiveAdmissionFallback: input.snapshot.lifecycle,
       })
@@ -433,7 +394,6 @@ export class PersistedReceiveOperationReopenAuthority {
     }
     return this.#workspaceContinuation.resumeReceive(
       Object.freeze({ ...input, target: input.target }),
-      observedAt,
       input.snapshot.lifecycle,
     )
   }
@@ -462,7 +422,7 @@ export class PersistedReceiveOperationReopenAuthority {
     lease: BrowserReceiveOperationLease,
     operationId: string,
   ): Promise<never> {
-    const attention = await persistOwnershipAttention(repository, snapshot, lease, this.#now())
+    const attention = await persistOwnershipAttention(repository, snapshot, lease)
     this.#emit(Object.freeze({
       name: 'receive.operation.needs_attention',
       operation_id: operationId,

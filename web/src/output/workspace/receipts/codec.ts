@@ -14,7 +14,6 @@ import {
 } from '../canonical'
 import {
   RECEIPT_SCHEMA_VERSION,
-  type ExpiryReceiptV1,
   type OwnedWorkspaceObjectReceipt,
   type PreparationAdmissionReceiptV1,
   type ReceiveReceiptBase,
@@ -207,18 +206,6 @@ export function checkedU64(value: bigint, label: string): bigint {
     throw new TypeError(`${label} is not a u64`)
   }
   return value
-}
-
-export function stableStateByte(state: ExpiryReceiptV1['priorStableState']): number {
-  switch (state) {
-    case 'resumable-receive': return 1
-    case 'resumable-package': return 2
-    case 'waiting-to-save': return 3
-    case 'download-started': return 4
-    case 'authorization-required': return 5
-    case 'target-verification-required': return 6
-    case 'destination-space-required': return 7
-  }
 }
 
 function compareCanonicalIdentity(left: string, right: string): number {

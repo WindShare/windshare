@@ -13,8 +13,6 @@ import {
 } from '../../src/ui/v2-lifecycle-presentation'
 import type { V2DirectZipProgressSnapshot } from '../../src/ui/v2-receive-runtime'
 
-const NOW = 1_000_000
-const DEADLINE = NOW + 86_400_000
 const ORIGINAL = { kind: 'original-file', suggestedName: 'report.txt' } as ArtifactSpec
 const ZIP = { kind: 'zip-archive', suggestedName: 'photos.zip' } as ArtifactSpec
 const TREE = {
@@ -81,7 +79,6 @@ describe('receive lifecycle terminal presentation', () => {
     [lifecycle({ kind: 'partial-directory', reason: 'failures', successCount: 2n, failureCount: 1n, receiptDigest: 'receipt' }), 'Some files were saved', 'terminal'],
     [lifecycle({ kind: 'restart-required', reason: 'portable-aborted', receiptDigest: 'receipt' }), 'Start again required', 'terminal'],
     [lifecycle({ kind: 'discarded', cleanupReceiptDigest: 'cleanup' }), 'Task discarded', 'terminal'],
-    [lifecycle({ kind: 'expired', priorStableState: 'waiting-to-save', expiresAt: DEADLINE, cleanupState: 'clean', expiryReceiptDigest: 'expiry' }), 'Task expired', 'terminal'],
     [lifecycle({ kind: 'needs-attention', reason: 'publication-unknown', lastVerifiedRecordDigest: 'record' }), 'Needs attention', 'terminal'],
   ] as const)('distinguishes %s', (state, title, category) => {
     const presentation = present(state, state.kind === 'partial-directory' ? TREE : ORIGINAL)
@@ -99,7 +96,6 @@ describe('receive lifecycle terminal presentation', () => {
     expect(presentation.title).toBe('Download started')
     expect(presentation.description).toContain('cannot confirm')
     expect(presentation.description).not.toMatch(/saved successfully/iu)
-    expect(presentation.retention).toBeNull()
     expect(presentation.actions).toEqual([])
   })
 
@@ -128,7 +124,6 @@ describe('direct ZIP lifecycle presentation', () => {
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
       ZIP,
       'direct-resumable-zip',
-      NOW,
       undefined,
       undefined,
       directZipProgress('closing'),
@@ -137,7 +132,6 @@ describe('direct ZIP lifecycle presentation', () => {
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
       ZIP,
       'direct-resumable-zip',
-      NOW,
       undefined,
       undefined,
       directZipProgress('verifying'),
@@ -199,7 +193,6 @@ describe('direct ZIP lifecycle presentation', () => {
       state,
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       undefined,
       undefined,
@@ -220,7 +213,6 @@ describe('direct ZIP lifecycle presentation', () => {
       state,
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       undefined,
       undefined,
@@ -278,7 +270,6 @@ describe('compatible-name repair presentation', () => {
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       summary,
     )
@@ -288,7 +279,7 @@ describe('compatible-name repair presentation', () => {
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 1n,
       completedBytes: 128n,
-    }), TREE, 'direct-tree', NOW, undefined, summary)
+    }), TREE, 'direct-tree', undefined, summary)
 
     expect(active.compatibleNameRepair).toMatchObject({
       noticeTitle: 'Compatible names are in use',
@@ -309,7 +300,6 @@ describe('compatible-name repair presentation', () => {
       lifecycle({ kind: 'receiving', activeLeaseId: 'lease' }),
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       repairSummary('active', false, 0),
     )
@@ -341,7 +331,6 @@ describe('compatible-name repair presentation', () => {
       state,
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       repairSummary(footerState, false, 2),
     )
@@ -364,7 +353,6 @@ describe('compatible-name repair presentation', () => {
       lifecycle({ kind: 'published', receiptDigest: 'receipt', cleanupState: 'clean' }),
       TREE,
       'direct-tree',
-      NOW,
       undefined,
       repairSummary('completed', true, 2),
     )
@@ -377,15 +365,14 @@ describe('compatible-name repair presentation', () => {
   })
 })
 
-describe('retention, usage, and lifecycle-valid actions', () => {
+describe('retained usage and lifecycle-valid actions', () => {
   it('shows retained workspace usage without a deletion deadline', () => {
     const state = lifecycle({ kind: 'waiting-to-save', packageDigest: 'package' })
-    const presentation = present(state, ZIP, 'workspace-then-publish', NOW, {
+    const presentation = present(state, ZIP, 'workspace-then-publish', {
       ownedBytes: 1_024n,
       maximumBytes: 4_096n,
     })
 
-    expect(presentation.retention).toBeNull()
     expect(presentation.usage).toMatchObject({
       ownedBytes: 1_024n,
       maximumBytes: 4_096n,
@@ -393,10 +380,10 @@ describe('retention, usage, and lifecycle-valid actions', () => {
     })
     expect(presentation.actions.map((action) => action.kind)).toEqual(['save', 'delete'])
 
-    expect(present(state, ZIP, 'direct-atomic', NOW, { ownedBytes: 1_024n }).usage).toBeNull()
+    expect(present(state, ZIP, 'direct-atomic', { ownedBytes: 1_024n }).usage).toBeNull()
   })
 
-  it('keeps continuation available after long retention', () => {
+  it('offers continuation and explicit discard for retained progress', () => {
     const state = lifecycle({
       kind: 'resumable-receive',
       payloadKind: 'file-set',
@@ -404,13 +391,8 @@ describe('retention, usage, and lifecycle-valid actions', () => {
       completedFileCount: 2n,
       completedBytes: 512n,
     })
-    const before = present(state, TREE, 'workspace-then-publish', DEADLINE - 1)
-    const elapsed = present(state, TREE, 'workspace-then-publish', DEADLINE)
-
-    expect(before.actions.map((action) => action.kind)).toEqual(['continue', 'discard'])
-    expect(elapsed.retention).toBeNull()
-    expect(elapsed.actions).toEqual(before.actions)
-    expect(elapsed.description).toBe(before.description)
+    const presentation = present(state, TREE, 'workspace-then-publish')
+    expect(presentation.actions.map((action) => action.kind)).toEqual(['continue', 'discard'])
   })
 
   it('keeps browser handoff repeatable without inventing a managed location action', () => {
@@ -420,12 +402,11 @@ describe('retention, usage, and lifecycle-valid actions', () => {
       attemptId: 'attempt',
       packageDigest: 'package',
     })
-    const presentation = present(state, ZIP, 'workspace-then-publish', NOW, {
+    const presentation = present(state, ZIP, 'workspace-then-publish', {
       ownedBytes: 2_048n,
     })
 
     expect(presentation.category).toBe('retained')
-    expect(presentation.retention).toBeNull()
     expect(presentation.actions.map((action) => action.kind)).toEqual([
       'redownload',
       'delete',
@@ -433,34 +414,13 @@ describe('retention, usage, and lifecycle-valid actions', () => {
     expect(presentation.usage?.ownedBytes).toBe(2_048n)
   })
 
-  it('hides reclaimed usage and continuation after expiry cleanup', () => {
-    const clean = present(lifecycle({
-      kind: 'expired',
-      priorStableState: 'resumable-package',
-      expiresAt: DEADLINE,
-      cleanupState: 'clean',
-      expiryReceiptDigest: 'expiry',
-    }), ZIP, 'workspace-then-publish', DEADLINE, { ownedBytes: 0n })
-    const pending = present(lifecycle({
-      kind: 'expired',
-      priorStableState: 'resumable-package',
-      expiresAt: DEADLINE,
-      cleanupState: 'cleanup-pending',
-      expiryReceiptDigest: 'expiry',
-    }), ZIP, 'workspace-then-publish', DEADLINE, { ownedBytes: 2_048n })
 
-    expect(clean.usage).toBeNull()
-    expect(clean.actions).toEqual([])
-    expect(pending.usage?.ownedBytes).toBe(2_048n)
-    expect(pending.actions.map((action) => action.kind)).toEqual(['delete'])
-  })
 })
 
 function present(
   state: ReceiveLifecycleState,
   artifact: ArtifactSpec,
   planKind: MaterializationPlan['kind'] = 'workspace-then-publish',
-  nowMilliseconds = NOW,
   workspaceUsage?: { readonly ownedBytes: bigint; readonly maximumBytes?: bigint },
   repairSummary?: CompatibleNameRepairSummary,
   directZipProgress?: V2DirectZipProgressSnapshot,
@@ -470,7 +430,6 @@ function present(
     state,
     artifact,
     plan: planForTest(planKind),
-    nowMilliseconds,
     ...(workspaceUsage === undefined ? {} : { workspaceUsage }),
     ...(repairSummary === undefined ? {} : { repairSummary }),
     ...(directZipProgress === undefined ? {} : { directZipProgress }),

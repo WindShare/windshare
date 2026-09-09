@@ -7,7 +7,6 @@ import type {
 } from '../output/persistent-tree/contracts'
 import {
   isTerminalLifecycleState,
-  lifecycleDeadline,
   type ReceiveLifecycleState,
 } from '../output/workspace'
 import type {
@@ -25,12 +24,6 @@ import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
 export interface WorkspaceUsage {
   readonly ownedBytes: bigint
   readonly maximumBytes?: bigint
-}
-
-export interface RetentionPresentation {
-  readonly expiresAt: number
-  readonly remainingMilliseconds: number
-  readonly elapsed: boolean
 }
 
 export interface WorkspaceUsagePresentation {
@@ -114,7 +107,6 @@ export interface ReceiveLifecyclePresentation {
   readonly title: string
   readonly description: string
   readonly tone: 'neutral' | 'positive' | 'warning' | 'critical'
-  readonly retention: RetentionPresentation | null
   readonly usage: WorkspaceUsagePresentation | null
   readonly actions: readonly LifecycleActionPresentation[]
   readonly compatibleNameRepair: CompatibleNameRepairPresentation | null
@@ -137,7 +129,6 @@ export function presentReceiveLifecycle(input: Readonly<{
   state: ReceiveLifecycleState
   artifact: ArtifactSpec
   plan: MaterializationPlan
-  nowMilliseconds: number
   workspaceUsage?: WorkspaceUsage | null
   activeControls?: readonly V2ActiveReceiveControl[]
   interruption?: V2ReceiveInterruptionPresentation | null
@@ -146,8 +137,6 @@ export function presentReceiveLifecycle(input: Readonly<{
   writerOpenPause?: PersistentWriterOpenPauseFact | null
   directZipProgress?: V2DirectZipProgressSnapshot | null
 }>): ReceiveLifecyclePresentation {
-  requireClock(input.nowMilliseconds)
-  const retention = retentionPresentation(input.state, input.nowMilliseconds)
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
     ? null
     : presentCompatibleNameRepair({ state: input.state, summary: input.repairSummary })
@@ -161,19 +150,14 @@ export function presentReceiveLifecycle(input: Readonly<{
         input.recoverySummary ?? null,
       )
     : interruptionCopy(input.interruption)
-  const actions = presentedLifecycleActions(input, retention)
+  const actions = presentedLifecycleActions(input)
   const writerOpenPause = presentPersistentWriterOpenPause(input)
   return Object.freeze({
     stateKind: input.state.kind,
     category: lifecycleCategory(input.state),
-    title: retention?.elapsed === true && isStableState(input.state)
-      ? 'The retention period has ended.'
-      : copy.title,
-    description: retention?.elapsed === true && isStableState(input.state)
-      ? 'This task can no longer continue. WindShare will clean up its retained data.'
-      : copy.description,
-    tone: retention?.elapsed === true && isStableState(input.state) ? 'warning' : copy.tone,
-    retention,
+    title: copy.title,
+    description: copy.description,
+    tone: copy.tone,
     usage: workspaceUsagePresentation(input),
     actions,
     compatibleNameRepair,
@@ -251,9 +235,7 @@ function presentedLifecycleActions(
     activeControls?: readonly V2ActiveReceiveControl[]
     recoverySummary?: RecoverySummary | null
   }>,
-  retention: RetentionPresentation | null,
 ): readonly LifecycleActionPresentation[] {
-  if (retention?.elapsed === true && isStableState(input.state)) return Object.freeze([])
   if (input.activeControls !== undefined && input.activeControls.length > 0) {
     return activeControlActions(input.state, input.activeControls, input.plan.kind)
   }
@@ -354,14 +336,6 @@ function lifecycleCopy(
       return copy('Start again required', restartRequiredDescription(state.reason), 'warning')
     case 'discarded':
       return copy('Task discarded', 'Owned unfinished data and task records were removed.', 'neutral')
-    case 'expired':
-      return copy(
-        'Task expired',
-        state.cleanupState === 'cleanup-pending'
-          ? 'The retention period ended. Continuing is disabled while owned data is cleaned up.'
-          : 'The retention period ended and owned retained data was cleaned up.',
-        'warning',
-      )
     case 'needs-attention':
       return copy('Needs attention', needsAttentionDescription(state.reason), 'critical')
     case 'authorization-required':
@@ -514,16 +488,6 @@ function lifecycleActions(
         action('continue', 'Retry after freeing space'),
         action('delete', 'Verify ownership and delete unfinished ZIP', true),
       ])
-    case 'expired':
-      if (state.cleanupState !== 'cleanup-pending') return Object.freeze([])
-      if (planKind === 'direct-resumable-zip') {
-        return Object.freeze([
-          action('delete', 'Verify ownership and delete the expired unfinished ZIP', true),
-        ])
-      }
-      return planKind === 'workspace-then-publish'
-        ? Object.freeze([action('delete', 'Delete expired data', true)])
-        : Object.freeze([])
     default:
       return Object.freeze([])
   }
@@ -561,19 +525,6 @@ function action(
   return Object.freeze({ kind, label, destructive })
 }
 
-function retentionPresentation(
-  state: ReceiveLifecycleState,
-  nowMilliseconds: number,
-): RetentionPresentation | null {
-  const expiresAt = state.kind === 'expired' ? state.expiresAt : lifecycleDeadline()
-  if (expiresAt === undefined) return null
-  return Object.freeze({
-    expiresAt,
-    remainingMilliseconds: Math.max(0, expiresAt - nowMilliseconds),
-    elapsed: nowMilliseconds >= expiresAt,
-  })
-}
-
 function workspaceUsagePresentation(input: Readonly<{
   state: ReceiveLifecycleState
   plan: MaterializationPlan
@@ -599,7 +550,6 @@ function lifecycleOwnsWorkspaceData(state: ReceiveLifecycleState): boolean {
   if (state.kind === 'discarded' || state.kind === 'partial-directory' ||
       state.kind === 'restart-required') return false
   if (state.kind === 'published') return state.cleanupState === 'cleanup-pending'
-  if (state.kind === 'expired') return state.cleanupState === 'cleanup-pending'
   return state.kind !== 'download-started' || state.attemptKind === 'workspace'
 }
 
@@ -610,16 +560,9 @@ function lifecycleCategory(state: ReceiveLifecycleState): ReceiveLifecyclePresen
       (state.kind === 'download-started' && state.attemptKind === 'workspace')) return 'retained'
   if (state.kind === 'published' || state.kind === 'partial-directory' ||
       state.kind === 'restart-required' || state.kind === 'discarded' ||
-      state.kind === 'expired' || state.kind === 'needs-attention' ||
+      state.kind === 'needs-attention' ||
       state.kind === 'download-started') return 'terminal'
   return 'active'
-}
-
-function isStableState(state: ReceiveLifecycleState): boolean {
-  return state.kind === 'resumable-receive' || state.kind === 'resumable-package' ||
-    state.kind === 'waiting-to-save' || state.kind === 'authorization-required' ||
-    state.kind === 'target-verification-required' || state.kind === 'destination-space-required' ||
-    (state.kind === 'download-started' && state.attemptKind === 'workspace')
 }
 
 function receivingDescription(artifact: ArtifactSpec, plan: MaterializationPlan): string {
@@ -712,10 +655,4 @@ function copy(
   tone: ReceiveLifecyclePresentation['tone'],
 ) {
   return Object.freeze({ title, description, tone })
-}
-
-function requireClock(nowMilliseconds: number): void {
-  if (!Number.isSafeInteger(nowMilliseconds) || nowMilliseconds < 0) {
-    throw new TypeError('presentation clock must be a non-negative safe integer')
-  }
 }

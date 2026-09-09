@@ -62,7 +62,6 @@ const LIFECYCLE_STATES = [
   'partial_directory',
   'restart_required',
   'discarded',
-  'expired',
   'needs_attention',
   'authorization_required',
   'target_verification_required',
@@ -446,7 +445,7 @@ export function validateLifecycleAction(payload: UnknownRecord): void {
     'lifecycle action transition')
   member(payload.action, [
     'pause', 'stop', 'continue', 'save', 'redownload', 'change_location',
-    'discard', 'delete', 'expiry',
+    'discard', 'delete',
   ], 'lifecycle action')
   if (payload.lifecycle_state !== undefined) {
     member(payload.lifecycle_state, LIFECYCLE_STATES, 'lifecycle state')
@@ -691,7 +690,7 @@ export function validateRetainedAction(payload: UnknownRecord): void {
   member(payload.continuation, [
     'resume_receive', 'pending_catch_up', 'restoration_available', 'history_only',
     'resume_package', 'save_artifact', 'retry_download',
-    'cleanup_expired', 'retry_cleanup', 'needs_attention',
+    'retry_cleanup', 'needs_attention',
   ], 'retained action continuation')
 }
 

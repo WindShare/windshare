@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import type { OutputFailureSinks } from '../../src/output/diagnostics'
@@ -11,12 +11,14 @@ import {
   type ReceiveLifecycleState,
 } from '../../src/output/workspace/state'
 
+afterEach(() => vi.useRealTimers())
+
 describe('receive operation resume authority', () => {
   it('keeps obsolete repair records cleanup-only after a long interruption', async () => {
     const lifecycle = resumableReceive()
     const readRecoverySummary = vi.fn(async () => { throw new Error('old repair must not decode') })
     const resume = vi.fn(async () => 'resumed')
-    const expire = vi.fn(async () => 'expired')
+    const cleanup = vi.fn(async () => 'cleaned')
     const catchUp = vi.fn(async () => 'caught-up')
     const discard = vi.fn(async () => ({ kind: 'record-forgotten' as const }))
     const authority = new ReceiveOperationResumeAuthority({
@@ -25,8 +27,7 @@ describe('receive operation resume authority', () => {
         isCleanupOnly: async () => true,
         readRecoverySummary,
       },
-      mutations: { ...mutations({ resume, expire, discard }), catchUp },
-      clock: { now: () => 5_000 + 365 * 24 * 60 * 60 * 1000 },
+      mutations: { ...mutations({ resume, cleanup, discard }), catchUp },
     })
     const reference = async () => (await authority.listResumeState()).operations[0]!
     expect((await reference()).descriptor.continuation).toBe('cleanup-incompatible')
@@ -36,7 +37,7 @@ describe('receive operation resume authority', () => {
     await expect(authority.discard(await reference())).resolves.toEqual({ kind: 'record-forgotten' })
     expect(readRecoverySummary).not.toHaveBeenCalled()
     expect(resume).not.toHaveBeenCalled()
-    expect(expire).not.toHaveBeenCalled()
+    expect(cleanup).not.toHaveBeenCalled()
     expect(catchUp).not.toHaveBeenCalled()
     expect(discard).toHaveBeenCalledOnce()
   })
@@ -47,7 +48,6 @@ describe('receive operation resume authority', () => {
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle] },
       mutations: mutations({ resume }),
-      clock: { now: () => 10_001 },
     })
 
     const inventory = await authority.listResumeState()
@@ -79,7 +79,6 @@ describe('receive operation resume authority', () => {
         readRecoverySummary: async () => summary,
       },
       mutations: mutations({ resume }),
-      clock: { now: () => 10_001 },
     })
     const inventory = await authority.listResumeState()
     const reference = inventory.operations[0]!
@@ -96,34 +95,33 @@ describe('receive operation resume authority', () => {
   })
 
   it('preserves unfinished receives after a year without expiring', async () => {
-    const enteredAt = 5_000
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2030-01-01'))
     const lifecycle = resumableReceive()
     const resume = vi.fn(async () => 'resumed')
-    const expire = vi.fn(async () => 'expired')
+    const cleanup = vi.fn(async () => 'cleaned')
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle] },
-      mutations: mutations({ resume, expire }),
-      clock: { now: () => enteredAt + 365 * 24 * 60 * 60 * 1000 },
+      mutations: mutations({ resume, cleanup }),
     })
 
     const inventory = await authority.listResumeState()
     const reference = inventory.operations[0]!
     expect(reference.descriptor.continuation).toBe('resume-receive')
-    expect(reference.descriptor.expiresAt).toBeUndefined()
+    expect(reference.descriptor).not.toHaveProperty('expiresAt')
     await expect(authority.resume(reference)).resolves.toBe('resumed')
     expect(resume).toHaveBeenCalledOnce()
-    expect(expire).not.toHaveBeenCalled()
+    expect(cleanup).not.toHaveBeenCalled()
   })
 
   it('forwards the exact attempt-local output capability through resume and discard', async () => {
     const lifecycle = resumableReceive()
     const resume = vi.fn(async () => 'resumed')
-    const expire = vi.fn(async () => 'expired')
+    const cleanup = vi.fn(async () => 'cleaned')
     const discard = vi.fn(async () => ({ kind: 'already-absent' as const }))
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle] },
-      mutations: mutations({ resume, expire, discard }),
-      clock: { now: () => 10_001 },
+      mutations: mutations({ resume, cleanup, discard }),
     })
     const failures = Object.freeze({}) as OutputFailureSinks
 
@@ -135,40 +133,28 @@ describe('receive operation resume authority', () => {
     await authority.discard(discardInventory.operations[0]!, failures)
     expect(discard).toHaveBeenCalledWith(expect.any(Object), failures)
 
-    const expiredAuthority = new ReceiveOperationResumeAuthority({
-      source: { listLifecycleStates: async () => [lifecycle] },
-      mutations: mutations({ resume, expire }),
-      clock: { now: () => 10_000 + 365 * 24 * 60 * 60 * 1000 },
-    })
-    const expiryInventory = await expiredAuthority.listResumeState()
-    await expiredAuthority.resume(expiryInventory.operations[0]!, { failures })
-    expect(expire).not.toHaveBeenCalled()
-    expect(resume).toHaveBeenLastCalledWith(expect.any(Object), { failures })
   })
 
   it('consumes an explicit retained-cleanup reference exactly once', async () => {
     const lifecycle: ReceiveLifecycleState = Object.freeze({
-      kind: 'expired',
+      kind: 'published',
       operationId: identity(16, 1),
       receiveIntentDigest: identity(32, 2),
       generation: 5n,
-      priorStableState: 'resumable-receive',
-      expiresAt: 10_000,
+      receiptDigest: identity(32, 3),
       cleanupState: 'cleanup-pending',
-      expiryReceiptDigest: identity(32, 4),
     })
-    const expire = vi.fn(async () => 'cleaned')
+    const cleanup = vi.fn(async () => 'cleaned')
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle] },
-      mutations: mutations({ expire }),
-      clock: { now: () => 10_001 },
+      mutations: mutations({ cleanup }),
     })
     const inventory = await authority.listResumeState()
     const reference = inventory.operations[0]!
 
     await expect(authority.cleanup(reference)).resolves.toBe('cleaned')
     await expect(authority.cleanup(reference)).rejects.toThrow('another authority')
-    expect(expire).toHaveBeenCalledOnce()
+    expect(cleanup).toHaveBeenCalledOnce()
   })
 
   it('closes inventory authority and reports cleanup uncertainty without partial export', async () => {
@@ -180,7 +166,6 @@ describe('receive operation resume authority', () => {
     const authority = new ReceiveOperationResumeAuthority({
       source: { listLifecycleStates: async () => [lifecycle] },
       mutations: mutations({ discard }),
-      clock: { now: () => 10_001 },
     })
 
     const inventory = await authority.listResumeState()
@@ -203,7 +188,7 @@ function mutations(overrides: Partial<ReceiveOperationMutationPort<string>> = {}
 ReceiveOperationMutationPort<string> {
   return {
     resume: overrides.resume ?? (async () => 'resumed'),
-    expire: overrides.expire ?? (async () => 'expired'),
+    cleanup: overrides.cleanup ?? (async () => 'cleaned'),
     discard: overrides.discard ?? (async () => ({
       kind: 'discarded',
       cleanupReceiptDigest: identity(32, 9),

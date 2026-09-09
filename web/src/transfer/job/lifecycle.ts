@@ -74,7 +74,6 @@ const WORKSPACE_POST_MATERIALIZATION_STATES: ReadonlySet<ReceiveLifecycleState['
   'download-started',
   'restart-required',
   'discarded',
-  'expired',
   'needs-attention',
 ])
 

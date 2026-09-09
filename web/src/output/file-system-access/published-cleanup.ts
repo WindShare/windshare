@@ -33,7 +33,6 @@ export interface FSAPublishedCleanupAuthority {
   readonly lifecycle: PublishedLifecycle
   readonly repository: FSASettlementRepository
   readonly leaseId: string
-  readonly clock?: () => number
   readonly trace?: OutputTraceSource
 }
 
@@ -190,7 +189,6 @@ async function commitPublishedCleanup(
     planKind: 'direct-tree',
     preparationRequired: false,
     activeLeaseId: input.leaseId,
-    nowMilliseconds: (input.clock ?? Date.now)(),
   })
   if (reduced.status !== 'applied' || reduced.state.kind !== 'published' ||
       reduced.state.cleanupState !== 'clean') {

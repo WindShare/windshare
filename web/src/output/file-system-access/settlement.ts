@@ -71,7 +71,6 @@ export interface CreateFileSystemAccessSettlementAuthorityOptions {
   readonly transferJobId: string
   /** Exact durable state to restore when a continuation cannot admit an execution. */
   readonly admissionFallback?: ReceiveAdmissionFallback
-  readonly clock?: () => number
   readonly diagnostics?: OutputDiagnosticsPorts
   readonly trace?: (event: FSASettlementTraceEvent) => void
 }
@@ -115,7 +114,6 @@ export function activatePreparedFileSystemAccessSettlement(
     ...(prepared.admissionFallback === undefined
       ? {}
       : { admissionFallback: prepared.admissionFallback }),
-    clock: options.clock ?? Date.now,
     ...(options.diagnostics === undefined
       ? {}
       : { diagnostics: options.diagnostics }),
@@ -136,7 +134,6 @@ export async function createFileSystemAccessSettlementAuthority(
     repository: options.repository,
     lifecycleLeaseId: options.lifecycleLeaseId,
     transferJobId: options.transferJobId,
-    ...(options.clock === undefined ? {} : { clock: options.clock }),
     ...(options.diagnostics === undefined
       ? {}
       : { diagnostics: options.diagnostics }),

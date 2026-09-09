@@ -1,11 +1,9 @@
 import type { PresentationExclusionReason } from '../../diagnostics/incident'
 import type { OutputFailureBindingLease } from '../../output/diagnostics'
-import { lifecycleDeadline } from '../../output/workspace'
 import type {
   LifecycleUserAction,
   V2ActiveReceiveControl,
 } from '../v2-lifecycle-presentation'
-import { isAbortError } from '../v2-controller-state'
 import type { V2OutputPresentationController } from '../v2-output'
 import type {
   V2BoundReceiveOperation,
@@ -20,15 +18,12 @@ import {
 import type { V2PresentationAttempt } from './presentation-attempt'
 import type { ActiveReceiveSettlementPresentation } from './active-receive-settlement-presentation'
 
-const MAXIMUM_TIMER_DELAY_MILLISECONDS = 2_147_483_647
-
 export interface ActiveReceiveLifecycleOperation {
   readonly runtime: V2BoundReceiveOperation
   readonly settlementPresentation: ActiveReceiveSettlementPresentation
   transfer?: AbortController
   running?: Promise<void>
   receiveAttempt?: V2ReceivePresentationAttempt
-  expiryTimer?: ReturnType<typeof setTimeout>
 }
 
 interface PendingLifecycleAction {
@@ -50,7 +45,6 @@ export interface ActiveReceiveLifecycleOptions {
     attempt: V2PresentationAttempt,
   ) => void
   readonly onActionError: (error: unknown) => void
-  readonly onFailure: (error: unknown) => void
   readonly onIdle: (operation: ActiveReceiveLifecycleOperation) => void
 }
 
@@ -62,7 +56,6 @@ export class ActiveReceiveLifecycle {
   readonly #startTransfer: (operation: ActiveReceiveLifecycleOperation) => void
   readonly #replaceDetachConsequence: ActiveReceiveLifecycleOptions['replaceDetachConsequence']
   readonly #onActionError: (error: unknown) => void
-  readonly #onFailure: (error: unknown) => void
   readonly #onIdle: ActiveReceiveLifecycleOptions['onIdle']
   #pending: PendingLifecycleAction | undefined
 
@@ -74,7 +67,6 @@ export class ActiveReceiveLifecycle {
     this.#startTransfer = options.startTransfer
     this.#replaceDetachConsequence = options.replaceDetachConsequence
     this.#onActionError = options.onActionError
-    this.#onFailure = options.onFailure
     this.#onIdle = options.onIdle
   }
 
@@ -135,11 +127,6 @@ export class ActiveReceiveLifecycle {
     this.#closeAttempt(pending)
   }
 
-  cancelExpiry(operation: ActiveReceiveLifecycleOperation): void {
-    if (operation.expiryTimer !== undefined) clearTimeout(operation.expiryTimer)
-    delete operation.expiryTimer
-  }
-
   async applyMutation(
     active: ActiveReceiveLifecycleOperation,
     expectedGeneration: bigint,
@@ -167,27 +154,9 @@ export class ActiveReceiveLifecycle {
     }
     isolateDiagnostic(beforePublish)
     const controls = mutation.activeControls ?? Object.freeze([])
-    if (!this.#outputs.updateLifecycle(mutation.lifecycle, Date.now(), usage, controls)) return false
-    this.scheduleExpiry(active)
+    if (!this.#outputs.updateLifecycle(mutation.lifecycle, usage, controls)) return false
     if (mutation.resumeTransfer === true) this.#resumeTransferWhenIdle(active)
     return true
-  }
-
-  scheduleExpiry(active: ActiveReceiveLifecycleOperation): void {
-    this.cancelExpiry(active)
-    const lifecycle = this.#outputs.getSnapshot().lifecycle
-    if (!this.#operationIsCurrent(active) || lifecycle === null) return
-    const deadline = lifecycleDeadline()
-    if (deadline === undefined) return
-    const delay = Math.min(
-      MAXIMUM_TIMER_DELAY_MILLISECONDS,
-      Math.max(0, deadline - Date.now()),
-    )
-    const expectedGeneration = lifecycle.generation
-    active.expiryTimer = setTimeout(() => {
-      delete active.expiryTimer
-      this.#observeExpiry(active, expectedGeneration, deadline).catch(() => undefined)
-    }, delay)
   }
 
   #interruptReceive(
@@ -324,74 +293,6 @@ export class ActiveReceiveLifecycle {
     running.finally(() => {
       if (this.#operationIsCurrent(active)) this.#startTransfer(active)
     }).catch(() => undefined)
-  }
-
-  async #observeExpiry(
-    active: ActiveReceiveLifecycleOperation,
-    expectedGeneration: bigint,
-    deadline: number,
-  ): Promise<void> {
-    if (
-      !this.#operationIsCurrent(active) ||
-      this.#outputs.getSnapshot().lifecycle?.generation !== expectedGeneration
-    ) {
-      return
-    }
-    if (Date.now() < deadline) {
-      this.scheduleExpiry(active)
-      return
-    }
-
-    const lifecycle = this.#outputs.getSnapshot().lifecycle
-    if (lifecycle === null) return
-    const attempt = this.#observability.openLifecycleAction()
-    const outputLease = active.runtime.bindOutputFailures?.(attempt.outputFailures)
-    this.#observability.emitLifecycleTrace('started', 'expiry')
-    try {
-      const mutation = await active.runtime.observeExpiry(lifecycle)
-      const applied = await this.applyMutation(
-        active,
-        expectedGeneration,
-        mutation,
-        () => {
-          this.#observability.decideLifecycleMutation(attempt, mutation.lifecycle)
-          if (!attempt.decisionSettled && mutation.lifecycle.kind === 'expired') {
-            this.#observability.lifecycleExclusion(attempt, 'normal_expiry')
-          }
-        },
-      )
-      if (!applied) this.#observability.lifecycleExclusion(attempt, 'stale_replacement')
-      if (!attempt.decisionSettled) this.#observability.lifecycleExclusion(attempt, 'success')
-      this.#observability.emitLifecycleTrace('completed', 'expiry', mutation.lifecycle.kind)
-    } catch (error) {
-      this.#observability.emitLifecycleTrace('failed', 'expiry')
-      if (isAbortError(error)) {
-        this.#observability.lifecycleExclusion(attempt, 'not_user_visible')
-      } else {
-        const trigger = attempt.outputFailureTrigger ??
-          this.#observability.recordUnclassified(
-            attempt,
-            'lifecycle_action',
-            'contributor',
-          )
-        if (trigger !== undefined) {
-          this.#observability.lifecycleIncident(attempt, trigger, 'failed')
-        }
-        if (this.#operationIsCurrent(active)) this.#reportFailure(error)
-      }
-    } finally {
-      outputLease?.revoke()
-      this.#replaceDetachConsequence(active, attempt)
-      attempt.close()
-    }
-  }
-
-  #reportFailure(error: unknown): void {
-    try {
-      this.#onFailure(error)
-    } catch {
-      // A presentation observer cannot replace the failure that was already published.
-    }
   }
 
   #closeAttempt(pending: PendingLifecycleAction): void {

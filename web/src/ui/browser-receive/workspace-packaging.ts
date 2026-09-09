@@ -153,17 +153,8 @@ export class WorkspaceReceivePackaging {
     }
   }
 
-  async observeExpiry(
-    backend: OriginPrivateWorkspaceBackend | undefined,
-  ): Promise<V2LifecycleMutation> {
-    const result = await this.#stages.expireIfDue(this.cleanupRequest(backend))
-    const state = result.kind === 'not-due' ? result.state : result.cleanup.state
-    return Object.freeze({ lifecycle: state, workspaceUsage: this.resolveWorkspaceUsage(state) })
-  }
-
   resolveWorkspaceUsage(lifecycle: ReceiveLifecycleState): WorkspaceUsage | null {
-    if (lifecycle.kind === 'discarded' ||
-        (lifecycle.kind === 'expired' && lifecycle.cleanupState === 'clean')) return null
+    if (lifecycle.kind === 'discarded') return null
     let ownedBytes = 0n
     if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
       ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.completedBytes

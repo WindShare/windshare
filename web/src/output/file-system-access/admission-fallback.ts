@@ -94,5 +94,5 @@ export function isFSAStableOrTerminal(state: ReceiveLifecycleState): boolean {
   return (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') ||
     state.kind === 'published' ||
     state.kind === 'partial-directory' || state.kind === 'restart-required' ||
-    state.kind === 'discarded' || state.kind === 'expired' || state.kind === 'needs-attention'
+    state.kind === 'discarded' || state.kind === 'needs-attention'
 }

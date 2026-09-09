@@ -76,7 +76,7 @@ describe('abandoned receive recovery', () => {
   })
 
   it('preserves unfinished package recovery after long retention', () => {
-    const expiresAt = NOW + OBSERVATION_INTERVAL
+    const observedAt = NOW + OBSERVATION_INTERVAL
     const stable = state({
       kind: 'materialization-sealed',
       sealedMaterializationDigest: identity(32, 4),
@@ -86,7 +86,7 @@ describe('abandoned receive recovery', () => {
       sealedMaterializationDigest: identity(32, 4),
       tempCleanupProofDigest: identity(32, 5),
       lastVerifiedRecordDigest: identity(32, 6),
-    }, context('workspace-then-publish', expiresAt))
+    }, context('workspace-then-publish', observedAt))
 
     expect(reduction.decision).toBe('resume-package')
     expect(reduction.state).toEqual(expect.objectContaining({
@@ -156,7 +156,6 @@ describe('abandoned receive recovery', () => {
       kind: 'handoff',
       outcome: 'started',
       lastVerifiedRecordDigest: identity(32, 8),
-      expiryReceiptDigest: identity(32, 9),
     }, context('workspace-then-publish', NOW + 1)).state
     expect(downloaded).toEqual(expect.objectContaining({
       kind: 'download-started',
@@ -193,7 +192,6 @@ function context(
   return {
     planKind,
     nowMilliseconds,
-    expiryReceiptDigest: identity(32, 9),
   } as const
 }
 

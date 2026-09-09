@@ -56,8 +56,6 @@ export function retainedOperationAuthority(
       return Object.freeze({ actions: retainedActions('save', 'discard') })
     case 'retry-download':
       return Object.freeze({ actions: retainedActions('redownload', 'delete') })
-    case 'cleanup-expired':
-      return Object.freeze({ actions: retainedActions('delete') })
     case 'retry-cleanup':
       return Object.freeze({ actions: retainedActions('catch-up', 'delete') })
     case 'needs-attention':

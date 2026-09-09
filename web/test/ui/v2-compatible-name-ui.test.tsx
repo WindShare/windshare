@@ -33,7 +33,6 @@ describe('compatible-name receiver UI', () => {
       state: lifecycle,
       artifact: TREE,
       plan: Object.freeze({ kind: 'direct-tree' }) as NonNullable<V2OutputPresentationSnapshot['plan']>,
-      nowMilliseconds: 1_000,
       repairSummary,
     })
     const output = Object.freeze({

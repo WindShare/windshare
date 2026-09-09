@@ -66,7 +66,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
   readonly #repository: FSASettlementRepository
   readonly #lifecycleLeaseId: string
   readonly #transferJobId: string
-  readonly #clock: () => number
   readonly #trace: CreateFileSystemAccessSettlementAuthorityOptions['trace']
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #directoryScope: DirectoryAdmissionScope
@@ -81,7 +80,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     lifecycleLeaseId: string
     transferJobId: string
     admissionFallback?: ReceiveAdmissionFallback
-    clock: () => number
     diagnostics?: OutputDiagnosticsPorts
     trace?: (event: FSASettlementTraceEvent) => void
     directoryScope: DirectoryAdmissionScope
@@ -91,7 +89,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
     this.#lifecycleLeaseId = input.lifecycleLeaseId
     this.#transferJobId = input.transferJobId
     this.#admissionFallback = input.admissionFallback
-    this.#clock = input.clock
     this.#trace = input.trace
     this.#diagnostics = input.diagnostics
     this.#directoryScope = input.directoryScope
@@ -364,7 +361,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       })
       const lifecycle = await cleanupTerminalFSAMetadata({
         intent: this.#intent, lifecycle: committed.state, repository: this.#repository,
-        lifecycleLeaseId: this.#lifecycleLeaseId, clock: this.#clock, observation,
+        lifecycleLeaseId: this.#lifecycleLeaseId, observation,
         ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
       })
       this.#emit(
@@ -637,7 +634,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       planKind: 'direct-tree',
       preparationRequired: false,
       activeLeaseId: this.#lifecycleLeaseId,
-      nowMilliseconds: this.#now(),
     })
     if (reduced.status !== 'applied' || reduced.state === state) {
       throw new TypeError('FSA lifecycle transition was stale or side-effect free')
@@ -651,12 +647,6 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         input.plan.reservation.digest !== this.#intent.plan.reservation.digest) {
       throw new TypeError('FSA settlement authority belongs to another receive intent')
     }
-  }
-
-  #now(): number {
-    const value = this.#clock()
-    if (!Number.isSafeInteger(value) || value < 0) throw new TypeError('FSA settlement clock is invalid')
-    return value
   }
 
   #emit(

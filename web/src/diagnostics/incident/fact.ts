@@ -184,7 +184,6 @@ const lifecycleKinds = [
   'partial-directory',
   'restart-required',
   'discarded',
-  'expired',
   'needs-attention',
   'authorization-required',
   'target-verification-required',
