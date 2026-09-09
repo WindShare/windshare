@@ -54,7 +54,7 @@ func TestPeerPathControlCanonicalBoundedSchema(t *testing.T) {
 }
 
 func TestPeerPathControlIsSessionBoundWithoutOperationAuthority(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 2}, time.Now)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 2}, time.Now)
 	if err != nil {
 		t.Fatal(err)
 	}

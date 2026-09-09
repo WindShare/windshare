@@ -24,21 +24,23 @@ const (
 )
 
 var (
-	ErrInvalidRole           = errors.New("protocolsession: invalid role")
-	ErrInvalidDirection      = errors.New("protocolsession: message kind is invalid for direction")
-	ErrUnknownOperation      = errors.New("protocolsession: message refers to an unknown operation")
-	ErrOperationIDReused     = errors.New("protocolsession: operation identity was reused")
-	ErrUnexpectedOperation   = errors.New("protocolsession: message is invalid for the operation")
-	ErrConflictingFinal      = errors.New("protocolsession: operation final conflicts with its tombstone")
-	ErrSessionTerminated     = errors.New("protocolsession: session is terminal")
-	ErrActiveOperationBudget = errors.New("protocolsession: active operation budget exhausted")
-	ErrTombstoneBudget       = errors.New("protocolsession: operation tombstone budget exhausted")
-	ErrOperationPinBudget    = errors.New("protocolsession: operation in-flight pin budget exhausted")
+	ErrInvalidRole            = errors.New("protocolsession: invalid role")
+	ErrInvalidDirection       = errors.New("protocolsession: message kind is invalid for direction")
+	ErrUnknownOperation       = errors.New("protocolsession: message refers to an unknown operation")
+	ErrOperationIDReused      = errors.New("protocolsession: operation identity was reused")
+	ErrUnexpectedOperation    = errors.New("protocolsession: message is invalid for the operation")
+	ErrConflictingFinal       = errors.New("protocolsession: operation final conflicts with its tombstone")
+	ErrSessionTerminated      = errors.New("protocolsession: session is terminal")
+	ErrActiveOperationBudget  = errors.New("protocolsession: active operation budget exhausted")
+	ErrTrackedOperationBudget = errors.New("protocolsession: tracked operation budget exhausted")
+	ErrOperationPinBudget     = errors.New("protocolsession: operation in-flight pin budget exhausted")
 )
 
 type OperationLimits struct {
-	MaxActive     int
-	MaxTombstones int
+	MaxActive int
+	// MaxTracked bounds retained identities, including the slots reserved by
+	// active operations for their eventual completion or cancellation.
+	MaxTracked int
 }
 
 // OperationDisposition tells a router whether a valid message is new, an
@@ -75,13 +77,14 @@ type operationTombstone struct {
 type OperationTable struct {
 	mu sync.Mutex
 
-	now           func() time.Time
-	limits        OperationLimits
-	continuations OperationContinuationClassifier
-	active        map[OperationID]activeOperation
-	tombstones    map[OperationID]operationTombstone
-	terminal      bool
-	peerPaths     map[[16]byte]*retiredPeerPath
+	now             func() time.Time
+	limits          OperationLimits
+	continuations   OperationContinuationClassifier
+	active          map[OperationID]activeOperation
+	tombstones      map[OperationID]operationTombstone
+	terminal        bool
+	peerPaths       map[[16]byte]*retiredPeerPath
+	capacityChanged chan struct{}
 }
 
 func NewOperationTable(limits OperationLimits, now func() time.Time) (*OperationTable, error) {
@@ -93,7 +96,7 @@ func NewOperationTableWithContinuations(
 	now func() time.Time,
 	continuations OperationContinuationClassifier,
 ) (*OperationTable, error) {
-	if limits.MaxActive <= 0 || limits.MaxTombstones <= 0 {
+	if limits.MaxActive <= 0 || limits.MaxTracked <= 0 {
 		return nil, fmt.Errorf("protocolsession: invalid operation limits: %+v", limits)
 	}
 	if now == nil {
@@ -214,6 +217,7 @@ func (table *OperationTable) observeAdmissionLocked(
 		table.terminal = true
 		clear(table.active)
 		clear(table.tombstones)
+		table.notifyCapacityLocked()
 		return OperationSessionTerminal, nil, nil
 	}
 
@@ -362,6 +366,7 @@ func (table *OperationTable) TerminateLocal() error {
 	table.terminal = true
 	clear(table.active)
 	clear(table.tombstones)
+	table.notifyCapacityLocked()
 	return nil
 }
 
@@ -405,6 +410,9 @@ func (table *OperationTable) beginOperation(
 	}
 	if len(table.active) >= table.limits.MaxActive {
 		return OperationDrop, ErrActiveOperationBudget
+	}
+	if len(table.active)+len(table.tombstones) >= table.limits.MaxTracked {
+		return OperationDrop, ErrTrackedOperationBudget
 	}
 	authority, err := table.newOperationAuthority(message)
 	if err != nil {
@@ -514,6 +522,7 @@ func (table *OperationTable) finishOperation(
 	table.retirePeerAttemptLocked(active.authority)
 	clearContinuationReplayLocked(active.authority)
 	delete(table.active, operationID)
+	table.notifyCapacityLocked()
 	return nil
 }
 

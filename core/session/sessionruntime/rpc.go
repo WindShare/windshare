@@ -208,35 +208,7 @@ func (client *rpcClient) beginOn(
 	}
 	client.calls[id] = call
 	client.mu.Unlock()
-	selected, err := client.runtime.lanes.selectLane(lane)
-	if err != nil {
-		call.recordProtocolTraceFailure(err)
-		client.end(call)
-		return nil, newRPCRequestSendError(protocolsession.SendOutcomeDropped, false, err)
-	}
-	var usableAtSelection uint32
-	if call.traceEnabled {
-		usableAtSelection = client.runtime.lanes.usableCount()
-	}
-	call.setProtocolTraceLane(selected.identity, usableAtSelection)
-	var receipt protocolsession.SendReceipt
-	if kind == protocolsession.MessagePeerOffer {
-		receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(
-			message,
-			call.observeAuthenticatedOperationViolation,
-		)
-	} else {
-		receipt, err = selected.writer.TryControl(message)
-	}
-	if err != nil {
-		call.recordProtocolTraceSend(protocolsession.SendCompletion{
-			Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err,
-		})
-		call.recordProtocolTraceFailure(err)
-		client.end(call)
-		return nil, newRPCRequestSendError(protocolsession.SendOutcomeDropped, false, err)
-	}
-	completion := receipt.Await(ctx)
+	completion := client.sendRequest(ctx, lane, call, message)
 	call.recordProtocolTraceSend(completion)
 	outcome, err := completion.Outcome, completion.Err
 	exactAuthority := completion.Admitted && !completion.Generation.IsZero() &&
@@ -290,6 +262,44 @@ func (client *rpcClient) beginOn(
 		)
 	}
 	return call, nil
+}
+
+func (client *rpcClient) sendRequest(
+	ctx context.Context,
+	lane *LaneIdentity,
+	call *operationCall,
+	message protocolsession.Message,
+) protocolsession.SendCompletion {
+	for {
+		if err := client.waitRequestCapacity(ctx, call); err != nil {
+			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+		}
+		selected, err := client.runtime.lanes.selectLane(lane)
+		if err != nil {
+			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+		}
+		var usableAtSelection uint32
+		if call.traceEnabled {
+			usableAtSelection = client.runtime.lanes.usableCount()
+		}
+		call.setProtocolTraceLane(selected.identity, usableAtSelection)
+		var receipt protocolsession.SendReceipt
+		if message.Kind() == protocolsession.MessagePeerOffer {
+			receipt, err = selected.writer.TryControlObservingAuthenticatedViolations(message, call.observeAuthenticatedOperationViolation)
+		} else {
+			receipt, err = selected.writer.TryControl(message)
+		}
+		if err != nil {
+			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+		}
+		completion := receipt.Await(ctx)
+		if completion.Admitted || completion.Outcome != protocolsession.SendOutcomeDropped ||
+			!protocolsession.IsOperationCapacityError(completion.Err) {
+			return completion
+		}
+		// Another lane can consume the available slot before this writer claims
+		// the request. Only this proven unsent refusal is safe to retry.
+	}
 }
 
 func (client *rpcClient) newCall(

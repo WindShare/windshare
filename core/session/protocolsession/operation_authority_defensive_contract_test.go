@@ -3,7 +3,6 @@ package protocolsession
 import (
 	"errors"
 	"testing"
-	"time"
 )
 
 func TestOperationAuthorityQueriesRemainGenerationScoped(t *testing.T) {
@@ -18,7 +17,7 @@ func TestOperationAuthorityQueriesRemainGenerationScoped(t *testing.T) {
 		t.Fatalf("zero generation request kind = (%v, %t)", kind, ok)
 	}
 
-	table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 2})
+	table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 	if maximum, ok := admission.Generation.MaximumContinuations(); ok || maximum != 0 {
 		t.Fatalf("generation without continuation authority = (%d, %t)", maximum, ok)
 	}
@@ -44,9 +43,9 @@ func TestOperationAuthorityQueriesRemainGenerationScoped(t *testing.T) {
 	}
 }
 
-func TestCancelGenerationRejectsTerminalStaleAndOverBudgetAuthority(t *testing.T) {
+func TestCancelGenerationRejectsTerminalStaleAndPreservesReservedCapacity(t *testing.T) {
 	t.Run("terminal", func(t *testing.T) {
-		table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 2})
+		table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 		table.terminal = true
 		if err := table.CancelGeneration(admission.Generation); !errors.Is(err, ErrSessionTerminated) {
 			t.Fatalf("terminal cancellation error = %v", err)
@@ -54,7 +53,7 @@ func TestCancelGenerationRejectsTerminalStaleAndOverBudgetAuthority(t *testing.T
 	})
 
 	t.Run("different tombstone generation", func(t *testing.T) {
-		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 2})
+		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 		table.tombstones[operationID] = operationTombstone{
 			expiresAt: table.now().Add(OperationTombstoneLifetime), authority: &operationAuthority{},
 		}
@@ -64,24 +63,25 @@ func TestCancelGenerationRejectsTerminalStaleAndOverBudgetAuthority(t *testing.T
 	})
 
 	t.Run("missing active generation", func(t *testing.T) {
-		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 2})
+		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 		delete(table.active, operationID)
 		if err := table.CancelGeneration(admission.Generation); err != nil {
 			t.Fatalf("missing generation cancellation error = %v", err)
 		}
 	})
 
-	t.Run("tombstone budget", func(t *testing.T) {
-		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 1})
+	t.Run("reserved cancellation capacity", func(t *testing.T) {
+		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 1})
 		otherID := testOperationID(0xe2)
 		if otherID == operationID {
 			t.Fatal("test operation identities collided")
 		}
-		table.tombstones[otherID] = operationTombstone{
-			expiresAt: table.now().Add(time.Hour), authority: &operationAuthority{},
+		cancel := mustMessage(t, MessageCancel, &otherID, map[uint64]any{0: uint64(1)})
+		if _, err := table.Observe(DirectionReceiverToSender, cancel); !errors.Is(err, ErrTrackedOperationBudget) {
+			t.Fatalf("unknown cancel stole an admitted operation's slot: %v", err)
 		}
-		if err := table.CancelGeneration(admission.Generation); !errors.Is(err, ErrTombstoneBudget) {
-			t.Fatalf("tombstone-budget cancellation error = %v", err)
+		if err := table.CancelGeneration(admission.Generation); err != nil {
+			t.Fatalf("reserved cancellation error = %v", err)
 		}
 	})
 }
@@ -95,7 +95,7 @@ func TestOutboundPermitRejectsZeroStaleAndOverBudgetAuthority(t *testing.T) {
 		t.Fatalf("zero permit lease = (%T, %v)", lease, err)
 	}
 
-	_, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTombstones: 2})
+	_, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 	stale := admission.Outbound
 	stale.authority = &operationAuthority{}
 	if lease, err := stale.AcquireLease(); lease != nil || !errors.Is(err, ErrUnknownOperation) {

@@ -10,7 +10,7 @@ import (
 )
 
 func TestSendReceiptPreflightDropDoesNotReserveAnUnsentOperation(t *testing.T) {
-	operations, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	operations, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,7 +263,7 @@ func TestSendReceiptKeepsTransportFailureAndCallerTimeoutUncertain(t *testing.T)
 	})
 
 	t.Run("receiver request hides replay until settled physical unknown", func(t *testing.T) {
-		operations, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		operations, err := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -424,7 +424,7 @@ func queuedOpenResult(
 	sealer OutboundEnvelopeSealer,
 ) (*OperationTable, *RoleRouter, *SessionWriter, SendReceipt, OperationID) {
 	t.Helper()
-	operations, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 8}, nil)
+	operations, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 8}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

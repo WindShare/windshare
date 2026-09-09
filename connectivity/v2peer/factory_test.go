@@ -612,7 +612,7 @@ func TestSenderHandlerTerminalizesOfferCanceledBeforePublication(t *testing.T) {
 	})
 	message := testMessage(t, protocolsession.MessagePeerOffer, operation, body)
 	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
 	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, message)
 	if err != nil {
@@ -923,7 +923,7 @@ func testPeerMessageContext(
 ) context.Context {
 	t.Helper()
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

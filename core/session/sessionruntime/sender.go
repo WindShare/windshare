@@ -157,7 +157,7 @@ func NewSenderFactory(config SenderFactoryConfig) (*SenderFactory, error) {
 	}
 	if config.ReplayGuard == nil {
 		var err error
-		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(DefaultOperationTombstones, config.Now)
+		config.ReplayGuard, err = protocolsession.NewClientHelloReplayGuard(DefaultTrackedOperations, config.Now)
 		if err != nil {
 			return nil, err
 		}

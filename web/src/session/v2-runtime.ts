@@ -382,26 +382,27 @@ export class V2ReceiverSessionRuntime {
     if (!isReceiverRequestKind(kind)) {
       throw new V2SessionRuntimeError('operation', 'Message kind cannot begin a receiver operation')
     }
-    const lane = this.#selectLane(options.laneId)
     const id = nonzeroRandom(this.#randomBytes, 16)
     const message = encodeV2Message(kind, id, canonicalBody)
-    const operation = this.#router.create(id, kind, canonicalBody)
-    this.#operationLanes.set(operation, lane.id)
-    operation.onSettled(() => this.#operationLanes.delete(operation))
-    const cancellationSignal = options.signal
-    if (cancellationSignal !== undefined) {
-      const cancel = () => {
-        const cause = abortCause(cancellationSignal)
-        this.cancelOperation(operation, {
-          protocolReason: cancellationProtocolReason(cause),
-          cause,
-          laneId: lane.id,
-        }).catch(() => undefined)
-      }
-      cancellationSignal.addEventListener('abort', cancel, { once: true })
-      operation.onSettled(() => cancellationSignal.removeEventListener('abort', cancel))
-    }
+    const operation = await this.#router.admit(id, kind, canonicalBody, options.signal)
     try {
+      options.signal?.throwIfAborted()
+      const lane = this.#selectLane(options.laneId)
+      this.#operationLanes.set(operation, lane.id)
+      operation.onSettled(() => this.#operationLanes.delete(operation))
+      const cancellationSignal = options.signal
+      if (cancellationSignal !== undefined) {
+        const cancel = () => {
+          const cause = abortCause(cancellationSignal)
+          this.cancelOperation(operation, {
+            protocolReason: cancellationProtocolReason(cause),
+            cause,
+            laneId: lane.id,
+          }).catch(() => undefined)
+        }
+        cancellationSignal.addEventListener('abort', cancel, { once: true })
+        operation.onSettled(() => cancellationSignal.removeEventListener('abort', cancel))
+      }
       await lane.writer.send(message)
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'protocol_operation',

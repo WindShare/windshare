@@ -124,7 +124,7 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	now := func() time.Time { return time.Unix(0, nanos.Load()) }
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleSender,
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, now,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, now,
 	)
 	handlerContexts := make(chan context.Context, 2)
 	if err := runtime.router.RegisterHandler(

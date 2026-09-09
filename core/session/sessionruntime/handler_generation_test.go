@@ -16,7 +16,7 @@ func canceledSenderIngress(
 	t.Helper()
 	operationID, _ := request.OperationID()
 	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
 	admission, err := operations.ObserveInbound(protocolsession.DirectionReceiverToSender, request)
 	if err != nil {
@@ -62,7 +62,7 @@ func TestCancelMuxRoutesStormToOnlyTheExactOperationOwner(t *testing.T) {
 	peer := &countingPeerCancelHandler{}
 	mux := cancelMux{catalog: catalog, content: contentHandler, peer: peer}
 	operations, _ := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 128, MaxTombstones: 128}, nil,
+		protocolsession.OperationLimits{MaxActive: 128, MaxTracked: 128}, nil,
 	)
 	cancelBody, _ := contentflow.EncodeCancelReason(contentflow.CancelReasonSuperseded)
 	routeCancel := func(seed byte, requestKind protocolsession.MessageKind) {

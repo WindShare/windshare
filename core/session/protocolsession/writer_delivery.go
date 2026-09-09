@@ -307,6 +307,11 @@ func (writer *SessionWriter) admitClaimedDelivery(
 	}
 	permit = decision.replay
 	if decision.err != nil {
+		if IsOperationCapacityError(decision.err) && !decision.admitted {
+			// The request never acquired authority or consumed a sequence. Its
+			// caller can wait and retry while this writer keeps serving cancels.
+			return permit, false, nil
+		}
 		return permit, false, decision.err
 	}
 	if decision.disposition == OperationDrop {

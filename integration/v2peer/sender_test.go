@@ -360,7 +360,7 @@ func newIntegrationPeerIngress(
 	handler sessionruntime.SenderPeerHandler,
 ) (*integrationPeerIngress, error) {
 	table, err := protocolsession.NewOperationTableWithContinuations(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4},
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4},
 		nil,
 		classifier,
 	)

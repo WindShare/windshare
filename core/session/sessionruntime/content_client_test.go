@@ -318,10 +318,10 @@ func TestReceiverBlockLaneProvenDropReassignsDemand(t *testing.T) {
 	}
 }
 
-func TestRPCFailedBeginCancellationBudgetFailClosesSession(t *testing.T) {
+func TestRPCFailedBeginCancellationUsesReservedCapacity(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 1}, nil,
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -351,15 +351,15 @@ func TestRPCFailedBeginCancellationBudgetFailClosesSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := runtime.reconcileLocalCancel(secondAdmission.Generation); !errors.Is(err, protocolsession.ErrTombstoneBudget) {
+	if err := runtime.reconcileLocalCancel(secondAdmission.Generation); err != nil {
 		t.Fatalf("cleanup error=%v", err)
 	}
 	select {
 	case <-runtime.ctx.Done():
+		t.Fatal("reserved cancellation ended the session")
 	default:
-		t.Fatal("tombstone exhaustion did not fail-close the session")
 	}
-	if !operations.Terminated() || operations.ActiveCount() != 0 || operations.TombstoneCount() != 0 {
+	if operations.Terminated() || operations.ActiveCount() != 0 || operations.TombstoneCount() != 2 {
 		t.Fatalf("terminal=%v active=%d tombstones=%d", operations.Terminated(), operations.ActiveCount(), operations.TombstoneCount())
 	}
 }
