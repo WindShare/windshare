@@ -6,7 +6,7 @@ Keep browsing and previewing while the current download runs. Expand **Details**
 
 The primary download action recommends an available result. **Other ways to save** explains alternatives, including ZIP packaging, extra storage, and a later Save step. Supported browsers start the authorized download when ready. ?Download started? means the browser took over; it does not prove the file was saved.
 
-Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A saved copy uses additional device space.
+Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A failed continuation keeps previously received ZIP data. If finishing takes too long, WindShare waits for active save operations to finish safely and retains a completed result for saving. A saved copy uses additional device space.
 
 Pause preserves the progress supported by the chosen saving method. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
 

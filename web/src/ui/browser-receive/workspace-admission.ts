@@ -4,17 +4,20 @@ import type { WorkspaceUsage } from '../v2-lifecycle-presentation'
 import type { V2LifecycleMutation } from '../v2-receive-runtime'
 import { isWorkspaceTerminal } from './shared'
 
-export type WorkspaceReceiveAdmissionFallback = Extract<
-  ReceiveLifecycleState,
-  { kind: 'resumable-receive'; payloadKind: 'file-set' }
->
+export type WorkspaceReceiveAdmission =
+  | Readonly<{ kind: 'fresh' }>
+  | Readonly<{
+      kind: 'continuation'
+      restore: () => Promise<ReceiveLifecycleState>
+    }>
+
+type ExecutionAdmission =
+  | Readonly<{ kind: 'pending'; origin: WorkspaceReceiveAdmission }>
+  | Readonly<{ kind: 'admitted' }>
 
 interface WorkspaceExecutionAdmissionSettlementPort {
   readonly operationId: string
   readonly currentLifecycle: () => Promise<ReceiveLifecycleState>
-  readonly restoreContinuation: (
-    fallback: WorkspaceReceiveAdmissionFallback,
-  ) => Promise<WorkspaceReceiveAdmissionFallback>
   readonly discard: () => Promise<V2LifecycleMutation>
   readonly recordUnknown: () => Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>>
   readonly workspaceUsage: (state: ReceiveLifecycleState) => WorkspaceUsage | null
@@ -22,70 +25,64 @@ interface WorkspaceExecutionAdmissionSettlementPort {
 
 export class WorkspaceExecutionAdmissionSettlement {
   readonly #port: WorkspaceExecutionAdmissionSettlementPort
-  #fallback: WorkspaceReceiveAdmissionFallback | undefined
-  #executionAdmitted = false
+  #admission: ExecutionAdmission
+  #settlement: Promise<V2LifecycleMutation> | undefined
 
-  constructor(
-    port: WorkspaceExecutionAdmissionSettlementPort,
-    fallback?: WorkspaceReceiveAdmissionFallback,
-  ) {
+  constructor(port: WorkspaceExecutionAdmissionSettlementPort, origin: WorkspaceReceiveAdmission) {
     this.#port = port
-    this.#fallback = fallback
+    this.#admission = { kind: 'pending', origin }
   }
 
-  beginContinuation(fallback: WorkspaceReceiveAdmissionFallback): void {
-    this.#fallback = fallback
-    this.#executionAdmitted = false
+  beginContinuation(restore: () => Promise<ReceiveLifecycleState>): void {
+    this.#admission = { kind: 'pending', origin: { kind: 'continuation', restore } }
+    this.#settlement = undefined
   }
 
   markExecutionAdmitted(): void {
-    this.#executionAdmitted = true
+    this.#admission = { kind: 'admitted' }
   }
 
-  async settle(reason?: unknown): Promise<V2LifecycleMutation> {
+  settle(reason?: unknown): Promise<V2LifecycleMutation> {
+    this.#settlement ??= this.#settle(reason).catch(error => {
+      this.#settlement = undefined
+      throw error
+    })
+    return this.#settlement
+  }
+
+  async #settle(reason?: unknown): Promise<V2LifecycleMutation> {
     if (reason instanceof TargetOwnershipUnknownError) {
       return this.#settleOwnershipUnknown(reason)
     }
     const current = await this.#port.currentLifecycle()
-    if (isWorkspaceTerminal(current) || isStable(current)) {
-      return Object.freeze({
-        lifecycle: current,
-        workspaceUsage: this.#port.workspaceUsage(current),
-      })
+    if (isWorkspaceTerminal(current) || isStable(current)) return this.#mutation(current)
+    const admission = this.#admission
+    if (admission.kind === 'pending') {
+      // Retained bytes belong to the operation, even before this attempt opens execution.
+      if (admission.origin.kind === 'continuation') {
+        const lifecycle = await admission.origin.restore()
+        if (lifecycle.operationId !== this.#port.operationId || !isStable(lifecycle)) {
+          throw new TypeError('Workspace continuation did not restore its owned stable state')
+        }
+        return this.#mutation(lifecycle)
+      }
+      if (current.kind === 'intent-frozen' || current.kind === 'preparing' ||
+          current.kind === 'receiving') return this.#port.discard()
     }
-    if (current.kind === 'receiving' && this.#fallback !== undefined &&
-        !this.#executionAdmitted) {
-      const lifecycle = await this.#port.restoreContinuation(this.#fallback)
-      this.#fallback = undefined
-      return Object.freeze({
-        lifecycle,
-        workspaceUsage: this.#port.workspaceUsage(lifecycle),
-      })
-    }
-    const safelyUnopened = !this.#executionAdmitted &&
-      (current.kind === 'intent-frozen' || current.kind === 'preparing' ||
-       (current.kind === 'receiving' && this.#fallback === undefined))
-    if (safelyUnopened) return this.#port.discard()
-    const lifecycle = await this.#port.recordUnknown()
-    return Object.freeze({
-      lifecycle,
-      workspaceUsage: this.#port.workspaceUsage(lifecycle),
-    })
+    return this.#mutation(await this.#port.recordUnknown())
   }
 
-  async #settleOwnershipUnknown(
-    reason: TargetOwnershipUnknownError,
-  ): Promise<V2LifecycleMutation> {
+  #mutation(lifecycle: ReceiveLifecycleState): V2LifecycleMutation {
+    return Object.freeze({ lifecycle, workspaceUsage: this.#port.workspaceUsage(lifecycle) })
+  }
+
+  async #settleOwnershipUnknown(reason: TargetOwnershipUnknownError): Promise<V2LifecycleMutation> {
     if (reason.operationId !== null && reason.operationId !== this.#port.operationId) {
       throw new TypeError('Workspace admission ownership evidence belongs to another operation', {
         cause: reason,
       })
     }
-    const lifecycle = await this.#port.recordUnknown()
-    return Object.freeze({
-      lifecycle,
-      workspaceUsage: this.#port.workspaceUsage(lifecycle),
-    })
+    return this.#mutation(await this.#port.recordUnknown())
   }
 }
 

@@ -23,17 +23,16 @@ describe('workspace execution admission settlement', () => {
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: states.receiving.operationId,
       currentLifecycle: async () => current,
-      restoreContinuation,
       discard,
       recordUnknown,
       workspaceUsage,
-    }, states.fallback)
+    }, { kind: 'continuation', restore: () => restoreContinuation() })
 
     await expect(settlement.settle()).resolves.toEqual({
       lifecycle: states.restored,
       workspaceUsage: workspaceUsage(states.restored),
     })
-    expect(restoreContinuation).toHaveBeenCalledWith(states.fallback)
+    expect(restoreContinuation).toHaveBeenCalledOnce()
     expect(discard).not.toHaveBeenCalled()
     expect(recordUnknown).not.toHaveBeenCalled()
   })
@@ -50,11 +49,10 @@ describe('workspace execution admission settlement', () => {
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: states.receiving.operationId,
       currentLifecycle: async () => states.receiving,
-      restoreContinuation,
       discard,
       recordUnknown,
       workspaceUsage,
-    }, states.fallback)
+    }, { kind: 'continuation', restore: () => restoreContinuation() })
     settlement.markExecutionAdmitted()
 
     await expect(settlement.settle()).resolves.toEqual({
@@ -76,11 +74,10 @@ describe('workspace execution admission settlement', () => {
     const settlement = new WorkspaceExecutionAdmissionSettlement({
       operationId: initial.operationId,
       currentLifecycle: async () => initial,
-      restoreContinuation: async fallback => fallback,
       discard,
       recordUnknown: async () => needsAttention(initial),
       workspaceUsage,
-    })
+    }, { kind: 'fresh' })
 
     await expect(settlement.settle()).resolves.toEqual({
       lifecycle: terminal,

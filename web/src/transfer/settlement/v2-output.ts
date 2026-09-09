@@ -144,6 +144,28 @@ export async function withQuiescentOutputSettlementTimeout<T>(
 }
 
 /**
+ * Workspace completion and recovery return durable lifecycle evidence. Once drained,
+ * that evidence wins over a deadline; a failed cut still exposes the initiating timeout.
+ */
+export async function withWorkspaceOutputSettlementTimeout(
+  operation: string,
+  timeoutMilliseconds: number,
+  settle: (signal: AbortSignal) => Promise<ReceiveLifecycleState>,
+  deadline?: V2OutputSettlementDeadline,
+): Promise<ReceiveLifecycleState> {
+  let committed: ReceiveLifecycleState | undefined
+  try {
+    return await withQuiescentOutputSettlementTimeout(operation, timeoutMilliseconds, async signal => {
+      committed = await settle(signal)
+      return committed
+    }, deadline)
+  } catch (error) {
+    if (committed !== undefined) return committed
+    throw error
+  }
+}
+
+/**
  * Transfer failure can request only a stable lifecycle cut. If the plan adapter
  * cannot prove that cut within the bounded interval, the lifecycle owner records
  * target authority as unknown instead of the worker inventing a terminal state.
@@ -165,9 +187,16 @@ export async function pauseFailedV2Execution(options: {
 }): Promise<ReceiveLifecycleState> {
   const budget = new SettlementBudget(options.timeoutMilliseconds, options.clock)
   const validate = options.validateState ?? ((state: ReceiveLifecycleState) => state)
+  // Admission recovery can close a reopened writer, so it needs the same ownership
+  // boundary even when no PlanExecution was installed.
+  const settle = options.intent.plan.kind === 'workspace-then-publish'
+    ? (operation: string, budget: SettlementBudget, run: (signal: AbortSignal) => Promise<ReceiveLifecycleState>,
+        deadline?: V2OutputSettlementDeadline) =>
+        withWorkspaceOutputSettlementTimeout(operation, budget.remainingMilliseconds(), run, deadline)
+    : settleWithSignal<ReceiveLifecycleState>
   try {
     if (options.execution === undefined) {
-      return validate(await settleWithSignal(
+      return validate(await settle(
         'settle plan execution admission failure',
         budget,
         signal => options.authority.settleExecutionAdmissionFailure(
@@ -178,7 +207,7 @@ export async function pauseFailedV2Execution(options: {
         options.deadline,
       ))
     }
-    return validate(await settleWithSignal(
+    return validate(await settle(
       'pause plan execution at a stable cut',
       budget,
       signal => options.execution!.pause({
@@ -191,7 +220,7 @@ export async function pauseFailedV2Execution(options: {
     ))
   } catch (settlementFailure) {
     try {
-      return validate(await settleWithSignal(
+      return validate(await settle(
         'record unknown output settlement',
         new SettlementBudget(options.timeoutMilliseconds, options.clock),
         signal => options.authority.recordSettlementUnknown(

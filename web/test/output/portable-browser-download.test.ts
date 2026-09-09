@@ -413,6 +413,29 @@ describe('browser handoff publisher integration seam', () => {
 })
 
 describe('immutable packaged File browser handoff', () => {
+  it('releases the package reader without starting a browser download when cancellation arrives during the read', async () => {
+    const artifact = await packagedArtifact(1n)
+    const attempt = await packagedAttempt(artifact, 25, true)
+    const controller = new AbortController()
+    const release = vi.fn()
+    const handoffWithLease = vi.fn()
+    const publisher = createPackagedArtifactHandoffPublisher({
+      packages: {
+        acquireReader: async () => ({ release }),
+        readPackagedArtifact: async () => {
+          controller.abort(new Error('settlement deadline'))
+          return new TestFile([Uint8Array.of(1)], 'sealed-result.bin')
+        },
+      },
+      browser: { handoffWithLease, handoff: vi.fn() },
+      File: TestFile as unknown as typeof File,
+    })
+    await expect(publisher.handoff({ artifact, attempt, signal: controller.signal }))
+      .rejects.toBeInstanceOf(BrowserHandoffNotStartedError)
+    expect(handoffWithLease).not.toHaveBeenCalled()
+    expect(release).toHaveBeenCalledOnce()
+  })
+
   it('creates a fresh bounded URL for each attempt without changing package or expiry identity', async () => {
     const artifact = await packagedArtifact(3n)
     const firstAttempt = await packagedAttempt(artifact, 21, true)

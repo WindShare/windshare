@@ -25,7 +25,7 @@ export class ActiveReceiveSettlementPresentation implements V2OutputSettlementDe
   begin(control: V2ActiveReceiveControl): void {
     this.#control = control
     if (!this.#operationIsCurrent()) return
-    this.#outputs.updateReceiveInterruption(Object.freeze({ control, phase: 'waiting' }))
+    this.#outputs.updateReceiveInterruption(Object.freeze({ operation: control, phase: 'waiting' }))
   }
 
   cancel(control: V2ActiveReceiveControl): void {
@@ -36,9 +36,10 @@ export class ActiveReceiveSettlementPresentation implements V2OutputSettlementDe
 
   schedule(delayMilliseconds: number, expire: () => void): Readonly<{ cancel(): void }> {
     const timer = setTimeout(() => {
-      const control = this.#control
-      if (control !== undefined && this.#operationIsCurrent()) {
-        this.#outputs.updateReceiveInterruption(Object.freeze({ control, phase: 'background' }))
+      if (this.#operationIsCurrent()) {
+        this.#outputs.updateReceiveInterruption(Object.freeze({
+          operation: this.#control ?? 'finish', phase: 'background',
+        }))
       }
       expire()
     }, delayMilliseconds)
