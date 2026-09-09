@@ -158,13 +158,14 @@ func projectFailure(failure clievent.Failure) (failureV3, error) {
 
 func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV3 {
 	return fileOutcomesV3{
-		DownloadedFiles:      decimal(outcomes.DownloadedFiles),
-		ResumedFiles:         decimal(outcomes.ResumedFiles),
-		PausedFiles:          decimal(outcomes.PausedFiles),
-		CollisionFiles:       decimal(outcomes.CollisionFiles),
-		ItemBlockedFiles:     decimal(outcomes.ItemBlockedFiles),
-		FailedFiles:          decimal(outcomes.FailedFiles),
-		ModifiedTimeWarnings: decimal(outcomes.ModifiedTimeWarnings),
+		DownloadedFiles:          decimal(outcomes.DownloadedFiles),
+		ResumedFiles:             decimal(outcomes.ResumedFiles),
+		PreviouslyPublishedFiles: decimal(outcomes.PreviouslyPublishedFiles),
+		PausedFiles:              decimal(outcomes.PausedFiles),
+		CollisionFiles:           decimal(outcomes.CollisionFiles),
+		ItemBlockedFiles:         decimal(outcomes.ItemBlockedFiles),
+		FailedFiles:              decimal(outcomes.FailedFiles),
+		ModifiedTimeWarnings:     decimal(outcomes.ModifiedTimeWarnings),
 	}
 }
 
@@ -174,15 +175,16 @@ func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV3, err
 		return progressPayloadV3{}, errInvalidSchemaEvent
 	}
 	return progressPayloadV3{
-		Discovery:          discovery,
-		CountersExact:      snapshot.CountersExact(),
-		DiscoveredFiles:    decimal(snapshot.DiscoveredFiles()),
-		DiscoveredBytes:    decimal(snapshot.DiscoveredBytes()),
-		PublishedFiles:     decimal(snapshot.PublishedFiles()),
-		PublishedBytes:     decimal(snapshot.PublishedBytes()),
-		VerifiedBytes:      decimal(snapshot.VerifiedBytes()),
-		NewlyVerifiedBytes: decimal(snapshot.NewlyVerifiedBytes()),
-		FileOutcomes:       projectFileOutcomes(snapshot.FileOutcomes()),
+		Discovery:                discovery,
+		CountersExact:            snapshot.CountersExact(),
+		DiscoveredFiles:          decimal(snapshot.DiscoveredFiles()),
+		DiscoveredBytes:          decimal(snapshot.DiscoveredBytes()),
+		PublishedFiles:           decimal(snapshot.PublishedFiles()),
+		PublishedBytes:           decimal(snapshot.PublishedBytes()),
+		VerifiedBytes:            decimal(snapshot.VerifiedBytes()),
+		PreviouslyPublishedBytes: decimal(snapshot.PreviouslyPublishedBytes()),
+		NewlyVerifiedBytes:       decimal(snapshot.NewlyVerifiedBytes()),
+		FileOutcomes:             projectFileOutcomes(snapshot.FileOutcomes()),
 		CapacityWait: capacityWaitV3{
 			ActiveWaiters:     decimal(uint64(snapshot.CapacityActiveWaiters())),
 			AccumulatedWaitMS: signedDecimal(snapshot.CapacityAccumulatedWait().Milliseconds()),

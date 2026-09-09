@@ -426,6 +426,13 @@ func TestNativeResumeCollisionRemainsResumableAndRetriesSameOperation(t *testing
 	if err != nil || settlement.Kind() != transfer.FilePublished {
 		t.Fatalf("retry commit = %d, %v", settlement.Kind(), err)
 	}
+	if provenance, ok := settlement.PublicationProvenance(); !ok || provenance != transfer.FileResumed {
+		t.Fatalf("private-stage retry provenance = (%d, %t)", provenance, ok)
+	}
+	if checkpoint, verified := settlement.VerifiedCheckpoint(); !verified ||
+		!transfer.RangesCoverFile(4, checkpoint.Ranges()) {
+		t.Fatal("private-stage retry lost its authenticated range progress")
+	}
 	published, err := os.ReadFile(fixture.finalPath)
 	if err != nil || string(published) != "data" {
 		t.Fatalf("published final = %q, %v", published, err)

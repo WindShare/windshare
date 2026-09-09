@@ -16,6 +16,10 @@ func TestJobRunAggregatesSettlementOwnedFileOutcomes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	previouslyPublished, err := NewPreviouslyPublishedFileSettlement(binding)
+	if err != nil {
+		t.Fatal(err)
+	}
 	paused, err := NewVerifiedFileSettlement(FilePaused, checkpoint)
 	if err != nil {
 		t.Fatal(err)
@@ -41,19 +45,25 @@ func TestJobRunAggregatesSettlementOwnedFileOutcomes(t *testing.T) {
 	selection := newDiscoveredSelection()
 	selection.addFile(binding.ExactSize())
 	selection.addFile(binding.ExactSize())
+	selection.addFile(binding.ExactSize())
 	tracker.addDiscovery(selection)
 	tracker.addRecoveredVerified(2 * binding.ExactSize())
-	for _, settlement := range []FileSettlement{downloaded, resumed, paused, collision, blocked, failed} {
+	for _, settlement := range []FileSettlement{downloaded, resumed, previouslyPublished, paused, collision, blocked, failed} {
 		tracker.acceptFileSettlement(settlement, binding.ExactSize())
 	}
 	want := FileOutcomeSummary{
 		DownloadedFiles: 1, ResumedFiles: 1, PausedFiles: 1,
-		CollisionFiles: 1, FailedFiles: 1, ItemBlockedFiles: 1,
+		PreviouslyPublishedFiles: 1,
+		CollisionFiles:           1, FailedFiles: 1, ItemBlockedFiles: 1,
 		ModifiedTimeWarnings: 2,
 	}
 	progress := tracker.snapshotValue()
-	if progress.FileOutcomes != want || progress.PublishedFiles != 2 ||
-		progress.PublishedBytes != 2*binding.ExactSize() || !progress.CountersExact {
+	if progress.FileOutcomes != want || progress.PublishedFiles != 3 ||
+		progress.FileOutcomes.PublishedFiles() != 3 ||
+		progress.VerifiedBytes != 2*binding.ExactSize() ||
+		progress.PreviouslyPublishedBytes != binding.ExactSize() ||
+		progress.CompletedBytes() != 3*binding.ExactSize() ||
+		progress.PublishedBytes != 3*binding.ExactSize() || !progress.CountersExact {
 		t.Fatalf("progress = %+v, want outcomes %+v", progress, want)
 	}
 }

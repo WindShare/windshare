@@ -54,6 +54,34 @@ func TestProgressProjectionPreservesAuthenticatedCounters(t *testing.T) {
 	}
 }
 
+func TestHistoricalDeliveryCompletesWithoutVerifiedBytes(t *testing.T) {
+	job := successfulJobResult(t)
+	job.Progress.VerifiedBytes, job.Progress.NewlyVerifiedBytes = 0, 0
+	job.Progress.PreviouslyPublishedBytes = job.Progress.DiscoveredBytes
+	job.Progress.FileOutcomes = transfer.FileOutcomeSummary{PreviouslyPublishedFiles: 2}
+	progress, err := ProjectProgress(job.Progress, false)
+	if err != nil || !progress.Valid() || progress.VerifiedBytes() != 0 ||
+		progress.CompletedBytes() != 100 || progress.PreviouslyPublishedBytes() != 100 ||
+		progress.FileOutcomes().PreviouslyPublishedFiles != 2 {
+		t.Fatalf("historical progress = (%+v, %v)", progress, err)
+	}
+	result, err := ProjectGetResult(GetResultInput{
+		Result: job, Destination: clievent.NewDisplayPath("C:/downloads"),
+	})
+	if err != nil || result.ExitCode() != clievent.ExitSuccess || result.Status() != clievent.ResultSuccess ||
+		result.Files().PreviouslyPublishedFiles != 2 {
+		t.Fatalf("historical result = (%+v, %v)", result, err)
+	}
+	if kind, ok := projectFileSettlement(transfer.FilePreviouslyPublished); !ok || kind != clievent.FilePreviouslyPublished {
+		t.Fatalf("historical lifecycle = (%d, %t)", kind, ok)
+	}
+	job.Progress.DiscoveredBytes, job.Progress.PublishedBytes = math.MaxUint64, math.MaxUint64
+	job.Progress.VerifiedBytes, job.Progress.PreviouslyPublishedBytes = math.MaxUint64, 1
+	if successfulGetResult(job) {
+		t.Fatal("overflowing historical progress proved successful completion")
+	}
+}
+
 func TestProgressProjectionKeepsCapacityWaitSeparateFromFailureAccounting(t *testing.T) {
 	value := transfer.ReceiveProgressSnapshot{
 		Discovery: transfer.DiscoveryComplete, CountersExact: true,

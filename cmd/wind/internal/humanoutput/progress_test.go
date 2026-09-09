@@ -43,6 +43,31 @@ func TestCapacityWaitOverridesOrdinaryProgressOnlyWhileVisible(t *testing.T) {
 	}
 }
 
+func TestHistoricalDeliveryContributesToProgressWithoutChangingTransferRate(t *testing.T) {
+	spec := clievent.ProgressSpec{
+		DiscoveredFiles: 2, DiscoveredBytes: 100,
+		PublishedFiles: 1, PublishedBytes: 60, PreviouslyPublishedBytes: 60,
+		VerifiedBytes: 20, NewlyVerifiedBytes: 20,
+		FileOutcomes: clievent.FileOutcomes{PreviouslyPublishedFiles: 1},
+		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+	}
+	text := lineText(FormatProgress(mustSnapshot(t, spec), ProgressMetrics{
+		RateBytesPerSecond: 10, RateValid: true, RateStable: true,
+	}, ProgressLayout{}))
+	for _, want := range []string{"80%", "80 B/100 B", "10 B/s", "2s left"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("mixed progress %q missing %q", text, want)
+		}
+	}
+	spec.VerifiedBytes, spec.NewlyVerifiedBytes = 0, 0
+	spec.PublishedFiles, spec.FileOutcomes.PreviouslyPublishedFiles = 2, 2
+	spec.PublishedBytes, spec.PreviouslyPublishedBytes = 100, 100
+	text = lineText(FormatProgress(mustSnapshot(t, spec), ProgressMetrics{SuccessfulSettlement: true}, ProgressLayout{}))
+	if !strings.Contains(text, "100%") || strings.Contains(text, "verified") || strings.Contains(text, "left") {
+		t.Fatalf("historical completion = %q", text)
+	}
+}
+
 func TestProgressTruthEligibility(t *testing.T) {
 	t.Parallel()
 	open := mustSnapshot(t, clievent.ProgressSpec{

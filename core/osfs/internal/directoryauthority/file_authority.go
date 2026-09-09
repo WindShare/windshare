@@ -337,7 +337,7 @@ func (destination *fileDestination) observeFinalAgainstFile(
 	if !same || size != expectation.ExactSize() {
 		return finalObservationWithClose(fileexecution.FinalCollision, final)
 	}
-	return finalObservationWithClose(fileexecution.FinalOwnedExact, final)
+	return finalObservationWithClose(fileexecution.FinalOwnedAtExpectedSize, final)
 }
 
 func (destination *fileDestination) observeFinalAtParent(
@@ -372,10 +372,10 @@ func (destination *fileDestination) observeFinalAtParent(
 	if !owned {
 		return finalObservationWithClose(fileexecution.FinalCollision, final)
 	}
-	// Native identity and exact size prove publication. Display metadata such as
-	// mtime is deliberately absent from this authority decision because platforms
-	// may round or reject it after authenticated bytes are already correct.
-	return finalObservationWithClose(fileexecution.FinalOwnedExact, final)
+	// Identity and size establish only the retained object witness, not current
+	// content integrity. Recovery uses it with publication history, avoiding a
+	// full rescan of completed files; mtime is not a content proof either.
+	return finalObservationWithClose(fileexecution.FinalOwnedAtExpectedSize, final)
 }
 
 func finalObservationWithClose(

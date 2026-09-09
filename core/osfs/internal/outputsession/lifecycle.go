@@ -261,7 +261,7 @@ func (session *Session) settlementSnapshotLocked() TreeSettlementSnapshot {
 		}
 		snapshot.FileSettlements = append(snapshot.FileSettlements, entry.settlement)
 		switch entry.settlement.Kind() {
-		case transfer.FilePublished:
+		case transfer.FilePublished, transfer.FilePreviouslyPublished:
 			snapshot.SuccessCount++
 		case transfer.FilePaused:
 			// A pause retains restart authority; it is neither a terminal success

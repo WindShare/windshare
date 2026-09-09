@@ -29,16 +29,24 @@ const (
 // caller's clock and presentation decision outside core, so polling still
 // cannot affect transfer authority or introduce I/O on the data path.
 type ReceiveProgressSnapshot struct {
-	DiscoveredFiles    uint64
-	DiscoveredBytes    uint64
-	PublishedFiles     uint64
-	PublishedBytes     uint64
-	VerifiedBytes      uint64
-	NewlyVerifiedBytes uint64
-	FileOutcomes       FileOutcomeSummary
-	CapacityWait       revisionwait.Snapshot
-	Discovery          DiscoveryStatus
-	CountersExact      bool
+	DiscoveredFiles          uint64
+	DiscoveredBytes          uint64
+	PublishedFiles           uint64
+	PublishedBytes           uint64
+	PreviouslyPublishedBytes uint64
+	VerifiedBytes            uint64
+	NewlyVerifiedBytes       uint64
+	FileOutcomes             FileOutcomeSummary
+	CapacityWait             revisionwait.Snapshot
+	Discovery                DiscoveryStatus
+	CountersExact            bool
+}
+
+// CompletedBytes includes historical delivery without presenting it as verified
+// content. Previously published files are disjoint from this run's range progress.
+func (snapshot ReceiveProgressSnapshot) CompletedBytes() uint64 {
+	completed, _ := checkedAdd(snapshot.VerifiedBytes, snapshot.PreviouslyPublishedBytes)
+	return completed
 }
 
 func (snapshot ReceiveProgressSnapshot) ConnectionSizeClass() ConnectionSizeClass {
@@ -129,7 +137,15 @@ func (tracker *receiveProgressTracker) acceptFileSettlement(
 	defer tracker.mu.Unlock()
 	outcomes := &tracker.snapshot.FileOutcomes
 	switch settlement.Kind() {
-	case FilePublished:
+	case FilePublished, FilePreviouslyPublished:
+		if settlement.Kind() == FilePreviouslyPublished {
+			outcomes.PreviouslyPublishedFiles, tracker.snapshot.CountersExact = saturatingAdd(
+				outcomes.PreviouslyPublishedFiles, 1, tracker.snapshot.CountersExact,
+			)
+			tracker.snapshot.PreviouslyPublishedBytes, tracker.snapshot.CountersExact = saturatingAdd(
+				tracker.snapshot.PreviouslyPublishedBytes, expectedSize, tracker.snapshot.CountersExact,
+			)
+		}
 		if provenance, ok := settlement.PublicationProvenance(); ok {
 			switch provenance {
 			case FileDownloaded:
@@ -265,9 +281,13 @@ func (tracker *receiveProgressTracker) validateExactLocked() {
 		tracker.snapshot.FileOutcomes.DownloadedFiles,
 		tracker.snapshot.FileOutcomes.ResumedFiles,
 	)
-	if !exact || tracker.snapshot.NewlyVerifiedBytes > tracker.snapshot.VerifiedBytes ||
-		tracker.snapshot.VerifiedBytes > tracker.snapshot.DiscoveredBytes ||
-		tracker.snapshot.PublishedBytes > tracker.snapshot.VerifiedBytes ||
+	publishedOutcomes, publishedExact := checkedAdd(publishedOutcomes, tracker.snapshot.FileOutcomes.PreviouslyPublishedFiles)
+	completedBytes, completedExact := checkedAdd(tracker.snapshot.VerifiedBytes, tracker.snapshot.PreviouslyPublishedBytes)
+	if !exact || !publishedExact || !completedExact ||
+		tracker.snapshot.NewlyVerifiedBytes > tracker.snapshot.VerifiedBytes ||
+		completedBytes > tracker.snapshot.DiscoveredBytes ||
+		tracker.snapshot.PreviouslyPublishedBytes > tracker.snapshot.PublishedBytes ||
+		tracker.snapshot.PublishedBytes > completedBytes ||
 		tracker.snapshot.PublishedFiles > tracker.snapshot.DiscoveredFiles ||
 		tracker.snapshot.PublishedFiles != publishedOutcomes {
 		// Once an upstream authority violates an exact relationship, consumers must
