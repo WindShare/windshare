@@ -63,6 +63,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     plan_kind: 'direct_tree',
   },
   protocol_operation: { transition: 'request_sent', request_kind: 'list_children' },
+  operation_recovery: {
+    transition: 'retry_available_lanes', operation_sequence: '1', generation_id: '1',
+    availability_revision: '3', lane_count: '1', unchanged_availability_retries: '0',
+  },
   peer_attempt: {
     stage: 'started',
     wave_ordinal: '1',

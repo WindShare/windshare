@@ -386,6 +386,7 @@ export class V2BrowserReceiverGateway {
         initial,
         policy: this.#policy,
         sessionFactory,
+        ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
         ...gatewayConnectivityOptions(
           this.#offersFactory,
           this.#nativePeerUsable,

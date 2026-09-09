@@ -147,6 +147,18 @@ export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV1 {
   const correlation = requiredCorrelation(event.correlation)
+  if (event.eventName === 'operation_recovery') {
+    return correlatedObservation(event.eventName, correlation, {
+      operation_sequence: decimal(event.operationSequence),
+      generation_id: decimal(event.generationId),
+      availability_revision: decimal(event.availabilityRevision),
+      lane_count: decimal(event.laneCount),
+      unchanged_availability_retries: decimal(event.unchangedAvailabilityRetries),
+      ...(event.transition === 'wait_for_availability'
+        ? { transition: event.transition, delay_ms: event.delayMilliseconds }
+        : { transition: event.transition }),
+    })
+  }
   if (event.eventName === 'lane_transition') {
     switch (event.transition) {
       case 'admission_rejected':
@@ -655,7 +667,7 @@ function observation<Name extends Exclude<keyof TraceEventPayloadByNameV1, 'inci
 }
 
 function correlatedObservation<
-  Name extends 'protocol_operation' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
+  Name extends 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
   correlation: NonNullable<TraceEventObservationV1['correlation']>,
