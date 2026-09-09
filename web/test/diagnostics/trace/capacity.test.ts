@@ -80,6 +80,7 @@ describe('trace frozen contract', () => {
       'projection_transition',
       'authority_transition',
       'protocol_operation',
+      'operation_recovery',
       'peer_attempt',
       'peer_recovery',
       'lane_transition',

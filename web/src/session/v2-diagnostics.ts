@@ -84,9 +84,23 @@ export type V2LaneTransitionTraceEvent =
       correlation: FailureCorrelation
     }>
 
+export type V2OperationRecoveryTraceEvent = Readonly<{
+  eventName: 'operation_recovery'
+  correlation: FailureCorrelation
+  operationSequence: number
+  generationId: number
+  availabilityRevision: number
+  laneCount: number
+  unchangedAvailabilityRetries: number
+}> & (
+  | Readonly<{ transition: 'retry_available_lanes' | 'wait_for_generation' | 'exhausted' }>
+  | Readonly<{ transition: 'wait_for_availability'; delayMilliseconds: number }>
+)
+
 export type V2ProtocolTraceEvent =
   | V2ProtocolOperationTraceEvent
   | V2LaneTransitionTraceEvent
+  | V2OperationRecoveryTraceEvent
 
 export type V2ProtocolTraceObserver = (event: V2ProtocolTraceEvent) => void
 

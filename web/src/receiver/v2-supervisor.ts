@@ -1,3 +1,4 @@
+import { defaultReconnectBackoff, requireBackoff, systemReconnectClock, type V2ReconnectClock } from './recovery-clock'
 import { ReceiverConnectionState } from './connection-state'
 import { RelayEndpointFailure } from './relay-race'
 import type { V2CatalogOperationClient } from '../catalog/v2-client'
@@ -52,6 +53,8 @@ import {
   V2StaleShareInstanceError,
 } from './v2-session-factory'
 
+import { OperationRecovery, type OperationAvailability, type OperationRecoveryDecision } from './operation-recovery'
+import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
 import { ReceiverRelaySet } from './relay-set'
 import { ReceiverPathActivity } from './path-activity'
 import { DownloadMetrics } from './download-metrics'
@@ -59,14 +62,6 @@ import {
   GenerationRecoveryBudget, GenerationRecoveryExhaustedError,
   runGenerationRecovery, type GenerationRecoveryWave,
 } from './generation-recovery'
-
-export const V2_RECONNECT_INITIAL_BACKOFF_MILLISECONDS = 100
-export const V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS = 5_000
-
-export interface V2ReconnectClock {
-  now(): number
-  sleep(milliseconds: number, signal: AbortSignal): Promise<void>
-}
 
 export interface V2ReceiverSupervisorOptions {
   readonly policy?: V2ConnectivityPolicy
@@ -79,6 +74,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
   readonly nativePeerUsable?: () => boolean
+  readonly protocolTrace?: V2ProtocolTraceSource
   readonly connectivityTrace?: V2ConnectivityTraceSource
   readonly peerRecovery?: V2PeerRecoveryDependencies
   readonly onRecoveryError?: (error: unknown) => void
@@ -94,6 +90,7 @@ interface V2ReceiverGeneration extends V2ContentGeneration {
   readonly session: V2ReceiverSessionRuntime
   readonly connectivity: V2ReceiverConnectivity
   readonly laneSecret: Uint8Array<ArrayBuffer>
+  availability: OperationAvailability
   retired: boolean
   unsubscribe?: () => void
   closeTask?: Promise<void>
@@ -137,6 +134,8 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #offersFactory: (() => OfferChannelFactory) | undefined
   readonly #randomBytes: ((length: number) => Uint8Array) | undefined
   readonly #nativePeerUsable: (() => boolean) | undefined
+  readonly #protocolTrace: V2ProtocolTraceSource | undefined
+  #operationSequence = 0
   readonly #connectivityTrace: V2ConnectivityTraceSource | undefined
   readonly #peerRecovery: V2PeerRecoveryDependencies | undefined
   readonly #onRecoveryError: (error: unknown) => void
@@ -172,6 +171,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#offersFactory = options.offersFactory
     this.#randomBytes = options.randomBytes
     this.#nativePeerUsable = options.nativePeerUsable
+    this.#protocolTrace = options.protocolTrace
     this.#connectivityTrace = options.connectivityTrace
     this.#peerRecovery = { ...options.peerRecovery,
       network: options.peerRecovery?.network ?? new PeerNetworkGeneration(),
@@ -239,24 +239,16 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     signal: AbortSignal | undefined,
     operation: (generation: V2ReceiverGeneration) => Promise<T>,
   ): Promise<{ readonly generation: V2ReceiverGeneration; readonly value: T }> {
-    let sameGenerationRetries = 0
+    const recovery = new OperationRecovery()
+    const operationSequence = ++this.#operationSequence
     while (true) {
       const generation = await this.#ready(signal)
+      recovery.beginAttempt(generation.availability)
       try {
         const value = await operation(generation)
         return Object.freeze({ generation, value })
       } catch (error) {
-        signal?.throwIfAborted()
-        this.#throwIfTerminal()
-        if (!isRecoverableOperationFailure(error, generation, this.#current)) throw error
-        if (this.isCurrent(generation) && generation.session.laneIds().length > 0 &&
-            sameGenerationRetries < 2) {
-          sameGenerationRetries += 1
-          await Promise.resolve()
-          continue
-        }
-        sameGenerationRetries = 0
-        await this.#waitForGenerationAfter(generation.id, signal)
+        await this.#recoverOperation(generation, recovery, operationSequence, error, signal)
       }
     }
   }
@@ -413,6 +405,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         broker,
         connectivity,
         laneSecret,
+        availability: Object.freeze({ generationId, revision: 0 }),
         retired: false,
       }
       generation.unsubscribe = core.session.subscribeLaneChanges((change) =>
@@ -432,7 +425,14 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   }
 
   #laneChanged(generation: V2ReceiverGeneration, change: V2LaneChange): void {
-    if (!this.isCurrent(generation) || change.type !== 'detached') return
+    if (!this.isCurrent(generation)) return
+    generation.availability = Object.freeze({
+      generationId: generation.id, revision: generation.availability.revision + 1,
+    })
+    if (change.type === 'attached') {
+      this.#wakeWaiters()
+      return
+    }
     if (generation.session.isClosed || isSessionFailure(change.failure)) {
       this.#failTerminal(change.failure ?? new Error('ProtocolSession closed terminally'))
       return
@@ -447,6 +447,67 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     if (generation.retired) generation.relays.close().catch(() => undefined)
     this.#requestReconcile()
     this.#wakeWaiters()
+  }
+
+  async #recoverOperation(
+    generation: V2ReceiverGeneration,
+    recovery: OperationRecovery,
+    operationSequence: number,
+    error: unknown,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    signal?.throwIfAborted()
+    this.#throwIfTerminal()
+    if (!isRecoverableOperationFailure(error, generation, this.#current)) throw error
+    const availability = generation.availability
+    const decision = recovery.decide(this.isCurrent(generation) ? availability : undefined)
+    this.#traceOperationRecovery(generation, operationSequence, recovery, decision)
+    if (decision.transition === 'exhausted') throw error
+    if (decision.transition === 'wait_for_generation') {
+      await this.#waitForGenerationAfter(generation.id, signal)
+    } else if (decision.transition === 'wait_for_availability' &&
+        this.isCurrent(generation) && generation.availability === availability) {
+      await this.#waitForOperationRetry(decision.delayMilliseconds, signal)
+    }
+  }
+
+  async #waitForOperationRetry(milliseconds: number, signal?: AbortSignal): Promise<void> {
+    const wait = new AbortController()
+    const combined = AbortSignal.any([
+      wait.signal, this.#lifetime.signal, ...(signal === undefined ? [] : [signal]),
+    ])
+    try {
+      // Subscribe before arming the delay so a lane event cannot be lost. The
+      // losing branch is cancelled to release both the timer and its waiter.
+      await Promise.race([
+        this.#waitForWake(combined),
+        this.#clock.sleep(milliseconds, combined),
+      ])
+    } finally {
+      wait.abort()
+    }
+  }
+
+  #traceOperationRecovery(
+    generation: V2ReceiverGeneration,
+    operationSequence: number,
+    recovery: OperationRecovery,
+    decision: OperationRecoveryDecision,
+  ): void {
+    try {
+      this.#protocolTrace?.current?.({
+        eventName: 'operation_recovery',
+        correlation: { protocolSessionId: generation.session.protocolSessionIdentity },
+        operationSequence,
+        generationId: generation.id,
+        availabilityRevision: generation.availability.revision,
+        laneCount: generation.session.laneIds().length,
+        unchangedAvailabilityRetries: recovery.unchangedAvailabilityRetries,
+        ...decision,
+      })
+    } catch {
+      // Recovery observation cannot acquire authority over the caller's result.
+    }
   }
 
   #requestReconcile(): void {
@@ -691,39 +752,4 @@ function isLaneRecoveryFailure(error: unknown): boolean {
 
 function isSessionFailure(error: unknown): boolean {
   return error instanceof V2SessionRuntimeError && error.scope === 'session'
-}
-
-function requireBackoff(milliseconds: number): number {
-  if (!Number.isFinite(milliseconds) || milliseconds < 0 ||
-      milliseconds > V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS) {
-    throw new RangeError('Receiver reconnect backoff is outside its bounded range')
-  }
-  return milliseconds
-}
-
-function defaultReconnectBackoff(attempt: number): number {
-  return Math.min(
-    V2_RECONNECT_INITIAL_BACKOFF_MILLISECONDS * 2 ** Math.min(attempt, 8),
-    V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS,
-  )
-}
-
-const systemReconnectClock: V2ReconnectClock = Object.freeze({
-  now: () => performance.now(),
-  sleep: (milliseconds: number, signal: AbortSignal) => abortableDelay(milliseconds, signal),
-})
-
-function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted()
-  return new Promise((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, milliseconds)
-    const abort = () => {
-      globalThis.clearTimeout(timer)
-      reject(signal.reason ?? new DOMException('Reconnect delay aborted', 'AbortError'))
-    }
-    signal.addEventListener('abort', abort, { once: true })
-  })
 }
