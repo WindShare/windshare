@@ -10,6 +10,8 @@ import type {
   V2RegisterProof,
   V2RelayErrorFrame,
   V2SessionRetired,
+  V2SessionAdmitted,
+  V2SessionCredit,
   V2StopInit,
   V2StopProof,
 } from './v2-protocol-types'
@@ -23,6 +25,8 @@ export type {
   V2RegisterProof,
   V2RelayErrorFrame,
   V2SessionRetired,
+  V2SessionAdmitted,
+  V2SessionCredit,
   V2StopInit,
   V2StopProof,
 } from './v2-protocol-types'
@@ -42,6 +46,8 @@ export const V2_RELAY_STOP_ID_BYTES = 16
 export const V2_RELAY_SESSION_ID_BYTES = 8
 export const V2_RELAY_MAX_DESCRIPTOR_BYTES = 16 << 10
 export const V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES = 64 << 10
+export const V2_RELAY_SENDER_WINDOW_FRAMES = 64
+export const V2_RELAY_SENDER_WINDOW_BYTES = 4 << 20
 
 export const V2_REGISTRATION_MODE = Object.freeze({ fresh: 0, resume: 1 } as const)
 export type V2RegistrationMode =
@@ -89,6 +95,8 @@ const FRAME_BYTES = Object.freeze({
   error: 12,
   opaqueHeader: 20,
   sessionRetired: 16,
+  sessionAdmitted: 16,
+  sessionCredit: 24,
 })
 
 export type V2RelayProtocolErrorKind = 'identity' | 'malformed' | 'mode' | 'purpose'
@@ -550,6 +558,51 @@ export function decodeV2SessionRetired(encoded: Uint8Array): V2SessionRetired {
       'relay session ID',
       true,
     ),
+  })
+}
+
+export function encodeV2SessionCredit(frame: V2SessionCredit): Uint8Array<ArrayBuffer> {
+  if (
+    !Number.isInteger(frame.frames) || frame.frames <= 0 || frame.frames > V2_RELAY_SENDER_WINDOW_FRAMES ||
+    !Number.isInteger(frame.bytes) || frame.bytes < frame.frames * (FRAME_BYTES.opaqueHeader + 1) ||
+    frame.bytes > V2_RELAY_SENDER_WINDOW_BYTES ||
+    frame.bytes > frame.frames * (FRAME_BYTES.opaqueHeader + V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES)
+  ) {
+    throw new V2RelayProtocolError('malformed', 'session credit exceeds the sender window')
+  }
+  return concatBytes([
+    reservedPrefix('WS2W'),
+    requireBytes(frame.relaySessionId, V2_RELAY_SESSION_ID_BYTES, 'relay session ID', true),
+    encodeUint32(frame.frames), encodeUint32(frame.bytes),
+  ])
+}
+
+export function decodeV2SessionCredit(encoded: Uint8Array): V2SessionCredit {
+  if (encoded.byteLength !== FRAME_BYTES.sessionCredit || !validPrefix(encoded, 'WS2W')) {
+    throw new V2RelayProtocolError('malformed', 'WS2W has an invalid header or length')
+  }
+  const view = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength)
+  const frame = {
+    relaySessionId: requireBytes(encoded.subarray(8, 16), V2_RELAY_SESSION_ID_BYTES, 'relay session ID', true),
+    frames: view.getUint32(16, false), bytes: view.getUint32(20, false),
+  }
+  encodeV2SessionCredit(frame)
+  return Object.freeze(frame)
+}
+
+export function encodeV2SessionAdmitted(frame: V2SessionAdmitted): Uint8Array<ArrayBuffer> {
+  return concatBytes([
+    reservedPrefix('WS2M'),
+    requireBytes(frame.relaySessionId, V2_RELAY_SESSION_ID_BYTES, 'relay session ID', true),
+  ])
+}
+
+export function decodeV2SessionAdmitted(encoded: Uint8Array): V2SessionAdmitted {
+  if (encoded.byteLength !== FRAME_BYTES.sessionAdmitted || !validPrefix(encoded, 'WS2M')) {
+    throw new V2RelayProtocolError('malformed', 'WS2M has an invalid header or length')
+  }
+  return Object.freeze({
+    relaySessionId: requireBytes(encoded.subarray(8), V2_RELAY_SESSION_ID_BYTES, 'relay session ID', true),
   })
 }
 

@@ -18,9 +18,9 @@ import (
 const (
 	MaximumControlQueueFrames     = 64
 	MaximumForwardQueueFrames     = 1_024
-	MaximumSessionQueueFrames     = 64
+	MaximumSessionQueueFrames     = v2.SenderWindowFrames
 	MaximumForwardQueueBytes      = 64 << 20
-	MaximumSessionQueueBytes      = 4 << 20
+	MaximumSessionQueueBytes      = v2.SenderWindowBytes
 	MaximumV2WebSocketMessageSize = v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes
 	defaultWriteTimeout           = 15 * time.Second
 )
@@ -108,6 +108,7 @@ type Config struct {
 	ConnectionIDs    ConnectionIDSource
 	RetirementTracer RetirementTracer
 	ForwardTracer    ForwardTracer
+	AdmissionTracer  AdmissionTracer
 	WriteTimeout     time.Duration
 }
 
@@ -118,6 +119,7 @@ type Server struct {
 	connectionIDs    ConnectionIDSource
 	retirementTracer RetirementTracer
 	forwardTracer    ForwardTracer
+	admissionTracer  AdmissionTracer
 	writeTimeout     time.Duration
 
 	connections *connectionRegistry
@@ -140,6 +142,7 @@ func New(config Config) (*Server, error) {
 		registry: config.Registry, challenges: config.Challenges, relayIdentity: config.RelayIdentity,
 		connectionIDs: config.ConnectionIDs, retirementTracer: config.RetirementTracer, forwardTracer: config.ForwardTracer,
 		writeTimeout: config.WriteTimeout, connections: newConnectionRegistry(),
+		admissionTracer: config.AdmissionTracer,
 	}, nil
 }
 
@@ -222,7 +225,10 @@ func (s *Server) Shutdown(ctx context.Context) error {
 }
 
 func (s *Server) serveConnection(ctx context.Context, peer *connection) error {
-	first, err := readBinary(ctx, peer.socket)
+	firstContext, cancel := context.WithTimeout(ctx, connectionAdmissionTimeout)
+	first, err := readBinary(firstContext, peer.socket)
+	s.traceAdmission(peer, v2.RelaySessionID{}, admissionFirstFrame, admissionOutcome(firstContext, err))
+	cancel()
 	if err != nil {
 		return err
 	}
@@ -235,7 +241,11 @@ func (s *Server) serveConnection(ctx context.Context, peer *connection) error {
 	case "WS2J":
 		return s.serveReceiver(ctx, peer, first)
 	case "WS2X":
-		return s.serveStop(ctx, peer, first)
+		stopContext, stop := context.WithTimeout(ctx, connectionAdmissionTimeout)
+		defer stop()
+		err := s.serveStop(stopContext, peer, first)
+		s.traceAdmission(peer, v2.RelaySessionID{}, admissionStopProof, admissionOutcome(stopContext, err))
+		return err
 	default:
 		return ErrProtocol
 	}
@@ -246,13 +256,21 @@ func (s *Server) serveRegistration(ctx context.Context, peer *connection, first 
 	if err != nil {
 		return ErrProtocol
 	}
-	if init.Mode == v2.RegistrationFresh {
-		return s.serveFreshRegistration(ctx, peer, init)
+	registrationContext, cancel := context.WithTimeout(ctx, v2route.JoinStartingGrace)
+	switch init.Mode {
+	case v2.RegistrationFresh:
+		err = s.serveFreshRegistration(registrationContext, peer, init)
+	case v2.RegistrationResume:
+		err = s.serveResume(registrationContext, peer, init)
+	default:
+		err = s.sendError(registrationContext, peer, v2.ErrorUnsupportedMode, 0)
 	}
-	if init.Mode == v2.RegistrationResume {
-		return s.serveResume(ctx, peer, init)
+	s.traceAdmission(peer, v2.RelaySessionID{}, admissionRegistration, admissionOutcome(registrationContext, err))
+	cancel()
+	if err != nil {
+		return err
 	}
-	return s.sendError(ctx, peer, v2.ErrorUnsupportedMode, 0)
+	return s.forwardLoop(ctx, peer)
 }
 
 func (s *Server) serveFreshRegistration(ctx context.Context, peer *connection, init v2.RegisterInit) error {
@@ -294,7 +312,7 @@ func (s *Server) serveFreshRegistration(ctx context.Context, peer *connection, i
 	if err := s.finishRegistration(ctx, peer, init); err != nil {
 		return err
 	}
-	return s.forwardLoop(ctx, peer)
+	return nil
 }
 
 func (s *Server) serveResume(ctx context.Context, peer *connection, init v2.RegisterInit) error {
@@ -320,7 +338,7 @@ func (s *Server) serveResume(ctx context.Context, peer *connection, init v2.Regi
 	if err := s.finishRegistration(ctx, peer, init); err != nil {
 		return err
 	}
-	return s.forwardLoop(ctx, peer)
+	return nil
 }
 
 func (s *Server) registrationAuthority(ctx context.Context, peer *connection, init v2.RegisterInit) (v2.SenderAuthority, error) {
@@ -388,6 +406,8 @@ func (s *Server) serveReceiver(ctx context.Context, peer *connection, first []by
 		peer.requestClose()
 		return ErrConnection
 	}
+	stopAdmission := s.watchAdmission(ctx, peer, result.RelaySessionID)
+	defer stopAdmission()
 	delivery, _ := (v2.DescriptorDelivery{
 		RelaySessionID: result.RelaySessionID, Object: result.Descriptor,
 	}).MarshalBinary()

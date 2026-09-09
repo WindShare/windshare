@@ -24,6 +24,7 @@ type link struct {
 	order     []v2.RelaySessionID
 	cursor    int
 	queued    int
+	windows   map[v2.RelaySessionID]*sendWindow
 	// Observation completion joins only accepted sends that can still publish a
 	// result fact; disabled tracing pays no registration or synchronization cost.
 	sendResultMu         sync.Mutex
@@ -55,6 +56,7 @@ func newLinkWithLifecycleStream(parent context.Context, socket BinarySocket, fix
 	return &link{
 		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
+		windows:  make(map[v2.RelaySessionID]*sendWindow),
 		channels: make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
 		done: make(chan struct{}), traces: newLifecycleSource(linkID, capacity),
 	}
@@ -141,6 +143,14 @@ func (l *link) readLoop() {
 				return
 			}
 			l.retire(retired.RelaySessionID)
+			continue
+		}
+		if string(encoded[:4]) == v2.SessionCreditMagic {
+			credit, err := v2.ParseSessionCredit(encoded)
+			if err != nil || l.fixed || !l.replenishCredit(credit) {
+				l.stop(ErrProtocol)
+				return
+			}
 			continue
 		}
 		route, parseErr := v2.ParseOpaqueRoute(encoded)

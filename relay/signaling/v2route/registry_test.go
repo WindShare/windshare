@@ -654,14 +654,18 @@ func TestSessionEndBudgetsAndRandomIdentityFailures(t *testing.T) {
 	if outsiderEnded || !senderEnded || duplicateEnded || nilEnded {
 		t.Fatal("session ending is not role-bound and idempotent")
 	}
-	if _, err := registry.Join(fixture.init.ShareID, receiverB); !errors.Is(err, ErrAdmission) {
-		t.Fatalf("ended-ID tombstone bypassed per-share budget: %v", err)
-	}
-	now = now.Add(SessionTombstoneTTL)
 	second, err := registry.Join(fixture.init.ShareID, receiverB)
 	if err != nil || second.Status != JoinReady {
 		t.Fatalf("second join = %+v, %v", second, err)
 	}
+	if second.RelaySessionID == first.RelaySessionID {
+		t.Fatal("reclaimed share slot reused a tombstoned session ID")
+	}
+	registry.EndSession(second.RelaySessionID, sender)
+	if _, err := registry.Join(fixture.init.ShareID, receiverB); !errors.Is(err, ErrAdmission) {
+		t.Fatalf("ended IDs bypassed global memory budget: %v", err)
+	}
+	now = now.Add(SessionTombstoneTTL)
 
 	broken, _ := New(context.Background(), Config{
 		MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1,
