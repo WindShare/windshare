@@ -83,6 +83,36 @@ it('exports lane exception causes and bounded stacks without mutating the failur
     })).toThrow('bounded text')
   })
 
+it('exports operation recovery decisions with session and local operation correlation', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createProtocolTraceSource(composition.trace)
+  const transitions = ['retry_available_lanes', 'wait_for_availability', 'wait_for_generation', 'exhausted'] as const
+  for (const transition of transitions) {
+    source.current?.({
+      eventName: 'operation_recovery',
+      correlation: { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
+      operationSequence: 2, generationId: 1, availabilityRevision: 3,
+      laneCount: 1, unchangedAvailabilityRetries: 2,
+      ...(transition === 'wait_for_availability'
+        ? { transition, delayMilliseconds: 200 } : { transition }),
+    })
+  }
+  const records = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+    .filter(line => line.record?.event === 'operation_recovery').map(line => line.record)
+  expect(records).toHaveLength(4)
+  expect(records.map(record => record.payload.transition)).toEqual(transitions)
+  expect(records.every(record => record.payload.operation_sequence === '2' &&
+    record.payload.availability_revision === '3' && record.correlation.protocol_session_id)).toBe(true)
+  expect(records[1].payload.delay_ms).toBe(200)
+  expect(() => validateTraceEventPayloadV1('operation_recovery', {
+    ...records[1].payload, delay_ms: -1,
+  })).toThrow()
+  expect(() => validateTraceEventPayloadV1('operation_recovery', {
+    ...records[0].payload, delay_ms: 200,
+  })).toThrow()
+})
+
 describe('browser diagnostics production composition', () => {
   it('uses injected package identity and the test build mode', () => {
     expect(browserBuildSnapshot()).toEqual({

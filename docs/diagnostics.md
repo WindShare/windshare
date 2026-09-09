@@ -47,6 +47,11 @@ current capture, `inspectLastFailure()` returns the last retained incident, and 
 retained evidence without disabling activation. Manual `disable()` also prevents later pages
 from restoring capture; already-open tabs retain their own capture state.
 
+Browser `operation_recovery` events distinguish retrying changed lanes, waiting for availability,
+waiting for a replacement session, and exhausting retries. They include the local operation sequence,
+protocol session, availability revision, lane count, and any backoff. Lane changes reset the operation's
+retry budget; an unchanged connection set gets two delayed retries before the original error is returned.
+
 Failed lane transitions include `failure_detail`: bounded exception text with nested causes and
 stack excerpts. Keep the sender trace from the same reproduction; `protocol_session_id` pairs
 browser and sender events. Do not call `enable()` again before exporting, since it starts a new capture.

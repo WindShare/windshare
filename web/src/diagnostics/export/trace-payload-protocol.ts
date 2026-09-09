@@ -30,6 +30,24 @@ const PEER_FAILURE_CODES = [
   'unexpected',
 ] as const
 
+export function validateOperationRecovery(payload: UnknownRecord): void {
+  const counters = [
+    'operation_sequence', 'generation_id', 'availability_revision',
+    'lane_count', 'unchanged_availability_retries',
+  ]
+  member(payload.transition, [
+    'retry_available_lanes', 'wait_for_generation', 'wait_for_availability', 'exhausted',
+  ], 'operation recovery transition')
+  exactKeys(payload, [
+    'transition', ...counters,
+    ...(payload.transition === 'wait_for_availability' ? ['delay_ms'] : []),
+  ], [], 'operation recovery payload')
+  decimalFields(payload, counters, 'operation recovery')
+  if (payload.transition === 'wait_for_availability') {
+    integerBetween(payload.delay_ms, 0, Number.MAX_SAFE_INTEGER, 'operation recovery delay')
+  }
+}
+
 export function validateProtocolOperation(payload: UnknownRecord): void {
   switch (payload.transition) {
     case 'request_sent':
