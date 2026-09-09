@@ -16,6 +16,9 @@ const (
 	ForwardQueueResumed      ForwardStage = "queue_resumed"
 	ForwardQueueWaitExpired  ForwardStage = "queue_wait_expired"
 	ForwardDestinationClosed ForwardStage = "destination_closed"
+	ForwardCreditViolation   ForwardStage = "credit_violation"
+	ForwardWindowConstrained ForwardStage = "window_constrained"
+	ForwardWindowAvailable   ForwardStage = "window_available"
 )
 
 // ForwardTrace identifies pressure at the forwarding owner, before a generic
@@ -29,6 +32,8 @@ type ForwardTrace struct {
 	SessionBytes        int
 	ConnectionFrames    int
 	ConnectionBytes     int
+	AvailableFrames     int
+	AvailableBytes      int
 }
 
 type ForwardTracer interface{ TraceForward(ForwardTrace) }
@@ -53,6 +58,9 @@ func (s *Server) forwardLoop(ctx context.Context, source *connection) error {
 }
 
 func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded []byte) error {
+	if len(encoded) >= 4 && string(encoded[:4]) == v2.SessionAdmittedMagic {
+		return s.admitSession(source, encoded)
+	}
 	route, err := v2.ParseOpaqueRoute(encoded)
 	if err != nil {
 		return ErrProtocol
@@ -67,17 +75,18 @@ func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded [
 	if resolution.Disposition != v2route.SessionForward || !resolution.Destination.Valid() {
 		return ErrProtocol
 	}
+	if source.roleValue() == roleReceiver {
+		if err := s.registry.ObserveReceiverFrame(route.RelaySessionID, source.ref); err != nil {
+			return err
+		}
+	}
 	destination, _, _ := s.connections.resolve(resolution.Destination)
-	if destination != nil {
-		err = s.forwardWithPressure(ctx, source, destination, route.RelaySessionID, encoded)
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-	} else {
-		err = ErrConnection
+	err = s.forwardToDestination(ctx, source, destination, route.RelaySessionID, encoded)
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	if retirement, ended := s.endSession(route.RelaySessionID, source.ref); ended {
 		if receiver, _, _ := s.connections.resolve(retirement.Receiver); receiver != nil {
@@ -90,6 +99,38 @@ func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded [
 		return nil
 	}
 	return err
+}
+
+func (s *Server) forwardToDestination(
+	ctx context.Context, source, destination *connection,
+	sessionID v2.RelaySessionID, encoded []byte,
+) error {
+	if destination == nil {
+		return ErrConnection
+	}
+	if source.roleValue() == roleSender {
+		return s.forwardSender(source, destination, sessionID, encoded)
+	}
+	return s.forwardWithPressure(ctx, source, destination, sessionID, encoded)
+}
+
+func (s *Server) forwardSender(source, destination *connection, sessionID v2.RelaySessionID, encoded []byte) error {
+	// Sender traffic is multiplexed. Waiting here would stop every sibling;
+	// the sender scheduler must reserve this destination's credit first.
+	trace, permitted := source.consumeSenderCredit(sessionID, len(encoded))
+	trace.Source, trace.Destination = source.ref, destination.ref
+	if trace.Stage != "" {
+		s.traceForward(trace, trace.Stage)
+	}
+	if !permitted {
+		s.traceForward(trace, ForwardCreditViolation)
+		return ErrProtocol
+	}
+	if accepted, _, _ := destination.tryForward(sessionID, encoded); !accepted {
+		s.traceForward(trace, ForwardDestinationClosed)
+		return ErrConnection
+	}
+	return nil
 }
 
 func (s *Server) forwardWithPressure(

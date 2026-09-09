@@ -31,11 +31,20 @@ func (s *Server) writeLoop(ctx context.Context, peer *connection) error {
 			}
 		default:
 		}
+		wroteSessionControl, err := s.writeSessionControls(ctx, peer)
+		if err != nil {
+			peer.requestClose()
+			return err
+		}
 		if frame, ok := peer.takeForward(); ok {
 			if err := s.write(ctx, peer.socket, frame); err != nil {
 				peer.requestClose()
 				return err
 			}
+			s.completeForward(peer, frame)
+			continue
+		}
+		if wroteSessionControl {
 			continue
 		}
 		select {
@@ -51,6 +60,38 @@ func (s *Server) writeLoop(ctx context.Context, peer *connection) error {
 		case <-peer.wake:
 		}
 	}
+}
+
+func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bool, error) {
+	wrote := false
+	if retired, ok := peer.takeSessionRetirement(); ok {
+		encoded, err := retired.MarshalBinary()
+		if err != nil {
+			return false, err
+		}
+		if err := s.write(ctx, peer.socket, encoded); err != nil {
+			return false, err
+		}
+		wrote = true
+	}
+	credit, trace, ok := peer.takeSenderCredit()
+	if !ok {
+		return wrote, nil
+	}
+	encoded, err := credit.MarshalBinary()
+	if err != nil {
+		return wrote, err
+	}
+	if err := s.write(ctx, peer.socket, encoded); err != nil {
+		return wrote, err
+	}
+	if trace.Stage != "" {
+		if route, err := s.registry.ResolveSession(credit.RelaySessionID, peer.ref); err == nil {
+			trace.Destination = route.Destination
+			s.traceForward(trace, trace.Stage)
+		}
+	}
+	return true, nil
 }
 
 func (s *Server) write(parent context.Context, socket BinaryConnection, data []byte) error {
@@ -75,19 +116,6 @@ func (peer *connection) sendControl(ctx context.Context, data []byte) error {
 		return ctx.Err()
 	case err := <-item.done:
 		return err
-	}
-}
-
-func (peer *connection) enqueueControl(data []byte) bool {
-	if peer == nil || peer.closed.Load() {
-		return false
-	}
-	item := controlWrite{data: bytes.Clone(data), done: make(chan error, 1)}
-	select {
-	case peer.control <- item:
-		return true
-	default:
-		return false
 	}
 }
 

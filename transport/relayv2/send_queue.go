@@ -8,7 +8,15 @@ import (
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
+type sendKind uint8
+
+const (
+	sendRoutedFrame sendKind = iota
+	sendSessionAdmission
+)
+
 type sendRequest struct {
+	kind        sendKind
 	data        []byte
 	receipt     chan error
 	channelID   v2.RelaySessionID
@@ -256,6 +264,14 @@ func (l *link) takeRequest() (*sendRequest, bool) {
 			continue
 		}
 		request := queue.requests[0]
+		if !l.fixed && request.kind == sendRoutedFrame {
+			window := l.senderWindowLocked(id)
+			if window.frames == 0 || window.bytes < len(request.data) {
+				continue
+			}
+			window.frames--
+			window.bytes -= len(request.data)
+		}
 		queue.requests[0] = nil
 		queue.requests = queue.requests[1:]
 		l.queued--
@@ -265,6 +281,7 @@ func (l *link) takeRequest() (*sendRequest, bool) {
 }
 
 func (l *link) drainQueueLocked(id v2.RelaySessionID, failure error) {
+	delete(l.windows, id)
 	if queue := l.queues[id]; queue != nil {
 		l.queued -= len(queue.requests)
 		for _, request := range queue.requests {

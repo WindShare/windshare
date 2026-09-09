@@ -59,6 +59,16 @@ export interface V2SessionRetired {
   readonly relaySessionId: Uint8Array
 }
 
+export interface V2SessionAdmitted {
+  readonly relaySessionId: Uint8Array
+}
+
+export interface V2SessionCredit {
+  readonly relaySessionId: Uint8Array
+  readonly frames: number
+  readonly bytes: number
+}
+
 export interface V2RelayErrorFrame {
   readonly code: V2RelayErrorCode
   readonly retryAfterMilliseconds: number

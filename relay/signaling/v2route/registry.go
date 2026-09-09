@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	SenderCrashGrace    = 60 * time.Second
-	JoinStartingGrace   = 5 * time.Second
-	SessionTombstoneTTL = 60 * time.Second
-	sessionIDRetries    = 4
+	SenderCrashGrace        = 60 * time.Second
+	JoinStartingGrace       = 5 * time.Second
+	SessionTombstoneTTL     = 60 * time.Second
+	SessionAdmissionTimeout = 30 * time.Second
+	sessionIDRetries        = 4
 )
 
 var (
@@ -33,6 +34,8 @@ var (
 	ErrOwner             = errors.New("relay v2 route: connection does not own route")
 	ErrResume            = errors.New("relay v2 route: resume credential is invalid")
 	ErrSession           = errors.New("relay v2 route: relay session is invalid")
+	ErrAdmissionExpired  = errors.New("relay v2 route: session admission expired")
+	ErrSessionEnded      = errors.New("relay v2 route: session already ended")
 	ErrStopping          = errors.New("relay v2 route: STOP is in progress")
 	ErrCommitFailed      = errors.New("relay v2 route: STOP was not committed")
 	ErrCommitUncertain   = errors.New("relay v2 route: STOP durability is uncertain")
@@ -87,8 +90,9 @@ func (connection ConnectionRef) Valid() bool {
 
 type Config struct {
 	MaxRoutes int
-	// MaxSessions bounds active sessions plus 60-second ended-ID tombstones.
-	MaxSessions         int
+	// MaxSessions bounds provisional/active sessions plus ended-ID tombstones.
+	MaxSessions int
+	// MaxSessionsPerShare counts occupied slots, excluding ended-ID tombstones.
 	MaxSessionsPerShare int
 	Random              io.Reader
 	Now                 func() time.Time
@@ -117,9 +121,11 @@ type route struct {
 }
 
 type relaySession struct {
-	shareID  v2.ShareID
-	sender   ConnectionRef
-	receiver ConnectionRef
+	shareID           v2.ShareID
+	sender            ConnectionRef
+	receiver          ConnectionRef
+	phase             SessionPhase
+	admissionDeadline time.Time
 }
 
 type sessionTombstone struct {
@@ -162,8 +168,12 @@ type Registry struct {
 	routes              map[v2.ShareID]*route
 	sessions            map[v2.RelaySessionID]relaySession
 	sessionTombstones   map[v2.RelaySessionID]sessionTombstone
-	sessionAuthorities  map[v2.ShareID]int
+	sessionSlotsByShare map[v2.ShareID]int
 }
+
+// SessionCapacity also bounds endpoint retirement notices retained for these
+// identities. An unresponsive sender cannot accumulate notices across ID expiry.
+func (r *Registry) SessionCapacity() int { return r.maxSessions }
 
 func New(ctx context.Context, config Config) (*Registry, error) {
 	if config.MaxRoutes <= 0 || config.MaxSessions <= 0 || config.MaxSessionsPerShare <= 0 ||
@@ -184,7 +194,7 @@ func New(ctx context.Context, config Config) (*Registry, error) {
 		maxRoutes: config.MaxRoutes, maxSessions: config.MaxSessions, maxSessionsPerShare: config.MaxSessionsPerShare,
 		random: config.Random, now: config.Now, tombstones: config.Tombstones,
 		routes: make(map[v2.ShareID]*route), sessions: make(map[v2.RelaySessionID]relaySession),
-		sessionTombstones: make(map[v2.RelaySessionID]sessionTombstone), sessionAuthorities: make(map[v2.ShareID]int),
+		sessionTombstones: make(map[v2.RelaySessionID]sessionTombstone), sessionSlotsByShare: make(map[v2.ShareID]int),
 	}
 	for _, tombstone := range stopped {
 		if !validTombstone(tombstone) {
@@ -432,15 +442,18 @@ func (r *Registry) Join(shareID v2.ShareID, receiver ConnectionRef) (JoinResult,
 		return JoinResult{}, ErrOwner
 	}
 	if len(r.sessions)+len(r.sessionTombstones) >= r.maxSessions ||
-		r.sessionAuthorities[shareID] >= r.maxSessionsPerShare {
+		r.sessionSlotsByShare[shareID] >= r.maxSessionsPerShare {
 		return JoinResult{}, ErrAdmission
 	}
 	sessionID, err := r.allocateSessionID()
 	if err != nil {
 		return JoinResult{}, err
 	}
-	r.sessions[sessionID] = relaySession{shareID: shareID, sender: current.owner, receiver: receiver}
-	r.sessionAuthorities[shareID]++
+	r.sessions[sessionID] = relaySession{
+		shareID: shareID, sender: current.owner, receiver: receiver,
+		phase: SessionAwaitingReceiver, admissionDeadline: now.Add(SessionAdmissionTimeout),
+	}
+	r.sessionSlotsByShare[shareID]++
 	return JoinResult{
 		Status: JoinReady, RelaySessionID: sessionID, Sender: current.owner, Descriptor: bytes.Clone(current.descriptor),
 	}, nil
@@ -470,7 +483,7 @@ func (r *Registry) ResolveSession(
 		return SessionResolution{}, ErrSession
 	}
 	if !r.now().Before(tombstone.expiresAt) {
-		r.expireSessionTombstone(sessionID, tombstone)
+		r.expireSessionTombstone(sessionID)
 		return SessionResolution{}, ErrSession
 	}
 	if _, err := tombstone.session.destination(source); err != nil {
@@ -561,6 +574,11 @@ func (r *Registry) dropShareSessions(shareID v2.ShareID) []SessionRetirement {
 
 func (r *Registry) retireSession(sessionID v2.RelaySessionID, session relaySession) SessionRetirement {
 	delete(r.sessions, sessionID)
+	if r.sessionSlotsByShare[session.shareID] <= 1 {
+		delete(r.sessionSlotsByShare, session.shareID)
+	} else {
+		r.sessionSlotsByShare[session.shareID]--
+	}
 	r.sessionTombstones[sessionID] = sessionTombstone{
 		session: session, expiresAt: r.now().Add(SessionTombstoneTTL),
 	}
@@ -570,19 +588,13 @@ func (r *Registry) retireSession(sessionID v2.RelaySessionID, session relaySessi
 func (r *Registry) expireSessionTombstones(now time.Time) {
 	for sessionID, tombstone := range r.sessionTombstones {
 		if !now.Before(tombstone.expiresAt) {
-			r.expireSessionTombstone(sessionID, tombstone)
+			r.expireSessionTombstone(sessionID)
 		}
 	}
 }
 
-func (r *Registry) expireSessionTombstone(sessionID v2.RelaySessionID, tombstone sessionTombstone) {
+func (r *Registry) expireSessionTombstone(sessionID v2.RelaySessionID) {
 	delete(r.sessionTombstones, sessionID)
-	shareID := tombstone.session.shareID
-	if r.sessionAuthorities[shareID] <= 1 {
-		delete(r.sessionAuthorities, shareID)
-		return
-	}
-	r.sessionAuthorities[shareID]--
 }
 
 func (r *Registry) retireRoute(current *route, shareID v2.ShareID) RouteRetirement {
