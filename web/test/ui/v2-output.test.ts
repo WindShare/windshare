@@ -362,6 +362,32 @@ describe('derived output presentation', () => {
 })
 
 describe('receive interruption presentation', () => {
+  it('reports a finishing deadline without pretending that the operation has paused', async () => {
+    vi.useFakeTimers()
+    try {
+      const observation = await singleFileObservation(19n)
+      const outputs = new V2OutputPresentationController()
+      outputs.updateProjection(1, observation.state, observation.offers)
+      outputs.updateActivation(waitingResolution(observation.offered, observation.state.projection, 1))
+      const intent = receiveIntent(observation.action)
+      const receiving = lifecycle(intent, 1n, { kind: 'receiving', activeLeaseId: 'lease' })
+      outputs.adoptReceiveIntent(observation.offered.choice, intent, receiving)
+      const presentation = new ActiveReceiveSettlementPresentation({ outputs, operationIsCurrent: () => true })
+      const deadline = presentation.schedule(25, () => {})
+      await vi.advanceTimersByTimeAsync(25)
+      expect(outputs.getSnapshot()).toMatchObject({
+        lifecycle: receiving,
+        lifecyclePresentation: { title: 'Finishing is taking longer than expected', tone: 'warning' },
+        receiveInterruption: { operation: 'finish', phase: 'background' },
+      })
+      deadline.cancel()
+      outputs.updateLifecycle(lifecycle(intent, 2n, { kind: 'waiting-to-save', packageDigest: identity(91, 32) }))
+      expect(outputs.getSnapshot().receiveInterruption).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each([
     { control: 'pause', foreground: 'Pausing', background: 'Pausing in the background' },
     { control: 'stop', foreground: 'Stopping', background: 'Stopping in the background' },
@@ -399,7 +425,7 @@ describe('receive interruption presentation', () => {
       expect(outputs.getSnapshot()).toMatchObject({
         lifecycle: { kind: 'receiving', generation: 1n },
         lifecyclePresentation: { title: foreground },
-        receiveInterruption: { control, phase: 'waiting' },
+        receiveInterruption: { operation: control, phase: 'waiting' },
       })
 
       let expired = false
@@ -409,7 +435,7 @@ describe('receive interruption presentation', () => {
       expect(outputs.getSnapshot()).toMatchObject({
         lifecycle: { kind: 'receiving', generation: 1n },
         lifecyclePresentation: { title: background, tone: 'warning' },
-        receiveInterruption: { control, phase: 'background' },
+        receiveInterruption: { operation: control, phase: 'background' },
       })
 
       const stable = lifecycle(intent, 2n, {

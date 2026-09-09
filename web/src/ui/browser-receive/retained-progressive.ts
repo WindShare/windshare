@@ -27,10 +27,10 @@ export async function continueProgressiveZip(
   }
   try {
     signal.throwIfAborted()
-    const checkpoint = await backend.archive.finalize()
+    const checkpoint = await backend.archive.finalize(signal)
     const lifecycle = await operation.stages.progressive.seal(backend.store, checkpoint)
     signal.throwIfAborted()
-    await handoffRetainedWorkspacePackage(windowPort, { ...operation, lifecycle }, backend, diagnostics)
+    await handoffRetainedWorkspacePackage(windowPort, { ...operation, lifecycle }, backend, diagnostics, signal)
     return Object.freeze({ kind: 'completed' })
   } finally { await operation.close() }
 }

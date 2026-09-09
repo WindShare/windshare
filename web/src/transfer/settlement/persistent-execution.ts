@@ -76,6 +76,7 @@ import {
 } from './persistent-file-transaction'
 import type { PersistentExecutionRecoveryPolicy } from './persistent-recovery-policy'
 import { PersistentSettlementCut } from './persistent-settlement-cut'
+import { WorkspaceSettlementOwner } from './workspace-settlement-owner'
 
 export type {
   PersistentDirectTreeMaterializationEvidence,
@@ -237,23 +238,26 @@ export async function createPersistentWorkspaceExecution(
       directorySettlements: materialized.directorySettlements,
     })
   }
+  const owner = new WorkspaceSettlementOwner()
   const execution: WorkspaceExecution = {
     planKind: 'workspace-then-publish',
     output: adapter,
-    pause: async (request, signal) => {
+    pause: (request, signal) => owner.pause(async () => {
       const cut = new PersistentSettlementCut(evidence(), () => adapter.close())
       const state = await input.settlement.pause(request, cut, signal)
       await cut.validateReturnedState(state)
       return state
-    },
+    }),
     settle: async (request, signal) => {
       const snapshot = evidence()
       requireCompleteWorkspaceMaterialization(input.intent, admission, snapshot)
       requireMatchingMaterializationSummary(request, snapshot)
-      const cut = new PersistentSettlementCut(snapshot, () => adapter.close())
-      const state = await input.settlement.settle(request, cut, signal)
-      await cut.validateReturnedState(state)
-      return state
+      return owner.settle(async () => {
+        const cut = new PersistentSettlementCut(snapshot, () => adapter.close())
+        const state = await input.settlement.settle(request, cut, signal)
+        await cut.validateReturnedState(state)
+        return state
+      })
     },
   }
   return Object.freeze(execution)

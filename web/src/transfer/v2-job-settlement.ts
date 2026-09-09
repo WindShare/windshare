@@ -36,6 +36,7 @@ import {
   pauseFailedV2Execution,
   withOutputSettlementTimeout,
   withQuiescentOutputSettlementTimeout,
+  withWorkspaceOutputSettlementTimeout,
 } from './settlement/v2-output'
 import type { V2JobFailureAuthority } from './v2-job-failure-authority'
 
@@ -178,6 +179,20 @@ export class TransferJobSettlement {
         signal => execution.settle({
           transferJobId: this.#context.transferJobId,
           worker,
+          materialization: summary,
+        }, signal),
+        this.#context.options.outputSettlementDeadline,
+      )
+      return validateCompletionLifecycle(this.#context.intent(), worker, state)
+    }
+
+    if (execution.planKind === 'workspace-then-publish') {
+      const state = await withWorkspaceOutputSettlementTimeout(
+        'settle completed workspace execution',
+        this.#context.outputSettlementTimeoutMilliseconds,
+        signal => execution.settle({
+          transferJobId: this.#context.transferJobId,
+          worker: requireSuccessfulWorker(worker),
           materialization: summary,
         }, signal),
         this.#context.options.outputSettlementDeadline,

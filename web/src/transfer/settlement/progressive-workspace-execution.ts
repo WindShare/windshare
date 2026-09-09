@@ -7,6 +7,7 @@ import type {
   OutputSessionIdentity, PlanPauseRequest, PlanSettlementRequest, WorkspaceExecution,
 } from '../output-session'
 import type { SuccessfulTransferWorkerSettlement } from '../outcome'
+import { WorkspaceSettlementOwner } from './workspace-settlement-owner'
 
 export type ProgressivePauseEvidence =
   | Readonly<{ kind: 'checkpoint-committed'; checkpoint: TaskCheckpoint }>
@@ -26,6 +27,7 @@ export async function createProgressiveWorkspaceExecution(input: {
   const ports = await createProgressiveZipOutput({
     intent: input.intent, archive: input.archive, identity: input.outputIdentity,
   })
+  const owner = new WorkspaceSettlementOwner()
   return Object.freeze({
     planKind: 'workspace-then-publish' as const,
     ...ports,
@@ -37,7 +39,7 @@ export async function createProgressiveWorkspaceExecution(input: {
       signal.throwIfAborted()
       await input.archive.markDiscoveryComplete()
     },
-    pause: async (request: PlanPauseRequest, signal: AbortSignal) => {
+    pause: (request: PlanPauseRequest, signal: AbortSignal) => owner.pause(async () => {
       let evidence: ProgressivePauseEvidence
       try {
         await input.archive.checkpoint('task-pause')
@@ -49,11 +51,11 @@ export async function createProgressiveWorkspaceExecution(input: {
       }
       await input.archive.close()
       return input.settlement.pause(request, Object.freeze(evidence), signal)
-    },
-    settle: async (request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>, signal: AbortSignal) => {
+    }),
+    settle: (request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>, signal: AbortSignal) => owner.settle(async () => {
       signal.throwIfAborted()
-      const checkpoint = await input.archive.finalize()
+      const checkpoint = await input.archive.finalize(signal)
       return input.settlement.settle(request, checkpoint, signal)
-    },
+    }),
   })
 }

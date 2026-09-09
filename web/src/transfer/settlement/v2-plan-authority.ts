@@ -234,15 +234,14 @@ export async function createV2PlanExecutionAuthority(input: {
     settleExecutionAdmissionFailure: async (supplied, reason, signal) => {
       signal.throwIfAborted()
       const intent = await requireBoundIntent(boundIntent, supplied)
+      // A completed recovery cut remains authoritative even if its deadline elapsed.
       const state = await routes.lifecycle.settleExecutionAdmissionFailure(intent, reason, signal)
-      signal.throwIfAborted()
       return validateLifecycleIdentity(intent, state)
     },
     recordSettlementUnknown: async (supplied, signal) => {
       signal.throwIfAborted()
       const intent = await requireBoundIntent(boundIntent, supplied)
       const state = await routes.lifecycle.recordSettlementUnknown(intent, signal)
-      signal.throwIfAborted()
       validateLifecycleIdentity(intent, state)
       if (state.kind !== 'needs-attention') {
         throw new TypeError('unknown settlement must stop in NeedsAttention')

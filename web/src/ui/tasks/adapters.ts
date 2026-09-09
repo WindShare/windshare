@@ -46,7 +46,7 @@ export function activeTaskFacts(input: Readonly<{
     directZipProgress: output.directZipProgress,
     fidelity: lifecycle?.compatibleNameRepair ?? null,
     details: Object.freeze(details),
-    interruption: output.receiveInterruption?.control ?? null,
+    interruption: output.receiveInterruption?.operation ?? null,
     execution: Object.freeze({ kind: 'active' }),
   })
 }

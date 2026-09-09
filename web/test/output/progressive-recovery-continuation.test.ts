@@ -35,7 +35,7 @@ describe('native ZIP retained continuation routing', () => {
     expect(f.finalize).toHaveBeenCalledOnce()
     expect(f.seal).toHaveBeenCalledWith(f.operation.progressiveContinuation.backend.store, f.checkpoint)
     expect(ports.handoff).toHaveBeenLastCalledWith({}, { ...f.operation, lifecycle: f.lifecycle },
-      f.operation.progressiveContinuation.backend, undefined)
+      f.operation.progressiveContinuation.backend, undefined, expect.any(AbortSignal))
     expect(ports.reopen.mock.calls).toHaveLength(previousReopens)
     expect(f.close).toHaveBeenCalledOnce()
   })

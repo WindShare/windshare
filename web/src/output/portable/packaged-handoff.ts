@@ -5,6 +5,7 @@ import type {
 } from '../workspace/aggregate'
 import {
   BROWSER_HANDOFF_OBJECT_URL_LEASE_MS,
+  BrowserHandoffNotStartedError,
   browserSupportsObjectUrlHandoff,
   type BrowserHandoffStarted,
   type PortableHandoffWindow,
@@ -21,6 +22,7 @@ export interface PackagedArtifactReadPort {
 export interface PackagedArtifactHandoffRequest {
   readonly artifact: PackagedArtifactV1
   readonly attempt: PublicationAttemptV1
+  readonly signal?: AbortSignal
 }
 
 export interface PackagedArtifactHandoffPublisher {
@@ -64,6 +66,7 @@ export function createPackagedArtifactHandoffPublisher(
         )
       }
 
+      if (request.signal?.aborted) throw new BrowserHandoffNotStartedError()
       const reader = await ports.packages.acquireReader?.(request.artifact)
       let handedOff = false
       try {
@@ -78,6 +81,8 @@ export function createPackagedArtifactHandoffPublisher(
           throw new TypeError('Packaged artifact File length changed after seal')
         }
 
+        // Revocation is still provable before the synchronous browser handoff boundary.
+        if (request.signal?.aborted) throw new BrowserHandoffNotStartedError()
         const started = ports.browser.handoffWithLease({
           context: {
             attemptKind: 'workspace',

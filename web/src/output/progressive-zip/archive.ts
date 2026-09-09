@@ -271,15 +271,18 @@ export class ProgressiveZipArchive {
     }
   }
 
-  async finalize(): Promise<TaskCheckpoint> {
+  async finalize(signal?: AbortSignal): Promise<TaskCheckpoint> {
+    signal?.throwIfAborted()
     if (this.#checkpoint.artifactState === 'sealed') {
       await this.close()
       return this.#checkpoint
     }
     await this.checkpoint('zip-before-finalization')
+    signal?.throwIfAborted()
     if (!this.#checkpoint.discoveryComplete) throw new Error('ZIP still needs remote discovery')
     if (this.#checkpoint.artifactState === 'receiving') {
       for await (const entry of this.#entries()) {
+        signal?.throwIfAborted()
         if (entry.revisionFailure !== undefined ||
             completeZipEntryCrc(entry.ranges, entry.zipLayout!.exactSize) === undefined) {
           throw new Error(`ZIP entry still needs remote content: ${entry.path.join('/')}`)
@@ -291,12 +294,14 @@ export class ProgressiveZipArchive {
           committedLength: this.#checkpoint.allocatedLength },
       }))
     }
+    signal?.throwIfAborted()
     const start = this.#checkpoint.finalization!
     // Only the uncommitted central-directory tail is discarded after interrupted finalization.
     await this.#input.coordinator.mutate(io => this.#truncateTail(io, start.committedLength))
     let committedLength = start.committedLength
     const entries = this.#entries(start.nextEntry === 0n ? undefined : start.nextEntry - 1n)
     for await (const batch of zipFinalizationBatches(entries, committedLength)) {
+      signal?.throwIfAborted()
       await this.#writeBatch(batch.writes)
       committedLength = batch.committedLength
       await this.#finalizationCheckpoint(batch.nextEntry, committedLength)
@@ -304,6 +309,7 @@ export class ProgressiveZipArchive {
         nextEntry: batch.nextEntry, entryCount: this.#checkpoint.entryCount, committedLength,
       })
     }
+    signal?.throwIfAborted()
     const endLayout = { entryCount: this.#checkpoint.entryCount,
       centralDirectoryOffset: start.centralDirectoryOffset,
       centralDirectoryBytes: committedLength - start.centralDirectoryOffset }
@@ -315,6 +321,7 @@ export class ProgressiveZipArchive {
       committedLength = checkedZipAdd(committedLength, BigInt(bytes.byteLength))
     }
     await this.#writeBatch(endWrites)
+    signal?.throwIfAborted()
     const sealed = await this.#input.coordinator.checkpoint('zip-sealed', () =>
       this.#commit({ artifactState: 'sealed', sealedLength: committedLength }))
     this.#trace('zip_sealed', { sealedLength: committedLength, entryCount: sealed.entryCount })
