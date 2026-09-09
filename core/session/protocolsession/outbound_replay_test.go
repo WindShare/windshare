@@ -8,7 +8,7 @@ import (
 
 func TestOutboundReplayPermitBindsAuthorityAndCanonicalMessage(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, func() time.Time { return now })
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, func() time.Time { return now })
 	operationID := testOperationID(101)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
 	authority := observeSenderOperation(t, table, request)
@@ -96,7 +96,7 @@ func TestOutboundReplayPermitBindsAuthorityAndCanonicalMessage(t *testing.T) {
 }
 
 func TestOutboundReplayPermitCannotCrossCancellationGenerationOrTerminal(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	operationID := testOperationID(102)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
 	authority := observeSenderOperation(t, table, request)
@@ -136,7 +136,7 @@ func TestOutboundReplayPermitCannotCrossCancellationGenerationOrTerminal(t *test
 }
 
 func TestReceiverRequestReplayRequiresExactGenerationPermit(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(104)
 	request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
 	admission, err := table.AdmitOutbound(DirectionReceiverToSender, request, OutboundOperationPermit{})
@@ -165,7 +165,7 @@ func TestReceiverRequestReplayRequiresExactGenerationPermit(t *testing.T) {
 }
 
 func TestPeerAnswerReplayDoesNotAdvanceMultiplicityTwice(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(105)
 	request := mustMessage(t, MessagePeerOffer, &operationID, map[uint64]any{0: uint64(1)})
 	authority := observeSenderOperation(t, table, request)

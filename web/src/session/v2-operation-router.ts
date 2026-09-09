@@ -41,7 +41,7 @@ export const V2_SESSION_PLAINTEXT_BACKLOG_BYTES = V2_SESSION_PLAINTEXT_BUDGET_BY
   V2_SESSION_BLOCK_CACHE_RESERVATION_BYTES - V2_SESSION_REASSEMBLY_RESERVATION_BYTES
 export const V2_MAXIMUM_ACTIVE_OPERATIONS = 256
 export const V2_OPERATION_TOMBSTONE_MILLISECONDS = 30_000
-export const V2_MAXIMUM_OPERATION_TOMBSTONES = 4_096
+export const V2_MAXIMUM_TRACKED_OPERATIONS = 4_096
 
 interface PendingRead {
   resolve(message: V2SessionMessage): void
@@ -286,6 +286,8 @@ export class V2OperationRouter {
   readonly #diagnostics: V2OperationRouterDiagnostics | undefined
   readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
   readonly #protocolFailures = new WeakMap<V2SessionMessage, ProtocolFailure>()
+  readonly #capacityWaiters = new Set<() => void>()
+  #capacityTimer: ReturnType<typeof setTimeout> | undefined
   #terminal: unknown
 
   constructor(
@@ -298,6 +300,43 @@ export class V2OperationRouter {
     this.#diagnostics = diagnostics
   }
 
+  async admit(
+    id: Uint8Array,
+    requestKind: V2MessageKind,
+    canonicalRequestBody: Uint8Array,
+    signal?: AbortSignal,
+  ): Promise<V2OperationQueue> {
+    const ownedId = id.slice()
+    const ownedBody = canonicalRequestBody.slice()
+    let waitingFor: 'active' | 'retained' | undefined
+    try {
+      for (;;) {
+        signal?.throwIfAborted()
+        if (this.#terminal !== undefined) {
+          throw new V2SessionRuntimeError('session', 'Protocol session is terminal')
+        }
+        this.#pruneTombstones()
+        this.#freshOperationKey(ownedId)
+        if (this.#hasOperationCapacity()) {
+          const operation = this.create(ownedId, requestKind, ownedBody)
+          if (waitingFor !== undefined) this.#traceAdmission(ownedId, requestKind, 'admission_ready')
+          return operation
+        }
+        const capacity = this.#operations.size >= V2_MAXIMUM_ACTIVE_OPERATIONS ? 'active' : 'retained'
+        if (waitingFor !== capacity) {
+          waitingFor = capacity
+          this.#traceAdmission(ownedId, requestKind, capacity)
+        }
+        // Wait before registering operation authority or entering a lane writer. Incoming
+        // results and cancellation must remain able to release active capacity.
+        await this.#waitForCapacity(signal)
+      }
+    } catch (error) {
+      if (waitingFor !== undefined) this.#traceAdmission(ownedId, requestKind, 'admission_abandoned')
+      throw error
+    }
+  }
+
   create(
     id: Uint8Array,
     requestKind: V2MessageKind,
@@ -307,15 +346,12 @@ export class V2OperationRouter {
       throw new V2SessionRuntimeError('session', 'Protocol session is terminal')
     }
     this.#pruneTombstones()
-    const key = encodeBase64Url(id)
-    if (this.#operations.has(key) || this.#tombstones.has(key)) {
-      throw new V2SessionRuntimeError('operation', 'Operation ID was reused')
-    }
+    const key = this.#freshOperationKey(id)
     if (this.#operations.size >= V2_MAXIMUM_ACTIVE_OPERATIONS) {
       throw new V2SessionRuntimeError('session', 'Active operation budget is exhausted')
     }
-    if (this.#operations.size + this.#tombstones.size >= V2_MAXIMUM_OPERATION_TOMBSTONES) {
-      throw new V2SessionRuntimeError('session', 'Operation tombstone budget is exhausted')
+    if (this.#operations.size + this.#tombstones.size >= V2_MAXIMUM_TRACKED_OPERATIONS) {
+      throw new V2SessionRuntimeError('session', 'Tracked operation budget is exhausted')
     }
     const operation = new V2OperationQueue(
       id,
@@ -330,6 +366,7 @@ export class V2OperationRouter {
           this.#now() + V2_OPERATION_TOMBSTONE_MILLISECONDS,
           authority,
         ))
+        this.#wakeCapacityWaiters()
         if (settlement !== 'remote_final') {
           this.#emitSettlement(operation, settlement)
         }
@@ -434,6 +471,7 @@ export class V2OperationRouter {
   terminate(reason: unknown): void {
     if (this.#terminal !== undefined) return
     this.#terminal = reason
+    this.#wakeCapacityWaiters()
     for (const operation of [...this.#operations.values()]) operation.fail(reason)
     for (const operation of [...this.#draining]) operation.fail(reason)
     for (const tombstone of this.#tombstones.values()) tombstone.close()
@@ -528,6 +566,86 @@ export class V2OperationRouter {
     } catch {
       // Trace failure cannot alter authenticated routing or queue settlement.
     }
+  }
+
+  #traceAdmission(
+    id: Uint8Array,
+    requestKind: V2MessageKind,
+    stage: 'active' | 'retained' | 'admission_ready' | 'admission_abandoned',
+  ): void {
+    const diagnostics = this.#diagnostics
+    if (diagnostics === undefined) return
+    this.#emitTrace(() => ({
+      eventName: 'protocol_operation',
+      requestKind: protocolMessageKindV1(requestKind),
+      correlation: {
+        protocolSessionId: diagnostics.protocolSessionIdentity,
+        protocolOperationId: createV2ProtocolOperationIdentity(id),
+      },
+      ...(stage === 'active' || stage === 'retained'
+        ? {
+            transition: 'admission_waiting' as const, capacity: stage,
+            activeOperations: this.#operations.size,
+            trackedOperations: this.#operations.size + this.#tombstones.size,
+          }
+        : { transition: stage }),
+    }))
+  }
+
+  #freshOperationKey(id: Uint8Array): string {
+    const key = encodeBase64Url(id)
+    if (this.#operations.has(key) || this.#tombstones.has(key)) {
+      throw new V2SessionRuntimeError('operation', 'Operation ID was reused')
+    }
+    return key
+  }
+
+  #hasOperationCapacity(): boolean {
+    return this.#operations.size < V2_MAXIMUM_ACTIVE_OPERATIONS &&
+      this.#operations.size + this.#tombstones.size < V2_MAXIMUM_TRACKED_OPERATIONS
+  }
+
+  #waitForCapacity(signal?: AbortSignal): Promise<void> {
+    // A synchronous trace observer may cancel, close the session, or settle an
+    // existing operation. Recheck before subscribing so its wakeup is not lost.
+    signal?.throwIfAborted()
+    if (this.#terminal !== undefined || this.#hasOperationCapacity()) {
+      return Promise.resolve()
+    }
+    return new Promise<void>((resolve, reject) => {
+      const cleanup = () => {
+        this.#capacityWaiters.delete(wake)
+        signal?.removeEventListener('abort', abort)
+        if (this.#capacityWaiters.size === 0) this.#clearCapacityTimer()
+      }
+      const wake = () => {
+        cleanup()
+        resolve()
+      }
+      const abort = () => {
+        cleanup()
+        reject(signal?.reason)
+      }
+      this.#capacityWaiters.add(wake)
+      signal?.addEventListener('abort', abort, { once: true })
+      if (this.#capacityTimer === undefined && this.#operations.size < V2_MAXIMUM_ACTIVE_OPERATIONS) {
+        let earliest = Infinity
+        for (const tombstone of this.#tombstones.values()) earliest = Math.min(earliest, tombstone.expiresAt)
+        if (Number.isFinite(earliest)) {
+          this.#capacityTimer = setTimeout(() => this.#wakeCapacityWaiters(), Math.max(0, earliest - this.#now()))
+        }
+      }
+    })
+  }
+
+  #clearCapacityTimer(): void {
+    if (this.#capacityTimer !== undefined) clearTimeout(this.#capacityTimer)
+    this.#capacityTimer = undefined
+  }
+
+  #wakeCapacityWaiters(): void {
+    this.#clearCapacityTimer()
+    for (const wake of [...this.#capacityWaiters]) wake()
   }
 
   #pruneTombstones(): void {

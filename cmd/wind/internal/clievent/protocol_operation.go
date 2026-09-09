@@ -24,12 +24,16 @@ const (
 	ProtocolOperationSenderRequestReceived
 	ProtocolOperationSenderResponseSettled
 	ProtocolOperationSenderContentDecision
+	ProtocolOperationReceiverWaitingActiveCapacity
+	ProtocolOperationReceiverWaitingRetainedCapacity
+	ProtocolOperationReceiverAdmissionReady
 )
 
 func (value ProtocolOperationStage) Name() (string, bool) {
 	names := [...]string{
 		"", "receiver_completed", "receiver_failed", "receiver_ended",
 		"sender_request_received", "sender_response_settled", "sender_content_decision",
+		"receiver_waiting_active_capacity", "receiver_waiting_retained_capacity", "receiver_admission_ready",
 	}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
@@ -440,6 +444,10 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 		return false
 	}
 	switch spec.Stage {
+	case ProtocolOperationReceiverWaitingActiveCapacity, ProtocolOperationReceiverWaitingRetainedCapacity,
+		ProtocolOperationReceiverAdmissionReady:
+		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
+			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationReceiverCompleted:
 		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			spec.HasResponse && spec.ResponseCount != 0 && spec.Cause == ProtocolOperationCauseNone

@@ -20,6 +20,9 @@ const (
 	ProtocolOperationSenderRequestReceived
 	ProtocolOperationSenderResponseSettled
 	ProtocolOperationSenderContentDecision
+	ProtocolOperationReceiverWaitingActiveCapacity
+	ProtocolOperationReceiverWaitingRetainedCapacity
+	ProtocolOperationReceiverAdmissionReady
 )
 
 // ProtocolOperationCause is deliberately closed and text-free. Raw transport
@@ -195,6 +198,11 @@ func (runtime *runtimeCore) protocolOperationTracingEnabled() bool {
 }
 
 func retainProtocolOperationTrace(event ProtocolOperationTrace) bool {
+	if event.Stage == ProtocolOperationReceiverWaitingActiveCapacity ||
+		event.Stage == ProtocolOperationReceiverWaitingRetainedCapacity ||
+		event.Stage == ProtocolOperationReceiverAdmissionReady {
+		return true
+	}
 	// Block operations and streaming responses are the transfer hot path. Their
 	// successful milestones add no failure evidence and can turn diagnostics into
 	// a second data stream, so retain only exceptional outcomes at those boundaries.
@@ -264,4 +272,30 @@ func durationMillis(value time.Duration) uint64 {
 	}
 	millis := value / time.Millisecond
 	return uint64(millis)
+}
+
+func (client *rpcClient) waitRequestCapacity(ctx context.Context, call *operationCall) error {
+	var observer func(protocolsession.OperationCapacityWaitReason)
+	waited := false
+	if call.traceEnabled {
+		observer = func(reason protocolsession.OperationCapacityWaitReason) {
+			waited = true
+			stage := ProtocolOperationReceiverWaitingRetainedCapacity
+			if reason == protocolsession.OperationWaitingActiveCapacity {
+				stage = ProtocolOperationReceiverWaitingActiveCapacity
+			}
+			client.runtime.traceProtocolOperation(ProtocolOperationTrace{
+				Stage: stage, OperationID: call.id, RequestKind: call.requestKind,
+				OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
+			})
+		}
+	}
+	err := client.runtime.operations.WaitForCapacity(ctx, observer)
+	if waited && err == nil {
+		client.runtime.traceProtocolOperation(ProtocolOperationTrace{
+			Stage: ProtocolOperationReceiverAdmissionReady, OperationID: call.id, RequestKind: call.requestKind,
+			OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
+		})
+	}
+	return err
 }

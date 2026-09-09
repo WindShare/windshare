@@ -98,6 +98,9 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationSenderRequestReceived,
 		sessionruntime.ProtocolOperationSenderResponseSettled,
 		sessionruntime.ProtocolOperationSenderContentDecision,
+		sessionruntime.ProtocolOperationReceiverWaitingActiveCapacity,
+		sessionruntime.ProtocolOperationReceiverWaitingRetainedCapacity,
+		sessionruntime.ProtocolOperationReceiverAdmissionReady,
 	}, sessionruntime.ProtocolOperationStage(255), projectProtocolOperationStage)
 	assertClosedProjection(t, "protocol message kind", []protocolsession.MessageKind{
 		protocolsession.MessageListChildren, protocolsession.MessageCatalogResult,

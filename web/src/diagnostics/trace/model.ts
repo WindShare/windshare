@@ -1,3 +1,4 @@
+import type { ProtocolOperationPayloadV1 } from './protocol-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
@@ -13,9 +14,7 @@ import type {
   DiagnosticEventEnvelopeV1,
   LifecycleStateV1,
   PeerFailureCodeV1,
-  ProtocolFailureV1,
 } from '../export/incident-record-v1'
-import type { ProtocolMessageKindV1 } from '../incident/fact'
 import type { IncidentScopeKind } from '../incident/scope'
 
 export const TRACE_CAPTURE_STATES = Object.freeze([
@@ -352,26 +351,7 @@ export interface TraceEventPayloadByNameV1 {
     | Readonly<{ transition: 'retry_available_lanes' | 'wait_for_generation' | 'exhausted' }>
     | Readonly<{ transition: 'wait_for_availability'; delay_ms: number }>
   )
-  readonly protocol_operation:
-    | Readonly<{
-        transition: 'request_sent' | 'request_send_failed' | 'cancelled'
-        request_kind: ProtocolMessageKindV1
-      }>
-    | Readonly<{
-        transition: 'response_received'
-        request_kind: ProtocolMessageKindV1
-        response_kind: ProtocolMessageKindV1
-      }>
-    | Readonly<{
-        transition: 'authenticated_failure'
-        request_kind: ProtocolMessageKindV1
-        protocol_failure: ProtocolFailureV1
-      }>
-    | Readonly<{
-        transition: 'settled'
-        request_kind: ProtocolMessageKindV1
-        settlement: 'remote_final' | 'local_cancel' | 'session_terminal'
-      }>
+  readonly protocol_operation: ProtocolOperationPayloadV1
   readonly peer_attempt:
     | Readonly<{ stage: 'provider_fact'; fact: import('../../connectivity/peer-set/provider-facts').PeerProviderFact }>
     | Readonly<{

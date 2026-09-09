@@ -88,7 +88,7 @@ func TestReceiverSemanticRegistryRejectsEverySignedMalformedSenderControl(t *tes
 
 func TestMalformedSignedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

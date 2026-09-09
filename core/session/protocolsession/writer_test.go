@@ -19,7 +19,7 @@ func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	operations, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	operations, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	router, _ := NewRoleRouter(RoleSender, operations)
 	request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
 	operationAdmission, err := operations.ObserveInbound(DirectionReceiverToSender, request)
@@ -205,7 +205,7 @@ func TestSessionWriterSustainedControlStillAdvancesData(t *testing.T) {
 }
 
 func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
-	operations, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	operations, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	router, _ := NewRoleRouter(RoleSender, operations)
 	operationID := testOperationID(70)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})

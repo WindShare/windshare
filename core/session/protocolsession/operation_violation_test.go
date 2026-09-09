@@ -10,7 +10,7 @@ import (
 )
 
 func TestAuthenticatedOperationViolationSurvivesTombstoneAndRegistrationRace(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -52,7 +52,7 @@ func TestAuthenticatedOperationViolationSurvivesTombstoneAndRegistrationRace(t *
 func TestAuthenticatedOperationViolationObserverCannotCrossGeneration(t *testing.T) {
 	now := time.Unix(1_900_000_000, 0)
 	table, err := NewOperationTable(
-		OperationLimits{MaxActive: 4, MaxTombstones: 4},
+		OperationLimits{MaxActive: 4, MaxTracked: 4},
 		func() time.Time { return now },
 	)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestAuthenticatedOperationViolationObserverCannotCrossGeneration(t *testing
 }
 
 func TestOperationTablePublishesConflictingPeerAnswerStructurally(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestOperationTablePublishesConflictingPeerAnswerStructurally(t *testing.T) 
 }
 
 func TestWriterRegistersViolationObserverBeforeRequestExposure(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

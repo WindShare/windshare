@@ -173,7 +173,7 @@ func TestFragmentMessageRoutingHeaderIsBoundedAndOwned(t *testing.T) {
 
 func TestOperationTableEnforcesMultiplicityCancellationAndTerminal(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
-	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, func() time.Time { return now })
+	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestOperationTableRejectsWrongKindsAndBudgets(t *testing.T) {
 	}
 
 	now := time.Unix(1_700_000_000, 0)
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 1}, func() time.Time { return now })
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 1}, func() time.Time { return now })
 	firstID, secondID := testOperationID(20), testOperationID(21)
 	first := mustMessage(t, MessageOpenRevisions, &firstID, map[uint64]any{0: uint64(1)})
 	second := mustMessage(t, MessageRenewLease, &secondID, map[uint64]any{0: uint64(1)})
@@ -283,11 +283,10 @@ func TestOperationTableRejectsWrongKindsAndBudgets(t *testing.T) {
 	}
 	openFinal := mustMessage(t, MessageOpenResults, &firstID, map[uint64]any{0: uint64(1)})
 	_, _ = table.Observe(DirectionSenderToReceiver, openFinal)
-	_, _ = table.Observe(DirectionReceiverToSender, second)
-	leaseFinal := mustMessage(t, MessageLeaseResult, &secondID, map[uint64]any{0: uint64(1)})
-	if _, err := table.Observe(DirectionSenderToReceiver, leaseFinal); !errors.Is(err, ErrTombstoneBudget) {
-		t.Fatalf("tombstone budget: %v", err)
+	if _, err := table.Observe(DirectionReceiverToSender, second); !errors.Is(err, ErrTrackedOperationBudget) {
+		t.Fatalf("retained capacity must refuse the request before admission: %v", err)
 	}
+	leaseFinal := mustMessage(t, MessageLeaseResult, &secondID, map[uint64]any{0: uint64(1)})
 	if err := table.CancelGeneration(OperationGeneration{}); !errors.Is(err, ErrInvalidOperationID) {
 		t.Fatalf("zero local cancel: %v", err)
 	}
@@ -302,6 +301,12 @@ func TestOperationTableRejectsWrongKindsAndBudgets(t *testing.T) {
 	now = now.Add(OperationTombstoneLifetime)
 	if table.TombstoneCount() != 0 {
 		t.Fatal("expired tombstone retained budget")
+	}
+	if _, err := table.Observe(DirectionReceiverToSender, second); err != nil {
+		t.Fatalf("request after retention expired: %v", err)
+	}
+	if _, err := table.Observe(DirectionSenderToReceiver, leaseFinal); err != nil {
+		t.Fatalf("admitted result must have reserved capacity: %v", err)
 	}
 	if err := (*OperationTable)(nil).TerminateLocal(); err == nil {
 		t.Fatal("nil operation table terminated")
@@ -324,7 +329,7 @@ func TestOperationTableAcceptsEveryFrozenRequestResponseShape(t *testing.T) {
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+			table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 			operationID := testOperationID(byte(100 + index))
 			request := mustMessage(t, test.request, &operationID, map[uint64]any{0: uint64(1)})
 			if _, err := table.Observe(DirectionReceiverToSender, request); err != nil {
@@ -348,7 +353,7 @@ func TestOperationTableAcceptsEveryFrozenRequestResponseShape(t *testing.T) {
 		})
 	}
 
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(120)
 	request := mustMessage(t, MessageOpenRevisions, &operationID, map[uint64]any{0: uint64(1)})
 	_, _ = table.Observe(DirectionReceiverToSender, request)
@@ -362,7 +367,7 @@ func TestOperationTableAcceptsEveryFrozenRequestResponseShape(t *testing.T) {
 }
 
 func TestPeerSignalingOperationBindsOneOfferAndBidirectionalCandidates(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(126)
 	offer := mustMessage(t, MessagePeerOffer, &operationID, map[uint64]any{0: uint64(1)})
 	answer := mustMessage(t, MessagePeerAnswer, &operationID, map[uint64]any{0: uint64(1)})
@@ -406,7 +411,7 @@ func TestPeerSignalingOperationBindsOneOfferAndBidirectionalCandidates(t *testin
 }
 
 func TestOperationTableTreatsResignedSemanticFinalAsIdempotent(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	operationID := testOperationID(127)
 	request := mustMessage(t, MessageOpenRevisions, &operationID, map[uint64]any{0: uint64(1)})
 	if _, err := table.Observe(DirectionReceiverToSender, request); err != nil {
@@ -435,7 +440,7 @@ func TestOperationTableTreatsResignedSemanticFinalAsIdempotent(t *testing.T) {
 var testIDHolder = testOperationID(99)
 
 func TestRoleRouterBoundsDispatchAndTerminal(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 8, MaxTombstones: 8}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 8, MaxTracked: 8}, nil)
 	if _, err := NewRoleRouterWithLimits(RoleSender, table, RouterLimits{}); err == nil {
 		t.Fatal("invalid router limits were accepted")
 	}
@@ -497,7 +502,7 @@ func TestRoleRouterBoundsDispatchAndTerminal(t *testing.T) {
 }
 
 func TestRoleRouterDataOverflowCancelsOnlyItsOperation(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	router, _ := NewRoleRouterWithLimits(RoleReceiver, table, RouterLimits{ControlFrames: 2, DataFrames: 1})
 	operationID := testOperationID(40)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
@@ -525,7 +530,7 @@ func TestRoleRouterDataOverflowCancelsOnlyItsOperation(t *testing.T) {
 }
 
 func TestRoleRouterControlOverflowAndRegistrationErrors(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	router, _ := NewRoleRouterWithLimits(RoleSender, table, RouterLimits{ControlFrames: 1, DataFrames: 1})
 	firstID, secondID := testOperationID(121), testOperationID(122)
 	first := mustMessage(t, MessageListChildren, &firstID, map[uint64]any{0: uint64(1)})
@@ -547,12 +552,12 @@ func TestRoleRouterControlOverflowAndRegistrationErrors(t *testing.T) {
 		t.Fatalf("nil operation table = %v", err)
 	}
 
-	receiverTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 1}, nil)
+	receiverTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 1}, nil)
 	receiver, _ := NewRoleRouter(RoleReceiver, receiverTable)
 	if err := receiver.AcceptOutboundTerminal(); !errors.Is(err, ErrInvalidDirection) {
 		t.Fatalf("receiver terminal = %v", err)
 	}
-	senderTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTombstones: 1}, nil)
+	senderTable, _ := NewOperationTable(OperationLimits{MaxActive: 1, MaxTracked: 1}, nil)
 	sender, _ := NewRoleRouter(RoleSender, senderTable)
 	if err := sender.AcceptOutboundTerminal(); err != nil || !senderTable.Terminated() {
 		t.Fatalf("sender terminal = %v", err)
@@ -560,7 +565,7 @@ func TestRoleRouterControlOverflowAndRegistrationErrors(t *testing.T) {
 }
 
 func TestRoleRouterPrefersUnrelatedControlWithoutOvertakingOperationData(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 3, MaxTombstones: 3}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 3, MaxTracked: 3}, nil)
 	router, _ := NewRoleRouter(RoleReceiver, table)
 	operationID := testOperationID(126)
 	request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
@@ -610,7 +615,7 @@ func TestRoleRouterPrefersUnrelatedControlWithoutOvertakingOperationData(t *test
 }
 
 func TestRoleRouterSustainedControlStillAdvancesData(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 32, MaxTombstones: 32}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 32, MaxTracked: 32}, nil)
 	router, _ := NewRoleRouter(RoleReceiver, table)
 	for index := range RouterMaximumControlBurst * 2 {
 		operationID := testOperationID(byte(130 + index))
@@ -649,7 +654,7 @@ func TestRoleRouterSustainedControlStillAdvancesData(t *testing.T) {
 }
 
 func TestRoleRouterHasOnePrioritySchedulerOwner(t *testing.T) {
-	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+	table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 	router, _ := NewRoleRouter(RoleReceiver, table)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)

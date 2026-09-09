@@ -7,7 +7,7 @@ import (
 )
 
 func TestRouterContextCapabilitiesRemainBoundToExactOperation(t *testing.T) {
-	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+	table, err := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,7 +101,7 @@ func routerMissingContext() context.Context { return nil }
 
 func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 	t.Run("exact outbound replay", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 4, MaxTracked: 4}, nil)
 		router, _ := NewRoleRouter(RoleReceiver, table)
 		operationID := testOperationID(246)
 		request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
@@ -119,7 +119,7 @@ func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 	})
 
 	t.Run("authenticated terminal bypasses backlog", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouter(RoleReceiver, table)
 		terminal := mustMessage(t, MessageSessionTerminal, nil, map[uint64]any{0: uint64(1)})
 		disposition, err := router.RouteInbound(context.Background(), terminal)
@@ -130,7 +130,7 @@ func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 	})
 
 	t.Run("closed router rejects every authority mutation", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouter(RoleSender, table)
 		operationID := testOperationID(247)
 		request := mustMessage(t, MessageListChildren, &operationID, map[uint64]any{0: uint64(1)})
@@ -164,7 +164,7 @@ func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 	})
 
 	t.Run("unmatched authenticated violation is isolated", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouter(RoleSender, table)
 		operationID := testOperationID(248)
 		unmatched := mustMessage(t, MessageOperationError, &operationID, map[uint64]any{0: uint64(1)})
@@ -181,7 +181,7 @@ func TestRoleRouterReplayTerminalAndClosedStateContracts(t *testing.T) {
 
 func TestRoleRouterOverflowPreservesAuthenticatedOrderAndFailureScope(t *testing.T) {
 	t.Run("final cannot overtake admitted data", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouterWithLimits(
 			RoleReceiver,
 			table,
@@ -197,7 +197,7 @@ func TestRoleRouterOverflowPreservesAuthenticatedOrderAndFailureScope(t *testing
 	})
 
 	t.Run("invalid overflow generation remains isolated", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouter(RoleReceiver, table)
 		if disposition, err := router.handleDataOverflow(testOperationID(249), OperationGeneration{}); disposition != OperationDrop || err == nil {
 			t.Fatalf("invalid overflow disposition=%d error=%v", disposition, err)
@@ -205,7 +205,7 @@ func TestRoleRouterOverflowPreservesAuthenticatedOrderAndFailureScope(t *testing
 	})
 
 	t.Run("overflow error cannot displace control backlog", func(t *testing.T) {
-		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTombstones: 2}, nil)
+		table, _ := NewOperationTable(OperationLimits{MaxActive: 2, MaxTracked: 2}, nil)
 		router, _ := NewRoleRouterWithLimits(
 			RoleReceiver,
 			table,

@@ -205,7 +205,7 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 	now := time.Unix(10_000, 0)
 	runtime, channel := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2},
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
 		func() time.Time { return now },
 	)
 	lane, _ := runtime.lanes.selectLane(&runtime.initial)
@@ -294,7 +294,7 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 	runtime, channel := newUnstartedRuntimeWithPolicy(
 		t,
 		protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2},
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
 		func() time.Time { return now },
 	)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
@@ -424,7 +424,7 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 	now := time.Unix(20_000, 0)
 	runtime, _ := newUnstartedRuntimeWithPolicy(
 		t, protocolsession.RoleReceiver,
-		protocolsession.OperationLimits{MaxActive: 2, MaxTombstones: 2},
+		protocolsession.OperationLimits{MaxActive: 2, MaxTracked: 2},
 		func() time.Time { return now },
 	)
 	t.Cleanup(runtime.abortBeforeStart)

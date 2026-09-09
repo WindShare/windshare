@@ -12,7 +12,7 @@ import (
 func senderIngressContext(t *testing.T, message protocolsession.Message) context.Context {
 	t.Helper()
 	operations, err := protocolsession.NewOperationTable(
-		protocolsession.OperationLimits{MaxActive: 4, MaxTombstones: 4}, nil,
+		protocolsession.OperationLimits{MaxActive: 4, MaxTracked: 4}, nil,
 	)
 	if err != nil {
 		t.Fatal(err)
