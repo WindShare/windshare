@@ -380,7 +380,7 @@ func (destination *memoryDestination) PublishNoReplace(
 ) (FinalObservation, error) {
 	condition := destination.publish
 	if condition == 0 {
-		condition = FinalOwnedExact
+		condition = FinalOwnedAtExpectedSize
 	}
 	destination.final = condition
 	observation, _ := ObserveFinal(condition)
@@ -825,8 +825,8 @@ func TestRecoveryReducerCoversClosedOwnershipOutcomes(t *testing.T) {
 		"paused":               {paused, owned(OwnedReady), final(FinalAbsent), RecoveryActivate},
 		"publishing-retry":     {publishing, owned(OwnedReady), final(FinalAbsent), RecoveryRetryPublication},
 		"publishing-collision": {publishing, owned(OwnedReady), final(FinalCollision), RecoveryReturnCollision},
-		"publishing-complete":  {publishing, owned(OwnedReady), final(FinalOwnedExact), RecoveryCompletePublication},
-		"published":            {published, owned(OwnedStageMissing), final(FinalOwnedExact), RecoveryReturnPublished},
+		"publishing-complete":  {publishing, owned(OwnedReady), final(FinalOwnedAtExpectedSize), RecoveryCompletePublication},
+		"published":            {published, owned(OwnedStageMissing), final(FinalOwnedAtExpectedSize), RecoveryReturnPublished},
 		"retired":              {retired, owned(OwnedAbsent), final(FinalAbsent), RecoveryReturnRetired},
 		"quarantined":          {quarantined, owned(OwnedReady), final(FinalAbsent), RecoveryReturnQuarantined},
 		"unknown":              {active, owned(OwnedReady), final(FinalUnsafe), RecoveryInstallQuarantine},
@@ -946,9 +946,9 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 		final  FinalCondition
 		want   transfer.FileSettlementKind
 	}{
-		"complete-publication":  {publishing, OwnedReady, FinalOwnedExact, transfer.FilePublished},
+		"complete-publication":  {publishing, OwnedReady, FinalOwnedAtExpectedSize, transfer.FilePreviouslyPublished},
 		"publication-collision": {publishing, OwnedReady, FinalCollision, transfer.FileCollision},
-		"published":             {published, OwnedStageMissing, FinalOwnedExact, transfer.FilePublished},
+		"published":             {published, OwnedStageMissing, FinalOwnedAtExpectedSize, transfer.FilePreviouslyPublished},
 		"retired":               {retired, OwnedAbsent, FinalAbsent, transfer.FileFailed},
 		"quarantined":           {quarantined, OwnedReady, FinalAbsent, transfer.FileItemBlocked},
 	} {
@@ -966,6 +966,14 @@ func TestBeginExistingReducesTerminalAndRecoveryCuts(t *testing.T) {
 			settlement, ok := start.ImmediateSettlement()
 			if !ok || settlement.Kind() != test.want {
 				t.Fatalf("settlement = (%d, %t), want %d", settlement.Kind(), ok, test.want)
+			}
+			if test.want == transfer.FilePreviouslyPublished {
+				if _, verified := settlement.VerifiedCheckpoint(); verified {
+					t.Fatal("historical publication exposed current range proof")
+				}
+				if _, provenance := settlement.PublicationProvenance(); provenance {
+					t.Fatal("historical publication claimed a new transfer")
+				}
 			}
 			if test.want == transfer.FileCollision {
 				if repository.record.Phase() != checkpointmodel.PhasePaused ||

@@ -20,13 +20,14 @@ type failureV3 struct {
 }
 
 type fileOutcomesV3 struct {
-	DownloadedFiles      string `json:"downloaded_files"`
-	ResumedFiles         string `json:"resumed_files"`
-	PausedFiles          string `json:"paused_files"`
-	CollisionFiles       string `json:"collision_files"`
-	ItemBlockedFiles     string `json:"item_blocked_files"`
-	FailedFiles          string `json:"failed_files"`
-	ModifiedTimeWarnings string `json:"modified_time_warnings"`
+	DownloadedFiles          string `json:"downloaded_files"`
+	PreviouslyPublishedFiles string `json:"previously_published_files"`
+	ResumedFiles             string `json:"resumed_files"`
+	PausedFiles              string `json:"paused_files"`
+	CollisionFiles           string `json:"collision_files"`
+	ItemBlockedFiles         string `json:"item_blocked_files"`
+	FailedFiles              string `json:"failed_files"`
+	ModifiedTimeWarnings     string `json:"modified_time_warnings"`
 }
 
 type capacityWaitV3 struct {
@@ -36,16 +37,17 @@ type capacityWaitV3 struct {
 }
 
 type progressPayloadV3 struct {
-	Discovery          string         `json:"discovery"`
-	CountersExact      bool           `json:"counters_exact"`
-	DiscoveredFiles    string         `json:"discovered_files"`
-	DiscoveredBytes    string         `json:"discovered_bytes"`
-	PublishedFiles     string         `json:"published_files"`
-	PublishedBytes     string         `json:"published_bytes"`
-	VerifiedBytes      string         `json:"verified_bytes"`
-	NewlyVerifiedBytes string         `json:"newly_verified_bytes"`
-	FileOutcomes       fileOutcomesV3 `json:"file_outcomes"`
-	CapacityWait       capacityWaitV3 `json:"capacity_wait"`
+	Discovery                string         `json:"discovery"`
+	CountersExact            bool           `json:"counters_exact"`
+	DiscoveredFiles          string         `json:"discovered_files"`
+	DiscoveredBytes          string         `json:"discovered_bytes"`
+	PublishedFiles           string         `json:"published_files"`
+	PublishedBytes           string         `json:"published_bytes"`
+	PreviouslyPublishedBytes string         `json:"previously_published_bytes"`
+	VerifiedBytes            string         `json:"verified_bytes"`
+	NewlyVerifiedBytes       string         `json:"newly_verified_bytes"`
+	FileOutcomes             fileOutcomesV3 `json:"file_outcomes"`
+	CapacityWait             capacityWaitV3 `json:"capacity_wait"`
 }
 
 type sharingSubjectPayloadV3 struct {

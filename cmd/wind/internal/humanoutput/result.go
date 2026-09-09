@@ -52,6 +52,9 @@ func formatOutcomeSummary(result clievent.TransferResult, separator string) stri
 	if outcomes.DownloadedFiles != 0 || terminalFileOutcomes(outcomes) == 0 {
 		parts = append(parts, resultCount(result, outcomes.DownloadedFiles)+" downloaded")
 	}
+	if outcomes.PreviouslyPublishedFiles != 0 {
+		parts = append(parts, resultCount(result, outcomes.PreviouslyPublishedFiles)+" already downloaded")
+	}
 	if outcomes.ResumedFiles != 0 {
 		parts = append(parts, resultCount(result, outcomes.ResumedFiles)+" resumed")
 	}

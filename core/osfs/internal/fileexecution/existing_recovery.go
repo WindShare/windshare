@@ -147,12 +147,7 @@ func (recovery *existingFileRecovery) start(
 	case RecoveryReturnCollision:
 		return recovery.returnCollision(ctx)
 	case RecoveryReturnPublished:
-		settlement, err := verifiedSettlement(
-			transfer.FilePublished, recovery.binding, recovery.record,
-		)
-		if err == nil {
-			settlement, err = settlement.WithPublicationProvenance(transfer.FileResumed)
-		}
+		settlement, err := transfer.NewPreviouslyPublishedFileSettlement(recovery.binding)
 		return recovery.engine.terminalStart(
 			ctx, recovery.destination, recovery.ownedFile, settlement, err,
 		)

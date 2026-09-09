@@ -66,7 +66,9 @@ Traces may contain filenames, local paths, and connection details. They exclude 
 
 ## Resume
 
-Running the same compatible `get` again in the same output directory resumes verified data.
+Running the same compatible `get` again in the same output directory resumes staged data.
+Previously delivered files keep their completion receipts without rereading or revalidating their current contents.
+Resume trusts private staged data to remain unchanged; it does not detect arbitrary external edits.
 
 ```text
 wind resume list -o <directory>

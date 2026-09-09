@@ -69,6 +69,43 @@ func TestOutputSettlementSumTypesRejectMalformedStates(t *testing.T) {
 	}
 }
 
+func TestHistoricalDeliveryCannotBecomeContentOrCommitEvidence(t *testing.T) {
+	binding, checkpoint := outputLifecycleFixture(t)
+	receipt, err := NewPreviouslyPublishedFileSettlement(binding)
+	if err != nil || !receipt.matchesBinding(binding) {
+		t.Fatalf("delivery receipt = (%+v, %v)", receipt, err)
+	}
+	start, err := NewFileSettlementStart(receipt)
+	if err != nil || !start.valid() {
+		t.Fatalf("historical start = (%+v, %v)", start, err)
+	}
+	if _, _, transaction := start.Transaction(); transaction {
+		t.Fatal("historical delivery exposed a writable transaction")
+	}
+	if _, verified := receipt.VerifiedCheckpoint(); verified {
+		t.Fatal("historical delivery exposed current content proof")
+	}
+	if _, provenance := receipt.PublicationProvenance(); provenance {
+		t.Fatal("historical delivery claimed current transfer provenance")
+	}
+	if receipt.matchesCommittedOutput(binding, DirectTreeCapabilities{}) {
+		t.Fatal("commit accepted a historical delivery instead of new publication")
+	}
+	if _, err := receipt.WithPublicationProvenance(FileResumed); !errors.Is(err, ErrInvalidOutputSettlement) {
+		t.Fatalf("receipt promoted to resumed content: %v", err)
+	}
+	if _, err := NewVerifiedFileSettlement(FilePreviouslyPublished, checkpoint); !errors.Is(err, ErrInvalidOutputSettlement) {
+		t.Fatalf("historical checkpoint accepted: %v", err)
+	}
+	if _, err := NewPreviouslyPublishedFileSettlement(MaterializedFileBinding{}); !errors.Is(err, ErrInvalidOutputSettlement) {
+		t.Fatalf("unbound receipt accepted: %v", err)
+	}
+	receipt.checkpoint, receipt.hasCheckpoint = checkpoint, true
+	if receipt.valid() {
+		t.Fatal("history and content proof were allowed to share one result")
+	}
+}
+
 func TestOutputLifecycleReasonsAndAuthorityFunctionAreClosedDomains(t *testing.T) {
 	if FilePauseReason(0).valid() || !FilePauseInterrupted.valid() || (FilePauseDependencyContract + 1).valid() {
 		t.Fatal("file pause reason admitted a value outside its closed domain")

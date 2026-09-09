@@ -108,7 +108,7 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 	)
 	fileOutcomes := v3TraceSchema(v3TraceFields(
 		v3TraceDecimal,
-		"downloaded_files", "resumed_files", "paused_files", "collision_files",
+		"downloaded_files", "resumed_files", "previously_published_files", "paused_files", "collision_files",
 		"item_blocked_files", "failed_files", "modified_time_warnings",
 	))
 	capacityWait := v3TraceSchema(v3TraceFields(
@@ -120,7 +120,7 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 		v3TraceFields(
 			v3TraceDecimal,
 			"discovered_files", "discovered_bytes", "published_files", "published_bytes",
-			"verified_bytes", "newly_verified_bytes",
+			"verified_bytes", "newly_verified_bytes", "previously_published_bytes",
 		),
 		v3TraceObjectField("file_outcomes", fileOutcomes, false),
 		v3TraceObjectField("capacity_wait", capacityWait, false),

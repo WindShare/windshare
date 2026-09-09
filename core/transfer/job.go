@@ -107,20 +107,22 @@ type FileJobFailure struct {
 // settlements. It intentionally carries counts rather than paths or checkpoint
 // facts so consumers can report provenance without retaining a second manifest.
 type FileOutcomeSummary struct {
-	DownloadedFiles         uint64
-	ResumedFiles            uint64
-	PausedFiles             uint64
-	CollisionFiles          uint64
-	FailedFiles             uint64
-	ItemBlockedFiles        uint64
-	RevisionConflictFiles   uint64
-	CheckpointInvalidFiles  uint64
-	OwnedObjectUnknownFiles uint64
-	ModifiedTimeWarnings    uint64
+	DownloadedFiles          uint64
+	ResumedFiles             uint64
+	PreviouslyPublishedFiles uint64
+	PausedFiles              uint64
+	CollisionFiles           uint64
+	FailedFiles              uint64
+	ItemBlockedFiles         uint64
+	RevisionConflictFiles    uint64
+	CheckpointInvalidFiles   uint64
+	OwnedObjectUnknownFiles  uint64
+	ModifiedTimeWarnings     uint64
 }
 
 func (summary FileOutcomeSummary) PublishedFiles() uint64 {
 	published, _ := checkedAdd(summary.DownloadedFiles, summary.ResumedFiles)
+	published, _ = checkedAdd(published, summary.PreviouslyPublishedFiles)
 	return published
 }
 
@@ -608,7 +610,7 @@ func (r *jobRun) handleImmediateSettlement(
 	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {
-	case FilePublished:
+	case FilePublished, FilePreviouslyPublished:
 		if releaseErr != nil {
 			r.recordFileFailure(FileJobFailure{
 				FileID: plan.file, Path: plan.failurePath(), Stage: FailureLeaseRelease,

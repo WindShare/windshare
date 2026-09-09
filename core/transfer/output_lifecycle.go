@@ -17,6 +17,7 @@ type FileSettlementKind uint8
 
 const (
 	FilePublished FileSettlementKind = iota + 1
+	FilePreviouslyPublished
 	FilePaused
 	FileCollision
 	FileItemBlocked
@@ -119,6 +120,18 @@ func (settlement FileSettlement) PublicationProvenance() (FilePublicationProvena
 
 func (s FileSettlement) Kind() FileSettlementKind          { return s.kind }
 func (s FileSettlement) Target() FileMaterializationTarget { return s.target }
+
+// NewPreviouslyPublishedFileSettlement restores a delivery receipt, not a proof
+// of the public file's current bytes. Rechecking every completed file would make
+// ordinary resume scan old downloads and could interfere with user edits.
+func NewPreviouslyPublishedFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
+	if !binding.valid() {
+		return FileSettlement{}, ErrInvalidOutputSettlement
+	}
+	return FileSettlement{
+		kind: FilePreviouslyPublished, target: binding.Target(), binding: binding, hasBinding: true,
+	}, nil
+}
 
 func NewFailedFileSettlement(binding MaterializedFileBinding) (FileSettlement, error) {
 	if !binding.valid() {
@@ -277,7 +290,7 @@ func (settlement FileSettlement) validWithoutWarnings() bool {
 		}
 		return !settlement.hasBinding ||
 			settlement.binding.valid() && settlement.binding.Target() == settlement.target
-	case FileFailed:
+	case FilePreviouslyPublished, FileFailed:
 		return settlement.provenance == 0 && settlement.target.valid() && settlement.hasBinding && settlement.binding.valid() &&
 			settlement.binding.Target() == settlement.target && !settlement.hasCheckpoint &&
 			settlement.stateRef.IsZero() && settlement.itemBlockReason == 0
@@ -345,7 +358,7 @@ func (settlement FileSettlement) matchesBinding(binding MaterializedFileBinding)
 		}
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
-	case FileFailed:
+	case FilePreviouslyPublished, FileFailed:
 		settledBinding, ok := settlement.MaterializedBinding()
 		return ok && settledBinding == binding
 	default:
@@ -357,7 +370,7 @@ func (settlement FileSettlement) matchesCommittedOutput(
 	binding MaterializedFileBinding,
 	capabilities DirectTreeCapabilities,
 ) bool {
-	if !settlement.matchesBinding(binding) {
+	if !settlement.matchesBinding(binding) || settlement.Kind() == FilePreviouslyPublished {
 		return false
 	}
 	if settlement.Kind() != FilePublished {
@@ -472,7 +485,7 @@ func NewFileTransactionStart(transaction FileTransaction, durable VerifiedDurabl
 
 func NewFileSettlementStart(settlement FileSettlement) (FileStart, error) {
 	switch settlement.Kind() {
-	case FilePublished, FileCollision, FileItemBlocked, FileFailed:
+	case FilePublished, FilePreviouslyPublished, FileCollision, FileItemBlocked, FileFailed:
 		_, durablePublication := settlement.VerifiedCheckpoint()
 		if !settlement.valid() || settlement.Kind() == FilePublished && !durablePublication {
 			return FileStart{}, ErrInvalidOutputSettlement

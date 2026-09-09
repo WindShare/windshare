@@ -51,7 +51,7 @@ func reduceOrdinaryResumeRecord(
 func reducePublishedResumeRecord(
 	final fileexecution.FinalObservation,
 ) ordinaryResumeDecision {
-	if final.Condition() == fileexecution.FinalOwnedExact {
+	if final.Condition() == fileexecution.FinalOwnedAtExpectedSize {
 		return ordinaryResumeState(resumeauthority.ItemPublished)
 	}
 	return ordinaryResumeBlock(resumeauthority.ItemBlockPublicationUnknown)
@@ -62,7 +62,7 @@ func reducePublishingResumeRecord(
 	final fileexecution.FinalObservation,
 ) ordinaryResumeDecision {
 	switch final.Condition() {
-	case fileexecution.FinalOwnedExact:
+	case fileexecution.FinalOwnedAtExpectedSize:
 		return ordinaryResumeState(resumeauthority.ItemPublished)
 	case fileexecution.FinalAbsent, fileexecution.FinalCollision:
 		// Destination occupation changes only when publication may proceed. It
@@ -126,7 +126,7 @@ func reduceRetiredResumeRecord(
 	final fileexecution.FinalObservation,
 ) ordinaryResumeDecision {
 	if record.RetirementReason() == checkpointmodel.RetirementPublished &&
-		final.Condition() == fileexecution.FinalOwnedExact {
+		final.Condition() == fileexecution.FinalOwnedAtExpectedSize {
 		return ordinaryResumeState(resumeauthority.ItemPublished)
 	}
 	return ordinaryResumeState(resumeauthority.ItemFailed)

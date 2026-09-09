@@ -20,6 +20,24 @@ const (
 	displayPathCanary = `C:\private\catalog\secret-file-name-token.txt`
 )
 
+func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
+	snapshot, err := clievent.NewProgressSnapshot(clievent.ProgressSpec{
+		DiscoveredFiles: 1, DiscoveredBytes: 4,
+		PublishedFiles: 1, PublishedBytes: 4, PreviouslyPublishedBytes: 4,
+		FileOutcomes: clievent.FileOutcomes{PreviouslyPublishedFiles: 1},
+		Discovery:    clievent.DiscoveryComplete, CountersExact: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress, err := projectProgress(snapshot)
+	if err != nil || progress.PreviouslyPublishedBytes != "4" || progress.VerifiedBytes != "0" ||
+		progress.NewlyVerifiedBytes != "0" || progress.FileOutcomes.PreviouslyPublishedFiles != "1" ||
+		progress.FileOutcomes.ResumedFiles != "0" {
+		t.Fatalf("historical trace = (%+v, %v)", progress, err)
+	}
+}
+
 func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 	events := allTraceEvents(t)
 	if got, want := len(events), 28; got != want {
