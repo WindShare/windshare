@@ -5,7 +5,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -189,33 +188,27 @@ func TestLocalSTUNGatherStopsWhenContextIsCanceled(t *testing.T) {
 	}
 }
 
+const idleWireInterval = 5 * time.Millisecond
+const stunTestPacketBytes = 1500
+
 func TestIdleHandoffRefreshesActualSTUNAndStopsBeforeICE(t *testing.T) {
 	server, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
-	observed := make(chan struct{}, 16)
-	var requests atomic.Int32
-	go func() {
-		buffer := make([]byte, 1500)
-		for {
-			n, source, readErr := server.ReadFrom(buffer)
-			if readErr != nil {
-				return
+	refreshed := make(chan Event, 1)
+	authority := New(Config{
+		IdleInterval: idleWireInterval, RefreshTimeout: idleTestBudget,
+		Observe: func(event Event) {
+			if event.Kind == STUNRefreshFinished {
+				select {
+				case refreshed <- event:
+				default:
+				}
 			}
-			request := &stun.Message{Raw: append([]byte{}, buffer[:n]...)}
-			if request.Decode() != nil {
-				continue
-			}
-			requests.Add(1)
-			address := source.(*net.UDPAddr)
-			response, _ := stun.Build(stun.NewTransactionIDSetter(request.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: address.IP, Port: address.Port})
-			_, _ = server.WriteTo(response.Raw, source)
-			observed <- struct{}{}
-		}
-	}()
-	authority := New(Config{IdleInterval: 5 * time.Millisecond, RefreshTimeout: 20 * time.Millisecond})
+		},
+	})
 	defer authority.Close()
 	lease, err := authority.Acquire([16]byte{1}, 1, [16]byte{1}, []netip.Addr{netip.MustParseAddr("127.0.0.1")})
 	if err != nil {
@@ -223,33 +216,37 @@ func TestIdleHandoffRefreshesActualSTUNAndStopsBeforeICE(t *testing.T) {
 	}
 	defer lease.Close()
 	servers := []netip.AddrPort{server.LocalAddr().(*net.UDPAddr).AddrPort()}
-	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(time.Second)); err != nil {
+	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(idleTestBudget)); err != nil {
 		t.Fatal(err)
 	}
 	for range 2 {
-		select {
-		case <-observed:
-		case <-time.After(time.Second):
-			t.Fatal("refresh did not reach wire")
+		respond := readSTUNRequest(t, server)
+		respond()
+		if event := receiveHandoff(t, refreshed); event.Result != "completed" {
+			t.Fatalf("wire refresh did not complete: %+v", event)
 		}
 	}
-	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(time.Second)); err != nil {
+	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(idleTestBudget)); err != nil {
 		t.Fatal(err)
 	}
+	// Withhold a wire response so replacing/claiming idle work also exercises
+	// cancellation rather than depending on an already completed refresh.
+	_ = readSTUNRequest(t, server)
+	idle := lease.entry.idle
 	mux, release, err := lease.Claim()
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := requests.Load()
-	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(time.Second)); err != ErrActive {
+	select {
+	case <-idle.done:
+	default:
+		t.Fatal("ICE received the socket before idle work exited")
+	}
+	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(idleTestBudget)); err != ErrActive {
 		t.Fatal(err)
 	}
-	time.Sleep(20 * time.Millisecond)
-	if requests.Load() != before {
-		t.Fatal("idle STUN continued during ICE ownership")
-	}
 	release()
-	if _, err = mux.GetRelayedAddr(nil, time.Millisecond); err == nil {
+	if _, err = mux.GetRelayedAddr(nil, 0); err == nil {
 		t.Fatal("TURN accepted")
 	}
 	if _, err = mux.GetConn("x", &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1}); err == nil {
@@ -258,17 +255,60 @@ func TestIdleHandoffRefreshesActualSTUNAndStopsBeforeICE(t *testing.T) {
 	if _, err = mux.GetConnForURL("x", "stun:x", &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 1}); err == nil {
 		t.Fatal("foreign endpoint accepted")
 	}
-	if _, err = mux.GetXORMappedAddrForLocal(context.Background(), server.LocalAddr(), mux.GetListenAddresses()[0], time.Millisecond); err != nil {
+	// A fresh destination guarantees uncached discovery and cannot consume
+	// datagrams left on the heartbeat server by canceled transactions.
+	lookupServer, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = mux.GetXORMappedAddr(server.LocalAddr(), time.Millisecond); err != nil {
+	defer lookupServer.Close()
+	lookup := runHandoff(func() error {
+		_, lookupErr := mux.GetXORMappedAddrForLocal(context.Background(), lookupServer.LocalAddr(), mux.GetListenAddresses()[0], handoffTestTimeout)
+		return lookupErr
+	})
+	respond := readSTUNRequest(t, lookupServer)
+	respond()
+	if err = receiveHandoff(t, lookup); err != nil {
 		t.Fatal(err)
 	}
-	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(-time.Second)); err != ErrInvalid {
+	if _, err = mux.GetXORMappedAddr(lookupServer.LocalAddr(), handoffTestTimeout); err != nil {
+		t.Fatal(err)
+	}
+	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(-idleTestBudget)); err != ErrInvalid {
 		t.Fatal(err)
 	}
 	authority.Retire(1)
-	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(time.Second)); err != ErrRetired {
+	if err = lease.StartIdle(context.Background(), servers, time.Now().Add(idleTestBudget)); err != ErrRetired {
 		t.Fatal(err)
+	}
+}
+
+// The test controls responses so wire receipt cannot stand in for completion,
+// and canceled refreshes can deliberately leave the discovery cache empty.
+func readSTUNRequest(t *testing.T, server net.PacketConn) func() {
+	t.Helper()
+	if err := server.SetReadDeadline(time.Now().Add(handoffTestTimeout)); err != nil {
+		t.Fatal(err)
+	}
+	var packet [stunTestPacketBytes]byte
+	n, source, err := server.ReadFrom(packet[:])
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &stun.Message{Raw: packet[:n]}
+	if err = request.Decode(); err != nil {
+		t.Fatal(err)
+	}
+	address := source.(*net.UDPAddr)
+	response, err := stun.Build(stun.NewTransactionIDSetter(request.TransactionID), stun.BindingSuccess,
+		&stun.XORMappedAddress{IP: address.IP, Port: address.Port})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return func() {
+		t.Helper()
+		if _, err := server.WriteTo(response.Raw, source); err != nil {
+			t.Fatal(err)
+		}
 	}
 }
