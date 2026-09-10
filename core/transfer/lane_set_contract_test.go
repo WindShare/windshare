@@ -106,7 +106,7 @@ func TestLaneSetRacesOneWinnerAndCancelsLateLane(t *testing.T) {
 	}
 }
 
-func TestLaneSetFairnessFailureHotSwitchAndEpochReplacement(t *testing.T) {
+func TestLaneSetExplorationFailureHotSwitchAndEpochReplacement(t *testing.T) {
 	descriptor := transferDescriptor(t, 1)
 	demand := validDemand(t, descriptor, 0)
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](6), RaceWidth: 1})
@@ -127,8 +127,9 @@ func TestLaneSetFairnessFailureHotSwitchAndEpochReplacement(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if firstCalls.Load() != 2 || secondCalls.Load() != 2 {
-		t.Fatalf("unfair calls first=%d second=%d", firstCalls.Load(), secondCalls.Load())
+	lanes.attempts.Wait()
+	if firstCalls.Load() == 0 || secondCalls.Load() == 0 || firstCalls.Load()+secondCalls.Load() > 5 {
+		t.Fatalf("bounded exploration calls first=%d second=%d", firstCalls.Load(), secondCalls.Load())
 	}
 
 	failing, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](7), RaceWidth: 1})

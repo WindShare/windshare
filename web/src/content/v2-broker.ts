@@ -259,7 +259,11 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       const loads = [...this.#inflight.values()].filter(
         (load) => !load.settled && sameBytes(load.demand.leaseId, leaseId),
       )
-      if (loads.length === 0) return
+      if (loads.length === 0) {
+        // A winner can unblock output before its canceled probes have settled.
+        await this.#lanes.waitForLeaseIdle(leaseId)
+        return
+      }
       await Promise.allSettled(loads.map((load) => load.promise))
     }
   }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"testing"
-	"time"
 
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -68,7 +67,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		for index := 1; index <= MaxDemandLaneAttempts; index++ {
 			attempted[LaneIdentity{ID: uint32(index), Epoch: 1}] = struct{}{}
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), attempted)
+		selected, exhausted, err := lanes.candidates(context.Background(), attempted, 1)
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempt budget = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -82,7 +81,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		})); err != nil {
 			t.Fatal(err)
 		}
-		selected, exhausted, err := lanes.candidates(context.Background(), map[LaneIdentity]struct{}{identity: {}})
+		selected, exhausted, err := lanes.candidates(context.Background(), map[LaneIdentity]struct{}{identity: {}}, 1)
 		if err != nil || !exhausted || len(selected) != 0 {
 			t.Fatalf("attempted identities = selected %d, exhausted %v, err %v", len(selected), exhausted, err)
 		}
@@ -92,7 +91,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 4)
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		if _, _, err := lanes.candidates(ctx, nil); !errors.Is(err, context.Canceled) {
+		if _, _, err := lanes.candidates(ctx, nil, 1); !errors.Is(err, context.Canceled) {
 			t.Fatalf("cancelled candidate wait = %v", err)
 		}
 	})
@@ -101,7 +100,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		lanes := newBoundaryLaneSet(t, 5)
 		done := make(chan error, 1)
 		go func() {
-			_, _, err := lanes.candidates(context.Background(), nil)
+			_, _, err := lanes.candidates(context.Background(), nil, 1)
 			done <- err
 		}()
 		lanes.stop()
@@ -118,7 +117,7 @@ func TestLaneCandidateWaitAndAttemptBudgetsAreTerminal(t *testing.T) {
 		}
 		done := make(chan laneCandidatesResult, 1)
 		go func() {
-			selected, _, err := lanes.candidates(context.Background(), nil)
+			selected, _, err := lanes.candidates(context.Background(), nil, 1)
 			done <- laneCandidatesResult{selected: selected, err: err}
 		}()
 		if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, boundaryBlockLaneFunc(func(context.Context, BlockDemand) (records.BlockRecord, error) {
@@ -144,17 +143,6 @@ func TestLaneFetchTerminatesAfterEveryIdentityRejectsAdmission(t *testing.T) {
 	}
 	if _, err := lanes.fetch(context.Background(), BlockDemand{}, func(records.BlockRecord) error { return nil }); !errors.Is(err, rejection) {
 		t.Fatalf("exhausted lane fetch = %v", err)
-	}
-}
-
-func TestLaneLatencyAccountingClampsClockRegressionAndSmoothsSamples(t *testing.T) {
-	lanes := newBoundaryLaneSet(t, 8)
-	state := &laneState{inflight: 3}
-	lanes.finish(state, -time.Second, records.BlockRecord{}, nil, false, false)
-	lanes.finish(state, time.Second, records.BlockRecord{}, nil, false, false)
-	lanes.finish(state, 3*time.Second, records.BlockRecord{}, nil, false, false)
-	if state.inflight != 0 || state.latency != 1500*time.Millisecond {
-		t.Fatalf("lane accounting = inflight %d, latency %v", state.inflight, state.latency)
 	}
 }
 

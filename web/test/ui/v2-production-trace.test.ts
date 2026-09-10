@@ -25,6 +25,32 @@ import {
 } from '../../src/ui/v2-production-trace'
 import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 
+it('exports scheduling decisions with session, lane, block, and completion estimates', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createProtocolTraceSource(composition.trace)
+  for (const purpose of ['content', 'probe', 'rescue'] as const) {
+    const event = {
+      eventName: 'content_scheduling' as const,
+      correlation: {
+        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        lane: { id: 2, epoch: 3 },
+      },
+      dispatchSequence: 10,
+      fileId: 'AQAAAAAAAAAAAAAAAAAAAA', localBlockIndex: 7n,
+      route: 'application-relay' as const, purpose,
+      expectedMilliseconds: 12.25, pendingBytes: 4096, bytesPerSecond: 1000.2,
+    }
+    const projected = projectProtocolTraceEvent(event)
+    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(projected.payload).toMatchObject({
+      dispatch_sequence: '10', block_index: '7', purpose, expected_ms: 13, bytes_per_second: 1000,
+    })
+    source.current?.(event)
+  }
+  expect(composition.runtime.status().retained_event_count).toBe('3')
+})
+
 it('exports a sealed unsampled final per-download record through the existing trace', () => {
     const metrics = new DownloadMetrics('01010101-0101-4101-8101-010101010101', true, () => 0)
     metrics.delivered('revision', 0n, 10n, 'direct')

@@ -105,7 +105,17 @@ func TestLaneSettlementAttributesAuthenticatedWinnersByRoute(t *testing.T) {
 	})); err != nil {
 		t.Fatal(err)
 	}
+	suspension, err := lanes.SuspendContent(LaneIdentity{ID: 2, Epoch: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
 	for index := range uint64(2) {
+		if index == 1 {
+			lanes.Remove(LaneIdentity{ID: 1, Epoch: 1})
+			if err := suspension.Resume(); err != nil {
+				t.Fatal(err)
+			}
+		}
 		demand := validDemand(t, descriptor, index)
 		if _, err := lanes.fetch(context.Background(), demand, validateTransferRecord(demand)); err != nil {
 			t.Fatal(err)
@@ -148,7 +158,7 @@ func TestLaneSettlementCreditsReassignmentOnlyAfterNextRoundAdmission(t *testing
 	})); err != nil {
 		t.Fatal(err)
 	}
-	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := lanes.Add(LaneIdentity{ID: 2, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {
 		t.Fatal(err)
@@ -277,7 +287,7 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 		t.Fatal(err)
 	}
 	var alternateCalls uint64
-	if err := wrapped.Add(LaneIdentity{ID: 5, Epoch: 1}, LaneRouteDirect, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
+	if err := wrapped.Add(LaneIdentity{ID: 5, Epoch: 1}, LaneRouteRelay, laneFunction(func(context.Context, BlockDemand) (records.BlockRecord, error) {
 		alternateCalls++
 		return transferRecord(t, descriptor, 0), nil
 	})); err != nil {

@@ -12,6 +12,7 @@ import {
 const CORRELATED_TRACE_EVENT_NAMES: ReadonlySet<TraceDomainEventNameV1> = new Set([
   'protocol_operation',
   'operation_recovery',
+  'content_scheduling',
   'peer_attempt',
   'peer_recovery',
   'lane_transition',

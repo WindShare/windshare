@@ -1,6 +1,8 @@
 package transfer
 
 import (
+	"errors"
+	"fmt"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"math"
@@ -377,7 +379,6 @@ func (policy ContentRoutePolicy) Allows(route LaneRoute) bool {
 
 func (s *LaneSet) finish(
 	state *laneState,
-	elapsed time.Duration,
 	record records.BlockRecord,
 	err error,
 	canceled bool,
@@ -392,9 +393,116 @@ func (s *LaneSet) finish(
 	if err != nil {
 		state.recordFailure(canceled)
 	} else {
-		state.recordSuccess(elapsed)
+		state.failures = 0
 	}
 	settlement := s.settleLaneLocked(state)
 	s.mu.Unlock()
 	s.publishLaneSettlement(settlement)
+}
+
+// demandNotAdmittedError is an opaque concrete capability proving that a lane
+// failed before its operation reached a transport. It requires explicit
+// construction through NewDemandNotAdmitted; accepting an incidental public
+// marker would let unrelated errors accidentally authorize duplicate work.
+type demandNotAdmittedError struct{ cause error }
+
+func NewDemandNotAdmitted(cause error) error {
+	if cause == nil {
+		cause = ErrInvalidLane
+	}
+	return &demandNotAdmittedError{cause: cause}
+}
+
+func (e *demandNotAdmittedError) Error() string {
+	return fmt.Sprintf("demand was not admitted: %v", e.cause)
+}
+func (e *demandNotAdmittedError) Unwrap() error { return e.cause }
+
+func isDemandNotAdmitted(err error) bool {
+	var notAdmitted *demandNotAdmittedError
+	return errors.As(err, &notAdmitted) && notAdmitted != nil
+}
+
+// demandReassignableAfterRetirementError is an opaque proof that an admitted
+// block operation has acquired its exact-generation cancellation tombstone.
+// Block reads are immutable under their revision lease, so a different lane may
+// now issue a fresh operation without aliasing responses from the retired one.
+type demandReassignableAfterRetirementError struct{ cause error }
+
+func NewDemandReassignableAfterRetirement(cause error) error {
+	if cause == nil {
+		cause = ErrInvalidLane
+	}
+	return &demandReassignableAfterRetirementError{cause: cause}
+}
+
+func (e *demandReassignableAfterRetirementError) Error() string {
+	return fmt.Sprintf("demand is reassignable after retiring its admitted operation: %v", e.cause)
+}
+func (e *demandReassignableAfterRetirementError) Unwrap() error { return e.cause }
+
+func isDemandReassignableAfterRetirement(err error) bool {
+	var retired *demandReassignableAfterRetirementError
+	return errors.As(err, &retired) && retired != nil
+}
+
+func (s *LaneSet) logicalLaneCountLocked() int {
+	count := len(s.lanes)
+	for laneID := range s.contentSuspensions {
+		if s.lanes[laneID] == nil {
+			count++
+		}
+	}
+	return count
+}
+
+// SuspendContent removes an authenticated logical lane from content admission
+// without detaching its control transport. The initial exact identity prevents
+// suspending an unintended incarnation, while the returned capability follows
+// replacements because reconnects must not bypass an active admission policy.
+func (s *LaneSet) SuspendContent(identity LaneIdentity) (*ContentLaneSuspension, error) {
+	if identity.ID == 0 {
+		return nil, ErrInvalidLane
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, ErrLaneClosed
+	}
+	state := s.lanes[identity.ID]
+	if state == nil || state.identity != identity {
+		return nil, ErrStaleLane
+	}
+	if _, exists := s.contentSuspensions[identity.ID]; exists {
+		return nil, ErrInvalidLane
+	}
+	policy := &contentLaneSuspensionPolicy{laneID: identity.ID}
+	s.contentSuspensions[identity.ID] = policy
+	s.notifyAvailabilityLocked()
+	return &ContentLaneSuspension{lanes: s, policy: policy}, nil
+}
+
+// Resume releases only the hold represented by this capability. It is
+// idempotent so concurrent admission signals cannot release a later policy.
+func (suspension *ContentLaneSuspension) Resume() error {
+	if suspension == nil || suspension.lanes == nil || suspension.policy == nil {
+		return ErrInvalidLane
+	}
+	lanes := suspension.lanes
+	lanes.mu.Lock()
+	defer lanes.mu.Unlock()
+	if suspension.policy.resumed {
+		return nil
+	}
+	if lanes.closed {
+		return ErrLaneClosed
+	}
+	current := lanes.contentSuspensions[suspension.policy.laneID]
+	if current != suspension.policy {
+		return ErrStaleLane
+	}
+	suspension.policy.resumed = true
+	delete(lanes.contentSuspensions, suspension.policy.laneID)
+	lanes.notifyAvailabilityLocked()
+	return nil
 }

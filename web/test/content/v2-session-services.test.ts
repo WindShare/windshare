@@ -524,7 +524,7 @@ describe('v2 session block lane deadlines', () => {
           data: Uint8Array.of(2),
         }
       },
-    }, 'direct')
+    }, 'application-relay')
 
     await expect(lanes.fetch({
       descriptor: revision,
@@ -563,7 +563,7 @@ describe('v2 session block lane deadlines', () => {
         peerCalls += 1
         throw new Error('wrong-result-count fallback must not run')
       },
-    }, 'direct')
+    }, 'application-relay')
 
     await expect(lanes.fetch({
       descriptor: revision,

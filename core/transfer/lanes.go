@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
 const (
@@ -29,52 +31,6 @@ var (
 	ErrLaneBudget  = errors.New("transfer lane budget exceeded")
 	ErrLaneClosed  = errors.New("transfer lane set is closed")
 )
-
-// demandNotAdmittedError is an opaque concrete capability proving that a lane
-// failed before its operation reached a transport. It requires explicit
-// construction through NewDemandNotAdmitted; accepting an incidental public
-// marker would let unrelated errors accidentally authorize duplicate work.
-type demandNotAdmittedError struct{ cause error }
-
-func NewDemandNotAdmitted(cause error) error {
-	if cause == nil {
-		cause = ErrInvalidLane
-	}
-	return &demandNotAdmittedError{cause: cause}
-}
-
-func (e *demandNotAdmittedError) Error() string {
-	return fmt.Sprintf("demand was not admitted: %v", e.cause)
-}
-func (e *demandNotAdmittedError) Unwrap() error { return e.cause }
-
-func isDemandNotAdmitted(err error) bool {
-	var notAdmitted *demandNotAdmittedError
-	return errors.As(err, &notAdmitted) && notAdmitted != nil
-}
-
-// demandReassignableAfterRetirementError is an opaque proof that an admitted
-// block operation has acquired its exact-generation cancellation tombstone.
-// Block reads are immutable under their revision lease, so a different lane may
-// now issue a fresh operation without aliasing responses from the retired one.
-type demandReassignableAfterRetirementError struct{ cause error }
-
-func NewDemandReassignableAfterRetirement(cause error) error {
-	if cause == nil {
-		cause = ErrInvalidLane
-	}
-	return &demandReassignableAfterRetirementError{cause: cause}
-}
-
-func (e *demandReassignableAfterRetirementError) Error() string {
-	return fmt.Sprintf("demand is reassignable after retiring its admitted operation: %v", e.cause)
-}
-func (e *demandReassignableAfterRetirementError) Unwrap() error { return e.cause }
-
-func isDemandReassignableAfterRetirement(err error) bool {
-	var retired *demandReassignableAfterRetirementError
-	return errors.As(err, &retired) && retired != nil
-}
 
 type LaneIdentity struct {
 	ID    uint32
@@ -106,7 +62,7 @@ type laneState struct {
 	inflight        uint32
 	settlementHolds uint32
 	failures        uint32
-	latency         time.Duration
+	performance     lanescheduling.Performance
 	retired         bool
 	settled         bool
 	settlement      *laneSettlementCounters
@@ -144,6 +100,7 @@ type LaneSet struct {
 	lanes               map[uint32]*laneState
 	contentSuspensions  map[uint32]*contentLaneSuspensionPolicy
 	cursor              uint64
+	exploration         lanescheduling.Exploration
 	availabilityChanged chan struct{}
 	settlementProducer  observationstream.Producer[LaneSettlementSummary]
 	settlementConsumer  observationstream.Consumer[LaneSettlementSummary]
@@ -244,67 +201,6 @@ func (s *LaneSet) settlementObservationsEnabled() bool {
 	return s != nil && s.settlementConsumer != nil
 }
 
-func (s *LaneSet) logicalLaneCountLocked() int {
-	count := len(s.lanes)
-	for laneID := range s.contentSuspensions {
-		if s.lanes[laneID] == nil {
-			count++
-		}
-	}
-	return count
-}
-
-// SuspendContent removes an authenticated logical lane from content admission
-// without detaching its control transport. The initial exact identity prevents
-// suspending an unintended incarnation, while the returned capability follows
-// replacements because reconnects must not bypass an active admission policy.
-func (s *LaneSet) SuspendContent(identity LaneIdentity) (*ContentLaneSuspension, error) {
-	if identity.ID == 0 {
-		return nil, ErrInvalidLane
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closed {
-		return nil, ErrLaneClosed
-	}
-	state := s.lanes[identity.ID]
-	if state == nil || state.identity != identity {
-		return nil, ErrStaleLane
-	}
-	if _, exists := s.contentSuspensions[identity.ID]; exists {
-		return nil, ErrInvalidLane
-	}
-	policy := &contentLaneSuspensionPolicy{laneID: identity.ID}
-	s.contentSuspensions[identity.ID] = policy
-	s.notifyAvailabilityLocked()
-	return &ContentLaneSuspension{lanes: s, policy: policy}, nil
-}
-
-// Resume releases only the hold represented by this capability. It is
-// idempotent so concurrent admission signals cannot release a later policy.
-func (suspension *ContentLaneSuspension) Resume() error {
-	if suspension == nil || suspension.lanes == nil || suspension.policy == nil {
-		return ErrInvalidLane
-	}
-	lanes := suspension.lanes
-	lanes.mu.Lock()
-	defer lanes.mu.Unlock()
-	if suspension.policy.resumed {
-		return nil
-	}
-	if lanes.closed {
-		return ErrLaneClosed
-	}
-	current := lanes.contentSuspensions[suspension.policy.laneID]
-	if current != suspension.policy {
-		return ErrStaleLane
-	}
-	suspension.policy.resumed = true
-	delete(lanes.contentSuspensions, suspension.policy.laneID)
-	lanes.notifyAvailabilityLocked()
-	return nil
-}
-
 func (s *LaneSet) Remove(identity LaneIdentity) bool {
 	if identity.ID == 0 {
 		return false
@@ -340,6 +236,7 @@ type laneCandidate struct {
 func (s *LaneSet) candidates(
 	ctx context.Context,
 	attempted map[LaneIdentity]struct{},
+	bytes uint64,
 ) ([]*laneState, bool, error) {
 	for {
 		s.mu.Lock()
@@ -365,7 +262,7 @@ func (s *LaneSet) candidates(
 			ordered = append(ordered, state)
 		}
 		if len(ordered) != 0 {
-			selected := s.selectCandidatesLocked(ordered, remaining)
+			selected := s.selectCandidatesLocked(ordered, remaining, bytes)
 			// Registration remains inside the closed-state lock so Close cannot
 			// observe a zero group while an admitted hedge is about to start.
 			s.attempts.Add(len(selected))
@@ -389,7 +286,7 @@ func (s *LaneSet) candidates(
 	}
 }
 
-func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int) []*laneState {
+func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int, bytes uint64) []*laneState {
 	slices.SortFunc(ordered, func(left, right *laneState) int {
 		return cmp.Compare(left.identity.ID, right.identity.ID)
 	})
@@ -404,27 +301,94 @@ func (s *LaneSet) selectCandidatesLocked(ordered []*laneState, remaining int) []
 		if left.state.failures != right.state.failures {
 			return cmp.Compare(left.state.failures, right.state.failures)
 		}
-		if left.state.inflight != right.state.inflight {
-			return cmp.Compare(left.state.inflight, right.state.inflight)
+		// A canceled probe only bounds speed; it cannot prove that a standby can
+		// finish content before the output window fills.
+		if left.state.performance.HasSuccessfulSample != right.state.performance.HasSuccessfulSample {
+			if left.state.performance.HasSuccessfulSample {
+				return -1
+			}
+			return 1
 		}
-		// Rotation precedes latency so every healthy lane receives bounded
-		// progress. The race itself still lets the fastest selected lane win;
-		// historical speed must not permanently starve a slower fallback.
-		if left.order != right.order {
-			return cmp.Compare(left.order, right.order)
+		if compared := cmp.Compare(laneCompletionCost(left.state, bytes), laneCompletionCost(right.state, bytes)); compared != 0 {
+			return compared
 		}
-		return cmp.Compare(left.state.latency, right.state.latency)
+		return cmp.Compare(left.order, right.order)
 	})
-	// Epoch churn can expose a fresh identity for every logical lane after earlier
-	// attempts. The per-demand budget applies to identities, not the current map
-	// width, so the final hedge batch must be clipped to the remaining authority.
 	limit := min(s.raceWidth, len(candidates), remaining)
 	selected := make([]*laneState, limit)
 	for index := range selected {
 		selected[index] = candidates[index].state
 		selected[index].inflight++
+		selected[index].performance.Begin(s.now(), bytes)
 	}
 	return selected
+}
+
+func laneCompletionCost(state *laneState, bytes uint64) float64 {
+	return lanescheduling.Cost(state.performance.Estimate(bytes), state.route != LaneRouteDirect)
+}
+
+func blockDemandBytes(demand BlockDemand) uint64 {
+	bytes, _ := demand.Descriptor.Geometry().BlockPlainLength(demand.Index)
+	return uint64(bytes)
+}
+
+// Supplemental reads race the same immutable block. They never take exclusive
+// ownership of a new prefix block and cannot bypass content-route authority.
+func (s *LaneSet) supplement(
+	demand BlockDemand, attempted map[LaneIdentity]struct{}, primary *laneState,
+	elapsed, estimate time.Duration, purpose lanescheduling.Purpose,
+) *laneState {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || len(attempted) >= MaxDemandLaneAttempts {
+		return nil
+	}
+	now, bytes := s.now(), blockDemandBytes(demand)
+	if purpose == lanescheduling.Probe && !primary.performance.HasSuccessfulSample {
+		return nil
+	}
+	var best *laneState
+	for _, state := range s.lanes {
+		if _, tried := attempted[state.identity]; tried {
+			continue
+		}
+		if _, suspended := s.contentSuspensions[state.identity.ID]; suspended || !s.contentRoutePolicy.Allows(state.route) {
+			continue
+		}
+		if purpose == lanescheduling.Probe && !lanescheduling.ProbeDue(&state.performance, now) {
+			continue
+		}
+		if best == nil {
+			best = state
+			continue
+		}
+		if purpose == lanescheduling.Probe {
+			// Oldest evidence first prevents a previously sampled fallback from
+			// monopolizing the exploration budget when a new path appears.
+			if state.performance.LastAttempt.Before(best.performance.LastAttempt) ||
+				(state.performance.LastAttempt.Equal(best.performance.LastAttempt) && state.identity.ID < best.identity.ID) {
+				best = state
+			}
+		} else if laneCompletionCost(state, bytes) < laneCompletionCost(best, bytes) ||
+			(laneCompletionCost(state, bytes) == laneCompletionCost(best, bytes) && state.identity.ID < best.identity.ID) {
+			best = state
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	if purpose == lanescheduling.Rescue && !lanescheduling.RescueDue(elapsed, estimate, best.performance.Estimate(bytes)) {
+		return nil
+	}
+	if !s.exploration.Acquire(purpose, now) {
+		return nil
+	}
+	attempted[best.identity] = struct{}{}
+	best.inflight++
+	best.performance.Begin(now, bytes)
+	s.attempts.Add(1)
+	return best
 }
 
 func (s *LaneSet) notifyAvailabilityLocked() {
@@ -482,11 +446,12 @@ func (s *LaneSet) fetch(
 	attempted := make(map[LaneIdentity]struct{}, MaxDemandLaneAttempts)
 	failures := laneFailureSet{}
 	var pendingReassignments []laneResult
+	supplemented := false
 	defer func() {
 		s.resolveLaneReassignments(pendingReassignments, false)
 	}()
 	for len(attempted) < MaxDemandLaneAttempts {
-		candidates, exhausted, err := s.candidates(ctx, attempted)
+		candidates, exhausted, err := s.candidates(ctx, attempted, blockDemandBytes(demand))
 		if err != nil {
 			normalized := admitInternalFailure(normalizeSourceBoundary(ctx, err))
 			return authenticatedBlock{}, collaboratorError(normalized, err)
@@ -501,7 +466,7 @@ func (s *LaneSet) fetch(
 		for _, state := range candidates {
 			attempted[state.identity] = struct{}{}
 		}
-		round := s.runLaneRound(ctx, demand, validate, candidates)
+		round := s.runLaneRound(ctx, demand, validate, candidates, attempted, &supplemented)
 		switch round.kind {
 		case laneRoundSucceeded:
 			return round.record, nil
@@ -536,6 +501,8 @@ func (s *LaneSet) runLaneRound(
 	demand BlockDemand,
 	validate func(records.BlockRecord) error,
 	candidates []*laneState,
+	attempted map[LaneIdentity]struct{},
+	supplemented *bool,
 ) laneRoundResult {
 	raceContext, cancel := context.WithCancel(ctx)
 	stopLifecycle := context.AfterFunc(s.lifecycle, cancel)
@@ -545,20 +512,42 @@ func (s *LaneSet) runLaneRound(
 		stopLifecycle()
 		cancel()
 	}()
-
-	results := make(chan laneResult, len(candidates))
+	results := make(chan laneResult, MaxDemandLaneAttempts)
 	for _, state := range candidates {
-		go s.fetchLane(raceContext, demand, validate, state, decision, results)
+		go s.fetchLane(raceContext, demand, validate, state, decision, results, lanescheduling.Content)
 	}
-	failures := make([]laneResult, 0, len(candidates))
-	for range candidates {
+	started := s.now()
+	s.mu.Lock()
+	estimate := candidates[0].performance.Estimate(0)
+	s.mu.Unlock()
+	active := len(candidates)
+	startSupplement := func(purpose lanescheduling.Purpose) {
+		if *supplemented || len(candidates) != 1 || raceContext.Err() != nil {
+			return
+		}
+		state := s.supplement(demand, attempted, candidates[0], s.now().Sub(started), estimate, purpose)
+		if state == nil {
+			return
+		}
+		*supplemented = true
+		active++
+		go s.fetchLane(raceContext, demand, validate, state, decision, results, purpose)
+	}
+	startSupplement(lanescheduling.Probe)
+	ticker := time.NewTicker(lanescheduling.HedgeCheckInterval)
+	defer ticker.Stop()
+	failures := make([]laneResult, 0, active)
+	for active > 0 {
 		select {
 		case <-raceContext.Done():
 			if ctx.Err() != nil {
 				return laneRoundResult{kind: laneRoundInterrupted, err: ctx.Err()}
 			}
 			return laneRoundResult{kind: laneRoundInterrupted, err: ErrLaneClosed}
+		case <-ticker.C:
+			startSupplement(lanescheduling.Rescue)
 		case result := <-results:
+			active--
 			if result.err == nil {
 				decision.winner = result.state
 				return laneRoundResult{kind: laneRoundSucceeded, record: s.attestBlock(result.state, result.record)}
@@ -591,9 +580,23 @@ func (s *LaneSet) fetchLane(
 	state *laneState,
 	decision *laneRoundDecision,
 	results chan<- laneResult,
+	purpose lanescheduling.Purpose,
 ) {
 	defer s.attempts.Done()
+	if purpose != lanescheduling.Content {
+		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
+	}
 	started := s.now()
+	bytes := blockDemandBytes(demand)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		s.mu.Lock()
+		expected, queued, rate := state.performance.Estimate(0), state.performance.PendingBytes, state.performance.BytesPerSecond
+		s.mu.Unlock()
+		slog.DebugContext(ctx, "content lane dispatched",
+			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID, "lane_epoch", state.identity.Epoch,
+			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
+			"purpose", purpose, "expected_ms", expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
+	}
 	record, fetchErr := state.lane.FetchBlock(ctx, demand)
 	if fetchErr == nil {
 		fetchErr = validate(record)
@@ -603,12 +606,20 @@ func (s *LaneSet) fetchLane(
 	canceled := normalized != nil && normalized.policy.canceled
 	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
 	elapsed := s.now().Sub(started)
+	s.mu.Lock()
+	state.performance.Complete(s.now(), bytes, fetchErr == nil)
+	s.mu.Unlock()
 	results <- laneResult{
 		state: state, record: record, err: fetchErr,
 		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
 	}
 	<-decision.done
-	s.finish(state, elapsed, record, fetchErr, canceled, decision.winner == state)
+	if canceled && decision.winner != nil && decision.winner != state {
+		s.mu.Lock()
+		state.performance.Superseded(bytes, elapsed)
+		s.mu.Unlock()
+	}
+	s.finish(state, record, fetchErr, canceled, decision.winner == state)
 }
 
 func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {
@@ -643,16 +654,4 @@ func (state *laneState) recordFailure(canceled bool) {
 		state.failures++
 	}
 	state.settlement.addFailure()
-}
-
-func (state *laneState) recordSuccess(elapsed time.Duration) {
-	state.failures = 0
-	if elapsed < 0 {
-		elapsed = 0
-	}
-	if state.latency == 0 {
-		state.latency = elapsed
-		return
-	}
-	state.latency = (state.latency*3 + elapsed) / 4
 }

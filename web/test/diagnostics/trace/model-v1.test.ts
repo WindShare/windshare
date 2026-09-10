@@ -63,6 +63,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     plan_kind: 'direct_tree',
   },
   protocol_operation: { transition: 'request_sent', request_kind: 'list_children' },
+  content_scheduling: {
+    dispatch_sequence: '1', file_id: 'AQAAAAAAAAAAAAAAAAAAAA', block_index: '0', route: 'direct', purpose: 'content',
+    expected_ms: 10, pending_bytes: '1024', bytes_per_second: 102400,
+  },
   operation_recovery: {
     transition: 'retry_available_lanes', operation_sequence: '1', generation_id: '1',
     availability_revision: '3', lane_count: '1', unchanged_availability_retries: '0',
