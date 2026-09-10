@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
@@ -50,13 +51,14 @@ type fakeNode struct {
 type fakePlatform struct {
 	mu sync.Mutex
 
-	root          *fakeNode
-	nextID        uint64
-	disposition   outputcap.RootOpenDisposition
-	guardErr      error
-	guardCloseErr error
-	modifiedErr   error
-	guardCalls    int
+	root            *fakeNode
+	nextID          uint64
+	disposition     outputcap.RootOpenDisposition
+	guardErr        error
+	guardCloseErr   error
+	modifiedErr     error
+	guardCalls      int
+	openDirectories atomic.Int64
 }
 
 func newFakePlatform(disposition outputcap.RootOpenDisposition) *fakePlatform {
@@ -109,7 +111,7 @@ func (platform *fakePlatform) AcquirePublicOperationGuard() (outputcap.PublicOpe
 		return nil, platform.guardErr
 	}
 	return &fakeGuard{
-		root: &fakeDirectory{platform: platform, node: platform.root}, closeErr: platform.guardCloseErr,
+		root: newFakeDirectory(platform, platform.root), closeErr: platform.guardCloseErr,
 	}, nil
 }
 
@@ -163,28 +165,39 @@ func (guard *fakeGuard) Close() error {
 		return nil
 	}
 	guard.closed = true
-	return guard.closeErr
+	return errors.Join(guard.closeErr, guard.root.Close())
 }
 
 type fakeDirectory struct {
-	platform *fakePlatform
-	node     *fakeNode
-	mu       sync.Mutex
-	closed   bool
+	platform   *fakePlatform
+	node       *fakeNode
+	mu         sync.Mutex
+	closed     bool
+	closeErr   error
+	closeCalls int
+}
+
+func newFakeDirectory(platform *fakePlatform, node *fakeNode) *fakeDirectory {
+	platform.openDirectories.Add(1)
+	return &fakeDirectory{platform: platform, node: node}
 }
 
 func (directory *fakeDirectory) Close() error {
 	directory.mu.Lock()
+	defer directory.mu.Unlock()
+	directory.closeCalls++
+	if !directory.closed && directory.platform != nil {
+		directory.platform.openDirectories.Add(-1)
+	}
 	directory.closed = true
-	directory.mu.Unlock()
-	return nil
+	return directory.closeErr
 }
 
 func (directory *fakeDirectory) Duplicate() (outputcap.Directory, error) {
 	if directory == nil || directory.node == nil {
 		return nil, errFakeUnsupported
 	}
-	return &fakeDirectory{platform: directory.platform, node: directory.node}, nil
+	return newFakeDirectory(directory.platform, directory.node), nil
 }
 
 func (directory *fakeDirectory) Sync() error {
@@ -274,7 +287,7 @@ func (directory *fakeDirectory) OpenPinnedDirectory(
 	if !ok || reference.kind != outputcap.EntryDirectory || reference.node == nil {
 		return nil, errFakeUnsupported
 	}
-	return &fakeDirectory{platform: directory.platform, node: reference.node}, nil
+	return newFakeDirectory(directory.platform, reference.node), nil
 }
 
 func (directory *fakeDirectory) RemoveEntry(string, outputcap.CurrentEntryReference) error {
@@ -328,7 +341,7 @@ func (directory *fakeDirectory) CreateDirectory(name string, _ bool) (outputcap.
 			node = directory.platform.addDirectoryLocked(directory.node, name, nil)
 		}
 		if plan.returnHandle && node != nil {
-			return &fakeDirectory{platform: directory.platform, node: node}, plan.err
+			return newFakeDirectory(directory.platform, node), plan.err
 		}
 		return nil, plan.err
 	}
@@ -336,7 +349,7 @@ func (directory *fakeDirectory) CreateDirectory(name string, _ bool) (outputcap.
 		return nil, outputcap.ErrNamespaceCollision
 	}
 	node := directory.platform.addDirectoryLocked(directory.node, name, nil)
-	return &fakeDirectory{platform: directory.platform, node: node}, nil
+	return newFakeDirectory(directory.platform, node), nil
 }
 
 func (directory *fakeDirectory) InstallDirectoryNoReplace(outputcap.Directory, string) (outputcap.Directory, error) {

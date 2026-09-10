@@ -249,13 +249,15 @@ func TestParentSnapshotRejectsAliasesAndPostSnapshotCollision(t *testing.T) {
 		if err != nil || result.disposition != DirectoryPreexistingDescendant {
 			t.Fatalf("existing descendant result=%+v error=%v", result, err)
 		}
-		if _, _, err := finalizeNative(authority, context.Background(), claim); err != nil {
-			t.Fatal(err)
-		}
 		child := mustClaim(t, authority, 3, 2, "existing/child", catalog.ModifiedTime{})
 		if childResult, _, err := materializeNative(authority, context.Background(), child); err != nil ||
 			childResult.disposition != DirectoryAuthorityCreatedDescendant {
 			t.Fatalf("child result=%+v error=%v", childResult, err)
+		}
+		for _, completed := range []directoryClaim{child, claim} {
+			if _, _, err := finalizeNative(authority, context.Background(), completed); err != nil {
+				t.Fatal(err)
+			}
 		}
 		platform.mu.Lock()
 		setCalls, syncCalls, createCalls := existing.setCalls, existing.syncCalls, existing.createCalls
@@ -591,7 +593,7 @@ func TestGuardCleanupAfterCreationIsMutationAmbiguous(t *testing.T) {
 	authority.mu.Lock()
 	rootRecord := authority.claims[1]
 	authority.mu.Unlock()
-	if _, err := authority.parentSnapshot(rootRecord); err != nil {
+	if _, err := authority.parentSnapshot(rootRecord.claim.id, rootRecord.execution); err != nil {
 		t.Fatal(err)
 	}
 	platform.guardCloseErr = errors.New("guard close failed")
@@ -609,7 +611,7 @@ func TestGuardCleanupAfterPreexistingOpenIsNoMutation(t *testing.T) {
 	authority.mu.Lock()
 	rootRecord := authority.claims[1]
 	authority.mu.Unlock()
-	if _, err := authority.parentSnapshot(rootRecord); err != nil {
+	if _, err := authority.parentSnapshot(rootRecord.claim.id, rootRecord.execution); err != nil {
 		t.Fatal(err)
 	}
 	platform.guardCloseErr = errors.New("guard close failed")
