@@ -86,7 +86,7 @@ describe('receiver runtime caller-owned lane admission', () => {
     initialChannel.receive(new Uint8Array([0]))
 
     await vi.waitFor(() => expect(runtime.isClosed).toBe(true))
-    expect(events.find(event => event.transition === 'detached')).toMatchObject({
+    expect(events.find(event => event.eventName === 'lane_transition' && event.transition === 'detached')).toMatchObject({
       eventName: 'lane_transition',
       transition: 'detached',
       detachmentClass: 'authenticated_failure',

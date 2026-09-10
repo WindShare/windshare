@@ -6,6 +6,7 @@ import {
 } from '../incident/fact'
 import {
   booleanValue,
+  canonicalIdentity,
   decimalFields,
   decimalUint64,
   exactKeys,
@@ -346,4 +347,16 @@ function validatePeerSettlement(value: unknown): void {
     return
   }
   throw new TypeError('peer settlement discriminant is invalid')
+}
+
+export function validateContentScheduling(payload: UnknownRecord): void {
+  exactKeys(payload, [
+    'dispatch_sequence', 'file_id', 'block_index', 'route', 'purpose', 'expected_ms', 'pending_bytes', 'bytes_per_second',
+  ], [], 'content scheduling payload')
+  decimalFields(payload, ['dispatch_sequence', 'block_index', 'pending_bytes'], 'content scheduling')
+  canonicalIdentity(payload.file_id, 'content scheduling file')
+  member(payload.route, ['application-relay', 'direct', 'turn'], 'content scheduling route')
+  member(payload.purpose, ['content', 'probe', 'rescue'], 'content scheduling purpose')
+  integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
+  integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
 }

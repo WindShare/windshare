@@ -1,4 +1,4 @@
-import { describe, expect, expectTypeOf, it } from 'vitest'
+import { describe, expect, expectTypeOf, it, vi } from 'vitest'
 
 import { byteRange, FileGeometry } from '../../src/content/geometry'
 import {
@@ -352,7 +352,7 @@ describe('v2 preview/download block broker', () => {
 
     for (let call = 0; call < 4; call += 1) {
       lane.complete(call)
-      await turn()
+      if (call < 3) await vi.waitFor(() => expect(lane.calls).toHaveLength(call + 2), { interval: 1 })
     }
     await Promise.all(reads)
     expect(lane.calls.map((call) => call.demand.localBlockIndex)).toEqual([0n, 3n, 2n, 1n])

@@ -113,7 +113,21 @@ export type V2OperationRecoveryTraceEvent = Readonly<{
   | Readonly<{ transition: 'wait_for_availability'; delayMilliseconds: number }>
 )
 
+export type V2ContentSchedulingTraceEvent = Readonly<{
+  eventName: 'content_scheduling'
+  correlation: FailureCorrelation
+  dispatchSequence: number
+  fileId: string
+  localBlockIndex: bigint
+  route: 'application-relay' | 'direct' | 'turn'
+  purpose: 'content' | 'probe' | 'rescue'
+  expectedMilliseconds: number
+  pendingBytes: number
+  bytesPerSecond: number
+}>
+
 export type V2ProtocolTraceEvent =
+  | V2ContentSchedulingTraceEvent
   | V2ProtocolOperationTraceEvent
   | V2LaneTransitionTraceEvent
   | V2OperationRecoveryTraceEvent

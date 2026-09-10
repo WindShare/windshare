@@ -110,7 +110,7 @@ describe('v2 operation replay ownership', () => {
     expect(delivered.protocolFailure?.correlation.peerAttemptId?.copyBytes()).toEqual(attemptId)
     expect(JSON.stringify(delivered.protocolFailure)).not.toContain(providerDetail)
     await routed
-    expect(events.map((event) => event.transition)).toEqual([
+    expect(events.filter((event) => event.eventName === 'protocol_operation').map((event) => event.transition)).toEqual([
       'response_received',
       'authenticated_failure',
       'settled',

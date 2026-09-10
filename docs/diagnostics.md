@@ -47,6 +47,11 @@ current capture, `inspectLastFailure()` returns the last retained incident, and 
 retained evidence without disabling activation. Manual `disable()` also prevents later pages
 from restoring capture; already-open tabs retain their own capture state.
 
+Browser `content_scheduling` events distinguish ordinary content, standby probes, and straggler
+rescues. They include session/lane identity, dispatch sequence, file/block identity, estimated
+completion time, outstanding bytes, and measured throughput. Native receiver debug logs report the
+same decisions as `content lane dispatched`. See [content path scheduling](performance.md#content-paths).
+
 Browser `operation_recovery` events distinguish retrying changed lanes, waiting for availability,
 waiting for a replacement session, and exhausting retries. They include the local operation sequence,
 protocol session, availability revision, lane count, and any backoff. Lane changes reset the operation's
