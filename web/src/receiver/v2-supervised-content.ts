@@ -14,6 +14,7 @@ import {
   type V2OpenedRevision,
   type V2RevisionReader,
   V2RevisionChangedDuringRecoveryError,
+  requiresV2RevisionLeaseReplacement,
   V2RevisionService,
 } from '../content/v2-session-services'
 import type { V2FileRevisionDescriptor } from '../content/v2-records'
@@ -143,35 +144,43 @@ export class V2SupervisedContent {
     authorization.requireDescriptor(descriptor)
     authorization.requireRoutes(routes)
     const checked = descriptor.geometry.requireRange(requested)
-    let offset = checked.start
+    const progress: RangeProgress = { offset: checked.start, replacementOffset: undefined }
     authorization.beginRead()
     try {
-      while (offset < checked.end) {
+      while (progress.offset < checked.end) {
         options.signal?.throwIfAborted()
         const binding = await authorization.binding(options.signal)
         try {
-          let yielded = false
-          for await (const slice of binding.generation.broker.readRouteAuthorizedRange(
-            binding.opened.descriptor,
-            binding.opened.leaseId,
-            byteRange(offset, checked.end),
-            { ...options, routes },
-          )) {
-            yielded = true
-            offset = requireNextOffset(slice, offset, checked.end)
-            yield slice
-          }
-          if (!yielded && offset < checked.end) {
-            throw new Error('Recovered block reader ended before the requested range')
-          }
+          yield* readGenerationRange(binding, progress, checked.end, routes, options)
         } catch (error) {
-          if (!(await this.#provider.recover(binding.generation, error, options.signal))) throw error
-          authorization.invalidate(binding)
+          await this.#recoverRead(authorization, binding, progress, checked.end, error, options.signal)
         }
       }
     } finally {
       authorization.endRead()
     }
+  }
+
+  async #recoverRead(
+    authorization: V2RevisionAuthorization,
+    binding: V2GenerationRevision,
+    progress: RangeProgress,
+    end: bigint,
+    error: unknown,
+    signal: AbortSignal | undefined,
+  ): Promise<void> {
+    signal?.throwIfAborted()
+    if (requiresV2RevisionLeaseReplacement(error)) {
+      if (progress.offset === end) return
+      // A repeatedly expired fresh lease without any useful bytes cannot
+      // create an unbounded reopen loop.
+      if (progress.replacementOffset === progress.offset) throw error
+      await authorization.replaceExpired(binding, signal)
+      progress.replacementOffset = progress.offset
+      return
+    }
+    if (!(await this.#provider.recover(binding.generation, error, signal))) throw error
+    authorization.invalidate(binding)
   }
 
   #authorization(token: Uint8Array): V2RevisionAuthorization {
@@ -250,6 +259,9 @@ class V2RevisionAuthorization {
   #released = false
   #closed = false
   #releaseTask: Promise<void> | undefined
+  readonly #retirements = new Set<Promise<void>>()
+  readonly #expiredBindings = new Set<V2GenerationRevision>()
+  #retirementFailure: unknown
 
   constructor(
     token: Uint8Array,
@@ -310,6 +322,28 @@ class V2RevisionAuthorization {
     }
   }
 
+  async replaceExpired(binding: V2GenerationRevision, signal?: AbortSignal): Promise<void> {
+    if (this.#current === binding) {
+      this.#current = undefined
+      this.#expiredBindings.add(binding)
+    }
+    await this.binding(signal)
+  }
+
+  #retireExpiredBindings(): void {
+    for (const binding of this.#expiredBindings) this.#retire(binding)
+    this.#expiredBindings.clear()
+  }
+
+  #retire(binding: V2GenerationRevision): void {
+    if (!this.#provider.isCurrent(binding.generation)) return
+    const task = binding.opened.release().catch((error: unknown) => {
+      if (!requiresV2RevisionLeaseReplacement(error)) this.#retirementFailure ??= error
+    })
+    this.#retirements.add(task)
+    task.then(() => this.#retirements.delete(task))
+  }
+
   invalidate(binding: V2GenerationRevision): void {
     // A physical lane replacement does not burn a ProtocolSession lease. Only a
     // generation transition requires reopening the authorization on new keys.
@@ -330,6 +364,7 @@ class V2RevisionAuthorization {
     this.#lifetime.abort(new DOMException('Supervised revision authorization closed', 'AbortError'))
     this.#unsubscribeRoutes()
     this.#current = undefined
+    this.#expiredBindings.clear()
     this.#token.fill(0)
     for (const resolve of this.#idleWaiters.splice(0)) resolve()
   }
@@ -344,9 +379,10 @@ class V2RevisionAuthorization {
     const current = this.#current
     this.#current = undefined
     try {
-      if (current !== undefined && this.#provider.isCurrent(current.generation)) {
-        await current.opened.release()
-      }
+      if (current !== undefined) this.#retire(current)
+      this.#retireExpiredBindings()
+      await Promise.all(this.#retirements)
+      if (this.#retirementFailure !== undefined) throw this.#retirementFailure
     } finally {
       this.#unsubscribeRoutes()
       this.#token.fill(0)
@@ -396,6 +432,10 @@ class V2RevisionAuthorization {
       }
       const next = { generation: result.generation, opened: result.value }
       this.#current = next
+      // Acquire and verify first: relinquishing the last old lease can retire
+      // the sender's stable source. Broker retirement is then independent of
+      // useful reads, including readers suspended inside an output consumer.
+      this.#retireExpiredBindings()
       return next
     }
   }
@@ -408,7 +448,11 @@ function sameRevision(
   return equalBytes(left.shareInstance, right.shareInstance) &&
     equalBytes(left.fileId, right.fileId) &&
     equalBytes(left.fileRevision, right.fileRevision) &&
-    left.exactSize === right.exactSize
+    left.exactSize === right.exactSize &&
+    left.geometry.blockSize === right.geometry.blockSize &&
+    left.modifiedTime?.seconds === right.modifiedTime?.seconds &&
+    left.modifiedTime?.nanoseconds === right.modifiedTime?.nanoseconds &&
+    left.modifiedTime?.precision === right.modifiedTime?.precision
 }
 
 function secureRandomBytes(length: number): Uint8Array<ArrayBuffer> {
@@ -446,4 +490,30 @@ function awaitBinding<T>(promise: Promise<T>, signal?: AbortSignal): Promise<T> 
       },
     )
   })
+}
+
+interface RangeProgress {
+  offset: bigint
+  replacementOffset: bigint | undefined
+}
+
+async function* readGenerationRange(
+  binding: V2GenerationRevision,
+  progress: RangeProgress,
+  end: bigint,
+  routes: V2BlockRouteEligibility,
+  options: V2BlockRangeReaderOptions,
+): AsyncGenerator<V2BlockSlice> {
+  let yielded = false
+  for await (const slice of binding.generation.broker.readRouteAuthorizedRange(
+    binding.opened.descriptor, binding.opened.leaseId, byteRange(progress.offset, end),
+    { ...options, routes },
+  )) {
+    yielded = true
+    progress.offset = requireNextOffset(slice, progress.offset, end)
+    yield slice
+  }
+  if (!yielded && progress.offset < end) {
+    throw new Error('Recovered block reader ended before the requested range')
+  }
 }

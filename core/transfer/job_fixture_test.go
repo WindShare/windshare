@@ -164,7 +164,7 @@ type jobRevisionClient struct {
 	opened     map[catalog.FileID]OpenedRevision
 	failures   map[catalog.FileID]error
 	order      []catalog.FileID
-	released   []content.LeaseID
+	released   []RevisionHandle
 	releaseErr error
 	openHook   func()
 }
@@ -185,7 +185,7 @@ func (c *jobRevisionClient) OpenRevision(_ context.Context, file catalog.FileID)
 	return opened, nil
 }
 
-func (c *jobRevisionClient) ReleaseRevision(_ context.Context, lease content.LeaseID) error {
+func (c *jobRevisionClient) ReleaseRevision(_ context.Context, lease RevisionHandle) error {
 	c.mu.Lock()
 	c.released = append(c.released, lease)
 	c.mu.Unlock()
@@ -779,4 +779,11 @@ type fixedJobSession protocolsession.ProtocolSessionID
 
 func (s fixedJobSession) ProtocolSessionID() protocolsession.ProtocolSessionID {
 	return protocolsession.ProtocolSessionID(s)
+}
+
+// Fixtures explicitly map local handles to their fixed fake wire leases.
+type jobBrokerReader struct{ broker *BlockBroker }
+
+func (r jobBrokerReader) ReadRange(ctx context.Context, handle RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink RangeSink) error {
+	return r.broker.ReadRange(ctx, content.LeaseID(handle), descriptor, requested, sink)
 }

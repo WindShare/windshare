@@ -32,7 +32,7 @@ type adversarialRangeReader struct {
 
 func (reader adversarialRangeReader) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
@@ -172,7 +172,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	file := transferID[catalog.FileID](212)
 	exactSize := uint64(defaultFileReadWindowBlocks * catalog.MinChunkSize)
 	descriptor := jobDescriptor(t, share, file, 213, exactSize)
-	opened, err := NewOpenedRevision(transferID[content.LeaseID](214), descriptor)
+	opened, err := NewOpenedRevision(transferID[RevisionHandle](214), descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 		Revisions: &jobRevisionClient{
 			opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error),
 		},
-		Blocks: broker, Materializer: output,
+		Blocks: jobBrokerReader{broker}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -276,7 +276,7 @@ func newAtomicRangeSinkJob(t *testing.T, reader RangeReader) (*TransferJob, *job
 	file := transferID[catalog.FileID](202)
 	exactSize := 2 * uint64(catalog.MinChunkSize)
 	descriptor := jobDescriptor(t, share, file, 203, exactSize)
-	opened, err := NewOpenedRevision(transferID[content.LeaseID](204), descriptor)
+	opened, err := NewOpenedRevision(transferID[RevisionHandle](204), descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}

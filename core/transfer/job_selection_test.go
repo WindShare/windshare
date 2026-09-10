@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -122,7 +121,7 @@ func TestTransferJobRollsBackSelectedPrefixOfFailedGeneration(t *testing.T) {
 	}
 	rules, _ := NewSelectionRules(true, nil)
 	descriptor := jobDescriptor(t, share, sibling, 1, 0)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](145), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](145), descriptor)
 	revisions := &jobRevisionClient{
 		opened:   map[catalog.FileID]OpenedRevision{sibling: opened},
 		failures: make(map[catalog.FileID]error),
@@ -232,7 +231,7 @@ func TestTransferJobAppliesSyntheticRootOverrideToProbeAndExecution(t *testing.T
 			}
 			if selected {
 				descriptor := jobDescriptor(t, share, file, 1, 0)
-				revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](173), descriptor)
+				revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](173), descriptor)
 			}
 			output := newJobOutput(share)
 			job, err := newTestTransferJob(t, testTransferJobConfig{
@@ -297,7 +296,7 @@ func TestTransferJobMaterializesOnlyAuthenticatedSelectedOutput(t *testing.T) {
 		file := transferID[catalog.FileID](154)
 		rules, _ := NewSelectionRules(false, []SelectionOverride{{FileID: file, Selected: true}})
 		descriptor := jobDescriptor(t, share, file, 1, 0)
-		opened, _ := NewOpenedRevision(transferID[content.LeaseID](155), descriptor)
+		opened, _ := NewOpenedRevision(transferID[RevisionHandle](155), descriptor)
 		output := newJobOutput(share)
 		output.ensureFailures = map[string]error{"unrelated": errors.New("unrelated output must remain virtual")}
 		job, err := newTestTransferJob(t, testTransferJobConfig{

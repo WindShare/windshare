@@ -417,7 +417,7 @@ func validateOpenedPlanFile(
 	opened OpenedRevision,
 ) error {
 	descriptor := opened.Descriptor
-	if file.IsZero() || opened.LeaseID.IsZero() || descriptor.ShareInstance() != share ||
+	if file.IsZero() || opened.Handle.IsZero() || descriptor.ShareInstance() != share ||
 		descriptor.FileID() != file || descriptor.FileRevision().IsZero() ||
 		descriptor.ExactSize() != expectedSize {
 		return ErrRevisionIdentity

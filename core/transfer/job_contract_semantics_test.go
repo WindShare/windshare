@@ -203,7 +203,7 @@ func TestTransferJobDirectorySettlementValidatorRequiresExactAdmission(t *testin
 func TestTransferJobImmediateSettlementsPreserveOutcomeAndReleaseFailures(t *testing.T) {
 	binding, checkpoint := outputLifecycleFixture(t)
 	opened := OpenedRevision{
-		LeaseID:    transferID[content.LeaseID](162),
+		Handle:     transferID[RevisionHandle](162),
 		Descriptor: binding.Descriptor(),
 	}
 	artifactPath, _ := ordinaryoutput.NewArtifactPath(binding.Locator().CanonicalPath())
@@ -282,11 +282,11 @@ func TestTransferJobRejectsUnstartedFileWithoutLeakingRevisionLease(t *testing.T
 	releaseCause := errors.New("lease release failed")
 	revisions := &jobRevisionClient{releaseErr: releaseCause}
 	run := immediateSettlementJobRun(transferID[catalog.ShareInstance](163), revisions)
-	lease := transferID[content.LeaseID](164)
+	lease := transferID[RevisionHandle](164)
 	artifactPath, _ := ordinaryoutput.NewArtifactPath("file.bin")
 	plan := plannedFile{file: transferID[catalog.FileID](165), artifactPath: artifactPath}
 	err := run.rejectUnstartedFile(
-		context.Background(), plan, OpenedRevision{LeaseID: lease}, dependencyContractFailure(cause),
+		context.Background(), plan, OpenedRevision{Handle: lease}, dependencyContractFailure(cause),
 	)
 	if normalizedFault(err) != fault.DependencyContractFault() || len(revisions.released) != 1 ||
 		revisions.released[0] != lease || len(run.files) != 1 ||
@@ -398,7 +398,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		if err != nil {
 			t.Fatal(err)
 		}
-		opened, err := NewOpenedRevision(transferID[content.LeaseID](170), descriptor)
+		opened, err := NewOpenedRevision(transferID[RevisionHandle](170), descriptor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -411,7 +411,7 @@ func TestTransferJobRejectsInvalidAdmissionAndRevisionIdentityTransitions(t *tes
 		share := transferID[catalog.ShareInstance](171)
 		selected := transferID[catalog.FileID](172)
 		foreign := transferID[catalog.FileID](173)
-		lease := transferID[content.LeaseID](174)
+		lease := transferID[RevisionHandle](174)
 		descriptor := jobDescriptor(t, share, foreign, 175, 1)
 		opened, err := NewOpenedRevision(lease, descriptor)
 		if err != nil {
