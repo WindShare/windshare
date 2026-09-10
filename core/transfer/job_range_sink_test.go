@@ -249,6 +249,15 @@ func TestTransferJobPipelinesSingleFileAcrossAvailableLanes(t *testing.T) {
 	if len(usedLanes) != 2 {
 		t.Fatalf("single-file window used lanes %v, want relay and peer lanes", usedLanes)
 	}
+	// Lane assignment precedes the probe's active count. Hold every response
+	// until all fetches enter the probe so the measured window proves overlap.
+	for range defaultFileReadWindowBlocks {
+		select {
+		case <-probe.started:
+		case <-ctx.Done():
+			t.Fatal(context.Cause(ctx))
+		}
+	}
 	for range defaultFileReadWindowBlocks {
 		select {
 		case probe.release <- struct{}{}:
