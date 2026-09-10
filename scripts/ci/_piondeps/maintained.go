@@ -3,10 +3,12 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"go/build"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -32,6 +34,10 @@ func writeMaintainedGoFiles(root string, nul bool, output io.Writer) error {
 		return err
 	}
 	files, err := maintainedGoFiles(root, strings.Split(string(tracked), "\x00"), sources)
+	if err != nil {
+		return err
+	}
+	files, err = orderDiagnosticSources(root, files, build.Default)
 	if err != nil {
 		return err
 	}
@@ -82,4 +88,72 @@ func maintainedGoFiles(root string, tracked []string, verified manifest) ([]stri
 		files = append(files, file)
 	}
 	return files, nil
+}
+
+// Opening a foreign-platform file makes gopls retain another build view. Every
+// subsequent open/close invalidates snapshots across those views, even when the
+// source is unchanged. Finish each module's native files before paying that cost.
+// MatchFile only determines order: foreign, tagged, and ignored files all remain.
+func orderDiagnosticSources(root string, files []string, context build.Context) ([]string, error) {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+	type source struct {
+		path, module string
+		native       bool
+	}
+	sources := make([]source, 0, len(files))
+	modules := make(map[string]string)
+	for _, file := range files {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		dir := filepath.Dir(path)
+		module, err := diagnosticModule(root, dir, modules)
+		if err != nil {
+			return nil, err
+		}
+		native, err := context.MatchFile(dir, filepath.Base(path))
+		if err != nil {
+			return nil, fmt.Errorf("read diagnostic source constraints %s: %w", file, err)
+		}
+		sources = append(sources, source{file, module, native})
+	}
+	slices.SortFunc(sources, func(a, b source) int {
+		if a.module != b.module {
+			return strings.Compare(a.module, b.module)
+		}
+		if a.native != b.native {
+			if a.native {
+				return -1
+			}
+			return 1
+		}
+		return strings.Compare(a.path, b.path)
+	})
+	ordered := make([]string, len(sources))
+	for i, source := range sources {
+		ordered[i] = source.path
+	}
+	return ordered, nil
+}
+
+func diagnosticModule(root, dir string, modules map[string]string) (string, error) {
+	if module, ok := modules[dir]; ok {
+		return module, nil
+	}
+	module := dir
+	if dir != root {
+		_, err := os.Stat(filepath.Join(dir, "go.mod"))
+		if err != nil && !os.IsNotExist(err) {
+			return "", err
+		}
+		if os.IsNotExist(err) {
+			module, err = diagnosticModule(root, filepath.Dir(dir), modules)
+			if err != nil {
+				return "", err
+			}
+		}
+	}
+	modules[dir] = module
+	return module, nil
 }

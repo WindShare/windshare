@@ -28,8 +28,10 @@ Pion is compiled through the root native dependency graph and exercised by the p
 tests. Its standalone upstream module graph and JavaScript/Wasm provider view are not supported targets.
 Stage new Go files before final validation so the tracked-source gate includes them.
 Both hosts use one owned gopls session for all selected files, including inferred platform and nested
-module views. Small batches wait for explicit diagnostic completion before files close; retained files
-keep each build view loaded. Progress reports include elapsed time. Each invocation checks fresh sources.
+module views. Sources are grouped by module, with current-platform files first, so ordinary files do
+not pay for additional platform views before they are needed. Foreign and tagged files remain included.
+Small batches wait for explicit diagnostic completion before files close; retained files keep each
+build view loaded. Progress reports include elapsed time. Each invocation checks fresh sources.
 
 Go coverage is blocking:
 
@@ -55,9 +57,9 @@ large artifacts under `tmp/` slow package discovery and every gopls build view.
 | `make short-go` | Core and non-core short tests, race detection, and coverage. |
 | `make vectors` | Go-to-TypeScript protocol-vector verification. |
 | `make vectors-update` | Regenerate protocol vectors for review. |
-| `make web` | ESLint, TypeScript/Vite build, and Vitest with two isolated workers. |
+| `make web` | ESLint with two workers, TypeScript/Vite build, and Vitest with two isolated workers. |
 | `make e2e` | Critical sender, relay, and receiver process path. |
-| `make browser` | Chromium relay smoke and short browser contracts. |
+| `make browser` | Chromium relay smoke and short browser contracts with two workers. |
 | `make browser-weekly` | Current-host browser suites, including the ordinary browser checks. |
 | `make long-go` | Long E2E, catalog, output-runtime, and integration suites. |
 | `make hygiene` | Formatting, generated files, repository layout, and dependency-boundary checks. |
