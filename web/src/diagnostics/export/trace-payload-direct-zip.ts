@@ -1,5 +1,6 @@
 import {
   canonicalIdentity,
+  decimalFields,
   exactKeys,
   member,
   type UnknownRecord,
@@ -24,6 +25,37 @@ export function validateDirectZipCoordination(payload: UnknownRecord): void {
         value.length === 0 || value.length > maximumLength)) {
       throw new TypeError(`direct ZIP coordination ${key} must be bounded nonempty text`)
     }
+  }
+}
+
+export function validateDirectZipMemberRollback(payload: UnknownRecord): void {
+  exactKeys(payload, [
+    'operation_id', 'session_id', 'candidate_id', 'phase',
+    'old_committed_length', 'new_committed_length',
+    'retained_selected_payload_bytes', 'member_ordinal',
+  ], ['source_change_reason', 'native_error_name'], 'direct_zip_member_rollback payload')
+  canonicalIdentity(payload.operation_id, 'direct ZIP operation ID')
+  canonicalIdentity(payload.session_id, 'direct ZIP session ID')
+  canonicalIdentity(payload.candidate_id, 'direct ZIP rollback candidate ID')
+  member(payload.phase, ['requested', 'persisted', 'recovering', 'completed', 'failed'],
+    'direct ZIP member rollback phase')
+  decimalFields(payload, [
+    'old_committed_length', 'new_committed_length',
+    'retained_selected_payload_bytes', 'member_ordinal',
+  ], 'direct ZIP member rollback')
+  if (BigInt(payload.new_committed_length as string) >
+      BigInt(payload.old_committed_length as string)) {
+    throw new RangeError('direct ZIP member rollback cannot increase the committed length')
+  }
+  if (payload.source_change_reason !== undefined) {
+    member(payload.source_change_reason, [
+      'file_id_changed', 'revision_changed', 'size_changed', 'range_authority_changed',
+    ], 'direct ZIP member rollback source-change reason')
+  }
+  if (payload.native_error_name !== undefined &&
+      (typeof payload.native_error_name !== 'string' || payload.native_error_name.length === 0 ||
+       payload.native_error_name.length > MAXIMUM_DIRECT_ZIP_NATIVE_ERROR_NAME_LENGTH)) {
+    throw new TypeError('direct ZIP member rollback native error name must be bounded nonempty text')
   }
 }
 

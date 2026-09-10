@@ -2,8 +2,9 @@ import { encodeBase64Url } from '../../../../crypto/bytes'
 import { planDirectZipEntryV2 } from '../../../../output/direct-zip/format'
 import {
   createDirectZipCheckpointProposalV1, createDirectZipCheckpointV1,
-  createDirectZipCommitCandidateV1, validateDirectZipCheckpointV1,
-  type DirectZipCheckpointV1, type DirectZipCommitCandidateV1,
+  assertDirectZipRollbackPredecessorV1,
+  createDirectZipCommitCandidateV1, createDirectZipRollbackCandidateV1, validateDirectZipCheckpointV1,
+  type DirectZipCheckpointV1, type DirectZipCommitCandidateV1, type DirectZipPendingCandidateV1,
   type DirectZipDiscoveryEvidenceV1, type DirectZipJournalRepository,
   type DirectZipTargetObservationV1,
 } from '../../../../output/direct-zip/journal'
@@ -19,6 +20,7 @@ import type { DirectZipReplayAuthorityV1 } from '../../../../transfer/direct-zip
 import type {
   DirectZipAuthenticatedRootV1, DirectZipOrderedMemberV1,
 } from '../../../../transfer/direct-zip/model'
+import { memberRollbackCheckpoint, type BrowserDirectZipMemberRollback } from './member-rollback'
 import { rootDirectoryEvidence } from './bootstrap'
 import { checkpointInput, writerCandidate, writerCheckpoint } from './checkpoint'
 import {
@@ -47,7 +49,8 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
   #persisted: DirectZipCheckpointV1
   #checkpoint: DirectZipWriterCheckpointV1
   #discovery: DirectZipDiscoveryEvidenceV1
-  #candidate: DirectZipCommitCandidateV1 | undefined
+  #candidate: DirectZipPendingCandidateV1 | undefined
+  #pendingMemberRollback: BrowserDirectZipMemberRollback | undefined
   #candidatePages: BrowserDirectZipPageAuthority | undefined
   #pendingCandidate: DirectZipEpochCandidateV1 | undefined
   #replayEntries: AsyncIterator<Uint8Array> | undefined
@@ -84,9 +87,18 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
       if (candidate.kind === 'bootstrap' || candidate.predecessorCheckpointDigest !== checkpoint.digest) {
         throw new TypeError('Direct ZIP writer candidate escaped its checkpoint')
       }
+      // Canonical bytes alone cannot authorize destruction: recovered intent must
+      // still name the active member's saved boundary before target IO is exposed.
+      if (candidate.kind === 'rollback') assertDirectZipRollbackPredecessorV1(checkpoint, candidate)
       journal.#candidate = candidate
       journal.#candidatePages = await pages.retainCandidateAuthority(candidate.proposedCheckpoint)
-      journal.#pendingCandidate = await writerCandidate(options.repository, candidate)
+      if (candidate.kind === 'rollback') {
+        journal.#pendingMemberRollback = {
+          candidate, authority: journal.#candidatePages,
+          checkpoint: await writerCheckpoint(options.repository, candidate.proposedCheckpoint,
+            candidate.predecessorTargetObservation.digest),
+        }
+      } else journal.#pendingCandidate = await writerCandidate(options.repository, candidate)
     }
     // A crash during page staging can leave immutable suffixes without a candidate.
     // Fenced reachability retains both committed and pending authority before retry.
@@ -100,6 +112,53 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
   get checkpoint(): DirectZipWriterCheckpointV1 { return this.#checkpoint }
   get persistedCheckpoint(): DirectZipCheckpointV1 { return this.#persisted }
   get pendingCandidate(): DirectZipEpochCandidateV1 | undefined { return this.#pendingCandidate }
+
+  get pendingMemberRollback(): BrowserDirectZipMemberRollback | undefined { return this.#pendingMemberRollback }
+  get hasPendingMutation(): boolean { return this.#candidate !== undefined }
+
+  async stageMemberRollback(candidateId: string): Promise<BrowserDirectZipMemberRollback> {
+    if (this.#candidate !== undefined) throw new TypeError('Direct ZIP already has a pending mutation')
+    const checkpoint = memberRollbackCheckpoint(this.#checkpoint)
+    const authority = await this.pages.prepareMemberRollback(this.#persisted)
+    const proposedCheckpoint = await createDirectZipCheckpointProposalV1(
+      await checkpointInput(this.#persisted, checkpoint, this.pages, this.#persisted.discovery, authority),
+    )
+    const candidate = await createDirectZipRollbackCandidateV1({
+      operationId: this.#persisted.operationId, candidateId, leaseId: this.#options.leaseId,
+      predecessorCheckpointGeneration: this.#persisted.generation,
+      predecessorCheckpointDigest: this.#persisted.digest,
+      predecessorTargetObservation: this.#persisted.targetObservation, proposedCheckpoint,
+    })
+    // The original checkpoint stays authoritative until the target truncation is observed.
+    await this.#options.repository.bindRollbackCandidate(this.#fence(), candidate)
+    this.#candidate = candidate
+    this.#candidatePages = authority
+    this.#pendingMemberRollback = { candidate, checkpoint, authority }
+    return this.#pendingMemberRollback
+  }
+
+  async promoteMemberRollback(observation: DirectZipTargetObservationV1): Promise<void> {
+    const pending = this.#pendingMemberRollback
+    if (pending === undefined || this.#candidate?.digest !== pending.candidate.digest) {
+      throw new TypeError('Direct ZIP member rollback lost its durable authority')
+    }
+    const writer = Object.freeze({
+      ...pending.checkpoint, targetObservationDigest: digestBytes(observation.digest),
+    })
+    const checkpoint = await createDirectZipCheckpointV1({
+      ...await checkpointInput(this.#persisted, writer, this.pages,
+        pending.candidate.proposedCheckpoint.discovery, pending.authority),
+      targetObservation: await this.#freshObservation(writer),
+      candidateLineageDigest: pending.candidate.digest,
+    })
+    const lifecycle = await this.#options.lifecycleForCheckpoint(checkpoint)
+    await this.#options.repository.promoteRollbackCandidate({
+      fence: this.#fence(), candidate: pending.candidate, checkpoint, ...lifecycle,
+    })
+    this.#adopt(checkpoint, writer, pending.authority, lifecycle.lifecycle)
+    // Only the promoted reachability can release immutable suffix ordinals for reuse.
+    await this.#options.repository.collectOrphanPages(this.#fence())
+  }
 
   async stageCandidate(candidate: DirectZipEpochCandidateV1): Promise<void> {
     if (this.#candidate !== undefined || candidate.predecessorGeneration !== this.#persisted.generation ||
@@ -221,7 +280,8 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
   }
 
   #requireCandidate(candidate: DirectZipEpochCandidateV1): DirectZipCommitCandidateV1 {
-    if (this.#candidate === undefined || this.#candidate.candidateId !== candidate.candidateId ||
+    if (this.#candidate === undefined || this.#candidate.kind === 'rollback' ||
+        this.#candidate.candidateId !== candidate.candidateId ||
         this.#candidate.expectedRangeDigest !== encodeBase64Url(candidate.contentDigest)) {
       throw new TypeError('Direct ZIP candidate mutation lost its durable authority')
     }
@@ -251,6 +311,7 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
     this.#candidate = undefined
     this.#candidatePages = undefined
     this.#pendingCandidate = undefined
+    this.#pendingMemberRollback = undefined
     this.pages.commit(pages, writer.member?.rollback.pages)
     this.#options.onCheckpointCommitted?.(checkpoint, lifecycle)
   }

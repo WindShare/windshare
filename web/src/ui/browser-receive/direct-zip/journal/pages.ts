@@ -1,17 +1,18 @@
 import { encodeBase64Url } from '../../../../crypto/bytes'
-import { directZipEpochGenesisRoot } from '../../../../output/direct-zip/format'
 import {
   createDirectZipImmutablePageV1,
   type DirectZipCheckpointV1, type DirectZipImmutablePageV1,
   type DirectZipJournalBudgetUsageV1, type DirectZipJournalFenceV1,
   type DirectZipJournalRepository, type DirectZipPageChainV1, type DirectZipPageKind,
+  type DirectZipRetainedEpochProofV1,
 } from '../../../../output/direct-zip/journal'
 import type {
   DirectZipEpochProofV1, DirectZipMemberAdmissionV1,
   DirectZipWriterCheckpointV1, DirectZipWriterPageSink, DirectZipWriterPageStateV1,
 } from '../../../../output/direct-zip/writer'
-import { equalCanonicalBytes } from '../../../../output/workspace/canonical'
-import { chainForKind, chainFromPage, ZERO_DIGEST } from './bootstrap'
+import { chainForKind, chainFromPage } from './bootstrap'
+import { epochProofsForAuthority, retainedEpochProof, streamEntries } from './page-stream'
+export { streamEntries } from './page-stream'
 import { decodeCentral, decodeEpoch, encodeCentral, encodeEpoch, encodeLayout, digestBytes } from './records'
 
 const MAXIMUM_RETAINED_PAGE_STATES = 6
@@ -20,6 +21,7 @@ export interface BrowserDirectZipPageAuthority {
   readonly layoutPages: DirectZipPageChainV1
   readonly centralPages: DirectZipPageChainV1
   readonly epochPages: DirectZipPageChainV1
+  readonly retainedEpochProof?: DirectZipRetainedEpochProofV1
   readonly journalUsage: DirectZipJournalBudgetUsageV1
   readonly accountingTailPageId?: string
   readonly centralBytes: bigint
@@ -74,6 +76,22 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
     return authority
   }
 
+  async prepareMemberRollback(checkpoint: DirectZipCheckpointV1): Promise<BrowserDirectZipPageAuthority> {
+    const rollback = checkpoint.currentMember?.rollback
+    if (rollback === undefined) throw new TypeError('Direct ZIP checkpoint has no member rollback authority')
+    const retained = rollback.epochStart === rollback.archiveOffset
+      ? rollback.retainedEpochProof : Object.freeze({
+          start: rollback.epochStart, end: rollback.archiveOffset,
+          predecessorRootDigest: rollback.predecessorEpochRootDigest,
+          contentDigest: rollback.epochContentDigest, epochRootDigest: rollback.epochRootDigest,
+        })
+    const authority = await readPageAuthority(this.#repository, checkpoint.operationId, {
+      ...rollback, ...(retained === undefined ? {} : { retainedEpochProof: retained }),
+    })
+    this.#remember(authority)
+    return authority
+  }
+
   get authority(): BrowserDirectZipPageAuthority { return this.#current }
   get committedAuthority(): BrowserDirectZipPageAuthority { return this.#committed }
 
@@ -100,6 +118,7 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
     if (admission.plan.ordinal !== this.#current.layoutPages.recordCount) {
       throw new TypeError('Direct ZIP layout page skipped an ordinal')
     }
+    await this.#materializeRetainedEpoch()
     if (admission.plan.zipEntry.kind === 'file') this.#rollback = this.#current
     await this.#stage('layout', encodeLayout(admission))
   }
@@ -153,25 +172,36 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
     }
   }
 
-  async *committedEpochProofs(checkpoint: DirectZipWriterCheckpointV1): AsyncIterable<DirectZipEpochProofV1> {
-    const authority = this.#committed
-    let end = 0n
-    let root: Uint8Array = directZipEpochGenesisRoot()
-    for await (const bytes of streamEntries(this.#repository, checkpoint.operationId, 'epoch', authority.epochPages)) {
-      const proof = decodeEpoch(bytes)
-      if (proof.start !== end || !equalCanonicalBytes(proof.predecessorRoot, root)) {
-        throw new TypeError('Direct ZIP epoch pages lost their contiguous lineage')
-      }
-      end = proof.end
-      root = proof.epochRoot
-      yield proof
-    }
-    if (end !== checkpoint.committedLength || !equalCanonicalBytes(root, checkpoint.epochRoot)) {
-      throw new TypeError('Direct ZIP epoch pages disagree with committed target bytes')
-    }
+  committedEpochProofs(checkpoint: DirectZipWriterCheckpointV1): AsyncIterable<DirectZipEpochProofV1> {
+    return this.epochProofsFor(this.#committed, checkpoint)
+  }
+
+  epochProofsFor(
+    authority: BrowserDirectZipPageAuthority,
+    checkpoint: Pick<DirectZipWriterCheckpointV1, 'operationId' | 'committedLength' | 'epochRoot'>,
+  ): AsyncIterable<DirectZipEpochProofV1> {
+    return epochProofsForAuthority(this.#repository, authority, checkpoint)
+  }
+
+  async #materializeRetainedEpoch(): Promise<void> {
+    const proof = this.#current.retainedEpochProof
+    if (proof === undefined) return
+    // The rollback cut must retire the old suffix before its immutable ordinal can
+    // hold the shorter terminal proof. This metadata write never closes the ZIP.
+    await this.#repository.collectOrphanPages(this.#fence())
+    await this.#appendPage('epoch', encodeEpoch(retainedEpochProof(proof)))
+    const authority = { ...this.#current }
+    delete authority.retainedEpochProof
+    this.#current = Object.freeze(authority)
+    this.#remember(this.#current)
   }
 
   async #stage(kind: DirectZipPageKind, bytes: Uint8Array, centralBytes = 0n): Promise<void> {
+    await this.#materializeRetainedEpoch()
+    await this.#appendPage(kind, bytes, centralBytes)
+  }
+
+  async #appendPage(kind: DirectZipPageKind, bytes: Uint8Array, centralBytes = 0n): Promise<void> {
     const fence = this.#fence()
     const chain = chainForKind(this.#current, kind)
     const predecessor = this.#tail === undefined
@@ -248,34 +278,10 @@ export async function readPageAuthority(
       if (kind === 'epoch') decodeEpoch(bytes)
     }
   }
-  return Object.freeze({ ...authority, centralBytes })
-}
-
-export async function* streamEntries(
-  repository: DirectZipJournalRepository,
-  operationId: string,
-  kind: DirectZipPageKind,
-  chain: DirectZipPageChainV1,
-): AsyncIterable<Uint8Array> {
-  let pageCount = 0n
-  let recordCount = 0n
-  let metadataBytes = 0n
-  let root = ZERO_DIGEST
-  for await (const page of repository.streamPages({ operationId, pageKind: kind, chainId: chain.chainId })) {
-    if (pageCount === chain.pageCount) break
-    if (BigInt(page.pageOrdinal) !== pageCount || page.predecessorRootDigest !== root ||
-        page.chainRecordCount !== recordCount + BigInt(page.entryCount) ||
-        page.chainCanonicalMetadataBytes !== metadataBytes + BigInt(page.canonicalBytes.byteLength)) {
-      throw new TypeError('Direct ZIP immutable page chain changed')
-    }
-    root = page.chainRootDigest
-    pageCount += 1n
-    recordCount = page.chainRecordCount
-    metadataBytes = page.chainCanonicalMetadataBytes
-    for (const bytes of page.canonicalEntries) yield bytes
-  }
-  if (pageCount !== chain.pageCount || root !== chain.rootDigest ||
-      recordCount !== chain.recordCount || metadataBytes !== chain.canonicalMetadataBytes) {
-    throw new TypeError('Direct ZIP immutable page chain is incomplete')
-  }
+  return Object.freeze({
+    layoutPages: authority.layoutPages, centralPages: authority.centralPages,
+    epochPages: authority.epochPages, journalUsage: authority.journalUsage, centralBytes,
+    ...(authority.accountingTailPageId === undefined ? {} : { accountingTailPageId: authority.accountingTailPageId }),
+    ...(authority.retainedEpochProof === undefined ? {} : { retainedEpochProof: authority.retainedEpochProof }),
+  })
 }

@@ -101,6 +101,7 @@ export async function checkpointInput(
     epochRootDigest: encodeBase64Url(writer.epochRoot),
     layoutPages: authority.layoutPages, centralPages: authority.centralPages,
     epochPages: authority.epochPages, journalUsage: authority.journalUsage,
+    ...(authority.retainedEpochProof === undefined ? {} : { retainedEpochProof: authority.retainedEpochProof }),
     ...(authority.accountingTailPageId === undefined ? {} : { accountingTailPageId: authority.accountingTailPageId }),
     ...(member === undefined || rollback === undefined || entryPlan === undefined ? {} : {
       currentMember: {
@@ -118,6 +119,7 @@ export async function checkpointInput(
           epochRootDigest: encodeBase64Url(member.rollback.epochRoot),
           layoutPages: rollback.layoutPages, centralPages: rollback.centralPages,
           epochPages: rollback.epochPages, journalUsage: rollback.journalUsage,
+          ...(rollback.retainedEpochProof === undefined ? {} : { retainedEpochProof: rollback.retainedEpochProof }),
           ...(rollback.accountingTailPageId === undefined ? {} : { accountingTailPageId: rollback.accountingTailPageId }),
         },
       },

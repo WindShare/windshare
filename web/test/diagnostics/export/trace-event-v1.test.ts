@@ -544,6 +544,19 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
     lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
     native_error_name: 'InvalidStateError',
   }),
+  ...(['requested', 'persisted', 'recovering', 'completed', 'failed'] as const).map(phase =>
+    observation('direct_zip_member_rollback', {
+      operation_id: OPERATION_ID,
+      session_id: SESSION_ID,
+      candidate_id: PATH_ID,
+      phase,
+      old_committed_length: '512',
+      new_committed_length: '128',
+      retained_selected_payload_bytes: '32',
+      member_ordinal: '1',
+      ...(phase === 'recovering' ? {} : { source_change_reason: 'revision_changed' as const }),
+      ...(phase === 'failed' ? { native_error_name: 'DataError' } : {}),
+    })),
   observation('retained_inventory', { transition: 'load_started' }),
   observation('retained_inventory', { transition: 'load_completed', operation_count: '3' }),
   observation('retained_action', {
@@ -729,8 +742,11 @@ describe('closed TraceEventObservationV1 boundary', () => {
   it('rejects open text at closed-vocabulary string and array-item positions', () => {
     for (const candidate of VALID_OBSERVATIONS) {
       for (const path of stringLeafPaths(candidate)) {
-        if (candidate.eventName === 'direct_zip_coordination' && path[0] === 'payload' &&
-            (path[1] === 'lock_name' || path[1] === 'native_error_name')) continue
+        if (path[0] === 'payload' &&
+            ((candidate.eventName === 'direct_zip_coordination' &&
+              (path[1] === 'lock_name' || path[1] === 'native_error_name')) ||
+             (candidate.eventName === 'direct_zip_member_rollback' &&
+              path[1] === 'native_error_name'))) continue
         const mutated = clone(candidate)
         setAtPath(mutated, path, PRIVATE_TEXT)
         expectRejected(mutated)
@@ -744,6 +760,22 @@ describe('closed TraceEventObservationV1 boundary', () => {
     const unknownPlan = clone(event('authority_transition', 'offers_computed'))
     ;(unknownPlan.payload.offered_plan_kinds as unknown[])[0] = PRIVATE_TEXT
     expectRejected(unknownPlan)
+  })
+
+  it('rejects ZIP rollback growth and bounds optional native error names', () => {
+    const candidate = VALID_OBSERVATIONS.find(event =>
+      event.eventName === 'direct_zip_member_rollback' && event.payload.phase === 'failed')!
+    const growth = clone(candidate)
+    growth.payload.new_committed_length = '513'
+    expectRejected(growth)
+    for (const value of ['', false, 'x'.repeat(129)]) {
+      const invalid = clone(candidate)
+      invalid.payload.native_error_name = value
+      expectRejected(invalid)
+    }
+    const bounded = clone(candidate)
+    bounded.payload.native_error_name = 'x'.repeat(128)
+    expect(() => snapshotTraceEventObservationV1(bounded as TraceEventObservationV1)).not.toThrow()
   })
 
   it('retains ZIP coordination identity through the output trace adapter and bounds optional names', () => {

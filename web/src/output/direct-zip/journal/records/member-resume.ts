@@ -39,6 +39,8 @@ import {
   requireU64,
 } from './canonical-fields'
 
+import { canonicalRetainedEpochProof, snapshotRetainedEpochProof } from './retained-epoch'
+
 const DIRECT_ZIP_MEMBER_ENTRY_PLAN_DOMAIN = 'windshare/direct-zip-member-entry-plan/v2'
 
 export async function snapshotCurrentMember(
@@ -167,6 +169,10 @@ function snapshotMemberRollback(
   const layoutPages = snapshotPageChain(input.layoutPages, 'member rollback layout')
   const centralPages = snapshotPageChain(input.centralPages, 'member rollback central')
   const epochPages = snapshotPageChain(input.epochPages, 'member rollback epoch')
+  const retainedEpochProof = snapshotRetainedEpochProof(input.retainedEpochProof, input.archiveOffset, epochRootDigest)
+  if (retainedEpochProof !== undefined && input.epochStart !== input.archiveOffset) {
+    throw new TypeError('member rollback must materialize its retained epoch before appending bytes')
+  }
   const journalUsage = validateDirectZipJournalBudgetUsageV1(input.journalUsage)
   if (journalUsage.memberCount !== layoutPages.recordCount ||
       journalUsage.canonicalMetadataBytes !== layoutPages.canonicalMetadataBytes +
@@ -193,6 +199,7 @@ function snapshotMemberRollback(
     layoutPages,
     centralPages,
     epochPages,
+    ...(retainedEpochProof === undefined ? {} : { retainedEpochProof }),
     journalUsage,
     ...(accountingTailPageId === undefined ? {} : { accountingTailPageId }),
   })
@@ -210,6 +217,7 @@ function canonicalMemberRollback(input: DirectZipMemberResumeV1['rollback']): Ca
     canonicalFrame(canonicalPageChain(input.layoutPages)),
     canonicalFrame(canonicalPageChain(input.centralPages)),
     canonicalFrame(canonicalPageChain(input.epochPages)),
+    canonicalFrame(canonicalRetainedEpochProof(input.retainedEpochProof)),
     canonicalFrame(canonicalBudgetUsage(input.journalUsage)),
     optionalTextFrame(input.accountingTailPageId),
   ])

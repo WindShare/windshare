@@ -1,5 +1,6 @@
 import type {
   DirectZipCoordinationPayloadV1,
+  DirectZipMemberRollbackPayloadV1,
   DirectZipMilestonePayloadV1,
 } from '../../diagnostics/trace/model'
 import type {
@@ -131,6 +132,7 @@ export interface OutputTracePayloadByName {
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
   readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
+  readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
 }
 
 export type OutputTraceEventName = keyof OutputTracePayloadByName

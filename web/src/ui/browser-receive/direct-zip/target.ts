@@ -214,6 +214,72 @@ export class BrowserDirectZipTarget implements DirectZipTargetVerificationPort {
     }
   }
 
+  async recoverMemberRollback(
+    previous: DirectZipWriterCheckpointV1,
+    rollback: DirectZipWriterCheckpointV1,
+    proofs: () => AsyncIterable<DirectZipEpochProofV1>,
+    signal?: AbortSignal,
+  ): Promise<DirectZipTargetObservationV1> {
+    signal?.throwIfAborted()
+    if (this.#writable !== undefined) throw new DOMException('ZIP writer is active', 'InvalidStateError')
+    const verified = await this.#verifyMemberRollbackTarget(previous, rollback, proofs)
+    signal?.throwIfAborted()
+    if (verified.checkpoint === rollback) return this.#acceptMemberRollback(rollback, verified.observation)
+
+    // The caller binds the rollback candidate durably before entering here. After
+    // publication, recovery must accept the shorter prefix without restoring old bytes.
+    const closeFailure = await this.#input.namespaceMutations.run(async () => {
+      let failure: Readonly<{ error: unknown }> | undefined
+      signal?.throwIfAborted()
+      await this.#recheckObservation(verified.observation, previous.epochRoot)
+      signal?.throwIfAborted()
+      const writable = await this.#input.fileSystem.createWritable(
+        this.#input.binding.fileBinding.persistedHandle, true,
+      )
+      this.#writable = writable
+      try {
+        signal?.throwIfAborted()
+        await this.#recheckObservation(verified.observation, previous.epochRoot)
+        signal?.throwIfAborted()
+        await writable.truncate(rollback.committedLength)
+        signal?.throwIfAborted()
+        try { await writable.close() } catch (error) { failure = { error } }
+      } catch (error) {
+        await writable.abort(error).catch(() => undefined)
+        throw error
+      } finally {
+        if (failure !== undefined) await writable.abort(failure.error).catch(() => undefined)
+        this.#writable = undefined
+        this.#verified = undefined
+        this.#closedEpoch = undefined
+        this.#candidateRoot = undefined
+      }
+      return failure
+    })
+    const published = await this.#verifyMemberRollbackTarget(previous, rollback, proofs)
+    if (published.checkpoint !== rollback) {
+      if (closeFailure !== undefined) throw closeFailure.error
+      throw new DOMException('The ZIP rollback was not published', 'DataError')
+    }
+    return this.#acceptMemberRollback(rollback, published.observation)
+  }
+
+  async deleteOwnedMemberRollback(
+    previous: DirectZipWriterCheckpointV1,
+    rollback: DirectZipWriterCheckpointV1,
+    proofs: () => AsyncIterable<DirectZipEpochProofV1>,
+  ): Promise<void> {
+    if (this.#writable !== undefined) throw new DOMException('ZIP writer is active', 'InvalidStateError')
+    try {
+      const verified = await this.#verifyMemberRollbackTarget(previous, rollback, proofs)
+      await this.#removeVerifiedTarget(verified.observation.digest, verified.checkpoint.epochRoot)
+    } catch (error) {
+      // An interrupted deletion can leave the candidate durable after its exact entry is gone.
+      if (error instanceof DOMException && error.name === 'NotFoundError') return
+      throw error
+    }
+  }
+
   async readBoundedCompletionProof(input: Readonly<{
     exactArchiveBytes: bigint; rootCentralRecordOffset: bigint
     rootCentralRecordBytes: bigint; closingTailBytes: number
@@ -253,17 +319,61 @@ export class BrowserDirectZipTarget implements DirectZipTargetVerificationPort {
       expectedObservation = encodeBase64Url(observed.observationDigest!)
       if (observed.length === 'candidate') expectedRoot = candidate.expectedEpochRoot
     }
+    await this.#removeVerifiedTarget(expectedObservation, expectedRoot)
+  }
+
+  async #removeVerifiedTarget(expectedObservation: string, expectedRoot: Uint8Array): Promise<void> {
     // Proof scans retain only target exclusivity. Namespace coordination is needed
     // for the bounded ownership recheck and removal, not for reading the archive.
     await this.#input.namespaceMutations.run(async () => {
-      const observedAgain = await this.#observation(await this.#ownedSnapshot(), expectedRoot)
-      if (observedAgain.digest !== expectedObservation) {
-        throw new DOMException('The retained ZIP changed before deletion', 'DataError')
-      }
+      await this.#recheckObservation({ digest: expectedObservation }, expectedRoot)
       await this.#input.fileSystem.removeExactName(
         this.#input.binding.parentBinding.persistedHandle, this.#input.binding.stableName,
       )
     })
+  }
+
+  async #recheckObservation(expected: Readonly<{ digest: string }>, root: Uint8Array): Promise<void> {
+    const observation = await this.#observation(await this.#ownedSnapshot(), root)
+    if (observation.digest !== expected.digest) {
+      throw new DOMException('The retained ZIP changed before mutation', 'DataError')
+    }
+  }
+
+  async #verifyMemberRollbackTarget(
+    previous: DirectZipWriterCheckpointV1,
+    rollback: DirectZipWriterCheckpointV1,
+    proofs: () => AsyncIterable<DirectZipEpochProofV1>,
+  ) {
+    if (rollback.operationId !== previous.operationId ||
+        rollback.phase !== 'between-members' || rollback.member !== undefined ||
+        rollback.committedLength < this.#input.binding.bootstrapPrefixLength ||
+        rollback.committedLength >= previous.committedLength) {
+      throw new DOMException('The ZIP member rollback is invalid', 'DataError')
+    }
+    const snapshot = await this.#ownedSnapshot()
+    let checkpoint: DirectZipWriterCheckpointV1 | undefined
+    if (snapshot.size === previous.committedLength) checkpoint = previous
+    else if (snapshot.size === rollback.committedLength) checkpoint = rollback
+    // A valid retained prefix never authorizes removal of an unverified discarded
+    // suffix. Both durable shapes must be exact; unknown tails remain untouched.
+    if (checkpoint === undefined ||
+        checkpoint === previous &&
+          !await this.#verifyProofs(snapshot, previous.committedLength, previous.epochRoot) ||
+        !await this.#verifyProofs(snapshot, rollback.committedLength, rollback.epochRoot, proofs)) {
+      throw new DOMException('The retained ZIP does not match its rollback proofs', 'DataError')
+    }
+    return { checkpoint, observation: await this.#observation(snapshot, checkpoint.epochRoot) }
+  }
+
+  #acceptMemberRollback(
+    checkpoint: DirectZipWriterCheckpointV1,
+    observation: DirectZipTargetObservationV1,
+  ): DirectZipTargetObservationV1 {
+    this.#verified = { generation: checkpoint.generation, observation: observation.digest }
+    this.#closedEpoch = undefined
+    this.#candidateRoot = undefined
+    return observation
   }
 
   async abort(reason: unknown): Promise<void> {
@@ -313,11 +423,16 @@ export class BrowserDirectZipTarget implements DirectZipTargetVerificationPort {
     return root
   }
 
-  async #verifyProofs(snapshot: DirectZipFileSnapshotPort, length: bigint, root: Uint8Array) {
+  async #verifyProofs(
+    snapshot: DirectZipFileSnapshotPort,
+    length: bigint,
+    root: Uint8Array,
+    proofs: () => AsyncIterable<DirectZipEpochProofV1> = () => this.#input.proofs(),
+  ) {
     if (snapshot.size < length) return false
     let offset = 0n
     let expectedRoot: Uint8Array = directZipEpochGenesisRoot()
-    for await (const proof of this.#input.proofs()) {
+    for await (const proof of proofs()) {
       if (proof.end > length) break
       if (proof.start !== offset || !equalBytes(proof.predecessorRoot, expectedRoot)) return false
       const digest = await digestRange(snapshot, proof.start, proof.end)

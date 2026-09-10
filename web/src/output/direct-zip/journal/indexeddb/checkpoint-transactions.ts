@@ -19,6 +19,7 @@ import type {
   DirectZipCandidatePromotionV1,
   DirectZipCandidateRetirementV1,
   DirectZipCommitCandidateV1,
+  DirectZipPendingCandidateV1,
   DirectZipImmutablePageV1,
   DirectZipJournalFenceV1,
   DirectZipRecoveryLifecycleCommitV1,
@@ -41,12 +42,13 @@ import {
   sameUsage,
   snapshotFence,
 } from './authority'
+import { validateDirectZipPendingCandidateV1 } from '../rollback'
 import type { IndexedDbDirectZipJournalStorage } from './storage'
 
 function applyRecoveryCandidateDisposition(
   store: IDBObjectStore,
   lifecycleKind: import('../../../workspace/state').ReceiveLifecycleState['kind'],
-  candidate: DirectZipCommitCandidateV1 | undefined,
+  candidate: DirectZipPendingCandidateV1 | undefined,
 ): void {
   if (lifecycleKind === 'discarded' && candidate !== undefined) store.delete(candidate.id)
 }
@@ -284,7 +286,7 @@ export class IndexedDbDirectZipCheckpointTransactions {
     const fence = snapshotFence(cut.fence)
     const candidate = cut.candidate === undefined
       ? undefined
-      : await validateDirectZipCommitCandidateV1(cut.candidate)
+      : await validateDirectZipPendingCandidateV1(cut.candidate)
     if (candidate !== undefined) assertCandidateCheckpointFence(candidate, fence)
     const lifecycleRecord = await validatePersistedReceiveRecord(cut.lifecycleRecord)
     const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)

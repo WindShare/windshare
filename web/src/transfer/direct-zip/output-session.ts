@@ -51,6 +51,7 @@ export interface DirectZipMemberRollbackAuthorityV1 {
     decision: Extract<DirectZipMemberResumeDecisionV1, { readonly kind: 'rollback-member' }>
     checkpoint: DirectZipWriterCheckpointV1
     source: DirectZipSourceAuthorityV1
+    signal: AbortSignal
   }>): Promise<DirectZipEpochWriterV1>
 }
 
@@ -181,7 +182,7 @@ export class DirectZipTransferOutputV1 implements
     const authority: DirectZipSourceAuthorityV1 = Object.freeze({ ...source })
     const checkpoint = this.#writer.committedCheckpoint
     const opened = checkpoint.phase === 'inside-member' && checkpoint.nextEntryOrdinal === pending.ordinal
-      ? await this.#resumeMember(pending.ordinal, file, authority, checkpoint)
+      ? await this.#resumeMember(pending.ordinal, file, authority, checkpoint, signal)
       : await this.#startMember(pending.ordinal, file, authority)
     this.#activeFile = true
     return new DirectZipFileTransaction(
@@ -198,6 +199,7 @@ export class DirectZipTransferOutputV1 implements
     file: Extract<DirectZipOrderedMemberV1, { kind: 'file' }>,
     authority: DirectZipSourceAuthorityV1,
     checkpoint: DirectZipWriterCheckpointV1,
+    signal: AbortSignal,
   ): Promise<OpenedDirectZipMember> {
     const active = checkpoint.member!
     const plan = this.#plan(ordinal, file, active.plan.zipEntry.localHeaderOffset)
@@ -213,6 +215,7 @@ export class DirectZipTransferOutputV1 implements
       decision: resumed,
       checkpoint,
       source: authority,
+      signal,
     })
     const replacement = this.#writer.committedCheckpoint
     if (replacement.phase !== 'between-members' ||
@@ -225,6 +228,7 @@ export class DirectZipTransferOutputV1 implements
     // A changed revision invalidates its reused payload, even when the archive
     // prefix was previously durable. The replacement writer owns that decision.
     this.#restoreRetainedPayload(replacement.safeResumeBytes)
+    signal.throwIfAborted()
     return this.#startMember(ordinal, file, authority)
   }
 

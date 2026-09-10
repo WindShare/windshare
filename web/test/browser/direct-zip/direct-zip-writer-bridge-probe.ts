@@ -181,7 +181,7 @@ export async function probeDirectZipWriterBridge(
     let promotionFailed = false
     try { await engine.pause() } catch { promotionFailed = true }
     const staged = await repository.readOperationCandidate(operationId)
-    if (staged === undefined || staged.kind === 'bootstrap') throw new Error('epoch candidate is absent')
+    if (staged?.kind !== 'epoch') throw new Error('epoch candidate is absent')
     const attention = nextReceiveLifecycleState(lifecycle, { kind: 'needs-attention',
       reason: 'publication-unknown', lastVerifiedRecordDigest: journal.persistedCheckpoint.digest })
     await repository.commitRecoveryLifecycle({
