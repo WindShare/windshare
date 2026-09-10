@@ -3,6 +3,7 @@ import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
 import type { CheckpointPayloadV1 } from './checkpoint-payload'
+import type { RetainedActionPayloadV1, RetainedInventoryPayloadV1 } from './retained-payload'
 import type {
   CapacityWaitTransitionPayloadV1,
   PerformancePhasePayloadV1,
@@ -624,23 +625,8 @@ export interface TraceEventPayloadByNameV1 {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
-  readonly retained_inventory:
-    | Readonly<{ transition: 'load_started' | 'load_failed' }>
-    | Readonly<{ transition: 'load_completed'; operation_count: string }>
-  readonly retained_action: Readonly<{
-    transition: 'started' | 'completed' | 'failed' | 'excluded'
-    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete' | 'save-partial' | 'forget'
-    continuation:
-      | 'resume_receive'
-      | 'pending_catch_up'
-      | 'restoration_available'
-      | 'history_only'
-      | 'resume_package'
-      | 'save_artifact'
-      | 'retry_download'
-      | 'retry_cleanup'
-      | 'needs_attention'
-  }>
+  readonly retained_inventory: RetainedInventoryPayloadV1
+  readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{
     incident_sequence: string
     root_incident_sequence?: string

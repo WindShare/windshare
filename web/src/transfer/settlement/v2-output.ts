@@ -144,10 +144,11 @@ export async function withQuiescentOutputSettlementTimeout<T>(
 }
 
 /**
- * Workspace completion and recovery return durable lifecycle evidence. Once drained,
- * that evidence wins over a deadline; a failed cut still exposes the initiating timeout.
+ * Durable completion and recovery own their target until the mutation drains.
+ * Committed lifecycle evidence wins over a deadline: a slow browser close cannot
+ * authorize a competing Pause or unknown-ownership record while publication runs.
  */
-export async function withWorkspaceOutputSettlementTimeout(
+export async function withDurableLifecycleSettlementTimeout(
   operation: string,
   timeoutMilliseconds: number,
   settle: (signal: AbortSignal) => Promise<ReceiveLifecycleState>,
@@ -166,9 +167,9 @@ export async function withWorkspaceOutputSettlementTimeout(
 }
 
 /**
- * Transfer failure can request only a stable lifecycle cut. If the plan adapter
- * cannot prove that cut within the bounded interval, the lifecycle owner records
- * target authority as unknown instead of the worker inventing a terminal state.
+ * Transfer failure can request only a stable lifecycle cut. Durable plans drain
+ * any live mutation before an unsuccessful cut can authorize unknown ownership;
+ * other adapters retain their bounded cancellation contract.
  */
 export async function pauseFailedV2Execution(options: {
   readonly intent: ReceiveIntent
@@ -189,10 +190,11 @@ export async function pauseFailedV2Execution(options: {
   const validate = options.validateState ?? ((state: ReceiveLifecycleState) => state)
   // Admission recovery can close a reopened writer, so it needs the same ownership
   // boundary even when no PlanExecution was installed.
-  const settle = options.intent.plan.kind === 'workspace-then-publish'
+  const settle = options.intent.plan.kind === 'workspace-then-publish' ||
+      options.intent.plan.kind === 'direct-resumable-zip'
     ? (operation: string, budget: SettlementBudget, run: (signal: AbortSignal) => Promise<ReceiveLifecycleState>,
         deadline?: V2OutputSettlementDeadline) =>
-        withWorkspaceOutputSettlementTimeout(operation, budget.remainingMilliseconds(), run, deadline)
+        withDurableLifecycleSettlementTimeout(operation, budget.remainingMilliseconds(), run, deadline)
     : settleWithSignal<ReceiveLifecycleState>
   try {
     if (options.execution === undefined) {

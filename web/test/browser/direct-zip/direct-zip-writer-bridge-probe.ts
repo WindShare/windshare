@@ -27,7 +27,10 @@ import { StagedDirectZipTarget } from '../../output/direct-zip/writer/fault-mode
 
 const identity = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 
-export async function probeDirectZipWriterBridge(databaseName: string) {
+export async function probeDirectZipWriterBridge(
+  databaseName: string,
+  rollbackFault?: 'before-publish' | 'unknown-tail',
+) {
   const repository = await IndexedDbDirectZipJournalRepository.open({ databaseName })
   const raw = await openIndexedDbCheckpointDatabase(databaseName)
   try {
@@ -147,6 +150,11 @@ export async function probeDirectZipWriterBridge(databaseName: string) {
       ...await originalCompletion(input),
       observationDigest: decodeBase64Url((await observeTarget(lastObservedRoot)).digest)!,
     })
+    const originalTruncate = target.truncateToPredecessor.bind(target)
+    target.truncateToPredecessor = async checkpoint => ({
+      ...await originalTruncate(checkpoint),
+      observationDigest: decodeBase64Url((await observeTarget(checkpoint.epochRoot)).digest)!,
+    })
     const writer = () => new DirectZipEpochWriterV1({
       context: { ownershipMarker: marker, rootComponent }, checkpoint: journal.checkpoint,
       pages: journal.pages, cuts: journal.cuts, target,
@@ -191,20 +199,20 @@ export async function probeDirectZipWriterBridge(databaseName: string) {
     if (!('write' in resumed)) throw new Error('unchanged member could not resume')
     await resumed.write(Uint8Array.of(68, 69, 70))
     await resumed.close()
-    await engine.pause()
+    const rollbackRecovery = rollbackFault === undefined ? undefined :
+      await probeClosingRollback({ engine, journal, target, admission, source, rootComponent, rollbackFault })
     const pages = await journal.pages.snapshot()
     const beforeClosing = journal.persistedCheckpoint
     const completion = await engine.closeArchive({
       entryCount: 2n, centralDirectoryBytes: pages.centralBytes,
       layoutRoot: pages.layoutRoot, centralRoot: pages.centralRoot,
-      preClosingEpochRoot: journal.checkpoint.epochRoot,
+      predecessorEpochRoot: journal.checkpoint.epochRoot,
     })
-    let staleClosingRejected = false
+    let staleCandidateRejected = false
     try {
-      await repository.enterClosing({ fence: { operationId, leaseId, checkpointGeneration: beforeClosing.generation },
-        checkpoint: journal.persistedCheckpoint, lifecycle,
-        lifecycleRecord: await storedReceiveLifecycleState(lifecycle) })
-    } catch { staleClosingRejected = true }
+      await repository.bindCandidate({ operationId, leaseId,
+        checkpointGeneration: staged.predecessorCheckpointGeneration }, staged)
+    } catch { staleCandidateRejected = true }
     const reopened = await BrowserDirectZipJournal.open({
       ...options, checkpoint: (await repository.readState(operationId))!.checkpoint,
     })
@@ -218,15 +226,73 @@ export async function probeDirectZipWriterBridge(databaseName: string) {
       lifecycle: published, lifecycleRecord: await storedReceiveLifecycleState(published),
     })
     return {
-      prematurePublicationRejected, publishedCommitted: true,
+      prematurePublicationRejected, publishedCommitted: true, rollbackRecovery,
       bootstrapFault, layoutCountAfterFault, bootstrapStateAbsent: bootstrapStateAfterFault === undefined,
       retiredBeforePublish,
       promotionFailed, candidateDurable: staged?.kind === 'epoch', resumedOffset: resumedOffset?.toString(),
       completionBytes: completion.exactArchiveBytes.toString(), storedCompletion: reopened.checkpoint.completion !== undefined,
-      epochCount: proofCount.length, staleClosingRejected,
+      epochCount: proofCount.length, staleCandidateRejected,
+      completionGenerationAdvance: (reopened.persistedCheckpoint.generation - beforeClosing.generation).toString(),
     }
   } finally {
     raw.close()
     repository.close()
   }
+}
+
+async function probeClosingRollback(input: Readonly<{
+  engine: DirectZipEpochWriterV1
+  journal: BrowserDirectZipJournal
+  target: StagedDirectZipTarget
+  admission: Parameters<DirectZipEpochWriterV1['beginFile']>[0]
+  source: Parameters<DirectZipEpochWriterV1['resumeFile']>[0]
+  rootComponent: string
+  rollbackFault: 'before-publish' | 'unknown-tail'
+}>) {
+  const { engine, journal, target, admission, source, rootComponent, rollbackFault } = input
+  const predecessor = journal.checkpoint
+  let archiveOffset = admission.plan.zipEntry.localHeaderOffset + admission.plan.entryStreamBytes
+  // More than the page-state cache limit must not evict the durable member's
+  // rollback while later members replace the working rollback authority.
+  for (let index = 0; index < 4; index++) {
+    const plan = planDirectZipEntryV2({ ordinal: BigInt(index + 2), localHeaderOffset: archiveOffset,
+      entry: { kind: 'file', path: [rootComponent, `pending-${index}.txt`], exactSize: source.exactSize } })
+    const member = await engine.beginFile({ ...admission, plan, source: { ...source, fileId: identity(16, 30 + index) } })
+    await member.write(Uint8Array.of(65, 66, 67, 68, 69, 70))
+    await member.close()
+    archiveOffset += plan.entryStreamBytes
+  }
+  const observe = target.observeCandidate.bind(target)
+  let appendUnknownTail = rollbackFault === 'unknown-tail'
+  target.observeCandidate = async (candidate, closeAttempt) => {
+    if (appendUnknownTail && candidate.kind === 'closing') {
+      appendUnknownTail = false
+      target.appendExternal(Uint8Array.of(0xaa, 0xbb))
+    }
+    return observe(candidate, closeAttempt)
+  }
+  target.closeFaults.push('before-publish')
+  const pages = await journal.pages.snapshot()
+  let rejected = false
+  try {
+    await engine.closeArchive({ entryCount: pages.layoutRecordCount, centralDirectoryBytes: pages.centralBytes,
+      layoutRoot: pages.layoutRoot, centralRoot: pages.centralRoot, predecessorEpochRoot: predecessor.epochRoot })
+  } catch (error) {
+    if (!(error instanceof Error) || !error.message.includes('closing epoch did not publish')) throw error
+    rejected = true
+  }
+  if (!rejected || journal.pendingCandidate !== undefined || journal.checkpoint.member?.payloadOffset !== 3n) {
+    throw new Error('failed final close did not retain the inside-member predecessor')
+  }
+  const resumed = engine.resumeFile(source)
+  if (!('write' in resumed)) throw new Error('failed final close lost its source resume')
+  await resumed.write(Uint8Array.of(68))
+  const saved = await engine.pause()
+  if (saved.kind !== 'advanced' || saved.checkpoint.member?.payloadOffset !== 4n) {
+    throw new Error('same-journal resume lost committed member rollback authority')
+  }
+  await resumed.write(Uint8Array.of(69, 70))
+  await resumed.close()
+  return { sameJournalSavedOffset: saved.checkpoint.member.payloadOffset.toString(),
+    truncated: target.truncateCount === 1, candidateRetired: journal.pendingCandidate === undefined }
 }

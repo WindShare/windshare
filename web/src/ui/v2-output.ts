@@ -519,8 +519,7 @@ function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPau
 
 function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
   if (progress.operationId.length === 0 || progress.generation < 0n ||
-      progress.receivedSelectedBytes < 0n || progress.safeResumeBytes < 0n ||
-      progress.safeResumeBytes > progress.receivedSelectedBytes ||
+      progress.safeResumeBytes < 0n ||
       (progress.resumeTemporarySpaceUpperBound !== undefined &&
        progress.resumeTemporarySpaceUpperBound < 0n)) {
     throw new TypeError('direct ZIP progress snapshot is invalid')

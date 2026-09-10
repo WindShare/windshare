@@ -1,4 +1,9 @@
 import {
+  RETAINED_ACTION_TRANSITIONS,
+  RETAINED_ACTIONS,
+  RETAINED_CONTINUATIONS,
+} from '../trace/retained-payload'
+import {
   booleanValue,
   recordValue,
   decimalFields,
@@ -695,15 +700,10 @@ export function validateRetainedInventory(payload: UnknownRecord): void {
 
 export function validateRetainedAction(payload: UnknownRecord): void {
   exactKeys(payload, ['transition', 'action', 'continuation'], [], 'retained action payload')
-  member(payload.transition, ['started', 'completed', 'failed', 'excluded'],
+  member(payload.transition, RETAINED_ACTION_TRANSITIONS,
     'retained action transition')
-  member(payload.action, ['continue', 'catch-up', 'save', 'redownload', 'discard', 'delete', 'save-partial', 'forget'],
-    'retained action')
-  member(payload.continuation, [
-    'resume_receive', 'pending_catch_up', 'restoration_available', 'history_only',
-    'resume_package', 'save_artifact', 'retry_download',
-    'retry_cleanup', 'needs_attention',
-  ], 'retained action continuation')
+  member(payload.action, RETAINED_ACTIONS, 'retained action')
+  member(payload.continuation, RETAINED_CONTINUATIONS, 'retained action continuation')
 }
 
 function validateOutputPair(

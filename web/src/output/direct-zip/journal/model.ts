@@ -108,7 +108,7 @@ export interface DirectZipClosingReplayV1 {
 
 export interface DirectZipCommittedCompletionV1 {
   readonly exactArchiveBytes: bigint
-  readonly preClosingEpochRootDigest: string
+  readonly predecessorEpochRootDigest: string
 }
 
 export interface DirectZipCheckpointV1 {
@@ -257,13 +257,6 @@ export interface DirectZipBootstrapCommitV1 {
   readonly checkpoint: DirectZipCheckpointV1
 }
 
-export interface DirectZipClosingTransitionV1 {
-  readonly fence: DirectZipJournalFenceV1
-  readonly checkpoint: DirectZipCheckpointV1
-  readonly lifecycle: ReceiveLifecycleState
-  readonly lifecycleRecord: PersistedReceiveRecord
-}
-
 export interface DirectZipCandidatePromotionV1 {
   readonly fence: DirectZipJournalFenceV1
   readonly candidate: DirectZipCommitCandidateV1
@@ -354,7 +347,6 @@ export type DirectZipJournalTraceEvent = Readonly<{
     | 'direct_zip.journal.bootstrap_committed'
     | 'direct_zip.journal.lease_acquired'
     | 'direct_zip.journal.candidate_promoted'
-    | 'direct_zip.journal.closing_entered'
     | 'direct_zip.journal.candidate_retired'
     | 'direct_zip.journal.recovery_lifecycle_committed'
     | 'direct_zip.journal.orphans_collected'

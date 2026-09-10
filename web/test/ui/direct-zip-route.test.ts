@@ -21,6 +21,22 @@ import type { V2ArtifactPresentationAuthority } from '../../src/ui/v2-receive-ru
 const CHOICE = 'choice' as ArtifactChoiceID
 
 describe('browser Direct ZIP route', () => {
+  it.each(['published', 'receiving'] as const)(
+    'finishes local ZIP verification with %s truth without starting a receive continuation', async kind => {
+      const fixture = directZipRetainedActionFixture(resumableDirectZipLifecycle(), () => 2_000)
+      fixture.source.readDirectZipRequirement.mockResolvedValue('verify-completion')
+      const detach = vi.fn(async () => undefined)
+      fixture.runtimeResume.mockResolvedValue({ lifecycle: { kind }, detach })
+      const inventory = await listRetainedFixture(fixture)
+      const retained = inventory.operations[0]!
+      expect(retained.continuation).toBe('verify-direct-zip-completion')
+      await expect(inventory.act(retained, 'continue', new AbortController().signal))
+        .resolves.toEqual({ kind: 'completed' })
+      expect(detach).toHaveBeenCalledOnce()
+      inventory.close()
+    },
+  )
+
   it('invokes the parent picker synchronously and preserves the exact displayed ranking', () => {
     let pickerInvoked = false
     const windowPort = {
@@ -214,6 +230,7 @@ function directZipRetainedActionFixture(
   return {
     source: {
       listLifecycleStates: vi.fn(async () => [lifecycle]),
+      readDirectZipRequirement: vi.fn<() => Promise<import('../../src/output/resume/direct-zip-checkpoint').DirectZipRecoveryRequirement | undefined>>(async () => undefined),
       close: vi.fn(),
     },
     directZip: directZipPort({ resume: runtimeResume, deleteRetained }),
@@ -331,10 +348,8 @@ function facts(): DirectZipRuntimeFactsV1 {
       workspacePeakBytesThreshold: 1n,
       policyDigest: digest,
     },
-    automaticEpochBudget: {
-      maximumPrefixCopyBytes: 1n,
-      maximumCumulativePrefixCopyBytes: 1n,
-      maximumModeledPeakTemporaryBytes: 1n,
+    automaticEpochPolicy: {
+      minimumAdvanceBytes: 1n,
     },
   }
 }

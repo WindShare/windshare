@@ -70,7 +70,9 @@ export async function assertDescriptorAuthority(
   if (current === undefined) {
     throw new DOMException('Receive lifecycle has no reopen authority', 'InvalidStateError')
   }
-  if (current.continuation === 'needs-attention') {
+  const directZipLocalCandidate = descriptor.continuation === 'verify-direct-zip-completion' &&
+    snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
+  if (current.continuation === 'needs-attention' && !directZipLocalCandidate) {
     throw new DOMException('Receive continuation requires explicit owner recovery', 'InvalidStateError')
   }
   if (purpose === 'continue') {
@@ -79,7 +81,11 @@ export async function assertDescriptorAuthority(
       snapshot.operation.receiveIntent.plan.kind === 'workspace-then-publish' &&
       (snapshot.operation.receiveIntent.artifact.kind === 'zip-archive' ||
        snapshot.operation.receiveIntent.artifact.kind === 'original-file')
-    if ((!nativeLocalCandidate && current.continuation !== descriptor.continuation) ||
+    const directZipReceive = current.continuation === 'resume-receive' &&
+      descriptor.continuation === 'resume-direct-zip' &&
+      snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
+    if ((!nativeLocalCandidate && !directZipLocalCandidate && !directZipReceive &&
+        current.continuation !== descriptor.continuation) ||
         current.continuation === 'retry-cleanup') {
       throw new DOMException('Receive continuation is stale or inert', 'InvalidStateError')
     }

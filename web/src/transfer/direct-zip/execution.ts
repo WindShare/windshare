@@ -1,7 +1,7 @@
 import type { DirectZipDiagnosticsObserver } from '../../output/direct-zip/diagnostics'
 import {
   DirectZipEpochWriterV1,
-  type DirectZipAutomaticEpochBudgetV1,
+  type DirectZipAutomaticEpochPolicyV1,
   type DirectZipTargetVerificationPort,
   type DirectZipWriterContextV1,
   type DirectZipWriterCutSink,
@@ -50,8 +50,7 @@ export interface DirectZipExecutionOptionsV1 {
     journal: DirectZipWriterJournalPortV1
     target: DirectZipTargetVerificationPort
     identities: DirectZipWriterIdentityPort
-    automaticBudget?: DirectZipAutomaticEpochBudgetV1
-    cumulativePrefixCopyBytes?: bigint
+    automaticPolicy?: DirectZipAutomaticEpochPolicyV1
   }>
   readonly replay: DirectZipReplayAuthorityV1
   readonly rollback: DirectZipMemberRollbackAuthorityV1
@@ -89,12 +88,9 @@ export async function createDirectZipExecutionV1(
     cuts: input.writer.journal,
     target: input.writer.target,
     identities: input.writer.identities,
-    ...(input.writer.automaticBudget === undefined
+    ...(input.writer.automaticPolicy === undefined
       ? {}
-      : { automaticBudget: input.writer.automaticBudget }),
-    ...(input.writer.cumulativePrefixCopyBytes === undefined
-      ? {}
-      : { cumulativePrefixCopyBytes: input.writer.cumulativePrefixCopyBytes }),
+      : { automaticPolicy: input.writer.automaticPolicy }),
     observe: diagnostics.writerObserver(),
   })
   const output = new DirectZipTransferOutputV1({

@@ -231,7 +231,6 @@ export interface V2DirectZipProgressSnapshot {
   readonly operationId: string
   readonly generation: bigint
   readonly phase: V2DirectZipProgressPhase
-  readonly receivedSelectedBytes: bigint
   readonly safeResumeBytes: bigint
   readonly resumeTemporarySpaceUpperBound?: bigint
 }

@@ -8,7 +8,9 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   const progress = facts.progress
   const direct = facts.directZipProgress
   if (progress === null && direct === null) return retainedProgress(facts)
-  const materialized = direct?.receivedSelectedBytes ?? progress?.materializedBytes ?? 0n
+  // Receipt and recovery advance independently; reopening starts with retained bytes
+  // before transfer replay has rebuilt its live materialization observations.
+  const materialized = maximum(progress?.materializedBytes ?? 0n, direct?.safeResumeBytes ?? 0n)
   const files = progress === null ? '' : ` · ${progress.completedFiles} files completed`
   const details = progressDetails(facts)
   const percentage = exactPercentage(facts, materialized)

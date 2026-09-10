@@ -9,7 +9,7 @@ import { storedReceiveLifecycleState } from '../../src/output/workspace/state-co
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { WorkspaceReceiveOperation } from '../../src/ui/browser-receive/workspace-operation'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
-import { withWorkspaceOutputSettlementTimeout } from '../../src/transfer/settlement/v2-output'
+import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
 import { digestIdentity, identityText, receiveIntentFixture } from '../transfer/v2-job-fixture'
 import { deferred, manualSettlementDeadline } from '../transfer/settlement-deadline'
 
@@ -116,7 +116,7 @@ describe('reopened ZIP admission ownership', () => {
       windowPort: {} as BrowserReceiveWindow, operation: f.operation,
     })
     const deadline = manualSettlementDeadline()
-    const running = withWorkspaceOutputSettlementTimeout('restore ZIP admission', 1, signal =>
+    const running = withDurableLifecycleSettlementTimeout('restore ZIP admission', 1, signal =>
       runtime.plans.settleExecutionAdmissionFailure(runtime.intent, new Error('disconnected'), signal), deadline)
     let exposed = false
     const observation = running.then(() => { exposed = true })

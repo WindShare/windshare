@@ -34,12 +34,11 @@ describe('receiver capacity wait UI', () => {
         operationId: 'operation',
         generation: 1n,
         phase: 'receiving',
-        receivedSelectedBytes: 32n,
         safeResumeBytes: 16n,
       }),
     })
     const html = render(
-      progress({ capacityWaitingFiles: 1, capacityWaitVisible: true }),
+      progress({ materializedBytes: 32n, capacityWaitingFiles: 1, capacityWaitVisible: true }),
       output,
     )
 

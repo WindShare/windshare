@@ -59,13 +59,14 @@ export function completionProgressDescription(progress: V2ReceiverProgress): str
 
 export function presentDirectZipProgress(input: Readonly<{
   progress: V2DirectZipProgressSnapshot
+  receivedBytes: bigint
   selectedBytes: ProjectedByteCount
   lifecycle: ReceiveLifecycleState | null
 }>): DirectZipProgressPresentation {
   const published = input.lifecycle?.kind === 'published'
   const total = input.selectedBytes.bytes
   const percentage = input.selectedBytes.kind === 'exact'
-    ? boundedPercentage(input.progress.receivedSelectedBytes, total, published)
+    ? boundedPercentage(input.receivedBytes, total, published)
     : null
   const totalCopy = input.selectedBytes.kind === 'exact'
     ? ` of ${formatBytes(total)}`
@@ -73,7 +74,7 @@ export function presentDirectZipProgress(input: Readonly<{
   const phaseCopy = published ? 'saved and verified' : directZipPhaseCopy(input.progress.phase)
   const percentageCopy = percentage === null ? '' : ` (${percentage}%)`
   return Object.freeze({
-    primary: `${formatBytes(input.progress.receivedSelectedBytes)} received${totalCopy}` +
+    primary: `${formatBytes(input.receivedBytes)} received${totalCopy}` +
       `${percentageCopy} · ${phaseCopy}`,
     safeResume: `If interrupted, resume from ${formatBytes(input.progress.safeResumeBytes)}.`,
     temporarySpace: input.progress.resumeTemporarySpaceUpperBound === undefined

@@ -158,21 +158,6 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
     this.#adopt(checkpoint, input.checkpoint, this.pages.committedAuthority, lifecycle.lifecycle)
   }
 
-  async enterClosing(input: Parameters<DirectZipWriterCutSink['enterClosing']>[0]): Promise<void> {
-    if (input.predecessorGeneration !== this.#persisted.generation || this.#candidate !== undefined) {
-      throw new TypeError('Direct ZIP closing lost its predecessor')
-    }
-    const checkpoint = await createDirectZipCheckpointV1({
-      ...await checkpointInput(this.#persisted, input.checkpoint, this.pages, this.#persisted.discovery),
-      targetObservation: this.#persisted.targetObservation,
-    })
-    const lifecycle = await this.#options.lifecycleForCheckpoint(checkpoint)
-    await this.#options.repository.enterClosing({ fence: this.#fence(), checkpoint, ...lifecycle })
-    const stagedDiscovery = this.#discovery
-    this.#adopt(checkpoint, input.checkpoint, this.pages.authority, lifecycle.lifecycle)
-    this.#discovery = stagedDiscovery
-  }
-
   async verifyRoot(checkpoint: DirectZipWriterCheckpointV1, root: DirectZipAuthenticatedRootV1): Promise<void> {
     this.#requireWriterCheckpoint(checkpoint)
     if (root.directoryId !== this.#options.expectedRootDirectoryId) {
@@ -266,7 +251,7 @@ export class BrowserDirectZipJournal implements DirectZipWriterCutSink, DirectZi
     this.#candidate = undefined
     this.#candidatePages = undefined
     this.#pendingCandidate = undefined
-    this.pages.commit(pages)
+    this.pages.commit(pages, writer.member?.rollback.pages)
     this.#options.onCheckpointCommitted?.(checkpoint, lifecycle)
   }
 }

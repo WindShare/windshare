@@ -19,12 +19,13 @@ import { DirectZipWriterGateError } from './gates'
 import type {
   DirectZipCompletionProofV1,
   DirectZipCompletionSealV1,
+  DirectZipClosingStateV1,
+  DirectZipWriterPageStateV1,
   DirectZipWriterCheckpointV1,
 } from './model'
 import type {
   DirectZipTargetVerificationPort,
   DirectZipWriterContextV1,
-  DirectZipWriterCutSink,
   DirectZipWriterPageSink,
   DirectZipWriterTraceEventV1,
 } from './ports'
@@ -53,7 +54,6 @@ const DIRECT_ZIP_MAXIMUM_ROOT_CENTRAL_RECORD_BYTES =
 export class DirectZipClosingCoordinator {
   readonly #context: DirectZipWriterContextV1
   readonly #pages: DirectZipWriterPageSink
-  readonly #cuts: DirectZipWriterCutSink
   readonly #target: DirectZipTargetVerificationPort
   readonly #writeArchive: DirectZipArchiveWrite
   readonly #archiveOffset: () => bigint
@@ -62,7 +62,6 @@ export class DirectZipClosingCoordinator {
   constructor(input: Readonly<{
     context: DirectZipWriterContextV1
     pages: DirectZipWriterPageSink
-    cuts: DirectZipWriterCutSink
     target: DirectZipTargetVerificationPort
     writeArchive: DirectZipArchiveWrite
     archiveOffset: () => bigint
@@ -70,46 +69,32 @@ export class DirectZipClosingCoordinator {
   }>) {
     this.#context = input.context
     this.#pages = input.pages
-    this.#cuts = input.cuts
     this.#target = input.target
     this.#writeArchive = input.writeArchive
     this.#archiveOffset = input.archiveOffset
     this.#emit = input.emit
   }
 
-  async stageClosingCheckpoint(
-    predecessor: DirectZipWriterCheckpointV1,
+  closingState(
+    centralDirectoryOffset: bigint,
     seal: DirectZipCompletionSealV1,
-  ): Promise<DirectZipWriterCheckpointV1> {
-    const closing = Object.freeze({
-      centralDirectoryOffset: predecessor.committedLength,
+  ): DirectZipClosingStateV1 {
+    return Object.freeze({
+      centralDirectoryOffset,
       centralDirectoryBytes: seal.centralDirectoryBytes,
       replayStartOrdinal: 0n,
     })
-    const checkpoint: DirectZipWriterCheckpointV1 = Object.freeze({
-      ...snapshotCheckpoint(predecessor),
-      generation: predecessor.generation + 1n,
-      phase: 'closing',
-      archiveOffset: predecessor.committedLength,
-      closing,
-    })
-    await this.#cuts.enterClosing({
-      predecessorGeneration: predecessor.generation,
-      checkpoint,
-    })
-    return checkpoint
   }
 
   async writeClosingRecords(
-    checkpoint: DirectZipWriterCheckpointV1,
+    closing: DirectZipClosingStateV1,
+    pages: DirectZipWriterPageStateV1,
     seal: DirectZipCompletionSealV1,
   ): Promise<DirectZipCompletionValidationInput> {
-    const closing = checkpoint.closing
-    if (closing === undefined) throw new Error('direct ZIP closing checkpoint is absent')
     let expectedOrdinal = closing.replayStartOrdinal
     let centralBytes = 0n
     let rootCentralRecord: Uint8Array | undefined
-    for await (const record of this.#pages.replayCentral(checkpoint.pages)) {
+    for await (const record of this.#pages.replayCentral(pages)) {
       if (record.ordinal !== expectedOrdinal || !(record.bytes instanceof Uint8Array)) {
         throw new Error('direct ZIP central-directory replay order changed')
       }
@@ -140,10 +125,10 @@ export class DirectZipClosingCoordinator {
   async completionInput(
     checkpoint: DirectZipWriterCheckpointV1,
     seal: DirectZipCompletionSealV1,
-    preClosingEpochRoot: Uint8Array = checkpoint.epochRoot,
+    predecessorEpochRoot: Uint8Array = checkpoint.epochRoot,
   ): Promise<DirectZipCompletionValidationInput> {
-    const pages = await this.#pages.snapshot()
-    requireCompletionSeal(seal, pages, checkpoint.nextEntryOrdinal, preClosingEpochRoot)
+    const pages = checkpoint.pages
+    requireCompletionSeal(seal, pages, checkpoint.nextEntryOrdinal, predecessorEpochRoot)
     for await (const record of this.#pages.replayCentral(pages)) {
       if (record.ordinal === 0n) {
         return Object.freeze({ seal, rootCentralRecord: Uint8Array.from(record.bytes) })

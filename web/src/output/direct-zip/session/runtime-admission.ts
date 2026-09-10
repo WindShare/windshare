@@ -16,8 +16,8 @@ import {
 import { directZipPolicyDigestsV2 } from '../format'
 import { directZipJournalBudgetDigestV1 } from '../journal'
 import {
-  directZipEpochPolicyDigestV1,
-  type DirectZipAutomaticEpochBudgetV1,
+  directZipEpochPolicyDigestV2,
+  type DirectZipAutomaticEpochPolicyV1,
 } from '../writer'
 
 const CHECKPOINT_POLICY_DOMAIN = 'windshare/direct-zip-checkpoint-policy/v1'
@@ -58,21 +58,20 @@ export interface DirectZipRuntimeCapabilitiesV1 {
 
 export interface DirectZipRuntimePolicyV1 {
   readonly version: 1
-  readonly automaticEpochBudget: DirectZipAutomaticEpochBudgetV1
+  readonly automaticEpochPolicy: DirectZipAutomaticEpochPolicyV1
   /** Ranking is optional and never grants target authority. */
   readonly workspacePeakBytesThreshold: bigint | null
 }
 
 /**
- * Product resource ceilings bound avoidable prefix copying and workspace use.
- * They are neither local free-space observations nor platform performance claims.
+ * Automatic checkpoints earn their prefix-copy cost through archive progress.
+ * The spacing floor and workspace ranking are product choices, not free-space
+ * observations or platform performance claims.
  */
 export const DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1: DirectZipRuntimePolicyV1 = Object.freeze({
   version: 1,
-  automaticEpochBudget: Object.freeze({
-    maximumPrefixCopyBytes: 256n * MEBIBYTE,
-    maximumCumulativePrefixCopyBytes: 512n * MEBIBYTE,
-    maximumModeledPeakTemporaryBytes: 256n * MEBIBYTE,
+  automaticEpochPolicy: Object.freeze({
+    minimumAdvanceBytes: 64n * MEBIBYTE,
   }),
   workspacePeakBytesThreshold: GIBIBYTE,
 })
@@ -80,7 +79,7 @@ export const DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1: DirectZipRuntimePolicyV1 = Ob
 export interface DirectZipRuntimeFactsV1 {
   readonly support: RuntimeDirectZipSupportFacts
   readonly recommendationPolicy: ZipRouteRecommendationPolicyV1
-  readonly automaticEpochBudget: DirectZipAutomaticEpochBudgetV1
+  readonly automaticEpochPolicy: DirectZipAutomaticEpochPolicyV1
 }
 
 export type DirectZipSupportLookupV1 =
@@ -103,7 +102,7 @@ export async function admitDirectZipRuntimeV1(input: Readonly<{
 
   const policy = input.policy ?? DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1
   if (!validPolicy(policy)) return unavailable('policy-digests-unavailable')
-  const automaticEpochBudget = Object.freeze({ ...policy.automaticEpochBudget })
+  const automaticEpochPolicy = Object.freeze({ ...policy.automaticEpochPolicy })
   const workspacePeakBytesThreshold = policy.workspacePeakBytesThreshold
   const authoritySnapshot = Object.freeze({ ...authority })
   const format = await directZipPolicyDigestsV2()
@@ -133,7 +132,7 @@ export async function admitDirectZipRuntimeV1(input: Readonly<{
       layout: encodeBase64Url(format.layoutPolicy),
       checkpoint,
       journalBudget: await directZipJournalBudgetDigestV1(),
-      epoch: await directZipEpochPolicyDigestV1(automaticEpochBudget),
+      epoch: await directZipEpochPolicyDigestV2(automaticEpochPolicy),
     }),
   })
   const recommendationPolicy: ZipRouteRecommendationPolicyV1 =
@@ -152,7 +151,7 @@ export async function admitDirectZipRuntimeV1(input: Readonly<{
         })
   return Object.freeze({
     kind: 'available',
-    facts: Object.freeze({ support, recommendationPolicy, automaticEpochBudget }),
+    facts: Object.freeze({ support, recommendationPolicy, automaticEpochPolicy }),
   })
 }
 
@@ -177,9 +176,8 @@ function hasRequiredAuthority(value: DirectZipRuntimeAuthorityContractV1): boole
 
 function validPolicy(value: DirectZipRuntimePolicyV1): boolean {
   return value.version === 1 &&
-    validOffset(value.automaticEpochBudget?.maximumPrefixCopyBytes) &&
-    validOffset(value.automaticEpochBudget?.maximumCumulativePrefixCopyBytes) &&
-    validOffset(value.automaticEpochBudget?.maximumModeledPeakTemporaryBytes)
+    validOffset(value.automaticEpochPolicy?.minimumAdvanceBytes) &&
+    value.automaticEpochPolicy.minimumAdvanceBytes > 0n
 }
 
 function validOffset(value: bigint): boolean {

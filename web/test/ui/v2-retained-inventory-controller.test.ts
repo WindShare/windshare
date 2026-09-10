@@ -12,6 +12,11 @@ import {
   type PresentationDecision,
 } from '../../src/diagnostics/incident'
 import { recordOutputException } from '../../src/output/diagnostics'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import {
+  createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,
+  createReceiveIntent, createSelectionSpec, createZipArchiveArtifact,
+} from '../../src/transfer/intent'
 import type { CompatibleNameRepairSummary } from '../../src/output/file-system-access/compatible-name/model'
 import type { V2RetainedCompatibleNameRepairSource } from '../../src/ui/controller/contracts'
 import { RetainedInventoryCoordinator } from '../../src/ui/controller/retained-inventory'
@@ -27,6 +32,52 @@ import type {
 } from '../../src/ui/v2-receive-runtime'
 
 describe('retained inventory local finalization and identity admission', () => {
+  it('adopts verified Direct ZIP receive authority after candidate recovery advances its lifecycle', async () => {
+    const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
+    const selection = await createSelectionSpec({ shareInstance: id(16, 1), syntheticRoot: id(16, 2),
+      rules: { mode: 'node-id', defaultSelected: true, rules: [] } })
+    const artifact = await createZipArchiveArtifact(createDirectorySelectionResultRoot(selection.syntheticRoot, 'shared'))
+    const binding = await createFSAOwnedFileBinding({ operationId: id(16, 3), artifact,
+      stableName: `shared.windshare-${id(16, 11)}.zip`, targetRef: id(32, 4), policies: {
+        zipEncoding: id(32, 5), layout: id(32, 6), checkpoint: id(32, 7), journalBudget: id(32, 8), epoch: id(32, 9),
+      } })
+    const intent = await createReceiveIntent({ selection, artifact, plan: await createDirectResumableZipPlan(artifact, binding) })
+    const original = Object.freeze({ ...operation(['continue'], 'resume-direct-zip', intent.operationId),
+      receiveIntentDigest: intent.digest })
+    const runtime = { intent, lifecycle: { kind: 'receiving', generation: 4n,
+      operationId: intent.operationId, receiveIntentDigest: intent.digest, activeLeaseId: id(16, 10) },
+      detach: async () => undefined } as unknown as V2BoundReceiveOperation
+    const inventory = testInventory([original], async () => ({ kind: 'receive-continuation', runtime }))
+    let adopted = false
+    const harness = retainedHarness(() => Promise.resolve(inventory), {
+      descriptor: { shareInstanceId: intent.shareInstance, syntheticRootId: intent.syntheticRoot },
+    } as V2JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
+    await harness.coordinator.load()
+    harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
+    for (let index = 0; index < 32 && !adopted; index += 1) {
+      await new Promise(resolve => setTimeout(resolve, 0))
+    }
+    expect(adopted).toBe(true)
+    expect(harness.actionErrors).toEqual([])
+  })
+
+  it('admits explicit ZIP completion verification without a connected share', async () => {
+    const original = operation(['continue'], 'verify-direct-zip-completion')
+    let dispatches = 0
+    const harness = retainedHarness(() => Promise.resolve(testInventory([original], async () => {
+      dispatches += 1
+      return { kind: 'completed' }
+    })))
+    await harness.coordinator.load()
+    expect(dispatches).toBe(0)
+    const row = harness.publications.at(-1)!.operations[0]!
+    expect(harness.coordinator.actionAdmission(row, 'continue')).toEqual({ allowed: true, reason: null })
+    harness.coordinator.perform(row, 'continue')
+    await turns()
+    expect(dispatches).toBe(1)
+    expect(harness.actionErrors).toEqual([])
+  })
+
   it('automatically finalizes only source-confirmed local content after competing work releases admission', async () => {
     const original = operation(['continue'], 'resume-local-finalization')
     let blocked = true
@@ -898,6 +949,7 @@ function retainedHarness(
   options: Readonly<{
     traceEnabled?: boolean
     localFinalizationBlocked?: () => boolean
+    adoptContinuation?: RetainedInventoryCoordinatorOptions['adoptContinuation']
     onPublish?: (retained: Parameters<RetainedInventoryCoordinatorOptions['publish']>[0]) => void
     repairSource?: V2RetainedCompatibleNameRepairSource
   }> = {},
@@ -917,7 +969,7 @@ function retainedHarness(
     currentJoinedShare: () => joined,
     continuationBlocked: () => false,
     ...(options.localFinalizationBlocked === undefined ? {} : { localFinalizationBlocked: options.localFinalizationBlocked }),
-    adoptContinuation: async () => undefined,
+    adoptContinuation: options.adoptContinuation ?? (async () => undefined),
     ownsRuntime: () => false,
     publish: (retained) => {
       publications.push(retained)

@@ -14,7 +14,8 @@ export interface DirectZipContentTransferOptionsV1 {
   readonly broker: V2BlockRangeReader
   readonly output: DirectZipOutputSessionV1
   readonly signal: AbortSignal
-  readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
+  readonly onInitialDurable: (bytes: bigint) => void
+  readonly onWriteAcknowledged: (bytes: bigint) => void
   readonly onComplete: (exactSize: bigint) => void
 }
 
@@ -40,7 +41,7 @@ export async function transferDirectZipFileV1(
       rangeAuthority: `windshare/source-range/v1:${opened.descriptor.fileRevisionText}:${opened.descriptor.geometry.blockSize.toString()}`,
     }), options.signal)
     let offset = transaction.resumeOffset
-    let wrote = false
+    options.onInitialDurable(offset)
     while (offset < opened.descriptor.exactSize) {
       const end = minimum(
         (offset / opened.descriptor.geometry.blockSize + 1n) * opened.descriptor.geometry.blockSize,
@@ -48,10 +49,11 @@ export async function transferDirectZipFileV1(
       )
       const data = await readAtomicRange(options, opened, offset, end)
       await transaction.write(offset, data, options.signal)
-      await transaction.observeCheckpoint(options.signal)
-      options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
-      wrote = true
+      options.onWriteAcknowledged(BigInt(data.byteLength))
       offset = end
+      // EOF leads straight into member completion and may be the archive's last
+      // write. A cut here would copy the whole prefix merely to append its tail.
+      if (offset < opened.descriptor.exactSize) await transaction.observeCheckpoint(options.signal)
     }
     await transaction.commit(options.signal)
     options.onComplete(opened.descriptor.exactSize)

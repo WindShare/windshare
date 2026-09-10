@@ -23,15 +23,28 @@ describe('task progress native authority', () => {
     expect(task.progress).toMatchObject({ mode: 'indeterminate', percentage: null })
   })
 
-  it('keeps direct ZIP progress on its own checkpoint-aware payload authority', () => {
+  it('updates direct ZIP receipt between checkpoints without advancing restart-safe bytes', () => {
     const task = presentTask(taskFixture({
-      progress: { ...resumed, materializedBytes: MIB },
+      progress: { ...resumed, materializedBytes: 77n * MIB },
       directZipProgress: {
         ...TASK_FIXTURES.verifying!.directZipProgress!,
-        receivedSelectedBytes: 77n * MIB,
+        safeResumeBytes: 32n * MIB,
       },
     }))
     expect(task.progress?.percentage).toBe(77)
+    expect(task.progress?.details).toContain('32.0 MiB safe to resume after restart.')
+  })
+
+  it('retains saved direct ZIP progress before transfer replay rebuilds live observations', () => {
+    const task = presentTask(taskFixture({
+      progress: { ...resumed, materializedBytes: 0n },
+      directZipProgress: {
+        ...TASK_FIXTURES.verifying!.directZipProgress!,
+        safeResumeBytes: 64n * MIB,
+      },
+    }))
+    expect(task.progress?.percentage).toBe(64)
+    expect(task.progress?.details).toContain('64.0 MiB safe to resume after restart.')
   })
 
   it('shows native local finishing ahead of remote connection failure without publishing or completing a partial result', () => {

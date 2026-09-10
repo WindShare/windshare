@@ -101,7 +101,12 @@ export function createBrowserDirectZipComposition(
         recoverBootstrap(windowPort, candidate, signal, dependencies),
       resume: async (operation, signal) => {
         const runtime = await openRetained(windowPort, operation, await facts(signal), dependencies)
-        try { signal.throwIfAborted(); await runtime.verify(); return runtime }
+        try {
+          signal.throwIfAborted()
+          await runtime.startLifecycleAction('continue')
+          signal.throwIfAborted()
+          return runtime
+        }
         catch (error) {
           try { await runtime.settleTransferAdmissionFailure(error) } finally { await runtime.detach() }
           throw error
