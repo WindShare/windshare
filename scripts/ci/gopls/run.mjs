@@ -37,7 +37,7 @@ try {
   }
   if (!selection.stdout.endsWith('\0')) throw new Error('Incomplete maintained Go source list')
   const files = selection.stdout.slice(0, -1).split('\0')
-  log('sources_selected', { files: files.length, sessions: 1 })
+  log('sources_selected', { files: files.length, sessions: 1, order: 'module-native-first' })
   const diagnostics = await checkFiles({ root, files, log, signal: controller.signal })
   for (const diagnostic of diagnostics) console.error(formatDiagnostic(diagnostic))
   if (diagnostics.length) throw new Error(`gopls reported ${diagnostics.length} diagnostics`)

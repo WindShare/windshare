@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "lint": "eslint .",
+    "lint": "eslint --concurrency 2 .",
     "preview": "vite preview",
     "test": "vitest run",
     "test:browser:contract": "playwright test --config playwright.contract.config.ts --project chromium-short",
