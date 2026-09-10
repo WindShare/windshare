@@ -32,28 +32,18 @@ func routeTestConnection(id ConnectionID) ConnectionRef {
 }
 
 type memoryTombstones struct {
-	mu      sync.Mutex
-	records map[v2.ShareID]Tombstone
-	load    []Tombstone
-	loadErr error
-	failPut bool
-	puts    int
+	mu        sync.Mutex
+	records   map[v2.ShareID]Tombstone
+	lookupErr error
+	failPut   bool
+	puts      int
 }
 
-func (s *memoryTombstones) Load(context.Context) ([]Tombstone, error) {
+func (s *memoryTombstones) Lookup(_ context.Context, shareID v2.ShareID) (Tombstone, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.loadErr != nil {
-		return nil, s.loadErr
-	}
-	if s.load != nil {
-		return append([]Tombstone(nil), s.load...), nil
-	}
-	result := make([]Tombstone, 0, len(s.records))
-	for _, record := range s.records {
-		result = append(result, record)
-	}
-	return result, nil
+	record, found := s.records[shareID]
+	return record, found, s.lookupErr
 }
 
 func (s *memoryTombstones) Commit(_ context.Context, record Tombstone) (CommitOutcome, error) {
@@ -500,8 +490,8 @@ func TestExplicitStopIsDurablePermanentAndNeverGrace(t *testing.T) {
 		t.Fatalf("restored tombstone join = %+v", result)
 	}
 	other := makeFixture(t, 0x50)
-	if err := restored.BeginRegistration(other.init, routeTestConnection("other")); !errors.Is(err, ErrAdmission) {
-		t.Fatalf("permanent tombstone did not consume bounded slot: %v", err)
+	if err := restored.BeginRegistration(other.init, routeTestConnection("other")); err != nil {
+		t.Fatalf("permanent tombstone consumed active capacity: %v", err)
 	}
 }
 
@@ -683,48 +673,23 @@ func TestSessionEndBudgetsAndRandomIdentityFailures(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsInvalidPersistentAndBudgetConfiguration(t *testing.T) {
-	now := time.Unix(1, 0)
-	valid := makeFixture(t, 0x30)
-	tombstone := Tombstone{
-		ShareID: valid.stop.ShareID, ShareInstance: valid.stop.ShareInstance,
-		PKHash: valid.stop.PKHash, StopID: valid.stop.StopID,
-	}
+func TestRegistryRejectsInvalidBudgetConfiguration(t *testing.T) {
 	tests := []Config{
 		{},
-		{MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 2, Random: bytes.NewReader(nil), Now: func() time.Time { return now }, Tombstones: &memoryTombstones{}},
-		{MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil), Now: func() time.Time { return now }},
+		{MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 2, Random: bytes.NewReader(nil), Tombstones: &memoryTombstones{}},
+		{MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil)},
 	}
 	for index, config := range tests {
 		if _, err := New(context.Background(), config); !errors.Is(err, ErrConfig) {
 			t.Fatalf("invalid config %d error = %v", index, err)
 		}
 	}
-	loadFailure := errors.New("load failed")
-	if _, err := New(context.Background(), Config{
-		MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil),
-		Tombstones: &memoryTombstones{loadErr: loadFailure},
-	}); !errors.Is(err, loadFailure) {
-		t.Fatalf("load failure = %v", err)
-	}
-	if _, err := New(context.Background(), Config{
-		MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil),
-		Tombstones: &memoryTombstones{load: []Tombstone{tombstone, tombstone}},
-	}); !errors.Is(err, ErrAdmission) {
-		t.Fatalf("loaded capacity error = %v", err)
-	}
-	invalid := tombstone
-	invalid.ShareInstance = v2.ShareInstance{}
-	if _, err := New(context.Background(), Config{
-		MaxRoutes: 2, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil),
-		Tombstones: &memoryTombstones{load: []Tombstone{invalid}},
-	}); !errors.Is(err, ErrConfig) {
-		t.Fatalf("invalid tombstone error = %v", err)
-	}
-	if _, err := New(context.Background(), Config{
-		MaxRoutes: 2, MaxSessions: 1, MaxSessionsPerShare: 1, Random: bytes.NewReader(nil),
-		Tombstones: &memoryTombstones{load: []Tombstone{tombstone, tombstone}},
-	}); !errors.Is(err, ErrConfig) {
-		t.Fatalf("duplicate tombstone error = %v", err)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := New(ctx, Config{
+		MaxRoutes: 1, MaxSessions: 1, MaxSessionsPerShare: 1,
+		Random: bytes.NewReader(nil), Tombstones: &memoryTombstones{},
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled registry construction = %v", err)
 	}
 }

@@ -31,14 +31,11 @@ func newBlockingCommitStore() *blockingCommitStore {
 	}
 }
 
-func (s *blockingCommitStore) Load(context.Context) ([]Tombstone, error) {
+func (s *blockingCommitStore) Lookup(_ context.Context, shareID v2.ShareID) (Tombstone, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	result := make([]Tombstone, 0, len(s.records))
-	for _, record := range s.records {
-		result = append(result, record)
-	}
-	return result, nil
+	record, found := s.records[shareID]
+	return record, found, nil
 }
 
 func (s *blockingCommitStore) Commit(ctx context.Context, record Tombstone) (CommitOutcome, error) {
@@ -308,7 +305,9 @@ type fixedOutcomeStore struct {
 	err     error
 }
 
-func (*fixedOutcomeStore) Load(context.Context) ([]Tombstone, error) { return nil, nil }
+func (*fixedOutcomeStore) Lookup(context.Context, v2.ShareID) (Tombstone, bool, error) {
+	return Tombstone{}, false, nil
+}
 
 func (s *fixedOutcomeStore) Commit(context.Context, Tombstone) (CommitOutcome, error) {
 	return s.outcome, s.err

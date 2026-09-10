@@ -366,10 +366,15 @@ type memoryStopStore struct {
 	values []v2route.Tombstone
 }
 
-func (store *memoryStopStore) Load(context.Context) ([]v2route.Tombstone, error) {
+func (store *memoryStopStore) Lookup(_ context.Context, shareID v2.ShareID) (v2route.Tombstone, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return append([]v2route.Tombstone(nil), store.values...), nil
+	for _, record := range store.values {
+		if record.ShareID == shareID {
+			return record, true, nil
+		}
+	}
+	return v2route.Tombstone{}, false, nil
 }
 
 func (store *memoryStopStore) Commit(

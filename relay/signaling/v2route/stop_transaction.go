@@ -27,7 +27,9 @@ const (
 // or uncertain. The explicit outcome prevents an ambiguous I/O error from
 // resurrecting a share whose tombstone may already have reached stable storage.
 type TombstoneStore interface {
-	Load(context.Context) ([]Tombstone, error)
+	// Lookup must observe every successfully committed STOP without loading history.
+	// The store validates persisted records before exposing them to the registry.
+	Lookup(context.Context, v2.ShareID) (Tombstone, bool, error)
 	Commit(context.Context, Tombstone) (CommitOutcome, error)
 }
 
@@ -39,14 +41,15 @@ type stopTransaction struct {
 }
 
 // Stop requires the one-use challenge authority for this exact STOP_INIT,
-// persists a permanent capacity-counted tombstone, and never grants crash grace.
-func (r *Registry) Stop(ctx context.Context, init v2.StopInit, authority v2.StopAuthority) (RouteRetirement, error) {
+// persists an independently indexed permanent tombstone, and never grants crash grace.
+func (r *Registry) Stop(ctx context.Context, init v2.StopInit, authority v2.StopAuthority) (retirement RouteRetirement, err error) {
 	if r == nil || init.Validate() != nil || !authority.Authorizes(init) {
 		return RouteRetirement{}, ErrConfig
 	}
+	defer func() { r.traceStop(init, err) }()
 	tombstone := Tombstone{ShareID: init.ShareID, ShareInstance: init.ShareInstance, PKHash: init.PKHash, StopID: init.StopID}
 	for {
-		txn, started, result, err := r.beginStop(init, tombstone)
+		txn, started, result, err := r.beginStop(ctx, init, tombstone)
 		if err != nil || result != nil {
 			return valueOrZero(result), err
 		}
@@ -66,21 +69,24 @@ func (r *Registry) Stop(ctx context.Context, init v2.StopInit, authority v2.Stop
 // beginStop serializes only one share. A returned transaction with a different
 // tombstone is a wait handle; storage for unrelated routes never runs under mu.
 func (r *Registry) beginStop(
+	ctx context.Context,
 	init v2.StopInit,
 	tombstone Tombstone,
 ) (*stopTransaction, bool, *RouteRetirement, error) {
-	r.mu.Lock()
+	current, stopped, err := r.lockRoute(ctx, init.ShareID)
 	defer r.mu.Unlock()
-	current := r.routes[init.ShareID]
-	if current == nil {
-		return nil, false, nil, ErrNotFound
+	if err != nil {
+		return nil, false, nil, err
 	}
-	if current.state == routeStopped {
-		if current.init.ShareInstance == init.ShareInstance && current.stopID == init.StopID {
+	if stopped != nil {
+		if *stopped == tombstone {
 			result := RouteRetirement{}
 			return nil, false, &result, nil
 		}
 		return nil, false, nil, ErrStopped
+	}
+	if current == nil {
+		return nil, false, nil, ErrNotFound
 	}
 	if current.init.ShareInstance != init.ShareInstance ||
 		subtle.ConstantTimeCompare(current.init.PKHash[:], init.PKHash[:]) != 1 {
@@ -125,8 +131,13 @@ func (r *Registry) finishStop(
 	switch outcome {
 	case CommitCommitted:
 		retirement := r.retireRoute(current, shareID)
-		current.state = routeStopped
-		current.stopID = txn.tombstone.StopID
+		// The durable index becomes the sole authority before capacity is released.
+		// Fence only overlapping lookups for this share, not unrelated traffic.
+		if lookup := r.revocationLookups[shareID]; lookup != nil {
+			stopped := txn.tombstone
+			lookup.stopped = &stopped
+		}
+		delete(r.routes, shareID)
 		return retirement, nil
 	case CommitNotCommitted:
 		if txn.wasUncertain {
