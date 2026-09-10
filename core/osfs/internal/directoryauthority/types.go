@@ -124,7 +124,7 @@ func directoryMetadataOwned(disposition DirectoryDisposition) bool {
 }
 
 // directoryMaterialization contains no native handle or restart authority.
-// Those remain retained inside Authority until Close.
+// Native authority is released at terminal finalization; receipts survive for replay.
 type directoryMaterialization struct {
 	claimID     ClaimID
 	disposition DirectoryDisposition

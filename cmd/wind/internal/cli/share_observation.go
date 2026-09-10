@@ -46,7 +46,6 @@ type shareObservations struct {
 
 	completionMu         sync.Mutex
 	relayComplete        []func() relayv2.LifecycleObservationCompletion
-	relayReaders         []*observationbridge.Reader[relayv2.LifecycleTrace]
 	webRTCChannels       *webRTCObservationSet
 	native               *nativepeer.NativePeerConnectivity
 	nativeReader         nativeObservationReader
@@ -368,17 +367,22 @@ func (observations *shareObservations) reportCumulativeLoss(
 	observations.observer.ReportObserverLoss(category, reason, cumulative)
 }
 
-func (observations *shareObservations) attachRelayStream(stream <-chan relayv2.LifecycleTrace) {
+func (observations *shareObservations) attachRelayStream(stream <-chan relayv2.LifecycleTrace) func() {
 	if observations == nil || !observations.detailedDiagnosticsEnabled() || stream == nil {
-		return
+		return func() {}
 	}
 	gate := &observationbridge.PublicationGate{}
 	reader := observationbridge.Start(stream, gate, func(ctx context.Context, value relayv2.LifecycleTrace) {
 		observations.relayLifecycleContext(ctx, gate, value)
 	})
-	observations.completionMu.Lock()
-	observations.relayReaders = append(observations.relayReaders, reader)
-	observations.completionMu.Unlock()
+	// The connection owns its reader through retirement. Keeping only a final
+	// counter at command scope prevents completed streams accumulating on reconnect.
+	return func() {
+		ctx, cancel := context.WithTimeout(context.Background(), observationCompletionTimeout)
+		status := reader.Join(ctx)
+		cancel()
+		observations.reportReaderStatus(clievent.ObserverLossRelayLifecycle, status)
+	}
 }
 
 func (observations *shareObservations) registerRelayCompletion(
@@ -440,7 +444,6 @@ func (observations *shareObservations) complete(ctx context.Context) {
 	observations.completeOnce.Do(func() {
 		observations.completionMu.Lock()
 		relayComplete := append([]func() relayv2.LifecycleObservationCompletion(nil), observations.relayComplete...)
-		relayReaders := append([]*observationbridge.Reader[relayv2.LifecycleTrace](nil), observations.relayReaders...)
 		webRTC := observations.webRTCChannels
 		native := observations.native
 		nativeReader := observations.nativeReader
@@ -460,10 +463,6 @@ func (observations *shareObservations) complete(ctx context.Context) {
 		var relay relayv2.LifecycleObservationCompletion
 		for _, complete := range relayComplete {
 			mergeRelayCompletion(&relay, complete())
-		}
-		for _, reader := range relayReaders {
-			status := reader.Join(ctx)
-			observations.reportReaderStatus(clievent.ObserverLossRelayLifecycle, status)
 		}
 		observations.reportRelayCompletion(relay)
 		webRTCCompletion, webRTCStatuses := webRTC.complete(ctx)

@@ -28,14 +28,14 @@ type parentNamespaceIndex struct {
 	owners map[string]string
 }
 
-func (authority *Authority) parentSnapshot(record *claimRecord) (parentNamespaceIndex, error) {
-	record.snapshotOnce.Do(func() {
-		record.snapshot, record.snapshotErr = authority.buildParentSnapshot(record.claim.id)
-		if record.snapshotErr != nil {
-			record.snapshotErr = errors.Join(ErrParentSnapshotUnavailable, record.snapshotErr)
+func (authority *Authority) parentSnapshot(claimID ClaimID, execution *directoryExecution) (parentNamespaceIndex, error) {
+	execution.snapshotOnce.Do(func() {
+		execution.snapshot, execution.snapshotErr = authority.buildParentSnapshot(claimID)
+		if execution.snapshotErr != nil {
+			execution.snapshotErr = errors.Join(ErrParentSnapshotUnavailable, execution.snapshotErr)
 		}
 	})
-	return record.snapshot, record.snapshotErr
+	return execution.snapshot, execution.snapshotErr
 }
 
 func (authority *Authority) executionRootSnapshot() (parentNamespaceIndex, error) {

@@ -32,19 +32,15 @@ type claimRecord struct {
 	claim           directoryClaim
 	state           materializationState
 	materialization directoryMaterialization
-	retained        outputcap.Directory
-
-	snapshotOnce sync.Once
-	snapshot     parentNamespaceIndex
-	snapshotErr  error
+	execution       *directoryExecution
 
 	finalizationState finalizationState
 	finalization      directoryFinalization
 }
 
-// Authority owns only live native directory capabilities and path-local indexes.
-// Output claim state, locator ownership, node identity, and catalog-global NodeID
-// authority deliberately remain in their respective callers.
+// Authority retains claim receipts for replay and conflict detection. Native
+// capabilities and namespace indexes belong only to unsettled executions;
+// outputsession seals descendants before invoking directory finalization.
 type Authority struct {
 	platform        Platform
 	snapshotter     ParentNamespaceSnapshotter
@@ -228,11 +224,11 @@ func (authority *Authority) Close() error {
 		return nil
 	}
 	authority.closed = true
-	retained := make([]outputcap.Directory, 0, len(authority.claims))
+	executions := make([]*directoryExecution, 0)
 	for _, record := range authority.claims {
-		if record.retained != nil {
-			retained = append(retained, record.retained)
-			record.retained = nil
+		if record.execution != nil {
+			executions = append(executions, record.execution)
+			record.execution = nil
 		}
 	}
 	authority.claims = nil
@@ -240,8 +236,8 @@ func (authority *Authority) Close() error {
 	authority.mu.Unlock()
 
 	var resultErr error
-	for _, directory := range retained {
-		resultErr = errors.Join(resultErr, directory.Close())
+	for _, execution := range executions {
+		resultErr = errors.Join(resultErr, execution.close())
 	}
 	authority.gate.Unlock()
 	return directoryBoundaryError(context.Background(), resultErr)
@@ -305,7 +301,8 @@ func (authority *Authority) beginMaterialization(
 		authority.rootClaimID = claim.id
 	} else if claim.parentID != 0 {
 		parent := authority.claims[claim.parentID]
-		if parent == nil || parent.state != materializationReady || parent.retained == nil {
+		if parent == nil || parent.state != materializationReady || parent.execution == nil ||
+			parent.finalizationState != finalizationUnstarted {
 			return nil, false, directoryMaterialization{}, noMutation(ErrParentUnavailable)
 		}
 	}
@@ -325,13 +322,13 @@ func (authority *Authority) finishMaterialization(
 	case err == nil && result.valid() && retained != nil:
 		record.state = materializationReady
 		record.materialization = result
-		record.retained = retained
+		record.execution = newDirectoryExecution(retained)
 		if !record.claim.admission.IsZero() {
 			authority.admissions[string(record.claim.admission.Bytes())] = record.claim.id
 		}
 	case errors.Is(err, ErrMutationAmbiguous):
 		record.state = materializationAmbiguous
-		record.retained = retained
+		record.execution = newDirectoryExecution(retained)
 	default:
 		delete(authority.claims, record.claim.id)
 		if !record.claim.admission.IsZero() {

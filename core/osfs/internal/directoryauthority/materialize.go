@@ -122,12 +122,14 @@ func (authority *Authority) snapshotForChild(claim directoryClaim) (parentNamesp
 	}
 	authority.mu.Lock()
 	parent := authority.claims[claim.parentID]
-	authority.mu.Unlock()
-	if parent == nil || parent.state != materializationReady ||
+	if parent == nil || parent.state != materializationReady || parent.execution == nil ||
 		!validateImmediateChild(parent.claim.locator.canonicalPath, claim.locator.canonicalPath) {
+		authority.mu.Unlock()
 		return parentNamespaceIndex{}, ErrParentUnavailable
 	}
-	return authority.parentSnapshot(parent)
+	execution := parent.execution
+	authority.mu.Unlock()
+	return authority.parentSnapshot(claim.parentID, execution)
 }
 
 func materializeAtParent(
