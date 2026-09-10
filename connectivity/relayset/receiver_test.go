@@ -28,7 +28,9 @@ import (
 
 type receiverTombstones struct{}
 
-func (receiverTombstones) Load(context.Context) ([]v2route.Tombstone, error) { return nil, nil }
+func (receiverTombstones) Lookup(context.Context, v2.ShareID) (v2route.Tombstone, bool, error) {
+	return v2route.Tombstone{}, false, nil
+}
 func (receiverTombstones) Commit(context.Context, v2route.Tombstone) (v2route.CommitOutcome, error) {
 	return v2route.CommitCommitted, nil
 }

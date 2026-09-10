@@ -11,6 +11,7 @@ import (
 
 	"github.com/coder/websocket"
 
+	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
 	"github.com/windshare/windshare/transport/relayv2"
 )
@@ -38,10 +39,15 @@ type memoryTombstoneStore struct {
 	records []v2route.Tombstone
 }
 
-func (store *memoryTombstoneStore) Load(context.Context) ([]v2route.Tombstone, error) {
+func (store *memoryTombstoneStore) Lookup(_ context.Context, shareID v2.ShareID) (v2route.Tombstone, bool, error) {
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	return append([]v2route.Tombstone(nil), store.records...), nil
+	for _, record := range store.records {
+		if record.ShareID == shareID {
+			return record, true, nil
+		}
+	}
+	return v2route.Tombstone{}, false, nil
 }
 
 func (store *memoryTombstoneStore) Commit(

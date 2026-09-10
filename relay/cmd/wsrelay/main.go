@@ -160,7 +160,7 @@ func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.A
 
 		maximumConnections   = flags.Int("max-connections", connectionlimit.DefaultMaximumConnections, "maximum upgraded WebSocket connections")
 		maximumPerSource     = flags.Int("max-connections-per-source", connectionlimit.DefaultMaximumConnectionsPerSource, "maximum upgraded WebSockets per source")
-		maximumRoutes        = flags.Int("max-routes", defaultMaximumRoutes, "maximum live and permanently stopped routes")
+		maximumRoutes        = flags.Int("max-routes", defaultMaximumRoutes, "maximum active routes, including registration, reconnect grace, and unresolved STOP")
 		maximumSessions      = flags.Int("max-sessions", defaultMaximumSessions, "maximum active and recently ended relay sessions")
 		maximumShareSessions = flags.Int("max-sessions-per-share", defaultMaximumSessionsPerShare, "maximum relay sessions for one share")
 		challengeCapacity    = flags.Int("challenge-capacity", defaultChallengeCapacity, "maximum outstanding one-use authentication challenges")
@@ -213,23 +213,20 @@ func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.A
 	if err != nil {
 		return err
 	}
-	tombstones, err := v2route.NewFileTombstoneStore(filepath.Join(relayStateDirectory, tombstoneFilename))
-	if err != nil {
-		return fmt.Errorf("wsrelay: initialize STOP tombstones: %w", err)
-	}
-	registry, err := v2route.New(ctx, v2route.Config{
+	routes, err := openRelayRoutes(ctx, relayStateDirectory, v2route.Config{
 		MaxRoutes: *maximumRoutes, MaxSessions: *maximumSessions,
-		MaxSessionsPerShare: *maximumShareSessions, Random: rand.Reader, Tombstones: tombstones,
-	})
+		MaxSessionsPerShare: *maximumShareSessions,
+	}, logf)
 	if err != nil {
-		return fmt.Errorf("wsrelay: initialize route registry: %w", err)
+		return err
 	}
+	defer routes.Close(logf)
 	challenges, err := v2.NewChallengeLedger(v2.ChallengeLedgerConfig{Capacity: *challengeCapacity, Random: rand.Reader})
 	if err != nil {
 		return fmt.Errorf("wsrelay: initialize challenge ledger: %w", err)
 	}
 	endpointServer, err := v2endpoint.New(v2endpoint.Config{
-		Registry: registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
+		Registry: routes.registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
 		WriteTimeout: *endpointWriteTimeout,
 		AdmissionTracer: v2endpoint.AdmissionTraceFunc(func(event v2endpoint.AdmissionTrace) {
 			logf("wsrelay: admission connection_id=%s generation=%d session_id=%x phase=%s outcome=%s",

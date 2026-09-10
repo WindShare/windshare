@@ -35,12 +35,13 @@ const (
 )
 
 type relayRuntime struct {
-	baseURL   string
-	listener  *testloopback.TCPListener
-	endpoint  *v2endpoint.Server
-	server    *http.Server
-	limiter   *connectionlimit.Limiter
-	serveDone <-chan error
+	baseURL    string
+	listener   *testloopback.TCPListener
+	endpoint   *v2endpoint.Server
+	server     *http.Server
+	limiter    *connectionlimit.Limiter
+	serveDone  <-chan error
+	tombstones *v2route.FileTombstoneStore
 
 	closeOnce sync.Once
 	closeErr  error
@@ -63,6 +64,12 @@ func startRelayRuntime(
 	if err != nil {
 		return nil, fmt.Errorf("create relay integration tombstone store: %w", err)
 	}
+	storeOwned := true
+	defer func() {
+		if storeOwned {
+			_ = tombstones.Close()
+		}
+	}()
 	registry, err := v2route.New(ctx, v2route.Config{
 		MaxRoutes:           relayMaximumRoutes,
 		MaxSessions:         relayMaximumSessions,
@@ -109,8 +116,10 @@ func startRelayRuntime(
 	go func() {
 		serveResult <- httpServer.Serve(listener)
 	}()
+	storeOwned = false
 	return &relayRuntime{
-		baseURL: baseURL, listener: listener, endpoint: endpoint,
+		tombstones: tombstones,
+		baseURL:    baseURL, listener: listener, endpoint: endpoint,
 		server: httpServer, limiter: limiter, serveDone: serveResult,
 	}, nil
 }
@@ -132,7 +141,8 @@ func (runtime *relayRuntime) Close() error {
 	return runtime.closeErr
 }
 
-func (runtime *relayRuntime) close() error {
+func (runtime *relayRuntime) close() (result error) {
+	defer func() { result = errors.Join(result, runtime.tombstones.Close()) }()
 	var failures []error
 	if err := shutdownRelayEndpoint(runtime.endpoint); err != nil {
 		failures = append(failures, err)

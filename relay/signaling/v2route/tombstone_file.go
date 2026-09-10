@@ -6,48 +6,49 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
+
+	bolt "go.etcd.io/bbolt"
 
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
 const (
-	tombstoneFileVersion = byte(1)
 	tombstonePayloadSize = v2.ShareIDBytes + v2.ShareInstanceBytes + v2.PKHashBytes + v2.StopIDBytes
 	tombstoneRecordSize  = tombstonePayloadSize + sha256.Size
+	tombstoneOpenTimeout = time.Second
 )
 
 var (
-	tombstoneFileMagic     = [8]byte{'W', 'S', 'R', '2', 'S', 'T', 'O', 'P'}
-	ErrTombstoneFile       = errors.New("relay v2 route: tombstone file is invalid")
-	ErrTombstoneConflict   = errors.New("relay v2 route: conflicting STOP tombstone")
-	openProductionStopFile = func(path string, flag int, perm os.FileMode) (stopFile, error) {
-		return os.OpenFile(path, flag, perm)
-	}
+	tombstoneBucket      = []byte("permanent-stops-v1")
+	ErrTombstoneFile     = errors.New("relay v2 route: tombstone index is invalid")
+	ErrTombstoneConflict = errors.New("relay v2 route: conflicting STOP tombstone")
+	errTombstonePresent  = errors.New("relay v2 route: exact STOP already persisted")
+	errTombstoneClosed   = errors.New("relay v2 route: tombstone index is closed")
 )
 
-type stopFile interface {
-	io.Reader
-	io.Writer
-	io.Seeker
+type tombstoneDatabase interface {
+	View(func(*bolt.Tx) error) error
+	Update(func(*bolt.Tx) error) error
 	Sync() error
-	Truncate(int64) error
 	Close() error
 }
 
-type stopFileOpener func(string, int, os.FileMode) (stopFile, error)
+type tombstoneDatabaseOpener func(string) (tombstoneDatabase, error)
 
-// FileTombstoneStore is the production durability boundary for explicit STOP.
-// The append-only format keeps an acknowledged tombstone recoverable even when
-// a later record is interrupted; corruption is rejected at startup instead of
-// silently resurrecting a stopped share.
+// FileTombstoneStore uses a disk B+tree so history neither occupies route slots
+// nor requires a heap-resident map or a full-history scan for each STOP.
+// The single database owner must Close after all endpoint handlers have joined.
 type FileTombstoneStore struct {
-	path string
-	mu   sync.Mutex
-	open stopFileOpener
+	mu        sync.RWMutex
+	path      string
+	db        tombstoneDatabase
+	open      tombstoneDatabaseOpener
+	uncertain error
+	closed    bool
 }
 
 func NewFileTombstoneStore(path string) (*FileTombstoneStore, error) {
@@ -56,223 +57,215 @@ func NewFileTombstoneStore(path string) (*FileTombstoneStore, error) {
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
-		return nil, fmt.Errorf("resolve relay tombstone file: %w", err)
+		return nil, fmt.Errorf("resolve relay STOP index: %w", err)
 	}
 	if err := os.MkdirAll(filepath.Dir(absolute), 0o700); err != nil {
 		return nil, fmt.Errorf("create relay state directory: %w", err)
 	}
-	file, err := os.OpenFile(absolute, os.O_CREATE|os.O_RDWR, 0o600)
+	db, err := openTombstoneDatabase(absolute)
 	if err != nil {
-		return nil, fmt.Errorf("open relay tombstone file: %w", err)
-	}
-	info, statErr := file.Stat()
-	if statErr == nil && info.Size() == 0 {
-		header := append(tombstoneFileMagic[:], tombstoneFileVersion)
-		_, err = file.Write(header)
-		if err == nil {
-			err = file.Sync()
-		}
-	}
-	closeErr := file.Close()
-	if err = errors.Join(statErr, err, closeErr); err != nil {
-		return nil, fmt.Errorf("initialize relay tombstone file: %w", err)
+		return nil, err
 	}
 	if err := syncDirectory(filepath.Dir(absolute)); err != nil {
-		return nil, fmt.Errorf("persist relay state directory: %w", err)
+		return nil, errors.Join(err, db.Close())
 	}
-	store := &FileTombstoneStore{path: absolute, open: openProductionStopFile}
-	if err := store.recoverPartialTail(); err != nil {
-		return nil, err
-	}
-	return store, nil
+	return &FileTombstoneStore{path: absolute, db: db, open: openTombstoneDatabase}, nil
 }
 
-func (store *FileTombstoneStore) Load(ctx context.Context) ([]Tombstone, error) {
-	if store == nil || store.path == "" {
-		return nil, ErrTombstoneFile
+func openTombstoneDatabase(path string) (tombstoneDatabase, error) {
+	info, statErr := os.Stat(path)
+	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
+		return nil, statErr
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	fresh := errors.Is(statErr, os.ErrNotExist) || info.Size() == 0
+	db, err := bolt.Open(path, 0o600, &bolt.Options{Timeout: tombstoneOpenTimeout})
+	if err != nil {
+		return nil, errors.Join(ErrTombstoneFile, err)
+	}
+	if fresh {
+		err = db.Update(func(tx *bolt.Tx) error {
+			_, createErr := tx.CreateBucket(tombstoneBucket)
+			return createErr
+		})
+	}
+	if err == nil {
+		// Validate history without copying it into the registry or a growing map.
+		// A damaged record must never silently become an absent revocation.
+		err = db.View(func(tx *bolt.Tx) error {
+			bucket := tx.Bucket(tombstoneBucket)
+			if bucket == nil {
+				return ErrTombstoneFile
+			}
+			return bucket.ForEach(func(key, value []byte) error {
+				_, decodeErr := decodeTombstoneRecord(key, value)
+				return decodeErr
+			})
+		})
+	}
+	if err != nil {
+		return nil, errors.Join(ErrTombstoneFile, err, db.Close())
+	}
+	return db, nil
+}
+
+func (store *FileTombstoneStore) Lookup(ctx context.Context, shareID v2.ShareID) (Tombstone, bool, error) {
+	if store == nil {
+		return Tombstone{}, false, ErrTombstoneFile
+	}
+	store.mu.RLock()
+	defer store.mu.RUnlock()
+	if err := store.readiness(ctx); err != nil {
+		return Tombstone{}, false, err
+	}
+	var record Tombstone
+	var found bool
+	err := store.db.View(func(tx *bolt.Tx) error {
+		value := tx.Bucket(tombstoneBucket).Get(shareID[:])
+		if value == nil {
+			return nil
+		}
+		var err error
+		record, err = decodeTombstoneRecord(shareID[:], value)
+		found = err == nil
+		return err
+	})
+	return record, found, err
+}
+
+func (store *FileTombstoneStore) Commit(ctx context.Context, record Tombstone) (CommitOutcome, error) {
+	if store == nil || !validTombstone(record) {
+		return CommitNotCommitted, ErrTombstoneFile
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	encoded, err := os.ReadFile(store.path)
-	if err != nil {
-		return nil, fmt.Errorf("read relay tombstone file: %w", err)
-	}
-	return decodeTombstoneRecords(ctx, encoded)
-}
-
-func (store *FileTombstoneStore) Commit(
-	ctx context.Context,
-	tombstone Tombstone,
-) (CommitOutcome, error) {
-	if store == nil || store.path == "" || !validTombstone(tombstone) {
-		return CommitNotCommitted, ErrTombstoneFile
-	}
 	if err := ctx.Err(); err != nil {
 		return CommitNotCommitted, err
 	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	file, err := store.openFile(os.O_RDWR)
-	if err != nil {
-		return CommitUnknown, fmt.Errorf("open relay tombstone file for commit: %w", err)
+	if store.closed {
+		return CommitNotCommitted, errTombstoneClosed
 	}
-	encoded, readErr := io.ReadAll(file)
-	if readErr != nil {
-		return CommitUnknown, errors.Join(fmt.Errorf("read relay tombstones before commit: %w", readErr), file.Close())
-	}
-	records, decodeErr := decodeTombstoneRecords(ctx, encoded)
-	if decodeErr != nil {
-		return CommitUnknown, errors.Join(decodeErr, file.Close())
-	}
-	for _, existing := range records {
-		if existing.ShareID != tombstone.ShareID {
-			continue
+	if store.uncertain != nil {
+		if err := store.recover(); err != nil {
+			return CommitUnknown, errors.Join(ErrCommitUncertain, err)
 		}
-		if existing != tombstone {
-			return CommitUnknown, errors.Join(ErrTombstoneConflict, file.Close())
+	}
+	commitAttempted := false
+	err := store.db.Update(func(tx *bolt.Tx) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		// A retry resolves an earlier ambiguous result only after the exact record
-		// is validated and synchronized again on a clean handle lifecycle.
-		return committedAfterSync(file)
+		bucket := tx.Bucket(tombstoneBucket)
+		if value := bucket.Get(record.ShareID[:]); value != nil {
+			existing, err := decodeTombstoneRecord(record.ShareID[:], value)
+			if err != nil {
+				return err
+			}
+			if existing != record {
+				return ErrTombstoneConflict
+			}
+			return errTombstonePresent
+		}
+		if err := bucket.Put(record.ShareID[:], encodeTombstoneRecord(record)); err != nil {
+			return err
+		}
+		commitAttempted = true
+		return nil
+	})
+	if errors.Is(err, errTombstonePresent) {
+		// A same-ID retry acknowledges only after a clean durability boundary.
+		err = store.db.Sync()
+		commitAttempted = true
 	}
-	originalSize := int64(len(encoded))
-	if _, err := file.Seek(0, io.SeekEnd); err != nil {
-		return CommitUnknown, errors.Join(fmt.Errorf("seek relay tombstone append: %w", err), file.Close())
-	}
-	payload := encodeTombstone(tombstone)
-	digest := sha256.Sum256(payload)
-	record := make([]byte, tombstoneRecordSize)
-	copy(record, payload)
-	copy(record[tombstonePayloadSize:], digest[:])
-	_, writeErr := io.Copy(file, bytes.NewReader(record))
-	syncErr := error(nil)
-	if writeErr == nil {
-		syncErr = file.Sync()
-	}
-	closeErr := file.Close()
-	commitErr := errors.Join(writeErr, syncErr, closeErr)
-	if commitErr == nil {
+	if err == nil {
 		return CommitCommitted, nil
 	}
-	rollbackErr := store.rollback(originalSize)
-	if rollbackErr != nil {
-		return CommitUnknown, errors.Join(ErrCommitUncertain, fmt.Errorf("persist relay tombstone: %w", commitErr), rollbackErr)
+	if commitAttempted {
+		// A failed commit can have reached disk even if the current read view
+		// has not advanced. No lookup may report absence until recovery.
+		store.uncertain = err
+		return CommitUnknown, errors.Join(ErrCommitUncertain, err)
 	}
-	return CommitNotCommitted, fmt.Errorf("persist relay tombstone: %w", commitErr)
+	if errors.Is(err, ErrTombstoneConflict) || errors.Is(err, ErrTombstoneFile) {
+		return CommitUnknown, err
+	}
+	return CommitNotCommitted, err
 }
 
-func (store *FileTombstoneStore) openFile(flag int) (stopFile, error) {
-	open := store.open
-	if open == nil {
-		open = openProductionStopFile
+func (store *FileTombstoneStore) readiness(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
 	}
-	return open(store.path, flag, 0o600)
-}
-
-func committedAfterSync(file stopFile) (CommitOutcome, error) {
-	err := errors.Join(file.Sync(), file.Close())
-	if err != nil {
-		return CommitUnknown, errors.Join(ErrCommitUncertain, fmt.Errorf("confirm relay tombstone durability: %w", err))
+	if store.closed || store.db == nil {
+		return errTombstoneClosed
 	}
-	return CommitCommitted, nil
-}
-
-func (store *FileTombstoneStore) rollback(size int64) error {
-	file, err := store.openFile(os.O_RDWR)
-	if err != nil {
-		return fmt.Errorf("open relay tombstone rollback: %w", err)
-	}
-	truncateErr := file.Truncate(size)
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err := errors.Join(truncateErr, syncErr, closeErr); err != nil {
-		return fmt.Errorf("rollback relay tombstone append: %w", err)
+	if store.uncertain != nil {
+		return errors.Join(ErrCommitUncertain, store.uncertain)
 	}
 	return nil
 }
 
-func (store *FileTombstoneStore) recoverPartialTail() error {
-	file, err := store.openFile(os.O_RDWR)
-	if err != nil {
-		return fmt.Errorf("open relay tombstone recovery: %w", err)
-	}
-	encoded, readErr := io.ReadAll(file)
-	if readErr != nil {
-		return errors.Join(fmt.Errorf("read relay tombstone recovery: %w", readErr), file.Close())
-	}
-	_, completeBytes, decodeErr := decodeTombstonePrefix(context.Background(), encoded)
-	if decodeErr != nil {
-		return errors.Join(decodeErr, file.Close())
-	}
-	if completeBytes == len(encoded) {
-		if err := file.Close(); err != nil {
-			return fmt.Errorf("close relay tombstone recovery: %w", err)
+func (store *FileTombstoneStore) recover() error {
+	if store.db != nil {
+		err := store.db.Close()
+		store.db = nil
+		if err != nil {
+			return err
 		}
+	}
+	db, err := store.open(store.path)
+	if err != nil {
+		return err
+	}
+	store.db = db
+	if err := db.Sync(); err != nil {
+		return err
+	}
+	store.uncertain = nil
+	return nil
+}
+
+func (store *FileTombstoneStore) Close() error {
+	if store == nil {
 		return nil
 	}
-	// Only an incomplete final fixed record is unambiguously unacknowledged:
-	// every prior acknowledged record crossed file.Sync, so a torn complete
-	// record or any earlier checksum failure must remain startup-fatal.
-	truncateErr := file.Truncate(int64(completeBytes))
-	syncErr := file.Sync()
-	closeErr := file.Close()
-	if err := errors.Join(truncateErr, syncErr, closeErr); err != nil {
-		return fmt.Errorf("truncate partial relay tombstone tail: %w", err)
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if store.closed {
+		return nil
 	}
-	return nil
+	store.closed = true
+	if store.db == nil {
+		return nil
+	}
+	return store.db.Close()
 }
 
-func decodeTombstoneRecords(ctx context.Context, encoded []byte) ([]Tombstone, error) {
-	records, completeBytes, err := decodeTombstonePrefix(ctx, encoded)
-	if err != nil {
-		return nil, err
-	}
-	if completeBytes != len(encoded) {
-		return nil, ErrTombstoneFile
-	}
-	return records, nil
-}
-
-func decodeTombstonePrefix(ctx context.Context, encoded []byte) ([]Tombstone, int, error) {
-	headerSize := len(tombstoneFileMagic) + 1
-	if len(encoded) < headerSize || !bytes.Equal(encoded[:len(tombstoneFileMagic)], tombstoneFileMagic[:]) ||
-		encoded[len(tombstoneFileMagic)] != tombstoneFileVersion {
-		return nil, 0, ErrTombstoneFile
-	}
-	completeBytes := headerSize + ((len(encoded)-headerSize)/tombstoneRecordSize)*tombstoneRecordSize
-	result := make([]Tombstone, 0, (completeBytes-headerSize)/tombstoneRecordSize)
-	for offset := headerSize; offset < completeBytes; offset += tombstoneRecordSize {
-		if err := ctx.Err(); err != nil {
-			return nil, 0, err
-		}
-		record := encoded[offset : offset+tombstoneRecordSize]
-		payload := record[:tombstonePayloadSize]
-		digest := sha256.Sum256(payload)
-		if !bytes.Equal(digest[:], record[tombstonePayloadSize:]) {
-			return nil, 0, ErrTombstoneFile
-		}
-		result = append(result, decodeTombstone(payload))
-	}
-	return result, completeBytes, nil
-}
-
-func encodeTombstone(value Tombstone) []byte {
-	result := make([]byte, 0, tombstonePayloadSize)
+func encodeTombstoneRecord(value Tombstone) []byte {
+	result := make([]byte, 0, tombstoneRecordSize)
 	result = append(result, value.ShareID[:]...)
 	result = append(result, value.ShareInstance[:]...)
 	result = append(result, value.PKHash[:]...)
-	return append(result, value.StopID[:]...)
+	result = append(result, value.StopID[:]...)
+	digest := sha256.Sum256(result)
+	return append(result, digest[:]...)
 }
 
-func decodeTombstone(encoded []byte) Tombstone {
+func decodeTombstoneRecord(key, encoded []byte) (Tombstone, error) {
+	if len(encoded) != tombstoneRecordSize {
+		return Tombstone{}, ErrTombstoneFile
+	}
+	digest := sha256.Sum256(encoded[:tombstonePayloadSize])
+	if !bytes.Equal(digest[:], encoded[tombstonePayloadSize:]) {
+		return Tombstone{}, ErrTombstoneFile
+	}
 	var result Tombstone
 	offset := 0
 	offset += copy(result.ShareID[:], encoded[offset:offset+v2.ShareIDBytes])
 	offset += copy(result.ShareInstance[:], encoded[offset:offset+v2.ShareInstanceBytes])
 	offset += copy(result.PKHash[:], encoded[offset:offset+v2.PKHashBytes])
 	copy(result.StopID[:], encoded[offset:offset+v2.StopIDBytes])
-	return result
+	if !bytes.Equal(key, result.ShareID[:]) || !validTombstone(result) {
+		return Tombstone{}, ErrTombstoneFile
+	}
+	return result, nil
 }

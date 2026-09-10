@@ -89,6 +89,8 @@ func (connection ConnectionRef) Valid() bool {
 }
 
 type Config struct {
+	// MaxRoutes bounds starting, live, grace, and unresolved STOP routes.
+	// Durable revocations occupy only the independent TombstoneStore.
 	MaxRoutes int
 	// MaxSessions bounds provisional/active sessions plus ended-ID tombstones.
 	MaxSessions int
@@ -97,6 +99,7 @@ type Config struct {
 	Random              io.Reader
 	Now                 func() time.Time
 	Tombstones          TombstoneStore
+	StopTracer          StopTracer
 }
 
 type routeState uint8
@@ -105,7 +108,6 @@ const (
 	routeStarting routeState = iota + 1
 	routeLive
 	routeGrace
-	routeStopped
 	routeStopUncertain
 )
 
@@ -165,6 +167,8 @@ type Registry struct {
 	random              io.Reader
 	now                 func() time.Time
 	tombstones          TombstoneStore
+	stopTracer          StopTracer
+	revocationLookups   map[v2.ShareID]*revocationLookup
 	routes              map[v2.ShareID]*route
 	sessions            map[v2.RelaySessionID]relaySession
 	sessionTombstones   map[v2.RelaySessionID]sessionTombstone
@@ -183,33 +187,15 @@ func New(ctx context.Context, config Config) (*Registry, error) {
 	if config.Now == nil {
 		config.Now = time.Now
 	}
-	stopped, err := config.Tombstones.Load(ctx)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return nil, err
-	}
-	if len(stopped) > config.MaxRoutes {
-		return nil, ErrAdmission
 	}
 	registry := &Registry{
 		maxRoutes: config.MaxRoutes, maxSessions: config.MaxSessions, maxSessionsPerShare: config.MaxSessionsPerShare,
-		random: config.Random, now: config.Now, tombstones: config.Tombstones,
+		random: config.Random, now: config.Now, tombstones: config.Tombstones, stopTracer: config.StopTracer,
 		routes: make(map[v2.ShareID]*route), sessions: make(map[v2.RelaySessionID]relaySession),
+		revocationLookups: make(map[v2.ShareID]*revocationLookup),
 		sessionTombstones: make(map[v2.RelaySessionID]sessionTombstone), sessionSlotsByShare: make(map[v2.ShareID]int),
-	}
-	for _, tombstone := range stopped {
-		if !validTombstone(tombstone) {
-			return nil, ErrConfig
-		}
-		if _, duplicate := registry.routes[tombstone.ShareID]; duplicate {
-			return nil, ErrConfig
-		}
-		registry.routes[tombstone.ShareID] = &route{
-			init: v2.RegisterInit{
-				Mode: v2.RegistrationFresh, ShareID: tombstone.ShareID,
-				ShareInstance: tombstone.ShareInstance, PKHash: tombstone.PKHash,
-			},
-			state: routeStopped, stopID: tombstone.StopID,
-		}
 	}
 	return registry, nil
 }
@@ -220,13 +206,24 @@ func (r *Registry) BeginRegistration(init v2.RegisterInit, owner ConnectionRef) 
 	if r == nil || init.Mode != v2.RegistrationFresh || init.Validate() != nil || !owner.Valid() {
 		return ErrConfig
 	}
-	r.mu.Lock()
+	existing, stopped, err := r.lockRoute(context.Background(), init.ShareID)
 	defer r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	if stopped != nil {
+		if stopped.ShareInstance == init.ShareInstance {
+			return ErrStopped
+		}
+		if subtle.ConstantTimeCompare(stopped.PKHash[:], init.PKHash[:]) != 1 {
+			return ErrCollision
+		}
+		return ErrAlreadyRegistered
+	}
 	now := r.now()
-	r.expireRoutes(now)
 	r.expireSessionTombstones(now)
-	if existing := r.routes[init.ShareID]; existing != nil {
-		if (existing.state == routeStopped || existing.state == routeStopUncertain) &&
+	if existing != nil {
+		if existing.state == routeStopUncertain &&
 			existing.init.ShareInstance == init.ShareInstance {
 			return ErrStopped
 		}
@@ -294,16 +291,19 @@ func (r *Registry) Resume(init v2.RegisterInit, authority v2.SenderAuthority, ow
 	if r == nil || init.Mode != v2.RegistrationResume || init.Validate() != nil || !authority.Authorizes(init) || !owner.Valid() {
 		return ErrResume
 	}
-	r.mu.Lock()
+	current, stopped, err := r.lockRoute(context.Background(), init.ShareID)
 	defer r.mu.Unlock()
-	now := r.now()
-	r.expireRoutes(now)
-	r.expireSessionTombstones(now)
-	current := r.routes[init.ShareID]
+	if err != nil {
+		return err
+	}
+	if stopped != nil {
+		return ErrStopped
+	}
+	r.expireSessionTombstones(r.now())
 	if current == nil {
 		return ErrNotFound
 	}
-	if current.state == routeStopped || current.state == routeStopUncertain {
+	if current.state == routeStopUncertain {
 		return ErrStopped
 	}
 	if current.pendingStop != nil {
@@ -335,16 +335,19 @@ func (r *Registry) ValidateResumeCredential(init v2.RegisterInit, token v2.Resum
 	if r == nil || init.Mode != v2.RegistrationResume || init.Validate() != nil {
 		return ErrResume
 	}
-	r.mu.Lock()
+	current, stopped, err := r.lockRoute(context.Background(), init.ShareID)
 	defer r.mu.Unlock()
-	now := r.now()
-	r.expireRoutes(now)
-	r.expireSessionTombstones(now)
-	current := r.routes[init.ShareID]
+	if err != nil {
+		return err
+	}
+	if stopped != nil {
+		return ErrStopped
+	}
+	r.expireSessionTombstones(r.now())
 	if current == nil {
 		return ErrNotFound
 	}
-	if current.state == routeStopped || current.state == routeStopUncertain {
+	if current.state == routeStopUncertain {
 		return ErrStopped
 	}
 	if current.pendingStop != nil {
@@ -417,12 +420,16 @@ func (r *Registry) Join(shareID v2.ShareID, receiver ConnectionRef) (JoinResult,
 	if r == nil || !receiver.Valid() {
 		return JoinResult{}, ErrConfig
 	}
-	r.mu.Lock()
+	current, stopped, err := r.lockRoute(context.Background(), shareID)
 	defer r.mu.Unlock()
+	if err != nil {
+		return JoinResult{}, err
+	}
+	if stopped != nil {
+		return JoinResult{Status: JoinStopped}, nil
+	}
 	now := r.now()
-	r.expireRoutes(now)
 	r.expireSessionTombstones(now)
-	current := r.routes[shareID]
 	if current == nil {
 		return JoinResult{Status: JoinNotFound}, nil
 	}
@@ -432,7 +439,7 @@ func (r *Registry) Join(shareID v2.ShareID, receiver ConnectionRef) (JoinResult,
 	switch current.state {
 	case routeStarting, routeGrace:
 		return JoinResult{Status: JoinStarting, RetryAfter: 250 * time.Millisecond}, nil
-	case routeStopped, routeStopUncertain:
+	case routeStopUncertain:
 		return JoinResult{Status: JoinStopped}, nil
 	case routeLive:
 	default:
