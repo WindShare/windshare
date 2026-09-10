@@ -8,9 +8,9 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   const progress = facts.progress
   const direct = facts.directZipProgress
   if (progress === null && direct === null) return retainedProgress(facts)
-  // Receipt and recovery advance independently; reopening starts with retained bytes
-  // before transfer replay has rebuilt its live materialization observations.
-  const materialized = maximum(progress?.materializedBytes ?? 0n, direct?.safeResumeBytes ?? 0n)
+  // Direct ZIP receipt advances while output writes and durable checkpoints wait.
+  // Its logical payload already includes the retained prefix after reopening.
+  const materialized = direct?.receivedSelectedBytes ?? progress?.materializedBytes ?? 0n
   const files = progress === null ? '' : ` · ${progress.completedFiles} files completed`
   const details = progressDetails(facts)
   const percentage = exactPercentage(facts, materialized)
@@ -77,6 +77,7 @@ function progressDetails(facts: TaskFacts): string[] {
     if (progress.discovery === 'failed') details.push(`${progress.failedDirectories} folders could not be fully discovered.`)
   }
   if (direct !== null) {
+    details.push(`${formatBytes(direct.writtenSelectedBytes)} written or reused in the ZIP.`)
     details.push(`${formatBytes(direct.safeResumeBytes)} safe to resume after restart.`)
     if (direct.resumeTemporarySpaceUpperBound !== undefined) {
       details.push(`Resuming may need up to ${formatBytes(direct.resumeTemporarySpaceUpperBound)} of temporary destination space.`)

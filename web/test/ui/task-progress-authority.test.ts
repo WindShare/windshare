@@ -25,13 +25,19 @@ describe('task progress native authority', () => {
 
   it('updates direct ZIP receipt between checkpoints without advancing restart-safe bytes', () => {
     const task = presentTask(taskFixture({
-      progress: { ...resumed, materializedBytes: 77n * MIB },
+      progress: { ...resumed, materializedBytes: 60n * MIB },
       directZipProgress: {
         ...TASK_FIXTURES.verifying!.directZipProgress!,
+        receivedSelectedBytes: 77n * MIB,
+        writtenSelectedBytes: 60n * MIB,
         safeResumeBytes: 32n * MIB,
       },
     }))
     expect(task.progress?.percentage).toBe(77)
+    expect(task.progress?.label).toContain('77.0 MiB / 100.0 MiB received')
+    expect(task.progress?.details).toContain('60.0 MiB written or reused in the ZIP.')
+    expect(task.progress?.receivedBytes).toBe(MIB)
+    expect(task.progress?.remainingBytes).toBe(23n * MIB)
     expect(task.progress?.details).toContain('32.0 MiB safe to resume after restart.')
   })
 
@@ -40,6 +46,8 @@ describe('task progress native authority', () => {
       progress: { ...resumed, materializedBytes: 0n },
       directZipProgress: {
         ...TASK_FIXTURES.verifying!.directZipProgress!,
+        receivedSelectedBytes: 64n * MIB,
+        writtenSelectedBytes: 64n * MIB,
         safeResumeBytes: 64n * MIB,
       },
     }))

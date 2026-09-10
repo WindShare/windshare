@@ -231,6 +231,10 @@ export interface V2DirectZipProgressSnapshot {
   readonly operationId: string
   readonly generation: bigint
   readonly phase: V2DirectZipProgressPhase
+  /** Logical payload, including the retained prefix; retries do not count twice. */
+  readonly receivedSelectedBytes: bigint
+  /** Payload acknowledged by the output writer; acknowledgement alone does not prove recovery. */
+  readonly writtenSelectedBytes: bigint
   readonly safeResumeBytes: bigint
   readonly resumeTemporarySpaceUpperBound?: bigint
 }

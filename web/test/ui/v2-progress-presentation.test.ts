@@ -34,18 +34,18 @@ describe('v2 progress presentation', () => {
   it('keeps a complete direct ZIP below 100% until closing and verification have published it', () => {
     const progress = directZipProgress({
       phase: 'closing',
+      receivedSelectedBytes: 1_024n,
+      writtenSelectedBytes: 1_024n,
       safeResumeBytes: 768n,
       resumeTemporarySpaceUpperBound: 2_048n,
     })
     const closing = presentDirectZipProgress({
       progress,
-      receivedBytes: 1_024n,
       selectedBytes: { kind: 'exact', bytes: 1_024n },
       lifecycle: lifecycle('receiving'),
     })
     const published = presentDirectZipProgress({
       progress: { ...progress, phase: 'verifying', generation: 2n },
-      receivedBytes: 1_024n,
       selectedBytes: { kind: 'exact', bytes: 1_024n },
       lifecycle: lifecycle('published'),
     })
@@ -60,12 +60,16 @@ describe('v2 progress presentation', () => {
 
   it('labels a lower-bound direct ZIP projection without inventing a percentage', () => {
     const presented = presentDirectZipProgress({
-      progress: directZipProgress({ safeResumeBytes: 256n }),
-      receivedBytes: 512n,
+      progress: directZipProgress({
+        receivedSelectedBytes: 512n, writtenSelectedBytes: 384n, safeResumeBytes: 256n,
+      }),
       selectedBytes: { kind: 'estimated-lower-bound', bytes: 1_024n },
       lifecycle: lifecycle('receiving'),
     })
 
+    expect(presented.primary).toContain('512 B received')
+    expect(presented.written).toBe('384 B written or reused in the ZIP.')
+    expect(presented.safeResume).toContain('256 B')
     expect(presented.percentage).toBeNull()
     expect(presented.primary).toContain('estimated selection is at least 1.0 KiB')
     expect(presented.primary).not.toContain('%')
@@ -95,6 +99,8 @@ function directZipProgress(
     operationId: 'operation',
     generation: 1n,
     phase: 'receiving',
+    receivedSelectedBytes: 0n,
+    writtenSelectedBytes: 0n,
     safeResumeBytes: 0n,
     ...overrides,
   })

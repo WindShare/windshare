@@ -43,6 +43,7 @@ import {
   type DirectZipOrderedSourceV1,
   type DirectZipReplayAuthorityV1,
   type DirectZipMemberRollbackAuthorityV1,
+  type DirectZipPayloadProgressV1,
 } from '../../src/transfer/direct-zip'
 import {
   V2RevisionCapacityCoordinator,
@@ -311,16 +312,19 @@ describe('direct ZIP discovery pipeline', () => {
 describe('direct ZIP output settlement', () => {
   it('treats content-block checkpoints as policy observations and creates one complete artifact', async () => {
     const harness = createWriterHarness()
-    const output = transferOutput(harness.writer(), harness)
+    const progress: DirectZipPayloadProgressV1[] = []
+    const output = transferOutput(harness.writer(), harness, undefined, snapshot => progress.push(snapshot))
     const member = file('root/a.txt', 6n)
     await output.beginTraversal(ROOT, SIGNAL)
     expect(await output.visit(1n, member, SIGNAL)).toBe('transfer-file')
     const transaction = await output.beginFile(member, source(), SIGNAL)
     await transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
     expect(await transaction.observeCheckpoint(SIGNAL)).toBe(0n)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 3n })
     expect(harness.target.closeAttemptCount).toBe(0)
     await transaction.write(3n, Uint8Array.of(4, 5, 6), SIGNAL)
     expect(await transaction.observeCheckpoint(SIGNAL)).toBe(0n)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 6n, writtenSelectedBytes: 6n })
     await transaction.commit(SIGNAL)
     await output.finishTraversal(2n, SIGNAL)
 
@@ -330,12 +334,131 @@ describe('direct ZIP output settlement', () => {
     expect(harness.target.artifactCount).toBe(1)
     expect(harness.target.rangeReads).toEqual([])
     expect(harness.target.closeAttemptCount).toBe(1)
+    expect(progress).toEqual([
+      { receivedSelectedBytes: 0n, writtenSelectedBytes: 0n },
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 0n },
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 3n },
+      { receivedSelectedBytes: 6n, writtenSelectedBytes: 3n },
+      { receivedSelectedBytes: 6n, writtenSelectedBytes: 6n },
+    ])
     expect(output.materializationSummary()).toEqual({
       entryCount: 2n,
       fileCount: 1n,
       directoryCount: 1n,
       rawBytes: 6n,
     })
+  })
+
+  it('reports authenticated receipt while the payload write is still pending', async () => {
+    const harness = createWriterHarness()
+    const writer = harness.writer()
+    const progress: DirectZipPayloadProgressV1[] = []
+    const output = transferOutput(writer, harness, undefined, snapshot => progress.push(snapshot))
+    const member = file('root/a.txt', 6n)
+    await output.beginTraversal(ROOT, SIGNAL)
+    await output.visit(1n, member, SIGNAL)
+    const transaction = await output.beginFile(member, source(), SIGNAL)
+    const started = coordinatorGate()
+    const release = coordinatorGate()
+    const writeMember = writer.writeMember.bind(writer)
+    vi.spyOn(writer, 'writeMember').mockImplementationOnce(async (...args) => {
+      started.resolve()
+      await release.promise
+      await writeMember(...args)
+    })
+
+    const writing = transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
+    await started.promise
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 0n })
+    expect(writer.committedCheckpoint.safeResumeBytes).toBe(0n)
+    await expect(transaction.write(0n, Uint8Array.of(1, 2, 3, 4), SIGNAL))
+      .rejects.toThrow(/contiguous range/u)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 0n })
+    release.resolve()
+    await writing
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 3n })
+    expect(progress.every(Object.isFrozen)).toBe(true)
+    expect(writer.committedCheckpoint.safeResumeBytes).toBe(0n)
+    await output.pause()
+  })
+
+  it('counts a retried payload range once and never acknowledges a rejected write', async () => {
+    const harness = createWriterHarness()
+    const writer = harness.writer()
+    const progress: DirectZipPayloadProgressV1[] = []
+    const output = transferOutput(writer, harness, undefined, snapshot => progress.push(snapshot))
+    const member = file('root/a.txt', 6n)
+    await output.beginTraversal(ROOT, SIGNAL)
+    await output.visit(1n, member, SIGNAL)
+    const transaction = await output.beginFile(member, source(), SIGNAL)
+    const failure = new Error('payload write rejected')
+    vi.spyOn(writer, 'writeMember').mockRejectedValueOnce(failure)
+    await expect(transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)).rejects.toBe(failure)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 0n })
+    await expect(transaction.write(1n, Uint8Array.of(1), SIGNAL)).rejects.toThrow(/contiguous range/u)
+
+    await transaction.write(0n, Uint8Array.of(1, 2), SIGNAL)
+    await transaction.write(2n, Uint8Array.of(3, 4), SIGNAL)
+    expect(progress).toEqual([
+      { receivedSelectedBytes: 0n, writtenSelectedBytes: 0n },
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 0n },
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 2n },
+      { receivedSelectedBytes: 4n, writtenSelectedBytes: 2n },
+      { receivedSelectedBytes: 4n, writtenSelectedBytes: 4n },
+    ])
+    expect(writer.committedCheckpoint.safeResumeBytes).toBe(0n)
+    await output.pause()
+  })
+
+  it('keeps progress observers outside writer success and failure authority', async () => {
+    const harness = createWriterHarness()
+    const observe = vi.fn(() => { throw new Error('progress view failed') })
+    const output = transferOutput(harness.writer(), harness, undefined, observe)
+    const member = file('root/a.txt', 6n)
+    await output.beginTraversal(ROOT, SIGNAL)
+    await output.visit(1n, member, SIGNAL)
+    const transaction = await output.beginFile(member, source(), SIGNAL)
+    await transaction.write(0n, Uint8Array.of(1, 2, 3, 4, 5, 6), SIGNAL)
+    await transaction.commit(SIGNAL)
+    await output.finishTraversal(2n, SIGNAL)
+    expect((await output.publish()).checkpoint.safeResumeBytes).toBe(6n)
+    expect(observe).toHaveBeenCalledTimes(3)
+  })
+
+  it.each(['payload', 'descriptor'] as const)('drops a discarded epoch from progress after %s failure', async fault => {
+    const harness = createWriterHarness()
+    const writer = harness.writer()
+    const progress: DirectZipPayloadProgressV1[] = []
+    const output = transferOutput(writer, harness, undefined, snapshot => progress.push(snapshot))
+    const member = file('root/a.txt', 6n)
+    await output.beginTraversal(ROOT, SIGNAL)
+    await output.visit(1n, member, SIGNAL)
+    const transaction = await output.beginFile(member, source(), SIGNAL)
+    await transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
+    if (fault === 'descriptor') await transaction.write(3n, Uint8Array.of(4, 5, 6), SIGNAL)
+    harness.target.failNextWriteAtOrAfter = 0n
+    await expect(fault === 'payload'
+      ? transaction.write(3n, Uint8Array.of(4, 5, 6), SIGNAL)
+      : transaction.commit(SIGNAL)).rejects.toThrow(/injected positioned write failure/u)
+    expect(progress.at(-1)).toEqual({
+      receivedSelectedBytes: 6n,
+      writtenSelectedBytes: fault === 'payload' ? 3n : 6n,
+    })
+    const paused = await output.pause()
+    expect(paused.checkpoint.safeResumeBytes).toBe(0n)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 0n, writtenSelectedBytes: 0n })
+
+    const resumed = transferOutput(harness.writer(paused.checkpoint), harness, undefined,
+      snapshot => progress.push(snapshot))
+    await resumed.beginTraversal(ROOT, SIGNAL)
+    await resumed.visit(1n, member, SIGNAL)
+    const retry = await resumed.beginFile(member, source(), SIGNAL)
+    expect(retry.resumeOffset).toBe(0n)
+    await retry.write(0n, Uint8Array.of(1, 2, 3, 4, 5, 6), SIGNAL)
+    await retry.commit(SIGNAL)
+    await resumed.finishTraversal(2n, SIGNAL)
+    await resumed.publish()
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 6n, writtenSelectedBytes: 6n })
   })
 
   it('forces an inside-member pause cut without claiming the incomplete file', async () => {
@@ -372,7 +495,10 @@ describe('direct ZIP output settlement', () => {
     await transaction.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
     const paused = await first.pause()
 
-    const resumed = transferOutput(harness.writer(paused.checkpoint), harness)
+    const progress: DirectZipPayloadProgressV1[] = []
+    const resumed = transferOutput(harness.writer(paused.checkpoint), harness, undefined,
+      snapshot => progress.push(snapshot))
+    expect(progress).toEqual([{ receivedSelectedBytes: 3n, writtenSelectedBytes: 3n }])
     await resumed.beginTraversal(ROOT, SIGNAL)
     expect(await resumed.visit(1n, member, SIGNAL)).toBe('transfer-file')
     const resumedTransaction = await resumed.beginFile(member, source(), SIGNAL)
@@ -381,6 +507,11 @@ describe('direct ZIP output settlement', () => {
     await resumedTransaction.commit(SIGNAL)
     await resumed.finishTraversal(2n, SIGNAL)
     expect(resumed.materializationSummary().rawBytes).toBe(6n)
+    expect(progress).toEqual([
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 3n },
+      { receivedSelectedBytes: 6n, writtenSelectedBytes: 3n },
+      { receivedSelectedBytes: 6n, writtenSelectedBytes: 6n },
+    ])
   })
 
   it('delegates revision change to member-only rollback authority', async () => {
@@ -413,12 +544,55 @@ describe('direct ZIP output settlement', () => {
       })
       return harness.writer(checkpoint)
     })
-    const resumed = transferOutput(harness.writer(paused.checkpoint), harness, rollback)
+    const progress: DirectZipPayloadProgressV1[] = []
+    const resumed = transferOutput(harness.writer(paused.checkpoint), harness, rollback,
+      snapshot => progress.push(snapshot))
     await resumed.beginTraversal(ROOT, SIGNAL)
     await resumed.visit(1n, member, SIGNAL)
     const replacement = await resumed.beginFile(member, source('revision-2'), SIGNAL)
     expect(replacement.resumeOffset).toBe(0n)
     expect(rollback).toHaveBeenCalledOnce()
+    expect(progress).toEqual([
+      { receivedSelectedBytes: 3n, writtenSelectedBytes: 3n },
+      { receivedSelectedBytes: 0n, writtenSelectedBytes: 0n },
+    ])
+    await replacement.write(0n, Uint8Array.of(1, 2, 3), SIGNAL)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 3n, writtenSelectedBytes: 3n })
+    await resumed.pause()
+  })
+
+  it('seeds completed and partial payload once while replaying directories and files', async () => {
+    const harness = createWriterHarness()
+    const first = transferOutput(harness.writer(), harness)
+    const completed = file('root/a.txt', 2n)
+    const folder = directory('root/b')
+    const partial = file('root/b/c.txt', 6n)
+    await first.beginTraversal(ROOT, SIGNAL)
+    await first.visit(1n, completed, SIGNAL)
+    const completedTransaction = await first.beginFile(completed, source('revision-1', 2n), SIGNAL)
+    await completedTransaction.write(0n, Uint8Array.of(1, 2), SIGNAL)
+    await completedTransaction.commit(SIGNAL)
+    await first.visit(2n, folder, SIGNAL)
+    await first.visit(3n, partial, SIGNAL)
+    const partialTransaction = await first.beginFile(partial, source(), SIGNAL)
+    await partialTransaction.write(0n, Uint8Array.of(3, 4, 5), SIGNAL)
+    const paused = await first.pause()
+    expect(paused.checkpoint.safeResumeBytes).toBe(5n)
+
+    const progress: DirectZipPayloadProgressV1[] = []
+    const resumed = transferOutput(harness.writer(paused.checkpoint), harness, undefined,
+      snapshot => progress.push(snapshot))
+    await resumed.beginTraversal(ROOT, SIGNAL)
+    expect(await resumed.visit(1n, completed, SIGNAL)).toBe('replayed')
+    expect(await resumed.visit(2n, folder, SIGNAL)).toBe('replayed')
+    await resumed.visit(3n, partial, SIGNAL)
+    const transaction = await resumed.beginFile(partial, source(), SIGNAL)
+    expect(progress).toEqual([{ receivedSelectedBytes: 5n, writtenSelectedBytes: 5n }])
+    await transaction.write(3n, Uint8Array.of(6, 7, 8), SIGNAL)
+    await transaction.commit(SIGNAL)
+    await resumed.finishTraversal(4n, SIGNAL)
+    await resumed.publish()
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 8n, writtenSelectedBytes: 8n })
   })
 
   it('observes an after-publication close fault without retrying or duplicating output', async () => {
@@ -486,7 +660,8 @@ describe('direct ZIP receive lifecycle', () => {
   it('keeps one writer alive while a supervised network generation recovers', async () => {
     const harness = createWriterHarness()
     const writer = harness.writer()
-    const output = transferOutput(writer, harness)
+    const progress: DirectZipPayloadProgressV1[] = []
+    const output = transferOutput(writer, harness, undefined, snapshot => progress.push(snapshot))
     const member = contentFile('root/a.txt', 4n)
     const opened = directZipOpenedRevision(member)
     const recovering = coordinatorGate()
@@ -537,6 +712,7 @@ describe('direct ZIP receive lifecycle', () => {
     await recovering.promise
     expect(acknowledged).toEqual([2n])
     expect(writer.committedCheckpoint.safeResumeBytes).toBe(0n)
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 2n, writtenSelectedBytes: 2n })
     expect(harness.target.openEpochCount).toBe(1)
     expect(harness.target.closeAttemptCount).toBe(0)
     expect(harness.target.abortCount).toBe(0)
@@ -548,6 +724,7 @@ describe('direct ZIP receive lifecycle', () => {
     expect(harness.target.openEpochCount).toBe(1)
     expect(harness.target.closeAttemptCount).toBe(1)
     expect(acknowledged).toEqual([2n, 2n])
+    expect(progress.at(-1)).toEqual({ receivedSelectedBytes: 4n, writtenSelectedBytes: 4n })
     content.close()
   })
 
@@ -814,6 +991,7 @@ function transferOutput(
   writer: ReturnType<ReturnType<typeof createWriterHarness>['writer']>,
   harness: ReturnType<typeof createWriterHarness>,
   rollback: DirectZipMemberRollbackAuthorityV1['rollbackMember'] = defaultRollback().rollbackMember,
+  onProgress?: (snapshot: DirectZipPayloadProgressV1) => void,
 ): DirectZipTransferOutputV1 {
   const replay: DirectZipReplayAuthorityV1 = {
     verifyRoot: async () => undefined,
@@ -831,6 +1009,7 @@ function transferOutput(
     pages: harness.pages,
     replay,
     rollback: { rollbackMember: rollback },
+    ...(onProgress === undefined ? {} : { onProgress }),
   })
 }
 

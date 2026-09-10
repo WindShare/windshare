@@ -18,7 +18,7 @@ import type {
   OutputSessionIdentity,
 } from '../output-session'
 import { DirectZipTransferDiagnosticsV1 } from './diagnostics'
-import type { DirectZipIntent, DirectZipSettlementAuthorityV1 } from './model'
+import type { DirectZipIntent, DirectZipPayloadProgressV1, DirectZipSettlementAuthorityV1 } from './model'
 import {
   DirectZipTransferOutputV1,
   type DirectZipMemberRollbackAuthorityV1,
@@ -56,6 +56,7 @@ export interface DirectZipExecutionOptionsV1 {
   readonly rollback: DirectZipMemberRollbackAuthorityV1
   readonly settlement: DirectZipSettlementAuthorityV1
   readonly diagnostics?: DirectZipDiagnosticsObserver
+  readonly onProgress?: (snapshot: DirectZipPayloadProgressV1) => void
 }
 
 /** Browser route assembly supplies acquired target and durable journal ports; this factory never picks either. */
@@ -105,6 +106,7 @@ export async function createDirectZipExecutionV1(
     pages: input.writer.journal,
     replay: input.replay,
     rollback: input.rollback,
+    ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
   })
   diagnostics.session('session-started', writer.committedCheckpoint.phase)
   const execution: DirectResumableZipExecution = {
