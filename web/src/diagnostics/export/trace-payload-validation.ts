@@ -137,7 +137,7 @@ export function decimalFields(
   for (const key of keys) decimalUint64(payload[key], `${field} ${key}`)
 }
 
-function canonicalIdentity(value: unknown, field: string): string {
+export function canonicalIdentity(value: unknown, field: string): string {
   if (typeof value !== 'string' || !CANONICAL_IDENTITY.test(value) || value === ZERO_IDENTITY) {
     throw new TypeError(`${field} must be a canonical non-zero 16-byte base64url identity`)
   }

@@ -1,3 +1,7 @@
+import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
+import { LanePerformance, completionCost } from './scheduling/performance'
+import { LaneExploration, probeDue, rescueDue, type DispatchPurpose } from './scheduling/exploration'
+import { ContentRaceWon, ContentRaceFailures, raceContent } from './scheduling/race'
 import { V2SessionRuntimeError } from '../session/v2-runtime-types'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from './v2-records'
 import type {
@@ -29,6 +33,7 @@ interface LaneState {
   readonly laneEpoch: number
   readonly route: V2BlockTransportRoute
   inflight: number
+  readonly performance: LanePerformance
   failed: boolean
 }
 
@@ -65,7 +70,16 @@ export class V2BlockDispatchSequenceAuthority {
   }
 }
 
+export interface V2BlockSchedulingObservation extends V2BlockDispatchObservation {
+  readonly purpose: DispatchPurpose
+  readonly expectedMilliseconds: number
+  readonly pendingBytes: number
+  readonly bytesPerSecond: number
+}
+
 export interface V2LaneSetOptions {
+  readonly now?: () => number
+  readonly onBlockScheduled?: (observation: V2BlockSchedulingObservation) => void
   readonly dispatchSequence?: V2BlockDispatchSequenceAuthority
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
@@ -86,10 +100,17 @@ export class V2LaneSet {
   readonly #dispatchSequence: V2BlockDispatchSequenceAuthority
   readonly #onBlockDispatched: (observation: V2BlockDispatchObservation) => void
   readonly #onBlockFetched: (observation: V2BlockRouteObservation) => void
+  readonly #now: () => number
+  readonly #onBlockScheduled: ((observation: V2BlockSchedulingObservation) => void) | undefined
+  readonly #exploration = new LaneExploration()
+  readonly #attemptLifetimes = new ContentAttemptLifetimes()
+  readonly #lifetime = new AbortController()
   #rotation = 0
   #closed = false
 
   constructor(options: V2LaneSetOptions = {}) {
+    this.#now = options.now ?? (() => performance.now())
+    this.#onBlockScheduled = options.onBlockScheduled
     this.#dispatchSequence = options.dispatchSequence ?? new V2BlockDispatchSequenceAuthority()
     this.#onBlockDispatched = options.onBlockDispatched ?? (() => undefined)
     this.#onBlockFetched = options.onBlockFetched ?? (() => undefined)
@@ -103,7 +124,7 @@ export class V2LaneSet {
     if (!Number.isInteger(laneEpoch) || laneEpoch < 0 || laneEpoch > 0xffff_ffff) {
       throw new TypeError('LaneSet requires an unsigned lane epoch')
     }
-    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false })
+    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance: new LanePerformance() })
     this.#wakeWaiters()
   }
 
@@ -140,52 +161,130 @@ export class V2LaneSet {
   async fetch(
     demand: V2BlockDemand,
     routes: V2BlockRouteEligibility,
-    signal: AbortSignal,
+    callerSignal: AbortSignal,
   ): Promise<V2BlockRecord> {
+    const signal = AbortSignal.any([callerSignal, this.#lifetime.signal])
     signal.throwIfAborted()
     routes.assertActive()
     const failures: unknown[] = []
     const attempted = new Set<LaneState>()
+    const bytes = blockDemandBytes(demand)
+    let supplemented = false
     while (true) {
       routes.assertActive()
-      const state = this.#orderedCandidates(routes).find((candidate) => !attempted.has(candidate))
+      const state = this.#orderedCandidates(routes, bytes).find((candidate) => !attempted.has(candidate))
       if (state === undefined) {
         await this.#awaitReplacementOrThrow(failures, attempted, routes, signal)
         continue
       }
       attempted.add(state)
-      signal.throwIfAborted()
-      state.inflight += 1
-      const observation = Object.freeze({
-        dispatchSequence: this.#dispatchSequence.next(),
-        laneId: state.lane.id,
-        laneEpoch: state.laneEpoch,
-        route: state.route,
-        fileId: demand.descriptor.fileIdText,
-        localBlockIndex: demand.localBlockIndex,
-      })
+      const started = this.#now()
+      const estimate = state.performance.estimate(bytes)
       try {
-        // The sequence is allocated immediately before invocation so a relay-cut
-        // fence classifies dispatch authority rather than completion timing.
-        this.#onBlockDispatched(observation)
-      } catch {
-        // Diagnostics cannot delay, redirect, or cancel authenticated block work.
-      }
-      try {
-        // Eligibility is sampled at dispatch. Once one legitimate consumer starts
-        // a shared BlockRef load, later cancellation cannot retroactively make the
-        // authenticated bytes illicit for another coalesced consumer.
-        const record = await state.lane.fetchBlock(demand, signal)
-        state.failed = false
-        this.#observeFetched(state, observation, record)
-        return record
+        const winner = await raceContent(
+          signal,
+          (attemptSignal) => this.#fetchAttempt(state, demand, attemptSignal, 'content'),
+          (attemptSignal, purpose) => {
+            if (supplemented) return undefined
+            routes.assertActive()
+            const candidate = this.#supplement(
+              state, attempted, routes, bytes, this.#now() - started, estimate, purpose,
+            )
+            if (candidate === undefined) return undefined
+            supplemented = true
+            attempted.add(candidate)
+            return this.#fetchAttempt(candidate, demand, attemptSignal, purpose)
+              .finally(() => this.#exploration.release(purpose))
+          },
+          isRetryableLaneFailure,
+        )
+        this.#observeFetched(winner.state, winner.observation, winner.record)
+        return winner.record
       } catch (error) {
         if (signal.aborted) throw signal.reason ?? error
-        if (!isRetryableLaneFailure(error)) throw error
-        failures.push(error)
-        state.failed = true
-      } finally {
-        state.inflight -= 1
+        if (!(error instanceof ContentRaceFailures)) throw error
+        const fatalIndex = error.errors.findIndex((failure: unknown) => !isRetryableLaneFailure(failure))
+        if (fatalIndex >= 0) throw error.errors[fatalIndex]
+        failures.push(...error.errors)
+      }
+    }
+  }
+
+  #supplement(
+    primary: LaneState,
+    attempted: ReadonlySet<LaneState>,
+    routes: V2BlockRouteEligibility,
+    bytes: number,
+    elapsed: number,
+    estimate: number,
+    purpose: 'probe' | 'rescue',
+  ): LaneState | undefined {
+    if (this.#closed || (purpose === 'probe' && !primary.performance.hasSuccessfulSample)) return undefined
+    const now = this.#now()
+    const candidates = this.#orderedCandidates(routes, bytes).filter((state) =>
+      !attempted.has(state) && (purpose !== 'probe' || probeDue(state.performance, now)))
+    if (purpose === 'probe') {
+      // Exploration follows stale evidence, independently of content allocation.
+      candidates.sort((left, right) =>
+        (left.performance.lastAttempt ?? -Number.MAX_VALUE) -
+          (right.performance.lastAttempt ?? -Number.MAX_VALUE) || left.lane.id - right.lane.id)
+    }
+    const candidate = candidates[0]
+    if (candidate === undefined) return undefined
+    if (purpose === 'rescue' && !rescueDue(elapsed, estimate, candidate.performance.estimate(bytes))) return undefined
+    return this.#exploration.acquire(purpose, now) ? candidate : undefined
+  }
+
+  waitForLeaseIdle(leaseId: Uint8Array): Promise<void> {
+    return this.#attemptLifetimes.waitForLeaseIdle(leaseId)
+  }
+
+  async #fetchAttempt(
+    state: LaneState,
+    demand: V2BlockDemand,
+    signal: AbortSignal,
+    purpose: DispatchPurpose,
+  ): Promise<{ state: LaneState; observation: V2BlockDispatchObservation; record: V2BlockRecord }> {
+    signal.throwIfAborted()
+    const bytes = blockDemandBytes(demand)
+    const started = this.#now()
+    const expectedMilliseconds = state.performance.estimate(bytes)
+    const observation = Object.freeze({
+      dispatchSequence: this.#dispatchSequence.next(),
+      laneId: state.lane.id,
+      laneEpoch: state.laneEpoch,
+      route: state.route,
+      fileId: demand.descriptor.fileIdText,
+      localBlockIndex: demand.localBlockIndex,
+    })
+    const releaseAttempt = this.#attemptLifetimes.begin(demand.leaseId)
+    state.inflight += 1
+    state.performance.begin(started, bytes)
+    try {
+      this.#onBlockDispatched(observation)
+    } catch { /* Diagnostics cannot redirect authenticated work. */ }
+    try {
+      this.#onBlockScheduled?.(Object.freeze({
+        ...observation, purpose, expectedMilliseconds,
+        pendingBytes: state.performance.pendingBytes,
+        bytesPerSecond: state.performance.bytesPerSecond,
+      }))
+    } catch { /* Scheduling observers cannot become transfer authority. */ }
+    let successful = false
+    try {
+      const record = await state.lane.fetchBlock(demand, signal)
+      successful = true
+      state.failed = false
+      return { state, observation, record }
+    } catch (error) {
+      if (!signal.aborted && isRetryableLaneFailure(error)) state.failed = true
+      throw error
+    } finally {
+      releaseAttempt()
+      state.inflight -= 1
+      state.performance.complete(this.#now(), bytes, successful)
+      if (!successful && signal.reason instanceof ContentRaceWon) {
+        state.performance.superseded(bytes, this.#now() - started)
       }
     }
   }
@@ -204,6 +303,7 @@ export class V2LaneSet {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#lifetime.abort(new Error('LaneSet is closed'))
     for (const state of this.#lanes.values()) state.lane.close?.()
     this.#lanes.clear()
     const reason = new Error('LaneSet is closed')
@@ -239,12 +339,21 @@ export class V2LaneSet {
     })
   }
 
-  #orderedCandidates(routes?: V2BlockRouteEligibility): LaneState[] {
+  #orderedCandidates(routes?: V2BlockRouteEligibility, bytes?: number): LaneState[] {
     const candidates = [...this.#lanes.values()].filter(
       (candidate) => routes?.allows(candidate.route) ?? true,
     )
     candidates.sort((left, right) => {
       if (left.failed !== right.failed) return left.failed ? 1 : -1
+      if (bytes !== undefined) {
+        // Losing a probe is not evidence that a standby can finish a prefix block.
+        if (left.performance.hasSuccessfulSample !== right.performance.hasSuccessfulSample) {
+          return left.performance.hasSuccessfulSample ? -1 : 1
+        }
+        const difference = completionCost(left.performance.estimate(bytes), left.route !== 'direct') -
+          completionCost(right.performance.estimate(bytes), right.route !== 'direct')
+        if (difference !== 0) return difference
+      }
       if (left.inflight !== right.inflight) return left.inflight - right.inflight
       return left.lane.id - right.lane.id
     })
@@ -252,7 +361,10 @@ export class V2LaneSet {
     const rotationWidth = first === undefined
       ? 0
       : candidates.findIndex((candidate) =>
-        candidate.failed !== first.failed || candidate.inflight !== first.inflight)
+        candidate.failed !== first.failed || candidate.inflight !== first.inflight ||
+        (bytes !== undefined && (candidate.performance.hasSuccessfulSample !== first.performance.hasSuccessfulSample ||
+          completionCost(candidate.performance.estimate(bytes), candidate.route !== 'direct') !==
+          completionCost(first.performance.estimate(bytes), first.route !== 'direct'))))
     const tiedWidth = rotationWidth < 0 ? candidates.length : rotationWidth
     if (tiedWidth > 1) {
       const offset = this.#rotation % tiedWidth
@@ -318,4 +430,9 @@ export class V2LaneSet {
 function isRetryableLaneFailure(error: unknown): boolean {
   return (error instanceof V2SessionRuntimeError && error.scope === 'lane') ||
     (error instanceof DOMException && error.name === 'AbortError')
+}
+
+function blockDemandBytes(demand: V2BlockDemand): number {
+  const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
+  return Number(range.end - range.start)
 }

@@ -132,8 +132,8 @@ describe('v2 receiver LaneSet', () => {
     })
     const first = new DeferredLane(1)
     const second = new DeferredLane(2)
-    lanes.add(first, 'application-relay', 0)
-    lanes.add(second, 'direct', 9)
+    lanes.add(first, 'direct', 0)
+    lanes.add(second, 'application-relay', 9)
     const signal = new AbortController().signal
 
     const left = lanes.fetch(demand(0n), ALL_ROUTES, signal)
@@ -146,7 +146,7 @@ describe('v2 receiver LaneSet', () => {
         dispatchSequence: 1,
         laneId: 1,
         laneEpoch: 0,
-        route: 'application-relay',
+        route: 'direct',
         fileId: 'file',
         localBlockIndex: 0n,
       },
@@ -154,7 +154,7 @@ describe('v2 receiver LaneSet', () => {
         dispatchSequence: 2,
         laneId: 2,
         laneEpoch: 9,
-        route: 'direct',
+        route: 'application-relay',
         fileId: 'file',
         localBlockIndex: 1n,
       },
@@ -170,7 +170,7 @@ describe('v2 receiver LaneSet', () => {
         dispatchSequence: 1,
         laneId: 1,
         laneEpoch: 0,
-        route: 'application-relay',
+        route: 'direct',
         fileId: 'file',
         localBlockIndex: 0n,
         usefulBytes: 1,
@@ -179,7 +179,7 @@ describe('v2 receiver LaneSet', () => {
         dispatchSequence: 2,
         laneId: 2,
         laneEpoch: 9,
-        route: 'direct',
+        route: 'application-relay',
         fileId: 'file',
         localBlockIndex: 1n,
         usefulBytes: 1,
@@ -246,7 +246,7 @@ describe('v2 receiver LaneSet', () => {
     const lanes = new V2LaneSet()
     const first = new CancelThenLane(1)
     const second = new ImmediateLane(2)
-    lanes.add(first, 'application-relay')
+    lanes.add(first, 'direct')
     lanes.add(second, 'direct')
     const controller = new AbortController()
     const cancelled = lanes.fetch(demand(0n), ALL_ROUTES, controller.signal)
@@ -255,6 +255,7 @@ describe('v2 receiver LaneSet', () => {
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
 
     expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(2))
+    lanes.remove(2)
     expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(1))
     expect(first.calls).toBe(2)
   })
@@ -282,8 +283,8 @@ describe('v2 receiver LaneSet', () => {
     lanes.add({
       id: 1,
       fetchBlock: async () => { throw new Error('authenticated block failure') },
-    }, 'application-relay')
-    lanes.add(fallback, 'direct')
+    }, 'direct')
+    lanes.add(fallback, 'application-relay')
 
     await expect(lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).rejects.toThrow(
       'authenticated block failure',

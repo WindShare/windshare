@@ -1,3 +1,4 @@
+import { traceContentScheduling } from '../diagnostics/trace/content-scheduling'
 import { defaultReconnectBackoff, requireBackoff, systemReconnectClock, type V2ReconnectClock } from './recovery-clock'
 import { ReceiverConnectionState } from './connection-state'
 import { RelayEndpointFailure } from './relay-race'
@@ -322,6 +323,8 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ...(this.#onBlockDispatched === undefined
           ? {}
           : { onBlockDispatched: this.#onBlockDispatched }),
+        onBlockScheduled: (fact) =>
+          traceContentScheduling(fact, core.session.protocolSessionIdentity, this.#protocolTrace),
         onBlockFetched: (fact) => {
           this.pathActivity.fetched(generationId, fact)
           this.#onBlockFetched?.(fact)

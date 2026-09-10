@@ -175,7 +175,7 @@ func (lane *signalingReceiverBlockLane) FetchBlock(
 	return record, err
 }
 
-func TestReceiverBlockLaneUnknownSendDoesNotIssueSecondOperation(t *testing.T) {
+func TestReceiverBlockLaneUnknownSendDoesNotRetryAfterCallerDeadline(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
 	base, peer := newMemoryChannelPair()
 	t.Cleanup(func() { _ = peer.Close() })
@@ -248,7 +248,10 @@ func TestReceiverBlockLaneUnknownSendDoesNotIssueSecondOperation(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer broker.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	// This boundary checks reconciliation after the caller leaves. A longer
+	// live demand may explicitly admit one bounded speculative content rescue.
+	const callerDeadline = 50 * time.Millisecond
+	ctx, cancel := context.WithTimeout(context.Background(), callerDeadline)
 	defer cancel()
 	_, fetchErr := broker.GetBlock(ctx, lease, descriptor, 0)
 	if fetchErr == nil || reflect.TypeOf(fetchErr) == reflect.TypeOf(transfer.NewDemandNotAdmitted(nil)) {

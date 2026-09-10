@@ -37,6 +37,23 @@ When a folder download pauses, compare file-queue starvation with directory requ
 A completed-file count equal to the discovered-file count can mean discovery has fallen behind;
 it does not imply the entire selected folder is complete.
 
+## Content paths
+
+Route permission controls which paths may carry content. Scheduling ranks permitted paths by
+estimated completion time from authenticated payload throughput and outstanding bytes; a 10% cost
+premium favors direct paths when arrival times are close. Unmeasured paths compete for an existing
+block before receiving independent content once a measured path is available.
+
+Standby sampling is independent of content allocation: at most one probe starts every five seconds,
+with oldest evidence first. Probes and delayed straggler rescues share a limit of two concurrent
+supplemental attempts per lane set; each demand gets at most one automatic supplement. A rescue is
+considered every 100 ms after twice the smaller primary/alternative estimate. These are conservative
+estimates, not completion guarantees. Idle downloads generate no content probes, and standby
+transports remain owned by connectivity.
+
+Only the authenticated winner contributes delivered bytes. Canceled attempts retain their lease
+ownership until they settle, without blocking delivery of the winning block.
+
 ## Output
 
 Standard output is one schema-versioned JSON report with environment context, command outcomes,

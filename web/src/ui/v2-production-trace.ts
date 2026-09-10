@@ -1,11 +1,10 @@
+import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
 import type {
   V2ConnectivityTraceEvent,
   V2ConnectivityTraceSource,
 } from '../connectivity/diagnostics'
 import { projectCorrelationV1 } from '../diagnostics/export/correlation-v1'
-import type {
-  ProtocolFailureV1,
-} from '../diagnostics/export/incident-record-v1'
+import type { ProtocolFailureV1 } from '../diagnostics/export/incident-record-v1'
 import type { ProtocolFailure } from '../diagnostics/incident'
 import type {
   TraceEventObservationV1,
@@ -147,6 +146,7 @@ export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV1 {
   const correlation = requiredCorrelation(event.correlation)
+  if (event.eventName === 'content_scheduling') return projectContentScheduling(event)
   if (event.eventName === 'operation_recovery') {
     return correlatedObservation(event.eventName, correlation, {
       operation_sequence: decimal(event.operationSequence),
@@ -682,7 +682,7 @@ function observation<Name extends Exclude<keyof TraceEventPayloadByNameV1, 'inci
 }
 
 function correlatedObservation<
-  Name extends 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
+  Name extends 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
   correlation: NonNullable<TraceEventObservationV1['correlation']>,

@@ -44,6 +44,7 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'projection_transition',
   'authority_transition',
   'protocol_operation',
+  'content_scheduling',
   'operation_recovery',
   'peer_attempt',
   'peer_recovery',
@@ -341,6 +342,16 @@ export interface TraceEventPayloadByNameV1 {
         event_class: 'capability_result' | 'artifact_action' | 'authority_result'
       }>
     | AuthorityActivationTransitionV1
+  readonly content_scheduling: Readonly<{
+    dispatch_sequence: string
+    file_id: string
+    block_index: string
+    route: 'application-relay' | 'direct' | 'turn'
+    purpose: 'content' | 'probe' | 'rescue'
+    expected_ms: number
+    pending_bytes: string
+    bytes_per_second: number
+  }>
   readonly operation_recovery: Readonly<{
     operation_sequence: string
     generation_id: string
@@ -645,6 +656,7 @@ export type TraceEventPayloadV1 = TraceEventPayloadByNameV1[TraceEventNameV1]
 type CorrelatedTraceEventNameV1 =
   | 'protocol_operation'
   | 'operation_recovery'
+  | 'content_scheduling'
   | 'peer_attempt'
   | 'peer_recovery'
   | 'lane_transition'

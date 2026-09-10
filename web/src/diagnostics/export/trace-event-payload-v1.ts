@@ -8,6 +8,7 @@ import {
   validatePeerRecovery,
   validateProtocolOperation,
   validateOperationRecovery,
+  validateContentScheduling,
 } from './trace-payload-protocol'
 import {
   validateAuthority,
@@ -52,6 +53,7 @@ export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>
     case 'projection_transition': validateProjection(payload); return
     case 'authority_transition': validateAuthority(payload); return
     case 'protocol_operation': validateProtocolOperation(payload); return
+    case 'content_scheduling': validateContentScheduling(payload); return
     case 'operation_recovery': validateOperationRecovery(payload); return
     case 'peer_attempt': validatePeerAttempt(payload); return
     case 'peer_recovery': validatePeerRecovery(payload); return
