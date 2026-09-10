@@ -1,4 +1,9 @@
-import { DirectZipEpochWriterV1, DirectZipWriterGateError } from '../../../output/direct-zip/writer'
+import {
+  decideDirectZipMemberResumeV1, DirectZipEpochWriterV1, DirectZipWriterGateError,
+  type DirectZipWriterObserver,
+} from '../../../output/direct-zip/writer'
+import type { DirectZipMemberRollbackAuthorityV1 } from '../../../transfer/direct-zip/output-session'
+import { DirectZipTransferDiagnosticsV1 } from '../../../transfer/direct-zip/diagnostics'
 import type { DirectZipWriterJournalPortV1 } from '../../../transfer/direct-zip/execution'
 import type { DirectZipRuntimeFactsV1 } from '../../../output/direct-zip/session'
 import type { DirectZipCheckpointV1, DirectZipJournalRepository } from '../../../output/direct-zip/journal'
@@ -31,6 +36,7 @@ import type {
 import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../v2-lifecycle-presentation'
 import { operationDigest } from '../shared'
 import { BrowserDirectZipJournal } from './journal'
+import { traceDirectZipMemberRollback } from './member-rollback-trace'
 import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from './target'
 import { browserDirectZipFileSystem, randomId } from './resources'
 
@@ -59,6 +65,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   #lifecycle: ReceiveLifecycleState
   #execution: DirectResumableZipExecution | undefined
   #closed = false
+  readonly #lifetime = new AbortController()
   #progressGeneration = 0n
   #executionProgressGeneration = 0n
   #payloadProgress: DirectZipPayloadProgressV1
@@ -122,9 +129,17 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       }
       await this.#commit({ kind: 'receiving', activeLeaseId: this.#input.leaseId })
       const progressGeneration = ++this.#executionProgressGeneration
+      const outputSessionId = createOutputSessionID()
+      const diagnostics = new BoundedDirectZipDiagnosticHistory({
+        clock: { nowMilliseconds: Date.now },
+        ...(this.#input.trace === undefined ? {} : { trace: this.#input.trace }),
+      })
+      const rollbackDiagnostics = new DirectZipTransferDiagnosticsV1({
+        operationId: this.intent.operationId, sessionId: outputSessionId, observer: diagnostics,
+      })
       this.#execution = await createDirectZipExecutionV1({
         intent: this.intent,
-        outputIdentity: { backend: 'file_system_access', outputSessionId: createOutputSessionID() },
+        outputIdentity: { backend: 'file_system_access', outputSessionId },
         support: { enabled: true, durability: 'ProcessRestart' },
         writer: {
           context: { ownershipMarker: this.#input.binding.marker,
@@ -142,13 +157,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
         },
         replay: this.#journal.replay,
         rollback: {
-          rollbackMember: async () => {
-            await this.#commit({
-              kind: 'restart-required', reason: 'source-revision-changed',
-              receiptDigest: await operationDigest(this.intent, 'source-revision-changed'),
-            })
-            throw new DOMException('The source file changed; its old ZIP bytes were retained', 'InvalidStateError')
-          },
+          rollbackMember: input => this.#rollbackMember(input, rollbackDiagnostics.writerObserver()),
         },
         settlement: {
           pause: async () => this.#pause(),
@@ -160,10 +169,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
               this.#commit(await this.#publication(this.#journal.persistedCheckpoint.digest))
           },
         },
-        diagnostics: new BoundedDirectZipDiagnosticHistory({
-          clock: { nowMilliseconds: Date.now },
-          ...(this.#input.trace === undefined ? {} : { trace: this.#input.trace }),
-        }),
+        diagnostics,
       })
       return this.#execution
     },
@@ -203,7 +209,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     this.#executionProgressGeneration += 1n
     await this.#target.abort(reason).catch(() => undefined)
     this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
-    if (this.#journal.pendingCandidate !== undefined) {
+    if (this.#journal.hasPendingMutation) {
       try { await this.verify() } catch (recoveryError) { reason = recoveryError }
     }
     if (this.#lifecycle.kind === 'restart-required' || this.#lifecycle.kind === 'published') {
@@ -219,7 +225,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       return { lifecycle: await this.#commit({ kind: 'needs-attention', reason: 'target-ownership-unknown',
         lastVerifiedRecordDigest: this.#journal.persistedCheckpoint.digest }) }
     }
-    if (kind === undefined && this.#journal.pendingCandidate !== undefined) kind = 'target-verification-required'
+    if (kind === undefined && this.#journal.hasPendingMutation) kind = 'target-verification-required'
     if (kind !== undefined) {
       const candidate = await this.#pendingCandidate()
       const gate = await createDirectZipRecoveryGateV1({
@@ -240,12 +246,19 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   }
 
   async deleteOwned() {
-    await this.#target.deleteOwned(this.#journal.checkpoint, this.#journal.pendingCandidate)
+    const rollback = this.#journal.pendingMemberRollback
+    if (rollback === undefined) {
+      await this.#target.deleteOwned(this.#journal.checkpoint, this.#journal.pendingCandidate)
+    } else {
+      await this.#target.deleteOwnedMemberRollback(this.#journal.checkpoint, rollback.checkpoint,
+        () => this.#journal.pages.epochProofsFor(rollback.authority, rollback.checkpoint))
+    }
     await this.#commit({ kind: 'discarded',
       cleanupReceiptDigest: await operationDigest(this.intent, 'owned-zip-deleted') })
   }
 
   async verify() {
+    await this.#recoverMemberRollback(this.#lifetime.signal)
     const candidate = this.#journal.pendingCandidate
     if (candidate !== undefined) {
       const writer = new DirectZipEpochWriterV1({
@@ -282,6 +295,80 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     }
   }
 
+  async #rollbackMember(
+    input: Parameters<DirectZipMemberRollbackAuthorityV1['rollbackMember']>[0],
+    observe: DirectZipWriterObserver,
+  ): Promise<DirectZipEpochWriterV1> {
+    const signal = AbortSignal.any([input.signal, this.#lifetime.signal])
+    signal.throwIfAborted()
+    const previous = this.#journal.checkpoint
+    const decision = decideDirectZipMemberResumeV1(previous, input.source)
+    if (input.checkpoint.operationId !== previous.operationId ||
+        input.checkpoint.generation !== previous.generation || decision.kind !== 'rollback-member' ||
+        decision.reason !== input.decision.reason || decision.archiveOffset !== input.decision.archiveOffset ||
+        decision.nextEntryOrdinal !== input.decision.nextEntryOrdinal ||
+        decision.safeResumeBytes !== input.decision.safeResumeBytes) {
+      throw new TypeError('Direct ZIP member rollback lost its current checkpoint authority')
+    }
+    const candidateId = randomId()
+    const trace = {
+      operationId: this.intent.operationId, sessionId: this.#input.leaseId, candidateId,
+      oldCommittedLength: previous.committedLength, newCommittedLength: decision.archiveOffset,
+      retainedSelectedPayloadBytes: decision.safeResumeBytes, memberOrdinal: decision.nextEntryOrdinal,
+      sourceChangeReason: decision.reason,
+    }
+    traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'requested' })
+    try {
+      await this.#journal.stageMemberRollback(candidateId)
+      traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'persisted' })
+      signal.throwIfAborted()
+    } catch (error) {
+      traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'failed', error })
+      throw error
+    }
+    await this.#recoverMemberRollback(signal, decision.reason)
+    // A pause still adopts the promoted writer before settling; detach ends its authority entirely.
+    this.#lifetime.signal.throwIfAborted()
+    return new DirectZipEpochWriterV1({
+      context: { ownershipMarker: this.#input.binding.marker,
+        rootComponent: this.#input.binding.resultRootComponent },
+      checkpoint: this.#journal.checkpoint, pages: this.#journal.pages, cuts: this.#journal.cuts,
+      target: this.#target, identities: { nextCandidateId: randomId, nextEpochId: randomId },
+      automaticPolicy: this.#input.facts.automaticEpochPolicy, observe,
+    })
+  }
+
+  async #recoverMemberRollback(
+    signal: AbortSignal,
+    sourceChangeReason?: Parameters<typeof traceDirectZipMemberRollback>[1]['sourceChangeReason'],
+  ): Promise<void> {
+    const rollback = this.#journal.pendingMemberRollback
+    if (rollback === undefined) return
+    signal.throwIfAborted()
+    const trace = {
+      operationId: this.intent.operationId, sessionId: this.#input.leaseId,
+      candidateId: rollback.candidate.candidateId,
+      oldCommittedLength: this.#journal.checkpoint.committedLength,
+      newCommittedLength: rollback.checkpoint.committedLength,
+      retainedSelectedPayloadBytes: rollback.checkpoint.safeResumeBytes,
+      memberOrdinal: rollback.checkpoint.nextEntryOrdinal,
+      ...(sourceChangeReason === undefined ? {} : { sourceChangeReason }),
+    }
+    traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'recovering' })
+    try {
+      const observation = await this.#target.recoverMemberRollback(
+        this.#journal.checkpoint, rollback.checkpoint,
+        () => this.#journal.pages.epochProofsFor(rollback.authority, rollback.checkpoint), signal,
+      )
+      await this.#journal.promoteMemberRollback(observation)
+      this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
+      traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'completed' })
+    } catch (error) {
+      traceDirectZipMemberRollback(this.#input.trace, { ...trace, phase: 'failed', error })
+      throw error
+    }
+  }
+
   #writerJournal(): DirectZipWriterJournalPortV1 {
     const pages = this.#journal.pages
     const cuts = this.#journal.cuts
@@ -301,6 +388,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.#lifetime.abort(new DOMException('ZIP session detached', 'AbortError'))
     this.#executionProgressGeneration += 1n
     try { await this.#target.abort(new DOMException('ZIP session detached', 'AbortError')) }
     finally { await this.#input.close() }

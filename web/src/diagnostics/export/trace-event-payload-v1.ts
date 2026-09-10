@@ -33,6 +33,7 @@ import {
 } from './trace-payload-product'
 import {
   validateDirectZipCoordination,
+  validateDirectZipMemberRollback,
   validateDirectZipMilestone,
 } from './trace-payload-direct-zip'
 import {
@@ -76,6 +77,7 @@ export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>
     case 'cleanup': validateCleanup(payload); return
     case 'direct_zip_milestone': validateDirectZipMilestone(payload); return
     case 'direct_zip_coordination': validateDirectZipCoordination(payload); return
+    case 'direct_zip_member_rollback': validateDirectZipMemberRollback(payload); return
     case 'retained_inventory': validateRetainedInventory(payload); return
     case 'retained_action': validateRetainedAction(payload); return
     default: assertNever(eventName)

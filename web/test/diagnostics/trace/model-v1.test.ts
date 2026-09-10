@@ -229,6 +229,17 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     transition: 'acquired',
     lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
   },
+  direct_zip_member_rollback: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+    session_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    candidate_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+    phase: 'completed',
+    old_committed_length: '512',
+    new_committed_length: '128',
+    retained_selected_payload_bytes: '32',
+    member_ordinal: '1',
+    source_change_reason: 'revision_changed',
+  },
   retained_inventory: { transition: 'load_completed', operation_count: '0' },
   retained_action: {
     transition: 'started',
