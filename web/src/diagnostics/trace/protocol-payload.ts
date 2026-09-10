@@ -4,6 +4,8 @@ import type { ProtocolFailureV1 } from '../export/incident-record-v1'
 export type ProtocolOperationPayloadV1 =
   | Readonly<{
       transition: 'request_sent' | 'request_send_failed' | 'cancelled' | 'admission_ready' | 'admission_abandoned'
+        | 'send_queued' | 'send_sealing' | 'send_sending' | 'send_completed'
+        | 'send_withdrawn' | 'send_abandoned' | 'send_failed'
       request_kind: ProtocolMessageKindV1
     }>
   | Readonly<{

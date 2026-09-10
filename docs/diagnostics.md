@@ -52,6 +52,11 @@ waiting for a replacement session, and exhausting retries. They include the loca
 protocol session, availability revision, lane count, and any backoff. Lane changes reset the operation's
 retry budget; an unchanged connection set gets two delayed retries before the original error is returned.
 
+Browser `protocol_operation` send transitions distinguish queued, sealing, sending, completed,
+withdrawn, abandoned, and failed frames. Withdrawal consumes no envelope sequence; abandonment
+ends the caller's wait while the lane retains delivery ownership. An active send has a 30-second
+deadline; expiry retires the lane instead of skipping a sequence. Correlate by operation and lane.
+
 Failed lane transitions include `failure_detail`: bounded exception text with nested causes and
 stack excerpts. Keep the sender trace from the same reproduction; `protocol_session_id` pairs
 browser and sender events. Do not call `enable()` again before exporting, since it starts a new capture.
