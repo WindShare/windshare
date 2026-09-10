@@ -1,4 +1,4 @@
-# Local CI timing snapshot — 2026-09-07
+# Local CI timing snapshot — 2026-09-10
 
 One before/after pair on the same Windows amd64 checkout, using existing caches and installed tools.
 This is a local diagnostic, not a p95 baseline or a performance guarantee.
@@ -8,30 +8,28 @@ Node.js 24.16.0, pnpm 11.8.0. Other developer applications remained open.
 
 | Measurement | Before | After |
 |---|---:|---:|
-| Complete `make ci-parallel` | 708.1 s | 286.4 s |
-| gopls within that run | 624.0 s | 278.6 s |
-| Web gate | 145 s | 110 s |
-| Vitest within the Web gate | 78.64 s | 38.97 s |
-| Hygiene gate | 79 s | 16 s |
-| Browser gate | 115 s | 97 s |
+| Complete `make ci-parallel` | 290.4 s | 159.7 s |
+| gopls within that run | 282.7 s | 144.2 s |
+| Web gate | 110 s | 98 s |
+| Browser gate | 98 s | 60 s |
 
-The complete run saved 421.7 seconds (59.6%). Gate timers are reported by their launchers and do not
-always include package discovery; concurrent gate durations must not be added to estimate total time.
-
-Both complete runs passed the same ordinary gates: 92 production Go packages with unchanged race and
-coverage requirements, 1,297 maintained Go files across six gopls views, 2,018 Vitest tests in 249 files,
-and 86 Chromium smoke/short-contract tests.
+The complete run saved 130.7 seconds (45.0%). Concurrent gate durations must not be added to estimate
+total time. Both runs passed the same ordinary gates, including race and coverage requirements,
+1,340 maintained Go files, 2,107 Vitest tests in 261 files, and 89 Chromium smoke/short-contract tests.
 
 The comparison combines three changes:
 
-- Move 86,747 historical experiment files from `tmp/` into `.tmp/legacy-tmp/`, preserving them. Go's
-  `./...` traversal skips dot directories but does not read `.gitignore`. Package discovery after the
-  move took 1.0 second and returned the identical package set. The native FSA evidence runner now writes
-  new browser profiles and materialized trees below `.tmp/fsa-small-file-native/`.
-- Reduce the gopls open batch from 64 to 8 files. Each open/close recomputes views over the open set;
-  smaller batches bound that work while retaining view witnesses and explicit diagnostic completion.
-- Run Vitest with two workers and explicit file isolation instead of one worker. Browser concurrency
-  and the three CI lanes are unchanged.
+- Order Go diagnostics by owning module, checking current-build files before foreign-platform files.
+  Opening foreign files early made gopls repeatedly update additional build views for ordinary files.
+  Go's build matcher determines order only; no foreign, tagged, test, or nested-module files are removed.
+  The same single session, bounded batches, hint severity, and explicit completion barriers remain.
+- Run ESLint with two workers, checking fresh sources on every invocation.
+- Run browser contracts with two workers. Browser contexts isolate storage; tests within each spec
+  remain sequential. The three CI lanes and the single-worker product smoke are unchanged.
 
-These measurements do not isolate each change's contribution. Raw local logs are in
-`.tmp/ci-parallel-before.log`, `.tmp/ci-parallel-after.log`, and `.tmp/ci-parallel-after-summary.json`.
+Ordering tests cover Windows/Linux selection, nested modules, tagged files, Unicode/spaced paths,
+determinism, and unreadable sources. An installed-gopls comparison also preserved compiler errors and
+hint diagnostics across 75 fixture files and two modules. The full run above was on Windows only.
+
+Raw local evidence is in `.tmp/ci-speed-before-20260910.log`, `.tmp/ci-speed-after-20260910.log`,
+their matching JSON timing summaries, and `.tmp/gopls-order-parity.log`.

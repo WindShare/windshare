@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"go/build"
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 )
 
@@ -47,6 +50,75 @@ func TestMaintainedGoFilesExcludeOnlyExactVerifiedProjection(t *testing.T) {
 	for _, invalid := range []string{"../escape.go", "file.txt"} {
 		if _, err := maintainedGoFiles(root, []string{invalid}, projection); err == nil {
 			t.Fatalf("invalid tracked path accepted: %q", invalid)
+		}
+	}
+}
+
+func TestDiagnosticOrderDefersForeignViewsWithoutOmittingSources(t *testing.T) {
+	root := t.TempDir()
+	contents := map[string]string{
+		"go.mod":                        "module example.test/root\n",
+		"a/platform_linux.go":           "package example\n",
+		"a/platform_windows.go":         "package example\n",
+		"a/tagged.go":                   "//go:build windshare_probe\n\npackage example\n",
+		"z/native_test.go":              "package example\n",
+		"z/\u6587\u4ef6 with spaces.go": "package example\n",
+		"middle/evidence/go.mod":        "module example.test/nested\n",
+		"middle/evidence/a_linux.go":    "package evidence\n",
+		"middle/evidence/a_windows.go":  "package evidence\n",
+		"middle/evidence/z.go":          "package evidence\n",
+	}
+	var files []string
+	for file, content := range contents {
+		path := filepath.Join(root, filepath.FromSlash(file))
+		if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasSuffix(file, ".go") {
+			files = append(files, file)
+		}
+	}
+	for _, platform := range []string{"windows", "linux"} {
+		t.Run(platform, func(t *testing.T) {
+			context := build.Default
+			context.GOOS, context.GOARCH = platform, "amd64"
+			context.BuildTags = nil
+			foreign := map[string]string{"windows": "linux", "linux": "windows"}[platform]
+			want := []string{
+				"a/platform_" + platform + ".go", "z/native_test.go", "z/\u6587\u4ef6 with spaces.go",
+				"a/platform_" + foreign + ".go", "a/tagged.go",
+				"middle/evidence/a_" + platform + ".go", "middle/evidence/z.go",
+				"middle/evidence/a_" + foreign + ".go",
+			}
+			got, err := orderDiagnosticSources(root, files, context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(got, want) {
+				t.Fatalf("diagnostic order = %q, want %q", got, want)
+			}
+			slices.Reverse(files)
+			reordered, err := orderDiagnosticSources(root, files, context)
+			if err != nil || !slices.Equal(reordered, got) {
+				t.Fatalf("input order changed diagnostic plan: %q, %v", reordered, err)
+			}
+		})
+	}
+}
+
+func TestDiagnosticOrderRejectsUnreadableConstraints(t *testing.T) {
+	root := t.TempDir()
+	for _, file := range []string{"missing.go", "malformed.go"} {
+		if file == "malformed.go" {
+			if err := os.WriteFile(filepath.Join(root, file), []byte("//go:build (\n\npackage example\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if got, err := orderDiagnosticSources(root, []string{file}, build.Default); err == nil || got != nil {
+			t.Fatalf("bad source produced a diagnostic plan: %q, %v", got, err)
 		}
 	}
 }

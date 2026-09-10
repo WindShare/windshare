@@ -6,6 +6,7 @@ const DEFAULT_WEB_PORT = 4197
 const WEB_PORT = contractPort(process.env.WINDSHARE_CONTRACT_PORT)
 const WEB_BASE_URL = `http://${WEB_HOST}:${WEB_PORT}`
 const WEB_DIRECTORY = fileURLToPath(new URL('.', import.meta.url))
+const MAX_CONTRACT_WORKERS = 2
 
 const ALL_COMPONENT_SPECS = '**/*.spec.ts'
 const PERIODIC_COMPONENT_SPECS = '**/*.periodic.spec.ts'
@@ -29,7 +30,9 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: true,
   retries: 0,
-  workers: 1,
+  // Contexts isolate browser storage; bound file concurrency while preserving
+  // test order within each spec and capacity for the other local CI lanes.
+  workers: MAX_CONTRACT_WORKERS,
   reporter: 'line',
   timeout: 80_000,
   expect: { timeout: 20_000 },
