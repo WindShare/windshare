@@ -32,6 +32,15 @@ max_lines = 600                           # Default max lines per file (Go and o
 warn_threshold = 0.9                      # Warn at 90% of limit
 skip_comments = true                      # Don't count comment lines
 skip_blank = true                         # Don't count blank lines
+# Pinned Unicode tables grow with the dataset, not handwritten logic. Hygiene
+# verifies the Go projection from the TS tables; Unicode contract tests cover
+# behavior. Keep the algorithms and directory counts under normal limits.
+exclude = [
+  "core/internal/unicode15/normalization_data_generated.go",
+  "core/internal/unicode15/casefold_data_generated.go",
+  "web/src/unicode/unicode-normalization-data.ts",
+  "web/src/unicode/unicode-case-fold-data.ts",
+]
 
 # Content Rules: Override limits for specific paths (last match wins)
 [[content.rules]]
@@ -50,24 +59,9 @@ max_lines = 1100
 reason = "Go tests need room for table-driven cases and fixtures"
 
 [[content.rules]]
-pattern = "**/*.test.ts"
+pattern = "**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx}"
 max_lines = 1200
-reason = "Web tests need room for fixtures and golden vectors"
-
-[[content.rules]]
-pattern = "**/*.test.tsx"
-max_lines = 1200
-reason = "Web tests need room for fixtures and golden vectors"
-
-[[content.rules]]
-pattern = "**/*.spec.ts"
-max_lines = 1200
-reason = "Playwright tests need the same fixture headroom as unit tests"
-
-[[content.rules]]
-pattern = "**/*.spec.tsx"
-max_lines = 1200
-reason = "Playwright tests need the same fixture headroom as unit tests"
+reason = "JavaScript and TypeScript tests need room for fixtures and golden vectors"
 
 [[content.rules]]
 pattern = "web/test/**"
@@ -78,17 +72,14 @@ reason = "Shared test fixtures and golden vectors"
 # Structure: Directory organization limits
 # =============================================================================
 # No global max_files/max_dirs: structure limits apply only where the rules
-# below match, so docs/testvectors/etc. stay unconstrained (allowlist model).
+# below match, so directories outside the selected roots stay unconstrained.
 [structure]
 warn_threshold = 0.8                      # Warn at 80% of limits (inherited by rules)
 # Test suites grow by scenario rather than module responsibility, so they do not
 # indicate production-module sprawl. Content limits above still apply.
 count_exclude = [
   "*_test.go",
-  "*.test.ts",
-  "*.test.tsx",
-  "*.spec.ts",
-  "*.spec.tsx",
+  "*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx}",
   "go.mod",
   "go.sum",
 ]
@@ -104,13 +95,34 @@ warn_dirs_at = 20
 warn_files_at = 15
 reason = "Go source: keep packages small and flat"
 
+# E2E fixtures include reusable process/service infrastructure, so their modules
+# retain the same file-count limit as production code and validation scripts.
 [[structure.rules]]
-scope = "web/{e2e,scripts,src,test}/"
+scope = "web/{e2e,scripts,src}/"
 max_files = 20
 max_dirs = 25
 warn_dirs_at = 20
 warn_files_at = 15
-reason = "Web source: keep component tree small and flat"
+reason = "Web source and reusable test infrastructure: keep modules small and flat"
+
+# Scenario-local fixtures, harnesses, and probes grow with test coverage. Their
+# directory file count does not measure module sprawl; content limits still apply.
+[[structure.rules]]
+scope = "web/test/"
+max_dirs = 25
+warn_dirs_at = 20
+reason = "Web test scenarios: keep directory navigation manageable without a file-count cap"
+
+# Vector data grows with contract coverage; any source files added here still
+# need normal module limits. make vectors verifies the inventory and contracts.
+[[structure.rules]]
+scope = "core/testvectors/"
+max_files = 20
+max_dirs = 25
+warn_files_at = 15
+warn_dirs_at = 20
+count_exclude = ["*.json", "README.md", "inventory.txt"]
+reason = "Protocol vector data and documentation do not count toward module size"
 
 # =============================================================================
 # Baseline: Grandfather existing violations
