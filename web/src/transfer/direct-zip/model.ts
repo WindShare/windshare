@@ -67,8 +67,15 @@ export interface DirectZipOpenedSourceV1 {
   readonly rangeAuthority: string
 }
 
+/** Logical selected payload, including the reusable prefix; excludes ZIP framing and retry traffic. */
+export interface DirectZipPayloadProgressV1 {
+  readonly receivedSelectedBytes: bigint
+  readonly writtenSelectedBytes: bigint
+}
+
 export interface DirectZipFileTransactionV1 {
   readonly resumeOffset: bigint
+  /** Accepts an authenticated contiguous source range; resolves after its writer acknowledgement. */
   write(offset: bigint, bytes: Uint8Array, signal: AbortSignal): Promise<void>
   /** A content block is an observation; the returned safe offset may remain unchanged. */
   observeCheckpoint(signal: AbortSignal): Promise<bigint>

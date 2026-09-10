@@ -8,7 +8,7 @@ import {
   type OfferedArtifactChoice, type ResolvedArtifactAction,
 } from '../../../src/output/planning'
 import {
-  admitDirectZipRuntimeV1,
+  admitDirectZipRuntimeV1, DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1,
 } from '../../../src/output/direct-zip/session'
 import { IndexedDbReceiveOperationRepository } from '../../../src/output/browser/indexeddb-repository'
 import { IndexedDbReceiveResumeSource } from '../../../src/output/browser/indexeddb-resume-state'
@@ -27,14 +27,19 @@ import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contr
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
 import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
 import { observeProductionDirectZipFileSystem } from './production-fsa-observation'
+import { observeProductionDirectZipProgress } from './production-progress-observation'
 
 const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 const signal = new AbortController().signal
 const COMPLETION_FAULT_MESSAGE = 'Injected completion promotion loss after final close'
+const SPACING_FIRST_WRITE_BYTES = 1_024
+const SPACING_LATER_WRITE_BYTES = 256
+const SPACING_TOTAL_BYTES = SPACING_FIRST_WRITE_BYTES + 2 * SPACING_LATER_WRITE_BYTES
 
 type ProductionMode = 'pause-resume' | 'complete' | 'delete' | 'delete-retry' | 'unpromoted-resume' |
   'unpromoted-delete' | 'unpromoted-continue' | 'unpromoted-settle' | 'bootstrap-recovery' |
-  'completion-journal-recovery' | 'completion-acknowledgement-recovery' | 'completion-continue'
+  'completion-journal-recovery' | 'completion-acknowledgement-recovery' | 'completion-continue' |
+  'aborted-write-continue' | 'automatic-checkpoint-spacing'
 
 export async function probeBrowserDirectZipProduction(databaseName: string, mode: ProductionMode) {
   const root = await navigator.storage.getDirectory()
@@ -46,15 +51,28 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
   const windowPort = window as BrowserReceiveWindow
   const openRepository = () => IndexedDbReceiveOperationRepository.open(databaseName)
   const openJournal = faultingJournal(databaseName, mode)
-  const directZip = createBrowserDirectZipComposition(windowPort, { openRepository, openJournal })
+  const installed = createBrowserDirectZipComposition(windowPort, { openRepository, openJournal })
+  const directZip = mode === 'automatic-checkpoint-spacing' ? {
+    ...installed,
+    capabilities: { read: async (signal: AbortSignal) => ({
+      ...await installed.capabilities.read(signal),
+      policy: { ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1, automaticEpochPolicy: { minimumAdvanceBytes: 1n } },
+    }) },
+  } : installed
   const receiver = createBrowserReceiveComposition(windowPort, { directZip })
   const fileSystem = observeProductionDirectZipFileSystem()
+  const payload = mode === 'automatic-checkpoint-spacing'
+    ? Uint8Array.from({ length: SPACING_TOTAL_BYTES }, (_, index) => index % 251)
+    : Uint8Array.of(1, 2, 3, 4, 5, 6)
+  const firstWriteBytes = mode === 'automatic-checkpoint-spacing' ? SPACING_FIRST_WRITE_BYTES : 3
+  const progress = observeProductionDirectZipProgress(BigInt(payload.byteLength))
   let active: V2BoundReceiveOperation | undefined
   try {
     const environment = await receiver.environment(signal)
     const source = await directZip.capabilities.read(signal)
     const admission = await admitDirectZipRuntimeV1({
       capabilities: { featureFacts: observeBrowserDirectZipFeatureFacts(windowPort), authority: source.authority },
+      ...(source.policy === undefined ? {} : { policy: source.policy }),
     })
     if (admission.kind !== 'available') throw new Error('Browser Direct ZIP capability admission failed')
     const rootId = id(16, 2)
@@ -104,47 +122,16 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
       throw new Error('Direct ZIP activation did not bind an operation')
     }
     const intent = active.intent as DirectZipIntent
-    const first = await active.plans.openDirectResumableZip(intent, signal)
-    const authenticatedRoot = { directoryId: rootId, generation: id(16, 7),
-      discoveryEvidence: new TextEncoder().encode('authenticated-root-generation') }
-    const member = {
-      kind: 'file', fileId: id(16, 8), expectedSize: 6n,
-      sourcePath: ['a.txt'], artifactPath: ['shared', 'a.txt'],
-      layoutEvidence: new TextEncoder().encode('layout-a'), discoveryEvidence: new TextEncoder().encode('member-a'),
-      pending: {},
-    } as unknown as DirectZipOrderedFileV1
-    const sourceFile = { fileId: member.fileId, revision: id(16, 9), exactSize: 6n, rangeAuthority: id(32, 10) }
-    await first.ordered.beginTraversal(authenticatedRoot, signal)
-    await first.ordered.visit(1n, member, signal)
-    const transaction = await first.output.beginFile(member, sourceFile, signal)
-    await transaction.write(0n, Uint8Array.of(1, 2, 3), signal)
-    let resumeOffset = 0n
-    let execution = first
-    if (mode !== 'complete' && mode !== 'bootstrap-recovery' && !mode.startsWith('completion-')) {
-      try {
-        await first.pause({ worker: {} as never, materialization: first.ordered.materializationSummary(),
-          selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 6n, discovery: 'complete' },
-          reason: new DOMException('User paused', 'AbortError') }, signal)
-      } catch (error) {
-        if (!mode.startsWith('unpromoted-')) throw error
-      }
-      const previous = active
-      active = undefined
-      active = await continuePausedOperation(previous, directZip, databaseName, mode, parent)
-      if (active === undefined) {
-        return { mode, contents: await entryNames(parent), directSupport: environment.directZipSupport.kind }
-      }
-      execution = await active.plans.openDirectResumableZip(intent, signal)
-      await execution.ordered.beginTraversal(authenticatedRoot, signal)
-      await execution.ordered.visit(1n, member, signal)
-      const resumed = await execution.output.beginFile(member, sourceFile, signal)
-      resumeOffset = resumed.resumeOffset
-      await resumed.write(resumeOffset, Uint8Array.of(4, 5, 6), signal)
-      await resumed.commit(signal)
-    } else {
-      await transaction.write(3n, Uint8Array.of(4, 5, 6), signal)
-      await transaction.commit(signal)
+    progress.bind(active)
+    progress.sample('initial', active)
+    const transferred = await materializeProductionPayload({ active, rootId, payload, firstWriteBytes,
+      mode, directZip, databaseName, parent, progress, fileSystem })
+    active = transferred.active
+    if (active === undefined) {
+      return { mode, contents: await entryNames(parent), directSupport: environment.directZipSupport.kind }
     }
+    const { execution, resumeOffset } = transferred
+    progress.sample('before-finalization', active)
     const beforeFinalization = fileSystem.snapshot()
     await execution.ordered.finishTraversal(2n, signal)
     const settle = () => execution.settle({
@@ -155,6 +142,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     let recovery
     if (mode.startsWith('completion-')) {
       await requireCompletionPromotionFailure(settle)
+      progress.sample('failed-finalization', active)
       const beforeRecovery = fileSystem.snapshot()
       const closed = await inspectInterruptedCompletion(databaseName, intent, parent)
       const recovered = await continueCompletedOperation(active, directZip, databaseName, mode)
@@ -165,6 +153,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     } else {
       lifecycle = await settle()
     }
+    progress.sample('published', active, lifecycle)
     const read = await openRepository()
     const envelope = await readEnvelope(read, intent.operationId)
     read.close()
@@ -175,15 +164,100 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
       fileBytes: saved.size, signature: Array.from(archive.slice(-22, -18)),
       archive: Array.from(archive),
       finalization: { before: beforeFinalization, after: recovery?.before ?? fileSystem.snapshot() },
-      recovery,
+      recovery, progress: progress.result(),
       directSupport: environment.directZipSupport.kind }
   } finally {
     await active?.detach()
+    progress.close()
     fileSystem.restore()
     if (originalPicker === undefined) Reflect.deleteProperty(window, 'showDirectoryPicker')
     else Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
     await root.removeEntry(databaseName, { recursive: true })
   }
+}
+
+async function materializeProductionPayload({ active, rootId, payload, firstWriteBytes, mode,
+  directZip, databaseName, parent, progress, fileSystem }: {
+  active: V2BoundReceiveOperation
+  rootId: string
+  payload: Uint8Array
+  firstWriteBytes: number
+  mode: ProductionMode
+  directZip: ReturnType<typeof createBrowserDirectZipComposition>
+  databaseName: string
+  parent: FileSystemDirectoryHandle
+  progress: ReturnType<typeof observeProductionDirectZipProgress>
+  fileSystem: ReturnType<typeof observeProductionDirectZipFileSystem>
+}) {
+  const intent = active.intent as DirectZipIntent
+  const first = await active.plans.openDirectResumableZip(intent, signal)
+  const authenticatedRoot = { directoryId: rootId, generation: id(16, 7),
+    discoveryEvidence: new TextEncoder().encode('authenticated-root-generation') }
+  const member = {
+    kind: 'file', fileId: id(16, 8), expectedSize: BigInt(payload.byteLength),
+    sourcePath: ['a.txt'], artifactPath: ['shared', 'a.txt'],
+    layoutEvidence: new TextEncoder().encode('layout-a'), discoveryEvidence: new TextEncoder().encode('member-a'),
+    pending: {},
+  } as unknown as DirectZipOrderedFileV1
+  const sourceFile = { fileId: member.fileId, revision: id(16, 9),
+    exactSize: member.expectedSize, rangeAuthority: id(32, 10) }
+  await first.ordered.beginTraversal(authenticatedRoot, signal)
+  await first.ordered.visit(1n, member, signal)
+  const transaction = await first.output.beginFile(member, sourceFile, signal)
+  progress.sample('metadata', active)
+  await transaction.write(0n, payload.slice(0, firstWriteBytes), signal)
+  progress.sample('first-write', active)
+  let resumeOffset = 0n
+  let execution = first
+  if (mode !== 'complete' && mode !== 'bootstrap-recovery' &&
+      mode !== 'automatic-checkpoint-spacing' && !mode.startsWith('completion-')) {
+    try {
+      if (mode === 'aborted-write-continue') {
+        const failure = new DOMException('Injected write acknowledgement loss', 'UnknownError')
+        fileSystem.rejectNextWrite(failure)
+        let rejected = false
+        try { await transaction.write(BigInt(firstWriteBytes), payload.slice(firstWriteBytes), signal) }
+        catch (error) {
+        if (error !== failure) throw error
+        rejected = true
+      }
+        if (!rejected) throw new Error('The injected write failure was not reached')
+        progress.sample('failed-write', active)
+      }
+      await first.pause({ worker: {} as never, materialization: first.ordered.materializationSummary(),
+        selectionFacts: { discoveredFileCount: 1n, discoveredBytes: member.expectedSize, discovery: 'complete' },
+        reason: new DOMException('User paused', 'AbortError') }, signal)
+    } catch (error) {
+      if (!mode.startsWith('unpromoted-')) throw error
+    }
+    progress.sample('paused', active)
+    const continued = await continuePausedOperation(active, directZip, databaseName, mode, parent)
+    if (continued === undefined) return { active: undefined, execution, resumeOffset }
+    active = continued
+    progress.bind(active)
+    progress.sample('continued', active)
+    execution = await active.plans.openDirectResumableZip(intent, signal)
+    await execution.ordered.beginTraversal(authenticatedRoot, signal)
+    await execution.ordered.visit(1n, member, signal)
+    const resumed = await execution.output.beginFile(member, sourceFile, signal)
+    resumeOffset = resumed.resumeOffset
+    progress.sample('resumed-member', active)
+    await resumed.write(resumeOffset, payload.slice(Number(resumeOffset)), signal)
+    await resumed.commit(signal)
+  } else if (mode === 'automatic-checkpoint-spacing') {
+    await transaction.observeCheckpoint(signal)
+    progress.sample('automatic-checkpoint', active)
+    for (let offset = firstWriteBytes; offset < payload.byteLength; offset += SPACING_LATER_WRITE_BYTES) {
+      await transaction.write(BigInt(offset), payload.slice(offset, offset + SPACING_LATER_WRITE_BYTES), signal)
+      await transaction.observeCheckpoint(signal)
+      progress.sample('spaced-write-' + offset, active)
+    }
+    await transaction.commit(signal)
+  } else {
+    await transaction.write(BigInt(firstWriteBytes), payload.slice(firstWriteBytes), signal)
+    await transaction.commit(signal)
+  }
+  return { active, execution, resumeOffset }
 }
 
 async function continueCompletedOperation(active: V2BoundReceiveOperation,
@@ -320,7 +394,7 @@ async function continuePausedOperation(active: V2BoundReceiveOperation,
     const settled = await active.settleTransferAdmissionFailure(new Error('Filesystem close outlived its journal promotion'))
     if (settled.lifecycle.kind !== 'resumable-receive') throw new Error('Candidate failure did not preserve a resumable checkpoint')
   }
-  if (mode === 'unpromoted-continue' || mode === 'unpromoted-settle') {
+  if (mode === 'unpromoted-continue' || mode === 'unpromoted-settle' || mode === 'aborted-write-continue') {
     await active.startLifecycleAction('continue', active.lifecycle)
     return active
   }

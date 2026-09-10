@@ -15,6 +15,7 @@ import { storedReceiveLifecycleState } from '../../../output/workspace/state-cod
 import {
   createDirectZipExecutionV1,
   type DirectZipIntent,
+  type DirectZipPayloadProgressV1,
 } from '../../../transfer/direct-zip'
 import { createOutputSessionID, createTransferJobID } from '../../../transfer/intent'
 import {
@@ -58,11 +59,14 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   #execution: DirectResumableZipExecution | undefined
   #closed = false
   #progressGeneration = 0n
+  #executionProgressGeneration = 0n
+  #payloadProgress: DirectZipPayloadProgressV1
 
   private constructor(input: BrowserDirectZipOperationOptions) {
     this.#input = input
     this.intent = input.intent
     this.#lifecycle = input.lifecycle
+    this.#payloadProgress = checkpointPayloadProgress(input.checkpoint)
     this.#target = new BrowserDirectZipTarget({
       binding: input.binding, fileSystem: browserDirectZipFileSystem(),
       proofs: () => this.#journal.pages.committedEpochProofs(this.#journal.checkpoint),
@@ -115,6 +119,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
         throw new DOMException('The saved ZIP is already complete', 'InvalidStateError')
       }
       await this.#commit({ kind: 'receiving', activeLeaseId: this.#input.leaseId })
+      const progressGeneration = ++this.#executionProgressGeneration
       this.#execution = await createDirectZipExecutionV1({
         intent: this.intent,
         outputIdentity: { backend: 'file_system_access', outputSessionId: createOutputSessionID() },
@@ -127,6 +132,11 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
           target: this.#target,
           identities: { nextCandidateId: randomId, nextEpochId: randomId },
           automaticPolicy: this.#input.facts.automaticEpochPolicy,
+        },
+        onProgress: progress => {
+          if (!this.#closed && progressGeneration === this.#executionProgressGeneration) {
+            this.#updatePayloadProgress(progress)
+          }
         },
         replay: this.#journal.replay,
         rollback: {
@@ -174,7 +184,9 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       return { lifecycle: this.#lifecycle, activeControls: [] }
     }
     if (action === 'continue') {
+      this.#executionProgressGeneration += 1n
       this.#execution = undefined
+      this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
       await this.verify()
       if (this.#lifecycle.kind === 'published') return { lifecycle: this.#lifecycle, activeControls: [] }
       return { lifecycle: await this.#commit({ kind: 'receiving', activeLeaseId: this.#input.leaseId }),
@@ -186,7 +198,9 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   resolveWorkspaceUsage() { return null }
 
   async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
+    this.#executionProgressGeneration += 1n
     await this.#target.abort(reason).catch(() => undefined)
+    this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
     if (this.#journal.pendingCandidate !== undefined) {
       try { await this.verify() } catch (recoveryError) { reason = recoveryError }
     }
@@ -256,6 +270,9 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       }
       throw new DirectZipWriterGateError(verified.kind, 'The saved ZIP requires recovery before continuing')
     }
+    // Continuing adopts only the verified prefix; an abandoned writable's bytes
+    // cannot contribute to the replacement execution or be counted again on replay.
+    this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
     // A completed archive is local authority; replaying the sender would make a
     // successfully saved result depend on the share still being available.
     if (this.#journal.checkpoint.completion !== undefined && this.#lifecycle.kind !== 'published') {
@@ -282,6 +299,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.#executionProgressGeneration += 1n
     try { await this.#target.abort(new DOMException('ZIP session detached', 'AbortError')) }
     finally { await this.#input.close() }
   }
@@ -331,8 +349,19 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     const checkpoint = this.#journal?.persistedCheckpoint ?? this.#input.checkpoint
     return { kind: 'direct-zip', operationId: this.intent.operationId, generation: this.#progressGeneration,
       phase: checkpoint.phase === 'closing' ? 'closing' : 'receiving',
+      // Candidate recovery can promote durable bytes before a replacement output
+      // opens and starts reporting live progress from that recovered prefix.
+      receivedSelectedBytes: maximum(this.#payloadProgress.receivedSelectedBytes, checkpoint.committedSelectedPayloadBytes),
+      writtenSelectedBytes: maximum(this.#payloadProgress.writtenSelectedBytes, checkpoint.committedSelectedPayloadBytes),
       safeResumeBytes: checkpoint.committedSelectedPayloadBytes,
       resumeTemporarySpaceUpperBound: checkpoint.committedArchiveLength }
+  }
+
+  #updatePayloadProgress(progress: DirectZipPayloadProgressV1) {
+    if (progress.receivedSelectedBytes === this.#payloadProgress.receivedSelectedBytes &&
+        progress.writtenSelectedBytes === this.#payloadProgress.writtenSelectedBytes) return
+    this.#payloadProgress = { ...progress }
+    this.#notify()
   }
 
   #notify() {
@@ -340,6 +369,13 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     for (const listener of this.#listeners) listener(this.#snapshot())
   }
 }
+
+function checkpointPayloadProgress(checkpoint: DirectZipCheckpointV1): DirectZipPayloadProgressV1 {
+  return { receivedSelectedBytes: checkpoint.committedSelectedPayloadBytes,
+    writtenSelectedBytes: checkpoint.committedSelectedPayloadBytes }
+}
+
+function maximum(left: bigint, right: bigint) { return left > right ? left : right }
 
 async function unavailable(): Promise<never> {
   throw new DOMException('This operation owns a direct ZIP', 'NotSupportedError')

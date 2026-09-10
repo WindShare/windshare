@@ -15,6 +15,7 @@ export function observeProductionDirectZipFileSystem() {
   const originalClose = streamPrototype.close
   const records: WritableObservation[] = []
   const streams = new WeakMap<FileSystemWritableFileStream, WritableObservation>()
+  let nextWriteFailure: Error | undefined
 
   filePrototype.createWritable = async function (options) {
     const existingBytes = (await this.getFile()).size
@@ -31,6 +32,11 @@ export function observeProductionDirectZipFileSystem() {
   streamPrototype.write = async function (chunk) {
     const record = streams.get(this)
     await originalWrite.call(this, chunk)
+    if (nextWriteFailure !== undefined) {
+      const failure = nextWriteFailure
+      nextWriteFailure = undefined
+      throw failure
+    }
     if (record !== undefined && isPositionedWrite(chunk)) {
       const bytes = dataBytes(chunk.data)
       const position = chunk.position
@@ -45,6 +51,7 @@ export function observeProductionDirectZipFileSystem() {
   }
 
   return {
+    rejectNextWrite: (failure: Error) => { nextWriteFailure = failure },
     snapshot: () => ({
       opens: records.length,
       prefixBytes: records.reduce((sum, record) => sum + record.preservedBytes +
