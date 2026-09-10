@@ -49,7 +49,8 @@ func (r *jobRun) isolateIncrementalFailure(
 	path string,
 	err error,
 ) error {
-	if cause := closedContextCause(ctx); cause != nil && cause == err {
+	propagated, _ := admitLifecycleFailure(err)
+	if cause := closedContextCause(ctx); cause != nil && cause == propagated {
 		// A worker can stop the whole job with a file-local settlement fault.
 		// Propagating that stop cannot invalidate authenticated catalog authority.
 		return cause
