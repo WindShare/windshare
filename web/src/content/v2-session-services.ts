@@ -30,6 +30,8 @@ import {
   encodeV2OpenRequest,
   V2_FRAGMENT_INACTIVITY_TIMEOUT_MILLISECONDS,
   V2_REVISION_CODE_QUOTA,
+  V2_REVISION_CODE_LEASE_EXPIRED,
+  V2_REVISION_CODE_INVALID_LEASE,
   V2_REVISION_RETRY_MAXIMUM_MILLISECONDS,
   V2_REVISION_RETRY_MINIMUM_MILLISECONDS,
   V2FragmentAssembler,
@@ -43,7 +45,7 @@ import {
   type V2BlockRecord,
   type V2FileRevisionDescriptor,
 } from './v2-records'
-import { remoteOperationErrorFor } from './v2-session-operations'
+import { remoteOperationErrorFor, V2RemoteOperationError } from './v2-session-operations'
 
 export {
   V2CatalogSessionOperations,
@@ -97,9 +99,15 @@ export class V2RevisionLeaseExpiredError extends Error {
   }
 }
 
+export function requiresV2RevisionLeaseReplacement(error: unknown): boolean {
+  return error instanceof V2RevisionLeaseExpiredError ||
+    (error instanceof V2RemoteOperationError && error.scope === 'revision' &&
+      (error.code === V2_REVISION_CODE_LEASE_EXPIRED || error.code === V2_REVISION_CODE_INVALID_LEASE))
+}
+
 export class V2RevisionChangedDuringRecoveryError extends Error {
   constructor() {
-    super('File revision changed while recovering a ProtocolSession')
+    super('File revision changed while renewing file access')
     this.name = 'V2RevisionChangedDuringRecoveryError'
   }
 }

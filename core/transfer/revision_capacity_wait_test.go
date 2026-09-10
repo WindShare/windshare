@@ -79,7 +79,7 @@ type capacityRangeReader struct{}
 
 func (capacityRangeReader) ReadRange(
 	context.Context,
-	content.LeaseID,
+	RevisionHandle,
 	content.FileRevisionDescriptor,
 	content.Range,
 	RangeSink,
@@ -93,7 +93,7 @@ type capacityRevisionScript struct {
 	signals  map[catalog.FileID]*revisionwait.CapacitySignal
 	opened   map[catalog.FileID]OpenedRevision
 	order    []catalog.FileID
-	released []content.LeaseID
+	released []RevisionHandle
 }
 
 func (script *capacityRevisionScript) OpenRevision(
@@ -110,7 +110,7 @@ func (script *capacityRevisionScript) OpenRevision(
 	return script.opened[file], nil
 }
 
-func (script *capacityRevisionScript) ReleaseRevision(_ context.Context, lease content.LeaseID) error {
+func (script *capacityRevisionScript) ReleaseRevision(_ context.Context, lease RevisionHandle) error {
 	script.mu.Lock()
 	script.released = append(script.released, lease)
 	script.mu.Unlock()
@@ -201,7 +201,7 @@ func TestTransferJobRetriesCapacityInsideCurrentWorkerSlotAndSucceeds(t *testing
 	}
 	for index, file := range []catalog.FileID{fileA, fileB} {
 		opened, err := NewOpenedRevision(
-			transferID[content.LeaseID](byte(86+index)), jobDescriptor(t, share, file, byte(88+index), 0),
+			transferID[RevisionHandle](byte(86+index)), jobDescriptor(t, share, file, byte(88+index), 0),
 		)
 		if err != nil {
 			t.Fatal(err)

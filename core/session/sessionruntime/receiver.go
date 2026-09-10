@@ -18,6 +18,7 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 )
 
@@ -281,7 +282,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 		publicKey: append(ed25519.PublicKey(nil), factory.publicKey...), opener: factory.opener,
 		semantic: factory.semantic, resourceLease: resourceLease,
 	}
-	if err := runtime.addFinalizer(receiver.releaseOwnedResources); err != nil {
+	if err := receiver.bindRevisionAccess(); err != nil {
 		return nil, err
 	}
 	assemblerTransferred = true
@@ -375,6 +376,7 @@ type ReceiverRuntime struct {
 	rpc           *rpcClient
 	catalog       *catalogflow.Client
 	revisions     *receiverRevisionClient
+	access        *revisionaccess.Reader
 	assembler     *contentflow.Assembler
 	laneSet       *transfer.LaneSet
 	broker        *transfer.BlockBroker
@@ -397,11 +399,11 @@ func (runtime *ReceiverRuntime) BlockBroker() *transfer.BlockBroker  { return ru
 func (runtime *ReceiverRuntime) OpenRevision(
 	ctx context.Context,
 	file catalog.FileID,
-) (transfer.OpenedRevision, error) {
-	return (receiverTransferDependencies{runtime: runtime}).OpenRevision(ctx, file)
+) (revisionaccess.Lease, error) {
+	return (receiverLeaseDependencies{receiverTransferDependencies{runtime: runtime}}).OpenLease(ctx, file)
 }
 func (runtime *ReceiverRuntime) ReleaseRevision(ctx context.Context, lease content.LeaseID) error {
-	return (receiverTransferDependencies{runtime: runtime}).ReleaseRevision(ctx, lease)
+	return (receiverLeaseDependencies{receiverTransferDependencies{runtime: runtime}}).ReleaseLease(ctx, lease)
 }
 
 func (runtime *ReceiverRuntime) Close() {
@@ -417,6 +419,9 @@ func (runtime *ReceiverRuntime) BeginClose() {
 		// Receiver callbacks may request shutdown themselves. Component Stop methods
 		// freeze/cancel without joining; the runtime owner performs ordered joins in
 		// finalization so cached plaintext and new lane attempts disappear immediately.
+		if runtime.access != nil {
+			runtime.access.Stop()
+		}
 		runtime.catalog.Stop()
 		runtime.revisions.stop()
 		runtime.broker.Stop()
@@ -435,6 +440,9 @@ func (runtime *ReceiverRuntime) releaseOwnedResources() {
 	runtime.cleanupOnce.Do(func() {
 		// Catalog loads can be inside user progress or verifier callbacks after the
 		// RPC sink closes. Join them before releasing the verifier/key-tree lease.
+		if runtime.access != nil {
+			runtime.access.Stop()
+		}
 		runtime.catalog.Close()
 		runtime.revisions.close()
 		runtime.broker.Close()

@@ -8,7 +8,6 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/downloadmetrics"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -32,7 +31,7 @@ type Session struct {
 	replace         Replace
 	flight          chan struct{}
 	failure         error
-	leases          map[content.LeaseID]*revisionLease
+	leases          map[transfer.RevisionHandle]*revisionLease
 }
 
 func New(ctx context.Context, current *sessionruntime.ReceiverRuntime, replace Replace) (*Session, error) {
@@ -40,7 +39,7 @@ func New(ctx context.Context, current *sessionruntime.ReceiverRuntime, replace R
 		return nil, ErrReplacement
 	}
 	lifetime, cancel := context.WithCancel(ctx)
-	return &Session{ctx: lifetime, cancel: cancel, current: current, replace: replace, leases: make(map[content.LeaseID]*revisionLease)}, nil
+	return &Session{ctx: lifetime, cancel: cancel, current: current, replace: replace, leases: make(map[transfer.RevisionHandle]*revisionLease)}, nil
 }
 
 func (s *Session) BindDownloadMetrics(metrics *downloadmetrics.Metrics) {

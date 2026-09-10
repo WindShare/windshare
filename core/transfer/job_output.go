@@ -3,7 +3,6 @@ package transfer
 import (
 	"context"
 
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -30,7 +29,7 @@ func (r *jobRun) settleFailedFile(
 	settlement, rawSettlementErr := transaction.Retire(settleContext, retireReason)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	failure := FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: stage, Cause: cause,
 		Settlement: settlement, SettlementFailure: settlementErr,
@@ -75,7 +74,7 @@ func (r *jobRun) pauseFailedFile(
 	settlement, rawSettlementErr := transaction.Pause(settleContext, reason)
 	settlementErr := normalizeOutputBoundary(settleContext, rawSettlementErr)
 	cancel()
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	if settlementErr == nil && (!settlement.matchesBinding(transaction.Binding()) ||
 		settlement.Kind() != FilePaused && settlement.Kind() != FileItemBlocked && settlement.Kind() != FileFailed) {
 		settlementErr = outputContractFault(nil)
@@ -123,7 +122,7 @@ func (r *jobRun) commitTransferredFile(
 	cancel()
 	if settlementErr != nil {
 		r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, settlementErr)
-		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		releaseErr := r.releaseRevision(ctx, opened.Handle)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
 			Cause: settlementErr, Settlement: settlement, SettlementFailure: settlementErr,
@@ -142,7 +141,7 @@ func (r *jobRun) commitTransferredFile(
 	if err := r.acceptTransactionFileSettlement(plan, transaction, progress, settlement); err != nil {
 		return r.rejectCommitSettlement(ctx, plan, opened, settlement)
 	}
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {
 	case FilePublished:
@@ -177,7 +176,7 @@ func (r *jobRun) rejectCommitSettlement(
 	settlement FileSettlement,
 ) error {
 	contractFailure := outputContractFault(nil)
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, contractFailure)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: contractFailure,
@@ -188,7 +187,7 @@ func (r *jobRun) rejectCommitSettlement(
 	return joinLifecycleFailures(contractFailure, releaseErr)
 }
 
-func (r *jobRun) releaseRevision(ctx context.Context, lease content.LeaseID) error {
+func (r *jobRun) releaseRevision(ctx context.Context, lease RevisionHandle) error {
 	settleContext, cancel := r.job.newSettlementContext(ctx)
 	rawReleaseErr := r.job.revisions.ReleaseRevision(settleContext, lease)
 	err := normalizeSourceBoundary(settleContext, rawReleaseErr)

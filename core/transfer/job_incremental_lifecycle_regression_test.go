@@ -29,7 +29,7 @@ type cancelFirstDemandReader struct {
 
 func (reader *cancelFirstDemandReader) ReadRange(
 	_ context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	requested content.Range,
 	_ RangeSink,
@@ -46,7 +46,7 @@ func newBlockingFirstRangeReader() *blockingFirstRangeReader {
 
 func (reader *blockingFirstRangeReader) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
@@ -75,7 +75,7 @@ func TestTransferJobPublishesTerminalDiscoveryBeforeContentDrain(t *testing.T) {
 	root := transferID[catalog.DirectoryID](202)
 	file := transferID[catalog.FileID](203)
 	descriptor := jobDescriptor(t, share, file, 204, 1)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](205), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](205), descriptor)
 	blocks := newBlockingFirstRangeReader()
 	defer blocks.Unblock()
 	rules, _ := NewSelectionRules(true, nil)
@@ -427,7 +427,7 @@ func TestTransferJobQueueBackpressuresGenerationReplay(t *testing.T) {
 		entries = append(entries, jobEntry(t, file, "file-"+string(rune('a'+index))+".bin", 1))
 		descriptor := jobDescriptor(t, share, file, byte(220+index), 1)
 		revisions.opened[file], _ = NewOpenedRevision(
-			transferID[content.LeaseID](byte(224+index)), descriptor,
+			transferID[RevisionHandle](byte(224+index)), descriptor,
 		)
 	}
 	source := &observedReplayCatalog{
@@ -655,7 +655,7 @@ func TestHugeFileRangePlanningDemandsOneBoundedWindowBeforeCancellation(t *testi
 	file := transferID[catalog.FileID](186)
 	rules, _ := NewSelectionRules(true, nil)
 	descriptor := jobDescriptor(t, share, file, 1, catalog.MaxFileSize)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](187), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](187), descriptor)
 	ctx, cancel := context.WithCancel(context.Background())
 	reader := &cancelFirstDemandReader{cancel: cancel}
 	output := newJobOutput(share)

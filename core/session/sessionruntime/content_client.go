@@ -11,6 +11,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 )
@@ -81,69 +82,69 @@ func newReceiverRevisionClient(
 func (client *receiverRevisionClient) OpenRevision(
 	ctx context.Context,
 	fileID catalog.FileID,
-) (transfer.OpenedRevision, error) {
+) (revisionaccess.Lease, error) {
 	// RecordOpener has no context and may execute application-controlled crypto.
 	// Runtime admission is therefore the ownership boundary that keeps its key
 	// resources alive even when the session is cancelled from inside the callback.
 	ctx, rpc, endAdmission, err := client.beginExternalOperation(ctx)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	defer endAdmission()
 	emptyRanges, err := content.NewRangeSet(nil)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	request, err := contentflow.NewOpenRequest([]contentflow.OpenItem{{FileID: fileID, InitialRanges: emptyRanges}})
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	body, err := contentflow.EncodeOpenRequest(request)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	call, err := rpc.begin(ctx, protocolsession.MessageOpenRevisions, body)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	defer func() { _ = rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort) }()
 	message, err := rpc.await(ctx, call)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	if message.Kind() == protocolsession.MessageOperationError {
-		return transfer.OpenedRevision{}, remoteRevisionOperationError(message)
+		return revisionaccess.Lease{}, remoteRevisionOperationError(message)
 	}
 	if message.Kind() != protocolsession.MessageOpenResults {
-		return transfer.OpenedRevision{}, ErrOperationMissing
+		return revisionaccess.Lease{}, ErrOperationMissing
 	}
 	unsigned, err := protocolsession.SenderControlSemanticBody(message)
 	if err != nil {
-		return transfer.OpenedRevision{}, err
+		return revisionaccess.Lease{}, err
 	}
 	results, err := contentflow.DecodeOpenResults(unsigned, []catalog.FileID{fileID})
 	if err != nil || len(results) != 1 {
-		return transfer.OpenedRevision{}, errors.Join(ErrOperationMissing, err)
+		return revisionaccess.Lease{}, errors.Join(ErrOperationMissing, err)
 	}
 	if results[0].Failure != nil {
-		return transfer.OpenedRevision{}, &RemoteRevisionError{
+		return revisionaccess.Lease{}, &RemoteRevisionError{
 			failure: *results[0].Failure, protocolSession: rpc.runtime.sessionID,
 			protocolOperation: call.id,
 		}
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
-		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
 	}
 	descriptor, err := client.opener.OpenRevision(fileID, client.chunkSize, results[0].RevisionObject)
 	if err != nil {
-		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, err)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, err)
 	}
 	if lifecycleErr := client.operationLifecycleError(ctx); lifecycleErr != nil {
-		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, lifecycleErr)
 	}
-	opened, err := transfer.NewOpenedRevision(results[0].Lease.ID, descriptor)
+	opened, err := revisionaccess.NewLease(results[0].Lease.ID, descriptor)
 	if err != nil {
-		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, err)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, results[0].Lease.ID, err)
 	}
 	leaseContext, stopLease := context.WithCancel(client.ctx)
 	state := &remoteLeaseState{
@@ -154,12 +155,12 @@ func (client *receiverRevisionClient) OpenRevision(
 	if client.closed {
 		client.mu.Unlock()
 		state.close()
-		return transfer.OpenedRevision{}, client.compensateRemoteLease(ctx, state.id, ErrRuntimeClosed)
+		return revisionaccess.Lease{}, client.compensateRemoteLease(ctx, state.id, ErrRuntimeClosed)
 	}
 	if client.leases[state.id] != nil {
 		client.mu.Unlock()
 		state.close()
-		return transfer.OpenedRevision{}, client.failRemoteLeaseCollision()
+		return revisionaccess.Lease{}, client.failRemoteLeaseCollision()
 	}
 	client.leases[state.id] = state
 	client.work.Add(1)

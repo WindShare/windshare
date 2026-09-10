@@ -56,10 +56,10 @@ func (attempt *revisionOpenAttempt) capacityContractError(
 	if !sessionID.IsZero() && signal.ProtocolSession() != sessionID {
 		return dependencyContractFailure(ErrRevisionIdentity)
 	}
-	if !opened.LeaseID.IsZero() {
+	if !opened.Handle.IsZero() {
 		// A capacity denial cannot grant a capability. Retiring it first keeps a
 		// broken adapter from leaking sender capacity while the job fails closed.
-		releaseErr := run.releaseRevision(ctx, opened.LeaseID)
+		releaseErr := run.releaseRevision(ctx, opened.Handle)
 		return joinClosedLifecycleFailures(
 			dependencyContractFailure(ErrRevisionIdentity), admitInternalFailure(releaseErr),
 		)
@@ -146,8 +146,8 @@ func (r *jobRun) finishRevisionOpen(
 		return r.validateOpenedRevision(ctx, plan, opened)
 	}
 	var releaseErr error
-	if !opened.LeaseID.IsZero() {
-		releaseErr = r.releaseRevision(ctx, opened.LeaseID)
+	if !opened.Handle.IsZero() {
+		releaseErr = r.releaseRevision(ctx, opened.Handle)
 	}
 	if isJobTerminalError(err) {
 		return OpenedRevision{}, false, joinLifecycleFailures(err, releaseErr)
@@ -171,7 +171,7 @@ func (r *jobRun) validateOpenedRevision(
 		r.job.share, plan.file, plan.expectedSize, plan.modified, opened,
 	); err != nil {
 		err = sourceChangedFailure(err)
-		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		releaseErr := r.releaseRevision(ctx, opened.Handle)
 		r.recordFileFailure(FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureRevisionIdentity,
 			Cause: err, LeaseReleaseFailure: releaseErr,

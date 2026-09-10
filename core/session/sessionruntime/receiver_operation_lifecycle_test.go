@@ -250,7 +250,7 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 		receiverFactory.Close()
 	})
 
-	opened, err := receiver.OpenRevision(context.Background(), fixture.fileID)
+	opened, err := (receiverTransferDependencies{runtime: receiver}).OpenRevision(context.Background(), fixture.fileID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 		t.Fatalf("live catalog validation error was promoted to session failure: %v", liveCatalogErr)
 	}
 	if err := dependencies.ReadRange(
-		context.Background(), opened.LeaseID, opened.Descriptor,
+		context.Background(), opened.Handle, opened.Descriptor,
 		content.Range{Offset: 0, End: 1}, nil,
 	); err == nil || isSessionTerminalBoundaryForTest(err) {
 		t.Fatalf("live range validation error was promoted to session failure: %v", err)
@@ -281,10 +281,10 @@ func TestReceiverTransferDependenciesPromoteClosedRuntimeToSessionFailure(t *tes
 	assertReceiverTransferSessionFailure(t, "catalog", catalogErr, catalogflow.ErrClientClosed)
 	_, revisionErr := dependencies.OpenRevision(context.Background(), fixture.fileID)
 	assertReceiverTransferSessionFailure(t, "revision open", revisionErr, ErrRuntimeClosed)
-	releaseErr := dependencies.ReleaseRevision(context.Background(), opened.LeaseID)
+	releaseErr := dependencies.ReleaseRevision(context.Background(), opened.Handle)
 	assertReceiverTransferSessionFailure(t, "revision release", releaseErr, ErrRuntimeClosed)
 	blockErr := dependencies.ReadRange(
-		context.Background(), opened.LeaseID, opened.Descriptor,
+		context.Background(), opened.Handle, opened.Descriptor,
 		content.Range{Offset: 0, End: 1},
 		transfer.RangeSinkFunc(func(context.Context, uint64, []byte) error { return nil }),
 	)

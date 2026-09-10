@@ -36,7 +36,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 	revisions := &jobRevisionClient{opened: make(map[catalog.FileID]OpenedRevision), failures: make(map[catalog.FileID]error)}
 	for index, file := range []catalog.FileID{fileA, fileB, emptyFile} {
 		descriptor := jobDescriptor(t, share, file, byte(30+index), []uint64{2 * chunk, chunk, 0}[index])
-		opened, err := NewOpenedRevision(transferID[content.LeaseID](byte(40+index)), descriptor)
+		opened, err := NewOpenedRevision(transferID[RevisionHandle](byte(40+index)), descriptor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -60,7 +60,7 @@ func TestTransferJobUsesCatalogClientBrokerAndSparseFileLocalResume(t *testing.T
 	rules, _ := NewSelectionRules(true, nil)
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules, Catalog: client,
-		Revisions: revisions, Blocks: broker, Materializer: output,
+		Revisions: revisions, Blocks: jobBrokerReader{broker}, Materializer: output,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		file := transferID[catalog.FileID](54)
 		chunk := uint64(catalog.MinChunkSize)
 		descriptor := jobDescriptor(t, share, file, 55, 2*chunk)
-		opened, _ := NewOpenedRevision(transferID[content.LeaseID](56), descriptor)
+		opened, _ := NewOpenedRevision(transferID[RevisionHandle](56), descriptor)
 		output := newJobOutput(share)
 		first, _ := content.NewRangeSet([]content.Range{{Offset: 0, End: chunk}})
 		output.durable["file.bin"] = first
@@ -143,7 +143,7 @@ func TestTransferJobRejectsRegressiveCheckpointAndCatalogCycle(t *testing.T) {
 		chunk := uint64(catalog.MinChunkSize)
 		exactSize := uint64(defaultFileReadWindowBlocks+1) * chunk
 		descriptor := jobDescriptor(t, share, file, 155, exactSize)
-		opened, _ := NewOpenedRevision(transferID[content.LeaseID](156), descriptor)
+		opened, _ := NewOpenedRevision(transferID[RevisionHandle](156), descriptor)
 		output := newJobOutput(share)
 		windowEnd := uint64(defaultFileReadWindowBlocks) * chunk
 		future, _ := content.NewRangeSet([]content.Range{{Offset: windowEnd, End: exactSize}})
@@ -281,7 +281,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 	}
 	for index, file := range []catalog.FileID{blockFailure, good} {
 		descriptor := jobDescriptor(t, share, file, byte(70+index), chunk)
-		revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](byte(75+index)), descriptor)
+		revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](byte(75+index)), descriptor)
 	}
 	lane := &jobLane{indices: make(map[catalog.FileID][]uint64)}
 	lanes, _ := NewLaneSet(LaneSetConfig{ProtocolSessionID: transferID[protocolsession.ProtocolSessionID](80), RaceWidth: 1})
@@ -297,7 +297,7 @@ func TestTransferJobDiscoveryFailurePreservesIndependentContentWork(t *testing.T
 		Catalog: failingCatalog{snapshots: map[catalog.DirectoryID]catalog.DirectorySnapshot{root: snapshot}, failures: map[catalog.DirectoryID]error{
 			failingDirectory: catalogDirectoryFailure(fault.CatalogUnavailable, errors.New("permission denied")),
 		}},
-		Revisions: revisions, Blocks: broker, Materializer: output,
+		Revisions: revisions, Blocks: jobBrokerReader{broker}, Materializer: output,
 	})
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePartial || result.SucceededFiles != 2 ||
@@ -324,7 +324,7 @@ func TestTransferJobKeepsAdmissionLowerBoundSeparateFromExactResultMeasure(t *te
 		file := transferID[catalog.FileID](byte(index))
 		entries = append(entries, jobEntry(t, file, fmt.Sprintf("file-%02d", index), 1))
 		descriptor := jobDescriptor(t, share, file, byte(index+40), 1)
-		revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](byte(index+80)), descriptor)
+		revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](byte(index+80)), descriptor)
 	}
 	rules, _ := NewSelectionRules(true, nil)
 	job, err := newTestTransferJob(t, testTransferJobConfig{
@@ -410,7 +410,7 @@ func TestTransferJobResolvesPathSelectionInsideBoundedJobTraversal(t *testing.T)
 		loads: make(map[catalog.DirectoryID]int),
 	}
 	descriptor := jobDescriptor(t, share, file, 4, 1)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](140), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](140), descriptor)
 	rules, _ := NewPathSelectionRules([]string{"folder/file.bin"})
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules, Catalog: source,
@@ -458,7 +458,7 @@ func TestTransferJobReportsMissingPathTargetAfterCompleteTraversal(t *testing.T)
 
 type sessionFailingBlocks struct{ err error }
 
-func (s sessionFailingBlocks) ReadRange(context.Context, content.LeaseID, content.FileRevisionDescriptor, content.Range, RangeSink) error {
+func (s sessionFailingBlocks) ReadRange(context.Context, RevisionHandle, content.FileRevisionDescriptor, content.Range, RangeSink) error {
 	return s.err
 }
 
@@ -504,7 +504,7 @@ type firstRangeSignalBlocks struct{ started chan<- struct{} }
 
 func (blocks firstRangeSignalBlocks) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
@@ -522,7 +522,7 @@ func TestTransferJobTransfersCommittedSiblingBeforeDelayedDiscovery(t *testing.T
 	child := transferID[catalog.DirectoryID](145)
 	file := transferID[catalog.FileID](146)
 	descriptor := jobDescriptor(t, share, file, 147, 1)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](148), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](148), descriptor)
 	source := &crossCancelCatalog{
 		root: root,
 		rootSnapshot: jobSnapshot(t, share, root, 1,

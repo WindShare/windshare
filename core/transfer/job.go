@@ -162,25 +162,30 @@ type CatalogReader interface {
 	OpenDirectoryPages(context.Context, catalog.DirectoryID) (catalog.DirectoryPageCursor, error)
 }
 
+// RevisionHandle identifies a receiver-owned reading lifetime, never a wire lease.
+type RevisionHandle [16]byte
+
+func (handle RevisionHandle) IsZero() bool { return handle == RevisionHandle{} }
+
 type OpenedRevision struct {
-	LeaseID    content.LeaseID
+	Handle     RevisionHandle
 	Descriptor content.FileRevisionDescriptor
 }
 
-func NewOpenedRevision(lease content.LeaseID, descriptor content.FileRevisionDescriptor) (OpenedRevision, error) {
-	if lease.IsZero() || descriptor.ShareInstance().IsZero() || descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() {
+func NewOpenedRevision(handle RevisionHandle, descriptor content.FileRevisionDescriptor) (OpenedRevision, error) {
+	if handle.IsZero() || descriptor.ShareInstance().IsZero() || descriptor.FileID().IsZero() || descriptor.FileRevision().IsZero() {
 		return OpenedRevision{}, ErrRevisionIdentity
 	}
-	return OpenedRevision{LeaseID: lease, Descriptor: descriptor}, nil
+	return OpenedRevision{Handle: handle, Descriptor: descriptor}, nil
 }
 
 type RevisionClient interface {
 	OpenRevision(context.Context, catalog.FileID) (OpenedRevision, error)
-	ReleaseRevision(context.Context, content.LeaseID) error
+	ReleaseRevision(context.Context, RevisionHandle) error
 }
 
 type RangeReader interface {
-	ReadRange(context.Context, content.LeaseID, content.FileRevisionDescriptor, content.Range, RangeSink) error
+	ReadRange(context.Context, RevisionHandle, content.FileRevisionDescriptor, content.Range, RangeSink) error
 }
 
 type SessionIdentity interface {
@@ -507,7 +512,7 @@ func (r *jobRun) transferPlannedFile(ctx context.Context, plan plannedFile) erro
 	err = normalizeOutputBoundary(ctx, err)
 	if err != nil {
 		r.traceFileLifecycle(TransferFileAdmitted, plan, err)
-		releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+		releaseErr := r.releaseRevision(ctx, opened.Handle)
 		policy := lifecyclePolicyFor(err)
 		failure := FileJobFailure{
 			FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput,
@@ -574,7 +579,7 @@ func (r *jobRun) rejectUnstartedFile(
 	opened OpenedRevision,
 	cause error,
 ) error {
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: cause,
 		LeaseReleaseFailure: releaseErr,
@@ -590,7 +595,7 @@ func (r *jobRun) rejectImmediateSettlement(
 	cause error,
 ) error {
 	fault := cause
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.settlementFailure = mergeLifecycleFailures(r.settlementFailure, fault)
 	r.recordFileFailure(FileJobFailure{
 		FileID: plan.file, Path: plan.failurePath(), Stage: FailureFileOutput, Cause: fault,
@@ -606,7 +611,7 @@ func (r *jobRun) handleImmediateSettlement(
 	opened OpenedRevision,
 	settlement FileSettlement,
 ) error {
-	releaseErr := r.releaseRevision(ctx, opened.LeaseID)
+	releaseErr := r.releaseRevision(ctx, opened.Handle)
 	r.job.progress.acceptFileSettlement(settlement, plan.expectedSize)
 	r.traceFileSettlement(plan, settlement, releaseErr)
 	switch settlement.Kind() {

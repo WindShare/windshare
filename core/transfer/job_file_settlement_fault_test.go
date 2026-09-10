@@ -25,7 +25,7 @@ func TestTransferJobSessionFailureAbortsJob(t *testing.T) {
 		jobEntry(t, file, "file.bin", chunk), jobEntry(t, laterFile, "later.bin", chunk),
 	)
 	descriptor := jobDescriptor(t, share, file, 94, chunk)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](95), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](95), descriptor)
 	revisions := &jobRevisionClient{opened: map[catalog.FileID]OpenedRevision{file: opened}, failures: make(map[catalog.FileID]error)}
 	output := newJobOutput(share)
 	rules, _ := NewSelectionRules(true, nil)
@@ -110,7 +110,7 @@ type replayBarrierSessionFailingBlocks struct {
 
 func (reader replayBarrierSessionFailingBlocks) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	_ content.Range,
 	_ RangeSink,
@@ -127,7 +127,7 @@ type retiredCountingRangeReader struct{ calls int }
 
 func (reader *retiredCountingRangeReader) ReadRange(
 	context.Context,
-	content.LeaseID,
+	RevisionHandle,
 	content.FileRevisionDescriptor,
 	content.Range,
 	RangeSink,
@@ -184,8 +184,8 @@ func TestTransferJobAcceptsRecoveredImmediateRetirementWithoutContentOrSecondFil
 			blocks.calls, len(output.transactions), output.pauseCalls, output.completeCalls, output.finished,
 		)
 	}
-	if !slices.Equal(revisions.released, []content.LeaseID{opened.LeaseID}) {
-		t.Fatalf("released leases = %v, want %v", revisions.released, opened.LeaseID)
+	if !slices.Equal(revisions.released, []RevisionHandle{opened.Handle}) {
+		t.Fatalf("released leases = %v, want %v", revisions.released, opened.Handle)
 	}
 }
 
@@ -351,7 +351,7 @@ func TestTransferJobContinuesSiblingAfterSettledFileOutputFault(t *testing.T) {
 	for index, file := range []catalog.FileID{failedFile, siblingFile} {
 		descriptor := jobDescriptor(t, share, file, byte(249+index), 1)
 		opened, openErr := NewOpenedRevision(
-			transferID[content.LeaseID](byte(251+index)), descriptor,
+			transferID[RevisionHandle](byte(251+index)), descriptor,
 		)
 		if openErr != nil {
 			t.Fatal(openErr)
@@ -472,7 +472,7 @@ func TestClosedFaultScopeDrivesOutputPolicyWithoutExposingDiagnostics(t *testing
 
 type scriptedRangeReader struct{ err error }
 
-func (r scriptedRangeReader) ReadRange(ctx context.Context, _ content.LeaseID, _ content.FileRevisionDescriptor, requested content.Range, sink RangeSink) error {
+func (r scriptedRangeReader) ReadRange(ctx context.Context, _ RevisionHandle, _ content.FileRevisionDescriptor, requested content.Range, sink RangeSink) error {
 	if r.err != nil {
 		return r.err
 	}
@@ -494,7 +494,7 @@ func branchJob(t *testing.T, output *jobOutput, revisions *jobRevisionClient, bl
 	}
 	if _, exists := revisions.opened[file]; !exists && revisions.failures[file] == nil {
 		descriptor := jobDescriptor(t, share, file, 114, size)
-		revisions.opened[file], _ = NewOpenedRevision(transferID[content.LeaseID](115), descriptor)
+		revisions.opened[file], _ = NewOpenedRevision(transferID[RevisionHandle](115), descriptor)
 	}
 	rules, _ := NewSelectionRules(true, nil)
 	job, err := newTestTransferJob(t, testTransferJobConfig{
@@ -509,7 +509,7 @@ func branchJob(t *testing.T, output *jobOutput, revisions *jobRevisionClient, bl
 }
 
 func TestTransferJobValidationEmptySelectionAndFailureBranches(t *testing.T) {
-	if _, err := NewOpenedRevision(content.LeaseID{}, content.FileRevisionDescriptor{}); !errors.Is(err, ErrRevisionIdentity) {
+	if _, err := NewOpenedRevision(RevisionHandle{}, content.FileRevisionDescriptor{}); !errors.Is(err, ErrRevisionIdentity) {
 		t.Fatalf("invalid opened revision error=%v", err)
 	}
 	if _, err := NewTransferJob(TransferJobConfig{}); !errors.Is(err, ErrInvalidTransferJob) {
@@ -628,7 +628,7 @@ func TestTransferJobRevisionIdentitySessionReleaseAndStreamSkipBranches(t *testi
 	job, selectedFile := branchJob(t, output, revisions, scriptedRangeReader{})
 	wrongFile := transferID[catalog.FileID](131)
 	wrongDescriptor := jobDescriptor(t, share, wrongFile, 132, uint64(catalog.MinChunkSize))
-	revisions.opened[selectedFile], _ = NewOpenedRevision(transferID[content.LeaseID](133), wrongDescriptor)
+	revisions.opened[selectedFile], _ = NewOpenedRevision(transferID[RevisionHandle](133), wrongDescriptor)
 	result := job.Run(context.Background())
 	if result.Outcome != DirectTreeOutcomePartial || len(result.Files) != 1 || result.Files[0].Stage != FailureRevisionIdentity {
 		t.Fatalf("identity result=%+v", result)

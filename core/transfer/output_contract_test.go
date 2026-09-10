@@ -146,7 +146,7 @@ func TestTransferJobAdmitsGenerationsIncrementallyBeforeContent(t *testing.T) {
 	other := transferID[catalog.DirectoryID](27)
 	file := transferID[catalog.FileID](24)
 	descriptor := jobDescriptor(t, share, file, 25, 1)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](26), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](26), descriptor)
 	rules, _ := NewSelectionRules(true, nil)
 	newJob := func(output *jobOutput, revisions *jobRevisionClient, blocks RangeReader) *TransferJob {
 		job, err := newTestTransferJob(t, testTransferJobConfig{
@@ -214,7 +214,7 @@ type countingRangeReader struct{ calls int }
 
 func (reader *countingRangeReader) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	_ content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
@@ -427,7 +427,7 @@ func TestTransferJobIsolatesImmediateCollisionAndItemBlocks(t *testing.T) {
 			for index, file := range []catalog.FileID{blockedFile, goodFile} {
 				descriptor := jobDescriptor(t, share, file, byte(40+index), 0)
 				revisions.opened[file], _ = NewOpenedRevision(
-					transferID[content.LeaseID](byte(50+index)), descriptor,
+					transferID[RevisionHandle](byte(50+index)), descriptor,
 				)
 			}
 			output := newJobOutput(share)

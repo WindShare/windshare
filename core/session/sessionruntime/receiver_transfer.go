@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -193,10 +194,10 @@ func (dependencies receiverTransferDependencies) AcquireDirectory(
 	return snapshot, release, dependencies.classifyCatalog(ctx, err)
 }
 
-func (dependencies receiverTransferDependencies) OpenRevision(
+func (dependencies receiverLeaseDependencies) OpenLease(
 	ctx context.Context,
 	file catalog.FileID,
-) (transfer.OpenedRevision, error) {
+) (revisionaccess.Lease, error) {
 	opened, err := dependencies.runtime.revisions.OpenRevision(ctx, file)
 	var remote *RemoteRevisionError
 	// Only the authenticated client may return this authority directly. Runtime
@@ -209,7 +210,7 @@ func (dependencies receiverTransferDependencies) OpenRevision(
 		}
 		err = remoteRevisionFailureError(remote)
 	}
-	return opened, dependencies.classifySource(ctx, err)
+	return opened, dependencies.classifyAccess(ctx, err)
 }
 
 func (dependencies receiverTransferDependencies) authenticatedCapacitySignal(
@@ -238,14 +239,14 @@ func (dependencies receiverTransferDependencies) authenticatedCapacitySignal(
 	return signal, true
 }
 
-func (dependencies receiverTransferDependencies) ReleaseRevision(
+func (dependencies receiverLeaseDependencies) ReleaseLease(
 	ctx context.Context,
 	lease content.LeaseID,
 ) error {
 	return dependencies.classifySource(ctx, dependencies.runtime.revisions.ReleaseRevision(ctx, lease))
 }
 
-func (dependencies receiverTransferDependencies) ReadRange(
+func (dependencies receiverLeaseDependencies) ReadLeaseRange(
 	ctx context.Context,
 	lease content.LeaseID,
 	descriptor content.FileRevisionDescriptor,
@@ -438,4 +439,44 @@ func (state *catalogProgressState) observe(progress protocolsession.ScanProgress
 	}
 	state.attempt, state.discovered, state.seen = progress.AttemptID, progress.DiscoveredEntries, true
 	return true, nil
+}
+
+func (runtime *ReceiverRuntime) bindRevisionAccess() error {
+	generation, _, err := newReceiverRevisionWait(runtime)
+	if err != nil {
+		return err
+	}
+	source := receiverLeaseDependencies{receiverTransferDependencies{runtime: runtime, generation: generation}}
+	runtime.access = revisionaccess.New(runtime.ctx, source)
+	return runtime.addFinalizer(runtime.releaseOwnedResources)
+}
+
+// Wire leases remain inside the runtime. A job retains this local handle while
+// the reader replaces expiring authorization for its immutable descriptor.
+type receiverLeaseDependencies struct{ receiverTransferDependencies }
+
+func (dependencies receiverTransferDependencies) OpenRevision(ctx context.Context, file catalog.FileID) (transfer.OpenedRevision, error) {
+	opened, err := dependencies.runtime.access.OpenRevision(ctx, file)
+	return opened, dependencies.classifyAccess(ctx, err)
+}
+func (dependencies receiverTransferDependencies) ReleaseRevision(ctx context.Context, handle transfer.RevisionHandle) error {
+	return dependencies.classifyAccess(ctx, dependencies.runtime.access.ReleaseRevision(ctx, handle))
+}
+func (dependencies receiverTransferDependencies) ReadRange(ctx context.Context, handle transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+	err := dependencies.runtime.access.ReadRange(ctx, handle, descriptor, requested, sink)
+	if errors.Is(err, revisionaccess.ErrClosed) {
+		err = errors.Join(transfer.ErrBrokerClosed, err)
+	}
+	return dependencies.classifyAccess(ctx, err)
+}
+
+func (dependencies receiverTransferDependencies) classifyAccess(ctx context.Context, err error) error {
+	if _, capacity := revisionwait.MatchCapacitySignal(err); capacity {
+		return err
+	}
+	if ctx.Err() == nil && (errors.Is(err, revisionaccess.ErrClosed) ||
+		errors.Is(err, context.Canceled) && dependencies.runtime.ctx.Err() != nil) {
+		return sessionTransportBoundaryError(errors.Join(ErrRuntimeClosed, err))
+	}
+	return dependencies.classifySource(ctx, err)
 }

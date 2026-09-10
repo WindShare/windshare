@@ -26,7 +26,7 @@ func (s *Session) OpenRevision(ctx context.Context, file catalog.FileID) (transf
 		opened, err := dependencies.OpenRevision(ctx, file)
 		if err == nil {
 			s.mu.Lock()
-			s.leases[opened.LeaseID] = &revisionLease{runtime: runtime, opened: opened}
+			s.leases[opened.Handle] = &revisionLease{runtime: runtime, opened: opened}
 			s.mu.Unlock()
 			return opened, nil
 		}
@@ -39,7 +39,7 @@ func (s *Session) OpenRevision(ctx context.Context, file catalog.FileID) (transf
 	}
 }
 
-func (s *Session) ReleaseRevision(ctx context.Context, lease content.LeaseID) error {
+func (s *Session) ReleaseRevision(ctx context.Context, lease transfer.RevisionHandle) error {
 	s.mu.Lock()
 	binding := s.leases[lease]
 	delete(s.leases, lease)
@@ -56,10 +56,10 @@ func (s *Session) ReleaseRevision(ctx context.Context, lease content.LeaseID) er
 	if err != nil {
 		return err
 	}
-	return dependencies.ReleaseRevision(ctx, binding.opened.LeaseID)
+	return dependencies.ReleaseRevision(ctx, binding.opened.Handle)
 }
 
-func (s *Session) ReadRange(ctx context.Context, lease content.LeaseID, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 	s.mu.Lock()
 	binding := s.leases[lease]
 	s.mu.Unlock()
@@ -87,7 +87,7 @@ func (s *Session) ReadRange(ctx context.Context, lease content.LeaseID, descript
 			return err
 		}
 		for _, part := range remaining.ranges() {
-			if err = dependencies.ReadRange(ctx, binding.opened.LeaseID, descriptor, part, remaining); err != nil {
+			if err = dependencies.ReadRange(ctx, binding.opened.Handle, descriptor, part, remaining); err != nil {
 				break
 			}
 		}
@@ -155,7 +155,7 @@ func (binding *revisionLease) refresh(ctx context.Context, runtime *sessionrunti
 	// A fresh lease does not certify old bytes unless the authenticated immutable
 	// revision and geometry are identical.
 	if opened.Descriptor != descriptor {
-		_ = dependencies.ReleaseRevision(ctx, opened.LeaseID)
+		_ = dependencies.ReleaseRevision(ctx, opened.Handle)
 		return content.ErrRevisionDrift
 	}
 	binding.runtime = runtime

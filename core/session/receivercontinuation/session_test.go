@@ -197,7 +197,7 @@ func TestTransferKeepsOutputAndConfirmedProgressAcrossFreshSession(t *testing.T)
 	}
 	id, _ := transfer.NewTransferJobID()
 	var reads []content.Range
-	reader := rangeReaderFunc(func(ctx context.Context, lease content.LeaseID, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
+	reader := rangeReaderFunc(func(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
 		reads = append(reads, requested)
 		err := continuation.ReadRange(ctx, lease, descriptor, requested, sink)
 		if len(reads) == 1 && err == nil {
@@ -300,9 +300,9 @@ func (f *transientFileTransaction) Commit(ctx context.Context) (transfer.FileSet
 	return transfer.NewTransientPublishedFileSettlement(f.Binding())
 }
 
-type rangeReaderFunc func(context.Context, content.LeaseID, content.FileRevisionDescriptor, content.Range, transfer.RangeSink) error
+type rangeReaderFunc func(context.Context, transfer.RevisionHandle, content.FileRevisionDescriptor, content.Range, transfer.RangeSink) error
 
-func (f rangeReaderFunc) ReadRange(ctx context.Context, l content.LeaseID, d content.FileRevisionDescriptor, r content.Range, s transfer.RangeSink) error {
+func (f rangeReaderFunc) ReadRange(ctx context.Context, l transfer.RevisionHandle, d content.FileRevisionDescriptor, r content.Range, s transfer.RangeSink) error {
 	return f(ctx, l, d, r, s)
 }
 
