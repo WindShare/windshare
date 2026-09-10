@@ -36,6 +36,7 @@ export class V2JobFailureAuthority {
   readonly #failedDirectoryIds = new Set<string>()
   readonly #failures = new TransferFailureAccumulator()
   readonly #options: V2JobFailureAuthorityOptions
+  #discoveryFailed = false
 
   constructor(options: V2JobFailureAuthorityOptions) {
     this.#options = options
@@ -48,6 +49,11 @@ export class V2JobFailureAuthority {
 
   snapshot(): TransferFailureSummary {
     return this.#failures.snapshot()
+  }
+
+  recordDiscoveryDirectory(identity: string, reason: unknown): void {
+    this.#discoveryFailed = true
+    this.recordDirectory(identity, reason)
   }
 
   recordDirectory(identity: string, reason: unknown): void {
@@ -87,7 +93,7 @@ export class V2JobFailureAuthority {
 
   finishDiscovery(): SelectionMeasure {
     const missing = this.explicitTargets.missing()
-    if (this.#options.progress.failedDirectories === 0) {
+    if (!this.#discoveryFailed) {
       for (const target of missing) {
         const normalized = normalizeV2FileTransferFailure(
           new V2SelectionTargetMissingError(target),
@@ -111,7 +117,7 @@ export class V2JobFailureAuthority {
         this.#options.progress.recordSelectionError()
       }
     }
-    const complete = this.#options.progress.failedDirectories === 0 && missing.length === 0
+    const complete = !this.#discoveryFailed && missing.length === 0
     const measure = complete ? this.#options.measure.complete() : this.#options.measure.fail()
     this.#options.observers()?.measure(measure)
     this.#options.emitProgress()

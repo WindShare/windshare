@@ -73,7 +73,7 @@ interface MaterializationDiscoveryPort {
     directFiles?: AsyncBoundedQueue<PendingFile>,
     collector?: ExactPreparationCollector,
   ): Promise<void>
-  finish(): SelectionMeasure
+  measure(): SelectionMeasure
   hasFailures(): boolean
   prepareDirectory(
     collector: ExactPreparationCollector,
@@ -155,7 +155,7 @@ export class TransferJobMaterialization {
     this.#context.execution.materializationStarted()
     const root = await this.#context.root.direct()
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
-    const measure = this.#context.discovery.finish()
+    const measure = this.#context.discovery.measure()
     this.#context.execution.finishingStarted()
     await this.#context.execution.finalizeDirectories()
     return this.#context.execution.completeWorkers(measure)
@@ -170,7 +170,7 @@ export class TransferJobMaterialization {
     this.#context.execution.materializationStarted()
     const root = this.#context.root.authenticated(await this.#context.root.load())
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
-    const measure = this.#context.discovery.finish()
+    const measure = this.#context.discovery.measure()
     this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
@@ -199,7 +199,7 @@ export class TransferJobMaterialization {
     this.#context.execution.materializationStarted()
     const root = this.#context.root.authenticated(committed)
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
-    const measure = this.#context.discovery.finish()
+    const measure = this.#context.discovery.measure()
     this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }
@@ -219,7 +219,7 @@ export class TransferJobMaterialization {
     this.#context.execution.materializationStarted()
     const root = await this.#context.root.direct()
     await this.#context.discovery.run(root, this.#context.discovery.createDirectFileQueue())
-    const measure = this.#context.discovery.finish()
+    const measure = this.#context.discovery.measure()
     this.#context.execution.finishingStarted()
     await this.#context.execution.finalizeDirectories()
     if (measure.discovery === 'complete') await execution.discoveryComplete(this.#context.signal)
@@ -264,7 +264,7 @@ export class TransferJobMaterialization {
     await this.#context.discovery.run(root, undefined, collector)
     return Object.freeze({
       collector,
-      measure: this.#context.discovery.finish(),
+      measure: this.#context.discovery.measure(),
     })
   }
 

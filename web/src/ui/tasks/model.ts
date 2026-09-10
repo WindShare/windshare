@@ -52,6 +52,10 @@ export interface TaskFacts {
 export interface TaskProgressPresentation {
   readonly mode: 'indeterminate' | 'determinate'
   readonly percentage: number | null
+  readonly sampleIdentity: string
+  readonly receivedBytes: bigint
+  readonly remainingBytes: bigint | null
+  readonly status: string | null
   readonly label: string
   readonly details: readonly string[]
 }

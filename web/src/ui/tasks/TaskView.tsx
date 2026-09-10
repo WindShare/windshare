@@ -3,6 +3,7 @@ import type { TaskAction, TaskPresentation } from './index'
 import { CompatibleNameRepairPanel } from '../compatible-name/CompatibleNameRepairPanel'
 import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
+import { useReceiveRate } from './use-receive-rate'
 
 const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>> = {
   preparing: 'clock', downloading: 'download', waiting: 'clock', paused: 'pause',
@@ -54,6 +55,7 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, p
   readonly primaryAction?: ReactNode
   readonly busy?: boolean
 }) {
+  const rate = useReceiveRate(task)
   return <section className={`task-card task-tone-${task.tone}`} aria-label={`Download: ${task.objectLabel}`}
     data-task-stage={task.stage} data-operation-id={task.operationId}>
     <div className="task-summary">
@@ -73,7 +75,10 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, p
     {task.progress !== null && <div className="task-progress" data-progress-mode={task.progress.mode}>
       <progress aria-label="Download progress" {...(task.progress.percentage === null
         ? {} : { max: 100, value: task.progress.percentage })} />
-      <span>{task.progress.label}</span>
+      <div className="task-progress-copy">
+        <span>{task.progress.label}{rate === null ? '' : ` · ${rate}`}</span>
+        {task.progress.status !== null && <span>{task.progress.status}</span>}
+      </div>
     </div>}
     {task.completeness === 'partial' && <p className="task-notice">Partial result — some selected content is unavailable.</p>}
     {task.fidelity?.actionMode === 'catch-up-required' && <p className="task-notice">Filename restoration setup needs attention.</p>}
@@ -97,7 +102,10 @@ export function TaskDetails({ task, actions, busy = false, children }: {
       {task.createdAtMilliseconds !== null && <><dt>Created</dt><dd><time
         dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></dd></>}
     </dl>
-    {task.progress !== null && <p>{task.progress.label}</p>}
+    {task.progress !== null && <>
+      <p>{task.progress.label}</p>
+      {task.progress.status !== null && <p>{task.progress.status}</p>}
+    </>}
     <ul className="task-detail-list">{[...task.details, ...(task.progress?.details ?? [])].map((line, index) =>
       <li key={`${index}-${line}`}>{line}</li>)}</ul>
     <div className="task-actions">

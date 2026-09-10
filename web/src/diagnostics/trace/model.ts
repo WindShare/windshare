@@ -479,6 +479,17 @@ export interface TraceEventPayloadByNameV1 {
   readonly lane_transition: LaneTransitionPayloadV1
   readonly receive_transition:
     | Readonly<{
+        transition: 'discovery_scheduling'
+        operation_id: string
+        transfer_job_id: string
+        queue: 'generations' | 'zip_members'
+        decision: 'waiting' | 'resumed' | 'cancelled' | 'complete'
+        pending_items: string
+        metadata_bytes: string
+        maximum_items: string
+        maximum_metadata_bytes: string
+      }>
+    | Readonly<{
         transition: 'download_connectivity'
         transfer_job_id: string
         connectivity: import('./transfer-payload').DownloadConnectivitySnapshot

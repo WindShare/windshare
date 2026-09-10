@@ -122,6 +122,9 @@ class GalleryController {
       output: { ...this.#snapshot.output, lifecycle, lifecyclePresentation: null },
     })
   }
+  advanceProgress = (progress: Partial<V2ReceiverSnapshot['progress']>) => {
+    this.#publish({ progress: { ...this.#snapshot.progress, ...progress } })
+  }
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -133,6 +136,7 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   // Vite may give dynamic imports distinct module URLs; bind evidence to the mounted controller.
   Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
     windshareCompleteDownload: active.completeDownload,
+    windshareAdvanceProgress: active.advanceProgress,
     windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario

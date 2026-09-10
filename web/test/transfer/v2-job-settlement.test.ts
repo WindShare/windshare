@@ -272,7 +272,7 @@ describe('v2 plan settlement', () => {
       expect(plans.pauseRequests[0]?.selectionFacts).toEqual({
         discoveredFileCount: 2n,
         discoveredBytes: 4n,
-        discovery: workerFamily === 'discovery' ? 'failed' : 'complete',
+        discovery: 'complete',
       })
       const consequences = traces.filter((event): event is Extract<
         TransferTraceEvent,

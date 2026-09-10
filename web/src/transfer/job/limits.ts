@@ -12,8 +12,15 @@ import {
   type OutputExecutionProfile,
 } from '../output-file-contract'
 
+import {
+  V2_MAXIMUM_PENDING_GENERATIONS,
+  V2_MAXIMUM_PENDING_GENERATION_METADATA_BYTES,
+} from '../discovery/v2-directory-replay'
+
 export interface TransferJobLimits {
   readonly requestedConcurrentFiles?: number
+  readonly pendingGenerations: number
+  readonly pendingGenerationMetadataBytes: bigint
   readonly concurrentDirectories: number
   readonly pendingFiles: number
   readonly pendingFileMetadataBytes: bigint
@@ -48,6 +55,17 @@ export function transferJobLimits(options: TransferJobOptions): TransferJobLimit
   if (pendingFileMetadataBytes <= 0n || pendingFileMetadataBytes > V2_MAXIMUM_PENDING_FILE_METADATA_BYTES) {
     throw new RangeError('v2 transfer pending-file metadata queue exceeds its admission limit')
   }
+  const pendingGenerations = boundedInteger(
+    options.maximumPendingGenerations,
+    V2_MAXIMUM_PENDING_GENERATIONS,
+    'v2 transfer pending-generation queue exceeds its admission limit',
+  )
+  const pendingGenerationMetadataBytes = options.maximumPendingGenerationMetadataBytes ??
+    V2_MAXIMUM_PENDING_GENERATION_METADATA_BYTES
+  if (pendingGenerationMetadataBytes <= 0n ||
+      pendingGenerationMetadataBytes > V2_MAXIMUM_PENDING_GENERATION_METADATA_BYTES) {
+    throw new RangeError('v2 transfer pending-generation metadata exceeds its admission limit')
+  }
   const catalogNodeClaims = boundedInteger(
     options.maximumNodeClaims,
     V2_MAXIMUM_CATALOG_NODE_CLAIMS,
@@ -61,6 +79,8 @@ export function transferJobLimits(options: TransferJobOptions): TransferJobLimit
   return Object.freeze({
     ...(requestedConcurrentFiles === undefined ? {} : { requestedConcurrentFiles }),
     concurrentDirectories,
+    pendingGenerations,
+    pendingGenerationMetadataBytes,
     pendingFiles,
     pendingFileMetadataBytes,
     catalogNodeClaims,
