@@ -3,7 +3,7 @@ import { decodeBase64Url } from '../../src/crypto/bytes'
 import { DirectZipEpochWriterV1 } from '../../src/output/direct-zip/writer'
 import type { DirectZipWriterCheckpointV1 } from '../../src/output/direct-zip/writer'
 import type { DirectZipFileSystemPort } from '../../src/output/direct-zip/target'
-import { BrowserDirectZipTarget, type BrowserDirectZipBinding } from '../../src/ui/browser-receive/direct-zip/target'
+import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from '../../src/ui/browser-receive/direct-zip/target'
 import { StagedFsaModel, type StagedFileHandle } from '../output/direct-zip/target/staged-fsa-model'
 import { createWriterHarness, fileAdmission, fileSource } from '../output/direct-zip/writer/fault-model'
 
@@ -136,6 +136,47 @@ describe('browser Direct ZIP target bridge', () => {
     expect(fixture.model.calls.some(call => call.startsWith('remove:'))).toBe(false)
   })
 
+  it('keeps archive proof scans outside the directory mutation fence and removes only inside it', async () => {
+    let inNamespace = false
+    const fixture = await targetFixture({
+      run: async operation => {
+        expect(fixture.reads.some(read => read.end - read.start >= BigInt(PAYLOAD_BYTES))).toBe(true)
+        fixture.reads.length = 0
+        inNamespace = true
+        try { return await operation() } finally { inNamespace = false }
+      },
+    })
+    const writer = fixture.writer()
+    const member = await writer.beginFile(fileAdmission(fixture.checkpoint, fileSource('revision-1', BigInt(PAYLOAD_BYTES))))
+    await member.write(PAYLOAD)
+    const saved = await writer.pause()
+    const remove = fixture.fileSystem.removeExactName
+    fixture.fileSystem.removeExactName = async (parent, name) => {
+      expect(inNamespace).toBe(true)
+      expect(fixture.reads.every(read => read.end - read.start < BigInt(PAYLOAD_BYTES))).toBe(true)
+      await remove(parent, name)
+    }
+    fixture.reads.length = 0
+
+    await fixture.reopen().deleteOwned(saved.checkpoint)
+
+    expect(fixture.model.fileBytes(TARGET_NAME)).toBeUndefined()
+    expect(inNamespace).toBe(false)
+  })
+
+  it('refuses a replacement that appears while deletion waits for namespace authority', async () => {
+    const fixture = await targetFixture({
+      run: async operation => {
+        fixture.model.replaceFile(TARGET_NAME, Uint8Array.of(9, 8, 7))
+        return operation()
+      },
+    })
+
+    await expect(fixture.target.deleteOwned(fixture.checkpoint)).rejects.toMatchObject({ name: 'DataError' })
+    expect(fixture.model.fileBytes(TARGET_NAME)).toEqual(Uint8Array.of(9, 8, 7))
+    expect(fixture.model.calls.some(call => call.startsWith('remove:'))).toBe(false)
+  })
+
   it('distinguishes lost permission and missing targets without creating or deleting files', async () => {
     const fixture = await targetFixture()
     fixture.model.queryPermissionState = 'denied'
@@ -147,7 +188,7 @@ describe('browser Direct ZIP target bridge', () => {
   })
 })
 
-async function targetFixture() {
+async function targetFixture(namespaceMutations: DirectZipNamespaceMutationPort = { run: async operation => operation() }) {
   const harness = createWriterHarness()
   const model = new StagedFsaModel()
   const file = model.installFile(TARGET_NAME, harness.target.visible)
@@ -188,6 +229,7 @@ async function targetFixture() {
   }
   const reopen = () => new BrowserDirectZipTarget({
     binding, fileSystem, proofs: () => harness.pages.committedEpochProofs(),
+    namespaceMutations,
   })
   const target = reopen()
   const observation = await target.observe(harness.checkpoint.epochRoot)

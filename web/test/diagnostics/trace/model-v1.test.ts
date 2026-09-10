@@ -223,6 +223,12 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     space_decision: 'admitted',
     cleanup_decision: 'not_requested',
   },
+  direct_zip_coordination: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+    scope: 'target',
+    transition: 'acquired',
+    lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
+  },
   retained_inventory: { transition: 'load_completed', operation_count: '0' },
   retained_action: {
     transition: 'started',

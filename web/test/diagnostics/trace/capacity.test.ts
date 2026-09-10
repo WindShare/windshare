@@ -99,6 +99,7 @@ describe('trace frozen contract', () => {
       'reopen',
       'cleanup',
       'direct_zip_milestone',
+      'direct_zip_coordination',
       'retained_inventory',
       'retained_action',
       'incident_marker',

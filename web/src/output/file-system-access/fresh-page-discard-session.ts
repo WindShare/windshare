@@ -18,6 +18,7 @@ import {
 import {
   acquireFSARootMutationLease,
   type BrowserLockManagerRuntime,
+  type FSAHandleIdentityResolver,
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
 import type { FSATerminalExclusiveAuthority } from '../browser/mutation-coordination/model'
@@ -53,6 +54,7 @@ export interface OpenFreshPageFileSystemAccessDiscardOptions {
   readonly binding: PersistedFSAOperationBinding
   readonly operationRepository: ReceiveOperationRepository
   readonly lockManager?: BrowserLockManagerRuntime
+  readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
@@ -351,9 +353,13 @@ export async function openFreshPageFileSystemAccessDiscard(
   if (firstBinding.parentHandleId !== options.binding.parentHandleId) {
     throw new TargetOwnershipUnknownError('parent-authority', intent.operationId)
   }
-  const rootLease = options.lockManager === undefined
-    ? await acquireFSARootMutationLease(firstBinding.parent)
-    : await acquireFSARootMutationLease(firstBinding.parent, options.lockManager)
+  const rootLease = await acquireFSARootMutationLease(
+    firstBinding.parent,
+    options.lockManager,
+    undefined,
+    undefined,
+    options.mutationIdentities,
+  )
   let checkpoints: FSAFileCheckpointRepository | undefined
   let compatibleNames: CompatibleNamePathAuthority | undefined
   try {

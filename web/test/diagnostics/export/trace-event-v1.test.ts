@@ -18,6 +18,8 @@ import {
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import type { IncidentScopeIdentity } from '../../../src/diagnostics/incident/scope'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
+import { emitOutputTrace, outputTraceEvent } from '../../../src/output/diagnostics'
+import { createOutputTraceSource } from '../../../src/ui/v2-production-trace'
 import type {
   TraceDomainEventNameV1,
   TraceEventObservationV1,
@@ -527,6 +529,21 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
     cleanup_decision: 'not_requested',
     native_error_class: 'quota_exceeded',
   }),
+  observation('direct_zip_coordination', {
+    operation_id: OPERATION_ID, scope: 'parent_access', transition: 'waiting',
+  }),
+  observation('direct_zip_coordination', {
+    operation_id: OPERATION_ID, scope: 'namespace', transition: 'acquired',
+    lock_name: 'windshare/fsa-namespace/v1:AQAAAAAAAAAAAAAAAAAAAA',
+  }),
+  observation('direct_zip_coordination', {
+    operation_id: OPERATION_ID, scope: 'namespace', transition: 'released',
+  }),
+  observation('direct_zip_coordination', {
+    operation_id: OPERATION_ID, scope: 'target', transition: 'failed',
+    lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
+    native_error_name: 'InvalidStateError',
+  }),
   observation('retained_inventory', { transition: 'load_started' }),
   observation('retained_inventory', { transition: 'load_completed', operation_count: '3' }),
   observation('retained_action', {
@@ -709,9 +726,11 @@ describe('closed TraceEventObservationV1 boundary', () => {
     expectRejected(nonConservedInspector)
   })
 
-  it('rejects open text at every represented string and array-item position', () => {
+  it('rejects open text at closed-vocabulary string and array-item positions', () => {
     for (const candidate of VALID_OBSERVATIONS) {
       for (const path of stringLeafPaths(candidate)) {
+        if (candidate.eventName === 'direct_zip_coordination' && path[0] === 'payload' &&
+            (path[1] === 'lock_name' || path[1] === 'native_error_name')) continue
         const mutated = clone(candidate)
         setAtPath(mutated, path, PRIVATE_TEXT)
         expectRejected(mutated)
@@ -725,6 +744,35 @@ describe('closed TraceEventObservationV1 boundary', () => {
     const unknownPlan = clone(event('authority_transition', 'offers_computed'))
     ;(unknownPlan.payload.offered_plan_kinds as unknown[])[0] = PRIVATE_TEXT
     expectRejected(unknownPlan)
+  })
+
+  it('retains ZIP coordination identity through the output trace adapter and bounds optional names', () => {
+    const events: TraceEventObservationV1[] = []
+    const source = createOutputTraceSource({ current: event => events.push(event) })
+    const payload = {
+      operation_id: OPERATION_ID,
+      scope: 'target' as const,
+      transition: 'failed' as const,
+      lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
+      native_error_name: 'InvalidStateError',
+    }
+    emitOutputTrace(source, () => outputTraceEvent('direct_zip_coordination', payload))
+    expect(events).toEqual([{ eventName: 'direct_zip_coordination', payload }])
+    const snapshot = snapshotTraceEventObservationV1(events[0]!)
+    expect(isDeeplyFrozen(snapshot)).toBe(true)
+
+    for (const [key, maximumLength] of [
+      ['lock_name', 512], ['native_error_name', 128],
+    ] as const) {
+      for (const value of ['', false, 'x'.repeat(maximumLength + 1)]) {
+        const invalid = clone(events[0])
+        invalid.payload[key] = value
+        expectRejected(invalid)
+      }
+      const bounded = clone(events[0])
+      bounded.payload[key] = 'x'.repeat(maximumLength)
+      expect(() => snapshotTraceEventObservationV1(bounded as TraceEventObservationV1)).not.toThrow()
+    }
   })
 
   it('keeps activation identities canonical and distinct from protocol correlation', () => {

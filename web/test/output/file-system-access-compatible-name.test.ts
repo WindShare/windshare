@@ -1,3 +1,4 @@
+import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
 import { directoryId } from '../../src/catalog/model'
@@ -109,7 +110,7 @@ describe('File System Access compatible-name traversal', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: openLedger,
     })
@@ -172,7 +173,7 @@ describe('File System Access compatible-name traversal', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: async () => ledger,
       compatibleNamePreparation: {
@@ -335,7 +336,7 @@ describe('File System Access compatible-name traversal', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: openLedger,
       compatibleNamePreparation,
@@ -867,7 +868,7 @@ describe('File System Access terminal metadata retirement', () => {
       openSession: caughtUpOperation => openFileSystemAccessCompatibleNameCatchUp({
         intent: caughtUpOperation.intent,
         operationRepository: caughtUpOperation.repository,
-        lockManager: locks,
+        lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
         checkpointRepositoryFactory: checkpointFactory,
         openCompatibleNameLedger: async () => ledger,
         compatibleNamePreparation: {
@@ -941,7 +942,7 @@ describe('File System Access local compatible-name replay', () => {
     const intent = session.intent
     await session.close()
     const reopenOptions = {
-      intent, operationRepository: repository, lockManager: locks,
+      intent, operationRepository: repository, lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: async () => ledger,
       compatibleNamePreparation: {

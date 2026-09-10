@@ -1,6 +1,6 @@
+import { acquireFSARootMutationLease } from '../output/fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
-import { acquireFSARootMutationLease } from '../../src/output/browser/namespace-mutation'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
 import { authorizeFSAParent } from '../../src/output/capability/acquisition'

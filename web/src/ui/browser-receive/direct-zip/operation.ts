@@ -31,7 +31,7 @@ import type {
 import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../v2-lifecycle-presentation'
 import { operationDigest } from '../shared'
 import { BrowserDirectZipJournal } from './journal'
-import { BrowserDirectZipTarget, type BrowserDirectZipBinding } from './target'
+import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from './target'
 import { browserDirectZipFileSystem, randomId } from './resources'
 
 export interface BrowserDirectZipOperationOptions {
@@ -44,6 +44,7 @@ export interface BrowserDirectZipOperationOptions {
   readonly binding: BrowserDirectZipBinding
   readonly facts: DirectZipRuntimeFactsV1
   readonly close: () => Promise<void>
+  readonly namespaceMutations: DirectZipNamespaceMutationPort
   readonly trace?: OutputTraceSource
 }
 
@@ -70,6 +71,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     this.#target = new BrowserDirectZipTarget({
       binding: input.binding, fileSystem: browserDirectZipFileSystem(),
       proofs: () => this.#journal.pages.committedEpochProofs(this.#journal.checkpoint),
+      namespaceMutations: input.namespaceMutations,
     })
   }
 
