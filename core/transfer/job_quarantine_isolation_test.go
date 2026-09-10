@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
 )
 
@@ -70,7 +69,7 @@ func TestTransferJobIsolatesTransactionQuarantineAndPublishesSibling(t *testing.
 	}
 	for index, file := range []catalog.FileID{quarantinedFile, publishedFile} {
 		descriptor := jobDescriptor(t, share, file, byte(184+index), 1)
-		opened, err := NewOpenedRevision(transferID[content.LeaseID](byte(190+index)), descriptor)
+		opened, err := NewOpenedRevision(transferID[RevisionHandle](byte(190+index)), descriptor)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -153,7 +152,7 @@ func TestTransferJobStopsSiblingWorkOnUnsettledCommit(t *testing.T) {
 			for index, file := range []catalog.FileID{first, second} {
 				descriptor := jobDescriptor(t, share, file, byte(220+index), 0)
 				revisions.opened[file], _ = NewOpenedRevision(
-					transferID[content.LeaseID](byte(224+index)), descriptor,
+					transferID[RevisionHandle](byte(224+index)), descriptor,
 				)
 			}
 			rules, _ := NewSelectionRules(true, nil)

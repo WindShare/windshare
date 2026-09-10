@@ -53,7 +53,7 @@ type fileScriptedRangeReader struct {
 
 func (reader *fileScriptedRangeReader) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ RevisionHandle,
 	descriptor content.FileRevisionDescriptor,
 	requested content.Range,
 	sink RangeSink,
@@ -167,7 +167,7 @@ func TestTransferJobRejectsCrossPageDuplicateNodeIDBeforeAdmission(t *testing.T)
 	}
 	rules, _ := NewSelectionRules(true, nil)
 	descriptor := jobDescriptor(t, share, file, 1, 0)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](204), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](204), descriptor)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{
 		opened:   map[catalog.FileID]OpenedRevision{file: opened},
@@ -244,7 +244,7 @@ func TestTransferJobDoesNotAdmitOrQueueOmittedChildGeneration(t *testing.T) {
 	file := transferID[catalog.FileID](208)
 	rules, _ := NewSelectionRules(true, nil)
 	descriptor := jobDescriptor(t, share, file, 1, 0)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](209), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](209), descriptor)
 	output := newJobOutput(share)
 	revisions := &jobRevisionClient{
 		opened:   map[catalog.FileID]OpenedRevision{file: opened},
@@ -304,7 +304,7 @@ func TestOpaqueSelectionBeginsBeforeDelayedUnrelatedBranchAndKeepsItVirtual(t *t
 		t.Fatal(err)
 	}
 	descriptor := jobDescriptor(t, share, file, 1, size)
-	opened, err := NewOpenedRevision(transferID[content.LeaseID](226), descriptor)
+	opened, err := NewOpenedRevision(transferID[RevisionHandle](226), descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,7 +379,7 @@ func TestNonDurableStreamPublishesWithTransientCoverageAndEmptyCheckpoints(t *te
 	}
 	output.capabilitiesOverride = &validated
 	descriptor := jobDescriptor(t, share, file, 1, size)
-	opened, _ := NewOpenedRevision(transferID[content.LeaseID](242), descriptor)
+	opened, _ := NewOpenedRevision(transferID[RevisionHandle](242), descriptor)
 	job, err := newTestTransferJob(t, testTransferJobConfig{
 		ShareInstance: share, SyntheticRoot: root, Rules: rules,
 		Catalog: failingCatalog{

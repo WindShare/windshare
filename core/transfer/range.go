@@ -472,7 +472,7 @@ func (r *jobRun) readRequestedRange(ctx context.Context, plan plannedFile, opene
 		if err != nil {
 			return buffered, err
 		}
-		rawErr := r.job.blocks.ReadRange(ctx, opened.LeaseID, opened.Descriptor, requested, buffered)
+		rawErr := r.job.blocks.ReadRange(ctx, opened.Handle, opened.Descriptor, requested, buffered)
 		signal, busy := revisionwait.MatchCapacitySignal(rawErr)
 		if busy {
 			retry, waitErr := attempt.waitForCapacity(ctx, OpenedRevision{}, signal)

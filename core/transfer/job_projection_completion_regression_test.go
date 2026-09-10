@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/transfer/fault"
 	"github.com/windshare/windshare/core/transfer/receivecontract"
 )
@@ -194,7 +193,7 @@ func TestTransferJobSingleFileUsesReferenceParentWithoutDirectoryLifecycle(t *te
 	}
 	intent := projectionDriftIntent(t, share, root, file, sourcePath, rules)
 	descriptor := jobDescriptor(t, share, file, 0xe4, exactSize)
-	opened, err := NewOpenedRevision(transferID[content.LeaseID](0xe5), descriptor)
+	opened, err := NewOpenedRevision(transferID[RevisionHandle](0xe5), descriptor)
 	if err != nil {
 		t.Fatal(err)
 	}

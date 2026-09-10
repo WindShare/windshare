@@ -63,7 +63,9 @@ func (source revisionTransferRevisions) OpenRevision(
 	}
 	return source.opened[file], nil
 }
-func (revisionTransferRevisions) ReleaseRevision(context.Context, content.LeaseID) error { return nil }
+func (revisionTransferRevisions) ReleaseRevision(context.Context, transfer.RevisionHandle) error {
+	return nil
+}
 
 type revisionTransferRanges struct {
 	failed  catalog.FileID
@@ -72,7 +74,7 @@ type revisionTransferRanges struct {
 
 func (source revisionTransferRanges) ReadRange(
 	ctx context.Context,
-	_ content.LeaseID,
+	_ transfer.RevisionHandle,
 	descriptor content.FileRevisionDescriptor,
 	requested content.Range,
 	sink transfer.RangeSink,
@@ -421,7 +423,7 @@ func runContentTransferIsolationCase(
 			t.Fatal(descriptorErr)
 		}
 		opened[file], descriptorErr = transfer.NewOpenedRevision(
-			id16[content.LeaseID](byte(217+index)), descriptor,
+			id16[transfer.RevisionHandle](byte(217+index)), descriptor,
 		)
 		if descriptorErr != nil {
 			t.Fatal(descriptorErr)

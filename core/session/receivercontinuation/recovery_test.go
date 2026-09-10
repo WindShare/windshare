@@ -63,20 +63,20 @@ func TestInterruptedRangeRetainsOnlyAuthenticatedDeliveredIntervals(t *testing.T
 		cut.Do(func() { _ = channel.Close() })
 		return nil
 	})
-	err = s.ReadRange(context.Background(), opened.LeaseID, opened.Descriptor, content.Range{End: opened.Descriptor.ExactSize()}, sink)
+	err = s.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: opened.Descriptor.ExactSize()}, sink)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if count.Load() != 1 || !bytes.Equal(written, f.payload) {
 		t.Fatalf("replacement=%d output=%d", count.Load(), len(written))
 	}
-	if err = s.ReleaseRevision(context.Background(), opened.LeaseID); err != nil {
+	if err = s.ReleaseRevision(context.Background(), opened.Handle); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.ReleaseRevision(context.Background(), opened.LeaseID); !errors.Is(err, content.ErrInvalidLease) {
+	if err = s.ReleaseRevision(context.Background(), opened.Handle); !errors.Is(err, content.ErrInvalidLease) {
 		t.Fatal(err)
 	}
-	if err = s.ReadRange(context.Background(), opened.LeaseID, opened.Descriptor, content.Range{End: 1}, sink); !errors.Is(err, content.ErrInvalidLease) {
+	if err = s.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{End: 1}, sink); !errors.Is(err, content.ErrInvalidLease) {
 		t.Fatal(err)
 	}
 }
@@ -119,20 +119,20 @@ func TestReplacementRevisionDriftRejectsRetainedProgress(t *testing.T) {
 	first := content.Range{End: 1024}
 	var delivered uint64
 	sink := transfer.RangeSinkFunc(func(_ context.Context, _ uint64, data []byte) error { delivered += uint64(len(data)); return nil })
-	if err = s.ReadRange(context.Background(), opened.LeaseID, opened.Descriptor, first, sink); err != nil {
+	if err = s.ReadRange(context.Background(), opened.Handle, opened.Descriptor, first, sink); err != nil {
 		t.Fatal(err)
 	}
 	dependencies, _ := runtime.TransferDependencies()
-	if err = dependencies.ReleaseRevision(context.Background(), opened.LeaseID); err != nil {
+	if err = dependencies.ReleaseRevision(context.Background(), opened.Handle); err != nil {
 		t.Fatal(err)
 	}
 	_ = wire.Close()
 	<-runtime.Done()
-	err = s.ReadRange(context.Background(), opened.LeaseID, opened.Descriptor, content.Range{Offset: first.End, End: opened.Descriptor.ExactSize()}, sink)
+	err = s.ReadRange(context.Background(), opened.Handle, opened.Descriptor, content.Range{Offset: first.End, End: opened.Descriptor.ExactSize()}, sink)
 	if !errors.Is(err, content.ErrRevisionStale) || delivered != first.End {
 		t.Fatalf("drift=%v delivered=%d", err, delivered)
 	}
-	if err = s.ReleaseRevision(context.Background(), opened.LeaseID); err != nil {
+	if err = s.ReleaseRevision(context.Background(), opened.Handle); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -152,7 +152,7 @@ func TestFreshLeaseCannotCertifyDifferentRetainedRevision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = dependencies.ReleaseRevision(context.Background(), opened.LeaseID) }()
+	defer func() { _ = dependencies.ReleaseRevision(context.Background(), opened.Handle) }()
 	changedRevision := opened.Descriptor.FileRevision()
 	changedRevision[0] ^= 1
 	changed, err := content.NewFileRevisionDescriptor(opened.Descriptor.ShareInstance(), file, changedRevision, opened.Descriptor.Geometry(), opened.Descriptor.ModifiedTime())

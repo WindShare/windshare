@@ -16,9 +16,9 @@ type changingJobSession struct {
 
 func (s *changingJobSession) ProtocolSessionID() protocolsession.ProtocolSessionID { return s.id }
 
-type capacityRangeFunc func(context.Context, content.LeaseID, content.FileRevisionDescriptor, content.Range, RangeSink) error
+type capacityRangeFunc func(context.Context, RevisionHandle, content.FileRevisionDescriptor, content.Range, RangeSink) error
 
-func (f capacityRangeFunc) ReadRange(ctx context.Context, l content.LeaseID, d content.FileRevisionDescriptor, r content.Range, s RangeSink) error {
+func (f capacityRangeFunc) ReadRange(ctx context.Context, l RevisionHandle, d content.FileRevisionDescriptor, r content.Range, s RangeSink) error {
 	return f(ctx, l, d, r, s)
 }
 
@@ -28,9 +28,9 @@ func TestReplacementLeaseCapacityUsesExistingJobBudgetAndRebuildsOnlyUncommitted
 	job, _ := newCapacityTransferJob(t, []catalog.FileID{file}, &capacityRevisionScript{}, wait, nil)
 	session := &changingJobSession{id: transferID[protocolsession.ProtocolSessionID](89)}
 	job.session = session
-	opened := OpenedRevision{LeaseID: transferID[content.LeaseID](86), Descriptor: jobDescriptor(t, transferID[catalog.ShareInstance](80), file, 88, 6)}
+	opened := OpenedRevision{Handle: transferID[RevisionHandle](86), Descriptor: jobDescriptor(t, transferID[catalog.ShareInstance](80), file, 88, 6)}
 	calls := 0
-	job.blocks = capacityRangeFunc(func(ctx context.Context, _ content.LeaseID, _ content.FileRevisionDescriptor, _ content.Range, sink RangeSink) error {
+	job.blocks = capacityRangeFunc(func(ctx context.Context, _ RevisionHandle, _ content.FileRevisionDescriptor, _ content.Range, sink RangeSink) error {
 		calls++
 		if calls == 1 {
 			session.id = transferID[protocolsession.ProtocolSessionID](91)
