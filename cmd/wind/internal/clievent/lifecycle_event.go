@@ -261,6 +261,7 @@ type FilesystemOutputCounters struct {
 }
 
 type FilesystemOutputSpec struct {
+	Capabilities        FilesystemDestinationCapabilities
 	Operation           FilesystemOutputOperation
 	ReceiveIntent       ReceiveIntentDigest
 	ReceiveOperation    ReceiveOperationID
@@ -292,7 +293,8 @@ func NewFilesystemOutputObserved(spec FilesystemOutputSpec) (FilesystemOutputObs
 }
 
 func validFilesystemOutputSpec(spec FilesystemOutputSpec) bool {
-	return validFilesystemOutputNames(spec) &&
+	return (spec.Capabilities == (FilesystemDestinationCapabilities{}) || spec.Capabilities.Valid()) &&
+		validFilesystemOutputNames(spec) &&
 		spec.Failure.Valid() == (spec.FailureStage != 0) &&
 		(spec.NativeLockScope != 0) == (spec.NativeLockMilestone != 0) &&
 		validFilesystemRuntimeDecision(spec) &&
@@ -370,6 +372,10 @@ func (value FilesystemOutputObserved) ReceiveIntentDigest() (ReceiveIntentDigest
 func (value FilesystemOutputObserved) OutputSessionID() (OutputSessionID, bool) {
 	return value.spec.OutputSession, value.spec.OutputSession.Valid()
 }
+func (value FilesystemOutputObserved) DestinationCapabilities() (FilesystemDestinationCapabilities, bool) {
+	return value.spec.Capabilities, value.spec.Capabilities.Valid()
+}
+
 func (value FilesystemOutputObserved) Operation() FilesystemOutputOperation {
 	return value.spec.Operation
 }

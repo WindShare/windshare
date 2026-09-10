@@ -58,9 +58,20 @@ export function assertCandidateFence(
   candidate: DirectZipCommitCandidateV1,
   fence: DirectZipJournalFenceV1,
 ): void {
-  if (candidate.operationId !== fence.operationId || candidate.leaseId !== fence.leaseId ||
+  assertCandidateCheckpointFence(candidate, fence)
+  if (candidate.leaseId !== fence.leaseId) {
+    throw new TypeError('Direct ZIP candidate escaped its admission lease')
+  }
+}
+
+/** The creating lease is provenance; recovery is authorized by the current state/lease CAS. */
+export function assertCandidateCheckpointFence(
+  candidate: DirectZipCommitCandidateV1,
+  fence: DirectZipJournalFenceV1,
+): void {
+  if (candidate.operationId !== fence.operationId ||
       candidate.predecessorCheckpointGeneration !== fence.checkpointGeneration) {
-    throw new TypeError('Direct ZIP candidate escaped its journal fence')
+    throw new TypeError('Direct ZIP candidate escaped its checkpoint fence')
   }
 }
 
@@ -250,6 +261,7 @@ export function assertRecoveryLifecycleCut(
     }
     return
   }
+  if (assertTerminalRecoveryLifecycle(lifecycle, state, candidate)) return
   if (candidate !== undefined) {
     throw new TypeError('Direct ZIP candidate recovery cannot clear its gate before resolution')
   }
@@ -266,6 +278,27 @@ export function assertRecoveryLifecycleCut(
       lifecycle.checkpointPhase !== state.checkpoint.phase) {
     throw new TypeError('Direct ZIP recovery lifecycle does not retain its checkpoint')
   }
+}
+
+function assertTerminalRecoveryLifecycle(
+  lifecycle: ReceiveLifecycleState,
+  state: DirectZipStateRowV1,
+  candidate: DirectZipCommitCandidateV1 | undefined,
+): boolean {
+  if (lifecycle.kind === 'published') {
+    if (candidate !== undefined || state.checkpoint.closingReplay?.completion === undefined) {
+      throw new TypeError('Direct ZIP publication requires a committed completion')
+    }
+    return true
+  }
+  if (lifecycle.kind === 'discarded' || lifecycle.kind === 'restart-required') return true
+  if (lifecycle.kind === 'needs-attention') {
+    if (lifecycle.lastVerifiedRecordDigest !== state.checkpointDigest) {
+      throw new TypeError('Direct ZIP attention state lost its retained checkpoint')
+    }
+    return true
+  }
+  return false
 }
 
 export function assertRetirementCheckpointCut(

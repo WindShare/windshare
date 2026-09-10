@@ -414,3 +414,41 @@ func TestPartialFileTransactionWrapperNeverManufacturesClosedAuthority(t *testin
 		t.Fatalf("nil strategy wrapper = (%T, %v)", wrapped, err)
 	}
 }
+
+func TestProcessOwnedFileReleasesOwnerExactlyOnceWithoutRestartTicket(t *testing.T) {
+	native := &liveTransactionFile{data: make([]byte, 4)}
+	object, err := checkpointmodel.ObjectIDFromBytes(bytes.Repeat([]byte{0x41}, transfer.OwnedObjectIdentityBytes))
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := 0
+	owned, err := NewProcessOwnedFile(object, native, func() error { released++; return native.Close() })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned.CleanupTicket().Valid() || owned.NativeFile() != native {
+		t.Fatal("process ownership manufactured restart evidence")
+	}
+	if err := owned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := owned.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if released != 1 || !native.closed {
+		t.Fatalf("releases=%d closed=%v", released, native.closed)
+	}
+	for _, invalid := range []struct {
+		object  checkpointmodel.ObjectID
+		file    outputcap.MutableFile
+		release func() error
+	}{
+		{object: checkpointmodel.ObjectID{}, file: native, release: native.Close},
+		{object: object, release: native.Close},
+		{object: object, file: native},
+	} {
+		if _, err := NewProcessOwnedFile(invalid.object, invalid.file, invalid.release); !errors.Is(err, ErrInvalidConfiguration) {
+			t.Fatalf("invalid process ownership=%v", err)
+		}
+	}
+}

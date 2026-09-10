@@ -118,7 +118,7 @@ func TestLinuxSetHandleModifiedTimeAndErrors(t *testing.T) {
 
 	// Directory and Regular file setModifiedTime
 	file := &linuxOutputRegularFile{
-		system: root.system, fd: linuxAuthorityRegularFileFD, certificate: root.certificate,
+		system: root.system, fd: linuxAuthorityRegularFileFD, binding: root.binding,
 		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
@@ -164,19 +164,19 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 	// nil statx
 	origStatx := root.system.statx
 	root.system.statx = nil
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("nil statx error = %v, want unsupported", err)
 	}
 	root.system.statx = origStatx
 
 	// Wrong object type
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFREG, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFREG, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("wrong object type error = %v, want unsafe", err)
 	}
 
 	// nil geteuid
 	root.system.geteuid = nil
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("nil geteuid error = %v, want unsupported", err)
 	}
 	root.system.geteuid = func() int { return 0 }
@@ -184,7 +184,7 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 	// UID mismatch
 	harness.ownerUID = 1000
 	root.system.geteuid = func() int { return 2000 }
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("UID mismatch error = %v, want unsafe", err)
 	}
 	harness.ownerUID = 0
@@ -193,12 +193,12 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 	// statx errors
 	for _, sysErr := range []error{unix.ENOSYS, unix.EINVAL, unix.EOPNOTSUPP} {
 		root.system.statx = func(int, string, int, int, *unix.Statx_t) error { return sysErr }
-		if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
+		if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
 			t.Fatalf("statx error %v produced %v, want unsupported", sysErr, err)
 		}
 	}
 	root.system.statx = func(int, string, int, int, *unix.Statx_t) error { return unix.EIO }
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); err == nil || errors.Is(err, errLinuxOutputUnsupported) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); err == nil || errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("statx generic error produced %v", err)
 	}
 
@@ -208,7 +208,7 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 		stat.Mask &^= unix.STATX_INO
 		return nil
 	}
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("missing STATX_INO error = %v, want unsupported", err)
 	}
 
@@ -218,7 +218,7 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 		stat.Mask &^= unix.STATX_BTIME
 		return nil
 	}
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("missing STATX_BTIME error = %v, want unsupported", err)
 	}
 
@@ -232,7 +232,7 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 		}
 		return nil
 	}
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("changed inode error = %v, want unsafe", err)
 	}
 
@@ -242,7 +242,7 @@ func TestLinuxRequireExtendedTimestampLayoutBranches(t *testing.T) {
 		stat.Btime.Nsec = 1_000_000_000
 		return nil
 	}
-	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.certificate, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
+	if err := linuxRequireExtendedTimestampLayout(root.system, root.fd, root.binding, unix.S_IFDIR, "test"); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("invalid Btime.Nsec error = %v, want unsafe", err)
 	}
 }
@@ -254,7 +254,7 @@ func TestLinuxReadHandleMetadataAndErrors(t *testing.T) {
 
 	// statx failure
 	root.system.statx = func(int, string, int, int, *unix.Statx_t) error { return unix.EIO }
-	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFDIR); err == nil {
+	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFDIR); err == nil {
 		t.Fatal("expected error on statx EIO")
 	}
 
@@ -264,7 +264,7 @@ func TestLinuxReadHandleMetadataAndErrors(t *testing.T) {
 		stat.Mask &^= unix.STATX_SIZE
 		return nil
 	}
-	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsupported) {
+	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("missing STATX_SIZE error = %v, want unsupported", err)
 	}
 
@@ -274,13 +274,13 @@ func TestLinuxReadHandleMetadataAndErrors(t *testing.T) {
 		stat.Mnt_id = 9999
 		return nil
 	}
-	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsafe) {
+	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("mount mismatch error = %v, want unsafe", err)
 	}
 
 	// wrong object kind
 	root.system.statx = origStatx
-	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFREG); !errors.Is(err, errLinuxOutputUnsafe) {
+	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFREG); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("wrong kind error = %v, want unsafe", err)
 	}
 
@@ -290,7 +290,7 @@ func TestLinuxReadHandleMetadataAndErrors(t *testing.T) {
 		stat.Mtime.Nsec = 1_000_000_000
 		return nil
 	}
-	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsafe) {
+	if _, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFDIR); !errors.Is(err, errLinuxOutputUnsafe) {
 		t.Fatalf("invalid mtime.Nsec error = %v, want unsafe", err)
 	}
 
@@ -302,7 +302,7 @@ func TestLinuxReadHandleMetadataAndErrors(t *testing.T) {
 		stat.Mtime.Nsec = 200
 		return nil
 	}
-	meta, err := linuxReadHandleMetadata(root.system, root.fd, root.certificate, unix.S_IFDIR)
+	meta, err := linuxReadHandleMetadata(root.system, root.fd, root.binding, unix.S_IFDIR)
 	if err != nil {
 		t.Fatalf("valid metadata error = %v", err)
 	}
@@ -341,7 +341,7 @@ func TestLinuxHandlesExactModeTruncateSyncAndPinnedEntry(t *testing.T) {
 
 	// Regular file operations
 	file := &linuxOutputRegularFile{
-		system: root.system, fd: linuxAuthorityRegularFileFD, certificate: root.certificate,
+		system: root.system, fd: linuxAuthorityRegularFileFD, binding: root.binding,
 		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,

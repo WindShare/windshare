@@ -115,12 +115,14 @@ const (
 	SenderRevisionInvalidationRejection
 	SenderRevisionMetadataBudgetStop
 	SenderRevisionLeaseSettlement
+	SenderRevisionOpenHandleBound
+	SenderRevisionOpenRejected
 )
 
 func (stage SenderRevisionStage) Name() (string, bool) {
 	names := [...]string{
 		"", "active_reuse", "clean_release", "reopen_match", "mismatch_invalidation",
-		"unavailable_retry", "invalidation_rejection", "metadata_budget_stop", "lease_settlement",
+		"unavailable_retry", "invalidation_rejection", "metadata_budget_stop", "lease_settlement", "open_handle_bound", "open_rejected",
 	}
 	if stage == 0 || int(stage) >= len(names) {
 		return "", false

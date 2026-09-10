@@ -8,6 +8,8 @@ Downloads count the selected contents while receiving files. The task shows rece
 
 The primary download action recommends an available result. **Other ways to save** explains alternatives, including ZIP packaging, extra storage, and a later Save step. Supported browsers start the authorized download when ready. ?Download started? means the browser took over; it does not prove the file was saved.
 
+Direct ZIP saves into the chosen folder as files arrive. Reopening requires permission for the destination and checks the ZIP's ownership and checkpoint data before continuing. WindShare coordinates its own tabs; avoid editing or replacing an unfinished ZIP from another application.
+
 Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A failed continuation keeps previously received ZIP data. If finishing takes too long, WindShare waits for active save operations to finish safely and retains a completed result for saving. A saved copy uses additional device space.
 
 Wait for **Pause** to finish before leaving. A successful pause commits received progress for resumable saving methods. A network interruption while the page remains open is different from a browser crash or forced close: after an unexpected exit, only verified checkpoints can resume.

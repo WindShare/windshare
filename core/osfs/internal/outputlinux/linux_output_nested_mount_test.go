@@ -48,7 +48,7 @@ func TestLinuxDirectoryOpenRejectsNestedMountIdentity(t *testing.T) {
 			return statErr
 		}
 		if fd == nestedFD && path == "" && mask&unix.STATX_MNT_ID_UNIQUE != 0 {
-			stat.Mnt_id = platform.root.native.certificate.mount.uniqueMountID + 1
+			stat.Mnt_id = platform.root.native.binding.mount.uniqueMountID + 1
 			mismatchCalls++
 		}
 		return nil

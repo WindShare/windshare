@@ -252,7 +252,7 @@ func linuxPlacementRestartIdentity(
 	}
 }
 
-func newLinuxPlacementTestHarness() (*linuxPlacementTestHarness, linuxOutputCertificate) {
+func newLinuxPlacementTestHarness() (*linuxPlacementTestHarness, linuxOutputBinding) {
 	node := func(fd int, inode uint64, generation uint32, owner uint32, mode uint16) *linuxPlacementTestNode {
 		return &linuxPlacementTestNode{
 			fd: fd, inode: inode, generation: generation, ownerUID: owner,
@@ -274,20 +274,19 @@ func newLinuxPlacementTestHarness() (*linuxPlacementTestHarness, linuxOutputCert
 		},
 		root: root, namedObservations: make(map[string]int),
 	}
-	return harness, harness.certificate(output)
+	return harness, harness.binding(output)
 }
 
-func (harness *linuxPlacementTestHarness) certificate(node *linuxPlacementTestNode) linuxOutputCertificate {
+func (harness *linuxPlacementTestHarness) binding(node *linuxPlacementTestNode) linuxOutputBinding {
 	restart := linuxPlacementRestartIdentity(node.inode, node.birthNanoseconds, node.generation)
-	return linuxOutputCertificate{
+	return linuxOutputBinding{filesystem: linuxOutputFilesystem{magic: linuxExt4SuperMagic, name: "ext4"},
 		mount: restart.mount,
 		rootObject: linuxOpenHandleIdentity{
 			mountID:     linuxPlacementTestUniqueMount,
 			deviceMajor: 8, deviceMinor: 1,
 			inode: node.inode, kind: unix.S_IFDIR,
 		},
-		rootRestartIdentity: restart,
-		durability:          linuxOutputProcessRestartDurability,
+		restart: &linuxOutputRestartCertificate{rootIdentity: restart, durability: linuxOutputProcessRestartDurability},
 	}
 }
 

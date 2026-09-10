@@ -118,7 +118,7 @@ func TestLinuxExactPrivateAuthorityRejectsForeignOwnedObjects(t *testing.T) {
 	}
 
 	file := &linuxOutputRegularFile{
-		system: root.system, fd: linuxAuthorityRegularFileFD, certificate: root.certificate,
+		system: root.system, fd: linuxAuthorityRegularFileFD, binding: root.binding,
 		object: linuxOpenHandleIdentity{
 			mountID: linuxTestUniqueMountID, deviceMajor: linuxTestDeviceMajor,
 			deviceMinor: linuxTestDeviceMinor, inode: linuxTestRootInode + 1,
@@ -149,7 +149,7 @@ func TestLinuxOpenObjectIdentityRequiresOwnerUID(t *testing.T) {
 		stat.Mask &^= unix.STATX_UID
 		return nil
 	}
-	if _, err := linuxVerifyOpenObject(root.system, root.fd, root.certificate); !errors.Is(err, errLinuxOutputUnsupported) {
+	if _, err := linuxVerifyOpenObject(root.system, root.fd, root.binding); !errors.Is(err, errLinuxOutputUnsupported) {
 		t.Fatalf("statx without owner UID error = %v", err)
 	}
 }

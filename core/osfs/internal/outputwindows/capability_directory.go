@@ -403,6 +403,33 @@ func (directory *windowsOutputV3Directory) CreateOrdinaryOutputStage(
 	return windowsOutputV3Error(directory.native.moveLiveStageNoReplace(stage, proof.native, name))
 }
 
+// CreateProcessStage preserves final-parent inheritance while returning the
+// original live handle. No persisted ticket is needed to own this exact object.
+func (directory *windowsOutputV3Directory) CreateProcessStage(
+	stageDirectory outputcap.Directory,
+	name string,
+	size int64,
+) (outputcap.MutableFile, error) {
+	proof, ok := stageDirectory.(*windowsOutputV3Directory)
+	if !ok || directory == nil || directory.native == nil || directory.native.private ||
+		proof == nil || proof.native == nil || !proof.native.private || name == "" || size < 0 {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	stage, err := directory.native.createPublicInheritedDeleteOnCloseFile()
+	if err != nil {
+		return nil, windowsOutputV3Error(err)
+	}
+	if err := stage.Truncate(size); err != nil {
+		return nil, windowsOutputV3Error(errors.Join(err, stage.Close()))
+	}
+	if err := directory.native.moveLiveStageNoReplace(stage, proof.native, name); err != nil {
+		// A late failure can follow installation. Preserve the original object
+		// witness so the process owner can clean only its exact stage.
+		return newWindowsOutputV3MutableFile(stage, false), windowsOutputV3Error(err)
+	}
+	return newWindowsOutputV3MutableFile(stage, false), nil
+}
+
 func (directory *windowsOutputV3Directory) CreateLiveCleanupStage(
 	proofDirectory outputcap.Directory,
 	ticket checkpointmodel.LiveCleanupTicket,

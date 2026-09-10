@@ -4,7 +4,7 @@ import { offerArtifacts } from '../../src/output/planning'
 import { compareSavingTransition, presentSavingActions } from '../../src/ui/saving'
 import {
   COMPLETE_DISCOVERY, directZipTarget, environment, fsaTarget, handoffTarget, identity,
-  nativeTarget, portableOffer, projection, reviewedDirectZipSupport, singleFileProof, treeProof, workspaceOffer,
+  nativeTarget, portableOffer, projection, runtimeDirectZipSupport, singleFileProof, treeProof, workspaceOffer,
 } from '../output/planning/fixture'
 
 async function selection() {
@@ -70,7 +70,7 @@ describe('saving action presenter over eligible offers', () => {
       projection(await selection(), treeProof(), 1024n), { kind: 'discovering' },
       environment({
         targets: [directZipTarget(), handoffTarget()], workspace: workspaceOffer(),
-        directZipSupport: reviewedDirectZipSupport(),
+        directZipSupport: runtimeDirectZipSupport(),
         zipRecommendationPolicy: { version: 1, kind: 'available', workspacePeakBytesThreshold: 1_000_000n, policyDigest: identity(89, 32) },
       }),
     )

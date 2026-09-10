@@ -1,6 +1,9 @@
 import {
   INDEXEDDB_BY_OPERATION_INDEX,
   INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
+  INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE,
+  INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE,
+  INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE,
   INDEXEDDB_DIRECT_ZIP_STATE_STORE,
   INDEXEDDB_RECEIVE_HANDLE_STORE,
   INDEXEDDB_RECEIVE_LEASE_STORE,
@@ -30,6 +33,8 @@ import type { DirectZipBootstrapCandidateCutV1, DirectZipBootstrapLeaseReplaceme
 import {
   DirectZipJournalConcurrencyError,
   abortQuietly,
+  directZipPageStore,
+  assertLifecycleForCheckpoint,
   isHandleForOperation,
   sameBootstrapReservationAuthority,
   sameCandidateRow,
@@ -40,6 +45,7 @@ import {
   sameStateRow,
 } from './authority'
 import type { IndexedDbDirectZipJournalStorage } from './storage'
+import { validateBootstrapPages } from './bootstrap-pages'
 
 export class IndexedDbDirectZipBootstrapTransactions {
   readonly #storage: IndexedDbDirectZipJournalStorage
@@ -216,6 +222,7 @@ export class IndexedDbDirectZipBootstrapTransactions {
     this.#storage.assertOpen()
     const candidate = await validateDirectZipBootstrapCandidateV1(cut.candidate)
     const checkpoint = await validateDirectZipCheckpointV1(cut.checkpoint)
+    const pages = await validateBootstrapPages(candidate, checkpoint, cut.pages ?? [])
     const operationRecord = await validatePersistedReceiveRecord(cut.operationRecord)
     const lifecycleRecord = await validatePersistedReceiveRecord(cut.lifecycleRecord)
     const operation = await decodeStoredReceiveOperation(operationRecord)
@@ -224,10 +231,11 @@ export class IndexedDbDirectZipBootstrapTransactions {
     const lifecycleProjection = await storedReceiveLifecycleState(cut.lifecycle)
     const lease = validateReceiveOperationLeaseRecord(cut.lease)
     const handles = cut.handles.map(validateReceiveOperationHandleRecord)
+    assertLifecycleForCheckpoint(lifecycle, checkpoint, {
+      operationId: candidate.operationId, leaseId: candidate.leaseId, checkpointGeneration: 1n,
+    })
     if (checkpoint.operationId !== candidate.operationId || checkpoint.generation !== 1n ||
         checkpoint.predecessorCheckpointDigest !== undefined || checkpoint.phase !== 'between-members' ||
-        checkpoint.journalUsage.memberCount !== 0n ||
-        checkpoint.journalUsage.canonicalMetadataBytes !== 0n ||
         operationProjection.digest !== operationRecord.digest ||
         !samePersistedRecordRow(lifecycleProjection, lifecycleRecord) ||
         cut.operation.digest !== operation.digest ||
@@ -253,20 +261,19 @@ export class IndexedDbDirectZipBootstrapTransactions {
         !sameJournalPolicies(checkpoint.policies, candidate.policies) ||
         checkpoint.targetBindingDigest !== candidate.targetBindingDigest ||
         checkpoint.receiveIntentDigest !== operation.receiveIntentDigest ||
-        checkpoint.entryOrdinal !== 0n || checkpoint.currentMember !== undefined ||
-        checkpoint.layoutPages.pageCount !== 0n || checkpoint.centralPages.pageCount !== 0n ||
-        checkpoint.epochPages.pageCount !== 0n ||
+        checkpoint.currentMember !== undefined ||
         lifecycle.operationId !== candidate.operationId ||
         lifecycle.receiveIntentDigest !== operation.receiveIntentDigest ||
-        lifecycle.kind !== 'receiving' || lifecycle.activeLeaseId !== candidate.leaseId ||
         lease.operationId !== candidate.operationId || lease.leaseId !== candidate.leaseId ||
-        candidate.leaseGeneration !== 1n ||
         handles.some(handle => handle.operationId !== candidate.operationId)) {
       throw new TypeError('Direct ZIP bootstrap commit does not promote one frozen operation')
     }
     const state = await createDirectZipStateRowV1(checkpoint, lease.leaseId)
     const transaction = this.#storage.database.transaction([
       INDEXEDDB_DIRECT_ZIP_CANDIDATE_STORE,
+      INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE,
+      INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE,
+      INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE,
       INDEXEDDB_DIRECT_ZIP_STATE_STORE,
       INDEXEDDB_RECEIVE_RECORD_STORE,
       INDEXEDDB_RECEIVE_HANDLE_STORE,
@@ -292,6 +299,7 @@ export class IndexedDbDirectZipBootstrapTransactions {
       if (existingState !== undefined) {
         throw new DirectZipJournalConcurrencyError('Direct ZIP bootstrap state already exists')
       }
+      for (const page of pages) transaction.objectStore(directZipPageStore(page.pageKind)).add(page)
       transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).add(operationRecord)
       transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).add(lifecycleRecord)
       for (const handle of handles) {

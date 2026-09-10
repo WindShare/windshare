@@ -200,7 +200,7 @@ function chooseDirectZipRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
 ): DirectResumableZipMaterializationRoute | null {
-  if (environment.directZipSupport.kind !== 'reviewed-supported') return null
+  if (environment.directZipSupport.kind !== 'runtime-supported') return null
   const target = environment.targets.find((candidate) =>
     candidate.kind === 'fsa-owned-file-target' &&
     outputLowerBoundFits(candidate.hardMaximumOutputBytes, byteCountLowerBound))

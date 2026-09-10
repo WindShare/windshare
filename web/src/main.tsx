@@ -12,6 +12,7 @@ import {
   createBrowserReceiveComposition,
   type BrowserReceiveWindow,
 } from './ui/v2-browser-receive-composition'
+import { createBrowserDirectZipComposition } from './ui/browser-receive/direct-zip/production'
 import { captureV2Location, V2ReceiverController } from './ui/v2-controller'
 import { V2BrowserReceiverGateway } from './ui/v2-gateway'
 import {
@@ -52,6 +53,7 @@ const receiveMutations = createBrowserReceiveOperationMutationPort({ outputTrace
 const receiveComposition = createBrowserReceiveComposition(
   window as BrowserReceiveWindow,
   {
+    directZip: createBrowserDirectZipComposition(window as BrowserReceiveWindow, { outputTrace }),
     resumeMutations: receiveMutations,
     outputTrace,
     localOutputFailures: diagnostics.localOutputFailures,

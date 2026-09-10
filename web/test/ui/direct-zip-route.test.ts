@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
-import type { ReviewedDirectZipRuntimeFactsV1 } from '../../src/output/direct-zip/session'
+import type { DirectZipRuntimeFactsV1 } from '../../src/output/direct-zip/session'
 import type { OfferedArtifactChoice } from '../../src/output/planning'
 import type { ReceiveOperationMutationPort } from '../../src/output/resume/authority'
 import type {
@@ -268,14 +268,14 @@ function resumableDirectZipLifecycle(): ReceiveLifecycleState {
 function installedRoute(
   runtimeOverrides: Partial<BrowserDirectZipCompositionPort['runtime']> = {},
 ): InstalledBrowserDirectZipRoute {
-  return Object.freeze({ directZip: directZipPort(runtimeOverrides), reviewed: reviewed() })
+  return Object.freeze({ directZip: directZipPort(runtimeOverrides), facts: facts() })
 }
 
 function directZipPort(
   runtimeOverrides: Partial<BrowserDirectZipCompositionPort['runtime']> = {},
 ): BrowserDirectZipCompositionPort {
   return {
-    evidence: { read: vi.fn() },
+    capabilities: { read: vi.fn() },
     runtime: {
       startFresh: () => authority(),
       dispatchBootstrapCandidate: vi.fn(async () => undefined),
@@ -295,7 +295,7 @@ function authority(): V2ArtifactPresentationAuthority {
 }
 
 function offered(): OfferedArtifactChoice {
-  const support = reviewed().support
+  const support = facts().support
   return {
     choice: { choiceId: CHOICE },
     route: {
@@ -305,19 +305,18 @@ function offered(): OfferedArtifactChoice {
   } as unknown as OfferedArtifactChoice
 }
 
-function reviewed(): ReviewedDirectZipRuntimeFactsV1 {
+function facts(): DirectZipRuntimeFactsV1 {
   const digest = 'digest'
   return {
     support: {
-      kind: 'reviewed-supported',
-      supportMatrixDigest: digest,
-      browserBinaryDigest: digest,
-      browserVersion: '1',
-      operatingSystemBuild: 'os',
-      filesystemProfile: 'fs',
-      rawEvidenceDigest: digest,
-      requiredFeatureFactsDigest: digest,
-      recommendationPolicyDigest: digest,
+      kind: 'runtime-supported',
+      capabilityDigest: digest,
+      authority: {
+        kind: 'owned-target-session-v1',
+        recovery: 'persisted-handle-and-verified-checkpoint',
+        replacement: 'coordinated-no-replace',
+        cleanup: 'ownership-proof-required',
+      },
       policies: {
         zipEncoding: digest,
         layout: digest,

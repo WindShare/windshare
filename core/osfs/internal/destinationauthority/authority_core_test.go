@@ -100,15 +100,13 @@ func TestBindDestinationChecksOptionalNativeMethodSetsOnlyWhenClaimed(t *testing
 	cleanup, _ := outputcap.UnsupportedCapability(outputcap.CapabilityReasonCleanupOwnershipUnknown)
 	supported := outputcap.SupportedCapability()
 	platform.capabilities, _ = outputcap.NewDestinationCapabilities(unsafe, supported, supported, cleanup)
+	beforeGuards := platform.guardCalls
 	authority, err := BindDestination(BindConfig{
 		Platform: platform, DisplayPath: filepath.Clean(t.TempDir()),
 		OpenLiveCleanupJournal: fakeJournalOpener(&destinationJournal{}),
 	})
-	if err != nil {
-		t.Fatalf("unsupported optional methods must not be asserted: %v", err)
-	}
-	if err := authority.Close(); err != nil {
-		t.Fatal(err)
+	if authority != nil || !errors.Is(err, outputcap.ErrOrdinaryOutputUnsupported) || platform.guardCalls != beforeGuards {
+		t.Fatalf("unsafe destination must be rejected before namespace work: %v", err)
 	}
 }
 

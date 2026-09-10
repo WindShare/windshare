@@ -367,6 +367,17 @@ func TestGetFailureProjectionDoesNotRenderProviderText(t *testing.T) {
 	}
 }
 
+func TestGetLiveOnlyWarningExplainsRecoveryWithoutReportingUnsafeOutput(t *testing.T) {
+	runtime, stderr := newGetReportingRuntime(t, false, false)
+	(getObservation{runtime: runtime}).warningCode(clievent.FailureOutputRecoveryUnavailable)
+	runtime.Close()
+	output := stderr.String()
+	if !strings.Contains(output, "without restart recovery") || !strings.Contains(output, "unfinished files") ||
+		strings.Contains(output, "could not be updated safely") {
+		t.Fatalf("live-only warning=%q", output)
+	}
+}
+
 func TestGetWarningUsesClosedFailureVocabulary(t *testing.T) {
 	runtime, stderr := newGetReportingRuntime(t, false, false)
 	(getObservation{runtime: runtime}).warningCode(clievent.FailureOutputUnsupportedFilesystem)

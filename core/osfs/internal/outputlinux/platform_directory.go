@@ -443,11 +443,38 @@ func (directory *linuxV3Directory) CreateOrdinaryOutputStage(
 		return errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: invalid Linux ordinary-output stage authority"))
 	}
-	created, err := directory.native.createLiveCleanupStage(proof.native, name, int64(exactSize))
-	if err != nil {
-		return linuxV3Error(err)
+	created, err := directory.native.createPublicProfileStage(proof.native, name, int64(exactSize))
+	if created != nil {
+		err = errors.Join(err, created.close())
 	}
-	return linuxV3Error(created.close())
+	return linuxV3Error(err)
+}
+
+// CreateProcessStage retains the only deletion authority for its private name.
+// Public metadata originates from the final parent through O_TMPFILE; keeping
+// the inode handle across installation failures avoids guessing at owned files.
+func (directory *linuxV3Directory) CreateProcessStage(
+	stageDirectory outputcap.Directory,
+	name string,
+	size int64,
+) (outputcap.MutableFile, error) {
+	stage, ok := stageDirectory.(*linuxV3Directory)
+	if !ok || directory == nil || directory.native == nil || stage == nil || stage.native == nil {
+		return nil, outputcap.ErrUnsafeNamespace
+	}
+	parent, err := stage.native.Duplicate()
+	if err != nil {
+		return nil, linuxV3Error(err)
+	}
+	created, createErr := directory.native.createPublicProfileStage(stage.native, name, size)
+	if created == nil {
+		return nil, linuxV3Error(errors.Join(createErr, parent.close()))
+	}
+	file := &linuxV3MutableFile{state: &linuxV3FileState{
+		native: created,
+		origin: &linuxV3FileOrigin{parent: parent, name: name},
+	}}
+	return file, linuxV3Error(createErr)
 }
 
 func (directory *linuxV3Directory) CreateLiveCleanupStage(
@@ -462,12 +489,12 @@ func (directory *linuxV3Directory) CreateLiveCleanupStage(
 		return errors.Join(outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: invalid Linux live-cleanup stage authority"))
 	}
-	created, err := directory.native.createLiveCleanupStage(
+	created, err := directory.native.createPublicProfileStage(
 		proof.native, ticket.StageName(), int64(ticket.ExactSize()))
-	if err != nil {
-		return linuxV3Error(err)
+	if created != nil {
+		err = errors.Join(err, created.close())
 	}
-	return linuxV3Error(created.close())
+	return linuxV3Error(err)
 }
 
 func (directory *linuxV3Directory) RemoveLiveCleanupStage(
