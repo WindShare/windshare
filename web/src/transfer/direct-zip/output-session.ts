@@ -132,6 +132,13 @@ export class DirectZipTransferOutputV1 implements
       return 'replayed'
     }
     if (ordinal !== this.#nextOrdinal) throw new Error('direct ZIP traversal skipped an archive ordinal')
+    // Seeing a successor is the first point where a member-boundary checkpoint
+    // cannot become an unnecessary full-prefix reopen solely for finalization.
+    const cut = await this.#writer.automaticCheckpoint()
+    if (cut.kind === 'replay-required') {
+      throw new Error('direct ZIP member boundary requires candidate replay')
+    }
+    signal.throwIfAborted()
     if (member.kind === 'directory') {
       const plan = this.#plan(ordinal, member, this.#workingOffset)
       await this.#writer.addDirectory({
@@ -166,7 +173,7 @@ export class DirectZipTransferOutputV1 implements
     const checkpoint = this.#writer.committedCheckpoint
     const opened = checkpoint.phase === 'inside-member' && checkpoint.nextEntryOrdinal === pending.ordinal
       ? await this.#resumeMember(pending.ordinal, file, authority, checkpoint)
-      : await this.#startMember(pending.ordinal, file, authority, checkpoint)
+      : await this.#startMember(pending.ordinal, file, authority)
     this.#activeFile = true
     return new DirectZipFileTransaction(
       opened.writer,
@@ -205,19 +212,15 @@ export class DirectZipTransferOutputV1 implements
       throw new Error('direct ZIP member rollback returned a non-authoritative checkpoint')
     }
     this.#workingOffset = replacement.archiveOffset
-    return this.#startMember(ordinal, file, authority, replacement)
+    return this.#startMember(ordinal, file, authority)
   }
 
   async #startMember(
     ordinal: bigint,
     file: Extract<DirectZipOrderedMemberV1, { kind: 'file' }>,
     authority: DirectZipSourceAuthorityV1,
-    checkpoint: DirectZipWriterCheckpointV1,
   ): Promise<OpenedDirectZipMember> {
-    if (checkpoint.phase !== 'between-members') {
-      throw new Error('direct ZIP cannot admit content while closing')
-    }
-    const plan = this.#plan(ordinal, file, checkpoint.archiveOffset)
+    const plan = this.#plan(ordinal, file, this.#workingOffset)
     const writer = await this.#writer.beginFile({
       plan,
       source: authority,
@@ -259,18 +262,22 @@ export class DirectZipTransferOutputV1 implements
       throw new Error('direct ZIP cannot publish before ordered materialization is quiescent')
     }
     if (this.#terminallyPaused) throw new Error('direct ZIP paused output cannot publish')
-    const stable = await this.#stableCut()
+    const checkpoint = this.#writer.committedCheckpoint
     const pages = await this.#pages.snapshot()
     const completion = await this.#writer.closeArchive({
       entryCount: this.#nextOrdinal,
       centralDirectoryBytes: pages.centralBytes,
       layoutRoot: pages.layoutRoot,
       centralRoot: pages.centralRoot,
-      preClosingEpochRoot: stable.checkpoint.completion?.preClosingEpochRoot ??
-        stable.checkpoint.epochRoot,
+      predecessorEpochRoot: checkpoint.completion?.predecessorEpochRoot ?? checkpoint.epochRoot,
     })
     requireExactCompletion(completion, this.#nextOrdinal)
-    return Object.freeze({ ...stable, checkpoint: completion.checkpoint, completion })
+    return Object.freeze({
+      checkpoint: completion.checkpoint,
+      materialization: this.materializationSummary(),
+      additionalTemporaryBytesUpperBound: 0n,
+      completion,
+    })
   }
 
   async observeFileCheckpoint(signal: AbortSignal): Promise<bigint> {

@@ -60,6 +60,8 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/resu
       'Authorize the same destination to continue the unfinished ZIP.', continuation)
     case 'verify-direct-zip-target': return stage('needs-action', 'Verify the save destination',
       'Ownership must be verified before the unfinished ZIP can change.', continuation)
+    case 'verify-direct-zip-completion': return stage('needs-action', 'Verify the saved ZIP',
+      'Check the local result without reconnecting. Any unfinished content can then resume from its saved progress.', continuation)
     case 'retry-direct-zip-space': return stage('needs-action', 'Free space at the destination',
       'Free destination space, then retry from the retained resume position.', continuation)
     case 'needs-attention': return stage('needs-action', 'Needs action',

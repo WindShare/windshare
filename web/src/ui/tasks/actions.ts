@@ -81,6 +81,7 @@ function continuationLabel(operation: V2RetainedReceiveOperation, readiness: Tas
   if (readiness === 'destination-authorization-required') return 'Authorize destination and continue'
   if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return 'Finish and save'
   if (operation.continuation === 'verify-direct-zip-target') return 'Verify destination and continue'
+  if (operation.continuation === 'verify-direct-zip-completion') return 'Verify saved ZIP'
   if (operation.continuation === 'retry-direct-zip-space') return 'Retry after freeing space'
   return operation.recoverySummary === undefined ? 'Continue' : 'Continue and preserve partial files'
 }

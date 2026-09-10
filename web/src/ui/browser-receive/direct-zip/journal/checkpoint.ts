@@ -55,7 +55,7 @@ export async function writerCheckpoint(
       ...(checkpoint.closingReplay.completion === undefined ? {} : {
         completion: Object.freeze({
           exactArchiveBytes: checkpoint.closingReplay.completion.exactArchiveBytes,
-          preClosingEpochRoot: digestBytes(checkpoint.closingReplay.completion.preClosingEpochRootDigest),
+          predecessorEpochRoot: digestBytes(checkpoint.closingReplay.completion.predecessorEpochRootDigest),
         }),
       }),
     }),
@@ -129,7 +129,7 @@ export async function checkpointInput(
         ...(writer.completion === undefined ? {} : {
           completion: {
             exactArchiveBytes: writer.completion.exactArchiveBytes,
-            preClosingEpochRootDigest: encodeBase64Url(writer.completion.preClosingEpochRoot),
+            predecessorEpochRootDigest: encodeBase64Url(writer.completion.predecessorEpochRoot),
           },
         }),
       },

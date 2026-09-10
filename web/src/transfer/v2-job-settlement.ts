@@ -36,7 +36,7 @@ import {
   pauseFailedV2Execution,
   withOutputSettlementTimeout,
   withQuiescentOutputSettlementTimeout,
-  withWorkspaceOutputSettlementTimeout,
+  withDurableLifecycleSettlementTimeout,
 } from './settlement/v2-output'
 import type { V2JobFailureAuthority } from './v2-job-failure-authority'
 
@@ -186,9 +186,9 @@ export class TransferJobSettlement {
       return validateCompletionLifecycle(this.#context.intent(), worker, state)
     }
 
-    if (execution.planKind === 'workspace-then-publish') {
-      const state = await withWorkspaceOutputSettlementTimeout(
-        'settle completed workspace execution',
+    if (execution.planKind === 'workspace-then-publish' || execution.planKind === 'direct-resumable-zip') {
+      const state = await withDurableLifecycleSettlementTimeout(
+        'settle completed durable plan execution',
         this.#context.outputSettlementTimeoutMilliseconds,
         signal => execution.settle({
           transferJobId: this.#context.transferJobId,

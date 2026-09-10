@@ -135,8 +135,11 @@ export class IndexedDbDirectZipCheckpointTransactions {
           candidate.predecessorTargetObservation.digest ||
         candidate.proposedCheckpoint.committedArchiveLength <=
           expectedState.checkpoint.committedArchiveLength ||
-        (candidate.kind === 'closing' && candidate.proposedCheckpoint.closingReplay?.archiveOffset !==
-          expectedState.checkpoint.committedArchiveLength) ||
+        (candidate.kind === 'closing' && (candidate.proposedCheckpoint.closingReplay === undefined ||
+          candidate.proposedCheckpoint.closingReplay.archiveOffset <
+            expectedState.checkpoint.committedArchiveLength ||
+          candidate.proposedCheckpoint.closingReplay.archiveOffset >=
+            candidate.proposedCheckpoint.committedArchiveLength)) ||
         candidate.proposedCheckpoint.epochRootDigest !== encodeBase64Url(
           chainDirectZipEpochDigestV1({
             predecessorRoot: decodeBase64Url(expectedState.checkpoint.epochRootDigest)!,

@@ -7,7 +7,6 @@ import type {
   DirectZipCandidatePromotionV1,
   DirectZipCandidateRetirementV1,
   DirectZipCandidateV1,
-  DirectZipClosingTransitionV1,
   DirectZipImmutablePageV1,
   DirectZipJournalFenceV1,
   DirectZipJournalTrace,
@@ -20,7 +19,6 @@ import type { DirectZipBootstrapCandidateCutV1, DirectZipBootstrapLeaseReplaceme
 import { IndexedDbDirectZipBootstrapTransactions } from './indexeddb/bootstrap-transactions'
 import { IndexedDbDirectZipCheckpointTransactions } from './indexeddb/checkpoint-transactions'
 import { IndexedDbDirectZipJournalStorage } from './indexeddb/storage'
-import { enterDirectZipClosing } from './indexeddb/closing-transition'
 
 export { DirectZipJournalConcurrencyError } from './indexeddb/authority'
 
@@ -51,7 +49,6 @@ export class IndexedDbDirectZipJournalRepository implements DirectZipJournalRepo
   stagePage(fence: DirectZipJournalFenceV1, page: DirectZipImmutablePageV1): Promise<void> { return this.#checkpoints.stagePage(fence, page) }
   bindCandidate(fence: DirectZipJournalFenceV1, candidate: Extract<DirectZipCandidateV1, { kind: 'epoch' | 'closing' }>): Promise<void> { return this.#checkpoints.bindCandidate(fence, candidate) }
   commitBootstrap(cut: DirectZipBootstrapCommitV1): Promise<void> { return this.#bootstrap.commitBootstrap(cut) }
-  enterClosing(cut: DirectZipClosingTransitionV1): Promise<void> { return enterDirectZipClosing(this.#storage, cut) }
   promoteCandidate(cut: DirectZipCandidatePromotionV1): Promise<void> { return this.#checkpoints.promoteCandidate(cut) }
   commitRecoveryLifecycle(cut: DirectZipRecoveryLifecycleCommitV1): Promise<void> { return this.#checkpoints.commitRecoveryLifecycle(cut) }
   retireCandidate(cut: DirectZipCandidateRetirementV1): Promise<void> { return this.#checkpoints.retireCandidate(cut) }

@@ -74,7 +74,7 @@ import {
 } from './output-session'
 import type { DirectZipIntent } from './direct-zip'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
-import { runDirectZipJob } from './v2-job-direct-zip'
+import { createDirectZipProgressObservers, runDirectZipJob } from './v2-job-direct-zip'
 import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
 import { outputSettlementTimeoutMilliseconds } from './settlement/v2-output'
@@ -387,18 +387,7 @@ export class TransferJob {
         this.#observers?.measure(measure)
         this.#emitProgress()
       },
-      observeReplayedFile: exactSize => {
-        this.#progress.completeFile(exactSize)
-        this.#emitProgress()
-      },
-      acknowledgeWrite: bytes => {
-        this.#progress.acknowledgeWrite(bytes)
-        this.#emitProgress()
-      },
-      completeFile: exactSize => {
-        this.#progress.completeFile(exactSize)
-        this.#emitProgress()
-      },
+      ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress()),
       observeDiscovery: event => this.#observers?.discoveryScheduling(event),
       finishMeasure: () => {
         const measure = this.#measure.complete()

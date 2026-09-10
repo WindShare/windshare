@@ -25,7 +25,7 @@ describe('browser Direct ZIP target bridge', () => {
       centralDirectoryBytes: pages.centralBytes,
       layoutRoot: pages.layoutRoot,
       centralRoot: pages.centralRoot,
-      preClosingEpochRoot: saved.checkpoint.epochRoot,
+      predecessorEpochRoot: saved.checkpoint.epochRoot,
     })
 
     expect(completion.exactArchiveBytes).toBe(BigInt(fixture.model.fileBytes(TARGET_NAME)!.byteLength))

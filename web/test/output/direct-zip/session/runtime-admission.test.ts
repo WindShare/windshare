@@ -6,7 +6,7 @@ import {
   type DirectZipRuntimeCapabilitiesV1,
   type DirectZipRuntimePolicyV1,
 } from '../../../../src/output/direct-zip/session'
-import { directZipEpochPolicyDigestV1 } from '../../../../src/output/direct-zip/writer'
+import { directZipEpochPolicyDigestV2 } from '../../../../src/output/direct-zip/writer'
 import { sameRuntimeDirectZipSupport } from '../../../../src/output/planning'
 
 const FEATURES: DirectZipRequiredFeatureFactsV1 = Object.freeze({
@@ -44,10 +44,10 @@ describe('Direct ZIP runtime admission', () => {
     ])
     expect(Object.values(result.facts.support.policies)).toHaveLength(5)
     expect(Object.values(result.facts.support.policies).every(value => value.length === 43)).toBe(true)
-    expect(result.facts.automaticEpochBudget).toEqual(
-      DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochBudget,
+    expect(result.facts.automaticEpochPolicy).toEqual(
+      DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochPolicy,
     )
-    await expect(directZipEpochPolicyDigestV1(result.facts.automaticEpochBudget))
+    await expect(directZipEpochPolicyDigestV2(result.facts.automaticEpochPolicy))
       .resolves.toBe(result.facts.support.policies.epoch)
   })
 
@@ -107,28 +107,28 @@ describe('Direct ZIP runtime admission', () => {
       capabilities: CAPABILITIES,
       policy: { ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1, workspacePeakBytesThreshold: null },
     })
-    const changedBudget = await admitDirectZipRuntimeV1({
+    const changedPolicy = await admitDirectZipRuntimeV1({
       capabilities: CAPABILITIES,
       policy: {
         ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1,
-        automaticEpochBudget: {
-          ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochBudget,
-          maximumPrefixCopyBytes: 0n,
+        automaticEpochPolicy: {
+          ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochPolicy,
+          minimumAdvanceBytes: 1n,
         },
       },
     })
-    expect([base.kind, withoutRanking.kind, changedBudget.kind]).toEqual([
+    expect([base.kind, withoutRanking.kind, changedPolicy.kind]).toEqual([
       'available', 'available', 'available',
     ])
     if (base.kind !== 'available' || withoutRanking.kind !== 'available' ||
-        changedBudget.kind !== 'available') return
+        changedPolicy.kind !== 'available') return
     expect(withoutRanking.facts.recommendationPolicy).toEqual({
       version: 1, kind: 'unavailable', reason: 'workspace-threshold-unavailable',
     })
     expect(sameRuntimeDirectZipSupport(base.facts.support, withoutRanking.facts.support)).toBe(true)
-    expect(changedBudget.facts.support.capabilityDigest).toBe(base.facts.support.capabilityDigest)
-    expect(changedBudget.facts.support.policies.epoch).not.toBe(base.facts.support.policies.epoch)
-    expect(sameRuntimeDirectZipSupport(base.facts.support, changedBudget.facts.support)).toBe(false)
+    expect(changedPolicy.facts.support.capabilityDigest).toBe(base.facts.support.capabilityDigest)
+    expect(changedPolicy.facts.support.policies.epoch).not.toBe(base.facts.support.policies.epoch)
+    expect(sameRuntimeDirectZipSupport(base.facts.support, changedPolicy.facts.support)).toBe(false)
   })
 
   it('declines malformed optional ranking policy while keeping supported output available', async () => {
@@ -143,14 +143,14 @@ describe('Direct ZIP runtime admission', () => {
     })
   })
 
-  it.each([-1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n, 1.5])(
-    'rejects an invalid configured copy budget: %s',
-    async (maximumPrefixCopyBytes) => {
+  it.each([0n, -1n, BigInt(Number.MAX_SAFE_INTEGER) + 1n, 1.5])(
+    'rejects an invalid configured checkpoint spacing: %s',
+    async (minimumAdvanceBytes) => {
       const policy = {
         ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1,
-        automaticEpochBudget: {
-          ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochBudget,
-          maximumPrefixCopyBytes,
+        automaticEpochPolicy: {
+          ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochPolicy,
+          minimumAdvanceBytes,
         },
       } as DirectZipRuntimePolicyV1
       await expect(admitDirectZipRuntimeV1({ capabilities: CAPABILITIES, policy }))
@@ -164,18 +164,18 @@ describe('Direct ZIP runtime admission', () => {
   it('snapshots policy before asynchronous digest computation', async () => {
     const policy = {
       version: 1 as const,
-      automaticEpochBudget: { ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochBudget },
+      automaticEpochPolicy: { ...DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochPolicy },
       workspacePeakBytesThreshold: 1024n,
     }
     const pending = admitDirectZipRuntimeV1({ capabilities: CAPABILITIES, policy })
-    policy.automaticEpochBudget.maximumPrefixCopyBytes = 0n
+    policy.automaticEpochPolicy.minimumAdvanceBytes = 0n
     policy.workspacePeakBytesThreshold = -1n
     const result = await pending
 
     expect(result.kind).toBe('available')
     if (result.kind !== 'available') return
-    expect(result.facts.automaticEpochBudget.maximumPrefixCopyBytes).toBe(
-      DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochBudget.maximumPrefixCopyBytes,
+    expect(result.facts.automaticEpochPolicy.minimumAdvanceBytes).toBe(
+      DEFAULT_DIRECT_ZIP_RUNTIME_POLICY_V1.automaticEpochPolicy.minimumAdvanceBytes,
     )
     expect(result.facts.recommendationPolicy).toMatchObject({ workspacePeakBytesThreshold: 1024n })
   })

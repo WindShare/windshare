@@ -75,10 +75,11 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       repository: input.journal, checkpoint: input.checkpoint, leaseId: input.leaseId,
       expectedRootDirectoryId: input.intent.selection.syntheticRoot,
       observeTarget: root => operation.#target.observe(root),
-      lifecycleForCheckpoint: async () => {
-        const lifecycle = nextReceiveLifecycleState(operation.#lifecycle, {
-          kind: 'receiving', activeLeaseId: input.leaseId,
-        })
+      lifecycleForCheckpoint: async checkpoint => {
+        const payload: ReceiveLifecycleStatePayload = checkpoint.closingReplay?.completion === undefined
+          ? { kind: 'receiving', activeLeaseId: input.leaseId }
+          : await operation.#publication(checkpoint.digest)
+        const lifecycle = nextReceiveLifecycleState(operation.#lifecycle, payload)
         return { lifecycle, lifecycleRecord: await storedReceiveLifecycleState(lifecycle) }
       },
       onCheckpointCommitted: (_checkpoint, lifecycle) => {
@@ -104,11 +105,15 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     openWorkspaceOriginal: unavailable, openWorkspaceZip: unavailable, preparePortable: unavailable,
     openDirectResumableZip: async (intent, signal) => {
       signal.throwIfAborted()
-      if (intent.digest !== this.intent.digest || this.#closed || this.#execution !== undefined) {
+      if (intent.digest !== this.intent.digest || this.#closed || this.#execution !== undefined ||
+          this.#lifecycle.kind === 'published') {
         throw new DOMException('ZIP execution authority is unavailable', 'InvalidStateError')
       }
       await this.verify()
       signal.throwIfAborted()
+      if (this.lifecycle.kind === 'published') {
+        throw new DOMException('The saved ZIP is already complete', 'InvalidStateError')
+      }
       await this.#commit({ kind: 'receiving', activeLeaseId: this.#input.leaseId })
       this.#execution = await createDirectZipExecutionV1({
         intent: this.intent,
@@ -121,7 +126,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
           journal: this.#writerJournal(),
           target: this.#target,
           identities: { nextCandidateId: randomId, nextEpochId: randomId },
-          automaticBudget: this.#input.facts.automaticEpochBudget,
+          automaticPolicy: this.#input.facts.automaticEpochPolicy,
         },
         replay: this.#journal.replay,
         rollback: {
@@ -139,12 +144,8 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
             if ((await this.#target.verifyPredecessor(evidence.checkpoint)).kind !== 'accepted-fast') {
               throw new DOMException('ZIP completion verification changed', 'DataError')
             }
-            return this.#commit({
-              kind: 'published',
-              receiptDigest: await operationDigest(this.intent,
-                `zip-complete:${this.#journal.persistedCheckpoint.digest}`),
-              cleanupState: 'clean',
-            })
+            return this.#lifecycle.kind === 'published' ? this.#lifecycle :
+              this.#commit(await this.#publication(this.#journal.persistedCheckpoint.digest))
           },
         },
         diagnostics: new BoundedDirectZipDiagnosticHistory({
@@ -175,6 +176,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     if (action === 'continue') {
       this.#execution = undefined
       await this.verify()
+      if (this.#lifecycle.kind === 'published') return { lifecycle: this.#lifecycle, activeControls: [] }
       return { lifecycle: await this.#commit({ kind: 'receiving', activeLeaseId: this.#input.leaseId }),
         activeControls: this.activeControls, resumeTransfer: true }
     }
@@ -188,7 +190,9 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     if (this.#journal.pendingCandidate !== undefined) {
       try { await this.verify() } catch (recoveryError) { reason = recoveryError }
     }
-    if (this.#lifecycle.kind === 'restart-required') return { lifecycle: this.#lifecycle }
+    if (this.#lifecycle.kind === 'restart-required' || this.#lifecycle.kind === 'published') {
+      return { lifecycle: this.#lifecycle }
+    }
     const gate = recoveryGateFor(reason)
     let kind = gate === 'target-deleted' || gate === 'needs-attention' ? undefined : gate
     if (gate === 'target-deleted') {
@@ -236,10 +240,10 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       })
       const checkpoint = this.#journal.checkpoint
       await writer.recoverCandidate(candidate, candidate.kind === 'closing' ? {
-        entryCount: checkpoint.nextEntryOrdinal,
-        centralDirectoryBytes: checkpoint.pages.centralBytes,
-        layoutRoot: checkpoint.pages.layoutRoot, centralRoot: checkpoint.pages.centralRoot,
-        preClosingEpochRoot: checkpoint.epochRoot,
+        entryCount: candidate.proposed.nextEntryOrdinal,
+        centralDirectoryBytes: candidate.proposed.pages.centralBytes,
+        layoutRoot: candidate.proposed.pages.layoutRoot, centralRoot: candidate.proposed.pages.centralRoot,
+        predecessorEpochRoot: checkpoint.epochRoot,
       } : undefined)
     }
     const verified = await this.#target.verifyPredecessor(this.#journal.checkpoint)
@@ -251,6 +255,11 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
         throw new DirectZipWriterGateError('target-verification-required', 'The saved ZIP needs byte verification')
       }
       throw new DirectZipWriterGateError(verified.kind, 'The saved ZIP requires recovery before continuing')
+    }
+    // A completed archive is local authority; replaying the sender would make a
+    // successfully saved result depend on the share still being available.
+    if (this.#journal.checkpoint.completion !== undefined && this.#lifecycle.kind !== 'published') {
+      await this.#commit(await this.#publication(this.#journal.persistedCheckpoint.digest))
     }
   }
 
@@ -267,7 +276,6 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       stageCandidate: candidate => cuts.stageCandidate(candidate),
       promoteCandidate: input => cuts.promoteCandidate(input),
       retireCandidate: input => cuts.retireCandidate(input),
-      enterClosing: input => cuts.enterClosing(input),
     }
   }
 
@@ -286,6 +294,14 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       safeSelectedPayloadBytes: checkpoint.committedSelectedPayloadBytes,
       committedArchiveLength: checkpoint.committedArchiveLength, checkpointPhase: checkpoint.phase,
     })
+  }
+
+  async #publication(checkpointDigest: string): Promise<Extract<ReceiveLifecycleStatePayload, { kind: 'published' }>> {
+    return {
+      kind: 'published',
+      receiptDigest: await operationDigest(this.intent, `zip-complete:${checkpointDigest}`),
+      cleanupState: 'clean',
+    }
   }
 
   async #commit(payload: ReceiveLifecycleStatePayload) {
@@ -315,7 +331,6 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
     const checkpoint = this.#journal?.persistedCheckpoint ?? this.#input.checkpoint
     return { kind: 'direct-zip', operationId: this.intent.operationId, generation: this.#progressGeneration,
       phase: checkpoint.phase === 'closing' ? 'closing' : 'receiving',
-      receivedSelectedBytes: checkpoint.committedSelectedPayloadBytes,
       safeResumeBytes: checkpoint.committedSelectedPayloadBytes,
       resumeTemporarySpaceUpperBound: checkpoint.committedArchiveLength }
   }

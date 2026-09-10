@@ -11,10 +11,12 @@ import {
   admitDirectZipRuntimeV1,
 } from '../../../src/output/direct-zip/session'
 import { IndexedDbReceiveOperationRepository } from '../../../src/output/browser/indexeddb-repository'
+import { IndexedDbReceiveResumeSource } from '../../../src/output/browser/indexeddb-resume-state'
 import { IndexedDbDirectZipJournalRepository, directZipBootstrapResumeDescriptorV1 } from '../../../src/output/direct-zip/journal'
 import { acquireBrowserReceiveOperationLease } from '../../../src/output/browser/session-lease'
 import { decodeStoredReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
 import type { ReopenedDirectZipOperation } from '../../../src/output/resume/reopen-authority'
+import { ReceiveOperationResumeAuthority } from '../../../src/output/resume/authority'
 import {
   createBrowserDirectZipComposition,
 } from '../../../src/ui/browser-receive/direct-zip/production'
@@ -24,12 +26,15 @@ import { createBrowserReceiveComposition } from '../../../src/ui/v2-browser-rece
 import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
 import type { DirectZipIntent, DirectZipOrderedFileV1 } from '../../../src/transfer/direct-zip'
 import type { V2BoundReceiveOperation } from '../../../src/ui/v2-receive-runtime'
+import { observeProductionDirectZipFileSystem } from './production-fsa-observation'
 
 const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
 const signal = new AbortController().signal
+const COMPLETION_FAULT_MESSAGE = 'Injected completion promotion loss after final close'
 
 type ProductionMode = 'pause-resume' | 'complete' | 'delete' | 'delete-retry' | 'unpromoted-resume' |
-  'unpromoted-delete' | 'unpromoted-continue' | 'unpromoted-settle' | 'bootstrap-recovery'
+  'unpromoted-delete' | 'unpromoted-continue' | 'unpromoted-settle' | 'bootstrap-recovery' |
+  'completion-journal-recovery' | 'completion-acknowledgement-recovery' | 'completion-continue'
 
 export async function probeBrowserDirectZipProduction(databaseName: string, mode: ProductionMode) {
   const root = await navigator.storage.getDirectory()
@@ -43,6 +48,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
   const openJournal = faultingJournal(databaseName, mode)
   const directZip = createBrowserDirectZipComposition(windowPort, { openRepository, openJournal })
   const receiver = createBrowserReceiveComposition(windowPort, { directZip })
+  const fileSystem = observeProductionDirectZipFileSystem()
   let active: V2BoundReceiveOperation | undefined
   try {
     const environment = await receiver.environment(signal)
@@ -114,7 +120,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     await transaction.write(0n, Uint8Array.of(1, 2, 3), signal)
     let resumeOffset = 0n
     let execution = first
-    if (mode !== 'complete' && mode !== 'bootstrap-recovery') {
+    if (mode !== 'complete' && mode !== 'bootstrap-recovery' && !mode.startsWith('completion-')) {
       try {
         await first.pause({ worker: {} as never, materialization: first.ordered.materializationSummary(),
           selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 6n, discovery: 'complete' },
@@ -139,11 +145,26 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
       await transaction.write(3n, Uint8Array.of(4, 5, 6), signal)
       await transaction.commit(signal)
     }
+    const beforeFinalization = fileSystem.snapshot()
     await execution.ordered.finishTraversal(2n, signal)
-    const lifecycle = await execution.settle({
-      transferJobId: active.transferJobId, worker: {} as never,
+    const settle = () => execution.settle({
+      transferJobId: active!.transferJobId, worker: {} as never,
       materialization: execution.ordered.materializationSummary(),
     }, signal)
+    let lifecycle
+    let recovery
+    if (mode.startsWith('completion-')) {
+      await requireCompletionPromotionFailure(settle)
+      const beforeRecovery = fileSystem.snapshot()
+      const closed = await inspectInterruptedCompletion(databaseName, intent, parent)
+      const recovered = await continueCompletedOperation(active, directZip, databaseName, mode)
+      active = recovered.active
+      lifecycle = recovered.lifecycle
+      recovery = { before: beforeRecovery, after: fileSystem.snapshot(), resumeTransfer: recovered.resumeTransfer,
+        ...closed }
+    } else {
+      lifecycle = await settle()
+    }
     const read = await openRepository()
     const envelope = await readEnvelope(read, intent.operationId)
     read.close()
@@ -152,13 +173,80 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
     const archive = new Uint8Array(await saved.arrayBuffer())
     return { mode, lifecycle: lifecycle.kind, resumeOffset: resumeOffset.toString(),
       fileBytes: saved.size, signature: Array.from(archive.slice(-22, -18)),
+      archive: Array.from(archive),
+      finalization: { before: beforeFinalization, after: recovery?.before ?? fileSystem.snapshot() },
+      recovery,
       directSupport: environment.directZipSupport.kind }
   } finally {
     await active?.detach()
+    fileSystem.restore()
     if (originalPicker === undefined) Reflect.deleteProperty(window, 'showDirectoryPicker')
     else Object.defineProperty(window, 'showDirectoryPicker', originalPicker)
     await root.removeEntry(databaseName, { recursive: true })
   }
+}
+
+async function continueCompletedOperation(active: V2BoundReceiveOperation,
+  directZip: ReturnType<typeof createBrowserDirectZipComposition>, databaseName: string, mode: ProductionMode) {
+  // A complete archive must recover with only local authority, even if the sender is gone.
+  if (mode === 'completion-continue') {
+    const continued = await active.startLifecycleAction('continue', active.lifecycle)
+    return { active, lifecycle: continued.lifecycle, resumeTransfer: continued.resumeTransfer }
+  }
+  await active.detach()
+  const reopened = await directZip.runtime.resume(
+    await reopenPersisted(active.intent as DirectZipIntent, databaseName), signal)
+  return { active: reopened, lifecycle: reopened.lifecycle, resumeTransfer: undefined }
+}
+
+async function requireCompletionPromotionFailure(settle: () => Promise<unknown>) {
+  try { await settle() } catch (error) {
+    if (error instanceof DOMException && error.message === COMPLETION_FAULT_MESSAGE) return
+    throw error
+  }
+  throw new Error('Completion did not reach the injected journal failure')
+}
+
+async function inspectInterruptedCompletion(databaseName: string, intent: DirectZipIntent,
+  parent: FileSystemDirectoryHandle) {
+  const repository = await IndexedDbDirectZipJournalRepository.open({ databaseName })
+  const operations = await IndexedDbReceiveOperationRepository.open(databaseName)
+  try {
+    const pending = await repository.readState(intent.operationId)
+    const candidate = await repository.readOperationCandidate(intent.operationId)
+    if (pending === undefined || (candidate?.kind !== 'closing' &&
+      pending.checkpoint.closingReplay?.completion === undefined)) {
+      throw new Error('The final close lost its completion candidate')
+    }
+    const lifecycle = await operations.readLifecycle(intent.operationId)
+    if (lifecycle === undefined) throw new Error('The final close lost its operation lifecycle')
+    const names = await entryNames(parent)
+    const completedFile = await (await parent.getFileHandle(names[0]!)).getFile()
+    return {
+      candidateKind: candidate?.kind,
+      lifecycleBeforeResume: decodeStoredReceiveLifecycleState(lifecycle).kind,
+      continuationBeforeResume: await readCompletionContinuation(databaseName, intent.operationId),
+      completedArchive: Array.from(new Uint8Array(await completedFile.arrayBuffer())),
+      safePayloadBefore: pending.checkpoint.committedSelectedPayloadBytes.toString(),
+      candidatePayload: candidate?.kind === 'closing'
+        ? candidate.proposedCheckpoint.committedSelectedPayloadBytes.toString() : undefined,
+    }
+  } finally { operations.close(); repository.close() }
+}
+
+async function readCompletionContinuation(databaseName: string, operationId: string) {
+  const source = await IndexedDbReceiveResumeSource.open(databaseName)
+  const unexpectedMutation = async (): Promise<never> => { throw new Error('Inventory attempted a mutation') }
+  try {
+    const authority = new ReceiveOperationResumeAuthority({ source,
+      mutations: { resume: unexpectedMutation, cleanup: unexpectedMutation, discard: unexpectedMutation } })
+    const inventory = await authority.listResumeState()
+    try {
+      const retained = inventory.operations.find(operation => operation.descriptor.operationId === operationId)
+      if (retained === undefined) throw new Error('The finished archive disappeared from retained inventory')
+      return retained.descriptor.continuation
+    } finally { inventory.close() }
+  } finally { source.close() }
 }
 
 async function reopenPersisted(intent: DirectZipIntent, databaseName: string): Promise<ReopenedDirectZipOperation> {
@@ -181,6 +269,7 @@ function faultingJournal(databaseName: string, mode: ProductionMode) {
   let promotionFailurePending = mode.startsWith('unpromoted-')
   let bootstrapFailurePending = mode === 'bootstrap-recovery'
   let deleteFailurePending = mode === 'delete-retry'
+  let completionFailurePending = mode.startsWith('completion-')
   return async () => {
     const repository = await IndexedDbDirectZipJournalRepository.open({ databaseName })
     return new Proxy(repository, {
@@ -197,6 +286,11 @@ function faultingJournal(databaseName: string, mode: ProductionMode) {
         if (property === 'promoteCandidate') return async (
           cut: Parameters<IndexedDbDirectZipJournalRepository['promoteCandidate']>[0],
         ) => {
+          if (completionFailurePending && cut.candidate.kind === 'closing') {
+            completionFailurePending = false
+            if (mode === 'completion-acknowledgement-recovery') await target.promoteCandidate(cut)
+            throw new DOMException(COMPLETION_FAULT_MESSAGE, 'UnknownError')
+          }
           if (promotionFailurePending) {
             promotionFailurePending = false
             throw new DOMException('Injected loss after filesystem close', 'UnknownError')
@@ -249,7 +343,11 @@ async function continuePausedOperation(active: V2BoundReceiveOperation,
     } finally { repository.close() }
     return undefined
   }
-  return directZip.runtime.resume(reopened, signal)
+  const resumed = await directZip.runtime.resume(reopened, signal)
+  if (resumed.lifecycle.kind !== 'receiving') {
+    throw new Error('Paused ZIP resume did not restore receiving before execution adoption')
+  }
+  return resumed
 }
 
 async function entryNames(parent: FileSystemDirectoryHandle) {

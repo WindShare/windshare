@@ -143,10 +143,10 @@ export function snapshotClosingReplay(
           input.completion.exactArchiveBytes,
           'completed archive length',
         ),
-        preClosingEpochRootDigest: snapshotFixedBase64(
-          input.completion.preClosingEpochRootDigest,
+        predecessorEpochRootDigest: snapshotFixedBase64(
+          input.completion.predecessorEpochRootDigest,
           32,
-          'pre-closing epoch root',
+          'completion predecessor epoch root',
           true,
         ),
       }),
@@ -165,7 +165,7 @@ export function canonicalClosingReplay(input: DirectZipCheckpointV1['closingRepl
       : concatCanonicalBytes([
           canonicalU8(2),
           canonicalFrame(canonicalU64(input.completion.exactArchiveBytes)),
-          fixedFrame(input.completion.preClosingEpochRootDigest, 32, 'pre-closing epoch root', true),
+          fixedFrame(input.completion.predecessorEpochRootDigest, 32, 'completion predecessor epoch root', true),
         ])),
   ])
 }

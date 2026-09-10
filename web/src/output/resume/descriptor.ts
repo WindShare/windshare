@@ -7,6 +7,7 @@ export type ReceiveOperationContinuation =
   | 'resume-direct-zip'
   | 'reauthorize-direct-zip'
   | 'verify-direct-zip-target'
+  | 'verify-direct-zip-completion'
   | 'retry-direct-zip-space'
   | 'pending-catch-up'
   | 'restoration-available'

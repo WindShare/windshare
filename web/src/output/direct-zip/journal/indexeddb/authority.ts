@@ -229,7 +229,7 @@ export function assertPromotedCheckpointCut(
       ((candidate.kind === 'closing') !==
         (checkpoint.closingReplay?.completion !== undefined)) ||
       (candidate.kind === 'closing' &&
-        checkpoint.closingReplay?.completion?.preClosingEpochRootDigest !==
+        checkpoint.closingReplay?.completion?.predecessorEpochRootDigest !==
           candidate.predecessorTargetObservation.epochRootDigest) ||
       !sameCheckpointResumeAuthority(proposed, checkpoint)) {
     throw new TypeError('Direct ZIP promotion did not bind its fresh observed checkpoint')

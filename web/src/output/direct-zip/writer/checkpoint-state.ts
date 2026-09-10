@@ -153,7 +153,7 @@ export function requireCompletionSeal(
       seal.centralDirectoryBytes !== pages.centralBytes ||
       !equalDirectZipBytes(seal.layoutRoot, pages.layoutRoot) ||
       !equalDirectZipBytes(seal.centralRoot, pages.centralRoot) ||
-      !equalDirectZipBytes(seal.preClosingEpochRoot, epochRoot)) {
+      !equalDirectZipBytes(seal.predecessorEpochRoot, epochRoot)) {
     throw new Error('direct ZIP completion seal disagrees with durable page roots')
   }
 }
@@ -178,7 +178,7 @@ function snapshotCompletion(
 ): DirectZipCommittedCompletionV1 {
   return Object.freeze({
     exactArchiveBytes: completion.exactArchiveBytes,
-    preClosingEpochRoot: Uint8Array.from(completion.preClosingEpochRoot),
+    predecessorEpochRoot: Uint8Array.from(completion.predecessorEpochRoot),
   })
 }
 
@@ -234,7 +234,7 @@ function requireCompletionCheckpoint(checkpoint: DirectZipWriterCheckpointV1): v
   })
   if (completion.exactArchiveBytes !== checkpoint.committedLength ||
       completion.exactArchiveBytes !== layout.exactArchiveBytes ||
-      completion.preClosingEpochRoot.byteLength !== DIRECT_ZIP_SHA256_BYTES) {
+      completion.predecessorEpochRoot.byteLength !== DIRECT_ZIP_SHA256_BYTES) {
     throw new TypeError('direct ZIP committed completion authority is inconsistent')
   }
 }

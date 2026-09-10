@@ -151,7 +151,7 @@
       },
       "name": "zip-direct-resumable",
       "policyAvailability": {
-        "directZipEpochPolicyDigest": "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo",
+        "directZipEpochPolicyDigest": "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s",
         "reason": "exact-reviewed-runtime-required",
         "zipRouteRecommendationPolicyDigest": "zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI"
       },

@@ -43,7 +43,7 @@ export const TASK_FIXTURES: Readonly<Record<string, TaskFacts>> = Object.freeze(
   verifying: taskFixture({
     directZipProgress: Object.freeze({
       kind: 'direct-zip', operationId: FIXTURE_OPERATION_ID, generation: 1n,
-      phase: 'verifying', receivedSelectedBytes: 2_000_000n, safeResumeBytes: 1_500_000n,
+      phase: 'verifying', safeResumeBytes: 1_500_000n,
     }),
   }),
   'partial-ready': taskFixture({

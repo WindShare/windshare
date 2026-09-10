@@ -9,10 +9,8 @@ import (
 )
 
 const (
-	directZipAutomaticMaxPrefixCopyBytes           uint64 = 256 << 20
-	directZipAutomaticMaxCumulativeCopyBytes       uint64 = 512 << 20
-	directZipAutomaticMaxModeledPeakTemporaryBytes uint64 = 256 << 20
-	zipWorkspaceRecommendationMaximumPeakBytes     uint64 = 1_073_744_986
+	directZipAutomaticMinimumAdvanceBytes      uint64 = 64 << 20
+	zipWorkspaceRecommendationMaximumPeakBytes uint64 = 1_073_744_986
 )
 
 func legalOperationFinals() map[string][]string {
@@ -45,29 +43,18 @@ func zipCompleteOnlyFailureCases() []any {
 	}
 }
 
-func directZipEpochPolicyDigestV1() string {
-	preimage := append([]byte("windshare/direct-zip-epoch-policy/v1\x00"), 1)
-	for _, value := range []uint64{
-		directZipAutomaticMaxPrefixCopyBytes,
-		directZipAutomaticMaxCumulativeCopyBytes,
-		directZipAutomaticMaxModeledPeakTemporaryBytes,
-	} {
-		var frame [16]byte
-		binary.BigEndian.PutUint64(frame[:8], 8)
-		binary.BigEndian.PutUint64(frame[8:], value)
-		preimage = append(preimage, frame[:]...)
-	}
-	digest := sha256.Sum256(preimage)
+func directZipEpochPolicyDigestV2() string {
+	preimage := append([]byte("windshare/direct-zip-epoch-policy/v2\x00"), 2)
+	var frame [16]byte
+	binary.BigEndian.PutUint64(frame[:8], 8)
+	binary.BigEndian.PutUint64(frame[8:], directZipAutomaticMinimumAdvanceBytes)
+	digest := sha256.Sum256(append(preimage, frame[:]...))
 	return base64.RawURLEncoding.EncodeToString(digest[:])
 }
 
-func TestDirectZipEpochPolicyV1(t *testing.T) {
-	if got, want := directZipEpochPolicyDigestV1(), "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo"; got != want {
-		t.Fatalf("DirectZipEpochPolicyV1 digest = %q, want %q", got, want)
-	}
-	// The measured 256 MiB predecessor acquired a 1 MiB ZIP epoch before restart.
-	if measuredCommittedArchivePrefix := uint64(257 << 20); measuredCommittedArchivePrefix <= directZipAutomaticMaxPrefixCopyBytes {
-		t.Fatal("257 MiB committed ZIP prefix passed the inclusive 256 MiB automatic boundary")
+func TestDirectZipEpochPolicyV2(t *testing.T) {
+	if got, want := directZipEpochPolicyDigestV2(), "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s"; got != want {
+		t.Fatalf("DirectZipEpochPolicyV2 digest = %q, want %q", got, want)
 	}
 }
 
@@ -299,11 +286,10 @@ func semanticCases(t *testing.T) []any {
 				map[string]any{"name": "direct-zip-checkpoint-v1", "domain": "windshare/direct-zip-checkpoint-policy/v1", "availability": "frozen"},
 				map[string]any{"name": "direct-zip-journal-budget-v1", "domain": "windshare/direct-zip-journal-budget/v1", "availability": "frozen"},
 				map[string]any{
-					"name": "direct-zip-epoch-v1", "domain": "windshare/direct-zip-epoch-policy/v1", "availability": "frozen",
-					"automaticMaxPrefixCopyBytes":           fmt.Sprint(directZipAutomaticMaxPrefixCopyBytes),
-					"automaticMaxCumulativeCopyBytes":       fmt.Sprint(directZipAutomaticMaxCumulativeCopyBytes),
-					"automaticMaxModeledPeakTemporaryBytes": fmt.Sprint(directZipAutomaticMaxModeledPeakTemporaryBytes),
-					"units":                                 "committed-archive-bytes", "boundary": "inclusive", "digest": directZipEpochPolicyDigestV1(),
+					"name": "direct-zip-epoch-v2", "domain": "windshare/direct-zip-epoch-policy/v2", "availability": "frozen",
+					"automaticMinimumAdvanceBytes": fmt.Sprint(directZipAutomaticMinimumAdvanceBytes),
+					"requiredAdvance":              "max(minimum-advance,durable-archive-prefix)",
+					"units":                        "archive-bytes", "boundary": "inclusive", "digest": directZipEpochPolicyDigestV2(),
 				},
 				map[string]any{
 					"name": "zip-route-recommendation-v1", "domain": "windshare/zip-route-recommendation-policy/v1", "availability": "frozen",

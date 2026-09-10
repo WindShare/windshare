@@ -31,6 +31,7 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
   readonly #states = new Map<string, BrowserDirectZipPageAuthority>()
   #current: BrowserDirectZipPageAuthority
   #committed: BrowserDirectZipPageAuthority
+  #committedRollback: BrowserDirectZipPageAuthority | undefined
   #rollback: BrowserDirectZipPageAuthority | undefined
   #tail: DirectZipImmutablePageV1 | undefined
 
@@ -55,6 +56,7 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
     const pages = new BrowserDirectZipPages(repository, fence, authority)
     if (checkpoint.currentMember !== undefined) {
       pages.#rollback = await readPageAuthority(repository, checkpoint.operationId, checkpoint.currentMember.rollback)
+      pages.#committedRollback = pages.#rollback
       pages.#remember(pages.#rollback)
     }
     return pages
@@ -86,8 +88,10 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
   }
 
   rollbackAuthority(state: DirectZipWriterPageStateV1): BrowserDirectZipPageAuthority {
-    if (this.#rollback !== undefined && pageStateKey(pageState(this.#rollback)) === pageStateKey(state)) {
-      return this.#rollback
+    for (const authority of [this.#rollback, this.#committedRollback]) {
+      if (authority !== undefined && pageStateKey(pageState(authority)) === pageStateKey(state)) {
+        return authority
+      }
     }
     return this.authorityFor(state)
   }
@@ -117,17 +121,22 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
   }
 
   async restore(state: DirectZipWriterPageStateV1): Promise<void> {
-    this.#current = pageStateKey(pageState(this.#committed)) === pageStateKey(state)
+    const restoresCommitted = pageStateKey(pageState(this.#committed)) === pageStateKey(state)
+    this.#current = restoresCommitted
       ? this.#committed : this.authorityFor(state)
+    if (restoresCommitted) this.#rollback = this.#committedRollback
     this.#tail = undefined
     // Retirement removes candidate reachability first. Only then may its uncommitted
     // suffix be discarded so the next attempt can reuse the immutable chain ordinal.
     await this.#repository.collectOrphanPages(this.#fence())
   }
 
-  commit(authority = this.#current): void {
+  commit(authority: BrowserDirectZipPageAuthority, rollbackState: DirectZipWriterPageStateV1 | undefined): void {
+    const rollback = rollbackState === undefined ? undefined : this.rollbackAuthority(rollbackState)
     this.#current = authority
     this.#committed = authority
+    this.#committedRollback = rollback
+    this.#rollback = rollback
     this.#tail = undefined
     this.#states.clear()
     this.#remember(authority)
@@ -196,6 +205,9 @@ export class BrowserDirectZipPages implements DirectZipWriterPageSink {
       const keep = new Set([
         pageStateKey(pageState(this.#current)), pageStateKey(pageState(this.#committed)),
         ...(this.#rollback === undefined ? [] : [pageStateKey(pageState(this.#rollback))]),
+        // Pending members can replace working rollback many times before a close.
+        // The durable active member must still be resumable if that close fails.
+        ...(this.#committedRollback === undefined ? [] : [pageStateKey(pageState(this.#committedRollback))]),
       ])
       for (const key of this.#states.keys()) if (!keep.has(key)) this.#states.delete(key)
     }

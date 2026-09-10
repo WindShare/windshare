@@ -28,6 +28,8 @@ import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-lega
 import { readSourceRevisionFailures } from '../resume/source-revision-failures'
 import { readProgressiveZipRecoveryRequirement } from '../resume/progressive-checkpoint'
 import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoint'
+import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
+import { IndexedDbDirectZipJournalRepository } from '../direct-zip/journal/indexeddb'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type { RecoverySummary } from '../file-system-access/recovery-summary'
 import { readFSARecoverySummary } from '../file-system-access/recovery-summary'
@@ -185,6 +187,13 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     return operation.receiveIntent.artifact.kind === 'original-file'
       ? readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
       : readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+  }
+
+  async readDirectZipRequirement(lifecycle: ReceiveLifecycleState) {
+    this.#assertOpen()
+    const journal = await IndexedDbDirectZipJournalRepository.open({ databaseName: this.#databaseName })
+    try { return await readDirectZipRecoveryRequirement(lifecycle, journal) }
+    finally { journal.close() }
   }
 
   async readSourceRevisionFailures(lifecycle: ReceiveLifecycleState) {

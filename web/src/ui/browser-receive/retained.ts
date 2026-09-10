@@ -416,7 +416,7 @@ async function performRetainedAction(
     case 'direct-tree-receive':
     case 'workspace-receive':
     case 'direct-zip':
-      return continueRetainedReceive(executor, continuation, action, signal, failures)
+      return continueRetainedReceive(executor, continuation, operation.continuation, action, signal, failures)
     case 'workspace-package':
       return withRetainedOperationClose(continuation.operation, async () => {
         if (action !== 'continue') throw continuationMismatch()
@@ -509,6 +509,7 @@ function deleteRetainedDirectZip(
 async function continueRetainedReceive(
   executor: BrowserRetainedContinuationExecutor,
   continuation: ReceiveContinuation,
+  sourceContinuation: V2RetainedReceiveOperation['continuation'],
   action: V2RetainedReceiveAction,
   signal: AbortSignal,
   failures?: OutputFailureSinks,
@@ -532,6 +533,14 @@ async function continueRetainedReceive(
   }
   try {
     signal.throwIfAborted()
+    if (continuation.kind === 'direct-zip' &&
+        (runtime.lifecycle.kind === 'published' || action === 'continue' &&
+          sourceContinuation === 'verify-direct-zip-completion')) {
+      // Verification can retire an incomplete final candidate. Release local
+      // authority so the refreshed inventory can offer source-backed continuation.
+      await runtime.detach()
+      return Object.freeze({ kind: 'completed' })
+    }
     return Object.freeze({ kind: 'receive-continuation', runtime })
   } catch (error) {
     return detachRuntimeAfterFailure(runtime, error)
@@ -667,6 +676,10 @@ function sourceWithoutBootstrapCandidates(
       readProgressiveRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readProgressiveRequirement']>>[0]) =>
         source.readProgressiveRequirement!(lifecycle),
     }),
+    ...(source.readDirectZipRequirement === undefined ? {} : {
+      readDirectZipRequirement: (lifecycle: Parameters<NonNullable<ReceiveOperationResumeSource['readDirectZipRequirement']>>[0]) =>
+        source.readDirectZipRequirement!(lifecycle),
+    }),
     ...(source.isCleanupOnly === undefined ? {} : {
       isCleanupOnly: (operationId: string) => source.isCleanupOnly!(operationId),
     }),
@@ -682,5 +695,6 @@ function isDirectZipContinuation(
   continuation: V2RetainedReceiveOperation['continuation'],
 ): boolean {
   return continuation === 'resume-direct-zip' || continuation === 'reauthorize-direct-zip' ||
-    continuation === 'verify-direct-zip-target' || continuation === 'retry-direct-zip-space'
+    continuation === 'verify-direct-zip-target' || continuation === 'verify-direct-zip-completion' ||
+    continuation === 'retry-direct-zip-space'
 }

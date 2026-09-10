@@ -12,7 +12,6 @@ import type {
   DirectZipCandidateRetirementV1,
   DirectZipCandidateV1,
   DirectZipCommitCandidateV1,
-  DirectZipClosingTransitionV1,
   DirectZipImmutablePageV1,
   DirectZipJournalFenceV1,
   DirectZipPageBatchV1,
@@ -56,7 +55,6 @@ export interface DirectZipJournalRepository {
     candidate: DirectZipCommitCandidateV1,
   ): Promise<void>
   commitBootstrap(cut: DirectZipBootstrapCommitV1): Promise<void>
-  enterClosing(cut: DirectZipClosingTransitionV1): Promise<void>
   promoteCandidate(cut: DirectZipCandidatePromotionV1): Promise<void>
   commitRecoveryLifecycle(cut: DirectZipRecoveryLifecycleCommitV1): Promise<void>
   retireCandidate(cut: DirectZipCandidateRetirementV1): Promise<void>
