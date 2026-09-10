@@ -321,9 +321,9 @@ function presentZipMode(
 
 function zipRecommendationCopy(group: ZipRouteGroup): string {
   if (group.recommendation.kind === 'recommended') {
-    return group.recommendation.reason === 'workspace-within-reviewed-budget'
-      ? 'Recommended: receive completely first because the checked local cost is within the reviewed budget.'
-      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the reviewed budget.'
+    return group.recommendation.reason === 'workspace-within-policy-budget'
+      ? 'Recommended: receive completely first because the checked local cost is within the workspace budget.'
+      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the workspace budget.'
   }
   switch (group.recommendation.reason) {
     case 'only-one-route-available': return 'This is the only safe browser ZIP route currently available.'

@@ -115,7 +115,8 @@ import {
   directZipTarget,
   environment,
   handoffTarget,
-  reviewedDirectZipSupport,
+  runtimeDirectZipSupport,
+  identity as planningIdentity,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -312,18 +313,18 @@ describe('v2 joined-share projection authority', () => {
       environment({
         targets: [directZipTarget(), handoffTarget()],
         workspace: workspaceOffer(),
-        directZipSupport: reviewedDirectZipSupport(),
+        directZipSupport: runtimeDirectZipSupport(),
         zipRecommendationPolicy: {
           version: 1,
           kind: 'available',
           workspacePeakBytesThreshold: cost.archiveBytes + cost.durableMetadataBytes,
-          policyDigest: reviewedDirectZipSupport().recommendationPolicyDigest,
+          policyDigest: planningIdentity(89, 32),
         },
       }),
     )
     if (offered.kind !== 'artifact-actions') throw new Error('share-wide ZIP was not offered')
     expect(offered.zip?.recommendation).toMatchObject({
-      kind: 'recommended', reason: 'workspace-within-reviewed-budget',
+      kind: 'recommended', reason: 'workspace-within-policy-budget',
     })
     expect(offered.zip?.secondary?.route.kind).toBe('direct-resumable-zip')
     expect(offered.primary).toMatchObject({

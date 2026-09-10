@@ -35,7 +35,7 @@ export interface DirectZipWriterJournalPortV1 extends
 
 export class DirectZipRuntimeUnsupportedError extends Error {
   constructor() {
-    super('Direct resumable ZIP is unavailable without reviewed runtime support evidence')
+    super('Direct resumable ZIP is unavailable without an installed output session')
     this.name = 'DirectZipRuntimeUnsupportedError'
   }
 }

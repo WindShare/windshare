@@ -53,9 +53,10 @@ func (authority *Authority) BindDestination(
 		Platform: platform, DisplayPath: authority.rootPath,
 		OpenLiveCleanupJournal: openNativeLiveCleanupJournal,
 		RecyclePrivateState:    checkpointstore.RecyclePrivateState,
+		ProcessNonceSource:     authority.random,
 	})
 	if err != nil {
-		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "bind destination authority", err)
+		return ExecutionMode{}, runtimeOutputError(ctx, transferfault.OutputOwnership, "bind destination authority", errors.Join(err, platform.Close()))
 	}
 	binding := destination.Binding()
 	mode, err := binding.ExecutionMode()
@@ -89,6 +90,11 @@ func (authority *Authority) BindDestination(
 	authority.mode = mode
 	authority.registry = registry
 	authority.stage = authorityStageBound
+	authority.trace(FilesystemOutputTrace{
+		Operation: TraceRuntimeDecision, RuntimeComponent: FilesystemOutputRuntimeSession,
+		RuntimeOperation: FilesystemOutputRuntimeAdmitDestination, RuntimeDecision: FilesystemOutputRuntimeAdmitted,
+		DestinationCapabilities: binding.Capabilities(), ExecutionMode: mode,
+	})
 	return ExecutionMode{mode: mode}, nil
 }
 

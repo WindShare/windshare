@@ -331,6 +331,12 @@ func (directory *destinationDirectory) PublishFileNoReplace(outputcap.FileIdenti
 	}
 	return outputcap.PublishNoReplaceCommitted, directory.platform.fileErr
 }
+func (directory *destinationDirectory) CreateProcessStage(stage outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
+	directory.platform.stageParent = directory.node
+	file, err := stage.CreateFile(name, false, size)
+	return file, errors.Join(err, directory.platform.createStageErr)
+}
+
 func (directory *destinationDirectory) CreateLiveCleanupStage(proof outputcap.Directory, ticket checkpointmodel.LiveCleanupTicket) error {
 	if directory.platform.createStageErr != nil {
 		return directory.platform.createStageErr

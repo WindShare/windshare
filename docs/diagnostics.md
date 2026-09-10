@@ -17,6 +17,14 @@ Snapshots retain at most 16 error nodes, 8 cause levels, 12 frames, and 8 KiB of
 not retain original error objects. Later cleanup cannot replace the winning failure snapshot.
 Use `runtime_run_id` and `protocol_session_id` to correlate it with surrounding trace events.
 
+## Filesystem capabilities
+
+Native output admission records `capabilities.mode` and separate support/reason facts for safe
+publication, operation recovery, range recovery, and crash cleanup. `live_only` means the current
+process can finish safely but cannot promise restart recovery; it is not an unsafe filesystem error.
+Sender revision stages `open_handle_bound` and `open_rejected` identify sources whose revision proof
+lasts only while the same file handle remains open. Reopening creates a new revision.
+
 ## Native socket handoff
 
 Native connectivity records include `stun_refresh_finished`, `socket_handoff_started`,

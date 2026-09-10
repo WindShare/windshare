@@ -51,7 +51,8 @@ func linuxModifiedTimespec(modified catalog.ModifiedTime) (unix.Timespec, error)
 			"timestamp exceeds the certified Linux timespec range", nil)
 	}
 	timespec := unix.NsecToTimespec(total + nanoseconds)
-	if timespec.Sec != seconds || timespec.Nsec != nanoseconds {
+	//nolint:unconvert // Timespec fields are int32 on supported 32-bit Linux ABIs.
+	if int64(timespec.Sec) != seconds || int64(timespec.Nsec) != nanoseconds {
 		return unix.Timespec{}, linuxUnsupported("validate output modified time",
 			"timestamp is not exactly representable by the native Linux ABI", nil)
 	}
@@ -65,7 +66,7 @@ func (file *linuxOutputRegularFile) setModifiedTime(modified catalog.ModifiedTim
 	}
 	if linuxModifiedTimeRequiresExtendedInodeFields(modified) {
 		if err := linuxRequireExtendedTimestampLayout(
-			file.system, file.fd, file.certificate, unix.S_IFREG, operation,
+			file.system, file.fd, file.binding, unix.S_IFREG, operation,
 		); err != nil {
 			return err
 		}
@@ -80,7 +81,7 @@ func (directory *linuxOutputDirectory) setModifiedTime(modified catalog.Modified
 	}
 	if linuxModifiedTimeRequiresExtendedInodeFields(modified) {
 		if err := linuxRequireExtendedTimestampLayout(
-			directory.system, directory.fd, directory.certificate, unix.S_IFDIR, operation,
+			directory.system, directory.fd, directory.binding, unix.S_IFDIR, operation,
 		); err != nil {
 			return err
 		}
@@ -123,12 +124,12 @@ func (file *linuxOutputRegularFile) metadataMatches(
 ) (bool, error) {
 	if linuxModifiedTimeRequiresExtendedInodeFields(modified) {
 		if err := linuxRequireExtendedTimestampLayout(
-			file.system, file.fd, file.certificate, unix.S_IFREG, "inspect output file metadata",
+			file.system, file.fd, file.binding, unix.S_IFREG, "inspect output file metadata",
 		); err != nil {
 			return false, err
 		}
 	}
-	metadata, err := linuxReadHandleMetadata(file.system, file.fd, file.certificate, unix.S_IFREG)
+	metadata, err := linuxReadHandleMetadata(file.system, file.fd, file.binding, unix.S_IFREG)
 	if err != nil {
 		return false, err
 	}
@@ -138,14 +139,14 @@ func (file *linuxOutputRegularFile) metadataMatches(
 func linuxRequireExtendedTimestampLayout(
 	system *linuxOutputSystem,
 	fd int,
-	certificate linuxOutputCertificate,
+	binding linuxOutputBinding,
 	expectedType uint16,
 	operation string,
 ) error {
 	if system == nil || system.statx == nil {
 		return linuxUnsupported(operation, "extended ext4 timestamp-layout provider is unavailable", nil)
 	}
-	current, err := linuxVerifyOpenObject(system, fd, certificate)
+	current, err := linuxVerifyOpenObject(system, fd, binding)
 	if err != nil {
 		return err
 	}
@@ -159,6 +160,11 @@ func linuxRequireExtendedTimestampLayout(
 		return linuxUnsafe(operation, "extended timestamp witness is not owned by the effective receiver user", nil)
 	}
 
+	// Process-only output checks the actual statx mtime after writing. The ext4
+	// on-disk layout witness below supports the stronger restart guarantee only.
+	if binding.restart == nil {
+		return nil
+	}
 	const identityMask = unix.STATX_TYPE | unix.STATX_MODE | unix.STATX_INO |
 		unix.STATX_UID | unix.STATX_MNT_ID_UNIQUE
 	requested := identityMask | unix.STATX_BTIME
@@ -196,7 +202,7 @@ func linuxRequireExtendedTimestampLayout(
 func linuxReadHandleMetadata(
 	system *linuxOutputSystem,
 	fd int,
-	certificate linuxOutputCertificate,
+	binding linuxOutputBinding,
 	expectedType uint16,
 ) (linuxOutputMetadata, error) {
 	const operation = "inspect output metadata"
@@ -212,9 +218,9 @@ func linuxReadHandleMetadata(
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
 		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}
-	if identity.mountID != certificate.mount.uniqueMountID ||
-		identity.deviceMajor != certificate.mount.deviceMajor || identity.deviceMinor != certificate.mount.deviceMinor {
-		return linuxOutputMetadata{}, linuxUnsafe(operation, "metadata handle crossed the certified mount", nil)
+	if identity.mountID != binding.mount.uniqueMountID ||
+		identity.deviceMajor != binding.mount.deviceMajor || identity.deviceMinor != binding.mount.deviceMinor {
+		return linuxOutputMetadata{}, linuxUnsafe(operation, "metadata handle crossed the pinned output mount", nil)
 	}
 	if identity.kind != expectedType {
 		return linuxOutputMetadata{}, linuxUnsafe(operation, "metadata handle has the wrong object type", nil)

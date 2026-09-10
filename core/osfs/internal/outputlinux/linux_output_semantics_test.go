@@ -106,7 +106,7 @@ func TestLinuxDestinationCapabilityEvidenceRemainsOrthogonal(t *testing.T) {
 	}
 }
 
-func TestLinuxCapabilityProbeKeepsCrashCleanupIndependent(t *testing.T) {
+func TestLinuxCapabilityProbeRequiresAnonymousStageForSafePublish(t *testing.T) {
 	platform, rootPath := newLinuxAdapterTestPlatform(t)
 	root := platform.root
 	probeName := linuxOutputProbePrefix + "6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b6b"
@@ -127,8 +127,8 @@ func TestLinuxCapabilityProbeKeepsCrashCleanupIndependent(t *testing.T) {
 	if probeErr != nil {
 		t.Fatal(probeErr)
 	}
-	if results.safePublish != nil || results.operationRecovery != nil || results.rangeRecovery != nil {
-		t.Fatalf("O_TMPFILE failure erased unrelated facts: %+v", results)
+	if !errors.Is(results.safePublish, errLinuxOutputUnsupported) || results.operationRecovery != nil || results.rangeRecovery != nil {
+		t.Fatalf("O_TMPFILE failure did not preserve the stage dependency: %+v", results)
 	}
 	if !errors.Is(results.crashCleanup, errLinuxOutputUnsupported) {
 		t.Fatalf("O_TMPFILE failure crash-cleanup evidence=%v", results.crashCleanup)

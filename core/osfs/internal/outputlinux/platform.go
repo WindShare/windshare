@@ -69,9 +69,9 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 	}
 	clean := filepath.Clean(path)
 	rootOpenDisposition := outputcap.CallerProvidedContainer
-	root, err := linuxOpenExt4OutputRoot(clean, &linuxHostOutputSystem)
+	root, err := linuxOpenOutputRoot(clean, &linuxHostOutputSystem)
 	if create && errors.Is(err, fs.ErrNotExist) {
-		root, err = linuxCreateCertifiedOutputRoot(clean)
+		root, err = linuxCreateOutputRoot(clean)
 		if err == nil {
 			rootOpenDisposition = outputcap.AuthorityCreatedRoot
 		}
@@ -85,13 +85,13 @@ func Open(path string, create bool) (outputcap.Platform, error) {
 	}, nil
 }
 
-func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resultErr error) {
-	const operation = "create certified output root"
+func linuxCreateOutputRoot(path string) (_ *linuxOutputDirectory, resultErr error) {
+	const operation = "create output root"
 	candidate := path
 	missing := make([]string, 0, 4)
 	var current *linuxOutputDirectory
 	for {
-		opened, err := linuxOpenExt4OutputRoot(candidate, &linuxHostOutputSystem)
+		opened, err := linuxOpenOutputRoot(candidate, &linuxHostOutputSystem)
 		if err == nil {
 			current = opened
 			break
@@ -102,7 +102,7 @@ func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resul
 		parent := filepath.Dir(candidate)
 		if parent == candidate {
 			return nil, errors.Join(linuxUnsafe(operation,
-				"no existing certified ancestor contains the requested root", nil), err)
+				"no existing accessible ancestor contains the requested root", nil), err)
 		}
 		missing = append(missing, filepath.Base(candidate))
 		candidate = parent
@@ -126,7 +126,7 @@ func linuxCreateCertifiedOutputRoot(path string) (_ *linuxOutputDirectory, resul
 	// Reopening the full path proves that the requested spelling still resolves
 	// to the handle-created object; a concurrent rename cannot redirect the new
 	// root between safe creation and authority return.
-	reopened, err := linuxOpenExt4OutputRoot(path, &linuxHostOutputSystem)
+	reopened, err := linuxOpenOutputRoot(path, &linuxHostOutputSystem)
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +194,11 @@ func (platform *linuxV3Platform) AcquirePublicOperationGuard() (outputcap.Public
 	return &linuxOutputPublicOperationGuard{root: root}, nil
 }
 
-func (*linuxV3Platform) Certification() outputcap.CertificationID {
+func (platform *linuxV3Platform) Certification() outputcap.CertificationID {
+	if platform == nil || platform.root == nil || platform.root.native == nil ||
+		platform.root.native.binding.restart == nil {
+		return ""
+	}
 	return outputcap.CertificationLinuxExt4ProcessRestart
 }
 
@@ -209,8 +213,11 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	if err := root.verifyHandle(); err != nil {
 		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
-	certificate := root.certificate
-	volume, err := linuxEncodeMountIdentity(certificate.mount)
+	binding := root.binding
+	if binding.restart == nil {
+		return outputcap.OutputRootBinding{}, outputcap.ErrRecoverableOutputUnsupported
+	}
+	volume, err := linuxEncodeMountIdentity(binding.mount)
 	if err != nil {
 		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
@@ -220,12 +227,12 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 			errors.New("osfs: Linux directory restart-identity provider is unavailable"),
 		)
 	}
-	restartIdentity, err := root.system.restartIdentity.Read(root.system, root.fd, certificate.mount)
+	restartIdentity, err := root.system.restartIdentity.Read(root.system, root.fd, binding.mount)
 	if err != nil {
 		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
 	if !restartIdentity.matchesHandle(root.object) ||
-		!restartIdentity.sameDirectory(certificate.rootRestartIdentity) {
+		!restartIdentity.sameDirectory(binding.restart.rootIdentity) {
 		return outputcap.OutputRootBinding{}, errors.Join(
 			outputcap.ErrUnsafeNamespace,
 			errors.New("osfs: Linux output-root restart identity changed"),
@@ -235,15 +242,21 @@ func (platform *linuxV3Platform) RootBinding() (outputcap.OutputRootBinding, err
 	if err != nil {
 		return outputcap.OutputRootBinding{}, linuxV3Error(err)
 	}
-	binding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
-	return binding, linuxV3Error(err)
+	rootBinding, err := outputcap.NewOutputRootBinding(platform.Certification(), volume, object)
+	return rootBinding, linuxV3Error(err)
 }
 
-func (*linuxV3Platform) Durability() transfer.DurabilityLevel {
+func (platform *linuxV3Platform) Durability() transfer.DurabilityLevel {
+	if platform.Certification() == "" {
+		return transfer.DurabilityNone
+	}
 	return transfer.DurabilityProcessRestart
 }
 
-func (*linuxV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+func (platform *linuxV3Platform) LiveCleanupNativeProfile() checkpointmodel.LiveCleanupNativeProfile {
+	if platform.Certification() == "" {
+		return 0
+	}
 	return checkpointmodel.LiveCleanupLinuxExt4V1
 }
 

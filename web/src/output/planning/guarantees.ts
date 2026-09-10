@@ -39,7 +39,7 @@ import type {
   WorkspaceEnvironmentOffer,
   WorkspacePlanSemantics,
   DirectZipSupportFacts,
-  ReviewedDirectZipSupportFacts,
+  RuntimeDirectZipSupportFacts,
   ZipRouteRecommendationPolicyV1,
 } from './contracts'
 
@@ -47,10 +47,10 @@ const MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES = 128
 const TEXT_ENCODER = new TextEncoder()
 const VALID_ENVIRONMENT_OFFERS = new WeakSet<object>()
 const UNAVAILABLE_DIRECT_ZIP_SUPPORT: DirectZipSupportFacts = Object.freeze({
-  kind: 'unavailable', reason: 'support-evidence-missing',
+  kind: 'unavailable', reason: 'runtime-not-installed',
 })
 const UNAVAILABLE_ZIP_RECOMMENDATION_POLICY: ZipRouteRecommendationPolicyV1 = Object.freeze({
-  version: 1, kind: 'unavailable', reason: 'measured-threshold-unavailable',
+  version: 1, kind: 'unavailable', reason: 'workspace-threshold-unavailable',
 })
 
 const PRECREATED_BROWSER_FILE_FACTS: DestinationGuaranteeFacts = Object.freeze({
@@ -109,11 +109,9 @@ export function createEnvironmentOffers(input: EnvironmentOffersInput): Environm
   )
   if (directTargets.length > 1) throw new TypeError('only one direct ZIP route may be installed')
   if (directTargets.length !== 0 &&
-      (directZipSupport.kind !== 'reviewed-supported' ||
-       !sameReviewedDirectZipSupport(directTargets[0]!.support, directZipSupport) ||
-       zipRecommendationPolicy.kind !== 'available' ||
-       zipRecommendationPolicy.policyDigest !== directZipSupport.recommendationPolicyDigest)) {
-    throw new TypeError('direct ZIP target lacks its exact reviewed support facts')
+      (directZipSupport.kind !== 'runtime-supported' ||
+       !sameRuntimeDirectZipSupport(directTargets[0]!.support, directZipSupport))) {
+    throw new TypeError('direct ZIP target lacks its admitted runtime support facts')
   }
   const result = Object.freeze({
     targets: Object.freeze(targets),
@@ -154,7 +152,7 @@ export function sameTargetSemantics(
       left.legalProfile !== right.legalProfile ||
       !sameGuaranteeFacts(left.guarantees, right.guarantees)) return false
   if (left.kind === 'fsa-owned-file-target' && right.kind === 'fsa-owned-file-target') {
-    return sameReviewedDirectZipSupport(left.support, right.support)
+    return sameRuntimeDirectZipSupport(left.support, right.support)
   }
   if (left.kind !== 'browser-handoff' || right.kind !== 'browser-handoff') return true
   return left.objectUrlLeaseMilliseconds === right.objectUrlLeaseMilliseconds &&
@@ -361,8 +359,8 @@ function snapshotTarget(input: EnvironmentTargetOfferInput): EnvironmentTargetOf
   }
   if (input.kind === 'fsa-owned-file-target') {
     const support = snapshotDirectZipSupport(input.support)
-    if (support.kind !== 'reviewed-supported') {
-      throw new TypeError('direct ZIP target support must be a reviewed supported row')
+    if (support.kind !== 'runtime-supported') {
+      throw new TypeError('direct ZIP target support must contain admitted runtime capabilities')
     }
     return Object.freeze({
       ...input,
@@ -481,29 +479,28 @@ function targetKindOrder(value: EnvironmentTargetKind): number {
 
 function snapshotDirectZipSupport(input: DirectZipSupportFacts): DirectZipSupportFacts {
   if (input.kind === 'unavailable') {
-    const valid = input.reason === 'support-evidence-missing' ||
-      input.reason === 'platform-not-reviewed' ||
+    const valid = input.reason === 'runtime-not-installed' ||
+      input.reason === 'required-api-unavailable' ||
+      input.reason === 'journal-unavailable' ||
+      input.reason === 'handle-persistence-unavailable' ||
+      input.reason === 'coordination-unavailable' ||
+      input.reason === 'authority-contract-unavailable' ||
       input.reason === 'direct-route-unsupported' ||
       input.reason === 'policy-digests-unavailable'
     if (!valid) throw new TypeError('direct ZIP unavailability reason is invalid')
     return Object.freeze({ kind: input.kind, reason: input.reason })
   }
+  if (input.kind !== 'runtime-supported' ||
+      input.authority?.kind !== 'owned-target-session-v1' ||
+      input.authority.recovery !== 'persisted-handle-and-verified-checkpoint' ||
+      input.authority.replacement !== 'coordinated-no-replace' ||
+      input.authority.cleanup !== 'ownership-proof-required') {
+    throw new TypeError('direct ZIP runtime authority contract is invalid')
+  }
   return Object.freeze({
     kind: input.kind,
-    supportMatrixDigest: requireDigest(input.supportMatrixDigest, 'support matrix digest'),
-    browserBinaryDigest: requireDigest(input.browserBinaryDigest, 'browser binary digest'),
-    browserVersion: requireBoundedFact(input.browserVersion, 'browser version'),
-    operatingSystemBuild: requireBoundedFact(input.operatingSystemBuild, 'operating system build'),
-    filesystemProfile: requireBoundedFact(input.filesystemProfile, 'filesystem profile'),
-    rawEvidenceDigest: requireDigest(input.rawEvidenceDigest, 'raw evidence digest'),
-    requiredFeatureFactsDigest: requireDigest(
-      input.requiredFeatureFactsDigest,
-      'required feature facts digest',
-    ),
-    recommendationPolicyDigest: requireDigest(
-      input.recommendationPolicyDigest,
-      'ZIP recommendation policy digest',
-    ),
+    capabilityDigest: requireDigest(input.capabilityDigest, 'runtime capability digest'),
+    authority: Object.freeze({ ...input.authority }),
     policies: Object.freeze({
       zipEncoding: requireDigest(input.policies.zipEncoding, 'ZIP encoding policy digest'),
       layout: requireDigest(input.policies.layout, 'ZIP layout policy digest'),
@@ -519,7 +516,7 @@ function snapshotZipRecommendationPolicy(
 ): ZipRouteRecommendationPolicyV1 {
   if (input.version !== 1) throw new TypeError('ZIP recommendation policy version is invalid')
   if (input.kind === 'unavailable') {
-    if (input.reason !== 'measured-threshold-unavailable' &&
+    if (input.reason !== 'workspace-threshold-unavailable' &&
         input.reason !== 'policy-digest-unavailable') {
       throw new TypeError('ZIP recommendation policy unavailability reason is invalid')
     }
@@ -534,31 +531,20 @@ function snapshotZipRecommendationPolicy(
   })
 }
 
-function sameReviewedDirectZipSupport(
-  left: ReviewedDirectZipSupportFacts,
-  right: ReviewedDirectZipSupportFacts,
+export function sameRuntimeDirectZipSupport(
+  left: RuntimeDirectZipSupportFacts,
+  right: RuntimeDirectZipSupportFacts,
 ): boolean {
-  return left.supportMatrixDigest === right.supportMatrixDigest &&
-    left.browserBinaryDigest === right.browserBinaryDigest &&
-    left.browserVersion === right.browserVersion &&
-    left.operatingSystemBuild === right.operatingSystemBuild &&
-    left.filesystemProfile === right.filesystemProfile &&
-    left.rawEvidenceDigest === right.rawEvidenceDigest &&
-    left.requiredFeatureFactsDigest === right.requiredFeatureFactsDigest &&
-    left.recommendationPolicyDigest === right.recommendationPolicyDigest &&
+  return left.capabilityDigest === right.capabilityDigest &&
+    left.authority.kind === right.authority.kind &&
+    left.authority.recovery === right.authority.recovery &&
+    left.authority.replacement === right.authority.replacement &&
+    left.authority.cleanup === right.authority.cleanup &&
     left.policies.zipEncoding === right.policies.zipEncoding &&
     left.policies.layout === right.policies.layout &&
     left.policies.checkpoint === right.policies.checkpoint &&
     left.policies.journalBudget === right.policies.journalBudget &&
     left.policies.epoch === right.policies.epoch
-}
-
-function requireBoundedFact(value: string, label: string): string {
-  if (typeof value !== 'string' || value.length === 0 ||
-      TEXT_ENCODER.encode(value).byteLength > MAX_ENVIRONMENT_ROUTE_ID_UTF8_BYTES) {
-    throw new TypeError(label + ' is invalid')
-  }
-  return value
 }
 
 function requireDigest(value: string, label: string): string {

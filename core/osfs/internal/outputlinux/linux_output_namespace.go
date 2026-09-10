@@ -18,7 +18,7 @@ const linuxRelativeOpenResolution = unix.RESOLVE_BENEATH |
 type linuxOutputRegularFile struct {
 	system                  *linuxOutputSystem
 	fd                      int
-	certificate             linuxOutputCertificate
+	binding                 linuxOutputBinding
 	object                  linuxOpenHandleIdentity
 	exactPermissions        uint32
 	requireExactPermissions bool
@@ -41,10 +41,10 @@ const (
 )
 
 func (directory *linuxOutputDirectory) durability() linuxOutputDurability {
-	if directory == nil {
+	if directory == nil || directory.binding.restart == nil {
 		return 0
 	}
-	return directory.certificate.durability
+	return directory.binding.restart.durability
 }
 
 func (directory *linuxOutputDirectory) openDirectory(name string) (*linuxOutputDirectory, error) {
@@ -79,7 +79,7 @@ func (directory *linuxOutputDirectory) openDirectoryWithMode(
 	if err != nil {
 		return nil, err
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
 		return nil, errors.Join(err, directory.system.close(fd))
 	}
@@ -103,7 +103,7 @@ func (directory *linuxOutputDirectory) openDirectoryWithMode(
 	return &linuxOutputDirectory{
 		system:                  directory.system,
 		fd:                      fd,
-		certificate:             directory.certificate,
+		binding:                 directory.binding,
 		object:                  identity.identity,
 		exactPermissions:        permissions,
 		requireExactPermissions: requireExactMode,
@@ -234,7 +234,7 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 	if err != nil {
 		return nil, err
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
 		return nil, errors.Join(err, directory.system.close(fd))
 	}
@@ -258,7 +258,7 @@ func (directory *linuxOutputDirectory) openRegularFileWithMode(
 	return &linuxOutputRegularFile{
 		system:                  directory.system,
 		fd:                      fd,
-		certificate:             directory.certificate,
+		binding:                 directory.binding,
 		object:                  identity.identity,
 		exactPermissions:        permissions,
 		requireExactPermissions: requireExactMode,
@@ -308,10 +308,10 @@ func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
 		return nil, err
 	}
 	created := &linuxOutputRegularFile{
-		system:      directory.system,
-		fd:          fd,
-		certificate: directory.certificate,
-		access:      linuxOutputFileMutable,
+		system:  directory.system,
+		fd:      fd,
+		binding: directory.binding,
+		access:  linuxOutputFileMutable,
 	}
 	committed := false
 	authorityFixed := false
@@ -328,7 +328,7 @@ func (directory *linuxOutputDirectory) createRegularFileExactWithAuthority(
 		}
 		resultErr = errors.Join(resultErr, rollbackErr, created.close())
 	}()
-	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
 		return nil, err
 	}

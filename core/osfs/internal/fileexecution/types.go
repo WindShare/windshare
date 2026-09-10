@@ -277,13 +277,14 @@ type OwnedFile interface {
 	Close() error
 }
 
-// LiveOwnedFile carries the already-journaled cleanup ticket beside the single
-// public-profile data object. It implements the same transaction port as a
-// resumable file but intentionally cannot manufacture durable ranges.
+// LiveOwnedFile retains a single public-profile data object. A certified cleanup
+// ticket may outlive it; process ownership instead ends with its retained handles.
+// Neither lifecycle can manufacture durable ranges.
 type LiveOwnedFile struct {
-	object checkpointmodel.ObjectID
-	file   outputcap.MutableFile
-	ticket checkpointmodel.LiveCleanupTicket
+	object  checkpointmodel.ObjectID
+	file    outputcap.MutableFile
+	ticket  checkpointmodel.LiveCleanupTicket
+	release func() error
 }
 
 func NewLiveOwnedFile(
@@ -296,6 +297,15 @@ func NewLiveOwnedFile(
 		return nil, ErrInvalidConfiguration
 	}
 	return &LiveOwnedFile{object: object, file: file, ticket: ticket}, nil
+}
+
+// NewProcessOwnedFile retains a live native object and its resource owner without
+// manufacturing a cleanup ticket or restart identity.
+func NewProcessOwnedFile(object checkpointmodel.ObjectID, file outputcap.MutableFile, release func() error) (*LiveOwnedFile, error) {
+	if object.IsZero() || file == nil || release == nil {
+		return nil, ErrInvalidConfiguration
+	}
+	return &LiveOwnedFile{object: object, file: file, release: release}, nil
 }
 
 func (file *LiveOwnedFile) ObjectID() checkpointmodel.ObjectID {
@@ -344,8 +354,13 @@ func (file *LiveOwnedFile) Close() error {
 	if file == nil || file.file == nil {
 		return nil
 	}
-	err := file.file.Close()
-	file.file = nil
+	var err error
+	if file.release != nil {
+		err = file.release()
+	} else {
+		err = file.file.Close()
+	}
+	file.file, file.release = nil, nil
 	return err
 }
 

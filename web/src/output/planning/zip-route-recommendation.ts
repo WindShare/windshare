@@ -46,7 +46,7 @@ export function recommendZipRoutes(input: ZipRouteRecommendationInput): ZipRoute
     return recommended(direct, workspace, 'direct-unknown-or-over-budget')
   }
   return input.workspaceCost.peakOwnedBytes <= input.policy.workspacePeakBytesThreshold
-    ? recommended(workspace, direct, 'workspace-within-reviewed-budget')
+    ? recommended(workspace, direct, 'workspace-within-policy-budget')
     : recommended(direct, workspace, 'direct-unknown-or-over-budget')
 }
 

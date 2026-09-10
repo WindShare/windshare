@@ -61,17 +61,16 @@ export function fsaTarget(routeId = 'fsa'): EnvironmentTargetOfferInput {
   }
 }
 
-export function reviewedDirectZipSupport(): Extract<DirectZipSupportFacts, { kind: 'reviewed-supported' }> {
+export function runtimeDirectZipSupport(): Extract<DirectZipSupportFacts, { kind: 'runtime-supported' }> {
   return {
-    kind: 'reviewed-supported',
-    supportMatrixDigest: identity(80, 32),
-    browserBinaryDigest: identity(81, 32),
-    browserVersion: 'reviewed-browser-version',
-    operatingSystemBuild: 'reviewed-os-build',
-    filesystemProfile: 'reviewed-local-filesystem',
-    rawEvidenceDigest: identity(82, 32),
-    requiredFeatureFactsDigest: identity(88, 32),
-    recommendationPolicyDigest: identity(89, 32),
+    kind: 'runtime-supported',
+    capabilityDigest: identity(80, 32),
+    authority: {
+      kind: 'owned-target-session-v1',
+      recovery: 'persisted-handle-and-verified-checkpoint',
+      replacement: 'coordinated-no-replace',
+      cleanup: 'ownership-proof-required',
+    },
     policies: {
       zipEncoding: identity(83, 32),
       layout: identity(84, 32),
@@ -89,7 +88,7 @@ export function directZipTarget(routeId = 'direct-zip'): EnvironmentTargetOfferI
     guarantees: guaranteeFacts(fsaOwnedFileGuarantees()),
     persistence: 'operation-scoped',
     hardMaximumOutputBytes: null,
-    support: reviewedDirectZipSupport(),
+    support: runtimeDirectZipSupport(),
   }
 }
 

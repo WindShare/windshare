@@ -214,6 +214,7 @@ export interface DirectZipCommitCandidateV1 {
   readonly kindByte: typeof DIRECT_ZIP_CANDIDATE_EPOCH | typeof DIRECT_ZIP_CANDIDATE_CLOSING
   readonly operationId: string
   readonly candidateId: string
+  /** Creation provenance; resumed mutation authority comes from the current journal fence. */
   readonly leaseId: string
   readonly predecessorCheckpointGeneration: bigint
   readonly predecessorCheckpointDigest: string
@@ -244,6 +245,8 @@ export interface DirectZipJournalFenceV1 {
 }
 
 export interface DirectZipBootstrapCommitV1 {
+  /** Root layout, central record, and bootstrap epoch publish with the operation itself. */
+  readonly pages?: readonly DirectZipImmutablePageV1[]
   readonly candidate: DirectZipBootstrapCandidateV1
   readonly operation: ReceiveOperationV2
   readonly operationRecord: PersistedReceiveRecord
@@ -252,6 +255,13 @@ export interface DirectZipBootstrapCommitV1 {
   readonly handles: readonly ReceiveOperationHandleRecord[]
   readonly lease: ReceiveOperationLeaseRecord
   readonly checkpoint: DirectZipCheckpointV1
+}
+
+export interface DirectZipClosingTransitionV1 {
+  readonly fence: DirectZipJournalFenceV1
+  readonly checkpoint: DirectZipCheckpointV1
+  readonly lifecycle: ReceiveLifecycleState
+  readonly lifecycleRecord: PersistedReceiveRecord
 }
 
 export interface DirectZipCandidatePromotionV1 {
@@ -344,6 +354,7 @@ export type DirectZipJournalTraceEvent = Readonly<{
     | 'direct_zip.journal.bootstrap_committed'
     | 'direct_zip.journal.lease_acquired'
     | 'direct_zip.journal.candidate_promoted'
+    | 'direct_zip.journal.closing_entered'
     | 'direct_zip.journal.candidate_retired'
     | 'direct_zip.journal.recovery_lifecycle_committed'
     | 'direct_zip.journal.orphans_collected'

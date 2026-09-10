@@ -63,7 +63,8 @@ func TestLinuxExt4CreatesMissingRootThroughCertifiedHandles(t *testing.T) {
 		}
 	}()
 	if binding, err := platform.RootBinding(); err != nil || binding.IsZero() {
-		t.Fatalf("bind handle-created Linux/ext4 root: zero=%t err=%v", binding.IsZero(), err)
+		nativeOutputCertificationFailure(t, linuxExt4NativeCertificationProfile,
+			"bind handle-created Linux/ext4 root", err)
 	}
 }
 

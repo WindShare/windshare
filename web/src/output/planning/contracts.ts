@@ -62,26 +62,32 @@ export type FSADirectoryContainerOffer = EnvironmentTargetOfferBase<
   'fsa-tree'
 >
 
-export interface ReviewedDirectZipSupportFacts {
-  readonly kind: 'reviewed-supported'
-  readonly supportMatrixDigest: string
-  readonly browserBinaryDigest: string
-  readonly browserVersion: string
-  readonly operatingSystemBuild: string
-  readonly filesystemProfile: string
-  readonly rawEvidenceDigest: string
-  readonly requiredFeatureFactsDigest: string
-  readonly recommendationPolicyDigest: string
+export interface DirectZipRuntimeAuthorityContractV1 {
+  readonly kind: 'owned-target-session-v1'
+  readonly recovery: 'persisted-handle-and-verified-checkpoint'
+  /** Origin coordination cannot exclude concurrent writes by other applications. */
+  readonly replacement: 'coordinated-no-replace'
+  readonly cleanup: 'ownership-proof-required'
+}
+
+export interface RuntimeDirectZipSupportFacts {
+  readonly kind: 'runtime-supported'
+  readonly capabilityDigest: string
+  readonly authority: DirectZipRuntimeAuthorityContractV1
   readonly policies: AvailableDirectZipPolicyDigests
 }
 
 export type DirectZipSupportFacts =
-  | ReviewedDirectZipSupportFacts
+  | RuntimeDirectZipSupportFacts
   | Readonly<{
       kind: 'unavailable'
       reason:
-        | 'support-evidence-missing'
-        | 'platform-not-reviewed'
+        | 'runtime-not-installed'
+        | 'required-api-unavailable'
+        | 'journal-unavailable'
+        | 'handle-persistence-unavailable'
+        | 'coordination-unavailable'
+        | 'authority-contract-unavailable'
         | 'direct-route-unsupported'
         | 'policy-digests-unavailable'
     }>
@@ -90,7 +96,7 @@ export type FSAOwnedFileTargetOffer = EnvironmentTargetOfferBase<
   'fsa-owned-file-target',
   'operation-scoped',
   'fsa-owned-file'
-> & Readonly<{ readonly support: ReviewedDirectZipSupportFacts }>
+> & Readonly<{ readonly support: RuntimeDirectZipSupportFacts }>
 
 export type ManagedAtomicTargetOffer = EnvironmentTargetOfferBase<
   'managed-atomic-file-target',
@@ -222,7 +228,7 @@ export type FSAOwnedFileTargetSemantics = TargetSemanticsBase<
   'fsa-owned-file-target',
   'operation-scoped',
   'fsa-owned-file'
-> & Readonly<{ readonly support: ReviewedDirectZipSupportFacts }>
+> & Readonly<{ readonly support: RuntimeDirectZipSupportFacts }>
 
 export type ManagedAtomicTargetSemantics = TargetSemanticsBase<
   'managed-atomic-file-target',
@@ -387,14 +393,14 @@ export type ZipRouteRecommendationPolicyV1 =
   | Readonly<{
       version: 1
       kind: 'unavailable'
-      reason: 'measured-threshold-unavailable' | 'policy-digest-unavailable'
+      reason: 'workspace-threshold-unavailable' | 'policy-digest-unavailable'
     }>
 
 export type ZipRouteRecommendation =
   | Readonly<{
       kind: 'recommended'
       choiceId: ArtifactChoiceID
-      reason: 'workspace-within-reviewed-budget' | 'direct-unknown-or-over-budget'
+      reason: 'workspace-within-policy-budget' | 'direct-unknown-or-over-budget'
     }>
   | Readonly<{
       kind: 'no-recommendation'

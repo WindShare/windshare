@@ -31,7 +31,7 @@ import {
   portableOffer,
   projection,
   singleFileProof,
-  reviewedDirectZipSupport,
+  runtimeDirectZipSupport,
   treeProof,
   workspaceOffer,
 } from './fixture'
@@ -123,9 +123,9 @@ describe('receive intent binding', () => {
     }
   })
 
-  it('binds a reviewed direct ZIP route without substituting workspace authority', async () => {
+  it('binds a admitted direct ZIP route without substituting workspace authority', async () => {
     const selection = await selectionSpec()
-    const support = reviewedDirectZipSupport()
+    const support = runtimeDirectZipSupport()
     const currentEnvironment = environment({
       targets: [directZipTarget()],
       directZipSupport: support,
@@ -133,7 +133,7 @@ describe('receive intent binding', () => {
         version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: 0n,
-        policyDigest: support.recommendationPolicyDigest,
+        policyDigest: identity(89, 32),
       },
     })
     const currentProjection = projection(selection, treeProof(), 10n)

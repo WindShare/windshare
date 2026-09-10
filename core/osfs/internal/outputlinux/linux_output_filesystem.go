@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -163,174 +162,38 @@ type linuxMountIdentity struct {
 	filesystemUUID      [linuxFilesystemUUIDBytes]byte
 }
 
-type linuxOutputCertificate struct {
-	mount               linuxMountIdentity
-	rootObject          linuxOpenHandleIdentity
-	rootRestartIdentity linuxDirectoryRestartIdentity
-	durability          linuxOutputDurability
+// Runtime authority lasts only while the corresponding handles remain open.
+// Restart claims are a separate, optional certificate; an absent certificate
+// never invalidates the kernel's current-object or no-replace guarantees.
+type linuxOutputBinding struct {
+	mount      linuxMountIdentity
+	rootObject linuxOpenHandleIdentity
+	filesystem linuxOutputFilesystem
+	restart    *linuxOutputRestartCertificate
+}
+
+type linuxOutputRestartCertificate struct {
+	rootIdentity linuxDirectoryRestartIdentity
+	durability   linuxOutputDurability
 }
 
 type linuxOutputDirectory struct {
 	system                  *linuxOutputSystem
 	fd                      int
-	certificate             linuxOutputCertificate
+	binding                 linuxOutputBinding
 	object                  linuxOpenHandleIdentity
 	absolutePath            string
 	exactPermissions        uint32
 	requireExactPermissions bool
 }
 
-func linuxOpenExt4OutputRoot(path string, system *linuxOutputSystem) (*linuxOutputDirectory, error) {
-	const operation = "open output root"
-	if system == nil {
-		return nil, linuxUnsupported(operation, "native syscall provider is absent", nil)
-	}
-	if !filepath.IsAbs(path) {
-		return nil, linuxUnsafe(operation, "output root must be absolute so authority does not depend on process cwd", nil)
-	}
-	cleanPath := filepath.Clean(path)
-	how := unix.OpenHow{
-		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
-		Resolve: uint64(unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS),
-	}
-	fd, err := system.openat2(unix.AT_FDCWD, cleanPath, &how)
+func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputBinding, error) {
+	binding, err := linuxBindOutputFD(system, fd)
 	if err != nil {
-		return nil, linuxClassifyOpenError(operation, err)
+		return linuxOutputBinding{}, err
 	}
-	certificate, err := linuxCertifyExt4OutputFD(system, fd)
-	if err != nil {
-		return nil, errors.Join(err, system.close(fd))
-	}
-	if _, err := linuxCertifyAbsoluteOutputPlacement(cleanPath, system, certificate); err != nil {
-		return nil, errors.Join(err, system.close(fd))
-	}
-	root := &linuxOutputDirectory{
-		system:       system,
-		fd:           fd,
-		certificate:  certificate,
-		object:       certificate.rootObject,
-		absolutePath: cleanPath,
-	}
-	// The public root is admitted by actual kernel access. Its ACL and ownership
-	// remain user policy; WindShare establishes exclusivity only below its private
-	// control namespace.
-	if err := root.validatePublicCreateAuthority(); err != nil {
-		return nil, errors.Join(err, root.close())
-	}
-	return root, nil
+	return linuxEnrollExt4Restart(system, fd, binding)
 }
-
-func linuxCertifyExt4OutputFD(system *linuxOutputSystem, fd int) (linuxOutputCertificate, error) {
-	const operation = "certify output filesystem"
-	legacy, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID)
-	if err != nil {
-		return linuxOutputCertificate{}, err
-	}
-	if legacy.identity.kind != unix.S_IFDIR {
-		return linuxOutputCertificate{}, linuxUnsafe(operation, "output root handle is not a directory", nil)
-	}
-	unique, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID_UNIQUE)
-	if err != nil {
-		return linuxOutputCertificate{}, err
-	}
-	// The legacy and unique statx queries intentionally return different mount
-	// ID domains. The inode comparison detects an object swap between them
-	// without treating that domain difference as a mount change.
-	if !legacy.identity.sameInodeObject(unique.identity) {
-		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount or root object changed during certification", nil)
-	}
-	if err := linuxVerifyOpenDirectoryFlags(system, fd, operation); err != nil {
-		return linuxOutputCertificate{}, err
-	}
-	var filesystem unix.Statfs_t
-	if err := system.fstatfs(fd, &filesystem); err != nil {
-		return linuxOutputCertificate{}, fmt.Errorf("%s: inspect filesystem: %w", operation, err)
-	}
-	// Statfs_t.Type follows the native Linux ABI and is narrower on 32-bit
-	// architectures, so the explicit widening is required outside amd64.
-	//nolint:unconvert
-	filesystemType := int64(filesystem.Type)
-	if filesystemType != linuxExt4SuperMagic {
-		return linuxOutputCertificate{}, linuxUnsupported(operation, "filesystem superblock is not ext4", nil)
-	}
-	mountInfo, err := system.readMountInfo()
-	if err != nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation, "mount table cannot be inspected", err)
-	}
-	mount, err := linuxFindMountInfo(mountInfo, legacy.identity.mountID)
-	if err != nil {
-		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount table is malformed or does not contain the open root", err)
-	}
-	if mount.filesystemType != "ext4" {
-		// ext2, ext3, and ext4 share a statfs magic number. The kernel mount
-		// table is the additional discriminator that keeps this allowlist exact.
-		return linuxOutputCertificate{}, linuxUnsupported(operation, "mounted filesystem type is not ext4", nil)
-	}
-	if mount.deviceMajor != legacy.identity.deviceMajor || mount.deviceMinor != legacy.identity.deviceMinor {
-		return linuxOutputCertificate{}, linuxUnsafe(operation, "mount table device does not match the open root", nil)
-	}
-	if system.readProcessStatus == nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"process umask provider is unavailable", nil)
-	}
-	processStatus, err := system.readProcessStatus()
-	if err != nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"process umask cannot be inspected before private creation", err)
-	}
-	processUmask, err := linuxParseProcessUmask(processStatus)
-	if err != nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"process umask is unavailable or malformed", err)
-	}
-	// Private directories and files request only owner bits. If the process
-	// umask preserves those bits, their 0700/0600 modes are exact at the create
-	// syscall itself, so termination before the defensive fchmod remains a
-	// recoverable cut rather than an inaccessible reserved namespace.
-	if processUmask&linuxOutputDirectoryMode != 0 {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"process umask masks required private owner permissions", nil)
-	}
-	if system.getFilesystemUUID == nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"ext4 filesystem UUID provider is unavailable", nil)
-	}
-	filesystemUUID, err := system.getFilesystemUUID(fd)
-	if err != nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"ext4 filesystem UUID is unavailable", err)
-	}
-	if filesystemUUID == [linuxFilesystemUUIDBytes]byte{} {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"ext4 filesystem UUID is all zero", nil)
-	}
-	mountIdentity := linuxMountIdentity{
-		uniqueMountID:       unique.identity.mountID,
-		deviceMajor:         unique.identity.deviceMajor,
-		deviceMinor:         unique.identity.deviceMinor,
-		runtimeFilesystemID: filesystem.Fsid.Val,
-		filesystemUUID:      filesystemUUID,
-	}
-	if system.restartIdentity == nil {
-		return linuxOutputCertificate{}, linuxUnsupported(operation,
-			"directory restart-identity provider is unavailable", nil)
-	}
-	restartIdentity, err := system.restartIdentity.Read(system, fd, mountIdentity)
-	if err != nil {
-		return linuxOutputCertificate{}, err
-	}
-	if !restartIdentity.matchesHandle(unique.identity) {
-		return linuxOutputCertificate{}, linuxUnsafe(operation,
-			"restart identity differs from the certified root handle", nil)
-	}
-	return linuxOutputCertificate{
-		mount:               mountIdentity,
-		rootObject:          unique.identity,
-		rootRestartIdentity: restartIdentity,
-		durability:          linuxOutputProcessRestartDurability,
-	}, nil
-}
-
 func linuxReadOpenHandleFacts(system *linuxOutputSystem, fd int, mountMask int) (linuxOpenHandleFacts, error) {
 	const operation = "inspect open output object"
 	if system == nil || system.statx == nil {
@@ -362,11 +225,11 @@ func linuxReadOpenHandleFacts(system *linuxOutputSystem, fd int, mountMask int) 
 
 func linuxVerifyOpenDirectoryFlags(system *linuxOutputSystem, fd int, operation string) error {
 	if system.getFlags == nil {
-		return linuxUnsupported(operation, "ext4 inode flag provider is unavailable", nil)
+		return linuxUnsupported(operation, "inode flag provider is unavailable", nil)
 	}
 	flags, err := system.getFlags(fd)
 	if err != nil {
-		return linuxUnsupported(operation, "ext4 directory flags are unavailable", err)
+		return linuxUnsupported(operation, "directory flags are unavailable", err)
 	}
 	if flags&linuxFSCasefoldFlag != 0 {
 		return linuxUnsupported(operation,
@@ -440,7 +303,7 @@ func linuxReadSizedIOCTL(kind, number, size uint) uint {
 func linuxVerifyOpenObject(
 	system *linuxOutputSystem,
 	fd int,
-	certificate linuxOutputCertificate,
+	binding linuxOutputBinding,
 ) (linuxOpenHandleFacts, error) {
 	const operation = "verify open output object"
 	identity, err := linuxReadOpenHandleFacts(system, fd, unix.STATX_MNT_ID_UNIQUE)
@@ -453,14 +316,14 @@ func linuxVerifyOpenObject(
 	}
 	//nolint:unconvert // Statfs_t.Type is int32 on supported 32-bit Linux ABIs.
 	filesystemType := int64(filesystem.Type)
-	mount := certificate.mount
+	mount := binding.mount
 	if identity.identity.mountID != mount.uniqueMountID ||
 		identity.identity.deviceMajor != mount.deviceMajor || identity.identity.deviceMinor != mount.deviceMinor ||
-		filesystem.Fsid.Val != mount.runtimeFilesystemID || filesystemType != linuxExt4SuperMagic {
-		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "object crossed or changed the certified ext4 mount", nil)
+		filesystem.Fsid.Val != mount.runtimeFilesystemID || filesystemType != binding.filesystem.magic {
+		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "object crossed or changed the pinned output mount", nil)
 	}
 	if identity.identity.kind == unix.S_IFDIR {
-		if err := linuxVerifyOpenDirectoryFlags(system, fd, operation); err != nil {
+		if err := linuxVerifyOutputDirectorySemantics(system, fd, binding.filesystem, operation); err != nil {
 			return linuxOpenHandleFacts{}, err
 		}
 	}

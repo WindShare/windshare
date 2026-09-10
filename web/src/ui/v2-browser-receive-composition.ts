@@ -162,7 +162,7 @@ async function inspectBrowserRouteRegistry(
     signal,
   )
   const installedDirectZip = directZip !== undefined && directZipContribution.lookup.kind === 'available'
-    ? Object.freeze({ directZip, reviewed: directZipContribution.lookup.facts })
+    ? Object.freeze({ directZip, facts: directZipContribution.lookup.facts })
     : undefined
   return Object.freeze({
     runtime,
@@ -215,7 +215,7 @@ function inspectBrowserRouteRegistrySynchronously(
     directZipTarget: null,
     directZipSupport: Object.freeze({
       kind: 'unavailable',
-      reason: 'support-evidence-missing',
+      reason: 'runtime-not-installed',
     }),
     zipRecommendationPolicy: null,
     installedDirectZip: undefined,

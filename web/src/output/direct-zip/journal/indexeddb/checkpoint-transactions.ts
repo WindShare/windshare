@@ -28,6 +28,7 @@ import {
   DirectZipJournalConcurrencyError,
   abortQuietly,
   assertCandidateFence,
+  assertCandidateCheckpointFence,
   assertLifecycleCheckpointCut,
   assertLifecycleForCheckpoint,
   assertPromotedCheckpointCut,
@@ -41,6 +42,14 @@ import {
   snapshotFence,
 } from './authority'
 import type { IndexedDbDirectZipJournalStorage } from './storage'
+
+function applyRecoveryCandidateDisposition(
+  store: IDBObjectStore,
+  lifecycleKind: import('../../../workspace/state').ReceiveLifecycleState['kind'],
+  candidate: DirectZipCommitCandidateV1 | undefined,
+): void {
+  if (lifecycleKind === 'discarded' && candidate !== undefined) store.delete(candidate.id)
+}
 
 export class IndexedDbDirectZipCheckpointTransactions {
   readonly #storage: IndexedDbDirectZipJournalStorage
@@ -192,7 +201,7 @@ export class IndexedDbDirectZipCheckpointTransactions {
     const fence = snapshotFence(cut.fence)
     const candidate = await validateDirectZipCommitCandidateV1(cut.candidate)
     const checkpoint = await validateDirectZipCheckpointV1(cut.checkpoint)
-    assertCandidateFence(candidate, fence)
+    assertCandidateCheckpointFence(candidate, fence)
     const lifecycleRecord = await validatePersistedReceiveRecord(cut.lifecycleRecord)
     const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)
     const lifecycleProjection = await storedReceiveLifecycleState(cut.lifecycle)
@@ -273,7 +282,7 @@ export class IndexedDbDirectZipCheckpointTransactions {
     const candidate = cut.candidate === undefined
       ? undefined
       : await validateDirectZipCommitCandidateV1(cut.candidate)
-    if (candidate !== undefined) assertCandidateFence(candidate, fence)
+    if (candidate !== undefined) assertCandidateCheckpointFence(candidate, fence)
     const lifecycleRecord = await validatePersistedReceiveRecord(cut.lifecycleRecord)
     const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)
     const lifecycleProjection = await storedReceiveLifecycleState(cut.lifecycle)
@@ -333,6 +342,9 @@ export class IndexedDbDirectZipCheckpointTransactions {
       }
       transaction.objectStore(INDEXEDDB_DIRECT_ZIP_STATE_STORE).put(state)
       transaction.objectStore(INDEXEDDB_RECEIVE_RECORD_STORE).put(lifecycleRecord)
+      // Explicit owned-target cleanup retires its pending write authority in the
+      // same cut as the cleanup receipt, so startup cannot revive a deleted ZIP.
+      applyRecoveryCandidateDisposition(candidateStore, lifecycle.kind, candidate)
       await transactionCompletion(transaction)
       this.#storage.emit({
         name: 'direct_zip.journal.recovery_lifecycle_committed',
@@ -353,7 +365,7 @@ export class IndexedDbDirectZipCheckpointTransactions {
     this.#storage.assertOpen()
     const fence = snapshotFence(cut.fence)
     const candidate = await validateDirectZipCommitCandidateV1(cut.candidate)
-    assertCandidateFence(candidate, fence)
+    assertCandidateCheckpointFence(candidate, fence)
     const checkpoint = await validateDirectZipCheckpointV1(cut.checkpoint)
     const lifecycleRecord = await validatePersistedReceiveRecord(cut.lifecycleRecord)
     const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)

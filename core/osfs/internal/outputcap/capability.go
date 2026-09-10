@@ -188,17 +188,18 @@ func (mode ExecutionMode) String() string {
 	}
 }
 
-// SelectExecutionMode permits live-only output only when both public visibility
-// and restart cleanup are proven. Registry or range weakness alone is not a
-// reason to weaken either safety guarantee.
+// SelectExecutionMode keeps safe current-process publication independent from
+// restart authority. Missing restart evidence selects a lifecycle that retains
+// live handles and never treats abandoned private names as recovery authority.
 func SelectExecutionMode(capabilities DestinationCapabilities) (ExecutionMode, error) {
 	if !capabilities.Valid() {
 		return 0, ErrInvalidDestinationCapabilities
 	}
-	if !capabilities.safePublish.Supported() || !capabilities.crashCleanup.Supported() {
+	if !capabilities.safePublish.Supported() {
 		return 0, ErrOrdinaryOutputUnsupported
 	}
-	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() {
+	if capabilities.operationRecovery.Supported() && capabilities.rangeRecovery.Supported() &&
+		capabilities.crashCleanup.Supported() {
 		return ExecutionResumable, nil
 	}
 	return ExecutionLiveOnly, nil

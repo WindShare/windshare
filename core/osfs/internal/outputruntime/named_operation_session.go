@@ -2,7 +2,6 @@ package outputruntime
 
 import (
 	"context"
-	"crypto/sha256"
 	"errors"
 	"io"
 	"sync"
@@ -409,43 +408,14 @@ func (executor *liveFileExecutor) BeginFile(
 			Cut: outputsession.MutationStable, Settlement: settlement,
 		}, errors.Join(settlementErr, destination.Close())
 	}
-	var nonce [checkpointmodel.LiveCleanupNonceBytesV1]byte
-	if _, err := io.ReadFull(executor.random, nonce[:]); err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, errors.Join(err, destination.Close())
-	}
-	ticket, err := checkpointmodel.NewLiveCleanupTicket(checkpointmodel.LiveCleanupTicketSpec{
-		Nonce: nonce[:], ExactSize: file.ExpectedSize(),
-		Profile: executor.authority.LiveCleanupProfile(), Generation: 1,
-		State: checkpointmodel.LiveCleanupTicketCommitted,
-	})
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, errors.Join(err, destination.Close())
-	}
-	parent, ok := destination.(destinationauthority.LiveCleanupStageParent)
-	if !ok {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationNoChange}, errors.Join(
-			transfer.ErrInvalidOutputBinding, destination.Close(),
-		)
-	}
-	stage, created, err := executor.authority.CreateLiveCleanupStage(ctx, parent, ticket)
+	owned, cleanup, err := executor.createOwnedStage(ctx, destination, file.ExpectedSize())
 	if err != nil {
 		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, errors.Join(err, destination.Close())
-	}
-	objectDigest := sha256.Sum256(append([]byte("windshare/live-partial-object/v1\x00"), nonce[:]...))
-	object, err := checkpointmodel.ObjectIDFromBytes(objectDigest[:])
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, errors.Join(err, stage.Close(), destination.Close())
-	}
-	owned, err := fileexecution.NewLiveOwnedFile(object, stage, created)
-	if err != nil {
-		return outputsession.FileBeginObservation{Cut: outputsession.MutationAmbiguous}, errors.Join(err, stage.Close(), destination.Close())
 	}
 	transaction, err := fileexecution.NewLivePartialFileTransaction(
 		file, destination, owned,
 		func(current *fileexecution.LiveOwnedFile) error {
-			err := executor.authority.RemoveLiveCleanupStage(
-				current.CleanupTicket(), current.NativeFile(),
-			)
+			err := cleanup(current)
 			decision := FilesystemOutputRuntimeSucceeded
 			if err != nil {
 				decision = FilesystemOutputRuntimeCleanupPending

@@ -37,7 +37,7 @@ type linuxOutputPlacementRecord struct {
 func linuxCertifyAbsoluteOutputPlacement(
 	absolutePath string,
 	system *linuxOutputSystem,
-	expected linuxOutputCertificate,
+	expected linuxOutputBinding,
 ) (_ []byte, resultErr error) {
 	const operation = "certify absolute output-root placement"
 	if system == nil || system.openat2 == nil || system.close == nil || system.geteuid == nil {
@@ -75,7 +75,7 @@ func linuxCertifyAbsoluteOutputPlacement(
 	}
 	records := make([]linuxOutputPlacementRecord, 0, len(components)+1)
 	records = append(records, linuxOutputPlacementRecord{
-		directory: currentCertificate.rootRestartIdentity,
+		directory: currentCertificate.restart.rootIdentity,
 	})
 
 	for _, component := range components {
@@ -117,7 +117,7 @@ func linuxCertifyAbsoluteOutputPlacement(
 		currentFD = childFD
 		currentCertificate = childCertificate
 		records = append(records, linuxOutputPlacementRecord{
-			component: component, directory: childCertificate.rootRestartIdentity,
+			component: component, directory: childCertificate.restart.rootIdentity,
 		})
 		if err := system.close(previousFD); err != nil {
 			return nil, fmt.Errorf("%s: close traversed ancestor: %w", operation, err)
@@ -159,18 +159,18 @@ func linuxAbsolutePathComponents(absolutePath string) ([]string, error) {
 func linuxValidateAbsolutePlacementParent(
 	system *linuxOutputSystem,
 	fd int,
-	certificate linuxOutputCertificate,
+	binding linuxOutputBinding,
 ) error {
 	const operation = "validate absolute output-root ancestry access"
 	if system.faccessat2 == nil {
 		return linuxUnsupported(operation, "handle-bound effective search provider is unavailable", nil)
 	}
-	identity, err := linuxVerifyOpenObject(system, fd, certificate)
+	identity, err := linuxVerifyOpenObject(system, fd, binding)
 	if err != nil {
 		return err
 	}
 	if identity.identity.kind != unix.S_IFDIR ||
-		!identity.matches(certificate.rootObject) {
+		!identity.matches(binding.rootObject) {
 		return linuxUnsafe(operation, "ancestry handle is not its certified directory incarnation", nil)
 	}
 	if err := system.faccessat2(fd, "", uint32(unix.X_OK), unix.AT_EMPTY_PATH|unix.AT_EACCESS); err != nil {
@@ -179,7 +179,7 @@ func linuxValidateAbsolutePlacementParent(
 		}
 		return linuxUnsafe(operation, "receiver lacks effective search authority on an ancestry directory", err)
 	}
-	rechecked, err := linuxVerifyOpenObject(system, fd, certificate)
+	rechecked, err := linuxVerifyOpenObject(system, fd, binding)
 	if err != nil {
 		return err
 	}
