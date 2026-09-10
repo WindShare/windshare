@@ -19,6 +19,13 @@ docker run --rm -p 8484:8484/tcp -p 3478:3478/udp \
   -state-dir /state -relay-base-url wss://relay.example.com
 ```
 
+`-max-routes` defaults to 1,024 active routes, including registration, reconnect grace,
+and unresolved STOP transactions. A durable STOP releases its route slot. Permanent
+revocations remain in the disk index at `-state-dir/stopped-shares.bin`; preserve this
+file across restarts and allow only one relay process to own it. History consumes disk,
+not active route capacity. This pre-v1 index uses bbolt; legacy append-log files are
+rejected rather than silently discarding their revocations.
+
 The state volume must be writable by container UID 65532. Terminate TLS at the host
 proxy as usual. The STUN admin port is private and is not published by this command.
 UDP 443 requires an explicit listener, port publication, available bind privileges,
