@@ -43,7 +43,8 @@ type senderRelayObservationCompleter interface {
 // senderRelayConnection keeps factories concrete while containing the narrow
 // transport interface at the consumer boundary.
 type senderRelayConnection struct {
-	endpoint senderRelayEndpoint
+	endpoint           senderRelayEndpoint
+	finishObservations func()
 }
 
 func newSenderRelayConnection(endpoint senderRelayEndpoint) senderRelayConnection {
@@ -133,7 +134,7 @@ type senderRelayLifecycleConfig struct {
 	dialer                       senderRelayDialer
 	clock                        senderRelayRecoveryClock
 	lifecycleObservationCapacity int
-	observeConnection            func(senderRelayConnection)
+	observeConnection            func(senderRelayConnection) func()
 	observe                      func(senderRelayRecoveryMilestone)
 	observeAttempt               func(senderRelayRecoveryAttempt)
 }
@@ -163,18 +164,16 @@ type senderRelayRecoveryAttempt struct {
 type senderRelayLifecycle struct {
 	mu sync.Mutex
 
-	config          senderRelayLifecycleConfig
-	resume          v2.RegisterInit
-	stopID          v2.StopID
-	connection      senderRelayConnection
-	recoveryContext context.Context
-	cancelRecovery  context.CancelFunc
-	stopping        bool
-	cleanupOnce     sync.Once
-	cleanupErr      error
-	observed        []senderRelayConnection
-	completionOnce  sync.Once
-	completion      relayv2.LifecycleObservationCompletion
+	config            senderRelayLifecycleConfig
+	resume            v2.RegisterInit
+	stopID            v2.StopID
+	connection        senderRelayConnection
+	recoveryContext   context.Context
+	cancelRecovery    context.CancelFunc
+	stopping          bool
+	cleanupOnce       sync.Once
+	cleanupErr        error
+	retiredCompletion relayv2.LifecycleObservationCompletion
 }
 
 func newSenderRelayLifecycle(config senderRelayLifecycleConfig) (*senderRelayLifecycle, error) {
@@ -199,15 +198,16 @@ func newSenderRelayLifecycle(config senderRelayLifecycleConfig) (*senderRelayLif
 	// lets a failed initial WebSocket become collectible immediately after detach.
 	config.initial = nil
 	recoveryContext, cancel := context.WithCancel(context.Background())
-	return &senderRelayLifecycle{
+	lifecycle := &senderRelayLifecycle{
 		config:          config,
 		resume:          resume,
 		stopID:          stopID,
 		connection:      connection,
-		observed:        []senderRelayConnection{connection},
 		recoveryContext: recoveryContext,
 		cancelRecovery:  cancel,
-	}, nil
+	}
+	lifecycle.connection = lifecycle.trackObservationConnection(connection)
+	return lifecycle, nil
 }
 
 func (lifecycle *senderRelayLifecycle) Accept(ctx context.Context) (*relayv2.Channel, error) {
@@ -269,7 +269,7 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 	}
 	// Detaching before Close prevents retries and cleanup from repeatedly owning
 	// the failed transport while a replacement is being established.
-	_ = old.Close()
+	_ = lifecycle.retireConnection(old)
 
 	recoveryContext, cancel := context.WithTimeout(
 		lifecycle.recoveryContext,
@@ -295,9 +295,9 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 			Dial:             relayv2.DialOptions{LifecycleObservationCapacity: lifecycle.config.lifecycleObservationCapacity},
 		})
 		if dialErr == nil {
-			lifecycle.trackObservationConnection(connection)
+			connection = lifecycle.trackObservationConnection(connection)
 			if err := lifecycle.recoveryCause(callerContext, recoveryContext); err != nil {
-				_ = connection.Close()
+				_ = lifecycle.retireConnection(connection)
 				return failAttempt(err)
 			}
 			if !connection.valid() {
@@ -306,7 +306,7 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 			if err := lifecycle.installRecovered(connection, callerContext, recoveryContext); err != nil {
 				// A dial can win concurrently with cancellation or explicit stop.
 				// Closing the uninstalled result keeps route ownership leak-free.
-				_ = connection.Close()
+				_ = lifecycle.retireConnection(connection)
 				return failAttempt(err)
 			}
 			lifecycle.observeRecoveryAttempt(senderRelayRecoveryAttempt{
@@ -340,31 +340,42 @@ func (lifecycle *senderRelayLifecycle) recover(callerContext context.Context) (r
 	}
 }
 
-func (lifecycle *senderRelayLifecycle) trackObservationConnection(connection senderRelayConnection) {
-	if lifecycle == nil || !connection.valid() {
-		return
+func (lifecycle *senderRelayLifecycle) trackObservationConnection(connection senderRelayConnection) senderRelayConnection {
+	if lifecycle != nil && connection.valid() && lifecycle.config.observeConnection != nil {
+		connection.finishObservations = lifecycle.config.observeConnection(connection)
+	}
+	return connection
+}
+
+func (lifecycle *senderRelayLifecycle) retireConnection(connection senderRelayConnection) error {
+	closeErr := connection.Close()
+	// Close can encounter a transport already retiring on another goroutine.
+	// Its Done follows the terminal observation, so never cut diagnostics early.
+	if terminal, ok := connection.endpoint.(interface{ Done() <-chan struct{} }); ok {
+		<-terminal.Done()
+	}
+	completion := connection.CompleteObservations()
+	if connection.finishObservations != nil {
+		connection.finishObservations()
 	}
 	lifecycle.mu.Lock()
-	lifecycle.observed = append(lifecycle.observed, connection)
+	mergeRelayCompletion(&lifecycle.retiredCompletion, completion)
 	lifecycle.mu.Unlock()
-	if lifecycle.config.observeConnection != nil {
-		lifecycle.config.observeConnection(connection)
-	}
+	return closeErr
 }
 
 func (lifecycle *senderRelayLifecycle) CompleteObservations() relayv2.LifecycleObservationCompletion {
 	if lifecycle == nil {
 		return relayv2.LifecycleObservationCompletion{}
 	}
-	lifecycle.completionOnce.Do(func() {
-		lifecycle.mu.Lock()
-		connections := append([]senderRelayConnection(nil), lifecycle.observed...)
-		lifecycle.mu.Unlock()
-		for _, connection := range connections {
-			mergeRelayCompletion(&lifecycle.completion, connection.CompleteObservations())
-		}
-	})
-	return lifecycle.completion
+	// The command joins recovery and cleanup before its final observation cut.
+	// Retired transports have already contributed immutable counters and no
+	// longer need to remain reachable from this lifecycle.
+	lifecycle.mu.Lock()
+	completion, connection := lifecycle.retiredCompletion, lifecycle.connection
+	lifecycle.mu.Unlock()
+	mergeRelayCompletion(&completion, connection.CompleteObservations())
+	return completion
 }
 
 func (lifecycle *senderRelayLifecycle) observeRecovery(milestone senderRelayRecoveryMilestone) {
@@ -466,7 +477,7 @@ func (lifecycle *senderRelayLifecycle) Cleanup(ctx context.Context) error {
 		connection := lifecycle.connection
 		lifecycle.connection = senderRelayConnection{}
 		lifecycle.mu.Unlock()
-		closeErr := connection.Close()
+		closeErr := lifecycle.retireConnection(connection)
 		lifecycle.cleanupErr = errors.Join(stopErr, closeErr)
 	})
 	return lifecycle.cleanupErr

@@ -485,6 +485,23 @@ func newSenderRelayTestLifecycle(
 	clock senderRelayRecoveryClock,
 ) *senderRelayLifecycle {
 	t.Helper()
+	lifecycle, err := newSenderRelayLifecycle(newSenderRelayTestConfig(t, initial, dialer, clock))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.config.initial != nil {
+		t.Fatal("bootstrap relay connection remained reachable through recovery config")
+	}
+	return lifecycle
+}
+
+func newSenderRelayTestConfig(
+	t *testing.T,
+	initial senderRelayEndpoint,
+	dialer senderRelayDialer,
+	clock senderRelayRecoveryClock,
+) senderRelayLifecycleConfig {
+	t.Helper()
 	privateKey := ed25519.NewKeyFromSeed(senderRelayBytesFrom(0x20, ed25519.SeedSize))
 	publicKey := privateKey.Public().(ed25519.PublicKey)
 	pkDigest := sha256.Sum256(append([]byte("windshare/v2 sender-key\x00"), publicKey...))
@@ -508,7 +525,7 @@ func newSenderRelayTestLifecycle(
 	if err != nil {
 		t.Fatal(err)
 	}
-	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
+	return senderRelayLifecycleConfig{
 		relayURL:    "https://relay.example",
 		fresh:       fresh,
 		resumeToken: resumeToken,
@@ -516,14 +533,7 @@ func newSenderRelayTestLifecycle(
 		initial:     initial,
 		dialer:      dialer,
 		clock:       clock,
-	})
-	if err != nil {
-		t.Fatal(err)
 	}
-	if lifecycle.config.initial != nil {
-		t.Fatal("bootstrap relay connection remained reachable through recovery config")
-	}
-	return lifecycle
 }
 
 func senderRelayBytesFrom(first byte, length int) []byte {

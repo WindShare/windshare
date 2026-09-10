@@ -27,11 +27,11 @@ func (authority *Authority) finalizeDirectory(
 	}
 	if err := ctx.Err(); err != nil {
 		err = noMutation(err)
-		authority.finishFinalization(record, directoryFinalization{}, err)
+		err = authority.finishFinalization(record, directoryFinalization{}, err)
 		return directoryFinalization{}, record.materialization.disposition, record.claim.parentID, false, err
 	}
 	result, finalizeErr := authority.finalizeRetained(record)
-	authority.finishFinalization(record, result, finalizeErr)
+	finalizeErr = authority.finishFinalization(record, result, finalizeErr)
 	return result, record.materialization.disposition, record.claim.parentID, false, finalizeErr
 }
 
@@ -44,7 +44,7 @@ func (authority *Authority) beginFinalization(
 		return nil, false, directoryFinalization{}, noMutation(ErrAuthorityClosed)
 	}
 	record := authority.claims[claim.id]
-	if record == nil || record.state != materializationReady || record.retained == nil {
+	if record == nil || record.state != materializationReady {
 		return record, false, directoryFinalization{}, noMutation(ErrParentUnavailable)
 	}
 	if !sameDirectoryClaim(record.claim, claim) {
@@ -59,6 +59,9 @@ func (authority *Authority) beginFinalization(
 		// Coalescing is outputsession state, not native filesystem authority.
 		return record, true, directoryFinalization{}, mutationAmbiguous(ErrMetadataReconcile)
 	default:
+		if record.execution == nil {
+			return record, false, directoryFinalization{}, noMutation(ErrParentUnavailable)
+		}
 		record.finalizationState = finalizationPending
 		return record, false, directoryFinalization{}, nil
 	}
@@ -75,18 +78,31 @@ func (authority *Authority) finishFinalization(
 	record *claimRecord,
 	result directoryFinalization,
 	err error,
-) {
+) error {
 	authority.mu.Lock()
-	switch {
-	case err == nil && result.valid():
+	if errors.Is(err, ErrNoMutation) {
+		record.finalizationState = finalizationUnstarted
+		authority.mu.Unlock()
+		return err
+	}
+	// A terminal receipt must not keep its native witness or namespace snapshot
+	// alive. Detach before waiting for borrowers, then publish the final result
+	// only after handle cleanup so a replay cannot hide a close failure.
+	execution := record.execution
+	record.execution = nil
+	authority.mu.Unlock()
+	if closeErr := execution.close(); closeErr != nil {
+		err = mutationAmbiguous(errors.Join(err, closeErr))
+	}
+	authority.mu.Lock()
+	if err == nil && result.valid() {
 		record.finalizationState = finalizationSettled
 		record.finalization = result
-	case errors.Is(err, ErrNoMutation):
-		record.finalizationState = finalizationUnstarted
-	default:
+	} else {
 		record.finalizationState = finalizationAmbiguous
 	}
 	authority.mu.Unlock()
+	return err
 }
 
 func (authority *Authority) finalizeRetained(record *claimRecord) (directoryFinalization, error) {

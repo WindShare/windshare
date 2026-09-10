@@ -173,10 +173,10 @@ func (a *App) connectShareRelay(
 	if err != nil {
 		return nil, clievent.RelayAuthority{}, err
 	}
-	observations.attachRelayStream(connection.LifecycleTrace())
 	relayAuthority, err := commandprojection.RelayAuthority(connection.Endpoint())
 	if err != nil {
 		_ = connection.Close()
+		observations.attachRelayStream(connection.LifecycleTrace())()
 		observations.registerRelayCompletion(connection.CompleteObservations)
 		return nil, clievent.RelayAuthority{}, err
 	}
@@ -184,14 +184,15 @@ func (a *App) connectShareRelay(
 		relayURL: relayURL, fresh: register, resumeToken: resumeToken,
 		privateKey: material.SenderPrivateKey, initial: connection,
 		lifecycleObservationCapacity: observations.relayObservationCapacity(),
-		observeConnection: func(connection senderRelayConnection) {
-			observations.attachRelayStream(connection.LifecycleTrace())
+		observeConnection: func(connection senderRelayConnection) func() {
+			return observations.attachRelayStream(connection.LifecycleTrace())
 		},
 		observe:        a.observeSenderRelayRecovery,
 		observeAttempt: observations.ObserveRelayRecovery,
 	})
 	if err != nil {
 		_ = connection.Close()
+		observations.attachRelayStream(connection.LifecycleTrace())()
 		observations.registerRelayCompletion(connection.CompleteObservations)
 		return nil, clievent.RelayAuthority{}, err
 	}

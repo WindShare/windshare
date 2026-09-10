@@ -8,13 +8,13 @@ import (
 	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
-func (authority *Authority) readyLineage(claimID ClaimID) ([]*claimRecord, error) {
+func (authority *Authority) readyLineage(claimID ClaimID) ([]directoryWitness, error) {
 	authority.mu.Lock()
 	defer authority.mu.Unlock()
 	if authority.closed {
 		return nil, ErrAuthorityClosed
 	}
-	reversed := make([]*claimRecord, 0, min(catalog.MaxPathDepth+1, len(authority.claims)))
+	reversed := make([]directoryWitness, 0, min(catalog.MaxPathDepth+1, len(authority.claims)))
 	seen := make(map[ClaimID]struct{}, catalog.MaxPathDepth+1)
 	for currentID := claimID; validClaimID(currentID); {
 		if _, duplicate := seen[currentID]; duplicate || len(reversed) > catalog.MaxPathDepth {
@@ -22,10 +22,10 @@ func (authority *Authority) readyLineage(claimID ClaimID) ([]*claimRecord, error
 		}
 		seen[currentID] = struct{}{}
 		record := authority.claims[currentID]
-		if record == nil || record.state != materializationReady || record.retained == nil {
+		if record == nil || record.state != materializationReady || record.execution == nil {
 			return nil, ErrParentUnavailable
 		}
-		reversed = append(reversed, record)
+		reversed = append(reversed, directoryWitness{claim: record.claim, execution: record.execution})
 		currentID = record.claim.parentID
 	}
 	if len(reversed) == 0 {
@@ -35,7 +35,7 @@ func (authority *Authority) readyLineage(claimID ClaimID) ([]*claimRecord, error
 	if top.parentID != 0 || !top.locator.isRoot() && !validateImmediateChild("", top.locator.canonicalPath) {
 		return nil, ErrRetainedAuthorityChanged
 	}
-	lineage := make([]*claimRecord, len(reversed))
+	lineage := make([]directoryWitness, len(reversed))
 	for index := range reversed {
 		lineage[len(reversed)-1-index] = reversed[index]
 	}
@@ -59,15 +59,27 @@ func (authority *Authority) openGuardedDirectory(
 	if err != nil {
 		return nil, nil, err
 	}
+	release, err := borrowDirectoryLineage(lineage)
+	if err != nil {
+		return nil, nil, err
+	}
 	guard, root, err := acquireGuardedRoot(authority.platform)
 	if err != nil {
+		release()
 		return nil, nil, err
 	}
 	current, currentOwned, err := walkRetainedLineage(root, lineage)
 	if err != nil {
-		return nil, nil, errors.Join(err, guard.Close())
+		err = errors.Join(err, guard.Close())
+		release()
+		return nil, nil, err
 	}
-	return current, guardedDirectoryCleanup(current, currentOwned, guard), nil
+	cleanup := guardedDirectoryCleanup(current, currentOwned, guard)
+	return current, func() error {
+		err := cleanup()
+		release()
+		return err
+	}, nil
 }
 
 func acquireGuardedRoot(
@@ -86,13 +98,13 @@ func acquireGuardedRoot(
 
 func walkRetainedLineage(
 	root outputcap.Directory,
-	lineage []*claimRecord,
+	lineage []directoryWitness,
 ) (outputcap.Directory, bool, error) {
 	current := root
 	currentOwned := false
 	start := 0
 	if lineage[0].claim.locator.isRoot() {
-		same, err := lineage[0].retained.SameDirectory(root)
+		same, err := lineage[0].execution.retained.SameDirectory(root)
 		if err != nil || !same {
 			return nil, false, errors.Join(ErrRetainedAuthorityChanged, err)
 		}
@@ -102,7 +114,7 @@ func walkRetainedLineage(
 		next, err := openExactDirectory(current, record.claim.locator.leaf)
 		if err == nil {
 			var same bool
-			same, err = record.retained.SameDirectory(next)
+			same, err = record.execution.retained.SameDirectory(next)
 			if err == nil && !same {
 				err = ErrRetainedAuthorityChanged
 			}
