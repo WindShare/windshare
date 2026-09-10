@@ -43,11 +43,17 @@ type incrementalDirectoryDiscovery struct {
 }
 
 func (r *jobRun) isolateIncrementalFailure(
+	ctx context.Context,
 	checkpoint nodeLedgerCheckpoint,
 	directory catalog.DirectoryID,
 	path string,
 	err error,
 ) error {
+	if cause := closedContextCause(ctx); cause != nil && cause == err {
+		// A worker can stop the whole job with a file-local settlement fault.
+		// Propagating that stop cannot invalidate authenticated catalog authority.
+		return cause
+	}
 	if recordErr := r.recordDiscoveryFailure(directory, path, err); recordErr != nil {
 		if directory == r.job.root && path == "" && !isJobTerminalError(recordErr) {
 			return catalogIntegrityFailure(err)
@@ -175,7 +181,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 	cursor, rawOpenErr := r.job.catalog.OpenDirectoryPages(ctx, request.directory)
 	err := normalizeCatalogBoundary(ctx, rawOpenErr)
 	if err != nil {
-		return false, r.isolateIncrementalFailure(checkpoint, request.directory, request.path, err)
+		return false, r.isolateIncrementalFailure(ctx, checkpoint, request.directory, request.path, err)
 	}
 	if cursor == nil {
 		return false, dependencyContractFailure(ErrCatalogCursorContract)
@@ -254,13 +260,13 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 			failure = dependencyContractFailure(err)
 		}
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	if result.Exhausted.Valid() {
 		failure := resourceBudgetFailure(ErrGenerationReplayBudget)
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	if !result.Complete {
@@ -271,7 +277,7 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 	if len(discovery.commitments) == 0 {
 		failure := catalogIntegrityFailure(ErrCatalogIdentity)
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	discovery.beginGeneration(discovery.generation)

@@ -74,7 +74,7 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 	cursor, rawOpenErr := discovery.run.job.catalog.OpenDirectoryPages(ctx, discovery.request.directory)
 	err := normalizeCatalogBoundary(ctx, rawOpenErr)
 	if err != nil {
-		return false, discovery.handleReplayFailure(err)
+		return false, discovery.handleReplayFailure(ctx, err)
 	}
 	if cursor == nil {
 		return false, dependencyContractFailure(ErrCatalogCursorContract)
@@ -82,7 +82,7 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 	defer func() {
 		closeErr := normalizeCatalogBoundary(context.Background(), cursor.Close())
 		if closeErr != nil {
-			closeErr = discovery.handleReplayFailure(closeErr)
+			closeErr = discovery.handleReplayFailure(context.Background(), closeErr)
 		}
 		resultErr = joinLifecycleFailures(resultErr, closeErr)
 	}()
@@ -92,7 +92,7 @@ func (discovery *incrementalDirectoryDiscovery) replayGenerationPhase(
 		page, ok, rawNextErr := cursor.Next(ctx)
 		err := normalizeCatalogBoundary(ctx, rawNextErr)
 		if err != nil {
-			return false, discovery.handleReplayFailure(err)
+			return false, discovery.handleReplayFailure(ctx, err)
 		}
 		terminal := index == len(discovery.commitments)-1
 		if !ok || !discovery.matchesReplayPage(page, uint32(index), commitment, terminal) {
@@ -283,7 +283,12 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 	}
 }
 
-func (discovery *incrementalDirectoryDiscovery) handleReplayFailure(err error) error {
+func (discovery *incrementalDirectoryDiscovery) handleReplayFailure(ctx context.Context, err error) error {
+	if cause := closedContextCause(ctx); cause != nil && cause == err {
+		// Root replay can observe a worker's stop before its own next catalog call.
+		// Preserve that cause instead of treating its local scope as catalog damage.
+		return cause
+	}
 	recorded := discovery.run.recordDiscoveryFailure(
 		discovery.request.directory, discovery.request.path, err,
 	)
