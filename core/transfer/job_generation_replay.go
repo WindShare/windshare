@@ -284,7 +284,8 @@ func (discovery *incrementalDirectoryDiscovery) enqueueReplayFile(
 }
 
 func (discovery *incrementalDirectoryDiscovery) handleReplayFailure(ctx context.Context, err error) error {
-	if cause := closedContextCause(ctx); cause != nil && cause == err {
+	propagated, _ := admitLifecycleFailure(err)
+	if cause := closedContextCause(ctx); cause != nil && cause == propagated {
 		// Root replay can observe a worker's stop before its own next catalog call.
 		// Preserve that cause instead of treating its local scope as catalog damage.
 		return cause
