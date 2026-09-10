@@ -50,6 +50,13 @@ export function validateOperationRecovery(payload: UnknownRecord): void {
 
 export function validateProtocolOperation(payload: UnknownRecord): void {
   switch (payload.transition) {
+    case 'send_queued':
+    case 'send_sealing':
+    case 'send_sending':
+    case 'send_completed':
+    case 'send_withdrawn':
+    case 'send_abandoned':
+    case 'send_failed':
     case 'request_sent':
     case 'request_send_failed':
     case 'cancelled':

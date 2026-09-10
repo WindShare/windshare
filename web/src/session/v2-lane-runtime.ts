@@ -2,92 +2,18 @@ import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
 import { V2CborError } from '../protocol/cbor'
 import { V2EnvelopeError, V2EnvelopeOpener, V2EnvelopeSealer } from './v2-envelope'
+import { protocolMessageKindV1, type V2ProtocolTraceSource } from './v2-diagnostics'
+import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from './v2-identities'
+import { V2SessionWriter } from './v2-writer'
+export * from './v2-writer'
 import {
   decodeV2Message,
   V2MessageError,
-  type V2SessionMessage,
   verifyV2SenderControl,
 } from './v2-message'
 import type { V2OperationRouter } from './v2-operation-router'
 import { V2SessionRuntimeError } from './v2-runtime-types'
 import type { V2SessionKeys } from './v2-transcript'
-
-export const V2_SESSION_CONTROL_QUEUE = 256
-export const V2_SESSION_DATA_QUEUE = 32
-
-type OutboundPriority = 'control' | 'data' | 'terminal'
-
-interface OutboundItem {
-  readonly message: V2SessionMessage
-  readonly priority: OutboundPriority
-  readonly resolve: () => void
-  readonly reject: (reason: unknown) => void
-}
-
-export class V2SessionWriter {
-  readonly #channel: FrameChannel
-  readonly #sealer: V2EnvelopeSealer
-  readonly #control: OutboundItem[] = []
-  readonly #data: OutboundItem[] = []
-  #running = false
-  #terminal = false
-  #failure: unknown
-
-  constructor(channel: FrameChannel, sealer: V2EnvelopeSealer) {
-    this.#channel = channel
-    this.#sealer = sealer
-  }
-
-  send(message: V2SessionMessage, priority: OutboundPriority = 'control'): Promise<void> {
-    if (this.#failure !== undefined) return Promise.reject(this.#failure)
-    if (this.#terminal) {
-      return Promise.reject(new V2SessionRuntimeError('session', 'Writer accepted its terminal'))
-    }
-    const queue = priority === 'data' ? this.#data : this.#control
-    const limit = priority === 'data' ? V2_SESSION_DATA_QUEUE : V2_SESSION_CONTROL_QUEUE
-    if (queue.length >= limit) {
-      return Promise.reject(new V2SessionRuntimeError('lane', 'Session writer queue is full'))
-    }
-    if (priority === 'terminal') this.#terminal = true
-    const result = new Promise<void>((resolve, reject) => {
-      queue.push({ message, priority, resolve, reject })
-    })
-    this.#run()
-    return result
-  }
-
-  fail(reason: unknown): void {
-    if (this.#failure !== undefined) return
-    this.#failure = reason
-    for (const item of [...this.#control.splice(0), ...this.#data.splice(0)]) item.reject(reason)
-  }
-
-  #run(): void {
-    if (this.#running) return
-    this.#running = true
-    this.#drain().finally(() => {
-      this.#running = false
-      if (this.#control.length > 0 || this.#data.length > 0) this.#run()
-    }).catch(() => undefined)
-  }
-
-  async #drain(): Promise<void> {
-    while (this.#failure === undefined) {
-      const item = this.#control.shift() ?? this.#data.shift()
-      if (item === undefined) return
-      try {
-        const frame = await this.#sealer.seal(item.message.plaintext)
-        if (item.priority === 'terminal') await this.#channel.sendTerminal(frame)
-        else await this.#channel.send(frame)
-        item.resolve()
-      } catch (error) {
-        item.reject(error)
-        this.fail(error)
-        return
-      }
-    }
-  }
-}
 
 export class V2SessionLane {
   readonly id: number
@@ -102,6 +28,7 @@ export class V2SessionLane {
   readonly #onClosed: (lane: V2SessionLane, failure: unknown, fatal: boolean) => void
   readonly #pumpTask: Promise<void>
   #closed = false
+  #sendFailure: unknown
   #closeTask: Promise<void> | undefined
 
   constructor(options: {
@@ -113,6 +40,7 @@ export class V2SessionLane {
     readonly laneEpoch: number
     readonly router: V2OperationRouter
     readonly onClosed: (lane: V2SessionLane, failure: unknown, fatal: boolean) => void
+    readonly protocolTrace?: V2ProtocolTraceSource
   }) {
     this.id = options.laneId
     this.epoch = options.laneEpoch
@@ -131,6 +59,24 @@ export class V2SessionLane {
         laneEpoch: options.laneEpoch,
         direction: 0,
       }),
+      {
+        onFailure: reason => {
+          this.#sendFailure = new V2SessionRuntimeError('lane', 'Session lane delivery failed', { cause: reason })
+          this.close().catch(() => undefined)
+        },
+        observe: (message, transition) => options.protocolTrace?.current?.({
+          eventName: 'protocol_operation',
+          transition,
+          requestKind: protocolMessageKindV1(message.kind),
+          correlation: Object.freeze({
+            protocolSessionId: createV2ProtocolSessionIdentity(this.#sessionId),
+            ...(message.operationId === undefined ? {} : {
+              protocolOperationId: createV2ProtocolOperationIdentity(message.operationId),
+            }),
+            lane: Object.freeze({ id: this.id, epoch: this.epoch }),
+          }),
+        }),
+      },
     )
     this.#opener = new V2EnvelopeOpener(options.keys.senderToReceiverKey, {
       shareInstance: options.descriptor.shareInstance,
@@ -195,6 +141,7 @@ export class V2SessionLane {
       this.writer.fail(error)
     } finally {
       this.#closed = true
+      failure ??= this.#sendFailure
       if (failure === undefined) {
         this.writer.fail(new V2SessionRuntimeError('lane', 'Session lane became unavailable'))
       }
