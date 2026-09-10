@@ -44,7 +44,7 @@ import { createInitialBrowserDirectZipCheckpoint } from './journal'
 import {
   acquireOperationLock, browserDirectZipFileSystem, browserDirectZipHandleId,
   browserTarget, envelopeRecord, journalPolicies, randomBytes, randomId, readEnvelope,
-  requireBootstrapEnvelope, type BrowserDirectZipEnvelope,
+  requireBootstrapEnvelope, requestBrowserDirectZipAuthorization, type BrowserDirectZipEnvelope,
 } from './resources'
 import { observeBrowserDirectZipFeatureFacts } from './support'
 
@@ -311,9 +311,8 @@ async function openRetained(windowPort: BrowserReceiveWindow, operation: Reopene
   }
   const fileSystem = browserDirectZipFileSystem()
   const parent = envelope.binding.parentBinding.persistedHandle
-  if (await fileSystem.queryPermission(parent) !== 'granted' &&
-      await fileSystem.requestPermission(parent) !== 'granted') {
-    throw new DOMException('Access to the saved ZIP is required', 'NotAllowedError')
+  if (await fileSystem.queryPermission(parent) !== 'granted') {
+    await requestBrowserDirectZipAuthorization(parent)
   }
   const coordination = await BrowserDirectZipCoordination.open({
     parent, manager: windowPort.navigator.locks, operationId: operation.intent.operationId,

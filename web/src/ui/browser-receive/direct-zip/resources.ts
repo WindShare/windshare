@@ -25,6 +25,14 @@ const DIRECT_ZIP_HANDLE_KIND = 4
 const DIRECT_ZIP_HANDLE_DOMAIN = 'windshare/direct-zip-browser-authority/v1'
 export const browserDirectZipFileSystem = () => createDirectZipBrowserFileSystemPort({ enabled: true })
 
+export async function requestBrowserDirectZipAuthorization(parent: FileSystemDirectoryHandle): Promise<void> {
+  // Start the native request in the click stack, before storage I/O can expire
+  // user activation. Already-granted permission resolves without a prompt.
+  if (await browserDirectZipFileSystem().requestPermission(parent) !== 'granted') {
+    throw new DOMException('Access to the saved ZIP is required', 'NotAllowedError')
+  }
+}
+
 export interface BrowserDirectZipEnvelope {
   readonly version: 1
   readonly frozen: BoundReceiveIntent
