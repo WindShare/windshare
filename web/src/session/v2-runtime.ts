@@ -23,7 +23,7 @@ import {
   type V2LaneAdoptionOptions,
   type V2LaneGrantRequestOptions,
 } from './v2-lane-admission'
-import { V2SessionLane } from './v2-lane-runtime'
+import { V2SessionLane, type V2OutboundSend } from './v2-lane-runtime'
 import {
   encodeV2Body,
   encodeV2Message,
@@ -87,6 +87,7 @@ export class V2ReceiverSessionRuntime {
   readonly #laneEpochs = new Map<number, number>()
   readonly #laneInstallTails = new Map<number, Promise<void>>()
   readonly #operationLanes = new Map<V2OperationQueue, number>()
+  readonly #operationSends = new Map<V2SessionOperation, V2OutboundSend>()
   readonly #laneListeners = new Set<(change: V2LaneChange) => void>()
   readonly #randomBytes: (length: number) => Uint8Array
   readonly #connectivityCleanup: () => void | Promise<void>
@@ -211,7 +212,7 @@ export class V2ReceiverSessionRuntime {
     this.#requireOpen()
     options.signal?.throwIfAborted()
     decodeV2PeerPathControl(body)
-    await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, body))
+    await this.#selectLane(options.laneId).writer.send(encodeV2Message(V2_MESSAGE_KIND.peerPathControl, undefined, body), options)
   }
 
   async requestLaneGrant(
@@ -390,6 +391,8 @@ export class V2ReceiverSessionRuntime {
       const lane = this.#selectLane(options.laneId)
       this.#operationLanes.set(operation, lane.id)
       operation.onSettled(() => this.#operationLanes.delete(operation))
+      const delivery = lane.writer.enqueue(message)
+      this.#operationSends.set(operation, delivery)
       const cancellationSignal = options.signal
       if (cancellationSignal !== undefined) {
         const cancel = () => {
@@ -402,8 +405,10 @@ export class V2ReceiverSessionRuntime {
         }
         cancellationSignal.addEventListener('abort', cancel, { once: true })
         operation.onSettled(() => cancellationSignal.removeEventListener('abort', cancel))
+        if (cancellationSignal.aborted) cancel()
       }
-      await lane.writer.send(message)
+      await delivery.completion
+      options.signal?.throwIfAborted()
       this.#emitProtocolTrace(() => Object.freeze({
         eventName: 'protocol_operation',
         transition: 'request_sent',
@@ -419,6 +424,8 @@ export class V2ReceiverSessionRuntime {
       }))
       operation.cancel(error)
       throw error
+    } finally {
+      this.#operationSends.delete(operation)
     }
     return operation
   }
@@ -438,13 +445,14 @@ export class V2ReceiverSessionRuntime {
       throw new V2SessionRuntimeError('operation', 'Message kind is not valid for this operation')
     }
     const lane = this.#selectLane(options.laneId)
-    await lane.writer.send(encodeV2Message(kind, operation.id, canonicalBody))
+    await lane.writer.send(encodeV2Message(kind, operation.id, canonicalBody), options)
   }
 
   async cancelOperation(
     operation: V2SessionOperation,
     cancellation: V2OperationCancellation,
   ): Promise<void> {
+    const delivery = this.#operationSends.get(operation)?.cancel(cancellation.cause)
     if (!this.#router.owns(operation)) {
       // A remote final may already have installed its routing tombstone while
       // authenticated responses remain buffered for the consumer. Cancellation
@@ -460,18 +468,25 @@ export class V2ReceiverSessionRuntime {
       requestKind: protocolMessageKindV1(operation.requestKind),
       correlation: this.operationCorrelation(operation),
     }))
+    for (const lane of this.#lanes.values()) {
+      lane.writer.cancelPendingMessages(operation.id, cancellation.cause)
+    }
     operation.cancel(cancellation.cause)
+    // A withdrawn request has no peer-side operation to cancel.
+    if (delivery === 'withdrawn') return
     const lane = (cancellation.laneId === undefined
       ? undefined
       : this.#lanes.get(cancellation.laneId)) ??
       this.#lanes.get(this.initialLaneId) ??
       this.#lanes.values().next().value as V2SessionLane | undefined
     if (lane === undefined) return
-    await lane.writer.send(encodeV2Message(
+    // Local cancellation must not wait behind remote I/O. The writer owns this
+    // notification through delivery or lane retirement, including its deadline.
+    lane.writer.send(encodeV2Message(
       V2_MESSAGE_KIND.cancel,
       operation.id,
       encodeV2Body([cancellation.protocolReason]),
-    ))
+    )).catch(() => undefined)
   }
 
   async stop(): Promise<void> {
@@ -525,6 +540,7 @@ export class V2ReceiverSessionRuntime {
       laneId,
       laneEpoch,
       router: this.#router,
+      ...(this.#protocolTrace === undefined ? {} : { protocolTrace: this.#protocolTrace }),
       onClosed: (closed, failure, fatal) => {
         // Fatal authenticated failures become non-recoverable before observers
         // see the final lane detach; physical zero-lane loss remains recoverable.

@@ -138,6 +138,7 @@ interface RemoteLeaseState {
 export interface V2OpenedRevision {
   readonly descriptor: V2FileRevisionDescriptor
   readonly leaseId: Uint8Array<ArrayBuffer>
+  /** Bounded caller wait; shared reads retain lease authority until their cleanup drains. */
   release(): Promise<void>
 }
 
@@ -241,7 +242,7 @@ export class V2RevisionService {
       release: () => {
         // The barrier is injected by the receiver's broker owner so every future
         // revision consumer preserves first-waiter authorization automatically.
-        releaseTask ??= this.#beforeLeaseRelease(lease.id).then(() => this.#release(lease.id))
+        releaseTask ??= this.#releaseWhenIdle(lease.id)
         return releaseTask
       },
     })
@@ -254,6 +255,25 @@ export class V2RevisionService {
       state.error = new V2RevisionLeaseExpiredError()
     }
     return state.error
+  }
+
+  async #releaseWhenIdle(leaseId: Uint8Array<ArrayBuffer>): Promise<void> {
+    const deadline = operationDeadlineSignal(
+      this.#lifetime.signal,
+      V2_LEASE_RELEASE_TIMEOUT_MILLISECONDS,
+      new V2SessionRuntimeError('lane', 'Revision lease release timed out'),
+    )
+    // A different consumer may still need a shared read authorized by this lease.
+    // Bound the departing caller's wait without revoking that consumer's authority;
+    // the service keeps renewal and eventual remote cleanup until the barrier drains.
+    const cleanup = Promise.resolve()
+      .then(() => this.#beforeLeaseRelease(leaseId))
+      .then(() => this.#release(leaseId))
+    try {
+      await awaitLeaseRelease(cleanup, deadline.signal)
+    } finally {
+      deadline.close()
+    }
   }
 
   async #release(leaseId: Uint8Array): Promise<void> {
@@ -673,6 +693,15 @@ function operationDeadlineSignal(
       parent.removeEventListener('abort', abort)
     },
   }
+}
+
+function awaitLeaseRelease(cleanup: Promise<void>, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const abort = () => reject(signal.reason)
+    signal.addEventListener('abort', abort, { once: true })
+    if (signal.aborted) abort()
+    cleanup.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
+  })
 }
 
 function delayWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
