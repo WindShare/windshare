@@ -48,6 +48,30 @@ it('exports a sealed unsampled final per-download record through the existing tr
     expect(composition.runtime.status().retained_event_count).toBe('1')
   })
 
+it('exports discovery scheduling decisions with bounded queue and operation context', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createV2ReceiverTraceSource(composition.trace)
+  for (const decision of ['waiting', 'resumed', 'cancelled', 'complete'] as const) {
+    const event = {
+      name: 'receive_transition' as const, transition: 'discovery_scheduling' as const,
+      operationId: 'AgAAAAAAAAAAAAAAAAAAAA',
+      transferJobId: 'AQAAAAAAAAAAAAAAAAAAAA',
+      queue: 'generations' as const, decision,
+      pendingItems: 256, metadataBytes: 4096n,
+      maximumItems: 256, maximumMetadataBytes: 16777216n,
+    }
+    const projected = projectV2ReceiverTraceEvent(event)
+    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(projected.payload).toMatchObject({
+      operation_id: event.operationId, transfer_job_id: event.transferJobId, decision,
+      pending_items: '256', metadata_bytes: '4096', maximum_metadata_bytes: '16777216',
+    })
+    emit(source, () => event)
+  }
+  expect(composition.runtime.status().retained_event_count).toBe('4')
+})
+
 it('exports lane exception causes and bounded stacks without mutating the failure', () => {
     const cause = new Error('Peer continuation binding changed')
     const failure = new Error('Authenticated session lane failed', { cause })

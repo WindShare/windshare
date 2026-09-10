@@ -25,6 +25,8 @@ import { fileEntry, identity, identityText } from './v2-job-fixture'
 const TEST_PENDING_FILE_METADATA_BYTES = 1024n * 1024n
 const TEST_LIMITS: TransferJobLimits = Object.freeze({
   concurrentDirectories: 2,
+  pendingGenerations: 8,
+  pendingGenerationMetadataBytes: TEST_PENDING_FILE_METADATA_BYTES,
   pendingFiles: 4,
   pendingFileMetadataBytes: TEST_PENDING_FILE_METADATA_BYTES,
   catalogNodeClaims: 16,
@@ -182,6 +184,62 @@ describe('worker family supervision', () => {
     expect(events).toEqual(['second-worker-drained'])
   })
 
+  it.each([
+    { pendingGenerations: 1, pendingGenerationMetadataBytes: 100n },
+    { pendingGenerations: 8, pendingGenerationMetadataBytes: 1n },
+  ])('backpressures generation discovery at its independent count or byte budget: %s', async budget => {
+    const controller = new AbortController()
+    const replayStarted = deferred()
+    const releaseReplay = deferred()
+    const secondPushStarted = deferred()
+    const root = directoryWork(2, [])
+    const firstChild = directoryWork(3, ['first'])
+    const secondChild = directoryWork(4, ['second'])
+    const admitted: string[] = []
+    const replayed: string[] = []
+    const scheduling: string[] = []
+    let discoveryComplete = false
+    const limits = { ...TEST_LIMITS, ...budget, concurrentDirectories: 1 }
+    const running = runDiscoveryWorkers({
+      root, limits, signal: controller.signal,
+      observeDiscovery: event => {
+        expect(event.queue).toBe('generations')
+        expect(event.maximumItems).toBe(budget.pendingGenerations)
+        expect(event.maximumMetadataBytes).toBe(budget.pendingGenerationMetadataBytes)
+        scheduling.push(event.decision)
+      },
+      claimRoot: () => undefined,
+      abort: failure => controller.abort(failure),
+      discoveryComplete: () => { discoveryComplete = true },
+      recordDiscoveryFailure: () => { throw new Error('Unexpected discovery failure') },
+      recordDirectoryFailure: () => { throw new Error('Unexpected replay failure') },
+      recordFileFailure: () => { throw new Error('Unexpected file failure') },
+      transferFile: async () => undefined,
+      discoverDirectory: async function* (work, replays) {
+        if (work === secondChild) secondPushStarted.resolve()
+        await replays.push({
+          cursor: work.cursor, metadataBytes: 1n,
+          run: async () => {
+            replayStarted.resolve()
+            await releaseReplay.promise
+            replayed.push(work.cursor.idText)
+          },
+        }, controller.signal)
+        admitted.push(work.cursor.idText)
+        if (work === root) { yield firstChild; yield secondChild }
+      },
+    })
+    await Promise.all([replayStarted.promise, secondPushStarted.promise])
+    expect(admitted).toEqual([root.cursor.idText, firstChild.cursor.idText])
+    expect(discoveryComplete).toBe(false)
+    expect(scheduling).toContain('waiting')
+    releaseReplay.resolve()
+    await running
+    expect(discoveryComplete).toBe(true)
+    expect(scheduling).toEqual(expect.arrayContaining(['waiting', 'resumed', 'complete']))
+    expect(replayed).toEqual([root.cursor.idText, firstChild.cursor.idText, secondChild.cursor.idText])
+  })
+
   it('drains discovery producers and file workers before exposing failure', async () => {
     const controller = new AbortController()
     const fileStarted = deferred()
@@ -212,9 +270,15 @@ describe('worker family supervision', () => {
         aborted.resolve()
       },
       claimRoot: () => undefined,
-      discoverDirectory: async function* (work, files) {
+      discoveryComplete: () => undefined,
+      recordDiscoveryFailure: () => undefined,
+      discoverDirectory: async function* (work, replays) {
         if (work.cursor.idText === root.cursor.idText) {
-          await files.push(file, controller.signal)
+          await replays.push({
+            cursor: work.cursor,
+            metadataBytes: 1n,
+            run: files => files.push(file, controller.signal),
+          }, controller.signal)
           yield child
           await releaseRootProducer.promise
           events.push('root-producer-drained')

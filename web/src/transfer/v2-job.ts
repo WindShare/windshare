@@ -171,7 +171,7 @@ export class TransferJob {
         this.#observers?.measure(measure)
         this.#emitProgress()
       },
-      recordDirectoryFailure: (identity, error) => this.#recordDirectoryFailure(identity, error),
+      recordDirectoryFailure: (identity, error) => this.#failures.recordDiscoveryDirectory(identity, error),
       authenticateDirectory: (cursor, committed, parent) =>
         this.#authenticateDirectory(cursor, committed, parent),
       projectFile: sourcePath => this.#projectFile(sourcePath),
@@ -217,7 +217,7 @@ export class TransferJob {
       discovery: {
         createDirectFileQueue: () => newFileQueue(this.#limits),
         run: (root, directFiles, collector) => this.#runDiscovery(root, directFiles, collector),
-        finish: () => this.#finishDiscovery(),
+        measure: () => this.#measure.snapshot(),
         hasFailures: () => this.#failures.failureCount !== 0,
         prepareDirectory: (collector, cursor, committed, role) =>
           this.#preparedDirectory(collector, cursor, committed, role),
@@ -326,7 +326,10 @@ export class TransferJob {
           if (!this.#lifetime.signal.aborted) this.#lifetime.abort(error)
         },
         claimRoot: ({ cursor }) => this.#traversal.claimNode(cursor.id),
-        discoverDirectory: (work, files) => this.#discovery.discoverDirectory(work, files, collector),
+        discoverDirectory: (work, replays) => this.#discovery.discoverDirectory(work, replays, collector),
+        discoveryComplete: () => { this.#finishDiscovery() },
+        observeDiscovery: event => this.#observers?.discoveryScheduling(event),
+        recordDiscoveryFailure: (identity, error) => this.#failures.recordDiscoveryDirectory(identity, error),
         recordDirectoryFailure: (identity, error) => this.#recordDirectoryFailure(identity, error),
         transferFile: (file, pipeline) => this.#transferFile(file, pipeline),
         recordFileFailure: (file, error) => this.#recordFileFailure(file.entry, error),
@@ -396,6 +399,7 @@ export class TransferJob {
         this.#progress.completeFile(exactSize)
         this.#emitProgress()
       },
+      observeDiscovery: event => this.#observers?.discoveryScheduling(event),
       finishMeasure: () => {
         const measure = this.#measure.complete()
         this.#observers?.measure(measure)

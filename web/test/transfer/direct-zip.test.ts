@@ -199,6 +199,106 @@ describe('direct ZIP ordered transfer composition', () => {
     expect(measure.discovery).toBe('complete')
   })
 
+})
+
+describe('direct ZIP discovery pipeline', () => {
+  it('publishes an exact ZIP total while the first serial file transfer is blocked', async () => {
+    const discovered = coordinatorGate()
+    const transferStarted = coordinatorGate()
+    const releaseTransfer = coordinatorGate()
+    const members = [file('root/a.txt', 2n), file('root/b.txt', 3n)]
+    const transferred: string[] = []
+    const observed: bigint[] = []
+    const running = new DirectZipOrderedCoordinatorV1({
+      source: { root: async () => ROOT, members: async function* () { yield* members } },
+      output: coordinatorOutput(),
+      signal: SIGNAL,
+      observeSelectedFile: size => observed.push(size),
+      observeReplayedFile: () => undefined,
+      transferFile: async member => {
+        transferStarted.resolve()
+        await releaseTransfer.promise
+        transferred.push(member.artifactPath.join('/'))
+      },
+      finishMeasure: () => {
+        discovered.resolve()
+        return { discoveredFiles: 2, discoveredBytes: 5n, discovery: 'complete', sizeClass: 'small' }
+      },
+    }).run()
+    await Promise.all([discovered.promise, transferStarted.promise])
+    expect(observed).toEqual([2n, 3n])
+    expect(transferred).toEqual([])
+    releaseTransfer.resolve()
+    expect((await running).discovery).toBe('complete')
+    expect(transferred).toEqual(['root/a.txt', 'root/b.txt'])
+  })
+
+  it('bounds ZIP discovery ahead of a blocked writer without changing member order', async () => {
+    const reachedBound = coordinatorGate()
+    const releaseTransfer = coordinatorGate()
+    let observed = 0
+    let finished = false
+    const members = Array.from({ length: 300 }, (_, index) => file(`root/${index.toString().padStart(3, '0')}.txt`, 1n))
+    const running = new DirectZipOrderedCoordinatorV1({
+      source: { root: async () => ROOT, members: async function* () { yield* members } },
+      output: coordinatorOutput(),
+      signal: SIGNAL,
+      observeSelectedFile: () => { if (++observed === 258) reachedBound.resolve() },
+      observeReplayedFile: () => undefined,
+      transferFile: async () => { await releaseTransfer.promise },
+      finishMeasure: () => {
+        finished = true
+        return { discoveredFiles: 300, discoveredBytes: 300n, discovery: 'complete', sizeClass: 'large' }
+      },
+    }).run()
+    await reachedBound.promise
+    // One active member, 256 queued members, and one producer waiting for admission.
+    expect(observed).toBe(258)
+    expect(finished).toBe(false)
+    releaseTransfer.resolve()
+    expect((await running).discoveredFiles).toBe(300)
+  })
+
+  it('cancels and drains the active writer when catalog discovery fails', async () => {
+    const transferStarted = coordinatorGate()
+    const cancelled = coordinatorGate()
+    const releaseCleanup = coordinatorGate()
+    const failure = new Error('catalog discovery failed')
+    let settled = false
+    const running = new DirectZipOrderedCoordinatorV1({
+      source: {
+        root: async () => ROOT,
+        members: async function* () {
+          yield file('root/a.txt', 1n)
+          await transferStarted.promise
+          throw failure
+        },
+      },
+      output: coordinatorOutput(),
+      signal: SIGNAL,
+      observeSelectedFile: () => undefined,
+      observeReplayedFile: () => undefined,
+      transferFile: async (_member, signal) => {
+        const aborted = new Promise<void>(resolve => {
+          signal.addEventListener('abort', () => { cancelled.resolve(); resolve() }, { once: true })
+        })
+        transferStarted.resolve()
+        await aborted
+        await releaseCleanup.promise
+        signal.throwIfAborted()
+      },
+      finishMeasure: () => { throw new Error('Failed discovery cannot publish an exact total') },
+    }).run()
+    const observed = running.then(() => { settled = true }, () => { settled = true })
+    await cancelled.promise
+    expect(settled).toBe(false)
+    releaseCleanup.resolve()
+    await expect(running).rejects.toBe(failure)
+    await observed
+  })
+})
+
+describe('direct ZIP output settlement', () => {
   it('treats content-block checkpoints as policy observations and creates one complete artifact', async () => {
     const harness = createWriterHarness()
     const output = transferOutput(harness.writer(), harness)
@@ -594,6 +694,21 @@ function file(path: string, expectedSize: bigint): DirectZipOrderedFileV1 {
       ready: Promise.resolve(),
     }),
   })
+}
+
+function coordinatorGate(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void
+  const promise = new Promise<void>(complete => { resolve = complete })
+  return { promise, resolve }
+}
+
+function coordinatorOutput(): DirectZipOrderedOutputV1 {
+  return {
+    beginTraversal: async () => undefined,
+    visit: async (_ordinal, member) => member.kind === 'file' ? 'transfer-file' : 'admitted',
+    finishTraversal: async () => undefined,
+    materializationSummary: () => ({ entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n }),
+  }
 }
 
 function id(seed: number): Uint8Array<ArrayBuffer> {

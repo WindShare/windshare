@@ -6,28 +6,29 @@ import {
   type DirectorySettlement,
 } from '../directory-admission'
 import type { IncrementalDirectoryOutput } from '../output-session'
-import type { DirectoryWork, PendingFile } from './contract'
+import type { DirectoryWork } from './contract'
+import type { V2DirectoryReplay } from '../discovery/v2-directory-replay'
 import type { AsyncBoundedQueue } from './scheduler'
 
 export interface V2DirectoryTransferRunner {
   readonly signal: AbortSignal
   readonly discoverDirectory: (
     work: DirectoryWork,
-    files: AsyncBoundedQueue<PendingFile>,
+    replays: AsyncBoundedQueue<V2DirectoryReplay>,
   ) => AsyncGenerator<DirectoryWork, void>
   readonly isolateDirectory: (directoryId: string, error: unknown) => void
 }
 
 export async function runV2DirectoryTransferWorker(
   directories: AsyncBoundedQueue<DirectoryWork>,
-  files: AsyncBoundedQueue<PendingFile>,
+  replays: AsyncBoundedQueue<V2DirectoryReplay>,
   runner: V2DirectoryTransferRunner,
 ): Promise<void> {
   while (true) {
     const work = await directories.pop(runner.signal)
     if (work === undefined) return
     try {
-      await runDirectoryStack(work, directories, files, runner)
+      await runDirectoryStack(work, directories, replays, runner)
     } finally {
       directories.taskDone()
     }
@@ -37,13 +38,13 @@ export async function runV2DirectoryTransferWorker(
 async function runDirectoryStack(
   initial: DirectoryWork,
   directories: AsyncBoundedQueue<DirectoryWork>,
-  files: AsyncBoundedQueue<PendingFile>,
+  replays: AsyncBoundedQueue<V2DirectoryReplay>,
   runner: V2DirectoryTransferRunner,
 ): Promise<void> {
   const stack: Array<{
     readonly work: DirectoryWork
     readonly discovery: AsyncGenerator<DirectoryWork, void>
-  }> = [{ work: initial, discovery: runner.discoverDirectory(initial, files) }]
+  }> = [{ work: initial, discovery: runner.discoverDirectory(initial, replays) }]
   try {
     while (stack.length > 0) {
       const frame = stack[stack.length - 1]
@@ -63,7 +64,7 @@ async function runDirectoryStack(
       // stack retains a bounded breadth queue without recursion or starvation.
       stack.push({
         work: next.value,
-        discovery: runner.discoverDirectory(next.value, files),
+        discovery: runner.discoverDirectory(next.value, replays),
       })
     }
   } finally {

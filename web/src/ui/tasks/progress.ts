@@ -12,9 +12,18 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   const files = progress === null ? '' : ` · ${progress.completedFiles} files completed`
   const details = progressDetails(facts)
   const percentage = exactPercentage(facts, materialized)
+  const exact = progress?.discovery === 'complete'
+  const total = exact ? ` / ${formatBytes(progress.discoveredBytes)}` : ''
+  const ratio = percentage === null ? '' : ` · ${percentage}%`
   return Object.freeze({
     mode: percentage === null ? 'indeterminate' : 'determinate',
-    percentage, label: `${formatBytes(materialized)} ${direct === null ? 'written or reused' : 'received'}${files}`,
+    percentage,
+    sampleIdentity: progress?.transferJobId ?? '',
+    receivedBytes: progress?.writtenBytes ?? 0n,
+    remainingBytes: exact && facts.completeness !== 'partial'
+      ? maximum(0n, progress.discoveredBytes - materialized) : null,
+    status: discoveryStatus(facts),
+    label: `${formatBytes(materialized)}${total} ${direct === null ? 'written or reused' : 'received'}${ratio}${files}`,
     details: Object.freeze(details),
   })
 }
@@ -25,6 +34,7 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
   const retained = state.payloadKind === 'direct-zip' ? state.safeSelectedPayloadBytes : state.completedBytes
   return Object.freeze({
     mode: 'indeterminate', percentage: null,
+    sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
     label: `${formatBytes(retained)} retained for continuation`,
     details: Object.freeze(state.payloadKind === 'direct-zip'
       ? [`Continuing may need up to ${formatBytes(state.committedArchiveLength)} of temporary destination space.`]
@@ -38,10 +48,19 @@ function exactPercentage(facts: TaskFacts, materialized: bigint): number | null 
   // required even when a single active file happens to have a known size.
   if (progress?.discovery !== 'complete' || progress.discoveredBytes <= 0n) return null
   const raw = materialized * PERCENT_SCALE / progress.discoveredBytes
-  const limit = facts.completeness === 'complete' ? PERCENT_SCALE : UNSETTLED_PERCENT_LIMIT
+  const limit = facts.completeness === 'complete' && facts.publication !== 'unpublished'
+    ? PERCENT_SCALE : UNSETTLED_PERCENT_LIMIT
   if (raw < 0n) return 0
   return Number(raw > limit ? limit : raw)
 }
+
+function discoveryStatus(facts: TaskFacts): string | null {
+  const progress = facts.progress
+  if (progress?.discovery === 'open') return `Calculating total · ${progress.discoveredFiles} files found so far`
+  return progress?.discovery === 'failed' ? 'Counting did not finish; final total unknown.' : null
+}
+
+function maximum(left: bigint, right: bigint): bigint { return left > right ? left : right }
 
 function progressDetails(facts: TaskFacts): string[] {
   const progress = facts.progress

@@ -1,5 +1,5 @@
 import { FaultScope } from '../fault'
-import type { DirectoryWork } from '../job/contract'
+import type { DirectoryCursor, DirectoryWork } from '../job/contract'
 import { V2DirectoryOutputError, normalizeV2FileTransferFailure } from '../job/failures'
 
 export interface V2DirectoryStackFrame {
@@ -15,18 +15,23 @@ export async function advanceV2DirectoryFrame(
   try {
     return await frame.discovery.next()
   } catch (error) {
-    const directoryId = error instanceof V2DirectoryOutputError && error.directoryId !== undefined
-      ? error.directoryId
-      : frame.work.cursor.idText
-    const normalized = normalizeV2FileTransferFailure(error)
-    if (
-      frame.work.cursor.path.length === 0 ||
-      normalized.kind === 'canceled' ||
-      normalized.fault.scope !== FaultScope.DirectoryLocal
-    ) {
-      throw normalized.diagnostic
-    }
-    isolate(directoryId, normalized.diagnostic)
+    isolateV2DirectoryFailure(frame.work.cursor, error, isolate)
     return undefined
   }
+}
+
+export function isolateV2DirectoryFailure(
+  cursor: DirectoryCursor,
+  error: unknown,
+  isolate: (directoryId: string, error: unknown) => void,
+): void {
+  const directoryId = error instanceof V2DirectoryOutputError && error.directoryId !== undefined
+    ? error.directoryId
+    : cursor.idText
+  const normalized = normalizeV2FileTransferFailure(error)
+  if (cursor.path.length === 0 || normalized.kind === 'canceled' ||
+      normalized.fault.scope !== FaultScope.DirectoryLocal) {
+    throw normalized.diagnostic
+  }
+  isolate(directoryId, normalized.diagnostic)
 }

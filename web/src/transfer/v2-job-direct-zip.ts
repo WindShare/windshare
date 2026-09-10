@@ -26,6 +26,7 @@ export interface DirectZipJobOrchestration {
   readonly observeReplayedFile: (exactSize: bigint) => void
   readonly acknowledgeWrite: (bytes: bigint) => void
   readonly completeFile: (exactSize: bigint) => void
+  readonly observeDiscovery: (event: import('./discovery/queue').DiscoverySchedulingObservation) => void
   readonly finishMeasure: () => SelectionMeasure
 }
 
@@ -46,15 +47,16 @@ export function runDirectZipJob(
     signal: orchestration.signal,
     observeSelectedFile: orchestration.observeSelectedFile,
     observeReplayedFile: orchestration.observeReplayedFile,
-    transferFile: file => transferDirectZipFileV1({
+    transferFile: (file, signal) => transferDirectZipFileV1({
       descriptor: orchestration.descriptor,
       revisions: orchestration.revisions,
       broker: orchestration.broker,
       output: orchestration.execution.output,
-      signal: orchestration.signal,
+      signal,
       onWriteAcknowledged: orchestration.acknowledgeWrite,
       onComplete: orchestration.completeFile,
     }, file),
+    observeDiscovery: orchestration.observeDiscovery,
     finishMeasure: orchestration.finishMeasure,
   }).run()
 }
