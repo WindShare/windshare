@@ -4,6 +4,8 @@ import {
   type PendingFile,
 } from './contract'
 import { runV2DirectoryTransferWorker } from './directory-transfer'
+import { DiscoveryQueue, type DiscoverySchedulingObservation } from '../discovery/queue'
+import { runV2DirectoryReplayWorker, type V2DirectoryReplay } from '../discovery/v2-directory-replay'
 import { isV2FileScopedTransferFailure } from './failures'
 import type { TransferExecutionLimits, TransferJobLimits } from './limits'
 import {
@@ -41,8 +43,11 @@ export async function runDiscoveryWorkers(input: {
   readonly claimRoot: (root: DirectoryWork) => void
   readonly discoverDirectory: (
     work: DirectoryWork,
-    files: AsyncBoundedQueue<PendingFile>,
+    replays: AsyncBoundedQueue<V2DirectoryReplay>,
   ) => AsyncGenerator<DirectoryWork, void>
+  readonly observeDiscovery?: (event: DiscoverySchedulingObservation) => void
+  readonly discoveryComplete: () => void
+  readonly recordDiscoveryFailure: (directoryIdentity: string, error: unknown) => void
   readonly recordDirectoryFailure: (directoryIdentity: string, error: unknown) => void
   readonly transferFile: (
     file: PendingFile,
@@ -61,13 +66,33 @@ export async function runDiscoveryWorkers(input: {
   input.claimRoot(input.root)
   await directoryQueue.push(input.root, input.signal)
 
+  const replays = new DiscoveryQueue<V2DirectoryReplay>({
+    queue: 'generations',
+    maximumItems: input.limits.pendingGenerations,
+    maximumMetadataBytes: input.limits.pendingGenerationMetadataBytes,
+    weight: replay => replay.metadataBytes,
+    ...(input.observeDiscovery === undefined ? {} : { observe: input.observeDiscovery }),
+  })
   const directoryWorkers = Array.from({ length: input.limits.concurrentDirectories }, () =>
-    runV2DirectoryTransferWorker(directoryQueue, sinkFiles, {
+    runV2DirectoryTransferWorker(directoryQueue, replays, {
       signal: input.signal,
       discoverDirectory: input.discoverDirectory,
+      isolateDirectory: input.recordDiscoveryFailure,
+    }),
+  )
+  const replayWorkers = Array.from({ length: input.limits.concurrentDirectories }, () =>
+    runV2DirectoryReplayWorker({
+      queue: replays,
+      files: sinkFiles,
+      signal: input.signal,
       isolateDirectory: input.recordDirectoryFailure,
     }),
   )
+  const discovery = Promise.all(directoryWorkers).then(() => {
+    input.signal.throwIfAborted()
+    input.discoveryComplete()
+    replays.close()
+  })
   const directFiles = input.directFiles
   let fileWorkers: Promise<void>[] = []
   if (directFiles !== undefined) {
@@ -85,17 +110,17 @@ export async function runDiscoveryWorkers(input: {
       recordFileFailure: input.recordFileFailure,
     }))
   }
-  // Directory workers collectively own production. Waiting for all of them here
-  // makes queue closure a success-only transition while the supervisor still
-  // observes and drains every original promise independently.
-  const producer = Promise.allSettled(directoryWorkers).then(() => undefined)
+  // Discovery closes its denominator independently. Only replay completion closes
+  // file production; the supervisor still drains every original worker on failure.
+  const producer = Promise.all(replayWorkers).then(() => undefined)
   await superviseWorkerFamily({
     producer,
-    workers: [...directoryWorkers, ...fileWorkers],
+    workers: [...directoryWorkers, discovery, ...replayWorkers, ...fileWorkers],
     // Direct transfers expose the same file queue through producer and consumer
     // roles; the supervisor collapses that alias before any terminal action.
     queues: [
       directoryQueue,
+      replays,
       sinkFiles,
       ...(directFiles === undefined ? [] : [directFiles]),
     ],

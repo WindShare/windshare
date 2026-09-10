@@ -131,6 +131,10 @@ export class AsyncBoundedQueue<T> {
     return item?.value
   }
 
+  snapshot(): Readonly<{ pendingItems: number; metadataBytes: bigint }> {
+    return Object.freeze({ pendingItems: this.#items.length, metadataBytes: this.#bytes })
+  }
+
   close(): void {
     this.#closed = true
     this.#wake()

@@ -12,12 +12,13 @@ import {
 import { normalizeV2FileTransferFailure } from '../job/failures'
 import type { V2CatalogTraversalGuard } from '../job/traversal'
 
-export interface V2GenerationReplayConsumer<T> {
-  readonly materializeSelectedDirectory: () => Promise<void>
-  readonly prepare: (entry: V2CatalogEntry) => Promise<T | undefined>
+export interface V2GenerationReplay {
+  readonly cursor: DirectoryCursor
+  readonly committed: V2CommittedDirectory
+  readonly replayEntryIds?: ReadonlySet<string>
 }
 
-export interface V2DirectoryDiscoveryOptions<T> {
+export interface V2DirectoryDiscoveryOptions {
   readonly cursor: DirectoryCursor
   readonly catalog: V2CatalogClient
   readonly traversal: V2CatalogTraversalGuard
@@ -30,46 +31,43 @@ export interface V2DirectoryDiscoveryOptions<T> {
   readonly observeEntry: (entry: V2CatalogEntry) => boolean
   readonly generationCommitted: (committed: V2CommittedDirectory) => void | Promise<void>
   readonly recordDirectoryFailure: (directoryId: string, error: unknown) => void
-  readonly replayConsumer: (committed: V2CommittedDirectory) => V2GenerationReplayConsumer<T>
 }
 
 /**
- * Authenticates a complete committed generation before exposing output work.
- * Opaque target searches may stop early, but only selected identities from that
- * authenticated prefix are replayed, keeping memory and output authority bounded.
+ * Catalog discovery owns authentication and measurement; output replay owns
+ * materialization backpressure. Their shared handle refers to cached pages,
+ * allowing discovery to finish without retaining every pending file in memory.
  */
-export async function* discoverV2DirectoryGeneration<T>(
-  options: V2DirectoryDiscoveryOptions<T>,
-): AsyncGenerator<T, void> {
+export async function discoverV2DirectoryGeneration(
+  options: V2DirectoryDiscoveryOptions,
+): Promise<V2GenerationReplay | undefined> {
   const { cursor } = options
-  if (cursor.path.length > 0 && options.opaqueSearchSatisfied()) return
+  if (cursor.path.length > 0 && options.opaqueSearchSatisfied()) return undefined
   options.lifetimeSignal.throwIfAborted()
   if (cursor.path.length > V2_CATALOG_PATH_DEPTH) {
     throw new V2DirectoryTraversalError('Catalog traversal exceeded the protocol path depth')
   }
-  let ignoreSatisfiedSearchFailure = !options.validateEntireGeneration
   const leave = options.traversal.enterDirectory(cursor.idText)
   try {
     const committed = await loadCommittedDirectory(options)
-    if (options.opaqueSearchSatisfied()) return
+    if (options.opaqueSearchSatisfied()) return undefined
     if (committed === undefined) {
       if (cursor.path.length === 0) throw new V2CatalogTraversalError('Synthetic root discovery failed')
-      return
+      return undefined
     }
     requireCommittedDirectoryAuthority(cursor, committed)
     options.observeDirectory(committed.directoryId)
     await options.generationCommitted(committed)
-
-    const consumer = options.replayConsumer(committed)
     const observation = await observeCommittedGeneration(options, committed)
-    if (observation.skipReplay) return
-
-    // Replay uses the bounded page-store handle so output failures cannot erase
-    // already-authenticated discovery or require an unbounded entry accumulator.
-    ignoreSatisfiedSearchFailure = false
-    yield* replayCommittedGeneration(options, committed, consumer, observation.replayEntryIds)
+    if (observation.skipReplay) return undefined
+    return Object.freeze({
+      cursor,
+      committed,
+      ...(observation.replayEntryIds === undefined ? {} : { replayEntryIds: observation.replayEntryIds }),
+    })
   } catch (error) {
-    if (!ignoreSatisfiedSearchFailure || !options.opaqueSearchSatisfied()) throw error
+    if (options.validateEntireGeneration || !options.opaqueSearchSatisfied()) throw error
+    return undefined
   } finally {
     leave()
   }
@@ -80,8 +78,8 @@ interface V2GenerationObservation {
   readonly replayEntryIds?: Set<string>
 }
 
-async function observeCommittedGeneration<T>(
-  options: V2DirectoryDiscoveryOptions<T>,
+async function observeCommittedGeneration(
+  options: V2DirectoryDiscoveryOptions,
   committed: V2CommittedDirectory,
 ): Promise<V2GenerationObservation> {
   const selectedEntryIds = options.validateEntireGeneration ? undefined : new Set<string>()
@@ -93,9 +91,6 @@ async function observeCommittedGeneration<T>(
       stoppedAfterTargets = true
       break
     }
-    // The authenticated terminal page completes the committed cursor. Closing
-    // this observation iterator avoids pulling past authority while replay owns
-    // bounded output backpressure on a fresh page-store iterator.
     if (page.terminal) break
   }
   if (!stoppedAfterTargets) pages.finish()
@@ -107,8 +102,8 @@ async function observeCommittedGeneration<T>(
   })
 }
 
-function observePageEntries<T>(
-  options: V2DirectoryDiscoveryOptions<T>,
+function observePageEntries(
+  options: V2DirectoryDiscoveryOptions,
   entries: readonly V2CatalogEntry[],
   selectedEntryIds: Set<string> | undefined,
 ): boolean {
@@ -119,29 +114,32 @@ function observePageEntries<T>(
   return false
 }
 
-async function* replayCommittedGeneration<T>(
-  options: V2DirectoryDiscoveryOptions<T>,
-  committed: V2CommittedDirectory,
-  consumer: V2GenerationReplayConsumer<T>,
-  replayEntryIds?: Set<string>,
-): AsyncGenerator<T, void> {
-  const { cursor } = options
-  if (cursor.path.length > 0 && cursor.selected) await consumer.materializeSelectedDirectory()
-  const replay = options.traversal.pageCursor(cursor, committed)
-  for await (const page of options.catalog.pages(committed, options.lifetimeSignal)) {
+/** Each consumer validates the same immutable generation without rediscovering or recounting it. */
+export async function* replayV2DirectoryEntries(
+  generation: V2GenerationReplay,
+  input: Readonly<{
+    catalog: V2CatalogClient
+    traversal: V2CatalogTraversalGuard
+    signal: AbortSignal
+  }>,
+): AsyncGenerator<V2CatalogEntry, void> {
+  const { cursor, committed } = generation
+  const replayEntryIds = generation.replayEntryIds === undefined
+    ? undefined : new Set(generation.replayEntryIds)
+  const replay = input.traversal.pageCursor(cursor, committed)
+  for await (const page of input.catalog.pages(committed, input.signal)) {
     replay.accept(page)
     for (const entry of page.entries) {
       if (replayEntryIds !== undefined && !replayEntryIds.delete(entry.idText)) continue
-      const child = await consumer.prepare(entry)
-      if (child !== undefined) yield child
+      yield entry
       if (replayEntryIds?.size === 0) return
     }
   }
   replay.finish()
 }
 
-async function loadCommittedDirectory<T>(
-  options: V2DirectoryDiscoveryOptions<T>,
+async function loadCommittedDirectory(
+  options: V2DirectoryDiscoveryOptions,
 ): Promise<V2CommittedDirectory | undefined> {
   const { cursor } = options
   if (cursor.path.length === 0 && options.rootCommitted !== undefined) return options.rootCommitted

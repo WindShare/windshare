@@ -2,7 +2,8 @@ import type { V2CatalogClient } from '../../catalog/v2-client'
 import type { V2CommittedDirectory } from '../../catalog/v2-page-store'
 import type { V2CatalogEntry } from '../../catalog/v2-records'
 import type { V2FrozenSelectionPolicy } from '../../catalog/v2-selection'
-import { discoverV2DirectoryGeneration } from '../discovery/v2-generation-replay'
+import { discoverV2DirectoryGeneration, replayV2DirectoryEntries } from '../discovery/v2-generation-replay'
+import { generationReplayMetadataBytes, type V2DirectoryReplay } from '../discovery/v2-directory-replay'
 import type {
   AuthenticatedDirectory,
   AuthenticatedLogicalSiblingMembership,
@@ -92,7 +93,7 @@ export class V2JobDiscovery {
 
   async *discoverDirectory(
     work: DirectoryWork,
-    files: AsyncBoundedQueue<PendingFile>,
+    replays: AsyncBoundedQueue<V2DirectoryReplay>,
     collector?: ExactPreparationCollector,
   ): AsyncGenerator<DirectoryWork, void> {
     const { cursor } = work
@@ -100,7 +101,7 @@ export class V2JobDiscovery {
       (cursor.path.length === 0 && !this.#explicitTargets.hasPendingTargets)
     const discoverySignal = this.#explicitTargets.discoverySignal(validateEntireGeneration)
     const rootCommitted = this.#rootCommitted()
-    yield* discoverV2DirectoryGeneration({
+    const generation = await discoverV2DirectoryGeneration({
       cursor,
       catalog: this.#catalog,
       traversal: this.#traversal,
@@ -116,20 +117,27 @@ export class V2JobDiscovery {
         collector?.observeGeneration(cursor, committed)
       },
       recordDirectoryFailure: this.#recordDirectoryFailure,
-      replayConsumer: (committed) => {
-        const materialize = this.#directoryMaterializer(work, cursor, committed, collector)
-        return {
-          materializeSelectedDirectory: async () => { await materialize('selected') },
-          prepare: (entry) => this.#prepareCatalogEntry(
-            cursor,
-            materialize,
-            entry,
-            files,
-            collector,
-          ),
+    })
+    if (generation === undefined) return
+    const materialize = this.#directoryMaterializer(work, cursor, generation.committed, collector)
+    const replayInput = { catalog: this.#catalog, traversal: this.#traversal, signal: this.#signal }
+    await replays.push({
+      cursor,
+      metadataBytes: generationReplayMetadataBytes(generation),
+      run: async files => {
+        if (cursor.path.length > 0 && cursor.selected) await materialize('selected')
+        for await (const entry of replayV2DirectoryEntries(generation, replayInput)) {
+          if (entry.kind === 'file') await this.#prepareFile(cursor, materialize, entry, files, collector)
         }
       },
-    })
+    }, this.#signal)
+    // Child discovery reads the committed pages independently of output admission.
+    // A full file queue can hold back replay without withholding the selection total.
+    for await (const entry of replayV2DirectoryEntries(generation, replayInput)) {
+      if (entry.kind !== 'directory') continue
+      const child = this.#prepareChildDirectory(cursor, materialize, entry)
+      if (child !== undefined) yield child
+    }
   }
 
   #observeCatalogEntry(cursor: DirectoryCursor, entry: V2CatalogEntry): boolean {
@@ -141,31 +149,30 @@ export class V2JobDiscovery {
     return selected
   }
 
-  async #prepareCatalogEntry(
+  async #prepareFile(
     cursor: DirectoryCursor,
     materialize: (role?: 'selected' | 'ancestor') => Promise<AuthenticatedDirectory>,
-    entry: V2CatalogEntry,
+    entry: Extract<V2CatalogEntry, { kind: 'file' }>,
     files: AsyncBoundedQueue<PendingFile>,
     collector?: ExactPreparationCollector,
-  ): Promise<DirectoryWork | undefined> {
+  ): Promise<void> {
     this.#signal.throwIfAborted()
-    const sourcePath = this.#traversal.entryPath(cursor, entry)
-    if (entry.kind === 'file') {
-      if (!this.#selection.selected(entry, cursor.ancestry)) return undefined
-      const parent = await materialize('ancestor')
-      const projection = this.#projectFile(sourcePath)
-      if (collector !== undefined) {
-        collector.addFile(
-          entry,
-          projection.sourceAuthenticationPath,
-          projection.logicalArtifactPath,
-          parent,
-        )
-      } else {
-        await this.#enqueueFile(entry, projection, parent, files)
-      }
-      return undefined
+    if (!this.#selection.selected(entry, cursor.ancestry)) return
+    const parent = await materialize('ancestor')
+    const projection = this.#projectFile(this.#traversal.entryPath(cursor, entry))
+    if (collector !== undefined) {
+      collector.addFile(entry, projection.sourceAuthenticationPath, projection.logicalArtifactPath, parent)
+    } else {
+      await this.#enqueueFile(entry, projection, parent, files)
     }
+  }
+
+  #prepareChildDirectory(
+    cursor: DirectoryCursor,
+    materialize: (role?: 'selected' | 'ancestor') => Promise<AuthenticatedDirectory>,
+    entry: Extract<V2CatalogEntry, { kind: 'directory' }>,
+  ): DirectoryWork | undefined {
+    const sourcePath = this.#traversal.entryPath(cursor, entry)
     const selected = this.#selection.selected(entry, cursor.ancestry)
     if (!selected && !this.#explicitTargets.hasPendingTargets) return undefined
     if (!this.#selection.shouldDiscover(entry.idText, cursor.ancestry)) return undefined

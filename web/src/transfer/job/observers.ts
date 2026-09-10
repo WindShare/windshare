@@ -214,6 +214,15 @@ export class V2TransferObservers {
     }))
   }
 
+  discoveryScheduling(event: import('../discovery/queue').DiscoverySchedulingObservation): void {
+    this.#emit(() => Object.freeze({
+      name: 'receive_transition', transition: 'discovery_scheduling',
+      operationId: this.#options.intent.operationId,
+      transferJobId: this.#options.transferJobId,
+      ...event,
+    }))
+  }
+
   capacityWait(event: V2RevisionCapacityTrace): void {
     this.#emit(() => Object.freeze({
       name: 'receive_transition',

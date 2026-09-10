@@ -791,6 +791,9 @@ export function transferJobFixture(input: {
   readonly trace?: ConstructorParameters<typeof TransferJob>[0]['trace']
   readonly onProgress?: ConstructorParameters<typeof TransferJob>[0]['onProgress']
   readonly maximumConcurrentFiles?: number
+  readonly maximumPendingFiles?: number
+  readonly maximumPendingGenerations?: number
+  readonly maximumPendingGenerationMetadataBytes?: bigint
   readonly maximumDirectoryAdmissions?: number
   readonly chunkSize?: number
   readonly outputSettlementTimeoutMilliseconds?: number
@@ -827,6 +830,9 @@ export function transferJobFixture(input: {
     }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
+    ...(input.maximumPendingFiles === undefined ? {} : { maximumPendingFiles: input.maximumPendingFiles }),
+    ...(input.maximumPendingGenerations === undefined ? {} : { maximumPendingGenerations: input.maximumPendingGenerations }),
+    ...(input.maximumPendingGenerationMetadataBytes === undefined ? {} : { maximumPendingGenerationMetadataBytes: input.maximumPendingGenerationMetadataBytes }),
     ...(input.maximumDirectoryAdmissions === undefined ? {} : { maximumDirectoryAdmissions: input.maximumDirectoryAdmissions }),
     ...(input.maximumConcurrentFiles === undefined
       ? {}

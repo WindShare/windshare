@@ -133,6 +133,12 @@ export type MaterializationFailureReason =
   (typeof MATERIALIZATION_FAILURE_REASONS)[number]
 
 export type TransferTraceEvent =
+  | (Readonly<{
+      name: 'receive_transition'
+      transition: 'discovery_scheduling'
+      operationId: string
+      transferJobId: string
+    }> & import('../discovery/queue').DiscoverySchedulingObservation)
   | Readonly<{
       name: 'receive_transition'
       transition: 'download_connectivity'
@@ -252,6 +258,8 @@ export interface TransferJobOptions {
   readonly incidentScope?: IncidentScopeHandle
   readonly maximumConcurrentFiles?: number
   readonly maximumConcurrentDirectories?: number
+  readonly maximumPendingGenerations?: number
+  readonly maximumPendingGenerationMetadataBytes?: bigint
   readonly maximumPendingFiles?: number
   readonly maximumPendingFileMetadataBytes?: bigint
   readonly maximumNodeClaims?: number

@@ -423,6 +423,13 @@ function projectTransferTraceEvent(
         layout_class: snake(event.layoutClass),
         plan_kind: snake(event.planKind),
       })
+    case 'discovery_scheduling':
+      return observation(event.name, {
+        transition: event.transition, operation_id: event.operationId, transfer_job_id: event.transferJobId,
+        queue: event.queue, decision: event.decision,
+        pending_items: decimal(BigInt(event.pendingItems)), metadata_bytes: decimal(event.metadataBytes),
+        maximum_items: decimal(BigInt(event.maximumItems)), maximum_metadata_bytes: decimal(event.maximumMetadataBytes),
+      })
     case 'directory_admitted':
       return observation(event.name, {
         transition: event.transition,

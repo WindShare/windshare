@@ -27,6 +27,8 @@ describe('shared task presenter', () => {
     const open = presentTask(TASK_FIXTURES['open-discovery']!)
     expect(open.progress).toMatchObject({ mode: 'indeterminate', percentage: null })
     expect(open.progress?.label).toContain('3 files completed')
+    expect(open.progress?.status).toContain('Calculating total')
+    expect(open.progress?.remainingBytes).toBeNull()
     expect(open.progress?.details.join(' ')).toContain('final total unknown')
     expect(presentTask(taskFixture({
       progress: { ...EMPTY_V2_PROGRESS, discovery: 'failed', discoveredBytes: 100n, writtenBytes: 50n },
@@ -48,7 +50,7 @@ describe('shared task presenter', () => {
         materializedBytes: 91n, writtenBytes: 1n, completedBytes: 80n },
     }))
     expect(result.progress?.percentage).toBe(91)
-    expect(result.progress?.label).toContain('91 B written or reused')
+    expect(result.progress?.label).toContain('91 B / 100 B written or reused · 91%')
     expect(result.progress?.details).toContain('1 B newly received during this attempt.')
   })
 

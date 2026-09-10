@@ -92,6 +92,7 @@
 :where(.receiver-shell, .detail-sheet) .task-progress progress::-webkit-progress-bar { background: var(--receiver-wash); }
 :where(.receiver-shell, .detail-sheet) .task-progress progress::-webkit-progress-value { background: var(--receiver-accent); }
 :where(.receiver-shell, .detail-sheet) .task-progress progress::-moz-progress-bar { background: var(--receiver-accent); }
+:where(.receiver-shell, .detail-sheet) .task-progress-copy { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 :where(.receiver-shell, .detail-sheet) .task-progress span { color: var(--receiver-muted); font-size: .75rem; line-height: 1.5; font-variant-numeric: tabular-nums; }
 :where(.receiver-shell, .detail-sheet) .task-notice {
   color: var(--receiver-warning);

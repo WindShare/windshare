@@ -333,6 +333,18 @@ export function validateReceive(payload: UnknownRecord): void {
       ], 'receive layout class')
       member(payload.plan_kind, PLAN_KINDS, 'receive plan kind')
       return
+    case 'discovery_scheduling':
+      exactKeys(payload, [
+        'transition', 'operation_id', 'transfer_job_id', 'queue', 'decision',
+        'pending_items', 'metadata_bytes', 'maximum_items', 'maximum_metadata_bytes',
+      ], [], 'discovery scheduling payload')
+      canonicalIdentity(payload.operation_id, 'discovery operation ID')
+      canonicalIdentity(payload.transfer_job_id, 'discovery transfer job ID')
+      member(payload.queue, ['generations', 'zip_members'], 'discovery queue')
+      member(payload.decision, ['waiting', 'resumed', 'cancelled', 'complete'], 'discovery scheduling decision')
+      decimalFields(payload, ['pending_items', 'metadata_bytes', 'maximum_items', 'maximum_metadata_bytes'],
+        'discovery scheduling')
+      return
     case 'directory_admitted':
       exactKeys(payload, ['transition', 'admitted_directory_count', 'layout_class'], [],
         'receive directory admission payload')
