@@ -215,10 +215,11 @@ export async function createPersistentWorkspaceExecution(
       maximumConcurrentFilePipelines: TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES,
       maximumOutstandingWriteBytes: WORKSPACE_WRITE_BUDGET_BYTES,
       maximumBufferedBytes: WORKSPACE_WRITE_BUDGET_BYTES,
-      automaticCheckpoint: { kind: 'bounded', trigger: {
+      automaticCheckpoint: {
+        kind: 'incremental',
         pendingBytes: WORKSPACE_CHECKPOINT_PENDING_BYTES,
         pendingMilliseconds: WORKSPACE_CHECKPOINT_PENDING_MILLISECONDS,
-      } },
+      },
     }),
     capabilities: persistentCapabilities({
       fileFailureIsolation: false,

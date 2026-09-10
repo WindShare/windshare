@@ -96,16 +96,22 @@ function routeConsequences(offered: OfferedArtifactChoice): string[] {
     case 'direct-tree':
       return [
         'Choose a folder now. Completed files become visible as they arrive.',
-        'Verified checkpoints can preserve progress. Checkpointing or resuming a partially written file may copy its saved prefix and need extra temporary destination space.',
+        'Wait for Pause to finish before leaving. A successful pause saves received progress.',
+        ...(offered.route.target.kind === 'fsa-parent-directory' ? [
+          'Automatic progress saving is limited to avoid repeated copying. Closing or crashing the browser may lose most progress in a large unfinished file; completed files remain saved.',
+          'Checkpointing or resuming a partially written file may copy its saved prefix and need extra temporary destination space.',
+        ] : ['After an unexpected exit, resume uses the last verified checkpoint.']),
       ]
     case 'direct-resumable-zip':
       return [
         'Choose a folder now. An unfinished ZIP is visible while downloading; keep it in place and unchanged.',
-        'Only verified checkpoint bytes can resume after restart. Continuing may copy the existing ZIP and need temporary space as large as its committed length.',
+        'Wait for Pause to finish before leaving. After closing or crashing the browser, only verified checkpoint bytes can resume; automatic progress saving may stop to limit copying.',
+        'Continuing may copy the existing ZIP and need temporary space as large as its committed length.',
       ]
     case 'workspace-then-publish':
       return [
         'Retains received content in browser storage. Saving writes an additional exported copy, so allow space for both.',
+        'Saves progress regularly during receiving. Wait for Pause to finish before leaving; after an unexpected exit, resume uses the last verified checkpoint.',
         offered.route.publicationTarget.kind === 'browser-handoff'
           ? 'The browser download starts automatically when allowed. If it does not start, choose Save; the retained copy stays available.'
           : 'The retained result is published to the authorized destination after receiving finishes.',

@@ -139,15 +139,15 @@ describe('plan-specific output boundary', () => {
       maximumOutstandingWriteBytes: 8n,
       maximumBufferedBytes: 5n,
       automaticCheckpoint: {
-        kind: 'bounded' as const,
-        trigger: { pendingBytes: 4n, pendingMilliseconds: 50 },
+        kind: 'incremental' as const,
+        pendingBytes: 4n, pendingMilliseconds: 50,
       },
     }
     const validated = outputExecutionProfile(profile)
-    profile.automaticCheckpoint.trigger.pendingBytes = 7n
+    profile.automaticCheckpoint.pendingBytes = 7n
     expect(validated).toMatchObject({
       maximumConcurrentFilePipelines: 3,
-      automaticCheckpoint: { trigger: { pendingBytes: 4n } },
+      automaticCheckpoint: { kind: 'incremental', pendingBytes: 4n },
     })
     expect(validated.automaticCheckpoint).not.toHaveProperty('costBudget')
     expect(() => outputExecutionProfile({ ...profile, maximumConcurrentFilePipelines: 0 }))
@@ -156,9 +156,9 @@ describe('plan-specific output boundary', () => {
       ...profile,
       automaticCheckpoint: {
         ...profile.automaticCheckpoint,
-        trigger: { ...profile.automaticCheckpoint.trigger, pendingMilliseconds: 0 },
+        pendingMilliseconds: 0,
       },
-    })).toThrow(/checkpoint trigger/u)
+    })).toThrow(/checkpoint policy/u)
   })
 
   it('snapshots final proof identity for durable ledger consumers', () => {
