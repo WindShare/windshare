@@ -1,20 +1,20 @@
-import { encodeBase64Url } from '../../src/crypto/bytes'
+import { encodeBase64Url } from '../../../src/crypto/bytes'
 import {
   INDEXEDDB_DIRECT_ZIP_STATE_STORE,
   INDEXEDDB_RECEIVE_LEASE_STORE, INDEXEDDB_RECEIVE_RECORD_STORE, INDEXEDDB_RECEIVE_HANDLE_STORE,
   openIndexedDbCheckpointDatabase, requestResult, transactionCompletion,
-} from '../../src/output/browser/indexeddb-database'
+} from '../../../src/output/browser/indexeddb-database'
 import {
   IndexedDbDirectZipJournalRepository, createDirectZipCheckpointV1, createDirectZipCheckpointProposalV1,
   createDirectZipImmutablePageV1, createDirectZipRollbackCandidateV1, createDirectZipStateRowV1,
   createDirectZipTargetObservationV1,
   type DirectZipImmutablePageV1, type DirectZipPageChainV1,
-} from '../../src/output/direct-zip/journal'
-import { directZipPageStore } from '../../src/output/direct-zip/journal/indexeddb/authority'
-import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../src/output/workspace/state'
-import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
-import { receiveOperationHandleRecord, receiveOperationLeaseRecord } from '../../src/output/workspace/records'
-import { rollbackCheckpointFixture } from '../output/direct-zip/journal/rollback-fixture'
+} from '../../../src/output/direct-zip/journal'
+import { directZipPageStore } from '../../../src/output/direct-zip/journal/indexeddb/authority'
+import { initialReceiveLifecycleState, nextReceiveLifecycleState } from '../../../src/output/workspace/state'
+import { storedReceiveLifecycleState } from '../../../src/output/workspace/state-codec'
+import { receiveOperationHandleRecord, receiveOperationLeaseRecord } from '../../../src/output/workspace/records'
+import { rollbackCheckpointFixture } from '../../output/direct-zip/journal/rollback-fixture'
 
 export async function probeDirectZipRollbackFences(databaseName: string) {
   let repository = await IndexedDbDirectZipJournalRepository.open({ databaseName })
