@@ -214,7 +214,6 @@ const PROTOCOL_SESSION_SEED = 126
 const CATALOG_CHUNK_BYTES = 2
 const TEST_OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const TEST_CHECKPOINT_TRIGGER_BYTES = 1_024n
-const TEST_CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
 const PERSISTENCE_PAUSE_RESUME_ORDINAL = 10
 const PERSISTENCE_COLLISION_ORDINAL = 20
 const PERSISTENCE_COMPATIBLE_NAME_ORDINAL = 30
@@ -582,11 +581,8 @@ async function productionPlanAuthority(input: Readonly<{
               maximumOutstandingWriteBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
               maximumBufferedBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
               automaticCheckpoint: {
-                kind: 'bounded',
-                trigger: {
-                  pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES,
-                  pendingMilliseconds: TEST_CHECKPOINT_TRIGGER_MILLISECONDS,
-                },
+                kind: 'prefix-copy',
+                pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES,
               },
             }),
             recovery: {

@@ -1,5 +1,5 @@
 import type { AutomaticCheckpointTrigger } from '../../transfer/output-session'
-import { AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES } from '../../transfer/checkpoint-schedule'
+import { PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES } from '../../transfer/checkpoint-schedule'
 import type {
   AutomaticCheckpointAdmissionAuthority,
   AutomaticCheckpointAdmissionDecision,
@@ -224,7 +224,7 @@ implements AutomaticCheckpointAdmissionAuthority {
     this.#committedWriteAmplificationBytes += hold.cost.writeAmplificationBytes
     hold.file.checkpointOrdinal += 1
     if (this.#committedRemainingWriteAmplificationBytes() <
-        AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES) {
+        PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES) {
       this.#cumulativelyExhausted = true
     }
     this.#emit(hold.file, hold.trigger, hold.cost, 'committed')

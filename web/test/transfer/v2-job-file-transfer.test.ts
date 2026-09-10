@@ -407,6 +407,43 @@ describe('v2 authenticated file transfer', () => {
 
 function registerCheckpointSchedulingTests(): void {
   it.each([
+    { kind: 'prefix-copy' as const, cuts: [] },
+    { kind: 'incremental' as const, cuts: [2, 4, 6, 8] },
+  ])('uses the $kind output policy after resuming a 50 GiB prefix', async ({ kind, cuts }) => {
+    const savedBytes = 50n * 1024n * 1024n * 1024n
+    const file = fileEntry(identity(11), 'large.bin', savedBytes + 10n)
+    const selection = selectOnlyFile(file)
+    const catalog = catalogFixture([{ id: identity(2), entries: [file] }])
+    const readers = readerFixture([file])
+    const checkpointWrites: number[] = []
+    const output = testOutput([], {
+      durability: 'ProcessRestart',
+      initialRanges: [byteRange(0n, savedBytes)],
+      executionProfile: outputExecutionProfile({
+        ...prefixCopyCheckpointProfile(2n),
+        automaticCheckpoint: kind === 'prefix-copy'
+          ? { kind, pendingBytes: 2n }
+          : { kind, pendingBytes: 2n, pendingMilliseconds: 60_000 },
+      }),
+      beforeAutomaticCheckpoint: async () => {
+        checkpointWrites.push(output.writes.reduce((sum, write) => sum + write.bytes, 0))
+      },
+    })
+    const intent = await receiveIntentFixture({
+      planKind: 'workspace-then-publish', artifactKind: 'original-file', selection, file,
+    })
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
+      revisions: readers.revisions, broker: readers.broker,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(checkpointWrites).toEqual(cuts)
+    expect(output.writes.reduce((sum, write) => sum + write.bytes, 0)).toBe(10)
+    expect(output.finalProofs).toHaveLength(1)
+  })
+
+  it.each([
     { label: 'no trigger fires', pendingBytes: 8n },
     { label: 'only the final block reaches the trigger', pendingBytes: 4n },
   ])('commits a normal multi-block file without an automatic checkpoint when $label', async ({
@@ -419,7 +456,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: boundedCheckpointProfile(pendingBytes),
+      executionProfile: prefixCopyCheckpointProfile(pendingBytes),
     })
     const intent = await receiveIntentFixture({
       planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
@@ -449,7 +486,7 @@ function registerCheckpointSchedulingTests(): void {
     const checkpoint = deferred<void>()
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: boundedCheckpointProfile(2n),
+      executionProfile: prefixCopyCheckpointProfile(2n),
       beforeAutomaticCheckpoint: () => checkpoint.promise,
     })
     const progress: TransferProgress[] = []
@@ -487,7 +524,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: boundedCheckpointProfile(2n),
+      executionProfile: prefixCopyCheckpointProfile(2n),
       automaticCheckpointDecisions: ['deferred', 'advanced'],
     })
     const intent = await receiveIntentFixture({
@@ -518,7 +555,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: boundedCheckpointProfile(2n),
+      executionProfile: prefixCopyCheckpointProfile(2n),
       automaticCheckpointDecisions: ['finished', 'advanced'],
     })
     const intent = await receiveIntentFixture({
@@ -679,14 +716,14 @@ function immediateCapacityPolicy(waitBudgetMilliseconds: number) {
   })
 }
 
-function boundedCheckpointProfile(pendingBytes: bigint) {
+function prefixCopyCheckpointProfile(pendingBytes: bigint) {
   return outputExecutionProfile({
     maximumConcurrentFilePipelines: 1,
     maximumOutstandingWriteBytes: 8n,
     maximumBufferedBytes: 8n,
     automaticCheckpoint: {
-      kind: 'bounded',
-      trigger: { pendingBytes, pendingMilliseconds: 60_000 },
+      kind: 'prefix-copy',
+      pendingBytes,
     },
   })
 }

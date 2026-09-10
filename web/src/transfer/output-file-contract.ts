@@ -19,6 +19,13 @@ import {
   type SourceAuthenticationPath,
 } from './job/coordinate/direct-tree'
 import type { PerformanceFilePipelineObservation } from '../output/diagnostics/performance-runtime-observations'
+import {
+  snapshotAutomaticCheckpointPolicy,
+  type AutomaticCheckpointPolicy,
+  type AutomaticCheckpointTrigger,
+} from './checkpoint-schedule'
+
+export type { AutomaticCheckpointTrigger, AutomaticCheckpointPolicy } from './checkpoint-schedule'
 
 export type DurabilityLevel = 'None' | 'ProcessRestart' | 'PowerLoss'
 export type FileRetirementDisposition = 'FileIsolated' | 'JobOutputCompromised'
@@ -37,24 +44,12 @@ export interface OutputCapabilities {
   readonly modificationTime: boolean
 }
 
-export interface OutputExecutionProfileBoundedCheckpoint {
-  readonly kind: 'bounded'
-  readonly trigger: Readonly<{
-    readonly pendingBytes: bigint
-    readonly pendingMilliseconds: number
-  }>
-}
-
 export interface OutputExecutionProfile {
   readonly maximumConcurrentFilePipelines: number
   readonly maximumOutstandingWriteBytes: bigint
   readonly maximumBufferedBytes: bigint
-  readonly automaticCheckpoint:
-    | Readonly<{ readonly kind: 'disabled' }>
-    | OutputExecutionProfileBoundedCheckpoint
+  readonly automaticCheckpoint: AutomaticCheckpointPolicy
 }
-
-export type AutomaticCheckpointTrigger = 'pending-bytes' | 'pending-time'
 
 export type AutomaticCheckpointResult =
   | Readonly<{
@@ -198,8 +193,8 @@ export interface OutputSession {
 }
 
 export class OutputSessionBindingError extends Error {
-  constructor(message: string) {
-    super(message)
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options)
     this.name = 'OutputSessionBindingError'
   }
 }
@@ -241,29 +236,17 @@ export function outputExecutionProfile(profile: OutputExecutionProfile): OutputE
   }
   requirePositiveBudget(profile.maximumOutstandingWriteBytes, 'outstanding write')
   requirePositiveBudget(profile.maximumBufferedBytes, 'buffered output')
-  const checkpoint = profile.automaticCheckpoint
-  if (checkpoint?.kind === 'disabled') {
-    return Object.freeze({
-      maximumConcurrentFilePipelines: profile.maximumConcurrentFilePipelines,
-      maximumOutstandingWriteBytes: profile.maximumOutstandingWriteBytes,
-      maximumBufferedBytes: profile.maximumBufferedBytes,
-      automaticCheckpoint: Object.freeze({ kind: 'disabled' as const }),
-    })
-  }
-  if (checkpoint?.kind !== 'bounded' ||
-      typeof checkpoint.trigger?.pendingBytes !== 'bigint' || checkpoint.trigger.pendingBytes <= 0n ||
-      !Number.isSafeInteger(checkpoint.trigger.pendingMilliseconds) ||
-      checkpoint.trigger.pendingMilliseconds <= 0) {
-    throw new OutputSessionBindingError('output execution profile reported an invalid checkpoint trigger')
+  let automaticCheckpoint: AutomaticCheckpointPolicy
+  try {
+    automaticCheckpoint = snapshotAutomaticCheckpointPolicy(profile.automaticCheckpoint)
+  } catch (cause) {
+    throw new OutputSessionBindingError('output execution profile reported an invalid checkpoint policy', { cause })
   }
   return Object.freeze({
     maximumConcurrentFilePipelines: profile.maximumConcurrentFilePipelines,
     maximumOutstandingWriteBytes: profile.maximumOutstandingWriteBytes,
     maximumBufferedBytes: profile.maximumBufferedBytes,
-    automaticCheckpoint: Object.freeze({
-      kind: 'bounded' as const,
-      trigger: Object.freeze({ ...checkpoint.trigger }),
-    }),
+    automaticCheckpoint,
   })
 }
 

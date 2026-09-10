@@ -27,6 +27,7 @@ import { createPreservingWriterCapacityAuthority } from '../../output/persistent
 import { checkpointAuthorityObserver } from '../../output/file-system-access/session-diagnostics'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
+import { PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES } from '../../transfer/checkpoint-schedule'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
@@ -43,7 +44,6 @@ import {
   TransferStopRequestedError,
   outputExecutionProfile,
   outputSessionIdentity,
-  type OutputExecutionProfileBoundedCheckpoint,
   type V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
 import type {
@@ -83,20 +83,15 @@ export const WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS = 8
 export const WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS = 3
 export const WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES = 8n * MEBIBYTE_BYTES
 export const WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES = 8n * MEBIBYTE_BYTES
-// Small transfers stay final-only; large transfers periodically bound restart loss
-// without admitting unbounded native prefix copies or temporary disk usage.
-export const FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER:
-  OutputExecutionProfileBoundedCheckpoint['trigger'] = Object.freeze({
-  pendingBytes: 64n * MEBIBYTE_BYTES,
-  pendingMilliseconds: 30_000,
-})
+// Opportunistic cuts stop when prefix copying exceeds the admission budget.
+// A successful pause still commits progress after automatic checkpointing stops.
 export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
   maximumConcurrentFilePipelines: WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
   maximumOutstandingWriteBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES,
   maximumBufferedBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES,
   automaticCheckpoint: {
-    kind: 'bounded',
-    trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
+    kind: 'prefix-copy',
+    pendingBytes: PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES,
   },
 })
 

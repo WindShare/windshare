@@ -10,6 +10,11 @@ The primary download action recommends an available result. **Other ways to save
 
 Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A failed continuation keeps previously received ZIP data. If finishing takes too long, WindShare waits for active save operations to finish safely and retains a completed result for saving. A saved copy uses additional device space.
 
-Pause preserves the progress supported by the chosen saving method. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
+Wait for **Pause** to finish before leaving. A successful pause commits received progress for resumable saving methods. A network interruption while the page remains open is different from a browser crash or forced close: after an unexpected exit, only verified checkpoints can resume.
+
+- **Browser workspace:** checkpoints continue at fixed progress intervals as files grow. Exporting needs space for both the retained result and the saved copy, plus time to write that copy.
+- **Save to folder / direct ZIP:** automatic checkpoints may stop to limit repeated prefix copying. A crash can lose most progress in a large unfinished file; completed folder files remain saved. Pausing still commits progress, but continuing may copy the saved prefix and require comparable extra destination space.
+
+Checkpoint intervals are scheduling targets, not a hard maximum for crash loss; writes, storage failures, and checkpoint completion affect what can resume. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
 
 For a paused ZIP with complete files, eligible browsers offer **Save partial ZIP**. It exports only complete files to a separate ZIP, uses destination space when requested, and keeps the original task available to continue.

@@ -35,7 +35,6 @@ import {
 } from '../../src/output/workspace/records'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
 import {
-  FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
   FSA_DIRECT_TREE_EXECUTION_PROFILE,
   FSAReceiveOperation,
   WINDOWS_CHROMIUM_FSA_MAXIMUM_ACTIVE_NATIVE_WRITERS,
@@ -78,9 +77,8 @@ describe('FSA DirectTree execution policy', () => {
       maximumOutstandingWriteBytes: 8n * MEBIBYTE_BYTES,
       maximumBufferedBytes: 8n * MEBIBYTE_BYTES,
     })
-    expect(FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER).toEqual({
-      pendingBytes: 64n * MEBIBYTE_BYTES,
-      pendingMilliseconds: 30_000,
+    expect(FSA_DIRECT_TREE_EXECUTION_PROFILE.automaticCheckpoint).toEqual({
+      kind: 'prefix-copy', pendingBytes: 64n * MEBIBYTE_BYTES,
     })
     expect(MAXIMUM_AUTOMATIC_PREFIX_COPY_BYTES).toBe(128n * MEBIBYTE_BYTES)
     expect(MAXIMUM_AUTOMATIC_WRITE_AMPLIFICATION_BYTES).toBe(2n * 1024n * MEBIBYTE_BYTES)
@@ -518,8 +516,8 @@ describe('FSA compatible-name route activation', () => {
     expect(execution.output.executionProfile).toEqual(FSA_DIRECT_TREE_EXECUTION_PROFILE)
     expect(execution.output.executionProfile.maximumConcurrentFilePipelines).toBe(15)
     expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
-      kind: 'bounded',
-      trigger: FSA_DIRECT_TREE_AUTOMATIC_CHECKPOINT_TRIGGER,
+      kind: 'prefix-copy',
+      pendingBytes: 64n * MEBIBYTE_BYTES,
     })
     await result.operation.detach()
   })

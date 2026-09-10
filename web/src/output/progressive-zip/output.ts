@@ -77,9 +77,10 @@ export async function createProgressiveZipOutput(input: {
     executionProfile: outputExecutionProfile({
       maximumConcurrentFilePipelines: CONCURRENT_FILE_PIPELINES,
       maximumOutstandingWriteBytes: WRITE_BUDGET_BYTES, maximumBufferedBytes: WRITE_BUDGET_BYTES,
-      automaticCheckpoint: { kind: 'bounded', trigger: {
+      automaticCheckpoint: {
+        kind: 'incremental',
         pendingBytes: CHECKPOINT_PENDING_BYTES, pendingMilliseconds: CHECKPOINT_PENDING_MILLISECONDS,
-      } },
+      },
     }),
     beginFile: async (input, signal) => {
       signal.throwIfAborted()

@@ -4,7 +4,7 @@ import { offerArtifacts } from '../../src/output/planning'
 import { compareSavingTransition, presentSavingActions } from '../../src/ui/saving'
 import {
   COMPLETE_DISCOVERY, directZipTarget, environment, fsaTarget, handoffTarget, identity,
-  portableOffer, projection, reviewedDirectZipSupport, singleFileProof, treeProof, workspaceOffer,
+  nativeTarget, portableOffer, projection, reviewedDirectZipSupport, singleFileProof, treeProof, workspaceOffer,
 } from '../output/planning/fixture'
 
 async function selection() {
@@ -28,6 +28,20 @@ describe('saving action presenter over eligible offers', () => {
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered).toBe(offers.primary)
   })
 
+  it.each([
+    { target: fsaTarget, copyLimited: true },
+    { target: nativeTarget, copyLimited: false },
+  ])('separates successful pause from copy-limited crash recovery: $copyLimited', async ({ target, copyLimited }) => {
+    const offers = await offerArtifacts(
+      projection(await selection(), treeProof(), 1n), COMPLETE_DISCOVERY,
+      environment({ targets: [target()] }),
+    )
+    const copy = presentSavingActions({ offers }).primary!.consequences.join(' ')
+    expect(copy).toContain('Wait for Pause to finish')
+    expect(copy.includes('may lose most progress')).toBe(copyLimited)
+    expect(copy.includes('copy its saved prefix')).toBe(copyLimited)
+  })
+
   it('keeps original-file default at large sizes when eligible instead of guessing browser capability', async () => {
     const offers = await offerArtifacts(
       projection(await selection(), singleFileProof(), 900_000_000n), COMPLETE_DISCOVERY,
@@ -36,6 +50,8 @@ describe('saving action presenter over eligible offers', () => {
     const result = presentSavingActions({ offers })
     expect(result.primary?.outcome).toBe('original-file')
     expect(result.primary?.consequences.join(' ')).toContain('additional exported copy')
+    expect(result.primary?.consequences.join(' ')).toContain('last verified checkpoint')
+    expect(result.primary?.consequences.join(' ')).not.toContain('may lose most progress')
   })
 
   it('defaults to hierarchy-preserving folder output and keeps ZIP format change explicit', async () => {

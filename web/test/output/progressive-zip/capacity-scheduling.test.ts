@@ -116,6 +116,9 @@ describe('native ZIP capacity scheduling', () => {
         settle: async () => { throw new Error('Capacity refusal cannot seal the archive') },
       },
     })
+    expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
+      kind: 'incremental', pendingBytes: BLOCK_SIZE, pendingMilliseconds: 1_000,
+    })
     const readers = readerFixture(files, [], { beforeOpen: async id => {
       if (id === d!.idText) {
         fourthOpening.resolve()
