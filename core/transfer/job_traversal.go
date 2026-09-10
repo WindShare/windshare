@@ -1,6 +1,7 @@
 package transfer
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
@@ -379,6 +380,40 @@ func (ledger *nodeIdentityLedger) rollback(checkpoint nodeLedgerCheckpoint) erro
 		delete(ledger.claims, identity)
 	}
 	ledger.order = ledger.order[:keep]
+	return nil
+}
+
+func (r *jobRun) isolateIncrementalFailure(
+	ctx context.Context,
+	checkpoint nodeLedgerCheckpoint,
+	directory catalog.DirectoryID,
+	path string,
+	err error,
+) error {
+	propagated, _ := admitLifecycleFailure(err)
+	if cause := closedContextCause(ctx); cause != nil && cause == propagated {
+		// A worker can stop the whole job with a file-local settlement fault.
+		// Propagating that stop cannot invalidate authenticated catalog authority.
+		return cause
+	}
+	if recordErr := r.recordDiscoveryFailure(directory, path, err); recordErr != nil {
+		if directory == r.job.root && path == "" && !isJobTerminalError(recordErr) {
+			return catalogIntegrityFailure(err)
+		}
+		return recordErr
+	}
+	if directory == r.job.root && path == "" {
+		// The synthetic root is the session's catalog authority. Without an
+		// authenticated terminal generation, no durable namespace may settle.
+		r.rootGeneration = catalog.DirectoryGeneration{}
+		if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
+			return dependencyContractFailure(rollbackErr)
+		}
+		return catalogIntegrityFailure(err)
+	}
+	if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
+		return dependencyContractFailure(rollbackErr)
+	}
 	return nil
 }
 
