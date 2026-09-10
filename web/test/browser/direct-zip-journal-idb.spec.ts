@@ -67,8 +67,8 @@ test('page staging, candidate binding, checkpoint promotion, and lifecycle share
 
 test('member rollback retains durable intent across lease takeover and failed promotion', async ({ page }) => {
   const result = await page.evaluate(async name => {
-    const path = '/test/browser/direct-zip-rollback-idb-probe.ts'
-    const probe = await import(path) as typeof import('./direct-zip-rollback-idb-probe')
+    const path = '/test/browser/direct-zip/rollback-idb-probe.ts'
+    const probe = await import(path) as typeof import('./direct-zip/rollback-idb-probe')
     return probe.probeDirectZipRollbackFences(name)
   }, `direct-zip-rollback-${crypto.randomUUID()}`)
   expect(result).toEqual({
