@@ -38,7 +38,7 @@ import { operationDigest } from '../shared'
 import { BrowserDirectZipJournal } from './journal'
 import { traceDirectZipMemberRollback } from './member-rollback-trace'
 import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from './target'
-import { browserDirectZipFileSystem, randomId } from './resources'
+import { browserDirectZipFileSystem, randomId, requestBrowserDirectZipAuthorization } from './resources'
 
 export interface BrowserDirectZipOperationOptions {
   readonly intent: DirectZipIntent
@@ -192,6 +192,9 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       return { lifecycle: this.#lifecycle, activeControls: [] }
     }
     if (action === 'continue') {
+      this.#lifetime.signal.throwIfAborted()
+      await requestBrowserDirectZipAuthorization(this.#input.binding.parentBinding.persistedHandle)
+      this.#lifetime.signal.throwIfAborted()
       this.#executionProgressGeneration += 1n
       this.#execution = undefined
       this.#updatePayloadProgress(checkpointPayloadProgress(this.#journal.persistedCheckpoint))
