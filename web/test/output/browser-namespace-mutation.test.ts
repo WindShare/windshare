@@ -17,10 +17,13 @@ import {
 } from '../../src/output/browser/indexeddb-root-binding'
 import {
   FSARootMutationBusyError,
-  acquireFSARootMutationLease,
   fsaRootMutationLockName,
-  type BrowserLockManagerRuntime,
 } from '../../src/output/browser/namespace-mutation'
+import {
+  acquireFSARootMutationLease,
+  memoryFSAIdentities,
+  MemoryMutationLockManager as MemoryLockManager,
+} from './fsa-mutation-lock-fixture'
 import type {
   FSAParentMutationIdentity,
 } from '../../src/output/browser/mutation-coordination/model'
@@ -37,12 +40,13 @@ import type {
 import { identity } from './planning/fixture'
 
 describe('FSA namespace and persisted parent authority', () => {
-  it('serializes same-named parents and reports a competing WindShare task as busy', async () => {
+  it('serializes aliases of one physical parent and reports a competing task as busy', async () => {
     const manager = new MemoryLockManager()
     const firstParent = directoryHandle('shared-parent', 'first')
-    const secondParent = directoryHandle('shared-parent', 'second')
-    expect(await fsaRootMutationLockName(firstParent)).toBe(
-      await fsaRootMutationLockName(secondParent),
+    const secondParent = directoryHandle('alias-name', 'first')
+    const identities = memoryFSAIdentities(manager)
+    expect(await fsaRootMutationLockName(firstParent, identities)).toBe(
+      await fsaRootMutationLockName(secondParent, identities),
     )
 
     const first = await acquireFSARootMutationLease(firstParent, manager)
@@ -57,7 +61,7 @@ describe('FSA namespace and persisted parent authority', () => {
   it('keeps the Web Lock until scheduler writer lifetimes drain after close rejection', async () => {
     const manager = new MemoryLockManager()
     const firstParent = directoryHandle('shared-parent', 'first')
-    const secondParent = directoryHandle('shared-parent', 'second')
+    const secondParent = directoryHandle('shared-parent', 'first')
     const lease = await acquireFSARootMutationLease(firstParent, manager, 1)
     const writerParent = Symbol('verified-parent') as FSAParentMutationIdentity
     const writer = await lease.scheduler.acquireWriter(writerParent)
@@ -214,27 +218,6 @@ async function commitFSAOperationBinding(
   })
   await repository.commitTransition({ operationId: intent.operationId, ...prepared.transition })
   return verifyFSAOperationBinding({ repository, intent, expectedParent: parent })
-}
-
-class MemoryLockManager implements BrowserLockManagerRuntime {
-  readonly #held = new Set<string>()
-
-  async request(
-    name: string,
-    _options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
-    callback: (lock: { readonly name: string } | null) => Promise<void>,
-  ): Promise<void> {
-    if (this.#held.has(name)) {
-      await callback(null)
-      return
-    }
-    this.#held.add(name)
-    try {
-      await callback({ name })
-    } finally {
-      this.#held.delete(name)
-    }
-  }
 }
 
 class MemoryOperationRepository implements ReceiveOperationRepository {

@@ -64,6 +64,7 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'reopen',
   'cleanup',
   'direct_zip_milestone',
+  'direct_zip_coordination',
   'retained_inventory',
   'retained_action',
   'incident_marker',
@@ -156,6 +157,14 @@ type ProjectionShapeProofV1 =
   | 'tree'
 
 type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
+
+export type DirectZipCoordinationPayloadV1 = Readonly<{
+  operation_id: string
+  scope: 'parent_access' | 'namespace' | 'target'
+  transition: 'waiting' | 'acquired' | 'released' | 'failed'
+  lock_name?: string
+  native_error_name?: string
+}>
 
 export type DirectZipMilestonePayloadV1 = Readonly<{
   operation_id: string
@@ -625,6 +634,7 @@ export interface TraceEventPayloadByNameV1 {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
+  readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
   readonly retained_inventory: RetainedInventoryPayloadV1
   readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{

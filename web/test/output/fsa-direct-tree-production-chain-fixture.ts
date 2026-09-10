@@ -1,3 +1,4 @@
+import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import {
   V2_CATALOG_PAGE_ENTRIES,
@@ -433,7 +434,7 @@ export async function runFSAProductionPersistenceChain(
   const reopened = await reopenFileSystemAccessOutput({
     intent: session.intent,
     operationRepository: repository,
-    lockManager: locks,
+    lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
     checkpointRepositoryFactory: checkpointFactory,
     openCompatibleNameLedger,
     ...(compatibleNames === undefined ? {} : {

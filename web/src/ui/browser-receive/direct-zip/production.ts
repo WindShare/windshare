@@ -38,10 +38,11 @@ import type { BrowserReceiveWindow } from '../contracts'
 import { digestText } from '../shared'
 import type { BrowserDirectZipCompositionPort, BrowserDirectZipFreshAuthorityInput } from './contracts'
 import { BrowserDirectZipOperation } from './operation'
+import { BrowserDirectZipCoordination } from './coordination'
 import { BrowserDirectZipTarget, bytes, type BrowserDirectZipBinding } from './target'
 import { createInitialBrowserDirectZipCheckpoint } from './journal'
 import {
-  acquireOperationLock, acquireParentLock, browserDirectZipFileSystem, browserDirectZipHandleId,
+  acquireOperationLock, browserDirectZipFileSystem, browserDirectZipHandleId,
   browserTarget, envelopeRecord, journalPolicies, randomBytes, randomId, readEnvelope,
   requireBootstrapEnvelope, type BrowserDirectZipEnvelope,
 } from './resources'
@@ -157,14 +158,19 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
     const operationId = createOperationID()
     const storage = await openStorage(this.#window, operationId, this.#dependencies)
     const { repository, journal } = storage
-    let parentLock: Awaited<ReturnType<typeof acquireParentLock>>
-    try { parentLock = await acquireParentLock(this.#window, parent) }
-    catch (error) { await storage.close(); throw error }
-    let closed = false
-    const close = async () => {
-      if (closed) return
-      closed = true
-      try { await parentLock.release() } finally { await storage.close() }
+    let coordination: BrowserDirectZipCoordination
+    try {
+      coordination = await BrowserDirectZipCoordination.open({
+        parent, manager: this.#window.navigator.locks, operationId,
+        ...(this.#dependencies.trace === undefined ? {} : { trace: this.#dependencies.trace }),
+      })
+    } catch (error) { await storage.close(); throw error }
+    let closePromise: Promise<void> | undefined
+    const close = () => {
+      closePromise ??= (async () => {
+        try { await coordination.close() } finally { await storage.close() }
+      })()
+      return closePromise
     }
     const lease = receiveOperationLeaseRecord({ operationId, leaseId: randomId(), acquiredAt: Date.now() })
     let durable: DirectZipBootstrapCandidateV1 | undefined
@@ -178,7 +184,8 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
       }
       const targetRef = randomBytes(32)
       const target = browserTarget({
-        leaseId: lease.leaseId,
+        leaseId: lease.leaseId, parentLocks: coordination.parentLocks,
+        claimFile: file => coordination.claimFile(file),
         reservations: {
           persistCandidate: async draft => {
             input.signal.throwIfAborted()
@@ -232,12 +239,13 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
       }
       const initialized = await commitBootstrap({
         repository, journal, candidate: durable, envelope: { ...envelope, binding: reserved.value.binding },
-        lease, binding: reserved.value.binding,
+        lease, binding: reserved.value.binding, coordination,
       })
       const operation = await BrowserDirectZipOperation.open({
         intent: frozen.intent as DirectZipIntent, lifecycle: initialized.lifecycle,
         leaseId: lease.leaseId, repository, journal, checkpoint: initialized.checkpoint,
         binding: reserved.value.binding, facts: this.#input.facts, close,
+        namespaceMutations: coordination.mutations,
         ...(this.#dependencies.trace === undefined ? {} : { trace: this.#dependencies.trace }),
       })
       return { kind: 'bound-operation', operation }
@@ -261,11 +269,12 @@ async function commitBootstrap(input: {
   repository: ReceiveOperationRepository; journal: DirectZipJournalRepository
   candidate: DirectZipBootstrapCandidateV1; envelope: BrowserDirectZipEnvelope
   lease: ReceiveOperationLeaseRecord; binding: BrowserDirectZipBinding
+  coordination: BrowserDirectZipCoordination
 }) {
   const intent = await validateReceiveIntent(input.envelope.frozen.intent)
   const target = new BrowserDirectZipTarget({
     binding: input.binding, fileSystem: browserDirectZipFileSystem(),
-    proofs: async function* () {},
+    proofs: async function* () {}, namespaceMutations: input.coordination.mutations,
   })
   const initialized = await createInitialBrowserDirectZipCheckpoint({
     candidate: input.candidate, receiveIntentDigest: intent.digest,
@@ -306,16 +315,21 @@ async function openRetained(windowPort: BrowserReceiveWindow, operation: Reopene
       await fileSystem.requestPermission(parent) !== 'granted') {
     throw new DOMException('Access to the saved ZIP is required', 'NotAllowedError')
   }
-  const parentLock = await acquireParentLock(windowPort, parent)
+  const coordination = await BrowserDirectZipCoordination.open({
+    parent, manager: windowPort.navigator.locks, operationId: operation.intent.operationId,
+    ...(dependencies.trace === undefined ? {} : { trace: dependencies.trace }),
+  })
   try {
+    await coordination.claimFile(envelope.binding.fileBinding.persistedHandle)
     return await BrowserDirectZipOperation.open({
       intent: operation.intent as DirectZipIntent, lifecycle: operation.lifecycle,
       leaseId: operation.lease.leaseId, repository: operation.repository, journal: operation.journal,
       checkpoint: operation.checkpoint, binding: envelope.binding, facts,
-      close: async () => { try { await parentLock.release() } finally { await operation.close() } },
+      namespaceMutations: coordination.mutations,
+      close: async () => { try { await coordination.close() } finally { await operation.close() } },
       ...(dependencies.trace === undefined ? {} : { trace: dependencies.trace }),
     })
-  } catch (error) { await parentLock.release(); throw error }
+  } catch (error) { await coordination.close(); throw error }
 }
 
 async function recoverBootstrap(windowPort: BrowserReceiveWindow, descriptor: DirectZipBootstrapResumeDescriptorV1,
@@ -323,14 +337,18 @@ async function recoverBootstrap(windowPort: BrowserReceiveWindow, descriptor: Di
   signal.throwIfAborted()
   const storage = await openStorage(windowPort, descriptor.operationId, dependencies)
   const { repository, journal } = storage
-  let parentLock: Awaited<ReturnType<typeof acquireParentLock>> | undefined
+  let coordination: BrowserDirectZipCoordination | undefined
   try {
     const current = await journal.readCandidate(descriptor.operationId, descriptor.candidateId)
     if (current?.kind !== 'bootstrap' || current.digest !== descriptor.candidateDigest) return
     const envelope = await readEnvelope(repository, descriptor.operationId)
     requireBootstrapEnvelope(current, envelope)
     const parent = envelope.candidate.parentBinding.persistedHandle
-    parentLock = await acquireParentLock(windowPort, parent)
+    coordination = await BrowserDirectZipCoordination.open({
+      parent, manager: windowPort.navigator.locks, operationId: descriptor.operationId,
+      ...(dependencies.trace === undefined ? {} : { trace: dependencies.trace }),
+    })
+    const ownedCoordination = coordination
     const lease = receiveOperationLeaseRecord({
       operationId: descriptor.operationId, leaseId: randomId(), acquiredAt: Date.now(),
     })
@@ -339,7 +357,9 @@ async function recoverBootstrap(windowPort: BrowserReceiveWindow, descriptor: Di
     })
     await journal.replaceBootstrapLease({ expectedCandidate: current, candidate, lease })
     const target = browserTarget({
-      leaseId: lease.leaseId, reservations: {
+      leaseId: lease.leaseId, parentLocks: coordination.parentLocks,
+      claimFile: file => ownedCoordination.claimFile(file),
+      reservations: {
         persistCandidate: async () => { throw new Error('Recovery cannot reserve another target') },
         retireCandidate: async () => { throw new DOMException('ZIP bootstrap target changed', 'DataError') },
       },
@@ -351,11 +371,11 @@ async function recoverBootstrap(windowPort: BrowserReceiveWindow, descriptor: Di
       throw new DOMException('An interrupted ZIP target requires verification', 'InvalidStateError')
     }
     await commitBootstrap({
-      repository, journal, candidate, lease, binding: reopened.value.binding,
+      repository, journal, candidate, lease, binding: reopened.value.binding, coordination,
       envelope: { ...envelope, binding: reopened.value.binding },
     })
   } finally {
-    try { await parentLock?.release() } finally { await storage.close() }
+    try { await coordination?.close() } finally { await storage.close() }
   }
 }
 

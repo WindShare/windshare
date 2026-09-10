@@ -34,10 +34,15 @@ import type {
 export type BrowserDirectZipBinding =
   DirectZipOwnedTargetBinding<FileSystemDirectoryHandle, FileSystemFileHandle>
 
+export interface DirectZipNamespaceMutationPort {
+  run<T>(operation: () => Promise<T>): Promise<T>
+}
+
 export interface BrowserDirectZipTargetOptions {
   readonly binding: BrowserDirectZipBinding
   readonly fileSystem: DirectZipFileSystemPort<FileSystemDirectoryHandle, FileSystemFileHandle>
   readonly proofs: () => AsyncIterable<DirectZipEpochProofV1>
+  readonly namespaceMutations: DirectZipNamespaceMutationPort
 }
 
 /**
@@ -248,14 +253,17 @@ export class BrowserDirectZipTarget implements DirectZipTargetVerificationPort {
       expectedObservation = encodeBase64Url(observed.observationDigest!)
       if (observed.length === 'candidate') expectedRoot = candidate.expectedEpochRoot
     }
-    // The bounded locator/marker observation closes the coordinated deletion fence without opening a writer.
-    const observedAgain = await this.#observation(await this.#ownedSnapshot(), expectedRoot)
-    if (observedAgain.digest !== expectedObservation) {
-      throw new DOMException('The retained ZIP changed before deletion', 'DataError')
-    }
-    await this.#input.fileSystem.removeExactName(
-      this.#input.binding.parentBinding.persistedHandle, this.#input.binding.stableName,
-    )
+    // Proof scans retain only target exclusivity. Namespace coordination is needed
+    // for the bounded ownership recheck and removal, not for reading the archive.
+    await this.#input.namespaceMutations.run(async () => {
+      const observedAgain = await this.#observation(await this.#ownedSnapshot(), expectedRoot)
+      if (observedAgain.digest !== expectedObservation) {
+        throw new DOMException('The retained ZIP changed before deletion', 'DataError')
+      }
+      await this.#input.fileSystem.removeExactName(
+        this.#input.binding.parentBinding.persistedHandle, this.#input.binding.stableName,
+      )
+    })
   }
 
   async abort(reason: unknown): Promise<void> {

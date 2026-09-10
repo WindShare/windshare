@@ -1,4 +1,7 @@
-import type { DirectZipMilestonePayloadV1 } from '../../diagnostics/trace/model'
+import type {
+  DirectZipCoordinationPayloadV1,
+  DirectZipMilestonePayloadV1,
+} from '../../diagnostics/trace/model'
 import type {
   PerformancePhasePayloadV1,
   PerformanceSummaryPayloadV1,
@@ -127,6 +130,7 @@ export interface OutputTracePayloadByName {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
+  readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
 }
 
 export type OutputTraceEventName = keyof OutputTracePayloadByName

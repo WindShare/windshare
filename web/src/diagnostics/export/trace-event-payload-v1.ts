@@ -16,7 +16,6 @@ import {
   validateCheckpoint,
   validateCleanup,
   validateContinuation,
-  validateDirectZipMilestone,
   validateJoin,
   validateReceiverExperience,
   validateLifecycleAction,
@@ -32,6 +31,10 @@ import {
   validateSettlement,
   validateTransferProgress,
 } from './trace-payload-product'
+import {
+  validateDirectZipCoordination,
+  validateDirectZipMilestone,
+} from './trace-payload-direct-zip'
 import {
   validatePerformancePhase,
   validatePerformanceSummary,
@@ -72,6 +75,7 @@ export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>
     case 'reopen': validateReopen(payload); return
     case 'cleanup': validateCleanup(payload); return
     case 'direct_zip_milestone': validateDirectZipMilestone(payload); return
+    case 'direct_zip_coordination': validateDirectZipCoordination(payload); return
     case 'retained_inventory': validateRetainedInventory(payload); return
     case 'retained_action': validateRetainedAction(payload); return
     default: assertNever(eventName)

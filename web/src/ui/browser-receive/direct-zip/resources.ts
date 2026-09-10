@@ -1,12 +1,12 @@
 import { encodeBase64Url, equalBytes } from '../../../crypto/bytes'
 import { browserReceiveOperationLockName } from '../../../output/browser/session-lease'
-import { acquireFSARootMutationLease } from '../../../output/browser/namespace-mutation'
 import {
   createDirectZipBrowserFileSystemPort,
   createDirectZipTarget,
   type DirectZipHandleBindingPort,
   type DirectZipReservationCandidatePort,
   type DirectZipReservationCandidate,
+  type DirectZipParentLockPort,
 } from '../../../output/direct-zip/target'
 import type { DirectZipBootstrapCandidateV1, DirectZipPolicyDigestsV1 } from '../../../output/direct-zip/journal'
 import {
@@ -96,13 +96,11 @@ export async function acquireOperationLock(windowPort: BrowserReceiveWindow, ope
   return async () => { released(); await completion }
 }
 
-export async function acquireParentLock(windowPort: BrowserReceiveWindow, parent: FileSystemDirectoryHandle) {
-  return acquireFSARootMutationLease(parent, windowPort.navigator.locks)
-}
-
 export function browserTarget(input: {
   readonly leaseId: string
   readonly reservations: DirectZipReservationCandidatePort<FileSystemDirectoryHandle>
+  readonly parentLocks: DirectZipParentLockPort<FileSystemDirectoryHandle>
+  readonly claimFile: (file: FileSystemFileHandle) => Promise<void>
 }) {
   const bindings: DirectZipHandleBindingPort<FileSystemDirectoryHandle, FileSystemFileHandle> = {
     compareParent: async (binding, current) =>
@@ -110,21 +108,27 @@ export function browserTarget(input: {
     compareFile: async (binding, current) =>
       await binding.persistedHandle.isSameEntry(current) ? 'same' : 'different',
     compareCurrentFiles: async (left, right) => await left.isSameEntry(right) ? 'same' : 'different',
-    bindFile: async ({ targetRef, stableName, file }) => ({
-      handleRef: encodeBase64Url(targetRef),
-      bindingDigest: bytes(await digestText(`windshare/direct-zip-file-locator/v1\n${encodeBase64Url(targetRef)}\n${stableName}`)),
-      persistedHandle: file,
-    }),
+    bindFile: async ({ targetRef, stableName, file }) => {
+      // Transfer bootstrap's short namespace protection to the concrete file lease
+      // before the target reservation releases its parent lock.
+      await input.claimFile(file)
+      return {
+        handleRef: encodeBase64Url(targetRef),
+        bindingDigest: bytes(await digestText(`windshare/direct-zip-file-locator/v1\n${encodeBase64Url(targetRef)}\n${stableName}`)),
+        persistedHandle: file,
+      }
+    },
   }
   return createDirectZipTarget({
     fileSystem: browserDirectZipFileSystem(),
     handleBindings: bindings,
     reservations: input.reservations,
-    // The presentation/reopen owner already holds both locks across the complete operation.
+    // The storage owner already holds the operation lease; namespace protection
+    // belongs to each reservation attempt and ends before archive transfer starts.
     operationLeases: { acquire: async () => ({
       leaseId: input.leaseId, generation: 1n, release: async () => undefined,
     }) },
-    parentLocks: { acquire: async () => ({ name: 'browser-owned-parent', release: async () => undefined }) },
+    parentLocks: input.parentLocks,
     random: { bytes: randomBytes },
     maximumReservationCandidates: 1,
   })
