@@ -1,90 +1,90 @@
-export const AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES = 64n * 1024n * 1024n
+export const PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES = 64n * 1024n * 1024n
+
+export type AutomaticCheckpointTrigger = 'pending-bytes' | 'pending-time'
+
+export type AutomaticCheckpointPolicy =
+  | Readonly<{ kind: 'disabled' }>
+  | Readonly<{ kind: 'prefix-copy'; pendingBytes: bigint }>
+  | Readonly<{ kind: 'incremental'; pendingBytes: bigint; pendingMilliseconds: number }>
 
 export interface CheckpointScheduleInput {
-  readonly durablePrefixBytes: bigint
+  readonly durableBytes: bigint
   readonly pendingBytes: bigint
   readonly remainingBytes: bigint
+  readonly pendingMilliseconds: number
+  readonly retryAtPendingBytes: bigint
 }
 
 export type CheckpointScheduleDecision =
+  | Readonly<{ kind: 'wait-for-progress' }>
   | Readonly<{
-      readonly kind: 'wait-for-progress'
-      readonly nextPendingBytes: bigint
+      kind: 'checkpoint-now'
+      trigger: AutomaticCheckpointTrigger
+      retryAtPendingBytes: bigint
     }>
-  | Readonly<{ readonly kind: 'checkpoint-now' }>
-  | Readonly<{ readonly kind: 'finish-without-further-checkpoint' }>
+  | Readonly<{ kind: 'finish-without-further-checkpoint' }>
 
-export interface CheckpointSchedule {
-  evaluate(input: CheckpointScheduleInput): CheckpointScheduleDecision
+export function snapshotAutomaticCheckpointPolicy(policy: AutomaticCheckpointPolicy): AutomaticCheckpointPolicy {
+  if (policy?.kind === 'disabled') return Object.freeze({ kind: 'disabled' })
+  if (policy?.kind !== 'prefix-copy' && policy?.kind !== 'incremental') {
+    throw new RangeError('checkpoint policy kind is invalid')
+  }
+  const pendingBytes = requireByteCount(policy.pendingBytes, 'threshold')
+  if (pendingBytes === 0n) throw new RangeError('checkpoint threshold must be positive')
+  if (policy.kind === 'prefix-copy') return Object.freeze({ kind: policy.kind, pendingBytes })
+  if (!Number.isSafeInteger(policy.pendingMilliseconds) || policy.pendingMilliseconds <= 0) {
+    throw new RangeError('checkpoint time threshold must be positive')
+  }
+  return Object.freeze({ kind: policy.kind, pendingBytes, pendingMilliseconds: policy.pendingMilliseconds })
 }
 
-export const checkpointSchedule = createCheckpointSchedule()
-
-export function createCheckpointSchedule(
-  pendingFloorBytes: bigint = AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES,
-): CheckpointSchedule {
-  const floor = requirePositiveByteCount(pendingFloorBytes, 'pending floor')
-  return Object.freeze({
-    evaluate: (input: CheckpointScheduleInput) => evaluateCheckpointScheduleAtFloor(input, floor),
-  })
-}
-
+/** The output selects its cost model; transfer progress alone cannot determine a safe schedule. */
 export function evaluateCheckpointSchedule(
+  policy: AutomaticCheckpointPolicy,
   input: CheckpointScheduleInput,
 ): CheckpointScheduleDecision {
-  return evaluateCheckpointScheduleAtFloor(input, AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES)
+  const durableBytes = requireByteCount(input.durableBytes, 'durable')
+  const pendingBytes = requireByteCount(input.pendingBytes, 'pending')
+  const remainingBytes = requireByteCount(input.remainingBytes, 'remaining')
+  const retryAtPendingBytes = requireByteCount(input.retryAtPendingBytes, 'retry')
+  if (!Number.isFinite(input.pendingMilliseconds) || input.pendingMilliseconds < 0) {
+    throw new RangeError('checkpoint pending time must not be negative')
+  }
+  if (policy.kind === 'disabled' || pendingBytes === 0n || remainingBytes === 0n ||
+      pendingBytes < retryAtPendingBytes) return Object.freeze({ kind: 'wait-for-progress' })
+
+  if (policy.kind === 'prefix-copy') {
+    const requiredAdvance = durableBytes > policy.pendingBytes ? durableBytes : policy.pendingBytes
+    // A timer cannot make a full-prefix copy cheaper. Keep the existing sparse
+    // schedule and let the output's admission authority enforce its copy budget.
+    if (pendingBytes < requiredAdvance) return Object.freeze({ kind: 'wait-for-progress' })
+    if (remainingBytes <= durableBytes + pendingBytes) {
+      return Object.freeze({ kind: 'finish-without-further-checkpoint' })
+    }
+    return checkpointNow('pending-bytes', pendingBytes + requiredAdvance)
+  }
+
+  // In-place flushes do not copy the saved prefix, including near file completion.
+  // Elapsed time is evaluated after accepted writes, not by a background timer.
+  if (pendingBytes >= policy.pendingBytes) {
+    return checkpointNow('pending-bytes', pendingBytes + policy.pendingBytes)
+  }
+  if (input.pendingMilliseconds >= policy.pendingMilliseconds) {
+    return checkpointNow('pending-time', pendingBytes + policy.pendingBytes)
+  }
+  return Object.freeze({ kind: 'wait-for-progress' })
 }
 
-function evaluateCheckpointScheduleAtFloor(
-  input: CheckpointScheduleInput,
-  pendingFloorBytes: bigint,
+function checkpointNow(
+  trigger: AutomaticCheckpointTrigger,
+  retryAtPendingBytes: bigint,
 ): CheckpointScheduleDecision {
-  const durablePrefixBytes = requireByteCount(input?.durablePrefixBytes, 'durable prefix')
-  const pendingBytes = requireByteCount(input?.pendingBytes, 'pending')
-  const remainingBytes = requireByteCount(input?.remainingBytes, 'remaining')
-  const nextPendingBytes = requiredPendingAdvance(durablePrefixBytes, pendingFloorBytes)
-
-  // Time may request an early evaluation, but returning the byte threshold keeps
-  // repeated timer observations from turning into preserving-open attempts.
-  if (pendingBytes < nextPendingBytes) {
-    return Object.freeze({ kind: 'wait-for-progress', nextPendingBytes })
-  }
-
-  const resultingPrefixBytes = durablePrefixBytes + pendingBytes
-  if (remainingBytes <= resultingPrefixBytes) {
-    return Object.freeze({ kind: 'finish-without-further-checkpoint' })
-  }
-  return Object.freeze({ kind: 'checkpoint-now' })
-}
-
-export function nextCheckpointRetryPendingBytes(
-  durablePrefixBytes: bigint,
-  evaluatedPendingBytes: bigint,
-  pendingFloorBytes: bigint = AUTOMATIC_CHECKPOINT_PENDING_FLOOR_BYTES,
-): bigint {
-  return requireByteCount(evaluatedPendingBytes, 'evaluated pending') +
-    requiredPendingAdvance(
-      requireByteCount(durablePrefixBytes, 'durable prefix'),
-      requirePositiveByteCount(pendingFloorBytes, 'pending floor'),
-    )
-}
-
-function requiredPendingAdvance(durablePrefixBytes: bigint, pendingFloorBytes: bigint): bigint {
-  return durablePrefixBytes > pendingFloorBytes
-    ? durablePrefixBytes
-    : pendingFloorBytes
+  return Object.freeze({ kind: 'checkpoint-now', trigger, retryAtPendingBytes })
 }
 
 function requireByteCount(value: bigint, label: string): bigint {
   if (typeof value !== 'bigint' || value < 0n) {
     throw new RangeError(`checkpoint schedule ${label} bytes must not be negative`)
-  }
-  return value
-}
-
-function requirePositiveByteCount(value: bigint, label: string): bigint {
-  if (typeof value !== 'bigint' || value <= 0n) {
-    throw new RangeError(`checkpoint schedule ${label} bytes must be positive`)
   }
   return value
 }

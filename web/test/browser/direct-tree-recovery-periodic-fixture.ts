@@ -92,7 +92,6 @@ const OUTPUT_SESSION_ID = identityText(210)
 const TRANSFER_JOB_ID = identityText(220)
 const OUTPUT_WRITE_BUDGET_BYTES = 1_024n
 const CHECKPOINT_TRIGGER_BYTES = 1_024n
-const CHECKPOINT_TRIGGER_MILLISECONDS = 60_000
 const OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS = 20_000
 const OUTPUT_IDENTITY = outputSessionIdentity({
   backend: 'fsa-direct-tree-periodic',
@@ -512,11 +511,8 @@ function recoveryExecutionProfile() {
     maximumOutstandingWriteBytes: OUTPUT_WRITE_BUDGET_BYTES,
     maximumBufferedBytes: OUTPUT_WRITE_BUDGET_BYTES,
     automaticCheckpoint: {
-      kind: 'bounded',
-      trigger: {
-        pendingBytes: CHECKPOINT_TRIGGER_BYTES,
-        pendingMilliseconds: CHECKPOINT_TRIGGER_MILLISECONDS,
-      },
+      kind: 'prefix-copy',
+      pendingBytes: CHECKPOINT_TRIGGER_BYTES,
     },
   })
 }

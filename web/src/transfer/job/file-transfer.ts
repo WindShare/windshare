@@ -17,10 +17,7 @@ import {
   bindOutputFileTransaction,
   ownOutputFileTransaction,
 } from '../output-file-transaction'
-import {
-  createCheckpointSchedule,
-  nextCheckpointRetryPendingBytes,
-} from '../checkpoint-schedule'
+import { evaluateCheckpointSchedule } from '../checkpoint-schedule'
 import {
   OutputBudgetExceededError,
   OutputSessionCompromisedError,
@@ -29,10 +26,8 @@ import {
   snapshotOpenedOutputRevision,
   snapshotOutputFile,
   snapshotOutputFileRequest,
-  type AutomaticCheckpointTrigger,
   type OutputFile,
   type OpenedOutputRevision,
-  type OutputExecutionProfileBoundedCheckpoint,
   type OutputSession,
 } from '../output-session'
 import { V2OutputPausedError, type PendingFile } from './contract'
@@ -184,7 +179,7 @@ export async function transferV2File(
       durableBytes: rangeBytes(initialDurable),
       pendingBytes: 0n,
       pendingSince: undefined as number | undefined,
-      nextEvaluationPendingBytes: undefined as bigint | undefined,
+      retryAtPendingBytes: 0n,
       automaticCheckpointFinished: false,
     }
     let wrote = false
@@ -559,7 +554,7 @@ async function acceptAtomicOutputRange(
     await writeAtomicRange(options, transaction, offset, data)
     checkpoint.remainingWriteBytes -= writtenBytes
     checkpoint.pendingBytes += writtenBytes
-    if (options.output.executionProfile.automaticCheckpoint.kind === 'bounded') {
+    if (options.output.executionProfile.automaticCheckpoint.kind === 'incremental') {
       checkpoint.pendingSince ??= checkpointTime(options)
     }
     options.onWriteAcknowledged(writtenBytes, !wrote)
@@ -599,7 +594,7 @@ interface FileCheckpointController {
   durableBytes: bigint
   pendingBytes: bigint
   pendingSince: number | undefined
-  nextEvaluationPendingBytes: bigint | undefined
+  retryAtPendingBytes: bigint
   automaticCheckpointFinished: boolean
 }
 
@@ -610,17 +605,15 @@ async function attemptAutomaticCheckpoint(
 ): Promise<void> {
   const policy = options.output.executionProfile.automaticCheckpoint
   if (policy.kind === 'disabled' || checkpoint.automaticCheckpointFinished) return
-  const trigger = automaticCheckpointTrigger(options, policy, checkpoint)
-  if (trigger === undefined) return
-  const scheduleDecision = createCheckpointSchedule(policy.trigger.pendingBytes).evaluate({
-    durablePrefixBytes: checkpoint.durableBytes,
+  const scheduleDecision = evaluateCheckpointSchedule(policy, {
+    durableBytes: checkpoint.durableBytes,
     pendingBytes: checkpoint.pendingBytes,
     remainingBytes: checkpoint.remainingWriteBytes,
+    pendingMilliseconds: checkpoint.pendingSince === undefined
+      ? 0 : checkpointTime(options) - checkpoint.pendingSince,
+    retryAtPendingBytes: checkpoint.retryAtPendingBytes,
   })
-  if (scheduleDecision.kind === 'wait-for-progress') {
-    checkpoint.nextEvaluationPendingBytes = scheduleDecision.nextPendingBytes
-    return
-  }
+  if (scheduleDecision.kind === 'wait-for-progress') return
   if (scheduleDecision.kind === 'finish-without-further-checkpoint') {
     checkpoint.automaticCheckpointFinished = true
     return
@@ -629,14 +622,10 @@ async function attemptAutomaticCheckpoint(
     options.signal,
     'Unable to checkpoint the output file',
     'output-write-failed',
-    () => transaction.automaticCheckpoint(trigger, options.signal),
+    () => transaction.automaticCheckpoint(scheduleDecision.trigger, options.signal),
   )
   if (result.kind === 'deferred') {
-    checkpoint.nextEvaluationPendingBytes = nextCheckpointRetryPendingBytes(
-      checkpoint.durableBytes,
-      checkpoint.pendingBytes,
-      policy.trigger.pendingBytes,
-    )
+    checkpoint.retryAtPendingBytes = scheduleDecision.retryAtPendingBytes
     return
   }
   if (result.kind === 'finished') {
@@ -651,29 +640,8 @@ async function attemptAutomaticCheckpoint(
   checkpoint.durableBytes = durableBytes
   checkpoint.pendingBytes = 0n
   checkpoint.pendingSince = undefined
-  checkpoint.nextEvaluationPendingBytes = nextCheckpointRetryPendingBytes(
-    durableBytes,
-    0n,
-    policy.trigger.pendingBytes,
-  )
+  checkpoint.retryAtPendingBytes = 0n
   options.onRecoverableAcknowledged?.(advancedBytes, 'automatic-checkpoint')
-}
-
-function automaticCheckpointTrigger(
-  options: V2FileTransferOptions,
-  policy: OutputExecutionProfileBoundedCheckpoint,
-  checkpoint: FileCheckpointController,
-): AutomaticCheckpointTrigger | undefined {
-  const nextPendingBytes = checkpoint.nextEvaluationPendingBytes ?? policy.trigger.pendingBytes
-  if (checkpoint.pendingBytes >= nextPendingBytes) return 'pending-bytes'
-  if (checkpoint.nextEvaluationPendingBytes !== undefined) return undefined
-  const pendingSince = checkpoint.pendingSince
-  if (pendingSince === undefined) return undefined
-  const elapsed = checkpointTime(options) - pendingSince
-  if (elapsed < 0) {
-    throw new OutputTransactionContractError('output checkpoint clock moved backwards')
-  }
-  return elapsed >= policy.trigger.pendingMilliseconds ? 'pending-time' : undefined
 }
 
 function checkpointTime(options: V2FileTransferOptions): number {
