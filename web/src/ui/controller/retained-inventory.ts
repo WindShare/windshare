@@ -124,7 +124,7 @@ export class RetainedInventoryCoordinator {
       if (this.#options.continuationBlocked()) {
         return Object.freeze({ allowed: false, reason: 'Another download is using the receiver. Pause or finish it before continuing this task.' })
       }
-    } else if ((action === 'continue' || action === 'save-staged-files' || action === 'cleanup-staging') &&
+    } else if ((action === 'continue' || action === 'save-staged-files') &&
         this.#options.localFinalizationBlocked?.()) {
       return Object.freeze({ allowed: false, reason: 'Another download is using the output. Pause or finish it before continuing this task.' })
     }

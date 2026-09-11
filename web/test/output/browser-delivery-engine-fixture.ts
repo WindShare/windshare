@@ -5,6 +5,7 @@ import type { BrowserDeliveryRecordV1, BrowserSavePolicyV1 } from '../../src/out
 import type { BrowserDeliveryRepository, BrowserDeliveryFileScan } from '../../src/output/browser-delivery/repository'
 import type { BrowserDeliveryReservation, BrowserDeliveryStagePort, BrowserDeliveryTargetPort } from '../../src/output/browser-delivery/ports'
 import { readBrowserDeliveryCheckpoint } from '../../src/output/browser-delivery/checkpoint-reader'
+import { verifyStagedDeliveryTarget } from '../../src/output/browser-delivery/target-content'
 import { PersistentTreeOutputSession } from '../../src/output/persistent-tree/session'
 import type { PersistentFileRequest } from '../../src/output/persistent-tree/contracts'
 import { acquireArtifactReader, withArtifactCleanup } from '../../src/output/origin-private/export-readers'
@@ -94,6 +95,8 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
     },
     ensureDirectory: path => targetSession.ensureDirectory(path),
     readCheckpoint: fileId => readBrowserDeliveryCheckpoint(targetCheckpoints, fileId),
+    verifyStagedTarget: async (record, content) => verifyStagedDeliveryTarget({ record, content, tree: targetTree,
+      namespace: policy.target, checkpoint: await readBrowserDeliveryCheckpoint(targetCheckpoints, record.fileId) }),
     close: () => targetSession.close(),
   })
   const stage: BrowserDeliveryStagePort = {
@@ -111,11 +114,13 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
       events.push('delete-stage')
       if (await stageTree.openFile(checkpoint.canonicalPath, checkpoint.ownedObjectId) !== undefined) await stageTree.removeFile(checkpoint.canonicalPath, checkpoint.ownedObjectId)
     }),
-    discard: async (source, checkpoint) => {
+    discard: async (source, checkpoint) => withArtifactCleanup(policy.staging!.operationId, async () => {
+      if (deleteFailure) { deleteFailure = false; throw new Error('delete failure') }
+      events.push('delete-stage')
       if (checkpoint !== undefined && await stageTree.openFile(browserDeliveryStagingPath(source.fileId), checkpoint.ownedObjectId) !== undefined) {
         await stageTree.removeFile(browserDeliveryStagingPath(source.fileId), checkpoint.ownedObjectId)
       }
-    },
+    }),
     close: () => stageSession.close(),
   }
   const reserve = async (source: { fileId: string }, retained?: BrowserDeliveryRecordV1) => {
@@ -132,7 +137,7 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
         exportFailed: async () => { phases.set(source.fileId, 'failed') },
         targetSaved: async () => { phases.set(source.fileId, 'saved'); events.push('budget-saved') },
         releaseDeleted: async () => { phases.set(source.fileId, 'released'); events.push('budget-released') },
-        releaseDiscarded: async () => { phases.set(source.fileId, 'released') },
+        releaseDiscarded: async () => { phases.set(source.fileId, 'released'); events.push('budget-released') },
         cancelUnused: async () => { phases.set(source.fileId, 'released') },
       }
       holds.set(source.fileId, reservation)
@@ -160,7 +165,7 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
     materializationRelativePath: path,
     openRevision: async () => ({ fileId: deliveryIdentity(id, 16), fileRevision: deliveryIdentity(22, 16), exactSize: size }),
   })
-  return { policy, repository, targetTree, stageTree, targetCheckpoints, stageCheckpoints, events, phases, session, request, reopen, reopenCleanup,
+  return { policy, repository, targetTree, stageTree, targetCheckpoints, stageCheckpoints, stage, events, phases, holds, session, request, reopen, reopenCleanup,
     setNow: (value: number) => { now = value }, failDelete: () => { deleteFailure = true },
     onTargetWrite: (callback: typeof targetWrite) => { targetWrite = callback } }
 }

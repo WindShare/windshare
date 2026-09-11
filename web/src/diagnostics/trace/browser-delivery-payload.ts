@@ -1,6 +1,7 @@
 export const BROWSER_DELIVERY_TRANSITIONS = Object.freeze([
   'placement', 'receiving', 'copy-started', 'copy-failed', 'target-saved',
-  'cleanup-failed', 'cleaned', 'discard-started', 'discarded', 'checkpoint',
+  'cleanup-failed', 'cleaned', 'discard-started', 'discarded', 'discard-failed',
+  'stop-staging-preserved', 'stop-cleanup-pending', 'checkpoint',
 ] as const)
 
 export interface BrowserDeliveryPayloadV1 {

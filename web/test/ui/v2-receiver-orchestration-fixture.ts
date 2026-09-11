@@ -867,6 +867,7 @@ function defaultLifecycleAction(
   switch (action) {
     case 'save-staged-files':
     case 'cleanup-staging':
+    case 'discard-incomplete-staging':
       return { lifecycle }
     case 'continue':
       return {

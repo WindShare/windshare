@@ -64,6 +64,7 @@ export function retainedTaskFacts(
   const details: string[] = []
   const localWork = execution.pending?.operationId === operation.operationId &&
     (execution.pending.action === 'save-staged-files' || execution.pending.action === 'cleanup-staging' ||
+      execution.pending.action === 'discard-incomplete-staging' ||
       (execution.pending.action === 'continue' &&
         (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')))
     ? 'finalizing' : 'idle'

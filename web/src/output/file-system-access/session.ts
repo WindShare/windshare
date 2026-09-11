@@ -1,4 +1,6 @@
 import { readBrowserDeliveryCheckpoint } from '../browser-delivery/checkpoint-reader'
+import { verifyStagedDeliveryTarget } from '../browser-delivery/target-content'
+import type { BrowserDeliveryRecordV1 } from '../browser-delivery/model'
 import {
   createDestinationReservationID,
   createFSANamedEntryReservation,
@@ -100,7 +102,7 @@ import {
   FSASettlementLedgerAuthority,
   type FSAResumableCheckpointEvidence,
 } from './settlement-ledger'
-import { closeFailedFSAAssembly } from './assembly-cleanup'
+import { closeFailedFSAAssembly, closeFSAOutputAuthorities } from './assembly-cleanup'
 
 
 export type {
@@ -436,6 +438,31 @@ export class FileSystemAccessOutputSession implements
     return this.#outputClosePromise
   }
 
+  async verifyStagedTarget(record: BrowserDeliveryRecordV1, content: Blob): Promise<'empty' | 'matching-staged-content'> {
+    this.#requireMaterializing()
+    return verifyStagedDeliveryTarget({ record, content, tree: this.#tree, namespace: this.#checkpoints.binding,
+      checkpoint: await this.readCheckpoint(record.fileId) })
+  }
+
+  closeForStopSettlement(): Promise<void> {
+    if (this.#settlementObservationActive || this.#terminalDrain?.kind !== 'stop-operation') {
+      return Promise.reject(new DOMException('Stopped metadata requires the completed Stop cut', 'InvalidStateError'))
+    }
+    this.#outputClosePromise ??= (async () => {
+      try {
+        // Delivery disposal may have removed the final child obligation after the
+        // parent receipt retired metadata. Release that target authority before closing.
+        this.#requireDrainedScheduler()
+        await this.#settlementLedger.retireRecoveryMetadata()
+      } catch (error) {
+        recordOutputException(this.#diagnostics?.failures?.cleanup, error)
+        outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
+      }
+      await this.#closeOutputAuthorities()
+    })()
+    return this.#outputClosePromise
+  }
+
   releaseRootLease(): Promise<void> {
     this.#rootReleasePromise ??= this.#rootLease.release()
     return this.#rootReleasePromise
@@ -460,33 +487,9 @@ export class FileSystemAccessOutputSession implements
     throw new AggregateError(failures, 'FSA output authorities did not close cleanly')
   }
 
-  async #closeOutputAuthorities(): Promise<void> {
-    const failures: unknown[] = []
-    try {
-      await this.#materialization.close()
-    } catch (error) {
-      // File-transaction cleanup owns its native classification; this layer preserves
-      // that failure while still releasing repository-backed output authorities.
-      failures.push(error)
-    }
-    try {
-      this.#checkpoints.close()
-    } catch (error) {
-      failures.push(error)
-      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-    }
-    try {
-      this.#compatibleNames.close()
-    } catch (error) {
-      failures.push(error)
-      recordOutputException(this.#diagnostics?.failures?.cleanup, error)
-    }
-    if (failures.length !== 0) {
-      outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'failed' })
-      if (failures.length === 1) throw failures[0]
-      throw new AggregateError(failures, 'FSA output repositories did not close cleanly')
-    }
-    outputTrace(this.#diagnostics, { eventName: 'cleanup', transition: 'completed' })
+  #closeOutputAuthorities(): Promise<void> {
+    return closeFSAOutputAuthorities({ materialization: this.#materialization, checkpoints: this.#checkpoints,
+      compatibleNames: this.#compatibleNames, diagnostics: this.#diagnostics })
   }
 
   #observation(authority: FSATerminalExclusiveAuthority): FSAFinalSettlementObservation {

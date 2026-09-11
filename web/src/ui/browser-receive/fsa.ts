@@ -1,9 +1,6 @@
 import {
   type BrowserReceiveOperationLease,
 } from '../../output/browser/session-lease'
-import { equalBytes } from '../../crypto/bytes'
-import { canonicalReceiveLifecycleStateBytes } from '../../output/workspace/state-codec'
-import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../output/browser-delivery/recovery/local-lifecycle'
 import {
   createFileSystemAccessSettlementAuthority,
   type FileSystemAccessOperationSettlementAuthority,
@@ -62,7 +59,8 @@ import {
   unavailableRoute,
 } from './shared'
 import { FSAResourceOwner } from './fsa-resource-owner'
-import { openFolderDeliveryAttempt, openFolderCleanupAttempt, readFolderRecoverySummary, type BrowserFolderDeliveryContext } from './fsa/folder-delivery'
+import { openFolderDeliveryAttempt, type BrowserFolderDeliveryContext } from './fsa/folder-delivery'
+import { runActiveBrowserFolderAction } from './fsa/active-local-delivery'
 import { observeBrowserFolderCheckpoint } from './fsa/delivery-trace'
 import {
   createFSAExecutionRecoveryPolicy,
@@ -319,8 +317,15 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
-    if (action === 'save-staged-files' || action === 'cleanup-staging') {
-      return this.#runLocalDelivery(action, lifecycle)
+    if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') {
+      return runActiveBrowserFolderAction({
+        intent: this.intent, repository: this.#repository, lease: this.#lease,
+        context: this.#folderDelivery, diagnostics: this.#diagnostics, output: this.#resources,
+        checkpointAuthorities: {
+          close: () => this.#closeCheckpointAuthorities(),
+          replace: close => { this.#closeCheckpointAuthorities = close },
+        },
+      }, action, lifecycle)
     }
     if ((action !== 'continue' && action !== 'redownload') ||
         lifecycle.kind !== 'resumable-receive' ||
@@ -401,62 +406,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     return null
   }
 
-  async #runLocalDelivery(
-    action: 'save-staged-files' | 'cleanup-staging',
-    lifecycle: ReceiveLifecycleState,
-  ): Promise<V2LifecycleMutation> {
-    const context = this.#folderDelivery
-    if (context === undefined || lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set' ||
-        lifecycle.operationId !== this.intent.operationId || lifecycle.receiveIntentDigest !== this.intent.digest) {
-      throw unavailableRoute()
-    }
-    await this.#closeCheckpointAuthorities()
-    if (action === 'cleanup-staging') {
-      const cleanup = await openFolderCleanupAttempt(context, {
-        intent: this.intent, operationLease: this.#lease,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
-      })
-      this.#closeCheckpointAuthorities = cleanup.close
-      try { await cleanup.delivery.cleanupStaging() } finally { await cleanup.close() }
-      return Object.freeze({ lifecycle, workspaceUsage: null, actionOutcome: { kind: 'completed' } as const })
-    }
-    const localAuthority = { repository: this.#repository, lease: this.#lease }
-    await beginBrowserDeliveryLocalMutation(localAuthority)
-    let session: FileSystemAccessOutputSession | undefined
-    let attempt: Awaited<ReturnType<typeof openFolderDeliveryAttempt>> | undefined
-    const failures: unknown[] = []
-    try {
-      session = await reopenFileSystemAccessOutput({
-        intent: this.intent, operationRepository: this.#repository,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
-      })
-      this.#resources.replaceOutputSession(session)
-      await session.activate()
-      attempt = await openFolderDeliveryAttempt(context, {
-        target: session, intent: this.intent, operationLease: this.#lease,
-        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
-      })
-      this.#closeCheckpointAuthorities = attempt.close
-      await attempt.delivery.saveStagedFiles()
-    } catch (error) { failures.push(error) }
-    for (const close of [() => attempt?.close(), () => session?.close()]) {
-      try { await close() } catch (error) { failures.push(error) }
-    }
-    const reconciled = await reconcileBrowserDeliveryLifecycle(localAuthority).catch(error => {
-      if (failures.length === 0) throw error
-      throw new AggregateError([...failures, error], 'Local folder saving could not reconcile its recovery authority', { cause: failures[0] })
-    })
-    const retainedLifecycle = equalBytes(canonicalReceiveLifecycleStateBytes(reconciled), canonicalReceiveLifecycleStateBytes(lifecycle))
-      ? lifecycle : reconciled
-    let recoverySummary: Awaited<ReturnType<typeof readFolderRecoverySummary>> | undefined
-    try { recoverySummary = await readFolderRecoverySummary(this.intent, retainedLifecycle) }
-    catch (error) { failures.push(error) }
-    const actionOutcome = localDeliveryOutcome(failures)
-    // Local copying proves individual target files; remaining discovery still owns task completion.
-    return Object.freeze({ lifecycle: retainedLifecycle, workspaceUsage: null, actionOutcome,
-      ...(recoverySummary === undefined ? {} : { recoverySummary }) })
-  }
-
   async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
     this.#requireAttached()
     const controller = new AbortController()
@@ -481,13 +430,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   #requireAttached(): void {
     if (this.#detached) throw new DOMException('Receive operation is detached', 'InvalidStateError')
   }
-}
-
-function localDeliveryOutcome(failures: readonly unknown[]): import('../v2-receive-runtime').V2LifecycleActionOutcome {
-  if (failures.length === 0) return Object.freeze({ kind: 'completed' })
-  const error = failures.length === 1 ? failures[0] : new AggregateError(failures,
-    'Local folder saving could not release output authority', { cause: failures[0] })
-  return Object.freeze({ kind: 'failed', error })
 }
 
 async function settleFailedFSAReopen(

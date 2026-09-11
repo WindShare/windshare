@@ -16,7 +16,7 @@ export interface BrowserDeliveryMaterializationOptions extends Omit<BrowserDeliv
 }
 
 export type BrowserDeliveryCleanup = Pick<BrowserDeliveryMaterialization,
-  'getSummary' | 'subscribe' | 'cleanupStaging' | 'discardStaging' | 'close'>
+  'getSummary' | 'subscribe' | 'cleanupStaging' | 'discardStaging' | 'discardIncompleteStaging' | 'close'>
 
 /** Folders retain one target authority while each unopened authenticated file chooses receiving storage. */
 export class BrowserDeliveryMaterialization implements PersistentMaterializationPort {
@@ -31,6 +31,8 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   readonly #listeners = new Set<(summary: BrowserDeliveryResumeSummary) => void>()
   #newReceivedBytes = 0n
   #closed = false
+  #receivingClosed = false
+  #dispositionPromise: Promise<void> | undefined
   #closePromise: Promise<void> | undefined
 
   private constructor(options: BrowserDeliveryMaterializationOptions) {
@@ -50,7 +52,8 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   static openForCleanup(options: Omit<BrowserDeliveryMaterializationOptions, 'target' | 'choosePlacement'>): Promise<BrowserDeliveryCleanup> {
     const unavailable = async (): Promise<never> => { throw new DOMException('Cleanup has no destination write authority', 'InvalidStateError') }
     return this.#load({ ...options, choosePlacement: unavailable,
-      target: { beginFile: unavailable, beginDirectFile: unavailable, ensureDirectory: unavailable, readCheckpoint: unavailable, close: async () => undefined } })
+      target: { beginFile: unavailable, beginDirectFile: unavailable, ensureDirectory: unavailable, readCheckpoint: unavailable,
+        verifyStagedTarget: unavailable, close: async () => undefined } })
   }
 
   static async #load(options: BrowserDeliveryMaterializationOptions): Promise<BrowserDeliveryMaterialization> {
@@ -78,7 +81,7 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   }
 
   beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
-    if (this.#closed) return Promise.reject(new DOMException('Browser delivery session is closed', 'InvalidStateError'))
+    if (this.#receivingClosed) return Promise.reject(new DOMException('Browser delivery receiving is closed', 'InvalidStateError'))
     const opening = this.#beginFile(request)
     this.#beginnings.add(opening)
     opening.finally(() => this.#beginnings.delete(opening)).catch(() => undefined)
@@ -150,8 +153,9 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       }
       // beginFile reserves an owned empty entry; FSA does not open its writable until
       // the first write. This prebinds final identity without allocating a target copy.
-      const targetRequest = record.placement === 'staged' || record.state.kind === 'restart-authorized'
-        ? { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' as const } } : openedRequest
+      let targetRequest = openedRequest
+      if (record.placement === 'staged') targetRequest = { ...openedRequest, recovery: { pausedFile: 'preserve' } }
+      else if (record.state.kind === 'restart-authorized') targetRequest = { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' } }
       target = record.placement === 'direct'
         ? await this.#options.target.beginDirectFile(targetRequest, {
           currentRecord: () => this.#records.get(record.fileId) ?? record,
@@ -236,18 +240,62 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     }
   }
 
-  closeForTerminalSettlement(): Promise<void> { return this.#close(true) }
-  close(): Promise<void> { return this.#close(false) }
+  /** Explicit terminal abandonment also repairs operations stopped before automatic disposal existed. */
+  discardIncompleteStaging(signal?: AbortSignal): Promise<void> {
+    if (this.#closed) return Promise.reject(new DOMException('Browser delivery session is closed', 'InvalidStateError'))
+    if (this.#dispositionPromise !== undefined) return this.#dispositionPromise
+    this.#receivingClosed = true
+    const running = (async () => {
+      const failures = await this.#drain()
+      if (failures.length > 0) throw new AggregateError(failures, 'Browser delivery writers could not be drained')
+      await this.#discardIncompleteStaging(signal)
+    })()
+    this.#dispositionPromise = running
+    this.#localWork.add(running)
+    running.finally(() => {
+      this.#localWork.delete(running)
+      this.#dispositionPromise = undefined
+    }).catch(() => undefined)
+    return running
+  }
 
-  #close(terminal: boolean): Promise<void> {
+  async #discardIncompleteStaging(signal?: AbortSignal): Promise<void> {
+    const failures: unknown[] = []
+    for (const record of await this.#currentRecords()) {
+      signal?.throwIfAborted()
+      if (record.placement !== 'staged') continue
+      try { await this.#engine.discardIncomplete(record.fileId) }
+      catch (error) { failures.push(error) }
+    }
+    if (failures.length > 0) throw new AggregateError(failures, 'Browser delivery staging cleanup remains pending')
+  }
+
+  closeForTerminalSettlement(): Promise<void> { return this.#close('terminal') }
+  closeForStopSettlement(): Promise<void> { return this.#close('stop') }
+  close(): Promise<void> { return this.#close('preserve') }
+
+  #close(disposition: 'preserve' | 'terminal' | 'stop'): Promise<void> {
     this.#closed = true
+    this.#receivingClosed = true
     this.#closePromise ??= (async () => {
-      await Promise.allSettled([...this.#beginnings, ...this.#localWork])
-      const paused = await Promise.allSettled([...this.#transactions].map(transaction => transaction.pause()))
-      const failures = paused.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason as unknown)
+      const failures = await this.#drain()
+      if (disposition === 'stop' && failures.length === 0) {
+        // The parent Stop is already durable. Its terminal authority and the child
+        // journal retain failed cleanup as local work, without failing source Stop.
+        await this.#discardIncompleteStaging().catch(error => {
+          for (const record of this.#records.values()) {
+            if (record.placement !== 'staged' || record.state.kind === 'cleaned' || record.state.kind === 'discarded') continue
+            try { this.#options.trace?.({ name: 'browser.delivery.runtime', operation_id: record.operationId,
+              file_id: record.fileId, transition: 'stop-cleanup-pending',
+              failure_name: error instanceof Error ? error.name : 'UnknownError' }) }
+            catch { /* Durable child ownership survives unavailable diagnostics. */ }
+          }
+        })
+      }
       try { await this.#options.staging?.close() } catch (error) { failures.push(error) }
       try {
-        if (terminal && this.#options.target.closeForTerminalSettlement !== undefined) await this.#options.target.closeForTerminalSettlement()
+        if (disposition === 'stop' && this.#options.target.closeForStopSettlement !== undefined) await this.#options.target.closeForStopSettlement()
+        else if (disposition !== 'preserve' && this.#options.target.closeForTerminalSettlement !== undefined) await this.#options.target.closeForTerminalSettlement()
         else await this.#options.target.close()
       } catch (error) { failures.push(error) }
       this.#options.closeResources?.()
@@ -256,8 +304,14 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
     return this.#closePromise
   }
 
+  async #drain(): Promise<unknown[]> {
+    await Promise.allSettled([...this.#beginnings, ...this.#localWork])
+    const paused = await Promise.allSettled([...this.#transactions].map(transaction => transaction.pause()))
+    return paused.filter((result): result is PromiseRejectedResult => result.status === 'rejected').map(result => result.reason as unknown)
+  }
+
   #runLocal(work: () => Promise<void>): Promise<void> {
-    if (this.#closed) return Promise.reject(new DOMException('Browser delivery session is closed', 'InvalidStateError'))
+    if (this.#closed || this.#dispositionPromise !== undefined) return Promise.reject(new DOMException('Browser delivery local work is closed', 'InvalidStateError'))
     const running = work()
     this.#localWork.add(running)
     running.finally(() => this.#localWork.delete(running)).catch(() => undefined)
@@ -369,16 +423,25 @@ class BrowserDeliveryFileTransaction implements PersistentFileTransactionPort {
   pause(reason?: unknown) { return this.#serialize(async () => {
     if (this.#settled) return this.verifiedRanges
     let durable = this.verifiedRanges
-    if (this.#options.receiving !== undefined) {
-      const port = this.#options.record.placement === 'staged' ? this.#options.stage! : this.#options.targetPort
-      const checkpoint = await port.readCheckpoint(this.#options.record.fileId)
-      if (checkpoint === undefined || !fileCheckpointIsComplete(checkpoint)) {
-        durable = await this.#options.receiving.pause(reason)
-        await this.#recordCheckpoint()
+    const failures: unknown[] = []
+    try {
+      if (this.#options.receiving !== undefined) {
+        const port = this.#options.record.placement === 'staged' ? this.#options.stage! : this.#options.targetPort
+        const checkpoint = await port.readCheckpoint(this.#options.record.fileId)
+        if (checkpoint === undefined || !fileCheckpointIsComplete(checkpoint)) {
+          durable = await this.#options.receiving.pause(reason)
+          await this.#recordCheckpoint()
+        }
       }
-    }
-    if (this.#options.receiving !== this.#options.target) await this.#options.target.retire(reason)
-    this.#finish()
+    } catch (error) { failures.push(error) }
+    // A checkpoint read/commit failure cannot leave a native writer alive while
+    // Stop classifies its storage. A complete checkpoint may still own a writer too.
+    const receivingRetired = await this.#options.receiving?.retire(reason).then(() => true, error => { failures.push(error); return false }) ?? true
+    const targetRetired = this.#options.receiving === this.#options.target ||
+      await this.#options.target.retire(reason).then(() => true, error => { failures.push(error); return false })
+    if (receivingRetired && targetRetired) this.#finish()
+    if (failures.length === 1) throw failures[0]
+    if (failures.length > 1) throw new AggregateError(failures, 'Browser delivery pause failed')
     return durable
   }) }
   retire(reason?: unknown) { return this.pause(reason).then(() => undefined) }

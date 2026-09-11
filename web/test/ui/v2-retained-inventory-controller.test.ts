@@ -32,6 +32,28 @@ import type {
 } from '../../src/ui/v2-receive-runtime'
 
 describe('retained inventory local finalization and identity admission', () => {
+  it.each(['cleanup-staging', 'discard-incomplete-staging'] as const)(
+    'admits %s without a share or access to the busy destination', async action => {
+      const original = operation([action], 'restoration-available')
+      const started = deferred<void>()
+      const finished = deferred<V2RetainedReceiveActionResult>()
+      const harness = retainedHarness(() => Promise.resolve(testInventory([original], async (_candidate, dispatched) => {
+        expect(dispatched).toBe(action)
+        started.resolve(undefined)
+        return finished.promise
+      })), undefined, { localFinalizationBlocked: () => true })
+      await harness.coordinator.load()
+      const row = harness.publications.at(-1)!.operations[0]!
+      expect(harness.coordinator.actionAdmission(row, action)).toEqual({ allowed: true, reason: null })
+      harness.coordinator.perform(row, action)
+      await started.promise
+      expect(harness.publications.at(-1)?.pending).toEqual({ operationId: original.operationId, action })
+      finished.resolve({ kind: 'completed' })
+      await harness.coordinator.load()
+      expect(harness.actionErrors).toEqual([])
+    },
+  )
+
   it('adopts verified Direct ZIP receive authority after candidate recovery advances its lifecycle', async () => {
     const id = (width: number, fill: number) => encodeBase64Url(new Uint8Array(width).fill(fill))
     const selection = await createSelectionSpec({ shareInstance: id(16, 1), syntheticRoot: id(16, 2),

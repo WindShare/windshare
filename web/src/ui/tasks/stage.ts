@@ -1,4 +1,5 @@
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
+import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
 
 export interface StageCopy {
   readonly stage: TaskStage
@@ -41,11 +42,17 @@ function folderDeliveryStage(facts: TaskFacts): StageCopy | null {
       'Complete files are copying from browser storage. Receiving other files can continue; these files are usable after the folder save finishes.',
       'browser-folder-copying')
   }
-  if (delivery?.localContinuation === 'save-staged-files' && facts.lifecycle.kind === 'resumable-receive') {
+  const localActions = browserDeliveryLocalActions(facts.lifecycle, delivery)
+  if (localActions.includes('save-staged-files')) {
     return stage('ready-to-save', 'Received files are ready to save',
       'Complete files are retained in browser storage. Save them to the chosen folder without reconnecting to the sender.',
       'browser-folder-local-save')
   }
+  if (localActions.includes('cleanup-staging')) return stage('needs-action', 'Browser storage cleanup needs attention',
+    'Retry cleanup of browser staging. Files already saved to the folder remain available.', 'browser-folder-cleanup')
+  if (localActions.includes('discard-incomplete-staging')) return stage('needs-action', 'Incomplete browser data remains',
+    'Receiving has ended. Discard the incomplete browser data to free storage; saved folder files remain available.',
+    'browser-folder-incomplete-staging')
   return null
 }
 

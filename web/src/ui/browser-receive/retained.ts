@@ -1,4 +1,5 @@
 import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type BrowserDeliveryRepositoryFactory } from './fsa/retained-delivery'
+import { hasBrowserDeliveryStaging } from '../../output/browser-delivery/retained'
 import { runRetainedBrowserFolderAction } from './fsa/local-delivery'
 import { reopenFolderDeliveryContext } from './fsa/folder-delivery'
 import { canForgetReceiveOperationHistory } from '../../output/resume/operation-history'
@@ -246,7 +247,7 @@ export async function listBrowserRetainedOperations(
         const ordinaryActions = descriptor.lifecycle.kind === 'resumable-receive' &&
           descriptor.lifecycle.payloadKind === 'opfs-zip'
           ? routeActions.filter(action => action !== 'catch-up') : routeActions
-        const availableActions = retainedBrowserDeliveryActions(browserDelivery, ordinaryActions)
+        const availableActions = retainedBrowserDeliveryActions(descriptor.lifecycle, browserDelivery, ordinaryActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
           : presentation.unavailableReason
@@ -466,12 +467,13 @@ async function performOrdinaryRetainedAction(
 }
 
 function isBrowserFolderStorageAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): boolean {
-  if (action === 'save-staged-files' || action === 'cleanup-staging') return true
-  return (action === 'discard' || action === 'delete') && (operation.browserDelivery?.reservedStagingBytes ?? 0n) > 0n
+  if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return true
+  return (action === 'discard' || action === 'delete') && operation.browserDelivery !== undefined &&
+    hasBrowserDeliveryStaging(operation.browserDelivery)
 }
 
 function browserFolderStorageAction(action: V2RetainedReceiveAction) {
-  if (action === 'save-staged-files' || action === 'cleanup-staging') return action
+  if (action === 'save-staged-files' || action === 'cleanup-staging' || action === 'discard-incomplete-staging') return action
   return 'discard-staging' as const
 }
 

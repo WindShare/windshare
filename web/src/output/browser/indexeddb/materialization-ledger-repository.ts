@@ -1,4 +1,5 @@
 import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../persistence/checkpoint'
+import { browserDeliveryRetainsTargetMetadata } from '../../browser-delivery/indexeddb/target-retirement'
 import type { IndexedDbFileCommitParticipants } from './file-commit-participants'
 import type { CheckpointNamespaceBinding } from '../../persistence/journal'
 import { validateBinding } from '../../materialization-ledger/codec'
@@ -34,6 +35,8 @@ import {
 } from '../../materialization-ledger/model'
 import {
   INDEXEDDB_BY_OPERATION_INDEX,
+  INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
+  INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
   INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
   INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
   INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
@@ -64,6 +67,7 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
   readonly #faults: IndexedDbSemanticTransactionFaults | undefined
   readonly #assertOpen: () => void
   readonly #fileCommits: IndexedDbFileCommitParticipants
+  #retirementInProgress = false
 
   constructor(input: Readonly<{
     database: IDBDatabase
@@ -309,6 +313,8 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
       throw new TypeError('materialization ledger retirement requires the fixed batch limit')
     }
     const stores = [
+      INDEXEDDB_BROWSER_DELIVERY_FILE_STORE,
+      INDEXEDDB_BROWSER_SAVE_POLICY_STORE,
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
       INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
@@ -318,12 +324,16 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
       INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE,
     ]
     const transaction = this.#database.transaction(stores, 'readwrite')
-    const result = await retireMaterializationLedgerTransaction(
-      transaction,
-      validated,
-      limit,
-    )
+    // The caller holds terminal mutation authority for the entire bounded retirement.
+    // Once deletion starts, re-scanning every delivery page per batch would make
+    // an ordinary direct folder quadratic. A retained pass always checks again later.
+    if (!this.#retirementInProgress && await browserDeliveryRetainsTargetMetadata(transaction, validated)) {
+      await transactionCompletion(transaction)
+      return Object.freeze({ deletedRows: 0, state: 'retained-for-local-delivery' })
+    }
+    const result = await retireMaterializationLedgerTransaction(transaction, validated, limit)
     await transactionCompletion(transaction)
+    this.#retirementInProgress = result.state === 'more'
     return result
   }
 
