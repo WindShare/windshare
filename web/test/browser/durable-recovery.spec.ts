@@ -186,21 +186,41 @@ test('admits product-bound workspace ZIP before requesting content', async ({ pa
     return harness.proveProductProgressiveZipAdmission(fixtureKey)
   }, { path: PREPARATION_HARNESS_PATH, fixtureKey: key }) as ProductProgressiveZipAdmissionProof
 
-  expect(result).toEqual({
+  const { checkpointBeforePause, checkpointAfterPause, paused, ...summary } = result
+  expect(summary).toEqual({
     admission: 'accepted',
     lifecycle: 'receiving',
     traceNames: [
       'receive.preparation_admission.accepted',
       'receive.capacity.reserved',
       'receive.opfs.checkpoint',
-      'receive.opfs.checkpoint',
-      'receive.opfs.checkpoint',
-      'receive.opfs.checkpoint',
       'receive.capacity.released',
       'receive.materialization.paused',
       'receive.operation.discarded',
     ],
+    checkpointStages: ['closed'],
     cleanup: 'discarded',
+  })
+  // No payload was written: pausing must reuse the durable initial cut without
+  // an extra flush, while retaining resumable authority before capacity cleanup.
+  expect(checkpointBeforePause).toMatchObject({
+    generation: 1n,
+    allocatedLength: 0n,
+    physicalLength: 0n,
+    entryCount: 0n,
+    discoveryComplete: false,
+    artifactState: 'receiving',
+  })
+  expect(checkpointAfterPause).toEqual(checkpointBeforePause)
+  expect(paused).toMatchObject({
+    kind: 'resumable-receive',
+    payloadKind: 'opfs-zip',
+    objectId: checkpointBeforePause.object.objectId,
+    checkpointGeneration: checkpointBeforePause.generation,
+    completedFileCount: 0n,
+    completedBytes: 0n,
+    discoveryComplete: false,
+    occupiedBytes: 0n,
   })
 })
 

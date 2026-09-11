@@ -37,6 +37,8 @@ export type LifecycleUserAction =
   | 'stop'
   | 'continue'
   | 'save'
+  | 'save-staged-files'
+  | 'cleanup-staging'
   | 'redownload'
   | 'change-location'
   | 'discard'
@@ -136,6 +138,7 @@ export function presentReceiveLifecycle(input: Readonly<{
   recoverySummary?: RecoverySummary | null
   writerOpenPause?: PersistentWriterOpenPauseFact | null
   directZipProgress?: V2DirectZipProgressSnapshot | null
+  browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
 }>): ReceiveLifecyclePresentation {
   const compatibleNameRepair = input.repairSummary === undefined || input.repairSummary === null
     ? null
@@ -234,18 +237,35 @@ function presentedLifecycleActions(
     plan: MaterializationPlan
     activeControls?: readonly V2ActiveReceiveControl[]
     recoverySummary?: RecoverySummary | null
+    browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
   }>,
 ): readonly LifecycleActionPresentation[] {
   if (input.activeControls !== undefined && input.activeControls.length > 0) {
     return activeControlActions(input.state, input.activeControls, input.plan.kind)
   }
+  const localActions = browserFolderLocalActions(input.state, input.browserDelivery)
   if (input.state.kind === 'resumable-receive' &&
       input.state.payloadKind === 'file-set' &&
       input.plan.kind === 'direct-tree' &&
       (input.recoverySummary === undefined || input.recoverySummary === null)) {
-    return Object.freeze([])
+    return localActions
   }
-  return lifecycleActions(input.state, input.artifact, input.plan.kind)
+  return Object.freeze([...localActions, ...lifecycleActions(input.state, input.artifact, input.plan.kind)])
+}
+
+function browserFolderLocalActions(
+  state: ReceiveLifecycleState,
+  summary: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null | undefined,
+): readonly LifecycleActionPresentation[] {
+  if (state.kind !== 'resumable-receive' || state.payloadKind !== 'file-set' || summary === undefined ||
+      summary === null || summary.policy.operationId !== state.operationId ||
+      summary.policy.receiveIntentDigest !== state.receiveIntentDigest) return Object.freeze([])
+  if (summary.localContinuation === 'save-staged-files') return Object.freeze([
+    { kind: 'save-staged-files', label: 'Save received files to folder', destructive: false },
+  ])
+  return summary.localContinuation === 'retry-staging-cleanup' ? Object.freeze([
+    { kind: 'cleanup-staging', label: 'Retry staging cleanup', destructive: false },
+  ]) : Object.freeze([])
 }
 
 function lifecycleCopy(

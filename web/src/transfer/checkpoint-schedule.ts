@@ -1,5 +1,10 @@
 export const PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES = 64n * 1024n * 1024n
 
+export const NATIVE_FILE_CHECKPOINT_PENDING_BYTES = 16n * 1024n * 1024n
+export const NATIVE_FILE_CHECKPOINT_PENDING_MILLISECONDS = 5_000
+export const ZIP_OBJECT_CHECKPOINT_PENDING_BYTES = 4n * 1024n * 1024n
+export const ZIP_OBJECT_CHECKPOINT_PENDING_MILLISECONDS = 1_000
+
 export type AutomaticCheckpointTrigger = 'pending-bytes' | 'pending-time'
 
 export type AutomaticCheckpointPolicy =
@@ -65,7 +70,6 @@ export function evaluateCheckpointSchedule(
   }
 
   // In-place flushes do not copy the saved prefix, including near file completion.
-  // Elapsed time is evaluated after accepted writes, not by a background timer.
   if (pendingBytes >= policy.pendingBytes) {
     return checkpointNow('pending-bytes', pendingBytes + policy.pendingBytes)
   }

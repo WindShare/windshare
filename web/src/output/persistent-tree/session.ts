@@ -9,11 +9,7 @@ import {
   type OutputDiagnosticsPorts,
 } from '../diagnostics'
 import {
-  FILE_CHECKPOINT_COMMIT_CANDIDATE,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
-  FILE_CHECKPOINT_PHASE_ACTIVE,
-  FILE_CHECKPOINT_PHASE_PAUSED,
-  fileCheckpointIsComplete,
   identityBytes,
   newFileCheckpointV2,
   type FileCheckpointV2,
@@ -44,6 +40,7 @@ import {
   persistentCheckpointLookup,
   persistentInitialCheckpoint,
   recoverFileCheckpointCandidates,
+  preparePersistentFileRecovery,
 } from './recovery'
 import {
   isPristinePreObjectCandidate,
@@ -240,12 +237,10 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           promote: (candidate, scope) => this.#promoteInitialCheckpoint(candidate, scope),
         })
         const handle = selected.handle
-        const committed = await this.#prepareRecovery(
-          request,
-          handle,
-          selected.checkpoint,
-          fileScope,
-        )
+        const committed = await preparePersistentFileRecovery({
+          request, handle, selected: selected.checkpoint, stageScope: fileScope,
+          checkpoints: this.#checkpoints, semantic: this.#semantic,
+        })
         const transactionScope = fileScope?.withCorrelation({
           checkpointRecordId: committed.recordId,
           checkpointGeneration: committed.checkpointGeneration,
@@ -469,90 +464,6 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       throw new TargetOwnershipUnknownError('checkpoint', candidate.operationId)
     }
     return reread
-  }
-
-  async #prepareRecovery(
-    request: PersistentFileRequest,
-    handle: PersistentTreeFile,
-    selected: FileCheckpointV2,
-    stageScope: PersistentOutputStageScope | undefined,
-  ): Promise<FileCheckpointV2> {
-    const recovery = request.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
-    let checkpoint = selected
-    if (recovery.pausedFile === 'restart-owned-file' &&
-        checkpoint.verifiedRanges.length > 0 && !fileCheckpointIsComplete(checkpoint)) {
-      if (this.#semantic === undefined || handle.persistedHandle === undefined) {
-        throw new DOMException(
-          'Explicit restart requires an exact durable handle authority',
-          'InvalidStateError',
-        )
-      }
-      if (checkpoint.phase === FILE_CHECKPOINT_PHASE_ACTIVE) {
-        const paused = newFileCheckpointV2({
-          ...checkpoint,
-          stateGeneration: checkpoint.stateGeneration + 1n,
-          phase: FILE_CHECKPOINT_PHASE_PAUSED,
-          commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
-        })
-        await runPersistentOutputStage(
-          stageScope?.withCorrelation({
-            checkpointRecordId: paused.recordId,
-            checkpointGeneration: paused.checkpointGeneration,
-          }),
-          'indexeddb.checkpoint.pause-commit',
-          () => this.#semantic!.commitDurableCut(checkpoint, paused),
-        )
-        checkpoint = paused
-      }
-      const reset = newFileCheckpointV2({
-        ...checkpoint,
-        stateGeneration: checkpoint.stateGeneration + 1n,
-        checkpointGeneration: checkpoint.checkpointGeneration + 1n,
-        verifiedRanges: [],
-        phase: FILE_CHECKPOINT_PHASE_PAUSED,
-        commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
-      })
-      await runPersistentOutputStage(
-        stageScope?.withCorrelation({
-          checkpointRecordId: reset.recordId,
-          checkpointGeneration: reset.checkpointGeneration,
-        }),
-        'indexeddb.checkpoint.restart-commit',
-        () => this.#semantic!.restartOwnedFile({
-          previous: checkpoint,
-          reset,
-          expectedHandle: handle.persistedHandle!,
-        }),
-      )
-      checkpoint = reset
-    }
-    if (checkpoint.phase !== FILE_CHECKPOINT_PHASE_PAUSED) return checkpoint
-    const active = newFileCheckpointV2({
-      ...checkpoint,
-      stateGeneration: checkpoint.stateGeneration + 1n,
-      checkpointGeneration: checkpoint.checkpointGeneration +
-        (this.#semantic === undefined ? 1n : 0n),
-      phase: FILE_CHECKPOINT_PHASE_ACTIVE,
-      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
-    })
-    if (this.#semantic !== undefined) {
-      await runPersistentOutputStage(
-        stageScope?.withCorrelation({
-          checkpointRecordId: active.recordId,
-          checkpointGeneration: active.checkpointGeneration,
-        }),
-        'indexeddb.checkpoint.resume-commit',
-        () => this.#semantic!.resumePausedCheckpoint(checkpoint, active),
-      )
-      return active
-    }
-    const candidate = newFileCheckpointV2({
-      ...active,
-      commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
-    })
-    await this.#checkpoints.stageCheckpointUpdate(checkpoint, candidate)
-    await this.#checkpoints.commitCheckpointCandidate(candidate, active)
-    return active
   }
 
   async #observeCandidate(

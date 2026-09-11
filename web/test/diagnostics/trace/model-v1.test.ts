@@ -209,6 +209,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   continuation: { backend: 'origin_private', transition: 'paused' },
   reopen: { backend: 'origin_private', transition: 'authorized' },
   cleanup: { backend: 'portable', transition: 'completed' },
+  browser_delivery: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA', file_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    transition: 'copy-started', placement: 'staged', recoverable_bytes: '128',
+  },
   direct_zip_milestone: {
     operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
     session_id: 'AgAAAAAAAAAAAAAAAAAAAA',

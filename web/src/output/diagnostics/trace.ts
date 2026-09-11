@@ -8,6 +8,7 @@ import type {
   PerformanceSummaryPayloadV1,
 } from '../../diagnostics/trace/transfer-payload'
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
+import type { BrowserDeliveryPayloadV1 } from '../../diagnostics/trace/browser-delivery-payload'
 
 export const OUTPUT_DIAGNOSTIC_BACKENDS = Object.freeze([
   'file_system_access',
@@ -131,6 +132,7 @@ export interface OutputTracePayloadByName {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
+  readonly browser_delivery: BrowserDeliveryPayloadV1
   readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
   readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
 }

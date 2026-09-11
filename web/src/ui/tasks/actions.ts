@@ -14,6 +14,8 @@ export function activeTaskAction(action: LifecycleActionPresentation, planKind: 
 }
 
 function activeConsequence(action: LifecycleActionPresentation, planKind: string): string | null {
+  if (action.kind === 'save-staged-files') return 'Copies complete retained files to the chosen folder without receiving them again. Incomplete files remain available to continue.'
+  if (action.kind === 'cleanup-staging') return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
   if (action.kind === 'pause') return 'Keeps the progress supported by this saving method; accepted writes finish before pausing.'
   if (action.kind === 'stop') return stopConsequence(planKind)
   if (action.kind === 'delete' || action.kind === 'discard') {
@@ -63,6 +65,8 @@ function retainedLabel(
   readiness: TaskRecoveryReadiness,
 ): string {
   switch (action) {
+    case 'save-staged-files': return 'Save received files to folder'
+    case 'cleanup-staging': return 'Retry staging cleanup'
     case 'save-partial': return 'Save partial ZIP'
     case 'catch-up': return 'Finish filename restoration setup'
     case 'continue': return continuationLabel(operation, readiness)
@@ -88,6 +92,8 @@ function continuationLabel(operation: V2RetainedReceiveOperation, readiness: Tas
 
 function retainedConsequence(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): string | null {
   switch (action) {
+    case 'save-staged-files': return 'Copies complete retained files to the chosen folder without receiving them again. Incomplete files remain available to continue.'
+    case 'cleanup-staging': return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
     case 'save-partial':
       return 'Exports only complete files as a separate partial ZIP. Missing and unfinished items are excluded; the retained task remains available for continuation.'
     case 'forget': return 'Removes this history record from Downloads. Files already saved or handed to the browser remain untouched.'

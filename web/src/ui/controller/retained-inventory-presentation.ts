@@ -15,7 +15,7 @@ export function retainedPresentationActions(
   summary: CompatibleNameRepairSummary | undefined,
 ): readonly V2RetainedReceiveAction[] {
   if (summary?.terminalSettlement === 'pending') {
-    return Object.freeze(operation.actions.filter(action => action === 'catch-up'))
+    return Object.freeze(operation.actions.filter(action => action === 'catch-up' || action === 'cleanup-staging'))
   }
   const needsCatchUp = summary?.sidecarSync === 'pending'
   // Sidecar replay and download continuation have separate authority. A stale

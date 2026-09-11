@@ -78,7 +78,7 @@ test('pre-v10 migration clears only obsolete origin metadata and fails closed wh
 
   expect(result).toEqual({
     oldRowsRemaining: 0,
-    storeCount: 23,
+    storeCount: 25,
     exactIndexesPresent: true,
     publishedSentinelBytes: [91, 92, 93, 94],
     blockedUpgradeRejected: true,

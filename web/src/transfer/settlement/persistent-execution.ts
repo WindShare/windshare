@@ -98,8 +98,6 @@ type WorkspaceOriginalIntent = ReceiveIntent & Readonly<{
 
 const TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES = 4
 const WORKSPACE_WRITE_BUDGET_BYTES = 8n * 1024n * 1024n
-const WORKSPACE_CHECKPOINT_PENDING_BYTES = 16n * 1024n * 1024n
-const WORKSPACE_CHECKPOINT_PENDING_MILLISECONDS = 5_000
 
 type PersistentCheckpointNamespaceEvidence = PersistentOutputTransactionNamespace
 
@@ -215,11 +213,6 @@ export async function createPersistentWorkspaceExecution(
       maximumConcurrentFilePipelines: TEMPORARY_PERSISTENT_MAXIMUM_CONCURRENT_FILE_PIPELINES,
       maximumOutstandingWriteBytes: WORKSPACE_WRITE_BUDGET_BYTES,
       maximumBufferedBytes: WORKSPACE_WRITE_BUDGET_BYTES,
-      automaticCheckpoint: {
-        kind: 'incremental',
-        pendingBytes: WORKSPACE_CHECKPOINT_PENDING_BYTES,
-        pendingMilliseconds: WORKSPACE_CHECKPOINT_PENDING_MILLISECONDS,
-      },
     }),
     capabilities: persistentCapabilities({
       fileFailureIsolation: false,
@@ -442,6 +435,7 @@ class PersistentMaterializationOutput implements OutputSession {
     let opened: OpenedOutputRevision | undefined
     try {
       const transaction = await this.#materialization.beginFile({
+        sourceAuthenticationPath: request.sourceAuthenticationPath,
         materializationRelativePath: request.materializationRelativePath,
         shareInstance: request.source.shareInstance,
         outputSession: this.identity,
@@ -505,6 +499,10 @@ class PersistentMaterializationOutput implements OutputSession {
       return Object.freeze({
         revision: opened,
         durableRanges,
+        ...(transaction.checkpointPolicy === undefined ? {} : { checkpoint: {
+          objectId: transaction.checkpointObjectId ?? transaction.ownedObjectId,
+          policy: transaction.checkpointPolicy,
+        } }),
         transaction: new PersistentOutputTransaction({
           transaction,
           revision: opened,

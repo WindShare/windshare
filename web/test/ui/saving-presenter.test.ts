@@ -24,7 +24,11 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.primary).toMatchObject({ outcome: 'original-file', label: 'Download original' })
     expect(result.primary?.offered.route.kind).toBe('portable-handoff')
     expect(result.alternatives.map(group => group.kind)).toEqual(['original-file', 'folder'])
-    expect(result.alternatives[1]?.primary.consequences.join(' ')).toContain('copy its saved prefix')
+    expect(result.alternatives[1]?.primary.recoveryPreference).toBe('automatic')
+    expect(result.alternatives[1]?.primary.consequences.join(' ')).toContain('Choose a folder once')
+    const direct = result.alternatives[1]?.alternatives.find(choice => choice.recoveryPreference === 'direct')
+    expect(direct?.consequences.join(' ')).toContain('copy its saved prefix')
+    expect(direct?.offered.choice.choiceId).toBe(result.alternatives[1]?.primary.offered.choice.choiceId)
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered).toBe(offers.primary)
   })
 
@@ -36,7 +40,11 @@ describe('saving action presenter over eligible offers', () => {
       projection(await selection(), treeProof(), 1n), COMPLETE_DISCOVERY,
       environment({ targets: [target()] }),
     )
-    const copy = presentSavingActions({ offers }).primary!.consequences.join(' ')
+    const model = presentSavingActions({ offers })
+    const choice = copyLimited
+      ? model.alternatives.find(group => group.kind === 'folder')!.alternatives.find(candidate => candidate.recoveryPreference === 'direct')!
+      : model.primary!
+    const copy = choice.consequences.join(' ')
     expect(copy).toContain('Wait for Pause to finish')
     expect(copy.includes('may lose most progress')).toBe(copyLimited)
     expect(copy.includes('copy its saved prefix')).toBe(copyLimited)
@@ -81,7 +89,7 @@ describe('saving action presenter over eligible offers', () => {
     expect(result.alternatives).toHaveLength(1)
     expect(result.alternatives[0]?.alternatives).toHaveLength(1)
     if (offers.kind === 'artifact-actions') expect(result.primary?.offered.choice.choiceId).toBe(offers.zip?.primary.choice.choiceId)
-    expect(result.alternatives[0]?.primary.consequences.join(' ')).toContain('temporary space')
+    expect(result.alternatives[0]?.primary.consequences.join(' ')).toContain('additional exported copy')
   })
 
   it('explains empty selection and blocks every action with the current admission reason', async () => {

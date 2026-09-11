@@ -35,6 +35,7 @@ export interface OpenedFileRevision {
 }
 
 export interface PersistentFileRequest {
+  readonly sourceAuthenticationPath?: readonly string[]
   readonly materializationRelativePath: readonly string[]
   readonly shareInstance?: string
   readonly outputSession?: OutputSessionIdentity
@@ -295,6 +296,8 @@ export interface ActivatablePersistentMaterializationPort extends PersistentMate
 export interface PersistentFileTransactionPort {
   readonly revision: OpenedFileRevision
   readonly ownedObjectId: string
+  readonly checkpointPolicy?: import('../../transfer/checkpoint-schedule').AutomaticCheckpointPolicy
+  readonly checkpointObjectId?: string
   readonly initialDurableRanges: readonly PersistentByteRange[]
   /** Transitional low-level observation; generic callers consume initialDurableRanges. */
   readonly verifiedRanges: readonly PersistentByteRange[]

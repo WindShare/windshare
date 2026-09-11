@@ -865,6 +865,9 @@ function defaultLifecycleAction(
   lifecycle: ReceiveLifecycleState,
 ): V2LifecycleMutation {
   switch (action) {
+    case 'save-staged-files':
+    case 'cleanup-staging':
+      return { lifecycle }
     case 'continue':
       return {
         lifecycle: next(lifecycle, { kind: 'receiving', activeLeaseId: identityText(60) }),

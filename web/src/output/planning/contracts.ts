@@ -400,7 +400,8 @@ export type ZipRouteRecommendation =
   | Readonly<{
       kind: 'recommended'
       choiceId: ArtifactChoiceID
-      reason: 'workspace-within-policy-budget' | 'direct-unknown-or-over-budget'
+      reason: 'workspace-within-policy-budget' | 'workspace-within-discovered-budget' |
+        'direct-unknown-or-over-budget'
     }>
   | Readonly<{
       kind: 'no-recommendation'

@@ -1,6 +1,9 @@
 import {
   type BrowserReceiveOperationLease,
 } from '../../output/browser/session-lease'
+import { equalBytes } from '../../crypto/bytes'
+import { canonicalReceiveLifecycleStateBytes } from '../../output/workspace/state-codec'
+import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../output/browser-delivery/recovery/local-lifecycle'
 import {
   createFileSystemAccessSettlementAuthority,
   type FileSystemAccessOperationSettlementAuthority,
@@ -27,7 +30,6 @@ import { createPreservingWriterCapacityAuthority } from '../../output/persistent
 import { checkpointAuthorityObserver } from '../../output/file-system-access/session-diagnostics'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
-import { PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES } from '../../transfer/checkpoint-schedule'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
 import { V2TransferFailureSettlementError } from '../../transfer/settlement/v2-output'
@@ -60,6 +62,8 @@ import {
   unavailableRoute,
 } from './shared'
 import { FSAResourceOwner } from './fsa-resource-owner'
+import { openFolderDeliveryAttempt, openFolderCleanupAttempt, readFolderRecoverySummary, type BrowserFolderDeliveryContext } from './fsa/folder-delivery'
+import { observeBrowserFolderCheckpoint } from './fsa/delivery-trace'
 import {
   createFSAExecutionRecoveryPolicy,
 } from './fsa/recovery-policy'
@@ -89,10 +93,6 @@ export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
   maximumConcurrentFilePipelines: WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_FILE_PIPELINES,
   maximumOutstandingWriteBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_OUTSTANDING_WRITE_BYTES,
   maximumBufferedBytes: WINDOWS_CHROMIUM_FSA_MAXIMUM_BUFFERED_BYTES,
-  automaticCheckpoint: {
-    kind: 'prefix-copy',
-    pendingBytes: PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES,
-  },
 })
 
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
@@ -101,15 +101,17 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly activeControls = Object.freeze(['pause', 'stop'] as const)
   readonly initialWorkspaceUsage = null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
+  readonly outputProgress?: BrowserFolderDeliveryContext['progress']
   readonly #repository: ReceiveOperationRepository
   readonly #lease: BrowserReceiveOperationLease
   readonly #resources: FSAResourceOwner
   #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #attemptIdentities: FSAAttemptIdentitySource
+  readonly #folderDelivery: BrowserFolderDeliveryContext | undefined
   #settlement: FileSystemAccessOperationSettlementAuthority
   #plans: V2PlanExecutionAuthority
-  #closeCheckpointAuthorities: () => void
+  #closeCheckpointAuthorities: () => void | Promise<void>
   #transferJobId: string
   #detached = false
 
@@ -122,11 +124,12 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     settlement: FileSystemAccessOperationSettlementAuthority
     resources: FSAResourceOwner
     plans: V2PlanExecutionAuthority
-    closeCheckpointAuthorities: () => void
+    closeCheckpointAuthorities: () => void | Promise<void>
     transferJobId: string
     attemptIdentities: FSAAttemptIdentitySource
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
+    folderDelivery?: BrowserFolderDeliveryContext
   }) {
     this.intent = input.intent
     this.lifecycle = input.lifecycle
@@ -138,6 +141,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     this.#diagnostics = input.diagnostics
     this.#localOutputFailures = input.localOutputFailures
     this.#attemptIdentities = input.attemptIdentities
+    this.#folderDelivery = input.folderDelivery
+    if (input.folderDelivery !== undefined) this.outputProgress = input.folderDelivery.progress
     this.#settlement = input.settlement
     this.#plans = input.plans
     this.#closeCheckpointAuthorities = input.closeCheckpointAuthorities
@@ -157,6 +162,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     resources: FSAResourceOwner
     diagnostics?: OutputDiagnosticsPorts
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort
+    folderDelivery?: BrowserFolderDeliveryContext
   }): Promise<FSAReceiveOperation> {
     const checkpointAttempt = await createFSAPlanAuthority(
       input.intent,
@@ -171,6 +177,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       createFSAExecutionRecoveryPolicy({
         pausedFile: 'preserve',
       }),
+      input.folderDelivery,
     )
     return new FSAReceiveOperation({ ...input, ...checkpointAttempt })
   }
@@ -180,6 +187,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     diagnostics?: OutputDiagnosticsPorts,
     localOutputFailures?: LocalOutputOperationFailureDiagnosticsPort,
     attemptIdentities: FSAAttemptIdentitySource = defaultAttemptIdentitySource,
+    folderDelivery?: BrowserFolderDeliveryContext,
   ): Promise<FSAReceiveOperation> {
     if (operation.lifecycle.kind !== 'receiving') {
       throw new TypeError('Direct-tree continuation requires active receive lifecycle state')
@@ -242,6 +250,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         createFSAExecutionRecoveryPolicy({
           pausedFile: retainedFileRecovery,
         }),
+        folderDelivery,
       )
       const resources = new FSAResourceOwner({
         outputSession: session,
@@ -259,6 +268,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         ...checkpointAttempt,
         transferJobId: attemptAuthority.transferJobId,
         attemptIdentities,
+        ...(folderDelivery === undefined ? {} : { folderDelivery }),
         ...(attemptDiagnostics === undefined ? {} : { diagnostics: attemptDiagnostics }),
         ...(localOutputFailures === undefined ? {} : { localOutputFailures }),
       })
@@ -280,6 +290,10 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
 
   get transferJobId(): string {
     return this.#transferJobId
+  }
+
+  observeCheckpoint: NonNullable<import('../../transfer/job/contract').TransferJobOptions['onCheckpointObservation']> = event => {
+    observeBrowserFolderCheckpoint(this.#diagnostics, event)
   }
 
   interrupt(control: V2ActiveReceiveControl, transfer: AbortController): void {
@@ -305,6 +319,9 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     lifecycle: ReceiveLifecycleState,
   ): Promise<V2LifecycleMutation> {
     this.#requireAttached()
+    if (action === 'save-staged-files' || action === 'cleanup-staging') {
+      return this.#runLocalDelivery(action, lifecycle)
+    }
     if ((action !== 'continue' && action !== 'redownload') ||
         lifecycle.kind !== 'resumable-receive' ||
         lifecycle.payloadKind !== 'file-set') throw unavailableRoute()
@@ -324,6 +341,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     )
     let session: FileSystemAccessOutputSession | undefined
     try {
+      await this.#closeCheckpointAuthorities()
       session = await reopenFileSystemAccessOutput({
         intent: this.intent,
         operationRepository: this.#repository,
@@ -352,6 +370,7 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
         transferJobId,
         outputSessionId,
         recovery,
+        this.#folderDelivery,
       )
       const resumed = await transitionLifecycle(
         this.#repository,
@@ -363,7 +382,6 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
       this.#resources.replaceOutputSession(session)
       this.#settlement = attempt.settlement
       this.#plans = attempt.plans
-      this.#closeCheckpointAuthorities()
       this.#closeCheckpointAuthorities = attempt.closeCheckpointAuthorities
       this.#transferJobId = attempt.transferJobId
       this.#diagnostics = attemptDiagnostics
@@ -383,6 +401,62 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     return null
   }
 
+  async #runLocalDelivery(
+    action: 'save-staged-files' | 'cleanup-staging',
+    lifecycle: ReceiveLifecycleState,
+  ): Promise<V2LifecycleMutation> {
+    const context = this.#folderDelivery
+    if (context === undefined || lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set' ||
+        lifecycle.operationId !== this.intent.operationId || lifecycle.receiveIntentDigest !== this.intent.digest) {
+      throw unavailableRoute()
+    }
+    await this.#closeCheckpointAuthorities()
+    if (action === 'cleanup-staging') {
+      const cleanup = await openFolderCleanupAttempt(context, {
+        intent: this.intent, operationLease: this.#lease,
+        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      })
+      this.#closeCheckpointAuthorities = cleanup.close
+      try { await cleanup.delivery.cleanupStaging() } finally { await cleanup.close() }
+      return Object.freeze({ lifecycle, workspaceUsage: null, actionOutcome: { kind: 'completed' } as const })
+    }
+    const localAuthority = { repository: this.#repository, lease: this.#lease }
+    await beginBrowserDeliveryLocalMutation(localAuthority)
+    let session: FileSystemAccessOutputSession | undefined
+    let attempt: Awaited<ReturnType<typeof openFolderDeliveryAttempt>> | undefined
+    const failures: unknown[] = []
+    try {
+      session = await reopenFileSystemAccessOutput({
+        intent: this.intent, operationRepository: this.#repository,
+        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      })
+      this.#resources.replaceOutputSession(session)
+      await session.activate()
+      attempt = await openFolderDeliveryAttempt(context, {
+        target: session, intent: this.intent, operationLease: this.#lease,
+        ...(this.#diagnostics === undefined ? {} : { diagnostics: this.#diagnostics }),
+      })
+      this.#closeCheckpointAuthorities = attempt.close
+      await attempt.delivery.saveStagedFiles()
+    } catch (error) { failures.push(error) }
+    for (const close of [() => attempt?.close(), () => session?.close()]) {
+      try { await close() } catch (error) { failures.push(error) }
+    }
+    const reconciled = await reconcileBrowserDeliveryLifecycle(localAuthority).catch(error => {
+      if (failures.length === 0) throw error
+      throw new AggregateError([...failures, error], 'Local folder saving could not reconcile its recovery authority', { cause: failures[0] })
+    })
+    const retainedLifecycle = equalBytes(canonicalReceiveLifecycleStateBytes(reconciled), canonicalReceiveLifecycleStateBytes(lifecycle))
+      ? lifecycle : reconciled
+    let recoverySummary: Awaited<ReturnType<typeof readFolderRecoverySummary>> | undefined
+    try { recoverySummary = await readFolderRecoverySummary(this.intent, retainedLifecycle) }
+    catch (error) { failures.push(error) }
+    const actionOutcome = localDeliveryOutcome(failures)
+    // Local copying proves individual target files; remaining discovery still owns task completion.
+    return Object.freeze({ lifecycle: retainedLifecycle, workspaceUsage: null, actionOutcome,
+      ...(recoverySummary === undefined ? {} : { recoverySummary }) })
+  }
+
   async settleTransferAdmissionFailure(reason: unknown): Promise<V2LifecycleMutation> {
     this.#requireAttached()
     const controller = new AbortController()
@@ -397,13 +471,23 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#detached) return
     this.#detached = true
-    this.#closeCheckpointAuthorities()
-    await this.#resources.close()
+    try {
+      await this.#closeCheckpointAuthorities()
+    } finally {
+      await this.#resources.close()
+    }
   }
 
   #requireAttached(): void {
     if (this.#detached) throw new DOMException('Receive operation is detached', 'InvalidStateError')
   }
+}
+
+function localDeliveryOutcome(failures: readonly unknown[]): import('../v2-receive-runtime').V2LifecycleActionOutcome {
+  if (failures.length === 0) return Object.freeze({ kind: 'completed' })
+  const error = failures.length === 1 ? failures[0] : new AggregateError(failures,
+    'Local folder saving could not release output authority', { cause: failures[0] })
+  return Object.freeze({ kind: 'failed', error })
 }
 
 async function settleFailedFSAReopen(
@@ -459,7 +543,7 @@ async function settleFailedFSAReopen(
 }
 
 async function closeFSAContinuationAfterFailure(
-  session: FileSystemAccessOutputSession,
+  session: Pick<FileSystemAccessOutputSession, 'close'>,
   error: unknown,
 ): Promise<never> {
   let cleanupFailure: unknown
@@ -471,7 +555,7 @@ async function closeFSAContinuationAfterFailure(
   if (cleanupFailure !== undefined) {
     throw new AggregateError(
       [error, cleanupFailure],
-      'FSA continuation failed and output cleanup also failed',
+      'FSA output setup failed and cleanup also failed',
       { cause: error },
     )
   }
@@ -489,10 +573,11 @@ async function createFSAAttempt(
   transferJobId: string,
   outputSessionId: string,
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
+  folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
   settlement: FileSystemAccessOperationSettlementAuthority
   plans: V2PlanExecutionAuthority
-  closeCheckpointAuthorities: () => void
+  closeCheckpointAuthorities: () => void | Promise<void>
   transferJobId: string
 }>> {
   const attemptAuthority = await createFSAAttemptSettlement(
@@ -514,6 +599,7 @@ async function createFSAAttempt(
     outputSessionId,
     diagnostics,
     recovery,
+    folderDelivery,
   )
   return Object.freeze({ ...attemptAuthority, ...plans })
 }
@@ -566,9 +652,10 @@ async function createFSAPlanAuthority(
   outputSessionId: string,
   diagnostics: OutputDiagnosticsPorts | undefined,
   recovery: ReturnType<typeof createFSAExecutionRecoveryPolicy>,
+  folderDelivery?: BrowserFolderDeliveryContext,
 ): Promise<Readonly<{
   plans: V2PlanExecutionAuthority
-  closeCheckpointAuthorities: () => void
+  closeCheckpointAuthorities: () => void | Promise<void>
 }>> {
   const checkpointIdentity = Object.freeze({
     receiveOperationId: intent.operationId,
@@ -584,6 +671,20 @@ async function createFSAPlanAuthority(
     identity: checkpointIdentity,
     ...(observeCheckpointAuthority === undefined ? {} : { observe: observeCheckpointAuthority }),
   })
+  let deliveryAttempt: Awaited<ReturnType<typeof openFolderDeliveryAttempt>> | undefined
+  const closeCheckpointAuthorities = async () => {
+    automaticCheckpointAdmission.close('terminal-drain')
+    preservingWriterCapacity.close('terminal-drain')
+    await deliveryAttempt?.close()
+  }
+  try {
+    deliveryAttempt = folderDelivery === undefined ? undefined : await openFolderDeliveryAttempt(folderDelivery, {
+      target: session, intent, operationLease: lease,
+      ...(diagnostics === undefined ? {} : { diagnostics }),
+    })
+  } catch (error) {
+    return closeFSAContinuationAfterFailure({ close: closeCheckpointAuthorities }, error)
+  }
   const plans = await createV2PlanExecutionAuthority({
     intent,
     routes: {
@@ -605,7 +706,7 @@ async function createFSAPlanAuthority(
           signal.throwIfAborted()
           return createPersistentDirectTreeExecution({
             intent: boundIntent,
-            materialization: session,
+            materialization: deliveryAttempt?.delivery ?? session,
             namespaceClaims: session,
             repairSummary: () => session.repairSummary(),
             executionProfile: FSA_DIRECT_TREE_EXECUTION_PROFILE,
@@ -625,12 +726,9 @@ async function createFSAPlanAuthority(
       },
       lifecycle: settlement,
     },
-  })
+  }).catch(error => closeFSAContinuationAfterFailure({ close: closeCheckpointAuthorities }, error))
   return Object.freeze({
     plans,
-    closeCheckpointAuthorities: () => {
-      automaticCheckpointAdmission.close('terminal-drain')
-      preservingWriterCapacity.close('terminal-drain')
-    },
+    closeCheckpointAuthorities,
   })
 }

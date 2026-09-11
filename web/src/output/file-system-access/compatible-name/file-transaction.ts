@@ -7,6 +7,8 @@ export function compatibleNameFileTransaction(
   return Object.freeze({
     revision: transaction.revision,
     ownedObjectId: transaction.ownedObjectId,
+    ...(transaction.checkpointPolicy === undefined ? {} : { checkpointPolicy: transaction.checkpointPolicy }),
+    ...(transaction.checkpointObjectId === undefined ? {} : { checkpointObjectId: transaction.checkpointObjectId }),
     get initialDurableRanges() { return transaction.initialDurableRanges },
     get verifiedRanges() { return transaction.verifiedRanges },
     writeRange: (offset: bigint, data: Uint8Array, signal?: AbortSignal) =>

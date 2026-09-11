@@ -1,6 +1,10 @@
+import { readRetainedBrowserDeliveries, retainedBrowserDeliveryActions, type BrowserDeliveryRepositoryFactory } from './fsa/retained-delivery'
+import { runRetainedBrowserFolderAction } from './fsa/local-delivery'
+import { reopenFolderDeliveryContext } from './fsa/folder-delivery'
 import { canForgetReceiveOperationHistory } from '../../output/resume/operation-history'
 import { pickPartialExport, saveProgressivePartial, supportsPartialExport } from './partial-export'
 import { continueProgressiveZip } from './retained-progressive'
+import { dispatchRetainedAuthorityAction } from './retained/action-dispatch'
 import { lifecycleFailureFact, type FailureFact } from '../../diagnostics/incident'
 import { IndexedDbReceiveResumeSource } from '../../output/browser/indexeddb-resume-state'
 import { IndexedDbReceiveOperationRepository } from '../../output/browser/indexeddb-repository'
@@ -108,14 +112,6 @@ type WorkspaceRetainedContinuation = Extract<
   AuthorityOwnedReceiveOperationContinuation,
   { readonly kind: 'workspace-retained' }
 >
-type RetainedAuthorityDispatch =
-  | Readonly<{ kind: 'completed' }>
-  | Readonly<{
-      kind: 'continuation'
-      continuation: AuthorityOwnedReceiveOperationContinuation
-      directZipAction: boolean
-    }>
-
 export interface BrowserRetainedContinuationExecutor {
   catchUpCompatibleNames?(
     continuation: DirectTreeCatchUpContinuation,
@@ -141,6 +137,8 @@ export interface BrowserRetainedContinuationExecutor {
 }
 
 export interface BrowserRetainedCompositionOptions {
+  readonly openBrowserDeliveryRepository?: BrowserDeliveryRepositoryFactory
+  readonly runBrowserFolderLocalAction?: typeof runRetainedBrowserFolderAction
   readonly openResumeSource?: () => Promise<ReceiveOperationResumeSource & { close(): void }>
   readonly resumeMutations?:
     ReceiveOperationMutationPort<AuthorityOwnedReceiveOperationMutationResult>
@@ -218,19 +216,24 @@ export async function listBrowserRetainedOperations(
       mutations: options.resumeMutations ?? READ_ONLY_RESUME_MUTATIONS,
     })
     const inventory = await authority.listResumeState()
-    const locks = windowPort.navigator?.locks
-    const activities = locks === undefined
-      ? inventory.operations.map(() => 'inactive' as const)
-      : await Promise.all(inventory.operations.map(reference => observeBrowserReceiveOperationActivity(
-          reference.descriptor.operationId,
-          locks,
-        )))
-    const references = new WeakMap<V2RetainedReceiveOperation, ReceiveOperationResumeRef>()
     try {
+      const browserDeliveries = options.openResumeSource === undefined || options.openBrowserDeliveryRepository !== undefined
+        ? await readRetainedBrowserDeliveries(inventory.operations.map(reference => reference.descriptor),
+            signal, options.openBrowserDeliveryRepository)
+        : new Map<string, import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary>()
+      const locks = windowPort.navigator?.locks
+      const activities = locks === undefined
+        ? inventory.operations.map(() => 'inactive' as const)
+        : await Promise.all(inventory.operations.map(reference => observeBrowserReceiveOperationActivity(
+            reference.descriptor.operationId,
+            locks,
+          )))
+      const references = new WeakMap<V2RetainedReceiveOperation, ReceiveOperationResumeRef>()
       signal.throwIfAborted()
       const operations = Object.freeze(inventory.operations.filter((_, index) =>
         activities[index] === 'inactive').map((reference) => {
         const { descriptor } = reference
+        const browserDelivery = browserDeliveries.get(descriptor.operationId) ?? descriptor.browserDelivery
         const presentation = retainedOperationAuthority(
           descriptor.continuation,
           hasMutationAuthority,
@@ -240,9 +243,10 @@ export async function listBrowserRetainedOperations(
         const routeActions = options.resumeMutations?.forget !== undefined &&
           canForgetReceiveOperationHistory(descriptor.lifecycle)
           ? Object.freeze([...presentation.actions, 'forget' as const]) : presentation.actions
-        const availableActions = descriptor.lifecycle.kind === 'resumable-receive' &&
+        const ordinaryActions = descriptor.lifecycle.kind === 'resumable-receive' &&
           descriptor.lifecycle.payloadKind === 'opfs-zip'
           ? routeActions.filter(action => action !== 'catch-up') : routeActions
+        const availableActions = retainedBrowserDeliveryActions(browserDelivery, ordinaryActions)
         const unavailableReason = descriptor.recoveryUnavailable === 'native-checkpoint-unavailable'
           ? 'Retained ZIP recovery is unavailable. Start a new download; the retained data has not been changed.'
           : presentation.unavailableReason
@@ -254,6 +258,7 @@ export async function listBrowserRetainedOperations(
           lifecycleGeneration: descriptor.lifecycleGeneration,
           lifecycle: descriptor.lifecycle,
           continuation: descriptor.continuation,
+          ...(browserDelivery === undefined ? {} : { browserDelivery }),
           actions: hasMutationAuthority && descriptor.recoveryUnavailable === undefined && supportsPartialExport(windowPort) &&
             descriptor.lifecycle.kind === 'resumable-receive' &&
             descriptor.lifecycle.payloadKind === 'opfs-zip' &&
@@ -354,6 +359,26 @@ async function performRetainedAction(
   signal: AbortSignal,
   failures?: OutputFailureSinks,
 ): Promise<V2RetainedReceiveActionResult> {
+  if (isBrowserFolderStorageAction(operation, action)) {
+    await (options.runBrowserFolderLocalAction ?? runRetainedBrowserFolderAction)(
+      windowPort, operation, browserFolderStorageAction(action), signal,
+      diagnosticsFor('file_system_access', options.outputTrace, failures),
+    )
+    if (action !== 'discard' && action !== 'delete') return Object.freeze({ kind: 'completed' })
+  }
+  return performOrdinaryRetainedAction(windowPort, options, authority, reference, operation, action, signal, failures)
+}
+
+async function performOrdinaryRetainedAction(
+  windowPort: BrowserReceiveWindow,
+  options: BrowserRetainedCompositionOptions,
+  authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
+  reference: ReceiveOperationResumeRef,
+  operation: V2RetainedReceiveOperation,
+  action: V2RetainedReceiveAction,
+  signal: AbortSignal,
+  failures?: OutputFailureSinks,
+): Promise<V2RetainedReceiveActionResult> {
   const partialDestination = action === 'save-partial'
     ? await pickPartialExport(windowPort)
     : undefined
@@ -440,53 +465,14 @@ async function performRetainedAction(
   }
 }
 
-async function dispatchRetainedAuthorityAction(
-  authority: ReceiveOperationResumeAuthority<AuthorityOwnedReceiveOperationMutationResult>,
-  reference: ReceiveOperationResumeRef,
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
-  signal: AbortSignal,
-  failures?: OutputFailureSinks,
-): Promise<RetainedAuthorityDispatch> {
-  if (action === 'forget') {
-    await authority.forget(reference)
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' })
-  }
-  const directZipAction = isDirectZipContinuation(operation.continuation)
-  if (!directZipAction && (action === 'discard' || (action === 'delete' &&
-      operation.continuation !== 'retry-cleanup'))) {
-    await authority.discard(reference, failures)
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' })
-  }
-  let result: AuthorityOwnedReceiveOperationMutationResult
-  if (action === 'delete' &&
-      operation.continuation === 'retry-cleanup') {
-    result = await authority.cleanup(reference, failures)
-  } else if (action === 'catch-up') {
-    result = await authority.catchUp(reference, failures)
-  } else {
-    const retainedFileRecovery = retainedFileRecoveryFor(operation, action)
-    result = await authority.resume(reference, {
-      ...(action === 'save-partial' ? { purpose: 'partial-export' as const } : {}),
-      ...(retainedFileRecovery === undefined ? {} : { retainedFileRecovery }),
-      ...(failures === undefined ? {} : { failures }),
-    })
-  }
-  if (result.kind === 'cleanup') {
-    signal.throwIfAborted()
-    return Object.freeze({ kind: 'completed' })
-  }
-  return Object.freeze({ kind: 'continuation', continuation: result.continuation, directZipAction })
+function isBrowserFolderStorageAction(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): boolean {
+  if (action === 'save-staged-files' || action === 'cleanup-staging') return true
+  return (action === 'discard' || action === 'delete') && (operation.browserDelivery?.reservedStagingBytes ?? 0n) > 0n
 }
 
-function retainedFileRecoveryFor(
-  operation: V2RetainedReceiveOperation,
-  action: V2RetainedReceiveAction,
-): 'preserve' | 'restart-owned-file' | undefined {
-  if (operation.recoverySummary === undefined) return undefined
-  return action === 'redownload' ? 'restart-owned-file' : 'preserve'
+function browserFolderStorageAction(action: V2RetainedReceiveAction) {
+  if (action === 'save-staged-files' || action === 'cleanup-staging') return action
+  return 'discard-staging' as const
 }
 
 function deleteRetainedDirectZip(
@@ -584,6 +570,8 @@ function browserRetainedContinuationExecutor(
               continuation.operation,
               diagnosticsFor('file_system_access', outputTrace, binding.sinks),
               localOutputFailures,
+              undefined,
+              await reopenFolderDeliveryContext(windowPort, continuation.operation.intent.operationId),
             ),
             binding,
           )
@@ -689,12 +677,4 @@ function sourceWithoutBootstrapCandidates(
           ReceiveOperationResumeSource['readRecoverySummary']
         >>[0]) => source.readRecoverySummary!(lifecycle) }),
   })
-}
-
-function isDirectZipContinuation(
-  continuation: V2RetainedReceiveOperation['continuation'],
-): boolean {
-  return continuation === 'resume-direct-zip' || continuation === 'reauthorize-direct-zip' ||
-    continuation === 'verify-direct-zip-target' || continuation === 'verify-direct-zip-completion' ||
-    continuation === 'retry-direct-zip-space'
 }

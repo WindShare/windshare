@@ -4,6 +4,7 @@ import type {
   DirectZipMilestonePayloadV1,
 } from './direct-zip-payload'
 import type { ProtocolOperationPayloadV1 } from './protocol-payload'
+import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
@@ -74,6 +75,7 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'continuation',
   'reopen',
   'cleanup',
+  'browser_delivery',
   'direct_zip_milestone',
   'direct_zip_coordination',
   'direct_zip_member_rollback',
@@ -489,6 +491,8 @@ export interface TraceEventPayloadByNameV1 {
       | 'stop'
       | 'continue'
       | 'save'
+      | 'save_staged_files'
+      | 'cleanup_staging'
       | 'redownload'
       | 'change_location'
       | 'discard'
@@ -542,6 +546,7 @@ export interface TraceEventPayloadByNameV1 {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
+  readonly browser_delivery: BrowserDeliveryPayloadV1
   readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
   readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
   readonly retained_inventory: RetainedInventoryPayloadV1

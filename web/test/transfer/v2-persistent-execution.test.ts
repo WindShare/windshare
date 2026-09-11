@@ -539,9 +539,7 @@ describe('persistent Workspace production execution bridge', () => {
       settlement,
       signal: SIGNAL,
     })
-    expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
-      kind: 'incremental', pendingBytes: 16n * 1024n * 1024n, pendingMilliseconds: 5_000,
-    })
+    expect(execution.output.executionProfile).not.toHaveProperty('automaticCheckpoint')
     await expect(execution.settle({
       transferJobId: 'transfer-job-original',
       worker: SUCCESS,
