@@ -12,6 +12,7 @@ import { TaskCard, TaskDetails } from './tasks/TaskView'
 import { composeTasks } from './experience/task-composition'
 import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
 import { ConnectionDetails } from './experience/ConnectionDetails'
+import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
 import { ReceiverFold } from './receiver-presentation/ReceiverFold'
 import { isReceiveOutputDelivered } from './operation-ownership/completion'
@@ -89,6 +90,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
             <button className={`connection-status connection-${snapshot.connection.kind}`} type="button" onClick={event => openDetails('connection', event.currentTarget)}>
               <ReceiverIcon name="connection" />
               {shareConnectionLabel(snapshot.connection, snapshot.phase, snapshot.status)}
+              {snapshot.pathActivity.lanes.length > 0 && <span>· {connectedChannelCount(snapshot.pathActivity)}</span>}
             </button>
             <button className="encryption-note" type="button" onClick={event => openDetails('connection', event.currentTarget)}>
               <ReceiverIcon name="lock" />Encrypted

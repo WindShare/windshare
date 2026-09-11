@@ -106,6 +106,29 @@ it('keeps download identity across generation changes and releases its bounded l
 })
 
 describe('v2 receiver reconnect supervisor', () => {
+  it('publishes multiple admitted relay channels and removes a detached channel', async () => {
+    const session = new FakeSession([1])
+    const { supervisor } = supervisorFixture(session, new TrackedRelay(1))
+    const observe = vi.fn()
+    supervisor.pathActivity.subscribe(observe)
+    expect(observe.mock.lastCall?.[0].lanes).toEqual([])
+    const activation = supervisor.beginConnectivity('download')
+    expect(observe.mock.lastCall?.[0].lanes).toEqual([
+      { laneId: 1, laneEpoch: 0, route: 'application-relay', recentContent: false },
+    ])
+    session.attach(7)
+    await supervisor.execute(undefined, async generation => generation.connectivity.addRelayLane(7))
+    expect(observe.mock.lastCall?.[0].lanes).toEqual([
+      { laneId: 1, laneEpoch: 0, route: 'application-relay', recentContent: false },
+      { laneId: 7, laneEpoch: 1, route: 'application-relay', recentContent: false },
+    ])
+    session.detach(7)
+    expect(observe.mock.lastCall?.[0].lanes).toHaveLength(1)
+    activation.close()
+    await supervisor.close()
+    expect(observe.mock.lastCall?.[0].lanes).toEqual([])
+  })
+
   it('dispatches relay content while the peer offer remains pending', async () => {
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)

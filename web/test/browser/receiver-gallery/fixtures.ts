@@ -112,7 +112,11 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
     taskDisplay: single ? null : facts.display,
     connection: { kind: scenario === 'reconnecting' ? 'reconnecting' : 'connected' },
     phase: 'browsing', status: 'Sender connected', error: null,
-    pathActivity: { directConnected: true, content: single ? 'idle' : 'direct' },
+    pathActivity: { lanes: scenario === 'reconnecting' ? [] : [
+      { laneId: 1, laneEpoch: 0, route: 'application-relay', recentContent: false },
+      { laneId: 3, laneEpoch: 1, route: 'direct', recentContent: !single },
+      { laneId: 5, laneEpoch: 1, route: 'turn', recentContent: false },
+    ] },
     rows: single ? [file] : directoryRows, breadcrumbs: [{ id: 'root', name: 'Summer photos' }],
     pageIndex: 0, pageCount: single || scenario === 'full-directory' ? 1 : 2,
     entryCount: single ? 1 : directoryEntryCount,

@@ -61,6 +61,17 @@
 .detail-sheet dt { color: var(--receiver-muted); }
 .detail-sheet dd { margin: 0; overflow-wrap: anywhere; }
 .detail-sheet .task-detail-list { padding-left: 20px; color: var(--receiver-muted); font-size: .875rem; line-height: 1.7; }
+.download-channels { border-top: 1px solid var(--receiver-rule); padding-top: 12px; }
+.download-channels h3 { margin-bottom: 4px; }
+.download-channels > [role=status] { color: var(--receiver-muted); margin-top: 0; }
+.download-channels ul { list-style: none; padding: 0; margin: 16px 0; }
+.download-channels li { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px 20px; padding-block: 14px; border-bottom: 1px solid var(--receiver-rule); font-size: .875rem; line-height: 1.6; }
+.download-channel-identity, .download-channel-state { display: flex; flex-direction: column; min-width: 0; overflow-wrap: anywhere; }
+.download-channel-identity strong { font-weight: 550; }
+.download-channel-identity > span, .download-channel-state > span { color: var(--receiver-muted); }
+.download-channel-state .download-channel-connected, .download-channel-state .download-channel-recent { color: var(--receiver-accent); }
+.download-channel-connected::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: currentColor; vertical-align: middle; }
+.download-channels .download-channel-help { color: var(--receiver-muted); }
 .detail-sheet .task-detail-list:empty { display: none; }
 .detail-sheet .task-detail-list li + li { margin-top: 6px; }
 .detail-sheet .task-removal { border-top: 1px solid var(--receiver-rule); padding-top: 12px; color: var(--receiver-muted); }

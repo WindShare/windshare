@@ -56,7 +56,7 @@ function render(
 ): string {
   const snapshot: V2ReceiverSnapshot = Object.freeze({
     ...experienceSnapshot(),
-    pathActivity: { directConnected: false, content: 'idle' as const },
+    pathActivity: { lanes: [] },
     phase: 'browsing',
     status: 'Ready.',
     error: null,

@@ -502,7 +502,7 @@ export class V2ReceiverController {
         ...this.#snapshot,
         phase: 'joining',
         status: 'Authenticating the share descriptor…',
-        pathActivity: { directConnected: false, content: 'idle' as const },
+        pathActivity: { lanes: [] },
         error: null,
         rows: Object.freeze([]),
         connection: { kind: 'idle' as const },

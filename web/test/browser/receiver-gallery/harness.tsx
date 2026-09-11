@@ -125,6 +125,7 @@ class GalleryController {
   advanceProgress = (progress: Partial<V2ReceiverSnapshot['progress']>) => {
     this.#publish({ progress: { ...this.#snapshot.progress, ...progress } })
   }
+  updatePathActivity = (pathActivity: V2ReceiverSnapshot['pathActivity']) => this.#publish({ pathActivity })
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -137,6 +138,7 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
   Object.assign(window, { windshareGalleryEvidence: galleryEvidence,
     windshareCompleteDownload: active.completeDownload,
     windshareAdvanceProgress: active.advanceProgress,
+    windshareUpdatePathActivity: active.updatePathActivity,
     windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario
