@@ -1,4 +1,13 @@
-import type { PersistentFileTransactionPort } from '../../persistent-tree/contracts'
+import type { PersistentFileRequest, PersistentFileTransactionPort, PersistentMaterializationPort } from '../../persistent-tree/contracts'
+import type { CompatibleNamePathAuthority } from './path-authority'
+
+export async function beginCompatibleNameFile(request: PersistentFileRequest,
+  materialization: Pick<PersistentMaterializationPort, 'beginFile'>,
+  names: Pick<CompatibleNamePathAuthority, 'commitFinalFile'>): Promise<PersistentFileTransactionPort> {
+  const transaction = await materialization.beginFile(request)
+  return compatibleNameFileTransaction(transaction,
+    () => names.commitFinalFile(request.materializationRelativePath, transaction.ownedObjectId))
+}
 
 export function compatibleNameFileTransaction(
   transaction: PersistentFileTransactionPort,

@@ -168,9 +168,10 @@ export async function finalizeDirectDelivery(databaseName: string) {
     const cleaned = await repository.finalizeDirect(f.initial, proof)
     IDBDatabase.prototype.transaction = originalTransaction
     const retry = await repository.finalizeDirect(f.initial, proof)
+    const currentRetry = await repository.finalizeDirect(cleaned, proof)
     return {
       missingCheckpointRejected, missingFinalProofRejected, foreignProofRejected, finalizationTransactions,
-      state: cleaned.state.kind, generation: cleaned.generation.toString(), idempotent: retry.digest === cleaned.digest,
+      state: cleaned.state.kind, generation: cleaned.generation.toString(), idempotent: retry.digest === cleaned.digest && currentRetry.digest === cleaned.digest,
       targetBytes: summarizeBrowserDeliveries(f.policy, [cleaned]).targetSavedBytes.toString(),
     }
   } finally { IDBDatabase.prototype.transaction = originalTransaction; repository.close() }

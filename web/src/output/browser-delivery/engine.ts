@@ -41,6 +41,11 @@ export class BrowserDeliveryEngine {
 
   async completeReceiving(fileId: string, commit: PersistentFinalFileCommit): Promise<BrowserDeliveryRecordV1> {
     const record = this.#options.currentRecord?.(fileId) ?? await this.#read(fileId)
+    if (record.placement === 'direct' && record.state.kind === 'cleaned') {
+      this.#emit(record, 'target-saved')
+      this.#emit(record, 'cleaned')
+      return record
+    }
     if (record.state.kind !== 'receiving') return record
     if (record.placement === 'direct') {
       const cleaned = await this.#options.repository.finalizeDirect(record, commit.checkpointProof)

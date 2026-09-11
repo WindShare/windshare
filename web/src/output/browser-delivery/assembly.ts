@@ -2,7 +2,7 @@ import { encodeBase64Url } from '../../crypto/bytes'
 import { createOperationID, validateReceiveIntent, type ReceiveIntent } from '../../transfer/intent'
 import type { OutputDiagnosticsPorts } from '../diagnostics'
 import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE, FILE_CHECKPOINT_MATERIALIZER_ORIGIN_PRIVATE } from '../persistence/checkpoint'
-import { decideFileReceivingPlacement } from '../planning/file-receiving-placement'
+import { chooseFileReceivingPlacement } from '../planning/file-receiving-placement'
 import { RecoveryCostObserver } from '../planning/recovery-cost'
 import type { BrowserStagingStorageFacts } from '../planning/staging-storage'
 import { StagingBudgetCoordinator } from '../staging-budget/coordinator'
@@ -102,8 +102,9 @@ async function openAssembly<T>(
     }
     return await open({ policy, repository,
       ...(policy.staging === undefined ? {} : { staging }),
-      choosePlacement: async source => decideFileReceivingPlacement({ exactSize: source.exactSize,
-        preference: policy.preference, storage: policy.staging === undefined ? { ...await input.storageFacts(), opfs: 'unavailable' } : await input.storageFacts(),
+      choosePlacement: source => chooseFileReceivingPlacement({ exactSize: source.exactSize,
+        preference: policy.preference, storage: async () => policy.staging === undefined
+          ? { ...await input.storageFacts(), opfs: 'unavailable' } : await input.storageFacts(),
         costs: costs.snapshot(Math.floor(now())) }),
       reserveStage: async (source, retained) => {
         if (retained === undefined) {

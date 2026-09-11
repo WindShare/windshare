@@ -1,4 +1,5 @@
 import { FILE_CHECKPOINT_MATERIALIZER_FSA_TREE } from '../../persistence/checkpoint'
+import type { IndexedDbFileCommitParticipants } from './file-commit-participants'
 import type { CheckpointNamespaceBinding } from '../../persistence/journal'
 import { validateBinding } from '../../materialization-ledger/codec'
 import {
@@ -62,10 +63,12 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
   readonly #checkpointBinding: CheckpointNamespaceBinding
   readonly #faults: IndexedDbSemanticTransactionFaults | undefined
   readonly #assertOpen: () => void
+  readonly #fileCommits: IndexedDbFileCommitParticipants
 
   constructor(input: Readonly<{
     database: IDBDatabase
     checkpointBinding: CheckpointNamespaceBinding
+    fileCommits: IndexedDbFileCommitParticipants
     faults?: IndexedDbSemanticTransactionFaults
     assertOpen: () => void
   }>) {
@@ -73,6 +76,7 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
     this.#checkpointBinding = input.checkpointBinding
     this.#faults = input.faults
     this.#assertOpen = input.assertOpen
+    this.#fileCommits = input.fileCommits
   }
 
   async commitFinalFile(
@@ -81,19 +85,29 @@ export class IndexedDbMaterializationLedgerParticipant implements Materializatio
     this.#assertOpen()
     const prepared = await prepareFinalFileCommit(input)
     await this.#binding(prepared.binding)
-    const transaction = this.#database.transaction([
+    const participation = this.#fileCommits.prepare([prepared.finalCheckpoint])
+    const transaction = this.#database.transaction([...new Set([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
       INDEXEDDB_FILE_CHECKPOINT_HANDLE_STORE,
       INDEXEDDB_FILE_FINAL_PROOF_STORE,
       INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE,
-    ], 'readwrite')
+      ...participation.stores,
+    ])], 'readwrite')
+    const completion = transactionCompletion(transaction)
+    completion.catch(() => undefined)
     try {
-      const receipt = await commitFinalFileTransaction(transaction, prepared, this.#faults)
-      await transactionCompletion(transaction)
+      // Both authorities validate their predecessors in this cut; neither needs to reread the other's queued writes.
+      const [receipt, publish] = await Promise.all([
+        commitFinalFileTransaction(transaction, prepared, this.#faults),
+        participation.apply(transaction, [{ kind: 'final-file', checkpoint: prepared.finalCheckpoint, finalProof: prepared.finalProof }]),
+      ])
+      await completion
+      publish()
       return receipt
     } catch (error) {
       abortQuietly(transaction)
+      await completion.catch(() => undefined)
       throw error
     }
   }

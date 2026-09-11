@@ -23,6 +23,7 @@ and copied at a time. A second case aborts a copy after 4 MiB, reloads the page,
 alternates direct reference and candidate runs in the same browser/profile: one warmup each, three
 measured runs each, 32 files of 4 KiB. Use `--repetitions` / `-Repetitions` for 1–5 diagnostic samples.
 Storage event sampling is part of the workload; it is not uninstrumented throughput or network speed.
+Small-file timing excludes per-range inventories and production trace forwarding in both paths.
 
 To exercise the production assembly, pass `--candidate /scripts/browser-evidence/folder-recovery/product-harness.mjs`
 and `--baseline /scripts/browser-evidence/folder-recovery/direct-product-harness.mjs` to the Node runner,
@@ -31,6 +32,9 @@ FSA checkpoint/ledger path. The product harness injects a reliable 1 KiB/s recei
 24 MiB files exercise the real long-receive planner without waits. Generated local bytes never update
 that synthetic network rate; copy and flush costs, transaction lifetimes and case timings use real clocks.
 It exercises production output modules directly, not network transfer, full UI wiring, or real operation-lease acquisition.
+Direct delivery joins placement to the initial checkpoint claim and completion to the final checkpoint/proof
+transaction. Its normal small-file loop should add no IndexedDB transactions over the FSA baseline;
+staged files and interrupted recovery still require their own durable transitions.
 
 Reports distinguish:
 

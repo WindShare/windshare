@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { decideFileReceivingPlacement, UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES,
+import { chooseFileReceivingPlacement, decideFileReceivingPlacement, UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES,
   SMALL_FILE_DIRECT_MAXIMUM_BYTES } from '../../../src/output/planning/file-receiving-placement'
 import { browserStagingQuota, type BrowserStagingStorageFacts } from '../../../src/output/planning/staging-storage'
 import { RecoveryCostObserver } from '../../../src/output/planning/recovery-cost'
@@ -9,6 +9,20 @@ const storage: BrowserStagingStorageFacts = { opfs: 'usable', persistence: 'not-
   quota: { kind: 'unknown' }, pressure: 'normal' }
 
 describe('authenticated per-file receiving placement', () => {
+  it('queries current storage only for an unopened file that benefits from staging', async () => {
+    let reads = 0
+    const currentStorage = async () => { reads++; return { ...storage, pressure: 'drain-first' as const } }
+    const input = { preference: 'automatic' as const, storage: currentStorage }
+    expect((await chooseFileReceivingPlacement({ ...input, exactSize: SMALL_FILE_DIRECT_MAXIMUM_BYTES })).reason).toBe('small-file')
+    expect((await chooseFileReceivingPlacement({ ...input, exactSize: UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES,
+      preference: 'direct' })).reason).toBe('explicit-direct')
+    expect((await chooseFileReceivingPlacement({ ...input, exactSize: UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES,
+      retainedPlacement: 'staged' })).reason).toBe('retained-placement')
+    expect(reads).toBe(0)
+    expect((await chooseFileReceivingPlacement({ ...input, exactSize: UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES })).reason).toBe('storage-pressure')
+    expect(reads).toBe(1)
+  })
+
   it('uses its named unknown-speed boundary independently of folder totals or persistence permission', () => {
     const decide = (exactSize: bigint) => decideFileReceivingPlacement({ exactSize, preference: 'automatic', storage })
     expect(decide(UNKNOWN_SPEED_STAGING_THRESHOLD_BYTES - 1n).placement).toBe('direct')

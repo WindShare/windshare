@@ -77,6 +77,15 @@ export async function deliveryEngineFixture(overrides: Partial<Pick<BrowserDeliv
   let deleteFailure = false
   let targetWrite: ((request: PersistentFileRequest) => Promise<void>) | undefined
   const makeTarget = (): BrowserDeliveryTargetPort => ({
+    beginDirectFile: async (request, delivery) => {
+      delivery.committed(await repository.createFile(delivery.currentRecord()))
+      const transaction = await makeTarget().beginFile(request)
+      return { ...transaction, commit: async signal => {
+        const result = await transaction.commit(signal)
+        delivery.committed(await repository.finalizeDirect(delivery.currentRecord(), result.checkpointProof))
+        return result
+      } }
+    },
     beginFile: async request => {
       const transaction = await targetSession.beginFile(request)
       return { ...transactionPort(transaction), writeRange: async (...args) => {
