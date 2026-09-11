@@ -176,6 +176,7 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
     let durable: DirectZipBootstrapCandidateV1 | undefined
     let frozen: BoundReceiveIntent | undefined
     let envelope: BrowserDirectZipEnvelope | undefined
+    let operation: BrowserDirectZipOperation | undefined
     try {
       const parentBinding: DirectZipParentBinding<FileSystemDirectoryHandle> = {
         handleRef: browserDirectZipHandleId(operationId),
@@ -241,15 +242,26 @@ class BrowserDirectZipPresentation implements V2ArtifactPresentationAuthority {
         repository, journal, candidate: durable, envelope: { ...envelope, binding: reserved.value.binding },
         lease, binding: reserved.value.binding, coordination,
       })
-      const operation = await BrowserDirectZipOperation.open({
+      operation = await BrowserDirectZipOperation.open({
         intent: frozen.intent as DirectZipIntent, lifecycle: initialized.lifecycle,
         leaseId: lease.leaseId, repository, journal, checkpoint: initialized.checkpoint,
         binding: reserved.value.binding, facts: this.#input.facts, close,
         namespaceMutations: coordination.mutations,
         ...(this.#dependencies.trace === undefined ? {} : { trace: this.#dependencies.trace }),
       })
+      // Bootstrap preserves a recoverable checkpoint. Adoption needs the same
+      // verified receiving transition as a retained operation before exposing pause.
+      await operation.startLifecycleAction('continue')
       return { kind: 'bound-operation', operation }
     } catch (cause) {
+      if (operation !== undefined) {
+        const runtime = operation
+        return { kind: 'owned-effects', cause, authority: {
+          intent: runtime.intent, lifecycle: runtime.lifecycle,
+          settleActivationFailure: reason => runtime.settleTransferAdmissionFailure(reason),
+          detach: () => runtime.detach(),
+        } }
+      }
       if (durable !== undefined && frozen !== undefined) {
         const intent = frozen.intent
         const lifecycle = nextReceiveLifecycleState(initialReceiveLifecycleState({

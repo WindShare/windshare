@@ -1,7 +1,7 @@
 import {
-  isBoundedOutputExceptionProjection,
-  type OutputExceptionProjection,
-} from '../../output/diagnostics/exception'
+  isBoundedDiagnosticExceptionProjection,
+  type DiagnosticExceptionProjection,
+} from '../exception'
 import type { LocalOutputOperationFailureV1 } from '../../output/diagnostics/local-output-failure'
 import { PERSISTENT_OUTPUT_FAILURE_FACT_LIMITS } from '../../output/persistent-tree/stage-diagnostics'
 
@@ -9,7 +9,7 @@ export function hasBoundedOutputExceptionEvidence(
   record: LocalOutputOperationFailureV1,
 ): boolean {
   return outputExceptionEvidence(record).every(exception =>
-    isBoundedOutputExceptionProjection(
+    isBoundedDiagnosticExceptionProjection(
       exception,
       PERSISTENT_OUTPUT_FAILURE_FACT_LIMITS.stringBytes,
     ))
@@ -17,9 +17,9 @@ export function hasBoundedOutputExceptionEvidence(
 
 function outputExceptionEvidence(
   record: LocalOutputOperationFailureV1,
-): readonly OutputExceptionProjection[] {
+): readonly DiagnosticExceptionProjection[] {
   const facts = record.stageFailure.facts
-  const exceptions: OutputExceptionProjection[] = [record.stageFailure.exception]
+  const exceptions: DiagnosticExceptionProjection[] = [record.stageFailure.exception]
   const observed = [
     facts.fsa?.entry,
     facts.fsa?.committedBytes,

@@ -1,3 +1,5 @@
+import type { DiagnosticExceptionProjection } from '../exception'
+import { isIncidentExceptionEvidence, snapshotIncidentException } from './exception-evidence'
 import {
   CheckpointFaultCode,
   OutputFaultCode,
@@ -151,7 +153,9 @@ export interface FailureFactByKind {
       reason?: LifecycleFailureReason
     }>
   }>
-  readonly unclassified: Readonly<{ unclassified: Readonly<Record<never, never>> }>
+  readonly unclassified: Readonly<{
+    unclassified: Readonly<{ exception: DiagnosticExceptionProjection | null }>
+  }>
 }
 
 export type FailureFact<Kind extends FailureFactKind = FailureFactKind> =
@@ -330,13 +334,16 @@ export function lifecycleFailureFact(input: {
 export function unclassifiedFailureFact(input: {
   readonly stage: FailureStage
   readonly recoveryDisposition: RecoveryDisposition
+  readonly error?: unknown
   readonly correlation?: FailureCorrelation
 }): FailureFact<'unclassified'> {
   return createFact(
     'unclassified',
     input.stage,
     input.recoveryDisposition,
-    Object.freeze({ unclassified: Object.freeze({}) }),
+    Object.freeze({ unclassified: Object.freeze({
+      exception: Object.hasOwn(input, 'error') ? snapshotIncidentException(input.error) : null,
+    }) }),
     input.correlation,
   )
 }
@@ -405,7 +412,9 @@ export function isFailureFact(value: unknown): value is FailureFact {
         hasExactKeys(value.payload, ['unclassified']) &&
         isRecord(value.payload.unclassified) &&
         Object.isFrozen(value.payload.unclassified) &&
-        Object.keys(value.payload.unclassified).length === 0
+        hasExactKeys(value.payload.unclassified, ['exception']) &&
+        (value.payload.unclassified.exception === null ||
+          isIncidentExceptionEvidence(value.payload.unclassified.exception))
       )
   }
 }

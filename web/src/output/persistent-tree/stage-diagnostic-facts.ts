@@ -1,5 +1,5 @@
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
-import { projectOutputException } from '../diagnostics/exception'
+import { projectDiagnosticException } from '../../diagnostics/exception'
 import type {
   FileCheckpointJournal,
   FileCheckpointScan,
@@ -240,7 +240,7 @@ function captureException(
 ): PersistentOutputCapturedException {
   return Object.freeze({
     raw: error,
-    projection: projectOutputException(error, bound),
+    projection: projectDiagnosticException(error, bound),
   })
 }
 

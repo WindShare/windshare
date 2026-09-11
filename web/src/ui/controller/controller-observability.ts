@@ -1,6 +1,7 @@
 import { V2RemoteOperationError } from '../../content/v2-session-operations'
 import {
   faultFailureFact,
+  unclassifiedFailureFact,
   type FailureFactRef,
   type FailureFactRelation,
   type FailureStage,
@@ -111,7 +112,9 @@ function recordFailureTrigger(
       fault: ACTIVATION_CONTRACT_FAULT,
     }), 'contributor')
   }
-  return attempt.recordUnclassified(stage, 'contributor')
+  return attempt.record(unclassifiedFailureFact({
+    stage, recoveryDisposition: 'terminal', error,
+  }), 'contributor')
 }
 
 function isActivationContractError(

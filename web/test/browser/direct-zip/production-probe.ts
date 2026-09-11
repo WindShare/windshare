@@ -29,7 +29,7 @@ const SPACING_TOTAL_BYTES = SPACING_FIRST_WRITE_BYTES + 2 * SPACING_LATER_WRITE_
 type ProductionMode = 'pause-resume' | 'complete' | 'delete' | 'delete-retry' | 'unpromoted-resume' |
   'unpromoted-delete' | 'unpromoted-continue' | 'unpromoted-settle' | 'bootstrap-recovery' |
   'completion-journal-recovery' | 'completion-acknowledgement-recovery' | 'completion-continue' |
-  'aborted-write-continue' | 'automatic-checkpoint-spacing'
+  'aborted-write-continue' | 'automatic-checkpoint-spacing' | 'activation-recovery'
 
 export async function probeBrowserDirectZipProduction(databaseName: string, mode: ProductionMode) {
   const root = await navigator.storage.getDirectory()
@@ -60,23 +60,7 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
   try {
     const activation = await prepareProductionDirectZipActivation(windowPort, receiver, directZip, signal)
     const { environment, rootId } = activation
-    const activated = await activation.commit()
-    if (activated.kind === 'owned-effects' && mode === 'bootstrap-recovery') {
-      await activated.authority.detach()
-      const inventory = await openJournal()
-      const candidates = []
-      for await (const candidate of inventory.streamBootstrapCandidates()) candidates.push(candidate)
-      inventory.close()
-      if (candidates.length !== 1) throw new Error('Interrupted bootstrap lost its candidate')
-      await directZip.runtime.dispatchBootstrapCandidate(directZipBootstrapResumeDescriptorV1(candidates[0]!), signal)
-      active = await directZip.runtime.resume(
-        await reopenPersisted(activated.authority.intent as DirectZipIntent, databaseName), signal)
-    } else if (activated.kind === 'bound-operation') {
-      active = activated.operation
-    } else {
-      if (activated.kind === 'owned-effects') throw activated.cause
-      throw new Error('Direct ZIP activation did not bind an operation')
-    }
+    active = await resolveProductionActivation(await activation.commit(), mode, directZip, databaseName, openJournal)
     const intent = active.intent as DirectZipIntent
     progress.bind(active)
     progress.sample('initial', active)
@@ -132,6 +116,41 @@ export async function probeBrowserDirectZipProduction(databaseName: string, mode
   }
 }
 
+async function resolveProductionActivation(
+  activated: Awaited<ReturnType<Awaited<ReturnType<typeof prepareProductionDirectZipActivation>>['commit']>>,
+  mode: ProductionMode,
+  directZip: ReturnType<typeof createBrowserDirectZipComposition>,
+  databaseName: string,
+  openJournal: ReturnType<typeof faultingJournal>,
+): Promise<V2BoundReceiveOperation> {
+  if (activated.kind === 'owned-effects' && mode === 'bootstrap-recovery') {
+    await activated.authority.detach()
+    const inventory = await openJournal()
+    const candidates = []
+    for await (const candidate of inventory.streamBootstrapCandidates()) candidates.push(candidate)
+    inventory.close()
+    if (candidates.length !== 1) throw new Error('Interrupted bootstrap lost its candidate')
+    await directZip.runtime.dispatchBootstrapCandidate(directZipBootstrapResumeDescriptorV1(candidates[0]!), signal)
+    return directZip.runtime.resume(
+      await reopenPersisted(activated.authority.intent as DirectZipIntent, databaseName), signal)
+  } else if (activated.kind === 'owned-effects' && mode === 'activation-recovery') {
+    if (!(activated.cause instanceof Error) || activated.cause.message !== 'Injected receive activation failure') {
+      throw new Error('The receive activation failure was not preserved')
+    }
+    const settled = await activated.authority.settleActivationFailure(activated.cause)
+    if (settled.lifecycle.kind !== 'resumable-receive') throw new Error('Activation lost its resumable checkpoint')
+    await activated.authority.detach()
+    return directZip.runtime.resume(
+      await reopenPersisted(activated.authority.intent as DirectZipIntent, databaseName), signal)
+  } else if (activated.kind === 'bound-operation') {
+    if (mode === 'activation-recovery') throw new Error('Receive activation bypassed the injected failure')
+    return activated.operation
+  } else {
+    if (activated.kind === 'owned-effects') throw activated.cause
+    throw new Error('Direct ZIP activation did not bind an operation')
+  }
+}
+
 async function materializeProductionPayload({ active, rootId, payload, firstWriteBytes, mode,
   directZip, databaseName, parent, progress, fileSystem }: {
   active: V2BoundReceiveOperation
@@ -166,7 +185,7 @@ async function materializeProductionPayload({ active, rootId, payload, firstWrit
   let resumeOffset = 0n
   let execution = first
   if (mode !== 'complete' && mode !== 'bootstrap-recovery' &&
-      mode !== 'automatic-checkpoint-spacing' && !mode.startsWith('completion-')) {
+      mode !== 'automatic-checkpoint-spacing' && mode !== 'activation-recovery' && !mode.startsWith('completion-')) {
     try {
       if (mode === 'aborted-write-continue') {
         const failure = new DOMException('Injected write acknowledgement loss', 'UnknownError')
@@ -299,6 +318,7 @@ function faultingJournal(databaseName: string, mode: ProductionMode) {
   let promotionFailurePending = mode.startsWith('unpromoted-')
   let bootstrapFailurePending = mode === 'bootstrap-recovery'
   let deleteFailurePending = mode === 'delete-retry'
+  let activationFailurePending = mode === 'activation-recovery'
   let completionFailurePending = mode.startsWith('completion-')
   return async () => {
     const repository = await IndexedDbDirectZipJournalRepository.open({ databaseName })
@@ -330,6 +350,10 @@ function faultingJournal(databaseName: string, mode: ProductionMode) {
         if (property === 'commitRecoveryLifecycle') return async (
           cut: Parameters<IndexedDbDirectZipJournalRepository['commitRecoveryLifecycle']>[0],
         ) => {
+          if (activationFailurePending && cut.lifecycle.kind === 'receiving') {
+            activationFailurePending = false
+            throw new DOMException('Injected receive activation failure', 'UnknownError')
+          }
           if (deleteFailurePending && cut.lifecycle.kind === 'discarded') {
             deleteFailurePending = false
             throw new DOMException('Injected loss after physical deletion', 'UnknownError')

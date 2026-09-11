@@ -102,7 +102,7 @@ function record(sequence: string): IncidentRecordV1 {
         kind: 'unclassified',
         stage: 'join',
         recovery_disposition: 'terminal',
-        payload: { unclassified: {} },
+        payload: { unclassified: { exception: null } },
       },
       contributors: [],
       consequences: [],

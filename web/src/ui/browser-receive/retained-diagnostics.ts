@@ -46,8 +46,13 @@ export function bindRuntimeOutputFailures(
     get transferJobId() {
       return runtime.transferJobId
     },
-    lifecycle: runtime.lifecycle,
-    activeControls: runtime.activeControls,
+    // Diagnostic decoration must preserve live runtime state across pause and completion.
+    get lifecycle() {
+      return runtime.lifecycle
+    },
+    get activeControls() {
+      return runtime.activeControls
+    },
     ...(runtime.outputProgress === undefined ? {} : { outputProgress: runtime.outputProgress }),
     ...(runtime.observeCheckpoint === undefined ? {} : { observeCheckpoint: runtime.observeCheckpoint.bind(runtime) }),
     ...(runtime.repairProjection === undefined
