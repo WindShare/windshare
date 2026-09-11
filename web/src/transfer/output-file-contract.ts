@@ -48,7 +48,6 @@ export interface OutputExecutionProfile {
   readonly maximumConcurrentFilePipelines: number
   readonly maximumOutstandingWriteBytes: bigint
   readonly maximumBufferedBytes: bigint
-  readonly automaticCheckpoint: AutomaticCheckpointPolicy
 }
 
 export type AutomaticCheckpointResult =
@@ -178,10 +177,27 @@ export interface OutputFileTransaction {
   pause(reason: unknown): Promise<VerifiedDurableRanges>
 }
 
+export interface OutputCheckpointObject {
+  /** Names the actual shared storage object independently of final target evidence. */
+  readonly objectId: string
+  readonly policy: AutomaticCheckpointPolicy
+}
+
+export function snapshotOutputCheckpointObject(object: OutputCheckpointObject): OutputCheckpointObject {
+  return Object.freeze({
+    objectId: requireIdentityPart(object?.objectId, 'checkpoint object', MAXIMUM_OWNED_FILE_IDENTITY_BYTES),
+    policy: snapshotAutomaticCheckpointPolicy(object.policy),
+  })
+}
+
 export interface BeginOutputFileResult {
   readonly revision: OpenedOutputRevision
   readonly transaction: OutputFileTransaction
   readonly durableRanges: VerifiedDurableRanges
+  /** Complete live coverage, including durable bytes; omitted means only durable coverage. */
+  readonly acceptedRanges?: readonly ByteRange[]
+  /** Omission explicitly disables automatic cuts for this opened file. */
+  readonly checkpoint?: OutputCheckpointObject
 }
 
 /** A materializer owns bytes and checkpoints only; artifact semantics stay in the plan execution. */
@@ -236,17 +252,10 @@ export function outputExecutionProfile(profile: OutputExecutionProfile): OutputE
   }
   requirePositiveBudget(profile.maximumOutstandingWriteBytes, 'outstanding write')
   requirePositiveBudget(profile.maximumBufferedBytes, 'buffered output')
-  let automaticCheckpoint: AutomaticCheckpointPolicy
-  try {
-    automaticCheckpoint = snapshotAutomaticCheckpointPolicy(profile.automaticCheckpoint)
-  } catch (cause) {
-    throw new OutputSessionBindingError('output execution profile reported an invalid checkpoint policy', { cause })
-  }
   return Object.freeze({
     maximumConcurrentFilePipelines: profile.maximumConcurrentFilePipelines,
     maximumOutstandingWriteBytes: profile.maximumOutstandingWriteBytes,
     maximumBufferedBytes: profile.maximumBufferedBytes,
-    automaticCheckpoint,
   })
 }
 
@@ -257,7 +266,6 @@ export function disabledOutputExecutionProfile(
     maximumConcurrentFilePipelines,
     maximumOutstandingWriteBytes: DEFAULT_OUTPUT_WRITE_BUDGET_BYTES,
     maximumBufferedBytes: DEFAULT_OUTPUT_WRITE_BUDGET_BYTES,
-    automaticCheckpoint: { kind: 'disabled' },
   })
 }
 

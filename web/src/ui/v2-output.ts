@@ -67,6 +67,7 @@ export interface V2OutputPresentationSnapshot {
   readonly workspaceUsage: WorkspaceUsage | null
   readonly activeControls: readonly V2ActiveReceiveControl[]
   readonly receiveInterruption: V2ReceiveInterruptionPresentation | null
+  readonly browserFolderProgress?: import('./v2-receive-runtime').V2BrowserFolderProgressSnapshot | null
   readonly directZipProgress: V2DirectZipProgressSnapshot | null
   readonly transferResultPresentation: TransferResultPresentation | null
 }
@@ -92,6 +93,7 @@ export const EMPTY_V2_OUTPUT_PRESENTATION: V2OutputPresentationSnapshot = Object
   activeControls: Object.freeze([]),
   receiveInterruption: null,
   directZipProgress: null,
+      browserFolderProgress: null,
   transferResultPresentation: null,
 })
 
@@ -232,6 +234,7 @@ export class V2OutputPresentationController {
       plan: intent.plan,
       transferResultPresentation: null,
       directZipProgress: null,
+      browserFolderProgress: null,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       recoverySummary: null,
       writerOpenPause: null,
@@ -282,6 +285,7 @@ export class V2OutputPresentationController {
       plan: intent.plan,
       transferResultPresentation: null,
       directZipProgress: null,
+      browserFolderProgress: null,
       repairSummary: snapshotCompatibleNameRepair(repairSummary),
       recoverySummary: null,
       writerOpenPause: null,
@@ -338,6 +342,20 @@ export class V2OutputPresentationController {
       ...this.#snapshot,
       receiveInterruption: interruption === null ? null : Object.freeze({ ...interruption }),
     }, lifecycle, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  updateBrowserFolderProgress(progress: import('./v2-receive-runtime').V2BrowserFolderProgressSnapshot): boolean {
+    const intent = this.#snapshot.receiveIntent
+    if (intent === null || intent.plan.kind !== 'direct-tree' ||
+        progress.operationId !== intent.operationId ||
+        progress.summary.policy.operationId !== intent.operationId ||
+        progress.summary.policy.receiveIntentDigest !== intent.digest) return false
+    const current = this.#snapshot.browserFolderProgress
+    if (current != null && progress.generation <= current.generation) return false
+    this.#publishLifecycleSnapshot({
+      ...this.#snapshot, browserFolderProgress: Object.freeze({ ...progress }),
+    }, this.#snapshot.lifecycle, this.#snapshot.workspaceUsage)
     return true
   }
 
@@ -478,6 +496,7 @@ export class V2OutputPresentationController {
       recoverySummary: matchingRecoverySummary(lifecycle, base.recoverySummary),
       writerOpenPause: base.writerOpenPause,
       directZipProgress: base.directZipProgress,
+      browserDelivery: base.browserFolderProgress?.summary ?? null,
     })
     const recoverySummary = matchingRecoverySummary(lifecycle, base.recoverySummary)
     return Object.freeze({
@@ -519,8 +538,9 @@ function persistentWriterOpenPauseFact(reason: unknown): PersistentWriterOpenPau
 
 function requireDirectZipProgress(progress: V2DirectZipProgressSnapshot): void {
   if (progress.operationId.length === 0 || progress.generation < 0n ||
-      progress.receivedSelectedBytes < 0n || progress.safeResumeBytes < 0n ||
-      progress.safeResumeBytes > progress.receivedSelectedBytes ||
+      progress.receivedSelectedBytes < 0n || progress.writtenSelectedBytes < 0n ||
+      progress.safeResumeBytes < 0n || progress.safeResumeBytes > progress.writtenSelectedBytes ||
+      progress.writtenSelectedBytes > progress.receivedSelectedBytes ||
       (progress.resumeTemporarySpaceUpperBound !== undefined &&
        progress.resumeTemporarySpaceUpperBound < 0n)) {
     throw new TypeError('direct ZIP progress snapshot is invalid')

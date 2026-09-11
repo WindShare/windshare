@@ -24,14 +24,20 @@ export function presentSavingActions(input: Readonly<{
   let reason: string = offers.zip?.recommendation.reason ?? 'eligible-route'
   if (primary.outcome === 'original-file') reason = 'original-file-default'
   if (primary.outcome === 'folder') reason = 'hierarchy-preserving-default'
-  const recommendation = primary.outcome === 'zip' && offers.zip?.recommendation.kind === 'no-recommendation' &&
-    offers.zip.recommendation.reason !== 'only-one-route-available'
-    ? 'You can start now. The space comparison is not settled; another saving method remains available in Other ways to save.'
-    : null
+  const recommendation = zipRecommendation(primary, offers.zip)
   return Object.freeze({
     primary, alternatives, disabledReason, retry: false, desktopGuidance: null, recommendation,
     transition: transition(offers, primary, reason),
   })
+}
+
+function zipRecommendation(primary: SavingChoice, zip: Extract<ArtifactOffers, { kind: 'artifact-actions' }>['zip']): string | null {
+  if (primary.outcome !== 'zip' || zip === null) return null
+  if (zip.recommendation.reason === 'workspace-within-discovered-budget') {
+    return 'You can start now. Known ZIP content fits browser staging; more discoveries may change the recommendation.'
+  }
+  return zip.recommendation.kind === 'no-recommendation' && zip.recommendation.reason !== 'only-one-route-available'
+    ? 'You can start now. The space comparison is not settled; another saving method remains available in Other ways to save.' : null
 }
 
 function groupOutcomes(
@@ -52,6 +58,9 @@ function groupOutcomes(
       seen.add(identity)
       return true
     }).map(choice => savingChoice(choice, disabledReason))
+    if (primary.route.kind === 'direct-tree' && primary.route.target.kind === 'fsa-parent-directory') {
+      alternatives.unshift(savingChoice(primary, disabledReason, undefined, 'direct'))
+    }
     result.push(Object.freeze({
       kind, label: outcomeLabel(kind),
       primary: savingChoice(primary, disabledReason),
@@ -61,7 +70,8 @@ function groupOutcomes(
   return Object.freeze(result)
 }
 
-function savingChoice(offered: OfferedArtifactChoice, disabledReason: string | null, actionLabel?: string): SavingChoice {
+function savingChoice(offered: OfferedArtifactChoice, disabledReason: string | null, actionLabel?: string,
+  recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic'): SavingChoice {
   const kind = outcome(offered)
   const descriptions: Record<SavingOutcomeKind, string> = {
     'original-file': 'Keeps the original file and format.',
@@ -69,11 +79,12 @@ function savingChoice(offered: OfferedArtifactChoice, disabledReason: string | n
     zip: 'Creates one ZIP containing the selected files, without compression.',
   }
   const description = descriptions[kind]
-  const consequences = routeConsequences(offered)
+  const consequences = routeConsequences(offered, recoveryPreference)
   if (kind === 'zip') consequences.unshift('The result is a ZIP package. It is usable only after closing and verification finish.')
   return Object.freeze({
     offered,
-    label: actionLabel ?? choiceLabel(offered),
+    ...(offered.route.kind === 'direct-tree' ? { recoveryPreference } : {}),
+    label: actionLabel ?? (recoveryPreference === 'direct' ? 'Write directly to folder' : choiceLabel(offered)),
     outcome: kind,
     description,
     consequences: Object.freeze(consequences),
@@ -91,11 +102,18 @@ function choiceLabel(offered: OfferedArtifactChoice): string {
   }
 }
 
-function routeConsequences(offered: OfferedArtifactChoice): string[] {
+function routeConsequences(offered: OfferedArtifactChoice,
+  recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference): string[] {
   switch (offered.route.kind) {
     case 'direct-tree':
+      if (recoveryPreference === 'automatic' && offered.route.target.kind === 'fsa-parent-directory') return [
+        'Choose a folder once. Small files save directly; larger or slower files may first use browser storage to retain progress.',
+        'Each staged file is copied to your folder as soon as it is received, then its browser copy is removed. Allow space for both during copying.',
+        'Files are ready to use after saving to the folder finishes. Wait for Pause to finish before leaving; recovery uses the last verified checkpoint.',
+        'Browser storage availability determines which files can be staged. Clearing this site’s data removes staged progress.',
+      ]
       return [
-        'Choose a folder now. Completed files become visible as they arrive.',
+        'Choose a folder now. Completed files become visible as they arrive; this task will not stage files in browser storage.',
         'Wait for Pause to finish before leaving. A successful pause saves received progress.',
         ...(offered.route.target.kind === 'fsa-parent-directory' ? [
           'Automatic progress saving is limited to avoid repeated copying. Closing or crashing the browser may lose most progress in a large unfinished file; completed files remain saved.',

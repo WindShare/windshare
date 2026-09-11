@@ -1,3 +1,6 @@
+export * from './file-receiving-placement'
+export * from './recovery-cost'
+export * from './staging-storage'
 export * from './binding'
 export * from './contracts'
 export * from './guarantees'

@@ -33,6 +33,7 @@ const (
 	MessageCheckpointRevisionConflict
 	MessageCheckpointInvalid
 	MessageOwnedObjectUnknown
+	MessageOutputRecoveryUnavailable
 )
 
 func (value SafeMessageKey) Name() (string, bool) {
@@ -89,6 +90,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "checkpoint_invalid", true
 	case MessageOwnedObjectUnknown:
 		return "owned_object_unknown", true
+	case MessageOutputRecoveryUnavailable:
+		return "output_recovery_unavailable", true
 	default:
 		return "", false
 	}
@@ -171,6 +174,7 @@ const (
 	FailureCheckpointUnsafeInstall
 	FailureCheckpointOwnershipMismatch
 	FailureCheckpointStateIO
+	FailureOutputRecoveryUnavailable
 )
 
 type failureDefinition struct {
@@ -188,7 +192,7 @@ func (code FailureCode) definition() (failureDefinition, bool) {
 		return peerFailureDefinition(code)
 	case code >= FailureSourceUnavailable && code <= FailureSessionDependencyContract:
 		return coreFailureDefinition(code)
-	case code >= FailureOutputStateIO && code <= FailureCheckpointStateIO:
+	case code >= FailureOutputStateIO && code <= FailureOutputRecoveryUnavailable:
 		return outputFailureDefinition(code)
 	default:
 		return failureDefinition{}, false
@@ -335,6 +339,8 @@ func outputFailureDefinition(code FailureCode) (failureDefinition, bool) {
 		return failureDefinition{"output_namespace_unsafe", MessageOutputFailed}, true
 	case FailureOutputUnsupportedFilesystem:
 		return failureDefinition{"output_unsupported_filesystem", MessageOutputFailed}, true
+	case FailureOutputRecoveryUnavailable:
+		return failureDefinition{"output_recovery_unavailable", MessageOutputRecoveryUnavailable}, true
 	case FailureOutputDirectoryBinding:
 		return failureDefinition{"output_directory_binding", MessageOutputFailed}, true
 	case FailureOutputDirectoryMetadata:

@@ -149,6 +149,9 @@ export class WorkspaceReceivePackaging {
       case 'delete':
         return this.#discard(backend)
       case 'change-location':
+      case 'save-staged-files':
+      case 'cleanup-staging':
+      case 'discard-incomplete-staging':
         throw unavailableRoute()
     }
   }

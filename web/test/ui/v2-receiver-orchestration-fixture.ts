@@ -79,7 +79,7 @@ import {
   directZipTarget,
   handoffTarget,
   managedTarget,
-  reviewedDirectZipSupport,
+  runtimeDirectZipSupport,
   workspaceOffer,
 } from '../output/planning/fixture'
 
@@ -93,7 +93,7 @@ export const WORKSPACE_ENVIRONMENT = environment({
   workspace: workspaceOffer(),
 })
 export const NO_DESTINATION_ENVIRONMENT = environment()
-const DIRECT_ZIP_SUPPORT = reviewedDirectZipSupport()
+const DIRECT_ZIP_SUPPORT = runtimeDirectZipSupport()
 export const DIRECT_ZIP_ENVIRONMENT = environment({
   targets: [directZipTarget()],
   directZipSupport: DIRECT_ZIP_SUPPORT,
@@ -101,7 +101,7 @@ export const DIRECT_ZIP_ENVIRONMENT = environment({
     version: 1,
     kind: 'available',
     workspacePeakBytesThreshold: 0n,
-    policyDigest: DIRECT_ZIP_SUPPORT.recommendationPolicyDigest,
+    policyDigest: identityText(89, 32),
   },
 })
 
@@ -865,6 +865,10 @@ function defaultLifecycleAction(
   lifecycle: ReceiveLifecycleState,
 ): V2LifecycleMutation {
   switch (action) {
+    case 'save-staged-files':
+    case 'cleanup-staging':
+    case 'discard-incomplete-staging':
+      return { lifecycle }
     case 'continue':
       return {
         lifecycle: next(lifecycle, { kind: 'receiving', activeLeaseId: identityText(60) }),

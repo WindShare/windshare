@@ -5,105 +5,83 @@ import {
   canonicalU64,
 } from '../../workspace/canonical'
 
-const DIRECT_ZIP_EPOCH_POLICY_DOMAIN = 'windshare/direct-zip-epoch-policy/v1'
+const DIRECT_ZIP_EPOCH_POLICY_DOMAIN = 'windshare/direct-zip-epoch-policy/v2'
 
-export interface DirectZipAutomaticEpochBudgetV1 {
-  readonly maximumPrefixCopyBytes: bigint
-  readonly maximumCumulativePrefixCopyBytes: bigint
-  readonly maximumModeledPeakTemporaryBytes: bigint
+export interface DirectZipAutomaticEpochPolicyV1 {
+  readonly minimumAdvanceBytes: bigint
 }
 
 export interface DirectZipAutomaticCheckpointInputV1 {
+  readonly archiveOffset: bigint
   readonly committedLength: bigint
-  readonly cumulativePrefixCopyBytes: bigint
-  readonly budget?: DirectZipAutomaticEpochBudgetV1
+  readonly policy?: DirectZipAutomaticEpochPolicyV1
 }
 
 export type DirectZipAutomaticCheckpointDecisionV1 =
   | Readonly<{
       kind: 'admit'
-      nextCumulativePrefixCopyBytes: bigint
       additionalTemporaryBytesUpperBound: bigint
     }>
   | Readonly<{
       kind: 'decline'
-      reason:
-        | 'evidence-unavailable'
-        | 'prefix-copy-budget'
-        | 'cumulative-copy-budget'
-        | 'modeled-peak-temporary-budget'
+      reason: 'policy-unavailable' | 'insufficient-progress'
       additionalTemporaryBytesUpperBound: bigint
     }>
 
-export async function directZipEpochPolicyDigestV1(
-  budget: DirectZipAutomaticEpochBudgetV1,
+export async function directZipEpochPolicyDigestV2(
+  policy: DirectZipAutomaticEpochPolicyV1,
 ): Promise<string> {
-  requireBudget(budget)
-  return canonicalDigest(canonicalRecord(DIRECT_ZIP_EPOCH_POLICY_DOMAIN, 1, [
-    canonicalFrame(canonicalU64(budget.maximumPrefixCopyBytes)),
-    canonicalFrame(canonicalU64(budget.maximumCumulativePrefixCopyBytes)),
-    canonicalFrame(canonicalU64(budget.maximumModeledPeakTemporaryBytes)),
+  requirePolicy(policy)
+  return canonicalDigest(canonicalRecord(DIRECT_ZIP_EPOCH_POLICY_DOMAIN, 2, [
+    canonicalFrame(canonicalU64(policy.minimumAdvanceBytes)),
   ]))
 }
 
-/** Missing evidence is a policy result, not a reason to invent a permissive threshold. */
+/**
+ * Each automatic close must earn its next full-prefix reopen through new archive
+ * progress. During forward progress, doubling the durable prefix bounds automatic
+ * copies below twice archive progress. Recovery reconstructs this spacing from the
+ * checkpoint; user pauses and retry copies are separate costs.
+ * Large archives therefore keep gaining durable progress, with proportionally larger
+ * replay windows; the pending prefix remains the explicit temporary-space bound.
+ */
 export function decideDirectZipAutomaticCheckpointV1(
   input: DirectZipAutomaticCheckpointInputV1,
 ): DirectZipAutomaticCheckpointDecisionV1 {
   requireOffset(input.committedLength, 'direct ZIP committed length')
-  requireOffset(input.cumulativePrefixCopyBytes, 'direct ZIP cumulative prefix-copy bytes')
-  // The committed length is the exact archive prefix, so ZIP headers, descriptors,
-  // and ownership metadata are admitted instead of only the selected source payload.
-  const spaceBound = input.committedLength
-  if (input.budget === undefined) {
+  requireOffset(input.archiveOffset, 'direct ZIP archive offset')
+  if (input.archiveOffset < input.committedLength) {
+    throw new RangeError('direct ZIP archive offset precedes its durable checkpoint')
+  }
+  const spaceBound = input.archiveOffset
+  if (input.policy === undefined) {
     return Object.freeze({
       kind: 'decline',
-      reason: 'evidence-unavailable',
+      reason: 'policy-unavailable',
       additionalTemporaryBytesUpperBound: spaceBound,
     })
   }
-  requireBudget(input.budget)
-  if (spaceBound > input.budget.maximumPrefixCopyBytes) {
+  requirePolicy(input.policy)
+  const requiredAdvance = input.committedLength > input.policy.minimumAdvanceBytes
+    ? input.committedLength : input.policy.minimumAdvanceBytes
+  if (input.archiveOffset - input.committedLength < requiredAdvance) {
     return Object.freeze({
       kind: 'decline',
-      reason: 'prefix-copy-budget',
+      reason: 'insufficient-progress',
       additionalTemporaryBytesUpperBound: spaceBound,
     })
   }
-  if (spaceBound > input.budget.maximumModeledPeakTemporaryBytes) {
-    return Object.freeze({
-      kind: 'decline',
-      reason: 'modeled-peak-temporary-budget',
-      additionalTemporaryBytesUpperBound: spaceBound,
-    })
-  }
-  if (input.cumulativePrefixCopyBytes > input.budget.maximumCumulativePrefixCopyBytes ||
-      spaceBound > input.budget.maximumCumulativePrefixCopyBytes -
-        input.cumulativePrefixCopyBytes) {
-    return Object.freeze({
-      kind: 'decline',
-      reason: 'cumulative-copy-budget',
-      additionalTemporaryBytesUpperBound: spaceBound,
-    })
-  }
-  const nextCumulative = input.cumulativePrefixCopyBytes + spaceBound
   return Object.freeze({
     kind: 'admit',
-    nextCumulativePrefixCopyBytes: nextCumulative,
     additionalTemporaryBytesUpperBound: spaceBound,
   })
 }
 
-function requireBudget(budget: DirectZipAutomaticEpochBudgetV1): void {
-  requireOffset(budget.maximumPrefixCopyBytes, 'direct ZIP automatic prefix-copy budget')
-  requireOffset(
-    budget.maximumCumulativePrefixCopyBytes,
-    'direct ZIP automatic cumulative-copy budget',
-  )
-  requireOffset(
-    budget.maximumModeledPeakTemporaryBytes,
-    'direct ZIP automatic modeled peak temporary-space budget',
-  )
+function requirePolicy(policy: DirectZipAutomaticEpochPolicyV1): void {
+  requireOffset(policy.minimumAdvanceBytes, 'direct ZIP automatic minimum advance')
+  if (policy.minimumAdvanceBytes === 0n) {
+    throw new RangeError('direct ZIP automatic minimum advance must be positive')
+  }
 }
 
 function requireOffset(value: bigint, label: string): void {

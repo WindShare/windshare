@@ -21,6 +21,7 @@ export interface ZipRouteRecommendationInput {
   readonly workspace: OfferedArtifactChoice | null
   readonly portable: OfferedArtifactChoice | null
   readonly discoveryComplete: boolean
+  readonly discoveredOutputBytes?: bigint
   readonly workspaceCost: WorkspaceCostObservationV1 | null
   readonly policy: ZipRouteRecommendationPolicyV1
 }
@@ -41,12 +42,19 @@ export function recommendZipRoutes(input: ZipRouteRecommendationInput): ZipRoute
   if (input.policy.kind === 'unavailable') {
     return group(direct, workspace, 'recommendation-policy-unavailable')
   }
-  if (!input.discoveryComplete) return group(direct, workspace, 'discovery-incomplete')
+  if (!input.discoveryComplete) {
+    const knownBytes = input.workspaceCost?.peakOwnedBytes ?? input.discoveredOutputBytes
+    if (knownBytes === undefined) return group(direct, workspace, 'discovery-incomplete')
+    // An unfinished archive is one growing output object. Ranking can refine without a full scan.
+    return knownBytes <= input.policy.workspacePeakBytesThreshold
+      ? recommended(workspace, direct, 'workspace-within-discovered-budget')
+      : recommended(direct, workspace, 'direct-unknown-or-over-budget')
+  }
   if (input.workspaceCost === null) {
     return recommended(direct, workspace, 'direct-unknown-or-over-budget')
   }
   return input.workspaceCost.peakOwnedBytes <= input.policy.workspacePeakBytesThreshold
-    ? recommended(workspace, direct, 'workspace-within-reviewed-budget')
+    ? recommended(workspace, direct, 'workspace-within-policy-budget')
     : recommended(direct, workspace, 'direct-unknown-or-over-budget')
 }
 

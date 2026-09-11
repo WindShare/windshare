@@ -66,7 +66,7 @@ export function SavingControls({ model, activation, currentTaskContext, actionLa
       {model.alternatives.map(outcome => <section className="saving-outcome" key={outcome.kind}>
         <h3>{outcome.label}</h3><Choice choice={outcome.primary} choose={commit} />
         {outcome.alternatives.length > 0 && <details><summary>Saving and recovery options</summary>
-          {outcome.alternatives.map(choice => <Choice key={choice.offered.choice.choiceId} choice={choice} choose={commit} />)}
+          {outcome.alternatives.map(choice => <Choice key={`${choice.offered.choice.choiceId}:${choice.recoveryPreference ?? ''}`} choice={choice} choose={commit} />)}
         </details>}
       </section>)}
     </DetailSheet>}

@@ -61,8 +61,8 @@ export interface PersistentMaterializationSettlementCut<
   snapshotQuiescentEvidence(): Evidence
   /** Qualifies the captured snapshot as the settlement evidence after final materialization work. */
   sealEvidence(): Evidence
-  /** The lifecycle owner chooses the final ownership-check/close ordering and must await this cut. */
-  closeMaterialization(): Promise<void>
+  /** Only a committed lifecycle outcome can authorize disposal; failed settlement closes preserving storage. */
+  closeMaterialization(committedState?: ReceiveLifecycleState): Promise<void>
 }
 
 export interface PersistentDirectTreeSettlementAuthority {

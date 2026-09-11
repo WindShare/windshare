@@ -195,6 +195,9 @@ test('blocked browser storage does not break startup or manual capture', async (
     })
   })
   await page.goto('/')
+  // Page load can precede module initialization; storage denial must be tested
+  // against the installed API rather than depend on startup timing under load.
+  await expect.poll(() => page.evaluate(() => window.windshareDiagnostics !== undefined)).toBe(true)
   const statuses = await page.evaluate(() => ({
     initial: window.windshareDiagnostics.status(),
     enabled: window.windshareDiagnostics.enable(),

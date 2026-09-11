@@ -12,6 +12,8 @@ const TEST_COGNITIVE_COMPLEXITY = 25
 
 export default defineConfig([
   globalIgnores([
+    // Local evidence probes use the same scratch directory excluded by Git.
+    '**/.tmp/**',
     'dist',
     'coverage',
     'test-results',

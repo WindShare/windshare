@@ -86,9 +86,9 @@ func (l RevisionLease) Descriptor() FileRevisionDescriptor { return l.descriptor
 func (l RevisionLease) TTL() time.Duration                 { return l.ttl }
 func (l RevisionLease) RenewAfter() time.Duration          { return l.renewAfter }
 
-// StableFile is returned by a backend only after it has verified the private
-// catalog candidate. Verify must use a reliable, same-object stability proof;
-// the backend must implement the platform support matrix frozen by the plan.
+// StableFile is returned only after the source has checked the private catalog
+// candidate and acquired a same-object stability proof. Verify must preserve that
+// proof for every read; a catalog timestamp alone does not exclude concurrent writes.
 type StableFile interface {
 	ExactSize() uint64
 	ModifiedTime() catalog.ModifiedTime
@@ -99,6 +99,23 @@ type StableFile interface {
 
 type RevisionSource interface {
 	OpenStable(context.Context, catalog.NodeRecord) (StableFile, error)
+}
+
+// RevisionContinuity identifies how long a source can prove that identical
+// catalog metadata still describes the same bytes. Weak filesystem timestamps
+// can support a write-excluding live handle without proving continuity on reopen.
+type RevisionContinuity uint8
+
+const (
+	CatalogRevisionContinuity RevisionContinuity = iota + 1
+	OpenHandleRevisionContinuity
+)
+
+// RevisionContinuitySource refines the default RevisionSource contract, whose
+// verified catalog candidate must distinguish content changes across opens.
+// Selection occurs before handle capacity admission and must not open a file.
+type RevisionContinuitySource interface {
+	RevisionContinuity(catalog.NodeRecord) (RevisionContinuity, error)
 }
 
 type CatalogNodeSource interface {

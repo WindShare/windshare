@@ -88,10 +88,9 @@ func (binding OutputRootBinding) IsZero() bool {
 	return binding.certification == "" && binding.digest == ([OutputRootBindingBytes]byte{})
 }
 
-// DestinationAuthorityID commits only to restart-stable native objects: the
-// opened destination root and its authenticated WindShare control namespace.
-// Display paths and placement ancestry are omitted so a same-filesystem rename
-// does not silently revoke valid recovery authority.
+// DestinationAuthorityID identifies a retained destination binding. Recoverable
+// bindings derive it from restart-stable native objects; process bindings derive
+// it from a fresh nonce and cannot use it to reopen a previous operation.
 type DestinationAuthorityID [DestinationAuthorityIDBytes]byte
 
 func NewDestinationAuthorityID(
@@ -112,6 +111,22 @@ func NewDestinationAuthorityID(
 		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
 	}
 	return id, nil
+}
+
+// NewProcessDestinationAuthorityID allocates an identity that cannot be recreated
+// from a path or stale private files. The retained root handle remains authority.
+func NewProcessDestinationAuthorityID(nonce []byte) (DestinationAuthorityID, error) {
+	if len(nonce) != DestinationAuthorityIDBytes {
+		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+	}
+	var zero [DestinationAuthorityIDBytes]byte
+	if string(nonce) == string(zero[:]) {
+		return DestinationAuthorityID{}, ErrInvalidDestinationAuthorityID
+	}
+	hash := sha256.New()
+	writeRootBindingClaim(hash, []byte("windshare/process-destination-authority-id/v1"))
+	writeRootBindingClaim(hash, nonce)
+	return DestinationAuthorityIDFromBytes(hash.Sum(nil))
 }
 
 func DestinationAuthorityIDFromBytes(raw []byte) (DestinationAuthorityID, error) {

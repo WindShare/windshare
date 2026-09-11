@@ -1,4 +1,13 @@
-import { encodeBase64Url } from '../../crypto/bytes'
+import {
+  acquireBrowserMutationLease,
+  browserLockManager,
+  type BrowserLockManagerRuntime,
+  type FSAMutationLease,
+} from './mutation-coordination/web-lock'
+import {
+  FSAHandleIdentityRegistry,
+  type FSAHandleIdentityResolver,
+} from './mutation-coordination/handle-identity'
 import {
   createFSAOperationMutationScheduler,
 } from './mutation-coordination/scheduler'
@@ -15,19 +24,20 @@ import {
 import type { PerformanceNamespaceKindV1 } from '../../diagnostics/trace/transfer-payload'
 
 const FSA_ROOT_LOCK_DOMAIN = 'windshare/fsa-parent-lock/v1'
+const FSA_NAMESPACE_LOCK_DOMAIN = 'windshare/fsa-parent-namespace-lock/v1'
+const FSA_ENTRY_LOCK_DOMAIN = 'windshare/fsa-entry-lock/v1'
 const LEGACY_FSA_MAXIMUM_ACTIVE_WRITERS = 1
 
-export interface BrowserLockHandle {
-  readonly name: string
-}
-
-export interface BrowserLockManagerRuntime {
-  request(
-    name: string,
-    options: { readonly mode: 'exclusive'; readonly ifAvailable: true },
-    callback: (lock: BrowserLockHandle | null) => Promise<void>,
-  ): Promise<void>
-}
+export type {
+  BrowserLockHandle,
+  BrowserLockManagerRuntime,
+  BrowserMutationLockOptions,
+  FSAMutationLease,
+} from './mutation-coordination/web-lock'
+export {
+  FSAHandleIdentityRegistry,
+  type FSAHandleIdentityResolver,
+} from './mutation-coordination/handle-identity'
 
 export class FSARootMutationBusyError extends DOMException {
   readonly scope = 'fsa-parent' as const
@@ -43,9 +53,17 @@ export class FSARootMutationClosedError extends DOMException {
   }
 }
 
+export class FSAEntryMutationBusyError extends DOMException {
+  readonly scope = 'fsa-entry' as const
+
+  constructor() {
+    super('This file is already being changed by another WindShare task', 'InvalidStateError')
+  }
+}
+
 /**
- * This temporary root-wide port keeps the current tree compileable until authenticated
- * parent authorities replace it. New scheduler code must use the narrower kind model.
+ * Tree output retains root authority until its operation-local writer scheduler drains.
+ * Single-file output uses shared parent access with explicit namespace and entry leases.
  */
 export type FSANamespaceMutationKind =
   | 'reserve-name'
@@ -68,20 +86,61 @@ export interface FSARootMutationLease {
   release(): Promise<void>
 }
 
-/**
- * FSA does not expose a stable filesystem identifier before persistence. Hashing the
- * picker-visible leaf intentionally over-serializes same-named parents: false sharing
- * is harmless, whereas separate locks for one parent would invalidate no-replace.
- */
 export async function fsaRootMutationLockName(
   parent: FileSystemDirectoryHandle,
+  identities: FSAHandleIdentityResolver = new FSAHandleIdentityRegistry(),
 ): Promise<string> {
-  if (parent.kind !== 'directory' || typeof parent.name !== 'string') {
-    throw new TypeError('FSA root lock requires a named directory authority')
+  if (parent.kind !== 'directory') {
+    throw new TypeError('FSA parent lock requires a directory authority')
   }
-  const material = new TextEncoder().encode(`${FSA_ROOT_LOCK_DOMAIN}\0${parent.name}`)
-  const digest = await crypto.subtle.digest('SHA-256', material)
-  return `${FSA_ROOT_LOCK_DOMAIN}:${encodeBase64Url(new Uint8Array(digest))}`
+  return `${FSA_ROOT_LOCK_DOMAIN}:${await identities.resolve(parent)}`
+}
+
+/** Shared access excludes legacy tree writers while allowing independent file owners. */
+export async function acquireFSAParentAccessLease(
+  parent: FileSystemDirectoryHandle,
+  manager: BrowserLockManagerRuntime = browserLockManager(),
+  identities: FSAHandleIdentityResolver = new FSAHandleIdentityRegistry({ manager }),
+): Promise<FSAMutationLease> {
+  return acquireBrowserMutationLease(
+    await fsaRootMutationLockName(parent, identities),
+    manager,
+    { mode: 'shared', ifAvailable: true },
+    () => new FSARootMutationBusyError(),
+  )
+}
+
+/** Callers hold parent access while briefly serializing name inspection and mutation. */
+export async function acquireFSAParentNamespaceLease(
+  parent: FileSystemDirectoryHandle,
+  manager: BrowserLockManagerRuntime = browserLockManager(),
+  identities: FSAHandleIdentityResolver = new FSAHandleIdentityRegistry({ manager }),
+): Promise<FSAMutationLease> {
+  if (parent.kind !== 'directory') {
+    throw new TypeError('FSA namespace lock requires a directory authority')
+  }
+  return acquireBrowserMutationLease(
+    `${FSA_NAMESPACE_LOCK_DOMAIN}:${await identities.resolve(parent)}`,
+    manager,
+    { mode: 'exclusive' },
+    () => new FSARootMutationBusyError(),
+  )
+}
+
+export async function acquireFSAEntryMutationLease(
+  handle: FileSystemFileHandle,
+  manager: BrowserLockManagerRuntime = browserLockManager(),
+  identities: FSAHandleIdentityResolver = new FSAHandleIdentityRegistry({ manager }),
+): Promise<FSAMutationLease> {
+  if (handle.kind !== 'file') {
+    throw new TypeError('FSA entry mutation lock requires a file authority')
+  }
+  return acquireBrowserMutationLease(
+    `${FSA_ENTRY_LOCK_DOMAIN}:${await identities.resolve(handle)}`,
+    manager,
+    { mode: 'exclusive', ifAvailable: true },
+    () => new FSAEntryMutationBusyError(),
+  )
 }
 
 export async function acquireFSARootMutationLease(
@@ -89,8 +148,9 @@ export async function acquireFSARootMutationLease(
   manager: BrowserLockManagerRuntime = browserLockManager(),
   maximumActiveWriters: number = LEGACY_FSA_MAXIMUM_ACTIVE_WRITERS,
   performance?: PerformanceSummaryObservations,
+  identities: FSAHandleIdentityResolver = new FSAHandleIdentityRegistry({ manager }),
 ): Promise<FSARootMutationLease> {
-  const lockName = await fsaRootMutationLockName(parent)
+  const lockName = await fsaRootMutationLockName(parent, identities)
   const rootParent = Symbol(lockName) as FSAParentMutationIdentity
   const scheduler = createFSAOperationMutationScheduler({
     rootParent,
@@ -98,28 +158,12 @@ export async function acquireFSARootMutationLease(
     ...(performance === undefined ? {} : { performance }),
   })
   const authority = new SerializedFSARootMutationAuthority(scheduler, rootParent, performance)
-  let acquiredResolve!: () => void
-  let acquiredReject!: (reason: unknown) => void
-  const acquired = new Promise<void>((resolve, reject) => {
-    acquiredResolve = resolve
-    acquiredReject = reject
-  })
-  let releaseResolve!: () => void
-  const held = new Promise<void>((resolve) => { releaseResolve = resolve })
-  const completion = manager.request(
+  const lease = await acquireBrowserMutationLease(
     lockName,
+    manager,
     { mode: 'exclusive', ifAvailable: true },
-    async (lock) => {
-      if (lock === null) {
-        acquiredReject(new FSARootMutationBusyError())
-        return
-      }
-      acquiredResolve()
-      await held
-    },
+    () => new FSARootMutationBusyError(),
   )
-  completion.then(undefined, acquiredReject)
-  await acquired
 
   let releasePromise: Promise<void> | undefined
   return Object.freeze({
@@ -128,8 +172,7 @@ export async function acquireFSARootMutationLease(
     release: () => {
       releasePromise ??= (async () => {
         await authority.close()
-        releaseResolve()
-        await completion
+        await lease.release()
       })()
       return releasePromise
     },
@@ -224,14 +267,6 @@ function performanceNamespaceKind(kind: FSANamespaceMutationKind): PerformanceNa
     case 'settle-operation': return 'settle_operation'
     case 'remove-entry': return 'remove_entry'
   }
-}
-
-function browserLockManager(): BrowserLockManagerRuntime {
-  const manager = globalThis.navigator?.locks
-  if (manager === undefined) {
-    throw new DOMException('Web Locks are required for coordinated FSA output', 'NotSupportedError')
-  }
-  return manager as BrowserLockManagerRuntime
 }
 
 function requireMutationKind(kind: FSANamespaceMutationKind): void {

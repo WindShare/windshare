@@ -163,7 +163,7 @@ func TestLinuxExt4RestartIdentityWorker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	identity := platform.root.native.certificate.rootRestartIdentity
+	identity := platform.root.native.binding.restart.rootIdentity
 	observation := linuxNativeRestartObservation{
 		RootBinding: binding.String(), FilesystemUUID: fmt.Sprintf("%x", identity.mount.filesystemUUID),
 		Inode: identity.inode, BirthSeconds: identity.birthSeconds,

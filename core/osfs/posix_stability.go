@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 
@@ -17,6 +18,10 @@ import (
 )
 
 const posixMutationTokenBytes = 56
+
+func catalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
+	return portableCatalogModifiedTime(information)
+}
 
 func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	return POSIXCatalogBaseline(file)

@@ -21,9 +21,9 @@ import {
   storedReceiveLifecycleState,
 } from '../../../src/output/workspace/state-codec'
 
-describe('IndexedDB v11 operation repository contract', () => {
+describe('IndexedDB operation repository contract', () => {
   it('isolates V2 receive authority and Direct ZIP journal stores', () => {
-    expect(CHECKPOINT_DATABASE_VERSION).toBe(11)
+    expect(CHECKPOINT_DATABASE_VERSION).toBe(12)
     const stores = new Map(INDEXEDDB_V10_STORE_SCHEMAS.map(value => [value.name, value]))
     expect([...stores.keys()]).not.toContain('receive-operation-v1-records')
     expect(stores.get('receive-operation-v2-records')).toEqual(schema(

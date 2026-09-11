@@ -42,33 +42,6 @@ type incrementalDirectoryDiscovery struct {
 	opaqueSelectionFound       bool
 }
 
-func (r *jobRun) isolateIncrementalFailure(
-	checkpoint nodeLedgerCheckpoint,
-	directory catalog.DirectoryID,
-	path string,
-	err error,
-) error {
-	if recordErr := r.recordDiscoveryFailure(directory, path, err); recordErr != nil {
-		if directory == r.job.root && path == "" && !isJobTerminalError(recordErr) {
-			return catalogIntegrityFailure(err)
-		}
-		return recordErr
-	}
-	if directory == r.job.root && path == "" {
-		// The synthetic root is the session's catalog authority. Without an
-		// authenticated terminal generation, no durable namespace may settle.
-		r.rootGeneration = catalog.DirectoryGeneration{}
-		if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
-			return dependencyContractFailure(rollbackErr)
-		}
-		return catalogIntegrityFailure(err)
-	}
-	if rollbackErr := r.rollbackClaims(checkpoint); rollbackErr != nil {
-		return dependencyContractFailure(rollbackErr)
-	}
-	return nil
-}
-
 func (r *jobRun) discoverIncremental(ctx context.Context, queue chan<- transferQueueItem) error {
 	rootSelected := r.job.rules.DirectorySelectedAt(r.job.root, "", r.job.rules.DefaultSelected())
 	request := incrementalDirectoryRequest{directory: r.job.root, selected: rootSelected}
@@ -175,7 +148,7 @@ func (r *jobRun) discoverIncrementalDirectory(
 	cursor, rawOpenErr := r.job.catalog.OpenDirectoryPages(ctx, request.directory)
 	err := normalizeCatalogBoundary(ctx, rawOpenErr)
 	if err != nil {
-		return false, r.isolateIncrementalFailure(checkpoint, request.directory, request.path, err)
+		return false, r.isolateIncrementalFailure(ctx, checkpoint, request.directory, request.path, err)
 	}
 	if cursor == nil {
 		return false, dependencyContractFailure(ErrCatalogCursorContract)
@@ -254,13 +227,13 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 			failure = dependencyContractFailure(err)
 		}
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	if result.Exhausted.Valid() {
 		failure := resourceBudgetFailure(ErrGenerationReplayBudget)
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	if !result.Complete {
@@ -271,7 +244,7 @@ func (discovery *incrementalDirectoryDiscovery) readTerminalGeneration(
 	if len(discovery.commitments) == 0 {
 		failure := catalogIntegrityFailure(ErrCatalogIdentity)
 		return false, discovery.run.isolateIncrementalFailure(
-			discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
+			ctx, discovery.checkpoint, discovery.request.directory, discovery.request.path, failure,
 		)
 	}
 	discovery.beginGeneration(discovery.generation)

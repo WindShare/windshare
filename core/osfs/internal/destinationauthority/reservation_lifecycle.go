@@ -38,6 +38,7 @@ type topLevelReservationCandidate struct {
 	claim        ReservationClaim
 	handle       ReservationClaimHandle
 	physicalName string
+	mode         outputcap.ExecutionMode
 }
 
 func reserveTopLevelOnRoot(
@@ -137,8 +138,12 @@ func beginTopLevelReservationCandidate(
 			ErrReservationIndeterminate, closeReservationClaimHandle(handle),
 		)
 	}
+	mode, err := binding.ExecutionMode()
+	if err != nil {
+		return topLevelReservationCandidate{}, false, errors.Join(err, rollbackReservationClaim(handle))
+	}
 	return topLevelReservationCandidate{
-		canonical: canonical, claim: claim, handle: handle, physicalName: physicalName,
+		canonical: canonical, claim: claim, handle: handle, physicalName: physicalName, mode: mode,
 	}, false, nil
 }
 
@@ -225,6 +230,14 @@ func commitResultRootCandidate(
 			closeReservationClaimHandle(candidate.handle),
 		)
 	}
+	if candidate.mode == outputcap.ExecutionLiveOnly {
+		// The newly created handle proves this process owns the result root.
+		// Enrollment exists only to authorize reopening after that handle is lost.
+		if err := candidate.handle.Close(); err != nil {
+			return nil, errors.Join(ErrReservationIndeterminate, err, directory.Close())
+		}
+		return newTopLevelReservation(candidate.canonical, candidate.claim, nil, directory)
+	}
 	identityClaim, err := preparePersistentIdentityClaim(directory)
 	if err != nil {
 		return nil, errors.Join(
@@ -260,6 +273,10 @@ func (authority *BoundDestination) ReopenTopLevel(
 	}
 	var result *TopLevelReservation
 	err := authority.withGuardedRoot(func(root outputcap.Directory) error {
+		mode, err := authority.binding.ExecutionMode()
+		if err != nil || mode != outputcap.ExecutionResumable {
+			return outputcap.ErrRecoverableOutputUnsupported
+		}
 		entry, err := NewReservedEntry(expected.Reservation)
 		if err != nil || expected.Reservation.AuthorityRef() != authority.binding.AuthorityRef() {
 			return ErrInvalidReservation

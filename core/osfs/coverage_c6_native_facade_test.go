@@ -36,6 +36,11 @@ func TestCoverageC6FilesystemOutputFacadeProjectsLeaseAndPersistedRootDispositio
 	if err != nil {
 		t.Fatal(err)
 	}
+	if first.Capabilities().Durability == transfer.DurabilityNone {
+		_, _ = first.PauseTree(context.Background(), transfer.JobPauseInterrupted)
+		_ = authority.Close()
+		t.Skip("persisted lease/disposition assertions require restart recovery")
+	}
 	contender, err := NewFilesystemOutputAuthority(FilesystemOutputAuthorityConfig{
 		RootPath: root, CreateRoot: true, Tracer: tracer,
 	})
@@ -97,6 +102,13 @@ func TestCoverageC6FilesystemOutputFacadeProjectsLeaseAndPersistedRootDispositio
 		}
 		switch event.RuntimeOperation {
 		case FilesystemOutputRuntimeAdmitDestination:
+			if event.ReceiveOperationID.IsZero() {
+				// Binding precedes operation allocation and reports destination-wide proofs.
+				if !event.DestinationCapabilities.Valid() || !event.ExecutionMode.Valid() {
+					t.Fatalf("destination binding omitted capability evidence: %+v", event)
+				}
+				continue
+			}
 			destinationAdmitted++
 			if event.RuntimeDecision != FilesystemOutputRuntimeAdmitted ||
 				event.ReceiveOperationID != intent.OperationID() {

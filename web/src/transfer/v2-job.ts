@@ -74,7 +74,7 @@ import {
 } from './output-session'
 import type { DirectZipIntent } from './direct-zip'
 import { V2TransferProgressLedger } from './progress/v2-ledger'
-import { runDirectZipJob } from './v2-job-direct-zip'
+import { createDirectZipProgressObservers, runDirectZipJob } from './v2-job-direct-zip'
 import { V2JobFailureAuthority } from './v2-job-failure-authority'
 import { TransferJobMaterialization } from './v2-job-materialization'
 import { outputSettlementTimeoutMilliseconds } from './settlement/v2-output'
@@ -387,18 +387,7 @@ export class TransferJob {
         this.#observers?.measure(measure)
         this.#emitProgress()
       },
-      observeReplayedFile: exactSize => {
-        this.#progress.completeFile(exactSize)
-        this.#emitProgress()
-      },
-      acknowledgeWrite: bytes => {
-        this.#progress.acknowledgeWrite(bytes)
-        this.#emitProgress()
-      },
-      completeFile: exactSize => {
-        this.#progress.completeFile(exactSize)
-        this.#emitProgress()
-      },
+      ...createDirectZipProgressObservers(this.#progress, () => this.#emitProgress()),
       observeDiscovery: event => this.#observers?.discoveryScheduling(event),
       finishMeasure: () => {
         const measure = this.#measure.complete()
@@ -612,12 +601,17 @@ export class TransferJob {
         : {}),
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      ...(this.#options.checkpointClock === undefined ? {} : { checkpointClock: this.#options.checkpointClock }),
+      ...(this.#options.onCheckpointObservation === undefined ? {} : { onCheckpointObservation: event => {
+        this.#options.onCheckpointObservation?.({ ...event, operationId: this.#requireIntent().operationId,
+          transferJobId: this.#transferJobId, fileId: file.entry.idText })
+      } }),
       ...(pipeline === undefined ? {} : { performancePipeline: pipeline }),
       ...(this.#options.incidentScope === undefined
         ? {}
         : { incidentScope: this.#options.incidentScope }),
-      onInitialDurable: bytes => {
-        materializedBytes = bytes
+      onInitialCoverage: coverage => {
+        materializedBytes = coverage.acceptedBytes
         this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
         this.#emitProgress()
       },

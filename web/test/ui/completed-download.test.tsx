@@ -6,6 +6,13 @@ import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 import { projectV2ReceiverTraceEvent } from '../../src/ui/v2-production-trace'
 import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
 import { composeTasks } from '../../src/ui/experience/task-composition'
+import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
+import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
+import { EMPTY_V2_OUTPUT_PRESENTATION } from '../../src/ui/v2-output'
+import { EMPTY_V2_PROGRESS, EMPTY_V2_RETAINED_INVENTORY } from '../../src/ui/v2-model'
+import type { V2RetainedReceiveOperation } from '../../src/ui/v2-receive-runtime'
+import { deliveryFixture } from '../output/browser-delivery-fixture'
+import { experienceSnapshot } from './receiver-experience-fixture'
 import {
   FakeJoinedShare, FakeReceiveComposition, MANAGED_ENVIRONMENT, WORKSPACE_ENVIRONMENT,
   controllerFor, deferred, identityText, next, resetOrchestrationTestEnvironment,
@@ -19,6 +26,25 @@ function published(state: ReceiveLifecycleState): ReceiveLifecycleState {
 }
 
 describe('completed download ownership and presentation', () => {
+  it('keeps completed file and size metrics when detached portable history refreshes its actions', () => {
+    const lifecycle: ReceiveLifecycleState = { operationId: identityText(10), receiveIntentDigest: identityText(11, 32),
+      generation: 2n, kind: 'download-started', attemptKind: 'portable', attemptId: identityText(12) }
+    const operation: V2RetainedReceiveOperation = { operationId: lifecycle.operationId,
+      receiveIntentDigest: lifecycle.receiveIntentDigest, lifecycleGeneration: lifecycle.generation,
+      lifecycle, continuation: 'history-only', actions: ['forget'] }
+    const snapshot = experienceSnapshot({ activeReceiveOperationId: null,
+      output: { ...EMPTY_V2_OUTPUT_PRESENTATION, lifecycle },
+      progress: { ...EMPTY_V2_PROGRESS, transferJobId: identityText(13), discoveredFiles: 1,
+        discoveredBytes: 8n, completedFiles: 1, completedBytes: 8n, materializedBytes: 8n, writtenBytes: 8n, discovery: 'complete' },
+      retained: { ...EMPTY_V2_RETAINED_INVENTORY, operations: [operation] } })
+    const current = composeTasks(snapshot).current!
+    expect(current.stage).toBe('handed-to-browser')
+    expect(current.details).toContain('1 files · 8 B total')
+    expect(current.details).toContain('8 B in completed files.')
+    expect(current.secondaryActions[0]?.target).toMatchObject({ kind: 'retained', action: 'forget' })
+    expect(current.primaryAction).toBeNull()
+  })
+
   it.each(['published', 'download-started'] as const)('keeps the %s result and starts the next picker in the click stack', async kind => {
     const receive = new FakeReceiveComposition(MANAGED_ENVIRONMENT)
     const joined = new FakeJoinedShare(true)
@@ -196,5 +222,46 @@ describe('completed download ownership and presentation', () => {
     expect(controller.getSnapshot().startAdmission.allowed).toBe(false)
     expect(runtime.detachments).toEqual(['detached'])
     await controller.dispose()
+  })
+})
+
+describe('stopped child obligation refresh integration', () => {
+  it.each(['receiving', 'discarding', 'staged-complete'] as const)('refreshes displayed %s child facts when local recovery preserves parent generation', kind => {
+    const f = deliveryFixture()
+    const before = kind === 'staged-complete'
+      ? f.advance(f.initial, { kind, stage: f.stage! })
+      : f.advance(f.initial, { kind, checkpoint: f.checkpoint('staged', 3n) })
+    let after = before
+    if (kind === 'staged-complete') {
+      after = f.advance(after, { kind: 'copying', stage: f.stage!, attempt: { attemptId: 'copy' } })
+      after = f.advance(after, { kind: 'target-saved', target: f.target, stage: f.stage! })
+      after = f.advance(after, { kind: 'cleanup-pending', target: f.target, stage: f.stage! })
+      after = f.advance(after, { kind: 'cleaned', target: f.target })
+    } else {
+      if (kind === 'receiving') after = f.advance(after, { kind: 'discarding', checkpoint: f.checkpoint('staged', 3n) })
+      after = f.advance(after, { kind: 'discarded' })
+    }
+    const lifecycle = { operationId: f.policy.operationId, receiveIntentDigest: f.policy.receiveIntentDigest,
+      generation: 2n, kind: 'partial-directory' as const, reason: 'stopped' as const,
+      successCount: 1n, failureCount: 1n, receiptDigest: f.policy.digest }
+    const operation: V2RetainedReceiveOperation = { operationId: lifecycle.operationId,
+      receiveIntentDigest: lifecycle.receiveIntentDigest, lifecycleGeneration: lifecycle.generation,
+      lifecycle, continuation: 'restoration-available', actions: [],
+      browserDelivery: summarizeBrowserDeliveries(f.policy, [after]) }
+    const snapshot = experienceSnapshot({ activeReceiveOperationId: null,
+      output: { ...EMPTY_V2_OUTPUT_PRESENTATION, lifecycle,
+        browserFolderProgress: { kind: 'browser-folder', operationId: lifecycle.operationId,
+          generation: 1n, summary: summarizeBrowserDeliveries(f.policy, [before]) } },
+      progress: { ...EMPTY_V2_PROGRESS, transferJobId: identityText(13), discoveredFiles: 1,
+        discoveredBytes: 8n, completedFiles: 0, completedBytes: 0n, materializedBytes: 3n, writtenBytes: 3n, discovery: 'complete' },
+      retained: { ...EMPTY_V2_RETAINED_INVENTORY, operations: [operation] } })
+    const actual = composeTasks(snapshot).current!
+    const retained = presentTask(retainedTaskFacts(operation))
+    expect(actual.headline).toBe(retained.headline)
+    expect(actual.details).toContain('1 files · 8 B total')
+    expect(actual.details).toContain('0 B retained in browser staging.')
+    expect(actual.details).toContain(kind === 'staged-complete' ? '8 B saved to the chosen folder.' : '0 B saved to the chosen folder.')
+    expect(actual.details.join(' ')).not.toContain('await staging cleanup')
+    expect(actual.details.join(' ')).not.toContain('incomplete staged files cannot continue')
   })
 })

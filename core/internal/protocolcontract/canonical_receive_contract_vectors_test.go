@@ -253,7 +253,7 @@ func buildArtifactChoiceVectorCases(t *testing.T) []any {
 		policyAvailability := any("not-required")
 		if current.plan == receivecontract.PlanDirectResumableZIP {
 			policyAvailability = map[string]any{
-				"directZipEpochPolicyDigest":         directZipEpochPolicyDigestV1(),
+				"directZipEpochPolicyDigest":         directZipEpochPolicyDigestV2(),
 				"zipRouteRecommendationPolicyDigest": zipRouteRecommendationPolicyDigestV1(),
 				"reason":                             "exact-reviewed-runtime-required",
 			}

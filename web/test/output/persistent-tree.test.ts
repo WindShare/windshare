@@ -51,6 +51,7 @@ describe('persistent DirectoryTree materialization port', () => {
     ])
     expect(fixture.tree.visible(['report.bin'])).toEqual(new Uint8Array())
     expect(transaction.verifiedRanges).toEqual([])
+    expect(transaction.checkpointPolicy).toEqual({ kind: 'prefix-copy', pendingBytes: 64n * 1024n * 1024n })
   })
 
   it('keeps prefix writes visible while checkpoint truth advances only after flush', async () => {

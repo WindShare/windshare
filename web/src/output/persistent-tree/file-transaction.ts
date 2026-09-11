@@ -1,5 +1,9 @@
 import { ByteRangeSet, byteRange } from '../../content/geometry'
 import {
+  NATIVE_FILE_CHECKPOINT_PENDING_BYTES, NATIVE_FILE_CHECKPOINT_PENDING_MILLISECONDS,
+  PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES, type AutomaticCheckpointPolicy,
+} from '../../transfer/checkpoint-schedule'
+import {
   type AutomaticCheckpointTrigger,
   type OutputFileOwnership,
   type OutputSourceIdentity,
@@ -73,6 +77,7 @@ type PersistentTransactionState = 'active' | 'paused' | 'retired' | 'committed'
 export class PersistentFileTransaction implements PersistentFileTransactionPort {
   readonly revision: OpenedFileRevision
   readonly ownedObjectId: string
+  readonly checkpointPolicy: AutomaticCheckpointPolicy
   readonly #handle: PersistentTreeFile
   readonly #checkpoints: FileCheckpointJournal
   readonly #semantic: SemanticPersistentOutputJournal | undefined
@@ -116,6 +121,10 @@ export class PersistentFileTransaction implements PersistentFileTransactionPort 
   }>) {
     this.revision = Object.freeze({ ...input.revision })
     this.ownedObjectId = input.handle.ownedObjectId
+    this.checkpointPolicy = input.handle.durability === 'native-in-place'
+      ? Object.freeze({ kind: 'incremental', pendingBytes: NATIVE_FILE_CHECKPOINT_PENDING_BYTES,
+          pendingMilliseconds: NATIVE_FILE_CHECKPOINT_PENDING_MILLISECONDS })
+      : Object.freeze({ kind: 'prefix-copy', pendingBytes: PREFIX_COPY_CHECKPOINT_PENDING_FLOOR_BYTES })
     this.#handle = input.handle
     this.#checkpoint = input.checkpoint
     this.#checkpoints = input.checkpoints

@@ -209,6 +209,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
   continuation: { backend: 'origin_private', transition: 'paused' },
   reopen: { backend: 'origin_private', transition: 'authorized' },
   cleanup: { backend: 'portable', transition: 'completed' },
+  browser_delivery: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA', file_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    transition: 'copy-started', placement: 'staged', recoverable_bytes: '128',
+  },
   direct_zip_milestone: {
     operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
     session_id: 'AgAAAAAAAAAAAAAAAAAAAA',
@@ -222,6 +226,23 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     identity_decision: 'verified',
     space_decision: 'admitted',
     cleanup_decision: 'not_requested',
+  },
+  direct_zip_coordination: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+    scope: 'target',
+    transition: 'acquired',
+    lock_name: 'windshare/fsa-target/v1:AgAAAAAAAAAAAAAAAAAAAA',
+  },
+  direct_zip_member_rollback: {
+    operation_id: 'AQAAAAAAAAAAAAAAAAAAAA',
+    session_id: 'AgAAAAAAAAAAAAAAAAAAAA',
+    candidate_id: 'AwAAAAAAAAAAAAAAAAAAAA',
+    phase: 'completed',
+    old_committed_length: '512',
+    new_committed_length: '128',
+    retained_selected_payload_bytes: '32',
+    member_ordinal: '1',
+    source_change_reason: 'revision_changed',
   },
   retained_inventory: { transition: 'load_completed', operation_count: '0' },
   retained_action: {

@@ -1,3 +1,4 @@
+import { acquireFSARootMutationLease, memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import {
   createCompleteDirectoryResultRoot,
   createDirectTreePlan,
@@ -16,7 +17,6 @@ import { createDirectTreeCoordinateContract } from '../../src/transfer/job/coord
 import { fsaParentOffer } from '../../src/output/capability/acquisition'
 import type { AcquiredFSAParentAuthority } from '../../src/output/capability/contract'
 import {
-  acquireFSARootMutationLease,
   type BrowserLockManagerRuntime,
 } from '../../src/output/browser/namespace-mutation'
 import {
@@ -254,7 +254,7 @@ export function discardFreshFixture(
 ) {
   return discardReopenedFileSystemAccessOutput({
     operation,
-    lockManager: fixture.locks,
+    lockManager: fixture.locks, mutationIdentities: memoryFSAIdentities(fixture.locks),
     checkpointRepositoryFactory: fixture.checkpointFactory,
     openCompatibleNameLedger: async () => new AbsentCompatibleNameLedger(),
   })

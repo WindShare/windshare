@@ -1,7 +1,7 @@
 import { fsaOwnedFileGuarantees } from '../../../transfer/intent'
 import { DIRECT_ZIP_MAXIMUM_POSITIONED_FSA_OFFSET } from '../../../output/direct-zip/format'
 import {
-  lookupReviewedDirectZipSupportV1,
+  admitDirectZipRuntimeV1,
   type DirectZipRequiredFeatureFactsV1,
   type DirectZipSupportLookupV1,
 } from '../../../output/direct-zip/session'
@@ -26,18 +26,18 @@ export async function inspectBrowserDirectZipEnvironment(
     return Object.freeze({
       lookup: Object.freeze({
         kind: 'unavailable',
-        support: Object.freeze({ kind: 'unavailable', reason: 'support-evidence-missing' }),
+        support: Object.freeze({ kind: 'unavailable', reason: 'runtime-not-installed' }),
       }),
     })
   }
-  const evidence = await directZip.evidence.read(signal)
+  const capabilities = await directZip.capabilities.read(signal)
   signal.throwIfAborted()
-  const lookup = await lookupReviewedDirectZipSupportV1({
-    artifact: evidence.artifact,
-    runtime: Object.freeze({
-      ...evidence.runtime,
+  const lookup = await admitDirectZipRuntimeV1({
+    capabilities: Object.freeze({
+      authority: capabilities.authority,
       featureFacts: observeBrowserDirectZipFeatureFacts(windowPort),
     }),
+    ...(capabilities.policy === undefined ? {} : { policy: capabilities.policy }),
   })
   if (lookup.kind === 'unavailable') return Object.freeze({ lookup })
   const guarantees = fsaOwnedFileGuarantees()

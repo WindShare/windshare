@@ -3,10 +3,12 @@ package osfs
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/windshare/windshare/core/osfs/internal/checkpointcleaner"
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 )
 
 func TestCheckpointCleanupFacadeProjectsDetachedReport(t *testing.T) {
@@ -95,14 +97,45 @@ func TestCheckpointCleanupFacadeRejectsNonCanonicalRootsBeforeNativeAccess(t *te
 
 func TestCleanLegacyResumeStateExecutesOnValidRoot(t *testing.T) {
 	root := t.TempDir()
+	platform, err := openNativeOutputPlatform(root, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certified := platform.Certification() != ""
+	if err := platform.Close(); err != nil {
+		t.Fatal(err)
+	}
+	foreignPath := filepath.Join(root, "user-data")
+	if err := os.WriteFile(foreignPath, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	report, err := CleanLegacyResumeState(
 		context.Background(),
 		FilesystemResumeRoot{RootPath: root},
 	)
-	if err != nil {
-		t.Fatalf("clean legacy resume state on empty root: %v", err)
+	if certified {
+		if err != nil {
+			t.Fatalf("clean legacy resume state without legacy files: %v", err)
+		}
+		if !report.Complete || report.Status != CheckpointCleanupStatusComplete || report.NeedsAttention() {
+			t.Fatalf("report semantics on clean root = %+v", report)
+		}
+	} else {
+		// Safe current-process output supplies no authority to inspect or mutate
+		// persistent legacy state, even when its namespace appears absent.
+		if !errors.Is(err, ErrCheckpointCleanerOwnership) ||
+			!errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
+			t.Fatalf("uncertified legacy cleanup error = %v", err)
+		}
+		if report.Complete || report.Scanned != 0 || report.Removed != 0 || report.Quarantined != 0 {
+			t.Fatalf("uncertified cleanup claimed work: %+v", report)
+		}
 	}
-	if !report.Complete || report.Status != CheckpointCleanupStatusComplete || report.NeedsAttention() {
-		t.Fatalf("report semantics on clean root = %+v", report)
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 1 || entries[0].Name() != "user-data" {
+		t.Fatalf("cleanup changed an unowned namespace: entries=%v error=%v", entries, readErr)
+	}
+	if data, readErr := os.ReadFile(foreignPath); readErr != nil || string(data) != "keep" {
+		t.Fatalf("cleanup changed unowned data: %q, %v", data, readErr)
 	}
 }

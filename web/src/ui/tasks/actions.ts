@@ -14,6 +14,9 @@ export function activeTaskAction(action: LifecycleActionPresentation, planKind: 
 }
 
 function activeConsequence(action: LifecycleActionPresentation, planKind: string): string | null {
+  if (action.kind === 'save-staged-files') return 'Copies complete retained files to the chosen folder without receiving them again.'
+  if (action.kind === 'cleanup-staging') return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
+  if (action.kind === 'discard-incomplete-staging') return incompleteStagingConsequence()
   if (action.kind === 'pause') return 'Keeps the progress supported by this saving method; accepted writes finish before pausing.'
   if (action.kind === 'stop') return stopConsequence(planKind)
   if (action.kind === 'delete' || action.kind === 'discard') {
@@ -36,12 +39,12 @@ export function retainedTaskAction(
     disabledReason = operation.unavailableReason ?? null
   }
   const cleanupOnly = operation.continuation === 'retry-cleanup'
-  const destructive = action === 'discard' || action === 'delete' ||
+  const destructive = action === 'discard' || action === 'delete' || action === 'discard-incomplete-staging' ||
     (action === 'redownload' && operation.recoverySummary !== undefined)
   return Object.freeze({
     id: action,
     label: retainedLabel(operation, action, readiness),
-    destructive: destructive && !cleanupOnly,
+    destructive: action === 'discard-incomplete-staging' || (destructive && !cleanupOnly),
     disabledReason,
     consequence: retainedConsequence(operation, action),
     target: Object.freeze({ kind: 'retained', operation, action }),
@@ -50,7 +53,7 @@ export function retainedTaskAction(
 
 function stopConsequence(planKind: string): string {
   switch (planKind) {
-    case 'direct-tree': return 'Completed files stay in the chosen folder. Unfinished files follow their verified checkpoint disposition.'
+    case 'direct-tree': return 'Ends receiving and removes incomplete browser staging. Saved folder files remain; complete staged files can still be saved locally.'
     case 'direct-resumable-zip': return 'Keeps the unfinished ZIP and its verified resume position. It is not a usable archive until finishing succeeds.'
     case 'workspace-then-publish': return 'Stops receiving and settles retained browser data before releasing this task.'
     default: return 'Stops receiving. This saving method cannot resume an interrupted transfer.'
@@ -63,6 +66,9 @@ function retainedLabel(
   readiness: TaskRecoveryReadiness,
 ): string {
   switch (action) {
+    case 'save-staged-files': return 'Save received files to folder'
+    case 'cleanup-staging': return 'Retry staging cleanup'
+    case 'discard-incomplete-staging': return 'Discard incomplete browser data'
     case 'save-partial': return 'Save partial ZIP'
     case 'catch-up': return 'Finish filename restoration setup'
     case 'continue': return continuationLabel(operation, readiness)
@@ -81,12 +87,16 @@ function continuationLabel(operation: V2RetainedReceiveOperation, readiness: Tas
   if (readiness === 'destination-authorization-required') return 'Authorize destination and continue'
   if (operation.continuation === 'resume-local-finalization' || operation.continuation === 'resume-package') return 'Finish and save'
   if (operation.continuation === 'verify-direct-zip-target') return 'Verify destination and continue'
+  if (operation.continuation === 'verify-direct-zip-completion') return 'Verify saved ZIP'
   if (operation.continuation === 'retry-direct-zip-space') return 'Retry after freeing space'
   return operation.recoverySummary === undefined ? 'Continue' : 'Continue and preserve partial files'
 }
 
 function retainedConsequence(operation: V2RetainedReceiveOperation, action: V2RetainedReceiveAction): string | null {
   switch (action) {
+    case 'save-staged-files': return 'Copies complete retained files to the chosen folder without receiving them again.'
+    case 'cleanup-staging': return 'Finishes previously authorized cleanup of browser staging; saved destination files remain untouched.'
+    case 'discard-incomplete-staging': return incompleteStagingConsequence()
     case 'save-partial':
       return 'Exports only complete files as a separate partial ZIP. Missing and unfinished items are excluded; the retained task remains available for continuation.'
     case 'forget': return 'Removes this history record from Downloads. Files already saved or handed to the browser remain untouched.'
@@ -103,4 +113,8 @@ function retainedConsequence(operation: V2RetainedReceiveOperation, action: V2Re
         : 'Restarts incomplete files instead of reusing their retained partial progress.'
     default: return null
   }
+}
+
+function incompleteStagingConsequence(): string {
+  return 'Deletes incomplete browser data that this ended task cannot continue. Complete staged files remain saveable; saved folder files stay untouched.'
 }

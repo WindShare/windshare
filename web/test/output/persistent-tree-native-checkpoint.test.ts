@@ -3,11 +3,16 @@ import { materializationFixture, revision } from './persistent-tree-session-fixt
 
 async function nativeFixture() {
   const fixture = await materializationFixture()
+  const createFile = fixture.tree.createFileAfterRevisionOpen.bind(fixture.tree)
+  vi.spyOn(fixture.tree, 'createFileAfterRevisionOpen').mockImplementation(async (...args) => {
+    const file = await createFile(...args)
+    Object.defineProperty(file, 'durability', { value: 'native-in-place' })
+    return file
+  })
   const transaction = await fixture.session.beginFile({
     materializationRelativePath: ['native.bin'], openRevision: async () => revision(6n),
   })
   const file = fixture.tree.file(['native.bin'])
-  Object.defineProperty(file, 'durability', { value: 'native-in-place' })
   const close = vi.spyOn(file, 'close')
   return { ...fixture, file, transaction, close }
 }
@@ -15,6 +20,8 @@ async function nativeFixture() {
 describe('native persistent tree durability', () => {
   it('automatically checkpoints without copy admission or reopening and closes on final commit', async () => {
     const fixture = await nativeFixture()
+    expect(fixture.transaction.checkpointPolicy).toEqual({ kind: 'incremental',
+      pendingBytes: 16n * 1024n * 1024n, pendingMilliseconds: 5_000 })
     await fixture.transaction.writeRange(0n, Uint8Array.of(1, 2, 3))
     await expect(fixture.transaction.automaticCheckpoint('pending-bytes')).resolves.toMatchObject({
       kind: 'advanced', durableRanges: [{ start: 0n, end: 3n }],

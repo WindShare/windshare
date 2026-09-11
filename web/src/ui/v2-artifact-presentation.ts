@@ -321,14 +321,17 @@ function presentZipMode(
 
 function zipRecommendationCopy(group: ZipRouteGroup): string {
   if (group.recommendation.kind === 'recommended') {
-    return group.recommendation.reason === 'workspace-within-reviewed-budget'
-      ? 'Recommended: receive completely first because the checked local cost is within the reviewed budget.'
-      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the reviewed budget.'
+    if (group.recommendation.reason === 'workspace-within-discovered-budget') {
+      return 'Known ZIP content currently fits the staging budget. You can start now; discovering more content may change the recommendation.'
+    }
+    return group.recommendation.reason === 'workspace-within-policy-budget'
+      ? 'Recommended: receive completely first because the checked local cost is within the workspace budget.'
+      : 'Recommended: save to a folder because complete-first cost is unknown or exceeds the workspace budget.'
   }
   switch (group.recommendation.reason) {
     case 'only-one-route-available': return 'This is the only safe browser ZIP route currently available.'
     case 'no-browser-zip-route': return NATIVE_ZIP_FALLBACK
-    case 'discovery-incomplete': return 'No route is recommended until selected-content discovery is complete.'
+    case 'discovery-incomplete': return 'You can start now. More content is still being discovered; saving alternatives remain available.'
     case 'workspace-cost-unavailable': return 'No route is recommended because complete-first cost is unavailable.'
     case 'recommendation-policy-unavailable': return 'No route is recommended because measured comparison data is unavailable.'
   }

@@ -17,6 +17,8 @@ import type {
   DirectZipPageBatchV1,
   DirectZipPageScanV1,
   DirectZipRecoveryLifecycleCommitV1,
+  DirectZipRollbackCandidateV1,
+  DirectZipRollbackPromotionV1,
   DirectZipStateRowV1,
 } from './model'
 
@@ -54,6 +56,8 @@ export interface DirectZipJournalRepository {
     fence: DirectZipJournalFenceV1,
     candidate: DirectZipCommitCandidateV1,
   ): Promise<void>
+  bindRollbackCandidate(fence: DirectZipJournalFenceV1, candidate: DirectZipRollbackCandidateV1): Promise<void>
+  promoteRollbackCandidate(cut: DirectZipRollbackPromotionV1): Promise<void>
   commitBootstrap(cut: DirectZipBootstrapCommitV1): Promise<void>
   promoteCandidate(cut: DirectZipCandidatePromotionV1): Promise<void>
   commitRecoveryLifecycle(cut: DirectZipRecoveryLifecycleCommitV1): Promise<void>

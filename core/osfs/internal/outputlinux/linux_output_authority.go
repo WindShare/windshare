@@ -54,7 +54,7 @@ func (directory *linuxOutputDirectory) validatePrivateAuthority(operation string
 	if err := directory.verifyHandle(); err != nil {
 		return err
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.binding)
 	if err != nil {
 		return err
 	}
@@ -111,7 +111,7 @@ func (directory *linuxOutputDirectory) ownerUID() (uint32, error) {
 	if stat.Mask&uint32(requested) != uint32(requested) {
 		return 0, linuxUnsupported(operation, "filesystem omitted required owner or identity fields", nil)
 	}
-	if stat.Mnt_id != directory.certificate.mount.uniqueMountID ||
+	if stat.Mnt_id != directory.binding.mount.uniqueMountID ||
 		stat.Dev_major != directory.object.deviceMajor || stat.Dev_minor != directory.object.deviceMinor ||
 		stat.Ino != directory.object.inode || linuxFileType(stat.Mode) != unix.S_IFDIR {
 		return 0, linuxUnsafe(operation, "owner metadata is outside the fixed directory authority", nil)
