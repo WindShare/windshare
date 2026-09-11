@@ -2,6 +2,8 @@ import type { BrowserReceiveOperationLease } from '../../browser/session-lease'
 import { verifyBrowserReceiveOperationLease } from '../../browser/session-lease'
 import { openFSAFileCheckpointRepository, scanAllFSAFileCheckpoints } from '../../file-system-access/checkpoint-repository'
 import { requireDirectTreeIntent } from '../../file-system-access/settlement-proof'
+import { retireFSAMaterializationRecoveryMetadata } from '../../file-system-access/recovery-metadata-retirement'
+import { createMaterializationLedgerBinding } from '../../materialization-ledger/codec'
 import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATION } from '../../workspace/records'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
@@ -43,6 +45,10 @@ export async function beginBrowserDeliveryLocalMutation(input: BrowserDeliveryLi
 export async function reconcileBrowserDeliveryLifecycle(input: BrowserDeliveryLifecycleAuthority): Promise<ReceiveLifecycleState> {
   return withLocalAuthority(input, async authority => {
     const { lifecycle, intent, policy, records, checkpoints } = authority
+    if (lifecycle.kind === 'partial-directory' || lifecycle.kind === 'published') {
+      await retireTerminalDeliveryMetadata(input, intent)
+      return lifecycle
+    }
     if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set' || policy === undefined) return lifecycle
     const next = await deriveBrowserDeliveryLifecycle({ intent, lifecycle, policy, records, checkpoints })
     if (next !== lifecycle) await input.repository.commitTransition({
@@ -51,6 +57,26 @@ export async function reconcileBrowserDeliveryLifecycle(input: BrowserDeliveryLi
     })
     return next
   })
+}
+
+async function retireTerminalDeliveryMetadata(
+  input: BrowserDeliveryLifecycleAuthority,
+  intent: Awaited<ReturnType<typeof requireDirectTreeIntent>>,
+): Promise<void> {
+  const reservation = intent.plan.reservation
+  if (reservation.kind !== 'named-container-entry' || reservation.authorityKind !== 'fsa-container') {
+    throw new TypeError('Terminal folder cleanup requires the original reserved target')
+  }
+  const checkpoints = await openFSAFileCheckpointRepository(
+    input.databaseName === undefined ? {} : { databaseName: input.databaseName }, intent, reservation)
+  try {
+    const binding = await createMaterializationLedgerBinding({
+      operationId: intent.operationId, receiveIntentDigest: intent.digest,
+      materializationBindingDigest: reservation.digest, authorityRef: reservation.authorityRef,
+    })
+    // The repository retains target ownership for unsettled child deliveries atomically.
+    await retireFSAMaterializationRecoveryMetadata(checkpoints, binding)
+  } finally { checkpoints.close() }
 }
 
 async function withLocalAuthority<T>(
@@ -72,6 +98,9 @@ async function readLocalAuthority(input: BrowserDeliveryLifecycleAuthority) {
   const operation = await decodeStoredReceiveOperation(operationRecord)
   const intent = await requireDirectTreeIntent(operation.receiveIntent)
   if (lifecycle.receiveIntentDigest !== intent.digest) throw new TypeError('Local delivery lifecycle intent changed')
+  if (lifecycle.kind !== 'resumable-receive' || lifecycle.payloadKind !== 'file-set') {
+    return { lifecycleRecord, lifecycle, intent, policy: undefined, records: [], checkpoints: [] }
+  }
   const journal = await IndexedDbBrowserDeliveryRepository.open(
     input.databaseName === undefined ? {} : { databaseName: input.databaseName })
   try {

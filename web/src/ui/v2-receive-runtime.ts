@@ -157,6 +157,7 @@ export interface V2ArtifactPresentationAuthority {
 export type V2RetainedReceiveAction =
   | 'save-staged-files'
   | 'cleanup-staging'
+  | 'discard-incomplete-staging'
   | 'save-partial'
   | 'continue'
   | 'catch-up'

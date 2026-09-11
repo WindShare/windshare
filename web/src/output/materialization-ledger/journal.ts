@@ -161,7 +161,7 @@ export interface MaterializationFinalProofReader {
 
 export interface MaterializationLedgerRetirementResult {
   readonly deletedRows: number
-  readonly state: 'more' | 'complete'
+  readonly state: 'more' | 'complete' | 'retained-for-local-delivery'
 }
 
 export interface MaterializationLedgerRetirementJournal {

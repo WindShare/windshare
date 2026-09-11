@@ -260,6 +260,8 @@ export interface PersistentMaterializationPort {
     outcome: MaterializationDirectoryFinalization,
   ): Promise<MaterializationDirectoryFinalizedEntryV1>
   closeForTerminalSettlement?(): Promise<void>
+  /** Stop may abandon receiving storage after draining; Pause must preserve its checkpoints. */
+  closeForStopSettlement?(): Promise<void>
   close(): Promise<void>
 }
 

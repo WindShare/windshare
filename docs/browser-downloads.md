@@ -21,6 +21,8 @@ Wait for **Pause** to finish before leaving. A successful pause commits received
 
 Staging needs space for the browser copy and one destination copy while saving. Files awaiting copying count against a shared storage budget; quota estimates are browser storage observations, not destination free-space guarantees. Persistence permission reduces eviction risk but is not required to retain checkpoints. The task's output, destination, and recovery preference stay fixed; new observations affect only files that have not started.
 
+For folder downloads, **Stop** ends receiving and removes incomplete browser staging after accepted writes finish. Saved folder files remain, and complete staged files can still be saved locally. If cleanup fails, **Retry staging cleanup** remains available in Downloads after reopening. Previously stopped tasks with incomplete browser data offer **Discard incomplete browser data**. These storage actions do not need the sender or destination permission; **Pause** keeps incomplete progress for continuation.
+
 Checkpoint intervals are scheduling targets, not a hard maximum for crash loss; writes, storage failures, and checkpoint completion affect what can resume. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
 
 After a browser download handoff, keep the retained result until you confirm it was saved or choose to discard it. WindShare cannot infer completion from the handoff or a timeout, and repeating Save may create another download copy. Cleanup waits for active reads and leaves retryable data after a failed export.

@@ -165,7 +165,10 @@ export async function createPersistentDirectTreeExecution(input: {
       stop: async (request, signal) => {
         const cut = new PersistentSettlementCut(
           adapter.directTreeEvidence(),
-          () => adapter.closeForTerminalSettlement(),
+          committedState => committedState?.kind === 'partial-directory' && committedState.reason === 'stopped' &&
+            committedState.operationId === input.intent.operationId && committedState.receiveIntentDigest === input.intent.digest
+            ? adapter.closeForStopSettlement()
+            : adapter.closeForTerminalSettlement(),
         )
         const state = await stop(request, cut, signal)
         await cut.validateReturnedState(state)
@@ -552,6 +555,13 @@ class PersistentMaterializationOutput implements OutputSession {
     this.closeCheckpointAuthorities()
     this.#closePromise ??= this.#materialization.closeForTerminalSettlement?.() ??
       this.#materialization.close()
+    return this.#closePromise
+  }
+
+  closeForStopSettlement(): Promise<void> {
+    this.closeCheckpointAuthorities()
+    this.#closePromise ??= this.#materialization.closeForStopSettlement?.() ??
+      this.#materialization.closeForTerminalSettlement?.() ?? this.#materialization.close()
     return this.#closePromise
   }
 

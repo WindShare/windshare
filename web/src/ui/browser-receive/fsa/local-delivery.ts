@@ -2,6 +2,8 @@ import { IndexedDbReceiveOperationRepository } from '../../../output/browser/ind
 import { acquireBrowserReceiveOperationLease, type BrowserReceiveOperationLease } from '../../../output/browser/session-lease'
 import { openBrowserFolderDelivery, openBrowserFolderDeliveryCleanup } from '../../../output/browser-delivery/assembly'
 import { beginBrowserDeliveryLocalMutation, reconcileBrowserDeliveryLifecycle } from '../../../output/browser-delivery/recovery/local-lifecycle'
+import { isBrowserDeliveryLocalLifecycle, type BrowserDeliveryLocalAction } from '../../../output/browser-delivery/recovery/local-actions'
+import { isTerminalLifecycleState, type ReceiveLifecycleState } from '../../../output/workspace/state'
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import { reopenFileSystemAccessOutput, type FileSystemAccessOutputSession } from '../../../output/file-system-access/session'
 import { decodeStoredReceiveOperation, operationRecordId, RECEIVE_RECORD_OPERATION } from '../../../output/workspace/records'
@@ -19,7 +21,7 @@ type LocalFolderReference = Pick<V2RetainedReceiveOperation, 'operationId' | 're
 export async function runRetainedBrowserFolderAction(
   windowPort: BrowserReceiveWindow,
   reference: LocalFolderReference,
-  action: 'save-staged-files' | 'cleanup-staging' | 'discard-staging',
+  action: BrowserDeliveryLocalAction | 'discard-staging',
   signal: AbortSignal,
   diagnostics?: OutputDiagnosticsPorts,
 ): Promise<void> {
@@ -28,13 +30,15 @@ export async function runRetainedBrowserFolderAction(
   let lease: BrowserReceiveOperationLease | undefined
   let target: FileSystemAccessOutputSession | undefined
   let delivery: Awaited<ReturnType<typeof openBrowserFolderDelivery | typeof openBrowserFolderDeliveryCleanup>> | undefined
-  let localMutationStarted = false
+  let localWorkAuthorized = false
   const failures: unknown[] = []
   try {
     lease = await acquireBrowserReceiveOperationLease(repository, reference.operationId, {
       manager: windowPort.navigator.locks,
     })
-    const { intent, policy } = await readLocalFolderAuthority(repository, reference)
+    const { intent, policy, lifecycle } = await readLocalFolderAuthority(repository, reference)
+    requireLocalFolderActionLifecycle(action, lifecycle)
+    localWorkAuthorized = true
     signal.throwIfAborted()
     const deliveryInput = {
       intent, operationLease: lease,
@@ -45,7 +49,6 @@ export async function runRetainedBrowserFolderAction(
     }
     if (action === 'save-staged-files') {
       await beginBrowserDeliveryLocalMutation({ repository, lease })
-      localMutationStarted = true
       target = await reopenFileSystemAccessOutput({ intent, operationRepository: repository,
         ...(diagnostics === undefined ? {} : { diagnostics }) })
       await target.activate()
@@ -55,6 +58,7 @@ export async function runRetainedBrowserFolderAction(
     } else {
       delivery = await openBrowserFolderDeliveryCleanup(deliveryInput)
       if (action === 'cleanup-staging') await delivery.cleanupStaging(signal)
+      else if (action === 'discard-incomplete-staging') await delivery.discardIncompleteStaging(signal)
       else await delivery.discardStaging(signal)
     }
   } catch (error) {
@@ -64,7 +68,8 @@ export async function runRetainedBrowserFolderAction(
   for (const close of [
     () => delivery?.close(),
     () => target?.closeForTerminalSettlement(),
-    () => localMutationStarted && lease !== undefined ? reconcileBrowserDeliveryLifecycle({ repository, lease }) : undefined,
+    () => lease !== undefined && localWorkAuthorized
+      ? reconcileBrowserDeliveryLifecycle({ repository, lease }) : undefined,
     () => lease?.release(),
     () => repository.close(),
     () => target?.releaseRootLease(),
@@ -76,6 +81,14 @@ export async function runRetainedBrowserFolderAction(
     'Local folder saving failed while releasing storage authority', { cause: failures[0] })
 }
 
+function requireLocalFolderActionLifecycle(action: BrowserDeliveryLocalAction | 'discard-staging', lifecycle: ReceiveLifecycleState): void {
+  if (action === 'discard-staging') return
+  if (!isBrowserDeliveryLocalLifecycle(lifecycle) ||
+      (action === 'discard-incomplete-staging' && !isTerminalLifecycleState(lifecycle))) {
+    throw new DOMException('Local folder action does not own this receive disposition', 'InvalidStateError')
+  }
+}
+
 async function readLocalFolderAuthority(repository: ReceiveOperationRepository, reference: LocalFolderReference) {
   const [record, lifecycleRecord] = await Promise.all([
     repository.readRecord(operationRecordId(reference.operationId, RECEIVE_RECORD_OPERATION)),
@@ -85,6 +98,7 @@ async function readLocalFolderAuthority(repository: ReceiveOperationRepository, 
   const operation = await decodeStoredReceiveOperation(record)
   const lifecycle = decodeStoredReceiveLifecycleState(lifecycleRecord)
   if (operation.receiveIntentDigest !== reference.receiveIntentDigest ||
+      lifecycle.operationId !== reference.operationId || lifecycle.receiveIntentDigest !== reference.receiveIntentDigest ||
       lifecycle.generation !== reference.lifecycleGeneration || operation.receiveIntent.plan.kind !== 'direct-tree') {
     throw new DOMException('Retained folder operation changed before local saving', 'InvalidStateError')
   }
@@ -93,5 +107,5 @@ async function readLocalFolderAuthority(repository: ReceiveOperationRepository, 
   if (policy === undefined || policy.receiveIntentDigest !== reference.receiveIntentDigest) {
     throw new TypeError('Retained folder operation has no matching delivery policy')
   }
-  return { intent: operation.receiveIntent, policy }
+  return { intent: operation.receiveIntent, policy, lifecycle }
 }

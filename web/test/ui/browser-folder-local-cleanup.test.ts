@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { deliveryPolicy } from '../output/browser-delivery-fixture'
 import { capableWindow, directoryHandle } from './v2-browser-receive-composition-fixture'
+import { deferred } from './fsa-route-activation-fixture'
 
 const mocks = vi.hoisted(() => ({
   operation: {} as Record<string, unknown>, lifecycle: {} as Record<string, unknown>, policy: {} as Record<string, unknown>,
-  openTarget: vi.fn(), openDelivery: vi.fn(), openCleanup: vi.fn(), cleanup: vi.fn(), discard: vi.fn(),
+  openTarget: vi.fn(), openDelivery: vi.fn(), openCleanup: vi.fn(), cleanup: vi.fn(), discard: vi.fn(), discardIncomplete: vi.fn(),
   close: vi.fn(), release: vi.fn(), closeRepository: vi.fn(),
   begin: vi.fn(), reconcile: vi.fn(), save: vi.fn(), drain: vi.fn(), rootRelease: vi.fn(),
 }))
@@ -40,17 +41,20 @@ beforeEach(() => {
   mocks.policy = { ...deliveryPolicy() }
   mocks.operation = { receiveIntentDigest: mocks.policy.receiveIntentDigest,
     receiveIntent: { operationId: mocks.policy.operationId, digest: mocks.policy.receiveIntentDigest, plan: { kind: 'direct-tree' } } }
-  mocks.lifecycle = { generation: 2n }
+  mocks.lifecycle = { generation: 2n, operationId: mocks.policy.operationId, receiveIntentDigest: mocks.policy.receiveIntentDigest,
+    kind: 'partial-directory', reason: 'stopped' }
   mocks.openTarget.mockRejectedValue(new DOMException('Destination is unavailable', 'NotAllowedError'))
-  mocks.openCleanup.mockResolvedValue({ cleanupStaging: mocks.cleanup, discardStaging: mocks.discard, close: mocks.close })
+  mocks.openCleanup.mockResolvedValue({ cleanupStaging: mocks.cleanup, discardStaging: mocks.discard,
+    discardIncompleteStaging: mocks.discardIncomplete, close: mocks.close })
   mocks.cleanup.mockResolvedValue(undefined)
   mocks.discard.mockResolvedValue(undefined)
+  mocks.discardIncomplete.mockResolvedValue(undefined)
   mocks.begin.mockResolvedValue(mocks.lifecycle)
   mocks.reconcile.mockResolvedValue(mocks.lifecycle)
 })
 
 describe('local staging cleanup without destination access', () => {
-  it.each(['cleanup-staging', 'discard-staging'] as const)('runs %s with only retained storage authority', async action => {
+  it.each(['cleanup-staging', 'discard-staging', 'discard-incomplete-staging'] as const)('runs %s with only retained storage authority', async action => {
     const reference = { operationId: String(mocks.policy.operationId), receiveIntentDigest: String(mocks.policy.receiveIntentDigest), lifecycleGeneration: 2n }
     const picker = vi.fn(async () => directoryHandle())
     await runRetainedBrowserFolderAction(capableWindow(picker), reference, action, new AbortController().signal)
@@ -58,12 +62,45 @@ describe('local staging cleanup without destination access', () => {
     expect(mocks.openTarget).not.toHaveBeenCalled()
     expect(mocks.openDelivery).not.toHaveBeenCalled()
     expect(picker).not.toHaveBeenCalled()
-    expect(action === 'cleanup-staging' ? mocks.cleanup : mocks.discard).toHaveBeenCalledOnce()
+    const mutations = { 'cleanup-staging': mocks.cleanup, 'discard-incomplete-staging': mocks.discardIncomplete, 'discard-staging': mocks.discard }
+    expect(mutations[action]).toHaveBeenCalledOnce()
     expect(mocks.close).toHaveBeenCalledOnce()
     expect(mocks.release).toHaveBeenCalledOnce()
     expect(mocks.closeRepository).toHaveBeenCalledOnce()
     expect(mocks.begin).not.toHaveBeenCalled()
+    expect(mocks.reconcile).toHaveBeenCalledOnce()
+    expect(mocks.close.mock.invocationCallOrder[0]).toBeLessThan(mocks.reconcile.mock.invocationCallOrder[0]!)
+    expect(mocks.reconcile.mock.invocationCallOrder[0]).toBeLessThan(mocks.release.mock.invocationCallOrder[0]!)
+  })
+
+  it('rejects abandonment after the authoritative lifecycle is paused or has advanced', async () => {
+    const reference = { operationId: String(mocks.policy.operationId), receiveIntentDigest: String(mocks.policy.receiveIntentDigest), lifecycleGeneration: 2n }
+    const windowPort = capableWindow(vi.fn(async () => directoryHandle()))
+    mocks.lifecycle = { ...mocks.lifecycle, kind: 'resumable-receive', payloadKind: 'file-set' }
+    await expect(runRetainedBrowserFolderAction(windowPort, reference, 'discard-incomplete-staging', new AbortController().signal))
+      .rejects.toMatchObject({ name: 'InvalidStateError' })
+    mocks.lifecycle = { ...mocks.lifecycle, kind: 'partial-directory', reason: 'stopped', generation: 3n }
+    await expect(runRetainedBrowserFolderAction(windowPort, reference, 'discard-incomplete-staging', new AbortController().signal))
+      .rejects.toMatchObject({ name: 'InvalidStateError' })
+    expect(mocks.openCleanup).not.toHaveBeenCalled()
+    expect(mocks.discardIncomplete).not.toHaveBeenCalled()
     expect(mocks.reconcile).not.toHaveBeenCalled()
+    expect(mocks.release).toHaveBeenCalledTimes(2)
+  })
+
+  it('holds operation authority until an incomplete-stage deletion finishes', async () => {
+    const started = deferred<void>()
+    const removed = deferred<void>()
+    mocks.discardIncomplete.mockImplementation(async () => { started.resolve(undefined); await removed.promise })
+    const pending = runRetainedBrowserFolderAction(capableWindow(vi.fn(async () => directoryHandle())), {
+      operationId: String(mocks.policy.operationId), receiveIntentDigest: String(mocks.policy.receiveIntentDigest), lifecycleGeneration: 2n,
+    }, 'discard-incomplete-staging', new AbortController().signal)
+    await started.promise
+    expect(mocks.release).not.toHaveBeenCalled()
+    expect(mocks.closeRepository).not.toHaveBeenCalled()
+    removed.resolve(undefined)
+    await pending
+    expect(mocks.release).toHaveBeenCalledOnce()
   })
 
   it('releases operation authority while preserving a failed stage deletion for retry', async () => {

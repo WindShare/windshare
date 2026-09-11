@@ -101,7 +101,8 @@ export class BrowserDeliveryEngine {
       try {
         record = await this.#advance(record, { kind: 'copying', stage,
           attempt: { attemptId: crypto.randomUUID(), ...(target === undefined ? {} : { targetOwnedObjectId: target.ownedObjectId }) } })
-        target ??= await this.#openTarget(record, request)
+        reader = await this.#stage().readComplete(stage)
+        target = await this.#prepareTarget(record, reader.blob, request, target)
         if (record.state.kind !== 'copying') throw new TypeError('Copy attempt lost its journal state')
         if (record.state.attempt.targetOwnedObjectId === undefined) {
           record = await this.#advance(record, { ...record.state, attempt: { ...record.state.attempt, targetOwnedObjectId: target.ownedObjectId } })
@@ -109,7 +110,6 @@ export class BrowserDeliveryEngine {
         this.#emit(record, 'copy-started')
         const existing = await this.#options.target.readCheckpoint(fileId)
         if (existing === undefined || !fileCheckpointIsComplete(existing)) {
-          reader = await this.#stage().readComplete(stage)
           await this.#copyBytes(reader.blob, target, signal)
         }
         const commit = await target.commit(signal)
@@ -145,6 +145,16 @@ export class BrowserDeliveryEngine {
       await this.#cleanup(record).catch(error => this.#emit(record, 'cleanup-failed', error))
       return savedCommit!
     }, signal)
+  }
+
+  async #prepareTarget(record: BrowserDeliveryRecordV1, content: Blob, request: PersistentFileRequest | undefined,
+    target: PersistentFileTransactionPort | undefined): Promise<PersistentFileTransactionPort> {
+    const existing = await this.#options.target.verifyStagedTarget(record, content)
+    if (existing === 'matching-staged-content' && target !== undefined) {
+      await target.retire()
+      target = undefined
+    }
+    return target ?? this.#openTarget(record, request)
   }
 
   async #copyBytes(blob: Blob, target: PersistentFileTransactionPort, signal?: AbortSignal): Promise<void> {
@@ -207,22 +217,45 @@ export class BrowserDeliveryEngine {
     return record
   }
 
-  discard(fileId: string): Promise<void> {
+  /** The caller has fenced admission and drained every writer before classifying current storage. */
+  discardIncomplete(fileId: string): Promise<void> {
     return this.#serialize(fileId, async () => {
       let record = await this.#read(fileId)
-      if (record.state.kind === 'discarded' || record.state.kind === 'cleaned') return
-      if (targetCheckpoint(record.state) !== undefined) { await this.#cleanup(record); return }
       if (record.placement !== 'staged') return
-      const checkpoint = record.state.kind === 'discarding' ? record.state.checkpoint
-        : await this.#stage().readCheckpoint(fileId) ?? stageCheckpoint(record.state)
-      if (record.state.kind !== 'discarding') {
-        record = await this.#advance(record, { kind: 'discarding', ...(checkpoint === undefined ? {} : { checkpoint }) })
+      try {
+        // A crash can leave the delivery journal receiving after the stage committed
+        // all bytes. Only current checkpoint authority can decide to abandon it.
+        record = await this.reconcile(fileId)
+        if (record.state.kind === 'receiving' || record.state.kind === 'discarding') await this.#discard(record)
+        else if (stageCheckpoint(record.state) !== undefined && targetCheckpoint(record.state) === undefined) {
+          this.#emit(record, 'stop-staging-preserved')
+        } else await this.#cleanup(record)
+      } catch (error) {
+        this.#emit(record, 'discard-failed', error)
+        throw error
       }
-      await this.#stage().discard(record.source, checkpoint)
-      await (await this.#options.reservation(record)).releaseDiscarded()
-      this.#options.released?.(record.fileId)
-      await this.#advance(record, { kind: 'discarded' })
     })
+  }
+
+  discard(fileId: string): Promise<void> {
+    return this.#serialize(fileId, async () => { await this.#discard(await this.#read(fileId)) })
+  }
+
+  async #discard(record: BrowserDeliveryRecordV1): Promise<void> {
+    if (record.state.kind === 'discarded' || record.state.kind === 'cleaned') return
+    if (targetCheckpoint(record.state) !== undefined) { await this.#cleanup(record); return }
+    if (record.placement !== 'staged') return
+    const checkpoint = record.state.kind === 'discarding' ? record.state.checkpoint
+      : await this.#stage().readCheckpoint(record.fileId) ?? stageCheckpoint(record.state)
+    if (record.state.kind !== 'discarding') {
+      record = await this.#advance(record, { kind: 'discarding', ...(checkpoint === undefined ? {} : { checkpoint }) })
+    }
+    this.#emit(record, 'discard-started')
+    await this.#stage().discard(record.source, checkpoint)
+    await (await this.#options.reservation(record)).releaseDiscarded()
+    this.#options.released?.(record.fileId)
+    const discarded = await this.#advance(record, { kind: 'discarded' })
+    this.#emit(discarded, 'discarded')
   }
 
   cleanup(fileId: string): Promise<void> {

@@ -19,6 +19,7 @@ import {
   type CompatibleNameRepairPresentation,
 } from './compatible-name-repair-presentation'
 import { formatBytes } from './v2-progress-presentation'
+import { browserDeliveryLocalActions } from '../output/browser-delivery/recovery/local-actions'
 import type { V2DirectZipProgressSnapshot } from './v2-receive-runtime'
 
 export interface WorkspaceUsage {
@@ -39,6 +40,7 @@ export type LifecycleUserAction =
   | 'save'
   | 'save-staged-files'
   | 'cleanup-staging'
+  | 'discard-incomplete-staging'
   | 'redownload'
   | 'change-location'
   | 'discard'
@@ -243,7 +245,8 @@ function presentedLifecycleActions(
   if (input.activeControls !== undefined && input.activeControls.length > 0) {
     return activeControlActions(input.state, input.activeControls, input.plan.kind)
   }
-  const localActions = browserFolderLocalActions(input.state, input.browserDelivery)
+  const localActions = input.plan.kind === 'direct-tree'
+    ? browserFolderLocalActions(input.state, input.browserDelivery) : []
   if (input.state.kind === 'resumable-receive' &&
       input.state.payloadKind === 'file-set' &&
       input.plan.kind === 'direct-tree' &&
@@ -257,15 +260,13 @@ function browserFolderLocalActions(
   state: ReceiveLifecycleState,
   summary: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null | undefined,
 ): readonly LifecycleActionPresentation[] {
-  if (state.kind !== 'resumable-receive' || state.payloadKind !== 'file-set' || summary === undefined ||
-      summary === null || summary.policy.operationId !== state.operationId ||
-      summary.policy.receiveIntentDigest !== state.receiveIntentDigest) return Object.freeze([])
-  if (summary.localContinuation === 'save-staged-files') return Object.freeze([
-    { kind: 'save-staged-files', label: 'Save received files to folder', destructive: false },
-  ])
-  return summary.localContinuation === 'retry-staging-cleanup' ? Object.freeze([
-    { kind: 'cleanup-staging', label: 'Retry staging cleanup', destructive: false },
-  ]) : Object.freeze([])
+  return Object.freeze(browserDeliveryLocalActions(state, summary).map(kind => {
+    switch (kind) {
+      case 'save-staged-files': return { kind, label: 'Save received files to folder', destructive: false }
+      case 'cleanup-staging': return { kind, label: 'Retry staging cleanup', destructive: false }
+      case 'discard-incomplete-staging': return { kind, label: 'Discard incomplete browser data', destructive: true }
+    }
+  }))
 }
 
 function lifecycleCopy(

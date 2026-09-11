@@ -15,6 +15,7 @@ export interface BrowserDirectFileDelivery {
 export interface BrowserDeliveryTargetPort extends PersistentMaterializationPort {
   beginDirectFile(request: PersistentFileRequest, delivery: BrowserDirectFileDelivery): Promise<PersistentFileTransactionPort>
   readCheckpoint(fileId: string): Promise<FileCheckpointV2 | undefined>
+  verifyStagedTarget(record: BrowserDeliveryRecordV1, content: Blob): Promise<'empty' | 'matching-staged-content'>
 }
 
 export interface BrowserDeliveryStageReader {
@@ -52,6 +53,7 @@ export interface BrowserDeliveryRuntimeTrace {
   readonly operation_id: string
   readonly file_id: string
   readonly transition: 'placement' | 'receiving' | 'copy-started' | 'copy-failed' | 'target-saved' | 'cleanup-failed' | 'cleaned'
+    | 'stop-staging-preserved' | 'stop-cleanup-pending' | 'discard-started' | 'discarded' | 'discard-failed'
   readonly placement?: BrowserFilePlacement
   readonly placement_reason?: string
   readonly received_bytes?: bigint

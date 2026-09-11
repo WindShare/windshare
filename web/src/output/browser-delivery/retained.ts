@@ -7,6 +7,7 @@ import { validateBrowserDeliveryRecord } from './records'
 export interface BrowserDeliveryResumeSummary {
   readonly policy: BrowserSavePolicyV1
   readonly receivingFiles: number
+  readonly incompleteStagedFiles: number
   readonly stagedCompleteFiles: number
   readonly copyingFiles: number
   readonly cleanupPendingFiles: number
@@ -23,8 +24,16 @@ export interface BrowserDeliveryLocalContinuation {
   readonly summary: BrowserDeliveryResumeSummary
   saveStagedFiles(signal?: AbortSignal): Promise<void>
   cleanupStaging(signal?: AbortSignal): Promise<void>
+  /** Terminal receiving cannot reuse incomplete stages; completed files remain locally saveable. */
+  discardIncompleteStaging(signal?: AbortSignal): Promise<void>
   /** Invoked only for an explicit user abandonment decision, after draining physical writers. */
   discardStaging(signal?: AbortSignal): Promise<void>
+}
+
+export function hasBrowserDeliveryStaging(summary: BrowserDeliveryResumeSummary): boolean {
+  // Empty owned files and reservations still require disposal authority.
+  return summary.incompleteStagedFiles + summary.stagedCompleteFiles + summary.copyingFiles + summary.cleanupPendingFiles > 0 ||
+    summary.reservedStagingBytes > 0n
 }
 
 type DeliveryCounters = Omit<BrowserDeliveryResumeSummary, 'policy' | 'localContinuation'>
@@ -45,7 +54,7 @@ export class BrowserDeliveryResumeAccumulator {
   readonly #policy: BrowserSavePolicyV1
   readonly #seen = new Set<string>()
   readonly #counters: MutableCounters = {
-    receivingFiles: 0, stagedCompleteFiles: 0, copyingFiles: 0, cleanupPendingFiles: 0, targetSavedFiles: 0,
+    receivingFiles: 0, incompleteStagedFiles: 0, stagedCompleteFiles: 0, copyingFiles: 0, cleanupPendingFiles: 0, targetSavedFiles: 0,
     discardedFiles: 0, recoverableBytes: 0n, stagedBytes: 0n, reservedStagingBytes: 0n, targetSavedBytes: 0n,
   }
 
@@ -94,14 +103,14 @@ function freezeSummary(policy: BrowserSavePolicyV1, counters: DeliveryCounters):
 
 function emptyCounters(): MutableCounters {
   return {
-    receivingFiles: 0, stagedCompleteFiles: 0, copyingFiles: 0, cleanupPendingFiles: 0, targetSavedFiles: 0,
+    receivingFiles: 0, incompleteStagedFiles: 0, stagedCompleteFiles: 0, copyingFiles: 0, cleanupPendingFiles: 0, targetSavedFiles: 0,
     discardedFiles: 0, recoverableBytes: 0n, stagedBytes: 0n, reservedStagingBytes: 0n, targetSavedBytes: 0n,
   }
 }
 
 function updateCounterTotals(total: MutableCounters, previous: DeliveryCounters, next: DeliveryCounters): void {
   const fileCounters = [
-    'receivingFiles', 'stagedCompleteFiles', 'copyingFiles', 'cleanupPendingFiles', 'targetSavedFiles', 'discardedFiles',
+    'receivingFiles', 'incompleteStagedFiles', 'stagedCompleteFiles', 'copyingFiles', 'cleanupPendingFiles', 'targetSavedFiles', 'discardedFiles',
   ] as const
   const byteCounters = ['recoverableBytes', 'stagedBytes', 'reservedStagingBytes', 'targetSavedBytes'] as const
   for (const key of fileCounters) total[key] += next[key] - previous[key]
@@ -140,7 +149,10 @@ function addReceiving(
   if (state.kind === 'receiving' || state.kind === 'restart-authorized') {
     if (record.placement === 'staged' && state.checkpoint !== undefined && fileCheckpointIsComplete(state.checkpoint)) {
       counters.stagedCompleteFiles += 1
-    } else counters.receivingFiles += 1
+    } else {
+      counters.receivingFiles += 1
+      if (record.placement === 'staged') counters.incompleteStagedFiles += 1
+    }
   } else counters.cleanupPendingFiles += 1
   const durableBytes = state.checkpoint?.verifiedRanges.reduce((sum, range) => sum + range.end - range.start, 0n) ?? 0n
   counters.recoverableBytes += durableBytes

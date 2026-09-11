@@ -151,6 +151,7 @@ export class WorkspaceReceivePackaging {
       case 'change-location':
       case 'save-staged-files':
       case 'cleanup-staging':
+      case 'discard-incomplete-staging':
         throw unavailableRoute()
     }
   }

@@ -493,6 +493,7 @@ export interface TraceEventPayloadByNameV1 {
       | 'save'
       | 'save_staged_files'
       | 'cleanup_staging'
+      | 'discard_incomplete_staging'
       | 'redownload'
       | 'change_location'
       | 'discard'

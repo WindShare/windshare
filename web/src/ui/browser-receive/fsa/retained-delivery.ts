@@ -1,18 +1,18 @@
 import { IndexedDbBrowserDeliveryRepository } from '../../../output/browser-delivery/indexeddb'
 import type { BrowserDeliveryRepository } from '../../../output/browser-delivery/repository'
 import { readBrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained-authority'
-import type { BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
+import { hasBrowserDeliveryStaging, type BrowserDeliveryResumeSummary } from '../../../output/browser-delivery/retained'
+import { browserDeliveryLocalActions } from '../../../output/browser-delivery/recovery/local-actions'
+import type { ReceiveLifecycleState } from '../../../output/workspace/state'
 import type { V2RetainedReceiveAction } from '../../v2-receive-runtime'
 
 export type BrowserDeliveryRepositoryFactory = () => Promise<BrowserDeliveryRepository>
 
-export function retainedBrowserDeliveryActions(summary: BrowserDeliveryResumeSummary | undefined,
+export function retainedBrowserDeliveryActions(lifecycle: ReceiveLifecycleState, summary: BrowserDeliveryResumeSummary | undefined,
   ordinary: readonly V2RetainedReceiveAction[]): readonly V2RetainedReceiveAction[] {
   if (summary === undefined) return ordinary
-  const actions = ordinary.filter(action => summary.reservedStagingBytes === 0n || action !== 'forget')
-  if (summary.localContinuation === 'save-staged-files') actions.unshift('save-staged-files')
-  if (summary.localContinuation === 'retry-staging-cleanup') actions.unshift('cleanup-staging')
-  return Object.freeze(actions)
+  const actions = ordinary.filter(action => !hasBrowserDeliveryStaging(summary) || action !== 'forget')
+  return Object.freeze([...browserDeliveryLocalActions(lifecycle, summary), ...actions])
 }
 
 export async function readRetainedBrowserDeliveries(

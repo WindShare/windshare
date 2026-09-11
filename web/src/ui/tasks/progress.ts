@@ -1,5 +1,6 @@
 import { formatBytes } from '../v2-progress-presentation'
 import type { TaskFacts, TaskProgressPresentation } from './model'
+import { isTerminalLifecycleState } from '../../output/workspace/state'
 
 const PERCENT_SCALE = 100n
 const UNSETTLED_PERCENT_LIMIT = 99n
@@ -41,7 +42,7 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
     mode: 'indeterminate', percentage: null,
     sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
     label: `${formatBytes(facts.browserDelivery.targetSavedBytes)} saved to folder`,
-    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery)),
+    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle)),
   })
   if (state.kind !== 'resumable-receive') return null
   const retained = state.payloadKind === 'direct-zip' ? state.safeSelectedPayloadBytes : state.completedBytes
@@ -73,15 +74,18 @@ function discoveryStatus(facts: TaskFacts): string | null {
   return progress?.discovery === 'failed' ? 'Counting did not finish; final total unknown.' : null
 }
 
-function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>): string[] {
+function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>, lifecycle: TaskFacts['lifecycle']): string[] {
+  const terminal = isTerminalLifecycleState(lifecycle)
   return [
-    `${formatBytes(summary.recoverableBytes)} verified and recoverable after restart.`,
+    ...(terminal ? [] : [`${formatBytes(summary.recoverableBytes)} verified and recoverable after restart.`]),
     `${formatBytes(summary.targetSavedBytes)} saved to the chosen folder.`,
     `${formatBytes(summary.stagedBytes)} retained in browser staging.`,
     ...((summary.stagedCompleteFiles + summary.copyingFiles) > 0
       ? [`${summary.stagedCompleteFiles + summary.copyingFiles} received files still need local saving.`] : []),
     ...(summary.cleanupPendingFiles > 0
       ? [`${summary.cleanupPendingFiles} files await staging cleanup.`] : []),
+    ...(terminal && summary.incompleteStagedFiles > 0
+      ? [`${summary.incompleteStagedFiles} incomplete staged files cannot continue and can be discarded.`] : []),
   ]
 }
 
@@ -106,7 +110,7 @@ function progressDetails(facts: TaskFacts): string[] {
       details.push(`Resuming may need up to ${formatBytes(direct.resumeTemporarySpaceUpperBound)} of temporary destination space.`)
     }
   } else if (facts.browserDelivery != null) {
-    details.push(...browserDeliveryDetails(facts.browserDelivery))
+    details.push(...browserDeliveryDetails(facts.browserDelivery, facts.lifecycle))
   } else {
     details.push('Received bytes are not a measurement of progress recoverable after restart.')
   }
