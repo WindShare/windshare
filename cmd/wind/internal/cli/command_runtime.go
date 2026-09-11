@@ -65,6 +65,8 @@ type commandRuntime struct {
 	stagedTerminal         clievent.TerminalEvent
 	presentationTerminal   clievent.TerminalEvent
 
+	projectionRejections []pendingProjectionRejection
+	unreportedRejections uint64
 	pendingObserverLoss  [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
 	upstreamCumulative   [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
 	pendingProgressLoss  atomic.Uint64
@@ -306,7 +308,7 @@ func (runtime *commandRuntime) finalize(
 		events = append(events, *progress)
 	}
 	events = append(events, terminal)
-	loss := runtime.collectPendingLossLocked()
+	loss := runtime.collectPendingLossLocked(true)
 	if !runtime.publishLocked(events...) {
 		return false
 	}
@@ -360,7 +362,7 @@ func (runtime *commandRuntime) FinalizeStaged() bool {
 	terminal := runtime.stagedTerminal
 	runtime.stagedFinalProgress = nil
 	runtime.stagedTerminal = nil
-	loss := runtime.collectPendingLossLocked()
+	loss := runtime.collectPendingLossLocked(true)
 	events := make([]clievent.Event, 0, 2)
 	if progress != nil {
 		events = append(events, *progress)

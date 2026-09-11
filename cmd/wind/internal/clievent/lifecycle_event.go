@@ -123,7 +123,62 @@ type CandidateCounts struct {
 	RemoteAccepted uint32
 }
 
+type PeerCloseInitiator uint8
+
+const (
+	PeerCloseUnknown PeerCloseInitiator = iota + 1
+	PeerCloseLocal
+	PeerCloseRemote
+)
+
+func (value PeerCloseInitiator) Name() (string, bool) {
+	names := [...]string{"", "unknown", "local", "remote"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerTerminationCause uint8
+
+const (
+	PeerTerminationUnclassified PeerTerminationCause = iota + 1
+	PeerTerminationAdmissionTimeout
+	PeerTerminationNegotiationTimeout
+	PeerTerminationRemoteClosed
+	PeerTerminationOfferCanceled
+	PeerTerminationRuntimeStopped
+	PeerTerminationTransportFailure
+	PeerTerminationAdmissionFailure
+	PeerTerminationLaneRejected
+)
+
+func (value PeerTerminationCause) Name() (string, bool) {
+	names := [...]string{"", "unclassified", "admission_timeout", "negotiation_timeout", "remote_closed",
+		"offer_canceled", "runtime_stopped", "transport_failure", "admission_failure", "lane_rejected"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type PeerAttemptFailureSummary struct {
+	LastCompletedStage PeerAttemptStage
+	StageElapsedMillis uint64
+	DeadlineExpired    bool
+	Initiator          PeerCloseInitiator
+	Cause              PeerTerminationCause
+}
+
+func (value PeerAttemptFailureSummary) Valid() bool {
+	_, stageOK := value.LastCompletedStage.Name()
+	_, initiatorOK := value.Initiator.Name()
+	_, causeOK := value.Cause.Name()
+	return stageOK && value.LastCompletedStage != PeerAttemptFailed && initiatorOK && causeOK
+}
+
 type PeerAttemptSpec struct {
+	FailureSummary            PeerAttemptFailureSummary
 	Command                   Command
 	Session                   ProtocolSessionID
 	PeerPath                  PeerPathID
@@ -167,6 +222,10 @@ func validPeerAttemptSpec(spec PeerAttemptSpec) bool {
 	_, deliveryOK := spec.ResponseDelivery.Name()
 	_, rejectionOK := spec.RejectionCode.Name()
 	_, failedAtOK := spec.FailedAtStage.Name()
+	if spec.FailureSummary != (PeerAttemptFailureSummary{}) &&
+		(spec.Stage != PeerAttemptFailed || !spec.FailureSummary.Valid()) {
+		return false
+	}
 	hasFailure := spec.Failure.Valid()
 	deadlineStage := spec.Stage == PeerNegotiationDeadlineArmed ||
 		spec.Stage == PeerNegotiationDeadlineExpired || spec.Stage == PeerAdmissionDeadlineArmed ||
@@ -241,6 +300,9 @@ func (value PeerAttemptObserved) Rejection() (PeerLaneRejectionCode, uint64, boo
 }
 func (value PeerAttemptObserved) Failure() (PeerFailureScope, Failure, bool) {
 	return value.spec.FailureScope, value.spec.Failure, value.spec.Failure.Valid()
+}
+func (value PeerAttemptObserved) FailureSummary() (PeerAttemptFailureSummary, bool) {
+	return value.spec.FailureSummary, value.spec.FailureSummary.Valid()
 }
 func (value PeerAttemptObserved) FailedAtStage() (PeerAttemptStage, bool) {
 	_, ok := value.spec.FailedAtStage.Name()

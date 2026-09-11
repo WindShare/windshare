@@ -90,6 +90,8 @@ export function createBrowserDiagnosticsComposition(
     scheduler: options.scheduler ?? SYSTEM_TRACE_SCHEDULER,
     ...(options.activationStore === undefined ? {} : { activationStore: options.activationStore }),
     eventName: traceEventObservationNameV1,
+    eventRetention: (event) => event.eventName === 'peer_attempt' &&
+      (event.payload.stage === 'failed' || event.payload.stage === 'admitted') ? 'attempt_summary' : 'recent',
     snapshotEvent: snapshotTraceEventObservationV1,
     eventBytes: traceEventObservationBytesV1,
     snapshotIncident: snapshotIncidentLink,

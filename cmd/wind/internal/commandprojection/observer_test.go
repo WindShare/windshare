@@ -3,6 +3,7 @@ package commandprojection
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"os"
@@ -459,7 +460,7 @@ func TestProtocolOperationProjectionPreservesCorrelationAndClosedDiagnostics(t *
 		ProtocolSessionID: sessionID, OperationID: operationID,
 		RequestKind: protocolsession.MessageReleaseLease,
 		Cause:       sessionruntime.ProtocolOperationCauseDeadline,
-	}); err != ErrInvalidProjection {
+	}); !errors.Is(err, ErrInvalidProjection) {
 		t.Fatalf("role/command mismatch error = %v", err)
 	}
 }
@@ -498,7 +499,7 @@ func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *t
 		ProtocolSessionID: sessionID, TransferJobID: jobID,
 		FileSettlement: transfer.FileItemBlocked, ItemBlockReason: transfer.ItemBlockReason(255),
 		Progress: progress,
-	}); err != ErrInvalidProjection {
+	}); !errors.Is(err, ErrInvalidProjection) {
 		t.Fatalf("unknown item-block trace reason error = %v", err)
 	}
 	canceled, err := ProjectTransferLifecycle(transfer.TransferLifecycleTrace{

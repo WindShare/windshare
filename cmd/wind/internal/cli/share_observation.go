@@ -18,6 +18,7 @@ import (
 )
 
 type shareEventObserver interface {
+	ReportObservationRejection(clievent.ObserverLossCategory, clievent.ObserverLossReason, clievent.ObservationRejection) bool
 	Observe(clievent.Event) bool
 	ReportObserverLoss(clievent.ObserverLossCategory, clievent.ObserverLossReason, uint64) bool
 }
@@ -295,7 +296,7 @@ func (observations *shareObservations) projectionFailed(category clievent.Observ
 	if observations == nil || observations.observer == nil {
 		return
 	}
-	observations.observer.ReportObserverLoss(category, commandprojection.ObserverLossReason(cause), 1)
+	observations.observer.ReportObservationRejection(category, commandprojection.ObserverLossReason(cause), commandprojection.ProjectionRejection(cause))
 }
 
 func (observations *shareObservations) detailedDiagnosticsEnabled() bool {

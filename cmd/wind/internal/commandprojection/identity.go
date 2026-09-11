@@ -22,7 +22,39 @@ const (
 	ProjectionEventContract
 )
 
-type ProjectionError struct{ reason ProjectionFailureReason }
+type ProjectionError struct {
+	reason    ProjectionFailureReason
+	rejection clievent.ObservationRejection
+}
+
+func rejectedProjection(reason ProjectionFailureReason, field, rule string) error {
+	return ProjectionError{reason: reason, rejection: clievent.ObservationRejection{Field: field, Rule: rule}}
+}
+
+func ProjectionRejection(err error) clievent.ObservationRejection {
+	if projection, ok := errors.AsType[ProjectionError](err); ok && projection.rejection.Valid() {
+		return projection.rejection
+	}
+	return clievent.ObservationRejection{Stage: "unknown", Field: "event", Rule: "projection_contract"}
+}
+
+func withRejectionContext(err error, context clievent.ObservationRejection) error {
+	projection, ok := errors.AsType[ProjectionError](err)
+	if !ok {
+		projection = ProjectionError{reason: ProjectionEventContract}
+	}
+	if contract, ok := errors.AsType[clievent.EventContractError](err); ok {
+		projection.rejection.Field, projection.rejection.Rule = contract.Field, contract.Rule
+	}
+	if projection.rejection.Field == "" {
+		projection.rejection.Field, projection.rejection.Rule = "event", "projection_contract"
+	}
+	projection.rejection.Stage = context.Stage
+	projection.rejection.Session = context.Session
+	projection.rejection.Operation = context.Operation
+	projection.rejection.Revision = context.Revision
+	return projection
+}
 
 func (err ProjectionError) Error() string                   { return ErrInvalidProjection.Error() }
 func (err ProjectionError) Unwrap() error                   { return ErrInvalidProjection }

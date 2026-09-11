@@ -177,6 +177,14 @@ type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
  * adapters may discard richer product state, but they cannot add open strings or
  * authority-bearing values to an exported event.
  */
+type SnakeStage<Value extends string> = Value extends `${infer Head}-${infer Tail}` ? `${Head}_${SnakeStage<Tail>}` : Value
+interface PeerAttemptSummaryV1 {
+  readonly last_completed_stage: SnakeStage<import('../../connectivity/diagnostics').V2BrowserConnectivityAttemptStage>
+  readonly attempt_elapsed_ms: number
+  readonly stage_elapsed_ms: number
+  readonly deadline_expired: boolean
+}
+
 export interface TraceEventPayloadByNameV1 {
   readonly receiver_experience: ReceiverExperiencePayloadV1
   readonly join_transition: Readonly<{
@@ -311,8 +319,8 @@ export interface TraceEventPayloadByNameV1 {
           | 'lane_hello_sent'
           | 'admission_response_received'
           | 'lane_attached'
-          | 'admitted'
       }>
+    | Readonly<{ stage: 'admitted'; summary?: PeerAttemptSummaryV1 }>
     | Readonly<{
         stage: 'admission_response_settled'
         settlement:
@@ -325,6 +333,8 @@ export interface TraceEventPayloadByNameV1 {
       }>
     | Readonly<{
         stage: 'failed'
+        summary?: PeerAttemptSummaryV1
+        failure?: import('../../connectivity/v2-peer-failure').V2PeerAttemptFailure
         failed_at_stage:
           | 'negotiation_deadline_armed'
           | 'negotiation_deadline_expired'

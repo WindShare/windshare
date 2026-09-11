@@ -218,19 +218,55 @@ func projectSenderAttemptEvidence(
 		}
 		spec.RejectionRetryAfterMillis = value.Rejection.RetryAfterMillis
 	}
-	if value.Failure != nil {
-		spec.FailedAtStage, ok = projectPeerStage(value.Failure.FailedAtStage)
+	return projectSenderAttemptFailure(spec, value.Failure)
+}
+
+func projectSenderAttemptFailure(spec *clievent.PeerAttemptSpec, failure *v2peer.SenderAttemptFailure) error {
+	if failure == nil {
+		return nil
+	}
+	var ok bool
+	if failure.LastCompletedStage != "" {
+		last, ok := projectPeerStage(failure.LastCompletedStage)
 		if !ok {
 			return ErrInvalidProjection
 		}
-		spec.FailureScope, ok = projectPeerFailureScope(value.Failure.Scope)
-		if !ok {
-			return ErrInvalidProjection
-		}
-		spec.Failure, ok = ProjectPeerErrorCode(value.Failure.TypedPeerErrorCode)
-		if !ok {
-			return ErrInvalidProjection
+		spec.FailureSummary = clievent.PeerAttemptFailureSummary{
+			LastCompletedStage: last,
+			StageElapsedMillis: failure.StageElapsedMillis,
+			DeadlineExpired:    failure.DeadlineExpired,
+			Initiator:          projectPeerCloseInitiator(failure.Termination.Initiator),
+			Cause:              projectPeerTerminationCause(failure.Termination.Cause),
 		}
 	}
+	spec.FailedAtStage, ok = projectPeerStage(failure.FailedAtStage)
+	if !ok {
+		return ErrInvalidProjection
+	}
+	spec.FailureScope, ok = projectPeerFailureScope(failure.Scope)
+	if !ok {
+		return ErrInvalidProjection
+	}
+	spec.Failure, ok = ProjectPeerErrorCode(failure.TypedPeerErrorCode)
+	if !ok {
+		return ErrInvalidProjection
+	}
 	return nil
+}
+
+func projectPeerCloseInitiator(value string) clievent.PeerCloseInitiator {
+	for candidate := clievent.PeerCloseUnknown; candidate <= clievent.PeerCloseRemote; candidate++ {
+		if name, _ := candidate.Name(); name == value {
+			return candidate
+		}
+	}
+	return 0
+}
+func projectPeerTerminationCause(value string) clievent.PeerTerminationCause {
+	for candidate := clievent.PeerTerminationUnclassified; candidate <= clievent.PeerTerminationLaneRejected; candidate++ {
+		if name, _ := candidate.Name(); name == value {
+			return candidate
+		}
+	}
+	return 0
 }

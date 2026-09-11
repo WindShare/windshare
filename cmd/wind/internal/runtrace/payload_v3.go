@@ -210,10 +210,19 @@ type peerRejectionV3 struct {
 	RetryAfterMS *string `json:"retry_after_ms,omitempty"`
 }
 
+type peerFailureSummaryV3 struct {
+	LastCompletedStage string `json:"last_completed_stage"`
+	StageElapsedMillis string `json:"stage_elapsed_ms"`
+	DeadlineExpired    bool   `json:"deadline_expired"`
+	Initiator          string `json:"close_initiator"`
+	Cause              string `json:"cause"`
+}
+
 type peerFailureV3 struct {
-	FailedAtStage string    `json:"failed_at_stage"`
-	Scope         string    `json:"scope"`
-	Failure       failureV3 `json:"failure"`
+	Summary       *peerFailureSummaryV3 `json:"summary,omitempty"`
+	FailedAtStage string                `json:"failed_at_stage"`
+	Scope         string                `json:"scope"`
+	Failure       failureV3             `json:"failure"`
 }
 
 type peerAttemptPayloadV3 struct {
@@ -467,9 +476,19 @@ type laneSettlementPayloadV3 struct {
 func (laneSettlementPayloadV3) runTracePayloadV3() {}
 
 type observerLossPayloadV3 struct {
-	Category string `json:"category"`
-	Reason   string `json:"reason"`
-	Count    string `json:"count"`
+	Category  string                         `json:"category"`
+	Reason    string                         `json:"reason"`
+	Count     string                         `json:"count"`
+	Rejection *observationRejectionPayloadV3 `json:"rejection,omitempty"`
+}
+
+type observationRejectionPayloadV3 struct {
+	Stage     string `json:"source_stage"`
+	Field     string `json:"field"`
+	Rule      string `json:"rule"`
+	Session   string `json:"sample_protocol_session_id,omitempty"`
+	Operation string `json:"sample_protocol_operation_id,omitempty"`
+	Revision  string `json:"sample_revision_id,omitempty"`
 }
 
 type platformSetupPayloadV3 struct {

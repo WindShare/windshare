@@ -176,8 +176,8 @@ func NewSenderRevisionObserved(
 	lease RevisionLeaseID,
 	session ProtocolSessionID,
 ) (SenderRevisionObserved, error) {
-	if !validSenderRevisionObserved(stage, cause, revision, lease, session) {
-		return SenderRevisionObserved{}, ErrInvalidEvent
+	if err := validateSenderRevisionObserved(stage, cause, revision, lease, session); err != nil {
+		return SenderRevisionObserved{}, err
 	}
 	return SenderRevisionObserved{stage: stage, cause: cause, revision: revision, lease: lease, session: session}, nil
 }
@@ -189,11 +189,26 @@ func validSenderRevisionObserved(
 	lease RevisionLeaseID,
 	session ProtocolSessionID,
 ) bool {
+	return validateSenderRevisionObserved(stage, cause, revision, lease, session) == nil
+}
+
+func validateSenderRevisionObserved(stage SenderRevisionStage, cause SenderRevisionCause, revision SenderRevisionID, lease RevisionLeaseID, session ProtocolSessionID) error {
 	_, stageOK := stage.Name()
 	_, causeOK := cause.Name()
-	leaseCorrelated := lease.Valid() || session.Valid()
-	return stageOK && causeOK && revision.Valid() && lease.Valid() == session.Valid() &&
-		(stage != SenderRevisionLeaseSettlement || leaseCorrelated)
+	switch {
+	case !stageOK:
+		return EventContractError{Field: "stage", Rule: "known_enum"}
+	case !causeOK:
+		return EventContractError{Field: "cause", Rule: "known_enum"}
+	case !revision.Valid():
+		return EventContractError{Field: "revision_id", Rule: "valid_revision_identity"}
+	case lease.Valid() != session.Valid():
+		return EventContractError{Field: "lease_session", Rule: "paired_identities"}
+	case stage == SenderRevisionLeaseSettlement && !lease.Valid():
+		return EventContractError{Field: "lease_id", Rule: "required_for_lease_settlement"}
+	default:
+		return nil
+	}
 }
 
 func (SenderRevisionObserved) event()                             {}
