@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { WorkspaceSettlementOwner } from '../../src/transfer/settlement/workspace-settlement-owner'
-import { withWorkspaceOutputSettlementTimeout } from '../../src/transfer/settlement/v2-output'
+import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
 import { deferred, manualSettlementDeadline } from './settlement-deadline'
 
 const stable: ReceiveLifecycleState = {
@@ -40,7 +40,7 @@ describe('workspace terminal ownership', () => {
     const release = deferred()
     const deadline = manualSettlementDeadline()
     const owner = new WorkspaceSettlementOwner()
-    const running = withWorkspaceOutputSettlementTimeout('pause workspace', 1,
+    const running = withDurableLifecycleSettlementTimeout('pause workspace', 1,
       () => owner.pause(async () => { entered.resolve(); await release.promise; return stable }), deadline)
     let exposed = false
     const observation = running.then(() => { exposed = true })

@@ -156,7 +156,7 @@ describe('Direct ZIP canonical checkpoint authority', () => {
         centralRecordRootDigest: identity(32, 35),
         completion: {
           exactArchiveBytes: 120n,
-          preClosingEpochRootDigest: identity(32, 36),
+          predecessorEpochRootDigest: identity(32, 36),
         },
       },
     }

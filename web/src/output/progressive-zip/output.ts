@@ -16,14 +16,15 @@ import {
 import { FaultDomain } from '../../transfer/fault'
 import { normalizeV2FileTransferFailure } from '../../transfer/job/failures'
 import type { ReceiveIntent } from '../../transfer/intent'
+import {
+  ZIP_OBJECT_CHECKPOINT_PENDING_BYTES, ZIP_OBJECT_CHECKPOINT_PENDING_MILLISECONDS,
+} from '../../transfer/checkpoint-schedule'
 import { ZipCapacityWindow } from './capacity-window'
 import { completeZipEntryCrc } from './crc-ranges'
 import type { ProgressiveZipArchive } from './archive'
 
 const CONCURRENT_FILE_PIPELINES = 4
 const WRITE_BUDGET_BYTES = 8n * 1024n * 1024n
-const CHECKPOINT_PENDING_BYTES = 4n * 1024n * 1024n
-const CHECKPOINT_PENDING_MILLISECONDS = 1000
 
 export async function createProgressiveZipOutput(input: {
   readonly archive: ProgressiveZipArchive
@@ -77,10 +78,6 @@ export async function createProgressiveZipOutput(input: {
     executionProfile: outputExecutionProfile({
       maximumConcurrentFilePipelines: CONCURRENT_FILE_PIPELINES,
       maximumOutstandingWriteBytes: WRITE_BUDGET_BYTES, maximumBufferedBytes: WRITE_BUDGET_BYTES,
-      automaticCheckpoint: {
-        kind: 'incremental',
-        pendingBytes: CHECKPOINT_PENDING_BYTES, pendingMilliseconds: CHECKPOINT_PENDING_MILLISECONDS,
-      },
     }),
     beginFile: async (input, signal) => {
       signal.throwIfAborted()
@@ -118,6 +115,11 @@ export async function createProgressiveZipOutput(input: {
         }
         return {
           revision,
+          checkpoint: {
+            objectId: archive.state.object.objectId,
+            policy: { kind: 'incremental', pendingBytes: ZIP_OBJECT_CHECKPOINT_PENDING_BYTES,
+              pendingMilliseconds: ZIP_OBJECT_CHECKPOINT_PENDING_MILLISECONDS },
+          },
           durableRanges: new VerifiedDurableRanges(ownership, revision, revision.exactSize, entry.ranges),
           transaction: {
             writeRange: async (offset, bytes, signal) => {

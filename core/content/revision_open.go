@@ -32,6 +32,7 @@ type openWorkResult struct {
 	leaseID    LeaseID
 	grant      revisioncapacity.AdmissionGrant
 	comparison RevisionComparison
+	continuity RevisionContinuity
 	cause      RevisionTraceCause
 	rejected   bool
 	err        error
@@ -276,12 +277,18 @@ func (s *RevisionStore) resolveOpenIdentity(
 		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseCatalog, err
 		return catalog.NodeRecord{}, false
 	}
+	evidence, err = evidenceForSourceContinuity(s.source, record, evidence)
+	if err != nil {
+		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseSourceOpen, err
+		return catalog.NodeRecord{}, false
+	}
 	revisionID, err := s.revisionDeriver.DeriveRevision(evidence)
 	if err != nil {
 		result.comparison, result.cause, result.err = RevisionComparisonUnavailable, RevisionTraceCauseCatalog, err
 		return catalog.NodeRecord{}, false
 	}
 	result.identity = revisionIdentity{file: attempt.file, revision: revisionID}
+	result.continuity = evidence.Continuity()
 	return record, true
 }
 
@@ -322,7 +329,11 @@ func (s *RevisionStore) completeOpen(attempt *openAttempt, result openWorkResult
 	}
 	attempt.completed = true
 	current := s.opening[attempt.file] == attempt
-	if result.comparison == RevisionComparisonMismatch && !result.identity.isZero() {
+	// An unpublished handle-scoped identity is never reused. Retaining its
+	// rejection would charge a new permanent tombstone for every failed retry
+	// of the same stale catalog entry, without protecting any published bytes.
+	if result.comparison == RevisionComparisonMismatch && !result.identity.isZero() &&
+		result.continuity != OpenHandleRevisionContinuity {
 		var budgetErr error
 		cleanups, releases, budgetErr = s.invalidateIdentityLocked(result.identity, nil)
 		invalidateCache = true
@@ -564,7 +575,11 @@ func (s *RevisionStore) finishResidentAdmission(revision *revisionState, done ch
 func (s *RevisionStore) traceOpenCompletion(result openWorkResult, attempt *openAttempt) {
 	switch result.comparison {
 	case RevisionComparisonMismatch:
-		s.traceRevision(RevisionTraceStageMismatchInvalidation, result.cause, result.identity.file, result.identity.revision)
+		stage := RevisionTraceStageMismatchInvalidation
+		if result.continuity == OpenHandleRevisionContinuity {
+			stage = RevisionTraceStageOpenRejected
+		}
+		s.traceRevision(stage, result.cause, result.identity.file, result.identity.revision)
 		return
 	case RevisionComparisonUnavailable:
 		s.traceRevision(RevisionTraceStageUnavailableRetry, result.cause, attempt.file, result.identity.revision)
@@ -578,6 +593,10 @@ func (s *RevisionStore) traceOpenCompletion(result openWorkResult, attempt *open
 		return
 	}
 	if attempt.revision != nil {
-		s.traceRevision(RevisionTraceStageReopenMatch, RevisionTraceCauseUnknown, result.identity.file, result.identity.revision)
+		stage := RevisionTraceStageReopenMatch
+		if result.continuity == OpenHandleRevisionContinuity {
+			stage = RevisionTraceStageOpenHandleBound
+		}
+		s.traceRevision(stage, RevisionTraceCauseUnknown, result.identity.file, result.identity.revision)
 	}
 }

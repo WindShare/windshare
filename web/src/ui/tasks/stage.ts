@@ -1,4 +1,5 @@
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
+import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
 
 export interface StageCopy {
   readonly stage: TaskStage
@@ -11,6 +12,8 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
   const state = facts.lifecycle
   if (facts.execution.kind === 'local-finalization') return stage('finishing', 'Finishing locally',
     'Retained content is being finalized and saved without reconnecting to the sender.', 'local-finalization-active')
+  const folderDelivery = folderDeliveryStage(facts)
+  if (folderDelivery !== null) return folderDelivery
   if (state.kind === 'published' || state.kind === 'partial-directory') {
     return savedStage(facts)
   }
@@ -30,6 +33,27 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
     'Accepted writes and recovery records are settling before this task releases its destination.', facts.interruption)
   if (state.kind === 'receiving') return activeReceivingStage(facts)
   return executionStage(facts)
+}
+
+function folderDeliveryStage(facts: TaskFacts): StageCopy | null {
+  const delivery = facts.browserDelivery
+  if (delivery != null && delivery.copyingFiles > 0 && facts.execution.kind === 'active') {
+    return stage('finishing', 'Saving received files to folder',
+      'Complete files are copying from browser storage. Receiving other files can continue; these files are usable after the folder save finishes.',
+      'browser-folder-copying')
+  }
+  const localActions = browserDeliveryLocalActions(facts.lifecycle, delivery)
+  if (localActions.includes('save-staged-files')) {
+    return stage('ready-to-save', 'Received files are ready to save',
+      'Complete files are retained in browser storage. Save them to the chosen folder without reconnecting to the sender.',
+      'browser-folder-local-save')
+  }
+  if (localActions.includes('cleanup-staging')) return stage('needs-action', 'Browser storage cleanup needs attention',
+    'Retry cleanup of browser staging. Files already saved to the folder remain available.', 'browser-folder-cleanup')
+  if (localActions.includes('discard-incomplete-staging')) return stage('needs-action', 'Incomplete browser data remains',
+    'Receiving has ended. Discard the incomplete browser data to free storage; saved folder files remain available.',
+    'browser-folder-incomplete-staging')
+  return null
 }
 
 function savedStage(facts: TaskFacts): StageCopy {
@@ -60,6 +84,8 @@ function retainedStage(facts: TaskFacts, continuation: import('../../output/resu
       'Authorize the same destination to continue the unfinished ZIP.', continuation)
     case 'verify-direct-zip-target': return stage('needs-action', 'Verify the save destination',
       'Ownership must be verified before the unfinished ZIP can change.', continuation)
+    case 'verify-direct-zip-completion': return stage('needs-action', 'Verify the saved ZIP',
+      'Check the local result without reconnecting. Any unfinished content can then resume from its saved progress.', continuation)
     case 'retry-direct-zip-space': return stage('needs-action', 'Free space at the destination',
       'Free destination space, then retry from the retained resume position.', continuation)
     case 'needs-attention': return stage('needs-action', 'Needs action',

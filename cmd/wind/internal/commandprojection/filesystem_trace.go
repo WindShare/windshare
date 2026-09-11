@@ -87,8 +87,13 @@ func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.Filesys
 	if !ok {
 		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionUnknownEnum)
 	}
+	capabilities, ok := projectFilesystemCapabilities(value)
+	if !ok {
+		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidStageFields)
+	}
 	event, err := clievent.NewFilesystemOutputObserved(clievent.FilesystemOutputSpec{
-		Operation: operation, ReceiveIntent: receiveIntent, ReceiveOperation: receiveID, OutputSession: outputSession,
+		Capabilities: capabilities,
+		Operation:    operation, ReceiveIntent: receiveIntent, ReceiveOperation: receiveID, OutputSession: outputSession,
 		Certification: certification, NativeLockScope: lockScope, NativeLockMilestone: lockMilestone,
 		RootDisposition: rootDisposition, RuntimeComponent: runtimeComponent,
 		RuntimeOperation: runtimeOperation, RuntimeDecision: runtimeDecision,
@@ -107,6 +112,38 @@ func ProjectFilesystemOutput(value osfs.FilesystemOutputTrace) (clievent.Filesys
 		return clievent.FilesystemOutputObserved{}, invalidProjection(ProjectionInvalidStageFields)
 	}
 	return event, nil
+}
+
+func projectFilesystemCapabilities(value osfs.FilesystemOutputTrace) (clievent.FilesystemDestinationCapabilities, bool) {
+	capabilities := value.DestinationCapabilities
+	if value.ExecutionMode == 0 && capabilities.SafePublish().Fact() == 0 &&
+		capabilities.OperationRecovery().Fact() == 0 && capabilities.RangeRecovery().Fact() == 0 &&
+		capabilities.CrashCleanup().Fact() == 0 {
+		return clievent.FilesystemDestinationCapabilities{}, true
+	}
+	if !value.ExecutionMode.Valid() || !capabilities.Valid() {
+		return clievent.FilesystemDestinationCapabilities{}, false
+	}
+	result := clievent.FilesystemDestinationCapabilities{
+		Mode: clievent.FilesystemExecutionMode(value.ExecutionMode),
+		SafePublish: clievent.FilesystemCapability{
+			Supported: capabilities.SafePublish().Supported(),
+			Reason:    clievent.FilesystemCapabilityReason(capabilities.SafePublish().Reason()),
+		},
+		OperationRecovery: clievent.FilesystemCapability{
+			Supported: capabilities.OperationRecovery().Supported(),
+			Reason:    clievent.FilesystemCapabilityReason(capabilities.OperationRecovery().Reason()),
+		},
+		RangeRecovery: clievent.FilesystemCapability{
+			Supported: capabilities.RangeRecovery().Supported(),
+			Reason:    clievent.FilesystemCapabilityReason(capabilities.RangeRecovery().Reason()),
+		},
+		CrashCleanup: clievent.FilesystemCapability{
+			Supported: capabilities.CrashCleanup().Supported(),
+			Reason:    clievent.FilesystemCapabilityReason(capabilities.CrashCleanup().Reason()),
+		},
+	}
+	return result, result.Valid()
 }
 
 func projectFilesystemOperation(value osfs.FilesystemOutputTraceOperation) (clievent.FilesystemOutputOperation, bool) {

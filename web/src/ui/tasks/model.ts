@@ -40,6 +40,7 @@ export interface TaskFacts {
   readonly completeness: TaskCompleteness
   readonly publication: TaskPublication
   readonly progress: V2ReceiverProgress | null
+  readonly browserDelivery?: import('../../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
   readonly directZipProgress: V2DirectZipProgressSnapshot | null
   readonly fidelity: CompatibleNameRepairPresentation | null
   readonly details: readonly string[]

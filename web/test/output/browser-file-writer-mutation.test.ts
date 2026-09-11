@@ -1,3 +1,4 @@
+import { acquireFSARootMutationLease } from './fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -10,7 +11,6 @@ import {
   type FSAVerifiedDirectoryAuthority,
 } from '../../src/output/browser/mutation-coordination/authority-cache'
 import {
-  acquireFSARootMutationLease,
   type BrowserLockHandle,
   type BrowserLockManagerRuntime,
 } from '../../src/output/browser/namespace-mutation'

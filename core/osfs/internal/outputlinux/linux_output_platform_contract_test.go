@@ -19,7 +19,7 @@ import (
 )
 
 // The adapter contract tests use real directory/file descriptors, while the
-// certificate fields are supplied by a deterministic statx shim. This keeps the
+// binding fields are supplied by a deterministic statx shim. This keeps the
 // namespace and handle lifecycle testable on CI volumes such as overlayfs, which
 // are intentionally not admitted as production ext4 certification roots.
 const (
@@ -89,15 +89,14 @@ func newLinuxAdapterTestPlatform(t *testing.T) (*linuxV3Platform, string) {
 		_ = unix.Close(fd)
 		t.Fatalf("read adapter contract restart identity: %v", err)
 	}
-	certificate := linuxOutputCertificate{
-		mount:               mount,
-		rootObject:          facts.identity,
-		rootRestartIdentity: restartIdentity,
-		durability:          linuxOutputProcessRestartDurability,
+	binding := linuxOutputBinding{filesystem: linuxOutputFilesystem{magic: linuxExt4SuperMagic, name: "ext4"},
+		mount:      mount,
+		rootObject: facts.identity,
+		restart:    &linuxOutputRestartCertificate{rootIdentity: restartIdentity, durability: linuxOutputProcessRestartDurability},
 	}
 	root := &linuxV3Directory{
 		native: &linuxOutputDirectory{
-			system: &system, fd: fd, certificate: certificate,
+			system: &system, fd: fd, binding: binding,
 			object: facts.identity,
 		},
 	}

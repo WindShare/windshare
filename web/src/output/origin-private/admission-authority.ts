@@ -10,10 +10,11 @@ import {
   type ObjectCapacityFence, type ObjectCapacityRecord, type ObjectGrowthRequest,
 } from './object-capacity'
 
-const WORKSPACE_BUDGET_DATABASE_NAME = 'windshare-workspace-budget'
-const WORKSPACE_BUDGET_DATABASE_VERSION = 2
-const CLAIM_STORE = 'workspace-budget-claims'
-const OBJECT_STORE = 'workspace-object-capacity'
+import { ORIGIN_CAPACITY_DATABASE_NAME as WORKSPACE_BUDGET_DATABASE_NAME,
+  WORKSPACE_CLAIM_STORE as CLAIM_STORE, WORKSPACE_OBJECT_STORE as OBJECT_STORE,
+  STAGING_FILE_STORE, ORIGIN_CAPACITY_STORES, openOriginCapacityDatabase } from './capacity/database'
+import { stagingCapacityTotals } from '../staging-budget/admission'
+import type { StagingBudgetRecord } from '../staging-budget/contracts'
 const CLAIM_BOUND = 1_048_576
 const RESERVATION_BOUND = 1_024
 
@@ -85,7 +86,7 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
   static async open(databaseName = WORKSPACE_BUDGET_DATABASE_NAME):
   Promise<IndexedDbOriginPrivateWorkspaceBudgetLeaseAuthority> {
     if (databaseName.length === 0) throw new TypeError('workspace budget database name is empty')
-    return new IndexedDbOriginPrivateWorkspaceBudgetLeaseAuthority(await openDatabase(databaseName))
+    return new IndexedDbOriginPrivateWorkspaceBudgetLeaseAuthority(await openOriginCapacityDatabase(databaseName))
   }
 
   claim(record: WorkspaceBudgetLeaseRecord, budget: WorkspaceBudgetV1,
@@ -139,10 +140,11 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
     }] }
     const replacement = updateAccount(account, object, next)
     const inventory = await accounts(transaction, facts.nowMilliseconds)
-    const occupied = sum(inventory, (entry) => entry.occupiedBytes)
+    const staging = await stagedCapacity(transaction)
+    const occupied = sum(inventory, (entry) => entry.occupiedBytes) + staging.verifiedStagedBytes
     const outstanding = sum(inventory, (entry) => entry.id === account.id
       ? replacement.outstandingGrowthBytes + replacement.metadataHeadroomBytes
-      : entry.outstandingGrowthBytes + entry.metadataHeadroomBytes)
+      : entry.outstandingGrowthBytes + entry.metadataHeadroomBytes) + staging.outstandingBytes
     const usage = facts.currentUsageBytes > occupied ? facts.currentUsageBytes : occupied
     const additionalCapacity = replacement.outstandingGrowthBytes + replacement.metadataHeadroomBytes -
       account.outstandingGrowthBytes - account.metadataHeadroomBytes
@@ -254,13 +256,15 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
       metadataHeadroomBytes: budget.durableMetadataBytes,
     }
     const others = inventory.filter((entry) => entry.id !== record.id)
+    const staging = await stagedCapacity(transaction)
     const capacity: WorkspaceCapacitySnapshot = {
       ...(facts.estimatedQuotaBytes === undefined ? {} : { estimatedQuotaBytes: facts.estimatedQuotaBytes }),
       currentUsageBytes: maximum(facts.currentUsageBytes,
-        sum(others, (entry) => entry.occupiedBytes) + current.occupiedBytes),
+        sum(others, (entry) => entry.occupiedBytes) + current.occupiedBytes + staging.verifiedStagedBytes),
       minimumReserveBytes: facts.minimumReserveBytes,
       verifiedAlreadyOwnedBytes: current.occupiedBytes,
-      outstandingGrowthBytes: current.outstandingGrowthBytes + sum(others, (entry) => entry.outstandingGrowthBytes),
+      outstandingGrowthBytes: current.outstandingGrowthBytes + staging.outstandingBytes +
+        sum(others, (entry) => entry.outstandingGrowthBytes),
       metadataHeadroomBytes: current.metadataHeadroomBytes - budget.durableMetadataBytes +
         sum(others, (entry) => entry.metadataHeadroomBytes),
     }
@@ -273,7 +277,7 @@ implements OriginPrivateWorkspaceBudgetLeaseAuthority {
 
   #transaction(): IDBTransaction {
     if (this.#closed) throw new DOMException('Workspace budget authority is closed', 'InvalidStateError')
-    return this.#database.transaction([CLAIM_STORE, OBJECT_STORE], 'readwrite', { durability: 'strict' })
+    return this.#database.transaction(ORIGIN_CAPACITY_STORES, 'readwrite', { durability: 'strict' })
   }
 }
 
@@ -342,22 +346,11 @@ function validateLeaseTimes(expires: number, now: number): void {
   }
 }
 
-async function openDatabase(name: string): Promise<IDBDatabase> {
-  if (typeof indexedDB === 'undefined') {
-    throw new DOMException('IndexedDB workspace budget authority is unavailable', 'NotSupportedError')
-  }
-  const request = indexedDB.open(name, WORKSPACE_BUDGET_DATABASE_VERSION)
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    request.addEventListener('upgradeneeded', () => {
-      for (const store of [CLAIM_STORE, OBJECT_STORE]) {
-        if (request.result.objectStoreNames.contains(store)) request.result.deleteObjectStore(store)
-        request.result.createObjectStore(store, { keyPath: 'id' })
-      }
-    })
-    request.addEventListener('blocked', () => reject(new DOMException('Workspace budget database upgrade is blocked', 'InvalidStateError')), { once: true })
-    request.addEventListener('error', () => reject(request.error), { once: true })
-    request.addEventListener('success', () => resolve(request.result), { once: true })
-  })
+async function stagedCapacity(transaction: IDBTransaction) {
+  const records = await requestResult<StagingBudgetRecord[]>(transaction.objectStore(STAGING_FILE_STORE)
+    .getAll(undefined, CLAIM_BOUND + 1))
+  if (records.length > CLAIM_BOUND) throw new DOMException('Staging inventory exceeds its bound', 'QuotaExceededError')
+  return stagingCapacityTotals(records)
 }
 
 function requestResult<T>(request: IDBRequest<T>): Promise<T> {

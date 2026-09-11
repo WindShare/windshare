@@ -370,6 +370,8 @@ export interface TestOutputOptions {
   readonly failWrite?: boolean
   readonly failCommit?: boolean
   readonly retirement?: 'FileIsolated' | 'JobOutputCompromised'
+  readonly checkpointPolicy?: import('../../src/transfer/checkpoint-schedule').AutomaticCheckpointPolicy
+  readonly acceptedRanges?: readonly ByteRange[]
   readonly executionProfile?: OutputExecutionProfile
   readonly automaticCheckpointDecisions?: readonly ('advanced' | 'deferred' | 'finished')[]
   readonly beforeAutomaticCheckpoint?: (attempt: number) => void | Promise<void>
@@ -451,10 +453,14 @@ export function testOutput(events: string[] = [], options: TestOutputOptions = {
         ownedFileIdentity: `owned:${file.source.fileId}`,
       })
       let durable = new ByteRangeSet(file.exactSize, options.initialRanges ?? [])
-      let pending = new ByteRangeSet(file.exactSize, [])
+      let pending = durable.missingFrom(new ByteRangeSet(file.exactSize, options.acceptedRanges ?? durable.ranges))
       events.push('transaction-created')
       return Object.freeze({
         revision,
+        ...(options.checkpointPolicy === undefined ? {} : { checkpoint: {
+          objectId: ownership.ownedFileIdentity, policy: options.checkpointPolicy,
+        } }),
+        ...(options.acceptedRanges === undefined ? {} : { acceptedRanges: options.acceptedRanges }),
         durableRanges: new VerifiedDurableRanges(
           ownership,
           file.source,
@@ -782,6 +788,8 @@ async function directoryOutput(
 }
 
 export function transferJobFixture(input: {
+  readonly checkpointClock?: ConstructorParameters<typeof TransferJob>[0]['checkpointClock']
+  readonly onCheckpointObservation?: ConstructorParameters<typeof TransferJob>[0]['onCheckpointObservation']
   readonly catalog: V2CatalogClient
   readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy
   readonly intent: ReceiveIntent
@@ -828,6 +836,8 @@ export function transferJobFixture(input: {
       sessionId: identityText(91),
       generation: 3,
     }),
+    ...(input.checkpointClock === undefined ? {} : { checkpointClock: input.checkpointClock }),
+    ...(input.onCheckpointObservation === undefined ? {} : { onCheckpointObservation: input.onCheckpointObservation }),
     ...(input.trace === undefined ? {} : { trace: input.trace }),
     ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
     ...(input.maximumPendingFiles === undefined ? {} : { maximumPendingFiles: input.maximumPendingFiles }),

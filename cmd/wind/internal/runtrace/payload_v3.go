@@ -322,7 +322,21 @@ type filesystemFailureV3 struct {
 	Failure            failureV3 `json:"failure"`
 }
 
+type filesystemCapabilityV3 struct {
+	Supported bool   `json:"supported"`
+	Reason    string `json:"reason"`
+}
+
+type filesystemCapabilitiesV3 struct {
+	Mode              string                 `json:"mode"`
+	SafePublish       filesystemCapabilityV3 `json:"safe_publish"`
+	OperationRecovery filesystemCapabilityV3 `json:"operation_recovery"`
+	RangeRecovery     filesystemCapabilityV3 `json:"range_recovery"`
+	CrashCleanup      filesystemCapabilityV3 `json:"crash_cleanup"`
+}
+
 type filesystemOutputPayloadV3 struct {
+	Capabilities        *filesystemCapabilitiesV3    `json:"capabilities,omitempty"`
 	Operation           string                       `json:"operation"`
 	ReceiveOperationID  *string                      `json:"receive_operation_id,omitempty"`
 	ReceiveIntentDigest *string                      `json:"receive_intent_digest,omitempty"`

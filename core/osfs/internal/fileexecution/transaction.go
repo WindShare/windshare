@@ -52,8 +52,8 @@ func settlementMetadataWarnings(warnings []MetadataWarning) []transfer.FileMetad
 	return result
 }
 
-// livePartialFileStrategy keeps only the mode-specific persistence choice. Its
-// cleanup ticket is durable, but its ranges intentionally are not.
+// livePartialFileStrategy uses the admitted stage lifecycle for cleanup while
+// keeping all range progress scoped to its retained native file.
 type livePartialFileStrategy struct {
 	materialization transfer.MaterializationFile
 	destination     FileDestination
@@ -297,9 +297,9 @@ func (transaction *livePartialFileStrategy) blockPublicationLocked() (transfer.F
 	settlement, err := itemBlockedSettlement(
 		transaction.binding, transfer.ItemBlockPublicationAmbiguous,
 	)
-	// The journaled stage is the only recovery evidence available in live mode.
-	// Closing handles is safe, but deleting that evidence would turn ambiguity
-	// into an unprovable success or loss.
+	// The stage is the only evidence left after uncertain publication. Its
+	// lifecycle may support authenticated restart cleanup; otherwise it remains
+	// an untouched leftover. Closing handles never authorizes reopening by name.
 	_ = transaction.close(false)
 	return settlement, err
 }
@@ -370,9 +370,9 @@ func (transaction *livePartialFileStrategy) close(remove bool) error {
 	if remove {
 		cleanupErr = transaction.cleanup(transaction.file)
 	}
-	// Handle release cannot retract a stable settlement. Failed journal cleanup is
-	// returned separately so callers can surface item-blocked; the durable ticket
-	// remains available to later bounded cleanup.
+	// Handle release cannot retract a stable settlement. Cleanup failure remains
+	// separate so callers can surface blocked items while retaining uncertain
+	// leftovers for the lifecycle that actually owns them.
 	_ = errors.Join(transaction.file.Close(), transaction.destination.Close())
 	transaction.file, transaction.destination = nil, nil
 	return cleanupErr

@@ -150,6 +150,8 @@ func projectSenderRevisionStage(value content.RevisionTraceStage) (clievent.Send
 		content.RevisionTraceStageInvalidationRejection: clievent.SenderRevisionInvalidationRejection,
 		content.RevisionTraceStageMetadataBudgetStop:    clievent.SenderRevisionMetadataBudgetStop,
 		content.RevisionTraceStageLeaseSettlement:       clievent.SenderRevisionLeaseSettlement,
+		content.RevisionTraceStageOpenHandleBound:       clievent.SenderRevisionOpenHandleBound,
+		content.RevisionTraceStageOpenRejected:          clievent.SenderRevisionOpenRejected,
 	}
 	stage, ok := stages[value]
 	return stage, ok

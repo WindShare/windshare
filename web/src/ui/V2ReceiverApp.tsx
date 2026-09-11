@@ -115,7 +115,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
       {hasContent && !singleResult && <SavingControls model={saving} activation={snapshot.output.activationPresentation}
         currentTaskContext={current !== null && !snapshot.draft.empty && !snapshot.startAdmission.allowed && snapshot.startAdmission.reason !== null
           ? { operationId: current.operationId, reason: snapshot.startAdmission.reason } : null}
-        actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId)}
+        actionLabel={actionLabel} choose={choice => controller.chooseArtifact(choice.offered.choice.choiceId, choice.recoveryPreference)}
         retry={() => controller.retryOutputConfirmation()} cancel={() => controller.cancelPreparing()}
         onIntent={action => controller.recordExperienceIntent(action)} />}
       {matching !== undefined && <div className="continuation-suggestion">
@@ -129,7 +129,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         primaryAction={singleResult ? <button className="quiet-action" type="button"
           disabled={saving.primary === null || saving.primary.disabledReason !== null}
           title={saving.disabledReason ?? undefined}
-          onClick={() => { if (saving.primary !== null) controller.chooseArtifact(saving.primary.offered.choice.choiceId) }}>
+          onClick={() => { if (saving.primary !== null) controller.chooseArtifact(saving.primary.offered.choice.choiceId, saving.primary.recoveryPreference) }}>
           <ReceiverIcon name="download" />Download again</button> : undefined} />}
       {snapshot.startAdmission.canReleaseCurrent && <p className="new-operation"><button type="button" onClick={() => controller.startNewReceiveOperation()}>Start another download</button></p>}
       {newOperation !== null && <details className="new-operation">
@@ -148,7 +148,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
       <TaskDetails task={current} actions={actions} busy={snapshot.retained.pending !== null}>
         <TaskSourceDetails operationId={current.operationId} snapshot={snapshot} controller={controller} />
         {controller.canRetainCurrentOperation && <div className="retained-handoff">
-          <p>Keep this paused task in Downloads to continue later or save its complete files as a partial ZIP.</p>
+          <p>Keep this paused task in Downloads to continue later or save its complete received files.</p>
           <button type="button" onClick={async () => {
             if (await controller.retainCurrentOperation()) {
               closeDetails()

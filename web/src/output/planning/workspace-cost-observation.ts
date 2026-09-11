@@ -31,6 +31,10 @@ export class WorkspaceCostObservationAccumulatorV1 {
   complete(): WorkspaceCostObservationV1 {
     if (this.#finished) throw new TypeError('workspace cost observation can complete only once')
     this.#finished = true
+    return this.snapshot()
+  }
+
+  snapshot(): WorkspaceCostObservationV1 {
     const endRequired = requiresZip64End({
       entryCount: this.#entryCount,
       centralDirectoryOffset: this.#localBytes,

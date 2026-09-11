@@ -157,6 +157,17 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 	filesystemNativeLock := v3TraceSchema(v3TraceFields(v3TraceString, "scope", "milestone"))
 	filesystemRuntimeDecision := v3TraceSchema(v3TraceFields(v3TraceString, "component", "operation", "decision"))
 	filesystemCorrelation := v3TraceSchema(v3TraceOptionalFields(v3TraceDecimal, "operation_id", "claim_id"))
+	filesystemCapability := v3TraceSchema(
+		v3TraceFields(v3TraceBool, "supported"),
+		v3TraceFields(v3TraceString, "reason"),
+	)
+	filesystemCapabilities := v3TraceSchema(
+		v3TraceFields(v3TraceString, "mode"),
+		v3TraceObjectField("safe_publish", filesystemCapability, false),
+		v3TraceObjectField("operation_recovery", filesystemCapability, false),
+		v3TraceObjectField("range_recovery", filesystemCapability, false),
+		v3TraceObjectField("crash_cleanup", filesystemCapability, false),
+	)
 	filesystemCounters := v3TraceSchema(v3TraceFields(
 		v3TraceDecimal,
 		"node_claims", "directory_claims", "file_claims", "active_file_claims",
@@ -285,6 +296,7 @@ func buildV3TracePayloadSchemas() map[string]*v3TraceObjectSchema {
 				v3TraceString,
 				"receive_intent_digest", "certification", "root_disposition", "checkpoint_decision",
 			),
+			v3TraceObjectField("capabilities", filesystemCapabilities, true),
 			v3TraceObjectField("native_lock", filesystemNativeLock, true),
 			v3TraceObjectField("runtime_decision", filesystemRuntimeDecision, true),
 			v3TraceObjectField("output_correlation", filesystemCorrelation, true),

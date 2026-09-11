@@ -3,21 +3,36 @@
 package osfs
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"sync"
+	"syscall"
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
 	"golang.org/x/sys/windows"
 )
+
+func catalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
+	if native, ok := information.Sys().(*syscall.Win32FileAttributeData); ok && native != nil {
+		// Windows uses FILETIME zero for unavailable metadata. Converting the
+		// raw value here matches the stable handle and avoids Go's nanosecond
+		// timestamp overflow for dates outside its UnixNano range.
+		ticks := int64(uint64(native.LastWriteTime.HighDateTime)<<32 | uint64(native.LastWriteTime.LowDateTime))
+		return (windowsMutationToken{lastWrite: ticks}).modifiedTime()
+	}
+	return portableCatalogModifiedTime(information)
+}
 
 func platformCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	return windowsCatalogObjectBaseline(file)
@@ -68,15 +83,13 @@ func NewWindowsRootedRevisionSource(rootPaths []string) (*RootedRevisionSource, 
 	return newOwnedRootedRevisionSource(rootPaths, binder)
 }
 
-// WindowsCatalogBaseline captures the private catalog candidate from the
+// WindowsCatalogBaseline captures the private discovery candidate from the
 // already-open object. The later root-relative stable open must reproduce these
-// exact values before a revision descriptor can be published.
+// values; RevisionContinuity separately states whether they also prove content
+// continuity after that write-excluding handle closes.
 func WindowsCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
-	}
-	if err := ensureSupportedWindowsRevisionVolume(windows.Handle(file.Fd())); err != nil {
-		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
 	}
 	token, err := inspectWindowsMutationToken(windows.Handle(file.Fd()))
 	if err != nil {
@@ -95,16 +108,13 @@ func WindowsCatalogBaseline(file *os.File) (catalog.SourceIdentity, catalog.Vers
 
 // windowsCatalogObjectBaseline extends the private catalog identity boundary to
 // directories. Revision publication still uses WindowsCatalogBaseline and
-// rejects directories; lazy catalog scans need the directory ChangeTime token
-// so a generation cannot commit across an enumeration mutation.
+// rejects directories. Lazy scans combine the available directory token with
+// the independently re-enumerated entry fingerprint before committing a generation.
 func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalog.VersionCandidate, error) {
 	if file == nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, content.ErrUnsupportedStability
 	}
 	handle := windows.Handle(file.Fd())
-	if err := ensureSupportedWindowsRevisionVolume(handle); err != nil {
-		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
-	}
 	token, err := inspectWindowsCatalogToken(handle)
 	if err != nil {
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, classifyWindowsIdentityError(err)
@@ -118,6 +128,46 @@ func windowsCatalogObjectBaseline(file *os.File) (catalog.SourceIdentity, catalo
 		return catalog.SourceIdentity{}, catalog.VersionCandidate{}, err
 	}
 	return identity, candidate, nil
+}
+
+type windowsRevisionProfileRoot interface {
+	RevisionProfile() windowsRevisionProfile
+}
+
+func (b *WindowsStabilityBinder) RevisionContinuity(record catalog.NodeRecord) (content.RevisionContinuity, error) {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	if b.closed {
+		return 0, content.ErrRevisionStoreClosed
+	}
+	candidate := record.VersionCandidate().Bytes()
+	if len(candidate) != windowsRevisionCandidateBytes {
+		return 0, content.ErrRevisionStale
+	}
+	var token windowsMutationToken
+	copy(token.identity[:], candidate[:windowsRevisionIdentityBytes])
+	token.changeTime = int64(binary.BigEndian.Uint64(candidate[windowsRevisionIdentityBytes+16 : windowsRevisionIdentityBytes+24]))
+	token.profile = windowsRevisionProfile(candidate[windowsRevisionCandidateBytes-2])
+	if token.identity[0] != windowsIdentityFullWidth && token.identity[0] != windowsIdentityLegacy ||
+		token.profile > windowsRevisionProfileLocalReFS ||
+		!bytes.Equal(token.identity[:], record.SourceIdentity().Bytes()) ||
+		candidate[windowsRevisionCandidateBytes-1] != byte(token.continuity()) {
+		return 0, content.ErrRevisionStale
+	}
+	if token.continuity() == content.CatalogRevisionContinuity {
+		// The record's historical observation cannot strengthen a root whose
+		// current retained authority has no matching reopen profile. Decide this
+		// before the content store derives and charges the revision identity.
+		slot := int(record.Locator().RootSlot())
+		if slot < 0 || slot >= len(b.roots) {
+			return content.OpenHandleRevisionContinuity, nil
+		}
+		root, ok := b.roots[slot].(windowsRevisionProfileRoot)
+		if !ok || root.RevisionProfile() != token.profile {
+			return content.OpenHandleRevisionContinuity, nil
+		}
+	}
+	return token.continuity(), nil
 }
 
 func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableBinding) (content.StableFile, error) {
@@ -166,7 +216,7 @@ func (b *WindowsStabilityBinder) BindStable(ctx context.Context, binding StableB
 	if err != nil {
 		return nil, fmt.Errorf("inspect write-excluding Windows revision: %w", err)
 	}
-	if before != after || after != stableToken || !stableToken.matches(binding.Record) {
+	if !before.sameCatalogEvidence(after) || !after.sameCatalogEvidence(stableToken) || !stableToken.matches(binding.Record) {
 		return nil, content.ErrRevisionStale
 	}
 	modified, err := stableToken.modifiedTime()
@@ -207,7 +257,7 @@ func (b *WindowsStabilityBinder) ValidateRoots(roots []*os.Root) error {
 		if err != nil {
 			return fmt.Errorf("open Windows root authority %d: %w", index, err)
 		}
-		osIdentity, identityErr := inspectWindowsPersistentFileIdentity(windows.Handle(file.Fd()))
+		osIdentity, identityErr := inspectWindowsHandleIdentity(windows.Handle(file.Fd()))
 		closeErr := file.Close()
 		if identityErr != nil || closeErr != nil {
 			return fmt.Errorf("inspect Windows root authority %d: %w", index, errors.Join(identityErr, closeErr))

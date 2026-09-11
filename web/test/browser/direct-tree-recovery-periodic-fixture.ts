@@ -355,7 +355,7 @@ export async function recoverDirectTreeAfterProcessTermination(
         onWriteAcknowledged: () => undefined,
         onRecoverableAcknowledged: () => undefined,
         onComplete: () => undefined,
-        now: () => RECOVERY_TIME_MILLISECONDS,
+        checkpointClock: { now: () => RECOVERY_TIME_MILLISECONDS, schedule: () => () => undefined },
       }, recoveryPendingFile(file, coordinates.projectFile([file.name]), parent))
     }
     const directorySettlement = await execution.directories.finalizeDirectory(
@@ -510,10 +510,6 @@ function recoveryExecutionProfile() {
     maximumConcurrentFilePipelines: FILES.length,
     maximumOutstandingWriteBytes: OUTPUT_WRITE_BUDGET_BYTES,
     maximumBufferedBytes: OUTPUT_WRITE_BUDGET_BYTES,
-    automaticCheckpoint: {
-      kind: 'prefix-copy',
-      pendingBytes: CHECKPOINT_TRIGGER_BYTES,
-    },
   })
 }
 
@@ -585,7 +581,13 @@ function observeInitialDurableRanges(
         file: request.materializationRelativePath.join('/'),
         ranges: rangeTexts(begun),
       }))
-      return begun
+      return Object.freeze({
+        ...begun,
+        ...(begun.checkpoint === undefined ? {} : { checkpoint: {
+          objectId: begun.checkpoint.objectId,
+          policy: { kind: 'prefix-copy' as const, pendingBytes: CHECKPOINT_TRIGGER_BYTES },
+        } }),
+      })
     },
   })
   return Object.freeze({ ...execution, output })

@@ -109,6 +109,18 @@ func closeRoots(roots []*os.Root) error {
 	return result
 }
 
+func (s *RootedRevisionSource) RevisionContinuity(record catalog.NodeRecord) (content.RevisionContinuity, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.closed {
+		return 0, content.ErrRevisionStoreClosed
+	}
+	if source, ok := s.binder.(content.RevisionContinuitySource); ok {
+		return source.RevisionContinuity(record)
+	}
+	return content.CatalogRevisionContinuity, nil
+}
+
 func (s *RootedRevisionSource) OpenStable(ctx context.Context, record catalog.NodeRecord) (content.StableFile, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, content.WithRevisionComparison(err, content.RevisionComparisonUnavailable)

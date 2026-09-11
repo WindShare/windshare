@@ -744,15 +744,14 @@
           "name": "direct-zip-journal-budget-v1"
         },
         {
-          "automaticMaxCumulativeCopyBytes": "536870912",
-          "automaticMaxModeledPeakTemporaryBytes": "268435456",
-          "automaticMaxPrefixCopyBytes": "268435456",
+          "automaticMinimumAdvanceBytes": "67108864",
           "availability": "frozen",
           "boundary": "inclusive",
-          "digest": "dVc_DFPK_50xrZ7_GK0oQ9noWgHhb-2eZEnl4-0kUOo",
-          "domain": "windshare/direct-zip-epoch-policy/v1",
-          "name": "direct-zip-epoch-v1",
-          "units": "committed-archive-bytes"
+          "digest": "cWXRxG365A-doi8JI-H2YlsavP6MppN_O9OpjACii8s",
+          "domain": "windshare/direct-zip-epoch-policy/v2",
+          "name": "direct-zip-epoch-v2",
+          "requiredAdvance": "max(minimum-advance,durable-archive-prefix)",
+          "units": "archive-bytes"
         },
         {
           "availability": "frozen",

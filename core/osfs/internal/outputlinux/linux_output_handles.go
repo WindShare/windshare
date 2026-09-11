@@ -33,8 +33,8 @@ func linuxSameOpenRegularFile(left, right *linuxOutputRegularFile) (bool, error)
 	if left == nil || right == nil {
 		return false, linuxUnsafe(operation, "file handle is absent", nil)
 	}
-	if left.certificate.mount != right.certificate.mount {
-		return false, linuxUnsafe(operation, "file handles belong to different certified mounts", nil)
+	if left.binding.mount != right.binding.mount {
+		return false, linuxUnsafe(operation, "file handles belong to different pinned output mounts", nil)
 	}
 	leftIdentity, err := left.currentIdentity()
 	if err != nil {
@@ -58,7 +58,7 @@ func (directory *linuxOutputDirectory) setExactMode(permissions uint32) error {
 	if err := directory.system.fchmod(directory.fd, permissions); err != nil {
 		return fmt.Errorf("%s: %w", operation, err)
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.binding)
 	if err != nil {
 		return err
 	}
@@ -150,7 +150,7 @@ func (directory *linuxOutputDirectory) verifyHandle() error {
 	if directory == nil || directory.system == nil || directory.fd < 0 {
 		return linuxUnsafe(operation, "directory handle is closed or absent", nil)
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.binding)
 	if err != nil {
 		return err
 	}
@@ -211,7 +211,7 @@ func (file *linuxOutputRegularFile) currentIdentity() (linuxOpenHandleFacts, err
 	if file == nil || file.system == nil || file.fd < 0 {
 		return linuxOpenHandleFacts{}, linuxUnsafe(operation, "file handle is closed or absent", nil)
 	}
-	identity, err := linuxVerifyOpenObject(file.system, file.fd, file.certificate)
+	identity, err := linuxVerifyOpenObject(file.system, file.fd, file.binding)
 	if err != nil {
 		return linuxOpenHandleFacts{}, err
 	}
@@ -280,8 +280,8 @@ func linuxVerifyDirectoryPair(left, right *linuxOutputDirectory) error {
 	if err := right.verifyHandle(); err != nil {
 		return err
 	}
-	if left.certificate.mount != right.certificate.mount {
-		return linuxUnsafe(operation, "directory handles belong to different certified mounts", nil)
+	if left.binding.mount != right.binding.mount {
+		return linuxUnsafe(operation, "directory handles belong to different pinned output mounts", nil)
 	}
 	return nil
 }

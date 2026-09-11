@@ -75,23 +75,22 @@ func newLinuxAuthorityRoot(t *testing.T) (*linuxOutputDirectory, *linuxAuthority
 		inode:       linuxTestRootInode,
 		kind:        unix.S_IFDIR,
 	}
-	certificate := linuxOutputCertificate{
+	binding := linuxOutputBinding{filesystem: linuxOutputFilesystem{magic: linuxExt4SuperMagic, name: "ext4"},
 		mount:      mount,
 		rootObject: rootObject,
-		rootRestartIdentity: linuxDirectoryRestartIdentity{
+		restart: &linuxOutputRestartCertificate{durability: linuxOutputProcessRestartDurability, rootIdentity: linuxDirectoryRestartIdentity{
 			mount:              mount,
 			inode:              linuxTestRootInode,
 			kind:               unix.S_IFDIR,
 			birthSeconds:       1_500_000_000,
 			generation:         linuxTestGeneration,
 			hasGenerationProof: true,
-		},
-		durability: linuxOutputProcessRestartDurability,
+		}},
 	}
 	return &linuxOutputDirectory{
-		system:      system,
-		fd:          linuxAuthorityRootFD,
-		certificate: certificate,
-		object:      certificate.rootObject,
+		system:  system,
+		fd:      linuxAuthorityRootFD,
+		binding: binding,
+		object:  binding.rootObject,
 	}, harness
 }

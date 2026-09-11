@@ -78,6 +78,7 @@ export interface ReopenedReceiveOperationBase {
 }
 
 export interface ReopenedDirectTreeOperation extends ReopenedReceiveOperationBase {
+  readonly browserDelivery?: import('../../browser-delivery/retained').BrowserDeliveryLocalContinuation
   readonly kind: 'direct-tree'
   readonly binding: PersistedFSAOperationBinding
   /** Exact pause-level choice consumed by the next DirectTree execution attempt. */

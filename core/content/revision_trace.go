@@ -17,6 +17,8 @@ const (
 	RevisionTraceStageInvalidationRejection
 	RevisionTraceStageMetadataBudgetStop
 	RevisionTraceStageLeaseSettlement
+	RevisionTraceStageOpenHandleBound
+	RevisionTraceStageOpenRejected
 )
 
 type RevisionTraceCause uint8

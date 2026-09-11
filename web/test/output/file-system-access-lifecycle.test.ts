@@ -1,3 +1,4 @@
+import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
 import { reduceReceiveLifecycle } from '../../src/output/workspace/lifecycle'
@@ -313,7 +314,7 @@ describe('File System Access DirectTree lifecycle', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent: frozenIntent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
@@ -390,7 +391,7 @@ describe('File System Access DirectTree lifecycle', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })
@@ -741,7 +742,7 @@ describe('File System Access settlement authority', () => {
     const reopened = await reopenFileSystemAccessOutput({
       intent: first.intent,
       operationRepository: repository,
-      lockManager: locks,
+      lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
       checkpointRepositoryFactory: checkpointFactory,
       openCompatibleNameLedger: absentCompatibleNameLedgerFactory,
     })

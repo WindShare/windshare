@@ -3,7 +3,7 @@ package clievent
 import "testing"
 
 func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
-	for code := FailureUnexpected; code <= FailureCheckpointStateIO; code++ {
+	for code := FailureUnexpected; code <= FailureOutputRecoveryUnavailable; code++ {
 		name, nameOK := code.Name()
 		key, keyOK := code.MessageKey()
 		keyName, keyNameOK := key.Name()
@@ -15,7 +15,7 @@ func TestFailureRegistryIsClosedAndComplete(t *testing.T) {
 	if _, err := NewFailure(0); err == nil {
 		t.Fatal("accepted zero failure code")
 	}
-	if _, err := NewFailure(FailureCheckpointStateIO + 1); err == nil {
+	if _, err := NewFailure(FailureOutputRecoveryUnavailable + 1); err == nil {
 		t.Fatal("accepted unknown failure code")
 	}
 }

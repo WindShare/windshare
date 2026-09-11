@@ -1,5 +1,8 @@
 import type { BrowserReceiveOperationLease } from '../browser/session-lease'
-import type { BrowserLockManagerRuntime } from '../browser/namespace-mutation'
+import type {
+  BrowserLockManagerRuntime,
+  FSAHandleIdentityResolver,
+} from '../browser/namespace-mutation'
 import type { PersistedFSAOperationBinding } from '../browser/indexeddb-root-binding'
 import {
   fileCheckpointDigest,
@@ -103,6 +106,7 @@ export type FSAFreshPageDiscardTraceEvent = Readonly<{
 export interface DiscardReopenedFileSystemAccessOutputOptions {
   readonly operation: ReopenedFileSystemAccessDiscardOperation
   readonly lockManager?: BrowserLockManagerRuntime
+  readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
@@ -166,6 +170,9 @@ class FreshPageDiscardExecution {
       binding: this.#options.operation.binding,
       operationRepository: this.#options.operation.repository,
       ...(this.#options.lockManager === undefined ? {} : { lockManager: this.#options.lockManager }),
+      ...(this.#options.mutationIdentities === undefined
+        ? {}
+        : { mutationIdentities: this.#options.mutationIdentities }),
       ...(this.#options.checkpointRepositoryFactory === undefined
         ? {}
         : { checkpointRepositoryFactory: this.#options.checkpointRepositoryFactory }),

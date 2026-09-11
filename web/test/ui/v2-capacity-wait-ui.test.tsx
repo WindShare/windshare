@@ -35,16 +35,17 @@ describe('receiver capacity wait UI', () => {
         generation: 1n,
         phase: 'receiving',
         receivedSelectedBytes: 32n,
+        writtenSelectedBytes: 24n,
         safeResumeBytes: 16n,
       }),
     })
     const html = render(
-      progress({ capacityWaitingFiles: 1, capacityWaitVisible: true }),
+      progress({ materializedBytes: 24n, capacityWaitingFiles: 1, capacityWaitVisible: true }),
       output,
     )
 
     expect(html).toContain('Download progress')
-    expect(html).toContain('32')
+    expect(html).toContain('32 B received')
     expect(html).toContain('Waiting for sender capacity')
   })
 })

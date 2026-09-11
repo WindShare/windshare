@@ -47,7 +47,7 @@ export interface DirectZipClosingStateV1 {
 
 export interface DirectZipCommittedCompletionV1 {
   readonly exactArchiveBytes: bigint
-  readonly preClosingEpochRoot: Uint8Array
+  readonly predecessorEpochRoot: Uint8Array
 }
 
 export interface DirectZipWriterCheckpointV1 {
@@ -97,7 +97,8 @@ export interface DirectZipCompletionSealV1 {
   readonly centralDirectoryBytes: bigint
   readonly layoutRoot: Uint8Array
   readonly centralRoot: Uint8Array
-  readonly preClosingEpochRoot: Uint8Array
+  /** The last durable epoch before finalization; the final candidate may include pending payload. */
+  readonly predecessorEpochRoot: Uint8Array
 }
 
 export interface DirectZipCompletionProofV1 {

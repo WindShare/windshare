@@ -289,7 +289,7 @@ func (a *App) finishGetTransfer(ctx context.Context, request getRequest, output 
 		return nil, code
 	}
 	if output.mode == getOutputLiveOnly {
-		observation.warningCode(clievent.FailureOutputUnsupportedFilesystem)
+		observation.warningCode(clievent.FailureOutputRecoveryUnavailable)
 	}
 	execution.operation = operation
 	execution.destination = destination

@@ -1,5 +1,86 @@
 package clievent
 
+type FilesystemExecutionMode uint8
+
+const (
+	FilesystemExecutionResumable FilesystemExecutionMode = iota + 1
+	FilesystemExecutionLiveOnly
+)
+
+func (mode FilesystemExecutionMode) Name() (string, bool) {
+	return closedName(uint8(mode), []string{"", "resumable", "live-only"})
+}
+
+type FilesystemCapabilityReason uint8
+
+const (
+	FilesystemCapabilityNone FilesystemCapabilityReason = iota + 1
+	FilesystemCapabilityUnsupported
+	FilesystemCapabilityNetwork
+	FilesystemCapabilityUserspace
+	FilesystemCapabilityCloudPlaceholder
+	FilesystemCapabilityNamespace
+	FilesystemCapabilityUnsafePublication
+	FilesystemCapabilityOperationRecovery
+	FilesystemCapabilityRangeRecovery
+	FilesystemCapabilityCrashCleanup
+	FilesystemCapabilityJournalOverflow
+	FilesystemCapabilityUnknownOwnership
+)
+
+func (reason FilesystemCapabilityReason) Name() (string, bool) {
+	return closedName(uint8(reason), []string{"", "none", "unsupported-filesystem", "network-filesystem",
+		"userspace-filesystem", "cloud-placeholder", "reparse-or-nested-mount", "unsafe-publication",
+		"operation-recovery-unverifiable", "range-recovery-unverifiable", "crash-cleanup-unverifiable",
+		"cleanup-journal-overflow", "cleanup-ownership-unknown"})
+}
+
+func (reason FilesystemCapabilityReason) Valid() bool {
+	switch reason {
+	case FilesystemCapabilityNone, FilesystemCapabilityUnsupported, FilesystemCapabilityNetwork,
+		FilesystemCapabilityUserspace, FilesystemCapabilityCloudPlaceholder, FilesystemCapabilityNamespace,
+		FilesystemCapabilityUnsafePublication, FilesystemCapabilityOperationRecovery,
+		FilesystemCapabilityRangeRecovery, FilesystemCapabilityCrashCleanup,
+		FilesystemCapabilityJournalOverflow, FilesystemCapabilityUnknownOwnership:
+		return true
+	default:
+		return false
+	}
+}
+
+type FilesystemCapability struct {
+	Supported bool
+	Reason    FilesystemCapabilityReason
+}
+
+func (capability FilesystemCapability) Valid() bool {
+	return capability.Reason.Valid() && capability.Supported == (capability.Reason == FilesystemCapabilityNone)
+}
+
+type FilesystemDestinationCapabilities struct {
+	Mode              FilesystemExecutionMode
+	SafePublish       FilesystemCapability
+	OperationRecovery FilesystemCapability
+	RangeRecovery     FilesystemCapability
+	CrashCleanup      FilesystemCapability
+}
+
+func (capabilities FilesystemDestinationCapabilities) Valid() bool {
+	if !capabilities.SafePublish.Valid() || !capabilities.OperationRecovery.Valid() ||
+		!capabilities.RangeRecovery.Valid() || !capabilities.CrashCleanup.Valid() {
+		return false
+	}
+	switch capabilities.Mode {
+	case FilesystemExecutionResumable:
+		return capabilities.SafePublish.Supported && capabilities.OperationRecovery.Supported &&
+			capabilities.RangeRecovery.Supported && capabilities.CrashCleanup.Supported
+	case FilesystemExecutionLiveOnly:
+		return capabilities.SafePublish.Supported
+	default:
+		return false
+	}
+}
+
 type FilesystemCertification uint8
 
 const (

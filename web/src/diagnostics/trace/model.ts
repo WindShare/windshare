@@ -1,8 +1,15 @@
+import type {
+  DirectZipCoordinationPayloadV1,
+  DirectZipMemberRollbackPayloadV1,
+  DirectZipMilestonePayloadV1,
+} from './direct-zip-payload'
 import type { ProtocolOperationPayloadV1 } from './protocol-payload'
+import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
 import type { TraceCapacityPolicy } from './capacity'
 import type { CheckpointPayloadV1 } from './checkpoint-payload'
+import type { RetainedActionPayloadV1, RetainedInventoryPayloadV1 } from './retained-payload'
 import type {
   CapacityWaitTransitionPayloadV1,
   PerformancePhasePayloadV1,
@@ -16,6 +23,12 @@ import type {
   PeerFailureCodeV1,
 } from '../export/incident-record-v1'
 import type { IncidentScopeKind } from '../incident/scope'
+
+export type {
+  DirectZipCoordinationPayloadV1,
+  DirectZipMemberRollbackPayloadV1,
+  DirectZipMilestonePayloadV1,
+} from './direct-zip-payload'
 
 export const TRACE_CAPTURE_STATES = Object.freeze([
   'idle',
@@ -62,7 +75,10 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'continuation',
   'reopen',
   'cleanup',
+  'browser_delivery',
   'direct_zip_milestone',
+  'direct_zip_coordination',
+  'direct_zip_member_rollback',
   'retained_inventory',
   'retained_action',
   'incident_marker',
@@ -155,102 +171,6 @@ type ProjectionShapeProofV1 =
   | 'tree'
 
 type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
-
-export type DirectZipMilestonePayloadV1 = Readonly<{
-  operation_id: string
-  session_id: string
-  plan_kind: 'direct_resumable_zip'
-  milestone:
-    | 'session_started'
-    | 'session_restored'
-    | 'session_paused'
-    | 'session_resumed'
-    | 'session_settled'
-    | 'session_stopped'
-    | 'permission_query'
-    | 'permission_request'
-    | 'candidate_persist'
-    | 'exact_name_lookup'
-    | 'exact_name_create'
-    | 'bootstrap_write'
-    | 'bootstrap_close'
-    | 'snapshot'
-    | 'epoch_open'
-    | 'epoch_write'
-    | 'epoch_truncate'
-    | 'epoch_close'
-    | 'epoch_abort'
-    | 'range_proof'
-    | 'cleanup_delete'
-    | 'cleanup_observe'
-    | 'epoch_opened'
-    | 'member_admitted'
-    | 'member_resumed'
-    | 'checkpoint_policy_decided'
-    | 'candidate_staged'
-    | 'predecessor_verified'
-    | 'epoch_close_observed'
-    | 'candidate_resolved'
-    | 'checkpoint_promoted'
-    | 'closing_entered'
-    | 'central_record_replayed'
-    | 'completion_verified'
-    | 'writer_gated'
-    | 'writer_failed'
-  checkpoint_phase: 'between_members' | 'inside_member' | 'closing'
-  epoch_offset_class:
-    | 'not_positioned'
-    | 'member_header'
-    | 'member_payload'
-    | 'member_descriptor'
-    | 'central_directory'
-    | 'closing_tail'
-  prefix_copy_decision:
-    | 'not_evaluated'
-    | 'admit'
-    | 'decline_evidence_unavailable'
-    | 'decline_prefix_copy_budget'
-    | 'decline_cumulative_copy_budget'
-  peak_space_decision:
-    | 'not_evaluated'
-    | 'within_budget'
-    | 'confirmation_required'
-    | 'destination_space_required'
-    | 'evidence_unavailable'
-  permission_decision: 'not_evaluated' | 'granted' | 'authorization_required'
-  identity_decision:
-    | 'not_evaluated'
-    | 'verified'
-    | 'target_verification_required'
-    | 'restart_required'
-    | 'needs_attention'
-  space_decision:
-    | 'not_evaluated'
-    | 'admitted'
-    | 'destination_space_required'
-    | 'quota_exceeded'
-    | 'native_effect_ambiguous'
-  cleanup_decision:
-    | 'not_evaluated'
-    | 'not_requested'
-    | 'retained'
-    | 'deleted'
-    | 'needs_attention'
-  native_error_class?:
-    | 'abort'
-    | 'data'
-    | 'invalid_state'
-    | 'no_modification_allowed'
-    | 'not_allowed'
-    | 'not_found'
-    | 'not_supported'
-    | 'quota_exceeded'
-    | 'security'
-    | 'timeout'
-    | 'type_error'
-    | 'type_mismatch'
-    | 'unknown'
-}>
 
 /**
  * The V1 payload map is deliberately closed at the diagnostics boundary. Domain
@@ -571,6 +491,9 @@ export interface TraceEventPayloadByNameV1 {
       | 'stop'
       | 'continue'
       | 'save'
+      | 'save_staged_files'
+      | 'cleanup_staging'
+      | 'discard_incomplete_staging'
       | 'redownload'
       | 'change_location'
       | 'discard'
@@ -624,23 +547,11 @@ export interface TraceEventPayloadByNameV1 {
     cleanup_kind?: 'published_metadata'
   }>
   readonly direct_zip_milestone: DirectZipMilestonePayloadV1
-  readonly retained_inventory:
-    | Readonly<{ transition: 'load_started' | 'load_failed' }>
-    | Readonly<{ transition: 'load_completed'; operation_count: string }>
-  readonly retained_action: Readonly<{
-    transition: 'started' | 'completed' | 'failed' | 'excluded'
-    action: 'continue' | 'catch-up' | 'save' | 'redownload' | 'discard' | 'delete' | 'save-partial' | 'forget'
-    continuation:
-      | 'resume_receive'
-      | 'pending_catch_up'
-      | 'restoration_available'
-      | 'history_only'
-      | 'resume_package'
-      | 'save_artifact'
-      | 'retry_download'
-      | 'retry_cleanup'
-      | 'needs_attention'
-  }>
+  readonly browser_delivery: BrowserDeliveryPayloadV1
+  readonly direct_zip_coordination: DirectZipCoordinationPayloadV1
+  readonly direct_zip_member_rollback: DirectZipMemberRollbackPayloadV1
+  readonly retained_inventory: RetainedInventoryPayloadV1
+  readonly retained_action: RetainedActionPayloadV1
   readonly incident_marker: Readonly<{
     incident_sequence: string
     root_incident_sequence?: string

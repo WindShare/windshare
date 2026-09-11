@@ -5,6 +5,7 @@ import {
   type ReceiveIntent,
 } from '../../transfer/intent'
 import { IndexedDbFileCheckpointRepository } from '../browser/indexeddb-repository'
+import type { IndexedDbFileCommitHost } from '../browser/indexeddb/file-commit-participants'
 import {
   FILE_CHECKPOINT_MATERIALIZER_FSA_TREE,
   type FileCheckpointV2,
@@ -28,7 +29,7 @@ extends FileCheckpointJournal, PersistentHandleInventoryRepository,
 export interface FSASemanticOutputRepository extends
   FSAFileCheckpointRepository,
   SemanticFileCheckpointJournal<FileSystemFileHandle>,
-  MaterializationLedgerJournal {}
+  MaterializationLedgerJournal, IndexedDbFileCommitHost {}
 
 export type FSAFileCheckpointRepositoryFactory = (
   binding: FileCheckpointJournal['binding'],

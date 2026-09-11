@@ -19,9 +19,12 @@ import (
 )
 
 const (
-	windowsRevisionIdentityBytes  = 24
-	windowsRevisionCandidateBytes = windowsRevisionIdentityBytes + 24
-	windowsFiletimeUnixOffset     = int64(116444736000000000)
+	windowsRevisionIdentityBytes        = 25
+	windowsRevisionContentEvidenceBytes = windowsRevisionIdentityBytes + 24
+	windowsRevisionCandidateBytes       = windowsRevisionContentEvidenceBytes + 2
+	windowsFiletimeUnixOffset           = int64(116444736000000000)
+	windowsIdentityFullWidth            = byte(1)
+	windowsIdentityLegacy               = byte(2)
 )
 
 type windowsRevisionFileIDInfo struct {
@@ -29,63 +32,149 @@ type windowsRevisionFileIDInfo struct {
 	FileID             [16]byte
 }
 
-func inspectWindowsPersistentFileIdentity(handle windows.Handle) ([windowsRevisionIdentityBytes]byte, error) {
-	var information windowsRevisionFileIDInfo
-	if err := windows.GetFileInformationByHandleEx(
-		handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)),
-	); err != nil {
+func inspectWindowsHandleIdentity(handle windows.Handle) ([windowsRevisionIdentityBytes]byte, error) {
+	return inspectWindowsFileIdentityWith(handle, nativeWindowsRevisionMetadata{})
+}
+
+func inspectWindowsFileIdentityWith(handle windows.Handle, api windowsRevisionMetadata) ([windowsRevisionIdentityBytes]byte, error) {
+	information, err := api.FileInformation(handle)
+	if err != nil {
 		return [windowsRevisionIdentityBytes]byte{}, err
 	}
+	return inspectWindowsFileIdentity(handle, information, api)
+}
+
+// Legacy file IDs are useful for comparing simultaneously open handles, but
+// cannot prove content continuity after close: FAT can reuse or rename them.
+// Keeping the identity formats separate also prevents a truncated ReFS ID from
+// silently comparing equal to a full-width ID.
+func inspectWindowsFileIdentity(handle windows.Handle, information windows.ByHandleFileInformation, api windowsRevisionMetadata) ([windowsRevisionIdentityBytes]byte, error) {
 	var identity [windowsRevisionIdentityBytes]byte
-	binary.BigEndian.PutUint64(identity[0:8], information.VolumeSerialNumber)
-	copy(identity[8:], information.FileID[:])
+	full, err := api.FileIdentity(handle)
+	if err == nil {
+		if full.FileID == [16]byte{} {
+			return identity, fmt.Errorf("%w: Windows provider returned an empty full-width file identity", content.ErrUnsupportedStability)
+		}
+		identity[0] = windowsIdentityFullWidth
+		binary.BigEndian.PutUint64(identity[1:9], full.VolumeSerialNumber)
+		copy(identity[9:], full.FileID[:])
+		return identity, nil
+	}
+	if !isWindowsCapabilityUnavailable(err) {
+		return identity, err
+	}
+	filesystem, volumeErr := api.Filesystem(handle)
+	if volumeErr != nil {
+		return identity, fmt.Errorf("%w: identify Windows legacy file-ID semantics: %w", content.ErrUnsupportedStability, volumeErr)
+	}
+	if filesystem == "" || strings.EqualFold(filesystem, "ReFS") {
+		return identity, fmt.Errorf("%w: filesystem %q requires an unambiguous full-width file identity: %w", content.ErrUnsupportedStability, filesystem, err)
+	}
+	index := uint64(information.FileIndexHigh)<<32 | uint64(information.FileIndexLow)
+	if index == 0 {
+		// FAT uses file ID zero for the volume root. An arbitrary zero ID from
+		// a network provider is partial information, not an object identity.
+		path, pathErr := api.FinalPath(handle)
+		volume := filepath.VolumeName(path)
+		if pathErr != nil || volume == "" || information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
+			!strings.EqualFold(filepath.Clean(path), filepath.Clean(volume+`\`)) {
+			return identity, fmt.Errorf("%w: Windows provider has no usable legacy file identity: %w", content.ErrUnsupportedStability, errors.Join(err, pathErr))
+		}
+	}
+	identity[0] = windowsIdentityLegacy
+	binary.BigEndian.PutUint64(identity[1:9], uint64(information.VolumeSerialNumber))
+	binary.BigEndian.PutUint64(identity[9:17], index)
+	binary.BigEndian.PutUint64(identity[17:25], uint64(information.CreationTime.HighDateTime)<<32|uint64(information.CreationTime.LowDateTime))
 	return identity, nil
 }
 
-type windowsRevisionVolume struct {
-	filesystem string
-	path       string
-	driveType  uint32
+// Metadata capabilities are queried on the actual handle. A filesystem name,
+// drive type, or UNC path is not evidence that a native operation is available.
+// Names constrain the documented reopen profile and guard ReFS legacy-ID
+// collisions; they never grant an otherwise missing native sharing capability.
+type windowsRevisionMetadata interface {
+	FileIdentity(windows.Handle) (windowsRevisionFileIDInfo, error)
+	FileInformation(windows.Handle) (windows.ByHandleFileInformation, error)
+	BasicInformation(windows.Handle) (windowsFileBasicInfo, error)
+	Filesystem(windows.Handle) (string, error)
+	FinalPath(windows.Handle) (string, error)
+	DriveType(string) (uint32, error)
 }
 
-func inspectWindowsRevisionVolume(handle windows.Handle) (windowsRevisionVolume, error) {
+type nativeWindowsRevisionMetadata struct{}
+
+func (nativeWindowsRevisionMetadata) FileIdentity(handle windows.Handle) (windowsRevisionFileIDInfo, error) {
+	var information windowsRevisionFileIDInfo
+	err := windows.GetFileInformationByHandleEx(handle, windows.FileIdInfo, (*byte)(unsafe.Pointer(&information)), uint32(unsafe.Sizeof(information)))
+	return information, err
+}
+
+func (nativeWindowsRevisionMetadata) FileInformation(handle windows.Handle) (windows.ByHandleFileInformation, error) {
+	var information windows.ByHandleFileInformation
+	err := windows.GetFileInformationByHandle(handle, &information)
+	return information, err
+}
+
+func (nativeWindowsRevisionMetadata) BasicInformation(handle windows.Handle) (windowsFileBasicInfo, error) {
+	var basic windowsFileBasicInfo
+	err := windows.GetFileInformationByHandleEx(handle, windows.FileBasicInfo, (*byte)(unsafe.Pointer(&basic)), uint32(unsafe.Sizeof(basic)))
+	return basic, err
+}
+
+func (nativeWindowsRevisionMetadata) Filesystem(handle windows.Handle) (string, error) {
 	var filesystem [32]uint16
-	var flags uint32
-	if err := windows.GetVolumeInformationByHandle(
-		handle, nil, 0, nil, nil, &flags, &filesystem[0], uint32(len(filesystem)),
-	); err != nil {
-		return windowsRevisionVolume{}, err
-	}
-	path, err := finalWindowsHandlePath(handle)
-	if err != nil {
-		return windowsRevisionVolume{}, err
-	}
-	volume := filepath.VolumeName(path)
-	if volume == "" {
-		return windowsRevisionVolume{}, errors.New("windows revision volume path has no volume name")
-	}
+	err := windows.GetVolumeInformationByHandle(handle, nil, 0, nil, nil, nil, &filesystem[0], uint32(len(filesystem)))
+	return windows.UTF16ToString(filesystem[:]), err
+}
+
+func (nativeWindowsRevisionMetadata) FinalPath(handle windows.Handle) (string, error) {
+	return finalWindowsHandlePath(handle)
+}
+
+type windowsRevisionProfile byte
+
+const (
+	windowsRevisionProfileUnknown windowsRevisionProfile = iota
+	windowsRevisionProfileLocalNTFS
+	windowsRevisionProfileLocalReFS
+)
+
+func (nativeWindowsRevisionMetadata) DriveType(volume string) (uint32, error) {
 	root, err := windows.UTF16PtrFromString(volume + `\`)
 	if err != nil {
-		return windowsRevisionVolume{}, err
+		return windows.DRIVE_UNKNOWN, err
 	}
-	return windowsRevisionVolume{
-		filesystem: windows.UTF16ToString(filesystem[:]),
-		path:       path,
-		driveType:  windows.GetDriveType(root),
-	}, nil
+	return windows.GetDriveType(root), nil
 }
 
-func validateWindowsLocalRevisionVolume(volume windowsRevisionVolume) error {
-	if !strings.EqualFold(volume.filesystem, "NTFS") && !strings.EqualFold(volume.filesystem, "ReFS") {
-		return fmt.Errorf("windows filesystem %q is outside the revision-stability support matrix", volume.filesystem)
+func inspectWindowsRevisionProfile(handle windows.Handle, api windowsRevisionMetadata) windowsRevisionProfile {
+	filesystem, err := api.Filesystem(handle)
+	if err != nil {
+		return windowsRevisionProfileUnknown
 	}
-	if strings.HasPrefix(strings.TrimPrefix(volume.path, `\\?\`), `UNC\`) {
-		return errors.New("remote Windows filesystem is outside the revision-stability support matrix")
+	var profile windowsRevisionProfile
+	switch {
+	case strings.EqualFold(filesystem, "NTFS"):
+		profile = windowsRevisionProfileLocalNTFS
+	case strings.EqualFold(filesystem, "ReFS"):
+		profile = windowsRevisionProfileLocalReFS
+	default:
+		return windowsRevisionProfileUnknown
 	}
-	if volume.driveType != windows.DRIVE_FIXED && volume.driveType != windows.DRIVE_REMOVABLE {
-		return fmt.Errorf("windows drive type %d is outside the revision-stability support matrix", volume.driveType)
+	path, err := api.FinalPath(handle)
+	if err != nil {
+		return windowsRevisionProfileUnknown
 	}
-	return nil
+	volume := filepath.VolumeName(path)
+	if volume == "" || strings.HasPrefix(strings.ToUpper(strings.TrimPrefix(volume, `\\?\`)), `UNC\`) ||
+		(strings.HasPrefix(volume, `\\`) && !strings.HasPrefix(volume, `\\?\`)) {
+		return windowsRevisionProfileUnknown
+	}
+	driveType, err := api.DriveType(volume)
+	if err != nil || driveType != windows.DRIVE_FIXED && driveType != windows.DRIVE_REMOVABLE {
+		return windowsRevisionProfileUnknown
+	}
+	return profile
 }
 
 func finalWindowsHandlePath(handle windows.Handle) (string, error) {
@@ -107,6 +196,7 @@ type windowsMutationToken struct {
 	size       uint64
 	lastWrite  int64
 	changeTime int64
+	profile    windowsRevisionProfile
 }
 
 func (t windowsMutationToken) sourceIdentityBytes() []byte {
@@ -121,24 +211,57 @@ func (t windowsMutationToken) candidateBytes() []byte {
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes:windowsRevisionIdentityBytes+8], t.size)
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes+8:windowsRevisionIdentityBytes+16], uint64(t.lastWrite))
 	binary.BigEndian.PutUint64(result[windowsRevisionIdentityBytes+16:windowsRevisionIdentityBytes+24], uint64(t.changeTime))
+	result[windowsRevisionCandidateBytes-2] = byte(t.profile)
+	result[windowsRevisionCandidateBytes-1] = byte(t.continuity())
 	return result
 }
 
+func (t windowsMutationToken) continuity() content.RevisionContinuity {
+	// Readable ID/time fields do not grant every provider a reopen guarantee.
+	// FILE_ID_INFO promises open-handle identity; ChangeTime is a timestamp,
+	// not a generic monotonic version counter. Only the established local
+	// metadata profiles retain catalog continuity; all others still share
+	// through the write-excluding handle with an independent open identity.
+	if t.identity[0] == windowsIdentityFullWidth && t.changeTime > 0 &&
+		(t.profile == windowsRevisionProfileLocalNTFS || t.profile == windowsRevisionProfileLocalReFS) {
+		return content.CatalogRevisionContinuity
+	}
+	return content.OpenHandleRevisionContinuity
+}
+
 func (t windowsMutationToken) matches(record catalog.NodeRecord) bool {
-	return t.size == record.Entry().ExpectedSize() &&
+	candidate := record.VersionCandidate().Bytes()
+	observed := t.candidateBytes()
+	return len(candidate) == windowsRevisionCandidateBytes && t.size == record.Entry().ExpectedSize() &&
 		subtle.ConstantTimeCompare(record.SourceIdentity().Bytes(), t.sourceIdentityBytes()) == 1 &&
-		subtle.ConstantTimeCompare(record.VersionCandidate().Bytes(), t.candidateBytes()) == 1
+		subtle.ConstantTimeCompare(candidate[:windowsRevisionContentEvidenceBytes], observed[:windowsRevisionContentEvidenceBytes]) == 1
+}
+
+func (t windowsMutationToken) sameCatalogEvidence(other windowsMutationToken) bool {
+	// Optional locality/profile observations select revision lifetime, not file
+	// contents. A failed profile probe must not manufacture a content mutation.
+	return t.identity == other.identity && t.size == other.size &&
+		t.lastWrite == other.lastWrite && t.changeTime == other.changeTime
 }
 
 func (t windowsMutationToken) sameOpenedRevision(other windowsMutationToken) bool {
-	// ChangeTime closes the catalog-to-stable-open race, but a later rename also
+	// ChangeTime helps compare the catalog candidate, but a later rename also
 	// changes it even though the write-excluding handle still names the exact
 	// original object. Once FILE_SHARE_WRITE is denied, object identity, size,
 	// and last-write time are the content invariants that remain meaningful.
-	return t.identity == other.identity && t.size == other.size && t.lastWrite == other.lastWrite
+	sameIdentity := t.identity == other.identity
+	if t.identity[0] == windowsIdentityLegacy && other.identity[0] == windowsIdentityLegacy {
+		// Renaming a FAT file can change its directory-slot ID. The retained
+		// write-excluding handle remains authoritative for this open lifetime.
+		sameIdentity = true
+	}
+	return sameIdentity && t.size == other.size && t.lastWrite == other.lastWrite
 }
 
 func (t windowsMutationToken) modifiedTime() (catalog.ModifiedTime, error) {
+	if t.lastWrite == 0 {
+		return catalog.ModifiedTime{}, nil
+	}
 	unixTicks := t.lastWrite - windowsFiletimeUnixOffset
 	seconds := unixTicks / 10_000_000
 	remainder := unixTicks % 10_000_000
@@ -169,29 +292,52 @@ type windowsRevisionPlatform interface {
 	Token(*os.File) (windowsMutationToken, error)
 }
 
-type nativeWindowsRevisionPlatform struct{}
+type nativeWindowsRevisionPlatform struct{ metadata windowsRevisionMetadata }
 
-func (nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoot, error) {
+func (p nativeWindowsRevisionPlatform) metadataAPI() windowsRevisionMetadata {
+	if p.metadata != nil {
+		return p.metadata
+	}
+	return nativeWindowsRevisionMetadata{}
+}
+
+func (p nativeWindowsRevisionPlatform) OpenRoot(path string) (windowsRevisionRoot, error) {
 	handle, err := openWindowsRootHandle(path)
 	if err != nil {
 		return nil, classifyWindowsRootOpenError(err)
 	}
-	if err := ensureSupportedWindowsRevisionVolume(handle); err != nil {
+	if _, err := inspectWindowsFileIdentityWith(handle, p.metadataAPI()); err != nil {
 		_ = windows.CloseHandle(handle)
-		return nil, err
+		return nil, classifyWindowsIdentityError(err)
 	}
-	return &nativeWindowsRevisionRoot{handle: handle}, nil
+	filesystem, filesystemErr := p.metadataAPI().Filesystem(handle)
+	metadata := windowsRootRevisionMetadata{windowsRevisionMetadata: p.metadataAPI(), filesystem: filesystem, filesystemErr: filesystemErr}
+	return &nativeWindowsRevisionRoot{handle: handle, metadata: metadata, profile: inspectWindowsRevisionProfile(handle, metadata)}, nil
 }
 
-func (nativeWindowsRevisionPlatform) Token(file *os.File) (windowsMutationToken, error) {
-	token, err := inspectWindowsMutationToken(windows.Handle(file.Fd()))
+func (p nativeWindowsRevisionPlatform) Token(file *os.File) (windowsMutationToken, error) {
+	token, err := inspectWindowsFileToken(windows.Handle(file.Fd()), p.metadataAPI())
 	return token, classifyWindowsIdentityError(err)
 }
 
-type nativeWindowsRevisionRoot struct {
-	mu     sync.Mutex
-	handle windows.Handle
+type windowsRootRevisionMetadata struct {
+	windowsRevisionMetadata
+	filesystem    string
+	filesystemErr error
 }
+
+func (metadata windowsRootRevisionMetadata) Filesystem(windows.Handle) (string, error) {
+	return metadata.filesystem, metadata.filesystemErr
+}
+
+type nativeWindowsRevisionRoot struct {
+	mu       sync.Mutex
+	handle   windows.Handle
+	metadata windowsRevisionMetadata
+	profile  windowsRevisionProfile
+}
+
+func (r *nativeWindowsRevisionRoot) RevisionProfile() windowsRevisionProfile { return r.profile }
 
 func (r *nativeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]byte, error) {
 	r.mu.Lock()
@@ -199,7 +345,7 @@ func (r *nativeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]by
 	if r.handle == 0 || r.handle == windows.InvalidHandle {
 		return [windowsRevisionIdentityBytes]byte{}, content.ErrRevisionStoreClosed
 	}
-	identity, err := inspectWindowsPersistentFileIdentity(r.handle)
+	identity, err := inspectWindowsFileIdentityWith(r.handle, r.metadata)
 	return identity, classifyWindowsIdentityError(err)
 }
 
@@ -218,7 +364,7 @@ func (r *nativeWindowsRevisionRoot) OpenStable(relative string) (windowsRevision
 		_ = windows.CloseHandle(handle)
 		return nil, errors.New("wrap Windows stable revision handle")
 	}
-	return &nativeWindowsRevisionFile{file: file}, nil
+	return &nativeWindowsRevisionFile{file: file, metadata: r.metadata, profile: r.profile}, nil
 }
 
 func (r *nativeWindowsRevisionRoot) Close() error {
@@ -232,10 +378,22 @@ func (r *nativeWindowsRevisionRoot) Close() error {
 	return windows.CloseHandle(handle)
 }
 
-type nativeWindowsRevisionFile struct{ file *os.File }
+type nativeWindowsRevisionFile struct {
+	file     *os.File
+	metadata windowsRevisionMetadata
+	profile  windowsRevisionProfile
+}
 
 func (f *nativeWindowsRevisionFile) Token() (windowsMutationToken, error) {
-	token, err := inspectWindowsMutationToken(windows.Handle(f.file.Fd()))
+	// Root admission cached the profile: block verification only reads the
+	// pinned file's metadata and never repeats volume/path/drive probes.
+	token, directory, err := inspectWindowsObjectMetadata(windows.Handle(f.file.Fd()), f.metadata)
+	if err == nil && directory {
+		err = content.ErrRevisionStale
+	}
+	if token.identity[0] == windowsIdentityFullWidth && token.changeTime > 0 {
+		token.profile = f.profile
+	}
 	return token, classifyWindowsIdentityError(err)
 }
 
@@ -255,63 +413,64 @@ type windowsFileBasicInfo struct {
 }
 
 func inspectWindowsMutationToken(handle windows.Handle) (windowsMutationToken, error) {
-	identity, err := inspectWindowsPersistentFileIdentity(handle)
-	if err != nil {
-		return windowsMutationToken{}, err
+	return inspectWindowsFileToken(handle, nativeWindowsRevisionMetadata{})
+}
+
+func inspectWindowsFileToken(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, error) {
+	token, directory, err := inspectWindowsObjectToken(handle, api)
+	if err == nil && directory {
+		err = content.ErrRevisionStale
 	}
-	var information windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return windowsMutationToken{}, err
-	}
-	if information.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
-		return windowsMutationToken{}, content.ErrRevisionStale
-	}
-	var basic windowsFileBasicInfo
-	if err := windows.GetFileInformationByHandleEx(
-		handle, windows.FileBasicInfo, (*byte)(unsafe.Pointer(&basic)), uint32(unsafe.Sizeof(basic)),
-	); err != nil {
-		return windowsMutationToken{}, err
-	}
-	size := uint64(information.FileSizeHigh)<<32 | uint64(information.FileSizeLow)
-	if size > catalog.MaxFileSize {
-		return windowsMutationToken{}, content.ErrRevisionStale
-	}
-	return windowsMutationToken{
-		identity: identity,
-		size:     size, lastWrite: basic.LastWriteTime, changeTime: basic.ChangeTime,
-	}, nil
+	return token, err
 }
 
 func inspectWindowsCatalogToken(handle windows.Handle) (windowsMutationToken, error) {
-	identity, err := inspectWindowsPersistentFileIdentity(handle)
-	if err != nil {
-		return windowsMutationToken{}, err
+	token, _, err := inspectWindowsObjectToken(handle, nativeWindowsRevisionMetadata{})
+	return token, err
+}
+
+func inspectWindowsObjectToken(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, bool, error) {
+	token, directory, err := inspectWindowsObjectMetadata(handle, api)
+	if err == nil && token.identity[0] == windowsIdentityFullWidth && token.changeTime > 0 {
+		token.profile = inspectWindowsRevisionProfile(handle, api)
 	}
-	var information windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &information); err != nil {
-		return windowsMutationToken{}, err
+	return token, directory, err
+}
+
+func inspectWindowsObjectMetadata(handle windows.Handle, api windowsRevisionMetadata) (windowsMutationToken, bool, error) {
+	information, err := api.FileInformation(handle)
+	if err != nil {
+		return windowsMutationToken{}, false, err
 	}
 	if information.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return windowsMutationToken{}, content.ErrRevisionStale
+		return windowsMutationToken{}, false, content.ErrRevisionStale
 	}
-	var basic windowsFileBasicInfo
-	if err := windows.GetFileInformationByHandleEx(
-		handle, windows.FileBasicInfo, (*byte)(unsafe.Pointer(&basic)), uint32(unsafe.Sizeof(basic)),
-	); err != nil {
-		return windowsMutationToken{}, err
+	directory := information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0
+	identity, err := inspectWindowsFileIdentity(handle, information, api)
+	if err != nil {
+		return windowsMutationToken{}, directory, err
+	}
+	basic, err := api.BasicInformation(handle)
+	if err != nil {
+		if !isWindowsCapabilityUnavailable(err) {
+			return windowsMutationToken{}, directory, err
+		}
+		// Basic metadata still describes the discovery candidate when extended
+		// change time is absent. Only the later deny-write handle proves bytes;
+		// continuity() prevents this candidate from reusing a closed revision.
+		basic = windowsFileBasicInfo{LastWriteTime: int64(uint64(information.LastWriteTime.HighDateTime)<<32 | uint64(information.LastWriteTime.LowDateTime))}
 	}
 	var size uint64
-	if information.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 {
+	if !directory {
 		size = uint64(information.FileSizeHigh)<<32 | uint64(information.FileSizeLow)
 		if size > catalog.MaxFileSize {
-			return windowsMutationToken{}, content.ErrRevisionStale
+			return windowsMutationToken{}, directory, content.ErrRevisionStale
 		}
 	}
 	return windowsMutationToken{
 		identity: identity, size: size, lastWrite: basic.LastWriteTime, changeTime: basic.ChangeTime,
-	}, nil
+	}, directory, nil
 }
-
 func openWindowsRootHandle(path string) (windows.Handle, error) {
 	name, err := windows.NewNTUnicodeString(windowsNTPath(path))
 	if err != nil {
@@ -400,8 +559,7 @@ func classifyWindowsStableOpenError(err error) error {
 	switch {
 	case errors.Is(err, windows.ERROR_SHARING_VIOLATION):
 		return errors.Join(content.ErrUnsupportedStability, err)
-	case errors.Is(err, windows.ERROR_INVALID_PARAMETER), errors.Is(err, windows.ERROR_NOT_SUPPORTED),
-		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED):
+	case isWindowsCapabilityUnavailable(err):
 		return errors.Join(content.ErrUnsupportedStability, err)
 	case errors.Is(err, windows.ERROR_FILE_NOT_FOUND), errors.Is(err, windows.ERROR_PATH_NOT_FOUND),
 		errors.Is(err, windows.ERROR_CANT_ACCESS_FILE):
@@ -418,28 +576,20 @@ func classifyWindowsIdentityError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
-		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED) {
+	if isWindowsCapabilityUnavailable(err) {
 		return errors.Join(content.ErrUnsupportedStability, err)
 	}
 	return err
 }
 
 func classifyWindowsRootOpenError(err error) error {
-	if errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
-		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED) {
+	if isWindowsCapabilityUnavailable(err) {
 		return errors.Join(content.ErrUnsupportedStability, err)
 	}
 	return err
 }
 
-func ensureSupportedWindowsRevisionVolume(handle windows.Handle) error {
-	volume, err := inspectWindowsRevisionVolume(handle)
-	if err == nil {
-		err = validateWindowsLocalRevisionVolume(volume)
-	}
-	if err != nil {
-		return errors.Join(content.ErrUnsupportedStability, err)
-	}
-	return nil
+func isWindowsCapabilityUnavailable(err error) bool {
+	return errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
+		errors.Is(err, windows.ERROR_CALL_NOT_IMPLEMENTED) || errors.Is(err, windows.ERROR_INVALID_FUNCTION)
 }

@@ -4,6 +4,7 @@
 package destinationauthority
 
 import (
+	"crypto/rand"
 	"errors"
 	"fmt"
 	"io"
@@ -75,6 +76,7 @@ type BindConfig struct {
 	OpenLiveCleanupJournal LiveCleanupJournalOpener
 	RecyclePrivateState    PrivateStateRecycler
 	ControlUseNonceSource  io.Reader
+	ProcessNonceSource     io.Reader
 }
 
 // BoundDestination retains only identity/private capabilities. A retained root
@@ -98,7 +100,7 @@ type BoundDestination struct {
 func destinationFacts(
 	config BindConfig,
 ) (outputcap.DestinationCapabilities, checkpointmodel.LiveCleanupNativeProfile, error) {
-	if config.Platform == nil || config.OpenLiveCleanupJournal == nil ||
+	if config.Platform == nil ||
 		config.DisplayPath == "" || !filepath.IsAbs(config.DisplayPath) ||
 		filepath.Clean(config.DisplayPath) != config.DisplayPath {
 		return outputcap.DestinationCapabilities{}, 0, ErrInvalidConfiguration
@@ -109,15 +111,16 @@ func destinationFacts(
 			ErrInvalidConfiguration, errors.New("native destination capability source is unavailable"),
 		)
 	}
-	profileSource, ok := config.Platform.(liveCleanupProfileSource)
-	if !ok {
-		return outputcap.DestinationCapabilities{}, 0, errors.Join(
-			ErrInvalidConfiguration, errors.New("native live-cleanup profile source is unavailable"),
-		)
-	}
 	capabilities, err := capabilitySource.DestinationCapabilities()
 	if err != nil || !capabilities.Valid() {
 		return outputcap.DestinationCapabilities{}, 0, errors.Join(ErrInvalidConfiguration, err)
+	}
+	if !capabilities.CrashCleanup().Supported() {
+		return capabilities, 0, nil
+	}
+	profileSource, ok := config.Platform.(liveCleanupProfileSource)
+	if !ok || config.OpenLiveCleanupJournal == nil {
+		return outputcap.DestinationCapabilities{}, 0, ErrInvalidConfiguration
 	}
 	profile := profileSource.LiveCleanupNativeProfile()
 	if !profile.Valid() {
@@ -132,6 +135,9 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		return nil, err
 	}
 
+	if _, err := outputcap.SelectExecutionMode(capabilities); err != nil {
+		return nil, err
+	}
 	guard, err := config.Platform.AcquirePublicOperationGuard()
 	if err != nil {
 		return nil, err
@@ -140,24 +146,29 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 		return nil, ErrRetainedRootChanged
 	}
 	guardClosed := false
-	defer func() {
-		if !guardClosed {
-			resultErr = errors.Join(resultErr, guard.Close())
-		}
-	}()
 	root := guard.Root()
 	if root == nil {
-		return nil, ErrRetainedRootChanged
+		return nil, errors.Join(ErrRetainedRootChanged, guard.Close())
 	}
 	rootWitness, err := root.Duplicate()
 	if err != nil || rootWitness == nil {
-		return nil, errors.Join(ErrRetainedRootChanged, err)
+		return nil, errors.Join(ErrRetainedRootChanged, err, closeDirectory(rootWitness), guard.Close())
 	}
 	defer func() {
-		if resultErr != nil {
-			resultErr = errors.Join(resultErr, rootWitness.Close())
-		}
+		resultErr = finishDestinationBinding(guard, rootWitness, guardClosed, resultErr)
 	}()
+
+	if !capabilities.CrashCleanup().Supported() {
+		bound, err := bindProcessDestination(config, capabilities, root, rootWitness)
+		if err != nil {
+			return nil, err
+		}
+		guardClosed = true
+		if err := guard.Close(); err != nil {
+			return nil, err
+		}
+		return bound, nil
+	}
 
 	control, created, controlUse, err := bindControlUse(
 		root, config.RecyclePrivateState != nil, config.ControlUseNonceSource,
@@ -170,20 +181,17 @@ func BindDestination(config BindConfig) (_ *BoundDestination, resultErr error) {
 			resultErr = errors.Join(resultErr, abortControlUse(control, controlUse), control.Close())
 		}
 	}()
-	rootClaim, controlClaim, err := bindIdentityClaims(root, control)
+	id, err := bindDestinationIdentity(config, capabilities, root, control)
 	if err != nil {
 		return nil, err
 	}
+
 	if created {
 		// The enrollment cut becomes recovery authority only after both the private
 		// namespace and its parent are durable.
 		if err := errors.Join(control.Sync(), root.Sync()); err != nil {
 			return nil, err
 		}
-	}
-	id, err := outputcap.NewDestinationAuthorityID(rootClaim, controlClaim)
-	if err != nil {
-		return nil, err
 	}
 
 	journal, err := config.OpenLiveCleanupJournal(control)
@@ -247,6 +255,10 @@ func validateNativeMethodSets(
 		if _, ok := proof.(liveCleanupStageRemover); !ok {
 			return errors.Join(ErrInvalidConfiguration, errors.New("live-cleanup stage removal is unavailable"))
 		}
+	} else if capabilities.SafePublish().Supported() {
+		if _, ok := root.(processStageCreator); !ok {
+			return errors.Join(ErrInvalidConfiguration, errors.New("process-owned stage creation is unavailable"))
+		}
 	}
 	return nil
 }
@@ -275,6 +287,10 @@ func (authority *BoundDestination) FileCheckpointOwnership(
 	defer authority.mu.RUnlock()
 	if authority.closed || authority.platform == nil || !authority.binding.Valid() {
 		return checkpointmodel.Ownership{}, ErrAuthorityClosed
+	}
+	mode, err := authority.binding.ExecutionMode()
+	if err != nil || mode != outputcap.ExecutionResumable {
+		return checkpointmodel.Ownership{}, outputcap.ErrRecoverableOutputUnsupported
 	}
 	return checkpointmodel.NewOwnership(checkpointmodel.OwnershipSpec{
 		Materializer:        checkpointmodel.MaterializerNativeTree,
@@ -487,4 +503,70 @@ func closeCloser(closer io.Closer) error {
 		return nil
 	}
 	return closer.Close()
+}
+
+func processDestinationID(random io.Reader) (outputcap.DestinationAuthorityID, error) {
+	if random == nil {
+		random = rand.Reader
+	}
+	var nonce [outputcap.DestinationAuthorityIDBytes]byte
+	if _, err := io.ReadFull(random, nonce[:]); err != nil {
+		return outputcap.DestinationAuthorityID{}, err
+	}
+	return outputcap.NewProcessDestinationAuthorityID(nonce[:])
+}
+
+func bindProcessDestination(
+	config BindConfig,
+	capabilities outputcap.DestinationCapabilities,
+	root outputcap.Directory,
+	witness outputcap.Directory,
+) (*BoundDestination, error) {
+	if err := validateNativeMethodSets(root, nil, capabilities); err != nil {
+		return nil, err
+	}
+	id, err := processDestinationID(config.ProcessNonceSource)
+	if err != nil {
+		return nil, err
+	}
+	binding, err := NewBinding(id, capabilities, config.DisplayPath)
+	if err != nil {
+		return nil, err
+	}
+	return &BoundDestination{binding: binding, platform: config.Platform, rootWitness: witness}, nil
+}
+
+func bindDestinationIdentity(
+	config BindConfig,
+	capabilities outputcap.DestinationCapabilities,
+	root outputcap.Directory,
+	control outputcap.Directory,
+) (outputcap.DestinationAuthorityID, error) {
+	if !capabilities.OperationRecovery().Supported() {
+		// Cleanup proves its own bounded private namespace. A missing operation
+		// identity must not prevent that independent cleanup lifecycle from working.
+		return processDestinationID(config.ProcessNonceSource)
+	}
+	rootClaim, controlClaim, err := bindIdentityClaims(root, control)
+	if err != nil {
+		return outputcap.DestinationAuthorityID{}, err
+	}
+	return outputcap.NewDestinationAuthorityID(rootClaim, controlClaim)
+}
+
+// A root witness transfers to BoundDestination only after its placement guard
+// closes successfully. Failed admission must release both capabilities.
+func finishDestinationBinding(
+	guard outputcap.PublicOperationGuard,
+	witness outputcap.Directory,
+	guardClosed bool,
+	bindErr error,
+) error {
+	if !guardClosed {
+		bindErr = errors.Join(bindErr, guard.Close())
+	}
+	if bindErr != nil {
+		bindErr = errors.Join(bindErr, witness.Close())
+	}
+	return bindErr
 }

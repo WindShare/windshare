@@ -1,9 +1,9 @@
 import type { ArtifactChoiceID } from '../../../transfer/intent'
 import type { DirectZipBootstrapResumeDescriptorV1 } from '../../../output/direct-zip/journal'
 import type {
-  DirectZipRuntimePlatformFactsV1,
-  DirectZipSupportMatrixArtifactV1,
-  ReviewedDirectZipRuntimeFactsV1,
+  DirectZipRuntimeAuthorityV1,
+  DirectZipRuntimeFactsV1,
+  DirectZipRuntimePolicyV1,
 } from '../../../output/direct-zip/session'
 import type { ReopenedDirectZipOperation } from '../../../output/resume/reopen-authority'
 import type { OfferedArtifactChoice } from '../../../output/planning'
@@ -13,10 +13,10 @@ import type {
   V2BoundReceiveOperation,
 } from '../../v2-receive-runtime'
 
-export interface BrowserDirectZipEvidenceSource {
+export interface BrowserDirectZipCapabilitySource {
   read(signal: AbortSignal): Promise<Readonly<{
-    readonly artifact: DirectZipSupportMatrixArtifactV1
-    readonly runtime: Omit<DirectZipRuntimePlatformFactsV1, 'featureFacts'>
+    readonly authority: DirectZipRuntimeAuthorityV1
+    readonly policy?: DirectZipRuntimePolicyV1
   }>>
 }
 
@@ -26,7 +26,7 @@ export interface BrowserDirectZipFreshAuthorityInput {
   }>
   readonly pickedParent: Promise<FileSystemDirectoryHandle>
   readonly preClickRanking: readonly ArtifactChoiceID[]
-  readonly reviewed: ReviewedDirectZipRuntimeFactsV1
+  readonly facts: DirectZipRuntimeFactsV1
 }
 
 export interface BrowserDirectZipRuntimePort {
@@ -49,6 +49,6 @@ export interface BrowserDirectZipRuntimePort {
 }
 
 export interface BrowserDirectZipCompositionPort {
-  readonly evidence: BrowserDirectZipEvidenceSource
+  readonly capabilities: BrowserDirectZipCapabilitySource
   readonly runtime: BrowserDirectZipRuntimePort
 }

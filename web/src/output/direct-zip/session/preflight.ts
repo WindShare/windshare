@@ -29,7 +29,7 @@ export type DirectZipSpacePreflightResult =
       readonly availableBytes: bigint | null
     }>
 
-/** Space is checked against remaining archive growth plus the reviewed copy-on-write peak. */
+/** Space is checked against remaining archive growth plus the modeled copy-on-write peak. */
 export async function preflightDirectZipDestinationSpace(
   input: DirectZipSpacePreflightInput<unknown>,
 ): Promise<DirectZipSpacePreflightResult> {

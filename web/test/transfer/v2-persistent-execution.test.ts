@@ -28,6 +28,7 @@ import {
 } from '../../src/transfer/job/coordinate/direct-tree'
 import {
   OutputDirectoryMutationError,
+  TransferStopRequestedError,
   VerifiedFinalOutputFile,
   disabledOutputExecutionProfile,
   outputSessionIdentity,
@@ -199,6 +200,53 @@ describe('persistent namespace claim bridge', () => {
 })
 
 describe('persistent production execution bridge', () => {
+  it.each(['pause', 'committed-stop', 'failed-stop'] as const)('chooses storage disposition from %s settlement authority', async outcome => {
+    const intent = asDirectTree(await receiveIntentFixture({
+      planKind: 'direct-tree', artifactKind: 'directory-tree', selection: new V2SelectionPolicy(),
+    }))
+    const preservingClose = vi.fn(async () => undefined)
+    const stoppedClose = vi.fn(async () => undefined)
+    const stopped = lifecycleState(intent, {
+      kind: 'partial-directory', reason: 'stopped', receiptDigest: digestIdentity(71), successCount: 1n, failureCount: 0n,
+    })
+    const execution = await createPersistentDirectTreeExecution({
+      ...createTestCheckpointAuthorities(), executionProfile: disabledOutputExecutionProfile(1), intent,
+      outputIdentity: outputSessionIdentity({ backend: 'persistent-test', outputSessionId: 'stop-disposition' }),
+      materialization: {
+        beginFile: async () => { throw new Error('no file admission expected') },
+        ensureDirectory: async () => { throw new Error('no directory admission expected') },
+        materializeDirectory: async () => { throw new Error('no directory admission expected') },
+        finalizeDirectory: async () => { throw new Error('no directory finalization expected') },
+        close: preservingClose, closeForTerminalSettlement: preservingClose, closeForStopSettlement: stoppedClose,
+      },
+      settlement: {
+        beginTerminal: () => undefined,
+        pause: async (_request, cut) => { await cut.closeMaterialization(resumableState(intent)); return resumableState(intent) },
+        settle: async (_request, cut) => { await cut.closeMaterialization(publishedState(intent)); return publishedState(intent) },
+        stop: async (_request, cut) => {
+          if (outcome === 'failed-stop') {
+            await cut.closeMaterialization()
+            throw new Error('Stop lifecycle commit failed')
+          }
+          await cut.closeMaterialization(stopped)
+          return stopped
+        },
+      },
+    })
+    const materialization = { entryCount: 0n, fileCount: 0n, directoryCount: 0n, rawBytes: 0n }
+    if (outcome === 'pause') {
+      await execution.pause({ worker: PAUSED, materialization, reason: new Error('pause'),
+        selectionFacts: { discoveredFileCount: 0n, discoveredBytes: 0n, discovery: 'complete' } }, SIGNAL)
+    } else {
+      const stopping = execution.stop!({ transferJobId: 'stop-disposition', worker: PAUSED, materialization,
+        reason: new TransferStopRequestedError() }, SIGNAL)
+      if (outcome === 'failed-stop') await expect(stopping).rejects.toThrow(/lifecycle commit failed/)
+      else await expect(stopping).resolves.toBe(stopped)
+    }
+    expect(stoppedClose).toHaveBeenCalledTimes(outcome === 'committed-stop' ? 1 : 0)
+    expect(preservingClose).toHaveBeenCalledTimes(outcome === 'committed-stop' ? 0 : 1)
+  })
+
   it('keeps DirectTree revision authority ahead of file creation and settles from proofs', async () => {
     const file = fileEntry(identity(11), 'payload.bin', 4n)
     const intent = asDirectTree(await receiveIntentFixture({
@@ -539,9 +587,7 @@ describe('persistent Workspace production execution bridge', () => {
       settlement,
       signal: SIGNAL,
     })
-    expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
-      kind: 'incremental', pendingBytes: 16n * 1024n * 1024n, pendingMilliseconds: 5_000,
-    })
+    expect(execution.output.executionProfile).not.toHaveProperty('automaticCheckpoint')
     await expect(execution.settle({
       transferJobId: 'transfer-job-original',
       worker: SUCCESS,

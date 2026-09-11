@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/windshare/windshare/core/osfs/internal/outputcap"
 	"github.com/windshare/windshare/core/osfs/internal/outputfault"
 	"github.com/windshare/windshare/core/osfs/internal/outputruntime"
 	"github.com/windshare/windshare/core/osfs/internal/pathfailure"
@@ -325,38 +326,42 @@ const (
 	FilesystemOutputNativeLockReleaseReportedFailure
 )
 
-// FilesystemOutputTrace projects only milestones emitted by the native
-// output-session graph. Durable recovery authority remains inside checkpointstore
-// and resumeauthority rather than leaking through telemetry values.
+type FilesystemOutputDestinationCapabilities = outputcap.DestinationCapabilities
+type FilesystemOutputExecutionModeFact = outputcap.ExecutionMode
+
+// FilesystemOutputTrace projects native capability decisions and milestones.
+// These observations carry no handles or durable recovery authority.
 type FilesystemOutputTrace struct {
-	Operation              FilesystemOutputTraceOperation
-	ReceiveIntentDigest    transfer.ReceiveIntentDigest
-	ReceiveOperationID     receivecontract.OperationID
-	SessionID              transfer.OutputSessionID
-	Certification          FilesystemOutputCertificationID
-	NativeLockScope        FilesystemOutputNativeLockScope
-	NativeLockMilestone    FilesystemOutputNativeLockMilestone
-	RootOpenDisposition    FilesystemOutputRootDisposition
-	RuntimeComponent       FilesystemOutputRuntimeComponent
-	RuntimeOperation       FilesystemOutputRuntimeOperation
-	RuntimeDecision        FilesystemOutputRuntimeDecision
-	CheckpointDecision     FilesystemCheckpointDecision
-	OperationID            uint64
-	ClaimID                uint64
-	FaultDomain            uint8
-	NormalizedFaultScope   uint8
-	NormalizedFaultCode    uint16
-	NodeClaimCount         uint64
-	DirectoryClaimCount    uint64
-	FileClaimCount         uint64
-	ActiveFileClaimCount   uint64
-	ReservedFileSlotCount  uint64
-	DirectoryMetadataBytes uint64
-	CheckpointRecordCount  uint64
-	FailureStage           FilesystemOutputFailureStage
-	ReconciliationStep     FilesystemCheckpointReconciliationStep
-	NativeErrorClass       FilesystemNativeErrorClass
-	Failed                 bool
+	Operation               FilesystemOutputTraceOperation
+	DestinationCapabilities FilesystemOutputDestinationCapabilities
+	ExecutionMode           FilesystemOutputExecutionModeFact
+	ReceiveIntentDigest     transfer.ReceiveIntentDigest
+	ReceiveOperationID      receivecontract.OperationID
+	SessionID               transfer.OutputSessionID
+	Certification           FilesystemOutputCertificationID
+	NativeLockScope         FilesystemOutputNativeLockScope
+	NativeLockMilestone     FilesystemOutputNativeLockMilestone
+	RootOpenDisposition     FilesystemOutputRootDisposition
+	RuntimeComponent        FilesystemOutputRuntimeComponent
+	RuntimeOperation        FilesystemOutputRuntimeOperation
+	RuntimeDecision         FilesystemOutputRuntimeDecision
+	CheckpointDecision      FilesystemCheckpointDecision
+	OperationID             uint64
+	ClaimID                 uint64
+	FaultDomain             uint8
+	NormalizedFaultScope    uint8
+	NormalizedFaultCode     uint16
+	NodeClaimCount          uint64
+	DirectoryClaimCount     uint64
+	FileClaimCount          uint64
+	ActiveFileClaimCount    uint64
+	ReservedFileSlotCount   uint64
+	DirectoryMetadataBytes  uint64
+	CheckpointRecordCount   uint64
+	FailureStage            FilesystemOutputFailureStage
+	ReconciliationStep      FilesystemCheckpointReconciliationStep
+	NativeErrorClass        FilesystemNativeErrorClass
+	Failed                  bool
 }
 
 type FilesystemOutputTracer interface {

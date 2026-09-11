@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import {
   DirectZipMemberWriterV1,
   type DirectZipCompletionSealV1,
-  type DirectZipWriterCheckpointV1,
 } from '../../../../src/output/direct-zip/writer'
 import {
   candidateObservation,
@@ -25,7 +24,7 @@ describe('DirectZip member epochs', () => {
     expect(observed.kind).toBe('unchanged')
     expect(observed.policyDecision).toMatchObject({
       kind: 'decline',
-      reason: 'evidence-unavailable',
+      reason: 'policy-unavailable',
     })
     expect(observed.checkpoint.safeResumeBytes).toBe(0n)
     expect(harness.target.closeAttemptCount).toBe(0)
@@ -115,15 +114,13 @@ describe('DirectZip member epochs', () => {
     expect(writer.resumeTemporarySpaceUpperBound).toBe(paused.checkpoint.committedLength)
   })
 
-  it('allows automatic close only when an injected budget admits the next prefix copy', async () => {
+  it('automatically saves when new progress amortizes the next prefix copy', async () => {
     const harness = createWriterHarness()
-    const writer = harness.writer(harness.checkpoint, {
-      maximumPrefixCopyBytes: 10_000n,
-      maximumCumulativePrefixCopyBytes: 20_000n,
-      maximumModeledPeakTemporaryBytes: 10_000n,
-    })
-    const member = await writer.beginFile(fileAdmission(harness.checkpoint))
-    await member.write(PAYLOAD.subarray(0, 1))
+    const writer = harness.writer(harness.checkpoint, { minimumAdvanceBytes: 1n })
+    const payload = new Uint8Array(Number(harness.checkpoint.committedLength))
+    const member = await writer.beginFile(fileAdmission(harness.checkpoint,
+      fileSource('revision-1', BigInt(payload.byteLength))))
+    await member.write(payload)
 
     const checkpoint = await writer.automaticCheckpoint()
 
@@ -132,13 +129,9 @@ describe('DirectZip member epochs', () => {
     expect(harness.target.closeAttemptCount).toBe(1)
   })
 
-  it('keeps writing after automatic advancement stops and lets an explicit pause cut the epoch', async () => {
+  it('keeps small advances in the open stream and lets an explicit pause save them', async () => {
     const harness = createWriterHarness()
-    const writer = harness.writer(harness.checkpoint, {
-      maximumPrefixCopyBytes: 0n,
-      maximumCumulativePrefixCopyBytes: 0n,
-      maximumModeledPeakTemporaryBytes: 0n,
-    })
+    const writer = harness.writer(harness.checkpoint, { minimumAdvanceBytes: 10_000n })
     const member = await writer.beginFile(fileAdmission(harness.checkpoint))
     await member.write(PAYLOAD.subarray(0, 1))
 
@@ -149,7 +142,7 @@ describe('DirectZip member epochs', () => {
     expect(automatic.kind).toBe('unchanged')
     expect(automatic.policyDecision).toMatchObject({
       kind: 'decline',
-      reason: 'prefix-copy-budget',
+      reason: 'insufficient-progress',
     })
     expect(paused.kind).toBe('advanced')
     expect(paused.additionalTemporaryBytesUpperBound).toBe(paused.checkpoint.committedLength)
@@ -272,8 +265,17 @@ describe('DirectZip deterministic closing', () => {
     expect(completion.exactArchiveBytes).toBe(BigInt(harness.target.visible.byteLength))
     expect(harness.target.rangeReads).toHaveLength(0)
     expect(harness.target.boundedCompletionReadCount).toBe(1)
-    expect(harness.target.openEpochCount).toBe(2)
-    expect(harness.target.closeAttemptCount).toBe(2)
+    expect(harness.target.openEpochCount).toBe(1)
+    expect(harness.target.closeAttemptCount).toBe(1)
+    expect(harness.cuts.staged).toHaveLength(1)
+    expect(harness.cuts.staged[0]).toMatchObject({
+      kind: 'closing',
+      rangeStart: harness.checkpoint.committedLength,
+      predecessorGeneration: harness.checkpoint.generation,
+    })
+    expect(completion.checkpoint.closing!.centralDirectoryOffset)
+      .toBeGreaterThan(harness.checkpoint.committedLength)
+    expect(completion.checkpoint.generation).toBe(harness.checkpoint.generation + 1n)
     expect(harness.cuts.promoted.at(-1)?.completion).toBeDefined()
     expect(harness.target.artifactCount).toBe(1)
   })
@@ -314,19 +316,22 @@ describe('DirectZip deterministic closing', () => {
     expect(events).toContain('operation-1:checkpoint-promoted:2')
   })
 
-  it('replays closing from the durable closing checkpoint after a central write fails', async () => {
-    const { harness, writer, seal, memberCheckpoint } = await preparedArchive()
-    harness.target.failNextWriteAtOrAfter = memberCheckpoint.committedLength
+  it('replays pending content from the real predecessor after a central write fails', async () => {
+    const { harness, writer, seal } = await preparedArchive()
+    harness.target.failNextWriteAtOrAfter = harness.checkpoint.committedLength
     await expect(writer.closeArchive(seal)).rejects.toThrow('injected positioned write failure')
-    const closingCheckpoint = writer.committedCheckpoint
-    expect(closingCheckpoint.phase).toBe('closing')
+    expect(writer.committedCheckpoint).toEqual(harness.checkpoint)
     expect(harness.target.abortCount).toBe(1)
-    expect(BigInt(harness.target.visible.byteLength)).toBe(memberCheckpoint.committedLength)
+    expect(harness.cuts.staged).toHaveLength(0)
+    expect(BigInt(harness.target.visible.byteLength)).toBe(harness.checkpoint.committedLength)
 
-    const completion = await harness.writer(closingCheckpoint).closeArchive(seal)
+    const replay = harness.writer()
+    const member = await replay.beginFile(fileAdmission(harness.checkpoint))
+    await member.write(PAYLOAD)
+    await member.close()
+    const completion = await replay.closeArchive(seal)
 
     expect(completion.checkpoint.phase).toBe('closing')
-    expect(harness.cuts.closing).toHaveLength(1)
     expect(BigInt(harness.target.visible.byteLength)).toBe(completion.exactArchiveBytes)
   })
 
@@ -341,29 +346,100 @@ describe('DirectZip deterministic closing', () => {
     expect(harness.target.boundedCompletionReadCount).toBe(1)
   })
 
+  it('keeps the predecessor when final candidate staging fails before the only close', async () => {
+    const { harness, writer, seal } = await preparedArchive()
+    harness.cuts.failStagingCount = 1
+
+    await expect(writer.closeArchive(seal)).rejects.toThrow('injected journal staging failure')
+
+    expect(writer.committedCheckpoint).toEqual(harness.checkpoint)
+    expect(harness.target.closeAttemptCount).toBe(0)
+    expect(harness.target.abortCount).toBe(1)
+    expect(harness.cuts.staged).toHaveLength(0)
+    expect(BigInt(harness.target.visible.byteLength)).toBe(harness.checkpoint.committedLength)
+  })
+
+  it('retires a failed final close and retains the real predecessor for content replay', async () => {
+    const { harness, writer, seal } = await preparedArchive()
+    harness.target.closeFaults.push('before-publish')
+
+    await expect(writer.closeArchive(seal)).rejects.toThrow('closing epoch did not publish')
+
+    expect(writer.committedCheckpoint).toEqual(harness.checkpoint)
+    expect(harness.target.closeAttemptCount).toBe(1)
+    expect(harness.cuts.retired).toHaveLength(1)
+    expect(harness.cuts.promoted).toHaveLength(0)
+    expect(BigInt(harness.target.visible.byteLength)).toBe(harness.checkpoint.committedLength)
+  })
+
+  it('recovers one final candidate spanning an inside-member checkpoint and later members', async () => {
+    const harness = createWriterHarness()
+    const writer = harness.writer()
+    const admission = fileAdmission(harness.checkpoint)
+    const member = await writer.beginFile(admission)
+    await member.write(PAYLOAD.subarray(0, 2))
+    const paused = await writer.pause()
+    const resumedWriter = harness.writer(paused.checkpoint)
+    const resumed = resumedWriter.resumeFile(fileSource()) as DirectZipMemberWriterV1
+    await resumed.write(PAYLOAD.subarray(2))
+    await resumed.close()
+    const nextAdmission = fileAdmission({
+      ...harness.checkpoint,
+      nextEntryOrdinal: 2n,
+      archiveOffset: admission.plan.zipEntry.localHeaderOffset + admission.plan.entryStreamBytes,
+    })
+    const next = await resumedWriter.beginFile(nextAdmission)
+    await next.write(PAYLOAD)
+    await next.close()
+    const pages = await harness.pages.snapshot()
+    const seal: DirectZipCompletionSealV1 = {
+      entryCount: pages.layoutRecordCount, centralDirectoryBytes: pages.centralBytes,
+      layoutRoot: pages.layoutRoot, centralRoot: pages.centralRoot,
+      predecessorEpochRoot: paused.checkpoint.epochRoot,
+    }
+    harness.cuts.failPromotionCount = 1
+    await expect(resumedWriter.closeArchive(seal)).rejects.toThrow('injected journal promotion failure')
+    const candidate = harness.cuts.staged.at(-1)!
+    const visible = Uint8Array.from(harness.target.visible)
+
+    // A reloaded journal exposes committed page roots from snapshot(), while the
+    // final candidate owns the additional members needed to validate completion.
+    harness.pages.snapshot = () => Promise.resolve(paused.checkpoint.pages)
+    const recovered = await harness.writer(paused.checkpoint).recoverCandidate(candidate, seal)
+
+    expect(candidate.rangeStart).toBe(paused.checkpoint.committedLength)
+    expect(candidate.proposed.closing!.centralDirectoryOffset).toBeGreaterThan(candidate.rangeStart)
+    expect(recovered.kind).toBe('promoted')
+    expect(recovered.checkpoint.safeResumeBytes).toBe(BigInt(PAYLOAD.byteLength * 2))
+    expect(recovered.checkpoint.nextEntryOrdinal).toBe(3n)
+    expect(recovered.checkpoint.completion?.predecessorEpochRoot).toEqual(paused.checkpoint.epochRoot)
+    expect(harness.target.visible).toEqual(visible)
+    expect(harness.target.openEpochCount).toBe(2)
+    expect(harness.target.closeAttemptCount).toBe(2)
+    expect(harness.target.rangeReads).toEqual([{ start: candidate.rangeStart, end: candidate.stagedEnd }])
+  })
+
   it('retains the closing candidate when exact tail validation fails, then promotes on recovery', async () => {
-    const { harness, writer, seal, memberCheckpoint } = await preparedArchive()
+    const { harness, writer, seal } = await preparedArchive()
     harness.target.corruptClosingTail = true
     await expect(writer.closeArchive(seal)).rejects.toThrow()
     const candidate = harness.cuts.staged.at(-1)!
     expect(candidate.kind).toBe('closing')
-    expect(harness.cuts.promoted).toHaveLength(1)
+    expect(harness.cuts.promoted).toHaveLength(0)
 
     harness.target.corruptClosingTail = false
-    const closingCheckpoint = harness.cuts.closing.at(-1)!
-    const recovered = await harness.writer(closingCheckpoint).recoverCandidate(candidate, seal)
+    const recovered = await harness.writer().recoverCandidate(candidate, seal)
 
     expect(recovered.kind).toBe('promoted')
-    expect(harness.cuts.promoted).toHaveLength(2)
+    expect(harness.cuts.promoted).toHaveLength(1)
     expect(harness.cuts.promoted.at(-1)?.completion).toBeDefined()
-    expect(memberCheckpoint.phase).toBe('between-members')
+    expect(recovered.checkpoint.safeResumeBytes).toBe(BigInt(PAYLOAD.byteLength))
   })
 })
 
 async function preparedArchive(): Promise<{
   readonly harness: ReturnType<typeof createWriterHarness>
   readonly writer: ReturnType<ReturnType<typeof createWriterHarness>['writer']>
-  readonly memberCheckpoint: DirectZipWriterCheckpointV1
   readonly seal: DirectZipCompletionSealV1
 }> {
   const harness = createWriterHarness()
@@ -371,15 +447,13 @@ async function preparedArchive(): Promise<{
   const member = await writer.beginFile(fileAdmission(harness.checkpoint))
   await member.write(PAYLOAD)
   await member.close()
-  const paused = await writer.pause()
-  if (paused.kind !== 'advanced') throw new Error('test member checkpoint did not advance')
   const pages = await harness.pages.snapshot()
   const seal: DirectZipCompletionSealV1 = Object.freeze({
     entryCount: pages.layoutRecordCount,
     centralDirectoryBytes: pages.centralBytes,
     layoutRoot: pages.layoutRoot,
     centralRoot: pages.centralRoot,
-    preClosingEpochRoot: paused.checkpoint.epochRoot,
+    predecessorEpochRoot: harness.checkpoint.epochRoot,
   })
-  return { harness, writer, memberCheckpoint: paused.checkpoint, seal }
+  return { harness, writer, seal }
 }

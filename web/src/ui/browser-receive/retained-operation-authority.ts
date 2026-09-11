@@ -45,6 +45,7 @@ export function retainedOperationAuthority(
     case 'resume-direct-zip':
     case 'reauthorize-direct-zip':
     case 'verify-direct-zip-target':
+    case 'verify-direct-zip-completion':
     case 'retry-direct-zip-space':
       return hasDirectZipAuthority
         ? Object.freeze({ actions: retainedActions('continue', 'delete') })

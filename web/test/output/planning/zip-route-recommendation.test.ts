@@ -16,7 +16,7 @@ import {
   handoffTarget,
   identity,
   projection,
-  reviewedDirectZipSupport,
+  runtimeDirectZipSupport,
   treeProof,
   workspaceOffer,
 } from './fixture'
@@ -27,7 +27,7 @@ describe('ZIP route recommendation policy V1', () => {
       .resolves.toBe('zHRGRc5-OvZ4Z8U2E1ORwNWnccnf_p35QB8iSXlixqI')
   })
 
-  it('keeps direct unavailable and emits no recommendation without reviewed support and threshold', async () => {
+  it('requires runtime authority independently of optional route-ranking policy', async () => {
     const selection = await selectionSpec()
     const actions = requireActions(await offerArtifacts(
       projection(selection, treeProof(), 10n),
@@ -41,10 +41,20 @@ describe('ZIP route recommendation policy V1', () => {
       kind: 'no-recommendation', reason: 'only-one-route-available',
     })
     expect(actions.alternatives.some((choice) => choice.route.kind === 'direct-resumable-zip')).toBe(false)
-    expect(() => environment({
-      targets: [directZipTarget()],
-      directZipSupport: reviewedDirectZipSupport(),
-    })).toThrow(/reviewed support facts/u)
+    const directWithoutRanking = requireActions(await offerArtifacts(
+      projection(selection, treeProof(), 10n),
+      COMPLETE_DISCOVERY,
+      environment({
+        targets: [directZipTarget(), handoffTarget()],
+        workspace: workspaceOffer(),
+        directZipSupport: runtimeDirectZipSupport(),
+      }),
+    ))
+    expect(directWithoutRanking.zip?.primary.route.kind).toBe('direct-resumable-zip')
+    expect(directWithoutRanking.zip?.secondary?.route.kind).toBe('workspace-then-publish')
+    expect(directWithoutRanking.zip?.recommendation).toEqual({
+      kind: 'no-recommendation', reason: 'recommendation-policy-unavailable',
+    })
   })
 
   it('ranks both reviewed routes without changing their canonical choice identities', async () => {
@@ -57,12 +67,12 @@ describe('ZIP route recommendation policy V1', () => {
       environment({
         targets: [fsaTarget(), directZipTarget(), handoffTarget()],
         workspace: workspaceOffer(),
-        directZipSupport: reviewedDirectZipSupport(),
+        directZipSupport: runtimeDirectZipSupport(),
         zipRecommendationPolicy: {
           version: 1,
           kind: 'available',
           workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes,
-          policyDigest: reviewedDirectZipSupport().recommendationPolicyDigest,
+          policyDigest: identity(89, 32),
         },
       }),
     ))
@@ -71,7 +81,7 @@ describe('ZIP route recommendation policy V1', () => {
     expect(actions.zip?.primary.route.kind).toBe('workspace-then-publish')
     expect(actions.zip?.secondary?.route.kind).toBe('direct-resumable-zip')
     expect(actions.zip?.recommendation).toMatchObject({
-      kind: 'recommended', reason: 'workspace-within-reviewed-budget',
+      kind: 'recommended', reason: 'workspace-within-policy-budget',
     })
     expect(actions.zip?.primary.choice.choiceId)
       .toBe('vQj0Uda3oyRmvsZcz2qN0T9-f5m99Lcn0NK-9rS2_-k')
@@ -97,7 +107,7 @@ describe('ZIP route recommendation policy V1', () => {
         version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes - 1n,
-        policyDigest: reviewedDirectZipSupport().recommendationPolicyDigest,
+        policyDigest: identity(89, 32),
       },
     })?.primary.route.kind).toBe('direct-resumable-zip')
   })
@@ -122,6 +132,35 @@ it('keeps large ZIP64 recommendations available beyond the former workspace limi
   const observation = accumulator.complete()
   expect(observation.archiveBytes).toBeGreaterThan(exactSize)
   expect(observation.peakOwnedBytes).toBe(observation.archiveBytes + observation.durableMetadataBytes)
+})
+
+it('refines ZIP ranking from discovered whole-output bytes without completing discovery', async () => {
+  const selection = await selectionSpec()
+  const policy = { version: 1 as const, kind: 'available' as const,
+    workspacePeakBytesThreshold: 100n, policyDigest: identity(89, 32) }
+  const runtime = environment({ targets: [fsaTarget(), directZipTarget(), handoffTarget()],
+    workspace: workspaceOffer(), directZipSupport: runtimeDirectZipSupport(), zipRecommendationPolicy: policy })
+  const early = requireActions(await offerArtifacts(projection(selection, treeProof(), 10n),
+    { kind: 'discovering' }, runtime))
+  expect(early.zip?.recommendation).toMatchObject({
+    kind: 'recommended', reason: 'workspace-within-discovered-budget',
+  })
+  expect(early.primary.route.kind).toBe('direct-tree')
+  const later = requireActions(await offerArtifacts(projection(selection, treeProof(), 101n),
+    { kind: 'discovering' }, runtime))
+  expect(later.zip?.primary.route.kind).toBe('direct-resumable-zip')
+  expect(later.primary.route.kind).toBe('direct-tree')
+  expect(later.zip?.secondary?.choice.choiceId).toBe(early.zip?.primary.choice.choiceId)
+})
+
+it('snapshots growing archive costs without freezing or completing the accumulator', () => {
+  const accumulator = new WorkspaceCostObservationAccumulatorV1()
+  accumulator.observe({ kind: 'file', path: ['one'], exactSize: 10n })
+  const early = accumulator.snapshot()
+  accumulator.observe({ kind: 'file', path: ['two'], exactSize: 100n })
+  expect(accumulator.snapshot().archiveBytes).toBeGreaterThan(early.archiveBytes)
+  expect(accumulator.complete()).toEqual(accumulator.snapshot())
+  expect(() => accumulator.complete()).toThrow('only once')
 })
 
 function costObservation() {

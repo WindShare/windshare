@@ -163,6 +163,55 @@ it('exports operation recovery decisions with session and local operation correl
   })).toThrow()
 })
 
+describe('retained receive trace projection', () => {
+  it.each([
+    'resume-receive', 'resume-direct-zip', 'reauthorize-direct-zip',
+    'verify-direct-zip-target', 'retry-direct-zip-space', 'verify-direct-zip-completion',
+    'pending-catch-up', 'restoration-available', 'history-only', 'resume-package',
+    'resume-local-finalization', 'save-artifact', 'retry-download',
+    'cleanup-incompatible', 'retry-cleanup', 'needs-attention',
+  ] as const)('exports retained continuation %s through every action milestone', (continuation) => {
+    for (const name of [
+      'receive.inventory.action.started',
+      'receive.inventory.action.completed',
+      'receive.inventory.action.failed',
+    ] as const) {
+      const projected = projectV2ReceiverTraceEvent({
+        name,
+        retained_action: 'continue',
+        continuation,
+      })
+      expect(projected.eventName).toBe('retained_action')
+      expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    }
+  })
+
+  it('distinguishes verification of a completed ZIP from receiving more content', () => {
+    const projected = projectV2ReceiverTraceEvent({
+      name: 'receive.inventory.action.started',
+      retained_action: 'continue',
+      continuation: 'verify-direct-zip-completion',
+    })
+    expect(projected.payload).toEqual({
+      transition: 'started',
+      action: 'continue',
+      continuation: 'verify_direct_zip_completion',
+    })
+  })
+
+  it('keeps retained-inventory failure events closed at the typed adapter', () => {
+    const projected = projectV2ReceiverTraceEvent({
+      name: 'receive.inventory.load.failed',
+    })
+
+    expect(projected).toEqual({
+      eventName: 'retained_inventory',
+      payload: { transition: 'load_failed' },
+    })
+    expect(Object.keys(projected.payload)).toEqual(['transition'])
+  })
+})
+
 describe('browser diagnostics production composition', () => {
   it('uses injected package identity and the test build mode', () => {
     expect(browserBuildSnapshot()).toEqual({
@@ -225,18 +274,6 @@ describe('browser diagnostics production composition', () => {
       },
     })
     expect(error).not.toHaveBeenCalled()
-  })
-
-  it('keeps retained-inventory failure events closed at the typed adapter', () => {
-    const projected = projectV2ReceiverTraceEvent({
-      name: 'receive.inventory.load.failed',
-    })
-
-    expect(projected).toEqual({
-      eventName: 'retained_inventory',
-      payload: { transition: 'load_failed' },
-    })
-    expect(Object.keys(projected.payload)).toEqual(['transition'])
   })
 
   it('projects activation decisions with stable local identity across observation replacement', () => {

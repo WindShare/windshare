@@ -70,7 +70,10 @@ type fakeWindowsRevisionRoot struct {
 	closeErr    error
 	identity    [windowsRevisionIdentityBytes]byte
 	identityErr error
+	profile     windowsRevisionProfile
 }
+
+func (r *fakeWindowsRevisionRoot) RevisionProfile() windowsRevisionProfile { return r.profile }
 
 func (r *fakeWindowsRevisionRoot) Identity() ([windowsRevisionIdentityBytes]byte, error) {
 	r.mu.Lock()
@@ -151,10 +154,11 @@ func (f *fakeWindowsRevisionFile) Close() error {
 
 func windowsTestToken(seed byte, size uint64) windowsMutationToken {
 	var identity [windowsRevisionIdentityBytes]byte
-	identity[0] = seed
+	identity[0] = windowsIdentityFullWidth
+	identity[1] = seed
 	identity[len(identity)-1] = seed + 10
 	return windowsMutationToken{
-		identity: identity, size: size,
+		identity: identity, size: size, profile: windowsRevisionProfileLocalNTFS,
 		lastWrite: windowsFiletimeUnixOffset + 20_000_000, changeTime: int64(seed) + 30,
 	}
 }
@@ -343,30 +347,6 @@ func TestWindowsPersistentIdentityUsesFullReFSWidth(t *testing.T) {
 	if first.sameOpenedRevision(second) || bytes.Equal(first.sourceIdentityBytes(), second.sourceIdentityBytes()) ||
 		bytes.Equal(first.candidateBytes(), second.candidateBytes()) {
 		t.Fatal("distinct 128-bit file IDs collapsed to the legacy 64-bit identity")
-	}
-}
-
-func TestWindowsRevisionVolumeSupportMatrix(t *testing.T) {
-	localNTFS := windowsRevisionVolume{
-		filesystem: "NTFS", path: `\\?\C:\root`, driveType: windows.DRIVE_FIXED,
-	}
-	localReFS := windowsRevisionVolume{
-		filesystem: "ReFS", path: `\\?\R:\root`, driveType: windows.DRIVE_REMOVABLE,
-	}
-	for _, supported := range []windowsRevisionVolume{localNTFS, localReFS} {
-		if err := validateWindowsLocalRevisionVolume(supported); err != nil {
-			t.Fatalf("stable volume %+v: %v", supported, err)
-		}
-	}
-	unsupported := []windowsRevisionVolume{
-		{filesystem: "FAT32", path: `\\?\F:\root`, driveType: windows.DRIVE_REMOVABLE},
-		{filesystem: "NTFS", path: `\\?\UNC\server\share\root`, driveType: windows.DRIVE_REMOTE},
-		{filesystem: "NTFS", path: `\\?\Z:\root`, driveType: windows.DRIVE_REMOTE},
-	}
-	for _, volume := range unsupported {
-		if err := validateWindowsLocalRevisionVolume(volume); err == nil {
-			t.Fatalf("unsupported stable volume admitted: %+v", volume)
-		}
 	}
 }
 
@@ -724,7 +704,7 @@ func TestWindowsStableSourceRejectsPreexistingWritableMapping(t *testing.T) {
 	identity, candidate, err := WindowsCatalogBaseline(baseline)
 	_ = baseline.Close()
 	if errors.Is(err, content.ErrUnsupportedStability) {
-		t.Skipf("Windows test volume is outside the frozen support matrix: %v", err)
+		t.Skipf("Windows test provider lacks a required source capability: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)
@@ -769,7 +749,7 @@ func TestWindowsRootedRevisionSourceRejectsExistingWriterAndIntermediateReparse(
 	identity, candidate, err := WindowsCatalogBaseline(baseline)
 	_ = baseline.Close()
 	if errors.Is(err, content.ErrUnsupportedStability) {
-		t.Skipf("Windows test volume is outside the frozen support matrix: %v", err)
+		t.Skipf("Windows test provider lacks a required source capability: %v", err)
 	}
 	if err != nil {
 		t.Fatal(err)

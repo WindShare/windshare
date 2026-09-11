@@ -111,8 +111,12 @@ func (root *linuxOutputDirectory) probeDestinationCapabilitiesWithRandom(
 			resultErr = errors.Join(resultErr, releaseErr)
 		}
 	}()
-	if err := root.recoverOutputProbeLeftovers(); err != nil {
-		return results, err
+	// A process-only root never adopts or deletes prior process artifacts. Its
+	// fresh probe name is exclusively created and retained through cleanup.
+	if root.binding.restart != nil {
+		if err := root.recoverOutputProbeLeftovers(); err != nil {
+			return results, err
+		}
 	}
 	if random == nil {
 		return results, linuxUnsafe(operation, "random source is absent", nil)
@@ -171,9 +175,28 @@ type linuxOutputProbe struct {
 }
 
 func (probe *linuxOutputProbe) runCapabilityFacts() (results linuxCapabilityProbeResults, resultErr error) {
-	// Each report is native evidence for one semantic fact. Later runtime
-	// composition decides which conjunction selects resumable or live-only mode;
-	// the platform must not erase unrelated evidence through probe ordering.
+	if probe.root.binding.restart == nil {
+		results.safePublish = probe.probeSafePublish()
+		if err := probe.cleanupFactArtifacts(); err != nil {
+			return results, linuxUnsafe("probe process output", "fixed publication artifacts could not be removed", err)
+		}
+		if results.safePublish == nil {
+			results.safePublish = probe.probePublicProfileStage()
+			if err := probe.cleanupFactArtifacts(); err != nil {
+				return results, linuxUnsafe("probe process output", "fixed stage artifacts could not be removed", err)
+			}
+		}
+		// Native operations establish availability, not crash guarantees. Only
+		// the separately enrolled restart certificate supplies those guarantees.
+		unsupported := linuxUnsupported("probe output recovery", "output root has no restart certificate", nil)
+		results.operationRecovery = unsupported
+		results.rangeRecovery = unsupported
+		results.crashCleanup = unsupported
+		return results, nil
+	}
+	// Probe each primitive independently, then reduce it into the guarantees
+	// that require it. Both publication modes need a stage with the final
+	// parent's actual permission profile; recovery needs additional evidence.
 	facts := []struct {
 		probe func() error
 		set   func(error)
@@ -181,7 +204,10 @@ func (probe *linuxOutputProbe) runCapabilityFacts() (results linuxCapabilityProb
 		{probe.probeSafePublish, func(err error) { results.safePublish = err }},
 		{probe.probeRangeRecovery, func(err error) { results.rangeRecovery = err }},
 		{probe.probeOperationRecovery, func(err error) { results.operationRecovery = err }},
-		{probe.probeCrashCleanup, func(err error) { results.crashCleanup = err }},
+		{probe.probePublicProfileStage, func(err error) {
+			results.safePublish = errors.Join(results.safePublish, err)
+			results.crashCleanup = err
+		}},
 	}
 	for _, fact := range facts {
 		fact.set(fact.probe())
@@ -313,21 +339,20 @@ func (probe *linuxOutputProbe) probeOperationRecovery() error {
 	return nil
 }
 
-func (probe *linuxOutputProbe) probeCrashCleanup() error {
-	const operation = "probe Linux crash cleanup"
+func (probe *linuxOutputProbe) probePublicProfileStage() error {
+	const operation = "probe Linux public-profile stage"
 	if err := probe.directory.validatePrivateAuthority(operation); err != nil {
 		return err
 	}
-	// Exercise the exact live-only primitive independently of ordinary publish:
-	// unprivileged O_TMPFILE through the public parent, then AT_EMPTY_PATH install
-	// into the protected proof directory. Unsupported kernels/filesystems disable
-	// only CrashCleanup; a named-file or ACL-copy fallback is forbidden.
-	liveStage, err := probe.root.createLiveCleanupStage(probe.directory, "live-stage", 0)
+	// O_TMPFILE through the final parent preserves its actual umask/default ACL.
+	// Installation into a private directory keeps the same inode for publication
+	// and current-process deletion; restart cleanup additionally needs a certificate.
+	liveStage, err := probe.root.createPublicProfileStage(probe.directory, "live-stage", 0)
+	probe.liveStage = liveStage
+	probe.liveStagePresent = liveStage != nil
 	if err != nil {
 		return linuxUnsupported(operation, "anonymous public-profile stage installation is unavailable", err)
 	}
-	probe.liveStage = liveStage
-	probe.liveStagePresent = true
 	matches, err := probe.directory.regularEntryMatches("live-stage", liveStage)
 	if err != nil || !matches {
 		return errors.Join(linuxUnsafe(operation,

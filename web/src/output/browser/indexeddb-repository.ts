@@ -82,6 +82,7 @@ import {
 } from './indexeddb/checkpoint-authority-transactions'
 import type { IndexedDbSemanticTransactionFaults } from './indexeddb/materialization-ledger-transactions'
 import { IndexedDbMaterializationLedgerParticipant } from './indexeddb/materialization-ledger-repository'
+import { IndexedDbFileCommitParticipants, type IndexedDbFileCommitParticipant } from './indexeddb/file-commit-participants'
 import { snapshotMaterializationRootRelativePath } from '../../transfer/job/coordinate/direct-tree'
 
 export { IndexedDbOperationConcurrencyError } from './indexeddb/repository-transactions'
@@ -98,6 +99,7 @@ implements SemanticFileCheckpointJournal,
   readonly binding: CheckpointNamespaceBinding
   readonly #database: IDBDatabase
   readonly #ledger: IndexedDbMaterializationLedgerParticipant
+  readonly #fileCommits = new IndexedDbFileCommitParticipants()
   #closed = false
 
   private constructor(
@@ -110,6 +112,7 @@ implements SemanticFileCheckpointJournal,
     this.#ledger = new IndexedDbMaterializationLedgerParticipant({
       database,
       checkpointBinding: binding,
+      fileCommits: this.#fileCommits,
       ...(faults === undefined ? {} : { faults }),
       assertOpen: () => this.#assertOpen(),
     })
@@ -163,21 +166,35 @@ implements SemanticFileCheckpointJournal,
     return (await this.installInitialClaims([candidate]))[0]!
   }
 
+  enlistFileCommit(fileId: string, participant: IndexedDbFileCommitParticipant): () => void {
+    this.#assertOpen()
+    return this.#fileCommits.enlistFileCommit(fileId, participant)
+  }
+
   async installInitialClaims(
     candidates: readonly FileCheckpointV2[],
   ): Promise<readonly InitialCheckpointCASResult[]> {
     this.#assertBatchSize(candidates.length)
     for (const candidate of candidates) this.#assertBinding(candidate)
-    const transaction = this.#database.transaction([
+    const participation = this.#fileCommits.prepare(candidates)
+    const transaction = this.#database.transaction([...new Set([
       INDEXEDDB_FILE_CHECKPOINT_CANDIDATE_STORE,
       INDEXEDDB_FILE_CHECKPOINT_COMMITTED_STORE,
-    ], 'readwrite')
+      ...participation.stores,
+    ])], 'readwrite')
+    const completion = transactionCompletion(transaction)
+    completion.catch(() => undefined)
     try {
       const results = await installIndexedInitialClaims(transaction, this.binding, candidates)
-      await transactionCompletion(transaction)
+      const publish = await participation.apply(transaction, results.flatMap(result =>
+        result.kind === 'installed' || result.kind === 'exact'
+          ? [{ kind: 'initial-claim' as const, checkpoint: result.record }] : []))
+      await completion
+      publish()
       return results
     } catch (error) {
       abortQuietly(transaction)
+      await completion.catch(() => undefined)
       throw error
     }
   }

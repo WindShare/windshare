@@ -23,7 +23,7 @@ import {
 import {
   decideDirectZipAutomaticCheckpointV1,
   type DirectZipAutomaticCheckpointDecisionV1,
-  type DirectZipAutomaticEpochBudgetV1,
+  type DirectZipAutomaticEpochPolicyV1,
 } from './policy'
 import {
   mutableMember,
@@ -97,8 +97,7 @@ export interface DirectZipEpochWriterOptionsV1 {
   readonly cuts: DirectZipWriterCutSink
   readonly target: DirectZipTargetVerificationPort
   readonly identities: DirectZipWriterIdentityPort
-  readonly automaticBudget?: DirectZipAutomaticEpochBudgetV1
-  readonly cumulativePrefixCopyBytes?: bigint
+  readonly automaticPolicy?: DirectZipAutomaticEpochPolicyV1
   readonly observe?: DirectZipWriterObserver
 }
 
@@ -112,7 +111,7 @@ export class DirectZipEpochWriterV1 {
   readonly #cuts: DirectZipWriterCutSink
   readonly #target: DirectZipTargetVerificationPort
   readonly #identities: DirectZipWriterIdentityPort
-  readonly #automaticBudget: DirectZipAutomaticEpochBudgetV1 | undefined
+  readonly #automaticPolicy: DirectZipAutomaticEpochPolicyV1 | undefined
   readonly #observe: DirectZipWriterObserver | undefined
   #checkpoint: DirectZipWriterCheckpointV1
   #phase: DirectZipWriterCheckpointV1['phase']
@@ -125,7 +124,6 @@ export class DirectZipEpochWriterV1 {
   #epochId: string | undefined
   #epochStart: bigint
   #epochDigest = new DirectZipSha256Accumulator()
-  #cumulativePrefixCopyBytes: bigint
   #memberHandleGeneration = 0
   #mutationInFlight = false
   #published = false
@@ -139,7 +137,7 @@ export class DirectZipEpochWriterV1 {
     this.#cuts = options.cuts
     this.#target = options.target
     this.#identities = options.identities
-    this.#automaticBudget = options.automaticBudget
+    this.#automaticPolicy = options.automaticPolicy
     this.#observe = options.observe
     this.#checkpoint = snapshotCheckpoint(options.checkpoint)
     this.#phase = this.#checkpoint.phase
@@ -150,12 +148,10 @@ export class DirectZipEpochWriterV1 {
     this.#closing = this.#checkpoint.closing
     this.#published = this.#checkpoint.completion !== undefined
     this.#epochStart = this.#checkpoint.committedLength
-    this.#cumulativePrefixCopyBytes = options.cumulativePrefixCopyBytes ?? 0n
     requireCheckpointShape(this.#checkpoint)
     this.#closingCoordinator = new DirectZipClosingCoordinator({
       context: this.#context,
       pages: this.#pages,
-      cuts: this.#cuts,
       target: this.#target,
       writeArchive: (bytes, offsetClass) => this.#writeArchive(bytes, offsetClass),
       archiveOffset: () => this.#archiveOffset,
@@ -272,9 +268,9 @@ export class DirectZipEpochWriterV1 {
   async automaticCheckpoint(): Promise<DirectZipCheckpointCutResultV1> {
     return this.#exclusive(async () => {
       const decision = decideDirectZipAutomaticCheckpointV1({
-        committedLength: this.#archiveOffset,
-        cumulativePrefixCopyBytes: this.#cumulativePrefixCopyBytes,
-        ...(this.#automaticBudget === undefined ? {} : { budget: this.#automaticBudget }),
+        archiveOffset: this.#archiveOffset,
+        committedLength: this.#checkpoint.committedLength,
+        ...(this.#automaticPolicy === undefined ? {} : { policy: this.#automaticPolicy }),
       })
       this.#emit('checkpoint-policy-decided', {
         decision: decision.kind === 'admit' ? 'admit' : `decline:${decision.reason}`,
@@ -288,9 +284,6 @@ export class DirectZipEpochWriterV1 {
         })
       }
       const result = await this.#checkpointEpoch('epoch')
-      if (result.kind === 'advanced') {
-        this.#cumulativePrefixCopyBytes = decision.nextCumulativePrefixCopyBytes
-      }
       return Object.freeze({ ...result, policyDecision: decision })
     })
   }
@@ -308,7 +301,9 @@ export class DirectZipEpochWriterV1 {
         throw new TypeError('direct ZIP closing recovery requires the completion seal')
       }
       const completion = candidate.kind === 'closing'
-        ? await this.#closingCoordinator.completionInput(this.#checkpoint, closingSeal!)
+        ? await this.#closingCoordinator.completionInput(
+          candidate.proposed, closingSeal!, this.#checkpoint.epochRoot,
+        )
         : undefined
       return this.#recoveryCoordinator.resolveCandidate(
         candidate,
@@ -325,7 +320,7 @@ export class DirectZipEpochWriterV1 {
         const completionInput = await this.#closingCoordinator.completionInput(
           this.#checkpoint,
           seal,
-          this.#checkpoint.completion.preClosingEpochRoot,
+          this.#checkpoint.completion.predecessorEpochRoot,
         )
         return this.#closingCoordinator.validateCompletion(this.#checkpoint, completionInput)
       }
@@ -333,16 +328,13 @@ export class DirectZipEpochWriterV1 {
       if (this.#phase === 'inside-member') {
         throw new Error('direct ZIP cannot close while a member is incomplete')
       }
-      if (this.#phase === 'between-members' && this.#archiveOffset !== this.#checkpoint.committedLength) {
-        const cut = await this.#checkpointEpoch('epoch')
-        if (cut.kind !== 'advanced') throw new Error('direct ZIP member epoch requires replay before closing')
-      }
       const pages = await this.#pages.snapshot()
       requireCompletionSeal(seal, pages, this.#nextEntryOrdinal, this.#checkpoint.epochRoot)
-      if (this.#phase === 'between-members') await this.#enterClosing(seal)
+      if (this.#phase === 'between-members') this.#enterClosing(seal)
       try {
         const completionInput = await this.#closingCoordinator.writeClosingRecords(
-          this.#checkpoint,
+          this.#closing!,
+          pages,
           seal,
         )
         const result = await this.#checkpointEpoch('closing', completionInput)
@@ -503,13 +495,11 @@ export class DirectZipEpochWriterV1 {
     }
   }
 
-  async #enterClosing(seal: DirectZipCompletionSealV1): Promise<void> {
-    const checkpoint = await this.#closingCoordinator.stageClosingCheckpoint(this.#checkpoint, seal)
-    this.#checkpoint = checkpoint
+  #enterClosing(seal: DirectZipCompletionSealV1): void {
+    // The final candidate commits pending members and the ZIP tail together. Keeping
+    // the real predecessor avoids a full-prefix copy just to append closing records.
     this.#phase = 'closing'
-    this.#closing = checkpoint.closing
-    this.#archiveOffset = checkpoint.archiveOffset
-    this.#epochStart = checkpoint.committedLength
+    this.#closing = this.#closingCoordinator.closingState(this.#archiveOffset, seal)
     this.#emit('closing-entered', { offsetClass: 'central-directory' })
   }
 

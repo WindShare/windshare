@@ -30,7 +30,13 @@ import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/se
 import { OriginPrivateWorkspaceBudgetAuthority } from '../../src/output/origin-private/admission'
 import { openOriginPrivateRetainedArtifactBackend } from '../../src/output/origin-private/session'
 import { openOriginPrivateWorkspaceNamespace } from '../../src/output/origin-private/namespace'
-import { openOriginPrivateProgressiveZipBackend } from '../../src/output/origin-private/progressive-backend'
+import {
+  openOriginPrivateProgressiveZipBackend,
+  progressiveZipObjectRef,
+} from '../../src/output/origin-private/progressive-backend'
+import { IndexedDbTaskCheckpointStore } from '../../src/output/origin-private/task-checkpoint/indexeddb-store'
+import type { TaskCheckpoint } from '../../src/output/origin-private/task-checkpoint/model'
+import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { RECEIVE_RECORD_RECEIPT } from '../../src/output/workspace/records'
 import {
   createBrowserReceiveComposition,
@@ -82,6 +88,10 @@ export interface ProductProgressiveZipAdmissionProof {
   readonly admission: string
   readonly lifecycle: string
   readonly traceNames: readonly string[]
+  readonly checkpointStages: readonly string[]
+  readonly checkpointBeforePause: TaskCheckpoint
+  readonly checkpointAfterPause: TaskCheckpoint
+  readonly paused: ReceiveLifecycleState
   readonly cleanup: string
 }
 
@@ -192,6 +202,7 @@ export async function proveFreshProgressiveZipAdmission(
 export async function proveProductProgressiveZipAdmission(
   key: string,
 ): Promise<ProductProgressiveZipAdmissionProof> {
+  let checkpointStore: IndexedDbTaskCheckpointStore | undefined
   const ids = await durableIdentities(key)
   const selection = await createSelectionSpec({
     shareInstance: ids.shareInstance,
@@ -237,6 +248,8 @@ export async function proveProductProgressiveZipAdmission(
     if (admission.kind !== 'accepted') {
       throw new DOMException('product workspace ZIP was rejected', 'QuotaExceededError')
     }
+    checkpointStore = await IndexedDbTaskCheckpointStore.open(await progressiveZipObjectRef(intent))
+    const checkpointBeforePause = await checkpointStore.readCheckpoint()
     const paused = await admission.execution.pause(Object.freeze({
       worker: transferWorkerSettlement('Paused', EMPTY_TRANSFER_FAILURE_SUMMARY),
       materialization: EMPTY_MATERIALIZATION_SUMMARY,
@@ -247,14 +260,25 @@ export async function proveProductProgressiveZipAdmission(
       }),
       reason: 'product admission proof completed',
     }), signal)
+    const checkpointAfterPause = await checkpointStore.readCheckpoint()
+    checkpointStore.close()
+    if (checkpointBeforePause === undefined || checkpointAfterPause === undefined) {
+      throw new Error('Product admission and pause must retain a durable task checkpoint')
+    }
     const discarded = await runtime.startLifecycleAction('discard', paused)
     return Object.freeze({
       admission: admission.kind,
       lifecycle: 'receiving',
       traceNames: Object.freeze(traces.map(event => event.name)),
+      checkpointStages: Object.freeze(traces.flatMap(event =>
+        event.name === 'receive.opfs.checkpoint' ? [event.stage] : [])),
+      checkpointBeforePause,
+      checkpointAfterPause,
+      paused,
       cleanup: discarded.lifecycle.kind,
     })
   } finally {
+    checkpointStore?.close()
     if (runtime !== undefined) {
       await Promise.resolve(runtime.detach()).catch(() => undefined)
     }

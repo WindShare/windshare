@@ -44,15 +44,19 @@ const DIRECTORY_HANDLE_DOMAIN = 'windshare/origin-private/directory-handle/v2'
 
 type OriginPrivateObjectIdentityStage = Exclude<TargetOwnershipStage, 'reservation'>
 
+export type OriginPrivateRawObjectRoot = Pick<OriginPrivateWorkspaceRoot,
+  | 'operationId' | 'authorityRef' | 'authorize' | 'prepareContainers' | 'rootOwnedObjectId'
+  | 'readObject' | 'createObject' | 'removeObject' | 'sameObject' | 'reserveGrowth' | 'reconcileObject'>
+
 export interface OriginPrivateWorkspaceTreeOptions {
-  readonly root: OriginPrivateWorkspaceRoot
+  readonly root: OriginPrivateRawObjectRoot
   readonly handles: PersistentHandleRepository
   readonly nativeObjectFactory?: NativeObjectFactory
 }
 
 /** Flat object names avoid giving mutable artifact paths any namespace authority. */
 export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
-  readonly #root: OriginPrivateWorkspaceRoot
+  readonly #root: OriginPrivateRawObjectRoot
   readonly #handles: PersistentHandleRepository
   readonly #nativeObjectFactory: NativeObjectFactory
 
@@ -372,7 +376,7 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
   readonly durability = 'native-in-place' as const
   readonly ownedObjectId: string
   readonly #handle: FileSystemFileHandle
-  readonly #root: OriginPrivateWorkspaceRoot
+  readonly #root: OriginPrivateRawObjectRoot
   readonly #nativeObjectFactory: NativeObjectFactory
   readonly #verifyIdentity: PersistentTreeFile['verify']
   #writer: NativeObjectIO | undefined
@@ -381,7 +385,7 @@ class OriginPrivatePersistentFile implements PersistentTreeFile {
   constructor(input: {
     readonly ownedObjectId: string
     readonly handle: FileSystemFileHandle
-    readonly root: OriginPrivateWorkspaceRoot
+    readonly root: OriginPrivateRawObjectRoot
     readonly nativeObjectFactory: NativeObjectFactory
     readonly verify: PersistentTreeFile['verify']
   }) {

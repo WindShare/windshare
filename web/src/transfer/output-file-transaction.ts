@@ -1,6 +1,7 @@
 import { ByteRangeSet, byteRange } from '../content/geometry'
 import {
   snapshotOpenedOutputRevision,
+  MAXIMUM_VERIFIED_DURABLE_RANGES,
   VerifiedDurableRanges,
   VerifiedFinalOutputFile,
 } from './output-session'
@@ -20,6 +21,7 @@ import type {
 export interface BoundOutputFileTransaction {
   readonly transaction: OutputFileTransaction
   readonly initialDurable: VerifiedDurableRanges
+  readonly initialAccepted: ByteRangeSet
 }
 
 /**
@@ -44,7 +46,12 @@ export function bindOutputFileTransaction(
     if (!durable && !initialDurable.asRangeSet().empty) {
       throw new OutputCheckpointContractError('transient output cannot claim durable resumable ranges')
     }
-    if (!session.capabilities.randomWrite) requireCanonicalPrefix(initialDurable.asRangeSet())
+    const initialAccepted = begun.acceptedRanges === undefined ? initialDurable.asRangeSet()
+      : snapshotAcceptedRanges(file.exactSize, begun.acceptedRanges)
+    if (!initialAccepted.missingFrom(initialDurable.asRangeSet()).empty) {
+      throw new OutputCheckpointContractError('accepted output coverage omits durable ranges')
+    }
+    if (!session.capabilities.randomWrite) requireCanonicalPrefix(initialAccepted)
     return Object.freeze({
       transaction: new SourceBoundOutputTransaction(
         transaction,
@@ -52,10 +59,12 @@ export function bindOutputFileTransaction(
         session.identity,
         initialDurable.ownership,
         initialDurable,
+        initialAccepted,
         durable,
         session.capabilities.randomWrite,
       ),
       initialDurable,
+      initialAccepted,
     })
   } catch (cause) {
     if (cause instanceof OutputTransactionContractError) throw cause
@@ -110,6 +119,7 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
     session: OutputSessionIdentity,
     ownership: OutputFileOwnership,
     durableRanges: VerifiedDurableRanges,
+    acceptedRanges: ByteRangeSet,
     durable: boolean,
     positioned: boolean,
   ) {
@@ -120,8 +130,8 @@ class SourceBoundOutputTransaction implements OutputFileTransaction {
     this.#durable = durable
     this.#positioned = positioned
     this.#durableRanges = durableRanges
-    this.#pendingRanges = new ByteRangeSet(file.exactSize, [])
-    this.#nextSequentialOffset = positioned ? 0n : requireCanonicalPrefix(durableRanges.asRangeSet())
+    this.#pendingRanges = durableRanges.asRangeSet().missingFrom(acceptedRanges)
+    this.#nextSequentialOffset = positioned ? 0n : requireCanonicalPrefix(acceptedRanges)
   }
 
   async writeRange(offset: bigint, data: Uint8Array, signal: AbortSignal): Promise<void> {
@@ -374,6 +384,21 @@ function requireFinalBinding(
     )
   }
   return proof
+}
+
+function snapshotAcceptedRanges(fileSize: bigint, ranges: readonly import('../content/geometry').ByteRange[]): ByteRangeSet {
+  let previousEnd = -1n
+  if (!Array.isArray(ranges) || ranges.length > MAXIMUM_VERIFIED_DURABLE_RANGES) {
+    throw new OutputCheckpointContractError('accepted output ranges exceed their canonical bound')
+  }
+  for (const range of ranges) {
+    if (typeof range?.start !== 'bigint' || typeof range.end !== 'bigint' ||
+        range.start < 0n || range.end <= range.start || range.end > fileSize || range.start <= previousEnd) {
+      throw new OutputCheckpointContractError('accepted output ranges are not canonical')
+    }
+    previousEnd = range.end
+  }
+  return new ByteRangeSet(fileSize, ranges)
 }
 
 function hasFunction(value: object, property: string): boolean {

@@ -159,6 +159,8 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The transfer session failed."
 	case clievent.MessageOutputFailed:
 		message = "The destination could not be updated safely."
+	case clievent.MessageOutputRecoveryUnavailable:
+		message = "Downloading without restart recovery. Keep WindShare running; an unexpected exit may leave unfinished files."
 	case clievent.MessageCheckpointFailed:
 		message = "The recovery checkpoint could not be updated safely."
 	case clievent.MessagePublicationFailed:

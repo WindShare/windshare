@@ -1,7 +1,7 @@
 import type { DirectZipDiagnosticsObserver } from '../../output/direct-zip/diagnostics'
 import {
   DirectZipEpochWriterV1,
-  type DirectZipAutomaticEpochBudgetV1,
+  type DirectZipAutomaticEpochPolicyV1,
   type DirectZipTargetVerificationPort,
   type DirectZipWriterContextV1,
   type DirectZipWriterCutSink,
@@ -18,7 +18,7 @@ import type {
   OutputSessionIdentity,
 } from '../output-session'
 import { DirectZipTransferDiagnosticsV1 } from './diagnostics'
-import type { DirectZipIntent, DirectZipSettlementAuthorityV1 } from './model'
+import type { DirectZipIntent, DirectZipPayloadProgressV1, DirectZipSettlementAuthorityV1 } from './model'
 import {
   DirectZipTransferOutputV1,
   type DirectZipMemberRollbackAuthorityV1,
@@ -35,7 +35,7 @@ export interface DirectZipWriterJournalPortV1 extends
 
 export class DirectZipRuntimeUnsupportedError extends Error {
   constructor() {
-    super('Direct resumable ZIP is unavailable without reviewed runtime support evidence')
+    super('Direct resumable ZIP is unavailable without an installed output session')
     this.name = 'DirectZipRuntimeUnsupportedError'
   }
 }
@@ -50,13 +50,13 @@ export interface DirectZipExecutionOptionsV1 {
     journal: DirectZipWriterJournalPortV1
     target: DirectZipTargetVerificationPort
     identities: DirectZipWriterIdentityPort
-    automaticBudget?: DirectZipAutomaticEpochBudgetV1
-    cumulativePrefixCopyBytes?: bigint
+    automaticPolicy?: DirectZipAutomaticEpochPolicyV1
   }>
   readonly replay: DirectZipReplayAuthorityV1
   readonly rollback: DirectZipMemberRollbackAuthorityV1
   readonly settlement: DirectZipSettlementAuthorityV1
   readonly diagnostics?: DirectZipDiagnosticsObserver
+  readonly onProgress?: (snapshot: DirectZipPayloadProgressV1) => void
 }
 
 /** Browser route assembly supplies acquired target and durable journal ports; this factory never picks either. */
@@ -89,12 +89,9 @@ export async function createDirectZipExecutionV1(
     cuts: input.writer.journal,
     target: input.writer.target,
     identities: input.writer.identities,
-    ...(input.writer.automaticBudget === undefined
+    ...(input.writer.automaticPolicy === undefined
       ? {}
-      : { automaticBudget: input.writer.automaticBudget }),
-    ...(input.writer.cumulativePrefixCopyBytes === undefined
-      ? {}
-      : { cumulativePrefixCopyBytes: input.writer.cumulativePrefixCopyBytes }),
+      : { automaticPolicy: input.writer.automaticPolicy }),
     observe: diagnostics.writerObserver(),
   })
   const output = new DirectZipTransferOutputV1({
@@ -109,6 +106,7 @@ export async function createDirectZipExecutionV1(
     pages: input.writer.journal,
     replay: input.replay,
     rollback: input.rollback,
+    ...(input.onProgress === undefined ? {} : { onProgress: input.onProgress }),
   })
   diagnostics.session('session-started', writer.committedCheckpoint.phase)
   const execution: DirectResumableZipExecution = {

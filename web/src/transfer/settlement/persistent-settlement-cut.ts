@@ -7,12 +7,12 @@ import type {
 export class PersistentSettlementCut<Evidence extends PersistentMaterializationEvidence>
 implements PersistentMaterializationSettlementCut<Evidence> {
   readonly #evidence: Evidence | (() => Evidence)
-  readonly #close: () => Promise<void>
+  readonly #close: (committedState?: ReceiveLifecycleState) => Promise<void>
   #snapshot: Evidence | undefined
   #sealed = false
   #closePromise: Promise<void> | undefined
 
-  constructor(evidence: Evidence | (() => Evidence), close: () => Promise<void>) {
+  constructor(evidence: Evidence | (() => Evidence), close: (committedState?: ReceiveLifecycleState) => Promise<void>) {
     this.#evidence = evidence
     this.#close = close
   }
@@ -34,8 +34,8 @@ implements PersistentMaterializationSettlementCut<Evidence> {
     return evidence
   }
 
-  closeMaterialization(): Promise<void> {
-    this.#closePromise ??= this.#close()
+  closeMaterialization(committedState?: ReceiveLifecycleState): Promise<void> {
+    this.#closePromise ??= this.#close(committedState)
     return this.#closePromise
   }
 

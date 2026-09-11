@@ -122,10 +122,6 @@ export interface DirectZipWriterCutSink {
     disposition: 'replay-predecessor' | 'truncate-and-replay'
     checkpoint: DirectZipWriterCheckpointV1
   }>): Promise<void>
-  enterClosing(input: Readonly<{
-    predecessorGeneration: bigint
-    checkpoint: DirectZipWriterCheckpointV1
-  }>): Promise<void>
 }
 
 export interface DirectZipWriterIdentityPort {

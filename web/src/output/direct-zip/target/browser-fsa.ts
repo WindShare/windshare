@@ -15,7 +15,7 @@ interface PermissionCapableDirectoryHandle extends FileSystemDirectoryHandle {
 }
 
 export interface DirectZipBrowserFileSystemOptions {
-  /** Support policy must opt in after matching reviewed real-local evidence. */
+  /** Only a complete owner session may construct this mutation port. */
   readonly enabled?: boolean
 }
 
@@ -24,7 +24,7 @@ export function createDirectZipBrowserFileSystemPort(
 ): DirectZipFileSystemPort<FileSystemDirectoryHandle, FileSystemFileHandle> {
   if ((options.enabled ?? DIRECT_ZIP_BROWSER_TARGET_ENABLED_BY_DEFAULT) !== true) {
     throw new DOMException(
-      'Direct resumable ZIP target support requires an injected reviewed support verdict',
+      'Direct resumable ZIP target access requires an installed ownership session',
       'NotSupportedError',
     )
   }

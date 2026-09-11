@@ -384,13 +384,13 @@ func TestLinuxIdentityCoverageCertificationUsesRecoveryIdentity(t *testing.T) {
 				return linuxIdentityCoverageRestart(mount), nil
 			},
 		}
-		certificate, err := linuxCertifyExt4OutputFD(&system, 31)
+		binding, err := linuxCertifyExt4OutputFD(&system, 31)
 		if err != nil {
 			t.Fatalf("certify output identity: %v", err)
 		}
-		if readCalls != 1 || !certificate.rootRestartIdentity.matchesHandle(certificate.rootObject) {
-			t.Fatalf("certification did not retain one recovery observation: reads=%d certificate=%+v",
-				readCalls, certificate)
+		if readCalls != 1 || !binding.restart.rootIdentity.matchesHandle(binding.rootObject) {
+			t.Fatalf("certification did not retain one recovery observation: reads=%d binding=%+v",
+				readCalls, binding)
 		}
 	})
 
@@ -479,7 +479,7 @@ func TestLinuxIdentityCoverageRootBindingFailureTaxonomy(t *testing.T) {
 			return restart, nil
 		})
 		directory := linuxIdentityCoverageDirectory(&current, restart, provider)
-		directory.certificate.mount.filesystemUUID = [linuxFilesystemUUIDBytes]byte{}
+		directory.binding.mount.filesystemUUID = [linuxFilesystemUUIDBytes]byte{}
 		platform := &linuxV3Platform{root: &linuxV3Directory{native: directory}}
 		if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrRecoverableOutputUnsupported) {
 			t.Fatalf("incomplete mount classification: %v", err)
@@ -658,7 +658,7 @@ func TestLinuxIdentityCoverageEnrollmentAndRecoveryUseDistinctProviderModes(t *t
 		t.Fatalf("directory claim accepted changed restart evidence: %v", err)
 	}
 
-	observed = directory.certificate.rootRestartIdentity
+	observed = directory.binding.restart.rootIdentity
 	current.inode++
 	readsBefore := readCalls
 	if _, err := platform.RootBinding(); !errors.Is(err, outputcap.ErrUnsafeNamespace) {
@@ -736,9 +736,8 @@ func linuxIdentityCoverageDirectory(
 	object := *current
 	return &linuxOutputDirectory{
 		system: system, fd: 29,
-		certificate: linuxOutputCertificate{
-			mount: mount, rootObject: object, rootRestartIdentity: restart,
-			durability: linuxOutputProcessRestartDurability,
+		binding: linuxOutputBinding{filesystem: linuxOutputFilesystem{magic: linuxExt4SuperMagic, name: "ext4"},
+			mount: mount, rootObject: object, restart: &linuxOutputRestartCertificate{rootIdentity: restart, durability: linuxOutputProcessRestartDurability},
 		},
 		object: object,
 	}

@@ -159,7 +159,7 @@ export class DirectZipEpochRecoveryCoordinator {
       if (completionInput !== undefined) {
         checkpoint = checkpointWithCompletion(checkpoint, Object.freeze({
           exactArchiveBytes: checkpoint.committedLength,
-          preClosingEpochRoot: Uint8Array.from(completionInput.seal.preClosingEpochRoot),
+          predecessorEpochRoot: Uint8Array.from(completionInput.seal.predecessorEpochRoot),
         }))
         completion = await this.#validateCompletion(checkpoint, completionInput)
       }

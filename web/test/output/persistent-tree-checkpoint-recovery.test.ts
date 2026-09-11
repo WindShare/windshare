@@ -141,8 +141,9 @@ describe('persistent tree checkpoint and paused recovery', () => {
     })
     expect(restarted.initialDurableRanges).toEqual([])
     expect(fixture.checkpoints.committed(FILE_ID).phase).toBe(FILE_CHECKPOINT_PHASE_ACTIVE)
-    // The metadata CAS cannot erase bytes; truncate occurs only when the authorized writer opens.
-    expect(fixture.tree.visible(['restart.bin'])).toEqual(Uint8Array.of(1, 2))
+    // Explicit restart releases the old owned prefix before a new replacement can
+    // grow beside it, bounding retained staging plus destination-copy demand.
+    expect(fixture.tree.visible(['restart.bin'])).toEqual(new Uint8Array())
     await restarted.writeRange(0n, Uint8Array.of(5, 6, 7, 8))
     expect(fixture.tree.file(['restart.bin']).writerModes.at(-1)).toBe('truncate')
   })

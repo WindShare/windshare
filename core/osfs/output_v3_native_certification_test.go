@@ -48,6 +48,10 @@ func openCertifiedNativeOutputForTest(
 		closeErr := platform.Close()
 		nativeOutputCertificationFailure(t, profile, operation, errors.Join(cause, closeErr))
 	}
+	if platform.Certification() == "" {
+		fail("identify native certification", outputcap.ErrRecoverableOutputUnsupported)
+		return nil
+	}
 	if platform.Certification() != expectedCertification {
 		fail("identify native certification", fmt.Errorf(
 			"got %q, want %q", platform.Certification(), expectedCertification,

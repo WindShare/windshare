@@ -316,17 +316,17 @@ func newLinuxNamespaceCoverageHarness(t *testing.T) *linuxNamespaceCoverageHarne
 		_ = unix.Close(fd)
 		t.Fatalf("read test root identity: %v", err)
 	}
-	certificate := linuxOutputCertificate{
+	binding := linuxOutputBinding{filesystem: linuxOutputFilesystem{magic: linuxExt4SuperMagic, name: "ext4"},
 		mount: linuxMountIdentity{
 			uniqueMountID: linuxNamespaceCoverageMountID,
 			deviceMajor:   facts.identity.deviceMajor, deviceMinor: facts.identity.deviceMinor,
 			runtimeFilesystemID: linuxNamespaceCoverageFilesystemID,
 		},
 		rootObject: facts.identity,
-		durability: linuxOutputProcessRestartDurability,
+		restart:    &linuxOutputRestartCertificate{durability: linuxOutputProcessRestartDurability},
 	}
 	harness.root = &linuxOutputDirectory{
-		system: &system, fd: fd, certificate: certificate, object: facts.identity,
+		system: &system, fd: fd, binding: binding, object: facts.identity,
 	}
 	t.Cleanup(func() {
 		if err := harness.root.close(); err != nil {
