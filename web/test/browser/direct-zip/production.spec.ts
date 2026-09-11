@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 
 for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpromoted-resume',
   'unpromoted-delete', 'unpromoted-continue', 'unpromoted-settle', 'bootstrap-recovery',
   'completion-journal-recovery', 'completion-acknowledgement-recovery', 'completion-continue',
   'aborted-write-continue', 'automatic-checkpoint-spacing', 'activation-recovery'] as const) {
   test('production Direct ZIP composition: ' + mode, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/production-probe.ts'
       const probe = await import(path) as typeof import('./production-probe')

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 import type { prepareAuthorizationProbe } from './authorization-probe'
 
 declare global {
@@ -10,7 +11,7 @@ declare global {
 
 for (const scenario of ['resume', 'foreign-target'] as const) {
   test('Direct ZIP authorizes a live operation before verification: ' + scenario, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const databaseName = 'direct-zip-authorization-' + crypto.randomUUID()
     await page.evaluate(async name => {
       const path = '/test/browser/direct-zip/authorization-probe.ts'

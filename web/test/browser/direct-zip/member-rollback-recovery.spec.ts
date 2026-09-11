@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 
 for (const mode of ['before-truncate', 'cancel-before-truncate', 'after-truncate'] as const) {
   test('production Direct ZIP replays durable member rollback intent: ' + mode, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/member-rollback-faults.ts'
       const probe = await import(path) as typeof import('./member-rollback-faults')
@@ -42,7 +43,7 @@ for (const mode of ['before-truncate', 'cancel-before-truncate', 'after-truncate
 
 for (const mode of ['ownership-marker', 'completed-prefix'] as const) {
   test('production Direct ZIP refuses rollback after retained authority changes: ' + mode, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/member-rollback-faults.ts'
       const probe = await import(path) as typeof import('./member-rollback-faults')
@@ -58,7 +59,7 @@ for (const mode of ['ownership-marker', 'completed-prefix'] as const) {
 
 for (const mode of ['earlier-completed-boundary', 'target-binding', 'target-observation'] as const) {
   test('production Direct ZIP rejects canonical rollback authority substitution: ' + mode, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/member-rollback-candidate-tamper.ts'
       const probe = await import(path) as typeof import('./member-rollback-candidate-tamper')

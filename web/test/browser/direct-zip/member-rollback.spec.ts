@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 
 for (const mode of ['unchanged-revision', 'identical-content', 'changed-content'] as const) {
   test('production Direct ZIP preserves completed members across source resume: ' + mode, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/member-rollback-probe.ts'
       const probe = await import(path) as typeof import('./member-rollback-probe')
