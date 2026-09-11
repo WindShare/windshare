@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { requireOriginPrivateStorage } from './browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH, requireOriginPrivateStorage } from './browser-storage-support'
 import type { StopStorageCut } from './browser-delivery-stop-probe'
 
 const PROBE = '/test/browser/browser-delivery-stop-probe.ts'
@@ -9,7 +9,7 @@ const RESERVED_PREFIX = [{ exactSize: AUTHENTICATED_SIZE, verifiedBytes: String(
 
 for (const cut of ['stop', 'pause', 'cleanup-failure'] satisfies StopStorageCut[]) {
   test(`real browser folder ${cut} settles incomplete staging and reopens its storage obligations`, async ({ page, browserName, context }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     await requireOriginPrivateStorage(page, browserName)
     const key = crypto.randomUUID()
     const prepared = await page.evaluate(async ({ path, parentName, cut }) => {
@@ -60,7 +60,7 @@ for (const cut of ['stop', 'pause', 'cleanup-failure'] satisfies StopStorageCut[
 }
 
 test('Stop preserves complete staging for a local save after reopening terminal folder output', async ({ page, browserName }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const prepared = await page.evaluate(async ({ path, parentName }) => {
     const probe = await import(path) as typeof import('./browser-delivery-stop-probe')
@@ -85,7 +85,7 @@ test('Stop preserves complete staging for a local save after reopening terminal 
 })
 
 test('retained complete-stage save refuses a replaced target and preserves both contents', async ({ page, browserName }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const prepared = await page.evaluate(async ({ path, parentName }) => {
     const probe = await import(path) as typeof import('./browser-delivery-stop-probe')
