@@ -1,3 +1,4 @@
+import type { RequestSchedulingObservation } from '../content/scheduling/requests'
 import type {
   FailureCorrelation,
   ProtocolFailure,
@@ -126,7 +127,13 @@ export type V2ContentSchedulingTraceEvent = Readonly<{
   bytesPerSecond: number
 }>
 
+export type V2RequestSchedulingTraceEvent = RequestSchedulingObservation & Readonly<{
+  eventName: 'request_scheduling'
+  correlation: FailureCorrelation
+}>
+
 export type V2ProtocolTraceEvent =
+  | V2RequestSchedulingTraceEvent
   | V2ContentSchedulingTraceEvent
   | V2ProtocolOperationTraceEvent
   | V2LaneTransitionTraceEvent

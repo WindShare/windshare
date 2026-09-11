@@ -52,7 +52,7 @@ it('finishes a catalog request on the surviving fourth lane without replacing th
     await flush()
     expect(attempted).toEqual([1, 2, 3, 4])
     expect(value).toEqual(page)
-    expect(trace).toEqual([1, 2, 3].map(revision => expect.objectContaining({
+    expect(trace.filter(event => event.eventName === 'operation_recovery')).toEqual([1, 2, 3].map(revision => expect.objectContaining({
       eventName: 'operation_recovery', transition: 'retry_available_lanes',
       operationSequence: 1, generationId: 1, availabilityRevision: revision,
       laneCount: 4 - revision,

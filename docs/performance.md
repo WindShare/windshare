@@ -39,20 +39,22 @@ it does not imply the entire selected folder is complete.
 
 ## Content paths
 
-Route permission controls which paths may carry content. Scheduling ranks permitted paths by
-estimated completion time from authenticated payload throughput and outstanding bytes; a 10% cost
-premium favors direct paths when arrival times are close. Unmeasured paths compete for an existing
-block before receiving independent content once a measured path is available.
+Route permission controls which paths may carry content. A receiver-wide allocator assigns different
+queued blocks using measured payload throughput and outstanding bytes; a 10% cost premium favors
+direct paths when completion estimates are close. New or stale paths can receive an independent
+read-ahead block, with at most one exploratory allocation active and one start every five seconds.
+A successful sample is not a prerequisite for normal allocation.
 
-Standby sampling is independent of content allocation: at most one probe starts every five seconds,
-with oldest evidence first. Probes and delayed straggler rescues share a limit of two concurrent
-supplemental attempts per lane set; each demand gets at most one automatic supplement. A rescue is
-considered every 100 ms after twice the smaller primary/alternative estimate. These are conservative
-estimates, not completion guarantees. Idle downloads generate no content probes, and standby
-transports remain owned by connectivity.
+Network slots refill independently of ordered output. Read-ahead is bounded by four times each
+reader's concurrency and a shared 64 MiB reservation budget, separate from the 64 MiB block cache.
+Budget offers rotate between readers. A blocked output frontier can trigger one duplicate rescue;
+two rescue attempts may run concurrently, independently of exploration. Canceled attempts retain
+lease ownership until they settle. Idle downloads generate no probes.
 
-Only the authenticated winner contributes delivered bytes. Canceled attempts retain their lease
-ownership until they settle, without blocking delivery of the winning block.
+Directory, revision, and lease requests use a separate latency router with per-kind response samples,
+pending request reservations, and content queue estimates. These requests are never duplicated for
+measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
+independent allocations and rescues; connection status alone does not identify a transfer bottleneck.
 
 ## Output
 

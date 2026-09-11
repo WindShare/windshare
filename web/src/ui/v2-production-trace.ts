@@ -126,6 +126,13 @@ export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV1 {
   const correlation = requiredCorrelation(event.correlation)
+  if (event.eventName === 'request_scheduling') {
+    return correlatedObservation(event.eventName, correlation, {
+      request_sequence: decimal(event.sequence), request_kind: event.kind, route: event.route,
+      transition: event.transition, expected_ms: Math.ceil(event.expectedMilliseconds),
+      elapsed_ms: Math.ceil(event.elapsedMilliseconds), pending_requests: event.pendingRequests,
+    })
+  }
   if (event.eventName === 'content_scheduling') return projectContentScheduling(event)
   if (event.eventName === 'operation_recovery') {
     return correlatedObservation(event.eventName, correlation, {
@@ -679,7 +686,7 @@ function observation<Name extends Exclude<keyof TraceEventPayloadByNameV1, 'inci
 }
 
 function correlatedObservation<
-  Name extends 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
+  Name extends 'request_scheduling' | 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
   correlation: NonNullable<TraceEventObservationV1['correlation']>,

@@ -1,3 +1,4 @@
+import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
@@ -181,7 +182,13 @@ export class V2RevisionService {
     signal?: AbortSignal,
   ): Promise<V2OpenedRevision> {
     this.#requireOpen()
-    const laneId = await this.#lanes.waitForEligibleLane(routes, signal)
+    return this.#lanes.requests.run(
+      { kind: 'open_revisions', routes, ...(signal === undefined ? {} : { signal }) },
+      route => this.#openOnLane(fileId, route.laneId, route.signal),
+    )
+  }
+
+  async #openOnLane(fileId: Uint8Array, laneId: number, signal: AbortSignal): Promise<V2OpenedRevision> {
     const operation = await this.#session.beginOperation(
       V2_MESSAGE_KIND.openRevisions,
       encodeV2OpenRequest(fileId),
@@ -290,13 +297,15 @@ export class V2RevisionService {
       new V2SessionRuntimeError('lane', 'Revision lease release timed out'),
     )
     try {
-      const laneId = await this.#lanes.waitForLane(deadline.signal)
-      const operation = await this.#session.beginOperation(
-        V2_MESSAGE_KIND.releaseLease,
-        encodeV2LeaseRequest(leaseId),
-        { laneId, signal: deadline.signal },
+      const message = await this.#lanes.requests.run(
+        { kind: 'release_lease', signal: deadline.signal },
+        async route => {
+          const operation = await this.#session.beginOperation(
+            V2_MESSAGE_KIND.releaseLease, encodeV2LeaseRequest(leaseId), route,
+          )
+          return operation.next(route.signal)
+        },
       )
-      const message = await operation.next(deadline.signal)
       if (message.kind === V2_MESSAGE_KIND.operationError) {
         throw remoteOperationErrorFor(this.#session, message)
       }
@@ -392,13 +401,15 @@ export class V2RevisionService {
 
   async #renewOnce(state: RemoteLeaseState, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
-    const laneId = await this.#lanes.waitForLane(signal)
-    const operation = await this.#session.beginOperation(
-      V2_MESSAGE_KIND.renewLease,
-      encodeV2LeaseRequest(state.lease.id),
-      { laneId, signal },
+    const message = await this.#lanes.requests.run(
+      { kind: 'renew_lease', signal },
+      async route => {
+        const operation = await this.#session.beginOperation(
+          V2_MESSAGE_KIND.renewLease, encodeV2LeaseRequest(state.lease.id), route,
+        )
+        return operation.next(route.signal)
+      },
     )
-    const message = await operation.next(signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
       throw remoteOperationErrorFor(this.#session, message)
     }
@@ -637,27 +648,6 @@ export function sameLease(left: Uint8Array, right: Uint8Array): boolean {
   return equalBytes(left, right)
 }
 
-function linkAbortSignals(...sources: readonly AbortSignal[]): {
-  readonly signal: AbortSignal
-  readonly close: () => void
-} {
-  const controller = new AbortController()
-  const listeners = sources.map((source) => {
-    const abort = () => controller.abort(
-      source.reason ?? new DOMException('Content operation aborted', 'AbortError'),
-    )
-    source.addEventListener('abort', abort, { once: true })
-    if (source.aborted) abort()
-    return { source, abort }
-  })
-  return {
-    signal: controller.signal,
-    close: () => {
-      for (const { source, abort } of listeners) source.removeEventListener('abort', abort)
-    },
-  }
-}
-
 function leaseDeadlineSignal(parent: AbortSignal, remainingMilliseconds: number): {
   readonly signal: AbortSignal
   readonly close: () => void
@@ -669,53 +659,12 @@ function leaseDeadlineSignal(parent: AbortSignal, remainingMilliseconds: number)
   )
 }
 
-function operationDeadlineSignal(
-  parent: AbortSignal,
-  remainingMilliseconds: number,
-  timeoutReason: unknown,
-): {
-  readonly signal: AbortSignal
-  readonly close: () => void
-} {
-  const controller = new AbortController()
-  const abort = () => controller.abort(
-    parent.reason ?? new DOMException('Revision lease renewal aborted', 'AbortError'),
-  )
-  parent.addEventListener('abort', abort, { once: true })
-  if (parent.aborted) abort()
-  const timer = globalThis.setTimeout(() => {
-    controller.abort(timeoutReason)
-  }, Math.max(0, Math.ceil(remainingMilliseconds)))
-  return {
-    signal: controller.signal,
-    close: () => {
-      globalThis.clearTimeout(timer)
-      parent.removeEventListener('abort', abort)
-    },
-  }
-}
-
 function awaitLeaseRelease(cleanup: Promise<void>, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason)
     signal.addEventListener('abort', abort, { once: true })
     if (signal.aborted) abort()
     cleanup.then(resolve, reject).finally(() => signal.removeEventListener('abort', abort))
-  })
-}
-
-function delayWithAbort(milliseconds: number, signal: AbortSignal): Promise<void> {
-  signal.throwIfAborted()
-  return new Promise((resolve, reject) => {
-    const timer = globalThis.setTimeout(() => {
-      signal.removeEventListener('abort', abort)
-      resolve()
-    }, Math.max(0, Math.ceil(milliseconds)))
-    const abort = () => {
-      globalThis.clearTimeout(timer)
-      reject(signal.reason ?? new DOMException('Lease renewal retry aborted', 'AbortError'))
-    }
-    signal.addEventListener('abort', abort, { once: true })
   })
 }
 
