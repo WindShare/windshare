@@ -1,5 +1,39 @@
 package clievent
 
+import "unicode/utf8"
+
+// ObservationRejection is a bounded failure-only sample. Correlation identifies
+// the first rejected event; Count on ObserverLossObserved accounts for repeats.
+type ObservationRejection struct {
+	Stage     string
+	Field     string
+	Rule      string
+	Session   ProtocolSessionID
+	Operation ProtocolOperationID
+	Revision  SenderRevisionID
+}
+
+const maxObservationRejectionLabelBytes = 96
+
+func (value ObservationRejection) Valid() bool {
+	for _, label := range [...]string{value.Stage, value.Field, value.Rule} {
+		if label == "" || len(label) > maxObservationRejectionLabelBytes || !utf8.ValidString(label) {
+			return false
+		}
+	}
+	return !value.Operation.Valid() || value.Session.Valid()
+}
+
+// EventContractError names the rejected invariant without retaining a whole
+// event or allocating a diagnostic snapshot on successful validation.
+type EventContractError struct {
+	Field string
+	Rule  string
+}
+
+func (err EventContractError) Error() string { return "CLI event: " + err.Field + ": " + err.Rule }
+func (err EventContractError) Unwrap() error { return ErrInvalidEvent }
+
 type LaneSettlementSpec struct {
 	Session             ProtocolSessionID
 	Route               LaneRoute
@@ -39,10 +73,11 @@ func (value LaneSettlementObserved) Accept(visitor Visitor) error {
 }
 
 type ObserverLossSpec struct {
-	Command  Command
-	Category ObserverLossCategory
-	Reason   ObserverLossReason
-	Count    uint64
+	Command   Command
+	Category  ObserverLossCategory
+	Reason    ObserverLossReason
+	Count     uint64
+	Rejection ObservationRejection
 }
 
 type ObserverLossObserved struct{ spec ObserverLossSpec }
@@ -50,7 +85,8 @@ type ObserverLossObserved struct{ spec ObserverLossSpec }
 func NewObserverLossObserved(spec ObserverLossSpec) (ObserverLossObserved, error) {
 	_, categoryOK := spec.Category.Name()
 	_, reasonOK := spec.Reason.Name()
-	if !spec.Command.Valid() || !categoryOK || !reasonOK || spec.Count == 0 {
+	if !spec.Command.Valid() || !categoryOK || !reasonOK || spec.Count == 0 ||
+		(spec.Rejection != (ObservationRejection{}) && !spec.Rejection.Valid()) {
 		return ObserverLossObserved{}, ErrInvalidEvent
 	}
 	return ObserverLossObserved{spec: spec}, nil
@@ -62,6 +98,9 @@ func (ObserverLossObserved) Level() Level                         { return Level
 func (value ObserverLossObserved) Category() ObserverLossCategory { return value.spec.Category }
 func (value ObserverLossObserved) Reason() ObserverLossReason     { return value.spec.Reason }
 func (value ObserverLossObserved) Count() uint64                  { return value.spec.Count }
+func (value ObserverLossObserved) Rejection() (ObservationRejection, bool) {
+	return value.spec.Rejection, value.spec.Rejection.Valid()
+}
 func (value ObserverLossObserved) Accept(visitor Visitor) error {
 	return acceptObserverLossObserved(visitor, value)
 }

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 
+	transportwebrtc "github.com/windshare/windshare/transport/webrtc"
+
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -59,7 +61,8 @@ func senderOperationAttemptFailure(code uint16, message string, cause error) Sen
 	}
 }
 
-func attemptFailure(result, primary error, operationCanceled bool) SenderAttemptFailure {
+func attemptFailure(result, primary error, operationCanceled bool) (failure SenderAttemptFailure) {
+	defer func() { failure.Termination = senderAttemptTermination(primary, operationCanceled) }()
 	// Authenticated admission owns the decision even when the receiver cancels
 	// its signaling operation while the rejected channel is still draining.
 	if _, rejected := errors.AsType[*sessionruntime.LaneRejectedError](primary); rejected {
@@ -82,6 +85,32 @@ func attemptFailure(result, primary error, operationCanceled bool) SenderAttempt
 			Message: peerUnexpectedFailureMessage,
 		}
 	}
+}
+
+// Classify the primary cause before cleanup errors are joined: teardown must
+// not make a remote close appear to have been initiated by local cancellation.
+func senderAttemptTermination(cause error, operationCanceled bool) SenderAttemptTermination {
+	initiator, reason := "unknown", "unclassified"
+	switch {
+	case errors.Is(cause, ErrPeerAdmissionTimeout):
+		initiator, reason = "local", "admission_timeout"
+	case errors.Is(cause, ErrPeerNegotiationTimeout):
+		initiator, reason = "local", "negotiation_timeout"
+	case errors.Is(cause, transportwebrtc.ErrRemoteClosed):
+		initiator, reason = "remote", "remote_closed"
+	case operationCanceled:
+		initiator, reason = "remote", "offer_canceled"
+	case errors.Is(cause, context.Canceled), errors.Is(cause, context.DeadlineExceeded):
+		initiator, reason = "local", "runtime_stopped"
+	case errors.Is(cause, transportwebrtc.ErrTransport):
+		reason = "transport_failure"
+	case errors.Is(cause, errChannelAdmission):
+		reason = "admission_failure"
+	}
+	if _, rejected := errors.AsType[*sessionruntime.LaneRejectedError](cause); rejected {
+		initiator, reason = "local", "lane_rejected"
+	}
+	return SenderAttemptTermination{Initiator: initiator, Cause: reason}
 }
 
 func senderAttemptCancelledFailure() SenderAttemptFailure {

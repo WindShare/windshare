@@ -276,9 +276,21 @@ func (visitor *encodeVisitorV3) VisitObserverLossObserved(event clievent.Observe
 	if err != nil {
 		return err
 	}
-	visitor.set("observer_loss", nil, observerLossPayloadV3{
-		Category: category, Reason: reason, Count: decimal(event.Count()),
-	})
+	payload := observerLossPayloadV3{Category: category, Reason: reason, Count: decimal(event.Count())}
+	if sample, ok := event.Rejection(); ok {
+		rejection := &observationRejectionPayloadV3{Stage: sample.Stage, Field: sample.Field, Rule: sample.Rule}
+		if sample.Session.Valid() {
+			rejection.Session = encodeCorrelationIdentity(sample.Session.Bytes())
+		}
+		if sample.Operation.Valid() {
+			rejection.Operation = encodeCorrelationIdentity(sample.Operation.Bytes())
+		}
+		if sample.Revision.Valid() {
+			rejection.Revision = sample.Revision.Hex()
+		}
+		payload.Rejection = rejection
+	}
+	visitor.set("observer_loss", nil, payload)
 	return nil
 }
 

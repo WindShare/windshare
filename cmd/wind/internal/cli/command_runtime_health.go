@@ -2,10 +2,109 @@ package cli
 
 import (
 	"sync/atomic"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
 )
+
+const (
+	maxProjectionRejectionSignatures  = 32
+	projectionRejectionReportInterval = 5 * time.Second
+)
+
+type pendingProjectionRejection struct {
+	category   clievent.ObserverLossCategory
+	reason     clievent.ObserverLossReason
+	sample     clievent.ObservationRejection
+	count      uint64
+	reported   bool
+	lastReport time.Time
+}
+
+// The table is allocated only on failure. IDs are samples, not signature keys,
+// so retries and new sessions cannot grow its memory or reset rate limiting.
+func (runtime *commandRuntime) ReportObservationRejection(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, sample clievent.ObservationRejection) bool {
+	_, reasonOK := reason.Name()
+	if runtime == nil || !reasonOK || !sample.Valid() {
+		return false
+	}
+	if _, ok := category.Name(); !ok {
+		return false
+	}
+	runtime.entryMu.Lock()
+	defer runtime.entryMu.Unlock()
+	if runtime.closed {
+		return false
+	}
+	runtime.unreportedRejections = saturatingAdd(runtime.unreportedRejections, 1)
+	if runtime.trace != nil {
+		runtime.recordProjectionRejectionLocked(category, reason, sample)
+	}
+	runtime.signalReadyLocked()
+	return true
+}
+
+func (runtime *commandRuntime) recordProjectionRejectionLocked(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, sample clievent.ObservationRejection) {
+	for i := range runtime.projectionRejections {
+		entry := &runtime.projectionRejections[i]
+		if entry.category == category && entry.reason == reason &&
+			entry.sample.Stage == sample.Stage && entry.sample.Field == sample.Field && entry.sample.Rule == sample.Rule {
+			entry.count = saturatingAdd(entry.count, 1)
+			return
+		}
+	}
+	if len(runtime.projectionRejections) == maxProjectionRejectionSignatures {
+		entry := &runtime.projectionRejections[maxProjectionRejectionSignatures-1]
+		entry.count = saturatingAdd(entry.count, 1)
+		return
+	}
+	if len(runtime.projectionRejections) == maxProjectionRejectionSignatures-1 {
+		// The final slot accounts for additional signatures without evicting
+		// the original samples or allocating unbounded keys.
+		category, reason = clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract
+		sample = clievent.ObservationRejection{Stage: "overflow", Field: "rejection_signatures", Rule: "detail_capacity_exceeded"}
+	}
+	runtime.projectionRejections = append(runtime.projectionRejections, pendingProjectionRejection{
+		category: category, reason: reason, sample: sample, count: 1,
+	})
+}
+
+func (runtime *commandRuntime) collectProjectionRejectionsLocked(final bool) uint64 {
+	count := runtime.unreportedRejections
+	runtime.unreportedRejections = 0
+	for i := range runtime.projectionRejections {
+		entry := &runtime.projectionRejections[i]
+		if entry.count == 0 {
+			continue
+		}
+		now := runtime.clock.Now()
+		if !final && entry.reported && now.Sub(entry.lastReport) < projectionRejectionReportInterval {
+			continue
+		}
+		runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
+			Command: runtime.command, Category: entry.category, Reason: entry.reason,
+			Count: entry.count, Rejection: entry.sample,
+		})
+		entry.count, entry.reported, entry.lastReport = 0, true, now
+	}
+	return count
+}
+
+func (runtime *commandRuntime) enqueueObserverLossLocked(spec clievent.ObserverLossSpec) {
+	if runtime.trace == nil || runtime.entrySequence == ^uint64(0) {
+		return
+	}
+	event, err := clievent.NewObserverLossObserved(spec)
+	if err != nil {
+		return
+	}
+	runtime.entrySequence++
+	runtime.commandPublications = append(runtime.commandPublications, queuedCommandEvent{
+		sequence: runtime.entrySequence, event: event,
+	})
+	runtime.signalReadyLocked()
+}
 
 type pendingRuntimeLoss struct {
 	lifecycle uint64
@@ -91,7 +190,7 @@ func (runtime *commandRuntime) traceHealth() <-chan clievent.TraceIncomplete {
 
 func (runtime *commandRuntime) reportPendingLoss() {
 	runtime.entryMu.Lock()
-	loss := runtime.collectPendingLossLocked()
+	loss := runtime.collectPendingLossLocked(runtime.closed || runtime.observerFinalized)
 	runtime.entryMu.Unlock()
 	loss.lifecycle = saturatingAdd(loss.lifecycle, runtime.pendingTraceLoss.Swap(0))
 	loss.progress = saturatingAdd(loss.progress, runtime.pendingTraceProgress.Swap(0))
@@ -110,8 +209,11 @@ func (runtime *commandRuntime) scheduleUpstreamLossLocked(loss pendingRuntimeLos
 	}
 }
 
-func (runtime *commandRuntime) collectPendingLossLocked() pendingRuntimeLoss {
-	loss := pendingRuntimeLoss{progress: runtime.pendingProgressLoss.Swap(0)}
+func (runtime *commandRuntime) collectPendingLossLocked(final bool) pendingRuntimeLoss {
+	loss := pendingRuntimeLoss{
+		progress:  runtime.pendingProgressLoss.Swap(0),
+		lifecycle: runtime.collectProjectionRejectionsLocked(final),
+	}
 	for category := clievent.ObserverLossCategory(1); category < clievent.ObserverLossCategoryLimit; category++ {
 		for reason := clievent.ObserverLossReason(1); reason < clievent.ObserverLossReasonLimit; reason++ {
 			count := runtime.pendingObserverLoss[category][reason].Swap(0)
@@ -119,18 +221,8 @@ func (runtime *commandRuntime) collectPendingLossLocked() pendingRuntimeLoss {
 				continue
 			}
 			loss.lifecycle = saturatingAdd(loss.lifecycle, count)
-			if runtime.trace == nil || runtime.entrySequence == ^uint64(0) {
-				continue
-			}
-			event, err := clievent.NewObserverLossObserved(clievent.ObserverLossSpec{
+			runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
 				Command: runtime.command, Category: category, Reason: reason, Count: count,
-			})
-			if err != nil {
-				continue
-			}
-			runtime.entrySequence++
-			runtime.commandPublications = append(runtime.commandPublications, queuedCommandEvent{
-				sequence: runtime.entrySequence, event: event,
 			})
 		}
 	}

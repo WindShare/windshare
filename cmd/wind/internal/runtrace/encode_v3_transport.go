@@ -156,27 +156,48 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 			payload.Rejection.RetryAfterMS = decimalPointer(retryAfter)
 		}
 	}
-	if scope, failure, ok := event.Failure(); ok {
-		failedAt, present := event.FailedAtStage()
-		if !present {
-			return errInvalidSchemaEvent
-		}
-		failedAtName, nameErr := nameOf(failedAt)
-		if nameErr != nil {
-			return nameErr
-		}
-		scopeName, nameErr := nameOf(scope)
-		if nameErr != nil {
-			return nameErr
-		}
-		projectedFailure, projectErr := projectFailure(failure)
-		if projectErr != nil {
-			return projectErr
-		}
-		payload.Failure = &peerFailureV3{
-			FailedAtStage: failedAtName, Scope: scopeName, Failure: projectedFailure,
-		}
+	if err := encodePeerAttemptFailure(event, &payload); err != nil {
+		return err
 	}
 	visitor.set("peer_attempt", correlation, payload)
+	return nil
+}
+
+func encodePeerAttemptFailure(event clievent.PeerAttemptObserved, payload *peerAttemptPayloadV3) error {
+	scope, failure, ok := event.Failure()
+	if !ok {
+		return nil
+	}
+	failedAt, present := event.FailedAtStage()
+	if !present {
+		return errInvalidSchemaEvent
+	}
+	failedAtName, nameErr := nameOf(failedAt)
+	if nameErr != nil {
+		return nameErr
+	}
+	scopeName, nameErr := nameOf(scope)
+	if nameErr != nil {
+		return nameErr
+	}
+	projectedFailure, projectErr := projectFailure(failure)
+	if projectErr != nil {
+		return projectErr
+	}
+	payload.Failure = &peerFailureV3{
+		FailedAtStage: failedAtName, Scope: scopeName, Failure: projectedFailure,
+	}
+	if summary, ok := event.FailureSummary(); ok {
+		last, err := nameOf(summary.LastCompletedStage)
+		if err != nil {
+			return err
+		}
+		initiator, _ := summary.Initiator.Name()
+		cause, _ := summary.Cause.Name()
+		payload.Failure.Summary = &peerFailureSummaryV3{
+			LastCompletedStage: last, StageElapsedMillis: decimal(summary.StageElapsedMillis),
+			DeadlineExpired: summary.DeadlineExpired, Initiator: initiator, Cause: cause,
+		}
+	}
 	return nil
 }

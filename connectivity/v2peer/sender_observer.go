@@ -84,7 +84,16 @@ type PeerOperationFailure struct {
 	Message string
 }
 
+type SenderAttemptTermination struct {
+	Initiator string
+	Cause     string
+}
+
 type SenderAttemptFailure struct {
+	LastCompletedStage SenderAttemptStage
+	StageElapsedMillis uint64
+	DeadlineExpired    bool
+	Termination        SenderAttemptTermination
 	FailedAtStage      SenderAttemptStage
 	Scope              AttemptFailureScope
 	TypedPeerErrorCode TypedPeerErrorCode
@@ -133,6 +142,9 @@ type senderAttemptRecorder struct {
 	lane                   *sessionruntime.LaneIdentity
 	laneHelloPending       bool
 	admissionExpiryPending bool
+	lastCompletedStage     SenderAttemptStage
+	lastCompletedAt        time.Time
+	deadlineExpired        bool
 }
 
 func newSenderAttemptRecorder(
@@ -189,6 +201,8 @@ func (recorder *senderAttemptRecorder) complete(
 			evidence.Lane = cloneLane(recorder.lane)
 		}
 	}
+	recorder.lastCompletedStage = stage
+	recorder.lastCompletedAt = recorder.factory.now()
 	recorder.emitLocked(evidence)
 	if stage == SenderAttemptAdmitted {
 		recorder.terminal = stage
@@ -205,6 +219,17 @@ func (recorder *senderAttemptRecorder) fail(failure SenderAttemptFailure) {
 	defer recorder.mu.Unlock()
 	if recorder.terminal != "" || recorder.next == "" {
 		return
+	}
+	failure.LastCompletedStage = recorder.lastCompletedStage
+	if failure.LastCompletedStage == "" {
+		failure.LastCompletedStage = SenderAttemptStarted
+	}
+	if !recorder.lastCompletedAt.IsZero() {
+		failure.StageElapsedMillis = durationMilliseconds(max(recorder.factory.now().Sub(recorder.lastCompletedAt), 0))
+	}
+	failure.DeadlineExpired = recorder.deadlineExpired
+	if failure.Termination.Cause == "" {
+		failure.Termination = SenderAttemptTermination{Initiator: "unknown", Cause: "unclassified"}
 	}
 	failure.FailedAtStage = recorder.next
 	observation := SenderAttemptObservation{
@@ -262,6 +287,7 @@ func (recorder *senderAttemptRecorder) emitPhaseDeadlineExpiredLocked(phase Peer
 	}
 	observation.GrantOperationID = recorder.grantOperationID
 	observation.Lane = cloneLane(recorder.lane)
+	recorder.deadlineExpired = true
 	recorder.emitLocked(observation)
 }
 

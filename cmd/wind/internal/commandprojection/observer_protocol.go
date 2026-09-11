@@ -4,52 +4,69 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
+	"strconv"
 )
 
-func ProjectProtocolOperation(
+func ProjectProtocolOperation(command clievent.Command, value sessionruntime.ProtocolOperationTrace) (clievent.ProtocolOperationObserved, error) {
+	event, err := projectProtocolOperation(command, value)
+	if err == nil {
+		return event, nil
+	}
+	context := clievent.ObservationRejection{Stage: "unknown_" + strconv.FormatUint(uint64(value.Stage), 10)}
+	if stage, ok := projectProtocolOperationStage(value.Stage); ok {
+		context.Stage, _ = stage.Name()
+	}
+	context.Session, _ = ProtocolSessionID(value.ProtocolSessionID)
+	if context.Session.Valid() {
+		context.Operation, _ = ProtocolOperationID(value.OperationID)
+	}
+	return event, withRejectionContext(err, context)
+}
+
+func projectProtocolOperation(
 	command clievent.Command,
 	value sessionruntime.ProtocolOperationTrace,
 ) (clievent.ProtocolOperationObserved, error) {
 	role, ok := projectProtocolRole(value.Role)
 	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "role", "known_enum")
 	}
 	stage, ok := projectProtocolOperationStage(value.Stage)
 	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "stage", "known_enum")
 	}
 	sessionID, err := ProtocolSessionID(value.ProtocolSessionID)
 	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionInvalidIdentity, "protocol_session_id", "nonzero_16_bytes")
 	}
 	operationID, err := ProtocolOperationID(value.OperationID)
 	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionInvalidIdentity, "protocol_operation_id", "nonzero_16_bytes")
 	}
 	requestKind, ok := projectProtocolMessageKind(value.RequestKind)
 	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "request_kind", "known_enum")
 	}
 	var responseKind clievent.ProtocolMessageKind
 	if value.HasResponse {
 		responseKind, ok = projectProtocolMessageKind(value.ResponseKind)
 		if !ok {
-			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+			return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "response_kind", "known_enum")
 		}
 	}
 	sendOutcome, ok := projectProtocolSendOutcome(value.SendOutcome)
 	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "send_outcome", "known_enum")
 	}
 	cause, ok := projectProtocolOperationCause(value.Cause)
 	if !ok {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionUnknownEnum, "cause", "known_enum")
 	}
 	var lane clievent.LaneIdentity
 	if value.HasLane {
 		lane, err = LaneIdentity(value.Lane)
 		if err != nil {
-			return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+			return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionInvalidIdentity, "lane", "valid_lane_identity")
 		}
 	}
 	protocolFailure, err := projectProtocolFailure(value.Failure)
@@ -58,7 +75,7 @@ func ProjectProtocolOperation(
 	}
 	if value.ContentDecision != (contentflow.SenderDecisionTrace{}) &&
 		(value.ContentDecision.OperationID != value.OperationID || value.ContentDecision.RequestKind != value.RequestKind) {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, rejectedProjection(ProjectionInvalidStageFields, "content_decision", "matching_operation_and_request")
 	}
 	contentDecision, err := projectSenderContentDecision(value.ContentDecision)
 	if err != nil {
@@ -81,7 +98,7 @@ func ProjectProtocolOperation(
 		ContentDecision:         contentDecision,
 	})
 	if err != nil {
-		return clievent.ProtocolOperationObserved{}, ErrInvalidProjection
+		return clievent.ProtocolOperationObserved{}, err
 	}
 	return event, nil
 }
@@ -94,19 +111,25 @@ func projectSenderContentDecision(
 	}
 	switch value.Stage {
 	case contentflow.SenderDecisionCapacityBusy:
-		if value.CapacityDecisionID == "" || !value.LeaseID.IsZero() {
-			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		if value.CapacityDecisionID == "" {
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidIdentity, "content_decision.capacity_decision_id", "required_for_capacity_decision")
+		}
+		if !value.LeaseID.IsZero() {
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidStageFields, "content_decision.lease_id", "absent_for_capacity_decision")
 		}
 		decisionID, err := clievent.NewCapacityDecisionID(string(value.CapacityDecisionID))
 		if err != nil {
-			return clievent.SenderContentDecision{}, ErrInvalidProjection
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidIdentity, "content_decision.capacity_decision_id", "valid_capacity_identity")
 		}
 		return clievent.NewSenderCapacityDecision(decisionID)
 	case contentflow.SenderDecisionLeaseRelinquished,
 		contentflow.SenderDecisionLeaseUndelivered,
 		contentflow.SenderDecisionLeaseDetached:
-		if value.CapacityDecisionID != "" || value.LeaseID.IsZero() {
-			return clievent.SenderContentDecision{}, ErrInvalidProjection
+		if value.CapacityDecisionID != "" {
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidStageFields, "content_decision.capacity_decision_id", "absent_for_lease_decision")
+		}
+		if value.LeaseID.IsZero() {
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidIdentity, "content_decision.lease_id", "nonzero_16_bytes")
 		}
 		kind := clievent.SenderContentLeaseRelinquished
 		switch value.Stage {
@@ -117,11 +140,11 @@ func projectSenderContentDecision(
 		}
 		leaseID, err := clievent.NewRevisionLeaseID(value.LeaseID.Bytes())
 		if err != nil {
-			return clievent.SenderContentDecision{}, ErrInvalidProjection
+			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidIdentity, "content_decision.lease_id", "valid_lease_identity")
 		}
 		return clievent.NewSenderLeaseDecision(kind, leaseID)
 	default:
-		return clievent.SenderContentDecision{}, ErrInvalidProjection
+		return clievent.SenderContentDecision{}, rejectedProjection(ProjectionUnknownEnum, "content_decision.stage", "known_enum")
 	}
 }
 

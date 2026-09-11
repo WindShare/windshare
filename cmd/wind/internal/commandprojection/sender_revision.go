@@ -77,39 +77,60 @@ func projectCapacityScope(
 }
 
 func ProjectSenderRevision(value content.RevisionTrace) (clievent.SenderRevisionObserved, error) {
+	event, err := projectSenderRevision(value)
+	if err == nil {
+		return event, nil
+	}
+	context := clievent.ObservationRejection{Stage: fmt.Sprintf("unknown_%d", value.Stage())}
+	if stage, ok := projectSenderRevisionStage(value.Stage()); ok {
+		context.Stage, _ = stage.Name()
+	}
+	context.Session, _ = projectRevisionCapacitySession(value.SessionID())
+	if !value.FileID().IsZero() && !value.FileRevision().IsZero() {
+		context.Revision, _ = clievent.NewSenderRevisionID(fmt.Appendf(nil, "%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes()))
+	}
+	return event, withRejectionContext(err, context)
+}
+
+func projectSenderRevision(value content.RevisionTrace) (clievent.SenderRevisionObserved, error) {
 	stage, ok := projectSenderRevisionStage(value.Stage())
 	if !ok {
-		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionUnknownEnum, "stage", "known_enum")
 	}
 	cause, ok := projectSenderRevisionCause(value.Cause())
 	if !ok {
-		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionUnknownEnum, "cause", "known_enum")
 	}
-	if value.ShareInstance().IsZero() || value.FileID().IsZero() || value.FileRevision().IsZero() {
-		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+	switch {
+	case value.ShareInstance().IsZero():
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "share_instance", "nonzero")
+	case value.FileID().IsZero():
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "file_id", "nonzero")
+	case value.FileRevision().IsZero():
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "file_revision", "nonzero")
 	}
 	// Capacity ownership uses this exact transport-neutral tuple. Hashing the
 	// same canonical form keeps coordinator and revision-store traces joinable.
 	revisionMaterial := fmt.Appendf(nil, "%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes())
 	revision, err := clievent.NewSenderRevisionID(revisionMaterial)
 	if err != nil {
-		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+		return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "revision_id", "valid_revision_material")
 	}
 	var lease clievent.RevisionLeaseID
 	var session clievent.ProtocolSessionID
 	if !value.LeaseID().IsZero() || value.SessionID() != "" {
 		lease, err = clievent.NewRevisionLeaseID(value.LeaseID().Bytes())
 		if err != nil {
-			return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+			return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "lease_id", "nonzero_16_bytes")
 		}
 		session, ok = projectRevisionCapacitySession(value.SessionID())
 		if !ok {
-			return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+			return clievent.SenderRevisionObserved{}, rejectedProjection(ProjectionInvalidIdentity, "protocol_session_id", "base64url_nonzero_16_bytes")
 		}
 	}
 	event, err := clievent.NewSenderRevisionObserved(stage, cause, revision, lease, session)
 	if err != nil {
-		return clievent.SenderRevisionObserved{}, ErrInvalidProjection
+		return clievent.SenderRevisionObserved{}, err
 	}
 	return event, nil
 }

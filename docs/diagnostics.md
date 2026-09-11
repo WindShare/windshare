@@ -17,6 +17,17 @@ Snapshots retain at most 16 error nodes, 8 cause levels, 12 frames, and 8 KiB of
 not retain original error objects. Later cleanup cannot replace the winning failure snapshot.
 Use `runtime_run_id` and `protocol_session_id` to correlate it with surrounding trace events.
 
+`observer_loss.rejection` identifies rejected protocol-operation and sender-revision events by
+source stage, field, and validation rule. Its correlation IDs sample the first rejection of that
+signature. Counts are deltas: the first report is immediate, repeats are limited to one report
+per five seconds during activity, and finalization flushes the remainder. The command retains
+31 distinct signatures plus one overflow counter. Labels are bounded; these records capture no
+stacks or complete source objects.
+
+Failed `peer_attempt` records include the last completed stage, time waiting there, observed
+deadline expiry, and the primary termination cause/close initiator. Unknown ownership stays
+`unknown`; later cleanup cannot relabel a remote close as local cancellation.
+
 ## Filesystem capabilities
 
 Native output admission records `capabilities.mode` and separate support/reason facts for safe
@@ -47,6 +58,11 @@ Enabling trace records a 30-minute activation deadline for this browser profile 
 Reloads and new tabs restore capture before the receiver starts, using the original deadline.
 Changing the host, port, browser profile, or private-browsing context does not share activation.
 If browser storage is blocked, capture works only in the current page.
+
+Browser peer-attempt terminal records preserve handshake timing and the typed failure
+(including admission timeout or authenticated rejection). During pre-failure recording, up to
+16 terminal records / 64 KiB receive retention priority over ordinary events, within the existing
+capture count and byte budgets. Export before reload; clearing or replacing capture clears this history.
 
 Each page has its own bounded, in-memory evidence and runtime identity. Export before leaving a
 page whose evidence you need. A failure can seal that page's capture to preserve the surrounding

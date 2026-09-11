@@ -1,6 +1,7 @@
 package commandprojection
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
@@ -38,7 +39,7 @@ func TestProjectSenderContentDecisionPreservesSessionOperationAndStableDecision(
 	}
 
 	trace.ContentDecision.OperationID = protocolsession.OperationID{0xff}
-	if _, err := ProjectProtocolOperation(clievent.CommandShare, trace); err != ErrInvalidProjection {
+	if _, err := ProjectProtocolOperation(clievent.CommandShare, trace); !errors.Is(err, ErrInvalidProjection) {
 		t.Fatalf("mismatched embedded operation error = %v", err)
 	}
 }
