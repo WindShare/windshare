@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './browser-storage-support'
 
 const PROBE = '/test/browser/browser-delivery-lifecycle-probe.ts'
 
 test('local target checkpoint crash cuts reopen with exact lifecycle authority and usable Downloads inventory', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const databaseName = 'delivery-lifecycle-' + crypto.randomUUID()
   expect(await page.evaluate(async ({ path, databaseName }) => {
     const probe = await import(path) as typeof import('./browser-delivery-lifecycle-probe')
