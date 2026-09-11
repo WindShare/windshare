@@ -7,6 +7,8 @@ import {
   type InitialCheckpointCASResult,
   type FileCheckpointPage,
   type FileCheckpointScan,
+  type FileCheckpointJournal,
+  type SemanticFileCheckpointJournal,
 } from '../persistence/journal'
 import { FILE_CHECKPOINT_BATCH_REQUEST_LIMIT } from '../persistence/journal'
 import {
@@ -14,6 +16,8 @@ import {
   FILE_CHECKPOINT_COMMIT_QUARANTINED,
   FILE_CHECKPOINT_COMMIT_VERIFIED,
   FILE_CHECKPOINT_PHASE_ACTIVE,
+  FILE_CHECKPOINT_PHASE_PAUSED,
+  fileCheckpointIsComplete,
   deriveCheckpointLineageID,
   newFileCheckpointV2,
   validateFileCheckpoint,
@@ -21,6 +25,8 @@ import {
 } from '../persistence/checkpoint'
 import type {
   OpenedFileRevision,
+  PersistentFileRequest,
+  PersistentTreeFile,
   PersistentOutputTree,
   PreservingWriterCapacityPurpose,
   PreservingWriterCost,
@@ -53,6 +59,104 @@ import type { PerformanceFilePipelineObservation } from '../diagnostics/performa
 import {
   inspectInitialClaimGroup,
 } from './initial-claim-inspection-group'
+
+/** Restores receiving authority before a recovered file accepts any new writes. */
+export async function preparePersistentFileRecovery(input: Readonly<{
+  request: Pick<PersistentFileRequest, 'recovery'>
+  handle: PersistentTreeFile
+  selected: FileCheckpointV2
+  checkpoints: FileCheckpointJournal
+  semantic: SemanticFileCheckpointJournal | undefined
+  stageScope: PersistentOutputStageScope | undefined
+}>): Promise<FileCheckpointV2> {
+  const { request, handle, selected, checkpoints, semantic, stageScope } = input
+  const recovery = request.recovery ?? Object.freeze({ pausedFile: 'preserve' as const })
+  let checkpoint = selected
+  if (recovery.pausedFile === 'restart-owned-file' &&
+      checkpoint.verifiedRanges.length > 0 && !fileCheckpointIsComplete(checkpoint)) {
+    if (semantic === undefined || handle.persistedHandle === undefined) {
+      throw new DOMException(
+        'Explicit restart requires an exact durable handle authority',
+        'InvalidStateError',
+      )
+    }
+    if (checkpoint.phase === FILE_CHECKPOINT_PHASE_ACTIVE) {
+      const paused = newFileCheckpointV2({
+        ...checkpoint,
+        stateGeneration: checkpoint.stateGeneration + 1n,
+        phase: FILE_CHECKPOINT_PHASE_PAUSED,
+        commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+      })
+      await runPersistentOutputStage(
+        stageScope?.withCorrelation({
+          checkpointRecordId: paused.recordId,
+          checkpointGeneration: paused.checkpointGeneration,
+        }),
+        'indexeddb.checkpoint.pause-commit',
+        () => semantic.commitDurableCut(checkpoint, paused),
+      )
+      checkpoint = paused
+    }
+    const reset = newFileCheckpointV2({
+      ...checkpoint,
+      stateGeneration: checkpoint.stateGeneration + 1n,
+      checkpointGeneration: checkpoint.checkpointGeneration + 1n,
+      verifiedRanges: [],
+      phase: FILE_CHECKPOINT_PHASE_PAUSED,
+      commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+    })
+    await runPersistentOutputStage(
+      stageScope?.withCorrelation({
+        checkpointRecordId: reset.recordId,
+        checkpointGeneration: reset.checkpointGeneration,
+      }),
+      'indexeddb.checkpoint.restart-commit',
+      () => semantic.restartOwnedFile({
+        previous: checkpoint,
+        reset,
+        expectedHandle: handle.persistedHandle!,
+      }),
+    )
+    checkpoint = reset
+  }
+  if (recovery.pausedFile === 'restart-owned-file' && !fileCheckpointIsComplete(checkpoint) &&
+      handle.durability !== 'native-in-place' && await handle.size() > 0n) {
+    // A crash can leave a closed full target with no final proof. Publish an empty
+    // owned target before copying again so its old content cannot coexist with a
+    // new full replacement and the complete OPFS source.
+    if (handle.openWriter === undefined) throw new TypeError('Owned restart requires a truncating writer')
+    await handle.openWriter('truncate')
+    try { await handle.flush() } finally { await handle.close() }
+    await handle.verify('checkpoint')
+  }
+  if (checkpoint.phase !== FILE_CHECKPOINT_PHASE_PAUSED) return checkpoint
+  const active = newFileCheckpointV2({
+    ...checkpoint,
+    stateGeneration: checkpoint.stateGeneration + 1n,
+    checkpointGeneration: checkpoint.checkpointGeneration +
+      (semantic === undefined ? 1n : 0n),
+    phase: FILE_CHECKPOINT_PHASE_ACTIVE,
+    commitState: FILE_CHECKPOINT_COMMIT_VERIFIED,
+  })
+  if (semantic !== undefined) {
+    await runPersistentOutputStage(
+      stageScope?.withCorrelation({
+        checkpointRecordId: active.recordId,
+        checkpointGeneration: active.checkpointGeneration,
+      }),
+      'indexeddb.checkpoint.resume-commit',
+      () => semantic.resumePausedCheckpoint(checkpoint, active),
+    )
+    return active
+  }
+  const candidate = newFileCheckpointV2({
+    ...active,
+    commitState: FILE_CHECKPOINT_COMMIT_CANDIDATE,
+  })
+  await checkpoints.stageCheckpointUpdate(checkpoint, candidate)
+  await checkpoints.commitCheckpointCandidate(candidate, active)
+  return active
+}
 
 /** A preserving open failed after its durable prefix was already committed. */
 export class PersistentPreservingWriterOpenError extends Error {

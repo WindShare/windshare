@@ -601,12 +601,17 @@ export class TransferJob {
         : {}),
       signal: this.#lifetime.signal,
       outputSettlementTimeoutMilliseconds: this.#outputSettlementTimeoutMilliseconds,
+      ...(this.#options.checkpointClock === undefined ? {} : { checkpointClock: this.#options.checkpointClock }),
+      ...(this.#options.onCheckpointObservation === undefined ? {} : { onCheckpointObservation: event => {
+        this.#options.onCheckpointObservation?.({ ...event, operationId: this.#requireIntent().operationId,
+          transferJobId: this.#transferJobId, fileId: file.entry.idText })
+      } }),
       ...(pipeline === undefined ? {} : { performancePipeline: pipeline }),
       ...(this.#options.incidentScope === undefined
         ? {}
         : { incidentScope: this.#options.incidentScope }),
-      onInitialDurable: bytes => {
-        materializedBytes = bytes
+      onInitialCoverage: coverage => {
+        materializedBytes = coverage.acceptedBytes
         this.#progress.observeMaterializedFile(file.entry.idText, materializedBytes)
         this.#emitProgress()
       },

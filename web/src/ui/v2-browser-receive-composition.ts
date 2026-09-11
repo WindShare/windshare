@@ -39,6 +39,8 @@ import type {
 import { V2PresentationSourceError } from './v2-receive-runtime'
 import type { BrowserReceiveWindow } from './browser-receive/contracts'
 import { FSAArtifactPresentationAuthority } from './browser-receive/fsa-route'
+import { BrowserFolderDeliveryProgress } from './browser-receive/fsa/folder-delivery'
+import { inspectBrowserStagingStorage } from './browser-receive/fsa/staging-storage'
 import { startPortableArtifactAuthority } from './browser-receive/portable-route'
 import {
   listBrowserRetainedOperations,
@@ -112,7 +114,7 @@ export function createBrowserReceiveComposition(
           : { zipRecommendationPolicy: registry.zipRecommendationPolicy }),
       }).offers
     },
-    startArtifactAuthority: (action, preClickRanking, failures, display) => startProductionAuthority(
+    startArtifactAuthority: (action, preClickRanking, failures, display, recoveryPreference) => startProductionAuthority(
       windowPort,
       action,
       preClickRanking,
@@ -123,6 +125,7 @@ export function createBrowserReceiveComposition(
       nativeObjectSupported,
       failures,
       display,
+      recoveryPreference,
     ),
   }
   return Object.freeze(composition)
@@ -280,6 +283,7 @@ function startProductionAuthority(
   nativeObjectSupported: boolean,
   failures?: OutputFailureSinks,
   displayInput?: ReceiveOperationDisplay,
+  recoveryPreference: import('../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic',
 ): V2ArtifactPresentationAuthority {
   const registry = inspectBrowserRouteRegistrySynchronously(windowPort, nativeObjectSupported)
   const binding = createOutputFailureBinding(failures)
@@ -301,6 +305,13 @@ function startProductionAuthority(
       const diagnostics = diagnosticsFor('file_system_access', outputTrace, binding.sinks)
       return bindArtifactAuthorityOutputFailures(
         new FSAArtifactPresentationAuthority({
+          folderDelivery: {
+            preference: recoveryPreference,
+            storage: windowPort.navigator.storage,
+            storageFacts: () => inspectBrowserStagingStorage(windowPort.navigator.storage,
+              nativeObjectSupported && typeof windowPort.navigator.storage?.getDirectory === 'function'),
+            progress: new BrowserFolderDeliveryProgress(),
+          },
           offered,
           picked,
           preClickRanking,

@@ -1,3 +1,4 @@
+import { readBrowserDeliveryCheckpoint } from '../browser-delivery/checkpoint-reader'
 import {
   createDestinationReservationID,
   createFSANamedEntryReservation,
@@ -261,6 +262,10 @@ export class FileSystemAccessOutputSession implements
         ? {}
         : { performance: input.diagnostics.performance }),
     })
+  }
+
+  readCheckpoint(fileId: string) {
+    return readBrowserDeliveryCheckpoint(this.#checkpoints, fileId)
   }
 
   async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {

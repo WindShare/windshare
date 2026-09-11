@@ -30,10 +30,12 @@ import {
 } from '../workspace/canonical'
 import {
   materializationLedgerPathKey,
+  materializationRecordDigest,
   requireCanonicalBytes,
   requireExpectedBindingDigest,
   requireRecordProjection,
   validateBinding,
+  validateBindingSync,
 } from './codec'
 import {
   MATERIALIZATION_LEDGER_DIRECTORY_FINALIZATION_ORDER,
@@ -188,7 +190,7 @@ export async function createFinalizedFileMaterializationRecords(input: {
   const finalOutput = snapshotFinalOutput(input.finalOutput)
   validateFinalOutputAgainstCheckpoint(finalOutput, input.finalCheckpoint)
   const checkpoint = checkpointReference(input.finalCheckpoint)
-  const finalProof = await createFinalFileProof(binding, finalOutput, checkpoint)
+  const finalProof = createFinalFileProof(binding, finalOutput, checkpoint)
   const ledgerEntry = await createFileFinalizedEntry(binding, finalOutput, checkpoint, finalProof)
   return Object.freeze({
     finalProof,
@@ -201,7 +203,14 @@ export async function decodeMaterializationFinalFileProofV1(
   input: unknown,
   bindingInput: MaterializationLedgerBindingV1,
 ): Promise<MaterializationFinalFileProofV1> {
-  const binding = await validateBinding(bindingInput)
+  return decodeMaterializationFinalFileProofV1Sync(input, bindingInput)
+}
+
+export function decodeMaterializationFinalFileProofV1Sync(
+  input: unknown,
+  bindingInput: MaterializationLedgerBindingV1,
+): MaterializationFinalFileProofV1 {
+  const binding = validateBindingSync(bindingInput)
   const record = requireRecord(input, 'materialization final file proof')
   requireExactKeys(record, [
     'schemaVersion',
@@ -229,7 +238,7 @@ export async function decodeMaterializationFinalFileProofV1(
   const checkpoint = decodeCheckpointReference(reader.frame('checkpoint reference'))
   const finalOutput = decodeFinalOutput(reader.frame('verified final output'))
   reader.finish('materialization final file proof')
-  const rebuilt = await createFinalFileProof(binding, finalOutput, checkpoint)
+  const rebuilt = createFinalFileProof(binding, finalOutput, checkpoint)
   requireRecordProjection(record, rebuilt, 'materialization final file proof')
   return rebuilt
 }
@@ -390,7 +399,7 @@ function snapshotFinalOutput(input: VerifiedFinalOutputFile): VerifiedFinalOutpu
   return new VerifiedFinalOutputFile(input.ownership, input.source, input.fileSize)
 }
 
-function validateFinalOutputAgainstCheckpoint(
+export function validateFinalOutputAgainstCheckpoint(
   proof: VerifiedFinalOutputFile,
   checkpoint: FileCheckpointV2,
 ): void {
@@ -406,12 +415,12 @@ function validateFinalOutputAgainstCheckpoint(
   }
 }
 
-async function createFinalFileProof(
+function createFinalFileProof(
   binding: MaterializationLedgerBindingV1,
   finalOutput: VerifiedFinalOutputFile,
   checkpoint: FinalFileCheckpointReference,
-): Promise<MaterializationFinalFileProofV1> {
-  const proofId = await canonicalDigest(canonicalRecord(
+): MaterializationFinalFileProofV1 {
+  const proofId = materializationRecordDigest(canonicalRecord(
     LEDGER_PROOF_ID_DOMAIN,
     MATERIALIZATION_LEDGER_SCHEMA_VERSION,
     [
@@ -442,7 +451,7 @@ async function createFinalFileProof(
     operationId: binding.operationId,
     ledgerBindingDigest: binding.ledgerBindingDigest,
     proofId,
-    proofDigest: await canonicalDigest(canonicalBytes),
+    proofDigest: materializationRecordDigest(canonicalBytes),
     recordId: checkpoint.recordId,
     fileId: finalOutput.source.fileId,
     finalOutput,

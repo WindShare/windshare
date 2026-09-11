@@ -3,6 +3,7 @@ import type { ArtifactOffers, OfferedArtifactChoice } from '../../output/plannin
 export type SavingOutcomeKind = 'original-file' | 'folder' | 'zip'
 
 export interface SavingChoice {
+  readonly recoveryPreference?: import('../../output/browser-delivery/model').BrowserRecoveryPreference
   readonly offered: OfferedArtifactChoice
   readonly label: string
   readonly outcome: SavingOutcomeKind

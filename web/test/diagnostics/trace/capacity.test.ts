@@ -98,6 +98,7 @@ describe('trace frozen contract', () => {
       'continuation',
       'reopen',
       'cleanup',
+      'browser_delivery',
       'direct_zip_milestone',
       'direct_zip_coordination',
       'direct_zip_member_rollback',

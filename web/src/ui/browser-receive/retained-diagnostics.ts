@@ -49,6 +49,7 @@ export function bindRuntimeOutputFailures(
     lifecycle: runtime.lifecycle,
     activeControls: runtime.activeControls,
     ...(runtime.outputProgress === undefined ? {} : { outputProgress: runtime.outputProgress }),
+    ...(runtime.observeCheckpoint === undefined ? {} : { observeCheckpoint: runtime.observeCheckpoint.bind(runtime) }),
     ...(runtime.repairProjection === undefined
       ? {}
       : { repairProjection: runtime.repairProjection }),

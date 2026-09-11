@@ -43,6 +43,7 @@ export function activeTaskFacts(input: Readonly<{
     completeness: completenessFromFacts(state, progress),
     publication: publicationFromLifecycle(state),
     progress,
+    browserDelivery: output.browserFolderProgress?.summary ?? null,
     directZipProgress: output.directZipProgress,
     fidelity: lifecycle?.compatibleNameRepair ?? null,
     details: Object.freeze(details),
@@ -62,8 +63,9 @@ export function retainedTaskFacts(
 ): TaskFacts {
   const details: string[] = []
   const localWork = execution.pending?.operationId === operation.operationId &&
-    execution.pending.action === 'continue' &&
-    (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')
+    (execution.pending.action === 'save-staged-files' || execution.pending.action === 'cleanup-staging' ||
+      (execution.pending.action === 'continue' &&
+        (operation.continuation === 'resume-package' || operation.continuation === 'resume-local-finalization')))
     ? 'finalizing' : 'idle'
   if (operation.recoverySummary !== undefined) details.push(recoverySummaryDescription(operation.recoverySummary))
   if (operation.unavailableReason !== undefined) details.push(operation.unavailableReason)
@@ -82,6 +84,7 @@ export function retainedTaskFacts(
     completeness: completenessFromFacts(operation.lifecycle, null),
     publication: publicationFromLifecycle(operation.lifecycle),
     progress: null,
+    browserDelivery: operation.browserDelivery ?? null,
     directZipProgress: null,
     fidelity: operation.repairSummary === undefined ? null : presentCompatibleNameRepair({
       state: operation.lifecycle, summary: operation.repairSummary, context: 'retained-operation',

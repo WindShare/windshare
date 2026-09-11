@@ -238,6 +238,9 @@ export type TransferTraceEvent =
     }>
 
 export interface TransferJobOptions {
+  readonly checkpointClock?: import('../checkpoint/controller').CheckpointClock
+  readonly onCheckpointObservation?: (event: import('../checkpoint/controller').CheckpointObservation &
+    Readonly<{ operationId: string; transferJobId: string; fileId: string }>) => void
   readonly descriptor: V2ShareDescriptor
   readonly catalog: V2CatalogClient
   readonly selection: V2FrozenSelectionPolicy | V2SelectionPolicy

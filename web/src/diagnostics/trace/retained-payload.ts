@@ -13,6 +13,8 @@ export const RETAINED_ACTIONS = Object.freeze([
   'discard',
   'delete',
   'save-partial',
+  'save-staged-files',
+  'cleanup-staging',
   'forget',
 ] as const)
 

@@ -84,6 +84,7 @@ import {
   WINDOWS_CHROMIUM_FSA_MAXIMUM_CONCURRENT_INITIAL_CLAIM_INSPECTIONS,
 } from './fsa'
 import { FSAResourceOwner } from './fsa-resource-owner'
+import type { BrowserFolderDeliveryContext } from './fsa/folder-delivery'
 import { snapshotPreClickRanking } from './shared'
 
 type FSARouteRepository = ReceiveOperationRepository & Partial<FSACompatibleNameBootstrapRepository>
@@ -118,6 +119,7 @@ export interface FSARouteDependencies {
 }
 
 export interface FSAArtifactPresentationAuthorityOptions {
+  readonly folderDelivery?: BrowserFolderDeliveryContext
   readonly offered: OfferedArtifactChoice
   readonly picked: Promise<AcquiredFSAParentAuthority>
   readonly preClickRanking: readonly ArtifactChoiceID[]
@@ -137,6 +139,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   readonly #localOutputFailures: LocalOutputOperationFailureDiagnosticsPort | undefined
   readonly #dependencies: FSARouteDependencies
+  readonly #folderDelivery: BrowserFolderDeliveryContext | undefined
   #state: FSAActivationState = 'open'
   #releaseReason: unknown
 
@@ -150,6 +153,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
     this.#diagnostics = options.diagnostics
     this.#localOutputFailures = options.localOutputFailures
     this.#dependencies = routeDependencies(options.dependencies)
+    this.#folderDelivery = options.folderDelivery === undefined ? undefined : Object.freeze({ ...options.folderDelivery })
     this.#picked = options.picked.then(
       authority => requirePickedAuthority(authority, this.#offered.route.target),
       (error: unknown) => {
@@ -378,6 +382,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
       input.resources.adoptOutputSession(session)
       unadoptedCompatibleNameCoordinator = undefined
       const operation = await FSAReceiveOperation.createCommitted({
+        ...(this.#folderDelivery === undefined ? {} : { folderDelivery: this.#folderDelivery }),
         intent: input.bound.intent,
         lifecycle: input.lifecycle,
         repository: input.repository,

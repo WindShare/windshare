@@ -11,6 +11,8 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
   const state = facts.lifecycle
   if (facts.execution.kind === 'local-finalization') return stage('finishing', 'Finishing locally',
     'Retained content is being finalized and saved without reconnecting to the sender.', 'local-finalization-active')
+  const folderDelivery = folderDeliveryStage(facts)
+  if (folderDelivery !== null) return folderDelivery
   if (state.kind === 'published' || state.kind === 'partial-directory') {
     return savedStage(facts)
   }
@@ -30,6 +32,21 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
     'Accepted writes and recovery records are settling before this task releases its destination.', facts.interruption)
   if (state.kind === 'receiving') return activeReceivingStage(facts)
   return executionStage(facts)
+}
+
+function folderDeliveryStage(facts: TaskFacts): StageCopy | null {
+  const delivery = facts.browserDelivery
+  if (delivery != null && delivery.copyingFiles > 0 && facts.execution.kind === 'active') {
+    return stage('finishing', 'Saving received files to folder',
+      'Complete files are copying from browser storage. Receiving other files can continue; these files are usable after the folder save finishes.',
+      'browser-folder-copying')
+  }
+  if (delivery?.localContinuation === 'save-staged-files' && facts.lifecycle.kind === 'resumable-receive') {
+    return stage('ready-to-save', 'Received files are ready to save',
+      'Complete files are retained in browser storage. Save them to the chosen folder without reconnecting to the sender.',
+      'browser-folder-local-save')
+  }
+  return null
 }
 
 function savedStage(facts: TaskFacts): StageCopy {

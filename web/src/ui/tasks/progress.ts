@@ -11,7 +11,7 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   // Direct ZIP receipt advances while output writes and durable checkpoints wait.
   // Its logical payload already includes the retained prefix after reopening.
   const materialized = direct?.receivedSelectedBytes ?? progress?.materializedBytes ?? 0n
-  const files = progress === null ? '' : ` · ${progress.completedFiles} files completed`
+  const files = completedFileLabel(facts)
   const details = progressDetails(facts)
   const percentage = exactPercentage(facts, materialized)
   const exact = progress?.discovery === 'complete'
@@ -30,8 +30,19 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   })
 }
 
+function completedFileLabel(facts: TaskFacts): string {
+  if (facts.browserDelivery != null) return ` · ${facts.browserDelivery.targetSavedFiles} files saved to folder`
+  return facts.progress === null ? '' : ` · ${facts.progress.completedFiles} files completed`
+}
+
 function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
   const state = facts.lifecycle
+  if (facts.browserDelivery != null) return Object.freeze({
+    mode: 'indeterminate', percentage: null,
+    sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
+    label: `${formatBytes(facts.browserDelivery.targetSavedBytes)} saved to folder`,
+    details: Object.freeze(browserDeliveryDetails(facts.browserDelivery)),
+  })
   if (state.kind !== 'resumable-receive') return null
   const retained = state.payloadKind === 'direct-zip' ? state.safeSelectedPayloadBytes : state.completedBytes
   return Object.freeze({
@@ -62,6 +73,18 @@ function discoveryStatus(facts: TaskFacts): string | null {
   return progress?.discovery === 'failed' ? 'Counting did not finish; final total unknown.' : null
 }
 
+function browserDeliveryDetails(summary: NonNullable<TaskFacts['browserDelivery']>): string[] {
+  return [
+    `${formatBytes(summary.recoverableBytes)} verified and recoverable after restart.`,
+    `${formatBytes(summary.targetSavedBytes)} saved to the chosen folder.`,
+    `${formatBytes(summary.stagedBytes)} retained in browser staging.`,
+    ...((summary.stagedCompleteFiles + summary.copyingFiles) > 0
+      ? [`${summary.stagedCompleteFiles + summary.copyingFiles} received files still need local saving.`] : []),
+    ...(summary.cleanupPendingFiles > 0
+      ? [`${summary.cleanupPendingFiles} files await staging cleanup.`] : []),
+  ]
+}
+
 function maximum(left: bigint, right: bigint): bigint { return left > right ? left : right }
 
 function progressDetails(facts: TaskFacts): string[] {
@@ -82,6 +105,8 @@ function progressDetails(facts: TaskFacts): string[] {
     if (direct.resumeTemporarySpaceUpperBound !== undefined) {
       details.push(`Resuming may need up to ${formatBytes(direct.resumeTemporarySpaceUpperBound)} of temporary destination space.`)
     }
+  } else if (facts.browserDelivery != null) {
+    details.push(...browserDeliveryDetails(facts.browserDelivery))
   } else {
     details.push('Received bytes are not a measurement of progress recoverable after restart.')
   }

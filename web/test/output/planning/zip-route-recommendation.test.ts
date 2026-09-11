@@ -134,6 +134,35 @@ it('keeps large ZIP64 recommendations available beyond the former workspace limi
   expect(observation.peakOwnedBytes).toBe(observation.archiveBytes + observation.durableMetadataBytes)
 })
 
+it('refines ZIP ranking from discovered whole-output bytes without completing discovery', async () => {
+  const selection = await selectionSpec()
+  const policy = { version: 1 as const, kind: 'available' as const,
+    workspacePeakBytesThreshold: 100n, policyDigest: identity(89, 32) }
+  const runtime = environment({ targets: [fsaTarget(), directZipTarget(), handoffTarget()],
+    workspace: workspaceOffer(), directZipSupport: runtimeDirectZipSupport(), zipRecommendationPolicy: policy })
+  const early = requireActions(await offerArtifacts(projection(selection, treeProof(), 10n),
+    { kind: 'discovering' }, runtime))
+  expect(early.zip?.recommendation).toMatchObject({
+    kind: 'recommended', reason: 'workspace-within-discovered-budget',
+  })
+  expect(early.primary.route.kind).toBe('direct-tree')
+  const later = requireActions(await offerArtifacts(projection(selection, treeProof(), 101n),
+    { kind: 'discovering' }, runtime))
+  expect(later.zip?.primary.route.kind).toBe('direct-resumable-zip')
+  expect(later.primary.route.kind).toBe('direct-tree')
+  expect(later.zip?.secondary?.choice.choiceId).toBe(early.zip?.primary.choice.choiceId)
+})
+
+it('snapshots growing archive costs without freezing or completing the accumulator', () => {
+  const accumulator = new WorkspaceCostObservationAccumulatorV1()
+  accumulator.observe({ kind: 'file', path: ['one'], exactSize: 10n })
+  const early = accumulator.snapshot()
+  accumulator.observe({ kind: 'file', path: ['two'], exactSize: 100n })
+  expect(accumulator.snapshot().archiveBytes).toBeGreaterThan(early.archiveBytes)
+  expect(accumulator.complete()).toEqual(accumulator.snapshot())
+  expect(() => accumulator.complete()).toThrow('only once')
+})
+
 function costObservation() {
   const accumulator = new WorkspaceCostObservationAccumulatorV1()
   accumulator.observe({ kind: 'directory', path: ['photos'] })

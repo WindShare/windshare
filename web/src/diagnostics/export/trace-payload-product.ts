@@ -462,7 +462,7 @@ export function validateLifecycleAction(payload: UnknownRecord): void {
     'lifecycle action transition')
   member(payload.action, [
     'pause', 'stop', 'continue', 'save', 'redownload', 'change_location',
-    'discard', 'delete',
+    'discard', 'delete', 'save_staged_files', 'cleanup_staging',
   ], 'lifecycle action')
   if (payload.lifecycle_state !== undefined) {
     member(payload.lifecycle_state, LIFECYCLE_STATES, 'lifecycle state')

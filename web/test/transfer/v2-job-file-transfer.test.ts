@@ -16,7 +16,6 @@ import {
   type V2RevisionReader,
 } from '../../src/content/v2-session-services'
 import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
-import { outputExecutionProfile } from '../../src/transfer/output-session'
 import {
   createFailureIdentity,
   createProtocolFailure,
@@ -419,12 +418,9 @@ function registerCheckpointSchedulingTests(): void {
     const output = testOutput([], {
       durability: 'ProcessRestart',
       initialRanges: [byteRange(0n, savedBytes)],
-      executionProfile: outputExecutionProfile({
-        ...prefixCopyCheckpointProfile(2n),
-        automaticCheckpoint: kind === 'prefix-copy'
-          ? { kind, pendingBytes: 2n }
-          : { kind, pendingBytes: 2n, pendingMilliseconds: 60_000 },
-      }),
+      checkpointPolicy: kind === 'prefix-copy'
+        ? { kind, pendingBytes: 2n }
+        : { kind, pendingBytes: 2n, pendingMilliseconds: 60_000 },
       beforeAutomaticCheckpoint: async () => {
         checkpointWrites.push(output.writes.reduce((sum, write) => sum + write.bytes, 0))
       },
@@ -435,6 +431,7 @@ function registerCheckpointSchedulingTests(): void {
     const result = await transferJobFixture({
       catalog: catalog.catalog, selection, intent, plans: planAuthorityFixture({ output }),
       revisions: readers.revisions, broker: readers.broker,
+      checkpointClock: { now: () => 0, schedule: () => () => undefined },
     }).run()
 
     expect(result.worker.status).toBe('Succeeded')
@@ -456,7 +453,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: prefixCopyCheckpointProfile(pendingBytes),
+      checkpointPolicy: prefixCopyCheckpointPolicy(pendingBytes),
     })
     const intent = await receiveIntentFixture({
       planKind: 'direct-atomic', artifactKind: 'original-file', selection, file,
@@ -486,7 +483,7 @@ function registerCheckpointSchedulingTests(): void {
     const checkpoint = deferred<void>()
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: prefixCopyCheckpointProfile(2n),
+      checkpointPolicy: prefixCopyCheckpointPolicy(2n),
       beforeAutomaticCheckpoint: () => checkpoint.promise,
     })
     const progress: TransferProgress[] = []
@@ -524,7 +521,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: prefixCopyCheckpointProfile(2n),
+      checkpointPolicy: prefixCopyCheckpointPolicy(2n),
       automaticCheckpointDecisions: ['deferred', 'advanced'],
     })
     const intent = await receiveIntentFixture({
@@ -555,7 +552,7 @@ function registerCheckpointSchedulingTests(): void {
     const readers = readerFixture([file])
     const output = testOutput([], {
       durability: 'ProcessRestart',
-      executionProfile: prefixCopyCheckpointProfile(2n),
+      checkpointPolicy: prefixCopyCheckpointPolicy(2n),
       automaticCheckpointDecisions: ['finished', 'advanced'],
     })
     const intent = await receiveIntentFixture({
@@ -716,16 +713,8 @@ function immediateCapacityPolicy(waitBudgetMilliseconds: number) {
   })
 }
 
-function prefixCopyCheckpointProfile(pendingBytes: bigint) {
-  return outputExecutionProfile({
-    maximumConcurrentFilePipelines: 1,
-    maximumOutstandingWriteBytes: 8n,
-    maximumBufferedBytes: 8n,
-    automaticCheckpoint: {
-      kind: 'prefix-copy',
-      pendingBytes,
-    },
-  })
+function prefixCopyCheckpointPolicy(pendingBytes: bigint) {
+  return { kind: 'prefix-copy' as const, pendingBytes }
 }
 
 function deferred<T>(): {

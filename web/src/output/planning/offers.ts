@@ -347,6 +347,7 @@ function artifactActionsOffer(
     workspace: zipChoices.find((choice) => choice.route.kind === 'workspace-then-publish') ?? null,
     portable: zipChoices.find((choice) => choice.route.kind === 'portable-handoff') ?? null,
     discoveryComplete: discovery.kind === 'complete',
+    discoveredOutputBytes: projection.metrics.byteCountLowerBound,
     workspaceCost: projection.workspaceCostObservation ?? null,
     policy: environment.zipRecommendationPolicy,
   })

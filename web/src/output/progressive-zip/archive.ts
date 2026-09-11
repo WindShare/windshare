@@ -232,7 +232,8 @@ export class ProgressiveZipArchive {
   }
 
   checkpoint(reason: string): Promise<TaskCheckpoint> {
-    return this.#input.coordinator.checkpoint(reason, () => this.#commit({}))
+    return this.#input.coordinator.checkpointIfChanged(reason, () => this.#dirty.size > 0,
+      () => this.#checkpoint, () => this.#commit({}))
   }
 
   async pinDirectory(directoryId: string, generation: string, sourcePath: readonly string[]): Promise<void> {

@@ -17,7 +17,10 @@ import {
   bindOutputFileTransaction,
   ownOutputFileTransaction,
 } from '../output-file-transaction'
-import { evaluateCheckpointSchedule } from '../checkpoint-schedule'
+import {
+  registerFileCheckpoint, systemCheckpointClock,
+  type CheckpointClock, type CheckpointObservation, type FileCheckpointController,
+} from '../checkpoint/controller'
 import {
   OutputBudgetExceededError,
   OutputSessionCompromisedError,
@@ -72,14 +75,15 @@ export interface V2FileTransferOptions {
   readonly outputSettlementTimeoutMilliseconds: number
   readonly incidentScope?: IncidentScopeHandle
   readonly performancePipeline?: PerformanceFilePipelineObservation
-  readonly onInitialDurable?: (bytes: bigint) => void
+  readonly onInitialCoverage?: (coverage: Readonly<{ durableBytes: bigint; acceptedBytes: bigint }>) => void
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
   readonly onRecoverableAcknowledged?: (
     bytes: bigint,
     transition: 'automatic-checkpoint' | 'final',
   ) => void
   readonly onComplete: (exactSize: bigint) => void
-  readonly now?: () => number
+  readonly checkpointClock?: CheckpointClock
+  readonly onCheckpointObservation?: (event: CheckpointObservation) => void
 }
 
 type BoundOutputFileTransaction = ReturnType<typeof bindOutputFileTransaction>['transaction']
@@ -89,6 +93,10 @@ export async function transferV2File(
   options: V2FileTransferOptions,
   pending: PendingFile,
 ): Promise<void> {
+  const callerSignal = options.signal
+  const checkpointFailure = new AbortController()
+  options = { ...options, signal: AbortSignal.any([options.signal, checkpointFailure.signal]) }
+  let checkpoint: FileCheckpointController | undefined
   let acquired: V2OpenedRevision | undefined
   let opened: V2OpenedRevision | undefined
   let transaction: BoundOutputFileTransaction | undefined
@@ -169,20 +177,29 @@ export async function transferV2File(
     options.performancePipeline?.transition('block_read_authentication')
     const wanted = new ByteRangeSet(outputFile.exactSize, [byteRange(0n, outputFile.exactSize)])
     const initialDurable = bound.initialDurable.asRangeSet()
-    const missing = initialDurable.missingFrom(wanted)
-    if (opened === undefined && (revisionOpenAttempted || options.output.capabilities.durability === 'None' || !missing.empty)) {
+    const missing = bound.initialAccepted.missingFrom(wanted)
+    if (opened === undefined && (revisionOpenAttempted || options.output.capabilities.durability === 'None' || !initialDurable.missingFrom(wanted).empty)) {
       throw new OutputTransactionContractError('output adapter omitted revision open without complete durable coverage')
     }
-    options.onInitialDurable?.(rangeBytes(initialDurable))
-    const checkpoint = {
-      remainingWriteBytes: rangeBytes(missing),
-      durableBytes: rangeBytes(initialDurable),
-      pendingBytes: 0n,
-      pendingSince: undefined as number | undefined,
-      retryAtPendingBytes: 0n,
-      automaticCheckpointFinished: false,
-    }
-    let wrote = false
+    options.onInitialCoverage?.({ durableBytes: rangeBytes(initialDurable), acceptedBytes: rangeBytes(bound.initialAccepted) })
+    const initialPendingBytes = rangeBytes(bound.initialAccepted) - rangeBytes(initialDurable)
+    checkpoint = registerFileCheckpoint(options.output, {
+      object: begun.checkpoint ?? { objectId: begun.durableRanges.ownership.ownedFileIdentity,
+        policy: { kind: 'disabled' } },
+      durableBytes: rangeBytes(initialDurable), pendingBytes: initialPendingBytes,
+      remainingBytes: rangeBytes(missing), signal: options.signal,
+      clock: options.checkpointClock ?? systemCheckpointClock,
+      checkpoint: async trigger => {
+        const result = await outputOperation(options.signal, 'Unable to checkpoint the output file',
+          'output-write-failed', () => activeTransaction.automaticCheckpoint(trigger, options.signal))
+        return result.kind === 'advanced'
+          ? { kind: 'advanced', durableBytes: rangeBytes(result.durable.asRangeSet()) } : result
+      },
+      onAdvanced: bytes => options.onRecoverableAcknowledged?.(bytes, 'automatic-checkpoint'),
+      onFailure: error => checkpointFailure.abort(error),
+      ...(options.onCheckpointObservation === undefined ? {} : { observe: options.onCheckpointObservation }),
+    })
+    let wrote = initialPendingBytes > 0n
     for (const missingRange of missing.ranges) {
       if (opened === undefined) throw new OutputTransactionContractError('missing bytes require a live revision lease')
       wrote = await transferMissingRange(
@@ -194,6 +211,7 @@ export async function transferV2File(
         checkpoint,
       )
     }
+    await checkpoint.drain()
     options.performancePipeline?.transition('final_transaction')
     await outputOperation(
       options.signal,
@@ -207,12 +225,21 @@ export async function transferV2File(
     }
     options.onComplete(outputFile.exactSize)
   } catch (error) {
-    const settled = await settleTransferError(options, transaction, error)
+    const settlementError = await drainCheckpointFailure(checkpoint, error)
+    // The internal abort wakes a blocked reader; it must not recast a storage failure as user cancellation.
+    const settled = await settleTransferError({ ...options, signal: callerSignal }, transaction, settlementError)
     primaryFailure = settled.failure
     capacityBlocked = settled.capacityBlocked
   } finally {
     await finishTransferFile(options, acquired, primaryFailure, capacityBlocked)
   }
+}
+
+async function drainCheckpointFailure(
+  checkpoint: FileCheckpointController | undefined, failure: unknown,
+): Promise<unknown> {
+  try { await checkpoint?.drain() } catch (checkpointError) { return checkpointError }
+  return failure
 }
 
 async function settleTransferError(
@@ -551,16 +578,10 @@ async function acceptAtomicOutputRange(
   const writtenBytes = BigInt(data.byteLength)
   options.performancePipeline?.transition('writer_lifecycle')
   try {
-    await writeAtomicRange(options, transaction, offset, data)
-    checkpoint.remainingWriteBytes -= writtenBytes
-    checkpoint.pendingBytes += writtenBytes
-    if (options.output.executionProfile.automaticCheckpoint.kind === 'incremental') {
-      checkpoint.pendingSince ??= checkpointTime(options)
-    }
-    options.onWriteAcknowledged(writtenBytes, !wrote)
-    if (checkpoint.remainingWriteBytes > 0n) {
-      await attemptAutomaticCheckpoint(options, transaction, checkpoint)
-    }
+    await checkpoint.write(writtenBytes, async () => {
+      await writeAtomicRange(options, transaction, offset, data)
+      options.onWriteAcknowledged(writtenBytes, !wrote)
+    })
     return true
   } finally {
     options.performancePipeline?.transition('block_read_authentication')
@@ -587,69 +608,6 @@ async function writeAtomicRange(
     'output-write-failed',
     () => transaction.writeRange(offset, data, options.signal),
   )
-}
-
-interface FileCheckpointController {
-  remainingWriteBytes: bigint
-  durableBytes: bigint
-  pendingBytes: bigint
-  pendingSince: number | undefined
-  retryAtPendingBytes: bigint
-  automaticCheckpointFinished: boolean
-}
-
-async function attemptAutomaticCheckpoint(
-  options: V2FileTransferOptions,
-  transaction: BoundOutputFileTransaction,
-  checkpoint: FileCheckpointController,
-): Promise<void> {
-  const policy = options.output.executionProfile.automaticCheckpoint
-  if (policy.kind === 'disabled' || checkpoint.automaticCheckpointFinished) return
-  const scheduleDecision = evaluateCheckpointSchedule(policy, {
-    durableBytes: checkpoint.durableBytes,
-    pendingBytes: checkpoint.pendingBytes,
-    remainingBytes: checkpoint.remainingWriteBytes,
-    pendingMilliseconds: checkpoint.pendingSince === undefined
-      ? 0 : checkpointTime(options) - checkpoint.pendingSince,
-    retryAtPendingBytes: checkpoint.retryAtPendingBytes,
-  })
-  if (scheduleDecision.kind === 'wait-for-progress') return
-  if (scheduleDecision.kind === 'finish-without-further-checkpoint') {
-    checkpoint.automaticCheckpointFinished = true
-    return
-  }
-  const result = await outputOperation(
-    options.signal,
-    'Unable to checkpoint the output file',
-    'output-write-failed',
-    () => transaction.automaticCheckpoint(scheduleDecision.trigger, options.signal),
-  )
-  if (result.kind === 'deferred') {
-    checkpoint.retryAtPendingBytes = scheduleDecision.retryAtPendingBytes
-    return
-  }
-  if (result.kind === 'finished') {
-    checkpoint.automaticCheckpointFinished = true
-    return
-  }
-  const durableBytes = rangeBytes(result.durable.asRangeSet())
-  const advancedBytes = durableBytes - checkpoint.durableBytes
-  if (advancedBytes <= 0n) {
-    throw new OutputTransactionContractError('advanced checkpoint did not increase durable coverage')
-  }
-  checkpoint.durableBytes = durableBytes
-  checkpoint.pendingBytes = 0n
-  checkpoint.pendingSince = undefined
-  checkpoint.retryAtPendingBytes = 0n
-  options.onRecoverableAcknowledged?.(advancedBytes, 'automatic-checkpoint')
-}
-
-function checkpointTime(options: V2FileTransferOptions): number {
-  const current = (options.now ?? Date.now)()
-  if (!Number.isFinite(current)) {
-    throw new OutputTransactionContractError('output checkpoint clock returned a non-finite time')
-  }
-  return current
 }
 
 function rangeBytes(ranges: ByteRangeSet): bigint {
