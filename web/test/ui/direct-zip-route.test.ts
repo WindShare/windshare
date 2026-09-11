@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { ArtifactChoiceID } from '../../src/transfer/intent'
-import type { ReviewedDirectZipRuntimeFactsV1 } from '../../src/output/direct-zip/session'
+import type { DirectZipRuntimeFactsV1 } from '../../src/output/direct-zip/session'
 import type { OfferedArtifactChoice } from '../../src/output/planning'
 import type { ReceiveOperationMutationPort } from '../../src/output/resume/authority'
 import type {
@@ -21,6 +21,22 @@ import type { V2ArtifactPresentationAuthority } from '../../src/ui/v2-receive-ru
 const CHOICE = 'choice' as ArtifactChoiceID
 
 describe('browser Direct ZIP route', () => {
+  it.each(['published', 'receiving'] as const)(
+    'finishes local ZIP verification with %s truth without starting a receive continuation', async kind => {
+      const fixture = directZipRetainedActionFixture(resumableDirectZipLifecycle(), () => 2_000)
+      fixture.source.readDirectZipRequirement.mockResolvedValue('verify-completion')
+      const detach = vi.fn(async () => undefined)
+      fixture.runtimeResume.mockResolvedValue({ lifecycle: { kind }, detach })
+      const inventory = await listRetainedFixture(fixture)
+      const retained = inventory.operations[0]!
+      expect(retained.continuation).toBe('verify-direct-zip-completion')
+      await expect(inventory.act(retained, 'continue', new AbortController().signal))
+        .resolves.toEqual({ kind: 'completed' })
+      expect(detach).toHaveBeenCalledOnce()
+      inventory.close()
+    },
+  )
+
   it('invokes the parent picker synchronously and preserves the exact displayed ranking', () => {
     let pickerInvoked = false
     const windowPort = {
@@ -214,6 +230,7 @@ function directZipRetainedActionFixture(
   return {
     source: {
       listLifecycleStates: vi.fn(async () => [lifecycle]),
+      readDirectZipRequirement: vi.fn<() => Promise<import('../../src/output/resume/direct-zip-checkpoint').DirectZipRecoveryRequirement | undefined>>(async () => undefined),
       close: vi.fn(),
     },
     directZip: directZipPort({ resume: runtimeResume, deleteRetained }),
@@ -268,14 +285,14 @@ function resumableDirectZipLifecycle(): ReceiveLifecycleState {
 function installedRoute(
   runtimeOverrides: Partial<BrowserDirectZipCompositionPort['runtime']> = {},
 ): InstalledBrowserDirectZipRoute {
-  return Object.freeze({ directZip: directZipPort(runtimeOverrides), reviewed: reviewed() })
+  return Object.freeze({ directZip: directZipPort(runtimeOverrides), facts: facts() })
 }
 
 function directZipPort(
   runtimeOverrides: Partial<BrowserDirectZipCompositionPort['runtime']> = {},
 ): BrowserDirectZipCompositionPort {
   return {
-    evidence: { read: vi.fn() },
+    capabilities: { read: vi.fn() },
     runtime: {
       startFresh: () => authority(),
       dispatchBootstrapCandidate: vi.fn(async () => undefined),
@@ -295,7 +312,7 @@ function authority(): V2ArtifactPresentationAuthority {
 }
 
 function offered(): OfferedArtifactChoice {
-  const support = reviewed().support
+  const support = facts().support
   return {
     choice: { choiceId: CHOICE },
     route: {
@@ -305,19 +322,18 @@ function offered(): OfferedArtifactChoice {
   } as unknown as OfferedArtifactChoice
 }
 
-function reviewed(): ReviewedDirectZipRuntimeFactsV1 {
+function facts(): DirectZipRuntimeFactsV1 {
   const digest = 'digest'
   return {
     support: {
-      kind: 'reviewed-supported',
-      supportMatrixDigest: digest,
-      browserBinaryDigest: digest,
-      browserVersion: '1',
-      operatingSystemBuild: 'os',
-      filesystemProfile: 'fs',
-      rawEvidenceDigest: digest,
-      requiredFeatureFactsDigest: digest,
-      recommendationPolicyDigest: digest,
+      kind: 'runtime-supported',
+      capabilityDigest: digest,
+      authority: {
+        kind: 'owned-target-session-v1',
+        recovery: 'persisted-handle-and-verified-checkpoint',
+        replacement: 'coordinated-no-replace',
+        cleanup: 'ownership-proof-required',
+      },
       policies: {
         zipEncoding: digest,
         layout: digest,
@@ -332,10 +348,8 @@ function reviewed(): ReviewedDirectZipRuntimeFactsV1 {
       workspacePeakBytesThreshold: 1n,
       policyDigest: digest,
     },
-    automaticEpochBudget: {
-      maximumPrefixCopyBytes: 1n,
-      maximumCumulativePrefixCopyBytes: 1n,
-      maximumModeledPeakTemporaryBytes: 1n,
+    automaticEpochPolicy: {
+      minimumAdvanceBytes: 1n,
     },
   }
 }

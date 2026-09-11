@@ -84,6 +84,8 @@ import {
   validateDirectZipTargetObservationV1,
 } from './records/target-observation'
 
+import { canonicalRetainedEpochProof, snapshotRetainedEpochProof } from './records/retained-epoch'
+
 const DIRECT_ZIP_CHECKPOINT_DOMAIN = 'windshare/direct-zip-checkpoint/v1'
 const DIRECT_ZIP_CHECKPOINT_PROPOSAL_DOMAIN = 'windshare/direct-zip-checkpoint-proposal/v1'
 const DIRECT_ZIP_BOOTSTRAP_CANDIDATE_DOMAIN = 'windshare/direct-zip-bootstrap-candidate/v1'
@@ -146,6 +148,7 @@ export async function createDirectZipCheckpointV1(
   const layoutPages = snapshotPageChain(input.layoutPages, 'layout')
   const centralPages = snapshotPageChain(input.centralPages, 'central')
   const epochPages = snapshotPageChain(input.epochPages, 'epoch')
+  const retainedEpochProof = snapshotRetainedEpochProof(input.retainedEpochProof, input.archiveOffset, epochRootDigest)
   const expectedLayoutRecords = phase === 'inside-member' ? entryOrdinal + 1n : entryOrdinal
   if (layoutPages.recordCount !== expectedLayoutRecords ||
       centralPages.recordCount !== entryOrdinal) {
@@ -200,6 +203,7 @@ export async function createDirectZipCheckpointV1(
     canonicalFrame(canonicalPageChain(layoutPages)),
     canonicalFrame(canonicalPageChain(centralPages)),
     canonicalFrame(canonicalPageChain(epochPages)),
+    canonicalFrame(canonicalRetainedEpochProof(retainedEpochProof)),
     canonicalFrame(canonicalBudgetUsage(journalUsage)),
     optionalTextFrame(accountingTailPageId),
     canonicalFrame(canonicalClosingReplay(closingReplay)),
@@ -227,6 +231,7 @@ export async function createDirectZipCheckpointV1(
     layoutPages,
     centralPages,
     epochPages,
+    ...(retainedEpochProof === undefined ? {} : { retainedEpochProof }),
     journalUsage,
     ...(accountingTailPageId === undefined ? {} : { accountingTailPageId }),
     ...(closingReplay === undefined ? {} : { closingReplay }),
@@ -289,6 +294,7 @@ export async function createDirectZipCheckpointProposalV1(
     canonicalFrame(canonicalPageChain(checked.layoutPages)),
     canonicalFrame(canonicalPageChain(checked.centralPages)),
     canonicalFrame(canonicalPageChain(checked.epochPages)),
+    canonicalFrame(canonicalRetainedEpochProof(checked.retainedEpochProof)),
     canonicalFrame(canonicalBudgetUsage(checked.journalUsage)),
     optionalTextFrame(checked.accountingTailPageId),
     canonicalFrame(canonicalClosingReplay(checked.closingReplay)),
@@ -316,6 +322,7 @@ export async function createDirectZipCheckpointProposalV1(
     layoutPages: checked.layoutPages,
     centralPages: checked.centralPages,
     epochPages: checked.epochPages,
+    ...(checked.retainedEpochProof === undefined ? {} : { retainedEpochProof: checked.retainedEpochProof }),
     journalUsage: checked.journalUsage,
     ...(checked.accountingTailPageId === undefined ? {} : {
       accountingTailPageId: checked.accountingTailPageId,

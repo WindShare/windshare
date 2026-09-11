@@ -125,6 +125,7 @@ func projectFilesystemOutput(
 	}
 	identities := projectFilesystemOutputIdentities(event)
 	return filesystemOutputPayloadV3{
+		Capabilities:        projectFilesystemCapabilities(event),
 		Operation:           operation,
 		ReceiveOperationID:  identities.receiveOperationID,
 		ReceiveIntentDigest: identities.receiveIntentDigest,
@@ -138,6 +139,23 @@ func projectFilesystemOutput(
 		Counters:            projectFilesystemCounters(event.Counters()),
 		Failure:             failure,
 	}, nil
+}
+
+func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *filesystemCapabilitiesV3 {
+	capabilities, present := event.DestinationCapabilities()
+	if !present {
+		return nil
+	}
+	project := func(value clievent.FilesystemCapability) filesystemCapabilityV3 {
+		reason, _ := value.Reason.Name()
+		return filesystemCapabilityV3{Supported: value.Supported, Reason: reason}
+	}
+	mode, _ := capabilities.Mode.Name()
+	return &filesystemCapabilitiesV3{
+		Mode: mode, SafePublish: project(capabilities.SafePublish),
+		OperationRecovery: project(capabilities.OperationRecovery),
+		RangeRecovery:     project(capabilities.RangeRecovery), CrashCleanup: project(capabilities.CrashCleanup),
+	}
 }
 
 func projectFilesystemOutputIdentities(

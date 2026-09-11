@@ -92,7 +92,7 @@ func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 			name:             "other superblock",
 			filesystemMagic:  unix.TMPFS_MAGIC,
 			mountType:        "tmpfs",
-			mountDeviceMajor: 0,
+			mountDeviceMajor: linuxTestDeviceMajor,
 			uniqueMask:       true,
 			wantUnsupported:  true,
 		},
@@ -121,7 +121,7 @@ func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 				test.mountDeviceMajor,
 				test.uniqueMask,
 			)
-			certificate, err := linuxCertifyExt4OutputFD(&system, 10)
+			binding, err := linuxCertifyExt4OutputFD(&system, 10)
 			switch {
 			case test.wantUnsupported:
 				assertLinuxUnsupported(t, err)
@@ -130,11 +130,11 @@ func TestLinuxCertificationAcceptsOnlyExplicitExt4Mount(t *testing.T) {
 			case err != nil:
 				t.Fatalf("certify ext4: %v", err)
 			default:
-				if certificate.durability != linuxOutputProcessRestartDurability {
-					t.Fatalf("durability = %v", certificate.durability)
+				if binding.restart.durability != linuxOutputProcessRestartDurability {
+					t.Fatalf("durability = %v", binding.restart.durability)
 				}
-				if certificate.mount.uniqueMountID != linuxTestUniqueMountID {
-					t.Fatalf("unique mount ID = %d", certificate.mount.uniqueMountID)
+				if binding.mount.uniqueMountID != linuxTestUniqueMountID {
+					t.Fatalf("unique mount ID = %d", binding.mount.uniqueMountID)
 				}
 			}
 		})
@@ -146,7 +146,7 @@ func TestLinuxRejectedFilesystemClosesRootBeforeMutation(t *testing.T) {
 	system := linuxCertificationTestSystem(
 		unix.TMPFS_MAGIC,
 		"tmpfs",
-		0,
+		linuxTestDeviceMajor,
 		true,
 	)
 	opened := 0
@@ -293,11 +293,11 @@ func TestLinuxCertificationTreatsGenerationAsOptionalEvidence(t *testing.T) {
 				linuxExt4SuperMagic, "ext4", linuxTestDeviceMajor, true,
 			)
 			mutate(&system)
-			certificate, err := linuxCertifyExt4OutputFD(&system, 10)
+			binding, err := linuxCertifyExt4OutputFD(&system, 10)
 			if err != nil {
 				t.Fatalf("certify ext4: %v", err)
 			}
-			if certificate.rootRestartIdentity.hasGenerationProof {
+			if binding.restart.rootIdentity.hasGenerationProof {
 				t.Fatal("optional generation evidence was recorded when unavailable or zero")
 			}
 		})
@@ -714,4 +714,46 @@ func assertLinuxUnsafe(t *testing.T, err error) {
 	if _, ok := errors.AsType[*linuxOutputUnsafeError](err); !ok {
 		t.Fatalf("unsafe error is not typed: %T", err)
 	}
+}
+
+// Certification fixtures deliberately retain the strict ext4-only entrance.
+// Production opens runtime authority first and enrolls restart support separately.
+func linuxOpenExt4OutputRoot(path string, system *linuxOutputSystem) (*linuxOutputDirectory, error) {
+	const operation = "open output root"
+	if system == nil {
+		return nil, linuxUnsupported(operation, "native syscall provider is absent", nil)
+	}
+	if !filepath.IsAbs(path) {
+		return nil, linuxUnsafe(operation, "output root must be absolute so authority does not depend on process cwd", nil)
+	}
+	cleanPath := filepath.Clean(path)
+	how := unix.OpenHow{
+		Flags:   uint64(unix.O_RDONLY | unix.O_DIRECTORY | unix.O_CLOEXEC | unix.O_NOFOLLOW),
+		Resolve: uint64(unix.RESOLVE_NO_MAGICLINKS | unix.RESOLVE_NO_SYMLINKS),
+	}
+	fd, err := system.openat2(unix.AT_FDCWD, cleanPath, &how)
+	if err != nil {
+		return nil, linuxClassifyOpenError(operation, err)
+	}
+	binding, err := linuxCertifyExt4OutputFD(system, fd)
+	if err != nil {
+		return nil, errors.Join(err, system.close(fd))
+	}
+	if _, err := linuxCertifyAbsoluteOutputPlacement(cleanPath, system, binding); err != nil {
+		return nil, errors.Join(err, system.close(fd))
+	}
+	root := &linuxOutputDirectory{
+		system:       system,
+		fd:           fd,
+		binding:      binding,
+		object:       binding.rootObject,
+		absolutePath: cleanPath,
+	}
+	// The public root is admitted by actual kernel access. Its ACL and ownership
+	// remain user policy; WindShare establishes exclusivity only below its private
+	// control namespace.
+	if err := root.validatePublicCreateAuthority(); err != nil {
+		return nil, errors.Join(err, root.close())
+	}
+	return root, nil
 }

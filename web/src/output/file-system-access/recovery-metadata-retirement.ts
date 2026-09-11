@@ -24,7 +24,7 @@ export async function retireFSAMaterializationRecoveryMetadata(
       binding,
       MATERIALIZATION_LEDGER_PAGE_ENTRY_LIMIT,
     )
-    if (result.state === 'complete') return
+    if (result.state === 'complete' || result.state === 'retained-for-local-delivery') return
     if (result.deletedRows === 0) {
       throw new DOMException('FSA recovery metadata retirement made no progress', 'OperationError')
     }

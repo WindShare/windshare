@@ -1,3 +1,5 @@
+import { encodeBase64Url } from '../../crypto/bytes'
+import { checkpointSha256Sync } from '../persistence/checkpoint-codec'
 import { DIRECTORY_ADMISSION_LAYOUT_VERSION } from '../../transfer/directory-admission'
 import {
   sameMaterializationRootRelativePath,
@@ -61,6 +63,13 @@ const ROOT_FINALIZATION_ISOLATED_DISCRIMINANT = 2
 export async function createMaterializationLedgerBinding(
   input: MaterializationLedgerBindingInput,
 ): Promise<MaterializationLedgerBindingV1> {
+  return createMaterializationLedgerBindingSync(input)
+}
+
+/** Small canonical records can be checked inside IndexedDB without yielding its transaction to WebCrypto. */
+export function createMaterializationLedgerBindingSync(
+  input: MaterializationLedgerBindingInput,
+): MaterializationLedgerBindingV1 {
   requireExactKeys(input, [
     'operationId',
     'receiveIntentDigest',
@@ -109,7 +118,7 @@ export async function createMaterializationLedgerBinding(
     materializerKind: 'fsa-tree',
     pathCoordinate: 'fsa-reserved-root-relative',
     layoutVersion: DIRECTORY_ADMISSION_LAYOUT_VERSION,
-    ledgerBindingDigest: await canonicalDigest(canonicalBytes),
+    ledgerBindingDigest: materializationRecordDigest(canonicalBytes),
     canonicalBytes,
   })
 }
@@ -500,6 +509,21 @@ export async function validateBinding(
   binding: MaterializationLedgerBindingV1,
 ): Promise<MaterializationLedgerBindingV1> {
   return decodeMaterializationLedgerBindingV1(binding)
+}
+
+export function validateBindingSync(input: MaterializationLedgerBindingV1): MaterializationLedgerBindingV1 {
+  const record = requireRecord(input, 'materialization ledger binding')
+  const binding = createMaterializationLedgerBindingSync({
+    operationId: input.operationId, receiveIntentDigest: input.receiveIntentDigest,
+    materializationBindingDigest: input.materializationBindingDigest, authorityRef: input.authorityRef,
+  })
+  requireExactKeys(record, Object.keys(binding), 'materialization ledger binding')
+  requireRecordProjection(record, binding, 'materialization ledger binding')
+  return binding
+}
+
+export function materializationRecordDigest(bytes: Uint8Array): string {
+  return encodeBase64Url(checkpointSha256Sync(bytes))
 }
 
 export function requireExpectedBindingDigest(

@@ -153,8 +153,13 @@ export class ActiveReceiveLifecycle {
       return false
     }
     isolateDiagnostic(beforePublish)
+    // Journal-only local actions can finish without changing the authenticated lifecycle cut.
+    const unchangedUsage = mutation.workspaceUsage === undefined ||
+      mutation.workspaceUsage === this.#outputs.getSnapshot().workspaceUsage
+    if (mutation.lifecycle === current && mutation.resumeTransfer !== true &&
+        mutation.activeControls === undefined && unchangedUsage) return true
     const controls = mutation.activeControls ?? Object.freeze([])
-    if (!this.#outputs.updateLifecycle(mutation.lifecycle, usage, controls)) return false
+    if (!this.#outputs.updateLifecycle(mutation.lifecycle, usage, controls, undefined, mutation.recoverySummary)) return false
     if (mutation.resumeTransfer === true) this.#resumeTransferWhenIdle(active)
     return true
   }
@@ -211,11 +216,17 @@ export class ActiveReceiveLifecycle {
         pending.operation,
         pending.generation,
         mutation,
-        () => this.#observability.decideLifecycleMutation(pending.attempt, mutation.lifecycle),
+        mutation.actionOutcome?.kind !== 'failed'
+          ? () => this.#observability.decideLifecycleMutation(pending.attempt, mutation.lifecycle)
+          : undefined,
       )
       if (!applied) {
         this.#observability.lifecycleExclusion(pending.attempt, 'stale_replacement')
         this.#observability.emitLifecycleTrace('excluded', pending.action)
+      } else if (mutation.actionOutcome?.kind === 'failed') {
+        this.#finishFailure(pending, mutation.actionOutcome.error, false)
+        this.#onIdle(pending.operation)
+        return
       } else if (!pending.attempt.decisionSettled) {
         this.#observability.lifecycleExclusion(
           pending.attempt,

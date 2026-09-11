@@ -18,7 +18,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"discovery", int(DiscoveryOpen), int(DiscoveryFailed), func(value int) (string, bool) { return DiscoveryStatus(value).Name() }},
 		{"send disposition", int(SendAccepted), int(SendRetired), func(value int) (string, bool) { return SendDisposition(value).Name() }},
 		{"channel state", int(ChannelConnecting), int(ChannelClosed), func(value int) (string, bool) { return ChannelState(value).Name() }},
-		{"message key", int(MessageUnexpected), int(MessageOwnedObjectUnknown), func(value int) (string, bool) { return SafeMessageKey(value).Name() }},
+		{"message key", int(MessageUnexpected), int(MessageOutputRecoveryUnavailable), func(value int) (string, bool) { return SafeMessageKey(value).Name() }},
 		{"fault domain", int(FaultSource), int(FaultCheckpoint), func(value int) (string, bool) { return FaultDomain(value).Name() }},
 		{"fault scope", int(FaultFileLocal), int(FaultSessionTerminal), func(value int) (string, bool) { return FaultScope(value).Name() }},
 		{"drift", int(DriftNone), int(DriftSource), func(value int) (string, bool) { return DriftReason(value).Name() }},

@@ -132,7 +132,8 @@ describe('revision release caller and shared-read ownership', () => {
       const transfer = expect(transferDirectZipFileV1({
         descriptor: harness.share, revisions: { open: async () => opened },
         broker: { readRange: () => { throw new Error('cancelled ZIP must not read') } },
-        output, signal: controller.signal, onWriteAcknowledged: () => undefined, onComplete: () => undefined,
+        output, signal: controller.signal, onInitialDurable: () => undefined,
+        onWriteAcknowledged: () => undefined, onComplete: () => undefined,
       }, file)).rejects.toMatchObject({
         cause: reason,
         errors: [reason, expect.objectContaining({ message: 'Revision lease release timed out' })],

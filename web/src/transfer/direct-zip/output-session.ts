@@ -29,6 +29,7 @@ import type {
   DirectZipOrderedOutputV1,
   DirectZipOrderedVisitV1,
   DirectZipOutputSessionV1,
+  DirectZipPayloadProgressV1,
   DirectZipPublishedEvidenceV1,
   DirectZipStableEvidenceV1,
 } from './model'
@@ -50,6 +51,7 @@ export interface DirectZipMemberRollbackAuthorityV1 {
     decision: Extract<DirectZipMemberResumeDecisionV1, { readonly kind: 'rollback-member' }>
     checkpoint: DirectZipWriterCheckpointV1
     source: DirectZipSourceAuthorityV1
+    signal: AbortSignal
   }>): Promise<DirectZipEpochWriterV1>
 }
 
@@ -60,6 +62,7 @@ export interface DirectZipTransferOutputOptionsV1 {
   readonly pages: Pick<DirectZipWriterPageSink, 'snapshot'>
   readonly replay: DirectZipReplayAuthorityV1
   readonly rollback: DirectZipMemberRollbackAuthorityV1
+  readonly onProgress?: (snapshot: DirectZipPayloadProgressV1) => void
 }
 
 interface OpenedDirectZipMember {
@@ -80,6 +83,9 @@ export class DirectZipTransferOutputV1 implements
   readonly #pages: Pick<DirectZipWriterPageSink, 'snapshot'>
   readonly #replay: DirectZipReplayAuthorityV1
   readonly #rollback: DirectZipMemberRollbackAuthorityV1
+  readonly #onProgress: DirectZipTransferOutputOptionsV1['onProgress']
+  #receivedSelectedBytes: bigint
+  #writtenSelectedBytes: bigint
   #writer: DirectZipEpochWriterV1
   #nextOrdinal: bigint
   #workingOffset: bigint
@@ -103,9 +109,13 @@ export class DirectZipTransferOutputV1 implements
     this.#pages = options.pages
     this.#replay = options.replay
     this.#rollback = options.rollback
+    this.#onProgress = options.onProgress
     const checkpoint = this.#writer.committedCheckpoint
     this.#nextOrdinal = checkpoint.nextEntryOrdinal
     this.#workingOffset = checkpoint.archiveOffset
+    this.#receivedSelectedBytes = checkpoint.safeResumeBytes
+    this.#writtenSelectedBytes = checkpoint.safeResumeBytes
+    this.#emitProgress()
   }
 
   async beginTraversal(root: DirectZipAuthenticatedRootV1, signal: AbortSignal): Promise<void> {
@@ -132,6 +142,13 @@ export class DirectZipTransferOutputV1 implements
       return 'replayed'
     }
     if (ordinal !== this.#nextOrdinal) throw new Error('direct ZIP traversal skipped an archive ordinal')
+    // Seeing a successor is the first point where a member-boundary checkpoint
+    // cannot become an unnecessary full-prefix reopen solely for finalization.
+    const cut = await this.#writer.automaticCheckpoint()
+    if (cut.kind === 'replay-required') {
+      throw new Error('direct ZIP member boundary requires candidate replay')
+    }
+    signal.throwIfAborted()
     if (member.kind === 'directory') {
       const plan = this.#plan(ordinal, member, this.#workingOffset)
       await this.#writer.addDirectory({
@@ -165,8 +182,8 @@ export class DirectZipTransferOutputV1 implements
     const authority: DirectZipSourceAuthorityV1 = Object.freeze({ ...source })
     const checkpoint = this.#writer.committedCheckpoint
     const opened = checkpoint.phase === 'inside-member' && checkpoint.nextEntryOrdinal === pending.ordinal
-      ? await this.#resumeMember(pending.ordinal, file, authority, checkpoint)
-      : await this.#startMember(pending.ordinal, file, authority, checkpoint)
+      ? await this.#resumeMember(pending.ordinal, file, authority, checkpoint, signal)
+      : await this.#startMember(pending.ordinal, file, authority)
     this.#activeFile = true
     return new DirectZipFileTransaction(
       opened.writer,
@@ -182,6 +199,7 @@ export class DirectZipTransferOutputV1 implements
     file: Extract<DirectZipOrderedMemberV1, { kind: 'file' }>,
     authority: DirectZipSourceAuthorityV1,
     checkpoint: DirectZipWriterCheckpointV1,
+    signal: AbortSignal,
   ): Promise<OpenedDirectZipMember> {
     const active = checkpoint.member!
     const plan = this.#plan(ordinal, file, active.plan.zipEntry.localHeaderOffset)
@@ -197,27 +215,29 @@ export class DirectZipTransferOutputV1 implements
       decision: resumed,
       checkpoint,
       source: authority,
+      signal,
     })
     const replacement = this.#writer.committedCheckpoint
     if (replacement.phase !== 'between-members' ||
         replacement.nextEntryOrdinal !== resumed.nextEntryOrdinal ||
-        replacement.archiveOffset !== resumed.archiveOffset) {
+        replacement.archiveOffset !== resumed.archiveOffset ||
+        replacement.safeResumeBytes !== resumed.safeResumeBytes) {
       throw new Error('direct ZIP member rollback returned a non-authoritative checkpoint')
     }
     this.#workingOffset = replacement.archiveOffset
-    return this.#startMember(ordinal, file, authority, replacement)
+    // A changed revision invalidates its reused payload, even when the archive
+    // prefix was previously durable. The replacement writer owns that decision.
+    this.#restoreRetainedPayload(replacement.safeResumeBytes)
+    signal.throwIfAborted()
+    return this.#startMember(ordinal, file, authority)
   }
 
   async #startMember(
     ordinal: bigint,
     file: Extract<DirectZipOrderedMemberV1, { kind: 'file' }>,
     authority: DirectZipSourceAuthorityV1,
-    checkpoint: DirectZipWriterCheckpointV1,
   ): Promise<OpenedDirectZipMember> {
-    if (checkpoint.phase !== 'between-members') {
-      throw new Error('direct ZIP cannot admit content while closing')
-    }
-    const plan = this.#plan(ordinal, file, checkpoint.archiveOffset)
+    const plan = this.#plan(ordinal, file, this.#workingOffset)
     const writer = await this.#writer.beginFile({
       plan,
       source: authority,
@@ -251,6 +271,9 @@ export class DirectZipTransferOutputV1 implements
     this.#terminallyPaused = true
     this.#activeFile = false
     this.#pendingFile = undefined
+    // A failed epoch can discard acknowledged writes before pause establishes
+    // its stable cut. Only retained payload belongs to the paused result.
+    this.#restoreRetainedPayload(evidence.checkpoint.safeResumeBytes)
     return evidence
   }
 
@@ -259,18 +282,22 @@ export class DirectZipTransferOutputV1 implements
       throw new Error('direct ZIP cannot publish before ordered materialization is quiescent')
     }
     if (this.#terminallyPaused) throw new Error('direct ZIP paused output cannot publish')
-    const stable = await this.#stableCut()
+    const checkpoint = this.#writer.committedCheckpoint
     const pages = await this.#pages.snapshot()
     const completion = await this.#writer.closeArchive({
       entryCount: this.#nextOrdinal,
       centralDirectoryBytes: pages.centralBytes,
       layoutRoot: pages.layoutRoot,
       centralRoot: pages.centralRoot,
-      preClosingEpochRoot: stable.checkpoint.completion?.preClosingEpochRoot ??
-        stable.checkpoint.epochRoot,
+      predecessorEpochRoot: checkpoint.completion?.predecessorEpochRoot ?? checkpoint.epochRoot,
     })
     requireExactCompletion(completion, this.#nextOrdinal)
-    return Object.freeze({ ...stable, checkpoint: completion.checkpoint, completion })
+    return Object.freeze({
+      checkpoint: completion.checkpoint,
+      materialization: this.materializationSummary(),
+      additionalTemporaryBytesUpperBound: 0n,
+      completion,
+    })
   }
 
   async observeFileCheckpoint(signal: AbortSignal): Promise<bigint> {
@@ -281,6 +308,18 @@ export class DirectZipTransferOutputV1 implements
     }
     signal.throwIfAborted()
     return currentFileSafeOffset(cut.checkpoint)
+  }
+
+  filePayloadReceived(bytes: bigint): void {
+    if (bytes === 0n) return
+    this.#receivedSelectedBytes += bytes
+    this.#emitProgress()
+  }
+
+  filePayloadWritten(bytes: bigint): void {
+    if (bytes === 0n) return
+    this.#writtenSelectedBytes += bytes
+    this.#emitProgress()
   }
 
   fileCommitted(plan: DirectZipEntryPlanV2): void {
@@ -311,6 +350,24 @@ export class DirectZipTransferOutputV1 implements
     else {
       this.#fileCount += 1n
       this.#rawBytes += member.expectedSize
+    }
+  }
+
+  #restoreRetainedPayload(bytes: bigint): void {
+    if (this.#receivedSelectedBytes === bytes && this.#writtenSelectedBytes === bytes) return
+    this.#receivedSelectedBytes = bytes
+    this.#writtenSelectedBytes = bytes
+    this.#emitProgress()
+  }
+
+  #emitProgress(): void {
+    try {
+      this.#onProgress?.(Object.freeze({
+        receivedSelectedBytes: this.#receivedSelectedBytes,
+        writtenSelectedBytes: this.#writtenSelectedBytes,
+      }))
+    } catch {
+      // Progress observation cannot change payload acceptance or writer authority.
     }
   }
 
@@ -349,6 +406,8 @@ class DirectZipFileTransaction implements DirectZipFileTransactionV1 {
   readonly #owner: DirectZipTransferOutputV1
   readonly #plan: DirectZipEntryPlanV2
   #offset: bigint
+  #receivedOffset: bigint
+  #writePending = false
   #committed = false
 
   constructor(
@@ -363,18 +422,34 @@ class DirectZipFileTransaction implements DirectZipFileTransactionV1 {
     this.#owner = owner
     this.resumeOffset = resumeOffset
     this.#offset = resumeOffset
+    this.#receivedOffset = resumeOffset
     this.#plan = plan
   }
 
   async write(offset: bigint, bytes: Uint8Array, signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
-    if (this.#committed || offset !== this.#offset || bytes.byteLength === 0 ||
+    if (this.#committed || this.#writePending || offset !== this.#offset || bytes.byteLength === 0 ||
         offset + BigInt(bytes.byteLength) > this.#source.exactSize) {
       throw new RangeError('direct ZIP source write is not its next contiguous range')
     }
-    await this.#member.write(bytes)
-    this.#offset += BigInt(bytes.byteLength)
-    signal.throwIfAborted()
+    const end = offset + BigInt(bytes.byteLength)
+    // A rejection before sink mutation may be retried at the acknowledged offset.
+    // Count its accepted source range once; a discarded epoch requires a new session.
+    this.#writePending = true
+    if (end > this.#receivedOffset) {
+      const received = end - this.#receivedOffset
+      this.#receivedOffset = end
+      this.#owner.filePayloadReceived(received)
+    }
+    try {
+      await this.#member.write(bytes)
+      const written = end - this.#offset
+      this.#offset = end
+      this.#owner.filePayloadWritten(written)
+      signal.throwIfAborted()
+    } finally {
+      this.#writePending = false
+    }
   }
 
   observeCheckpoint(signal: AbortSignal): Promise<bigint> {
@@ -384,7 +459,7 @@ class DirectZipFileTransaction implements DirectZipFileTransactionV1 {
 
   async commit(signal: AbortSignal): Promise<void> {
     signal.throwIfAborted()
-    if (this.#committed || this.#offset !== this.#source.exactSize) {
+    if (this.#committed || this.#writePending || this.#offset !== this.#source.exactSize) {
       throw new Error('direct ZIP file cannot commit before its exact source size')
     }
     await this.#member.close()

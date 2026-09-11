@@ -7,6 +7,7 @@ export type ReceiveOperationContinuation =
   | 'resume-direct-zip'
   | 'reauthorize-direct-zip'
   | 'verify-direct-zip-target'
+  | 'verify-direct-zip-completion'
   | 'retry-direct-zip-space'
   | 'pending-catch-up'
   | 'restoration-available'
@@ -20,6 +21,7 @@ export type ReceiveOperationContinuation =
   | 'history-only'
 
 export interface ReceiveOperationResumeDescriptor {
+  readonly browserDelivery?: import('../browser-delivery/retained').BrowserDeliveryResumeSummary
   readonly display?: import('../workspace/operation-display').ReceiveOperationDisplay
   readonly shareInstance?: string
   readonly schemaVersion: typeof RECEIVE_OPERATION_RESUME_DESCRIPTOR_VERSION

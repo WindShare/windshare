@@ -446,6 +446,7 @@ function directZipProgress(
     generation: 1n,
     phase,
     receivedSelectedBytes: 1_024n,
+    writtenSelectedBytes: 1_024n,
     safeResumeBytes: 768n,
   })
 }

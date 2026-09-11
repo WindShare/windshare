@@ -200,7 +200,7 @@ function chooseDirectZipRoute(
   environment: EnvironmentOffers,
   byteCountLowerBound: bigint,
 ): DirectResumableZipMaterializationRoute | null {
-  if (environment.directZipSupport.kind !== 'reviewed-supported') return null
+  if (environment.directZipSupport.kind !== 'runtime-supported') return null
   const target = environment.targets.find((candidate) =>
     candidate.kind === 'fsa-owned-file-target' &&
     outputLowerBoundFits(candidate.hardMaximumOutputBytes, byteCountLowerBound))
@@ -347,6 +347,7 @@ function artifactActionsOffer(
     workspace: zipChoices.find((choice) => choice.route.kind === 'workspace-then-publish') ?? null,
     portable: zipChoices.find((choice) => choice.route.kind === 'portable-handoff') ?? null,
     discoveryComplete: discovery.kind === 'complete',
+    discoveredOutputBytes: projection.metrics.byteCountLowerBound,
     workspaceCost: projection.workspaceCostObservation ?? null,
     policy: environment.zipRecommendationPolicy,
   })

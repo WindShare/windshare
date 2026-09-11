@@ -10,6 +10,7 @@ import {
 import {
   acquireFSARootMutationLease,
   type BrowserLockManagerRuntime,
+  type FSAHandleIdentityResolver,
   type FSARootMutationLease,
 } from '../browser/namespace-mutation'
 import { PersistentTreeOutputSession } from '../persistent-tree/session'
@@ -56,6 +57,7 @@ export interface ReopenFileSystemAccessOutputOptions {
   readonly operationRepository: FSAOperationBindingRepository
   readonly maximumConcurrentInitialClaimInspections?: number
   readonly lockManager?: BrowserLockManagerRuntime
+  readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
@@ -69,6 +71,7 @@ export interface OpenFileSystemAccessCompatibleNameCatchUpOptions {
   readonly intent: ReceiveIntent
   readonly operationRepository: FSAOperationBindingRepository
   readonly lockManager?: BrowserLockManagerRuntime
+  readonly mutationIdentities?: FSAHandleIdentityResolver
   readonly checkpointRepositoryFactory?: FSAFileCheckpointRepositoryFactory
   readonly databaseName?: string
   readonly openCompatibleNameLedger?: () => Promise<CompatibleNameActivationLedger>
@@ -326,14 +329,13 @@ async function acquireReopenRootLease(
   options: ReopenFileSystemAccessOutputOptions,
 ): Promise<FSARootMutationLease> {
   try {
-    return options.lockManager === undefined
-      ? await acquireFSARootMutationLease(parent, undefined, undefined, options.diagnostics?.performance)
-      : await acquireFSARootMutationLease(
-          parent,
-          options.lockManager,
-          undefined,
-          options.diagnostics?.performance,
-        )
+    return await acquireFSARootMutationLease(
+      parent,
+      options.lockManager,
+      undefined,
+      options.diagnostics?.performance,
+      options.mutationIdentities,
+    )
   } catch (error) {
     recordOutputException(options.diagnostics?.failures?.reopen, error)
     outputTrace(options.diagnostics, { eventName: 'reopen', transition: 'failed' })

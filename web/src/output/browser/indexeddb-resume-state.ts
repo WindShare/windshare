@@ -28,9 +28,11 @@ import { readLegacyCompatibleNameStatus } from './indexeddb/compatible-name-lega
 import { readSourceRevisionFailures } from '../resume/source-revision-failures'
 import { readProgressiveZipRecoveryRequirement } from '../resume/progressive-checkpoint'
 import { readOriginalFileRecoveryRequirement } from '../resume/original-checkpoint'
+import { readDirectZipRecoveryRequirement } from '../resume/direct-zip-checkpoint'
+import { IndexedDbDirectZipJournalRepository } from '../direct-zip/journal/indexeddb'
 import type { ReceiveOperationResumeSource } from '../resume/authority'
 import type { RecoverySummary } from '../file-system-access/recovery-summary'
-import { readFSARecoverySummary } from '../file-system-access/recovery-summary'
+import { repairBrowserDeliveryInventoryLifecycle, readBrowserDeliveryRecoverySummary } from '../browser-delivery/recovery/inventory'
 import { openFSAFileCheckpointRepository } from '../file-system-access/checkpoint-repository'
 import { requireDirectTreeIntent } from '../file-system-access/settlement-proof'
 import { FSA_RESERVED_ROOT_LAYOUT_VERSION } from '../../transfer/intent'
@@ -143,7 +145,8 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       throw new DOMException('Receive resume inventory exceeds its bound', 'QuotaExceededError')
     }
 
-    const states = await Promise.all(records.map(validateLifecycleRecord))
+    const states = await Promise.all(records.map(async record =>
+      repairBrowserDeliveryInventoryLifecycle(await validateLifecycleRecord(record), this.#databaseName)))
     const operations = new Set<string>()
     for (const state of states) {
       if (operations.has(state.operationId)) {
@@ -185,6 +188,13 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
     return operation.receiveIntent.artifact.kind === 'original-file'
       ? readOriginalFileRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
       : readProgressiveZipRecoveryRequirement(operation.receiveIntent, lifecycle, this.#databaseName)
+  }
+
+  async readDirectZipRequirement(lifecycle: ReceiveLifecycleState) {
+    this.#assertOpen()
+    const journal = await IndexedDbDirectZipJournalRepository.open({ databaseName: this.#databaseName })
+    try { return await readDirectZipRecoveryRequirement(lifecycle, journal) }
+    finally { journal.close() }
   }
 
   async readSourceRevisionFailures(lifecycle: ReceiveLifecycleState) {
@@ -240,10 +250,8 @@ export class IndexedDbReceiveResumeSource implements ReceiveOperationResumeSourc
       reservation,
     )
     try {
-      return readFSARecoverySummary({
-        intent,
-        lifecycle,
-        checkpoints,
+      return await readBrowserDeliveryRecoverySummary({
+        intent, lifecycle, checkpoints, databaseName: this.#databaseName,
       })
     } finally {
       checkpoints.close()

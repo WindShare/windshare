@@ -32,6 +32,16 @@ func openLiveTransactionFixture(
 	collision bool,
 ) liveTransactionFixture {
 	t.Helper()
+	return openLiveTransactionWithPlatform(t, root, seed, collision, func(base outputcap.Platform) outputcap.Platform {
+		return &liveOnlyRuntimePlatform{Platform: base}
+	})
+}
+
+func openLiveTransactionWithPlatform(
+	t *testing.T, root string, seed byte, collision bool,
+	decorate func(outputcap.Platform) outputcap.Platform,
+) liveTransactionFixture {
+	t.Helper()
 	ctx := context.Background()
 	selection := nativeReservationTestSelection(t, seed)
 	fileID := incrementalTestIdentity16[catalog.FileID](seed + 2)
@@ -46,7 +56,7 @@ func openLiveTransactionFixture(
 			if openErr != nil {
 				return nil, openErr
 			}
-			return &liveOnlyRuntimePlatform{Platform: base}, nil
+			return decorate(base), nil
 		},
 	})
 	if err != nil {

@@ -32,7 +32,7 @@ import {
   type DirectZipWriterObserver,
   type DirectZipWriterPageSink,
   type DirectZipWriterPageStateV1,
-  type DirectZipAutomaticEpochBudgetV1,
+  type DirectZipAutomaticEpochPolicyV1,
 } from '../../../../src/output/direct-zip/writer'
 
 const ROOT_COMPONENT = 'root'
@@ -286,7 +286,7 @@ export class MemoryDirectZipCuts implements DirectZipWriterCutSink {
     completion?: DirectZipCompletionProofV1
   }>> = []
   readonly retired: DirectZipEpochCandidateV1[] = []
-  readonly closing: DirectZipWriterCheckpointV1[] = []
+  failStagingCount = 0
   failPromotionCount = 0
   readonly #pages: MemoryDirectZipPages
 
@@ -295,6 +295,10 @@ export class MemoryDirectZipCuts implements DirectZipWriterCutSink {
   }
 
   stageCandidate(candidate: DirectZipEpochCandidateV1): Promise<void> {
+    if (this.failStagingCount > 0) {
+      this.failStagingCount -= 1
+      return Promise.reject(new Error('injected journal staging failure'))
+    }
     this.staged.push(candidate)
     return Promise.resolve()
   }
@@ -321,10 +325,6 @@ export class MemoryDirectZipCuts implements DirectZipWriterCutSink {
     return Promise.resolve()
   }
 
-  enterClosing(input: Readonly<{ checkpoint: DirectZipWriterCheckpointV1 }>): Promise<void> {
-    this.closing.push(input.checkpoint)
-    return Promise.resolve()
-  }
 }
 
 export interface DirectZipWriterHarness {
@@ -335,7 +335,7 @@ export interface DirectZipWriterHarness {
   readonly checkpoint: DirectZipWriterCheckpointV1
   writer(
     checkpoint?: DirectZipWriterCheckpointV1,
-    budget?: DirectZipAutomaticEpochBudgetV1,
+    policy?: DirectZipAutomaticEpochPolicyV1,
     observe?: DirectZipWriterObserver,
   ): DirectZipEpochWriterV1
 }
@@ -393,14 +393,14 @@ export function createWriterHarness(): DirectZipWriterHarness {
     pages,
     cuts,
     checkpoint,
-    writer: (restored = checkpoint, budget, observe) => new DirectZipEpochWriterV1({
+    writer: (restored = checkpoint, policy, observe) => new DirectZipEpochWriterV1({
       context: { ownershipMarker: marker, rootComponent: ROOT_COMPONENT },
       checkpoint: restored,
       pages,
       cuts,
       target,
       identities,
-      ...(budget === undefined ? {} : { automaticBudget: budget }),
+      ...(policy === undefined ? {} : { automaticPolicy: policy }),
       ...(observe === undefined ? {} : { observe }),
     }),
   }

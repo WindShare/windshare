@@ -1,6 +1,6 @@
+import { acquireFSARootMutationLease } from '../output/fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
-import { acquireFSARootMutationLease } from '../../src/output/browser/namespace-mutation'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import { createIncidentScopeIssuer } from '../../src/diagnostics/incident'
 import { authorizeFSAParent } from '../../src/output/capability/acquisition'
@@ -77,9 +77,7 @@ describe('FSA DirectTree execution policy', () => {
       maximumOutstandingWriteBytes: 8n * MEBIBYTE_BYTES,
       maximumBufferedBytes: 8n * MEBIBYTE_BYTES,
     })
-    expect(FSA_DIRECT_TREE_EXECUTION_PROFILE.automaticCheckpoint).toEqual({
-      kind: 'prefix-copy', pendingBytes: 64n * MEBIBYTE_BYTES,
-    })
+    expect(FSA_DIRECT_TREE_EXECUTION_PROFILE).not.toHaveProperty('automaticCheckpoint')
     expect(MAXIMUM_AUTOMATIC_PREFIX_COPY_BYTES).toBe(128n * MEBIBYTE_BYTES)
     expect(MAXIMUM_AUTOMATIC_WRITE_AMPLIFICATION_BYTES).toBe(2n * 1024n * MEBIBYTE_BYTES)
     expect(MAXIMUM_AGGREGATE_PRESERVING_WRITER_TEMPORARY_BYTES).toBe(
@@ -515,10 +513,7 @@ describe('FSA compatible-name route activation', () => {
     expect(execution.output.identity.outputSessionId).toBe(outputSessionId)
     expect(execution.output.executionProfile).toEqual(FSA_DIRECT_TREE_EXECUTION_PROFILE)
     expect(execution.output.executionProfile.maximumConcurrentFilePipelines).toBe(15)
-    expect(execution.output.executionProfile.automaticCheckpoint).toEqual({
-      kind: 'prefix-copy',
-      pendingBytes: 64n * MEBIBYTE_BYTES,
-    })
+    expect(execution.output.executionProfile.maximumOutstandingWriteBytes).toBe(8n * MEBIBYTE_BYTES)
     await result.operation.detach()
   })
 })

@@ -64,7 +64,9 @@ func NewFileTombstoneStore(path string) (*FileTombstoneStore, error) {
 	}
 	db, err := openTombstoneDatabase(absolute)
 	if err != nil {
-		return nil, err
+		// Name the file: a rejection without a path is not actionable, and the
+		// revocation history it guards must not be deleted blindly.
+		return nil, fmt.Errorf("open STOP index %s: %w", absolute, err)
 	}
 	if err := syncDirectory(filepath.Dir(absolute)); err != nil {
 		return nil, errors.Join(err, db.Close())

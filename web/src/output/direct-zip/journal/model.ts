@@ -16,9 +16,10 @@ export const DIRECT_ZIP_PAGE_EPOCH = 3 as const
 export const DIRECT_ZIP_CANDIDATE_BOOTSTRAP = 1 as const
 export const DIRECT_ZIP_CANDIDATE_EPOCH = 2 as const
 export const DIRECT_ZIP_CANDIDATE_CLOSING = 3 as const
+export const DIRECT_ZIP_CANDIDATE_ROLLBACK = 4 as const
 
 export type DirectZipPageKind = 'layout' | 'central' | 'epoch'
-export type DirectZipCandidateKind = 'bootstrap' | 'epoch' | 'closing'
+export type DirectZipCandidateKind = 'bootstrap' | 'epoch' | 'closing' | 'rollback'
 export type DirectZipCheckpointPhase = 'between-members' | 'inside-member' | 'closing'
 
 export interface DirectZipPolicyDigestsV1 {
@@ -85,6 +86,15 @@ export interface DirectZipMemberResumeV1 {
   readonly rollback: DirectZipMemberRollbackV1
 }
 
+/** One truncated terminal epoch remains inline until its immutable page can be materialized. */
+export interface DirectZipRetainedEpochProofV1 {
+  readonly start: bigint
+  readonly end: bigint
+  readonly predecessorRootDigest: string
+  readonly contentDigest: string
+  readonly epochRootDigest: string
+}
+
 export interface DirectZipMemberRollbackV1 {
   readonly archiveOffset: bigint
   readonly safeSelectedPayloadBytes: bigint
@@ -96,6 +106,7 @@ export interface DirectZipMemberRollbackV1 {
   readonly layoutPages: DirectZipPageChainV1
   readonly centralPages: DirectZipPageChainV1
   readonly epochPages: DirectZipPageChainV1
+  readonly retainedEpochProof?: DirectZipRetainedEpochProofV1
   readonly journalUsage: DirectZipJournalBudgetUsageV1
   readonly accountingTailPageId?: string
 }
@@ -108,7 +119,7 @@ export interface DirectZipClosingReplayV1 {
 
 export interface DirectZipCommittedCompletionV1 {
   readonly exactArchiveBytes: bigint
-  readonly preClosingEpochRootDigest: string
+  readonly predecessorEpochRootDigest: string
 }
 
 export interface DirectZipCheckpointV1 {
@@ -134,6 +145,7 @@ export interface DirectZipCheckpointV1 {
   readonly layoutPages: DirectZipPageChainV1
   readonly centralPages: DirectZipPageChainV1
   readonly epochPages: DirectZipPageChainV1
+  readonly retainedEpochProof?: DirectZipRetainedEpochProofV1
   readonly journalUsage: DirectZipJournalBudgetUsageV1
   readonly accountingTailPageId?: string
   readonly closingReplay?: DirectZipClosingReplayV1
@@ -214,6 +226,7 @@ export interface DirectZipCommitCandidateV1 {
   readonly kindByte: typeof DIRECT_ZIP_CANDIDATE_EPOCH | typeof DIRECT_ZIP_CANDIDATE_CLOSING
   readonly operationId: string
   readonly candidateId: string
+  /** Creation provenance; resumed mutation authority comes from the current journal fence. */
   readonly leaseId: string
   readonly predecessorCheckpointGeneration: bigint
   readonly predecessorCheckpointDigest: string
@@ -224,7 +237,16 @@ export interface DirectZipCommitCandidateV1 {
   readonly digest: string
 }
 
-export type DirectZipCandidateV1 = DirectZipBootstrapCandidateV1 | DirectZipCommitCandidateV1
+/** Durable intent authorizes one member truncation; it never authorizes an append. */
+export interface DirectZipRollbackCandidateV1 extends Omit<
+  DirectZipCommitCandidateV1, 'kind' | 'kindByte' | 'expectedRangeDigest'
+> {
+  readonly kind: 'rollback'
+  readonly kindByte: typeof DIRECT_ZIP_CANDIDATE_ROLLBACK
+}
+
+export type DirectZipPendingCandidateV1 = DirectZipCommitCandidateV1 | DirectZipRollbackCandidateV1
+export type DirectZipCandidateV1 = DirectZipBootstrapCandidateV1 | DirectZipPendingCandidateV1
 
 export interface DirectZipStateRowV1 {
   readonly id: string
@@ -244,6 +266,8 @@ export interface DirectZipJournalFenceV1 {
 }
 
 export interface DirectZipBootstrapCommitV1 {
+  /** Root layout, central record, and bootstrap epoch publish with the operation itself. */
+  readonly pages?: readonly DirectZipImmutablePageV1[]
   readonly candidate: DirectZipBootstrapCandidateV1
   readonly operation: ReceiveOperationV2
   readonly operationRecord: PersistedReceiveRecord
@@ -263,12 +287,16 @@ export interface DirectZipCandidatePromotionV1 {
   readonly handles?: readonly ReceiveOperationHandleRecord[]
 }
 
+export interface DirectZipRollbackPromotionV1 extends Omit<DirectZipCandidatePromotionV1, 'candidate'> {
+  readonly candidate: DirectZipRollbackCandidateV1
+}
+
 export interface DirectZipRecoveryLifecycleCommitV1 {
   readonly fence: DirectZipJournalFenceV1
   readonly lifecycle: ReceiveLifecycleState
   readonly lifecycleRecord: PersistedReceiveRecord
   readonly recoveryGate?: DirectZipRecoveryGateV1
-  readonly candidate?: DirectZipCommitCandidateV1
+  readonly candidate?: DirectZipPendingCandidateV1
 }
 
 export interface DirectZipCandidateRetirementV1 {
@@ -341,6 +369,8 @@ export type DirectZipJournalTraceEvent = Readonly<{
     | 'direct_zip.journal.bootstrap_lease_replaced'
     | 'direct_zip.journal.page_staged'
     | 'direct_zip.journal.candidate_bound'
+    | 'direct_zip.journal.rollback_bound'
+    | 'direct_zip.journal.rollback_promoted'
     | 'direct_zip.journal.bootstrap_committed'
     | 'direct_zip.journal.lease_acquired'
     | 'direct_zip.journal.candidate_promoted'

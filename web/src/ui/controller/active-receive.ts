@@ -140,8 +140,9 @@ export class ActiveReceiveCoordinator {
   get canRetainForLocalOutput(): boolean {
     const output = this.#outputs.getSnapshot()
     return this.#operation !== undefined && !this.#lifecycle.pending &&
-      output.lifecycle?.kind === 'resumable-receive' && output.plan?.kind === 'workspace-then-publish' &&
-      output.resolvedArtifact?.kind === 'zip-archive'
+      output.lifecycle?.kind === 'resumable-receive' &&
+      ((output.plan?.kind === 'workspace-then-publish' && output.resolvedArtifact?.kind === 'zip-archive') ||
+        output.browserFolderProgress != null)
   }
 
   get canRelease(): boolean {
@@ -258,6 +259,7 @@ export class ActiveReceiveCoordinator {
           ...(this.#traceSource === undefined ? {} : { trace: this.#traceSource }),
           ...(attempt.handle === undefined ? {} : { incidentScope: attempt.handle }),
           outputSettlementDeadline: active.settlementPresentation,
+          ...(active.runtime.observeCheckpoint === undefined ? {} : { onCheckpointObservation: active.runtime.observeCheckpoint }),
         },
       )
       task = job.run(transfer.signal).then(
@@ -600,7 +602,8 @@ export class ActiveReceiveCoordinator {
     const publish = (progress: ReturnType<typeof source.getSnapshot>) => {
       if (!this.#operationIsCurrent(active)) return
       try {
-        this.#outputs.updateDirectZipProgress(progress)
+        if (progress.kind === 'browser-folder') this.#outputs.updateBrowserFolderProgress(progress)
+        else this.#outputs.updateDirectZipProgress(progress)
       } catch (error) {
         this.#reportTransferFailure(error)
       }

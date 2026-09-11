@@ -115,4 +115,9 @@ modify extracted sources. Local release scripts validate and package but never p
 See [installation](installation.md) for supported clone/source-bundle and binary paths. Canonical Go
 proxy ZIPs and module-version `go install` are unsupported with nested local replacements.
 
+Exact browser executable hashes, OS builds, and filesystem profiles belong to reproducible release
+evidence. Runtime admission uses observable capabilities and operation ownership checks; a release
+evidence row is not a user's required machine identity. Basic safe output, source revision continuity,
+restart recovery, and crash cleanup are validated independently.
+
 Performance measurements are optional local diagnostics; see [Performance diagnostics](performance.md).

@@ -1,8 +1,8 @@
+import { acquireFSARootMutationLease } from '../output/fsa-mutation-lock-fixture'
 import { describe, expect, it } from 'vitest'
 
 import {
   FSARootMutationBusyError,
-  acquireFSARootMutationLease,
 } from '../../src/output/browser/namespace-mutation'
 import type { BrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import {

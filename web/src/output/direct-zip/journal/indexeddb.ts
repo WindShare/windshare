@@ -13,11 +13,14 @@ import type {
   DirectZipPageBatchV1,
   DirectZipPageScanV1,
   DirectZipRecoveryLifecycleCommitV1,
+  DirectZipRollbackCandidateV1,
+  DirectZipRollbackPromotionV1,
   DirectZipStateRowV1,
 } from './model'
 import type { DirectZipBootstrapCandidateCutV1, DirectZipBootstrapLeaseReplacementV1, DirectZipJournalRepository, DirectZipOrphanCollectionV1 } from './repository'
 import { IndexedDbDirectZipBootstrapTransactions } from './indexeddb/bootstrap-transactions'
 import { IndexedDbDirectZipCheckpointTransactions } from './indexeddb/checkpoint-transactions'
+import { IndexedDbDirectZipRollbackTransactions } from './indexeddb/rollback-transactions'
 import { IndexedDbDirectZipJournalStorage } from './indexeddb/storage'
 
 export { DirectZipJournalConcurrencyError } from './indexeddb/authority'
@@ -26,11 +29,13 @@ export class IndexedDbDirectZipJournalRepository implements DirectZipJournalRepo
   readonly #storage: IndexedDbDirectZipJournalStorage
   readonly #bootstrap: IndexedDbDirectZipBootstrapTransactions
   readonly #checkpoints: IndexedDbDirectZipCheckpointTransactions
+  readonly #rollbacks: IndexedDbDirectZipRollbackTransactions
 
   private constructor(database: IDBDatabase, trace?: DirectZipJournalTrace) {
     this.#storage = new IndexedDbDirectZipJournalStorage(database, trace)
     this.#bootstrap = new IndexedDbDirectZipBootstrapTransactions(this.#storage)
     this.#checkpoints = new IndexedDbDirectZipCheckpointTransactions(this.#storage)
+    this.#rollbacks = new IndexedDbDirectZipRollbackTransactions(this.#storage)
   }
 
   static async open(input: { readonly databaseName?: string; readonly trace?: DirectZipJournalTrace } = {}): Promise<IndexedDbDirectZipJournalRepository> {
@@ -48,6 +53,8 @@ export class IndexedDbDirectZipJournalRepository implements DirectZipJournalRepo
   replaceBootstrapLease(cut: DirectZipBootstrapLeaseReplacementV1): Promise<void> { return this.#bootstrap.replaceBootstrapLease(cut) }
   stagePage(fence: DirectZipJournalFenceV1, page: DirectZipImmutablePageV1): Promise<void> { return this.#checkpoints.stagePage(fence, page) }
   bindCandidate(fence: DirectZipJournalFenceV1, candidate: Extract<DirectZipCandidateV1, { kind: 'epoch' | 'closing' }>): Promise<void> { return this.#checkpoints.bindCandidate(fence, candidate) }
+  bindRollbackCandidate(fence: DirectZipJournalFenceV1, candidate: DirectZipRollbackCandidateV1): Promise<void> { return this.#rollbacks.bindRollbackCandidate(fence, candidate) }
+  promoteRollbackCandidate(cut: DirectZipRollbackPromotionV1): Promise<void> { return this.#rollbacks.promoteRollbackCandidate(cut) }
   commitBootstrap(cut: DirectZipBootstrapCommitV1): Promise<void> { return this.#bootstrap.commitBootstrap(cut) }
   promoteCandidate(cut: DirectZipCandidatePromotionV1): Promise<void> { return this.#checkpoints.promoteCandidate(cut) }
   commitRecoveryLifecycle(cut: DirectZipRecoveryLifecycleCommitV1): Promise<void> { return this.#checkpoints.commitRecoveryLifecycle(cut) }

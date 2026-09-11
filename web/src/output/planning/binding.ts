@@ -147,7 +147,7 @@ async function bindPlan(
           candidate.binding.guarantees.profile !== route.target.legalProfile ||
           !sameGuaranteeFacts(candidate.binding.guarantees, route.target.guarantees) ||
           !sameDirectZipPolicyDigests(candidate.binding.policies, route.target.support.policies)) {
-        throw new TypeError('direct ZIP binding does not match the reviewed route authority')
+        throw new TypeError('direct ZIP binding does not match the admitted route authority')
       }
       return createDirectResumableZipPlan(action.artifact, candidate.binding)
   }

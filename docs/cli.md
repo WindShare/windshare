@@ -24,6 +24,8 @@ Key: <key>
 
 Links and keys go to stdout. Status and errors go to stderr.
 
+Windows sources are admitted by file identity and write-excluding handle capabilities, including eligible removable and network volumes. Filesystems with weak change metadata keep the same revision while its handle remains open; reopening creates a new revision, so old download ranges are never mixed with potentially changed content.
+
 ## Download
 
 ```text
@@ -66,7 +68,8 @@ Traces may contain filenames, local paths, and connection details. They exclude 
 
 ## Resume
 
-Running the same compatible `get` again in the same output directory resumes staged data.
+On destinations with recovery support, running the same compatible `get` again in the same output directory resumes staged data.
+Safe destinations without recovery support can still receive files while WindShare remains open; the CLI explains this limit before receiving content. Normal cleanup uses retained file handles. After an unexpected exit, unrecognized unfinished files are left for manual cleanup, never reopened or deleted by name alone.
 Previously delivered files keep their completion receipts without rereading or revalidating their current contents.
 Resume trusts private staged data to remain unchanged; it does not detect arbitrary external edits.
 

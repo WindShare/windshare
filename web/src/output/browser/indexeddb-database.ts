@@ -1,4 +1,4 @@
-export const OUTPUT_DATABASE_VERSION = 11
+export const OUTPUT_DATABASE_VERSION = 12
 export const CHECKPOINT_DATABASE_VERSION = OUTPUT_DATABASE_VERSION
 export const DEFAULT_OUTPUT_DATABASE_NAME = 'windshare-output-checkpoints'
 export const DEFAULT_OUTPUT_CHECKPOINT_DATABASE_NAME = DEFAULT_OUTPUT_DATABASE_NAME
@@ -19,6 +19,8 @@ export const INDEXEDDB_DIRECT_ZIP_LAYOUT_PAGE_STORE = 'direct-zip-layout-pages-v
 export const INDEXEDDB_DIRECT_ZIP_CENTRAL_PAGE_STORE = 'direct-zip-central-pages-v1'
 export const INDEXEDDB_DIRECT_ZIP_EPOCH_PAGE_STORE = 'direct-zip-epoch-pages-v1'
 export const INDEXEDDB_FILE_FINAL_PROOF_STORE = 'file-final-proof-v1'
+export const INDEXEDDB_BROWSER_SAVE_POLICY_STORE = 'browser-save-policy-v1'
+export const INDEXEDDB_BROWSER_DELIVERY_FILE_STORE = 'browser-file-delivery-v1'
 export const INDEXEDDB_MATERIALIZATION_LEDGER_ENTRY_STORE = 'materialization-ledger-v1-entries'
 export const INDEXEDDB_MATERIALIZATION_LEDGER_PAGE_STORE = 'materialization-ledger-v1-pages'
 export const INDEXEDDB_MATERIALIZATION_LEDGER_SEAL_STORE = 'materialization-ledger-v1-seals'
@@ -231,7 +233,7 @@ export async function openIndexedDbCheckpointDatabase(name: string): Promise<IDB
   }
   const request = indexedDB.open(name, CHECKPOINT_DATABASE_VERSION)
   request.addEventListener('upgradeneeded', (event) =>
-    installIndexedDbV11Schema(
+    installIndexedDbV12Schema(
       request.result,
       request.transaction ?? undefined,
       event.oldVersion,
@@ -257,6 +259,23 @@ export const INDEXEDDB_OPFS_TASK_STORE = 'opfs-task-checkpoints-v1'
 export const INDEXEDDB_OPFS_ENTRY_STORE = 'opfs-task-entries-v1'
 export const INDEXEDDB_OPFS_PATH_STORE = 'opfs-task-paths-v1'
 export const INDEXEDDB_OPFS_DIRECTORY_STORE = 'opfs-task-directories-v1'
+
+export function installIndexedDbV12Schema(
+  database: IDBDatabase,
+  transaction?: IDBTransaction,
+  oldVersion = OUTPUT_DATABASE_VERSION,
+): void {
+  installIndexedDbV11Schema(database, transaction, oldVersion)
+  installSchemas(database, [
+    storeSchema(INDEXEDDB_BROWSER_SAVE_POLICY_STORE, 'operationId', []),
+  ], transaction)
+  if (!database.objectStoreNames.contains(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE)) {
+    const files = database.createObjectStore(INDEXEDDB_BROWSER_DELIVERY_FILE_STORE, {
+      keyPath: ['operationId', 'fileId'],
+    })
+    files.createIndex(INDEXEDDB_BY_OPERATION_FILE_INDEX, ['operationId', 'fileId'], { unique: true })
+  }
+}
 
 export function installIndexedDbV11Schema(
   database: IDBDatabase,

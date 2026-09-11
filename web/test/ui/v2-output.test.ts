@@ -40,7 +40,7 @@ import {
   managedTarget,
   portableOffer,
   projection,
-  reviewedDirectZipSupport,
+  runtimeDirectZipSupport,
   singleFileProof,
   treeProof,
   workspaceOffer,
@@ -113,7 +113,7 @@ describe('artifact product presentation', () => {
       ...projection(selection, treeProof(), 1_024n),
       workspaceCostObservation,
     }
-    const support = reviewedDirectZipSupport()
+    const support = runtimeDirectZipSupport()
     const offers = await offerArtifacts(projected, COMPLETE_DISCOVERY, environment({
       targets: [fsaTarget(), directZipTarget(), handoffTarget()],
       workspace: workspaceOffer(),
@@ -122,7 +122,7 @@ describe('artifact product presentation', () => {
         version: 1,
         kind: 'available',
         workspacePeakBytesThreshold: workspaceCostObservation.peakOwnedBytes,
-        policyDigest: support.recommendationPolicyDigest,
+        policyDigest: identity(89, 32),
       },
     }))
     const zip = requireZipRoutes(requireChoices(presentArtifactOffers(offers)))

@@ -1,4 +1,4 @@
-import { acquireFSARootMutationLease } from '../../src/output/browser/namespace-mutation'
+import { acquireFSARootMutationLease } from '../output/fsa-mutation-lock-fixture'
 import { PathComponentRejectedError } from '../../src/output/browser/filesystem-component-inspection'
 import { acquireBrowserReceiveOperationLease } from '../../src/output/browser/session-lease'
 import {

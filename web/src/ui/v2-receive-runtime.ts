@@ -48,7 +48,14 @@ export interface V2LifecycleMutation {
   readonly workspaceUsage?: WorkspaceUsage | null
   readonly activeControls?: readonly V2ActiveReceiveControl[]
   readonly resumeTransfer?: boolean
+  /** Action outcome is separate from the durable state that survived the attempt. */
+  readonly actionOutcome?: V2LifecycleActionOutcome
+  readonly recoverySummary?: RecoverySummary
 }
+
+export type V2LifecycleActionOutcome =
+  | Readonly<{ kind: 'completed' }>
+  | Readonly<{ kind: 'failed'; error: unknown }>
 
 export interface V2BoundReceiveOperation {
   readonly display?: ReceiveOperationDisplay
@@ -58,7 +65,8 @@ export interface V2BoundReceiveOperation {
   readonly transferJobId: string
   readonly lifecycle: ReceiveLifecycleState
   readonly activeControls: readonly V2ActiveReceiveControl[]
-  readonly outputProgress?: V2DirectZipProgressSource
+  readonly outputProgress?: V2DirectZipProgressSource | V2BrowserFolderProgressSource
+  readonly observeCheckpoint?: NonNullable<import('../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>
   readonly initialWorkspaceUsage?: WorkspaceUsage | null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
   subscribeRepairProjectionActivation?(
@@ -147,6 +155,9 @@ export interface V2ArtifactPresentationAuthority {
 }
 
 export type V2RetainedReceiveAction =
+  | 'save-staged-files'
+  | 'cleanup-staging'
+  | 'discard-incomplete-staging'
   | 'save-partial'
   | 'continue'
   | 'catch-up'
@@ -173,6 +184,7 @@ export interface V2RetainedReceiveOperation {
   readonly continuation: ReceiveOperationContinuation
   readonly actions: readonly V2RetainedReceiveAction[]
   readonly sourceRevisionFailures?: import('../output/resume/source-revision-failures').SourceRevisionFailures
+  readonly browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary
   readonly recoverySummary?: RecoverySummary
   readonly unavailableReason?: string
 }
@@ -217,7 +229,20 @@ export interface V2ReceiveCompositionPort {
     preClickRanking: readonly ArtifactChoiceID[],
     failures?: OutputFailureSinks,
     display?: ReceiveOperationDisplay,
+    recoveryPreference?: import('../output/browser-delivery/model').BrowserRecoveryPreference,
   ): V2ArtifactPresentationAuthority
+}
+
+export interface V2BrowserFolderProgressSnapshot {
+  readonly kind: 'browser-folder'
+  readonly operationId: string
+  readonly generation: bigint
+  readonly summary: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary
+}
+
+export interface V2BrowserFolderProgressSource {
+  getSnapshot(): V2BrowserFolderProgressSnapshot
+  subscribe(listener: (snapshot: V2BrowserFolderProgressSnapshot) => void): () => void
 }
 
 export type V2DirectZipProgressPhase =
@@ -231,7 +256,10 @@ export interface V2DirectZipProgressSnapshot {
   readonly operationId: string
   readonly generation: bigint
   readonly phase: V2DirectZipProgressPhase
+  /** Logical payload, including the retained prefix; retries do not count twice. */
   readonly receivedSelectedBytes: bigint
+  /** Payload acknowledged by the output writer; acknowledgement alone does not prove recovery. */
+  readonly writtenSelectedBytes: bigint
   readonly safeResumeBytes: bigint
   readonly resumeTemporarySpaceUpperBound?: bigint
 }

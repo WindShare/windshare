@@ -32,7 +32,7 @@ func TestExecutionModeReductionUsesFourOrthogonalFacts(t *testing.T) {
 		{name: "range recovery missing", facts: [4]CapabilityEvidence{supported, supported, unsupported, supported}, mode: ExecutionLiveOnly},
 		{name: "both recovery facts missing", facts: [4]CapabilityEvidence{supported, unsupported, unsupported, supported}, mode: ExecutionLiveOnly},
 		{name: "safe publish missing", facts: [4]CapabilityEvidence{unsafe, supported, supported, supported}, unsupported: true},
-		{name: "crash cleanup missing", facts: [4]CapabilityEvidence{supported, supported, supported, unclean}, unsupported: true},
+		{name: "crash cleanup missing", facts: [4]CapabilityEvidence{supported, supported, supported, unclean}, mode: ExecutionLiveOnly},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -71,7 +71,7 @@ func TestExecutionModeReductionUsesFourOrthogonalFacts(t *testing.T) {
 			if err != nil || mode != ExecutionResumable {
 				t.Fatalf("mask %04b = %v/%v, want resumable", mask, mode, err)
 			}
-		case safePublish && crashCleanup:
+		case safePublish:
 			if err != nil || mode != ExecutionLiveOnly {
 				t.Fatalf("mask %04b = %v/%v, want live-only", mask, mode, err)
 			}

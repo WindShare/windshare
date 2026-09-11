@@ -5,6 +5,9 @@ import {
   type V2BlockRangeReader,
 } from '../../content/v2-broker'
 import type { V2OpenedRevision, V2RevisionReader } from '../../content/v2-session-services'
+import {
+  canonicalDigest, canonicalFrame, canonicalRecord, canonicalText, canonicalU64,
+} from '../../output/workspace/canonical'
 import { validateOpenedFileRevision } from '../job/file-authority'
 import type { DirectZipOrderedFileV1, DirectZipOutputSessionV1 } from './model'
 
@@ -14,7 +17,8 @@ export interface DirectZipContentTransferOptionsV1 {
   readonly broker: V2BlockRangeReader
   readonly output: DirectZipOutputSessionV1
   readonly signal: AbortSignal
-  readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
+  readonly onInitialDurable: (bytes: bigint) => void
+  readonly onWriteAcknowledged: (bytes: bigint) => void
   readonly onComplete: (exactSize: bigint) => void
 }
 
@@ -37,10 +41,13 @@ export async function transferDirectZipFileV1(
       exactSize: opened.descriptor.exactSize,
       // Revision identity authenticates the complete geometry; the explicit label
       // keeps range authority distinct from a transient remote lease identifier.
-      rangeAuthority: `windshare/source-range/v1:${opened.descriptor.fileRevisionText}:${opened.descriptor.geometry.blockSize.toString()}`,
+      rangeAuthority: await canonicalDigest(canonicalRecord('windshare/source-range', 1, [
+        canonicalFrame(canonicalText(opened.descriptor.fileRevisionText)),
+        canonicalU64(opened.descriptor.geometry.blockSize),
+      ])),
     }), options.signal)
     let offset = transaction.resumeOffset
-    let wrote = false
+    options.onInitialDurable(offset)
     while (offset < opened.descriptor.exactSize) {
       const end = minimum(
         (offset / opened.descriptor.geometry.blockSize + 1n) * opened.descriptor.geometry.blockSize,
@@ -48,10 +55,11 @@ export async function transferDirectZipFileV1(
       )
       const data = await readAtomicRange(options, opened, offset, end)
       await transaction.write(offset, data, options.signal)
-      await transaction.observeCheckpoint(options.signal)
-      options.onWriteAcknowledged(BigInt(data.byteLength), !wrote)
-      wrote = true
+      options.onWriteAcknowledged(BigInt(data.byteLength))
       offset = end
+      // EOF leads straight into member completion and may be the archive's last
+      // write. A cut here would copy the whole prefix merely to append its tail.
+      if (offset < opened.descriptor.exactSize) await transaction.observeCheckpoint(options.signal)
     }
     await transaction.commit(options.signal)
     options.onComplete(opened.descriptor.exactSize)

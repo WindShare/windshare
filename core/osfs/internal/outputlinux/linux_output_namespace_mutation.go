@@ -57,12 +57,12 @@ func (directory *linuxOutputDirectory) reservePublicDirectoryNoReplace(
 	return result, outputcap.PublishNoReplaceCommitted, nil
 }
 
-func (publicDirectory *linuxOutputDirectory) createLiveCleanupStage(
+func (publicDirectory *linuxOutputDirectory) createPublicProfileStage(
 	proofDirectory *linuxOutputDirectory,
 	name string,
 	size int64,
 ) (result *linuxOutputRegularFile, resultErr error) {
-	const operation = "create Linux live-cleanup stage"
+	const operation = "create Linux public-profile stage"
 	if err := linuxVerifyDirectoryPair(publicDirectory, proofDirectory); err != nil {
 		return nil, err
 	}
@@ -90,7 +90,7 @@ func (publicDirectory *linuxOutputDirectory) createLiveCleanupStage(
 		return nil, err
 	}
 	stage := &linuxOutputRegularFile{
-		system: publicDirectory.system, fd: fd, certificate: publicDirectory.certificate,
+		system: publicDirectory.system, fd: fd, binding: publicDirectory.binding,
 		access: linuxOutputFileMutable,
 	}
 	defer func() {
@@ -117,14 +117,15 @@ func (publicDirectory *linuxOutputDirectory) createLiveCleanupStage(
 		}
 		return nil, fmt.Errorf("%s %q: %w", operation, name, err)
 	}
-	// From this cut onward the stage may be durably named. Return errors without
-	// unlinking; the journal reconciler must observe the exact proof name.
+	// Keep the live inode witness after installation even when a later check
+	// fails. Process-only cleanup has no journal from which to reacquire it.
+	result = stage
 	if err := proofDirectory.sync(); err != nil {
-		return nil, err
+		return result, err
 	}
 	matches, err := proofDirectory.regularEntryMatches(name, stage)
 	if err != nil || !matches {
-		return nil, errors.Join(
+		return result, errors.Join(
 			linuxUnsafe(operation, "proof name does not identify the anonymous stage", nil), err)
 	}
 	result = stage
@@ -150,8 +151,8 @@ func (targetDirectory *linuxOutputDirectory) linkRegularFileNoReplace(
 	if err := expected.verifyHandle(); err != nil {
 		return err
 	}
-	if expected.certificate.mount != targetDirectory.certificate.mount {
-		return linuxUnsafe(operation, "source handle belongs to a different certified mount", nil)
+	if expected.binding.mount != targetDirectory.binding.mount {
+		return linuxUnsafe(operation, "source handle belongs to a different pinned output mount", nil)
 	}
 	sourceFD := expected.fd
 	sourcePath := ""
@@ -163,8 +164,8 @@ func (targetDirectory *linuxOutputDirectory) linkRegularFileNoReplace(
 		if err := sourceDirectory.verifyHandle(); err != nil {
 			return err
 		}
-		if sourceDirectory.certificate.mount != targetDirectory.certificate.mount {
-			return linuxUnsafe(operation, "source name belongs to a different certified mount", nil)
+		if sourceDirectory.binding.mount != targetDirectory.binding.mount {
+			return linuxUnsafe(operation, "source name belongs to a different pinned output mount", nil)
 		}
 		matches, err := sourceDirectory.regularEntryMatches(sourceName, expected)
 		if err != nil || !matches {

@@ -301,7 +301,7 @@ function directZipRoutes(
   semantics: Extract<OfferedMaterializationPlanSemantics, { kind: 'direct-resumable-zip' }>,
   environment: EnvironmentOffers,
 ): readonly OfferedMaterializationRoute[] {
-  if (environment.directZipSupport.kind !== 'reviewed-supported') return Object.freeze([])
+  if (environment.directZipSupport.kind !== 'runtime-supported') return Object.freeze([])
   return Object.freeze(environment.targets.flatMap((target) =>
     target.kind === 'fsa-owned-file-target' && sameTargetSemantics(semantics.target, target)
       ? [Object.freeze({ kind: 'direct-resumable-zip' as const, target })]

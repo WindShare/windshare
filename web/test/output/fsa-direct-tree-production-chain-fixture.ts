@@ -1,3 +1,4 @@
+import { memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import type { V2CatalogClient } from '../../src/catalog/v2-client'
 import {
   V2_CATALOG_PAGE_ENTRIES,
@@ -433,7 +434,7 @@ export async function runFSAProductionPersistenceChain(
   const reopened = await reopenFileSystemAccessOutput({
     intent: session.intent,
     operationRepository: repository,
-    lockManager: locks,
+    lockManager: locks, mutationIdentities: memoryFSAIdentities(locks),
     checkpointRepositoryFactory: checkpointFactory,
     openCompatibleNameLedger,
     ...(compatibleNames === undefined ? {} : {
@@ -580,10 +581,6 @@ async function productionPlanAuthority(input: Readonly<{
               maximumConcurrentFilePipelines: input.maximumConcurrentFilePipelines ?? 1,
               maximumOutstandingWriteBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
               maximumBufferedBytes: TEST_OUTPUT_WRITE_BUDGET_BYTES,
-              automaticCheckpoint: {
-                kind: 'prefix-copy',
-                pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES,
-              },
             }),
             recovery: {
               pausedFile: input.recoveryPausedFile ?? 'preserve',
@@ -636,9 +633,24 @@ function observeProductionExecution(
     finalizeDirectory: (admission: DirectoryAdmission, signal: AbortSignal) =>
       directories.finalizeDirectory(admission, signal),
   })
+  const checkpointOutput: OutputSession = Object.freeze({
+    identity: execution.output.identity,
+    capabilities: execution.output.capabilities,
+    executionProfile: execution.output.executionProfile,
+    beginFile: async (request: OutputFileRequest, signal: AbortSignal) => {
+      const begun = await execution.output.beginFile(request, signal)
+      return Object.freeze({
+        ...begun,
+        ...(begun.checkpoint === undefined ? {} : { checkpoint: {
+          objectId: begun.checkpoint.objectId,
+          policy: { kind: 'prefix-copy' as const, pendingBytes: TEST_CHECKPOINT_TRIGGER_BYTES },
+        } }),
+      })
+    },
+  })
   const observedOutput = fileRecorder === undefined
-    ? execution.output
-    : observeFileCoordinates(execution.output, fileRecorder)
+    ? checkpointOutput
+    : observeFileCoordinates(checkpointOutput, fileRecorder)
   return Object.freeze({
     ...execution,
     output: observedOutput,

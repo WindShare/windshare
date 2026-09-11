@@ -37,6 +37,33 @@ const ownership: OutputFileOwnership = Object.freeze({
 })
 
 describe('bound output file transaction', () => {
+  it('separates live accepted coverage from restart evidence and checkpoints it exactly', async () => {
+    const durable = durableRanges([{ start: 0n, end: 1n }])
+    const begun = { ...result({ ...file.source, exactSize: 4n }, {
+      automaticCheckpoint: async () => ({ kind: 'advanced' as const,
+        durable: durableRanges([{ start: 0n, end: 3n }]) }),
+    }, durable), acceptedRanges: [{ start: 0n, end: 3n }] }
+    const bound = bindOutputFileTransaction(begun, file, session('ProcessRestart', false))
+    expect(bound.initialDurable.ranges).toEqual([{ start: 0n, end: 1n }])
+    expect(bound.initialAccepted.ranges).toEqual([{ start: 0n, end: 3n }])
+    await expect(bound.transaction.writeRange(1n, new Uint8Array([1]), signal)).rejects.toThrow(/overlaps/)
+    await expect(bound.transaction.automaticCheckpoint('pending-time', signal)).resolves.toMatchObject({
+      kind: 'advanced',
+    })
+    await bound.transaction.writeRange(3n, new Uint8Array([4]), signal)
+    await expect(bound.transaction.commit(signal)).resolves.toMatchObject({ fileSize: 4n })
+  })
+
+  it.each([
+    [{ start: 1n, end: 3n }],
+    [{ start: 0n, end: 2n }, { start: 2n, end: 3n }],
+    [{ start: 0n, end: 5n }],
+  ])('rejects malformed or durability-dropping accepted coverage %#', (...acceptedRanges) => {
+    const begun = { ...result({ ...file.source, exactSize: 4n }, {},
+      durableRanges([{ start: 0n, end: 1n }])), acceptedRanges }
+    expect(() => bindOutputFileTransaction(begun, file, session('ProcessRestart', true))).toThrow()
+  })
+
   it('rejects a transaction returned for another authenticated revision', () => {
     const begun = result({
       ...file.source,

@@ -469,7 +469,7 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
       }
     }
     try {
-      await cut.closeMaterialization()
+      await cut.closeMaterialization(failure === undefined ? result : undefined)
     } catch (closeFailure) {
       // Resource release is a consequence. Once settlement has an initiating failure,
       // cleanup cannot replace its exact object identity with an aggregate wrapper.

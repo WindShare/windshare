@@ -73,6 +73,38 @@ describe('native OPFS worker writes', () => {
 })
 
 describe('one native object checkpoint boundary', () => {
+  it('coalesces shared-member cuts after queued writes while retaining one open native handle', async () => {
+    const events: string[] = []
+    const coordinator = new ObjectCheckpointCoordinator({
+      io: fakeIO(events), operationId: 'task', objectId: 'shared-archive',
+    })
+    let dirty = false
+    let generation = 0
+    const checkpoint = () => coordinator.checkpointIfChanged('members-due', () => dirty,
+      () => generation, async () => {
+        events.push('metadata')
+        dirty = false
+        return ++generation
+      })
+    const write = coordinator.mutate(async writer => {
+      await writer.writeAt(0n, Uint8Array.of(1))
+      dirty = true
+    })
+    const first = checkpoint()
+    const second = checkpoint()
+    await write
+    expect(await Promise.all([first, second])).toEqual([1, 1])
+    expect(events).toEqual(['write:0', 'flush', 'metadata'])
+    await coordinator.mutate(async writer => {
+      await writer.writeAt(1n, Uint8Array.of(2))
+      dirty = true
+    })
+    expect(await checkpoint()).toBe(2)
+    expect(events).toEqual(['write:0', 'flush', 'metadata', 'write:1', 'flush', 'metadata'])
+    await coordinator.close()
+    expect(events.at(-1)).toBe('close')
+  })
+
   it('holds later writes until the covered writes, flush and atomic commit complete', async () => {
     const events: string[] = []
     let release!: () => void

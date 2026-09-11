@@ -148,7 +148,8 @@ export class V2AuthorityActivationCoordinator {
     this.#beginObservationReplacement(activation, reason)
   }
 
-  choose(choiceId: ArtifactChoiceID, display?: import('../../output/workspace/operation-display').ReceiveOperationDisplay): boolean {
+  choose(choiceId: ArtifactChoiceID, display?: import('../../output/workspace/operation-display').ReceiveOperationDisplay,
+    recoveryPreference: import('../../output/browser-delivery/model').BrowserRecoveryPreference = 'automatic'): boolean {
     const current = this.#options.currentProjection()
     const planned = this.#planning.latestOffers
     if (current === undefined || planned === undefined || planned.request.active !== current ||
@@ -189,6 +190,7 @@ export class V2AuthorityActivationCoordinator {
         preClickRanking,
         attempt.outputFailures,
         display,
+        recoveryPreference,
       )
       record.authority = authority
     } catch (error) {

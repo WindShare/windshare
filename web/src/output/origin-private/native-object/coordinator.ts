@@ -53,14 +53,23 @@ export class ObjectCheckpointCoordinator implements NativeObjectIO {
   flush(): Promise<void> { return this.mutate(io => io.flush()) }
 
   checkpoint<T>(reason: string, commit: () => Promise<T>): Promise<T> {
-    return this.#enqueue(async () => {
-      this.#emit('cut-started', reason)
-      await this.#io.flush()
-      this.#emit('flush-succeeded', reason)
-      const committed = await commit()
-      this.#emit('commit-succeeded', reason)
-      return committed
-    })
+    return this.#enqueue(() => this.#flushAndCommit(reason, commit))
+  }
+
+  /** The queue decides dirtiness after all prior writes, so sibling requests share one flush. */
+  checkpointIfChanged<T>(
+    reason: string, changed: () => boolean, committed: () => T, commit: () => Promise<T>,
+  ): Promise<T> {
+    return this.#enqueue(async () => changed() ? this.#flushAndCommit(reason, commit) : committed())
+  }
+
+  async #flushAndCommit<T>(reason: string, commit: () => Promise<T>): Promise<T> {
+    this.#emit('cut-started', reason)
+    await this.#io.flush()
+    this.#emit('flush-succeeded', reason)
+    const result = await commit()
+    this.#emit('commit-succeeded', reason)
+    return result
   }
 
   close(): Promise<void> {

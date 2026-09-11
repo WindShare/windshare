@@ -548,6 +548,10 @@ func (directory *portableRuntimeDirectory) CreateOrdinaryOutputStage(
 	return file.Close()
 }
 
+func (directory *portableRuntimeDirectory) CreateProcessStage(stage outputcap.Directory, name string, size int64) (outputcap.MutableFile, error) {
+	return stage.CreateFile(name, false, size)
+}
+
 func (directory *portableRuntimeDirectory) CreateLiveCleanupStage(
 	proof outputcap.Directory,
 	ticket checkpointmodel.LiveCleanupTicket,

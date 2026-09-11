@@ -33,7 +33,7 @@ func (directory *linuxOutputDirectory) Duplicate() (*linuxOutputDirectory, error
 	if err != nil {
 		return nil, err
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil || identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		if err == nil {
 			err = linuxUnsafe(operation, "duplicated handle does not identify the fixed directory", nil)
@@ -41,7 +41,7 @@ func (directory *linuxOutputDirectory) Duplicate() (*linuxOutputDirectory, error
 		return nil, errors.Join(err, directory.system.close(fd))
 	}
 	return &linuxOutputDirectory{
-		system: directory.system, fd: fd, certificate: directory.certificate, object: identity.identity,
+		system: directory.system, fd: fd, binding: directory.binding, object: identity.identity,
 		absolutePath: directory.absolutePath, exactPermissions: directory.exactPermissions,
 		requireExactPermissions: directory.requireExactPermissions,
 	}, nil
@@ -93,7 +93,7 @@ func (directory *linuxOutputDirectory) namesMatching(
 		return nil, err
 	}
 	defer func() { resultErr = errors.Join(resultErr, directory.system.close(fd)) }()
-	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
 		return nil, err
 	}
@@ -199,12 +199,15 @@ func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]b
 			return nil, errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
 		}
 	}
-	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.certificate)
+	identity, err := linuxVerifyOpenObject(directory.system, directory.fd, directory.binding)
 	if err != nil {
 		return nil, err
 	}
 	if identity.identity.kind != unix.S_IFDIR || !identity.matches(directory.object) {
 		return nil, linuxUnsafe(operation, "directory changed while its identity was claimed", nil)
+	}
+	if directory.binding.restart == nil {
+		return nil, linuxUnsupported(operation, "directory has no restart certificate", nil)
 	}
 	provider := directory.system.restartIdentity
 	if provider == nil {
@@ -212,9 +215,9 @@ func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]b
 	}
 	var restartIdentity linuxDirectoryRestartIdentity
 	if prepare {
-		restartIdentity, err = provider.Prepare(directory.system, directory.fd, directory.certificate.mount)
+		restartIdentity, err = provider.Prepare(directory.system, directory.fd, directory.binding.mount)
 	} else {
-		restartIdentity, err = provider.Read(directory.system, directory.fd, directory.certificate.mount)
+		restartIdentity, err = provider.Read(directory.system, directory.fd, directory.binding.mount)
 	}
 	if err != nil {
 		return nil, err
@@ -222,8 +225,8 @@ func (directory *linuxOutputDirectory) directoryIdentityClaim(prepare bool) ([]b
 	if !restartIdentity.matchesHandle(identity.identity) {
 		return nil, linuxUnsafe(operation, "restart identity differs from the open directory", nil)
 	}
-	if directory.object.sameObject(directory.certificate.rootObject) &&
-		!restartIdentity.sameDirectory(directory.certificate.rootRestartIdentity) {
+	if directory.object.sameObject(directory.binding.rootObject) &&
+		!restartIdentity.sameDirectory(directory.binding.restart.rootIdentity) {
 		return nil, linuxUnsafe(operation, "certified output-root restart identity changed", nil)
 	}
 	return linuxEncodeDirectoryRestartIdentity(restartIdentity)
@@ -254,10 +257,10 @@ func (directory *linuxOutputDirectory) namedEntrySnapshotNoFollow(name string) (
 		mountID: stat.Mnt_id, deviceMajor: stat.Dev_major, deviceMinor: stat.Dev_minor,
 		inode: stat.Ino, kind: linuxFileType(stat.Mode),
 	}}
-	mount := directory.certificate.mount
+	mount := directory.binding.mount
 	if snapshot.identity.mountID != mount.uniqueMountID ||
 		snapshot.identity.deviceMajor != mount.deviceMajor || snapshot.identity.deviceMinor != mount.deviceMinor {
-		return linuxNamedEntrySnapshot{}, linuxUnsafe(operation, "entry crossed the certified ext4 mount", nil)
+		return linuxNamedEntrySnapshot{}, linuxUnsafe(operation, "entry crossed the pinned output mount", nil)
 	}
 	return snapshot, nil
 }

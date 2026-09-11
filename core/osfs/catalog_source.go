@@ -373,7 +373,7 @@ func (source *SelectedCatalogSource) scanChild(
 	return child, false, nil
 }
 
-func catalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
+func portableCatalogModifiedTime(information fs.FileInfo) (catalog.ModifiedTime, error) {
 	modified := information.ModTime()
 	return catalog.NewModifiedTime(modified.Unix(), uint32(modified.Nanosecond()), catalog.TimePrecisionNanoseconds)
 }

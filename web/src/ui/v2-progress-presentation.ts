@@ -9,6 +9,7 @@ const INCOMPLETE_PERCENT_LIMIT = 99n
 
 export interface DirectZipProgressPresentation {
   readonly primary: string
+  readonly written: string
   readonly safeResume: string
   readonly temporarySpace: string | null
   readonly percentage: bigint | null
@@ -75,6 +76,7 @@ export function presentDirectZipProgress(input: Readonly<{
   return Object.freeze({
     primary: `${formatBytes(input.progress.receivedSelectedBytes)} received${totalCopy}` +
       `${percentageCopy} · ${phaseCopy}`,
+    written: `${formatBytes(input.progress.writtenSelectedBytes)} written or reused in the ZIP.`,
     safeResume: `If interrupted, resume from ${formatBytes(input.progress.safeResumeBytes)}.`,
     temporarySpace: input.progress.resumeTemporarySpaceUpperBound === undefined
       ? null

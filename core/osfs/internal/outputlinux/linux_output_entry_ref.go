@@ -12,12 +12,12 @@ import (
 )
 
 type linuxOutputPinnedEntry struct {
-	system      *linuxOutputSystem
-	fd          int
-	certificate linuxOutputCertificate
-	object      linuxOpenHandleIdentity
-	kind        outputcap.EntryKind
-	name        string
+	system  *linuxOutputSystem
+	fd      int
+	binding linuxOutputBinding
+	object  linuxOpenHandleIdentity
+	kind    outputcap.EntryKind
+	name    string
 }
 
 func (directory *linuxOutputDirectory) openPinnedEntry(
@@ -53,7 +53,7 @@ func (directory *linuxOutputDirectory) openPinnedEntry(
 			resultErr = errors.Join(resultErr, directory.system.close(fd))
 		}
 	}()
-	opened, err := linuxVerifyOpenObject(directory.system, fd, directory.certificate)
+	opened, err := linuxVerifyOpenObject(directory.system, fd, directory.binding)
 	if err != nil {
 		return nil, err
 	}
@@ -65,7 +65,7 @@ func (directory *linuxOutputDirectory) openPinnedEntry(
 		return nil, linuxUnsafe(operation, "entry changed while its no-follow handle was pinned", nil)
 	}
 	return &linuxOutputPinnedEntry{
-		system: directory.system, fd: fd, certificate: directory.certificate,
+		system: directory.system, fd: fd, binding: directory.binding,
 		object: opened.identity, kind: linuxOutputEntryKind(opened.mode), name: name,
 	}, nil
 }
@@ -85,7 +85,7 @@ func (directory *linuxOutputDirectory) pinnedEntryMatches(
 ) (bool, error) {
 	const operation = "compare pinned output entry"
 	if expected == nil || expected.fd < 0 || expected.system != directory.system ||
-		expected.certificate.mount != directory.certificate.mount {
+		expected.binding.mount != directory.binding.mount {
 		return false, linuxUnsafe(operation, "pinned entry belongs to incompatible authority", nil)
 	}
 	current, err := directory.openPinnedEntry(name)

@@ -16,7 +16,6 @@ import {
   validateCheckpoint,
   validateCleanup,
   validateContinuation,
-  validateDirectZipMilestone,
   validateJoin,
   validateReceiverExperience,
   validateLifecycleAction,
@@ -33,51 +32,58 @@ import {
   validateTransferProgress,
 } from './trace-payload-product'
 import {
+  validateDirectZipCoordination,
+  validateDirectZipMemberRollback,
+  validateDirectZipMilestone,
+} from './trace-payload-direct-zip'
+import {
   validatePerformancePhase,
   validatePerformanceSummary,
 } from './trace-payload-performance'
-import { recordValue } from './trace-payload-validation'
+import { recordValue, type UnknownRecord } from './trace-payload-validation'
+import { validateBrowserDelivery } from './trace-payload-browser-delivery'
 
 export { validateCorrelationV1 } from './trace-payload-validation'
+
+const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
+  join_transition: validateJoin,
+  receiver_experience: validateReceiverExperience,
+  browse_transition: validateBrowse,
+  preview_transition: validatePreview,
+  projection_transition: validateProjection,
+  authority_transition: validateAuthority,
+  protocol_operation: validateProtocolOperation,
+  content_scheduling: validateContentScheduling,
+  operation_recovery: validateOperationRecovery,
+  peer_attempt: validatePeerAttempt,
+  peer_recovery: validatePeerRecovery,
+  lane_transition: validateLane,
+  receive_transition: validateReceive,
+  lifecycle_action_transition: validateLifecycleAction,
+  transfer_progress: validateTransferProgress,
+  performance_phase: validatePerformancePhase,
+  performance_summary: validatePerformanceSummary,
+  output_reservation: validateOutputReservation,
+  output_write: validateOutputWrite,
+  checkpoint: validateCheckpoint,
+  settlement: validateSettlement,
+  publication: validatePublication,
+  continuation: validateContinuation,
+  reopen: validateReopen,
+  cleanup: validateCleanup,
+  direct_zip_milestone: validateDirectZipMilestone,
+  browser_delivery: validateBrowserDelivery,
+  direct_zip_coordination: validateDirectZipCoordination,
+  direct_zip_member_rollback: validateDirectZipMemberRollback,
+  retained_inventory: validateRetainedInventory,
+  retained_action: validateRetainedAction,
+} satisfies Record<TraceDomainEventNameV1, (payload: UnknownRecord) => void>)
 
 export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>(
   eventName: Name,
   value: unknown,
 ): asserts value is TraceEventPayloadByNameV1[Name] {
   const payload = recordValue(value, `${eventName} payload`)
-  switch (eventName) {
-    case 'join_transition': validateJoin(payload); return
-    case 'receiver_experience': validateReceiverExperience(payload); return
-    case 'browse_transition': validateBrowse(payload); return
-    case 'preview_transition': validatePreview(payload); return
-    case 'projection_transition': validateProjection(payload); return
-    case 'authority_transition': validateAuthority(payload); return
-    case 'protocol_operation': validateProtocolOperation(payload); return
-    case 'content_scheduling': validateContentScheduling(payload); return
-    case 'operation_recovery': validateOperationRecovery(payload); return
-    case 'peer_attempt': validatePeerAttempt(payload); return
-    case 'peer_recovery': validatePeerRecovery(payload); return
-    case 'lane_transition': validateLane(payload); return
-    case 'receive_transition': validateReceive(payload); return
-    case 'lifecycle_action_transition': validateLifecycleAction(payload); return
-    case 'transfer_progress': validateTransferProgress(payload); return
-    case 'performance_phase': validatePerformancePhase(payload); return
-    case 'performance_summary': validatePerformanceSummary(payload); return
-    case 'output_reservation': validateOutputReservation(payload); return
-    case 'output_write': validateOutputWrite(payload); return
-    case 'checkpoint': validateCheckpoint(payload); return
-    case 'settlement': validateSettlement(payload); return
-    case 'publication': validatePublication(payload); return
-    case 'continuation': validateContinuation(payload); return
-    case 'reopen': validateReopen(payload); return
-    case 'cleanup': validateCleanup(payload); return
-    case 'direct_zip_milestone': validateDirectZipMilestone(payload); return
-    case 'retained_inventory': validateRetainedInventory(payload); return
-    case 'retained_action': validateRetainedAction(payload); return
-    default: assertNever(eventName)
-  }
-}
-
-function assertNever(value: never): never {
-  throw new TypeError(`unhandled trace event ${String(value)}`)
+  if (!Object.hasOwn(EVENT_PAYLOAD_VALIDATORS, eventName)) throw new TypeError(`unhandled trace event ${String(eventName)}`)
+  EVENT_PAYLOAD_VALIDATORS[eventName](payload)
 }

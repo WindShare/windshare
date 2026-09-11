@@ -325,6 +325,7 @@ export class PersistedReceiveOperationReopenAuthority {
     if (input.descriptor.continuation === 'resume-direct-zip' ||
         input.descriptor.continuation === 'reauthorize-direct-zip' ||
         input.descriptor.continuation === 'verify-direct-zip-target' ||
+        input.descriptor.continuation === 'verify-direct-zip-completion' ||
         input.descriptor.continuation === 'retry-direct-zip-space') {
       if (input.target.kind !== 'direct-zip') {
         throw new TypeError('Direct ZIP continuation reopened a foreign target')
