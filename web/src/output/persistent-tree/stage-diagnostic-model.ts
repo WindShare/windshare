@@ -1,5 +1,5 @@
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
-import type { OutputExceptionProjection } from '../diagnostics/exception'
+import type { DiagnosticExceptionProjection } from '../../diagnostics/exception'
 
 export type PersistentOutputStage =
   | 'fsa.binding.parent-handle.verify'
@@ -61,7 +61,7 @@ export interface PersistentOutputStageCorrelation {
 export interface PersistentOutputCapturedException {
   /** Exact identity is transient in-process evidence and must not enter retained projections. */
   readonly raw: unknown
-  readonly projection: OutputExceptionProjection
+  readonly projection: DiagnosticExceptionProjection
 }
 
 export type PersistentOutputObservedFact<Value> =
@@ -155,7 +155,7 @@ export type PersistentOutputStageFailureMilestone = Extract<
   PersistentOutputStageMilestone,
   { readonly transition: 'failed' }
 >
-export type PersistentOutputExceptionProjection = OutputExceptionProjection
+export type PersistentOutputExceptionProjection = DiagnosticExceptionProjection
 
 export interface PersistentOutputCheckpointRecordProjection {
   readonly recordId: string

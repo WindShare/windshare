@@ -1,13 +1,13 @@
-export const OUTPUT_JAVASCRIPT_EXCEPTION_KINDS = Object.freeze([
+export const JAVASCRIPT_EXCEPTION_KINDS = Object.freeze([
   'type-error',
   'dom-exception',
   'unknown',
 ] as const)
 
-export type OutputJavaScriptExceptionKind =
-  (typeof OUTPUT_JAVASCRIPT_EXCEPTION_KINDS)[number]
+export type JavaScriptExceptionKind =
+  (typeof JAVASCRIPT_EXCEPTION_KINDS)[number]
 
-export const OUTPUT_NATIVE_ERROR_CLASSES = Object.freeze([
+export const NATIVE_ERROR_CLASSES = Object.freeze([
   'abort',
   'data',
   'invalid_state',
@@ -23,11 +23,11 @@ export const OUTPUT_NATIVE_ERROR_CLASSES = Object.freeze([
   'unknown',
 ] as const)
 
-export type OutputNativeErrorClass = (typeof OUTPUT_NATIVE_ERROR_CLASSES)[number]
+export type NativeErrorClass = (typeof NATIVE_ERROR_CLASSES)[number]
 
-export interface OutputExceptionProjection {
-  readonly javascriptKind: OutputJavaScriptExceptionKind
-  readonly nativeClass: OutputNativeErrorClass
+export interface DiagnosticExceptionProjection {
+  readonly javascriptKind: JavaScriptExceptionKind
+  readonly nativeClass: NativeErrorClass
   readonly thrownType: string
   readonly constructorName: string | null
   readonly errorName: string | null
@@ -37,7 +37,7 @@ export interface OutputExceptionProjection {
   readonly cause: string | null
 }
 
-export type OutputExceptionTextProjector = (value: string) => string
+export type DiagnosticExceptionTextProjector = (value: string) => string
 
 /**
  * Only genuine platform objects select an error class. Name-like properties on
@@ -45,10 +45,10 @@ export type OutputExceptionTextProjector = (value: string) => string
  * Every dynamic string crosses the caller-owned projector before it can become
  * retained evidence, so capture and export cannot silently diverge on capacity.
  */
-export function projectOutputException(
+export function projectDiagnosticException(
   thrown: unknown,
-  projectText: OutputExceptionTextProjector,
-): OutputExceptionProjection {
+  projectText: DiagnosticExceptionTextProjector,
+): DiagnosticExceptionProjection {
   const domException = isNativeDOMException(thrown) ? thrown : undefined
   const typeError = domException === undefined && isNativeTypeError(thrown)
     ? thrown
@@ -75,12 +75,12 @@ export function projectOutputException(
   })
 }
 
-export function isBoundedOutputExceptionProjection(
-  projection: OutputExceptionProjection,
+export function isBoundedDiagnosticExceptionProjection(
+  projection: DiagnosticExceptionProjection,
   maximumTextBytes: number,
 ): boolean {
   if (!Number.isSafeInteger(maximumTextBytes) || maximumTextBytes <= 0) {
-    throw new RangeError('output exception text capacity must be a positive integer')
+    throw new RangeError('diagnostic exception text capacity must be a positive integer')
   }
   return [
     projection.constructorName,
@@ -96,7 +96,7 @@ export function isBoundedOutputExceptionProjection(
 
 function projectNullableText(
   value: string | null,
-  projectText: OutputExceptionTextProjector,
+  projectText: DiagnosticExceptionTextProjector,
 ): string | null {
   return value === null ? null : projectText(value)
 }
@@ -104,7 +104,7 @@ function projectNullableText(
 function javascriptExceptionKind(
   domException: DOMException | undefined,
   typeError: TypeError | undefined,
-): OutputJavaScriptExceptionKind {
+): JavaScriptExceptionKind {
   if (domException !== undefined) return 'dom-exception'
   if (typeError !== undefined) return 'type-error'
   return 'unknown'
@@ -114,13 +114,13 @@ function nativeErrorClass(
   domException: DOMException | undefined,
   typeError: TypeError | undefined,
   errorName: string | null,
-): OutputNativeErrorClass {
+): NativeErrorClass {
   if (domException !== undefined) return classForDOMException(errorName ?? '')
   if (typeError !== undefined) return 'type_error'
   return 'unknown'
 }
 
-function classForDOMException(name: string): OutputNativeErrorClass {
+function classForDOMException(name: string): NativeErrorClass {
   switch (name) {
     case 'AbortError': return 'abort'
     case 'DataError': return 'data'

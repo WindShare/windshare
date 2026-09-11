@@ -421,7 +421,7 @@ function projectFailureFactV1(fact: FailureFact): FailureFactV1 {
       return deepFreezeJson({
         ...common,
         kind: fact.kind,
-        payload: { unclassified: {} },
+        payload: { unclassified: { exception: fact.payload.unclassified.exception } },
       })
   }
 }

@@ -4,7 +4,7 @@ import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
 for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpromoted-resume',
   'unpromoted-delete', 'unpromoted-continue', 'unpromoted-settle', 'bootstrap-recovery',
   'completion-journal-recovery', 'completion-acknowledgement-recovery', 'completion-continue',
-  'aborted-write-continue', 'automatic-checkpoint-spacing'] as const) {
+  'aborted-write-continue', 'automatic-checkpoint-spacing', 'activation-recovery'] as const) {
   test('production Direct ZIP composition: ' + mode, async ({ page }) => {
     await page.goto('/')
     const result = await page.evaluate(async input => {
@@ -20,11 +20,16 @@ for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpro
       expect(result.signature).toEqual([0x50, 0x4b, 0x05, 0x06])
       expect(result.resumeOffset).toBe(mode === 'complete' || mode === 'bootstrap-recovery' ||
         mode === 'aborted-write-continue' || mode === 'automatic-checkpoint-spacing' ||
-        mode.startsWith('completion-') ? '0' : '3')
+        mode === 'activation-recovery' || mode.startsWith('completion-') ? '0' : '3')
       expect(result.fileBytes).toBeGreaterThan(6)
       const progress = result.progress!
       const samples = progress.samples
-      expect(samples.initial).toMatchObject({ received: '0', written: '0', safe: '0' })
+      expect(samples.initial).toMatchObject({ received: '0', written: '0', safe: '0',
+        lifecycle: 'receiving', category: 'active', actions: ['pause'] })
+      expect(samples.published).toMatchObject({ lifecycle: 'published', category: 'terminal', actions: [] })
+      if (samples.paused?.lifecycle === 'resumable-receive') {
+        expect(samples.paused).toMatchObject({ category: 'retained', actions: ['continue', 'delete'] })
+      }
       expect(samples.metadata).toMatchObject({ received: '0', written: '0', safe: '0' })
       const firstBytes = mode === 'automatic-checkpoint-spacing' ? '1024' : '3'
       const totalBytes = mode === 'automatic-checkpoint-spacing' ? '1536' : '6'

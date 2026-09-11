@@ -1,3 +1,4 @@
+import type { DiagnosticExceptionProjection } from '../exception'
 import type {
   FailureFactKind,
   FailureStage,
@@ -200,7 +201,7 @@ export type FailureFactV1 =
       }>
     }>>>
   | Readonly<FailureFactEnvelopeV1<'unclassified', Readonly<{
-      unclassified: Readonly<Record<never, never>>
+      unclassified: Readonly<{ exception: DiagnosticExceptionProjection | null }>
     }>>>
 
 export interface FailureFactBucketV1 {

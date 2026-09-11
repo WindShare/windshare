@@ -54,10 +54,12 @@ export interface BrowserDirectZipOperationOptions {
   readonly trace?: OutputTraceSource
 }
 
+const RECEIVING_CONTROLS = Object.freeze(['pause'] as const)
+const INACTIVE_CONTROLS = Object.freeze([])
+
 export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   readonly intent: DirectZipIntent
   readonly transferJobId = createTransferJobID()
-  readonly activeControls = Object.freeze(['pause'] as const)
   readonly #input: BrowserDirectZipOperationOptions
   readonly #target: BrowserDirectZipTarget
   readonly #listeners = new Set<(value: V2DirectZipProgressSnapshot) => void>()
@@ -104,6 +106,10 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   }
 
   get lifecycle() { return this.#lifecycle }
+
+  get activeControls(): readonly V2ActiveReceiveControl[] {
+    return !this.#closed && this.#lifecycle.kind === 'receiving' ? RECEIVING_CONTROLS : INACTIVE_CONTROLS
+  }
 
   readonly outputProgress = {
     getSnapshot: (): V2DirectZipProgressSnapshot => this.#snapshot(),
