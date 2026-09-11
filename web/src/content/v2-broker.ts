@@ -1,3 +1,4 @@
+import { OrderedBlockWindow, RangeBufferBudget, IMMEDIATE_BLOCK_CONSUMER, type BlockConsumer } from './scheduling/range-window'
 import { bigintToSafeNumber, byteRange, type ByteRange } from './geometry'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from './v2-records'
 import {
@@ -21,6 +22,7 @@ export {
 } from './v2-lane-set'
 
 export const V2_BLOCK_BROKER_CACHE_BYTES = 64 * 1024 * 1024
+export const V2_BLOCK_BROKER_RANGE_BUFFER_BYTES = 64 * 1024 * 1024
 export const V2_BLOCK_BROKER_PARALLEL_READS = 8
 export const V2_BLOCK_BROKER_UPSTREAM_READS = 8
 
@@ -36,6 +38,9 @@ const PRIORITY_ORDER: readonly V2BlockPriority[] = ['preview', 'download', 'pref
 interface SharedBlockLoad {
   readonly controller: AbortController
   readonly demand: V2BlockDemand
+  readonly signal: AbortSignal
+  readonly consumers: Set<BlockConsumer>
+  readonly distance: () => bigint
   readonly routes: SharedV2BlockRouteEligibility
   readonly sequence: number
   promise: Promise<V2BlockRecord>
@@ -83,11 +88,13 @@ export interface V2ContentLaneStatus {
 
 export interface V2BlockBrokerOptions {
   readonly maximumCacheBytes?: number
+  readonly maximumRangeBufferBytes?: number
   readonly maximumUpstreamReads?: number
   readonly validateDemand?: (demand: V2BlockDemand) => unknown
 }
 
 export interface V2RouteAuthorizedBlockReadOptions {
+  readonly consumer?: BlockConsumer
   readonly routes: V2BlockRouteEligibility
   readonly signal?: AbortSignal
   readonly priority?: V2BlockPriority
@@ -109,7 +116,9 @@ export interface V2RouteAuthorizedBlockRangeReader {
 /** Receiver-scoped cache/singleflight; every new upstream dispatch carries consumer route authority. */
 export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
   readonly #lanes: V2LaneSet
+  readonly #lifetime = new AbortController()
   readonly #maximumCacheBytes: number
+  readonly #rangeBudget: RangeBufferBudget
   readonly #maximumUpstreamReads: number
   readonly #validateDemand: (demand: V2BlockDemand) => unknown
   readonly #inflight = new Map<string, SharedBlockLoad>()
@@ -137,6 +146,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       throw new RangeError('Block broker upstream concurrency exceeds its receiver budget')
     }
     this.#lanes = lanes
+    this.#rangeBudget = new RangeBufferBudget(options.maximumRangeBufferBytes ?? V2_BLOCK_BROKER_RANGE_BUFFER_BYTES)
     this.#maximumCacheBytes = maximumCacheBytes
     this.#maximumUpstreamReads = maximumUpstreamReads
     this.#validateDemand = options.validateDemand ?? (() => undefined)
@@ -164,6 +174,8 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       this.#queued.add(load)
       queueMicrotask(() => this.#drainQueue())
     }
+    const consumer = { ...(options.consumer ?? IMMEDIATE_BLOCK_CONSUMER) }
+    load.consumers.add(consumer)
     const priority = options.priority ?? 'download'
     const releaseRoutes = load.routes.add(options.routes)
     // A canceled consumer loses dispatch authority synchronously. Waiting for the
@@ -181,6 +193,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
     } finally {
       options.signal?.removeEventListener('abort', abortRoutes)
       load.waiters -= 1
+      load.consumers.delete(consumer)
       this.#removePriority(load, priority)
       releaseRoutes()
       if (load.waiters === 0 && !load.settled) {
@@ -204,50 +217,37 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         maximumParallel > V2_BLOCK_BROKER_PARALLEL_READS) {
       throw new RangeError('Range read parallelism exceeds its consumer budget')
     }
-    const pending = new Map<bigint, Promise<V2BlockRecord>>()
     const controller = new AbortController()
-    const unlink = forwardAbort(options.signal, controller)
-    let scheduled = plan.blocks.first
-    let emitted = plan.blocks.first
+    const signal = AbortSignal.any([this.#lifetime.signal, ...(options.signal === undefined ? [] : [options.signal])])
+    const unlink = forwardAbort(signal, controller)
+    const window = new OrderedBlockWindow({
+      first: plan.blocks.first, end: plan.blocks.end, parallel: maximumParallel, budget: this.#rangeBudget,
+      bytes: index => {
+        const block = descriptor.geometry.blockPlaintext(index)
+        return bigintToSafeNumber(block.end - block.start, 'buffered block bytes')
+      },
+      read: (localBlockIndex, consumer) => this.readBlock({ descriptor, leaseId, localBlockIndex }, {
+        routes: options.routes, signal: controller.signal, priority: options.priority ?? 'download', consumer,
+      }),
+    })
     try {
-      while (emitted < plan.blocks.end) {
-        controller.signal.throwIfAborted()
-        while (scheduled < plan.blocks.end && pending.size < maximumParallel) {
-          const index = scheduled
-          pending.set(index, this.readBlock(
-            { descriptor, leaseId, localBlockIndex: index },
-            {
-              routes: options.routes,
-              signal: controller.signal,
-              priority: options.priority ?? 'download',
-            },
-          ))
-          scheduled += 1n
-        }
-        const promise = pending.get(emitted)
-        if (promise === undefined) throw new Error('Block broker scheduling lost an index')
-        const record = await promise
-        pending.delete(emitted)
+      for (let emitted = plan.blocks.first; emitted < plan.blocks.end; emitted += 1n) {
+        const record = await window.next(controller.signal)
         const slice = plan.sliceForBlock(emitted)
         if (slice === undefined) throw new Error('Block broker produced an out-of-range block')
         const start = bigintToSafeNumber(slice.offsetWithinBlock, 'block slice offset')
-        const length = bigintToSafeNumber(
-          slice.requestedBytes.end - slice.requestedBytes.start,
-          'block slice length',
-        )
+        const length = bigintToSafeNumber(slice.requestedBytes.end - slice.requestedBytes.start, 'block slice length')
+        const data = record.data.slice(start, start + length)
+        window.consumed()
         yield Object.freeze({
-          offset: slice.requestedBytes.start,
-          data: record.data.slice(start, start + length),
+          offset: slice.requestedBytes.start, data,
           ...(authenticatedBlockRoute(record) === undefined ? {} : { authenticatedRoute: authenticatedBlockRoute(record)! }),
         })
-        emitted += 1n
       }
     } finally {
       unlink()
-      if (pending.size > 0) {
-        controller.abort(new DOMException('Range consumer left', 'AbortError'))
-        await Promise.allSettled(pending.values())
-      }
+      controller.abort(new DOMException('Range consumer left', 'AbortError'))
+      await window.close()
     }
   }
 
@@ -260,7 +260,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         (load) => !load.settled && sameBytes(load.demand.leaseId, leaseId),
       )
       if (loads.length === 0) {
-        // A winner can unblock output before its canceled probes have settled.
+        // A winner can unblock output before its canceled rescue attempts have settled.
         await this.#lanes.waitForLeaseIdle(leaseId)
         return
       }
@@ -288,6 +288,7 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#lifetime.abort(new Error('Block broker closed'))
     for (const load of this.#inflight.values()) {
       load.controller.abort(new Error('Block broker closed'))
       if (!load.started) this.#settleQueued(load, new Error('Block broker closed'))
@@ -305,8 +306,14 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
       resolve = accepted
       reject = rejected
     })
+    const controller = new AbortController()
+    const consumers = new Set<BlockConsumer>()
     return {
-      controller: new AbortController(),
+      controller, signal: controller.signal, consumers,
+      distance: () => [...consumers].reduce((distance, consumer) => {
+        const current = consumer.distance()
+        return current < distance ? current : distance
+      }, BigInt(Number.MAX_SAFE_INTEGER)),
       demand,
       routes: new SharedV2BlockRouteEligibility(),
       sequence: this.#loadSequence++,
@@ -336,13 +343,17 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
   #drainQueue(): void {
     if (this.#closed) return
     while (this.#activeLoads < this.#maximumUpstreamReads) {
-      const load = this.#nextQueued()
-      if (load === undefined) return
+      const queued = this.#nextQueued()
+      if (queued.length === 0) return
+      const { work: load, result } = this.#lanes.dispatch(queued)
+      const consumer = [...load.consumers].find(candidate => candidate.canDispatch())
+      if (consumer === undefined) throw new Error('Content dispatch lost its consumer admission')
+      const release = consumer.acquire()
       this.#queued.delete(load)
       load.started = true
       this.#activeLoads += 1
       const key = demandKey(load.demand)
-      this.#lanes.fetch(load.demand, load.routes, load.controller.signal)
+      result
         .then((record) => {
           if (load.controller.signal.aborted || load.waiters === 0) {
             load.reject(load.controller.signal.reason ?? new DOMException('Block load abandoned', 'AbortError'))
@@ -354,35 +365,29 @@ export class V2BlockBroker implements V2RouteAuthorizedBlockRangeReader {
         .finally(() => {
           load.settled = true
           this.#activeLoads -= 1
+          release()
           if (this.#inflight.get(key) === load) this.#inflight.delete(key)
           this.#drainQueue()
         })
     }
   }
 
-  #nextQueued(): SharedBlockLoad | undefined {
-    for (const priority of PRIORITY_ORDER) {
-      if (this.#priorityServed[priority] >= PRIORITY_WEIGHTS[priority]) continue
-      const candidate = this.#oldestQueued(priority)
-      if (candidate !== undefined) {
-        this.#priorityServed[priority] += 1
-        return candidate
+  #nextQueued(): SharedBlockLoad[] {
+    const eligible = [...this.#queued].filter(load => !load.settled &&
+      [...load.consumers].some(consumer => consumer.canDispatch()))
+    for (let round = 0; round < 2; round += 1) {
+      for (const priority of PRIORITY_ORDER) {
+        if (this.#priorityServed[priority] >= PRIORITY_WEIGHTS[priority]) continue
+        const candidates = eligible.filter(load => load.priority === priority)
+          .sort((left, right) => left.sequence - right.sequence)
+        if (candidates.length > 0) {
+          this.#priorityServed[priority] += 1
+          return candidates
+        }
       }
+      for (const priority of PRIORITY_ORDER) this.#priorityServed[priority] = 0
     }
-    if (![...this.#queued].some((load) => !load.settled)) return undefined
-    // A fresh weighted round is permitted when the remaining queued priorities
-    // have exhausted their shares; absent classes never make useful work wait.
-    for (const priority of PRIORITY_ORDER) this.#priorityServed[priority] = 0
-    return this.#nextQueued()
-  }
-
-  #oldestQueued(priority: V2BlockPriority): SharedBlockLoad | undefined {
-    let oldest: SharedBlockLoad | undefined
-    for (const load of this.#queued) {
-      if (load.settled || load.priority !== priority) continue
-      if (oldest === undefined || load.sequence < oldest.sequence) oldest = load
-    }
-    return oldest
+    return []
   }
 
   #settleQueued(load: SharedBlockLoad, reason: unknown): void {

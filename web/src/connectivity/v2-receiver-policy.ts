@@ -251,6 +251,8 @@ export class V2ReceiverConnectivity {
       throw new Error('Replacement relay lane is not attached to this ProtocolSession')
     }
     this.#relayLaneIds.add(laneId)
+    const epoch = this.#laneEpochs.get(laneId)
+    if (epoch !== undefined) this.#lanes.requests.add({ id: laneId, epoch, route: 'application-relay' })
     if (this.#activations.size > 0) this.#admitRelay()
   }
 

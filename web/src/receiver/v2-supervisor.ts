@@ -1,7 +1,7 @@
+import { isTerminalRecoveryFailure, isLaneRecoveryFailure, isSessionFailure } from './recovery-failure'
 import { traceContentScheduling } from '../diagnostics/trace/content-scheduling'
 import { defaultReconnectBackoff, requireBackoff, systemReconnectClock, type V2ReconnectClock } from './recovery-clock'
 import { ReceiverConnectionState } from './connection-state'
-import { RelayEndpointFailure } from './relay-race'
 import type { V2CatalogOperationClient } from '../catalog/v2-client'
 import type { V2CatalogPageRequest, V2ShareDescriptor } from '../catalog/v2-records'
 import {
@@ -20,7 +20,6 @@ import { PeerNetworkGeneration } from '../connectivity/peer-set/network-generati
 import {
   V2BlockBroker,
   V2BlockDispatchSequenceAuthority,
-  V2BlockLaneAttemptsError,
   V2LaneSet,
   type V2BlockRouteEligibility,
   type V2BlockDispatchObservation,
@@ -31,17 +30,13 @@ import {
   V2RevisionService,
   V2SessionBlockLane,
 } from '../content/v2-session-services'
-import { V2SessionRuntimeError, type V2LaneChange } from '../session/v2-runtime-types'
+import { type V2LaneChange } from '../session/v2-runtime-types'
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import {
   equalV2DiagnosticIdentities,
   type V2ProtocolSessionIdentity,
 } from '../session/v2-identities'
 import { encodeBase64Url } from '../crypto/bytes'
-import {
-  V2RelayReceiverError,
-} from '../transport/relay/v2-receiver'
-import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
 import {
   type V2ContentGeneration,
   type V2ContentGenerationProvider,
@@ -60,7 +55,7 @@ import { ReceiverRelaySet } from './relay-set'
 import { ReceiverPathActivity } from './path-activity'
 import { DownloadMetrics } from './download-metrics'
 import {
-  GenerationRecoveryBudget, GenerationRecoveryExhaustedError,
+  GenerationRecoveryBudget,
   runGenerationRecovery, type GenerationRecoveryWave,
 } from './generation-recovery'
 
@@ -195,7 +190,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.catalogOperations = Object.freeze({
       fetchPage: (request: V2CatalogPageRequest, signal: AbortSignal) =>
         this.execute(signal, (generation) =>
-        new V2CatalogSessionOperations(generation.session).fetchPage(request, signal))
+        new V2CatalogSessionOperations(generation.session, generation.lanes.requests).fetchPage(request, signal))
         .then((result) => result.value),
       failProtocol: async (reason: unknown) => this.#failTerminal(reason),
     })
@@ -268,7 +263,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
     if (!isLaneRecoveryFailure(error) || managed.lanes.size > 0) return false
     try {
-      await managed.lanes.waitForLane(signal)
+      await managed.lanes.waitForContentAdmission(signal)
       return true
     } catch {
       signal?.throwIfAborted()
@@ -323,6 +318,11 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         ...(this.#onBlockDispatched === undefined
           ? {}
           : { onBlockDispatched: this.#onBlockDispatched }),
+        onRequestScheduled: fact => this.#protocolTrace?.current?.({
+          ...fact, eventName: 'request_scheduling',
+          correlation: { protocolSessionId: core.session.protocolSessionIdentity,
+            lane: { id: fact.laneId, epoch: fact.laneEpoch } },
+        }),
         onBlockScheduled: (fact) =>
           traceContentScheduling(fact, core.session.protocolSessionIdentity, this.#protocolTrace),
         onBlockFetched: (fact) => {
@@ -331,6 +331,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         },
       },
     )
+    lanes.requests.add({ id: core.session.initialLaneId, epoch: core.session.keys.initialLaneEpoch, route: 'application-relay' })
     const brokerOwner: { current?: V2BlockBroker } = {}
     const readSecret = this.#factory.copyReadSecret()
     let revisions: V2RevisionService | undefined
@@ -436,6 +437,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       this.#wakeWaiters()
       return
     }
+    generation.lanes.requests.remove(change.laneId, change.laneEpoch)
     if (generation.session.isClosed || isSessionFailure(change.failure)) {
       this.#failTerminal(change.failure ?? new Error('ProtocolSession closed terminally'))
       return
@@ -705,22 +707,6 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   }
 }
 
-function isTerminalRecoveryFailure(error: unknown): boolean {
-  if (error instanceof RelayEndpointFailure) return isTerminalRecoveryFailure(error.cause)
-  if (error instanceof AggregateError) {
-    return error.errors.some(isSessionRecoveryFailure) ||
-      (error.errors.length > 0 && error.errors.every(isTerminalRecoveryFailure))
-  }
-  return isSessionRecoveryFailure(error) ||
-    (error instanceof V2RelayReceiverError && error.relayError?.code === V2_RELAY_ERROR.stopped)
-}
-
-function isSessionRecoveryFailure(error: unknown): boolean {
-  if (error instanceof RelayEndpointFailure) return isSessionRecoveryFailure(error.cause)
-  if (error instanceof AggregateError) return error.errors.some(isSessionRecoveryFailure)
-  return error instanceof GenerationRecoveryExhaustedError || error instanceof V2StaleShareInstanceError
-}
-
 async function closeGeneration(generation: V2ReceiverGeneration): Promise<void> {
   generation.retired = true
   generation.unsubscribe?.()
@@ -746,13 +732,4 @@ function isRecoverableOperationFailure(
   current: V2ReceiverGeneration,
 ): boolean {
   return generation !== current || generation.retired || isLaneRecoveryFailure(error)
-}
-
-function isLaneRecoveryFailure(error: unknown): boolean {
-  return error instanceof V2BlockLaneAttemptsError ||
-    (error instanceof V2SessionRuntimeError && error.scope === 'lane')
-}
-
-function isSessionFailure(error: unknown): boolean {
-  return error instanceof V2SessionRuntimeError && error.scope === 'session'
 }

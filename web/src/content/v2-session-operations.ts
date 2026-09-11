@@ -1,3 +1,4 @@
+import type { LaneRequests } from './scheduling/requests'
 import type {
   V2CatalogOperationClient,
   V2CatalogScanProgressListener,
@@ -52,7 +53,10 @@ export function remoteOperationErrorFor(
 export class V2CatalogSessionOperations implements V2CatalogOperationClient {
   readonly #session: V2ReceiverSessionRuntime
 
-  constructor(session: V2ReceiverSessionRuntime) {
+  readonly #requests: LaneRequests
+
+  constructor(session: V2ReceiverSessionRuntime, requests: LaneRequests) {
+    this.#requests = requests
     this.#session = session
   }
 
@@ -65,10 +69,20 @@ export class V2CatalogSessionOperations implements V2CatalogOperationClient {
     signal: AbortSignal,
     onProgress?: V2CatalogScanProgressListener,
   ): Promise<Uint8Array> {
+    return this.#requests.run({ kind: 'list_children', signal }, route =>
+      this.#fetchOnLane(request, route.laneId, route.signal, onProgress))
+  }
+
+  async #fetchOnLane(
+    request: V2CatalogPageRequest,
+    laneId: number,
+    signal: AbortSignal,
+    onProgress?: V2CatalogScanProgressListener,
+  ): Promise<Uint8Array> {
     const operation = await this.#session.beginOperation(
       V2_MESSAGE_KIND.listChildren,
       encodeV2ListRequest(request.directoryId, request.generation, request.pageIndex),
-      { signal },
+      { laneId, signal },
     )
     let attemptId: Uint8Array<ArrayBuffer> | undefined
     let discoveredEntries = 0n

@@ -1,6 +1,8 @@
 import { ContentAttemptLifetimes } from './scheduling/attempt-lifetimes'
-import { LanePerformance, completionCost } from './scheduling/performance'
-import { LaneExploration, probeDue, rescueDue, type DispatchPurpose } from './scheduling/exploration'
+import { LanePerformance } from './scheduling/performance'
+import { LaneRequests, type RequestSchedulingObservation } from './scheduling/requests'
+import { ContentAllocation, orderedContentLanes, demandBytes, type ContentLane, type ContentWork } from './scheduling/selection'
+import { LaneRescues, rescueDue, type DispatchPurpose } from './scheduling/exploration'
 import { ContentRaceWon, ContentRaceFailures, raceContent } from './scheduling/race'
 import { V2SessionRuntimeError } from '../session/v2-runtime-types'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from './v2-records'
@@ -28,14 +30,10 @@ export class V2BlockLaneAttemptsError extends AggregateError {
   }
 }
 
-interface LaneState {
-  readonly lane: V2BlockLane
-  readonly laneEpoch: number
-  readonly route: V2BlockTransportRoute
-  inflight: number
-  readonly performance: LanePerformance
-  failed: boolean
-}
+type LaneState = ContentLane
+type FetchedBlock = { state: LaneState; observation: V2BlockDispatchObservation; record: V2BlockRecord }
+
+export type { ContentWork } from './scheduling/selection'
 
 export interface V2BlockDispatchObservation {
   readonly dispatchSequence: number
@@ -80,6 +78,7 @@ export interface V2BlockSchedulingObservation extends V2BlockDispatchObservation
 export interface V2LaneSetOptions {
   readonly now?: () => number
   readonly onBlockScheduled?: (observation: V2BlockSchedulingObservation) => void
+  readonly onRequestScheduled?: (observation: RequestSchedulingObservation) => void
   readonly dispatchSequence?: V2BlockDispatchSequenceAuthority
   readonly onBlockDispatched?: (observation: V2BlockDispatchObservation) => void
   readonly onBlockFetched?: (observation: V2BlockRouteObservation) => void
@@ -87,7 +86,7 @@ export interface V2LaneSetOptions {
 
 interface PendingLane {
   readonly routes?: V2BlockRouteEligibility
-  readonly resolve: (laneId: number) => void
+  readonly resolve: () => void
   readonly reject: (reason: unknown) => void
   readonly signal?: AbortSignal
   abort?: () => void
@@ -102,14 +101,16 @@ export class V2LaneSet {
   readonly #onBlockFetched: (observation: V2BlockRouteObservation) => void
   readonly #now: () => number
   readonly #onBlockScheduled: ((observation: V2BlockSchedulingObservation) => void) | undefined
-  readonly #exploration = new LaneExploration()
+  readonly requests: LaneRequests
+  readonly #allocation = new ContentAllocation()
+  readonly #rescues = new LaneRescues()
   readonly #attemptLifetimes = new ContentAttemptLifetimes()
   readonly #lifetime = new AbortController()
-  #rotation = 0
   #closed = false
 
   constructor(options: V2LaneSetOptions = {}) {
     this.#now = options.now ?? (() => performance.now())
+    this.requests = new LaneRequests({ now: this.#now, ...(options.onRequestScheduled === undefined ? {} : { observe: options.onRequestScheduled }) })
     this.#onBlockScheduled = options.onBlockScheduled
     this.#dispatchSequence = options.dispatchSequence ?? new V2BlockDispatchSequenceAuthority()
     this.#onBlockDispatched = options.onBlockDispatched ?? (() => undefined)
@@ -124,13 +125,16 @@ export class V2LaneSet {
     if (!Number.isInteger(laneEpoch) || laneEpoch < 0 || laneEpoch > 0xffff_ffff) {
       throw new TypeError('LaneSet requires an unsigned lane epoch')
     }
-    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance: new LanePerformance() })
+    const performance = new LanePerformance()
+    this.#lanes.set(lane.id, { lane, laneEpoch, route, inflight: 0, failed: false, performance })
+    this.requests.add({ id: lane.id, epoch: laneEpoch, route, content: performance })
     this.#wakeWaiters()
   }
 
   remove(laneId: number): void {
     this.#lanes.get(laneId)?.lane.close?.()
     this.#lanes.delete(laneId)
+    this.requests.remove(laneId)
     this.#wakeWaiters()
   }
 
@@ -147,32 +151,41 @@ export class V2LaneSet {
     return [...this.#lanes.values()].filter((candidate) => routes.allows(candidate.route)).length
   }
 
-  waitForLane(signal?: AbortSignal): Promise<number> {
-    return this.#waitForMatchingLane(undefined, signal)
+  waitForContentAdmission(signal?: AbortSignal): Promise<void> {
+    return this.#waitForContentAvailability(undefined, signal)
   }
 
-  waitForEligibleLane(
-    routes: V2BlockRouteEligibility,
-    signal?: AbortSignal,
-  ): Promise<number> {
-    return this.#waitForMatchingLane(routes, signal)
+  async fetch(demand: V2BlockDemand, routes: V2BlockRouteEligibility, signal: AbortSignal): Promise<V2BlockRecord> {
+    return this.dispatch([{ demand, routes, signal, distance: () => 0n }]).result
   }
 
-  async fetch(
-    demand: V2BlockDemand,
-    routes: V2BlockRouteEligibility,
-    callerSignal: AbortSignal,
-  ): Promise<V2BlockRecord> {
-    const signal = AbortSignal.any([callerSignal, this.#lifetime.signal])
+  dispatch<T extends ContentWork>(queued: readonly T[]): { readonly work: T; readonly result: Promise<V2BlockRecord> } {
+    try {
+      const assignment = this.#allocation.select(queued, [...this.#lanes.values()], this.#now())
+      const result = this.#fetch(assignment.work, assignment.lane, assignment.purpose)
+        .finally(() => this.#allocation.completed(assignment.purpose))
+      return { work: assignment.work, result }
+    } catch (error) {
+      const work = queued[0]
+      if (work === undefined) throw error
+      return { work, result: Promise.reject(error) }
+    }
+  }
+
+  async #fetch(work: ContentWork, assigned: LaneState | undefined, purpose: DispatchPurpose): Promise<V2BlockRecord> {
+    const { demand, routes } = work
+    const signal = AbortSignal.any([work.signal, this.#lifetime.signal])
     signal.throwIfAborted()
     routes.assertActive()
     const failures: unknown[] = []
     const attempted = new Set<LaneState>()
-    const bytes = blockDemandBytes(demand)
+    const bytes = demandBytes(demand)
     let supplemented = false
     while (true) {
+      signal.throwIfAborted()
       routes.assertActive()
-      const state = this.#orderedCandidates(routes, bytes).find((candidate) => !attempted.has(candidate))
+      const state = this.#selectAttemptLane(work, assigned, attempted)
+      assigned = undefined
       if (state === undefined) {
         await this.#awaitReplacementOrThrow(failures, attempted, routes, signal)
         continue
@@ -183,18 +196,12 @@ export class V2LaneSet {
       try {
         const winner = await raceContent(
           signal,
-          (attemptSignal) => this.#fetchAttempt(state, demand, attemptSignal, 'content'),
-          (attemptSignal, purpose) => {
+          attemptSignal => this.#fetchAttempt(state, demand, attemptSignal, purpose),
+          attemptSignal => {
             if (supplemented) return undefined
-            routes.assertActive()
-            const candidate = this.#supplement(
-              state, attempted, routes, bytes, this.#now() - started, estimate, purpose,
-            )
-            if (candidate === undefined) return undefined
-            supplemented = true
-            attempted.add(candidate)
-            return this.#fetchAttempt(candidate, demand, attemptSignal, purpose)
-              .finally(() => this.#exploration.release(purpose))
+            const rescue = this.#rescue(work, attempted, started, estimate, attemptSignal)
+            supplemented = rescue !== undefined
+            return rescue
           },
           isRetryableLaneFailure,
         )
@@ -210,29 +217,22 @@ export class V2LaneSet {
     }
   }
 
-  #supplement(
-    primary: LaneState,
-    attempted: ReadonlySet<LaneState>,
-    routes: V2BlockRouteEligibility,
-    bytes: number,
-    elapsed: number,
-    estimate: number,
-    purpose: 'probe' | 'rescue',
-  ): LaneState | undefined {
-    if (this.#closed || (purpose === 'probe' && !primary.performance.hasSuccessfulSample)) return undefined
-    const now = this.#now()
-    const candidates = this.#orderedCandidates(routes, bytes).filter((state) =>
-      !attempted.has(state) && (purpose !== 'probe' || probeDue(state.performance, now)))
-    if (purpose === 'probe') {
-      // Exploration follows stale evidence, independently of content allocation.
-      candidates.sort((left, right) =>
-        (left.performance.lastAttempt ?? -Number.MAX_VALUE) -
-          (right.performance.lastAttempt ?? -Number.MAX_VALUE) || left.lane.id - right.lane.id)
-    }
-    const candidate = candidates[0]
-    if (candidate === undefined) return undefined
-    if (purpose === 'rescue' && !rescueDue(elapsed, estimate, candidate.performance.estimate(bytes))) return undefined
-    return this.#exploration.acquire(purpose, now) ? candidate : undefined
+  #selectAttemptLane(work: ContentWork, assigned: LaneState | undefined, attempted: ReadonlySet<LaneState>): LaneState | undefined {
+    if (assigned !== undefined && this.#lanes.get(assigned.lane.id) === assigned && work.routes.allows(assigned.route)) return assigned
+    return orderedContentLanes([...this.#lanes.values()], work).find(candidate => !attempted.has(candidate))
+  }
+
+  #rescue(
+    work: ContentWork, attempted: Set<LaneState>, started: number, estimate: number, signal: AbortSignal,
+  ): Promise<FetchedBlock> | undefined {
+    if (work.distance() > 0n) return undefined
+    work.routes.assertActive()
+    const candidate = orderedContentLanes([...this.#lanes.values()], work).find(lane => !attempted.has(lane))
+    if (candidate === undefined ||
+      !rescueDue(this.#now() - started, estimate, candidate.performance.estimate(demandBytes(work.demand))) ||
+      !this.#rescues.acquire()) return undefined
+    attempted.add(candidate)
+    return this.#fetchAttempt(candidate, work.demand, signal, 'rescue').finally(() => this.#rescues.release())
   }
 
   waitForLeaseIdle(leaseId: Uint8Array): Promise<void> {
@@ -244,9 +244,9 @@ export class V2LaneSet {
     demand: V2BlockDemand,
     signal: AbortSignal,
     purpose: DispatchPurpose,
-  ): Promise<{ state: LaneState; observation: V2BlockDispatchObservation; record: V2BlockRecord }> {
+  ): Promise<FetchedBlock> {
     signal.throwIfAborted()
-    const bytes = blockDemandBytes(demand)
+    const bytes = demandBytes(demand)
     const started = this.#now()
     const expectedMilliseconds = state.performance.estimate(bytes)
     const observation = Object.freeze({
@@ -303,6 +303,7 @@ export class V2LaneSet {
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.requests.close()
     this.#lifetime.abort(new Error('LaneSet is closed'))
     for (const state of this.#lanes.values()) state.lane.close?.()
     this.#lanes.clear()
@@ -310,16 +311,16 @@ export class V2LaneSet {
     for (const waiter of [...this.#waiters]) this.#rejectWaiter(waiter, reason)
   }
 
-  #waitForMatchingLane(
+  #waitForContentAvailability(
     routes: V2BlockRouteEligibility | undefined,
     signal: AbortSignal | undefined,
-  ): Promise<number> {
+  ): Promise<void> {
     if (this.#closed) return Promise.reject(new Error('LaneSet is closed'))
     signal?.throwIfAborted()
     routes?.assertActive()
-    const available = this.#orderedCandidates(routes)[0]
-    if (available !== undefined) return Promise.resolve(available.lane.id)
-    return new Promise<number>((resolve, reject) => {
+    const available = this.#availableLanes(routes)[0]
+    if (available !== undefined) return Promise.resolve()
+    return new Promise<void>((resolve, reject) => {
       const waiter: PendingLane = {
         ...(routes === undefined ? {} : { routes }),
         resolve,
@@ -339,44 +340,8 @@ export class V2LaneSet {
     })
   }
 
-  #orderedCandidates(routes?: V2BlockRouteEligibility, bytes?: number): LaneState[] {
-    const candidates = [...this.#lanes.values()].filter(
-      (candidate) => routes?.allows(candidate.route) ?? true,
-    )
-    candidates.sort((left, right) => {
-      if (left.failed !== right.failed) return left.failed ? 1 : -1
-      if (bytes !== undefined) {
-        // Losing a probe is not evidence that a standby can finish a prefix block.
-        if (left.performance.hasSuccessfulSample !== right.performance.hasSuccessfulSample) {
-          return left.performance.hasSuccessfulSample ? -1 : 1
-        }
-        const difference = completionCost(left.performance.estimate(bytes), left.route !== 'direct') -
-          completionCost(right.performance.estimate(bytes), right.route !== 'direct')
-        if (difference !== 0) return difference
-      }
-      if (left.inflight !== right.inflight) return left.inflight - right.inflight
-      return left.lane.id - right.lane.id
-    })
-    const first = candidates[0]
-    const rotationWidth = first === undefined
-      ? 0
-      : candidates.findIndex((candidate) =>
-        candidate.failed !== first.failed || candidate.inflight !== first.inflight ||
-        (bytes !== undefined && (candidate.performance.hasSuccessfulSample !== first.performance.hasSuccessfulSample ||
-          completionCost(candidate.performance.estimate(bytes), candidate.route !== 'direct') !==
-          completionCost(first.performance.estimate(bytes), first.route !== 'direct'))))
-    const tiedWidth = rotationWidth < 0 ? candidates.length : rotationWidth
-    if (tiedWidth > 1) {
-      const offset = this.#rotation % tiedWidth
-      this.#rotation += 1
-      const tied = candidates.slice(0, tiedWidth)
-      return [
-        ...tied.slice(offset),
-        ...tied.slice(0, offset),
-        ...candidates.slice(tiedWidth),
-      ]
-    }
-    return candidates
+  #availableLanes(routes?: V2BlockRouteEligibility): LaneState[] {
+    return [...this.#lanes.values()].filter(candidate => routes?.allows(candidate.route) ?? true)
   }
 
   async #awaitReplacementOrThrow(
@@ -385,9 +350,9 @@ export class V2LaneSet {
     routes: V2BlockRouteEligibility,
     signal: AbortSignal,
   ): Promise<void> {
-    const eligible = this.#orderedCandidates(routes)
+    const eligible = this.#availableLanes(routes)
     if (eligible.length === 0) {
-      await this.waitForEligibleLane(routes, signal)
+      await this.#waitForContentAvailability(routes, signal)
       return
     }
     if (eligible.some((candidate) => !attempted.has(candidate))) return
@@ -403,10 +368,10 @@ export class V2LaneSet {
     if (!this.#waiters.has(waiter)) return
     try {
       waiter.routes?.assertActive()
-      const candidate = this.#orderedCandidates(waiter.routes)[0]
+      const candidate = this.#availableLanes(waiter.routes)[0]
       if (candidate === undefined) return
       this.#finishWaiter(waiter)
-      waiter.resolve(candidate.lane.id)
+      waiter.resolve()
     } catch (error) {
       this.#rejectWaiter(waiter, error)
     }
@@ -430,9 +395,4 @@ export class V2LaneSet {
 function isRetryableLaneFailure(error: unknown): boolean {
   return (error instanceof V2SessionRuntimeError && error.scope === 'lane') ||
     (error instanceof DOMException && error.name === 'AbortError')
-}
-
-function blockDemandBytes(demand: V2BlockDemand): number {
-  const range = demand.descriptor.geometry.blockPlaintext(demand.localBlockIndex)
-  return Number(range.end - range.start)
 }
