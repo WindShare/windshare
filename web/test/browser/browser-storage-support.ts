@@ -6,6 +6,9 @@ interface OriginPrivateStorageManager extends StorageManager {
   getDirectory(): Promise<FileSystemDirectoryHandle>
 }
 
+// Storage probes assemble their own runtime; loading the app would start an unrelated receiver.
+export const BROWSER_CONTRACT_HOST_PATH = '/test/browser/contract-host.html'
+
 const PROFILE_REMOVAL_MAX_RETRIES = 5
 const PROFILE_REMOVAL_RETRY_DELAY_MS = 100
 

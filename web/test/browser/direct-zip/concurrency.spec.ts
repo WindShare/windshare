@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 import type { ConcurrentZipInput } from './concurrency-probe'
 
 const FIRST_PAYLOAD = [1, 2, 3, 4, 5, 6]
@@ -9,7 +10,7 @@ for (const parentLayout of ['same-directory', 'same-leaf-distinct-directories'] 
   test('production ZIP writers overlap across tabs: ' + parentLayout, async ({ page, context }) => {
     const secondPage = await context.newPage()
     const databaseName = 'direct-zip-concurrency-' + crypto.randomUUID()
-    await Promise.all([page.goto('/'), secondPage.goto('/')])
+    await Promise.all([page.goto(BROWSER_CONTRACT_HOST_PATH), secondPage.goto(BROWSER_CONTRACT_HOST_PATH)])
     try {
       const first = await start(page, { databaseName, branch: 'A', payload: FIRST_PAYLOAD })
       const second = await start(secondPage, {
@@ -55,7 +56,7 @@ for (const parentLayout of ['same-directory', 'same-leaf-distinct-directories'] 
 test('failed production ZIP activation releases ownership for another tab', async ({ page, context }) => {
   const secondPage = await context.newPage()
   const databaseName = 'direct-zip-activation-release-' + crypto.randomUUID()
-  await Promise.all([page.goto('/'), secondPage.goto('/')])
+  await Promise.all([page.goto(BROWSER_CONTRACT_HOST_PATH), secondPage.goto(BROWSER_CONTRACT_HOST_PATH)])
   try {
     const failed = await page.evaluate(async name => {
       const path = '/test/browser/direct-zip/concurrency-probe.ts'
@@ -78,7 +79,7 @@ test('failed production ZIP activation releases ownership for another tab', asyn
 test('persisted ZIP target identity admits deletion retry without blocking unrelated files', async ({ page, context }) => {
   const secondPage = await context.newPage()
   const databaseName = 'direct-zip-deleted-target-' + crypto.randomUUID()
-  await Promise.all([page.goto('/'), secondPage.goto('/')])
+  await Promise.all([page.goto(BROWSER_CONTRACT_HOST_PATH), secondPage.goto(BROWSER_CONTRACT_HOST_PATH)])
   try {
     const first = await start(page, { databaseName, branch: 'A', payload: FIRST_PAYLOAD })
     await assertArchive(await finish(page), FIRST_PAYLOAD)
