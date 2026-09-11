@@ -1,10 +1,11 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './browser-storage-support'
 
 const PROBE = '/test/browser/browser-delivery-atomic-probe.ts'
 
 for (const [preference, failure] of [['automatic', 'delivery'], ['direct', 'target-proof']] as const) {
   test(`direct ${preference} placement and ${failure} failure share checkpoint commit authority across reload`, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const fixture = { databaseName: 'delivery-atomic-' + crypto.randomUUID(), parentName: 'delivery-atomic-' + crypto.randomUUID() }
     const prepared = await page.evaluate(async ({ path, fixture, preference }) => {
       const probe = await import(path) as typeof import('./browser-delivery-atomic-probe')

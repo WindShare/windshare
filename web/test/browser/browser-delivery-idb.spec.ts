@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './browser-storage-support'
 
 const PROBE_PATH = '/test/browser/browser-delivery-idb-probe.ts'
 
 test('retained staging and target proof remain distinct after reload and offline continuation', async ({ page, context }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const databaseName = 'delivery-reopen-' + crypto.randomUUID()
   const initial = await page.evaluate(async ({ path, databaseName }) => {
     const probe = await import(path) as typeof import('./browser-delivery-idb-probe')
@@ -29,7 +30,7 @@ test('retained staging and target proof remain distinct after reload and offline
 })
 
 test('explicit redownload durably authorizes one reset while ordinary CAS and forged baselines remain forbidden', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {
     const probe = await import(path) as typeof import('./browser-delivery-idb-probe')
     return probe.restartDeliveryJournal('delivery-restart-' + crypto.randomUUID())
@@ -39,7 +40,7 @@ test('explicit redownload durably authorizes one reset while ordinary CAS and fo
 })
 
 test('file authority uses atomic exact CAS and bounded pages across independent repositories', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {
     const probe = await import(path) as typeof import('./browser-delivery-idb-probe')
     return probe.raceBrowserDeliveryJournal('delivery-race-' + crypto.randomUUID())
@@ -51,7 +52,7 @@ test('file authority uses atomic exact CAS and bounded pages across independent 
 })
 
 test('direct target completion uses one atomic transaction while retaining exact final proof checks', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {
     const probe = await import(path) as typeof import('./browser-delivery-idb-probe')
     return probe.finalizeDirectDelivery('delivery-direct-' + crypto.randomUUID())
@@ -63,7 +64,7 @@ test('direct target completion uses one atomic transaction while retaining exact
 })
 
 test('an aborted delivery cut preserves its predecessor and the persisted staging proof for retry', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async path => {
     const probe = await import(path) as typeof import('./browser-delivery-idb-probe')
     return probe.abortBrowserDeliveryCut('delivery-abort-' + crypto.randomUUID())
