@@ -7,7 +7,9 @@ Production wiring is checked through behavior: `make e2e` exercises the real CLI
 smoke test in `make browser` exercises the browser UI, preview, downloaded contents, and Chromium's
 retained downloads after reloading and going offline. Longer recovery and connectivity scenarios belong
 to `make long-go` and the weekly browser suites; unit and component contracts cover individual decisions
-and failure paths. Static architecture gates protect dependency and capability boundaries, not
+and failure paths. The short Chromium contracts also build and serve the native-storage capability
+probe under a same-origin Worker CSP, catching bundling failures hidden by the development server.
+Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 
 ## Go package checks
