@@ -132,7 +132,7 @@ func (observation getObservation) completeAndFinalize() {
 
 func (observation getObservation) lose(category clievent.ObserverLossCategory, cause error) {
 	if observation.runtime != nil {
-		observation.runtime.ReportObserverLoss(category, commandprojection.ObserverLossReason(cause), 1)
+		observation.runtime.ReportObservationRejection(category, commandprojection.ObserverLossReason(cause), commandprojection.ProjectionRejection(cause))
 	}
 }
 

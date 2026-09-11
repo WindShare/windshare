@@ -416,13 +416,17 @@ type ProtocolOperationSpec struct {
 type ProtocolOperationObserved struct{ spec ProtocolOperationSpec }
 
 func NewProtocolOperationObserved(spec ProtocolOperationSpec) (ProtocolOperationObserved, error) {
-	if !validProtocolOperationSpec(spec) {
-		return ProtocolOperationObserved{}, ErrInvalidEvent
+	if err := validateProtocolOperationSpec(spec); err != nil {
+		return ProtocolOperationObserved{}, err
 	}
 	return ProtocolOperationObserved{spec: spec}, nil
 }
 
 func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
+	return validateProtocolOperationSpec(spec) == nil
+}
+
+func validateProtocolOperationSpec(spec ProtocolOperationSpec) error {
 	_, roleOK := spec.Role.Name()
 	_, stageOK := spec.Stage.Name()
 	_, requestOK := spec.RequestKind.Name()
@@ -433,43 +437,67 @@ func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
 	contentDecisionOK := spec.ContentDecision.Valid()
 	if spec.Stage != ProtocolOperationSenderContentDecision &&
 		(contentDecisionOK || spec.ContentDecision != (SenderContentDecision{})) {
-		return false
+		return EventContractError{Field: "content_decision", Rule: "only_on_sender_content_decision"}
 	}
-	if !spec.Command.Valid() || !roleOK || !stageOK || !requestOK || !spec.RequestKind.Request() ||
-		!sendOK || !causeOK || !protocolFailureOK ||
-		!spec.ProtocolSession.Valid() || !spec.ProtocolOperation.Valid() ||
-		spec.HasLane != spec.Lane.Valid() || spec.HasResponse != responseOK ||
-		(!spec.HasDeadline && spec.DeadlineRemainingMillis != 0) ||
-		(!spec.HasSend && (spec.SendSettled || spec.SendAdmitted || spec.SendOutcome != ProtocolSendUnknown)) {
-		return false
+	switch {
+	case !spec.Command.Valid():
+		return EventContractError{Field: "command", Rule: "known_enum"}
+	case !roleOK:
+		return EventContractError{Field: "role", Rule: "known_enum"}
+	case !stageOK:
+		return EventContractError{Field: "stage", Rule: "known_enum"}
+	case !requestOK || !spec.RequestKind.Request():
+		return EventContractError{Field: "request_kind", Rule: "request_message"}
+	case !sendOK:
+		return EventContractError{Field: "send_outcome", Rule: "known_enum"}
+	case !causeOK:
+		return EventContractError{Field: "cause", Rule: "known_enum"}
+	case !protocolFailureOK:
+		return EventContractError{Field: "protocol_failure", Rule: "matching_operation_lane_and_settlement"}
+	case !spec.ProtocolSession.Valid():
+		return EventContractError{Field: "protocol_session_id", Rule: "nonzero_16_bytes"}
+	case !spec.ProtocolOperation.Valid():
+		return EventContractError{Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
+	case spec.HasLane != spec.Lane.Valid():
+		return EventContractError{Field: "lane", Rule: "presence_matches_identity"}
+	case spec.HasResponse != responseOK:
+		return EventContractError{Field: "response_kind", Rule: "presence_matches_kind"}
+	case !spec.HasDeadline && spec.DeadlineRemainingMillis != 0:
+		return EventContractError{Field: "deadline", Rule: "value_requires_presence"}
+	case !spec.HasSend && (spec.SendSettled || spec.SendAdmitted || spec.SendOutcome != ProtocolSendUnknown):
+		return EventContractError{Field: "send", Rule: "settlement_requires_presence"}
 	}
+	validStage := false
 	switch spec.Stage {
 	case ProtocolOperationReceiverWaitingActiveCapacity, ProtocolOperationReceiverWaitingRetainedCapacity,
 		ProtocolOperationReceiverAdmissionReady:
-		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationReceiverCompleted:
-		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			spec.HasResponse && spec.ResponseCount != 0 && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationReceiverFailed:
-		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			spec.Cause != ProtocolOperationCauseNone
 	case ProtocolOperationReceiverEnded:
-		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderRequestReceived:
-		return !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
+		validStage = !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
 			spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
 			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderResponseSettled:
-		return !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
+		validStage = !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
 			spec.Command == CommandShare && spec.Role == ProtocolRoleSender && spec.HasResponse
 	case ProtocolOperationSenderContentDecision:
-		return contentDecisionOK && spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
+		validStage = contentDecisionOK && spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
 			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone && spec.Failure.IsZero()
-	default:
-		return false
 	}
+	if !validStage {
+		stage, _ := spec.Stage.Name()
+		return EventContractError{Field: "stage_fields", Rule: stage}
+	}
+	return nil
 }
 
 func validProtocolOperationFailure(spec ProtocolOperationSpec) bool {

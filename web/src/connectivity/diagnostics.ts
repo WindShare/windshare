@@ -108,7 +108,15 @@ export interface V2PeerAttemptCorrelation extends V2AttemptOrdinalCorrelation {
   readonly attemptId: V2PeerAttemptIdentity
 }
 
+export interface V2PeerAttemptSummary {
+  readonly lastCompletedStage: V2BrowserConnectivityAttemptStage
+  readonly attemptElapsedMilliseconds: number
+  readonly stageElapsedMilliseconds: number
+  readonly deadlineExpired: boolean
+}
+
 type V2PeerAttemptBase = Readonly<{
+  summary?: V2PeerAttemptSummary
   eventName: 'peer_attempt'
   correlation: FailureCorrelation & Readonly<{
     protocolSessionId: V2ProtocolSessionIdentity

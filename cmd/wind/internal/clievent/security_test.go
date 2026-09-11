@@ -9,7 +9,7 @@ import (
 
 func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T) {
 	eventTypes := []reflect.Type{
-		reflect.TypeFor[PlatformSetupObserved](),
+		reflect.TypeFor[PlatformSetupObserved](), reflect.TypeFor[ObserverLossObserved](),
 		reflect.TypeFor[Ready](), reflect.TypeFor[SharingSubjectSelected](),
 		reflect.TypeFor[RelayConnected](), reflect.TypeFor[RelayRecovering](),
 		reflect.TypeFor[ContentPathSelected](), reflect.TypeFor[Fallback](),
@@ -62,6 +62,9 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				owner := value.Name()
 				diagnostic := value == reflect.TypeFor[diagnosticerror.Snapshot]() ||
 					value == reflect.TypeFor[diagnosticerror.Node]() || value == reflect.TypeFor[diagnosticerror.Frame]()
+				// Rejection labels are validated to at most 96 UTF-8 bytes;
+				// no arbitrary provider value or raw error is retained.
+				diagnostic = diagnostic || value == reflect.TypeFor[ObservationRejection]()
 				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}

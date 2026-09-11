@@ -1,3 +1,5 @@
+import { V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
+import { classifyV2PeerAttemptFailure } from '../../connectivity/v2-peer-failure'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../trace/lane-payload'
 import {
   PROTOCOL_FAILURE_SCOPES,
@@ -19,6 +21,9 @@ import {
   type UnknownRecord,
 } from './trace-payload-validation'
 
+const PEER_COMPLETED_STAGES = V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES
+  .filter(stage => stage !== 'failed' && stage !== 'negotiation-deadline-expired' && stage !== 'admission-deadline-expired')
+  .map(stage => stage.replaceAll('-', '_'))
 const MAX_AUTHENTICATED_RETRY_AFTER_MS = 30_000
 const PEER_FAILURE_CODES = [
   'peer_negotiation',
@@ -139,8 +144,11 @@ export function validatePeerAttempt(payload: UnknownRecord): void {
     case 'lane_hello_sent':
     case 'admission_response_received':
     case 'lane_attached':
-    case 'admitted':
       exactKeys(payload, ['stage'], [], 'peer stage payload')
+      return
+    case 'admitted':
+      exactKeys(payload, ['stage'], ['summary'], 'peer admitted payload')
+      validateAttemptSummary(payload.summary)
       return
     case 'admission_response_settled':
       exactKeys(payload, ['stage', 'settlement'], [], 'peer admission settlement payload')
@@ -149,7 +157,7 @@ export function validatePeerAttempt(payload: UnknownRecord): void {
     case 'failed':
       exactKeys(payload, [
         'stage', 'failed_at_stage', 'failure_scope', 'code', 'retryable',
-      ], [], 'peer failed payload')
+      ], ['summary', 'failure'], 'peer failed payload')
       member(payload.failed_at_stage, [
         'negotiation_deadline_armed', 'negotiation_deadline_expired', 'offer_created',
         'offer_sent', 'answer_received', 'datachannel_open', 'admission_deadline_armed',
@@ -160,9 +168,58 @@ export function validatePeerAttempt(payload: UnknownRecord): void {
       member(payload.failure_scope, ['attempt-transient', 'path-terminal', 'session-terminal'], 'peer failure scope')
       member(payload.code, PEER_FAILURE_CODES, 'peer failure code')
       booleanValue(payload.retryable, 'peer retryable')
+      validateAttemptSummary(payload.summary)
+      if (payload.failure !== undefined) validateAttemptFailure(payload.failure)
       return
     default:
       throw new TypeError('peer_attempt discriminant is invalid')
+  }
+}
+
+function validateAttemptSummary(input: unknown): void {
+  if (input === undefined) return
+  const summary = recordValue(input, 'peer attempt summary')
+  exactKeys(summary, ['last_completed_stage', 'attempt_elapsed_ms', 'stage_elapsed_ms', 'deadline_expired'], [],
+    'peer attempt summary')
+  member(summary.last_completed_stage,
+    PEER_COMPLETED_STAGES,
+    'peer last completed stage')
+  uint32(summary.attempt_elapsed_ms, 'peer attempt elapsed')
+  uint32(summary.stage_elapsed_ms, 'peer stage elapsed')
+  if ((summary.stage_elapsed_ms as number) > (summary.attempt_elapsed_ms as number)) {
+    throw new TypeError('peer stage elapsed exceeds attempt elapsed')
+  }
+  booleanValue(summary.deadline_expired, 'peer deadline expired')
+}
+
+function validateAttemptFailure(input: unknown): void {
+  const failure = recordValue(input, 'peer attempt failure')
+  switch (failure.kind) {
+    case 'local-transient':
+      exactKeys(failure, ['kind', 'phase', 'reason'], [], 'peer transient failure')
+      break
+    case 'local-policy':
+    case 'local-contract':
+    case 'authenticated-peer-operation':
+      exactKeys(failure, ['kind', 'code'], [], 'peer coded failure')
+      break
+    case 'authenticated-lane-rejection': {
+      exactKeys(failure, ['kind', 'rejection'], [], 'peer lane failure')
+      const rejection = recordValue(failure.rejection, 'peer lane rejection')
+      exactKeys(rejection, ['code', 'retryAfterMilliseconds'], [], 'peer lane rejection')
+      break
+    }
+    case 'session-terminal': {
+      exactKeys(failure, ['kind', 'terminal'], [], 'peer terminal failure')
+      exactKeys(recordValue(failure.terminal, 'peer terminal'), ['authority', 'code'], [], 'peer terminal')
+      break
+    }
+    default:
+      throw new TypeError('peer failure kind is invalid')
+  }
+  const decision = classifyV2PeerAttemptFailure(input)
+  if (decision.type === 'stop-path' && decision.reason === 'untyped-failure') {
+    throw new TypeError('peer failure fields are invalid')
   }
 }
 

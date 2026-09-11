@@ -275,6 +275,11 @@ func (emitter *shareRecordingEmitter) ReportObserverLoss(_ clievent.ObserverLoss
 	return true
 }
 
+func (emitter *shareRecordingEmitter) ReportObservationRejection(_ clievent.ObserverLossCategory, _ clievent.ObserverLossReason, _ clievent.ObservationRejection) bool {
+	emitter.lifecycleLoss++
+	return true
+}
+
 func (emitter *shareRecordingEmitter) detailedDiagnosticsEnabled() bool { return emitter.detailed }
 func (emitter *shareRecordingEmitter) traceRecordingEnabled() bool      { return emitter.trace }
 

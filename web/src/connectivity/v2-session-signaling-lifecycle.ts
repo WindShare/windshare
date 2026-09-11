@@ -35,6 +35,10 @@ type V2PeerAttemptTracePayload<Event = V2PeerAttemptTraceEvent> =
 export class BrowserAttemptLifecycle {
   readonly #trace: V2ConnectivityTraceSource | undefined
   readonly #correlation: () => V2PeerAttemptCorrelation
+  readonly #now: () => number
+  readonly #startedAt: number
+  #lastCompletedAt: number
+  #deadlineExpired = false
   #nextStageIndex = 1
   #terminal = false
   #offerOperationId: V2ProtocolOperationIdentity | undefined
@@ -44,7 +48,11 @@ export class BrowserAttemptLifecycle {
   constructor(
     correlation: () => V2PeerAttemptCorrelation,
     trace?: V2ConnectivityTraceSource,
+    now: () => number = () => performance.now(),
   ) {
+    this.#now = now
+    this.#startedAt = this.#readNow(0)
+    this.#lastCompletedAt = this.#startedAt
     this.#trace = trace
     this.#correlation = correlation
     this.#emit(() => this.#event({ stage: 'started' }))
@@ -95,6 +103,7 @@ export class BrowserAttemptLifecycle {
     deadlineBudgetMilliseconds: number,
   ): void {
     if (this.#terminal) return
+    this.#deadlineExpired = true
     if (phase === 'negotiation') {
       this.#emit(() => this.#event({
         stage: 'negotiation-deadline-expired',
@@ -180,6 +189,7 @@ export class BrowserAttemptLifecycle {
   ): void {
     if (this.#terminal || BROWSER_LINEAR_STAGES[this.#nextStageIndex] !== stage) return
     this.#nextStageIndex += 1
+    this.#lastCompletedAt = this.#readNow(this.#lastCompletedAt)
     this.#emit(createEvent)
     if (stage === 'admitted') this.#terminal = true
   }
@@ -206,7 +216,28 @@ export class BrowserAttemptLifecycle {
       waveAttemptOrdinal: attemptCorrelation.waveAttemptOrdinal,
       sessionAttemptOrdinal: attemptCorrelation.sessionAttemptOrdinal,
       ...payload,
+      ...(payload.stage === 'failed' || payload.stage === 'admitted'
+        ? { summary: this.#summary() } : {}),
     }) as V2PeerAttemptTraceEvent
+  }
+
+  #readNow(fallback: number): number {
+    try {
+      const now = this.#now()
+      return Number.isFinite(now) ? Math.max(fallback, now) : fallback
+    } catch {
+      return fallback
+    }
+  }
+
+  #summary() {
+    const now = this.#readNow(this.#lastCompletedAt)
+    return Object.freeze({
+      lastCompletedStage: BROWSER_LINEAR_STAGES[this.#nextStageIndex - 1] ?? 'started',
+      attemptElapsedMilliseconds: Math.max(0, Math.floor(now - this.#startedAt)),
+      stageElapsedMilliseconds: Math.max(0, Math.floor(now - this.#lastCompletedAt)),
+      deadlineExpired: this.#deadlineExpired,
+    })
   }
 
   #emit(createEvent: () => V2PeerAttemptTraceEvent): void {

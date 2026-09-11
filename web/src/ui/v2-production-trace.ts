@@ -502,6 +502,23 @@ function workerConsequenceSourceIndex(
 function projectPeerAttemptPayload(
   event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
 ): TraceEventPayloadByNameV1['peer_attempt'] {
+  const payload = projectPeerAttemptMilestone(event)
+  if (event.stage !== 'failed' && event.stage !== 'admitted') return payload
+  return {
+    ...payload,
+    ...(event.stage === 'failed' ? { failure: event.failure } : {}),
+    ...(event.summary === undefined ? {} : { summary: {
+      last_completed_stage: snake(event.summary.lastCompletedStage),
+      attempt_elapsed_ms: event.summary.attemptElapsedMilliseconds,
+      stage_elapsed_ms: event.summary.stageElapsedMilliseconds,
+      deadline_expired: event.summary.deadlineExpired,
+    } }),
+  }
+}
+
+function projectPeerAttemptMilestone(
+  event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
+): TraceEventPayloadByNameV1['peer_attempt'] {
   const ordinals = {
     wave_ordinal: decimal(event.waveOrdinal),
     wave_attempt_ordinal: decimal(event.waveAttemptOrdinal),
