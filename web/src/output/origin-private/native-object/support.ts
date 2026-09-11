@@ -13,12 +13,14 @@ export interface NativeSupportRuntime {
 
 /** Window API presence cannot establish a Dedicated Worker's sync-access capability. */
 export function probeNativeObjectSupport(runtime: NativeSupportRuntime): Promise<boolean> {
-  const WorkerConstructor = runtime.Worker
-  if (WorkerConstructor === undefined) return Promise.resolve(false)
+  // Vite recognizes Worker entries by this constructor name and the direct URL expression.
+  // Keep the injected constructor under that name so production emits compiled, same-origin JS.
+  const Worker = runtime.Worker
+  if (Worker === undefined) return Promise.resolve(false)
   return new Promise(resolve => {
     let worker: NativeSupportWorker
     try {
-      worker = new WorkerConstructor(new URL('./support-worker.ts', import.meta.url), { type: 'module' })
+      worker = new Worker(new URL('./support-worker.ts', import.meta.url), { type: 'module' })
     } catch {
       resolve(false)
       return
