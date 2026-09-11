@@ -33,6 +33,21 @@ import {
 } from '../../../src/diagnostics/export/projector'
 
 describe('IncidentRecordV1 projection', () => {
+  it('retains bounded exception evidence in the sealed incident export', () => {
+    const error = new TypeError('activation failed')
+    error.stack = 'TypeError: activation failed\n    at adopt (controller.ts:468:1)'
+    const facts = sealFacts([unclassifiedFailureFact({
+      stage: 'authority_activation', recoveryDisposition: 'terminal', error,
+    })])
+    const { record } = projector().project(input(facts))
+    expect(record.payload.trigger).toMatchObject({
+      kind: 'unclassified', payload: { unclassified: { exception: {
+        errorName: 'TypeError', message: error.message, stack: error.stack,
+      } } },
+    })
+    expect(JSON.parse(JSON.stringify(record))).toEqual(record)
+  })
+
   it('emits the exact envelope/payload order and correlation-safe immutable DTO', () => {
     const sourceRunId = identityBytes(1)
     const projector = createIncidentRecordProjector({

@@ -1,5 +1,5 @@
 import type { DirectZipMilestonePayloadV1 } from '../../../diagnostics/trace/model'
-import { projectOutputException } from '../../diagnostics/exception'
+import { projectDiagnosticException } from '../../../diagnostics/exception'
 import { snapshotIdentity } from '../../workspace/canonical'
 import {
   DIRECT_ZIP_CHECKPOINT_PHASES,
@@ -63,7 +63,7 @@ export function projectDirectZipDiagnosticV1(
 ): DirectZipMilestonePayloadV1 {
   assertClosedDirectZipDiagnostic(record)
   const nativeErrorClass = record.rawExceptionObserved
-    ? projectOutputException(record.rawException, () => '').nativeClass
+    ? projectDiagnosticException(record.rawException, () => '').nativeClass
     : undefined
   return Object.freeze({
     operation_id: snapshotIdentity(record.operationId, 16, 'direct ZIP diagnostic operation ID'),

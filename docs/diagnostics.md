@@ -55,6 +55,10 @@ current capture, `inspectLastFailure()` returns the last retained incident, and 
 retained evidence without disabling activation. Manual `disable()` also prevents later pages
 from restoring capture; already-open tabs retain their own capture state.
 
+Unclassified join, projection, and save-activation incidents include `payload.unclassified.exception`
+with the exception name, message, stack, and cause. Each text field is limited to 2 KiB; `null`
+means no exception evidence was supplied. The snapshot does not retain the original error object.
+
 Browser `content_scheduling` events distinguish ordinary content, standby probes, and straggler
 rescues. They include session/lane identity, dispatch sequence, file/block identity, estimated
 completion time, outstanding bytes, and measured throughput. Native receiver debug logs report the

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { DiagnosticExceptionProjection } from '../../src/diagnostics/exception'
 
 import {
   createFailureIdentity,
@@ -9,7 +10,6 @@ import {
   bindLocalOutputFailureProtocolAttempt,
   createAttemptOutputFailureCapability,
   createOutputFailureBinding,
-  type OutputExceptionProjection,
 } from '../../src/output/diagnostics'
 import {
   persistentOutputCapturedException,
@@ -165,7 +165,7 @@ function failedMilestone(
   })
 }
 
-function exceptionProjection(error: unknown): OutputExceptionProjection {
+function exceptionProjection(error: unknown): DiagnosticExceptionProjection {
   return persistentOutputCapturedException(error).projection
 }
 

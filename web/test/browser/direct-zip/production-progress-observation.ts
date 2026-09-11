@@ -1,5 +1,6 @@
 import type { V2BoundReceiveOperation, V2DirectZipProgressSnapshot } from '../../../src/ui/v2-receive-runtime'
 import { presentDirectZipProgress } from '../../../src/ui/v2-progress-presentation'
+import { presentReceiveLifecycle } from '../../../src/ui/v2-lifecycle-presentation'
 import type { ReceiveLifecycleState } from '../../../src/output/workspace/state'
 
 export function observeProductionDirectZipProgress(selectedBytes: bigint) {
@@ -13,8 +14,14 @@ export function observeProductionDirectZipProgress(selectedBytes: bigint) {
     const presentation = presentDirectZipProgress({
       progress, selectedBytes: { kind: 'exact', bytes: selectedBytes }, lifecycle,
     })
+    const lifecyclePresentation = presentReceiveLifecycle({
+      state: lifecycle, artifact: operation.intent.artifact, plan: operation.intent.plan,
+      activeControls: operation.activeControls,
+    })
     return { ...counters(progress), primary: presentation.primary,
-      percentage: presentation.percentage?.toString(), safeResume: presentation.safeResume }
+      percentage: presentation.percentage?.toString(), safeResume: presentation.safeResume,
+      lifecycle: lifecycle.kind, category: lifecyclePresentation.category,
+      actions: lifecyclePresentation.actions.map(action => action.kind) }
   }
 
   return {
