@@ -237,9 +237,10 @@ describe('v2 receiver LaneSet', () => {
 
   it('waits without polling until content policy admits a lane', async () => {
     const lanes = new V2LaneSet()
-    const waiting = lanes.waitForLane()
-    lanes.add(new DeferredLane(7), 'application-relay')
-    await expect(waiting).resolves.toBe(7)
+    const waiting = lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)
+    lanes.add(new ImmediateLane(7), 'application-relay')
+    await expect(waiting).resolves.toMatchObject({ data: Uint8Array.of(7) })
+    lanes.close()
   })
 
   it('does not demote a healthy lane when the caller cancels its request', async () => {
@@ -254,10 +255,10 @@ describe('v2 receiver LaneSet', () => {
     controller.abort(new DOMException('consumer left', 'AbortError'))
     await expect(cancelled).rejects.toMatchObject({ name: 'AbortError' })
 
-    expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(2))
+    expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(1))
     lanes.remove(2)
     expect((await lanes.fetch(demand(0n), ALL_ROUTES, new AbortController().signal)).data).toEqual(Uint8Array.of(1))
-    expect(first.calls).toBe(2)
+    expect(first.calls).toBe(3)
   })
 
   it('adopts a replacement lane that attaches while the failed attempt unwinds', async () => {

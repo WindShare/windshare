@@ -417,3 +417,15 @@ export function validateContentScheduling(payload: UnknownRecord): void {
   integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
   integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
 }
+
+export function validateRequestScheduling(payload: UnknownRecord): void {
+  exactKeys(payload, ['request_sequence', 'request_kind', 'route', 'transition',
+    'expected_ms', 'elapsed_ms', 'pending_requests'], [], 'request scheduling payload')
+  decimalFields(payload, ['request_sequence'], 'request scheduling')
+  member(payload.request_kind, ['open_revisions', 'list_children', 'renew_lease', 'release_lease'], 'request kind')
+  member(payload.route, ['application-relay', 'direct', 'turn'], 'request route')
+  member(payload.transition, ['dispatched', 'completed', 'failed', 'cancelled'], 'request transition')
+  for (const key of ['expected_ms', 'elapsed_ms', 'pending_requests']) {
+    integerBetween(payload[key], 0, Number.MAX_SAFE_INTEGER, key)
+  }
+}

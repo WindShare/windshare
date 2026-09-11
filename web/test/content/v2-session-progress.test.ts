@@ -1,3 +1,4 @@
+import { LaneRequests } from '../../src/content/scheduling/requests'
 import { describe, expect, it } from 'vitest'
 
 import type { V2CatalogPageRequest } from '../../src/catalog/v2-records'
@@ -30,7 +31,7 @@ describe('v2 catalog session scan progress', () => {
     ])
     const observed: bigint[] = []
     const result = await new V2CatalogSessionOperations(
-      session as unknown as V2ReceiverSessionRuntime,
+      session as unknown as V2ReceiverSessionRuntime, requestLanes(),
     ).fetchPage(request, new AbortController().signal, (progress) => {
       observed.push(progress.discoveredEntries)
     })
@@ -50,7 +51,7 @@ describe('v2 catalog session scan progress', () => {
         hostile,
       ])
       await expect(new V2CatalogSessionOperations(
-        session as unknown as V2ReceiverSessionRuntime,
+        session as unknown as V2ReceiverSessionRuntime, requestLanes(),
       ).fetchPage(request, new AbortController().signal)).rejects.toMatchObject({ scope: 'session' })
       expect(session.closeCalls).toBe(1)
     })
@@ -109,4 +110,10 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   const value = new Uint8Array(16)
   value[0] = first
   return value
+}
+
+function requestLanes(): LaneRequests {
+  const lanes = new LaneRequests()
+  lanes.add({ id: 1, epoch: 0, route: 'application-relay' })
+  return lanes
 }

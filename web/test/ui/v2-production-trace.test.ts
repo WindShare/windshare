@@ -51,6 +51,32 @@ it('exports scheduling decisions with session, lane, block, and completion estim
   expect(composition.runtime.status().retained_event_count).toBe('3')
 })
 
+it('exports request route decisions and outcomes with validated session correlation', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createProtocolTraceSource(composition.trace)
+  for (const transition of ['dispatched', 'completed', 'failed', 'cancelled'] as const) {
+    const event = {
+      eventName: 'request_scheduling' as const,
+      correlation: {
+        protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+        lane: { id: 2, epoch: 3 },
+      },
+      sequence: 7, kind: 'open_revisions' as const, laneId: 2, laneEpoch: 3,
+      route: 'direct' as const, transition, expectedMilliseconds: 2.25,
+      pendingRequests: 1, elapsedMilliseconds: 1.25,
+    }
+    const projected = projectProtocolTraceEvent(event)
+    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(projected.payload).toMatchObject({
+      request_sequence: '7', request_kind: 'open_revisions', route: 'direct', transition,
+      expected_ms: 3, elapsed_ms: 2, pending_requests: 1,
+    })
+    source.current?.(event)
+  }
+  expect(composition.runtime.status().retained_event_count).toBe('4')
+})
+
 it('exports a sealed unsampled final per-download record through the existing trace', () => {
     const metrics = new DownloadMetrics('01010101-0101-4101-8101-010101010101', true, () => 0)
     metrics.delivered('revision', 0n, 10n, 'direct')

@@ -67,6 +67,10 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     dispatch_sequence: '1', file_id: 'AQAAAAAAAAAAAAAAAAAAAA', block_index: '0', route: 'direct', purpose: 'content',
     expected_ms: 10, pending_bytes: '1024', bytes_per_second: 102400,
   },
+  request_scheduling: {
+    request_sequence: '1', request_kind: 'open_revisions', route: 'direct', transition: 'dispatched',
+    expected_ms: 25, elapsed_ms: 0, pending_requests: 1,
+  },
   operation_recovery: {
     transition: 'retry_available_lanes', operation_sequence: '1', generation_id: '1',
     availability_revision: '3', lane_count: '1', unchanged_availability_retries: '0',

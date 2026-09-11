@@ -347,6 +347,9 @@ describe('v2 session block lane deadlines', () => {
     const peerRoutes = new V2ConnectivityRouteAuthority()
     await expect(revisions.open(revision.fileId, peerRoutes)).rejects.toBe(beginFailure)
     expect(observedLaneId).toBe(1)
+    lanes.add(unusedLane(2), 'direct')
+    await expect(revisions.open(revision.fileId, peerRoutes)).rejects.toBe(beginFailure)
+    expect(observedLaneId).toBe(2)
 
     revisions.close()
     lanes.close()

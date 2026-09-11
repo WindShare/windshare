@@ -1,18 +1,17 @@
-import { HEDGE_CHECK_MILLISECONDS, type DispatchPurpose } from './exploration'
+import { HEDGE_CHECK_MILLISECONDS } from './exploration'
 
 export class ContentRaceWon extends Error {
   constructor() { super('Another authenticated content attempt won') }
 }
-
 export class ContentRaceFailures extends AggregateError {
   constructor(errors: readonly unknown[]) { super(errors, 'Content race failed') }
 }
 
-/** Only a live demand owns a timer. Losers retain their budget until they settle. */
+/** Duplicate work is reserved for blocked output, never for normal lane exploration. */
 export function raceContent<T>(
   signal: AbortSignal,
   primary: (signal: AbortSignal) => Promise<T>,
-  supplement: (signal: AbortSignal, purpose: 'probe' | 'rescue') => Promise<T> | undefined,
+  rescue: (signal: AbortSignal) => Promise<T> | undefined,
   retryable: (error: unknown) => boolean,
 ): Promise<T> {
   signal.throwIfAborted()
@@ -37,13 +36,12 @@ export function raceContent<T>(
       cleanup()
       pendingFailure = { reason }
       controller.abort(reason)
-      // Broker admission stays occupied until canceled primary work returns.
       finishFailure()
     }
     const abort = () => fail(signal.reason)
-    const start = (promise: Promise<T>, purpose: DispatchPurpose) => {
+    const start = (promise: Promise<T>) => {
       active += 1
-      promise.then((result) => {
+      promise.then(result => {
         active -= 1
         if (settled) { finishFailure(); return }
         settled = true
@@ -53,29 +51,24 @@ export function raceContent<T>(
       }, (error: unknown) => {
         active -= 1
         if (settled) { finishFailure(); return }
-        // Optional exploration cannot turn healthy primary content into a failure.
-        if (purpose === 'content' && !retryable(error)) { fail(error); return }
+        if (!retryable(error)) { fail(error); return }
         errors.push(error)
         if (active === 0) fail(new ContentRaceFailures(errors))
       })
     }
-    const explore = (purpose: 'probe' | 'rescue') => {
-      if (settled || supplemented) return
-      try {
-        const promise = supplement(controller.signal, purpose)
-        if (promise === undefined) return
-        supplemented = true
-        if (timer !== undefined) clearInterval(timer)
-        start(promise, purpose)
-      } catch (error) { fail(error) }
-    }
     signal.addEventListener('abort', abort, { once: true })
     try {
-      start(primary(controller.signal), 'content')
-      explore('probe')
-      if (!settled && !supplemented) {
-        timer = setInterval(() => explore('rescue'), HEDGE_CHECK_MILLISECONDS)
-      }
+      start(primary(controller.signal))
+      timer = setInterval(() => {
+        if (settled || supplemented) return
+        try {
+          const promise = rescue(controller.signal)
+          if (promise === undefined) return
+          supplemented = true
+          clearInterval(timer)
+          start(promise)
+        } catch (error) { fail(error) }
+      }, HEDGE_CHECK_MILLISECONDS)
     } catch (error) { fail(error) }
   })
 }
