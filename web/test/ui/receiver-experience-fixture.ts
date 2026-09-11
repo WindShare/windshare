@@ -12,7 +12,7 @@ export function experienceSnapshot(patch: Partial<V2ReceiverSnapshot> = {}): V2R
     startAdmission: { allowed: true, reason: null, canReleaseCurrent: false },
     activeReceiveOperationId: patch.output?.lifecycle?.operationId ?? null,
     taskDisplay: null,
-    pathActivity: { directConnected: false, content: 'idle' },
+    pathActivity: { lanes: [] },
     phase: 'awaiting-key', status: 'Waiting for a link.', error: null,
     rows: [], breadcrumbs: [], pageIndex: 0, pageCount: 0, entryCount: 0, omittedCount: 0n,
     selectedVisibleFiles: 0, selectedVisibleBytes: 0n, directoryRetryable: false,

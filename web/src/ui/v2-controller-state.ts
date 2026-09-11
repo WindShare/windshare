@@ -187,7 +187,7 @@ export function initialReceiverSnapshot(): V2ReceiverSnapshot {
     taskDisplay: null,
     phase: 'awaiting-key',
     status: 'Waiting for the capability key.',
-    pathActivity: { directConnected: false, content: 'idle' as const },
+    pathActivity: { lanes: [] },
     error: null,
     rows: Object.freeze([]),
     breadcrumbs: Object.freeze([]),

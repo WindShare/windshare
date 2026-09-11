@@ -135,7 +135,7 @@ function snapshot(
 ): V2ReceiverSnapshot {
   return Object.freeze({
     ...experienceSnapshot(),
-    pathActivity: { directConnected: false, content: 'idle' as const },
+    pathActivity: { lanes: [] },
     phase: 'browsing',
     status: 'Ready.',
     error: null,

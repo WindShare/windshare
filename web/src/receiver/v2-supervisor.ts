@@ -183,8 +183,8 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#onContentLaneAdmitted = options.onContentLaneAdmitted
     this.#onContentLaneDetached = options.onContentLaneDetached
     this.pathActivity.subscribe(snapshot => {
-      this.#directUsable = snapshot.directConnected
-      for (const metrics of this.#downloads.values()) metrics.availability(snapshot.directConnected)
+      this.#directUsable = snapshot.lanes.some(lane => lane.route === 'direct')
+      for (const metrics of this.#downloads.values()) metrics.availability(this.#directUsable)
     })
     this.connectivity = new V2SupervisedConnectivity(this.#policy)
     this.#current = this.#createGeneration(options.initial)

@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import type { ReceiverPathActivitySnapshot } from '../../receiver/path-activity'
 import { presentReceiverPathActivity } from '../connection/path-presentation'
+import { DownloadChannels } from '../connection/DownloadChannels'
 
 export function ConnectionDetails({ status, path }: {
   readonly status: string
@@ -24,7 +25,8 @@ export function ConnectionDetails({ status, path }: {
   return <div className="connection-details">
     <p>Your files and filenames are encrypted between you and the sender. Relays carry encrypted data.</p>
     <dl><dt>Share connection</dt><dd>{status}</dd><dt>Content path</dt>
-      <dd>{presentReceiverPathActivity(path) ?? 'No content is moving right now.'}</dd></dl>
+      <dd>{presentReceiverPathActivity(path) ?? 'No data received recently.'}</dd></dl>
+    <DownloadChannels path={path} />
     <details><summary>Developer diagnostics</summary>
       <p>Export connection and operation evidence to help investigate a problem.</p>
       <button type="button" onClick={exportDiagnostics}>Export diagnostics</button>
