@@ -8,6 +8,27 @@ import { newFileCheckpointV2 } from '../../src/output/persistence/checkpoint'
 import { deliveryFixture, deliveryIdentity, deliveryPolicy } from './browser-delivery-fixture'
 
 describe('immutable browser save policy', () => {
+  it('reuses only canonical immutable snapshots and validates clones and foreign policies', () => {
+    const f = deliveryFixture('direct')
+    const saved = f.advance(f.initial, { kind: 'target-saved', target: f.target })
+    expect(validateBrowserSavePolicy(f.policy)).toBe(f.policy)
+    expect(validateBrowserDeliveryRecord(f.policy, saved)).toBe(saved)
+    const clone = structuredClone(saved)
+    const validated = validateBrowserDeliveryRecord(f.policy, clone)
+    expect(validated).not.toBe(clone)
+    expect(validated).toEqual(saved)
+    if (clone.state.kind !== 'target-saved') throw new Error('Expected target proof')
+    Object.assign(clone.state.target.verifiedRanges[0]!, { end: 1n })
+    expect(() => validateBrowserDeliveryRecord(f.policy, Object.freeze(clone))).toThrow()
+    expect(() => validateBrowserDeliveryRecord(deliveryPolicy(), saved)).toThrow()
+    expect(() => validateBrowserSavePolicy(Object.freeze({ ...f.policy, digest: deliveryIdentity(99) }))).toThrow()
+    expect(Object.isFrozen(saved.source.canonicalPath)).toBe(true)
+    expect(Object.isFrozen(saved.state)).toBe(true)
+    if (saved.state.kind !== 'target-saved') throw new Error('Expected target proof')
+    expect(Object.isFrozen(saved.state.target.verifiedRanges)).toBe(true)
+    expect(Object.isFrozen(saved.state.target.verifiedRanges[0])).toBe(true)
+  })
+
   it('binds both independent storage authorities without changing the final intent', () => {
     const policy = deliveryPolicy()
     expect(validateBrowserSavePolicy(structuredClone(policy))).toEqual(policy)

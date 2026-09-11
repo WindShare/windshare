@@ -66,7 +66,6 @@ import {
 } from '../persistent-tree/stage-diagnostics'
 import {
   openFSAFileCheckpointRepository,
-  type FSAFileCheckpointRepository,
   type FSAFileCheckpointRepositoryFactory,
   type FSASemanticOutputRepository,
 } from './checkpoint-repository'
@@ -81,7 +80,9 @@ import type {
   CompatibleNameRepairProjectionSource,
 } from './compatible-name/coordinator'
 import { CompatibleNamePathAuthority } from './compatible-name/coordinator'
-import { compatibleNameFileTransaction } from './compatible-name/file-transaction'
+import { beginCompatibleNameFile } from './compatible-name/file-transaction'
+import { openDirectDeliveryFile } from '../browser-delivery/indexeddb/direct-file'
+import type { BrowserDirectFileDelivery } from '../browser-delivery/ports'
 import type {
   CompatibleNamePendingTerminalOutcomeV1,
   CompatibleNameRepairSummary,
@@ -210,7 +211,7 @@ export class FileSystemAccessOutputSession implements
   readonly #tree: BrowserFileSystemTree
   readonly #binding: PersistedFSAOperationBinding
   readonly #operationRepository: FSAOperationBindingRepository
-  readonly #checkpoints: FSAFileCheckpointRepository
+  readonly #checkpoints: FSASemanticOutputRepository
   readonly #rootLease: FSARootMutationLease
   readonly #compatibleNames: CompatibleNamePathAuthority
   readonly #stageAuthority: PersistentOutputStageAuthority | undefined
@@ -231,7 +232,7 @@ export class FileSystemAccessOutputSession implements
     tree: BrowserFileSystemTree
     binding: PersistedFSAOperationBinding
     operationRepository: FSAOperationBindingRepository
-    checkpoints: FSAFileCheckpointRepository
+    checkpoints: FSASemanticOutputRepository
     rootLease: FSARootMutationLease
     compatibleNames: CompatibleNamePathAuthority
     stageAuthority?: PersistentOutputStageAuthority
@@ -268,16 +269,14 @@ export class FileSystemAccessOutputSession implements
     return readBrowserDeliveryCheckpoint(this.#checkpoints, fileId)
   }
 
+  beginDirectFile(request: PersistentFileRequest, delivery: BrowserDirectFileDelivery): Promise<PersistentFileTransactionPort> {
+    this.#requireMaterializing()
+    return openDirectDeliveryFile(this.#checkpoints, delivery, () => this.beginFile(request))
+  }
+
   async beginFile(request: PersistentFileRequest): Promise<PersistentFileTransactionPort> {
     this.#requireMaterializing()
-    const transaction = await this.#materialization.beginFile(request)
-    return compatibleNameFileTransaction(
-      transaction,
-      () => this.#compatibleNames.commitFinalFile(
-        request.materializationRelativePath,
-        transaction.ownedObjectId,
-      ),
-    )
+    return beginCompatibleNameFile(request, this.#materialization, this.#compatibleNames)
   }
 
   ensureDirectory(

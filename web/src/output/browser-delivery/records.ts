@@ -13,6 +13,9 @@ import {
 } from './model'
 import { validateBrowserSavePolicy } from './policy'
 
+// IndexedDB clones must be validated again; reducer-owned frozen records need no repeated hashing.
+const canonicalRecords = new WeakSet<BrowserDeliveryRecordV1>()
+
 export function createBrowserDeliveryRecord(input: {
   readonly policy: BrowserSavePolicyV1
   readonly source: BrowserDeliverySource
@@ -38,6 +41,7 @@ export function validateBrowserDeliveryRecord(
   policy: BrowserSavePolicyV1,
   input: BrowserDeliveryRecordV1,
 ): BrowserDeliveryRecordV1 {
+  if (canonicalRecords.has(input) && input.policyDigest === validateBrowserSavePolicy(policy).digest) return input
   const value = snapshotBrowserDeliveryRecord(policy, input)
   if (input.digest !== value.digest) throw new TypeError('Browser delivery record digest mismatch')
   return value
@@ -70,7 +74,7 @@ export function snapshotBrowserDeliveryRecord(
     ...(localMutation === undefined ? {} : { localMutation }), placement: input.placement,
     placementReason: deliveryReason(input.placementReason), generation: input.generation, state,
   } as const
-  return Object.freeze({
+  const record = Object.freeze({
     ...value,
     digest: deliveryDigest('windshare/browser-file-delivery/v1', [
       value.schemaVersion, value.operationId, value.policyDigest, source.fileId, source.fileRevision,
@@ -79,6 +83,8 @@ export function snapshotBrowserDeliveryRecord(
       value.generation.toString(), stateFields(state),
     ]),
   })
+  canonicalRecords.add(record)
+  return record
 }
 
 export function browserDeliveryStagingPath(fileId: string): readonly string[] {

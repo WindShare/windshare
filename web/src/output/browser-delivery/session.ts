@@ -50,7 +50,7 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
   static openForCleanup(options: Omit<BrowserDeliveryMaterializationOptions, 'target' | 'choosePlacement'>): Promise<BrowserDeliveryCleanup> {
     const unavailable = async (): Promise<never> => { throw new DOMException('Cleanup has no destination write authority', 'InvalidStateError') }
     return this.#load({ ...options, choosePlacement: unavailable,
-      target: { beginFile: unavailable, ensureDirectory: unavailable, readCheckpoint: unavailable, close: async () => undefined } })
+      target: { beginFile: unavailable, beginDirectFile: unavailable, ensureDirectory: unavailable, readCheckpoint: unavailable, close: async () => undefined } })
   }
 
   static async #load(options: BrowserDeliveryMaterializationOptions): Promise<BrowserDeliveryMaterialization> {
@@ -117,6 +117,9 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       reservation = await this.#options.reserveStage(source)
       if (reservation === undefined) decision = { placement: 'direct', reason: 'staging-capacity-unavailable' }
     }
+    // Direct placement joins the target's initial claim before it can create or write the file.
+    if (decision.placement === 'direct') return createBrowserDeliveryRecord({ policy: this.#options.policy, source,
+      materializationRelativePath, placement: decision.placement, placementReason: decision.reason })
     try {
       record = await this.#options.repository.createFile(createBrowserDeliveryRecord({ policy: this.#options.policy, source, materializationRelativePath,
         placement: decision.placement, placementReason: decision.reason }))
@@ -147,8 +150,21 @@ export class BrowserDeliveryMaterialization implements PersistentMaterialization
       }
       // beginFile reserves an owned empty entry; FSA does not open its writable until
       // the first write. This prebinds final identity without allocating a target copy.
-      target = await this.#options.target.beginFile(record.placement === 'staged' || record.state.kind === 'restart-authorized'
-        ? { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' } } : openedRequest)
+      const targetRequest = record.placement === 'staged' || record.state.kind === 'restart-authorized'
+        ? { ...openedRequest, recovery: { pausedFile: 'restart-owned-file' as const } } : openedRequest
+      target = record.placement === 'direct'
+        ? await this.#options.target.beginDirectFile(targetRequest, {
+          currentRecord: () => this.#records.get(record.fileId) ?? record,
+          committed: committed => {
+            this.#changed(committed)
+            if (committed.generation === 1n) {
+              try { this.#options.trace?.({ name: 'browser.delivery.runtime', operation_id: committed.operationId,
+                file_id: committed.fileId, transition: 'placement', placement: committed.placement, placement_reason: committed.placementReason }) }
+              catch { /* Diagnostics cannot change committed placement. */ }
+            }
+          },
+        })
+        : await this.#options.target.beginFile(targetRequest)
       if (record.state.kind === 'restart-authorized') record = await this.#engine.completeRestart(record.fileId)
       if (record.placement === 'staged' && record.state.kind === 'receiving') {
         const reservation = await this.#reservation(record)

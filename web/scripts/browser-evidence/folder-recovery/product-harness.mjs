@@ -25,12 +25,12 @@ function observeTarget(session, fixture, tree, input) {
   return new Proxy({}, {
     get(_unused, key) {
       const target = session
-      if (key !== 'beginFile') {
+      if (key !== 'beginFile' && key !== 'beginDirectFile') {
         const value = Reflect.get(target, key, target)
         return typeof value === 'function' ? value.bind(target) : value
       }
-      return async request => {
-        const transaction = await target.beginFile(request)
+      return async (request, ...args) => {
+        const transaction = await target[key](request, ...args)
         const path = request.materializationRelativePath.join('/')
         const entry = entries.get(path)
         const staged = entry?.placement === 'staged' && fixture.input.mode !== 'direct'
@@ -83,6 +83,7 @@ async function open(input, reopen = false) {
     budgetPolicy: { ...DEFAULT_STAGING_BUDGET_POLICY, maximumTaskFiles: 1, maximumSiteFiles: 1 },
     costs,
     trace: trace => {
+      if (input.sample === false) return
       observations = observations.then(async () => {
         await emit('production-trace', { caseId: input.caseId, trace: JSON.parse(JSON.stringify(trace, (_, value) => typeof value === 'bigint' ? value.toString() : value)) })
         if (trace.transition === 'copy-failed') await emit('copy-failed', { caseId: input.caseId, path: trace.file_id })

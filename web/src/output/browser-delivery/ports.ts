@@ -2,11 +2,18 @@ import type { StagingExportAuthority } from '../staging-budget/export-authority'
 import type { FileCheckpointV2 } from '../persistence/checkpoint'
 import type {
   PersistentMaterializationPort,
+  PersistentFileRequest, PersistentFileTransactionPort,
 } from '../persistent-tree/contracts'
 import type { ObjectCapacity } from '../origin-private/object-capacity'
-import type { BrowserDeliverySource, BrowserFilePlacement } from './model'
+import type { BrowserDeliveryRecordV1, BrowserDeliverySource, BrowserFilePlacement } from './model'
+
+export interface BrowserDirectFileDelivery {
+  currentRecord(): BrowserDeliveryRecordV1
+  committed(record: BrowserDeliveryRecordV1): void
+}
 
 export interface BrowserDeliveryTargetPort extends PersistentMaterializationPort {
+  beginDirectFile(request: PersistentFileRequest, delivery: BrowserDirectFileDelivery): Promise<PersistentFileTransactionPort>
   readCheckpoint(fileId: string): Promise<FileCheckpointV2 | undefined>
 }
 
