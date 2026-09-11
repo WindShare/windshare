@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
 
 test('Direct ZIP writer recovers partial progress and commits the remaining content with its tail', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async name => {
     const path = '/test/browser/direct-zip/direct-zip-writer-bridge-probe.ts'
     const probe = await import(path) as typeof import('./direct-zip-writer-bridge-probe')
@@ -19,7 +20,7 @@ test('Direct ZIP writer recovers partial progress and commits the remaining cont
 
 for (const fault of ['before-publish', 'unknown-tail'] as const) {
   test(`Direct ZIP retains predecessor member rollback after a failed final ${fault} cut`, async ({ page }) => {
-    await page.goto('/')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async input => {
       const path = '/test/browser/direct-zip/direct-zip-writer-bridge-probe.ts'
       const probe = await import(path) as typeof import('./direct-zip-writer-bridge-probe')
