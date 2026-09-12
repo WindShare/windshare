@@ -38,9 +38,10 @@ pwsh -NoProfile -File scripts/deploy/wsrelay/build.ps1
 $manifest = Get-Content dist/deploy/wsrelay/manifest.json | ConvertFrom-Json
 ```
 
-The builder runs uncached `relay/...` tests, targets static Linux/amd64, and writes the binary plus a JSON
-manifest to `dist/deploy/wsrelay/`. `source_graph_status` is derived from the relay's actual in-repository
-dependency graph, so unrelated working-tree files do not make the deployment provenance ambiguous.
+The builder skips tests by default. Add `-RunTests` to run uncached `relay/...` tests before building.
+It targets static Linux/amd64 and writes the binary plus a JSON manifest to `dist/deploy/wsrelay/`.
+`source_graph_status` is derived from the relay's actual in-repository dependency graph, so unrelated
+working-tree files do not make the deployment provenance ambiguous.
 
 Install the remote helper once:
 

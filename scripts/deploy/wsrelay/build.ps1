@@ -1,5 +1,7 @@
 [CmdletBinding()]
-param()
+param(
+    [switch] $RunTests
+)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -51,8 +53,12 @@ try {
         GOWORK = 'off'
     }
 
-    Write-Output "wsrelay_build operation_id=$operationID milestone=tests_started"
-    Invoke-NativeCommand -FilePath 'go' -Arguments @('test', '-count=1', './relay/...')
+    if ($RunTests) {
+        Write-Output "wsrelay_build operation_id=$operationID milestone=tests_started"
+        Invoke-NativeCommand -FilePath 'go' -Arguments @('test', '-count=1', './relay/...')
+    } else {
+        Write-Output "wsrelay_build operation_id=$operationID milestone=tests_skipped reason=not_requested"
+    }
 
     # Deriving source paths from the compiler graph keeps the manifest accurate
     # when the relay starts consuming another in-repository package.
