@@ -1,6 +1,5 @@
 import type { V2BlockRouteEligibility, V2BlockTransportRoute } from '../v2-route-policy'
 import { V2SessionRuntimeError } from '../../session/v2-runtime-types'
-import type { LanePerformance } from './performance'
 
 const INITIAL_DIRECT_RESPONSE_MILLISECONDS = 25
 const INITIAL_RELAY_RESPONSE_MILLISECONDS = 250
@@ -8,11 +7,14 @@ const MINIMUM_RESPONSE_MILLISECONDS = 1
 const RESPONSE_SAMPLE_WEIGHT = 0.25
 
 export type LaneRequestKind = 'open_revisions' | 'list_children' | 'renew_lease' | 'release_lease'
+interface ContentQueueEstimate {
+  estimateQueueMilliseconds(): number
+}
 export interface RequestLane {
   readonly id: number
   readonly epoch: number
   readonly route: V2BlockTransportRoute
-  readonly content?: LanePerformance
+  readonly content?: ContentQueueEstimate
 }
 export interface RequestSchedulingObservation {
   readonly sequence: number
@@ -171,9 +173,7 @@ export class LaneRequests {
   #cost(state: RequestState, kind: LaneRequestKind): number {
     const response = state.response.get(kind) ?? (state.lane.route === 'direct'
       ? INITIAL_DIRECT_RESPONSE_MILLISECONDS : INITIAL_RELAY_RESPONSE_MILLISECONDS)
-    const content = state.lane.content
-    const queuedContent = content !== undefined && content.pendingBytes > 0
-      ? content.estimate(1) : 0
+    const queuedContent = state.lane.content?.estimateQueueMilliseconds() ?? 0
     return response * (state.pending + 1) + queuedContent
   }
 }
