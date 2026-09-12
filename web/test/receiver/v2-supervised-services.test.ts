@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
 
-import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
 import { byteRange, FileGeometry, type ByteRange } from '../../src/content/geometry'
 import {
   type V2BlockRouteEligibility,
@@ -130,19 +130,15 @@ function capacityBusyError(retryAfterMilliseconds = 400): V2RevisionCapacityBusy
     retryable: true,
     retryAfterMilliseconds,
   })
-  const protocolFailure = createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: failure.retryable,
-    retryAfterMilliseconds: failure.retryAfterMilliseconds,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  const protocolFailure = createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createV2ProtocolSessionIdentity(identity(30)),
       protocolOperationId: createV2ProtocolOperationIdentity(identity(31)),
-    }),
+    }), content: {
+      scope: 'revision', code: failure.code, retryable: failure.retryable, retryAfterMilliseconds: failure.retryAfterMilliseconds
+    }
   })
-  return new V2RevisionCapacityBusyError(failure, protocolFailure)
+  return new V2RevisionCapacityBusyError(protocolFailure)
 }
 
 function revision(revisionSeed = 3): V2FileRevisionDescriptor {

@@ -1,11 +1,11 @@
 import {
-  createDiagnosticBundleV1,
-  projectDiagnosticsStatusV1,
-  type DiagnosticBundleIdentityV1,
-  type DiagnosticsStatusV1,
-} from './export/diagnostic-bundle-v1'
+  createDiagnosticBundleV2,
+  projectDiagnosticsStatusV2,
+  type DiagnosticBundleIdentityV2,
+  type DiagnosticsStatusV2,
+} from './export/diagnostic-bundle-v2'
 import { encodeDiagnosticBundleNdjson } from './export/ndjson'
-import type { IncidentRecordV1 } from './export/incident-record-v1'
+import type { IncidentRecordV2 } from './export/incident-record-v2'
 import { projectDiagnosticsHealthV1 } from './export/projector'
 import { isDeeplyFrozen } from './export/json'
 import type { IncidentHealthReadPort } from './incident/health'
@@ -17,7 +17,7 @@ import type {
 import type {
   TraceCaptureSnapshot,
   TraceCoreStatus,
-  TraceEventObservationV1,
+  TraceEventObservationV2,
 } from './trace/model'
 
 export interface DiagnosticsIncidentRuntimePort {
@@ -31,7 +31,7 @@ export interface DiagnosticsTraceRuntimePort {
   disable(): TraceCoreStatus
   status(): TraceCoreStatus
   clear(): void
-  captureSnapshot(): TraceCaptureSnapshot<TraceEventObservationV1, IncidentLink> | undefined
+  captureSnapshot(): TraceCaptureSnapshot<TraceEventObservationV2, IncidentLink> | undefined
 }
 
 export interface DiagnosticsExportTimeSource {
@@ -39,7 +39,7 @@ export interface DiagnosticsExportTimeSource {
 }
 
 export interface BrowserDiagnosticsRuntimeOptions {
-  readonly identity: DiagnosticBundleIdentityV1
+  readonly identity: DiagnosticBundleIdentityV2
   readonly incident: DiagnosticsIncidentRuntimePort
   readonly trace: DiagnosticsTraceRuntimePort
   readonly timeSource?: DiagnosticsExportTimeSource
@@ -49,10 +49,10 @@ export interface BrowserDiagnosticsRuntimeOptions {
 }
 
 export interface DiagnosticsRuntimePort {
-  enable(): DiagnosticsStatusV1
-  disable(): DiagnosticsStatusV1
-  status(): DiagnosticsStatusV1
-  inspectLastFailure(): IncidentRecordV1 | null
+  enable(): DiagnosticsStatusV2
+  disable(): DiagnosticsStatusV2
+  status(): DiagnosticsStatusV2
+  inspectLastFailure(): IncidentRecordV2 | null
   export(): string
   clear(): void
 }
@@ -61,7 +61,7 @@ export const SYSTEM_DIAGNOSTICS_EXPORT_TIME_SOURCE: DiagnosticsExportTimeSource 
   Object.freeze({ captureTime: () => new Date().toISOString() })
 
 export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
-  readonly #identity: DiagnosticBundleIdentityV1
+  readonly #identity: DiagnosticBundleIdentityV2
   readonly #incident: DiagnosticsIncidentRuntimePort
   readonly #trace: DiagnosticsTraceRuntimePort
   readonly #timeSource: DiagnosticsExportTimeSource
@@ -75,19 +75,19 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
     this.#localOutputFailures = options.localOutputFailures
   }
 
-  enable(): DiagnosticsStatusV1 {
+  enable(): DiagnosticsStatusV2 {
     return this.#statusFrom(this.#trace.enable())
   }
 
-  disable(): DiagnosticsStatusV1 {
+  disable(): DiagnosticsStatusV2 {
     return this.#statusFrom(this.#trace.disable())
   }
 
-  status(): DiagnosticsStatusV1 {
+  status(): DiagnosticsStatusV2 {
     return this.#statusFrom(this.#trace.status())
   }
 
-  inspectLastFailure(): IncidentRecordV1 | null {
+  inspectLastFailure(): IncidentRecordV2 | null {
     try {
       const record = this.#incident.history.last()
       return record !== null && isDeeplyFrozen(record) ? record : null
@@ -106,8 +106,8 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
     const healthAtExport = projectDiagnosticsHealthV1(
       this.#incident.health.incidentHealthSnapshot(),
     )
-    const status = projectDiagnosticsStatusV1(traceStatus, healthAtExport)
-    const bundle = createDiagnosticBundleV1({
+    const status = projectDiagnosticsStatusV2(traceStatus, healthAtExport)
+    const bundle = createDiagnosticBundleV2({
       identity: this.#identity,
       time: this.#timeSource.captureTime(),
       incidents,
@@ -137,11 +137,11 @@ export class BrowserDiagnosticsRuntime implements DiagnosticsRuntimePort {
     }
   }
 
-  #statusFrom(status: TraceCoreStatus): DiagnosticsStatusV1 {
+  #statusFrom(status: TraceCoreStatus): DiagnosticsStatusV2 {
     const health = projectDiagnosticsHealthV1(
       this.#incident.health.incidentHealthSnapshot(),
     )
-    return projectDiagnosticsStatusV1(status, health)
+    return projectDiagnosticsStatusV2(status, health)
   }
 }
 

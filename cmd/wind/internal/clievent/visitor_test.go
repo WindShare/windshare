@@ -4,6 +4,7 @@ import (
 	"errors"
 	"github.com/windshare/windshare/core/diagnosticerror"
 	"testing"
+	"time"
 )
 
 type exhaustiveVisitor struct{ visited string }
@@ -85,7 +86,7 @@ func (visitor *exhaustiveVisitor) VisitSenderCapacityObserved(SenderCapacityObse
 func (visitor *exhaustiveVisitor) VisitSenderRevisionObserved(SenderRevisionObserved) error {
 	return visitor.mark("sender_revision")
 }
-func (visitor *exhaustiveVisitor) VisitProtocolOperationObserved(ProtocolOperationObserved) error {
+func (visitor *exhaustiveVisitor) VisitProtocolObservationObserved(ProtocolObservationObserved) error {
 	return visitor.mark("protocol_operation")
 }
 func (visitor *exhaustiveVisitor) VisitLaneSettlementObserved(LaneSettlementObserved) error {
@@ -161,7 +162,7 @@ func TestVisitorDispatchCoversEverySealedVariant(t *testing.T) {
 	)
 	rootPrefetch, _ := NewRootPrefetchObserved(RootPrefetchCommitted, 1, 2, 3)
 	protocolOperationID, _ := NewProtocolOperationID(bytes16(6))
-	protocolOperation, _ := NewProtocolOperationObserved(ProtocolOperationSpec{
+	protocolOperation, _ := NewProtocolOperationObserved(ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 		Command: CommandGet, Role: ProtocolRoleReceiver,
 		Stage:           ProtocolOperationReceiverFailed,
 		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,

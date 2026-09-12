@@ -4,7 +4,7 @@ import type { ReceiveLifecycleState } from '../../src/output/workspace'
 import { V2ReceiverApp } from '../../src/ui/V2ReceiverApp'
 import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 import { projectV2ReceiverTraceEvent } from '../../src/ui/v2-production-trace'
-import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
+import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import { composeTasks } from '../../src/ui/experience/task-composition'
 import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
 import { presentTask, retainedTaskFacts } from '../../src/ui/tasks'
@@ -67,7 +67,7 @@ describe('completed download ownership and presentation', () => {
     ])
     for (const event of releaseEvents) {
       const exported = projectV2ReceiverTraceEvent(event)
-      expect(() => validateTraceEventPayloadV1(exported.eventName, exported.payload)).not.toThrow()
+      expect(() => validateTraceEventPayloadV2(exported.eventName, exported.payload)).not.toThrow()
     }
     const html = renderToString(<V2ReceiverApp controller={controller} />)
     expect(html).toContain(kind === 'published' ? '>Saved<' : 'Download started — check browser downloads')

@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  createDiagnosticBundleV1,
-  projectDiagnosticsStatusV1,
-} from '../../../src/diagnostics/export/diagnostic-bundle-v1'
+  createDiagnosticBundleV2,
+  projectDiagnosticsStatusV2,
+} from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import { deepFreezeJson, utf8ByteLength } from '../../../src/diagnostics/export/json'
 import { encodeDiagnosticBundleNdjson } from '../../../src/diagnostics/export/ndjson'
-import type { IncidentRecordV1 } from '../../../src/diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from '../../../src/diagnostics/export/incident-record-v2'
 import { createFailureIdentity, createIncidentScopeIssuer } from '../../../src/diagnostics/incident'
 import {
   BoundedLocalOutputOperationFailureHistory,
@@ -91,12 +91,12 @@ describe('local output failure bundle projection', () => {
       },
     )
     const health = diagnosticsHealthV1()
-    const bundle = createDiagnosticBundleV1({
+    const bundle = createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-20T00:00:00Z',
       incidents: [nativeOutputIncident('9', '12'), nativeOutputIncident('3', '11')],
       localOutputFailures: [first, orphan, second],
-      status: projectDiagnosticsStatusV1(traceStatus(), health),
+      status: projectDiagnosticsStatusV2(traceStatus(), health),
       healthAtExport: health,
     })
     const encoded = encodeDiagnosticBundleNdjson(bundle)
@@ -192,7 +192,7 @@ describe('local output failure bundle projection', () => {
     )).rejects.toBe(raw)
 
     const health = diagnosticsHealthV1()
-    const bundle = createDiagnosticBundleV1({
+    const bundle = createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-20T00:00:00Z',
       incidents: [nativeOutputIncident(
@@ -200,7 +200,7 @@ describe('local output failure bundle projection', () => {
         incidentScope.identity.scopeSequence.toString(10),
       )],
       localOutputFailures: history.snapshot(),
-      status: projectDiagnosticsStatusV1(traceStatus(), health),
+      status: projectDiagnosticsStatusV2(traceStatus(), health),
       healthAtExport: health,
     })
     const projected = bundle.localOutputFailures[0]?.record.stageFailure
@@ -230,9 +230,9 @@ function requiredAttempt<T>(attempt: T | undefined): T {
   return attempt
 }
 
-function nativeOutputIncident(sequence: string, scopeSequence: string): IncidentRecordV1 {
+function nativeOutputIncident(sequence: string, scopeSequence: string): IncidentRecordV2 {
   return deepFreezeJson({
-    schema_version: 1,
+    schema_version: 2,
     sequence,
     time: '2026-08-20T00:00:00.000Z',
     elapsed_ms: sequence,

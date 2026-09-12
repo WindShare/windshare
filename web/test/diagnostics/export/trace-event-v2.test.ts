@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  createDiagnosticBundleV1,
-  projectDiagnosticsStatusV1,
-} from '../../../src/diagnostics/export/diagnostic-bundle-v1'
+  createDiagnosticBundleV2,
+  projectDiagnosticsStatusV2,
+} from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import { isDeeplyFrozen } from '../../../src/diagnostics/export/json'
 import {
   projectPerformancePhasePayloadV1,
@@ -11,19 +11,19 @@ import {
 } from '../../../src/diagnostics/export/projector'
 import { encodeDiagnosticBundleNdjson } from '../../../src/diagnostics/export/ndjson'
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../../src/diagnostics/export/trace-event-v1'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../../src/diagnostics/export/trace-event-v2'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import type { IncidentScopeIdentity } from '../../../src/diagnostics/incident/scope'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
 import { emitOutputTrace, outputTraceEvent } from '../../../src/output/diagnostics'
 import { createOutputTraceSource } from '../../../src/ui/v2-production-trace'
 import type {
-  TraceDomainEventNameV1,
-  TraceEventObservationV1,
-  TraceEventPayloadByNameV1,
+  TraceDomainEventNameV2,
+  TraceEventObservationV2,
+  TraceEventPayloadByNameV2,
 } from '../../../src/diagnostics/trace/model'
 import {
   PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1,
@@ -207,7 +207,7 @@ const AUTHORITY_ACTIVATION_CONTEXT = Object.freeze({
   plan_kind: 'direct_tree' as const,
 })
 
-const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
+const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('join_transition', { transition: 'joined' }),
   observation('browse_transition', { transition: 'started' }),
   observation('browse_transition', { transition: 'page_loaded', entry_count: '2' }),
@@ -332,25 +332,12 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
   correlated('protocol_operation', {
     transition: 'authenticated_failure',
     request_kind: 'renew_lease',
-    protocol_failure: protocolFailure({ retryable: true, retry_after_ms: 250 }),
+    protocol_error: protocolFailure({ retryable: true, retry_after_ms: 250 }),
   }),
   correlated('protocol_operation', {
     transition: 'authenticated_failure',
     request_kind: 'renew_lease',
-    protocol_failure: protocolFailure({ retryable: false }),
-  }),
-  correlated('protocol_operation', {
-    transition: 'authenticated_failure',
-    request_kind: 'renew_lease',
-    protocol_failure: protocolFailure({
-      retryable: true,
-      settlement: {
-        kind: 'response_send',
-        admitted: true,
-        settled: false,
-        outcome: 'unknown',
-      },
-    }),
+    protocol_error: protocolFailure({ retryable: false }),
   }),
   correlated('protocol_operation', {
     transition: 'settled',
@@ -566,19 +553,19 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV1[] = [
   }),
 ]
 
-describe('closed TraceEventObservationV1 boundary', () => {
+describe('closed TraceEventObservationV2 boundary', () => {
   it('detaches, freezes, sizes, records, and deterministically exports every union variant', () => {
     for (const candidate of VALID_OBSERVATIONS) {
-      const snapshot = snapshotTraceEventObservationV1(candidate)
-      expect(traceEventObservationNameV1(snapshot)).toBe(candidate.eventName)
-      expect(traceEventObservationBytesV1(snapshot)).toBeGreaterThan(0)
+      const snapshot = snapshotTraceEventObservationV2(candidate)
+      expect(traceEventObservationNameV2(snapshot)).toBe(candidate.eventName)
+      expect(traceEventObservationBytesV2(snapshot)).toBeGreaterThan(0)
       expect(snapshot).not.toBe(candidate)
       expect(isDeeplyFrozen(snapshot)).toBe(true)
     }
 
     let now = Date.parse('2026-08-19T01:00:00Z')
     const recorder = new BoundedTraceRecorder<
-      TraceEventObservationV1,
+      TraceEventObservationV2,
       IncidentLink,
       IncidentScopeIdentity
     >({
@@ -587,9 +574,9 @@ describe('closed TraceEventObservationV1 boundary', () => {
       scheduler: {
         schedule: () => Object.freeze({ cancel: () => undefined }),
       },
-      eventName: traceEventObservationNameV1,
-      snapshotEvent: snapshotTraceEventObservationV1,
-      eventBytes: traceEventObservationBytesV1,
+      eventName: traceEventObservationNameV2,
+      snapshotEvent: snapshotTraceEventObservationV2,
+      eventBytes: traceEventObservationBytesV2,
       snapshotIncident: (incident) => incident,
       incidentMarkerBytes: () => 1,
       incidentScope: (incident) => incident.scope,
@@ -607,7 +594,7 @@ describe('closed TraceEventObservationV1 boundary', () => {
     })
     const capture = recorder.snapshot()
     const health = diagnosticsHealthV1()
-    const status = projectDiagnosticsStatusV1(traceStatus({
+    const status = projectDiagnosticsStatusV2(traceStatus({
       state: capture.state,
       enabled: true,
       captureGeneration: capture.captureGeneration,
@@ -617,7 +604,7 @@ describe('closed TraceEventObservationV1 boundary', () => {
       incidentMarkerCount: capture.incidentMarkerCount,
       health: capture.health,
     }), health)
-    const bundle = createDiagnosticBundleV1({
+    const bundle = createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-19T01:30:00Z',
       incidents: [],
@@ -775,11 +762,11 @@ describe('closed TraceEventObservationV1 boundary', () => {
     }
     const bounded = clone(candidate)
     bounded.payload.native_error_name = 'x'.repeat(128)
-    expect(() => snapshotTraceEventObservationV1(bounded as TraceEventObservationV1)).not.toThrow()
+    expect(() => snapshotTraceEventObservationV2(bounded as TraceEventObservationV2)).not.toThrow()
   })
 
   it('retains ZIP coordination identity through the output trace adapter and bounds optional names', () => {
-    const events: TraceEventObservationV1[] = []
+    const events: TraceEventObservationV2[] = []
     const source = createOutputTraceSource({ current: event => events.push(event) })
     const payload = {
       operation_id: OPERATION_ID,
@@ -790,7 +777,7 @@ describe('closed TraceEventObservationV1 boundary', () => {
     }
     emitOutputTrace(source, () => outputTraceEvent('direct_zip_coordination', payload))
     expect(events).toEqual([{ eventName: 'direct_zip_coordination', payload }])
-    const snapshot = snapshotTraceEventObservationV1(events[0]!)
+    const snapshot = snapshotTraceEventObservationV2(events[0]!)
     expect(isDeeplyFrozen(snapshot)).toBe(true)
 
     for (const [key, maximumLength] of [
@@ -803,7 +790,7 @@ describe('closed TraceEventObservationV1 boundary', () => {
       }
       const bounded = clone(events[0])
       bounded.payload[key] = 'x'.repeat(maximumLength)
-      expect(() => snapshotTraceEventObservationV1(bounded as TraceEventObservationV1)).not.toThrow()
+      expect(() => snapshotTraceEventObservationV2(bounded as TraceEventObservationV2)).not.toThrow()
     }
   })
 
@@ -822,14 +809,14 @@ describe('closed TraceEventObservationV1 boundary', () => {
 
     const preCandidateRetry = clone(event('authority_transition', 'commit_pre_cut_retry'))
     delete preCandidateRetry.payload.receiver_operation_id
-    expect(() => snapshotTraceEventObservationV1(
-      preCandidateRetry as TraceEventObservationV1,
+    expect(() => snapshotTraceEventObservationV2(
+      preCandidateRetry as TraceEventObservationV2,
     )).not.toThrow()
 
     const preOperationCleanup = clone(event('authority_transition', 'cleanup_completed'))
     delete preOperationCleanup.payload.receiver_operation_id
-    expect(() => snapshotTraceEventObservationV1(
-      preOperationCleanup as TraceEventObservationV1,
+    expect(() => snapshotTraceEventObservationV2(
+      preOperationCleanup as TraceEventObservationV2,
     )).not.toThrow()
 
     const cleanupWithoutOwner = clone(event('authority_transition', 'cleanup_failed'))
@@ -843,23 +830,25 @@ describe('closed TraceEventObservationV1 boundary', () => {
 
   it('rejects open or contradictory protocol, peer, lifecycle, and correlation shapes', () => {
     const authenticated = clone(event('protocol_operation', 'authenticated_failure'))
-    ;(authenticated.payload.protocol_failure as UnknownRecord).detail = PRIVATE_TEXT
+    ;(authenticated.payload.protocol_error as UnknownRecord).detail = PRIVATE_TEXT
     expectRejected(authenticated)
 
     const missingProtocolField = clone(event('protocol_operation', 'authenticated_failure'))
-    delete (missingProtocolField.payload.protocol_failure as UnknownRecord).wire_code
+    delete (missingProtocolField.payload.protocol_error as UnknownRecord).code
     expectRejected(missingProtocolField)
 
     const responseAsRequest = clone(event('protocol_operation', 'authenticated_failure'))
     responseAsRequest.payload.request_kind = 'operation_error'
-    ;(responseAsRequest.payload.protocol_failure as UnknownRecord).request_kind = 'operation_error'
     expectRejected(responseAsRequest)
 
-    const openSettlement = clone(event('protocol_operation', 'authenticated_failure'))
-    const protocolSettlement = (openSettlement.payload.protocol_failure as UnknownRecord)
-      .settlement as UnknownRecord
-    protocolSettlement.message = PRIVATE_TEXT
-    expectRejected(openSettlement)
+    for (const settlement of [
+      { kind: 'received_authenticated' },
+      { kind: 'response_send', admitted: true, settled: false, outcome: 'unknown' },
+    ]) {
+      const legacy = clone(event('protocol_operation', 'authenticated_failure'))
+      ;(legacy.payload.protocol_error as UnknownRecord).settlement = settlement
+      expectRejected(legacy)
+    }
 
     const peer = clone(event('peer_attempt', 'admission_response_settled'))
     ;(peer.payload.settlement as UnknownRecord).provider_message = PRIVATE_TEXT
@@ -894,10 +883,13 @@ describe('closed TraceEventObservationV1 boundary', () => {
       expectRejected(invalid)
     }
 
-    const mismatch = clone(event('protocol_operation', 'authenticated_failure'))
-    ;((mismatch.payload.protocol_failure as UnknownRecord).correlation as UnknownRecord)
-      .protocol_operation_id = 'BQAAAAAAAAAAAAAAAAAAAA'
-    expectRejected(mismatch)
+    const nestedContext = clone(event('protocol_operation', 'authenticated_failure'))
+    ;(nestedContext.payload.protocol_error as UnknownRecord).correlation = CORRELATION
+    expectRejected(nestedContext)
+
+    const missingReceiveIdentity = clone(event('protocol_operation', 'authenticated_failure'))
+    missingReceiveIdentity.correlation = { protocol_session_id: SESSION_ID }
+    expectRejected(missingReceiveIdentity)
   })
 
   it('enforces canonical decimal, fixed-width number, and retry bounds', () => {
@@ -916,11 +908,11 @@ describe('closed TraceEventObservationV1 boundary', () => {
     }
 
     const wireCodeOverflow = clone(event('protocol_operation', 'authenticated_failure'))
-    ;(wireCodeOverflow.payload.protocol_failure as UnknownRecord).wire_code = 0x1_0000
+    ;(wireCodeOverflow.payload.protocol_error as UnknownRecord).code = 0x1_0000
     expectRejected(wireCodeOverflow)
 
     const retryOverflow = clone(event('protocol_operation', 'authenticated_failure'))
-    ;(retryOverflow.payload.protocol_failure as UnknownRecord).retry_after_ms = 30_001
+    ;(retryOverflow.payload.protocol_error as UnknownRecord).retry_after_ms = 30_001
     expectRejected(retryOverflow)
   })
 
@@ -931,50 +923,39 @@ describe('closed TraceEventObservationV1 boundary', () => {
     })
     expectRejected({ eventName: 'cleanup', payload: {} })
     const protocolProbe = clone(event('protocol_operation', 'authenticated_failure'))
-    ;(protocolProbe.payload.protocol_failure as UnknownRecord).detail = 'secret-capability'
+    ;(protocolProbe.payload.protocol_error as UnknownRecord).detail = 'secret-capability'
     expectRejected(protocolProbe)
   })
 })
 
-function observation<Name extends TraceDomainEventNameV1>(
+function observation<Name extends TraceDomainEventNameV2>(
   eventName: Name,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
-  return { eventName, payload } as TraceEventObservationV1
+  payload: TraceEventPayloadByNameV2[Name],
+): TraceEventObservationV2 {
+  return { eventName, payload } as TraceEventObservationV2
 }
 
 function correlated<
   Name extends 'protocol_operation' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
-  return { eventName, correlation: CORRELATION, payload } as TraceEventObservationV1
+  payload: TraceEventPayloadByNameV2[Name],
+): TraceEventObservationV2 {
+  return { eventName, correlation: CORRELATION, payload } as TraceEventObservationV2
 }
 
 function protocolFailure(input: {
   readonly retryable: boolean
   readonly retry_after_ms?: number
-  readonly settlement?:
-    | Readonly<{ kind: 'received_authenticated' }>
-    | Readonly<{
-        kind: 'response_send'
-        admitted: boolean
-        settled: boolean
-        outcome: 'unknown' | 'delivered' | 'dropped'
-      }>
 }): Extract<
-  TraceEventPayloadByNameV1['protocol_operation'],
+  TraceEventPayloadByNameV2['protocol_operation'],
   { readonly transition: 'authenticated_failure' }
->['protocol_failure'] {
+>['protocol_error'] {
   return {
-    request_kind: 'renew_lease',
-    wire_scope: 'revision',
-    wire_code: 7,
+    scope: 'revision',
+    code: 7,
     retryable: input.retryable,
     ...(input.retry_after_ms === undefined ? {} : { retry_after_ms: input.retry_after_ms }),
-    settlement: input.settlement ?? { kind: 'received_authenticated' },
-    correlation: CORRELATION,
   }
 }
 
@@ -990,22 +971,22 @@ function clone(value: unknown): MutableObservation {
 }
 
 function expectRejected(value: unknown): void {
-  expect(() => snapshotTraceEventObservationV1(
-    value as TraceEventObservationV1,
+  expect(() => snapshotTraceEventObservationV2(
+    value as TraceEventObservationV2,
   )).toThrow()
 }
 
 function uniqueByEventName(
-  observations: readonly TraceEventObservationV1[],
-): readonly TraceEventObservationV1[] {
-  const unique = new Map<string, TraceEventObservationV1>()
+  observations: readonly TraceEventObservationV2[],
+): readonly TraceEventObservationV2[] {
+  const unique = new Map<string, TraceEventObservationV2>()
   for (const observation of observations) {
     if (!unique.has(observation.eventName)) unique.set(observation.eventName, observation)
   }
   return [...unique.values()]
 }
 
-function event(eventName: string, discriminant: string): TraceEventObservationV1 {
+function event(eventName: string, discriminant: string): TraceEventObservationV2 {
   const found = VALID_OBSERVATIONS.find((candidate) =>
     candidate.eventName === eventName &&
     (candidate.payload as UnknownRecord).transition === discriminant ||

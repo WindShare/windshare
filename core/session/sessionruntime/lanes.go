@@ -155,7 +155,7 @@ func (router laneInboundRouter) RouteInbound(
 	if err == nil && disposition == protocolsession.OperationDeliver &&
 		router.runtime.role == protocolsession.RoleSender && receiverRequestKind(message.Kind()) &&
 		router.runtime.protocolOperationTracingEnabled() && message.Kind() != protocolsession.MessageRequestBlocks {
-		router.runtime.traceProtocolOperation(ProtocolOperationTrace{
+		router.runtime.traceProtocolOperation(ProtocolOperationObservation{
 			Stage:       ProtocolOperationSenderRequestReceived,
 			OperationID: binding.operationID, RequestKind: message.Kind(),
 			Lane: router.identity, HasLane: true,

@@ -254,8 +254,8 @@ export class V2SessionSignalingRoute implements SignalingRoute, V2PeerOfferAttem
 
   async #acceptSenderMessage(message: V2SessionMessage): Promise<void> {
     if (message.kind === V2_MESSAGE_KIND.operationError) {
-      const protocolFailure = this.#session.authenticatedProtocolFailure(message)
-      if (protocolFailure.wireScope !== 'peer') {
+      const protocolFailure = this.#session.authenticatedReceivedProtocolError(message)
+      if (protocolFailure.content.scope !== 'peer') {
         throw new V2PeerProtocolError('Peer operation received an error from another scope')
       }
       throw new V2AuthenticatedPeerOperationError(protocolFailure)

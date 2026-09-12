@@ -14,27 +14,27 @@ import {
   PRESENTATION_BOUNDARIES,
   PRESENTATION_EXCLUSION_REASONS,
   PRESENTATION_OUTCOMES,
-  PROTOCOL_FAILURE_SCOPES,
+  PROTOCOL_ERROR_SCOPES,
   PROTOCOL_MESSAGE_KINDS_V1,
   PROTOCOL_REQUEST_KINDS_V1,
   RECOVERY_DISPOSITIONS,
   createFailureCorrelation,
   createFailureIdentity,
   createIncidentScopeIssuer,
-  createProtocolFailure,
+  createReceivedProtocolError,
   excludedPresentationDecision,
   faultFailureFact,
   incidentPresentationDecision,
   isFailureCorrelation,
   isFailureFact,
   isPresentationDecision,
-  isProtocolFailure,
+  isReceivedProtocolError,
   lifecycleFailureFact,
   nativeOutputFailureFact,
   presentationBoundaryForScope,
   unclassifiedFailureFact,
-  type ProtocolFailure,
-  type ProtocolFailureInput,
+  type ReceivedProtocolError,
+  type ReceivedProtocolErrorInput,
 } from '../../../src/diagnostics/incident'
 
 describe('incident frozen contracts', () => {
@@ -88,7 +88,7 @@ describe('incident frozen contracts', () => {
       'lane_attach',
       'peer_offer',
     ])
-    expect(PROTOCOL_FAILURE_SCOPES).toEqual([
+    expect(PROTOCOL_ERROR_SCOPES).toEqual([
       'directory',
       'revision',
       'block',
@@ -117,7 +117,7 @@ describe('incident frozen contracts', () => {
       NATIVE_FAILURE_CLASSES,
       PROTOCOL_MESSAGE_KINDS_V1,
       PROTOCOL_REQUEST_KINDS_V1,
-      PROTOCOL_FAILURE_SCOPES,
+      PROTOCOL_ERROR_SCOPES,
       FAILURE_IDENTITY_KINDS,
       PRESENTATION_BOUNDARIES,
       PRESENTATION_OUTCOMES,
@@ -222,37 +222,22 @@ describe('incident frozen contracts', () => {
     for (const requestKind of PROTOCOL_MESSAGE_KINDS_V1) {
       const candidate = { ...valid, requestKind }
       const expected = requestKinds.has(requestKind)
-      expect(isProtocolFailure(candidate), requestKind).toBe(expected)
+      expect(isReceivedProtocolError(candidate), requestKind).toBe(expected)
       if (expected) {
-        expect(constructProtocolFailure(candidate), requestKind).toMatchObject({
+        expect(constructReceivedProtocolError(candidate), requestKind).toMatchObject({
           requestKind,
         })
       } else {
         expect(
-          constructProtocolFailure.bind(undefined, candidate),
+          constructReceivedProtocolError.bind(undefined, candidate),
           requestKind,
         ).toThrow(/invalid/)
       }
     }
   })
 
-  it('requires retry-after exactly for retryable authenticated receive settlement', () => {
+  it('requires a bounded peer retry hint exactly when retryable', () => {
     const valid = protocolFailure()
-    const common = {
-      requestKind: valid.requestKind,
-      wireScope: valid.wireScope,
-      wireCode: valid.wireCode,
-      correlation: valid.correlation,
-    }
-    const settlements = [
-      { kind: 'received_authenticated' },
-      {
-        kind: 'response_send',
-        admitted: true,
-        settled: true,
-        outcome: 'delivered',
-      },
-    ] as const
     const retryAfterCases = [
       { name: 'absent', present: false },
       { name: 'explicit-undefined', present: true, value: undefined },
@@ -263,82 +248,52 @@ describe('incident frozen contracts', () => {
       { name: 'maximum', present: true, value: 30_000 },
       { name: 'above-maximum', present: true, value: 30_001 },
     ] as const
-
-    for (const settlement of settlements) {
-      for (const retryable of [false, true] as const) {
-        for (const retryAfter of retryAfterCases) {
-          const candidate = {
-            ...common,
-            retryable,
-            settlement,
-            ...(retryAfter.present
-              ? { retryAfterMilliseconds: retryAfter.value }
-              : {}),
-          }
-          const requiresRetryAfter =
-            settlement.kind === 'received_authenticated' && retryable
-          const hasValidRetryAfter = retryAfter.present &&
-            typeof retryAfter.value === 'number' &&
-            Number.isInteger(retryAfter.value) &&
-            retryAfter.value >= 1 &&
-            retryAfter.value <= 30_000
-          const expected = requiresRetryAfter
-            ? hasValidRetryAfter
-            : !retryAfter.present
-          const caseName =
-            `${settlement.kind}/retryable=${retryable}/${retryAfter.name}`
-          expect(isProtocolFailure(candidate), caseName).toBe(expected)
-          if (expected) {
-            const failure = constructProtocolFailure(candidate)
-            expect(
-              Object.hasOwn(failure, 'retryAfterMilliseconds'),
-              caseName,
-            ).toBe(requiresRetryAfter)
-          } else {
-            expect(
-              constructProtocolFailure.bind(undefined, candidate),
-              caseName,
-            ).toThrow(/invalid/)
-          }
+    for (const retryable of [false, true]) {
+      for (const retryAfter of retryAfterCases) {
+        const content = {
+          scope: valid.content.scope,
+          code: valid.content.code,
+          retryable,
+          ...(retryAfter.present ? { retryAfterMilliseconds: retryAfter.value } : {}),
         }
+        const candidate = { ...valid, content }
+        const expected = retryable
+          ? retryAfter.present && typeof retryAfter.value === 'number' &&
+            Number.isInteger(retryAfter.value) && retryAfter.value >= 1 && retryAfter.value <= 30_000
+          : !retryAfter.present
+        expect(isReceivedProtocolError(candidate), retryAfter.name).toBe(expected)
+        if (expected) expect(Object.isFrozen(constructReceivedProtocolError(candidate).content)).toBe(true)
+        else expect(() => constructReceivedProtocolError(candidate)).toThrow(/invalid/)
       }
     }
   })
 
-  it('validates protocol bounds, settlement truth, and absence of remote text', () => {
+  it('snapshots received content and rejects sender settlement or remote text', () => {
     const valid = protocolFailure()
-    expect(isProtocolFailure(createProtocolFailure(valid))).toBe(true)
-    expect(() => createProtocolFailure({
+    const content = { ...valid.content }
+    const lane = { id: 4, epoch: 0 }
+    const received = createReceivedProtocolError({
       ...valid,
-      wireCode: 0x1_0000,
-    })).toThrow(/invalid/)
-
-    const validResponse = createProtocolFailure({
-      requestKind: valid.requestKind,
-      wireScope: valid.wireScope,
-      wireCode: valid.wireCode,
-      retryable: true,
-      settlement: {
-        kind: 'response_send',
-        admitted: true,
-        settled: true,
-        outcome: 'delivered',
-      },
-      correlation: valid.correlation,
+      content,
+      correlation: { ...valid.correlation, lane },
     })
-    expect(() => createProtocolFailure({
-      ...validResponse,
-      settlement: {
-        kind: 'response_send',
-        admitted: true,
-        settled: false,
-        outcome: 'invalid',
-      } as unknown as ProtocolFailure['settlement'],
+    lane.id = 9
+    expect(received.correlation.lane).toEqual({ id: 4, epoch: 0 })
+    content.code = 1
+    expect(received.content.code).toBe(0xffff)
+    expect(received.content).not.toBe(content)
+    expect(Object.isFrozen(received.content)).toBe(true)
+    expect(Object.isFrozen(received.correlation)).toBe(true)
+    expect(isReceivedProtocolError(received)).toBe(true)
+    expect(() => createReceivedProtocolError({
+      ...valid, content: {
+        ...valid.content, code: 65536
+      }
     })).toThrow(/invalid/)
-    expect(isProtocolFailure({
-      ...valid,
-      remoteMessage: 'secret',
-    })).toBe(false)
+    expect(isReceivedProtocolError({ ...valid, settlement: { kind: 'received_authenticated' } })).toBe(false)
+    expect(isReceivedProtocolError({ ...valid, settlement: { kind: 'response_send', admitted: true, settled: false, outcome: 'unknown' } })).toBe(false)
+    expect(isReceivedProtocolError({ ...valid, remoteMessage: 'secret' })).toBe(false)
+    expect(isReceivedProtocolError({ ...valid, content: { ...valid.content, requestKind: valid.requestKind } })).toBe(false)
   })
 
   it('keeps native and lifecycle payloads closed to applicable codes and reasons', () => {
@@ -401,21 +356,12 @@ describe('incident frozen contracts', () => {
   })
 })
 
-function constructProtocolFailure(value: unknown): ProtocolFailure {
-  return createProtocolFailure(value as ProtocolFailureInput)
+function constructReceivedProtocolError(value: unknown): ReceivedProtocolError {
+  return createReceivedProtocolError(value as ReceivedProtocolErrorInput)
 }
 
-function protocolFailure(): ProtocolFailure {
-  return {
-    requestKind: 'request_blocks',
-    wireScope: 'block',
-    wireCode: 0xffff,
-    retryable: true,
-    retryAfterMilliseconds: 30_000,
-    settlement: {
-      kind: 'received_authenticated',
-    },
-    correlation: {
+function protocolFailure(): ReceivedProtocolError {
+  return { requestKind: 'request_blocks', correlation: {
       protocolSessionId: createFailureIdentity(
         'protocol_session',
         identityBytes(4),
@@ -425,8 +371,7 @@ function protocolFailure(): ProtocolFailure {
         identityBytes(5),
       ),
       lane: { id: 0xffff_ffff, epoch: 0 },
-    },
-  }
+    }, content: { scope: 'block', code: 0xffff, retryable: true, retryAfterMilliseconds: 30_000 } }
 }
 
 function identityBytes(seed: number): Uint8Array {

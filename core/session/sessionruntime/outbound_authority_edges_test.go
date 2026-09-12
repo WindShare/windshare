@@ -3,6 +3,7 @@ package sessionruntime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -159,21 +160,78 @@ func TestOutboundTransactionFailClosesReplayAuthorityContractViolations(t *testi
 	}
 }
 
-func TestOutboundTransactionDoesNotRetryDefinitiveOrUnsettledDrops(t *testing.T) {
-	completion := protocolsession.SendCompletion{
-		Settled: true,
-		Outcome: protocolsession.SendOutcomeDropped,
-	}
-	if outcome, done := completedOutboundAttempt(completion, nil); !done || outcome != protocolsession.SendOutcomeDropped {
-		t.Fatalf("definitive drop outcome=%d done=%t", outcome, done)
-	}
-
-	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	transaction := &outboundTransaction{runtime: runtime}
-	physicalErr := errors.New("transport settlement is still pending")
-	unsettled := protocolsession.SendCompletion{RetryableAcrossLane: true}
-	if err := transaction.retryBoundaryError(context.Background(), unsettled, physicalErr); !errors.Is(err, physicalErr) || !errors.Is(err, errOutboundNotDelivered) {
-		t.Fatalf("unsettled retry boundary error=%v", err)
+func TestResponseReplayAuthorityRejectionBeforeReceiptFailsRuntime(t *testing.T) {
+	for _, response := range []struct {
+		name    string
+		request protocolsession.MessageKind
+		kind    protocolsession.MessageKind
+	}{
+		{"final response", protocolsession.MessageRequestBlocks, protocolsession.MessageOperationComplete},
+		{"peer continuation", protocolsession.MessagePeerOffer, protocolsession.MessagePeerCandidate},
+	} {
+		for _, rejection := range []struct {
+			name string
+			err  error
+		}{
+			{"direct", protocolsession.ErrOutboundReplayPermit},
+			{"wrapped", fmt.Errorf("writer admission: %w", protocolsession.ErrOutboundReplayPermit)},
+		} {
+			t.Run(response.name+"/"+rejection.name, func(t *testing.T) {
+				runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
+				recorder := newProtocolTraceRecorder(runtime)
+				operationID := id16[protocolsession.OperationID](138)
+				request, err := protocolsession.NewMessage(response.request, &operationID, []byte{0xf6})
+				if err != nil {
+					t.Fatal(err)
+				}
+				ctx, _ := testOutboundOperationContext(t, runtime, runtime.initial, request)
+				attempts := 0
+				result, err := (senderOutbound{runtime: runtime}).executeResponse(
+					ctx, response.kind, operationID, ProtocolErrorContent{},
+					func(*outboundTransaction) (outboundLaneAttempt, error) {
+						return func(selectedLane, protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
+							attempts++
+							// A writer-policy invariant violation can reject continuation
+							// admission before receipt ownership exists.
+							return protocolsession.SendReceipt{}, rejection.err
+						}, nil
+					},
+				)
+				attempt, ok := result.Attempt(0)
+				if !ok || attempts != 1 || result.AttemptCount() != 1 ||
+					attempt.End() != protocolsession.SendAttemptEndRejectedBeforeReceipt || attempt.Settled() ||
+					attempt.PolicyAdmitted() || attempt.Outcome() != protocolsession.SendOutcomeDropped ||
+					attempt.TransportDisposition() != 0 ||
+					result.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent {
+					t.Fatalf("rejection facts changed: attempts=%d result=%+v attempt=%+v", attempts, result, attempt)
+				}
+				identity := attempt.Identity()
+				if identity.ResponseSequence == 0 || identity.AttemptSequence != 1 ||
+					identity.LaneID != runtime.initial.ID || identity.LaneEpoch != runtime.initial.Epoch ||
+					attempt.Cause().Kind() != protocolsession.SendAttemptCauseAdmissionFailure ||
+					attempt.Cause().Detail() != rejection.err.Error() || attempt.Cause().Truncated() {
+					t.Fatalf("rejection identity or cause changed: attempt=%+v", attempt)
+				}
+				if _, pending := result.PendingAttempt(); pending {
+					t.Fatal("receipt-less rejection retained a pending receipt")
+				}
+				facts := recorder.facts()
+				if len(facts) != 1 {
+					t.Fatalf("rejection observations=%v", facts)
+				}
+				returned, ok := facts[0].(ResponseSendReturned)
+				if !ok || returned.Result() != result || returned.ResponseSequence() != identity.ResponseSequence {
+					t.Fatalf("returned observation lost rejection facts: fact=%+v result=%+v", facts[0], result)
+				}
+				if result.End() != protocolsession.ResponseSendEndAuthorityLost ||
+					!errors.Is(err, rejection.err) || !errors.Is(err, errOutboundReplayAuthority) ||
+					runtime.ctx.Err() == nil || !errors.Is(runtime.Err(), errOutboundReplayAuthority) ||
+					!runtime.operations.Terminated() || runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 {
+					t.Fatalf("authority rejection did not fail-close: result=%+v err=%v runtimeErr=%v terminal=%t routes=%d active=%d",
+						result, err, runtime.Err(), runtime.operations.Terminated(), runtime.routes.len(), runtime.operations.ActiveCount())
+				}
+			})
+		}
 	}
 }
 

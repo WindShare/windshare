@@ -14,7 +14,7 @@ import {
   type V2ContentGeneration,
   type V2ContentGenerationProvider,
 } from '../../src/receiver/v2-supervised-content'
-import { createProtocolFailure } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError } from '../../src/diagnostics/incident/fact'
 import { createV2ProtocolOperationIdentity, createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import { V2_REVISION_CODE_LEASE_EXPIRED } from '../../src/content/v2-flow'
 
@@ -26,13 +26,13 @@ function descriptor(): V2FileRevisionDescriptor {
   }
 }
 function remoteFailure(code = V2_REVISION_CODE_LEASE_EXPIRED): V2RemoteOperationError {
-  return new V2RemoteOperationError(createProtocolFailure({
-    requestKind: 'renew_lease', wireScope: 'revision', wireCode: code, retryable: false,
-    settlement: { kind: 'received_authenticated' },
-    correlation: {
+  return new V2RemoteOperationError(createReceivedProtocolError({
+    requestKind: 'renew_lease', correlation: {
       protocolSessionId: createV2ProtocolSessionIdentity(id(10)),
-      protocolOperationId: createV2ProtocolOperationIdentity(id(11)),
-    },
+      protocolOperationId: createV2ProtocolOperationIdentity(id(11))
+    }, content: {
+      scope: 'revision', code: code, retryable: false
+    }
   }))
 }
 function deferred() {

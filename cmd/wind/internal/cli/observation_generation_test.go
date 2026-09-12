@@ -30,6 +30,7 @@ func (source *testRelayObservationSource) CompleteObservations() relayv2.Lifecyc
 func TestGetObservationKeepsConcurrentEndpointsAndDrainsReplacedEndpoint(t *testing.T) {
 	runtime, _ := newGetReportingRuntime(t, false, true)
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	first := &testRelayObservationSource{endpoint: v2.RelayEndpoint{Identity: v2.RelayIdentity{1}}, stream: make(chan relayv2.LifecycleTrace), loss: 2}
 	second := &testRelayObservationSource{endpoint: v2.RelayEndpoint{Identity: v2.RelayIdentity{2}}, stream: make(chan relayv2.LifecycleTrace), loss: 3}
 	replacement := &testRelayObservationSource{endpoint: first.endpoint, stream: make(chan relayv2.LifecycleTrace), loss: 4}
@@ -73,6 +74,7 @@ func (source *testReceiverObservationSource) CompleteObservations() v2peer.Recei
 func TestGetObservationDrainsPreviousReceiverGenerationBeforeDiscardingReader(t *testing.T) {
 	runtime, _ := newGetReportingRuntime(t, false, true)
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	previous := &testReceiverObservationSource{terminal: make(chan v2peer.ReceiverTerminationTrace), diagnostic: make(chan v2peer.PeerDiagnosticObservation)}
 	next := &testReceiverObservationSource{terminal: make(chan v2peer.ReceiverTerminationTrace), diagnostic: make(chan v2peer.PeerDiagnosticObservation)}
 	observation.registerReceiverFactory(previous, &receiverLocalStop{})

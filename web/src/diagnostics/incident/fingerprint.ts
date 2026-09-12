@@ -19,24 +19,16 @@ export function fingerprintFailureFact(fact: FailureFact): FailureFingerprint {
     }
     case 'protocol_failure': {
       const value = fact.payload.protocolFailure
-      const settlement = value.settlement.kind === 'received_authenticated'
-        ? [value.settlement.kind]
-        : [
-            value.settlement.kind,
-            encodeBoolean(value.settlement.admitted),
-            encodeBoolean(value.settlement.settled),
-            value.settlement.outcome,
-          ]
+      const content = value.content
       return encode([
         ...common,
         value.requestKind,
-        value.wireScope,
-        String(value.wireCode),
-        encodeBoolean(value.retryable),
-        value.retryAfterMilliseconds === undefined
+        content.scope,
+        String(content.code),
+        encodeBoolean(content.retryable),
+        content.retryAfterMilliseconds === undefined
           ? '-'
-          : String(value.retryAfterMilliseconds),
-        ...settlement,
+          : String(content.retryAfterMilliseconds),
       ])
     }
     case 'peer_failure': {

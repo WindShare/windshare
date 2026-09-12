@@ -25,7 +25,7 @@ func TestClosedEnumRegistriesNameEveryDeclaredValue(t *testing.T) {
 		{"relay scheme", int(RelayWS), int(RelayWSS), func(value int) (string, bool) { return RelayScheme(value).Name() }},
 		{"sharing subject", int(SharingFile), int(SharingMultiple), func(value int) (string, bool) { return SharingSubjectKind(value).Name() }},
 		{"relay recovery", int(RelayRecoveryStarted), int(RelayRecoveryFailed), func(value int) (string, bool) { return RelayRecoveryState(value).Name() }},
-		{"trace incomplete", int(TraceIncompleteLifecycleDrop), int(TraceIncompleteSchemaLimit), func(value int) (string, bool) { return TraceIncompleteCause(value).Name() }},
+		{"trace incomplete", int(TraceIncompleteLifecycleDrop), int(TraceIncompleteRejectionEvidence), func(value int) (string, bool) { return TraceIncompleteCause(value).Name() }},
 		{"relay lifecycle stage", int(RelayTerminalReserved), int(RelayTraceDropped), func(value int) (string, bool) { return RelayLifecycleStage(value).Name() }},
 		{"relay retirement", int(RelayRetirementNone), int(RelayRetirementIngressFailure), func(value int) (string, bool) { return RelayRetirementSource(value).Name() }},
 		{"relay cause", int(RelayCauseNone), int(RelayCauseTransport), func(value int) (string, bool) { return RelayLifecycleCause(value).Name() }},

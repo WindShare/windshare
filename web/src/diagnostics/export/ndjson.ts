@@ -1,21 +1,21 @@
 import type {
-  DiagnosticBundleHeaderV1,
-  DiagnosticBundleIncidentLineV1,
-  DiagnosticBundleLocalOutputFailureLineV1,
-  DiagnosticBundleTraceCaptureLineV1,
-  DiagnosticBundleTraceEventLineV1,
-  DiagnosticBundleV1,
-} from './diagnostic-bundle-v1'
+  DiagnosticBundleHeaderV2,
+  DiagnosticBundleIncidentLineV2,
+  DiagnosticBundleLocalOutputFailureLineV2,
+  DiagnosticBundleTraceCaptureLineV2,
+  DiagnosticBundleTraceEventLineV2,
+  DiagnosticBundleV2,
+} from './diagnostic-bundle-v2'
 
-type DiagnosticBundleLineV1 =
-  | DiagnosticBundleHeaderV1
-  | DiagnosticBundleIncidentLineV1
-  | DiagnosticBundleLocalOutputFailureLineV1
-  | DiagnosticBundleTraceCaptureLineV1
-  | DiagnosticBundleTraceEventLineV1
+type DiagnosticBundleLineV2 =
+  | DiagnosticBundleHeaderV2
+  | DiagnosticBundleIncidentLineV2
+  | DiagnosticBundleLocalOutputFailureLineV2
+  | DiagnosticBundleTraceCaptureLineV2
+  | DiagnosticBundleTraceEventLineV2
 
-export function encodeDiagnosticBundleNdjson(bundle: DiagnosticBundleV1): string {
-  const lines: DiagnosticBundleLineV1[] = [
+export function encodeDiagnosticBundleNdjson(bundle: DiagnosticBundleV2): string {
+  const lines: DiagnosticBundleLineV2[] = [
     bundle.header,
     ...bundle.incidents,
     ...bundle.localOutputFailures,
@@ -25,7 +25,7 @@ export function encodeDiagnosticBundleNdjson(bundle: DiagnosticBundleV1): string
   return `${lines.map(encodeLine).join('\n')}\n`
 }
 
-function encodeLine(line: DiagnosticBundleLineV1): string {
+function encodeLine(line: DiagnosticBundleLineV2): string {
   const encoded = JSON.stringify(line)
   if (encoded === undefined) {
     throw new TypeError('diagnostic bundle line is not standard JSON')

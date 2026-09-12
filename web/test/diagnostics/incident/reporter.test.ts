@@ -27,7 +27,7 @@ import {
   createRuntimeRunIdentity,
   type IncidentRecordProjector,
 } from '../../../src/diagnostics/export/projector'
-import type { IncidentRecordV1 } from '../../../src/diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from '../../../src/diagnostics/export/incident-record-v2'
 
 describe('browser incident reporter', () => {
   it('seals one immutable record before one Console call and ordered trace signals', () => {
@@ -141,7 +141,7 @@ describe('browser incident reporter', () => {
       incidentPresentationDecision('receive', 'failed', trigger),
     )
     scope.close()
-    const root = consoleError.mock.calls[0]?.[0] as IncidentRecordV1
+    const root = consoleError.mock.calls[0]?.[0] as IncidentRecordV2
 
     scope.facts.record(fact('cleanup'), 'consequence')
 
@@ -305,7 +305,7 @@ function reportRootAttempt(
 
 function reporterFixture(options: {
   readonly policy?: IncidentPolicy
-  readonly consoleError?: (record: IncidentRecordV1) => void
+  readonly consoleError?: (record: IncidentRecordV2) => void
   readonly traceSignals?: IncidentTraceSignalPort
   readonly health?: IncidentDiagnosticsHealth
   readonly history?: IncidentHistoryPort

@@ -6,7 +6,7 @@ import { browserBuildSnapshot } from './diagnostics/build-identity'
 import { createBrowserDiagnosticsComposition } from './diagnostics/browser-composition'
 import { createBrowserTraceActivationStore } from './diagnostics/browser-trace-activation'
 import { installWindShareDiagnostics } from './diagnostics/export/developer-api'
-import type { IncidentRecordV1 } from './diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from './diagnostics/export/incident-record-v2'
 import { createBrowserReceiveOperationMutationPort } from './output/resume/reopen-authority'
 import {
   createBrowserReceiveComposition,
@@ -40,7 +40,7 @@ const diagnostics = createBrowserDiagnosticsComposition({
   activationStore: createBrowserTraceActivationStore(() => window.localStorage),
   secureContext: window.isSecureContext,
   consoleSink: Object.freeze({
-    error: (record: IncidentRecordV1) => console.error(record),
+    error: (record: IncidentRecordV2) => console.error(record),
   }),
   controllerSnapshot: () => controllerContext.read?.(),
 })

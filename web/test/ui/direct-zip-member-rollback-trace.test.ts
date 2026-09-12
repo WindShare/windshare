@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { snapshotTraceEventObservationV1 } from '../../src/diagnostics/export/trace-event-v1'
-import type { TraceEventObservationV1 } from '../../src/diagnostics/trace/model'
+import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
+import type { TraceEventObservationV2 } from '../../src/diagnostics/trace/model'
 import type { OutputTraceEvent, OutputTraceSource } from '../../src/output/diagnostics'
 import {
   traceDirectZipMemberRollback,
@@ -22,7 +22,7 @@ const INPUT: DirectZipMemberRollbackTraceInput = {
 
 describe('production direct ZIP member rollback tracing', () => {
   it('preserves rollback correlation and exact prefix lengths through the production trace adapter', () => {
-    const events: TraceEventObservationV1[] = []
+    const events: TraceEventObservationV2[] = []
     const source = createOutputTraceSource({ current: event => events.push(event) })
     for (const phase of ['requested', 'persisted', 'recovering', 'completed', 'failed'] as const) {
       traceDirectZipMemberRollback(source, {
@@ -46,19 +46,19 @@ describe('production direct ZIP member rollback tracing', () => {
     )
     for (const event of events) {
       expect(event.eventName).toBe('direct_zip_member_rollback')
-      expect(() => snapshotTraceEventObservationV1(event)).not.toThrow()
+      expect(() => snapshotTraceEventObservationV2(event)).not.toThrow()
     }
   })
 
   it('records candidate recovery without inventing a source-change reason', () => {
-    const events: TraceEventObservationV1[] = []
+    const events: TraceEventObservationV2[] = []
     const source = createOutputTraceSource({ current: event => events.push(event) })
     const recovery = { ...INPUT }
     delete recovery.sourceChangeReason
     traceDirectZipMemberRollback(source, { ...recovery, phase: 'recovering' })
     expect(events).toHaveLength(1)
     expect(events[0]!.payload).not.toHaveProperty('source_change_reason')
-    expect(() => snapshotTraceEventObservationV1(events[0]!)).not.toThrow()
+    expect(() => snapshotTraceEventObservationV2(events[0]!)).not.toThrow()
   })
 
   it('keeps disabled or failing trace observers outside rollback authority', () => {

@@ -6,15 +6,15 @@ import {
   type DiagnosticsTraceRuntimePort,
 } from '../../../src/diagnostics/runtime'
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../../src/diagnostics/export/trace-event-v1'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../../src/diagnostics/export/trace-event-v2'
 import { deepFreezeJson } from '../../../src/diagnostics/export/json'
 import type { IncidentDiagnosticsHealthSnapshot } from '../../../src/diagnostics/incident/health'
-import type { IncidentRecordV1 } from '../../../src/diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from '../../../src/diagnostics/export/incident-record-v2'
 import type { TraceCoreStatus } from '../../../src/diagnostics/trace/model'
-import type { TraceEventObservationV1 } from '../../../src/diagnostics/trace/model'
+import type { TraceEventObservationV2 } from '../../../src/diagnostics/trace/model'
 import { TraceSwitch } from '../../../src/diagnostics/trace/switch'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import type { IncidentScopeIdentity } from '../../../src/diagnostics/incident/scope'
@@ -111,7 +111,7 @@ describe('browser diagnostics runtime', () => {
 
   it('does not expose a mutable or fallible custom history value', () => {
     const incident = fakeIncident([])
-    incident.history.last = vi.fn(() => ({ sequence: '1' }) as IncidentRecordV1)
+    incident.history.last = vi.fn(() => ({ sequence: '1' }) as IncidentRecordV2)
     const runtime = createBrowserDiagnosticsRuntime({
       identity: TEST_BUNDLE_IDENTITY,
       incident,
@@ -165,7 +165,7 @@ describe('browser diagnostics runtime', () => {
 })
 
 function fakeIncident(
-  records: readonly IncidentRecordV1[],
+  records: readonly IncidentRecordV2[],
   health: IncidentDiagnosticsHealthSnapshot = incidentHealth(),
 ) {
   const retained = [...records]
@@ -182,7 +182,7 @@ function fakeIncident(
   return port satisfies DiagnosticsIncidentRuntimePort
 }
 
-function incidentRecordFrom(incident: DiagnosticsIncidentRuntimePort): IncidentRecordV1 | null {
+function incidentRecordFrom(incident: DiagnosticsIncidentRuntimePort): IncidentRecordV2 | null {
   return incident.history.last()
 }
 
@@ -263,15 +263,15 @@ class FakeTracePort implements DiagnosticsTraceRuntimePort {
 
 function realTraceSwitch(time: FakeTraceTime) {
   return new TraceSwitch<
-    TraceEventObservationV1,
+    TraceEventObservationV2,
     IncidentLink,
     IncidentScopeIdentity
   >({
     clock: time,
     scheduler: time,
-    eventName: traceEventObservationNameV1,
-    snapshotEvent: snapshotTraceEventObservationV1,
-    eventBytes: traceEventObservationBytesV1,
+    eventName: traceEventObservationNameV2,
+    snapshotEvent: snapshotTraceEventObservationV2,
+    eventBytes: traceEventObservationBytesV2,
     snapshotIncident: (incident) => Object.freeze({
       incidentSequence: incident.incidentSequence,
       ...(incident.rootIncidentSequence === undefined

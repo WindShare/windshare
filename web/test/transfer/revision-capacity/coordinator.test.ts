@@ -13,7 +13,7 @@ import {
 } from '../../../src/content/v2-flow'
 import {
   createFailureIdentity,
-  createProtocolFailure,
+  createReceivedProtocolError,
 } from '../../../src/diagnostics/incident'
 import {
   V2RevisionCapacityCoordinator,
@@ -365,19 +365,15 @@ function capacityError(retryAfterMilliseconds: number): V2RevisionCapacityBusyEr
     retryable: true,
     retryAfterMilliseconds,
   })
-  const protocolFailure = createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: true,
-    retryAfterMilliseconds,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: {
+  const protocolFailure = createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', identity(1)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(2)),
-    },
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(2))
+    }, content: {
+      scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
+    }
   })
-  return new V2RevisionCapacityBusyError(failure, protocolFailure)
+  return new V2RevisionCapacityBusyError(protocolFailure)
 }
 
 function openedRevision(): V2OpenedRevision {

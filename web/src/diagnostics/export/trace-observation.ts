@@ -1,33 +1,33 @@
 import { projectCorrelationV1 } from './correlation-v1'
-import type { TraceEventObservationV1, TraceEventPayloadByNameV1 } from '../trace/model'
+import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../trace/model'
 
-export function observation<Name extends Exclude<keyof TraceEventPayloadByNameV1, 'incident_marker'>>(
+export function observation<Name extends Exclude<keyof TraceEventPayloadByNameV2, 'incident_marker'>>(
   eventName: Name,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
+  payload: TraceEventPayloadByNameV2[Name],
+): TraceEventObservationV2 {
   return Object.freeze({
     eventName,
     payload: Object.freeze(payload),
-  }) as TraceEventObservationV1
+  }) as TraceEventObservationV2
 }
 
 export function correlatedObservation<
   Name extends 'request_scheduling' | 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
-  correlation: NonNullable<TraceEventObservationV1['correlation']>,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
+  correlation: NonNullable<TraceEventObservationV2['correlation']>,
+  payload: TraceEventPayloadByNameV2[Name],
+): TraceEventObservationV2 {
   return Object.freeze({
     eventName,
     correlation,
     payload: Object.freeze(payload),
-  }) as TraceEventObservationV1
+  }) as TraceEventObservationV2
 }
 
 export function requiredCorrelation(
   correlation: Parameters<typeof projectCorrelationV1>[0],
-): NonNullable<TraceEventObservationV1['correlation']> {
+): NonNullable<TraceEventObservationV2['correlation']> {
   const projected = projectCorrelationV1(correlation)
   if (projected === undefined) {
     throw new TypeError('Correlated trace event omitted its typed correlation')

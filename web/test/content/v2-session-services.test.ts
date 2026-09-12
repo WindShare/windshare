@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import {
-  createProtocolFailure,
-  type ProtocolFailure,
+  createReceivedProtocolError,
+  type ReceivedProtocolError,
 } from '../../src/diagnostics/incident/fact'
 import { V2ConnectivityRouteAuthority } from '../../src/connectivity/v2-receiver-policy'
 import { FileGeometry } from '../../src/content/geometry'
@@ -47,19 +47,16 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
   return value
 }
 
-function blockProtocolFailure(message: V2SessionMessage) {
+function blockReceivedProtocolError(message: V2SessionMessage) {
   const decoded = decodeV2OperationErrorControl(message.body)
-  return createProtocolFailure({
-    requestKind: 'request_blocks',
-    wireScope: decoded.scope,
-    wireCode: decoded.code,
-    retryable: decoded.retryable,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  return createReceivedProtocolError({
+    requestKind: 'request_blocks', correlation: Object.freeze({
       protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
       protocolOperationId: createV2ProtocolOperationIdentity(message.operationId!),
       lane: Object.freeze({ id: 1, epoch: 1 }),
-    }),
+    }), content: {
+      scope: decoded.scope, code: decoded.code, retryable: decoded.retryable
+    }
   })
 }
 
@@ -126,7 +123,7 @@ function responseOperation(
 
 function revisionOperationCorrelation(
   operation: V2SessionOperation,
-): ProtocolFailure['correlation'] {
+): ReceivedProtocolError['correlation'] {
   return Object.freeze({
     protocolSessionId: createV2ProtocolSessionIdentity(identity(7)),
     protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
@@ -138,10 +135,10 @@ async function openRevisionFailure(input: {
   readonly code: number
   readonly retryable: boolean
   readonly retryAfterMilliseconds?: number
-}): Promise<{ readonly error: unknown; readonly correlationCapturedBeforeFinal: boolean }> {
+}): Promise<{ readonly error: unknown; readonly correlationCapturedFromResponse: boolean }> {
   const operationId = identity(26)
   let finalRead = false
-  let correlationCapturedBeforeFinal = false
+  let correlationCapturedFromResponse = false
   const operation: V2SessionOperation = {
     id: operationId,
     requestKind: V2_MESSAGE_KIND.openRevisions,
@@ -166,9 +163,10 @@ async function openRevisionFailure(input: {
   }
   const session = {
     beginOperation: async () => operation,
-    operationCorrelation: (candidate: V2SessionOperation) => {
-      correlationCapturedBeforeFinal = !finalRead
-      return revisionOperationCorrelation(candidate)
+    authenticatedResponseCorrelation: (message: V2SessionMessage) => {
+      correlationCapturedFromResponse = finalRead
+      expect(message.operationId).toEqual(operationId)
+      return revisionOperationCorrelation(operation)
     },
   } as unknown as V2ReceiverSessionRuntime
   const lanes = new V2LaneSet()
@@ -192,12 +190,12 @@ async function openRevisionFailure(input: {
     lanes.close()
   }
   if (error === undefined) throw new Error('Expected revision open to fail')
-  return { error, correlationCapturedBeforeFinal }
+  return { error, correlationCapturedFromResponse }
 }
 
 describe('v2 authenticated revision capacity results', () => {
   it('creates retry authority only for the exact authenticated quota tuple', async () => {
-    const { error, correlationCapturedBeforeFinal } = await openRevisionFailure({
+    const { error, correlationCapturedFromResponse } = await openRevisionFailure({
       code: V2_REVISION_CODE_QUOTA,
       retryable: true,
       retryAfterMilliseconds: 275,
@@ -205,22 +203,14 @@ describe('v2 authenticated revision capacity results', () => {
 
     expect(error).toBeInstanceOf(V2RevisionCapacityBusyError)
     if (!(error instanceof V2RevisionCapacityBusyError)) throw error
-    expect(correlationCapturedBeforeFinal).toBe(true)
+    expect(correlationCapturedFromResponse).toBe(true)
     expect(error.retryAfterMilliseconds).toBe(275)
     expect(error.failure).toEqual({
       code: V2_REVISION_CODE_QUOTA,
       retryable: true,
       retryAfterMilliseconds: 275,
     })
-    expect(error.protocolFailure).toMatchObject({
-      requestKind: 'open_revisions',
-      wireScope: 'revision',
-      wireCode: V2_REVISION_CODE_QUOTA,
-      retryable: true,
-      retryAfterMilliseconds: 275,
-      settlement: { kind: 'received_authenticated' },
-      correlation: { lane: { id: 1, epoch: 9 } },
-    })
+    expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', correlation: { lane: { id: 1, epoch: 9 } }, content: { scope: 'revision', code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275 } })
     expect(error.protocolFailure.correlation.protocolSessionId.copyBytes()).toEqual(identity(7))
     expect(error.protocolFailure.correlation.protocolOperationId.copyBytes()).toEqual(identity(26))
     expect(error.failureFact.recoveryDisposition).toBe('none')
@@ -236,19 +226,15 @@ describe('v2 authenticated revision capacity results', () => {
         [5, 'sender operation is busy'],
       ])),
     )
-    const protocolFailure = createProtocolFailure({
-      requestKind: 'open_revisions',
-      wireScope: 'revision',
-      wireCode: V2_REVISION_CODE_QUOTA,
-      retryable: true,
-      retryAfterMilliseconds: 275,
-      settlement: Object.freeze({ kind: 'received_authenticated' }),
-      correlation: revisionOperationCorrelation(operation),
+    const protocolFailure = createReceivedProtocolError({
+      requestKind: 'open_revisions', correlation: revisionOperationCorrelation(operation), content: {
+        scope: 'revision', code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 275
+      }
     })
     const session = {
       beginOperation: async () => operation,
       operationCorrelation: revisionOperationCorrelation,
-      authenticatedProtocolFailure: () => protocolFailure,
+      authenticatedReceivedProtocolError: () => protocolFailure,
     } as unknown as V2ReceiverSessionRuntime
     const lanes = new V2LaneSet()
     lanes.add({
@@ -299,13 +285,7 @@ describe('v2 authenticated revision capacity results', () => {
         retryable,
         ...(retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds }),
       })
-      expect(error.protocolFailure).toMatchObject({
-        requestKind: 'open_revisions',
-        wireScope: 'revision',
-        wireCode: code,
-        retryable,
-        settlement: { kind: 'received_authenticated' },
-      })
+      expect(error.protocolFailure).toMatchObject({ requestKind: 'open_revisions', content: { scope: 'revision', code: code, retryable } })
       expect(error.failureFact.recoveryDisposition).toBe('none')
     },
   )
@@ -410,7 +390,7 @@ describe('v2 session block lane deadlines', () => {
       ),
       cancelOperation: async () => { cancellations += 1 },
       close,
-      authenticatedProtocolFailure: blockProtocolFailure,
+      authenticatedReceivedProtocolError: blockReceivedProtocolError,
     } as unknown as V2ReceiverSessionRuntime
     const lane = new V2SessionBlockLane(
       1,

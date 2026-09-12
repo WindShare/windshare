@@ -24,7 +24,7 @@ type OperationFailure = protocolsession.OperationFailure
 // SendControl must add key 255 and sign with the exact writer-assigned sequence
 // atomically before envelope sealing; bodyWithoutSignature is canonical CBOR.
 type SemanticOutbound interface {
-	SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, bodyWithoutSignature []byte) (protocolsession.SendOutcome, error)
+	SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, bodyWithoutSignature []byte) (protocolsession.ResponseSendResult, error)
 	SendFragment(ctx context.Context, message protocolsession.Message) error
 	SendOperationError(ctx context.Context, operationID protocolsession.OperationID, failure OperationFailure) error
 }
@@ -257,10 +257,10 @@ func (h *SenderHandler) processOpen(ctx context.Context, operationID protocolses
 		return errors.Join(err, h.endOpenResults(operationID, results, content.LeaseUndelivered))
 	}
 	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageOpenResults, operationID, encoded)
-	switch outcome {
-	case protocolsession.SendOutcomeDropped:
+	switch outcome.Evidence() {
+	case protocolsession.ResponseSendEvidenceDefinitelyNotSent:
 		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseUndelivered))
-	case protocolsession.SendOutcomeUnknown:
+	case protocolsession.ResponseSendEvidenceUncertain, protocolsession.ResponseSendEvidenceUninitialized:
 		return errors.Join(wrapOutboundError(err), h.endOpenResults(operationID, results, content.LeaseDetached))
 	}
 	return wrapOutboundError(err)
@@ -282,7 +282,7 @@ func (h *SenderHandler) processRenew(ctx context.Context, operationID protocolse
 		return err
 	}
 	outcome, err := h.outbound.SendControl(ctx, protocolsession.MessageLeaseResult, operationID, encoded)
-	if outcome != protocolsession.SendOutcomeDelivered {
+	if outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
 		h.service.detachLease(leaseID)
 		h.traceLeaseDecision(operationID, protocolsession.MessageRenewLease, leaseID, content.LeaseDetached)
 	}

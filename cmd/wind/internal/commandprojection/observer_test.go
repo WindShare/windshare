@@ -97,8 +97,6 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationReceiverFailed,
 		sessionruntime.ProtocolOperationReceiverEnded,
 		sessionruntime.ProtocolOperationSenderRequestReceived,
-		sessionruntime.ProtocolOperationSenderResponseSettled,
-		sessionruntime.ProtocolOperationSenderContentDecision,
 		sessionruntime.ProtocolOperationReceiverWaitingActiveCapacity,
 		sessionruntime.ProtocolOperationReceiverWaitingRetainedCapacity,
 		sessionruntime.ProtocolOperationReceiverAdmissionReady,
@@ -116,7 +114,7 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 	}, protocolsession.MessageKind(255), projectProtocolMessageKind)
 	assertClosedProjection(t, "protocol send outcome", []protocolsession.SendOutcome{
 		protocolsession.SendOutcomeUnknown,
-		protocolsession.SendOutcomeDelivered,
+		protocolsession.SendOutcomeTransportConfirmed,
 		protocolsession.SendOutcomeDropped,
 	}, protocolsession.SendOutcome(255), projectProtocolSendOutcome)
 	assertClosedProjection(t, "protocol operation cause", []sessionruntime.ProtocolOperationCause{
@@ -129,12 +127,12 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationCauseOperationClosed,
 		sessionruntime.ProtocolOperationCauseProtocolFailure,
 	}, sessionruntime.ProtocolOperationCause(255), projectProtocolOperationCause)
-	assertClosedProjection(t, "protocol failure scope", []sessionruntime.ProtocolFailureScope{
-		sessionruntime.ProtocolFailureDirectory,
-		sessionruntime.ProtocolFailureRevision,
-		sessionruntime.ProtocolFailureBlock,
-		sessionruntime.ProtocolFailurePeer,
-	}, sessionruntime.ProtocolFailureScope(255), projectProtocolFailureScope)
+	assertClosedProjection(t, "protocol failure scope", []sessionruntime.ProtocolErrorScope{
+		sessionruntime.ProtocolErrorDirectory,
+		sessionruntime.ProtocolErrorRevision,
+		sessionruntime.ProtocolErrorBlock,
+		sessionruntime.ProtocolErrorPeer,
+	}, sessionruntime.ProtocolErrorScope(255), projectProtocolErrorScope)
 
 	assertClosedProjection(t, "transfer stage", []transfer.TransferLifecycleStage{
 		transfer.TransferDiscoveryStarted, transfer.TransferGenerationCommitted,
@@ -346,123 +344,6 @@ func TestLifecycleProjectionCopiesOnlyWhitelistedFacts(t *testing.T) {
 		t.Fatalf("peer failure = %#v, present %v", failure, ok)
 	}
 	assertProjectionOmits(t, failedPeer, "provider-message-SECRET", "operation-message-SECRET")
-}
-
-func TestProtocolOperationProjectionPreservesCorrelationAndClosedDiagnostics(t *testing.T) {
-	sessionID := sourceProtocolSessionID(t, 0x81)
-	operationID, err := protocolsession.OperationIDFromBytes(
-		bytes.Repeat([]byte{0x82}, protocolsession.IdentityBytes),
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	event, err := ProjectProtocolOperation(clievent.CommandGet, sessionruntime.ProtocolOperationTrace{
-		Stage:             sessionruntime.ProtocolOperationReceiverFailed,
-		Role:              protocolsession.RoleReceiver,
-		ProtocolSessionID: sessionID, OperationID: operationID,
-		RequestKind: protocolsession.MessageReleaseLease,
-		Lane:        sessionruntime.LaneIdentity{ID: 2, Epoch: 1}, HasLane: true,
-		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome:             protocolsession.SendOutcomeDelivered,
-		DeadlineRemainingMillis: 30_000, HasDeadline: true,
-		OperationElapsedMillis: 30_000,
-		UsableLanesAtSelection: 2, UsableLanesAtSettlement: 2,
-		Cause: sessionruntime.ProtocolOperationCauseDeadline,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if event.ProtocolSessionID().Hex() != fmt.Sprintf("%x", sessionID) ||
-		event.ProtocolOperationID().Hex() != fmt.Sprintf("%x", operationID) ||
-		event.RequestKind() != clievent.ProtocolMessageReleaseLease ||
-		event.Cause() != clievent.ProtocolOperationCauseDeadline {
-		t.Fatalf("protocol operation projection = %#v", event)
-	}
-	failure, err := sessionruntime.NewResponseSendProtocolFailure(
-		sessionruntime.ProtocolFailureSpec{
-			RequestKind: protocolsession.MessageRequestBlocks,
-			WireScope:   sessionruntime.ProtocolFailureRevision, WireCode: 0x3008,
-			Retryable: true, RetryAfterMillis: 30_000, HasRetryAfter: true,
-			ProtocolSessionID: sessionID, ProtocolOperationID: operationID,
-			Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
-		},
-		sessionruntime.ProtocolFailureResponseSendSettlement{
-			Admitted: true, Settled: true, Outcome: protocolsession.SendOutcomeDelivered,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	operationError, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
-		Stage:             sessionruntime.ProtocolOperationSenderResponseSettled,
-		Role:              protocolsession.RoleSender,
-		ProtocolSessionID: sessionID, OperationID: operationID,
-		RequestKind:  protocolsession.MessageRequestBlocks,
-		ResponseKind: protocolsession.MessageOperationError, HasResponse: true,
-		Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
-		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome: protocolsession.SendOutcomeDelivered, Failure: failure,
-		Cause: sessionruntime.ProtocolOperationCauseNone,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	projectedFailure, present := operationError.Failure()
-	if !present || projectedFailure.WireScope() != clievent.ProtocolFailureRevision ||
-		projectedFailure.WireCode() != 0x3008 || !projectedFailure.Retryable() ||
-		projectedFailure.ProtocolSessionID() != operationError.ProtocolSessionID() ||
-		projectedFailure.ProtocolOperationID() != operationError.ProtocolOperationID() {
-		t.Fatalf("projected protocol failure = %#v, present=%v", projectedFailure, present)
-	}
-	if retryAfter, ok := projectedFailure.RetryAfterMillis(); !ok || retryAfter != 30_000 {
-		t.Fatalf("projected retry after = %d, present=%v", retryAfter, ok)
-	}
-	response, ok := projectedFailure.Settlement().ResponseSend()
-	if !ok || !response.Admitted || !response.Settled || response.Outcome != clievent.ProtocolSendDelivered {
-		t.Fatalf("projected response settlement = %#v, present=%v", response, ok)
-	}
-	receivedFailure, err := sessionruntime.NewReceivedAuthenticatedProtocolFailure(
-		sessionruntime.ProtocolFailureSpec{
-			RequestKind: protocolsession.MessageRequestBlocks,
-			WireScope:   sessionruntime.ProtocolFailureBlock, WireCode: 0x4003,
-			Retryable: true, RetryAfterMillis: 1_250, HasRetryAfter: true,
-			ProtocolSessionID: sessionID, ProtocolOperationID: operationID,
-			Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
-		},
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	received, err := ProjectProtocolOperation(clievent.CommandGet, sessionruntime.ProtocolOperationTrace{
-		Stage: sessionruntime.ProtocolOperationReceiverFailed, Role: protocolsession.RoleReceiver,
-		ProtocolSessionID: sessionID, OperationID: operationID,
-		RequestKind:  protocolsession.MessageRequestBlocks,
-		ResponseKind: protocolsession.MessageOperationError, HasResponse: true,
-		Lane: sessionruntime.LaneIdentity{ID: 2, Epoch: 0}, HasLane: true,
-		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome: protocolsession.SendOutcomeDelivered,
-		Failure:     receivedFailure, Cause: sessionruntime.ProtocolOperationCauseProtocolFailure,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	projectedReceived, present := received.Failure()
-	if !present || projectedReceived.WireScope() != clievent.ProtocolFailureBlock ||
-		projectedReceived.Settlement().Kind() != clievent.ProtocolFailureReceivedAuthenticated {
-		t.Fatalf("projected received failure = %#v, present=%v", projectedReceived, present)
-	}
-	if response, present := projectedReceived.Settlement().ResponseSend(); present {
-		t.Fatalf("received failure exposed response settlement = %#v", response)
-	}
-	if _, err := ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
-		Stage:             sessionruntime.ProtocolOperationReceiverFailed,
-		Role:              protocolsession.RoleReceiver,
-		ProtocolSessionID: sessionID, OperationID: operationID,
-		RequestKind: protocolsession.MessageReleaseLease,
-		Cause:       sessionruntime.ProtocolOperationCauseDeadline,
-	}); !errors.Is(err, ErrInvalidProjection) {
-		t.Fatalf("role/command mismatch error = %v", err)
-	}
 }
 
 func TestCoreObserverProjectionPreservesCorrelationAndDropsAuthoritySecrets(t *testing.T) {

@@ -1,7 +1,7 @@
 import { decodeBase64Url, encodeBase64Url } from '../../src/crypto/bytes'
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
-import type { IncidentRecordV1 } from '../../src/diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from '../../src/diagnostics/export/incident-record-v2'
 import {
   createFailureIdentity,
   type ProtocolMessageKindV1,
@@ -149,7 +149,7 @@ export async function reconstructFSAContinuationFailure(
     build: browserBuildSnapshot(),
     secureContext: globalThis.isSecureContext,
     consoleSink: Object.freeze({
-      error: (record: IncidentRecordV1) => incidentConsole.push(record),
+      error: (record: IncidentRecordV2) => incidentConsole.push(record),
     }),
     controllerSnapshot: snapshot,
     randomBytes: length => identityBytes(211, length),

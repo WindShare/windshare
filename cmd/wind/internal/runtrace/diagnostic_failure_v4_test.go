@@ -33,7 +33,7 @@ func TestSenderFailureSnapshotSurvivesProjectionAndNDJSONEncoding(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV3(testRunIdentity(0x25), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+	record, err := encodeV4(testRunIdentity(0x25), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -50,7 +50,7 @@ func TestSenderFailureSnapshotSurvivesProjectionAndNDJSONEncoding(t *testing.T) 
 		Correlation  struct {
 			Session string `json:"protocol_session_id"`
 		} `json:"correlation"`
-		Payload senderSessionTerminatedPayloadV3 `json:"payload"`
+		Payload senderSessionTerminatedPayloadV4 `json:"payload"`
 	}
 	if err := json.Unmarshal(encoded, &decoded); err != nil {
 		t.Fatal(err)
@@ -68,7 +68,7 @@ func TestSenderFailureSnapshotSurvivesProjectionAndNDJSONEncoding(t *testing.T) 
 		t.Fatalf("native error tree was lost: %s", encoded)
 	}
 	if len(failure.CaptureStack) == 0 ||
-		!strings.HasSuffix(failure.CaptureStack[0].File, "diagnostic_failure_v3_test.go") ||
+		!strings.HasSuffix(failure.CaptureStack[0].File, "diagnostic_failure_v4_test.go") ||
 		failure.CaptureStack[0].Line == "" || failure.CaptureStack[0].Function == "" {
 		t.Fatalf("capture location was lost: %s", encoded)
 	}

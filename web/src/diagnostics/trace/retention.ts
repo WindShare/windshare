@@ -1,4 +1,4 @@
-import type { TraceEventObservationV1 } from './model'
+import type { TraceEventObservationV2 } from './model'
 import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 
 export type TraceRetention = 'recent' | 'milestone' | 'outcome'
@@ -75,7 +75,7 @@ function browserDeliveryRetention(payload: BrowserDeliveryPayloadV1): TraceReten
   }
 }
 
-export function traceEventRetention(event: TraceEventObservationV1): TraceRetention {
+export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
     case 'protocol_operation':
       switch (event.payload.transition) {

@@ -21,7 +21,7 @@ func TestSocketCancellationTracePreservesTimingEndpointsAndSession(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
 	if err != nil {
 		t.Fatal(err)
 	}

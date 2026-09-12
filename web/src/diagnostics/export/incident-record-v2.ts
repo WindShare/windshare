@@ -3,8 +3,8 @@ import type {
   FailureFactKind,
   FailureStage,
   NativeFailureClass,
-  ProtocolFailureScope,
-  ProtocolMessageKindV1,
+  ProtocolErrorScope,
+  ProtocolRequestKindV1,
   RecoveryDisposition,
 } from '../incident/fact'
 import type {
@@ -14,10 +14,10 @@ import type {
 import type { CorrelationV1 } from './correlation-v1'
 import type { DiagnosticContextV1 } from './context'
 
-export const INCIDENT_RECORD_SCHEMA_VERSION = 1 as const
+export const INCIDENT_RECORD_SCHEMA_VERSION = 2 as const
 export const INCIDENT_RECORD_EVENT = 'failure_incident' as const
 
-export interface DiagnosticEventEnvelopeV1<Payload extends object> {
+export interface DiagnosticEventEnvelopeV2<Payload extends object> {
   readonly schema_version: typeof INCIDENT_RECORD_SCHEMA_VERSION
   readonly sequence: string
   readonly time: string
@@ -41,20 +41,16 @@ export interface RuntimeIdentityV1 {
   readonly secure_context: boolean
 }
 
-export interface ProtocolFailureV1 {
-  readonly request_kind: ProtocolMessageKindV1
-  readonly wire_scope: ProtocolFailureScope
-  readonly wire_code: number
+export interface ProtocolErrorContentV2 {
+  readonly scope: ProtocolErrorScope
+  readonly code: number
   readonly retryable: boolean
   readonly retry_after_ms?: number
-  readonly settlement:
-    | Readonly<{ kind: 'received_authenticated' }>
-    | Readonly<{
-        kind: 'response_send'
-        admitted: boolean
-        settled: boolean
-        outcome: 'unknown' | 'delivered' | 'dropped'
-      }>
+}
+
+export interface ReceivedProtocolErrorV2 {
+  readonly request_kind: ProtocolRequestKindV1
+  readonly content: ProtocolErrorContentV2
   readonly correlation: CorrelationV1
 }
 
@@ -159,7 +155,7 @@ export type LifecycleReasonV1 =
   | 'publication_unknown'
   | 'cleanup_unknown'
 
-interface FailureFactEnvelopeV1<
+interface FailureFactEnvelopeV2<
   Kind extends FailureFactKind,
   Payload extends object,
 > {
@@ -170,44 +166,44 @@ interface FailureFactEnvelopeV1<
   readonly payload: Payload
 }
 
-export type FailureFactV1 =
-  | Readonly<FailureFactEnvelopeV1<'fault', Readonly<{
+export type FailureFactV2 =
+  | Readonly<FailureFactEnvelopeV2<'fault', Readonly<{
       fault: Readonly<{
         domain: FaultDomainV1
         scope: FaultScopeV1
         code: FaultCodeV1
       }>
     }>>>
-  | Readonly<FailureFactEnvelopeV1<'protocol_failure', Readonly<{
-      protocol_failure: ProtocolFailureV1
+  | Readonly<FailureFactEnvelopeV2<'protocol_failure', Readonly<{
+      protocol_failure: ReceivedProtocolErrorV2
     }>>>
-  | Readonly<FailureFactEnvelopeV1<'peer_failure', Readonly<{
+  | Readonly<FailureFactEnvelopeV2<'peer_failure', Readonly<{
       peer_failure: Readonly<{
         scope: 'attempt-transient' | 'path-terminal' | 'session-terminal'
         code: PeerFailureCodeV1
         retryable: boolean
       }>
     }>>>
-  | Readonly<FailureFactEnvelopeV1<'native_output_failure', Readonly<{
+  | Readonly<FailureFactEnvelopeV2<'native_output_failure', Readonly<{
       native_output_failure: Readonly<{
         native_class: NativeFailureClass
         code?: NativeOutputCodeV1
       }>
     }>>>
-  | Readonly<FailureFactEnvelopeV1<'lifecycle_failure', Readonly<{
+  | Readonly<FailureFactEnvelopeV2<'lifecycle_failure', Readonly<{
       lifecycle_failure: Readonly<{
         state: LifecycleStateV1
         reason?: LifecycleReasonV1
       }>
     }>>>
-  | Readonly<FailureFactEnvelopeV1<'unclassified', Readonly<{
+  | Readonly<FailureFactEnvelopeV2<'unclassified', Readonly<{
       unclassified: Readonly<{ exception: DiagnosticExceptionProjection | null }>
     }>>>
 
-export interface FailureFactBucketV1 {
+export interface FailureFactBucketV2 {
   readonly fingerprint: string
   readonly count: string
-  readonly representative: FailureFactV1
+  readonly representative: FailureFactV2
 }
 
 export interface DiagnosticsHealthV1 {
@@ -221,7 +217,7 @@ export interface DiagnosticsHealthV1 {
   readonly trace_coalesced_count: string
 }
 
-export interface FailureIncidentPayloadV1 {
+export interface FailureIncidentPayloadV2 {
   readonly root_incident_sequence?: string
   readonly scope: Readonly<{
     scope_kind:
@@ -244,17 +240,17 @@ export interface FailureIncidentPayloadV1 {
   }>
   readonly build: BuildIdentityV1
   readonly runtime: RuntimeIdentityV1
-  readonly trigger: FailureFactV1
-  readonly contributors: readonly FailureFactBucketV1[]
-  readonly consequences: readonly FailureFactBucketV1[]
+  readonly trigger: FailureFactV2
+  readonly contributors: readonly FailureFactBucketV2[]
+  readonly consequences: readonly FailureFactBucketV2[]
   readonly fact_count: string
   readonly overflow_fact_count: string
   readonly context: DiagnosticContextV1
   readonly diagnostics_health_at_seal: DiagnosticsHealthV1
 }
 
-export type IncidentRecordV1 = Readonly<
-  DiagnosticEventEnvelopeV1<FailureIncidentPayloadV1> & {
+export type IncidentRecordV2 = Readonly<
+  DiagnosticEventEnvelopeV2<FailureIncidentPayloadV2> & {
     readonly level: 'error'
     readonly event: typeof INCIDENT_RECORD_EVENT
   }
