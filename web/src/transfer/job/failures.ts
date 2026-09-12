@@ -12,6 +12,7 @@ import {
   faultFailureFact,
   isFailureFact,
   protocolFailureFact,
+  unclassifiedFailureFact,
   type FailureFact,
   type FailureFactRef,
   type FailureFactRelation,
@@ -24,6 +25,7 @@ import {
   DestinationCollisionError,
   SourceRevisionChangedError,
 } from '../../output/persistent-tree/errors'
+import { OriginCapacityDataError } from '../../output/origin-private/capacity/errors'
 import { OutputTransactionContractError } from '../output-file-transaction'
 import {
   OutputDirectoryMutationError,
@@ -236,6 +238,15 @@ export function normalizeV2FileTransferFailure(
       options,
       fileOutcomeEvidence,
     )
+  }
+  // Preserve bounded exception evidence when there is no protocol/domain fact.
+  // Product recovery still follows the reviewed fault, never exception text.
+  if (classified === undefined || error instanceof OriginCapacityDataError) {
+    return normalizedV2FileTransferClassification(Object.freeze({
+      fault,
+      fact: unclassifiedFailureFact({ stage, recoveryDisposition, error }),
+      materializationFailureReason: reason,
+    }), options, fileOutcomeEvidence)
   }
   return normalizedV2FileTransferFault(fault, {
     ...options,
@@ -491,13 +502,15 @@ function outputTransferFault(error: unknown): Fault | undefined {
         : OutputFaultCode.DirectoryMetadata,
     )
   }
-  if (error instanceof V2FileOutputError || error instanceof V2OutputPausedError) {
+  if (error instanceof V2FileOutputError || error instanceof V2OutputPausedError ||
+      error instanceof OriginCapacityDataError) {
     return outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO)
   }
   return undefined
 }
 
 function failureStage(error: unknown): FailureStage {
+  if (error instanceof OriginCapacityDataError) return 'output_reservation'
   if (error instanceof V2RemoteOperationError) return 'protocol_operation'
   if (
     error instanceof CheckpointLineageDecisionError ||
@@ -611,6 +624,7 @@ export function materializationFailureReason(
   if (input instanceof V2ClassifiedTransferFailureError) {
     return input.classification.materializationFailureReason
   }
+  if (input instanceof OriginCapacityDataError) return 'output-write-failed'
   if (input instanceof V2FileOutputError) return input.materializationFailureReason
   if (
     isFault(input) &&

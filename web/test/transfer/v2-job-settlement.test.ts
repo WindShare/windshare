@@ -655,7 +655,14 @@ describe('v2 terminal settlement authority', () => {
       expect.objectContaining({ fact: expect.objectContaining({ stage: 'settlement' }) }),
       expect.objectContaining({ fact: expect.objectContaining({ stage: 'settlement' }) }),
     ])
-    expect(JSON.stringify(failure.settlementFailures)).not.toContain('fixture')
+    expect(failure.settlementFailures.map(entry => entry.fact)).toEqual([
+      expect.objectContaining({ kind: 'unclassified', payload: {
+        unclassified: { exception: expect.objectContaining({ message: 'fixture pause failure' }) },
+      } }),
+      expect.objectContaining({ kind: 'unclassified', payload: {
+        unclassified: { exception: expect.objectContaining({ message: 'fixture unknown-settlement failure' }) },
+      } }),
+    ])
   })
 })
 
