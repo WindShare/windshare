@@ -151,7 +151,6 @@ func TestTerminalFanoutPreservesCallerCancellationBeforeAdmission(t *testing.T) 
 		privateKey: ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize)),
 	}
 	err = outbound.sendTerminalRecipients(
-		context.Background(),
 		callerContext,
 		body,
 		[]selectedLane{lane},
