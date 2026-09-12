@@ -84,6 +84,7 @@ export interface PersistedReceiveRecord {
   readonly reopenKey?: string
   readonly state?: number
   readonly lifecycleGeneration?: string
+  readonly timing?: import('./lifecycle/timing').ReceiveTiming
 }
 
 export interface ManifestPageRecord {
@@ -703,6 +704,7 @@ function assertExactPersistedRecordShape(record: PersistedReceiveRecord): void {
   }
   if (record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
     expected.push('state', 'lifecycleGeneration')
+    if (Object.hasOwn(record, 'timing')) expected.push('timing')
   }
   const actual = Object.keys(record).sort()
   expected.sort()

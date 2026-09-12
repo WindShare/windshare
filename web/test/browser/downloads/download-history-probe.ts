@@ -10,6 +10,7 @@ import { createPortableBinding, createPortableHandoffPlan, createReceiveIntent, 
 import { listBrowserRetainedOperations } from '../../../src/ui/browser-receive/retained'
 import type { BrowserReceiveWindow } from '../../../src/ui/browser-receive/contracts'
 import { durableIdentities, durableIntent } from '../durable-output-fixture'
+import { presentTask, retainedTaskFacts } from '../../../src/ui/tasks'
 
 const DATABASE_PREFIX = 'windshare-download-history-test-'
 
@@ -27,6 +28,7 @@ export async function seedDownloadHistory(key: string) {
       const lifecycle: ReceiveLifecycleState = Object.freeze({
         kind: 'download-started', attemptKind: 'portable', attemptId: ids.firstPublicationAttemptId,
         operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 5n,
+        timing: { startedAtMilliseconds: 1000 + index, resultReadyAtMilliseconds: 126_000 + index },
       })
       await persistPortableDownloadHistory({ repository, intent, lifecycle,
         display: { objectLabel: 'Holiday photos', destinationLabel: 'Browser downloads', createdAtMilliseconds: 1000 + index } })
@@ -52,6 +54,7 @@ export async function inspectAndForgetDownloadHistory(key: string) {
         labels: rows.map(row => row.display?.objectLabel),
         destinations: rows.map(row => row.display?.destinationLabel),
         times: rows.map(row => row.display?.createdAtMilliseconds),
+        elapsed: rows.map(row => presentTask(retainedTaskFacts(row)).elapsedMilliseconds),
         distinctIdentities: rows[0]!.operationId !== rows[1]!.operationId,
         sameShareIsNotAssumed: rows[0]!.shareInstance !== rows[1]!.shareInstance,
         continuations: rows.map(row => row.continuation),

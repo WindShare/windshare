@@ -79,6 +79,7 @@ export interface TaskPresentation {
   readonly objectLabel: string
   readonly destinationLabel: string | null
   readonly createdAtMilliseconds: number | null
+  readonly elapsedMilliseconds: number | null
   readonly stage: TaskStage
   readonly headline: string
   readonly description: string

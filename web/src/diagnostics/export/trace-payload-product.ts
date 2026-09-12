@@ -79,7 +79,8 @@ export function validateReceiverExperience(payload: UnknownRecord): void {
   switch (payload.transition) {
     case 'task':
       exactKeys(payload, ['transition', 'operation_id', 'generation', 'stage', 'reason',
-        'attention', 'completeness', 'publication'], [], 'receiver task payload')
+        'attention', 'completeness', 'publication', 'elapsed_ms'], [], 'receiver task payload')
+      if (payload.elapsed_ms !== null) decimalUint64(payload.elapsed_ms, 'receiver task elapsed milliseconds')
       decimalUint64(payload.generation, 'receiver task generation')
       booleanValue(payload.attention, 'receiver task attention')
       break

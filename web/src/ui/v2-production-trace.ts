@@ -57,6 +57,7 @@ export function projectV2ReceiverTraceEvent(
         transition: 'task', operation_id: event.operationId, generation: decimal(event.generation),
         stage: event.stage, reason: event.reason, attention: event.attention,
         completeness: event.completeness, publication: event.publication,
+        elapsed_ms: event.elapsedMilliseconds === null ? null : String(event.elapsedMilliseconds),
       })
       if (event.transition === 'saving') return observation('receiver_experience', {
         transition: 'saving', projection_epoch: event.projectionEpoch === null ? null : decimal(event.projectionEpoch),

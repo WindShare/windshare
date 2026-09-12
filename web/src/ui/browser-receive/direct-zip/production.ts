@@ -300,6 +300,7 @@ async function commitBootstrap(input: {
     receiveIntent: intent, preClickRanking: input.candidate.preClickRanking,
   })
   const lifecycle = nextReceiveLifecycleState(initialReceiveLifecycleState({
+    startedAtMilliseconds: input.lease.acquiredAt,
     operationId: intent.operationId, receiveIntentDigest: intent.digest,
   }), {
     kind: 'resumable-receive', payloadKind: 'direct-zip',

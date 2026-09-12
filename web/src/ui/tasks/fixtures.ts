@@ -10,6 +10,9 @@ function lifecycle(payload: ReceiveLifecycleStatePayload): ReceiveLifecycleState
   return Object.freeze({
     operationId: FIXTURE_OPERATION_ID, receiveIntentDigest: FIXTURE_INTENT_DIGEST,
     generation: 1n, ...payload,
+    ...(['published', 'download-started', 'waiting-to-save'].includes(payload.kind) ? {
+      timing: { startedAtMilliseconds: FIXTURE_TIME, resultReadyAtMilliseconds: FIXTURE_TIME + 125_000 },
+    } : {}),
   })
 }
 

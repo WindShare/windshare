@@ -1,4 +1,5 @@
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
+import { receiveTimingFields } from './lifecycle/timing'
 import {
   canonicalFrame,
   canonicalIdentity,
@@ -44,16 +45,17 @@ export function canonicalReceiveLifecycleStateBytes(
   ])
 }
 
-export function storedReceiveLifecycleState(
+export async function storedReceiveLifecycleState(
   state: ReceiveLifecycleState,
 ): Promise<PersistedReceiveRecord> {
-  return createPersistedReceiveRecord({
+  const record = await createPersistedReceiveRecord({
     operationId: state.operationId,
     kind: RECEIVE_RECORD_LIFECYCLE_STATE,
     canonicalBytes: canonicalReceiveLifecycleStateBytes(state),
     state: receiveStateByte(state),
     lifecycleGeneration: state.generation,
   })
+  return Object.freeze({ ...record, ...receiveTimingFields(state.timing) })
 }
 
 export function decodeStoredReceiveLifecycleState(
@@ -68,7 +70,7 @@ export function decodeStoredReceiveLifecycleState(
       receiveStateByte(state) !== record.state) {
     throw new TypeError('lifecycle projections disagree with canonical bytes')
   }
-  return state
+  return Object.freeze({ ...state, ...receiveTimingFields(record.timing) })
 }
 
 function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes[] {
