@@ -82,6 +82,7 @@ describe('trace frozen contract', () => {
       'protocol_operation',
       'content_scheduling',
       'request_scheduling',
+      'lease_retirement',
       'operation_recovery',
       'peer_attempt',
       'peer_recovery',

@@ -71,6 +71,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     request_sequence: '1', request_kind: 'open_revisions', route: 'direct', transition: 'dispatched',
     expected_ms: 25, elapsed_ms: 0, pending_requests: 1,
   },
+  lease_retirement: { lease_id: '01000000000000000000000000000000', attempt: 1, transition: 'released' },
   operation_recovery: {
     transition: 'retry_available_lanes', operation_sequence: '1', generation_id: '1',
     availability_revision: '3', lane_count: '1', unchanged_availability_retries: '0',

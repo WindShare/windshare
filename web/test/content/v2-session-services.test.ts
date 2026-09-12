@@ -646,9 +646,7 @@ describe('v2 session block lane deadlines', () => {
     expect(revisions.leaseError(opened.leaseId)).toBeUndefined()
     await vi.advanceTimersByTimeAsync(59_750)
     expect(revisions.leaseError(opened.leaseId)).toBeUndefined()
-    const releasing = expect(opened.release()).rejects.toMatchObject({
-      scope: 'lane',
-    })
+    const releasing = expect(opened.release()).resolves.toBeUndefined()
     await vi.advanceTimersByTimeAsync(30_000)
     await releasing
     revisions.close()

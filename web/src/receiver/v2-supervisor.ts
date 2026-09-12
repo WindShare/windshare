@@ -345,6 +345,10 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
         readSecret,
         lanes,
         {
+          onLeaseRetirement: fact => this.#protocolTrace?.current?.({
+            ...fact, eventName: 'lease_retirement',
+            correlation: { protocolSessionId: core.session.protocolSessionIdentity },
+          }),
           beforeLeaseRelease: (leaseId) => brokerOwner.current?.waitForLeaseIdle(leaseId) ??
             Promise.reject(new Error('Generation block broker is unavailable during lease release')),
         },
