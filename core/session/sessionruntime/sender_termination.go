@@ -253,12 +253,10 @@ func (observers *senderTerminalObservers) sessionObserver() SenderSessionTermina
 }
 
 func (outbound senderOutbound) sendTerminalAll(
-	deliveryContext context.Context,
 	callerContext context.Context,
 	body []byte,
 ) error {
 	return outbound.sendTerminalRecipients(
-		deliveryContext,
 		callerContext,
 		body,
 		outbound.runtime.lanes.snapshot(),
@@ -266,7 +264,6 @@ func (outbound senderOutbound) sendTerminalAll(
 }
 
 func (outbound senderOutbound) sendTerminalRecipients(
-	deliveryContext context.Context,
 	callerContext context.Context,
 	body []byte,
 	lanes []selectedLane,
@@ -324,11 +321,14 @@ func (outbound senderOutbound) sendTerminalRecipients(
 		}
 		return combined
 	}
+	// Lane shutdown cancels physical writers, but their admitted receipts still
+	// own the final acceptance result. Only the caller may abandon this wait;
+	// observing lifecycle cancellation as a send result loses late success.
 	completions := make([]terminalCompletion, 0, len(receipts))
 	for _, pending := range receipts {
 		completions = append(completions, terminalCompletion{
 			lane:       pending.lane,
-			completion: pending.receipt.Await(deliveryContext),
+			completion: pending.receipt.Await(callerContext),
 		})
 	}
 	delivered := false
