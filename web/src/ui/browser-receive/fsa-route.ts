@@ -222,6 +222,7 @@ export class FSAArtifactPresentationAuthority implements V2ArtifactPresentationA
       requireBoundCandidate(bound, input.action, reserved.reservation.digest)
 
       const lifecycle = initialReceiveLifecycleState({
+        startedAtMilliseconds: input.display?.createdAtMilliseconds ?? Date.now(),
         operationId: bound.intent.operationId, receiveIntentDigest: bound.intent.digest,
       })
       const displayFields = receiveOperationDisplayFields(input.display, authority.parent.name)

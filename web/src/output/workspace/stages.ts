@@ -57,6 +57,7 @@ export async function journalWorkspaceActivation(input: {
     repositoryAuthority: intent.plan.workspace.repositoryRef,
   })
   const lifecycle = initialReceiveLifecycleState({
+    startedAtMilliseconds: input.display?.createdAtMilliseconds ?? Date.now(),
     operationId: intent.operationId,
     receiveIntentDigest: intent.digest,
   })

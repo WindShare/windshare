@@ -148,7 +148,9 @@ test('receives an explicit directory artifact from the real sender and relay', a
     await expect(task.getByText('Download started \u2014 check browser downloads', { exact: true })).toBeVisible({
       timeout: DOWNLOAD_TIMEOUT_MILLISECONDS,
     })
+    await expect(task).toContainText(/Elapsed: (?:Less than 1 sec|.* sec)/u)
     await task.getByRole('button', { name: 'Details', exact: true }).click()
+    await expect(page.getByRole('dialog').getByText('Elapsed', { exact: true })).toBeVisible()
     await expect(page.getByRole('dialog').getByText(
       'The browser took over. WindShare cannot confirm where or whether the file was saved.',
       { exact: true },

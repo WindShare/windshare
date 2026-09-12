@@ -4,6 +4,7 @@ import { CompatibleNameRepairPanel } from '../compatible-name/CompatibleNameRepa
 import { DetailSheet } from '../controls/DetailSheet'
 import { ReceiverIcon, type ReceiverIconName } from '../receiver-presentation/ReceiverIcon'
 import { useReceiveRate } from './use-receive-rate'
+import { ELAPSED_DESCRIPTION, formatElapsedTime } from './elapsed'
 
 const STAGE_ICONS: Readonly<Record<TaskPresentation['stage'], ReceiverIconName>> = {
   preparing: 'clock', downloading: 'download', waiting: 'clock', paused: 'pause',
@@ -64,6 +65,7 @@ export function TaskCard({ task, actions, onDetails, detailsRef, busy = false, p
           <ReceiverIcon name={STAGE_ICONS[task.stage]} />{task.headline}
         </span>
         {task.destinationLabel !== null && <small>{task.destinationLabel}</small>}
+        {task.elapsedMilliseconds !== null && <small title={ELAPSED_DESCRIPTION}>Elapsed: {formatElapsedTime(task.elapsedMilliseconds)}</small>}
         {task.createdAtMilliseconds !== null && <small><time dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></small>}
       </div>
       <div className="task-actions">
@@ -98,6 +100,8 @@ export function TaskDetails({ task, actions, busy = false, children }: {
     <p>{task.description}</p>
     <dl className="task-facts">
       <dt>Result</dt><dd>{task.objectLabel}</dd>
+      {task.elapsedMilliseconds !== null && <><dt>Elapsed</dt><dd>{formatElapsedTime(task.elapsedMilliseconds)}
+        <small className="action-reason">{ELAPSED_DESCRIPTION}</small></dd></>}
       {task.destinationLabel !== null && <><dt>Destination</dt><dd>{task.destinationLabel}</dd></>}
       {task.createdAtMilliseconds !== null && <><dt>Created</dt><dd><time
         dateTime={new Date(task.createdAtMilliseconds).toISOString()}>{new Date(task.createdAtMilliseconds).toLocaleString()}</time></dd></>}

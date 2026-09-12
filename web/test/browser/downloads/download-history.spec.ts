@@ -18,7 +18,7 @@ test('restores identifiable Downloads after refresh and consumes only original h
   expect(result).toEqual({
     labels: ['Holiday photos', 'Holiday photos'],
     destinations: ['Browser downloads', 'Browser downloads'],
-    times: [1001, 1000], distinctIdentities: true, sameShareIsNotAssumed: true,
+    times: [1001, 1000], elapsed: [125_000, 125_000], distinctIdentities: true, sameShareIsNotAssumed: true,
     continuations: ['history-only', 'history-only'], actions: [['forget'], ['forget']],
     copiedRejected: true, remaining: 1,
   })

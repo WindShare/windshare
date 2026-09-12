@@ -105,6 +105,7 @@ V2ExecutionAdmissionLifecycle {
     this.#preClickRanking = preClickRanking
     this.#diagnostics = diagnostics
     this.lifecycle = initialReceiveLifecycleState({
+      startedAtMilliseconds: display?.createdAtMilliseconds ?? Date.now(),
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
     })
