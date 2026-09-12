@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 import type { ArtifactChoiceActivationProof } from './artifact-action-user-activation-harness'
@@ -10,7 +11,7 @@ test('explicit DirectoryTree action starts one picker in the trusted Chromium ac
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
 
   const beforeClick = await installHarness(page)

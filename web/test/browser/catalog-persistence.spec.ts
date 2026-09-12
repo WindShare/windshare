@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const PROBE_MODULE = '/test/browser/catalog-persistence-probe.ts'
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
 })
 
 test('rejects same-page node and portable-name collisions before persistence', async ({ page }) => {

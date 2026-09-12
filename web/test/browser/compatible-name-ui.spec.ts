@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 type RepairMode = 'receiving' | 'stopped' | 'pending' | 'completed'
 
@@ -6,7 +7,7 @@ const HARNESS_PATH = '/test/browser/compatible-name-ui-harness.tsx'
 const FULL_COMMAND = 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File ".\\restore.windshare-abc234.ps1"'
 
 test('restoration copy waits for clipboard success and exposes selectable command on failure', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await mount(page, 'completed')
   await expect(page.getByRole('button', { name: 'Copy restoration command' })).toBeVisible()
   await expect(page.getByText(FULL_COMMAND, { exact: true })).not.toBeVisible()
@@ -26,7 +27,7 @@ test('restoration copy waits for clipboard success and exposes selectable comman
 })
 
 test('receiving and pending checkpoints never expose commands, while stopped restoration stays secondary', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await mount(page, 'receiving')
   await expect(page.getByText('Compatible names are in use')).toBeVisible()
   await expect(page.locator('details')).toHaveCount(0)

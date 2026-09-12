@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 
 const PROBE_PATH = '/test/browser/indexeddb-output-repository-probe.ts'
 
 test.beforeEach(async ({ browserName, page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
 })
 

@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { ZIP_OUTPUT_METADATA_BUFFER_BYTES } from '../../src/output/streams/zip-output-sink'
 
@@ -6,8 +7,6 @@ const FULL_PORTABLE_STRESS_BYTES = 64 * 1024 * 1024
 const CROSS_ENGINE_PORTABLE_STRESS_BYTES = 4 * 1024 * 1024
 const WEEKLY_MILLION_MEMBER_WRITER_TIMEOUT_MILLISECONDS = 150_000
 const WEEKLY_MILLION_MEMBER_PROGRESS_KIND = 'weekly-million-member-zip-progress'
-// These storage probes need a same-origin document, not product-shell rendering work.
-const BROWSER_CONTRACT_HOST_PATH = '/test/browser/contract-host.html'
 
 test('streams one million ZIP members through the production writer and durable spool', async ({
   browserName,

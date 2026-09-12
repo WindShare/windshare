@@ -1,10 +1,11 @@
 import { expect, test, type Page } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const HARNESS_PATH = '/test/browser/opfs/capacity-persistence-harness.ts'
 type Harness = typeof import('./opfs/capacity-persistence-harness')
 
 async function run(page: Page, scenario: 'incompatibleSchema' | 'expiryRollback' | 'settlementRollback') {
-  await page.goto('/test/browser/contract-host.html')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   return page.evaluate(async ({ path, scenario }) => (await import(path) as Harness)[scenario](),
     { path: HARNESS_PATH, scenario })
 }
@@ -15,7 +16,7 @@ test('rejects incompatible schema without deleting old accounting; an explicit r
 
 for (const kind of ['legacy', 'nan'] as const) {
   test(`rejects ${kind} workspace rows in ZIP admission, release, and staged-file admission without changing them`, async ({ page }) => {
-    await page.goto('/test/browser/contract-host.html')
+    await page.goto(BROWSER_CONTRACT_HOST_PATH)
     const result = await page.evaluate(async ({ path, kind }) => {
       return (await import(path) as Harness).corruptWorkspace(kind)
     }, { path: HARNESS_PATH, kind })

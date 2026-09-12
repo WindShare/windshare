@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 
@@ -7,7 +8,7 @@ const LEGACY_RECORD_COUNT = 16
 const CURRENT_V10_STORE_COUNT = 19
 
 test.beforeEach(async ({ browserName, page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
 })
 
@@ -36,7 +37,7 @@ test('concurrent legacy IndexedDB cleanup callers serialize one durable pass', a
   const competitor = await context.newPage()
   const databaseName = `legacy-cleanup-race-${crypto.randomUUID()}`
   try {
-    await competitor.goto('/')
+    await competitor.goto(BROWSER_CONTRACT_HOST_PATH)
     await page.evaluate(async ({ name, path }) => {
       const probe = await import(path) as typeof import('./indexeddb-legacy-cleaner-probe')
       await probe.seedIndexedDbLegacyCleanup(name)
