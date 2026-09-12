@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 test('ZIP spool budgets reject atomically without committing the rejected record', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async () => {
     const spoolPath = '/src/output/streams/zip-spool.ts'
     const spoolModule = await (

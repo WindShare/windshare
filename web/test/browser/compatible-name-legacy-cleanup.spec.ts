@@ -1,7 +1,8 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 test('obsolete restoration records stay cleanup-only and forgetting preserves downloaded files', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(async () => {
     const path = '/test/browser/compatible-name-legacy-cleanup-probe.ts'
     const probe = await import(path) as typeof import('./compatible-name-legacy-cleanup-probe')

@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
-import { BROWSER_CONTRACT_HOST_PATH, requireOriginPrivateStorage } from './browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
+import { requireOriginPrivateStorage } from './browser-storage-support'
 import type { StopStorageCut } from './browser-delivery-stop-probe'
 
 const PROBE = '/test/browser/browser-delivery-stop-probe.ts'

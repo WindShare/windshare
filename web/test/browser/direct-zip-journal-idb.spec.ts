@@ -1,11 +1,12 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { CHECKPOINT_DATABASE_VERSION } from '../../src/output/browser/indexeddb-database'
 
 const PROBE_PATH = '/test/browser/direct-zip-journal-idb-probe.ts'
 
 test.beforeEach(async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
 })
 
 test('Direct ZIP bootstrap cut rolls back every new authority row on a late store fault', async ({

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 
 test('Direct ZIP writer recovers partial progress and commits the remaining content with its tail', async ({ page }) => {
   await page.goto(BROWSER_CONTRACT_HOST_PATH)

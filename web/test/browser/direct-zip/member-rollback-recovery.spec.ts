@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
-import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 
 for (const mode of ['before-truncate', 'cancel-before-truncate', 'after-truncate'] as const) {
   test('production Direct ZIP replays durable member rollback intent: ' + mode, async ({ page }) => {

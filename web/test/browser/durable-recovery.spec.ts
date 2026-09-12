@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 import type {
@@ -24,7 +25,7 @@ const RECOVERY_HARNESS_PATH = '/test/browser/durable-recovery-harness.ts'
 const PREPARATION_HARNESS_PATH = '/test/browser/durable-preparation-harness.ts'
 
 test.beforeEach(async ({ browserName, page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
 })
 
@@ -88,7 +89,7 @@ test('catches up committed names locally after reload and preserves real receive
   expect(cut.injectedWriteFailures).toBeGreaterThan(0)
   const otherPage = await context.newPage()
   try {
-    await otherPage.goto('/')
+    await otherPage.goto(BROWSER_CONTRACT_HOST_PATH)
     const liveOperationExposed = await otherPage.evaluate(async ({ path, fixture }) => {
       const harness = await import(path) as typeof import('./compatible-name-catch-up-harness')
       return harness.retainedOperationPresent(fixture)

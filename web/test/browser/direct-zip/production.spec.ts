@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
-import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 
 for (const mode of ['complete', 'pause-resume', 'delete', 'delete-retry', 'unpromoted-resume',
   'unpromoted-delete', 'unpromoted-continue', 'unpromoted-settle', 'bootstrap-recovery',

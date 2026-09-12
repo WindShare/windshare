@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { createFile } from 'mp4box'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const MP4_FIXTURE_BYTES = 768 * 1024
 const MP4_BLOCK_BYTES = 16 * 1024
@@ -15,7 +16,7 @@ const HERO_BYTES = 13_057
 const MP4_FIXTURE_BASE64 = Buffer.from(buildDeterministicMp4Fixture()).toString('base64')
 
 test('runs production image decode and bounded MP4 seek semantics in the active browser', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const pageOrigin = new URL(page.url()).origin
   expect(pageOrigin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/u)
   const evidence = await page.evaluate(async ({ mp4Base64, mp4BlockBytes }) => {

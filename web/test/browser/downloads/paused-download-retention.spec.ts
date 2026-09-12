@@ -1,9 +1,10 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 import { requireOriginPrivateStorage } from '../browser-storage-support'
 
 test('retains a paused native ZIP in Downloads with its partial-save authority without reload', async ({ page, browserName }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const result = await page.evaluate(async () => {
     const path = '/test/browser/downloads/paused-download-retention-harness.ts'
