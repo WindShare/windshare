@@ -27,7 +27,7 @@
 
 ### 其他
 
-- 写计划文档的时候禁止写在文档里边写一堆验收条件，不准出现 验收条件/验收标准 标题块，这导致实现了太多无关紧要的东西而忽略的产品真正的需求。
+- 写计划文档的时候禁止写在文档里边写一堆验收条件，不准出现 验收条件/验收标准 类似标题块，这导致实现了太多无关紧要的东西而忽略的产品真正的需求。
 - 新增测试如果没有合理的理由，就不能导致本地测试运行时间大幅增加。
 - 当前产品正在开发阶段，一个使用者都没有、没有线上兼容，没有任何负担。
 - 如果需要做产品决策，可以从用户使用体验升级/降级角度出发，是否为了低频场景大幅牺牲高频场景体验？或者查看 `docs\clarifications\原始需求.md`。
@@ -37,11 +37,11 @@
 
 WindShare is an open-source E2EE file/folder sharing tool. WindShare makes sharing local files and folders feel instant: select, generate a link, and let anyone browse and download in their browser, without waiting for uploads or a full directory scan. End-to-end encryption keeps both content and file metadata private from relays. Prioritize reliable P2P connectivity, seamless relay fallback, and resumable transfers that preserve progress without unnecessary disk usage. Keep everyday sharing effortless, use shared infrastructure efficiently, and give users control through open source and self-hosting. Technical complexity should serve the experience, never burden it.
 
-WindShare has one production Go module. Within it, `core/**` is the network-free application and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities.
+The root `go.mod` owns WindShare's production Go packages; pinned Pion dependency modules live under `third_party/pion/`. Within the root module, `core/**` is the network-free application and protocol package boundary; dependency-graph gates prevent core packages from importing non-core WindShare packages or concrete networking and transport capabilities.
 
 ```text
 .
-├── .github/workflows/             Ordinary CI, weekly suites, and root release
+├── .github/workflows/             Ordinary CI, weekly suites, and source/binary releases
 ├── core/                         Network-free reusable package subtree
 │   ├── link/, senderobject/      Capability links and sealed transport-neutral objects
 │   ├── catalog/                  Committed directory generations/pages, durable storage/recovery
@@ -49,7 +49,7 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 │   ├── session/                  Authenticated protocol engine, catalog/content flows, sender/receiver runtime
 │   ├── framechannel/             Transport-neutral frame contract
 │   ├── observationstream/        Bounded producer-owned observation queues
-│   ├── transfer/                 Receive contracts/selection, jobs, output transactions/settlement
+│   ├── transfer/                 Receive contracts/discovery, jobs, lane scheduling, output settlement
 │   ├── liveshare/                Sender/receiver runtime assembly
 │   ├── osfs/                     Root-confined sources, native output authority, checkpoints/recovery
 │   ├── testvectors/              Canonical Go↔TypeScript contract vectors
@@ -59,17 +59,23 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 │   └── testprocessowner/         Test-only bounded process supervisor
 ├── connectivity/
 │   ├── v2signal/                 Canonical E2E signaling schema, codec, and validation
-│   └── v2peer/                   Peer negotiation, lane admission, lifecycle diagnostics
+│   ├── v2peer/                   Peer negotiation/admission and demand-driven PeerSet orchestration
+│   ├── nativepeer/               Native connectivity resource assembly and lifecycle
+│   ├── networkstate/             Network snapshots and generation tracking
+│   ├── socketauthority/          UDP/TCP socket ownership and capability snapshots
+│   ├── reachability/, icepolicy/ Gateway mapping leases and ICE endpoint policy
+│   └── relayset/                 Independent relay lifecycles and coordinated session admission
 ├── transport/
 │   ├── relayv2/                  Relay registration and multiplexed FrameChannel lifecycle
-│   └── webrtc/                   Pion DataChannel FrameChannel and terminal lifecycle
+│   └── webrtc/                   Pion FrameChannels, terminal lifecycle, and native provider adaptation
 ├── relay/
 │   ├── cmd/wsrelay/              Relay daemon entry and state/policy assembly
 │   ├── protocol/v2/              Authenticated relay control, proofs, and opaque routes
 │   ├── signaling/v2route/        Registration/resume/STOP authority and session routing
 │   ├── signaling/v2endpoint/     Authenticated WebSocket roles and bounded forwarding
 │   ├── httpapi/                  WebSocket upgrade, Origin policy, and admission hook
-│   └── connectionlimit/          Global and per-source connection limits
+│   ├── connectionlimit/          Global and per-source connection limits
+│   └── stunonly/                 Independent bounded UDP STUN listeners, health, and metrics
 ├── web/                          React/TypeScript landing portal and browser receiver
 │   ├── src/crypto/, protocol/    Suite-02 links/key hierarchy, sealed-object auth, canonical CBOR/text
 │   ├── src/contracts/, session/  Browser FrameChannel contract and ProtocolSession runtime
@@ -78,18 +84,19 @@ WindShare has one production Go module. Within it, `core/**` is the network-free
 │   ├── src/transport/            Relay/WebRTC channels and frame adapters
 │   ├── src/connectivity/         Signaling, path policy, and lane adoption
 │   ├── src/receiver/             Reconnect and protocol-generation supervision
-│   ├── src/transfer/             Intent/discovery, jobs/direct ZIP, capacity backpressure, settlement
-│   ├── src/output/               Artifact planning/authority, materialization, publication, recovery
+│   ├── src/transfer/             Intent/discovery, jobs, Direct ZIP coordination, backpressure/checkpoints/settlement
+│   ├── src/output/               Artifact authority, storage providers, Direct ZIP writing/journals, publication/recovery
 │   ├── src/diagnostics/          Bounded tracing, incident correlation, and developer export
 │   ├── src/security/             Capability redaction and bounded diagnostic formatting
 │   ├── src/preview/, ui/         Media preview, receiver UI, and landing portal
 │   ├── scripts/                  Browser/Pion interop and output/diagnostic evidence
 │   ├── test/                     Unit and browser component-contract tests
 │   └── e2e/                      Direct smoke and scheduled product scenarios
-├── internal/                     Performance evidence, process ownership, test topology, and scenario/trace support
+├── internal/                     Platform setup status, process ownership, performance evidence, and test support
 ├── integration/                  Native relayv2 and v2peer integration scenarios
 ├── e2e/                          Process-level Go end-to-end tests
 ├── spikes/                       R0 feasibility and isolated Pion↔Chromium evidence
-├── testdata/                     Versioned browser/output evidence and ICE-topology fixtures
+├── testdata/                     Browser/output evidence, ICE policy/topology, and provider capabilities
+├── third_party/pion/              Pinned ICE/WebRTC sources, patches, and reproducibility manifest
 └── scripts/ci/                   CI gates, validation tooling, and release certification
 ```
