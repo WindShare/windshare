@@ -540,13 +540,15 @@ func (s *LaneSet) runLaneRound(
 	for active > 0 {
 		select {
 		case <-raceContext.Done():
-			if ctx.Err() != nil {
-				return laneRoundResult{kind: laneRoundInterrupted, err: ctx.Err()}
-			}
-			return laneRoundResult{kind: laneRoundInterrupted, err: ErrLaneClosed}
+			return interruptedLaneRound(ctx)
 		case <-ticker.C:
 			startSupplement(lanescheduling.Rescue)
 		case result := <-results:
+			// Cancellation and its lane result can become ready together. The
+			// demand owner determines the outcome, not select's ready-case choice.
+			if raceContext.Err() != nil {
+				return interruptedLaneRound(ctx)
+			}
 			active--
 			if result.err == nil {
 				decision.winner = result.state
@@ -559,6 +561,14 @@ func (s *LaneSet) runLaneRound(
 		s.holdLaneReassignments(failures)
 	}
 	return laneRoundResult{kind: laneRoundFailed, failures: failures}
+}
+
+func interruptedLaneRound(ctx context.Context) laneRoundResult {
+	err := ctx.Err()
+	if err == nil {
+		err = ErrLaneClosed
+	}
+	return laneRoundResult{kind: laneRoundInterrupted, err: err}
 }
 
 func laneResultsReassignable(results []laneResult) bool {
@@ -644,14 +654,4 @@ func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailu
 		reassignable = reassignable && result.reassignable
 	}
 	return current, reassignable
-}
-
-func (state *laneState) recordFailure(canceled bool) {
-	if canceled {
-		return
-	}
-	if state.failures < maximumLaneFailures {
-		state.failures++
-	}
-	state.settlement.addFailure()
 }

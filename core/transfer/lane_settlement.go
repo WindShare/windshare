@@ -400,6 +400,16 @@ func (s *LaneSet) finish(
 	s.publishLaneSettlement(settlement)
 }
 
+func (state *laneState) recordFailure(canceled bool) {
+	if canceled {
+		return
+	}
+	if state.failures < maximumLaneFailures {
+		state.failures++
+	}
+	state.settlement.addFailure()
+}
+
 // demandNotAdmittedError is an opaque concrete capability proving that a lane
 // failed before its operation reached a transport. It requires explicit
 // construction through NewDemandNotAdmitted; accepting an incidental public
