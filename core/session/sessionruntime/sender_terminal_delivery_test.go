@@ -35,19 +35,17 @@ func (channel *terminalCancellationRejectionChannel) SendTerminal(
 	return framechannel.RejectSend(ctx.Err())
 }
 
-func TestEmptyTerminalFanoutDistinguishesCallerFromLifecycleCancellation(t *testing.T) {
+func TestEmptyTerminalFanoutHonorsCallerCancellation(t *testing.T) {
 	runtime := &runtimeCore{}
 	runtime.lanes = newRuntimeLanes(runtime)
 	outbound := senderOutbound{runtime: runtime}
 
-	lifecycleContext, cancelLifecycle := context.WithCancel(context.Background())
-	cancelLifecycle()
-	if err := outbound.sendTerminalAll(lifecycleContext, context.Background(), nil); err != nil {
-		t.Fatalf("natural lifecycle cancellation failed empty fanout: %v", err)
+	if err := outbound.sendTerminalAll(context.Background(), nil); err != nil {
+		t.Fatalf("empty terminal fanout failed: %v", err)
 	}
 	callerContext, cancelCaller := context.WithCancel(context.Background())
 	cancelCaller()
-	if err := outbound.sendTerminalAll(context.Background(), callerContext, nil); !errors.Is(err, context.Canceled) {
+	if err := outbound.sendTerminalAll(callerContext, nil); !errors.Is(err, context.Canceled) {
 		t.Fatalf("caller cancellation across empty fanout = %v", err)
 	}
 }
@@ -108,7 +106,7 @@ func TestTerminalPreAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T)
 					usable, current, selected, selectErr)
 			}
 			err := (senderOutbound{runtime: runtime, privateKey: privateKey}).sendTerminalRecipients(
-				context.Background(), context.Background(), body, recipients,
+				context.Background(), body, recipients,
 			)
 			if test.wantError {
 				if !errors.Is(err, protocolsession.ErrWriterStopped) {
@@ -165,7 +163,7 @@ func TestTerminalPostAdmissionWriterStopRequiresNoUsableReplacement(t *testing.T
 							func(observation SenderTerminalSendObserved) { observed <- observation },
 						),
 					}).sendTerminalRecipients(
-						context.Background(), context.Background(), body, recipients,
+						context.Background(), body, recipients,
 					)
 				}()
 				// The sender is durably blocked on the admitted receipt before the
@@ -253,7 +251,7 @@ func TestTerminalClaimRejectedByLaneCancellationRequiresNoUsableReplacement(t *t
 							func(observation SenderTerminalSendObserved) { observed <- observation },
 						),
 					}).sendTerminalRecipients(
-						context.Background(), context.Background(), body, recipients,
+						context.Background(), body, recipients,
 					)
 				}()
 				writerContext, cancelWriter := context.WithCancel(context.Background())
@@ -307,7 +305,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		callerContext, cancelCaller := context.WithCancel(context.Background())
 		cancelCaller()
 		err := sender.outbound.sendTerminalRecipients(
-			context.Background(), callerContext, body, sender.lanes.snapshot(),
+			callerContext, body, sender.lanes.snapshot(),
 		)
 		if !errors.Is(err, context.Canceled) {
 			t.Fatalf("delivered terminal erased caller cancellation: %v", err)
@@ -320,7 +318,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 		t.Cleanup(receiver.Close)
 		recipients := append([]selectedLane{{identity: LaneIdentity{}}}, sender.lanes.snapshot()...)
 		err := sender.outbound.sendTerminalRecipients(
-			context.Background(), context.Background(), body, recipients,
+			context.Background(), body, recipients,
 		)
 		if !errors.Is(err, protocolsession.ErrControlBinding) {
 			t.Fatalf("delivered terminal erased hard preparation failure: %v", err)
@@ -354,7 +352,7 @@ func TestDeliveredTerminalPreservesCallerAndHardAdmissionFailures(t *testing.T) 
 			sender.lanes.snapshot()...,
 		)
 		err = sender.outbound.sendTerminalRecipients(
-			context.Background(), context.Background(), body, recipients,
+			context.Background(), body, recipients,
 		)
 		if !errors.Is(err, sealErr) {
 			t.Fatalf("delivered terminal erased accepted seal failure: %v", err)

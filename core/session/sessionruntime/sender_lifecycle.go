@@ -235,33 +235,23 @@ func (runtime *SenderRuntime) BeginStop(ctx context.Context, message string) err
 	// Claiming before fanout makes graceful stop the immutable root even when a
 	// receipt failure or concurrent lane retirement follows.
 	runtime.publishTermination(claim)
-	stopContext, cancelStop := context.WithCancel(ctx)
-	stopLifecycle := context.AfterFunc(runtime.ctx, cancelStop)
-	go runtime.runStop(stopContext, ctx, normalized, func() {
-		stopLifecycle()
-		cancelStop()
-	})
+	go runtime.runStop(ctx, normalized)
 	return nil
 }
 
 func (runtime *SenderRuntime) runStop(
-	deliveryContext context.Context,
 	callerContext context.Context,
 	message string,
-	releaseContext func(),
 ) {
 	runtime.stopMu.Lock()
 	stopDone := runtime.stopDone
 	runtime.stopMu.Unlock()
-	defer func() {
-		releaseContext()
-		close(stopDone)
-	}()
+	defer close(stopDone)
 	body, err := protocolsession.EncodeSessionTerminal(protocolsession.SessionTerminal{
 		Code: SessionStoppedCode, Message: message,
 	})
 	if err == nil {
-		err = runtime.outbound.sendTerminalAll(deliveryContext, callerContext, body)
+		err = runtime.outbound.sendTerminalAll(callerContext, body)
 	}
 	runtime.stopMu.Lock()
 	runtime.stopErr = err
