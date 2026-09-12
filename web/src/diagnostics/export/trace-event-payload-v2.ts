@@ -10,6 +10,7 @@ import {
   validateOperationRecovery,
   validateContentScheduling,
   validateRequestScheduling,
+  validateLeaseRetirement,
 } from './trace-payload-protocol'
 import {
   validateAuthority,
@@ -56,6 +57,7 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   protocol_operation: validateProtocolOperation,
   content_scheduling: validateContentScheduling,
   request_scheduling: validateRequestScheduling,
+  lease_retirement: validateLeaseRetirement,
   operation_recovery: validateOperationRecovery,
   peer_attempt: validatePeerAttempt,
   peer_recovery: validatePeerRecovery,

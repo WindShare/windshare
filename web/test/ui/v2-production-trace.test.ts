@@ -84,6 +84,39 @@ it('exports request route decisions and outcomes with validated session correlat
   expect(composition.runtime.status().retained_event_count).toBe('4')
 })
 
+it('exports remote lease retirement independently of transfer incidents', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createProtocolTraceSource(composition.trace)
+  const correlation = { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) }
+  const identity = { eventName: 'lease_retirement' as const, correlation,
+    leaseId: '01000000000000000000000000000000', attempt: 1 }
+  const events = [
+    { ...identity, transition: 'waiting_for_reads' as const },
+    { ...identity, transition: 'deferred_for_reads' as const },
+    { ...identity, transition: 'retrying' as const, failure: new Error('lane disconnected') },
+    { ...identity, transition: 'released' as const },
+    ...(['service_closed', 'deadline', 'remote_failure', 'barrier_failure'] as const).map(reason => ({
+      ...identity, transition: 'abandoned' as const, reason, failure: new Error(reason),
+    })),
+  ]
+  for (const event of events) {
+    const projected = projectProtocolTraceEvent(event)
+    expect(snapshotTraceEventObservationV2(projected)).toEqual(projected)
+    expect(projected.payload).toMatchObject({ lease_id: identity.leaseId, attempt: 1, transition: event.transition })
+    source.current?.(event)
+  }
+  expect(composition.runtime.status().retained_event_count).toBe(String(events.length))
+  const projected = projectProtocolTraceEvent(events[2]!)
+  for (const malformed of [
+    { ...projected.payload, lease_id: 'unscoped' },
+    { ...projected.payload, attempt: -1 },
+    { ...projected.payload, failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1) },
+  ]) {
+    expect(() => validateTraceEventPayloadV2('lease_retirement', malformed)).toThrow()
+  }
+})
+
 it('exports a sealed unsampled final per-download record through the existing trace', () => {
     const metrics = new DownloadMetrics('01010101-0101-4101-8101-010101010101', true, () => 0)
     metrics.delivered('revision', 0n, 10n, 'direct')

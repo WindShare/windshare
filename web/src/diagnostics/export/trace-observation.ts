@@ -12,7 +12,7 @@ export function observation<Name extends Exclude<keyof TraceEventPayloadByNameV2
 }
 
 export function correlatedObservation<
-  Name extends 'request_scheduling' | 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
+  Name extends 'lease_retirement' | 'request_scheduling' | 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
 >(
   eventName: Name,
   correlation: NonNullable<TraceEventObservationV2['correlation']>,

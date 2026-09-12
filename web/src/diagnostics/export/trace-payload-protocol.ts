@@ -125,9 +125,7 @@ function validateRetiredOperation(payload: UnknownRecord): void {
   member(payload.request_kind, ['request_blocks', 'release_lease', 'renew_lease'], 'lease request kind')
   const request = recordValue(payload.request, 'lease request')
   exactKeys(request, ['lease_id', ...(payload.request_kind === 'request_blocks' ? ['blocks'] : [])], [], 'lease request')
-  if (typeof request.lease_id !== 'string' || !/^[0-9a-f]{32}$/u.test(request.lease_id) || /^0+$/u.test(request.lease_id)) {
-    throw new TypeError('Lease ID must be a nonzero 16-byte hexadecimal identity')
-  }
+  validateLeaseIdentity(request.lease_id)
   if (request.blocks !== undefined) {
     const blocks = recordValue(request.blocks, 'block request summary')
     exactKeys(blocks, ['first_index', 'count'], [], 'block request summary')
@@ -404,6 +402,30 @@ export function validateContentScheduling(payload: UnknownRecord): void {
   member(payload.purpose, ['content', 'probe', 'rescue'], 'content scheduling purpose')
   integerBetween(payload.expected_ms, 0, Number.MAX_SAFE_INTEGER, 'estimated completion')
   integerBetween(payload.bytes_per_second, 0, Number.MAX_SAFE_INTEGER, 'content throughput')
+}
+
+function validateLeaseIdentity(leaseId: unknown): void {
+  if (typeof leaseId !== 'string' || !/^[0-9a-f]{32}$/u.test(leaseId) || /^0+$/u.test(leaseId)) {
+    throw new TypeError('Lease ID must be a nonzero 16-byte hexadecimal identity')
+  }
+}
+
+export function validateLeaseRetirement(payload: UnknownRecord): void {
+  member(payload.transition, ['waiting_for_reads', 'deferred_for_reads', 'released', 'retrying', 'abandoned'],
+    'lease retirement transition')
+  const failure = payload.transition === 'retrying' || payload.transition === 'abandoned'
+  exactKeys(payload, ['lease_id', 'attempt', 'transition',
+    ...(failure ? ['failure_detail'] : []), ...(payload.transition === 'abandoned' ? ['reason'] : [])],
+  [], 'lease retirement payload')
+  validateLeaseIdentity(payload.lease_id)
+  uint32(payload.attempt, 'lease retirement attempt')
+  if (failure && (typeof payload.failure_detail !== 'string' ||
+      payload.failure_detail.length > TRACE_FAILURE_DETAIL_MAX_CHARACTERS)) {
+    throw new TypeError('lease retirement failure detail is invalid')
+  }
+  if (payload.transition === 'abandoned') {
+    member(payload.reason, ['service_closed', 'deadline', 'remote_failure', 'barrier_failure'], 'lease retirement reason')
+  }
 }
 
 export function validateRequestScheduling(payload: UnknownRecord): void {
