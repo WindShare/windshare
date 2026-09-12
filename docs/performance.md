@@ -41,9 +41,11 @@ it does not imply the entire selected folder is complete.
 
 Route permission controls which paths may carry content. A receiver-wide allocator assigns different
 queued blocks using measured payload throughput and outstanding bytes; a 10% cost premium favors
-direct paths when completion estimates are close. New or stale paths can receive an independent
-read-ahead block, with at most one exploratory allocation active and one start every five seconds.
-A successful sample is not a prerequisite for normal allocation.
+direct paths when completion estimates are close. New or stale paths can sample read-ahead or another
+independent file's frontier, including during an ongoing file batch. The two oldest active/queued
+frontiers in that priority remain on normal allocation; preview frontiers never become probes.
+At most one exploratory allocation is active, with one start every five seconds. A successful sample
+is not a prerequisite for normal allocation.
 
 Network slots refill independently of ordered output. Read-ahead is bounded by four times each
 reader's concurrency and a shared 64 MiB reservation budget, separate from the 64 MiB block cache.
@@ -52,8 +54,10 @@ two rescue attempts may run concurrently, independently of exploration. Canceled
 lease ownership until they settle. Idle downloads generate no probes.
 
 Directory, revision, and lease requests use a separate latency router with per-kind response samples,
-pending request reservations, and content queue estimates. These requests are never duplicated for
-measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
+pending request reservations, and content queue estimates. Before throughput is measured, each
+outstanding content block contributes its own initial cost; the next request's size cannot inflate
+existing work. Reservations remain charged until blocks settle. These requests are never duplicated
+for measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
 independent allocations and rescues; connection status alone does not identify a transfer bottleneck.
 
 ## Output

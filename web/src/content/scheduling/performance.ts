@@ -13,12 +13,14 @@ export class LanePerformance {
   lastAttempt: number | undefined
   #busySince = 0
   #completedBytes = 0
+  #pendingBlocks = 0
 
   begin(now: number, bytes: number): void {
     if (this.pendingBytes === 0) {
       this.#busySince = now
       this.#completedBytes = 0
     }
+    this.#pendingBlocks += 1
     this.pendingBytes += bytes
     this.lastAttempt = now
   }
@@ -40,6 +42,7 @@ export class LanePerformance {
         this.#completedBytes = 0
       }
     }
+    this.#pendingBlocks -= 1
     this.pendingBytes -= Math.min(this.pendingBytes, bytes)
   }
 
@@ -52,12 +55,21 @@ export class LanePerformance {
     }
   }
 
-  estimate(bytes: number): number {
-    bytes = Math.max(bytes, 1)
+  estimateQueueMilliseconds(): number {
+    // Only complete blocks expose progress. Charge outstanding reservations until
+    // they settle; a new request's size must never redefine this existing work.
     const milliseconds = this.bytesPerSecond > 0
-      ? (this.pendingBytes + bytes) * 1000 / this.bytesPerSecond
-      : INITIAL_BLOCK_MILLISECONDS * (this.pendingBytes + bytes) / bytes
-    return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS, Math.max(MINIMUM_SAMPLE_MILLISECONDS, milliseconds))
+      ? this.pendingBytes * 1000 / this.bytesPerSecond
+      : this.#pendingBlocks * INITIAL_BLOCK_MILLISECONDS
+    return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS, milliseconds)
+  }
+
+  estimateCompletionMilliseconds(bytes: number): number {
+    const service = this.bytesPerSecond > 0
+      ? Math.max(bytes, 1) * 1000 / this.bytesPerSecond
+      : INITIAL_BLOCK_MILLISECONDS
+    return Math.min(MAXIMUM_ESTIMATE_MILLISECONDS,
+      Math.max(MINIMUM_SAMPLE_MILLISECONDS, this.estimateQueueMilliseconds() + service))
   }
 }
 
