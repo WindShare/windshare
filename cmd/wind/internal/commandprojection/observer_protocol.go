@@ -124,7 +124,11 @@ func projectSenderContentDecision(
 		return clievent.NewSenderCapacityDecision(decisionID)
 	case contentflow.SenderDecisionLeaseRelinquished,
 		contentflow.SenderDecisionLeaseUndelivered,
-		contentflow.SenderDecisionLeaseDetached:
+		contentflow.SenderDecisionLeaseDetached,
+		contentflow.SenderDecisionBlockLeaseReleased,
+		contentflow.SenderDecisionBlockLeaseNotOwned,
+		contentflow.SenderDecisionBlockLeaseExpired,
+		contentflow.SenderDecisionBlockLeaseInvalid:
 		if value.CapacityDecisionID != "" {
 			return clievent.SenderContentDecision{}, rejectedProjection(ProjectionInvalidStageFields, "content_decision.capacity_decision_id", "absent_for_lease_decision")
 		}
@@ -137,6 +141,14 @@ func projectSenderContentDecision(
 			kind = clievent.SenderContentLeaseUndelivered
 		case contentflow.SenderDecisionLeaseDetached:
 			kind = clievent.SenderContentLeaseDetached
+		case contentflow.SenderDecisionBlockLeaseReleased:
+			kind = clievent.SenderContentBlockLeaseReleased
+		case contentflow.SenderDecisionBlockLeaseNotOwned:
+			kind = clievent.SenderContentBlockLeaseNotOwned
+		case contentflow.SenderDecisionBlockLeaseExpired:
+			kind = clievent.SenderContentBlockLeaseExpired
+		case contentflow.SenderDecisionBlockLeaseInvalid:
+			kind = clievent.SenderContentBlockLeaseInvalid
 		}
 		leaseID, err := clievent.NewRevisionLeaseID(value.LeaseID.Bytes())
 		if err != nil {

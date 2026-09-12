@@ -212,14 +212,14 @@ func retainProtocolOperationTrace(event ProtocolOperationTrace) bool {
 		(event.HasResponse && event.ResponseKind == protocolsession.MessageOperationError) {
 		return true
 	}
+	if event.Stage == ProtocolOperationSenderContentDecision {
+		return true
+	}
 	if event.RequestKind == protocolsession.MessageRequestBlocks {
 		return false
 	}
 	if event.Stage == ProtocolOperationSenderResponseSettled {
 		return senderResponseFinal(event.ResponseKind)
-	}
-	if event.Stage == ProtocolOperationSenderContentDecision {
-		return true
 	}
 	return true
 }

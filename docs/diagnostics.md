@@ -59,10 +59,11 @@ Reloads and new tabs restore capture before the receiver starts, using the origi
 Changing the host, port, browser profile, or private-browsing context does not share activation.
 If browser storage is blocked, capture works only in the current page.
 
-Browser peer-attempt terminal records preserve handshake timing and the typed failure
-(including admission timeout or authenticated rejection). During pre-failure recording, up to
-16 terminal records / 64 KiB receive retention priority over ordinary events, within the existing
-capture count and byte budgets. Export before reload; clearing or replacing capture clears this history.
+During pre-failure recording, milestones and exceptional outcomes each receive a bounded
+reservation of up to 256 events / 256 KiB, capped at one quarter of the existing window.
+Routine send/write events cannot crowd out these records; newer outcomes eventually replace
+older ones. Peer-attempt terminal records, cancellation, discarded late responses, and publication
+outcomes receive this protection. Export before reload; clearing capture clears all reservations.
 
 Each page has its own bounded, in-memory evidence and runtime identity. Export before leaving a
 page whose evidence you need. A failure can seal that page's capture to preserve the surrounding
@@ -89,6 +90,15 @@ Browser `protocol_operation` send transitions distinguish queued, sealing, sendi
 withdrawn, abandoned, and failed frames. Withdrawal consumes no envelope sequence; abandonment
 ends the caller's wait while the lane retains delivery ownership. An active send has a 30-second
 deadline; expiry retires the lane instead of skipping a sequence. Correlate by operation and lane.
+
+`cancelled` includes the cancellation reason and, when captured at admission, the lease ID and
+block-request summary. `late_response_discarded` records the first validated late completion/error,
+its original settlement, cancellation reason, and wire error without creating a failure incident.
+Lease IDs use the same hexadecimal representation as sender trace. Correlate them with sender
+`content_decision.kind`: `block_lease_released` proves an explicit release was remembered when the
+request was rejected; `block_lease_not_owned`, `block_lease_expired`, and `block_lease_invalid`
+distinguish other authority failures. Once bounded release history expires, absence alone cannot
+prove why a lease is no longer owned. Local cancellation never waits for remote notification.
 
 Failed lane transitions include `failure_detail`: bounded exception text with nested causes and
 stack excerpts. Keep the sender trace from the same reproduction; `protocol_session_id` pairs

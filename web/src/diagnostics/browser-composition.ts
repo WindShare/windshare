@@ -1,4 +1,5 @@
 import { encodeBase64Url } from '../crypto/bytes'
+import { traceEventRetention } from './trace/retention'
 import type { V2ReceiverDiagnosticSnapshot } from '../ui/v2-model'
 import { browserBuildIdentity } from './build-identity'
 import type { DiagnosticContextSources } from './export/context'
@@ -90,8 +91,7 @@ export function createBrowserDiagnosticsComposition(
     scheduler: options.scheduler ?? SYSTEM_TRACE_SCHEDULER,
     ...(options.activationStore === undefined ? {} : { activationStore: options.activationStore }),
     eventName: traceEventObservationNameV1,
-    eventRetention: (event) => event.eventName === 'peer_attempt' &&
-      (event.payload.stage === 'failed' || event.payload.stage === 'admitted') ? 'attempt_summary' : 'recent',
+    eventRetention: traceEventRetention,
     snapshotEvent: snapshotTraceEventObservationV1,
     eventBytes: traceEventObservationBytesV1,
     snapshotIncident: snapshotIncidentLink,
