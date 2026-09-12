@@ -318,6 +318,7 @@ func (h *SenderHandler) processBlocks(ctx context.Context, operationID protocols
 		return nil
 	})
 	if err != nil {
+		h.traceBlockLeaseRejection(operationID, request.leaseID, err)
 		return wrapServiceError("serve blocks", err)
 	}
 	encoded, _ := EncodeOperationComplete(count)

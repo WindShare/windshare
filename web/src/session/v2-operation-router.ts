@@ -1,4 +1,6 @@
+import { V2OperationTombstone, type V2ProtocolTraceContext } from './v2-operation-retirement'
 import { encodeBase64Url } from '../crypto/bytes'
+import { cancellationTraceReason, snapshotOperationRequest, type V2CancellationTraceReason } from './v2-operation-diagnostics'
 import {
   createProtocolFailure,
   type FailureCorrelation,
@@ -8,13 +10,11 @@ import {
   protocolMessageKindV1,
   type V2ProtocolOperationSettlement,
   type V2ProtocolTraceEvent,
-  type V2ProtocolTraceSource,
 } from './v2-diagnostics'
 import {
   createV2PeerAttemptIdentity,
   createV2PeerPathIdentityValue,
   createV2ProtocolOperationIdentity,
-  type V2ProtocolSessionIdentity,
 } from './v2-identities'
 import {
   decodeV2OperationErrorControl,
@@ -27,7 +27,7 @@ import {
   V2OperationContinuationAuthority,
   V2RetiredPeerContinuations,
 } from './v2-operation-continuation'
-import { type V2SessionOperation, V2SessionRuntimeError } from './v2-runtime-types'
+import { type V2OperationCancelReason, type V2SessionOperation, V2SessionRuntimeError } from './v2-runtime-types'
 
 export const V2_SESSION_OPERATION_RESPONSE_QUEUE = 512
 export const V2_SESSION_CONTROL_BACKLOG = 256
@@ -51,6 +51,8 @@ interface PendingRead {
 export class V2OperationQueue implements V2SessionOperation {
   readonly id: Uint8Array<ArrayBuffer>
   readonly requestKind: V2MessageKind
+  readonly requestTrace: ReturnType<typeof snapshotOperationRequest>
+  #cancellationReason: V2CancellationTraceReason | undefined
   readonly #messages: V2SessionMessage[] = []
   readonly #readers: PendingRead[] = []
   readonly #settlementCleanups = new Set<() => void>()
@@ -87,9 +89,11 @@ export class V2OperationQueue implements V2SessionOperation {
       laneId?: number,
       laneEpoch?: number,
     ) => void,
+    requestTrace?: ReturnType<typeof snapshotOperationRequest>,
   ) {
     this.id = id.slice()
     this.requestKind = requestKind
+    this.requestTrace = requestTrace
     this.#admission = admission
     this.#authority = new V2OperationContinuationAuthority(requestKind, canonicalRequestBody)
     this.#onClose = onClose
@@ -104,6 +108,8 @@ export class V2OperationQueue implements V2SessionOperation {
   }> | undefined {
     return this.#authority.peerBinding()
   }
+
+  get cancellationReason(): V2CancellationTraceReason | undefined { return this.#cancellationReason }
 
   get settlement(): V2ProtocolOperationSettlement | undefined {
     return this.#settlement
@@ -144,9 +150,9 @@ export class V2OperationQueue implements V2SessionOperation {
     })
   }
 
-  push(message: V2SessionMessage, laneId?: number, laneEpoch?: number): Promise<void> {
+  push(message: V2SessionMessage, laneId?: number, laneEpoch?: number): Promise<'delivered' | 'discarded'> {
     const pushed = this.#pushTail.then(() => this.#push(message, laneId, laneEpoch))
-    this.#pushTail = pushed.catch(() => undefined)
+    this.#pushTail = pushed.then(() => undefined, () => undefined)
     return pushed
   }
 
@@ -154,18 +160,17 @@ export class V2OperationQueue implements V2SessionOperation {
     message: V2SessionMessage,
     laneId?: number,
     laneEpoch?: number,
-  ): Promise<void> {
-    if (this.#failure !== undefined) return
-    if (this.#closed) {
+  ): Promise<'delivered' | 'discarded'> {
+    if (this.#closed || this.#failure !== undefined) {
       await this.#authority.acceptLate(message)
-      return
+      return 'discarded'
     }
     const reservation = await this.#authority.reserve(message)
-    if (reservation.disposition === 'drop') return
+    if (reservation.disposition === 'drop') return 'discarded'
     if (this.#closed || this.#failure !== undefined) {
       reservation.rollback()
-      if (this.#failure === undefined) await this.#authority.acceptLate(message)
-      return
+      await this.#authority.acceptLate(message)
+      return 'discarded'
     }
     try {
       this.#onAuthenticatedMessage(message, laneId, laneEpoch)
@@ -181,6 +186,7 @@ export class V2OperationQueue implements V2SessionOperation {
       }
       reservation.accept()
       if (reservation.final) this.#finish(false)
+      return 'delivered'
     } catch (error) {
       reservation.rollback()
       throw error
@@ -195,8 +201,9 @@ export class V2OperationQueue implements V2SessionOperation {
     this.#rejectConsumer(reason, settlement)
   }
 
-  cancel(cause: unknown): void {
+  cancel(cause: unknown, protocolReason?: V2OperationCancelReason): void {
     if (this.#failure !== undefined) return
+    if (protocolReason !== undefined) this.#cancellationReason = cancellationTraceReason(protocolReason)
     this.#authority.retire('local-cancel')
     this.#rejectConsumer(cause, 'local_cancel')
   }
@@ -270,11 +277,6 @@ export class V2OperationQueue implements V2SessionOperation {
 
 }
 
-export interface V2OperationRouterDiagnostics {
-  readonly protocolSessionIdentity: V2ProtocolSessionIdentity
-  readonly trace?: V2ProtocolTraceSource
-}
-
 export class V2OperationRouter {
   readonly #operations = new Map<string, V2OperationQueue>()
   readonly #draining = new Set<V2OperationQueue>()
@@ -283,7 +285,7 @@ export class V2OperationRouter {
   readonly #tombstones = new Map<string, V2OperationTombstone>()
   readonly #retiredPeers = new V2RetiredPeerContinuations()
   readonly #admission = new V2SessionQueueAdmission()
-  readonly #diagnostics: V2OperationRouterDiagnostics | undefined
+  readonly #diagnostics: V2ProtocolTraceContext | undefined
   readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
   readonly #protocolFailures = new WeakMap<V2SessionMessage, ProtocolFailure>()
   readonly #capacityWaiters = new Set<() => void>()
@@ -293,7 +295,7 @@ export class V2OperationRouter {
   constructor(
     onTerminal: (reason: unknown) => void,
     now: () => number = () => Date.now(),
-    diagnostics?: V2OperationRouterDiagnostics,
+    diagnostics?: V2ProtocolTraceContext,
   ) {
     this.#onTerminal = onTerminal
     this.#now = now
@@ -364,7 +366,7 @@ export class V2OperationRouter {
         this.#draining.add(operation)
         this.#tombstones.set(key, new V2OperationTombstone(
           this.#now() + V2_OPERATION_TOMBSTONE_MILLISECONDS,
-          authority,
+          authority, settlement, operation.requestTrace, operation.cancellationReason,
         ))
         this.#wakeCapacityWaiters()
         if (settlement !== 'remote_final') {
@@ -384,6 +386,7 @@ export class V2OperationRouter {
           }
         }
       },
+      this.#diagnostics?.trace?.current === undefined ? undefined : snapshotOperationRequest(requestKind, canonicalRequestBody),
     )
     this.#retiredPeers.admit(operation.peerBinding())
     this.#operations.set(key, operation)
@@ -430,7 +433,11 @@ export class V2OperationRouter {
     const key = encodeBase64Url(operationId)
     const operation = this.#operations.get(key)
     if (operation !== undefined) {
-      await operation.push(message, laneId, laneEpoch)
+      const disposition = await operation.push(message, laneId, laneEpoch)
+      if (disposition === 'discarded') {
+        this.#tombstones.get(key)?.traceResponse(message, this.#diagnostics, laneId, laneEpoch)
+        return
+      }
       if (message.kind !== V2_MESSAGE_KIND.blockFragment) {
         this.#emitTrace(() => Object.freeze({
           eventName: 'protocol_operation',
@@ -455,10 +462,10 @@ export class V2OperationRouter {
       }
       return
     }
-    await this.#routeRetired(key, message)
+    await this.#routeRetired(key, message, laneId, laneEpoch)
   }
 
-  async #routeRetired(key: string, message: V2SessionMessage): Promise<void> {
+  async #routeRetired(key: string, message: V2SessionMessage, laneId?: number, laneEpoch?: number): Promise<void> {
     this.#pruneTombstones()
     const tombstone = this.#tombstones.get(key)
     if (tombstone === undefined) {
@@ -466,6 +473,7 @@ export class V2OperationRouter {
       throw new V2SessionRuntimeError('session', 'Inbound message uses an unknown operation ID')
     }
     await tombstone.accept(message)
+    tombstone.traceResponse(message, this.#diagnostics, laneId, laneEpoch)
   }
 
   terminate(reason: unknown): void {
@@ -687,27 +695,6 @@ class V2SessionQueueAdmission {
     if (this.#control < 0 || this.#data < 0 || this.#plaintextBytes < 0) {
       throw new V2SessionRuntimeError('session', 'Protocol session response admission underflowed')
     }
-  }
-}
-
-class V2OperationTombstone {
-  readonly expiresAt: number
-  readonly #authority: V2OperationContinuationAuthority
-
-  constructor(
-    expiresAt: number,
-    authority: V2OperationContinuationAuthority,
-  ) {
-    this.expiresAt = expiresAt
-    this.#authority = authority
-  }
-
-  accept(message: V2SessionMessage): Promise<void> {
-    return this.#authority.acceptLate(message)
-  }
-
-  close(): void {
-    this.#authority.close()
   }
 }
 

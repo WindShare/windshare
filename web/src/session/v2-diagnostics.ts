@@ -1,3 +1,4 @@
+import type { V2CancellationTraceReason, V2OperationRequestTrace } from './v2-operation-diagnostics'
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
 import type {
   FailureCorrelation,
@@ -14,6 +15,7 @@ export type V2ProtocolOperationTransition =
   | 'response_received'
   | 'authenticated_failure'
   | 'cancelled'
+  | 'late_response_discarded'
   | 'settled'
   | 'admission_waiting'
   | 'admission_ready'
@@ -42,7 +44,26 @@ export type V2LaneDetachmentClass =
 export type V2ProtocolOperationTraceEvent =
   | Readonly<{
       eventName: 'protocol_operation'
-      transition: 'request_sent' | 'request_send_failed' | 'cancelled' | 'admission_ready' | 'admission_abandoned'
+      transition: 'cancelled'
+      requestKind: ProtocolMessageKindV1
+      cancellationReason: V2CancellationTraceReason
+      request?: V2OperationRequestTrace
+      correlation: FailureCorrelation
+    }>
+  | Readonly<{
+      eventName: 'protocol_operation'
+      transition: 'late_response_discarded'
+      requestKind: ProtocolMessageKindV1
+      responseKind: ProtocolMessageKindV1
+      settlement: V2ProtocolOperationSettlement
+      cancellationReason?: V2CancellationTraceReason
+      request?: V2OperationRequestTrace
+      protocolFailure?: ProtocolFailure
+      correlation: FailureCorrelation
+    }>
+  | Readonly<{
+      eventName: 'protocol_operation'
+      transition: 'request_sent' | 'request_send_failed' | 'admission_ready' | 'admission_abandoned'
         | 'send_queued' | 'send_sealing' | 'send_sending' | 'send_completed'
         | 'send_withdrawn' | 'send_abandoned' | 'send_failed'
       requestKind: ProtocolMessageKindV1

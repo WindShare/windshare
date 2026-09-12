@@ -1,17 +1,14 @@
-import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
+import { projectProtocolTraceEvent } from './v2-protocol-trace'
+export { projectProtocolTraceEvent } from './v2-protocol-trace'
+import { correlatedObservation, decimal, observation, requiredCorrelation, snake } from '../diagnostics/export/trace-observation'
 import type {
   V2ConnectivityTraceEvent,
   V2ConnectivityTraceSource,
 } from '../connectivity/diagnostics'
-import { projectCorrelationV1 } from '../diagnostics/export/correlation-v1'
-import type { ProtocolFailureV1 } from '../diagnostics/export/incident-record-v1'
-import type { ProtocolFailure } from '../diagnostics/incident'
 import type {
   TraceEventObservationV1,
   TraceEventPayloadByNameV1,
 } from '../diagnostics/trace/model'
-import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
-import { formatDiagnosticText } from '../security/diagnostic-formatter'
 import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import type {
   OutputTraceEvent,
@@ -20,17 +17,10 @@ import type {
 import type { ProjectionTraceEvent } from '../transfer/projection'
 import type { TransferTraceEvent } from '../transfer/v2-job'
 import type {
-  V2ProtocolTraceEvent,
   V2ProtocolTraceSource,
 } from '../session/v2-diagnostics'
 import type { V2ReceiverTraceEvent } from './v2-controller'
 import { projectRetainedActionPayload } from './controller/retained-trace'
-
-const FAILURE_DETAIL_FORMAT = Object.freeze({
-  maxDepth: 6,
-  maxEntries: 8,
-  maxStringCharacters: 256,
-})
 
 type BrowserTraceSource = DomainTraceSource<TraceEventObservationV1>
 
@@ -120,91 +110,6 @@ export function projectOutputTraceEvent(
     eventName: event.eventName,
     payload: Object.freeze({ ...event.payload }),
   }) as TraceEventObservationV1
-}
-
-export function projectProtocolTraceEvent(
-  event: V2ProtocolTraceEvent,
-): TraceEventObservationV1 {
-  const correlation = requiredCorrelation(event.correlation)
-  if (event.eventName === 'request_scheduling') {
-    return correlatedObservation(event.eventName, correlation, {
-      request_sequence: decimal(event.sequence), request_kind: event.kind, route: event.route,
-      transition: event.transition, expected_ms: Math.ceil(event.expectedMilliseconds),
-      elapsed_ms: Math.ceil(event.elapsedMilliseconds), pending_requests: event.pendingRequests,
-    })
-  }
-  if (event.eventName === 'content_scheduling') return projectContentScheduling(event)
-  if (event.eventName === 'operation_recovery') {
-    return correlatedObservation(event.eventName, correlation, {
-      operation_sequence: decimal(event.operationSequence),
-      generation_id: decimal(event.generationId),
-      availability_revision: decimal(event.availabilityRevision),
-      lane_count: decimal(event.laneCount),
-      unchanged_availability_retries: decimal(event.unchangedAvailabilityRetries),
-      ...(event.transition === 'wait_for_availability'
-        ? { transition: event.transition, delay_ms: event.delayMilliseconds }
-        : { transition: event.transition }),
-    })
-  }
-  if (event.eventName === 'lane_transition') {
-    switch (event.transition) {
-      case 'admission_rejected':
-        return correlatedObservation(event.eventName, correlation, {
-          transition: event.transition,
-          rejection_code: event.rejectionCode,
-          retry_after_ms: event.retryAfterMilliseconds,
-        })
-      case 'detached':
-        return correlatedObservation(event.eventName, correlation, {
-          transition: event.transition,
-          detachment_class: event.detachmentClass,
-          // Error causes are non-enumerable; preserving them here makes an
-          // authenticated failure distinguishable from ordinary transport loss.
-          ...(event.failure === undefined ? {} : {
-            failure_detail: formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT)
-              .slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
-          }),
-        })
-      default:
-        return correlatedObservation(event.eventName, correlation, {
-          transition: event.transition,
-        })
-    }
-  }
-
-  switch (event.transition) {
-    case 'admission_waiting':
-      return correlatedObservation(event.eventName, correlation, {
-        transition: event.transition,
-        request_kind: event.requestKind,
-        capacity: event.capacity,
-        active_operations: decimal(event.activeOperations),
-        tracked_operations: decimal(event.trackedOperations),
-      })
-    case 'response_received':
-      return correlatedObservation(event.eventName, correlation, {
-        transition: event.transition,
-        request_kind: event.requestKind,
-        response_kind: event.responseKind,
-      })
-    case 'authenticated_failure':
-      return correlatedObservation(event.eventName, correlation, {
-        transition: event.transition,
-        request_kind: event.requestKind,
-        protocol_failure: projectProtocolFailure(event.protocolFailure),
-      })
-    case 'settled':
-      return correlatedObservation(event.eventName, correlation, {
-        transition: event.transition,
-        request_kind: event.requestKind,
-        settlement: event.settlement,
-      })
-    default:
-      return correlatedObservation(event.eventName, correlation, {
-        transition: event.transition,
-        request_kind: event.requestKind,
-      })
-  }
 }
 
 export function projectConnectivityTraceEvent(
@@ -641,27 +546,6 @@ function projectPeerRecoveryPayload(
   }
 }
 
-function projectProtocolFailure(failure: ProtocolFailure): ProtocolFailureV1 {
-  return {
-    request_kind: failure.requestKind,
-    wire_scope: failure.wireScope,
-    wire_code: failure.wireCode,
-    retryable: failure.retryable,
-    ...(failure.retryAfterMilliseconds === undefined
-      ? {}
-      : { retry_after_ms: failure.retryAfterMilliseconds }),
-    settlement: failure.settlement.kind === 'received_authenticated'
-      ? { kind: failure.settlement.kind }
-      : {
-          kind: failure.settlement.kind,
-          admitted: failure.settlement.admitted,
-          settled: failure.settlement.settled,
-          outcome: failure.settlement.outcome,
-        },
-    correlation: requiredCorrelation(failure.correlation),
-  }
-}
-
 function adaptTraceSource<Input>(
   trace: BrowserTraceSource,
   project: (event: Input) => TraceEventObservationV1,
@@ -674,52 +558,3 @@ function adaptTraceSource<Input>(
     },
   })
 }
-
-function observation<Name extends Exclude<keyof TraceEventPayloadByNameV1, 'incident_marker'>>(
-  eventName: Name,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
-  return Object.freeze({
-    eventName,
-    payload: Object.freeze(payload),
-  }) as TraceEventObservationV1
-}
-
-function correlatedObservation<
-  Name extends 'request_scheduling' | 'content_scheduling' | 'protocol_operation' | 'operation_recovery' | 'peer_attempt' | 'peer_recovery' | 'lane_transition',
->(
-  eventName: Name,
-  correlation: NonNullable<TraceEventObservationV1['correlation']>,
-  payload: TraceEventPayloadByNameV1[Name],
-): TraceEventObservationV1 {
-  return Object.freeze({
-    eventName,
-    correlation,
-    payload: Object.freeze(payload),
-  }) as TraceEventObservationV1
-}
-
-function requiredCorrelation(
-  correlation: Parameters<typeof projectCorrelationV1>[0],
-): NonNullable<TraceEventObservationV1['correlation']> {
-  const projected = projectCorrelationV1(correlation)
-  if (projected === undefined) {
-    throw new TypeError('Correlated trace event omitted its typed correlation')
-  }
-  return projected
-}
-
-function decimal(value: number | bigint): string {
-  const candidate = typeof value === 'bigint' ? value : BigInt(value)
-  if (candidate < 0n) throw new RangeError('Trace counter must be non-negative')
-  return candidate.toString(10)
-}
-
-function snake<Value extends string>(value: Value): SnakeCase<Value> {
-  return value.replaceAll('-', '_') as SnakeCase<Value>
-}
-
-type SnakeCase<Value extends string> =
-  Value extends `${infer Head}-${infer Tail}`
-    ? `${Head}_${SnakeCase<Tail>}`
-    : Value

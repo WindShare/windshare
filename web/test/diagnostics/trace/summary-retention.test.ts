@@ -8,7 +8,7 @@ function recorder() {
   return new BoundedTraceRecorder<Event, number, number>({
     captureGeneration: 1n, clock: time, scheduler: time, capacity: testTraceCapacity(),
     eventName: event => event.name, snapshotEvent: event => Object.freeze({ ...event }), eventBytes: event => event.bytes,
-    eventRetention: event => event.name === 'peer_attempt' ? 'attempt_summary' : 'recent',
+    eventRetention: event => event.name === 'peer_attempt' ? 'outcome' : 'recent',
     snapshotIncident: value => value, incidentMarkerBytes: () => 1, incidentScope: value => value, sameScope: (a, b) => a === b,
   })
 }
@@ -21,7 +21,7 @@ describe('bounded summary retention', () => {
     const trace = recorder()
     for (let id = 1; id <= 10; id++) trace.record({ name: 'peer_attempt', id, bytes: 1 })
     for (let id = 11; id <= 20; id++) trace.record({ name: 'cleanup', id, bytes: 1 })
-    expect(ids(trace)).toEqual([9, 10, 19, 20])
+    expect(ids(trace)).toEqual([10, 18, 19, 20])
     expect(trace.snapshot().retainedEventCount).toBe(4n)
     expect(trace.snapshot().retainedEventBytes).toBe(4n)
   })

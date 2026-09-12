@@ -1,3 +1,5 @@
+import { cancellationTraceReason } from './v2-operation-diagnostics'
+import { V2OperationCancellationError } from './v2-runtime-types'
 import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
@@ -457,7 +459,7 @@ export class V2ReceiverSessionRuntime {
       // A remote final may already have installed its routing tombstone while
       // authenticated responses remain buffered for the consumer. Cancellation
       // still owns releasing that session-wide queue admission.
-      operation.cancel(cancellation.cause)
+      operation.cancel(cancellation.cause, cancellation.protocolReason)
       return
     }
     // Local ownership ends before remote I/O. Otherwise a disappeared or
@@ -465,13 +467,15 @@ export class V2ReceiverSessionRuntime {
     this.#emitProtocolTrace(() => Object.freeze({
       eventName: 'protocol_operation',
       transition: 'cancelled',
+      cancellationReason: cancellationTraceReason(cancellation.protocolReason),
+      ...(operation.requestTrace === undefined ? {} : { request: operation.requestTrace }),
       requestKind: protocolMessageKindV1(operation.requestKind),
       correlation: this.operationCorrelation(operation),
     }))
     for (const lane of this.#lanes.values()) {
       lane.writer.cancelPendingMessages(operation.id, cancellation.cause)
     }
-    operation.cancel(cancellation.cause)
+    operation.cancel(cancellation.cause, cancellation.protocolReason)
     // A withdrawn request has no peer-side operation to cancel.
     if (delivery === 'withdrawn') return
     const lane = (cancellation.laneId === undefined
@@ -717,6 +721,7 @@ function abortCause(signal: AbortSignal): unknown {
 }
 
 function cancellationProtocolReason(cause: unknown): V2OperationCancelReason {
+  if (cause instanceof V2OperationCancellationError) return cause.protocolReason
   return cause instanceof DOMException && cause.name === 'TimeoutError'
     ? V2_OPERATION_CANCEL_REASON.timeout
     : V2_OPERATION_CANCEL_REASON.user

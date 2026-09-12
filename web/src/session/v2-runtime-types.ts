@@ -14,6 +14,16 @@ export const V2_OPERATION_CANCEL_REASON = Object.freeze({
 export type V2OperationCancelReason =
   (typeof V2_OPERATION_CANCEL_REASON)[keyof typeof V2_OPERATION_CANCEL_REASON]
 
+/** Carries cancellation intent through AbortSignal without a dependency on its producer. */
+export class V2OperationCancellationError extends Error {
+  readonly protocolReason: V2OperationCancelReason
+
+  constructor(protocolReason: V2OperationCancelReason, message: string) {
+    super(message)
+    this.protocolReason = protocolReason
+  }
+}
+
 export interface V2OperationCancellation {
   readonly protocolReason: V2OperationCancelReason
   readonly cause: unknown
@@ -24,7 +34,7 @@ export interface V2SessionOperation {
   readonly id: Uint8Array<ArrayBuffer>
   readonly requestKind: V2MessageKind
   next(signal?: AbortSignal): Promise<V2SessionMessage>
-  cancel(cause: unknown): void
+  cancel(cause: unknown, protocolReason?: V2OperationCancelReason): void
 }
 
 export interface V2LaneChange {

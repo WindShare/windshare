@@ -1,6 +1,8 @@
 package contentflow
 
 import (
+	"errors"
+
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -13,6 +15,10 @@ const (
 	SenderDecisionLeaseRelinquished
 	SenderDecisionLeaseUndelivered
 	SenderDecisionLeaseDetached
+	SenderDecisionBlockLeaseReleased
+	SenderDecisionBlockLeaseNotOwned
+	SenderDecisionBlockLeaseExpired
+	SenderDecisionBlockLeaseInvalid
 )
 
 type SenderDecisionTrace struct {
@@ -84,6 +90,27 @@ func (h *SenderHandler) traceLeaseDecision(
 	}
 	h.traceDecision(SenderDecisionTrace{
 		Stage: stage, OperationID: operation, RequestKind: request, LeaseID: lease,
+	})
+}
+
+// Only rejected lease authority needs per-block evidence. Successful block traffic
+// stays off the trace hot path; the lease ID joins the prior release decision.
+func (h *SenderHandler) traceBlockLeaseRejection(operation protocolsession.OperationID, lease content.LeaseID, err error) {
+	var stage SenderDecisionStage
+	switch {
+	case errors.Is(err, errLeaseRelinquished):
+		stage = SenderDecisionBlockLeaseReleased
+	case errors.Is(err, ErrLeaseNotOwned):
+		stage = SenderDecisionBlockLeaseNotOwned
+	case errors.Is(err, content.ErrLeaseExpired):
+		stage = SenderDecisionBlockLeaseExpired
+	case errors.Is(err, content.ErrInvalidLease):
+		stage = SenderDecisionBlockLeaseInvalid
+	default:
+		return
+	}
+	h.traceDecision(SenderDecisionTrace{
+		Stage: stage, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: lease,
 	})
 }
 
