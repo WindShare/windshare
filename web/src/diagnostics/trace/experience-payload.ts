@@ -15,6 +15,7 @@ export type ReceiverExperiencePayloadV1 =
       attention: boolean
       completeness: string
       publication: string
+      elapsed_ms: string | null
     }>
   | Readonly<{
       transition: 'saving'

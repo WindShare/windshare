@@ -1,5 +1,6 @@
 import type { TaskAction, TaskFacts, TaskPresentation, TaskPresentationTransition, TaskStage } from './model'
 import { presentTaskProgress } from './progress'
+import { receiveElapsedMilliseconds } from '../../output/workspace/lifecycle/timing'
 
 import { resolveTaskStage, type StageCopy } from './stage'
 
@@ -33,6 +34,7 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
     objectLabel: facts.display?.objectLabel ?? `Download ${facts.lifecycle.operationId.slice(0, FALLBACK_OPERATION_LABEL_LENGTH)}`,
     destinationLabel: facts.display?.destinationLabel ?? null,
     createdAtMilliseconds: facts.display?.createdAtMilliseconds ?? null,
+    elapsedMilliseconds: receiveElapsedMilliseconds(facts.lifecycle.timing),
     stage: copy.stage,
     headline: copy.headline,
     description: copy.description,
@@ -78,7 +80,8 @@ function transitionFor(facts: TaskFacts, copy: StageCopy, attention: boolean): T
     completeness: facts.completeness, publication: facts.publication, attention,
     fingerprint: [facts.lifecycle.operationId, copy.stage, copy.reason, facts.completeness,
       facts.publication, attention, facts.fidelity?.actionMode,
-      (facts.fidelity?.replacementCount ?? 0) > 0, actionFacts].join(':'),
+      (facts.fidelity?.replacementCount ?? 0) > 0, actionFacts,
+      receiveElapsedMilliseconds(facts.lifecycle.timing)].join(':'),
   })
 }
 

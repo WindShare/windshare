@@ -155,7 +155,8 @@ export type V2ReceiverExperienceTraceEvent =
   | Readonly<{ name: 'receiver_experience'; transition: 'ownership'; operationId: string; generation: bigint;
       state: 'releasing' | 'released' | 'release-failed'; lifecycleKind: ReceiveLifecycleState['kind'] }>
   | Readonly<{ name: 'receiver_experience'; transition: 'task'; operationId: string; generation: bigint;
-      stage: string; reason: string; attention: boolean; completeness: string; publication: string }>
+      stage: string; reason: string; attention: boolean; completeness: string; publication: string;
+      elapsedMilliseconds: number | null }>
   | Readonly<{ name: 'receiver_experience'; transition: 'saving'; projectionEpoch: bigint | null;
       choiceId: string | null; outcome: string | null; reason: string }>
   | Readonly<{ name: 'receiver_experience'; transition: 'intent'; action: string;

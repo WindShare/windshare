@@ -22,7 +22,8 @@ export class ReceiverExperienceObservability {
           observer(Object.freeze({ name: 'receiver_experience', transition: 'task',
             operationId: current.operation_id, generation: current.generation,
             stage: current.stage, reason: current.reason, attention: current.attention,
-            completeness: current.completeness, publication: current.publication }))
+            completeness: current.completeness, publication: current.publication,
+            elapsedMilliseconds: task.elapsedMilliseconds }))
         }
         tasks.set(task.operationId, current)
       }

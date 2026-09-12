@@ -27,9 +27,16 @@ describe('receiver experience diagnostics', () => {
     trace.publish({ ...initial, progress: { ...initial.progress,
       capacityWaitVisible: true, capacityWaitingFiles: 1 } })
     trace.intent('open-downloads', initial)
+    const completed = { ...initial, output: { ...initial.output, lifecycle: {
+      ...next(initial.output.lifecycle, { kind: 'published', receiptDigest: identityText(91), cleanupState: 'clean' }),
+      timing: { startedAtMilliseconds: 1_000, resultReadyAtMilliseconds: 126_000 },
+    } } }
+    trace.publish(completed)
+    trace.publish(completed)
     expect(events).toEqual(expect.arrayContaining([
       expect.objectContaining({ transition: 'task', stage: 'waiting', reason: 'sender-capacity' }),
       expect.objectContaining({ transition: 'saving' }),
+      expect.objectContaining({ transition: 'task', stage: 'saved', elapsedMilliseconds: 125_000 }),
       expect.objectContaining({ transition: 'intent', action: 'open-downloads',
         operationId: initial.output.receiveIntent?.operationId }),
     ]))

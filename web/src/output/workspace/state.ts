@@ -1,5 +1,6 @@
 import type { MaterializationPlan } from '../../transfer/intent'
 import { snapshotIdentity } from './canonical'
+import { advanceReceiveTiming, receiveTimingFields, type ReceiveTiming } from './lifecycle/timing'
 
 const MAXIMUM_RECOVERY_SELECTION_VALUE = 0xffff_ffff_ffff_ffffn
 
@@ -107,6 +108,7 @@ export type ReceiveStateByte = (typeof RECEIVE_STATE_BYTES_BY_KIND)[ReceiveLifec
 const VALID_RECEIVE_STATE_BYTES: ReadonlySet<number> = new Set(Object.values(RECEIVE_STATE_BYTES_BY_KIND))
 
 interface LifecycleStateBase {
+  readonly timing?: ReceiveTiming
   readonly operationId: string
   readonly receiveIntentDigest: string
   readonly generation: bigint
@@ -228,6 +230,7 @@ type StatePayload<T> = T extends LifecycleStateBase
 export type ReceiveLifecycleStatePayload = StatePayload<ReceiveLifecycleState>
 
 export function initialReceiveLifecycleState(input: {
+  readonly startedAtMilliseconds?: number
   readonly operationId: string
   readonly receiveIntentDigest: string
 }): ReceiveLifecycleState {
@@ -236,12 +239,14 @@ export function initialReceiveLifecycleState(input: {
     operationId: snapshotIdentity(input.operationId, 16, 'operation ID'),
     receiveIntentDigest: snapshotIdentity(input.receiveIntentDigest, 32, 'receive intent digest'),
     generation: 1n,
+    ...receiveTimingFields({ startedAtMilliseconds: input.startedAtMilliseconds }),
   })
 }
 
 export function nextReceiveLifecycleState(
   current: ReceiveLifecycleState,
   payload: ReceiveLifecycleStatePayload,
+  clock: () => number = Date.now,
 ): ReceiveLifecycleState {
   if (current.generation >= 0xffff_ffff_ffff_ffffn) {
     throw new TypeError('receive lifecycle generation overflow')
@@ -261,6 +266,7 @@ export function nextReceiveLifecycleState(
     operationId: current.operationId,
     receiveIntentDigest: current.receiveIntentDigest,
     generation: current.generation + 1n,
+    ...advanceReceiveTiming(current.timing, payload.kind, clock),
   }) as ReceiveLifecycleState
 }
 
