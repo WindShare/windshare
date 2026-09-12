@@ -60,6 +60,21 @@ existing work. Reservations remain charged until blocks settle. These requests a
 for measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
 independent allocations and rescues; connection status alone does not identify a transfer bottleneck.
 
+## Browser folder saving
+
+Folder claims use bounded inspection workers that refill as files become ready. Independent claims
+can reach durable registration without waiting for a slower sibling; database transactions still batch
+ready work. Browser namespace operations serialize briefly per parent, while writer ownership and
+file removal conflict only for the same verified file. Recursive cleanup requires terminal authority.
+`lineage_claims` measures successful unique claims (duplicate requests coalesce); its phase totals
+include overlapping waits on shared transactions. The inspector also includes failed attempts.
+`inspect_entry` and `create_file` separate namespace inspection from creation. IndexedDB stage events
+identify the actual batched transactions.
+
+Compare runs from output-authority acquisition through confirmed publication. A ZIP handed to the
+browser has a different completion boundary from a folder confirmed saved. Summed queue wait times
+overlap across files and must not be subtracted from elapsed download time.
+
 ## Output
 
 Standard output is one schema-versioned JSON report with environment context, command outcomes,

@@ -138,6 +138,14 @@ export class MemoryCheckpointRepository implements FileCheckpointJournal {
       throw new Error('simulated atomic created-file commit failure')
     }
     validateFileCheckpointTransition(input.candidate, input.committed)
+    const existing = this.#committed.get(input.committed.recordId)
+    const existingHandle = this.#handles.get(input.handle.id)
+    if (!this.#candidates.has(input.candidate.recordId) &&
+        existing?.checksum === input.committed.checksum &&
+        existingHandle?.operationId === input.handle.operationId &&
+        existingHandle?.kind === input.handle.kind &&
+        existingHandle?.ownedObjectId === input.handle.ownedObjectId &&
+        existingHandle?.authorityRef === input.handle.authorityRef) return
     if (this.#candidates.get(input.candidate.recordId)?.checksum !== input.candidate.checksum) {
       throw new DOMException('created-file candidate missing', 'InvalidStateError')
     }

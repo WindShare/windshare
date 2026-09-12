@@ -175,12 +175,9 @@ const PAYLOAD_FOR_EVERY_EVENT = {
       maximum_active: 0,
       active_at_completion: 0,
     },
-    claim_batches: {
+    lineage_claims: {
       count: '0',
-      members: '0',
-      maximum_size: 0,
-      oldest_wait_ms: EMPTY_PERFORMANCE_HISTOGRAM,
-      newest_wait_ms: EMPTY_PERFORMANCE_HISTOGRAM,
+      wait_ms: EMPTY_PERFORMANCE_HISTOGRAM,
       run_ms: EMPTY_PERFORMANCE_HISTOGRAM,
       phases: {
         classification: emptyClaimPhase(),
@@ -265,7 +262,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
 
 function emptyClaimPhase() {
   return {
-    batch_count: '0',
+    claim_count: '0',
     member_count: '0',
     queue_ms: EMPTY_PERFORMANCE_HISTOGRAM,
     run_ms: EMPTY_PERFORMANCE_HISTOGRAM,

@@ -85,7 +85,8 @@ const capture = () => {
 
 try {
   const sourceFiles = new Set([options.candidate.slice(1), options.baseline.slice(1),
-    'test/browser/fsa-namespace-atomicity-harness.ts', 'scripts/browser-evidence/fsa-small-file/content.mjs'])
+    'test/browser/fsa-namespace-atomicity-harness.ts', 'test/browser/fsa-native-mutation-probe.ts',
+    'scripts/browser-evidence/fsa-small-file/content.mjs'])
   for (const directory of ['src/output', 'src/transfer', 'scripts/browser-evidence/folder-recovery']) {
     for (const entry of await readdir(join(webRoot, directory), { withFileTypes: true, recursive: true })) {
       if (entry.isFile() && /\.(?:ts|mjs|html|ps1)$/u.test(entry.name)) {

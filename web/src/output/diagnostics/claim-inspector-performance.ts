@@ -283,10 +283,10 @@ class ClaimInspectorObservation implements PerformanceClaimInspectorObservation 
   }
 
   #underCapacityReason(): PerformanceClaimInspectorReasonV1 {
-    // Pending work behind the one resident batch is intentionally serialized;
-    // this reason must not imply that a configurable preparation lane exists.
-    if (this.#state.pendingMembers > 0 && this.#state.residentContexts > 0) {
-      return 'batch_serialization'
+    // Admission waits include journal classification, residence backpressure and
+    // same-lineage ordering. They do not imply a whole-batch inspection barrier.
+    if (this.#state.pendingMembers > 0) {
+      return 'admission_wait'
     }
     if (this.#state.orderedSettlementContexts > 0) return 'ordered_settlement'
     return 'no_pending_arrival'

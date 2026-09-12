@@ -23,7 +23,7 @@ import type { ReceiveIntent } from '../../src/transfer/intent'
 import { identity } from './planning/fixture'
 
 describe('browser file writer mutation lifecycle', () => {
-  it('holds the same-parent lane from verification through native close', async () => {
+  it('keeps writer ownership through close while sibling namespace work progresses', async () => {
     const fixture = await writerFixture()
     await fixture.file.openWriter('preserve')
     await fixture.file.writeAt(7n, Uint8Array.of(3, 4))
@@ -35,7 +35,7 @@ describe('browser file writer mutation lifecycle', () => {
     )
 
     await Promise.resolve()
-    expect(namespaceEntered).toBe(false)
+    expect(namespaceEntered).toBe(true)
     expect(fixture.lease.scheduler.diagnostics().activeWriters).toBe(1)
     await fixture.file.flush()
     await namespace
@@ -115,9 +115,9 @@ describe('browser file writer mutation lifecycle', () => {
     await fixture.file.openWriter('preserve')
     await expect(fixture.file.writeAt(0n, Uint8Array.of(5))).rejects.toBe(writeFailure)
     let namespaceEntered = false
-    const namespace = fixture.lease.scheduler.runNamespace(
-      [fixture.parent.schedulerIdentity],
-      'remove-entry',
+    const namespace = fixture.lease.scheduler.runFileMutation(
+      fixture.authorities.file(['payload-0.bin'], 'owned-file-0')!.schedulerTarget,
+      'remove-file',
       async () => { namespaceEntered = true },
     )
 
@@ -148,7 +148,7 @@ describe('browser file writer mutation lifecycle', () => {
     await fixture.release()
   })
 
-  it('keeps namespace work blocked until a native abort attempt settles', async () => {
+  it('keeps same-file removal blocked until a native abort attempt settles', async () => {
     const abortFinished = deferred<void>()
     const writer = new InstrumentedWriter([], { abortGate: abortFinished })
     const fixture = await writerFixture({ writers: [writer] })
@@ -157,9 +157,9 @@ describe('browser file writer mutation lifecycle', () => {
     await writer.abortStarted.promise
     await expect(fixture.file.flush()).rejects.toMatchObject({ name: 'InvalidStateError' })
     let namespaceEntered = false
-    const namespace = fixture.lease.scheduler.runNamespace(
-      [fixture.parent.schedulerIdentity],
-      'remove-entry',
+    const namespace = fixture.lease.scheduler.runFileMutation(
+      fixture.authorities.file(['payload-0.bin'], 'owned-file-0')!.schedulerTarget,
+      'remove-file',
       async () => { namespaceEntered = true },
     )
 

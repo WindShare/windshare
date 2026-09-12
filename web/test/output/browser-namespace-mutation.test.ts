@@ -25,6 +25,7 @@ import {
   MemoryMutationLockManager as MemoryLockManager,
 } from './fsa-mutation-lock-fixture'
 import type {
+  FSAFileMutationIdentity,
   FSAParentMutationIdentity,
 } from '../../src/output/browser/mutation-coordination/model'
 import { TargetOwnershipUnknownError } from '../../src/output/persistent-tree/errors'
@@ -64,7 +65,10 @@ describe('FSA namespace and persisted parent authority', () => {
     const secondParent = directoryHandle('shared-parent', 'first')
     const lease = await acquireFSARootMutationLease(firstParent, manager, 1)
     const writerParent = Symbol('verified-parent') as FSAParentMutationIdentity
-    const writer = await lease.scheduler.acquireWriter(writerParent)
+    const writer = await lease.scheduler.acquireWriter({
+      parent: writerParent,
+      file: Symbol('verified-file') as FSAFileMutationIdentity,
+    })
     let released = false
     const firstRelease = lease.release()
     expect(lease.release()).toBe(firstRelease)

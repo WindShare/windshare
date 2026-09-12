@@ -126,15 +126,12 @@ const PERFORMANCE_SUMMARY = projectPerformanceSummaryPayloadV1({
     maximumActive: 0,
     activeAtCompletion: 0,
   },
-  claimBatches: {
+  lineageClaims: {
     count: 0n,
-    members: 0n,
-    maximumSize: 0,
-    oldestWait: EMPTY_PERFORMANCE_HISTOGRAM,
-    newestWait: EMPTY_PERFORMANCE_HISTOGRAM,
+    wait: EMPTY_PERFORMANCE_HISTOGRAM,
     run: EMPTY_PERFORMANCE_HISTOGRAM,
     phases: Object.fromEntries(PERFORMANCE_CLAIM_PHASES_V1.map(phase => [phase, {
-      batchCount: 0n,
+      claimCount: 0n,
       memberCount: 0n,
       queue: EMPTY_PERFORMANCE_HISTOGRAM,
       run: EMPTY_PERFORMANCE_HISTOGRAM,
@@ -691,30 +688,30 @@ describe('closed TraceEventObservationV2 boundary', () => {
     ;(contradictoryPipeline.payload.file_pipeline as UnknownRecord).worker_ms = '1'
     expectRejected(contradictoryPipeline)
 
-    const contradictoryClaimBatch = clone(performance)
-    ;(contradictoryClaimBatch.payload.claim_batches as UnknownRecord).count = '1'
-    expectRejected(contradictoryClaimBatch)
+    const contradictoryLineageClaim = clone(performance)
+    ;(contradictoryLineageClaim.payload.lineage_claims as UnknownRecord).count = '1'
+    expectRejected(contradictoryLineageClaim)
 
     const contradictoryClaimPhases = clone(performance)
-    const phases = (contradictoryClaimPhases.payload.claim_batches as UnknownRecord)
+    const phases = (contradictoryClaimPhases.payload.lineage_claims as UnknownRecord)
       .phases as UnknownRecord
     ;(phases.installation as UnknownRecord).active_ms = '1'
     expectRejected(contradictoryClaimPhases)
 
     const missingInspectorReason = clone(performance)
-    const missingReasons = (((missingInspectorReason.payload.claim_batches as UnknownRecord)
+    const missingReasons = (((missingInspectorReason.payload.lineage_claims as UnknownRecord)
       .inspector as UnknownRecord).under_capacity as UnknownRecord)
     delete missingReasons.ordered_settlement
     expectRejected(missingInspectorReason)
 
     const openInspector = clone(performance)
-    const completion = (((openInspector.payload.claim_batches as UnknownRecord)
+    const completion = (((openInspector.payload.lineage_claims as UnknownRecord)
       .inspector as UnknownRecord).at_completion as UnknownRecord)
     completion.active = 1
     expectRejected(openInspector)
 
     const nonConservedInspector = clone(performance)
-    const inspector = (nonConservedInspector.payload.claim_batches as UnknownRecord)
+    const inspector = (nonConservedInspector.payload.lineage_claims as UnknownRecord)
       .inspector as UnknownRecord
     inspector.drains = '1'
     inspector.wall_ms = '1'
