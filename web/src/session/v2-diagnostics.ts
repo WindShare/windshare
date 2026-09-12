@@ -153,7 +153,13 @@ export type V2RequestSchedulingTraceEvent = RequestSchedulingObservation & Reado
   correlation: FailureCorrelation
 }>
 
+export type V2LeaseRetirementTraceEvent = import('../content/scheduling/lease-retirement').LeaseRetirementObservation & Readonly<{
+  eventName: 'lease_retirement'
+  correlation: FailureCorrelation
+}>
+
 export type V2ProtocolTraceEvent =
+  | V2LeaseRetirementTraceEvent
   | V2RequestSchedulingTraceEvent
   | V2ContentSchedulingTraceEvent
   | V2ProtocolOperationTraceEvent

@@ -59,6 +59,7 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'protocol_operation',
   'content_scheduling',
   'request_scheduling',
+  'lease_retirement',
   'operation_recovery',
   'peer_attempt',
   'peer_recovery',
@@ -271,6 +272,18 @@ export interface TraceEventPayloadByNameV2 {
         event_class: 'capability_result' | 'artifact_action' | 'authority_result'
       }>
     | AuthorityActivationTransitionV1
+  readonly lease_retirement: Readonly<{
+    lease_id: string
+    attempt: number
+  }> & (
+    | Readonly<{ transition: 'waiting_for_reads' | 'deferred_for_reads' | 'released' }>
+    | Readonly<{ transition: 'retrying'; failure_detail: string }>
+    | Readonly<{
+        transition: 'abandoned'
+        reason: 'service_closed' | 'deadline' | 'remote_failure' | 'barrier_failure'
+        failure_detail: string
+      }>
+  )
   readonly request_scheduling: Readonly<{
     request_sequence: string
     request_kind: 'open_revisions' | 'list_children' | 'renew_lease' | 'release_lease'
@@ -589,6 +602,7 @@ type CorrelatedTraceEventNameV2 =
   | 'operation_recovery'
   | 'content_scheduling'
   | 'request_scheduling'
+  | 'lease_retirement'
   | 'peer_attempt'
   | 'peer_recovery'
   | 'lane_transition'

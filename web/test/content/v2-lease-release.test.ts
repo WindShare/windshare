@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { V2RevisionService } from '../../src/content/v2-session-services'
+import type { LeaseRetirementObservation } from '../../src/content/scheduling/lease-retirement'
 import { V2LaneSet, type V2BlockRouteEligibility } from '../../src/content/v2-broker'
 import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND, type V2MessageKind } from '../../src/session/v2-message'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
@@ -34,6 +35,7 @@ function fixture() {
     senderPublicKey: bytes(identity.senderPublicKeyB64), chunkSize: 1 << 20,
   }
   const requests: V2MessageKind[] = []
+  const retirements: LeaseRetirementObservation[] = []
   let nextId = 30
   const beginOperation = vi.fn(async (kind: V2MessageKind) => {
     requests.push(kind)
@@ -68,8 +70,9 @@ function fixture() {
   lanes.add({ id: 1, fetchBlock: async () => { throw new Error('unused') } }, 'direct')
   const revisions = new V2RevisionService(session, share, bytes(identity.readSecretB64), lanes, {
     now: () => Date.now(), beforeLeaseRelease: () => barrier.promise,
+    onLeaseRetirement: event => retirements.push(event),
   })
-  return { barrier, revisions, share, requests, open: () => revisions.open(fileId, ROUTES),
+  return { barrier, revisions, share, requests, retirements, open: () => revisions.open(fileId, ROUTES),
     close: () => { revisions.close(); lanes.close() } }
 }
 
@@ -83,9 +86,10 @@ describe('revision release caller and shared-read ownership', () => {
       const opened = await harness.open()
       const release = opened.release()
       expect(opened.release()).toBe(release)
-      const timedOut = expect(release).rejects.toThrow('Revision lease release timed out')
+      const timedOut = expect(release).resolves.toBeUndefined()
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
       await timedOut
+      expect(harness.retirements.at(-1)?.transition).toBe('deferred_for_reads')
       expect(harness.requests).not.toContain(V2_MESSAGE_KIND.releaseLease)
       expect(harness.revisions.leaseError(opened.leaseId)).toBeUndefined()
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
@@ -100,7 +104,7 @@ describe('revision release caller and shared-read ownership', () => {
   it('wakes the departing caller on service closure without releasing a shared lease early', async () => {
     const harness = fixture()
     const opened = await harness.open()
-    const releasing = expect(opened.release()).rejects.toMatchObject({ name: 'AbortError' })
+    const releasing = expect(opened.release()).resolves.toBeUndefined()
     harness.close()
     await releasing
     harness.barrier.resolve()
@@ -134,10 +138,7 @@ describe('revision release caller and shared-read ownership', () => {
         broker: { readRange: () => { throw new Error('cancelled ZIP must not read') } },
         output, signal: controller.signal, onInitialDurable: () => undefined,
         onWriteAcknowledged: () => undefined, onComplete: () => undefined,
-      }, file)).rejects.toMatchObject({
-        cause: reason,
-        errors: [reason, expect.objectContaining({ message: 'Revision lease release timed out' })],
-      })
+      }, file)).rejects.toBe(reason)
       await reachedOutput.promise
       await vi.advanceTimersByTimeAsync(RELEASE_WAIT)
       await transfer

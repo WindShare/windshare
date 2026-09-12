@@ -75,6 +75,11 @@ function browserDeliveryRetention(payload: BrowserDeliveryPayloadV1): TraceReten
   }
 }
 
+const LEASE_RETIREMENT_RETENTION = {
+  waiting_for_reads: 'recent', deferred_for_reads: 'outcome', released: 'recent',
+  retrying: 'milestone', abandoned: 'outcome',
+} as const
+
 export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
     case 'protocol_operation':
@@ -91,6 +96,8 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
         default:
           return 'recent'
       }
+    case 'lease_retirement':
+      return LEASE_RETIREMENT_RETENTION[event.payload.transition]
     case 'request_scheduling':
       return event.payload.transition === 'failed' ? 'outcome' : 'recent'
     case 'content_scheduling':

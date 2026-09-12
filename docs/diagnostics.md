@@ -112,6 +112,12 @@ rescues. They include session/lane identity, dispatch sequence, file/block ident
 completion time, outstanding bytes, and measured throughput. Native receiver debug logs report the
 same decisions as `content lane dispatched`. See [content path scheduling](performance.md#content-paths).
 
+Browser `lease_retirement` events record shared-read deferral, idempotent release retries, confirmed
+reclamation, and abandonment with a reason. Session identity, hexadecimal lease ID, and attempt count
+correlate cleanup across lanes. Remote retirement has a 30-second budget; an unconfirmed release falls
+back to sender TTL/session teardown and does not invalidate downloaded files. Shared reads retain
+renewal until they drain, even after the departing consumer's bounded wait ends.
+
 Browser `operation_recovery` events distinguish retrying changed lanes, waiting for availability,
 waiting for a replacement session, and exhausting retries. They include the local operation sequence,
 protocol session, availability revision, lane count, and any backoff. Lane changes reset the operation's

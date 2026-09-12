@@ -1,4 +1,8 @@
 import { linkAbortSignals, operationDeadlineSignal, delayWithAbort } from './scheduling/deadlines'
+import {
+  LEASE_RETIREMENT_WAIT_MILLISECONDS, observeLeaseRetirement, retireRemoteLease,
+  type LeaseRetirementObservation, type LeaseRetirementOwner,
+} from './scheduling/lease-retirement'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
@@ -54,7 +58,6 @@ export {
 
 const V2_LEASE_RETRY_INITIAL_MILLISECONDS = 250
 const V2_LEASE_RETRY_MAXIMUM_MILLISECONDS = 2_000
-const V2_LEASE_RELEASE_TIMEOUT_MILLISECONDS = 30_000
 
 export class V2RemoteRevisionError extends Error {
   readonly failure: V2RevisionFailure
@@ -144,7 +147,8 @@ interface RemoteLeaseState {
 export interface V2OpenedRevision {
   readonly descriptor: V2FileRevisionDescriptor
   readonly leaseId: Uint8Array<ArrayBuffer>
-  /** Bounded caller wait; shared reads retain lease authority until their cleanup drains. */
+  /** Relinquishes this consumer's lease. The service owns bounded remote retirement;
+   * unconfirmed reclamation never changes the file result. Shared reads retain renewal. */
   release(): Promise<void>
 }
 
@@ -158,6 +162,7 @@ export class V2RevisionService {
   readonly #readSecret: Uint8Array<ArrayBuffer>
   readonly #lanes: V2LaneSet
   readonly #beforeLeaseRelease: (leaseId: Uint8Array<ArrayBuffer>) => Promise<void>
+  readonly #retirementOwner: LeaseRetirementOwner
   readonly #now: () => number
   readonly #lifetime = new AbortController()
   readonly #leases = new Map<string, RemoteLeaseState>()
@@ -170,6 +175,7 @@ export class V2RevisionService {
     lanes: V2LaneSet,
     options: {
       readonly beforeLeaseRelease?: (leaseId: Uint8Array<ArrayBuffer>) => Promise<void>
+      readonly onLeaseRetirement?: (observation: LeaseRetirementObservation) => void
       readonly now?: () => number
     } = {},
   ) {
@@ -178,6 +184,8 @@ export class V2RevisionService {
     this.#readSecret = readSecret.slice()
     this.#lanes = lanes
     this.#beforeLeaseRelease = options.beforeLeaseRelease ?? (() => Promise.resolve())
+    this.#retirementOwner = { signal: this.#lifetime.signal,
+      ...(options.onLeaseRetirement === undefined ? {} : { observe: options.onLeaseRetirement }) }
     this.#now = options.now ?? (() => performance.now())
   }
 
@@ -269,22 +277,36 @@ export class V2RevisionService {
   }
 
   async #releaseWhenIdle(leaseId: Uint8Array<ArrayBuffer>): Promise<void> {
-    const deadline = operationDeadlineSignal(
-      this.#lifetime.signal,
-      V2_LEASE_RELEASE_TIMEOUT_MILLISECONDS,
-      new V2SessionRuntimeError('lane', 'Revision lease release timed out'),
-    )
-    // A different consumer may still need a shared read authorized by this lease.
-    // Bound the departing caller's wait without revoking that consumer's authority;
-    // the service keeps renewal and eventual remote cleanup until the barrier drains.
-    const cleanup = Promise.resolve()
-      .then(() => this.#beforeLeaseRelease(leaseId))
-      .then(() => this.#release(leaseId))
+    const identity = { leaseId: leaseKey(leaseId), attempt: 0 }
+    const deadline = operationDeadlineSignal(this.#lifetime.signal, LEASE_RETIREMENT_WAIT_MILLISECONDS,
+      new DOMException('Shared revision reads are still active', 'TimeoutError'))
+    observeLeaseRetirement(this.#retirementOwner, { ...identity, transition: 'waiting_for_reads' })
+    const idle = Promise.resolve().then(() => this.#beforeLeaseRelease(leaseId))
     try {
-      await awaitLeaseRelease(cleanup, deadline.signal)
+      await awaitLeaseRelease(idle, deadline.signal)
+    } catch (failure) {
+      if (!deadline.signal.aborted) {
+        observeLeaseRetirement(this.#retirementOwner, { ...identity, transition: 'abandoned',
+          reason: 'barrier_failure', failure })
+        throw failure
+      }
+      if (this.#closed) {
+        observeLeaseRetirement(this.#retirementOwner, { ...identity, transition: 'abandoned',
+          reason: 'service_closed', failure })
+      } else {
+        // The departing caller no longer owns this wait. Shared reads still own
+        // the lease, so renewal continues until their barrier permits retirement.
+        observeLeaseRetirement(this.#retirementOwner, { ...identity, transition: 'deferred_for_reads' })
+        idle.then(() => this.#release(leaseId)).catch((failure: unknown) => {
+          observeLeaseRetirement(this.#retirementOwner, { ...identity, transition: 'abandoned',
+            reason: 'barrier_failure', failure })
+        })
+      }
+      return
     } finally {
       deadline.close()
     }
+    await this.#release(leaseId)
   }
 
   async #release(leaseId: Uint8Array): Promise<void> {
@@ -295,14 +317,9 @@ export class V2RevisionService {
     state.lifetime.abort(new DOMException('Revision lease released', 'AbortError'))
     if (state.timer !== undefined) clearTimeout(state.timer)
     this.#leases.delete(key)
-    const deadline = operationDeadlineSignal(
-      this.#lifetime.signal,
-      V2_LEASE_RELEASE_TIMEOUT_MILLISECONDS,
-      new V2SessionRuntimeError('lane', 'Revision lease release timed out'),
-    )
-    try {
+    await retireRemoteLease(key, this.#retirementOwner, async signal => {
       const message = await this.#lanes.requests.run(
-        { kind: 'release_lease', signal: deadline.signal },
+        { kind: 'release_lease', signal },
         async route => {
           const operation = await this.#session.beginOperation(
             V2_MESSAGE_KIND.releaseLease, encodeV2LeaseRequest(leaseId), route,
@@ -319,9 +336,7 @@ export class V2RevisionService {
       ) {
         throw new Error('Revision release received an invalid completion')
       }
-    } finally {
-      deadline.close()
-    }
+    })
   }
 
   close(): void {

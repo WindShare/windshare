@@ -273,7 +273,7 @@ async function finishTransferFile(
   primaryFailure: NormalizedV2FileTransferFailure | undefined,
   capacityBlocked: OutputCapacityBlockedError | undefined,
 ): Promise<void> {
-  const releaseFailure = await releaseRevisionLease(acquired, options.outputSettlementTimeoutMilliseconds)
+  const releaseFailure = await releaseRevisionLease(acquired)
   if (capacityBlocked !== undefined && releaseFailure === undefined) {
     try { await capacityBlocked.waitForDrain(options.signal) } catch (error) {
       primaryFailure = normalizeV2FileTransferFailure(error, { signal: options.signal })
@@ -405,18 +405,15 @@ async function pauseCanceledFileTransfer(
 
 async function releaseRevisionLease(
   acquired: V2OpenedRevision | undefined,
-  timeoutMilliseconds: number,
 ): Promise<NormalizedV2FileTransferFailure | undefined> {
   if (acquired === undefined) return undefined
   try {
-    await withOutputSettlementTimeout(
-      'release revision lease',
-      timeoutMilliseconds,
-      () => acquired.release(),
-    )
+    // Lease ownership supplies its own bounded wait; the output mutation budget
+    // cannot promote an unconfirmed remote retirement into a file failure.
+    await acquired.release()
     return undefined
   } catch (error) {
-    return normalizeV2FileTransferFailure(error)
+    return normalizeV2FileTransferFailure(error, { stage: 'settlement' })
   }
 }
 

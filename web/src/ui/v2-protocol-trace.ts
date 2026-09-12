@@ -2,7 +2,7 @@ import { projectContentScheduling } from '../diagnostics/trace/content-schedulin
 import { projectProtocolErrorContentV2 } from '../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
 import { formatDiagnosticText } from '../security/diagnostic-formatter'
-import type { V2ProtocolTraceEvent } from '../session/v2-diagnostics'
+import type { V2LeaseRetirementTraceEvent, V2ProtocolTraceEvent } from '../session/v2-diagnostics'
 import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../diagnostics/trace/model'
 import { correlatedObservation, decimal, requiredCorrelation } from '../diagnostics/export/trace-observation'
 
@@ -16,6 +16,7 @@ export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV2 {
   const correlation = requiredCorrelation(event.correlation)
+  if (event.eventName === 'lease_retirement') return projectLeaseRetirement(event)
   if (event.eventName === 'request_scheduling') {
     return correlatedObservation(event.eventName, correlation, {
       request_sequence: decimal(event.sequence), request_kind: event.kind, route: event.route,
@@ -119,4 +120,20 @@ function projectRetiredOperation(
     ...(event.cancellationReason === undefined ? {} : { cancellation_reason: event.cancellationReason }),
     ...(event.protocolError === undefined ? {} : { protocol_error: projectProtocolErrorContentV2(event.protocolError) }),
   }
+}
+
+function projectLeaseRetirement(event: V2LeaseRetirementTraceEvent): TraceEventObservationV2 {
+  const correlation = requiredCorrelation(event.correlation)
+  const identity = { lease_id: event.leaseId, attempt: event.attempt }
+  if (event.transition === 'retrying' || event.transition === 'abandoned') {
+    const failure_detail = formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT)
+      .slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS)
+    return correlatedObservation(event.eventName, correlation, {
+      ...identity, failure_detail,
+      ...(event.transition === 'abandoned'
+        ? { transition: event.transition, reason: event.reason }
+        : { transition: event.transition }),
+    })
+  }
+  return correlatedObservation(event.eventName, correlation, { ...identity, transition: event.transition })
 }
