@@ -2,7 +2,11 @@ import type { MaterializationRootRelativePath } from '../../../transfer/job/coor
 import { snapshotMaterializationRootRelativePath } from '../../../transfer/job/coordinate/direct-tree'
 import type { PersistedFSAOperationBinding } from '../indexeddb-root-binding'
 import type { FSARootMutationAuthority } from '../namespace-mutation'
-import type { FSAParentMutationIdentity } from './model'
+import type {
+  FSAFileMutationIdentity,
+  FSAParentMutationIdentity,
+  FSAVerifiedFileMutationTarget,
+} from './model'
 import {
   observePerformance,
   type PerformanceSummaryObservations,
@@ -28,6 +32,7 @@ export interface FSAVerifiedFileAuthority {
   readonly canonicalPath: MaterializationRootRelativePath
   readonly physicalName: string
   readonly handle: FileSystemFileHandle
+  readonly schedulerTarget: FSAVerifiedFileMutationTarget
 }
 
 export interface FSAAuthorityCacheDiagnosticsSnapshot {
@@ -72,6 +77,7 @@ export class FSAAuthorityCache {
   readonly #files = new Map<string, FSAVerifiedFileAuthority>()
   readonly #filePathOwners = new Map<string, string>()
   readonly #directoryIdentities = new Map<string, FSAParentMutationIdentity>()
+  readonly #fileIdentities = new Map<string, FSAFileMutationIdentity>()
   readonly #inFlightDirectories = new Map<string, Promise<FSAVerifiedDirectoryAuthority>>()
   #hits = 0
   #misses = 0
@@ -236,6 +242,15 @@ export class FSAAuthorityCache {
         return existing
       }
     }
+    // Namespace admission has already rejected occupied aliases and verified the
+    // exact native handle. Keep its token across cache invalidations so reopening
+    // a durable claim cannot acquire a second concurrent writer for that file.
+    const identityKey = `${input.handleId}\0${input.ownedObjectId}`
+    let schedulerIdentity = this.#fileIdentities.get(identityKey)
+    if (schedulerIdentity === undefined) {
+      schedulerIdentity = Symbol(identityKey) as FSAFileMutationIdentity
+      this.#fileIdentities.set(identityKey, schedulerIdentity)
+    }
     const authority = Object.freeze({
       operationId: this.#operationId,
       handleId: requireIdentity(input.handleId, 'file handle ID'),
@@ -244,6 +259,7 @@ export class FSAAuthorityCache {
       canonicalPath: path,
       physicalName: requireIdentity(input.physicalName, 'file physical name'),
       handle: requireFileHandle(input.handle),
+      schedulerTarget: Object.freeze({ parent: input.parent.schedulerIdentity, file: schedulerIdentity }),
     })
     this.#files.set(key, authority)
     this.#filePathOwners.set(pathKey(path), key)
@@ -284,6 +300,8 @@ export class FSAAuthorityCache {
     this.#directories.clear()
     this.#files.clear()
     this.#filePathOwners.clear()
+    this.#directoryIdentities.clear()
+    this.#fileIdentities.clear()
     this.#inFlightDirectories.clear()
   }
 

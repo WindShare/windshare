@@ -149,7 +149,7 @@ export function projectPerformanceSummaryPayloadV1(
       ),
     },
     revision_opens: projectPerformanceRevisionOpens(input),
-    claim_batches: projectPerformanceClaimBatches(input),
+    lineage_claims: projectPerformanceLineageClaims(input),
     output_resources: projectPerformanceOutputResources(input),
     milestones: projectPerformanceMilestonesV1(input.milestones),
     counter_overflowed: input.counterOverflowed,
@@ -293,64 +293,58 @@ function projectPerformanceRevisionOpens(
   }
 }
 
-function projectPerformanceClaimBatches(
+function projectPerformanceLineageClaims(
   input: PerformanceSummaryProjectionInput,
-): PerformanceSummaryPayloadV1['claim_batches'] {
+): PerformanceSummaryPayloadV1['lineage_claims'] {
   return {
-    count: decimalUint64(input.claimBatches.count, 'claim batches'),
-    members: decimalUint64(input.claimBatches.members, 'claim batch members'),
-    maximum_size: uint32(input.claimBatches.maximumSize, 'maximum claim batch size'),
-    oldest_wait_ms: projectPerformanceHistogramV1(
-      input.claimBatches.oldestWait,
-      'claim batch oldest-member wait',
+    count: decimalUint64(input.lineageClaims.count, 'successful lineage claims'),
+    wait_ms: projectPerformanceHistogramV1(
+      input.lineageClaims.wait,
+      'lineage claim admission wait',
     ),
-    newest_wait_ms: projectPerformanceHistogramV1(
-      input.claimBatches.newestWait,
-      'claim batch newest-member wait',
-    ),
-    run_ms: projectPerformanceHistogramV1(input.claimBatches.run, 'claim batch run'),
+    run_ms: projectPerformanceHistogramV1(input.lineageClaims.run, 'lineage claim run'),
     phases: Object.fromEntries(PERFORMANCE_CLAIM_PHASES_V1.map(phase => [phase, {
-      batch_count: decimalUint64(
-        input.claimBatches.phases[phase].batchCount,
-        `claim ${phase} batch count`,
+      claim_count: decimalUint64(
+        input.lineageClaims.phases[phase].claimCount,
+        `claim ${phase} count`,
       ),
       member_count: decimalUint64(
-        input.claimBatches.phases[phase].memberCount,
+        input.lineageClaims.phases[phase].memberCount,
         `claim ${phase} member count`,
       ),
       queue_ms: projectPerformanceHistogramV1(
-        input.claimBatches.phases[phase].queue,
+        input.lineageClaims.phases[phase].queue,
         `claim ${phase} queue`,
       ),
       run_ms: projectPerformanceHistogramV1(
-        input.claimBatches.phases[phase].run,
+        input.lineageClaims.phases[phase].run,
         `claim ${phase} run`,
       ),
       active_ms: decimalUint64(
-        input.claimBatches.phases[phase].activeMilliseconds,
+        input.lineageClaims.phases[phase].activeMilliseconds,
         `claim ${phase} active milliseconds`,
       ),
       overlap_ms: decimalUint64(
-        input.claimBatches.phases[phase].overlapMilliseconds,
+        input.lineageClaims.phases[phase].overlapMilliseconds,
         `claim ${phase} overlap milliseconds`,
       ),
       maximum_active: uint32(
-        input.claimBatches.phases[phase].maximumActive,
+        input.lineageClaims.phases[phase].maximumActive,
         `claim ${phase} maximum active`,
       ),
       active_at_completion: uint32(
-        input.claimBatches.phases[phase].activeAtCompletion,
+        input.lineageClaims.phases[phase].activeAtCompletion,
         `claim ${phase} active at completion`,
       ),
-    }])) as PerformanceSummaryPayloadV1['claim_batches']['phases'],
+    }])) as PerformanceSummaryPayloadV1['lineage_claims']['phases'],
     inspector: projectPerformanceClaimInspector(input),
   }
 }
 
 function projectPerformanceClaimInspector(
   input: PerformanceSummaryProjectionInput,
-): PerformanceSummaryPayloadV1['claim_batches']['inspector'] {
-  const inspector = input.claimBatches.inspector
+): PerformanceSummaryPayloadV1['lineage_claims']['inspector'] {
+  const inspector = input.lineageClaims.inspector
   return {
       drains: decimalUint64(inspector.drains, 'claim inspector drains'),
       wall_ms: decimalUint64(inspector.wallMilliseconds, 'claim inspector wall'),
@@ -449,7 +443,7 @@ function projectPerformanceClaimInspector(
             `claim inspector ${reason} idle-slot milliseconds`,
           ),
         },
-      ])) as PerformanceSummaryPayloadV1['claim_batches']['inspector']['under_capacity'],
+      ])) as PerformanceSummaryPayloadV1['lineage_claims']['inspector']['under_capacity'],
     }
 }
 

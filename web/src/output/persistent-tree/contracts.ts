@@ -246,7 +246,6 @@ export interface PersistentOutputTree {
     stageScope?: PersistentOutputStageScope,
   ): Promise<PersistentTreeFile | undefined>
   removeFile(path: readonly string[], ownedObjectId: string): Promise<void>
-  removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void>
 }
 
 export interface PersistentMaterializationPort {

@@ -1,5 +1,11 @@
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
+  fileTarget,
+  parentIdentity,
+  probeNativeMutationScheduling,
+  type NativeMutationSchedulingProof,
+} from './fsa-native-mutation-probe'
+import {
   createCompleteDirectoryResultRoot,
   createDirectTreePlan,
   createReceiveIntent,
@@ -74,119 +80,15 @@ interface HeldNativeDrain {
   releasePromise: Promise<void> | undefined
 }
 
-const NATIVE_SCHEDULER_WRITER_LIMIT = 2
 const heldNativeDrains = new Map<string, HeldNativeDrain>()
-
-export interface NativeMutationSchedulingProof {
-  readonly sameParentMutationStartedBeforeWriterClose: boolean
-  readonly independentParentCreatedWhileSameParentDrained: boolean
-  readonly laterWriterAdmittedDuringMutation: boolean
-  readonly eventOrder: readonly string[]
-  readonly sameParentFileBytes: readonly number[]
-  readonly independentParentFileBytes: readonly number[]
-  readonly peakActiveWriters: number
-}
 
 export async function exerciseNativeMutationScheduling(
   fixture: FsaNamespaceFixture,
 ): Promise<NativeMutationSchedulingProof> {
   await resetFixture(fixture)
-  const root = await parentDirectory(fixture, true)
-  const blockedParent = await root.getDirectoryHandle('blocked-parent', { create: true })
-  const independentParent = await root.getDirectoryHandle('independent-parent', { create: true })
-  const blockedIdentity = parentIdentity('blocked-parent')
-  const independentIdentity = parentIdentity('independent-parent')
-  const scheduler = createFSAOperationMutationScheduler({
-    rootParent: parentIdentity('root'),
-    maximumActiveWriters: NATIVE_SCHEDULER_WRITER_LIMIT,
-  })
-  const activeHandle = await blockedParent.getFileHandle('active.bin', { create: true })
-  const activeLease = await scheduler.acquireWriter(blockedIdentity)
-  const activeWriter = await activeHandle.createWritable()
-  const eventOrder: string[] = []
-  const mutationStarted = deferred<void>()
-  const releaseMutation = deferred<void>()
-  let sameParentMutationStarted = false
-  let laterWriterAdmitted = false
-  let laterLease: FSAWriterLifecycleLease | undefined
-  let laterWriterPromise: Promise<FSAWriterLifecycleLease> | undefined
-
   try {
-    await activeWriter.write(Uint8Array.of(1, 2, 3))
-    const sameParentMutation = scheduler.runNamespace(
-      [blockedIdentity],
-      'create-file',
-      async () => {
-        sameParentMutationStarted = true
-        eventOrder.push('same-parent-mutation')
-        const created = await blockedParent.getFileHandle('after-drain.bin', { create: true })
-        const writer = await created.createWritable()
-        await writer.write(Uint8Array.of(4, 5))
-        await writer.close()
-        mutationStarted.resolve()
-        await releaseMutation.promise
-      },
-    )
-    laterWriterPromise = scheduler.acquireWriter(blockedIdentity).then((lease) => {
-      laterLease = lease
-      laterWriterAdmitted = true
-      eventOrder.push('later-writer')
-      return lease
-    })
-
-    const independentResult = await scheduler.runNamespace(
-      [independentIdentity],
-      'create-file',
-      async () => {
-        eventOrder.push('independent-parent-mutation')
-        const created = await independentParent.getFileHandle('independent.bin', { create: true })
-        const writer = await created.createWritable()
-        await writer.write(Uint8Array.of(8, 9))
-        await writer.close()
-        return created
-      },
-    )
-    const sameParentMutationStartedBeforeWriterClose = sameParentMutationStarted
-
-    await activeWriter.close()
-    activeLease.release()
-    await mutationStarted.promise
-    const laterWriterAdmittedDuringMutation = laterWriterAdmitted
-    releaseMutation.resolve()
-    await sameParentMutation
-    laterLease = await laterWriterPromise
-    const laterHandle = await blockedParent.getFileHandle('later.bin', { create: true })
-    const laterNativeWriter = await laterHandle.createWritable()
-    await laterNativeWriter.write(Uint8Array.of(6, 7))
-    await laterNativeWriter.close()
-    laterLease.release()
-    laterLease = undefined
-
-    const sameParentFile = await (await blockedParent.getFileHandle('after-drain.bin')).getFile()
-    const independentParentFile = await independentResult.getFile()
-    const diagnostics = scheduler.diagnostics()
-    await scheduler.close()
-    return Object.freeze({
-      sameParentMutationStartedBeforeWriterClose,
-      independentParentCreatedWhileSameParentDrained:
-        independentParentFile.size === 2 && !sameParentMutationStartedBeforeWriterClose,
-      laterWriterAdmittedDuringMutation,
-      eventOrder: Object.freeze(eventOrder),
-      sameParentFileBytes: Object.freeze([
-        ...new Uint8Array(await sameParentFile.arrayBuffer()),
-      ]),
-      independentParentFileBytes: Object.freeze([
-        ...new Uint8Array(await independentParentFile.arrayBuffer()),
-      ]),
-      peakActiveWriters: diagnostics.peakActiveWriters,
-    })
+    return await probeNativeMutationScheduling(await parentDirectory(fixture, true))
   } finally {
-    releaseMutation.resolve()
-    await activeWriter.abort().catch(() => undefined)
-    activeLease.release()
-    await laterWriterPromise?.catch(() => undefined)
-    laterLease?.release()
-    await scheduler.close().catch(() => undefined)
     await resetFixture(fixture)
   }
 }
@@ -222,8 +124,8 @@ export async function exerciseNativeWriterFailureRelease(
       await parent.getFileHandle('abort-failure.bin', { create: true }),
       'abort',
     )
-    const successorLease = await scheduler.acquireWriter(identity)
     const successorHandle = await parent.getFileHandle('successor.bin', { create: true })
+    const successorLease = await scheduler.acquireWriter(fileTarget(identity, successorHandle.name))
     const successorWriter = await successorHandle.createWritable()
     try {
       await successorWriter.write(Uint8Array.of(21, 22, 23))
@@ -253,8 +155,10 @@ export async function holdNativeRootThroughWriterDrain(
   await resetFixture(fixture)
   const parent = await parentDirectory(fixture, true)
   const rootLease = await acquireFSARootMutationLease(parent, undefined, 1)
-  const writerLease = await rootLease.scheduler.acquireWriter(rootLease.authority.rootParentIdentity)
   const handle = await parent.getFileHandle('held.bin', { create: true })
+  const writerLease = await rootLease.scheduler.acquireWriter(
+    fileTarget(rootLease.authority.rootParentIdentity, handle.name),
+  )
   const writer = await handle.createWritable()
   await writer.write(Uint8Array.of(31, 32))
   heldNativeDrains.set(fixture.databaseName, {
@@ -278,7 +182,7 @@ export async function beginHeldNativeRootDrain(fixture: FsaNamespaceFixture): Pr
   held.releasePromise = Promise.all([schedulerClose, held.rootLease.release()])
     .then(() => { rootReleased = true })
   const lateWriterRejection = await rejectionName(
-    held.scheduler.acquireWriter(held.rootLease.authority.rootParentIdentity),
+    held.scheduler.acquireWriter(fileTarget(held.rootLease.authority.rootParentIdentity, 'late.bin')),
   )
   const lateNamespaceRejection = await rejectionName(held.scheduler.runRootNamespace(
     'create-file',
@@ -1182,7 +1086,7 @@ async function failSettledNativeWriter(
   handle: FileSystemFileHandle,
   failingOperation: 'close' | 'abort',
 ): Promise<boolean> {
-  const lease = await scheduler.acquireWriter(parent)
+  const lease = await scheduler.acquireWriter(fileTarget(parent, handle.name))
   const writer = await handle.createWritable()
   try {
     if (failingOperation === 'close') {
@@ -1214,10 +1118,6 @@ async function rejectionName(promise: Promise<unknown>): Promise<string> {
     () => 'resolved',
     error => error instanceof Error ? error.name : 'Error',
   )
-}
-
-function parentIdentity(description: string): FSAParentMutationIdentity {
-  return Symbol(description) as FSAParentMutationIdentity
 }
 
 function deferred<T>() {

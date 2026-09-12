@@ -74,6 +74,7 @@ export const PERFORMANCE_NAMESPACE_KINDS_V1 = Object.freeze([
   'reserve_name',
   'create_directory',
   'create_file',
+  'inspect_entry',
   'settle_operation',
   'remove_entry',
   'rename_entry',
@@ -100,7 +101,7 @@ export const PERFORMANCE_CLAIM_PHASES_V1 = Object.freeze([
 
 export const PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1 = Object.freeze([
   'no_pending_arrival',
-  'batch_serialization',
+  'admission_wait',
   'ordered_settlement',
 ] as const)
 
@@ -243,15 +244,12 @@ export type PerformanceSummaryProjectionInput = Readonly<{
     maximumActive: number
     activeAtCompletion: number
   }>
-  claimBatches: Readonly<{
+  lineageClaims: Readonly<{
     count: bigint
-    members: bigint
-    maximumSize: number
-    oldestWait: PerformanceHistogramSnapshot
-    newestWait: PerformanceHistogramSnapshot
+    wait: PerformanceHistogramSnapshot
     run: PerformanceHistogramSnapshot
     phases: Readonly<Record<PerformanceClaimPhaseV1, Readonly<{
-      batchCount: bigint
+      claimCount: bigint
       memberCount: bigint
       queue: PerformanceHistogramSnapshot
       run: PerformanceHistogramSnapshot
@@ -392,15 +390,12 @@ export type PerformanceSummaryPayloadV1 = Readonly<{
     maximum_active: number
     active_at_completion: number
   }>
-  claim_batches: Readonly<{
+  lineage_claims: Readonly<{
     count: string
-    members: string
-    maximum_size: number
-    oldest_wait_ms: PerformanceHistogramPayloadV1
-    newest_wait_ms: PerformanceHistogramPayloadV1
+    wait_ms: PerformanceHistogramPayloadV1
     run_ms: PerformanceHistogramPayloadV1
     phases: Readonly<Record<PerformanceClaimPhaseV1, Readonly<{
-      batch_count: string
+      claim_count: string
       member_count: string
       queue_ms: PerformanceHistogramPayloadV1
       run_ms: PerformanceHistogramPayloadV1

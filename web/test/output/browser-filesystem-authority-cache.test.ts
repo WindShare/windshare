@@ -81,6 +81,32 @@ describe('browser filesystem authority cache', () => {
     expect(fixture.cache.directory(['mapped'])).toBeUndefined()
   })
 
+  it('retains the exact file scheduling identity across cache invalidation and reopen', async () => {
+    const fixture = cacheFixture()
+    const installation = fileInstallation(fixture.cache.pickedParent(), ['payload.bin'], 'owned-payload')
+    const first = fixture.cache.installFile(installation)
+    const scheduler = createFSAOperationMutationScheduler({
+      rootParent: fixture.rootIdentity,
+      maximumActiveWriters: 2,
+    })
+    const active = await scheduler.acquireWriter(first.schedulerTarget)
+    fixture.cache.invalidateSubtree(['payload.bin'])
+    const reopened = fixture.cache.installFile(installation)
+    expect(reopened).not.toBe(first)
+    expect(reopened.schedulerTarget).toEqual(first.schedulerTarget)
+    let reacquired = false
+    const pending = scheduler.acquireWriter(reopened.schedulerTarget).then((lease) => {
+      reacquired = true
+      return lease
+    })
+    await Promise.resolve()
+    expect(reacquired).toBe(false)
+    active.release()
+    const next = await pending
+    next.release()
+    await scheduler.close()
+  })
+
   it('clears retained handles and rejects later admission after close', () => {
     const fixture = cacheFixture()
     fixture.cache.installDirectory(directoryInstallation(fixture, ['nested'], 'nested-object'))

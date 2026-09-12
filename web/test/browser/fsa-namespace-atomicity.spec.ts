@@ -15,11 +15,13 @@ const WORKSPACE_RECORDS_PATH = '/src/output/workspace/records.ts'
 
 interface NamespaceHarness {
   exerciseNativeMutationScheduling(fixture: FsaNamespaceFixture): Promise<{
-    sameParentMutationStartedBeforeWriterClose: boolean
-    independentParentCreatedWhileSameParentDrained: boolean
-    laterWriterAdmittedDuringMutation: boolean
+    siblingInspection: string
+    siblingCreatedBeforeWriterClose: boolean
+    siblingWriterCompletedBeforeWriterClose: boolean
+    removalStartedBeforeWriterClose: boolean
+    laterWriterAdmittedDuringRemoval: boolean
     eventOrder: readonly string[]
-    sameParentFileBytes: readonly number[]
+    siblingFileBytes: readonly number[]
     independentParentFileBytes: readonly number[]
     peakActiveWriters: number
   }>
@@ -95,7 +97,7 @@ interface NamespaceHarness {
   }>
 }
 
-test('native FSA scheduler drains same-parent writers without blocking independent parents', async ({
+test('native FSA sibling files progress while same-file removal drains its writer', async ({
   browserName,
   page,
 }) => {
@@ -106,17 +108,20 @@ test('native FSA scheduler drains same-parent writers without blocking independe
     'exerciseNativeMutationScheduling',
     testFixture('native-scheduler'),
   )).toEqual({
-    sameParentMutationStartedBeforeWriterClose: false,
-    independentParentCreatedWhileSameParentDrained: true,
-    laterWriterAdmittedDuringMutation: false,
+    siblingInspection: 'NotFoundError',
+    siblingCreatedBeforeWriterClose: true,
+    siblingWriterCompletedBeforeWriterClose: true,
+    removalStartedBeforeWriterClose: false,
+    laterWriterAdmittedDuringRemoval: false,
     eventOrder: [
-      'independent-parent-mutation',
-      'same-parent-mutation',
-      'later-writer',
+      'sibling-created',
+      'independent-parent-created',
+      'same-file-removal',
+      'later-same-file-writer',
     ],
-    sameParentFileBytes: [4, 5],
+    siblingFileBytes: [4, 5],
     independentParentFileBytes: [8, 9],
-    peakActiveWriters: 1,
+    peakActiveWriters: 2,
   })
 })
 

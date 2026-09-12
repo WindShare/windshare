@@ -272,27 +272,6 @@ export class OriginPrivateWorkspaceTree implements PersistentOutputTree {
     ))
   }
 
-  async removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void> {
-    const canonical = snapshotPath(path, true)
-    if (canonical.length === 0) {
-      throw new TypeError('workspace root cleanup belongs to the aggregate lifecycle')
-    }
-    const objectId = snapshotIdentity(ownedObjectId, 32, 'owned object ID')
-    if (!await this.validateDirectory(canonical, objectId)) {
-      throw new TargetOwnershipUnknownError('cleanup', this.#root.operationId)
-    }
-    const record = await this.#readHandle(
-      originPrivateDirectoryHandleId(this.#root.operationId, objectId),
-      'cleanup',
-    )
-    const handle = requireFileHandle(record?.handle, this.#root.operationId, 'cleanup')
-    await this.#root.removeObject(ORIGIN_PRIVATE_DIRECTORY_OBJECT_CONTAINER, objectId, handle)
-    await this.#handles.deleteHandle(originPrivateDirectoryHandleId(
-      this.#root.operationId,
-      objectId,
-    ))
-  }
-
   #file(
     path: readonly string[],
     ownedObjectId: string,

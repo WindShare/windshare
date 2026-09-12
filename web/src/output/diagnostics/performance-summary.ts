@@ -21,7 +21,7 @@ import {
   requirePerformanceMilliseconds,
 } from './performance-histogram'
 import { BoundedPerformanceStarvationSummary } from './performance-starvation-summary'
-import type { PerformanceClaimPhaseSamples } from './claim-batch-performance'
+import type { PerformanceClaimPhaseSamples } from './lineage-claim-performance'
 import type { PerformanceClaimInspectorSample } from './claim-inspector-performance'
 
 const UINT32_MAX = 0xffff_ffff
@@ -91,10 +91,8 @@ export interface PerformanceSummarySink {
     runMilliseconds: number
     succeeded: boolean
   }>): void
-  observeClaimBatch(input: Readonly<{
-    size: number
-    oldestWaitMilliseconds: number
-    newestWaitMilliseconds: number
+  observeLineageClaim(input: Readonly<{
+    waitMilliseconds: number
     runMilliseconds: number
     phases: PerformanceClaimPhaseSamples
   }>): void
@@ -417,15 +415,13 @@ export class BoundedPerformanceSummary implements PerformanceSummarySink {
     this.#starvation.revisionFinished(input)
   }
 
-  observeClaimBatch(input: Readonly<{
-    size: number
-    oldestWaitMilliseconds: number
-    newestWaitMilliseconds: number
+  observeLineageClaim(input: Readonly<{
+    waitMilliseconds: number
     runMilliseconds: number
     phases: PerformanceClaimPhaseSamples
   }>): void {
     if (this.#completed !== undefined) return
-    this.#starvation.observeClaimBatch(input)
+    this.#starvation.observeLineageClaim(input)
   }
 
   observeClaimInspector(input: PerformanceClaimInspectorSample): void {
@@ -508,7 +504,7 @@ export class BoundedPerformanceSummary implements PerformanceSummarySink {
         sealElapsed: this.#ledger.sealElapsed.snapshot(),
       }),
       revisionOpens: starvation.revisionOpens,
-      claimBatches: starvation.claimBatches,
+      lineageClaims: starvation.lineageClaims,
       outputResources: starvation.outputResources,
       milestones: Object.freeze({ ...this.#milestones }),
       counterOverflowed: this.#counterOverflowed,
