@@ -15,6 +15,7 @@ import {
   outputFault,
   sourceFault,
 } from '../../src/transfer/fault'
+import { OriginCapacityDataError } from '../../src/output/origin-private/capacity/errors'
 import { V2TransferAdmissionFailureError } from '../../src/transfer/job/admission-error'
 import {
   V2FileOutputError,
@@ -58,7 +59,7 @@ describe('transfer failure classification', () => {
     if (replay.kind === 'fault') expect(replay.factRef).toBe(normalized.factRef)
   })
 
-  it('carries only reviewed authority across transfer admission', () => {
+  it('carries reviewed authority and immutable exception evidence across transfer admission', () => {
     const normalized = normalizeV2FileTransferFailure(new Error('private admission detail'), {
       stage: 'authority_selection',
     })
@@ -74,7 +75,26 @@ describe('transfer failure classification', () => {
       classification: normalized.diagnostic.classification,
     })
     expect(error.cause).toBeUndefined()
-    expect(JSON.stringify(error.authority)).not.toContain('private admission detail')
+    expect(normalized.fault).toEqual(dependencyContractFault())
+    expect(normalized.fact).toMatchObject({
+      kind: 'unclassified', stage: 'authority_selection',
+      payload: { unclassified: { exception: { errorName: 'Error', message: 'private admission detail' } } },
+    })
+  })
+
+  it('reports invalid capacity as output state failure with the original record evidence', () => {
+    const detail = 'store=workspace-budget-claims id=operation field=occupiedBytes: expected u64 bigint; actual=NaN'
+    const normalized = normalizeV2FileTransferFailure(new OriginCapacityDataError(detail))
+    expect(normalized.kind).toBe('fault')
+    if (normalized.kind !== 'fault') return
+    expect(normalized.fault).toEqual(outputFault(FaultScope.OutputPause, OutputFaultCode.StateIO))
+    expect(normalized.fact).toMatchObject({
+      stage: 'output_reservation',
+      payload: { unclassified: { exception: { errorName: 'DataError', message: expect.stringContaining(detail) } } },
+    })
+    const replay = normalizeV2FileTransferFailure(normalized.diagnostic)
+    expect(replay.kind).toBe('fault')
+    if (replay.kind === 'fault') expect(replay.fact).toBe(normalized.fact)
   })
 
   it('reuses the authenticated protocol fact while producing product fault authority', () => {
