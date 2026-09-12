@@ -1,32 +1,44 @@
-# Browser downloads
+# Browser Downloads
 
-Open a share to see its file, photo, video frame preview, or folder browser. Folder names navigate; checkboxes select items across folders and pages. **Download all**, **Download this folder**, and **Download selected** name the current scope. Clearing an explicit selection never downloads everything.
+WindShare lets you preview, browse, and download shared files and folders directly in the browser without waiting for an initial full scan.
 
-Keep browsing and previewing while the current download runs. Expand **Details** for recovery progress, per-file issues, and filename restoration. **Downloads**, available on the share and home pages, keeps identifiable current and retained tasks together. Reopening a task may require the original share link or authorization for the same destination.
+## Download Scopes
 
-Downloads count the selected contents while receiving files. The task shows received or reused bytes, completed files, and current receive speed; it switches to an exact total and percentage as soon as counting finishes. Remaining time appears only with a known total and a stable receive rate. Large selections may keep counting while bounded discovery waits for transfer to catch up.
+- **Download all**: Downloads everything in the share.
+- **Download this folder**: Downloads the current folder and its subfolders.
+- **Download selected**: Downloads explicitly checked items across folders and pages.
 
-Completed task cards and **Details ? Elapsed** show the time from starting the download until its result is ready, including pauses and reconnecting. The value survives refresh and excludes later waiting to save and browser-managed saving. Older records without timing data leave this field hidden.
+You can continue browsing and previewing files while downloads run in the background.
 
-The primary download action recommends an available result. **Other ways to save** explains alternatives, including ZIP packaging, extra storage, and a later Save step. Supported browsers start the authorized download when ready. **Download started** means the browser took over; it does not prove the file was saved.
+## Saving Options
 
-Direct ZIP saves into the chosen folder as files arrive. Normal completion appends the ZIP directory and tail to the current write session before saving, without reopening the downloaded contents just to finish the archive. Reopening requires destination permission and checks the ZIP's ownership and checkpoint data. If the unfinished file's source revision changes, WindShare keeps the verified completed files and receives that file again from its beginning. **Verify saved ZIP** can confirm a completed save locally after an interrupted completion update, without the sender. Different ZIP files can download concurrently, including into the same folder or into folders with the same name. WindShare prevents its tabs from changing the same ZIP concurrently; avoid editing or replacing an unfinished ZIP from another application.
+WindShare recommends the best save method based on browser capabilities and the selected content:
 
-Browser workspace downloads retain received bytes on this device. A single file becomes the saved artifact without another workspace copy. Folder ZIPs grow as files arrive and can finish locally after receiving completes. A failed continuation keeps previously received ZIP data. If finishing takes too long, WindShare waits for active save operations to finish safely and retains a completed result for saving. A saved copy uses additional device space.
+| Save Option | Behavior | Best For |
+|---|---|---|
+| **Save to folder** | Writes files directly into a chosen local folder via File System Access API. Small files save directly; large or slow files stage in browser storage (OPFS) and copy upon completion for crash resilience. | Modern Chromium browsers; preserving directory structure. |
+| **Direct ZIP** | Streams an archive directly into a chosen folder with incremental checkpoints. Resumable if interrupted. | Multi-file or folder downloads when a single archive file is preferred. |
+| **Browser workspace** | Buffers data in browser storage (OPFS) first, then triggers a browser save/export when complete. | Browsers lacking folder access permissions or single-file downloads. |
 
-Wait for **Pause** to finish before leaving. A successful pause commits received progress for resumable saving methods. A network interruption while the page remains open is different from a browser crash or forced close: after an unexpected exit, only verified checkpoints can resume.
+> Under **Saving and recovery options**, choosing **Write directly to folder** bypasses browser staging completely to conserve local browser storage, but unfinished large files may lose uncheckpointed progress if the browser crashes.
 
-- **Browser workspace:** checkpoints continue at fixed progress intervals as files grow. Exporting needs space for both the retained result and the saved copy, plus time to write that copy.
-- **Direct ZIP:** automatic checkpoints continue as the archive grows, with increasing intervals to limit repeated copying. The unsaved portion can grow between checkpoints. The received-byte counter keeps moving; **Details** shows bytes written into the ZIP and actual restart-safe progress. Pausing saves current progress. Continuing after a checkpoint may copy the saved prefix and require comparable extra destination space.
-- **Save to folder:** choose the destination once. Automatic recovery saves small files directly and may stage individual large or slow files in browser storage. Each completed staged file is copied to the folder and its staging copy is released after the save is confirmed. **Details** separates retained progress, local saving, and saved files. Complete staged files can be saved or retried locally without the sender.
-- **Write directly to folder**, under **Saving and recovery options**, avoids browser staging for the whole task. Automatic checkpoints may stop to limit repeated prefix copying, so a crash can lose most progress in a large unfinished file. Completed files remain saved; pausing commits current progress, and continuing may copy the saved prefix.
+## Progress & Details
 
-Staging needs space for the browser copy and one destination copy while saving. Files awaiting copying count against a shared storage budget; quota estimates are browser storage observations, not destination free-space guarantees. Persistence permission reduces eviction risk but is not required to retain checkpoints. The task's output, destination, and recovery preference stay fixed; new observations affect only files that have not started.
+- **Live indicators**: Displays received/reused bytes, completed files, and transfer speed. Exact totals, percentages, and remaining time appear once item discovery finishes.
+- **Details panel**: Displays per-file transfer status, recovery checkpoints, actual elapsed time, and restart-safe progress.
+- **Downloads hub**: Access active and retained download tasks anytime from the share page or home screen.
 
-For folder downloads, **Stop** ends receiving and removes incomplete browser staging after accepted writes finish. Saved folder files remain, and complete staged files can still be saved locally. If cleanup fails, **Retry staging cleanup** remains available in Downloads after reopening. Previously stopped tasks with incomplete browser data offer **Discard incomplete browser data**. These storage actions do not need the sender or destination permission; **Pause** keeps incomplete progress for continuation.
+## Pause, Resume & Recovery
 
-Checkpoint intervals are scheduling targets, not a hard maximum for crash loss; writes, storage failures, and checkpoint completion affect what can resume. Unfinished workspace downloads and results awaiting save do not expire automatically. Clearing site data or browser eviction can remove retained data. Removing a history record is separate from deleting owned unfinished output; exported files remain separate.
+- **Pause vs. Stop**:
+  - **Pause**: Commits current progress so transfers can safely resume later.
+  - **Stop**: Cancels transfer and removes incomplete staging data while preserving already-saved files.
+- **Crash recovery**: If the tab or browser unexpectedly closes, verified checkpoints allow transfers to resume from where they left off.
+- **Save partial ZIP**: For paused ZIP tasks with completed files, you can export already-completed files into a standalone ZIP immediately without waiting for the rest.
+- **Verify saved ZIP**: Allows verifying a completed archive locally after an interrupted write session.
 
-After a browser download handoff, keep the retained result until you confirm it was saved or choose to discard it. WindShare cannot infer completion from the handoff or a timeout, and repeating Save may create another download copy. Cleanup waits for active reads and leaves retryable data after a failed export.
+## Storage & Cleanup
 
-For a paused ZIP with complete files, eligible browsers offer **Save partial ZIP**. It exports only complete files to a separate ZIP, uses destination space when requested, and keeps the original task available to continue.
+- **Staging vs. Destination**: Staged files temporarily occupy browser storage (OPFS) alongside the target folder until copied. Browser storage quotas do not reflect destination disk free space.
+- **Automatic cleanup**: Staged files are automatically removed after destination writes are confirmed.
+- **Manual cleanup**: For stopped tasks or aborted exports, use **Discard incomplete browser data** or **Retry staging cleanup** from the task card to free browser storage.
