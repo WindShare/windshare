@@ -156,14 +156,14 @@ export class V2LaneSet {
   }
 
   async fetch(demand: V2BlockDemand, routes: V2BlockRouteEligibility, signal: AbortSignal): Promise<V2BlockRecord> {
-    return this.dispatch([{ demand, routes, signal, distance: () => 0n }]).result
+    return this.dispatch([{ demand, routes, signal, priority: 'download', distance: () => 0n }]).result
   }
 
   dispatch<T extends ContentWork>(queued: readonly T[]): { readonly work: T; readonly result: Promise<V2BlockRecord> } {
     try {
       const assignment = this.#allocation.select(queued, [...this.#lanes.values()], this.#now())
       const result = this.#fetch(assignment.work, assignment.lane, assignment.purpose)
-        .finally(() => this.#allocation.completed(assignment.purpose))
+        .finally(() => this.#allocation.completed(assignment.work))
       return { work: assignment.work, result }
     } catch (error) {
       const work = queued[0]
@@ -192,7 +192,7 @@ export class V2LaneSet {
       }
       attempted.add(state)
       const started = this.#now()
-      const estimate = state.performance.estimate(bytes)
+      const estimate = state.performance.estimateCompletionMilliseconds(bytes)
       try {
         const winner = await raceContent(
           signal,
@@ -229,7 +229,7 @@ export class V2LaneSet {
     work.routes.assertActive()
     const candidate = orderedContentLanes([...this.#lanes.values()], work).find(lane => !attempted.has(lane))
     if (candidate === undefined ||
-      !rescueDue(this.#now() - started, estimate, candidate.performance.estimate(demandBytes(work.demand))) ||
+      !rescueDue(this.#now() - started, estimate, candidate.performance.estimateCompletionMilliseconds(demandBytes(work.demand))) ||
       !this.#rescues.acquire()) return undefined
     attempted.add(candidate)
     return this.#fetchAttempt(candidate, work.demand, signal, 'rescue').finally(() => this.#rescues.release())
@@ -248,7 +248,7 @@ export class V2LaneSet {
     signal.throwIfAborted()
     const bytes = demandBytes(demand)
     const started = this.#now()
-    const expectedMilliseconds = state.performance.estimate(bytes)
+    const expectedMilliseconds = state.performance.estimateCompletionMilliseconds(bytes)
     const observation = Object.freeze({
       dispatchSequence: this.#dispatchSequence.next(),
       laneId: state.lane.id,

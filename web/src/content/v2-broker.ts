@@ -1,4 +1,5 @@
 import { OrderedBlockWindow, RangeBufferBudget, IMMEDIATE_BLOCK_CONSUMER, type BlockConsumer } from './scheduling/range-window'
+import type { ContentPriority as V2BlockPriority } from './scheduling/selection'
 import { bigintToSafeNumber, byteRange, type ByteRange } from './geometry'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from './v2-records'
 import {
@@ -26,7 +27,7 @@ export const V2_BLOCK_BROKER_RANGE_BUFFER_BYTES = 64 * 1024 * 1024
 export const V2_BLOCK_BROKER_PARALLEL_READS = 8
 export const V2_BLOCK_BROKER_UPSTREAM_READS = 8
 
-export type V2BlockPriority = 'preview' | 'download' | 'prefetch'
+export type { ContentPriority as V2BlockPriority } from './scheduling/selection'
 
 const PRIORITY_WEIGHTS: Readonly<Record<V2BlockPriority, number>> = Object.freeze({
   preview: 4,
