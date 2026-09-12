@@ -228,7 +228,7 @@ class BrowserPersistentFileAuthority implements BrowserPersistentFile {
   }
 
   async #openWriter(mode: PersistentWriterOpenMode): Promise<FileSystemWritableFileStream> {
-    const lease = await this.#scheduler.acquireWriter(this.#authority.parent.schedulerIdentity)
+    const lease = await this.#scheduler.acquireWriter(this.#authority.schedulerTarget)
     this.#writerLease = lease
     try {
       await this.#verify('writer-open')

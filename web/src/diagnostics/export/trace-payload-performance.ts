@@ -41,7 +41,7 @@ export function validatePerformanceSummary(payload: UnknownRecord): void {
     'final_transactions',
     'ledger',
     'revision_opens',
-    'claim_batches',
+    'lineage_claims',
     'output_resources',
     'milestones',
     'counter_overflowed',
@@ -52,8 +52,8 @@ export function validatePerformanceSummary(payload: UnknownRecord): void {
   validatePerformanceFilePipeline(payload)
   validatePerformanceStorage(payload)
   validateRevisionOpens(recordValue(payload.revision_opens, 'performance revision opens'))
-  validateClaimBatches(
-    recordValue(payload.claim_batches, 'performance claim batches'),
+  validateLineageClaims(
+    recordValue(payload.lineage_claims, 'performance lineage claims'),
     payload.counter_overflowed,
   )
   validateOutputResources(recordValue(payload.output_resources, 'performance output resources'))
@@ -270,38 +270,29 @@ function validateRevisionOpens(revisionOpens: UnknownRecord): void {
   }
 }
 
-function validateClaimBatches(claimBatches: UnknownRecord, counterOverflowed: boolean): void {
-  exactKeys(claimBatches, [
-    'count', 'members', 'maximum_size', 'oldest_wait_ms', 'newest_wait_ms', 'run_ms', 'phases',
+function validateLineageClaims(lineageClaims: UnknownRecord, counterOverflowed: boolean): void {
+  exactKeys(lineageClaims, [
+    'count', 'wait_ms', 'run_ms', 'phases',
     'inspector',
-  ], [], 'performance claim batches')
-  decimalFields(claimBatches, ['count', 'members'], 'performance claim batches')
-  const maximumClaimSize = uint32(claimBatches.maximum_size, 'performance maximum claim batch size')
+  ], [], 'performance lineage claims')
+  decimalFields(lineageClaims, ['count'], 'performance lineage claims')
   for (const [key, label] of [
-    ['oldest_wait_ms', 'oldest-member wait'],
-    ['newest_wait_ms', 'newest-member wait'],
+    ['wait_ms', 'admission wait'],
     ['run_ms', 'run'],
   ] as const) {
-    const histogram = recordValue(claimBatches[key], `performance claim batch ${label}`)
-    validatePerformanceHistogram(histogram, `performance claim batch ${label}`)
-    equalDecimal(claimBatches.count, histogram.sample_count, `performance claim batch ${label} count`)
+    const histogram = recordValue(lineageClaims[key], `performance lineage claim ${label}`)
+    validatePerformanceHistogram(histogram, `performance lineage claim ${label}`)
+    equalDecimal(lineageClaims.count, histogram.sample_count, `performance lineage claim ${label} count`)
   }
-  const claimCount = BigInt(claimBatches.count as string)
-  const claimMembers = BigInt(claimBatches.members as string)
-  if ((claimCount === 0n && (claimMembers !== 0n || maximumClaimSize !== 0)) ||
-      (claimCount > 0n && (claimMembers < claimCount || maximumClaimSize === 0 ||
-        BigInt(maximumClaimSize) > claimMembers))) {
-    throw new TypeError('performance claim batch sizes contradict their counts')
-  }
+  const claimCount = BigInt(lineageClaims.count as string)
   validateClaimPhases(
-    recordValue(claimBatches.phases, 'performance claim phases'),
+    recordValue(lineageClaims.phases, 'performance claim phases'),
     claimCount,
-    claimMembers,
-    histogramDecimal(claimBatches, 'run_ms', 'total_ms'),
+    histogramDecimal(lineageClaims, 'run_ms', 'total_ms'),
     counterOverflowed,
   )
   validateClaimInspector(
-    recordValue(claimBatches.inspector, 'performance claim inspector'),
+    recordValue(lineageClaims.inspector, 'performance claim inspector'),
     counterOverflowed,
   )
 }
@@ -309,7 +300,6 @@ function validateClaimBatches(claimBatches: UnknownRecord, counterOverflowed: bo
 function validateClaimPhases(
   phases: UnknownRecord,
   claimCount: bigint,
-  claimMembers: bigint,
   claimRunMilliseconds: bigint,
   counterOverflowed: boolean,
 ): void {
@@ -319,17 +309,17 @@ function validateClaimPhases(
   for (const phase of PERFORMANCE_CLAIM_PHASES_V1) {
     const summary = recordValue(phases[phase], `performance claim ${phase}`)
     exactKeys(summary, [
-      'batch_count', 'member_count', 'queue_ms', 'run_ms', 'active_ms', 'overlap_ms',
+      'claim_count', 'member_count', 'queue_ms', 'run_ms', 'active_ms', 'overlap_ms',
       'maximum_active', 'active_at_completion',
     ], [], `performance claim ${phase}`)
-    decimalFields(summary, ['batch_count', 'member_count', 'active_ms', 'overlap_ms'],
+    decimalFields(summary, ['claim_count', 'member_count', 'active_ms', 'overlap_ms'],
       `performance claim ${phase}`)
     const queue = recordValue(summary.queue_ms, `performance claim ${phase} queue`)
     const run = recordValue(summary.run_ms, `performance claim ${phase} run`)
     validatePerformanceHistogram(queue, `performance claim ${phase} queue`)
     validatePerformanceHistogram(run, `performance claim ${phase} run`)
-    equalDecimal(summary.batch_count, queue.sample_count, `performance claim ${phase} queue count`)
-    equalDecimal(summary.batch_count, run.sample_count, `performance claim ${phase} run count`)
+    equalDecimal(summary.claim_count, queue.sample_count, `performance claim ${phase} queue count`)
+    equalDecimal(summary.claim_count, run.sample_count, `performance claim ${phase} run count`)
     const maximumActive = uint32(summary.maximum_active, `performance claim ${phase} maximum active`)
     const activeAtCompletion = uint32(
       summary.active_at_completion,
@@ -341,7 +331,7 @@ function validateClaimPhases(
     const runMilliseconds = BigInt(run.total_ms as string)
     const activeMilliseconds = BigInt(summary.active_ms as string)
     const overlapMilliseconds = BigInt(summary.overlap_ms as string)
-    if (!counterOverflowed && (BigInt(summary.batch_count as string) !== claimCount ||
+    if (!counterOverflowed && (BigInt(summary.claim_count as string) !== claimCount ||
         overlapMilliseconds > runMilliseconds ||
         activeMilliseconds > BigInt(maximumActive) * runMilliseconds)) {
       throw new TypeError(`performance claim ${phase} integrals contradict its run`)
@@ -350,13 +340,13 @@ function validateClaimPhases(
     members.set(phase, BigInt(summary.member_count as string))
   }
   if (!counterOverflowed && conservedMilliseconds !== claimRunMilliseconds) {
-    throw new TypeError('performance claim phase durations do not conserve claim-batch run time')
+    throw new TypeError('performance claim phase durations do not conserve lineage claim run time')
   }
-  if (!counterOverflowed && (members.get('classification')! > claimMembers ||
+  if (!counterOverflowed && (members.get('classification')! !== claimCount ||
       members.get('inspection_union')! > members.get('classification')! ||
       members.get('reclassification')! + members.get('installation')! !==
         members.get('inspection_union')!)) {
-    throw new TypeError('performance claim phase members contradict the batch membership')
+    throw new TypeError('performance claim phase members contradict the lineage claim count')
   }
 }
 
