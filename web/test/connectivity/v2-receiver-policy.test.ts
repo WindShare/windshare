@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { FileGeometry } from '../../src/content/geometry'
 import { V2LaneSet, type V2BlockDemand, type V2BlockLane } from '../../src/content/v2-lane-set'
 import type { V2BlockRecord, V2FileRevisionDescriptor } from '../../src/content/v2-records'
-import { createProtocolFailure, type ProtocolFailure } from '../../src/diagnostics/incident/fact'
+import { createReceivedProtocolError, type ReceivedProtocolError } from '../../src/diagnostics/incident/fact'
 import type {
   V2CandidateCounts,
   V2PeerAttemptTraceEvent,
@@ -162,7 +162,7 @@ class FakeSession {
     initialLaneEpoch: 0,
   })
   readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
-  readonly protocolFailures: ProtocolFailure[] = []
+  readonly protocolFailures: ReceivedProtocolError[] = []
   readonly #ids = new Set([this.initialLaneId])
   readonly #listeners = new Set<(change: V2LaneChange) => void>()
   attachGate: Promise<void> | undefined
@@ -257,7 +257,7 @@ class FakeSession {
     })
   }
 
-  recordProtocolFailure(failure: ProtocolFailure): void {
+  recordReceivedProtocolError(failure: ReceivedProtocolError): void {
     this.protocolFailures.push(failure)
   }
 
@@ -442,16 +442,13 @@ function identity(first: number): Uint8Array<ArrayBuffer> {
 }
 
 function authenticatedPeerFailure(code: number): V2AuthenticatedPeerOperationError {
-  return new V2AuthenticatedPeerOperationError(createProtocolFailure({
-    requestKind: 'peer_offer',
-    wireScope: 'peer',
-    wireCode: code,
-    retryable: false,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  return new V2AuthenticatedPeerOperationError(createReceivedProtocolError({
+    requestKind: 'peer_offer', correlation: Object.freeze({
       protocolSessionId: createV2ProtocolSessionIdentity(identity(90)),
       protocolOperationId: createV2ProtocolOperationIdentity(identity(80)),
-    }),
+    }), content: {
+      scope: 'peer', code: code, retryable: false
+    }
   }))
 }
 

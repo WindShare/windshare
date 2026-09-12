@@ -25,7 +25,7 @@ import {
 } from '../../src/transfer/job/coordinate/direct-tree'
 import {
   createFailureIdentity,
-  createProtocolFailure,
+  createReceivedProtocolError,
 } from '../../src/diagnostics/incident'
 import type { DirectZipWriterCheckpointV1 } from '../../src/output/direct-zip/writer'
 import {
@@ -958,17 +958,13 @@ function directZipCapacityError(retryAfterMilliseconds: number): V2RevisionCapac
     retryable: true as const,
     retryAfterMilliseconds,
   })
-  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: true,
-    retryAfterMilliseconds,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: {
+  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', id(10)),
-      protocolOperationId: createFailureIdentity('protocol_operation', id(11)),
-    },
+      protocolOperationId: createFailureIdentity('protocol_operation', id(11))
+    }, content: {
+      scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
+    }
   }))
 }
 

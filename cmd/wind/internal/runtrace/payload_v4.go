@@ -1,25 +1,25 @@
 package runtrace
 
-type relayAuthorityV3 struct {
+type relayAuthorityV4 struct {
 	Scheme string `json:"scheme"`
 	Host   string `json:"host"`
 	Port   uint16 `json:"port"`
 }
 
-type faultV3 struct {
+type faultV4 struct {
 	Domain string `json:"domain"`
 	Scope  string `json:"scope"`
 	Code   uint16 `json:"code"`
 }
 
-type failureV3 struct {
+type failureV4 struct {
 	Code         string   `json:"code"`
 	MessageKey   string   `json:"message_key"`
-	Fault        *faultV3 `json:"fault,omitempty"`
+	Fault        *faultV4 `json:"fault,omitempty"`
 	RetryAfterMS *string  `json:"retry_after_ms,omitempty"`
 }
 
-type fileOutcomesV3 struct {
+type fileOutcomesV4 struct {
 	DownloadedFiles          string `json:"downloaded_files"`
 	PreviouslyPublishedFiles string `json:"previously_published_files"`
 	ResumedFiles             string `json:"resumed_files"`
@@ -30,13 +30,13 @@ type fileOutcomesV3 struct {
 	ModifiedTimeWarnings     string `json:"modified_time_warnings"`
 }
 
-type capacityWaitV3 struct {
+type capacityWaitV4 struct {
 	ActiveWaiters     string `json:"active_waiters"`
 	AccumulatedWaitMS string `json:"accumulated_wait_ms"`
 	Attempts          string `json:"attempts"`
 }
 
-type progressPayloadV3 struct {
+type progressPayloadV4 struct {
 	Discovery                string         `json:"discovery"`
 	CountersExact            bool           `json:"counters_exact"`
 	DiscoveredFiles          string         `json:"discovered_files"`
@@ -46,69 +46,69 @@ type progressPayloadV3 struct {
 	PreviouslyPublishedBytes string         `json:"previously_published_bytes"`
 	VerifiedBytes            string         `json:"verified_bytes"`
 	NewlyVerifiedBytes       string         `json:"newly_verified_bytes"`
-	FileOutcomes             fileOutcomesV3 `json:"file_outcomes"`
-	CapacityWait             capacityWaitV3 `json:"capacity_wait"`
+	FileOutcomes             fileOutcomesV4 `json:"file_outcomes"`
+	CapacityWait             capacityWaitV4 `json:"capacity_wait"`
 }
 
-type sharingSubjectPayloadV3 struct {
+type sharingSubjectPayloadV4 struct {
 	SubjectKind   string  `json:"subject_kind"`
 	SelectedItems string  `json:"selected_items"`
 	FileBytes     *string `json:"file_bytes,omitempty"`
 }
 
-func (sharingSubjectPayloadV3) runTracePayloadV3() {}
+func (sharingSubjectPayloadV4) runTracePayloadV4() {}
 
-type relayConnectedPayloadV3 struct {
-	RelayAuthority relayAuthorityV3 `json:"relay_authority"`
+type relayConnectedPayloadV4 struct {
+	RelayAuthority relayAuthorityV4 `json:"relay_authority"`
 }
 
-func (relayConnectedPayloadV3) runTracePayloadV3() {}
+func (relayConnectedPayloadV4) runTracePayloadV4() {}
 
-type relayRecoveringPayloadV3 struct {
-	RelayAuthority relayAuthorityV3 `json:"relay_authority"`
+type relayRecoveringPayloadV4 struct {
+	RelayAuthority relayAuthorityV4 `json:"relay_authority"`
 	Attempt        uint32           `json:"attempt"`
 	State          string           `json:"state"`
-	Failure        *failureV3       `json:"failure,omitempty"`
+	Failure        *failureV4       `json:"failure,omitempty"`
 }
 
-func (relayRecoveringPayloadV3) runTracePayloadV3() {}
+func (relayRecoveringPayloadV4) runTracePayloadV4() {}
 
-type contentPathSelectedPayloadV3 struct {
+type contentPathSelectedPayloadV4 struct {
 	ContentPath string `json:"content_path"`
 }
 
-func (contentPathSelectedPayloadV3) runTracePayloadV3() {}
+func (contentPathSelectedPayloadV4) runTracePayloadV4() {}
 
-type fallbackPayloadV3 struct {
+type fallbackPayloadV4 struct {
 	FromTransport string    `json:"from_transport"`
 	ToTransport   string    `json:"to_transport"`
-	Failure       failureV3 `json:"failure"`
+	Failure       failureV4 `json:"failure"`
 }
 
-func (fallbackPayloadV3) runTracePayloadV3() {}
+func (fallbackPayloadV4) runTracePayloadV4() {}
 
-type transferProgressPayloadV3 struct {
+type transferProgressPayloadV4 struct {
 	ReceiveOperationID string            `json:"receive_operation_id"`
 	TransferJobID      string            `json:"transfer_job_id"`
-	Progress           progressPayloadV3 `json:"progress"`
+	Progress           progressPayloadV4 `json:"progress"`
 }
 
-func (transferProgressPayloadV3) runTracePayloadV3() {}
+func (transferProgressPayloadV4) runTracePayloadV4() {}
 
-type warningPayloadV3 struct {
-	Failure failureV3 `json:"failure"`
+type warningPayloadV4 struct {
+	Failure failureV4 `json:"failure"`
 }
 
-func (warningPayloadV3) runTracePayloadV3() {}
+func (warningPayloadV4) runTracePayloadV4() {}
 
-type commandFailedPayloadV3 struct {
+type commandFailedPayloadV4 struct {
 	ExitCode int       `json:"exit_code"`
-	Failure  failureV3 `json:"failure"`
+	Failure  failureV4 `json:"failure"`
 }
 
-func (commandFailedPayloadV3) runTracePayloadV3() {}
+func (commandFailedPayloadV4) runTracePayloadV4() {}
 
-type downloadConnectivityV3 struct {
+type downloadConnectivityV4 struct {
 	DownloadID            string   `json:"download_id"`
 	FirstDirectElapsedMS  *string  `json:"first_direct_elapsed_ms"`
 	DirectBytes           string   `json:"direct_bytes"`
@@ -121,47 +121,47 @@ type downloadConnectivityV3 struct {
 	Final                 bool     `json:"final"`
 }
 
-type transferSettledPayloadV3 struct {
-	DownloadConnectivity *downloadConnectivityV3 `json:"download_connectivity,omitempty"`
+type transferSettledPayloadV4 struct {
+	DownloadConnectivity *downloadConnectivityV4 `json:"download_connectivity,omitempty"`
 	ResultStatus         string                  `json:"result_status"`
 	ExitCode             int                     `json:"exit_code"`
 	Drift                string                  `json:"drift"`
 	ResultElapsedMS      string                  `json:"result_elapsed_ms"`
 	DestinationAdjusted  bool                    `json:"destination_adjusted"`
-	FileOutcomes         fileOutcomesV3          `json:"file_outcomes"`
+	FileOutcomes         fileOutcomesV4          `json:"file_outcomes"`
 	DirectoryFailures    string                  `json:"directory_failures"`
 	OmittedDiagnostics   string                  `json:"omitted_diagnostics"`
 	PublishedBytes       string                  `json:"published_bytes"`
 	CountersExact        bool                    `json:"counters_exact"`
-	Failure              *failureV3              `json:"failure,omitempty"`
+	Failure              *failureV4              `json:"failure,omitempty"`
 }
 
-func (transferSettledPayloadV3) runTracePayloadV3() {}
+func (transferSettledPayloadV4) runTracePayloadV4() {}
 
-type sharingStoppedPayloadV3 struct {
+type sharingStoppedPayloadV4 struct {
 	ExitCode        int        `json:"exit_code"`
 	ResultElapsedMS string     `json:"result_elapsed_ms"`
 	StoppedCleanly  bool       `json:"stopped_cleanly"`
-	Failure         *failureV3 `json:"failure,omitempty"`
+	Failure         *failureV4 `json:"failure,omitempty"`
 }
 
-func (sharingStoppedPayloadV3) runTracePayloadV3() {}
+func (sharingStoppedPayloadV4) runTracePayloadV4() {}
 
-type traceIncompletePayloadV3 struct {
+type traceIncompletePayloadV4 struct {
 	Cause            string `json:"cause"`
 	LifecycleDropped string `json:"lifecycle_dropped"`
 	ProgressDropped  string `json:"progress_dropped"`
 }
 
-func (traceIncompletePayloadV3) runTracePayloadV3() {}
+func (traceIncompletePayloadV4) runTracePayloadV4() {}
 
-type laneAdoptedPayloadV3 struct {
+type laneAdoptedPayloadV4 struct {
 	Transport string `json:"transport"`
 }
 
-func (laneAdoptedPayloadV3) runTracePayloadV3() {}
+func (laneAdoptedPayloadV4) runTracePayloadV4() {}
 
-type relayLifecyclePayloadV3 struct {
+type relayLifecyclePayloadV4 struct {
 	LinkID           string  `json:"link_id"`
 	RelaySessionID   *string `json:"relay_session_id,omitempty"`
 	SendOperationID  *string `json:"send_operation_id,omitempty"`
@@ -174,9 +174,9 @@ type relayLifecyclePayloadV3 struct {
 	Dropped          *string `json:"dropped,omitempty"`
 }
 
-func (relayLifecyclePayloadV3) runTracePayloadV3() {}
+func (relayLifecyclePayloadV4) runTracePayloadV4() {}
 
-type webRTCLifecyclePayloadV3 struct {
+type webRTCLifecyclePayloadV4 struct {
 	ChannelID       string  `json:"channel_id"`
 	SendOperationID *string `json:"send_operation_id,omitempty"`
 	Operation       string  `json:"operation"`
@@ -188,29 +188,29 @@ type webRTCLifecyclePayloadV3 struct {
 	Dropped         *string `json:"dropped,omitempty"`
 }
 
-func (webRTCLifecyclePayloadV3) runTracePayloadV3() {}
+func (webRTCLifecyclePayloadV4) runTracePayloadV4() {}
 
-type peerPhaseDeadlineV3 struct {
+type peerPhaseDeadlineV4 struct {
 	Phase      string `json:"phase"`
 	DeadlineMS string `json:"deadline_ms"`
 }
 
-type peerCandidateCountsV3 struct {
+type peerCandidateCountsV4 struct {
 	LocalEmitted   uint32 `json:"local_emitted"`
 	RemoteAccepted uint32 `json:"remote_accepted"`
 }
 
-type peerAdmissionV3 struct {
+type peerAdmissionV4 struct {
 	Disposition      string `json:"disposition"`
 	ResponseDelivery string `json:"response_delivery"`
 }
 
-type peerRejectionV3 struct {
+type peerRejectionV4 struct {
 	Code         string  `json:"code"`
 	RetryAfterMS *string `json:"retry_after_ms,omitempty"`
 }
 
-type peerFailureSummaryV3 struct {
+type peerFailureSummaryV4 struct {
 	LastCompletedStage string `json:"last_completed_stage"`
 	StageElapsedMillis string `json:"stage_elapsed_ms"`
 	DeadlineExpired    bool   `json:"deadline_expired"`
@@ -218,29 +218,29 @@ type peerFailureSummaryV3 struct {
 	Cause              string `json:"cause"`
 }
 
-type peerFailureV3 struct {
-	Summary       *peerFailureSummaryV3 `json:"summary,omitempty"`
+type peerFailureV4 struct {
+	Summary       *peerFailureSummaryV4 `json:"summary,omitempty"`
 	FailedAtStage string                `json:"failed_at_stage"`
 	Scope         string                `json:"scope"`
-	Failure       failureV3             `json:"failure"`
+	Failure       failureV4             `json:"failure"`
 }
 
-type peerAttemptPayloadV3 struct {
+type peerAttemptPayloadV4 struct {
 	AttemptSequence  string                 `json:"attempt_sequence"`
 	AttemptElapsedMS string                 `json:"attempt_elapsed_ms"`
 	Stage            string                 `json:"stage"`
 	OfferOperationID *string                `json:"offer_operation_id,omitempty"`
-	PhaseDeadline    *peerPhaseDeadlineV3   `json:"phase_deadline,omitempty"`
-	Candidates       *peerCandidateCountsV3 `json:"candidates,omitempty"`
+	PhaseDeadline    *peerPhaseDeadlineV4   `json:"phase_deadline,omitempty"`
+	Candidates       *peerCandidateCountsV4 `json:"candidates,omitempty"`
 	GrantOperationID *string                `json:"grant_operation_id,omitempty"`
-	Admission        *peerAdmissionV3       `json:"admission,omitempty"`
-	Rejection        *peerRejectionV3       `json:"rejection,omitempty"`
-	Failure          *peerFailureV3         `json:"failure,omitempty"`
+	Admission        *peerAdmissionV4       `json:"admission,omitempty"`
+	Rejection        *peerRejectionV4       `json:"rejection,omitempty"`
+	Failure          *peerFailureV4         `json:"failure,omitempty"`
 }
 
-func (peerAttemptPayloadV3) runTracePayloadV3() {}
+func (peerAttemptPayloadV4) runTracePayloadV4() {}
 
-type capacityScopeV3 struct {
+type capacityScopeV4 struct {
 	StableHandles            string `json:"stable_handles"`
 	ActiveLeases             string `json:"active_leases"`
 	StableHandleLimit        string `json:"stable_handle_limit"`
@@ -251,27 +251,27 @@ type capacityScopeV3 struct {
 	ActiveReclaims           string `json:"active_reclaims"`
 }
 
-type senderCapacityPayloadV3 struct {
+type senderCapacityPayloadV4 struct {
 	Stage      string           `json:"stage"`
 	DecisionID *string          `json:"decision_id,omitempty"`
 	RevisionID *string          `json:"revision_id,omitempty"`
-	Process    capacityScopeV3  `json:"process"`
-	Share      *capacityScopeV3 `json:"share,omitempty"`
-	Session    *capacityScopeV3 `json:"session,omitempty"`
+	Process    capacityScopeV4  `json:"process"`
+	Share      *capacityScopeV4 `json:"share,omitempty"`
+	Session    *capacityScopeV4 `json:"session,omitempty"`
 }
 
-func (senderCapacityPayloadV3) runTracePayloadV3() {}
+func (senderCapacityPayloadV4) runTracePayloadV4() {}
 
-type senderRevisionPayloadV3 struct {
+type senderRevisionPayloadV4 struct {
 	Stage      string  `json:"stage"`
 	Cause      string  `json:"cause"`
 	RevisionID string  `json:"revision_id"`
 	LeaseID    *string `json:"lease_id,omitempty"`
 }
 
-func (senderRevisionPayloadV3) runTracePayloadV3() {}
+func (senderRevisionPayloadV4) runTracePayloadV4() {}
 
-type transferCapacityLifecycleV3 struct {
+type transferCapacityLifecycleV4 struct {
 	WaitID              string `json:"wait_id"`
 	GenerationID        string `json:"generation_id"`
 	ProtocolOperationID string `json:"protocol_operation_id"`
@@ -283,7 +283,7 @@ type transferCapacityLifecycleV3 struct {
 	ActiveWaiters       uint32 `json:"active_waiters"`
 }
 
-type transferLifecyclePayloadV3 struct {
+type transferLifecyclePayloadV4 struct {
 	ReceiveOperationID string                       `json:"receive_operation_id"`
 	TransferJobID      string                       `json:"transfer_job_id"`
 	Stage              string                       `json:"stage"`
@@ -291,30 +291,30 @@ type transferLifecyclePayloadV3 struct {
 	FileSettlement     string                       `json:"file_settlement"`
 	ItemBlockReason    *string                      `json:"item_block_reason,omitempty"`
 	TreeSettlement     string                       `json:"tree_settlement"`
-	Progress           progressPayloadV3            `json:"progress"`
-	Capacity           *transferCapacityLifecycleV3 `json:"capacity,omitempty"`
-	Failure            *failureV3                   `json:"failure,omitempty"`
+	Progress           progressPayloadV4            `json:"progress"`
+	Capacity           *transferCapacityLifecycleV4 `json:"capacity,omitempty"`
+	Failure            *failureV4                   `json:"failure,omitempty"`
 }
 
-func (transferLifecyclePayloadV3) runTracePayloadV3() {}
+func (transferLifecyclePayloadV4) runTracePayloadV4() {}
 
-type filesystemNativeLockV3 struct {
+type filesystemNativeLockV4 struct {
 	Scope     string `json:"scope"`
 	Milestone string `json:"milestone"`
 }
 
-type filesystemRuntimeDecisionV3 struct {
+type filesystemRuntimeDecisionV4 struct {
 	Component string `json:"component"`
 	Operation string `json:"operation"`
 	Decision  string `json:"decision"`
 }
 
-type filesystemCorrelationV3 struct {
+type filesystemCorrelationV4 struct {
 	OperationID *string `json:"operation_id,omitempty"`
 	ClaimID     *string `json:"claim_id,omitempty"`
 }
 
-type filesystemCountersV3 struct {
+type filesystemCountersV4 struct {
 	NodeClaims             string `json:"node_claims"`
 	DirectoryClaims        string `json:"directory_claims"`
 	FileClaims             string `json:"file_claims"`
@@ -324,62 +324,62 @@ type filesystemCountersV3 struct {
 	CheckpointRecords      string `json:"checkpoint_records"`
 }
 
-type filesystemFailureV3 struct {
+type filesystemFailureV4 struct {
 	Stage              string    `json:"stage"`
 	ReconciliationStep *string   `json:"reconciliation_step,omitempty"`
 	NativeErrorClass   *string   `json:"native_error_class,omitempty"`
-	Failure            failureV3 `json:"failure"`
+	Failure            failureV4 `json:"failure"`
 }
 
-type filesystemCapabilityV3 struct {
+type filesystemCapabilityV4 struct {
 	Supported bool   `json:"supported"`
 	Reason    string `json:"reason"`
 }
 
-type filesystemCapabilitiesV3 struct {
+type filesystemCapabilitiesV4 struct {
 	Mode              string                 `json:"mode"`
-	SafePublish       filesystemCapabilityV3 `json:"safe_publish"`
-	OperationRecovery filesystemCapabilityV3 `json:"operation_recovery"`
-	RangeRecovery     filesystemCapabilityV3 `json:"range_recovery"`
-	CrashCleanup      filesystemCapabilityV3 `json:"crash_cleanup"`
+	SafePublish       filesystemCapabilityV4 `json:"safe_publish"`
+	OperationRecovery filesystemCapabilityV4 `json:"operation_recovery"`
+	RangeRecovery     filesystemCapabilityV4 `json:"range_recovery"`
+	CrashCleanup      filesystemCapabilityV4 `json:"crash_cleanup"`
 }
 
-type filesystemOutputPayloadV3 struct {
-	Capabilities        *filesystemCapabilitiesV3    `json:"capabilities,omitempty"`
+type filesystemOutputPayloadV4 struct {
+	Capabilities        *filesystemCapabilitiesV4    `json:"capabilities,omitempty"`
 	Operation           string                       `json:"operation"`
 	ReceiveOperationID  *string                      `json:"receive_operation_id,omitempty"`
 	ReceiveIntentDigest *string                      `json:"receive_intent_digest,omitempty"`
 	OutputSessionID     *string                      `json:"output_session_id,omitempty"`
 	Certification       *string                      `json:"certification,omitempty"`
-	NativeLock          *filesystemNativeLockV3      `json:"native_lock,omitempty"`
+	NativeLock          *filesystemNativeLockV4      `json:"native_lock,omitempty"`
 	RootDisposition     *string                      `json:"root_disposition,omitempty"`
-	RuntimeDecision     *filesystemRuntimeDecisionV3 `json:"runtime_decision,omitempty"`
+	RuntimeDecision     *filesystemRuntimeDecisionV4 `json:"runtime_decision,omitempty"`
 	CheckpointDecision  *string                      `json:"checkpoint_decision,omitempty"`
-	Correlation         *filesystemCorrelationV3     `json:"output_correlation,omitempty"`
-	Counters            filesystemCountersV3         `json:"counters"`
-	Failure             *filesystemFailureV3         `json:"failure,omitempty"`
+	Correlation         *filesystemCorrelationV4     `json:"output_correlation,omitempty"`
+	Counters            filesystemCountersV4         `json:"counters"`
+	Failure             *filesystemFailureV4         `json:"failure,omitempty"`
 }
 
-func (filesystemOutputPayloadV3) runTracePayloadV3() {}
+func (filesystemOutputPayloadV4) runTracePayloadV4() {}
 
-type senderTerminalSendPayloadV3 struct {
+type senderTerminalSendPayloadV4 struct {
 	Settled              bool   `json:"settled"`
 	TransportDisposition string `json:"transport_disposition"`
 	Outcome              string `json:"outcome"`
 	Decision             string `json:"decision"`
 }
 
-func (senderTerminalSendPayloadV3) runTracePayloadV3() {}
+func (senderTerminalSendPayloadV4) runTracePayloadV4() {}
 
-type senderSessionTerminatedPayloadV3 struct {
+type senderSessionTerminatedPayloadV4 struct {
 	Trigger    string               `json:"trigger"`
 	Provenance string               `json:"provenance"`
-	Failure    *diagnosticFailureV3 `json:"failure,omitempty"`
+	Failure    *diagnosticFailureV4 `json:"failure,omitempty"`
 }
 
-func (senderSessionTerminatedPayloadV3) runTracePayloadV3() {}
+func (senderSessionTerminatedPayloadV4) runTracePayloadV4() {}
 
-type catalogUsageV3 struct {
+type catalogUsageV4 struct {
 	ActiveScans string `json:"active_scans"`
 	ScanWork    string `json:"scan_work"`
 	Entries     string `json:"entries"`
@@ -387,84 +387,117 @@ type catalogUsageV3 struct {
 	SpillBytes  string `json:"spill_bytes"`
 }
 
-type catalogStoragePayloadV3 struct {
+type catalogStoragePayloadV4 struct {
 	Operation          string         `json:"operation"`
 	Cause              string         `json:"cause"`
-	Usage              catalogUsageV3 `json:"usage"`
+	Usage              catalogUsageV4 `json:"usage"`
 	LegacyRootsRemoved string         `json:"legacy_roots_removed"`
 }
 
-func (catalogStoragePayloadV3) runTracePayloadV3() {}
+func (catalogStoragePayloadV4) runTracePayloadV4() {}
 
-type rootPrefetchPayloadV3 struct {
+type rootPrefetchPayloadV4 struct {
 	Decision     string `json:"decision"`
 	Attempt      string `json:"attempt"`
 	EntryCount   string `json:"entry_count"`
 	OmittedCount string `json:"omitted_count"`
 }
 
-func (rootPrefetchPayloadV3) runTracePayloadV3() {}
+func (rootPrefetchPayloadV4) runTracePayloadV4() {}
 
-type protocolSendV3 struct {
+type protocolSendV4 struct {
 	Settled  bool   `json:"settled"`
 	Admitted bool   `json:"admitted"`
 	Outcome  string `json:"outcome"`
 }
 
-type ProtocolFailureV1 struct {
-	RequestKind  string                      `json:"request_kind"`
-	WireScope    string                      `json:"wire_scope"`
-	WireCode     uint16                      `json:"wire_code"`
-	Retryable    bool                        `json:"retryable"`
-	RetryAfterMS *uint32                     `json:"retry_after_ms,omitempty"`
-	Settlement   protocolFailureSettlementV1 `json:"settlement"`
-	Correlation  CorrelationV1               `json:"correlation"`
+type ProtocolErrorContentV4 struct {
+	Scope        string  `json:"scope"`
+	Code         uint16  `json:"code"`
+	Retryable    bool    `json:"retryable"`
+	RetryAfterMS *uint32 `json:"retry_after_ms,omitempty"`
+}
+type protocolContextV4 struct {
+	ObservedAt  string `json:"observed_at"`
+	Role        string `json:"role"`
+	RequestKind string `json:"request_kind,omitempty"`
+}
+type sendAttemptV4 struct {
+	Cause                sendAttemptCauseV4 `json:"cause"`
+	AttemptSequence      string             `json:"attempt_sequence"`
+	LaneID               uint32             `json:"lane_id"`
+	LaneEpoch            uint32             `json:"lane_epoch"`
+	PolicyAdmitted       bool               `json:"policy_admitted"`
+	Settled              bool               `json:"settled"`
+	Outcome              string             `json:"outcome"`
+	TransportDisposition *string            `json:"transport_disposition,omitempty"`
+	End                  string             `json:"end"`
+}
+type responseSendResultV4 struct {
+	Started                bool            `json:"started"`
+	Evidence               string          `json:"evidence"`
+	End                    string          `json:"end"`
+	Cleanup                string          `json:"cleanup"`
+	Attempts               []sendAttemptV4 `json:"attempts"`
+	PendingAttemptSequence *string         `json:"pending_attempt_sequence,omitempty"`
+}
+type protocolResponseSendPayloadV4 struct {
+	protocolContextV4
+	ResponseSequence string                  `json:"response_sequence"`
+	ResponseKind     string                  `json:"response_kind"`
+	ProtocolError    *ProtocolErrorContentV4 `json:"protocol_error,omitempty"`
+	ResponseResult   responseSendResultV4    `json:"response_result"`
 }
 
-type protocolFailureSettlementV1 interface {
-	protocolFailureSettlementV1()
+func (protocolResponseSendPayloadV4) runTracePayloadV4() {}
+
+type protocolSendAttemptSettledPayloadV4 struct {
+	protocolContextV4
+	ResponseSequence string        `json:"response_sequence"`
+	ResponseKind     string        `json:"response_kind"`
+	Attempt          sendAttemptV4 `json:"attempt"`
 }
 
-type receivedAuthenticatedSettlementV1 struct {
-	Kind string `json:"kind"`
+func (protocolSendAttemptSettledPayloadV4) runTracePayloadV4() {}
+
+type protocolErrorReceivedPayloadV4 struct {
+	protocolContextV4
+	ProtocolError *ProtocolErrorContentV4 `json:"protocol_error"`
 }
 
-func (receivedAuthenticatedSettlementV1) protocolFailureSettlementV1() {}
+func (protocolErrorReceivedPayloadV4) runTracePayloadV4() {}
 
-type responseSendSettlementV1 struct {
-	Kind     string `json:"kind"`
-	Admitted bool   `json:"admitted"`
-	Settled  bool   `json:"settled"`
-	Outcome  string `json:"outcome"`
+type senderContentDecisionPayloadV4 struct {
+	protocolContextV4
+	ContentDecision *senderContentDecisionV4 `json:"content_decision"`
 }
 
-func (responseSendSettlementV1) protocolFailureSettlementV1() {}
+func (senderContentDecisionPayloadV4) runTracePayloadV4() {}
 
-type senderContentDecisionV3 struct {
+type senderContentDecisionV4 struct {
 	Kind               string  `json:"kind"`
 	CapacityDecisionID *string `json:"capacity_decision_id,omitempty"`
 	LeaseID            *string `json:"lease_id,omitempty"`
 }
 
-type protocolOperationPayloadV3 struct {
-	Role                    string                   `json:"role"`
-	Stage                   string                   `json:"stage"`
-	RequestKind             string                   `json:"request_kind"`
-	ResponseKind            *string                  `json:"response_kind,omitempty"`
-	Send                    *protocolSendV3          `json:"send,omitempty"`
-	ResponseCount           string                   `json:"response_count"`
-	DeadlineRemainingMS     *string                  `json:"deadline_remaining_ms,omitempty"`
-	OperationElapsedMS      string                   `json:"operation_elapsed_ms"`
-	UsableLanesAtSelection  uint32                   `json:"usable_lanes_at_selection"`
-	UsableLanesAtSettlement uint32                   `json:"usable_lanes_at_settlement"`
-	Cause                   string                   `json:"cause"`
-	ProtocolFailure         *ProtocolFailureV1       `json:"protocol_failure,omitempty"`
-	ContentDecision         *senderContentDecisionV3 `json:"content_decision,omitempty"`
+type protocolOperationPayloadV4 struct {
+	ObservedAt              string          `json:"observed_at"`
+	Role                    string          `json:"role"`
+	Stage                   string          `json:"stage"`
+	RequestKind             string          `json:"request_kind"`
+	ResponseKind            *string         `json:"response_kind,omitempty"`
+	Send                    *protocolSendV4 `json:"send,omitempty"`
+	ResponseCount           string          `json:"response_count"`
+	DeadlineRemainingMS     *string         `json:"deadline_remaining_ms,omitempty"`
+	OperationElapsedMS      string          `json:"operation_elapsed_ms"`
+	UsableLanesAtSelection  uint32          `json:"usable_lanes_at_selection"`
+	UsableLanesAtSettlement uint32          `json:"usable_lanes_at_settlement"`
+	Cause                   string          `json:"cause"`
 }
 
-func (protocolOperationPayloadV3) runTracePayloadV3() {}
+func (protocolOperationPayloadV4) runTracePayloadV4() {}
 
-type laneSettlementPayloadV3 struct {
+type laneSettlementPayloadV4 struct {
 	Route               string `json:"route"`
 	DeliveredBlocks     string `json:"delivered_blocks"`
 	DeliveredBytes      string `json:"delivered_bytes"`
@@ -473,34 +506,48 @@ type laneSettlementPayloadV3 struct {
 	Incomplete          bool   `json:"incomplete"`
 }
 
-func (laneSettlementPayloadV3) runTracePayloadV3() {}
+func (laneSettlementPayloadV4) runTracePayloadV4() {}
 
-type observerLossPayloadV3 struct {
-	Category  string                         `json:"category"`
-	Reason    string                         `json:"reason"`
-	Count     string                         `json:"count"`
-	Rejection *observationRejectionPayloadV3 `json:"rejection,omitempty"`
+type observerLossPayloadV4 struct {
+	OmittedSamples string                         `json:"omitted_samples"`
+	Category       string                         `json:"category"`
+	Reason         string                         `json:"reason"`
+	Count          string                         `json:"count"`
+	Rejection      *observationRejectionPayloadV4 `json:"rejection,omitempty"`
 }
 
-type observationRejectionPayloadV3 struct {
-	Stage     string `json:"source_stage"`
-	Field     string `json:"field"`
-	Rule      string `json:"rule"`
-	Session   string `json:"sample_protocol_session_id,omitempty"`
-	Operation string `json:"sample_protocol_operation_id,omitempty"`
-	Revision  string `json:"sample_revision_id,omitempty"`
+type observationRejectionPayloadV4 struct {
+	Event            string             `json:"source_event"`
+	Source           string             `json:"source_location"`
+	Stage            string             `json:"source_stage"`
+	Field            string             `json:"field"`
+	Rule             string             `json:"rule"`
+	Session          string             `json:"sample_protocol_session_id,omitempty"`
+	Operation        string             `json:"sample_protocol_operation_id,omitempty"`
+	Revision         string             `json:"sample_revision_id,omitempty"`
+	ResponseSequence string             `json:"sample_response_sequence,omitempty"`
+	AttemptSequence  string             `json:"sample_attempt_sequence,omitempty"`
+	Evidence         []rejectionFieldV4 `json:"evidence"`
+	Truncated        bool               `json:"truncated"`
+	OmittedFields    string             `json:"omitted_fields"`
+	OmittedBytes     string             `json:"omitted_bytes"`
+}
+type rejectionFieldV4 struct {
+	Field          string `json:"field"`
+	Representation string `json:"representation"`
+	Value          string `json:"value"`
 }
 
-type platformSetupPayloadV3 struct {
+type platformSetupPayloadV4 struct {
 	State  string `json:"state"`
 	Reason string `json:"reason"`
 }
 
-func (platformSetupPayloadV3) runTracePayloadV3() {}
+func (platformSetupPayloadV4) runTracePayloadV4() {}
 
-func (observerLossPayloadV3) runTracePayloadV3() {}
+func (observerLossPayloadV4) runTracePayloadV4() {}
 
-type receiverTerminationPayloadV3 struct {
+type receiverTerminationPayloadV4 struct {
 	ProtocolOperationID   *string  `json:"protocol_operation_id,omitempty"`
 	LocalGeneration       string   `json:"local_generation"`
 	TransitionAuthority   string   `json:"transition_authority"`
@@ -516,16 +563,23 @@ type receiverTerminationPayloadV3 struct {
 	ChannelDrainFailed    bool     `json:"channel_drain_failed"`
 }
 
-func (receiverTerminationPayloadV3) runTracePayloadV3() {}
+func (receiverTerminationPayloadV4) runTracePayloadV4() {}
 
-type traceSummaryPayloadV3 struct {
-	Incomplete       bool   `json:"incomplete"`
-	LifecycleDropped string `json:"lifecycle_dropped"`
-	ProgressDropped  string `json:"progress_dropped"`
-	EventsWritten    string `json:"events_written"`
-	WriterFailed     bool   `json:"writer_failed"`
-	FlushFailed      bool   `json:"flush_failed"`
-	SchemaLimited    bool   `json:"schema_limited"`
+type traceSummaryPayloadV4 struct {
+	RejectionEvidenceDropped string `json:"rejection_evidence_dropped"`
+	Incomplete               bool   `json:"incomplete"`
+	LifecycleDropped         string `json:"lifecycle_dropped"`
+	ProgressDropped          string `json:"progress_dropped"`
+	EventsWritten            string `json:"events_written"`
+	WriterFailed             bool   `json:"writer_failed"`
+	FlushFailed              bool   `json:"flush_failed"`
+	SchemaLimited            bool   `json:"schema_limited"`
 }
 
-func (traceSummaryPayloadV3) runTracePayloadV3() {}
+func (traceSummaryPayloadV4) runTracePayloadV4() {}
+
+type sendAttemptCauseV4 struct {
+	Kind      string `json:"kind"`
+	Detail    string `json:"detail,omitempty"`
+	Truncated bool   `json:"truncated"`
+}

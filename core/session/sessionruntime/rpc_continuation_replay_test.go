@@ -24,7 +24,7 @@ func TestRPCContinuationRetriesStoppedPreferredWriterAcrossLane(t *testing.T) {
 	outcome, err := fixture.rpc.sendContinuation(
 		context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	)
-	if err != nil || outcome != protocolsession.SendOutcomeDelivered {
+	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
 		t.Fatalf("continuation after stopped preferred writer = outcome %d, error %v", outcome, err)
 	}
 	fixture.assertReplacementOrder()
@@ -54,7 +54,7 @@ func TestRPCContinuationRetriesStaleDrainedPreadmissionDropAcrossLane(t *testing
 
 	select {
 	case sent := <-result:
-		if sent.err != nil || sent.outcome != protocolsession.SendOutcomeDelivered {
+		if sent.err != nil || sent.outcome != protocolsession.SendOutcomeTransportConfirmed {
 			t.Fatalf("continuation after stale queue drain = outcome %d, error %v", sent.outcome, sent.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
@@ -85,7 +85,7 @@ func TestRPCContinuationRetriesClaimedPretransportFailureAcrossLane(t *testing.T
 	outcome, err := fixture.rpc.sendContinuation(
 		context.Background(), fixture.call, protocolsession.MessagePeerCandidate, []byte{0xf6},
 	)
-	if err != nil || outcome != protocolsession.SendOutcomeDelivered {
+	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
 		t.Fatalf("continuation after pretransport failure = outcome %d, error %v", outcome, err)
 	}
 	fixture.assertReplacementOrder()
@@ -149,7 +149,7 @@ func TestRPCContinuationGateSerializesRollbackBeforeExactRetry(t *testing.T) {
 	releaseOnce.Do(func() { close(blocker.release) })
 	select {
 	case result := <-second:
-		if result.outcome != protocolsession.SendOutcomeDelivered || result.err != nil {
+		if result.outcome != protocolsession.SendOutcomeTransportConfirmed || result.err != nil {
 			t.Fatalf("exact retry after rollback = outcome %d, error %v", result.outcome, result.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):
@@ -207,7 +207,7 @@ func TestRPCContinuationGateCoversAutomaticReplacementRetry(t *testing.T) {
 	releaseOnce.Do(func() { close(blocker.release) })
 	select {
 	case result := <-first:
-		if result.outcome != protocolsession.SendOutcomeDelivered || result.err != nil {
+		if result.outcome != protocolsession.SendOutcomeTransportConfirmed || result.err != nil {
 			t.Fatalf("replacement retry owner = outcome %d, error %v", result.outcome, result.err)
 		}
 	case <-time.After(continuationReplayTestTimeout):

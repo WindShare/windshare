@@ -5,7 +5,7 @@ import { V2SessionBlockLane, type V2RevisionService } from '../../src/content/v2
 import { encodeV2Body, V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
 import { V2_SESSION_SEND_TIMEOUT_MILLISECONDS } from '../../src/session/v2-writer'
-import { snapshotTraceEventObservationV1 } from '../../src/diagnostics/export/trace-event-v1'
+import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
 import { id, openSent, runtimeFixture, SHARE } from './v2-send-fixture'
 
@@ -32,7 +32,7 @@ describe('request cancellation across send backpressure', () => {
       ])
       expect(events).toContainEqual(expect.objectContaining({ transition: 'send_withdrawn' }))
       for (const event of events) {
-        expect(() => snapshotTraceEventObservationV1(projectProtocolTraceEvent(event))).not.toThrow()
+        expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(event))).not.toThrow()
       }
     } finally { await runtime.close() }
   })

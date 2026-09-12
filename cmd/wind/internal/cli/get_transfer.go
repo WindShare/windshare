@@ -116,7 +116,7 @@ func (a *App) openGetReceiver(ctx context.Context, capability link.Link, policy 
 		Dial: a.receiverDial,
 		Receiver: liveshare.ReceiverConfig{
 			Capability: capability, ContentRoutePolicy: receiverRoutePolicy(policy),
-			PeerControls: v2signal.ReceiverControlValidator{}, ProtocolTracer: observation.protocolTracer(),
+			PeerControls: v2signal.ReceiverControlValidator{}, ProtocolObservations: observation.protocolObservations(),
 			LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
 		},
 		DialOptions: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},

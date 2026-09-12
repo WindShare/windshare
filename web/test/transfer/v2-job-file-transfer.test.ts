@@ -18,7 +18,7 @@ import {
 import { V2_REVISION_CODE_QUOTA } from '../../src/content/v2-flow'
 import {
   createFailureIdentity,
-  createProtocolFailure,
+  createReceivedProtocolError,
 } from '../../src/diagnostics/incident'
 import { CheckpointLineageDecisionError } from '../../src/output/persistent-tree/errors'
 import type { TransferProgress, TransferTraceEvent } from '../../src/transfer/v2-job'
@@ -672,17 +672,13 @@ function capacityFailure(retryAfterMilliseconds: number): V2RevisionCapacityBusy
     retryable: true as const,
     retryAfterMilliseconds,
   })
-  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: true,
-    retryAfterMilliseconds,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: {
+  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: {
       protocolSessionId: createFailureIdentity('protocol_session', identity(91)),
-      protocolOperationId: createFailureIdentity('protocol_operation', identity(92)),
-    },
+      protocolOperationId: createFailureIdentity('protocol_operation', identity(92))
+    }, content: {
+      scope: 'revision', code: failure.code, retryable: true, retryAfterMilliseconds
+    }
   }))
 }
 

@@ -278,8 +278,19 @@ func (a *App) activateShare(
 
 func stopShareFactory(factory shareSessionFactory, message string) {
 	stopContext, cancel := context.WithTimeout(context.Background(), shareStopTimeout)
-	_ = factory.Stop(stopContext, message)
+	_ = stopShareFactoryWithin(stopContext, factory, message)
 	cancel()
+}
+
+func stopShareFactoryWithin(ctx context.Context, factory shareSessionFactory, message string) error {
+	stopErr := factory.Stop(ctx, message)
+	if ctx.Err() != nil {
+		// The caller deadline bounds graceful waiting, not execution ownership.
+		// The factory already force-closes and joins its runtimes; join that same
+		// terminal worker before shared observation admission or stores are cut.
+		stopErr = errors.Join(stopErr, factory.Stop(context.Background(), message))
+	}
+	return stopErr
 }
 
 func (a *App) serveActiveShare(ctx context.Context, active *activeShare) int {
@@ -295,7 +306,7 @@ func (a *App) serveActiveShare(ctx context.Context, active *activeShare) int {
 	}
 	stopContext, cancelStop := context.WithTimeout(context.Background(), shareStopTimeout)
 	a.recordProcessTrace(processTraceShareComponent, processTraceSenderStop, testrun.OutcomeStarted)
-	stopErr := active.factory.Stop(stopContext, "Sender stopped")
+	stopErr := stopShareFactoryWithin(stopContext, active.factory, "Sender stopped")
 	stopOutcome := testrun.OutcomeSucceeded
 	if stopErr != nil {
 		stopOutcome = testrun.OutcomeFailed
@@ -372,7 +383,7 @@ func (a *App) newShareRuntimeFactory(
 		PeerHandlers:            peers,
 		TerminalSendObserver:    observations.terminalSendObserver(),
 		SessionTerminalObserver: observations.sessionTerminalObserver(),
-		ProtocolTracer:          observations.protocolTracer(),
+		ProtocolObservations:    observations.protocolObservations(),
 	})
 }
 

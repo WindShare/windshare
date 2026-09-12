@@ -75,6 +75,7 @@ func TestSenderPeerAdmissionPublishesPrivateLaneMilestone(t *testing.T) {
 func TestSenderPeerConfigKeepsDetailedDiagnosticsDisabledByDefault(t *testing.T) {
 	emitter := &shareRecordingEmitter{}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	config := senderPeerConfig(observations, false, nil)
 	if config.SenderAttemptObservationCapacity != 0 || config.PeerDiagnosticObservationCapacity != 0 || config.DataChannels != nil {
 		t.Fatalf("sender observer config = %#v", config)
@@ -90,6 +91,7 @@ func TestSenderPeerConfigKeepsDetailedDiagnosticsDisabledByDefault(t *testing.T)
 
 func TestProcessTraceOnlySenderFactoryRetainsAndCompletesItsAttemptStream(t *testing.T) {
 	observations := newShareObservations(&shareRecordingEmitter{})
+	cleanupProtocolObservations(t, observations.protocol)
 	app := &App{processTrace: &processTrace{}}
 	factory, err := app.newSenderPeerFactory(observations, nil)
 	if err != nil {

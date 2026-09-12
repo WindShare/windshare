@@ -31,7 +31,7 @@ func TestOutboundOperationLeaseConcurrentReleaseAndSettlementIsIdempotent(t *tes
 		go func() {
 			defer wait.Done()
 			<-start
-			result.complete(SendOutcomeDelivered, OutboundReplayPermit{}, false, nil)
+			result.complete(SendOutcomeTransportConfirmed, OutboundReplayPermit{}, false, nil)
 		}()
 		close(start)
 		wait.Wait()

@@ -291,6 +291,8 @@ func (trace *recordingUserTrace) Record(event clievent.Event) bool {
 	return true
 }
 
+func (*recordingUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
+
 func (*recordingUserTrace) ReportUpstreamLoss(uint64, uint64) bool { return true }
 
 func (trace *recordingUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }

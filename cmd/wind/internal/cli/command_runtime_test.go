@@ -68,11 +68,13 @@ func TestCommandRuntimeFansOutWithSharedClock(t *testing.T) {
 	if runtime.Clock() != clock {
 		t.Fatal("runtime did not retain the command clock")
 	}
-	getDiagnostics := getObservation{runtime: runtime}
+	getDiagnostics := newGetObservation(runtime)
+	cleanupProtocolObservations(t, getDiagnostics.state.protocol)
 	shareDiagnostics := newShareObservations(runtime)
-	if !runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() == nil ||
+	cleanupProtocolObservations(t, shareDiagnostics.protocol)
+	if !runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolObservations().IsZero() ||
 		getDiagnostics.relayObservationCapacity() == 0 || getDiagnostics.webRTCObservationCapacity() == 0 || getDiagnostics.laneSettlementObservationCapacity() == 0 ||
-		shareDiagnostics.protocolTracer() == nil || shareDiagnostics.terminalSendObserver() == nil ||
+		shareDiagnostics.protocolObservations().IsZero() || shareDiagnostics.terminalSendObserver() == nil ||
 		shareDiagnostics.sessionTerminalObserver() == nil || shareDiagnostics.relayObservationCapacity() == 0 {
 		t.Fatal("verbose/trace runtime did not enable detailed diagnostics")
 	}
@@ -101,11 +103,13 @@ func TestCommandRuntimeLeavesProtocolHotPathUnobservedByDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
-	getDiagnostics := getObservation{runtime: runtime}
+	getDiagnostics := newGetObservation(runtime)
+	cleanupProtocolObservations(t, getDiagnostics.state.protocol)
 	shareDiagnostics := newShareObservations(runtime)
-	if runtime.detailedDiagnosticsEnabled() || getDiagnostics.protocolTracer() != nil ||
+	cleanupProtocolObservations(t, shareDiagnostics.protocol)
+	if runtime.detailedDiagnosticsEnabled() || !getDiagnostics.protocolObservations().IsZero() ||
 		getDiagnostics.relayObservationCapacity() != 0 || getDiagnostics.webRTCObservationCapacity() != 0 || getDiagnostics.laneSettlementObservationCapacity() != 0 ||
-		shareDiagnostics.protocolTracer() != nil || shareDiagnostics.terminalSendObserver() != nil ||
+		!shareDiagnostics.protocolObservations().IsZero() || shareDiagnostics.terminalSendObserver() != nil ||
 		shareDiagnostics.sessionTerminalObserver() != nil || shareDiagnostics.relayObservationCapacity() != 0 {
 		t.Fatal("default runtime enabled detailed diagnostics")
 	}
@@ -148,12 +152,14 @@ func TestCommandRuntimeSeparatesDetailedAndTraceOnlyObserverAuthority(t *testing
 			defer runtime.Close()
 
 			observations := newShareObservations(runtime)
+
+			cleanupProtocolObservations(t, observations.protocol)
 			if opened != test.trace || runtime.traceRecordingEnabled() != test.trace {
 				t.Fatalf("trace opened=%t enabled=%t, want %t", opened, runtime.traceRecordingEnabled(), test.trace)
 			}
 			if runtime.detailedDiagnosticsEnabled() != test.wantDetailed ||
-				(observations.protocolTracer() != nil) != test.wantDetailed {
-				t.Fatalf("detailed runtime=%t protocol=%t, want %t", runtime.detailedDiagnosticsEnabled(), observations.protocolTracer() != nil, test.wantDetailed)
+				(!observations.protocolObservations().IsZero()) != test.wantDetailed {
+				t.Fatalf("detailed runtime=%t protocol=%t, want %t", runtime.detailedDiagnosticsEnabled(), !observations.protocolObservations().IsZero(), test.wantDetailed)
 			}
 			if (observations.terminalSendObserver() != nil) != test.trace ||
 				(observations.sessionTerminalObserver() != nil) != test.trace {
@@ -384,6 +390,7 @@ func TestRelayDropSummaryIsRetainedAndNotDoubleCountedAtCompletion(t *testing.T)
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	observation.TraceRelayLifecycle(relayv2.LifecycleTrace{
 		LinkID: 1, Stage: relayv2.LifecycleTraceDropped,
 		RetirementSource: relayv2.LifecycleRetirementNone,
@@ -506,6 +513,7 @@ func TestGetContextObserversCannotCommitAfterCompletionRevocation(t *testing.T) 
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	relayGate := &observationbridge.PublicationGate{}
 	receiverGate := &observationbridge.PublicationGate{}
 	relayGate.Revoke()
@@ -548,6 +556,7 @@ func TestGetFinalizationWaitsForProducerCompletionCut(t *testing.T) {
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	entered := make(chan struct{})
 	release := make(chan struct{})
 	observation.registerReceiverFactory(receiverObservationCompleterFunc(func(ctx context.Context) v2peer.ReceiverObservationCompletion {
@@ -611,6 +620,7 @@ func TestDrainTimeoutLossPrecedesTerminalWithoutUnexpectedFailure(t *testing.T) 
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	observation.registerReceiverFactory(receiverObservationCompleterFunc(func(context.Context) v2peer.ReceiverObservationCompletion {
 		return v2peer.ReceiverObservationCompletion{
 			Terminations: v2peer.ObservationCompletion{Loss: v2peer.ObservationLoss{CapacityDropped: 2}},
@@ -651,6 +661,7 @@ func TestReaderNonJoinReportsOnlyKnownBufferedAndActiveResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	observation := newGetObservation(runtime)
+	cleanupProtocolObservations(t, observation.state.protocol)
 	observation.reportReaderStatus(clievent.ObserverLossReceiverTermination, observationbridge.Status{
 		Buffered: 2, Active: true, Joined: false,
 	})
@@ -1004,14 +1015,16 @@ func TestPrivateAndUserTraceRemainIndependent(t *testing.T) {
 }
 
 type fakeUserTrace struct {
-	mu        sync.Mutex
-	events    []clievent.Event
-	lifecycle uint64
-	progress  uint64
-	health    chan clievent.TraceIncomplete
-	status    runtrace.Status
-	path      string
-	closeOnce sync.Once
+	mu                 sync.Mutex
+	events             []clievent.Event
+	lifecycle          uint64
+	progress           uint64
+	rejectionEvidence  uint64
+	rejectEvidenceLoss bool
+	health             chan clievent.TraceIncomplete
+	status             runtrace.Status
+	path               string
+	closeOnce          sync.Once
 }
 
 func newFakeUserTrace(status runtrace.Status) *fakeUserTrace {
@@ -1030,6 +1043,16 @@ func (trace *fakeUserTrace) ReportUpstreamLoss(lifecycle, progress uint64) bool 
 	defer trace.mu.Unlock()
 	trace.lifecycle += lifecycle
 	trace.progress += progress
+	return true
+}
+
+func (trace *fakeUserTrace) ReportRejectionEvidenceLoss(count uint64) bool {
+	trace.mu.Lock()
+	defer trace.mu.Unlock()
+	if trace.rejectEvidenceLoss {
+		return false
+	}
+	trace.rejectionEvidence = saturatingAdd(trace.rejectionEvidence, count)
 	return true
 }
 

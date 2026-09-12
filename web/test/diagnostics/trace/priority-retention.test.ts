@@ -1,37 +1,36 @@
 import { describe, expect, it } from 'vitest'
 import { BoundedTraceRecorder } from '../../../src/diagnostics/trace/recorder'
 import { traceEventRetention, TraceRetentionWindow } from '../../../src/diagnostics/trace/retention'
-import type { TraceEventObservationV1 } from '../../../src/diagnostics/trace/model'
+import type { TraceEventObservationV2 } from '../../../src/diagnostics/trace/model'
 import {
-  snapshotTraceEventObservationV1, traceEventObservationBytesV1,
-} from '../../../src/diagnostics/export/trace-event-v1'
+  snapshotTraceEventObservationV2, traceEventObservationBytesV2,
+} from '../../../src/diagnostics/export/trace-event-v2'
 import { FakeTraceTime } from './test-support'
 
 describe('trace evidence under high-volume protocol traffic', () => {
   it('retains cancellation and product milestones across a trace-11 sized burst within the original budgets', () => {
     const time = new FakeTraceTime()
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV1, number, number>({
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, number, number>({
       captureGeneration: 1n, clock: time, scheduler: time,
       eventName: event => event.eventName,
       eventRetention: traceEventRetention,
-      snapshotEvent: snapshotTraceEventObservationV1, eventBytes: traceEventObservationBytesV1,
+      snapshotEvent: snapshotTraceEventObservationV2, eventBytes: traceEventObservationBytesV2,
       snapshotIncident: value => value, incidentMarkerBytes: () => 1,
       incidentScope: value => value, sameScope: (a, b) => a === b,
     })
     const correlation = { protocol_session_id: 'AQEBAQEBAQEBAQEBAQEBAQ', protocol_operation_id: 'AgICAgICAgICAgICAgICAg' }
-    const cancelled: TraceEventObservationV1 = {
+    const cancelled: TraceEventObservationV2 = {
       eventName: 'protocol_operation', correlation, payload: {
         transition: 'cancelled', request_kind: 'request_blocks', cancellation_reason: 'lane_race',
         request: { lease_id: '03'.repeat(16), blocks: { first_index: '7', count: 1 } },
       },
     }
-    const milestone: TraceEventObservationV1 = { eventName: 'join_transition', payload: { transition: 'started' } }
-    const late: TraceEventObservationV1 = {
+    const milestone: TraceEventObservationV2 = { eventName: 'join_transition', payload: { transition: 'started' } }
+    const late: TraceEventObservationV2 = {
       eventName: 'protocol_operation', correlation, payload: {
         transition: 'late_response_discarded', request_kind: 'request_blocks', response_kind: 'operation_error',
         settlement: 'local_cancel', cancellation_reason: 'lane_race',
-        protocol_failure: { request_kind: 'request_blocks', wire_scope: 'revision', wire_code: 0x3008,
-          retryable: false, settlement: { kind: 'received_authenticated' }, correlation },
+        protocol_error: { scope: 'revision', code: 0x3008, retryable: false },
       },
     }
     recorder.record(cancelled)

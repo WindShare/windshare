@@ -364,6 +364,9 @@ func (writer *SessionWriter) decideDeliveryAdmission(
 	}
 	if admission.err != nil {
 		admission.err = fmt.Errorf("write message kind %d: %w", item.message.kind, admission.err)
+		// The formatted execution error is already a concrete string here; receipt
+		// publication must not invoke arbitrary error methods under its mutex.
+		admission.cause = newSendAttemptCauseText(SendAttemptCauseAdmissionFailure, admission.err.Error())
 	}
 	return admission
 }
@@ -398,7 +401,7 @@ func (item *queuedMessage) completePhysicalDelivery(
 	}
 	outcome := physicalSendOutcome(transportDisposition, err)
 	retryableAcrossLane := err != nil
-	if outcome == SendOutcomeDelivered {
+	if outcome == SendOutcomeTransportConfirmed {
 		retryableAcrossLane = false
 	}
 	item.settleContinuation(outcome != SendOutcomeDropped || transportDisposition == framechannel.SendAccepted)
@@ -419,7 +422,7 @@ func physicalSendOutcome(transportDisposition framechannel.SendDisposition, err 
 	if err != nil {
 		return SendOutcomeUnknown
 	}
-	return SendOutcomeDelivered
+	return SendOutcomeTransportConfirmed
 }
 
 func (writer *SessionWriter) materializeSequenced(item *queuedMessage, sequence uint64) error {

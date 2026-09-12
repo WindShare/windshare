@@ -2,7 +2,7 @@ package runtrace
 
 import "github.com/windshare/windshare/cmd/wind/internal/clievent"
 
-func (visitor *encodeVisitorV3) VisitRelayLifecycleObserved(event clievent.RelayLifecycleObserved) error {
+func (visitor *encodeVisitorV4) VisitRelayLifecycleObserved(event clievent.RelayLifecycleObserved) error {
 	stage, err := nameOf(event.Stage())
 	if err != nil {
 		return err
@@ -19,7 +19,7 @@ func (visitor *encodeVisitorV3) VisitRelayLifecycleObserved(event clievent.Relay
 	if err != nil {
 		return err
 	}
-	payload := relayLifecyclePayloadV3{
+	payload := relayLifecyclePayloadV4{
 		LinkID:           decimal(event.LinkID()),
 		Stage:            stage,
 		Terminal:         event.Terminal(),
@@ -47,7 +47,7 @@ func (visitor *encodeVisitorV3) VisitRelayLifecycleObserved(event clievent.Relay
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitWebRTCLifecycleObserved(event clievent.WebRTCLifecycleObserved) error {
+func (visitor *encodeVisitorV4) VisitWebRTCLifecycleObserved(event clievent.WebRTCLifecycleObserved) error {
 	operation, err := nameOf(event.Operation())
 	if err != nil {
 		return err
@@ -68,7 +68,7 @@ func (visitor *encodeVisitorV3) VisitWebRTCLifecycleObserved(event clievent.WebR
 	if err != nil {
 		return err
 	}
-	payload := webRTCLifecyclePayloadV3{
+	payload := webRTCLifecyclePayloadV4{
 		ChannelID:     decimal(event.ChannelID()),
 		Operation:     operation,
 		Transition:    transition,
@@ -92,7 +92,7 @@ func (visitor *encodeVisitorV3) VisitWebRTCLifecycleObserved(event clievent.WebR
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAttemptObserved) error {
+func (visitor *encodeVisitorV4) VisitPeerAttemptObserved(event clievent.PeerAttemptObserved) error {
 	stage, err := nameOf(event.Stage())
 	if err != nil {
 		return err
@@ -105,7 +105,7 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 	if err != nil {
 		return err
 	}
-	payload := peerAttemptPayloadV3{
+	payload := peerAttemptPayloadV4{
 		AttemptSequence:  decimal(event.Sequence()),
 		AttemptElapsedMS: decimal(event.ElapsedMillis()),
 		Stage:            stage,
@@ -119,12 +119,12 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 		if nameErr != nil {
 			return nameErr
 		}
-		payload.PhaseDeadline = &peerPhaseDeadlineV3{
+		payload.PhaseDeadline = &peerPhaseDeadlineV4{
 			Phase: phaseName, DeadlineMS: decimal(deadline),
 		}
 	}
 	if candidates, ok := event.Candidates(); ok {
-		payload.Candidates = &peerCandidateCountsV3{
+		payload.Candidates = &peerCandidateCountsV4{
 			LocalEmitted:   candidates.LocalEmitted,
 			RemoteAccepted: candidates.RemoteAccepted,
 		}
@@ -142,7 +142,7 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 		if nameErr != nil {
 			return nameErr
 		}
-		payload.Admission = &peerAdmissionV3{
+		payload.Admission = &peerAdmissionV4{
 			Disposition: dispositionName, ResponseDelivery: deliveryName,
 		}
 	}
@@ -151,7 +151,7 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 		if nameErr != nil {
 			return nameErr
 		}
-		payload.Rejection = &peerRejectionV3{Code: rejectionName}
+		payload.Rejection = &peerRejectionV4{Code: rejectionName}
 		if retryAfter != 0 {
 			payload.Rejection.RetryAfterMS = decimalPointer(retryAfter)
 		}
@@ -163,7 +163,7 @@ func (visitor *encodeVisitorV3) VisitPeerAttemptObserved(event clievent.PeerAtte
 	return nil
 }
 
-func encodePeerAttemptFailure(event clievent.PeerAttemptObserved, payload *peerAttemptPayloadV3) error {
+func encodePeerAttemptFailure(event clievent.PeerAttemptObserved, payload *peerAttemptPayloadV4) error {
 	scope, failure, ok := event.Failure()
 	if !ok {
 		return nil
@@ -184,7 +184,7 @@ func encodePeerAttemptFailure(event clievent.PeerAttemptObserved, payload *peerA
 	if projectErr != nil {
 		return projectErr
 	}
-	payload.Failure = &peerFailureV3{
+	payload.Failure = &peerFailureV4{
 		FailedAtStage: failedAtName, Scope: scopeName, Failure: projectedFailure,
 	}
 	if summary, ok := event.FailureSummary(); ok {
@@ -194,7 +194,7 @@ func encodePeerAttemptFailure(event clievent.PeerAttemptObserved, payload *peerA
 		}
 		initiator, _ := summary.Initiator.Name()
 		cause, _ := summary.Cause.Name()
-		payload.Failure.Summary = &peerFailureSummaryV3{
+		payload.Failure.Summary = &peerFailureSummaryV4{
 			LastCompletedStage: last, StageElapsedMillis: decimal(summary.StageElapsedMillis),
 			DeadlineExpired: summary.DeadlineExpired, Initiator: initiator, Cause: cause,
 		}

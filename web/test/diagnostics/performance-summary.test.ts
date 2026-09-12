@@ -1,12 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../src/diagnostics/export/trace-event-v1'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../src/diagnostics/export/trace-event-v2'
 import {
-  type TraceEventObservationV1,
+  type TraceEventObservationV2,
 } from '../../src/diagnostics/trace/model'
 import { BoundedTraceRecorder } from '../../src/diagnostics/trace/recorder'
 import {
@@ -39,7 +39,7 @@ const CORRELATION = Object.freeze({
 describe('bounded performance summary', () => {
   it('projects exact counters, fixed histograms, peaks, and monotonic phase timestamps', () => {
     let now = 1_000
-    const events: TraceEventObservationV1[] = []
+    const events: TraceEventObservationV2[] = []
     const summary = createBoundedPerformanceSummary({
       correlation: CORRELATION,
       clock: { nowMilliseconds: () => now },
@@ -446,15 +446,15 @@ describe('bounded performance summary limits', () => {
 
   it('keeps a 582-file success within normal trace capacity without overwrite', () => {
     let now = 0
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV1, never, never>({
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never, never>({
       captureGeneration: 1n,
       clock: { nowMilliseconds: () => now },
       scheduler: {
         schedule: () => Object.freeze({ cancel: () => undefined }),
       },
-      eventName: traceEventObservationNameV1,
-      snapshotEvent: snapshotTraceEventObservationV1,
-      eventBytes: traceEventObservationBytesV1,
+      eventName: traceEventObservationNameV2,
+      snapshotEvent: snapshotTraceEventObservationV2,
+      eventBytes: traceEventObservationBytesV2,
       snapshotIncident: (incident) => incident,
       incidentMarkerBytes: () => 1,
       incidentScope: (incident) => incident,

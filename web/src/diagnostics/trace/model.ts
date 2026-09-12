@@ -3,7 +3,7 @@ import type {
   DirectZipMemberRollbackPayloadV1,
   DirectZipMilestonePayloadV1,
 } from './direct-zip-payload'
-import type { ProtocolOperationPayloadV1 } from './protocol-payload'
+import type { ProtocolOperationPayloadV2 } from './protocol-payload'
 import type { BrowserDeliveryPayloadV1 } from './browser-delivery-payload'
 import type { LaneTransitionPayloadV1 } from './lane-payload'
 import type { ReceiverExperiencePayloadV1 } from './experience-payload'
@@ -18,10 +18,10 @@ import type {
 } from './transfer-payload'
 import type { CorrelationV1 } from '../export/correlation-v1'
 import type {
-  DiagnosticEventEnvelopeV1,
+  DiagnosticEventEnvelopeV2,
   LifecycleStateV1,
   PeerFailureCodeV1,
-} from '../export/incident-record-v1'
+} from '../export/incident-record-v2'
 import type { IncidentScopeKind } from '../incident/scope'
 
 export type {
@@ -49,7 +49,7 @@ export const TRACE_SEAL_REASONS = Object.freeze([
 
 export type TraceSealReason = (typeof TRACE_SEAL_REASONS)[number]
 
-export const TRACE_EVENT_NAMES_V1 = Object.freeze([
+export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'join_transition',
   'receiver_experience',
   'browse_transition',
@@ -85,9 +85,9 @@ export const TRACE_EVENT_NAMES_V1 = Object.freeze([
   'incident_marker',
 ] as const)
 
-export type TraceEventNameV1 = (typeof TRACE_EVENT_NAMES_V1)[number]
+export type TraceEventNameV2 = (typeof TRACE_EVENT_NAMES_V2)[number]
 
-export type TraceDomainEventNameV1 = Exclude<TraceEventNameV1, 'incident_marker'>
+export type TraceDomainEventNameV2 = Exclude<TraceEventNameV2, 'incident_marker'>
 
 type ArtifactKindV1 = 'original_file' | 'directory_tree' | 'zip_archive'
 type PlanKindV1 =
@@ -174,7 +174,7 @@ type ProjectionShapeProofV1 =
 type OutputBackendV1 = 'file_system_access' | 'origin_private' | 'portable'
 
 /**
- * The V1 payload map is deliberately closed at the diagnostics boundary. Domain
+ * The V2 payload map is deliberately closed at the diagnostics boundary. Domain
  * adapters may discard richer product state, but they cannot add open strings or
  * authority-bearing values to an exported event.
  */
@@ -186,7 +186,7 @@ interface PeerAttemptSummaryV1 {
   readonly deadline_expired: boolean
 }
 
-export interface TraceEventPayloadByNameV1 {
+export interface TraceEventPayloadByNameV2 {
   readonly receiver_experience: ReceiverExperiencePayloadV1
   readonly join_transition: Readonly<{
     transition: 'started' | 'joined' | 'failed' | 'stale_replacement'
@@ -300,7 +300,7 @@ export interface TraceEventPayloadByNameV1 {
     | Readonly<{ transition: 'retry_available_lanes' | 'wait_for_generation' | 'exhausted' }>
     | Readonly<{ transition: 'wait_for_availability'; delay_ms: number }>
   )
-  readonly protocol_operation: ProtocolOperationPayloadV1
+  readonly protocol_operation: ProtocolOperationPayloadV2
   readonly peer_attempt:
     | Readonly<{ stage: 'provider_fact'; fact: import('../../connectivity/peer-set/provider-facts').PeerProviderFact }>
     | Readonly<{
@@ -582,9 +582,9 @@ export interface TraceEventPayloadByNameV1 {
   }>
 }
 
-export type TraceEventPayloadV1 = TraceEventPayloadByNameV1[TraceEventNameV1]
+export type TraceEventPayloadV2 = TraceEventPayloadByNameV2[TraceEventNameV2]
 
-type CorrelatedTraceEventNameV1 =
+type CorrelatedTraceEventNameV2 =
   | 'protocol_operation'
   | 'operation_recovery'
   | 'content_scheduling'
@@ -593,23 +593,23 @@ type CorrelatedTraceEventNameV1 =
   | 'peer_recovery'
   | 'lane_transition'
 
-export type TraceEventObservationV1 = {
-  readonly [Name in TraceDomainEventNameV1]: Readonly<{
+export type TraceEventObservationV2 = {
+  readonly [Name in TraceDomainEventNameV2]: Readonly<{
     eventName: Name
-    payload: TraceEventPayloadByNameV1[Name]
-  } & (Name extends CorrelatedTraceEventNameV1
+    payload: TraceEventPayloadByNameV2[Name]
+  } & (Name extends CorrelatedTraceEventNameV2
     ? { correlation: CorrelationV1 }
     : { correlation?: CorrelationV1 })>
-}[TraceDomainEventNameV1]
+}[TraceDomainEventNameV2]
 
-export type TraceEventRecordV1 = {
-  readonly [Name in TraceEventNameV1]: Readonly<
-    DiagnosticEventEnvelopeV1<TraceEventPayloadByNameV1[Name]> & {
+export type TraceEventRecordV2 = {
+  readonly [Name in TraceEventNameV2]: Readonly<
+    DiagnosticEventEnvelopeV2<TraceEventPayloadByNameV2[Name]> & {
       readonly level: 'debug'
       readonly event: Name
     }
   >
-}[TraceEventNameV1]
+}[TraceEventNameV2]
 
 export type TraceHealthCounter =
   | 'droppedCount'
@@ -625,7 +625,7 @@ export interface TraceHealthSnapshot {
 }
 
 export type TraceCapturedValue<Event, Incident> =
-  | Readonly<{ kind: 'event'; event: Event; eventName: Exclude<TraceEventNameV1, 'incident_marker'> }>
+  | Readonly<{ kind: 'event'; event: Event; eventName: Exclude<TraceEventNameV2, 'incident_marker'> }>
   | Readonly<{ kind: 'incident_marker'; incident: Incident; eventName: 'incident_marker' }>
 
 export interface TraceCapturedEvent<Event, Incident> {

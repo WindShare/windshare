@@ -21,6 +21,7 @@ var (
 type userTraceRecorder interface {
 	Record(clievent.Event) bool
 	ReportUpstreamLoss(lifecycle, progress uint64) bool
+	ReportRejectionEvidenceLoss(count uint64) bool
 	Health() <-chan clievent.TraceIncomplete
 	Close() runtrace.Status
 	Path() string
@@ -65,15 +66,18 @@ type commandRuntime struct {
 	stagedTerminal         clievent.TerminalEvent
 	presentationTerminal   clievent.TerminalEvent
 
-	projectionRejections []pendingProjectionRejection
-	unreportedRejections uint64
-	pendingObserverLoss  [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
-	upstreamCumulative   [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
-	pendingProgressLoss  atomic.Uint64
-	pendingTraceLoss     atomic.Uint64
-	pendingTraceProgress atomic.Uint64
-	warningOnce          sync.Once
-	closeOnce            sync.Once
+	projectionRejections              []pendingProjectionRejection
+	unreportedRejections              uint64
+	rejectionEvidenceDropped          atomic.Uint64
+	pendingRejectionEvidenceLoss      atomic.Uint64
+	rejectionEvidenceLossReportFailed atomic.Bool
+	pendingObserverLoss               [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
+	upstreamCumulative                [clievent.ObserverLossCategoryLimit][clievent.ObserverLossReasonLimit]atomic.Uint64
+	pendingProgressLoss               atomic.Uint64
+	pendingTraceLoss                  atomic.Uint64
+	pendingTraceProgress              atomic.Uint64
+	warningOnce                       sync.Once
+	closeOnce                         sync.Once
 }
 
 // canvasHealth is deliberately narrower than TerminalCanvas. Runtime users can

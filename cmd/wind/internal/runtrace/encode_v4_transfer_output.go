@@ -2,7 +2,7 @@ package runtrace
 
 import "github.com/windshare/windshare/cmd/wind/internal/clievent"
 
-func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.TransferLifecycleObserved) error {
+func (visitor *encodeVisitorV4) VisitTransferLifecycleObserved(event clievent.TransferLifecycleObserved) error {
 	stage, err := nameOf(event.Stage())
 	if err != nil {
 		return err
@@ -27,7 +27,7 @@ func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.Tr
 	if err != nil {
 		return err
 	}
-	payload := transferLifecyclePayloadV3{
+	payload := transferLifecyclePayloadV4{
 		ReceiveOperationID: encodeTypedIdentity(event.ReceiveOperationID().Bytes()),
 		TransferJobID:      encodeTypedIdentity(event.TransferJobID().Bytes()),
 		Stage:              stage,
@@ -37,7 +37,7 @@ func (visitor *encodeVisitorV3) VisitTransferLifecycleObserved(event clievent.Tr
 		Progress:           progress,
 	}
 	if capacity, ok := event.CapacityLifecycle(); ok {
-		payload.Capacity = &transferCapacityLifecycleV3{
+		payload.Capacity = &transferCapacityLifecycleV4{
 			WaitID:              encodeTypedIdentity(capacity.WaitID().Bytes()),
 			GenerationID:        encodeTypedIdentity(capacity.GenerationID().Bytes()),
 			ProtocolOperationID: encodeTypedIdentity(capacity.OperationID().Bytes()),
@@ -75,7 +75,7 @@ func transferLifecycleCorrelation(event clievent.TransferLifecycleObserved) (*Co
 	return projectSessionCorrelation(event.ProtocolSessionID(), clievent.LaneIdentity{}, false)
 }
 
-func (visitor *encodeVisitorV3) VisitFilesystemOutputObserved(event clievent.FilesystemOutputObserved) error {
+func (visitor *encodeVisitorV4) VisitFilesystemOutputObserved(event clievent.FilesystemOutputObserved) error {
 	payload, err := projectFilesystemOutput(event)
 	if err != nil {
 		return err
@@ -84,32 +84,32 @@ func (visitor *encodeVisitorV3) VisitFilesystemOutputObserved(event clievent.Fil
 	return nil
 }
 
-type filesystemOutputIdentitiesV3 struct {
+type filesystemOutputIdentitiesV4 struct {
 	receiveOperationID  *string
 	receiveIntentDigest *string
 	outputSessionID     *string
 }
 
-type filesystemOutputAuthorityV3 struct {
+type filesystemOutputAuthorityV4 struct {
 	certification   *string
-	nativeLock      *filesystemNativeLockV3
+	nativeLock      *filesystemNativeLockV4
 	rootDisposition *string
 }
 
 func projectFilesystemOutput(
 	event clievent.FilesystemOutputObserved,
-) (filesystemOutputPayloadV3, error) {
+) (filesystemOutputPayloadV4, error) {
 	operation, err := nameOf(event.Operation())
 	if err != nil {
-		return filesystemOutputPayloadV3{}, err
+		return filesystemOutputPayloadV4{}, err
 	}
 	authority, err := projectFilesystemOutputAuthority(event)
 	if err != nil {
-		return filesystemOutputPayloadV3{}, err
+		return filesystemOutputPayloadV4{}, err
 	}
 	runtimeDecision, err := projectFilesystemRuntimeDecision(event)
 	if err != nil {
-		return filesystemOutputPayloadV3{}, err
+		return filesystemOutputPayloadV4{}, err
 	}
 	checkpointDecision, hasCheckpointDecision := event.CheckpointDecision()
 	projectedCheckpointDecision, err := projectOptionalNamedValue(
@@ -117,14 +117,14 @@ func projectFilesystemOutput(
 		hasCheckpointDecision,
 	)
 	if err != nil {
-		return filesystemOutputPayloadV3{}, err
+		return filesystemOutputPayloadV4{}, err
 	}
 	failure, err := projectFilesystemOutputFailure(event)
 	if err != nil {
-		return filesystemOutputPayloadV3{}, err
+		return filesystemOutputPayloadV4{}, err
 	}
 	identities := projectFilesystemOutputIdentities(event)
-	return filesystemOutputPayloadV3{
+	return filesystemOutputPayloadV4{
 		Capabilities:        projectFilesystemCapabilities(event),
 		Operation:           operation,
 		ReceiveOperationID:  identities.receiveOperationID,
@@ -141,17 +141,17 @@ func projectFilesystemOutput(
 	}, nil
 }
 
-func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *filesystemCapabilitiesV3 {
+func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *filesystemCapabilitiesV4 {
 	capabilities, present := event.DestinationCapabilities()
 	if !present {
 		return nil
 	}
-	project := func(value clievent.FilesystemCapability) filesystemCapabilityV3 {
+	project := func(value clievent.FilesystemCapability) filesystemCapabilityV4 {
 		reason, _ := value.Reason.Name()
-		return filesystemCapabilityV3{Supported: value.Supported, Reason: reason}
+		return filesystemCapabilityV4{Supported: value.Supported, Reason: reason}
 	}
 	mode, _ := capabilities.Mode.Name()
-	return &filesystemCapabilitiesV3{
+	return &filesystemCapabilitiesV4{
 		Mode: mode, SafePublish: project(capabilities.SafePublish),
 		OperationRecovery: project(capabilities.OperationRecovery),
 		RangeRecovery:     project(capabilities.RangeRecovery), CrashCleanup: project(capabilities.CrashCleanup),
@@ -160,8 +160,8 @@ func projectFilesystemCapabilities(event clievent.FilesystemOutputObserved) *fil
 
 func projectFilesystemOutputIdentities(
 	event clievent.FilesystemOutputObserved,
-) filesystemOutputIdentitiesV3 {
-	identities := filesystemOutputIdentitiesV3{}
+) filesystemOutputIdentitiesV4 {
+	identities := filesystemOutputIdentitiesV4{}
 	if receiveOperation, ok := event.ReceiveOperationID(); ok {
 		encoded := encodeTypedIdentity(receiveOperation.Bytes())
 		identities.receiveOperationID = &encoded
@@ -179,22 +179,22 @@ func projectFilesystemOutputIdentities(
 
 func projectFilesystemOutputAuthority(
 	event clievent.FilesystemOutputObserved,
-) (filesystemOutputAuthorityV3, error) {
+) (filesystemOutputAuthorityV4, error) {
 	certification, hasCertification := event.Certification()
 	projectedCertification, err := projectOptionalNamedValue(certification, hasCertification)
 	if err != nil {
-		return filesystemOutputAuthorityV3{}, err
+		return filesystemOutputAuthorityV4{}, err
 	}
 	nativeLock, err := projectFilesystemNativeLock(event)
 	if err != nil {
-		return filesystemOutputAuthorityV3{}, err
+		return filesystemOutputAuthorityV4{}, err
 	}
 	rootDisposition, hasRootDisposition := event.RootDisposition()
 	projectedRootDisposition, err := projectOptionalNamedValue(rootDisposition, hasRootDisposition)
 	if err != nil {
-		return filesystemOutputAuthorityV3{}, err
+		return filesystemOutputAuthorityV4{}, err
 	}
-	return filesystemOutputAuthorityV3{
+	return filesystemOutputAuthorityV4{
 		certification:   projectedCertification,
 		nativeLock:      nativeLock,
 		rootDisposition: projectedRootDisposition,
@@ -210,7 +210,7 @@ func projectOptionalNamedValue(value namedValue, present bool) (*string, error) 
 
 func projectFilesystemNativeLock(
 	event clievent.FilesystemOutputObserved,
-) (*filesystemNativeLockV3, error) {
+) (*filesystemNativeLockV4, error) {
 	scope, milestone, present := event.NativeLock()
 	if !present {
 		return nil, nil
@@ -223,14 +223,14 @@ func projectFilesystemNativeLock(
 	if err != nil {
 		return nil, err
 	}
-	return &filesystemNativeLockV3{
+	return &filesystemNativeLockV4{
 		Scope: scopeName, Milestone: milestoneName,
 	}, nil
 }
 
 func projectFilesystemRuntimeDecision(
 	event clievent.FilesystemOutputObserved,
-) (*filesystemRuntimeDecisionV3, error) {
+) (*filesystemRuntimeDecisionV4, error) {
 	component, operation, decision, present := event.RuntimeDecision()
 	if !present {
 		return nil, nil
@@ -247,19 +247,19 @@ func projectFilesystemRuntimeDecision(
 	if err != nil {
 		return nil, err
 	}
-	return &filesystemRuntimeDecisionV3{
+	return &filesystemRuntimeDecisionV4{
 		Component: componentName, Operation: operationName, Decision: decisionName,
 	}, nil
 }
 
 func projectFilesystemOutputCorrelation(
 	event clievent.FilesystemOutputObserved,
-) *filesystemCorrelationV3 {
+) *filesystemCorrelationV4 {
 	operationID, claimID := event.Correlation()
 	if operationID == 0 && claimID == 0 {
 		return nil
 	}
-	return &filesystemCorrelationV3{
+	return &filesystemCorrelationV4{
 		OperationID: optionalDecimalPointer(operationID),
 		ClaimID:     optionalDecimalPointer(claimID),
 	}
@@ -274,7 +274,7 @@ func optionalDecimalPointer(value uint64) *string {
 
 func projectFilesystemOutputFailure(
 	event clievent.FilesystemOutputObserved,
-) (*filesystemFailureV3, error) {
+) (*filesystemFailureV4, error) {
 	failure, present := event.Failure()
 	if !present {
 		return nil, nil
@@ -291,7 +291,7 @@ func projectFilesystemOutputFailure(
 	if err != nil {
 		return nil, err
 	}
-	return &filesystemFailureV3{
+	return &filesystemFailureV4{
 		Stage:              stageName,
 		ReconciliationStep: optionalClosedName(reconciliation),
 		NativeErrorClass:   optionalClosedName(nativeClass),
@@ -307,8 +307,8 @@ func optionalClosedName(value namedValue) *string {
 	return &name
 }
 
-func projectFilesystemCounters(counters clievent.FilesystemOutputCounters) filesystemCountersV3 {
-	return filesystemCountersV3{
+func projectFilesystemCounters(counters clievent.FilesystemOutputCounters) filesystemCountersV4 {
+	return filesystemCountersV4{
 		NodeClaims:             decimal(counters.NodeClaims),
 		DirectoryClaims:        decimal(counters.DirectoryClaims),
 		FileClaims:             decimal(counters.FileClaims),

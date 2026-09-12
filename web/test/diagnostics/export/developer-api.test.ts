@@ -4,7 +4,7 @@ import {
   createWindShareDiagnostics,
   installWindShareDiagnostics,
 } from '../../../src/diagnostics/export/developer-api'
-import { projectDiagnosticsStatusV1 } from '../../../src/diagnostics/export/diagnostic-bundle-v1'
+import { projectDiagnosticsStatusV2 } from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import type { DiagnosticsRuntimePort } from '../../../src/diagnostics/runtime'
 import {
   diagnosticsHealthV1,
@@ -14,7 +14,7 @@ import {
 
 describe('windshareDiagnostics developer API', () => {
   it('is a frozen facade over the six injected runtime operations', () => {
-    const status = projectDiagnosticsStatusV1(traceStatus(), diagnosticsHealthV1())
+    const status = projectDiagnosticsStatusV2(traceStatus(), diagnosticsHealthV1())
     const failure = incidentRecord('1')
     const runtime: DiagnosticsRuntimePort = {
       enable: vi.fn(() => status),
@@ -68,7 +68,7 @@ describe('windshareDiagnostics developer API', () => {
 })
 
 function runtimePort(): DiagnosticsRuntimePort {
-  const status = projectDiagnosticsStatusV1(traceStatus(), diagnosticsHealthV1())
+  const status = projectDiagnosticsStatusV2(traceStatus(), diagnosticsHealthV1())
   return {
     enable: () => status,
     disable: () => status,

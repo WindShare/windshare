@@ -132,22 +132,20 @@ func peerAdmissionStatus(event clievent.PeerAttemptObserved) (string, bool) {
 }
 
 func formatProtocolOperationFailure(
-	event clievent.ProtocolOperationObserved,
+	event clievent.ProtocolObservationObserved,
+	fact clievent.ProtocolOperationFact,
 	symbols Symbols,
 ) terminalcanvas.Line {
 	operation := strings.ReplaceAll(eventName(event.RequestKind()), "_", " ")
 	message := "Protocol operation " + operation + " failed"
-	if event.Stage() == clievent.ProtocolOperationSenderResponseSettled {
-		message = "Protocol response for " + operation + " failed"
-	}
-	if elapsed := event.OperationElapsedMillis(); elapsed != 0 {
+	if elapsed := fact.OperationElapsedMillis(); elapsed != 0 {
 		message += " after " + FormatElapsed(time.Duration(elapsed)*time.Millisecond)
 	}
-	if lane, ok := event.Lane(); ok {
+	if lane, ok := fact.Lane(); ok {
 		message += " on lane " + strconv.FormatUint(uint64(lane.ID()), 10) +
 			" epoch " + strconv.FormatUint(uint64(lane.Epoch()), 10)
 	}
-	cause := strings.ReplaceAll(eventName(event.Cause()), "_", " ")
+	cause := strings.ReplaceAll(eventName(fact.Cause()), "_", " ")
 	message += " (" + cause + ")."
 	return statusLine(symbols.Warning, message, terminalcanvas.StyleWarning)
 }

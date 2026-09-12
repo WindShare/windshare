@@ -260,7 +260,7 @@ func TestCancelOnOneLaneStopsOperationStartedOnAnotherLane(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != protocolsession.SendOutcomeDelivered {
+	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
 		t.Fatalf("cross-lane cancel = %v, %v", outcome, err)
 	}
 	select {

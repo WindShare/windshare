@@ -38,7 +38,7 @@ import {
   captureDiagnosticContextV1,
   type DiagnosticContextSources,
 } from '../export/context'
-import type { IncidentRecordV1 } from '../export/incident-record-v1'
+import type { IncidentRecordV2 } from '../export/incident-record-v2'
 import type {
   IncidentRecordProjection,
   IncidentRecordProjector,
@@ -54,7 +54,7 @@ export interface IncidentTimeSource {
 }
 
 export interface IncidentConsoleSink {
-  error(record: IncidentRecordV1): void
+  error(record: IncidentRecordV2): void
 }
 
 export interface IncidentTraceSignalPort {
@@ -488,7 +488,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
   }
 
-  #appendHistory(record: IncidentRecordV1): void {
+  #appendHistory(record: IncidentRecordV2): void {
     try {
       this.#history.append(record)
     } catch {
@@ -496,7 +496,7 @@ class BrowserIncidentReporter implements IncidentReporter {
     }
   }
 
-  #reportConsole(record: IncidentRecordV1): void {
+  #reportConsole(record: IncidentRecordV2): void {
     try {
       this.#consoleSink.error(record)
     } catch {

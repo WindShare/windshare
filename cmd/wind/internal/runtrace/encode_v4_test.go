@@ -38,7 +38,7 @@ func TestTraceDistinguishesHistoricalDeliveryFromVerifiedContent(t *testing.T) {
 	}
 }
 
-func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
+func TestEncodeV4VisitsEveryEventWithSealedPayloads(t *testing.T) {
 	events := allTraceEvents(t)
 	if got, want := len(events), 28; got != want {
 		t.Fatalf("event fixture count = %d, want %d", got, want)
@@ -76,7 +76,7 @@ func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 	eventNames := make(map[string]struct{}, len(events))
 	payloadTypes := make(map[reflect.Type]string, len(events))
 	for index, event := range events {
-		record, err := encodeV3(
+		record, err := encodeV4(
 			testRunIdentity(0x10),
 			entryMetadata{
 				sequence:  uint64(index + 1),
@@ -105,7 +105,7 @@ func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 		eventNames[record.Event] = struct{}{}
 		payloadType := reflect.TypeOf(record.Payload)
 		if previous, duplicate := payloadTypes[payloadType]; duplicate &&
-			payloadType != reflect.TypeFor[emptyPayloadV3]() {
+			payloadType != reflect.TypeFor[emptyPayloadV4]() {
 			t.Fatalf("events %q and %q share payload type %v", previous, record.Event, payloadType)
 		}
 		payloadTypes[payloadType] = record.Event
@@ -114,9 +114,9 @@ func TestEncodeV3VisitsEveryEventWithSealedPayloads(t *testing.T) {
 	}
 }
 
-func TestEncodeV3PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T) {
+func TestEncodeV4PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T) {
 	events := allTraceEvents(t)
-	transfer, err := encodeV3(
+	transfer, err := encodeV4(
 		testRunIdentity(0x12),
 		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
 		events[16],
@@ -124,13 +124,13 @@ func TestEncodeV3PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	transferPayload, ok := transfer.Payload.(transferLifecyclePayloadV3)
+	transferPayload, ok := transfer.Payload.(transferLifecyclePayloadV4)
 	if !ok || transferPayload.ItemBlockReason == nil ||
 		*transferPayload.ItemBlockReason != "revision_conflict" {
 		t.Fatalf("transfer item block payload = %#v", transfer.Payload)
 	}
 
-	filesystem, err := encodeV3(
+	filesystem, err := encodeV4(
 		testRunIdentity(0x13),
 		entryMetadata{sequence: 2, time: time.Unix(2, 0)},
 		events[17],
@@ -138,17 +138,17 @@ func TestEncodeV3PreservesRevisionIdentityDecisionsInTypedPayloads(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	filesystemPayload, ok := filesystem.Payload.(filesystemOutputPayloadV3)
+	filesystemPayload, ok := filesystem.Payload.(filesystemOutputPayloadV4)
 	if !ok || filesystemPayload.CheckpointDecision == nil ||
 		*filesystemPayload.CheckpointDecision != "revision_conflict" {
 		t.Fatalf("filesystem checkpoint payload = %#v", filesystem.Payload)
 	}
 }
 
-func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T) {
+func TestV4PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T) {
 	var roots []reflect.Type
 	for _, event := range allTraceEvents(t) {
-		record, err := encodeV3(
+		record, err := encodeV4(
 			testRunIdentity(0x11),
 			entryMetadata{sequence: 1, time: time.Unix(1, 0)},
 			event,
@@ -159,10 +159,11 @@ func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 		roots = append(roots, reflect.TypeOf(record.Payload))
 	}
 	roots = append(roots,
-		reflect.TypeFor[traceSummaryPayloadV3](),
-		reflect.TypeFor[ProtocolFailureV1](),
-		reflect.TypeFor[receivedAuthenticatedSettlementV1](),
-		reflect.TypeFor[responseSendSettlementV1](),
+		reflect.TypeFor[traceSummaryPayloadV4](),
+		reflect.TypeFor[ProtocolErrorContentV4](),
+		reflect.TypeFor[protocolResponseSendPayloadV4](),
+		reflect.TypeFor[protocolSendAttemptSettledPayloadV4](),
+		reflect.TypeFor[protocolErrorReceivedPayloadV4](),
 	)
 	seen := make(map[reflect.Type]struct{})
 	var inspect func(reflect.Type)
@@ -179,6 +180,10 @@ func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 		}
 		for field := range value.Fields() {
 			tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+			if field.Anonymous {
+				inspect(field.Type)
+				continue
+			}
 			if tag == "" || tag == "-" {
 				t.Fatalf("payload field %v.%s lacks an explicit JSON key", value, field.Name)
 			}
@@ -189,11 +194,7 @@ func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 			switch fieldType.Kind() {
 			case reflect.Struct:
 				inspect(fieldType)
-			case reflect.Interface:
-				if field.Type != reflect.TypeFor[protocolFailureSettlementV1]() {
-					t.Fatalf("payload field %v.%s has open interface %v", value, field.Name, field.Type)
-				}
-			case reflect.Map, reflect.Func, reflect.Chan:
+			case reflect.Interface, reflect.Map, reflect.Func, reflect.Chan:
 				t.Fatalf("payload field %v.%s has open type %v", value, field.Name, field.Type)
 			case reflect.Slice:
 				switch fieldType.Elem().Kind() {
@@ -217,9 +218,9 @@ func TestV3PayloadSchemasAreClosedAndUseSafeNumericRepresentations(t *testing.T)
 	}
 }
 
-func TestEncodeV3EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
+func TestEncodeV4EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
 	runID := testRunIdentity(0x20)
-	record, err := encodeV3(
+	record, err := encodeV4(
 		runID,
 		entryMetadata{
 			sequence:  math.MaxUint64,
@@ -235,14 +236,14 @@ func TestEncodeV3EnvelopeUsesFrozenOrderAndDecimalCounters(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"schema_version":3,"sequence":"18446744073709551615","time":"1970-01-01T00:00:01.000000234Z","elapsed_ms":"9223372036854775807","level":"info","event":"ready","command":"share","runtime_run_id":"` +
+	want := `{"schema_version":4,"sequence":"18446744073709551615","time":"1970-01-01T00:00:01.000000234Z","elapsed_ms":"9223372036854775807","level":"info","event":"ready","command":"share","runtime_run_id":"` +
 		runID.encoded() + `","payload":{}}`
 	if string(encoded) != want {
 		t.Fatalf("envelope = %s, want %s", encoded, want)
 	}
 }
 
-func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
+func TestEncodeV4ProgressUsesNestedDecimalStrings(t *testing.T) {
 	snapshot := mustValue(clievent.NewProgressSnapshot(clievent.ProgressSpec{
 		DiscoveredFiles:         math.MaxUint64,
 		DiscoveredBytes:         math.MaxUint64,
@@ -262,7 +263,7 @@ func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
 		mustValue(clievent.NewTransferJobID(testIdentity(t, 0xb2))),
 		snapshot,
 	))
-	record, err := encodeV3(
+	record, err := encodeV4(
 		testRunIdentity(0x21),
 		entryMetadata{sequence: 1, time: time.Unix(1, 0), elapsedMS: 2},
 		event,
@@ -270,7 +271,7 @@ func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(transferProgressPayloadV3)
+	payload, ok := record.Payload.(transferProgressPayloadV4)
 	if !ok {
 		t.Fatalf("payload type = %T", record.Payload)
 	}
@@ -295,11 +296,11 @@ func TestEncodeV3ProgressUsesNestedDecimalStrings(t *testing.T) {
 	}
 }
 
-func TestEncodeV3ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
+func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
 	lane := mustValue(clievent.NewLaneIdentity(math.MaxUint32, 0))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 		Command:           clievent.CommandGet,
 		Role:              clievent.ProtocolRoleReceiver,
 		Stage:             clievent.ProtocolOperationReceiverEnded,
@@ -310,7 +311,7 @@ func TestEncodeV3ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 		HasLane:           true,
 		Cause:             clievent.ProtocolOperationCauseNone,
 	}))
-	record, err := encodeV3(
+	record, err := encodeV4(
 		testRunIdentity(0x22),
 		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
 		event,
@@ -327,120 +328,7 @@ func TestEncodeV3ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 	}
 }
 
-func TestEncodeV3ProjectsAuthenticatedProtocolFailure(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x41)))
-	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x42)))
-	lane := mustValue(clievent.NewLaneIdentity(7, 2))
-	failure := mustValue(clievent.NewReceivedAuthenticatedProtocolFailure(clievent.ProtocolFailureSpec{
-		RequestKind:       clievent.ProtocolMessageRequestBlocks,
-		WireScope:         clievent.ProtocolFailureRevision,
-		WireCode:          0x3008,
-		Retryable:         true,
-		RetryAfterMillis:  12_345,
-		HasRetryAfter:     true,
-		ProtocolSession:   session,
-		ProtocolOperation: operation,
-		Lane:              lane,
-		HasLane:           true,
-	}))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		Command:           clievent.CommandGet,
-		Role:              clievent.ProtocolRoleReceiver,
-		Stage:             clievent.ProtocolOperationReceiverFailed,
-		ProtocolSession:   session,
-		ProtocolOperation: operation,
-		RequestKind:       clievent.ProtocolMessageRequestBlocks,
-		ResponseKind:      clievent.ProtocolMessageOperationError,
-		HasResponse:       true,
-		Lane:              lane,
-		HasLane:           true,
-		Failure:           failure,
-		Cause:             clievent.ProtocolOperationCauseProtocolFailure,
-	}))
-	record, err := encodeV3(
-		testRunIdentity(0x23),
-		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
-		event,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := record.Payload.(protocolOperationPayloadV3)
-	if payload.ProtocolFailure == nil {
-		t.Fatal("protocol failure missing")
-	}
-	projected := payload.ProtocolFailure
-	settlement, ok := projected.Settlement.(receivedAuthenticatedSettlementV1)
-	if !ok || settlement.Kind != "received_authenticated" ||
-		projected.RequestKind != "request_blocks" || projected.WireScope != "revision" ||
-		projected.WireCode != 0x3008 || !projected.Retryable ||
-		projected.RetryAfterMS == nil || *projected.RetryAfterMS != 12_345 ||
-		projected.Correlation.ProtocolSessionID != record.Correlation.ProtocolSessionID ||
-		projected.Correlation.ProtocolOperationID != record.Correlation.ProtocolOperationID {
-		t.Fatalf("protocol failure = %+v, settlement %T", projected, projected.Settlement)
-	}
-	encoded, _ := json.Marshal(record)
-	for _, forbidden := range []string{"message", "body", "stack", "error"} {
-		if strings.Contains(string(encoded), `"`+forbidden+`"`) {
-			t.Fatalf("forbidden protocol field %q in %s", forbidden, encoded)
-		}
-	}
-}
-
-func TestEncodeV3ResponseSendFailureOmitsRetryAfterAndKeepsSettlement(t *testing.T) {
-	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x51)))
-	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x52)))
-	failure := mustValue(clievent.NewResponseSendProtocolFailure(
-		clievent.ProtocolFailureSpec{
-			RequestKind:       clievent.ProtocolMessageReleaseLease,
-			WireScope:         clievent.ProtocolFailureRevision,
-			WireCode:          9,
-			Retryable:         true,
-			RetryAfterMillis:  30_000,
-			HasRetryAfter:     true,
-			ProtocolSession:   session,
-			ProtocolOperation: operation,
-		},
-		clievent.ProtocolFailureResponseSendSettlement{
-			Admitted: true, Settled: true, Outcome: clievent.ProtocolSendDelivered,
-		},
-	))
-	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		Command:           clievent.CommandShare,
-		Role:              clievent.ProtocolRoleSender,
-		Stage:             clievent.ProtocolOperationSenderResponseSettled,
-		ProtocolSession:   session,
-		ProtocolOperation: operation,
-		RequestKind:       clievent.ProtocolMessageReleaseLease,
-		ResponseKind:      clievent.ProtocolMessageOperationError,
-		HasResponse:       true,
-		HasSend:           true,
-		SendSettled:       true,
-		SendAdmitted:      true,
-		SendOutcome:       clievent.ProtocolSendDelivered,
-		Failure:           failure,
-		Cause:             clievent.ProtocolOperationCauseNone,
-	}))
-	record, err := encodeV3(
-		testRunIdentity(0x24),
-		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
-		event,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	projected := record.Payload.(protocolOperationPayloadV3).ProtocolFailure
-	settlement, ok := projected.Settlement.(responseSendSettlementV1)
-	if !ok || settlement.Kind != "response_send" || !settlement.Admitted ||
-		!settlement.Settled || settlement.Outcome != "delivered" {
-		t.Fatalf("response-send settlement = %#v", projected.Settlement)
-	}
-	if projected.RetryAfterMS != nil {
-		t.Fatalf("response-send failure retained authenticated retry delay: %+v", projected)
-	}
-}
-
-func TestEncodeV3SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
+func TestEncodeV4SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x61)))
 	lane := mustValue(clievent.NewLaneIdentity(1, 0))
 	send := mustValue(clievent.NewSenderTerminalSendObserved(
@@ -455,7 +343,7 @@ func TestEncodeV3SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 		clievent.SenderSessionTerminalNormalStop,
 		diagnosticerror.Snapshot{},
 	))
-	sendRecord, err := encodeV3(
+	sendRecord, err := encodeV4(
 		testRunIdentity(0x25),
 		entryMetadata{sequence: 1, time: time.Unix(1, 0)},
 		send,
@@ -463,7 +351,7 @@ func TestEncodeV3SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	rootRecord, err := encodeV3(
+	rootRecord, err := encodeV4(
 		testRunIdentity(0x25),
 		entryMetadata{sequence: 2, time: time.Unix(2, 0)},
 		root,
@@ -476,14 +364,14 @@ func TestEncodeV3SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 		sendRecord.Correlation.LaneID == nil || rootRecord.Correlation.LaneID != nil {
 		t.Fatalf("terminal records = send %+v, root %+v", sendRecord, rootRecord)
 	}
-	rootPayload := rootRecord.Payload.(senderSessionTerminatedPayloadV3)
+	rootPayload := rootRecord.Payload.(senderSessionTerminatedPayloadV4)
 	if rootPayload.Trigger != "graceful_stop" || rootPayload.Provenance != "normal_stop" {
 		t.Fatalf("terminal root payload = %+v", rootPayload)
 	}
 }
 
-func TestSummaryV3IsTypedAndTruthful(t *testing.T) {
-	record := summaryV3(
+func TestSummaryV4IsTypedAndTruthful(t *testing.T) {
+	record := summaryV4(
 		testRunIdentity(0x26),
 		clievent.CommandGet,
 		entryMetadata{sequence: math.MaxUint64, time: time.Unix(1, 0), elapsedMS: 4},
@@ -497,7 +385,7 @@ func TestSummaryV3IsTypedAndTruthful(t *testing.T) {
 			SchemaLimited:    true,
 		},
 	)
-	payload, ok := record.Payload.(traceSummaryPayloadV3)
+	payload, ok := record.Payload.(traceSummaryPayloadV4)
 	if !ok || record.Event != "trace_summary" || record.Level != "warn" ||
 		!payload.Incomplete || payload.LifecycleDropped != "18446744073709551615" ||
 		payload.ProgressDropped != "7" || payload.EventsWritten != "11" ||
@@ -718,7 +606,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			math.MaxUint64,
 			math.MaxUint64,
 		)),
-		mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 			Command:                 clievent.CommandGet,
 			Role:                    clievent.ProtocolRoleReceiver,
 			Stage:                   clievent.ProtocolOperationReceiverFailed,
@@ -730,7 +618,7 @@ func allTraceEvents(t *testing.T) []clievent.Event {
 			HasSend:                 true,
 			SendSettled:             true,
 			SendAdmitted:            true,
-			SendOutcome:             clievent.ProtocolSendDelivered,
+			SendOutcome:             clievent.ProtocolSendTransportConfirmed,
 			DeadlineRemainingMillis: math.MaxUint64,
 			HasDeadline:             true,
 			OperationElapsedMillis:  math.MaxUint64,

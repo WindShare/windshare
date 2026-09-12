@@ -23,12 +23,12 @@ func TestFilesystemCapabilitiesKeepSafeOutputSeparateFromRecovery(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV3{}
-	visitor := &encodeVisitorV3{record: record}
+	record := &RunTraceRecordV4{}
+	visitor := &encodeVisitorV4{record: record}
 	if err := visitor.VisitFilesystemOutputObserved(event); err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(filesystemOutputPayloadV3)
+	payload, ok := record.Payload.(filesystemOutputPayloadV4)
 	if !ok || payload.Capabilities == nil {
 		t.Fatalf("missing capability payload: %#v", record.Payload)
 	}

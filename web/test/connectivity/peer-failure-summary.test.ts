@@ -6,7 +6,7 @@ import {
   createV2PeerPathIdentityValue, createV2PeerAttemptIdentity,
 } from '../../src/session/v2-identities'
 import { projectConnectivityTraceEvent } from '../../src/ui/v2-production-trace'
-import { snapshotTraceEventObservationV1 } from '../../src/diagnostics/export/trace-event-v1'
+import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { createBrowserDiagnosticsComposition } from '../../src/diagnostics/browser-composition'
 import { FakeTraceTime } from '../diagnostics/trace/test-support'
 
@@ -32,7 +32,7 @@ function timedOutAttempt() {
   lifecycle.phaseDeadlineExpired('admission', 20_000)
   lifecycle.failed({ kind: 'local-transient', phase: 'admission', reason: 'admission-timeout' })
   const last = events.at(-1)!
-  return { lifecycle, events, last, projected: snapshotTraceEventObservationV1(projectConnectivityTraceEvent(last)) }
+  return { lifecycle, events, last, projected: snapshotTraceEventObservationV2(projectConnectivityTraceEvent(last)) }
 }
 
 describe('peer failure summaries', () => {
@@ -66,7 +66,7 @@ describe('peer failure summaries', () => {
     const observer = diagnostics.trace.current!
     const { projected } = timedOutAttempt()
     observer(projected)
-    const operation = snapshotTraceEventObservationV1({
+    const operation = snapshotTraceEventObservationV2({
       eventName: 'protocol_operation',
       correlation: { protocol_session_id: 'AQAAAAAAAAAAAAAAAAAAAA', protocol_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA' },
       payload: { transition: 'request_sent', request_kind: 'open_revisions' },
@@ -87,10 +87,10 @@ describe('peer failure summaries', () => {
   it('rejects unbounded failure fields and inconsistent summary durations', () => {
     const { projected } = timedOutAttempt()
     const payload = projected.payload
-    expect(() => snapshotTraceEventObservationV1({ ...projected, payload: {
+    expect(() => snapshotTraceEventObservationV2({ ...projected, payload: {
       ...payload, failure: { kind: 'local-transient', phase: 'admission', reason: 'provider text' },
     } } as never)).toThrow()
-    expect(() => snapshotTraceEventObservationV1({ ...projected, payload: {
+    expect(() => snapshotTraceEventObservationV2({ ...projected, payload: {
       ...payload, summary: { last_completed_stage: 'grant_requested', attempt_elapsed_ms: 1, stage_elapsed_ms: 2, deadline_expired: false },
     } } as never)).toThrow()
   })

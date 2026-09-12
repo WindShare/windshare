@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/liveshare"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 	"github.com/windshare/windshare/transport/relayv2"
 	wsrtc "github.com/windshare/windshare/transport/webrtc"
@@ -53,6 +54,7 @@ type shareObservations struct {
 	peerFactory          *v2peer.Factory
 	peerAttemptReader    *observationbridge.Reader[v2peer.SenderAttemptObservation]
 	peerDiagnosticReader *observationbridge.Reader[v2peer.PeerDiagnosticObservation]
+	protocol             protocolObservationStream
 	completeOnce         sync.Once
 
 	losses *observationbridge.CumulativeLosses[observerLossSource]
@@ -63,6 +65,7 @@ func newShareObservations(observer shareEventObserver) *shareObservations {
 	if preference, ok := observer.(detailedDiagnosticsPreference); ok && preference.detailedDiagnosticsEnabled() {
 		observations.webRTCChannels = &webRTCObservationSet{}
 		observations.losses = observationbridge.NewCumulativeLosses[observerLossSource](observer)
+		observations.protocol = startProtocolObservations(observations.protocolObservationContext)
 	}
 	return observations
 }
@@ -213,16 +216,23 @@ func (observations *shareObservations) ObserveSenderSessionTerminated(
 	observations.emitProjected(clievent.ObserverLossSenderSessionTerminal, event, err)
 }
 
-func (observations *shareObservations) TraceProtocolOperation(value sessionruntime.ProtocolOperationTrace) {
-	event, err := commandprojection.ProjectProtocolOperation(clievent.CommandShare, value)
-	observations.emitProjected(clievent.ObserverLossProtocolOperation, event, err)
+func (observations *shareObservations) protocolObservationContext(
+	ctx context.Context,
+	gate *observationbridge.PublicationGate,
+	value sessionruntime.ProtocolObservation,
+) {
+	if ctx.Err() != nil {
+		return
+	}
+	event, err := commandprojection.ProjectProtocolObservation(clievent.CommandShare, value)
+	observations.emitProjectedContext(ctx, gate, clievent.ObserverLossProtocolOperation, event, err)
 }
 
-func (observations *shareObservations) protocolTracer() sessionruntime.ProtocolOperationTracer {
-	if !observations.detailedDiagnosticsEnabled() {
-		return nil
+func (observations *shareObservations) protocolObservations() observationstream.Producer[sessionruntime.ProtocolObservation] {
+	if observations == nil {
+		return observationstream.Producer[sessionruntime.ProtocolObservation]{}
 	}
-	return observations
+	return observations.protocol.producer
 }
 
 func (observations *shareObservations) terminalSendObserver() sessionruntime.SenderTerminalSendObserver {
@@ -452,6 +462,10 @@ func (observations *shareObservations) complete(ctx context.Context) {
 		peerAttemptReader := observations.peerAttemptReader
 		peerDiagnosticReader := observations.peerDiagnosticReader
 		observations.completionMu.Unlock()
+
+		protocolCompletion, protocolStatus := observations.protocol.complete(ctx)
+		observations.reportCumulativeLoss(observerLossProtocolQueue, clievent.ObserverLossProtocolOperation, clievent.ObserverLossStreamCapacity, protocolCompletion.CapacityDropped)
+		observations.reportReaderStatus(clievent.ObserverLossProtocolOperation, protocolStatus)
 
 		// Sender session owners have stopped before completion; closing the shared
 		// native owner now joins gateway and socket work before cutting its stream.

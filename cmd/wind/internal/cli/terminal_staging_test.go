@@ -296,6 +296,8 @@ func (trace *blockingCloseUserTrace) Record(event clievent.Event) bool {
 	return true
 }
 
+func (*blockingCloseUserTrace) ReportRejectionEvidenceLoss(uint64) bool { return true }
+
 func (*blockingCloseUserTrace) ReportUpstreamLoss(uint64, uint64) bool        { return true }
 func (trace *blockingCloseUserTrace) Health() <-chan clievent.TraceIncomplete { return trace.health }
 func (*blockingCloseUserTrace) Path() string                                  { return "trace.ndjson" }

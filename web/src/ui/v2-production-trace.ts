@@ -6,8 +6,8 @@ import type {
   V2ConnectivityTraceSource,
 } from '../connectivity/diagnostics'
 import type {
-  TraceEventObservationV1,
-  TraceEventPayloadByNameV1,
+  TraceEventObservationV2,
+  TraceEventPayloadByNameV2,
 } from '../diagnostics/trace/model'
 import type { DomainTraceSource } from '../diagnostics/trace/ports'
 import type {
@@ -22,7 +22,7 @@ import type {
 import type { V2ReceiverTraceEvent } from './v2-controller'
 import { projectRetainedActionPayload } from './controller/retained-trace'
 
-type BrowserTraceSource = DomainTraceSource<TraceEventObservationV1>
+type BrowserTraceSource = DomainTraceSource<TraceEventObservationV2>
 
 export function createV2ReceiverTraceSource(
   trace: BrowserTraceSource,
@@ -50,7 +50,7 @@ export function createConnectivityTraceSource(
 
 export function projectV2ReceiverTraceEvent(
   event: V2ReceiverTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   switch (event.name) {
     case 'receiver_experience':
       if (event.transition === 'task') return observation('receiver_experience', {
@@ -104,18 +104,18 @@ export function projectV2ReceiverTraceEvent(
 
 export function projectOutputTraceEvent(
   event: OutputTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   // Output's diagnostic port already owns the frozen V1 field vocabulary. This
   // boundary detaches it while the recorder performs the shared exact-key check.
   return Object.freeze({
     eventName: event.eventName,
     payload: Object.freeze({ ...event.payload }),
-  }) as TraceEventObservationV1
+  }) as TraceEventObservationV2
 }
 
 export function projectConnectivityTraceEvent(
   event: V2ConnectivityTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'peer_attempt') {
     return correlatedObservation(
@@ -133,7 +133,7 @@ export function projectConnectivityTraceEvent(
 
 function projectProjectionTraceEvent(
   event: ProjectionTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   switch (event.transition) {
     case 'started':
       return observation(event.name, {
@@ -183,7 +183,7 @@ function projectProjectionTraceEvent(
 
 function projectAuthorityTraceEvent(
   event: Extract<V2ReceiverTraceEvent, { readonly name: 'authority_transition' }>,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   switch (event.transition) {
     case 'offers_computed':
       return observation(event.name, {
@@ -282,7 +282,7 @@ function projectAuthorityActivationContext(
 
 function projectTransferTraceEvent(
   event: TransferTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   if (event.name === 'transfer_progress') {
     return observation(event.name, {
       discovered_files: decimal(event.discoveredFiles),
@@ -414,7 +414,7 @@ function workerConsequenceSourceIndex(
 
 function projectPeerAttemptPayload(
   event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
-): TraceEventPayloadByNameV1['peer_attempt'] {
+): TraceEventPayloadByNameV2['peer_attempt'] {
   const payload = projectPeerAttemptMilestone(event)
   if (event.stage !== 'failed' && event.stage !== 'admitted') return payload
   return {
@@ -431,7 +431,7 @@ function projectPeerAttemptPayload(
 
 function projectPeerAttemptMilestone(
   event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_attempt' }>,
-): TraceEventPayloadByNameV1['peer_attempt'] {
+): TraceEventPayloadByNameV2['peer_attempt'] {
   const ordinals = {
     wave_ordinal: decimal(event.waveOrdinal),
     wave_attempt_ordinal: decimal(event.waveAttemptOrdinal),
@@ -490,7 +490,7 @@ function projectPeerAttemptMilestone(
 
 function projectPeerRecoveryPayload(
   event: Extract<V2ConnectivityTraceEvent, { readonly eventName: 'peer_recovery' }>,
-): TraceEventPayloadByNameV1['peer_recovery'] {
+): TraceEventPayloadByNameV2['peer_recovery'] {
   switch (event.stage) {
     case 'wave-started':
     case 'wave-rearmed':
@@ -549,7 +549,7 @@ function projectPeerRecoveryPayload(
 
 function adaptTraceSource<Input>(
   trace: BrowserTraceSource,
-  project: (event: Input) => TraceEventObservationV1,
+  project: (event: Input) => TraceEventObservationV2,
 ): DomainTraceSource<Input> {
   return Object.freeze({
     get current() {

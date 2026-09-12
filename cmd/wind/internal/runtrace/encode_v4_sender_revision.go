@@ -2,12 +2,12 @@ package runtrace
 
 import "github.com/windshare/windshare/cmd/wind/internal/clievent"
 
-func (visitor *encodeVisitorV3) VisitSenderCapacityObserved(event clievent.SenderCapacityObserved) error {
+func (visitor *encodeVisitorV4) VisitSenderCapacityObserved(event clievent.SenderCapacityObserved) error {
 	stage, err := nameOf(event.Stage())
 	if err != nil {
 		return err
 	}
-	payload := senderCapacityPayloadV3{Stage: stage, Process: projectCapacityScopeV3(event.ProcessSnapshot())}
+	payload := senderCapacityPayloadV4{Stage: stage, Process: projectCapacityScopeV4(event.ProcessSnapshot())}
 	if decision, ok := event.DecisionID(); ok {
 		encoded := decision.Hex()
 		payload.DecisionID = &encoded
@@ -17,11 +17,11 @@ func (visitor *encodeVisitorV3) VisitSenderCapacityObserved(event clievent.Sende
 		payload.RevisionID = &encoded
 	}
 	if share, ok := event.ShareSnapshot(); ok {
-		projected := projectCapacityScopeV3(share)
+		projected := projectCapacityScopeV4(share)
 		payload.Share = &projected
 	}
 	if sessionScope, ok := event.SessionSnapshot(); ok {
-		projected := projectCapacityScopeV3(sessionScope)
+		projected := projectCapacityScopeV4(sessionScope)
 		payload.Session = &projected
 	}
 	var correlation *CorrelationV1
@@ -35,8 +35,8 @@ func (visitor *encodeVisitorV3) VisitSenderCapacityObserved(event clievent.Sende
 	return nil
 }
 
-func projectCapacityScopeV3(value clievent.CapacityScopeSnapshot) capacityScopeV3 {
-	return capacityScopeV3{
+func projectCapacityScopeV4(value clievent.CapacityScopeSnapshot) capacityScopeV4 {
+	return capacityScopeV4{
 		StableHandles: decimal(value.StableHandles), ActiveLeases: decimal(value.ActiveLeases),
 		StableHandleLimit: decimal(value.StableHandleLimit), ActiveLeaseLimit: decimal(value.ActiveLeaseLimit),
 		ReclaimableStableHandles: decimal(value.ReclaimableStableHandles),
@@ -45,7 +45,7 @@ func projectCapacityScopeV3(value clievent.CapacityScopeSnapshot) capacityScopeV
 	}
 }
 
-func (visitor *encodeVisitorV3) VisitSenderRevisionObserved(event clievent.SenderRevisionObserved) error {
+func (visitor *encodeVisitorV4) VisitSenderRevisionObserved(event clievent.SenderRevisionObserved) error {
 	stage, err := nameOf(event.Stage())
 	if err != nil {
 		return err
@@ -54,7 +54,7 @@ func (visitor *encodeVisitorV3) VisitSenderRevisionObserved(event clievent.Sende
 	if err != nil {
 		return err
 	}
-	payload := senderRevisionPayloadV3{Stage: stage, Cause: cause, RevisionID: event.RevisionID().Hex()}
+	payload := senderRevisionPayloadV4{Stage: stage, Cause: cause, RevisionID: event.RevisionID().Hex()}
 	var correlation *CorrelationV1
 	if lease, ok := event.LeaseID(); ok {
 		encoded := lease.Hex()

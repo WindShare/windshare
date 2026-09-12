@@ -3,11 +3,10 @@ import type { V2ShareDescriptor } from '../catalog/v2-records'
 import { SenderObjectError } from '../crypto/sender-object'
 import { equalBytes } from '../crypto/bytes'
 import {
-  createProtocolFailure,
+  createReceivedProtocolError,
   protocolFailureFact,
-  type FailureCorrelation,
   type FailureFact,
-  type ProtocolFailure,
+  type ReceivedProtocolError,
 } from '../diagnostics/incident/fact'
 import { V2CborError } from '../protocol/cbor'
 import { V2_MESSAGE_KIND, type V2SessionMessage } from '../session/v2-message'
@@ -59,16 +58,22 @@ const V2_LEASE_RELEASE_TIMEOUT_MILLISECONDS = 30_000
 
 export class V2RemoteRevisionError extends Error {
   readonly failure: V2RevisionFailure
-  readonly protocolFailure: ProtocolFailure
+  readonly protocolFailure: ReceivedProtocolError
   readonly failureFact: FailureFact<'protocol_failure'>
 
-  constructor(failure: V2RevisionFailure, protocolFailure: ProtocolFailure) {
-    super(`Sender could not open the file revision (0x${failure.code.toString(16)})`)
-    if (!revisionFailureMatchesProtocolFailure(failure, protocolFailure)) {
-      throw new TypeError('Revision failure does not match its authenticated protocol result')
+  constructor(protocolFailure: ReceivedProtocolError) {
+    super(`Sender could not open the file revision (0x${protocolFailure.content.code.toString(16)})`)
+    if (protocolFailure.requestKind !== 'open_revisions' || protocolFailure.content.scope !== 'revision') {
+      throw new TypeError('Revision errors require an authenticated open-revisions result')
     }
     this.name = 'V2RemoteRevisionError'
-    this.failure = Object.freeze({ ...failure })
+    this.failure = Object.freeze({
+      code: protocolFailure.content.code,
+      retryable: protocolFailure.content.retryable,
+      ...(protocolFailure.content.retryAfterMilliseconds === undefined
+        ? {}
+        : { retryAfterMilliseconds: protocolFailure.content.retryAfterMilliseconds }),
+    })
     this.protocolFailure = protocolFailure
     this.failureFact = protocolFailureFact({
       stage: 'protocol_operation',
@@ -83,13 +88,13 @@ export class V2RemoteRevisionError extends Error {
 export class V2RevisionCapacityBusyError extends V2RemoteRevisionError {
   readonly retryAfterMilliseconds: number
 
-  constructor(failure: V2RevisionFailure, protocolFailure: ProtocolFailure) {
-    if (!isRevisionCapacityBusyFailure(failure)) {
+  constructor(protocolFailure: ReceivedProtocolError) {
+    if (!isRevisionCapacityBusyFailure(protocolFailure.content)) {
       throw new TypeError('Revision capacity requires an exact retryable quota result')
     }
-    super(failure, protocolFailure)
+    super(protocolFailure)
     this.name = 'V2RevisionCapacityBusyError'
-    this.retryAfterMilliseconds = failure.retryAfterMilliseconds
+    this.retryAfterMilliseconds = protocolFailure.content.retryAfterMilliseconds
   }
 }
 
@@ -194,9 +199,6 @@ export class V2RevisionService {
       encodeV2OpenRequest(fileId),
       { laneId, ...(signal === undefined ? {} : { signal }) },
     )
-    // OPEN_RESULTS settles the operation, so capture attribution while the
-    // operation-to-lane binding still exists.
-    const correlation = this.#session.operationCorrelation(operation)
     const message = await operation.next(signal)
     if (message.kind === V2_MESSAGE_KIND.operationError) {
       throw remoteOperationErrorFor(this.#session, message)
@@ -213,7 +215,9 @@ export class V2RevisionService {
       }
       throw error
     }
-    if (result.failure !== undefined) throw remoteRevisionErrorFor(result.failure, correlation)
+    if (result.failure !== undefined) {
+      throw remoteRevisionErrorFor(result.failure, this.#session.authenticatedResponseCorrelation(message))
+    }
     if (result.revisionObject === undefined || result.lease === undefined) {
       throw new Error('Revision open returned no authenticated outcome')
     }
@@ -560,46 +564,18 @@ export class V2SessionBlockLane implements V2BlockLane {
 
 function remoteRevisionErrorFor(
   failure: V2RevisionFailure,
-  correlation: FailureCorrelation,
+  correlation: ReceivedProtocolError['correlation'],
 ): V2RemoteRevisionError {
-  const protocolFailure = createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: failure.retryable,
-    ...(failure.retryAfterMilliseconds === undefined
-      ? {}
-      : { retryAfterMilliseconds: failure.retryAfterMilliseconds }),
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: requireOperationCorrelation(correlation),
+  const protocolFailure = createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation, content: {
+      scope: 'revision', code: failure.code, retryable: failure.retryable, ...(failure.retryAfterMilliseconds === undefined
+        ? {}
+        : { retryAfterMilliseconds: failure.retryAfterMilliseconds })
+    }
   })
   return isRevisionCapacityBusyFailure(failure)
-    ? new V2RevisionCapacityBusyError(failure, protocolFailure)
-    : new V2RemoteRevisionError(failure, protocolFailure)
-}
-
-function requireOperationCorrelation(
-  correlation: FailureCorrelation,
-): ProtocolFailure['correlation'] {
-  if (
-    correlation.protocolSessionId === undefined ||
-    correlation.protocolOperationId === undefined
-  ) {
-    throw new TypeError('Revision result attribution requires session and operation identities')
-  }
-  return correlation as ProtocolFailure['correlation']
-}
-
-function revisionFailureMatchesProtocolFailure(
-  failure: V2RevisionFailure,
-  protocolFailure: ProtocolFailure,
-): boolean {
-  return protocolFailure.requestKind === 'open_revisions' &&
-    protocolFailure.wireScope === 'revision' &&
-    protocolFailure.settlement.kind === 'received_authenticated' &&
-    protocolFailure.wireCode === failure.code &&
-    protocolFailure.retryable === failure.retryable &&
-    protocolFailure.retryAfterMilliseconds === failure.retryAfterMilliseconds
+    ? new V2RevisionCapacityBusyError(protocolFailure)
+    : new V2RemoteRevisionError(protocolFailure)
 }
 
 function isRevisionCapacityBusyFailure(

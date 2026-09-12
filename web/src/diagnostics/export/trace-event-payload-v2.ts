@@ -1,6 +1,6 @@
 import type {
-  TraceDomainEventNameV1,
-  TraceEventPayloadByNameV1,
+  TraceDomainEventNameV2,
+  TraceEventPayloadByNameV2,
 } from '../trace/model'
 import {
   validateLane,
@@ -79,12 +79,12 @@ const EVENT_PAYLOAD_VALIDATORS = Object.freeze({
   direct_zip_member_rollback: validateDirectZipMemberRollback,
   retained_inventory: validateRetainedInventory,
   retained_action: validateRetainedAction,
-} satisfies Record<TraceDomainEventNameV1, (payload: UnknownRecord) => void>)
+} satisfies Record<TraceDomainEventNameV2, (payload: UnknownRecord) => void>)
 
-export function validateTraceEventPayloadV1<Name extends TraceDomainEventNameV1>(
+export function validateTraceEventPayloadV2<Name extends TraceDomainEventNameV2>(
   eventName: Name,
   value: unknown,
-): asserts value is TraceEventPayloadByNameV1[Name] {
+): asserts value is TraceEventPayloadByNameV2[Name] {
   const payload = recordValue(value, `${eventName} payload`)
   if (!Object.hasOwn(EVENT_PAYLOAD_VALIDATORS, eventName)) throw new TypeError(`unhandled trace event ${String(eventName)}`)
   EVENT_PAYLOAD_VALIDATORS[eventName](payload)

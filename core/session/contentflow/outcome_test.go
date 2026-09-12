@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"github.com/windshare/windshare/core/framechannel"
 	"testing"
 
 	"github.com/windshare/windshare/core/content"
@@ -11,6 +12,7 @@ import (
 )
 
 type fixedOutcomeOutbound struct {
+	result  protocolsession.ResponseSendResult
 	outcome protocolsession.SendOutcome
 	err     error
 }
@@ -26,8 +28,8 @@ func (*fragmentFailureOutbound) SendControl(
 	protocolsession.MessageKind,
 	protocolsession.OperationID,
 	[]byte,
-) (protocolsession.SendOutcome, error) {
-	return protocolsession.SendOutcomeDropped, errors.New("final control was not expected")
+) (protocolsession.ResponseSendResult, error) {
+	return responseResultForTest(protocolsession.SendOutcomeDropped), errors.New("final control was not expected")
 }
 
 func (outbound *fragmentFailureOutbound) SendFragment(context.Context, protocolsession.Message) error {
@@ -49,8 +51,11 @@ func (outbound fixedOutcomeOutbound) SendControl(
 	protocolsession.MessageKind,
 	protocolsession.OperationID,
 	[]byte,
-) (protocolsession.SendOutcome, error) {
-	return outbound.outcome, outbound.err
+) (protocolsession.ResponseSendResult, error) {
+	if !outbound.result.IsZero() {
+		return outbound.result, outbound.err
+	}
+	return responseResultForTest(outbound.outcome), outbound.err
 }
 
 func (fixedOutcomeOutbound) SendFragment(context.Context, protocolsession.Message) error {
@@ -74,12 +79,15 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 	tests := []struct {
 		name             string
 		outcome          protocolsession.SendOutcome
+		result           protocolsession.ResponseSendResult
 		sendErr          error
 		wantEnd          content.LeaseEndKind
 		wantProcessError error
 	}{
 		{name: "cancel before send", outcome: protocolsession.SendOutcomeDropped, wantEnd: content.LeaseUndelivered},
-		{name: "send wins cancel", outcome: protocolsession.SendOutcomeDelivered},
+		{name: "send wins cancel", outcome: protocolsession.SendOutcomeTransportConfirmed},
+		{name: "confirmed after uncertainty with cleanup failure", result: retriedConfirmedResultForTest(), sendErr: transportErr, wantProcessError: transportErr},
+		{name: "invalid evidence", outcome: protocolsession.SendOutcomeUninitialized, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
 		{name: "writer transport failure", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantEnd: content.LeaseDetached, wantProcessError: transportErr},
 		{name: "caller timeout", outcome: protocolsession.SendOutcomeUnknown, sendErr: context.DeadlineExceeded, wantEnd: content.LeaseDetached, wantProcessError: context.DeadlineExceeded},
 		{name: "session close before send", outcome: protocolsession.SendOutcomeDropped, sendErr: protocolsession.ErrWriterStopped, wantEnd: content.LeaseUndelivered, wantProcessError: protocolsession.ErrWriterStopped},
@@ -91,7 +99,7 @@ func TestOpenResultDeliverySettlesLeaseWithExactEvidence(t *testing.T) {
 			defer cache.Close()
 			handler, err := NewSenderHandler(SenderHandlerConfig{
 				Service:  service,
-				Outbound: fixedOutcomeOutbound{outcome: test.outcome, err: test.sendErr},
+				Outbound: fixedOutcomeOutbound{outcome: test.outcome, result: test.result, err: test.sendErr},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -171,11 +179,14 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 	tests := []struct {
 		name         string
 		outcome      protocolsession.SendOutcome
+		result       protocolsession.ResponseSendResult
 		sendErr      error
 		wantDetached bool
 	}{
 		{name: "definitive drop", outcome: protocolsession.SendOutcomeDropped, wantDetached: true},
-		{name: "delivered", outcome: protocolsession.SendOutcomeDelivered},
+		{name: "delivered", outcome: protocolsession.SendOutcomeTransportConfirmed},
+		{name: "confirmed retry cleanup failed", result: retriedConfirmedResultForTest(), sendErr: transportErr},
+		{name: "invalid evidence", outcome: protocolsession.SendOutcomeUninitialized, sendErr: transportErr, wantDetached: true},
 		{name: "transport uncertainty", outcome: protocolsession.SendOutcomeUnknown, sendErr: transportErr, wantDetached: true},
 	}
 	for _, test := range tests {
@@ -191,7 +202,7 @@ func TestRenewResultDeliveryDetachesEveryAmbiguousLease(t *testing.T) {
 				t.Fatal(err)
 			}
 			handler, err := NewSenderHandler(SenderHandlerConfig{
-				Service: service, Outbound: fixedOutcomeOutbound{outcome: test.outcome, err: test.sendErr},
+				Service: service, Outbound: fixedOutcomeOutbound{outcome: test.outcome, result: test.result, err: test.sendErr},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -415,4 +426,41 @@ func TestReleaseReplayRemainsIdempotentAfterIdentityTombstoneRotation(t *testing
 	if ended != 0 {
 		t.Fatalf("unknown replay reached the share-scoped store: endings=%d", ended)
 	}
+}
+
+// Test doubles express the same physical boundary as production receipts.
+func responseResultForTest(outcome protocolsession.SendOutcome) protocolsession.ResponseSendResult {
+	if outcome == protocolsession.SendOutcomeUninitialized {
+		return protocolsession.ResponseSendResult{}
+	}
+	completion := protocolsession.SendCompletion{Settled: true, Outcome: outcome}
+	end := protocolsession.ResponseSendEndRetryDisallowed
+	if outcome != protocolsession.SendOutcomeDropped {
+		completion.Admitted = true
+		completion.TransportDisposition = framechannel.SendAccepted
+	}
+	if outcome == protocolsession.SendOutcomeTransportConfirmed {
+		end = protocolsession.ResponseSendEndTransportConfirmed
+	}
+	attempt, err := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 1, LaneID: 1}, completion)
+	if err != nil {
+		panic(err)
+	}
+	result, err := protocolsession.NewResponseSendReturned(end, []protocolsession.SendAttemptSnapshot{attempt})
+	if err != nil {
+		panic(err)
+	}
+	return result
+}
+
+func retriedConfirmedResultForTest() protocolsession.ResponseSendResult {
+	first, _ := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 1, LaneID: 1},
+		protocolsession.SendCompletion{Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeUnknown, TransportDisposition: framechannel.SendAccepted, Err: errors.New("transport uncertain")})
+	second, _ := protocolsession.NewSettledSendAttempt(protocolsession.SendAttemptIdentity{ResponseSequence: 1, AttemptSequence: 2, LaneID: 2},
+		protocolsession.SendCompletion{Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeTransportConfirmed, TransportDisposition: framechannel.SendAccepted})
+	result, err := protocolsession.NewResponseSendReturned(protocolsession.ResponseSendEndTransportConfirmed, []protocolsession.SendAttemptSnapshot{first, second})
+	if err != nil {
+		panic(err)
+	}
+	return result.WithCleanup(protocolsession.SendCleanupFailed)
 }

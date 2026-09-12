@@ -4,7 +4,7 @@ import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/sessio
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
 import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
-import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
+import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import {
   V2_MAXIMUM_ACTIVE_OPERATIONS,
   V2_MAXIMUM_TRACKED_OPERATIONS,
@@ -75,7 +75,7 @@ describe('operation lifecycle capacity', () => {
     ])
     for (const event of events) {
       const projected = projectProtocolTraceEvent(event)
-      expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+      expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
       expect(event.correlation.protocolOperationId).toBeDefined()
     }
     await router.route(encodeV2Message(V2_MESSAGE_KIND.catalogResult, operation.id, BODY))

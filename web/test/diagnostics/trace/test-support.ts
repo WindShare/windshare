@@ -2,7 +2,7 @@ import {
   createTraceCapacityPolicy,
   type TraceCapacityPolicy,
 } from '../../../src/diagnostics/trace/capacity'
-import type { TraceEventNameV1 } from '../../../src/diagnostics/trace/model'
+import type { TraceEventNameV2 } from '../../../src/diagnostics/trace/model'
 import {
   BoundedTraceRecorder,
   TraceHealthAccumulator,
@@ -14,7 +14,7 @@ import type {
 } from '../../../src/diagnostics/trace/ports'
 
 type TestEventName = Extract<
-  TraceEventNameV1,
+  TraceEventNameV2,
   'transfer_progress' | 'checkpoint' | 'cleanup'
 >
 

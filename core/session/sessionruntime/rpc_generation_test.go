@@ -227,7 +227,7 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 		t.Fatal(err)
 	}
 	first := requestReceipt.Await(context.Background())
-	if first.Outcome != protocolsession.SendOutcomeDelivered || !first.Admitted {
+	if first.Outcome != protocolsession.SendOutcomeTransportConfirmed || !first.Admitted {
 		t.Fatalf("first request completion=%+v", first)
 	}
 	call := &operationCall{
@@ -273,7 +273,7 @@ func testRPCFinalWinsCleanupPreservesFingerprintAndCannotCancelHostileSameIDGene
 		t.Fatal(err)
 	}
 	second := secondReceipt.Await(context.Background())
-	if second.Outcome != protocolsession.SendOutcomeDelivered || !second.Generation.IsActive() {
+	if second.Outcome != protocolsession.SendOutcomeTransportConfirmed || !second.Generation.IsActive() {
 		t.Fatalf("forced second generation: %+v", second)
 	}
 	if err := rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort); err != nil {
@@ -328,7 +328,7 @@ func testReceiverPeerOperationLateTerminateCannotCrossSameIDGeneration(t *testin
 			t.Fatal(sendErr)
 		}
 		completion := receipt.Await(context.Background())
-		if completion.Outcome != protocolsession.SendOutcomeDelivered || !completion.Admitted ||
+		if completion.Outcome != protocolsession.SendOutcomeTransportConfirmed || !completion.Admitted ||
 			completion.Generation.IsZero() || completion.Operation.IsZero() {
 			t.Fatalf("same-ID peer offer completion=%+v", completion)
 		}
@@ -456,7 +456,7 @@ func testRPCQueuedStaleResponseCannotCrossSameIDGeneration(t *testing.T) {
 			t.Fatal(sendErr)
 		}
 		completion := receipt.Await(context.Background())
-		if completion.Outcome != protocolsession.SendOutcomeDelivered || !completion.Admitted ||
+		if completion.Outcome != protocolsession.SendOutcomeTransportConfirmed || !completion.Admitted ||
 			completion.Generation.IsZero() || completion.Operation.IsZero() {
 			t.Fatalf("same-ID request completion=%+v", completion)
 		}

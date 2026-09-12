@@ -6,31 +6,31 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
 
-var errInvalidSchemaEvent = errors.New("event cannot be represented by trace schema v3")
+var errInvalidSchemaEvent = errors.New("event cannot be represented by trace schema v4")
 
 type namedValue interface {
 	Name() (string, bool)
 }
 
-type encodeVisitorV3 struct {
-	record *RunTraceRecordV3
+type encodeVisitorV4 struct {
+	record *RunTraceRecordV4
 }
 
-func encodeV3(
+func encodeV4(
 	runID runIdentity,
 	metadata entryMetadata,
 	event clievent.Event,
-) (RunTraceRecordV3, error) {
-	record, err := baseRecordV3(runID, metadata, event.Command(), event.Level(), "pending")
+) (RunTraceRecordV4, error) {
+	record, err := baseRecordV4(runID, metadata, event.Command(), event.Level(), "pending")
 	if err != nil {
-		return RunTraceRecordV3{}, err
+		return RunTraceRecordV4{}, err
 	}
-	visitor := &encodeVisitorV3{record: &record}
+	visitor := &encodeVisitorV4{record: &record}
 	if err := event.Accept(visitor); err != nil {
-		return RunTraceRecordV3{}, err
+		return RunTraceRecordV4{}, err
 	}
 	if record.Event == "pending" || record.Payload == nil {
-		return RunTraceRecordV3{}, errInvalidSchemaEvent
+		return RunTraceRecordV4{}, errInvalidSchemaEvent
 	}
 	return record, nil
 }
@@ -63,7 +63,7 @@ func namesOf[T namedValue](values []T) ([]string, error) {
 	return names, nil
 }
 
-func (visitor *encodeVisitorV3) set(event string, correlation *CorrelationV1, payload payloadV3) {
+func (visitor *encodeVisitorV4) set(event string, correlation *CorrelationV1, payload payloadV4) {
 	visitor.record.Event = event
 	visitor.record.Correlation = correlation
 	visitor.record.Payload = payload
@@ -120,35 +120,35 @@ func encodeTypedIdentity(raw []byte) string {
 	return encodeCorrelationIdentity(raw)
 }
 
-func projectRelayAuthority(authority clievent.RelayAuthority) (relayAuthorityV3, error) {
+func projectRelayAuthority(authority clievent.RelayAuthority) (relayAuthorityV4, error) {
 	scheme, err := nameOf(authority.Scheme())
 	if err != nil || !authority.Valid() {
-		return relayAuthorityV3{}, errInvalidSchemaEvent
+		return relayAuthorityV4{}, errInvalidSchemaEvent
 	}
-	return relayAuthorityV3{Scheme: scheme, Host: authority.Host(), Port: authority.Port()}, nil
+	return relayAuthorityV4{Scheme: scheme, Host: authority.Host(), Port: authority.Port()}, nil
 }
 
-func projectFailure(failure clievent.Failure) (failureV3, error) {
+func projectFailure(failure clievent.Failure) (failureV4, error) {
 	code, err := nameOf(failure.Code())
 	if err != nil {
-		return failureV3{}, err
+		return failureV4{}, err
 	}
 	messageKey, ok := failure.MessageKey()
 	if !ok {
-		return failureV3{}, errInvalidSchemaEvent
+		return failureV4{}, errInvalidSchemaEvent
 	}
 	message, err := nameOf(messageKey)
 	if err != nil {
-		return failureV3{}, err
+		return failureV4{}, err
 	}
-	projected := failureV3{Code: code, MessageKey: message}
+	projected := failureV4{Code: code, MessageKey: message}
 	if fault, ok := failure.Fault(); ok {
 		domain, domainErr := nameOf(fault.Domain())
 		scope, scopeErr := nameOf(fault.Scope())
 		if domainErr != nil || scopeErr != nil {
-			return failureV3{}, errInvalidSchemaEvent
+			return failureV4{}, errInvalidSchemaEvent
 		}
-		projected.Fault = &faultV3{Domain: domain, Scope: scope, Code: fault.Code()}
+		projected.Fault = &faultV4{Domain: domain, Scope: scope, Code: fault.Code()}
 	}
 	if retryAfter, ok := failure.RetryAfterMillis(); ok {
 		projected.RetryAfterMS = decimalPointer(retryAfter)
@@ -156,8 +156,8 @@ func projectFailure(failure clievent.Failure) (failureV3, error) {
 	return projected, nil
 }
 
-func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV3 {
-	return fileOutcomesV3{
+func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV4 {
+	return fileOutcomesV4{
 		DownloadedFiles:          decimal(outcomes.DownloadedFiles),
 		ResumedFiles:             decimal(outcomes.ResumedFiles),
 		PreviouslyPublishedFiles: decimal(outcomes.PreviouslyPublishedFiles),
@@ -169,12 +169,12 @@ func projectFileOutcomes(outcomes clievent.FileOutcomes) fileOutcomesV3 {
 	}
 }
 
-func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV3, error) {
+func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV4, error) {
 	discovery, err := nameOf(snapshot.Discovery())
 	if err != nil || !snapshot.Valid() {
-		return progressPayloadV3{}, errInvalidSchemaEvent
+		return progressPayloadV4{}, errInvalidSchemaEvent
 	}
-	return progressPayloadV3{
+	return progressPayloadV4{
 		Discovery:                discovery,
 		CountersExact:            snapshot.CountersExact(),
 		DiscoveredFiles:          decimal(snapshot.DiscoveredFiles()),
@@ -185,7 +185,7 @@ func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV3, err
 		PreviouslyPublishedBytes: decimal(snapshot.PreviouslyPublishedBytes()),
 		NewlyVerifiedBytes:       decimal(snapshot.NewlyVerifiedBytes()),
 		FileOutcomes:             projectFileOutcomes(snapshot.FileOutcomes()),
-		CapacityWait: capacityWaitV3{
+		CapacityWait: capacityWaitV4{
 			ActiveWaiters:     decimal(uint64(snapshot.CapacityActiveWaiters())),
 			AccumulatedWaitMS: signedDecimal(snapshot.CapacityAccumulatedWait().Milliseconds()),
 			Attempts:          decimal(snapshot.CapacityWaitAttempts()),
@@ -193,18 +193,18 @@ func projectProgress(snapshot clievent.ProgressSnapshot) (progressPayloadV3, err
 	}, nil
 }
 
-func (visitor *encodeVisitorV3) VisitReady(clievent.Ready) error {
-	visitor.set("ready", nil, emptyPayloadV3{})
+func (visitor *encodeVisitorV4) VisitReady(clievent.Ready) error {
+	visitor.set("ready", nil, emptyPayloadV4{})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitSharingSubjectSelected(event clievent.SharingSubjectSelected) error {
+func (visitor *encodeVisitorV4) VisitSharingSubjectSelected(event clievent.SharingSubjectSelected) error {
 	subject := event.Subject()
 	kind, err := nameOf(subject.Kind())
 	if err != nil {
 		return err
 	}
-	payload := sharingSubjectPayloadV3{
+	payload := sharingSubjectPayloadV4{
 		SubjectKind: kind, SelectedItems: decimal(subject.SelectedItems()),
 	}
 	if subject.Kind() == clievent.SharingFile {
@@ -214,16 +214,16 @@ func (visitor *encodeVisitorV3) VisitSharingSubjectSelected(event clievent.Shari
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitRelayConnected(event clievent.RelayConnected) error {
+func (visitor *encodeVisitorV4) VisitRelayConnected(event clievent.RelayConnected) error {
 	authority, err := projectRelayAuthority(event.Authority())
 	if err != nil {
 		return err
 	}
-	visitor.set("relay_connected", nil, relayConnectedPayloadV3{RelayAuthority: authority})
+	visitor.set("relay_connected", nil, relayConnectedPayloadV4{RelayAuthority: authority})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitRelayRecovering(event clievent.RelayRecovering) error {
+func (visitor *encodeVisitorV4) VisitRelayRecovering(event clievent.RelayRecovering) error {
 	authority, err := projectRelayAuthority(event.Authority())
 	if err != nil {
 		return err
@@ -232,7 +232,7 @@ func (visitor *encodeVisitorV3) VisitRelayRecovering(event clievent.RelayRecover
 	if err != nil {
 		return err
 	}
-	payload := relayRecoveringPayloadV3{
+	payload := relayRecoveringPayloadV4{
 		RelayAuthority: authority, Attempt: event.Attempt(), State: state,
 	}
 	if failure, ok := event.Failure(); ok {
@@ -246,16 +246,16 @@ func (visitor *encodeVisitorV3) VisitRelayRecovering(event clievent.RelayRecover
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitContentPathSelected(event clievent.ContentPathSelected) error {
+func (visitor *encodeVisitorV4) VisitContentPathSelected(event clievent.ContentPathSelected) error {
 	path, err := nameOf(event.Path())
 	if err != nil {
 		return err
 	}
-	visitor.set("content_path_selected", nil, contentPathSelectedPayloadV3{ContentPath: path})
+	visitor.set("content_path_selected", nil, contentPathSelectedPayloadV4{ContentPath: path})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitFallback(event clievent.Fallback) error {
+func (visitor *encodeVisitorV4) VisitFallback(event clievent.Fallback) error {
 	from, err := nameOf(event.From())
 	if err != nil {
 		return err
@@ -268,18 +268,18 @@ func (visitor *encodeVisitorV3) VisitFallback(event clievent.Fallback) error {
 	if err != nil {
 		return err
 	}
-	visitor.set("fallback", nil, fallbackPayloadV3{
+	visitor.set("fallback", nil, fallbackPayloadV4{
 		FromTransport: from, ToTransport: to, Failure: failure,
 	})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitTransferProgress(event clievent.TransferProgress) error {
+func (visitor *encodeVisitorV4) VisitTransferProgress(event clievent.TransferProgress) error {
 	progress, err := projectProgress(event.Snapshot())
 	if err != nil {
 		return err
 	}
-	visitor.set("transfer_progress", nil, transferProgressPayloadV3{
+	visitor.set("transfer_progress", nil, transferProgressPayloadV4{
 		ReceiveOperationID: encodeTypedIdentity(event.ReceiveOperationID().Bytes()),
 		TransferJobID:      encodeTypedIdentity(event.TransferJobID().Bytes()),
 		Progress:           progress,
@@ -287,16 +287,16 @@ func (visitor *encodeVisitorV3) VisitTransferProgress(event clievent.TransferPro
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitWarning(event clievent.Warning) error {
+func (visitor *encodeVisitorV4) VisitWarning(event clievent.Warning) error {
 	failure, err := projectFailure(event.Failure())
 	if err != nil {
 		return err
 	}
-	visitor.set("warning", nil, warningPayloadV3{Failure: failure})
+	visitor.set("warning", nil, warningPayloadV4{Failure: failure})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitCommandFailed(event clievent.CommandFailed) error {
+func (visitor *encodeVisitorV4) VisitCommandFailed(event clievent.CommandFailed) error {
 	exitCode, ok := event.ExitCode().ProcessCode()
 	if !ok {
 		return errInvalidSchemaEvent
@@ -305,13 +305,13 @@ func (visitor *encodeVisitorV3) VisitCommandFailed(event clievent.CommandFailed)
 	if err != nil {
 		return err
 	}
-	visitor.set("command_failed", nil, commandFailedPayloadV3{
+	visitor.set("command_failed", nil, commandFailedPayloadV4{
 		ExitCode: exitCode, Failure: failure,
 	})
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitTransferSettled(event clievent.TransferSettled) error {
+func (visitor *encodeVisitorV4) VisitTransferSettled(event clievent.TransferSettled) error {
 	result := event.Result()
 	status, err := nameOf(result.Status())
 	if err != nil {
@@ -325,7 +325,7 @@ func (visitor *encodeVisitorV3) VisitTransferSettled(event clievent.TransferSett
 	if !ok {
 		return errInvalidSchemaEvent
 	}
-	payload := transferSettledPayloadV3{
+	payload := transferSettledPayloadV4{
 		ResultStatus:        status,
 		ExitCode:            exitCode,
 		Drift:               drift,
@@ -338,7 +338,7 @@ func (visitor *encodeVisitorV3) VisitTransferSettled(event clievent.TransferSett
 		CountersExact:       result.CountersExact(),
 	}
 	if metrics, ok := event.DownloadConnectivity(); ok {
-		summary := &downloadConnectivityV3{
+		summary := &downloadConnectivityV4{
 			DownloadID: metrics.DownloadID, DirectBytes: decimal(metrics.DirectBytes),
 			TURNBytes: decimal(metrics.TURNBytes), ApplicationRelayBytes: decimal(metrics.ApplicationRelayBytes),
 			UnknownBytes: decimal(metrics.UnknownBytes), DirectFraction: metrics.DirectFraction,
@@ -362,13 +362,13 @@ func (visitor *encodeVisitorV3) VisitTransferSettled(event clievent.TransferSett
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitSharingStopped(event clievent.SharingStopped) error {
+func (visitor *encodeVisitorV4) VisitSharingStopped(event clievent.SharingStopped) error {
 	result := event.Result()
 	exitCode, ok := result.ExitCode().ProcessCode()
 	if !ok {
 		return errInvalidSchemaEvent
 	}
-	payload := sharingStoppedPayloadV3{
+	payload := sharingStoppedPayloadV4{
 		ExitCode:        exitCode,
 		ResultElapsedMS: signedDecimal(result.Elapsed().Milliseconds()),
 		StoppedCleanly:  result.StoppedCleanly(),
@@ -384,12 +384,12 @@ func (visitor *encodeVisitorV3) VisitSharingStopped(event clievent.SharingStoppe
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
+func (visitor *encodeVisitorV4) VisitTraceIncomplete(event clievent.TraceIncomplete) error {
 	cause, err := nameOf(event.Cause())
 	if err != nil {
 		return err
 	}
-	visitor.set("trace_incomplete", nil, traceIncompletePayloadV3{
+	visitor.set("trace_incomplete", nil, traceIncompletePayloadV4{
 		Cause:            cause,
 		LifecycleDropped: decimal(event.LifecycleDrops()),
 		ProgressDropped:  decimal(event.ProgressDrops()),
@@ -397,7 +397,7 @@ func (visitor *encodeVisitorV3) VisitTraceIncomplete(event clievent.TraceIncompl
 	return nil
 }
 
-func (visitor *encodeVisitorV3) VisitLaneAdopted(event clievent.LaneAdopted) error {
+func (visitor *encodeVisitorV4) VisitLaneAdopted(event clievent.LaneAdopted) error {
 	transport, err := nameOf(event.Transport())
 	if err != nil {
 		return err
@@ -406,6 +406,6 @@ func (visitor *encodeVisitorV3) VisitLaneAdopted(event clievent.LaneAdopted) err
 	if err != nil {
 		return err
 	}
-	visitor.set("lane_adopted", correlation, laneAdoptedPayloadV3{Transport: transport})
+	visitor.set("lane_adopted", correlation, laneAdoptedPayloadV4{Transport: transport})
 	return nil
 }

@@ -6,7 +6,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createFailureIdentity,
   createIncidentScopeIssuer,
-  createProtocolFailure,
+  createReceivedProtocolError,
   type FailureFact,
   type FailureFactRelation,
   type IncidentScopeHandle,
@@ -545,17 +545,13 @@ function directNavigationSnapshot(): V2ReceiverSnapshot {
 }
 
 function authenticatedRemoteOperationError(): V2RemoteOperationError {
-  return new V2RemoteOperationError(createProtocolFailure({
-    requestKind: 'list_children',
-    wireScope: 'directory',
-    wireCode: 0x21,
-    retryable: true,
-    retryAfterMilliseconds: 250,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  return new V2RemoteOperationError(createReceivedProtocolError({
+    requestKind: 'list_children', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
-    }),
+    }), content: {
+      scope: 'directory', code: 0x21, retryable: true, retryAfterMilliseconds: 250
+    }
   }))
 }
 

@@ -10,6 +10,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/downloadmetrics"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -22,6 +23,32 @@ import (
 )
 
 const observationCompletionTimeout = time.Second
+const protocolObservationCapacity observationstream.Capacity = 256
+
+// One command stream spans receiver reconnects or concurrent sender sessions.
+// Its producer is cut only after those execution owners have joined; projection
+// and reader cancellation therefore cannot become a runtime dependency.
+type protocolObservationStream struct {
+	producer observationstream.Producer[sessionruntime.ProtocolObservation]
+	reader   *observationbridge.Reader[sessionruntime.ProtocolObservation]
+}
+
+func startProtocolObservations(project func(context.Context, *observationbridge.PublicationGate, sessionruntime.ProtocolObservation)) protocolObservationStream {
+	producer, consumer, err := observationstream.New[sessionruntime.ProtocolObservation](protocolObservationCapacity)
+	if err != nil {
+		panic("cli: invalid protocol observation capacity")
+	}
+	gate := &observationbridge.PublicationGate{}
+	reader := observationbridge.Start(consumer, gate, func(ctx context.Context, fact sessionruntime.ProtocolObservation) {
+		project(ctx, gate, fact)
+	})
+	return protocolObservationStream{producer: producer, reader: reader}
+}
+
+func (stream protocolObservationStream) complete(ctx context.Context) (observationstream.Completion, observationbridge.Status) {
+	completion := stream.producer.Complete()
+	return completion, stream.reader.Join(ctx)
+}
 
 type observerLossSource uint8
 
@@ -36,6 +63,7 @@ const (
 	observerLossReceiverTerminationCapacity
 	observerLossReceiverDiagnosticDrain
 	observerLossNativeQueue
+	observerLossProtocolQueue
 )
 
 type receiverObservationCompleter interface {
@@ -55,6 +83,7 @@ type getObservationState struct {
 	lanes                    *transfer.LaneSet
 	laneReader               *observationbridge.Reader[transfer.LaneSettlementSummary]
 	native                   nativeObservationReader
+	protocol                 protocolObservationStream
 	completeOnce             sync.Once
 
 	losses *observationbridge.CumulativeLosses[observerLossSource]
@@ -67,11 +96,13 @@ type getObservation struct {
 
 func newGetObservation(runtime *commandRuntime) getObservation {
 	state := &getObservationState{}
+	observation := getObservation{runtime: runtime, state: state}
 	if runtime != nil && runtime.detailedDiagnosticsEnabled() {
 		state.webRTC = &webRTCObservationSet{}
 		state.losses = observationbridge.NewCumulativeLosses[observerLossSource](runtime)
+		state.protocol = startProtocolObservations(observation.protocolObservationContext)
 	}
-	return getObservation{runtime: runtime, state: state}
+	return observation
 }
 
 func (observation getObservation) observe(event clievent.Event) bool {
@@ -313,20 +344,29 @@ func (observation getObservation) transferLifecycle(value transfer.TransferLifec
 	observation.observe(event)
 }
 
-func (observation getObservation) protocolOperation(value sessionruntime.ProtocolOperationTrace) {
-	event, err := commandprojection.ProjectProtocolOperation(clievent.CommandGet, value)
-	if err != nil {
-		observation.lose(clievent.ObserverLossProtocolOperation, err)
+func (observation getObservation) protocolObservationContext(
+	ctx context.Context,
+	gate *observationbridge.PublicationGate,
+	value sessionruntime.ProtocolObservation,
+) {
+	if ctx.Err() != nil {
 		return
 	}
-	observation.observe(event)
+	event, err := commandprojection.ProjectProtocolObservation(clievent.CommandGet, value)
+	gate.Commit(ctx, func() bool {
+		if err != nil {
+			observation.lose(clievent.ObserverLossProtocolOperation, err)
+			return false
+		}
+		return observation.observe(event)
+	})
 }
 
-func (observation getObservation) protocolTracer() sessionruntime.ProtocolOperationTracer {
-	if observation.runtime == nil || !observation.runtime.detailedDiagnosticsEnabled() {
-		return nil
+func (observation getObservation) protocolObservations() observationstream.Producer[sessionruntime.ProtocolObservation] {
+	if observation.state == nil {
+		return observationstream.Producer[sessionruntime.ProtocolObservation]{}
 	}
-	return sessionruntime.ProtocolOperationTraceFunc(observation.protocolOperation)
+	return observation.state.protocol.producer
 }
 
 func (observation getObservation) relayObservationCapacity() int {

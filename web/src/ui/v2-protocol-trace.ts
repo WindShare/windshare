@@ -1,10 +1,9 @@
 import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
-import type { ProtocolFailureV1 } from '../diagnostics/export/incident-record-v1'
-import type { ProtocolFailure } from '../diagnostics/incident'
+import { projectProtocolErrorContentV2 } from '../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
 import { formatDiagnosticText } from '../security/diagnostic-formatter'
 import type { V2ProtocolTraceEvent } from '../session/v2-diagnostics'
-import type { TraceEventObservationV1, TraceEventPayloadByNameV1 } from '../diagnostics/trace/model'
+import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../diagnostics/trace/model'
 import { correlatedObservation, decimal, requiredCorrelation } from '../diagnostics/export/trace-observation'
 
 const FAILURE_DETAIL_FORMAT = Object.freeze({
@@ -15,7 +14,7 @@ const FAILURE_DETAIL_FORMAT = Object.freeze({
 
 export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
-): TraceEventObservationV1 {
+): TraceEventObservationV2 {
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'request_scheduling') {
     return correlatedObservation(event.eventName, correlation, {
@@ -85,7 +84,7 @@ export function projectProtocolTraceEvent(
       return correlatedObservation(event.eventName, correlation, {
         transition: event.transition,
         request_kind: event.requestKind,
-        protocol_failure: projectProtocolFailure(event.protocolFailure),
+        protocol_error: projectProtocolErrorContentV2(event.protocolError),
       })
     case 'settled':
       return correlatedObservation(event.eventName, correlation, {
@@ -103,7 +102,7 @@ export function projectProtocolTraceEvent(
 
 function projectRetiredOperation(
   event: Extract<V2ProtocolTraceEvent, { transition: 'cancelled' | 'late_response_discarded' }>,
-): TraceEventPayloadByNameV1['protocol_operation'] {
+): TraceEventPayloadByNameV2['protocol_operation'] {
   const request = event.request === undefined ? {} : { request: {
     lease_id: event.request.leaseId,
     ...(event.request.blocks === undefined ? {} : { blocks: {
@@ -118,27 +117,6 @@ function projectRetiredOperation(
     transition: event.transition, request_kind: event.requestKind,
     response_kind: event.responseKind, settlement: event.settlement, ...request,
     ...(event.cancellationReason === undefined ? {} : { cancellation_reason: event.cancellationReason }),
-    ...(event.protocolFailure === undefined ? {} : { protocol_failure: projectProtocolFailure(event.protocolFailure) }),
-  }
-}
-
-function projectProtocolFailure(failure: ProtocolFailure): ProtocolFailureV1 {
-  return {
-    request_kind: failure.requestKind,
-    wire_scope: failure.wireScope,
-    wire_code: failure.wireCode,
-    retryable: failure.retryable,
-    ...(failure.retryAfterMilliseconds === undefined
-      ? {}
-      : { retry_after_ms: failure.retryAfterMilliseconds }),
-    settlement: failure.settlement.kind === 'received_authenticated'
-      ? { kind: failure.settlement.kind }
-      : {
-          kind: failure.settlement.kind,
-          admitted: failure.settlement.admitted,
-          settled: failure.settlement.settled,
-          outcome: failure.settlement.outcome,
-        },
-    correlation: requiredCorrelation(failure.correlation),
+    ...(event.protocolError === undefined ? {} : { protocol_error: projectProtocolErrorContentV2(event.protocolError) }),
   }
 }

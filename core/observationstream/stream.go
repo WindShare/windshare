@@ -80,6 +80,27 @@ func (producer Producer[T]) TryPublish(observation T) bool {
 	}
 }
 
+// IsZero reports whether this producer has an active stream capability.
+func (producer Producer[T]) IsZero() bool { return producer.state == nil }
+
+// RecordDropped accounts for observations lost by an upstream bounded producer.
+// The owner transfers this count before completing the shared output stream.
+func (producer Producer[T]) RecordDropped(count uint64) {
+	if producer.state == nil || count == 0 {
+		return
+	}
+	producer.state.mu.Lock()
+	defer producer.state.mu.Unlock()
+	if producer.state.completed {
+		return
+	}
+	if ^uint64(0)-producer.state.capacityDropped < count {
+		producer.state.capacityDropped = ^uint64(0)
+	} else {
+		producer.state.capacityDropped += count
+	}
+}
+
 // Complete closes admission and the consumer channel at one serialized cut.
 // Every call returns the same producer-proven snapshot. Owners must quiesce all
 // possible publishers before treating that cut as their final lifecycle state.

@@ -1,7 +1,7 @@
 import {
   protocolFailureFact,
   type FailureFact,
-  type ProtocolFailure,
+  type ReceivedProtocolError,
 } from '../diagnostics/incident/fact'
 
 export class V2SessionSignalingError extends Error {
@@ -16,19 +16,19 @@ export class V2SessionSignalingError extends Error {
  * is sufficient for retry, incident, and cross-runtime correlation.
  */
 export class V2AuthenticatedPeerOperationError extends V2SessionSignalingError {
-  readonly protocolFailure: ProtocolFailure
+  readonly protocolFailure: ReceivedProtocolError
   readonly failureFact: FailureFact<'protocol_failure'>
 
-  constructor(protocolFailure: ProtocolFailure) {
+  constructor(protocolFailure: ReceivedProtocolError) {
     super('Sender rejected the authenticated peer operation')
-    if (protocolFailure.wireScope !== 'peer') {
+    if (protocolFailure.content.scope !== 'peer') {
       throw new TypeError('Authenticated peer failures require peer scope')
     }
     this.name = 'V2AuthenticatedPeerOperationError'
     this.protocolFailure = protocolFailure
     this.failureFact = protocolFailureFact({
       stage: 'peer_attempt',
-      recoveryDisposition: protocolFailure.retryable ? 'retryable' : 'terminal',
+      recoveryDisposition: protocolFailure.content.retryable ? 'retryable' : 'terminal',
       protocolFailure,
     })
   }

@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -19,13 +18,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		runtime, _ := newUnstartedRuntimeWithPolicy(t, protocolsession.RoleReceiver,
 			protocolsession.OperationLimits{MaxActive: 1, MaxTracked: 2}, nil)
-		var traces []ProtocolOperationTrace
-		var traceMu sync.Mutex
-		runtime.protocolTracer = ProtocolOperationTraceFunc(func(event ProtocolOperationTrace) {
-			traceMu.Lock()
-			defer traceMu.Unlock()
-			traces = append(traces, event)
-		})
+		recorder := newProtocolTraceRecorder(runtime)
 		physical := runtime.lanes.active[runtime.initial.ID]
 		writerContext, stopWriter := context.WithCancel(context.Background())
 		writerDone := make(chan error, 1)
@@ -88,6 +81,7 @@ func TestRPCWaitsForOperationCapacityAndKeepsCancellationLive(t *testing.T) {
 		if runtime.ctx.Err() != nil || !physical.writer.Accepting() || runtime.operations.ActiveCount() != 0 {
 			t.Fatal("capacity pressure ended the session or leaked operation authority")
 		}
+		traces := recorder.snapshot()
 		for _, stage := range []ProtocolOperationStage{
 			ProtocolOperationReceiverWaitingActiveCapacity,
 			ProtocolOperationReceiverWaitingRetainedCapacity,

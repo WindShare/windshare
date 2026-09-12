@@ -30,6 +30,7 @@ func TestPrepareShareSenderEmitsTypedCatalogStorageMilestonesWithoutSlog(t *test
 	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	emitter := &shareRecordingEmitter{}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	prepared, code := (&App{revisionCapacity: newTestRevisionCapacity(t)}).prepareShareSender(
 		context.Background(),
 		shareRequest{

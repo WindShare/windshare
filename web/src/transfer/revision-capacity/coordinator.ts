@@ -13,7 +13,7 @@ import { encodeBase64Url } from '../../crypto/bytes'
 import {
   protocolFailureFact,
   type FailureFact,
-  type ProtocolFailure,
+  type ReceivedProtocolError,
 } from '../../diagnostics/incident'
 import {
   createV2ProtocolSessionIdentity,
@@ -85,7 +85,7 @@ export interface V2RevisionCapacityCoordinatorOptions extends V2RevisionCapacity
 
 export class V2RevisionCapacityWaitBudgetError extends Error {
   readonly surface: V2RevisionCapacitySurface
-  readonly protocolFailure: ProtocolFailure
+  readonly protocolFailure: ReceivedProtocolError
   readonly failureFact: FailureFact<'protocol_failure'>
 
   constructor(surface: V2RevisionCapacitySurface, capacity: V2RevisionCapacityBusyError) {

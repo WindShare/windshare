@@ -27,10 +27,10 @@ import {
   type FailureCorrelation,
 } from './failure-correlation'
 import {
-  createProtocolFailure,
-  isProtocolFailure,
-  type ProtocolFailure,
-} from './protocol-failure'
+  createReceivedProtocolError,
+  isReceivedProtocolError,
+  type ReceivedProtocolError,
+} from './protocol-error'
 
 export {
   FAILURE_IDENTITY_KINDS,
@@ -43,18 +43,21 @@ export {
   type FailureLaneCorrelation,
 } from './failure-correlation'
 export {
-  PROTOCOL_FAILURE_SCOPES,
+  PROTOCOL_ERROR_SCOPES,
   PROTOCOL_MESSAGE_KINDS_V1,
   PROTOCOL_REQUEST_KINDS_V1,
-  createProtocolFailure,
-  isProtocolFailure,
-  type ProtocolFailure,
-  type ProtocolFailureInput,
-  type ProtocolFailureScope,
+  createReceivedProtocolError,
+  isReceivedProtocolError,
+  type ReceivedProtocolError,
+  type ReceivedProtocolErrorInput,
+  type ProtocolErrorScope,
   type ProtocolMessageKindV1,
   type ProtocolRequestKindV1,
-  type ProtocolSettlement,
-} from './protocol-failure'
+  createProtocolErrorContent,
+  isProtocolErrorContent,
+  type ProtocolErrorContent,
+  type ProtocolErrorContentInput,
+} from './protocol-error'
 
 export const FAILURE_FACT_KINDS = Object.freeze([
   'fault',
@@ -133,7 +136,7 @@ type LifecycleFailureReason =
 
 export interface FailureFactByKind {
   readonly fault: Readonly<{ fault: Fault }>
-  readonly protocol_failure: Readonly<{ protocolFailure: ProtocolFailure }>
+  readonly protocol_failure: Readonly<{ protocolFailure: ReceivedProtocolError }>
   readonly peer_failure: Readonly<{
     peerFailure: Readonly<{
       scope: V2ConnectivityFailureScope
@@ -236,9 +239,9 @@ export function faultFailureFact(input: {
 export function protocolFailureFact(input: {
   readonly stage: FailureStage
   readonly recoveryDisposition: RecoveryDisposition
-  readonly protocolFailure: ProtocolFailure
+  readonly protocolFailure: ReceivedProtocolError
 }): FailureFact<'protocol_failure'> {
-  const protocolFailure = createProtocolFailure(input.protocolFailure)
+  const protocolFailure = createReceivedProtocolError(input.protocolFailure)
   return createFact(
     'protocol_failure',
     input.stage,
@@ -387,9 +390,9 @@ export function isFailureFact(value: unknown): value is FailureFact {
         hasExactKeys(value.payload, ['protocolFailure']) &&
         isRecord(value.payload.protocolFailure) &&
         Object.isFrozen(value.payload.protocolFailure) &&
-        Object.isFrozen(value.payload.protocolFailure.settlement) &&
+        Object.isFrozen(value.payload.protocolFailure.content) &&
         Object.isFrozen(value.payload.protocolFailure.correlation) &&
-        isProtocolFailure(value.payload.protocolFailure) &&
+        isReceivedProtocolError(value.payload.protocolFailure) &&
         value.correlation !== undefined &&
         failureCorrelationsEqual(value.correlation, value.payload.protocolFailure.correlation)
       )

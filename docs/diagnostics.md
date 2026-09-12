@@ -3,6 +3,28 @@
 ## Sender trace
 
 Add `--trace-dir sender_trace --verbose` to `wind share` and keep the resulting NDJSON file.
+Native NDJSON uses schema 4. Protocol observations retain `observed_at`, the source timestamp;
+the envelope `time` records recorder admission. The facts have separate scopes:
+
+- `protocol_response_send_not_started`: setup ended before any attempt. `request_kind` is absent
+  when no route supplied that context; no lane or receipt is invented.
+- `protocol_response_send_returned`: immutable `response_result` at the call boundary, including
+  bounded `attempts`, aggregate `evidence`, call `end`, and independent `cleanup`.
+- `protocol_send_attempt_settled`: final receipt evidence for an earlier pending attempt.
+- `protocol_error_received`: authenticated error content and its actual receiving lane.
+- `protocol_operation` and `sender_content_decision`: operation lifecycle and content decisions.
+
+`transport_confirmed` proves transport acceptance, not peer receipt or processing. Earlier uncertain
+attempts remain in history when retry succeeds. Each attempt retains its original lane, policy admission,
+receipt progress, outcome, boundary `end`, and bounded `cause` (kind, detail, truncation).
+`pending_attempt_sequence` links a stopped wait to a possible later settlement; it never changes the
+returned result. Records can arrive in either order. Missing settlement means missing evidence.
+
+Join responses by `runtime_run_id`, `protocol_session_id`, `protocol_operation_id`, and local
+`response_sequence`; add `attempt_sequence` for an attempt. Sequences are decimal strings in the
+payload. Cross-runtime `CorrelationV1` is unchanged. `protocol_error` appears once and contains
+only `scope`, `code`, `retryable`, and optional `retry_after_ms`, including on sender responses.
+
 On `sender_session_terminated`, `trigger` and `provenance` remain stable classifications.
 Its optional `failure` captures the winning terminal decision's error evidence:
 
@@ -17,12 +39,16 @@ Snapshots retain at most 16 error nodes, 8 cause levels, 12 frames, and 8 KiB of
 not retain original error objects. Later cleanup cannot replace the winning failure snapshot.
 Use `runtime_run_id` and `protocol_session_id` to correlate it with surrounding trace events.
 
-`observer_loss.rejection` identifies rejected protocol-operation and sender-revision events by
-source stage, field, and validation rule. Its correlation IDs sample the first rejection of that
-signature. Counts are deltas: the first report is immediate, repeats are limited to one report
-per five seconds during activity, and finalization flushes the remainder. The command retains
-31 distinct signatures plus one overflow counter. Labels are bounded; these records capture no
-stacks or complete source objects.
+`observer_loss.rejection` records source event/location/stage, rejected field/rule, and a first
+sample of raw values. Invalid enum numbers and identities survive failed conversion. Association
+strings are diagnostic samples, not validated business correlation. `evidence` is bounded to 16 fields,
+256 bytes per value, and 4 KiB total; `truncated`, `omitted_fields`, and `omitted_bytes` report limits.
+
+Counts are deltas: first report immediately, repeats at most every five seconds during activity,
+then final flush. Signatures exclude values and IDs; 31 signatures plus an overflow counter bound
+aggregation. `omitted_samples` reports overflow. `trace_summary.rejection_evidence_dropped` counts
+anomaly records lost during construction, admission, or writing, separately from original observation
+loss. Writer/flush failures and incomplete status remain authoritative even without a final summary.
 
 Failed `peer_attempt` records include the last completed stage, time waiting there, observed
 deadline expiry, and the primary termination cause/close initiator. Unknown ownership stays
@@ -45,6 +71,11 @@ plus local and STUN endpoints for refreshes. A canceled refresh followed by a co
 handoff means the existing socket was transferred to the next ICE owner.
 
 ## Browser diagnostics
+
+Browser incident/trace records and bundles use schema 2, with unchanged `CorrelationV1`.
+Authenticated errors carry the same pure `protocol_error` content as native traces; request and
+receive correlation stay in their enclosing record. Standalone incidents retain a receiver context
+wrapper. Browser exports do not model the native sender response lifecycle.
 
 To capture a problem that happens when reopening a share:
 
@@ -95,7 +126,7 @@ deadline; expiry retires the lane instead of skipping a sequence. Correlate by o
 block-request summary. `late_response_discarded` records the first validated late completion/error,
 its original settlement, cancellation reason, and wire error without creating a failure incident.
 Lease IDs use the same hexadecimal representation as sender trace. Correlate them with sender
-`content_decision.kind`: `block_lease_released` proves an explicit release was remembered when the
+`sender_content_decision.content_decision.kind`: `block_lease_released` proves an explicit release was remembered when the
 request was rejected; `block_lease_not_owned`, `block_lease_expired`, and `block_lease_invalid`
 distinguish other authority failures. Once bounded release history expires, absence alone cannot
 prove why a lease is no longer owned. Local cancellation never waits for remote notification.

@@ -181,7 +181,7 @@ func TestWriterRegistersViolationObserverBeforeRequestExposure(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- writer.Run(ctx) }()
-	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 		t.Fatalf("offer delivery: outcome=%d err=%v", outcome, err)
 	}
 	if err := <-recorded; err != nil {

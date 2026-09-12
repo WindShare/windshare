@@ -3,198 +3,121 @@ package clievent
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
-func TestProtocolOperationEventRetainsOnlyBoundedDiagnosticFacts(t *testing.T) {
+func protocolTestContext(t *testing.T) ProtocolObservationContext {
+	t.Helper()
 	session, _ := NewProtocolSessionID(bytes16(31))
 	operation, _ := NewProtocolOperationID(bytes16(32))
-	lane, _ := NewLaneIdentity(2, 1)
-	event, err := NewProtocolOperationObserved(ProtocolOperationSpec{
-		Command: CommandGet, Role: ProtocolRoleReceiver,
-		Stage:           ProtocolOperationReceiverFailed,
-		ProtocolSession: session, ProtocolOperation: operation,
-		RequestKind: ProtocolMessageReleaseLease,
-		Lane:        lane, HasLane: true,
-		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome:             ProtocolSendDelivered,
-		DeadlineRemainingMillis: 30_000, HasDeadline: true,
-		OperationElapsedMillis: 30_000,
-		UsableLanesAtSelection: 2, UsableLanesAtSettlement: 2,
-		Cause: ProtocolOperationCauseDeadline,
-	})
+	return ProtocolObservationContext{Command: CommandShare, ObservedAt: time.Unix(1, 2), Role: ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: ProtocolMessageOpenRevisions}
+}
+func TestProtocolObservationFactsAndImmutableResult(t *testing.T) {
+	context := protocolTestContext(t)
+	lane, _ := NewLaneIdentity(2, 0)
+	attempt, err := NewSendAttemptSnapshot(SendAttemptSpec{AttemptSequence: 1, Lane: lane, PolicyAdmitted: true, Outcome: ProtocolSendUnknown, End: SendAttemptEndWaitingEnded})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if event.Command() != CommandGet || event.Level() != LevelDebug ||
-		event.Role() != ProtocolRoleReceiver || event.Stage() != ProtocolOperationReceiverFailed ||
-		event.ProtocolSessionID() != session || event.ProtocolOperationID() != operation ||
-		event.RequestKind() != ProtocolMessageReleaseLease || event.Cause() != ProtocolOperationCauseDeadline ||
-		event.ResponseCount() != 0 || event.OperationElapsedMillis() != 30_000 ||
-		event.UsableLanesAtSelection() != 2 || event.UsableLanesAtSettlement() != 2 {
-		t.Fatalf("protocol operation event = %#v", event)
-	}
-	if got, ok := event.Lane(); !ok || got != lane {
-		t.Fatalf("lane = %#v, %v", got, ok)
-	}
-	if _, ok := event.ResponseKind(); ok {
-		t.Fatal("failed wait unexpectedly retained a response kind")
-	}
-	if outcome, settled, admitted, ok := event.Send(); !ok || outcome != ProtocolSendDelivered || !settled || !admitted {
-		t.Fatalf("send = %v settled=%v admitted=%v present=%v", outcome, settled, admitted, ok)
-	}
-	if deadline, ok := event.DeadlineRemainingMillis(); !ok || deadline != 30_000 {
-		t.Fatalf("deadline = %d, %v", deadline, ok)
-	}
-}
-
-func TestProtocolOperationEventRejectsContradictoryLifecycleFacts(t *testing.T) {
-	session, _ := NewProtocolSessionID(bytes16(41))
-	operation, _ := NewProtocolOperationID(bytes16(42))
-	valid := ProtocolOperationSpec{
-		Command: CommandGet, Role: ProtocolRoleReceiver,
-		Stage:           ProtocolOperationReceiverFailed,
-		ProtocolSession: session, ProtocolOperation: operation,
-		RequestKind: ProtocolMessageReleaseLease,
-		Cause:       ProtocolOperationCauseDeadline,
-	}
-	tests := []struct {
-		name   string
-		mutate func(*ProtocolOperationSpec)
-	}{
-		{"sender command for receiver", func(spec *ProtocolOperationSpec) { spec.Command = CommandShare }},
-		{"response flag without kind", func(spec *ProtocolOperationSpec) { spec.HasResponse = true }},
-		{"response kind without flag", func(spec *ProtocolOperationSpec) { spec.ResponseKind = ProtocolMessageOperationComplete }},
-		{"lane flag without identity", func(spec *ProtocolOperationSpec) { spec.HasLane = true }},
-		{"send fact without send", func(spec *ProtocolOperationSpec) { spec.SendSettled = true }},
-		{"deadline value without deadline", func(spec *ProtocolOperationSpec) { spec.DeadlineRemainingMillis = 1 }},
-		{"non request kind", func(spec *ProtocolOperationSpec) { spec.RequestKind = ProtocolMessageOperationComplete }},
-		{"failed stage without cause", func(spec *ProtocolOperationSpec) { spec.Cause = ProtocolOperationCauseNone }},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			spec := valid
-			test.mutate(&spec)
-			if _, err := NewProtocolOperationObserved(spec); !errors.Is(err, ErrInvalidEvent) {
-				t.Fatalf("invalid protocol operation error = %v", err)
-			}
-		})
-	}
-}
-
-func TestProtocolOperationEventCarriesTypedProtocolFailure(t *testing.T) {
-	session, _ := NewProtocolSessionID(bytes16(51))
-	operation, _ := NewProtocolOperationID(bytes16(52))
-	lane, _ := NewLaneIdentity(7, 0)
-	failure, err := NewResponseSendProtocolFailure(
-		ProtocolFailureSpec{
-			RequestKind:       ProtocolMessageRequestBlocks,
-			WireScope:         ProtocolFailureRevision,
-			WireCode:          0x3008,
-			Retryable:         true,
-			RetryAfterMillis:  30_000,
-			HasRetryAfter:     true,
-			ProtocolSession:   session,
-			ProtocolOperation: operation,
-			Lane:              lane,
-			HasLane:           true,
-		},
-		ProtocolFailureResponseSendSettlement{
-			Admitted: true, Settled: true, Outcome: ProtocolSendDelivered,
-		},
-	)
+	attempts := []SendAttemptSnapshot{attempt}
+	result, err := NewResponseSendResult(ResponseSendResultSpec{Started: true, Evidence: ResponseSendEvidenceUncertain, End: ResponseSendEndCallerCanceled, Cleanup: SendCleanupRouteReleased, Attempts: attempts, PendingAttemptSequence: 1, HasPendingAttempt: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	event, err := NewProtocolOperationObserved(ProtocolOperationSpec{
-		Command: CommandShare, Role: ProtocolRoleSender,
-		Stage:           ProtocolOperationSenderResponseSettled,
-		ProtocolSession: session, ProtocolOperation: operation,
-		RequestKind:  ProtocolMessageRequestBlocks,
-		ResponseKind: ProtocolMessageOperationError, HasResponse: true,
-		Lane: lane, HasLane: true,
-		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome: ProtocolSendDelivered, Failure: failure,
-		Cause: ProtocolOperationCauseNone,
-	})
+	attempts[0] = SendAttemptSnapshot{}
+	captured, ok := result.Attempt(0)
+	if !ok || captured != attempt || result.AttemptCount() != 1 {
+		t.Fatal("caller mutation changed retained evidence")
+	}
+	if _, ok := result.Attempt(-1); ok {
+		t.Fatal("negative attempt index")
+	}
+	if _, ok := result.Attempt(1); ok {
+		t.Fatal("out of bounds attempt index")
+	}
+	content, err := NewProtocolErrorContent(ProtocolErrorContentSpec{WireScope: ProtocolErrorRevision, WireCode: 0x3008, Retryable: true, HasRetryAfter: true, RetryAfterMillis: 125})
 	if err != nil {
 		t.Fatal(err)
 	}
-	projected, ok := event.Failure()
-	if !ok || projected.RequestKind() != ProtocolMessageRequestBlocks ||
-		projected.WireScope() != ProtocolFailureRevision || projected.WireCode() != 0x3008 ||
-		!projected.Retryable() || projected.ProtocolSessionID() != session ||
-		projected.ProtocolOperationID() != operation {
-		t.Fatalf("protocol failure = %#v, present=%v", projected, ok)
+	returned, err := NewResponseSendReturnedObserved(context, 99, ProtocolMessageOperationError, content, result)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if retryAfter, present := projected.RetryAfterMillis(); !present || retryAfter != 30_000 {
-		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
+	fact := returned.Fact().(ResponseSendReturnedFact)
+	if !returned.ObservedAt().Equal(context.ObservedAt) || fact.ResponseSequence() != 99 || fact.Result().Evidence() != ResponseSendEvidenceUncertain || fact.Content() != content {
+		t.Fatal("response fact lost source facts")
 	}
-	if projectedLane, present := projected.Lane(); !present || projectedLane != lane {
-		t.Fatalf("failure lane = %#v, present=%v", projectedLane, present)
+	pending, ok := fact.Result().PendingAttemptSequence()
+	if !ok || pending != 1 {
+		t.Fatal("pending link missing")
 	}
-	response, present := projected.Settlement().ResponseSend()
-	if !present || !response.Admitted || !response.Settled || response.Outcome != ProtocolSendDelivered {
-		t.Fatalf("response settlement = %#v, present=%v", response, present)
+	notStarted, err := NewResponseSendResult(ResponseSendResultSpec{Evidence: ResponseSendEvidenceDefinitelyNotSent, End: ResponseSendEndRouteUnavailable})
+	if err != nil {
+		t.Fatal(err)
 	}
-	contradictory := event.spec
-	contradictory.SendOutcome = ProtocolSendDropped
-	if _, err := NewProtocolOperationObserved(contradictory); !errors.Is(err, ErrInvalidEvent) {
-		t.Fatalf("contradictory outer settlement error = %v", err)
+	setup, err := NewResponseSendNotStartedObserved(context, 100, ProtocolMessageOperationError, content, notStarted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup.Fact().(ResponseSendNotStartedFact).Result().AttemptCount() != 0 {
+		t.Fatal("invented attempt for failed setup")
+	}
+	settled, err := NewSendAttemptSnapshot(SendAttemptSpec{AttemptSequence: 1, Lane: lane, PolicyAdmitted: true, Settled: true, Outcome: ProtocolSendTransportConfirmed, TransportDisposition: SendAccepted, HasTransportDisposition: true, End: SendAttemptEndSettled})
+	if err != nil {
+		t.Fatal(err)
+	}
+	late, err := NewSendAttemptSettledObserved(context, 99, ProtocolMessageOperationError, settled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if late.Fact().(SendAttemptSettledFact).Attempt().Lane() != lane || fact.Result().Evidence() != ResponseSendEvidenceUncertain {
+		t.Fatal("late settlement mutated earlier snapshot")
+	}
+	received, err := NewReceivedProtocolErrorObserved(context, content, lane)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if received.Fact().(ReceivedProtocolErrorFact).Lane() != lane {
+		t.Fatal("received lane missing")
+	}
+	decisionID, _ := NewCapacityDecisionID("capacity-1")
+	decision, _ := NewSenderCapacityDecision(decisionID)
+	decisionEvent, err := NewSenderContentDecisionObserved(context, decision, lane, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decisionEvent.Fact().(SenderContentDecisionFact).Decision() != decision {
+		t.Fatal("decision changed")
+	}
+	for _, event := range []ProtocolObservationObserved{returned, setup, late, received, decisionEvent} {
+		if err := event.Accept(&exhaustiveVisitor{}); err != nil {
+			t.Fatal(err)
+		}
+		if !errors.Is(event.Accept(nil), ErrInvalidEvent) {
+			t.Fatal("nil visitor accepted")
+		}
 	}
 }
-
-func TestProtocolFailureRejectsInvalidRetrySettlementAndOuterCorrelation(t *testing.T) {
-	session, _ := NewProtocolSessionID(bytes16(61))
-	operation, _ := NewProtocolOperationID(bytes16(62))
-	otherOperation, _ := NewProtocolOperationID(bytes16(63))
-	lane, _ := NewLaneIdentity(3, 1)
-	base := ProtocolFailureSpec{
-		RequestKind: ProtocolMessageReleaseLease,
-		WireScope:   ProtocolFailureRevision, WireCode: 0xffff,
-		Retryable: true, RetryAfterMillis: 1, HasRetryAfter: true,
-		ProtocolSession: session, ProtocolOperation: operation,
-		Lane: lane, HasLane: true,
+func TestProtocolObservationRejectsUninitializedAndFormatViolations(t *testing.T) {
+	context := protocolTestContext(t)
+	if _, err := NewResponseSendReturnedObserved(context, 1, ProtocolMessageOperationError, ProtocolErrorContent{}, ResponseSendResult{}); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatal(err)
 	}
-
-	for _, test := range []struct {
-		name   string
-		mutate func(*ProtocolFailureSpec)
-	}{
-		{"retry without value", func(spec *ProtocolFailureSpec) { spec.HasRetryAfter = false }},
-		{"zero retry", func(spec *ProtocolFailureSpec) { spec.RetryAfterMillis = 0 }},
-		{"oversized retry", func(spec *ProtocolFailureSpec) { spec.RetryAfterMillis = 30_001 }},
-		{"unknown scope", func(spec *ProtocolFailureSpec) { spec.WireScope = 255 }},
-		{"hidden lane", func(spec *ProtocolFailureSpec) { spec.HasLane = false }},
+	if err := (ProtocolObservationObserved{}).Accept(&exhaustiveVisitor{}); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatal(err)
+	}
+	for _, spec := range []ProtocolErrorContentSpec{
+		{WireScope: 255}, {WireScope: ProtocolErrorRevision, Retryable: true}, {WireScope: ProtocolErrorRevision, RetryAfterMillis: 1}, {WireScope: ProtocolErrorRevision, Retryable: true, HasRetryAfter: true, RetryAfterMillis: 30001},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			spec := base
-			test.mutate(&spec)
-			if _, err := NewReceivedAuthenticatedProtocolFailure(spec); !errors.Is(err, ErrInvalidEvent) {
-				t.Fatalf("invalid failure error = %v", err)
-			}
-		})
+		if _, err := NewProtocolErrorContent(spec); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("invalid content accepted: %+v", spec)
+		}
 	}
-	if _, err := NewResponseSendProtocolFailure(
-		base,
-		ProtocolFailureResponseSendSettlement{Outcome: ProtocolSendDelivered},
-	); !errors.Is(err, ErrInvalidEvent) {
-		t.Fatalf("unsettled delivery error = %v", err)
-	}
-
-	failure, err := NewReceivedAuthenticatedProtocolFailure(base)
-	if err != nil {
-		t.Fatal(err)
-	}
-	outer := ProtocolOperationSpec{
-		Command: CommandGet, Role: ProtocolRoleReceiver,
-		Stage:           ProtocolOperationReceiverFailed,
-		ProtocolSession: session, ProtocolOperation: otherOperation,
-		RequestKind:  ProtocolMessageReleaseLease,
-		ResponseKind: ProtocolMessageOperationError, HasResponse: true,
-		Lane: lane, HasLane: true, Failure: failure,
-		Cause: ProtocolOperationCauseProtocolFailure,
-	}
-	if _, err := NewProtocolOperationObserved(outer); !errors.Is(err, ErrInvalidEvent) {
-		t.Fatalf("mismatched operation correlation error = %v", err)
+	for _, mutate := range []func(*ProtocolObservationContext){func(c *ProtocolObservationContext) { c.ObservedAt = time.Time{} }, func(c *ProtocolObservationContext) { c.Role = 255 }, func(c *ProtocolObservationContext) { c.ProtocolSession = ProtocolSessionID{} }, func(c *ProtocolObservationContext) { c.RequestKind = ProtocolMessageBlockFragment }} {
+		invalid := context
+		mutate(&invalid)
+		if err := validateProtocolContext(invalid); !errors.Is(err, ErrInvalidEvent) {
+			t.Fatal("invalid context accepted")
+		}
 	}
 }

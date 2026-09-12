@@ -3,12 +3,12 @@ import { traceEventRetention } from './trace/retention'
 import type { V2ReceiverDiagnosticSnapshot } from '../ui/v2-model'
 import { browserBuildIdentity } from './build-identity'
 import type { DiagnosticContextSources } from './export/context'
-import type { DiagnosticBundleIdentityV1 } from './export/diagnostic-bundle-v1'
+import type { DiagnosticBundleIdentityV2 } from './export/diagnostic-bundle-v2'
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from './export/trace-event-v1'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from './export/trace-event-v2'
 import {
   createIncidentRecordProjector,
   createRuntimeRunIdentity,
@@ -27,7 +27,7 @@ import {
   createBrowserDiagnosticsRuntime,
   type BrowserDiagnosticsRuntime,
 } from './runtime'
-import type { TraceEventObservationV1 } from './trace/model'
+import type { TraceEventObservationV2 } from './trace/model'
 import {
   SYSTEM_TRACE_SCHEDULER,
   type TraceClock,
@@ -58,7 +58,7 @@ export interface BrowserDiagnosticsCompositionOptions {
 
 export interface BrowserDiagnosticsComposition {
   readonly trace: TraceSwitch<
-    TraceEventObservationV1,
+    TraceEventObservationV2,
     IncidentLink,
     IncidentScopeIdentity
   >
@@ -83,17 +83,17 @@ export function createBrowserDiagnosticsComposition(
     ),
   )
   const trace = new TraceSwitch<
-    TraceEventObservationV1,
+    TraceEventObservationV2,
     IncidentLink,
     IncidentScopeIdentity
   >({
     clock,
     scheduler: options.scheduler ?? SYSTEM_TRACE_SCHEDULER,
     ...(options.activationStore === undefined ? {} : { activationStore: options.activationStore }),
-    eventName: traceEventObservationNameV1,
+    eventName: traceEventObservationNameV2,
     eventRetention: traceEventRetention,
-    snapshotEvent: snapshotTraceEventObservationV1,
-    eventBytes: traceEventObservationBytesV1,
+    snapshotEvent: snapshotTraceEventObservationV2,
+    eventBytes: traceEventObservationBytesV2,
     snapshotIncident: snapshotIncidentLink,
     incidentMarkerBytes: incidentMarkerBytes,
     incidentScope: (incident) => incident.scope,
@@ -117,7 +117,7 @@ export function createBrowserDiagnosticsComposition(
     traceSignals: Object.freeze({
       signal: (
         signal: Parameters<TraceSwitch<
-          TraceEventObservationV1,
+          TraceEventObservationV2,
           IncidentLink,
           IncidentScopeIdentity
         >['signal']>[0],
@@ -133,7 +133,7 @@ export function createBrowserDiagnosticsComposition(
       },
     }),
   })
-  const identity: DiagnosticBundleIdentityV1 = Object.freeze({
+  const identity: DiagnosticBundleIdentityV2 = Object.freeze({
     build: browserBuildIdentity(options.build),
     runtime: Object.freeze({
       kind: 'browser',

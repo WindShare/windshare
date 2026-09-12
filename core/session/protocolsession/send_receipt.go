@@ -3,8 +3,10 @@ package protocolsession
 import (
 	"context"
 	"sync"
+	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/observationstream"
 )
 
 // SendOutcome distinguishes transport acceptance from proven pre-transport
@@ -14,8 +16,9 @@ import (
 type SendOutcome uint8
 
 const (
-	SendOutcomeUnknown SendOutcome = iota
-	SendOutcomeDelivered
+	SendOutcomeUninitialized SendOutcome = iota
+	SendOutcomeUnknown
+	SendOutcomeTransportConfirmed
 	SendOutcomeDropped
 )
 
@@ -37,6 +40,7 @@ type SendCompletion struct {
 	// the adapter's exact ownership decision for this physical send.
 	TransportDisposition framechannel.SendDisposition
 	Err                  error
+	cause                SendAttemptCause
 }
 
 func (receipt SendReceipt) Done() <-chan struct{} {
@@ -70,7 +74,7 @@ func (receipt SendReceipt) Admitted() bool {
 // receives an unsettled Unknown completion while the writer publishes the result.
 func (receipt SendReceipt) Await(ctx context.Context) SendCompletion {
 	if receipt.result == nil {
-		return SendCompletion{Settled: true, Outcome: SendOutcomeUnknown, Err: ErrWriterStopped}
+		return SendCompletion{Err: ErrWriterStopped}
 	}
 	select {
 	case <-receipt.result.done:
@@ -101,6 +105,7 @@ type deliveryAdmission struct {
 	continuation *operationContinuationReservation
 	admitted     bool
 	err          error
+	cause        SendAttemptCause
 }
 
 type deliveryResult struct {
@@ -111,6 +116,9 @@ type deliveryResult struct {
 	settlementLease      *OutboundOperationLease
 	reservedContinuation *operationContinuationReservation
 	reservedPin          *outboundAdmissionPin
+	settledAt            time.Time
+	settlementObserver   settlementRegistration
+	settlementRegistered bool
 }
 
 func newDeliveryResult() *deliveryResult            { return &deliveryResult{done: make(chan struct{})} }
@@ -167,7 +175,11 @@ func (result *deliveryResult) commitReservationSeal() error {
 
 func (result *deliveryResult) admit(decide func() deliveryAdmission) (deliveryAdmission, bool) {
 	result.mu.Lock()
-	defer result.mu.Unlock()
+	var publication settlementPublication
+	defer func() {
+		result.mu.Unlock()
+		publication.publish()
+	}()
 	if result.phase != deliveryClaimed {
 		return deliveryAdmission{}, false
 	}
@@ -178,10 +190,10 @@ func (result *deliveryResult) admit(decide func() deliveryAdmission) (deliveryAd
 	if decision.err != nil || decision.disposition != OperationDeliver {
 		decision.pin.release()
 		decision.continuation.rollback()
-		result.completeLocked(SendCompletion{
+		publication = result.completeLocked(SendCompletion{
 			Settled: true, Admitted: decision.admitted, Outcome: SendOutcomeDropped,
 			Generation: decision.generation, Operation: decision.operation,
-			Replay: decision.replay, Err: decision.err,
+			Replay: decision.replay, Err: decision.err, cause: decision.cause,
 		})
 		return decision, true
 	}
@@ -238,13 +250,22 @@ func (result *deliveryResult) completeTransport(
 	transportDisposition framechannel.SendDisposition,
 	err error,
 ) bool {
+	fallback := SendAttemptCausePreparationFailure
+	if transportDisposition != 0 {
+		fallback = SendAttemptCauseTransportFailure
+	}
+	cause := newSendAttemptCause(err, fallback)
 	if outcome != SendOutcomeUnknown && replay.direction == DirectionReceiverToSender && replay.kind.isRequest() {
 		// Receiver request replay exists only to resolve a settled ambiguous send.
 		// Proven delivery or pre-transport drop must not export reusable authority.
 		replay = OutboundReplayPermit{}
 	}
 	result.mu.Lock()
-	defer result.mu.Unlock()
+	var publication settlementPublication
+	defer func() {
+		result.mu.Unlock()
+		publication.publish()
+	}()
 	if result.phase == deliveryCompleted {
 		return false
 	}
@@ -252,17 +273,21 @@ func (result *deliveryResult) completeTransport(
 	result.rollbackReservationLocked()
 	generation := result.completionValue.Generation
 	operation := result.completionValue.Operation
-	result.completeLocked(SendCompletion{
+	publication = result.completeLocked(SendCompletion{
 		Settled: true, Admitted: admitted, Outcome: outcome, Replay: replay,
 		Generation: generation, Operation: operation,
 		RetryableAcrossLane:  retryableAcrossLane,
 		TransportDisposition: transportDisposition,
 		Err:                  err,
+		cause:                cause,
 	})
 	return true
 }
 
-func (result *deliveryResult) completeLocked(completion SendCompletion) {
+func (result *deliveryResult) completeLocked(completion SendCompletion) settlementPublication {
+	// Capture the physical boundary even without a registration. Late observers
+	// must not misreport their registration or dispatch time as settlement time.
+	result.settledAt = time.Now()
 	result.rollbackReservationLocked()
 	result.phase = deliveryCompleted
 	result.completionValue = completion
@@ -271,6 +296,7 @@ func (result *deliveryResult) completeLocked(completion SendCompletion) {
 		result.settlementLease.Release()
 		result.settlementLease = nil
 	}
+	return result.claimSettlementPublicationLocked()
 }
 
 func (result *deliveryResult) rollbackReservationLocked() {
@@ -308,12 +334,17 @@ func (receipt SendReceipt) ReleaseLeaseOnSettlement(lease *OutboundOperationLeas
 }
 
 func (result *deliveryResult) cancelOrSnapshot(cause error) SendCompletion {
+	observedCause := newSendAttemptCause(cause, SendAttemptCausePreparationFailure)
 	result.mu.Lock()
-	defer result.mu.Unlock()
+	var publication settlementPublication
+	defer func() {
+		result.mu.Unlock()
+		publication.publish()
+	}()
 	switch result.phase {
 	case deliveryPending, deliveryReserved, deliveryReservedClaimed, deliveryClaimed:
-		result.completeLocked(SendCompletion{
-			Settled: true, Outcome: SendOutcomeDropped, Err: cause,
+		publication = result.completeLocked(SendCompletion{
+			Settled: true, Outcome: SendOutcomeDropped, Err: cause, cause: observedCause,
 		})
 		return result.completionValue
 	case deliveryReservedSealing:
@@ -347,4 +378,92 @@ func (result *deliveryResult) completion() SendCompletion {
 	result.mu.Lock()
 	defer result.mu.Unlock()
 	return result.completionValue
+}
+
+type SendAttemptCorrelation struct {
+	ProtocolSessionID ProtocolSessionID
+	OperationID       OperationID
+	RequestKind       MessageKind
+	ResponseKind      MessageKind
+	Identity          SendAttemptIdentity
+}
+
+// SendAttemptSettlement supplements an earlier return snapshot. It does not
+// revise that result or retain any capability to continue its operation.
+type SendAttemptSettlement struct {
+	correlation SendAttemptCorrelation
+	observedAt  time.Time
+	attempt     SendAttemptSnapshot
+}
+
+func (settlement SendAttemptSettlement) Correlation() SendAttemptCorrelation {
+	return settlement.correlation
+}
+func (settlement SendAttemptSettlement) ObservedAt() time.Time        { return settlement.observedAt }
+func (settlement SendAttemptSettlement) Attempt() SendAttemptSnapshot { return settlement.attempt }
+
+type settlementRegistration struct {
+	correlation SendAttemptCorrelation
+	producer    observationstream.Producer[SendAttemptSettlement]
+}
+
+type settlementPublication struct {
+	producer observationstream.Producer[SendAttemptSettlement]
+	value    SendAttemptSettlement
+}
+
+func (publication settlementPublication) publish() {
+	if !publication.value.attempt.IsZero() {
+		publication.producer.TryPublish(publication.value)
+	}
+}
+
+// ObserveSettlement registers at most once, including when completion raced
+// ahead of registration. The return value reports registration ownership, not
+// queue admission: exhausted observation capacity cannot affect send behavior.
+func (receipt SendReceipt) ObserveSettlement(
+	correlation SendAttemptCorrelation,
+	producer observationstream.Producer[SendAttemptSettlement],
+) bool {
+	if receipt.result == nil || correlation.ProtocolSessionID.IsZero() ||
+		correlation.OperationID.IsZero() || !correlation.RequestKind.valid() ||
+		!correlation.ResponseKind.valid() || !correlation.Identity.valid() {
+		return false
+	}
+	result := receipt.result
+	result.mu.Lock()
+	if result.settlementRegistered {
+		result.mu.Unlock()
+		return false
+	}
+	result.settlementRegistered = true
+	result.settlementObserver = settlementRegistration{correlation: correlation, producer: producer}
+	publication := result.claimSettlementPublicationLocked()
+	result.mu.Unlock()
+	publication.publish()
+	return true
+}
+
+func (result *deliveryResult) claimSettlementPublicationLocked() settlementPublication {
+	if result.phase != deliveryCompleted || result.settlementObserver.correlation.Identity.ResponseSequence == 0 {
+		return settlementPublication{}
+	}
+	registration := result.settlementObserver
+	// Detach the producer before publication so a completed receipt cannot keep
+	// its observation queue alive, and repeated registration cannot republish.
+	result.settlementObserver = settlementRegistration{}
+	completion := result.completionValue
+	// Error formatting/classification belongs to execution before this lock.
+	// Publication copies only its previously bounded cause, never calls an error.
+	completion.Err = nil
+	attempt, err := NewSettledSendAttempt(registration.correlation.Identity, completion)
+	if err != nil {
+		return settlementPublication{}
+	}
+	return settlementPublication{
+		producer: registration.producer,
+		value: SendAttemptSettlement{
+			correlation: registration.correlation, observedAt: result.settledAt, attempt: attempt,
+		},
+	}
 }

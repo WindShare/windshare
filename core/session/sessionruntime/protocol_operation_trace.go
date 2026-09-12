@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
@@ -18,8 +19,6 @@ const (
 	ProtocolOperationReceiverFailed
 	ProtocolOperationReceiverEnded
 	ProtocolOperationSenderRequestReceived
-	ProtocolOperationSenderResponseSettled
-	ProtocolOperationSenderContentDecision
 	ProtocolOperationReceiverWaitingActiveCapacity
 	ProtocolOperationReceiverWaitingRetainedCapacity
 	ProtocolOperationReceiverAdmissionReady
@@ -41,10 +40,11 @@ const (
 	ProtocolOperationCauseProtocolFailure
 )
 
-// ProtocolOperationTrace summarizes one RPC boundary. Content decisions carry
+// ProtocolOperationObservation summarizes one RPC boundary. Content decisions carry
 // only opaque coordinator/lease join keys; request bodies, file identities,
 // catalog paths, and raw errors remain intentionally absent.
-type ProtocolOperationTrace struct {
+type ProtocolOperationObservation struct {
+	observedAt              time.Time
 	Stage                   ProtocolOperationStage
 	Role                    protocolsession.Role
 	ProtocolSessionID       protocolsession.ProtocolSessionID
@@ -64,21 +64,129 @@ type ProtocolOperationTrace struct {
 	OperationElapsedMillis  uint64
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
-	Failure                 ProtocolFailure
 	Cause                   ProtocolOperationCause
-	ContentDecision         contentflow.SenderDecisionTrace
 }
 
-type ProtocolOperationTracer interface {
-	TraceProtocolOperation(ProtocolOperationTrace)
+type ProtocolObservation interface {
+	Correlation() ProtocolObservationCorrelation
+	ObservedAt() time.Time
+	protocolObservation()
 }
+type ProtocolObservationCorrelation struct {
+	Role              protocolsession.Role
+	ProtocolSessionID protocolsession.ProtocolSessionID
+	OperationID       protocolsession.OperationID
+	// RequestKind may be zero only on ResponseSendNotStarted when setup had no
+	// operation route from which to obtain authenticated request context.
+	RequestKind protocolsession.MessageKind
+}
+type ProtocolObservationContext struct {
+	Correlation ProtocolObservationCorrelation
+	ObservedAt  time.Time
+}
+type observationContext struct{ context ProtocolObservationContext }
 
-type ProtocolOperationTraceFunc func(ProtocolOperationTrace)
+func (fact observationContext) Correlation() ProtocolObservationCorrelation {
+	return fact.context.Correlation
+}
+func (fact observationContext) ObservedAt() time.Time { return fact.context.ObservedAt }
+func (observationContext) protocolObservation()       {}
 
-func (function ProtocolOperationTraceFunc) TraceProtocolOperation(event ProtocolOperationTrace) {
-	if function != nil {
-		function(event)
+type ProtocolObservationTracer interface{ TraceProtocolObservation(ProtocolObservation) }
+type ProtocolObservationTraceFunc func(ProtocolObservation)
+
+func (fn ProtocolObservationTraceFunc) TraceProtocolObservation(fact ProtocolObservation) {
+	if fn != nil {
+		fn(fact)
 	}
+}
+
+type responseSendObservation struct {
+	observationContext
+	sequence uint64
+	kind     protocolsession.MessageKind
+	content  ProtocolErrorContent
+	result   protocolsession.ResponseSendResult
+}
+
+func (fact responseSendObservation) ResponseSequence() uint64                   { return fact.sequence }
+func (fact responseSendObservation) ResponseKind() protocolsession.MessageKind  { return fact.kind }
+func (fact responseSendObservation) Content() ProtocolErrorContent              { return fact.content }
+func (fact responseSendObservation) Result() protocolsession.ResponseSendResult { return fact.result }
+
+type ResponseSendNotStarted struct{ responseSendObservation }
+type ResponseSendReturned struct{ responseSendObservation }
+
+func NewResponseSendNotStarted(ctx ProtocolObservationContext, sequence uint64, kind protocolsession.MessageKind, content ProtocolErrorContent, result protocolsession.ResponseSendResult) ResponseSendNotStarted {
+	return ResponseSendNotStarted{responseSendObservation{observationContext{ctx}, sequence, kind, content, result}}
+}
+func NewResponseSendReturned(ctx ProtocolObservationContext, sequence uint64, kind protocolsession.MessageKind, content ProtocolErrorContent, result protocolsession.ResponseSendResult) ResponseSendReturned {
+	return ResponseSendReturned{responseSendObservation{observationContext{ctx}, sequence, kind, content, result}}
+}
+
+type SendAttemptSettled struct {
+	observationContext
+	kind    protocolsession.MessageKind
+	attempt protocolsession.SendAttemptSnapshot
+}
+
+func NewSendAttemptSettled(ctx ProtocolObservationContext, kind protocolsession.MessageKind, attempt protocolsession.SendAttemptSnapshot) SendAttemptSettled {
+	return SendAttemptSettled{observationContext{ctx}, kind, attempt}
+}
+func (fact SendAttemptSettled) ResponseKind() protocolsession.MessageKind    { return fact.kind }
+func (fact SendAttemptSettled) Attempt() protocolsession.SendAttemptSnapshot { return fact.attempt }
+
+type ReceivedProtocolError struct {
+	observationContext
+	content ProtocolErrorContent
+	lane    LaneIdentity
+}
+
+func NewReceivedProtocolError(ctx ProtocolObservationContext, content ProtocolErrorContent, lane LaneIdentity) ReceivedProtocolError {
+	return ReceivedProtocolError{observationContext{ctx}, content, lane}
+}
+func (fact ReceivedProtocolError) Content() ProtocolErrorContent { return fact.content }
+func (fact ReceivedProtocolError) Lane() LaneIdentity            { return fact.lane }
+
+type SenderContentDecision struct {
+	observationContext
+	decision contentflow.SenderDecisionTrace
+	lane     LaneIdentity
+	hasLane  bool
+}
+
+func NewSenderContentDecision(ctx ProtocolObservationContext, decision contentflow.SenderDecisionTrace, lane LaneIdentity, hasLane bool) SenderContentDecision {
+	return SenderContentDecision{observationContext{ctx}, decision, lane, hasLane}
+}
+func (fact SenderContentDecision) Decision() contentflow.SenderDecisionTrace { return fact.decision }
+func (fact SenderContentDecision) Lane() (LaneIdentity, bool)                { return fact.lane, fact.hasLane }
+
+func NewProtocolOperationObservation(ctx ProtocolObservationContext, fact ProtocolOperationObservation) ProtocolOperationObservation {
+	fact.Role = ctx.Correlation.Role
+	fact.ProtocolSessionID = ctx.Correlation.ProtocolSessionID
+	fact.OperationID = ctx.Correlation.OperationID
+	fact.RequestKind = ctx.Correlation.RequestKind
+	fact.observedAt = ctx.ObservedAt
+	return fact
+}
+func (fact ProtocolOperationObservation) Correlation() ProtocolObservationCorrelation {
+	return ProtocolObservationCorrelation{fact.Role, fact.ProtocolSessionID, fact.OperationID, fact.RequestKind}
+}
+func (fact ProtocolOperationObservation) ObservedAt() time.Time { return fact.observedAt }
+func (ProtocolOperationObservation) protocolObservation()       {}
+
+func (client *rpcClient) newCall(
+	ctx context.Context,
+	id protocolsession.OperationID,
+	kind protocolsession.MessageKind,
+) *operationCall {
+	traceEnabled := client.runtime.protocolOperationTracingEnabled()
+	if !traceEnabled {
+		return newOperationCall(id, kind, time.Time{}, 0, false, false)
+	}
+	started := client.runtime.now()
+	deadlineMillis, hasDeadline := remainingDeadlineMillis(ctx, started)
+	return newOperationCall(id, kind, started, deadlineMillis, hasDeadline, true)
 }
 
 func newOperationCall(
@@ -138,9 +246,9 @@ func (call *operationCall) recordProtocolTraceFailure(err error) {
 	call.stateMu.Unlock()
 }
 
-func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperationTrace, bool) {
+func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperationObservation, bool) {
 	if call == nil || !call.traceEnabled {
-		return ProtocolOperationTrace{}, false
+		return ProtocolOperationObservation{}, false
 	}
 	// continuationLane takes laneMu before stateMu, so trace snapshotting follows
 	// the same order and cannot invert locks during concurrent shutdown.
@@ -150,7 +258,7 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 	if call.traceEmitted {
 		call.stateMu.Unlock()
 		call.laneMu.Unlock()
-		return ProtocolOperationTrace{}, false
+		return ProtocolOperationObservation{}, false
 	}
 	call.traceEmitted = true
 	stage := ProtocolOperationReceiverEnded
@@ -159,7 +267,7 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 	} else if call.traceHasFinalResponse {
 		stage = ProtocolOperationReceiverCompleted
 	}
-	event := ProtocolOperationTrace{
+	event := ProtocolOperationObservation{
 		Stage: stage, OperationID: call.id, RequestKind: call.requestKind,
 		ResponseKind: call.traceResponseKind, HasResponse: call.traceHasResponse,
 		Lane: lane, HasLane: lane.valid(true), HasSend: call.traceHasSend,
@@ -168,7 +276,6 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 		DeadlineRemainingMillis: call.traceDeadlineMillis, HasDeadline: call.traceHasDeadline,
 		OperationElapsedMillis: durationMillis(now.Sub(call.traceStarted)),
 		UsableLanesAtSelection: call.traceUsableAtSelection,
-		Failure:                call.traceFailure,
 		Cause:                  call.traceCause,
 	}
 	call.stateMu.Unlock()
@@ -176,52 +283,78 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 	return event, true
 }
 
-func (runtime *runtimeCore) traceProtocolOperation(event ProtocolOperationTrace) {
-	if runtime == nil || runtime.protocolTracer == nil || !retainProtocolOperationTrace(event) {
+func (runtime *runtimeCore) observationContext(operationID protocolsession.OperationID, kind protocolsession.MessageKind) ProtocolObservationContext {
+	return ProtocolObservationContext{Correlation: ProtocolObservationCorrelation{runtime.role, runtime.sessionID, operationID, kind}, ObservedAt: runtime.now()}
+}
+func (runtime *runtimeCore) traceProtocolOperation(event ProtocolOperationObservation) {
+	if !runtime.protocolOperationTracingEnabled() || !retainProtocolOperationObservation(event) {
 		return
 	}
-	if event.ProtocolSessionID.IsZero() {
-		event.ProtocolSessionID = runtime.sessionID
-	}
-	event.Role = runtime.role
+	event = NewProtocolOperationObservation(runtime.observationContext(event.OperationID, event.RequestKind), event)
 	if runtime.lanes != nil {
 		event.UsableLanesAtSettlement = runtime.lanes.usableCount()
 	}
-	// Diagnostics must never gain authority over a protocol session. In
-	// particular, a UI observer panic cannot strand operation cleanup.
-	defer func() { _ = recover() }()
-	runtime.protocolTracer.TraceProtocolOperation(event)
+	runtime.protocolObservations.TryPublish(event)
 }
-
 func (runtime *runtimeCore) protocolOperationTracingEnabled() bool {
-	return runtime != nil && runtime.protocolTracer != nil
+	return runtime != nil && !runtime.protocolObservations.IsZero()
 }
-
-func retainProtocolOperationTrace(event ProtocolOperationTrace) bool {
-	if event.Stage == ProtocolOperationReceiverWaitingActiveCapacity ||
-		event.Stage == ProtocolOperationReceiverWaitingRetainedCapacity ||
-		event.Stage == ProtocolOperationReceiverAdmissionReady {
+func retainProtocolOperationObservation(event ProtocolOperationObservation) bool {
+	if event.Stage == ProtocolOperationReceiverWaitingActiveCapacity || event.Stage == ProtocolOperationReceiverWaitingRetainedCapacity || event.Stage == ProtocolOperationReceiverAdmissionReady {
 		return true
 	}
-	// Block operations and streaming responses are the transfer hot path. Their
-	// successful milestones add no failure evidence and can turn diagnostics into
-	// a second data stream, so retain only exceptional outcomes at those boundaries.
-	if event.Cause != ProtocolOperationCauseNone || !event.Failure.IsZero() ||
-		(event.HasSend && (!event.SendSettled || !event.SendAdmitted ||
-			event.SendOutcome != protocolsession.SendOutcomeDelivered)) ||
+	if event.Cause != ProtocolOperationCauseNone ||
+		(event.HasSend && (!event.SendSettled || !event.SendAdmitted || event.SendOutcome != protocolsession.SendOutcomeTransportConfirmed)) ||
 		(event.HasResponse && event.ResponseKind == protocolsession.MessageOperationError) {
 		return true
 	}
-	if event.Stage == ProtocolOperationSenderContentDecision {
-		return true
+	return event.RequestKind != protocolsession.MessageRequestBlocks
+}
+func (runtime *runtimeCore) traceResponseResult(operationID protocolsession.OperationID, requestKind, responseKind protocolsession.MessageKind, sequence uint64, content ProtocolErrorContent, result protocolsession.ResponseSendResult) {
+	if !runtime.protocolOperationTracingEnabled() {
+		return
 	}
-	if event.RequestKind == protocolsession.MessageRequestBlocks {
-		return false
+	ctx := runtime.observationContext(operationID, requestKind)
+	if !result.Started() && !result.IsZero() {
+		runtime.protocolObservations.TryPublish(NewResponseSendNotStarted(ctx, sequence, responseKind, content, result))
+		return
 	}
-	if event.Stage == ProtocolOperationSenderResponseSettled {
-		return senderResponseFinal(event.ResponseKind)
+	if result.AttemptCount() > 1 || result.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed ||
+		result.Cleanup() == protocolsession.SendCleanupFailed || result.End() != protocolsession.ResponseSendEndTransportConfirmed ||
+		!content.IsZero() || (requestKind != protocolsession.MessageRequestBlocks && senderResponseFinal(responseKind)) {
+		runtime.protocolObservations.TryPublish(NewResponseSendReturned(ctx, sequence, responseKind, content, result))
 	}
-	return true
+}
+
+const receiptObservationCapacity observationstream.Capacity = 64
+
+func (runtime *runtimeCore) startReceiptObservations() {
+	if !runtime.protocolOperationTracingEnabled() {
+		return
+	}
+	producer, consumer, _ := observationstream.New[protocolsession.SendAttemptSettlement](receiptObservationCapacity)
+	runtime.receiptObservations = producer
+	runtime.receiptObservationsDone = make(chan struct{})
+	output := runtime.protocolObservations
+	done := runtime.receiptObservationsDone
+	go func() {
+		defer close(done)
+		for settled := range consumer {
+			correlation := settled.Correlation()
+			ctx := ProtocolObservationContext{Correlation: ProtocolObservationCorrelation{
+				Role: protocolsession.RoleSender, ProtocolSessionID: correlation.ProtocolSessionID,
+				OperationID: correlation.OperationID, RequestKind: correlation.RequestKind}, ObservedAt: settled.ObservedAt()}
+			output.TryPublish(NewSendAttemptSettled(ctx, correlation.ResponseKind, settled.Attempt()))
+		}
+	}()
+}
+func (runtime *runtimeCore) finishReceiptObservations() {
+	if runtime.receiptObservationsDone == nil {
+		return
+	}
+	completion := runtime.receiptObservations.Complete()
+	<-runtime.receiptObservationsDone
+	runtime.protocolObservations.RecordDropped(completion.CapacityDropped)
 }
 
 func protocolOperationCause(err error) ProtocolOperationCause {
@@ -284,7 +417,7 @@ func (client *rpcClient) waitRequestCapacity(ctx context.Context, call *operatio
 			if reason == protocolsession.OperationWaitingActiveCapacity {
 				stage = ProtocolOperationReceiverWaitingActiveCapacity
 			}
-			client.runtime.traceProtocolOperation(ProtocolOperationTrace{
+			client.runtime.traceProtocolOperation(ProtocolOperationObservation{
 				Stage: stage, OperationID: call.id, RequestKind: call.requestKind,
 				OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
 			})
@@ -292,7 +425,7 @@ func (client *rpcClient) waitRequestCapacity(ctx context.Context, call *operatio
 	}
 	err := client.runtime.operations.WaitForCapacity(ctx, observer)
 	if waited && err == nil {
-		client.runtime.traceProtocolOperation(ProtocolOperationTrace{
+		client.runtime.traceProtocolOperation(ProtocolOperationObservation{
 			Stage: ProtocolOperationReceiverAdmissionReady, OperationID: call.id, RequestKind: call.requestKind,
 			OperationElapsedMillis: durationMillis(client.runtime.now().Sub(call.traceStarted)),
 		})

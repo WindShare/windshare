@@ -55,12 +55,12 @@ func TestTransferCapacityLifecyclePayloadKeepsWaitAndProtocolCorrelation(t *test
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV3{}
-	visitor := &encodeVisitorV3{record: record}
+	record := &RunTraceRecordV4{}
+	visitor := &encodeVisitorV4{record: record}
 	if err := visitor.VisitTransferLifecycleObserved(event); err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(transferLifecyclePayloadV3)
+	payload, ok := record.Payload.(transferLifecyclePayloadV4)
 	if !ok || payload.Capacity == nil || payload.Capacity.WaitID != encodeTypedIdentity(wait.Bytes()) ||
 		payload.Capacity.GenerationID != encodeTypedIdentity(generation.Bytes()) ||
 		payload.Capacity.ProtocolOperationID != encodeTypedIdentity(operation.Bytes()) ||
