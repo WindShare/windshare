@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { requireOriginPrivateStorage } from './browser-storage-support'
 
@@ -9,7 +10,7 @@ const READER_HARNESS_PATH = '/test/browser/opfs/opfs-reader-harness.ts'
 test('recovers a real Worker ZIP cut and finalizes offline without staging another payload object', async ({
   page, context, browserName,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const workers: string[] = []
   page.on('worker', worker => workers.push(worker.url()))
@@ -31,7 +32,7 @@ test('recovers a real Worker ZIP cut and finalizes offline without staging anoth
 
   const competingPage = await context.newPage()
   try {
-    await competingPage.goto('/')
+    await competingPage.goto(BROWSER_CONTRACT_HOST_PATH)
     const competing = await competingPage.evaluate(async ({ path, fixture }) => {
       const harness = await import(path) as typeof import('./opfs/opfs-native-harness')
       return harness.competingNativeWriter(fixture)
@@ -91,7 +92,7 @@ test('recovers a real Worker ZIP cut and finalizes offline without staging anoth
 test('defers cross-tab cleanup until the active artifact reader releases ownership', async ({
   page, context, browserName,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const operationId = `reader-${crypto.randomUUID()}`
   await page.evaluate(async ({ path, operationId }) => {
@@ -100,7 +101,7 @@ test('defers cross-tab cleanup until the active artifact reader releases ownersh
   }, { path: READER_HARNESS_PATH, operationId })
   const cleaner = await context.newPage()
   try {
-    await cleaner.goto('/')
+    await cleaner.goto(BROWSER_CONTRACT_HOST_PATH)
     await cleaner.evaluate(async ({ path, operationId }) => {
       const harness = await import(path) as typeof import('./opfs/opfs-reader-harness')
       harness.beginArtifactCleanup(operationId)

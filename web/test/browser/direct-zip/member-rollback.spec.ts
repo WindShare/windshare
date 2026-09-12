@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
-import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 
 for (const mode of ['unchanged-revision', 'identical-content', 'changed-content'] as const) {
   test('production Direct ZIP preserves completed members across source resume: ' + mode, async ({ page }) => {

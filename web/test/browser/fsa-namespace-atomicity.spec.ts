@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { BROWSER_CONTRACT_HOST_PATH, requireOriginPrivateStorage } from './browser-storage-support'
+import { requireOriginPrivateStorage } from './browser-storage-support'
 import type { FsaNamespaceFixture } from './fsa-namespace-atomicity-harness'
 
 const HARNESS_PATH = '/test/browser/fsa-namespace-atomicity-harness.ts'

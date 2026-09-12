@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const PORTABLE_FILE_NAME = 'portable-contract.bin'
 const PORTABLE_BYTES = Uint8Array.of(0, 1, 2, 127, 128, 254, 255)
@@ -6,7 +7,7 @@ const PORTABLE_BYTES = Uint8Array.of(0, 1, 2, 127, 128, 254, 255)
 test('hands an explicitly admitted portable artifact to the browser as DownloadStarted', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const downloadPromise = page.waitForEvent('download')
   const result = await page.evaluate(async ({ bytes, suggestedName }) => {
     const portablePath = '/src/output/portable/browser-download.ts'
@@ -41,7 +42,7 @@ test('hands an explicitly admitted portable artifact to the browser as DownloadS
 test('retries one immutable OPFS package through fresh bounded File handoffs', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await page.evaluate(async ({ bytes, suggestedName }) => {
     const fixturePath = '/test/browser/portable-output-fixture.ts'
     const fixture = await import(fixturePath) as typeof import('./portable-output-fixture')
@@ -91,7 +92,7 @@ test('retries one immutable OPFS package through fresh bounded File handoffs', a
 test('rejects an over-limit portable artifact before a browser handoff can start', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const downloadNames: string[] = []
   page.on('download', (download) => downloadNames.push(download.suggestedFilename()))
 

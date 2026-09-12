@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { expect, test, type BrowserContext } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 import {
   removePersistentBrowserProfile,
@@ -31,6 +32,7 @@ test('receive, package, and retained publication survive fresh browser processes
   if (!browser.isConnected()) throw new Error('Playwright worker browser is unavailable')
   const storageOrigin = testInfo.project.use.baseURL
   if (typeof storageOrigin !== 'string') throw new Error('Durable recovery test requires baseURL')
+  const contractHostURL = new URL(BROWSER_CONTRACT_HOST_PATH, storageOrigin).href
   const profile = await mkdtemp(join(tmpdir(), 'windshare-w3c-durable-'))
   const browserType = browser.browserType()
   expect(browserType.name()).toBe(browserName)
@@ -38,7 +40,7 @@ test('receive, package, and retained publication survive fresh browser processes
   try {
     const firstContext = await browserType.launchPersistentContext(profile, { headless: true })
     const firstPage = firstContext.pages()[0] ?? await firstContext.newPage()
-    await firstPage.goto(storageOrigin)
+    await firstPage.goto(contractHostURL)
     await requireOriginPrivateStorage(firstPage, browserName)
     const crashCut = await firstPage.evaluate(async ({ path, fixtureKey }) => {
       const harness = await import(path) as typeof import('./durable-recovery-harness')
@@ -49,7 +51,7 @@ test('receive, package, and retained publication survive fresh browser processes
 
     const secondContext = await browserType.launchPersistentContext(profile, { headless: true })
     const secondPage = secondContext.pages()[0] ?? await secondContext.newPage()
-    await secondPage.goto(storageOrigin)
+    await secondPage.goto(contractHostURL)
     await requireOriginPrivateStorage(secondPage, browserName)
     const recovered = await secondPage.evaluate(async ({ path, fixture }) => {
       const harness = await import(path) as typeof import('./durable-recovery-harness')
@@ -67,7 +69,7 @@ test('receive, package, and retained publication survive fresh browser processes
 
     const thirdContext = await browserType.launchPersistentContext(profile, { headless: true })
     const thirdPage = thirdContext.pages()[0] ?? await thirdContext.newPage()
-    await thirdPage.goto(storageOrigin)
+    await thirdPage.goto(contractHostURL)
     await requireOriginPrivateStorage(thirdPage, browserName)
     const retried = await thirdPage.evaluate(async ({ path, fixture }) => {
       const harness = await import(path) as typeof import('./durable-recovery-harness')
@@ -95,6 +97,7 @@ test('DirectTree recovery preserves only verified work across a Chromium process
   if (!browser.isConnected()) throw new Error('Playwright worker browser is unavailable')
   const storageOrigin = testInfo.project.use.baseURL
   if (typeof storageOrigin !== 'string') throw new Error('DirectTree recovery test requires baseURL')
+  const contractHostURL = new URL(BROWSER_CONTRACT_HOST_PATH, storageOrigin).href
   const profile = await mkdtemp(join(tmpdir(), 'windshare-direct-tree-recovery-'))
   const browserType = browser.browserType()
   const key = crypto.randomUUID()
@@ -103,7 +106,7 @@ test('DirectTree recovery preserves only verified work across a Chromium process
     const firstContext = await browserType.launchPersistentContext(profile, { headless: true })
     activeContext = firstContext
     const firstPage = firstContext.pages()[0] ?? await firstContext.newPage()
-    await firstPage.goto(storageOrigin)
+    await firstPage.goto(contractHostURL)
     await requireOriginPrivateStorage(firstPage, browserName)
     const crashCut = await firstPage.evaluate(async ({ path, fixtureKey }) => {
       const fixture = await import(path) as typeof import(
@@ -138,7 +141,7 @@ test('DirectTree recovery preserves only verified work across a Chromium process
     const secondContext = await browserType.launchPersistentContext(profile, { headless: true })
     activeContext = secondContext
     const secondPage = secondContext.pages()[0] ?? await secondContext.newPage()
-    await secondPage.goto(storageOrigin)
+    await secondPage.goto(contractHostURL)
     await requireOriginPrivateStorage(secondPage, browserName)
     const recovered = await secondPage.evaluate(async ({ path, fixture: recoveryFixture }) => {
       const fixture = await import(path) as typeof import(

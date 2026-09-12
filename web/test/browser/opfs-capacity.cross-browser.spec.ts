@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 import type { CapacityAction } from './opfs/opfs-capacity-harness'
 
 const HARNESS_PATH = '/test/browser/opfs/opfs-capacity-harness.ts'
@@ -34,7 +35,7 @@ test('shares full-file staging admission atomically with existing workspace grow
   const other = await context.newPage()
   const pages = [page, other]
   const databaseName = `windshare-staging-capacity-${crypto.randomUUID()}`
-  await Promise.all(pages.map(current => current.goto('/test/browser/contract-host.html')))
+  await Promise.all(pages.map(current => current.goto(BROWSER_CONTRACT_HOST_PATH)))
   try {
     await open(page, databaseName, 0, 'workspace')
     await openStage(other, databaseName, 'staging')
@@ -65,7 +66,7 @@ test('reclaims a vanished tab export claim while preserving that task staging ob
   const other = await context.newPage()
   const pages = [page, other]
   const databaseName = `windshare-staging-export-${crypto.randomUUID()}`
-  await Promise.all(pages.map(current => current.goto('/test/browser/contract-host.html')))
+  await Promise.all(pages.map(current => current.goto(BROWSER_CONTRACT_HOST_PATH)))
   try {
     await openStage(page, databaseName, 'first', 2000n)
     await openStage(other, databaseName, 'second', 2000n)
@@ -133,7 +134,7 @@ test('serializes two-tab logical growth, retains headroom, and avoids counting s
   const other = await context.newPage()
   const pages = [page, other]
   const databaseName = `windshare-capacity-${crypto.randomUUID()}`
-  await Promise.all(pages.map(current => current.goto('/test/browser/contract-host.html')))
+  await Promise.all(pages.map(current => current.goto(BROWSER_CONTRACT_HOST_PATH)))
   try {
     await Promise.all(pages.map((current, actor) => open(current, databaseName, actor, `owner-${actor}`)))
     expect(await Promise.all(pages.map((current, actor) =>
@@ -178,7 +179,7 @@ test('reconciles expired uncertain growth and fences every stale owner mutation 
   const other = await context.newPage()
   const pages = [page, other]
   const databaseName = `windshare-capacity-${crypto.randomUUID()}`
-  await Promise.all(pages.map(current => current.goto('/test/browser/contract-host.html')))
+  await Promise.all(pages.map(current => current.goto(BROWSER_CONTRACT_HOST_PATH)))
   try {
     await open(page, databaseName, 0, 'stale')
     expect(await action(page, { token: 'stale', kind: 'claim' })).toBe('accepted')

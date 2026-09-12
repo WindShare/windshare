@@ -1,6 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
-import { BROWSER_CONTRACT_HOST_PATH } from '../browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from '../contract-host'
 import type { ConcurrentZipInput } from './concurrency-probe'
 
 const FIRST_PAYLOAD = [1, 2, 3, 4, 5, 6]

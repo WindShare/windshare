@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const CROSS_BROWSER_FILE_NAME = 'portable-cross-browser.bin'
 const CROSS_BROWSER_BYTES = Uint8Array.of(0, 1, 2, 127, 128, 254, 255)
@@ -6,7 +7,7 @@ const CROSS_BROWSER_BYTES = Uint8Array.of(0, 1, 2, 127, 128, 254, 255)
 test('starts the same exact portable object-URL handoff in each supported engine', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const downloadPromise = page.waitForEvent('download')
   const result = await page.evaluate(async ({ bytes, suggestedName }) => {
     const portablePath = '/src/output/portable/browser-download.ts'
@@ -41,7 +42,7 @@ test('starts the same exact portable object-URL handoff in each supported engine
 test('supports immutable OPFS packaged File retries without weakening the URL lease', async ({
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const packageReadSupported = await page.evaluate(() =>
     typeof navigator.storage?.getDirectory === 'function')
   if (!packageReadSupported) {

@@ -1,3 +1,4 @@
+import '../../src/index.css'
 import { createRoot, type Root } from 'react-dom/client'
 import { flushSync } from 'react-dom'
 import type { ReceiveLifecycleState } from '../../src/output/workspace'

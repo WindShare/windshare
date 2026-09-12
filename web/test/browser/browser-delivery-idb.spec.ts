@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { BROWSER_CONTRACT_HOST_PATH } from './browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const PROBE_PATH = '/test/browser/browser-delivery-idb-probe.ts'
 

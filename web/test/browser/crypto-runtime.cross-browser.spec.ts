@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
 
 const RFC8032_EMPTY_MESSAGE_PUBLIC_KEY =
   'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
@@ -7,7 +8,7 @@ const RFC8032_EMPTY_MESSAGE_SIGNATURE =
   '5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b'
 
 test('production curve boundary works with the active browser capabilities', async ({ page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   const result = await page.evaluate(
     async ({ publicKeyHex, signatureHex }) => {
       const curvePath = '/src/crypto/curve25519.ts'
