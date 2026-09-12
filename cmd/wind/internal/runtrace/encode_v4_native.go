@@ -8,7 +8,7 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
 
-type nativeConnectivityPayloadV3 struct {
+type nativeConnectivityPayloadV4 struct {
 	Kind              string                       `json:"kind"`
 	State             string                       `json:"state"`
 	Side              string                       `json:"side"`
@@ -16,24 +16,24 @@ type nativeConnectivityPayloadV3 struct {
 	NetworkGeneration string                       `json:"network_generation_id"`
 	Profile           string                       `json:"ice_profile_id"`
 	ObservedAt        string                       `json:"observed_at"`
-	Candidate         *nativeCandidatePayloadV3    `json:"candidate,omitempty"`
-	Pair              *nativePairPayloadV3         `json:"selected_pair,omitempty"`
-	Reachability      *nativeReachabilityPayloadV3 `json:"reachability,omitempty"`
-	Lifecycle         *nativeLifecyclePayloadV3    `json:"lifecycle,omitempty"`
-	Admission         *nativeAdmissionPayloadV3    `json:"admission,omitempty"`
-	Socket            *nativeSocketPayloadV3       `json:"socket,omitempty"`
+	Candidate         *nativeCandidatePayloadV4    `json:"candidate,omitempty"`
+	Pair              *nativePairPayloadV4         `json:"selected_pair,omitempty"`
+	Reachability      *nativeReachabilityPayloadV4 `json:"reachability,omitempty"`
+	Lifecycle         *nativeLifecyclePayloadV4    `json:"lifecycle,omitempty"`
+	Admission         *nativeAdmissionPayloadV4    `json:"admission,omitempty"`
+	Socket            *nativeSocketPayloadV4       `json:"socket,omitempty"`
 }
 
-func (nativeConnectivityPayloadV3) runTracePayloadV3() {}
+func (nativeConnectivityPayloadV4) runTracePayloadV4() {}
 
-type nativeSocketPayloadV3 struct {
+type nativeSocketPayloadV4 struct {
 	Local    string `json:"local_endpoint"`
 	Server   string `json:"stun_server"`
 	Duration string `json:"duration_ms"`
 	Result   string `json:"result"`
 }
 
-type nativeAdmissionPayloadV3 struct {
+type nativeAdmissionPayloadV4 struct {
 	Wait                string `json:"wait_ms"`
 	Active              string `json:"active"`
 	Queued              string `json:"queued"`
@@ -42,12 +42,12 @@ type nativeAdmissionPayloadV3 struct {
 	ActiveTimeRemaining string `json:"active_time_remaining_ms"`
 }
 
-type nativeLifecyclePayloadV3 struct {
+type nativeLifecyclePayloadV4 struct {
 	Content            bool   `json:"content_demand"`
 	Direct             bool   `json:"direct_demand"`
 	PreviousGeneration string `json:"previous_network_generation_id"`
 }
-type nativeCandidatePayloadV3 struct {
+type nativeCandidatePayloadV4 struct {
 	Priority       uint32 `json:"priority"`
 	TCPType        string `json:"tcp_type,omitempty"`
 	Type           string `json:"type"`
@@ -61,7 +61,7 @@ type nativeCandidatePayloadV3 struct {
 	STUNRTT        string `json:"stun_rtt_ms"`
 	PolicyDecision string `json:"policy_decision"`
 }
-type nativePairPayloadV3 struct {
+type nativePairPayloadV4 struct {
 	LocalType     string `json:"local_type"`
 	RemoteType    string `json:"remote_type"`
 	Protocol      string `json:"protocol"`
@@ -75,7 +75,7 @@ type nativePairPayloadV3 struct {
 	Lifetime      string `json:"lifetime_ms"`
 	SwitchReason  string `json:"switch_reason"`
 }
-type nativeReachabilityPayloadV3 struct {
+type nativeReachabilityPayloadV4 struct {
 	Local           string `json:"local_endpoint"`
 	Remote          string `json:"remote_scope"`
 	Protocol        string `json:"protocol"`
@@ -84,13 +84,13 @@ type nativeReachabilityPayloadV3 struct {
 	ServerRestarted bool   `json:"server_restarted"`
 }
 
-func (visitor *encodeVisitorV3) VisitNativeConnectivityObserved(event clievent.NativeConnectivityObserved) error {
+func (visitor *encodeVisitorV4) VisitNativeConnectivityObserved(event clievent.NativeConnectivityObserved) error {
 	facts := event.Facts()
 	correlation, err := ProjectCorrelationV1(CorrelationInput{ProtocolSessionID: facts.Session, PeerPathID: facts.Path, PeerAttemptID: facts.Attempt})
 	if err != nil {
 		return err
 	}
-	payload := nativeConnectivityPayloadV3{Kind: facts.Kind, State: facts.State, Side: facts.Side, AttemptSequence: nativeKnownUint(facts.AttemptSequence), NetworkGeneration: nativeKnownUint(facts.NetworkGeneration), Profile: facts.Profile, ObservedAt: "unknown"}
+	payload := nativeConnectivityPayloadV4{Kind: facts.Kind, State: facts.State, Side: facts.Side, AttemptSequence: nativeKnownUint(facts.AttemptSequence), NetworkGeneration: nativeKnownUint(facts.NetworkGeneration), Profile: facts.Profile, ObservedAt: "unknown"}
 	if payload.Profile == "" {
 		payload.Profile = "unknown"
 	}
@@ -98,26 +98,26 @@ func (visitor *encodeVisitorV3) VisitNativeConnectivityObserved(event clievent.N
 		payload.ObservedAt = facts.At.UTC().Format(time.RFC3339Nano)
 	}
 	if c := facts.Candidate; c != nil {
-		payload.Candidate = &nativeCandidatePayloadV3{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: c.Address, Port: c.Port, Family: c.Family, Origin: c.Origin, InterfaceClass: "unknown", STUNEndpoint: "unknown", STUNRTT: "unknown", PolicyDecision: "unknown"}
+		payload.Candidate = &nativeCandidatePayloadV4{Priority: c.Priority, TCPType: c.TCPType, Type: c.Type, Protocol: c.Protocol, Address: c.Address, Port: c.Port, Family: c.Family, Origin: c.Origin, InterfaceClass: "unknown", STUNEndpoint: "unknown", STUNRTT: "unknown", PolicyDecision: "unknown"}
 	}
 	if p := facts.Pair; p != nil {
 		rtt := "unknown"
 		if p.PairRTT > 0 {
 			rtt = strconv.FormatFloat(float64(p.PairRTT)/float64(time.Millisecond), 'f', 3, 64)
 		}
-		payload.Pair = &nativePairPayloadV3{LocalType: p.LocalType, RemoteType: p.RemoteType, Protocol: p.Protocol, LocalAddress: p.LocalAddress, RemoteAddress: p.RemoteAddress, LocalPort: p.LocalPort, RemotePort: p.RemotePort, LocalFamily: nativeFamily(p.LocalAddress), RemoteFamily: nativeFamily(p.RemoteAddress), PairRTT: rtt, Lifetime: "unknown", SwitchReason: "unknown"}
+		payload.Pair = &nativePairPayloadV4{LocalType: p.LocalType, RemoteType: p.RemoteType, Protocol: p.Protocol, LocalAddress: p.LocalAddress, RemoteAddress: p.RemoteAddress, LocalPort: p.LocalPort, RemotePort: p.RemotePort, LocalFamily: nativeFamily(p.LocalAddress), RemoteFamily: nativeFamily(p.RemoteAddress), PairRTT: rtt, Lifetime: "unknown", SwitchReason: "unknown"}
 	}
 	if r := facts.Reachability; r != nil {
-		payload.Reachability = &nativeReachabilityPayloadV3{Local: nativeEndpoint(r.Local), Remote: nativeEndpoint(r.Remote), Protocol: r.Protocol, Reason: r.Reason, ServerEpoch: r.ServerEpoch, ServerRestarted: r.ServerRestarted}
+		payload.Reachability = &nativeReachabilityPayloadV4{Local: nativeEndpoint(r.Local), Remote: nativeEndpoint(r.Remote), Protocol: r.Protocol, Reason: r.Reason, ServerEpoch: r.ServerEpoch, ServerRestarted: r.ServerRestarted}
 	}
 	if l := facts.Lifecycle; l != nil {
-		payload.Lifecycle = &nativeLifecyclePayloadV3{Content: l.Content, Direct: l.Direct, PreviousGeneration: nativeKnownUint(l.PreviousGeneration)}
+		payload.Lifecycle = &nativeLifecyclePayloadV4{Content: l.Content, Direct: l.Direct, PreviousGeneration: nativeKnownUint(l.PreviousGeneration)}
 	}
 	if a := facts.Admission; a != nil {
-		payload.Admission = &nativeAdmissionPayloadV3{Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}
+		payload.Admission = &nativeAdmissionPayloadV4{Wait: strconv.FormatFloat(float64(a.Wait)/float64(time.Millisecond), 'f', 3, 64), Active: decimal(a.Active), Queued: decimal(a.Queued), StartsRemaining: strconv.FormatFloat(a.StartsRemaining, 'f', -1, 64), STUNRemaining: strconv.FormatFloat(a.STUNRemaining, 'f', -1, 64), ActiveTimeRemaining: strconv.FormatFloat(float64(a.ActiveTimeRemaining)/float64(time.Millisecond), 'f', 3, 64)}
 	}
 	if s := facts.Socket; s != nil {
-		payload.Socket = &nativeSocketPayloadV3{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
+		payload.Socket = &nativeSocketPayloadV4{Local: nativeEndpoint(s.Local), Server: nativeEndpoint(s.Server), Duration: strconv.FormatFloat(float64(s.Duration)/float64(time.Millisecond), 'f', 3, 64), Result: s.Result}
 	}
 	visitor.set("native_connectivity", correlation, payload)
 	return nil

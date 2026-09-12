@@ -1,12 +1,12 @@
 import type { ProtocolMessageKindV1 } from '../incident/fact'
-import type { ProtocolFailureV1 } from '../export/incident-record-v1'
+import type { ProtocolErrorContentV2 } from '../export/incident-record-v2'
 
 export interface ProtocolRequestTraceV1 {
   readonly lease_id: string
   readonly blocks?: Readonly<{ first_index: string; count: number }>
 }
 
-export type ProtocolOperationPayloadV1 =
+export type ProtocolOperationPayloadV2 =
   | Readonly<{
       transition: 'cancelled'
       request_kind: ProtocolMessageKindV1
@@ -20,7 +20,7 @@ export type ProtocolOperationPayloadV1 =
       settlement: 'remote_final' | 'local_cancel' | 'session_terminal'
       cancellation_reason?: 'user' | 'superseded' | 'output_abort' | 'timeout' | 'lane_race'
       request?: ProtocolRequestTraceV1
-      protocol_failure?: ProtocolFailureV1
+      protocol_error?: ProtocolErrorContentV2
     }>
   | Readonly<{
       transition: 'request_sent' | 'request_send_failed' | 'admission_ready' | 'admission_abandoned'
@@ -43,7 +43,7 @@ export type ProtocolOperationPayloadV1 =
   | Readonly<{
       transition: 'authenticated_failure'
       request_kind: ProtocolMessageKindV1
-      protocol_failure: ProtocolFailureV1
+      protocol_error: ProtocolErrorContentV2
     }>
   | Readonly<{
       transition: 'settled'

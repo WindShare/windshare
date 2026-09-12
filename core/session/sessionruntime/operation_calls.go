@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -74,19 +75,24 @@ func outboundRoute(ctx context.Context, operationID protocolsession.OperationID)
 	return binding.route, nil
 }
 
-func bindInboundLane(ctx context.Context, lane LaneIdentity) context.Context {
+type authenticatedReceiveContext struct {
+	lane       LaneIdentity
+	observedAt time.Time
+}
+
+func bindInboundLane(ctx context.Context, lane LaneIdentity, observedAt time.Time) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	return context.WithValue(ctx, inboundLaneContextKey{}, lane)
+	return context.WithValue(ctx, inboundLaneContextKey{}, authenticatedReceiveContext{lane: lane, observedAt: observedAt})
 }
 
 func inboundLane(ctx context.Context) (LaneIdentity, bool) {
 	if ctx == nil {
 		return LaneIdentity{}, false
 	}
-	lane, ok := ctx.Value(inboundLaneContextKey{}).(LaneIdentity)
-	return lane, ok && lane.valid(true)
+	source, ok := ctx.Value(inboundLaneContextKey{}).(authenticatedReceiveContext)
+	return source.lane, ok && source.lane.valid(true)
 }
 
 type operationLaneRoutes struct {
@@ -269,7 +275,6 @@ type operationCall struct {
 	traceResponseKind      protocolsession.MessageKind
 	traceHasResponse       bool
 	traceHasFinalResponse  bool
-	traceFailure           ProtocolFailure
 	traceCause             ProtocolOperationCause
 	traceEmitted           bool
 
@@ -409,6 +414,8 @@ func (call *operationCall) enqueue(response operationResponse) error {
 }
 
 type authenticatedFailureSource struct {
+	observations      observationstream.Producer[ProtocolObservation]
+	observedAt        time.Time
 	protocolSessionID protocolsession.ProtocolSessionID
 	lane              LaneIdentity
 	hasLane           bool
@@ -458,18 +465,15 @@ func (call *operationCall) traceAuthenticatedFailure(
 	if !call.traceEnabled {
 		return
 	}
-	failure, ok := protocolFailureForAuthenticatedReceive(
-		source.protocolSessionID,
-		call.id,
-		call.requestKind,
-		message,
-		source.lane,
-		source.hasLane,
-	)
+	content, ok := protocolErrorForAuthenticatedReceive(message)
 	if !ok {
 		return
 	}
-	call.traceFailure = failure
+	if source.hasLane && !source.observations.IsZero() {
+		source.observations.TryPublish(NewReceivedProtocolError(
+			ProtocolObservationContext{Correlation: ProtocolObservationCorrelation{Role: protocolsession.RoleReceiver, ProtocolSessionID: source.protocolSessionID, OperationID: call.id, RequestKind: call.requestKind}, ObservedAt: source.observedAt},
+			content, source.lane))
+	}
 	if call.traceCause == ProtocolOperationCauseNone {
 		call.traceCause = ProtocolOperationCauseProtocolFailure
 	}
@@ -595,7 +599,7 @@ func (router laneInboundRouter) prepareInboundRoute(
 		// The physical lane is attached only for the one authenticated failure
 		// message that consumes it. Successful and trace-disabled traffic avoid a
 		// context allocation on the protocol hot path.
-		binding.ctx = bindInboundLane(binding.ctx, router.identity)
+		binding.ctx = bindInboundLane(binding.ctx, router.identity, router.runtime.now())
 	}
 	if !hasOperation || router.runtime.role != protocolsession.RoleSender {
 		return binding, nil

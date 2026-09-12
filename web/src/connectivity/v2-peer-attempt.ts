@@ -548,7 +548,7 @@ function classifyAttemptError(error: unknown): V2PeerAttemptFailure {
   if (error instanceof V2AuthenticatedPeerOperationError) {
     return Object.freeze({
       kind: 'authenticated-peer-operation',
-      code: error.protocolFailure.wireCode,
+      code: error.protocolFailure.content.code,
     })
   }
   if (error instanceof V2LaneAdmissionRejectedError) {

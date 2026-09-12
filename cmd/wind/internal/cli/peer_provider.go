@@ -514,6 +514,10 @@ func (observation getObservation) complete(ctx context.Context) {
 		native := observation.state.native
 		observation.state.completionMu.Unlock()
 
+		protocolCompletion, protocolStatus := observation.state.protocol.complete(ctx)
+		observation.reportCumulativeLoss(observerLossProtocolQueue, clievent.ObserverLossProtocolOperation, clievent.ObserverLossStreamCapacity, protocolCompletion.CapacityDropped)
+		observation.reportReaderStatus(clievent.ObserverLossProtocolOperation, protocolStatus)
+
 		completion, status := native.complete(ctx)
 		observation.reportCumulativeLoss(observerLossNativeQueue, clievent.ObserverLossNativeConnectivity, clievent.ObserverLossStreamCapacity, completion.CapacityDropped)
 		observation.reportReaderStatus(clievent.ObserverLossNativeConnectivity, status)

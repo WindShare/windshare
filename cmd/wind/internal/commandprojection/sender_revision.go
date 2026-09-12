@@ -81,14 +81,23 @@ func ProjectSenderRevision(value content.RevisionTrace) (clievent.SenderRevision
 	if err == nil {
 		return event, nil
 	}
-	context := clievent.ObservationRejection{Stage: fmt.Sprintf("unknown_%d", value.Stage())}
+	context := clievent.ObservationRejection{
+		Event: "sender_revision", Source: "commandprojection.ProjectSenderRevision", Stage: "unknown",
+		Session:  string(value.SessionID()),
+		Revision: fmt.Sprintf("%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes()),
+	}
 	if stage, ok := projectSenderRevisionStage(value.Stage()); ok {
 		context.Stage, _ = stage.Name()
 	}
-	context.Session, _ = projectRevisionCapacitySession(value.SessionID())
-	if !value.FileID().IsZero() && !value.FileRevision().IsZero() {
-		context.Revision, _ = clievent.NewSenderRevisionID(fmt.Appendf(nil, "%x:%x", value.FileID().Bytes(), value.FileRevision().Bytes()))
-	}
+	context = clievent.CaptureObservationRejection(context,
+		clievent.RejectedEnum("stage", uint64(value.Stage())),
+		clievent.RejectedEnum("cause", uint64(value.Cause())),
+		clievent.RejectedIdentity("share_instance", value.ShareInstance().Bytes()),
+		clievent.RejectedIdentity("file_id", value.FileID().Bytes()),
+		clievent.RejectedIdentity("file_revision", value.FileRevision().Bytes()),
+		clievent.RejectedIdentity("lease_id", value.LeaseID().Bytes()),
+		clievent.RejectedString("protocol_session_id", string(value.SessionID())),
+	)
 	return event, withRejectionContext(err, context)
 }
 

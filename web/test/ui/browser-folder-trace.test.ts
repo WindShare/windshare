@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { browserFolderDeliveryTrace, observeBrowserFolderCheckpoint } from '../../src/ui/browser-receive/fsa/delivery-trace'
-import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
+import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import type { OutputDiagnosticsPorts, OutputTraceEvent } from '../../src/output/diagnostics'
 import { deliveryIdentity } from '../output/browser-delivery-fixture'
 
@@ -24,7 +24,7 @@ describe('folder delivery diagnostic projection', () => {
     expect(events[0]).toMatchObject({ eventName: 'browser_delivery', payload: {
       transition: 'copy-failed', recoverable_bytes: '1024', failure_name: 'QuotaExceededError',
     } })
-    expect(() => validateTraceEventPayloadV1('browser_delivery', events[0]!.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2('browser_delivery', events[0]!.payload)).not.toThrow()
   })
 
   it('records actual checkpoint cuts and pending bytes without logging every accepted range', () => {
@@ -39,6 +39,6 @@ describe('folder delivery diagnostic projection', () => {
     expect(events[0]).toMatchObject({ eventName: 'browser_delivery', payload: {
       checkpoint_stage: 'advanced', pending_bytes: '64', recoverable_bytes: '128', last_checkpoint_milliseconds: 2000,
     } })
-    expect(() => validateTraceEventPayloadV1('browser_delivery', events[0]!.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2('browser_delivery', events[0]!.payload)).not.toThrow()
   })
 })

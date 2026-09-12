@@ -30,7 +30,7 @@ func TestSessionWriterWaitPathDeliversEveryQueueClass(t *testing.T) {
 		if schedule.dataBurst != 0 || schedule.controlBurst != 1 || writer.controlUsage != (queueUsage{}) {
 			t.Fatalf("control wakeup schedule=%+v usage=%+v", schedule, writer.controlUsage)
 		}
-		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 			t.Fatalf("control receipt = %d, %v", outcome, waitErr)
 		}
 	})
@@ -58,7 +58,7 @@ func TestSessionWriterWaitPathDeliversEveryQueueClass(t *testing.T) {
 		if schedule.dataBurst != 1 || schedule.controlBurst != 0 || writer.dataUsage != (queueUsage{}) {
 			t.Fatalf("data wakeup schedule=%+v usage=%+v", schedule, writer.dataUsage)
 		}
-		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 			t.Fatalf("data receipt = %d, %v", outcome, waitErr)
 		}
 	})
@@ -81,7 +81,7 @@ func TestSessionWriterWaitPathDeliversEveryQueueClass(t *testing.T) {
 		if err != nil || !terminal {
 			t.Fatalf("terminal wakeup = terminal %v, err %v", terminal, err)
 		}
-		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+		if outcome, waitErr := receipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 			t.Fatalf("terminal receipt = %d, %v", outcome, waitErr)
 		}
 		channel.mu.Lock()

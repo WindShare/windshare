@@ -84,6 +84,7 @@ func TestSenderRelayRetirementBoundsConnectionsAndReadersAcrossRecovery(t *testi
 	}}
 	config := newSenderRelayTestConfig(t, initial, dialer, newSenderRelayTestClock())
 	observations := newShareObservations(&shareRecordingEmitter{detailed: true})
+	cleanupProtocolObservations(t, observations.protocol)
 	config.observeConnection = func(connection senderRelayConnection) func() {
 		finish := observations.attachRelayStream(connection.LifecycleTrace())
 		activeReaders.Add(1)

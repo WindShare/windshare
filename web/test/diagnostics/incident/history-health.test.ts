@@ -9,7 +9,7 @@ import {
 import {
   createIncidentPolicy,
 } from '../../../src/diagnostics/incident/policy'
-import type { IncidentRecordV1 } from '../../../src/diagnostics/export/incident-record-v1'
+import type { IncidentRecordV2 } from '../../../src/diagnostics/export/incident-record-v2'
 import { deepFreezeJson } from '../../../src/diagnostics/export/json'
 
 describe('bounded incident history', () => {
@@ -80,9 +80,9 @@ describe('incident diagnostics health', () => {
   })
 })
 
-function record(sequence: string): IncidentRecordV1 {
+function record(sequence: string): IncidentRecordV2 {
   return deepFreezeJson({
-    schema_version: 1,
+    schema_version: 2,
     sequence,
     time: '2026-08-19T01:02:03Z',
     elapsed_ms: sequence,

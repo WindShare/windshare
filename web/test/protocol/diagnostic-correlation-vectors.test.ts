@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  PROTOCOL_FAILURE_SCOPES,
+  PROTOCOL_ERROR_SCOPES,
   PROTOCOL_MESSAGE_KINDS_V1,
   createFailureCorrelation,
   createFailureIdentity,
@@ -53,7 +53,7 @@ describe('Go↔TypeScript diagnostic correlation vectors', () => {
       expect(PROTOCOL_MESSAGE_KINDS_V1).toContain(
         requiredString(expected.request_kind, 'request kind'),
       )
-      expect(PROTOCOL_FAILURE_SCOPES).toContain(
+      expect(PROTOCOL_ERROR_SCOPES).toContain(
         requiredString(expected.wire_scope, 'wire scope'),
       )
       const wireCode = requiredNumber(expected.wire_code, 'wire code')

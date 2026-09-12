@@ -1,12 +1,12 @@
-import type { IncidentRecordV1 } from './incident-record-v1'
-import type { DiagnosticsStatusV1 } from './diagnostic-bundle-v1'
+import type { IncidentRecordV2 } from './incident-record-v2'
+import type { DiagnosticsStatusV2 } from './diagnostic-bundle-v2'
 import type { DiagnosticsRuntimePort } from '../runtime'
 
 export interface WindShareDiagnostics {
-  enable(): DiagnosticsStatusV1
-  disable(): DiagnosticsStatusV1
-  status(): DiagnosticsStatusV1
-  inspectLastFailure(): IncidentRecordV1 | null
+  enable(): DiagnosticsStatusV2
+  disable(): DiagnosticsStatusV2
+  status(): DiagnosticsStatusV2
+  inspectLastFailure(): IncidentRecordV2 | null
   export(): string
   clear(): void
 }

@@ -101,8 +101,8 @@ func TestConcurrentSameIDRequestsAdmitExactlyOneRouteAuthority(t *testing.T) {
 		operationContext,
 		protocolsession.MessageOpenResults, operationID, body,
 	)
-	if err != nil || outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("winning authority response = %d, %v", outcome, err)
+	if err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("winning authority response = %+v, %v", outcome, err)
 	}
 	stopWriter()
 	<-writerDone
@@ -162,8 +162,8 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	}
 	if outcome, err := outbound.SendControl(
 		oldContext, protocolsession.MessageOpenResults, operationID, body,
-	); err != nil || outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("first final = %d, %v", outcome, err)
+	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("first final = %+v, %v", outcome, err)
 	}
 	// Receipt settlement can wake the caller before the writer's deferred
 	// admission-pin release. The hostile clock jump must begin after that release
@@ -192,8 +192,8 @@ func testForcedHostileSameIDReuseRejectsDelayedOldRouteContext(t *testing.T) {
 	}
 	if outcome, err := outbound.SendControl(
 		newContext, protocolsession.MessageOpenResults, operationID, body,
-	); err != nil || outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("forced colliding generation final = %d, %v", outcome, err)
+	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("forced colliding generation final = %+v, %v", outcome, err)
 	}
 	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 1 {
 		t.Fatalf("forced colliding generation drain routes=%d active=%d tombstones=%d",

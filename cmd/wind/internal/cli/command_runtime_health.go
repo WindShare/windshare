@@ -25,11 +25,7 @@ type pendingProjectionRejection struct {
 // The table is allocated only on failure. IDs are samples, not signature keys,
 // so retries and new sessions cannot grow its memory or reset rate limiting.
 func (runtime *commandRuntime) ReportObservationRejection(category clievent.ObserverLossCategory, reason clievent.ObserverLossReason, sample clievent.ObservationRejection) bool {
-	_, reasonOK := reason.Name()
-	if runtime == nil || !reasonOK || !sample.Valid() {
-		return false
-	}
-	if _, ok := category.Name(); !ok {
+	if runtime == nil {
 		return false
 	}
 	runtime.entryMu.Lock()
@@ -38,6 +34,13 @@ func (runtime *commandRuntime) ReportObservationRejection(category clievent.Obse
 		return false
 	}
 	runtime.unreportedRejections = saturatingAdd(runtime.unreportedRejections, 1)
+	_, reasonOK := reason.Name()
+	_, categoryOK := category.Name()
+	if !reasonOK || !categoryOK || !sample.Valid() {
+		runtime.loseRejectionEvidenceLocked(1)
+		runtime.signalReadyLocked()
+		return false
+	}
 	if runtime.trace != nil {
 		runtime.recordProjectionRejectionLocked(category, reason, sample)
 	}
@@ -49,6 +52,7 @@ func (runtime *commandRuntime) recordProjectionRejectionLocked(category clievent
 	for i := range runtime.projectionRejections {
 		entry := &runtime.projectionRejections[i]
 		if entry.category == category && entry.reason == reason &&
+			entry.sample.Event == sample.Event && entry.sample.Source == sample.Source &&
 			entry.sample.Stage == sample.Stage && entry.sample.Field == sample.Field && entry.sample.Rule == sample.Rule {
 			entry.count = saturatingAdd(entry.count, 1)
 			return
@@ -63,8 +67,12 @@ func (runtime *commandRuntime) recordProjectionRejectionLocked(category clievent
 		// The final slot accounts for additional signatures without evicting
 		// the original samples or allocating unbounded keys.
 		category, reason = clievent.ObserverLossCommandAdapter, clievent.ObserverLossEventContract
-		sample = clievent.ObservationRejection{Stage: "overflow", Field: "rejection_signatures", Rule: "detail_capacity_exceeded"}
+		sample = clievent.ObservationRejection{
+			Event: "observation_rejection", Source: "cli.commandRuntime",
+			Stage: "overflow", Field: "rejection_signatures", Rule: "detail_capacity_exceeded",
+		}
 	}
+	sample = clievent.CaptureObservationRejection(sample, sample.Evidence()...)
 	runtime.projectionRejections = append(runtime.projectionRejections, pendingProjectionRejection{
 		category: category, reason: reason, sample: sample, count: 1,
 	})
@@ -82,9 +90,13 @@ func (runtime *commandRuntime) collectProjectionRejectionsLocked(final bool) uin
 		if !final && entry.reported && now.Sub(entry.lastReport) < projectionRejectionReportInterval {
 			continue
 		}
+		var omittedSamples uint64
+		if i == maxProjectionRejectionSignatures-1 {
+			omittedSamples = entry.count
+		}
 		runtime.enqueueObserverLossLocked(clievent.ObserverLossSpec{
 			Command: runtime.command, Category: entry.category, Reason: entry.reason,
-			Count: entry.count, Rejection: entry.sample,
+			Count: entry.count, Rejection: entry.sample, OmittedSamples: omittedSamples,
 		})
 		entry.count, entry.reported, entry.lastReport = 0, true, now
 	}
@@ -92,11 +104,20 @@ func (runtime *commandRuntime) collectProjectionRejectionsLocked(final bool) uin
 }
 
 func (runtime *commandRuntime) enqueueObserverLossLocked(spec clievent.ObserverLossSpec) {
-	if runtime.trace == nil || runtime.entrySequence == ^uint64(0) {
+	if runtime.trace == nil {
+		return
+	}
+	if runtime.entrySequence == ^uint64(0) {
+		if spec.Rejection != (clievent.ObservationRejection{}) {
+			runtime.loseRejectionEvidenceLocked(spec.Count)
+		}
 		return
 	}
 	event, err := clievent.NewObserverLossObserved(spec)
 	if err != nil {
+		if spec.Rejection != (clievent.ObservationRejection{}) {
+			runtime.loseRejectionEvidenceLocked(spec.Count)
+		}
 		return
 	}
 	runtime.entrySequence++
@@ -104,6 +125,30 @@ func (runtime *commandRuntime) enqueueObserverLossLocked(spec clievent.ObserverL
 		sequence: runtime.entrySequence, event: event,
 	})
 	runtime.signalReadyLocked()
+}
+
+// Evidence loss uses an independent numeric path: a failed anomaly must never
+// construct another anomaly or count the original observation loss twice.
+func (runtime *commandRuntime) loseRejectionEvidenceLocked(count uint64) {
+	if runtime.trace == nil {
+		return
+	}
+	saturatingAtomicAdd(&runtime.rejectionEvidenceDropped, count)
+	saturatingAtomicAdd(&runtime.pendingRejectionEvidenceLoss, count)
+}
+
+func (runtime *commandRuntime) reportRejectionEvidenceLoss() {
+	if runtime.trace == nil {
+		return
+	}
+	count := runtime.pendingRejectionEvidenceLoss.Swap(0)
+	if count == 0 {
+		return
+	}
+	if !runtime.trace.ReportRejectionEvidenceLoss(count) {
+		saturatingAtomicAdd(&runtime.pendingRejectionEvidenceLoss, count)
+		runtime.rejectionEvidenceLossReportFailed.Store(true)
+	}
 }
 
 type pendingRuntimeLoss struct {
@@ -195,6 +240,7 @@ func (runtime *commandRuntime) reportPendingLoss() {
 	loss.lifecycle = saturatingAdd(loss.lifecycle, runtime.pendingTraceLoss.Swap(0))
 	loss.progress = saturatingAdd(loss.progress, runtime.pendingTraceProgress.Swap(0))
 	runtime.reportUpstreamLoss(loss)
+	runtime.reportRejectionEvidenceLoss()
 }
 
 func (runtime *commandRuntime) scheduleUpstreamLossLocked(loss pendingRuntimeLoss) {
@@ -272,6 +318,8 @@ func traceIncompleteFromStatus(command clievent.Command, status runtrace.Status)
 		cause = clievent.TraceIncompleteFlush
 	case status.SchemaLimited:
 		cause = clievent.TraceIncompleteSchemaLimit
+	case status.RejectionEvidenceDropped != 0:
+		cause = clievent.TraceIncompleteRejectionEvidence
 	case status.LifecycleDropped == 0:
 		cause = clievent.TraceIncompleteWriter
 	}

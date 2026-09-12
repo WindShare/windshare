@@ -3,6 +3,7 @@ package clievent
 import (
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/core/diagnosticerror"
 )
@@ -20,7 +21,7 @@ func TestSealedEventPayloadTypesExposeNoOpenEndedOrRawErrorSurface(t *testing.T)
 		reflect.TypeFor[RelayLifecycleObserved](), reflect.TypeFor[WebRTCLifecycleObserved](),
 		reflect.TypeFor[PeerAttemptObserved](), reflect.TypeFor[TransferLifecycleObserved](),
 		reflect.TypeFor[FilesystemOutputObserved](), reflect.TypeFor[SenderTerminalSendObserved](),
-		reflect.TypeFor[SenderSessionTerminated](), reflect.TypeFor[ProtocolOperationObserved](),
+		reflect.TypeFor[SenderSessionTerminated](), reflect.TypeFor[ProtocolObservationObserved](),
 		reflect.TypeFor[CatalogStorageObserved](),
 		reflect.TypeFor[RootPrefetchObserved](),
 		reflect.TypeFor[SenderCapacityObserved](), reflect.TypeFor[SenderRevisionObserved](),
@@ -37,6 +38,15 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 		return
 	}
 	seen[value] = true
+	if value == reflect.TypeFor[time.Time]() {
+		return
+	}
+	if value == reflect.TypeFor[ProtocolFact]() {
+		for _, fact := range []reflect.Type{reflect.TypeFor[ProtocolOperationFact](), reflect.TypeFor[SenderContentDecisionFact](), reflect.TypeFor[ResponseSendNotStartedFact](), reflect.TypeFor[ResponseSendReturnedFact](), reflect.TypeFor[SendAttemptSettledFact](), reflect.TypeFor[ReceivedProtocolErrorFact]()} {
+			assertSafePayloadType(t, fact, seen)
+		}
+		return
+	}
 	if value == reflect.TypeFor[error]() {
 		t.Fatalf("event payload reaches raw error interface through %v", value)
 	}
@@ -62,9 +72,10 @@ func assertSafePayloadType(t *testing.T, value reflect.Type, seen map[reflect.Ty
 				owner := value.Name()
 				diagnostic := value == reflect.TypeFor[diagnosticerror.Snapshot]() ||
 					value == reflect.TypeFor[diagnosticerror.Node]() || value == reflect.TypeFor[diagnosticerror.Frame]()
-				// Rejection labels are validated to at most 96 UTF-8 bytes;
-				// no arbitrary provider value or raw error is retained.
-				diagnostic = diagnostic || value == reflect.TypeFor[ObservationRejection]()
+				// Rejection evidence has fixed field storage and explicit
+				// aggregate/per-value byte bounds; raw errors are never retained.
+				diagnostic = diagnostic || value == reflect.TypeFor[ObservationRejection]() ||
+					value == reflect.TypeFor[RejectionField]() || value == reflect.TypeFor[SendAttemptCause]()
 				if !diagnostic && owner != "DisplayName" && owner != "DisplayPath" && owner != "RelayAuthority" {
 					t.Fatalf("unreviewed string field %s.%s", owner, field.Name)
 				}

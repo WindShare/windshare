@@ -19,7 +19,7 @@ func TestNativeConnectivityExactPayloadAndCorrelation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,11 +43,11 @@ func TestNativeConnectivityUnknownsRemainDistinctFromPairMeasurements(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+		record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
 		if err != nil {
 			t.Fatal(err)
 		}
-		payload := record.Payload.(nativeConnectivityPayloadV3)
+		payload := record.Payload.(nativeConnectivityPayloadV4)
 		if record.Correlation != nil || payload.Profile != "unknown" || payload.NetworkGeneration != "unknown" || payload.AttemptSequence != "unknown" || payload.ObservedAt != "unknown" {
 			t.Fatalf("invented attribution=%+v", payload)
 		}
@@ -71,11 +71,11 @@ func TestNativeConnectivityUnknownsRemainDistinctFromPairMeasurements(t *testing
 		if err != nil {
 			t.Fatal(err)
 		}
-		record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+		record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
 		if err != nil {
 			t.Fatal(err)
 		}
-		payload := record.Payload.(nativeConnectivityPayloadV3)
+		payload := record.Payload.(nativeConnectivityPayloadV4)
 		if r := payload.Reachability; r != nil && (r.Local != "127.0.0.1:123" || r.Remote != "unknown" || r.ServerEpoch != 42 || !r.ServerRestarted) {
 			t.Fatalf("reachability=%+v", r)
 		}
@@ -90,11 +90,11 @@ func TestNativeProcessAdmissionExactAllowancePayload(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(0, 0)}, event)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := record.Payload.(nativeConnectivityPayloadV3)
+	payload := record.Payload.(nativeConnectivityPayloadV4)
 	raw, err := json.Marshal(payload.Admission)
 	if err != nil {
 		t.Fatal(err)

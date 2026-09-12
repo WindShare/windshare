@@ -7,9 +7,9 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
 
-// RunTraceRecordV3 is the stable NDJSON envelope. Event-specific data is
+// RunTraceRecordV4 is the stable NDJSON envelope. Event-specific data is
 // package-sealed so adding one event cannot silently expand every other shape.
-type RunTraceRecordV3 struct {
+type RunTraceRecordV4 struct {
 	SchemaVersion int            `json:"schema_version"`
 	Sequence      string         `json:"sequence"`
 	Time          string         `json:"time"`
@@ -19,31 +19,31 @@ type RunTraceRecordV3 struct {
 	Command       string         `json:"command"`
 	RuntimeRunID  string         `json:"runtime_run_id"`
 	Correlation   *CorrelationV1 `json:"correlation,omitempty"`
-	Payload       payloadV3      `json:"payload"`
+	Payload       payloadV4      `json:"payload"`
 }
 
-type payloadV3 interface {
-	runTracePayloadV3()
+type payloadV4 interface {
+	runTracePayloadV4()
 }
 
-type emptyPayloadV3 struct{}
+type emptyPayloadV4 struct{}
 
-func (emptyPayloadV3) runTracePayloadV3() {}
+func (emptyPayloadV4) runTracePayloadV4() {}
 
-func baseRecordV3(
+func baseRecordV4(
 	runID runIdentity,
 	metadata entryMetadata,
 	command clievent.Command,
 	level clievent.Level,
 	event string,
-) (RunTraceRecordV3, error) {
+) (RunTraceRecordV4, error) {
 	commandName, commandOK := command.Name()
 	levelName, levelOK := runTraceLevelName(level)
 	if !runID.valid() || !commandOK || !levelOK || event == "" ||
 		metadata.sequence == 0 || metadata.elapsedMS < 0 {
-		return RunTraceRecordV3{}, ErrInvalidConfig
+		return RunTraceRecordV4{}, ErrInvalidConfig
 	}
-	return RunTraceRecordV3{
+	return RunTraceRecordV4{
 		SchemaVersion: SchemaVersion,
 		Sequence:      strconv.FormatUint(metadata.sequence, 10),
 		Time:          metadata.time.UTC().Format(time.RFC3339Nano),
@@ -52,29 +52,30 @@ func baseRecordV3(
 		Event:         event,
 		Command:       commandName,
 		RuntimeRunID:  runID.encoded(),
-		Payload:       emptyPayloadV3{},
+		Payload:       emptyPayloadV4{},
 	}, nil
 }
 
-func summaryV3(
+func summaryV4(
 	runID runIdentity,
 	command clievent.Command,
 	metadata entryMetadata,
 	status Status,
-) RunTraceRecordV3 {
+) RunTraceRecordV4 {
 	level := clievent.LevelInfo
 	if !status.Complete {
 		level = clievent.LevelWarning
 	}
-	record, _ := baseRecordV3(runID, metadata, command, level, "trace_summary")
-	record.Payload = traceSummaryPayloadV3{
-		Incomplete:       !status.Complete,
-		LifecycleDropped: decimal(status.LifecycleDropped),
-		ProgressDropped:  decimal(status.ProgressDropped),
-		EventsWritten:    decimal(status.EventsWritten),
-		WriterFailed:     status.WriterFailed,
-		FlushFailed:      status.FlushFailed,
-		SchemaLimited:    status.SchemaLimited,
+	record, _ := baseRecordV4(runID, metadata, command, level, "trace_summary")
+	record.Payload = traceSummaryPayloadV4{
+		Incomplete:               !status.Complete,
+		RejectionEvidenceDropped: decimal(status.RejectionEvidenceDropped),
+		LifecycleDropped:         decimal(status.LifecycleDropped),
+		ProgressDropped:          decimal(status.ProgressDropped),
+		EventsWritten:            decimal(status.EventsWritten),
+		WriterFailed:             status.WriterFailed,
+		FlushFailed:              status.FlushFailed,
+		SchemaLimited:            status.SchemaLimited,
 	}
 	return record
 }

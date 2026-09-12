@@ -1,8 +1,8 @@
 import { V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
+import { validateProtocolErrorContentV2 } from './protocol-error-v2'
 import { classifyV2PeerAttemptFailure } from '../../connectivity/v2-peer-failure'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../trace/lane-payload'
 import {
-  PROTOCOL_FAILURE_SCOPES,
   PROTOCOL_MESSAGE_KINDS_V1,
   PROTOCOL_REQUEST_KINDS_V1,
 } from '../incident/fact'
@@ -15,9 +15,7 @@ import {
   integerBetween,
   member,
   recordValue,
-  uint16,
   uint32,
-  validateCorrelationV1,
   type UnknownRecord,
 } from './trace-payload-validation'
 
@@ -84,13 +82,10 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
       member(payload.response_kind, PROTOCOL_MESSAGE_KINDS_V1, 'protocol response kind')
       return
     case 'authenticated_failure': {
-      exactKeys(payload, ['transition', 'request_kind', 'protocol_failure'], [],
+      exactKeys(payload, ['transition', 'request_kind', 'protocol_error'], [],
         'protocol authenticated_failure payload')
-      member(payload.request_kind, PROTOCOL_MESSAGE_KINDS_V1, 'protocol request kind')
-      const failure = validateProtocolFailure(payload.protocol_failure)
-      if (failure.request_kind !== payload.request_kind) {
-        throw new TypeError('protocol failure request kind contradicts its trace payload')
-      }
+      member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'protocol request kind')
+      validateProtocolErrorContentV2(payload.protocol_error)
       return
     }
     case 'cancelled':
@@ -112,7 +107,7 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
 function validateRetiredOperation(payload: UnknownRecord): void {
   const cancelled = payload.transition === 'cancelled'
   exactKeys(payload, ['transition', 'request_kind', ...(cancelled ? ['cancellation_reason'] : ['response_kind', 'settlement'])],
-    ['request', ...(cancelled ? [] : ['cancellation_reason', 'protocol_failure'])], 'retired operation')
+    ['request', ...(cancelled ? [] : ['cancellation_reason', 'protocol_error'])], 'retired operation')
   member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'retired request kind')
   if (payload.cancellation_reason !== undefined) {
     member(payload.cancellation_reason, ['user', 'superseded', 'output_abort', 'timeout', 'lane_race'], 'cancellation reason')
@@ -121,9 +116,8 @@ function validateRetiredOperation(payload: UnknownRecord): void {
     member(payload.response_kind, ['operation_error', 'operation_complete'], 'late response kind')
     member(payload.settlement, ['remote_final', 'local_cancel', 'session_terminal'], 'retired settlement')
     if (payload.response_kind === 'operation_error') {
-      const failure = validateProtocolFailure(payload.protocol_failure)
-      if (failure.request_kind !== payload.request_kind) throw new TypeError('Late failure request kind contradicts its trace')
-    } else if (payload.protocol_failure !== undefined) {
+      validateProtocolErrorContentV2(payload.protocol_error)
+    } else if (payload.protocol_error !== undefined) {
       throw new TypeError('Late completion cannot carry a protocol failure')
     }
   }
@@ -381,48 +375,6 @@ export function validateLane(payload: UnknownRecord): void {
     default:
       throw new TypeError('lane_transition discriminant is invalid')
   }
-}
-
-function validateProtocolFailure(value: unknown): UnknownRecord {
-  const failure = recordValue(value, 'protocol_failure')
-  exactKeys(failure, [
-    'request_kind', 'wire_scope', 'wire_code', 'retryable', 'settlement', 'correlation',
-  ], ['retry_after_ms'], 'protocol_failure')
-  member(failure.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'protocol failure request kind')
-  member(failure.wire_scope, PROTOCOL_FAILURE_SCOPES, 'protocol failure wire scope')
-  uint16(failure.wire_code, 'protocol failure wire code')
-  booleanValue(failure.retryable, 'protocol failure retryable')
-  const settlement = recordValue(failure.settlement, 'protocol failure settlement')
-  if (settlement.kind === 'received_authenticated') {
-    exactKeys(settlement, ['kind'], [], 'received protocol failure settlement')
-    if (failure.retryable === true) {
-      if (failure.retry_after_ms === undefined) {
-        throw new TypeError('retryable authenticated protocol failure requires retry_after_ms')
-      }
-      integerBetween(failure.retry_after_ms, 1, MAX_AUTHENTICATED_RETRY_AFTER_MS,
-        'protocol failure retry_after_ms')
-    } else if (failure.retry_after_ms !== undefined) {
-      throw new TypeError('non-retryable protocol failure cannot contain retry_after_ms')
-    }
-  } else if (settlement.kind === 'response_send') {
-    exactKeys(settlement, ['kind', 'admitted', 'settled', 'outcome'], [],
-      'response-send protocol failure settlement')
-    booleanValue(settlement.admitted, 'protocol response admission')
-    booleanValue(settlement.settled, 'protocol response settlement')
-    member(settlement.outcome, ['unknown', 'delivered', 'dropped'],
-      'protocol response outcome')
-    if (failure.retry_after_ms !== undefined) {
-      throw new TypeError('response-send protocol failure cannot contain retry_after_ms')
-    }
-  } else {
-    throw new TypeError('protocol failure settlement discriminant is invalid')
-  }
-  const correlation = validateCorrelationV1(failure.correlation, 'protocol failure correlation')
-  if (correlation.protocol_session_id === undefined ||
-      correlation.protocol_operation_id === undefined) {
-    throw new TypeError('protocol failure requires session and operation correlation')
-  }
-  return failure
 }
 
 function validatePeerSettlement(value: unknown): void {

@@ -2,6 +2,7 @@ package runtrace
 
 import (
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 )
@@ -11,23 +12,16 @@ func TestSenderDecisionPayloadKeepsJoinableDecisionAndProtocolCorrelation(t *tes
 	operation, _ := clievent.NewProtocolOperationID(identityBytes(0x62))
 	decisionID, _ := clievent.NewCapacityDecisionID("capacity-owner-3-decision-4")
 	decision, _ := clievent.NewSenderCapacityDecision(decisionID)
-	event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
-		Command: clievent.CommandShare, Role: clievent.ProtocolRoleSender,
-		Stage:           clievent.ProtocolOperationSenderContentDecision,
-		ProtocolSession: session, ProtocolOperation: operation,
-		RequestKind: clievent.ProtocolMessageOpenRevisions,
-		SendOutcome: clievent.ProtocolSendUnknown, Cause: clievent.ProtocolOperationCauseNone,
-		ContentDecision: decision,
-	})
+	event, err := clievent.NewSenderContentDecisionObserved(clievent.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Command: clievent.CommandShare, Role: clievent.ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessageOpenRevisions}, decision, clievent.LaneIdentity{}, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV3{}
-	visitor := &encodeVisitorV3{record: record}
-	if err := visitor.VisitProtocolOperationObserved(event); err != nil {
+	record := &RunTraceRecordV4{}
+	visitor := &encodeVisitorV4{record: record}
+	if err := visitor.VisitProtocolObservationObserved(event); err != nil {
 		t.Fatal(err)
 	}
-	payload, ok := record.Payload.(protocolOperationPayloadV3)
+	payload, ok := record.Payload.(senderContentDecisionPayloadV4)
 	if !ok || payload.ContentDecision == nil || payload.ContentDecision.CapacityDecisionID == nil ||
 		*payload.ContentDecision.CapacityDecisionID != decisionID.Hex() || record.Correlation == nil ||
 		record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) ||
@@ -49,12 +43,12 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record := &RunTraceRecordV3{}
-	visitor := &encodeVisitorV3{record: record}
+	record := &RunTraceRecordV4{}
+	visitor := &encodeVisitorV4{record: record}
 	if err := visitor.VisitSenderCapacityObserved(capacityEvent); err != nil {
 		t.Fatal(err)
 	}
-	capacityPayload, ok := record.Payload.(senderCapacityPayloadV3)
+	capacityPayload, ok := record.Payload.(senderCapacityPayloadV4)
 	if !ok || capacityPayload.DecisionID == nil || *capacityPayload.DecisionID != decisionID.Hex() ||
 		capacityPayload.RevisionID == nil || *capacityPayload.RevisionID != revisionID.Hex() ||
 		record.Correlation == nil || record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) {
@@ -69,12 +63,12 @@ func TestSenderCapacityAndRevisionPayloadsKeepStableJoinKeys(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record = &RunTraceRecordV3{}
-	visitor = &encodeVisitorV3{record: record}
+	record = &RunTraceRecordV4{}
+	visitor = &encodeVisitorV4{record: record}
 	if err := visitor.VisitSenderRevisionObserved(revisionEvent); err != nil {
 		t.Fatal(err)
 	}
-	revisionPayload, ok := record.Payload.(senderRevisionPayloadV3)
+	revisionPayload, ok := record.Payload.(senderRevisionPayloadV4)
 	if !ok || revisionPayload.LeaseID == nil || *revisionPayload.LeaseID != lease.Hex() ||
 		revisionPayload.RevisionID != revisionID.Hex() || record.Correlation == nil ||
 		record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session.Bytes()) {

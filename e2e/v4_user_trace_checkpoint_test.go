@@ -2,7 +2,7 @@ package e2e
 
 import "testing"
 
-func TestUserTraceV3FilesystemCheckpointDecisionVocabulary(t *testing.T) {
+func TestUserTraceV4FilesystemCheckpointDecisionVocabulary(t *testing.T) {
 	tests := []struct {
 		name     string
 		event    string
@@ -22,7 +22,7 @@ func TestUserTraceV3FilesystemCheckpointDecisionVocabulary(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if got := v3ValidFilesystemCheckpointDecision(test.event, test.decision); got != test.want {
+			if got := v4ValidFilesystemCheckpointDecision(test.event, test.decision); got != test.want {
 				t.Fatalf("valid=%t want=%t", got, test.want)
 			}
 		})

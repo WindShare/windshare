@@ -819,14 +819,14 @@ func TestContinuationReservationTracksIrreversibleSequenceOwnership(t *testing.T
 		}
 		close(sealer.release)
 		released = true
-		if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+		if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("sealed continuation completion = %d, %v", outcome, err)
 		}
 		secondReceipt, err := writer.TryAuthorizedControl(second, authority)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if outcome, err := secondReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+		if outcome, err := secondReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("following continuation completion = %d, %v", outcome, err)
 		}
 		stop()
@@ -1013,7 +1013,7 @@ func TestContinuationReservationTracksIrreversibleSequenceOwnership(t *testing.T
 			t.Fatalf("committed reservation records = %d, want 1", count)
 		}
 		close(channel.releaseFirst)
-		if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+		if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("physical completion = %d, %v", outcome, err)
 		}
 		stop()

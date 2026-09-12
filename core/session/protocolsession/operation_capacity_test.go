@@ -141,7 +141,7 @@ func TestWriterCapacityRaceDoesNotRetireTheLane(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if completion := retry.Await(ctx); completion.Err != nil || !completion.Admitted || completion.Outcome != SendOutcomeDelivered {
+		if completion := retry.Await(ctx); completion.Err != nil || !completion.Admitted || completion.Outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("request could not resume on the same writer: %+v", completion)
 		}
 	})

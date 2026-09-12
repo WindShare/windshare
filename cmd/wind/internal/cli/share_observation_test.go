@@ -20,6 +20,7 @@ import (
 func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)
 	if err != nil {
 		t.Fatal(err)
@@ -88,13 +89,16 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 
 func TestShareTerminalObserversRequireTracePreference(t *testing.T) {
 	plain := newShareObservations(&shareRecordingEmitter{})
-	if plain.protocolTracer() != nil || plain.terminalSendObserver() != nil ||
+	cleanupProtocolObservations(t, plain.protocol)
+	if !plain.protocolObservations().IsZero() || plain.terminalSendObserver() != nil ||
 		plain.sessionTerminalObserver() != nil {
 		t.Fatal("default share observations exposed a detailed core observer")
 	}
 
 	detailed := newShareObservations(&shareRecordingEmitter{detailed: true})
-	if detailed.protocolTracer() == nil {
+
+	cleanupProtocolObservations(t, detailed.protocol)
+	if detailed.protocolObservations().IsZero() {
 		t.Fatal("detailed share observations omitted the protocol tracer")
 	}
 	if detailed.terminalSendObserver() != nil || detailed.sessionTerminalObserver() != nil {
@@ -102,13 +106,15 @@ func TestShareTerminalObserversRequireTracePreference(t *testing.T) {
 	}
 
 	traced := newShareObservations(&shareRecordingEmitter{detailed: true, trace: true})
-	if traced.protocolTracer() == nil || traced.terminalSendObserver() == nil ||
+
+	cleanupProtocolObservations(t, traced.protocol)
+	if traced.protocolObservations().IsZero() || traced.terminalSendObserver() == nil ||
 		traced.sessionTerminalObserver() == nil {
 		t.Fatal("traced share observations omitted a core observer")
 	}
 
 	var absent *shareObservations
-	if absent.protocolTracer() != nil || absent.terminalSendObserver() != nil ||
+	if !absent.protocolObservations().IsZero() || absent.terminalSendObserver() != nil ||
 		absent.sessionTerminalObserver() != nil {
 		t.Fatal("nil share observations exposed an observer")
 	}
@@ -117,6 +123,7 @@ func TestShareTerminalObserversRequireTracePreference(t *testing.T) {
 func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	for range 2 {
 		observations.TraceRootPrefetch(liveshare.RootPrefetchTrace{
 			Decision: liveshare.RootPrefetchDecision(255),
@@ -131,6 +138,7 @@ func TestShareObservationsCollapseInvalidProducerFactsWithoutProviderText(t *tes
 func TestShareObservationsAcceptAuthenticatedLaneHello(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	observation := testShareAttemptObservation(t)
 	observation.Stage = v2peer.SenderAttemptLaneHelloAuthenticated
 	observation.Phase = v2peer.SenderAttemptPhaseAdmission
@@ -156,6 +164,7 @@ func TestShareObservationsAcceptAuthenticatedLaneHello(t *testing.T) {
 func TestShareRelayDropSummaryAndStreamCompletionRetainPreciseSources(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	dropped := relayv2.LifecycleTrace{
 		LinkID: 4, Stage: relayv2.LifecycleTraceDropped,
 		RetirementSource: relayv2.LifecycleRetirementNone,
@@ -185,6 +194,7 @@ func TestShareRelayDropSummaryAndStreamCompletionRetainPreciseSources(t *testing
 func TestShareContextObserversCannotCommitAfterAuthorityRevocation(t *testing.T) {
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	observations.TraceWebRTCLifecycleContext(ctx, wsrtc.LifecycleTrace{

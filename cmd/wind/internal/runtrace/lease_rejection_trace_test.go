@@ -2,6 +2,7 @@ package runtrace
 
 import (
 	"testing"
+	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
@@ -25,23 +26,16 @@ func TestLeaseRejectionProjectionAndExportKeepTheReleaseJoinKey(t *testing.T) {
 			session := protocolsession.ProtocolSessionID{1}
 			operation := protocolsession.OperationID{2}
 			lease := content.LeaseID{3}
-			event, err := commandprojection.ProjectProtocolOperation(clievent.CommandShare, sessionruntime.ProtocolOperationTrace{
-				Stage: sessionruntime.ProtocolOperationSenderContentDecision,
-				Role:  protocolsession.RoleSender, ProtocolSessionID: session, OperationID: operation,
-				RequestKind: protocolsession.MessageRequestBlocks,
-				ContentDecision: contentflow.SenderDecisionTrace{
-					Stage: scenario.stage, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: lease,
-				},
-			})
+			event, err := commandprojection.ProjectProtocolObservation(clievent.CommandShare, sessionruntime.NewSenderContentDecision(sessionruntime.ProtocolObservationContext{ObservedAt: time.Unix(1, 0), Correlation: sessionruntime.ProtocolObservationCorrelation{Role: protocolsession.RoleSender, ProtocolSessionID: session, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks}}, contentflow.SenderDecisionTrace{Stage: scenario.stage, OperationID: operation, RequestKind: protocolsession.MessageRequestBlocks, LeaseID: lease}, sessionruntime.LaneIdentity{}, false))
 			if err != nil {
 				t.Fatal(err)
 			}
-			record := &RunTraceRecordV3{}
-			visitor := &encodeVisitorV3{record: record}
-			if err := visitor.VisitProtocolOperationObserved(event); err != nil {
+			record := &RunTraceRecordV4{}
+			visitor := &encodeVisitorV4{record: record}
+			if err := visitor.VisitProtocolObservationObserved(event); err != nil {
 				t.Fatal(err)
 			}
-			payload, ok := record.Payload.(protocolOperationPayloadV3)
+			payload, ok := record.Payload.(senderContentDecisionPayloadV4)
 			if !ok || payload.ContentDecision == nil || payload.ContentDecision.LeaseID == nil ||
 				payload.ContentDecision.Kind != scenario.name || *payload.ContentDecision.LeaseID != "03000000000000000000000000000000" ||
 				record.Correlation == nil || record.Correlation.ProtocolSessionID != encodeCorrelationIdentity(session[:]) ||

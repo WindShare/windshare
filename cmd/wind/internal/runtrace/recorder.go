@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	SchemaVersion            = 3
+	SchemaVersion            = 4
 	DefaultLifecycleCapacity = 256
 	DefaultSampleInterval    = 250 * time.Millisecond
 )
@@ -63,13 +63,14 @@ type Config struct {
 }
 
 type Status struct {
-	Complete         bool
-	LifecycleDropped uint64
-	ProgressDropped  uint64
-	EventsWritten    uint64
-	WriterFailed     bool
-	FlushFailed      bool
-	SchemaLimited    bool
+	RejectionEvidenceDropped uint64
+	Complete                 bool
+	LifecycleDropped         uint64
+	ProgressDropped          uint64
+	EventsWritten            uint64
+	WriterFailed             bool
+	FlushFailed              bool
+	SchemaLimited            bool
 }
 
 type entryMetadata struct {
@@ -110,13 +111,14 @@ type Recorder struct {
 	closeOnce  sync.Once
 	healthOnce sync.Once
 
-	disabled         atomic.Bool
-	lifecycleDropped atomic.Uint64
-	progressDropped  atomic.Uint64
-	eventsWritten    atomic.Uint64
-	writerFailed     atomic.Bool
-	flushFailed      atomic.Bool
-	schemaLimited    atomic.Bool
+	rejectionEvidenceDropped atomic.Uint64
+	disabled                 atomic.Bool
+	lifecycleDropped         atomic.Uint64
+	progressDropped          atomic.Uint64
+	eventsWritten            atomic.Uint64
+	writerFailed             atomic.Bool
+	flushFailed              atomic.Bool
+	schemaLimited            atomic.Bool
 }
 
 func Open(target Target, command clievent.Command, config Config) (*Recorder, error) {
@@ -234,9 +236,14 @@ func (recorder *Recorder) Health() <-chan clievent.TraceIncomplete { return reco
 
 // Record never performs file IO and never waits for queue capacity. A false
 // result means the event was rejected or could not be retained.
-func (recorder *Recorder) Record(event clievent.Event) bool {
+func (recorder *Recorder) Record(event clievent.Event) (accepted bool) {
 	recorder.entryMu.Lock()
 	defer recorder.entryMu.Unlock()
+	defer func() {
+		if !accepted && !recorder.closed {
+			recorder.countRejectionEvidence(event)
+		}
+	}()
 	if recorder.closed {
 		return false
 	}
@@ -305,7 +312,8 @@ func (recorder *Recorder) ReportUpstreamLoss(lifecycle, progress uint64) bool {
 func (recorder *Recorder) Status() Status {
 	lifecycleDropped := recorder.lifecycleDropped.Load()
 	return Status{
-		Complete: lifecycleDropped == 0 && !recorder.writerFailed.Load() &&
+		RejectionEvidenceDropped: recorder.rejectionEvidenceDropped.Load(),
+		Complete: lifecycleDropped == 0 && recorder.rejectionEvidenceDropped.Load() == 0 && !recorder.writerFailed.Load() &&
 			!recorder.flushFailed.Load() &&
 			!recorder.schemaLimited.Load(),
 		LifecycleDropped: lifecycleDropped,
@@ -358,4 +366,30 @@ func classifyEvent(event clievent.Event) (progress bool, recognized bool) {
 	// a second event registry that can silently reject newly added visitor-backed events.
 	_, progress = event.(clievent.TransferProgress)
 	return progress, true
+}
+
+// This numeric path cannot recurse through the rejected observation contract.
+func (recorder *Recorder) ReportRejectionEvidenceLoss(count uint64) bool {
+	recorder.entryMu.Lock()
+	defer recorder.entryMu.Unlock()
+	if recorder.closed {
+		return false
+	}
+	recorder.addRejectionEvidenceDropped(count)
+	return true
+}
+func (recorder *Recorder) addRejectionEvidenceDropped(count uint64) {
+	if count == 0 {
+		return
+	}
+	recorder.addCounter(&recorder.rejectionEvidenceDropped, count)
+	recorder.markIncomplete(clievent.TraceIncompleteRejectionEvidence)
+}
+func (recorder *Recorder) countRejectionEvidence(event clievent.Event) {
+	if loss, ok := event.(clievent.ObserverLossObserved); ok {
+		_, sample := loss.Rejection()
+		if sample || loss.OmittedSamples() != 0 {
+			recorder.addRejectionEvidenceDropped(loss.Count())
+		}
+	}
 }

@@ -1,16 +1,16 @@
 import { DEFAULT_TRACE_CAPACITY_POLICY } from '../../../src/diagnostics/trace/capacity'
 import type {
   DiagnosticsHealthV1,
-  IncidentRecordV1,
-} from '../../../src/diagnostics/export/incident-record-v1'
-import type { DiagnosticBundleIdentityV1 } from '../../../src/diagnostics/export/diagnostic-bundle-v1'
+  IncidentRecordV2,
+} from '../../../src/diagnostics/export/incident-record-v2'
+import type { DiagnosticBundleIdentityV2 } from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import { deepFreezeJson } from '../../../src/diagnostics/export/json'
 import type { IncidentDiagnosticsHealthSnapshot } from '../../../src/diagnostics/incident/health'
 import type { TraceCoreStatus } from '../../../src/diagnostics/trace/model'
 
 export const TEST_RUNTIME_RUN_ID = 'AQAAAAAAAAAAAAAAAAAAAA'
 
-export const TEST_BUNDLE_IDENTITY: DiagnosticBundleIdentityV1 = deepFreezeJson({
+export const TEST_BUNDLE_IDENTITY: DiagnosticBundleIdentityV2 = deepFreezeJson({
   build: {
     application: 'windshare_web',
     version: '0.0.0',
@@ -74,9 +74,9 @@ export function traceStatus(
   })
 }
 
-export function incidentRecord(sequence: string): IncidentRecordV1 {
+export function incidentRecord(sequence: string): IncidentRecordV2 {
   return deepFreezeJson({
-    schema_version: 1,
+    schema_version: 2,
     sequence,
     time: '2026-08-19T01:02:03.000Z',
     elapsed_ms: sequence,

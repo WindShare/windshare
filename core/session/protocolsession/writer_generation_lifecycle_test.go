@@ -62,7 +62,7 @@ func TestSessionWriterSettlementLeaseAnchorsTombstoneAfterPhysicalSend(t *testin
 		sendErr     error
 		wantOutcome SendOutcome
 	}{
-		{name: "delivered", wantOutcome: SendOutcomeDelivered},
+		{name: "delivered", wantOutcome: SendOutcomeTransportConfirmed},
 		{name: "unknown", sendErr: errors.New("transport accepted before error"), wantOutcome: SendOutcomeUnknown},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -245,7 +245,7 @@ func TestSessionWriterDropsQueuedStaleGenerationBeforePolicyMutation(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if outcome, waitErr := currentReceipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+	if outcome, waitErr := currentReceipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 		t.Fatalf("generation B send = %d, %v", outcome, waitErr)
 	}
 	channel.mu.Lock()

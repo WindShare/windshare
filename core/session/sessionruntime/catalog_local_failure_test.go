@@ -185,8 +185,8 @@ func sendInjectedCatalogProgress(
 	t.Helper()
 	ctx := protocolsession.RetainMessageContext(context.Background(), senderContext)
 	outcome, err := sender.outbound.SendControl(ctx, protocolsession.MessageScanProgress, operationID, body)
-	if err != nil || outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("send authenticated catalog fault over the session lane: outcome=%d error=%v", outcome, err)
+	if err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("send authenticated catalog fault over the session lane: result=%+v error=%v", outcome, err)
 	}
 }
 

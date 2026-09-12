@@ -349,7 +349,7 @@ func (outbound senderOutbound) sendTerminalRecipients(
 			// wire, so an absent replacement makes the lifecycle naturally complete.
 			continue
 		}
-		if completion.Err == nil && completion.Outcome == protocolsession.SendOutcomeDelivered {
+		if completion.Err == nil && completion.Outcome == protocolsession.SendOutcomeTransportConfirmed {
 			// Once any attached lane delivers terminal, the peer's monotonic
 			// session stop may close its siblings before their receipts settle.
 			// Every lane was admitted before waiting, so that close is success,
@@ -357,7 +357,7 @@ func (outbound senderOutbound) sendTerminalRecipients(
 			delivered = true
 		}
 		if completion.Err != nil &&
-			(completion.Outcome == protocolsession.SendOutcomeDelivered ||
+			(completion.Outcome == protocolsession.SendOutcomeTransportConfirmed ||
 				(completion.Outcome == protocolsession.SendOutcomeDropped &&
 					!errorTreeContainsOnly(
 						completion.Err,

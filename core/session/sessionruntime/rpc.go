@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"sync"
-	"time"
 
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -152,9 +151,12 @@ func (client *rpcClient) HandleMessage(ctx context.Context, message protocolsess
 	response := operationResponse{message: message, generation: generation}
 	var err error
 	if call.traceEnabled && message.Kind() == protocolsession.MessageOperationError {
-		lane, hasLane := inboundLane(ctx)
+		source, hasSource := ctx.Value(inboundLaneContextKey{}).(authenticatedReceiveContext)
+		lane, hasLane := source.lane, hasSource && source.lane.valid(true)
 		err = call.enqueueAuthenticatedFailure(response, authenticatedFailureSource{
 			protocolSessionID: client.runtime.sessionID,
+			observations:      client.runtime.protocolObservations,
+			observedAt:        source.observedAt,
 			lane:              lane,
 			hasLane:           hasLane,
 		})
@@ -231,7 +233,7 @@ func (client *rpcClient) beginOn(
 			rpcDeliveryError(client.runtime, errRequestNotDelivered, ErrRuntimeClosed),
 		)
 	}
-	if err != nil || outcome != protocolsession.SendOutcomeDelivered {
+	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
 		if outcome == protocolsession.SendOutcomeUnknown && ctx.Err() == nil && client.runtime.ctx.Err() == nil {
 			if !completion.Settled || !call.setRequestReplay(message, completion.Replay) {
 				authorityErr := client.runtime.failRPCOperationAuthority()
@@ -300,20 +302,6 @@ func (client *rpcClient) sendRequest(
 		// Another lane can consume the available slot before this writer claims
 		// the request. Only this proven unsent refusal is safe to retry.
 	}
-}
-
-func (client *rpcClient) newCall(
-	ctx context.Context,
-	id protocolsession.OperationID,
-	kind protocolsession.MessageKind,
-) *operationCall {
-	traceEnabled := client.runtime.protocolOperationTracingEnabled()
-	if !traceEnabled {
-		return newOperationCall(id, kind, time.Time{}, 0, false, false)
-	}
-	started := client.runtime.now()
-	deadlineMillis, hasDeadline := remainingDeadlineMillis(ctx, started)
-	return newOperationCall(id, kind, started, deadlineMillis, hasDeadline, true)
 }
 
 func (runtime *runtimeCore) failRPCOperationAuthority() error {
@@ -426,7 +414,7 @@ func (client *rpcClient) sendContinuationAttempt(
 		// remain distinguishable from a pre-transport failure with a cause.
 		return continuationAttemptResult{outcome: completion.Outcome}
 	}
-	if completion.Err != nil || completion.Outcome != protocolsession.SendOutcomeDelivered {
+	if completion.Err != nil || completion.Outcome != protocolsession.SendOutcomeTransportConfirmed {
 		return continuationAttemptResult{
 			outcome: completion.Outcome,
 			err: rpcDeliveryError(

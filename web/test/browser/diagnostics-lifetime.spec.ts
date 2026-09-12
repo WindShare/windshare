@@ -49,7 +49,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
   expect(initial.frozen).toBe(true)
   expect(initial.methods).toEqual(EXPECTED_API_METHODS)
   expect(initial.status).toMatchObject({
-    schema_version: 1,
+    schema_version: 2,
     state: 'idle',
     enabled: false,
     capture_generation: '0',

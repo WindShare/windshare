@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../src/diagnostics/export/trace-event-v1'
-import type { TraceEventObservationV1 } from '../../src/diagnostics/trace/model'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../src/diagnostics/export/trace-event-v2'
+import type { TraceEventObservationV2 } from '../../src/diagnostics/trace/model'
 import { BoundedTraceRecorder } from '../../src/diagnostics/trace/recorder'
 import {
   PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1,
@@ -41,15 +41,15 @@ describe('FSA performance production observations', () => {
         return observed
       },
     }
-    const recorder = new BoundedTraceRecorder<TraceEventObservationV1, never, never>({
+    const recorder = new BoundedTraceRecorder<TraceEventObservationV2, never, never>({
       captureGeneration: 1n,
       clock,
       scheduler: {
         schedule: () => Object.freeze({ cancel: () => undefined }),
       },
-      eventName: traceEventObservationNameV1,
-      snapshotEvent: snapshotTraceEventObservationV1,
-      eventBytes: traceEventObservationBytesV1,
+      eventName: traceEventObservationNameV2,
+      snapshotEvent: snapshotTraceEventObservationV2,
+      eventBytes: traceEventObservationBytesV2,
       snapshotIncident: incident => incident,
       incidentMarkerBytes: () => 1,
       incidentScope: incident => incident,
