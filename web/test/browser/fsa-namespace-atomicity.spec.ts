@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
-import { requireOriginPrivateStorage } from './browser-storage-support'
+import { BROWSER_CONTRACT_HOST_PATH, requireOriginPrivateStorage } from './browser-storage-support'
 import type { FsaNamespaceFixture } from './fsa-namespace-atomicity-harness'
 
 const HARNESS_PATH = '/test/browser/fsa-namespace-atomicity-harness.ts'
@@ -98,7 +98,7 @@ test('native FSA scheduler drains same-parent writers without blocking independe
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   expect(await callHarness(
     page,
@@ -123,7 +123,7 @@ test('native writable close and abort failures release scheduler capacity', asyn
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   expect(await callHarness(
     page,
@@ -143,10 +143,10 @@ test('FSA parent Web Lock remains held through writer drain and rejects late adm
   context,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const competitor = await context.newPage()
-  await competitor.goto('/')
+  await competitor.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(competitor, browserName)
   const fixture = testFixture('native-cross-tab-drain')
   try {
@@ -178,7 +178,7 @@ test('FSA parent Web Lock remains held through writer drain and rejects late adm
 })
 
 test('FSA task roots keep suffix and ownership across restart', async ({ browserName, page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const fixture = testFixture('task-root')
   expect(await callHarness(page, 'exerciseTaskRootRestart', fixture)).toEqual({
@@ -194,7 +194,7 @@ test('single-file DirectoryTree has no extra root and resumes its visible prefix
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const fixture = testFixture('single-file')
   expect(await callHarness(page, 'exerciseSingleFileLayout', fixture)).toEqual({
@@ -208,10 +208,10 @@ test('single-file DirectoryTree has no extra root and resumes its visible prefix
 })
 
 test('FSA parent Web Lock spans tabs', async ({ browserName, context, page }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const competitor = await context.newPage()
-  await competitor.goto('/')
+  await competitor.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(competitor, browserName)
   const fixture = testFixture('cross-tab')
   await callHarness(page, 'holdTaskRoot', fixture)
@@ -227,7 +227,7 @@ test('failed activation before DirectTree execution leaves no visible task root'
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   expect(await callHarness(
     page,
@@ -240,7 +240,7 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const proof = await callHarness<Awaited<ReturnType<
     NamespaceHarness['exerciseCompatibleNameScenarioClosure']
@@ -303,7 +303,7 @@ test('compatible-name repair is exact-call-locus, pair-first, and dormant for or
 })
 
 test('retries the whole restoration pair when either exact native sibling is occupied', async ({ page, browserName }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const proof = await page.evaluate(async ({ path, fixture }) => {
     const harness = await import(path) as typeof import('./fsa-namespace-atomicity-harness')
@@ -323,7 +323,7 @@ test('compatible-name ledger keeps pair ownership and contiguous commits across 
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const operationId = identity(16, 31)
   const atomicOperationId = identity(16, 41)
@@ -643,7 +643,7 @@ test('compatible-name ledger scopes mapping and pair claims to physical siblings
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const databaseName = `fsa-compatible-claims-${crypto.randomUUID()}`
   const operationId = identity(16, 46)
@@ -775,7 +775,7 @@ test('IndexedDB v9 closes on versionchange and rejects blocked upgrades without 
   browserName,
   page,
 }) => {
-  await page.goto('/')
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
   await requireOriginPrivateStorage(page, browserName)
   const result = await page.evaluate(async ({ upgradeName, blockedName, operationId, modulePaths }) => {
     const databaseModule = await import(modulePaths.database) as
