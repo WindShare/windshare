@@ -1,4 +1,5 @@
 declare const FSA_PARENT_MUTATION_IDENTITY: unique symbol
+declare const FSA_FILE_MUTATION_IDENTITY: unique symbol
 declare const FSA_TERMINAL_EXCLUSIVE_AUTHORITY: unique symbol
 
 /**
@@ -9,13 +10,28 @@ export type FSAParentMutationIdentity = symbol & {
   readonly [FSA_PARENT_MUTATION_IDENTITY]: 'verified-fsa-parent'
 }
 
+export type FSAFileMutationIdentity = symbol & {
+  readonly [FSA_FILE_MUTATION_IDENTITY]: 'verified-fsa-file'
+}
+
+export interface FSAVerifiedFileMutationTarget {
+  readonly parent: FSAParentMutationIdentity
+  readonly file: FSAFileMutationIdentity
+}
+
+/**
+ * These operations inspect names, create absent entries, or maintain separately
+ * reserved repair metadata. They cannot replace content entries or mutate their
+ * bytes, so an existing file writer need not reserve its entire parent directory.
+ */
 export type FSANamespaceMutationKind =
+  | 'inspect-entry'
   | 'reserve-name'
   | 'create-directory'
   | 'create-file'
-  | 'remove-entry'
-  | 'rename-entry'
   | 'repair-compatible-name'
+
+export type FSAFileMutationKind = 'remove-file'
 
 export type FSATerminalMutationKind =
   | 'settle-operation'
@@ -45,7 +61,7 @@ export class FSATerminalMutationUnavailableError extends DOMException {
 }
 
 export interface FSAWriterLifecycleLease {
-  readonly parent: FSAParentMutationIdentity
+  readonly target: FSAVerifiedFileMutationTarget
   release(): void
 }
 
@@ -94,7 +110,12 @@ export interface FSAOperationMutationScheduler {
     kind: FSANamespaceMutationKind,
     operation: () => Promise<T>,
   ): Promise<T>
-  acquireWriter(parent: FSAParentMutationIdentity): Promise<FSAWriterLifecycleLease>
+  runFileMutation<T>(
+    target: FSAVerifiedFileMutationTarget,
+    kind: FSAFileMutationKind,
+    operation: () => Promise<T>,
+  ): Promise<T>
+  acquireWriter(target: FSAVerifiedFileMutationTarget): Promise<FSAWriterLifecycleLease>
   beginTerminal(kind: FSATerminalMutationKind): FSATerminalDrain
   close(): Promise<void>
   diagnostics(): FSAMutationSchedulerDiagnosticsSnapshot

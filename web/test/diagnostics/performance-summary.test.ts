@@ -19,7 +19,7 @@ import {
   createBoundedPerformanceSummary,
   createPerformanceSummaryObservations,
 } from '../../src/output/diagnostics/performance-summary'
-import { createPerformanceClaimBatchTimeline } from '../../src/output/diagnostics/claim-batch-performance'
+import { createPerformanceLineageClaimTimeline } from '../../src/output/diagnostics/lineage-claim-performance'
 import { createPerformanceClaimInspectorObservation } from '../../src/output/diagnostics/claim-inspector-performance'
 
 const RECEIVE_OPERATION_ID = 'AQAAAAAAAAAAAAAAAAAAAA'
@@ -125,16 +125,14 @@ describe('bounded performance summary', () => {
       runMilliseconds: 5,
       succeeded: true,
     })
-    summary.observeClaimBatch({
-      size: 4,
-      oldestWaitMilliseconds: 6,
-      newestWaitMilliseconds: 1,
+    summary.observeLineageClaim({
+      waitMilliseconds: 6,
       runMilliseconds: 8,
       phases: {
-        classification: claimPhaseSample(4, 1, 1, 1n, 0n, 1),
-        inspection_union: claimPhaseSample(4, 0, 3, 5n, 1n, 2),
-        reclassification: claimPhaseSample(1, 1, 0, 0n, 0n, 0),
-        installation: claimPhaseSample(3, 0, 2, 2n, 0n, 1),
+        classification: claimPhaseSample(1, 1, 1, 1n, 0n, 1),
+        inspection_union: claimPhaseSample(1, 0, 3, 3n, 0n, 1),
+        reclassification: claimPhaseSample(0, 1, 0, 0n, 0n, 0),
+        installation: claimPhaseSample(1, 0, 2, 2n, 0n, 1),
       },
     })
     summary.observeOutputResource({ resource: 'active_files', waitMilliseconds: 2, peak: 2 })
@@ -242,18 +240,15 @@ describe('bounded performance summary', () => {
         maximum_active: 2,
         active_at_completion: 0,
       },
-      claim_batches: {
+      lineage_claims: {
         count: '1',
-        members: '4',
-        maximum_size: 4,
-        oldest_wait_ms: histogram(['0', '0', '1', '0', '0', '0', '0', '0'], '1', '6', '6'),
-        newest_wait_ms: histogram(['1', '0', '0', '0', '0', '0', '0', '0'], '1', '1', '1'),
+        wait_ms: histogram(['0', '0', '1', '0', '0', '0', '0', '0'], '1', '6', '6'),
         run_ms: histogram(['0', '0', '1', '0', '0', '0', '0', '0'], '1', '8', '8'),
         phases: claimPhaseSummaries({
-          classification: claimPhaseSummary(4, 1, 1, '1', '0', 1),
-          inspection_union: claimPhaseSummary(4, 0, 3, '5', '1', 2),
-          reclassification: claimPhaseSummary(1, 1, 0, '0', '0', 0),
-          installation: claimPhaseSummary(3, 0, 2, '2', '0', 1),
+          classification: claimPhaseSummary(1, 1, 1, '1', '0', 1),
+          inspection_union: claimPhaseSummary(1, 0, 3, '3', '0', 1),
+          reclassification: claimPhaseSummary(0, 1, 0, '0', '0', 0),
+          installation: claimPhaseSummary(1, 0, 2, '2', '0', 1),
         }),
         inspector: emptyClaimInspectorPayload(),
       },
@@ -306,7 +301,7 @@ describe('bounded performance summary limits', () => {
       correlation: CORRELATION,
       clock: { nowMilliseconds: () => now },
     })
-    const timeline = createPerformanceClaimBatchTimeline(observations, now)
+    const timeline = createPerformanceLineageClaimTimeline(observations, now)
     if (timeline === undefined) throw new Error('claim timeline was not created')
 
     now = 101
@@ -413,12 +408,12 @@ describe('bounded performance summary limits', () => {
       orderedSettlementContextsAtCompletion: 0,
       underCapacity: {
         no_pending_arrival: { wallMilliseconds: 4n, idleSlotMilliseconds: 10n },
-        batch_serialization: { wallMilliseconds: 3n, idleSlotMilliseconds: 6n },
+        admission_wait: { wallMilliseconds: 3n, idleSlotMilliseconds: 6n },
         ordered_settlement: { wallMilliseconds: 3n, idleSlotMilliseconds: 6n },
       },
     })
     observations.summary.observeClaimInspector(sample)
-    const payload = observations.summary.complete().claim_batches.inspector
+    const payload = observations.summary.complete().lineage_claims.inspector
     expect(BigInt(payload.at_capacity_ms) + PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1.reduce(
       (total, reason) => total + BigInt(payload.under_capacity[reason].wall_ms),
       0n,
@@ -619,7 +614,7 @@ function claimPhaseSummary(
   maximumActive: number,
 ) {
   return {
-    batch_count: '1',
+    claim_count: '1',
     member_count: memberCount.toString(),
     queue_ms: sampleHistogram(queueMilliseconds),
     run_ms: sampleHistogram(runMilliseconds),
