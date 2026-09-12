@@ -57,13 +57,15 @@ var (
 	ErrInvalidOpenResults     = errors.New("content open results are invalid")
 	ErrInvalidOperationResult = errors.New("content operation result is invalid")
 	ErrLeaseNotOwned          = errors.New("content lease is not owned by this protocol session")
-	ErrServiceClosed          = errors.New("content sender service is closed")
-	ErrServiceQueueFull       = errors.New("content sender service work queue is full")
-	ErrOutboundUnavailable    = errors.New("content sender outbound path is unavailable")
-	ErrNonCanonicalBody       = errors.New("content operation body is not canonical CBOR")
-	ErrOperationIdentity      = errors.New("content operation identity is missing")
-	ErrUnexpectedMessage      = errors.New("content sender received an unsupported message kind")
-	ErrRevisionStoreContract  = errors.New("revision store violated the content sender contract")
+	// Retain the ownership decision so later cleanup cannot relabel a rejection.
+	errLeaseRelinquished     = errors.New("content lease was explicitly relinquished")
+	ErrServiceClosed         = errors.New("content sender service is closed")
+	ErrServiceQueueFull      = errors.New("content sender service work queue is full")
+	ErrOutboundUnavailable   = errors.New("content sender outbound path is unavailable")
+	ErrNonCanonicalBody      = errors.New("content operation body is not canonical CBOR")
+	ErrOperationIdentity     = errors.New("content operation identity is missing")
+	ErrUnexpectedMessage     = errors.New("content sender received an unsupported message kind")
+	ErrRevisionStoreContract = errors.New("revision store violated the content sender contract")
 )
 
 type OpenItem struct {

@@ -1,7 +1,8 @@
+import { V2OperationCancellationError, V2_OPERATION_CANCEL_REASON } from '../../session/v2-runtime-types'
 import { HEDGE_CHECK_MILLISECONDS } from './exploration'
 
-export class ContentRaceWon extends Error {
-  constructor() { super('Another authenticated content attempt won') }
+export class ContentRaceWon extends V2OperationCancellationError {
+  constructor() { super(V2_OPERATION_CANCEL_REASON.laneRace, 'Another authenticated content attempt won') }
 }
 export class ContentRaceFailures extends AggregateError {
   constructor(errors: readonly unknown[]) { super(errors, 'Content race failed') }

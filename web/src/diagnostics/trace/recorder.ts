@@ -20,8 +20,7 @@ import type {
   TraceScheduler,
 } from './ports'
 
-export const MAX_TRACE_ATTEMPT_SUMMARIES = 16
-export const MAX_TRACE_ATTEMPT_SUMMARY_BYTES = 65_536
+import { TraceRetentionWindow, type TraceRetention } from './retention'
 
 type DomainTraceEventName = Exclude<TraceEventNameV1, 'incident_marker'>
 type CapturePhase = 'pre' | 'post'
@@ -51,7 +50,7 @@ export interface BoundedTraceRecorderOptions<Event, Incident, Scope> {
   readonly eventName: (event: Event) => DomainTraceEventName
   readonly snapshotEvent: (event: Event) => Event
   readonly eventBytes: (event: Event) => number
-  readonly eventRetention?: (event: Event) => 'recent' | 'attempt_summary'
+  readonly eventRetention?: (event: Event) => TraceRetention
   readonly snapshotIncident: (incident: Incident) => Incident
   readonly incidentMarkerBytes: (incident: Incident) => number
   readonly incidentScope: (incident: Incident) => Scope
@@ -101,9 +100,8 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
   readonly #onSealed: BoundedTraceRecorderOptions<Event, Incident, Scope>['onSealed']
   readonly #startedAtMilliseconds: number
   readonly #events: StoredTraceEvent<Event, Incident>[] = []
-  readonly #attemptSummaries = new Set<StoredTraceEvent<Event, Incident>>()
+  readonly #retention: TraceRetentionWindow<StoredTraceEvent<Event, Incident>>
   readonly #eventRetention: BoundedTraceRecorderOptions<Event, Incident, Scope>['eventRetention']
-  #attemptSummaryBytes = 0
   readonly #sampledAt = new Map<TraceEventNameV1, number>()
   readonly #coalesced = new Map<TraceEventNameV1, CoalescedEvent<Event, Incident>>()
   #state: Exclude<TraceCaptureState, 'idle'> = 'recording_pre_failure'
@@ -127,6 +125,7 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
     }
     this.#captureGeneration = options.captureGeneration
     this.#capacity = createTraceCapacityPolicy(options.capacity)
+    this.#retention = new TraceRetentionWindow(this.#capacity.maxPreFailureEventCount, this.#capacity.maxPreFailureBytes)
     this.#clock = options.clock
     this.#scheduler = options.scheduler
     this.#eventName = options.eventName
@@ -242,8 +241,7 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
   clear(): void {
     if (!this.enabled) return
     this.#events.splice(0)
-    this.#attemptSummaries.clear()
-    this.#attemptSummaryBytes = 0
+    this.#retention.clear()
     this.#retainedBytes = 0
     this.#preFailureEventCount = 0
     this.#preFailureBytes = 0
@@ -406,7 +404,7 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
     if (stored.phase === 'pre') {
       while (!this.#canAdmitPre(stored.record.encodedBytes)) this.#overwriteOldestPreFailure()
       this.#append(stored)
-      this.#retainAttemptSummary(stored)
+      this.#retainPriority(stored)
       return stored
     }
     if (!this.#canAdmitPost(stored.record.encodedBytes)) {
@@ -451,6 +449,8 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
     // the old array position would make sequence order contradict chronology.
     this.#events.splice(currentIndex, 1)
     this.#events.push(replacement)
+    this.#retention.remove(previous)
+    if (replacement.phase === 'pre') this.#retainPriority(replacement)
     this.#retainedBytes += byteDelta
     if (previous.phase === 'pre') this.#preFailureBytes += byteDelta
     else this.#postFailureBytes += byteDelta
@@ -493,29 +493,24 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
     }
   }
 
-  #retainAttemptSummary(stored: StoredTraceEvent<Event, Incident>): void {
+  #retainPriority(stored: StoredTraceEvent<Event, Incident>): void {
     const value = stored.record.value
-    if (stored.name !== 'peer_attempt' || value.kind !== 'event') return
+    if (value.kind !== 'event') return
     try {
-      if (this.#eventRetention?.(value.event) !== 'attempt_summary') return
+      this.#retention.retain(stored, stored.record.encodedBytes, this.#eventRetention?.(value.event) ?? 'recent')
     } catch {
-      return
-    }
-    this.#attemptSummaries.add(stored)
-    this.#attemptSummaryBytes += stored.record.encodedBytes
-    const countLimit = Math.min(MAX_TRACE_ATTEMPT_SUMMARIES, Math.floor(this.#capacity.maxPreFailureEventCount / 2))
-    const byteLimit = Math.min(MAX_TRACE_ATTEMPT_SUMMARY_BYTES, Math.floor(this.#capacity.maxPreFailureBytes / 2))
-    while (this.#attemptSummaries.size > countLimit || this.#attemptSummaryBytes > byteLimit) {
-      const oldest = this.#attemptSummaries.values().next().value
-      if (oldest === undefined) break
-      this.#attemptSummaries.delete(oldest)
-      this.#attemptSummaryBytes -= oldest.record.encodedBytes
+      // Invalid retention hints cannot interfere with a valid observation.
     }
   }
 
   #oldestReplaceablePre(exclude?: StoredTraceEvent<Event, Incident>) {
-    return this.#events.find(entry => entry.phase === 'pre' && entry !== exclude && !this.#attemptSummaries.has(entry))
-      ?? this.#events.find(entry => entry.phase === 'pre' && entry !== exclude)
+    let candidate: StoredTraceEvent<Event, Incident> | undefined
+    for (const entry of this.#events) {
+      if (entry.phase !== 'pre' || entry === exclude) continue
+      if (candidate === undefined || this.#retention.priority(entry) < this.#retention.priority(candidate)) candidate = entry
+      if (this.#retention.priority(candidate) === 0) break
+    }
+    return candidate
   }
 
   #overwriteOldestPreFailure(): void {
@@ -533,7 +528,7 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
     const index = this.#events.indexOf(stored)
     if (index < 0) return
     this.#events.splice(index, 1)
-    if (this.#attemptSummaries.delete(stored)) this.#attemptSummaryBytes -= stored.record.encodedBytes
+    this.#retention.remove(stored)
     this.#retainedBytes -= stored.record.encodedBytes
     if (stored.phase === 'pre') {
       this.#preFailureEventCount -= 1

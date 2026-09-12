@@ -451,6 +451,9 @@ func (s *SenderService) ownedDescriptor(leaseID content.LeaseID) (content.FileRe
 	}
 	descriptor, ok := s.leases[leaseID]
 	if !ok {
+		if _, released := s.released[leaseID]; released {
+			return content.FileRevisionDescriptor{}, errors.Join(ErrLeaseNotOwned, errLeaseRelinquished)
+		}
 		return content.FileRevisionDescriptor{}, ErrLeaseNotOwned
 	}
 	return descriptor, nil

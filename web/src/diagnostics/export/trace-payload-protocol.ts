@@ -65,7 +65,6 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
     case 'send_failed':
     case 'request_sent':
     case 'request_send_failed':
-    case 'cancelled':
     case 'admission_ready':
     case 'admission_abandoned':
       exactKeys(payload, ['transition', 'request_kind'], [], 'protocol request payload')
@@ -94,6 +93,10 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
       }
       return
     }
+    case 'cancelled':
+    case 'late_response_discarded':
+      validateRetiredOperation(payload)
+      return
     case 'settled':
       exactKeys(payload, ['transition', 'request_kind', 'settlement'], [],
         'protocol settled payload')
@@ -103,6 +106,39 @@ export function validateProtocolOperation(payload: UnknownRecord): void {
       return
     default:
       throw new TypeError('protocol_operation discriminant is invalid')
+  }
+}
+
+function validateRetiredOperation(payload: UnknownRecord): void {
+  const cancelled = payload.transition === 'cancelled'
+  exactKeys(payload, ['transition', 'request_kind', ...(cancelled ? ['cancellation_reason'] : ['response_kind', 'settlement'])],
+    ['request', ...(cancelled ? [] : ['cancellation_reason', 'protocol_failure'])], 'retired operation')
+  member(payload.request_kind, PROTOCOL_REQUEST_KINDS_V1, 'retired request kind')
+  if (payload.cancellation_reason !== undefined) {
+    member(payload.cancellation_reason, ['user', 'superseded', 'output_abort', 'timeout', 'lane_race'], 'cancellation reason')
+  }
+  if (!cancelled) {
+    member(payload.response_kind, ['operation_error', 'operation_complete'], 'late response kind')
+    member(payload.settlement, ['remote_final', 'local_cancel', 'session_terminal'], 'retired settlement')
+    if (payload.response_kind === 'operation_error') {
+      const failure = validateProtocolFailure(payload.protocol_failure)
+      if (failure.request_kind !== payload.request_kind) throw new TypeError('Late failure request kind contradicts its trace')
+    } else if (payload.protocol_failure !== undefined) {
+      throw new TypeError('Late completion cannot carry a protocol failure')
+    }
+  }
+  if (payload.request === undefined) return
+  member(payload.request_kind, ['request_blocks', 'release_lease', 'renew_lease'], 'lease request kind')
+  const request = recordValue(payload.request, 'lease request')
+  exactKeys(request, ['lease_id', ...(payload.request_kind === 'request_blocks' ? ['blocks'] : [])], [], 'lease request')
+  if (typeof request.lease_id !== 'string' || !/^[0-9a-f]{32}$/u.test(request.lease_id) || /^0+$/u.test(request.lease_id)) {
+    throw new TypeError('Lease ID must be a nonzero 16-byte hexadecimal identity')
+  }
+  if (request.blocks !== undefined) {
+    const blocks = recordValue(request.blocks, 'block request summary')
+    exactKeys(blocks, ['first_index', 'count'], [], 'block request summary')
+    decimalUint64(blocks.first_index, 'first block index')
+    integerBetween(blocks.count, 1, Number.MAX_SAFE_INTEGER, 'block request count')
   }
 }
 

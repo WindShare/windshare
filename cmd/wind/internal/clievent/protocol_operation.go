@@ -339,10 +339,15 @@ const (
 	SenderContentLeaseRelinquished
 	SenderContentLeaseUndelivered
 	SenderContentLeaseDetached
+	SenderContentBlockLeaseReleased
+	SenderContentBlockLeaseNotOwned
+	SenderContentBlockLeaseExpired
+	SenderContentBlockLeaseInvalid
 )
 
 func (value SenderContentDecisionKind) Name() (string, bool) {
-	names := [...]string{"", "capacity_busy", "lease_relinquished", "lease_undelivered", "lease_detached"}
+	names := [...]string{"", "capacity_busy", "lease_relinquished", "lease_undelivered", "lease_detached",
+		"block_lease_released", "block_lease_not_owned", "block_lease_expired", "block_lease_invalid"}
 	if value == 0 || int(value) >= len(names) {
 		return "", false
 	}
@@ -363,7 +368,7 @@ func NewSenderCapacityDecision(id CapacityDecisionID) (SenderContentDecision, er
 }
 
 func NewSenderLeaseDecision(kind SenderContentDecisionKind, leaseID RevisionLeaseID) (SenderContentDecision, error) {
-	if kind < SenderContentLeaseRelinquished || kind > SenderContentLeaseDetached || !leaseID.Valid() {
+	if kind < SenderContentLeaseRelinquished || kind > SenderContentBlockLeaseInvalid || !leaseID.Valid() {
 		return SenderContentDecision{}, ErrInvalidEvent
 	}
 	return SenderContentDecision{kind: kind, leaseID: leaseID}, nil
@@ -374,7 +379,7 @@ func (value SenderContentDecision) CapacityDecisionID() (CapacityDecisionID, boo
 	return value.capacityDecisionID, value.kind == SenderContentCapacityBusy
 }
 func (value SenderContentDecision) LeaseID() (RevisionLeaseID, bool) {
-	return value.leaseID, value.kind >= SenderContentLeaseRelinquished && value.kind <= SenderContentLeaseDetached
+	return value.leaseID, value.kind >= SenderContentLeaseRelinquished && value.kind <= SenderContentBlockLeaseInvalid
 }
 func (value SenderContentDecision) Valid() bool {
 	_, kindOK := value.kind.Name()
