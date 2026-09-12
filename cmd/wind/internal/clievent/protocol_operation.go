@@ -1,358 +1,15 @@
 package clievent
 
-type ProtocolRole uint8
-
-const (
-	ProtocolRoleReceiver ProtocolRole = iota + 1
-	ProtocolRoleSender
+import (
+	"strings"
+	"time"
+	"unicode/utf8"
 )
 
-func (value ProtocolRole) Name() (string, bool) {
-	names := [...]string{"", "receiver", "sender"}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-type ProtocolOperationStage uint8
-
 const (
-	ProtocolOperationReceiverCompleted ProtocolOperationStage = iota + 1
-	ProtocolOperationReceiverFailed
-	ProtocolOperationReceiverEnded
-	ProtocolOperationSenderRequestReceived
-	ProtocolOperationSenderResponseSettled
-	ProtocolOperationSenderContentDecision
-	ProtocolOperationReceiverWaitingActiveCapacity
-	ProtocolOperationReceiverWaitingRetainedCapacity
-	ProtocolOperationReceiverAdmissionReady
+	protocolErrorRetryAfterMinMillis uint32 = 1
+	protocolErrorRetryAfterMaxMillis uint32 = 30_000
 )
-
-func (value ProtocolOperationStage) Name() (string, bool) {
-	names := [...]string{
-		"", "receiver_completed", "receiver_failed", "receiver_ended",
-		"sender_request_received", "sender_response_settled", "sender_content_decision",
-		"receiver_waiting_active_capacity", "receiver_waiting_retained_capacity", "receiver_admission_ready",
-	}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-type ProtocolMessageKind uint8
-
-const (
-	ProtocolMessageListChildren ProtocolMessageKind = iota + 1
-	ProtocolMessageCatalogResult
-	ProtocolMessageOpenRevisions
-	ProtocolMessageOpenResults
-	ProtocolMessageRenewLease
-	ProtocolMessageReleaseLease
-	ProtocolMessageRequestBlocks
-	ProtocolMessageBlockFragment
-	ProtocolMessageCancel
-	ProtocolMessageOperationError
-	ProtocolMessageSessionTerminal
-	ProtocolMessageLaneAttach
-	ProtocolMessageScanProgress
-	ProtocolMessageOperationComplete
-	ProtocolMessageLeaseResult
-	ProtocolMessagePeerOffer
-	ProtocolMessagePeerAnswer
-	ProtocolMessagePeerCandidate
-)
-
-func (value ProtocolMessageKind) Name() (string, bool) {
-	names := [...]string{
-		"", "list_children", "catalog_result", "open_revisions", "open_results",
-		"renew_lease", "release_lease", "request_blocks", "block_fragment", "cancel",
-		"operation_error", "session_terminal", "lane_attach", "scan_progress",
-		"operation_complete", "lease_result", "peer_offer", "peer_answer", "peer_candidate",
-	}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-func (value ProtocolMessageKind) Request() bool {
-	switch value {
-	case ProtocolMessageListChildren, ProtocolMessageOpenRevisions,
-		ProtocolMessageRenewLease, ProtocolMessageReleaseLease,
-		ProtocolMessageRequestBlocks, ProtocolMessageLaneAttach, ProtocolMessagePeerOffer:
-		return true
-	default:
-		return false
-	}
-}
-
-type ProtocolSendOutcome uint8
-
-const (
-	ProtocolSendUnknown ProtocolSendOutcome = iota
-	ProtocolSendDelivered
-	ProtocolSendDropped
-)
-
-func (value ProtocolSendOutcome) Name() (string, bool) {
-	names := [...]string{"unknown", "delivered", "dropped"}
-	if int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-type ProtocolOperationCause uint8
-
-const (
-	ProtocolOperationCauseNone ProtocolOperationCause = iota
-	ProtocolOperationCauseCanceled
-	ProtocolOperationCauseDeadline
-	ProtocolOperationCauseRuntimeClosed
-	ProtocolOperationCauseLaneUnavailable
-	ProtocolOperationCauseWriterStopped
-	ProtocolOperationCauseOperationClosed
-	ProtocolOperationCauseProtocolFailure
-)
-
-func (value ProtocolOperationCause) Name() (string, bool) {
-	names := [...]string{
-		"none", "canceled", "deadline", "runtime_closed", "lane_unavailable",
-		"writer_stopped", "operation_closed", "protocol_failure",
-	}
-	if int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-type ProtocolFailureScope uint8
-
-const (
-	ProtocolFailureDirectory ProtocolFailureScope = iota + 1
-	ProtocolFailureRevision
-	ProtocolFailureBlock
-	ProtocolFailurePeer
-)
-
-func (value ProtocolFailureScope) Name() (string, bool) {
-	names := [...]string{"", "directory", "revision", "block", "peer"}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-const (
-	protocolFailureRetryAfterMinMillis uint32 = 1
-	protocolFailureRetryAfterMaxMillis uint32 = 30_000
-)
-
-type ProtocolFailureSettlementKind uint8
-
-const (
-	ProtocolFailureReceivedAuthenticated ProtocolFailureSettlementKind = iota + 1
-	ProtocolFailureResponseSend
-)
-
-func (value ProtocolFailureSettlementKind) Name() (string, bool) {
-	names := [...]string{"", "received_authenticated", "response_send"}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
-
-type ProtocolFailureResponseSendSettlement struct {
-	Admitted bool
-	Settled  bool
-	Outcome  ProtocolSendOutcome
-}
-
-type ProtocolFailureSettlement struct {
-	kind     ProtocolFailureSettlementKind
-	admitted bool
-	settled  bool
-	outcome  ProtocolSendOutcome
-}
-
-func (value ProtocolFailureSettlement) Kind() ProtocolFailureSettlementKind {
-	return value.kind
-}
-
-func (value ProtocolFailureSettlement) ResponseSend() (
-	ProtocolFailureResponseSendSettlement,
-	bool,
-) {
-	if value.kind != ProtocolFailureResponseSend {
-		return ProtocolFailureResponseSendSettlement{}, false
-	}
-	return ProtocolFailureResponseSendSettlement{
-		Admitted: value.admitted,
-		Settled:  value.settled,
-		Outcome:  value.outcome,
-	}, true
-}
-
-// ProtocolFailureSpec is deliberately text-free. Authenticated provider
-// messages stay below command projection because even reviewed diagnostics do
-// not need them to correlate or classify an operation failure.
-type ProtocolFailureSpec struct {
-	RequestKind       ProtocolMessageKind
-	WireScope         ProtocolFailureScope
-	WireCode          uint16
-	Retryable         bool
-	RetryAfterMillis  uint32
-	HasRetryAfter     bool
-	ProtocolSession   ProtocolSessionID
-	ProtocolOperation ProtocolOperationID
-	Lane              LaneIdentity
-	HasLane           bool
-}
-
-type ProtocolFailure struct {
-	requestKind       ProtocolMessageKind
-	wireScope         ProtocolFailureScope
-	wireCode          uint16
-	retryable         bool
-	retryAfterMillis  uint32
-	hasRetryAfter     bool
-	protocolSession   ProtocolSessionID
-	protocolOperation ProtocolOperationID
-	lane              LaneIdentity
-	hasLane           bool
-	settlement        ProtocolFailureSettlement
-}
-
-func NewReceivedAuthenticatedProtocolFailure(spec ProtocolFailureSpec) (ProtocolFailure, error) {
-	return newProtocolFailure(spec, ProtocolFailureSettlement{
-		kind: ProtocolFailureReceivedAuthenticated,
-	})
-}
-
-func NewResponseSendProtocolFailure(
-	spec ProtocolFailureSpec,
-	response ProtocolFailureResponseSendSettlement,
-) (ProtocolFailure, error) {
-	if !validProtocolFailureResponseSend(response) {
-		return ProtocolFailure{}, ErrInvalidEvent
-	}
-	return newProtocolFailure(spec, ProtocolFailureSettlement{
-		kind:     ProtocolFailureResponseSend,
-		admitted: response.Admitted,
-		settled:  response.Settled,
-		outcome:  response.Outcome,
-	})
-}
-
-func newProtocolFailure(
-	spec ProtocolFailureSpec,
-	settlement ProtocolFailureSettlement,
-) (ProtocolFailure, error) {
-	if !validProtocolFailureSpec(spec) || !validProtocolFailureSettlement(settlement) {
-		return ProtocolFailure{}, ErrInvalidEvent
-	}
-	return ProtocolFailure{
-		requestKind: spec.RequestKind, wireScope: spec.WireScope,
-		wireCode: spec.WireCode, retryable: spec.Retryable,
-		retryAfterMillis: spec.RetryAfterMillis, hasRetryAfter: spec.HasRetryAfter,
-		protocolSession: spec.ProtocolSession, protocolOperation: spec.ProtocolOperation,
-		lane: spec.Lane, hasLane: spec.HasLane, settlement: settlement,
-	}, nil
-}
-
-func validProtocolFailureSpec(spec ProtocolFailureSpec) bool {
-	_, scopeOK := spec.WireScope.Name()
-	return spec.RequestKind.Request() && scopeOK &&
-		spec.ProtocolSession.Valid() && spec.ProtocolOperation.Valid() &&
-		spec.HasLane == spec.Lane.Valid() &&
-		spec.Retryable == spec.HasRetryAfter &&
-		(spec.HasRetryAfter || spec.RetryAfterMillis == 0) &&
-		(!spec.HasRetryAfter || spec.RetryAfterMillis >= protocolFailureRetryAfterMinMillis &&
-			spec.RetryAfterMillis <= protocolFailureRetryAfterMaxMillis)
-}
-
-func validProtocolFailureSettlement(value ProtocolFailureSettlement) bool {
-	switch value.kind {
-	case ProtocolFailureReceivedAuthenticated:
-		return !value.admitted && !value.settled && value.outcome == ProtocolSendUnknown
-	case ProtocolFailureResponseSend:
-		return validProtocolFailureResponseSend(ProtocolFailureResponseSendSettlement{
-			Admitted: value.admitted,
-			Settled:  value.settled,
-			Outcome:  value.outcome,
-		})
-	default:
-		return false
-	}
-}
-
-func validProtocolFailureResponseSend(value ProtocolFailureResponseSendSettlement) bool {
-	switch value.Outcome {
-	case ProtocolSendUnknown:
-		return true
-	case ProtocolSendDelivered:
-		return value.Settled && value.Admitted
-	case ProtocolSendDropped:
-		return value.Settled
-	default:
-		return false
-	}
-}
-
-func (value ProtocolFailure) IsZero() bool { return value.settlement.kind == 0 }
-
-func (value ProtocolFailure) Valid() bool {
-	return validProtocolFailureSpec(ProtocolFailureSpec{
-		RequestKind: value.requestKind, WireScope: value.wireScope,
-		WireCode: value.wireCode, Retryable: value.retryable,
-		RetryAfterMillis: value.retryAfterMillis, HasRetryAfter: value.hasRetryAfter,
-		ProtocolSession: value.protocolSession, ProtocolOperation: value.protocolOperation,
-		Lane: value.lane, HasLane: value.hasLane,
-	}) && validProtocolFailureSettlement(value.settlement)
-}
-
-func (value ProtocolFailure) RequestKind() ProtocolMessageKind { return value.requestKind }
-func (value ProtocolFailure) WireScope() ProtocolFailureScope  { return value.wireScope }
-func (value ProtocolFailure) WireCode() uint16                 { return value.wireCode }
-func (value ProtocolFailure) Retryable() bool                  { return value.retryable }
-func (value ProtocolFailure) RetryAfterMillis() (uint32, bool) {
-	return value.retryAfterMillis, value.hasRetryAfter
-}
-func (value ProtocolFailure) ProtocolSessionID() ProtocolSessionID {
-	return value.protocolSession
-}
-func (value ProtocolFailure) ProtocolOperationID() ProtocolOperationID {
-	return value.protocolOperation
-}
-func (value ProtocolFailure) Lane() (LaneIdentity, bool) {
-	return value.lane, value.hasLane
-}
-func (value ProtocolFailure) Settlement() ProtocolFailureSettlement { return value.settlement }
-
-type SenderContentDecisionKind uint8
-
-const (
-	SenderContentCapacityBusy SenderContentDecisionKind = iota + 1
-	SenderContentLeaseRelinquished
-	SenderContentLeaseUndelivered
-	SenderContentLeaseDetached
-	SenderContentBlockLeaseReleased
-	SenderContentBlockLeaseNotOwned
-	SenderContentBlockLeaseExpired
-	SenderContentBlockLeaseInvalid
-)
-
-func (value SenderContentDecisionKind) Name() (string, bool) {
-	names := [...]string{"", "capacity_busy", "lease_relinquished", "lease_undelivered", "lease_detached",
-		"block_lease_released", "block_lease_not_owned", "block_lease_expired", "block_lease_invalid"}
-	if value == 0 || int(value) >= len(names) {
-		return "", false
-	}
-	return names[value], true
-}
 
 type SenderContentDecision struct {
 	kind               SenderContentDecisionKind
@@ -392,13 +49,81 @@ func (value SenderContentDecision) Valid() bool {
 	return !value.capacityDecisionID.Valid() && value.leaseID.Valid()
 }
 
+type ProtocolObservationContext struct {
+	Command           Command
+	ObservedAt        time.Time
+	Role              ProtocolRole
+	ProtocolSession   ProtocolSessionID
+	ProtocolOperation ProtocolOperationID
+	RequestKind       ProtocolMessageKind
+}
+
+type ProtocolFact interface{ protocolFact() }
+type ProtocolObservationObserved struct {
+	context ProtocolObservationContext
+	fact    ProtocolFact
+}
+
+func (ProtocolObservationObserved) event()                      {}
+func (value ProtocolObservationObserved) Command() Command      { return value.context.Command }
+func (ProtocolObservationObserved) Level() Level                { return LevelDebug }
+func (value ProtocolObservationObserved) ObservedAt() time.Time { return value.context.ObservedAt }
+func (value ProtocolObservationObserved) Role() ProtocolRole    { return value.context.Role }
+func (value ProtocolObservationObserved) ProtocolSessionID() ProtocolSessionID {
+	return value.context.ProtocolSession
+}
+func (value ProtocolObservationObserved) ProtocolOperationID() ProtocolOperationID {
+	return value.context.ProtocolOperation
+}
+func (value ProtocolObservationObserved) RequestKind() ProtocolMessageKind {
+	return value.context.RequestKind
+}
+func (value ProtocolObservationObserved) Fact() ProtocolFact { return value.fact }
+func (value ProtocolObservationObserved) Accept(visitor Visitor) error {
+	return acceptProtocolObservationObserved(visitor, value)
+}
+func validProtocolObservation(value ProtocolObservationObserved) bool {
+	return validateProtocolContext(value.context) == nil && value.fact != nil
+}
+func validateProtocolContext(value ProtocolObservationContext) error {
+	_, roleOK := value.Role.Name()
+	switch {
+	case !value.Command.Valid():
+		return EventContractError{Field: "command", Rule: "known_enum"}
+	case !roleOK:
+		return EventContractError{Field: "role", Rule: "known_enum"}
+	case value.ObservedAt.IsZero():
+		return EventContractError{Field: "observed_at", Rule: "source_timestamp"}
+	case !value.ProtocolSession.Valid():
+		return EventContractError{Field: "protocol_session_id", Rule: "nonzero_16_bytes"}
+	case !value.ProtocolOperation.Valid():
+		return EventContractError{Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
+	case value.RequestKind != 0 && !value.RequestKind.Request():
+		return EventContractError{Field: "request_kind", Rule: "request_message"}
+	}
+	return nil
+}
+func newProtocolObservation(context ProtocolObservationContext, fact ProtocolFact) (ProtocolObservationObserved, error) {
+	if context.RequestKind == 0 {
+		if _, notStarted := fact.(ResponseSendNotStartedFact); !notStarted {
+			return ProtocolObservationObserved{}, EventContractError{Field: "request_kind", Rule: "request_message"}
+		}
+	}
+	if err := validateProtocolContext(context); err != nil {
+		return ProtocolObservationObserved{}, err
+	}
+	context.ObservedAt = context.ObservedAt.UTC()
+	return ProtocolObservationObserved{context: context, fact: fact}, nil
+}
+
 type ProtocolOperationSpec struct {
 	Command                 Command
+	ObservedAt              time.Time
 	Role                    ProtocolRole
-	Stage                   ProtocolOperationStage
 	ProtocolSession         ProtocolSessionID
 	ProtocolOperation       ProtocolOperationID
 	RequestKind             ProtocolMessageKind
+	Stage                   ProtocolOperationStage
 	ResponseKind            ProtocolMessageKind
 	HasResponse             bool
 	Lane                    LaneIdentity
@@ -413,90 +138,53 @@ type ProtocolOperationSpec struct {
 	OperationElapsedMillis  uint64
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
-	Failure                 ProtocolFailure
 	Cause                   ProtocolOperationCause
-	ContentDecision         SenderContentDecision
 }
+type ProtocolOperationFact struct{ spec ProtocolOperationSpec }
 
-type ProtocolOperationObserved struct{ spec ProtocolOperationSpec }
-
-func NewProtocolOperationObserved(spec ProtocolOperationSpec) (ProtocolOperationObserved, error) {
+func (ProtocolOperationFact) protocolFact() {}
+func NewProtocolOperationObserved(spec ProtocolOperationSpec) (ProtocolObservationObserved, error) {
 	if err := validateProtocolOperationSpec(spec); err != nil {
-		return ProtocolOperationObserved{}, err
+		return ProtocolObservationObserved{}, err
 	}
-	return ProtocolOperationObserved{spec: spec}, nil
+	return newProtocolObservation(spec.context(), ProtocolOperationFact{spec: spec})
 }
-
-func validProtocolOperationSpec(spec ProtocolOperationSpec) bool {
-	return validateProtocolOperationSpec(spec) == nil
-}
-
 func validateProtocolOperationSpec(spec ProtocolOperationSpec) error {
-	_, roleOK := spec.Role.Name()
+	if err := validateProtocolContext(spec.context()); err != nil {
+		return err
+	}
 	_, stageOK := spec.Stage.Name()
-	_, requestOK := spec.RequestKind.Name()
 	_, responseOK := spec.ResponseKind.Name()
 	_, sendOK := spec.SendOutcome.Name()
 	_, causeOK := spec.Cause.Name()
-	protocolFailureOK := validProtocolOperationFailure(spec)
-	contentDecisionOK := spec.ContentDecision.Valid()
-	if spec.Stage != ProtocolOperationSenderContentDecision &&
-		(contentDecisionOK || spec.ContentDecision != (SenderContentDecision{})) {
-		return EventContractError{Field: "content_decision", Rule: "only_on_sender_content_decision"}
-	}
 	switch {
-	case !spec.Command.Valid():
-		return EventContractError{Field: "command", Rule: "known_enum"}
-	case !roleOK:
-		return EventContractError{Field: "role", Rule: "known_enum"}
 	case !stageOK:
 		return EventContractError{Field: "stage", Rule: "known_enum"}
-	case !requestOK || !spec.RequestKind.Request():
-		return EventContractError{Field: "request_kind", Rule: "request_message"}
-	case !sendOK:
-		return EventContractError{Field: "send_outcome", Rule: "known_enum"}
 	case !causeOK:
 		return EventContractError{Field: "cause", Rule: "known_enum"}
-	case !protocolFailureOK:
-		return EventContractError{Field: "protocol_failure", Rule: "matching_operation_lane_and_settlement"}
-	case !spec.ProtocolSession.Valid():
-		return EventContractError{Field: "protocol_session_id", Rule: "nonzero_16_bytes"}
-	case !spec.ProtocolOperation.Valid():
-		return EventContractError{Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
+	case spec.HasSend && !sendOK:
+		return EventContractError{Field: "send_outcome", Rule: "known_enum"}
 	case spec.HasLane != spec.Lane.Valid():
 		return EventContractError{Field: "lane", Rule: "presence_matches_identity"}
 	case spec.HasResponse != responseOK:
 		return EventContractError{Field: "response_kind", Rule: "presence_matches_kind"}
 	case !spec.HasDeadline && spec.DeadlineRemainingMillis != 0:
 		return EventContractError{Field: "deadline", Rule: "value_requires_presence"}
-	case !spec.HasSend && (spec.SendSettled || spec.SendAdmitted || spec.SendOutcome != ProtocolSendUnknown):
+	case !spec.HasSend && (spec.SendSettled || spec.SendAdmitted || spec.SendOutcome != ProtocolSendUninitialized):
 		return EventContractError{Field: "send", Rule: "settlement_requires_presence"}
 	}
 	validStage := false
 	switch spec.Stage {
-	case ProtocolOperationReceiverWaitingActiveCapacity, ProtocolOperationReceiverWaitingRetainedCapacity,
-		ProtocolOperationReceiverAdmissionReady:
-		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
-			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
+	case ProtocolOperationReceiverWaitingActiveCapacity, ProtocolOperationReceiverWaitingRetainedCapacity, ProtocolOperationReceiverAdmissionReady:
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver && !spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationReceiverCompleted:
-		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
-			spec.HasResponse && spec.ResponseCount != 0 && spec.Cause == ProtocolOperationCauseNone
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver && spec.HasResponse && spec.ResponseCount != 0 && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationReceiverFailed:
-		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
-			spec.Cause != ProtocolOperationCauseNone
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver && spec.Cause != ProtocolOperationCauseNone
 	case ProtocolOperationReceiverEnded:
-		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
-			spec.Cause == ProtocolOperationCauseNone
+		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver && spec.Cause == ProtocolOperationCauseNone
 	case ProtocolOperationSenderRequestReceived:
-		validStage = !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
-			spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
-			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
-	case ProtocolOperationSenderResponseSettled:
-		validStage = !contentDecisionOK && spec.ContentDecision == (SenderContentDecision{}) &&
-			spec.Command == CommandShare && spec.Role == ProtocolRoleSender && spec.HasResponse
-	case ProtocolOperationSenderContentDecision:
-		validStage = contentDecisionOK && spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
-			!spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone && spec.Failure.IsZero()
+		validStage = spec.Command == CommandShare && spec.Role == ProtocolRoleSender && !spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	}
 	if !validStage {
 		stage, _ := spec.Stage.Name()
@@ -504,81 +192,297 @@ func validateProtocolOperationSpec(spec ProtocolOperationSpec) error {
 	}
 	return nil
 }
-
-func validProtocolOperationFailure(spec ProtocolOperationSpec) bool {
-	failure := spec.Failure
-	if failure.IsZero() {
-		return failure == (ProtocolFailure{})
-	}
-	if !failure.Valid() || !spec.HasResponse || spec.ResponseKind != ProtocolMessageOperationError ||
-		failure.ProtocolSessionID() != spec.ProtocolSession ||
-		failure.ProtocolOperationID() != spec.ProtocolOperation ||
-		failure.RequestKind() != spec.RequestKind {
-		return false
-	}
-	failureLane, failureHasLane := failure.Lane()
-	if failureHasLane != spec.HasLane || failureHasLane && failureLane != spec.Lane {
-		return false
-	}
-	switch failure.Settlement().Kind() {
-	case ProtocolFailureReceivedAuthenticated:
-		return spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
-			spec.Stage == ProtocolOperationReceiverFailed &&
-			spec.Cause == ProtocolOperationCauseProtocolFailure
-	case ProtocolFailureResponseSend:
-		response, present := failure.Settlement().ResponseSend()
-		return present && spec.Command == CommandShare && spec.Role == ProtocolRoleSender &&
-			spec.Stage == ProtocolOperationSenderResponseSettled && spec.HasSend &&
-			spec.SendAdmitted == response.Admitted && spec.SendSettled == response.Settled &&
-			spec.SendOutcome == response.Outcome
-	default:
-		return false
-	}
-}
-
-func (ProtocolOperationObserved) event()                              {}
-func (value ProtocolOperationObserved) Command() Command              { return value.spec.Command }
-func (ProtocolOperationObserved) Level() Level                        { return LevelDebug }
-func (value ProtocolOperationObserved) Role() ProtocolRole            { return value.spec.Role }
-func (value ProtocolOperationObserved) Stage() ProtocolOperationStage { return value.spec.Stage }
-func (value ProtocolOperationObserved) ProtocolSessionID() ProtocolSessionID {
-	return value.spec.ProtocolSession
-}
-func (value ProtocolOperationObserved) ProtocolOperationID() ProtocolOperationID {
-	return value.spec.ProtocolOperation
-}
-func (value ProtocolOperationObserved) RequestKind() ProtocolMessageKind {
-	return value.spec.RequestKind
-}
-func (value ProtocolOperationObserved) ResponseKind() (ProtocolMessageKind, bool) {
+func (value ProtocolOperationFact) Stage() ProtocolOperationStage { return value.spec.Stage }
+func (value ProtocolOperationFact) ResponseKind() (ProtocolMessageKind, bool) {
 	return value.spec.ResponseKind, value.spec.HasResponse
 }
-func (value ProtocolOperationObserved) Lane() (LaneIdentity, bool) {
+func (value ProtocolOperationFact) Lane() (LaneIdentity, bool) {
 	return value.spec.Lane, value.spec.HasLane
 }
-func (value ProtocolOperationObserved) Send() (ProtocolSendOutcome, bool, bool, bool) {
+func (value ProtocolOperationFact) Send() (ProtocolSendOutcome, bool, bool, bool) {
 	return value.spec.SendOutcome, value.spec.SendSettled, value.spec.SendAdmitted, value.spec.HasSend
 }
-func (value ProtocolOperationObserved) ResponseCount() uint64 { return value.spec.ResponseCount }
-func (value ProtocolOperationObserved) DeadlineRemainingMillis() (uint64, bool) {
+func (value ProtocolOperationFact) ResponseCount() uint64 { return value.spec.ResponseCount }
+func (value ProtocolOperationFact) DeadlineRemainingMillis() (uint64, bool) {
 	return value.spec.DeadlineRemainingMillis, value.spec.HasDeadline
 }
-func (value ProtocolOperationObserved) OperationElapsedMillis() uint64 {
+func (value ProtocolOperationFact) OperationElapsedMillis() uint64 {
 	return value.spec.OperationElapsedMillis
 }
-func (value ProtocolOperationObserved) UsableLanesAtSelection() uint32 {
+func (value ProtocolOperationFact) UsableLanesAtSelection() uint32 {
 	return value.spec.UsableLanesAtSelection
 }
-func (value ProtocolOperationObserved) UsableLanesAtSettlement() uint32 {
+func (value ProtocolOperationFact) UsableLanesAtSettlement() uint32 {
 	return value.spec.UsableLanesAtSettlement
 }
-func (value ProtocolOperationObserved) Failure() (ProtocolFailure, bool) {
-	return value.spec.Failure, !value.spec.Failure.IsZero()
+func (value ProtocolOperationFact) Cause() ProtocolOperationCause { return value.spec.Cause }
+
+type ProtocolErrorContentSpec struct {
+	WireScope        ProtocolErrorScope
+	WireCode         uint16
+	Retryable        bool
+	RetryAfterMillis uint32
+	HasRetryAfter    bool
 }
-func (value ProtocolOperationObserved) Cause() ProtocolOperationCause { return value.spec.Cause }
-func (value ProtocolOperationObserved) ContentDecision() (SenderContentDecision, bool) {
-	return value.spec.ContentDecision, value.spec.ContentDecision.Valid()
+type ProtocolErrorContent struct{ spec ProtocolErrorContentSpec }
+
+func NewProtocolErrorContent(spec ProtocolErrorContentSpec) (ProtocolErrorContent, error) {
+	_, ok := spec.WireScope.Name()
+	if !ok {
+		return ProtocolErrorContent{}, EventContractError{Field: "protocol_error.scope", Rule: "known_enum"}
+	}
+	if spec.Retryable != spec.HasRetryAfter || (!spec.HasRetryAfter && spec.RetryAfterMillis != 0) || (spec.HasRetryAfter && (spec.RetryAfterMillis < protocolErrorRetryAfterMinMillis || spec.RetryAfterMillis > protocolErrorRetryAfterMaxMillis)) {
+		return ProtocolErrorContent{}, EventContractError{Field: "protocol_error.retry_after_ms", Rule: "retry_hint_bounds"}
+	}
+	return ProtocolErrorContent{spec: spec}, nil
 }
-func (value ProtocolOperationObserved) Accept(visitor Visitor) error {
-	return acceptProtocolOperationObserved(visitor, value)
+func (value ProtocolErrorContent) IsZero() bool                  { return value == ProtocolErrorContent{} }
+func (value ProtocolErrorContent) WireScope() ProtocolErrorScope { return value.spec.WireScope }
+func (value ProtocolErrorContent) WireCode() uint16              { return value.spec.WireCode }
+func (value ProtocolErrorContent) Retryable() bool               { return value.spec.Retryable }
+func (value ProtocolErrorContent) RetryAfterMillis() (uint32, bool) {
+	return value.spec.RetryAfterMillis, value.spec.HasRetryAfter
 }
+
+type SenderContentDecisionFact struct {
+	decision SenderContentDecision
+	lane     LaneIdentity
+	hasLane  bool
+}
+
+func (SenderContentDecisionFact) protocolFact()                         {}
+func (value SenderContentDecisionFact) Decision() SenderContentDecision { return value.decision }
+func (value SenderContentDecisionFact) Lane() (LaneIdentity, bool)      { return value.lane, value.hasLane }
+func NewSenderContentDecisionObserved(context ProtocolObservationContext, decision SenderContentDecision, lane LaneIdentity, hasLane bool) (ProtocolObservationObserved, error) {
+	if !decision.Valid() || context.Role != ProtocolRoleSender || context.Command != CommandShare {
+		return ProtocolObservationObserved{}, EventContractError{Field: "content_decision", Rule: "sender_decision"}
+	}
+	if hasLane != lane.Valid() {
+		return ProtocolObservationObserved{}, EventContractError{Field: "lane", Rule: "presence_matches_identity"}
+	}
+	return newProtocolObservation(context, SenderContentDecisionFact{decision: decision, lane: lane, hasLane: hasLane})
+}
+
+type ReceivedProtocolErrorFact struct {
+	content ProtocolErrorContent
+	lane    LaneIdentity
+}
+
+func (ReceivedProtocolErrorFact) protocolFact()                       {}
+func (value ReceivedProtocolErrorFact) Content() ProtocolErrorContent { return value.content }
+func (value ReceivedProtocolErrorFact) Lane() LaneIdentity            { return value.lane }
+func NewReceivedProtocolErrorObserved(context ProtocolObservationContext, content ProtocolErrorContent, lane LaneIdentity) (ProtocolObservationObserved, error) {
+	if content.IsZero() || !lane.Valid() {
+		return ProtocolObservationObserved{}, EventContractError{Field: "protocol_error", Rule: "received_content_and_lane"}
+	}
+	return newProtocolObservation(context, ReceivedProtocolErrorFact{content: content, lane: lane})
+}
+
+const MaxProtocolSendAttempts = 16
+
+type SendAttemptSpec struct {
+	Cause                   SendAttemptCause
+	AttemptSequence         uint32
+	Lane                    LaneIdentity
+	PolicyAdmitted          bool
+	Settled                 bool
+	Outcome                 ProtocolSendOutcome
+	TransportDisposition    SendDisposition
+	HasTransportDisposition bool
+	End                     SendAttemptEnd
+}
+type SendAttemptSnapshot struct{ spec SendAttemptSpec }
+
+func NewSendAttemptSnapshot(spec SendAttemptSpec) (SendAttemptSnapshot, error) {
+	_, outcomeOK := spec.Outcome.Name()
+	_, endOK := spec.End.Name()
+	_, transportOK := spec.TransportDisposition.Name()
+	switch {
+	case spec.AttemptSequence == 0 || spec.AttemptSequence > MaxProtocolSendAttempts:
+		return SendAttemptSnapshot{}, EventContractError{Field: "attempt.attempt_sequence", Rule: "bounded_nonzero_sequence"}
+	case !spec.Lane.Valid():
+		return SendAttemptSnapshot{}, EventContractError{Field: "attempt.lane", Rule: "valid_lane_identity"}
+	case !outcomeOK:
+		return SendAttemptSnapshot{}, EventContractError{Field: "attempt.outcome", Rule: "known_enum"}
+	case !endOK:
+		return SendAttemptSnapshot{}, EventContractError{Field: "attempt.end", Rule: "known_enum"}
+	case spec.HasTransportDisposition && !transportOK:
+		return SendAttemptSnapshot{}, EventContractError{Field: "attempt.transport_disposition", Rule: "known_enum"}
+	}
+	return SendAttemptSnapshot{spec: spec}, nil
+}
+func (value SendAttemptSnapshot) AttemptSequence() uint32      { return value.spec.AttemptSequence }
+func (value SendAttemptSnapshot) Lane() LaneIdentity           { return value.spec.Lane }
+func (value SendAttemptSnapshot) PolicyAdmitted() bool         { return value.spec.PolicyAdmitted }
+func (value SendAttemptSnapshot) Settled() bool                { return value.spec.Settled }
+func (value SendAttemptSnapshot) Outcome() ProtocolSendOutcome { return value.spec.Outcome }
+func (value SendAttemptSnapshot) TransportDisposition() (SendDisposition, bool) {
+	return value.spec.TransportDisposition, value.spec.HasTransportDisposition
+}
+func (value SendAttemptSnapshot) End() SendAttemptEnd { return value.spec.End }
+
+type ResponseSendResultSpec struct {
+	Started                bool
+	Evidence               ResponseSendEvidence
+	End                    ResponseSendEnd
+	Cleanup                SendCleanupKind
+	Attempts               []SendAttemptSnapshot
+	PendingAttemptSequence uint32
+	HasPendingAttempt      bool
+}
+
+// The projection copies evidence verbatim; the executor remains the sole owner
+// of aggregation and receipt semantics.
+type ResponseSendResult struct {
+	started                bool
+	evidence               ResponseSendEvidence
+	end                    ResponseSendEnd
+	cleanup                SendCleanupKind
+	attempts               [MaxProtocolSendAttempts]SendAttemptSnapshot
+	attemptCount           int
+	pendingAttemptSequence uint32
+	hasPendingAttempt      bool
+}
+
+func NewResponseSendResult(spec ResponseSendResultSpec) (ResponseSendResult, error) {
+	_, evidenceOK := spec.Evidence.Name()
+	_, endOK := spec.End.Name()
+	_, cleanupOK := spec.Cleanup.Name()
+	switch {
+	case !evidenceOK:
+		return ResponseSendResult{}, EventContractError{Field: "response_result.evidence", Rule: "known_enum"}
+	case !endOK:
+		return ResponseSendResult{}, EventContractError{Field: "response_result.end", Rule: "known_enum"}
+	case !cleanupOK:
+		return ResponseSendResult{}, EventContractError{Field: "response_result.cleanup", Rule: "known_enum"}
+	case len(spec.Attempts) > MaxProtocolSendAttempts:
+		return ResponseSendResult{}, EventContractError{Field: "response_result.attempts", Rule: "bounded_history"}
+	case spec.HasPendingAttempt && (spec.PendingAttemptSequence == 0 || spec.PendingAttemptSequence > MaxProtocolSendAttempts):
+		return ResponseSendResult{}, EventContractError{Field: "response_result.pending_attempt_sequence", Rule: "bounded_nonzero_sequence"}
+	}
+	value := ResponseSendResult{started: spec.Started, evidence: spec.Evidence, end: spec.End, cleanup: spec.Cleanup, attemptCount: len(spec.Attempts), pendingAttemptSequence: spec.PendingAttemptSequence, hasPendingAttempt: spec.HasPendingAttempt}
+	for i, attempt := range spec.Attempts {
+		if _, err := NewSendAttemptSnapshot(attempt.spec); err != nil {
+			return ResponseSendResult{}, err
+		}
+		value.attempts[i] = attempt
+	}
+	return value, nil
+}
+func (value ResponseSendResult) Started() bool                  { return value.started }
+func (value ResponseSendResult) Evidence() ResponseSendEvidence { return value.evidence }
+func (value ResponseSendResult) End() ResponseSendEnd           { return value.end }
+func (value ResponseSendResult) Cleanup() SendCleanupKind       { return value.cleanup }
+func (value ResponseSendResult) AttemptCount() int              { return value.attemptCount }
+func (value ResponseSendResult) Attempt(index int) (SendAttemptSnapshot, bool) {
+	if index < 0 || index >= value.attemptCount {
+		return SendAttemptSnapshot{}, false
+	}
+	return value.attempts[index], true
+}
+func (value ResponseSendResult) PendingAttemptSequence() (uint32, bool) {
+	return value.pendingAttemptSequence, value.hasPendingAttempt
+}
+
+type ResponseSendNotStartedFact struct {
+	responseSequence uint64
+	responseKind     ProtocolMessageKind
+	content          ProtocolErrorContent
+	result           ResponseSendResult
+}
+type ResponseSendReturnedFact struct {
+	responseSequence uint64
+	responseKind     ProtocolMessageKind
+	content          ProtocolErrorContent
+	result           ResponseSendResult
+}
+
+func (ResponseSendNotStartedFact) protocolFact() {}
+func (ResponseSendReturnedFact) protocolFact()   {}
+func NewResponseSendNotStartedObserved(context ProtocolObservationContext, sequence uint64, kind ProtocolMessageKind, content ProtocolErrorContent, result ResponseSendResult) (ProtocolObservationObserved, error) {
+	if err := validateResponseSend(sequence, kind, result); err != nil {
+		return ProtocolObservationObserved{}, err
+	}
+	if result.Started() {
+		return ProtocolObservationObserved{}, EventContractError{Field: "response_result.started", Rule: "not_started_fact"}
+	}
+	return newProtocolObservation(context, ResponseSendNotStartedFact{sequence, kind, content, result})
+}
+func NewResponseSendReturnedObserved(context ProtocolObservationContext, sequence uint64, kind ProtocolMessageKind, content ProtocolErrorContent, result ResponseSendResult) (ProtocolObservationObserved, error) {
+	if err := validateResponseSend(sequence, kind, result); err != nil {
+		return ProtocolObservationObserved{}, err
+	}
+	if !result.Started() {
+		return ProtocolObservationObserved{}, EventContractError{Field: "response_result.started", Rule: "returned_fact"}
+	}
+	return newProtocolObservation(context, ResponseSendReturnedFact{sequence, kind, content, result})
+}
+func validateResponseSend(sequence uint64, kind ProtocolMessageKind, result ResponseSendResult) error {
+	if sequence == 0 {
+		return EventContractError{Field: "response_sequence", Rule: "nonzero_sequence"}
+	}
+	if _, ok := kind.Name(); !ok {
+		return EventContractError{Field: "response_kind", Rule: "known_enum"}
+	}
+	if _, ok := result.Evidence().Name(); !ok {
+		return EventContractError{Field: "response_result", Rule: "initialized"}
+	}
+	return nil
+}
+
+type SendAttemptSettledFact struct {
+	responseSequence uint64
+	responseKind     ProtocolMessageKind
+	attempt          SendAttemptSnapshot
+}
+
+func (SendAttemptSettledFact) protocolFact()                           {}
+func (value SendAttemptSettledFact) ResponseSequence() uint64          { return value.responseSequence }
+func (value SendAttemptSettledFact) ResponseKind() ProtocolMessageKind { return value.responseKind }
+func (value SendAttemptSettledFact) Attempt() SendAttemptSnapshot      { return value.attempt }
+func NewSendAttemptSettledObserved(context ProtocolObservationContext, sequence uint64, kind ProtocolMessageKind, attempt SendAttemptSnapshot) (ProtocolObservationObserved, error) {
+	if sequence == 0 {
+		return ProtocolObservationObserved{}, EventContractError{Field: "response_sequence", Rule: "nonzero_sequence"}
+	}
+	if _, ok := kind.Name(); !ok {
+		return ProtocolObservationObserved{}, EventContractError{Field: "response_kind", Rule: "known_enum"}
+	}
+	if _, err := NewSendAttemptSnapshot(attempt.spec); err != nil {
+		return ProtocolObservationObserved{}, err
+	}
+	return newProtocolObservation(context, SendAttemptSettledFact{sequence, kind, attempt})
+}
+func (value ResponseSendNotStartedFact) ResponseSequence() uint64          { return value.responseSequence }
+func (value ResponseSendNotStartedFact) ResponseKind() ProtocolMessageKind { return value.responseKind }
+func (value ResponseSendNotStartedFact) Content() ProtocolErrorContent     { return value.content }
+func (value ResponseSendNotStartedFact) Result() ResponseSendResult        { return value.result }
+func (value ResponseSendReturnedFact) ResponseSequence() uint64            { return value.responseSequence }
+func (value ResponseSendReturnedFact) ResponseKind() ProtocolMessageKind   { return value.responseKind }
+func (value ResponseSendReturnedFact) Content() ProtocolErrorContent       { return value.content }
+func (value ResponseSendReturnedFact) Result() ResponseSendResult          { return value.result }
+
+func (spec ProtocolOperationSpec) context() ProtocolObservationContext {
+	return ProtocolObservationContext{Command: spec.Command, ObservedAt: spec.ObservedAt, Role: spec.Role, ProtocolSession: spec.ProtocolSession, ProtocolOperation: spec.ProtocolOperation, RequestKind: spec.RequestKind}
+}
+
+const MaximumSendAttemptCauseDetailBytes = 256
+
+type SendAttemptCause struct {
+	kind      SendAttemptCauseKind
+	detail    string
+	truncated bool
+}
+
+func NewSendAttemptCause(kind SendAttemptCauseKind, detail string, truncated bool) (SendAttemptCause, error) {
+	if _, ok := kind.Name(); !ok {
+		return SendAttemptCause{}, EventContractError{Field: "attempt.cause.kind", Rule: "known_enum"}
+	}
+	if !utf8.ValidString(detail) || len(detail) > MaximumSendAttemptCauseDetailBytes {
+		return SendAttemptCause{}, EventContractError{Field: "attempt.cause.detail", Rule: "bounded_utf8"}
+	}
+	return SendAttemptCause{kind: kind, detail: strings.Clone(detail), truncated: truncated}, nil
+}
+func (value SendAttemptCause) Kind() SendAttemptCauseKind { return value.kind }
+func (value SendAttemptCause) Detail() string             { return value.detail }
+func (value SendAttemptCause) Truncated() bool            { return value.truncated }
+func (value SendAttemptSnapshot) Cause() SendAttemptCause { return value.spec.Cause }

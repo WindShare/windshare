@@ -588,7 +588,7 @@ func (session senderPeerSession) SendPeerControl(
 		return protocolsession.OperationDrop, ErrRuntimeConfig
 	}
 	outcome, err := session.outbound.SendControl(ctx, kind, operationID, body)
-	if outcome == protocolsession.SendOutcomeDropped {
+	if outcome.Evidence() == protocolsession.ResponseSendEvidenceDefinitelyNotSent {
 		return protocolsession.OperationDrop, err
 	}
 	return protocolsession.OperationDeliver, err

@@ -191,9 +191,9 @@ test('receives an explicit directory artifact from the real sender and relay', a
     if (joined === null) throw new Error('Shared protocol correlation disappeared after observation')
     expect(joined.correlation.protocolSessionId).toMatch(BASE64URL_IDENTITY_PATTERN)
     expect(joined.correlation.protocolOperationId).toMatch(BASE64URL_IDENTITY_PATTERN)
-    expect(joined.browser).toMatchObject({ schemaVersion: 1, event: 'protocol_operation' })
+    expect(joined.browser).toMatchObject({ schemaVersion: 2, event: 'protocol_operation' })
     expect(joined.sender).toMatchObject({
-      schemaVersion: 3,
+      schemaVersion: 4,
       event: 'protocol_operation',
       command: 'share',
     })

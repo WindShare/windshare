@@ -14,6 +14,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	framechannel "github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -109,7 +110,7 @@ type SenderFactoryConfig struct {
 	TerminalTimeout         time.Duration
 	TerminalSendObserver    SenderTerminalSendObserver
 	SessionTerminalObserver SenderSessionTerminalObserver
-	ProtocolTracer          ProtocolOperationTracer
+	ProtocolObservations    observationstream.Producer[ProtocolObservation]
 }
 
 type SenderFactory struct {
@@ -128,7 +129,7 @@ type SenderFactory struct {
 	terminalConnectivity TerminalConnectivity
 	terminalTimeout      time.Duration
 	terminalObserver     *senderTerminalObservers
-	protocolTracer       ProtocolOperationTracer
+	protocolObservations observationstream.Producer[ProtocolObservation]
 	admissionContext     context.Context
 	cancelAdmissions     context.CancelFunc
 
@@ -184,8 +185,8 @@ func NewSenderFactory(config SenderFactoryConfig) (*SenderFactory, error) {
 			config.TerminalSendObserver,
 			config.SessionTerminalObserver,
 		),
-		protocolTracer:   config.ProtocolTracer,
-		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
+		protocolObservations: config.ProtocolObservations,
+		admissionContext:     admissionContext, cancelAdmissions: cancelAdmissions,
 		sessions: make(map[protocolsession.ProtocolSessionID]*SenderRuntime), terminalDone: make(chan struct{}),
 	}, nil
 }
@@ -324,7 +325,7 @@ func (factory *SenderFactory) acceptClient(
 		),
 		Continuations:   factory.peers,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
-		ProtocolTracer:          factory.protocolTracer,
+		ProtocolObservations:    factory.protocolObservations,
 		SessionTerminalObserver: factory.terminalObserver.sessionObserver(),
 	})
 	if err != nil {
@@ -366,10 +367,9 @@ func (factory *SenderFactory) acceptClient(
 	contentHandler, err := contentflow.NewSenderHandler(contentflow.SenderHandlerConfig{
 		Service: contentService, Outbound: outbound,
 		DecisionTracer: contentflow.SenderDecisionTraceFunc(func(decision contentflow.SenderDecisionTrace) {
-			runtime.traceProtocolOperation(ProtocolOperationTrace{
-				Stage: ProtocolOperationSenderContentDecision, OperationID: decision.OperationID,
-				RequestKind: decision.RequestKind, ContentDecision: decision,
-			})
+			if runtime.protocolOperationTracingEnabled() {
+				runtime.protocolObservations.TryPublish(NewSenderContentDecision(runtime.observationContext(decision.OperationID, decision.RequestKind), decision, LaneIdentity{}, false))
+			}
 		}),
 	})
 	if err != nil {
@@ -514,27 +514,14 @@ func (outbound senderOutbound) SendFragment(ctx context.Context, message protoco
 	if !ok {
 		return ErrOperationMissing
 	}
-	transaction, err := beginOutboundTransaction(outbound.runtime, ctx, operationID)
-	if err != nil {
-		return err
-	}
-	defer transaction.Close()
-	_, err = transaction.Run(ctx, func(
-		lane selectedLane,
-		permit protocolsession.OutboundReplayPermit,
-	) (protocolsession.SendReceipt, error) {
-		if !permit.IsZero() {
-			return lane.writer.TryDataReplay(message, permit)
-		}
-		return lane.writer.TryAuthorizedData(message, transaction.authority)
+	_, err := outbound.executeResponse(ctx, message.Kind(), operationID, ProtocolErrorContent{}, func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
+		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
+			if !permit.IsZero() {
+				return lane.writer.TryDataReplay(message, permit)
+			}
+			return lane.writer.TryAuthorizedData(message, transaction.authority)
+		}, nil
 	})
-	if ctx.Err() != nil || outbound.runtime.ctx.Err() != nil {
-		err = errors.Join(
-			err, outbound.runtime.abandonOutboundOperation(
-				operationID, transaction.route, transaction.generation,
-			),
-		)
-	}
 	return err
 }
 
@@ -545,7 +532,8 @@ func (outbound senderOutbound) SendOperationError(
 ) error {
 	body, err := protocolsession.EncodeOperationFailure(failure)
 	if err != nil {
-		return errors.Join(err, outbound.runtime.abandonBoundOutboundOperation(ctx, operationID))
+		_, sendErr := outbound.executeResponse(ctx, protocolsession.MessageOperationError, operationID, ProtocolErrorContent{}, func(*outboundTransaction) (outboundLaneAttempt, error) { return nil, err })
+		return sendErr
 	}
 	_, err = outbound.SendControl(ctx, protocolsession.MessageOperationError, operationID, body)
 	return err

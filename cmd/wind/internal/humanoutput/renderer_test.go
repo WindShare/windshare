@@ -238,14 +238,14 @@ func rendererEvents(t *testing.T) []visibilityExpectation {
 	if err != nil {
 		t.Fatal(err)
 	}
-	protocolOperation, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+	protocolOperation, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{ObservedAt: time.Unix(1, 0),
 		Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
 		Stage:           clievent.ProtocolOperationReceiverFailed,
 		ProtocolSession: sessionID, ProtocolOperation: protocolOperationID,
 		RequestKind: clievent.ProtocolMessageReleaseLease,
 		Lane:        lane, HasLane: true,
 		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome:            clievent.ProtocolSendDelivered,
+		SendOutcome:            clievent.ProtocolSendTransportConfirmed,
 		OperationElapsedMillis: 30_000,
 		Cause:                  clievent.ProtocolOperationCauseDeadline,
 	})

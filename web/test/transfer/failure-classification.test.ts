@@ -3,7 +3,7 @@ import { V2RemoteOperationError } from '../../src/content/v2-session-services'
 import {
   createFailureIdentity,
   createIncidentScopeIssuer,
-  createProtocolFailure,
+  createReceivedProtocolError,
   type IncidentScopeHandle,
   type IncidentScopeObserver,
 } from '../../src/diagnostics/incident'
@@ -98,17 +98,13 @@ describe('transfer failure classification', () => {
   })
 
   it('reuses the authenticated protocol fact while producing product fault authority', () => {
-    const remote = new V2RemoteOperationError(createProtocolFailure({
-      requestKind: 'request_blocks',
-      wireScope: 'block',
-      wireCode: 0xffff,
-      retryable: true,
-      retryAfterMilliseconds: 250,
-      settlement: Object.freeze({ kind: 'received_authenticated' }),
-      correlation: {
+    const remote = new V2RemoteOperationError(createReceivedProtocolError({
+      requestKind: 'request_blocks', correlation: {
         protocolSessionId: createFailureIdentity('protocol_session', identityBytes(1)),
-        protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(2)),
-      },
+        protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(2))
+      }, content: {
+        scope: 'block', code: 0xffff, retryable: true, retryAfterMilliseconds: 250
+      }
     }))
 
     const normalized = normalizeV2FileTransferFailure(remote)

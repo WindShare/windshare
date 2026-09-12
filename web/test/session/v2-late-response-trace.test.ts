@@ -6,7 +6,7 @@ import { V2OperationRouter } from '../../src/session/v2-operation-router'
 import { encodeV2Body, encodeV2Message, V2_MESSAGE_KIND } from '../../src/session/v2-message'
 import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
 import { V2_OPERATION_CANCEL_REASON } from '../../src/session/v2-runtime-types'
-import { snapshotTraceEventObservationV1 } from '../../src/diagnostics/export/trace-event-v1'
+import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { projectProtocolTraceEvent } from '../../src/ui/v2-production-trace'
 import type { V2ProtocolTraceEvent } from '../../src/session/v2-diagnostics'
 import { id, openSent, runtimeFixture } from './v2-send-fixture'
@@ -52,7 +52,7 @@ describe('retired block-request diagnostics', () => {
     expect(late).toMatchObject({ settlement: 'remote_final', request: { leaseId: '03'.repeat(16) } })
     expect(late).not.toHaveProperty('cancellationReason')
     expect(late).not.toHaveProperty('protocolFailure')
-    expect(() => snapshotTraceEventObservationV1(projectProtocolTraceEvent(late))).not.toThrow()
+    expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(late))).not.toThrow()
     router.terminate(new Error('test cleanup'))
   })
 
@@ -69,10 +69,10 @@ describe('retired block-request diagnostics', () => {
       requestKind: 'request_blocks', responseKind: 'operation_error', settlement: 'local_cancel',
       cancellationReason: 'lane_race',
       request: { leaseId: '03'.repeat(16), blocks: { firstIndex: 7n, count: 1 } },
-      protocolFailure: { wireCode: 0x3008, wireScope: 'revision' },
+      protocolError: { code: 0x3008, scope: 'revision' },
       correlation: { lane: { id: 1, epoch: 0 } },
     })
-    expect(() => snapshotTraceEventObservationV1(projectProtocolTraceEvent(late))).not.toThrow()
+    expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(late))).not.toThrow()
     expect(router.protocolFailureFor(rejected)).toBeUndefined()
     expect(events.some(event => event.eventName === 'protocol_operation' && event.transition === 'authenticated_failure')).toBe(false)
     await expect(operation.next()).rejects.toBe(cause)
@@ -97,7 +97,7 @@ describe('retired block-request diagnostics', () => {
     const { events, router, operation, rejected } = fixture()
     await router.route(rejected, 1, 0)
     await expect(operation.next()).resolves.toEqual(rejected)
-    expect(router.protocolFailureFor(rejected)?.wireCode).toBe(0x3008)
+    expect(router.protocolFailureFor(rejected)?.content.code).toBe(0x3008)
     expect(events.some(event => event.eventName === 'protocol_operation' && event.transition === 'authenticated_failure')).toBe(true)
     const malformed = encodeV2Message(V2_MESSAGE_KIND.operationError, operation.id, encodeV2Body([]))
     await expect(router.route(malformed, 1, 0)).rejects.toMatchObject({ scope: 'session' })
@@ -126,7 +126,7 @@ describe('retired block-request diagnostics', () => {
         V2_MESSAGE_KIND.requestBlocks, V2_MESSAGE_KIND.cancel, V2_MESSAGE_KIND.listChildren,
       ])
       expect(sent[1]!.message.body).toEqual(encodeV2Body([V2_OPERATION_CANCEL_REASON.laneRace]))
-      for (const event of events) expect(() => snapshotTraceEventObservationV1(projectProtocolTraceEvent(event))).not.toThrow()
+      for (const event of events) expect(() => snapshotTraceEventObservationV2(projectProtocolTraceEvent(event))).not.toThrow()
     } finally { await runtime.close() }
   })
 })

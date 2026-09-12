@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/senderobject"
 	"github.com/windshare/windshare/core/session/catalogflow"
@@ -59,7 +60,7 @@ type RuntimeFactoryConfig struct {
 	PeerHandlers            sessionruntime.SenderPeerHandlerFactory
 	TerminalSendObserver    sessionruntime.SenderTerminalSendObserver
 	SessionTerminalObserver sessionruntime.SenderSessionTerminalObserver
-	ProtocolTracer          sessionruntime.ProtocolOperationTracer
+	ProtocolObservations    observationstream.Producer[sessionruntime.ProtocolObservation]
 }
 
 type senderRevisionIdentityDeriver interface {
@@ -578,7 +579,7 @@ func (sender *PreparedSender) NewRuntimeFactory(config RuntimeFactoryConfig) (*s
 		Peers:                   config.PeerHandlers,
 		TerminalSendObserver:    config.TerminalSendObserver,
 		SessionTerminalObserver: config.SessionTerminalObserver,
-		ProtocolTracer:          config.ProtocolTracer,
+		ProtocolObservations:    config.ProtocolObservations,
 		Random:                  sender.random, TerminalConnectivity: prefetchTerminalConnectivity{
 			prefetch: sender.catalogAccess,
 			delegate: config.TerminalConnectivity,

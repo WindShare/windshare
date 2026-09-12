@@ -217,3 +217,270 @@ func (value PeerTeardownTransition) Name() (string, bool) {
 	}
 	return names[value], true
 }
+
+type ProtocolRole uint8
+
+const (
+	ProtocolRoleReceiver ProtocolRole = iota + 1
+	ProtocolRoleSender
+)
+
+func (value ProtocolRole) Name() (string, bool) {
+	names := [...]string{"", "receiver", "sender"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ProtocolOperationStage uint8
+
+const (
+	ProtocolOperationReceiverCompleted ProtocolOperationStage = iota + 1
+	ProtocolOperationReceiverFailed
+	ProtocolOperationReceiverEnded
+	ProtocolOperationSenderRequestReceived
+	ProtocolOperationReceiverWaitingActiveCapacity
+	ProtocolOperationReceiverWaitingRetainedCapacity
+	ProtocolOperationReceiverAdmissionReady
+)
+
+func (value ProtocolOperationStage) Name() (string, bool) {
+	names := [...]string{
+		"", "receiver_completed", "receiver_failed", "receiver_ended",
+		"sender_request_received",
+		"receiver_waiting_active_capacity", "receiver_waiting_retained_capacity", "receiver_admission_ready",
+	}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ProtocolMessageKind uint8
+
+const (
+	ProtocolMessageListChildren ProtocolMessageKind = iota + 1
+	ProtocolMessageCatalogResult
+	ProtocolMessageOpenRevisions
+	ProtocolMessageOpenResults
+	ProtocolMessageRenewLease
+	ProtocolMessageReleaseLease
+	ProtocolMessageRequestBlocks
+	ProtocolMessageBlockFragment
+	ProtocolMessageCancel
+	ProtocolMessageOperationError
+	ProtocolMessageSessionTerminal
+	ProtocolMessageLaneAttach
+	ProtocolMessageScanProgress
+	ProtocolMessageOperationComplete
+	ProtocolMessageLeaseResult
+	ProtocolMessagePeerOffer
+	ProtocolMessagePeerAnswer
+	ProtocolMessagePeerCandidate
+)
+
+func (value ProtocolMessageKind) Name() (string, bool) {
+	names := [...]string{
+		"", "list_children", "catalog_result", "open_revisions", "open_results",
+		"renew_lease", "release_lease", "request_blocks", "block_fragment", "cancel",
+		"operation_error", "session_terminal", "lane_attach", "scan_progress",
+		"operation_complete", "lease_result", "peer_offer", "peer_answer", "peer_candidate",
+	}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+func (value ProtocolMessageKind) Request() bool {
+	switch value {
+	case ProtocolMessageListChildren, ProtocolMessageOpenRevisions,
+		ProtocolMessageRenewLease, ProtocolMessageReleaseLease,
+		ProtocolMessageRequestBlocks, ProtocolMessageLaneAttach, ProtocolMessagePeerOffer:
+		return true
+	default:
+		return false
+	}
+}
+
+type ProtocolSendOutcome uint8
+
+const (
+	ProtocolSendUninitialized ProtocolSendOutcome = iota
+	ProtocolSendUnknown
+	ProtocolSendTransportConfirmed
+	ProtocolSendDropped
+)
+
+func (value ProtocolSendOutcome) Name() (string, bool) {
+	names := [...]string{"", "unknown", "transport_confirmed", "dropped"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ProtocolOperationCause uint8
+
+const (
+	ProtocolOperationCauseNone ProtocolOperationCause = iota
+	ProtocolOperationCauseCanceled
+	ProtocolOperationCauseDeadline
+	ProtocolOperationCauseRuntimeClosed
+	ProtocolOperationCauseLaneUnavailable
+	ProtocolOperationCauseWriterStopped
+	ProtocolOperationCauseOperationClosed
+	ProtocolOperationCauseProtocolFailure
+)
+
+func (value ProtocolOperationCause) Name() (string, bool) {
+	names := [...]string{
+		"none", "canceled", "deadline", "runtime_closed", "lane_unavailable",
+		"writer_stopped", "operation_closed", "protocol_failure",
+	}
+	if int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ProtocolErrorScope uint8
+
+const (
+	ProtocolErrorDirectory ProtocolErrorScope = iota + 1
+	ProtocolErrorRevision
+	ProtocolErrorBlock
+	ProtocolErrorPeer
+)
+
+func (value ProtocolErrorScope) Name() (string, bool) {
+	names := [...]string{"", "directory", "revision", "block", "peer"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SenderContentDecisionKind uint8
+
+const (
+	SenderContentCapacityBusy SenderContentDecisionKind = iota + 1
+	SenderContentLeaseRelinquished
+	SenderContentLeaseUndelivered
+	SenderContentLeaseDetached
+	SenderContentBlockLeaseReleased
+	SenderContentBlockLeaseNotOwned
+	SenderContentBlockLeaseExpired
+	SenderContentBlockLeaseInvalid
+)
+
+func (value SenderContentDecisionKind) Name() (string, bool) {
+	names := [...]string{"", "capacity_busy", "lease_relinquished", "lease_undelivered", "lease_detached",
+		"block_lease_released", "block_lease_not_owned", "block_lease_expired", "block_lease_invalid"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ResponseSendEvidence uint8
+
+const (
+	ResponseSendEvidenceUninitialized ResponseSendEvidence = iota
+	ResponseSendEvidenceDefinitelyNotSent
+	ResponseSendEvidenceUncertain
+	ResponseSendEvidenceTransportConfirmed
+)
+
+func (value ResponseSendEvidence) Name() (string, bool) {
+	names := [...]string{"uninitialized", "definitely_not_sent", "uncertain", "transport_confirmed"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type ResponseSendEnd uint8
+
+const (
+	ResponseSendEndUninitialized ResponseSendEnd = iota
+	ResponseSendEndPreparationFailed
+	ResponseSendEndRouteUnavailable
+	ResponseSendEndAuthorityUnavailable
+	ResponseSendEndTransportConfirmed
+	ResponseSendEndPolicySuppressed
+	ResponseSendEndCallerCanceled
+	ResponseSendEndDeadlineExceeded
+	ResponseSendEndRuntimeStopped
+	ResponseSendEndRetryDisallowed
+	ResponseSendEndNoUsableLane
+	ResponseSendEndAttemptsExhausted
+	ResponseSendEndAuthorityLost
+	ResponseSendEndInvalidReceipt
+)
+
+func (value ResponseSendEnd) Name() (string, bool) {
+	names := [...]string{"uninitialized", "preparation_failed", "route_unavailable", "authority_unavailable", "transport_confirmed", "policy_suppressed", "caller_canceled", "deadline_exceeded", "runtime_stopped", "retry_disallowed", "no_usable_lane", "attempts_exhausted", "authority_lost", "invalid_receipt"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SendAttemptEnd uint8
+
+const (
+	SendAttemptEndUninitialized SendAttemptEnd = iota
+	SendAttemptEndRejectedBeforeReceipt
+	SendAttemptEndSettled
+	SendAttemptEndWaitingEnded
+)
+
+func (value SendAttemptEnd) Name() (string, bool) {
+	names := [...]string{"uninitialized", "rejected_before_receipt", "settled", "waiting_ended"}
+	if value == 0 || int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SendCleanupKind uint8
+
+const (
+	SendCleanupNone SendCleanupKind = iota
+	SendCleanupRouteReleased
+	SendCleanupOperationRetired
+	SendCleanupFailed
+)
+
+func (value SendCleanupKind) Name() (string, bool) {
+	names := [...]string{"none", "route_released", "operation_retired", "failed"}
+	if int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}
+
+type SendAttemptCauseKind uint8
+
+const (
+	SendAttemptCauseNone SendAttemptCauseKind = iota
+	SendAttemptCauseCanceled
+	SendAttemptCauseDeadline
+	SendAttemptCauseControlQueueFull
+	SendAttemptCauseDataQueueFull
+	SendAttemptCauseWriterStopped
+	SendAttemptCauseWriterTerminal
+	SendAttemptCauseTransportFailure
+	SendAttemptCausePreparationFailure
+	SendAttemptCauseAdmissionFailure
+)
+
+func (value SendAttemptCauseKind) Name() (string, bool) {
+	names := [...]string{"none", "canceled", "deadline", "control_queue_full", "data_queue_full", "writer_stopped", "writer_terminal", "transport_failure", "preparation_failure", "admission_failure"}
+	if int(value) >= len(names) {
+		return "", false
+	}
+	return names[value], true
+}

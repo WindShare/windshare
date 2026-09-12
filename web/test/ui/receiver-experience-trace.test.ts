@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
+import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 import type { V2ReceiverTraceEvent } from '../../src/ui/v2-controller'
 import { ReceiverExperienceObservability } from '../../src/ui/experience/observability'
 import { projectV2ReceiverTraceEvent } from '../../src/ui/v2-production-trace'
@@ -42,7 +42,7 @@ describe('receiver experience diagnostics', () => {
     ]))
     for (const event of events) {
       const exported = projectV2ReceiverTraceEvent(event)
-      expect(() => validateTraceEventPayloadV1(exported.eventName, exported.payload)).not.toThrow()
+      expect(() => validateTraceEventPayloadV2(exported.eventName, exported.payload)).not.toThrow()
     }
     await controller.dispose()
   })

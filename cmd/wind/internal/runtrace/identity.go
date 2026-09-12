@@ -29,7 +29,7 @@ func (identity runIdentity) encoded() string {
 }
 
 // Filename correlation is deliberately shorter and visually filesystem-safe;
-// the full local run identity remains available only inside each v3 record.
+// the full local run identity remains available only inside each v4 record.
 func (identity runIdentity) filenameToken() string {
 	return hex.EncodeToString(identity[:])[:directoryFilenameTokenHexLength]
 }

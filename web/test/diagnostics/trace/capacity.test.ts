@@ -19,7 +19,7 @@ import {
 } from '../../../src/diagnostics/trace/capacity'
 import {
   TRACE_CAPTURE_STATES,
-  TRACE_EVENT_NAMES_V1,
+  TRACE_EVENT_NAMES_V2,
   TRACE_SEAL_REASONS,
 } from '../../../src/diagnostics/trace/model'
 
@@ -72,7 +72,7 @@ describe('trace frozen contract', () => {
       'post_failure_silence',
       'capacity_exhausted',
     ])
-    expect(TRACE_EVENT_NAMES_V1).toEqual([
+    expect(TRACE_EVENT_NAMES_V2).toEqual([
       'join_transition',
       'receiver_experience',
       'browse_transition',
@@ -109,7 +109,7 @@ describe('trace frozen contract', () => {
     ])
     expect(Object.isFrozen(TRACE_CAPTURE_STATES)).toBe(true)
     expect(Object.isFrozen(TRACE_SEAL_REASONS)).toBe(true)
-    expect(Object.isFrozen(TRACE_EVENT_NAMES_V1)).toBe(true)
+    expect(Object.isFrozen(TRACE_EVENT_NAMES_V2)).toBe(true)
   })
 
   it('rejects policies whose local or relational bounds are invalid', () => {

@@ -1,4 +1,4 @@
-import type { IncidentRecordV1 } from '../export/incident-record-v1'
+import { INCIDENT_RECORD_SCHEMA_VERSION, type IncidentRecordV2 } from '../export/incident-record-v2'
 import { isDeeplyFrozen } from '../export/json'
 import {
   DEFAULT_INCIDENT_POLICY,
@@ -7,19 +7,19 @@ import {
 } from './policy'
 
 export interface IncidentHistoryReadPort {
-  last(): IncidentRecordV1 | null
-  snapshot(): readonly IncidentRecordV1[]
+  last(): IncidentRecordV2 | null
+  snapshot(): readonly IncidentRecordV2[]
 }
 
 export interface IncidentHistoryPort extends IncidentHistoryReadPort {
   nextAppendEvictionCount(): bigint
-  append(record: IncidentRecordV1): void
+  append(record: IncidentRecordV2): void
   clear(): void
 }
 
 export class BoundedIncidentHistory implements IncidentHistoryPort {
   readonly #capacity: number
-  readonly #records: IncidentRecordV1[] = []
+  readonly #records: IncidentRecordV2[] = []
 
   constructor(policy: IncidentPolicy = DEFAULT_INCIDENT_POLICY) {
     const snapshot = policy === DEFAULT_INCIDENT_POLICY
@@ -32,23 +32,23 @@ export class BoundedIncidentHistory implements IncidentHistoryPort {
     return this.#records.length >= this.#capacity ? 1n : 0n
   }
 
-  append(record: IncidentRecordV1): void {
+  append(record: IncidentRecordV2): void {
     if (
-      record.schema_version !== 1 ||
+      record.schema_version !== INCIDENT_RECORD_SCHEMA_VERSION ||
       record.event !== 'failure_incident' ||
       !isDeeplyFrozen(record)
     ) {
-      throw new TypeError('Incident history accepts only immutable V1 incident records')
+      throw new TypeError('Incident history accepts only immutable V2 incident records')
     }
     if (this.#records.length >= this.#capacity) this.#records.shift()
     this.#records.push(record)
   }
 
-  last(): IncidentRecordV1 | null {
+  last(): IncidentRecordV2 | null {
     return this.#records.at(-1) ?? null
   }
 
-  snapshot(): readonly IncidentRecordV1[] {
+  snapshot(): readonly IncidentRecordV2[] {
     return Object.freeze([...this.#records])
   }
 

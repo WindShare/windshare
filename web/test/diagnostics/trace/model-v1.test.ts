@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  TRACE_EVENT_NAMES_V1,
-  type TraceEventNameV1,
-  type TraceEventPayloadByNameV1,
+  TRACE_EVENT_NAMES_V2,
+  type TraceEventNameV2,
+  type TraceEventPayloadByNameV2,
 } from '../../../src/diagnostics/trace/model'
 import {
   PERFORMANCE_CLAIM_INSPECTOR_REASONS_V1,
@@ -259,7 +259,7 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     scope: { scope_kind: 'receive', scope_sequence: '2' },
   },
 } as const satisfies {
-  readonly [Name in TraceEventNameV1]: TraceEventPayloadByNameV1[Name]
+  readonly [Name in TraceEventNameV2]: TraceEventPayloadByNameV2[Name]
 }
 
 function emptyClaimPhase() {
@@ -327,11 +327,11 @@ const CLOSED_AUTHORITY_OWNERSHIP_PAYLOADS = Object.freeze([
     receiver_operation_id: 'AgAAAAAAAAAAAAAAAAAAAA',
     failed_stage: 'settlement' as const,
   }),
-]) satisfies readonly TraceEventPayloadByNameV1['authority_transition'][]
+]) satisfies readonly TraceEventPayloadByNameV2['authority_transition'][]
 
-describe('TraceEventPayloadV1 integration union', () => {
+describe('TraceEventPayloadV2 integration union', () => {
   it('owns one closed JSON payload for every frozen event name', () => {
-    expect(Object.keys(PAYLOAD_FOR_EVERY_EVENT)).toEqual(TRACE_EVENT_NAMES_V1)
+    expect(Object.keys(PAYLOAD_FOR_EVERY_EVENT)).toEqual(TRACE_EVENT_NAMES_V2)
     expect(() => JSON.stringify(PAYLOAD_FOR_EVERY_EVENT)).not.toThrow()
     expect(CLOSED_AUTHORITY_OWNERSHIP_PAYLOADS.map(({ transition }) => transition)).toEqual([
       'commit_pre_cut_retry',

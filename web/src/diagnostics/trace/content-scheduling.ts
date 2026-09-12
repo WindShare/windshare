@@ -2,7 +2,7 @@ import type { V2BlockSchedulingObservation } from '../../content/v2-lane-set'
 import type { V2ContentSchedulingTraceEvent, V2ProtocolTraceSource } from '../../session/v2-diagnostics'
 import type { FailureIdentity } from '../incident/fact'
 import { projectCorrelationV1 } from '../export/correlation-v1'
-import type { TraceEventObservationV1 } from './model'
+import type { TraceEventObservationV2 } from './model'
 
 export function traceContentScheduling(
   fact: V2BlockSchedulingObservation,
@@ -20,7 +20,7 @@ export function traceContentScheduling(
   })
 }
 
-export function projectContentScheduling(event: V2ContentSchedulingTraceEvent): TraceEventObservationV1 {
+export function projectContentScheduling(event: V2ContentSchedulingTraceEvent): TraceEventObservationV2 {
   const correlation = projectCorrelationV1(event.correlation)
   if (correlation === undefined) throw new TypeError('Content scheduling requires session correlation')
   return Object.freeze({

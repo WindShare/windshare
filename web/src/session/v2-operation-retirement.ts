@@ -1,4 +1,4 @@
-import { createProtocolFailure } from '../diagnostics/incident/fact'
+import { createProtocolErrorContent } from '../diagnostics/incident/fact'
 import { protocolMessageKindV1, type V2ProtocolOperationSettlement, type V2ProtocolTraceSource } from './v2-diagnostics'
 import { createV2ProtocolOperationIdentity, type V2ProtocolSessionIdentity } from './v2-identities'
 import { decodeV2OperationErrorControl, V2_MESSAGE_KIND, type V2MessageKind, type V2SessionMessage } from './v2-message'
@@ -62,11 +62,11 @@ export class V2OperationTombstone {
         settlement: this.settlement,
         ...(this.cancellationReason === undefined ? {} : { cancellationReason: this.cancellationReason }),
         ...(this.requestTrace === undefined ? {} : { request: this.requestTrace }),
-        ...(failure === undefined ? {} : { protocolFailure: createProtocolFailure({
-          requestKind: protocolMessageKindV1(this.requestKind),
-          wireScope: failure.scope, wireCode: failure.code, retryable: failure.retryable,
+        ...(failure === undefined ? {} : { protocolError: createProtocolErrorContent({
+          scope: failure.scope,
+          code: failure.code,
+          retryable: failure.retryable,
           ...(failure.retryAfterMilliseconds === undefined ? {} : { retryAfterMilliseconds: failure.retryAfterMilliseconds }),
-          settlement: { kind: 'received_authenticated' }, correlation,
         }) }),
         correlation,
       }))

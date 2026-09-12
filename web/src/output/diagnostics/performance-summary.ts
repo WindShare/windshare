@@ -3,7 +3,7 @@ import {
   projectPerformanceSummaryPayloadV1,
 } from '../../diagnostics/export/projector'
 import type {
-  TraceEventObservationV1,
+  TraceEventObservationV2,
 } from '../../diagnostics/trace/model'
 import type { DomainTraceSource, TraceClock } from '../../diagnostics/trace/ports'
 import {
@@ -42,7 +42,7 @@ export type PerformanceLedgerTransition =
   | 'recovery_scan_fallback'
 
 export type PerformanceTraceEvent = Extract<
-  TraceEventObservationV1,
+  TraceEventObservationV2,
   { readonly eventName: 'performance_phase' | 'performance_summary' }
 >
 

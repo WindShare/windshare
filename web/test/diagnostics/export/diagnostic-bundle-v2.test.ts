@@ -1,20 +1,20 @@
 import { describe, expect, it } from 'vitest'
 
 import {
-  createDiagnosticBundleV1,
-  projectDiagnosticsStatusV1,
-} from '../../../src/diagnostics/export/diagnostic-bundle-v1'
+  createDiagnosticBundleV2,
+  projectDiagnosticsStatusV2,
+} from '../../../src/diagnostics/export/diagnostic-bundle-v2'
 import { deepFreezeJson, isDeeplyFrozen } from '../../../src/diagnostics/export/json'
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../../src/diagnostics/export/trace-event-v1'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../../src/diagnostics/export/trace-event-v2'
 import type { IncidentLink } from '../../../src/diagnostics/incident/reporter'
 import type {
   TraceCaptureSnapshot,
   TraceCapturedEvent,
-  TraceEventObservationV1,
+  TraceEventObservationV2,
 } from '../../../src/diagnostics/trace/model'
 import {
   TEST_BUNDLE_IDENTITY,
@@ -23,14 +23,14 @@ import {
   traceStatus,
 } from './test-support'
 
-describe('DiagnosticBundleV1', () => {
+describe('DiagnosticBundleV2', () => {
   it('takes an immutable ordered capture cut with exact export health', () => {
     const health = diagnosticsHealthV1({
       incident_history_eviction_count: '3',
       trace_dropped_count: '5',
       trace_overwritten_count: '8',
     })
-    const status = projectDiagnosticsStatusV1(traceStatus({
+    const status = projectDiagnosticsStatusV2(traceStatus({
       state: 'recording_post_failure',
       enabled: true,
       captureGeneration: 2n,
@@ -39,7 +39,7 @@ describe('DiagnosticBundleV1', () => {
       retainedEventBytes: 20n,
       incidentMarkerCount: 1n,
     }), health)
-    const bundle = createDiagnosticBundleV1({
+    const bundle = createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-19T01:30:00.123Z',
       incidents: [incidentRecord('2'), incidentRecord('1')],
@@ -83,7 +83,7 @@ describe('DiagnosticBundleV1', () => {
   })
 
   it('publishes every named trace capacity using the frozen key order', () => {
-    const status = projectDiagnosticsStatusV1(traceStatus(), diagnosticsHealthV1())
+    const status = projectDiagnosticsStatusV2(traceStatus(), diagnosticsHealthV1())
 
     expect(Object.keys(status)).toEqual([
       'schema_version',
@@ -138,13 +138,13 @@ describe('DiagnosticBundleV1', () => {
         transition: 'failed',
         message: 'C:/private/name.txt',
       },
-    }) as unknown as TraceEventObservationV1
+    }) as unknown as TraceEventObservationV2
     const traceCapture = capture([domainEvent(3n, unsafe)])
     const health = diagnosticsHealthV1({
       trace_dropped_count: '5',
       trace_overwritten_count: '8',
     })
-    const status = projectDiagnosticsStatusV1(traceStatus({
+    const status = projectDiagnosticsStatusV2(traceStatus({
       state: 'recording_pre_failure',
       enabled: true,
       captureGeneration: 2n,
@@ -154,7 +154,7 @@ describe('DiagnosticBundleV1', () => {
       incidentMarkerCount: 0n,
     }), health)
 
-    expect(() => createDiagnosticBundleV1({
+    expect(() => createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-19T01:30:00Z',
       incidents: [],
@@ -166,9 +166,9 @@ describe('DiagnosticBundleV1', () => {
 
   it('rejects health and capture cuts that were read from different states', () => {
     const statusHealth = diagnosticsHealthV1({ trace_dropped_count: '1' })
-    const status = projectDiagnosticsStatusV1(traceStatus(), statusHealth)
+    const status = projectDiagnosticsStatusV2(traceStatus(), statusHealth)
 
-    expect(() => createDiagnosticBundleV1({
+    expect(() => createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-19T01:30:00Z',
       incidents: [],
@@ -190,7 +190,7 @@ describe('DiagnosticBundleV1', () => {
       trace_dropped_count: '5',
       trace_overwritten_count: '8',
     })
-    const status = projectDiagnosticsStatusV1(traceStatus({
+    const status = projectDiagnosticsStatusV2(traceStatus({
       state: 'recording_pre_failure',
       enabled: true,
       captureGeneration: 2n,
@@ -200,7 +200,7 @@ describe('DiagnosticBundleV1', () => {
       incidentMarkerCount: 0n,
     }), health)
 
-    expect(() => createDiagnosticBundleV1({
+    expect(() => createDiagnosticBundleV2({
       identity: TEST_BUNDLE_IDENTITY,
       time: '2026-08-19T01:30:00Z',
       incidents: [],
@@ -221,22 +221,22 @@ describe('DiagnosticBundleV1', () => {
       eventName: 'cleanup',
       payload: { backend: 'portable', transition: 'completed' },
     }
-    const snapshot = snapshotTraceEventObservationV1(source)
+    const snapshot = snapshotTraceEventObservationV2(source)
     source.payload.transition = 'failed'
 
     expect(snapshot.payload).toEqual({ backend: 'portable', transition: 'completed' })
-    expect(traceEventObservationNameV1(snapshot)).toBe('cleanup')
-    expect(traceEventObservationBytesV1(snapshot)).toBeGreaterThan(0)
+    expect(traceEventObservationNameV2(snapshot)).toBe('cleanup')
+    expect(traceEventObservationBytesV2(snapshot)).toBeGreaterThan(0)
     expect(isDeeplyFrozen(snapshot)).toBe(true)
   })
 })
 
 function capture(
-  events: readonly TraceCapturedEvent<TraceEventObservationV1, IncidentLink>[] = [
+  events: readonly TraceCapturedEvent<TraceEventObservationV2, IncidentLink>[] = [
     markerEvent(5n),
     domainEvent(3n, cleanupObservation()),
   ],
-): TraceCaptureSnapshot<TraceEventObservationV1, IncidentLink> {
+): TraceCaptureSnapshot<TraceEventObservationV2, IncidentLink> {
   return Object.freeze({
     state: events.length === 1 ? 'recording_pre_failure' : 'recording_post_failure',
     captureGeneration: 2n,
@@ -256,7 +256,7 @@ function capture(
   })
 }
 
-function cleanupObservation(): TraceEventObservationV1 {
+function cleanupObservation(): TraceEventObservationV2 {
   return deepFreezeJson({
     eventName: 'cleanup',
     payload: { backend: 'portable', transition: 'failed' },
@@ -265,8 +265,8 @@ function cleanupObservation(): TraceEventObservationV1 {
 
 function domainEvent(
   sequence: bigint,
-  event: TraceEventObservationV1,
-): TraceCapturedEvent<TraceEventObservationV1, IncidentLink> {
+  event: TraceEventObservationV2,
+): TraceCapturedEvent<TraceEventObservationV2, IncidentLink> {
   return Object.freeze({
     sequence,
     observedAtMilliseconds: Date.parse('2026-08-19T01:10:00Z') + Number(sequence),
@@ -282,7 +282,7 @@ function domainEvent(
 
 function markerEvent(
   sequence: bigint,
-): TraceCapturedEvent<TraceEventObservationV1, IncidentLink> {
+): TraceCapturedEvent<TraceEventObservationV2, IncidentLink> {
   return Object.freeze({
     sequence,
     observedAtMilliseconds: Date.parse('2026-08-19T01:20:00Z'),

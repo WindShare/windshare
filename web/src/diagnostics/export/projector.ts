@@ -1,7 +1,7 @@
+import { projectReceivedProtocolErrorV2 } from './protocol-error-v2'
 import { encodeBase64Url } from '../../crypto/bytes'
 import type {
   FailureFact,
-  ProtocolFailure,
 } from '../incident/fact'
 import type {
   FailureFactBucket,
@@ -34,16 +34,15 @@ import {
   INCIDENT_RECORD_SCHEMA_VERSION,
   type BuildIdentityV1,
   type DiagnosticsHealthV1,
-  type FailureFactBucketV1,
-  type FailureFactV1,
-  type FailureIncidentPayloadV1,
-  type IncidentRecordV1,
+  type FailureFactBucketV2,
+  type FailureFactV2,
+  type FailureIncidentPayloadV2,
+  type IncidentRecordV2,
   type LifecycleReasonV1,
   type LifecycleStateV1,
   type NativeOutputCodeV1,
   type PeerFailureCodeV1,
-  type ProtocolFailureV1,
-} from './incident-record-v1'
+} from './incident-record-v2'
 import {
   boundedUtf8String,
   decimalUint64,
@@ -79,7 +78,7 @@ export interface IncidentRecordProjectionInput {
 }
 
 export interface IncidentRecordProjection {
-  readonly record: IncidentRecordV1
+  readonly record: IncidentRecordV2
   readonly overflowFactCount: bigint
 }
 
@@ -157,7 +156,7 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       throw new RangeError('Root incident sequence must precede its linked incident')
     }
 
-    const trigger = projectFailureFactV1(input.facts.trigger.fact)
+    const trigger = projectFailureFactV2(input.facts.trigger.fact)
     const correlation = projectCorrelationV1(input.facts.trigger.fact.correlation)
     const contributors = input.facts.contributorBuckets.map((bucket) =>
       projectBucket(bucket, this.#policy))
@@ -176,7 +175,7 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
       this.#policy.maxRecordListItems,
     )
 
-    const buildRecord = (): IncidentRecordV1 => ({
+    const buildRecord = (): IncidentRecordV2 => ({
       schema_version: INCIDENT_RECORD_SCHEMA_VERSION,
       sequence,
       time: utcRfc3339(input.time, 'incident time'),
@@ -212,7 +211,7 @@ class V1IncidentRecordProjector implements IncidentRecordProjector {
         ),
         context: input.context,
         diagnostics_health_at_seal: projectDiagnosticsHealthV1(input.health),
-      } satisfies FailureIncidentPayloadV1,
+      } satisfies FailureIncidentPayloadV2,
     })
 
     let record = buildRecord()
@@ -336,7 +335,7 @@ function validSemanticIdentifiers(
     ))
 }
 
-function projectFailureFactV1(fact: FailureFact): FailureFactV1 {
+function projectFailureFactV2(fact: FailureFact): FailureFactV2 {
   const correlation = projectCorrelationV1(fact.correlation)
   const common = {
     kind: fact.kind,
@@ -356,13 +355,13 @@ function projectFailureFactV1(fact: FailureFact): FailureFactV1 {
             code: snakeCaseClosedValue(fact.payload.fault.code),
           },
         },
-      }) as FailureFactV1
+      }) as FailureFactV2
     case 'protocol_failure':
       return deepFreezeJson({
         ...common,
         kind: fact.kind,
         payload: {
-          protocol_failure: projectProtocolFailureV1(
+          protocol_failure: projectReceivedProtocolErrorV2(
             fact.payload.protocolFailure,
           ),
         },
@@ -426,37 +425,10 @@ function projectFailureFactV1(fact: FailureFact): FailureFactV1 {
   }
 }
 
-function projectProtocolFailureV1(
-  failure: ProtocolFailure,
-): ProtocolFailureV1 {
-  const correlation = projectCorrelationV1(failure.correlation)
-  if (correlation === undefined) {
-    throw new TypeError('Protocol failure projection requires correlation')
-  }
-  return deepFreezeJson({
-    request_kind: failure.requestKind,
-    wire_scope: failure.wireScope,
-    wire_code: failure.wireCode,
-    retryable: failure.retryable,
-    ...(failure.retryAfterMilliseconds === undefined
-      ? {}
-      : { retry_after_ms: failure.retryAfterMilliseconds }),
-    settlement: failure.settlement.kind === 'received_authenticated'
-      ? { kind: failure.settlement.kind }
-      : {
-          kind: failure.settlement.kind,
-          admitted: failure.settlement.admitted,
-          settled: failure.settlement.settled,
-          outcome: failure.settlement.outcome,
-        },
-    correlation,
-  })
-}
-
 function projectBucket(
   bucket: FailureFactBucket,
   policy: IncidentPolicy,
-): FailureFactBucketV1 {
+): FailureFactBucketV2 {
   return deepFreezeJson({
     fingerprint: boundedUtf8String(
       bucket.fingerprint.replaceAll('-', '_'),
@@ -464,12 +436,12 @@ function projectBucket(
       policy.maxSafeStringUtf8Bytes,
     ),
     count: decimalUint64(bucket.count, 'failure bucket count'),
-    representative: projectFailureFactV1(bucket.representative),
+    representative: projectFailureFactV2(bucket.representative),
   })
 }
 
 function pruneList(
-  buckets: FailureFactBucketV1[],
+  buckets: FailureFactBucketV2[],
   maximumItems: number,
 ): bigint {
   let removedCount = 0n

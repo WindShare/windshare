@@ -1,5 +1,5 @@
 import type {} from './build-identity-env'
-import type { BuildIdentityV1 } from './export/incident-record-v1'
+import type { BuildIdentityV1 } from './export/incident-record-v2'
 import type { BuildSnapshot } from './export/projector'
 
 const BUILD_REVISION_PATTERN = /^[0-9a-f]{7,64}$/

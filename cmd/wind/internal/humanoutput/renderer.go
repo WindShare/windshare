@@ -292,9 +292,9 @@ func (eventVisitor) VisitCatalogStorageObserved(clievent.CatalogStorageObserved)
 func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) error     { return nil }
 func (eventVisitor) VisitSenderCapacityObserved(clievent.SenderCapacityObserved) error { return nil }
 func (eventVisitor) VisitSenderRevisionObserved(clievent.SenderRevisionObserved) error { return nil }
-func (visitor eventVisitor) VisitProtocolOperationObserved(event clievent.ProtocolOperationObserved) error {
-	if visitor.verboseVisible() && event.Cause() != clievent.ProtocolOperationCauseNone {
-		visitor.renderer.insert(formatProtocolOperationFailure(event, visitor.symbols()))
+func (visitor eventVisitor) VisitProtocolObservationObserved(event clievent.ProtocolObservationObserved) error {
+	if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Cause() != clievent.ProtocolOperationCauseNone {
+		visitor.renderer.insert(formatProtocolOperationFailure(event, fact, visitor.symbols()))
 	}
 	return nil
 }

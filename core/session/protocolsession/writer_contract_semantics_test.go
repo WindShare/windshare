@@ -55,7 +55,7 @@ func TestSessionWriterCancellationAdmissionIsAtomicAndFailClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		completion := runWriterToCompletion(t, writer, receipt)
-		if completion.Outcome != SendOutcomeDelivered || !completion.Admitted || completion.Replay.IsZero() ||
+		if completion.Outcome != SendOutcomeTransportConfirmed || !completion.Admitted || completion.Replay.IsZero() ||
 			policy.admitCalls != 1 {
 			t.Fatalf("cancellation completion=%+v admission calls=%d", completion, policy.admitCalls)
 		}
@@ -142,7 +142,7 @@ func TestSessionWriterContinuationAdmissionCommitsOnlyQueuedDelivery(t *testing.
 			t.Fatal(err)
 		}
 		completion := runWriterToCompletion(t, writer, receipt)
-		if completion.Outcome != SendOutcomeDelivered || !completion.Admitted || policy.admitCalls != 1 {
+		if completion.Outcome != SendOutcomeTransportConfirmed || !completion.Admitted || policy.admitCalls != 1 {
 			t.Fatalf("continuation completion=%+v admission calls=%d", completion, policy.admitCalls)
 		}
 	})
@@ -192,7 +192,7 @@ func TestSessionWriterContinuationAdmissionCommitsOnlyQueuedDelivery(t *testing.
 			t.Fatal(err)
 		}
 		completion := runWriterToCompletion(t, writer, receipt)
-		if completion.Outcome != SendOutcomeDelivered || replayPolicy.replayCalls != 1 {
+		if completion.Outcome != SendOutcomeTransportConfirmed || replayPolicy.replayCalls != 1 {
 			t.Fatalf("replayed continuation completion=%+v replay calls=%d", completion, replayPolicy.replayCalls)
 		}
 	})
@@ -250,7 +250,7 @@ func TestSessionWriterReplayWrappersAndPreparationContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if completion := runWriterToCompletion(t, receiverWriter, receipt); completion.Outcome != SendOutcomeDelivered ||
+	if completion := runWriterToCompletion(t, receiverWriter, receipt); completion.Outcome != SendOutcomeTransportConfirmed ||
 		receiverPolicy.replayCalls != 1 {
 		t.Fatalf("receiver replay completion=%+v replay calls=%d", completion, receiverPolicy.replayCalls)
 	}
@@ -276,7 +276,7 @@ func TestSessionWriterReplayWrappersAndPreparationContracts(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if completion := runWriterToCompletion(t, writer, receipt); completion.Outcome != SendOutcomeDelivered {
+			if completion := runWriterToCompletion(t, writer, receipt); completion.Outcome != SendOutcomeTransportConfirmed {
 				t.Fatalf("data completion=%+v", completion)
 			}
 		})

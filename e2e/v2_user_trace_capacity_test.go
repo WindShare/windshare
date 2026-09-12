@@ -11,25 +11,25 @@ import (
 	"testing"
 )
 
-func TestUserTraceV3RevisionCapacityContract(t *testing.T) {
-	runtimeRunID := v3CapacityBase64ID(0x11)
-	protocolSessionID := v3CapacityBase64ID(0x22)
-	protocolOperationID := v3CapacityBase64ID(0x33)
-	transferJobID := v3CapacityBase64ID(0x44)
-	waitID := v3CapacityBase64ID(0x55)
-	generationID := v3CapacityBase64ID(0x66)
-	decisionID := v3CapacityHexID(0x77, v3DigestBytes)
-	revisionID := v3CapacityHexID(0x88, v3DigestBytes)
-	leaseID := v3CapacityHexID(0x99, v3IdentityBytes)
+func TestUserTraceV4RevisionCapacityContract(t *testing.T) {
+	runtimeRunID := v4CapacityBase64ID(0x11)
+	protocolSessionID := v4CapacityBase64ID(0x22)
+	protocolOperationID := v4CapacityBase64ID(0x33)
+	transferJobID := v4CapacityBase64ID(0x44)
+	waitID := v4CapacityBase64ID(0x55)
+	generationID := v4CapacityBase64ID(0x66)
+	decisionID := v4CapacityHexID(0x77, v4DigestBytes)
+	revisionID := v4CapacityHexID(0x88, v4DigestBytes)
+	leaseID := v4CapacityHexID(0x99, v4IdentityBytes)
 
-	progress := v3CapacityProgressVector()
+	progress := v4CapacityProgressVector()
 	receiver := []map[string]any{
-		v3CapacityTraceRecord(1, "get", "transfer_progress", runtimeRunID, map[string]any{
+		v4CapacityTraceRecord(1, "get", "transfer_progress", runtimeRunID, map[string]any{
 			"receive_operation_id": protocolOperationID,
 			"transfer_job_id":      transferJobID,
 			"progress":             progress,
 		}),
-		v3CapacityTraceRecord(2, "get", "transfer_lifecycle", runtimeRunID, map[string]any{
+		v4CapacityTraceRecord(2, "get", "transfer_lifecycle", runtimeRunID, map[string]any{
 			"receive_operation_id": protocolOperationID,
 			"transfer_job_id":      transferJobID,
 			"stage":                "capacity_retry_scheduled",
@@ -45,21 +45,19 @@ func TestUserTraceV3RevisionCapacityContract(t *testing.T) {
 			},
 		}),
 	}
-	v3ReadTraceVectors(t, "get", receiver)
+	v4ReadTraceVectors(t, "get", receiver)
 
-	capacityScope := v3CapacityScopeVector()
+	capacityScope := v4CapacityScopeVector()
 	sender := []map[string]any{
-		v3CapacityTraceRecord(1, "share", "protocol_operation", runtimeRunID, map[string]any{
-			"role": "sender", "stage": "sender_content_decision", "request_kind": "request_file",
-			"response_count": "1", "operation_elapsed_ms": "2", "usable_lanes_at_selection": 1,
-			"usable_lanes_at_settlement": 1, "cause": "completed",
+		v4CapacityTraceRecord(1, "share", "sender_content_decision", runtimeRunID, map[string]any{
+			"observed_at": "2026-08-23T00:00:00Z", "role": "sender", "request_kind": "open_revisions",
 			"content_decision": map[string]any{"kind": "capacity_busy", "capacity_decision_id": decisionID},
 		}),
-		v3CapacityTraceRecord(2, "share", "sender_capacity", runtimeRunID, map[string]any{
+		v4CapacityTraceRecord(2, "share", "sender_capacity", runtimeRunID, map[string]any{
 			"stage": "admission_denied", "decision_id": decisionID, "revision_id": revisionID,
 			"process": capacityScope, "share": capacityScope, "session": capacityScope,
 		}),
-		v3CapacityTraceRecord(3, "share", "sender_revision", runtimeRunID, map[string]any{
+		v4CapacityTraceRecord(3, "share", "sender_revision", runtimeRunID, map[string]any{
 			"stage": "lease_settlement", "cause": "relinquished", "revision_id": revisionID, "lease_id": leaseID,
 		}),
 	}
@@ -69,12 +67,12 @@ func TestUserTraceV3RevisionCapacityContract(t *testing.T) {
 	sender[0]["correlation"] = map[string]any{
 		"protocol_session_id": protocolSessionID, "protocol_operation_id": protocolOperationID,
 	}
-	v3ReadTraceVectors(t, "share", sender)
+	v4ReadTraceVectors(t, "share", sender)
 }
 
-func v3CapacityTraceRecord(sequence int, command, event, runtimeRunID string, payload map[string]any) map[string]any {
+func v4CapacityTraceRecord(sequence int, command, event, runtimeRunID string, payload map[string]any) map[string]any {
 	return map[string]any{
-		"schema_version": v3TraceSchemaVersion,
+		"schema_version": v4TraceSchemaVersion,
 		"sequence":       strconv.Itoa(sequence),
 		"time":           "2026-08-23T00:00:00Z",
 		"elapsed_ms":     strconv.Itoa(sequence),
@@ -86,7 +84,7 @@ func v3CapacityTraceRecord(sequence int, command, event, runtimeRunID string, pa
 	}
 }
 
-func v3CapacityProgressVector() map[string]any {
+func v4CapacityProgressVector() map[string]any {
 	return map[string]any{
 		"discovery": "complete", "counters_exact": true,
 		"discovered_files": "2", "discovered_bytes": "8192",
@@ -105,7 +103,7 @@ func v3CapacityProgressVector() map[string]any {
 	}
 }
 
-func v3CapacityScopeVector() map[string]any {
+func v4CapacityScopeVector() map[string]any {
 	return map[string]any{
 		"stable_handles": "2", "active_leases": "1", "stable_handle_limit": "256", "active_lease_limit": "64",
 		"reclaimable_stable_handles": "1", "quarantined_stable_handles": "0",
@@ -113,7 +111,7 @@ func v3CapacityScopeVector() map[string]any {
 	}
 }
 
-func v3ReadTraceVectors(t *testing.T, command string, records []map[string]any) {
+func v4ReadTraceVectors(t *testing.T, command string, records []map[string]any) {
 	t.Helper()
 	var encoded bytes.Buffer
 	for _, record := range records {
@@ -128,21 +126,21 @@ func v3ReadTraceVectors(t *testing.T, command string, records []map[string]any) 
 	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	validated, _ := readV3UserTrace(t, path, command)
+	validated, _ := readV4UserTrace(t, path, command)
 	if len(validated) != len(records) {
 		t.Fatalf("validated capacity records=%d want=%d", len(validated), len(records))
 	}
 }
 
-func v3CapacityBase64ID(fill byte) string {
-	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, v3IdentityBytes))
+func v4CapacityBase64ID(fill byte) string {
+	return base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{fill}, v4IdentityBytes))
 }
 
-func v3CapacityHexID(fill byte, size int) string {
+func v4CapacityHexID(fill byte, size int) string {
 	return hex.EncodeToString(bytes.Repeat([]byte{fill}, size))
 }
 
-func validateV3TraceHex(t *testing.T, value, context string, wantBytes int) {
+func validateV4TraceHex(t *testing.T, value, context string, wantBytes int) {
 	t.Helper()
 	decoded, err := hex.DecodeString(value)
 	if err != nil || len(decoded) != wantBytes || hex.EncodeToString(decoded) != value {

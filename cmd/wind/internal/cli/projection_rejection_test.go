@@ -8,8 +8,6 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
-	"github.com/windshare/windshare/core/session/protocolsession"
-	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
 func rejectionRuntime() (*commandRuntime, *fakeCommandClock) {
@@ -22,13 +20,18 @@ func rejectionRuntime() (*commandRuntime, *fakeCommandClock) {
 
 func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T) {
 	runtime, clock := rejectionRuntime()
-	observations := newShareObservations(runtime)
-	trace := sessionruntime.ProtocolOperationTrace{
-		Stage: sessionruntime.ProtocolOperationSenderRequestReceived,
-		Role:  protocolsession.RoleSender, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
-		RequestKind: protocolsession.MessageOpenRevisions,
+	input := clievent.CaptureObservationRejection(clievent.ObservationRejection{
+		Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation",
+		Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes",
+		Session: "01000000000000000000000000000000", Operation: "00000000000000000000000000000000",
+	}, clievent.RejectedEnum("request_kind", 3))
+	report := func() {
+		t.Helper()
+		if !runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossInvalidIdentity, input) {
+			t.Fatal("rejection not accounted")
+		}
 	}
-	observations.TraceProtocolOperation(trace)
+	report()
 	if loss := runtime.collectPendingLossLocked(false); loss.lifecycle != 1 {
 		t.Fatalf("first loss = %+v", loss)
 	}
@@ -38,14 +41,16 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	}
 	sample, ok := first.Rejection()
 	if !ok || sample.Stage != "sender_request_received" || sample.Field != "protocol_operation_id" ||
-		sample.Rule != "nonzero_16_bytes" || !sample.Session.Valid() || sample.Operation.Valid() {
+		sample.Rule != "nonzero_16_bytes" || sample.Session != input.Session || sample.Operation != input.Operation {
 		t.Fatalf("rejection sample = %+v", sample)
 	}
 
 	// Changing operation/session identities must not reset the signature limit.
-	for range 100 {
-		trace.ProtocolSessionID = protocolsession.ProtocolSessionID{2}
-		observations.TraceProtocolOperation(trace)
+	for i := range 100 {
+		input.Session = fmt.Sprintf("session-%d", i)
+		input.ResponseSequence = fmt.Sprintf("%d", i)
+		input = clievent.CaptureObservationRejection(input, clievent.RejectedEnum("request_kind", uint64(i)))
+		report()
 		if loss := runtime.collectPendingLossLocked(false); loss.lifecycle != 1 {
 			t.Fatalf("loss = %+v", loss)
 		}
@@ -62,8 +67,8 @@ func TestProjectionRejectionReportsFirstSampleAndFlushesExactCounts(t *testing.T
 	if repeated.Count() != 100 || repeatedSample != sample {
 		t.Fatalf("repeat report = %#v", repeated)
 	}
-	observations.TraceProtocolOperation(trace)
-	observations.TraceProtocolOperation(trace)
+	report()
+	report()
 	terminal := newRuntimeTestCommandFailure(t, clievent.CommandShare, clievent.FailureCanceled)
 	if !runtime.Finalize(terminal) {
 		t.Fatal("finalize failed")
@@ -81,7 +86,7 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 	runtime, _ := rejectionRuntime()
 	const count = 100
 	for i := range count {
-		sample := clievent.ObservationRejection{Stage: fmt.Sprintf("stage_%d", i), Field: "field", Rule: "rule"}
+		sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: fmt.Sprintf("stage_%d", i), Field: "field", Rule: "rule"}
 		if !runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample) {
 			t.Fatal("rejection not accounted")
 		}
@@ -92,13 +97,14 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 	if loss := runtime.collectPendingLossLocked(true); loss.lifecycle != count {
 		t.Fatalf("loss = %+v", loss)
 	}
-	var total uint64
+	var total, omitted uint64
 	reports := 0
 	for event := runtime.takeNext(); event != nil; event = runtime.takeNext() {
 		total += event.(clievent.ObserverLossObserved).Count()
+		omitted += event.(clievent.ObserverLossObserved).OmittedSamples()
 		reports++
 	}
-	if total != count || reports != maxProjectionRejectionSignatures {
+	if total != count || reports != maxProjectionRejectionSignatures || omitted != count-(maxProjectionRejectionSignatures-1) {
 		t.Fatalf("total=%d reports=%d", total, reports)
 	}
 }
@@ -106,7 +112,7 @@ func TestProjectionRejectionSignatureCapacity(t *testing.T) {
 func TestProjectionRejectionDisabledTraceRetainsNoSamples(t *testing.T) {
 	runtime, _ := rejectionRuntime()
 	runtime.trace = nil
-	sample := clievent.ObservationRejection{Stage: "stage", Field: "field", Rule: "rule"}
+	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
 	for range 100 {
 		runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossEventContract, sample)
 	}
@@ -124,7 +130,7 @@ func TestProjectionRejectionDisabledTraceRetainsNoSamples(t *testing.T) {
 
 func BenchmarkObservationRejectionRepeated(b *testing.B) {
 	runtime, _ := rejectionRuntime()
-	sample := clievent.ObservationRejection{Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
+	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received", Field: "protocol_operation_id", Rule: "nonzero_16_bytes"}
 	runtime.ReportObservationRejection(clievent.ObserverLossProtocolOperation, clievent.ObserverLossInvalidIdentity, sample)
 	b.ReportAllocs()
 	for b.Loop() {
@@ -134,7 +140,7 @@ func BenchmarkObservationRejectionRepeated(b *testing.B) {
 
 func TestObservationRejectionConcurrentAccounting(t *testing.T) {
 	runtime, _ := rejectionRuntime()
-	sample := clievent.ObservationRejection{Stage: "stage", Field: "field", Rule: "rule"}
+	sample := clievent.ObservationRejection{Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "stage", Field: "field", Rule: "rule"}
 	var workers sync.WaitGroup
 	for range 8 {
 		workers.Go(func() {

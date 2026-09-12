@@ -3,7 +3,7 @@ import { V2OperationCancellationError } from './v2-runtime-types'
 import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
 import type { V2ShareDescriptor } from '../catalog/v2-records'
 import type { FrameChannel } from '../contracts/channel'
-import type { FailureCorrelation, ProtocolFailure } from '../diagnostics/incident/fact'
+import type { FailureCorrelation, ReceivedProtocolError } from '../diagnostics/incident/fact'
 import {
   decodeV2LaneGrant,
   encodeV2LaneAttachRequest,
@@ -190,7 +190,18 @@ export class V2ReceiverSessionRuntime {
     })
   }
 
-  authenticatedProtocolFailure(message: V2SessionMessage): ProtocolFailure {
+  authenticatedResponseCorrelation(message: V2SessionMessage): ReceivedProtocolError['correlation'] {
+    const correlation = this.#router.receivedCorrelationFor(message)
+    if (correlation === undefined) {
+      throw new V2SessionRuntimeError(
+        'session',
+        'Authenticated response context was not captured during routing',
+      )
+    }
+    return correlation
+  }
+
+  authenticatedReceivedProtocolError(message: V2SessionMessage): ReceivedProtocolError {
     const failure = this.#router.protocolFailureFor(message)
     if (failure === undefined) {
       throw new V2SessionRuntimeError(

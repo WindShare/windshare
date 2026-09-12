@@ -8,6 +8,40 @@ import (
 	"testing"
 )
 
+func TestUpstreamLossSharesCompletionCutAndSaturates(t *testing.T) {
+	var inactive Producer[int]
+	if !inactive.IsZero() {
+		t.Fatal("zero producer active")
+	}
+	inactive.RecordDropped(10)
+	if inactive.Complete() != (Completion{}) {
+		t.Fatal("inactive producer retained loss")
+	}
+	producer, _ := mustNew[int](t, 1)
+	if producer.IsZero() {
+		t.Fatal("created producer inactive")
+	}
+	producer.RecordDropped(0)
+	producer.RecordDropped(3)
+	producer.TryPublish(1)
+	producer.TryPublish(2)
+	first := producer.Complete()
+	if first != (Completion{Enqueued: 1, CapacityDropped: 4}) {
+		t.Fatalf("cut=%+v", first)
+	}
+	producer.RecordDropped(99)
+	if producer.Complete() != first {
+		t.Fatal("post-cut loss changed completion")
+	}
+
+	saturated, _ := mustNew[int](t, 1)
+	saturated.RecordDropped(^uint64(0) - 1)
+	saturated.RecordDropped(2)
+	if cut := saturated.Complete(); cut.CapacityDropped != ^uint64(0) {
+		t.Fatalf("saturation=%+v", cut)
+	}
+}
+
 func TestNewRejectsNonPositiveCapacity(t *testing.T) {
 	t.Parallel()
 

@@ -1,9 +1,9 @@
 import {
-  snapshotTraceEventObservationV1,
-  traceEventObservationBytesV1,
-  traceEventObservationNameV1,
-} from '../../src/diagnostics/export/trace-event-v1'
-import type { TraceEventObservationV1 } from '../../src/diagnostics/trace/model'
+  snapshotTraceEventObservationV2,
+  traceEventObservationBytesV2,
+  traceEventObservationNameV2,
+} from '../../src/diagnostics/export/trace-event-v2'
+import type { TraceEventObservationV2 } from '../../src/diagnostics/trace/model'
 import {
   SYSTEM_TRACE_CLOCK,
   SYSTEM_TRACE_SCHEDULER,
@@ -167,16 +167,16 @@ async function runEvidence(options: EvidenceOptions): Promise<EvidenceResult> {
 }
 
 function createEvidenceTraceSwitch(): TraceSwitch<
-  TraceEventObservationV1,
+  TraceEventObservationV2,
   EvidenceIncident,
   EvidenceScope
 > {
   return new TraceSwitch({
     clock: SYSTEM_TRACE_CLOCK,
     scheduler: SYSTEM_TRACE_SCHEDULER,
-    eventName: traceEventObservationNameV1,
-    snapshotEvent: snapshotTraceEventObservationV1,
-    eventBytes: traceEventObservationBytesV1,
+    eventName: traceEventObservationNameV2,
+    snapshotEvent: snapshotTraceEventObservationV2,
+    eventBytes: traceEventObservationBytesV2,
     snapshotIncident: (incident) => Object.freeze({
       sequence: incident.sequence,
       scope: Object.freeze({ ...incident.scope }),
@@ -222,7 +222,7 @@ function chooseLane(assignedBytes: readonly number[], entryToken: number): numbe
 }
 
 function emitStartEvents(
-  trace: DomainTraceSource<TraceEventObservationV1>,
+  trace: DomainTraceSource<TraceEventObservationV2>,
   counters: WorkloadCounters,
 ): void {
   emitTrace(trace, counters, () => ({
@@ -244,7 +244,7 @@ function emitStartEvents(
 }
 
 function emitPageEvents(
-  trace: DomainTraceSource<TraceEventObservationV1>,
+  trace: DomainTraceSource<TraceEventObservationV2>,
   counters: WorkloadCounters,
   complete: boolean,
 ): void {
@@ -288,7 +288,7 @@ function emitPageEvents(
 }
 
 function emitCompletionEvents(
-  trace: DomainTraceSource<TraceEventObservationV1>,
+  trace: DomainTraceSource<TraceEventObservationV2>,
   counters: WorkloadCounters,
 ): void {
   emitTrace(trace, counters, () => ({
@@ -321,9 +321,9 @@ function emitCompletionEvents(
 }
 
 function emitTrace(
-  trace: DomainTraceSource<TraceEventObservationV1>,
+  trace: DomainTraceSource<TraceEventObservationV2>,
   counters: WorkloadCounters,
-  construct: () => TraceEventObservationV1,
+  construct: () => TraceEventObservationV2,
 ): void {
   const observer = trace.current
   if (observer === undefined) return

@@ -61,9 +61,9 @@ func (process *v2Process) validateUserTrace(t *testing.T) {
 			t.Fatalf("redirected %s stderr contains forbidden value %q", process.component, forbidden)
 		}
 	}
-	records, encoded := readV3UserTrace(t, process.userTracePath, process.userTraceCommand)
+	records, encoded := readV4UserTrace(t, process.userTracePath, process.userTraceCommand)
 	for _, forbidden := range process.traceForbidden {
-		if v3TraceContainsForbidden(encoded, forbidden) {
+		if v4TraceContainsForbidden(encoded, forbidden) {
 			t.Fatalf("%s user trace contains forbidden value %q", process.component, forbidden)
 		}
 	}
@@ -74,7 +74,7 @@ func (process *v2Process) validateUserTrace(t *testing.T) {
 	if last.Event != "trace_summary" {
 		t.Fatalf("%s user trace has no terminal summary", process.component)
 	}
-	incomplete := v3TraceBoolField(t, last.Payload, "incomplete")
+	incomplete := v4TraceBoolField(t, last.Payload, "incomplete")
 	warningCount := strings.Count(stderr, "Trace is incomplete")
 	if warningCount > 1 {
 		t.Fatalf("%s emitted %d trace-incomplete warnings, want at most one", process.component, warningCount)
@@ -87,11 +87,11 @@ func (process *v2Process) validateUserTrace(t *testing.T) {
 			warningCount,
 		)
 	}
-	assertV3ProducerFactsPrecedeCommandResult(t, process.component, records)
-	registerCriticalV3ProtocolCorrelation(t, process, records)
+	assertV4ProducerFactsPrecedeCommandResult(t, process.component, records)
+	registerCriticalV4ProtocolCorrelation(t, process, records)
 }
 
-func assertV3ProducerFactsPrecedeCommandResult(t *testing.T, component string, records []v3TraceRecord) {
+func assertV4ProducerFactsPrecedeCommandResult(t *testing.T, component string, records []v4TraceRecord) {
 	t.Helper()
 	terminal := -1
 	for index, record := range records {
@@ -113,7 +113,7 @@ func assertV3ProducerFactsPrecedeCommandResult(t *testing.T, component string, r
 	}
 }
 
-func readV3UserTrace(t *testing.T, path, command string) ([]v3TraceRecord, []byte) {
+func readV4UserTrace(t *testing.T, path, command string) ([]v4TraceRecord, []byte) {
 	t.Helper()
 	encoded, err := os.ReadFile(path)
 	if err != nil {
@@ -123,11 +123,11 @@ func readV3UserTrace(t *testing.T, path, command string) ([]v3TraceRecord, []byt
 		t.Fatalf("user trace %q is empty", path)
 	}
 	lines := bytes.Split(bytes.TrimSpace(encoded), []byte{'\n'})
-	records := make([]v3TraceRecord, 0, len(lines))
+	records := make([]v4TraceRecord, 0, len(lines))
 	sequences := make(map[uint64]struct{}, len(lines))
 	runtimeRunID := ""
 	for index, line := range lines {
-		record := validateV3TraceRecord(t, line, command, sequences)
+		record := validateV4TraceRecord(t, line, command, sequences)
 		if runtimeRunID == "" {
 			runtimeRunID = record.RuntimeRunID
 		} else if runtimeRunID != record.RuntimeRunID {
@@ -138,12 +138,12 @@ func readV3UserTrace(t *testing.T, path, command string) ([]v3TraceRecord, []byt
 	return records, encoded
 }
 
-func validateV3TraceRecord(
+func validateV4TraceRecord(
 	t *testing.T,
 	line []byte,
 	command string,
 	sequences map[uint64]struct{},
-) v3TraceRecord {
+) v4TraceRecord {
 	t.Helper()
 	decoder := json.NewDecoder(bytes.NewReader(line))
 	decoder.UseNumber()
@@ -151,7 +151,7 @@ func validateV3TraceRecord(
 	if err := decoder.Decode(&envelope); err != nil {
 		t.Fatalf("decode user trace record: %v", err)
 	}
-	if err := ensureV3TraceEOF(decoder); err != nil {
+	if err := ensureV4TraceEOF(decoder); err != nil {
 		t.Fatalf("decode user trace record: %v", err)
 	}
 	allowedEnvelope := map[string]struct{}{
@@ -173,10 +173,10 @@ func validateV3TraceRecord(
 			t.Fatalf("user trace is missing envelope field %q", field)
 		}
 	}
-	if version := v3TraceIntegerField(t, envelope, "schema_version"); version != v3TraceSchemaVersion {
-		t.Fatalf("user trace schema_version=%d want=%d", version, v3TraceSchemaVersion)
+	if version := v4TraceIntegerField(t, envelope, "schema_version"); version != v4TraceSchemaVersion {
+		t.Fatalf("user trace schema_version=%d want=%d", version, v4TraceSchemaVersion)
 	}
-	sequence := v3TraceDecimalField(t, envelope, "sequence")
+	sequence := v4TraceDecimalField(t, envelope, "sequence")
 	if sequence == 0 {
 		t.Fatal("user trace sequence is zero")
 	}
@@ -184,40 +184,40 @@ func validateV3TraceRecord(
 		t.Fatalf("user trace sequence %d is duplicated", sequence)
 	}
 	sequences[sequence] = struct{}{}
-	_ = v3TraceDecimalField(t, envelope, "elapsed_ms")
-	if _, err := time.Parse(time.RFC3339Nano, v3TraceStringField(t, envelope, "time")); err != nil {
+	_ = v4TraceDecimalField(t, envelope, "elapsed_ms")
+	if _, err := time.Parse(time.RFC3339Nano, v4TraceStringField(t, envelope, "time")); err != nil {
 		t.Fatalf("user trace time is invalid: %v", err)
 	}
-	if got := v3TraceStringField(t, envelope, "command"); got != command {
+	if got := v4TraceStringField(t, envelope, "command"); got != command {
 		t.Fatalf("user trace command=%q want=%q", got, command)
 	}
-	runtimeRunID := v3TraceStringField(t, envelope, "runtime_run_id")
-	validateV3TraceIdentity(t, runtimeRunID, "runtime_run_id", v3IdentityBytes)
-	event := v3TraceStringField(t, envelope, "event")
-	schema, known := v3TracePayloadSchemas[event]
+	runtimeRunID := v4TraceStringField(t, envelope, "runtime_run_id")
+	validateV4TraceIdentity(t, runtimeRunID, "runtime_run_id", v4IdentityBytes)
+	event := v4TraceStringField(t, envelope, "event")
+	schema, known := v4TracePayloadSchemas[event]
 	if !known {
 		t.Fatalf("user trace event %q is outside the closed vocabulary", event)
 	}
-	switch level := v3TraceStringField(t, envelope, "level"); level {
+	switch level := v4TraceStringField(t, envelope, "level"); level {
 	case "debug", "info", "warn", "error":
 	default:
 		t.Fatalf("user trace level %q is outside the closed vocabulary", level)
 	}
-	payload := v3TraceObjectMap(t, envelope["payload"], event+" payload")
-	validateV3TraceObject(t, payload, schema, event+" payload")
-	var correlation *v3TraceCorrelation
+	payload := v4TraceObjectMap(t, envelope["payload"], event+" payload")
+	validateV4TraceObject(t, payload, schema, event+" payload")
+	var correlation *v4TraceCorrelation
 	if raw, present := envelope["correlation"]; present {
-		projected := validateV3TraceCorrelation(t, raw, event+" correlation")
+		projected := validateV4TraceCorrelation(t, raw, event+" correlation")
 		correlation = &projected
 	}
-	record := v3TraceRecord{
+	record := v4TraceRecord{
 		Event: event, RuntimeRunID: runtimeRunID, Correlation: correlation, Payload: payload,
 	}
-	validateV3DiagnosticRecord(t, record)
+	validateV4DiagnosticRecord(t, record)
 	return record
 }
 
-func ensureV3TraceEOF(decoder *json.Decoder) error {
+func ensureV4TraceEOF(decoder *json.Decoder) error {
 	var extra json.RawMessage
 	if err := decoder.Decode(&extra); err != io.EOF {
 		if err == nil {
@@ -228,10 +228,10 @@ func ensureV3TraceEOF(decoder *json.Decoder) error {
 	return nil
 }
 
-func validateV3TraceObject(
+func validateV4TraceObject(
 	t *testing.T,
 	object map[string]json.RawMessage,
-	schema *v3TraceObjectSchema,
+	schema *v4TraceObjectSchema,
 	context string,
 ) {
 	t.Helper()
@@ -246,7 +246,7 @@ func validateV3TraceObject(
 			}
 			t.Fatalf("%s field %q is null", context, name)
 		}
-		validateV3TraceValue(t, raw, field, context)
+		validateV4TraceValue(t, raw, field, context)
 	}
 	for name, field := range schema.fields {
 		if _, present := object[name]; !present && !field.optional {
@@ -255,33 +255,33 @@ func validateV3TraceObject(
 	}
 }
 
-func validateV3TraceValue(t *testing.T, raw json.RawMessage, field v3TraceFieldSchema, context string) {
+func validateV4TraceValue(t *testing.T, raw json.RawMessage, field v4TraceFieldSchema, context string) {
 	t.Helper()
 	fieldContext := context + "." + field.name
 	switch field.kind {
-	case v3TraceString:
-		if value := v3TraceStringRaw(t, raw, fieldContext); value == "" {
+	case v4TraceString:
+		if value := v4TraceStringRaw(t, raw, fieldContext); value == "" {
 			t.Fatalf("%s is empty", fieldContext)
 		}
-	case v3TraceIdentity:
-		validateV3TraceIdentity(t, v3TraceStringRaw(t, raw, fieldContext), fieldContext, v3IdentityBytes)
-	case v3TraceRelaySessionIdentity:
-		validateV3TraceIdentity(t, v3TraceStringRaw(t, raw, fieldContext), fieldContext, 8)
-	case v3TraceDecimal:
-		_ = v3TraceDecimalRaw(t, raw, fieldContext)
-	case v3TraceInteger:
-		_ = v3TraceIntegerRaw(t, raw, fieldContext)
-	case v3TraceFraction:
+	case v4TraceIdentity:
+		validateV4TraceIdentity(t, v4TraceStringRaw(t, raw, fieldContext), fieldContext, v4IdentityBytes)
+	case v4TraceRelaySessionIdentity:
+		validateV4TraceIdentity(t, v4TraceStringRaw(t, raw, fieldContext), fieldContext, 8)
+	case v4TraceDecimal:
+		_ = v4TraceDecimalRaw(t, raw, fieldContext)
+	case v4TraceInteger:
+		_ = v4TraceIntegerRaw(t, raw, fieldContext)
+	case v4TraceFraction:
 		var value float64
 		if err := json.Unmarshal(raw, &value); err != nil || value < 0 || value > 1 {
 			t.Fatalf("%s is not a fraction in [0,1]: %s", fieldContext, raw)
 		}
-	case v3TraceBool:
+	case v4TraceBool:
 		var value bool
 		if err := json.Unmarshal(raw, &value); err != nil {
 			t.Fatalf("%s is not a bool: %v", fieldContext, err)
 		}
-	case v3TraceStringSlice:
+	case v4TraceStringSlice:
 		var values []string
 		if err := json.Unmarshal(raw, &values); err != nil || values == nil {
 			t.Fatalf("%s is not a string array: %v", fieldContext, err)
@@ -291,44 +291,38 @@ func validateV3TraceValue(t *testing.T, raw json.RawMessage, field v3TraceFieldS
 				t.Fatalf("%s contains an empty value", fieldContext)
 			}
 		}
-	case v3TraceObject:
-		object := v3TraceObjectMap(t, raw, fieldContext)
-		validateV3TraceObject(t, object, field.object, fieldContext)
-	case v3TraceHexIdentity:
-		validateV3TraceHex(t, v3TraceStringRaw(t, raw, fieldContext), fieldContext, v3IdentityBytes)
-	case v3TraceHexDigest:
-		validateV3TraceHex(t, v3TraceStringRaw(t, raw, fieldContext), fieldContext, v3DigestBytes)
-	case v3TraceCorrelationValue:
-		_ = validateV3TraceCorrelation(t, raw, fieldContext)
-	case v3TraceProtocolSettlement:
-		validateV3ProtocolSettlement(t, raw, fieldContext)
+	case v4TraceObject:
+		object := v4TraceObjectMap(t, raw, fieldContext)
+		validateV4TraceObject(t, object, field.object, fieldContext)
+	case v4TraceHexIdentity:
+		validateV4TraceHex(t, v4TraceStringRaw(t, raw, fieldContext), fieldContext, v4IdentityBytes)
+	case v4TraceHexDigest:
+		validateV4TraceHex(t, v4TraceStringRaw(t, raw, fieldContext), fieldContext, v4DigestBytes)
+	case v4TraceCorrelationValue:
+		_ = validateV4TraceCorrelation(t, raw, fieldContext)
+	case v4TraceTimestamp:
+		value := v4TraceStringRaw(t, raw, fieldContext)
+		if _, err := time.Parse(time.RFC3339Nano, value); err != nil {
+			t.Fatalf("%s invalid timestamp: %v", fieldContext, err)
+		}
+	case v4TraceRawString:
+		_ = v4TraceStringRaw(t, raw, fieldContext)
+	case v4TraceObjectSlice:
+		var values []map[string]json.RawMessage
+		if err := json.Unmarshal(raw, &values); err != nil || values == nil {
+			t.Fatalf("%s is not an object array: %v", fieldContext, err)
+		}
+		for i, value := range values {
+			validateV4TraceObject(t, value, field.object, fmt.Sprintf("%s[%d]", fieldContext, i))
+		}
 	default:
 		t.Fatalf("%s has unsupported schema kind %d", fieldContext, field.kind)
 	}
 }
 
-func validateV3ProtocolSettlement(t *testing.T, raw json.RawMessage, context string) {
+func validateV4TraceCorrelation(t *testing.T, raw json.RawMessage, context string) v4TraceCorrelation {
 	t.Helper()
-	settlement := v3TraceObjectMap(t, raw, context)
-	kind := v3TraceStringField(t, settlement, "kind")
-	var schema *v3TraceObjectSchema
-	switch kind {
-	case "received_authenticated":
-		schema = v3TraceSchema(v3TraceFields(v3TraceString, "kind"))
-	case "response_send":
-		schema = v3TraceSchema(
-			v3TraceFields(v3TraceString, "kind", "outcome"),
-			v3TraceFields(v3TraceBool, "admitted", "settled"),
-		)
-	default:
-		t.Fatalf("%s has unknown kind %q", context, kind)
-	}
-	validateV3TraceObject(t, settlement, schema, context)
-}
-
-func validateV3TraceCorrelation(t *testing.T, raw json.RawMessage, context string) v3TraceCorrelation {
-	t.Helper()
-	object := v3TraceObjectMap(t, raw, context)
+	object := v4TraceObjectMap(t, raw, context)
 	allowed := map[string]struct{}{
 		"protocol_session_id": {}, "protocol_operation_id": {}, "peer_path_id": {},
 		"peer_attempt_id": {}, "lane_id": {}, "lane_epoch": {},
@@ -344,7 +338,7 @@ func validateV3TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 	if len(object) == 0 {
 		t.Fatalf("%s is empty", context)
 	}
-	correlation := v3TraceCorrelation{}
+	correlation := v4TraceCorrelation{}
 	for field, target := range map[string]*string{
 		"protocol_session_id":   &correlation.ProtocolSessionID,
 		"protocol_operation_id": &correlation.ProtocolOperationID,
@@ -352,8 +346,8 @@ func validateV3TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 		"peer_attempt_id":       &correlation.PeerAttemptID,
 	} {
 		if value, present := object[field]; present {
-			*target = v3TraceStringRaw(t, value, context+"."+field)
-			validateV3TraceIdentity(t, *target, context+"."+field, v3IdentityBytes)
+			*target = v4TraceStringRaw(t, value, context+"."+field)
+			validateV4TraceIdentity(t, *target, context+"."+field, v4IdentityBytes)
 		}
 	}
 	if correlation.ProtocolOperationID != "" && correlation.ProtocolSessionID == "" {
@@ -368,8 +362,8 @@ func validateV3TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 		t.Fatalf("%s must contain lane_id and lane_epoch together", context)
 	}
 	if hasLaneID {
-		laneID := v3TraceIntegerRaw(t, laneIDRaw, context+".lane_id")
-		laneEpoch := v3TraceIntegerRaw(t, laneEpochRaw, context+".lane_epoch")
+		laneID := v4TraceIntegerRaw(t, laneIDRaw, context+".lane_id")
+		laneEpoch := v4TraceIntegerRaw(t, laneEpochRaw, context+".lane_epoch")
 		if laneID > uint64(^uint32(0)) || laneEpoch > uint64(^uint32(0)) {
 			t.Fatalf("%s lane identity exceeds uint32", context)
 		}
@@ -381,7 +375,7 @@ func validateV3TraceCorrelation(t *testing.T, raw json.RawMessage, context strin
 	return correlation
 }
 
-func validateV3DiagnosticRecord(t *testing.T, record v3TraceRecord) {
+func validateV4DiagnosticRecord(t *testing.T, record v4TraceRecord) {
 	t.Helper()
 	switch record.Event {
 	case "lane_adopted", "lane_settlement":
@@ -389,15 +383,15 @@ func validateV3DiagnosticRecord(t *testing.T, record v3TraceRecord) {
 			record.Correlation.LaneID == nil || record.Correlation.LaneEpoch == nil {
 			t.Fatalf("%s lacks protocol session and lane correlation", record.Event)
 		}
-	case "protocol_operation":
+	case "protocol_operation", "sender_content_decision", "protocol_response_send_not_started", "protocol_response_send_returned", "protocol_send_attempt_settled", "protocol_error_received":
 		if record.Correlation == nil || record.Correlation.ProtocolSessionID == "" ||
 			record.Correlation.ProtocolOperationID == "" {
 			t.Fatal("protocol operation lacks shared session/operation correlation")
 		}
 	case "filesystem_output":
 		if raw, present := record.Payload["checkpoint_decision"]; present {
-			decision := v3TraceStringRaw(t, raw, "filesystem_output.checkpoint_decision")
-			if !v3ValidFilesystemCheckpointDecision(record.Event, decision) {
+			decision := v4TraceStringRaw(t, raw, "filesystem_output.checkpoint_decision")
+			if !v4ValidFilesystemCheckpointDecision(record.Event, decision) {
 				t.Fatalf(
 					"filesystem checkpoint decision %q is outside the closed vocabulary",
 					decision,
@@ -405,29 +399,29 @@ func validateV3DiagnosticRecord(t *testing.T, record v3TraceRecord) {
 			}
 		}
 	case "observer_loss":
-		if !v3KnownObserverLossCategory(v3TraceStringField(t, record.Payload, "category")) {
+		if !v4KnownObserverLossCategory(v4TraceStringField(t, record.Payload, "category")) {
 			t.Fatal("observer loss category is outside the closed vocabulary")
 		}
-		if !v3KnownObserverLossReason(v3TraceStringField(t, record.Payload, "reason")) {
+		if !v4KnownObserverLossReason(v4TraceStringField(t, record.Payload, "reason")) {
 			t.Fatal("observer loss reason is outside the closed vocabulary")
 		}
-		if v3TraceDecimalField(t, record.Payload, "count") == 0 {
+		if v4TraceDecimalField(t, record.Payload, "count") == 0 {
 			t.Fatal("observer loss count is zero")
 		}
 	case "receiver_termination":
-		switch reason := v3TraceStringField(t, record.Payload, "local_stop_reason"); reason {
+		switch reason := v4TraceStringField(t, record.Payload, "local_stop_reason"); reason {
 		case "none", "caller_stop", "output_admission_stop", "runtime_session_failure", "normal_completion":
 		default:
 			t.Fatalf("receiver termination has unknown local stop reason %q", reason)
 		}
 	case "relay_lifecycle":
-		if v3TraceStringField(t, record.Payload, "stage") == "send_admitted" {
+		if v4TraceStringField(t, record.Payload, "stage") == "send_admitted" {
 			t.Fatal("ordinary successful relay sends must not enter the user trace")
 		}
 	}
 }
 
-func v3ValidFilesystemCheckpointDecision(event, decision string) bool {
+func v4ValidFilesystemCheckpointDecision(event, decision string) bool {
 	if event != "filesystem_output" {
 		return false
 	}
@@ -439,7 +433,7 @@ func v3ValidFilesystemCheckpointDecision(event, decision string) bool {
 	}
 }
 
-func v3KnownObserverLossCategory(value string) bool {
+func v4KnownObserverLossCategory(value string) bool {
 	switch value {
 	case "relay_lifecycle", "webrtc_lifecycle", "sender_attempt", "receiver_termination", "lane_settlement",
 		"protocol_operation", "transfer_lifecycle", "filesystem_output", "catalog_storage", "root_prefetch",
@@ -450,17 +444,17 @@ func v3KnownObserverLossCategory(value string) bool {
 	}
 }
 
-func v3KnownObserverLossReason(value string) bool {
+func v4KnownObserverLossReason(value string) bool {
 	switch value {
 	case "unknown_enum", "invalid_identity", "invalid_stage_field_combination", "event_contract_rejection",
-		"adapter_capacity_timeout", "trace_queue", "recorder_closed":
+		"adapter_capacity_timeout", "trace_queue", "recorder_closed", "observation_capacity", "consumer_undrained", "signature_capacity", "observer_panic":
 		return true
 	default:
 		return false
 	}
 }
 
-func v3TraceObjectMap(t *testing.T, raw json.RawMessage, context string) map[string]json.RawMessage {
+func v4TraceObjectMap(t *testing.T, raw json.RawMessage, context string) map[string]json.RawMessage {
 	t.Helper()
 	var object map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &object); err != nil || object == nil {
@@ -469,16 +463,16 @@ func v3TraceObjectMap(t *testing.T, raw json.RawMessage, context string) map[str
 	return object
 }
 
-func v3TraceStringField(t *testing.T, object map[string]json.RawMessage, field string) string {
+func v4TraceStringField(t *testing.T, object map[string]json.RawMessage, field string) string {
 	t.Helper()
 	raw, present := object[field]
 	if !present {
 		t.Fatalf("user trace is missing %q", field)
 	}
-	return v3TraceStringRaw(t, raw, field)
+	return v4TraceStringRaw(t, raw, field)
 }
 
-func v3TraceStringRaw(t *testing.T, raw json.RawMessage, context string) string {
+func v4TraceStringRaw(t *testing.T, raw json.RawMessage, context string) string {
 	t.Helper()
 	var value string
 	if err := json.Unmarshal(raw, &value); err != nil {
@@ -487,7 +481,7 @@ func v3TraceStringRaw(t *testing.T, raw json.RawMessage, context string) string 
 	return value
 }
 
-func v3TraceBoolField(t *testing.T, object map[string]json.RawMessage, field string) bool {
+func v4TraceBoolField(t *testing.T, object map[string]json.RawMessage, field string) bool {
 	t.Helper()
 	raw, present := object[field]
 	if !present {
@@ -500,16 +494,16 @@ func v3TraceBoolField(t *testing.T, object map[string]json.RawMessage, field str
 	return value
 }
 
-func v3TraceIntegerField(t *testing.T, object map[string]json.RawMessage, field string) uint64 {
+func v4TraceIntegerField(t *testing.T, object map[string]json.RawMessage, field string) uint64 {
 	t.Helper()
 	raw, present := object[field]
 	if !present {
 		t.Fatalf("user trace is missing %q", field)
 	}
-	return v3TraceIntegerRaw(t, raw, field)
+	return v4TraceIntegerRaw(t, raw, field)
 }
 
-func v3TraceIntegerRaw(t *testing.T, raw json.RawMessage, context string) uint64 {
+func v4TraceIntegerRaw(t *testing.T, raw json.RawMessage, context string) uint64 {
 	t.Helper()
 	var value json.Number
 	if err := json.Unmarshal(raw, &value); err != nil {
@@ -522,18 +516,18 @@ func v3TraceIntegerRaw(t *testing.T, raw json.RawMessage, context string) uint64
 	return parsed
 }
 
-func v3TraceDecimalField(t *testing.T, object map[string]json.RawMessage, field string) uint64 {
+func v4TraceDecimalField(t *testing.T, object map[string]json.RawMessage, field string) uint64 {
 	t.Helper()
 	raw, present := object[field]
 	if !present {
 		t.Fatalf("user trace is missing %q", field)
 	}
-	return v3TraceDecimalRaw(t, raw, field)
+	return v4TraceDecimalRaw(t, raw, field)
 }
 
-func v3TraceDecimalRaw(t *testing.T, raw json.RawMessage, context string) uint64 {
+func v4TraceDecimalRaw(t *testing.T, raw json.RawMessage, context string) uint64 {
 	t.Helper()
-	value := v3TraceStringRaw(t, raw, context)
+	value := v4TraceStringRaw(t, raw, context)
 	parsed, err := strconv.ParseUint(value, 10, 64)
 	if err != nil || strconv.FormatUint(parsed, 10) != value {
 		t.Fatalf("user trace field %s is not a canonical unsigned decimal string: %q", context, value)
@@ -541,7 +535,7 @@ func v3TraceDecimalRaw(t *testing.T, raw json.RawMessage, context string) uint64
 	return parsed
 }
 
-func validateV3TraceIdentity(t *testing.T, value, context string, wantBytes int) {
+func validateV4TraceIdentity(t *testing.T, value, context string, wantBytes int) {
 	t.Helper()
 	decoded, err := base64.RawURLEncoding.DecodeString(value)
 	if err != nil || len(decoded) != wantBytes || base64.RawURLEncoding.EncodeToString(decoded) != value {
@@ -549,7 +543,7 @@ func validateV3TraceIdentity(t *testing.T, value, context string, wantBytes int)
 	}
 }
 
-func v3TraceContainsForbidden(encoded []byte, forbidden string) bool {
+func v4TraceContainsForbidden(encoded []byte, forbidden string) bool {
 	if forbidden == "" {
 		return false
 	}
@@ -572,7 +566,7 @@ func v3TraceContainsForbidden(encoded []byte, forbidden string) bool {
 
 func requireV2UserTraceFact(t *testing.T, process *v2Process, event, field, value string) {
 	t.Helper()
-	records, _ := readV3UserTrace(t, process.userTracePath, process.userTraceCommand)
+	records, _ := readV4UserTrace(t, process.userTracePath, process.userTraceCommand)
 	for _, record := range records {
 		if record.Event != event {
 			continue
@@ -589,8 +583,8 @@ func requireV2UserTraceFact(t *testing.T, process *v2Process, event, field, valu
 
 func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, receiveOperationID string) {
 	t.Helper()
-	receiveOperationID = v3TraceIdentityFromHex(t, receiveOperationID)
-	records, _ := readV3UserTrace(t, process.userTracePath, process.userTraceCommand)
+	receiveOperationID = v4TraceIdentityFromHex(t, receiveOperationID)
+	records, _ := readV4UserTrace(t, process.userTracePath, process.userTraceCommand)
 	checkpointReconciled := false
 	receiverCompleted := false
 	laneSettlements := 0
@@ -600,8 +594,8 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 		switch record.Event {
 		case "filesystem_output":
 			if operation, ok := record.Payload["operation"]; ok &&
-				v3TraceStringRaw(t, operation, "filesystem_output.operation") == "checkpoint_reconciled" {
-				if v3TraceStringField(t, record.Payload, "receive_operation_id") != receiveOperationID {
+				v4TraceStringRaw(t, operation, "filesystem_output.operation") == "checkpoint_reconciled" {
+				if v4TraceStringField(t, record.Payload, "receive_operation_id") != receiveOperationID {
 					t.Fatal("checkpoint reconciliation belongs to a different retained operation")
 				}
 				checkpointReconciled = true
@@ -622,7 +616,7 @@ func assertV2UserTraceProductDiagnostics(t *testing.T, process *v2Process, recei
 		case "lane_adopted":
 			laneAdoptions++
 		case "receiver_termination":
-			if v3TraceStringField(t, record.Payload, "local_stop_reason") == "normal_completion" {
+			if v4TraceStringField(t, record.Payload, "local_stop_reason") == "normal_completion" {
 				receiverCompleted = true
 			}
 		case "fallback":
@@ -651,19 +645,19 @@ func assertV2UserTraceTransportDiagnostics(
 	requireReceiverTermination bool,
 ) {
 	t.Helper()
-	records, _ := readV3UserTrace(t, process.userTracePath, process.userTraceCommand)
+	records, _ := readV4UserTrace(t, process.userTracePath, process.userTraceCommand)
 	delivered := false
 	receiverCompleted := false
 	for _, record := range records {
 		switch record.Event {
 		case "lane_settlement":
-			if v3TraceStringField(t, record.Payload, "route") == wantRoute &&
-				v3TraceDecimalField(t, record.Payload, "delivered_blocks") > 0 &&
-				v3TraceDecimalField(t, record.Payload, "delivered_bytes") > 0 {
+			if v4TraceStringField(t, record.Payload, "route") == wantRoute &&
+				v4TraceDecimalField(t, record.Payload, "delivered_blocks") > 0 &&
+				v4TraceDecimalField(t, record.Payload, "delivered_bytes") > 0 {
 				delivered = true
 			}
 		case "receiver_termination":
-			if v3TraceStringField(t, record.Payload, "local_stop_reason") == "normal_completion" {
+			if v4TraceStringField(t, record.Payload, "local_stop_reason") == "normal_completion" {
 				receiverCompleted = true
 			}
 		case "fallback":
@@ -680,40 +674,40 @@ func assertV2UserTraceTransportDiagnostics(
 	}
 }
 
-type v3ProtocolCorrelationKey struct {
+type v4ProtocolCorrelationKey struct {
 	ProtocolSessionID   string
 	ProtocolOperationID string
 	LaneID              uint32
 	LaneEpoch           uint32
 }
 
-type v3ProtocolCorrelationEvidence struct {
+type v4ProtocolCorrelationEvidence struct {
 	runtimeRunID string
-	keys         map[v3ProtocolCorrelationKey]struct{}
+	keys         map[v4ProtocolCorrelationKey]struct{}
 }
 
-type v3CriticalCorrelationState struct {
+type v4CriticalCorrelationState struct {
 	cleanupRegistered bool
-	sender            *v3ProtocolCorrelationEvidence
-	receivers         map[string]v3ProtocolCorrelationEvidence
+	sender            *v4ProtocolCorrelationEvidence
+	receivers         map[string]v4ProtocolCorrelationEvidence
 }
 
 // Each process seals and validates its own trace when wait completes. Retaining
 // only correlation keys by scenario lets the final sender wait prove the join
-// without adding a second process scenario or coupling process lifetime code to v3.
-var v3CriticalCorrelations = struct {
+// without adding a second process scenario or coupling process lifetime code to v4.
+var v4CriticalCorrelations = struct {
 	sync.Mutex
-	states map[*v2Scenario]*v3CriticalCorrelationState
-}{states: make(map[*v2Scenario]*v3CriticalCorrelationState)}
+	states map[*v2Scenario]*v4CriticalCorrelationState
+}{states: make(map[*v2Scenario]*v4CriticalCorrelationState)}
 
-func registerCriticalV3ProtocolCorrelation(t *testing.T, process *v2Process, records []v3TraceRecord) {
+func registerCriticalV4ProtocolCorrelation(t *testing.T, process *v2Process, records []v4TraceRecord) {
 	t.Helper()
 	if process.scenario.operation.Scenario() != v2CriticalRelayTransferScenario {
 		return
 	}
-	evidence := v3ProtocolCorrelationEvidence{
+	evidence := v4ProtocolCorrelationEvidence{
 		runtimeRunID: records[0].RuntimeRunID,
-		keys:         make(map[v3ProtocolCorrelationKey]struct{}),
+		keys:         make(map[v4ProtocolCorrelationKey]struct{}),
 	}
 	for _, record := range records {
 		correlation := record.Correlation
@@ -722,7 +716,7 @@ func registerCriticalV3ProtocolCorrelation(t *testing.T, process *v2Process, rec
 			correlation.LaneID == nil || correlation.LaneEpoch == nil {
 			continue
 		}
-		evidence.keys[v3ProtocolCorrelationKey{
+		evidence.keys[v4ProtocolCorrelationKey{
 			ProtocolSessionID:   correlation.ProtocolSessionID,
 			ProtocolOperationID: correlation.ProtocolOperationID,
 			LaneID:              *correlation.LaneID,
@@ -733,18 +727,18 @@ func registerCriticalV3ProtocolCorrelation(t *testing.T, process *v2Process, rec
 		t.Fatalf("%s trace has no complete protocol session/operation/lane correlation", process.component)
 	}
 
-	v3CriticalCorrelations.Lock()
-	state := v3CriticalCorrelations.states[process.scenario]
+	v4CriticalCorrelations.Lock()
+	state := v4CriticalCorrelations.states[process.scenario]
 	if state == nil {
-		state = &v3CriticalCorrelationState{receivers: make(map[string]v3ProtocolCorrelationEvidence)}
-		v3CriticalCorrelations.states[process.scenario] = state
+		state = &v4CriticalCorrelationState{receivers: make(map[string]v4ProtocolCorrelationEvidence)}
+		v4CriticalCorrelations.states[process.scenario] = state
 	}
 	if !state.cleanupRegistered {
 		state.cleanupRegistered = true
 		t.Cleanup(func() {
-			v3CriticalCorrelations.Lock()
-			delete(v3CriticalCorrelations.states, process.scenario)
-			v3CriticalCorrelations.Unlock()
+			v4CriticalCorrelations.Lock()
+			delete(v4CriticalCorrelations.states, process.scenario)
+			v4CriticalCorrelations.Unlock()
 		})
 	}
 	if process.userTraceCommand == "share" {
@@ -753,11 +747,11 @@ func registerCriticalV3ProtocolCorrelation(t *testing.T, process *v2Process, rec
 		state.receivers[process.userTracePath] = evidence
 	}
 	sender := state.sender
-	receivers := make([]v3ProtocolCorrelationEvidence, 0, len(state.receivers))
+	receivers := make([]v4ProtocolCorrelationEvidence, 0, len(state.receivers))
 	for _, receiver := range state.receivers {
 		receivers = append(receivers, receiver)
 	}
-	v3CriticalCorrelations.Unlock()
+	v4CriticalCorrelations.Unlock()
 
 	if sender == nil {
 		return
@@ -769,15 +763,15 @@ func registerCriticalV3ProtocolCorrelation(t *testing.T, process *v2Process, rec
 		if sender.runtimeRunID == receiver.runtimeRunID {
 			t.Fatal("sender and receiver unexpectedly share a local runtime_run_id")
 		}
-		if !v3TraceCorrelationsIntersect(sender.keys, receiver.keys) {
+		if !v4TraceCorrelationsIntersect(sender.keys, receiver.keys) {
 			t.Fatal("sender and receiver traces have no shared protocol session/operation/lane correlation")
 		}
 	}
 }
 
-func v3TraceCorrelationsIntersect(
-	left map[v3ProtocolCorrelationKey]struct{},
-	right map[v3ProtocolCorrelationKey]struct{},
+func v4TraceCorrelationsIntersect(
+	left map[v4ProtocolCorrelationKey]struct{},
+	right map[v4ProtocolCorrelationKey]struct{},
 ) bool {
 	for key := range left {
 		if _, present := right[key]; present {
@@ -787,13 +781,13 @@ func v3TraceCorrelationsIntersect(
 	return false
 }
 
-func TestUserTraceV3DiagnosticContract(t *testing.T) {
-	runtimeRunID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, v3IdentityBytes))
-	protocolSessionID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, v3IdentityBytes))
-	protocolOperationID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, v3IdentityBytes))
+func TestUserTraceV4DiagnosticContract(t *testing.T) {
+	runtimeRunID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x11}, v4IdentityBytes))
+	protocolSessionID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x22}, v4IdentityBytes))
+	protocolOperationID := base64.RawURLEncoding.EncodeToString(bytes.Repeat([]byte{0x33}, v4IdentityBytes))
 	base := func(sequence int, event string, payload map[string]any) map[string]any {
 		return map[string]any{
-			"schema_version": v3TraceSchemaVersion,
+			"schema_version": v4TraceSchemaVersion,
 			"sequence":       strconv.Itoa(sequence),
 			"time":           "2026-08-17T00:00:00Z",
 			"elapsed_ms":     strconv.Itoa(sequence),
@@ -812,16 +806,16 @@ func TestUserTraceV3DiagnosticContract(t *testing.T) {
 		"protocol_session_id": protocolSessionID, "lane_id": 1, "lane_epoch": 0,
 	}
 	protocol := base(2, "protocol_operation", map[string]any{
-		"role": "receiver", "stage": "receiver_settled", "request_kind": "request_file",
+		"observed_at": "2026-08-23T00:00:00Z", "role": "receiver", "stage": "receiver_ended", "request_kind": "list_children",
 		"response_count": "1", "operation_elapsed_ms": "2", "usable_lanes_at_selection": 1,
-		"usable_lanes_at_settlement": 1, "cause": "completed",
+		"usable_lanes_at_settlement": 1, "cause": "none",
 	})
 	protocol["correlation"] = map[string]any{
 		"protocol_session_id": protocolSessionID, "protocol_operation_id": protocolOperationID,
 		"lane_id": 1, "lane_epoch": 0,
 	}
 	loss := base(3, "observer_loss", map[string]any{
-		"category": "filesystem_output", "reason": "trace_queue", "count": "1",
+		"category": "filesystem_output", "reason": "trace_queue", "count": "1", "omitted_samples": "0",
 	})
 	termination := base(4, "receiver_termination", map[string]any{
 		"local_generation": "1", "transition_authority": "local", "disposition": "session_unavailable",
@@ -860,7 +854,7 @@ func TestUserTraceV3DiagnosticContract(t *testing.T) {
 	if err := os.WriteFile(path, encoded.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	records, _ := readV3UserTrace(t, path, "get")
+	records, _ := readV4UserTrace(t, path, "get")
 	if len(records) != len(recordVectors) {
 		t.Fatalf("diagnostic records=%d want=%d", len(records), len(recordVectors))
 	}

@@ -93,19 +93,13 @@ describe('v2 operation replay ownership', () => {
     const routed = router.route(operationError(operationId, 'peer', providerDetail, [peerPathId, attemptId, 1n]), 4, 0)
 
     const delivered = await deliveredFailure
-    expect(delivered.protocolFailure).toMatchObject({
-      requestKind: 'peer_offer',
-      wireScope: 'peer',
-      retryable: false,
-      settlement: { kind: 'received_authenticated' },
-      correlation: {
+    expect(delivered.protocolFailure).toMatchObject({ requestKind: 'peer_offer', correlation: {
         protocolSessionId: { kind: 'protocol_session', byteLength: 16 },
         protocolOperationId: { kind: 'protocol_operation', byteLength: 16 },
         peerPathId: { kind: 'peer_path', byteLength: 16 },
         peerAttemptId: { kind: 'peer_attempt', byteLength: 16 },
         lane: { id: 4, epoch: 0 },
-      },
-    })
+      }, content: { scope: 'peer', retryable: false } })
     expect(delivered.protocolFailure?.correlation.peerPathId?.copyBytes()).toEqual(peerPathId)
     expect(delivered.protocolFailure?.correlation.peerAttemptId?.copyBytes()).toEqual(attemptId)
     expect(JSON.stringify(delivered.protocolFailure)).not.toContain(providerDetail)
@@ -118,7 +112,8 @@ describe('v2 operation replay ownership', () => {
     expect(events[1]).toMatchObject({
       eventName: 'protocol_operation',
       transition: 'authenticated_failure',
-      protocolFailure: delivered.protocolFailure,
+      protocolError: delivered.protocolFailure?.content,
+      correlation: delivered.protocolFailure?.correlation,
     })
   })
 

@@ -66,7 +66,7 @@ func TestSendReceiptPreflightDropDoesNotReserveAnUnsentOperation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- retryWriter.Run(ctx) }()
-	if outcome, waitErr := retryReceipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+	if outcome, waitErr := retryReceipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 		t.Fatalf("retry receipt = %d, %v", outcome, waitErr)
 	}
 	cancel()
@@ -122,7 +122,7 @@ func TestSendReceiptMakesCancelBeforeSendAndSendBeforeCancelUnambiguous(t *testi
 		}
 		close(channel.releaseFirst)
 		outcome, err := receipt.Wait(context.Background())
-		if err != nil || outcome != SendOutcomeDelivered {
+		if err != nil || outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("send-before-cancel outcome=%d err=%v", outcome, err)
 		}
 		if len(channel.frames()) != 1 {
@@ -222,7 +222,7 @@ func TestSendReceiptKeepsTransportFailureAndCallerTimeoutUncertain(t *testing.T)
 		runDone := make(chan error, 1)
 		go func() { runDone <- writer.Run(runContext) }()
 		outcome, err := second.Wait(context.Background())
-		if err != nil || outcome != SendOutcomeDelivered {
+		if err != nil || outcome != SendOutcomeTransportConfirmed {
 			t.Fatalf("sentinel completion outcome=%d err=%v", outcome, err)
 		}
 		channel.mu.Lock()
@@ -253,7 +253,7 @@ func TestSendReceiptKeepsTransportFailureAndCallerTimeoutUncertain(t *testing.T)
 			t.Fatalf("post-admission cancellation=%+v", completion)
 		}
 		close(channel.releaseFirst)
-		if outcome, err := receipt.Wait(context.Background()); outcome != SendOutcomeDelivered || err != nil {
+		if outcome, err := receipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || err != nil {
 			t.Fatalf("physical completion=%d, %v", outcome, err)
 		}
 		stopWriter()
@@ -336,11 +336,11 @@ func TestSendReceiptKeepsTransportFailureAndCallerTimeoutUncertain(t *testing.T)
 
 func TestSendReceiptCompletionWinsCallerCancellationRace(t *testing.T) {
 	result := newDeliveryResult()
-	result.complete(SendOutcomeDelivered, OutboundReplayPermit{}, false, nil)
+	result.complete(SendOutcomeTransportConfirmed, OutboundReplayPermit{}, false, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	completion := result.receipt().Await(ctx)
-	if !completion.Settled || completion.Outcome != SendOutcomeDelivered || completion.Err != nil {
+	if !completion.Settled || completion.Outcome != SendOutcomeTransportConfirmed || completion.Err != nil {
 		t.Fatalf("completed receipt lost cancellation race: %+v", completion)
 	}
 }
@@ -370,9 +370,9 @@ func TestSendReceiptSealingSnapshotWithholdsUncommittedReplay(t *testing.T) {
 	if err := result.commitReservationSeal(); err != nil {
 		t.Fatal(err)
 	}
-	result.complete(SendOutcomeDelivered, replay, false, nil)
+	result.complete(SendOutcomeTransportConfirmed, replay, false, nil)
 	settled := result.receipt().Await(context.Background())
-	if !settled.Settled || !settled.Admitted || settled.Outcome != SendOutcomeDelivered ||
+	if !settled.Settled || !settled.Admitted || settled.Outcome != SendOutcomeTransportConfirmed ||
 		settled.Replay.IsZero() || settled.Err != nil {
 		t.Fatalf("committed completion = %+v", settled)
 	}

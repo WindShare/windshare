@@ -22,8 +22,6 @@ var protocolOperationStageProjections = map[sessionruntime.ProtocolOperationStag
 	sessionruntime.ProtocolOperationReceiverFailed:                  clievent.ProtocolOperationReceiverFailed,
 	sessionruntime.ProtocolOperationReceiverEnded:                   clievent.ProtocolOperationReceiverEnded,
 	sessionruntime.ProtocolOperationSenderRequestReceived:           clievent.ProtocolOperationSenderRequestReceived,
-	sessionruntime.ProtocolOperationSenderResponseSettled:           clievent.ProtocolOperationSenderResponseSettled,
-	sessionruntime.ProtocolOperationSenderContentDecision:           clievent.ProtocolOperationSenderContentDecision,
 	sessionruntime.ProtocolOperationReceiverWaitingActiveCapacity:   clievent.ProtocolOperationReceiverWaitingActiveCapacity,
 	sessionruntime.ProtocolOperationReceiverWaitingRetainedCapacity: clievent.ProtocolOperationReceiverWaitingRetainedCapacity,
 	sessionruntime.ProtocolOperationReceiverAdmissionReady:          clievent.ProtocolOperationReceiverAdmissionReady,
@@ -51,9 +49,9 @@ var protocolMessageKindProjections = map[protocolsession.MessageKind]clievent.Pr
 }
 
 var protocolSendOutcomeProjections = map[protocolsession.SendOutcome]clievent.ProtocolSendOutcome{
-	protocolsession.SendOutcomeUnknown:   clievent.ProtocolSendUnknown,
-	protocolsession.SendOutcomeDelivered: clievent.ProtocolSendDelivered,
-	protocolsession.SendOutcomeDropped:   clievent.ProtocolSendDropped,
+	protocolsession.SendOutcomeUnknown:            clievent.ProtocolSendUnknown,
+	protocolsession.SendOutcomeTransportConfirmed: clievent.ProtocolSendTransportConfirmed,
+	protocolsession.SendOutcomeDropped:            clievent.ProtocolSendDropped,
 }
 
 var protocolOperationCauseProjections = map[sessionruntime.ProtocolOperationCause]clievent.ProtocolOperationCause{
@@ -67,11 +65,11 @@ var protocolOperationCauseProjections = map[sessionruntime.ProtocolOperationCaus
 	sessionruntime.ProtocolOperationCauseProtocolFailure: clievent.ProtocolOperationCauseProtocolFailure,
 }
 
-var protocolFailureScopeProjections = map[sessionruntime.ProtocolFailureScope]clievent.ProtocolFailureScope{
-	sessionruntime.ProtocolFailureDirectory: clievent.ProtocolFailureDirectory,
-	sessionruntime.ProtocolFailureRevision:  clievent.ProtocolFailureRevision,
-	sessionruntime.ProtocolFailureBlock:     clievent.ProtocolFailureBlock,
-	sessionruntime.ProtocolFailurePeer:      clievent.ProtocolFailurePeer,
+var protocolFailureScopeProjections = map[sessionruntime.ProtocolErrorScope]clievent.ProtocolErrorScope{
+	sessionruntime.ProtocolErrorDirectory: clievent.ProtocolErrorDirectory,
+	sessionruntime.ProtocolErrorRevision:  clievent.ProtocolErrorRevision,
+	sessionruntime.ProtocolErrorBlock:     clievent.ProtocolErrorBlock,
+	sessionruntime.ProtocolErrorPeer:      clievent.ProtocolErrorPeer,
 }
 
 func projectProtocolOperationStage(value sessionruntime.ProtocolOperationStage) (clievent.ProtocolOperationStage, bool) {
@@ -94,9 +92,57 @@ func projectProtocolOperationCause(value sessionruntime.ProtocolOperationCause) 
 	return projected, ok
 }
 
-func projectProtocolFailureScope(
-	value sessionruntime.ProtocolFailureScope,
-) (clievent.ProtocolFailureScope, bool) {
+func projectProtocolErrorScope(
+	value sessionruntime.ProtocolErrorScope,
+) (clievent.ProtocolErrorScope, bool) {
 	projected, ok := protocolFailureScopeProjections[value]
 	return projected, ok
+}
+
+var responseSendEvidenceProjections = map[protocolsession.ResponseSendEvidence]clievent.ResponseSendEvidence{
+	protocolsession.ResponseSendEvidenceDefinitelyNotSent:  clievent.ResponseSendEvidenceDefinitelyNotSent,
+	protocolsession.ResponseSendEvidenceUncertain:          clievent.ResponseSendEvidenceUncertain,
+	protocolsession.ResponseSendEvidenceTransportConfirmed: clievent.ResponseSendEvidenceTransportConfirmed,
+}
+
+var responseSendEndProjections = map[protocolsession.ResponseSendEnd]clievent.ResponseSendEnd{
+	protocolsession.ResponseSendEndPreparationFailed:    clievent.ResponseSendEndPreparationFailed,
+	protocolsession.ResponseSendEndRouteUnavailable:     clievent.ResponseSendEndRouteUnavailable,
+	protocolsession.ResponseSendEndAuthorityUnavailable: clievent.ResponseSendEndAuthorityUnavailable,
+	protocolsession.ResponseSendEndTransportConfirmed:   clievent.ResponseSendEndTransportConfirmed,
+	protocolsession.ResponseSendEndPolicySuppressed:     clievent.ResponseSendEndPolicySuppressed,
+	protocolsession.ResponseSendEndCallerCanceled:       clievent.ResponseSendEndCallerCanceled,
+	protocolsession.ResponseSendEndDeadlineExceeded:     clievent.ResponseSendEndDeadlineExceeded,
+	protocolsession.ResponseSendEndRuntimeStopped:       clievent.ResponseSendEndRuntimeStopped,
+	protocolsession.ResponseSendEndRetryDisallowed:      clievent.ResponseSendEndRetryDisallowed,
+	protocolsession.ResponseSendEndNoUsableLane:         clievent.ResponseSendEndNoUsableLane,
+	protocolsession.ResponseSendEndAttemptsExhausted:    clievent.ResponseSendEndAttemptsExhausted,
+	protocolsession.ResponseSendEndAuthorityLost:        clievent.ResponseSendEndAuthorityLost,
+	protocolsession.ResponseSendEndInvalidReceipt:       clievent.ResponseSendEndInvalidReceipt,
+}
+
+var sendAttemptEndProjections = map[protocolsession.SendAttemptEnd]clievent.SendAttemptEnd{
+	protocolsession.SendAttemptEndRejectedBeforeReceipt: clievent.SendAttemptEndRejectedBeforeReceipt,
+	protocolsession.SendAttemptEndSettled:               clievent.SendAttemptEndSettled,
+	protocolsession.SendAttemptEndWaitingEnded:          clievent.SendAttemptEndWaitingEnded,
+}
+
+var sendCleanupProjections = map[protocolsession.SendCleanupKind]clievent.SendCleanupKind{
+	protocolsession.SendCleanupNone:             clievent.SendCleanupNone,
+	protocolsession.SendCleanupRouteReleased:    clievent.SendCleanupRouteReleased,
+	protocolsession.SendCleanupOperationRetired: clievent.SendCleanupOperationRetired,
+	protocolsession.SendCleanupFailed:           clievent.SendCleanupFailed,
+}
+
+var sendAttemptCauseProjections = map[protocolsession.SendAttemptCauseKind]clievent.SendAttemptCauseKind{
+	protocolsession.SendAttemptCauseNone:               clievent.SendAttemptCauseNone,
+	protocolsession.SendAttemptCauseCanceled:           clievent.SendAttemptCauseCanceled,
+	protocolsession.SendAttemptCauseDeadline:           clievent.SendAttemptCauseDeadline,
+	protocolsession.SendAttemptCauseControlQueueFull:   clievent.SendAttemptCauseControlQueueFull,
+	protocolsession.SendAttemptCauseDataQueueFull:      clievent.SendAttemptCauseDataQueueFull,
+	protocolsession.SendAttemptCauseWriterStopped:      clievent.SendAttemptCauseWriterStopped,
+	protocolsession.SendAttemptCauseWriterTerminal:     clievent.SendAttemptCauseWriterTerminal,
+	protocolsession.SendAttemptCauseTransportFailure:   clievent.SendAttemptCauseTransportFailure,
+	protocolsession.SendAttemptCausePreparationFailure: clievent.SendAttemptCausePreparationFailure,
+	protocolsession.SendAttemptCauseAdmissionFailure:   clievent.SendAttemptCauseAdmissionFailure,
 }
