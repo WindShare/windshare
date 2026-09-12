@@ -50,6 +50,10 @@ Keep local experiment workspaces, browser profiles, and generated file trees in 
 temporary directory. Go's `./...` traversal ignores dot directories but does not read `.gitignore`;
 large artifacts under `tmp/` slow package discovery and every gopls build view.
 
+Browser storage formats are pre-release. Incompatible capacity schemas are rejected without migration
+or deleting accounting records. After a format change, close old tabs and clear the test site's storage
+(IndexedDB and OPFS, not just the HTTP cache) before testing the new build.
+
 | Command | Runs |
 |---|---|
 | `make check` | Fast Go and Web feedback. |
