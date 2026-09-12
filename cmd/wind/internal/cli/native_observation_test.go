@@ -122,6 +122,7 @@ func TestNativeObservationRegistrationRespectsCommandVisibilityAndClose(t *testi
 	for _, detailed := range []bool{false, true} {
 		runtime, _ := newGetReportingRuntime(t, false, detailed)
 		observation := newGetObservation(runtime)
+		cleanupProtocolObservations(t, observation.state.protocol)
 		native := nativepeer.New(nativepeer.Config{Side: nativepeer.SideReceiver, ObservationCapacity: nativepeer.DefaultObservationCapacity})
 		observation.registerNative(native)
 		if (observation.state.native.reader != nil) != detailed {
@@ -145,6 +146,7 @@ func TestShareNativeObserverLossIsReportedOnceAtFinalCut(t *testing.T) {
 	producer.TryPublish(value)
 	emitter := &shareRecordingEmitter{detailed: true}
 	observations := newShareObservations(emitter)
+	cleanupProtocolObservations(t, observations.protocol)
 	observations.nativeReader = startNativeObservation(&testNativeObservationSource{producer: producer, stream: stream}, clievent.CommandShare, emitter)
 	observations.completeWithin()
 	observations.completeWithin()
@@ -157,6 +159,7 @@ func TestSenderNativeQueueTracksDetailedCommandOwnership(t *testing.T) {
 	for _, detailed := range []bool{false, true} {
 		emitter := &shareRecordingEmitter{detailed: detailed}
 		observations := newShareObservations(emitter)
+		cleanupProtocolObservations(t, observations.protocol)
 		factory, err := (&App{}).newSenderPeerFactory(observations, nil)
 		if err != nil {
 			t.Fatal(err)

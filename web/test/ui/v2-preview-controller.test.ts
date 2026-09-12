@@ -5,7 +5,7 @@ import { encodeBase64Url } from '../../src/crypto/bytes'
 import {
   createFailureIdentity,
   createIncidentScopeIssuer,
-  createProtocolFailure,
+  createReceivedProtocolError,
   type FailureFact,
   type FailureFactRelation,
   type IncidentScopeHandle,
@@ -183,17 +183,13 @@ function identityText(first: number): string {
 }
 
 function authenticatedRemoteOperationError(): V2RemoteOperationError {
-  return new V2RemoteOperationError(createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: 0x22,
-    retryable: true,
-    retryAfterMilliseconds: 250,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  return new V2RemoteOperationError(createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(9)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(10)),
-    }),
+    }), content: {
+      scope: 'revision', code: 0x22, retryable: true, retryAfterMilliseconds: 250
+    }
   }))
 }
 
@@ -203,17 +199,13 @@ function authenticatedRevisionCapacityError(): V2RevisionCapacityBusyError {
     retryable: true as const,
     retryAfterMilliseconds: 250,
   })
-  return new V2RevisionCapacityBusyError(failure, createProtocolFailure({
-    requestKind: 'open_revisions',
-    wireScope: 'revision',
-    wireCode: failure.code,
-    retryable: failure.retryable,
-    retryAfterMilliseconds: failure.retryAfterMilliseconds,
-    settlement: Object.freeze({ kind: 'received_authenticated' }),
-    correlation: Object.freeze({
+  return new V2RevisionCapacityBusyError(createReceivedProtocolError({
+    requestKind: 'open_revisions', correlation: Object.freeze({
       protocolSessionId: createFailureIdentity('protocol_session', identity(11)),
       protocolOperationId: createFailureIdentity('protocol_operation', identity(12)),
-    }),
+    }), content: {
+      scope: 'revision', code: failure.code, retryable: failure.retryable, retryAfterMilliseconds: failure.retryAfterMilliseconds
+    }
   }))
 }
 
@@ -614,12 +606,7 @@ describe('v2 preview incident ownership', () => {
         kind: 'protocol_failure',
         correlation: failure.failureFact.correlation,
         payload: {
-          protocolFailure: {
-            wireCode: V2_REVISION_CODE_QUOTA,
-            retryable: true,
-            retryAfterMilliseconds: 250,
-            correlation: failure.protocolFailure.correlation,
-          },
+          protocolFailure: { correlation: failure.protocolFailure.correlation, content: { code: V2_REVISION_CODE_QUOTA, retryable: true, retryAfterMilliseconds: 250 } },
         },
       },
       relation: 'contributor',

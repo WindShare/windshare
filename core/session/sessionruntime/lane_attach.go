@@ -245,7 +245,7 @@ func (handler *laneGrantHandler) process(ctx context.Context, message protocolse
 	outcome, err := handler.outbound.SendControl(ctx, protocolsession.MessageLaneAttach, operationID, body)
 	// Delivered and Unknown both permit peer ownership; only a proven pre-wire
 	// drop leaves the exact grant exclusively owned by this handler.
-	retainGrant = outcome != protocolsession.SendOutcomeDropped
+	retainGrant = outcome.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent
 	return err
 }
 

@@ -18,14 +18,14 @@ func TestObserverRejectionAndPeerFailureSummarySurviveEncoding(t *testing.T) {
 		Command: clievent.CommandShare, Category: clievent.ObserverLossProtocolOperation,
 		Reason: clievent.ObserverLossInvalidStageFields, Count: 17,
 		Rejection: clievent.ObservationRejection{
-			Stage: "sender_request_received", Field: "send", Rule: "settlement_requires_presence",
-			Session: session, Operation: operation, Revision: revision,
+			Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received", Field: "send", Rule: "settlement_requires_presence",
+			Session: session.Hex(), Operation: operation.Hex(), Revision: revision.Hex(),
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err := encodeV3(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, loss)
+	record, err := encodeV4(testRunIdentity(1), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, loss)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,8 +35,8 @@ func TestObserverRejectionAndPeerFailureSummarySurviveEncoding(t *testing.T) {
 	}
 	for _, field := range []string{
 		`"count":"17"`, `"field":"send"`, `"rule":"settlement_requires_presence"`,
-		`"sample_protocol_session_id":"` + encodeCorrelationIdentity(session.Bytes()) + `"`,
-		`"sample_protocol_operation_id":"` + encodeCorrelationIdentity(operation.Bytes()) + `"`,
+		`"sample_protocol_session_id":"` + session.Hex() + `"`,
+		`"sample_protocol_operation_id":"` + operation.Hex() + `"`,
 		`"sample_revision_id":"` + revision.Hex() + `"`,
 	} {
 		if !strings.Contains(string(encoded), field) {
@@ -59,11 +59,11 @@ func TestObserverRejectionAndPeerFailureSummarySurviveEncoding(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	record, err = encodeV3(testRunIdentity(1), entryMetadata{sequence: 2, time: time.Unix(2, 0)}, peer)
+	record, err = encodeV4(testRunIdentity(1), entryMetadata{sequence: 2, time: time.Unix(2, 0)}, peer)
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload := record.Payload.(peerAttemptPayloadV3)
+	payload := record.Payload.(peerAttemptPayloadV4)
 	if payload.Failure.Summary == nil || payload.Failure.Summary.StageElapsedMillis != "18716" ||
 		payload.Failure.Summary.Initiator != "remote" || payload.Failure.Summary.Cause != "remote_closed" {
 		t.Fatalf("peer summary=%+v", payload.Failure)

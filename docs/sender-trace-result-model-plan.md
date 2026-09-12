@@ -1,5 +1,12 @@
 # Sender trace 与发送结果模型重构计划
 
+## Implementation status
+
+Implemented with immutable executor-owned results, bounded receipt settlement publication, distinct
+protocol observation facts, native trace schema 4, and browser diagnostic schema 2. CLI projection
+copies factual evidence; failed projection retains bounded raw operands and independent loss counters.
+See [diagnostics](diagnostics.md) for event meanings, local response/attempt joins, and missing evidence.
+
 ## 改造目的
 
 将发送事实的定义收敛到发送执行层，让业务逻辑与 trace 使用同一个结果来源。通过明确协议错误、单次尝试、响应发送调用及最终回执的不同语义，消除调用方手工同步字段带来的不一致。
@@ -141,8 +148,8 @@ Run 显式维护当前尝试及事务汇总，返回统一结果。每次尝试�
 - cmd/wind/internal/commandprojection/observer_protocol.go
 - cmd/wind/internal/commandprojection/observer_mapping_protocol.go
 - cmd/wind/internal/clievent/protocol_operation.go
-- cmd/wind/internal/runtrace/encode_v3_session.go
-- cmd/wind/internal/runtrace/payload_v3.go
+- cmd/wind/internal/runtrace/encode_v4_session.go
+- cmd/wind/internal/runtrace/payload_v4.go
 
 投影按具体事实变体转换字段，业务状态的解释留在核心结果模型。删除协议失败对象与事件外层重复结算字段的相等规则。
 

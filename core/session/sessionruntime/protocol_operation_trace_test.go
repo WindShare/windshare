@@ -5,30 +5,45 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 type protocolTraceRecorder struct {
-	mu     sync.Mutex
-	events []ProtocolOperationTrace
+	producer observationstream.Producer[ProtocolObservation]
+	consumer observationstream.Consumer[ProtocolObservation]
+	events   []ProtocolObservation
 }
 
-func (recorder *protocolTraceRecorder) TraceProtocolOperation(event ProtocolOperationTrace) {
-	recorder.mu.Lock()
-	recorder.events = append(recorder.events, event)
-	recorder.mu.Unlock()
+func newProtocolTraceRecorder(runtime *runtimeCore) *protocolTraceRecorder {
+	producer, consumer, _ := observationstream.New[ProtocolObservation](256)
+	recorder := &protocolTraceRecorder{producer: producer, consumer: consumer}
+	runtime.protocolObservations = producer
+	return recorder
 }
-
-func (recorder *protocolTraceRecorder) snapshot() []ProtocolOperationTrace {
-	recorder.mu.Lock()
-	defer recorder.mu.Unlock()
-	return append([]ProtocolOperationTrace(nil), recorder.events...)
+func (recorder *protocolTraceRecorder) facts() []ProtocolObservation {
+	for {
+		select {
+		case event := <-recorder.consumer:
+			recorder.events = append(recorder.events, event)
+		default:
+			return append([]ProtocolObservation(nil), recorder.events...)
+		}
+	}
+}
+func (recorder *protocolTraceRecorder) snapshot() []ProtocolOperationObservation {
+	var result []ProtocolOperationObservation
+	for _, event := range recorder.facts() {
+		if value, ok := event.(ProtocolOperationObservation); ok {
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 func TestProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.T) {
@@ -37,8 +52,7 @@ func TestProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.
 
 func testProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
 	rpc := newRPCClient(runtime, bytes.NewReader(bytes.Repeat([]byte{0x63}, protocolsession.IdentityBytes)))
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
@@ -74,7 +88,7 @@ func testProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.
 		event.OperationID != call.id || event.ProtocolSessionID != runtime.sessionID ||
 		!event.HasLane || event.Lane != runtime.initial ||
 		!event.HasSend || !event.SendSettled || !event.SendAdmitted ||
-		event.SendOutcome != protocolsession.SendOutcomeDelivered ||
+		event.SendOutcome != protocolsession.SendOutcomeTransportConfirmed ||
 		event.HasResponse || event.ResponseCount != 0 ||
 		!event.HasDeadline || event.DeadlineRemainingMillis != 30_000 ||
 		event.OperationElapsedMillis != 30_000 ||
@@ -85,8 +99,7 @@ func testProtocolOperationTraceExplainsDeliveredReleaseLeaseDeadline(t *testing.
 
 func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
@@ -140,31 +153,26 @@ func TestSenderProtocolOperationTraceCorrelatesRequestAndResponse(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	events := recorder.snapshot()
-	if len(events) != 2 {
-		t.Fatalf("sender protocol trace events = %d, want 2: %+v", len(events), events)
+	facts := recorder.facts()
+	if len(facts) != 2 {
+		t.Fatalf("sender facts: %+v", facts)
 	}
-	received, responded := events[0], events[1]
-	if received.Stage != ProtocolOperationSenderRequestReceived ||
-		received.OperationID != operationID || received.RequestKind != protocolsession.MessageReleaseLease ||
-		!received.HasLane || received.Lane != runtime.initial || received.Cause != ProtocolOperationCauseNone {
-		t.Fatalf("sender request trace = %+v", received)
+	received := facts[0].(ProtocolOperationObservation)
+	responded := facts[1].(ResponseSendReturned)
+	if received.OperationID != operationID || responded.Correlation() != received.Correlation() ||
+		responded.ResponseKind() != protocolsession.MessageOperationComplete || responded.Result().Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("request=%+v response=%+v", received, responded)
 	}
-	if responded.Stage != ProtocolOperationSenderResponseSettled ||
-		responded.OperationID != operationID || responded.RequestKind != protocolsession.MessageReleaseLease ||
-		!responded.HasResponse || responded.ResponseKind != protocolsession.MessageOperationComplete ||
-		!responded.HasSend || !responded.SendSettled || !responded.SendAdmitted ||
-		responded.SendOutcome != protocolsession.SendOutcomeDelivered ||
-		!responded.HasLane || responded.Lane != runtime.initial ||
-		responded.Cause != ProtocolOperationCauseNone {
-		t.Fatalf("sender response trace = %+v", responded)
+	attempt, ok := responded.Result().Attempt(0)
+	if !ok || attempt.Identity().LaneID != runtime.initial.ID || attempt.Identity().ResponseSequence != responded.ResponseSequence() {
+		t.Fatalf("attempt=%+v", attempt)
 	}
+
 }
 
 func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
 	selected, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
@@ -229,61 +237,39 @@ func TestSenderProtocolOperationTraceCapturesFailureSendSettlement(t *testing.T)
 		t.Fatal(err)
 	}
 
-	events := recorder.snapshot()
-	if len(events) != 2 {
-		t.Fatalf("sender protocol trace events = %d, want 2: %+v", len(events), events)
+	facts := recorder.facts()
+	if len(facts) != 2 {
+		t.Fatalf("sender facts: %+v", facts)
 	}
-	event := events[1]
-	failure := event.Failure
-	if event.Stage != ProtocolOperationSenderResponseSettled ||
-		event.RequestKind != protocolsession.MessageOpenRevisions ||
-		event.ResponseKind != protocolsession.MessageOperationError ||
-		failure.IsZero() ||
-		failure.RequestKind() != protocolsession.MessageOpenRevisions ||
-		failure.WireScope() != ProtocolFailureRevision ||
-		failure.WireCode() != 0x3008 ||
-		!failure.Retryable() ||
-		failure.ProtocolSessionID() != runtime.sessionID ||
-		failure.ProtocolOperationID() != operationID {
-		t.Fatalf("sender failure trace = %+v", event)
+	event := facts[1].(ResponseSendReturned)
+	failure := event.Content()
+	if event.Correlation().OperationID != operationID || event.ResponseKind() != protocolsession.MessageOperationError ||
+		failure.WireScope() != ProtocolErrorRevision || failure.WireCode() != 0x3008 || !failure.Retryable() ||
+		event.Result().Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("fact=%+v", event)
 	}
-	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 2_000 {
-		t.Fatalf("sender failure retry after = %d, present=%v", retryAfter, present)
+	if retry, present := failure.RetryAfterMillis(); !present || retry != 2000 {
+		t.Fatalf("retry=%d/%v", retry, present)
 	}
-	if lane, present := failure.Lane(); !present || lane != runtime.initial {
-		t.Fatalf("sender failure lane = %+v, present=%v", lane, present)
-	}
-	response, present := failure.Settlement().ResponseSend()
-	if !present || !response.Admitted || !response.Settled ||
-		response.Outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("sender failure settlement = %+v, present=%v", response, present)
-	}
+
 }
 
 func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
 	operationID := id16[protocolsession.OperationID](0x78)
 
-	for _, event := range []ProtocolOperationTrace{
+	for _, event := range []ProtocolOperationObservation{
 		{
 			Stage: ProtocolOperationReceiverCompleted, OperationID: operationID,
 			RequestKind:  protocolsession.MessageRequestBlocks,
 			ResponseKind: protocolsession.MessageOperationComplete, HasResponse: true,
 			HasSend: true, SendSettled: true, SendAdmitted: true,
-			SendOutcome: protocolsession.SendOutcomeDelivered,
+			SendOutcome: protocolsession.SendOutcomeTransportConfirmed,
 		},
 		{
 			Stage: ProtocolOperationSenderRequestReceived, OperationID: operationID,
 			RequestKind: protocolsession.MessageRequestBlocks,
-		},
-		{
-			Stage: ProtocolOperationSenderResponseSettled, OperationID: operationID,
-			RequestKind:  protocolsession.MessageListChildren,
-			ResponseKind: protocolsession.MessageScanProgress, HasResponse: true,
-			HasSend: true, SendSettled: true, SendAdmitted: true,
-			SendOutcome: protocolsession.SendOutcomeDelivered,
 		},
 	} {
 		runtime.traceProtocolOperation(event)
@@ -292,7 +278,7 @@ func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T)
 		t.Fatalf("successful hot-path protocol events were retained: %+v", events)
 	}
 
-	runtime.traceProtocolOperation(ProtocolOperationTrace{
+	runtime.traceProtocolOperation(ProtocolOperationObservation{
 		Stage: ProtocolOperationReceiverFailed, OperationID: operationID,
 		RequestKind: protocolsession.MessageRequestBlocks,
 		Cause:       ProtocolOperationCauseDeadline,
@@ -302,73 +288,11 @@ func TestProtocolOperationTraceSuppressesSuccessfulTransferHotPath(t *testing.T)
 	}
 }
 
-func TestProtocolFailureForResponseSendRetainsReviewedFactsAndSettlement(t *testing.T) {
-	body, err := protocolsession.EncodeOperationFailure(protocolsession.OperationFailure{
-		Scope:      protocolsession.OperationScopeRevision,
-		Code:       0x3008,
-		Retryable:  true,
-		RetryAfter: protocolsession.MaxOperationFailureRetryAfter,
-		Message:    "provider text must not enter the trace",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionID := id16[protocolsession.ProtocolSessionID](0x7b)
-	operationID := id16[protocolsession.OperationID](0x7c)
-	lane := LaneIdentity{ID: 9, Epoch: 4}
-	failure, ok := protocolFailureForResponseSend(
-		sessionID,
-		operationID,
-		protocolsession.MessageOpenRevisions,
-		protocolsession.MessageOperationError,
-		body,
-		lane,
-		true,
-		protocolsession.SendCompletion{
-			Settled: true, Admitted: true, Outcome: protocolsession.SendOutcomeDelivered,
-		},
-	)
-	if !ok || failure.IsZero() ||
-		failure.RequestKind() != protocolsession.MessageOpenRevisions ||
-		failure.WireScope() != ProtocolFailureRevision ||
-		failure.WireCode() != 0x3008 ||
-		!failure.Retryable() ||
-		failure.ProtocolSessionID() != sessionID ||
-		failure.ProtocolOperationID() != operationID {
-		t.Fatalf("response-send protocol failure = %+v, present=%v", failure, ok)
-	}
-	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 30_000 {
-		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
-	}
-	if gotLane, present := failure.Lane(); !present || gotLane != lane {
-		t.Fatalf("failure lane = %+v, present=%v", gotLane, present)
-	}
-	settlement := failure.Settlement()
-	response, present := settlement.ResponseSend()
-	if settlement.Kind() != ProtocolFailureSettlementResponseSend || !present ||
-		!response.Admitted || !response.Settled ||
-		response.Outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("response-send settlement = %+v, present=%v", response, present)
-	}
-
-	if _, malformed := protocolFailureForResponseSend(
-		sessionID,
-		operationID,
-		protocolsession.MessageOpenRevisions,
-		protocolsession.MessageOperationError,
-		[]byte("provider text must not enter the trace"),
-		lane,
-		true,
-		protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped},
-	); malformed {
-		t.Fatal("malformed operation error exposed unverified classification")
-	}
-}
-
 func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
+	receivedAt := time.Unix(1234, 0)
+	runtime.now = func() time.Time { return receivedAt }
 	rpc := newRPCClient(runtime, bytes.NewReader(bytes.Repeat([]byte{0x7d}, protocolsession.IdentityBytes)))
 	if err := rpc.register(runtime.router); err != nil {
 		t.Fatal(err)
@@ -431,6 +355,7 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 	if err != nil {
 		t.Fatal(err)
 	}
+	runtime.now = func() time.Time { return receivedAt.Add(time.Second) }
 	if err := runtime.router.Dispatch(context.Background(), queued); err != nil {
 		t.Fatal(err)
 	}
@@ -438,52 +363,37 @@ func TestProtocolOperationTraceCapturesAuthenticatedReceivedFailureAtSource(t *t
 		response.Kind() != protocolsession.MessageOperationError {
 		t.Fatalf("await authenticated failure: kind=%d error=%v", response.Kind(), err)
 	}
+	call.setProtocolTraceLane(LaneIdentity{ID: 9, Epoch: 4}, 1)
 	rpc.end(call)
 
-	events := recorder.snapshot()
-	if len(events) != 1 {
-		t.Fatalf("protocol trace events = %d, want 1: %+v", len(events), events)
+	facts := recorder.facts()
+	if len(facts) != 2 {
+		t.Fatalf("received facts=%+v", facts)
 	}
-	event := events[0]
-	failure := event.Failure
-	if event.Stage != ProtocolOperationReceiverFailed ||
-		event.Cause != ProtocolOperationCauseProtocolFailure ||
-		failure.IsZero() ||
-		failure.RequestKind() != protocolsession.MessageRequestBlocks ||
-		failure.WireScope() != ProtocolFailureBlock ||
-		failure.WireCode() != 0x4003 ||
-		!failure.Retryable() ||
-		failure.ProtocolSessionID() != runtime.sessionID ||
-		failure.ProtocolOperationID() != call.id {
-		t.Fatalf("authenticated receive trace = %+v", event)
+	received := facts[0].(ReceivedProtocolError)
+	failure := received.Content()
+	if received.Lane() != runtime.initial || received.Correlation().OperationID != call.id ||
+		failure.WireScope() != ProtocolErrorBlock || failure.WireCode() != 0x4003 || !failure.Retryable() ||
+		!received.ObservedAt().Equal(receivedAt) {
+		t.Fatalf("received=%+v", received)
 	}
-	if retryAfter, present := failure.RetryAfterMillis(); !present || retryAfter != 1_250 {
-		t.Fatalf("retry after = %d, present=%v", retryAfter, present)
+	if retry, present := failure.RetryAfterMillis(); !present || retry != 1250 {
+		t.Fatalf("retry=%d/%v", retry, present)
 	}
-	if lane, present := failure.Lane(); !present || lane != runtime.initial {
-		t.Fatalf("authenticated receive lane = %+v, present=%v", lane, present)
-	}
-	settlement := failure.Settlement()
-	if settlement.Kind() != ProtocolFailureSettlementReceivedAuthenticated {
-		t.Fatalf("authenticated receive settlement kind = %d", settlement.Kind())
-	}
-	if response, present := settlement.ResponseSend(); present {
-		t.Fatalf("authenticated receive exposed response send settlement: %+v", response)
-	}
+
 }
 
 func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	recorder := &protocolTraceRecorder{}
-	runtime.protocolTracer = recorder
+	recorder := newProtocolTraceRecorder(runtime)
 	operationID := id16[protocolsession.OperationID](0x7a)
 	lane := LaneIdentity{ID: 7, Epoch: 2}
-	runtime.traceProtocolOperation(ProtocolOperationTrace{
+	runtime.traceProtocolOperation(ProtocolOperationObservation{
 		Stage: ProtocolOperationReceiverCompleted, OperationID: operationID,
 		RequestKind: protocolsession.MessageLaneAttach, ResponseKind: protocolsession.MessageLaneAttach,
 		HasResponse: true, Lane: lane, HasLane: true,
 		HasSend: true, SendSettled: true, SendAdmitted: true,
-		SendOutcome: protocolsession.SendOutcomeDelivered, ResponseCount: 1,
+		SendOutcome: protocolsession.SendOutcomeTransportConfirmed, ResponseCount: 1,
 	})
 	events := recorder.snapshot()
 	if len(events) != 1 {
@@ -494,23 +404,22 @@ func TestProtocolOperationTraceCorrelatesLaneGrantWithoutAuthenticatedBody(t *te
 		event.RequestKind != protocolsession.MessageLaneAttach ||
 		event.ResponseKind != protocolsession.MessageLaneAttach || !event.HasResponse ||
 		!event.HasLane || event.Lane != lane || event.ResponseCount != 1 ||
-		event.SendOutcome != protocolsession.SendOutcomeDelivered {
+		event.SendOutcome != protocolsession.SendOutcomeTransportConfirmed {
 		t.Fatalf("lane-grant trace = %+v", event)
 	}
 }
 
-func TestProtocolOperationTracerPanicCannotChangeRuntimeAuthority(t *testing.T) {
+func TestProtocolObservationBlockedConsumerCannotChangeRuntimeAuthority(t *testing.T) {
 	runtime, _ := newUnstartedRuntime(t, protocolsession.RoleReceiver)
-	runtime.protocolTracer = ProtocolOperationTraceFunc(func(ProtocolOperationTrace) {
-		panic("observer failure")
-	})
-	operationID := id16[protocolsession.OperationID](0x79)
-	runtime.traceProtocolOperation(ProtocolOperationTrace{
-		Stage:       ProtocolOperationReceiverFailed,
-		OperationID: operationID, RequestKind: protocolsession.MessageReleaseLease,
-		Cause: ProtocolOperationCauseDeadline,
-	})
-	if runtime.ctx.Err() != nil || runtime.operations.Terminated() {
-		t.Fatal("protocol trace observer gained runtime authority")
+	producer, _, _ := observationstream.New[ProtocolObservation](1)
+	runtime.protocolObservations = producer
+	for range 3 {
+		runtime.traceProtocolOperation(ProtocolOperationObservation{
+			Stage: ProtocolOperationReceiverFailed, OperationID: id16[protocolsession.OperationID](0x79),
+			RequestKind: protocolsession.MessageReleaseLease, Cause: ProtocolOperationCauseDeadline})
+	}
+	completion := producer.Complete()
+	if completion.Enqueued != 1 || completion.CapacityDropped != 2 || runtime.ctx.Err() != nil || runtime.operations.Terminated() {
+		t.Fatalf("completion=%+v", completion)
 	}
 }

@@ -1,8 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createV2ProtocolSessionIdentity } from '../../src/session/v2-identities'
+import {
+  createV2PeerPathIdentityValue,
+  createV2ProtocolSessionIdentity,
+} from '../../src/session/v2-identities'
+import { V2PeerRecoverySupervisor } from '../../src/connectivity/peer-set/path'
+import { snapshotTraceEventObservationV2 } from '../../src/diagnostics/export/trace-event-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../../src/diagnostics/trace/lane-payload'
 import { DownloadMetrics } from '../../src/receiver/download-metrics'
-import { validateTraceEventPayloadV1 } from '../../src/diagnostics/export/trace-event-payload-v1'
+import { validateTraceEventPayloadV2 } from '../../src/diagnostics/export/trace-event-payload-v2'
 
 import { browserBuildSnapshot } from '../../src/diagnostics/build-identity'
 import {
@@ -17,6 +22,8 @@ import type {
 } from '../../src/diagnostics/trace/ports'
 import { nextProjectionEpoch } from '../../src/transfer/projection'
 import {
+  createConnectivityTraceSource,
+  projectConnectivityTraceEvent,
   createOutputTraceSource,
   createProtocolTraceSource,
   projectProtocolTraceEvent,
@@ -42,7 +49,7 @@ it('exports scheduling decisions with session, lane, block, and completion estim
       expectedMilliseconds: 12.25, pendingBytes: 4096, bytesPerSecond: 1000.2,
     }
     const projected = projectProtocolTraceEvent(event)
-    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({
       dispatch_sequence: '10', block_index: '7', purpose, expected_ms: 13, bytes_per_second: 1000,
     })
@@ -67,7 +74,7 @@ it('exports request route decisions and outcomes with validated session correlat
       pendingRequests: 1, elapsedMilliseconds: 1.25,
     }
     const projected = projectProtocolTraceEvent(event)
-    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({
       request_sequence: '7', request_kind: 'open_revisions', route: 'direct', transition,
       expected_ms: 3, elapsed_ms: 2, pending_requests: 1,
@@ -86,11 +93,11 @@ it('exports a sealed unsampled final per-download record through the existing tr
     }
     const projected = projectV2ReceiverTraceEvent(event)
     expect(projected.eventName).toBe('receive_transition')
-    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({ transition: 'download_connectivity', connectivity: {
       direct_bytes: '10', direct_fraction: 1, final: true,
     } })
-    expect(() => validateTraceEventPayloadV1('receive_transition', {
+    expect(() => validateTraceEventPayloadV2('receive_transition', {
       ...projected.payload, connectivity: { ...event.connectivity, incomplete: true },
     })).toThrow('incomplete')
     const composition = productionComposition()
@@ -114,7 +121,7 @@ it('exports discovery scheduling decisions with bounded queue and operation cont
       maximumItems: 256, maximumMetadataBytes: 16777216n,
     }
     const projected = projectV2ReceiverTraceEvent(event)
-    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     expect(projected.payload).toMatchObject({
       operation_id: event.operationId, transfer_job_id: event.transferJobId, decision,
       pending_items: '256', metadata_bytes: '4096', maximum_metadata_bytes: '16777216',
@@ -152,8 +159,8 @@ it('exports lane exception causes and bounded stacks without mutating the failur
     Object.defineProperty(failure, 'cause', { value: failure })
     failure.message = 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS * 2)
     const projected = projectProtocolTraceEvent(event)
-    expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
-    expect(() => validateTraceEventPayloadV1('lane_transition', {
+    expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
+    expect(() => validateTraceEventPayloadV2('lane_transition', {
       transition: 'detached', detachment_class: 'authenticated_failure',
       failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1),
     })).toThrow('bounded text')
@@ -181,12 +188,82 @@ it('exports operation recovery decisions with session and local operation correl
   expect(records.every(record => record.payload.operation_sequence === '2' &&
     record.payload.availability_revision === '3' && record.correlation.protocol_session_id)).toBe(true)
   expect(records[1].payload.delay_ms).toBe(200)
-  expect(() => validateTraceEventPayloadV1('operation_recovery', {
+  expect(() => validateTraceEventPayloadV2('operation_recovery', {
     ...records[1].payload, delay_ms: -1,
   })).toThrow()
-  expect(() => validateTraceEventPayloadV1('operation_recovery', {
+  expect(() => validateTraceEventPayloadV2('operation_recovery', {
     ...records[0].payload, delay_ms: 200,
   })).toThrow()
+})
+
+describe('peer recovery terminal trace', () => {
+  const correlation = {
+    protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)),
+    peerPathId: createV2PeerPathIdentityValue(new Uint8Array(16).fill(2)),
+  }
+
+  it.each([
+    ['runtime-closed', 'runtime_closed'],
+    ['generation-retired', 'generation_retired'],
+    ['binding-conflict', 'binding_conflict'],
+    ['continuation-conflict', 'continuation_conflict'],
+    ['protocol-failure', 'protocol_failure'],
+  ] as const)('preserves session stop reason %s through projection and capture validation', (reason, exportedReason) => {
+    const projected = projectConnectivityTraceEvent({
+      eventName: 'peer_recovery', correlation, stage: 'session-stopped', reason,
+    })
+
+    expect(snapshotTraceEventObservationV2(projected).payload).toEqual({
+      stage: 'session_stopped', reason: exportedReason,
+    })
+  })
+
+  it('rejects protocol_error as a session stop reason', () => {
+    expect(() => validateTraceEventPayloadV2('peer_recovery', {
+      stage: 'session_stopped', reason: 'protocol_error',
+    })).toThrow('peer session stop reason')
+  })
+
+  it('retains and exports the supervisor protocol failure without dropping trace evidence', async () => {
+    const composition = productionComposition()
+    composition.runtime.enable()
+    createV2ReceiverTraceSource(composition.trace).current?.({
+      name: 'join_transition', transition: 'started',
+    })
+    const createAttempt = vi.fn(() => { throw new Error('Stopped sessions cannot start attempts') })
+    const supervisor = new V2PeerRecoverySupervisor({
+      ...correlation,
+      attempts: { createAttempt },
+      trace: createConnectivityTraceSource(composition.trace),
+    })
+
+    await supervisor.sessionTerminated({
+      authority: 'protocol-session-terminal', code: 'protocol-failure',
+    })
+
+    expect(supervisor.state).toEqual({ kind: 'session-stopped', reason: 'protocol-failure' })
+    expect(createAttempt).not.toHaveBeenCalled()
+    const lines = composition.runtime.export().trimEnd().split('\n').map(
+      line => JSON.parse(line) as Record<string, unknown>,
+    )
+    expect(composition.runtime.status()).toMatchObject({
+      retained_event_count: '2',
+      health: { trace_dropped_count: '0' },
+    })
+    expect(lines.filter(line => line.line_type === 'trace_event')).toMatchObject([
+      { record: { event: 'join_transition', payload: { transition: 'started' } } },
+      {
+        record: {
+          event: 'peer_recovery',
+          correlation: {
+            protocol_session_id: 'AQEBAQEBAQEBAQEBAQEBAQ',
+            peer_path_id: 'AgICAgICAgICAgICAgICAg',
+          },
+          payload: { stage: 'session_stopped', reason: 'protocol_failure' },
+        },
+      },
+    ])
+  })
 })
 
 describe('retained receive trace projection', () => {
@@ -208,7 +285,7 @@ describe('retained receive trace projection', () => {
         continuation,
       })
       expect(projected.eventName).toBe('retained_action')
-      expect(() => validateTraceEventPayloadV1(projected.eventName, projected.payload)).not.toThrow()
+      expect(() => validateTraceEventPayloadV2(projected.eventName, projected.payload)).not.toThrow()
     }
   })
 

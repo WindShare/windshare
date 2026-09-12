@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
-import type { ProtocolFailure } from '../../src/diagnostics/incident/fact'
+import type { ReceivedProtocolError } from '../../src/diagnostics/incident/fact'
 import type { V2ConnectivityTraceEvent } from '../../src/connectivity/diagnostics'
 import {
   decodeV2PeerCandidate,
@@ -91,7 +91,7 @@ class InMemoryFrameChannel implements FrameChannel {
 class SignalingSessionFacade {
   readonly keys = protocolKeys()
   readonly protocolSessionIdentity = createV2ProtocolSessionIdentity(this.keys.protocolSessionId)
-  readonly protocolFailures: ProtocolFailure[] = []
+  readonly protocolFailures: ReceivedProtocolError[] = []
   readonly #router: V2OperationRouter
   readonly #operationId: Uint8Array<ArrayBuffer>
   operation: V2SessionOperation | undefined
@@ -134,7 +134,7 @@ class SignalingSessionFacade {
     })
   }
 
-  authenticatedProtocolFailure(message: V2SessionMessage): ProtocolFailure {
+  authenticatedReceivedProtocolError(message: V2SessionMessage): ReceivedProtocolError {
     const failure = this.#router.protocolFailureFor(message)
     if (failure === undefined) throw new Error('test router did not capture protocol failure')
     this.protocolFailures.push(failure)
@@ -471,12 +471,7 @@ describe('v2 authenticated session signaling', () => {
     expect(peerFailure).toBeInstanceOf(V2AuthenticatedPeerOperationError)
     expect(peerFailure).toMatchObject({
       message: 'Sender rejected the authenticated peer operation',
-      protocolFailure: {
-        wireScope: 'peer',
-        wireCode: 0x5001,
-        requestKind: 'peer_offer',
-        settlement: { kind: 'received_authenticated' },
-      },
+      protocolFailure: { requestKind: 'peer_offer', content: { scope: 'peer', code: 0x5001 } },
       failureFact: { kind: 'protocol_failure' },
     })
     expect(session.closeCalls).toBe(0)

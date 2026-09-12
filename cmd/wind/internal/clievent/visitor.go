@@ -27,7 +27,7 @@ type Visitor interface {
 	VisitRootPrefetchObserved(RootPrefetchObserved) error
 	VisitSenderCapacityObserved(SenderCapacityObserved) error
 	VisitSenderRevisionObserved(SenderRevisionObserved) error
-	VisitProtocolOperationObserved(ProtocolOperationObserved) error
+	VisitProtocolObservationObserved(ProtocolObservationObserved) error
 	VisitLaneSettlementObserved(LaneSettlementObserved) error
 	VisitObserverLossObserved(ObserverLossObserved) error
 	VisitReceiverTerminationObserved(ReceiverTerminationObserved) error
@@ -222,11 +222,11 @@ func acceptSenderRevisionObserved(visitor Visitor, value SenderRevisionObserved)
 	return visitor.VisitSenderRevisionObserved(value)
 }
 
-func acceptProtocolOperationObserved(visitor Visitor, value ProtocolOperationObserved) error {
-	if visitor == nil || !validProtocolOperationSpec(value.spec) {
+func acceptProtocolObservationObserved(visitor Visitor, value ProtocolObservationObserved) error {
+	if visitor == nil || !validProtocolObservation(value) {
 		return ErrInvalidEvent
 	}
-	return visitor.VisitProtocolOperationObserved(value)
+	return visitor.VisitProtocolObservationObserved(value)
 }
 
 func acceptLaneSettlementObserved(visitor Visitor, value LaneSettlementObserved) error {

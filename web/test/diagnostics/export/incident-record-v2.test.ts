@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest'
+import { projectProtocolTraceEvent } from '../../../src/ui/v2-protocol-trace'
+import { snapshotTraceEventObservationV2 } from '../../../src/diagnostics/export/trace-event-v2'
 
 import {
   FaultScope,
@@ -9,7 +11,7 @@ import {
   createFailureFactAccumulator,
   createFailureIdentity,
   createIncidentScopeIssuer,
-  createProtocolFailure,
+  createReceivedProtocolError,
   faultFailureFact,
   lifecycleFailureFact,
   nativeOutputFailureFact,
@@ -32,7 +34,7 @@ import {
   type IncidentRecordProjectionInput,
 } from '../../../src/diagnostics/export/projector'
 
-describe('IncidentRecordV1 projection', () => {
+describe('IncidentRecordV2 projection', () => {
   it('retains bounded exception evidence in the sealed incident export', () => {
     const error = new TypeError('activation failed')
     error.stack = 'TypeError: activation failed\n    at adopt (controller.ts:468:1)'
@@ -105,7 +107,7 @@ describe('IncidentRecordV1 projection', () => {
       'diagnostics_health_at_seal',
     ])
     expect(record).toMatchObject({
-      schema_version: 1,
+      schema_version: 2,
       sequence: '1',
       time: '2026-08-19T01:02:03.456Z',
       elapsed_ms: '9',
@@ -151,23 +153,13 @@ describe('IncidentRecordV1 projection', () => {
   })
 
   it('projects authenticated protocol failure without remote text', () => {
-    const failure = createProtocolFailure({
-      requestKind: 'request_blocks',
-      wireScope: 'block',
-      wireCode: 9,
-      retryable: true,
-      retryAfterMilliseconds: 300,
-      settlement: { kind: 'received_authenticated' },
-      correlation: {
-        protocolSessionId: createFailureIdentity(
-          'protocol_session',
-          identityBytes(4),
-        ),
-        protocolOperationId: createFailureIdentity(
-          'protocol_operation',
-          identityBytes(5),
-        ),
-      },
+    const failure = createReceivedProtocolError({
+      requestKind: 'request_blocks', correlation: {
+        protocolSessionId: createFailureIdentity('protocol_session', identityBytes(4)),
+        protocolOperationId: createFailureIdentity('protocol_operation', identityBytes(5))
+      }, content: {
+        scope: 'block', code: 9, retryable: true, retryAfterMilliseconds: 300
+      }
     })
     const facts = sealFacts([
       protocolFailureFact({
@@ -181,17 +173,33 @@ describe('IncidentRecordV1 projection', () => {
     expect(record.payload.trigger.payload).toEqual({
       protocol_failure: {
         request_kind: 'request_blocks',
-        wire_scope: 'block',
-        wire_code: 9,
-        retryable: true,
-        retry_after_ms: 300,
-        settlement: { kind: 'received_authenticated' },
+        content: { scope: 'block', code: 9, retryable: true, retry_after_ms: 300 },
         correlation: {
           protocol_session_id: 'BAAAAAAAAAAAAAAAAAAAAA',
           protocol_operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
         },
       },
     })
+    const trace = snapshotTraceEventObservationV2(projectProtocolTraceEvent({
+      eventName: 'protocol_operation',
+      transition: 'authenticated_failure',
+      requestKind: failure.requestKind,
+      protocolError: failure.content,
+      correlation: failure.correlation,
+    }))
+    expect(trace).toEqual({
+      eventName: 'protocol_operation',
+      correlation: {
+        protocol_session_id: 'BAAAAAAAAAAAAAAAAAAAAA',
+        protocol_operation_id: 'BQAAAAAAAAAAAAAAAAAAAA',
+      },
+      payload: {
+        transition: 'authenticated_failure',
+        request_kind: 'request_blocks',
+        protocol_error: { scope: 'block', code: 9, retryable: true, retry_after_ms: 300 },
+      },
+    })
+    expect(Object.isFrozen(trace.payload)).toBe(true)
     expect(JSON.stringify(record)).not.toMatch(/message|stack|cause|body/)
   })
 

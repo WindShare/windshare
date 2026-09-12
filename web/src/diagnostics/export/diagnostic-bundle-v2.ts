@@ -3,16 +3,16 @@ import { MAX_SAFE_STRING_UTF8_BYTES } from '../incident/policy'
 import type {
   DiagnosticsHealthV1,
   BuildIdentityV1,
-  IncidentRecordV1,
+  IncidentRecordV2,
   RuntimeIdentityV1,
-} from './incident-record-v1'
+} from './incident-record-v2'
 import type {
   TraceCapturedEvent,
   TraceCaptureSnapshot,
   TraceCoreStatus,
-  TraceEventObservationV1,
-  TraceEventPayloadByNameV1,
-  TraceEventRecordV1,
+  TraceEventObservationV2,
+  TraceEventPayloadByNameV2,
+  TraceEventRecordV2,
 } from '../trace/model'
 import {
   decimalUint64,
@@ -20,7 +20,7 @@ import {
   isDeeplyFrozen,
   utcRfc3339,
 } from './json'
-import { snapshotTraceEventObservationV1 } from './trace-event-v1'
+import { snapshotTraceEventObservationV2 } from './trace-event-v2'
 import type {
   CorrelatedLocalOutputOperationFailureV1,
   LocalOutputOperationFailureV1,
@@ -28,7 +28,7 @@ import type {
 import type { CorrelationV1 } from './correlation-v1'
 import { hasBoundedOutputExceptionEvidence } from './local-output-failure-v1'
 
-export const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 1 as const
+export const DIAGNOSTIC_BUNDLE_SCHEMA_VERSION = 2 as const
 
 export interface DiagnosticsTraceCapacityV1 {
   readonly default_trace_capture_expiry_ms: number
@@ -46,7 +46,7 @@ export interface DiagnosticsTraceCapacityV1 {
   readonly trace_checkpoint_coalesce_interval_ms: number
 }
 
-export interface DiagnosticsStatusV1 {
+export interface DiagnosticsStatusV2 {
   readonly schema_version: typeof DIAGNOSTIC_BUNDLE_SCHEMA_VERSION
   readonly state: TraceCoreStatus['state']
   readonly enabled: boolean
@@ -60,7 +60,7 @@ export interface DiagnosticsStatusV1 {
   readonly health: DiagnosticsHealthV1
 }
 
-export interface DiagnosticBundleHeaderV1 {
+export interface DiagnosticBundleHeaderV2 {
   readonly line_type: 'bundle_header'
   readonly schema_version: typeof DIAGNOSTIC_BUNDLE_SCHEMA_VERSION
   readonly build: BuildIdentityV1
@@ -70,59 +70,59 @@ export interface DiagnosticBundleHeaderV1 {
   readonly diagnostics_health_at_export: DiagnosticsHealthV1
 }
 
-export interface DiagnosticBundleIncidentLineV1 {
+export interface DiagnosticBundleIncidentLineV2 {
   readonly line_type: 'incident'
-  readonly record: IncidentRecordV1
+  readonly record: IncidentRecordV2
 }
 
-export interface DiagnosticBundleLocalOutputFailureLineV1 {
+export interface DiagnosticBundleLocalOutputFailureLineV2 {
   readonly line_type: 'local_output_operation_failure'
   readonly owning_incident: Readonly<{
     readonly incident_sequence: string
-    readonly scope: IncidentRecordV1['payload']['scope']
+    readonly scope: IncidentRecordV2['payload']['scope']
   }>
   readonly correlation: CorrelationV1
   readonly record: LocalOutputOperationFailureV1
 }
 
-export interface DiagnosticBundleTraceCaptureLineV1 {
+export interface DiagnosticBundleTraceCaptureLineV2 {
   readonly line_type: 'trace_capture'
-  readonly status: DiagnosticsStatusV1
+  readonly status: DiagnosticsStatusV2
 }
 
-export interface DiagnosticBundleTraceEventLineV1 {
+export interface DiagnosticBundleTraceEventLineV2 {
   readonly line_type: 'trace_event'
-  readonly record: TraceEventRecordV1
+  readonly record: TraceEventRecordV2
 }
 
-export interface DiagnosticBundleV1 {
-  readonly header: DiagnosticBundleHeaderV1
-  readonly incidents: readonly DiagnosticBundleIncidentLineV1[]
-  readonly localOutputFailures: readonly DiagnosticBundleLocalOutputFailureLineV1[]
-  readonly traceCapture?: DiagnosticBundleTraceCaptureLineV1
-  readonly traceEvents: readonly DiagnosticBundleTraceEventLineV1[]
+export interface DiagnosticBundleV2 {
+  readonly header: DiagnosticBundleHeaderV2
+  readonly incidents: readonly DiagnosticBundleIncidentLineV2[]
+  readonly localOutputFailures: readonly DiagnosticBundleLocalOutputFailureLineV2[]
+  readonly traceCapture?: DiagnosticBundleTraceCaptureLineV2
+  readonly traceEvents: readonly DiagnosticBundleTraceEventLineV2[]
 }
 
-export interface DiagnosticBundleIdentityV1 {
+export interface DiagnosticBundleIdentityV2 {
   readonly build: BuildIdentityV1
   readonly runtime: RuntimeIdentityV1
   readonly runtimeRunId: string
 }
 
 export interface DiagnosticBundleSnapshotInput {
-  readonly identity: DiagnosticBundleIdentityV1
+  readonly identity: DiagnosticBundleIdentityV2
   readonly time: string
-  readonly incidents: readonly IncidentRecordV1[]
+  readonly incidents: readonly IncidentRecordV2[]
   readonly localOutputFailures?: readonly CorrelatedLocalOutputOperationFailureV1[]
-  readonly status: DiagnosticsStatusV1
+  readonly status: DiagnosticsStatusV2
   readonly healthAtExport: DiagnosticsHealthV1
-  readonly traceCapture?: TraceCaptureSnapshot<TraceEventObservationV1, IncidentLink>
+  readonly traceCapture?: TraceCaptureSnapshot<TraceEventObservationV2, IncidentLink>
 }
 
-export function projectDiagnosticsStatusV1(
+export function projectDiagnosticsStatusV2(
   status: TraceCoreStatus,
   health: DiagnosticsHealthV1,
-): DiagnosticsStatusV1 {
+): DiagnosticsStatusV2 {
   if (status.enabled !== isRecording(status.state)) {
     throw new TypeError('trace enabled flag contradicts capture state')
   }
@@ -165,9 +165,9 @@ export function projectDiagnosticsStatusV1(
   })
 }
 
-export function createDiagnosticBundleV1(
+export function createDiagnosticBundleV2(
   input: DiagnosticBundleSnapshotInput,
-): DiagnosticBundleV1 {
+): DiagnosticBundleV2 {
   const identity = copyIdentity(input.identity)
   const healthAtExport = copyHealth(input.healthAtExport)
   const status = copyStatus(input.status)
@@ -184,7 +184,7 @@ export function createDiagnosticBundleV1(
   const localOutputFailures = Object.freeze(
     [...(input.localOutputFailures ?? [])]
       .map((record) => projectLocalOutputFailureLine(record, incidentRecords))
-      .filter((line): line is DiagnosticBundleLocalOutputFailureLineV1 => line !== undefined)
+      .filter((line): line is DiagnosticBundleLocalOutputFailureLineV2 => line !== undefined)
       .sort(compareLocalOutputFailures),
   )
 
@@ -268,8 +268,8 @@ function validateLocalOutputFailure(
 
 function projectLocalOutputFailureLine(
   projection: CorrelatedLocalOutputOperationFailureV1,
-  incidents: readonly IncidentRecordV1[],
-): DiagnosticBundleLocalOutputFailureLineV1 | undefined {
+  incidents: readonly IncidentRecordV2[],
+): DiagnosticBundleLocalOutputFailureLineV2 | undefined {
   validateLocalOutputFailure(projection)
   const owner = incidents.filter((incident) =>
     incident.payload.root_incident_sequence === undefined &&
@@ -290,8 +290,8 @@ function projectLocalOutputFailureLine(
 }
 
 function compareLocalOutputFailures(
-  left: DiagnosticBundleLocalOutputFailureLineV1,
-  right: DiagnosticBundleLocalOutputFailureLineV1,
+  left: DiagnosticBundleLocalOutputFailureLineV2,
+  right: DiagnosticBundleLocalOutputFailureLineV2,
 ): number {
   return compareDecimal(
     left.owning_incident.incident_sequence,
@@ -309,16 +309,16 @@ function compareLocalOutputFailures(
     left.record.stageFailure.sequence - right.record.stageFailure.sequence
 }
 
-function incidentContainsNativeOutputFailure(incident: IncidentRecordV1): boolean {
+function incidentContainsNativeOutputFailure(incident: IncidentRecordV2): boolean {
   return incident.payload.trigger.kind === 'native_output_failure' ||
     [...incident.payload.contributors, ...incident.payload.consequences]
       .some((bucket) => bucket.representative.kind === 'native_output_failure')
 }
 
 function projectCapturedEvent(
-  captured: TraceCapturedEvent<TraceEventObservationV1, IncidentLink>,
+  captured: TraceCapturedEvent<TraceEventObservationV2, IncidentLink>,
   runtimeRunId: string,
-): TraceEventRecordV1 {
+): TraceEventRecordV2 {
   const sequence = decimalUint64(captured.sequence, 'trace event sequence')
   const elapsedMs = decimalUint64(captured.elapsedMs, 'trace event elapsed milliseconds')
   const time = utcTimeFromMilliseconds(captured.observedAtMilliseconds)
@@ -328,7 +328,7 @@ function projectCapturedEvent(
         incident.rootIncidentSequence >= incident.incidentSequence) {
       throw new RangeError('trace root incident marker must precede its linked incident')
     }
-    const payload: TraceEventPayloadByNameV1['incident_marker'] = {
+    const payload: TraceEventPayloadByNameV2['incident_marker'] = {
       incident_sequence: decimalUint64(
         incident.incidentSequence,
         'trace incident marker sequence',
@@ -361,7 +361,7 @@ function projectCapturedEvent(
     })
   }
 
-  const observation = snapshotTraceEventObservationV1(captured.value.event)
+  const observation = snapshotTraceEventObservationV2(captured.value.event)
   if (captured.value.eventName !== observation.eventName) {
     throw new TypeError('captured trace event name contradicts its immutable observation')
   }
@@ -377,12 +377,12 @@ function projectCapturedEvent(
       ? {}
       : { correlation: observation.correlation }),
     payload: observation.payload,
-  }) as TraceEventRecordV1
+  }) as TraceEventRecordV2
 }
 
 function validateCaptureCut(
-  capture: TraceCaptureSnapshot<TraceEventObservationV1, IncidentLink>,
-  status: DiagnosticsStatusV1,
+  capture: TraceCaptureSnapshot<TraceEventObservationV2, IncidentLink>,
+  status: DiagnosticsStatusV2,
 ): void {
   if (
     status.state !== capture.state ||
@@ -423,9 +423,9 @@ function validateCaptureCut(
 }
 
 function validateIncident(
-  record: IncidentRecordV1,
-  identity: DiagnosticBundleIdentityV1,
-): IncidentRecordV1 {
+  record: IncidentRecordV2,
+  identity: DiagnosticBundleIdentityV2,
+): IncidentRecordV2 {
   if (
     record.schema_version !== DIAGNOSTIC_BUNDLE_SCHEMA_VERSION ||
     record.event !== 'failure_incident' ||
@@ -444,7 +444,7 @@ function validateIncident(
   return record
 }
 
-function copyIdentity(identity: DiagnosticBundleIdentityV1): DiagnosticBundleIdentityV1 {
+function copyIdentity(identity: DiagnosticBundleIdentityV2): DiagnosticBundleIdentityV2 {
   if (!/^[A-Za-z0-9_-]{22}$/.test(identity.runtimeRunId) ||
       identity.runtimeRunId === 'AAAAAAAAAAAAAAAAAAAAAA') {
     throw new TypeError('diagnostic runtime run identity must be non-zero base64url')
@@ -489,7 +489,7 @@ function copyIdentity(identity: DiagnosticBundleIdentityV1): DiagnosticBundleIde
   })
 }
 
-function copyStatus(status: DiagnosticsStatusV1): DiagnosticsStatusV1 {
+function copyStatus(status: DiagnosticsStatusV2): DiagnosticsStatusV2 {
   if (status.schema_version !== DIAGNOSTIC_BUNDLE_SCHEMA_VERSION) {
     throw new TypeError('diagnostics status schema version is invalid')
   }
@@ -545,7 +545,7 @@ function copyStatus(status: DiagnosticsStatusV1): DiagnosticsStatusV1 {
   return copy
 }
 
-function validateStatusCapacity(status: DiagnosticsStatusV1): void {
+function validateStatusCapacity(status: DiagnosticsStatusV2): void {
   const retainedEvents = BigInt(status.retained_event_count)
   const retainedBytes = BigInt(status.retained_event_bytes)
   const incidentMarkers = BigInt(status.incident_marker_count)

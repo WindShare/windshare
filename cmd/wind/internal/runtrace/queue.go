@@ -169,11 +169,13 @@ func (recorder *Recorder) takeProgressBefore(sequence uint64) *queuedEvent {
 func (recorder *Recorder) writeNormal(content *traceContent, queued queuedEvent) {
 	if recorder.disabled.Load() {
 		recorder.countDropped(queued.progress, 1)
+		recorder.countRejectionEvidence(queued.event)
 		return
 	}
-	record, err := encodeV3(recorder.runID, queued.metadata, queued.event)
+	record, err := encodeV4(recorder.runID, queued.metadata, queued.event)
 	if err != nil {
 		recorder.countDropped(queued.progress, 1)
+		recorder.countRejectionEvidence(queued.event)
 		recorder.schemaLimited.Store(true)
 		recorder.disabled.Store(true)
 		recorder.markIncomplete(clievent.TraceIncompleteSchemaLimit)
@@ -182,6 +184,7 @@ func (recorder *Recorder) writeNormal(content *traceContent, queued queuedEvent)
 	data, err := json.Marshal(record)
 	if err != nil {
 		recorder.countDropped(queued.progress, 1)
+		recorder.countRejectionEvidence(queued.event)
 		recorder.schemaLimited.Store(true)
 		recorder.disabled.Store(true)
 		recorder.markIncomplete(clievent.TraceIncompleteSchemaLimit)
@@ -190,6 +193,7 @@ func (recorder *Recorder) writeNormal(content *traceContent, queued queuedEvent)
 	data = append(data, '\n')
 	if !content.appendRecord(data) {
 		recorder.countDropped(queued.progress, 1)
+		recorder.countRejectionEvidence(queued.event)
 		recorder.writerFailed.Store(true)
 		recorder.disabled.Store(true)
 		recorder.markIncomplete(clievent.TraceIncompleteWriter)
@@ -215,7 +219,7 @@ func (recorder *Recorder) writeSummary(content *traceContent) {
 	}
 	// Only failures known before encoding belong in the summary. If the append or
 	// authority sync fails, the summary is removed instead of claiming stale health.
-	record := summaryV3(recorder.runID, recorder.command, recorder.summaryMetadata, recorder.Status())
+	record := summaryV4(recorder.runID, recorder.command, recorder.summaryMetadata, recorder.Status())
 	data, err := json.Marshal(record)
 	if err != nil {
 		recorder.schemaLimited.Store(true)

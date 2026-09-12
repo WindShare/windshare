@@ -1,15 +1,15 @@
 import {
-  TRACE_EVENT_NAMES_V1,
-  type TraceDomainEventNameV1,
-  type TraceEventObservationV1,
+  TRACE_EVENT_NAMES_V2,
+  type TraceDomainEventNameV2,
+  type TraceEventObservationV2,
 } from '../trace/model'
 import { deepFreezeJson } from './json'
 import {
   validateCorrelationV1,
-  validateTraceEventPayloadV1,
-} from './trace-event-payload-v1'
+  validateTraceEventPayloadV2,
+} from './trace-event-payload-v2'
 
-const CORRELATED_TRACE_EVENT_NAMES: ReadonlySet<TraceDomainEventNameV1> = new Set([
+const CORRELATED_TRACE_EVENT_NAMES: ReadonlySet<TraceDomainEventNameV2> = new Set([
   'protocol_operation',
   'operation_recovery',
   'content_scheduling',
@@ -23,9 +23,9 @@ const CORRELATED_TRACE_EVENT_NAMES: ReadonlySet<TraceDomainEventNameV1> = new Se
  * Detachment alone is not a privacy boundary: the parsed value is still unknown
  * until the event-specific validator proves the complete closed payload variant.
  */
-export function snapshotTraceEventObservationV1(
-  observation: TraceEventObservationV1,
-): TraceEventObservationV1 {
+export function snapshotTraceEventObservationV2(
+  observation: TraceEventObservationV2,
+): TraceEventObservationV2 {
   const encoded = JSON.stringify(observation)
   if (encoded === undefined) throw new TypeError('trace observation is not standard JSON')
   const detached: unknown = JSON.parse(encoded)
@@ -40,7 +40,7 @@ export function snapshotTraceEventObservationV1(
   if (!isDomainEventName(record.eventName)) {
     throw new TypeError('trace observation event name is invalid')
   }
-  validateTraceEventPayloadV1(record.eventName, record.payload)
+  validateTraceEventPayloadV2(record.eventName, record.payload)
   const correlation = record.correlation === undefined
     ? undefined
     : validateCorrelationV1(record.correlation)
@@ -48,27 +48,24 @@ export function snapshotTraceEventObservationV1(
     throw new TypeError(`${record.eventName} requires correlation`)
   }
   if (record.eventName === 'protocol_operation' &&
-      'transition' in record.payload &&
-      record.payload.transition === 'authenticated_failure' &&
-      'protocol_failure' in record.payload &&
-      correlation !== undefined &&
-      !sameCorrelation(correlation, record.payload.protocol_failure.correlation)) {
-    throw new TypeError('protocol failure correlation contradicts its trace observation')
+      'protocol_error' in record.payload &&
+      (correlation?.protocol_session_id === undefined || correlation.protocol_operation_id === undefined)) {
+    throw new TypeError('received protocol error requires session and operation correlation')
   }
-  return deepFreezeJson(detached) as TraceEventObservationV1
+  return deepFreezeJson(detached) as TraceEventObservationV2
 }
 
-export function traceEventObservationNameV1(
-  observation: TraceEventObservationV1,
-): TraceDomainEventNameV1 {
+export function traceEventObservationNameV2(
+  observation: TraceEventObservationV2,
+): TraceDomainEventNameV2 {
   if (!isDomainEventName(observation.eventName)) {
     throw new TypeError('trace observation event name is invalid')
   }
   return observation.eventName
 }
 
-export function traceEventObservationBytesV1(
-  observation: TraceEventObservationV1,
+export function traceEventObservationBytesV2(
+  observation: TraceEventObservationV2,
 ): number {
   const encoded = JSON.stringify(observation)
   if (encoded === undefined) throw new TypeError('trace observation is not standard JSON')
@@ -96,20 +93,8 @@ function exactKeys(
   }
 }
 
-function isDomainEventName(value: unknown): value is TraceDomainEventNameV1 {
+function isDomainEventName(value: unknown): value is TraceDomainEventNameV2 {
   return typeof value === 'string' &&
     value !== 'incident_marker' &&
-    TRACE_EVENT_NAMES_V1.includes(value as (typeof TRACE_EVENT_NAMES_V1)[number])
-}
-
-function sameCorrelation(
-  left: NonNullable<TraceEventObservationV1['correlation']>,
-  right: NonNullable<TraceEventObservationV1['correlation']>,
-): boolean {
-  return left.protocol_session_id === right.protocol_session_id &&
-    left.protocol_operation_id === right.protocol_operation_id &&
-    left.peer_path_id === right.peer_path_id &&
-    left.peer_attempt_id === right.peer_attempt_id &&
-    left.lane_id === right.lane_id &&
-    left.lane_epoch === right.lane_epoch
+    TRACE_EVENT_NAMES_V2.includes(value as (typeof TRACE_EVENT_NAMES_V2)[number])
 }

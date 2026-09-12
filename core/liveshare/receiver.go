@@ -15,6 +15,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -30,7 +31,7 @@ type ReceiverConfig struct {
 	Random                            io.Reader
 	CatalogProgress                   sessionruntime.CatalogScanProgressObserver
 	PeerControls                      sessionruntime.ReceiverPeerSemantics
-	ProtocolTracer                    sessionruntime.ProtocolOperationTracer
+	ProtocolObservations              observationstream.Producer[sessionruntime.ProtocolObservation]
 	LaneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
 }
 
@@ -128,7 +129,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 		CatalogVerifier: verifier, RecordOpener: opener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,
-		ProtocolTracer:                    config.ProtocolTracer,
+		ProtocolObservations:              config.ProtocolObservations,
 		LaneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,
 		RuntimeResources:                  resources,
 	})

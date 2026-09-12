@@ -9,9 +9,11 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -41,6 +43,9 @@ func (reader *lockedReader) Read(destination []byte) (int, error) {
 }
 
 type runtimeCore struct {
+	responseSequence        atomic.Uint64
+	receiptObservations     observationstream.Producer[protocolsession.SendAttemptSettlement]
+	receiptObservationsDone chan struct{}
 	peerPathMu              sync.RWMutex
 	peerPathHandler         func(context.Context, []byte) error
 	share                   catalog.ShareInstance
@@ -54,7 +59,7 @@ type runtimeCore struct {
 	lanes                   *runtimeLanes
 	routes                  *operationLaneRoutes
 	now                     func() time.Time
-	protocolTracer          ProtocolOperationTracer
+	protocolObservations    observationstream.Producer[ProtocolObservation]
 	sessionTerminalObserver SenderSessionTerminalObserver
 	termination             runtimeTerminationArbiter
 
@@ -89,7 +94,7 @@ type runtimeConfig struct {
 	OperationLimits         protocolsession.OperationLimits
 	RouterLimits            protocolsession.RouterLimits
 	Now                     func() time.Time
-	ProtocolTracer          ProtocolOperationTracer
+	ProtocolObservations    observationstream.Producer[ProtocolObservation]
 	SessionTerminalObserver SenderSessionTerminalObserver
 }
 
@@ -126,7 +131,7 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 		random: config.Random, operations: operations, router: router,
 		routes:                  newOperationLaneRoutes(),
 		now:                     config.Now,
-		protocolTracer:          config.ProtocolTracer,
+		protocolObservations:    config.ProtocolObservations,
 		sessionTerminalObserver: config.SessionTerminalObserver,
 		ctx:                     ctx,
 		cancelLifecycle:         cancelLifecycle,
@@ -145,6 +150,7 @@ func newRuntime(config runtimeConfig) (*runtimeCore, error) {
 		config.Keys.Destroy()
 		return nil, err
 	}
+	runtime.startReceiptObservations()
 	return runtime, nil
 }
 
@@ -225,6 +231,7 @@ func (runtime *runtimeCore) finish() {
 		for _, finalize := range finalizers {
 			finalize()
 		}
+		runtime.finishReceiptObservations()
 		runtime.keys.Destroy()
 		close(runtime.done)
 	})
@@ -370,133 +377,89 @@ func (outbound senderOutbound) sendControl(
 	kind protocolsession.MessageKind,
 	operationID protocolsession.OperationID,
 	body []byte,
-) (resultOutcome protocolsession.SendOutcome, resultErr error) {
-	final := senderResponseFinal(kind)
-	traceEnabled := outbound.runtime.protocolOperationTracingEnabled()
-	var started time.Time
-	var deadlineMillis uint64
-	var hasDeadline bool
-	requestKind := protocolsession.MessageKind(0)
-	if traceEnabled {
-		started = outbound.runtime.now()
-		deadlineMillis, hasDeadline = remainingDeadlineMillis(ctx, started)
-		if route, routeErr := outboundRoute(ctx, operationID); routeErr == nil {
-			requestKind = route.requestKind
+) (protocolsession.ResponseSendResult, error) {
+	return outbound.executeResponse(ctx, kind, operationID, protocolErrorForResponse(kind, body), func(transaction *outboundTransaction) (outboundLaneAttempt, error) {
+		prepared, err := protocolsession.PrepareSenderControl(outbound.privateKey, outbound.runtime.senderControlBase(transaction.lane.identity), kind, &operationID, body)
+		if err != nil {
+			return nil, err
 		}
-	}
-	transaction, err := beginOutboundTransaction(outbound.runtime, ctx, operationID)
-	if err != nil {
-		if traceEnabled && requestKind != 0 {
-			failure, _ := protocolFailureForResponseSend(
-				outbound.runtime.sessionID,
-				operationID,
-				requestKind,
-				kind,
-				body,
-				LaneIdentity{},
-				false,
-				protocolsession.SendCompletion{
-					Settled: true,
-					Outcome: protocolsession.SendOutcomeDropped,
-				},
-			)
-			outbound.runtime.traceProtocolOperation(ProtocolOperationTrace{
-				Stage:       ProtocolOperationSenderResponseSettled,
-				OperationID: operationID, RequestKind: requestKind,
-				ResponseKind: kind, HasResponse: true,
-				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
-				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
-				Failure:                failure,
-				Cause:                  protocolOperationCause(err),
-			})
-		}
-		if final {
-			// A final response owns operation retirement even when every physical
-			// writer became non-accepting before transaction admission. Otherwise
-			// the exact route and generation remain live with no delivery path.
-			err = errors.Join(err, outbound.runtime.abandonBoundOutboundOperation(ctx, operationID))
-		}
-		return protocolsession.SendOutcomeDropped, err
-	}
-	defer transaction.Close()
-	if traceEnabled {
-		usableAtSelection := outbound.runtime.lanes.usableCount()
-		defer func() {
-			completion := transaction.lastCompletion
-			failure, _ := protocolFailureForResponseSend(
-				outbound.runtime.sessionID,
-				operationID,
-				transaction.route.requestKind,
-				kind,
-				body,
-				transaction.lane.identity,
-				transaction.lane.identity.valid(true),
-				completion,
-			)
-			cause := protocolOperationCause(resultErr)
-			if cause == ProtocolOperationCauseNone && transaction.attempted &&
-				(!completion.Settled || !completion.Admitted || resultOutcome != protocolsession.SendOutcomeDelivered) {
-				cause = ProtocolOperationCauseProtocolFailure
+		initial := transaction.lane.identity
+		return func(lane selectedLane, permit protocolsession.OutboundReplayPermit) (protocolsession.SendReceipt, error) {
+			control := prepared
+			if lane.identity != initial {
+				var prepareErr error
+				control, prepareErr = protocolsession.PrepareSenderControl(outbound.privateKey, outbound.runtime.senderControlBase(lane.identity), kind, &operationID, body)
+				if prepareErr != nil {
+					return protocolsession.SendReceipt{}, prepareErr
+				}
 			}
-			outbound.runtime.traceProtocolOperation(ProtocolOperationTrace{
-				Stage:       ProtocolOperationSenderResponseSettled,
-				OperationID: operationID, RequestKind: transaction.route.requestKind,
-				ResponseKind: kind, HasResponse: true,
-				Lane: transaction.lane.identity, HasLane: transaction.lane.identity.valid(true),
-				HasSend: transaction.attempted, SendSettled: completion.Settled,
-				SendAdmitted: completion.Admitted, SendOutcome: resultOutcome,
-				DeadlineRemainingMillis: deadlineMillis, HasDeadline: hasDeadline,
-				OperationElapsedMillis: durationMillis(outbound.runtime.now().Sub(started)),
-				UsableLanesAtSelection: usableAtSelection,
-				Failure:                failure,
-				Cause:                  cause,
-			})
-		}()
-	}
-	if final {
-		defer func() {
-			if resultErr == nil && resultOutcome == protocolsession.SendOutcomeDelivered {
-				outbound.runtime.routes.releaseRoute(operationID, transaction.route)
-				return
+			if !permit.IsZero() {
+				return lane.writer.TrySenderControlReplay(control, permit)
 			}
-			resultErr = errors.Join(
-				resultErr,
-				outbound.runtime.abandonOutboundOperation(
-					operationID, transaction.route, transaction.generation,
-				),
-			)
-		}()
-	}
-	resultOutcome, resultErr = transaction.Run(ctx, func(
-		lane selectedLane,
-		permit protocolsession.OutboundReplayPermit,
-	) (protocolsession.SendReceipt, error) {
-		prepared, prepareErr := protocolsession.PrepareSenderControl(
-			outbound.privateKey, outbound.runtime.senderControlBase(lane.identity), kind, &operationID, body,
-		)
-		if prepareErr != nil {
-			return protocolsession.SendReceipt{}, prepareErr
-		}
-		if !permit.IsZero() {
-			return lane.writer.TrySenderControlReplay(prepared, permit)
-		}
-		return lane.writer.TryAuthorizedSenderControl(prepared, transaction.authority)
+			return lane.writer.TryAuthorizedSenderControl(control, transaction.authority)
+		}, nil
 	})
-	if !final && (ctx.Err() != nil || outbound.runtime.ctx.Err() != nil) {
-		resultErr = errors.Join(
-			resultErr, outbound.runtime.abandonOutboundOperation(
-				operationID, transaction.route, transaction.generation,
-			),
-		)
-	}
-	return resultOutcome, resultErr
 }
 
-func (outbound senderOutbound) SendControl(
-	ctx context.Context,
-	kind protocolsession.MessageKind,
-	operationID protocolsession.OperationID,
-	body []byte,
-) (protocolsession.SendOutcome, error) {
+// Preparation establishes immutable message inputs before the first writer
+// attempt, so malformed input never becomes a fabricated receipt.
+type responsePreparation func(*outboundTransaction) (outboundLaneAttempt, error)
+
+func (outbound senderOutbound) executeResponse(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, content ProtocolErrorContent, prepare responsePreparation) (protocolsession.ResponseSendResult, error) {
+	runtime := outbound.runtime
+	sequence := runtime.responseSequence.Add(1)
+	requestKind := protocolsession.MessageKind(0)
+	if route, err := outboundRoute(ctx, operationID); err == nil {
+		requestKind = route.requestKind
+	}
+	transaction, err := beginOutboundTransaction(runtime, ctx, operationID)
+	final := senderResponseFinal(kind)
+	if err != nil {
+		end := protocolsession.ResponseSendEndPreparationFailed
+		if errors.Is(err, ErrLaneUnavailable) {
+			end = protocolsession.ResponseSendEndRouteUnavailable
+		} else if errors.Is(err, ErrOperationMissing) {
+			end = protocolsession.ResponseSendEndAuthorityUnavailable
+		}
+		result, _ := protocolsession.NewResponseSendNotStarted(end)
+		if final {
+			cleanupErr := runtime.abandonBoundOutboundOperation(ctx, operationID)
+			result = withOutboundCleanup(result, cleanupErr)
+			err = errors.Join(err, cleanupErr)
+		}
+		runtime.traceResponseResult(operationID, requestKind, kind, sequence, content, result)
+		return result, err
+	}
+	transaction.responseSequence = sequence
+	transaction.responseKind = kind
+	attempt, prepareErr := prepare(transaction)
+	var result protocolsession.ResponseSendResult
+	if prepareErr != nil {
+		result, _ = protocolsession.NewResponseSendNotStarted(protocolsession.ResponseSendEndPreparationFailed)
+		err = prepareErr
+	} else {
+		result, err = transaction.Run(ctx, attempt)
+	}
+	// Resource retirement is independent of physical evidence. A cleanup error
+	// cannot turn transport confirmation into proof that a peer owns no resource.
+	if final && err == nil && result.Evidence() == protocolsession.ResponseSendEvidenceTransportConfirmed {
+		runtime.routes.releaseRoute(operationID, transaction.route)
+		result = result.WithCleanup(protocolsession.SendCleanupRouteReleased)
+	} else if final || ctx.Err() != nil || runtime.ctx.Err() != nil {
+		cleanupErr := runtime.abandonOutboundOperation(operationID, transaction.route, transaction.generation)
+		result = withOutboundCleanup(result, cleanupErr)
+		err = errors.Join(err, cleanupErr)
+	}
+	transaction.Close()
+	runtime.traceResponseResult(operationID, transaction.route.requestKind, kind, sequence, content, result)
+	return result, err
+}
+func withOutboundCleanup(result protocolsession.ResponseSendResult, err error) protocolsession.ResponseSendResult {
+	if err != nil {
+		return result.WithCleanup(protocolsession.SendCleanupFailed)
+	}
+	return result.WithCleanup(protocolsession.SendCleanupOperationRetired)
+}
+func (outbound senderOutbound) SendControl(ctx context.Context, kind protocolsession.MessageKind, operationID protocolsession.OperationID, body []byte) (protocolsession.ResponseSendResult, error) {
 	return outbound.sendControl(ctx, kind, operationID, body)
 }

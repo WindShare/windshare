@@ -66,7 +66,7 @@ func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runDone := make(chan error, 1)
 	go func() { runDone <- writer.Run(ctx) }()
-	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+	if outcome, err := receipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 		t.Fatalf("send signed control: outcome=%d err=%v", outcome, err)
 	}
 	cancel()
@@ -131,7 +131,7 @@ func TestSessionWriterControlPriorityAndFairDataBurst(t *testing.T) {
 		t.Fatal(err)
 	}
 	close(channel.releaseFirst)
-	if outcome, err := controlReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+	if outcome, err := controlReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 		t.Fatalf("control outcome=%d err=%v", outcome, err)
 	}
 	cancel()
@@ -178,7 +178,7 @@ func TestSessionWriterSustainedControlStillAdvancesData(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- writer.Run(ctx) }()
-	if outcome, waitErr := dataReceipt.Wait(context.Background()); outcome != SendOutcomeDelivered || waitErr != nil {
+	if outcome, waitErr := dataReceipt.Wait(context.Background()); outcome != SendOutcomeTransportConfirmed || waitErr != nil {
 		t.Fatalf("data receipt = %d, %v", outcome, waitErr)
 	}
 	cancel()
@@ -242,7 +242,7 @@ func TestSessionWriterTerminalAdmissionIsImmediateAndOutOfBand(t *testing.T) {
 	if err := writer.Run(context.Background()); err != nil {
 		t.Fatalf("terminal writer run: %v", err)
 	}
-	if outcome, err := terminalReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeDelivered {
+	if outcome, err := terminalReceipt.Wait(context.Background()); err != nil || outcome != SendOutcomeTransportConfirmed {
 		t.Fatalf("terminal receipt outcome=%d err=%v", outcome, err)
 	}
 	channel.mu.Lock()
@@ -314,7 +314,7 @@ func TestSessionWriterBoundedQueuesClassesAndStopReceipts(t *testing.T) {
 	if _, err := controlWriter.TryData(controlMessage); !errors.Is(err, ErrMessageClass) {
 		t.Fatalf("control through data queue = %v", err)
 	}
-	if outcome, err := (SendReceipt{}).Wait(context.Background()); !errors.Is(err, ErrWriterStopped) || outcome != SendOutcomeUnknown {
+	if outcome, err := (SendReceipt{}).Wait(context.Background()); !errors.Is(err, ErrWriterStopped) || outcome != SendOutcomeUninitialized {
 		t.Fatalf("zero receipt outcome=%d err=%v", outcome, err)
 	}
 	if (SendReceipt{}).Done() != nil {

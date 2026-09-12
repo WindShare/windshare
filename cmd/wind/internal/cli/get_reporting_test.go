@@ -391,7 +391,9 @@ type getIncompleteTraceRecorder struct {
 	health chan clievent.TraceIncomplete
 }
 
-func (*getIncompleteTraceRecorder) Record(clievent.Event) bool { return true }
+func (*getIncompleteTraceRecorder) Record(clievent.Event) bool              { return true }
+func (*getIncompleteTraceRecorder) ReportRejectionEvidenceLoss(uint64) bool { return true }
+
 func (*getIncompleteTraceRecorder) ReportUpstreamLoss(uint64, uint64) bool {
 	return true
 }

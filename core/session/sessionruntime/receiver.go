@@ -15,6 +15,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	framechannel "github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -73,7 +74,7 @@ type ReceiverFactoryConfig struct {
 	LaneRaceWidth                     int
 	Now                               func() time.Time
 	After                             func(time.Duration) <-chan time.Time
-	ProtocolTracer                    ProtocolOperationTracer
+	ProtocolObservations              observationstream.Producer[ProtocolObservation]
 	LaneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
 }
 
@@ -100,7 +101,7 @@ type ReceiverFactory struct {
 	raceWidth                         int
 	now                               func() time.Time
 	after                             func(time.Duration) <-chan time.Time
-	protocolTracer                    ProtocolOperationTracer
+	protocolObservations              observationstream.Producer[ProtocolObservation]
 	laneSettlementObservationCapacity transfer.LaneSettlementObservationCapacity
 
 	mu         sync.Mutex
@@ -152,7 +153,7 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 		resources:       config.RuntimeResources,
 		operationLimits: config.OperationLimits, routerLimits: config.RouterLimits,
 		raceWidth: config.LaneRaceWidth, now: config.Now, after: config.After,
-		protocolTracer:                    config.ProtocolTracer,
+		protocolObservations:              config.ProtocolObservations,
 		laneSettlementObservationCapacity: config.LaneSettlementObservationCapacity,
 		closeDone:                         make(chan struct{}),
 	}, nil
@@ -190,7 +191,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 		Random: factory.random, Authenticator: handshake.authenticator,
 		Continuations:   factory.peerSemantics,
 		OperationLimits: factory.operationLimits, RouterLimits: factory.routerLimits, Now: factory.now,
-		ProtocolTracer: factory.protocolTracer,
+		ProtocolObservations: factory.protocolObservations,
 	})
 	if err != nil {
 		keys.Destroy()

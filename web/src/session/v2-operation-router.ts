@@ -2,9 +2,9 @@ import { V2OperationTombstone, type V2ProtocolTraceContext } from './v2-operatio
 import { encodeBase64Url } from '../crypto/bytes'
 import { cancellationTraceReason, snapshotOperationRequest, type V2CancellationTraceReason } from './v2-operation-diagnostics'
 import {
-  createProtocolFailure,
+  createReceivedProtocolError,
   type FailureCorrelation,
-  type ProtocolFailure,
+  type ReceivedProtocolError,
 } from '../diagnostics/incident/fact'
 import {
   protocolMessageKindV1,
@@ -287,7 +287,8 @@ export class V2OperationRouter {
   readonly #admission = new V2SessionQueueAdmission()
   readonly #diagnostics: V2ProtocolTraceContext | undefined
   readonly #pathControls = new Set<(body: Uint8Array<ArrayBuffer>) => void>()
-  readonly #protocolFailures = new WeakMap<V2SessionMessage, ProtocolFailure>()
+  readonly #authenticatedResponses = new WeakMap<V2SessionMessage,
+    ReceivedProtocolError | Readonly<{ correlation: ReceivedProtocolError['correlation'] }>>()
   readonly #capacityWaiters = new Set<() => void>()
   #capacityTimer: ReturnType<typeof setTimeout> | undefined
   #terminal: unknown
@@ -375,7 +376,7 @@ export class V2OperationRouter {
       },
       () => this.#draining.delete(operation),
       (message, laneId, laneEpoch) => {
-        this.#captureProtocolFailure(operation, message, laneId, laneEpoch)
+        this.#captureAuthenticatedResponse(operation, message, laneId, laneEpoch)
         if (message.kind === V2_MESSAGE_KIND.operationError) {
           const failure = decodeV2OperationErrorControl(message.body)
           if (failure.scope === 'peer' && peerFailureScope(failure.code) === 'session-terminal') {
@@ -401,8 +402,13 @@ export class V2OperationRouter {
     return Object.freeze([...this.#operations.values()])
   }
 
-  protocolFailureFor(message: V2SessionMessage): ProtocolFailure | undefined {
-    return this.#protocolFailures.get(message)
+  protocolFailureFor(message: V2SessionMessage): ReceivedProtocolError | undefined {
+    const response = this.#authenticatedResponses.get(message)
+    return response !== undefined && 'content' in response ? response : undefined
+  }
+
+  receivedCorrelationFor(message: V2SessionMessage): ReceivedProtocolError['correlation'] | undefined {
+    return this.#authenticatedResponses.get(message)?.correlation
   }
 
   subscribePeerPathControls(listener: (body: Uint8Array<ArrayBuffer>) => void): () => void {
@@ -447,13 +453,13 @@ export class V2OperationRouter {
           correlation: this.#operationCorrelation(operation, laneId, laneEpoch),
         }))
       }
-      const protocolFailure = this.#protocolFailures.get(message)
+      const protocolFailure = this.protocolFailureFor(message)
       if (protocolFailure !== undefined) {
         this.#emitTrace(() => Object.freeze({
           eventName: 'protocol_operation',
           transition: 'authenticated_failure',
           requestKind: protocolFailure.requestKind,
-          protocolFailure,
+          protocolError: protocolFailure.content,
           correlation: protocolFailure.correlation,
         }))
       }
@@ -489,18 +495,17 @@ export class V2OperationRouter {
     this.#retiredPeers.clear()
   }
 
-  #captureProtocolFailure(
+  #captureAuthenticatedResponse(
     operation: V2OperationQueue,
     message: V2SessionMessage,
     laneId?: number,
     laneEpoch?: number,
   ): void {
-    if (message.kind !== V2_MESSAGE_KIND.operationError) return
+    if (message.kind !== V2_MESSAGE_KIND.operationError && message.kind !== V2_MESSAGE_KIND.openResults) return
     const diagnostics = this.#diagnostics
     if (diagnostics === undefined) return
-    const decoded = decodeV2OperationErrorControl(message.body)
     const peerBinding = operation.peerBinding()
-    const correlation: ProtocolFailure['correlation'] = Object.freeze({
+    const correlation: ReceivedProtocolError['correlation'] = Object.freeze({
       protocolSessionId: diagnostics.protocolSessionIdentity,
       protocolOperationId: createV2ProtocolOperationIdentity(operation.id),
       ...(peerBinding === undefined
@@ -513,16 +518,19 @@ export class V2OperationRouter {
         ? {}
         : { lane: Object.freeze({ id: laneId, epoch: laneEpoch }) }),
     })
-    this.#protocolFailures.set(message, createProtocolFailure({
-      requestKind: protocolMessageKindV1(operation.requestKind),
-      wireScope: decoded.scope,
-      wireCode: decoded.code,
-      retryable: decoded.retryable,
-      ...(decoded.retryAfterMilliseconds === undefined
-        ? {}
-        : { retryAfterMilliseconds: decoded.retryAfterMilliseconds }),
-      settlement: Object.freeze({ kind: 'received_authenticated' }),
-      correlation,
+    if (message.kind === V2_MESSAGE_KIND.openResults) {
+      // The content layer decodes per-file failures after final delivery removes
+      // the operation binding. Preserve this message's receive lane, not its request route.
+      this.#authenticatedResponses.set(message, Object.freeze({ correlation }))
+      return
+    }
+    const decoded = decodeV2OperationErrorControl(message.body)
+    this.#authenticatedResponses.set(message, createReceivedProtocolError({
+      requestKind: protocolMessageKindV1(operation.requestKind), correlation, content: {
+        scope: decoded.scope, code: decoded.code, retryable: decoded.retryable, ...(decoded.retryAfterMilliseconds === undefined
+          ? {}
+          : { retryAfterMilliseconds: decoded.retryAfterMilliseconds })
+      }
     }))
   }
 

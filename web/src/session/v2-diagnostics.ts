@@ -2,7 +2,7 @@ import type { V2CancellationTraceReason, V2OperationRequestTrace } from './v2-op
 import type { RequestSchedulingObservation } from '../content/scheduling/requests'
 import type {
   FailureCorrelation,
-  ProtocolFailure,
+  ProtocolErrorContent,
   ProtocolMessageKindV1,
 } from '../diagnostics/incident/fact'
 import { V2_MESSAGE_KIND, type V2MessageKind } from './v2-message'
@@ -58,7 +58,7 @@ export type V2ProtocolOperationTraceEvent =
       settlement: V2ProtocolOperationSettlement
       cancellationReason?: V2CancellationTraceReason
       request?: V2OperationRequestTrace
-      protocolFailure?: ProtocolFailure
+      protocolError?: ProtocolErrorContent
       correlation: FailureCorrelation
     }>
   | Readonly<{
@@ -89,7 +89,7 @@ export type V2ProtocolOperationTraceEvent =
       eventName: 'protocol_operation'
       transition: 'authenticated_failure'
       requestKind: ProtocolMessageKindV1
-      protocolFailure: ProtocolFailure
+      protocolError: ProtocolErrorContent
       correlation: FailureCorrelation
     }>
   | Readonly<{

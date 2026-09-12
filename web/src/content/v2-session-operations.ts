@@ -8,7 +8,7 @@ import { equalBytes } from '../crypto/bytes'
 import {
   protocolFailureFact,
   type FailureFact,
-  type ProtocolFailure,
+  type ReceivedProtocolError,
 } from '../diagnostics/incident/fact'
 import {
   decodeV2ScanProgress,
@@ -24,20 +24,20 @@ export class V2RemoteOperationError extends Error {
   readonly code: number
   readonly retryable: boolean
   readonly retryAfterMilliseconds: number | undefined
-  readonly protocolFailure: ProtocolFailure
+  readonly protocolFailure: ReceivedProtocolError
   readonly failureFact: FailureFact<'protocol_failure'>
 
-  constructor(protocolFailure: ProtocolFailure) {
+  constructor(protocolFailure: ReceivedProtocolError) {
     super('Sender rejected the authenticated operation')
     this.name = 'V2RemoteOperationError'
-    this.scope = protocolFailure.wireScope
-    this.code = protocolFailure.wireCode
-    this.retryable = protocolFailure.retryable
-    this.retryAfterMilliseconds = protocolFailure.retryAfterMilliseconds
+    this.scope = protocolFailure.content.scope
+    this.code = protocolFailure.content.code
+    this.retryable = protocolFailure.content.retryable
+    this.retryAfterMilliseconds = protocolFailure.content.retryAfterMilliseconds
     this.protocolFailure = protocolFailure
     this.failureFact = protocolFailureFact({
       stage: 'protocol_operation',
-      recoveryDisposition: protocolFailure.retryable ? 'retryable' : 'terminal',
+      recoveryDisposition: protocolFailure.content.retryable ? 'retryable' : 'terminal',
       protocolFailure,
     })
   }
@@ -47,7 +47,7 @@ export function remoteOperationErrorFor(
   session: V2ReceiverSessionRuntime,
   message: V2SessionMessage,
 ): V2RemoteOperationError {
-  return new V2RemoteOperationError(session.authenticatedProtocolFailure(message))
+  return new V2RemoteOperationError(session.authenticatedReceivedProtocolError(message))
 }
 
 export class V2CatalogSessionOperations implements V2CatalogOperationClient {

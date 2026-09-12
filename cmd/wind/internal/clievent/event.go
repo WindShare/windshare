@@ -347,6 +347,7 @@ const (
 	TraceIncompleteWriter
 	TraceIncompleteFlush
 	TraceIncompleteSchemaLimit
+	TraceIncompleteRejectionEvidence
 )
 
 func (cause TraceIncompleteCause) Name() (string, bool) {
@@ -359,6 +360,8 @@ func (cause TraceIncompleteCause) Name() (string, bool) {
 		return "flush", true
 	case TraceIncompleteSchemaLimit:
 		return "schema_limit", true
+	case TraceIncompleteRejectionEvidence:
+		return "rejection_evidence_drop", true
 	default:
 		return "", false
 	}

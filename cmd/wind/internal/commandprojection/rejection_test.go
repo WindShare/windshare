@@ -11,83 +11,69 @@ import (
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
 
-func validRejectionTestTrace() sessionruntime.ProtocolOperationTrace {
-	return sessionruntime.ProtocolOperationTrace{
-		Stage: sessionruntime.ProtocolOperationSenderRequestReceived,
-		Role:  protocolsession.RoleSender, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
-		OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageOpenRevisions,
-	}
-}
-
-func TestProjectionRejectionNamesBrokenInvariants(t *testing.T) {
-	tests := []struct {
-		name, field, rule string
-		mutate            func(*sessionruntime.ProtocolOperationTrace)
-	}{
-		{"stage", "stage", "known_enum", func(v *sessionruntime.ProtocolOperationTrace) { v.Stage = 255 }},
-		{"operation", "protocol_operation_id", "nonzero_16_bytes", func(v *sessionruntime.ProtocolOperationTrace) { v.OperationID = protocolsession.OperationID{} }},
-		{"response", "response_kind", "known_enum", func(v *sessionruntime.ProtocolOperationTrace) { v.HasResponse = true; v.ResponseKind = 255 }},
-		{"send", "send", "settlement_requires_presence", func(v *sessionruntime.ProtocolOperationTrace) { v.SendAdmitted = true }},
-		{"stage_fields", "stage_fields", "sender_request_received", func(v *sessionruntime.ProtocolOperationTrace) {
-			v.HasResponse = true
-			v.ResponseKind = protocolsession.MessageOpenResults
-		}},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			input := validRejectionTestTrace()
-			test.mutate(&input)
-			_, err := ProjectProtocolOperation(clievent.CommandShare, input)
-			if !errors.Is(err, ErrInvalidProjection) {
-				t.Fatalf("error = %v", err)
-			}
-			sample := ProjectionRejection(err)
-			if !sample.Valid() || sample.Field != test.field || sample.Rule != test.rule {
-				t.Fatalf("rejection = %+v", sample)
-			}
-			if test.name == "stage" && sample.Stage != "unknown_255" {
-				t.Fatalf("stage = %q", sample.Stage)
-			}
-		})
-	}
-	_, err := ProjectSenderRevision(content.RevisionTrace{})
+func TestProjectionRejectionPreservesRuleAndSourceOperands(t *testing.T) {
+	context := clievent.CaptureObservationRejection(clievent.ObservationRejection{
+		Event: "protocol_operation", Source: "commandprojection.ProjectProtocolObservation", Stage: "sender_request_received",
+		Session: "00000000000000000000000000000000", Operation: "invalid raw operation",
+	}, clievent.RejectedBool("has_lane", false), clievent.RejectedUint("lane_id", 7), clievent.RejectedUint("lane_epoch", 0))
+	err := withRejectionContext(clievent.EventContractError{Field: "lane", Rule: "presence_matches_identity"}, context)
 	sample := ProjectionRejection(err)
-	if sample.Field != "stage" || sample.Stage != "unknown_0" {
-		t.Fatalf("revision rejection = %+v", sample)
+	if !sample.Valid() || sample.Field != "lane" || sample.Rule != "presence_matches_identity" ||
+		sample.Event != context.Event || sample.Source != context.Source || sample.Session != context.Session ||
+		len(sample.Evidence()) != 3 {
+		t.Fatalf("sample = %+v", sample)
+	}
+	if sample.Evidence()[1].Value != "7" || sample.Evidence()[2].Value != "0" {
+		t.Fatal("conflicting operands were erased")
 	}
 }
 
 func TestProjectionRejectionSnapshotBoundsAndFallback(t *testing.T) {
 	context := clievent.ObservationRejection{Stage: "sender_request_received"}
-	err := withRejectionContext(clievent.EventContractError{Field: "send", Rule: "settlement_requires_presence"}, context)
-	if sample := ProjectionRejection(err); sample.Field != "send" || sample.Stage != context.Stage {
-		t.Fatalf("sample=%+v", sample)
-	}
 	oversized := withRejectionContext(rejectedProjection(ProjectionEventContract, strings.Repeat("x", 1000), "rule"), context)
-	if sample := ProjectionRejection(oversized); !sample.Valid() || sample.Field != "event" {
-		t.Fatalf("unbounded sample=%+v", sample)
+	sample := ProjectionRejection(oversized)
+	if !sample.Valid() || len(sample.Field) != 96 || !sample.Truncated() || sample.OmittedBytes() != 904 {
+		t.Fatalf("unbounded sample = %+v", sample)
 	}
-	if sample := ProjectionRejection(errors.New("provider object text")); sample.Rule != "projection_contract" {
-		t.Fatalf("fallback=%+v", sample)
-	}
-}
-
-func BenchmarkProtocolProjectionSuccess(b *testing.B) {
-	value := validRejectionTestTrace()
-	b.ReportAllocs()
-	for b.Loop() {
-		if _, err := ProjectProtocolOperation(clievent.CommandShare, value); err != nil {
-			b.Fatal(err)
-		}
+	if fallback := ProjectionRejection(errors.New("provider object text")); !fallback.Valid() ||
+		fallback.Rule != "projection_contract" || len(fallback.Evidence()) != 0 {
+		t.Fatalf("fallback = %+v", fallback)
 	}
 }
 
-func BenchmarkProtocolProjectionWithoutFailureContext(b *testing.B) {
-	value := validRejectionTestTrace()
-	b.ReportAllocs()
-	for b.Loop() {
-		if _, err := projectProtocolOperation(clievent.CommandShare, value); err != nil {
-			b.Fatal(err)
-		}
+func TestIdentityRejectionRetainsRawBytesBeforeConversion(t *testing.T) {
+	raw := []byte{0, 1, 255}
+	_, err := RelaySessionID(raw)
+	raw[0] = 3
+	sample := ProjectionRejection(err)
+	if !errors.Is(err, ErrInvalidProjection) || ObserverLossReason(err) != clievent.ObserverLossInvalidIdentity ||
+		!sample.Valid() || sample.Source != "commandprojection.RelaySessionID" ||
+		len(sample.Evidence()) != 1 || sample.Evidence()[0].Value != "0001ff" {
+		t.Fatalf("identity evidence = %+v", sample)
+	}
+	_, err = ProtocolSessionID(protocolsession.ProtocolSessionID{})
+	sample = ProjectionRejection(err)
+	if sample.Evidence()[0].Value != strings.Repeat("0", 32) {
+		t.Fatal("invalid zero identity was erased")
+	}
+	_, err = LaneIdentity(sessionruntime.LaneIdentity{Epoch: 9})
+	sample = ProjectionRejection(err)
+	if sample.Field != "lane" || len(sample.Evidence()) != 2 || sample.Evidence()[0].Value != "0" || sample.Evidence()[1].Value != "9" {
+		t.Fatalf("lane evidence = %+v", sample)
+	}
+}
+
+func TestSenderRevisionRejectionCapturesOriginalZeroValues(t *testing.T) {
+	_, err := ProjectSenderRevision(content.RevisionTrace{})
+	sample := ProjectionRejection(err)
+	if !sample.Valid() || sample.Event != "sender_revision" || sample.Source != "commandprojection.ProjectSenderRevision" ||
+		sample.Field != "stage" || sample.Stage != "unknown" || sample.Rule != "known_enum" {
+		t.Fatalf("revision rejection = %+v", sample)
+	}
+	evidence := sample.Evidence()
+	if len(evidence) != 7 || evidence[0].Representation != "enum_number" || evidence[0].Value != "0" ||
+		evidence[2].Representation != "identity_hex" || evidence[2].Value != strings.Repeat("0", 32) ||
+		evidence[6].Field != "protocol_session_id" || evidence[6].Value != "" {
+		t.Fatalf("original revision values = %#v", evidence)
 	}
 }

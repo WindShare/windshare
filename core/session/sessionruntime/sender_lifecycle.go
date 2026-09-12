@@ -165,7 +165,7 @@ func observeSenderTerminalSend(
 		observation.TransportDisposition = SenderTerminalSendTransportNotReached
 	}
 	switch completion.Outcome {
-	case protocolsession.SendOutcomeDelivered:
+	case protocolsession.SendOutcomeTransportConfirmed:
 		observation.Outcome = SenderTerminalSendOutcomeDelivered
 		observation.Decision = SenderTerminalSendDecisionDelivered
 	case protocolsession.SendOutcomeDropped:

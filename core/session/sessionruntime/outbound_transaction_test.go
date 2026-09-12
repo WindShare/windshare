@@ -67,12 +67,12 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 		name            string
 		firstUnknown    bool
 		secondDelivered bool
-		wantOutcome     protocolsession.SendOutcome
+		wantOutcome     protocolsession.ResponseSendEvidence
 		wantError       bool
 	}{
-		{name: "unknown then delivered", firstUnknown: true, secondDelivered: true, wantOutcome: protocolsession.SendOutcomeDelivered},
-		{name: "unknown then dropped", firstUnknown: true, wantOutcome: protocolsession.SendOutcomeUnknown, wantError: true},
-		{name: "all pretransport dropped", wantOutcome: protocolsession.SendOutcomeDropped, wantError: true},
+		{name: "unknown then delivered", firstUnknown: true, secondDelivered: true, wantOutcome: protocolsession.ResponseSendEvidenceTransportConfirmed},
+		{name: "unknown then dropped", firstUnknown: true, wantOutcome: protocolsession.ResponseSendEvidenceUncertain, wantError: true},
+		{name: "all pretransport dropped", wantOutcome: protocolsession.ResponseSendEvidenceDefinitelyNotSent, wantError: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime, _ := newUnstartedRuntime(t, protocolsession.RoleSender)
@@ -130,8 +130,23 @@ func TestSenderControlTransactionAggregatesAttemptsAndDrainsAuthority(t *testing
 			if secondDone != nil {
 				<-secondDone
 			}
-			if outcome != test.wantOutcome || (sendErr != nil) != test.wantError {
-				t.Fatalf("outcome=%d error=%v", outcome, sendErr)
+			if outcome.Evidence() != test.wantOutcome || (sendErr != nil) != test.wantError {
+				t.Fatalf("result=%+v error=%v", outcome, sendErr)
+			}
+			if test.firstUnknown {
+				wantCount, lastLane := 1, firstIdentity.ID
+				if test.secondDelivered {
+					wantCount, lastLane = 2, runtime.initial.ID
+				}
+				if outcome.AttemptCount() != wantCount {
+					t.Fatalf("attempt count=%d want=%d", outcome.AttemptCount(), wantCount)
+				}
+				firstAttempt, _ := outcome.Attempt(0)
+				lastAttempt, _ := outcome.Attempt(wantCount - 1)
+				if firstAttempt.Identity().LaneID != firstIdentity.ID || lastAttempt.Identity().LaneID != lastLane ||
+					firstAttempt.Cause().Kind() != protocolsession.SendAttemptCauseTransportFailure {
+					t.Fatalf("attempts lost lane or failure evidence: first=%+v last=%+v", firstAttempt, lastAttempt)
+				}
 			}
 			if errors.Is(sendErr, ErrRuntimeClosed) {
 				t.Fatalf("live-session attempt exhaustion was misclassified as runtime closure: %v", sendErr)
@@ -212,9 +227,9 @@ func TestOutboundTransactionAttemptsExactlyEveryFullLaneIdentityOnce(t *testing.
 		}
 		return protocolsession.SendReceipt{}, errors.Join(protocolsession.ErrWriterStopped, physicalErr)
 	})
-	if outcome != protocolsession.SendOutcomeDropped || runErr == nil ||
+	if outcome.Evidence() != protocolsession.ResponseSendEvidenceDefinitelyNotSent || runErr == nil ||
 		!errors.Is(runErr, protocolsession.ErrWriterStopped) || !errors.Is(runErr, ErrLaneUnavailable) {
-		t.Fatalf("exhausted transaction outcome=%d error=%v", outcome, runErr)
+		t.Fatalf("exhausted transaction result=%+v error=%v", outcome, runErr)
 	}
 	if len(attempted) != protocolsession.DefaultMaxLogicalLanes {
 		t.Fatalf("physical attempts=%d, want %d", len(attempted), protocolsession.DefaultMaxLogicalLanes)
@@ -411,8 +426,8 @@ func TestUnsettledCallerCancelDoesNotMigrateOrTerminateSession(t *testing.T) {
 	outbound.privateKey = ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
 	if outcome, err := outbound.SendControl(
 		secondContext, protocolsession.MessageOperationComplete, secondOperation, completeBody,
-	); err != nil || outcome != protocolsession.SendOutcomeDelivered {
-		t.Fatalf("second operation outcome=%d error=%v", outcome, err)
+	); err != nil || outcome.Evidence() != protocolsession.ResponseSendEvidenceTransportConfirmed {
+		t.Fatalf("second operation result=%+v error=%v", outcome, err)
 	}
 	if runtime.routes.len() != 0 || runtime.operations.ActiveCount() != 0 || runtime.operations.TombstoneCount() != 2 {
 		t.Fatalf("post-cancel continuation routes=%d active=%d tombstones=%d", runtime.routes.len(), runtime.operations.ActiveCount(), runtime.operations.TombstoneCount())
@@ -443,8 +458,8 @@ func TestSettledUnknownWithoutReplayAuthorityFailClosesSession(t *testing.T) {
 		return protocolsession.SendReceipt{}, nil
 	})
 	transaction.Close()
-	if outcome != protocolsession.SendOutcomeUnknown || !errors.Is(err, errOutboundReplayAuthority) {
-		t.Fatalf("outcome=%d error=%v", outcome, err)
+	if !outcome.IsZero() || !errors.Is(err, errOutboundReplayAuthority) {
+		t.Fatalf("result=%+v error=%v", outcome, err)
 	}
 	select {
 	case <-runtime.ctx.Done():
@@ -468,6 +483,9 @@ func testOutboundOperationContext(
 		t.Fatal("test request has no operation identity")
 	}
 	route := runtime.routes.reserve(operationID, identity)
+	if route != nil {
+		route.requestKind = request.Kind()
+	}
 	if route == nil {
 		t.Fatal("operation route was not reserved")
 	}

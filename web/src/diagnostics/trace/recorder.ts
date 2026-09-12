@@ -3,11 +3,11 @@ import {
   type TraceCapacityPolicy,
 } from './capacity'
 import {
-  TRACE_EVENT_NAMES_V1,
+  TRACE_EVENT_NAMES_V2,
   type TraceCapturedEvent,
   type TraceCaptureSnapshot,
   type TraceCaptureState,
-  type TraceEventNameV1,
+  type TraceEventNameV2,
   type TraceHealthCounter,
   type TraceHealthSnapshot,
   type TraceSealReason,
@@ -22,12 +22,12 @@ import type {
 
 import { TraceRetentionWindow, type TraceRetention } from './retention'
 
-type DomainTraceEventName = Exclude<TraceEventNameV1, 'incident_marker'>
+type DomainTraceEventName = Exclude<TraceEventNameV2, 'incident_marker'>
 type CapturePhase = 'pre' | 'post'
 
 interface StoredTraceEvent<Event, Incident> {
   readonly phase: CapturePhase
-  readonly name: TraceEventNameV1
+  readonly name: TraceEventNameV2
   readonly record: TraceCapturedEvent<Event, Incident>
 }
 
@@ -102,8 +102,8 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
   readonly #events: StoredTraceEvent<Event, Incident>[] = []
   readonly #retention: TraceRetentionWindow<StoredTraceEvent<Event, Incident>>
   readonly #eventRetention: BoundedTraceRecorderOptions<Event, Incident, Scope>['eventRetention']
-  readonly #sampledAt = new Map<TraceEventNameV1, number>()
-  readonly #coalesced = new Map<TraceEventNameV1, CoalescedEvent<Event, Incident>>()
+  readonly #sampledAt = new Map<TraceEventNameV2, number>()
+  readonly #coalesced = new Map<TraceEventNameV2, CoalescedEvent<Event, Incident>>()
   #state: Exclude<TraceCaptureState, 'idle'> = 'recording_pre_failure'
   #sealReason: TraceSealReason | undefined
   #lastNowMilliseconds: number
@@ -590,8 +590,8 @@ export class BoundedTraceRecorder<Event, Incident, Scope> {
   }
 
   #requireDomainEventName(value: DomainTraceEventName): DomainTraceEventName {
-    if ((value as TraceEventNameV1) === 'incident_marker' ||
-        !TRACE_EVENT_NAMES_V1.includes(value as TraceEventNameV1)) {
+    if ((value as TraceEventNameV2) === 'incident_marker' ||
+        !TRACE_EVENT_NAMES_V2.includes(value as TraceEventNameV2)) {
       throw new TypeError('trace event name is not part of the closed domain vocabulary')
     }
     return value
