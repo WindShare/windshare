@@ -475,17 +475,6 @@ export class BrowserFileSystemTree implements PersistentOutputTree {
     return this.#files.removeWithinTerminal(authority, path, ownedObjectId)
   }
 
-  async removeDirectory(path: readonly string[], ownedObjectId: string): Promise<void> {
-    if (this.#binding.reservation.entryKind === 'single-file') {
-      throw new TypeError('Single-file DirectoryTree has no owned directory')
-    }
-    const canonicalPath = snapshotRelativePath(path, true)
-    if (!await this.validateDirectory(canonicalPath, ownedObjectId)) {
-      throw new TargetOwnershipUnknownError('cleanup', this.#binding.intent.operationId)
-    }
-    await this.#mutate('remove-entry', () => this.#removeDirectoryAuthority(canonicalPath))
-  }
-
   async removeDirectoryWithinTerminal(
     _authority: FSATerminalExclusiveAuthority,
     path: readonly string[],

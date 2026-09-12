@@ -314,7 +314,6 @@ export class MemoryTree implements PersistentOutputTree {
     this.#files.delete(key)
   }
 
-  async removeDirectory(): Promise<void> {}
 
   failNextCreation(): void {
     this.#failNextCreation = true

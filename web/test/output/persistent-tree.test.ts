@@ -261,6 +261,25 @@ describe('persistent DirectoryTree materialization port', () => {
 
 describe('persistent initial claim inspection coordination', () => {
 
+  it('admits and settles later independent files while the first inspection stays blocked', async () => {
+    const fixture = await materializationFixture(undefined, 2)
+    const gate = fixture.tree.deferFileInspection(['slow', 'first.bin'])
+    const first = beginInitialClaim(fixture.session, ['slow', 'first.bin'],
+      { ...revision(0n), fileId: identity(106) })
+    await gate.started
+    const quick = await beginInitialClaim(fixture.session, ['fast', 'second.bin'],
+      { ...revision(0n), fileId: identity(107) })
+    const next = await beginInitialClaim(fixture.session, ['fast', 'third.bin'],
+      { ...revision(0n), fileId: identity(108) })
+    expect(fixture.tree.activeInspections).toBe(1)
+    expect(fixture.checkpoints.installedClaimBatches.flat()).toEqual([
+      'fast/second.bin', 'fast/third.bin',
+    ])
+    gate.resolve()
+    const slow = await first
+    await Promise.all([quick, next, slow].map(transaction => transaction.retire()))
+  })
+
   it('starts the first discovered file and bounds different-parent claim inspections at two', async () => {
     const fixture = await materializationFixture(undefined, 2)
     const gate = fixture.tree.deferFileInspection(['gate', 'first.bin'])
@@ -288,11 +307,12 @@ describe('persistent initial claim inspection coordination', () => {
     inspections[1]!.resolve()
     inspections[2]!.resolve()
     const transactions = await Promise.all(later)
-    expect(fixture.checkpoints.installedClaimBatches.at(-1)).toEqual(paths.map(path => path.join('/')))
+    expect(fixture.checkpoints.installedClaimBatches.flat().slice(-paths.length))
+      .toEqual(paths.map(path => path.join('/')))
     await Promise.all([firstTransaction, ...transactions].map(transaction => transaction.retire()))
   })
 
-  it('keeps same-parent claim inspections serialized inside the bounded group', async () => {
+  it('preserves provider serialization for same-parent claim inspections', async () => {
     const fixture = await materializationFixture(undefined, 2)
     const gate = fixture.tree.deferFileInspection(['gate', 'same-parent.bin'])
     const first = beginInitialClaim(fixture.session, ['gate', 'same-parent.bin'],
@@ -321,40 +341,36 @@ describe('persistent initial claim inspection coordination', () => {
     await Promise.all(transactions.map(transaction => transaction.retire()))
   })
 
-  it('drains active inspection siblings before rejecting a failed batch without installing it', async () => {
+  it('rejects only the failed inspection and keeps sibling authority admitted until it drains', async () => {
     const fixture = await materializationFixture(undefined, 2)
-    const gate = fixture.tree.deferFileInspection(['gate', 'failure.bin'])
-    const first = beginInitialClaim(fixture.session, ['gate', 'failure.bin'],
-      { ...revision(0n), fileId: identity(130) })
-    await gate.started
     const left = fixture.tree.deferFileInspection(['left', 'failed.bin'])
     const right = fixture.tree.deferFileInspection(['right', 'drained.bin'])
-    const claims = [left, right].map((_inspection, index) => beginInitialClaim(fixture.session,
-      [index === 0 ? 'left' : 'right', index === 0 ? 'failed.bin' : 'drained.bin'],
-      { ...revision(0n), fileId: identity(131 + index) }))
-    await Promise.resolve()
-    gate.resolve()
-    const firstTransaction = await first
-    const installedBeforeFailure = fixture.checkpoints.installedClaimBatches.length
+    const failed = beginInitialClaim(fixture.session, ['left', 'failed.bin'],
+      { ...revision(0n), fileId: identity(131) })
+    const sibling = beginInitialClaim(fixture.session, ['right', 'drained.bin'],
+      { ...revision(0n), fileId: identity(132) })
     await Promise.all([left.started, right.started])
     const raw = new Error('injected inspection failure')
+    const rejection = expect(failed).rejects.toBe(raw)
     left.reject(raw)
-    let batchSettled = false
-    const settled = Promise.allSettled(claims).then((results) => {
-      batchSettled = true
-      return results
-    })
+    await rejection
+    const later = await beginInitialClaim(fixture.session, ['later', 'ready.bin'],
+      { ...revision(0n), fileId: identity(133) })
+    expect(fixture.checkpoints.installedClaimBatches.flat()).toEqual(['later/ready.bin'])
+    await later.retire()
+    let closed = false
+    const closing = fixture.session.close().then(() => { closed = true })
     await Promise.resolve()
-    expect(batchSettled).toBe(false)
+    expect(closed).toBe(false)
     right.resolve()
-    const results = await settled
-    expect(results.map(result => result.status === 'rejected' ? result.reason : undefined))
-      .toEqual([raw, raw])
-    expect(fixture.checkpoints.installedClaimBatches).toHaveLength(installedBeforeFailure)
-    await firstTransaction.retire()
+    await sibling
+    await closing
+    expect(fixture.checkpoints.installedClaimBatches.flat()).toEqual([
+      'later/ready.bin', 'right/drained.bin',
+    ])
   })
 
-  it('batch-reclassifies occupied destinations and installs absent claims in original order', async () => {
+  it('reclassifies ready occupied destinations and installs ready absent claims', async () => {
     const fixture = await materializationFixture(undefined, 2)
     const gate = fixture.tree.deferFileInspection(['gate', 'reclassify.bin'])
     const first = beginInitialClaim(fixture.session, ['gate', 'reclassify.bin'],
@@ -378,11 +394,10 @@ describe('persistent initial claim inspection coordination', () => {
     inspections[2]!.resolve('occupied')
     inspections[3]!.resolve()
     const transactions = await Promise.all(claims)
-    expect(fixture.checkpoints.lineageBatches.slice(-2)).toEqual([
-      paths.map(path => path.join('/')),
-      ['p0/0.bin', 'p2/2.bin'],
+    expect(fixture.checkpoints.lineageBatches.flat().filter(path => path.startsWith('p')).sort()).toEqual([
+      'p0/0.bin', 'p0/0.bin', 'p1/1.bin', 'p2/2.bin', 'p2/2.bin', 'p3/3.bin',
     ])
-    expect(fixture.checkpoints.installedClaimBatches.at(-1)).toEqual(['p1/1.bin', 'p3/3.bin'])
+    expect(fixture.checkpoints.installedClaimBatches.flat().slice(-2)).toEqual(['p1/1.bin', 'p3/3.bin'])
     await Promise.all([firstTransaction, ...transactions].map(transaction => transaction.retire()))
   })
 

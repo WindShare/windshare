@@ -32,15 +32,15 @@ export interface PerformanceClaimPhaseObservation {
   finish(): void
 }
 
-export interface PerformanceClaimBatchTimeline {
+export interface PerformanceLineageClaimTimeline {
   beginPhase(
     phase: PerformanceClaimPhaseV1,
     memberCount: number,
   ): PerformanceClaimPhaseObservation | undefined
-  complete(): PerformanceClaimBatchTimelineResult | undefined
+  complete(): PerformanceLineageClaimTimelineResult | undefined
 }
 
-export interface PerformanceClaimBatchTimelineResult {
+export interface PerformanceLineageClaimTimelineResult {
   readonly completedAtMilliseconds: number
   readonly phases: PerformanceClaimPhaseSamples
 }
@@ -58,15 +58,15 @@ interface ActivePhaseState {
   finished: boolean
 }
 
-export function createPerformanceClaimBatchTimeline(
+export function createPerformanceLineageClaimTimeline(
   performance: PerformanceSummaryObservations | undefined,
   startedAtMilliseconds: number | undefined,
-): PerformanceClaimBatchTimeline | undefined {
+): PerformanceLineageClaimTimeline | undefined {
   if (performance === undefined || startedAtMilliseconds === undefined) return undefined
-  return new ClaimBatchTimeline(performance, startedAtMilliseconds)
+  return new LineageClaimTimeline(performance, startedAtMilliseconds)
 }
 
-class ClaimBatchTimeline implements PerformanceClaimBatchTimeline {
+class LineageClaimTimeline implements PerformanceLineageClaimTimeline {
   readonly #performance: PerformanceSummaryObservations
   readonly #samples = new Map<PerformanceClaimPhaseV1, PerformanceClaimPhaseSample>()
   #cursorMilliseconds: number
@@ -117,7 +117,7 @@ class ClaimBatchTimeline implements PerformanceClaimBatchTimeline {
     })
   }
 
-  complete(): PerformanceClaimBatchTimelineResult | undefined {
+  complete(): PerformanceLineageClaimTimelineResult | undefined {
     if (this.#current?.phase === 'installation') this.#finishPhase(this.#current)
     if (this.#disabled || this.#current !== undefined ||
         this.#nextPhaseIndex !== PERFORMANCE_CLAIM_PHASES_V1.length) return undefined

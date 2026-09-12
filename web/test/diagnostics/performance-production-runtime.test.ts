@@ -163,7 +163,10 @@ describe('FSA performance production observations', () => {
       observed.directoryAdmissions.length.toString(),
     )
     expect(summary.namespace_by_kind.create_file.wait_ms.sample_count).toBe(
-      (2 * FILE_COUNT).toString(),
+      FILE_COUNT.toString(),
+    )
+    expect(summary.namespace_by_kind.inspect_entry.wait_ms.sample_count).toBe(
+      FILE_COUNT.toString(),
     )
     expect(summary.file_pipeline.worker_starts).toBe(
       MAXIMUM_CONCURRENT_FILE_PIPELINES.toString(),
@@ -185,41 +188,36 @@ describe('FSA performance production observations', () => {
     expect(summary.file_pipeline.stages.final_transaction.entries).toBe(FILE_COUNT.toString())
     expect(summary.revision_opens.attempts).toBe(FILE_COUNT.toString())
     expect(summary.revision_opens.active_at_completion).toBe(0)
-    expect(summary.claim_batches.members).toBe(FILE_COUNT.toString())
-    expect(BigInt(summary.claim_batches.count)).toBeGreaterThan(0n)
-    expect(BigInt(summary.claim_batches.count)).toBeLessThanOrEqual(BigInt(FILE_COUNT))
-    expect(summary.claim_batches.oldest_wait_ms.sample_count).toBe(summary.claim_batches.count)
-    expect(summary.claim_batches.newest_wait_ms.sample_count).toBe(summary.claim_batches.count)
-    expect(summary.claim_batches.run_ms.sample_count).toBe(summary.claim_batches.count)
-    expect(summary.claim_batches.maximum_size).toBeGreaterThan(0)
-    expect(summary.claim_batches.maximum_size).toBeLessThanOrEqual(FILE_COUNT)
+    expect(summary.lineage_claims.count).toBe(FILE_COUNT.toString())
+    expect(summary.lineage_claims.wait_ms.sample_count).toBe(summary.lineage_claims.count)
+    expect(summary.lineage_claims.run_ms.sample_count).toBe(summary.lineage_claims.count)
     const claimPhases = PERFORMANCE_CLAIM_PHASES_V1.map(
-      phase => summary.claim_batches.phases[phase],
+      phase => summary.lineage_claims.phases[phase],
     )
     expect(claimPhases.every(
-      phase => phase.batch_count === summary.claim_batches.count &&
-        phase.queue_ms.sample_count === phase.batch_count &&
-        phase.run_ms.sample_count === phase.batch_count &&
+      phase => phase.claim_count === summary.lineage_claims.count &&
+        phase.queue_ms.sample_count === phase.claim_count &&
+        phase.run_ms.sample_count === phase.claim_count &&
         phase.active_at_completion === 0,
     )).toBe(true)
     expect(claimPhases.reduce(
       (total, phase) => total + BigInt(phase.queue_ms.total_ms) + BigInt(phase.run_ms.total_ms),
       0n,
-    )).toBe(BigInt(summary.claim_batches.run_ms.total_ms))
-    expect(summary.claim_batches.phases.classification.member_count).toBe(FILE_COUNT.toString())
-    expect(summary.claim_batches.phases.inspection_union.member_count).toBe(FILE_COUNT.toString())
+    )).toBe(BigInt(summary.lineage_claims.run_ms.total_ms))
+    expect(summary.lineage_claims.phases.classification.member_count).toBe(FILE_COUNT.toString())
+    expect(summary.lineage_claims.phases.inspection_union.member_count).toBe(FILE_COUNT.toString())
     expect(
-      BigInt(summary.claim_batches.phases.reclassification.member_count) +
-      BigInt(summary.claim_batches.phases.installation.member_count),
-    ).toBe(BigInt(summary.claim_batches.phases.inspection_union.member_count))
-    expect(summary.claim_batches.phases.inspection_union.maximum_active).toBeGreaterThan(0)
+      BigInt(summary.lineage_claims.phases.reclassification.member_count) +
+      BigInt(summary.lineage_claims.phases.installation.member_count),
+    ).toBe(BigInt(summary.lineage_claims.phases.inspection_union.member_count))
+    expect(summary.lineage_claims.phases.inspection_union.maximum_active).toBeGreaterThan(0)
     for (const phase of claimPhases) {
       expect(BigInt(phase.overlap_ms)).toBeLessThanOrEqual(BigInt(phase.run_ms.total_ms))
       expect(BigInt(phase.active_ms)).toBeLessThanOrEqual(
         BigInt(phase.maximum_active) * BigInt(phase.run_ms.total_ms),
       )
     }
-    const inspector = summary.claim_batches.inspector
+    const inspector = summary.lineage_claims.inspector
     expect(BigInt(inspector.drains)).toBeGreaterThan(0n)
     expect(inspector.maximum_width).toBeGreaterThan(0)
     expect(inspector.maximum.active).toBeLessThanOrEqual(inspector.maximum_width)

@@ -107,7 +107,7 @@ export class BrowserFileLineageAuthority {
     if (this.#compatibleNames?.hasLateLogicalCollision(canonicalPath, 'file')) return 'occupied'
     const outcome = await this.#mutations.scheduler.runNamespace(
       [parent.schedulerIdentity],
-      'create-file',
+      'inspect-entry',
       async () => {
         try {
           return Object.freeze({
@@ -232,9 +232,9 @@ export class BrowserFileLineageAuthority {
     if (authority === undefined) {
       throw new TargetOwnershipUnknownError('cleanup', this.#binding.intent.operationId)
     }
-    await this.#mutations.scheduler.runNamespace(
-      [authority.parent.schedulerIdentity],
-      'remove-entry',
+    await this.#mutations.scheduler.runFileMutation(
+      authority.schedulerTarget,
+      'remove-file',
       () => this.#removeAuthority(canonicalPath, authority),
     )
   }

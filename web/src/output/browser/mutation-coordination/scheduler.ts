@@ -3,6 +3,8 @@ import {
   FSATerminalMutationAlreadyBegunError,
   FSATerminalMutationUnavailableError,
   type FSAOperationMutationScheduler,
+  type FSAFileMutationIdentity,
+  type FSAFileMutationKind,
   type FSAMutationSchedulerDiagnosticsSnapshot,
   type FSAMutationSchedulerState,
   type FSANamespaceMutationKind,
@@ -11,6 +13,7 @@ import {
   type FSATerminalExclusiveAuthority,
   type FSATerminalMutationKind,
   type FSAWriterLifecycleLease,
+  type FSAVerifiedFileMutationTarget,
 } from './model'
 import { FSAMutationSchedulerDiagnostics } from './scheduler-diagnostics'
 import {
@@ -31,16 +34,21 @@ interface ParentLane {
   readonly identity: FSAParentMutationIdentity
   readonly ordinal: number
   readonly namespaceQueue: NamespaceRequest[]
-  activeWriters: number
   activeNamespace: NamespaceRequest | undefined
-  writerBarrierOrder: number | undefined
+}
+
+interface FileLane {
+  readonly target: FSAVerifiedFileMutationTarget
+  readonly parent: ParentLane
+  activeWriter: boolean
 }
 
 interface NamespaceRequest {
   readonly order: number
   readonly queuedAtMilliseconds: number | undefined
-  readonly kind: FSANamespaceMutationKind
+  readonly kind: FSANamespaceMutationKind | FSAFileMutationKind
   readonly lanes: readonly ParentLane[]
+  readonly file: FileLane | undefined
   readonly operation: () => Promise<unknown>
   readonly resolve: (value: unknown) => void
   readonly reject: (reason: unknown) => void
@@ -49,7 +57,7 @@ interface NamespaceRequest {
 interface WriterRequest {
   readonly order: number
   readonly queuedAtMilliseconds: number | undefined
-  readonly lane: ParentLane
+  readonly lane: FileLane
   readonly resolve: (lease: FSAWriterLifecycleLease) => void
 }
 
@@ -75,6 +83,7 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
   readonly #diagnostics: FSAMutationSchedulerDiagnostics
   readonly #performance: PerformanceSummaryObservations | undefined
   readonly #lanes = new Map<FSAParentMutationIdentity, ParentLane>()
+  readonly #files = new Map<FSAFileMutationIdentity, FileLane>()
   readonly #namespaceRequests: NamespaceRequest[] = []
   readonly #writerRequests: WriterRequest[] = []
   #state: FSAMutationSchedulerState = 'accepting'
@@ -115,6 +124,28 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
     operation: () => Promise<T>,
   ): Promise<T> {
     requireNamespaceMutationKind(kind)
+    return this.#enqueueNamespace(parents, kind, operation)
+  }
+
+  runFileMutation<T>(
+    target: FSAVerifiedFileMutationTarget,
+    kind: FSAFileMutationKind,
+    operation: () => Promise<T>,
+  ): Promise<T> {
+    if (kind !== 'remove-file') throw new TypeError('FSA file mutation kind is invalid')
+    requireFileTarget(target)
+    requireOperation(operation)
+    if (this.#state !== 'accepting') return Promise.reject(new FSAOperationMutationClosedError())
+    const file = this.#file(target)
+    return this.#enqueueNamespace([target.parent], kind, operation, file)
+  }
+
+  #enqueueNamespace<T>(
+    parents: readonly FSAParentMutationIdentity[],
+    kind: FSANamespaceMutationKind | FSAFileMutationKind,
+    operation: () => Promise<T>,
+    file?: FileLane,
+  ): Promise<T> {
     requireOperation(operation)
     if (this.#state !== 'accepting') {
       return Promise.reject(new FSAOperationMutationClosedError())
@@ -128,13 +159,13 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
         queuedAtMilliseconds: performanceNowMilliseconds(this.#performance),
         kind,
         lanes,
+        file,
         operation,
         resolve: value => { resolve(value as T) },
         reject,
       }
       this.#namespaceRequests.push(request)
       for (const lane of lanes) {
-        if (lane.writerBarrierOrder === undefined) lane.writerBarrierOrder = order
         lane.namespaceQueue.push(request)
       }
       this.#diagnostics.namespaceQueued()
@@ -144,13 +175,13 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
     return result
   }
 
-  acquireWriter(parent: FSAParentMutationIdentity): Promise<FSAWriterLifecycleLease> {
-    requireParentIdentity(parent)
+  acquireWriter(target: FSAVerifiedFileMutationTarget): Promise<FSAWriterLifecycleLease> {
+    requireFileTarget(target)
     if (this.#state !== 'accepting') {
       return Promise.reject(new FSAOperationMutationClosedError())
     }
 
-    const lane = this.#lane(parent)
+    const lane = this.#file(target)
     const result = new Promise<FSAWriterLifecycleLease>((resolve) => {
       this.#writerRequests.push({
         order: this.#nextSequence(),
@@ -228,13 +259,28 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
       identity,
       ordinal: this.#nextLaneOrdinal,
       namespaceQueue: [],
-      activeWriters: 0,
       activeNamespace: undefined,
-      writerBarrierOrder: undefined,
     }
     this.#nextLaneOrdinal += 1
     this.#lanes.set(identity, lane)
     return lane
+  }
+
+  #file(target: FSAVerifiedFileMutationTarget): FileLane {
+    const existing = this.#files.get(target.file)
+    if (existing !== undefined) {
+      if (existing.target.parent !== target.parent) {
+        throw new TypeError('FSA file mutation identity changed its verified parent')
+      }
+      return existing
+    }
+    const file: FileLane = {
+      target: Object.freeze({ parent: target.parent, file: target.file }),
+      parent: this.#lane(target.parent),
+      activeWriter: false,
+    }
+    this.#files.set(target.file, file)
+    return file
   }
 
   #nextSequence(): number {
@@ -268,10 +314,11 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
       }
       this.#namespaceRequests.splice(index, 1)
       for (const lane of request.lanes) {
-        const queued = lane.namespaceQueue.shift()
-        if (queued !== request) {
+        const queuedIndex = lane.namespaceQueue.indexOf(request)
+        if (queuedIndex < 0) {
           throw new Error('FSA namespace lane order was corrupted')
         }
+        lane.namespaceQueue.splice(queuedIndex, 1)
         lane.activeNamespace = request
       }
       this.#diagnostics.namespaceStarted()
@@ -284,18 +331,18 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
 
   #namespaceReady(request: NamespaceRequest): boolean {
     return request.lanes.every((lane) =>
-      lane.activeWriters === 0 &&
       lane.activeNamespace === undefined &&
-      lane.namespaceQueue[0] === request &&
-      !this.#hasWriterBeforeBarrier(lane),
+      lane.namespaceQueue.find(candidate => this.#fileMutationReady(candidate)) === request,
     )
   }
 
-  #hasWriterBeforeBarrier(lane: ParentLane): boolean {
-    const barrier = lane.writerBarrierOrder
-    if (barrier === undefined) return false
-    return this.#writerRequests.some(
-      request => request.lane === lane && request.order < barrier,
+  #fileMutationReady(request: NamespaceRequest): boolean {
+    const file = request.file
+    if (file === undefined) return true
+    // Waiting for one file to close must not reserve its entire parent. Sibling
+    // inspection/creation can use the short namespace lane while this file drains.
+    return !file.activeWriter && !this.#writerRequests.some(
+      writer => writer.lane === file && writer.order < request.order,
     )
   }
 
@@ -317,7 +364,6 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
           throw new Error('FSA namespace active lane was corrupted')
         }
         lane.activeNamespace = undefined
-        if (lane.namespaceQueue.length === 0) lane.writerBarrierOrder = undefined
       }
       this.#diagnostics.namespaceSettled(succeeded)
       if (succeeded) {
@@ -342,7 +388,7 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
       const [request] = this.#writerRequests.splice(index, 1)
       if (request === undefined) throw new Error('FSA writer queue was corrupted')
       this.#activeWriters += 1
-      request.lane.activeWriters += 1
+      request.lane.activeWriter = true
       this.#diagnostics.writerAcquired()
       const startedAtMilliseconds = performanceNowMilliseconds(this.#performance)
       this.#observeConcurrency()
@@ -358,25 +404,25 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
 
   #writerEligible(request: WriterRequest): boolean {
     const lane = request.lane
-    if (lane.activeNamespace !== undefined) return false
-    const barrier = lane.writerBarrierOrder
-    return barrier === undefined || request.order < barrier
+    if (lane.activeWriter || lane.parent.activeNamespace?.file === lane) return false
+    return !lane.parent.namespaceQueue.some(mutation =>
+      mutation.file === lane && mutation.order < request.order)
   }
 
   #writerLease(
-    lane: ParentLane,
+    lane: FileLane,
     queuedAtMilliseconds: number | undefined,
     startedAtMilliseconds: number | undefined,
   ): FSAWriterLifecycleLease {
     let released = false
     return Object.freeze({
-      parent: lane.identity,
+      target: lane.target,
       release: () => {
         if (released) return
         released = true
-        lane.activeWriters -= 1
+        lane.activeWriter = false
         this.#activeWriters -= 1
-        if (lane.activeWriters < 0 || this.#activeWriters < 0) {
+        if (this.#activeWriters < 0) {
           throw new Error('FSA writer lease accounting underflowed')
         }
         this.#diagnostics.writerReleased()
@@ -500,13 +546,15 @@ class OperationMutationScheduler implements FSAOperationMutationScheduler {
   }
 }
 
-function performanceNamespaceKind(kind: FSANamespaceMutationKind): PerformanceNamespaceKindV1 {
+function performanceNamespaceKind(
+  kind: FSANamespaceMutationKind | FSAFileMutationKind,
+): PerformanceNamespaceKindV1 {
   switch (kind) {
+    case 'inspect-entry': return 'inspect_entry'
     case 'reserve-name': return 'reserve_name'
     case 'create-directory': return 'create_directory'
     case 'create-file': return 'create_file'
-    case 'remove-entry': return 'remove_entry'
-    case 'rename-entry': return 'rename_entry'
+    case 'remove-file': return 'remove_entry'
     case 'repair-compatible-name': return 'repair_compatible_name'
   }
 }
@@ -523,6 +571,13 @@ function requireParentIdentity(parent: FSAParentMutationIdentity): void {
   }
 }
 
+function requireFileTarget(target: FSAVerifiedFileMutationTarget): void {
+  requireParentIdentity(target.parent)
+  if (typeof target.file !== 'symbol') {
+    throw new TypeError('FSA file mutation identity must be an opaque authority token')
+  }
+}
+
 function requireOperation(operation: unknown): asserts operation is () => Promise<unknown> {
   if (typeof operation !== 'function') {
     throw new TypeError('FSA mutation operation must be a function')
@@ -531,11 +586,10 @@ function requireOperation(operation: unknown): asserts operation is () => Promis
 
 function requireNamespaceMutationKind(kind: FSANamespaceMutationKind): void {
   switch (kind) {
+    case 'inspect-entry':
     case 'reserve-name':
     case 'create-directory':
     case 'create-file':
-    case 'remove-entry':
-    case 'rename-entry':
     case 'repair-compatible-name':
       return
   }

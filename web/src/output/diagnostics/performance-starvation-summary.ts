@@ -14,14 +14,14 @@ import {
   requirePerformanceMilliseconds,
   saturatingPerformanceAdd,
 } from './performance-histogram'
-import type { PerformanceClaimPhaseSamples } from './claim-batch-performance'
+import type { PerformanceClaimPhaseSamples } from './lineage-claim-performance'
 import type { PerformanceClaimInspectorSample } from './claim-inspector-performance'
 
 const UINT32_MAX = 0xffff_ffff
 
 type StarvationSnapshot = Pick<
   PerformanceSummaryProjectionInput,
-  'namespaceByKind' | 'filePipeline' | 'revisionOpens' | 'claimBatches' | 'outputResources'
+  'namespaceByKind' | 'filePipeline' | 'revisionOpens' | 'lineageClaims' | 'outputResources'
 >
 
 type Histogram = BoundedMillisecondsHistogram
@@ -36,7 +36,7 @@ interface PipelineStageState {
 interface ClaimPhaseState {
   readonly queue: Histogram
   readonly run: Histogram
-  batchCount: bigint
+  claimCount: bigint
   memberCount: bigint
   activeMilliseconds: bigint
   overlapMilliseconds: bigint
@@ -89,13 +89,10 @@ export class BoundedPerformanceStarvationSummary {
     active: number
     maximumActive: number
   }
-  readonly #claimBatches: {
-    oldestWait: Histogram
-    newestWait: Histogram
+  readonly #lineageClaims: {
+    wait: Histogram
     run: Histogram
     count: bigint
-    members: bigint
-    maximumSize: number
     phases: Record<PerformanceClaimPhaseV1, ClaimPhaseState>
     inspector: ClaimInspectorState
   }
@@ -132,17 +129,14 @@ export class BoundedPerformanceStarvationSummary {
       active: 0,
       maximumActive: 0,
     }
-    this.#claimBatches = {
-      oldestWait: histogram(),
-      newestWait: histogram(),
+    this.#lineageClaims = {
+      wait: histogram(),
       run: histogram(),
       count: 0n,
-      members: 0n,
-      maximumSize: 0,
       phases: Object.fromEntries(PERFORMANCE_CLAIM_PHASES_V1.map(phase => [phase, {
         queue: histogram(),
         run: histogram(),
-        batchCount: 0n,
+        claimCount: 0n,
         memberCount: 0n,
         activeMilliseconds: 0n,
         overlapMilliseconds: 0n,
@@ -252,25 +246,18 @@ export class BoundedPerformanceStarvationSummary {
     this.#revision.run.observe(input.runMilliseconds)
   }
 
-  observeClaimBatch(input: Readonly<{
-    size: number
-    oldestWaitMilliseconds: number
-    newestWaitMilliseconds: number
+  observeLineageClaim(input: Readonly<{
+    waitMilliseconds: number
     runMilliseconds: number
     phases: PerformanceClaimPhaseSamples
   }>): void {
-    const size = requireUint32(input.size, 'claim batch size')
-    if (size === 0) throw new RangeError('claim batch size must be positive')
-    this.#claimBatches.count = this.#increment(this.#claimBatches.count)
-    this.#claimBatches.members = this.#add(this.#claimBatches.members, BigInt(size))
-    this.#claimBatches.maximumSize = Math.max(this.#claimBatches.maximumSize, size)
-    this.#claimBatches.oldestWait.observe(input.oldestWaitMilliseconds)
-    this.#claimBatches.newestWait.observe(input.newestWaitMilliseconds)
-    this.#claimBatches.run.observe(input.runMilliseconds)
+    this.#lineageClaims.count = this.#increment(this.#lineageClaims.count)
+    this.#lineageClaims.wait.observe(input.waitMilliseconds)
+    this.#lineageClaims.run.observe(input.runMilliseconds)
     for (const phase of PERFORMANCE_CLAIM_PHASES_V1) {
       const sample = input.phases[phase]
-      const summary = this.#claimBatches.phases[phase]
-      summary.batchCount = this.#increment(summary.batchCount)
+      const summary = this.#lineageClaims.phases[phase]
+      summary.claimCount = this.#increment(summary.claimCount)
       summary.memberCount = this.#add(summary.memberCount, BigInt(sample.memberCount))
       summary.queue.observe(sample.queueMilliseconds)
       summary.run.observe(sample.runMilliseconds)
@@ -291,7 +278,7 @@ export class BoundedPerformanceStarvationSummary {
   }
 
   observeClaimInspector(input: PerformanceClaimInspectorSample): void {
-    const state = this.#claimBatches.inspector
+    const state = this.#lineageClaims.inspector
     const wallMilliseconds = BigInt(requirePerformanceMilliseconds(
       input.drainMilliseconds,
       'claim inspector drain',
@@ -405,27 +392,24 @@ export class BoundedPerformanceStarvationSummary {
         maximumActive: this.#revision.maximumActive,
         activeAtCompletion: this.#revision.active,
       }),
-      claimBatches: Object.freeze({
-        count: this.#claimBatches.count,
-        members: this.#claimBatches.members,
-        maximumSize: this.#claimBatches.maximumSize,
-        oldestWait: this.#claimBatches.oldestWait.snapshot(),
-        newestWait: this.#claimBatches.newestWait.snapshot(),
-        run: this.#claimBatches.run.snapshot(),
+      lineageClaims: Object.freeze({
+        count: this.#lineageClaims.count,
+        wait: this.#lineageClaims.wait.snapshot(),
+        run: this.#lineageClaims.run.snapshot(),
         phases: Object.freeze(Object.fromEntries(PERFORMANCE_CLAIM_PHASES_V1.map(phase => [
           phase,
           Object.freeze({
-            batchCount: this.#claimBatches.phases[phase].batchCount,
-            memberCount: this.#claimBatches.phases[phase].memberCount,
-            queue: this.#claimBatches.phases[phase].queue.snapshot(),
-            run: this.#claimBatches.phases[phase].run.snapshot(),
-            activeMilliseconds: this.#claimBatches.phases[phase].activeMilliseconds,
-            overlapMilliseconds: this.#claimBatches.phases[phase].overlapMilliseconds,
-            maximumActive: this.#claimBatches.phases[phase].maximumActive,
-            activeAtCompletion: this.#claimBatches.phases[phase].activeAtCompletion,
+            claimCount: this.#lineageClaims.phases[phase].claimCount,
+            memberCount: this.#lineageClaims.phases[phase].memberCount,
+            queue: this.#lineageClaims.phases[phase].queue.snapshot(),
+            run: this.#lineageClaims.phases[phase].run.snapshot(),
+            activeMilliseconds: this.#lineageClaims.phases[phase].activeMilliseconds,
+            overlapMilliseconds: this.#lineageClaims.phases[phase].overlapMilliseconds,
+            maximumActive: this.#lineageClaims.phases[phase].maximumActive,
+            activeAtCompletion: this.#lineageClaims.phases[phase].activeAtCompletion,
           }),
-        ]))) as StarvationSnapshot['claimBatches']['phases'],
-        inspector: snapshotClaimInspector(this.#claimBatches.inspector),
+        ]))) as StarvationSnapshot['lineageClaims']['phases'],
+        inspector: snapshotClaimInspector(this.#lineageClaims.inspector),
       }),
       outputResources: Object.freeze({
         activeFiles: Object.freeze({
@@ -487,7 +471,7 @@ export class BoundedPerformanceStarvationSummary {
 
 function snapshotClaimInspector(
   state: ClaimInspectorState,
-): StarvationSnapshot['claimBatches']['inspector'] {
+): StarvationSnapshot['lineageClaims']['inspector'] {
   return Object.freeze({
     drains: state.drains,
     wallMilliseconds: state.wallMilliseconds,
@@ -522,7 +506,7 @@ function snapshotClaimInspector(
         reason,
         Object.freeze({ ...state.underCapacity[reason] }),
       ]),
-    ) as StarvationSnapshot['claimBatches']['inspector']['underCapacity']),
+    ) as StarvationSnapshot['lineageClaims']['inspector']['underCapacity']),
   })
 }
 
