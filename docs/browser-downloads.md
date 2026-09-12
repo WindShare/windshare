@@ -1,6 +1,6 @@
 # Browser Downloads
 
-WindShare lets you preview, browse, and download shared files and folders directly in the browser without waiting for an initial full scan.
+WindShare lets you browse shared files and folders without waiting for an initial full scan, then preview or download them directly in the browser.
 
 ## Download Scopes
 
@@ -12,33 +12,34 @@ You can continue browsing and previewing files while downloads run in the backgr
 
 ## Saving Options
 
-WindShare recommends the best save method based on browser capabilities and the selected content:
+WindShare recommends a save method based on browser capabilities, available storage, and the selected content. Open **Other ways to save** for alternatives.
 
-| Save Option | Behavior | Best For |
-|---|---|---|
-| **Save to folder** | Writes files directly into a chosen local folder via File System Access API. Small files save directly; large or slow files stage in browser storage (OPFS) and copy upon completion for crash resilience. | Modern Chromium browsers; preserving directory structure. |
-| **Direct ZIP** | Streams an archive directly into a chosen folder with incremental checkpoints. Resumable if interrupted. | Multi-file or folder downloads when a single archive file is preferred. |
-| **Browser workspace** | Buffers data in browser storage (OPFS) first, then triggers a browser save/export when complete. | Browsers lacking folder access permissions or single-file downloads. |
+| Save Method | Behavior |
+|---|---|
+| **Save to folder** | Preserves the folder hierarchy in a chosen local folder. Small files save directly; larger or slower files may first use browser storage (OPFS), depending on recovery costs and available staging capacity. Each staged file is copied to the folder when complete. |
+| **Save ZIP to a folder** (Direct ZIP) | Streams an uncompressed archive into a chosen folder with verified resume checkpoints. The ZIP becomes usable after closing and verification finish. Checkpointing and resuming may require temporary destination space for a copy of the saved prefix. |
+| **Browser workspace** | Retains content in OPFS, then starts a browser download when allowed; otherwise choose **Save**. Actions include **Download original** and **Receive ZIP, then save**. The retained result remains available for another export. |
+| **Browser fallback** | A browser download with a size limit may be offered as a fallback. It checks that the complete result fits before receiving. Progress cannot survive a page reload. |
 
-> Under **Saving and recovery options**, choosing **Write directly to folder** bypasses browser staging completely to conserve local browser storage, but unfinished large files may lose uncheckpointed progress if the browser crashes.
+> Under **Other ways to save**, expand **Saving and recovery options**. Choosing **Write directly to folder** bypasses file staging in browser storage. A crash may lose most progress in a large unfinished file; completed files remain saved.
 
 ## Progress & Details
 
-- **Live indicators**: Displays received/reused bytes, completed files, and transfer speed. Exact totals, percentages, and remaining time appear once item discovery finishes.
-- **Details panel**: Displays per-file transfer status, recovery checkpoints, actual elapsed time, and restart-safe progress.
-- **Downloads hub**: Access active and retained download tasks anytime from the share page or home screen.
+- **Live indicators**: Displays received/reused bytes, completed or saved files, and transfer speed. Exact totals and percentages depend on completed item discovery; remaining time also requires a sufficiently stable transfer rate.
+- **Details panel**: Displays task summaries, failure information, elapsed time, and recovery information where available.
+- **Downloads hub**: Access active and retained download tasks in this browser from the share page or home screen.
 
 ## Pause, Resume & Recovery
 
-- **Pause vs. Stop**:
-  - **Pause**: Commits current progress so transfers can safely resume later.
-  - **Stop**: Cancels transfer and removes incomplete staging data while preserving already-saved files.
-- **Crash recovery**: If the tab or browser unexpectedly closes, verified checkpoints allow transfers to resume from where they left off.
-- **Save partial ZIP**: For paused ZIP tasks with completed files, you can export already-completed files into a standalone ZIP immediately without waiting for the rest.
-- **Verify saved ZIP**: Allows verifying a completed archive locally after an interrupted write session.
+- **Available controls**: Folder downloads offer **Pause** and **Stop**. Direct ZIP and browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
+- **Pause**: Saves progress supported by the chosen method. Wait for pausing to finish before leaving the page.
+- **Stop**: Ends receiving. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
+- **Crash recovery**: Resumable methods use the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require the original share link and renewed destination permission. The browser fallback must start again after a reload.
+- **Save partial ZIP**: Available for retained browser-workspace ZIP tasks with completed files when the browser supports a file save picker. Exports complete files as a separate ZIP while keeping the task available for continuation.
+- **Verify saved ZIP**: For Direct ZIP tasks requiring completion verification after an interrupted write session, verifies the saved archive locally.
 
 ## Storage & Cleanup
 
-- **Staging vs. Destination**: Staged files temporarily occupy browser storage (OPFS) alongside the target folder until copied. Browser storage quotas do not reflect destination disk free space.
-- **Automatic cleanup**: Staged files are automatically removed after destination writes are confirmed.
-- **Manual cleanup**: For stopped tasks or aborted exports, use **Discard incomplete browser data** or **Retry staging cleanup** from the task card to free browser storage.
+- **Staging vs. Destination**: Staging and export can temporarily require both browser storage and a destination copy. Browser storage quotas do not reflect destination disk free space.
+- **Folder staging cleanup**: Each staged file is removed after its destination write is confirmed. Use **Retry staging cleanup** for pending cleanup, or **Discard incomplete browser data** for incomplete staging left by an ended task.
+- **Retained browser results**: A browser download starting does not confirm that it was saved. Workspace results remain available for another export; use **Delete retained result** when no longer needed.
