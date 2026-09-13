@@ -1,4 +1,16 @@
 import { describe, expect, it, vi } from 'vitest'
+import { Uint8ArrayReader, Uint8ArrayWriter, ZipReader } from '@zip.js/zip.js'
+
+import { V2SelectionPolicy } from '../../src/catalog/v2-selection'
+import {
+  catalogFixture,
+  directoryEntry,
+  fileEntry,
+  identity as catalogIdentity,
+  readerFixture,
+  receiveIntentFixture,
+  transferJobFixture,
+} from '../transfer/v2-job-fixture'
 
 import { encodeBase64Url } from '../../src/crypto/bytes'
 import { browserHandoffOffer } from '../../src/output/capability/acquisition'
@@ -60,6 +72,78 @@ const ROOT_GENERATION = identity(20)
 const EMPTY_GENERATION = identity(21)
 
 describe('portable exact-preparation execution routes', () => {
+  it.each([
+    { directory: 'a', rootFile: 'z.txt' },
+    { directory: 'z', rootFile: 'a.txt' },
+    { directory: '\u{10000}', rootFile: '\uE000.txt' },
+  ])('downloads nested ZIP contents in sealed order: $directory / $rootFile', async ({
+    directory, rootFile,
+  }) => {
+    const payloadBytes = 1024
+    const leaf = fileEntry(catalogIdentity(11), 'leaf.txt', BigInt(payloadBytes))
+    const root = fileEntry(catalogIdentity(12), rootFile, BigInt(payloadBytes))
+    const child = directoryEntry(catalogIdentity(3), directory)
+    const selection = new V2SelectionPolicy(true)
+    const intent = await receiveIntentFixture({
+      planKind: 'portable-handoff', artifactKind: 'zip-archive', selection,
+    })
+    if (intent.artifact.kind !== 'zip-archive') throw new Error('test requires a ZIP artifact')
+    const prefix = intent.artifact.layout.name
+    const payloads = new Map([
+      [leaf.idText, new Uint8Array(payloadBytes).fill(1)],
+      [root.idText, new Uint8Array(payloadBytes).fill(2)],
+    ])
+    const catalog = catalogFixture([
+      { id: catalogIdentity(2), entries: [child, root] },
+      { id: child.id, entries: [leaf] },
+    ])
+    const readers = readerFixture([leaf, root])
+    const downloads: Blob[] = []
+    const spool = new MemoryZipCentralDirectorySpool()
+    const routes = createPortableExecutionRoutes({
+      environment: supportedEnvironment(),
+      attemptId: identity(32),
+      publisher: recordingPublisher(downloads),
+      assembly: { Blob, WritableStream },
+      lifecycle: lifecycleAuthority(),
+      createZipSpool: () => spool,
+    })
+    const plans = await createV2PlanExecutionAuthority({
+      intent, routes: { ...routes, lifecycle: unopenedLifecycle(intent) },
+    })
+    const result = await transferJobFixture({
+      catalog: catalog.catalog, selection, intent, plans, revisions: readers.revisions,
+      broker: {
+        readRange: async function* (descriptor, _leaseId, range) {
+          const payload = payloads.get(descriptor.fileIdText)!
+          yield { offset: range.start, data: payload.slice(Number(range.start), Number(range.end)) }
+        },
+      },
+      maximumPendingFiles: 1,
+    }).run()
+
+    expect(result.worker.status).toBe('Succeeded')
+    expect(result.lifecycle.kind).toBe('download-started')
+    expect(downloads).toHaveLength(1)
+    const archive = new ZipReader(new Uint8ArrayReader(
+      new Uint8Array(await downloads[0]!.arrayBuffer()),
+    ), { checkSignature: true })
+    try {
+      const entries = (await archive.getEntries()).filter(entry => !entry.directory)
+      const expected = new Map([
+        [`${prefix}/${directory}/leaf.txt`, payloads.get(leaf.idText)!],
+        [`${prefix}/${rootFile}`, payloads.get(root.idText)!],
+      ])
+      expect(entries.map(entry => entry.filename).sort()).toEqual([...expected.keys()].sort())
+      for (const entry of entries) {
+        expect(await entry.getData(new Uint8ArrayWriter())).toEqual(expected.get(entry.filename))
+      }
+    } finally {
+      await archive.close()
+    }
+    expect(spool.cleared).toBe(true)
+  })
+
   it('issues a bound original admission and settles only after DownloadStarted', async () => {
     const intent = await originalIntent()
     const evidence = originalEvidence(intent, 3n)

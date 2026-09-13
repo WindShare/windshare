@@ -776,6 +776,7 @@ function workspaceExecution(intent: ReceiveIntent): WorkspaceExecution {
 function portableExecution(intent: ReceiveIntent): PortableExecution {
   return {
     planKind: 'portable-handoff',
+    orderedFiles: [],
     output: testOutput(),
     pause: async () => discardedState(intent),
     settle: async () => downloadStartedState(intent),

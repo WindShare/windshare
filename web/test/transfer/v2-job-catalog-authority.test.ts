@@ -16,6 +16,57 @@ import {
 } from './v2-job-fixture'
 
 describe('v2 catalog and preparation authority', () => {
+  it.each(['reversed', 'missing', 'duplicate', 'unknown'] as const)(
+    'binds prepared file execution to output authority: %s',
+    async (order) => {
+      const files = [
+        fileEntry(identity(11), 'a.txt', 4n),
+        fileEntry(identity(12), 'z.txt', 4n),
+      ]
+      const selection = new V2SelectionPolicy(true)
+      const catalog = catalogFixture([{ id: identity(2), entries: files }])
+      const readers = readerFixture(files)
+      const plans = planAuthorityFixture()
+      const preparePortable = plans.preparePortable
+      plans.preparePortable = async (...args) => {
+        const admitted = await preparePortable(...args)
+        if (admitted.kind === 'rejected') return admitted
+        const [first, second] = admitted.execution.orderedFiles
+        if (first === undefined || second === undefined) throw new Error('test requires two files')
+        const orders = {
+          reversed: [second, first],
+          missing: [first],
+          duplicate: [first, first],
+          unknown: [first, { ...second, fileId: identityText(99) }],
+        }
+        return {
+          ...admitted,
+          execution: { ...admitted.execution, orderedFiles: orders[order] },
+        }
+      }
+      const intent = await receiveIntentFixture({
+        planKind: 'portable-handoff', artifactKind: 'zip-archive', selection,
+      })
+      const result = await transferJobFixture({
+        catalog: catalog.catalog, selection, intent, plans,
+        revisions: readers.revisions, broker: readers.broker, maximumPendingFiles: 1,
+      }).run()
+
+      if (order === 'reversed') {
+        expect(result.worker.status).toBe('Succeeded')
+        expect(readers.revisionRequests).toEqual([files[1]!.idText, files[0]!.idText])
+        expect(plans.output.commits).toEqual(readers.revisionRequests)
+      } else {
+        expect(result.worker.status).toBe('Paused')
+        expect(result.lifecycle.kind).toBe('restart-required')
+        expect(plans.output.requests).toEqual([])
+        expect(readers.revisionRequests).toEqual([])
+        expect(readers.blockRequests).toEqual([])
+        expect(plans.settlements).toEqual([])
+      }
+    },
+  )
+
   it('releases sequential sibling identities from path-local ancestry', () => {
     const ancestry = new V2DirectoryAncestry()
     const leaveRoot = ancestry.enter('root')
