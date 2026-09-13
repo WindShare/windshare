@@ -43,6 +43,11 @@ func (visitor *encodeVisitorV4) VisitRelayLifecycleObserved(event clievent.Relay
 	if dropped := event.Dropped(); dropped != 0 {
 		payload.Dropped = decimalPointer(dropped)
 	}
+	if event.HeartbeatRound() != 0 {
+		payload.HeartbeatRound = decimalPointer(event.HeartbeatRound())
+		wait, timeout := signedDecimal(event.Wait().Milliseconds()), signedDecimal(event.Timeout().Milliseconds())
+		payload.WaitMS, payload.TimeoutMS = &wait, &timeout
+	}
 	visitor.set("relay_lifecycle", nil, payload)
 	return nil
 }

@@ -58,6 +58,10 @@ type v2RegistrationVector struct {
 	StoppedErrorB64         string `json:"stoppedErrorB64"`
 	SessionCreditB64        string `json:"sessionCreditB64"`
 	SessionAdmittedB64      string `json:"sessionAdmittedB64"`
+	ResumeStaleErrorB64     string `json:"resumeStaleErrorB64"`
+	ConnectionProbeNonce    string `json:"connectionProbeNonce"`
+	ConnectionProbeB64      string `json:"connectionProbeB64"`
+	ConnectionProbeAckB64   string `json:"connectionProbeAckB64"`
 }
 
 func loadV2VectorCase(t *testing.T, fileName, name string, destination any) {
@@ -151,6 +155,35 @@ func TestRuntimeReconstructsGeneratedRegistrationResumeStopAndOpaqueVectors(t *t
 	assertBinaryVector(t, "SESSION_CREDIT", (SessionCredit{RelaySessionID: session, Frames: 2, Bytes: 100}).MarshalBinary, vector.SessionCreditB64)
 	assertBinaryVector(t, "SESSION_ADMITTED", (SessionAdmitted{RelaySessionID: session}).MarshalBinary, vector.SessionAdmittedB64)
 	assertBinaryVector(t, "STOPPED_ERROR", (ErrorFrame{Code: ErrorStopped}).MarshalBinary, vector.StoppedErrorB64)
+	assertBinaryVector(t, "RESUME_STALE_ERROR", (ErrorFrame{Code: ErrorResumeStale}).MarshalBinary, vector.ResumeStaleErrorB64)
+	probeNonce := parseVectorUint64(t, vector.ConnectionProbeNonce)
+	assertBinaryVector(t, "CONNECTION_PROBE", (ConnectionProbe{Nonce: probeNonce}).MarshalBinary, vector.ConnectionProbeB64)
+	assertBinaryVector(t, "CONNECTION_PROBE_ACK", (ConnectionProbeAck{Nonce: probeNonce}).MarshalBinary, vector.ConnectionProbeAckB64)
+}
+
+func TestRuntimeReconstructsBidirectionalCreditVectors(t *testing.T) {
+	var vector struct {
+		RelaySessionIDB64 string `json:"relaySessionIdB64"`
+		Grants            []struct {
+			Name       string `json:"name"`
+			Frames     uint32 `json:"frames"`
+			Bytes      uint32 `json:"bytes"`
+			EncodedB64 string `json:"encodedB64"`
+		} `json:"grants"`
+	}
+	loadV2VectorCase(t, "v2-session.json", "bidirectional-relay-session-credit", &vector)
+	var session RelaySessionID
+	copy(session[:], testB64(t, vector.RelaySessionIDB64))
+	for _, grant := range vector.Grants {
+		t.Run(grant.Name, func(t *testing.T) {
+			credit := SessionCredit{RelaySessionID: session, Frames: grant.Frames, Bytes: grant.Bytes}
+			assertBinaryVector(t, "SESSION_CREDIT", credit.MarshalBinary, grant.EncodedB64)
+			decoded, err := ParseSessionCredit(testB64(t, grant.EncodedB64))
+			if err != nil || decoded != credit {
+				t.Fatalf("credit decode=%+v error=%v want=%+v", decoded, err, credit)
+			}
+		})
+	}
 }
 
 func assertBinaryVector(t *testing.T, label string, marshal func() ([]byte, error), encoded string) {

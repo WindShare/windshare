@@ -223,6 +223,11 @@ func (visitor *encodeVisitorV4) VisitRelayConnected(event clievent.RelayConnecte
 	return nil
 }
 
+func (visitor *encodeVisitorV4) VisitRelayAvailability(event clievent.RelayAvailability) error {
+	visitor.set("relay_availability", nil, relayAvailabilityPayloadV4{event.Available(), event.Total(), event.EverReady(), event.Terminal()})
+	return nil
+}
+
 func (visitor *encodeVisitorV4) VisitRelayRecovering(event clievent.RelayRecovering) error {
 	authority, err := projectRelayAuthority(event.Authority())
 	if err != nil {
@@ -242,7 +247,22 @@ func (visitor *encodeVisitorV4) VisitRelayRecovering(event clievent.RelayRecover
 		}
 		payload.Failure = &projected
 	}
-	visitor.set("relay_recovering", nil, payload)
+	var correlation *CorrelationV1
+	if details, ok := event.Details(); ok {
+		payload.Details = &relayRecoveryDetailsV4{Generation: decimal(details.Generation), Slow: details.Slow, Resume: details.Resume, Terminal: details.Terminal, NextDelayMS: signedDecimal(details.NextDelay.Milliseconds())}
+		if details.ShareInstance.Valid() {
+			identity := encodeTypedIdentity(details.ShareInstance.Bytes())
+			payload.Details.ShareInstance = &identity
+		}
+		if details.ProtocolSessionID.Valid() {
+			var err error
+			correlation, err = projectSessionCorrelation(details.ProtocolSessionID, clievent.LaneIdentity{}, false)
+			if err != nil {
+				return err
+			}
+		}
+	}
+	visitor.set("relay_recovering", correlation, payload)
 	return nil
 }
 

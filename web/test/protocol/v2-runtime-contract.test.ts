@@ -44,6 +44,8 @@ import {
   V2_REGISTRATION_MODE,
   V2_RELAY_ERROR,
   decodeV2Challenge,
+  decodeV2ConnectionProbe,
+  decodeV2ConnectionProbeAck,
   decodeV2DescriptorDelivery,
   decodeV2DescriptorUpload,
   decodeV2Join,
@@ -60,6 +62,8 @@ import {
   decodeV2StopProof,
   decodeV2Stopped,
   encodeV2Challenge,
+  encodeV2ConnectionProbe,
+  encodeV2ConnectionProbeAck,
   encodeV2DescriptorDelivery,
   encodeV2DescriptorUpload,
   encodeV2Join,
@@ -159,6 +163,20 @@ interface RegistrationVector extends VectorCase {
   readonly sessionAdmittedB64: string
   readonly sessionRetiredRelaySessionIdB64: string
   readonly stoppedErrorB64: string
+  readonly resumeStaleErrorB64: string
+  readonly connectionProbeNonce: string
+  readonly connectionProbeB64: string
+  readonly connectionProbeAckB64: string
+}
+
+interface SessionCreditVector extends VectorCase {
+  readonly relaySessionIdB64: string
+  readonly grants: readonly {
+    readonly name: string
+    readonly frames: number
+    readonly bytes: number
+    readonly encodedB64: string
+  }[]
 }
 
 interface LaneVector extends VectorCase {
@@ -479,7 +497,7 @@ describe('suite-02 Web runtime contract', () => {
 
 })
 
-describe('suite-02 relay and lane runtime contract', () => {
+describe('suite-02 relay runtime contract', () => {
   it('reconstructs purpose-bound relay controls and opaque routing', async () => {
     const vector = named<RegistrationVector>('fresh-relay-registration-proof')
     const endpointVector = named<RelayEndpointVector>('v2-relay-endpoint-normalization')
@@ -638,37 +656,14 @@ describe('suite-02 relay and lane runtime contract', () => {
       bytes(vector.stoppedErrorB64),
     )
     expect(decodeV2RelayError(bytes(vector.stoppedErrorB64)).code).toBe(V2_RELAY_ERROR.stopped)
-    expect(semanticCases.find((candidate) => candidate.name === 'relay-route-lifecycle')).toEqual({
-      name: 'relay-route-lifecycle',
-      crashGraceSeconds: '60',
-      sessionTombstoneSeconds: '60',
-      routeBudgetCounts: ['starting', 'live', 'crash-grace', 'stopped-tombstone'],
-      sessionBudgets: {
-        global: ['provisional', 'active', 'ended-id-tombstone'],
-        'per-share': ['provisional', 'active'],
-      },
-      sessionAdmissionSeconds: '30',
-      sessionAdmissionPhases: ['awaiting_receiver', 'awaiting_sender', 'active'],
-      senderWindowFrames: 64,
-      senderWindowBytes: 4 << 20,
-      stopStoreOutcomes: ['committed', 'definitely-not-committed', 'unknown'],
-      explicitStop: [
-        'per-route-storage-transaction',
-        'durable-tombstone-before-ack',
-        'exact-participant-cleanup-before-ack',
-        'unknown-durability-fail-closed',
-        'same-stop-id-resolution',
-        'no-crash-grace',
-        'permanent-reject-same-instance',
-      ],
-      unexpectedDisconnect: [
-        'drop-sessions',
-        'enter-bounded-crash-grace',
-        'immediate-retirement-during-stop-commit',
-      ],
-      stoppedTombstoneRetention: 'until-future-authenticated-refresh',
-    })
-
+    const staleResume = { code: V2_RELAY_ERROR.resumeStale, retryAfterMilliseconds: 0 }
+    expect(encodeV2RelayError(staleResume)).toEqual(bytes(vector.resumeStaleErrorB64))
+    expect(decodeV2RelayError(bytes(vector.resumeStaleErrorB64))).toEqual(staleResume)
+    const probeNonce = BigInt(vector.connectionProbeNonce)
+    expect(encodeV2ConnectionProbe(probeNonce)).toEqual(bytes(vector.connectionProbeB64))
+    expect(decodeV2ConnectionProbe(bytes(vector.connectionProbeB64))).toBe(probeNonce)
+    expect(encodeV2ConnectionProbeAck(probeNonce)).toEqual(bytes(vector.connectionProbeAckB64))
+    expect(decodeV2ConnectionProbeAck(bytes(vector.connectionProbeAckB64))).toBe(probeNonce)
     const registrationAxes: readonly {
       readonly candidateInit: V2RegisterInit
       readonly candidateChallenge: V2Challenge
@@ -748,7 +743,7 @@ describe('suite-02 relay and lane runtime contract', () => {
     expect(() => decodeV2SessionAdmitted(flip(bytes(vector.sessionAdmittedB64), 5))).toThrow()
     expect(() => decodeV2SessionCredit(new Uint8Array(24))).toThrow()
     expect(() => decodeV2SessionAdmitted(new Uint8Array(16))).toThrow()
-    for (const [frames, creditBytes] of [[0, 0], [65, 2000], [1, 1], [1, 4 << 20], [1.5, 100]] as const) {
+    for (const [frames, creditBytes] of [[0, 0], [65, 2000], [-1, 100], [1, -1], [1, (4 << 20) + 1], [1.5, 100], [1, 1.5]] as const) {
       expect(() => encodeV2SessionCredit({ relaySessionId: bytes(vector.opaqueRelaySessionIdB64), frames, bytes: creditBytes })).toThrow()
     }
     expect(() => decodeV2SessionRetired(bytes(vector.sessionRetiredB64).subarray(0, 15))).toThrow()
@@ -765,6 +760,65 @@ describe('suite-02 relay and lane runtime contract', () => {
     expect(() => encodeV2RelayError({ code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 1 })).toThrow()
   })
 
+  it('matches relay route lifecycle and credit semantics', () => {
+    expect(semanticCases.find((candidate) => candidate.name === 'relay-route-lifecycle')).toEqual({
+      name: 'relay-route-lifecycle',
+      crashGraceSeconds: '60',
+      sessionTombstoneSeconds: '60',
+      routeBudgetCounts: ['starting', 'live', 'crash-grace', 'stopped-tombstone'],
+      sessionBudgets: {
+        global: ['provisional', 'active', 'ended-id-tombstone'],
+        'per-share': ['provisional', 'active'],
+      },
+      sessionAdmissionSeconds: '30',
+      sessionAdmissionPhases: ['awaiting_receiver', 'awaiting_sender', 'active'],
+      sessionCredit: {
+        directions: ['sender-to-receiver', 'receiver-to-sender'],
+        maximumAvailableFrames: 64,
+        maximumAvailableBytes: 4 << 20,
+        deltaFieldsIndependent: true,
+        nonzeroDeltaRequired: true,
+        senderInitialFrames: 64,
+        senderInitialBytes: 4 << 20,
+        receiverInitialFrames: 0,
+        receiverInitialBytes: 0,
+        receiverAllocation: 'fair-shared-destination-capacity',
+        opaqueFrameCost: ['one-frame', 'full-encoded-route-bytes'],
+        controlConsumesCredit: false,
+      },
+      stopStoreOutcomes: ['committed', 'definitely-not-committed', 'unknown'],
+      explicitStop: [
+        'per-route-storage-transaction',
+        'durable-tombstone-before-ack',
+        'exact-participant-cleanup-before-ack',
+        'unknown-durability-fail-closed',
+        'same-stop-id-resolution',
+        'no-crash-grace',
+        'permanent-reject-same-instance',
+      ],
+      unexpectedDisconnect: [
+        'drop-sessions',
+        'enter-bounded-crash-grace',
+        'immediate-retirement-during-stop-commit',
+      ],
+      stoppedTombstoneRetention: 'until-future-authenticated-refresh',
+    })
+  })
+
+  it('reconstructs independent bidirectional session-credit deltas', () => {
+    const vector = named<SessionCreditVector>('bidirectional-relay-session-credit')
+    for (const grant of vector.grants) {
+      const credit = {
+        relaySessionId: bytes(vector.relaySessionIdB64), frames: grant.frames, bytes: grant.bytes,
+      }
+      expect(encodeV2SessionCredit(credit), grant.name).toEqual(bytes(grant.encodedB64))
+      expect(decodeV2SessionCredit(bytes(grant.encodedB64)), grant.name).toEqual(credit)
+    }
+  })
+
+})
+
+describe('suite-02 lane runtime contract', () => {
   it('binds lane accept/reject to every hello axis and consumes one response', async () => {
     const vector = named<LaneVector>('sender-granted-lane-attach')
     const fields = {

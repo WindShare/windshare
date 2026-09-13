@@ -55,6 +55,7 @@ import {
   type V2ReceiverSessionOptions,
   type V2SessionOperation,
   V2SessionRuntimeError,
+  V2SessionHandshakeTimeoutError,
 } from './v2-runtime-types'
 import {
   createV2ReceiverHandshake,
@@ -127,8 +128,7 @@ export class V2ReceiverSessionRuntime {
     const deadline = deadlineSignal(
       options.signal,
       V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS,
-      'Protocol session handshake timed out',
-      'session',
+      new V2SessionHandshakeTimeoutError(V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS),
     )
     const handshakeOptions: V2ReceiverHandshakeOptions = {
       descriptor: options.descriptor,

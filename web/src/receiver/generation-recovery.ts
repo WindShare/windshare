@@ -7,7 +7,7 @@ const RECOVERY_ATTEMPT_MILLISECONDS = 45_000
 
 export class GenerationRecoveryExhaustedError extends Error {
   constructor() {
-    super('The connection could not recover within its budget. Resume the download when the sender is available.')
+    super('Fast connection recovery capacity is exhausted; waiting to retry')
     this.name = 'GenerationRecoveryExhaustedError'
   }
 }
@@ -17,6 +17,7 @@ interface RecoveryReservation {
   finish(completedAt: number): void
 }
 export interface GenerationRecoveryWave {
+  exhausted(now: number): boolean
   reserve(now: number): RecoveryReservation
 }
 
@@ -28,12 +29,15 @@ export class GenerationRecoveryBudget {
 
   openWave(startedAt: number): GenerationRecoveryWave {
     let attempts = 0
+    const exhausted = (now: number) => attempts >= RECOVERY_WAVE_ATTEMPTS ||
+      now - startedAt >= RECOVERY_WAVE_MILLISECONDS
     return {
+      exhausted,
       reserve: (now) => {
         this.#refill(now)
         const milliseconds = Math.min(RECOVERY_ATTEMPT_MILLISECONDS, this.#milliseconds,
           RECOVERY_WAVE_MILLISECONDS - (now - startedAt))
-        if (attempts >= RECOVERY_WAVE_ATTEMPTS || this.#attempts < 1 || milliseconds < 1) {
+        if (exhausted(now) || this.#attempts < 1 || milliseconds < 1) {
           throw new GenerationRecoveryExhaustedError()
         }
         attempts += 1
@@ -49,6 +53,14 @@ export class GenerationRecoveryBudget {
         } }
       },
     }
+  }
+
+  nextCapacityMilliseconds(now: number): number {
+    this.#refill(now)
+    return Math.ceil(Math.max(0,
+      (1 - this.#attempts) * RECOVERY_REFILL_MILLISECONDS / RECOVERY_ATTEMPT_CAPACITY,
+      (RECOVERY_ATTEMPT_MILLISECONDS - this.#milliseconds) *
+        RECOVERY_REFILL_MILLISECONDS / RECOVERY_TIME_CAPACITY_MILLISECONDS))
   }
 
   #refill(now: number): void {
@@ -77,10 +89,12 @@ export async function runGenerationRecovery<T>(options: {
   const timer = setTimeout(() => controller.abort(new Error('Connection recovery attempt timed out')),
     options.reservation.milliseconds)
   if (options.parent.aborted) abort()
+  let interrupt: (() => void) | undefined
   try {
     controller.signal.throwIfAborted()
     const interrupted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+      interrupt = () => reject(controller.signal.reason)
+      controller.signal.addEventListener('abort', interrupt, { once: true })
     })
     const work = options.connect(controller.signal).then(async (value) => {
       if (controller.signal.aborted) {
@@ -93,6 +107,7 @@ export async function runGenerationRecovery<T>(options: {
   } finally {
     clearTimeout(timer)
     options.parent.removeEventListener('abort', abort)
+    if (interrupt !== undefined) controller.signal.removeEventListener('abort', interrupt)
     options.reservation.finish(options.now())
   }
 }

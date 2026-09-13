@@ -1,4 +1,4 @@
-package cli
+package senderrelay
 
 import (
 	"context"
@@ -31,11 +31,11 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 	clock := newSenderRelayTestClock()
 	var attempts atomic.Int32
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 			if attempts.Add(1) == 1 {
-				return senderRelayConnection{}, transient
+				return Connection{}, transient
 			}
-			return newSenderRelayConnection(recovered), nil
+			return NewConnection(recovered), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
@@ -65,7 +65,7 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 		if config.Init != lifecycle.resume {
 			t.Fatalf("dial %d did not use the authenticated resume init", index)
 		}
-		if config.ResumeToken != lifecycle.config.resumeToken {
+		if config.ResumeToken != lifecycle.config.ResumeToken {
 			t.Fatalf("dial %d did not use the resume token", index)
 		}
 		if len(config.Descriptor) != 0 {
@@ -75,8 +75,10 @@ func TestSenderRelayRecoveryRetriesUnexpectedDisconnectWithBackoff(t *testing.T)
 			t.Fatalf("dial %d had no absolute recovery deadline", index)
 		}
 	}
-	if !deadlines[0].Equal(deadlines[1]) {
-		t.Fatalf("dial attempts used different recovery deadlines: %v", deadlines)
+	for _, deadline := range deadlines {
+		if time.Until(deadline) > senderRelayAttemptTimeout {
+			t.Fatalf("unbounded attempt deadline=%v", deadline)
+		}
 	}
 }
 
@@ -93,18 +95,18 @@ func TestSenderRelayRecoveryReusesLifecycleStreamPolicyAndPublishesTypedAttempts
 	}
 	var dialCount int
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 			dialCount++
 			if dialCount == 1 {
-				return senderRelayConnection{}, errors.New("transient provider canary")
+				return Connection{}, errors.New("transient provider canary")
 			}
-			return newSenderRelayConnection(recovered), nil
+			return NewConnection(recovered), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
-	lifecycle.config.lifecycleObservationCapacity = relayv2.DefaultLifecycleObservationCapacity
-	var attempts []senderRelayRecoveryAttempt
-	lifecycle.config.observeAttempt = func(value senderRelayRecoveryAttempt) {
+	lifecycle.config.LifecycleObservationCapacity = relayv2.DefaultLifecycleObservationCapacity
+	var attempts []Attempt
+	lifecycle.config.ObserveAttempt = func(value Attempt) {
 		attempts = append(attempts, value)
 	}
 	if _, err := lifecycle.Accept(context.Background()); err != nil {
@@ -116,78 +118,50 @@ func TestSenderRelayRecoveryReusesLifecycleStreamPolicyAndPublishesTypedAttempts
 			t.Fatalf("recovery dial %d lost the lifecycle stream policy", index)
 		}
 	}
-	if len(attempts) != 3 ||
-		attempts[0].attempt != 1 || attempts[0].state != senderRelayAttemptStarted ||
-		attempts[1].attempt != 2 || attempts[1].state != senderRelayAttemptStarted ||
-		attempts[2].attempt != 2 || attempts[2].state != senderRelayAttemptSucceeded {
+	if len(attempts) != 4 ||
+		attempts[0].Number != 1 || attempts[0].State != AttemptStarted ||
+		attempts[1].Number != 1 || attempts[1].State != AttemptFailed ||
+		attempts[2].Number != 2 || attempts[2].State != AttemptStarted ||
+		attempts[3].Number != 2 || attempts[3].State != AttemptSucceeded {
 		t.Fatalf("recovery attempt events = %#v", attempts)
 	}
 	for _, attempt := range attempts {
-		if attempt.failure != nil {
+		if attempt.State != AttemptFailed && attempt.Failure != nil {
 			t.Fatalf("successful recovery retained provider failure: %#v", attempts)
 		}
 	}
 }
 
-func TestSenderRelayRecoveryExpiresFixedBudget(t *testing.T) {
-	disconnect := errors.New("unexpected relay disconnect")
-	unavailable := errors.New("relay remains unavailable")
-	initial := &senderRelayTestEndpoint{
-		accept: func(context.Context) (*relayv2.Channel, error) {
-			return nil, disconnect
-		},
-	}
+func TestSenderRelayRecoveryContinuesAfterFastBudget(t *testing.T) {
 	clock := newSenderRelayTestClock()
-	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
-			return senderRelayConnection{}, unavailable
-		},
-	}
+	initial := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return nil, relayv2.ErrClosed }}
+	accepted := new(relayv2.Channel)
+	recovered := &senderRelayTestEndpoint{accept: func(context.Context) (*relayv2.Channel, error) { return accepted, nil }}
+	start := clock.Now()
+	dialer := &senderRelayTestDialer{dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+		if clock.Now().Sub(start) > 2*time.Minute {
+			return NewConnection(recovered), nil
+		}
+		return Connection{}, errors.New("temporary outage")
+	}}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
-
-	_, err := lifecycle.Accept(context.Background())
-	if !errors.Is(err, unavailable) {
-		t.Fatalf("Accept error = %v, want final dial error", err)
+	lifecycle.config.Jitter = func(delay time.Duration) time.Duration { return delay }
+	waiting := 0
+	lifecycle.config.ObserveAttempt = func(event Attempt) {
+		if event.State == AttemptWaiting {
+			waiting++
+		}
+	}
+	channel, err := lifecycle.Accept(t.Context())
+	if err != nil || channel != accepted {
+		t.Fatalf("recovery=(%v,%v)", channel, err)
 	}
 	waits := clock.Waits()
-	if len(waits) != 57 {
-		t.Fatalf("recovery wait count = %d, want 57", len(waits))
+	if waiting != 1 || waits[len(waits)-1] != senderRelaySlowRetry || clock.Now().Sub(start) <= senderRelayRecoveryWindow {
+		t.Fatalf("waiting=%d waits=%v", waiting, waits)
 	}
-	wantRamp := []time.Duration{
-		100 * time.Millisecond,
-		200 * time.Millisecond,
-		400 * time.Millisecond,
-		800 * time.Millisecond,
-	}
-	for index, want := range wantRamp {
-		if waits[index] != want {
-			t.Fatalf("recovery wait %d = %v, want %v", index, waits[index], want)
-		}
-	}
-	for index, wait := range waits[len(wantRamp):] {
-		if wait != senderRelayRetryMaximum {
-			t.Fatalf("capped recovery wait %d = %v, want %v", index, wait, senderRelayRetryMaximum)
-		}
-	}
-	var elapsed time.Duration
-	for _, wait := range waits {
-		elapsed += wait
-	}
-	if elapsed != 54*time.Second+500*time.Millisecond {
-		t.Fatalf("recovery elapsed time = %v, want 54.5s", elapsed)
-	}
-	configs, _ := dialer.Snapshot()
-	if len(configs) != len(waits)+1 {
-		t.Fatalf("resume dial attempts = %d, want %d", len(configs), len(waits)+1)
-	}
-	if got := initial.closeCalls.Load(); got != 1 {
-		t.Fatalf("failed connection close calls = %d, want 1", got)
-	}
-	lifecycle.mu.Lock()
-	installed := lifecycle.connection.valid()
-	lifecycle.mu.Unlock()
-	if installed {
-		t.Fatal("failed recovery left a relay connection installed")
+	if initial.closeCalls.Load() != 1 {
+		t.Fatal("old connection was not retired exactly once")
 	}
 }
 
@@ -205,12 +179,12 @@ func TestSenderRelayAcceptCancellationClosesLateDialSuccess(t *testing.T) {
 	}
 	dialStarted := make(chan struct{})
 	dialer := &senderRelayTestDialer{
-		dial: func(ctx context.Context, _ relayv2.SenderConfig) (senderRelayConnection, error) {
+		dial: func(ctx context.Context, _ relayv2.SenderConfig) (Connection, error) {
 			close(dialStarted)
 			// A completed handshake may surface at the same instant its context
 			// is canceled, so recovery must close the result before installation.
 			<-ctx.Done()
-			return newSenderRelayConnection(late), nil
+			return NewConnection(late), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
@@ -261,8 +235,8 @@ func TestSenderRelayStopRecoveryInterruptsBackoffWithoutResume(t *testing.T) {
 		return ctx.Err()
 	}
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
-			return senderRelayConnection{}, transient
+		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
+			return Connection{}, transient
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, clock)
@@ -275,7 +249,7 @@ func TestSenderRelayStopRecoveryInterruptsBackoffWithoutResume(t *testing.T) {
 	senderRelayAwaitSignal(t, waiting, "recovery backoff")
 	lifecycle.StopRecovery()
 	err := senderRelayAwaitError(t, result)
-	if !errors.Is(err, errSenderRelayRecoveryStopped) {
+	if !errors.Is(err, ErrStopped) {
 		t.Fatalf("Accept error = %v, want explicit recovery stop", err)
 	}
 	configs, _ := dialer.Snapshot()
@@ -302,12 +276,12 @@ func TestSenderRelayStopWinsDialSuccessAndClosesLateConnection(t *testing.T) {
 	dialStarted := make(chan struct{})
 	releaseDial := make(chan struct{})
 	dialer := &senderRelayTestDialer{
-		dial: func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error) {
+		dial: func(context.Context, relayv2.SenderConfig) (Connection, error) {
 			close(dialStarted)
 			// A transport can finish its handshake just after cancellation; the
 			// lifecycle must arbitrate installation rather than trust the dial.
 			<-releaseDial
-			return newSenderRelayConnection(late), nil
+			return NewConnection(late), nil
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, dialer, newSenderRelayTestClock())
@@ -321,7 +295,7 @@ func TestSenderRelayStopWinsDialSuccessAndClosesLateConnection(t *testing.T) {
 	lifecycle.StopRecovery()
 	close(releaseDial)
 	err := senderRelayAwaitError(t, result)
-	if !errors.Is(err, errSenderRelayRecoveryStopped) {
+	if !errors.Is(err, ErrStopped) {
 		t.Fatalf("Accept error = %v, want explicit recovery stop", err)
 	}
 	if got := late.closeCalls.Load(); got != 1 {
@@ -370,11 +344,11 @@ func TestSenderRelayCleanupKeepsDefaultDependenciesAndClosesOnce(t *testing.T) {
 		},
 	}
 	lifecycle := newSenderRelayTestLifecycle(t, initial, nil, nil)
-	if _, ok := lifecycle.config.dialer.(relayV2SenderDialer); !ok {
-		t.Fatalf("default dialer type = %T", lifecycle.config.dialer)
+	if _, ok := lifecycle.config.Dialer.(relayV2SenderDialer); !ok {
+		t.Fatalf("default dialer type = %T", lifecycle.config.Dialer)
 	}
-	if _, ok := lifecycle.config.clock.(wallSenderRelayRecoveryClock); !ok {
-		t.Fatalf("default recovery clock type = %T", lifecycle.config.clock)
+	if _, ok := lifecycle.config.Clock.(wallSenderRelayRecoveryClock); !ok {
+		t.Fatalf("default recovery clock type = %T", lifecycle.config.Clock)
 	}
 
 	canceled, cancel := context.WithCancel(context.Background())
@@ -417,7 +391,7 @@ func (endpoint *senderRelayTestEndpoint) Close() error {
 
 type senderRelayTestDialer struct {
 	mu        sync.Mutex
-	dial      func(context.Context, relayv2.SenderConfig) (senderRelayConnection, error)
+	dial      func(context.Context, relayv2.SenderConfig) (Connection, error)
 	configs   []relayv2.SenderConfig
 	deadlines []time.Time
 }
@@ -425,7 +399,7 @@ type senderRelayTestDialer struct {
 func (dialer *senderRelayTestDialer) Dial(
 	ctx context.Context,
 	config relayv2.SenderConfig,
-) (senderRelayConnection, error) {
+) (Connection, error) {
 	deadline, _ := ctx.Deadline()
 	dialer.mu.Lock()
 	dialer.configs = append(dialer.configs, config)
@@ -480,16 +454,16 @@ func (clock *senderRelayTestClock) Waits() []time.Duration {
 
 func newSenderRelayTestLifecycle(
 	t *testing.T,
-	initial senderRelayEndpoint,
-	dialer senderRelayDialer,
-	clock senderRelayRecoveryClock,
-) *senderRelayLifecycle {
+	initial Endpoint,
+	dialer Dialer,
+	clock Clock,
+) *Lifecycle {
 	t.Helper()
-	lifecycle, err := newSenderRelayLifecycle(newSenderRelayTestConfig(t, initial, dialer, clock))
+	lifecycle, err := New(newSenderRelayTestConfig(t, initial, dialer, clock))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if lifecycle.config.initial != nil {
+	if lifecycle.config.Initial != nil {
 		t.Fatal("bootstrap relay connection remained reachable through recovery config")
 	}
 	return lifecycle
@@ -497,10 +471,10 @@ func newSenderRelayTestLifecycle(
 
 func newSenderRelayTestConfig(
 	t *testing.T,
-	initial senderRelayEndpoint,
-	dialer senderRelayDialer,
-	clock senderRelayRecoveryClock,
-) senderRelayLifecycleConfig {
+	initial Endpoint,
+	dialer Dialer,
+	clock Clock,
+) Config {
 	t.Helper()
 	privateKey := ed25519.NewKeyFromSeed(senderRelayBytesFrom(0x20, ed25519.SeedSize))
 	publicKey := privateKey.Public().(ed25519.PublicKey)
@@ -525,14 +499,15 @@ func newSenderRelayTestConfig(
 	if err != nil {
 		t.Fatal(err)
 	}
-	return senderRelayLifecycleConfig{
-		relayURL:    "https://relay.example",
-		fresh:       fresh,
-		resumeToken: resumeToken,
-		privateKey:  privateKey,
-		initial:     initial,
-		dialer:      dialer,
-		clock:       clock,
+	return Config{
+		RelayURL:    "https://relay.example",
+		Fresh:       fresh,
+		ResumeToken: resumeToken,
+		PrivateKey:  privateKey,
+		Descriptor:  descriptor,
+		Initial:     initial,
+		Dialer:      dialer,
+		Clock:       clock,
 	}
 }
 

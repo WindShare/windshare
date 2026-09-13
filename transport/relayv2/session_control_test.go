@@ -79,7 +79,7 @@ func TestSenderCreditCancellationAndControlScheduling(t *testing.T) {
 	})
 }
 
-func TestRelayCreditRejectsOversizedAndWrongRoleGrants(t *testing.T) {
+func TestRelayCreditRejectsWindowOverflow(t *testing.T) {
 	for _, fixed := range []bool{false, true} {
 		synctest.Test(t, func(t *testing.T) {
 			socket := newScriptedSocket()
@@ -90,6 +90,11 @@ func TestRelayCreditRejectsOversizedAndWrongRoleGrants(t *testing.T) {
 				if err := channel.ConfirmAdmission(t.Context()); !errors.Is(err, ErrProtocol) {
 					t.Fatal(err)
 				}
+			}
+			if fixed {
+				link.writeMu.Lock()
+				link.windows[channel.id] = &sendWindow{frames: v2.SenderWindowFrames, bytes: v2.SenderWindowBytes}
+				link.writeMu.Unlock()
 			}
 			credit, _ := (v2.SessionCredit{RelaySessionID: channel.id, Frames: 1, Bytes: 32}).MarshalBinary()
 			socket.respond(credit)

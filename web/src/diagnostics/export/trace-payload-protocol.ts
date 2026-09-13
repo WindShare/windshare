@@ -1,6 +1,7 @@
 import { V2_BROWSER_CONNECTIVITY_ATTEMPT_STAGES } from '../../connectivity/diagnostics'
 import { validateProtocolErrorContentV2 } from './protocol-error-v2'
 import { classifyV2PeerAttemptFailure } from '../../connectivity/v2-peer-failure'
+import { CONNECTION_TRACE_TEXT_MAX_CHARACTERS } from '../trace/connection-payload'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../trace/lane-payload'
 import {
   PROTOCOL_MESSAGE_KINDS_V1,
@@ -33,6 +34,46 @@ const PEER_FAILURE_CODES = [
   'runtime_stopped',
   'unexpected',
 ] as const
+
+export function validateConnectionRecovery(payload: UnknownRecord): void {
+  exactKeys(payload, ['generation_id', 'attempt', 'phase', 'transition'],
+    ['share_id', 'share_instance_id', 'relay_base', 'delay_ms', 'wait_reason', 'failure_detail'], 'connection recovery')
+  member(payload.phase, ['initial', 'fast', 'waiting'], 'connection recovery phase')
+  member(payload.transition, ['attempt_started', 'attempt_failed', 'waiting', 'connected', 'terminal', 'retry_requested'],
+    'connection recovery transition')
+  decimalFields(payload, ['generation_id', 'attempt'], 'connection recovery')
+  validateConnectionIdentity(payload)
+  if (payload.delay_ms !== undefined) integerBetween(payload.delay_ms, 0, Number.MAX_SAFE_INTEGER, 'connection recovery delay')
+  if (payload.wait_reason !== undefined) member(payload.wait_reason, ['backoff', 'capacity', 'server'], 'connection wait reason')
+  if (payload.failure_detail !== undefined) {
+    boundedConnectionText(payload.failure_detail, TRACE_FAILURE_DETAIL_MAX_CHARACTERS, 'connection failure')
+  }
+}
+
+export function validateRelayHeartbeat(payload: UnknownRecord): void {
+  exactKeys(payload, ['connection_id', 'relay_base', 'round', 'stage', 'buffered_bytes', 'elapsed_ms', 'timeout_ms'],
+    ['generation_id', 'share_id', 'share_instance_id'], 'relay heartbeat')
+  decimalFields(payload, ['connection_id', 'round', 'buffered_bytes'], 'relay heartbeat')
+  if (payload.connection_id === '0') throw new RangeError('heartbeat connection ID must be positive')
+  if (payload.generation_id !== undefined) decimalUint64(payload.generation_id, 'heartbeat generation')
+  if (payload.round === '0') throw new RangeError('heartbeat round must be positive')
+  member(payload.stage, ['probe', 'acknowledged', 'failed'], 'relay heartbeat stage')
+  integerBetween(payload.elapsed_ms, 0, Number.MAX_SAFE_INTEGER, 'heartbeat elapsed')
+  integerBetween(payload.timeout_ms, 1, Number.MAX_SAFE_INTEGER, 'heartbeat timeout')
+  validateConnectionIdentity(payload)
+}
+
+function validateConnectionIdentity(payload: UnknownRecord): void {
+  for (const field of ['share_id', 'share_instance_id', 'relay_base']) {
+    if (payload[field] !== undefined) boundedConnectionText(payload[field], CONNECTION_TRACE_TEXT_MAX_CHARACTERS, field)
+  }
+}
+
+function boundedConnectionText(value: unknown, limit: number, field: string): void {
+  if (typeof value !== 'string' || value.length === 0 || value.length > limit) {
+    throw new TypeError(`${field} must be bounded text`)
+  }
+}
 
 export function validateOperationRecovery(payload: UnknownRecord): void {
   const counters = [

@@ -4,7 +4,11 @@ import type { V2ProtocolTraceSource } from '../session/v2-diagnostics'
 import { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import { dialV2RelayReceiver } from '../transport/relay/v2-receiver'
 import type { V2ProtocolGenerationCore } from './v2-session-factory'
-import { firstUsableRelay } from './relay-race'
+import { firstUsableRelay, RelayEndpointFailure } from './relay-race'
+import { runInitialJoin, type InitialJoinOptions } from './initial-join'
+import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
+import { observeRecovery } from './recovery-observation'
+import { emitRelayHeartbeat } from '../diagnostics/trace/connection-payload'
 
 export interface BrowserRelayJoin extends V2ProtocolGenerationCore {
   readonly descriptor: V2ShareDescriptor
@@ -15,16 +19,38 @@ export function joinBrowserRelays(
   capability: Suite02CapabilityKey,
   signal: AbortSignal,
   protocolTrace?: V2ProtocolTraceSource,
+  options: InitialJoinOptions = {},
 ): Promise<BrowserRelayJoin> {
-  return firstUsableRelay(relayBases, signal, async (relayBase, attemptSignal) => {
+  const disabled = new Map<string, RelayEndpointFailure>()
+  return runInitialJoin({ ...options, signal,
+    observe: observation => {
+      observeRecovery(protocolTrace, { correlation: {}, generationId: 0, shareId: capability.shareId }, observation)
+      options.observe?.(observation)
+    }, connect: attemptSignal => {
+    const eligible = relayBases.filter(base => !disabled.has(base))
+    if (eligible.length === 0) throw new AggregateError([...disabled.values()], 'All relay endpoints rejected this share')
+    return firstUsableRelay(eligible, attemptSignal, (relayBase, relaySignal) =>
+      connect(relayBase, relaySignal).catch((cause: unknown) => {
+        if (isTerminalRecoveryFailure(cause)) disabled.set(relayBase, new RelayEndpointFailure(relayBase, cause))
+        throw cause
+      }), close, isShareRecoveryFailure)
+  }, close })
+
+  async function connect(relayBase: string, attemptSignal: AbortSignal): Promise<BrowserRelayJoin> {
     // Losing joins may settle after publication; they never borrow the winner's erased secret.
     const ownedCapability = { ...capability, readSecret: capability.readSecret.slice() }
     try {
-      const relay = await dialV2RelayReceiver(relayBase, ownedCapability, { signal: attemptSignal })
+      let session: V2ReceiverSessionRuntime | undefined
+      const relay = await dialV2RelayReceiver(relayBase, ownedCapability, { signal: attemptSignal,
+        heartbeatTrace: event => emitRelayHeartbeat(protocolTrace, event, relayBase, () => ({
+          correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+          shareId: capability.shareId,
+        })),
+      })
       try {
         const descriptor = await openV2ShareDescriptor(relay.descriptorObject, ownedCapability)
         attemptSignal.throwIfAborted()
-        const session = await V2ReceiverSessionRuntime.connect({
+        session = await V2ReceiverSessionRuntime.connect({
           descriptor,
           readSecret: ownedCapability.readSecret,
           initialChannel: relay.channel,
@@ -39,5 +65,9 @@ export function joinBrowserRelays(
     } finally {
       ownedCapability.readSecret.fill(0)
     }
-  }, async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) })
+  }
+}
+
+async function close(core: BrowserRelayJoin): Promise<void> {
+  await Promise.allSettled([core.session.close(), core.relay.close()])
 }

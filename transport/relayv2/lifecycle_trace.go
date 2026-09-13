@@ -3,6 +3,7 @@ package relayv2
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/windshare/windshare/core/framechannel"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -11,16 +12,19 @@ import (
 type LifecycleStage string
 
 const (
-	LifecycleTerminalReserved   LifecycleStage = "terminal_reserved"
-	LifecycleSendAdmitted       LifecycleStage = "send_admitted"
-	LifecycleSendRejected       LifecycleStage = "send_rejected"
-	LifecycleSendRolledBack     LifecycleStage = "send_rolled_back"
-	LifecycleRetirementDeferred LifecycleStage = "retirement_deferred"
-	LifecycleRetired            LifecycleStage = "retired"
-	LifecycleTerminalSettled    LifecycleStage = "terminal_settled"
-	LifecycleLinkRetiring       LifecycleStage = "link_retiring"
-	LifecycleLinkClosed         LifecycleStage = "link_closed"
-	LifecycleTraceDropped       LifecycleStage = "trace_dropped"
+	LifecycleTerminalReserved      LifecycleStage = "terminal_reserved"
+	LifecycleSendAdmitted          LifecycleStage = "send_admitted"
+	LifecycleSendRejected          LifecycleStage = "send_rejected"
+	LifecycleSendRolledBack        LifecycleStage = "send_rolled_back"
+	LifecycleRetirementDeferred    LifecycleStage = "retirement_deferred"
+	LifecycleRetired               LifecycleStage = "retired"
+	LifecycleTerminalSettled       LifecycleStage = "terminal_settled"
+	LifecycleLinkRetiring          LifecycleStage = "link_retiring"
+	LifecycleLinkClosed            LifecycleStage = "link_closed"
+	LifecycleTraceDropped          LifecycleStage = "trace_dropped"
+	LifecycleHeartbeatProbe        LifecycleStage = "heartbeat_probe"
+	LifecycleHeartbeatAcknowledged LifecycleStage = "heartbeat_acknowledged"
+	LifecycleHeartbeatFailed       LifecycleStage = "heartbeat_failed"
 )
 
 type LifecycleRetirementSource string
@@ -63,6 +67,9 @@ type LifecycleTrace struct {
 	Cause            LifecycleCause
 	DrainCause       LifecycleCause
 	Dropped          uint64
+	HeartbeatRound   uint64
+	Wait             time.Duration
+	Timeout          time.Duration
 }
 
 func lifecycleCause(err error) LifecycleCause {

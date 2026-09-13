@@ -159,10 +159,18 @@ func (visitor eventVisitor) VisitRelayConnected(event clievent.RelayConnected) e
 }
 
 func (visitor eventVisitor) VisitRelayRecovering(event clievent.RelayRecovering) error {
-	if event.State() != clievent.RelayRecoveryFailed && !visitor.verboseVisible() {
-		return nil
+	if !visitor.verboseVisible() {
+		details, detailed := event.Details()
+		if event.State() == clievent.RelayRecoveryStarted || (event.State() == clievent.RelayRecoveryFailed && detailed && !details.Terminal) {
+			return nil
+		}
 	}
 	visitor.renderer.insert(formatRelayRecovery(event, visitor.symbols()))
+	return nil
+}
+
+func (visitor eventVisitor) VisitRelayAvailability(event clievent.RelayAvailability) error {
+	visitor.renderer.insert(formatRelayAvailability(event, visitor.symbols()))
 	return nil
 }
 

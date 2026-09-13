@@ -27,6 +27,7 @@ import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
 import { joinBrowserRelays } from '../receiver/browser-join'
+import type { InitialJoinOptions } from '../receiver/initial-join'
 import { receiverRelayBases } from '../receiver/relay-race'
 import type { ReceiverPathActivitySnapshot } from '../receiver/path-activity'
 import type { V2ConnectivityPolicy } from '../connectivity/v2-receiver-policy'
@@ -123,6 +124,8 @@ export class V2JoinedBrowserShare {
   subscribeConnection(listener: (snapshot: import('../receiver/connection-state').ReceiverConnectionSnapshot) => void): () => void {
     return this.#supervisor.connection.subscribe(listener)
   }
+
+  requestReconnect(): void { this.#supervisor.requestReconnect() }
 
   subscribePathActivity(listener: (snapshot: ReceiverPathActivitySnapshot) => void): () => void {
     return this.#supervisor.pathActivity.subscribe(listener)
@@ -350,7 +353,7 @@ export class V2BrowserReceiverGateway {
     this.#onContentLaneDetached = options.onContentLaneDetached
   }
 
-  async join(input: string, pageUrl: string, signal?: AbortSignal): Promise<V2JoinedBrowserShare> {
+  async join(input: string, pageUrl: string, signal?: AbortSignal, recovery: InitialJoinOptions = {}): Promise<V2JoinedBrowserShare> {
     signal?.throwIfAborted()
     let capability: Suite02CapabilityLink | undefined
     let relay: V2RelayReceiverConnection | undefined
@@ -364,7 +367,7 @@ export class V2BrowserReceiverGateway {
       const relayBases = this.#relayBases ?? receiverRelayBases(capability.relayHints.length > 0
         ? capability.relayHints : [new URL(pageUrl).origin])
       const initial = await joinBrowserRelays(relayBases, capability,
-        signal ?? new AbortController().signal, this.#protocolTrace)
+        signal ?? new AbortController().signal, this.#protocolTrace, recovery)
       relay = initial.relay
       session = initial.session
       const descriptor = initial.descriptor

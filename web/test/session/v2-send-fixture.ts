@@ -66,6 +66,12 @@ export class BackpressuredChannel implements FrameChannel {
 
   unblock(): void { this.#capacity.resolve() }
 
+  failIncoming(reason: unknown): void { this.#controller.error(reason) }
+
+  failOutgoing(reason: unknown): void { this.#capacity.reject(reason) }
+
+  receive(frame: Uint8Array): void { this.#controller.enqueue(frame) }
+
   block(): void {
     this.#capacity = deferred<void>()
     this.#capacity.promise.catch(() => undefined)

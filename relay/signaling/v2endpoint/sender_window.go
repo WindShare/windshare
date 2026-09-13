@@ -5,12 +5,12 @@ import (
 	"github.com/windshare/windshare/relay/signaling/v2route"
 )
 
-type senderWindow struct {
+type forwardWindow struct {
 	frames, bytes               int
 	pendingFrames, pendingBytes uint32
 }
 
-func (peer *connection) consumeSenderCredit(id v2.RelaySessionID, size int) (ForwardTrace, bool) {
+func (peer *connection) consumeForwardCredit(id v2.RelaySessionID, size int) (ForwardTrace, bool) {
 	peer.sessionMu.Lock()
 	defer peer.sessionMu.Unlock()
 	window := peer.windows[id]
@@ -31,11 +31,11 @@ func (peer *connection) consumeSenderCredit(id v2.RelaySessionID, size int) (For
 	return trace, true
 }
 
-func (window *senderWindow) constrained() bool {
+func (window *forwardWindow) constrained() bool {
 	return window.frames == 0 || window.bytes < MaximumV2WebSocketMessageSize
 }
 
-func (peer *connection) replenishSenderCredit(id v2.RelaySessionID, size int) {
+func (peer *connection) replenishForwardCredit(id v2.RelaySessionID, size int) {
 	peer.sessionMu.Lock()
 	defer peer.sessionMu.Unlock()
 	window := peer.windows[id]
@@ -52,11 +52,11 @@ func (peer *connection) replenishSenderCredit(id v2.RelaySessionID, size int) {
 	}
 }
 
-func (peer *connection) takeSenderCredit() (v2.SessionCredit, ForwardTrace, bool) {
+func (peer *connection) takeForwardCredit() (v2.SessionCredit, ForwardTrace, bool) {
 	peer.sessionMu.Lock()
 	defer peer.sessionMu.Unlock()
 	for id, window := range peer.windows {
-		if window.pendingFrames == 0 {
+		if window.pendingFrames == 0 && window.pendingBytes == 0 {
 			continue
 		}
 		credit := v2.SessionCredit{
@@ -76,9 +76,6 @@ func (peer *connection) takeSenderCredit() (v2.SessionCredit, ForwardTrace, bool
 }
 
 func (s *Server) completeForward(destination *connection, encoded []byte) {
-	if destination.roleValue() != roleReceiver {
-		return
-	}
 	route, err := v2.ParseOpaqueRoute(encoded)
 	if err != nil {
 		return
@@ -87,7 +84,11 @@ func (s *Server) completeForward(destination *connection, encoded []byte) {
 	if err != nil || resolution.Disposition != v2route.SessionForward {
 		return
 	}
+	if destination.roleValue() == roleSender {
+		destination.receiverCredits.complete(route.RelaySessionID, len(encoded))
+		return
+	}
 	if sender, _, _ := s.connections.resolve(resolution.Destination); sender != nil {
-		sender.replenishSenderCredit(route.RelaySessionID, len(encoded))
+		sender.replenishForwardCredit(route.RelaySessionID, len(encoded))
 	}
 }

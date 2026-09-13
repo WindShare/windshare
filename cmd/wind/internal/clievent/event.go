@@ -75,6 +75,7 @@ const (
 	RelayRecoveryStarted RelayRecoveryState = iota + 1
 	RelayRecoverySucceeded
 	RelayRecoveryFailed
+	RelayRecoveryWaiting
 )
 
 func (state RelayRecoveryState) Name() (string, bool) {
@@ -85,6 +86,8 @@ func (state RelayRecoveryState) Name() (string, bool) {
 		return "succeeded", true
 	case RelayRecoveryFailed:
 		return "failed", true
+	case RelayRecoveryWaiting:
+		return "waiting", true
 	default:
 		return "", false
 	}
@@ -97,6 +100,8 @@ type RelayRecovering struct {
 	state      RelayRecoveryState
 	failure    Failure
 	hasFailure bool
+	details    RelayRecoveryDetails
+	hasDetails bool
 }
 
 func NewRelayRecovering(
@@ -425,3 +430,68 @@ func (value LaneAdopted) ProtocolSessionID() ProtocolSessionID { return value.se
 func (value LaneAdopted) Lane() LaneIdentity                   { return value.lane }
 func (value LaneAdopted) Transport() Transport                 { return value.transport }
 func (value LaneAdopted) Accept(v Visitor) error               { return acceptLaneAdopted(v, value) }
+
+// RelayAvailability concerns admission of new receivers, independently of any
+// already active direct transfer or the lifetime of the capability itself.
+type RelayAvailability struct {
+	available uint32
+	total     uint32
+	everReady bool
+	terminal  uint32
+}
+
+func NewRelayAvailability(available, total, terminal uint32, everReady bool) (RelayAvailability, error) {
+	if total == 0 || available > total || terminal > total-available || (available > 0 && !everReady) {
+		return RelayAvailability{}, ErrInvalidEvent
+	}
+	return RelayAvailability{available: available, total: total, everReady: everReady, terminal: terminal}, nil
+}
+func (RelayAvailability) event()                  {}
+func (RelayAvailability) Command() Command        { return CommandShare }
+func (RelayAvailability) Level() Level            { return LevelInfo }
+func (value RelayAvailability) Available() uint32 { return value.available }
+func (value RelayAvailability) Total() uint32     { return value.total }
+func (value RelayAvailability) EverReady() bool   { return value.everReady }
+func (value RelayAvailability) Terminal() uint32  { return value.terminal }
+func (value RelayAvailability) Accept(visitor Visitor) error {
+	if visitor == nil {
+		return ErrInvalidEvent
+	}
+	if _, err := NewRelayAvailability(value.available, value.total, value.terminal, value.everReady); err != nil {
+		return err
+	}
+	return visitor.VisitRelayAvailability(value)
+}
+
+// RelayRecoveryDetails preserves the owner's decision context. A missing
+// protocol session is expected while establishing the first connection.
+type RelayRecoveryDetails struct {
+	ShareInstance     SharingInstanceID
+	Generation        uint64
+	Slow              bool
+	Resume            bool
+	Terminal          bool
+	NextDelay         time.Duration
+	ProtocolSessionID ProtocolSessionID
+}
+
+type SharingInstanceID struct{ value identity }
+
+func NewSharingInstanceID(raw []byte) (SharingInstanceID, error) {
+	value, err := newIdentity(raw)
+	return SharingInstanceID{value: value}, err
+}
+func (id SharingInstanceID) Bytes() []byte { return id.value.bytes() }
+func (id SharingInstanceID) Valid() bool   { return id.value.valid() }
+
+func NewRelayRecoveryObservation(command Command, authority RelayAuthority, attempt uint32, state RelayRecoveryState, failure Failure, details RelayRecoveryDetails) (RelayRecovering, error) {
+	event, err := NewRelayRecovering(command, authority, attempt, state, failure)
+	if err != nil || details.NextDelay < 0 {
+		return RelayRecovering{}, ErrInvalidEvent
+	}
+	event.details, event.hasDetails = details, true
+	return event, nil
+}
+func (event RelayRecovering) Details() (RelayRecoveryDetails, bool) {
+	return event.details, event.hasDetails
+}

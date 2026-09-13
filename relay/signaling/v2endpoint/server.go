@@ -23,13 +23,13 @@ const (
 	MaximumSessionQueueBytes      = v2.SenderWindowBytes
 	MaximumV2WebSocketMessageSize = v2.OpaqueRouteHeaderBytes + v2.MaxOpaqueCiphertextBytes
 	defaultWriteTimeout           = 15 * time.Second
+	registrationRetryDelay        = 250 * time.Millisecond
 )
 
 var (
-	ErrConfig         = errors.New("relay v2 endpoint: invalid configuration")
-	ErrConnection     = errors.New("relay v2 endpoint: connection failed")
-	ErrProtocol       = errors.New("relay v2 endpoint: protocol violation")
-	ErrForwardTimeout = errors.New("relay v2 endpoint: destination queue did not drain")
+	ErrConfig     = errors.New("relay v2 endpoint: invalid configuration")
+	ErrConnection = errors.New("relay v2 endpoint: connection failed")
+	ErrProtocol   = errors.New("relay v2 endpoint: protocol violation")
 )
 
 // BinaryConnection is defined at the protocol consumer. The coder WebSocket
@@ -38,6 +38,7 @@ var (
 type BinaryConnection interface {
 	Read(context.Context) (websocket.MessageType, []byte, error)
 	Write(context.Context, websocket.MessageType, []byte) error
+	Ping(context.Context) error
 	Close(websocket.StatusCode, string) error
 	SetReadLimit(int64)
 }
@@ -61,6 +62,7 @@ const (
 	RetirementSourceDisconnect          RetirementSource = "disconnect"
 	RetirementSourceRegistrationFailure RetirementSource = "registration_failure"
 	RetirementSourceStop                RetirementSource = "stop"
+	RetirementSourceResume              RetirementSource = "resume"
 )
 
 type RetirementTarget string
@@ -110,6 +112,8 @@ type Config struct {
 	ForwardTracer    ForwardTracer
 	AdmissionTracer  AdmissionTracer
 	WriteTimeout     time.Duration
+	Heartbeat        HeartbeatConfig
+	HeartbeatTracer  HeartbeatTracer
 }
 
 type Server struct {
@@ -121,12 +125,15 @@ type Server struct {
 	forwardTracer    ForwardTracer
 	admissionTracer  AdmissionTracer
 	writeTimeout     time.Duration
+	heartbeat        HeartbeatConfig
+	heartbeatTracer  HeartbeatTracer
 
 	connections *connectionRegistry
 }
 
 func New(config Config) (*Server, error) {
-	if config.Registry == nil || config.Challenges == nil || !nonzero(config.RelayIdentity[:]) {
+	if config.Registry == nil || config.Challenges == nil || !nonzero(config.RelayIdentity[:]) ||
+		config.Registry.MaxSessionsPerShare() > receiverCreditCapacity {
 		return nil, ErrConfig
 	}
 	if config.ConnectionIDs == nil {
@@ -138,11 +145,16 @@ func New(config Config) (*Server, error) {
 	if config.WriteTimeout < 0 {
 		return nil, ErrConfig
 	}
+	heartbeat, err := config.Heartbeat.Normalize()
+	if err != nil || heartbeat.Timeout/2 < config.WriteTimeout {
+		return nil, ErrConfig
+	}
 	return &Server{
 		registry: config.Registry, challenges: config.Challenges, relayIdentity: config.RelayIdentity,
 		connectionIDs: config.ConnectionIDs, retirementTracer: config.RetirementTracer, forwardTracer: config.ForwardTracer,
 		writeTimeout: config.WriteTimeout, connections: newConnectionRegistry(),
 		admissionTracer: config.AdmissionTracer,
+		heartbeat:       heartbeat, heartbeatTracer: config.HeartbeatTracer,
 	}, nil
 }
 
@@ -175,7 +187,9 @@ func (s *Server) newConnection(socket BinaryConnection, cancel context.CancelFun
 	if err != nil {
 		return nil, errors.Join(ErrConfig, err)
 	}
-	return newConnection(reference, socket, cancel), nil
+	peer := newConnection(reference, socket, cancel)
+	peer.receiverCredits.windowFrames = min(receiverWindowFrames, receiverCreditCapacity/s.registry.MaxSessionsPerShare())
+	return peer, nil
 }
 
 // Serve owns the complete connection role transition. Registration attempts
@@ -198,13 +212,19 @@ func (s *Server) Serve(ctx context.Context, socket BinaryConnection) error {
 	socket.SetReadLimit(MaximumV2WebSocketMessageSize)
 	writerDone := make(chan error, 1)
 	go func() { writerDone <- s.writeLoop(connectionContext, peer) }()
+	heartbeatDone := make(chan error, 1)
+	go func() { heartbeatDone <- s.heartbeatLoop(connectionContext, peer) }()
 
 	serveErr := s.serveConnection(connectionContext, peer)
 	peer.requestClose()
 	s.cleanup(peer)
 	writerErr := <-writerDone
+	heartbeatErr := <-heartbeatDone
 	peer.closed.Store(true)
 	_ = socket.Close(websocket.StatusNormalClosure, "")
+	if errors.Is(heartbeatErr, ErrHeartbeat) {
+		return errors.Join(ErrConnection, heartbeatErr)
+	}
 	if serveErr != nil && !normalClose(serveErr) {
 		return serveErr
 	}
@@ -302,13 +322,14 @@ func (s *Server) serveFreshRegistration(ctx context.Context, peer *connection, i
 	if err != nil {
 		return ErrProtocol
 	}
+	// Receivers may join as soon as Publish exposes the route. Install the
+	// authenticated role first so their sender windows are ready immediately;
+	// exact ConnectionRef ownership makes cleanup of a rejected commit harmless.
+	peer.setRole(roleSender, init.ShareID)
 	if err := s.registry.Publish(init.ShareID, peer.ref, descriptor); err != nil {
 		return s.sendRegistryError(ctx, peer, err)
 	}
 	published = true
-	// Role publication follows the authoritative transition so a losing attempt
-	// cannot later place the winner into crash grace during its cleanup.
-	peer.setRole(roleSender, init.ShareID)
 	if err := s.finishRegistration(ctx, peer, init); err != nil {
 		return err
 	}
@@ -324,17 +345,21 @@ func (s *Server) serveResume(ctx context.Context, peer *connection, init v2.Regi
 	if err != nil {
 		return ErrProtocol
 	}
-	if err := s.registry.ValidateResumeCredential(init, credential.Token); err != nil {
+	attempt, err := s.registry.BeginResume(ctx, init, credential.Token)
+	if err != nil {
 		return s.sendRegistryError(ctx, peer, err)
 	}
 	authority, err := s.registrationAuthority(ctx, peer, init)
 	if err != nil {
 		return err
 	}
-	if err := s.registry.Resume(init, authority, peer.ref, credential.Token); err != nil {
+	// Atomic ownership publication immediately permits concurrent receiver joins.
+	peer.setRole(roleSender, init.ShareID)
+	retirement, err := s.registry.Resume(ctx, attempt, authority, peer.ref)
+	if err != nil {
 		return s.sendRegistryError(ctx, peer, err)
 	}
-	peer.setRole(roleSender, init.ShareID)
+	s.applyRouteRetirement(retirement, RetirementSourceResume)
 	if err := s.finishRegistration(ctx, peer, init); err != nil {
 		return err
 	}
@@ -379,7 +404,11 @@ func (s *Server) finishRegistration(ctx context.Context, peer *connection, init 
 	registered, _ := (v2.Registered{
 		ShareID: init.ShareID, ShareInstance: init.ShareInstance, DescriptorDigest: init.DescriptorDigest,
 	}).MarshalBinary()
-	return peer.sendControl(ctx, registered)
+	if err := peer.sendControl(ctx, registered); err != nil {
+		return err
+	}
+	peer.completeHandshake()
+	return nil
 }
 
 func (s *Server) serveReceiver(ctx context.Context, peer *connection, first []byte) error {
@@ -417,6 +446,7 @@ func (s *Server) serveReceiver(ctx context.Context, peer *connection, first []by
 		}
 		return err
 	}
+	peer.completeHandshake()
 	return s.forwardLoop(ctx, peer)
 }
 
@@ -438,7 +468,8 @@ func (s *Server) activateReceiverSession(
 		return false
 	}
 	resolution, err := s.registry.ResolveSession(result.RelaySessionID, peer.ref)
-	if err == nil && resolution.Disposition == v2route.SessionForward && resolution.Destination == result.Sender {
+	if err == nil && resolution.Disposition == v2route.SessionForward && resolution.Destination == result.Sender &&
+		sender.reserveReceiverCredit(result.RelaySessionID, peer) {
 		return true
 	}
 	// A route transition can retire the Registry session between Join and local
@@ -497,7 +528,11 @@ func (s *Server) serveStop(ctx context.Context, peer *connection, first []byte) 
 }
 
 func (s *Server) sendRegistryError(ctx context.Context, peer *connection, cause error) error {
-	return s.sendError(ctx, peer, registryErrorCode(cause), 0)
+	retry := time.Duration(0)
+	if errors.Is(cause, v2route.ErrStarting) {
+		retry = registrationRetryDelay
+	}
+	return s.sendError(ctx, peer, registryErrorCode(cause), retry)
 }
 
 func registryErrorCode(cause error) v2.ErrorCode {
@@ -511,6 +546,10 @@ func registryErrorCode(cause error) v2.ErrorCode {
 		code = v2.ErrorStopped
 	case errors.Is(cause, v2route.ErrNotFound):
 		code = v2.ErrorNotFound
+	case errors.Is(cause, v2route.ErrStarting):
+		code = v2.ErrorStarting
+	case errors.Is(cause, v2route.ErrResumeStale):
+		code = v2.ErrorResumeStale
 	case errors.Is(cause, v2route.ErrAdmission):
 		code = v2.ErrorAdmission
 	case errors.Is(cause, v2route.ErrStopping):

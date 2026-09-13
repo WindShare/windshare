@@ -54,6 +54,9 @@ import {
   type RetainedContinuationAdoption,
 } from './controller/retained-inventory'
 import { BrowserNavigationCoordinator } from './controller/navigation'
+import { JoinedShareObservation } from './controller/joined-observation'
+import { InitialJoinControl } from '../receiver/initial-join'
+import { initialJoinStatus } from './experience/share-presentation'
 
 export {
   captureV2Location,
@@ -89,6 +92,7 @@ export class V2ReceiverController {
   readonly #authority: V2AuthorityActivationCoordinator
   readonly #retained: RetainedInventoryCoordinator
   readonly #browse: BrowserNavigationCoordinator
+  readonly #joinedObservation: JoinedShareObservation
   readonly #unsubscribeOutput: () => void
   readonly #unsubscribeAuthority: () => void
   #snapshot: V2ReceiverSnapshot
@@ -96,10 +100,7 @@ export class V2ReceiverController {
   #pageUrl = ''
   #joined: V2JoinedBrowserShare | undefined
   #joinNavigation: AbortController | undefined
-  #unsubscribeScanProgress: (() => void) | undefined
-  #unsubscribeProtocolGeneration: (() => void) | undefined
-  #unsubscribePathActivity: (() => void) | undefined
-  #unsubscribeConnection: (() => void) | undefined
+  #joinRecovery: InitialJoinControl | undefined
   #disposed = false
   readonly #operationTransitions: ReceiveOperationTransitions
 
@@ -207,6 +208,14 @@ export class V2ReceiverController {
       publicError: (error) => this.#publicError(error),
       ...(options.incidents === undefined ? {} : { incidents: options.incidents }),
     })
+    this.#joinedObservation = new JoinedShareObservation({
+      ownsJoinedShare: joined => !this.#disposed && this.#joined === joined,
+      isJoining: () => this.#joinNavigation !== undefined,
+      onConnection: connection => this.#publish({ ...this.#snapshot, connection }),
+      onPathActivity: pathActivity => this.#publish({ ...this.#snapshot, pathActivity }),
+      onCatalogScanProgress: (joined, progress) => this.#browse.catalogScanProgress(joined, progress),
+      onProtocolGeneration: joined => this.#beginSelectionProjection(joined, 'observation-replacement'),
+    })
     this.#snapshot = initialReceiverSnapshot()
     this.#unsubscribeOutput = this.#outputs.subscribe(() => {
       if (!this.#disposed) this.#publish({ ...this.#snapshot, output: this.#outputs.getSnapshot() })
@@ -260,6 +269,34 @@ export class V2ReceiverController {
     this.#join(input.trim()).catch(() => undefined)
     // The form clears its password field in this same stack before join can reject.
     this.#capabilityLifecycle.notify('key-cleared')
+  }
+
+  requestReconnect(): void {
+    if (this.#disposed) return
+    this.recordExperienceIntent('reconnect-now')
+    if (this.#joinRecovery !== undefined) this.#joinRecovery.request('retry')
+    else this.#joined?.requestReconnect()
+  }
+
+  continueJoinWaiting(): void {
+    if (this.#disposed) return
+    this.recordExperienceIntent('continue-connection-wait')
+    this.#joinRecovery?.request('continue')
+  }
+
+  cancelJoin(): void {
+    if (this.#disposed || this.#joinNavigation === undefined) return
+    const reason = new DOMException('Connection waiting cancelled', 'AbortError')
+    this.#joinNavigation.abort(reason)
+    this.#browse.cancel(reason)
+    if (this.#snapshot.share === null && this.#joined !== undefined) {
+      const joined = this.#joined
+      this.#joined = undefined
+      joined.close().catch(() => undefined)
+    }
+    this.#authority.cancelJoin()
+    this.#publish({ ...this.#snapshot, phase: 'awaiting-key', connection: { kind: 'idle' },
+      status: 'Connection waiting cancelled.', error: null })
   }
 
   recordExperienceIntent(action: string): void {
@@ -418,14 +455,7 @@ export class V2ReceiverController {
     this.#joinNavigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#browse.cancel(new DOMException('Receiver disposed', 'AbortError'))
     this.#retained.close(new DOMException('Receiver disposed', 'AbortError'))
-    this.#unsubscribeScanProgress?.()
-    this.#unsubscribeScanProgress = undefined
-    this.#unsubscribeProtocolGeneration?.()
-    this.#unsubscribeProtocolGeneration = undefined
-    this.#unsubscribeConnection?.()
-    this.#unsubscribeConnection = undefined
-    this.#unsubscribePathActivity?.()
-    this.#unsubscribePathActivity = undefined
+    this.#joinedObservation.close()
     const detached = this.#resetReceiveOwnership(new DOMException('Receiver disposed', 'AbortError'))
     this.#unsubscribeAuthority()
     this.#unsubscribeOutput()
@@ -514,16 +544,20 @@ export class V2ReceiverController {
         progress: EMPTY_V2_PROGRESS,
       })
       previous = this.#joined
-      this.#unsubscribeScanProgress?.()
-      this.#unsubscribeScanProgress = undefined
-      this.#unsubscribeProtocolGeneration?.()
-      this.#unsubscribeProtocolGeneration = undefined
-      this.#unsubscribePathActivity?.()
-      this.#unsubscribePathActivity = undefined
+      this.#joinedObservation.suspendForJoin()
       navigation.signal.throwIfAborted()
       const activeNavigation = navigation
+      const recovery = new InitialJoinControl()
+      this.#joinRecovery = recovery
       const joined = await lease.handoff((ownedInput) =>
-        this.#gateway.join(ownedInput, this.#pageUrl, activeNavigation.signal))
+        this.#gateway.join(ownedInput, this.#pageUrl, activeNavigation.signal, {
+          control: recovery,
+          onState: join => {
+            if (!this.#joinReplacementIsCurrent(activeNavigation)) return
+            this.#publish({ ...this.#snapshot, connection: { kind: 'idle', join },
+              status: initialJoinStatus(join) })
+          },
+        }))
       if (!this.#joinReplacementIsCurrent(navigation)) {
         await joined.close()
         this.#observability.exclude(attempt, 'join', 'stale_replacement')
@@ -545,6 +579,7 @@ export class V2ReceiverController {
         return
       }
       this.#joined = joined
+      this.#joinRecovery = undefined
       joinedReplacementInstalled = true
       this.#authority.completeJoin(joined, selection)
       await previous?.close().catch(() => undefined)
@@ -553,7 +588,7 @@ export class V2ReceiverController {
         name: 'join_transition',
         transition: 'joined',
       }))
-      this.#subscribeJoinedNotifications(joined)
+      this.#joinedObservation.observe(joined)
       const root = joined.rootDirectory()
       this.#browse.clearCatalog()
       await this.#browse.loadPage(root, 0, Object.freeze([root]))
@@ -573,7 +608,10 @@ export class V2ReceiverController {
         joinedReplacementInstalled,
       )
     } finally {
-      if (this.#joinNavigation === navigation) this.#joinNavigation = undefined
+      if (this.#joinNavigation === navigation) {
+        this.#joinNavigation = undefined
+        this.#joinRecovery = undefined
+      }
       lease.release()
       if (!attempt.decisionSettled) {
         this.#observability.exclude(attempt, 'join', 'stale_replacement')
@@ -601,7 +639,7 @@ export class V2ReceiverController {
     if (!joinedReplacementInstalled) {
       this.#authority.cancelJoin()
       if (previous !== undefined && this.#joined === previous) {
-        this.#subscribeJoinedNotifications(previous)
+        this.#joinedObservation.observe(previous)
       }
     }
     this.#observability.fail(attempt, 'join', error, 'join')
@@ -622,27 +660,6 @@ export class V2ReceiverController {
 
   #stopProjectionObservation(reason: unknown): void {
     this.#projectionObservation.stop(reason)
-  }
-
-  #subscribeJoinedNotifications(joined: V2JoinedBrowserShare): void {
-    this.#unsubscribeScanProgress?.()
-    this.#unsubscribeProtocolGeneration?.()
-    this.#unsubscribeConnection?.()
-    this.#unsubscribeConnection = joined.subscribeConnection((connection) => {
-      if (!this.#disposed && this.#joined === joined) this.#publish({ ...this.#snapshot, connection })
-    })
-    this.#unsubscribeScanProgress = joined.subscribeCatalogScanProgress(
-      progress => this.#browse.catalogScanProgress(joined, progress),
-    )
-    this.#unsubscribePathActivity?.()
-    this.#unsubscribePathActivity = joined.subscribePathActivity((pathActivity) => {
-      if (!this.#disposed && this.#joined === joined) this.#publish({ ...this.#snapshot, pathActivity })
-    })
-    this.#unsubscribeProtocolGeneration = joined.subscribeProtocolGeneration(() => {
-      if (!this.#disposed && this.#joined === joined && this.#joinNavigation === undefined) {
-        this.#beginSelectionProjection(joined, 'observation-replacement')
-      }
-    })
   }
 
   #resetReceiveOwnership(reason: unknown): Promise<void> {

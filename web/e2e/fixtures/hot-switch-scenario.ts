@@ -1,16 +1,18 @@
 import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 
 import { expect, type Page, type TestInfo } from '@playwright/test'
 
-import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import { V2_TYPED_PEER_ERROR_CODES } from '../../src/connectivity/diagnostics'
 import {
   classifyNativePeerConnection,
   type NativeRtcCapabilityDiagnostic,
 } from '../../test/transport/webrtc/browser-capability'
-import type {
-  HotSwitchPageEvent,
-  HotSwitchPeerAttemptEvidence,
+import {
+  HOT_SWITCH_TRANSFER_BLOCKS,
+  hotSwitchTerminalEvidence,
+  type HotSwitchPageEvent,
+  type HotSwitchPeerAttemptEvidence,
 } from './hot-switch-contract'
 import {
   releasePageOutput,
@@ -32,7 +34,7 @@ import {
 
 /** One extra block makes the post-cut dispatch observable without a timing race. */
 export const HOT_SWITCH_TRANSFER_BYTES =
-  (V2_BLOCK_BROKER_PARALLEL_READS + 1) * DIRECT_TEST_BLOCK_BYTES
+  HOT_SWITCH_TRANSFER_BLOCKS * DIRECT_TEST_BLOCK_BYTES
 export const HOT_SWITCH_FILE_NAME = 'hot-switch.bin'
 
 const EVENT_TIMEOUT_MILLISECONDS = 30_000
@@ -130,7 +132,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       separateKey: share.key,
     })
 
-    const firstRelayDispatch = await events.waitFor(
+    await events.waitFor(
       'dispatch',
       (event) => event.kind === 'dispatch' && event.observation.route === 'application-relay',
       'first relay dispatch',
@@ -141,7 +143,6 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       events,
       initialRouteMode,
       routePlan.dynamicWebKitNativeAttempt,
-      firstRelayDispatch.observation.dispatchSequence,
     )
     routeMode = settlement.routeMode
     fallbackFailure = settlement.fallbackFailure
@@ -160,7 +161,16 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     assertDelivery(delivery, expectedHash)
     assertStackIdentity(stackTraces, scenarioId)
     expect(runtime.error).toBeUndefined()
-    if (routeMode === 'relay-fallback') assertRelayFallback(events, fallbackFailure)
+    if (routeMode === 'relay-fallback') {
+      assertRelayFallback(events, fallbackFailure)
+    } else {
+      const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
+      expect(events.snapshot().filter((event) =>
+        event.kind === 'dispatch' &&
+        event.observation.route === 'application-relay' &&
+        event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
+      )).toEqual([])
+    }
   } catch (error) {
     const diagnostic = {
       browserName: options.browserName,
@@ -170,12 +180,17 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       scenarioId,
       stackTraces,
       events: events.snapshot(),
+      ...hotSwitchTerminalEvidence(events.snapshot()),
       processes: stack.diagnostic(),
     }
-    await options.testInfo.attach('direct-hot-switch-diagnostic', {
-      body: redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2),
-      contentType: 'application/json',
-    }).catch(() => undefined)
+    const diagnosticText = redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2)
+    const diagnosticPath = options.testInfo.outputPath('direct-hot-switch-diagnostic.json')
+    // The line reporter does not persist inline attachment bodies for artifact upload.
+    await writeFile(diagnosticPath, diagnosticText).then(() => options.testInfo.attach(
+      'direct-hot-switch-diagnostic',
+      { path: diagnosticPath, contentType: 'application/json' },
+    )).catch(() => undefined)
+    console.error(diagnosticText)
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(redactor?.redactText(message) ?? message, {
       // eslint-disable-next-line preserve-caught-error -- detached redacted cause is the only permitted boundary value
@@ -233,7 +248,6 @@ async function settleHotSwitchRoute(
   events: HotSwitchEventLog,
   routeMode: ResolvedHotSwitchRoute,
   dynamicWebKitNativeAttempt: boolean,
-  firstRelayDispatchSequence: number,
 ): Promise<HotSwitchRouteSettlement> {
   if (routeMode !== 'direct') {
     await releaseRelayOutput(options.page)
@@ -241,7 +255,7 @@ async function settleHotSwitchRoute(
   }
 
   if (!dynamicWebKitNativeAttempt) {
-    await completePeerHotSwitch(options, proxy, events, firstRelayDispatchSequence)
+    await completePeerHotSwitch(options, proxy, events)
     return { routeMode: 'direct', fallbackFailure: undefined }
   }
 
@@ -251,7 +265,6 @@ async function settleHotSwitchRoute(
       options,
       proxy,
       events,
-      firstRelayDispatchSequence,
       outcome.lane,
     )
     return { routeMode: 'direct', fallbackFailure: undefined }
@@ -323,7 +336,6 @@ async function completePeerHotSwitch(
   options: HotSwitchScenarioOptions,
   proxy: { readonly cut: () => Promise<void> },
   events: HotSwitchEventLog,
-  firstRelayDispatchSequence: number,
   peerLaneAdmission?: PeerLaneAdmission,
 ): Promise<void> {
   const peerAttempt = await events.waitFor(
@@ -337,28 +349,16 @@ async function completePeerHotSwitch(
     'peer content lane admission',
   )
 
-  // The physical proxy cut is the authority boundary. Capture all dispatches
-  // already observed before it; the relay-ineligible acknowledgement arrives
-  // after the cut and must not move the boundary forward.
-  const preCutDispatchBoundary = Math.max(
-    firstRelayDispatchSequence,
-    events.latestDispatchSequence(),
-  )
   await proxy.cut()
   await sealPageRelayCut(options.page)
-  await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
-  expect(events.snapshot().some((event) =>
-    event.kind === 'dispatch' &&
-    event.observation.route === 'application-relay' &&
-    event.observation.dispatchSequence > preCutDispatchBoundary,
-  )).toBe(false)
+  const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
   await releasePageOutput(options.page)
 
   const peerDispatch = await events.waitFor(
     'dispatch',
     (event) => event.kind === 'dispatch' &&
       event.observation.route === 'direct' &&
-      event.observation.dispatchSequence > preCutDispatchBoundary,
+      event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
     'post-cut peer dispatch',
   )
 

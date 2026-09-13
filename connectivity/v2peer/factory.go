@@ -76,6 +76,9 @@ type PeerDataChannel interface {
 	Err() error
 }
 
+// DataChannelAdapter installs the channel's callbacks before returning. The
+// sender invokes it inside Pion's OnDataChannel callback, before Open and reads;
+// implementations must not wait for those events or for protocol admission.
 type DataChannelAdapter interface {
 	WrapDataChannel(*pion.DataChannel) (PeerDataChannel, error)
 }

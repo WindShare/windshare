@@ -108,11 +108,21 @@ export class V2SessionLane {
     await this.#pumpTask
   }
 
+  async #readFrame(): Promise<ReadableStreamReadResult<Uint8Array>> {
+    try {
+      return await this.#reader.read()
+    } catch (cause) {
+      // Read failure also rejects pending writes. Give them the same physical
+      // failure boundary without reclassifying later authentication or parsing.
+      throw new V2SessionRuntimeError('lane', 'Session lane receive failed', { cause })
+    }
+  }
+
   async #pump(): Promise<void> {
     let failure: unknown
     try {
       while (!this.#closed) {
-        const result = await this.#reader.read()
+        const result = await this.#readFrame()
         if (result.done) break
         const opened = await this.#opener.open(result.value)
         const message = decodeV2Message(opened.plaintext)
