@@ -1,4 +1,5 @@
 import type {
+  HotSwitchDispatch,
   HotSwitchLaneObservation,
   HotSwitchPageEvent,
   HotSwitchPeerAttemptEvidence,
@@ -58,9 +59,18 @@ export class RelayCutEvidence {
   readonly #activeRelayLanes = new Set<string>()
   #ineligibilityPublished = false
   #sealed = false
+  #latestDispatchSequence = 0
 
   constructor(bridge: EvidenceBridge) {
     this.#bridge = bridge
+  }
+
+  dispatch(observation: HotSwitchDispatch): void {
+    this.#latestDispatchSequence = Math.max(
+      this.#latestDispatchSequence,
+      observation.dispatchSequence,
+    )
+    this.#bridge.publish({ kind: 'dispatch', observation }).catch(() => undefined)
   }
 
   admit(observation: HotSwitchLaneObservation): void {
@@ -70,9 +80,8 @@ export class RelayCutEvidence {
 
   detach(observation: HotSwitchLaneObservation): void {
     if (observation.route === 'application-relay') this.#activeRelayLanes.delete(laneKey(observation))
-    this.#bridge.publish({ kind: 'lane-detached', observation })
-      .then(() => this.#publishIneligibility())
-      .catch(() => undefined)
+    this.#bridge.publish({ kind: 'lane-detached', observation }).catch(() => undefined)
+    this.#publishIneligibility().catch(() => undefined)
   }
 
   async seal(): Promise<void> {
@@ -85,7 +94,13 @@ export class RelayCutEvidence {
       !this.#sealed || this.#ineligibilityPublished || this.#activeRelayLanes.size !== 0
     ) return
     this.#ineligibilityPublished = true
-    await this.#bridge.publish({ kind: 'relay-ineligible' })
+    // The scheduler can exclude the relay only after its lane has detached.
+    // Capture that page-local boundary synchronously once the physical cut is
+    // sealed; delivery through the asynchronous bridge must never move it.
+    await this.#bridge.publish({
+      kind: 'relay-ineligible',
+      dispatchSequenceBoundary: this.#latestDispatchSequence,
+    })
   }
 }
 
