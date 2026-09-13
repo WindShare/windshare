@@ -166,18 +166,64 @@ func recoverOfferBinding(encoded []byte) (v2signal.Binding, bool) {
 	return binding, true
 }
 
-func (execution *attemptExecution) startDataChannel(raw *pion.DataChannel) error {
+func (attempt *peerAttempt) receiveDataChannel(raw *pion.DataChannel) {
 	if raw == nil {
-		return errors.Join(errChannelAdmission, errors.New("peer delivered a nil DataChannel"))
+		attempt.push(attemptEvent{
+			kind: attemptDataChannel,
+			err:  errors.Join(errChannelAdmission, errors.New("peer delivered a nil DataChannel")),
+		})
+		return
 	}
-	if execution.dataChannelSeen {
+	if attempt.dataChannelReceived.Swap(true) {
+		// Reject before Pion starts this channel's read loop. Wrapping a duplicate
+		// could let an unauthenticated terminal intent make graceful Close wait.
 		_ = raw.Close()
-		return errors.Join(errChannelAdmission, errors.New("peer created more than one DataChannel"))
+		attempt.push(attemptEvent{
+			kind: attemptDataChannel,
+			err:  errors.Join(errChannelAdmission, errors.New("peer created more than one DataChannel")),
+		})
+		return
 	}
-	execution.dataChannelSeen = true
-	channel, err := execution.attempt.config.factory.dataChannels.WrapDataChannel(raw)
+	// Pion starts the read loop when OnDataChannel returns. Install callbacks
+	// within that barrier so an immediate LaneHello survives delayed dispatch.
+	channel, err := attempt.config.factory.dataChannels.WrapDataChannel(raw)
 	if err != nil || channel == nil {
-		return errors.Join(errChannelAdmission, err)
+		if channel != nil {
+			_ = channel.Close()
+		} else {
+			_ = raw.Close()
+		}
+		attempt.push(attemptEvent{kind: attemptDataChannel, err: errors.Join(errChannelAdmission, err)})
+		return
+	}
+	attempt.push(attemptEvent{kind: attemptDataChannel, channel: channel})
+}
+
+// The attempt has already shut down the peer before abandoning queued channels.
+// A queued remote terminal may still be behind ordinary frames; with no lane
+// consumer, disposal must drain those frames while joining graceful Close.
+func discardUnadoptedPeerChannel(channel PeerDataChannel) {
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		_ = channel.Close()
+	}()
+	for {
+		select {
+		case <-closed:
+			return
+		case _, ok := <-channel.Recv():
+			if !ok {
+				<-closed
+				return
+			}
+		}
+	}
+}
+
+func (execution *attemptExecution) startDataChannel(channel PeerDataChannel) error {
+	if channel == nil {
+		return errors.Join(errChannelAdmission, errors.New("peer delivered a nil DataChannel"))
 	}
 	execution.transport = newOwnedPeerDataChannel(execution.peer, channel)
 	execution.channel = execution.transport

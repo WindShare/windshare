@@ -69,7 +69,7 @@ const (
 type attemptEvent struct {
 	kind             attemptEventKind
 	candidate        v2signal.Candidate
-	raw              *pion.DataChannel
+	channel          PeerDataChannel
 	lane             sessionruntime.LaneIdentity
 	admission        sessionruntime.SenderPeerAdmissionResult
 	err              error
@@ -87,6 +87,7 @@ type peerAttempt struct {
 	cancelMu                 sync.Mutex
 	cancel                   context.CancelCauseFunc
 	attached                 atomic.Bool
+	dataChannelReceived      atomic.Bool
 	operationCancelRequested atomic.Bool
 	done                     chan struct{}
 
@@ -189,8 +190,8 @@ func (attempt *peerAttempt) push(event attemptEvent) {
 	attempt.inboxMu.Lock()
 	if attempt.closed {
 		attempt.inboxMu.Unlock()
-		if event.raw != nil {
-			_ = event.raw.Close()
+		if event.channel != nil {
+			_ = event.channel.Close()
 		}
 		if event.completed != nil {
 			close(event.completed)
@@ -205,8 +206,8 @@ func (attempt *peerAttempt) push(event attemptEvent) {
 	}
 	attempt.inboxMu.Unlock()
 	if overflow {
-		if event.raw != nil {
-			_ = event.raw.Close()
+		if event.channel != nil {
+			_ = event.channel.Close()
 		}
 		if event.completed != nil {
 			close(event.completed)
@@ -217,16 +218,17 @@ func (attempt *peerAttempt) push(event attemptEvent) {
 
 func (attempt *peerAttempt) closeInbox() {
 	attempt.inboxMu.Lock()
-	defer attempt.inboxMu.Unlock()
 	if attempt.closed {
+		attempt.inboxMu.Unlock()
 		return
 	}
 	attempt.closed = true
+	attempt.inboxMu.Unlock()
 	for {
 		select {
 		case event := <-attempt.events:
-			if event.raw != nil {
-				_ = event.raw.Close()
+			if event.channel != nil {
+				discardUnadoptedPeerChannel(event.channel)
 			}
 			if event.completed != nil {
 				close(event.completed)
@@ -270,7 +272,6 @@ type attemptExecution struct {
 	openTransition    <-chan struct{}
 	localCandidates   int
 	remoteCandidates  int
-	dataChannelSeen   bool
 	signaling         bool
 	operationCanceled bool
 	terminalAuthority bool
@@ -308,9 +309,7 @@ func (execution *attemptExecution) registerCallbacks() {
 			})
 		}
 	})
-	execution.peer.OnDataChannel(func(raw *pion.DataChannel) {
-		execution.attempt.push(attemptEvent{kind: attemptDataChannel, raw: raw})
-	})
+	execution.peer.OnDataChannel(execution.attempt.receiveDataChannel)
 }
 
 func (execution *attemptExecution) negotiate() error {
@@ -435,7 +434,10 @@ func (execution *attemptExecution) handleEvent(event attemptEvent) (bool, error)
 	case attemptLocalCandidate:
 		return false, execution.sendLocalCandidate(event.candidate)
 	case attemptDataChannel:
-		return false, execution.startDataChannel(event.raw)
+		if event.err != nil {
+			return false, event.err
+		}
+		return false, execution.startDataChannel(event.channel)
 	case attemptDataChannelOpen:
 		if event.err != nil {
 			return true, event.err
