@@ -56,6 +56,7 @@ export function projectConnectionTrace(
       ...identity, generation_id: decimal(event.generationId), attempt: decimal(event.attempt), phase: event.phase, transition: event.transition,
       ...(event.relayBase === undefined ? {} : { relay_base: boundedText(event.relayBase) }),
       ...(event.delayMilliseconds === undefined ? {} : { delay_ms: event.delayMilliseconds }),
+      ...(event.waitReason === undefined ? {} : { wait_reason: event.waitReason }),
       ...(event.failure === undefined ? {} : {
         failure_detail: formatDiagnosticText(event.failure, FAILURE_DETAIL_FORMAT).slice(0, TRACE_FAILURE_DETAIL_MAX_CHARACTERS),
       }),

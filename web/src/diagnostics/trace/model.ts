@@ -324,6 +324,7 @@ export interface TraceEventPayloadByNameV2 {
     phase: 'initial' | 'fast' | 'waiting'
     transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
     delay_ms?: number
+    wait_reason?: 'backoff' | 'capacity' | 'server'
     failure_detail?: string
   }>
   readonly relay_heartbeat: Readonly<{

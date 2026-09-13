@@ -209,16 +209,18 @@ it('exports initial connection recovery before a protocol session exists', () =>
       eventName: 'connection_recovery', correlation: {}, generationId: 0,
       shareId: 'share', relayBase: 'https://relay.invalid', attempt: 2, phase: 'initial', transition,
       delayMilliseconds: 1000, failure: new Error('relay unreachable', { cause: new Error('timeout') }),
+      ...(transition === 'waiting' ? { waitReason: 'capacity' } : {}),
     })
   }
   const records = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
     .filter(line => line.record?.event === 'connection_recovery').map(line => line.record)
   expect(records).toHaveLength(6)
+  expect(records[2].payload.wait_reason).toBe('capacity')
   expect(records[0].correlation).toBeUndefined()
   expect(records[0].payload).toMatchObject({ generation_id: '0', attempt: '2', share_id: 'share', delay_ms: 1000 })
   expect(JSON.parse(records[0].payload.failure_detail)).toMatchObject({ message: 'relay unreachable', cause: { message: 'timeout' } })
   for (const invalid of [
-    { phase: 'rpc' }, { attempt: '-1' }, { generation_id: '01' }, { delay_ms: -1 },
+    { phase: 'rpc' }, { attempt: '-1' }, { generation_id: '01' }, { delay_ms: -1 }, { wait_reason: 'unknown' },
     { relay_base: '' }, { share_id: 'x'.repeat(2049) }, { failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1) },
     { unexpected: 'field' },
   ]) {

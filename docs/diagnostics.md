@@ -71,7 +71,7 @@ The browser receiver retains an in-memory ring buffer of diagnostic events and i
 
 - `content_scheduling`: Dispatched block requests, lane selection, standby probes, and throughput metrics (see [performance](performance.md#content-paths)).
 - `operation_recovery`: Operation retry decisions, protocol generation, and available lanes.
-- `connection_recovery`: Initial, fast, and slow waiting phases; attempt, generation, retry delay, outcome, and failure context.
+- `connection_recovery`: Initial, fast, and slow waiting phases; attempt, generation, retry delay, wait reason (backoff, recovery capacity, or service cooldown), outcome, and failure context.
 - `relay_heartbeat`: Per-relay probe round, acknowledgement or failure, buffered bytes, elapsed time, and timeout. Initial events can precede protocol-session identity.
 - `protocol_operation`: Frame lifecycle states (`queued`, `sending`, `completed`, `withdrawn`, `failed`).
 - `lease_retirement`: Block lease cleanup and timeouts.

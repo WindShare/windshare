@@ -12,6 +12,7 @@ import { TaskCard, TaskDetails } from './tasks/TaskView'
 import { composeTasks } from './experience/task-composition'
 import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
 import { ConnectionDetails } from './experience/ConnectionDetails'
+import { ConnectionRecovery } from './connection/ConnectionRecovery'
 import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
 import { ReceiverFold } from './receiver-presentation/ReceiverFold'
@@ -109,10 +110,8 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         </>}
         <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
       </div>}
-      {snapshot.connection.kind === 'reconnecting' && <div className="connection-recovery" role="status">
-        <p>Reconnection is automatic. Keep this page open to preserve your download progress.</p>
-        <button type="button" onClick={() => controller.requestReconnect()}>Reconnect now</button>
-      </div>}
+      {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery
+        activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
       {hasContent && <ShareContent share={share} preview={snapshot.preview} previewActions={previewActions} explorer={{ rows: snapshot.rows, breadcrumbs: snapshot.breadcrumbs,
         pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
         browse: snapshot.browse, draft: snapshot.draft, actions: {
