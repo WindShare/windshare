@@ -15,7 +15,7 @@ export function isTerminalRecoveryFailure(error: unknown): boolean {
     return error.errors.some(isShareRecoveryFailure) ||
       (error.errors.length > 0 && error.errors.every(isTerminalRecoveryFailure))
   }
-  return isShareRecoveryFailure(error) ||
+  return isShareRecoveryFailure(error) || isRejectedRelayData(error) ||
     (error instanceof V2RelayReceiverError && error.relayError !== undefined &&
       ![V2_RELAY_ERROR.notFound, V2_RELAY_ERROR.starting, V2_RELAY_ERROR.admission,
         V2_RELAY_ERROR.challengeExpired].some(code => code === error.relayError?.code))
@@ -24,9 +24,15 @@ export function isTerminalRecoveryFailure(error: unknown): boolean {
 export function isShareRecoveryFailure(error: unknown): boolean {
   if (error instanceof RelayEndpointFailure) return isShareRecoveryFailure(error.cause)
   if (error instanceof AggregateError) return error.errors.some(isShareRecoveryFailure)
-  return error instanceof V2StaleShareInstanceError || error instanceof SenderObjectError ||
-    error instanceof V2CborError || error instanceof V2TranscriptError ||
-    error instanceof V2EnvelopeError || error instanceof V2RelayProtocolError || isSessionFailure(error)
+  // Unverified endpoint data cannot revoke a healthy authenticated session.
+  // Only descriptor continuity checks and the established session own that authority.
+  return error instanceof V2StaleShareInstanceError || isSessionFailure(error)
+}
+
+function isRejectedRelayData(error: unknown): boolean {
+  return error instanceof SenderObjectError || error instanceof V2CborError ||
+    error instanceof V2TranscriptError || error instanceof V2EnvelopeError ||
+    error instanceof V2RelayProtocolError
 }
 
 export function recoveryRetryAfter(error: unknown): number {
