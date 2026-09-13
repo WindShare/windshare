@@ -4,17 +4,30 @@ import type { PeerChannel, PeerPathRoute } from '../../src/connectivity/peer-cha
 import { FileGeometry } from '../../src/content/geometry'
 import { V2BlockBroker, V2LaneSet, type V2BlockDemand } from '../../src/content/v2-broker'
 import type { V2BlockSchedulingObservation } from '../../src/content/v2-lane-set'
-import { HOT_SWITCH_INITIAL_BUFFERED_BLOCKS } from '../../e2e/fixtures/hot-switch-contract'
-import { OutputFence, PagePeerRecoveryHarness } from '../../e2e/fixtures/hot-switch-page-transfer'
+import {
+  HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
+  HOT_SWITCH_TRANSFER_BLOCKS,
+} from '../../e2e/fixtures/hot-switch-contract'
+import { EvidenceBridge, RelayCutEvidence } from '../../e2e/fixtures/hot-switch-page-evidence'
+import {
+  OneShotRelease,
+  OutputFence,
+  PagePeerRecoveryHarness,
+} from '../../e2e/fixtures/hot-switch-page-transfer'
 import { parseLocalTurnReadyRecord } from '../../e2e/fixtures/local-turn-server'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
 
 describe('direct weekly network fixtures', () => {
-  it.each(['cut', 'healthy'] as const)('keeps post-fence peer demand with a %s relay', async (relay) => {
+  it.each([
+    { relay: 'cut', route: 'direct' },
+    { relay: 'cut', route: 'turn' },
+    { relay: 'healthy', route: 'direct' },
+  ] as const)('keeps post-fence $route demand with a $relay relay', async ({ relay, route }) => {
     vi.useFakeTimers()
     const blockBytes = 16
-    const blocksAfterFence = relay === 'cut' ? 1 : 3
-    const blockCount = HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + blocksAfterFence
+    const blockCount = relay === 'cut'
+      ? HOT_SWITCH_TRANSFER_BLOCKS
+      : HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + 3
     const exactSize = BigInt(blockBytes * blockCount)
     const descriptor = {
       shareInstance: new Uint8Array(16), shareInstanceId: 'share',
@@ -51,7 +64,7 @@ describe('direct weekly network fixtures', () => {
       expect(writtenBytes).toBe(0)
       expect(dispatches).toHaveLength(HOT_SWITCH_INITIAL_BUFFERED_BLOCKS)
       expect(dispatches.every(dispatch => dispatch.route === 'application-relay')).toBe(true)
-      lanes.add({ id: 2, fetchBlock }, 'direct')
+      lanes.add({ id: 2, fetchBlock }, route)
       if (relay === 'cut') {
         lanes.remove(1)
       } else {
@@ -59,14 +72,14 @@ describe('direct weekly network fixtures', () => {
         fence.advance()
         await vi.runAllTimersAsync()
         expect(writtenBytes).toBe(2 * blockBytes)
-        expect(dispatches.at(-1)).toMatchObject({ route: 'direct', purpose: 'probe' })
+        expect(dispatches.at(-1)).toMatchObject({ route, purpose: 'probe' })
         expect(lanes.size).toBe(2)
       }
       fence.release()
       await vi.runAllTimersAsync()
       await transfer
       expect(dispatches.slice(HOT_SWITCH_INITIAL_BUFFERED_BLOCKS)).toContainEqual(expect.objectContaining({
-        route: 'direct',
+        route,
         localBlockIndex: BigInt(HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + (relay === 'healthy' ? 1 : 0)),
       }))
       expect(writtenBytes).toBe(Number(exactSize))
@@ -79,6 +92,55 @@ describe('direct weekly network fixtures', () => {
       vi.useRealTimers()
     }
   })
+
+  it.each(['seal-first', 'detach-first'] as const)(
+    'freezes the page dispatch boundary with delayed bridge delivery and %s',
+    async (order) => {
+      const delivery = new OneShotRelease()
+      const log = new NetworkEventLog()
+      const bridge = new EvidenceBridge(async (event) => {
+        await delivery.wait()
+        log.accept(event)
+      }, 4)
+      const evidence = new RelayCutEvidence(bridge)
+      const relay = { laneId: 1, laneEpoch: 1, route: 'application-relay' } as const
+      const peer = { laneId: 2, laneEpoch: 1, route: 'direct' } as const
+      evidence.admit(relay)
+      evidence.dispatch({ ...relay, dispatchSequence: 1 })
+      let sealed: Promise<void>
+      if (order === 'seal-first') {
+        sealed = evidence.seal()
+        // The page may schedule buffered work before learning the socket has closed.
+        evidence.dispatch({ ...relay, dispatchSequence: 2 })
+        evidence.detach(relay)
+      } else {
+        evidence.detach(relay)
+        evidence.dispatch({ ...peer, dispatchSequence: 2 })
+        sealed = evidence.seal()
+      }
+
+      // Neither these later observations nor delayed bridge delivery may advance
+      // the boundary and hide an erroneous post-detachment relay dispatch.
+      evidence.dispatch({ ...relay, dispatchSequence: 3 })
+      evidence.dispatch({ ...peer, dispatchSequence: 4 })
+      await Promise.resolve()
+      expect(log.latestDispatchSequence()).toBe(0)
+      delivery.release()
+      await sealed
+      await evidence.seal()
+      expect(await bridge.terminalFailure()).toBeUndefined()
+      const events = log.snapshot()
+      expect(events.filter(event => event.kind === 'relay-ineligible')).toEqual([
+        { kind: 'relay-ineligible', dispatchSequenceBoundary: 2 },
+      ])
+      const cutIndex = events.findIndex(event => event.kind === 'relay-ineligible')
+      expect(events.slice(cutIndex + 1)).toEqual([
+        { kind: 'dispatch', observation: { ...relay, dispatchSequence: 3 } },
+        { kind: 'dispatch', observation: { ...peer, dispatchSequence: 4 } },
+      ])
+      expect(log.latestDispatchSequence()).toBe(4)
+    },
+  )
 
   it('preserves live path evidence while recovery admission is gated', async () => {
     const listeners = new Set<(route: PeerPathRoute) => void>()

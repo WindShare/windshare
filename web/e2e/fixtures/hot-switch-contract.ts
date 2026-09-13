@@ -11,6 +11,9 @@ import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-wind
 export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =
   V2_BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR + 1
 
+// Every relay-cut route must retain fresh network demand after releasing output.
+export const HOT_SWITCH_TRANSFER_BLOCKS = HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + 1
+
 export interface HotSwitchDispatch {
   readonly dispatchSequence: number
   readonly laneId: number
@@ -102,6 +105,6 @@ export type HotSwitchPageEvent =
   | { readonly kind: 'dispatch'; readonly observation: HotSwitchDispatch }
   | { readonly kind: 'lane-admitted'; readonly observation: HotSwitchLaneObservation }
   | { readonly kind: 'lane-detached'; readonly observation: HotSwitchLaneObservation }
-  | { readonly kind: 'relay-ineligible' }
+  | { readonly kind: 'relay-ineligible'; readonly dispatchSequenceBoundary: number }
   | ({ readonly kind: 'delivery' } & HotSwitchDeliveryTerminal)
   | ({ readonly kind: 'runtime-settled' } & HotSwitchRuntimeTerminal)
