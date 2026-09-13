@@ -833,13 +833,13 @@ func TestCoverageC4WindowsEnumerationRejectsAuthorityLoss(t *testing.T) {
 					if err := file.Close(); err != nil {
 						t.Fatal(err)
 					}
-					delegate := nativeWindowsV3HandleInspector{}
+					delegate := nativeWindowsV3ObjectInspector{}
 					injected := errors.New("injected enumeration inspection failure")
 					calls := 0
-					root.inspector = windowsV3HandleInspectorFunc(func(handle windows.Handle) (windowsV3HandleFacts, error) {
+					root.inspector = windowsV3ObjectInspectorFunc(func(handle windows.Handle) (windowsV3ObjectFacts, error) {
 						calls++
 						if calls == failure.call {
-							return windowsV3HandleFacts{}, injected
+							return windowsV3ObjectFacts{}, injected
 						}
 						return delegate.Inspect(handle)
 					})

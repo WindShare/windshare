@@ -42,18 +42,18 @@ func TestWindowsV3OpenedObjectAndLeafIdentityFailuresAreExact(t *testing.T) {
 
 	for _, test := range []struct {
 		name   string
-		mutate func(*windowsV3HandleFacts)
+		mutate func(*windowsV3ObjectFacts)
 	}{
-		{name: "filesystem", mutate: func(facts *windowsV3HandleFacts) { facts.filesystem = "ReFS" }},
-		{name: "volume", mutate: func(facts *windowsV3HandleFacts) { facts.object.volume.serial++ }},
-		{name: "reparse", mutate: func(facts *windowsV3HandleFacts) {
+		{name: "volume GUID", mutate: func(facts *windowsV3ObjectFacts) { facts.object.volume.guid += "-different" }},
+		{name: "volume", mutate: func(facts *windowsV3ObjectFacts) { facts.object.volume.serial++ }},
+		{name: "reparse", mutate: func(facts *windowsV3ObjectFacts) {
 			facts.attributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT
 		}},
-		{name: "type", mutate: func(facts *windowsV3HandleFacts) {
+		{name: "type", mutate: func(facts *windowsV3ObjectFacts) {
 			facts.attributes &^= windows.FILE_ATTRIBUTE_DIRECTORY
 		}},
-		{name: "case-sensitive", mutate: func(facts *windowsV3HandleFacts) { facts.caseSensitive = true }},
-		{name: "identity", mutate: func(facts *windowsV3HandleFacts) { facts.object.fileID = [16]byte{} }},
+		{name: "case-sensitive", mutate: func(facts *windowsV3ObjectFacts) { facts.caseSensitive = true }},
+		{name: "identity", mutate: func(facts *windowsV3ObjectFacts) { facts.object.fileID = [16]byte{} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			facts := rootFacts
@@ -98,8 +98,8 @@ func TestWindowsV3OpenedObjectAndLeafIdentityFailuresAreExact(t *testing.T) {
 
 	injected := errors.New("injected inspector failure")
 	brokenFile := *file
-	brokenFile.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		return windowsV3HandleFacts{}, injected
+	brokenFile.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+		return windowsV3ObjectFacts{}, injected
 	})
 	if _, err := sameWindowsV3OpenedObject(&brokenFile, file); !errors.Is(err, errWindowsV3OutputUnsafe) {
 		t.Fatalf("file comparison inspector failure = %v", err)
@@ -201,15 +201,15 @@ func TestWindowsV3PersistentObjectIDProviderFailuresDoNotMutateAuthority(t *test
 	}
 
 	brokenInspection := clone(windowsV3ObjectIDProviderStub{createID: first}, first)
-	brokenInspection.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		return windowsV3HandleFacts{}, injected
+	brokenInspection.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+		return windowsV3ObjectFacts{}, injected
 	})
 	_, err = brokenInspection.identityClaim()
 	assertUnsafe("identity claim inspection", err)
 
 	invalidFacts := clone(windowsV3ObjectIDProviderStub{createID: first}, first)
-	invalidFacts.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		return windowsV3HandleFacts{}, nil
+	invalidFacts.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+		return windowsV3ObjectFacts{}, nil
 	})
 	_, err = invalidFacts.identityClaim()
 	assertUnsafe("identity claim object validation", err)
@@ -231,10 +231,10 @@ func TestWindowsV3PersistentObjectIDProviderFailuresDoNotMutateAuthority(t *test
 	}
 	inspectionCalls := 0
 	duplicateComparisonFailure := *root
-	duplicateComparisonFailure.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
+	duplicateComparisonFailure.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
 		inspectionCalls++
 		if inspectionCalls == 2 {
-			return windowsV3HandleFacts{}, injected
+			return windowsV3ObjectFacts{}, injected
 		}
 		return rootFacts, nil
 	})
@@ -510,28 +510,30 @@ func TestWindowsV3ProbeCleanupRejectsMismatchedNativeIdentities(t *testing.T) {
 }
 
 func TestWindowsV3PlatformAdmissionAndClosedAuthoritiesFailExact(t *testing.T) {
-	nativeInspector := nativeWindowsV3HandleInspector{}
-	if platform, err := openWindowsV3OutputPlatformWithInspector("", nativeInspector); platform != nil || err == nil {
+	nativeInspector := nativeWindowsV3ObjectInspector{}
+	if platform, err := openWindowsV3OutputPlatformWithInspectors("", nativeInspector, nativeWindowsV3VolumeInspector{}); platform != nil || err == nil {
 		t.Fatalf("empty root admission = platform %v error %v", platform, err)
 	}
-	if platform, err := openWindowsV3OutputPlatformWithInspector(t.TempDir(), nil); platform != nil || err == nil {
+	if platform, err := openWindowsV3OutputPlatformWithInspectors(t.TempDir(), nil, nativeWindowsV3VolumeInspector{}); platform != nil || err == nil {
 		t.Fatalf("missing inspector admission = platform %v error %v", platform, err)
 	}
 
 	injected := errors.New("injected root inspection failure")
-	if platform, err := openWindowsV3OutputPlatformWithInspector(
+	if platform, err := openWindowsV3OutputPlatformWithInspectors(
 		t.TempDir(),
-		windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-			return windowsV3HandleFacts{}, injected
+		windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+			return windowsV3ObjectFacts{}, injected
 		}),
+		nativeWindowsV3VolumeInspector{},
 	); platform != nil || err == nil {
 		t.Fatalf("failed root inspection = platform %v error %v", platform, err)
 	}
-	if platform, err := openWindowsV3OutputPlatformWithInspector(
+	if platform, err := openWindowsV3OutputPlatformWithInspectors(
 		t.TempDir(),
-		windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-			return windowsV3HandleFacts{}, nil
+		windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+			return windowsV3ObjectFacts{}, nil
 		}),
+		nativeWindowsV3VolumeInspector{},
 	); platform != nil || err == nil {
 		t.Fatalf("invalid root facts = platform %v error %v", platform, err)
 	}

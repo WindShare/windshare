@@ -16,15 +16,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func validWindowsV3CertificationFacts() windowsV3HandleFacts {
+func validWindowsV3ObjectFacts() windowsV3ObjectFacts {
 	var fileID [16]byte
 	fileID[0] = 1
-	return windowsV3HandleFacts{
-		filesystem: windowsV3OutputFilesystem,
+	return windowsV3ObjectFacts{
 		path:       `\\?\C:\output`,
-		driveType:  windows.DRIVE_FIXED,
-		flags: windows.FILE_SUPPORTS_HARD_LINKS | windows.FILE_PERSISTENT_ACLS |
-			windowsV3FileSupportsPOSIXSemantics,
 		attributes: windows.FILE_ATTRIBUTE_DIRECTORY,
 		object: windowsV3ObjectIdentity{
 			volume: windowsV3VolumeIdentity{guid: `\\?\volume{test}`, serial: 1},
@@ -33,34 +29,36 @@ func validWindowsV3CertificationFacts() windowsV3HandleFacts {
 	}
 }
 
+func validWindowsV3VolumeFacts() windowsV3VolumeFacts {
+	return windowsV3VolumeFacts{
+		filesystem: windowsV3OutputFilesystem,
+		path:       `\\?\C:\output`,
+		driveType:  windows.DRIVE_FIXED,
+		flags: windows.FILE_SUPPORTS_HARD_LINKS | windows.FILE_PERSISTENT_ACLS |
+			windowsV3FileSupportsPOSIXSemantics,
+	}
+}
+
 func TestWindowsV3CertificationIsNTFSLocalAndFailClosed(t *testing.T) {
-	if err := validateWindowsV3Certification(validWindowsV3CertificationFacts()); err != nil {
+	if err := validateWindowsV3VolumeCertification(validWindowsV3VolumeFacts()); err != nil {
 		t.Fatalf("valid NTFS facts: %v", err)
 	}
-
-	tests := []struct {
+	for _, test := range []struct {
 		name   string
-		mutate func(*windowsV3HandleFacts)
+		mutate func(*windowsV3VolumeFacts)
 	}{
-		{name: "ReFS", mutate: func(facts *windowsV3HandleFacts) { facts.filesystem = "ReFS" }},
-		{name: "FAT", mutate: func(facts *windowsV3HandleFacts) { facts.filesystem = "FAT32" }},
-		{name: "remote", mutate: func(facts *windowsV3HandleFacts) { facts.path = `\\?\UNC\host\share\output` }},
-		{name: "removable", mutate: func(facts *windowsV3HandleFacts) { facts.driveType = windows.DRIVE_REMOVABLE }},
-		{name: "no hard links", mutate: func(facts *windowsV3HandleFacts) { facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS }},
-		{name: "no persistent ACL", mutate: func(facts *windowsV3HandleFacts) { facts.flags &^= windows.FILE_PERSISTENT_ACLS }},
-		{name: "no POSIX namespace", mutate: func(facts *windowsV3HandleFacts) { facts.flags &^= windowsV3FileSupportsPOSIXSemantics }},
-		{name: "reparse", mutate: func(facts *windowsV3HandleFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT }},
-		{name: "offline", mutate: func(facts *windowsV3HandleFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_OFFLINE }},
-		{name: "recall", mutate: func(facts *windowsV3HandleFacts) { facts.attributes |= 0x00400000 }},
-		{name: "case sensitive", mutate: func(facts *windowsV3HandleFacts) { facts.caseSensitive = true }},
-		{name: "missing volume", mutate: func(facts *windowsV3HandleFacts) { facts.object.volume = windowsV3VolumeIdentity{} }},
-		{name: "missing File ID", mutate: func(facts *windowsV3HandleFacts) { facts.object.fileID = [16]byte{} }},
-	}
-	for _, test := range tests {
+		{name: "ReFS", mutate: func(facts *windowsV3VolumeFacts) { facts.filesystem = "ReFS" }},
+		{name: "FAT", mutate: func(facts *windowsV3VolumeFacts) { facts.filesystem = "FAT32" }},
+		{name: "remote", mutate: func(facts *windowsV3VolumeFacts) { facts.path = `\\?\UNC\host\share\output` }},
+		{name: "removable", mutate: func(facts *windowsV3VolumeFacts) { facts.driveType = windows.DRIVE_REMOVABLE }},
+		{name: "no hard links", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windows.FILE_SUPPORTS_HARD_LINKS }},
+		{name: "no persistent ACL", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windows.FILE_PERSISTENT_ACLS }},
+		{name: "no POSIX namespace", mutate: func(facts *windowsV3VolumeFacts) { facts.flags &^= windowsV3FileSupportsPOSIXSemantics }},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			facts := validWindowsV3CertificationFacts()
+			facts := validWindowsV3VolumeFacts()
 			test.mutate(&facts)
-			err := validateWindowsV3Certification(facts)
+			err := validateWindowsV3VolumeCertification(facts)
 			if !errors.Is(err, errWindowsV3OutputUnsupported) {
 				t.Fatalf("error=%v", err)
 			}
@@ -72,8 +70,33 @@ func TestWindowsV3CertificationIsNTFSLocalAndFailClosed(t *testing.T) {
 	}
 }
 
+func TestWindowsV3RootShapeRequiresCurrentSafeDirectory(t *testing.T) {
+	if err := validateWindowsV3RootShape(validWindowsV3ObjectFacts()); err != nil {
+		t.Fatalf("valid directory facts: %v", err)
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*windowsV3ObjectFacts)
+	}{
+		{name: "reparse", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT }},
+		{name: "offline", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= windows.FILE_ATTRIBUTE_OFFLINE }},
+		{name: "recall", mutate: func(facts *windowsV3ObjectFacts) { facts.attributes |= 0x00400000 }},
+		{name: "case sensitive", mutate: func(facts *windowsV3ObjectFacts) { facts.caseSensitive = true }},
+		{name: "missing volume", mutate: func(facts *windowsV3ObjectFacts) { facts.object.volume = windowsV3VolumeIdentity{} }},
+		{name: "missing File ID", mutate: func(facts *windowsV3ObjectFacts) { facts.object.fileID = [16]byte{} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			facts := validWindowsV3ObjectFacts()
+			test.mutate(&facts)
+			if err := validateWindowsV3RootShape(facts); !errors.Is(err, errWindowsV3OutputUnsupported) {
+				t.Fatalf("error=%v", err)
+			}
+		})
+	}
+}
+
 func TestWindowsV3CurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) {
-	left := validWindowsV3CertificationFacts().object
+	left := validWindowsV3ObjectFacts().object
 	right := left
 	if !left.same(right) {
 		t.Fatal("same current object was not equal")
@@ -94,12 +117,12 @@ func TestWindowsV3CurrentObjectIdentityCannotBeEncodedAsOwnership(t *testing.T) 
 
 func TestWindowsV3CertificationPrecedesAnyResumeMutation(t *testing.T) {
 	root := t.TempDir()
-	inspector := windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		facts := validWindowsV3CertificationFacts()
+	volumes := windowsV3VolumeInspectorFunc(func(windows.Handle) (windowsV3VolumeFacts, error) {
+		facts := validWindowsV3VolumeFacts()
 		facts.filesystem = "ReFS"
 		return facts, nil
 	})
-	platform, err := openWindowsV3OutputPlatformWithInspector(root, inspector)
+	platform, err := openWindowsV3OutputPlatformWithInspectors(root, nativeWindowsV3ObjectInspector{}, volumes)
 	if platform != nil || !errors.Is(err, errWindowsV3OutputUnsupported) {
 		if platform != nil {
 			_ = platform.Close()

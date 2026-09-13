@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -20,7 +19,7 @@ type windowsV3File struct {
 	file      *os.File
 	path      string
 	volume    windowsV3VolumeIdentity
-	inspector windowsV3HandleInspector
+	inspector windowsV3ObjectInspector
 	policy    *windowsV3PrivatePolicy
 }
 
@@ -316,8 +315,10 @@ func (file *windowsV3File) verify(private bool) error {
 	return nil
 }
 
-func windowsV3ValidateOpenedObject(facts windowsV3HandleFacts, expected windowsV3VolumeIdentity, directory bool) error {
-	if !strings.EqualFold(facts.filesystem, windowsV3OutputFilesystem) || facts.object.volume != expected {
+func windowsV3ValidateOpenedObject(facts windowsV3ObjectFacts, expected windowsV3VolumeIdentity, directory bool) error {
+	// Volume capabilities were certified on admission. Current GUID and serial
+	// membership is checked even for handles opened relative to that authority.
+	if facts.object.volume != expected {
 		return errors.New("opened object crossed the certified NTFS volume boundary")
 	}
 	if facts.attributes&windowsV3CloudAttributeMask != 0 {
