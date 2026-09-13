@@ -13,7 +13,7 @@ import {
   snapshotMaterializationPath,
 } from '../directory-admission'
 import type { ReceiveIntent } from '../intent'
-import type { ExactPreparationEvidence } from '../output-session'
+import { OutputSessionBindingError, type ExactPreparationEvidence } from '../output-session'
 import { directoryIsResultRoot } from './artifact-path'
 import type {
   AuthenticatedDirectory,
@@ -151,8 +151,21 @@ export class ExactPreparationCollector {
     }))
   }
 
-  pendingFiles(): readonly PendingFile[] {
-    return Object.freeze([...this.#pendingFiles])
+  pendingFiles(orderedFiles: readonly PreparationFileEntry[]): readonly PendingFile[] {
+    const pending = new Map(this.#pendingFiles.map(file => [file.entry.idText, file]))
+    if (orderedFiles.length !== this.#pendingFiles.length || pending.size !== this.#pendingFiles.length) {
+      throw new OutputSessionBindingError('prepared execution file count differs from discovery')
+    }
+    // Resolve the output's plan without re-sorting it or depending on catalog arrival order.
+    // Deleting each claim rejects duplicate or substituted members before content is opened.
+    return Object.freeze(orderedFiles.map(entry => {
+      const file = pending.get(entry.fileId)
+      if (file === undefined) {
+        throw new OutputSessionBindingError('prepared execution must contain each discovered file exactly once')
+      }
+      pending.delete(entry.fileId)
+      return file
+    }))
   }
 
   evidence(): ExactPreparationEvidence {

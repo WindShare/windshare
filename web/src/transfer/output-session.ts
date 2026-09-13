@@ -1,5 +1,5 @@
 import type { AuthenticatedGenerationReference } from '../output/workspace/manifest'
-import type { PreparationManifestEntry } from '../output/workspace/preparation'
+import type { PreparationFileEntry, PreparationManifestEntry } from '../output/workspace/preparation'
 import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../output/workspace/state'
 import type { CompatibleNameRepairSummary } from '../output/file-system-access/compatible-name/model'
 import type { RecoverySummary } from '../output/file-system-access/recovery-summary'
@@ -157,6 +157,8 @@ export interface WorkspaceExecution extends PlanExecutionBase<WorkspaceThenPubli
 
 export interface PortableExecution extends PlanExecutionBase<PortableHandoffPlan> {
   readonly planKind: 'portable-handoff'
+  /** Output owns member order; discovery order cannot determine a sealed artifact's layout. */
+  readonly orderedFiles: readonly PreparationFileEntry[]
   settle(
     request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
     signal: AbortSignal,
@@ -278,6 +280,9 @@ export function validatePlanExecutionBinding<Execution extends PlanExecution>(
   outputCapabilities(execution.output.capabilities)
   if (execution.planKind !== 'direct-resumable-zip') {
     outputExecutionProfile(execution.output.executionProfile)
+  }
+  if (execution.planKind === 'portable-handoff' && !Array.isArray(execution.orderedFiles)) {
+    throw new OutputSessionBindingError('Portable execution requires prepared file order')
   }
   if (intent.plan.kind === 'direct-tree' && !hasDirectoryPort(execution)) {
     throw new OutputSessionBindingError('DirectTree execution requires incremental directory authority')

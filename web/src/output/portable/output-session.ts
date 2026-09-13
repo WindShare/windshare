@@ -41,6 +41,7 @@ import {
 export const PORTABLE_ZIP_OUTPUT_BACKEND = 'portable-sealed-zip'
 
 export interface PortablePreparedOutput extends OutputSession {
+  readonly orderedFiles: readonly PreparationFileEntry[]
   readonly cleanupPending: boolean
   finalize(signal: AbortSignal): Promise<void>
   abort(reason: unknown): Promise<void>
@@ -54,6 +55,7 @@ export type PortableZipArchiveWriterFactory = (
 ) => ZipArchiveWriter
 
 export class PortableOriginalOutputSession implements PortablePreparedOutput {
+  readonly orderedFiles: readonly PreparationFileEntry[]
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities
   readonly executionProfile
@@ -73,6 +75,7 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
   }>) {
     this.#intent = input.intent
     this.#entry = input.entry
+    this.orderedFiles = Object.freeze([input.entry])
     this.#handoff = input.handoff
     this.#diagnostics = input.diagnostics
     this.#inner = new SingleFileStreamOutputSession(
@@ -164,6 +167,7 @@ export class PortableOriginalOutputSession implements PortablePreparedOutput {
 type ZipSessionState = 'open' | 'closing' | 'closed' | 'failed'
 
 export class PortableSealedZipOutputSession implements PortablePreparedOutput {
+  readonly orderedFiles: readonly PreparationFileEntry[]
   readonly identity: OutputSessionIdentity
   readonly capabilities: OutputCapabilities = outputCapabilities({
     durability: 'None',
@@ -214,6 +218,9 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
         : input.intent.operationId}:zip`,
     })
     this.#entriesByPath = preparedFilesByArtifactPath(input.files)
+    this.orderedFiles = Object.freeze(this.#layout.entries
+      .filter(entry => entry.kind === 'file')
+      .map(entry => this.#preparedFile(entry)))
   }
 
   get cleanupPending(): boolean {
@@ -379,12 +386,16 @@ export class PortableSealedZipOutputSession implements PortablePreparedOutput {
     if (entry === undefined || entry.kind !== 'file') {
       throw new OutputSessionBindingError('portable ZIP received an unexpected file')
     }
+    assertPreparedFileRequest(this.#intent, this.#preparedFile(entry), request, this.capabilities)
+    return entry
+  }
+
+  #preparedFile(entry: ZipEntryPlanV1): PreparationFileEntry {
     const file = this.#entriesByPath.get(pathKey(entry.path))
     if (file === undefined) {
       throw new OutputSessionBindingError('sealed ZIP member lacks preparation evidence')
     }
-    assertPreparedFileRequest(this.#intent, file, request, this.capabilities)
-    return entry
+    return file
   }
 
   async #writeDirectoriesBefore(file: ZipEntryPlanV1): Promise<void> {
