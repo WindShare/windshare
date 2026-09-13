@@ -16,19 +16,24 @@ import (
 
 type windowsV3OutputPlatform struct {
 	root       *windowsV3Directory
-	inspector  windowsV3HandleInspector
+	inspector  windowsV3ObjectInspector
 	policy     *windowsV3PrivatePolicy
 	durability windowsV3OutputDurability
 }
 
 func openWindowsV3OutputPlatform(path string) (*windowsV3OutputPlatform, error) {
-	return openWindowsV3OutputPlatformWithInspector(path, nativeWindowsV3HandleInspector{})
+	return openWindowsV3OutputPlatformWithInspectors(path, nativeWindowsV3ObjectInspector{}, nativeWindowsV3VolumeInspector{})
 }
 
-func openWindowsV3OutputPlatformWithInspector(path string, inspector windowsV3HandleInspector) (*windowsV3OutputPlatform, error) {
+func openWindowsV3OutputPlatformWithInspectors(
+	path string,
+	inspector windowsV3ObjectInspector,
+	volumes windowsV3VolumeInspector,
+) (*windowsV3OutputPlatform, error) {
 	return openWindowsV3OutputPlatformWithAuthority(
 		path,
 		inspector,
+		volumes,
 		windowsV3RootDirectoryAccess(),
 		windowsV3DirectoryShareMode(false),
 	)
@@ -37,7 +42,8 @@ func openWindowsV3OutputPlatformWithInspector(path string, inspector windowsV3Ha
 func openWindowsV3PrivateRootParent(path string) (*windowsV3OutputPlatform, error) {
 	return openWindowsV3OutputPlatformWithAuthority(
 		path,
-		nativeWindowsV3HandleInspector{},
+		nativeWindowsV3ObjectInspector{},
+		nativeWindowsV3VolumeInspector{},
 		windowsV3PrivateRootParentAccess(),
 		windowsV3DirectoryShareMode(true),
 	)
@@ -45,11 +51,12 @@ func openWindowsV3PrivateRootParent(path string) (*windowsV3OutputPlatform, erro
 
 func openWindowsV3OutputPlatformWithAuthority(
 	path string,
-	inspector windowsV3HandleInspector,
+	inspector windowsV3ObjectInspector,
+	volumes windowsV3VolumeInspector,
 	rootAccess uint32,
 	shareMode uint32,
 ) (*windowsV3OutputPlatform, error) {
-	if inspector == nil || path == "" {
+	if inspector == nil || volumes == nil || path == "" {
 		return nil, windowsV3Failure("open output root", path, errWindowsV3OutputUnsupported, errors.New("missing root or inspector"))
 	}
 	if rootAccess == 0 {
@@ -83,7 +90,17 @@ func openWindowsV3OutputPlatformWithAuthority(
 	if err != nil {
 		err = windowsV3Failure("inspect output root", absolute, errWindowsV3OutputUnsupported, err)
 	} else {
-		err = validateWindowsV3Certification(facts)
+		err = validateWindowsV3RootShape(facts)
+	}
+	if err == nil {
+		// This handle anchors the certification lifetime. Descendants and guards
+		// still prove their own volume identity; reopening a root certifies anew.
+		volumeFacts, volumeErr := volumes.InspectVolume(handle)
+		if volumeErr != nil {
+			err = windowsV3Failure("inspect output volume", absolute, errWindowsV3OutputUnsupported, volumeErr)
+		} else {
+			err = validateWindowsV3VolumeCertification(volumeFacts)
+		}
 	}
 	if err != nil {
 		return nil, errors.Join(err, file.Close())
@@ -138,7 +155,7 @@ type windowsV3Directory struct {
 	volume             windowsV3VolumeIdentity
 	objectIDs          windowsV3PersistentObjectIDProvider
 	objectIDState      *windowsV3PersistentObjectIDState
-	inspector          windowsV3HandleInspector
+	inspector          windowsV3ObjectInspector
 	policy             *windowsV3PrivatePolicy
 	ancestryAuthority  windowsV3AncestryAuthorityVerifier
 	enumerate          *sync.Mutex

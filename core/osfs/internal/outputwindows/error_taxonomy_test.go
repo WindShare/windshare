@@ -205,8 +205,8 @@ func TestWindowsV3RealNativeOpenFailuresRemainRawThroughWrapper(t *testing.T) {
 	}
 
 	inaccessibleRoot := *root
-	inaccessibleRoot.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		return windowsV3HandleFacts{}, windows.ERROR_ACCESS_DENIED
+	inaccessibleRoot.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+		return windowsV3ObjectFacts{}, windows.ERROR_ACCESS_DENIED
 	})
 	if opened, err := inaccessibleRoot.OpenRegularFile(collisionName); opened != nil {
 		_ = opened.Close()

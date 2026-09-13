@@ -169,34 +169,34 @@ func (directory *windowsV3Directory) prepareCreatedPrivateDirectory(
 	created *windowsV3Directory,
 	relative string,
 	native string,
-) (windowsV3HandleFacts, error) {
+) (windowsV3ObjectFacts, error) {
 	const operation = "create crash-safe private output directory"
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutCreated); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	// Protected ACL verification is a private-namespace invariant. Object IDs are
 	// deliberately absent here: live crash cleanup must remain available when
 	// restart identity enrollment is not.
 	if err := created.verify(true); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	if err := windowsV3VerifyOpenedLeafAuthority(created.handle(), native, true); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutACLHidden); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	if err := errors.Join(created.Sync(), directory.Sync()); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	duplicate, err := created.Duplicate()
 	if err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	verifyErr := duplicate.verify(true)
 	closeErr := duplicate.Close()
 	if verifyErr != nil || closeErr != nil {
-		return windowsV3HandleFacts{}, errors.Join(
+		return windowsV3ObjectFacts{}, errors.Join(
 			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
 				errors.New("private directory did not preserve its protected security")),
 			verifyErr, closeErr,
@@ -204,11 +204,11 @@ func (directory *windowsV3Directory) prepareCreatedPrivateDirectory(
 	}
 	preparedFacts, err := created.inspector.Inspect(created.handle())
 	if err != nil {
-		return windowsV3HandleFacts{},
+		return windowsV3ObjectFacts{},
 			windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
 	}
 	if err := directory.observePrivateDirectoryCreate(relative, windowsV3PrivateDirectoryCutSynced); err != nil {
-		return windowsV3HandleFacts{}, err
+		return windowsV3ObjectFacts{}, err
 	}
 	return preparedFacts, nil
 }

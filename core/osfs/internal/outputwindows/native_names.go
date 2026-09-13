@@ -503,8 +503,7 @@ func (directory *windowsV3Directory) inspectEntryName(
 		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe, err)
 	}
 	facts, err := directory.inspector.Inspect(handle)
-	if err != nil || !strings.EqualFold(facts.filesystem, windowsV3OutputFilesystem) ||
-		facts.object.volume != directory.volume || !facts.object.valid() {
+	if err != nil || facts.object.volume != directory.volume || !facts.object.valid() {
 		return windowsV3EntryNameObservation{}, windowsV3Failure(operation, relative, errWindowsV3OutputUnsafe,
 			errors.Join(errors.New("observed entry is outside the fixed NTFS authority"), err))
 	}

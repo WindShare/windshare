@@ -108,16 +108,16 @@ func TestWindowsV3IdentityPreparationValidatesBeforeAndAfterCreateOrGet(t *testi
 		t.Fatalf("failed pre-authority check invoked CreateOrGet %d times", calls)
 	}
 
-	nativeInspector := nativeWindowsV3HandleInspector{}
+	nativeInspector := nativeWindowsV3ObjectInspector{}
 	facts, err := nativeInspector.Inspect(root.handle())
 	if err != nil {
 		t.Fatal(err)
 	}
 	var inspections atomic.Int64
 	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	root.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
+	root.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
 		if inspections.Add(1) >= 3 {
-			return windowsV3HandleFacts{}, nil
+			return windowsV3ObjectFacts{}, nil
 		}
 		return facts, nil
 	})
@@ -160,8 +160,8 @@ func TestWindowsV3ReadOnlyIdentityClaimPreservesAuthorityTraceTaxonomy(t *testin
 
 	structural := errors.New("injected handle inspection failure")
 	root.ancestryAuthority = windowsV3AncestryAuthorityVerifierFunc(func(windows.Handle) error { return nil })
-	root.inspector = windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) {
-		return windowsV3HandleFacts{}, structural
+	root.inspector = windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) {
+		return windowsV3ObjectFacts{}, structural
 	})
 	_, err := root.identityClaim()
 	mapped := windowsOutputV3Error(err)
