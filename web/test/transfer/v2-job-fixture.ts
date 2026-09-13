@@ -720,6 +720,7 @@ export function planAuthorityFixture(input: {
       }
       const execution: PortableExecution = {
         planKind: 'portable-handoff',
+        orderedFiles: evidence.entries.filter(entry => entry.kind === 'file'),
         output,
         settle: async ({ worker }) => {
           settlements.push(`portable-handoff:${worker.status}`)

@@ -241,8 +241,9 @@ export class TransferJobMaterialization {
     if (prepared.kind === 'rejected') {
       return this.#context.execution.preparationRejected(prepared.state)
     }
-    this.#context.execution.bind(validatePlanExecutionBinding(intent, prepared.execution))
-    return this.#runPreparedContent(collector, measure)
+    const execution = validatePlanExecutionBinding(intent, prepared.execution)
+    this.#context.execution.bind(execution)
+    return this.#runPreparedContent(collector.pendingFiles(execution.orderedFiles), measure)
   }
 
   async #collectExactPreparation(intent: ReceiveIntent): Promise<Readonly<{
@@ -269,12 +270,12 @@ export class TransferJobMaterialization {
   }
 
   async #runPreparedContent(
-    collector: ExactPreparationCollector,
+    files: readonly PendingFile[],
     measure: SelectionMeasure,
   ): Promise<TransferJobResult> {
     this.#context.execution.requireBound()
     this.#context.execution.materializationStarted()
-    await this.#context.execution.transferPreparedFiles(collector.pendingFiles())
+    await this.#context.execution.transferPreparedFiles(files)
     this.#context.execution.finishingStarted()
     return this.#context.execution.completeWorkers(measure)
   }

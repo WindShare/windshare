@@ -292,6 +292,7 @@ function acceptedPortableExecution(input: Readonly<{
   const controller = new PortableExecutionController(input)
   const execution: PortableExecution = Object.freeze({
     planKind: 'portable-handoff',
+    orderedFiles: input.output.orderedFiles,
     output: input.output,
     pause: (request: PlanPauseRequest, signal: AbortSignal) =>
       controller.pause(request, signal),
