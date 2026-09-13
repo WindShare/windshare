@@ -56,7 +56,7 @@ it('reconnects the joined share without replacing an active download, selection,
   const joined = new FakeJoinedShare(true, [], 'tree')
   const controller = controllerFor(joined, receive)
   await startTransfer(controller, joined)
-  joined.connectionChanged({ kind: 'reconnecting', phase: 'waiting' })
+  joined.connectionChanged({ kind: 'reconnecting', activity: { kind: 'waiting', reason: 'backoff', retryAt: 30_000 } })
   const before = controller.getSnapshot()
   const selection = joined.selection
   controller.requestReconnect()
@@ -87,7 +87,7 @@ it('keeps a paused task paused when the connection returns or the user requests 
     completedFileCount: 1n, completedBytes: 1024n, discoveryComplete: false })
   joined.transferRuns[0]!.resolve(paused)
   await waitFor(() => controller.canRetainCurrentOperation)
-  joined.connectionChanged({ kind: 'reconnecting', phase: 'waiting' })
+  joined.connectionChanged({ kind: 'reconnecting', activity: { kind: 'waiting', reason: 'backoff', retryAt: 30_000 } })
   controller.requestReconnect()
   joined.connectionChanged({ kind: 'connected' })
   await turns()
@@ -107,9 +107,9 @@ it('offers bounded initial waiting choices and same-page recovery controls', () 
   expect(html).toContain('Cancel')
   expect(html).toContain('The link may still be valid')
   const reconnecting = renderToString(<V2ReceiverApp controller={experienceController(experienceSnapshot({
-    phase: 'browsing', connection: { kind: 'reconnecting', phase: 'waiting' },
+    phase: 'browsing', connection: { kind: 'reconnecting', activity: { kind: 'waiting', reason: 'backoff', retryAt: 30_000 } },
   }))} />)
-  expect(reconnecting).toContain('Reconnect now')
+  expect(reconnecting).toContain('Retry now')
   expect(reconnecting).toContain('preserve your download progress')
   expect(reconnecting).not.toContain('reopen the original link')
 })

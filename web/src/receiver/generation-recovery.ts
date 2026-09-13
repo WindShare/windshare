@@ -17,6 +17,7 @@ interface RecoveryReservation {
   finish(completedAt: number): void
 }
 export interface GenerationRecoveryWave {
+  exhausted(now: number): boolean
   reserve(now: number): RecoveryReservation
 }
 
@@ -28,12 +29,15 @@ export class GenerationRecoveryBudget {
 
   openWave(startedAt: number): GenerationRecoveryWave {
     let attempts = 0
+    const exhausted = (now: number) => attempts >= RECOVERY_WAVE_ATTEMPTS ||
+      now - startedAt >= RECOVERY_WAVE_MILLISECONDS
     return {
+      exhausted,
       reserve: (now) => {
         this.#refill(now)
         const milliseconds = Math.min(RECOVERY_ATTEMPT_MILLISECONDS, this.#milliseconds,
           RECOVERY_WAVE_MILLISECONDS - (now - startedAt))
-        if (attempts >= RECOVERY_WAVE_ATTEMPTS || this.#attempts < 1 || milliseconds < 1) {
+        if (exhausted(now) || this.#attempts < 1 || milliseconds < 1) {
           throw new GenerationRecoveryExhaustedError()
         }
         attempts += 1

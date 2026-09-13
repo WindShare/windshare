@@ -37,13 +37,14 @@ const PEER_FAILURE_CODES = [
 
 export function validateConnectionRecovery(payload: UnknownRecord): void {
   exactKeys(payload, ['generation_id', 'attempt', 'phase', 'transition'],
-    ['share_id', 'share_instance_id', 'relay_base', 'delay_ms', 'failure_detail'], 'connection recovery')
+    ['share_id', 'share_instance_id', 'relay_base', 'delay_ms', 'wait_reason', 'failure_detail'], 'connection recovery')
   member(payload.phase, ['initial', 'fast', 'waiting'], 'connection recovery phase')
   member(payload.transition, ['attempt_started', 'attempt_failed', 'waiting', 'connected', 'terminal', 'retry_requested'],
     'connection recovery transition')
   decimalFields(payload, ['generation_id', 'attempt'], 'connection recovery')
   validateConnectionIdentity(payload)
   if (payload.delay_ms !== undefined) integerBetween(payload.delay_ms, 0, Number.MAX_SAFE_INTEGER, 'connection recovery delay')
+  if (payload.wait_reason !== undefined) member(payload.wait_reason, ['backoff', 'capacity', 'server'], 'connection wait reason')
   if (payload.failure_detail !== undefined) {
     boundedConnectionText(payload.failure_detail, TRACE_FAILURE_DETAIL_MAX_CHARACTERS, 'connection failure')
   }

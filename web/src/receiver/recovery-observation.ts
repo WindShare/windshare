@@ -1,7 +1,7 @@
 import type { V2ConnectionRecoveryTraceEvent, V2ProtocolTraceSource } from '../session/v2-diagnostics'
 
 export type RecoveryObservation = Pick<V2ConnectionRecoveryTraceEvent,
-  'attempt' | 'phase' | 'transition' | 'delayMilliseconds' | 'failure'>
+  'attempt' | 'phase' | 'transition' | 'delayMilliseconds' | 'waitReason' | 'failure'>
 
 export function observeRecovery(
   source: V2ProtocolTraceSource | undefined,
