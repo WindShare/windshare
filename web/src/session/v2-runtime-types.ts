@@ -54,6 +54,17 @@ export interface V2ReceiverSessionOptions {
   readonly protocolTrace?: V2ProtocolTraceSource
 }
 
+/** An absent handshake response is transport uncertainty, before session authority exists. */
+export class V2SessionHandshakeTimeoutError extends Error {
+  readonly timeoutMilliseconds: number
+
+  constructor(timeoutMilliseconds: number) {
+    super('Protocol session handshake timed out')
+    this.name = 'V2SessionHandshakeTimeoutError'
+    this.timeoutMilliseconds = timeoutMilliseconds
+  }
+}
+
 export class V2SessionRuntimeError extends Error {
   readonly scope: 'lane' | 'operation' | 'session'
 

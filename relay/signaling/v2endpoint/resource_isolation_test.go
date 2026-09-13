@@ -156,6 +156,12 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					for len(encoded) >= 4 && string(encoded[:4]) == v2.SessionCreditMagic {
+						_, encoded, err = client.Read(t.Context())
+						if err != nil {
+							t.Fatal(err)
+						}
+					}
 					frame, err := v2.ParseOpaqueRoute(encoded)
 					if err != nil || len(frame.Ciphertext) != size || binary.BigEndian.Uint32(frame.Ciphertext) != uint32(index) {
 						t.Fatalf("resumed transfer lost order or content at %d: %v", index, err)

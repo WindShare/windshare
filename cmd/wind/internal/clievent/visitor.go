@@ -7,6 +7,7 @@ type Visitor interface {
 	VisitSharingSubjectSelected(SharingSubjectSelected) error
 	VisitRelayConnected(RelayConnected) error
 	VisitRelayRecovering(RelayRecovering) error
+	VisitRelayAvailability(RelayAvailability) error
 	VisitContentPathSelected(ContentPathSelected) error
 	VisitFallback(Fallback) error
 	VisitTransferProgress(TransferProgress) error

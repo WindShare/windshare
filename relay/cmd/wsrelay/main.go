@@ -148,6 +148,14 @@ func run(ctx context.Context, args []string, onReady func(net.Addr) error, logf 
 	return runWithSTUNListeners(ctx, args, onReady, logf, stunonly.Listeners{})
 }
 
+func heartbeatLogTracer(logf func(string, ...any)) v2endpoint.HeartbeatTraceFunc {
+	return func(event v2endpoint.HeartbeatTrace) {
+		logf("wsrelay: heartbeat connection_id=%s generation=%d round=%d stage=%s timeout_ms=%d elapsed_ms=%d cause=%v",
+			event.Connection.ConnectionID(), event.Connection.LocalGeneration(), event.Round, event.Stage,
+			event.Timeout.Milliseconds(), event.Elapsed.Milliseconds(), event.Cause)
+	}
+}
+
 func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.Addr) error, logf func(string, ...any), stunListeners stunonly.Listeners) error {
 	flags := flag.NewFlagSet("wsrelay", flag.ContinueOnError)
 	stunConfig := registerSTUNFlags(flags)
@@ -227,14 +235,15 @@ func runWithSTUNListeners(ctx context.Context, args []string, onReady func(net.A
 	}
 	endpointServer, err := v2endpoint.New(v2endpoint.Config{
 		Registry: routes.registry, Challenges: challenges, RelayIdentity: endpoint.Identity,
-		WriteTimeout: *endpointWriteTimeout,
+		WriteTimeout:    *endpointWriteTimeout,
+		HeartbeatTracer: heartbeatLogTracer(logf),
 		AdmissionTracer: v2endpoint.AdmissionTraceFunc(func(event v2endpoint.AdmissionTrace) {
 			logf("wsrelay: admission connection_id=%s generation=%d session_id=%x phase=%s outcome=%s",
 				event.Connection.ConnectionID(), event.Connection.LocalGeneration(), event.SessionID, event.Phase, event.Outcome)
 		}),
 		ForwardTracer: v2endpoint.ForwardTraceFunc(func(event v2endpoint.ForwardTrace) {
-			logf("wsrelay: forward_pressure session_id=%x source_id=%s destination_id=%s stage=%s wait_ms=%d session_frames=%d session_bytes=%d connection_frames=%d connection_bytes=%d available_frames=%d available_bytes=%d",
-				event.SessionID, event.Source.ConnectionID(), event.Destination.ConnectionID(), event.Stage, event.Wait.Milliseconds(),
+			logf("wsrelay: forward_pressure session_id=%x source_id=%s destination_id=%s stage=%s session_frames=%d session_bytes=%d connection_frames=%d connection_bytes=%d available_frames=%d available_bytes=%d",
+				event.SessionID, event.Source.ConnectionID(), event.Destination.ConnectionID(), event.Stage,
 				event.SessionFrames, event.SessionBytes, event.ConnectionFrames, event.ConnectionBytes, event.AvailableFrames, event.AvailableBytes)
 		}),
 		RetirementTracer: v2endpoint.RetirementTraceFunc(func(event v2endpoint.RetirementTrace) {

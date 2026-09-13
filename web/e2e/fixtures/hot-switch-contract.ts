@@ -3,6 +3,13 @@ import type {
   V2PeerRecoveryTraceEvent,
 } from '../../src/connectivity/diagnostics'
 import type { V2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
+import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
+import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
+
+// Network completion refills the entire read-ahead window while output is gated.
+// The yielded block is already outside that window when it reaches the writer.
+export const HOT_SWITCH_INITIAL_BUFFERED_BLOCKS =
+  V2_BLOCK_BROKER_PARALLEL_READS * RANGE_READ_AHEAD_FACTOR + 1
 
 export interface HotSwitchDispatch {
   readonly dispatchSequence: number

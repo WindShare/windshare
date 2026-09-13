@@ -2,15 +2,15 @@ import { createHash } from 'node:crypto'
 
 import { expect, type Page, type TestInfo } from '@playwright/test'
 
-import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import { V2_TYPED_PEER_ERROR_CODES } from '../../src/connectivity/diagnostics'
 import {
   classifyNativePeerConnection,
   type NativeRtcCapabilityDiagnostic,
 } from '../../test/transport/webrtc/browser-capability'
-import type {
-  HotSwitchPageEvent,
-  HotSwitchPeerAttemptEvidence,
+import {
+  HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
+  type HotSwitchPageEvent,
+  type HotSwitchPeerAttemptEvidence,
 } from './hot-switch-contract'
 import {
   releasePageOutput,
@@ -32,7 +32,7 @@ import {
 
 /** One extra block makes the post-cut dispatch observable without a timing race. */
 export const HOT_SWITCH_TRANSFER_BYTES =
-  (V2_BLOCK_BROKER_PARALLEL_READS + 1) * DIRECT_TEST_BLOCK_BYTES
+  (HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + 1) * DIRECT_TEST_BLOCK_BYTES
 export const HOT_SWITCH_FILE_NAME = 'hot-switch.bin'
 
 const EVENT_TIMEOUT_MILLISECONDS = 30_000

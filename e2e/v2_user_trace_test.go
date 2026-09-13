@@ -840,6 +840,24 @@ func TestUserTraceV4DiagnosticContract(t *testing.T) {
 		})
 		recordVectors = append(recordVectors, filesystem)
 	}
+	recordVectors = append(recordVectors, base(len(recordVectors)+1, "relay_availability", map[string]any{
+		"available": 0, "total": 2, "terminal": 0, "ever_ready": true,
+	}))
+	recovery := base(len(recordVectors)+1, "relay_recovering", map[string]any{
+		"relay_authority": map[string]any{"scheme": "wss", "host": "relay.example", "port": 443},
+		"attempt":         2, "state": "waiting",
+		"details": map[string]any{
+			"share_instance": protocolSessionID, "connection_generation": "2", "next_delay_ms": "30000",
+			"slow_wait": true, "resume_registration": true, "terminal": false,
+		},
+	})
+	recovery["correlation"] = map[string]any{"protocol_session_id": protocolSessionID}
+	recordVectors = append(recordVectors, recovery)
+	recordVectors = append(recordVectors, base(len(recordVectors)+1, "relay_lifecycle", map[string]any{
+		"link_id": "1", "heartbeat_round": "2", "wait_ms": "45000", "timeout_ms": "45000",
+		"stage": "heartbeat_failed", "retirement_source": "none", "cause": "transport_failed",
+		"drain_cause": "none", "terminal": false,
+	}))
 
 	var encoded bytes.Buffer
 	for _, record := range recordVectors {

@@ -8,6 +8,23 @@ import {
 import { FakeTraceTime } from './test-support'
 
 describe('trace evidence under high-volume protocol traffic', () => {
+  it('protects connection outcomes without filling milestone reserves with healthy probes', () => {
+    const heartbeat = { connection_id: '1', relay_base: 'https://relay.invalid', round: '1', buffered_bytes: '0', elapsed_ms: 0, timeout_ms: 45000 }
+    for (const stage of ['probe', 'acknowledged', 'failed'] as const) {
+      expect(traceEventRetention({ eventName: 'relay_heartbeat', payload: { ...heartbeat, stage } }))
+        .toBe(stage === 'failed' ? 'outcome' : 'recent')
+    }
+    for (const [transition, retention] of [
+      ['attempt_started', 'recent'], ['attempt_failed', 'recent'], ['waiting', 'milestone'],
+      ['connected', 'milestone'], ['terminal', 'outcome'], ['retry_requested', 'recent'],
+    ] as const) {
+      expect(traceEventRetention({
+        eventName: 'connection_recovery',
+        payload: { generation_id: '1', attempt: '1', phase: 'fast', transition },
+      })).toBe(retention)
+    }
+  })
+
   it('retains cancellation and product milestones across a trace-11 sized burst within the original budgets', () => {
     const time = new FakeTraceTime()
     const recorder = new BoundedTraceRecorder<TraceEventObservationV2, number, number>({

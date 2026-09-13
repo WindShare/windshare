@@ -9,8 +9,8 @@ import {
 } from '../transport/relay/v2-receiver'
 
 import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from './relay-race'
-import { V2RelayReceiverError } from '../transport/relay/v2-receiver'
-import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
+import { isShareRecoveryFailure, isTerminalRecoveryFailure } from './recovery-failure'
+import { emitRelayHeartbeat } from '../diagnostics/trace/connection-payload'
 
 export const V2_RELAY_LANE_ADMISSION_TIMEOUT_MILLISECONDS = 30_000
 
@@ -73,7 +73,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   readonly #connectSession: (
     options: V2ReceiverSessionOptions,
   ) => Promise<V2ReceiverSessionRuntime>
-  readonly #stoppedRelays = new Map<string, RelayEndpointFailure>()
+  readonly #terminalRelays = new Map<string, RelayEndpointFailure>()
   #closed = false
 
   constructor(options: V2BrowserSessionFactoryOptions) {
@@ -96,17 +96,18 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
 
   async connectFresh(signal: AbortSignal): Promise<V2ProtocolGenerationCore> {
     this.#requireOpen()
-    const eligible = this.relayBases.filter((relayBase) => !this.#stoppedRelays.has(relayBase))
-    if (eligible.length === 0) throw new AggregateError([...this.#stoppedRelays.values()], 'All relay endpoints stopped')
+    const eligible = this.relayBases.filter((relayBase) => !this.#terminalRelays.has(relayBase))
+    if (eligible.length === 0) throw new AggregateError([...this.#terminalRelays.values()], 'All relay endpoints rejected this share')
     return firstUsableRelay(eligible, signal,
       (relayBase, attemptSignal) => this.#connectFreshRelay(relayBase, attemptSignal),
-      async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) })
+      async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) }, isShareRecoveryFailure)
   }
 
   async #connectFreshRelay(relayBase: string, signal: AbortSignal): Promise<V2ProtocolGenerationCore> {
-    const relay = await this.#dialValidatedRelay(relayBase, signal)
+    let session: V2ReceiverSessionRuntime | undefined
+    const relay = await this.#dialValidatedRelay(relayBase, signal, () => session)
     try {
-      const session = await this.#connectSession({
+      session = await this.#connectSession({
         descriptor: this.#descriptor,
         readSecret: this.#capability.readSecret,
         initialChannel: relay.channel,
@@ -132,7 +133,7 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   ): Promise<V2AttachedRelay> {
     this.#requireOpen()
     if (!this.relayBases.includes(relayBase)) throw new TypeError('Relay endpoint is not configured')
-    const relay = await this.#dialValidatedRelay(relayBase, signal)
+    const relay = await this.#dialValidatedRelay(relayBase, signal, () => session)
     const admission = relayAdmissionDeadline(signal)
     try {
       // A redial gets a new delivery route and a new logical lane grant. It
@@ -166,14 +167,22 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     this.#capability.shareIdRaw.fill(0)
   }
 
-  async #dialValidatedRelay(relayBase: string, signal: AbortSignal): Promise<V2RelayReceiverConnection> {
+  async #dialValidatedRelay(relayBase: string, signal: AbortSignal,
+    currentSession: () => V2ReceiverSessionRuntime | undefined,
+  ): Promise<V2RelayReceiverConnection> {
     signal.throwIfAborted()
-    const stopped = this.#stoppedRelays.get(relayBase)
-    if (stopped !== undefined) throw stopped.cause
-    const relay = await this.#dialRelay(relayBase, this.#capability, { signal }).catch((cause: unknown) => {
-      // STOP belongs to this delivery endpoint, and remains disabled across fresh sessions.
-      if (cause instanceof V2RelayReceiverError && cause.relayError?.code === V2_RELAY_ERROR.stopped) {
-        this.#stoppedRelays.set(relayBase, new RelayEndpointFailure(relayBase, cause))
+    const terminal = this.#terminalRelays.get(relayBase)
+    if (terminal !== undefined) throw terminal.cause
+    const relay = await this.#dialRelay(relayBase, this.#capability, { signal,
+      heartbeatTrace: event => emitRelayHeartbeat(this.#protocolTrace, event, relayBase, () => {
+        const session = currentSession()
+        return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+          shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }
+      }),
+    }).catch((cause: unknown) => {
+      // A permanent rejection belongs to this endpoint and remains disabled across generations.
+      if (isTerminalRecoveryFailure(cause)) {
+        this.#terminalRelays.set(relayBase, new RelayEndpointFailure(relayBase, cause))
       }
       throw cause
     })

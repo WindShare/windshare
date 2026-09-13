@@ -61,6 +61,8 @@ export const TRACE_EVENT_NAMES_V2 = Object.freeze([
   'request_scheduling',
   'lease_retirement',
   'operation_recovery',
+  'connection_recovery',
+  'relay_heartbeat',
   'peer_attempt',
   'peer_recovery',
   'lane_transition',
@@ -313,6 +315,29 @@ export interface TraceEventPayloadByNameV2 {
     | Readonly<{ transition: 'retry_available_lanes' | 'wait_for_generation' | 'exhausted' }>
     | Readonly<{ transition: 'wait_for_availability'; delay_ms: number }>
   )
+  readonly connection_recovery: Readonly<{
+    generation_id: string
+    share_id?: string
+    share_instance_id?: string
+    relay_base?: string
+    attempt: string
+    phase: 'initial' | 'fast' | 'waiting'
+    transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
+    delay_ms?: number
+    failure_detail?: string
+  }>
+  readonly relay_heartbeat: Readonly<{
+    connection_id: string
+    generation_id?: string
+    share_id?: string
+    share_instance_id?: string
+    relay_base: string
+    round: string
+    stage: 'probe' | 'acknowledged' | 'failed'
+    buffered_bytes: string
+    elapsed_ms: number
+    timeout_ms: number
+  }>
   readonly protocol_operation: ProtocolOperationPayloadV2
   readonly peer_attempt:
     | Readonly<{ stage: 'provider_fact'; fact: import('../../connectivity/peer-set/provider-facts').PeerProviderFact }>

@@ -31,20 +31,12 @@ func (s *Server) writeLoop(ctx context.Context, peer *connection) error {
 			}
 		default:
 		}
-		wroteSessionControl, err := s.writeSessionControls(ctx, peer)
+		wroteSessionTraffic, err := s.writeSessionTraffic(ctx, peer)
 		if err != nil {
 			peer.requestClose()
 			return err
 		}
-		if frame, ok := peer.takeForward(); ok {
-			if err := s.write(ctx, peer.socket, frame); err != nil {
-				peer.requestClose()
-				return err
-			}
-			s.completeForward(peer, frame)
-			continue
-		}
-		if wroteSessionControl {
+		if wroteSessionTraffic {
 			continue
 		}
 		select {
@@ -62,6 +54,27 @@ func (s *Server) writeLoop(ctx context.Context, peer *connection) error {
 	}
 }
 
+func (s *Server) writeSessionTraffic(ctx context.Context, peer *connection) (bool, error) {
+	// Atomic route publication can admit receivers before REGISTERED is
+	// written. Keep their traffic queued until the handshake response is on
+	// the wire; otherwise a valid session frame becomes a malformed greeting.
+	if !peer.handshakeComplete.Load() {
+		return false, nil
+	}
+	wroteControl, err := s.writeSessionControls(ctx, peer)
+	if err != nil {
+		return false, err
+	}
+	if frame, ok := peer.takeForward(); ok {
+		if err := s.writeSessionData(ctx, peer, frame); err != nil {
+			return false, err
+		}
+		s.completeForward(peer, frame)
+		return true, nil
+	}
+	return wroteControl, nil
+}
+
 func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bool, error) {
 	wrote := false
 	if retired, ok := peer.takeSessionRetirement(); ok {
@@ -69,12 +82,12 @@ func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bo
 		if err != nil {
 			return false, err
 		}
-		if err := s.write(ctx, peer.socket, encoded); err != nil {
+		if err := s.writeSessionData(ctx, peer, encoded); err != nil {
 			return false, err
 		}
 		wrote = true
 	}
-	credit, trace, ok := peer.takeSenderCredit()
+	credit, trace, ok := peer.takeForwardCredit()
 	if !ok {
 		return wrote, nil
 	}
@@ -82,7 +95,7 @@ func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bo
 	if err != nil {
 		return wrote, err
 	}
-	if err := s.write(ctx, peer.socket, encoded); err != nil {
+	if err := s.writeSessionData(ctx, peer, encoded); err != nil {
 		return wrote, err
 	}
 	if trace.Stage != "" {
@@ -92,6 +105,21 @@ func (s *Server) writeSessionControls(ctx context.Context, peer *connection) (bo
 		}
 	}
 	return true, nil
+}
+
+func (s *Server) writeSessionData(ctx context.Context, peer *connection, data []byte) error {
+	// A session cycle may contain retirement, credit, and content writes. Probe
+	// responses must wait for at most the current physical write, not that batch.
+	select {
+	case item := <-peer.control:
+		err := s.write(ctx, peer.socket, item.data)
+		item.done <- err
+		if err != nil {
+			return err
+		}
+	default:
+	}
+	return s.write(ctx, peer.socket, data)
 }
 
 func (s *Server) write(parent context.Context, socket BinaryConnection, data []byte) error {
@@ -119,14 +147,14 @@ func (peer *connection) sendControl(ctx context.Context, data []byte) error {
 	}
 }
 
-func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) (bool, <-chan struct{}, ForwardTrace) {
+func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) (bool, ForwardTrace) {
 	peer.sessionMu.Lock()
 	defer peer.sessionMu.Unlock()
 	if peer.closed.Load() {
-		return false, nil, ForwardTrace{}
+		return false, ForwardTrace{}
 	}
 	if _, active := peer.sessions[sessionID]; !active {
-		return false, nil, ForwardTrace{}
+		return false, ForwardTrace{}
 	}
 	peer.forwardMu.Lock()
 	defer peer.forwardMu.Unlock()
@@ -137,10 +165,7 @@ func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) 
 	}
 	if trace.SessionFrames >= MaximumSessionQueueFrames || trace.SessionBytes+len(encoded) > MaximumSessionQueueBytes ||
 		peer.forwardFrames >= MaximumForwardQueueFrames || peer.forwardBytes+len(encoded) > MaximumForwardQueueBytes {
-		if peer.forwardChanged == nil {
-			peer.forwardChanged = make(chan struct{})
-		}
-		return false, peer.forwardChanged, trace
+		return false, trace
 	}
 	if queue == nil {
 		queue = &forwardQueue{}
@@ -155,14 +180,7 @@ func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) 
 	case peer.wake <- struct{}{}:
 	default:
 	}
-	return true, nil, trace
-}
-
-func (peer *connection) forwardCapacityChangedLocked() {
-	if peer.forwardChanged != nil {
-		close(peer.forwardChanged)
-		peer.forwardChanged = nil
-	}
+	return true, trace
 }
 
 func (peer *connection) takeForward() ([]byte, bool) {
@@ -187,7 +205,6 @@ func (peer *connection) takeForward() ([]byte, bool) {
 		queue.bytes -= len(frame)
 		peer.forwardFrames--
 		peer.forwardBytes -= len(frame)
-		peer.forwardCapacityChangedLocked()
 		return frame, true
 	}
 	return nil, false

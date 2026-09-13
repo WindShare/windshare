@@ -99,6 +99,11 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 		v4TraceFields(v4TraceString, "scheme", "host"),
 		v4TraceFields(v4TraceInteger, "port"),
 	)
+	relayRecoveryDetails := v4TraceSchema(
+		v4TraceOptionalFields(v4TraceIdentity, "share_instance"),
+		v4TraceFields(v4TraceDecimal, "connection_generation", "next_delay_ms"),
+		v4TraceFields(v4TraceBool, "slow_wait", "resume_registration", "terminal"),
+	)
 	fault := v4TraceSchema(
 		v4TraceFields(v4TraceString, "domain", "scope"),
 		v4TraceFields(v4TraceInteger, "code"),
@@ -207,11 +212,16 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 			v4TraceOptionalFields(v4TraceDecimal, "file_bytes"),
 		),
 		"relay_connected": v4TraceSchema(v4TraceObjectField("relay_authority", relayAuthority, false)),
+		"relay_availability": v4TraceSchema(
+			v4TraceFields(v4TraceInteger, "available", "total", "terminal"),
+			v4TraceFields(v4TraceBool, "ever_ready"),
+		),
 		"relay_recovering": v4TraceSchema(
 			v4TraceObjectField("relay_authority", relayAuthority, false),
 			v4TraceFields(v4TraceInteger, "attempt"),
 			v4TraceFields(v4TraceString, "state"),
 			v4TraceObjectField("failure", failure, true),
+			v4TraceObjectField("details", relayRecoveryDetails, true),
 		),
 		"content_path_selected": v4TraceSchema(v4TraceFields(v4TraceString, "content_path")),
 		"fallback": v4TraceSchema(
@@ -250,7 +260,7 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 		"relay_lifecycle": v4TraceSchema(
 			v4TraceFields(v4TraceDecimal, "link_id"),
 			v4TraceOptionalFields(v4TraceRelaySessionIdentity, "relay_session_id"),
-			v4TraceOptionalFields(v4TraceDecimal, "send_operation_id", "dropped"),
+			v4TraceOptionalFields(v4TraceDecimal, "send_operation_id", "dropped", "heartbeat_round", "wait_ms", "timeout_ms"),
 			v4TraceFields(v4TraceString, "stage", "retirement_source", "cause", "drain_cause"),
 			v4TraceOptionalFields(v4TraceString, "disposition"),
 			v4TraceFields(v4TraceBool, "terminal"),

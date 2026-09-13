@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/runtrace"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/internal/testoutputroot"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -64,15 +65,17 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	connections := make(chan *relayv2.ReceiverConnection, 8)
 	trace := &disconnectingGetTrace{recordingUserTrace: newRecordingUserTrace(), connections: connections}
 	var dials, primaryAttempts, stoppedAttempts atomic.Int32
+	recoveryClock := &getRecoveryClock{}
 	output := testoutputroot.New(t)
 	getErrors := &lockedTestBuffer{}
 	receiver := &App{Stdout: &lockedTestBuffer{}, Stderr: getErrors, Stdin: strings.NewReader(""),
+		receiverRecoveryOptions: relayset.ReceiverRecoveryOptions{Clock: recoveryClock, Jitter: func(delay time.Duration) time.Duration { return delay }},
 		receiverDial: func(ctx context.Context, config relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
 			if config.RelayBaseURL == stoppedEndpoint.URL {
 				stoppedAttempts.Add(1)
 				return nil, &relayv2.RelayError{Code: v2.ErrorStopped}
 			}
-			if primaryAttempts.Add(1) == 2 {
+			if primaryAttempts.Add(1) > 1 && recoveryClock.Now().Before(time.Unix(181, 0)) {
 				return nil, errors.New("transient endpoint failure during fresh join")
 			}
 			connection, err := relayv2.DialReceiver(ctx, config)
@@ -92,7 +95,7 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	if code != ExitOK {
 		t.Fatalf("get=%d dials=%d stderr=%q", code, dials.Load(), getErrors.String())
 	}
-	if dials.Load() != 2 || primaryAttempts.Load() != 3 || stoppedAttempts.Load() != 2 {
+	if dials.Load() != 2 || primaryAttempts.Load() < 4 || stoppedAttempts.Load() != 1 {
 		t.Fatalf("session generations=%d primary attempts=%d stopped attempts=%d", dials.Load(), primaryAttempts.Load(), stoppedAttempts.Load())
 	}
 	actual, err := os.ReadFile(filepath.Join(output.RootPath, "file.bin"))
@@ -102,13 +105,21 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	trace.mu.Lock()
 	events := append([]clievent.Event(nil), trace.events...)
 	trace.mu.Unlock()
+	waited, restored := false, false
 	jobs := map[clievent.TransferJobID]bool{}
 	sessions := map[clievent.ProtocolSessionID]bool{}
 	for _, event := range events {
+		if recovery, ok := event.(clievent.RelayRecovering); ok {
+			waited = waited || recovery.State() == clievent.RelayRecoveryWaiting
+			restored = restored || recovery.State() == clievent.RelayRecoverySucceeded
+		}
 		if lifecycle, ok := event.(clievent.TransferLifecycleObserved); ok {
 			jobs[lifecycle.TransferJobID()] = true
 			sessions[lifecycle.ProtocolSessionID()] = true
 		}
+	}
+	if !waited || !restored {
+		t.Fatalf("waiting=%v restored=%v", waited, restored)
 	}
 	if len(jobs) != 1 || len(sessions) != 2 {
 		t.Fatalf("job identities=%d session generations=%d", len(jobs), len(sessions))

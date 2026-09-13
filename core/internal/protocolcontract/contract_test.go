@@ -300,7 +300,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 	return []vectorFile{
 		{Version: 1, Kind: "v2-identity", Description: "Suite 0x02 link identity and domain-separated HKDF contract.", Cases: []any{identityCase(t, f)}},
 		{Version: 1, Kind: "v2-sender-objects", Description: "Canonical CBOR, AES-GCM and Ed25519 transport-neutral sender objects.", Cases: objectCases},
-		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, WS2U/D/O/F, WS2A/B/N, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
+		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
 	}
@@ -726,6 +726,16 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	stoppedError := slices.Concat(
 		[]byte("WS2E"), []byte{wireVersion, 0}, u16(11), u32(0),
 	)
+	resumeStaleError := slices.Concat(
+		[]byte("WS2E"), []byte{wireVersion, 0}, u16(12), u32(0),
+	)
+	connectionProbeNonce := uint64(0x0102030405060708)
+	connectionProbe := slices.Concat(
+		[]byte("WS2H"), []byte{wireVersion, 0, 0, 0}, u64(connectionProbeNonce),
+	)
+	connectionProbeAck := slices.Concat(
+		[]byte("WS2A"), []byte{wireVersion, 0, 0, 0}, u64(connectionProbeNonce),
+	)
 
 	return []any{
 		map[string]any{
@@ -766,7 +776,10 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"opaqueRouteB64": b64(opaqueRoute), "sessionRetiredB64": b64(sessionRetired),
 			"sessionCreditB64": b64(sessionCredit), "sessionAdmittedB64": b64(sessionAdmitted),
 			"sessionRetiredRelaySessionIdB64": b64(opaqueRelaySessionID), "stoppedErrorB64": b64(stoppedError),
+			"resumeStaleErrorB64": b64(resumeStaleError), "connectionProbeNonce": fmt.Sprint(connectionProbeNonce),
+			"connectionProbeB64": b64(connectionProbe), "connectionProbeAckB64": b64(connectionProbeAck),
 		},
+		relaySessionCreditVectors(opaqueRelaySessionID),
 		map[string]any{
 			"name": "sender-signed-operation-error", "shareInstanceB64": b64(f.shareInstance),
 			"protocolSessionIdB64": b64(protocolSessionID), "laneId": laneID, "laneEpoch": uint32(0), "sequence": "0",

@@ -6,7 +6,7 @@ import { V2RelayReceiverError } from '../../src/transport/relay/v2-receiver'
 import { V2_RELAY_ERROR } from '../../src/transport/relay/v2-protocol'
 
 describe('receiver connection observations', () => {
-  it('keeps interruption and exhausted retries distinct from confirmed share ending', () => {
+  it('keeps fast retry exhaustion in automatic waiting without ending the share', () => {
     const state = new ReceiverConnectionState()
     const events: ReceiverConnectionSnapshot[] = []
     state.subscribe(snapshot => events.push(snapshot))
@@ -15,7 +15,7 @@ describe('receiver connection observations', () => {
     state.connected()
     state.failed(new GenerationRecoveryExhaustedError())
     expect(events).toEqual([{ kind: 'connected' }, { kind: 'reconnecting' }, { kind: 'connected' },
-      { kind: 'unavailable', reason: 'recovery-exhausted' }])
+      { kind: 'reconnecting', phase: 'waiting' }])
   })
 
   it('requires authenticated replacement or all stopped endpoints and isolates observers', () => {

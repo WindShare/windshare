@@ -1,5 +1,7 @@
 package clievent
 
+import "time"
+
 type RelayLifecycleSpec struct {
 	Command          Command
 	LinkID           uint64
@@ -12,6 +14,9 @@ type RelayLifecycleSpec struct {
 	Cause            RelayLifecycleCause
 	DrainCause       RelayLifecycleCause
 	Dropped          uint64
+	HeartbeatRound   uint64
+	Wait             time.Duration
+	Timeout          time.Duration
 }
 
 type RelayLifecycleObserved struct{ spec RelayLifecycleSpec }
@@ -59,7 +64,10 @@ func (value RelayLifecycleObserved) Cause() RelayLifecycleCause { return value.s
 func (value RelayLifecycleObserved) DrainCause() RelayLifecycleCause {
 	return value.spec.DrainCause
 }
-func (value RelayLifecycleObserved) Dropped() uint64 { return value.spec.Dropped }
+func (value RelayLifecycleObserved) Dropped() uint64        { return value.spec.Dropped }
+func (value RelayLifecycleObserved) HeartbeatRound() uint64 { return value.spec.HeartbeatRound }
+func (value RelayLifecycleObserved) Wait() time.Duration    { return value.spec.Wait }
+func (value RelayLifecycleObserved) Timeout() time.Duration { return value.spec.Timeout }
 func (value RelayLifecycleObserved) Accept(visitor Visitor) error {
 	return acceptRelayLifecycleObserved(visitor, value)
 }

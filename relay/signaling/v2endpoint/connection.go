@@ -37,21 +37,22 @@ type connection struct {
 	control chan controlWrite
 	wake    chan struct{}
 
-	forwardMu      sync.Mutex
-	forward        map[v2.RelaySessionID]*forwardQueue
-	forwardOrder   []v2.RelaySessionID
-	forwardCursor  int
-	forwardFrames  int
-	forwardBytes   int
-	forwardChanged chan struct{}
+	forwardMu     sync.Mutex
+	forward       map[v2.RelaySessionID]*forwardQueue
+	forwardOrder  []v2.RelaySessionID
+	forwardCursor int
+	forwardFrames int
+	forwardBytes  int
 
-	sessionMu   sync.Mutex
-	sessions    map[v2.RelaySessionID]struct{}
-	windows     map[v2.RelaySessionID]*senderWindow
-	retirements map[v2.RelaySessionID]struct{}
-	closed      atomic.Bool
-	admitted    chan struct{}
-	admitOnce   sync.Once
+	receiverCredits   receiverCreditPool
+	sessionMu         sync.Mutex
+	sessions          map[v2.RelaySessionID]struct{}
+	windows           map[v2.RelaySessionID]*forwardWindow
+	retirements       map[v2.RelaySessionID]struct{}
+	closed            atomic.Bool
+	handshakeComplete atomic.Bool
+	admitted          chan struct{}
+	admitOnce         sync.Once
 }
 
 func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel context.CancelFunc) *connection {
@@ -59,7 +60,7 @@ func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel co
 		ref: ref, socket: socket, cancel: cancel,
 		control: make(chan controlWrite, MaximumControlQueueFrames), wake: make(chan struct{}, 1),
 		forward: make(map[v2.RelaySessionID]*forwardQueue), sessions: make(map[v2.RelaySessionID]struct{}),
-		windows:     make(map[v2.RelaySessionID]*senderWindow),
+		windows:     make(map[v2.RelaySessionID]*forwardWindow),
 		retirements: make(map[v2.RelaySessionID]struct{}),
 		admitted:    make(chan struct{}),
 	}
@@ -176,12 +177,17 @@ func (peer *connection) requestClose() bool {
 	peer.cancelOnce.Do(func() {
 		applied = true
 		peer.closed.Store(true)
-		peer.forwardMu.Lock()
-		peer.forwardCapacityChangedLocked()
-		peer.forwardMu.Unlock()
 		peer.cancel()
 	})
 	return applied
+}
+
+func (peer *connection) completeHandshake() {
+	peer.handshakeComplete.Store(true)
+	select {
+	case peer.wake <- struct{}{}:
+	default:
+	}
 }
 
 func (peer *connection) setRole(role connectionRole, share v2.ShareID) {
@@ -212,9 +218,11 @@ func (peer *connection) addSession(id v2.RelaySessionID) bool {
 		return true
 	}
 	peer.sessions[id] = struct{}{}
+	window := &forwardWindow{}
 	if peer.roleValue() == roleSender {
-		peer.windows[id] = &senderWindow{frames: v2.SenderWindowFrames, bytes: v2.SenderWindowBytes}
+		window.frames, window.bytes = v2.SenderWindowFrames, v2.SenderWindowBytes
 	}
+	peer.windows[id] = window
 	return true
 }
 
@@ -238,9 +246,9 @@ func (peer *connection) removeSession(id v2.RelaySessionID) bool {
 			}
 		}
 	}
-	peer.forwardCapacityChangedLocked()
 	peer.forwardMu.Unlock()
 	peer.sessionMu.Unlock()
+	peer.receiverCredits.remove(id)
 	return existed
 }
 

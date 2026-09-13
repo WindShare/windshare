@@ -264,8 +264,8 @@ func (l *link) takeRequest() (*sendRequest, bool) {
 			continue
 		}
 		request := queue.requests[0]
-		if !l.fixed && request.kind == sendRoutedFrame {
-			window := l.senderWindowLocked(id)
+		if request.kind == sendRoutedFrame {
+			window := l.sendWindowLocked(id)
 			if window.frames == 0 || window.bytes < len(request.data) {
 				continue
 			}

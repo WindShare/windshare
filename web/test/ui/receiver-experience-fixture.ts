@@ -26,6 +26,7 @@ export function experienceController(snapshot: V2ReceiverSnapshot): V2ReceiverCo
   return {
     subscribe: vi.fn(() => () => undefined), getSnapshot: vi.fn(() => snapshot),
     submitKey: vi.fn(), toggleSelection: vi.fn(), openDirectory: vi.fn(), openBreadcrumb: vi.fn(),
+    requestReconnect: vi.fn(), continueJoinWaiting: vi.fn(), cancelJoin: vi.fn(),
     showPage: vi.fn(), retryDirectory: vi.fn(), previewFile: vi.fn(), cancelPreview: vi.fn(),
     seekPreview: vi.fn(), previewMediaPresented: vi.fn(), previewMediaFailed: vi.fn(),
     chooseArtifact: vi.fn(), retryOutputConfirmation: vi.fn(), performLifecycleAction: vi.fn(),

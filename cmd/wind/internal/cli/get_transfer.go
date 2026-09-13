@@ -4,14 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/connectivity/relayset"
-	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"path/filepath"
-	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/v2peer/peerset"
 	"github.com/windshare/windshare/connectivity/v2signal"
-	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/osfs"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -72,7 +71,112 @@ func (a *App) prepareGetOutput(
 	}, ExitOK
 }
 
+type getReceiverRecovery struct {
+	owner       *relayset.ReceiverRecovery
+	config      relayset.ReceiverConfig
+	observation getObservation
+}
+
+func (a *App) connectGetReceiver(ctx context.Context, request getRequest, observation getObservation) (*getReceiverSession, int) {
+	options := a.receiverRecoveryOptions
+	options.WaitTimeout = request.waitTimeout
+	options.Observe = observation.receiverRecovery
+	owner, err := relayset.NewReceiverRecovery(options)
+	if err != nil {
+		return nil, observation.commandFailure(ExitFailure, err)
+	}
+	recovery := &getReceiverRecovery{
+		owner:       owner,
+		observation: observation,
+		config: relayset.ReceiverConfig{
+			Dial: a.receiverDial,
+			Receiver: liveshare.ReceiverConfig{
+				Capability: request.link, ContentRoutePolicy: receiverRoutePolicy(request.connectivity),
+				PeerControls: v2signal.ReceiverControlValidator{}, ProtocolObservations: observation.protocolObservations(),
+				LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
+			},
+			DialOptions: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
+			Connected: func(connection *relayv2.ReceiverConnection) {
+				observation.registerRelayConnection(connection)
+				observation.relayConnected(connection.Endpoint())
+			},
+		},
+	}
+	session, err := recovery.open(ctx, owner.Join)
+	if err != nil {
+		var rejection *relayv2.RelayError
+		var joined *relayset.ReceiverJoinFailure
+		if errors.As(err, &joined) && len(joined.RetryEndpoints()) == 0 &&
+			errors.As(err, &rejection) && rejection.Code == v2.ErrorStopped {
+			a.recordProcessTrace(processTraceGetComponent, processTraceReceiverJoinStopped, testrun.OutcomeFailed)
+		}
+		return nil, observation.commandFailure(ExitNetwork, err)
+	}
+	return session, ExitOK
+}
+
+func (recovery *getReceiverRecovery) replace(ctx context.Context) (*getReceiverSession, error) {
+	return recovery.open(ctx, recovery.owner.Replace)
+}
+
+func (recovery *getReceiverRecovery) open(ctx context.Context, connect func(context.Context, relayset.ReceiverConfig) (*relayset.Receiver, error)) (*getReceiverSession, error) {
+	set, err := connect(ctx, recovery.config)
+	if err != nil {
+		return nil, err
+	}
+	runtime, connection, err := set.WaitReady(ctx)
+	if err != nil {
+		set.Close()
+		return nil, err
+	}
+	recovery.observation.registerLaneSet(runtime.LaneSet())
+	return &getReceiverSession{relays: set, connection: connection, runtime: runtime, recovery: recovery}, nil
+}
+
+func (observation getObservation) receiverRecovery(value relayset.ReceiverRecoveryObservation) {
+	authority, err := commandprojection.NormalizeRelayAuthority(value.Endpoint)
+	if err != nil {
+		observation.lose(clievent.ObserverLossRelayLifecycle, err)
+		return
+	}
+	var state clievent.RelayRecoveryState
+	var failure clievent.Failure
+	switch value.Phase {
+	case relayset.ReceiverRecoveryConnecting:
+		state = clievent.RelayRecoveryStarted
+	case relayset.ReceiverRecoveryConnected:
+		if value.Attempt == 1 {
+			return
+		}
+		state = clievent.RelayRecoverySucceeded
+	case relayset.ReceiverRecoveryWaiting:
+		state = clievent.RelayRecoveryWaiting
+	case relayset.ReceiverRecoveryRetrying, relayset.ReceiverRecoveryTerminal:
+		state = clievent.RelayRecoveryFailed
+		failure, _ = commandprojection.ClassifyError(value.Err)
+		if !failure.Valid() {
+			failure, _ = clievent.NewFailure(clievent.FailureRelayTransport)
+		}
+	default:
+		return
+	}
+	details := clievent.RelayRecoveryDetails{
+		Generation: value.ConnectionGeneration, Slow: value.Phase == relayset.ReceiverRecoveryWaiting,
+		Terminal: value.Phase == relayset.ReceiverRecoveryTerminal, NextDelay: value.Delay,
+	}
+	if value.ProtocolSessionID != ([16]byte{}) {
+		details.ProtocolSessionID, _ = clievent.NewProtocolSessionID(value.ProtocolSessionID[:])
+	}
+	event, err := clievent.NewRelayRecoveryObservation(clievent.CommandGet, authority, value.Attempt, state, failure, details)
+	if err != nil {
+		observation.lose(clievent.ObserverLossRelayLifecycle, err)
+		return
+	}
+	observation.publish(event)
+}
+
 type getReceiverSession struct {
+	recovery   *getReceiverRecovery
 	relays     *relayset.Receiver
 	connection *relayv2.ReceiverConnection
 	prepared   *liveshare.PreparedReceiver
@@ -96,54 +200,6 @@ func (session *getReceiverSession) Close() {
 	if session.connection != nil {
 		_ = session.connection.Close()
 	}
-}
-
-func (a *App) connectGetReceiver(
-	ctx context.Context,
-	capability link.Link,
-	policy ConnectivityPolicy,
-	observation getObservation,
-) (*getReceiverSession, int) {
-	session, err := a.openGetReceiver(ctx, capability, policy, observation)
-	if err != nil {
-		return nil, observation.commandFailure(ExitNetwork, err)
-	}
-	return session, ExitOK
-}
-
-func (a *App) openGetReceiver(ctx context.Context, capability link.Link, policy ConnectivityPolicy, observation getObservation, join ...context.Context) (*getReceiverSession, error) {
-	set, err := relayset.NewReceiver(ctx, relayset.ReceiverConfig{
-		Dial: a.receiverDial,
-		Receiver: liveshare.ReceiverConfig{
-			Capability: capability, ContentRoutePolicy: receiverRoutePolicy(policy),
-			PeerControls: v2signal.ReceiverControlValidator{}, ProtocolObservations: observation.protocolObservations(),
-			LaneSettlementObservationCapacity: observation.laneSettlementObservationCapacity(),
-		},
-		DialOptions: relayv2.DialOptions{LifecycleObservationCapacity: observation.relayObservationCapacity()},
-		Connected: func(connection *relayv2.ReceiverConnection) {
-			observation.registerRelayConnection(connection)
-			observation.relayConnected(connection.Endpoint())
-		},
-	})
-	if err != nil {
-		return nil, err
-	}
-	wait := ctx
-	if len(join) != 0 {
-		wait = join[0]
-	}
-	runtime, connection, err := set.WaitReady(wait)
-	if err != nil {
-		set.Close()
-		var rejection *relayv2.RelayError
-		var joined *relayset.ReceiverJoinFailure
-		if errors.As(err, &joined) && len(joined.RetryEndpoints()) == 0 && errors.As(err, &rejection) && rejection.Code == v2.ErrorStopped {
-			a.recordProcessTrace(processTraceGetComponent, processTraceReceiverJoinStopped, testrun.OutcomeFailed)
-		}
-		return nil, err
-	}
-	observation.registerLaneSet(runtime.LaneSet())
-	return &getReceiverSession{relays: set, connection: connection, runtime: runtime}, nil
 }
 
 type getTransferExecution struct {
@@ -468,31 +524,5 @@ func receiverRoutePolicy(policy ConnectivityPolicy) transfer.ContentRoutePolicy 
 		return transfer.ContentRouteRelayOnly
 	default:
 		return transfer.ContentRouteAll
-	}
-}
-
-func (a *App) recoverGetReceiver(ctx context.Context, request getRequest, observation getObservation) (*getReceiverSession, error) {
-	lifetime, cancel := context.WithTimeout(ctx, getSessionRecoveryWindow)
-	defer cancel()
-	for {
-		session, err := a.openGetReceiver(ctx, request.link, request.connectivity, observation, lifetime)
-		if err == nil {
-			return session, nil
-		}
-		var joinFailure *relayset.ReceiverJoinFailure
-		if !errors.As(err, &joinFailure) {
-			return nil, err
-		}
-		request.link.Relays = joinFailure.RetryEndpoints()
-		if len(request.link.Relays) == 0 {
-			return nil, err
-		}
-		timer := time.NewTimer(getRelayStartingRetryDelay)
-		select {
-		case <-lifetime.Done():
-			timer.Stop()
-			return nil, errors.Join(err, lifetime.Err())
-		case <-timer.C:
-		}
 	}
 }

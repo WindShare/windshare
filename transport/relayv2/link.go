@@ -13,10 +13,11 @@ import (
 var nextLinkID atomic.Uint64
 
 type link struct {
-	id     uint64
-	socket BinarySocket
-	ctx    context.Context
-	cancel context.CancelFunc
+	id        uint64
+	socket    BinarySocket
+	ctx       context.Context
+	cancel    context.CancelFunc
+	heartbeat HeartbeatConfig
 
 	writeWake chan struct{}
 	writeMu   sync.Mutex
@@ -123,6 +124,7 @@ func (l *link) traceTransition(channel *Channel, transition retirementTransition
 func (l *link) start() {
 	go l.readLoop()
 	go l.writeLoop()
+	go l.heartbeatLoop()
 }
 
 func (l *link) readLoop() {
@@ -147,7 +149,7 @@ func (l *link) readLoop() {
 		}
 		if string(encoded[:4]) == v2.SessionCreditMagic {
 			credit, err := v2.ParseSessionCredit(encoded)
-			if err != nil || l.fixed || !l.replenishCredit(credit) {
+			if err != nil || !l.replenishCredit(credit) {
 				l.stop(ErrProtocol)
 				return
 			}

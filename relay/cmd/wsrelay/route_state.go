@@ -32,6 +32,12 @@ func openRelayRoutes(
 		logf("wsrelay: stop share_id=%x stop_id=%x outcome=%s active_routes=%d route_capacity=%d error=%v",
 			event.ShareID, event.StopID, event.Outcome, event.ActiveRoutes, event.RouteCapacity, event.Err)
 	})
+	config.ResumeTracer = v2route.ResumeTraceFunc(func(event v2route.ResumeTrace) {
+		logf("wsrelay: resume share_id=%x share_instance=%x phase=%s outcome=%s expected_generation=%d current_generation=%d expected_owner_generation=%d new_owner_generation=%d retired_sessions=%d error=%v",
+			event.ShareID, event.ShareInstance, event.Phase, event.Outcome,
+			event.ExpectedGeneration, event.CurrentGeneration, event.ExpectedOwnerGeneration,
+			event.NewOwnerGeneration, event.RetiredSessions, event.Err)
+	})
 	registry, err := v2route.New(ctx, config)
 	if err != nil {
 		return relayRouteState{}, fmt.Errorf("wsrelay: initialize route registry: %w", errors.Join(err, tombstones.Close()))

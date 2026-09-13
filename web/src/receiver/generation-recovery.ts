@@ -7,7 +7,7 @@ const RECOVERY_ATTEMPT_MILLISECONDS = 45_000
 
 export class GenerationRecoveryExhaustedError extends Error {
   constructor() {
-    super('The connection could not recover within its budget. Resume the download when the sender is available.')
+    super('Fast connection recovery capacity is exhausted; waiting to retry')
     this.name = 'GenerationRecoveryExhaustedError'
   }
 }
@@ -51,6 +51,14 @@ export class GenerationRecoveryBudget {
     }
   }
 
+  nextCapacityMilliseconds(now: number): number {
+    this.#refill(now)
+    return Math.ceil(Math.max(0,
+      (1 - this.#attempts) * RECOVERY_REFILL_MILLISECONDS / RECOVERY_ATTEMPT_CAPACITY,
+      (RECOVERY_ATTEMPT_MILLISECONDS - this.#milliseconds) *
+        RECOVERY_REFILL_MILLISECONDS / RECOVERY_TIME_CAPACITY_MILLISECONDS))
+  }
+
   #refill(now: number): void {
     if (!Number.isFinite(now) || (this.#updatedAt !== undefined && now < this.#updatedAt)) {
       throw new RangeError('Generation recovery clock must be monotonic')
@@ -77,10 +85,12 @@ export async function runGenerationRecovery<T>(options: {
   const timer = setTimeout(() => controller.abort(new Error('Connection recovery attempt timed out')),
     options.reservation.milliseconds)
   if (options.parent.aborted) abort()
+  let interrupt: (() => void) | undefined
   try {
     controller.signal.throwIfAborted()
     const interrupted = new Promise<never>((_resolve, reject) => {
-      controller.signal.addEventListener('abort', () => reject(controller.signal.reason), { once: true })
+      interrupt = () => reject(controller.signal.reason)
+      controller.signal.addEventListener('abort', interrupt, { once: true })
     })
     const work = options.connect(controller.signal).then(async (value) => {
       if (controller.signal.aborted) {
@@ -93,6 +103,7 @@ export async function runGenerationRecovery<T>(options: {
   } finally {
     clearTimeout(timer)
     options.parent.removeEventListener('abort', abort)
+    if (interrupt !== undefined) controller.signal.removeEventListener('abort', interrupt)
     options.reservation.finish(options.now())
   }
 }
