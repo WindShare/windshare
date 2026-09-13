@@ -99,7 +99,8 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     const eligible = this.relayBases.filter((relayBase) => !this.#terminalRelays.has(relayBase))
     if (eligible.length === 0) throw new AggregateError([...this.#terminalRelays.values()], 'All relay endpoints rejected this share')
     return firstUsableRelay(eligible, signal,
-      (relayBase, attemptSignal) => this.#connectFreshRelay(relayBase, attemptSignal),
+      (relayBase, attemptSignal) => this.#attemptRelay(relayBase, attemptSignal,
+        () => this.#connectFreshRelay(relayBase, attemptSignal)),
       async (core) => { await Promise.allSettled([core.session.close(), core.relay.close()]) }, isShareRecoveryFailure)
   }
 
@@ -133,6 +134,14 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
   ): Promise<V2AttachedRelay> {
     this.#requireOpen()
     if (!this.relayBases.includes(relayBase)) throw new TypeError('Relay endpoint is not configured')
+    return this.#attemptRelay(relayBase, signal, () => this.#attachRelay(session, signal, relayBase))
+  }
+
+  async #attachRelay(
+    session: V2ReceiverSessionRuntime,
+    signal: AbortSignal,
+    relayBase: string,
+  ): Promise<V2AttachedRelay> {
     const relay = await this.#dialValidatedRelay(relayBase, signal, () => session)
     const admission = relayAdmissionDeadline(signal)
     try {
@@ -167,24 +176,31 @@ export class V2BrowserSessionFactory implements V2ReceiverSessionFactory {
     this.#capability.shareIdRaw.fill(0)
   }
 
-  async #dialValidatedRelay(relayBase: string, signal: AbortSignal,
-    currentSession: () => V2ReceiverSessionRuntime | undefined,
-  ): Promise<V2RelayReceiverConnection> {
+  async #attemptRelay<T>(relayBase: string, signal: AbortSignal, connect: () => Promise<T>): Promise<T> {
     signal.throwIfAborted()
     const terminal = this.#terminalRelays.get(relayBase)
     if (terminal !== undefined) throw terminal.cause
+    try {
+      return await connect()
+    } catch (cause) {
+      // Dialing, descriptor validation and admission belong to the same endpoint.
+      // Remember permanent rejections across generations, but never remember a lost race as one.
+      if (!signal.aborted && isTerminalRecoveryFailure(cause) && !isShareRecoveryFailure(cause)) {
+        this.#terminalRelays.set(relayBase, new RelayEndpointFailure(relayBase, cause))
+      }
+      throw cause
+    }
+  }
+
+  async #dialValidatedRelay(relayBase: string, signal: AbortSignal,
+    currentSession: () => V2ReceiverSessionRuntime | undefined,
+  ): Promise<V2RelayReceiverConnection> {
     const relay = await this.#dialRelay(relayBase, this.#capability, { signal,
       heartbeatTrace: event => emitRelayHeartbeat(this.#protocolTrace, event, relayBase, () => {
         const session = currentSession()
         return { correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
           shareId: this.#capability.shareId, shareInstanceId: this.#descriptor.shareInstanceId }
       }),
-    }).catch((cause: unknown) => {
-      // A permanent rejection belongs to this endpoint and remains disabled across generations.
-      if (isTerminalRecoveryFailure(cause)) {
-        this.#terminalRelays.set(relayBase, new RelayEndpointFailure(relayBase, cause))
-      }
-      throw cause
     })
     try {
       const candidate = await this.#openDescriptor(relay.descriptorObject, this.#capability)

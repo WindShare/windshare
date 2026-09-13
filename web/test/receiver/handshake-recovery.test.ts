@@ -9,7 +9,10 @@ import type { ReceiverConnectionSnapshot } from '../../src/receiver/connection-s
 import { isTerminalRecoveryFailure } from '../../src/receiver/recovery-failure'
 import { V2SessionHandshakeTimeoutError } from '../../src/session/v2-runtime-types'
 import { V2_SESSION_HANDSHAKE_TIMEOUT_MILLISECONDS } from '../../src/session/v2-runtime'
+import * as relayReceiver from '../../src/transport/relay/v2-receiver'
 import type { V2RelayReceiverConnection } from '../../src/transport/relay/v2-receiver'
+import { decodeV2DescriptorDelivery } from '../../src/transport/relay/v2-protocol'
+import { joinBrowserRelays } from '../../src/receiver/browser-join'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
 import { identity, namedCase, senderObjects } from '../protocol/r0-contract-support'
 import { deferred } from './v2-supervisor-fixture'
@@ -63,11 +66,16 @@ class HandshakeChannel implements FrameChannel {
   }
 }
 
-async function factoryFixture() {
+async function shareFixture() {
   const capability = { suite: 2 as const, readSecret: b64ToBytes(identity.readSecretB64).slice(),
     pkHash: b64ToBytes(identity.pkHashB64).slice(), shareIdRaw: b64ToBytes(identity.shareIdRawB64).slice(), shareId: identity.shareId }
   const descriptorObject = b64ToBytes(senderObjects.find(value => value.domain === 'windshare/v2 object/descriptor')!.objectB64).slice()
   const descriptor = await openV2ShareDescriptor(descriptorObject, capability)
+  return { capability, descriptorObject, descriptor }
+}
+
+async function factoryFixture() {
+  const { capability, descriptorObject, descriptor } = await shareFixture()
   const channels: HandshakeChannel[] = []
   const control = { response: 'valid' as Response, dialed: deferred<HandshakeChannel>() }
   const factory = new V2BrowserSessionFactory({ relayBases: ['https://relay.example'], capability, descriptor, descriptorObject,
@@ -83,9 +91,58 @@ async function factoryFixture() {
   return { factory, descriptor, channels, control }
 }
 
-afterEach(() => vi.useRealTimers())
+afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks() })
 
 describe('production browser handshake recovery', () => {
+  it.each(['malformed', 'signature'] as const)('joins through a healthy relay after another supplies %s data', async failure => {
+    vi.useFakeTimers()
+    const { capability, descriptorObject } = await shareFixture()
+    const healthy = new HandshakeChannel('valid')
+    const ready = deferred<void>()
+    const rejected = deferred<void>()
+    const invalidObject = descriptorObject.slice()
+    invalidObject[invalidObject.length - 1] = invalidObject.at(-1)! ^ 1
+    let healthySignal: AbortSignal | undefined
+    const dial = vi.spyOn(relayReceiver, 'dialV2RelayReceiver').mockImplementation(async (base, _key, options) => {
+      if (base === 'invalid') {
+        if (failure === 'malformed') {
+          rejected.resolve()
+          decodeV2DescriptorDelivery(Uint8Array.of(0))
+        }
+        return { endpoint: {} as V2RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+          descriptorObject: invalidObject, channel: new HandshakeChannel('silent'),
+          close: async () => { rejected.resolve() } }
+      }
+      healthySignal = options?.signal
+      await ready.promise
+      return { endpoint: {} as V2RelayReceiverConnection['endpoint'], relaySessionId: new Uint8Array(8),
+        descriptorObject, channel: healthy, close: () => healthy.close() }
+    })
+    const parent = new AbortController()
+    const outcome = joinBrowserRelays(['invalid', 'healthy'], capability, parent.signal).then(
+      value => ({ value }), error => ({ error }),
+    )
+    try {
+      await rejected.promise
+      await vi.advanceTimersByTimeAsync(0)
+      expect(healthySignal?.aborted).toBe(false)
+      ready.resolve()
+      const result = await outcome
+      expect(result).toHaveProperty('value')
+      if (!('value' in result)) throw result.error
+      expect(result.value.relayBase).toBe('healthy')
+      expect(result.value.session.isClosed).toBe(false)
+      expect(dial).toHaveBeenCalledTimes(2)
+    } finally {
+      parent.abort()
+      ready.resolve()
+      const result = await outcome
+      if ('value' in result) await result.value.session.close()
+      await healthy.close()
+    }
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
   it('keeps the existing operation and content authority after a missing ServerHello deadline, then recovers', async () => {
     vi.useFakeTimers()
     const { factory, descriptor, channels, control } = await factoryFixture()

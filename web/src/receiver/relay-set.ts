@@ -101,6 +101,7 @@ export class ReceiverRelaySet {
         this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_failed', failure: error })
         if (this.#options.failure(error) === 'stop') {
           this.#disabled.add(relayBase)
+          this.#options.observe(relayBase, { attempt, phase, transition: 'terminal', failure: error })
           return
         }
         await this.#options.sleep(attempt, signal, this.#options.now() - startedAt, error, relayBase).catch(() => undefined)
