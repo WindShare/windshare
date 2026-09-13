@@ -1,11 +1,18 @@
 import type { V2ReceiverSessionRuntime } from '../session/v2-runtime'
 import type { V2AttachedRelay, V2ProtocolGenerationCore, V2ReceiverSessionFactory } from './v2-session-factory'
+import { runGenerationRecovery } from './generation-recovery'
+import type { RecoveryObservation } from './recovery-observation'
+import { reconnectPhase } from './recovery-clock'
+
+const RELAY_ATTACH_ATTEMPT_MILLISECONDS = 45_000
 
 interface RelaySetOptions {
   readonly initial: V2ProtocolGenerationCore
   readonly factory: V2ReceiverSessionFactory
   readonly admit: (laneId: number) => void
-  readonly sleep: (attempt: number, signal: AbortSignal) => Promise<void>
+  readonly sleep: (attempt: number, signal: AbortSignal, elapsed: number, error: unknown, relayBase: string) => Promise<void>
+  readonly now: () => number
+  readonly observe: (relayBase: string, observation: RecoveryObservation) => void
   readonly failure: (error: unknown) => 'retry' | 'stop'
 }
 
@@ -63,10 +70,19 @@ export class ReceiverRelaySet {
 
   async #connect(relayBase: string): Promise<void> {
     let attempt = 0
+    const startedAt = this.#options.now()
     const signal = this.#lifetime.signal
     while (!signal.aborted && !this.#session.isClosed && this.#session.laneIds().length > 0) {
+      const phase = reconnectPhase(attempt, this.#options.now() - startedAt)
+      attempt += 1
+      this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_started' })
       try {
-        const attached = await this.#options.factory.attachRelay(this.#session, signal, relayBase)
+        const attached = await runGenerationRecovery({
+          reservation: { milliseconds: RELAY_ATTACH_ATTEMPT_MILLISECONDS, finish: () => undefined },
+          parent: signal, now: this.#options.now,
+          connect: attemptSignal => this.#options.factory.attachRelay(this.#session, attemptSignal, relayBase),
+          close: attached => attached.relay.close(),
+        })
         if (signal.aborted || this.#session.isClosed) {
           await attached.relay.close().catch(() => undefined)
           return
@@ -78,14 +94,17 @@ export class ReceiverRelaySet {
           throw error
         }
         this.#connections.set(relayBase, attached)
+        this.#options.observe(relayBase, { attempt, phase, transition: 'connected' })
         return
       } catch (error) {
         if (signal.aborted) return
+        this.#options.observe(relayBase, { attempt, phase, transition: 'attempt_failed', failure: error })
         if (this.#options.failure(error) === 'stop') {
           this.#disabled.add(relayBase)
+          this.#options.observe(relayBase, { attempt, phase, transition: 'terminal', failure: error })
           return
         }
-        await this.#options.sleep(attempt++, signal).catch(() => undefined)
+        await this.#options.sleep(attempt, signal, this.#options.now() - startedAt, error, relayBase).catch(() => undefined)
       }
     }
   }

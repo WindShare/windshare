@@ -2,6 +2,7 @@ package cli
 
 import (
 	"errors"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"reflect"
 	"time"
 )
@@ -77,7 +78,7 @@ func settleShareServe(
 			return true
 		}
 		_, stopped := leaf.(shareServeStopCause)
-		return stopped
+		return stopped || exactShareInterruption(leaf, senderrelay.ErrStopped)
 	}):
 		return shareComponentSettlement{outcome: shareComponentInterrupted}
 	default:

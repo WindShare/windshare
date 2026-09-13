@@ -1,5 +1,9 @@
 const V2_RECONNECT_INITIAL_BACKOFF_MILLISECONDS = 100
 const V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS = 5_000
+export const RECOVERY_FAST_WINDOW_MILLISECONDS = 55_000
+export const RECOVERY_FAST_ATTEMPTS = 8
+const RECOVERY_WAIT_MILLISECONDS = 30_000
+const RECOVERY_MAXIMUM_WAIT_MILLISECONDS = 60_000
 
 export interface V2ReconnectClock {
   now(): number
@@ -8,10 +12,18 @@ export interface V2ReconnectClock {
 
 export function requireBackoff(milliseconds: number): number {
   if (!Number.isFinite(milliseconds) || milliseconds < 0 ||
-      milliseconds > V2_RECONNECT_MAXIMUM_BACKOFF_MILLISECONDS) {
+      milliseconds > RECOVERY_MAXIMUM_WAIT_MILLISECONDS) {
     throw new RangeError('Receiver reconnect backoff is outside its bounded range')
   }
   return milliseconds
+}
+
+export function waitingReconnectBackoff(random: () => number = Math.random): number {
+  return RECOVERY_WAIT_MILLISECONDS * (0.8 + Math.max(0, Math.min(1, random())) * 0.4)
+}
+
+export function reconnectPhase(attempt: number, elapsed: number): 'fast' | 'waiting' {
+  return attempt >= RECOVERY_FAST_ATTEMPTS || elapsed >= RECOVERY_FAST_WINDOW_MILLISECONDS ? 'waiting' : 'fast'
 }
 
 export function defaultReconnectBackoff(attempt: number): number {

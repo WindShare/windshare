@@ -132,6 +132,7 @@
         "invalid-proof": 6,
         "malformed": 1,
         "not-found": 8,
+        "resume-stale": 12,
         "share-id-collision": 3,
         "starting": 9,
         "stopped": 11,
@@ -157,8 +158,6 @@
         "crash-grace",
         "stopped-tombstone"
       ],
-      "senderWindowBytes": 4194304,
-      "senderWindowFrames": 64,
       "sessionAdmissionPhases": [
         "awaiting_receiver",
         "awaiting_sender",
@@ -175,6 +174,26 @@
           "provisional",
           "active"
         ]
+      },
+      "sessionCredit": {
+        "controlConsumesCredit": false,
+        "deltaFieldsIndependent": true,
+        "directions": [
+          "sender-to-receiver",
+          "receiver-to-sender"
+        ],
+        "maximumAvailableBytes": 4194304,
+        "maximumAvailableFrames": 64,
+        "nonzeroDeltaRequired": true,
+        "opaqueFrameCost": [
+          "one-frame",
+          "full-encoded-route-bytes"
+        ],
+        "receiverAllocation": "fair-shared-destination-capacity",
+        "receiverInitialBytes": 0,
+        "receiverInitialFrames": 0,
+        "senderInitialBytes": 4194304,
+        "senderInitialFrames": 64
       },
       "sessionTombstoneSeconds": "60",
       "stopStoreOutcomes": [

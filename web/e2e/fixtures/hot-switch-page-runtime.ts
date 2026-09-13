@@ -192,6 +192,8 @@ async function runTransfer(
       outcome: succeeded ? 'succeeded' : 'failed',
       evidence: deliveryEvidence(input, received, succeeded ? 'succeeded' : 'failed'),
       jobOutcome,
+      ...(result.abortReason === undefined ? {} : { failureMessage: bridge.describe(result.abortReason) }),
+      ...(result.failureTrigger === undefined ? {} : { failureClassification: result.failureTrigger }),
     })
   } catch (error) {
     runtimeError = bridge.describe(error)
@@ -465,15 +467,12 @@ function createGateway(
           },
         }),
     onBlockDispatched: (observation) => {
-      bridge.publish({
-        kind: 'dispatch',
-        observation: {
-          dispatchSequence: observation.dispatchSequence,
-          laneId: observation.laneId,
-          laneEpoch: observation.laneEpoch,
-          route: observation.route,
-        },
-      }).catch(() => undefined)
+      relayCut.dispatch({
+        dispatchSequence: observation.dispatchSequence,
+        laneId: observation.laneId,
+        laneEpoch: observation.laneEpoch,
+        route: observation.route,
+      })
       if (observation.route === 'application-relay') peerRelease.release()
     },
     onContentLaneAdmitted: (observation) => relayCut.admit(observation),

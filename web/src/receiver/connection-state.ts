@@ -1,12 +1,20 @@
 import { V2RelayReceiverError } from '../transport/relay/v2-receiver'
 import { V2_RELAY_ERROR } from '../transport/relay/v2-protocol'
 import { RelayEndpointFailure } from './relay-race'
-import { GenerationRecoveryExhaustedError } from './generation-recovery'
 import { V2StaleShareInstanceError } from './v2-session-factory'
+
+export type ReceiverReconnectActivity =
+  | Readonly<{ kind: 'connecting' }>
+  | Readonly<{
+      kind: 'waiting'
+      reason: 'backoff' | 'capacity' | 'server'
+      /** Deadline on the reconnect clock; rendering must not restart the wait. */
+      retryAt: number
+    }>
 
 export type ReceiverConnectionSnapshot =
   | Readonly<{ kind: 'connected' }>
-  | Readonly<{ kind: 'reconnecting' }>
+  | Readonly<{ kind: 'reconnecting'; activity: ReceiverReconnectActivity }>
   | Readonly<{ kind: 'ended'; reason: 'share-replaced' | 'share-stopped' }>
   | Readonly<{ kind: 'unavailable'; reason: 'recovery-exhausted' | 'protocol-failed' }>
 
@@ -21,13 +29,15 @@ export class ReceiverConnectionState {
   }
 
   connected(): void { this.#publish(Object.freeze({ kind: 'connected' })) }
-  reconnecting(): void { this.#publish(Object.freeze({ kind: 'reconnecting' })) }
+  reconnecting(activity: ReceiverReconnectActivity): void {
+    this.#publish(Object.freeze({ kind: 'reconnecting', activity: Object.freeze(activity) }))
+  }
 
   failed(error: unknown): void {
     const reason = confirmedShareEnd(error)
     if (reason !== null) this.#publish(Object.freeze({ kind: 'ended', reason }))
     else this.#publish(Object.freeze({ kind: 'unavailable',
-      reason: error instanceof GenerationRecoveryExhaustedError ? 'recovery-exhausted' : 'protocol-failed' }))
+      reason: 'protocol-failed' }))
   }
 
   close(): void { this.#listeners.clear() }

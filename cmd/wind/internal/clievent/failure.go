@@ -15,6 +15,7 @@ const (
 	MessageSelectionMissing
 	MessageRelayRejected
 	MessageRelayUnavailable
+	MessageShareUnavailable
 	MessageDirectUnavailable
 	MessageDirectPolicy
 	MessageDirectBusy
@@ -54,6 +55,8 @@ func (value SafeMessageKey) Name() (string, bool) {
 		return "relay_rejected", true
 	case MessageRelayUnavailable:
 		return "relay_unavailable", true
+	case MessageShareUnavailable:
+		return "share_unavailable", true
 	case MessageDirectUnavailable:
 		return "direct_unavailable", true
 	case MessageDirectPolicy:
@@ -243,7 +246,7 @@ func relayFailureDefinition(code FailureCode) (failureDefinition, bool) {
 	case FailureRelayDescriptorInvalid:
 		return failureDefinition{"relay_descriptor_invalid", MessageRelayRejected}, true
 	case FailureRelayNotFound:
-		return failureDefinition{"relay_not_found", MessageRelayRejected}, true
+		return failureDefinition{"relay_not_found", MessageShareUnavailable}, true
 	case FailureRelayStarting:
 		return failureDefinition{"relay_starting", MessageRelayUnavailable}, true
 	case FailureRelayAdmission:

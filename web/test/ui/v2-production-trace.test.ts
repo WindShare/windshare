@@ -1,3 +1,4 @@
+import { emitRelayHeartbeat } from '../../src/diagnostics/trace/connection-payload'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createV2PeerPathIdentityValue,
@@ -198,6 +199,64 @@ it('exports lane exception causes and bounded stacks without mutating the failur
       failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1),
     })).toThrow('bounded text')
   })
+
+it('exports initial connection recovery before a protocol session exists', () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const source = createProtocolTraceSource(composition.trace)
+  for (const transition of ['attempt_started', 'attempt_failed', 'waiting', 'connected', 'terminal', 'retry_requested'] as const) {
+    source.current?.({
+      eventName: 'connection_recovery', correlation: {}, generationId: 0,
+      shareId: 'share', relayBase: 'https://relay.invalid', attempt: 2, phase: 'initial', transition,
+      delayMilliseconds: 1000, failure: new Error('relay unreachable', { cause: new Error('timeout') }),
+      ...(transition === 'waiting' ? { waitReason: 'capacity' } : {}),
+    })
+  }
+  const records = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+    .filter(line => line.record?.event === 'connection_recovery').map(line => line.record)
+  expect(records).toHaveLength(6)
+  expect(records[2].payload.wait_reason).toBe('capacity')
+  expect(records[0].correlation).toBeUndefined()
+  expect(records[0].payload).toMatchObject({ generation_id: '0', attempt: '2', share_id: 'share', delay_ms: 1000 })
+  expect(JSON.parse(records[0].payload.failure_detail)).toMatchObject({ message: 'relay unreachable', cause: { message: 'timeout' } })
+  for (const invalid of [
+    { phase: 'rpc' }, { attempt: '-1' }, { generation_id: '01' }, { delay_ms: -1 }, { wait_reason: 'unknown' },
+    { relay_base: '' }, { share_id: 'x'.repeat(2049) }, { failure_detail: 'x'.repeat(TRACE_FAILURE_DETAIL_MAX_CHARACTERS + 1) },
+    { unexpected: 'field' },
+  ]) {
+    expect(() => validateTraceEventPayloadV2('connection_recovery', { ...records[0].payload, ...invalid })).toThrow()
+  }
+})
+
+it('exports connection probes with available session identity and bounded queue context', () => {
+  const composition = productionComposition()
+  const source = createProtocolTraceSource(composition.trace)
+  const context = vi.fn(() => ({
+    correlation: { protocolSessionId: createV2ProtocolSessionIdentity(new Uint8Array(16).fill(1)) },
+    shareInstanceId: 'instance',
+  }))
+  const event = { connectionId: 4n, round: 3n, stage: 'failed' as const, bufferedBytes: 4096, elapsedMilliseconds: 45000, timeoutMilliseconds: 45000 }
+  emitRelayHeartbeat(source, event, 'https://relay.invalid', context)
+  expect(context).not.toHaveBeenCalled()
+  composition.runtime.enable()
+  emitRelayHeartbeat(source, event, 'https://relay.invalid', context)
+  const records = composition.runtime.export().trim().split('\n').map(line => JSON.parse(line))
+    .filter(line => line.record?.event === 'relay_heartbeat').map(line => line.record)
+  expect(records).toHaveLength(1)
+  expect(records[0].correlation.protocol_session_id).toBeDefined()
+  expect(records[0].payload).toEqual({
+    connection_id: '4', share_instance_id: 'instance', relay_base: 'https://relay.invalid', round: '3',
+    stage: 'failed', buffered_bytes: '4096', elapsed_ms: 45000, timeout_ms: 45000,
+  })
+  for (const invalid of [
+    { connection_id: '0' }, { round: '0' }, { stage: 'retrying' }, { elapsed_ms: -1 }, { timeout_ms: 0 },
+    { buffered_bytes: '-1' }, { generation_id: '-1' },
+  ]) {
+    expect(() => validateTraceEventPayloadV2('relay_heartbeat', { ...records[0].payload, ...invalid })).toThrow()
+  }
+  expect(() => emitRelayHeartbeat({ current: () => { throw new Error('observer failed') } }, event,
+    'https://relay.invalid', context)).not.toThrow()
+})
 
 it('exports operation recovery decisions with session and local operation correlation', () => {
   const composition = productionComposition()

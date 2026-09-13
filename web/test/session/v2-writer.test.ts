@@ -108,9 +108,10 @@ describe('session writer delivery ownership', () => {
     const channel = new BackpressuredChannel()
     const failure = vi.fn()
     const writer = new V2SessionWriter(channel, new V2EnvelopeSealer(KEY, BINDING), { onFailure: failure })
-    const first = expect(writer.send(message(1))).rejects.toThrow('Channel closed')
+    const physicalFailure = { scope: 'lane', cause: expect.objectContaining({ message: 'Channel closed' }) }
+    const first = expect(writer.send(message(1))).rejects.toMatchObject(physicalFailure)
     await channel.sending.promise
-    const second = expect(writer.send(message(2))).rejects.toThrow('Channel closed')
+    const second = expect(writer.send(message(2))).rejects.toMatchObject(physicalFailure)
     await channel.close()
     await Promise.all([first, second])
     expect(failure).toHaveBeenCalledOnce()

@@ -334,11 +334,11 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 	}
 	server, err := protocolsession.ParseServerHello(serverBytes, client, factory.publicKey)
 	if err != nil {
-		return receiverHandshake{}, errors.Join(ErrHandshake, err)
+		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(ErrHandshake, err))
 	}
 	keys, err := protocolsession.DeriveReceiverSession(receiverPrivate, factory.authKey, client, server)
 	if err != nil {
-		return receiverHandshake{}, errors.Join(ErrHandshake, err)
+		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(ErrHandshake, err))
 	}
 	lane := LaneIdentity{ID: server.InitialLaneID(), Epoch: server.InitialLaneEpoch()}
 	base := protocolsession.ControlBinding{
@@ -405,6 +405,17 @@ func (runtime *ReceiverRuntime) OpenRevision(
 }
 func (runtime *ReceiverRuntime) ReleaseRevision(ctx context.Context, lease content.LeaseID) error {
 	return (receiverLeaseDependencies{receiverTransferDependencies{runtime: runtime}}).ReleaseLease(ctx, lease)
+}
+
+// RejectShareIdentity ends authority after the application authenticates a
+// contradictory share descriptor. It cannot authorize path recovery, and keeps
+// the protocol cause distinct from the component cancellation used for cleanup.
+func (runtime *ReceiverRuntime) RejectShareIdentity(cause error) {
+	if runtime == nil || runtime.runtimeCore == nil || cause == nil {
+		return
+	}
+	runtime.terminateRuntimeFailed(sessionProtocolBoundaryError(cause))
+	runtime.BeginClose()
 }
 
 func (runtime *ReceiverRuntime) Close() {

@@ -118,8 +118,7 @@ export function laneAdmissionIdentity(grant: V2LaneGrant): V2LaneAdmissionIdenti
 export function deadlineSignal(
   parent: AbortSignal | undefined,
   milliseconds: number,
-  message: string,
-  scope: 'lane' | 'session',
+  timeout: Error,
 ): { readonly signal: AbortSignal; readonly close: () => void } {
   const controller = new AbortController()
   const abort = () => controller.abort(
@@ -128,7 +127,7 @@ export function deadlineSignal(
   parent?.addEventListener('abort', abort, { once: true })
   if (parent?.aborted) abort()
   const timer = globalThis.setTimeout(() => {
-    controller.abort(new V2SessionRuntimeError(scope, message))
+    controller.abort(timeout)
   }, milliseconds)
   return {
     signal: controller.signal,

@@ -31,10 +31,14 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 ## Pause, Resume & Recovery
 
+If the sender is temporarily unreachable when opening a link, WindShare retries for 30 seconds, then offers **Retry now**, **Continue waiting**, or **Cancel**. Continue waiting retries at a lower rate; temporary unavailability does not mean the link has expired. Invalid links are reported directly. A relay that returns malformed or unverifiable data is excluded while other relays can still connect; if every relay is excluded, the connection fails.
+
+Keep the original page open during an active download outage. Reconnection continues automatically, preserving the download, save destination, and reusable progress. **Retry now** skips the ordinary retry wait without restarting the download. During an active connection attempt or a required cooldown, the button is disabled; the page shows the current activity, waiting reason, and automatic retry countdown. Healthy direct or relay transfers continue when another relay disconnects or is excluded. A verified conflict with the current share identity still ends the session. File changes, share termination, and save errors are handled separately from network waiting.
+
 - **Available controls**: Folder downloads offer **Pause** and **Stop**. Direct ZIP and browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
-- **Pause**: Saves progress supported by the chosen method. Wait for pausing to finish before leaving the page.
-- **Stop**: Ends receiving. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
-- **Crash recovery**: Resumable methods use the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require the original share link and renewed destination permission. The browser fallback must start again after a reload.
+- **Pause**: Saves progress supported by the chosen method and cancels that download's pending network wait. Reconnection does not resume a paused download; choose **Resume** when ready. Wait for pausing to finish before leaving the page.
+- **Stop**: Ends receiving and cancels that download's recovery. For folder downloads, incomplete browser staging is removed while saved files remain; complete staged files can still be saved locally. Failed cleanup can be retried.
+- **Page closure or crash recovery**: Reopen the original link to recover supported downloads from the last verified checkpoint, which may lag behind received bytes. Keep destination files unchanged and site data intact; continuing may require renewed destination permission. The browser fallback must start again after a reload.
 - **Save partial ZIP**: Available for retained browser-workspace ZIP tasks with completed files when the browser supports a file save picker. Exports complete files as a separate ZIP while keeping the task available for continuation.
 - **Verify saved ZIP**: For Direct ZIP tasks requiring completion verification after an interrupted write session, verifies the saved archive locally.
 

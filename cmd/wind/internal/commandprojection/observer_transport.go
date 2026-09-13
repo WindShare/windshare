@@ -57,6 +57,7 @@ func ProjectRelayLifecycle(
 		Command: command, LinkID: value.LinkID, RelaySession: session, SendOperationID: value.OperationID,
 		Stage: stage, Terminal: value.Terminal, Disposition: disposition,
 		RetirementSource: retirement, Cause: cause, DrainCause: drain, Dropped: value.Dropped,
+		HeartbeatRound: value.HeartbeatRound, Wait: value.Wait, Timeout: value.Timeout,
 	})
 	if err != nil {
 		return clievent.RelayLifecycleObserved{}, invalidProjection(ProjectionEventContract)

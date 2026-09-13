@@ -8,6 +8,8 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
 	"github.com/windshare/windshare/connectivity/nativepeer"
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
@@ -249,33 +251,42 @@ func (observations *shareObservations) sessionTerminalObserver() sessionruntime.
 	return observations
 }
 
-func (observations *shareObservations) ObserveRelayRecovery(value senderRelayRecoveryAttempt) {
+func (observations *shareObservations) ObserveRelayRecovery(authority clievent.RelayAuthority, value senderrelay.Attempt) {
 	var state clievent.RelayRecoveryState
-	switch value.state {
-	case senderRelayAttemptStarted:
+	switch value.State {
+	case senderrelay.AttemptStarted:
 		state = clievent.RelayRecoveryStarted
-	case senderRelayAttemptSucceeded:
+	case senderrelay.AttemptSucceeded:
 		state = clievent.RelayRecoverySucceeded
-	case senderRelayAttemptFailed:
+	case senderrelay.AttemptFailed:
 		state = clievent.RelayRecoveryFailed
+	case senderrelay.AttemptWaiting:
+		state = clievent.RelayRecoveryWaiting
 	default:
 		observations.projectionFailed(clievent.ObserverLossCommandAdapter, commandprojection.ErrInvalidProjection)
 		return
 	}
 	var failure clievent.Failure
 	if state == clievent.RelayRecoveryFailed {
-		failure, _ = commandprojection.ClassifyError(value.failure)
+		failure, _ = commandprojection.ClassifyError(value.Failure)
 		if !failure.Valid() {
 			failure = mustShareFailure(clievent.FailureUnexpected)
 		}
 	}
-	event, err := clievent.NewRelayRecovering(
+	shareInstance, _ := clievent.NewSharingInstanceID(value.ShareInstance[:])
+	event, err := clievent.NewRelayRecoveryObservation(
 		clievent.CommandShare,
-		observations.RelayAuthority(),
-		value.attempt,
+		authority,
+		value.Number,
 		state,
 		failure,
+		clievent.RelayRecoveryDetails{ShareInstance: shareInstance, Generation: value.Generation, Slow: value.Slow, Resume: value.Resume, Terminal: value.Terminal, NextDelay: value.NextDelay},
 	)
+	observations.emitProjected(clievent.ObserverLossCommandAdapter, event, err)
+}
+
+func (observations *shareObservations) ObserveRelayAvailability(value relayset.SenderAvailability) {
+	event, err := clievent.NewRelayAvailability(value.Available, value.Total, value.Terminal, value.EverReady)
 	observations.emitProjected(clievent.ObserverLossCommandAdapter, event, err)
 }
 

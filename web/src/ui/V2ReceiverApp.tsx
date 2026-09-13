@@ -12,6 +12,7 @@ import { TaskCard, TaskDetails } from './tasks/TaskView'
 import { composeTasks } from './experience/task-composition'
 import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
 import { ConnectionDetails } from './experience/ConnectionDetails'
+import { ConnectionRecovery } from './connection/ConnectionRecovery'
 import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
 import { ReceiverFold } from './receiver-presentation/ReceiverFold'
@@ -101,7 +102,16 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
       </div>
       {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error}</div>}
       {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
-      {!hasContent && snapshot.phase === 'joining' && <p className="share-loading" role="status">Connecting to the sender…</p>}
+      {!hasContent && snapshot.phase === 'joining' && <div className="share-loading">
+        <p role="status">{snapshot.status}</p>
+        {snapshot.connection.kind === 'idle' && snapshot.connection.join === 'waiting-for-choice' && <>
+          <button type="button" onClick={() => controller.requestReconnect()}>Retry now</button>
+          <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
+        </>}
+        <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+      </div>}
+      {snapshot.connection.kind === 'reconnecting' && <ConnectionRecovery
+        activity={snapshot.connection.activity} retry={() => controller.requestReconnect()} />}
       {hasContent && <ShareContent share={share} preview={snapshot.preview} previewActions={previewActions} explorer={{ rows: snapshot.rows, breadcrumbs: snapshot.breadcrumbs,
         pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
         browse: snapshot.browse, draft: snapshot.draft, actions: {

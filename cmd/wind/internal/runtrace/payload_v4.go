@@ -62,13 +62,32 @@ type relayConnectedPayloadV4 struct {
 	RelayAuthority relayAuthorityV4 `json:"relay_authority"`
 }
 
+type relayAvailabilityPayloadV4 struct {
+	Available uint32 `json:"available"`
+	Total     uint32 `json:"total"`
+	EverReady bool   `json:"ever_ready"`
+	Terminal  uint32 `json:"terminal"`
+}
+
+func (relayAvailabilityPayloadV4) runTracePayloadV4() {}
+
 func (relayConnectedPayloadV4) runTracePayloadV4() {}
 
 type relayRecoveringPayloadV4 struct {
-	RelayAuthority relayAuthorityV4 `json:"relay_authority"`
-	Attempt        uint32           `json:"attempt"`
-	State          string           `json:"state"`
-	Failure        *failureV4       `json:"failure,omitempty"`
+	RelayAuthority relayAuthorityV4        `json:"relay_authority"`
+	Attempt        uint32                  `json:"attempt"`
+	State          string                  `json:"state"`
+	Failure        *failureV4              `json:"failure,omitempty"`
+	Details        *relayRecoveryDetailsV4 `json:"details,omitempty"`
+}
+
+type relayRecoveryDetailsV4 struct {
+	ShareInstance *string `json:"share_instance,omitempty"`
+	Generation    string  `json:"connection_generation"`
+	Slow          bool    `json:"slow_wait"`
+	Resume        bool    `json:"resume_registration"`
+	Terminal      bool    `json:"terminal"`
+	NextDelayMS   string  `json:"next_delay_ms"`
 }
 
 func (relayRecoveringPayloadV4) runTracePayloadV4() {}
@@ -172,6 +191,9 @@ type relayLifecyclePayloadV4 struct {
 	Cause            string  `json:"cause"`
 	DrainCause       string  `json:"drain_cause"`
 	Dropped          *string `json:"dropped,omitempty"`
+	HeartbeatRound   *string `json:"heartbeat_round,omitempty"`
+	WaitMS           *string `json:"wait_ms,omitempty"`
+	TimeoutMS        *string `json:"timeout_ms,omitempty"`
 }
 
 func (relayLifecyclePayloadV4) runTracePayloadV4() {}

@@ -126,6 +126,11 @@ class GalleryController {
     this.#publish({ progress: { ...this.#snapshot.progress, ...progress } })
   }
   updatePathActivity = (pathActivity: V2ReceiverSnapshot['pathActivity']) => this.#publish({ pathActivity })
+  updateConnection = (connection: V2ReceiverSnapshot['connection']) => this.#publish({ connection })
+  requestReconnect = () => {
+    this.intents.push('reconnect-now')
+    this.updateConnection({ kind: 'reconnecting', activity: { kind: 'connecting' } })
+  }
   startNewReceiveOperation = () => undefined
   prepareReplacementDownload = () => undefined
 }
@@ -139,6 +144,7 @@ export async function mountGallery(scenario: Scenario = 'folder'): Promise<void>
     windshareCompleteDownload: active.completeDownload,
     windshareAdvanceProgress: active.advanceProgress,
     windshareUpdatePathActivity: active.updatePathActivity,
+    windshareUpdateConnection: active.updateConnection,
     windshareHoldVideoSeeks: holdVideoSeeks, windshareCompleteVideoSeek: completeVideoSeek })
   const container = document.createElement('div')
   container.dataset.galleryScenario = scenario

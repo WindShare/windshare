@@ -135,6 +135,36 @@ export type V2OperationRecoveryTraceEvent = Readonly<{
   | Readonly<{ transition: 'wait_for_availability'; delayMilliseconds: number }>
 )
 
+export type V2ConnectionRecoveryTraceEvent = Readonly<{
+  eventName: 'connection_recovery'
+  correlation: FailureCorrelation
+  generationId: number
+  shareId?: string
+  shareInstanceId?: string
+  relayBase?: string
+  attempt: number
+  phase: 'initial' | 'fast' | 'waiting'
+  transition: 'attempt_started' | 'attempt_failed' | 'waiting' | 'connected' | 'terminal' | 'retry_requested'
+  delayMilliseconds?: number
+  waitReason?: 'backoff' | 'capacity' | 'server'
+  failure?: unknown
+}>
+
+export type V2RelayHeartbeatTraceEvent = Readonly<{
+  eventName: 'relay_heartbeat'
+  correlation: FailureCorrelation
+  connectionId: bigint
+  generationId?: number
+  shareId?: string
+  shareInstanceId?: string
+  relayBase: string
+  round: bigint
+  stage: 'probe' | 'acknowledged' | 'failed'
+  bufferedBytes: number
+  elapsedMilliseconds: number
+  timeoutMilliseconds: number
+}>
+
 export type V2ContentSchedulingTraceEvent = Readonly<{
   eventName: 'content_scheduling'
   correlation: FailureCorrelation
@@ -165,6 +195,8 @@ export type V2ProtocolTraceEvent =
   | V2ProtocolOperationTraceEvent
   | V2LaneTransitionTraceEvent
   | V2OperationRecoveryTraceEvent
+  | V2ConnectionRecoveryTraceEvent
+  | V2RelayHeartbeatTraceEvent
 
 export type V2ProtocolTraceObserver = (event: V2ProtocolTraceEvent) => void
 

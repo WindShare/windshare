@@ -9,7 +9,7 @@ wind share <path...>
 wind share <path...> --split-key
 ```
 
-After connecting to the relay, `share` prints:
+After at least one relay confirms publication, `share` prints:
 
 ```text
 Link: <link>
@@ -24,6 +24,8 @@ Key: <key>
 
 Links and keys go to stdout. Status and errors go to stderr.
 
+If every relay is temporarily unreachable, `share` waits and retries until one is ready; Ctrl+C cancels waiting. Each relay recovers independently, including those unavailable at startup. Later outages retain the original share link. Status shows how many relays currently admit new receivers, ongoing recovery, and successful reconnection; healthy direct transfers can continue while relay access recovers. Stopping or exiting the sender ends the share.
+
 Windows sources are admitted by file identity and write-excluding handle capabilities, including eligible removable and network volumes. Filesystems with weak change metadata keep the same revision while its handle remains open; reopening creates a new revision, so old download ranges are never mixed with potentially changed content.
 
 ## Download
@@ -34,6 +36,7 @@ wind get -o <directory> <link>
 wind get --only <path> <link>
 wind get <bare-link> --key <key>
 wind get --connectivity auto|relay-only|p2p-only <link>
+wind get --wait-timeout 2m <link>
 ```
 
 `-o` selects the output directory and defaults to the current directory. `--only` may be repeated to select multiple paths.
@@ -53,7 +56,9 @@ Existing files are not overwritten. A name collision creates a suffixed destinat
 | `relay-only` | Transfers content through the relay. |
 | `p2p-only` | Uses relays for setup, transfers content only directly, and stops if direct recovery is exhausted. |
 
-Connection recovery keeps the same output and verified progress while the shared file revision remains unchanged.
+Temporary outages reconnect automatically, keeping the same download, output, and verified progress while the shared file revision remains unchanged. After fast retries, recovery continues at a lower rate; healthy direct paths can keep transferring while a relay recovers. Authentication, changed content, and output failures retain their own failure handling.
+
+By default, the first connection waits up to 10 seconds; an established download waits through later connection outages until cancelled. `--wait-timeout <duration>` (for example, `30s` or `2m`) limits the initial connection and each later full connection outage separately. Healthy transfer time does not consume this limit. `0` selects the defaults; negative durations are invalid. Press Ctrl+C to cancel waiting. If the first connection expires, retry the original command or increase the wait timeout; temporary unavailability does not prove the link has expired.
 
 The final result is `success`, `partial`, `paused`, or `failed`. Exit codes are: `0` success, `1` runtime failure, `2` invalid command, `3` network failure, and `4` shared content changed.
 

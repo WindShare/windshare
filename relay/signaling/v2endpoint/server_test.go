@@ -604,10 +604,12 @@ func TestConcurrentResumeLoserCleanupCannotEraseWinnerOrStopAuthority(t *testing
 	}
 	resume := fixture.init
 	resume.Mode = v2.RegistrationResume
-	if err := registry.ValidateResumeCredential(resume, fixture.token); err != nil {
+	attemptA, err := registry.BeginResume(context.Background(), resume, fixture.token)
+	if err != nil {
 		t.Fatalf("candidate A precheck: %v", err)
 	}
-	if err := registry.ValidateResumeCredential(resume, fixture.token); err != nil {
+	attemptB, err := registry.BeginResume(context.Background(), resume, fixture.token)
+	if err != nil {
 		t.Fatalf("candidate B precheck: %v", err)
 	}
 	authority := endpointResumeAuthority(t, fixture, resume)
@@ -617,21 +619,22 @@ func TestConcurrentResumeLoserCleanupCannotEraseWinnerOrStopAuthority(t *testing
 	}
 	start := make(chan struct{})
 	results := make(chan resumeResult, 2)
-	for _, candidate := range []v2route.ConnectionRef{
+	for index, candidate := range []v2route.ConnectionRef{
 		endpointTestConnectionRef("candidate-a"), endpointTestConnectionRef("candidate-b"),
 	} {
-		go func(candidate v2route.ConnectionRef) {
+		go func(candidate v2route.ConnectionRef, attempt v2route.ResumeAttempt) {
 			<-start
-			results <- resumeResult{connection: candidate, err: registry.Resume(resume, authority, candidate, fixture.token)}
-		}(candidate)
+			_, err := registry.Resume(context.Background(), attempt, authority, candidate)
+			results <- resumeResult{connection: candidate, err: err}
+		}(candidate, []v2route.ResumeAttempt{attemptA, attemptB}[index])
 	}
 	close(start)
 	first, second := <-results, <-results
 	var winner, loser v2route.ConnectionRef
 	switch {
-	case first.err == nil && errors.Is(second.err, v2route.ErrNotFound):
+	case first.err == nil && errors.Is(second.err, v2route.ErrResumeStale):
 		winner, loser = first.connection, second.connection
-	case second.err == nil && errors.Is(first.err, v2route.ErrNotFound):
+	case second.err == nil && errors.Is(first.err, v2route.ErrResumeStale):
 		winner, loser = second.connection, first.connection
 	default:
 		t.Fatalf("concurrent Resume results = %+v, %+v", first, second)
@@ -796,7 +799,9 @@ func newEndpointTestConnection(
 	socket BinaryConnection,
 	cancel context.CancelFunc,
 ) *connection {
-	return newConnection(endpointTestConnectionRef(id), socket, cancel)
+	peer := newConnection(endpointTestConnectionRef(id), socket, cancel)
+	peer.completeHandshake()
+	return peer
 }
 
 func endpointTestServer(

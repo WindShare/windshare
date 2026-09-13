@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
-import { firstUsableRelay, receiverRelayBases } from '../../src/receiver/relay-race'
+import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from '../../src/receiver/relay-race'
+import { V2StaleShareInstanceError } from '../../src/receiver/v2-session-factory'
+import { isShareRecoveryFailure } from '../../src/receiver/recovery-failure'
 
 function deferred<T>() {
   let resolve!: (value: T) => void
@@ -8,6 +10,25 @@ function deferred<T>() {
 }
 
 describe('first usable relay', () => {
+  it('rejects authenticated identity failures beside a stalled endpoint and disposes its late result', async () => {
+    const slow = deferred<string>()
+    const failure = new V2StaleShareInstanceError('Authenticated descriptor changed')
+    const close = vi.fn(async () => undefined)
+    let stalledSignal: AbortSignal | undefined
+    const task = firstUsableRelay(['stalled', 'invalid'], new AbortController().signal,
+      async (endpoint, signal) => {
+        if (endpoint === 'invalid') throw failure
+        stalledSignal = signal
+        return slow.promise
+      }, close, isShareRecoveryFailure)
+    await expect(task).rejects.toMatchObject({
+      name: RelayEndpointFailure.name, relayBase: 'invalid', cause: failure,
+    })
+    expect(stalledSignal?.aborted).toBe(true)
+    slow.resolve('late-session')
+    await vi.waitFor(() => expect(close).toHaveBeenCalledWith('late-session'))
+  })
+
   it('returns the first authenticated result without waiting for earlier slow endpoints and closes late losers', async () => {
     const slow = deferred<string>()
     const aborted: AbortSignal[] = []

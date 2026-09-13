@@ -23,12 +23,7 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-const (
-	getProgressInterval        = 500 * time.Millisecond
-	getRelayStartingRetryDelay = 250 * time.Millisecond
-	getSessionRecoveryAttempts = 3
-	getSessionRecoveryWindow   = 55 * time.Second
-)
+const getProgressInterval = 500 * time.Millisecond
 
 type getRequest struct {
 	outDir       string
@@ -36,6 +31,7 @@ type getRequest struct {
 	link         link.Link
 	connectivity ConnectivityPolicy
 	observation  observationOptions
+	waitTimeout  time.Duration
 }
 
 func (a *App) runGet(ctx context.Context, args []string) int {
@@ -70,7 +66,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 	}
 	defer closeOutput()
 
-	session, code := a.connectGetReceiver(ctx, request.link, request.connectivity, observation)
+	session, code := a.connectGetReceiver(ctx, request, observation)
 	if code != ExitOK {
 		return code
 	}
@@ -98,7 +94,6 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 		currentSession.Close()
 	}
 	defer closeSession()
-	recoveries := 0
 	continuation, err := receivercontinuation.New(ctx, session.runtime, func(recoverCtx context.Context, previous *sessionruntime.ReceiverRuntime) (*sessionruntime.ReceiverRuntime, error) {
 		generationMu.Lock()
 		oldSession, oldExecution := session, execution
@@ -106,11 +101,7 @@ func (a *App) runGet(ctx context.Context, args []string) int {
 		oldExecution.CloseWithReason(clievent.ReceiverLocalStopRuntimeSessionFailure)
 		oldSession.Close()
 		options.native.CloseSession([16]byte(oldSession.runtime.ProtocolSessionID()))
-		if recoveries >= getSessionRecoveryAttempts {
-			return nil, errors.New("receiver session recovery budget exhausted")
-		}
-		recoveries++
-		next, connectErr := a.recoverGetReceiver(recoverCtx, request, observation)
+		next, connectErr := oldSession.recovery.replace(recoverCtx)
 		if connectErr != nil {
 			return nil, connectErr
 		}
@@ -213,6 +204,7 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		return getRequest{}, requestParseInternalFailure
 	}
 	outDir := flags.String("o", ".", "output directory")
+	waitTimeout := flags.Duration("wait-timeout", 0, "maximum wait for initial connection or each reconnection (0: initial 10s, reconnection unlimited)")
 	keyString := flags.String("key", "", "separate key string when the link has no fragment")
 	connectivityName := flags.String(
 		"connectivity",
@@ -227,6 +219,10 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 	}
 	if err := observation.validate(); err != nil {
 		a.writeCompleteLine("get: %s", observationOptionDiagnostic(err))
+		return getRequest{}, requestParseUsageFailure
+	}
+	if *waitTimeout < 0 {
+		a.writeCompleteLine("get: wait-timeout must not be negative")
 		return getRequest{}, requestParseUsageFailure
 	}
 	if len(positional) != 1 {
@@ -258,7 +254,7 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 	}
 	return getRequest{
 		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
-		observation: observation,
+		observation: observation, waitTimeout: *waitTimeout,
 	}, requestParseReady
 }
 
