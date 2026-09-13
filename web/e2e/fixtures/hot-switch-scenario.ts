@@ -10,6 +10,7 @@ import {
 } from '../../test/transport/webrtc/browser-capability'
 import {
   HOT_SWITCH_TRANSFER_BLOCKS,
+  hotSwitchTerminalEvidence,
   type HotSwitchPageEvent,
   type HotSwitchPeerAttemptEvidence,
 } from './hot-switch-contract'
@@ -179,6 +180,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       scenarioId,
       stackTraces,
       events: events.snapshot(),
+      ...hotSwitchTerminalEvidence(events.snapshot()),
       processes: stack.diagnostic(),
     }
     const diagnosticText = redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2)
