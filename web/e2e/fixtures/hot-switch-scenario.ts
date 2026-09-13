@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { writeFile } from 'node:fs/promises'
 
 import { expect, type Page, type TestInfo } from '@playwright/test'
 
@@ -180,10 +181,14 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
       events: events.snapshot(),
       processes: stack.diagnostic(),
     }
-    await options.testInfo.attach('direct-hot-switch-diagnostic', {
-      body: redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2),
-      contentType: 'application/json',
-    }).catch(() => undefined)
+    const diagnosticText = redactor?.text(diagnostic) ?? JSON.stringify(diagnostic, null, 2)
+    const diagnosticPath = options.testInfo.outputPath('direct-hot-switch-diagnostic.json')
+    // The line reporter does not persist inline attachment bodies for artifact upload.
+    await writeFile(diagnosticPath, diagnosticText).then(() => options.testInfo.attach(
+      'direct-hot-switch-diagnostic',
+      { path: diagnosticPath, contentType: 'application/json' },
+    )).catch(() => undefined)
+    console.error(diagnosticText)
     const message = error instanceof Error ? error.message : String(error)
     throw new Error(redactor?.redactText(message) ?? message, {
       // eslint-disable-next-line preserve-caught-error -- detached redacted cause is the only permitted boundary value
