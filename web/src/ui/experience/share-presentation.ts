@@ -10,7 +10,7 @@ export function downloadScopeLabel(share: V2ReceiverSnapshot['share'], draft: V2
 export function shareConnectionLabel(connection: V2ReceiverSnapshot['connection'], phase: V2ReceiverSnapshot['phase'], status: string): string {
   switch (connection.kind) {
     case 'connected': return 'Sender connected'
-    case 'reconnecting': return connection.phase === 'waiting' ? 'Waiting for the sender; reconnecting automatically' : 'Reconnecting to the sender…'
+    case 'reconnecting': return connection.activity.kind === 'waiting' ? 'Waiting to reconnect automatically' : 'Reconnecting to the sender…'
     case 'ended': return 'Share ended — a new link is needed'
     case 'unavailable': return 'Connection unavailable'
     case 'idle': {

@@ -97,6 +97,24 @@
   overflow-wrap: anywhere;
 }
 .share-loading { padding: 48px 0; color: var(--receiver-muted); }
+.connection-recovery {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px 24px;
+  margin-block: 16px 24px;
+  padding: 18px 20px;
+  background: var(--receiver-paper);
+  border: 1px solid var(--receiver-rule);
+  border-inline-start: 3px solid var(--receiver-warning);
+  border-radius: 4px;
+}
+.connection-recovery-copy { flex: 1 1 240px; min-width: 0; }
+.connection-recovery p { margin: 0; color: var(--receiver-muted); font-size: .875rem; overflow-wrap: anywhere; }
+.connection-recovery p + p { margin-top: 6px; }
+.connection-recovery .connection-recovery-status { color: var(--receiver-ink); font-weight: 600; }
+.connection-recovery-countdown { font-variant-numeric: tabular-nums; }
+.connection-recovery > button { flex: 0 0 auto; min-width: 120px; }
 .key-form { max-width: 640px; margin-block: 32px; }
 .key-form label { font-weight: 600; }
 .key-form p { color: var(--receiver-muted); }

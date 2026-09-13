@@ -1,21 +1,22 @@
 import { describe, expect, it } from 'vitest'
 import { ReceiverConnectionState, type ReceiverConnectionSnapshot } from '../../src/receiver/connection-state'
-import { GenerationRecoveryExhaustedError } from '../../src/receiver/generation-recovery'
 import { V2StaleShareInstanceError } from '../../src/receiver/v2-session-factory'
 import { V2RelayReceiverError } from '../../src/transport/relay/v2-receiver'
 import { V2_RELAY_ERROR } from '../../src/transport/relay/v2-protocol'
 
 describe('receiver connection observations', () => {
-  it('keeps fast retry exhaustion in automatic waiting without ending the share', () => {
+  it('distinguishes an active attempt from scheduled recovery without duplicate observations', () => {
     const state = new ReceiverConnectionState()
     const events: ReceiverConnectionSnapshot[] = []
     state.subscribe(snapshot => events.push(snapshot))
-    state.reconnecting()
-    state.reconnecting()
+    state.reconnecting({ kind: 'connecting' })
+    state.reconnecting({ kind: 'connecting' })
+    state.reconnecting({ kind: 'waiting', reason: 'capacity', retryAt: 75_000 })
     state.connected()
-    state.failed(new GenerationRecoveryExhaustedError())
-    expect(events).toEqual([{ kind: 'connected' }, { kind: 'reconnecting' }, { kind: 'connected' },
-      { kind: 'reconnecting', phase: 'waiting' }])
+    expect(events).toEqual([{ kind: 'connected' },
+      { kind: 'reconnecting', activity: { kind: 'connecting' } },
+      { kind: 'reconnecting', activity: { kind: 'waiting', reason: 'capacity', retryAt: 75_000 } },
+      { kind: 'connected' }])
   })
 
   it('requires authenticated replacement or all stopped endpoints and isolates observers', () => {

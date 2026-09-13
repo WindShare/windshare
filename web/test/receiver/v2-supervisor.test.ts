@@ -570,7 +570,7 @@ describe('bounded protocol generation replacement', () => {
     await vi.advanceTimersByTimeAsync(600_000)
     expect(settled).toBe(false)
     expect(factory.connectFreshCalls).toBeLessThanOrEqual(16)
-    expect(state).toMatchObject({ kind: 'reconnecting', phase: 'waiting' })
+    expect(state).toMatchObject({ kind: 'reconnecting', activity: { kind: 'waiting' } })
     expect(supervisor.generationId).toBe(1)
     expect(session.isClosed).toBe(true)
     const replacement = deferred<V2ProtocolGenerationCore>()
