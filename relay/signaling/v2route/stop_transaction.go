@@ -86,7 +86,20 @@ func (r *Registry) beginStop(
 		return nil, false, nil, ErrStopped
 	}
 	if current == nil {
-		return nil, false, nil, ErrNotFound
+		if len(r.routes) >= r.maxRoutes {
+			return nil, false, nil, ErrAdmission
+		}
+		// A delayed registration may still arrive after an authenticated STOP.
+		// Reserve revocation authority even without a published route so absence
+		// cannot reopen the share between proof and durable tombstone commit.
+		current = &route{
+			init: v2.RegisterInit{
+				Mode: v2.RegistrationFresh, ShareID: init.ShareID,
+				ShareInstance: init.ShareInstance, PKHash: init.PKHash,
+			},
+			state: routeRevoking, generation: newRouteGeneration(),
+		}
+		r.routes[init.ShareID] = current
 	}
 	if current.init.ShareInstance != init.ShareInstance ||
 		subtle.ConstantTimeCompare(current.init.PKHash[:], init.PKHash[:]) != 1 {
@@ -102,6 +115,9 @@ func (r *Registry) beginStop(
 		tombstone: tombstone, done: make(chan struct{}), wasUncertain: current.state == routeStopUncertain,
 	}
 	current.pendingStop = txn
+	// A rejected durability attempt must not revive an authentication begun
+	// before STOP fenced the route.
+	current.generation = newRouteGeneration()
 	return txn, true, nil, nil
 }
 
@@ -144,7 +160,9 @@ func (r *Registry) finishStop(
 			current.state = routeStopUncertain
 			return RouteRetirement{}, errors.Join(ErrAdmission, ErrCommitUncertain, commitErr)
 		}
-		if txn.ownerDisconnected {
+		if current.state == routeRevoking {
+			delete(r.routes, shareID)
+		} else if txn.ownerDisconnected {
 			if current.state == routeStarting {
 				delete(r.routes, shareID)
 			} else {

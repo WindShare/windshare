@@ -168,7 +168,8 @@ export interface V2SelectionDraft {
 }
 
 export interface V2ReceiverSnapshot {
-  readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot | Readonly<{ kind: 'idle' }>
+  readonly connection: import('../receiver/connection-state').ReceiverConnectionSnapshot |
+    Readonly<{ kind: 'idle'; join?: import('../receiver/initial-join').InitialJoinState }>
   readonly share: V2ShareIdentity | null
   readonly browse: V2BrowseState
   readonly draft: V2SelectionDraft

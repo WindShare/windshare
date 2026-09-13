@@ -3,6 +3,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -27,6 +28,7 @@ const (
 	v2CriticalPayload               = "critical sender-relay-receiver\n"
 
 	v2SenderRelayRecoveryMilestone  = "sender_relay_recovery"
+	v2SenderReadyMilestone          = "sender_ready"
 	v2SenderDirectLaneMilestone     = "sender_direct_lane"
 	v2SenderStopMilestone           = "sender_stop"
 	v2ReceiverDirectLaneMilestone   = "receiver_direct_lane"
@@ -127,6 +129,9 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 	)
 	shareLink := waitV2Match(t, share, regexp.MustCompile(`(?m)^Link: (\S+)$`), share.stdout)
 	capabilitySecrets := v2CapabilityForbiddenValues(shareLink)
+	// Readiness consumes startup events before introducing the fault. Recovery
+	// then has to replace that exact admitted connection generation.
+	waitV2ProcessTrace(t, share, v2SenderReadyMilestone, testrun.OutcomeSucceeded)
 	pauseContext, cancelPause := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
 	if err := scenario.observe(v2RelayProxyPauseMilestone, nil, func() error {
 		return proxy.Pause(pauseContext)
@@ -135,14 +140,26 @@ func TestLongV2ProcessSenderReconnectsAfterRelayPathRestoration(t *testing.T) {
 		t.Fatal(err)
 	}
 	cancelPause()
-	waitV2ProcessTrace(t, share, v2SenderRelayRecoveryMilestone, testrun.OutcomeStarted)
+	started := waitV2ProcessEvent(t, share, v2SenderRelayRecoveryMilestone, testrun.OutcomeStarted)
+	var recovering struct {
+		ConnectionGeneration uint64 `json:"connection_generation"`
+	}
+	if err := json.Unmarshal(started.Payload, &recovering); err != nil || recovering.ConnectionGeneration != 1 {
+		t.Fatalf("recovery did not retire initial connection generation: event=%+v error=%v", started, err)
+	}
 	if err := scenario.observe(v2RelayProxyResumeMilestone, nil, func() error {
 		proxy.Resume()
 		return nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	waitV2ProcessTrace(t, share, v2SenderRelayRecoveryMilestone, testrun.OutcomeSucceeded)
+	restored := waitV2ProcessEvent(t, share, v2SenderRelayRecoveryMilestone, testrun.OutcomeSucceeded)
+	var replacement struct {
+		ConnectionGeneration uint64 `json:"connection_generation"`
+	}
+	if err := json.Unmarshal(restored.Payload, &replacement); err != nil || replacement.ConnectionGeneration != recovering.ConnectionGeneration+1 {
+		t.Fatalf("restoration did not confirm replacement generation: event=%+v error=%v", restored, err)
+	}
 
 	output := testoutputroot.New(t).RootPath
 	receiver := startTracedV2Process(

@@ -141,6 +141,8 @@ func failureMessage(failure clievent.Failure) string {
 		message = "The relay rejected the request."
 	case clievent.MessageRelayUnavailable:
 		message = "The relay is unavailable."
+	case clievent.MessageShareUnavailable:
+		message = "The share is not currently available. Retry the original link."
 	case clievent.MessageDirectUnavailable:
 		message = "The direct connection is unavailable."
 	case clievent.MessageDirectPolicy:

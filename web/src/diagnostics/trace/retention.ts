@@ -80,6 +80,12 @@ const LEASE_RETIREMENT_RETENTION = {
   retrying: 'milestone', abandoned: 'outcome',
 } as const
 
+const HEARTBEAT_RETENTION = { probe: 'recent', acknowledged: 'recent', failed: 'outcome' } as const
+const CONNECTION_RECOVERY_RETENTION = {
+  attempt_started: 'recent', attempt_failed: 'recent', waiting: 'milestone',
+  connected: 'milestone', terminal: 'outcome', retry_requested: 'recent',
+} as const
+
 export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
     case 'protocol_operation':
@@ -96,6 +102,10 @@ export function traceEventRetention(event: TraceEventObservationV2): TraceRetent
         default:
           return 'recent'
       }
+    case 'relay_heartbeat':
+      return HEARTBEAT_RETENTION[event.payload.stage]
+    case 'connection_recovery':
+      return CONNECTION_RECOVERY_RETENTION[event.payload.transition]
     case 'lease_retirement':
       return LEASE_RETIREMENT_RETENTION[event.payload.transition]
     case 'request_scheduling':

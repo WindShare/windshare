@@ -374,9 +374,10 @@ const (
 	ErrorStarting
 	ErrorAdmission
 	ErrorStopped
+	ErrorResumeStale
 )
 
-func (c ErrorCode) valid() bool { return c >= ErrorMalformed && c <= ErrorStopped }
+func (c ErrorCode) valid() bool { return c >= ErrorMalformed && c <= ErrorResumeStale }
 
 type ErrorFrame struct {
 	Code       ErrorCode

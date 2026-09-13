@@ -108,6 +108,8 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 		sessionID := relaySessionID(3)
 		delivery, _ := (v2.DescriptorDelivery{RelaySessionID: sessionID, Object: fixture.descriptor}).MarshalBinary()
 		socket.respond(delivery)
+		credit, _ := (v2.SessionCredit{RelaySessionID: sessionID, Frames: 16, Bytes: v2.SenderWindowBytes}).MarshalBinary()
+		socket.respond(credit)
 		receiver, err := DialReceiver(context.Background(), ReceiverConfig{
 			RelayBaseURL: "https://relay.example", ShareID: fixture.fresh.ShareID,
 			Dial: DialOptions{SocketDialer: socket.dial},

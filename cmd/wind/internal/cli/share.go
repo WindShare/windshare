@@ -5,13 +5,14 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
-	"github.com/windshare/windshare/connectivity/relayset"
 	"math"
 	"slices"
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/commandprojection"
+	"github.com/windshare/windshare/connectivity/relayset"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/liveshare"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -41,12 +42,18 @@ type shareSessionFactory interface {
 }
 
 type activeShare struct {
-	lifecycle    relayset.SenderEndpoint
+	lifecycle    shareRelayIngress
 	factory      shareSessionFactory
 	prepared     *liveshare.PreparedSender
 	runtime      *commandRuntime
 	observations *shareObservations
 	startedAt    time.Time
+}
+
+type shareRelayIngress interface {
+	Accept(context.Context) (*relayv2.Channel, error)
+	StopRecovery()
+	Cleanup(context.Context) error
 }
 
 func (a *App) runShare(ctx context.Context, args []string) int {
@@ -76,16 +83,18 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		return code
 	}
 	defer func() { _ = prepared.Close() }()
-	authorities := make(chan clievent.RelayAuthority, len(request.relayURLs))
-	lifecycle, err := relayset.NewSender(ctx, request.relayURLs, func(ctx context.Context, relayURL string) (relayset.SenderEndpoint, error) {
-		endpoint, authority, dialErr := a.connectShareRelay(ctx, prepared, relayURL, observations)
+	lifecycle, err := relayset.NewSender(ctx, request.relayURLs, func(_ context.Context, relayURL string) (relayset.SenderEndpoint, error) {
+		endpoint, _, dialErr := a.prepareShareRelay(prepared, relayURL, observations)
 		if dialErr != nil {
 			return nil, dialErr
 		}
-		authorities <- authority
 		return endpoint, nil
 	})
 	if err == nil {
+		lifecycle.ObserveAvailability(observations.ObserveRelayAvailability)
+		networkContext, cancelNetwork := context.WithCancel(ctx)
+		defer cancelNetwork()
+		go wakeSenderRelaysOnNetworkChange(networkContext, lifecycle)
 		err = lifecycle.WaitReady(ctx)
 	}
 	if err != nil {
@@ -97,7 +106,8 @@ func (a *App) runShare(ctx context.Context, args []string) int {
 		emitShareCommandFailure(runtime, ExitNetwork, err)
 		return ExitNetwork
 	}
-	relayAuthority := <-authorities
+	readyEndpoint, _ := v2.NormalizeRelayEndpoint(lifecycle.ReadyRelayURL())
+	relayAuthority, _ := commandprojection.RelayAuthority(readyEndpoint)
 	observations.SetRelayAuthority(relayAuthority)
 	active, code := a.activateShare(
 		prepared,
@@ -140,12 +150,11 @@ func (a *App) prepareShareSender(
 	return prepared, ExitOK
 }
 
-func (a *App) connectShareRelay(
-	ctx context.Context,
+func (a *App) prepareShareRelay(
 	prepared *liveshare.PreparedSender,
 	relayURL string,
 	observations *shareObservations,
-) (*senderRelayLifecycle, clievent.RelayAuthority, error) {
+) (*senderrelay.Lifecycle, clievent.RelayAuthority, error) {
 	material := prepared.Registration()
 	shareID, shareInstance, pkHash, err := relayRegistrationIdentity(material)
 	if err != nil {
@@ -165,35 +174,27 @@ func (a *App) connectShareRelay(
 	if err != nil {
 		return nil, clievent.RelayAuthority{}, err
 	}
-	connection, err := relayv2.DialSender(ctx, relayv2.SenderConfig{
-		RelayBaseURL: relayURL, Init: register, SenderPrivateKey: material.SenderPrivateKey,
-		Descriptor: material.Descriptor,
-		Dial:       relayv2.DialOptions{LifecycleObservationCapacity: observations.relayObservationCapacity()},
-	})
+	endpoint, err := v2.NormalizeRelayEndpoint(relayURL)
 	if err != nil {
 		return nil, clievent.RelayAuthority{}, err
 	}
-	relayAuthority, err := commandprojection.RelayAuthority(connection.Endpoint())
+	relayAuthority, err := commandprojection.RelayAuthority(endpoint)
 	if err != nil {
-		_ = connection.Close()
-		observations.attachRelayStream(connection.LifecycleTrace())()
-		observations.registerRelayCompletion(connection.CompleteObservations)
 		return nil, clievent.RelayAuthority{}, err
 	}
-	lifecycle, err := newSenderRelayLifecycle(senderRelayLifecycleConfig{
-		relayURL: relayURL, fresh: register, resumeToken: resumeToken,
-		privateKey: material.SenderPrivateKey, initial: connection,
-		lifecycleObservationCapacity: observations.relayObservationCapacity(),
-		observeConnection: func(connection senderRelayConnection) func() {
+	lifecycle, err := senderrelay.New(senderrelay.Config{
+		RelayURL: relayURL, Fresh: register, ResumeToken: resumeToken,
+		PrivateKey: material.SenderPrivateKey, Descriptor: material.Descriptor,
+		LifecycleObservationCapacity: observations.relayObservationCapacity(),
+		ObserveConnection: func(connection senderrelay.Connection) func() {
 			return observations.attachRelayStream(connection.LifecycleTrace())
 		},
-		observe:        a.observeSenderRelayRecovery,
-		observeAttempt: observations.ObserveRelayRecovery,
+		ObserveAttempt: func(attempt senderrelay.Attempt) {
+			observations.ObserveRelayRecovery(relayAuthority, attempt)
+			a.observeSenderRelayRecovery(attempt)
+		},
 	})
 	if err != nil {
-		_ = connection.Close()
-		observations.attachRelayStream(connection.LifecycleTrace())()
-		observations.registerRelayCompletion(connection.CompleteObservations)
 		return nil, clievent.RelayAuthority{}, err
 	}
 	observations.registerRelayCompletion(lifecycle.CompleteObservations)
@@ -202,7 +203,7 @@ func (a *App) connectShareRelay(
 
 func (a *App) activateShare(
 	prepared *liveshare.PreparedSender,
-	lifecycle relayset.SenderEndpoint,
+	lifecycle shareRelayIngress,
 	relayAuthority clievent.RelayAuthority,
 	request shareRequest,
 	runtime *commandRuntime,
@@ -354,23 +355,25 @@ func (a *App) serveActiveShare(ctx context.Context, active *activeShare) int {
 	return code
 }
 
-func (a *App) observeSenderRelayRecovery(milestone senderRelayRecoveryMilestone) {
+func (a *App) observeSenderRelayRecovery(attempt senderrelay.Attempt) {
 	outcome := testrun.OutcomeFailed
-	switch milestone {
-	case senderRelayRecoveryStarted:
+	switch {
+	case attempt.State == senderrelay.AttemptStarted && attempt.Number == 1 && attempt.Generation > 0:
 		outcome = testrun.OutcomeStarted
-	case senderRelayRecoverySucceeded:
+	case attempt.State == senderrelay.AttemptSucceeded && attempt.Generation > 1:
 		outcome = testrun.OutcomeSucceeded
-	case senderRelayRecoveryFailed:
+	case attempt.State == senderrelay.AttemptFailed && attempt.Terminal && attempt.Generation > 0:
 	default:
 		return
 	}
-	a.recordProcessTrace(processTraceShareComponent, processTraceSenderRelayRecovery, outcome)
+	a.processTrace.record(processTraceShareComponent, processTraceSenderRelayRecovery, outcome, struct {
+		ConnectionGeneration uint64 `json:"connection_generation"`
+	}{attempt.Generation})
 }
 
 func (a *App) newShareRuntimeFactory(
 	prepared *liveshare.PreparedSender,
-	lifecycle relayset.SenderEndpoint,
+	lifecycle shareRelayIngress,
 	observations *shareObservations,
 	clock commandClock,
 ) (*sessionruntime.SenderFactory, error) {
@@ -456,7 +459,7 @@ func relayRegistrationIdentity(material liveshare.RegistrationMaterial) (v2.Shar
 func (a *App) serveSessions(
 	ctx context.Context,
 	factory shareSessionFactory,
-	lifecycle relayset.SenderEndpoint,
+	lifecycle shareRelayIngress,
 	observations *shareObservations,
 ) error {
 	for {

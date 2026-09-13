@@ -13,17 +13,20 @@ import {
   type V2RelayErrorFrame,
 } from './v2-protocol'
 import { BoundedStreamQueue } from './stream-queue'
+import { RelayHeartbeat, type RelayHeartbeatTrace } from './heartbeat'
+import { ReceiverCredit } from './receiver-credit'
 
 const WEBSOCKET_OPEN = 1
 const WEBSOCKET_CLOSING = 2
 const WEBSOCKET_CLOSED = 3
+// Browser close() only accepts 1000 or application codes from 3000 to 4999.
+export const V2_RELAY_HEARTBEAT_CLOSE_CODE = 4001
+export const V2_RELAY_PROTOCOL_CLOSE_CODE = 4002
 const BUFFER_DRAIN_INTERVAL_MILLISECONDS = 8
 const MAXIMUM_BUFFERED_BYTES = 4 * 65_536
 export const V2_RELAY_RECEIVE_QUEUE_FRAMES = 32
 export const V2_RELAY_CLOSE_TIMEOUT_MILLISECONDS = 2_000
 export const V2_RELAY_JOIN_TIMEOUT_MILLISECONDS = 30_000
-export const V2_RELAY_STARTING_WINDOW_MILLISECONDS = 5_000
-const V2_RELAY_MINIMUM_RETRY_MILLISECONDS = 50
 
 export interface V2WebSocketPort {
   binaryType: BinaryType
@@ -65,36 +68,20 @@ export class V2RelayReceiverError extends Error {
 export async function dialV2RelayReceiver(
   relayBase: string,
   capability: Suite02CapabilityKey,
-  options: { readonly socketFactory?: V2WebSocketFactory; readonly signal?: AbortSignal } = {},
+  options: {
+    readonly socketFactory?: V2WebSocketFactory
+    readonly signal?: AbortSignal
+    readonly heartbeatTrace?: (event: RelayHeartbeatTrace) => void
+  } = {},
 ): Promise<V2RelayReceiverConnection> {
   const deadline = relayJoinDeadline(options.signal)
-  const startedAt = Date.now()
   try {
     deadline.signal.throwIfAborted()
     const endpoint = await canonicalV2RelayEndpoint(relayBase)
-    while (true) {
-      try {
-        return await dialV2RelayReceiverOnce(
-          endpoint,
-          capability,
-          options.socketFactory ?? browserWebSocketFactory,
-          deadline.signal,
-        )
-      } catch (error) {
-        const elapsed = Date.now() - startedAt
-        const remaining = V2_RELAY_STARTING_WINDOW_MILLISECONDS - elapsed
-        if (
-          !(error instanceof V2RelayReceiverError) ||
-          error.relayError?.code !== V2_RELAY_ERROR.starting ||
-          remaining <= 0
-        ) throw error
-        const retry = Math.max(
-          V2_RELAY_MINIMUM_RETRY_MILLISECONDS,
-          error.relayError.retryAfterMilliseconds,
-        )
-        await delay(Math.min(retry, remaining), deadline.signal)
-      }
-    }
+    return await dialV2RelayReceiverOnce(
+      endpoint, capability, options.socketFactory ?? browserWebSocketFactory,
+      deadline.signal, options.heartbeatTrace,
+    )
   } finally {
     deadline.close()
   }
@@ -105,26 +92,29 @@ async function dialV2RelayReceiverOnce(
   capability: Suite02CapabilityKey,
   socketFactory: V2WebSocketFactory,
   signal: AbortSignal,
+  heartbeatTrace?: (event: RelayHeartbeatTrace) => void,
 ): Promise<V2RelayReceiverConnection> {
   signal.throwIfAborted()
   const socket = socketFactory(endpoint.dialEndpoint)
   socket.binaryType = 'arraybuffer'
   try {
     await awaitSocketOpen(socket, signal)
-    socket.send(encodeV2Join(capability.shareIdRaw))
-    const deliveryBytes = await nextBinaryMessage(socket, signal)
-    const relayError = decodeRelayErrorIfPresent(deliveryBytes)
-    if (relayError !== undefined) {
-      throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
-    }
-    const delivery = decodeV2DescriptorDelivery(deliveryBytes)
-    const channel = new V2OpaqueRelayFrameChannel(socket, delivery.relaySessionId)
-    return Object.freeze({
-      endpoint,
-      relaySessionId: delivery.relaySessionId.slice(),
-      descriptorObject: delivery.object.slice(),
-      channel,
-      close: () => channel.close(),
+    return await receiveDescriptor(socket, signal, () => socket.send(encodeV2Join(capability.shareIdRaw)), deliveryBytes => {
+      const relayError = decodeRelayErrorIfPresent(deliveryBytes)
+      if (relayError !== undefined) {
+        throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
+      }
+      const delivery = decodeV2DescriptorDelivery(deliveryBytes)
+      // Install the channel listener in the descriptor event itself: the relay
+      // sends its initial credit next, before the caller resumes its join.
+      const channel = new V2OpaqueRelayFrameChannel(socket, delivery.relaySessionId, heartbeatTrace)
+      return Object.freeze({
+        endpoint,
+        relaySessionId: delivery.relaySessionId.slice(),
+        descriptorObject: delivery.object.slice(),
+        channel,
+        close: () => channel.close(),
+      })
     })
   } catch (error) {
     if (socket.readyState < WEBSOCKET_CLOSING) socket.close(1000, 'relay join failed')
@@ -159,13 +149,17 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
   readonly #socket: V2WebSocketPort
   readonly #relaySessionId: Uint8Array<ArrayBuffer>
   readonly #receiveQueue: BoundedStreamQueue<Frame>
+  readonly #heartbeat: RelayHeartbeat
+  readonly #credit: ReceiverCredit
+  readonly #lifetime = new AbortController()
   #state: ChannelState = 'open'
   #sendTail: Promise<void> = Promise.resolve()
   #closeTask: Promise<void> | undefined
 
-  constructor(socket: V2WebSocketPort, relaySessionId: Uint8Array) {
+  constructor(socket: V2WebSocketPort, relaySessionId: Uint8Array, heartbeatTrace?: (event: RelayHeartbeatTrace) => void) {
     this.#socket = socket
     this.#relaySessionId = relaySessionId.slice()
+    this.#credit = new ReceiverCredit(relaySessionId)
     this.#receiveQueue = new BoundedStreamQueue(
       V2_RELAY_RECEIVE_QUEUE_FRAMES,
       () => { this.close().catch(() => undefined) },
@@ -174,6 +168,7 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
     socket.addEventListener('message', this.#onMessage)
     socket.addEventListener('close', this.#onClose)
     socket.addEventListener('error', this.#onError)
+    this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, V2_RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
   }
 
   get state(): ChannelState {
@@ -194,23 +189,36 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
   }
 
   #enqueue(frame: Frame, terminal: boolean, signal?: AbortSignal): Promise<void> {
-    const owned = frame.slice()
-    const operation = this.#sendTail.then(async () => {
-      signal?.throwIfAborted()
-      if (this.#state !== 'open' || this.#socket.readyState !== WEBSOCKET_OPEN) {
-        throw new V2RelayReceiverError('Relay frame channel is closed')
+    let encoded: Uint8Array<ArrayBuffer>
+    try {
+      encoded = encodeV2OpaqueRoute({ relaySessionId: this.#relaySessionId, ciphertext: frame })
+    } catch (error) {
+      return Promise.reject(error)
+    }
+    const lifetime = this.#lifetime.signal
+    const sendSignal = signal === undefined ? lifetime : AbortSignal.any([signal, lifetime])
+    const previous = this.#sendTail
+    const operation = waitForSendTurn(previous, sendSignal).then(async () => {
+      await this.#credit.waitForCapacity(encoded.byteLength, sendSignal)
+      await waitForBufferCapacity(this.#socket, sendSignal)
+      sendSignal.throwIfAborted()
+      // No asynchronous boundary may separate this reservation from socket.send:
+      // aborted waits must leave both frame and complete wire-byte credit intact.
+      this.#credit.consume(encoded.byteLength)
+      try {
+        this.#socket.send(encoded)
+      } catch (error) {
+        this.#fail(error)
+        throw error
       }
-      await waitForBufferCapacity(this.#socket, signal)
-      this.#socket.send(encodeV2OpaqueRoute({
-        relaySessionId: this.#relaySessionId,
-        ciphertext: owned,
-      }))
       if (terminal) {
-        await waitForBufferDrain(this.#socket, signal)
+        await waitForBufferDrain(this.#socket, sendSignal)
         await this.close()
       }
     })
-    this.#sendTail = operation.catch(() => undefined)
+    // Aborting a queued caller must be prompt without letting its successor
+    // overtake the still-active writer that preceded it.
+    this.#sendTail = Promise.all([previous, operation.catch(() => undefined)]).then(() => undefined)
     return operation
   }
 
@@ -221,6 +229,7 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
         throw new V2RelayReceiverError('Relay delivered a non-binary frame')
       }
       const encoded = new Uint8Array(event.data)
+      if (this.#heartbeat.receive(encoded) || this.#credit.receive(encoded)) return
       const relayError = decodeRelayErrorIfPresent(encoded)
       if (relayError !== undefined) {
         throw new V2RelayReceiverError(relayErrorMessage(relayError), { relayError })
@@ -255,12 +264,12 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
     this.#fail(new V2RelayReceiverError('Relay WebSocket failed'))
   }
 
-  #fail(reason: unknown): void {
+  #fail(reason: unknown, code = V2_RELAY_PROTOCOL_CLOSE_CODE, closeReason = 'invalid relay frame'): void {
     if (this.#state === 'closed') return
     this.#state = 'closed'
-    this.#removeListeners()
+    this.#removeListeners(reason)
     this.#receiveQueue.fail(reason)
-    if (this.#socket.readyState < WEBSOCKET_CLOSING) this.#socket.close(1002, 'invalid relay frame')
+    if (this.#socket.readyState < WEBSOCKET_CLOSING) this.#socket.close(code, closeReason)
   }
 
   #retire(): void {
@@ -286,7 +295,9 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
     }
   }
 
-  #removeListeners(): void {
+  #removeListeners(reason: unknown = new V2RelayReceiverError('Relay frame channel is closed')): void {
+    this.#lifetime.abort(reason)
+    this.#heartbeat.close()
     this.#socket.removeEventListener('message', this.#onMessage)
     this.#socket.removeEventListener('close', this.#onClose)
     this.#socket.removeEventListener('error', this.#onError)
@@ -326,9 +337,14 @@ function awaitSocketOpen(socket: V2WebSocketPort, signal?: AbortSignal): Promise
   })
 }
 
-function nextBinaryMessage(socket: V2WebSocketPort, signal?: AbortSignal): Promise<Uint8Array> {
-  signal?.throwIfAborted()
-  return new Promise<Uint8Array>((resolve, reject) => {
+function receiveDescriptor(
+  socket: V2WebSocketPort,
+  signal: AbortSignal,
+  join: () => void,
+  accept: (encoded: Uint8Array) => V2RelayReceiverConnection,
+): Promise<V2RelayReceiverConnection> {
+  signal.throwIfAborted()
+  return new Promise<V2RelayReceiverConnection>((resolve, reject) => {
     const cleanup = () => {
       socket.removeEventListener('message', received)
       socket.removeEventListener('close', closed)
@@ -341,7 +357,11 @@ function nextBinaryMessage(socket: V2WebSocketPort, signal?: AbortSignal): Promi
         reject(new V2RelayReceiverError('Relay handshake frame is not binary'))
         return
       }
-      resolve(new Uint8Array(event.data))
+      try {
+        resolve(accept(new Uint8Array(event.data)))
+      } catch (error) {
+        reject(error)
+      }
     }
     const closed = () => {
       cleanup()
@@ -358,7 +378,25 @@ function nextBinaryMessage(socket: V2WebSocketPort, signal?: AbortSignal): Promi
     socket.addEventListener('message', received, { once: true })
     socket.addEventListener('close', closed, { once: true })
     socket.addEventListener('error', failed, { once: true })
-    signal?.addEventListener('abort', aborted, { once: true })
+    signal.addEventListener('abort', aborted, { once: true })
+    try {
+      join()
+    } catch (error) {
+      cleanup()
+      reject(error)
+    }
+  })
+}
+
+function waitForSendTurn(previous: Promise<void>, signal: AbortSignal): Promise<void> {
+  if (signal.aborted) return Promise.reject(signal.reason)
+  return new Promise<void>((resolve, reject) => {
+    const aborted = () => reject(signal.reason)
+    signal.addEventListener('abort', aborted, { once: true })
+    previous.then(() => {
+      signal.removeEventListener('abort', aborted)
+      resolve()
+    })
   })
 }
 

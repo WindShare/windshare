@@ -361,6 +361,8 @@ export class FakeJoinedShare {
   readonly #projectionShape: 'single-file' | 'tree'
   readonly #generationListeners = new Set<V2ProtocolGenerationListener>()
   closeCount = 0
+  reconnectCount = 0
+  readonly #connectionListeners = new Set<(snapshot: import('../../src/receiver/connection-state').ReceiverConnectionSnapshot) => void>()
 
   constructor(
     defaultSelected: boolean,
@@ -401,9 +403,16 @@ export class FakeJoinedShare {
     return this.protocolSessionId
   }
 
-  subscribeConnection(listener: (snapshot: { kind: 'connected' }) => void): () => void {
+  subscribeConnection(listener: (snapshot: import('../../src/receiver/connection-state').ReceiverConnectionSnapshot) => void): () => void {
+    this.#connectionListeners.add(listener)
     listener({ kind: 'connected' })
-    return () => undefined
+    return () => this.#connectionListeners.delete(listener)
+  }
+
+  requestReconnect(): void { this.reconnectCount += 1 }
+
+  connectionChanged(snapshot: import('../../src/receiver/connection-state').ReceiverConnectionSnapshot): void {
+    for (const listener of this.#connectionListeners) listener(snapshot)
   }
 
   subscribePathActivity(): () => void { return () => undefined }

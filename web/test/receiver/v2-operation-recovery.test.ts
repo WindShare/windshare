@@ -229,7 +229,8 @@ it('retries on an already installed generation when an old operation fails late'
     releaseFailure.resolve()
     await expect(request).resolves.toMatchObject({ value: 'ready', generation: { id: 2 } })
     expect(factory.connectFreshCalls).toBe(1)
-    expect(trace).toMatchObject([{ transition: 'wait_for_generation', generationId: 1 }])
+    expect(trace.filter(event => event.eventName === 'operation_recovery'))
+      .toMatchObject([{ transition: 'wait_for_generation', generationId: 1 }])
   } finally { await supervisor.close() }
 })
 

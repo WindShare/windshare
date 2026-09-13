@@ -23,6 +23,7 @@ import {
   V2StaleShareInstanceError,
 } from '../../src/receiver/v2-session-factory'
 import { V2ReceiverReconnectSupervisor } from '../../src/receiver/v2-supervisor'
+import { systemReconnectClock } from '../../src/receiver/recovery-clock'
 import type { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
 import { V2SessionRuntimeError } from '../../src/session/v2-runtime-types'
 
@@ -551,21 +552,43 @@ function registerProtocolSessionReplacementWaitTests(): void {
 }
 
 describe('bounded protocol generation replacement', () => {
-  it('retires failed authority and stops after the recovery wave', async () => {
+  it('keeps generation waiters through a long outage and wakes the same recovery owner', async () => {
+    vi.useFakeTimers()
     const session = new FakeSession([1])
     const relay = new TrackedRelay(1)
     const factory = new FakeSessionFactory()
     factory.connectFreshImpl = async () => { throw new Error('network unavailable') }
     const supervisor = new V2ReceiverReconnectSupervisor({
       descriptor: descriptor(), initial: core(session, relay), sessionFactory: factory,
-      policy: 'relay-only', clock: { now: () => 0, sleep: async () => undefined },
+      policy: 'relay-only', clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
     })
-    const terminal = expect(supervisor.waitForGenerationAfter(1)).rejects.toThrow('within its budget')
+    let settled = false
+    const waiting = supervisor.waitForGenerationAfter(1).then(() => { settled = true })
+    let state: unknown
+    supervisor.connection.subscribe(value => { state = value })
     session.detach(1)
-    await terminal
-    expect(factory.connectFreshCalls).toBe(4)
+    await vi.advanceTimersByTimeAsync(600_000)
+    expect(settled).toBe(false)
+    expect(factory.connectFreshCalls).toBeLessThanOrEqual(16)
+    expect(state).toMatchObject({ kind: 'reconnecting', phase: 'waiting' })
     expect(supervisor.generationId).toBe(1)
     expect(session.isClosed).toBe(true)
+    const replacement = deferred<V2ProtocolGenerationCore>()
+    let handshakeActive = false
+    factory.connectFreshImpl = async () => { handshakeActive = true; return replacement.promise }
+    supervisor.requestReconnect()
+    await flushReconciliation()
+    while (!handshakeActive) await vi.advanceTimersToNextTimerAsync()
+    const calls = factory.connectFreshCalls
+    supervisor.requestReconnect()
+    supervisor.requestReconnect()
+    await flushReconciliation()
+    expect(factory.connectFreshCalls).toBe(calls)
+    replacement.resolve(core(new FakeSession([2]), new TrackedRelay(2)))
+    await waiting
+    expect(supervisor.generationId).toBe(2)
+    expect(factory.closeCalls).toBe(0)
+    expect(state).toEqual({ kind: 'connected' })
     await supervisor.close()
   })
 })

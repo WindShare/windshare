@@ -3,9 +3,11 @@ import { writeFile } from 'node:fs/promises'
 
 import { expect, test, type TestInfo } from '@playwright/test'
 
-import { V2_BLOCK_BROKER_PARALLEL_READS } from '../src/content/v2-broker'
 import { createV2PeerRecoveryPolicy } from '../src/connectivity/peer-set/path'
-import type { HotSwitchPageEvent } from './fixtures/hot-switch-contract'
+import {
+  HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
+  type HotSwitchPageEvent,
+} from './fixtures/hot-switch-contract'
 import {
   advancePageOutput,
   detachPagePeer,
@@ -30,7 +32,7 @@ const SCENARIO_ID = 'chromium-direct-recovery'
 const FILE_NAME = 'direct-recovery.bin'
 const TRANSFER_BLOCKS_AFTER_INITIAL_WINDOW = 4
 const TRANSFER_BYTES =
-  (V2_BLOCK_BROKER_PARALLEL_READS + TRANSFER_BLOCKS_AFTER_INITIAL_WINDOW) *
+  (HOT_SWITCH_INITIAL_BUFFERED_BLOCKS + TRANSFER_BLOCKS_AFTER_INITIAL_WINDOW) *
   DIRECT_TEST_BLOCK_BYTES
 const RECOVERY_POLICY = createV2PeerRecoveryPolicy({
   negotiationBudgetMilliseconds: 10_000,
@@ -185,8 +187,9 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     )
 
     const recoveredTrafficBoundary = events.latestDispatchSequence()
-    await advancePageOutput(page)
-    await advancePageOutput(page)
+    // One page turn supplies concurrent demand so the allocator can sample the
+    // recovered peer before the local relay completes the first new request.
+    await advancePageOutput(page, 2)
     const recoveredPeerDispatch = await events.waitFor(
       'dispatch',
       (event) => event.observation.route === 'direct' &&

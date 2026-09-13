@@ -20,6 +20,7 @@ const registrationReadLimit = v2.MaxDescriptorBytes + v2.DescriptorDeliveryHeade
 type DialOptions struct {
 	HTTPClient *http.Client
 	Header     http.Header
+	Heartbeat  HeartbeatConfig
 	// LifecycleObservationCapacity enables a producer-owned bounded stream.
 	// Zero disables lifecycle observation without allocating producer work.
 	LifecycleObservationCapacity int
@@ -33,6 +34,7 @@ type DialOptions struct {
 type BinarySocket interface {
 	Read(context.Context) (websocket.MessageType, []byte, error)
 	Write(context.Context, websocket.MessageType, []byte) error
+	Ping(context.Context) error
 	Close(websocket.StatusCode, string) error
 	SetReadLimit(int64)
 }
@@ -72,6 +74,9 @@ type SenderConnection struct {
 func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, error) {
 	if config.Dial.LifecycleObservationCapacity < 0 {
 		return nil, ErrLifecycleObservationCapacity
+	}
+	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
+		return nil, err
 	}
 	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
 	if err != nil {
@@ -150,6 +155,7 @@ func DialSender(ctx context.Context, config SenderConfig) (*SenderConnection, er
 	link := newLinkWithLifecycleStream(
 		context.Background(), socket, false, config.Dial.LifecycleObservationCapacity,
 	)
+	link.heartbeat = config.Dial.Heartbeat
 	link.start()
 	return &SenderConnection{endpoint: endpoint, link: link, stats: stats}, nil
 }
@@ -220,6 +226,9 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 	if config.Dial.LifecycleObservationCapacity < 0 {
 		return nil, ErrLifecycleObservationCapacity
 	}
+	if _, err := config.Dial.Heartbeat.Normalize(); err != nil {
+		return nil, err
+	}
 	endpoint, err := v2.NormalizeRelayEndpoint(config.RelayBaseURL)
 	if err != nil {
 		return nil, err
@@ -259,6 +268,7 @@ func DialReceiver(ctx context.Context, config ReceiverConfig) (*ReceiverConnecti
 		context.Background(), socket, true, config.Dial.LifecycleObservationCapacity,
 	)
 	channel := link.installFixed(delivery.RelaySessionID)
+	link.heartbeat = config.Dial.Heartbeat
 	link.start()
 	return &ReceiverConnection{
 		endpoint: endpoint, descriptor: append([]byte(nil), delivery.Object...), channel: channel, link: link,
