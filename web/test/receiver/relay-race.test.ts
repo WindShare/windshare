@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { firstUsableRelay, receiverRelayBases, RelayEndpointFailure } from '../../src/receiver/relay-race'
-import { SenderObjectError } from '../../src/crypto/sender-object'
+import { V2StaleShareInstanceError } from '../../src/receiver/v2-session-factory'
 import { isShareRecoveryFailure } from '../../src/receiver/recovery-failure'
 
 function deferred<T>() {
@@ -12,7 +12,7 @@ function deferred<T>() {
 describe('first usable relay', () => {
   it('rejects authenticated identity failures beside a stalled endpoint and disposes its late result', async () => {
     const slow = deferred<string>()
-    const failure = new SenderObjectError('signature', 'Invalid sender signature')
+    const failure = new V2StaleShareInstanceError('Authenticated descriptor changed')
     const close = vi.fn(async () => undefined)
     let stalledSignal: AbortSignal | undefined
     const task = firstUsableRelay(['stalled', 'invalid'], new AbortController().signal,

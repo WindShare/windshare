@@ -31,9 +31,9 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 ## Pause, Resume & Recovery
 
-If the sender is temporarily unreachable when opening a link, WindShare retries for 30 seconds, then offers **Retry now**, **Continue waiting**, or **Cancel**. Continue waiting retries at a lower rate; temporary unavailability does not mean the link has expired. Invalid links and authentication failures are reported directly.
+If the sender is temporarily unreachable when opening a link, WindShare retries for 30 seconds, then offers **Retry now**, **Continue waiting**, or **Cancel**. Continue waiting retries at a lower rate; temporary unavailability does not mean the link has expired. Invalid links are reported directly. A relay that returns malformed or unverifiable data is excluded while other relays can still connect; if every relay is excluded, the connection fails.
 
-Keep the original page open during an active download outage. Reconnection continues automatically, preserving the download, save destination, and reusable progress. **Reconnect now** wakes that recovery without restarting the download. Healthy direct transfers can continue while a relay reconnects. File changes, share termination, and save errors are handled separately from network waiting.
+Keep the original page open during an active download outage. Reconnection continues automatically, preserving the download, save destination, and reusable progress. **Reconnect now** wakes that recovery without restarting the download. Healthy direct or relay transfers continue when another relay disconnects or is excluded. A verified conflict with the current share identity still ends the session. File changes, share termination, and save errors are handled separately from network waiting.
 
 - **Available controls**: Folder downloads offer **Pause** and **Stop**. Direct ZIP and browser workspace downloads offer **Pause**; the browser fallback offers **Stop** only.
 - **Pause**: Saves progress supported by the chosen method and cancels that download's pending network wait. Reconnection does not resume a paused download; choose **Resume** when ready. Wait for pausing to finish before leaving the page.
