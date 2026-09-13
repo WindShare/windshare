@@ -192,6 +192,7 @@ async function runTransfer(
       outcome: succeeded ? 'succeeded' : 'failed',
       evidence: deliveryEvidence(input, received, succeeded ? 'succeeded' : 'failed'),
       jobOutcome,
+      ...(result.abortReason === undefined ? {} : { failureMessage: bridge.describe(result.abortReason) }),
     })
   } catch (error) {
     runtimeError = bridge.describe(error)

@@ -220,6 +220,12 @@ jobs:
         run: pnpm -C web test:browser:cross
       - name: Run Firefox and WebKit component contracts
         run: pnpm -C web test:browser:contract:cross
+      - name: Preserve cross-browser failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-cross-diagnostics
+          path: web/test-results/cross-browser-smoke/
 
   browser-periodic:
     name: Chromium periodic browser contracts (Linux)
