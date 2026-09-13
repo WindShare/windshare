@@ -130,7 +130,7 @@ func TestWindowsV3DirectoryPublicNameValidationAcceptsEmptyPlan(t *testing.T) {
 	// reduced to zero public entries; it must not force a native directory scan.
 	directory := &windowsV3Directory{
 		file:      &os.File{},
-		inspector: windowsV3HandleInspectorFunc(func(windows.Handle) (windowsV3HandleFacts, error) { return windowsV3HandleFacts{}, nil }),
+		inspector: windowsV3ObjectInspectorFunc(func(windows.Handle) (windowsV3ObjectFacts, error) { return windowsV3ObjectFacts{}, nil }),
 		policy:    &windowsV3PrivatePolicy{},
 	}
 	if err := directory.validatePublicEntryNames(nil); err != nil {

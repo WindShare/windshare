@@ -143,9 +143,9 @@ func TestWindowsV3ExternalPlacementGuardPinsWithoutCertifyingHostileAncestorDACL
 }
 
 func TestWindowsV3ExternalPlacementDoesNotApplyOutputLookupPolicy(t *testing.T) {
-	facts := validWindowsV3CertificationFacts()
+	facts := validWindowsV3ObjectFacts()
 	facts.caseSensitive = true
-	if err := validateWindowsV3Certification(facts); !errors.Is(err, errWindowsV3OutputUnsupported) {
+	if err := validateWindowsV3RootShape(facts); !errors.Is(err, errWindowsV3OutputUnsupported) {
 		t.Fatalf("case-sensitive output-root certification = %v", err)
 	}
 	if err := validateWindowsV3ExternalPlacement(facts, facts.object.volume); err != nil {

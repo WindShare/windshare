@@ -230,7 +230,7 @@ func (traversal windowsV3AncestryGuardTraversal) openEntry(
 	index int,
 	parentHandle windows.Handle,
 	parentCaseSensitive bool,
-) (*os.File, windowsV3HandleFacts, error) {
+) (*os.File, windowsV3ObjectFacts, error) {
 	path := traversal.paths[index]
 	rootEntry := index == len(traversal.paths)-1
 	openRoot, openPath, access, objectAttributes := windowsV3AncestryOpenParameters(
@@ -244,14 +244,14 @@ func (traversal windowsV3AncestryGuardTraversal) openEntry(
 			category = errWindowsV3OutputUnsafe
 			cause = errors.Join(outputfault.ErrAncestryAuthorityDenied, err)
 		}
-		return nil, windowsV3HandleFacts{}, windowsV3Failure(
+		return nil, windowsV3ObjectFacts{}, windowsV3Failure(
 			traversal.operation, path, category, cause,
 		)
 	}
 	file := os.NewFile(uintptr(handle), path)
 	if file == nil {
 		_ = windows.CloseHandle(handle)
-		return nil, windowsV3HandleFacts{}, windowsV3Failure(
+		return nil, windowsV3ObjectFacts{}, windowsV3Failure(
 			traversal.operation, path, errWindowsV3OutputUnsafe,
 			errors.New("wrap guarded ancestry handle"),
 		)
@@ -263,7 +263,7 @@ func (traversal windowsV3AncestryGuardTraversal) openEntry(
 		if errors.Is(cause, errWindowsV3OutputUnsupported) {
 			class = errWindowsV3OutputUnsupported
 		}
-		return nil, windowsV3HandleFacts{}, errors.Join(
+		return nil, windowsV3ObjectFacts{}, errors.Join(
 			windowsV3Failure(traversal.operation, path, class, cause), file.Close(),
 		)
 	}
@@ -316,7 +316,7 @@ func (traversal windowsV3AncestryGuardTraversal) validateEntry(
 	index int,
 	rootEntry bool,
 	parentCaseSensitive bool,
-	facts windowsV3HandleFacts,
+	facts windowsV3ObjectFacts,
 	inspectErr error,
 ) error {
 	if inspectErr != nil {
@@ -325,7 +325,7 @@ func (traversal windowsV3AncestryGuardTraversal) validateEntry(
 	var err error
 	if rootEntry && (traversal.scope == windowsV3GuardPublicOutputRoot ||
 		traversal.scope == windowsV3GuardPrivatePublicationRoot) {
-		err = validateWindowsV3Certification(facts)
+		err = validateWindowsV3RootShape(facts)
 		if err == nil {
 			err = windowsV3ValidateOpenedObject(facts, traversal.root.volume, true)
 		}

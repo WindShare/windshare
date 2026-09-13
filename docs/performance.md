@@ -75,6 +75,13 @@ Compare runs from output-authority acquisition through confirmed publication. A 
 browser has a different completion boundary from a folder confirmed saved. Summed queue wait times
 overlap across files and must not be subtracted from elapsed download time.
 
+## Windows native output
+
+NTFS volume capabilities are certified when opening an output root. Subsequent object checks read
+current handle identity (volume GUID, serial, and File ID), attributes, and directory case sensitivity;
+they do not repeat path-based volume resolution. Ancestry guards still verify each opened directory
+against the certified volume. Reopening a root certifies it again; there is no process-wide path cache.
+
 ## Output
 
 Standard output is one schema-versioned JSON report with environment context, command outcomes,
