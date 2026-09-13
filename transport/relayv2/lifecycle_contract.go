@@ -30,6 +30,12 @@ func ValidateLifecycleTrace(event LifecycleTrace) LifecycleContractViolation {
 	if event.LinkID == 0 {
 		return LifecycleContractInvalidIdentity
 	}
+	if isHeartbeatLifecycleStage(event.Stage) {
+		return validateHeartbeatLifecycleTrace(event)
+	}
+	if event.HeartbeatRound != 0 || event.Wait != 0 || event.Timeout != 0 {
+		return LifecycleContractInvalidStageFields
+	}
 	switch event.Stage {
 	case LifecycleTraceDropped:
 		return validateDroppedLifecycleTrace(event)
@@ -111,6 +117,9 @@ func validSessionLifecycleStage(event LifecycleTrace) bool {
 }
 
 func validLifecycleStage(stage LifecycleStage) bool {
+	if isHeartbeatLifecycleStage(stage) {
+		return true
+	}
 	switch stage {
 	case LifecycleTerminalReserved, LifecycleSendAdmitted, LifecycleSendRejected,
 		LifecycleSendRolledBack, LifecycleRetirementDeferred, LifecycleRetired,

@@ -31,6 +31,12 @@ func projectRelayStage(value relayv2.LifecycleStage) (clievent.RelayLifecycleSta
 		return clievent.RelayLinkClosed, true
 	case relayv2.LifecycleTraceDropped:
 		return clievent.RelayTraceDropped, true
+	case relayv2.LifecycleHeartbeatProbe:
+		return clievent.RelayHeartbeatProbe, true
+	case relayv2.LifecycleHeartbeatAcknowledged:
+		return clievent.RelayHeartbeatAcknowledged, true
+	case relayv2.LifecycleHeartbeatFailed:
+		return clievent.RelayHeartbeatFailed, true
 	default:
 		return 0, false
 	}

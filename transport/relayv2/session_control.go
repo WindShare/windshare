@@ -9,10 +9,13 @@ import (
 
 type sendWindow struct{ frames, bytes int }
 
-func (l *link) senderWindowLocked(id v2.RelaySessionID) *sendWindow {
+func (l *link) sendWindowLocked(id v2.RelaySessionID) *sendWindow {
 	window := l.windows[id]
 	if window == nil {
-		window = &sendWindow{frames: v2.SenderWindowFrames, bytes: v2.SenderWindowBytes}
+		window = &sendWindow{}
+		if !l.fixed {
+			window.frames, window.bytes = v2.SenderWindowFrames, v2.SenderWindowBytes
+		}
 		l.windows[id] = window
 	}
 	return window
@@ -28,7 +31,7 @@ func (l *link) replenishCredit(credit v2.SessionCredit) bool {
 	}
 	l.writeMu.Lock()
 	defer l.writeMu.Unlock()
-	window := l.senderWindowLocked(credit.RelaySessionID)
+	window := l.sendWindowLocked(credit.RelaySessionID)
 	if int(credit.Frames) > v2.SenderWindowFrames-window.frames ||
 		int(credit.Bytes) > v2.SenderWindowBytes-window.bytes {
 		return false

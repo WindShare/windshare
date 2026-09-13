@@ -265,21 +265,22 @@ func TestReceiverInitialStartingUsesBoundedClockAndAllFailuresSettle(t *testing.
 	clock := &receiverFakeClock{now: time.Unix(1, 0)}
 	var calls atomic.Int32
 	rejection := errors.New("endpoint offline")
-	set, err := NewReceiver(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability}, Clock: clock, Dial: func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
+	recovery, err := NewReceiverRecovery(ReceiverRecoveryOptions{
+		Clock: clock, InitialWait: time.Second, Jitter: func(delay time.Duration) time.Duration { return delay },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	set, err := recovery.Join(context.Background(), ReceiverConfig{Receiver: liveshare.ReceiverConfig{Capability: capability}, Dial: func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
 		if calls.Add(1) <= 2 {
 			return nil, &relayv2.RelayError{Code: v2.ErrorStarting}
 		}
 		return nil, rejection
 	}})
-	if err != nil {
-		t.Fatal(err)
+	if set != nil || !errors.Is(err, rejection) || !errors.Is(err, ErrReceiverUnavailable) {
+		t.Fatal(set, err)
 	}
-	defer set.Close()
-	_, _, err = set.WaitReady(context.Background())
-	if !errors.Is(err, rejection) {
-		t.Fatal(err)
-	}
-	if len(clock.waits) != 2 || clock.waits[0] != receiverRetryDelay {
+	if len(clock.waits) != 3 || clock.waits[0] != receiverRetryDelay || clock.Now() != time.Unix(2, 0) {
 		t.Fatal(clock.waits)
 	}
 	var missingContext context.Context // Constructors reject missing lifetime ownership.

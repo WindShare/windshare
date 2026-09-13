@@ -55,8 +55,7 @@ func TestSessionControlValidation(t *testing.T) {
 	}
 	for _, invalid := range []SessionCredit{
 		{}, {RelaySessionID: id}, {RelaySessionID: id, Frames: 65, Bytes: 2000},
-		{RelaySessionID: id, Frames: 1, Bytes: 1}, {RelaySessionID: id, Frames: 1, Bytes: SenderWindowBytes + 1},
-		{RelaySessionID: id, Frames: 1, Bytes: MaxOpaqueCiphertextBytes + OpaqueRouteHeaderBytes + 1},
+		{RelaySessionID: id, Frames: 1, Bytes: SenderWindowBytes + 1},
 	} {
 		if _, err := invalid.MarshalBinary(); err == nil {
 			t.Fatal("accepted impossible credit", invalid)
@@ -64,8 +63,17 @@ func TestSessionControlValidation(t *testing.T) {
 	}
 	bad := bytes.Clone(encoded)
 	clear(bad[16:20])
-	if _, err := ParseSessionCredit(bad); err == nil {
-		t.Fatal("accepted zero frame credit")
+	if _, err := ParseSessionCredit(bad); err != nil {
+		t.Fatal("rejected byte-only credit", err)
+	}
+	for _, credit := range []SessionCredit{{RelaySessionID: id, Frames: 1}, {RelaySessionID: id, Bytes: SenderWindowBytes}} {
+		wire, err := credit.MarshalBinary()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if parsed, err := ParseSessionCredit(wire); err != nil || parsed != credit {
+			t.Fatal(parsed, err)
+		}
 	}
 	if _, err := (SessionAdmitted{}).MarshalBinary(); err == nil {
 		t.Fatal("accepted zero admission identity")

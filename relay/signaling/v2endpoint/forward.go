@@ -2,8 +2,6 @@ package v2endpoint
 
 import (
 	"context"
-	"errors"
-	"time"
 
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
@@ -12,9 +10,6 @@ import (
 type ForwardStage string
 
 const (
-	ForwardQueueWait         ForwardStage = "queue_wait"
-	ForwardQueueResumed      ForwardStage = "queue_resumed"
-	ForwardQueueWaitExpired  ForwardStage = "queue_wait_expired"
 	ForwardDestinationClosed ForwardStage = "destination_closed"
 	ForwardCreditViolation   ForwardStage = "credit_violation"
 	ForwardWindowConstrained ForwardStage = "window_constrained"
@@ -27,7 +22,6 @@ type ForwardTrace struct {
 	Source, Destination v2route.ConnectionRef
 	SessionID           v2.RelaySessionID
 	Stage               ForwardStage
-	Wait                time.Duration
 	SessionFrames       int
 	SessionBytes        int
 	ConnectionFrames    int
@@ -58,6 +52,9 @@ func (s *Server) forwardLoop(ctx context.Context, source *connection) error {
 }
 
 func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded []byte) error {
+	if len(encoded) >= 4 && string(encoded[:4]) == v2.ConnectionProbeMagic {
+		return s.answerConnectionProbe(ctx, source, encoded)
+	}
 	if len(encoded) >= 4 && string(encoded[:4]) == v2.SessionAdmittedMagic {
 		return s.admitSession(source, encoded)
 	}
@@ -81,7 +78,7 @@ func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded [
 		}
 	}
 	destination, _, _ := s.connections.resolve(resolution.Destination)
-	err = s.forwardToDestination(ctx, source, destination, route.RelaySessionID, encoded)
+	err = s.forwardToDestination(source, destination, route.RelaySessionID, encoded)
 	if err == nil {
 		return nil
 	}
@@ -102,22 +99,20 @@ func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded [
 }
 
 func (s *Server) forwardToDestination(
-	ctx context.Context, source, destination *connection,
+	source, destination *connection,
 	sessionID v2.RelaySessionID, encoded []byte,
 ) error {
 	if destination == nil {
 		return ErrConnection
 	}
-	if source.roleValue() == roleSender {
-		return s.forwardSender(source, destination, sessionID, encoded)
-	}
-	return s.forwardWithPressure(ctx, source, destination, sessionID, encoded)
+	return s.forwardCredited(source, destination, sessionID, encoded)
 }
 
-func (s *Server) forwardSender(source, destination *connection, sessionID v2.RelaySessionID, encoded []byte) error {
-	// Sender traffic is multiplexed. Waiting here would stop every sibling;
-	// the sender scheduler must reserve this destination's credit first.
-	trace, permitted := source.consumeSenderCredit(sessionID, len(encoded))
+func (s *Server) forwardCredited(source, destination *connection, sessionID v2.RelaySessionID, encoded []byte) error {
+	// Neither role may pause the socket reader behind productive data pressure:
+	// probes and native Ping/Pong need that reader even during an idle transfer.
+	// Source credit reserves bounded destination storage before each write.
+	trace, permitted := source.consumeForwardCredit(sessionID, len(encoded))
 	trace.Source, trace.Destination = source.ref, destination.ref
 	if trace.Stage != "" {
 		s.traceForward(trace, trace.Stage)
@@ -126,68 +121,11 @@ func (s *Server) forwardSender(source, destination *connection, sessionID v2.Rel
 		s.traceForward(trace, ForwardCreditViolation)
 		return ErrProtocol
 	}
-	if accepted, _, _ := destination.tryForward(sessionID, encoded); !accepted {
+	if accepted, _ := destination.tryForward(sessionID, encoded); !accepted {
 		s.traceForward(trace, ForwardDestinationClosed)
 		return ErrConnection
 	}
 	return nil
-}
-
-func (s *Server) forwardWithPressure(
-	ctx context.Context, source, destination *connection,
-	sessionID v2.RelaySessionID, encoded []byte,
-) error {
-	var started time.Time
-	var timer *time.Timer
-	var deadline <-chan time.Time
-	defer func() {
-		if timer != nil {
-			timer.Stop()
-		}
-	}()
-	for {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		accepted, changed, trace := destination.tryForward(sessionID, encoded)
-		trace.Source, trace.Destination = source.ref, destination.ref
-		trace.SessionID = sessionID
-		if !started.IsZero() {
-			trace.Wait = time.Since(started)
-		}
-		if accepted {
-			if !started.IsZero() {
-				s.traceForward(trace, ForwardQueueResumed)
-			}
-			return nil
-		}
-		if changed == nil {
-			s.traceForward(trace, ForwardDestinationClosed)
-			return ErrConnection
-		}
-		if started.IsZero() {
-			started = time.Now()
-			s.traceForward(trace, ForwardQueueWait)
-			timeout := s.writeTimeout
-			if timeout == 0 {
-				timeout = defaultWriteTimeout
-			}
-			timer = time.NewTimer(timeout)
-			deadline = timer.C
-		}
-		// Stop reading the source while the bounded destination queue is full.
-		// This carries TCP backpressure upstream instead of mistaking a fast
-		// localhost burst for a dead route and cancelling its P2P negotiation.
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline:
-			trace.Wait = time.Since(started)
-			s.traceForward(trace, ForwardQueueWaitExpired)
-			return errors.Join(ErrForwardTimeout, context.DeadlineExceeded)
-		case <-changed:
-		}
-	}
 }
 
 func (s *Server) traceForward(event ForwardTrace, stage ForwardStage) {

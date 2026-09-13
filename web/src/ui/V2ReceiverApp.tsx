@@ -101,7 +101,18 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
       </div>
       {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error}</div>}
       {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
-      {!hasContent && snapshot.phase === 'joining' && <p className="share-loading" role="status">Connecting to the sender…</p>}
+      {!hasContent && snapshot.phase === 'joining' && <div className="share-loading">
+        <p role="status">{snapshot.status}</p>
+        {snapshot.connection.kind === 'idle' && snapshot.connection.join === 'waiting-for-choice' && <>
+          <button type="button" onClick={() => controller.requestReconnect()}>Retry now</button>
+          <button type="button" onClick={() => controller.continueJoinWaiting()}>Continue waiting</button>
+        </>}
+        <button type="button" onClick={() => controller.cancelJoin()}>Cancel</button>
+      </div>}
+      {snapshot.connection.kind === 'reconnecting' && <div className="connection-recovery" role="status">
+        <p>Reconnection is automatic. Keep this page open to preserve your download progress.</p>
+        <button type="button" onClick={() => controller.requestReconnect()}>Reconnect now</button>
+      </div>}
       {hasContent && <ShareContent share={share} preview={snapshot.preview} previewActions={previewActions} explorer={{ rows: snapshot.rows, breadcrumbs: snapshot.breadcrumbs,
         pageIndex: snapshot.pageIndex, pageCount: snapshot.pageCount, omittedCount: snapshot.omittedCount,
         browse: snapshot.browse, draft: snapshot.draft, actions: {

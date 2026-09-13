@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/transfer"
 	transferfault "github.com/windshare/windshare/core/transfer/fault"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
@@ -67,7 +68,7 @@ func classifyErrorAtDepth(cause error, depth int, traversal *errorTraversal) (cl
 		return mustFailure(clievent.FailureOutputStateIO), true
 	case trustedURLErrorType, trustedNetErrorType:
 		return mustFailure(clievent.FailureRelayTransport), true
-	case trustedJoinType, trustedMultiWrapType:
+	case trustedJoinType, trustedMultiWrapType, reflect.TypeFor[*relayset.ReceiverJoinFailure]():
 		children, ok := cause.(interface{ Unwrap() []error })
 		if !ok {
 			return clievent.Failure{}, false
@@ -133,6 +134,12 @@ func classifyDirectError(cause error) (clievent.Failure, bool) {
 		return ProjectFault(boundary.Fault())
 	}
 	switch {
+	case exactError(cause, relayset.ErrReceiverUnavailable):
+		return mustFailure(clievent.FailureRelayNotFound), true
+	case exactError(cause, relayset.ErrReceiverWaitExpired):
+		return mustFailure(clievent.FailureDeadline), true
+	case exactError(cause, relayset.ErrReceiverShareChanged), exactError(cause, relayset.ErrReceiverAuthentication):
+		return mustFailure(clievent.FailureSessionProtocol), true
 	case exactError(cause, relayv2.ErrFrameBounds), exactError(cause, relayv2.ErrProtocol):
 		return mustFailure(clievent.FailureRelayProtocol), true
 	case exactError(cause, relayv2.ErrIngressOverflow), exactError(cause, relayv2.ErrEgressOverflow):
@@ -178,7 +185,7 @@ func containsExactErrorAtDepth(
 		return true
 	}
 	switch reflect.TypeOf(cause) {
-	case trustedJoinType, trustedMultiWrapType:
+	case trustedJoinType, trustedMultiWrapType, reflect.TypeFor[*relayset.ReceiverJoinFailure]():
 		children, ok := cause.(interface{ Unwrap() []error })
 		if !ok {
 			return false

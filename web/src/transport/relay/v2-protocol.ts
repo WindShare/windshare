@@ -69,6 +69,7 @@ export const V2_RELAY_ERROR = Object.freeze({
   starting: 9,
   admission: 10,
   stopped: 11,
+  resumeStale: 12,
 } as const)
 export type V2RelayErrorCode = (typeof V2_RELAY_ERROR)[keyof typeof V2_RELAY_ERROR]
 
@@ -563,10 +564,9 @@ export function decodeV2SessionRetired(encoded: Uint8Array): V2SessionRetired {
 
 export function encodeV2SessionCredit(frame: V2SessionCredit): Uint8Array<ArrayBuffer> {
   if (
-    !Number.isInteger(frame.frames) || frame.frames <= 0 || frame.frames > V2_RELAY_SENDER_WINDOW_FRAMES ||
-    !Number.isInteger(frame.bytes) || frame.bytes < frame.frames * (FRAME_BYTES.opaqueHeader + 1) ||
-    frame.bytes > V2_RELAY_SENDER_WINDOW_BYTES ||
-    frame.bytes > frame.frames * (FRAME_BYTES.opaqueHeader + V2_RELAY_MAX_OPAQUE_CIPHERTEXT_BYTES)
+    !Number.isInteger(frame.frames) || frame.frames < 0 || frame.frames > V2_RELAY_SENDER_WINDOW_FRAMES ||
+    !Number.isInteger(frame.bytes) || frame.bytes < 0 || frame.bytes > V2_RELAY_SENDER_WINDOW_BYTES ||
+    (frame.frames === 0 && frame.bytes === 0)
   ) {
     throw new V2RelayProtocolError('malformed', 'session credit exceeds the sender window')
   }
@@ -606,8 +606,42 @@ export function decodeV2SessionAdmitted(encoded: Uint8Array): V2SessionAdmitted 
   })
 }
 
+export const V2_CONNECTION_PROBE_MAGIC = 'WS2H'
+export const V2_CONNECTION_PROBE_ACK_MAGIC = 'WS2A'
+export const V2_CONNECTION_PROBE_BYTES = 16
+
+export function encodeV2ConnectionProbe(nonce: bigint): Uint8Array<ArrayBuffer> {
+  return encodeConnectionProbe(V2_CONNECTION_PROBE_MAGIC, nonce)
+}
+
+export function encodeV2ConnectionProbeAck(nonce: bigint): Uint8Array<ArrayBuffer> {
+  return encodeConnectionProbe(V2_CONNECTION_PROBE_ACK_MAGIC, nonce)
+}
+
+function encodeConnectionProbe(magic: string, nonce: bigint): Uint8Array<ArrayBuffer> {
+  if (nonce === 0n) throw new V2RelayProtocolError('identity', 'connection probe nonce must be nonzero')
+  return concatBytes([reservedPrefix(magic), encodeUint64(nonce)])
+}
+
+export function decodeV2ConnectionProbe(encoded: Uint8Array): bigint {
+  return decodeConnectionProbe(encoded, V2_CONNECTION_PROBE_MAGIC)
+}
+
+export function decodeV2ConnectionProbeAck(encoded: Uint8Array): bigint {
+  return decodeConnectionProbe(encoded, V2_CONNECTION_PROBE_ACK_MAGIC)
+}
+
+function decodeConnectionProbe(encoded: Uint8Array, magic: string): bigint {
+  if (encoded.byteLength !== V2_CONNECTION_PROBE_BYTES || !validPrefix(encoded, magic)) {
+    throw new V2RelayProtocolError('malformed', 'connection probe has an invalid header or length')
+  }
+  const nonce = new DataView(encoded.buffer, encoded.byteOffset, encoded.byteLength).getBigUint64(8, false)
+  if (nonce === 0n) throw new V2RelayProtocolError('identity', 'connection probe nonce must be nonzero')
+  return nonce
+}
+
 function validErrorCode(code: number): code is V2RelayErrorCode {
-  return code >= V2_RELAY_ERROR.malformed && code <= V2_RELAY_ERROR.stopped
+  return code >= V2_RELAY_ERROR.malformed && code <= V2_RELAY_ERROR.resumeStale
 }
 
 export function encodeV2RelayError(frame: V2RelayErrorFrame): Uint8Array<ArrayBuffer> {

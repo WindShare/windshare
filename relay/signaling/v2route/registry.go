@@ -4,7 +4,6 @@ package v2route
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
 	"io"
@@ -33,6 +32,8 @@ var (
 	ErrNotFound          = errors.New("relay v2 route: share was not found")
 	ErrOwner             = errors.New("relay v2 route: connection does not own route")
 	ErrResume            = errors.New("relay v2 route: resume credential is invalid")
+	ErrResumeStale       = errors.New("relay v2 route: resume ownership changed during authentication")
+	ErrStarting          = errors.New("relay v2 route: registration is not published")
 	ErrSession           = errors.New("relay v2 route: relay session is invalid")
 	ErrAdmissionExpired  = errors.New("relay v2 route: session admission expired")
 	ErrSessionEnded      = errors.New("relay v2 route: session already ended")
@@ -100,6 +101,7 @@ type Config struct {
 	Now                 func() time.Time
 	Tombstones          TombstoneStore
 	StopTracer          StopTracer
+	ResumeTracer        ResumeTracer
 }
 
 type routeState uint8
@@ -109,10 +111,12 @@ const (
 	routeLive
 	routeGrace
 	routeStopUncertain
+	routeRevoking
 )
 
 type route struct {
 	init          v2.RegisterInit
+	generation    *routeGeneration
 	state         routeState
 	owner         ConnectionRef
 	descriptor    []byte
@@ -168,6 +172,7 @@ type Registry struct {
 	now                 func() time.Time
 	tombstones          TombstoneStore
 	stopTracer          StopTracer
+	resumeTracer        ResumeTracer
 	revocationLookups   map[v2.ShareID]*revocationLookup
 	routes              map[v2.ShareID]*route
 	sessions            map[v2.RelaySessionID]relaySession
@@ -193,7 +198,8 @@ func New(ctx context.Context, config Config) (*Registry, error) {
 	registry := &Registry{
 		maxRoutes: config.MaxRoutes, maxSessions: config.MaxSessions, maxSessionsPerShare: config.MaxSessionsPerShare,
 		random: config.Random, now: config.Now, tombstones: config.Tombstones, stopTracer: config.StopTracer,
-		routes: make(map[v2.ShareID]*route), sessions: make(map[v2.RelaySessionID]relaySession),
+		resumeTracer: config.ResumeTracer,
+		routes:       make(map[v2.ShareID]*route), sessions: make(map[v2.RelaySessionID]relaySession),
 		revocationLookups: make(map[v2.ShareID]*revocationLookup),
 		sessionTombstones: make(map[v2.RelaySessionID]sessionTombstone), sessionSlotsByShare: make(map[v2.ShareID]int),
 	}
@@ -230,13 +236,16 @@ func (r *Registry) BeginRegistration(init v2.RegisterInit, owner ConnectionRef) 
 		if subtle.ConstantTimeCompare(existing.init.PKHash[:], init.PKHash[:]) != 1 {
 			return ErrCollision
 		}
+		if existing.pendingStop != nil {
+			return ErrStopping
+		}
 		return ErrAlreadyRegistered
 	}
 	if len(r.routes) >= r.maxRoutes {
 		return ErrAdmission
 	}
 	r.routes[init.ShareID] = &route{
-		init: init, state: routeStarting, owner: owner, startDeadline: now.Add(JoinStartingGrace),
+		init: init, generation: newRouteGeneration(), state: routeStarting, owner: owner, startDeadline: now.Add(JoinStartingGrace),
 	}
 	return nil
 }
@@ -282,90 +291,9 @@ func (r *Registry) Publish(shareID v2.ShareID, owner ConnectionRef, descriptor v
 		return ErrOwner
 	}
 	current.descriptor = object
+	current.generation = newRouteGeneration()
 	current.state = routeLive
 	current.startDeadline = time.Time{}
-	return nil
-}
-
-func (r *Registry) Resume(init v2.RegisterInit, authority v2.SenderAuthority, owner ConnectionRef, token v2.ResumeToken) error {
-	if r == nil || init.Mode != v2.RegistrationResume || init.Validate() != nil || !authority.Authorizes(init) || !owner.Valid() {
-		return ErrResume
-	}
-	current, stopped, err := r.lockRoute(context.Background(), init.ShareID)
-	defer r.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if stopped != nil {
-		return ErrStopped
-	}
-	r.expireSessionTombstones(r.now())
-	if current == nil {
-		return ErrNotFound
-	}
-	if current.state == routeStopUncertain {
-		return ErrStopped
-	}
-	if current.pendingStop != nil {
-		return ErrStopping
-	}
-	if current.state != routeGrace {
-		return ErrNotFound
-	}
-	if current.init.ShareInstance != init.ShareInstance || subtle.ConstantTimeCompare(current.init.PKHash[:], init.PKHash[:]) != 1 ||
-		subtle.ConstantTimeCompare(current.init.DescriptorDigest[:], init.DescriptorDigest[:]) != 1 {
-		return ErrResume
-	}
-	tokenHash := sha256.Sum256(token[:])
-	if subtle.ConstantTimeCompare(tokenHash[:], current.init.ResumeTokenHash[:]) != 1 ||
-		subtle.ConstantTimeCompare(init.ResumeTokenHash[:], current.init.ResumeTokenHash[:]) != 1 {
-		return ErrResume
-	}
-	current.owner = owner
-	current.state = routeLive
-	current.graceDeadline = time.Time{}
-	return nil
-}
-
-// ValidateResumeCredential is the pre-challenge admission boundary required by
-// the wire contract. A bad token must not consume challenge capacity, while the
-// later Resume call repeats every check under the same registry lock so this
-// method never becomes an authorization grant on its own.
-func (r *Registry) ValidateResumeCredential(init v2.RegisterInit, token v2.ResumeToken) error {
-	if r == nil || init.Mode != v2.RegistrationResume || init.Validate() != nil {
-		return ErrResume
-	}
-	current, stopped, err := r.lockRoute(context.Background(), init.ShareID)
-	defer r.mu.Unlock()
-	if err != nil {
-		return err
-	}
-	if stopped != nil {
-		return ErrStopped
-	}
-	r.expireSessionTombstones(r.now())
-	if current == nil {
-		return ErrNotFound
-	}
-	if current.state == routeStopUncertain {
-		return ErrStopped
-	}
-	if current.pendingStop != nil {
-		return ErrStopping
-	}
-	if current.state != routeGrace {
-		return ErrNotFound
-	}
-	if current.init.ShareInstance != init.ShareInstance ||
-		subtle.ConstantTimeCompare(current.init.PKHash[:], init.PKHash[:]) != 1 ||
-		subtle.ConstantTimeCompare(current.init.DescriptorDigest[:], init.DescriptorDigest[:]) != 1 ||
-		subtle.ConstantTimeCompare(current.init.ResumeTokenHash[:], init.ResumeTokenHash[:]) != 1 {
-		return ErrResume
-	}
-	tokenHash := sha256.Sum256(token[:])
-	if subtle.ConstantTimeCompare(tokenHash[:], current.init.ResumeTokenHash[:]) != 1 {
-		return ErrResume
-	}
 	return nil
 }
 
@@ -384,6 +312,7 @@ func (r *Registry) UnexpectedDisconnect(shareID v2.ShareID, owner ConnectionRef)
 		return RouteRetirement{}, false
 	}
 	retirement := RouteRetirement{Owner: owner, Sessions: r.dropShareSessions(shareID)}
+	current.generation = newRouteGeneration()
 	if current.pendingStop != nil {
 		current.pendingStop.ownerDisconnected = true
 		current.owner = ConnectionRef{}
@@ -621,3 +550,7 @@ func allZero(value []byte) bool {
 	}
 	return true
 }
+
+// MaxSessionsPerShare is the immutable admission bound used by endpoint storage
+// reservations, so idle sessions cannot consume the next admitted peer's slot.
+func (r *Registry) MaxSessionsPerShare() int { return r.maxSessionsPerShare }

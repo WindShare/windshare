@@ -1,3 +1,4 @@
+import { projectConnectionTrace } from '../diagnostics/trace/connection-payload'
 import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
 import { projectProtocolErrorContentV2 } from '../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
@@ -15,6 +16,7 @@ const FAILURE_DETAIL_FORMAT = Object.freeze({
 export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV2 {
+  if (event.eventName === 'connection_recovery' || event.eventName === 'relay_heartbeat') return projectConnectionTrace(event)
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'lease_retirement') return projectLeaseRetirement(event)
   if (event.eventName === 'request_scheduling') {
