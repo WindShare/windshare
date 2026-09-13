@@ -7,6 +7,8 @@ import type { V2BlockSchedulingObservation } from '../../src/content/v2-lane-set
 import {
   HOT_SWITCH_INITIAL_BUFFERED_BLOCKS,
   HOT_SWITCH_TRANSFER_BLOCKS,
+  hotSwitchTerminalEvidence,
+  type HotSwitchPageEvent,
 } from '../../e2e/fixtures/hot-switch-contract'
 import { EvidenceBridge, RelayCutEvidence } from '../../e2e/fixtures/hot-switch-page-evidence'
 import {
@@ -16,8 +18,42 @@ import {
 } from '../../e2e/fixtures/hot-switch-page-transfer'
 import { parseLocalTurnReadyRecord } from '../../e2e/fixtures/local-turn-server'
 import { NetworkEventLog } from '../../e2e/fixtures/network-event-log'
+import { createCapabilityRedactor } from '../../e2e/fixtures/capability-redactor'
+import { normalizeV2FileTransferFailure } from '../../src/transfer/job/failures'
 
 describe('direct weekly network fixtures', () => {
+  it('retains terminal exception evidence when the event prefix exceeds the diagnostic bound', () => {
+    const normalized = normalizeV2FileTransferFailure(new Error('physical socket failed', {
+      cause: new Error('connection reset'),
+    }))
+    if (normalized.kind !== 'fault') throw new Error('Expected a classified fixture failure')
+    const diagnosticPrefixEvents = 96
+    const events: HotSwitchPageEvent[] = Array.from({ length: diagnosticPrefixEvents }, (_unused, index) => ({
+      kind: 'dispatch',
+      observation: { dispatchSequence: index + 1, laneId: 1, laneEpoch: 0, route: 'application-relay' },
+    }))
+    events.push({
+      kind: 'delivery', outcome: 'failed',
+      evidence: { expectedBytes: 2, receivedBytes: 1, expectedSha256: 'expected', receivedSha256: null, terminal: 'failed' },
+      failureClassification: normalized.diagnostic.classification,
+    }, { kind: 'runtime-settled' })
+    const diagnostic = createCapabilityRedactor({}).value({ events, ...hotSwitchTerminalEvidence(events) })
+    expect(diagnostic).toMatchObject({
+      delivery: {
+        kind: 'delivery',
+        failureClassification: {
+          fact: {
+            kind: 'unclassified',
+            payload: { unclassified: { exception: {
+              errorName: 'Error', message: 'physical socket failed', cause: expect.stringContaining('connection reset'),
+            } } },
+          },
+        },
+      },
+      runtime: { kind: 'runtime-settled' },
+    })
+  })
+
   it.each([
     { relay: 'cut', route: 'direct' },
     { relay: 'cut', route: 'turn' },

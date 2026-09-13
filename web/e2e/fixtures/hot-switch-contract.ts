@@ -5,6 +5,7 @@ import type {
 import type { V2PeerRecoveryPolicy } from '../../src/connectivity/peer-set/path'
 import { V2_BLOCK_BROKER_PARALLEL_READS } from '../../src/content/v2-broker'
 import { RANGE_READ_AHEAD_FACTOR } from '../../src/content/scheduling/range-window'
+import type { ClassifiedTransferFailure } from '../../src/transfer/job/failures'
 
 // Network completion refills the entire read-ahead window while output is gated.
 // The yielded block is already outside that window when it reaches the writer.
@@ -53,6 +54,7 @@ export interface HotSwitchDeliveryTerminal {
   readonly evidence: HotSwitchDeliveryEvidence
   readonly jobOutcome?: ObservedJobOutcome
   readonly failureMessage?: string
+  readonly failureClassification?: ClassifiedTransferFailure
 }
 
 export interface HotSwitchRuntimeTerminal {
@@ -108,3 +110,11 @@ export type HotSwitchPageEvent =
   | { readonly kind: 'relay-ineligible'; readonly dispatchSequenceBoundary: number }
   | ({ readonly kind: 'delivery' } & HotSwitchDeliveryTerminal)
   | ({ readonly kind: 'runtime-settled' } & HotSwitchRuntimeTerminal)
+
+export function hotSwitchTerminalEvidence(events: readonly HotSwitchPageEvent[]) {
+  // Terminal cause must survive the recursive formatter's array-entry bound.
+  return Object.freeze({
+    delivery: events.findLast((event) => event.kind === 'delivery'),
+    runtime: events.findLast((event) => event.kind === 'runtime-settled'),
+  })
+}
