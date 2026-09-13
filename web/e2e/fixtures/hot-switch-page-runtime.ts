@@ -465,15 +465,12 @@ function createGateway(
           },
         }),
     onBlockDispatched: (observation) => {
-      bridge.publish({
-        kind: 'dispatch',
-        observation: {
-          dispatchSequence: observation.dispatchSequence,
-          laneId: observation.laneId,
-          laneEpoch: observation.laneEpoch,
-          route: observation.route,
-        },
-      }).catch(() => undefined)
+      relayCut.dispatch({
+        dispatchSequence: observation.dispatchSequence,
+        laneId: observation.laneId,
+        laneEpoch: observation.laneEpoch,
+        route: observation.route,
+      })
       if (observation.route === 'application-relay') peerRelease.release()
     },
     onContentLaneAdmitted: (observation) => relayCut.admit(observation),

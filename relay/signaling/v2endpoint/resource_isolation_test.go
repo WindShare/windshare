@@ -16,7 +16,10 @@ import (
 	"github.com/windshare/windshare/transport/relayv2"
 )
 
-const isolationRelayBase = "https://relay.example/isolation"
+const (
+	isolationRelayBase       = "https://relay.example/isolation"
+	isolationScenarioTimeout = time.Minute
+)
 
 func isolationServer(t *testing.T) (*Server, *relayv2.SenderConnection, endpointFixture) {
 	t.Helper()
@@ -47,7 +50,14 @@ func isolationServer(t *testing.T) (*Server, *relayv2.SenderConnection, endpoint
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = sender.Close(); _ = server.Shutdown(context.Background()) })
+	t.Cleanup(func() {
+		_ = sender.Close()
+		cleanupContext, cancel := context.WithTimeout(context.Background(), isolationScenarioTimeout)
+		defer cancel()
+		if err := server.Shutdown(cleanupContext); err != nil {
+			t.Errorf("shutdown isolation server: %v", err)
+		}
+	})
 	return server, sender, fixture
 }
 
@@ -71,18 +81,22 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 	for _, size := range []int{32, v2.MaxOpaqueCiphertextBytes} {
 		t.Run(stringSize(size), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
+				// Healthy heartbeat timers keep advancing virtual time after a lost
+				// admission. Bound the scenario so that failure cannot hide as a hang.
+				ctx, cancel := context.WithTimeout(t.Context(), isolationScenarioTimeout)
+				defer cancel()
 				server, sender, fixture := isolationServer(t)
 				client, destination := newMemorySocketPair()
 				defer client.Close(websocket.StatusNormalClosure, "")
 				gate := make(chan struct{})
 				var open sync.Once
 				defer open.Do(func() { close(gate) })
-				go func() { _ = server.Serve(context.Background(), gatedDestination{destination, gate}) }()
+				go func() { _ = server.Serve(ctx, gatedDestination{destination, gate}) }()
 				join, _ := (v2.Join{ShareID: fixture.init.ShareID}).MarshalBinary()
-				if err := client.Write(t.Context(), websocket.MessageBinary, join); err != nil {
+				if err := client.Write(ctx, websocket.MessageBinary, join); err != nil {
 					t.Fatal(err)
 				}
-				_, response, err := client.Read(t.Context())
+				_, response, err := client.Read(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -90,16 +104,15 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				hello, _ := (v2.OpaqueRoute{RelaySessionID: delivery.RelaySessionID, Ciphertext: []byte("hello")}).MarshalBinary()
-				if err := client.Write(t.Context(), websocket.MessageBinary, hello); err != nil {
+				if err := sendInitialReceiverFrame(ctx, client, delivery.RelaySessionID, []byte("hello")); err != nil {
 					t.Fatal(err)
 				}
-				slow, err := sender.Accept(t.Context())
+				slow, err := sender.Accept(ctx)
 				if err != nil {
 					t.Fatal(err)
 				}
 				assertFrame(t, slow.Recv(), "hello")
-				if err := slow.ConfirmAdmission(t.Context()); err != nil {
+				if err := slow.ConfirmAdmission(ctx); err != nil {
 					t.Fatal(err)
 				}
 
@@ -109,7 +122,7 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 					for index := range total {
 						frame := bytes.Repeat([]byte{0x7a}, size)
 						binary.BigEndian.PutUint32(frame, uint32(index))
-						if err := slow.Send(t.Context(), frame); err != nil {
+						if err := slow.Send(ctx, frame); err != nil {
 							done <- err
 							return
 						}
@@ -133,14 +146,20 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 					}
 				}
 				server.connections.mu.Unlock()
-				healthy := dialReceiver(t, isolationRelayBase, fixture.init.ShareID, memoryServerDialer(server))
+				healthy, err := dialIsolationReceiver(ctx, server, fixture.init.ShareID)
+				if err != nil {
+					t.Fatalf("dial sibling receiver: %v", err)
+				}
 				defer healthy.Close()
-				fast := establishSession(t, sender, healthy, []byte("sibling hello"))
-				assertFrame(t, fast.Recv(), "sibling hello")
-				if err := fast.ConfirmAdmission(t.Context()); err != nil {
+				fast, err := establishIsolationSession(ctx, sender, healthy, []byte("sibling hello"))
+				if err != nil {
 					t.Fatal(err)
 				}
-				if err := fast.Send(t.Context(), []byte("sibling signal and data")); err != nil {
+				assertFrame(t, fast.Recv(), "sibling hello")
+				if err := fast.ConfirmAdmission(ctx); err != nil {
+					t.Fatal(err)
+				}
+				if err := fast.Send(ctx, []byte("sibling signal and data")); err != nil {
 					t.Fatal(err)
 				}
 				assertFrame(t, healthy.Channel().Recv(), "sibling signal and data")
@@ -152,12 +171,12 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 
 				open.Do(func() { close(gate) })
 				for index := range total {
-					_, encoded, err := client.Read(t.Context())
+					_, encoded, err := client.Read(ctx)
 					if err != nil {
 						t.Fatal(err)
 					}
 					for len(encoded) >= 4 && string(encoded[:4]) == v2.SessionCreditMagic {
-						_, encoded, err = client.Read(t.Context())
+						_, encoded, err = client.Read(ctx)
 						if err != nil {
 							t.Fatal(err)
 						}
