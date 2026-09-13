@@ -96,19 +96,20 @@ type ReceiverConfig struct {
 // initial handshakes race to publish the first usable session; losers release
 // their authority and join the winner using a fresh authenticated lane grant.
 type Receiver struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	config    ReceiverConfig
-	shareID   v2.ShareID
-	mu        sync.Mutex
-	runtime   *sessionruntime.ReceiverRuntime
-	prepared  *liveshare.PreparedReceiver
-	first     *relayv2.ReceiverConnection
-	remaining int
-	failure   error
-	ready     chan struct{}
-	workers   sync.WaitGroup
-	closeOnce sync.Once
+	ctx              context.Context
+	cancel           context.CancelFunc
+	config           ReceiverConfig
+	shareID          v2.ShareID
+	mu               sync.Mutex
+	runtime          *sessionruntime.ReceiverRuntime
+	prepared         *liveshare.PreparedReceiver
+	first            *relayv2.ReceiverConnection
+	remaining        int
+	failure          error
+	ready            chan struct{}
+	workers          sync.WaitGroup
+	closeOnce        sync.Once
+	stopRuntimeWatch func() bool
 }
 
 func validateReceiverEndpoints(endpoints []string) error {
@@ -177,7 +178,11 @@ func (receiver *Receiver) Close() {
 		receiver.cancel()
 		receiver.mu.Lock()
 		runtime := receiver.runtime
+		stopRuntimeWatch := receiver.stopRuntimeWatch
 		receiver.mu.Unlock()
+		if stopRuntimeWatch != nil {
+			stopRuntimeWatch()
+		}
 		if runtime != nil {
 			runtime.BeginClose()
 		}
@@ -200,17 +205,11 @@ func (receiver *Receiver) run(url string) {
 	var lane sessionruntime.LaneIdentity
 	recovery := receiver.config.recovery
 	started := receiver.config.Clock.Now()
-	for failures := uint32(0); receiver.ctx.Err() == nil; failures++ {
+	for failures := uint32(0); receiver.attemptError(receiver.ctx) == nil; failures++ {
 		attempt := recovery.begin(url)
 		recovery.observe(url, attempt, ReceiverRecoveryConnecting, 0, receiver.current(), nil)
 		ctx, cancel := recovery.options.TimeoutContext(receiver.ctx, receiverAttemptTimeout)
-		connection, err := receiver.dial(ctx, url)
-		if err == nil && connection == nil {
-			err = errors.New("receiver dial returned no connection")
-		}
-		if err == nil {
-			err = receiver.admit(ctx, connection, &lane)
-		}
+		connection, err := receiver.connectAttempt(ctx, url, &lane)
 		cancel()
 		recovery.rejected(url, err)
 		if !receiverEndpointRetryable(err) {
@@ -253,10 +252,8 @@ func (receiver *Receiver) run(url string) {
 		if runtime == nil {
 			return
 		}
-		select {
-		case <-runtime.Done():
+		if runtime.Stopping() {
 			return
-		default:
 		}
 		delay, phase := recovery.delay(started, failures, err)
 		recovery.observe(url, attempt, phase, delay, runtime, err)
@@ -313,6 +310,35 @@ func (receiver *Receiver) admit(ctx context.Context, connection *relayv2.Receive
 	return err
 }
 
+func (receiver *Receiver) attemptError(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if runtime := receiver.current(); runtime != nil && runtime.Stopping() {
+		return sessionruntime.ErrRuntimeClosed
+	}
+	return nil
+}
+
+func (receiver *Receiver) connectAttempt(ctx context.Context, url string, lane *sessionruntime.LaneIdentity) (*relayv2.ReceiverConnection, error) {
+	if err := receiver.attemptError(ctx); err != nil {
+		return nil, err
+	}
+	connection, err := receiver.dial(ctx, url)
+	if err == nil && connection == nil {
+		err = errors.New("receiver dial returned no connection")
+	}
+	if err == nil {
+		// Dial implementations may finish after cancellation. Such a candidate
+		// cannot authenticate a new descriptor or enter the retired generation.
+		err = receiver.attemptError(ctx)
+	}
+	if err == nil {
+		err = receiver.admit(ctx, connection, lane)
+	}
+	return connection, err
+}
+
 func (receiver *Receiver) dial(ctx context.Context, url string) (*relayv2.ReceiverConnection, error) {
 	return receiver.config.Dial(ctx, relayv2.ReceiverConfig{RelayBaseURL: url, ShareID: receiver.shareID, Dial: receiver.config.DialOptions})
 }
@@ -357,6 +383,12 @@ func (receiver *Receiver) publishInitial(ctx context.Context, candidate *session
 		// reassigned to the winner, so the endpoint redials before attachment.
 		return errors.New("initial relay handshake superseded")
 	}
+	if candidate.Stopping() {
+		return errors.Join(sessionruntime.ErrRuntimeClosed, candidate.Err())
+	}
+	// Relay waits and dials belong to this session's live authority. Done is a
+	// later cleanup boundary and cannot authorize retries during finalization.
+	receiver.stopRuntimeWatch = context.AfterFunc(candidate.Lifetime(), receiver.cancel)
 	receiver.runtime = candidate
 	receiver.prepared = prepared
 	receiver.first = connection

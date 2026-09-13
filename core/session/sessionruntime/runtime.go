@@ -338,6 +338,11 @@ func (runtime *runtimeCore) Err() error {
 
 func (runtime *runtimeCore) Done() <-chan struct{} { return runtime.done }
 
+// Lifetime cancels when session authority ends, before finalizers close Done.
+// Dependent owners borrow it to stop waiting and revoke in-flight work while
+// the runtime is still joining callbacks and physical resources.
+func (runtime *runtimeCore) Lifetime() context.Context { return runtime.ctx }
+
 func (runtime *runtimeCore) Stopping() bool {
 	if runtime == nil || runtime.ctx == nil {
 		return true

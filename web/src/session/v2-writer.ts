@@ -166,8 +166,7 @@ export class V2SessionWriter {
         this.#lifetime.signal.throwIfAborted()
         item.phase = 'sending'
         this.#trace(item, 'send_sending')
-        if (item.priority === 'terminal') await this.#channel.sendTerminal(frame, this.#lifetime.signal)
-        else await this.#channel.send(frame, this.#lifetime.signal)
+        await this.#sendFrame(frame, item.priority)
         this.#lifetime.signal.throwIfAborted()
         item.phase = 'sent'
         item.resolve()
@@ -180,6 +179,18 @@ export class V2SessionWriter {
         this.#deliveryTimer = undefined
         this.#active = undefined
       }
+    }
+  }
+
+  async #sendFrame(frame: Uint8Array, priority: OutboundPriority): Promise<void> {
+    try {
+      if (priority === 'terminal') await this.#channel.sendTerminal(frame, this.#lifetime.signal)
+      else await this.#channel.send(frame, this.#lifetime.signal)
+    } catch (cause) {
+      this.#lifetime.signal.throwIfAborted()
+      // Physical delivery can fail before lane detachment reaches queued callers.
+      // Scope it here so those callers can retry another authenticated lane.
+      throw new V2SessionRuntimeError('lane', 'Session lane delivery failed', { cause })
     }
   }
 
