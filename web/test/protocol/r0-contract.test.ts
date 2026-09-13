@@ -926,6 +926,7 @@ describe('R0 resource and state-machine contract', () => {
         starting: 9,
         admission: 10,
         stopped: 11,
+        'resume-stale': 12,
       },
     })
   })

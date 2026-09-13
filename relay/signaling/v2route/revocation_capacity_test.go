@@ -50,10 +50,10 @@ func TestPermanentStopsReleaseCapacityAcrossRepeatedUseAndRestart(t *testing.T) 
 		}
 		resume := fixture.init
 		resume.Mode = v2.RegistrationResume
-		if err := registry.ValidateResumeCredential(resume, fixture.token); !errors.Is(err, ErrStopped) {
+		if _, err := registry.BeginResume(context.Background(), resume, fixture.token); !errors.Is(err, ErrStopped) {
 			t.Fatalf("restored STOP passed resume precheck: %v", err)
 		}
-		if err := registry.Resume(resume, resumeAuthority(t, fixture, resume), routeTestConnection("replacement"), fixture.token); !errors.Is(err, ErrStopped) {
+		if err := resumeRoute(registry, resume, resumeAuthority(t, fixture, resume), routeTestConnection("replacement"), fixture.token); !errors.Is(err, ErrStopped) {
 			t.Fatalf("restored STOP resumed: %v", err)
 		}
 		if _, err := registry.Stop(context.Background(), fixture.stop, fixture.stopAuth); err != nil {
@@ -199,10 +199,10 @@ func TestRevocationLookupFailureNeverAuthorizesAbsentShare(t *testing.T) {
 	}
 	resume := fixture.init
 	resume.Mode = v2.RegistrationResume
-	if err := registry.ValidateResumeCredential(resume, fixture.token); !errors.Is(err, ErrAdmission) {
+	if _, err := registry.BeginResume(context.Background(), resume, fixture.token); !errors.Is(err, ErrAdmission) {
 		t.Fatalf("failed lookup passed resume precheck: %v", err)
 	}
-	if err := registry.Resume(resume, resumeAuthority(t, fixture, resume), routeTestConnection("sender"), fixture.token); !errors.Is(err, ErrAdmission) {
+	if err := resumeRoute(registry, resume, resumeAuthority(t, fixture, resume), routeTestConnection("sender"), fixture.token); !errors.Is(err, ErrAdmission) {
 		t.Fatalf("failed lookup passed resume: %v", err)
 	}
 }

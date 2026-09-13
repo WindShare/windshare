@@ -19,6 +19,15 @@ import (
 
 var routeTestConnections sync.Map
 
+func resumeRoute(registry *Registry, init v2.RegisterInit, authority v2.SenderAuthority, owner ConnectionRef, token v2.ResumeToken) error {
+	attempt, err := registry.BeginResume(context.Background(), init, token)
+	if err != nil {
+		return err
+	}
+	_, err = registry.Resume(context.Background(), attempt, authority, owner)
+	return err
+}
+
 func routeTestConnection(id ConnectionID) ConnectionRef {
 	if existing, ok := routeTestConnections.Load(id); ok {
 		return existing.(ConnectionRef)
@@ -294,10 +303,10 @@ func TestCrashGraceResumeAndRoleDerivedRouting(t *testing.T) {
 	wrong := fixture.token
 	wrong[0] ^= 1
 	senderB := routeTestConnection("sender-b")
-	if err := registry.Resume(resume, resumeAuth, senderB, wrong); !errors.Is(err, ErrResume) {
+	if err := resumeRoute(registry, resume, resumeAuth, senderB, wrong); !errors.Is(err, ErrResume) {
 		t.Fatalf("wrong token error = %v", err)
 	}
-	if err := registry.Resume(resume, resumeAuth, senderB, fixture.token); err != nil {
+	if err := resumeRoute(registry, resume, resumeAuth, senderB, fixture.token); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := registry.ResolveSession(joined.RelaySessionID, senderB); !errors.Is(err, ErrOwner) {
@@ -478,10 +487,10 @@ func TestExplicitStopIsDurablePermanentAndNeverGrace(t *testing.T) {
 	}
 	resume := fixture.init
 	resume.Mode = v2.RegistrationResume
-	if err := registry.ValidateResumeCredential(resume, fixture.token); !errors.Is(err, ErrStopped) {
+	if _, err := registry.BeginResume(context.Background(), resume, fixture.token); !errors.Is(err, ErrStopped) {
 		t.Fatalf("stopped resume precheck error = %v", err)
 	}
-	if err := registry.Resume(resume, resumeAuthority(t, fixture, resume), senderNew, fixture.token); !errors.Is(err, ErrStopped) {
+	if err := resumeRoute(registry, resume, resumeAuthority(t, fixture, resume), senderNew, fixture.token); !errors.Is(err, ErrStopped) {
 		t.Fatalf("stopped resume error = %v", err)
 	}
 

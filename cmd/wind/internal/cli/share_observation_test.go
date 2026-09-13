@@ -7,6 +7,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/cmd/wind/internal/observationbridge"
+	"github.com/windshare/windshare/connectivity/senderrelay"
 	"github.com/windshare/windshare/connectivity/v2peer"
 	"github.com/windshare/windshare/connectivity/v2signal"
 	"github.com/windshare/windshare/core/framechannel"
@@ -62,9 +63,9 @@ func TestShareObservationsProjectEverySenderProducerToTypedEvents(t *testing.T) 
 		Trigger:           sessionruntime.SenderSessionTerminalTriggerGracefulStop,
 		Provenance:        sessionruntime.SenderSessionTerminalProvenanceNormalStop,
 	})
-	observations.ObserveRelayRecovery(senderRelayRecoveryAttempt{
-		attempt: 2,
-		state:   senderRelayAttemptSucceeded,
+	observations.ObserveRelayRecovery(authority, senderrelay.Attempt{
+		Number: 2,
+		State:  senderrelay.AttemptSucceeded,
 	})
 
 	wantTypes := []any{

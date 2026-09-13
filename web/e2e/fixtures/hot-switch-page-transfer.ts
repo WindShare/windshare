@@ -251,14 +251,14 @@ export async function sealPageRelayCut(page: Page): Promise<void> {
   })
 }
 
-export async function advancePageOutput(page: Page): Promise<void> {
-  await page.evaluate(() => {
+export async function advancePageOutput(page: Page, writes = 1): Promise<void> {
+  await page.evaluate((permits) => {
     const advance = (
       window as Window & { __windshareAdvanceHotSwitchOutput?: () => void }
     ).__windshareAdvanceHotSwitchOutput
     if (advance === undefined) throw new Error('Hot-switch output checkpoint is unavailable')
-    advance()
-  })
+    for (let index = 0; index < permits; index += 1) advance()
+  }, writes)
 }
 
 export async function detachPagePeer(page: Page): Promise<void> {

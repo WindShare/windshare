@@ -25,6 +25,9 @@ func (visitor *exhaustiveVisitor) VisitSharingSubjectSelected(SharingSubjectSele
 func (visitor *exhaustiveVisitor) VisitRelayConnected(RelayConnected) error {
 	return visitor.mark("relay_connected")
 }
+func (visitor *exhaustiveVisitor) VisitRelayAvailability(RelayAvailability) error {
+	return visitor.mark("relay_availability")
+}
 func (visitor *exhaustiveVisitor) VisitRelayRecovering(RelayRecovering) error {
 	return visitor.mark("relay_recovering")
 }

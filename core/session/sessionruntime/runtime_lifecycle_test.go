@@ -23,12 +23,17 @@ import (
 func TestRuntimeStoppingPrecedesFinalDonePublication(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	runtime := &runtimeCore{ctx: ctx, done: make(chan struct{})}
-	if runtime.Stopping() {
+	if runtime.Stopping() || runtime.Lifetime().Err() != nil {
 		t.Fatal("live runtime reported stopping")
 	}
 	cancel()
-	if !runtime.Stopping() {
+	if !runtime.Stopping() || !errors.Is(runtime.Lifetime().Err(), context.Canceled) {
 		t.Fatal("runtime cancellation was hidden until final Done publication")
+	}
+	select {
+	case <-runtime.Lifetime().Done():
+	default:
+		t.Fatal("borrowed session lifetime did not revoke dependent work")
 	}
 	select {
 	case <-runtime.Done():

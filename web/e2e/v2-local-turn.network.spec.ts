@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 
 import { expect, test } from '@playwright/test'
 
-import { V2_BLOCK_BROKER_PARALLEL_READS } from '../src/content/v2-broker'
+import { HOT_SWITCH_TRANSFER_BLOCKS } from './fixtures/hot-switch-contract'
 import {
   releasePageOutput,
   sealPageRelayCut,
@@ -22,7 +22,7 @@ import {
 
 const SCENARIO_ID = 'chromium-turn-route'
 const FILE_NAME = 'turn-route.bin'
-const TRANSFER_BYTES = (V2_BLOCK_BROKER_PARALLEL_READS + 1) * DIRECT_TEST_BLOCK_BYTES
+const TRANSFER_BYTES = HOT_SWITCH_TRANSFER_BLOCKS * DIRECT_TEST_BLOCK_BYTES
 
 test('continues over an authenticated TURN peer lane after relay loss', async ({ page }, testInfo) => {
   const stack = new DirectProductStack(SCENARIO_ID)
@@ -84,17 +84,23 @@ test('continues over an authenticated TURN peer lane after relay loss', async ({
 
     await proxy.cut()
     await sealPageRelayCut(page)
-    await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
-    const cutBoundary = events.latestDispatchSequence()
+    const cut = await events.waitFor('relay-ineligible', () => true, 'relay ineligibility')
     await releasePageOutput(page)
 
     const peerDispatch = await events.waitFor(
       'dispatch',
       (event) => event.observation.route === 'turn' &&
-        event.observation.dispatchSequence > cutBoundary,
+        event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
       'post-cut TURN dispatch',
     )
     const delivery = await events.waitFor('delivery', () => true, 'TURN delivery terminal')
+    const runtime = await events.waitFor('runtime-settled', () => true, 'TURN runtime settlement')
+    expect(runtime.error).toBeUndefined()
+    expect(events.snapshot().filter((event) =>
+      event.kind === 'dispatch' &&
+      event.observation.route === 'application-relay' &&
+      event.observation.dispatchSequence > cut.dispatchSequenceBoundary,
+    )).toEqual([])
 
     if (admitted.evidence.stage !== 'admitted') {
       throw new Error('TURN admission wait returned a non-admitted diagnostic')

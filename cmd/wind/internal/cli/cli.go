@@ -15,6 +15,7 @@ import (
 
 	"github.com/windshare/windshare/cmd/wind/internal/capacitytrace"
 	"github.com/windshare/windshare/cmd/wind/internal/commandmeta"
+	"github.com/windshare/windshare/connectivity/relayset"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
 	"github.com/windshare/windshare/internal/platformsetup"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -47,6 +48,8 @@ const usageText = `Usage:
   ` + commandmeta.Name + ` get -o <directory> <link> [--only <path>]... [--key <key-string>] [--connectivity auto|relay-only|p2p-only] [-v|--verbose] [--trace <file>|--trace-dir <directory>]
       Save one ordinary named result inside the output container; -o defaults to the current directory.
       Compatible active downloads reuse their frozen result name and verified progress.
+      Temporary outages reconnect automatically; --wait-timeout <duration> limits initial or each later connection wait.
+      The default waits 10 seconds on first join and indefinitely after joining; Ctrl-C preserves resumable progress.
       relay-only skips direct peer setup and transfers content through the configured relay.
       p2p-only uses the relay for bootstrap and signaling but never for content; direct-path failure stops the download.
       If the link has no key, use --key or enter the key interactively.
@@ -75,13 +78,14 @@ type App struct {
 	openUserTrace        userTraceOpener
 	commandEventCapacity int
 
-	receiverPeerFactory   func() (receiverPeerStarter, error)
-	receiverDial          func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
-	processTrace          *processTrace
-	revisionCapacity      *revisioncapacity.Coordinator
-	revisionCapacityTrace *capacitytrace.Router
-	getOutputFactory      getOutputAuthorityFactory
-	platformSetupStatus   *platformsetup.Status
+	receiverRecoveryOptions relayset.ReceiverRecoveryOptions
+	receiverPeerFactory     func() (receiverPeerStarter, error)
+	receiverDial            func(context.Context, relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error)
+	processTrace            *processTrace
+	revisionCapacity        *revisioncapacity.Coordinator
+	revisionCapacityTrace   *capacitytrace.Router
+	getOutputFactory        getOutputAuthorityFactory
+	platformSetupStatus     *platformsetup.Status
 }
 
 // Main 是 os 进程入口的接线:真实标准流 + SIGINT 取消(Ctrl-C 即"停止分享"

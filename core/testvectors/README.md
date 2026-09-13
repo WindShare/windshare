@@ -46,7 +46,10 @@ Receiver-local canonical contracts:
   vectors a broader platform authority.
 
 Other generated v2 files retain sender objects, sessions, fragmentation,
-identity, and peer signaling. Peer signaling schema 2 includes monotonic attempt
+identity, and peer signaling. `v2-session.json` includes relay connection probes,
+acknowledgements, stale resume errors, and independent frame/byte credit deltas for
+both relay directions alongside registration and session bytes.
+Peer signaling schema 2 includes monotonic attempt
 sequences, the closed peer reason-to-recovery-scope mapping, and signed
 session-bound path controls. Path-control schema 2 also binds an opaque provider
 profile; its capability semantics stay in connectivity. `path-policy.json`, `portable-path-vectors.json`,

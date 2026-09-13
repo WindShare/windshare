@@ -321,27 +321,40 @@ func (dependencies receiverTransferDependencies) classifyBoundary(
 	if err == nil {
 		return err
 	}
+	runtime := dependencies.runtime
+	var normalized *transferfault.BoundaryError
+	if errors.As(err, &normalized) && normalized != nil && normalized.Fault().Valid() {
+		// A local file/output fault keeps its own scope even when another path
+		// simultaneously retires. Only session cancellation inherits its owner.
+		if normalized.Fault().Domain() != transferfault.DomainSession ||
+			runtime == nil || runtime.runtimeCore == nil || runtime.ctx.Err() == nil {
+			return err
+		}
+		return receiverTerminalBoundaryError(runtime, err)
+	}
+	if runtime != nil && runtime.runtimeCore != nil && runtime.ctx.Err() != nil {
+		return receiverTerminalBoundaryError(runtime, err)
+	}
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}
-	var normalized *transferfault.BoundaryError
-	if errors.As(err, &normalized) && normalized != nil && normalized.Fault().Valid() {
-		return err
-	}
-	runtime := dependencies.runtime
 	if errors.Is(err, ErrRuntimeClosed) || runtime == nil || runtime.runtimeCore == nil {
 		return sessionTransportBoundaryError(err)
 	}
-	select {
-	case <-runtime.ctx.Done():
-		cause := runtime.Err()
-		if cause == nil {
-			cause = ErrRuntimeClosed
-		}
-		return sessionTransportBoundaryError(errors.Join(err, cause))
-	default:
-		return classify(err)
+	return classify(err)
+}
+
+func receiverTerminalBoundaryError(runtime *ReceiverRuntime, err error) error {
+	cause := runtime.Err()
+	if cause == nil {
+		cause = ErrRuntimeClosed
 	}
+	var boundary *transferfault.BoundaryError
+	if errors.As(cause, &boundary) && boundary != nil &&
+		boundary.Fault().Domain() == transferfault.DomainSession && boundary.Fault().Scope() == transferfault.ScopeSessionTerminal {
+		return transferfault.Wrap(boundary.Fault(), errors.Join(err, cause))
+	}
+	return sessionTransportBoundaryError(errors.Join(err, cause))
 }
 
 type CatalogScanProgress struct {
@@ -476,7 +489,7 @@ func (dependencies receiverTransferDependencies) classifyAccess(ctx context.Cont
 	}
 	if ctx.Err() == nil && (errors.Is(err, revisionaccess.ErrClosed) ||
 		errors.Is(err, context.Canceled) && dependencies.runtime.ctx.Err() != nil) {
-		return sessionTransportBoundaryError(errors.Join(ErrRuntimeClosed, err))
+		return receiverTerminalBoundaryError(dependencies.runtime, errors.Join(ErrRuntimeClosed, err))
 	}
 	return dependencies.classifySource(ctx, err)
 }

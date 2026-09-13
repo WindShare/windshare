@@ -76,6 +76,8 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     transition: 'retry_available_lanes', operation_sequence: '1', generation_id: '1',
     availability_revision: '3', lane_count: '1', unchanged_availability_retries: '0',
   },
+  connection_recovery: { generation_id: '0', attempt: '1', phase: 'initial', transition: 'attempt_started' },
+  relay_heartbeat: { connection_id: '1', generation_id: '1', relay_base: 'https://relay.invalid', round: '1', stage: 'probe', buffered_bytes: '0', elapsed_ms: 0, timeout_ms: 45000 },
   peer_attempt: {
     stage: 'started',
     wave_ordinal: '1',

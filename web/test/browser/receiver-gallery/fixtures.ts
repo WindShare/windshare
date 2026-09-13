@@ -110,7 +110,8 @@ export async function gallerySnapshot(scenario: Scenario): Promise<V2ReceiverSna
     activeReceiveOperationId: output.lifecycle?.operationId ?? null,
     startAdmission: { allowed: single, reason: single ? null : 'Pause the current download before starting another.', canReleaseCurrent: false },
     taskDisplay: single ? null : facts.display,
-    connection: { kind: scenario === 'reconnecting' ? 'reconnecting' : 'connected' },
+    connection: scenario === 'reconnecting'
+      ? { kind: 'reconnecting', activity: { kind: 'connecting' } } : { kind: 'connected' },
     phase: 'browsing', status: 'Sender connected', error: null,
     pathActivity: { lanes: scenario === 'reconnecting' ? [] : [
       { laneId: 1, laneEpoch: 0, route: 'application-relay', recentContent: false },

@@ -145,10 +145,10 @@ func TestPendingStopRetiresDisconnectedOwnerWithoutBlockingOtherRoutes(t *testin
 	}
 	resume := stopping.init
 	resume.Mode = v2.RegistrationResume
-	if err := registry.ValidateResumeCredential(resume, stopping.token); err != nil {
+	if _, err := registry.BeginResume(context.Background(), resume, stopping.token); err != nil {
 		t.Fatalf("failed STOP emitted a permanent state: %v", err)
 	}
-	if err := registry.Resume(resume, resumeAuthority(t, stopping, resume), routeTestConnection("sender-resumed"), stopping.token); err != nil {
+	if err := resumeRoute(registry, resume, resumeAuthority(t, stopping, resume), routeTestConnection("sender-resumed"), stopping.token); err != nil {
 		t.Fatalf("resume after definite STOP failure: %v", err)
 	}
 }
@@ -197,17 +197,17 @@ func TestPendingStopFencesPublishAbortAndResumeWithoutClaimingDurability(t *test
 		resume.Mode = v2.RegistrationResume
 		stopDone := startStop(registry, fixture)
 		<-store.entered
-		if err := registry.ValidateResumeCredential(resume, fixture.token); !errors.Is(err, ErrStopping) {
+		if _, err := registry.BeginResume(context.Background(), resume, fixture.token); !errors.Is(err, ErrStopping) {
 			t.Fatalf("ValidateResumeCredential during STOP = %v", err)
 		}
-		if err := registry.Resume(resume, resumeAuthority(t, fixture, resume), routeTestConnection("sender-new"), fixture.token); !errors.Is(err, ErrStopping) {
+		if err := resumeRoute(registry, resume, resumeAuthority(t, fixture, resume), routeTestConnection("sender-new"), fixture.token); !errors.Is(err, ErrStopping) {
 			t.Fatalf("Resume during STOP = %v", err)
 		}
 		store.replies <- commitReply{outcome: CommitNotCommitted, err: ErrCommitFailed}
 		if result := <-stopDone; !errors.Is(result.err, ErrCommitFailed) {
 			t.Fatalf("definite STOP failure = %v", result.err)
 		}
-		if err := registry.ValidateResumeCredential(resume, fixture.token); err != nil {
+		if _, err := registry.BeginResume(context.Background(), resume, fixture.token); err != nil {
 			t.Fatalf("definite failure became permanent stopped: %v", err)
 		}
 	})
@@ -274,10 +274,10 @@ func TestUncertainStopFailsClosedUntilSameIDResolves(t *testing.T) {
 	}
 	resume := fixture.init
 	resume.Mode = v2.RegistrationResume
-	if err := registry.ValidateResumeCredential(resume, fixture.token); !errors.Is(err, ErrStopped) {
+	if _, err := registry.BeginResume(context.Background(), resume, fixture.token); !errors.Is(err, ErrStopped) {
 		t.Fatalf("uncertain STOP resume precheck = %v", err)
 	}
-	if err := registry.Resume(resume, resumeAuthority(t, fixture, resume), replacement, fixture.token); !errors.Is(err, ErrStopped) {
+	if err := resumeRoute(registry, resume, resumeAuthority(t, fixture, resume), replacement, fixture.token); !errors.Is(err, ErrStopped) {
 		t.Fatalf("uncertain STOP Resume = %v", err)
 	}
 	different := fixture.stop
