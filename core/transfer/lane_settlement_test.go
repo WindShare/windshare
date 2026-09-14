@@ -216,6 +216,9 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	if err := lanes.Add(LaneIdentity{ID: 1, Epoch: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 		close(slowStarted)
 		<-ctx.Done()
+		if !BlockAttemptSuperseded(ctx) {
+			t.Error("race loser did not retain the demand owner's termination reason")
+		}
 		return records.BlockRecord{}, ctx.Err()
 	})); err != nil {
 		t.Fatal(err)
@@ -251,6 +254,9 @@ func TestLaneSettlementRaceCreditsOnlyWinnerAndIgnoresCancellation(t *testing.T)
 	if err := canceled.Add(LaneIdentity{ID: 3, Epoch: 1}, LaneRouteRelay, laneFunction(func(ctx context.Context, _ BlockDemand) (records.BlockRecord, error) {
 		close(started)
 		<-ctx.Done()
+		if BlockAttemptSuperseded(ctx) {
+			t.Error("caller cancellation was misclassified as a winning race")
+		}
 		return records.BlockRecord{}, ctx.Err()
 	})); err != nil {
 		t.Fatal(err)

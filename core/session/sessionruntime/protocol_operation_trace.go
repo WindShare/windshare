@@ -39,6 +39,7 @@ const (
 	ProtocolOperationCauseWriterStopped
 	ProtocolOperationCauseOperationClosed
 	ProtocolOperationCauseProtocolFailure
+	ProtocolOperationCauseSuperseded
 )
 
 // ProtocolOperationObservation summarizes one RPC boundary. Content decisions carry
@@ -234,10 +235,29 @@ func (call *operationCall) recordProtocolTraceSend(completion protocolsession.Se
 }
 
 func (call *operationCall) recordProtocolTraceFailure(err error) {
-	if call == nil || !call.traceEnabled {
+	if call == nil || !call.traceEnabled || err == nil {
+		return
+	}
+	call.recordProtocolTraceCause(protocolOperationCause(err))
+}
+
+func (call *operationCall) recordProtocolTraceCleanup(err error) {
+	if call == nil || !call.traceEnabled || err == nil {
 		return
 	}
 	cause := protocolOperationCause(err)
+	// Cleanup is synchronous and owns no cancelable wait. A lifecycle-shaped
+	// error here is a failed transition, not evidence of an ordinary wakeup.
+	if cause != ProtocolOperationCauseNone && protocolOperationLifecycleCause(cause) {
+		cause = ProtocolOperationCauseProtocolFailure
+	}
+	call.recordProtocolTraceCause(cause)
+}
+
+func (call *operationCall) recordProtocolTraceCause(cause ProtocolOperationCause) {
+	if call == nil || !call.traceEnabled {
+		return
+	}
 	if cause == ProtocolOperationCauseNone {
 		return
 	}
@@ -246,11 +266,48 @@ func (call *operationCall) recordProtocolTraceFailure(err error) {
 	call.stateMu.Unlock()
 }
 
-func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperationObservation, bool) {
-	return call.protocolOperationTerminationTrace(now, nil)
+type protocolOperationOutcome struct {
+	stage ProtocolOperationStage
+	cause ProtocolOperationCause
 }
 
-func (call *operationCall) protocolOperationTerminationTrace(now time.Time, termination *ReceiverPeerTermination) (ProtocolOperationObservation, bool) {
+// An owner holds terminal observation until its receive and cleanup results are
+// known. Closing the RPC sink still wakes waiters immediately, but cannot publish
+// a partial outcome that would hide a later joined fault.
+type protocolOperationTerminalOwner struct{ call *operationCall }
+
+func (call *operationCall) claimProtocolTermination() *protocolOperationTerminalOwner {
+	if call == nil || !call.traceEnabled {
+		return nil
+	}
+	call.stateMu.Lock()
+	defer call.stateMu.Unlock()
+	return call.claimProtocolTerminationLocked()
+}
+
+func (call *operationCall) claimProtocolTerminationLocked() *protocolOperationTerminalOwner {
+	if !call.traceEnabled {
+		return nil
+	}
+	owner := &protocolOperationTerminalOwner{call: call}
+	call.traceOwner = owner
+	return owner
+}
+
+func (owner *protocolOperationTerminalOwner) finish(runtime *runtimeCore, outcome protocolOperationOutcome) {
+	if owner == nil || runtime == nil {
+		return
+	}
+	if event, ok := owner.call.protocolOperationTerminationTrace(runtime.now(), owner, outcome); ok {
+		runtime.traceProtocolOperation(event)
+	}
+}
+
+func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperationObservation, bool) {
+	return call.protocolOperationTerminationTrace(now, nil, protocolOperationOutcome{})
+}
+
+func (call *operationCall) protocolOperationTerminationTrace(now time.Time, owner *protocolOperationTerminalOwner, outcome protocolOperationOutcome) (ProtocolOperationObservation, bool) {
 	if call == nil || !call.traceEnabled {
 		return ProtocolOperationObservation{}, false
 	}
@@ -259,7 +316,7 @@ func (call *operationCall) protocolOperationTerminationTrace(now time.Time, term
 	call.laneMu.Lock()
 	lane := call.lane
 	call.stateMu.Lock()
-	if call.traceEmitted || (call.peerOperation != nil && (termination == nil || !call.peerOperation.OwnsTermination(*termination))) {
+	if call.traceEmitted || call.traceOwner != owner {
 		call.stateMu.Unlock()
 		call.laneMu.Unlock()
 		return ProtocolOperationObservation{}, false
@@ -267,8 +324,23 @@ func (call *operationCall) protocolOperationTerminationTrace(now time.Time, term
 	call.traceEmitted = true
 	stage, cause := ProtocolOperationReceiverEnded, call.traceCause
 	switch {
-	case call.peerOperation != nil:
-		stage, cause = receiverPeerProtocolOutcome(*termination, cause)
+	case owner != nil:
+		stage, cause = outcome.stage, mergeProtocolOperationCause(cause, outcome.cause)
+		// Supersession owns a canceled block wait, not missing RPC authority.
+		// Peer owners can separately prove an ordinary operation-closed wakeup.
+		if outcome.cause == ProtocolOperationCauseSuperseded && cause == ProtocolOperationCauseOperationClosed {
+			stage = ProtocolOperationReceiverFailed
+		}
+		if stage == ProtocolOperationReceiverEnded && protocolOperationLifecycleCause(cause) && outcome.cause != ProtocolOperationCauseNone {
+			cause = outcome.cause
+		}
+		if (stage == ProtocolOperationReceiverCompleted && cause != ProtocolOperationCauseNone) ||
+			(stage == ProtocolOperationReceiverEnded && !protocolOperationLifecycleCause(cause)) {
+			stage = ProtocolOperationReceiverFailed
+		}
+		if stage == ProtocolOperationReceiverFailed && cause == ProtocolOperationCauseNone {
+			cause = ProtocolOperationCauseProtocolFailure
+		}
 	case cause != ProtocolOperationCauseNone:
 		stage = ProtocolOperationReceiverFailed
 	case call.traceHasFinalResponse:
@@ -326,7 +398,7 @@ func receiverPeerProtocolOutcome(termination ReceiverPeerTermination, cause Prot
 
 func protocolOperationLifecycleCause(cause ProtocolOperationCause) bool {
 	return cause == ProtocolOperationCauseNone || cause == ProtocolOperationCauseCanceled ||
-		cause == ProtocolOperationCauseOperationClosed
+		cause == ProtocolOperationCauseOperationClosed || cause == ProtocolOperationCauseSuperseded
 }
 
 func mergeProtocolOperationCause(current, next ProtocolOperationCause) ProtocolOperationCause {
@@ -414,12 +486,30 @@ func (runtime *runtimeCore) finishReceiptObservations() {
 }
 
 func protocolOperationCause(err error) ProtocolOperationCause {
+	// Inspect joined components independently: errors.Is on the whole tree would
+	// let a cancellation component erase an unrelated protocol or cleanup fault.
+	// Only canonical lifecycle leaves prove a benign wakeup; an opaque Is match
+	// cannot make a collaborator's own error harmless.
+	switch wrapped := err.(type) {
+	case interface{ Unwrap() []error }:
+		cause := ProtocolOperationCauseNone
+		for _, component := range wrapped.Unwrap() {
+			cause = mergeProtocolOperationCause(cause, protocolOperationCause(component))
+		}
+		if cause != ProtocolOperationCauseNone {
+			return cause
+		}
+	case interface{ Unwrap() error }:
+		if inner := wrapped.Unwrap(); inner != nil {
+			return protocolOperationCause(inner)
+		}
+	}
 	switch {
 	case err == nil:
 		return ProtocolOperationCauseNone
 	case errors.Is(err, context.DeadlineExceeded):
 		return ProtocolOperationCauseDeadline
-	case errors.Is(err, context.Canceled):
+	case err == context.Canceled:
 		return ProtocolOperationCauseCanceled
 	case errors.Is(err, ErrRuntimeClosed):
 		return ProtocolOperationCauseRuntimeClosed
@@ -427,7 +517,7 @@ func protocolOperationCause(err error) ProtocolOperationCause {
 		return ProtocolOperationCauseLaneUnavailable
 	case errors.Is(err, protocolsession.ErrWriterStopped):
 		return ProtocolOperationCauseWriterStopped
-	case errors.Is(err, ErrOperationMissing):
+	case err == ErrOperationMissing:
 		return ProtocolOperationCauseOperationClosed
 	default:
 		return ProtocolOperationCauseProtocolFailure
