@@ -1,6 +1,8 @@
 import { reopenProgressiveZipContinuation } from './progressive-continuation'
 import { recoverLocalWorkspaceArtifact } from './artifact-recovery'
 import { sealCompletedOriginalFile } from './original-continuation'
+import { recoverOriginalFileReceive } from './original-receive-recovery'
+import { storedReceiveLifecycleState } from '../../workspace/state-codec'
 import type { BrowserReceiveOperationLease } from '../../browser/session-lease'
 import type { OutputDiagnosticsPorts } from '../../diagnostics'
 import type { OriginPrivateStorageEstimate } from '../../origin-private/admission'
@@ -13,7 +15,6 @@ import type { PersistentTreeTrace } from '../../persistent-tree/contracts'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
 import type { PreparationAdmissionReceiptV1 } from '../../workspace/receipts'
 import type { ReceiveOperationRepository } from '../../workspace/repository'
-import type { ReceiveLifecycleState } from '../../workspace/state'
 import {
   WorkspaceOperationStages,
   type AdmittedWorkspaceContent,
@@ -109,13 +110,25 @@ export class WorkspaceContinuationAuthority {
     return recoverLocalWorkspaceArtifact(input, stages, this.#checkpointDatabaseName)
   }
 
-  async resumeReceive(
-    input: WorkspaceContinuationInput,
-    admissionFallback: Extract<ReceiveLifecycleState, {
-      kind: 'resumable-receive'
-      payloadKind: 'file-set'
-    }>,
-  ): Promise<ReopenLifecycleAuthority> {
+  async resumeReceive(input: WorkspaceContinuationInput): Promise<ReopenLifecycleAuthority> {
+    if (input.snapshot.lifecycle.kind === 'receiving') {
+      try {
+        const admission = await readPersistedWorkspaceAdmission(input.repository, input.snapshot.operation.receiveIntent)
+        const recovered = await recoverOriginalFileReceive({
+          authority: input, budget: admission.budget, now: this.#now(),
+          ...(this.#checkpointDatabaseName === undefined ? {} : { checkpointDatabaseName: this.#checkpointDatabaseName }),
+        })
+        input = { ...input, snapshot: { ...input.snapshot, lifecycle: recovered,
+          lifecycleRecord: await storedReceiveLifecycleState(recovered) } }
+      } catch (error) {
+        if (!(error instanceof TargetOwnershipUnknownError)) throw error
+        return this.#ownershipAttention(input)
+      }
+    }
+    const admissionFallback = input.snapshot.lifecycle
+    if (admissionFallback.kind !== 'resumable-receive' || admissionFallback.payloadKind !== 'file-set') {
+      throw new TypeError('workspace receive continuation requires a stable file-set fallback')
+    }
     const stages = await this.openStages(
       input.repository,
       input.snapshot,
@@ -130,10 +143,17 @@ export class WorkspaceContinuationAuthority {
     )
     const claim = input.resources.reclaimedClaim
     if (claim === undefined) throw new TypeError('workspace reopen omitted its budget claim')
-    const admittedContent = await stages.reopenAdmittedContent({
-      budget: admission.budget,
-      claim,
-    })
+    let admittedContent: AdmittedWorkspaceContent
+    try {
+      admittedContent = await stages.reopenAdmittedContent({ budget: admission.budget, claim })
+    } catch (error) {
+      if (error instanceof TargetOwnershipUnknownError) {
+        return this.#ownershipAttention({ ...input, snapshot: { ...input.snapshot, lifecycle,
+          lifecycleRecord: await storedReceiveLifecycleState(lifecycle) } })
+      }
+      await stages.restoreReceiveContinuation(admissionFallback)
+      throw error
+    }
     const receiveContinuation = this.#workspaceReceiveContinuation({
       ...input,
       admittedContent,

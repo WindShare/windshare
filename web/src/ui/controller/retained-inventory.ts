@@ -561,8 +561,9 @@ export class RetainedInventoryCoordinator {
       pending.operation.operationId !== intent.operationId ||
       pending.operation.receiveIntentDigest !== intent.digest ||
       runtime.lifecycle.kind !== 'receiving' ||
-      (directZipReceive ? runtime.lifecycle.generation <= pending.operation.lifecycleGeneration :
-        runtime.lifecycle.generation !== pending.operation.lifecycleGeneration + 1n) ||
+      // Output authority may commit recovery before receive admission. The UI
+      // checks forward progress; it does not own the number of durable transitions.
+      runtime.lifecycle.generation <= pending.operation.lifecycleGeneration ||
       runtime.lifecycle.operationId !== intent.operationId ||
       runtime.lifecycle.receiveIntentDigest !== intent.digest ||
       (
