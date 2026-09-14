@@ -301,7 +301,7 @@ func (eventVisitor) VisitRootPrefetchObserved(clievent.RootPrefetchObserved) err
 func (eventVisitor) VisitSenderCapacityObserved(clievent.SenderCapacityObserved) error { return nil }
 func (eventVisitor) VisitSenderRevisionObserved(clievent.SenderRevisionObserved) error { return nil }
 func (visitor eventVisitor) VisitProtocolObservationObserved(event clievent.ProtocolObservationObserved) error {
-	if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Cause() != clievent.ProtocolOperationCauseNone {
+	if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok && visitor.verboseVisible() && fact.Stage() == clievent.ProtocolOperationReceiverFailed {
 		visitor.renderer.insert(formatProtocolOperationFailure(event, fact, visitor.symbols()))
 	}
 	return nil

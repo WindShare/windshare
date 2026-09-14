@@ -33,6 +33,33 @@ func TestProtocolProjectionRetainsControlSchedulingDecision(t *testing.T) {
 	}
 }
 
+func TestProtocolProjectionPreservesNormalTerminationDiagnostics(t *testing.T) {
+	for _, testCase := range []struct {
+		cause sessionruntime.ProtocolOperationCause
+		want  clievent.ProtocolOperationCause
+	}{
+		{sessionruntime.ProtocolOperationCauseCanceled, clievent.ProtocolOperationCauseCanceled},
+		{sessionruntime.ProtocolOperationCauseOperationClosed, clievent.ProtocolOperationCauseOperationClosed},
+	} {
+		source := protocolObservationContext()
+		source.Correlation.Role = protocolsession.RoleReceiver
+		source.Correlation.RequestKind = protocolsession.MessagePeerOffer
+		fact := sessionruntime.NewProtocolOperationObservation(source, sessionruntime.ProtocolOperationObservation{
+			Stage: sessionruntime.ProtocolOperationReceiverEnded, Cause: testCase.cause,
+		})
+		event, err := ProjectProtocolObservation(clievent.CommandGet, fact)
+		if err != nil {
+			t.Fatal(err)
+		}
+		projected := event.Fact().(clievent.ProtocolOperationFact)
+		if projected.Stage() != clievent.ProtocolOperationReceiverEnded ||
+			projected.Cause() != testCase.want ||
+			!event.ObservedAt().Equal(source.ObservedAt) {
+			t.Fatalf("normal termination diagnostics changed during projection: %+v", projected)
+		}
+	}
+}
+
 func protocolObservationContext() sessionruntime.ProtocolObservationContext {
 	return sessionruntime.ProtocolObservationContext{ObservedAt: time.Unix(1, 123), Correlation: sessionruntime.ProtocolObservationCorrelation{Role: protocolsession.RoleSender, ProtocolSessionID: protocolsession.ProtocolSessionID{1}, OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageOpenRevisions}}
 }
