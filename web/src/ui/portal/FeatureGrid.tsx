@@ -1,3 +1,5 @@
+import { PORTAL_SECTIONS } from './navigation'
+
 export function FeatureGrid() {
   const features = [
     {
@@ -48,7 +50,7 @@ export function FeatureGrid() {
   ]
 
   return (
-    <section id="features" className="portal-section">
+    <section id={PORTAL_SECTIONS.features.id} className="portal-section">
       <div className="portal-container">
         <div className="portal-section-header">
           <span className="portal-section-tag">ARCHITECTURAL HIGHLIGHTS</span>

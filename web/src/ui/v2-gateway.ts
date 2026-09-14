@@ -18,11 +18,8 @@ import type {
   V2ContentLaneAdmissionObservation,
   V2ContentLaneDetachmentObservation,
 } from '../connectivity/v2-receiver-policy'
-import {
-  decodeSuite02CapabilityKey,
-  parseSuite02CapabilityLink,
-  type Suite02CapabilityLink,
-} from '../crypto/suite02-link'
+import type { Suite02CapabilityLink } from '../crypto/suite02-link'
+import { capabilityFromInput } from './capability/input'
 import { decodeBase64Url, encodeBase64Url } from '../crypto/bytes'
 import { bindLocalOutputFailureProtocolAttempt } from '../output/diagnostics'
 import { V2BrowserSessionFactory } from '../receiver/v2-session-factory'
@@ -458,14 +455,4 @@ function gatewayConnectivityOptions(
     ...(onContentLaneAdmitted === undefined ? {} : { onContentLaneAdmitted }),
     ...(onContentLaneDetached === undefined ? {} : { onContentLaneDetached }),
   }
-}
-
-async function capabilityFromInput(input: string, pageUrl: string): Promise<Suite02CapabilityLink> {
-  const trimmed = input.trim()
-  if (trimmed.includes('://')) return parseSuite02CapabilityLink(trimmed)
-  const capability = await decodeSuite02CapabilityKey(trimmed)
-  const current = new URL(pageUrl)
-  current.pathname = `/s/${capability.shareId}`
-  current.hash = trimmed.startsWith('#') ? trimmed : `#${trimmed}`
-  return parseSuite02CapabilityLink(current.href)
 }

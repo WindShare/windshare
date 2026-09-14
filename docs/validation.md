@@ -9,7 +9,8 @@ retained downloads after reloading and going offline. Longer recovery and connec
 to `make long-go` and the weekly browser suites; unit and component contracts cover individual decisions
 and failure paths. Component contracts use the lightweight `test/browser/contract-host.html` page and
 load their own production modules; storage, reloads, and browser-process recovery stay real. Startup and
-diagnostics contracts use the application entry point, and UI harnesses load their required styles.
+diagnostics contracts use the application entry point, including same-document share links and portal anchors.
+UI harnesses load their required styles.
 The short Chromium contracts also build and serve the native-storage capability probe under a
 same-origin Worker CSP, catching bundling failures hidden by the development server.
 Static architecture gates protect dependency and capability boundaries, not
