@@ -612,6 +612,16 @@ export function validateContinuation(payload: UnknownRecord): void {
 }
 
 export function validateReopen(payload: UnknownRecord): void {
+  if (payload.transition === 'receive_recovered') {
+    exactKeys(payload, ['backend', 'transition', 'operation_id', 'lifecycle_generation',
+      'checkpoint_count', 'verified_bytes'], [], 'receive recovery payload')
+    member(payload.backend, ['origin_private'], 'receive recovery backend')
+    canonicalIdentity(payload.operation_id, 'receive recovery operation ID')
+    decimalUint64(payload.lifecycle_generation, 'receive recovery generation')
+    member(payload.checkpoint_count, ['0', '1'], 'original receive checkpoint count')
+    decimalUint64(payload.verified_bytes, 'receive recovery verified bytes')
+    return
+  }
   validateOutputPair(payload, CHECKPOINT_BACKENDS, [
     'started', 'authorized', 'failed',
   ], 'reopen')

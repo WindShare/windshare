@@ -272,6 +272,24 @@ test('reopens workspace admission authority from a fresh page', async ({ page })
   })
 })
 
+test('production Continue recovers an empty checkpoint after reload during an uncommitted write', async ({ page }) => {
+  const created = await page.evaluate(async ({ path, key }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.createOriginPrivateReceiveCrashCut(key, 'empty')
+  }, { path: RECOVERY_HARNESS_PATH, key: crypto.randomUUID() })
+  expect(created).toMatchObject({ lifecycle: 'receiving', ranges: [] })
+  await page.reload()
+  const recovered = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.recoverReceiveAndSealPackage(fixture)
+  }, { path: RECOVERY_HARNESS_PATH, fixture: created.fixture })
+  expect(recovered).toMatchObject({
+    recoveredRanges: [], receivedBytesAfterReload: '5', packageBytes: [1, 2, 3, 4, 5],
+    recoveryDecision: 'resume-receive', lifecycle: 'waiting-to-save',
+  })
+  expect(recovered.fixture.rawOwnedObjectId).toBe(created.originalObjectId)
+})
+
 for (const cut of ['receiving', 'materialization-sealed'] as const) {
   test(`completed original ${cut} crash cut saves the same object offline`, async ({ page, context }) => {
     const created = await page.evaluate(async ({ path, key }) => {
@@ -335,7 +353,7 @@ test('fresh inventory recovers an interrupted browser handoff and saves the same
   expect(await download.failure()).toBeNull()
 })
 
-test('recovers a FileCheckpoint, reuses its original object, and retries offline after reload', async ({
+test('production Continue recovers an active FileCheckpoint and reuses its original object after reload', async ({
   page,
   context,
 }) => {
@@ -360,6 +378,7 @@ test('recovers a FileCheckpoint, reuses its original object, and retries offline
   }) as RecoveredPackageResult
   expect(recovered).toMatchObject({
     recoveredRanges: ['0:3'],
+    receivedBytesAfterReload: '2',
     packageBytes: [1, 2, 3, 4, 5],
     recoveryDecision: 'resume-receive',
     lifecycle: 'waiting-to-save',
@@ -368,6 +387,7 @@ test('recovers a FileCheckpoint, reuses its original object, and retries offline
     publicationAttempts: 1,
   })
 
+  expect(recovered.fixture.rawOwnedObjectId).toBe(crashCut.originalObjectId)
   expect(recovered.fixture.package.packageOwnedObjectId).toBe(recovered.fixture.rawOwnedObjectId)
   await page.reload()
   await page.evaluate(async path => { await import(path) }, RECOVERY_HARNESS_PATH)

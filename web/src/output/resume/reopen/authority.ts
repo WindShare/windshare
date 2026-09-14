@@ -74,6 +74,7 @@ export class PersistedReceiveOperationReopenAuthority {
   readonly #reopenWorkspaceNamespace: typeof reopenOriginPrivateWorkspaceNamespace
   readonly #workspaceContinuation: WorkspaceContinuationAuthority
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
+  readonly #outputTrace: import('../../diagnostics').OutputTraceSource | undefined
   readonly #trace: PersistedReceiveOperationReopenTrace | undefined
 
   constructor(options: PersistedReceiveOperationReopenAuthorityOptions) {
@@ -121,6 +122,7 @@ export class PersistedReceiveOperationReopenAuthority {
         : { openWorkspacePackageContinuation: options.openWorkspacePackageContinuation }),
     })
     this.#diagnostics = options.diagnostics
+    this.#outputTrace = options.outputTrace
     this.#trace = options.trace
   }
 
@@ -133,7 +135,7 @@ export class PersistedReceiveOperationReopenAuthority {
     if (purpose !== 'continue' && retainedFileRecovery !== undefined) {
       throw new TypeError('retained file recovery is exclusive to receive continuation')
     }
-    const diagnostics = this.#diagnosticsFor(failures)
+    let diagnostics = this.#diagnosticsFor(failures)
     this.#emitReviewedReopen('started')
     const repository = await this.#repositoryFactory().catch((error: unknown) => {
       recordOutputException(diagnostics?.failures?.reopen, error)
@@ -155,6 +157,9 @@ export class PersistedReceiveOperationReopenAuthority {
         descriptor,
         resources,
       )
+      if (diagnostics !== undefined) {
+        diagnostics = { ...diagnostics, backend: target.kind === 'workspace' ? 'origin_private' : 'file_system_access' }
+      }
       requireMatchingRetainedFileRecovery(target, descriptor, retainedFileRecovery)
       if (target.kind === 'direct-zip') resources.directZipJournal = target.journal
       const lifecycleAuthority = await this.#advanceLifecycle({
@@ -354,6 +359,9 @@ export class PersistedReceiveOperationReopenAuthority {
       diagnostics?: OutputDiagnosticsPorts
     }>,
   ): Promise<ReopenLifecycleAuthority> {
+    if (input.target.kind === 'workspace') {
+      return this.#workspaceContinuation.resumeReceive({ ...input, target: input.target })
+    }
     if (input.snapshot.lifecycle.kind === 'receiving' && input.target.kind === 'direct-tree') {
       const header = await this.#readCompatibleNameHeader(input.snapshot.operation.operationId)
       if (header?.pendingTerminalOutcome !== undefined ||
@@ -383,20 +391,11 @@ export class PersistedReceiveOperationReopenAuthority {
         receiveAdmissionFallback: input.snapshot.lifecycle,
       })
     }
-    if (input.target.kind === 'direct-zip') {
-      if (input.snapshot.lifecycle.payloadKind !== 'direct-zip') {
-        throw new TypeError('Direct ZIP cannot resume a file-set checkpoint')
-      }
-      input.resources.directZipJournal = input.target.journal
-      return Object.freeze({ lifecycle: input.snapshot.lifecycle })
+    if (input.snapshot.lifecycle.payloadKind !== 'direct-zip') {
+      throw new TypeError('Direct ZIP cannot resume a file-set checkpoint')
     }
-    if (input.snapshot.lifecycle.payloadKind !== 'file-set') {
-      throw new TypeError('workspace cannot resume a Direct ZIP checkpoint')
-    }
-    return this.#workspaceContinuation.resumeReceive(
-      Object.freeze({ ...input, target: input.target }),
-      input.snapshot.lifecycle,
-    )
+    input.resources.directZipJournal = input.target.journal
+    return Object.freeze({ lifecycle: input.snapshot.lifecycle })
   }
 
   async #resumePackage(input: Readonly<{
@@ -423,7 +422,7 @@ export class PersistedReceiveOperationReopenAuthority {
     lease: BrowserReceiveOperationLease,
     operationId: string,
   ): Promise<never> {
-    const attention = await persistOwnershipAttention(repository, snapshot, lease)
+    const attention = await persistOwnershipAttention(repository, snapshot, lease, this.#now())
     this.#emit(Object.freeze({
       name: 'receive.operation.needs_attention',
       operation_id: operationId,
@@ -538,11 +537,14 @@ export class PersistedReceiveOperationReopenAuthority {
   }
 
   #diagnosticsFor(failures: OutputFailureSinks | undefined): OutputDiagnosticsPorts | undefined {
-    if (failures === undefined) return this.#diagnostics
-    if (this.#diagnostics === undefined) {
-      return Object.freeze({ backend: 'origin_private', failures })
-    }
-    return Object.freeze({ ...this.#diagnostics, failures })
+    const trace = this.#diagnostics?.trace ?? this.#outputTrace
+    if (failures === undefined && trace === undefined) return this.#diagnostics
+    return Object.freeze({
+      backend: 'origin_private',
+      ...this.#diagnostics,
+      ...(failures === undefined ? {} : { failures }),
+      ...(trace === undefined ? {} : { trace }),
+    })
   }
 
   #now(): number {
