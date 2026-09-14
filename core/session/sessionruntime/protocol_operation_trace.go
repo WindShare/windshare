@@ -8,6 +8,7 @@ import (
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
 // ProtocolOperationStage identifies the side and terminal observation boundary
@@ -65,6 +66,7 @@ type ProtocolOperationObservation struct {
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
 	Cause                   ProtocolOperationCause
+	RequestScheduling       requestlane.Estimate
 }
 
 type ProtocolObservation interface {
@@ -277,6 +279,7 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 		OperationElapsedMillis: durationMillis(now.Sub(call.traceStarted)),
 		UsableLanesAtSelection: call.traceUsableAtSelection,
 		Cause:                  call.traceCause,
+		RequestScheduling:      call.requests.Estimate(),
 	}
 	call.stateMu.Unlock()
 	call.laneMu.Unlock()

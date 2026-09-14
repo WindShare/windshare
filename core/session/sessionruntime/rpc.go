@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
 const operationResponseFrames = 512
@@ -148,6 +149,9 @@ func (client *rpcClient) HandleMessage(ctx context.Context, message protocolsess
 	} else if !expected.Same(generation) {
 		return nil
 	}
+	if requestlane.Managed(call.requestKind) && senderResponseFinal(message.Kind()) {
+		call.requests.Complete(client.runtime.now())
+	}
 	response := operationResponse{message: message, generation: generation}
 	var err error
 	if call.traceEnabled && message.Kind() == protocolsession.MessageOperationError {
@@ -276,9 +280,12 @@ func (client *rpcClient) sendRequest(
 		if err := client.waitRequestCapacity(ctx, call); err != nil {
 			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
 		}
-		selected, err := client.runtime.lanes.selectLane(lane)
+		selected, reservation, estimate, err := client.runtime.lanes.selectRequestLane(lane, message.Kind())
 		if err != nil {
 			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: err}
+		}
+		if reservation != nil && !call.requests.Reserve(reservation, estimate) {
+			return protocolsession.SendCompletion{Settled: true, Outcome: protocolsession.SendOutcomeDropped, Err: ErrRuntimeClosed}
 		}
 		var usableAtSelection uint32
 		if call.traceEnabled {
@@ -299,6 +306,7 @@ func (client *rpcClient) sendRequest(
 			!protocolsession.IsOperationCapacityError(completion.Err) {
 			return completion
 		}
+		call.requests.Reserve(nil, estimate)
 		// Another lane can consume the available slot before this writer claims
 		// the request. Only this proven unsent refusal is safe to retry.
 	}

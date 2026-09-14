@@ -809,6 +809,7 @@ func TestUserTraceV4DiagnosticContract(t *testing.T) {
 		"observed_at": "2026-08-23T00:00:00Z", "role": "receiver", "stage": "receiver_ended", "request_kind": "list_children",
 		"response_count": "1", "operation_elapsed_ms": "2", "usable_lanes_at_selection": 1,
 		"usable_lanes_at_settlement": 1, "cause": "none",
+		"request_scheduling": map[string]any{"expected_ms": "42", "response_ms": "10", "queued_content_ms": "12", "pending_requests": 2},
 	})
 	protocol["correlation"] = map[string]any{
 		"protocol_session_id": protocolSessionID, "protocol_operation_id": protocolOperationID,

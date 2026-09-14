@@ -337,6 +337,10 @@ func buildV4TracePayloadSchemas() map[string]*v4TraceObjectSchema {
 			v4TraceFields(v4TraceDecimal, "response_count", "operation_elapsed_ms"),
 			v4TraceOptionalFields(v4TraceDecimal, "deadline_remaining_ms"),
 			v4TraceFields(v4TraceInteger, "usable_lanes_at_selection", "usable_lanes_at_settlement"),
+			v4TraceObjectField("request_scheduling", v4TraceSchema(
+				v4TraceFields(v4TraceDecimal, "expected_ms", "response_ms", "queued_content_ms"),
+				v4TraceFields(v4TraceInteger, "pending_requests"),
+			), true),
 		),
 		"protocol_response_send_not_started": notStartedResponse,
 		"protocol_response_send_returned":    response,

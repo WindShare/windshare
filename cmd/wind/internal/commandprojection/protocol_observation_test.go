@@ -10,8 +10,28 @@ import (
 	"github.com/windshare/windshare/cmd/wind/internal/clievent"
 	"github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 	"github.com/windshare/windshare/core/session/sessionruntime"
 )
+
+func TestProtocolProjectionRetainsControlSchedulingDecision(t *testing.T) {
+	source := protocolObservationContext()
+	source.Correlation.Role = protocolsession.RoleReceiver
+	fact := sessionruntime.NewProtocolOperationObservation(source, sessionruntime.ProtocolOperationObservation{
+		Stage: sessionruntime.ProtocolOperationReceiverEnded,
+		Lane:  sessionruntime.LaneIdentity{ID: 3, Epoch: 2}, HasLane: true,
+		Cause:             sessionruntime.ProtocolOperationCauseNone,
+		RequestScheduling: requestlane.Estimate{Expected: 42 * time.Millisecond, Response: 10 * time.Millisecond, QueuedContent: 12 * time.Millisecond, Pending: 2},
+	})
+	projected, err := ProjectProtocolObservation(clievent.CommandGet, fact)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := projected.Fact().(clievent.ProtocolOperationFact).RequestScheduling()
+	if decision != (clievent.RequestSchedulingSpec{ExpectedMillis: 42, ResponseMillis: 10, QueuedContentMillis: 12, PendingRequests: 2}) {
+		t.Fatalf("scheduling decision lost at projection: %+v", decision)
+	}
+}
 
 func protocolObservationContext() sessionruntime.ProtocolObservationContext {
 	return sessionruntime.ProtocolObservationContext{ObservedAt: time.Unix(1, 123), Correlation: sessionruntime.ProtocolObservationCorrelation{Role: protocolsession.RoleSender, ProtocolSessionID: protocolsession.ProtocolSessionID{1}, OperationID: protocolsession.OperationID{2}, RequestKind: protocolsession.MessageOpenRevisions}}

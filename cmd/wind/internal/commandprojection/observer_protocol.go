@@ -130,7 +130,14 @@ func projectProtocolOperation(context clievent.ProtocolObservationContext, value
 			return clievent.ProtocolObservationObserved{}, err
 		}
 	}
-	return clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{Command: context.Command, ObservedAt: context.ObservedAt, Role: context.Role, ProtocolSession: context.ProtocolSession, ProtocolOperation: context.ProtocolOperation, RequestKind: context.RequestKind, Stage: stage, ResponseKind: responseKind, HasResponse: value.HasResponse, Lane: lane, HasLane: value.HasLane, HasSend: value.HasSend, SendSettled: value.SendSettled, SendAdmitted: value.SendAdmitted, SendOutcome: outcome, ResponseCount: value.ResponseCount, DeadlineRemainingMillis: value.DeadlineRemainingMillis, HasDeadline: value.HasDeadline, OperationElapsedMillis: value.OperationElapsedMillis, UsableLanesAtSelection: value.UsableLanesAtSelection, UsableLanesAtSettlement: value.UsableLanesAtSettlement, Cause: cause})
+	return clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{Command: context.Command, ObservedAt: context.ObservedAt, Role: context.Role, ProtocolSession: context.ProtocolSession, ProtocolOperation: context.ProtocolOperation, RequestKind: context.RequestKind, Stage: stage, ResponseKind: responseKind, HasResponse: value.HasResponse, Lane: lane, HasLane: value.HasLane, HasSend: value.HasSend, SendSettled: value.SendSettled, SendAdmitted: value.SendAdmitted, SendOutcome: outcome, ResponseCount: value.ResponseCount, DeadlineRemainingMillis: value.DeadlineRemainingMillis, HasDeadline: value.HasDeadline, OperationElapsedMillis: value.OperationElapsedMillis, UsableLanesAtSelection: value.UsableLanesAtSelection, UsableLanesAtSettlement: value.UsableLanesAtSettlement, Cause: cause,
+		RequestScheduling: clievent.RequestSchedulingSpec{
+			ExpectedMillis:      uint64(max(0, value.RequestScheduling.Expected.Milliseconds())),
+			ResponseMillis:      uint64(max(0, value.RequestScheduling.Response.Milliseconds())),
+			QueuedContentMillis: uint64(max(0, value.RequestScheduling.QueuedContent.Milliseconds())),
+			PendingRequests:     value.RequestScheduling.Pending,
+		},
+	})
 }
 func projectProtocolErrorContent(value sessionruntime.ProtocolErrorContent) (clievent.ProtocolErrorContent, error) {
 	if value.IsZero() {
