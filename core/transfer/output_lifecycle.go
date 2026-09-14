@@ -584,5 +584,9 @@ type DirectTreeSession interface {
 	FinalizeDirectory(context.Context, DirectoryAdmission) (DirectorySettlement, error)
 	BeginFile(context.Context, MaterializationFile) (FileStart, error)
 	PauseTree(context.Context, JobPauseReason) (DirectTreeSettlement, error)
+	// FinalizeTree requires every acquired output claim to be settled. A partial
+	// selection may have no admitted nodes when discovery failed; that result
+	// retains known operation ownership, including any destination reservation.
+	// Success additionally requires the intent's output root to be settled.
 	FinalizeTree(context.Context, DirectTreeOutcome) (DirectTreeSettlement, error)
 }

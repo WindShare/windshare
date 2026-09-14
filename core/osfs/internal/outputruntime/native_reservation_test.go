@@ -20,83 +20,98 @@ import (
 const retiredAggregateCheckpointDirectory = "checkpoints-v2"
 
 func TestStagedAuthorityCreatesAndExactlyReopensNamedOperation(t *testing.T) {
-	root := newRuntimeTestRootSpec(t)
-	selection := nativeReservationTestSelection(t, 0x31)
-	resultLayout, err := receivecontract.NewCompleteDirectoryResultRoot(
-		incrementalTestIdentity16[catalog.DirectoryID](0x33), "docs",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	artifact, err := receivecontract.NewResultRootDirectoryTree(resultLayout)
-	if err != nil {
-		t.Fatal(err)
-	}
-	first := newNativeReservationTestAuthority(t, root.path)
-	mode, err := first.BindDestination(context.Background())
-	if err != nil || !mode.Resumable() {
-		t.Fatalf("bind mode = (%+v, %v)", mode, err)
-	}
-	lookup, err := first.LookupActive(context.Background(), selection)
-	if err != nil || lookup.Kind() != ActiveLookupMiss {
-		t.Fatalf("initial lookup = (%d, %v)", lookup.Kind(), err)
-	}
-	operation, err := first.CreateOperation(context.Background(), lookup, artifact)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intent, ok := operation.ReceiveIntent()
-	if !ok {
-		t.Fatal("created operation omitted its frozen intent")
-	}
-	reservation, _ := intent.MaterializationPlan().DestinationReservation()
-	if reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
-		reservation.LogicalReservedName() != "docs" || reservation.PhysicalName() != "docs" {
-		t.Fatalf("named reservation = kind %d logical %q physical %q", reservation.Kind(),
-			reservation.LogicalReservedName(), reservation.PhysicalName())
-	}
-	if info, err := os.Stat(filepath.Join(root.path, reservation.PhysicalName())); err != nil || !info.IsDir() {
-		t.Fatalf("direct result root = (%v, %v)", info, err)
-	}
-	if _, err := os.Stat(filepath.Join(root.path, checkpointstore.ControlDirectory, retiredAggregateCheckpointDirectory)); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("staged ordinary path touched legacy checkpoint namespace: %v", err)
-	}
-	session, err := first.OpenOperation(context.Background(), operation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := first.OpenOperation(context.Background(), operation); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
-		t.Fatalf("operation reopened twice: %v", err)
-	}
-	if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
-		t.Fatal(err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatal(err)
-	}
+	for _, test := range []struct {
+		name    string
+		outcome transfer.DirectTreeOutcome
+	}{
+		{"interrupted before root admission", transfer.DirectTreeOutcomePaused},
+		{"unavailable before root admission", transfer.DirectTreeOutcomePartial},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := newRuntimeTestRootSpec(t)
+			selection := nativeReservationTestSelection(t, 0x31)
+			resultLayout, err := receivecontract.NewCompleteDirectoryResultRoot(
+				incrementalTestIdentity16[catalog.DirectoryID](0x33), "docs",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			artifact, err := receivecontract.NewResultRootDirectoryTree(resultLayout)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first := newNativeReservationTestAuthority(t, root.path)
+			mode, err := first.BindDestination(context.Background())
+			if err != nil || !mode.Resumable() {
+				t.Fatalf("bind mode = (%+v, %v)", mode, err)
+			}
+			lookup, err := first.LookupActive(context.Background(), selection)
+			if err != nil || lookup.Kind() != ActiveLookupMiss {
+				t.Fatalf("initial lookup = (%d, %v)", lookup.Kind(), err)
+			}
+			operation, err := first.CreateOperation(context.Background(), lookup, artifact)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intent, ok := operation.ReceiveIntent()
+			if !ok {
+				t.Fatal("created operation omitted its frozen intent")
+			}
+			reservation, _ := intent.MaterializationPlan().DestinationReservation()
+			if reservation.Kind() != receivecontract.ReservationNamedContainerEntry ||
+				reservation.LogicalReservedName() != "docs" || reservation.PhysicalName() != "docs" {
+				t.Fatalf("named reservation = kind %d logical %q physical %q", reservation.Kind(),
+					reservation.LogicalReservedName(), reservation.PhysicalName())
+			}
+			if info, err := os.Stat(filepath.Join(root.path, reservation.PhysicalName())); err != nil || !info.IsDir() {
+				t.Fatalf("direct result root = (%v, %v)", info, err)
+			}
+			if _, err := os.Stat(filepath.Join(root.path, checkpointstore.ControlDirectory, retiredAggregateCheckpointDirectory)); !errors.Is(err, fs.ErrNotExist) {
+				t.Fatalf("staged ordinary path touched legacy checkpoint namespace: %v", err)
+			}
+			session, err := first.OpenOperation(context.Background(), operation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := first.OpenOperation(context.Background(), operation); !errors.Is(err, transfer.ErrInvalidOutputBinding) {
+				t.Fatalf("operation reopened twice: %v", err)
+			}
+			if test.outcome == transfer.DirectTreeOutcomePartial {
+				settlement, err := session.FinalizeTree(context.Background(), test.outcome)
+				if err != nil || settlement.Kind() != transfer.DirectTreeSettlementPartial {
+					t.Fatalf("unavailable root lost operation ownership: (%d, %v)", settlement.Kind(), err)
+				}
+			} else if _, err := session.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+				t.Fatal(err)
+			}
+			if err := first.Close(); err != nil {
+				t.Fatal(err)
+			}
 
-	second := newNativeReservationTestAuthority(t, root.path)
-	if _, err := second.BindDestination(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	reopened, err := second.LookupActive(context.Background(), selection)
-	if err != nil || reopened.Kind() != ActiveLookupReopened {
-		t.Fatalf("reopened lookup = (%d, %v)", reopened.Kind(), err)
-	}
-	reopenedOperation := reopened.Operation()
-	reopenedIntent, ok := reopenedOperation.ReceiveIntent()
-	if !ok || !reopenedIntent.EqualCanonical(intent) {
-		t.Fatal("exact reopen changed the frozen intent")
-	}
-	reopenedSession, err := second.OpenOperation(context.Background(), reopenedOperation)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := reopenedSession.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
-		t.Fatal(err)
-	}
-	if err := second.Close(); err != nil {
-		t.Fatal(err)
+			second := newNativeReservationTestAuthority(t, root.path)
+			if _, err := second.BindDestination(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := second.LookupActive(context.Background(), selection)
+			if err != nil || reopened.Kind() != ActiveLookupReopened {
+				t.Fatalf("reopened lookup = (%d, %v)", reopened.Kind(), err)
+			}
+			reopenedOperation := reopened.Operation()
+			reopenedIntent, ok := reopenedOperation.ReceiveIntent()
+			if !ok || !reopenedIntent.EqualCanonical(intent) {
+				t.Fatal("exact reopen changed the frozen intent")
+			}
+			reopenedSession, err := second.OpenOperation(context.Background(), reopenedOperation)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := reopenedSession.PauseTree(context.Background(), transfer.JobPauseInterrupted); err != nil {
+				t.Fatal(err)
+			}
+			if err := second.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

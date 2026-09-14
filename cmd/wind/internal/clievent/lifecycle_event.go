@@ -365,7 +365,7 @@ func NewFilesystemOutputObserved(spec FilesystemOutputSpec) (FilesystemOutputObs
 func validFilesystemOutputSpec(spec FilesystemOutputSpec) bool {
 	return (spec.Capabilities == (FilesystemDestinationCapabilities{}) || spec.Capabilities.Valid()) &&
 		validFilesystemOutputNames(spec) &&
-		spec.Failure.Valid() == (spec.FailureStage != 0) &&
+		validFilesystemFailureContext(spec) &&
 		(spec.NativeLockScope != 0) == (spec.NativeLockMilestone != 0) &&
 		validFilesystemRuntimeDecision(spec) &&
 		validFilesystemReconciliation(spec)
@@ -424,6 +424,20 @@ func validFilesystemRuntimeDecision(spec FilesystemOutputSpec) bool {
 	return runtimeFields == 0 || runtimeFields == 3
 }
 
+func validFilesystemFailureContext(spec FilesystemOutputSpec) bool {
+	if spec.FailureStage != 0 {
+		return spec.Failure.Valid()
+	}
+	if spec.ReconciliationStep != 0 || spec.NativeErrorClass != 0 {
+		return false
+	}
+	// Runtime decisions already identify the failing component and operation.
+	// Requiring a native I/O stage would discard protocol/ownership failures or
+	// force producers to misclassify them as a filesystem primitive failure.
+	return !spec.Failure.Valid() || spec.Operation == FilesystemRuntimeDecision &&
+		spec.RuntimeComponent != 0 && spec.RuntimeOperation != 0 && spec.RuntimeDecision != 0
+}
+
 func validFilesystemReconciliation(spec FilesystemOutputSpec) bool {
 	return spec.ReconciliationStep == 0 ||
 		spec.FailureStage == FilesystemFailureCheckpointReconciliation ||
@@ -480,7 +494,7 @@ func (value FilesystemOutputObserved) Failure() (Failure, bool) {
 	return value.spec.Failure, value.spec.Failure.Valid()
 }
 func (value FilesystemOutputObserved) FailureClassification() (FilesystemFailureStage, FilesystemReconciliationStep, FilesystemNativeErrorClass, bool) {
-	return value.spec.FailureStage, value.spec.ReconciliationStep, value.spec.NativeErrorClass, value.spec.Failure.Valid()
+	return value.spec.FailureStage, value.spec.ReconciliationStep, value.spec.NativeErrorClass, value.spec.FailureStage != 0
 }
 func (value FilesystemOutputObserved) Accept(visitor Visitor) error {
 	return acceptFilesystemOutputObserved(visitor, value)

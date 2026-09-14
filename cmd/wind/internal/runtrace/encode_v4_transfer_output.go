@@ -280,12 +280,13 @@ func projectFilesystemOutputFailure(
 		return nil, nil
 	}
 	stage, reconciliation, nativeClass, classified := event.FailureClassification()
-	if !classified {
-		return nil, errInvalidSchemaEvent
-	}
-	stageName, err := nameOf(stage)
-	if err != nil {
-		return nil, err
+	var stageName string
+	if classified {
+		var err error
+		stageName, err = nameOf(stage)
+		if err != nil {
+			return nil, err
+		}
 	}
 	projectedFailure, err := projectFailure(failure)
 	if err != nil {
