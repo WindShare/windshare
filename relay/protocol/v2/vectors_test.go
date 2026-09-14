@@ -57,6 +57,7 @@ type v2RegistrationVector struct {
 	OpaqueRouteB64          string `json:"opaqueRouteB64"`
 	StoppedErrorB64         string `json:"stoppedErrorB64"`
 	SessionCreditB64        string `json:"sessionCreditB64"`
+	ReceiveCreditB64        string `json:"receiveCreditB64"`
 	SessionAdmittedB64      string `json:"sessionAdmittedB64"`
 	ResumeStaleErrorB64     string `json:"resumeStaleErrorB64"`
 	ConnectionProbeNonce    string `json:"connectionProbeNonce"`
@@ -153,6 +154,7 @@ func TestRuntimeReconstructsGeneratedRegistrationResumeStopAndOpaqueVectors(t *t
 	opaque := OpaqueRoute{RelaySessionID: session, Ciphertext: testB64(t, vector.OpaqueCiphertextB64)}
 	assertBinaryVector(t, "OPAQUE_ROUTE", opaque.MarshalBinary, vector.OpaqueRouteB64)
 	assertBinaryVector(t, "SESSION_CREDIT", (SessionCredit{RelaySessionID: session, Frames: 2, Bytes: 100}).MarshalBinary, vector.SessionCreditB64)
+	assertBinaryVector(t, "RECEIVE_CREDIT", (ReceiveCredit{RelaySessionID: session, Frames: 2, Bytes: 100}).MarshalBinary, vector.ReceiveCreditB64)
 	assertBinaryVector(t, "SESSION_ADMITTED", (SessionAdmitted{RelaySessionID: session}).MarshalBinary, vector.SessionAdmittedB64)
 	assertBinaryVector(t, "STOPPED_ERROR", (ErrorFrame{Code: ErrorStopped}).MarshalBinary, vector.StoppedErrorB64)
 	assertBinaryVector(t, "RESUME_STALE_ERROR", (ErrorFrame{Code: ErrorResumeStale}).MarshalBinary, vector.ResumeStaleErrorB64)

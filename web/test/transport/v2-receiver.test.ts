@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
+import { RELAY_RECEIVE_WINDOW_BYTES } from '../../src/transport/relay/receive-credit-codec'
 import type { Suite02CapabilityKey } from '../../src/crypto/suite02-link'
 import {
   dialV2RelayReceiver,
@@ -131,7 +132,9 @@ describe('v2 relay receiver ingress', () => {
       ciphertext: new Uint8Array(65_536).fill(7),
     })
 
-    for (let index = 0; index < V2_RELAY_RECEIVE_QUEUE_FRAMES; index += 1) {
+    const permitted = Math.floor(RELAY_RECEIVE_WINDOW_BYTES / opaque.byteLength)
+    expect(permitted).toBeLessThanOrEqual(V2_RELAY_RECEIVE_QUEUE_FRAMES)
+    for (let index = 0; index < permitted; index += 1) {
       socket.message(opaque)
     }
     expect(socket.closeCode).toBeUndefined()
@@ -139,7 +142,7 @@ describe('v2 relay receiver ingress', () => {
     expect(socket.closeCode).toBe(V2_RELAY_PROTOCOL_CLOSE_CODE)
 
     const reader = connection.channel.frames.getReader()
-    await expect(reader.read()).rejects.toThrow(/receive queue/)
+    await expect(reader.read()).rejects.toThrow(/receive credit/)
   })
 
   it('bounds a relay that opens but withholds descriptor delivery', async () => {

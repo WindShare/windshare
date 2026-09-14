@@ -104,6 +104,11 @@ func TestSlowReceiverDoesNotBlockSiblingDataOrAdmission(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
+				grant, _ := (v2.ReceiveCredit{RelaySessionID: delivery.RelaySessionID,
+					Frames: v2.ReceiveWindowFrames, Bytes: v2.ReceiveWindowBytes}).MarshalBinary()
+				if err := client.Write(ctx, websocket.MessageBinary, grant); err != nil {
+					t.Fatal(err)
+				}
 				if err := sendInitialReceiverFrame(ctx, client, delivery.RelaySessionID, []byte("hello")); err != nil {
 					t.Fatal(err)
 				}

@@ -128,7 +128,14 @@ func (l *link) closeChannelLocked(
 	stored := record
 	channel.retirement = &stored
 	channel.pendingNatural = nil
-	close(channel.recv)
+	if channel.incoming == nil {
+		close(channel.recv)
+	} else {
+		close(channel.incoming)
+		if record.source == LifecycleRetirementLocalClose || record.source == LifecycleRetirementLinkClose {
+			channel.stopReceiving()
+		}
+	}
 	if l.channels[channel.id] == channel {
 		delete(l.channels, channel.id)
 	}
@@ -187,9 +194,13 @@ func (l *link) settleTerminal(
 }
 
 type Channel struct {
-	id   v2.RelaySessionID
-	link *link
-	recv chan framechannel.Frame
+	id               v2.RelaySessionID
+	link             *link
+	recv             chan framechannel.Frame
+	incoming         chan framechannel.Frame
+	receiveAbort     chan struct{}
+	receiveDone      chan struct{}
+	receiveAbortOnce sync.Once
 
 	mu             sync.Mutex
 	state          framechannel.ChannelState
@@ -199,6 +210,9 @@ type Channel struct {
 }
 
 func newChannel(id v2.RelaySessionID, link *link) *Channel {
+	if link.fixed {
+		return newReceiverChannel(id, link)
+	}
 	return &Channel{id: id, link: link, recv: make(chan framechannel.Frame, channelReceiveFrames), state: framechannel.Open}
 }
 
@@ -321,6 +335,7 @@ func (c *Channel) Err() error {
 }
 
 func (c *Channel) Close() error {
+	c.stopReceiving()
 	record := retirementRecord{
 		natural: true, source: LifecycleRetirementLocalClose,
 		operationID: c.link.nextOperationID(),
@@ -328,6 +343,9 @@ func (c *Channel) Close() error {
 	done := c.link.requestChannelRetirement(c, record)
 	if done != nil {
 		<-done
+	}
+	if c.receiveDone != nil {
+		<-c.receiveDone
 	}
 	return nil
 }
@@ -337,6 +355,9 @@ func (c *Channel) deliver(frame []byte) bool {
 	defer c.mu.Unlock()
 	if c.state != framechannel.Open {
 		return false
+	}
+	if c.incoming != nil {
+		return c.deliverReceived(frame)
 	}
 	select {
 	case c.recv <- bytes.Clone(frame):

@@ -65,7 +65,13 @@ func (s *Server) writeSessionTraffic(ctx context.Context, peer *connection) (boo
 	if err != nil {
 		return false, err
 	}
-	if frame, ok := peer.takeForward(); ok {
+	if frame, trace, ok := peer.takeForwardWithTrace(); ok {
+		if trace.Stage != "" {
+			if route, err := s.registry.ResolveSession(trace.SessionID, peer.ref); err == nil {
+				trace.Source = route.Destination
+			}
+			s.traceForward(trace, trace.Stage)
+		}
 		if err := s.writeSessionData(ctx, peer, frame); err != nil {
 			return false, err
 		}
@@ -183,11 +189,11 @@ func (peer *connection) tryForward(sessionID v2.RelaySessionID, encoded []byte) 
 	return true, trace
 }
 
-func (peer *connection) takeForward() ([]byte, bool) {
+func (peer *connection) takeForwardWithTrace() ([]byte, ForwardTrace, bool) {
 	peer.forwardMu.Lock()
 	defer peer.forwardMu.Unlock()
 	if len(peer.forwardOrder) == 0 {
-		return nil, false
+		return nil, ForwardTrace{}, false
 	}
 	for range len(peer.forwardOrder) {
 		if peer.forwardCursor >= len(peer.forwardOrder) {
@@ -200,12 +206,25 @@ func (peer *connection) takeForward() ([]byte, bool) {
 			continue
 		}
 		frame := queue.frames[0]
+		trace := ForwardTrace{}
+		if window := peer.receiveWindows[id]; window != nil {
+			if window.frames == 0 || window.bytes < len(frame) {
+				continue
+			}
+			wasConstrained := window.frames == 0 || window.bytes < MaximumV2WebSocketMessageSize
+			window.frames--
+			window.bytes -= len(frame)
+			if !wasConstrained && (window.frames == 0 || window.bytes < MaximumV2WebSocketMessageSize) {
+				trace = ForwardTrace{Stage: ForwardReceiveWindowConstrained, Destination: peer.ref,
+					SessionID: id, AvailableFrames: window.frames, AvailableBytes: window.bytes}
+			}
+		}
 		queue.frames[0] = nil
 		queue.frames = queue.frames[1:]
 		queue.bytes -= len(frame)
 		peer.forwardFrames--
 		peer.forwardBytes -= len(frame)
-		return frame, true
+		return frame, trace, true
 	}
-	return nil, false
+	return nil, ForwardTrace{}, false
 }

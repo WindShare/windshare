@@ -282,6 +282,7 @@ func (l *link) takeRequest() (*sendRequest, bool) {
 
 func (l *link) drainQueueLocked(id v2.RelaySessionID, failure error) {
 	delete(l.windows, id)
+	delete(l.receiveCredits, id)
 	if queue := l.queues[id]; queue != nil {
 		l.queued -= len(queue.requests)
 		for _, request := range queue.requests {

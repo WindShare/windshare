@@ -1,3 +1,4 @@
+import { decodeReceiveCredit, encodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
 import { decode } from 'cborg'
 import { describe, expect, it } from 'vitest'
 
@@ -160,6 +161,7 @@ interface RegistrationVector extends VectorCase {
   readonly opaqueRouteB64: string
   readonly sessionRetiredB64: string
   readonly sessionCreditB64: string
+  readonly receiveCreditB64: string
   readonly sessionAdmittedB64: string
   readonly sessionRetiredRelaySessionIdB64: string
   readonly stoppedErrorB64: string
@@ -650,6 +652,8 @@ describe('suite-02 relay runtime contract', () => {
     const credit = { relaySessionId: opaque.relaySessionId, frames: 2, bytes: 100 }
     expect(encodeV2SessionCredit(credit)).toEqual(bytes(vector.sessionCreditB64))
     expect(decodeV2SessionCredit(bytes(vector.sessionCreditB64))).toEqual(credit)
+    expect(encodeReceiveCredit(credit)).toEqual(bytes(vector.receiveCreditB64))
+    expect(decodeReceiveCredit(bytes(vector.receiveCreditB64))).toEqual(credit)
     expect(encodeV2SessionAdmitted(sessionRetired)).toEqual(bytes(vector.sessionAdmittedB64))
     expect(decodeV2SessionAdmitted(bytes(vector.sessionAdmittedB64))).toEqual(sessionRetired)
     expect(encodeV2RelayError({ code: V2_RELAY_ERROR.stopped, retryAfterMilliseconds: 0 })).toEqual(
