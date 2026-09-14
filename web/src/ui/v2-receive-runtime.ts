@@ -64,6 +64,8 @@ export interface V2BoundReceiveOperation {
   readonly plans: V2PlanExecutionAuthority
   readonly transferJobId: string
   readonly lifecycle: ReceiveLifecycleState
+  /** Subscribe before reading lifecycle; notifications never settle the execution lifetime. */
+  subscribeLifecycle(listener: (state: ReceiveLifecycleState) => void): () => void
   readonly activeControls: readonly V2ActiveReceiveControl[]
   readonly outputProgress?: V2DirectZipProgressSource | V2BrowserFolderProgressSource
   readonly observeCheckpoint?: NonNullable<import('../transfer/job/contract').TransferJobOptions['onCheckpointObservation']>

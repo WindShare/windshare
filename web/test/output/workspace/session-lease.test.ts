@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
@@ -138,6 +139,10 @@ describe('browser receive operation lease', () => {
 })
 
 class MemoryRepository implements ReceiveOperationRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   lease: ReceiveOperationLeaseRecord | undefined
   readonly transitions: ReceiveOperationTransition[] = []
 
@@ -153,6 +158,7 @@ class MemoryRepository implements ReceiveOperationRepository {
     if (transition.lease?.kind === 'put') this.lease = transition.lease.record
     if (transition.lease?.kind === 'delete') this.lease = undefined
     this.transitions.push(transition)
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   async readRecord(): Promise<PersistedReceiveRecord | undefined> {

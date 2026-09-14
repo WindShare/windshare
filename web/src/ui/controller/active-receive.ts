@@ -63,6 +63,7 @@ interface ActiveReceiveOperation extends ActiveReceiveLifecycleOperation {
   unsubscribeRepairProjection?: () => void
   unsubscribeRepairProjectionActivation?: () => void
   unsubscribeOutputProgress?: () => void
+  unsubscribeLifecycle?: () => void
 }
 
 export interface ActiveReceiveCoordinatorOptions {
@@ -212,6 +213,7 @@ export class ActiveReceiveCoordinator {
     if (active === undefined) return Promise.resolve()
     this.#stopRepairProjection(active)
     this.#stopOutputProgress(active)
+    this.#stopLifecycleObservation(active)
     active.transfer?.abort(reason)
     this.#observability.receiveExclusion(
       active.receiveAttempt,
@@ -246,6 +248,7 @@ export class ActiveReceiveCoordinator {
       transfer = new AbortController()
       active.connectivity = connectivity
       active.transfer = transfer
+      this.#startLifecycleObservation(active)
       const job = active.joined.transferJob(
         active.runtime.plans,
         active.runtime.intent,
@@ -276,6 +279,7 @@ export class ActiveReceiveCoordinator {
     const ownedConnectivity = connectivity
     const ownedTransfer = transfer
     const running = task.finally(async () => {
+      this.#stopLifecycleObservation(active)
       try {
         ownedConnectivity?.close()
       } catch (error) {
@@ -339,6 +343,7 @@ export class ActiveReceiveCoordinator {
       return
     }
     this.#assertTransferResultIdentity(active, result)
+    this.#stopLifecycleObservation(active)
 
     const trigger = this.#observability.transferTrigger(attempt, result.abortReason, result.failureTrigger)
     const usage = await Promise.resolve(active.runtime.resolveWorkspaceUsage(result.lifecycle))
@@ -358,7 +363,7 @@ export class ActiveReceiveCoordinator {
     }
 
     try {
-      if (!this.#outputs.updateLifecycle(
+      if (!this.#outputs.settleLifecycle(
         result.lifecycle,
         usage,
         Object.freeze([]),
@@ -419,6 +424,7 @@ export class ActiveReceiveCoordinator {
           authority?.kind === 'fault' ? authority.classification : error,
         ),
       )
+      this.#stopLifecycleObservation(active)
       const applied = await this.#lifecycle.applyMutation(
         active,
         this.#outputs.getSnapshot().lifecycle?.generation ?? 0n,
@@ -621,6 +627,28 @@ export class ActiveReceiveCoordinator {
     }
   }
 
+  #startLifecycleObservation(active: ActiveReceiveOperation): void {
+    let observing = true
+    const publish = (state: V2BoundReceiveOperation['lifecycle']) => {
+      if (!observing || !this.#operationIsCurrent(active)) return
+      try { this.#outputs.observeLifecycle(state) } catch (error) { this.#reportTransferFailure(error) }
+    }
+    // Subscribe first so the initial snapshot cannot leave a transition unobserved.
+    const stop = active.runtime.subscribeLifecycle(publish)
+    const unsubscribe = () => { observing = false; stop() }
+    if (!this.#operationIsCurrent(active)) { unsubscribe(); return }
+    active.unsubscribeLifecycle = unsubscribe
+    publish(active.runtime.lifecycle)
+  }
+
+  #stopLifecycleObservation(active: ActiveReceiveOperation): void {
+    const unsubscribe = active.unsubscribeLifecycle
+    delete active.unsubscribeLifecycle
+    try { unsubscribe?.() } catch {
+      // Ending display observation cannot change the transfer's settlement result.
+    }
+  }
+
   #stopOutputProgress(active: ActiveReceiveOperation): void {
     const unsubscribe = active.unsubscribeOutputProgress
     if (unsubscribe === undefined) return
@@ -635,6 +663,7 @@ export class ActiveReceiveCoordinator {
   #detachOperation(active: ActiveReceiveOperation): Promise<void> {
     if (active.detachment !== undefined) return active.detachment
     this.#stopOutputProgress(active)
+    this.#stopLifecycleObservation(active)
     const lateCapability = active.detachOutputCapability
     const outputLease = lateCapability === undefined
       ? undefined

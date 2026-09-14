@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { vi } from 'vitest'
 
 import type { V2CatalogEntry } from '../../src/catalog/v2-records'
@@ -243,6 +244,10 @@ class FakeTransferControlError extends DOMException {
 }
 
 export class FakeBoundRuntime implements V2BoundReceiveOperation {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   display?: import('../../src/output/workspace/operation-display').ReceiveOperationDisplay
   readonly plans = Object.freeze({}) as V2PlanExecutionAuthority
   readonly transferJobId = identityText(76)

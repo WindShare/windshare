@@ -20,6 +20,7 @@ import type { ResolvedArtifactAction } from '../../output/planning'
 import { IndexedDbZipCentralDirectorySpool } from '../../output/streams/zip-spool'
 import { reduceReceiveLifecycle, type LifecycleEvent } from '../../output/workspace/lifecycle'
 import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import {
   createV2PlanExecutionAuthority,
   type V2ExecutionAdmissionLifecycle,
@@ -77,7 +78,7 @@ V2BoundReceiveOperation,
 PortableExecutionLifecycleAuthority,
 V2ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
-  readonly lifecycle: ReceiveLifecycleState
+  readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
   readonly activeControls = Object.freeze(['stop'] as const)
   readonly initialWorkspaceUsage = null
   readonly #leaseId = createOperationID()
@@ -104,12 +105,11 @@ V2ExecutionAdmissionLifecycle {
     if (display !== undefined) this.display = display
     this.#preClickRanking = preClickRanking
     this.#diagnostics = diagnostics
-    this.lifecycle = initialReceiveLifecycleState({
+    this.#state = initialReceiveLifecycleState({
       startedAtMilliseconds: display?.createdAtMilliseconds ?? Date.now(),
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
     })
-    this.#state = this.lifecycle
   }
 
   static async create(
@@ -133,6 +133,12 @@ V2ExecutionAdmissionLifecycle {
 
   get plans(): V2PlanExecutionAuthority {
     return this.#plans
+  }
+
+  get lifecycle(): ReceiveLifecycleState { return this.#state }
+
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.#lifecycleNotifications.subscribe(listener)
   }
 
   get transferJobId(): string {
@@ -167,19 +173,20 @@ V2ExecutionAdmissionLifecycle {
 
   detach(): void {
     this.#detached = true
+    this.#lifecycleNotifications.close()
   }
 
   async beginPreparation(): Promise<void> {
     if (this.#preparationStarted) return
     this.#preparationStarted = true
-    this.#state = this.#reduce({
+    this.#advance({
       kind: 'receive-started',
       preparationId: this.#attemptId,
     })
   }
 
   admitPreparation(): void {
-    this.#state = this.#reduce({ kind: 'preparation-admitted' })
+    this.#advance({ kind: 'preparation-admitted' })
   }
 
   async rejectAdmission(
@@ -189,7 +196,7 @@ V2ExecutionAdmissionLifecycle {
     requireSameIntent(this.intent, record.intent)
     signal.throwIfAborted()
     await this.beginPreparation()
-    this.#state = this.#reduce({
+    this.#advance({
       kind: 'preparation-rejected',
       reason: record.reason,
       cleanupReceiptDigest: await operationDigest(this.intent, `portable-rejection:${record.reason}`),
@@ -206,12 +213,12 @@ V2ExecutionAdmissionLifecycle {
   }>> {
     requireSameIntent(this.intent, record.intent)
     signal.throwIfAborted()
-    this.#state = this.#reduce({
+    this.#advance({
       kind: 'handoff-requested',
       attemptKind: 'portable',
       attemptId: record.attemptId,
     })
-    this.#state = this.#reduce({ kind: 'handoff-started' })
+    this.#advance({ kind: 'handoff-started' })
     if (this.#historyAvailable) {
       try {
         const repository = await IndexedDbReceiveOperationRepository.open()
@@ -237,7 +244,7 @@ V2ExecutionAdmissionLifecycle {
     kind: 'restart-required' | 'discarded' | 'needs-attention'
   }>> {
     requireSameIntent(this.intent, record.intent)
-    this.#state = this.#reduce({
+    this.#advance({
       kind: 'restart-boundary-verified',
       reason: record.reason,
       receiptDigest: await operationDigest(
@@ -257,7 +264,7 @@ V2ExecutionAdmissionLifecycle {
     requireSameIntent(this.intent, intent)
     signal.throwIfAborted()
     if (this.#state.kind === 'intent-frozen') {
-      this.#state = this.#reduce({
+      this.#advance({
         kind: 'cleanup-verified',
         cleanupReceiptDigest: await operationDigest(this.intent, 'portable-unopened'),
       })
@@ -291,7 +298,7 @@ V2ExecutionAdmissionLifecycle {
         transition: 'ownership_unknown',
         outcome: 'needs_attention',
       }))
-    this.#state = this.#reduce({
+    this.#advance({
       kind: 'ownership-unknown',
       lastVerifiedRecordDigest: await operationDigest(this.intent, 'portable-settlement-unknown'),
     })
@@ -318,7 +325,7 @@ V2ExecutionAdmissionLifecycle {
     return this.#diagnostics?.failures?.cleanup
   }
 
-  #reduce(event: LifecycleEventPayload): ReceiveLifecycleState {
+  #advance(event: LifecycleEventPayload): void {
     if (this.#detached) throw new DOMException('Receive operation is detached', 'InvalidStateError')
     const reduction = reduceReceiveLifecycle(this.#state, {
       ...event,
@@ -330,7 +337,8 @@ V2ExecutionAdmissionLifecycle {
       activeLeaseId: this.#leaseId,
     })
     if (reduction.status !== 'applied') throw new TypeError('portable lifecycle transition became stale')
-    return reduction.state
+    this.#state = reduction.state
+    this.#lifecycleNotifications.publish(this.#state)
   }
 }
 

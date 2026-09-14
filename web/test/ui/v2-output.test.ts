@@ -381,7 +381,7 @@ describe('receive interruption presentation', () => {
         receiveInterruption: { operation: 'finish', phase: 'background' },
       })
       deadline.cancel()
-      outputs.updateLifecycle(lifecycle(intent, 2n, { kind: 'waiting-to-save', packageDigest: identity(91, 32) }))
+      outputs.settleLifecycle(lifecycle(intent, 2n, { kind: 'waiting-to-save', packageDigest: identity(91, 32) }))
       expect(outputs.getSnapshot().receiveInterruption).toBeNull()
     } finally {
       vi.useRealTimers()
@@ -442,7 +442,7 @@ describe('receive interruption presentation', () => {
         kind: 'restart-required',
         reason: 'portable-aborted',
       })
-      expect(outputs.updateLifecycle(stable)).toBe(true)
+      expect(outputs.settleLifecycle(stable)).toBe(true)
       expect(outputs.getSnapshot()).toMatchObject({
         lifecycle: { kind: 'restart-required', generation: 2n },
         lifecyclePresentation: { title: 'Start again required' },
@@ -607,7 +607,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       kind: 'receiving',
       activeLeaseId: 'lease',
     })
-    expect(outputs.updateLifecycle(receivingUpdate, null, [], committed)).toBe(true)
+    expect(outputs.settleLifecycle(receivingUpdate, null, [], committed)).toBe(true)
     expect(outputs.getSnapshot().repairSummary?.committedCount).toBe(2)
     expect(outputs.getSnapshot().lifecyclePresentation?.compatibleNameRepair)
       .toMatchObject({ replacementCount: 2 })
@@ -620,7 +620,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(92, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.updateLifecycle(published, null, [], terminalRepair)).toBe(true)
+    expect(outputs.settleLifecycle(published, null, [], terminalRepair)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       lifecycle: { kind: 'published' },
       lifecyclePresentation: {
@@ -673,7 +673,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       receiptDigest: identity(93, 32),
       cleanupState: 'clean',
     })
-    expect(outputs.updateLifecycle(published, null, [], null)).toBe(true)
+    expect(outputs.settleLifecycle(published, null, [], null)).toBe(true)
     expect(outputs.getSnapshot()).toMatchObject({
       repairSummary: null,
       lifecyclePresentation: {

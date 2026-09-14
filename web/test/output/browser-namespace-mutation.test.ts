@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it } from 'vitest'
 
 import {
@@ -225,6 +226,10 @@ async function commitFSAOperationBinding(
 }
 
 class MemoryOperationRepository implements ReceiveOperationRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly records = new Map<string, PersistedReceiveRecord>()
   readonly handles = new Map<string, ReceiveOperationHandleRecord>()
   readonly transitions: ReceiveOperationTransition[] = []
@@ -235,6 +240,7 @@ class MemoryOperationRepository implements ReceiveOperationRepository {
     for (const handle of transition.handles ?? []) this.handles.set(handle.id, handle)
     for (const id of transition.deleteRecordIds ?? []) this.records.delete(id)
     for (const id of transition.deleteHandleIds ?? []) this.handles.delete(id)
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

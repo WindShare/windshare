@@ -238,11 +238,16 @@ function presentedLifecycleActions(
     artifact: ArtifactSpec
     plan: MaterializationPlan
     activeControls?: readonly V2ActiveReceiveControl[]
+    interruption?: V2ReceiveInterruptionPresentation | null
     recoverySummary?: RecoverySummary | null
     browserDelivery?: import('../output/browser-delivery/retained').BrowserDeliveryResumeSummary | null
   }>,
 ): readonly LifecycleActionPresentation[] {
+  if (input.interruption != null) return Object.freeze([])
   if (input.activeControls !== undefined && input.activeControls.length > 0) {
+    // The durable cut can settle before its writer drains. Recovery actions
+    // remain unavailable until execution settlement releases the active controls.
+    if (lifecycleCategory(input.state) !== 'active') return Object.freeze([])
     return activeControlActions(input.state, input.activeControls, input.plan.kind)
   }
   const localActions = input.plan.kind === 'direct-tree'

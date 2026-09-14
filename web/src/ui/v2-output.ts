@@ -1,3 +1,4 @@
+import { sameReceiveLifecycleState } from '../output/workspace/lifecycle/observation'
 import {
   sameArtifactChoiceSemantics,
   type ArtifactChoice,
@@ -297,7 +298,19 @@ export class V2OutputPresentationController {
     this.#publishWithOwnership(snapshot, commitOwnership)
   }
 
-  updateLifecycle(
+  observeLifecycle(state: ReceiveLifecycleState): boolean {
+    const intent = this.#snapshot.receiveIntent
+    const current = this.#snapshot.lifecycle
+    if (intent === null || state.operationId !== intent.operationId ||
+        state.receiveIntentDigest !== intent.digest ||
+        (current !== null && state.generation <= current.generation)) return false
+    // A committed state is a display fact, not permission to clear interruption
+    // controls or release the still-running writer and its connectivity lease.
+    this.#publishLifecycleSnapshot(this.#snapshot, state, this.#snapshot.workspaceUsage)
+    return true
+  }
+
+  settleLifecycle(
     state: ReceiveLifecycleState,
     workspaceUsage?: WorkspaceUsage | null,
     activeControls: readonly V2ActiveReceiveControl[] = Object.freeze([]),
@@ -308,7 +321,8 @@ export class V2OutputPresentationController {
     if (intent === null || state.operationId !== intent.operationId ||
         state.receiveIntentDigest !== intent.digest) return false
     const current = this.#snapshot.lifecycle
-    if (current !== null && state.generation <= current.generation) return false
+    if (current !== null && (state.generation < current.generation ||
+        (state.generation === current.generation && !sameReceiveLifecycleState(state, current)))) return false
     this.#publishLifecycleSnapshot({
       ...this.#snapshot,
       repairSummary: nextCompatibleNameRepair(
