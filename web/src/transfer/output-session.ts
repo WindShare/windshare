@@ -211,6 +211,9 @@ type ReceiveIntentForPlanArtifact<
 /**
  * Controller composition supplies one explicit adapter per immutable plan. The
  * transfer runtime cannot choose a backend, invoke a picker, or infer a format.
+ * A returned execution transfers settlement ownership even if cancellation raced
+ * acquisition: callers must bind it before observing their signal. A returned
+ * rejection carries a committed lifecycle cut and must not be settled again.
  */
 export interface V2PlanExecutionAuthority {
   openDirectTree(
