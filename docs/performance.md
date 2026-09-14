@@ -59,6 +59,12 @@ outstanding content block contributes its own initial cost; the next request's s
 existing work. Reservations remain charged until blocks settle. These requests are never duplicated
 for measurement. Inspect `request_scheduling` for request costs/outcomes and `content_scheduling` for
 independent allocations and rescues; connection status alone does not identify a transfer bottleneck.
+Native control routing seeds each physical lane from its authenticated handshake, then measures
+per-kind responses before caller processing. Pending requests and queued content affect selection;
+30-second-old response samples return to the handshake estimate without probes or startup waits.
+Native `protocol_operation.request_scheduling` records the selected lane's response estimate,
+queued content, pending requests, and expected completion time. Explicit operation routes and
+content route permissions retain their own authority.
 
 ## Browser folder saving
 

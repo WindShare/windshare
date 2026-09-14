@@ -65,6 +65,21 @@ func TestCensoredAndCancelledSamples(t *testing.T) {
 	}
 }
 
+func TestControlQueueEstimateCountsOnlyOutstandingContent(t *testing.T) {
+	var p Performance
+	if p.EstimateQueue(0) != 0 || p.EstimateQueue(2) != 2*InitialBlockTime {
+		t.Fatal("unmeasured queue does not count outstanding blocks")
+	}
+	p.PendingBytes, p.BytesPerSecond = 4096, 8192
+	if p.EstimateQueue(2) != 500*time.Millisecond {
+		t.Fatal("measured queue does not count outstanding bytes")
+	}
+	p.BytesPerSecond = 0.000001
+	if p.EstimateQueue(2) != time.Hour {
+		t.Fatal("queue estimate overflow")
+	}
+}
+
 func TestIndependentExplorationBudgets(t *testing.T) {
 	now := time.Unix(100, 0)
 	var e Exploration

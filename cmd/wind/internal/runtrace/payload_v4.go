@@ -502,19 +502,27 @@ type senderContentDecisionV4 struct {
 	LeaseID            *string `json:"lease_id,omitempty"`
 }
 
+type requestSchedulingV4 struct {
+	ExpectedMS      string `json:"expected_ms"`
+	ResponseMS      string `json:"response_ms"`
+	QueuedContentMS string `json:"queued_content_ms"`
+	PendingRequests uint32 `json:"pending_requests"`
+}
+
 type protocolOperationPayloadV4 struct {
-	ObservedAt              string          `json:"observed_at"`
-	Role                    string          `json:"role"`
-	Stage                   string          `json:"stage"`
-	RequestKind             string          `json:"request_kind"`
-	ResponseKind            *string         `json:"response_kind,omitempty"`
-	Send                    *protocolSendV4 `json:"send,omitempty"`
-	ResponseCount           string          `json:"response_count"`
-	DeadlineRemainingMS     *string         `json:"deadline_remaining_ms,omitempty"`
-	OperationElapsedMS      string          `json:"operation_elapsed_ms"`
-	UsableLanesAtSelection  uint32          `json:"usable_lanes_at_selection"`
-	UsableLanesAtSettlement uint32          `json:"usable_lanes_at_settlement"`
-	Cause                   string          `json:"cause"`
+	RequestScheduling       *requestSchedulingV4 `json:"request_scheduling,omitempty"`
+	ObservedAt              string               `json:"observed_at"`
+	Role                    string               `json:"role"`
+	Stage                   string               `json:"stage"`
+	RequestKind             string               `json:"request_kind"`
+	ResponseKind            *string              `json:"response_kind,omitempty"`
+	Send                    *protocolSendV4      `json:"send,omitempty"`
+	ResponseCount           string               `json:"response_count"`
+	DeadlineRemainingMS     *string              `json:"deadline_remaining_ms,omitempty"`
+	OperationElapsedMS      string               `json:"operation_elapsed_ms"`
+	UsableLanesAtSelection  uint32               `json:"usable_lanes_at_selection"`
+	UsableLanesAtSettlement uint32               `json:"usable_lanes_at_settlement"`
+	Cause                   string               `json:"cause"`
 }
 
 func (protocolOperationPayloadV4) runTracePayloadV4() {}

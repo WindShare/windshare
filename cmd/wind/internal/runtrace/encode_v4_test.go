@@ -328,6 +328,28 @@ func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 	}
 }
 
+func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T) {
+	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
+	lane := mustValue(clievent.NewLaneIdentity(3, 2))
+	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+		Stage: clievent.ProtocolOperationReceiverEnded, ProtocolSession: session, ProtocolOperation: operation,
+		RequestKind: clievent.ProtocolMessageOpenRevisions, Lane: lane, HasLane: true,
+		Cause:             clievent.ProtocolOperationCauseNone,
+		RequestScheduling: clievent.RequestSchedulingSpec{ExpectedMillis: 42, ResponseMillis: 10, QueuedContentMillis: 12, PendingRequests: 2},
+	}))
+	record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decision := record.Payload.(protocolOperationPayloadV4).RequestScheduling
+	if decision == nil || decision.ExpectedMS != "42" || decision.ResponseMS != "10" || decision.QueuedContentMS != "12" || decision.PendingRequests != 2 ||
+		record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+		t.Fatalf("uncorrelated scheduling decision: %+v", record)
+	}
+}
+
 func TestEncodeV4SeparatesSenderTerminalRootFromSendConsequence(t *testing.T) {
 	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x61)))
 	lane := mustValue(clievent.NewLaneIdentity(1, 0))

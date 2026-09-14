@@ -71,6 +71,16 @@ func (p *Performance) Superseded(bytes uint64, elapsed time.Duration) {
 	}
 }
 
+// EstimateQueue charges only work already reserved. A tiny control request must
+// not inflate an unmeasured content queue by dividing it by its own byte size.
+func (p *Performance) EstimateQueue(blocks uint32) time.Duration {
+	seconds := InitialBlockTime.Seconds() * float64(blocks)
+	if p.BytesPerSecond > 0 {
+		seconds = float64(p.PendingBytes) / p.BytesPerSecond
+	}
+	return time.Duration(min(max(seconds, 0), time.Hour.Seconds()) * float64(time.Second))
+}
+
 func (p *Performance) Estimate(bytes uint64) time.Duration {
 	bytes = max(bytes, 1)
 	seconds := InitialBlockTime.Seconds() * float64(p.PendingBytes+bytes) / float64(bytes)

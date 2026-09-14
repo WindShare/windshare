@@ -19,6 +19,7 @@ import (
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 	"github.com/windshare/windshare/core/session/revisionaccess"
 	"github.com/windshare/windshare/core/transfer"
 )
@@ -132,6 +133,9 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 			return protocolsession.ReceiverInstanceIDFromBytes(value)
 		})
 	}
+	if config.Now == nil {
+		config.Now = time.Now
+	}
 	if config.After == nil {
 		config.After = time.After
 	}
@@ -203,6 +207,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 			runtime.abortBeforeStart()
 		}
 	}()
+	runtime.lanes.active[handshake.lane.ID].requests = requestlane.New(handshake.responseTime)
 	rpc := newRPCClient(runtime, factory.random)
 	if err := runtime.addFinalizer(rpc.Close); err != nil {
 		return nil, err
@@ -296,6 +301,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 }
 
 type receiverHandshake struct {
+	responseTime  time.Duration
 	keys          protocolsession.SessionKeys
 	lane          LaneIdentity
 	receive       <-chan framechannel.Frame
@@ -325,6 +331,7 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 	if err != nil {
 		return receiverHandshake{}, errors.Join(ErrHandshake, err)
 	}
+	started := factory.now()
 	if err := channel.Send(ctx, framechannel.Frame(client.Encoded())); err != nil {
 		return receiverHandshake{}, errors.Join(ErrHandshake, err)
 	}
@@ -336,6 +343,7 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 	if err != nil {
 		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(ErrHandshake, err))
 	}
+	responseTime := factory.now().Sub(started)
 	keys, err := protocolsession.DeriveReceiverSession(receiverPrivate, factory.authKey, client, server)
 	if err != nil {
 		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(ErrHandshake, err))
@@ -351,7 +359,7 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 		return receiverHandshake{}, err
 	}
 	return receiverHandshake{
-		keys: keys, lane: lane, receive: receive, authenticator: authenticator,
+		keys: keys, lane: lane, receive: receive, authenticator: authenticator, responseTime: responseTime,
 	}, nil
 }
 
@@ -387,6 +395,10 @@ type ReceiverRuntime struct {
 }
 
 func (runtime *ReceiverRuntime) startReceiver() {
+	// Both registries acquire locks in runtime-lane then content-lane order.
+	runtime.lanes.queuedContent = func(identity LaneIdentity) time.Duration {
+		return runtime.laneSet.EstimateQueuedContent(transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch})
+	}
 	runtime.lanes.setDetachHook(func(identity LaneIdentity) {
 		runtime.laneSet.Remove(transfer.LaneIdentity{ID: identity.ID, Epoch: identity.Epoch})
 	})

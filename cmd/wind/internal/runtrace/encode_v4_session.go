@@ -263,6 +263,14 @@ func (visitor *encodeVisitorV4) encodeProtocolOperation(
 		UsableLanesAtSettlement: fact.UsableLanesAtSettlement(),
 		Cause:                   cause,
 	}
+	if scheduling := fact.RequestScheduling(); scheduling.ExpectedMillis != 0 {
+		payload.RequestScheduling = &requestSchedulingV4{
+			ExpectedMS:      decimal(scheduling.ExpectedMillis),
+			ResponseMS:      decimal(scheduling.ResponseMillis),
+			QueuedContentMS: decimal(scheduling.QueuedContentMillis),
+			PendingRequests: scheduling.PendingRequests,
+		}
+	}
 	if responseKind, ok := fact.ResponseKind(); ok {
 		payload.ResponseKind, err = namedPointer(responseKind)
 		if err != nil {

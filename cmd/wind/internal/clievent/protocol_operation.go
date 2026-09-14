@@ -116,6 +116,13 @@ func newProtocolObservation(context ProtocolObservationContext, fact ProtocolFac
 	return ProtocolObservationObserved{context: context, fact: fact}, nil
 }
 
+type RequestSchedulingSpec struct {
+	ExpectedMillis      uint64
+	ResponseMillis      uint64
+	QueuedContentMillis uint64
+	PendingRequests     uint32
+}
+
 type ProtocolOperationSpec struct {
 	Command                 Command
 	ObservedAt              time.Time
@@ -139,6 +146,7 @@ type ProtocolOperationSpec struct {
 	UsableLanesAtSelection  uint32
 	UsableLanesAtSettlement uint32
 	Cause                   ProtocolOperationCause
+	RequestScheduling       RequestSchedulingSpec
 }
 type ProtocolOperationFact struct{ spec ProtocolOperationSpec }
 
@@ -214,6 +222,9 @@ func (value ProtocolOperationFact) UsableLanesAtSelection() uint32 {
 }
 func (value ProtocolOperationFact) UsableLanesAtSettlement() uint32 {
 	return value.spec.UsableLanesAtSettlement
+}
+func (value ProtocolOperationFact) RequestScheduling() RequestSchedulingSpec {
+	return value.spec.RequestScheduling
 }
 func (value ProtocolOperationFact) Cause() ProtocolOperationCause { return value.spec.Cause }
 

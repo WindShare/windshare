@@ -516,3 +516,15 @@ func (suspension *ContentLaneSuspension) Resume() error {
 	lanes.notifyAvailabilityLocked()
 	return nil
 }
+
+// EstimateQueuedContent exposes scheduling evidence, not route permission. Control
+// requests remain usable while a lane is suspended for content-only policy.
+func (s *LaneSet) EstimateQueuedContent(identity LaneIdentity) time.Duration {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := s.lanes[identity.ID]
+	if state == nil || state.identity != identity || state.retired {
+		return 0
+	}
+	return state.performance.EstimateQueue(state.inflight)
+}
