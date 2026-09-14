@@ -51,7 +51,7 @@ type BlockLane interface {
 // attempt after selecting an authenticated winner. Plain cancellation, including
 // a parent failure, cannot supply this evidence to a lane's terminal diagnostics.
 func BlockAttemptSuperseded(ctx context.Context) bool {
-	return ctx != nil && context.Cause(ctx) == errBlockSuperseded
+	return ctx != nil && context.Cause(ctx) == errBlockSuperseded //nolint:errorlint // Only the lane round's exact cause grants supersession ownership.
 }
 
 type LaneSetConfig struct {

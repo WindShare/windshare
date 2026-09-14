@@ -232,48 +232,48 @@ func (client *rpcClient) beginCall(
 			rpcDeliveryError(client.runtime, errRequestNotDelivered, ErrRuntimeClosed),
 		)
 	}
-	if err != nil || outcome != protocolsession.SendOutcomeTransportConfirmed {
-		if outcome == protocolsession.SendOutcomeUnknown && ctx.Err() == nil && client.runtime.ctx.Err() == nil {
-			if !completion.Settled || !call.setRequestReplay(message, completion.Replay) {
-				authorityErr := client.runtime.failRPCOperationAuthority()
-				call.recordProtocolTraceFailure(authorityErr)
-				client.end(call)
-				return newRPCRequestSendError(
-					outcome, completion.Admitted,
-					rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
-				)
-			}
-			// Transport acceptance is ambiguous: the peer may already own this exact
-			// operation. The exact request replay is retained only to order a later
-			// dependent control on a replacement lane.
-			return nil
-		}
-		var cleanupErr error
-		if completion.Admitted {
-			cleanupErr = client.admitCancellation(call, contentflow.CancelReasonTimeout)
-		}
-		deliveryErr := rpcDeliveryError(
-			client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr),
-		)
-		// The delivery wrapper describes the unsuccessful request, not an
-		// additional fault. Preserve the send and cleanup evidence separately so
-		// an owner can distinguish a canceled send from failed cancellation.
-		if err == nil {
-			call.recordProtocolTraceFailure(errRequestNotDelivered)
-		} else {
-			call.recordProtocolTraceFailure(err)
-		}
-		call.recordProtocolTraceCleanup(cleanupErr)
-		if client.runtime.ctx.Err() != nil {
-			call.recordProtocolTraceFailure(ErrRuntimeClosed)
-		}
-		client.end(call)
-		return newRPCRequestSendError(
-			outcome, completion.Admitted,
-			deliveryErr,
-		)
+	if err == nil && outcome == protocolsession.SendOutcomeTransportConfirmed {
+		return nil
 	}
-	return nil
+	if outcome == protocolsession.SendOutcomeUnknown && ctx.Err() == nil && client.runtime.ctx.Err() == nil {
+		if !completion.Settled || !call.setRequestReplay(message, completion.Replay) {
+			authorityErr := client.runtime.failRPCOperationAuthority()
+			call.recordProtocolTraceFailure(authorityErr)
+			client.end(call)
+			return newRPCRequestSendError(
+				outcome, completion.Admitted,
+				rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
+			)
+		}
+		// Transport acceptance is ambiguous: the peer may already own this exact
+		// operation. The exact request replay is retained only to order a later
+		// dependent control on a replacement lane.
+		return nil
+	}
+	var cleanupErr error
+	if completion.Admitted {
+		cleanupErr = client.admitCancellation(call, contentflow.CancelReasonTimeout)
+	}
+	deliveryErr := rpcDeliveryError(
+		client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr),
+	)
+	// The delivery wrapper describes the unsuccessful request, not an
+	// additional fault. Preserve the send and cleanup evidence separately so
+	// an owner can distinguish a canceled send from failed cancellation.
+	if err == nil {
+		call.recordProtocolTraceFailure(errRequestNotDelivered)
+	} else {
+		call.recordProtocolTraceFailure(err)
+	}
+	call.recordProtocolTraceCleanup(cleanupErr)
+	if client.runtime.ctx.Err() != nil {
+		call.recordProtocolTraceFailure(ErrRuntimeClosed)
+	}
+	client.end(call)
+	return newRPCRequestSendError(
+		outcome, completion.Admitted,
+		deliveryErr,
+	)
 }
 
 func (client *rpcClient) sendRequest(
