@@ -122,6 +122,13 @@ export interface OutputTracePayloadByName {
   readonly reopen: Readonly<{
     backend: Exclude<OutputDiagnosticBackend, 'portable'>
     transition: 'started' | 'authorized' | 'failed'
+  }> | Readonly<{
+    backend: 'origin_private'
+    transition: 'receive_recovered'
+    operation_id: string
+    lifecycle_generation: string
+    checkpoint_count: string
+    verified_bytes: string
   }>
   readonly cleanup: Readonly<{
     backend: OutputDiagnosticBackend

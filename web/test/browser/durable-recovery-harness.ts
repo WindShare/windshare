@@ -26,8 +26,8 @@ import {
 } from '../../src/output/origin-private/namespace'
 import { OriginPrivatePackageWorkflow } from '../../src/output/origin-private/workflow'
 import type { PackagedArtifactV1 } from '../../src/output/workspace/aggregate'
-import { createSingleFileWorkspaceBudget } from '../../src/output/workspace/budget'
-import { recoverAbandonedOperation } from '../../src/output/workspace/recovery'
+import { IndexedDbReceiveResumeSource } from '../../src/output/browser/indexeddb-resume-state'
+import { ReceiveOperationResumeAuthority } from '../../src/output/resume/authority'
 import { recoverWorkspaceActivationCandidates } from '../../src/output/workspace/activation-recovery'
 import { decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import { receiveOperationResumeDescriptor } from '../../src/output/resume/descriptor'
@@ -145,6 +145,7 @@ export interface CompatibleNameRecoveryProof {
 }
 
 export interface ReceiveCrashCutResult {
+  readonly originalObjectId: string
   readonly completedObjectId?: string
   readonly fixture: DurableReceiveFixture
   readonly ranges: readonly string[]
@@ -157,6 +158,7 @@ export interface RecoveredPackageResult {
   readonly recoveredRanges: readonly string[]
   readonly packageBytes: readonly number[]
   readonly recoveryDecision: string
+  readonly receivedBytesAfterReload: string
   readonly lifecycle: string
   readonly contentRequests: string
   readonly packageSeals: number
@@ -521,7 +523,7 @@ export async function reopenFreshPageWorkspaceResume(
 
 export async function createOriginPrivateReceiveCrashCut(
   key: string,
-  checkpointCut: 'partial' | 'complete' = 'partial',
+  checkpointCut: 'empty' | 'partial' | 'complete' = 'partial',
 ): Promise<ReceiveCrashCutResult> {
   const ids = await durableIdentities(key)
   const intent = await durableIntent(ids)
@@ -591,15 +593,16 @@ export async function createOriginPrivateReceiveCrashCut(
     },
   })
   await transaction.writeRange(0n, checkpointCut === 'complete' ? FILE_BYTES : FILE_BYTES.subarray(0, CHECKPOINT_PREFIX_BYTES), ACTIVE_SIGNAL)
-  const ranges = await transaction.checkpoint(ACTIVE_SIGNAL)
+  const ranges = checkpointCut === 'empty' ? transaction.initialDurableRanges : await transaction.checkpoint(ACTIVE_SIGNAL)
   const completedProof = checkpointCut === 'complete' ? await transaction.commit(ACTIVE_SIGNAL) : undefined
-  await transaction.close()
+  if (completedProof !== undefined) await transaction.close()
   const lifecycle = await readDurableLifecycle(repository, intent.operationId)
   ;(globalThis as Record<string, unknown>).__windshareW3cCrashCut = {
     repository,
     backend,
     lease,
     claim,
+    transaction,
   }
   return Object.freeze({
     fixture: Object.freeze({
@@ -609,6 +612,7 @@ export async function createOriginPrivateReceiveCrashCut(
       durableMetadataBytes: admission.content.budget.durableMetadataBytes.toString(),
     }),
     ranges: ranges.map(rangeText),
+    originalObjectId: transaction.ownedObjectId,
     ...(completedProof === undefined ? {} : { completedObjectId: completedProof.ownedObjectId }),
     lifecycle: lifecycle.kind,
     contentRequests: contentRequests.toString(),
@@ -620,52 +624,33 @@ export async function recoverReceiveAndSealPackage(
 ): Promise<RecoveredPackageResult> {
   const ids = await durableIdentities(fixture.key)
   const intent = await durableIntent(ids)
-  const repository = await IndexedDbReceiveOperationRepository.open(fixture.checkpointDatabaseName)
-  const namespace = await openOriginPrivateWorkspaceNamespace({
-    receiveIntent: intent,
-    preClickRanking: [(await deriveArtifactChoiceIdentity(intent.artifact, intent.plan)).id],
-    repository,
-  })
-  const lease = await acquireBrowserReceiveOperationLease(repository, intent.operationId, {
-    clock: { now: () => RECOVERY_TIME },
-    randomBytes: () => new Uint8Array(16).fill(0x31),
-  })
-  const budget = await createSingleFileWorkspaceBudget({
-    receiveIntent: intent,
-    fileId: ids.fileId,
-    containingDirectoryId: ids.directoryId,
-    generation: ids.generation,
-    catalogSize: BigInt(FILE_BYTES.byteLength),
-    durableMetadataBytes: BigInt(fixture.durableMetadataBytes),
-  })
-  const authority = await workspaceBudgetAuthority({
-    operationId: intent.operationId,
-    databaseName: fixture.admissionDatabaseName,
-    now: RECOVERY_TIME,
-    token: `${fixture.key}-recovered`,
-  })
-  const claimResult = await authority.claim(budget)
-  if (claimResult.kind !== 'accepted') throw new Error('recovered workspace budget was rejected')
-  const claim = originPrivateClaim(claimResult.claim)
   let contentRequests = 0n
   const traces: WorkspaceStageTraceEvent[] = []
-  const stages = await WorkspaceOperationStages.open({
-    repository,
-    receiveIntent: intent,
-    leaseId: lease.leaseId,
-    clock: () => RECOVERY_TIME,
-    contentRequests: { count: () => contentRequests },
-    onTrace: (event) => traces.push(event),
+  const source = await IndexedDbReceiveResumeSource.open(fixture.checkpointDatabaseName)
+  const authority = new ReceiveOperationResumeAuthority({
+    source,
+    mutations: createBrowserReceiveOperationMutationPort({
+      checkpointDatabaseName: fixture.checkpointDatabaseName,
+      workspaceBudgetDatabaseName: fixture.admissionDatabaseName,
+      clock: { now: () => RECOVERY_TIME },
+      leaseOptions: { clock: { now: () => RECOVERY_TIME }, randomBytes: () => new Uint8Array(16).fill(0x31) },
+      estimateWorkspaceStorage: async () => ({ usage: 0, quota: Number(DURABLE_FIXTURE_CAPACITY_BYTES) }),
+      contentRequests: { count: () => contentRequests },
+      openWorkspaceStages: options => WorkspaceOperationStages.open({ ...options, onTrace: event => traces.push(event) }),
+    }),
   })
-  const reopened = await stages.reopenAdmittedContent({ budget, claim })
-  const backend = await openOriginPrivateWorkspaceBackend({
-    receiveIntent: intent,
-    operationRepository: repository,
-    namespace,
-    contentGate: reopened.gate,
-    budgetClaim: claim,
-    checkpointDatabaseName: fixture.checkpointDatabaseName,
-  })
+  const inventory = await authority.listResumeState()
+  const reference = inventory.operations[0]
+  if (reference === undefined) throw new Error('Interrupted original disappeared from inventory')
+  const result = await authority.resume(reference)
+  inventory.close()
+  source.close()
+  if (result.kind !== 'continuation' || result.continuation.kind !== 'workspace-receive') {
+    throw new Error('Interrupted original did not reopen production receive authority')
+  }
+  const operation = result.continuation.operation
+  const stages = operation.stages
+  const backend = await operation.receiveContinuation.openBackend()
   const transaction = await backend.materialization.beginFile({
     materializationRelativePath: [intent.artifact.suggestedName],
     recovery: preservingBrowserRecoveryPolicy(),
@@ -679,45 +664,8 @@ export async function recoverReceiveAndSealPackage(
     },
   })
   const recoveredRanges = transaction.verifiedRanges.map(rangeText)
-  const checkpointRepository = await import('../../src/output/browser/indexeddb-repository')
-    .then((module) => module.IndexedDbFileCheckpointRepository.open(
-      checkpointBinding(intent),
-      fixture.checkpointDatabaseName,
-    ))
-  const committed = await checkpointRepository.scanCommitted({ direction: 'ascending' })
-  checkpointRepository.close()
-  const checkpoint = committed.records[0]
-  if (checkpoint === undefined || committed.records.length !== 1) {
-    throw new Error('recovered workspace lacks its unique checkpoint')
-  }
-  const observed = await readDurableLifecycle(repository, intent.operationId)
-  const recovery = recoverAbandonedOperation(observed, {
-    kind: 'verified-receive',
-    checkpointSetDigest: checkpoint.checksum,
-    completedFileCount: 0n,
-    completedBytes: 0n,
-    selectionFacts: Object.freeze({
-      discoveredFileCount: 1n,
-      discoveredBytes: BigInt(FILE_BYTES.byteLength),
-      discovery: 'complete',
-    }),
-    lastVerifiedRecordDigest: checkpoint.checksum,
-  }, {
-    planKind: 'workspace-then-publish',
-    nowMilliseconds: RECOVERY_TIME,
-  })
-  await repository.commitTransition({
-    operationId: intent.operationId,
-    expectedLifecycleGeneration: observed.generation,
-    expectedLeaseId: lease.leaseId,
-    lifecycle: recovery.state,
-  })
-  await stages.resumeReceive()
-  await transaction.writeRange(
-    BigInt(CHECKPOINT_PREFIX_BYTES),
-    FILE_BYTES.subarray(CHECKPOINT_PREFIX_BYTES),
-    ACTIVE_SIGNAL,
-  )
+  const remainingStart = transaction.initialDurableRanges.at(-1)?.end ?? 0n
+  await transaction.writeRange(remainingStart, FILE_BYTES.subarray(Number(remainingStart)), ACTIVE_SIGNAL)
   const proof = await transaction.commit(ACTIVE_SIGNAL)
   await transaction.close()
   const sealed = await stages.sealMaterialization({
@@ -760,10 +708,7 @@ export async function recoverReceiveAndSealPackage(
     reason: 'user-cancelled',
   })
   if (waiting.kind !== 'waiting-to-save') throw new Error('handoff cancellation lost WaitingToSave')
-  await backend.close()
-  await claim.release()
-  await lease.release()
-  repository.close()
+  await operation.close()
 
   return Object.freeze({
     fixture: Object.freeze({
@@ -773,7 +718,8 @@ export async function recoverReceiveAndSealPackage(
     }),
     recoveredRanges,
     packageBytes: Object.freeze([...new Uint8Array(await packageBlob.arrayBuffer())]),
-    recoveryDecision: recovery.decision,
+    recoveryDecision: reference.descriptor.continuation,
+    receivedBytesAfterReload: (BigInt(FILE_BYTES.byteLength) - remainingStart).toString(),
     lifecycle: waiting.kind,
     contentRequests: contentRequests.toString(),
     packageSeals: traces.filter((event) => event.name === 'receive.package.sealed').length,
@@ -859,17 +805,6 @@ export async function retryRetainedPackagePublication(
     packageSeals: traces.filter((event) => event.name === 'receive.package.sealed').length,
     publicationAttempts: traces.filter((event) => event.name === 'receive.publication.started').length,
     cleanup: cleanup.kind,
-  })
-}
-
-function checkpointBinding(intent: ReceiveIntent) {
-  if (intent.plan.kind !== 'workspace-then-publish') throw new TypeError('test intent is not workspace')
-  return Object.freeze({
-    operationId: intent.operationId,
-    receiveIntentDigest: intent.digest,
-    materializationBindingDigest: intent.plan.workspace.digest,
-    materializerKind: 3 as const,
-    authorityRef: intent.plan.workspace.repositoryRef,
   })
 }
 

@@ -497,6 +497,8 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('publication', { backend: 'portable', transition: 'committed' }),
   observation('continuation', { backend: 'origin_private', transition: 'resumed' }),
   observation('reopen', { backend: 'file_system_access', transition: 'authorized' }),
+  observation('reopen', { backend: 'origin_private', transition: 'receive_recovered',
+    operation_id: OPERATION_ID, lifecycle_generation: '3', checkpoint_count: '1', verified_bytes: '3' }),
   observation('cleanup', { backend: 'portable', transition: 'retryable_failure' }),
   observation('direct_zip_milestone', {
     operation_id: OPERATION_ID,

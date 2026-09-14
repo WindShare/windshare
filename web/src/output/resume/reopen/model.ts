@@ -186,6 +186,7 @@ export interface PersistedReceiveOperationReopenAuthorityOptions {
   readonly openWorkspaceReceiveBackend?: typeof openOriginPrivateWorkspaceBackend
   readonly contentRequests?: WorkspaceContentRequestCounter
   readonly diagnostics?: OutputDiagnosticsPorts
+  readonly outputTrace?: import('../../diagnostics').OutputTraceSource
   readonly trace?: PersistedReceiveOperationReopenTrace
 }
 

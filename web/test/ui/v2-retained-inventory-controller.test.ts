@@ -13,6 +13,7 @@ import {
 } from '../../src/diagnostics/incident'
 import { recordOutputException } from '../../src/output/diagnostics'
 import { encodeBase64Url } from '../../src/crypto/bytes'
+import { workspaceIntent } from '../output/resume-reopen-authority-fixture'
 import {
   createDirectorySelectionResultRoot, createDirectResumableZipPlan, createFSAOwnedFileBinding,
   createReceiveIntent, createSelectionSpec, createZipArchiveArtifact,
@@ -82,6 +83,33 @@ describe('retained inventory local finalization and identity admission', () => {
     expect(adopted).toBe(true)
     expect(harness.actionErrors).toEqual([])
   })
+
+  it.each([0n, 1n, 2n, 3n, 4n])(
+    'checks workspace continuation generation %s against the observed revision without counting recovery steps',
+    async generation => {
+      const intent = await workspaceIntent()
+      const original = Object.freeze({ ...operation(['continue'], 'resume-receive', intent.operationId),
+        receiveIntentDigest: intent.digest })
+      let detached = false
+      let adopted = false
+      const runtime = { intent, lifecycle: { kind: 'receiving', generation,
+        operationId: intent.operationId, receiveIntentDigest: intent.digest,
+        activeLeaseId: encodeBase64Url(new Uint8Array(16).fill(10)) },
+        detach: async () => { detached = true } } as unknown as V2BoundReceiveOperation
+      const inventory = testInventory([original], async () => ({ kind: 'receive-continuation', runtime }))
+      const harness = retainedHarness(() => Promise.resolve(inventory), {
+        descriptor: { shareInstanceId: intent.shareInstance, syntheticRootId: intent.syntheticRoot },
+      } as V2JoinedBrowserShare, { adoptContinuation: async () => { adopted = true } })
+      await harness.coordinator.load()
+      harness.coordinator.perform(harness.publications.at(-1)!.operations[0]!, 'continue')
+      for (let index = 0; index < 32 && !adopted && harness.actionErrors.length === 0; index += 1) {
+        await new Promise(resolve => setTimeout(resolve, 0))
+      }
+      expect(adopted).toBe(generation > original.lifecycleGeneration)
+      expect(detached).toBe(generation <= original.lifecycleGeneration)
+      expect(harness.actionErrors).toHaveLength(generation > original.lifecycleGeneration ? 0 : 1)
+    },
+  )
 
   it('admits explicit ZIP completion verification without a connected share', async () => {
     const original = operation(['continue'], 'verify-direct-zip-completion')

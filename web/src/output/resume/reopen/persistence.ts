@@ -9,6 +9,7 @@ import { OriginPrivateWorkspaceBudgetOwnershipError } from '../../origin-private
 import { OriginPrivateWorkspaceRoot } from '../../origin-private/workspace-root'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
 import { reduceReceiveLifecycle } from '../../workspace/lifecycle'
+import { recoverAbandonedOperation } from '../../workspace/recovery'
 import {
   RECEIVE_RECORD_RECEIPT,
   RECEIVE_RECORD_RESERVATION,
@@ -118,23 +119,35 @@ export async function persistOwnershipAttention(
   repository: ReceiveOperationRepository,
   snapshot: PersistedReopenSnapshot,
   lease: BrowserReceiveOperationLease,
+  nowMilliseconds: number,
 ): Promise<Extract<ReceiveLifecycleState, { kind: 'needs-attention' }>> {
-  const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
-    kind: 'ownership-unknown',
-    expectedGeneration: snapshot.lifecycle.generation,
-    leaseId: lease.leaseId,
-    lastVerifiedRecordDigest: snapshot.operationRecord.digest,
-  }), reducerContext(snapshot.operation.receiveIntent, lease))
-  if (reduction.status !== 'applied' || reduction.state.kind !== 'needs-attention') {
+  // The abandoned runtime still names its old lease. Recovery is fenced by the
+  // acquired repository lease, not by pretending that the old runtime sent an event.
+  let state: ReceiveLifecycleState
+  if (snapshot.lifecycle.kind === 'receiving') {
+    state = recoverAbandonedOperation(snapshot.lifecycle, {
+      kind: 'unknown', authority: 'target', lastVerifiedRecordDigest: snapshot.operationRecord.digest,
+    }, { planKind: snapshot.operation.receiveIntent.plan.kind, nowMilliseconds }).state
+  } else {
+    const reduction = reduceReceiveLifecycle(snapshot.lifecycle, Object.freeze({
+      kind: 'ownership-unknown',
+      expectedGeneration: snapshot.lifecycle.generation,
+      leaseId: lease.leaseId,
+      lastVerifiedRecordDigest: snapshot.operationRecord.digest,
+    }), reducerContext(snapshot.operation.receiveIntent, lease))
+    if (reduction.status !== 'applied') throw new TypeError('unknown reopen ownership transition was rejected')
+    state = reduction.state
+  }
+  if (state.kind !== 'needs-attention') {
     throw new TypeError('unknown reopen ownership did not become NeedsAttention')
   }
   await repository.commitTransition({
     operationId: snapshot.operation.operationId,
     expectedLifecycleGeneration: snapshot.lifecycle.generation,
     expectedLeaseId: lease.leaseId,
-    lifecycle: reduction.state,
+    lifecycle: state,
   })
-  return reduction.state
+  return state
 }
 
 export async function readPersistedWorkspaceAdmission(
