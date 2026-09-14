@@ -43,15 +43,62 @@ func TestOperationAuthorityQueriesRemainGenerationScoped(t *testing.T) {
 	}
 }
 
-func TestCancelGenerationRejectsTerminalStaleAndPreservesReservedCapacity(t *testing.T) {
-	t.Run("terminal", func(t *testing.T) {
-		table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
-		table.terminal = true
-		if err := table.CancelGeneration(admission.Generation); !errors.Is(err, ErrSessionTerminated) {
-			t.Fatalf("terminal cancellation error = %v", err)
+func TestCancelGenerationAfterSessionTermination(t *testing.T) {
+	for _, local := range []bool{false, true} {
+		for _, cancelFirst := range []bool{false, true} {
+			table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
+			if cancelFirst {
+				if err := table.CancelGeneration(admission.Generation); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if local {
+				if err := table.TerminateLocal(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				terminal := mustMessage(t, MessageSessionTerminal, nil, map[uint64]any{0: uint64(1)})
+				if disposition, err := table.Observe(DirectionSenderToReceiver, terminal); err != nil || disposition != OperationSessionTerminal {
+					t.Fatalf("peer terminal = (%v, %v)", disposition, err)
+				}
+			}
+			for range 2 {
+				if err := table.CancelGeneration(admission.Generation); err != nil {
+					t.Fatalf("late cancellation (local=%t cancelFirst=%t): %v", local, cancelFirst, err)
+				}
+			}
+			if !table.Terminated() || table.ActiveCount() != 0 || table.TombstoneCount() != 0 || admission.Generation.IsCurrent() {
+				t.Fatal("late cancellation restored retired operation authority")
+			}
+			request := mustMessage(t, MessageRequestBlocks, &operationID, map[uint64]any{0: uint64(1)})
+			if disposition, err := table.Observe(DirectionReceiverToSender, request); err != nil || disposition != OperationDrop {
+				t.Fatalf("late cancellation reopened admission: (%v, %v)", disposition, err)
+			}
 		}
-	})
+	}
+}
 
+func TestCancelGenerationRejectsInvalidAuthorityAfterTermination(t *testing.T) {
+	table, admission, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
+	_, foreign, _ := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
+	if err := table.TerminateLocal(); err != nil {
+		t.Fatal(err)
+	}
+	for _, generation := range []OperationGeneration{
+		{}, foreign.Generation,
+		{table: table, operationID: admission.Generation.operationID},
+		{table: table, authority: admission.Generation.authority},
+	} {
+		if err := table.CancelGeneration(generation); !errors.Is(err, ErrInvalidOperationID) {
+			t.Fatalf("terminal table accepted invalid cancellation: %v", err)
+		}
+	}
+	if err := (*OperationTable)(nil).CancelGeneration(admission.Generation); !errors.Is(err, ErrInvalidOperationID) {
+		t.Fatalf("nil table cancellation: %v", err)
+	}
+}
+
+func TestCancelGenerationIgnoresRetiredGenerationsAndPreservesReservedCapacity(t *testing.T) {
 	t.Run("different tombstone generation", func(t *testing.T) {
 		table, admission, operationID := operationAuthorityAdmission(t, OperationLimits{MaxActive: 2, MaxTracked: 2})
 		table.tombstones[operationID] = operationTombstone{
