@@ -1,6 +1,8 @@
+import { PORTAL_SECTIONS } from './navigation'
+
 export function SelfHostSection() {
   return (
-    <section id="self-host" className="portal-section">
+    <section id={PORTAL_SECTIONS.selfHost.id} className="portal-section">
       <div className="portal-container">
         <div className="portal-selfhost-box">
           <div className="portal-selfhost-text">

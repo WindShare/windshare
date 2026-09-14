@@ -192,6 +192,16 @@ export class ReceiveOperationTransitions {
     })
   }
 
+  shareNavigationBlockedReason(): string | null {
+    if (this.#options.retained.pending || this.#pending) {
+      return 'Wait for the current download action to finish before opening another share.'
+    }
+    if (this.#options.activeReceive.active && !isReceiveOutputDelivered(this.#options.snapshot().output.lifecycle)) {
+      return 'Finish this download, or pause it and keep it in Downloads, before opening another share.'
+    }
+    return null
+  }
+
   remoteContinuationUnavailable(): string | null {
     const connection = this.#options.snapshot().connection
     if (connection.kind === 'ended') return 'This share has ended. Open a new share link to receive more content.'

@@ -5,16 +5,7 @@ import {
 } from '../security/capability-redactor'
 import { formatDiagnosticValue } from '../security/diagnostic-formatter'
 
-export interface V2CapturedLocation {
-  readonly capabilityInput: string | null
-  readonly pageUrl: string
-}
-
 export type V2SecurityMilestone = 'location-cleared' | 'key-cleared'
-
-export interface V2LocationCaptureOptions {
-  readonly onSecurityMilestone?: (milestone: 'location-cleared') => void
-}
 
 export type V2DiagnosticFormatter = (
   error: unknown,
@@ -38,20 +29,6 @@ export interface V2CapabilityJoinLease {
   readonly release: () => void
 }
 
-export function captureV2Location(
-  windowPort: Window = window,
-  options: V2LocationCaptureOptions = {},
-): V2CapturedLocation {
-  const input = windowPort.location.href
-  const sanitized = new URL(input)
-  const capabilityInput = sanitized.hash.length > 1 ? input : null
-  sanitized.hash = ''
-  // Secret erasure precedes crypto, browser feature detection, and relay dialing.
-  windowPort.history.replaceState(windowPort.history.state, '', sanitized)
-  notifySecurityMilestone(options.onSecurityMilestone, 'location-cleared')
-  return Object.freeze({ capabilityInput, pageUrl: sanitized.href })
-}
-
 /**
  * Owns capability redactors, security milestones, and error publication for a
  * receiver instance. The controller delegates this boundary so navigation and
@@ -65,15 +42,6 @@ export class V2CapabilityInputLifecycle {
   constructor(options: V2CapabilityLifecycleOptions = {}) {
     this.#diagnosticFormatter = options.diagnosticFormatter ?? formatV2PublicError
     this.#onSecurityMilestone = options.onSecurityMilestone
-  }
-
-  acceptCapturedLocation(captured: V2CapturedLocation): void {
-    const next = captured.capabilityInput === null
-      ? undefined
-      : createCapabilityRedactor(
-        capabilityRedactionValuesFromInput(captured.capabilityInput, captured.pageUrl),
-      )
-    this.#replace(next)
   }
 
   beginJoin(input: string, pageUrl: string): V2CapabilityJoinLease {

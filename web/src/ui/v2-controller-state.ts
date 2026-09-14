@@ -125,6 +125,24 @@ export function previewSnapshot(
       })
 }
 
+export function joiningReceiverSnapshot(snapshot: V2ReceiverSnapshot): V2ReceiverSnapshot {
+  return Object.freeze({
+    ...snapshot,
+    phase: 'joining',
+    status: 'Authenticating the share descriptor?',
+    pathActivity: { lanes: [] },
+    error: null,
+    rows: Object.freeze([]),
+    connection: { kind: 'idle' as const },
+    share: null,
+    draft: EMPTY_SELECTION_DRAFT,
+    browse: { kind: 'idle' as const, status: '', error: null },
+    taskDisplay: null,
+    preview: EMPTY_V2_PREVIEW,
+    progress: EMPTY_V2_PROGRESS,
+  })
+}
+
 export function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === 'AbortError'
 }
