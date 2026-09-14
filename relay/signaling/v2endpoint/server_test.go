@@ -323,6 +323,11 @@ func TestForwardFrameIsolatesSenderSessionsAndRejectsHostileIDs(t *testing.T) {
 	receiverC.setRole(roleReceiver, fixture.init.ShareID)
 	receiverC.addSession(overflowSession.RelaySessionID)
 	server := endpointTestServer(t, registry, sender, receiverA, receiverB, receiverC)
+	grant, _ := (v2.ReceiveCredit{RelaySessionID: healthySession.RelaySessionID,
+		Frames: v2.ReceiveWindowFrames, Bytes: v2.ReceiveWindowBytes}).MarshalBinary()
+	if err := server.forwardFrame(t.Context(), receiverB, grant); err != nil {
+		t.Fatal(err)
+	}
 
 	// Model the exact cleanup interval where the receiver is no longer a live
 	// endpoint but Registry has not yet retired its active session.

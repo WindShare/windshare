@@ -10,10 +10,12 @@ import (
 type ForwardStage string
 
 const (
-	ForwardDestinationClosed ForwardStage = "destination_closed"
-	ForwardCreditViolation   ForwardStage = "credit_violation"
-	ForwardWindowConstrained ForwardStage = "window_constrained"
-	ForwardWindowAvailable   ForwardStage = "window_available"
+	ForwardDestinationClosed        ForwardStage = "destination_closed"
+	ForwardCreditViolation          ForwardStage = "credit_violation"
+	ForwardWindowConstrained        ForwardStage = "window_constrained"
+	ForwardWindowAvailable          ForwardStage = "window_available"
+	ForwardReceiveWindowConstrained ForwardStage = "receive_window_constrained"
+	ForwardReceiveWindowAvailable   ForwardStage = "receive_window_available"
 )
 
 // ForwardTrace identifies pressure at the forwarding owner, before a generic
@@ -54,6 +56,9 @@ func (s *Server) forwardLoop(ctx context.Context, source *connection) error {
 func (s *Server) forwardFrame(ctx context.Context, source *connection, encoded []byte) error {
 	if len(encoded) >= 4 && string(encoded[:4]) == v2.ConnectionProbeMagic {
 		return s.answerConnectionProbe(ctx, source, encoded)
+	}
+	if len(encoded) >= 4 && string(encoded[:4]) == v2.ReceiveCreditMagic {
+		return s.grantReceiveCredit(source, encoded)
 	}
 	if len(encoded) >= 4 && string(encoded[:4]) == v2.SessionAdmittedMagic {
 		return s.admitSession(source, encoded)

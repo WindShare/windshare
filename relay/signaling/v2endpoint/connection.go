@@ -37,12 +37,13 @@ type connection struct {
 	control chan controlWrite
 	wake    chan struct{}
 
-	forwardMu     sync.Mutex
-	forward       map[v2.RelaySessionID]*forwardQueue
-	forwardOrder  []v2.RelaySessionID
-	forwardCursor int
-	forwardFrames int
-	forwardBytes  int
+	forwardMu      sync.Mutex
+	forward        map[v2.RelaySessionID]*forwardQueue
+	forwardOrder   []v2.RelaySessionID
+	forwardCursor  int
+	forwardFrames  int
+	forwardBytes   int
+	receiveWindows map[v2.RelaySessionID]*receiveWindow
 
 	receiverCredits   receiverCreditPool
 	sessionMu         sync.Mutex
@@ -60,9 +61,10 @@ func newConnection(ref v2route.ConnectionRef, socket BinaryConnection, cancel co
 		ref: ref, socket: socket, cancel: cancel,
 		control: make(chan controlWrite, MaximumControlQueueFrames), wake: make(chan struct{}, 1),
 		forward: make(map[v2.RelaySessionID]*forwardQueue), sessions: make(map[v2.RelaySessionID]struct{}),
-		windows:     make(map[v2.RelaySessionID]*forwardWindow),
-		retirements: make(map[v2.RelaySessionID]struct{}),
-		admitted:    make(chan struct{}),
+		windows:        make(map[v2.RelaySessionID]*forwardWindow),
+		receiveWindows: make(map[v2.RelaySessionID]*receiveWindow),
+		retirements:    make(map[v2.RelaySessionID]struct{}),
+		admitted:       make(chan struct{}),
 	}
 }
 
@@ -223,6 +225,11 @@ func (peer *connection) addSession(id v2.RelaySessionID) bool {
 		window.frames, window.bytes = v2.SenderWindowFrames, v2.SenderWindowBytes
 	}
 	peer.windows[id] = window
+	if peer.roleValue() == roleReceiver {
+		peer.forwardMu.Lock()
+		peer.receiveWindows[id] = &receiveWindow{}
+		peer.forwardMu.Unlock()
+	}
 	return true
 }
 
@@ -232,6 +239,7 @@ func (peer *connection) removeSession(id v2.RelaySessionID) bool {
 	delete(peer.sessions, id)
 	delete(peer.windows, id)
 	peer.forwardMu.Lock()
+	delete(peer.receiveWindows, id)
 	if queue := peer.forward[id]; queue != nil {
 		peer.forwardFrames -= len(queue.frames)
 		peer.forwardBytes -= queue.bytes

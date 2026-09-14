@@ -11,8 +11,13 @@ test('a production-size relay burst preserves the session and downloaded bytes',
   const stack = new DirectProductStack('relay-burst-backpressure')
   const payload = randomBytes(FILE_BYTES)
   let relayClosures = 0
+  let receiveCreditUpdates = 0
   page.on('websocket', socket => {
-    if (new URL(socket.url()).pathname === '/v2/ws') socket.on('close', () => { relayClosures += 1 })
+    if (new URL(socket.url()).pathname !== '/v2/ws') return
+    socket.on('close', () => { relayClosures += 1 })
+    socket.on('framesent', ({ payload }) => {
+      if (Buffer.isBuffer(payload) && payload.subarray(0, 4).toString('ascii') === 'WS2B') receiveCreditUpdates += 1
+    })
   })
   // The relay must sustain native block geometry on its own. A tiny fixture or
   // a warmed direct lane would hide a queue-overflow/reconnect loop.
@@ -41,6 +46,7 @@ test('a production-size relay burst preserves the session and downloaded bytes',
     expect(createHash('sha256').update(received).digest('hex'))
       .toBe(createHash('sha256').update(payload).digest('hex'))
     expect(relayClosures).toBe(0)
+    expect(receiveCreditUpdates).toBeGreaterThan(1)
   } finally {
     await stack.dispose()
   }
