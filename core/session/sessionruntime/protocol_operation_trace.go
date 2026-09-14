@@ -490,7 +490,7 @@ func protocolOperationCause(err error) ProtocolOperationCause {
 	// let a cancellation component erase an unrelated protocol or cleanup fault.
 	// Only canonical lifecycle leaves prove a benign wakeup; an opaque Is match
 	// cannot make a collaborator's own error harmless.
-	switch wrapped := err.(type) {
+	switch wrapped := err.(type) { //nolint:errorlint // Inspect one node at a time so every joined fault is classified.
 	case interface{ Unwrap() []error }:
 		cause := ProtocolOperationCauseNone
 		for _, component := range wrapped.Unwrap() {
@@ -509,7 +509,7 @@ func protocolOperationCause(err error) ProtocolOperationCause {
 		return ProtocolOperationCauseNone
 	case errors.Is(err, context.DeadlineExceeded):
 		return ProtocolOperationCauseDeadline
-	case err == context.Canceled:
+	case err == context.Canceled: //nolint:errorlint // Only the canonical leaf proves an ordinary canceled wait.
 		return ProtocolOperationCauseCanceled
 	case errors.Is(err, ErrRuntimeClosed):
 		return ProtocolOperationCauseRuntimeClosed
@@ -517,7 +517,7 @@ func protocolOperationCause(err error) ProtocolOperationCause {
 		return ProtocolOperationCauseLaneUnavailable
 	case errors.Is(err, protocolsession.ErrWriterStopped):
 		return ProtocolOperationCauseWriterStopped
-	case err == ErrOperationMissing:
+	case err == ErrOperationMissing: //nolint:errorlint // An opaque Is match cannot prove that this operation ended.
 		return ProtocolOperationCauseOperationClosed
 	default:
 		return ProtocolOperationCauseProtocolFailure

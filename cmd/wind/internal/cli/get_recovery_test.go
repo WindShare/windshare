@@ -93,6 +93,11 @@ func TestGetReplacesLostSessionAndKeepsOneJobAndOutputReservation(t *testing.T) 
 	defer cancel()
 	code := receiver.Run(ctx, []string{"get", capability, "-o", output.RootPath, "--connectivity", "relay-only", "--trace", filepath.Join(t.TempDir(), "receive.ndjson")})
 	if code != ExitOK {
+		trace.mu.Lock()
+		for _, event := range trace.events {
+			t.Logf("receiver trace: %+v", event)
+		}
+		trace.mu.Unlock()
 		t.Fatalf("get=%d dials=%d stderr=%q", code, dials.Load(), getErrors.String())
 	}
 	if dials.Load() != 2 || primaryAttempts.Load() < 4 || stoppedAttempts.Load() != 1 {
