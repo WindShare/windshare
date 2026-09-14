@@ -18,11 +18,11 @@ import type {
   WorkspaceMaterializationEvidence,
 } from '../../transfer/settlement/persistent-execution'
 import type {
-  PlanPauseRequest,
   PlanSettlementRequest,
   V2PlanExecutionAuthority,
 } from '../../transfer/output-session'
 import type { SuccessfulTransferWorkerSettlement } from '../../transfer/outcome'
+import type { PersistentWorkspaceInterruption } from '../../transfer/settlement/persistent-evidence'
 import type {
   LifecycleUserAction,
   V2ActiveReceiveControl,
@@ -92,15 +92,17 @@ export class WorkspaceReceivePackaging {
     currentBackend: () => OriginPrivateWorkspaceBackend | undefined,
   ): PersistentWorkspaceSettlementAuthority {
     return Object.freeze({
-      pause: async (
-        request: PlanPauseRequest,
+      interrupt: async (
+        request: PersistentWorkspaceInterruption,
         cut: PersistentMaterializationSettlementCut<WorkspaceMaterializationEvidence>,
       ) => {
         await cut.closeMaterialization()
+        const digest = await checkpointSetDigest(this.#intent, cut.evidence)
+        if (request.kind === 'source-invalidated') return this.#stages.invalidateReceive(digest)
         const files = cut.evidence.entries.filter(entry => entry.kind === 'file')
         const completedBytes = files.reduce((total, entry) => total + entry.exactSize, 0n)
         return this.#stages.pauseReceive({
-          checkpointSetDigest: await checkpointSetDigest(this.#intent, cut.evidence),
+          checkpointSetDigest: digest,
           completedFileCount: BigInt(files.length),
           completedBytes,
           selectionFacts: request.selectionFacts,
@@ -157,7 +159,7 @@ export class WorkspaceReceivePackaging {
   }
 
   resolveWorkspaceUsage(lifecycle: ReceiveLifecycleState): WorkspaceUsage | null {
-    if (lifecycle.kind === 'discarded') return null
+    if (lifecycle.kind === 'discarded' || lifecycle.kind === 'source-invalidated') return null
     let ownedBytes = 0n
     if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
       ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.completedBytes

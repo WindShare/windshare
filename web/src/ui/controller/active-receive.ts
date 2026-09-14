@@ -17,7 +17,7 @@ import {
   type TransferJobResult,
   type TransferProgress,
 } from '../../transfer/v2-job'
-import type { LifecycleUserAction } from '../v2-lifecycle-presentation'
+import { SOURCE_INVALIDATED_DESCRIPTION, type LifecycleUserAction } from '../v2-lifecycle-presentation'
 import { isAbortError } from '../v2-controller-state'
 import type { V2JoinedBrowserShare } from '../v2-gateway'
 import type { V2OutputPresentationController } from '../v2-output'
@@ -29,6 +29,7 @@ import {
 } from './contracts'
 import {
   ActiveReceiveObservability,
+  type ReceiveFailureTrigger,
   type V2ReceivePresentationAttempt,
 } from './active-receive-observability'
 import {
@@ -149,7 +150,7 @@ export class ActiveReceiveCoordinator {
   get canRelease(): boolean {
     const state = this.#outputs.getSnapshot().lifecycle
     return this.#operation !== undefined && !this.#lifecycle.pending && state !== null &&
-      (state.kind === 'restart-required' || state.kind === 'discarded' ||
+      (state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
        state.kind === 'needs-attention')
   }
 
@@ -389,13 +390,15 @@ export class ActiveReceiveCoordinator {
     }
 
     if (!attempt.decisionSettled) this.#observability.receiveExclusion(attempt, 'success')
-    if (result.abortReason !== undefined && trigger !== undefined) {
-      this.#reportTransferFailure(result.abortReason)
-    }
-    this.#publishRetainedFileFailures(result)
+    this.#publishTransferFailures(result, trigger)
   }
 
-  #publishRetainedFileFailures(result: TransferJobResult): void {
+  #publishTransferFailures(result: TransferJobResult, trigger: ReceiveFailureTrigger | undefined): void {
+    if (result.abortReason !== undefined && trigger !== undefined) {
+      this.#reportTransferFailure(result.lifecycle.kind === 'source-invalidated'
+        ? new Error(SOURCE_INVALIDATED_DESCRIPTION, { cause: result.abortReason })
+        : result.abortReason)
+    }
     if (result.lifecycle.kind !== 'resumable-receive' || result.lifecycle.payloadKind !== 'opfs-zip' ||
         result.worker.fileFailureCount === 0) return
     // Release after settlement so inventory can read durable file failures under its own authority.

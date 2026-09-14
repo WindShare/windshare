@@ -27,6 +27,9 @@ export interface WorkspaceUsage {
   readonly maximumBytes?: bigint
 }
 
+export const SOURCE_INVALIDATED_DESCRIPTION =
+  'The source file changed and this download cannot continue. Ask the sender to share it again and open the new link. You can discard this task to remove its retained data.'
+
 export interface WorkspaceUsagePresentation {
   readonly ownedBytes: bigint
   readonly maximumBytes?: bigint
@@ -360,6 +363,8 @@ function lifecycleCopy(
       )
     case 'restart-required':
       return copy('Start again required', restartRequiredDescription(state.reason), 'warning')
+    case 'source-invalidated':
+      return copy('Source file changed', SOURCE_INVALIDATED_DESCRIPTION, 'warning')
     case 'discarded':
       return copy('Task discarded', 'Owned unfinished data and task records were removed.', 'neutral')
     case 'needs-attention':
@@ -499,6 +504,8 @@ function lifecycleActions(
         : Object.freeze([])
     case 'restart-required':
       return Object.freeze([])
+    case 'source-invalidated':
+      return Object.freeze([action('discard', 'Discard task and delete retained content', true)])
     case 'authorization-required':
       return Object.freeze([
         action('continue', 'Authorize and continue'),
@@ -585,7 +592,7 @@ function lifecycleCategory(state: ReceiveLifecycleState): ReceiveLifecyclePresen
       state.kind === 'target-verification-required' || state.kind === 'destination-space-required' ||
       (state.kind === 'download-started' && state.attemptKind === 'workspace')) return 'retained'
   if (state.kind === 'published' || state.kind === 'partial-directory' ||
-      state.kind === 'restart-required' || state.kind === 'discarded' ||
+      state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
       state.kind === 'needs-attention' ||
       state.kind === 'download-started') return 'terminal'
   return 'active'

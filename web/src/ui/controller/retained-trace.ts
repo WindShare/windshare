@@ -28,6 +28,7 @@ const CONTINUATIONS = Object.freeze({
   'save-artifact': 'save_artifact',
   'retry-download': 'retry_download',
   'cleanup-incompatible': 'cleanup_incompatible',
+  'cleanup-only': 'cleanup_only',
   'retry-cleanup': 'retry_cleanup',
   'needs-attention': 'needs_attention',
 } satisfies Record<RetainedActionTraceEvent['continuation'], RetainedActionPayloadV1['continuation']>)

@@ -144,6 +144,12 @@ export class WorkspaceStageRuntime {
           transition: 'paused',
         }))
         return
+      case 'receive.materialization.source_invalidated':
+        emitOutputTrace(trace, () => outputTraceEvent('continuation', {
+          backend: 'origin_private',
+          transition: 'source_invalidated',
+        }))
+        return
       case 'receive.continuation.admission_failed':
         emitOutputTrace(trace, () => outputTraceEvent('continuation', {
           backend: 'origin_private',

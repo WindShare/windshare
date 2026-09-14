@@ -16,6 +16,7 @@ export type ReceiveOperationContinuation =
   | 'save-artifact'
   | 'retry-download'
   | 'cleanup-incompatible'
+  | 'cleanup-only'
   | 'retry-cleanup'
   | 'needs-attention'
   | 'history-only'
@@ -57,6 +58,7 @@ export function assertReceiveOperationCanContinue(
   descriptor: ReceiveOperationResumeDescriptor,
 ): void {
   if (descriptor.continuation === 'history-only' || descriptor.continuation === 'cleanup-incompatible' ||
+      descriptor.continuation === 'cleanup-only' ||
       descriptor.continuation === 'needs-attention' ||
       descriptor.continuation === 'retry-cleanup') {
     throw new DOMException('Receive operation cannot continue automatically', 'InvalidStateError')
@@ -67,6 +69,7 @@ function continuationFor(
   lifecycle: ReceiveLifecycleState,
 ): ReceiveOperationContinuation | undefined {
   switch (lifecycle.kind) {
+    case 'source-invalidated': return 'cleanup-only'
     case 'receiving': return 'resume-receive'
     case 'resumable-receive': return lifecycle.payloadKind === 'direct-zip'
       ? 'resume-direct-zip'

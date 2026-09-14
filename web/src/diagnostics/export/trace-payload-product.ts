@@ -53,6 +53,7 @@ const LIFECYCLE_STATES = [
   'preparing',
   'receiving',
   'resumable_receive',
+  'source_invalidated',
   'finalizing_tree',
   'committing_atomic',
   'materialization_sealed',
@@ -607,7 +608,7 @@ export function validatePublication(payload: UnknownRecord): void {
 
 export function validateContinuation(payload: UnknownRecord): void {
   validateOutputPair(payload, OUTPUT_BACKENDS, [
-    'paused', 'resumed', 'admission_failed',
+    'paused', 'resumed', 'admission_failed', 'source_invalidated',
   ], 'continuation')
 }
 

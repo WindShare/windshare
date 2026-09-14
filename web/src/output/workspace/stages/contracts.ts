@@ -86,6 +86,12 @@ export type WorkspaceReceiveIntent = ReceiveIntent & {
 }
 
 export type WorkspaceStageTraceEvent =
+  | Readonly<{
+      name: 'receive.materialization.source_invalidated'
+      operation_id: string
+      receive_intent_digest: string
+      checkpoint_set_digest: string
+    }>
   | ObjectCapacityTraceEvent
   | Readonly<{
       name: 'receive.opfs.checkpoint'; operation_id: string; object_id: string; stage: string

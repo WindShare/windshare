@@ -556,7 +556,7 @@ describe('persistent Workspace production execution bridge', () => {
     let settledEvidence: WorkspaceMaterializationEvidence | undefined
     let settlementCalls = 0
     const settlement: PersistentWorkspaceSettlementAuthority = {
-      pause: async (_request, cut) => {
+      interrupt: async (_request, cut) => {
         await cut.closeMaterialization()
         return resumableState(intent)
       },
@@ -662,7 +662,7 @@ describe('persistent Workspace production execution bridge', () => {
         outputSessionId: 'foreign-proof-session',
       }),
       settlement: {
-        pause: async () => resumableState(intent),
+        interrupt: async () => resumableState(intent),
         settle: async () => waitingToSaveState(intent),
       },
       signal: SIGNAL,
