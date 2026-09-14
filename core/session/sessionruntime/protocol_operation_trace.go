@@ -242,13 +242,15 @@ func (call *operationCall) recordProtocolTraceFailure(err error) {
 		return
 	}
 	call.stateMu.Lock()
-	if call.traceCause == ProtocolOperationCauseNone {
-		call.traceCause = cause
-	}
+	call.traceCause = mergeProtocolOperationCause(call.traceCause, cause)
 	call.stateMu.Unlock()
 }
 
 func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperationObservation, bool) {
+	return call.protocolOperationTerminationTrace(now, nil)
+}
+
+func (call *operationCall) protocolOperationTerminationTrace(now time.Time, termination *ReceiverPeerTermination) (ProtocolOperationObservation, bool) {
 	if call == nil || !call.traceEnabled {
 		return ProtocolOperationObservation{}, false
 	}
@@ -257,16 +259,19 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 	call.laneMu.Lock()
 	lane := call.lane
 	call.stateMu.Lock()
-	if call.traceEmitted {
+	if call.traceEmitted || (call.peerOperation != nil && (termination == nil || !call.peerOperation.OwnsTermination(*termination))) {
 		call.stateMu.Unlock()
 		call.laneMu.Unlock()
 		return ProtocolOperationObservation{}, false
 	}
 	call.traceEmitted = true
-	stage := ProtocolOperationReceiverEnded
-	if call.traceCause != ProtocolOperationCauseNone {
+	stage, cause := ProtocolOperationReceiverEnded, call.traceCause
+	switch {
+	case call.peerOperation != nil:
+		stage, cause = receiverPeerProtocolOutcome(*termination, cause)
+	case cause != ProtocolOperationCauseNone:
 		stage = ProtocolOperationReceiverFailed
-	} else if call.traceHasFinalResponse {
+	case call.traceHasFinalResponse:
 		stage = ProtocolOperationReceiverCompleted
 	}
 	event := ProtocolOperationObservation{
@@ -278,12 +283,60 @@ func (call *operationCall) protocolOperationTrace(now time.Time) (ProtocolOperat
 		DeadlineRemainingMillis: call.traceDeadlineMillis, HasDeadline: call.traceHasDeadline,
 		OperationElapsedMillis: durationMillis(now.Sub(call.traceStarted)),
 		UsableLanesAtSelection: call.traceUsableAtSelection,
-		Cause:                  call.traceCause,
+		Cause:                  cause,
 		RequestScheduling:      call.requests.Estimate(),
 	}
 	call.stateMu.Unlock()
 	call.laneMu.Unlock()
 	return event, true
+}
+
+// Local ownership alone cannot make a joined fault benign. The operation's
+// immutable terminal diagnostics and the RPC evidence must both agree before a
+// canceled wait can be observed as an ordinary end.
+func receiverPeerProtocolOutcome(termination ReceiverPeerTermination, cause ProtocolOperationCause) (ProtocolOperationStage, ProtocolOperationCause) {
+	localStop := termination.Authority() == ReceiverPeerTerminalAuthorityLocal &&
+		termination.Severity() == ReceiverPeerTerminalOperationOnly &&
+		(termination.ConsequenceProvenance() == ReceiverPeerProvenanceLocalExplicitStop ||
+			termination.ConsequenceProvenance() == ReceiverPeerProvenanceLocalContextEnded)
+	if !localStop {
+		failure := ProtocolOperationCauseProtocolFailure
+		if termination.Severity() == ReceiverPeerTerminalSessionUnavailable {
+			failure = ProtocolOperationCauseRuntimeClosed
+		}
+		cause = mergeProtocolOperationCause(cause, failure)
+	}
+	for _, diagnostic := range termination.diagnostics.components[:termination.diagnostics.count] {
+		component := ProtocolOperationCauseProtocolFailure
+		switch diagnostic.Code() {
+		case ReceiverPeerDiagnosticContextCanceled:
+			component = ProtocolOperationCauseCanceled
+		case ReceiverPeerDiagnosticOperationMissing:
+			component = ProtocolOperationCauseOperationClosed
+		case ReceiverPeerDiagnosticRuntimeClosed:
+			component = ProtocolOperationCauseRuntimeClosed
+		}
+		cause = mergeProtocolOperationCause(cause, component)
+	}
+	if localStop && protocolOperationLifecycleCause(cause) {
+		return ProtocolOperationReceiverEnded, cause
+	}
+	return ProtocolOperationReceiverFailed, cause
+}
+
+func protocolOperationLifecycleCause(cause ProtocolOperationCause) bool {
+	return cause == ProtocolOperationCauseNone || cause == ProtocolOperationCauseCanceled ||
+		cause == ProtocolOperationCauseOperationClosed
+}
+
+func mergeProtocolOperationCause(current, next ProtocolOperationCause) ProtocolOperationCause {
+	// A wakeup can arrive before an authenticated fault or failed cleanup.
+	// Preserve the first actual failure instead of letting cancellation mask it.
+	if current == ProtocolOperationCauseNone ||
+		(protocolOperationLifecycleCause(current) && !protocolOperationLifecycleCause(next)) {
+		return next
+	}
+	return current
 }
 
 func (runtime *runtimeCore) observationContext(operationID protocolsession.OperationID, kind protocolsession.MessageKind) ProtocolObservationContext {

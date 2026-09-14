@@ -328,6 +328,25 @@ func TestEncodeV4ProjectsCorrelationAndPreservesLaneEpochZero(t *testing.T) {
 	}
 }
 
+func TestEncodeV4RetainsNormalCancellationAsDiagnostic(t *testing.T) {
+	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
+	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))
+	event := mustValue(clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+		ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+		ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessagePeerOffer,
+		Stage: clievent.ProtocolOperationReceiverEnded, Cause: clievent.ProtocolOperationCauseCanceled,
+	}))
+	record, err := encodeV4(testRunIdentity(0x22), entryMetadata{sequence: 1, time: time.Unix(1, 0)}, event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := record.Payload.(protocolOperationPayloadV4)
+	if payload.Stage != "receiver_ended" || payload.Cause != "canceled" ||
+		record.Correlation == nil || record.Correlation.ProtocolOperationID != base64.RawURLEncoding.EncodeToString(operation.Bytes()) {
+		t.Fatalf("normal cancellation was lost or classified as failure: %+v", record)
+	}
+}
+
 func TestEncodeV4IncludesControlSchedulingWithOperationCorrelation(t *testing.T) {
 	session := mustValue(clievent.NewProtocolSessionID(testIdentity(t, 0x31)))
 	operation := mustValue(clievent.NewProtocolOperationID(testIdentity(t, 0x32)))

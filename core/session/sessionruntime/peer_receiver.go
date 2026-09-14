@@ -37,9 +37,7 @@ func (runtime *ReceiverRuntime) OpenPeerOperation(
 		maximumContinuations: maximumContinuations, hasContinuationLimit: true,
 		terminalDone: make(chan struct{}),
 	}
-	if err := call.registerAuthenticatedOperationViolationHandler(
-		operation.observeAuthenticatedOperationViolation,
-	); err != nil {
+	if err := call.bindPeerOperation(operation); err != nil {
 		cleanupErr := runtime.rpc.cancelAndEnd(call, contentflow.CancelReasonOutputAbort)
 		if runtime.ctx.Err() != nil {
 			return nil, errors.Join(ErrRuntimeClosed, runtime.Err(), err, cleanupErr)
@@ -340,7 +338,8 @@ func (operation *ReceiverPeerOperation) claimTerminal(
 	if operation.id.IsZero() && call != nil {
 		operation.id = call.id
 	}
-	operation.call = nil
+	// Keep the exact call's observation until receive and cleanup have joined.
+	// closed already revokes new sends and receives independently of this reference.
 	return call, true, done
 }
 
@@ -405,6 +404,14 @@ func (operation *ReceiverPeerOperation) publishTerminalLocked() {
 		return
 	}
 	operation.terminalPublished = true
+	if operation.rpc != nil && operation.rpc.runtime != nil {
+		runtime := operation.rpc.runtime
+		termination := operation.terminationLocked()
+		if event, ok := operation.call.protocolOperationTerminationTrace(runtime.now(), &termination); ok {
+			runtime.traceProtocolOperation(event)
+		}
+	}
+	operation.call = nil
 	close(operation.terminalDoneLocked())
 }
 
@@ -412,6 +419,10 @@ func (operation *ReceiverPeerOperation) awaitTerminal(done <-chan struct{}) Rece
 	<-done
 	operation.mu.Lock()
 	defer operation.mu.Unlock()
+	return operation.terminationLocked()
+}
+
+func (operation *ReceiverPeerOperation) terminationLocked() ReceiverPeerTermination {
 	return ReceiverPeerTermination{
 		operationToken: operation.token,
 		transition:     operation.terminalTransition,

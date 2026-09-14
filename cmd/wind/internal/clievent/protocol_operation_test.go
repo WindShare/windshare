@@ -12,6 +12,30 @@ func protocolTestContext(t *testing.T) ProtocolObservationContext {
 	operation, _ := NewProtocolOperationID(bytes16(32))
 	return ProtocolObservationContext{Command: CommandShare, ObservedAt: time.Unix(1, 2), Role: ProtocolRoleSender, ProtocolSession: session, ProtocolOperation: operation, RequestKind: ProtocolMessageOpenRevisions}
 }
+func TestProtocolOperationNormalEndRejectsFailureCauses(t *testing.T) {
+	ctx := protocolTestContext(t)
+	for _, cause := range []ProtocolOperationCause{
+		ProtocolOperationCauseNone, ProtocolOperationCauseCanceled, ProtocolOperationCauseOperationClosed,
+		ProtocolOperationCauseDeadline, ProtocolOperationCauseRuntimeClosed, ProtocolOperationCauseLaneUnavailable,
+		ProtocolOperationCauseWriterStopped, ProtocolOperationCauseProtocolFailure,
+	} {
+		event, err := NewProtocolOperationObserved(ProtocolOperationSpec{
+			Command: CommandGet, Role: ProtocolRoleReceiver, ObservedAt: ctx.ObservedAt,
+			ProtocolSession: ctx.ProtocolSession, ProtocolOperation: ctx.ProtocolOperation,
+			RequestKind: ProtocolMessagePeerOffer, Stage: ProtocolOperationReceiverEnded, Cause: cause,
+		})
+		valid := cause == ProtocolOperationCauseNone || cause == ProtocolOperationCauseCanceled ||
+			cause == ProtocolOperationCauseOperationClosed
+		if valid {
+			if err != nil || event.Fact().(ProtocolOperationFact).Cause() != cause {
+				t.Fatalf("normal end lost diagnostic %v: %v", cause, err)
+			}
+		} else if !errors.Is(err, ErrInvalidEvent) {
+			t.Fatalf("normal end accepted failure cause %v: %v", cause, err)
+		}
+	}
+}
+
 func TestProtocolObservationFactsAndImmutableResult(t *testing.T) {
 	context := protocolTestContext(t)
 	lane, _ := NewLaneIdentity(2, 0)

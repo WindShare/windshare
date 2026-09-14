@@ -287,8 +287,8 @@ type operationCall struct {
 	maximumContinuations int
 	hasContinuationLimit bool
 
-	authenticatedViolation        protocolsession.AuthenticatedOperationViolation
-	authenticatedViolationHandler func(protocolsession.AuthenticatedOperationViolation)
+	authenticatedViolation protocolsession.AuthenticatedOperationViolation
+	peerOperation          *ReceiverPeerOperation
 }
 
 func (call *operationCall) observeAuthenticatedOperationViolation(
@@ -303,29 +303,30 @@ func (call *operationCall) observeAuthenticatedOperationViolation(
 		return
 	}
 	call.authenticatedViolation = violation
-	handler := call.authenticatedViolationHandler
+	operation := call.peerOperation
 	call.stateMu.Unlock()
-	if handler != nil {
-		handler(violation)
+	if operation != nil {
+		operation.observeAuthenticatedOperationViolation(violation)
 	}
 }
 
-func (call *operationCall) registerAuthenticatedOperationViolationHandler(
-	handler func(protocolsession.AuthenticatedOperationViolation),
-) error {
-	if call == nil || handler == nil {
+func (call *operationCall) bindPeerOperation(operation *ReceiverPeerOperation) error {
+	if call == nil || operation == nil {
 		return ErrOperationMissing
 	}
 	call.stateMu.Lock()
-	if call.authenticatedViolationHandler != nil {
+	if call.peerOperation != nil {
 		call.stateMu.Unlock()
 		return ErrOperationMissing
 	}
-	call.authenticatedViolationHandler = handler
+	// The same owner receives authenticated violations and settles observation.
+	// RPC sink closure only wakes Receive; its joined termination decides whether
+	// that wakeup was a local stop or accompanied a real protocol failure.
+	call.peerOperation = operation
 	violation := call.authenticatedViolation
 	call.stateMu.Unlock()
 	if validAuthenticatedOperationViolationCode(violation.Code()) {
-		handler(violation)
+		operation.observeAuthenticatedOperationViolation(violation)
 	}
 	return nil
 }
@@ -477,9 +478,7 @@ func (call *operationCall) traceAuthenticatedFailure(
 			ProtocolObservationContext{Correlation: ProtocolObservationCorrelation{Role: protocolsession.RoleReceiver, ProtocolSessionID: source.protocolSessionID, OperationID: call.id, RequestKind: call.requestKind}, ObservedAt: source.observedAt},
 			content, source.lane))
 	}
-	if call.traceCause == ProtocolOperationCauseNone {
-		call.traceCause = ProtocolOperationCauseProtocolFailure
-	}
+	call.traceCause = mergeProtocolOperationCause(call.traceCause, ProtocolOperationCauseProtocolFailure)
 }
 
 func (call *operationCall) close() {
