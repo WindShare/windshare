@@ -85,8 +85,9 @@ func (generation OperationGeneration) RequestKind() (MessageKind, bool) {
 	return 0, false
 }
 
-// CancelGeneration records local abandonment only for the exact admitted
-// generation. A delayed owner can therefore never retire a newer same-ID call.
+// CancelGeneration idempotently retires the exact admitted generation. A delayed
+// owner can never retire a newer same-ID call, and session termination already
+// satisfies retirement by revoking all operation authority.
 func (table *OperationTable) CancelGeneration(generation OperationGeneration) error {
 	if table == nil || generation.table != table || generation.authority == nil || generation.operationID.IsZero() {
 		return ErrInvalidOperationID
@@ -94,7 +95,9 @@ func (table *OperationTable) CancelGeneration(generation OperationGeneration) er
 	table.mu.Lock()
 	defer table.mu.Unlock()
 	if table.terminal {
-		return ErrSessionTerminated
+		// Termination cleared the table and permanently closed admission, so a
+		// late owner needs neither a cancellation tombstone nor a new failure.
+		return nil
 	}
 	table.pruneExpired()
 	operationID := generation.operationID
