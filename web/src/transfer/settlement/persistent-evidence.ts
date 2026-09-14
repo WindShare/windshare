@@ -2,7 +2,8 @@ import type {
   AuthenticatedGenerationReference,
   MaterializedManifestEntry,
 } from '../../output/workspace/manifest'
-import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState, RecoverySelectionFacts } from '../../output/workspace/state'
+import { transferFileOutcomeEvidence } from '../job/failures'
 import type { RecoverySummary } from '../../output/file-system-access/recovery-summary'
 import {
   DirectorySettlementKind,
@@ -86,9 +87,22 @@ export interface PersistentDirectTreeSettlementAuthority {
   ): Promise<ReceiveLifecycleState>
 }
 
+export type PersistentWorkspaceInterruption =
+  | Readonly<{ kind: 'source-invalidated' }>
+  | Readonly<{ kind: 'resumable'; selectionFacts: RecoverySelectionFacts }>
+
+/** Durable output is reusable only while the authenticated source still satisfies the intent. */
+export function persistentWorkspaceInterruption(request: PlanPauseRequest): PersistentWorkspaceInterruption {
+  if (request.worker.fileOutcomes.sourceDriftFiles > 0 ||
+      transferFileOutcomeEvidence(request.reason)?.kind === 'authenticated-source-drift') {
+    return Object.freeze({ kind: 'source-invalidated' })
+  }
+  return Object.freeze({ kind: 'resumable', selectionFacts: request.selectionFacts })
+}
+
 export interface PersistentWorkspaceSettlementAuthority {
-  pause(
-    request: PlanPauseRequest,
+  interrupt(
+    request: PersistentWorkspaceInterruption,
     cut: PersistentMaterializationSettlementCut<WorkspaceMaterializationEvidence>,
     signal: AbortSignal,
   ): Promise<ReceiveLifecycleState>

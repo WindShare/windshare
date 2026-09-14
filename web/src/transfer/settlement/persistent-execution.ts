@@ -59,6 +59,7 @@ import {
 } from './v2-plan-authority'
 import {
   compareMaterializedEntries,
+  persistentWorkspaceInterruption,
   requireCompleteWorkspaceMaterialization,
   requireMatchingMaterializationSummary,
   sameMaterializedEntry,
@@ -241,7 +242,7 @@ export async function createPersistentWorkspaceExecution(
     output: adapter,
     pause: (request, signal) => owner.pause(async () => {
       const cut = new PersistentSettlementCut(evidence(), () => adapter.close())
-      const state = await input.settlement.pause(request, cut, signal)
+      const state = await input.settlement.interrupt(persistentWorkspaceInterruption(request), cut, signal)
       await cut.validateReturnedState(state)
       return state
     }),

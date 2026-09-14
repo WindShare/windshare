@@ -77,6 +77,7 @@ export const RECEIVE_STATE_NEEDS_ATTENTION = 20 as const
 export const RECEIVE_STATE_AUTHORIZATION_REQUIRED = 21 as const
 export const RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED = 22 as const
 export const RECEIVE_STATE_DESTINATION_SPACE_REQUIRED = 23 as const
+export const RECEIVE_STATE_SOURCE_INVALIDATED = 24 as const
 
 const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'intent-frozen': RECEIVE_STATE_INTENT_FROZEN,
@@ -101,6 +102,7 @@ const RECEIVE_STATE_BYTES_BY_KIND = Object.freeze({
   'authorization-required': RECEIVE_STATE_AUTHORIZATION_REQUIRED,
   'target-verification-required': RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
   'destination-space-required': RECEIVE_STATE_DESTINATION_SPACE_REQUIRED,
+  'source-invalidated': RECEIVE_STATE_SOURCE_INVALIDATED,
 } satisfies Readonly<Record<ReceiveLifecycleState['kind'], number>>)
 
 export type ReceiveStateByte = (typeof RECEIVE_STATE_BYTES_BY_KIND)[ReceiveLifecycleState['kind']]
@@ -119,6 +121,8 @@ export type ReceiveLifecycleState =
   | Readonly<LifecycleStateBase & { kind: 'intent-frozen' }>
   | Readonly<LifecycleStateBase & { kind: 'preparing'; preparationId: string }>
   | Readonly<LifecycleStateBase & { kind: 'receiving'; activeLeaseId: string }>
+  /** The source cannot satisfy this intent; retained bytes authorize cleanup, never continuation. */
+  | Readonly<LifecycleStateBase & { kind: 'source-invalidated'; checkpointSetDigest: string }>
   | Readonly<LifecycleStateBase & {
       kind: 'resumable-receive'
       payloadKind: 'file-set'
@@ -308,6 +312,6 @@ export function isReceiveStateByte(value: number): value is ReceiveStateByte {
 
 export function isTerminalLifecycleState(state: ReceiveLifecycleState): boolean {
   return state.kind === 'published' || state.kind === 'partial-directory' ||
-    state.kind === 'restart-required' || state.kind === 'discarded' ||
+    state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
     state.kind === 'needs-attention'
 }

@@ -123,6 +123,7 @@ export type LifecycleStateV1 =
   | 'preparing'
   | 'receiving'
   | 'resumable_receive'
+  | 'source_invalidated'
   | 'finalizing_tree'
   | 'committing_atomic'
   | 'materialization_sealed'

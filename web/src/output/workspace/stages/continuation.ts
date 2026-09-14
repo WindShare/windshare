@@ -51,6 +51,29 @@ export class WorkspaceContinuationStages {
     return next
   }
 
+  async invalidateReceive(checkpointSetDigest: string): Promise<Extract<ReceiveLifecycleState, {
+    kind: 'source-invalidated'
+  }>> {
+    // A single source invalidates the whole original-file intent. ZIP members have
+    // their own failure isolation and must not inherit this operation-wide decision.
+    if (this.runtime.intent.artifact.kind !== 'original-file') {
+      throw new TypeError('source invalidation requires an original-file workspace')
+    }
+    const state = await this.runtime.lifecycle()
+    const next = this.runtime.reduce(state, this.runtime.event({
+      kind: 'source-invalidation-verified', checkpointSetDigest,
+    }, state))
+    if (next.kind !== 'source-invalidated') throw new TypeError('source invalidation did not terminate receiving')
+    await this.runtime.commitLifecycle(state, next)
+    this.runtime.emit({
+      name: 'receive.materialization.source_invalidated',
+      operation_id: this.runtime.intent.operationId,
+      receive_intent_digest: this.runtime.intent.digest,
+      checkpoint_set_digest: next.checkpointSetDigest,
+    })
+    return next
+  }
+
   async pausePackage(input: {
     readonly sealedMaterializationDigest: string
     readonly temporaryCleanup: PackageTemporaryCleanupEvidence

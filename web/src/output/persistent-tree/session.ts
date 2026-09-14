@@ -202,21 +202,24 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
       // Awaiting authenticated source authority before local planning prevents both
       // checkpoint reservations and namespace placeholders for unopened revisions.
       const revision = snapshotOpenedRevision(await request.openRevision())
-      stageScope = this.#stageAuthority?.fileScope(revision.fileId, materializationRelativePath)
-      stageScope?.addFailureFacts(
-        'checkpoint',
-        context => captureCheckpointFailureFacts(
-          this.#checkpoints,
-          revision.fileId,
-          context,
-        ),
-      )
-       const decision = await this.#selectInitialCheckpoint(
-         revision,
-         materializationRelativePath,
-         stageScope,
-         request.performancePipeline,
-       )
+      // Source failures retain their protocol attribution; only local materialization
+      // can produce checkpoint evidence.
+      try {
+        stageScope = this.#stageAuthority?.fileScope(revision.fileId, materializationRelativePath)
+        stageScope?.addFailureFacts(
+          'checkpoint',
+          context => captureCheckpointFailureFacts(
+            this.#checkpoints,
+            revision.fileId,
+            context,
+          ),
+        )
+        const decision = await this.#selectInitialCheckpoint(
+          revision,
+          materializationRelativePath,
+          stageScope,
+          request.performancePipeline,
+        )
         this.#traceCheckpointDecision(revision.fileId, decision)
         const checkpoint = selectedCheckpoint(decision)
         const fileScope = stageScope?.withCorrelation({
@@ -286,12 +289,13 @@ export class PersistentTreeOutputSession implements PersistentMaterializationPor
           await transaction.pause(new DOMException('Persistent tree session paused', 'AbortError'))
         })
         handedOff = true
-      return transaction
-    } catch (error) {
-      recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
-      this.#trace({ eventName: 'checkpoint', transition: 'failed' })
-      if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
-      throw error
+        return transaction
+      } catch (error) {
+        recordOutputException(this.#diagnostics?.failures?.checkpoint, error)
+        this.#trace({ eventName: 'checkpoint', transition: 'failed' })
+        if (error instanceof TargetOwnershipUnknownError) this.#reportLegacyNeedsAttention()
+        throw error
+      }
     } finally {
       if (!handedOff) {
         admission.leave()

@@ -33,6 +33,26 @@ import {
 const NEXT_REVISION = identity(23)
 
 describe('persistent DirectoryTree materialization port', () => {
+  it('preserves source admission failures without checkpoint attribution or local reservations', async () => {
+    const failures: OutputFailureObservation<'checkpoint'>[] = []
+    const traces: OutputTraceEvent[] = []
+    const fixture = await materializationFixture({
+      backend: 'origin_private',
+      failures: { checkpoint: { stage: 'checkpoint', record: failure => { failures.push(failure); return undefined } } },
+      trace: { current: event => { traces.push(event) } },
+    })
+    const sourceFailure = new Error('source revision is no longer available')
+    await expect(fixture.session.beginFile({
+      materializationRelativePath: ['changed.bin'],
+      openRevision: async () => { throw sourceFailure },
+    })).rejects.toBe(sourceFailure)
+    await fixture.session.close()
+    expect(fixture.events).toEqual(['authorize', 'prepare-root'])
+    expect(fixture.checkpoints.installedClaimBatches).toEqual([])
+    expect(failures).toEqual([])
+    expect(traces.filter(event => event.eventName === 'checkpoint')).toEqual([])
+  })
+
   it('opens the authenticated revision before creating a visible file', async () => {
     const fixture = await materializationFixture()
     const transaction = await fixture.session.beginFile({

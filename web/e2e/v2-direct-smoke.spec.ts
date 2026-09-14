@@ -23,6 +23,7 @@ import {
   assertRetainedDirectoryDownload,
   RETAINED_DIRECTORY_CAPABILITY_KEY,
 } from './fixtures/retained-directory-smoke'
+import { assertSourceInvalidationRecovery } from './fixtures/source-invalidation-smoke'
 
 const DIRECTORY_NAME = 'micro-share'
 const FILE_NAME = 'pixel.png'
@@ -36,7 +37,7 @@ const TRACE_CORRELATION_TIMEOUT_MILLISECONDS = 10_000
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
 const RECONSTRUCTION_HARNESS_PATH = '/test/browser/diagnostics-reconstruction-harness.ts'
 
-test('receives an explicit directory artifact from the real sender and relay', async ({ browserName, page }, testInfo) => {
+test('receives and recovers downloads through the real sender and relay', async ({ browserName, page }, testInfo) => {
   const scenarioId = microDirectoryScenarioId(browserName)
   const stack = new DirectProductStack(scenarioId)
   const pageErrors: string[] = []
@@ -267,6 +268,10 @@ test('receives an explicit directory artifact from the real sender and relay', a
     })
     if (browserName === 'chromium') {
       await assertRetainedDirectoryDownload(page, navigationUrl, assertDirectoryDownload)
+      await testInfo.attach('source-invalidation-browser-bundle', {
+        body: await assertSourceInvalidationRecovery(page, stack),
+        contentType: 'application/x-ndjson',
+      })
     }
   } catch (error) {
     const pageDiagnostic = await page.evaluate(() => ({
