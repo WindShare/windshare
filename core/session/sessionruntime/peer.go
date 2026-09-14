@@ -180,10 +180,11 @@ func (result ReceiverPeerReceiveResult) Termination() (ReceiverPeerTermination, 
 // candidates are fragments; a remote final, explicit Terminate, or runtime
 // shutdown ends the exact operation object.
 type ReceiverPeerOperation struct {
-	rpc   *rpcClient
-	id    protocolsession.OperationID
-	call  *operationCall
-	token *receiverPeerOperationToken
+	rpc              *rpcClient
+	id               protocolsession.OperationID
+	call             *operationCall
+	token            *receiverPeerOperationToken
+	protocolTerminal *protocolOperationTerminalOwner
 
 	maximumContinuations int
 	hasContinuationLimit bool

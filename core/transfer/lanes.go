@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"slices"
 	"sync"
 	"time"
@@ -26,10 +25,11 @@ const (
 )
 
 var (
-	ErrInvalidLane = errors.New("transfer lane is invalid")
-	ErrStaleLane   = errors.New("transfer lane epoch is stale")
-	ErrLaneBudget  = errors.New("transfer lane budget exceeded")
-	ErrLaneClosed  = errors.New("transfer lane set is closed")
+	ErrInvalidLane     = errors.New("transfer lane is invalid")
+	ErrStaleLane       = errors.New("transfer lane epoch is stale")
+	ErrLaneBudget      = errors.New("transfer lane budget exceeded")
+	ErrLaneClosed      = errors.New("transfer lane set is closed")
+	errBlockSuperseded = errors.New("block attempt superseded by an authenticated winner")
 )
 
 type LaneIdentity struct {
@@ -45,6 +45,13 @@ type BlockDemand struct {
 
 type BlockLane interface {
 	FetchBlock(context.Context, BlockDemand) (records.BlockRecord, error)
+}
+
+// BlockAttemptSuperseded proves that the demand owner canceled a redundant
+// attempt after selecting an authenticated winner. Plain cancellation, including
+// a parent failure, cannot supply this evidence to a lane's terminal diagnostics.
+func BlockAttemptSuperseded(ctx context.Context) bool {
+	return ctx != nil && context.Cause(ctx) == errBlockSuperseded
 }
 
 type LaneSetConfig struct {
@@ -504,13 +511,17 @@ func (s *LaneSet) runLaneRound(
 	attempted map[LaneIdentity]struct{},
 	supplemented *bool,
 ) laneRoundResult {
-	raceContext, cancel := context.WithCancel(ctx)
-	stopLifecycle := context.AfterFunc(s.lifecycle, cancel)
+	raceContext, cancel := context.WithCancelCause(ctx)
+	stopLifecycle := context.AfterFunc(s.lifecycle, func() { cancel(ErrLaneClosed) })
 	decision := &laneRoundDecision{done: make(chan struct{})}
 	defer func() {
 		close(decision.done)
 		stopLifecycle()
-		cancel()
+		if decision.winner != nil {
+			cancel(errBlockSuperseded)
+		} else {
+			cancel(nil)
+		}
 	}()
 	results := make(chan laneResult, MaxDemandLaneAttempts)
 	for _, state := range candidates {
@@ -581,55 +592,6 @@ func laneResultsReassignable(results []laneResult) bool {
 		}
 	}
 	return true
-}
-
-func (s *LaneSet) fetchLane(
-	ctx context.Context,
-	demand BlockDemand,
-	validate func(records.BlockRecord) error,
-	state *laneState,
-	decision *laneRoundDecision,
-	results chan<- laneResult,
-	purpose lanescheduling.Purpose,
-) {
-	defer s.attempts.Done()
-	if purpose != lanescheduling.Content {
-		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
-	}
-	started := s.now()
-	bytes := blockDemandBytes(demand)
-	if slog.Default().Enabled(ctx, slog.LevelDebug) {
-		s.mu.Lock()
-		expected, queued, rate := state.performance.Estimate(0), state.performance.PendingBytes, state.performance.BytesPerSecond
-		s.mu.Unlock()
-		slog.DebugContext(ctx, "content lane dispatched",
-			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID, "lane_epoch", state.identity.Epoch,
-			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
-			"purpose", purpose, "expected_ms", expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
-	}
-	record, fetchErr := state.lane.FetchBlock(ctx, demand)
-	if fetchErr == nil {
-		fetchErr = validate(record)
-	}
-	notAdmitted := isDemandNotAdmitted(fetchErr)
-	normalized := admitInternalFailure(normalizeSourceBoundary(ctx, fetchErr))
-	canceled := normalized != nil && normalized.policy.canceled
-	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
-	elapsed := s.now().Sub(started)
-	s.mu.Lock()
-	state.performance.Complete(s.now(), bytes, fetchErr == nil)
-	s.mu.Unlock()
-	results <- laneResult{
-		state: state, record: record, err: fetchErr,
-		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
-	}
-	<-decision.done
-	if canceled && decision.winner != nil && decision.winner != state {
-		s.mu.Lock()
-		state.performance.Superseded(bytes, elapsed)
-		s.mu.Unlock()
-	}
-	s.finish(state, record, fetchErr, canceled, decision.winner == state)
 }
 
 func reduceLaneFailures(current laneFailureSet, results []laneResult) (laneFailureSet, bool) {

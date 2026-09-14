@@ -407,10 +407,10 @@ func (operation *ReceiverPeerOperation) publishTerminalLocked() {
 	if operation.rpc != nil && operation.rpc.runtime != nil {
 		runtime := operation.rpc.runtime
 		termination := operation.terminationLocked()
-		if event, ok := operation.call.protocolOperationTerminationTrace(runtime.now(), &termination); ok {
-			runtime.traceProtocolOperation(event)
-		}
+		stage, cause := receiverPeerProtocolOutcome(termination, ProtocolOperationCauseNone)
+		operation.protocolTerminal.finish(runtime, protocolOperationOutcome{stage, cause})
 	}
+	operation.protocolTerminal = nil
 	operation.call = nil
 	close(operation.terminalDoneLocked())
 }

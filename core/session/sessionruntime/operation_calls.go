@@ -280,6 +280,7 @@ type operationCall struct {
 	traceHasFinalResponse  bool
 	traceCause             ProtocolOperationCause
 	traceEmitted           bool
+	traceOwner             *protocolOperationTerminalOwner
 
 	// The admitted continuation bound is operation identity metadata, not live
 	// authority. Retaining it after close prevents shutdown timing from changing
@@ -323,6 +324,7 @@ func (call *operationCall) bindPeerOperation(operation *ReceiverPeerOperation) e
 	// RPC sink closure only wakes Receive; its joined termination decides whether
 	// that wakeup was a local stop or accompanied a real protocol failure.
 	call.peerOperation = operation
+	operation.protocolTerminal = call.claimProtocolTerminationLocked()
 	violation := call.authenticatedViolation
 	call.stateMu.Unlock()
 	if validAuthenticatedOperationViolationCode(violation.Code()) {

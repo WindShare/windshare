@@ -332,12 +332,13 @@ const (
 	ProtocolOperationCauseWriterStopped
 	ProtocolOperationCauseOperationClosed
 	ProtocolOperationCauseProtocolFailure
+	ProtocolOperationCauseSuperseded
 )
 
 func (value ProtocolOperationCause) Name() (string, bool) {
 	names := [...]string{
 		"none", "canceled", "deadline", "runtime_closed", "lane_unavailable",
-		"writer_stopped", "operation_closed", "protocol_failure",
+		"writer_stopped", "operation_closed", "protocol_failure", "superseded",
 	}
 	if int(value) >= len(names) {
 		return "", false

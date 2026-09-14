@@ -82,6 +82,7 @@ func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.
 		warn  bool
 	}{
 		{"normal cancellation", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseCanceled, false},
+		{"superseded block attempt", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseSuperseded, false},
 		{"normal receive wakeup", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseOperationClosed, false},
 		{"unexpected cancellation", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseCanceled, true},
 		{"protocol failure", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseProtocolFailure, true},

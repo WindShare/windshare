@@ -1,15 +1,18 @@
 package transfer
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/downloadmetrics"
+	"log/slog"
 	"math"
 	"time"
 
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/transfer/lanescheduling"
 )
 
 // BindDownloadMetrics is called before content activation, once per generation.
@@ -375,6 +378,55 @@ func (policy ContentRoutePolicy) Allows(route LaneRoute) bool {
 	default:
 		return false
 	}
+}
+
+func (s *LaneSet) fetchLane(
+	ctx context.Context,
+	demand BlockDemand,
+	validate func(records.BlockRecord) error,
+	state *laneState,
+	decision *laneRoundDecision,
+	results chan<- laneResult,
+	purpose lanescheduling.Purpose,
+) {
+	defer s.attempts.Done()
+	if purpose != lanescheduling.Content {
+		defer func() { s.mu.Lock(); s.exploration.Release(purpose); s.mu.Unlock() }()
+	}
+	started := s.now()
+	bytes := blockDemandBytes(demand)
+	if slog.Default().Enabled(ctx, slog.LevelDebug) {
+		s.mu.Lock()
+		expected, queued, rate := state.performance.Estimate(0), state.performance.PendingBytes, state.performance.BytesPerSecond
+		s.mu.Unlock()
+		slog.DebugContext(ctx, "content lane dispatched",
+			"protocol_session_id", s.sessionID, "lane_id", state.identity.ID, "lane_epoch", state.identity.Epoch,
+			"file_id", demand.Descriptor.FileID(), "block_index", demand.Index, "route", state.route,
+			"purpose", purpose, "expected_ms", expected.Milliseconds(), "pending_bytes", queued, "bytes_per_second", rate)
+	}
+	record, fetchErr := state.lane.FetchBlock(ctx, demand)
+	if fetchErr == nil {
+		fetchErr = validate(record)
+	}
+	notAdmitted := isDemandNotAdmitted(fetchErr)
+	normalized := admitInternalFailure(normalizeSourceBoundary(ctx, fetchErr))
+	canceled := normalized != nil && normalized.policy.canceled
+	reassignable := !canceled && (notAdmitted || isDemandReassignableAfterRetirement(fetchErr))
+	elapsed := s.now().Sub(started)
+	s.mu.Lock()
+	state.performance.Complete(s.now(), bytes, fetchErr == nil)
+	s.mu.Unlock()
+	results <- laneResult{
+		state: state, record: record, err: fetchErr,
+		normalized: normalized, notAdmitted: notAdmitted, reassignable: reassignable,
+	}
+	<-decision.done
+	if canceled && decision.winner != nil && decision.winner != state {
+		s.mu.Lock()
+		state.performance.Superseded(bytes, elapsed)
+		s.mu.Unlock()
+	}
+	s.finish(state, record, fetchErr, canceled, decision.winner == state)
 }
 
 func (s *LaneSet) finish(
