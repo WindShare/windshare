@@ -84,7 +84,7 @@ func TestUnstartedRuntimeRollsBackLaneAuthorityAndOwnedChannels(t *testing.T) {
 	t.Cleanup(func() { _ = rolledBackPeer.Close() })
 	if _, err := runtime.lanes.addWithAdmission(
 		LaneIdentity{ID: 3, Epoch: 1}, rolledBack, authenticator, false,
-		func() error { return admissionFailure },
+		func(*runtimeLane) error { return admissionFailure },
 	); !errors.Is(err, admissionFailure) {
 		t.Fatalf("admission rollback error = %v", err)
 	}

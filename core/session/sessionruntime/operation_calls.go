@@ -9,6 +9,7 @@ import (
 
 	"github.com/windshare/windshare/core/observationstream"
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
 type operationLaneRoute struct {
@@ -261,6 +262,8 @@ type operationCall struct {
 	request    protocolsession.Message
 	replay     protocolsession.OutboundReplayPermit
 
+	requests requestlane.Call
+
 	requestKind            protocolsession.MessageKind
 	traceEnabled           bool
 	traceStarted           time.Time
@@ -486,6 +489,7 @@ func (call *operationCall) close() {
 		return
 	}
 	call.closed = true
+	call.requests.Close()
 	call.generation = protocolsession.OperationGeneration{}
 	call.authority = protocolsession.OutboundOperationPermit{}
 	call.request = protocolsession.Message{}

@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/windshare/windshare/core/session/protocolsession"
+	"github.com/windshare/windshare/core/session/requestlane"
 )
 
 var (
@@ -27,6 +29,7 @@ func (identity LaneIdentity) valid(initial bool) bool {
 }
 
 type runtimeLane struct {
+	requests *requestlane.Lane
 	identity LaneIdentity
 	channel  protocolsession.FrameChannel
 	writer   *protocolsession.SessionWriter
@@ -185,15 +188,16 @@ func (router laneInboundRouter) InboundDirection() protocolsession.Direction {
 type runtimeLanes struct {
 	runtime *runtimeCore
 
-	mu       sync.Mutex
-	active   map[uint32]*runtimeLane
-	epochs   map[uint32]uint32
-	order    []uint32
-	next     uint64
-	started  bool
-	stopping bool
-	wait     sync.WaitGroup
-	onDetach func(LaneIdentity)
+	mu            sync.Mutex
+	active        map[uint32]*runtimeLane
+	epochs        map[uint32]uint32
+	order         []uint32
+	next          uint64
+	started       bool
+	stopping      bool
+	wait          sync.WaitGroup
+	onDetach      func(LaneIdentity)
+	queuedContent func(LaneIdentity) time.Duration
 
 	terminalMu       sync.Mutex
 	terminalAdmitted bool
@@ -221,7 +225,7 @@ func (lanes *runtimeLanes) addWithAdmission(
 	channel protocolsession.FrameChannel,
 	authenticator protocolsession.InboundMessageAuthenticator,
 	initial bool,
-	admit func() error,
+	admit func(*runtimeLane) error,
 ) (*runtimeLane, error) {
 	if lanes == nil || !identity.valid(initial) || channel == nil || authenticator == nil {
 		return nil, ErrRuntimeConfig
@@ -253,13 +257,14 @@ func (lanes *runtimeLanes) addWithAdmission(
 		lane.releaseRuntimeReferences()
 		return nil, rejection
 	}
+	lane.requests = requestlane.New(requestlane.InitialResponse)
 	lanes.active[identity.ID] = lane
 	lanes.epochs[identity.ID] = identity.Epoch
 	if !seen {
 		lanes.order = append(lanes.order, identity.ID)
 	}
 	if admit != nil {
-		if err := admit(); err != nil {
+		if err := admit(lane); err != nil {
 			delete(lanes.active, identity.ID)
 			lanes.mu.Unlock()
 			lane.closeChannel()
