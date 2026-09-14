@@ -37,10 +37,10 @@ Correlate events across the session using:
 - `filesystem_output`: Output ownership and settlement decisions. Runtime failures are located by `runtime_decision.component` and `runtime_decision.operation`; `failure.stage` is present only when a native filesystem stage is classified.
 - `capabilities.mode`: Filesystem capabilities (`live_only` vs restart-resumable).
 
-Receiver peer operations publish their terminal `protocol_operation` after receive and cleanup join.
-`receiver_ended` can retain `canceled` or `operation_closed` as diagnostic causes without a failure warning.
-Real protocol or cleanup faults remain `receiver_failed`, even during a local stop. Correlate with
-`receiver_termination.local_stop_reason` for the command's reason for stopping.
+Receiver peer and block operations publish their terminal `protocol_operation` after receive and cleanup join.
+Content race losers report `receiver_ended / superseded`; peer stops may retain `canceled` or `operation_closed`.
+These ordinary ends produce no failure warning. Real protocol or cleanup faults remain `receiver_failed`,
+even during a local stop. For peer stops, correlate with `receiver_termination.local_stop_reason`.
 
 ## Browser Diagnostics
 

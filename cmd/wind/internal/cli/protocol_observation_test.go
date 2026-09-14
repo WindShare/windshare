@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -99,6 +100,59 @@ func TestProtocolCommandAssemblyProjectsSourceFactsAndReportsFinalLossOnce(t *te
 				t.Fatal("completed command retained observation admission")
 			}
 		})
+	}
+}
+
+func TestSupersededBlockObservationRetainsTraceWithoutVerboseWarning(t *testing.T) {
+	recorder := newFakeUserTrace(runtrace.Status{Complete: true})
+	stderr := bytes.NewBuffer(nil)
+	app := &App{
+		Stderr: stderr,
+		openUserTrace: func(runtrace.Target, clievent.Command, runtrace.Config, runtrace.Dependencies) (userTraceRecorder, error) {
+			return recorder, nil
+		},
+	}
+	options := testExactTraceOptions("trace.ndjson")
+	options.verbose = true
+	runtime, err := app.newCommandRuntime(clievent.CommandGet, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	observations := newGetObservation(runtime)
+	for index, outcome := range []struct {
+		stage sessionruntime.ProtocolOperationStage
+		cause sessionruntime.ProtocolOperationCause
+	}{
+		{sessionruntime.ProtocolOperationReceiverEnded, sessionruntime.ProtocolOperationCauseSuperseded},
+		{sessionruntime.ProtocolOperationReceiverFailed, sessionruntime.ProtocolOperationCauseProtocolFailure},
+	} {
+		fact := sessionruntime.NewProtocolOperationObservation(sessionruntime.ProtocolObservationContext{
+			ObservedAt: time.Unix(12, 345),
+			Correlation: sessionruntime.ProtocolObservationCorrelation{
+				Role: protocolsession.RoleReceiver, ProtocolSessionID: protocolsession.ProtocolSessionID{1},
+				OperationID: protocolsession.OperationID{byte(index + 2)}, RequestKind: protocolsession.MessageRequestBlocks,
+			},
+		}, sessionruntime.ProtocolOperationObservation{Stage: outcome.stage, Cause: outcome.cause})
+		if !observations.protocolObservations().TryPublish(fact) {
+			t.Fatal("operation observation rejected")
+		}
+	}
+	observations.complete(context.Background())
+	runtime.Close()
+	var causes []clievent.ProtocolOperationCause
+	for _, event := range recorder.recorded() {
+		if event, ok := event.(clievent.ProtocolObservationObserved); ok {
+			if fact, ok := event.Fact().(clievent.ProtocolOperationFact); ok {
+				causes = append(causes, fact.Cause())
+			}
+		}
+	}
+	if len(causes) != 2 || causes[0] != clievent.ProtocolOperationCauseSuperseded || causes[1] != clievent.ProtocolOperationCauseProtocolFailure {
+		t.Fatalf("trace lost terminal reasons: %v", causes)
+	}
+	if output := stderr.String(); strings.Count(output, "Protocol operation request blocks failed") != 1 ||
+		!strings.Contains(output, "protocol failure") || strings.Contains(output, "superseded") {
+		t.Fatalf("verbose warning classification = %q", output)
 	}
 }
 

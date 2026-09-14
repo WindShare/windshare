@@ -417,20 +417,21 @@ type receiverBlockLane struct {
 }
 
 type receiverBlockOperation struct {
-	lane    *receiverBlockLane
-	call    *operationCall
-	retired bool
+	lane     *receiverBlockLane
+	call     *operationCall
+	retired  bool
+	terminal *protocolOperationTerminalOwner
 }
 
 func (lane *receiverBlockLane) FetchBlock(
 	ctx context.Context,
 	demand transfer.BlockDemand,
-) (records.BlockRecord, error) {
+) (record records.BlockRecord, err error) {
 	operation, err := lane.beginBlockOperation(ctx, demand)
 	if err != nil {
 		return records.BlockRecord{}, err
 	}
-	defer func() { _ = operation.retire(contentflow.CancelReasonOutputAbort) }()
+	defer func() { err = operation.finish(ctx, err) }()
 	return operation.receive(ctx, demand)
 }
 
@@ -449,14 +450,45 @@ func (lane *receiverBlockLane) beginBlockOperation(
 	if err != nil {
 		return nil, err
 	}
-	call, err := lane.rpc.beginOn(ctx, &lane.identity, protocolsession.MessageRequestBlocks, body)
+	call, message, err := lane.rpc.prepareCall(ctx, protocolsession.MessageRequestBlocks, body)
 	if err != nil {
+		return nil, err
+	}
+	operation := &receiverBlockOperation{lane: lane, call: call, terminal: call.claimProtocolTermination()}
+	if err := lane.rpc.beginCall(ctx, &lane.identity, call, message); err != nil {
+		operation.finishProtocolTrace(ctx, ProtocolOperationReceiverFailed)
 		if ctx.Err() == nil && lane.rpc.runtime.ctx.Err() == nil && requestProvenNotDelivered(err) {
 			return nil, transfer.NewDemandNotAdmitted(err)
 		}
 		return nil, err
 	}
-	return &receiverBlockOperation{lane: lane, call: call}, nil
+	return operation, nil
+}
+
+func (operation *receiverBlockOperation) finish(ctx context.Context, receiveErr error) error {
+	operation.call.recordProtocolTraceFailure(receiveErr)
+	reason := contentflow.CancelReasonOutputAbort
+	if transfer.BlockAttemptSuperseded(ctx) {
+		reason = contentflow.CancelReasonSuperseded
+	}
+	cleanupErr := operation.retire(reason)
+	stage := ProtocolOperationReceiverCompleted
+	if receiveErr != nil || cleanupErr != nil {
+		stage = ProtocolOperationReceiverFailed
+	}
+	operation.finishProtocolTrace(ctx, stage)
+	if cleanupErr != nil {
+		return errors.Join(receiveErr, cleanupErr)
+	}
+	return receiveErr
+}
+
+func (operation *receiverBlockOperation) finishProtocolTrace(ctx context.Context, stage ProtocolOperationStage) {
+	outcome := protocolOperationOutcome{stage: stage}
+	if stage != ProtocolOperationReceiverCompleted && transfer.BlockAttemptSuperseded(ctx) {
+		outcome = protocolOperationOutcome{ProtocolOperationReceiverEnded, ProtocolOperationCauseSuperseded}
+	}
+	operation.terminal.finish(operation.lane.rpc.runtime, outcome)
 }
 
 func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason) error {
@@ -467,6 +499,7 @@ func (operation *receiverBlockOperation) retire(reason contentflow.CancelReason)
 	// The local reassembly tombstone is committed before the RPC sink is
 	// removed, so late fragments cannot alias a replacement lane operation.
 	assemblyErr := operation.lane.assembler.CancelOperation(operation.call.id)
+	operation.call.recordProtocolTraceCleanup(assemblyErr)
 	return errors.Join(assemblyErr, operation.lane.rpc.cancelAndEnd(operation.call, reason))
 }
 
@@ -486,6 +519,9 @@ func (operation *receiverBlockOperation) receive(
 		case protocolsession.MessageBlockFragment:
 			next, progressed, err := operation.lane.acceptBlockFragment(demand, message, record)
 			if err != nil {
+				// Decoding has no cancelable wait. Even a lifecycle-shaped opener
+				// error is a validation fault, regardless of a concurrent race winner.
+				operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
 				return operation.receiveFailure(err)
 			}
 			record = next
@@ -495,8 +531,13 @@ func (operation *receiverBlockOperation) receive(
 		case protocolsession.MessageOperationError:
 			return records.BlockRecord{}, blockRequestOperationError(message)
 		case protocolsession.MessageOperationComplete:
-			return operation.complete(message, record)
+			completed, err := operation.complete(message, record)
+			if err != nil {
+				operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
+			}
+			return completed, err
 		default:
+			operation.call.recordProtocolTraceCause(ProtocolOperationCauseProtocolFailure)
 			return records.BlockRecord{}, ErrOperationMissing
 		}
 	}
@@ -542,7 +583,9 @@ func (operation *receiverBlockOperation) complete(
 	if err != nil || count != 1 || record.DataLength() == 0 {
 		return records.BlockRecord{}, errors.Join(ErrOperationMissing, err)
 	}
-	_ = operation.lane.assembler.CompleteOperation(operation.call.id)
+	if err := operation.lane.assembler.CompleteOperation(operation.call.id); err != nil {
+		return records.BlockRecord{}, err
+	}
 	return record, nil
 }
 

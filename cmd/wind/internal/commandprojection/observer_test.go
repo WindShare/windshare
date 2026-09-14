@@ -126,6 +126,7 @@ func TestObserverEnumProjectionIsExhaustiveAndRejectsUnknownValues(t *testing.T)
 		sessionruntime.ProtocolOperationCauseWriterStopped,
 		sessionruntime.ProtocolOperationCauseOperationClosed,
 		sessionruntime.ProtocolOperationCauseProtocolFailure,
+		sessionruntime.ProtocolOperationCauseSuperseded,
 	}, sessionruntime.ProtocolOperationCause(255), projectProtocolOperationCause)
 	assertClosedProjection(t, "protocol failure scope", []sessionruntime.ProtocolErrorScope{
 		sessionruntime.ProtocolErrorDirectory,

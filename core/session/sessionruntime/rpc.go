@@ -26,37 +26,6 @@ var (
 	errRPCOperationAuthority    = errors.New("session runtime request admission returned incomplete operation authority")
 )
 
-type rpcRequestSendError struct {
-	outcome  protocolsession.SendOutcome
-	admitted bool
-	cause    error
-}
-
-func (failure *rpcRequestSendError) Error() string {
-	return fmt.Sprintf("send operation request: %v", failure.cause)
-}
-
-func (failure *rpcRequestSendError) Unwrap() error { return failure.cause }
-
-func requestProvenNotDelivered(err error) bool {
-	var failure *rpcRequestSendError
-	return errors.As(err, &failure) && failure.outcome == protocolsession.SendOutcomeDropped && !failure.admitted
-}
-
-func newRPCRequestSendError(outcome protocolsession.SendOutcome, admitted bool, cause error) error {
-	if cause == nil {
-		cause = ErrRuntimeClosed
-	}
-	return &rpcRequestSendError{outcome: outcome, admitted: admitted, cause: cause}
-}
-
-func rpcDeliveryError(runtime *runtimeCore, notDelivered error, cause error) error {
-	if runtime.ctx.Err() != nil {
-		return errors.Join(notDelivered, cause, ErrRuntimeClosed, runtime.Err())
-	}
-	return errors.Join(notDelivered, cause)
-}
-
 type operationIDSource struct {
 	mu          sync.Mutex
 	random      io.Reader
@@ -187,30 +156,56 @@ func (client *rpcClient) beginOn(
 	kind protocolsession.MessageKind,
 	body []byte,
 ) (*operationCall, error) {
-	if err := ctx.Err(); err != nil {
+	call, message, err := client.prepareCall(ctx, kind, body)
+	if err != nil {
 		return nil, err
+	}
+	if err := client.beginCall(ctx, lane, call, message); err != nil {
+		return nil, err
+	}
+	return call, nil
+}
+
+func (client *rpcClient) prepareCall(
+	ctx context.Context,
+	kind protocolsession.MessageKind,
+	body []byte,
+) (*operationCall, protocolsession.Message, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, protocolsession.Message{}, err
 	}
 	id, err := client.ids.New()
 	if err != nil {
-		return nil, err
+		return nil, protocolsession.Message{}, err
 	}
 	message, err := protocolsession.NewMessage(kind, &id, body)
 	if err != nil {
-		return nil, err
+		return nil, protocolsession.Message{}, err
 	}
-	call := client.newCall(ctx, id, kind)
+	return client.newCall(ctx, id, kind), message, nil
+}
+
+// Preparing identity separately lets an operation claim terminal observation
+// before admission or sending can race cancellation and runtime shutdown.
+func (client *rpcClient) beginCall(
+	ctx context.Context,
+	lane *LaneIdentity,
+	call *operationCall,
+	message protocolsession.Message,
+) error {
+	id := call.id
 	client.mu.Lock()
 	if client.closed {
 		client.mu.Unlock()
 		call.recordProtocolTraceFailure(ErrRuntimeClosed)
 		client.end(call)
-		return nil, ErrRuntimeClosed
+		return ErrRuntimeClosed
 	}
 	if client.calls[id] != nil {
 		client.mu.Unlock()
 		call.recordProtocolTraceFailure(ErrOperationMissing)
 		client.end(call)
-		return nil, ErrOperationMissing
+		return ErrOperationMissing
 	}
 	client.calls[id] = call
 	client.mu.Unlock()
@@ -224,7 +219,7 @@ func (client *rpcClient) beginOn(
 		authorityErr := client.runtime.failRPCOperationAuthority()
 		call.recordProtocolTraceFailure(authorityErr)
 		client.end(call)
-		return nil, newRPCRequestSendError(
+		return newRPCRequestSendError(
 			outcome, completion.Admitted,
 			rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
 		)
@@ -232,7 +227,7 @@ func (client *rpcClient) beginOn(
 	if exactAuthority && !call.setAuthority(completion.Generation, completion.Operation) {
 		call.recordProtocolTraceFailure(ErrRuntimeClosed)
 		client.end(call)
-		return nil, newRPCRequestSendError(
+		return newRPCRequestSendError(
 			outcome, true,
 			rpcDeliveryError(client.runtime, errRequestNotDelivered, ErrRuntimeClosed),
 		)
@@ -243,7 +238,7 @@ func (client *rpcClient) beginOn(
 				authorityErr := client.runtime.failRPCOperationAuthority()
 				call.recordProtocolTraceFailure(authorityErr)
 				client.end(call)
-				return nil, newRPCRequestSendError(
+				return newRPCRequestSendError(
 					outcome, completion.Admitted,
 					rpcDeliveryError(client.runtime, errRequestNotDelivered, authorityErr),
 				)
@@ -251,7 +246,7 @@ func (client *rpcClient) beginOn(
 			// Transport acceptance is ambiguous: the peer may already own this exact
 			// operation. The exact request replay is retained only to order a later
 			// dependent control on a replacement lane.
-			return call, nil
+			return nil
 		}
 		var cleanupErr error
 		if completion.Admitted {
@@ -260,14 +255,25 @@ func (client *rpcClient) beginOn(
 		deliveryErr := rpcDeliveryError(
 			client.runtime, errRequestNotDelivered, errors.Join(err, cleanupErr),
 		)
-		call.recordProtocolTraceFailure(deliveryErr)
+		// The delivery wrapper describes the unsuccessful request, not an
+		// additional fault. Preserve the send and cleanup evidence separately so
+		// an owner can distinguish a canceled send from failed cancellation.
+		if err == nil {
+			call.recordProtocolTraceFailure(errRequestNotDelivered)
+		} else {
+			call.recordProtocolTraceFailure(err)
+		}
+		call.recordProtocolTraceCleanup(cleanupErr)
+		if client.runtime.ctx.Err() != nil {
+			call.recordProtocolTraceFailure(ErrRuntimeClosed)
+		}
 		client.end(call)
-		return nil, newRPCRequestSendError(
+		return newRPCRequestSendError(
 			outcome, completion.Admitted,
 			deliveryErr,
 		)
 	}
-	return call, nil
+	return nil
 }
 
 func (client *rpcClient) sendRequest(
@@ -310,27 +316,6 @@ func (client *rpcClient) sendRequest(
 		// Another lane can consume the available slot before this writer claims
 		// the request. Only this proven unsent refusal is safe to retry.
 	}
-}
-
-func (runtime *runtimeCore) failRPCOperationAuthority() error {
-	_ = runtime.router.TerminateLocal()
-	runtime.terminateRuntimeFailed(errRPCOperationAuthority)
-	return errRPCOperationAuthority
-}
-
-func (runtime *runtimeCore) reconcileLocalCancel(
-	generation protocolsession.OperationGeneration,
-) error {
-	err := runtime.operations.CancelGeneration(generation)
-	if err == nil {
-		return nil
-	}
-	// Failure to retain a cancellation tombstone would leak active authority and
-	// make a later ID collision ambiguous. Fail-closing atomically clears the
-	// table instead of continuing a session whose at-most-once state is unknown.
-	_ = runtime.router.TerminateLocal()
-	runtime.terminateRuntimeFailed(err)
-	return err
 }
 
 func (client *rpcClient) sendContinuation(
@@ -536,6 +521,7 @@ func (client *rpcClient) cancelAndEnd(call *operationCall, reason contentflow.Ca
 	// disappears. Otherwise a local decoder/observer failure can leave an active
 	// remote operation with no caller capable of consuming or cancelling it.
 	err := client.admitCancellation(call, reason)
+	call.recordProtocolTraceCleanup(err)
 	client.end(call)
 	return err
 }
@@ -576,10 +562,9 @@ func (client *rpcClient) awaitCall(
 			// Cancellation admission is part of the observable failure. Dropping
 			// it here would make a later exact-call cleanup appear benign even
 			// when the first cancellation transition genuinely failed.
-			return protocolsession.Message{}, errors.Join(
-				ctx.Err(),
-				client.admitCancellation(call, contentflow.CancelReasonTimeout),
-			)
+			cleanupErr := client.admitCancellation(call, contentflow.CancelReasonTimeout)
+			call.recordProtocolTraceCleanup(cleanupErr)
+			return protocolsession.Message{}, errors.Join(ctx.Err(), cleanupErr)
 		case <-client.runtime.Done():
 			call.recordProtocolTraceFailure(ErrRuntimeClosed)
 			return protocolsession.Message{}, errors.Join(ErrRuntimeClosed, client.runtime.Err())

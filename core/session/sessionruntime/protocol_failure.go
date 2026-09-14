@@ -2,10 +2,63 @@ package sessionruntime
 
 import (
 	"errors"
+	"fmt"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
 var ErrProtocolErrorContent = errors.New("session runtime protocol error content is invalid")
+
+type rpcRequestSendError struct {
+	outcome  protocolsession.SendOutcome
+	admitted bool
+	cause    error
+}
+
+func (failure *rpcRequestSendError) Error() string {
+	return fmt.Sprintf("send operation request: %v", failure.cause)
+}
+
+func (failure *rpcRequestSendError) Unwrap() error { return failure.cause }
+
+func requestProvenNotDelivered(err error) bool {
+	var failure *rpcRequestSendError
+	return errors.As(err, &failure) && failure.outcome == protocolsession.SendOutcomeDropped && !failure.admitted
+}
+
+func newRPCRequestSendError(outcome protocolsession.SendOutcome, admitted bool, cause error) error {
+	if cause == nil {
+		cause = ErrRuntimeClosed
+	}
+	return &rpcRequestSendError{outcome: outcome, admitted: admitted, cause: cause}
+}
+
+func rpcDeliveryError(runtime *runtimeCore, notDelivered error, cause error) error {
+	if runtime.ctx.Err() != nil {
+		return errors.Join(notDelivered, cause, ErrRuntimeClosed, runtime.Err())
+	}
+	return errors.Join(notDelivered, cause)
+}
+
+func (runtime *runtimeCore) failRPCOperationAuthority() error {
+	_ = runtime.router.TerminateLocal()
+	runtime.terminateRuntimeFailed(errRPCOperationAuthority)
+	return errRPCOperationAuthority
+}
+
+func (runtime *runtimeCore) reconcileLocalCancel(
+	generation protocolsession.OperationGeneration,
+) error {
+	err := runtime.operations.CancelGeneration(generation)
+	if err == nil {
+		return nil
+	}
+	// Failure to retain a cancellation tombstone would leak active authority and
+	// make a later ID collision ambiguous. Fail-closing atomically clears the
+	// table instead of continuing a session whose at-most-once state is unknown.
+	_ = runtime.router.TerminateLocal()
+	runtime.terminateRuntimeFailed(err)
+	return err
+}
 
 type ProtocolErrorScope uint8
 

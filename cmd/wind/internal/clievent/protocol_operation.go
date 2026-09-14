@@ -192,7 +192,7 @@ func validateProtocolOperationSpec(spec ProtocolOperationSpec) error {
 	case ProtocolOperationReceiverEnded:
 		validStage = spec.Command == CommandGet && spec.Role == ProtocolRoleReceiver &&
 			(spec.Cause == ProtocolOperationCauseNone || spec.Cause == ProtocolOperationCauseCanceled ||
-				spec.Cause == ProtocolOperationCauseOperationClosed)
+				spec.Cause == ProtocolOperationCauseOperationClosed || spec.Cause == ProtocolOperationCauseSuperseded)
 	case ProtocolOperationSenderRequestReceived:
 		validStage = spec.Command == CommandShare && spec.Role == ProtocolRoleSender && !spec.HasResponse && !spec.HasSend && spec.Cause == ProtocolOperationCauseNone
 	}

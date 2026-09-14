@@ -63,6 +63,7 @@ var protocolOperationCauseProjections = map[sessionruntime.ProtocolOperationCaus
 	sessionruntime.ProtocolOperationCauseWriterStopped:   clievent.ProtocolOperationCauseWriterStopped,
 	sessionruntime.ProtocolOperationCauseOperationClosed: clievent.ProtocolOperationCauseOperationClosed,
 	sessionruntime.ProtocolOperationCauseProtocolFailure: clievent.ProtocolOperationCauseProtocolFailure,
+	sessionruntime.ProtocolOperationCauseSuperseded:      clievent.ProtocolOperationCauseSuperseded,
 }
 
 var protocolFailureScopeProjections = map[sessionruntime.ProtocolErrorScope]clievent.ProtocolErrorScope{
