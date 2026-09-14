@@ -49,6 +49,8 @@ export interface PreparedReceiveOperationTransition {
 }
 
 export interface ReceiveOperationRepository {
+  /** Observes successful lifecycle commits made through this repository authority only. */
+  subscribeLifecycle(listener: import('./lifecycle/observation').ReceiveLifecycleListener): () => void
   commitTransition(transition: ReceiveOperationTransition): Promise<void>
   readRecord(id: string): Promise<PersistedReceiveRecord | undefined>
   readLifecycle(operationId: string): Promise<PersistedReceiveRecord | undefined>

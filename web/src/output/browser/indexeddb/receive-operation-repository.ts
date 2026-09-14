@@ -25,6 +25,7 @@ import {
 import { snapshotIdentity } from '../../workspace/canonical'
 import { RECEIVE_STATE_INTENT_FROZEN } from '../../workspace/state'
 import { decodeStoredReceiveLifecycleState } from '../../workspace/state-codec'
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../workspace/lifecycle/observation'
 import type { FSACompatibleNameBootstrapRepository } from '../indexeddb-root-binding'
 import {
   applyCompatibleNameBootstrapTransaction,
@@ -67,6 +68,7 @@ implements ReceiveOperationRepository,
   WorkspaceActivationJournalRepository,
   FSACompatibleNameBootstrapRepository {
   readonly #database: IDBDatabase
+  readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
   #closed = false
 
   private constructor(database: IDBDatabase) {
@@ -95,6 +97,17 @@ implements ReceiveOperationRepository,
     await assertOperationMutationOwnership(transaction, prepared)
     applyOperationTransition(transaction, prepared)
     await transactionCompletion(transaction)
+    this.#publishCommittedLifecycle(prepared.records)
+  }
+
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    this.#assertOpen()
+    return this.#lifecycleNotifications.subscribe(listener)
+  }
+
+  #publishCommittedLifecycle(records: readonly PersistedReceiveRecord[]): void {
+    const record = records.find(candidate => candidate.kind === RECEIVE_RECORD_LIFECYCLE_STATE)
+    if (record !== undefined) this.#lifecycleNotifications.publish(decodeStoredReceiveLifecycleState(record))
   }
 
   async commitFSACompatibleNameBootstrap(input: Readonly<{
@@ -126,6 +139,7 @@ implements ReceiveOperationRepository,
       abortQuietly(transaction)
       throw error
     }
+    this.#publishCommittedLifecycle(prepared.records)
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {
@@ -250,6 +264,7 @@ implements ReceiveOperationRepository,
   close(): void {
     if (this.#closed) return
     this.#closed = true
+    this.#lifecycleNotifications.close()
     this.#database.close()
   }
 

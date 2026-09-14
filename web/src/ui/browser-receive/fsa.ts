@@ -26,6 +26,7 @@ import { createAutomaticCheckpointAdmissionAuthority } from '../../output/persis
 import { createPreservingWriterCapacityAuthority } from '../../output/persistent-tree/preserving-writer-capacity'
 import { checkpointAuthorityObserver } from '../../output/file-system-access/session-diagnostics'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import { ReceiveLifecycleObservation, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
 import { classificationForTransferFailure } from '../../transfer/job/failures'
 import { createPersistentDirectTreeExecution } from '../../transfer/settlement/persistent-execution'
@@ -95,7 +96,8 @@ export const FSA_DIRECT_TREE_EXECUTION_PROFILE = outputExecutionProfile({
 
 export class FSAReceiveOperation implements V2BoundReceiveOperation {
   readonly intent: ReceiveIntent
-  readonly lifecycle: ReceiveLifecycleState
+  readonly #lifecycle: ReceiveLifecycleObservation
+  readonly #unsubscribeLifecycle: () => void
   readonly activeControls = Object.freeze(['pause', 'stop'] as const)
   readonly initialWorkspaceUsage = null
   readonly repairProjection?: CompatibleNameRepairProjectionSource
@@ -130,7 +132,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     folderDelivery?: BrowserFolderDeliveryContext
   }) {
     this.intent = input.intent
-    this.lifecycle = input.lifecycle
+    this.#lifecycle = new ReceiveLifecycleObservation(input.lifecycle)
+    this.#unsubscribeLifecycle = input.repository.subscribeLifecycle(state => this.#lifecycle.publish(state))
     this.#repository = input.repository
     this.#lease = input.lease
     this.#resources = input.resources
@@ -286,6 +289,12 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
     return this.#plans
   }
 
+  get lifecycle(): ReceiveLifecycleState { return this.#lifecycle.getSnapshot() }
+
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.#lifecycle.subscribe(listener)
+  }
+
   get transferJobId(): string {
     return this.#transferJobId
   }
@@ -420,6 +429,8 @@ export class FSAReceiveOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#detached) return
     this.#detached = true
+    this.#unsubscribeLifecycle()
+    this.#lifecycle.close()
     try {
       await this.#closeCheckpointAuthorities()
     } finally {

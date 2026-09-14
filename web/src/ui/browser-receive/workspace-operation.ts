@@ -18,7 +18,8 @@ import {
 import type { AuthorityOwnedReceiveOperationContinuation } from '../../output/resume/reopen-authority'
 import { verifyProgressiveZipRecovery } from '../../output/resume/progressive-checkpoint'
 import type { ReceiveOperationRepository } from '../../output/workspace/repository'
-import { initialReceiveLifecycleState, type ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import { ReceiveLifecycleObservation, type ReceiveLifecycleListener } from '../../output/workspace/lifecycle/observation'
 import {
   type AdmittedWorkspaceContent,
   type WorkspaceOperationStages,
@@ -72,7 +73,8 @@ type WorkspaceReceiveContinuation = Extract<
 
 export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2ExecutionAdmissionLifecycle {
   readonly intent: ReceiveIntent
-  readonly lifecycle: ReceiveLifecycleState
+  readonly #lifecycle: ReceiveLifecycleObservation
+  readonly #unsubscribeLifecycle: () => void
   readonly activeControls = Object.freeze(['pause'] as const)
   readonly initialWorkspaceUsage: WorkspaceUsage
   readonly #window: BrowserReceiveWindow
@@ -95,7 +97,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   private constructor(input: {
     windowPort: BrowserReceiveWindow
     intent: ReceiveIntent
-    lifecycle?: ReceiveLifecycleState
+    lifecycle: ReceiveLifecycleState
     repository: ReceiveOperationRepository
     namespace: OriginPrivateWorkspaceNamespace
     lease: BrowserReceiveOperationLease
@@ -110,10 +112,8 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   }) {
     this.#window = input.windowPort
     this.intent = input.intent
-    this.lifecycle = input.lifecycle ?? initialReceiveLifecycleState({
-      operationId: input.intent.operationId,
-      receiveIntentDigest: input.intent.digest,
-    })
+    this.#lifecycle = new ReceiveLifecycleObservation(input.lifecycle)
+    this.#unsubscribeLifecycle = input.repository.subscribeLifecycle(state => this.#lifecycle.publish(state))
     this.#repository = input.repository
     this.#namespace = input.namespace
     this.#lease = input.lease
@@ -159,6 +159,7 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     const owner = new WorkspaceReceiveOperation({
       windowPort: input.windowPort,
       intent: input.intent,
+      lifecycle: await readLifecycle(input.repository, input.intent.operationId),
       repository: input.repository,
       namespace: input.namespace,
       lease: input.lease,
@@ -238,6 +239,12 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
     return this.#plans
   }
 
+  get lifecycle(): ReceiveLifecycleState { return this.#lifecycle.getSnapshot() }
+
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.#lifecycle.subscribe(listener)
+  }
+
   get transferJobId(): string {
     return this.#transferJobId
   }
@@ -295,6 +302,8 @@ export class WorkspaceReceiveOperation implements V2BoundReceiveOperation, V2Exe
   async detach(): Promise<void> {
     if (this.#detached) return
     this.#detached = true
+    this.#unsubscribeLifecycle()
+    this.#lifecycle.close()
     if (this.#closeAuthority !== undefined) {
       try { await this.#backend?.close() } finally { await this.#closeAuthority() }
       return

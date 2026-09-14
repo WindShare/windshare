@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { acquireFSARootMutationLease, memoryFSAIdentities } from './fsa-mutation-lock-fixture'
 import {
   createCompleteDirectoryResultRoot,
@@ -816,6 +817,10 @@ interface MemoryOperationStore {
 }
 
 export class MemoryOperationRepository implements ReceiveOperationRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly records: Map<string, PersistedReceiveRecord>
   readonly handles: Map<string, ReceiveOperationHandleRecord>
   readonly leases: Map<string, ReceiveOperationLeaseRecord>
@@ -857,6 +862,7 @@ export class MemoryOperationRepository implements ReceiveOperationRepository {
     }
     this.#commitCount += 1
     if (this.#commitCount === 1) await this.afterFirstCommit?.()
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

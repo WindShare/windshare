@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { vi } from 'vitest'
 
 import { prepareFSAOperationBindingTransition } from '../../src/output/browser/indexeddb-root-binding'
@@ -450,6 +451,10 @@ export class MemoryRepositoryState {
 }
 
 export class MemoryOperationRepository implements ReceiveOperationRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly #state: MemoryRepositoryState
   #closed = false
 
@@ -488,6 +493,7 @@ export class MemoryOperationRepository implements ReceiveOperationRepository {
     for (const handle of prepared.handles) this.#state.handles.set(handle.id, handle)
     if (prepared.lease?.kind === 'put') this.#state.lease = prepared.lease.record
     if (prepared.lease?.kind === 'delete') this.#state.lease = undefined
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   async readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

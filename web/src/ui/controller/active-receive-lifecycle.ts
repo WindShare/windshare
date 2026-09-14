@@ -156,10 +156,10 @@ export class ActiveReceiveLifecycle {
     // Journal-only local actions can finish without changing the authenticated lifecycle cut.
     const unchangedUsage = mutation.workspaceUsage === undefined ||
       mutation.workspaceUsage === this.#outputs.getSnapshot().workspaceUsage
-    if (mutation.lifecycle === current && mutation.resumeTransfer !== true &&
+    if (mutation.lifecycle === current && mutation.resumeTransfer !== true && active.running === undefined &&
         mutation.activeControls === undefined && unchangedUsage) return true
     const controls = mutation.activeControls ?? Object.freeze([])
-    if (!this.#outputs.updateLifecycle(mutation.lifecycle, usage, controls, undefined, mutation.recoverySummary)) return false
+    if (!this.#outputs.settleLifecycle(mutation.lifecycle, usage, controls, undefined, mutation.recoverySummary)) return false
     if (mutation.resumeTransfer === true) this.#resumeTransferWhenIdle(active)
     return true
   }
@@ -212,7 +212,11 @@ export class ActiveReceiveLifecycle {
     }
     this.#pending = undefined
     try {
-      const applied = await this.applyMutation(
+      // Local commands must return a new commit or the original unchanged authority;
+      // equivalent snapshots are accepted only when settling an observed transfer.
+      const hasMutationAuthority = mutation.lifecycle.generation > pending.generation ||
+        mutation.lifecycle === this.#outputs.getSnapshot().lifecycle
+      const applied = hasMutationAuthority && await this.applyMutation(
         pending.operation,
         pending.generation,
         mutation,

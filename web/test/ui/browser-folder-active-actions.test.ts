@@ -5,6 +5,7 @@ import { BrowserFolderDeliveryProgress, type BrowserFolderDeliveryContext } from
 import { summarizeBrowserDeliveries } from '../../src/output/browser-delivery/retained'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import { ReceiveLifecycleNotifications } from '../../src/output/workspace/lifecycle/observation'
 import { deliveryFixture, deliveryIdentity } from '../output/browser-delivery-fixture'
 import { deferred } from './fsa-route-activation-fixture'
 
@@ -26,6 +27,7 @@ async function activeFixture() {
     kind: 'partial-directory', reason: 'stopped', successCount: 1n, failureCount: 1n, receiptDigest: fixture.policy.digest,
   }
   let current: ReceiveLifecycleState = lifecycle
+  const notifications = new ReceiveLifecycleNotifications()
   const lease = { operationId: lifecycle.operationId, leaseId: deliveryIdentity(30, 16), acquiredAt: 100 }
   const progress = new BrowserFolderDeliveryProgress()
   const initialClose = vi.fn(async () => undefined)
@@ -42,7 +44,8 @@ async function activeFixture() {
   const context = { progress, preference: 'automatic', storage: {}, storageFacts: async () => ({}),
     open: async () => initial, openCleanup } as unknown as BrowserFolderDeliveryContext
   const readLease = vi.fn(async () => lease)
-  const repository = { readLease, readLifecycle: async () => storedReceiveLifecycleState(current) }
+  const repository = { readLease, readLifecycle: async () => storedReceiveLifecycleState(current),
+    subscribeLifecycle: notifications.subscribe.bind(notifications) }
   const input = {
     intent: { operationId: lifecycle.operationId, digest: lifecycle.receiveIntentDigest,
       artifact: { digest: deliveryIdentity(31) }, plan: { kind: 'direct-tree' } },
@@ -56,7 +59,7 @@ async function activeFixture() {
   targets.reconcile.mockImplementation(async () => current)
   targets.reopen.mockResolvedValue({ activate: async () => undefined, close: async () => undefined })
   return { runtime, lifecycle, fixture, initialClose, cleanupClose, cleanup, abandon, save, openCleanup, readLease,
-    setLifecycle: (state: ReceiveLifecycleState) => { current = state } }
+    setLifecycle: (state: ReceiveLifecycleState) => { current = state; notifications.publish(state) } }
 }
 
 describe('active terminal folder storage actions', () => {
