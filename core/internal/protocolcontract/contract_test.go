@@ -720,6 +720,9 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 	sessionCredit := slices.Concat(
 		[]byte("WS2W"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID, u32(2), u32(100),
 	)
+	receiveCredit := slices.Concat(
+		[]byte("WS2B"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID, u32(2), u32(100),
+	)
 	sessionAdmitted := slices.Concat(
 		[]byte("WS2M"), []byte{wireVersion, 0, 0, 0}, opaqueRelaySessionID,
 	)
@@ -775,6 +778,7 @@ func sessionCases(t *testing.T, f *fixture, objects []sealedObject) []any {
 			"opaqueRelaySessionIdB64": b64(opaqueRelaySessionID), "opaqueCiphertextB64": b64(opaqueCiphertext),
 			"opaqueRouteB64": b64(opaqueRoute), "sessionRetiredB64": b64(sessionRetired),
 			"sessionCreditB64": b64(sessionCredit), "sessionAdmittedB64": b64(sessionAdmitted),
+			"receiveCreditB64":                b64(receiveCredit),
 			"sessionRetiredRelaySessionIdB64": b64(opaqueRelaySessionID), "stoppedErrorB64": b64(stoppedError),
 			"resumeStaleErrorB64": b64(resumeStaleError), "connectionProbeNonce": fmt.Sprint(connectionProbeNonce),
 			"connectionProbeB64": b64(connectionProbe), "connectionProbeAckB64": b64(connectionProbeAck),

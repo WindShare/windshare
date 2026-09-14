@@ -107,7 +107,7 @@ started manually. It contains:
 - named long-running Go E2E and catalog tests;
 - Linux and Windows durable-output tests;
 - progressive catalog, direct/TURN switching, and browser/Pion interoperability scenarios;
-- Firefox, WebKit, and periodic Chromium browser tests;
+- Firefox, WebKit (including native-size relay bursts), and periodic Chromium browser tests;
 - Windows browser and process smoke tests;
 - Linux and Windows native-output release-artifact checks.
 

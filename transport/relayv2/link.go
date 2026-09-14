@@ -19,13 +19,14 @@ type link struct {
 	cancel    context.CancelFunc
 	heartbeat HeartbeatConfig
 
-	writeWake chan struct{}
-	writeMu   sync.Mutex
-	queues    map[v2.RelaySessionID]*sendQueue
-	order     []v2.RelaySessionID
-	cursor    int
-	queued    int
-	windows   map[v2.RelaySessionID]*sendWindow
+	writeWake      chan struct{}
+	writeMu        sync.Mutex
+	queues         map[v2.RelaySessionID]*sendQueue
+	order          []v2.RelaySessionID
+	cursor         int
+	queued         int
+	windows        map[v2.RelaySessionID]*sendWindow
+	receiveCredits map[v2.RelaySessionID]*v2.ReceiveCredit
 	// Observation completion joins only accepted sends that can still publish a
 	// result fact; disabled tracing pays no registration or synchronization cost.
 	sendResultMu         sync.Mutex
@@ -57,8 +58,9 @@ func newLinkWithLifecycleStream(parent context.Context, socket BinarySocket, fix
 	return &link{
 		id: linkID, socket: socket, ctx: ctx, cancel: cancel, fixed: fixed,
 		writeWake: make(chan struct{}, 1), queues: make(map[v2.RelaySessionID]*sendQueue),
-		windows:  make(map[v2.RelaySessionID]*sendWindow),
-		channels: make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
+		windows:        make(map[v2.RelaySessionID]*sendWindow),
+		receiveCredits: make(map[v2.RelaySessionID]*v2.ReceiveCredit),
+		channels:       make(map[v2.RelaySessionID]*Channel), accept: make(chan *Channel, channelReceiveFrames),
 		done: make(chan struct{}), traces: newLifecycleSource(linkID, capacity),
 	}
 }
@@ -181,6 +183,18 @@ func (l *link) readLoop() {
 
 func (l *link) writeLoop() {
 	for {
+		encoded, err := l.takeReceiveCredit()
+		if err != nil {
+			l.stop(err)
+			return
+		}
+		if encoded != nil {
+			if err := l.socket.Write(l.ctx, websocket.MessageBinary, encoded); err != nil {
+				l.stop(err)
+				return
+			}
+			continue
+		}
 		request, ok := l.takeRequest()
 		if ok {
 			err := l.socket.Write(l.ctx, websocket.MessageBinary, request.data)
@@ -226,6 +240,14 @@ func (l *link) installFixed(id v2.RelaySessionID) *Channel {
 	channel := newChannel(id, l)
 	if l.lifecycle == linkOpen {
 		l.channels[id] = channel
+		if l.fixed {
+			l.writeMu.Lock()
+			l.receiveCredits[id] = &v2.ReceiveCredit{RelaySessionID: id,
+				Frames: v2.ReceiveWindowFrames, Bytes: v2.ReceiveWindowBytes}
+			l.writeMu.Unlock()
+		}
+	} else if channel.incoming != nil {
+		channel.stopReceiving()
 	}
 	return channel
 }

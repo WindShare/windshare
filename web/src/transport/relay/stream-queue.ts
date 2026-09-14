@@ -3,6 +3,7 @@ export type QueueIngressResult = 'accepted' | 'closed' | 'overflow'
 /** A highWaterMark-zero stream keeps the protocol queue as the sole byte owner. */
 export class BoundedStreamQueue<T> {
   readonly #ordinaryLimit: number
+  readonly #onConsumed: ((item: T) => void) | undefined
   readonly #queue: T[] = []
   readonly stream: ReadableStream<T>
   #controller: ReadableStreamDefaultController<T> | undefined
@@ -10,8 +11,9 @@ export class BoundedStreamQueue<T> {
   #closed = false
   #cancelled = false
 
-  constructor(ordinaryLimit: number, onCancel?: (reason: unknown) => void) {
+  constructor(ordinaryLimit: number, onCancel?: (reason: unknown) => void, onConsumed?: (item: T) => void) {
     this.#ordinaryLimit = ordinaryLimit
+    this.#onConsumed = onConsumed
     this.stream = new ReadableStream<T>(
       {
         start: (controller) => {
@@ -93,6 +95,7 @@ export class BoundedStreamQueue<T> {
     if (item !== undefined) {
       this.#pullWaiting = false
       this.#controller?.enqueue(item)
+      this.#onConsumed?.(item)
       return
     }
     if (!this.#cancelled) {

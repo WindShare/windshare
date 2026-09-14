@@ -5,7 +5,7 @@ const CROSS_BROWSER_HARD_TIMEOUT_MILLISECONDS = 180_000
 
 export default defineConfig({
   testDir: './e2e',
-  testMatch: ['v2-direct-smoke.spec.ts', 'v2-direct-hot-switch.cross-browser.spec.ts'],
+  testMatch: ['v2-direct-smoke.spec.ts', 'v2-direct-hot-switch.cross-browser.spec.ts', 'v2-relay-burst.spec.ts'],
   outputDir: 'test-results/cross-browser-smoke',
   fullyParallel: false,
   forbidOnly: true,

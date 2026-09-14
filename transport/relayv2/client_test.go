@@ -124,6 +124,7 @@ func TestDialClientsAndOpaqueChannels(t *testing.T) {
 			t.Fatal("default receiver unexpectedly enabled lifecycle observations")
 		}
 		assertWriteMagic(t, socket, "WS2J")
+		assertWriteMagic(t, socket, v2.ReceiveCreditMagic)
 		if err := receiver.Channel().Send(context.Background(), []byte("request")); err != nil {
 			t.Fatal(err)
 		}

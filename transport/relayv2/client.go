@@ -303,6 +303,11 @@ func (connection *ReceiverConnection) Close() error {
 	if connection == nil || connection.link == nil {
 		return nil
 	}
+	// A retired receive stream may still be draining accepted frames. Its
+	// application owner releases that bounded remainder when leaving the link.
+	if connection.channel != nil {
+		_ = connection.channel.Close()
+	}
 	connection.link.stop(nil)
 	return nil
 }

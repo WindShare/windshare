@@ -12,7 +12,8 @@ import {
   V2_RELAY_ERROR,
   type V2RelayErrorFrame,
 } from './v2-protocol'
-import { BoundedStreamQueue } from './stream-queue'
+import { RelayReceiveWindow } from './receive-window'
+import { RELAY_RECEIVE_WINDOW_FRAMES } from './receive-credit-codec'
 import { RelayHeartbeat, type RelayHeartbeatTrace } from './heartbeat'
 import { ReceiverCredit } from './receiver-credit'
 
@@ -24,7 +25,7 @@ export const V2_RELAY_HEARTBEAT_CLOSE_CODE = 4001
 export const V2_RELAY_PROTOCOL_CLOSE_CODE = 4002
 const BUFFER_DRAIN_INTERVAL_MILLISECONDS = 8
 const MAXIMUM_BUFFERED_BYTES = 4 * 65_536
-export const V2_RELAY_RECEIVE_QUEUE_FRAMES = 32
+export const V2_RELAY_RECEIVE_QUEUE_FRAMES = RELAY_RECEIVE_WINDOW_FRAMES
 export const V2_RELAY_CLOSE_TIMEOUT_MILLISECONDS = 2_000
 export const V2_RELAY_JOIN_TIMEOUT_MILLISECONDS = 30_000
 
@@ -148,7 +149,7 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
   readonly frames: ReadableStream<Frame>
   readonly #socket: V2WebSocketPort
   readonly #relaySessionId: Uint8Array<ArrayBuffer>
-  readonly #receiveQueue: BoundedStreamQueue<Frame>
+  readonly #receiveQueue: RelayReceiveWindow
   readonly #heartbeat: RelayHeartbeat
   readonly #credit: ReceiverCredit
   readonly #lifetime = new AbortController()
@@ -160,8 +161,11 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
     this.#socket = socket
     this.#relaySessionId = relaySessionId.slice()
     this.#credit = new ReceiverCredit(relaySessionId)
-    this.#receiveQueue = new BoundedStreamQueue(
-      V2_RELAY_RECEIVE_QUEUE_FRAMES,
+    this.#receiveQueue = new RelayReceiveWindow(
+      relaySessionId,
+      encoded => {
+        try { this.#socket.send(encoded) } catch (error) { this.#fail(error); throw error }
+      },
       () => { this.close().catch(() => undefined) },
     )
     this.frames = this.#receiveQueue.stream
@@ -169,6 +173,7 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
     socket.addEventListener('close', this.#onClose)
     socket.addEventListener('error', this.#onError)
     this.#heartbeat = new RelayHeartbeat(socket, error => this.#fail(error, V2_RELAY_HEARTBEAT_CLOSE_CODE, 'relay heartbeat failed'), heartbeatTrace)
+    this.#receiveQueue.start()
   }
 
   get state(): ChannelState {
@@ -245,9 +250,7 @@ class V2OpaqueRelayFrameChannel implements FrameChannel {
       if (!equalBytes(routed.relaySessionId, this.#relaySessionId)) {
         throw new V2RelayReceiverError('Relay delivered another receiver session')
       }
-      if (this.#receiveQueue.push(routed.ciphertext.slice()) === 'overflow') {
-        throw new V2RelayReceiverError('Relay receive queue exceeded its bounded frame budget')
-      }
+      this.#receiveQueue.push(routed.ciphertext)
     } catch (error) {
       this.#fail(error)
     }
