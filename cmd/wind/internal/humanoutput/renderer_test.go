@@ -72,6 +72,41 @@ func TestVerboseProtocolFailureNamesWaitLaneAndCause(t *testing.T) {
 	}
 }
 
+func TestVerboseProtocolWarningUsesOutcomeInsteadOfCancellationCause(t *testing.T) {
+	session, _ := clievent.NewProtocolSessionID(mustID(t, 5))
+	operation, _ := clievent.NewProtocolOperationID(mustID(t, 6))
+	for _, testCase := range []struct {
+		name  string
+		stage clievent.ProtocolOperationStage
+		cause clievent.ProtocolOperationCause
+		warn  bool
+	}{
+		{"normal cancellation", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseCanceled, false},
+		{"normal receive wakeup", clievent.ProtocolOperationReceiverEnded, clievent.ProtocolOperationCauseOperationClosed, false},
+		{"unexpected cancellation", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseCanceled, true},
+		{"protocol failure", clievent.ProtocolOperationReceiverFailed, clievent.ProtocolOperationCauseProtocolFailure, true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			event, err := clievent.NewProtocolOperationObserved(clievent.ProtocolOperationSpec{
+				ObservedAt: time.Unix(1, 0), Command: clievent.CommandGet, Role: clievent.ProtocolRoleReceiver,
+				ProtocolSession: session, ProtocolOperation: operation, RequestKind: clievent.ProtocolMessagePeerOffer,
+				Stage: testCase.stage, Cause: testCase.cause,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			harness := newRenderHarness(t, terminalcanvas.Capabilities{}, true)
+			if err := harness.renderer.Render(event); err != nil {
+				t.Fatal(err)
+			}
+			if got := harness.buffer.String(); (got != "") != testCase.warn ||
+				(testCase.warn && !strings.Contains(got, "Protocol operation peer offer failed")) {
+				t.Fatalf("warning = %q, want warning %v", got, testCase.warn)
+			}
+		})
+	}
+}
+
 func rendererEvents(t *testing.T) []visibilityExpectation {
 	t.Helper()
 	authority, err := clievent.NewRelayAuthority(clievent.RelayWSS, "relay.example", 443)

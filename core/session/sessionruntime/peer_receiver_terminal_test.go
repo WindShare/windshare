@@ -516,6 +516,11 @@ func newReceiverPeerTerminalFixture(t *testing.T, seed byte) receiverPeerTermina
 		nil,
 		continuationReplayClassifier{},
 	)
+	return openReceiverPeerTerminalFixture(t, runtime, seed)
+}
+
+func openReceiverPeerTerminalFixture(t *testing.T, runtime *runtimeCore, seed byte) receiverPeerTerminalFixture {
+	t.Helper()
 	lane, err := runtime.lanes.selectLane(&runtime.initial)
 	if err != nil {
 		t.Fatal(err)
