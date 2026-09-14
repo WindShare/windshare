@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it } from 'vitest'
 
 import { encodeBase64Url } from '../../../src/crypto/bytes'
@@ -205,6 +206,10 @@ describe('workspace stage admission gate', () => {
 })
 
 class MemoryReceiveOperationRepository implements ReceiveOperationRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly #records = new Map<string, PersistedReceiveRecord>()
   readonly #pages = new Map<string, ManifestPageRecord>()
   readonly #handles = new Map<string, ReceiveOperationHandleRecord>()
@@ -226,6 +231,7 @@ class MemoryReceiveOperationRepository implements ReceiveOperationRepository {
       }
       this.#records.set(record.id, record)
     }
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

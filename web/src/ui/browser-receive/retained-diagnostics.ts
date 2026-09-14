@@ -50,6 +50,7 @@ export function bindRuntimeOutputFailures(
     get lifecycle() {
       return runtime.lifecycle
     },
+    subscribeLifecycle: listener => runtime.subscribeLifecycle(listener),
     get activeControls() {
       return runtime.activeControls
     },

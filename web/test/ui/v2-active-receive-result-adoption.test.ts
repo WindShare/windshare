@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it } from 'vitest'
 
 import { fileId } from '../../src/catalog/model'
@@ -422,6 +423,10 @@ class ResultShare implements ActiveReceiveJoinedShare {
 }
 
 class ResultRuntime implements V2BoundReceiveOperation {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly plans = UNAVAILABLE_PLANS
   readonly transferJobId = identity(20)
   readonly activeControls = Object.freeze([] as const)

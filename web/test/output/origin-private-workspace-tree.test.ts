@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it, vi } from 'vitest'
 
 import type {
@@ -560,6 +561,10 @@ class MemoryFileHandle {
 }
 
 class NamespaceRepository implements WorkspaceActivationJournalRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly #records = new Map<string, PersistedReceiveRecord>()
   readonly #pages = new Map<string, ManifestPageRecord>()
   readonly #handles = new Map<string, ReceiveOperationHandleRecord>()
@@ -585,6 +590,7 @@ class NamespaceRepository implements WorkspaceActivationJournalRepository {
     for (const handle of prepared.handles) this.#handles.set(handle.id, handle)
     if (prepared.lease?.kind === 'put') this.#leases.set(prepared.operationId, prepared.lease.record)
     else if (prepared.lease?.kind === 'delete') this.#leases.delete(prepared.operationId)
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   readRecord(id: string): Promise<PersistedReceiveRecord | undefined> {

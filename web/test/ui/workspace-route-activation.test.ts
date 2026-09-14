@@ -1,3 +1,4 @@
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../src/output/workspace/lifecycle/observation'
 import { describe, expect, it, vi } from 'vitest'
 
 import {
@@ -601,6 +602,7 @@ function fakeBoundOperation(intent: ReceiveIntent): V2BoundReceiveOperation {
     transferJobId: identity(90),
     lifecycle,
     activeControls: Object.freeze(['pause'] as const),
+    subscribeLifecycle: () => () => undefined,
     interrupt: () => undefined,
     startLifecycleAction: async () => ({ lifecycle }),
     resolveWorkspaceUsage: () => null,
@@ -610,6 +612,10 @@ function fakeBoundOperation(intent: ReceiveIntent): V2BoundReceiveOperation {
 }
 
 class MemoryReceiveOperationRepository implements WorkspaceActivationJournalRepository {
+  readonly lifecycleNotifications = new ReceiveLifecycleNotifications()
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.lifecycleNotifications.subscribe(listener)
+  }
   readonly #records = new Map<string, PersistedReceiveRecord>()
   readonly #pages = new Map<string, ManifestPageRecord>()
   readonly #handles = new Map<string, ReceiveOperationHandleRecord>()
@@ -645,6 +651,7 @@ class MemoryReceiveOperationRepository implements WorkspaceActivationJournalRepo
     } else if (prepared.lease?.kind === 'delete') {
       this.#leases.delete(prepared.operationId)
     }
+    if (transition.lifecycle !== undefined) this.lifecycleNotifications.publish(transition.lifecycle)
   }
 
   rejectNextNeedsAttentionTransitions(count: number): void { this.#rejectNeedsAttention = count }

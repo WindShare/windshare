@@ -37,6 +37,7 @@ import type { LifecycleUserAction, V2ActiveReceiveControl } from '../../v2-lifec
 import { operationDigest } from '../shared'
 import { BrowserDirectZipJournal } from './journal'
 import { traceDirectZipMemberRollback } from './member-rollback-trace'
+import { ReceiveLifecycleNotifications, type ReceiveLifecycleListener } from '../../../output/workspace/lifecycle/observation'
 import { BrowserDirectZipTarget, type BrowserDirectZipBinding, type DirectZipNamespaceMutationPort } from './target'
 import { browserDirectZipFileSystem, randomId, requestBrowserDirectZipAuthorization } from './resources'
 
@@ -65,6 +66,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   readonly #listeners = new Set<(value: V2DirectZipProgressSnapshot) => void>()
   #journal!: BrowserDirectZipJournal
   #lifecycle: ReceiveLifecycleState
+  readonly #lifecycleNotifications = new ReceiveLifecycleNotifications()
   #execution: DirectResumableZipExecution | undefined
   #closed = false
   readonly #lifetime = new AbortController()
@@ -99,6 +101,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       },
       onCheckpointCommitted: (_checkpoint, lifecycle) => {
         operation.#lifecycle = lifecycle
+        operation.#lifecycleNotifications.publish(lifecycle)
         operation.#notify()
       },
     })
@@ -106,6 +109,10 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   }
 
   get lifecycle() { return this.#lifecycle }
+
+  subscribeLifecycle(listener: ReceiveLifecycleListener): () => void {
+    return this.#lifecycleNotifications.subscribe(listener)
+  }
 
   get activeControls(): readonly V2ActiveReceiveControl[] {
     return !this.#closed && this.#lifecycle.kind === 'receiving' ? RECEIVING_CONTROLS : INACTIVE_CONTROLS
@@ -249,6 +256,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
         ...(candidate === undefined ? {} : { candidate }),
       })
       this.#lifecycle = lifecycle
+      this.#lifecycleNotifications.publish(lifecycle)
       return { lifecycle }
     }
     return { lifecycle: await this.#pause(), activeControls: [] }
@@ -397,6 +405,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
   async detach(): Promise<void> {
     if (this.#closed) return
     this.#closed = true
+    this.#lifecycleNotifications.close()
     this.#lifetime.abort(new DOMException('ZIP session detached', 'AbortError'))
     this.#executionProgressGeneration += 1n
     try { await this.#target.abort(new DOMException('ZIP session detached', 'AbortError')) }
@@ -429,6 +438,7 @@ export class BrowserDirectZipOperation implements V2BoundReceiveOperation {
       ...(candidate === undefined ? {} : { candidate }),
     })
     this.#lifecycle = lifecycle
+    this.#lifecycleNotifications.publish(lifecycle)
     this.#notify()
     return lifecycle
   }

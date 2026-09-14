@@ -7,6 +7,7 @@ import type { ReceiveOperationRepository, ReceiveOperationTransition } from '../
 import { WorkspaceOperationStages } from '../../src/output/workspace/stages'
 import { storedReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
+import { ReceiveLifecycleNotifications } from '../../src/output/workspace/lifecycle/observation'
 import { WorkspaceReceiveOperation } from '../../src/ui/browser-receive/workspace-operation'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
 import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
@@ -27,11 +28,14 @@ async function fixture() {
     kind: 'receiving', operationId: intent.operationId, receiveIntentDigest: intent.digest,
     generation: 4n, activeLeaseId: identityText(16),
   }
+  const notifications = new ReceiveLifecycleNotifications()
   const repository = {
+    subscribeLifecycle: notifications.subscribe.bind(notifications),
     readLifecycle: async () => storedReceiveLifecycleState(lifecycle),
     commitTransition: vi.fn(async (transition: ReceiveOperationTransition) => {
       expect(transition.expectedLifecycleGeneration).toBe(lifecycle.generation)
       if (transition.lifecycle !== undefined) lifecycle = transition.lifecycle
+      notifications.publish(lifecycle)
     }),
   } as unknown as ReceiveOperationRepository
   const stages = await WorkspaceOperationStages.open({
