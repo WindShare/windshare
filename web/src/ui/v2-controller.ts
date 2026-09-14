@@ -1,7 +1,7 @@
-import { initialReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './v2-controller-state'
+import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './v2-controller-state'
 import { ReceiverExperienceObservability } from './experience/observability'
 import { V2SelectionPolicy } from '../catalog/v2-selection'
-import { EMPTY_SELECTION_DRAFT, projectDraft, scopeSelection, shareIdentityFromRoot } from './draft/model'
+import { projectDraft, scopeSelection, shareIdentityFromRoot } from './draft/model'
 import type { V2BrowsePage } from './v2-gateway'
 import {
   createSelectionSpec,
@@ -17,15 +17,16 @@ import {
 } from './v2-gateway'
 import {
   EMPTY_V2_PROGRESS,
-  EMPTY_V2_PREVIEW,
   type V2ReceiverDiagnosticSnapshot,
   type V2ReceiverSnapshot,
 } from './v2-model'
 import {
   V2CapabilityInputLifecycle,
   type V2CapabilityJoinLease,
-  type V2CapturedLocation,
 } from './v2-capability-lifecycle'
+import { capabilityInputFingerprint } from './capability/input'
+import { CapabilityNavigation } from './capability/navigation'
+import type { V2CapturedLocation } from './capability/location'
 import {
   type LifecycleUserAction,
 } from './v2-lifecycle-presentation'
@@ -58,16 +59,10 @@ import { JoinedShareObservation } from './controller/joined-observation'
 import { InitialJoinControl } from '../receiver/initial-join'
 import { initialJoinStatus } from './experience/share-presentation'
 
-export {
-  captureV2Location,
-  formatV2PublicError,
-} from './v2-capability-lifecycle'
-export type {
-  V2CapturedLocation,
-  V2DiagnosticFormatter,
-  V2LocationCaptureOptions,
-  V2SecurityMilestone,
-} from './v2-capability-lifecycle'
+export { formatV2PublicError } from './v2-capability-lifecycle'
+export type { V2DiagnosticFormatter, V2SecurityMilestone } from './v2-capability-lifecycle'
+export { captureV2Location } from './capability/location'
+export type { V2CapturedLocation, V2LocationCaptureOptions } from './capability/location'
 
 export type {
   V2ReceiverControllerOptions,
@@ -82,6 +77,9 @@ export class V2ReceiverController {
   readonly #gateway: V2BrowserReceiverGateway
   readonly #receive: V2ReceiveCompositionPort
   readonly #capabilityLifecycle: V2CapabilityInputLifecycle
+  readonly #capabilityNavigation = new CapabilityNavigation(() =>
+    this.#joinNavigation !== undefined || this.#snapshot.connection.kind === 'connected' ||
+    this.#snapshot.connection.kind === 'reconnecting')
   readonly #listeners = new Set<() => void>()
   readonly #observability: V2ControllerObservability
   readonly #experienceTrace: ReceiverExperienceObservability
@@ -256,12 +254,15 @@ export class V2ReceiverController {
     receiverDiagnosticSnapshot(this.#snapshot, this.#diagnosticGeneration)
 
   initialize(captured: V2CapturedLocation): void {
+    if (this.#disposed) return
     this.#pageUrl = captured.pageUrl
-    this.#capabilityLifecycle.acceptCapturedLocation(captured)
-    if (captured.capabilityInput !== null) {
-      this.#join(captured.capabilityInput).catch(() => undefined)
-    }
+    this.openLocation(captured)
     this.#retained.load().catch(() => undefined)
+  }
+
+  openLocation(captured: V2CapturedLocation): void {
+    if (this.#disposed || captured.capabilityInput === null) return
+    this.#join(captured.capabilityInput, captured.pageUrl).catch(() => undefined)
   }
 
   submitKey(input: string): void {
@@ -287,6 +288,7 @@ export class V2ReceiverController {
   cancelJoin(): void {
     if (this.#disposed || this.#joinNavigation === undefined) return
     const reason = new DOMException('Connection waiting cancelled', 'AbortError')
+    this.#capabilityNavigation.clear()
     this.#joinNavigation.abort(reason)
     this.#browse.cancel(reason)
     if (this.#snapshot.share === null && this.#joined !== undefined) {
@@ -451,6 +453,7 @@ export class V2ReceiverController {
   async dispose(): Promise<void> {
     if (this.#disposed) return
     this.#disposed = true
+    this.#capabilityNavigation.clear()
     this.#capabilityLifecycle.clear()
     this.#joinNavigation?.abort(new DOMException('Receiver disposed', 'AbortError'))
     this.#browse.cancel(new DOMException('Receiver disposed', 'AbortError'))
@@ -500,57 +503,61 @@ export class V2ReceiverController {
     prepared.start()
   }
 
-  #join(input: string): Promise<void> {
-    const lease = this.#capabilityLifecycle.beginJoin(input, this.#pageUrl)
-    return this.#joinOwned(lease, this.#observability.open('join'))
+  #join(input: string, pageUrl = this.#pageUrl): Promise<void> {
+    const lease = this.#capabilityLifecycle.beginJoin(input, pageUrl)
+    return this.#capabilityNavigation.open(capabilityInputFingerprint(input, pageUrl), async () => {
+      if (this.#disposed) return 'blocked'
+      const reason = this.#operationTransitions.shareNavigationBlockedReason()
+      if (reason !== null) {
+        this.#publishActionError(new Error(reason))
+        return 'blocked'
+      }
+      this.#pageUrl = pageUrl
+      return await this.#joinOwned(lease, this.#observability.open('join'), pageUrl) ? 'joined' : 'failed'
+    }).then(decision => {
+      if (this.#disposed) return
+      this.recordExperienceIntent(`share-navigation-${decision}`)
+      if (decision === 'reused' && this.#snapshot.connection.kind === 'reconnecting') this.requestReconnect()
+    }).finally(() => lease.release())
   }
 
   async #joinOwned(
     lease: V2CapabilityJoinLease,
     attempt: V2PresentationAttempt,
-  ): Promise<void> {
+    pageUrl: string,
+  ): Promise<boolean> {
     let navigation: AbortController | undefined
     let previous: V2JoinedBrowserShare | undefined
+    let candidate: V2JoinedBrowserShare | undefined
     let joinedReplacementInstalled = false
     this.#observability.trace(() => Object.freeze({
       name: 'join_transition',
       transition: 'started',
     }))
     try {
-      this.#retained.cancelPending(new StaleReceiveBoundaryError())
-      this.#activeReceive.reset(new StaleReceiveBoundaryError()).catch(() => undefined)
-      if (this.#snapshot.output.receiveIntent !== null) this.#outputs.reset()
-      this.#authority.suspendForJoin()
-      this.#stopProjectionObservation(new StaleReceiveBoundaryError())
-      await this.#previews.close()
+      // Claim navigation before awaiting cleanup; a slow old preview must never
+      // abort a newer link or start dialing after the document has been disposed.
       this.#joinNavigation?.abort(new DOMException('A newer join replaced this one', 'AbortError'))
       this.#browse.cancel(new DOMException('A newer join replaced this one', 'AbortError'))
       navigation = new AbortController()
       this.#joinNavigation = navigation
-      lease.activate()
-      this.#publish({
-        ...this.#snapshot,
-        phase: 'joining',
-        status: 'Authenticating the share descriptor…',
-        pathActivity: { lanes: [] },
-        error: null,
-        rows: Object.freeze([]),
-        connection: { kind: 'idle' as const },
-        share: null,
-        draft: EMPTY_SELECTION_DRAFT,
-        browse: { kind: 'idle' as const, status: '', error: null },
-        taskDisplay: null,
-        preview: EMPTY_V2_PREVIEW,
-        progress: EMPTY_V2_PROGRESS,
-      })
       previous = this.#joined
+      lease.activate()
+      this.#retained.cancelPending(new StaleReceiveBoundaryError())
+      const detached = this.#activeReceive.reset(new StaleReceiveBoundaryError())
+      if (this.#snapshot.output.receiveIntent !== null) this.#outputs.reset()
+      this.#authority.suspendForJoin()
+      this.#stopProjectionObservation(new StaleReceiveBoundaryError())
+      await Promise.all([detached, this.#previews.close()])
+      navigation.signal.throwIfAborted()
+      this.#publish(joiningReceiverSnapshot(this.#snapshot))
       this.#joinedObservation.suspendForJoin()
       navigation.signal.throwIfAborted()
       const activeNavigation = navigation
       const recovery = new InitialJoinControl()
       this.#joinRecovery = recovery
       const joined = await lease.handoff((ownedInput) =>
-        this.#gateway.join(ownedInput, this.#pageUrl, activeNavigation.signal, {
+        this.#gateway.join(ownedInput, pageUrl, activeNavigation.signal, {
           control: recovery,
           onState: join => {
             if (!this.#joinReplacementIsCurrent(activeNavigation)) return
@@ -558,14 +565,14 @@ export class V2ReceiverController {
               status: initialJoinStatus(join) })
           },
         }))
+      candidate = joined
       if (!this.#joinReplacementIsCurrent(navigation)) {
-        await joined.close()
         this.#observability.exclude(attempt, 'join', 'stale_replacement')
         this.#observability.trace(() => Object.freeze({
           name: 'join_transition',
           transition: 'stale_replacement',
         }))
-        return
+        return false
       }
       const frozenSelection = joined.selection.snapshot()
       const selection = await createSelectionSpec({
@@ -573,16 +580,15 @@ export class V2ReceiverController {
         syntheticRoot: joined.descriptor.syntheticRootId,
         rules: selectionRulesSpecFromPolicy(frozenSelection),
       })
-      navigation.signal.throwIfAborted()
       if (!this.#joinReplacementIsCurrent(navigation)) {
-        await joined.close()
-        return
+        return false
       }
       this.#joined = joined
       this.#joinRecovery = undefined
       joinedReplacementInstalled = true
       this.#authority.completeJoin(joined, selection)
       await previous?.close().catch(() => undefined)
+      if (!this.#joinReplacementIsCurrent(navigation)) return false
       this.#observability.exclude(attempt, 'join', 'success')
       this.#observability.trace(() => Object.freeze({
         name: 'join_transition',
@@ -598,6 +604,7 @@ export class V2ReceiverController {
           this.#browse.openDirectory(share.homeDirectoryId)
         }
       }
+      return this.#joinReplacementIsCurrent(navigation)
     } catch (error) {
       this.#handleJoinFailure(
         error,
@@ -607,6 +614,7 @@ export class V2ReceiverController {
         previous,
         joinedReplacementInstalled,
       )
+      return false
     } finally {
       if (this.#joinNavigation === navigation) {
         this.#joinNavigation = undefined
@@ -617,6 +625,7 @@ export class V2ReceiverController {
         this.#observability.exclude(attempt, 'join', 'stale_replacement')
       }
       attempt.close()
+      if (candidate !== undefined && !joinedReplacementInstalled) await candidate.close().catch(() => undefined)
     }
   }
 

@@ -13,7 +13,8 @@ import {
   type BrowserReceiveWindow,
 } from './ui/v2-browser-receive-composition'
 import { createBrowserDirectZipComposition } from './ui/browser-receive/direct-zip/production'
-import { captureV2Location, V2ReceiverController } from './ui/v2-controller'
+import { V2ReceiverController } from './ui/v2-controller'
+import { captureV2Location, observeV2Location } from './ui/capability/location'
 import { V2BrowserReceiverGateway } from './ui/v2-gateway'
 import {
   createConnectivityTraceSource,
@@ -70,6 +71,7 @@ const controller = new V2ReceiverController(gateway, {
 })
 controllerContext.read = () => controller.getDiagnosticSnapshot()
 controller.initialize(initialCapability)
+const stopLocationObservation = observeV2Location(window, captured => controller.openLocation(captured))
 installWindShareDiagnostics(window, diagnostics.runtime)
 
 window.addEventListener('pagehide', (event) => {
@@ -78,6 +80,7 @@ window.addEventListener('pagehide', (event) => {
   if (event.persisted) {
     return
   }
+  stopLocationObservation()
   controller.dispose().catch(() => undefined)
 })
 

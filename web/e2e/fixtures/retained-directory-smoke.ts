@@ -46,4 +46,15 @@ export async function assertRetainedDirectoryDownload(
   } finally {
     await page.context().setOffline(false)
   }
+
+  // Reopening the original capability must reconnect this same portal document.
+  await page.keyboard.press('Escape')
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  expect(await page.goto(navigationUrl)).toBeNull()
+  await expect(action).toBeEnabled()
+  await expect.poll(() => new URL(page.url()).hash).toBe('')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+  await page.getByRole('button', { name: /^(?:Downloads|下载记录)/u }).click()
+  await expect(downloads.locator(`[data-operation-id="${operationId}"]`)).toBeVisible()
+  await page.keyboard.press('Escape')
 }

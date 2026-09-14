@@ -1,3 +1,5 @@
+import { PORTAL_SECTIONS } from './navigation'
+
 export function PortalHeader() {
   return (
     <header className="portal-header">
@@ -18,10 +20,9 @@ export function PortalHeader() {
         </a>
 
         <nav className="portal-nav" aria-label="主要导航">
-          <a href="#features">核心优势</a>
-          <a href="#how-it-works">工作原理</a>
-          <a href="#cli">CLI & 客户端</a>
-          <a href="#self-host">自建中转</a>
+          {Object.values(PORTAL_SECTIONS).map(section => (
+            <a key={section.id} href={`#${section.id}`}>{section.label}</a>
+          ))}
         </nav>
 
         <a

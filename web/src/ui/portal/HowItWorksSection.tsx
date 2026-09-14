@@ -1,3 +1,5 @@
+import { PORTAL_SECTIONS } from './navigation'
+
 export function HowItWorksSection() {
   const steps = [
     {
@@ -18,7 +20,7 @@ export function HowItWorksSection() {
   ]
 
   return (
-    <section id="how-it-works" className="portal-section" style={{ background: 'rgba(0, 0, 0, 0.25)' }}>
+    <section id={PORTAL_SECTIONS.howItWorks.id} className="portal-section" style={{ background: 'rgba(0, 0, 0, 0.25)' }}>
       <div className="portal-container">
         <div className="portal-section-header">
           <span className="portal-section-tag">ZERO-CLOUD WORKFLOW</span>
