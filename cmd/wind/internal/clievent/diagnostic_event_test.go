@@ -110,6 +110,49 @@ func TestFilesystemOutputEventPreservesRecoveryFailureClassification(t *testing.
 	}
 }
 
+func TestFilesystemRuntimeFailureRequiresCompleteOperationContext(t *testing.T) {
+	failure, err := NewFailure(FailureSessionDependencyContract)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := FilesystemOutputSpec{
+		Operation: FilesystemRuntimeDecision, Failure: failure,
+		RuntimeComponent: FilesystemRuntimeSession,
+		RuntimeOperation: FilesystemRuntimeFinalizeTree,
+		RuntimeDecision:  FilesystemRuntimeClosed,
+	}
+	event, err := NewFilesystemOutputObserved(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := event.Failure(); !ok || got != failure {
+		t.Fatalf("runtime failure = (%v, %t)", got, ok)
+	}
+	if _, _, _, classified := event.FailureClassification(); classified {
+		t.Fatal("runtime failure fabricated a native I/O classification")
+	}
+	for _, test := range []struct {
+		name   string
+		mutate func(*FilesystemOutputSpec)
+	}{
+		{"non-runtime event", func(value *FilesystemOutputSpec) { value.Operation = FilesystemSessionOpened }},
+		{"missing component", func(value *FilesystemOutputSpec) { value.RuntimeComponent = 0 }},
+		{"missing operation", func(value *FilesystemOutputSpec) { value.RuntimeOperation = 0 }},
+		{"missing decision", func(value *FilesystemOutputSpec) { value.RuntimeDecision = 0 }},
+		{"unknown operation", func(value *FilesystemOutputSpec) { value.RuntimeOperation = 255 }},
+		{"unclassified native error", func(value *FilesystemOutputSpec) { value.NativeErrorClass = FilesystemNativeErrorAccessDenied }},
+		{"unclassified reconciliation", func(value *FilesystemOutputSpec) { value.ReconciliationStep = FilesystemReconciliationStageDurability }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := spec
+			test.mutate(&invalid)
+			if _, err := NewFilesystemOutputObserved(invalid); !errors.Is(err, ErrInvalidEvent) {
+				t.Fatalf("incomplete failure context accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestDiagnosticEventsEnforceBoundedImmutableContracts(t *testing.T) {
 	session, err := NewProtocolSessionID(bytes16(60))
 	if err != nil {

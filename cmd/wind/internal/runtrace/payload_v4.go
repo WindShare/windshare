@@ -347,7 +347,7 @@ type filesystemCountersV4 struct {
 }
 
 type filesystemFailureV4 struct {
-	Stage              string    `json:"stage"`
+	Stage              string    `json:"stage,omitempty"`
 	ReconciliationStep *string   `json:"reconciliation_step,omitempty"`
 	NativeErrorClass   *string   `json:"native_error_class,omitempty"`
 	Failure            failureV4 `json:"failure"`
