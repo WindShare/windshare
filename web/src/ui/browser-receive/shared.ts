@@ -189,7 +189,7 @@ export function unavailableRoute(): DOMException {
 
 export function isWorkspaceTerminal(state: ReceiveLifecycleState): boolean {
   return state.kind === 'published' || state.kind === 'partial-directory' ||
-    state.kind === 'restart-required' || state.kind === 'discarded' ||
+    state.kind === 'restart-required' || state.kind === 'source-invalidated' || state.kind === 'discarded' ||
     state.kind === 'needs-attention' ||
     (state.kind === 'download-started' && state.attemptKind === 'portable')
 }

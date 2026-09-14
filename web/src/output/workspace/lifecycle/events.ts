@@ -25,6 +25,7 @@ export type LifecycleEvent =
       cleanupReceiptDigest: string
     }>
   | Readonly<LifecycleEventAuthority & { kind: 'pause-requested'; stage: 'receive' | 'package' }>
+  | Readonly<LifecycleEventAuthority & { kind: 'source-invalidation-verified'; checkpointSetDigest: string }>
   | Readonly<LifecycleEventAuthority & {
       kind: 'pause-verified'
       stage: 'receive'

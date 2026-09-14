@@ -30,6 +30,7 @@ export const RETAINED_CONTINUATIONS = Object.freeze([
   'save_artifact',
   'retry_download',
   'cleanup_incompatible',
+  'cleanup_only',
   'retry_cleanup',
   'needs_attention',
 ] as const)

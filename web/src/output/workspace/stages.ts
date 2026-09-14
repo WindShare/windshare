@@ -252,6 +252,12 @@ export class WorkspaceOperationStages {
     return this.#continuation.pauseReceive(...args)
   }
 
+  invalidateReceive(
+    ...args: Parameters<WorkspaceContinuationStages['invalidateReceive']>
+  ): ReturnType<WorkspaceContinuationStages['invalidateReceive']> {
+    return this.#continuation.invalidateReceive(...args)
+  }
+
   pausePackage(
     ...args: Parameters<WorkspaceContinuationStages['pausePackage']>
   ): ReturnType<WorkspaceContinuationStages['pausePackage']> {

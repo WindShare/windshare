@@ -43,6 +43,12 @@ export function reduceReceiveLifecycle(
     case 'preparation-admitted': return applied(admitPreparation(state, context))
     case 'preparation-rejected': return applied(rejectPreparation(state, event))
     case 'pause-verified': return applied(pauseVerified(state, event, context))
+    case 'source-invalidation-verified':
+      requireWorkspaceState(state, context.planKind, 'receiving')
+      return applied(nextReceiveLifecycleState(state, {
+        kind: 'source-invalidated',
+        checkpointSetDigest: event.checkpointSetDigest,
+      }))
     case 'resume-started': return applied(resumeStable(state, event, context))
     case 'resume-admission-failed': return applied(restoreReceiveContinuation(state, event, context))
     case 'receive-authority-reacquired': return applied(reacquireReceiveAuthority(state, context))

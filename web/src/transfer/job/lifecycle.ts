@@ -31,6 +31,7 @@ const DIRECT_ZIP_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new 
 
 const WORKSPACE_RECEIVE_PAUSE_STATES: ReadonlySet<ReceiveLifecycleState['kind']> = new Set([
   'resumable-receive',
+  'source-invalidated',
   'discarded',
   'needs-attention',
 ])

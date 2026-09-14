@@ -11,6 +11,7 @@ import {
 } from './canonical'
 import {
   receiveStateByte,
+  RECEIVE_STATE_SOURCE_INVALIDATED,
   snapshotRecoverySelectionFacts,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
@@ -82,6 +83,7 @@ function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes
     case 'committing-atomic':
       return [identityFrame(state.activeLeaseId, 16, 'lease ID')]
     case 'resumable-receive': return resumableReceivePayload(state)
+    case 'source-invalidated': return [digestFrame(state.checkpointSetDigest, 'checkpoint set digest')]
     case 'materialization-sealed':
       return [digestFrame(state.sealedMaterializationDigest, 'sealed materialization digest')]
     case 'packaging': return [
@@ -386,6 +388,11 @@ function decodePublicationState(
     case 21: return decodeRecoveryGateState(reader, base, 'authorization-required')
     case 22: return decodeRecoveryGateState(reader, base, 'target-verification-required')
     case 23: return decodeRecoveryGateState(reader, base, 'destination-space-required')
+    case RECEIVE_STATE_SOURCE_INVALIDATED: return Object.freeze({
+      ...base,
+      kind: 'source-invalidated',
+      checkpointSetDigest: reader.identity(32, 'checkpoint set digest'),
+    })
     default: throw new TypeError('receive lifecycle state discriminant is invalid')
   }
 }

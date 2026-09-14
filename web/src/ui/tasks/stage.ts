@@ -1,5 +1,6 @@
 import type { TaskBlocking, TaskFacts, TaskStage } from './model'
 import { browserDeliveryLocalActions } from '../../output/browser-delivery/recovery/local-actions'
+import { SOURCE_INVALIDATED_DESCRIPTION } from '../v2-lifecycle-presentation'
 
 export interface StageCopy {
   readonly stage: TaskStage
@@ -64,6 +65,7 @@ function savedStage(facts: TaskFacts): StageCopy {
 
 function retainedStage(facts: TaskFacts, continuation: import('../../output/resume/descriptor').ReceiveOperationContinuation): StageCopy {
   switch (continuation) {
+    case 'cleanup-only': return executionStage(facts)
     case 'resume-receive':
     case 'resume-direct-zip': return pausedStage(facts)
     case 'resume-package':
@@ -132,6 +134,7 @@ function executionStage(facts: TaskFacts): StageCopy {
     case 'handing-off': return finishingStage(state.kind)
     case 'needs-attention': return stage('needs-action', 'Needs action', attentionDescription(state.reason), state.reason)
     case 'restart-required': return stage('failed', 'Download needs a new attempt', restartDescription(state.reason), state.reason)
+    case 'source-invalidated': return stage('failed', 'Source file changed', SOURCE_INVALIDATED_DESCRIPTION, state.kind)
     case 'discarded': return stage('cancelled', 'Cancelled', 'Task-owned unfinished data and records were removed.', state.kind)
     default: throw new TypeError('settled task must be resolved before execution stage')
   }

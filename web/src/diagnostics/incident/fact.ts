@@ -177,6 +177,7 @@ const lifecycleKinds = [
   'preparing',
   'receiving',
   'resumable-receive',
+  'source-invalidated',
   'finalizing-tree',
   'committing-atomic',
   'materialization-sealed',

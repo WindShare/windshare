@@ -13,6 +13,7 @@ import {
   RECEIVE_STATE_TARGET_VERIFICATION_REQUIRED,
   receiveStateByte,
   initialReceiveLifecycleState,
+  isTerminalLifecycleState,
   type ReceiveLifecycleState,
 } from '../../../src/output/workspace/state'
 import {
@@ -23,6 +24,26 @@ import {
 } from '../../../src/output/workspace/state-codec'
 
 describe('receive lifecycle V2 durable states', () => {
+  it('persists source invalidation as a terminal receive with explicit retained-data cleanup', async () => {
+    const receiving: ReceiveLifecycleState = { ...base(), kind: 'receiving', activeLeaseId: identity(16, 2) }
+    const context = { planKind: 'workspace-then-publish' as const, activeLeaseId: identity(16, 2), preparationRequired: false }
+    const invalidated = reduceReceiveLifecycle(receiving, {
+      kind: 'source-invalidation-verified', expectedGeneration: receiving.generation,
+      leaseId: context.activeLeaseId, checkpointSetDigest: identity(32, 9),
+    }, context).state
+    expect(invalidated.kind).toBe('source-invalidated')
+    expect(isTerminalLifecycleState(invalidated)).toBe(true)
+    const restored = decodeStoredReceiveLifecycleState(await storedReceiveLifecycleState(invalidated))
+    expect(restored).toEqual(invalidated)
+    expect(() => reduceReceiveLifecycle(restored, {
+      kind: 'resume-started', expectedGeneration: restored.generation, leaseId: context.activeLeaseId,
+    }, context)).toThrow()
+    expect(reduceReceiveLifecycle(restored, {
+      kind: 'cleanup-verified', expectedGeneration: restored.generation,
+      leaseId: context.activeLeaseId, cleanupReceiptDigest: identity(32, 10),
+    }, context).state.kind).toBe('discarded')
+  })
+
   it('round-trips pause selection facts in the same canonical lifecycle record', async () => {
     const lifecycle: ReceiveLifecycleState = Object.freeze({
       ...base(),

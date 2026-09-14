@@ -29,6 +29,31 @@ test.beforeEach(async ({ browserName, page }) => {
   await requireOriginPrivateStorage(page, browserName)
 })
 
+test('retains invalidated original-file bytes across reload with cleanup but no continuation', async ({ page }) => {
+  const key = `source-${crypto.randomUUID()}`
+  const cut = await page.evaluate(async ({ path, key }) => {
+    const harness = await import(path) as typeof import('./durable-recovery-harness')
+    return harness.createOriginPrivateReceiveCrashCut(key, 'partial')
+  }, { path: RECOVERY_HARNESS_PATH, key })
+  await page.reload()
+  const path = '/test/browser/workspace-source-invalidation-harness.ts'
+  const invalidated = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./workspace-source-invalidation-harness')
+    return harness.invalidateRetainedOriginal(fixture)
+  }, { path, fixture: cut.fixture })
+  expect(invalidated.lifecycle).toBe('source-invalidated')
+  expect(invalidated.before).toContainEqual([1, 2, 3])
+  expect(invalidated.after).toEqual(invalidated.before)
+  await page.reload()
+  const proof = await page.evaluate(async ({ path, fixture }) => {
+    const harness = await import(path) as typeof import('./workspace-source-invalidation-harness')
+    return harness.inspectAndDiscardInvalidatedOriginal(fixture)
+  }, { path, fixture: cut.fixture })
+  expect(proof).toMatchObject({ lifecycle: 'source-invalidated', continuation: 'cleanup-only',
+    actions: ['discard'], resumed: false, cleanup: 'discarded', remainingCount: 0 })
+  expect(proof.retainedPayloads).not.toContainEqual([1, 2, 3])
+})
+
 test('reopens compatible-name translation without changing materialization-relative checkpoint lineage', async ({
   page,
 }) => {

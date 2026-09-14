@@ -19,6 +19,7 @@ export const LIFECYCLE_CONTEXT_STATES = Object.freeze([
   'preparing',
   'receiving',
   'resumable-receive',
+  'source-invalidated',
   'finalizing-tree',
   'committing-atomic',
   'materialization-sealed',
@@ -122,6 +123,7 @@ export interface DiagnosticContextV1 {
       | 'preparing'
       | 'receiving'
       | 'resumable_receive'
+      | 'source_invalidated'
       | 'finalizing_tree'
       | 'committing_atomic'
       | 'materialization_sealed'

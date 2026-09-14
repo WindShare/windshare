@@ -87,7 +87,7 @@ export async function assertDescriptorAuthority(
       snapshot.operation.receiveIntent.plan.kind === 'direct-resumable-zip'
     if ((!nativeLocalCandidate && !directZipLocalCandidate && !directZipReceive &&
         current.continuation !== descriptor.continuation) ||
-        current.continuation === 'retry-cleanup') {
+        current.continuation === 'retry-cleanup' || current.continuation === 'cleanup-only') {
       throw new DOMException('Receive continuation is stale or inert', 'InvalidStateError')
     }
   }
