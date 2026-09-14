@@ -34,6 +34,7 @@ Correlate events across the session using:
 - `relay_availability`: Current ready, configured, and terminal relay counts plus whether any relay was previously ready; separate from active download paths.
 - `relay_recovering`: Per-relay attempt state and failure; sender details include connection generation, fast/slow waiting, resume/publication mode, terminal disposition, and next delay.
 - `relay_lifecycle`: Connection and channel transitions, including heartbeat probe, acknowledgement, and failure with round, elapsed wait, and timeout.
+- `filesystem_output`: Output ownership and settlement decisions. Runtime failures are located by `runtime_decision.component` and `runtime_decision.operation`; `failure.stage` is present only when a native filesystem stage is classified.
 - `capabilities.mode`: Filesystem capabilities (`live_only` vs restart-resumable).
 
 ## Browser Diagnostics

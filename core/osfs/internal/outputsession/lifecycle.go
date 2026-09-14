@@ -82,7 +82,7 @@ func (session *Session) FinalizeTree(
 	<-drained
 
 	session.mu.Lock()
-	complete := session.completionReadyLocked()
+	complete := session.completionReadyLocked(outcome)
 	if !complete {
 		value := fault.DependencyContractFault()
 		session.requirePauseLocked(value, true)
@@ -210,18 +210,25 @@ func (session *Session) pauseActiveFiles(
 	return failures
 }
 
-func (session *Session) completionReadyLocked() bool {
+func (session *Session) completionReadyLocked(outcome transfer.DirectTreeOutcome) bool {
 	if session.state != sessionOpen || session.requiredFault.Valid() ||
 		session.activeFiles != 0 || session.fileSlots != 0 {
 		return false
 	}
-	if session.scope.RootExpectation().Kind() == transfer.DirectoryAdmissionNoRoot {
+	switch {
+	case session.scope.RootExpectation().Kind() == transfer.DirectoryAdmissionNoRoot:
 		if session.rootClaim != 0 || len(session.directoryClaims) != 0 {
 			return false
 		}
-	} else {
+	case session.rootClaim == 0:
+		// A source failure may prevent every admission after the destination name
+		// was reserved. Partial closes only acquired claims and retains that
+		// reservation for retry; success must still prove the requested root.
+		return outcome == transfer.DirectTreeOutcomePartial &&
+			len(session.directoryClaims) == 0 && len(session.fileClaims) == 0
+	default:
 		root := session.directoryClaims[session.rootClaim]
-		if session.rootClaim == 0 || root == nil || root.state != directorySettled || root.uncertain {
+		if root == nil || root.state != directorySettled || root.uncertain {
 			return false
 		}
 	}
