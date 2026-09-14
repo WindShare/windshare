@@ -352,6 +352,9 @@ export class TransferJob {
       finalize: signal => this.#finalizeDirectories(signal),
     })
     this.#execution = stabilized
+    // Acquisition may finish after Pause. Install its settlement owner before
+    // observing cancellation so the job can retain the owned recovery cut.
+    this.#lifetime.signal.throwIfAborted()
     if (stabilized.planKind === 'direct-tree') {
       this.#performance = stabilized.performance
       this.#observers?.bindPerformance(stabilized.performance)

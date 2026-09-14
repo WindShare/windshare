@@ -155,6 +155,7 @@ export async function createV2PlanExecutionAuthority(input: {
   ): Promise<Intent> => {
     signal.throwIfAborted()
     const intent = await requireBoundIntent(boundIntent, supplied) as Intent
+    signal.throwIfAborted()
     if (claimedRoute !== undefined) {
       throw new TypeError('plan execution authority was already consumed')
     }
@@ -162,47 +163,40 @@ export async function createV2PlanExecutionAuthority(input: {
     return intent
   }
 
+  // Route results carry ownership: an execution belongs to the caller, while a
+  // rejection already owns its cleanup cut. Cancellation must not erase either
+  // after acquisition; the job binds accepted execution before checking its signal.
   const authority: V2PlanExecutionAuthority = {
     openDirectTree: async (supplied, signal) => {
       const intent = await claim(supplied, 'direct-tree', signal)
       const route = routes.directTree
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
-      const execution = validatePlanExecutionBinding(intent, await route.open(intent, signal))
-      signal.throwIfAborted()
-      return execution
+      return validatePlanExecutionBinding(intent, await route.open(intent, signal))
     },
     openDirectAtomic: async (supplied, signal) => {
       const intent = await claim(supplied, 'direct-atomic', signal)
       const route = routes.directAtomic
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
-      const execution = validatePlanExecutionBinding(intent, await route.open(intent, signal))
-      signal.throwIfAborted()
-      return execution
+      return validatePlanExecutionBinding(intent, await route.open(intent, signal))
     },
     openDirectResumableZip: async (supplied, signal) => {
       const intent = await claim(supplied, 'direct-resumable-zip', signal)
       const route = routes.directResumableZip
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
-      const execution = validatePlanExecutionBinding(intent, await route.open(intent, signal))
-      signal.throwIfAborted()
-      return execution
+      return validatePlanExecutionBinding(intent, await route.open(intent, signal))
     },
     openWorkspaceOriginal: async (supplied, evidence, signal) => {
       const intent = await claim(supplied, 'workspace-original', signal)
       const route = routes.workspaceOriginal
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
       const snapshot = snapshotExactSingleFileEvidence(intent, evidence)
-      const result = await route.admit(intent, snapshot, signal)
-      signal.throwIfAborted()
-      return validateExecutionAdmission(intent, result)
+      return validateExecutionAdmission(intent, await route.admit(intent, snapshot, signal))
     },
     openWorkspaceZip: async (supplied, signal) => {
       const intent = await claim(supplied, 'workspace-zip', signal)
       const route = routes.workspaceZip
       if (route === undefined) throw new V2PlanRouteUnavailableError(intent)
-      const result = await route.admit(intent, signal)
-      signal.throwIfAborted()
-      return validateExecutionAdmission(intent, result)
+      return validateExecutionAdmission(intent, await route.admit(intent, signal))
     },
     preparePortable: async (supplied, evidence, signal) => {
       const intent = await claim(
@@ -227,7 +221,6 @@ export async function createV2PlanExecutionAuthority(input: {
         }
         case 'directory-tree': throw new V2PlanRouteUnavailableError(intent)
       }
-      signal.throwIfAborted()
       if (result === undefined) throw new V2PlanRouteUnavailableError(intent)
       return validateExecutionAdmission(intent, result)
     },

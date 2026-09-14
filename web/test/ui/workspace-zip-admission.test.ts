@@ -10,7 +10,11 @@ import type { ReceiveLifecycleState } from '../../src/output/workspace/state'
 import { WorkspaceReceiveOperation } from '../../src/ui/browser-receive/workspace-operation'
 import type { BrowserReceiveWindow } from '../../src/ui/browser-receive/contracts'
 import { withDurableLifecycleSettlementTimeout } from '../../src/transfer/settlement/v2-output'
-import { digestIdentity, identityText, receiveIntentFixture } from '../transfer/v2-job-fixture'
+import * as progressiveExecution from '../../src/transfer/settlement/progressive-workspace-execution'
+import {
+  catalogFixture, digestIdentity, identity, identityText, readerFixture,
+  receiveIntentFixture, transferJobFixture,
+} from '../transfer/v2-job-fixture'
 import { deferred, manualSettlementDeadline } from '../transfer/settlement-deadline'
 
 type Operation = Extract<AuthorityOwnedReceiveOperationContinuation, { kind: 'workspace-progressive-zip' }>['operation']
@@ -51,7 +55,8 @@ async function fixture() {
         }] : [],
   }
   const backend = {
-    archive: { close, state: checkpoint }, store, object: checkpoint.object, close: vi.fn(async () => undefined),
+    archive: { close, checkpoint: vi.fn(async () => checkpoint), state: checkpoint },
+    store, object: checkpoint.object, close: vi.fn(async () => undefined),
   } as unknown as OriginPrivateProgressiveZipBackend
   const operation = {
     intent, lifecycle, repository, stages,
@@ -62,6 +67,44 @@ async function fixture() {
 }
 
 describe('reopened ZIP admission ownership', () => {
+  it('retains the owned ZIP checkpoint when Pause arrives before execution reaches the job', async () => {
+    const f = await fixture()
+    const runtime = await WorkspaceReceiveOperation.reopenProgressive({
+      windowPort: {} as BrowserReceiveWindow, operation: f.operation,
+    })
+    const catalog = catalogFixture([{ id: identity(2), entries: [] }])
+    const readers = readerFixture([])
+    const controller = new AbortController()
+    const createExecution = progressiveExecution.createProgressiveWorkspaceExecution
+    const create = vi.spyOn(progressiveExecution, 'createProgressiveWorkspaceExecution')
+      .mockImplementationOnce(async input => {
+        const execution = await createExecution(input)
+        runtime.interrupt('pause', controller)
+        return execution
+      })
+    try {
+      const result = await transferJobFixture({
+        catalog: catalog.catalog, selection: new V2SelectionPolicy(true),
+        intent: runtime.intent, plans: runtime.plans,
+        revisions: readers.revisions, broker: readers.broker,
+      }).run(controller.signal)
+
+      expect(result.worker.status).toBe('Paused')
+      expect(result.lifecycle).toMatchObject({
+        kind: 'resumable-receive', payloadKind: 'opfs-zip',
+        completedBytes: 64n, checkpointGeneration: 7n,
+      })
+      expect(f.lifecycle()).toEqual(result.lifecycle)
+      expect(f.close).toHaveBeenCalledOnce()
+      expect(f.discard).not.toHaveBeenCalled()
+      expect(catalog.loads).toEqual([])
+      expect(readers.revisionRequests).toEqual([])
+      expect(readers.blockRequests).toEqual([])
+    } finally {
+      create.mockRestore()
+    }
+  })
+
   it('starts a new recovery admission after an already admitted attempt is paused in the same tab', async () => {
     const f = await fixture()
     const runtime = await WorkspaceReceiveOperation.reopenProgressive({
