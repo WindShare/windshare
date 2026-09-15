@@ -269,6 +269,7 @@ type attemptExecution struct {
 	children          sync.WaitGroup
 	phaseContext      context.Context
 	transport         *ownedPeerDataChannel
+	transportFailure  peerChannelFailure
 	openTransition    <-chan struct{}
 	localCandidates   int
 	remoteCandidates  int
@@ -304,8 +305,9 @@ func (execution *attemptExecution) registerCallbacks() {
 	})
 	execution.peer.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		if state == pion.PeerConnectionStateFailed {
+			execution.transportFailure.fail(errPeerConnectionFailed)
 			execution.attempt.push(attemptEvent{
-				kind: attemptConnectionFailed, err: errors.New("PeerConnection entered failed state"),
+				kind: attemptConnectionFailed, err: errPeerConnectionFailed,
 			})
 		}
 	})

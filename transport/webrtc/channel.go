@@ -328,6 +328,21 @@ func (c *Channel) sendLocalTerminal(ctx context.Context, frame framechannel.Fram
 	return nil
 }
 
+// Fail propagates a permanent failure of the owning PeerConnection even when
+// Pion leaves the DataChannel open. Freeze sends immediately, then serialize the
+// termination behind accepted callbacks so buffered final frames retain their
+// authority. A provider callback must never wait for application backpressure.
+func (c *Channel) Fail(cause error) {
+	if !c.lifecycle.beginTermination(errors.Join(ErrTransport, cause)) {
+		return
+	}
+	go func() {
+		c.callbackMu.Lock()
+		defer c.callbackMu.Unlock()
+		c.enqueueInbound(inboundEvent{kind: inboundTermination})
+	}()
+}
+
 // Close waits behind either admitted terminal direction. This preserves the
 // terminal owner's final-frame/ack sequence instead of racing it with Pion close.
 func (c *Channel) Close() error {

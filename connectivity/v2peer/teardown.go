@@ -1,6 +1,44 @@
 package v2peer
 
-import "errors"
+import (
+	"errors"
+	"sync"
+)
+
+var errPeerConnectionFailed = errors.New("PeerConnection entered failed state")
+
+// Peer failure can precede DataChannel dispatch or outlive the attempt's event
+// loop after ownership moves to core. Retain it independently of negotiation so
+// either ordering retires the same channel without canceling healthy lanes.
+type peerChannelFailure struct {
+	mu      sync.Mutex
+	channel PeerDataChannel
+	cause   error
+}
+
+func (failure *peerChannelFailure) bind(channel PeerDataChannel) {
+	failure.mu.Lock()
+	failure.channel = channel
+	cause := failure.cause
+	failure.mu.Unlock()
+	if cause != nil {
+		channel.Fail(cause)
+	}
+}
+
+func (failure *peerChannelFailure) fail(cause error) {
+	failure.mu.Lock()
+	if failure.cause != nil {
+		failure.mu.Unlock()
+		return
+	}
+	failure.cause = cause
+	channel := failure.channel
+	failure.mu.Unlock()
+	if channel != nil {
+		channel.Fail(cause)
+	}
+}
 
 var (
 	errPeerShutdown = errors.New("v2 peer connection shutdown failed")

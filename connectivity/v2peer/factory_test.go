@@ -267,6 +267,7 @@ type testPeerChannel struct {
 	closeOnce  sync.Once
 	closeCalls atomic.Int32
 	state      atomic.Uint32
+	failure    atomic.Pointer[error]
 }
 
 func newTestPeerChannel() *testPeerChannel {
@@ -284,16 +285,28 @@ func (channel *testPeerChannel) State() framechannel.ChannelState {
 }
 func (channel *testPeerChannel) Close() error {
 	channel.closeCalls.Add(1)
-	channel.closeOnce.Do(func() {
-		channel.state.Store(uint32(framechannel.Closed))
-		close(channel.done)
-		close(channel.receive)
-	})
+	channel.finish(nil)
 	return nil
+}
+func (channel *testPeerChannel) Fail(cause error) { channel.finish(cause) }
+func (channel *testPeerChannel) finish(cause error) {
+	channel.closeOnce.Do(func() {
+		if cause != nil {
+			channel.failure.Store(&cause)
+		}
+		channel.state.Store(uint32(framechannel.Closed))
+		close(channel.receive)
+		close(channel.done)
+	})
 }
 func (channel *testPeerChannel) Done() <-chan struct{}   { return channel.done }
 func (channel *testPeerChannel) Opened() <-chan struct{} { return channel.opened }
-func (*testPeerChannel) Err() error                      { return nil }
+func (channel *testPeerChannel) Err() error {
+	if cause := channel.failure.Load(); cause != nil {
+		return *cause
+	}
+	return nil
+}
 
 func TestSenderHandlerAnswersCandidatesAndAdmitsPeerChannel(t *testing.T) {
 	peer := newTestPeerConnection()
