@@ -683,7 +683,8 @@ func TestCallbackRacesCloseExactlyOnce(t *testing.T) {
 	for range 50 {
 		fake, channel := openFakeChannel(t, defaultFlowControl)
 		var group sync.WaitGroup
-		group.Add(4)
+		group.Add(5)
+		go func() { defer group.Done(); channel.Fail(errors.New("owning peer failed")) }()
 		go func() { defer group.Done(); fake.fireLow() }()
 		go func() { defer group.Done(); fake.fail(errors.New("transport broke")) }()
 		go func() { defer group.Done(); fake.remoteClose() }()

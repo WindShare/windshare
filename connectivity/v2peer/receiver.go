@@ -424,8 +424,9 @@ func (attempt *ReceiverAttempt) registerCallbacks() {
 	})
 	attempt.peer.OnConnectionStateChange(func(state pion.PeerConnectionState) {
 		if state == pion.PeerConnectionStateFailed {
+			attempt.channel.Fail(errPeerConnectionFailed)
 			attempt.push(receiverEvent{
-				kind: receiverConnectionFailed, err: errors.New("PeerConnection entered failed state"),
+				kind: receiverConnectionFailed, err: errPeerConnectionFailed,
 			})
 		}
 	})

@@ -399,6 +399,7 @@ type receiverTestChannel struct {
 	closeOnce  sync.Once
 	closeCalls atomic.Int32
 	state      atomic.Uint32
+	failure    atomic.Pointer[error]
 }
 
 func newReceiverTestChannel() *receiverTestChannel {
@@ -417,16 +418,28 @@ func (channel *receiverTestChannel) State() framechannel.ChannelState {
 }
 func (channel *receiverTestChannel) Opened() <-chan struct{} { return channel.opened }
 func (channel *receiverTestChannel) Done() <-chan struct{}   { return channel.done }
-func (*receiverTestChannel) Err() error                      { return nil }
-func (channel *receiverTestChannel) open()                   { channel.openOnce.Do(func() { close(channel.opened) }) }
+func (channel *receiverTestChannel) Err() error {
+	if cause := channel.failure.Load(); cause != nil {
+		return *cause
+	}
+	return nil
+}
+func (channel *receiverTestChannel) open() { channel.openOnce.Do(func() { close(channel.opened) }) }
 func (channel *receiverTestChannel) Close() error {
 	channel.closeCalls.Add(1)
-	channel.closeOnce.Do(func() {
-		channel.state.Store(uint32(framechannel.Closed))
-		close(channel.done)
-		close(channel.receive)
-	})
+	channel.finish(nil)
 	return nil
+}
+func (channel *receiverTestChannel) Fail(cause error) { channel.finish(cause) }
+func (channel *receiverTestChannel) finish(cause error) {
+	channel.closeOnce.Do(func() {
+		if cause != nil {
+			channel.failure.Store(&cause)
+		}
+		channel.state.Store(uint32(framechannel.Closed))
+		close(channel.receive)
+		close(channel.done)
+	})
 }
 
 type receiverTestLanes struct {

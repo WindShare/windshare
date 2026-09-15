@@ -74,6 +74,10 @@ type PeerDataChannel interface {
 	Opened() <-chan struct{}
 	Done() <-chan struct{}
 	Err() error
+	// Fail records a permanent transport failure without waiting for consumers or
+	// physical shutdown. Already accepted inbound frames retain their order;
+	// Done and Close remain the logical completion and physical join barriers.
+	Fail(error)
 }
 
 // DataChannelAdapter installs the channel's callbacks before returning. The
