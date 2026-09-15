@@ -237,7 +237,8 @@ func TestReceiverRecoveryTerminalErrorsNeverWait(t *testing.T) {
 }
 
 func TestReceiverRecoveryAttemptDeadlineAndCancellationJoin(t *testing.T) {
-	entered := make(chan context.CancelFunc, 1)
+	attemptDeadline := make(chan context.CancelFunc, 1)
+	dialEntered := make(chan struct{})
 	finished := make(chan struct{})
 	clock := &receiverBlockedRetryClock{waiting: make(chan struct{})}
 	recovery, _ := NewReceiverRecovery(ReceiverRecoveryOptions{
@@ -247,20 +248,25 @@ func TestReceiverRecoveryAttemptDeadlineAndCancellationJoin(t *testing.T) {
 				t.Errorf("attempt duration=%s", duration)
 			}
 			child, cancel := context.WithCancel(ctx)
-			entered <- cancel
+			attemptDeadline <- cancel
 			return child, cancel
 		},
 	})
 	config := receiverUnavailableConfig("one")
 	config.Dial = func(ctx context.Context, _ relayv2.ReceiverConfig) (*relayv2.ReceiverConnection, error) {
 		defer close(finished)
+		close(dialEntered)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
 	result := make(chan error, 1)
 	go func() { _, err := recovery.Replace(ctx, config); result <- err }()
-	expireAttempt := <-entered
+	expireAttempt := <-attemptDeadline
+	// Context creation does not establish dial ownership: an attempt that
+	// expires before Dial starts correctly skips it entirely.
+	<-dialEntered
 	expireAttempt()
 	<-clock.waiting
 	if ctx.Err() != nil {
