@@ -522,6 +522,7 @@ function resumableLifecycle(initial: ReceiveLifecycleState): ReceiveLifecycleSta
     payloadKind: 'file-set',
     checkpointSetDigest: identity(30, 32),
     completedFileCount: 0n,
+    retainedBytes: 0n,
     completedBytes: 0n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 0n,

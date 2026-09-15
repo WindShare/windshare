@@ -321,6 +321,7 @@ export class FakeBoundRuntime implements V2BoundReceiveOperation {
           payloadKind: 'file-set',
           checkpointSetDigest: identityText(74, 32),
           completedFileCount: 0n,
+          retainedBytes: 0n,
           completedBytes: 0n,
           selectionFacts: Object.freeze({
             discoveredFileCount: 0n,
@@ -536,6 +537,7 @@ export class FakeTransferRun {
             payloadKind: 'file-set',
             checkpointSetDigest: identityText(74, 32),
             completedFileCount: 0n,
+            retainedBytes: 0n,
             completedBytes: 0n,
             selectionFacts: Object.freeze({
               discoveredFileCount: 0n,
@@ -755,6 +757,7 @@ export function retainedReceiveContinuation(intent: ReceiveIntent): Readonly<{
     payloadKind: 'file-set',
     checkpointSetDigest: identityText(93, 32),
     completedFileCount: 1n,
+    retainedBytes: 64n,
     completedBytes: 64n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 1n,
@@ -852,6 +855,7 @@ export function stableLifecycle(
         payloadKind: 'file-set',
         checkpointSetDigest: identityText(50, 32),
         completedFileCount: 1n,
+        retainedBytes: 128n,
         completedBytes: 128n,
         selectionFacts: Object.freeze({
           discoveredFileCount: 1n,

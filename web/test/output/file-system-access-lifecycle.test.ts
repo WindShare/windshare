@@ -822,6 +822,7 @@ describe('File System Access settlement authority', () => {
       kind: 'resumable-receive',
       checkpointSetDigest: fallback.checkpointSetDigest,
       completedFileCount: fallback.completedFileCount,
+      retainedBytes: fallback.completedBytes,
       completedBytes: fallback.completedBytes,
       selectionFacts: fallback.selectionFacts,
       partialReceiptDigest: fallback.partialReceiptDigest,

@@ -471,6 +471,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       payloadKind: 'file-set',
       checkpointSetDigest,
       completedFileCount: 2n,
+      retainedBytes: 1_024n,
       completedBytes: 1_024n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 5n,
@@ -520,6 +521,7 @@ describe('derived output lifecycle and recovery presentation', () => {
       payloadKind: 'file-set',
       checkpointSetDigest,
       completedFileCount: 2n,
+      retainedBytes: 1_024n,
       completedBytes: 1_024n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 5n,
@@ -918,6 +920,7 @@ function recoverySummaryFixture(
     discoveredBytes: 4_096n,
     discovery: 'complete',
     completedFileCount: 2n,
+    retainedBytes: 1_024n,
     completedBytes: 1_024n,
     incompleteFileCount: 2n,
     verifiedPartialFileCount: 2n,

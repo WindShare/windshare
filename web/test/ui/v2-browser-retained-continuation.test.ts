@@ -72,6 +72,7 @@ describe('browser retained continuation composition', () => {
       payloadKind: 'file-set',
         checkpointSetDigest: identity(41, 32),
         completedFileCount: 1n,
+        retainedBytes: 64n,
         completedBytes: 64n,
       })])
       const close = vi.fn(async () => undefined)
@@ -131,6 +132,7 @@ describe('browser retained continuation composition', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(61, 32),
       completedFileCount: 1n,
+      retainedBytes: 64n,
       completedBytes: 64n,
     })
     const summary = retainedRecoverySummary(lifecycle)
@@ -177,6 +179,7 @@ describe('browser retained continuation composition', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(42, 32),
       completedFileCount: 1n,
+      retainedBytes: 64n,
       completedBytes: 64n,
     })
     if (fallback.kind !== 'resumable-receive') throw new Error('test fallback changed kind')

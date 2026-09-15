@@ -274,6 +274,7 @@ export async function recoverDirectTreeAfterProcessTermination(
       kind: 'verified-receive',
       checkpointSetDigest,
       completedFileCount: 1n,
+      retainedBytes: COMPLETED_SIZE,
       completedBytes: COMPLETED_SIZE,
       selectionFacts: RECOVERY_SELECTION_FACTS,
       lastVerifiedRecordDigest: lastVerified.checksum,
@@ -354,7 +355,7 @@ export async function recoverDirectTreeAfterProcessTermination(
         outputSettlementTimeoutMilliseconds: OUTPUT_SETTLEMENT_TIMEOUT_MILLISECONDS,
         onWriteAcknowledged: () => undefined,
         onRecoverableAcknowledged: () => undefined,
-        onComplete: () => undefined,
+        onSettlement: () => undefined,
         checkpointClock: { now: () => RECOVERY_TIME_MILLISECONDS, schedule: () => () => undefined },
       }, recoveryPendingFile(file, coordinates.projectFile([file.name]), parent))
     }

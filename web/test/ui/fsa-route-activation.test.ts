@@ -566,6 +566,7 @@ describe('FSA output diagnostic correlation', () => {
       generation: 1n,
       checkpointSetDigest: identity(47, 32),
       completedFileCount: 0n,
+      retainedBytes: 0n,
       completedBytes: 0n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 0n,
@@ -619,6 +620,7 @@ describe('FSA output diagnostic correlation', () => {
       generation: receiving.generation - 1n,
       checkpointSetDigest: identity(48, 32),
       completedFileCount: 0n,
+      retainedBytes: 0n,
       completedBytes: 0n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 0n,

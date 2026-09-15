@@ -97,6 +97,7 @@ function continuationStates() {
     payloadKind: 'file-set',
     checkpointSetDigest: identity(5, 32),
     completedFileCount: 19n,
+    retainedBytes: 35_020n,
     completedBytes: 35_020n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 19n,
@@ -116,6 +117,7 @@ function continuationStates() {
     payloadKind: 'file-set',
     checkpointSetDigest: fallback.checkpointSetDigest,
     completedFileCount: fallback.completedFileCount,
+    retainedBytes: fallback.completedBytes,
     completedBytes: fallback.completedBytes,
     selectionFacts: fallback.selectionFacts,
   })

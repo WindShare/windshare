@@ -1,4 +1,5 @@
 import type { SelectionMeasure } from '../measure'
+import type { FileTransferSettlement } from '../job/contract'
 import type { V2RevisionCapacityWaitSnapshot } from '../revision-capacity/public'
 
 /** Separates received bytes from whole-file settlement and failure evidence. */
@@ -31,11 +32,16 @@ export class V2TransferProgressLedger {
   beginFinishing(): void { this.#phase = 'finishing' }
 
   // Absolute per-file coverage replaces a retried transaction's observation;
-  // completed files leave this bounded active-worker map and count exactly once.
+  // completed files leave this bounded running/parked-worker map and count exactly once.
   observeMaterializedFile(fileId: string, bytes: bigint): void {
     this.#activeMaterializedBytes += bytes - (this.#materializingFiles.get(fileId) ?? 0n)
     if (bytes === 0n) this.#materializingFiles.delete(fileId)
     else this.#materializingFiles.set(fileId, bytes)
+  }
+
+  settleFile(fileId: string, settlement: FileTransferSettlement): void {
+    if (settlement.kind === 'completed') this.completeFile(settlement.exactSize, fileId)
+    else this.observeMaterializedFile(fileId, settlement.kind === 'paused' ? settlement.retainedBytes : 0n)
   }
 
   completeFile(exactSize: bigint, fileId?: string): void {

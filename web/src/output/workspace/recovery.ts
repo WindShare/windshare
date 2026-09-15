@@ -17,6 +17,7 @@ export type AbandonedOperationObservation =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
       lastVerifiedRecordDigest: string
@@ -47,6 +48,7 @@ export type AbandonedOperationObservation =
       failureCount: bigint
       checkpointSetDigest: string
       completedBytes: bigint
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       lastVerifiedRecordDigest: string
     }>
@@ -217,6 +219,7 @@ function recoverFinalizingTree(
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.successCount,
     completedBytes: observation.completedBytes,
+    retainedBytes: observation.retainedBytes,
     selectionFacts: observation.selectionFacts,
     partialReceiptDigest: observation.receiptDigest,
   }), 'resume-receive')
@@ -373,6 +376,7 @@ function resumableReceive(
     checkpointSetDigest: observation.checkpointSetDigest,
     completedFileCount: observation.completedFileCount,
     completedBytes: observation.completedBytes,
+    retainedBytes: observation.retainedBytes,
     selectionFacts: observation.selectionFacts,
     ...(observation.partialReceiptDigest === undefined
       ? {}

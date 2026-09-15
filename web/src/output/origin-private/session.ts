@@ -245,6 +245,7 @@ export async function openOriginPrivateWorkspaceBackend(options: {
     })
     const finalCheckpoints = createOriginPrivateFinalCheckpointReader(checkpoints)
     return new OriginPrivateWorkspaceBackendSession({
+      intent,
       materialization,
       packages,
       finalCheckpoints,

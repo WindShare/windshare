@@ -312,6 +312,7 @@ describe('browser production receive composition', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(21, 32),
       completedFileCount: 3n,
+      retainedBytes: 512n,
       completedBytes: 512n,
     })])
     const composition = createBrowserReceiveComposition(
@@ -337,6 +338,7 @@ describe('browser production receive composition', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(23, 32),
       completedFileCount: 1n,
+      retainedBytes: 64n,
       completedBytes: 64n,
     })])
     const cleanup = vi.fn(async () => {
@@ -387,6 +389,7 @@ describe('browser production receive composition', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(27, 32),
       completedFileCount: 1n,
+      retainedBytes: 64n,
       completedBytes: 64n,
     })])
     const discardedDescriptors: ReceiveOperationResumeDescriptor[] = []
@@ -433,6 +436,7 @@ describe('browser output attempt ownership', () => {
       payloadKind: 'file-set',
         checkpointSetDigest: identity(49, 32),
         completedFileCount: 1n,
+        retainedBytes: 64n,
         completedBytes: 64n,
       }),
       receiveLifecycle(50, {

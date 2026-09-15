@@ -157,6 +157,7 @@ export function resumableReceive(intent: ReceiveIntent, generation: bigint): Ext
     generation,
     checkpointSetDigest: identity(60, 32),
     completedFileCount: 1n,
+    retainedBytes: 16n,
     completedBytes: 16n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 2n,

@@ -13,7 +13,7 @@ import {
 import {
   receiveStateByte,
   RECEIVE_STATE_SOURCE_INVALIDATED,
-  snapshotRecoverySelectionFacts,
+  snapshotRetainedFileSetProgress,
   type NeedsAttentionReason,
   type ReceiveLifecycleState,
   type RecoveryDiscoveryState,
@@ -163,16 +163,13 @@ function resumableReceivePayload(
       canonicalFrame(canonicalU8(state.pauseReason === 'storage-pressure' ? 1 : 0)),
     ]
   }
-  const selectionFacts = snapshotRecoverySelectionFacts(
-    state.selectionFacts,
-    state.completedFileCount,
-    state.completedBytes,
-  )
+  const { selectionFacts } = snapshotRetainedFileSetProgress(state)
   return [
     canonicalFrame(canonicalU8(RESUMABLE_RECEIVE_FILE_SET)),
     digestFrame(state.checkpointSetDigest, 'checkpoint set digest'),
     canonicalFrame(canonicalU64(state.completedFileCount)),
     canonicalFrame(canonicalU64(state.completedBytes)),
+    canonicalFrame(canonicalU64(state.retainedBytes)),
     canonicalFrame(canonicalU64(selectionFacts.discoveredFileCount)),
     canonicalFrame(canonicalU64(selectionFacts.discoveredBytes)),
     canonicalFrame(canonicalU8(recoveryDiscoveryStateByte(selectionFacts.discovery))),
@@ -411,6 +408,7 @@ function decodeResumableReceiveState(
       checkpointSetDigest: reader.identity(32, 'checkpoint set digest'),
       completedFileCount: reader.u64('completed file count'),
       completedBytes: reader.u64('completed bytes'),
+      retainedBytes: reader.u64('retained bytes'),
       selectionFacts: Object.freeze({
         discoveredFileCount: reader.u64('discovered file count'),
         discoveredBytes: reader.u64('discovered bytes'),

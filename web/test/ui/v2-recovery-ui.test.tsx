@@ -56,6 +56,7 @@ function pausedLifecycle(): Extract<ReceiveLifecycleState, {
     generation: 2n,
     checkpointSetDigest: 'checkpoint-set',
     completedFileCount: 1n,
+    retainedBytes: 1_024n,
     completedBytes: 1_024n,
     expiresAt: Date.now() + 60_000,
     selectionFacts: Object.freeze({
@@ -74,6 +75,7 @@ function recoverySummary(): RecoverySummary {
     discoveredBytes: 3_584n,
     discovery: 'known-so-far',
     completedFileCount: 1n,
+    retainedBytes: 1_024n,
     completedBytes: 1_024n,
     incompleteFileCount: 2n,
     verifiedPartialFileCount: 2n,

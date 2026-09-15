@@ -104,6 +104,7 @@ export function retainedLifecycles(): readonly ReceiveLifecycleState[] {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(30, 32),
       completedFileCount: 2n,
+      retainedBytes: 256n,
       completedBytes: 256n,
     }),
     receiveLifecycle(2, {
@@ -250,6 +251,7 @@ export function retainedRecoverySummary(lifecycle: ReceiveLifecycleState): Recov
     discoveredBytes: 256n,
     discovery: 'known-so-far',
     completedFileCount: lifecycle.completedFileCount,
+    retainedBytes: lifecycle.completedBytes,
     completedBytes: lifecycle.completedBytes,
     incompleteFileCount: 1n,
     verifiedPartialFileCount: 1n,

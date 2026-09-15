@@ -142,6 +142,8 @@ export class WorkspaceStageRuntime {
         emitOutputTrace(trace, () => outputTraceEvent('continuation', {
           backend: 'origin_private',
           transition: 'paused',
+          operation_id: event.operation_id,
+          ...(event.retained_bytes === undefined ? {} : { retained_bytes: event.retained_bytes.toString() }),
         }))
         return
       case 'receive.materialization.source_invalidated':
@@ -154,6 +156,8 @@ export class WorkspaceStageRuntime {
         emitOutputTrace(trace, () => outputTraceEvent('continuation', {
           backend: 'origin_private',
           transition: 'admission_failed',
+          operation_id: event.operation_id,
+          retained_bytes: event.restored_retained_bytes.toString(),
         }))
         return
       case 'receive.operation.discarded':

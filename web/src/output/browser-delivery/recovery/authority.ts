@@ -49,6 +49,8 @@ export async function deriveBrowserDeliveryLifecycle(input: {
     ...lifecycle, checkpointSetDigest: snapshot.checkpointSetDigest,
     completedFileCount: BigInt(completed.length),
     completedBytes: completed.reduce((sum, checkpoint) => sum + checkpoint.exactSize, 0n),
+    retainedBytes: checkpoints.reduce((sum, checkpoint) => sum + checkpoint.verifiedRanges.reduce(
+      (bytes, range) => bytes + range.end - range.start, 0n), 0n),
   }) as LocalFileSetLifecycle
   await deriveFSARecoverySummary({
     intent, lifecycle: next, snapshot: { ...snapshot, lifecycleGeneration: next.generation },

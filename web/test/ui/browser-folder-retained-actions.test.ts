@@ -24,7 +24,7 @@ function retainedFixture(stopped = false, incomplete = false) {
     ...(stopped ? {
       kind: 'partial-directory' as const, reason: 'stopped' as const, successCount: 1n, failureCount: 1n, receiptDigest: fixture.policy.digest,
     } : { kind: 'resumable-receive' as const, payloadKind: 'file-set' as const, checkpointSetDigest: fixture.policy.digest,
-    completedFileCount: 0n, completedBytes: 0n,
+    completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
     selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' as const },
     }),
   }])
