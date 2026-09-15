@@ -40,6 +40,8 @@ const (
 	v2PionRelayCutPayloadBytes  int64 = 1 << 20
 	v2PionRelayCutBlockBytes          = 4 << 10
 	v2PionRelayCutPayloadSHA256       = "fbbab289f7f94b25736c58be46a994c441fd02552cc6022352e3d86d2fab7c83"
+	v2PionRelayCutTailName            = "z-after-cut.txt"
+	v2PionRelayCutTailPayload         = "content requested after the relay cut\n"
 
 	v2RelayComponent             = "wsrelay"
 	v2ShareCommandComponent      = "wind_share"
@@ -452,8 +454,18 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	requireV2ProcessScenario(t)
 	scenario := startV2Scenario(t, v2PionRelayCutScenario)
 	binaries := loadE2EBinaries(t)
-	source := filepath.Join(t.TempDir(), "pion-relay-cut.bin")
-	writeV2PatternFile(t, source, v2PionRelayCutPayloadBytes, v2PionRelayCutPayloadSHA256)
+	source := filepath.Join(t.TempDir(), "pion-relay-cut")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	payloadPath := filepath.Join(source, "a-payload.bin")
+	writeV2PatternFile(t, payloadPath, v2PionRelayCutPayloadBytes, v2PionRelayCutPayloadSHA256)
+	// A later file needs its own revision before any of its blocks can be
+	// requested. Its opening timestamp proves the cut interrupted useful work,
+	// even when the first file finishes before its process exits.
+	if err := os.WriteFile(filepath.Join(source, v2PionRelayCutTailName), []byte(v2PionRelayCutTailPayload), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	proxy := startRelayCutProxy(t, scenario)
 	relay := startV2Process(
@@ -509,6 +521,7 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 	cutPhase := scenario.startPhase(t, v2RelayProxyCutMilestone, nil)
 	cutContext, cancelCut := context.WithTimeout(context.Background(), v2ProcessTerminationGrace)
 	relayDownstream, proxyErr := proxy.CutAndWait(cutContext)
+	cutCompletedAt := time.Now()
 	cancelCut()
 	if proxyErr != nil {
 		t.Fatalf("cut relay proxy: %v", errors.Join(proxyErr, cutPhase.Fail(v2ActionFailureReason)))
@@ -526,15 +539,22 @@ func TestLongV2ProcessTransfersExactPayloadOverPionAfterRelayCut(t *testing.T) {
 			receiver.stderr.String(),
 		)
 	}
-	requireV2UserTraceFact(t, receiver, "content_path_selected", "content_path", "direct")
+	// Recent useful traffic can correctly remain Direct + Relay for a short
+	// transfer. Verify authenticated delivery instead of a presentation window.
+	assertV2UserTraceTransportDiagnostics(t, receiver, "direct", true)
+	records, _ := readV4UserTrace(t, receiver.userTracePath, receiver.userTraceCommand)
+	if !hasV2DirectRevisionAfter(t, records, cutCompletedAt) {
+		t.Fatalf("no content revision opened over a delivering direct lane after relay cut at %s", cutCompletedAt.Format(time.RFC3339Nano))
+	}
 
-	outputPath := filepath.Join(output, filepath.Base(source))
+	outputPath := filepath.Join(output, filepath.Base(source), filepath.Base(payloadPath))
 	assertV2FileSHA256(
 		t,
 		outputPath,
 		v2PionRelayCutPayloadBytes,
 		v2PionRelayCutPayloadSHA256,
 	)
+	assertV2File(t, filepath.Join(output, filepath.Base(source), v2PionRelayCutTailName), []byte(v2PionRelayCutTailPayload))
 	scenario.requireSuccess(t)
 }
 
