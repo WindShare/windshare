@@ -13,7 +13,8 @@ import {
   finalizedDirectorySettlement, isImmediateChildPath, verifyDirectoryAdmissionReceipt,
   type DirectoryAdmission, type CanonicalModifiedTime,
 } from '../../transfer/directory-admission'
-import { FaultDomain } from '../../transfer/fault'
+import { FaultDomain, SourceFaultCode } from '../../transfer/fault'
+import { MAX_CONTENT_WARNING_FILES, type MissingContentFile } from '../workspace/lifecycle/content-warning'
 import { normalizeV2FileTransferFailure } from '../../transfer/job/failures'
 import type { ReceiveIntent } from '../../transfer/intent'
 import {
@@ -30,8 +31,9 @@ export async function createProgressiveZipOutput(input: {
   readonly archive: ProgressiveZipArchive
   readonly identity: OutputSessionIdentity
   readonly intent: ReceiveIntent
-}): Promise<{ output: OutputSession; directories: IncrementalDirectoryOutput }> {
+}): Promise<{ output: OutputSession; directories: IncrementalDirectoryOutput; missingFiles: () => readonly MissingContentFile[] }> {
   const { archive, intent } = input
+  const missingFiles = new Map<string, MissingContentFile>()
   if (intent.plan.kind !== 'workspace-then-publish' || intent.artifact.kind !== 'zip-archive' ||
       archive.state.object.operationId !== intent.operationId) {
     throw new TypeError('ZIP output does not belong to the frozen receive operation')
@@ -160,12 +162,25 @@ export async function createProgressiveZipOutput(input: {
           },
         }
       } catch (error) {
+        if (!signal.aborted) recordMissingFile(missingFiles, entryId, request.logicalArtifactPath, error)
         capacityEntry.finish()
         throw error
       }
     },
   }
-  return { output, directories }
+  return { output, directories, missingFiles: () => Object.freeze([...missingFiles.values()]) }
+}
+
+function recordMissingFile(files: Map<string, MissingContentFile>, entryId: string, path: readonly string[], error: unknown): void {
+  if (files.size >= MAX_CONTENT_WARNING_FILES) return
+  const failure = normalizeV2FileTransferFailure(error)
+  const fault = failure.kind === 'fault' ? failure.fault : undefined
+  let reason: MissingContentFile['reason'] = 'file-failed'
+  if (fault?.domain === FaultDomain.Source) {
+    reason = fault.code === SourceFaultCode.RevisionChanged || fault.code === SourceFaultCode.RevisionInvalidated
+      ? 'source-changed' : 'source-unavailable'
+  }
+  files.set(entryId, { path, reason })
 }
 
 function modifiedTime(value: CanonicalModifiedTime | undefined): { modifiedTimeMilliseconds?: bigint } {

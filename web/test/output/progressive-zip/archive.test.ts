@@ -12,6 +12,7 @@ import { ObjectCheckpointCoordinator } from '../../../src/output/origin-private/
 import type { NativeObjectIO } from '../../../src/output/origin-private/native-object/contracts'
 import type { TaskCheckpoint, TaskEntry, TaskDirectoryPin } from '../../../src/output/origin-private/task-checkpoint/model'
 import type { TaskCheckpointStore } from '../../../src/output/origin-private/task-checkpoint/store'
+import { verifyProgressiveZipRecovery } from '../../../src/output/resume/progressive-checkpoint'
 
 const object = { operationId: 'task', objectId: 'archive', kind: 'zip-archive' as const, handleId: 'handle' }
 const source = { shareInstance: 'share', directoryId: 'parent', generation: 'generation', sourcePath: ['file'] }
@@ -243,6 +244,80 @@ describe('progressive ZIP settlement and cancellation', () => {
     const entry = (await reader.getEntries())[0]!
     if (entry.directory) throw new Error('Expected retained file')
     expect(await entry.getData!(new Uint8ArrayWriter())).toEqual(bytes('abc'))
+    await reader.close()
+  })
+
+})
+
+describe('progressive native ZIP missing-file results', () => {
+  it.each([
+    { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: false },
+    { code: SourceFaultCode.Unavailable, reason: 'source-unavailable', rejectWarning: false },
+    { code: SourceFaultCode.RevisionChanged, reason: 'source-changed', rejectWarning: true },
+  ] as const)('retains first-open $code omissions across recovery (rejected commit: $rejectWarning)', async test => {
+    const files = [fileEntry(identity(61), 'a.txt', 3n), fileEntry(identity(62), 'b.txt', 4n),
+      fileEntry(identity(63), 'c.txt', 5n)]
+    const selection = new V2SelectionPolicy(true)
+    const intent = await receiveIntentFixture({ planKind: 'workspace-then-publish', artifactKind: 'zip-archive', selection })
+    const f = fixture(new MemoryStore(), new MemoryIO(), undefined, intent.operationId)
+    const archive = await f.open()
+    const commit = f.store.commit.bind(f.store)
+    vi.spyOn(f.store, 'commit').mockImplementation(async input => {
+      if (input.checkpoint.discoveryComplete) {
+        expect(input.checkpoint.contentWarning).toMatchObject({ selectedFileCount: 3n, completedFileCount: 2n })
+        if (test.rejectWarning) throw new Error('warning commit failed')
+      }
+      await commit(input)
+    })
+    const execution = await createProgressiveWorkspaceExecution({
+      archive, intent, outputIdentity: { backend: 'native-zip', outputSessionId: 'missing-file-session' },
+      settlement: {
+        pause: async (_request, evidence) => {
+          expect(evidence.kind).toBe(test.rejectWarning ? 'last-committed-checkpoint' : 'checkpoint-committed')
+          const checkpoint = evidence.checkpoint
+          return {
+            operationId: intent.operationId, receiveIntentDigest: intent.digest, generation: 2n,
+            kind: 'resumable-receive', payloadKind: 'opfs-zip', objectId: checkpoint.object.objectId,
+            checkpointGeneration: checkpoint.generation, occupiedBytes: checkpoint.physicalLength,
+            completedFileCount: 2n, completedBytes: 8n, discoveryComplete: checkpoint.discoveryComplete,
+          }
+        },
+        settle: async () => { throw new Error('Missing selected file must remain a partial result') },
+      },
+    })
+    const plans = planAuthorityFixture()
+    plans.openWorkspaceZip = async () => ({ kind: 'accepted', execution })
+    const readers = readerFixture(files, [], { beforeOpen: async id => {
+      if (id === files[1]!.idText) throw new BoundaryFaultError(sourceFault(FaultScope.FileLocal, test.code))
+    } })
+    const result = await transferJobFixture({
+      catalog: catalogFixture([{ id: identity(2), entries: files }]).catalog, selection, intent, plans,
+      revisions: readers.revisions, broker: readers.broker,
+    }).run()
+    expect(result.worker.status).toBe('CompletedWithErrors')
+    expect(f.store.entries.has(`file:${files[1]!.idText}`)).toBe(false)
+    // Reopen only durable state: no live worker counters or sampled failures survive.
+    f.store.checkpoint = structuredClone(f.store.checkpoint!)
+    vi.mocked(f.store.commit).mockRestore()
+    const recovered = await verifyProgressiveZipRecovery(f.store, archive.state.object, result.lifecycle)
+    if (test.rejectWarning) {
+      expect(recovered.requirement).toBe('remote-content-needed')
+      expect(recovered.checkpoint.discoveryComplete).toBe(false)
+      return
+    }
+    expect(recovered.requirement).toBe('local-finalization')
+    expect(recovered.checkpoint.contentWarning).toMatchObject({
+      kind: 'partial-zip', selectedFileCount: 3n, completedFileCount: 2n,
+      missingFiles: [{ path: ['windshare', 'b.txt'], reason: test.reason }],
+    })
+    const reopened = await f.open()
+    const sealed = await reopened.finalize()
+    expect(sealed.contentWarning).toEqual(recovered.checkpoint.contentWarning)
+    const reader = new ZipReader(new Uint8ArrayReader(f.io.data))
+    const entries = (await reader.getEntries()).filter(entry => !entry.directory)
+    expect(entries.map(entry => entry.filename).sort()).toEqual(['windshare/a.txt', 'windshare/c.txt'])
+    for (const entry of entries) expect(await entry.getData!(new Uint8ArrayWriter()))
+      .toEqual(new Uint8Array(entry.uncompressedSize).fill(7))
     await reader.close()
   })
 

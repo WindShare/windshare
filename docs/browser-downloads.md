@@ -27,6 +27,7 @@ WindShare recommends a save method based on browser capabilities, available stor
 
 - **Live indicators**: Displays received/reused bytes, completed or saved files, and transfer speed. Exact totals and percentages depend on completed item discovery; remaining time also requires a sufficiently stable transfer rate.
 - **Details panel**: Displays task summaries, failure information, elapsed time, and recovery information where available.
+- **Partial ZIP results**: If selected files cannot be opened and the received entries form a usable ZIP, it still downloads automatically. Downloads marks it as partial; Details retains the missing count and example filenames after reload.
 - **Downloads hub**: Access active and retained download tasks in this browser from the share page or home screen.
 
 ## Pause, Resume & Recovery

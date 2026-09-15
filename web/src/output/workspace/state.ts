@@ -1,4 +1,5 @@
 import type { MaterializationPlan } from '../../transfer/intent'
+import { receiveContentWarningFields, type ReceiveContentWarning } from './lifecycle/content-warning'
 import { snapshotIdentity } from './canonical'
 import { advanceReceiveTiming, receiveTimingFields, type ReceiveTiming } from './lifecycle/timing'
 
@@ -110,6 +111,7 @@ export type ReceiveStateByte = (typeof RECEIVE_STATE_BYTES_BY_KIND)[ReceiveLifec
 const VALID_RECEIVE_STATE_BYTES: ReadonlySet<number> = new Set(Object.values(RECEIVE_STATE_BYTES_BY_KIND))
 
 interface LifecycleStateBase {
+  readonly contentWarning?: ReceiveContentWarning
   readonly timing?: ReceiveTiming
   readonly operationId: string
   readonly receiveIntentDigest: string
@@ -249,7 +251,7 @@ export function initialReceiveLifecycleState(input: {
 
 export function nextReceiveLifecycleState(
   current: ReceiveLifecycleState,
-  payload: ReceiveLifecycleStatePayload,
+  payload: ReceiveLifecycleStatePayload & Readonly<{ contentWarning?: ReceiveContentWarning | null }>,
   clock: () => number = Date.now,
 ): ReceiveLifecycleState {
   if (current.generation >= 0xffff_ffff_ffff_ffffn) {
@@ -265,12 +267,14 @@ export function nextReceiveLifecycleState(
         ),
       })
     : payload
+  const { contentWarning, ...statePayload } = durablePayload
   return Object.freeze({
-    ...durablePayload,
+    ...statePayload,
     operationId: current.operationId,
     receiveIntentDigest: current.receiveIntentDigest,
     generation: current.generation + 1n,
     ...advanceReceiveTiming(current.timing, payload.kind, clock),
+    ...receiveContentWarningFields(Object.hasOwn(payload, 'contentWarning') ? contentWarning ?? undefined : current.contentWarning),
   }) as ReceiveLifecycleState
 }
 

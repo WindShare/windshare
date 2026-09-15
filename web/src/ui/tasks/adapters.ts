@@ -99,12 +99,11 @@ export function retainedTaskFacts(
 }
 
 function completenessFromFacts(state: ReceiveLifecycleState, progress: V2ReceiverProgress | null): TaskCompleteness {
-  if (state.kind === 'partial-directory') return 'partial'
+  if (state.contentWarning !== undefined || state.kind === 'partial-directory') return 'partial'
   if (state.kind === 'resumable-receive') return 'incomplete'
   if (progress !== null && (progress.fileErrors > 0 || progress.selectionErrors > 0 ||
       progress.failedDirectories > 0 || progress.discovery === 'failed')) return 'partial'
-  // Native sealing requires complete selected content. Partial ZIP export writes
-  // a separate artifact and intentionally leaves this operation resumable.
+  // Publication proves that an artifact is ready. Its retained warning separately records selection omissions.
   if (['published', 'artifact-sealed', 'waiting-to-save', 'download-started',
     'publishing-managed', 'handing-off', 'materialization-sealed', 'packaging',
     'resumable-package'].includes(state.kind)) return 'complete'
