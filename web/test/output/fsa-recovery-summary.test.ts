@@ -86,6 +86,7 @@ describe('FSA recovery summary', () => {
         ...fixture.lifecycle,
         checkpointSetDigest: foreignSnapshot.checkpointSetDigest,
         completedFileCount: 0n,
+        retainedBytes: 0n,
         completedBytes: 0n,
       }),
       snapshot: foreignSnapshot,
@@ -107,6 +108,7 @@ describe('FSA recovery summary', () => {
           discovery: 'complete' as const,
         }),
         completedFileCount: 2n,
+        retainedBytes: 100n,
         completedBytes: 100n,
       }),
       snapshot: duplicateSnapshot,
@@ -159,6 +161,7 @@ async function createFixture(
     generation: 7n,
     checkpointSetDigest: snapshot.checkpointSetDigest,
     completedFileCount: 1n,
+    retainedBytes: 80n,
     completedBytes: 50n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 3n,

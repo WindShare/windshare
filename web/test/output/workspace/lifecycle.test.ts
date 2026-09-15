@@ -51,6 +51,7 @@ describe('receive lifecycle reducer', () => {
       leaseId: LEASE,
       checkpointSetDigest: identity(32, 3),
       completedFileCount: 1n,
+      retainedBytes: 12n,
       completedBytes: 12n,
       selectionFacts: SELECTION_FACTS,
     }, context('direct-tree')).state
@@ -82,6 +83,7 @@ describe('receive lifecycle reducer', () => {
         ? stable.checkpointSetDigest
         : identity(32, 4),
       completedFileCount: 1n,
+      retainedBytes: 12n,
       completedBytes: 12n,
       selectionFacts: SELECTION_FACTS,
     }, context('direct-tree')).state

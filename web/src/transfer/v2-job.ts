@@ -628,16 +628,11 @@ export class TransferJob {
         this.#progress.acknowledgeRecoverable(bytes)
         this.#emitProgress()
       },
-      onComplete: (exactSize) => {
-        this.#progress.completeFile(exactSize, file.entry.idText)
+      onSettlement: settlement => {
+        this.#progress.settleFile(file.entry.idText, settlement)
         this.#emitProgress()
       },
-    }, file).finally(() => {
-      // Failed/parked transactions cannot contribute speculative live coverage.
-      // A retry reinstates only the durable coverage its adapter authenticates.
-      this.#progress.observeMaterializedFile(file.entry.idText, 0n)
-      this.#emitProgress()
-    })
+    }, file)
   }
 
   #admissionFailure(error: unknown): V2TransferAdmissionFailureError {

@@ -51,6 +51,7 @@ describe('receive lifecycle V2 durable states', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(32, 9),
       completedFileCount: 2n,
+      retainedBytes: 12n,
       completedBytes: 12n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 5n,
@@ -72,6 +73,7 @@ describe('receive lifecycle V2 durable states', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: identity(32, 9),
       completedFileCount: 2n,
+      retainedBytes: 12n,
       completedBytes: 12n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 1n,

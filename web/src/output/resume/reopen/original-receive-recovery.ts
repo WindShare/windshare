@@ -2,23 +2,13 @@ import { IndexedDbFileCheckpointRepository } from '../../browser/indexeddb-repos
 import { emitOutputTrace, outputTraceEvent } from '../../diagnostics'
 import { OriginPrivatePackageStore } from '../../origin-private/package-store'
 import { OriginPrivateWorkspaceRoot } from '../../origin-private/workspace-root'
-import {
-  FILE_CHECKPOINT_COMMIT_VERIFIED, FILE_CHECKPOINT_PHASE_ACTIVE, FILE_CHECKPOINT_PHASE_PAUSED,
-  FileCheckpointError, fileCheckpointIsComplete, validateFileCheckpoint,
-  type FileCheckpointV2,
-} from '../../persistence/checkpoint'
-import type { FileCheckpointJournal } from '../../persistence/journal'
 import { TargetOwnershipUnknownError } from '../../persistent-tree/errors'
 import type { WorkspaceBudgetV1 } from '../../workspace/budget'
-import { canonicalDigest, canonicalFrame, canonicalRecord, canonicalText } from '../../workspace/canonical'
 import { recoverAbandonedOperation } from '../../workspace/recovery'
 import type { ReceiveLifecycleState } from '../../workspace/state'
-import { originalCheckpointBinding } from '../original-checkpoint'
+import { originalCheckpointBinding, originalReceiveCheckpointSummary,
+  readOriginalReceiveCheckpoint } from '../../origin-private/recovery/receive-checkpoint'
 import type { WorkspaceContinuationInput } from './workspace-continuation-authority'
-
-const ORIGINAL_CHECKPOINT_AUTHORITY_BOUND = 2
-const RECEIVE_CHECKPOINT_SET_DOMAIN = 'windshare/original-receive-checkpoint-set'
-const RECEIVE_CHECKPOINT_SET_VERSION = 1
 
 /** Recover durable evidence before admission so a rejected retry cannot strand an active lifecycle. */
 export async function recoverOriginalFileReceive(input: {
@@ -35,7 +25,7 @@ export async function recoverOriginalFileReceive(input: {
   const binding = originalCheckpointBinding(intent)
   const checkpoints = await IndexedDbFileCheckpointRepository.open(binding, input.checkpointDatabaseName)
   try {
-    const checkpoint = await readReceiveCheckpoint(authority, budget, checkpoints)
+    const checkpoint = await readOriginalReceiveCheckpoint(intent, budget.evidence.catalogSize, checkpoints)
     const root = new OriginPrivateWorkspaceRoot({
       operationId: intent.operationId,
       receiveIntentDigest: intent.digest,
@@ -57,18 +47,10 @@ export async function recoverOriginalFileReceive(input: {
         throw new TargetOwnershipUnknownError('checkpoint', intent.operationId)
       }
     }
-    const checkpointSetDigest = await canonicalDigest(canonicalRecord(
-      RECEIVE_CHECKPOINT_SET_DOMAIN, RECEIVE_CHECKPOINT_SET_VERSION, [
-        canonicalFrame(canonicalText(intent.digest)),
-        canonicalFrame(canonicalText(checkpoint?.checksum ?? '')),
-      ],
-    ))
-    const complete = checkpoint !== undefined && fileCheckpointIsComplete(checkpoint)
+    const summary = await originalReceiveCheckpointSummary(intent, checkpoint)
     const recovered = recoverAbandonedOperation(authority.snapshot.lifecycle, {
       kind: 'verified-receive',
-      checkpointSetDigest,
-      completedFileCount: complete ? 1n : 0n,
-      completedBytes: complete ? checkpoint.exactSize : 0n,
+      ...summary,
       selectionFacts: {
         discoveredFileCount: 1n,
         discoveredBytes: budget.evidence.catalogSize,
@@ -91,45 +73,10 @@ export async function recoverOriginalFileReceive(input: {
       operation_id: intent.operationId,
       lifecycle_generation: recovered.generation.toString(),
       checkpoint_count: checkpoint === undefined ? '0' : '1',
-      verified_bytes: (checkpoint?.verifiedRanges.reduce((sum, range) => sum + range.end - range.start, 0n) ?? 0n).toString(),
+      verified_bytes: recovered.retainedBytes.toString(),
     }))
     return recovered
   } finally {
     checkpoints.close()
-  }
-}
-
-async function readReceiveCheckpoint(
-  authority: WorkspaceContinuationInput,
-  budget: WorkspaceBudgetV1,
-  checkpoints: Pick<FileCheckpointJournal, 'scanCommitted'>,
-): Promise<FileCheckpointV2 | undefined> {
-  const intent = authority.snapshot.operation.receiveIntent
-  const binding = originalCheckpointBinding(intent)
-  try {
-    const page = await checkpoints.scanCommitted({ direction: 'ascending', limit: ORIGINAL_CHECKPOINT_AUTHORITY_BOUND })
-    if (page.nextCursor !== undefined || page.records.length > 1) {
-      throw new TypeError('Original receive checkpoint authority is ambiguous')
-    }
-    const record = page.records[0]
-    // Receiving is persisted before the first file opens; no checkpoint is a valid zero-progress cut.
-    if (record === undefined) return undefined
-    validateFileCheckpoint(record)
-    if (intent.artifact.kind !== 'original-file' || budget.evidence.kind !== 'single-file' ||
-        record.operationId !== binding.operationId || record.receiveIntentDigest !== binding.receiveIntentDigest ||
-        record.materializationBindingDigest !== binding.materializationBindingDigest ||
-        record.materializerKind !== binding.materializerKind || record.authorityRef !== binding.authorityRef ||
-        record.fileId !== intent.artifact.fileId || record.exactSize !== budget.evidence.catalogSize ||
-        record.canonicalPath.length !== 1 || record.canonicalPath[0] !== intent.artifact.suggestedName ||
-        record.commitState !== FILE_CHECKPOINT_COMMIT_VERIFIED ||
-        (record.phase !== FILE_CHECKPOINT_PHASE_ACTIVE && record.phase !== FILE_CHECKPOINT_PHASE_PAUSED)) {
-      throw new TypeError('Original receive checkpoint escaped its admitted file')
-    }
-    return record
-  } catch (cause) {
-    if (cause instanceof TypeError || cause instanceof FileCheckpointError) {
-      throw new TargetOwnershipUnknownError('checkpoint', intent.operationId, { cause })
-    }
-    throw cause
   }
 }

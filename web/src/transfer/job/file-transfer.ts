@@ -33,7 +33,7 @@ import {
   type OpenedOutputRevision,
   type OutputSession,
 } from '../output-session'
-import { V2OutputPausedError, type PendingFile } from './contract'
+import { V2OutputPausedError, type FileTransferSettlement, type PendingFile } from './contract'
 import {
   V2ClassifiedTransferFailureError,
   V2FileOutputError,
@@ -65,6 +65,14 @@ export class V2RangeReaderContractError extends Error {
   }
 }
 
+const UNCONFIRMED_FILE_SETTLEMENT: FileTransferSettlement = Object.freeze({ kind: 'unconfirmed' })
+
+interface SettledFileFailure {
+  readonly failure: NormalizedV2FileTransferFailure
+  readonly settlement: FileTransferSettlement
+  readonly capacityBlocked?: OutputCapacityBlockedError
+}
+
 export interface V2FileTransferOptions {
   readonly descriptor: V2ShareDescriptor
   readonly revisions: V2RevisionReader
@@ -79,9 +87,9 @@ export interface V2FileTransferOptions {
   readonly onWriteAcknowledged: (bytes: bigint, firstWrite: boolean) => void
   readonly onRecoverableAcknowledged?: (
     bytes: bigint,
-    transition: 'automatic-checkpoint' | 'final',
+    transition: 'automatic-checkpoint' | 'final' | 'pause',
   ) => void
-  readonly onComplete: (exactSize: bigint) => void
+  readonly onSettlement: (settlement: FileTransferSettlement) => void
   readonly checkpointClock?: CheckpointClock
   readonly onCheckpointObservation?: (event: CheckpointObservation) => void
 }
@@ -102,6 +110,7 @@ export async function transferV2File(
   let transaction: BoundOutputFileTransaction | undefined
   let primaryFailure: NormalizedV2FileTransferFailure | undefined
   let capacityBlocked: OutputCapacityBlockedError | undefined
+  let settlement = UNCONFIRMED_FILE_SETTLEMENT
   try {
     let revisionOpenAttempted = false
     let revisionOpenFailure: Readonly<{ readonly reason: unknown }> | undefined
@@ -219,20 +228,38 @@ export async function transferV2File(
       'output-commit-failed',
       () => activeTransaction.commit(options.signal),
     )
-    const finalDurableBytes = outputFile.exactSize - checkpoint.durableBytes
-    if (finalDurableBytes > 0n) {
-      options.onRecoverableAcknowledged?.(finalDurableBytes, 'final')
-    }
-    options.onComplete(outputFile.exactSize)
+    settlement = Object.freeze({ kind: 'completed', exactSize: outputFile.exactSize })
   } catch (error) {
     const settlementError = await drainCheckpointFailure(checkpoint, error)
     // The internal abort wakes a blocked reader; it must not recast a storage failure as user cancellation.
     const settled = await settleTransferError({ ...options, signal: callerSignal }, transaction, settlementError)
     primaryFailure = settled.failure
     capacityBlocked = settled.capacityBlocked
+    settlement = settled.settlement
   } finally {
-    await finishTransferFile(options, acquired, primaryFailure, capacityBlocked)
+    try {
+      // Storage progress is settled before remote cleanup, which can fail or wait
+      // for capacity without revoking the output transaction's durable evidence.
+      observeFileSettlement(options, settlement, checkpoint)
+    } finally {
+      await finishTransferFile(options, acquired, primaryFailure, capacityBlocked)
+    }
   }
+}
+
+function observeFileSettlement(
+  options: V2FileTransferOptions,
+  settlement: FileTransferSettlement,
+  checkpoint: FileCheckpointController | undefined,
+): void {
+  if (settlement.kind !== 'unconfirmed' && checkpoint !== undefined) {
+    const durableBytes = settlement.kind === 'paused' ? settlement.retainedBytes : settlement.exactSize
+    const advancedBytes = durableBytes - checkpoint.durableBytes
+    if (advancedBytes > 0n) {
+      options.onRecoverableAcknowledged?.(advancedBytes, settlement.kind === 'paused' ? 'pause' : 'final')
+    }
+  }
+  options.onSettlement(settlement)
 }
 
 async function drainCheckpointFailure(
@@ -246,25 +273,29 @@ async function settleTransferError(
   options: V2FileTransferOptions,
   transaction: BoundOutputFileTransaction | undefined,
   error: unknown,
-): Promise<{ failure: NormalizedV2FileTransferFailure; capacityBlocked?: OutputCapacityBlockedError }> {
+): Promise<SettledFileFailure> {
   if (error instanceof OutputCapacityBlockedError && !options.signal.aborted) {
     // Unwind the write/buffer lease before waiting: parked payload buffers could
     // otherwise consume the entire budget needed by still-admitted files.
     try {
+      let settlement = UNCONFIRMED_FILE_SETTLEMENT
       if (transaction !== undefined) {
-        await withOutputSettlementTimeout('checkpoint capacity-blocked file',
+        const durable = await withOutputSettlementTimeout('checkpoint capacity-blocked file',
           options.outputSettlementTimeoutMilliseconds, () => transaction.pause(error))
+        settlement = Object.freeze({ kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()) })
       }
-      return { capacityBlocked: error, failure: normalizeV2FileTransferFailure(error, { stage: 'output_write' }) }
+      return { capacityBlocked: error, settlement,
+        failure: normalizeV2FileTransferFailure(error, { stage: 'output_write' }) }
     } catch (settlementFailure) {
-      return { failure: normalizeV2FileTransferFailure(settlementFailure, { stage: 'settlement' }) }
+      return { failure: normalizeV2FileTransferFailure(settlementFailure, { stage: 'settlement' }),
+        settlement: UNCONFIRMED_FILE_SETTLEMENT }
     }
   }
-  return { failure: await settleFailedFileTransfer(options, transaction,
+  return settleFailedFileTransfer(options, transaction,
     normalizeV2FileTransferFailure(error, {
       signal: options.signal,
       ...(options.incidentScope === undefined ? {} : { incidentScope: options.incidentScope }),
-    })) }
+    }))
 }
 
 async function finishTransferFile(
@@ -305,12 +336,14 @@ async function settleFailedFileTransfer(
   options: V2FileTransferOptions,
   transaction: BoundOutputFileTransaction | undefined,
   failure: NormalizedV2FileTransferFailure,
-): Promise<NormalizedV2FileTransferFailure> {
-  if (transaction === undefined) return failure
+): Promise<SettledFileFailure> {
+  if (transaction === undefined) return { failure, settlement: UNCONFIRMED_FILE_SETTLEMENT }
   if (failure.kind === 'canceled') return pauseCanceledFileTransfer(options, transaction, failure)
   const persistenceFailure = await persistSourceFailure(options, transaction, failure)
-  if (persistenceFailure !== undefined) return persistenceFailure
-  return settleFileFault(options, transaction, failure)
+  return {
+    failure: persistenceFailure ?? await settleFileFault(options, transaction, failure),
+    settlement: UNCONFIRMED_FILE_SETTLEMENT,
+  }
 }
 
 async function settleFileFault(
@@ -374,14 +407,16 @@ async function pauseCanceledFileTransfer(
   options: V2FileTransferOptions,
   transaction: BoundOutputFileTransaction,
   failure: Extract<NormalizedV2FileTransferFailure, { kind: 'canceled' }>,
-): Promise<NormalizedV2FileTransferFailure> {
+): Promise<SettledFileFailure> {
   try {
-    await withOutputSettlementTimeout(
+    const durable = await withOutputSettlementTimeout(
       'pause output file transaction',
       options.outputSettlementTimeoutMilliseconds,
       () => transaction.pause(failure.diagnostic),
     )
-    return failure
+    return { failure, settlement: Object.freeze({
+      kind: 'paused', retainedBytes: rangeBytes(durable.asRangeSet()),
+    }) }
   } catch (pauseFailure) {
     normalizeV2FileTransferFailure(pauseFailure, {
       ...(options.incidentScope === undefined
@@ -390,16 +425,19 @@ async function pauseCanceledFileTransfer(
       relation: 'consequence',
       stage: 'settlement',
     })
-    return normalizedV2FileTransferFault(
-      outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
-      {
-        ...(options.incidentScope === undefined
-          ? {}
-          : { incidentScope: options.incidentScope }),
-        stage: 'settlement',
-        materializationFailureReason: 'output-write-failed',
-      },
-    )
+    return {
+      failure: normalizedV2FileTransferFault(
+        outputFault(FaultScope.OutputPause, OutputFaultCode.MutationAmbiguous),
+        {
+          ...(options.incidentScope === undefined
+            ? {}
+            : { incidentScope: options.incidentScope }),
+          stage: 'settlement',
+          materializationFailureReason: 'output-write-failed',
+        },
+      ),
+      settlement: UNCONFIRMED_FILE_SETTLEMENT,
+    }
   }
 }
 

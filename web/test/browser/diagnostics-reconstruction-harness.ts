@@ -375,6 +375,7 @@ function resumableReceive(
     generation,
     checkpointSetDigest: identity(60, 32),
     completedFileCount: 1n,
+    retainedBytes: 16n,
     completedBytes: 16n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 1n,

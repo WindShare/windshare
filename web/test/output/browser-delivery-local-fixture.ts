@@ -54,7 +54,7 @@ export async function localDeliveryFixture() {
   const lifecycle: LocalFileSetLifecycle = {
     kind: 'resumable-receive', payloadKind: 'file-set', operationId: intent.operationId,
     receiveIntentDigest: intent.digest, generation: 7n, checkpointSetDigest: snapshot.checkpointSetDigest,
-    completedFileCount: 0n, completedBytes: 0n,
+    completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
     selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'complete' },
   }
   return { intent, policy, source, initial, target, stage, baseline, lifecycle }

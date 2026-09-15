@@ -11,7 +11,7 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   if (progress === null && direct === null) return retainedProgress(facts)
   // Direct ZIP receipt advances while output writes and durable checkpoints wait.
   // Its logical payload already includes the retained prefix after reopening.
-  const materialized = direct?.receivedSelectedBytes ?? progress?.materializedBytes ?? 0n
+  const materialized = materializedTaskBytes(facts)
   const files = completedFileLabel(facts)
   const details = progressDetails(facts)
   const percentage = exactPercentage(facts, materialized)
@@ -31,6 +31,14 @@ export function presentTaskProgress(facts: TaskFacts): TaskProgressPresentation 
   })
 }
 
+function materializedTaskBytes(facts: TaskFacts): bigint {
+  const state = facts.lifecycle
+  // A settled checkpoint supersedes the attempt's last observation, including
+  // interruptions before a reopened file could report its initial coverage.
+  if (state.kind === 'resumable-receive' && state.payloadKind === 'file-set') return state.retainedBytes
+  return facts.directZipProgress?.receivedSelectedBytes ?? facts.progress?.materializedBytes ?? 0n
+}
+
 function completedFileLabel(facts: TaskFacts): string {
   if (facts.browserDelivery != null) return ` · ${facts.browserDelivery.targetSavedFiles} files saved to folder`
   return facts.progress === null ? '' : ` · ${facts.progress.completedFiles} files completed`
@@ -45,7 +53,7 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
     details: Object.freeze(browserDeliveryDetails(facts.browserDelivery, facts.lifecycle)),
   })
   if (state.kind !== 'resumable-receive') return null
-  const retained = state.payloadKind === 'direct-zip' ? state.safeSelectedPayloadBytes : state.completedBytes
+  const retained = retainedReceiveBytes(state)
   return Object.freeze({
     mode: 'indeterminate', percentage: null,
     sampleIdentity: '', receivedBytes: 0n, remainingBytes: null, status: null,
@@ -54,6 +62,14 @@ function retainedProgress(facts: TaskFacts): TaskProgressPresentation | null {
       ? [`Continuing may need up to ${formatBytes(state.committedArchiveLength)} of temporary destination space.`]
       : [`${state.completedFileCount} completed files retained.`]),
   })
+}
+
+function retainedReceiveBytes(state: Extract<TaskFacts['lifecycle'], { kind: 'resumable-receive' }>): bigint {
+  switch (state.payloadKind) {
+    case 'file-set': return state.retainedBytes
+    case 'direct-zip': return state.safeSelectedPayloadBytes
+    case 'opfs-zip': return state.completedBytes
+  }
 }
 
 function exactPercentage(facts: TaskFacts, materialized: bigint): number | null {

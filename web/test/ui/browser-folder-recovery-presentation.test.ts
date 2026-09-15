@@ -74,7 +74,7 @@ describe('folder receiving and local saving presentation', () => {
     const summary = summarizeBrowserDeliveries(fixture.policy, [fixture.initial])
     const lifecycle = { operationId: fixture.policy.operationId, receiveIntentDigest: fixture.policy.receiveIntentDigest, generation: 2n,
       kind: 'resumable-receive' as const, payloadKind: 'file-set' as const,
-      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, completedBytes: 0n,
+      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' as const } }
     expect(retainedBrowserDeliveryActions(lifecycle, summary, ['continue'])).toEqual(['continue'])
   })
@@ -87,7 +87,7 @@ describe('folder receiving and local saving presentation', () => {
     const lifecycle = {
       operationId: fixture.policy.operationId, receiveIntentDigest: fixture.policy.receiveIntentDigest, generation: 2n,
       kind: 'resumable-receive' as const, payloadKind: 'file-set' as const,
-      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, completedBytes: 0n,
+      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' as const },
     }
     const presentation = presentReceiveLifecycle({
@@ -138,7 +138,7 @@ describe('folder receiving and local saving presentation', () => {
     const lifecycle = {
       operationId: fixture.policy.operationId, receiveIntentDigest: fixture.policy.receiveIntentDigest, generation: 2n,
       kind: 'resumable-receive' as const, payloadKind: 'file-set' as const,
-      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, completedBytes: 0n,
+      checkpointSetDigest: fixture.policy.digest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' as const },
     }
     const operation: V2RetainedReceiveOperation = {

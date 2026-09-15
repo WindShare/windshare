@@ -88,7 +88,7 @@ describe('interrupted original-file receive recovery', () => {
       expect(reopened.lifecycle).toMatchObject({ kind: 'receiving', generation: 4n, activeLeaseId: reopened.lease.leaseId })
       expect(reopened.receiveAdmissionFallback).toMatchObject({
         kind: 'resumable-receive', payloadKind: 'file-set', generation: 3n,
-        completedFileCount: 0n, completedBytes: 0n,
+        completedFileCount: 0n, completedBytes: 0n, retainedBytes: cut === 'partial' ? 3n : 0n,
         selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 5n, discovery: 'complete' },
       })
       expect(reopened.receiveContinuation).toBeDefined()
@@ -104,7 +104,7 @@ describe('interrupted original-file receive recovery', () => {
       // Recovery summaries must not promote a partly received file to completed output.
       await reopened.stages.restoreReceiveContinuation(reopened.receiveAdmissionFallback!)
       expect(await f.state.lifecycle()).toMatchObject({
-        kind: 'resumable-receive', completedFileCount: 0n, completedBytes: 0n,
+        kind: 'resumable-receive', completedFileCount: 0n, retainedBytes: cut === 'partial' ? 3n : 0n, completedBytes: 0n,
         checkpointSetDigest: reopened.receiveAdmissionFallback!.checkpointSetDigest,
       })
     } finally { await reopened.close() }

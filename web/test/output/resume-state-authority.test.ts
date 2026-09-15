@@ -205,6 +205,7 @@ function resumableReceive(): ReceiveLifecycleState {
     generation: 4n,
     checkpointSetDigest: identity(32, 3),
     completedFileCount: 2n,
+    retainedBytes: 12n,
     completedBytes: 12n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 3n,
@@ -229,6 +230,7 @@ function recoverySummary(lifecycle: ReceiveLifecycleState): RecoverySummary {
     discoveredBytes: 20n,
     discovery: 'known-so-far',
     completedFileCount: lifecycle.completedFileCount,
+    retainedBytes: lifecycle.completedBytes,
     completedBytes: lifecycle.completedBytes,
     incompleteFileCount: 1n,
     verifiedPartialFileCount: 1n,

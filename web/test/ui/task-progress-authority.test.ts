@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest'
 import { presentTask } from '../../src/ui/tasks'
 import { taskFixture, TASK_FIXTURES } from '../../src/ui/tasks/fixtures'
 import { EMPTY_V2_PROGRESS } from '../../src/ui/v2-model'
+import { encodeBase64Url } from '../../src/crypto/bytes'
+import { storedReceiveLifecycleState, decodeStoredReceiveLifecycleState } from '../../src/output/workspace/state-codec'
 
 const MIB = 1024n * 1024n
 const resumed = {
@@ -12,6 +14,29 @@ const resumed = {
 }
 
 describe('task progress native authority', () => {
+  it('shows partially retained bytes after a paused task is persisted and reloaded', async () => {
+    const record = await storedReceiveLifecycleState({
+      kind: 'resumable-receive', payloadKind: 'file-set',
+      operationId: encodeBase64Url(new Uint8Array(16).fill(1)),
+      receiveIntentDigest: encodeBase64Url(new Uint8Array(32).fill(2)),
+      checkpointSetDigest: encodeBase64Url(new Uint8Array(32).fill(3)),
+      generation: 2n, completedFileCount: 0n, completedBytes: 0n, retainedBytes: 3n * MIB,
+      selectionFacts: { discovery: 'complete', discoveredFileCount: 1n, discoveredBytes: 12n * MIB },
+    })
+    const task = presentTask(taskFixture({
+      progress: null, directZipProgress: null, lifecycle: decodeStoredReceiveLifecycleState(record),
+    }))
+    expect(task.progress?.label).toBe('3.0 MiB retained for continuation')
+    expect(task.progress?.details).toContain('0 completed files retained.')
+    expect(task.publication).toBe('unpublished')
+    const paused = presentTask(taskFixture({
+      lifecycle: decodeStoredReceiveLifecycleState(record),
+      progress: { ...EMPTY_V2_PROGRESS, discovery: 'complete', discoveredFiles: 1, discoveredBytes: 12n * MIB },
+    }))
+    expect(paused.progress?.label).toContain('3.0 MiB / 12.0 MiB written or reused')
+    expect(paused.progress?.percentage).toBe(25)
+  })
+
   it('counts authenticated reused payload once without adding overlapping receipt and completed bytes', () => {
     const task = presentTask(taskFixture({ progress: resumed }))
     expect(task.progress?.percentage).toBe(91)
