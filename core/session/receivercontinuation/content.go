@@ -53,10 +53,16 @@ func (s *Session) ReleaseRevision(ctx context.Context, lease transfer.RevisionHa
 		return nil
 	}
 	dependencies, err := binding.runtime.TransferDependencies()
-	if err != nil {
-		return err
+	if err == nil {
+		err = dependencies.ReleaseRevision(ctx, binding.opened.Handle)
 	}
-	return dependencies.ReleaseRevision(ctx, binding.opened.Handle)
+	// Path retirement also ends old-generation lease authority when it wins
+	// during release. Join that decision before treating cleanup as a failure;
+	// protocol rejection and caller shutdown still retain their own errors.
+	if err != nil && binding.runtime.AwaitPathRetirement(ctx) {
+		return nil
+	}
+	return err
 }
 
 func (s *Session) ReadRange(ctx context.Context, lease transfer.RevisionHandle, descriptor content.FileRevisionDescriptor, requested content.Range, sink transfer.RangeSink) error {
