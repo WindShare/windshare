@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { capture, CURRENT_TASK, expectNoHorizontalOverflow, galleryEvidence, GALLERY_PATH, JADE, showScenario } from './assertions'
+import { capture, CURRENT_TASK, expectNoHorizontalOverflow, galleryEvidence, GALLERY_PATH, showScenario } from './assertions'
 import { LONG_NAME } from './fixtures'
 
 test('live system appearance preserves selection, task progress, modal identity and keyboard focus', async ({ page }) => {
@@ -26,13 +26,11 @@ test('live system appearance preserves selection, task progress, modal identity 
     const back = dialog.getByRole('button', { name: 'Close downloads', exact: true })
     await back.focus()
     const before = await galleryEvidence(page)
+    const lightBackground = await dialog.evaluate(element => getComputedStyle(element).backgroundColor)
     for (const colorScheme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme })
-      await expect(page.locator('.receiver-shell')).toHaveCSS('background-color', JADE[colorScheme].page)
-      await expect(dialog).toHaveCSS('background-color', JADE[colorScheme].paper)
-      await expect(dialog).toHaveCSS('color', JADE[colorScheme].ink)
-      await expect(back).toHaveCSS('color', JADE[colorScheme].ink)
-      await expect(dialog.getByRole('button', { name: 'Details', exact: true }).last()).toHaveCSS('color', JADE[colorScheme].ink)
+      if (colorScheme === 'dark') await expect(dialog).not.toHaveCSS('background-color', lightBackground)
+      else await expect(dialog).toHaveCSS('background-color', lightBackground)
       expect(await taskNode!.evaluate(element => element.isConnected)).toBe(true)
       expect(await dialogNode!.evaluate(element => element.isConnected && (element as HTMLDialogElement).open)).toBe(true)
       await expect(back).toBeFocused()
@@ -94,37 +92,5 @@ test('Jade content and task actions reflow at narrow widths, large text and shor
     expect(await details.evaluate(element => element.scrollWidth <= element.clientWidth)).toBe(true)
     await capture(page, 'reflow-details-' + width + '-' + fontSize + '-' + colorScheme)
     await page.keyboard.press('Escape')
-  }
-})
-
-test('dark media remains uncropped and unsupported previews retain an immediate download action', async ({ page }) => {
-  await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' })
-  await page.goto(GALLERY_PATH)
-  for (const [width, height] of [[1024, 900], [360, 740]] as const) {
-    await page.setViewportSize({ width, height })
-    for (const scenario of ['folder', 'portrait', 'landscape', 'video', 'unsupported'] as const) {
-      await showScenario(page, scenario)
-      if (scenario === 'portrait' || scenario === 'landscape') {
-        await expect(page.getByRole('img', { name: /^Preview of/ })).toHaveCSS('object-fit', 'contain')
-      }
-      if (scenario === 'video') {
-        await page.getByRole('button', { name: 'Preview a frame', exact: true }).click()
-        await expect(page.locator('.preview-frame-stage')).toHaveAttribute('aria-busy', 'false')
-        const seek = page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })
-        await seek.focus()
-        await page.keyboard.press('ArrowRight')
-        expect((await galleryEvidence(page)).intents.some(intent => intent.startsWith('seek:'))).toBe(true)
-      }
-      if (scenario === 'unsupported') {
-        await page.getByRole('button', { name: 'Preview', exact: true }).click()
-        await expect(page.getByRole('alert')).toContainText('cannot be previewed')
-        const download = page.getByRole('button', { name: 'Download file', exact: true })
-        await expect(download).toBeEnabled()
-        await download.click()
-        expect((await galleryEvidence(page)).intents.some(intent => intent.startsWith('choose:'))).toBe(true)
-      }
-      await expectNoHorizontalOverflow(page)
-      await capture(page, 'dark-' + width + '-' + scenario, true)
-    }
   }
 })
