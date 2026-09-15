@@ -149,7 +149,7 @@ func TestProofAuthoritiesCannotCrossRegistrationOrStopBoundaries(t *testing.T) {
 		t.Fatal("sender authority crossed registration digest")
 	}
 
-	uploadBytes := testB64(t, "V1MyVQIAAAAAAADjAgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3IZ12dbXljAhPMxure5bwD4bJzI+qSRmw1G6aZems+gCERr/qm4+5Vtdpve2Fmf2tbEqKTtppABJrqXNgEaKnQ4=")
+	uploadBytes := testB64(t, frozenRegistrationVector(t).DescriptorUploadB64)
 	upload, _ := ParseDescriptorUpload(uploadBytes)
 	if _, err := VerifyDescriptorUpload(init, SenderAuthority{}, upload); !errors.Is(err, ErrProof) {
 		t.Fatalf("zero descriptor authority error = %v", err)

@@ -480,8 +480,14 @@ describe('suite-02 Web runtime contract', () => {
         : await openSenderObject(binding, key, senderPublicKey, object)
       expect(plaintext).toEqual(bytes(vector.canonicalCborB64))
 
-      await expect(openSenderObject(binding, key, senderPublicKey, flip(object, 20))).rejects.toThrow()
-      await expect(openSenderObject(binding, key, senderPublicKey, flip(object, object.length - 1))).rejects.toThrow()
+      for (const offset of [8, 20, prefix.length - 17, prefix.length - 1, object.length - 1]) {
+        await expect(openSenderObject(binding, key, senderPublicKey, flip(object, offset)))
+          .rejects.toMatchObject({ kind: 'signature' })
+      }
+      const previousVersion = object.slice()
+      previousVersion[0] = 2
+      await expect(openSenderObject(binding, key, senderPublicKey, previousVersion))
+        .rejects.toMatchObject({ kind: 'malformed' })
       for (const hostileBinding of await hostileObjectBindings(vector)) {
         await expect(
           openSenderObject(hostileBinding, key, senderPublicKey, object),

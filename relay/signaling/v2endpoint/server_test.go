@@ -3,12 +3,9 @@ package v2endpoint
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
@@ -19,6 +16,7 @@ import (
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
+	"github.com/windshare/windshare/core/senderobject"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 	"github.com/windshare/windshare/relay/signaling/v2route"
 	"github.com/windshare/windshare/transport/relayv2"
@@ -1040,27 +1038,10 @@ func endpointResumeAuthority(
 }
 
 func sealDescriptor(init v2.RegisterInit, key []byte, privateKey ed25519.PrivateKey) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	plaintext := []byte{0xa1, 0x00, 0x01}
-	header := make([]byte, 8)
-	header[0] = v2.WireVersion
-	binary.BigEndian.PutUint32(header[4:], uint32(len(plaintext)+aead.Overhead()))
-	objectContext := append([]byte{v2.Suite}, init.PKHash[:]...)
-	objectContext = append(objectContext, init.ShareID[:]...)
-	contextHash := sha256.Sum256(objectContext)
-	aad := append([]byte("windshare/v2 object/descriptor\x00"), contextHash[:]...)
-	aad = append(aad, header...)
-	nonce := bytes.Repeat([]byte{0x18}, aead.NonceSize())
-	prefix := append(bytes.Clone(header), nonce...)
-	prefix = aead.Seal(prefix, nonce, plaintext, aad)
-	preimage := append([]byte("windshare/v2 object/descriptor\x00"), contextHash[:]...)
-	preimage = append(preimage, prefix...)
-	return append(prefix, ed25519.Sign(privateKey, preimage)...), nil
+	return senderobject.Seal(binding, key, privateKey,
+		bytes.Repeat([]byte{0x18}, senderobject.NonceBytes), []byte{0xa1, 0x00, 0x01})
 }

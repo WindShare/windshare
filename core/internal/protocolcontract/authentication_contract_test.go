@@ -187,7 +187,7 @@ func assertSenderObjectContextRejected(t *testing.T, f *fixture, object sealedOb
 	if _, err := aead.Open(nil, object.encoded[8:20], object.encoded[20:prefixEnd], aad); err == nil {
 		t.Fatal("AEAD accepted a mutated object identity")
 	}
-	preimage := slices.Concat([]byte(object.domain), []byte{0}, contextHash, object.encoded[:prefixEnd])
+	preimage := slices.Concat([]byte(object.domain), []byte{0}, contextHash, hash(object.encoded[:prefixEnd]))
 	if ed25519.Verify(f.edPublic, preimage, object.encoded[prefixEnd:]) {
 		t.Fatal("signature accepted a mutated object identity")
 	}

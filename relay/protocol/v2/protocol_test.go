@@ -5,7 +5,9 @@ import (
 	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"os"
 	"testing"
 	"time"
 )
@@ -27,6 +29,46 @@ func testSequence(first byte, length int) []byte {
 	return result
 }
 
+type registrationFixture struct {
+	Name                  string `json:"name"`
+	DescriptorDigestB64   string `json:"descriptorDigestB64"`
+	RegisterInitB64       string `json:"registerInitB64"`
+	PreimageB64           string `json:"preimageB64"`
+	RegisterProofB64      string `json:"registerProofB64"`
+	DescriptorUploadB64   string `json:"descriptorUploadB64"`
+	DescriptorDeliveryB64 string `json:"descriptorDeliveryB64"`
+}
+
+func frozenRegistrationVector(t *testing.T) registrationFixture {
+	t.Helper()
+	encoded, err := os.ReadFile("../../../core/testvectors/v2-session.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var file struct {
+		Cases []registrationFixture `json:"cases"`
+	}
+	if err := json.Unmarshal(encoded, &file); err != nil {
+		t.Fatal(err)
+	}
+	for _, fixture := range file.Cases {
+		if fixture.Name == "fresh-relay-registration-proof" {
+			return fixture
+		}
+	}
+	t.Fatal("missing frozen registration vector")
+	return registrationFixture{}
+}
+
+func frozenDescriptor(t *testing.T) []byte {
+	t.Helper()
+	upload, err := ParseDescriptorUpload(testB64(t, frozenRegistrationVector(t).DescriptorUploadB64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return upload.Object
+}
+
 func frozenRegistration(t *testing.T) (RegisterInit, Challenge, RelayIdentity, ed25519.PrivateKey) {
 	t.Helper()
 	var init RegisterInit
@@ -34,7 +76,7 @@ func frozenRegistration(t *testing.T) (RegisterInit, Challenge, RelayIdentity, e
 	copy(init.ShareID[:], testB64(t, "tVW+68OSeLBZTpU+"))
 	copy(init.ShareInstance[:], testB64(t, "QEFCQ0RFRkdISUpLTE1OTw=="))
 	copy(init.PKHash[:], testB64(t, "JEKgoDij26RUJt97fcJPxA=="))
-	copy(init.DescriptorDigest[:], testB64(t, "On7QQd47GWSkm2d7BhQJ5XmC1Y4Xxtu4k+cCPMNKEZY="))
+	copy(init.DescriptorDigest[:], testB64(t, frozenRegistrationVector(t).DescriptorDigestB64))
 	copy(init.ResumeTokenHash[:], testB64(t, "y8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA="))
 	var challenge Challenge
 	challenge.Purpose = ChallengeRegister
@@ -48,12 +90,13 @@ func frozenRegistration(t *testing.T) (RegisterInit, Challenge, RelayIdentity, e
 }
 
 func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T) {
+	vector := frozenRegistrationVector(t)
 	init, challenge, relayIdentity, privateKey := frozenRegistration(t)
 	initBytes, err := init.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := testB64(t, "V1MyUgIAAAC1Vb7rw5J4sFlOlT5AQUJDREVGR0hJSktMTU5PJEKgoDij26RUJt97fcJPxDp+0EHeOxlkpJtnewYUCeV5gtWOF8bbuJPnAjzDShGWy8MvQbuxtwSyAAZ4WakNTEN24ONLRmnUEgYX5VXgHiA="); !bytes.Equal(initBytes, want) {
+	if want := testB64(t, vector.RegisterInitB64); !bytes.Equal(initBytes, want) {
 		t.Fatal("REGISTER_INIT diverged from frozen vector")
 	}
 	challengeBytes, _ := challenge.MarshalBinary()
@@ -64,7 +107,7 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := testB64(t, "d2luZHNoYXJlL3YyIHJlbGF5LXJlZ2lzdGVyALVVvuvDkniwWU6VPkBBQkNERUZHSElKS0xNTk8kQqCgOKPbpFQm33t9wk/EOn7QQd47GWSkm2d7BhQJ5XmC1Y4Xxtu4k+cCPMNKEZbLwy9Bu7G3BLIABnhZqQ1MQ3bg40tGadQSBhflVeAeIJasO2tVgsmH27TH4QmtHY2h/v5jufcd6sJleDIK5rIdAQIDBAUGBwgJCgsMDQ4PECEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj9AAAAAAGVT8R4="); !bytes.Equal(preimage, want) {
+	if want := testB64(t, vector.PreimageB64); !bytes.Equal(preimage, want) {
 		t.Fatal("registration preimage diverged from frozen vector")
 	}
 	proof, err := NewRegisterProof(init, challenge, relayIdentity, privateKey)
@@ -72,7 +115,7 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 		t.Fatal(err)
 	}
 	proofBytes, _ := proof.MarshalBinary()
-	if want := testB64(t, "V1MyUAIAAAAprLrhQbzK8LIuGpTTTQvHNh5SbQv+EsiXlLyTIpZt15V0JzXTUa/PIcjBj7iDpbBz0BLmKfRh1tda+jcvQLpTZsOJM/DUj88nARIOvEQD4mLjoo2ARiKCJ42qVjLXEgs="); !bytes.Equal(proofBytes, want) {
+	if want := testB64(t, vector.RegisterProofB64); !bytes.Equal(proofBytes, want) {
 		t.Fatal("REGISTER_PROOF diverged from frozen vector")
 	}
 	authority, err := authenticateRegisterProof(init, challenge, relayIdentity, proof, time.Unix(1_700_000_000, 0))
@@ -80,7 +123,7 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 		t.Fatal(err)
 	}
 
-	uploadBytes := testB64(t, "V1MyVQIAAAAAAADjAgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3IZ12dbXljAhPMxure5bwD4bJzI+qSRmw1G6aZems+gCERr/qm4+5Vtdpve2Fmf2tbEqKTtppABJrqXNgEaKnQ4=")
+	uploadBytes := testB64(t, vector.DescriptorUploadB64)
 	upload, err := ParseDescriptorUpload(uploadBytes)
 	if err != nil {
 		t.Fatal(err)
@@ -95,7 +138,7 @@ func TestFreshRegistrationAndDescriptorDirectionsMatchFrozenVectors(t *testing.T
 	if encoded, err := upload.MarshalBinary(); err != nil || !bytes.Equal(encoded, uploadBytes) {
 		t.Fatalf("WS2U byte replay changed: %v", err)
 	}
-	deliveryBytes := testB64(t, "V1MyRAIAAADh4uPk5ebn6AAAAOMCAAAAAAAAj9DR0tPU1dbX2Nna21mIW1WQFRsyPDscj+rkH2pPDpt02aVYBC0yA/EkaRFKaZmOXoqFgzzBGM9I2mmnrLyX6iyQuFM2OSc9s9HjWXcossJyXxrdAacFmW2lE/Z6vJIeGhQvMnOUNwQCSZAnKsBKaA1B1VBKKlJGJreXvJGdkB4WEKiUL9ZgA7jtME7V5mujhDb94G8tlgVei6XchnXZ1teWMCE8zG6t7lvAPhsnMj6pJGbDUbppl6az6AIRGv+qbj7lW12m97YWZ/a1sSopO2mkAEmupc2ARoqdDg==")
+	deliveryBytes := testB64(t, vector.DescriptorDeliveryB64)
 	delivery, err := ParseDescriptorDelivery(deliveryBytes)
 	if err != nil || !bytes.Equal(delivery.Object, upload.Object) {
 		t.Fatalf("WS2D parse: %v", err)
@@ -332,13 +375,38 @@ func TestDescriptorDigestSubstitutionFailsBeforePublication(t *testing.T) {
 	init, challenge, relay, privateKey := frozenRegistration(t)
 	proof, _ := NewRegisterProof(init, challenge, relay, privateKey)
 	authority, _ := authenticateRegisterProof(init, challenge, relay, proof, time.Unix(1_700_000_000, 0))
-	object := testB64(t, "AgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3IZ12dbXljAhPMxure5bwD4bJzI+qSRmw1G6aZems+gCERr/qm4+5Vtdpve2Fmf2tbEqKTtppABJrqXNgEaKnQ4=")
+	object := frozenDescriptor(t)
 	if digest := sha256.Sum256(object); digest != init.DescriptorDigest {
 		t.Fatal("test fixture digest mismatch")
 	}
 	object[20] ^= 1
 	if _, err := VerifyDescriptorUpload(init, authority, DescriptorUpload{Object: object}); !errors.Is(err, ErrProof) {
 		t.Fatalf("descriptor substitution error = %v", err)
+	}
+}
+
+func TestDescriptorAdmissionRejectsInvalidObjectsWithAuthenticatedUploadDigests(t *testing.T) {
+	for name, offset := range map[string]int{
+		"previous-object-version": 0, "flags": 1, "nonce": 8, "ciphertext": 20,
+	} {
+		t.Run(name, func(t *testing.T) {
+			init, challenge, relay, privateKey := frozenRegistration(t)
+			object := frozenDescriptor(t)
+			object[offset] ^= 1
+			// A sender-authenticated upload digest cannot replace object authentication.
+			init.DescriptorDigest = sha256.Sum256(object)
+			proof, err := NewRegisterProof(init, challenge, relay, privateKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			authority, err := authenticateRegisterProof(init, challenge, relay, proof, time.Unix(1_700_000_000, 0))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := VerifyDescriptorUpload(init, authority, DescriptorUpload{Object: object}); !errors.Is(err, ErrProof) {
+				t.Fatalf("descriptor admission error = %v", err)
+			}
+		})
 	}
 }
 

@@ -1,7 +1,7 @@
 import type { FrameChannel, ChannelState } from '../../src/contracts/channel'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { concatBytes, encodeBase64Url } from '../../src/crypto/bytes'
-import { createRevisionObjectBinding, senderObjectAuthenticationData, senderObjectSignaturePreimage } from '../../src/crypto/sender-object'
+import { SENDER_OBJECT_WIRE_VERSION, createRevisionObjectBinding, senderObjectAuthenticationData, senderObjectSignaturePreimage } from '../../src/crypto/sender-object'
 import { deriveSuite02FileObjectKey } from '../../src/crypto/suite02-key-derivation'
 import { encodeCanonicalCbor } from '../../src/protocol/cbor'
 import { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
@@ -116,7 +116,7 @@ async function sealedRevision(share: V2ShareDescriptor, fileId: Uint8Array, sign
   ]))
   const binding = createRevisionObjectBinding(share.shareInstance, fileId)
   const header = new Uint8Array(8)
-  header[0] = 2
+  header[0] = SENDER_OBJECT_WIRE_VERSION
   new DataView(header.buffer).setUint32(4, body.byteLength + 16, false)
   const nonce = crypto.getRandomValues(new Uint8Array(12))
   const keyBytes = await deriveSuite02FileObjectKey(SECRET, share.shareInstance, fileId)

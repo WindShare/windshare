@@ -5,7 +5,8 @@ import { suite02SenderKeyHash } from './suite02-link'
 import { SUITE02_DERIVED_KEY_BYTES } from './suite02-key-derivation'
 import { type CryptoRuntime, defaultCryptoRuntime, importAesGcmKey } from './webcrypto'
 
-export const SENDER_OBJECT_WIRE_VERSION = 2
+// Object signature revisions are independent of the v2 session wire and suite-02 keys.
+export const SENDER_OBJECT_WIRE_VERSION = 3
 export const SENDER_OBJECT_HEADER_BYTES = 8
 export const SENDER_OBJECT_NONCE_BYTES = 12
 export const SENDER_OBJECT_SIGNATURE_BYTES = 64
@@ -291,11 +292,17 @@ export async function senderObjectSignaturePreimage(
   prefix: Uint8Array,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
+  // Native hashing keeps full block data out of the portable Ed25519 path.
+  // These independent commitments must not add two serial WebCrypto waits.
+  const [bindingHash, objectHash] = await Promise.all([
+    contextHash(expectedBinding, runtime),
+    sha256(prefix, runtime),
+  ])
   return concatBytes([
     TEXT_ENCODER.encode(expectedBinding.domain),
     Uint8Array.of(0),
-    await contextHash(expectedBinding, runtime),
-    prefix,
+    bindingHash,
+    objectHash,
   ])
 }
 
@@ -303,13 +310,12 @@ async function verifySignature(
   publicKey: Uint8Array,
   preimage: Uint8Array,
   signature: Uint8Array,
-  runtime: CryptoRuntime,
 ): Promise<boolean> {
   if (publicKey.byteLength !== 32 || signature.byteLength !== SENDER_OBJECT_SIGNATURE_BYTES) {
     throw new SenderObjectError('key', 'Ed25519 verification material has an invalid width')
   }
   try {
-    return await verifyEd25519Signature(publicKey, preimage, signature, runtime)
+    return await verifyEd25519Signature(publicKey, preimage, signature)
   } catch (cause) {
     throw new SenderObjectError('key', 'Unable to verify Ed25519 sender signature', { cause })
   }
@@ -323,7 +329,7 @@ export async function verifySenderObject(
 ): Promise<void> {
   const parsed = parseSenderObject(object, expectedBinding)
   const preimage = await senderObjectSignaturePreimage(expectedBinding, parsed.prefix, runtime)
-  if (!(await verifySignature(publicKey, preimage, parsed.signature, runtime))) {
+  if (!(await verifySignature(publicKey, preimage, parsed.signature))) {
     throw new SenderObjectError('signature', 'sender object signature is invalid')
   }
 }
