@@ -3,17 +3,15 @@ package v2route
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/ed25519"
 	"crypto/hkdf"
 	"crypto/sha256"
-	"encoding/binary"
 	"errors"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/windshare/windshare/core/senderobject"
 	v2 "github.com/windshare/windshare/relay/protocol/v2"
 )
 
@@ -129,27 +127,11 @@ func makeFixture(t *testing.T, identityByte byte) routeFixture {
 }
 
 func sealTestDescriptor(init v2.RegisterInit, key []byte, privateKey ed25519.PrivateKey, nonce, plaintext []byte) ([]byte, error) {
-	block, err := aes.NewCipher(key)
+	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
 	if err != nil {
 		return nil, err
 	}
-	aead, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-	header := make([]byte, 8)
-	header[0] = v2.WireVersion
-	binary.BigEndian.PutUint32(header[4:], uint32(len(plaintext)+aead.Overhead()))
-	context := append([]byte{v2.Suite}, init.PKHash[:]...)
-	context = append(context, init.ShareID[:]...)
-	contextHash := sha256.Sum256(context)
-	aad := append([]byte("windshare/v2 object/descriptor\x00"), contextHash[:]...)
-	aad = append(aad, header...)
-	prefix := append(bytes.Clone(header), nonce...)
-	prefix = aead.Seal(prefix, nonce, plaintext, aad)
-	preimage := append([]byte("windshare/v2 object/descriptor\x00"), contextHash[:]...)
-	preimage = append(preimage, prefix...)
-	return append(prefix, ed25519.Sign(privateKey, preimage)...), nil
+	return senderobject.Seal(binding, key, privateKey, nonce, plaintext)
 }
 
 func challengeLedger(t *testing.T) *v2.ChallengeLedger {

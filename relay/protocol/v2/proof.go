@@ -6,13 +6,14 @@ import (
 	"crypto/subtle"
 	"encoding/binary"
 	"time"
+
+	"github.com/windshare/windshare/core/senderobject"
 )
 
 const (
-	registerDomain   = "windshare/v2 relay-register\x00"
-	resumeDomain     = "windshare/v2 relay-resume\x00"
-	stopDomain       = "windshare/v2 relay-stop\x00"
-	descriptorDomain = "windshare/v2 object/descriptor"
+	registerDomain = "windshare/v2 relay-register\x00"
+	resumeDomain   = "windshare/v2 relay-resume\x00"
+	stopDomain     = "windshare/v2 relay-stop\x00"
 )
 
 func RegistrationPreimage(init RegisterInit, challenge Challenge, relayIdentity RelayIdentity) ([]byte, error) {
@@ -210,35 +211,13 @@ func VerifyDescriptorUpload(init RegisterInit, authority SenderAuthority, upload
 }
 
 func verifyDescriptorSignature(init RegisterInit, senderPublicKey ed25519.PublicKey, object []byte) error {
-	const (
-		headerBytes = 8
-		nonceBytes  = 12
-		tagBytes    = 16
-	)
-	if len(senderPublicKey) != ed25519.PublicKeySize || len(object) < headerBytes+nonceBytes+tagBytes+ed25519.SignatureSize ||
-		len(object) > MaxDescriptorBytes {
+	// Relay admission must enforce the same object version and authentication
+	// contract as receivers without maintaining another sealed-object codec.
+	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
+	if err != nil {
 		return ErrProof
 	}
-	header := object[:headerBytes]
-	if header[0] != WireVersion || header[1] != 0 || header[2] != 0 || header[3] != 0 {
-		return ErrProof
-	}
-	ciphertextLength := binary.BigEndian.Uint32(header[4:])
-	prefixLength := uint64(headerBytes+nonceBytes) + uint64(ciphertextLength)
-	if ciphertextLength < tagBytes || prefixLength+ed25519.SignatureSize != uint64(len(object)) {
-		return ErrProof
-	}
-	context := make([]byte, 0, 1+PKHashBytes+ShareIDBytes)
-	context = append(context, Suite)
-	context = append(context, init.PKHash[:]...)
-	context = append(context, init.ShareID[:]...)
-	contextHash := sha256.Sum256(context)
-	preimage := make([]byte, 0, len(descriptorDomain)+1+sha256.Size+int(prefixLength))
-	preimage = append(preimage, descriptorDomain...)
-	preimage = append(preimage, 0)
-	preimage = append(preimage, contextHash[:]...)
-	preimage = append(preimage, object[:prefixLength]...)
-	if !ed25519.Verify(senderPublicKey, preimage, object[prefixLength:]) {
+	if err := senderobject.Verify(binding, senderPublicKey, object); err != nil {
 		return ErrProof
 	}
 	return nil

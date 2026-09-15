@@ -364,9 +364,9 @@ export function expectSenderObject(
   const ciphertext = object.subarray(SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES, cipherEnd)
   const signature = object.subarray(cipherEnd)
   const aad = concat(utf8(vector.domain), Uint8Array.of(0), contextHash, object.subarray(0, 8))
-  const preimage = concat(utf8(vector.domain), Uint8Array.of(0), contextHash, prefix)
+  const preimage = concat(utf8(vector.domain), Uint8Array.of(0), contextHash, sha256(prefix))
 
-  expect(object[0]).toBe(2)
+  expect(object[0]).toBe(3)
   expect(object.subarray(1, 4)).toEqual(Uint8Array.of(0, 0, 0))
   expect(object.byteLength).toBe(cipherEnd + SENDER_OBJECT_SIGNATURE_BYTES)
   expect(binding.context).toEqual(bytes(vector.contextB64))
@@ -396,7 +396,7 @@ export function expectSenderObject(
       utf8(vector.domain),
       Uint8Array.of(0),
       hostileHash,
-      prefix,
+      sha256(prefix),
     )
     expect(verify(null, hostilePreimage, senderPublicKey, signature), axis.name).toBe(false)
   }

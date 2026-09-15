@@ -66,24 +66,19 @@ describe('curve25519 browser boundary', () => {
     const signature = bytes(registration.signatureB64)
 
     await expect(
-      verifyEd25519Signature(publicKey, preimage, signature, unsupportedCurveRuntime()),
+      verifyEd25519Signature(publicKey, preimage, signature),
     ).resolves.toBe(true)
 
     signature[0] = signature[0]! ^ 1
     await expect(
-      verifyEd25519Signature(publicKey, preimage, signature, unsupportedCurveRuntime()),
+      verifyEd25519Signature(publicKey, preimage, signature),
     ).resolves.toBe(false)
   })
 
-  it('does not disguise validation failures as missing-algorithm fallbacks', async () => {
+  it('does not disguise X25519 validation failures as missing-algorithm fallbacks', async () => {
     const failure = new DOMException('invalid key', 'DataError')
     await expect(
-      verifyEd25519Signature(
-        bytes(identity.senderPublicKeyB64),
-        bytes(registration.preimageB64),
-        bytes(registration.signatureB64),
-        failingEd25519Runtime(failure),
-      ),
+      createX25519KeyAgreement({ runtime: runtimeRejectingCurveMethods(() => failure) }),
     ).rejects.toBe(failure)
   })
 
@@ -117,10 +112,6 @@ function unsupportedCurveRuntime(): CryptoRuntime {
     'curve unavailable',
     'NotSupportedError',
   ))
-}
-
-function failingEd25519Runtime(failure: DOMException): CryptoRuntime {
-  return runtimeRejectingCurveMethods(() => failure)
 }
 
 function runtimeRejectingCurveMethods(failure: () => DOMException): CryptoRuntime {

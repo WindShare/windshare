@@ -19,6 +19,9 @@ layouts; incidental copy, exact palette values, and DOM nesting are not contract
 mappings in unit tests and use browser tests for interactions and representative viewport/theme combinations.
 The short Chromium contracts also build and serve the native-storage capability probe under a
 same-origin Worker CSP, catching bundling failures hidden by the development server.
+Cross-browser crypto contracts open version-3 sealed blocks from an independent signer, reject
+identity/content/signature substitutions, and simulate native Ed25519 returning false. Unit contracts
+also require concurrent native commitment hashes; frozen vectors cover every sender-object domain.
 Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 

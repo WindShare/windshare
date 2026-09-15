@@ -30,6 +30,7 @@ const (
 	updateVectorsCommand = "make vectors-update"
 
 	wireVersion                         = 2
+	senderObjectWireVersion             = 3
 	suite                               = 2
 	chunkSize                           = 1 << 20
 	minChunkSize                        = 1 << 10
@@ -299,7 +300,7 @@ func buildVectorFiles(t *testing.T) []vectorFile {
 	}
 	return []vectorFile{
 		{Version: 1, Kind: "v2-identity", Description: "Suite 0x02 link identity and domain-separated HKDF contract.", Cases: []any{identityCase(t, f)}},
-		{Version: 1, Kind: "v2-sender-objects", Description: "Canonical CBOR, AES-GCM and Ed25519 transport-neutral sender objects.", Cases: objectCases},
+		{Version: 1, Kind: "v2-sender-objects", Description: "Version-3 sender objects: canonical CBOR, AES-GCM and Ed25519 over SHA-256 identity and sealed-object commitments.", Cases: objectCases},
 		{Version: 1, Kind: "v2-session", Description: "Canonical v2 relay endpoint/identity, purpose-bound register/resume/stop proofs, connection probes, route controls, lane admission, X25519 transcript, traffic keys and sender controls.", Cases: sessionCases(t, f, objects)},
 		{Version: 1, Kind: "v2-fragment", Description: "Authenticated BLOCK_FRAGMENT fixed layout and allocation limits.", Cases: fragmentCases(t, f, objects)},
 		{Version: 1, Kind: "v2-semantics", Description: "R0 resource, operation-final, selection/timing, ZIP member, lifecycle and crash-commit state contracts.", Cases: semanticCases(t)},
@@ -470,13 +471,13 @@ func sealObject(t *testing.T, f *fixture, domain string, context, key, nonce, pl
 		t.Fatal(err)
 	}
 	header := make([]byte, 8)
-	header[0] = wireVersion
+	header[0] = senderObjectWireVersion
 	binary.BigEndian.PutUint32(header[4:], uint32(len(plain)+aead.Overhead()))
 	contextHash := hash(context)
 	aad := slices.Concat([]byte(domain), []byte{0}, contextHash, header)
 	sealed := aead.Seal(nil, nonce, plain, aad)
 	prefix := slices.Concat(header, nonce, sealed)
-	preimage := slices.Concat([]byte(domain), []byte{0}, contextHash, prefix)
+	preimage := slices.Concat([]byte(domain), []byte{0}, contextHash, hash(prefix))
 	signature := ed25519.Sign(f.edPrivate, preimage)
 	return sealedObject{
 		domain: domain, context: slices.Clone(context), key: slices.Clone(key), nonce: slices.Clone(nonce),

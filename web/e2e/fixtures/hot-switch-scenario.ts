@@ -22,7 +22,6 @@ import {
 import {
   DIRECT_TEST_BLOCK_BYTES,
   DirectProductStack,
-  DIRECT_WEBKIT_RELAY_BLOCK_BYTES,
   type DirectStackTrace,
   relayReceiverUrl,
 } from './direct-product-stack'
@@ -99,11 +98,7 @@ export async function runHotSwitchScenario(options: HotSwitchScenarioOptions): P
     const proxy = await stack.createRelayCutProxy()
     const path = await stack.createFile(HOT_SWITCH_FILE_NAME, payload)
     const share = await stack.share(path, {
-      blockSizeBytes: hotSwitchBlockSize(
-        options.browserName,
-        initialRouteMode,
-        routePlan.dynamicWebKitNativeAttempt,
-      ),
+      blockSizeBytes: DIRECT_TEST_BLOCK_BYTES,
     })
     const navigationUrl = relayReceiverUrl(share, proxy.url)
     redactor = createCapabilityRedactor({
@@ -294,21 +289,6 @@ function nativeRouteMode(
     return 'direct'
   }
   return capability.rtcCapability === 'available' ? 'direct' : 'relay-fallback'
-}
-
-function hotSwitchBlockSize(
-  browserName: string,
-  routeMode: ResolvedHotSwitchRoute,
-  dynamicWebKitNativeAttempt: boolean,
-): number {
-  // A native-capability WebKit run can discover product-level peer failure only
-  // after the sender is already serving blocks. Start with the relay-safe frame
-  // geometry so that either terminal route can finish without rebuilding the
-  // sender or changing the exact payload contract.
-  return browserName === 'webkit' &&
-    (routeMode === 'relay-fallback' || dynamicWebKitNativeAttempt)
-    ? DIRECT_WEBKIT_RELAY_BLOCK_BYTES
-    : DIRECT_TEST_BLOCK_BYTES
 }
 
 async function waitForNativePeerOutcome(events: HotSwitchEventLog): Promise<NativePeerOutcome> {
