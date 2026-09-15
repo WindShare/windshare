@@ -72,7 +72,7 @@ test('receives and recovers downloads through the real sender and relay', async 
         showDirectoryPicker: { configurable: true, value: undefined },
         showSaveFilePicker: { configurable: true, value: undefined },
       })
-      if (navigator.storage !== undefined && window.sessionStorage.getItem(retainedCapabilityKey) !== 'enabled') {
+      if (typeof navigator.storage !== 'undefined' && window.sessionStorage.getItem(retainedCapabilityKey) !== 'enabled') {
         Object.defineProperty(navigator.storage, 'getDirectory', {
           configurable: true,
           value: undefined,
@@ -519,7 +519,6 @@ async function assertDirectoryDownload(download: Download): Promise<void> {
 
 async function readDownload(download: Download): Promise<Uint8Array> {
   const stream = await download.createReadStream()
-  if (stream === null) throw new Error('Playwright download stream is unavailable')
   const chunks: Buffer[] = []
   for await (const chunk of stream) chunks.push(Buffer.from(chunk))
   return Buffer.concat(chunks)

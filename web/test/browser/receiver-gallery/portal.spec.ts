@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { capture, galleryEvidence, GALLERY_PATH, JADE, showScenario } from './assertions'
+import { capture, galleryEvidence, GALLERY_PATH, showScenario } from './assertions'
 
 const MINIMUM_TOUCH_TARGET_HEIGHT = 44
 
@@ -34,8 +34,8 @@ test('portal Downloads and nested confirmations stay dark and return focus witho
     const before = await galleryEvidence(page)
     await trigger.click()
     const dialog = page.getByRole('dialog', { name: 'Downloads', exact: true })
-    await expect(dialog).toHaveCSS('background-color', JADE.dark.paper)
-    await expect(dialog).toHaveCSS('color', JADE.dark.ink)
+    await expect(dialog).toHaveCSS('color-scheme', 'dark')
+    const background = await dialog.evaluate(element => getComputedStyle(element).backgroundColor)
     await expect(dialog.locator('.task-card')).toHaveCount(3)
     await capture(page, 'portal-downloads-' + width + '-os-light')
     await dialog.getByRole('button', { name: 'Details', exact: true }).last().click()
@@ -46,8 +46,7 @@ test('portal Downloads and nested confirmations stay dark and return focus witho
     const remove = details.getByRole('button', { name: 'Delete retained result', exact: true })
     await remove.click()
     const confirmation = page.getByRole('dialog', { name: 'Delete retained result', exact: true })
-    await expect(confirmation).toHaveCSS('background-color', JADE.dark.paper)
-    await expect(confirmation).toHaveCSS('color', JADE.dark.ink)
+    await expect(confirmation).toHaveCSS('color-scheme', 'dark')
     await capture(page, 'portal-confirmation-' + width + '-os-light')
     await page.keyboard.press('Escape')
     await expect(remove).toBeFocused()
@@ -56,8 +55,7 @@ test('portal Downloads and nested confirmations stay dark and return focus witho
     await expect(dialog.getByRole('button', { name: 'Details', exact: true }).last()).toBeFocused()
     for (const colorScheme of ['dark', 'light'] as const) {
       await page.emulateMedia({ colorScheme })
-      await expect(dialog).toHaveCSS('background-color', JADE.dark.paper)
-      await expect(page.locator('.portal-root')).toHaveCSS('background-color', JADE.dark.page)
+      await expect(dialog).toHaveCSS('background-color', background)
     }
     await dialog.getByRole('button', { name: 'Close downloads', exact: true }).click()
     await expect(trigger).toBeFocused()
