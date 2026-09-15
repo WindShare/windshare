@@ -62,6 +62,13 @@ export default defineConfig([
     },
   },
   {
+    files: ['e2e/**/*.spec.ts'],
+    languageOptions: {
+      // Resolve assertions inside imported scenario helpers instead of requiring placeholders.
+      parserOptions: { projectService: true },
+    },
+  },
+  {
     files: ['**/*.ts'],
     rules: {
       'max-lines-per-function': [
