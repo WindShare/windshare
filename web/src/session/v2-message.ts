@@ -192,7 +192,7 @@ export async function verifyV2SenderControl(
     [CONTROL_BODY_KEY, semanticValue],
   ]))
   const preimage = await controlPreimage(message, binding, domain, unsignedWrapper, runtime)
-  if (!(await verifyEd25519(senderPublicKey, preimage, signature, runtime))) {
+  if (!(await verifyEd25519(senderPublicKey, preimage, signature))) {
     throw new V2MessageError('Sender control signature is invalid')
   }
   validateV2SenderControlBody(message.kind, semanticBody)
@@ -655,10 +655,9 @@ async function verifyEd25519(
   publicKey: Uint8Array,
   preimage: Uint8Array,
   signature: Uint8Array,
-  runtime: CryptoRuntime,
 ): Promise<boolean> {
   try {
-    return await verifyEd25519Signature(publicKey, preimage, signature, runtime)
+    return await verifyEd25519Signature(publicKey, preimage, signature)
   } catch (cause) {
     throw new V2MessageError('Unable to verify sender control signature', { cause })
   }

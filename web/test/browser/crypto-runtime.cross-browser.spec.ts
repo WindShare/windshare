@@ -1,5 +1,9 @@
+import { generateKeyPairSync, sign } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
+
+const BLOCK_SIGNATURE_MESSAGE_BYTES = 1024 * 1024
+const BLOCK_SIGNATURE_MESSAGE_FILL = 0x5a
 
 const RFC8032_EMPTY_MESSAGE_PUBLIC_KEY =
   'd75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a'
@@ -57,4 +61,35 @@ test('production curve boundary works with the active browser capabilities', asy
     validSignature: true,
     mutatedSignature: false,
   })
+})
+
+test('authenticates production-size signed blocks and rejects changed content and signatures', async ({ page }) => {
+  // Independent signing catches browser backends that accept Ed25519 but reject
+  // valid block objects larger than their small capability-test messages.
+  const { publicKey, privateKey } = generateKeyPairSync('ed25519')
+  const publicKeyJwk = publicKey.export({ format: 'jwk' })
+  if (publicKeyJwk.x === undefined) throw new Error('Ed25519 public key has no raw coordinate')
+  const message = Buffer.alloc(BLOCK_SIGNATURE_MESSAGE_BYTES, BLOCK_SIGNATURE_MESSAGE_FILL)
+  const signature = sign(null, message, privateKey)
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
+  const result = await page.evaluate(async ({ publicKey, signature, messageBytes, fill }) => {
+    const curvePath = '/src/crypto/curve25519.ts'
+    const curves = await import(curvePath) as typeof import('../../src/crypto/curve25519')
+    const key = Uint8Array.from(publicKey)
+    const proof = Uint8Array.from(signature)
+    const content = new Uint8Array(messageBytes).fill(fill)
+    const valid = await curves.verifyEd25519Signature(key, content, proof)
+    content[content.length - 1] = content[content.length - 1]! ^ 1
+    const changedContent = await curves.verifyEd25519Signature(key, content, proof)
+    content[content.length - 1] = content[content.length - 1]! ^ 1
+    proof[0] = proof[0]! ^ 1
+    const changedSignature = await curves.verifyEd25519Signature(key, content, proof)
+    return { valid, changedContent, changedSignature }
+  }, {
+    publicKey: [...Buffer.from(publicKeyJwk.x, 'base64url')],
+    signature: [...signature],
+    messageBytes: BLOCK_SIGNATURE_MESSAGE_BYTES,
+    fill: BLOCK_SIGNATURE_MESSAGE_FILL,
+  })
+  expect(result).toEqual({ valid: true, changedContent: false, changedSignature: false })
 })

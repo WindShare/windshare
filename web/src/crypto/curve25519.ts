@@ -41,31 +41,13 @@ export async function verifyEd25519Signature(
   publicKey: Uint8Array,
   message: Uint8Array,
   signature: Uint8Array,
-  runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<boolean> {
   requireWidth(publicKey, CURVE25519_KEY_BYTES, 'Ed25519 public key')
   requireWidth(signature, ED25519_SIGNATURE_BYTES, 'Ed25519 signature')
-  try {
-    const key = await runtime.subtle.importKey(
-      'raw',
-      copyBytes(publicKey),
-      'Ed25519',
-      false,
-      ['verify'],
-    )
-    return await runtime.subtle.verify(
-      'Ed25519',
-      key,
-      copyBytes(signature),
-      copyBytes(message),
-    )
-  } catch (cause) {
-    if (!isUnsupportedAlgorithm(cause)) throw cause
-  }
-
+  // WebKit can accept Ed25519 yet reject or stall on valid large signed objects.
+  // One RFC 8032 verifier keeps every message size aligned with Go; ZIP-215's
+  // additional encodings would make browser and sender authentication disagree.
   const { ed25519 } = await loadNobleCurve25519()
-  // Go's crypto/ed25519 follows RFC 8032, so accepting ZIP-215's additional
-  // encodings here would make browser and sender authentication disagree.
   return ed25519.verify(
     copyBytes(signature),
     copyBytes(message),
