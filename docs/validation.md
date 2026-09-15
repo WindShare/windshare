@@ -120,6 +120,10 @@ started manually. It contains:
 
 ## Release workflow
 
+Release is optional and scheduled when external distribution is intended. Development milestones and
+subsequent work depend on implemented capabilities and the relevant validation, not on a version tag
+or a published release.
+
 [Source and Binary Release](../.github/workflows/release.yml) is started manually with an exact commit SHA
 and root `vX.Y.Z` version. Linux and Windows reconstruct a deterministic complete source bundle,
 including pinned Pion nested modules, licenses, manifest and patches. Each extracted bundle reproduces
