@@ -19,7 +19,8 @@ export function resolveTaskStage(facts: TaskFacts): StageCopy {
     return savedStage(facts)
   }
   if (state.kind === 'download-started') return stage('handed-to-browser',
-    'Download started — check browser downloads',
+    facts.completeness === 'partial' ? 'Partial download — check browser downloads'
+      : 'Download started — check browser downloads',
     'The browser took over. WindShare cannot confirm where or whether the file was saved.', state.kind)
   if (state.kind === 'waiting-to-save') return stage('ready-to-save', 'Ready to save',
     facts.completeness === 'partial'

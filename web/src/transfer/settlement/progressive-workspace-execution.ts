@@ -2,6 +2,7 @@ import { createProgressiveZipOutput } from '../../output/progressive-zip/output'
 import type { ProgressiveZipArchive } from '../../output/progressive-zip/archive'
 import type { TaskCheckpoint } from '../../output/origin-private/task-checkpoint/model'
 import type { ReceiveLifecycleState } from '../../output/workspace/state'
+import type { ReceiveContentWarning } from '../../output/workspace/lifecycle/content-warning'
 import type { ReceiveIntent } from '../intent'
 import type {
   OutputSessionIdentity, PlanPauseRequest, PlanSettlementRequest, WorkspaceExecution,
@@ -28,6 +29,7 @@ export async function createProgressiveWorkspaceExecution(input: {
     intent: input.intent, archive: input.archive, identity: input.outputIdentity,
   })
   const owner = new WorkspaceSettlementOwner()
+  let discoveryComplete = false
   return Object.freeze({
     planKind: 'workspace-then-publish' as const,
     ...ports,
@@ -37,11 +39,21 @@ export async function createProgressiveWorkspaceExecution(input: {
     },
     discoveryComplete: async (signal: AbortSignal) => {
       signal.throwIfAborted()
-      await input.archive.markDiscoveryComplete()
+      // Commit closure with the worker outcome, so recovery cannot outrun a missing-file warning.
+      discoveryComplete = true
     },
     pause: (request: PlanPauseRequest, signal: AbortSignal) => owner.pause(async () => {
       let evidence: ProgressivePauseEvidence
       try {
+        if (discoveryComplete) {
+          const completedFileCount = request.materialization.fileCount
+          const selectedFileCount = request.selectionFacts.discoveredFileCount
+          const contentWarning: ReceiveContentWarning | undefined = completedFileCount < selectedFileCount
+            ? { kind: 'partial-zip', completedFileCount, selectedFileCount,
+              missingFiles: ports.missingFiles().slice(0, Number(selectedFileCount - completedFileCount)) }
+            : undefined
+          await input.archive.markDiscoveryComplete(contentWarning)
+        }
         await input.archive.checkpoint('task-pause')
         evidence = { kind: 'checkpoint-committed', checkpoint: input.archive.state }
       } catch (failure) {
@@ -54,6 +66,7 @@ export async function createProgressiveWorkspaceExecution(input: {
     }),
     settle: (request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>, signal: AbortSignal) => owner.settle(async () => {
       signal.throwIfAborted()
+      if (discoveryComplete) await input.archive.markDiscoveryComplete()
       const checkpoint = await input.archive.finalize(signal)
       return input.settlement.settle(request, checkpoint, signal)
     }),

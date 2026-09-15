@@ -75,6 +75,7 @@ export class WorkspaceProgressiveStages {
       objectId: checkpoint.object.objectId, checkpointGeneration: checkpoint.generation,
       completedFileCount: progress.completedFileCount, completedBytes: progress.completedBytes,
       discoveryComplete: checkpoint.discoveryComplete, occupiedBytes: checkpoint.physicalLength,
+      contentWarning: checkpoint.contentWarning ?? null,
       ...(pauseReason === undefined ? {} : { pauseReason }),
     })
     await this.runtime.commitLifecycle(state, next)
@@ -92,7 +93,7 @@ export class WorkspaceProgressiveStages {
         !checkpoint.discoveryComplete) throw new TypeError('ZIP artifact lacks a durable finalization seal')
     const progress = await checkpointProgress(store)
     if (!progress.complete || progress.entryCount !== checkpoint.entryCount) {
-      throw new TypeError('ZIP artifact has incomplete selected content')
+      throw new TypeError('ZIP artifact has incomplete admitted entries')
     }
     const state = await this.runtime.lifecycle()
     requireReceivingState(state)
@@ -113,8 +114,10 @@ export class WorkspaceProgressiveStages {
       operationId: this.runtime.intent.operationId, receiveIntentDigest: this.runtime.intent.digest,
       packagedArtifactDigest: artifact.digest, artifactVerification: verification,
     })
-    // The format authority has already sealed the sole object; no packaging mutation exists.
-    const next = nextReceiveLifecycleState(state, { kind: 'waiting-to-save', packageDigest: artifact.digest })
+    // The seal verifies admitted entries; omitted selection members remain visible after handoff and reload.
+    const next = nextReceiveLifecycleState(state, {
+      kind: 'waiting-to-save', packageDigest: artifact.digest, contentWarning: checkpoint.contentWarning ?? null,
+    })
     await this.runtime.repository.commitTransition({
       operationId: this.runtime.intent.operationId, expectedLifecycleGeneration: state.generation,
       expectedLeaseId: this.runtime.leaseId, lifecycle: next,
