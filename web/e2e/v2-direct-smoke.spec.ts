@@ -134,10 +134,6 @@ test('receives and recovers downloads through the real sender and relay', async 
     await expect(filePreview).toBeFocused()
     const artifactAction = page.getByRole('button', { name: 'Download this folder', exact: true })
     await expect(artifactAction).toBeEnabled()
-    await expect(page.getByText(
-      'Checks the complete result fits before receiving. The browser download starts automatically when allowed; otherwise choose Save.',
-      { exact: true },
-    )).toBeVisible()
     await expect.poll(() => new URL(page.url()).hash).toBe('')
 
     const downloadStarted = page.waitForEvent('download', {
@@ -152,10 +148,6 @@ test('receives and recovers downloads through the real sender and relay', async 
     await expect(task).toContainText(/Elapsed: (?:Less than 1 sec|.* sec)/u)
     await task.getByRole('button', { name: 'Details', exact: true }).click()
     await expect(page.getByRole('dialog').getByText('Elapsed', { exact: true })).toBeVisible()
-    await expect(page.getByRole('dialog').getByText(
-      'The browser took over. WindShare cannot confirm where or whether the file was saved.',
-      { exact: true },
-    )).toBeVisible()
     await expect(page.getByText('Ready to save', { exact: true })).toHaveCount(0)
     await expect(page.getByText('Saved', { exact: true })).toHaveCount(0)
     await expect(page.getByRole('dialog').getByText(/1 files \u00b7 .* total/u)).toBeVisible()

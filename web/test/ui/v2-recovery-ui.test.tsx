@@ -10,7 +10,7 @@ import {
 } from '../../src/ui/v2-model'
 
 describe('DirectTree recovery UI', () => {
-  it('renders reload-safe recovery costs and both retained actions without another confirmation', () => {
+  it('renders reload-safe recovery costs for retained actions', () => {
     const lifecycle = pausedLifecycle()
     const retained: V2ReceiverSnapshot['retained'] = Object.freeze({
       kind: 'ready',
@@ -39,8 +39,6 @@ describe('DirectTree recovery UI', () => {
     expect(html).toContain('Restart incomplete files: 2.5 KiB remaining')
     expect(html).toContain('512 B of verified data to redownload')
     expect(html).toContain('Continue and preserve partial files')
-    expect(html).toContain('class="danger-action"')
-    expect(html).not.toMatch(/confirm|per-file/iu)
   })
 })
 

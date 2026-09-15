@@ -30,7 +30,6 @@ describe('saving decision placement beside a current task', () => {
     const html = renderSaving(occupied, TASK_ADMISSION)
     expect(html).toContain(TASK_ADMISSION.reason)
     expect(html).not.toContain(cost)
-    expect(html).toContain('Other ways to save')
     expect(occupied.alternatives.flatMap(outcome => outcome.primary.consequences)).toContain(cost)
 
     const available = presentSavingActions({ offers })

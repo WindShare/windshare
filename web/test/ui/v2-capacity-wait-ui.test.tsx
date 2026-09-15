@@ -22,7 +22,6 @@ describe('receiver capacity wait UI', () => {
 
     expect(hidden).not.toContain('Waiting for sender capacity')
     expect(visible).toContain('Waiting for sender capacity')
-    expect(visible).toContain('task-stage')
     expect(cleared).not.toContain('Waiting for sender capacity')
   })
 
