@@ -227,6 +227,7 @@ func (execution *attemptExecution) startDataChannel(channel PeerDataChannel) err
 	}
 	execution.transport = newOwnedPeerDataChannel(execution.peer, channel)
 	execution.channel = execution.transport
+	execution.transportFailure.bind(execution.transport)
 	openTransition := make(chan struct{})
 	execution.openTransition = openTransition
 	admissionEventsComplete := make(chan struct{})
