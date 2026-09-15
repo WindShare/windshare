@@ -18,6 +18,7 @@ UI harnesses load their required styles. Assertions protect state, actions, acce
 layouts; incidental marketing copy and DOM nesting are not contracts.
 The short Chromium contracts also build and serve the native-storage capability probe under a
 same-origin Worker CSP, catching bundling failures hidden by the development server.
+Cross-browser crypto contracts verify native-size signed blocks against an independent signer.
 Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 

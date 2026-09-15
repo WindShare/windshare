@@ -23,15 +23,7 @@ const PROCESS_STOP_TIMEOUT_MILLISECONDS = 5_000
 const RELAY_LISTENING_PATTERN = /wsrelay: listening on ([^\s]+) /u
 const BARE_LINK_PATTERN = /^Bare link: (.+)$/mu
 const SEPARATE_KEY_PATTERN = /^Key: (.+)$/mu
-/** Default sender block geometry used by native-peer and non-WebKit routes. */
 export const DIRECT_TEST_BLOCK_BYTES = 64 * 1024
-
-/**
- * WPE's Linux WebKit build cannot reliably process relay frames above 32 KiB.
- * Keep this compatibility value at the fixture boundary; production defaults
- * remain unchanged and the transfer payload is still validated end-to-end.
- */
-export const DIRECT_WEBKIT_RELAY_BLOCK_BYTES = 32 * 1024
 
 export interface DirectShareOptions {
   readonly blockSizeBytes?: number

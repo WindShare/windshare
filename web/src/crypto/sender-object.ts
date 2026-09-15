@@ -303,13 +303,12 @@ async function verifySignature(
   publicKey: Uint8Array,
   preimage: Uint8Array,
   signature: Uint8Array,
-  runtime: CryptoRuntime,
 ): Promise<boolean> {
   if (publicKey.byteLength !== 32 || signature.byteLength !== SENDER_OBJECT_SIGNATURE_BYTES) {
     throw new SenderObjectError('key', 'Ed25519 verification material has an invalid width')
   }
   try {
-    return await verifyEd25519Signature(publicKey, preimage, signature, runtime)
+    return await verifyEd25519Signature(publicKey, preimage, signature)
   } catch (cause) {
     throw new SenderObjectError('key', 'Unable to verify Ed25519 sender signature', { cause })
   }
@@ -323,7 +322,7 @@ export async function verifySenderObject(
 ): Promise<void> {
   const parsed = parseSenderObject(object, expectedBinding)
   const preimage = await senderObjectSignaturePreimage(expectedBinding, parsed.prefix, runtime)
-  if (!(await verifySignature(publicKey, preimage, parsed.signature, runtime))) {
+  if (!(await verifySignature(publicKey, preimage, parsed.signature))) {
     throw new SenderObjectError('signature', 'sender object signature is invalid')
   }
 }
