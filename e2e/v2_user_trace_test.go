@@ -415,7 +415,11 @@ func validateV4DiagnosticRecord(t *testing.T, record v4TraceRecord) {
 			t.Fatalf("receiver termination has unknown local stop reason %q", reason)
 		}
 	case "relay_lifecycle":
-		if v4TraceStringField(t, record.Payload, "stage") == "send_admitted" {
+		// Terminal admission and failures after admission explain shutdown races.
+		// Only ordinary successful admission is intentionally absent from tracing.
+		if v4TraceStringField(t, record.Payload, "stage") == "send_admitted" &&
+			!v4TraceBoolField(t, record.Payload, "terminal") &&
+			v4TraceStringField(t, record.Payload, "cause") == "none" {
 			t.Fatal("ordinary successful relay sends must not enter the user trace")
 		}
 	}
@@ -661,9 +665,9 @@ func assertV2UserTraceTransportDiagnostics(
 				receiverCompleted = true
 			}
 		case "fallback":
-			t.Fatalf("%s-only transfer emitted an unexpected fallback record", wantRoute)
+			t.Fatalf("transfer using %s emitted an unexpected fallback record", wantRoute)
 		case "observer_loss":
-			t.Fatalf("%s-only transfer lost diagnostic observations", wantRoute)
+			t.Fatalf("transfer using %s lost diagnostic observations", wantRoute)
 		}
 	}
 	if !delivered {
@@ -859,6 +863,20 @@ func TestUserTraceV4DiagnosticContract(t *testing.T) {
 		"stage": "heartbeat_failed", "retirement_source": "none", "cause": "transport_failed",
 		"drain_cause": "none", "terminal": false,
 	}))
+
+	for _, admission := range []struct {
+		terminal bool
+		cause    string
+	}{
+		{terminal: true, cause: "none"},
+		{cause: "transport_failed"},
+	} {
+		recordVectors = append(recordVectors, base(len(recordVectors)+1, "relay_lifecycle", map[string]any{
+			"link_id": "1", "send_operation_id": "2", "stage": "send_admitted",
+			"disposition": "accepted", "retirement_source": "none",
+			"cause": admission.cause, "drain_cause": "none", "terminal": admission.terminal,
+		}))
+	}
 
 	var encoded bytes.Buffer
 	for _, record := range recordVectors {
