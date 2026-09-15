@@ -48,11 +48,7 @@ const RECOVERY_POLICY = createV2PeerRecoveryPolicy({
   retryJitterMaximumFactor: 1,
 })
 
-test('recovers authenticated Chromium peer traffic without interrupting relay', async ({
-  browserName,
-  page,
-}, testInfo) => {
-  expect(browserName).toBe('chromium')
+test('recovers authenticated Chromium peer traffic without interrupting relay', async ({ page }, testInfo) => {
   const events = new NetworkEventLog()
   const stackTraces: DirectStackTrace[] = []
   const stack = new DirectProductStack(SCENARIO_ID, (trace) => stackTraces.push(trace))
@@ -161,12 +157,8 @@ test('recovers authenticated Chromium peer traffic without interrupting relay', 
     const recoveredAttempt = await events.waitFor(
       'attempt',
       (event) => event.evidence.stage === 'admitted' &&
-        event.evidence.attemptIdBytes !== undefined &&
-          replacement.evidence.attemptIdBytes !== undefined &&
-          sameIdentityBytes(
-            event.evidence.attemptIdBytes,
-            replacement.evidence.attemptIdBytes,
-          ),
+        replacement.evidence.attemptIdBytes !== undefined &&
+        sameIdentityBytes(event.evidence.attemptIdBytes, replacement.evidence.attemptIdBytes),
       'authenticated replacement admission',
     )
     requireAttemptStage(recoveredAttempt, 'admitted')

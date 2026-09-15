@@ -4,10 +4,6 @@ import type { Scenario } from './fixtures'
 
 export const GALLERY_PATH = '/test/browser/receiver-gallery/index.html'
 export const CURRENT_TASK = '.share-workspace > .task-card'
-export const JADE = {
-  light: { page: 'rgb(242, 247, 244)', paper: 'rgb(255, 255, 255)', ink: 'rgb(24, 43, 34)' },
-  dark: { page: 'rgb(7, 12, 9)', paper: 'rgb(18, 32, 25)', ink: 'rgb(243, 244, 246)' },
-} as const
 
 export async function showScenario(page: Page, scenario: Scenario) {
   await page.getByLabel('Synthetic scenario').selectOption(scenario)

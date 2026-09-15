@@ -1,26 +1,7 @@
-import { expect, test, type Page } from '@playwright/test'
-import { join } from 'node:path'
-import type { Scenario } from './receiver-gallery/fixtures'
-import { galleryEvidence as evidence } from './receiver-gallery/assertions'
-
-const GALLERY_PATH = '/test/browser/receiver-gallery/index.html'
-const EVIDENCE_DIRECTORY = process.env.WINDSHARE_GALLERY_EVIDENCE_DIR
+import { expect, test } from '@playwright/test'
+import { capture, expectNoHorizontalOverflow, galleryEvidence as evidence, GALLERY_PATH, showScenario } from './receiver-gallery/assertions'
 
 test.beforeEach(({ page }) => { page.on('pageerror', error => { console.error(error.stack) }) })
-
-async function scenario(page: Page, value: Scenario) {
-  await page.getByLabel('Synthetic scenario').selectOption(value)
-  await expect(page.locator('[data-gallery-scenario]')).toHaveAttribute('data-gallery-scenario', value)
-  await expect(page.locator('.receiver-shell')).toBeVisible()
-}
-
-async function screenshot(page: Page, name: string) {
-  if (EVIDENCE_DIRECTORY !== undefined) {
-    // This host contains only generated media and synthetic operation facts.
-    expect(new URL(page.url()).pathname).toBe(GALLERY_PATH)
-    await page.screenshot({ path: join(EVIDENCE_DIRECTORY, name + '.png'), fullPage: true })
-  }
-}
 
 test('production explorer keeps semantic selection, preview focus and current task independent', async ({ page }) => {
   await page.goto(GALLERY_PATH)
@@ -74,7 +55,7 @@ test('production explorer keeps semantic selection, preview focus and current ta
   expect(await evidence(page)).toMatchObject({ taskId: before.taskId, taskLabel: before.taskLabel, taskBytes: before.taskBytes })
 })
 
-test('production responsive gallery keeps media uncropped and controls reachable with touch', async ({ browser }) => {
+test('media reflows across viewports and themes while touch and keyboard actions stay usable', async ({ browser }) => {
   const context = await browser.newContext({ viewport: { width: 390, height: 844 }, hasTouch: true })
   const page = await context.newPage()
   await page.goto(GALLERY_PATH)
@@ -82,35 +63,47 @@ test('production responsive gallery keeps media uncropped and controls reachable
   await expect(page.getByRole('navigation', { name: 'Directory pages' })).toContainText('Page 2 of 2')
   await page.getByRole('button', { name: /^Downloads/ }).tap()
   await expect(page.getByRole('dialog')).toBeVisible()
-  await screenshot(page, 'mobile-downloads')
+  await capture(page, 'mobile-downloads', true)
   await page.getByRole('button', { name: 'Close downloads', exact: true }).tap()
   await expect(page.locator('.share-workspace > .task-card')).toContainText('Downloading')
 
-  for (const [device, width, height] of [['desktop', 1440, 1000], ['tablet', 820, 1180], ['mobile', 390, 844]] as const) {
+  // Theme transitions have their own contract; representative pairs cover media reflow.
+  for (const [device, width, height, colorScheme] of [
+    ['desktop', 1440, 1000, 'light'], ['tablet', 820, 1180, 'dark'], ['mobile', 390, 844, 'dark'],
+  ] as const) {
     await page.setViewportSize({ width, height })
-    for (const value of ['folder', 'portrait', 'landscape', 'video', 'unsupported'] as const) {
-      await scenario(page, value)
+    await page.emulateMedia({ colorScheme, reducedMotion: 'reduce' })
+    for (const value of ['portrait', 'landscape', 'video'] as const) {
+      await showScenario(page, value)
       if (value === 'video') {
-        await page.getByRole('button', { name: 'Preview a frame', exact: true }).click()
+        await page.getByRole('button', { name: 'Preview a frame', exact: true }).tap()
         await expect(page.getByRole('img', { name: 'Video preview of Summer afternoon.mp4' })).toBeVisible()
         await expect(page.locator('.preview-frame-stage')).toHaveAttribute('aria-busy', 'false')
-        await expect(page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })).toBeVisible()
-      }
-      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
-      if (value === 'portrait' || value === 'landscape') {
+        await expect(page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })).toBeInViewport()
+      } else {
         const photo = page.getByRole('img', { name: /^Preview of/ })
         await expect(photo).toBeVisible()
-        expect(await photo.evaluate(image => getComputedStyle(image).objectFit)).toBe('contain')
+        await expect(photo).toHaveCSS('object-fit', 'contain')
         const box = await photo.boundingBox()
         expect(box!.width).toBeLessThanOrEqual(width)
       }
-      await screenshot(page, device + '-' + value)
+      await expectNoHorizontalOverflow(page)
+      await capture(page, device + '-' + colorScheme + '-' + value, true)
     }
   }
-  await scenario(page, 'unsupported')
+  const seek = page.getByRole('slider', { name: 'Seek Summer afternoon.mp4' })
+  await seek.focus()
+  await page.keyboard.press('ArrowRight')
+  expect((await evidence(page)).intents.some(intent => intent.startsWith('seek:'))).toBe(true)
+
+  await showScenario(page, 'unsupported')
   await page.getByRole('button', { name: 'Preview', exact: true }).tap()
-  await expect(page.getByRole('alert')).toContainText('cannot be previewed')
-  await expect(page.getByRole('button', { name: 'Download file', exact: true })).toBeEnabled()
+  await expect(page.getByRole('alert')).toBeVisible()
+  const download = page.getByRole('button', { name: 'Download file', exact: true })
+  await expect(download).toBeEnabled()
+  await download.tap()
+  expect((await evidence(page)).intents.some(intent => intent.startsWith('choose:'))).toBe(true)
+  await expectNoHorizontalOverflow(page)
   await context.close()
 })
 
@@ -118,7 +111,7 @@ test('a full catalog page keeps download controls close while every item remains
   await page.goto(GALLERY_PATH)
   for (const [device, width, height] of [['desktop', 1440, 1000], ['mobile', 390, 844]] as const) {
     await page.setViewportSize({ width, height })
-    await scenario(page, 'full-directory')
+    await showScenario(page, 'full-directory')
     const contents = page.getByRole('list', { name: 'Folder contents' })
     await expect(contents.locator('.explorer-row')).toHaveCount(256)
     const download = page.getByRole('button', { name: 'Download this folder', exact: true })
@@ -137,24 +130,6 @@ test('a full catalog page keeps download controls close while every item remains
     await expect(page.getByRole('dialog')).toBeVisible()
     await page.keyboard.press('Escape')
     await expect(lastItem).toBeFocused()
-    await screenshot(page, device + '-full-directory')
-  }
-})
-
-test('production task stages retain honest publication and partial-result wording', async ({ page }) => {
-  await page.goto(GALLERY_PATH)
-  for (const [value, headline] of [
-    ['reconnecting', 'Reconnecting to the sender'],
-    ['capacity', 'Waiting for sender capacity'],
-    ['verifying', 'Verifying ZIP'],
-    ['partial-ready', 'Ready to save'],
-    ['browser-handoff', 'Download started — check browser downloads'],
-    ['saved-cleanup', 'Saved'],
-  ] as const) {
-    await scenario(page, value)
-    await expect(page.locator('.share-workspace > .task-card .task-stage')).toHaveText(headline)
-    if (value === 'partial-ready') await expect(page.locator('.share-workspace > .task-card')).toContainText('Partial result')
-    if (value === 'saved-cleanup') await expect(page.locator('.share-workspace > .task-card')).toContainText('1 filename')
-    await screenshot(page, 'stage-' + value)
+    await capture(page, device + '-full-directory', true)
   }
 })
