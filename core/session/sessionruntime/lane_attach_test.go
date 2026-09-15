@@ -319,7 +319,9 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 	}
 	relaySendsBefore := relaySenderChannel.sends.Load()
 	peerSendsBefore := peerSenderChannel.sends.Load()
-	gate := peerSenderChannel.gateNextSendThenFail(errors.New("peer accepted frame before disconnect"))
+	gate := peerSenderChannel.gateNextSendResult(errors.New("peer accepted frame before disconnect"))
+	releaseFailure := sync.OnceFunc(func() { close(gate.release) })
+	defer releaseFailure()
 	close(blockGate)
 	select {
 	case <-gate.started:
@@ -327,8 +329,9 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 		receiver.rpc.end(call)
 		t.Fatal("sender did not enter the gated peer send")
 	}
-	close(gate.release)
-
+	// The original fragment must reach assembly before the sender retries.
+	// Otherwise the surviving lane's final can overtake it, and the operation
+	// tombstone correctly drops the late original before assembly sees it.
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	fragments := 0
@@ -354,6 +357,7 @@ func TestSenderMigratesSameBlockOperationAfterSendDetachRace(t *testing.T) {
 			}
 			completedRecord = completedRecord || assembly.Status == contentflow.RecordComplete
 			tombstonedDuplicate = tombstonedDuplicate || assembly.Status == contentflow.FragmentTombstoned
+			releaseFailure()
 		case protocolsession.MessageOperationComplete:
 			if fragments < 2 || !completedRecord || !tombstonedDuplicate {
 				receiver.rpc.end(call)
@@ -428,7 +432,7 @@ func TestSenderResignsAmbiguousFinalForSurvivingLane(t *testing.T) {
 	relaySendsBefore := relaySenderChannel.sends.Load()
 	requestSendsBefore := peerReceiverChannel.sends.Load()
 	responseSendsBefore := peerSenderChannel.sends.Load()
-	gate := peerSenderChannel.gateNextSendThenFail(errors.New("peer accepted final before disconnect"))
+	gate := peerSenderChannel.gateNextSendResult(errors.New("peer accepted final before disconnect"))
 	call, err := receiver.rpc.beginOn(context.Background(), &peer, protocolsession.MessageOpenRevisions, body)
 	if err != nil {
 		t.Fatal(err)
@@ -975,51 +979,63 @@ func (channel *failingAdmissionSendChannel) Send(context.Context, framechannel.F
 
 type observedMemoryChannel struct {
 	*memoryChannel
-	sends     atomic.Int32
-	terminals atomic.Int32
-	gateMu    sync.Mutex
-	nextGate  *observedSendGate
+	sends          atomic.Int32
+	terminals      atomic.Int32
+	gateMu         sync.Mutex
+	nextSendGate   *observedSendGate
+	nextResultGate *observedSendGate
 }
 
 type observedSendGate struct {
-	started        chan struct{}
-	release        chan struct{}
-	errorAfterSend error
+	started chan struct{}
+	release chan struct{}
+	err     error
+}
+
+func (gate *observedSendGate) wait(ctx context.Context) error {
+	if gate == nil {
+		return nil
+	}
+	close(gate.started)
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-gate.release:
+		return gate.err
+	}
 }
 
 func (channel *observedMemoryChannel) gateNextSend() *observedSendGate {
 	gate := &observedSendGate{started: make(chan struct{}), release: make(chan struct{})}
 	channel.gateMu.Lock()
-	channel.nextGate = gate
+	channel.nextSendGate = gate
 	channel.gateMu.Unlock()
 	return gate
 }
 
-func (channel *observedMemoryChannel) gateNextSendThenFail(err error) *observedSendGate {
-	gate := channel.gateNextSend()
-	gate.errorAfterSend = err
+// Delivery and the transport's return value are separate events: a receiver can
+// accept a frame while the sender still cannot determine whether it arrived.
+func (channel *observedMemoryChannel) gateNextSendResult(err error) *observedSendGate {
+	gate := &observedSendGate{started: make(chan struct{}), release: make(chan struct{}), err: err}
+	channel.gateMu.Lock()
+	channel.nextResultGate = gate
+	channel.gateMu.Unlock()
 	return gate
 }
 
 func (channel *observedMemoryChannel) Send(ctx context.Context, frame framechannel.Frame) error {
 	channel.sends.Add(1)
 	channel.gateMu.Lock()
-	gate := channel.nextGate
-	channel.nextGate = nil
+	sendGate, resultGate := channel.nextSendGate, channel.nextResultGate
+	channel.nextSendGate, channel.nextResultGate = nil, nil
 	channel.gateMu.Unlock()
-	if gate != nil {
-		close(gate.started)
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-gate.release:
-		}
+	if err := sendGate.wait(ctx); err != nil {
+		return err
 	}
-	err := channel.memoryChannel.Send(ctx, frame)
-	if err == nil && gate != nil && gate.errorAfterSend != nil {
-		return gate.errorAfterSend
+	if err := channel.memoryChannel.Send(ctx, frame); err != nil {
+		return err
 	}
-	return err
+	return resultGate.wait(ctx)
 }
 
 func (channel *observedMemoryChannel) SendTerminal(ctx context.Context, frame framechannel.Frame) error {

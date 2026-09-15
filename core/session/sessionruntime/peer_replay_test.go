@@ -262,7 +262,7 @@ func TestAmbiguousPeerAnswerExactReplaySurvivesLaneMigration(t *testing.T) {
 	requestSendsBefore := initialReceiver.sends.Load()
 	initialAnswerSendsBefore := initialSender.sends.Load()
 	secondaryAnswerSendsBefore := secondarySender.sends.Load()
-	gate := initialSender.gateNextSendThenFail(errors.New("peer answer accepted before disconnect"))
+	gate := initialSender.gateNextSendResult(errors.New("peer answer accepted before disconnect"))
 
 	call, err := receiver.rpc.beginOn(
 		context.Background(), &receiver.initial, protocolsession.MessagePeerOffer, peerReplayBody(t, "offer"),
