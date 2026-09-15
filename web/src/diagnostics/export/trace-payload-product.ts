@@ -607,9 +607,11 @@ export function validatePublication(payload: UnknownRecord): void {
 }
 
 export function validateContinuation(payload: UnknownRecord): void {
-  validateOutputPair(payload, OUTPUT_BACKENDS, [
-    'paused', 'resumed', 'admission_failed', 'source_invalidated',
-  ], 'continuation')
+  exactKeys(payload, ['backend', 'transition'], ['operation_id', 'retained_bytes'], 'continuation payload')
+  member(payload.backend, OUTPUT_BACKENDS, 'continuation backend')
+  member(payload.transition, ['paused', 'resumed', 'admission_failed', 'source_invalidated'], 'continuation transition')
+  if (payload.operation_id !== undefined) canonicalIdentity(payload.operation_id, 'continuation operation ID')
+  if (payload.retained_bytes !== undefined) decimalUint64(payload.retained_bytes, 'continuation retained bytes')
 }
 
 export function validateReopen(payload: UnknownRecord): void {

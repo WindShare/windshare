@@ -1,7 +1,7 @@
 import { snapshotIdentity } from '../workspace/canonical'
 import type { LifecycleEvent } from '../workspace/lifecycle'
 import {
-  snapshotRecoverySelectionFacts,
+  snapshotRetainedFileSetProgress,
   type ReceiveLifecycleState,
 } from '../workspace/state'
 import type { DirectTreeIntent } from './settlement-proof'
@@ -43,13 +43,7 @@ export function snapshotReceiveAdmissionFallback(
     receiveIntentDigest: input.receiveIntentDigest,
     generation: input.generation,
     checkpointSetDigest: snapshotIdentity(input.checkpointSetDigest, 32, 'checkpoint set digest'),
-    completedFileCount: input.completedFileCount,
-    completedBytes: input.completedBytes,
-    selectionFacts: snapshotRecoverySelectionFacts(
-      input.selectionFacts,
-      input.completedFileCount,
-      input.completedBytes,
-    ),
+    ...snapshotRetainedFileSetProgress(input),
     ...(input.partialReceiptDigest === undefined
       ? {}
       : { partialReceiptDigest: snapshotIdentity(input.partialReceiptDigest, 32, 'partial receipt digest') }),
@@ -64,6 +58,7 @@ export function sameReceiveAdmissionFallback(
     state.checkpointSetDigest === fallback.checkpointSetDigest &&
     state.completedFileCount === fallback.completedFileCount &&
     state.completedBytes === fallback.completedBytes &&
+    state.retainedBytes === fallback.retainedBytes &&
     state.selectionFacts.discoveredFileCount === fallback.selectionFacts.discoveredFileCount &&
     state.selectionFacts.discoveredBytes === fallback.selectionFacts.discoveredBytes &&
     state.selectionFacts.discovery === fallback.selectionFacts.discovery &&
@@ -81,6 +76,7 @@ export function receiveAdmissionFailureEvent(
     checkpointSetDigest: fallback.checkpointSetDigest,
     completedFileCount: fallback.completedFileCount,
     completedBytes: fallback.completedBytes,
+    retainedBytes: fallback.retainedBytes,
     selectionFacts: fallback.selectionFacts,
     ...(fallback.partialReceiptDigest === undefined
       ? {}

@@ -118,6 +118,8 @@ export interface OutputTracePayloadByName {
   readonly continuation: Readonly<{
     backend: OutputDiagnosticBackend
     transition: 'paused' | 'resumed' | 'admission_failed' | 'source_invalidated'
+    operation_id?: string
+    retained_bytes?: string
   }>
   readonly reopen: Readonly<{
     backend: Exclude<OutputDiagnosticBackend, 'portable'>

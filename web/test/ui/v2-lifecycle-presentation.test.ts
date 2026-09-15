@@ -187,6 +187,7 @@ describe('direct ZIP lifecycle presentation', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoint-set',
       completedFileCount: 1n,
+      retainedBytes: 1_024n,
       completedBytes: 1_024n,
     })
     const resumable = present(
@@ -228,6 +229,7 @@ describe('direct ZIP lifecycle presentation', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoint-set',
       completedFileCount: 1n,
+      retainedBytes: 1_024n,
       completedBytes: 1_024n,
     }), TREE, 'direct-tree')
 
@@ -278,6 +280,7 @@ describe('compatible-name repair presentation', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 1n,
+      retainedBytes: 128n,
       completedBytes: 128n,
     }), TREE, 'direct-tree', undefined, summary)
 
@@ -389,6 +392,7 @@ describe('retained usage and lifecycle-valid actions', () => {
       payloadKind: 'file-set',
       checkpointSetDigest: 'checkpoints',
       completedFileCount: 2n,
+      retainedBytes: 512n,
       completedBytes: 512n,
     })
     const presentation = present(state, TREE, 'workspace-then-publish')
@@ -513,6 +517,7 @@ function recoverySummary(
     discoveredBytes: 3_584n,
     discovery: override.discovery,
     completedFileCount: 1n,
+    retainedBytes: 1_024n,
     completedBytes: 1_024n,
     incompleteFileCount: 2n,
     verifiedPartialFileCount: 2n,

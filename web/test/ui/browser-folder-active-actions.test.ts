@@ -103,7 +103,7 @@ describe('active terminal folder storage actions', () => {
     f.readLease.mockResolvedValue({ operationId: f.lifecycle.operationId, leaseId: deliveryIdentity(40, 16), acquiredAt: 100 })
     await expect(f.runtime.startLifecycleAction('cleanup-staging', f.lifecycle)).rejects.toMatchObject({ name: 'InvalidStateError' })
     const paused: ReceiveLifecycleState = { ...f.lifecycle, kind: 'resumable-receive', payloadKind: 'file-set',
-      checkpointSetDigest: f.fixture.policy.digest, completedFileCount: 0n, completedBytes: 0n,
+      checkpointSetDigest: f.fixture.policy.digest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 1n, discoveredBytes: 8n, discovery: 'failed' } }
     await expect(f.runtime.startLifecycleAction('discard-incomplete-staging', paused)).rejects.toMatchObject({ name: 'NotSupportedError' })
     expect(f.openCleanup).not.toHaveBeenCalled()

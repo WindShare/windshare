@@ -449,6 +449,7 @@ export async function createFreshPageWorkspaceResumeCut(
   const paused = await stages.pauseReceive({
     checkpointSetDigest: ids.checkpointSetDigest,
     completedFileCount: 0n,
+    retainedBytes: 0n,
     completedBytes: 0n,
     selectionFacts: Object.freeze({
       discoveredFileCount: 1n,

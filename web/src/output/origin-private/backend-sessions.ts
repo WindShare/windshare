@@ -10,6 +10,9 @@ import type {
   PersistentHandleRepository,
 } from '../persistence/journal'
 import { finalFileCheckpointProof } from '../persistence/journal'
+import type { ReceiveIntent } from '../../transfer/intent'
+import { readOriginalReceiveCheckpoint, originalReceiveCheckpointSummary,
+  type OriginalReceiveCheckpointSummary } from './recovery/receive-checkpoint'
 import type {
   PersistentDirectoryMaterialization,
   PersistentFileRequest,
@@ -49,6 +52,7 @@ export interface OriginPrivateWorkspaceBackend {
   readonly packagedArtifacts: PackagedArtifactReadPort
   readonly finalCheckpoints: FinalCheckpointReader
   readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
+  snapshotReceiveProgress(expectedSize: bigint): Promise<OriginalReceiveCheckpointSummary>
   close(): Promise<void>
 }
 
@@ -124,11 +128,13 @@ export class OriginPrivateWorkspaceBackendSession implements OriginPrivateWorksp
   readonly finalCheckpoints: FinalCheckpointReader
   readonly cleanup: OriginPrivateWorkspaceCleanupAuthority
   readonly #checkpoints: OriginPrivateDurableCheckpointStore
+  readonly #intent: ReceiveIntent
   readonly #ownsStore: boolean
   readonly #diagnostics: OutputDiagnosticsPorts | undefined
   #closed = false
 
   constructor(input: {
+    readonly intent: ReceiveIntent
     readonly materialization: PersistentMaterializationPort
     readonly packages: OriginPrivatePackageStore
     readonly finalCheckpoints: FinalCheckpointReader
@@ -137,6 +143,7 @@ export class OriginPrivateWorkspaceBackendSession implements OriginPrivateWorksp
     readonly ownsStore: boolean
     readonly diagnostics?: OutputDiagnosticsPorts
   }) {
+    this.#intent = input.intent
     this.materialization = input.materialization
     this.packages = input.packages
     this.packagedArtifacts = input.packages
@@ -145,6 +152,12 @@ export class OriginPrivateWorkspaceBackendSession implements OriginPrivateWorksp
     this.#checkpoints = input.checkpoints
     this.#ownsStore = input.ownsStore
     this.#diagnostics = input.diagnostics
+  }
+
+  async snapshotReceiveProgress(expectedSize: bigint): Promise<OriginalReceiveCheckpointSummary> {
+    await this.materialization.close()
+    return originalReceiveCheckpointSummary(this.#intent,
+      await readOriginalReceiveCheckpoint(this.#intent, expectedSize, this.#checkpoints))
   }
 
   async close(): Promise<void> {

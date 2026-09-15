@@ -61,6 +61,8 @@ large artifacts under `tmp/` slow package discovery and every gopls build view.
 Browser storage formats are pre-release. Incompatible capacity schemas are rejected without migration
 or deleting accounting records. After a format change, close old tabs and clear the test site's storage
 (IndexedDB and OPFS, not just the HTTP cache) before testing the new build.
+File-set lifecycle snapshots include verified retained bytes for incomplete files; snapshots without
+that field are incompatible with the current pre-release format.
 
 | Command | Runs |
 |---|---|

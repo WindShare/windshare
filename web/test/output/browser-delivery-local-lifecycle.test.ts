@@ -60,7 +60,7 @@ describe('browser local delivery lifecycle authority', () => {
     const old = await createFSARecoveryCheckpointSnapshot(intent, 7n, baseline)
     const lifecycle: LocalFileSetLifecycle = {
       kind: 'resumable-receive', payloadKind: 'file-set', operationId: intent.operationId, receiveIntentDigest: intent.digest,
-      generation: 7n, checkpointSetDigest: old.checkpointSetDigest, completedFileCount: 0n, completedBytes: 0n,
+      generation: 7n, checkpointSetDigest: old.checkpointSetDigest, completedFileCount: 0n, retainedBytes: 0n, completedBytes: 0n,
       selectionFacts: { discoveredFileCount: 2n, discoveredBytes: 8n, discovery: 'failed' },
     }
     for (const record of f.repository.files.values()) f.repository.files.set(record.fileId,

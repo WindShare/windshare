@@ -956,6 +956,7 @@ function pauseState(
         payloadKind: 'file-set',
         checkpointSetDigest: digestIdentity(77),
         completedFileCount: 0n,
+        retainedBytes: 0n,
         completedBytes: 0n,
         selectionFacts,
         expiresAt: 1000,

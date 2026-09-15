@@ -236,6 +236,8 @@ export class FSAOperationSettlementAuthority implements FileSystemAccessOperatio
         checkpointSetDigest: checkpointEvidence.checkpointSetDigest,
         completedFileCount: validated.fileCount,
         completedBytes: validated.completedBytes,
+        retainedBytes: checkpointEvidence.checkpoints.reduce((total, checkpoint) =>
+          total + checkpoint.verifiedRanges.reduce((bytes, range) => bytes + range.end - range.start, 0n), 0n),
         selectionFacts: request.selectionFacts,
         partialReceiptDigest: receipt.digest,
         expectedGeneration: current.state.generation,

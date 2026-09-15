@@ -184,6 +184,7 @@ function pauseVerified(
       checkpointSetDigest: event.checkpointSetDigest,
       completedFileCount: event.completedFileCount,
       completedBytes: event.completedBytes,
+      retainedBytes: event.retainedBytes,
       selectionFacts: event.selectionFacts,
       ...(event.partialReceiptDigest === undefined
         ? {}
@@ -252,6 +253,7 @@ function restoreReceiveContinuation(
     checkpointSetDigest: event.checkpointSetDigest,
     completedFileCount: event.completedFileCount,
     completedBytes: event.completedBytes,
+    retainedBytes: event.retainedBytes,
     selectionFacts: event.selectionFacts,
     ...(event.partialReceiptDigest === undefined
       ? {}
@@ -332,6 +334,7 @@ function finalizeTree(
         checkpointSetDigest: event.checkpointSetDigest,
         completedFileCount: event.completedFileCount,
         completedBytes: event.completedBytes,
+        retainedBytes: event.retainedBytes,
         selectionFacts: event.selectionFacts,
         partialReceiptDigest: event.receiptDigest,
       })

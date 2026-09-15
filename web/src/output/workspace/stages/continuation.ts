@@ -22,6 +22,7 @@ export class WorkspaceContinuationStages {
     readonly checkpointSetDigest: string
     readonly completedFileCount: bigint
     readonly completedBytes: bigint
+    readonly retainedBytes: bigint
     readonly selectionFacts: RecoverySelectionFacts
   }): Promise<Extract<ReceiveLifecycleState, {
     kind: 'resumable-receive'
@@ -34,6 +35,7 @@ export class WorkspaceContinuationStages {
       checkpointSetDigest: input.checkpointSetDigest,
       completedFileCount: input.completedFileCount,
       completedBytes: input.completedBytes,
+      retainedBytes: input.retainedBytes,
       selectionFacts: input.selectionFacts,
     }, state))
     if (next.kind !== 'resumable-receive' || next.payloadKind !== 'file-set') {
@@ -47,6 +49,7 @@ export class WorkspaceContinuationStages {
       resumable_stage: 'receive',
       completed_file_count: next.completedFileCount,
       completed_bytes: next.completedBytes,
+      retained_bytes: next.retainedBytes,
     })
     return next
   }
@@ -140,6 +143,7 @@ export class WorkspaceContinuationStages {
       checkpointSetDigest: fallback.checkpointSetDigest,
       completedFileCount: fallback.completedFileCount,
       completedBytes: fallback.completedBytes,
+      retainedBytes: fallback.retainedBytes,
       selectionFacts: fallback.selectionFacts,
       ...(fallback.partialReceiptDigest === undefined
         ? {}
@@ -156,6 +160,7 @@ export class WorkspaceContinuationStages {
       restored_checkpoint_set_digest: next.checkpointSetDigest,
       restored_completed_file_count: next.completedFileCount,
       restored_completed_bytes: next.completedBytes,
+      restored_retained_bytes: next.retainedBytes,
     })
     return next
   }

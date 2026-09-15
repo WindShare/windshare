@@ -260,6 +260,7 @@ export type WorkspaceStageTraceEvent =
       resumable_stage: 'receive'
       completed_file_count: bigint
       completed_bytes: bigint
+      retained_bytes?: bigint
     }>
   | Readonly<{
       name: 'receive.continuation.admission_failed'
@@ -268,6 +269,7 @@ export type WorkspaceStageTraceEvent =
       restored_checkpoint_set_digest: string
       restored_completed_file_count: bigint
       restored_completed_bytes: bigint
+      restored_retained_bytes: bigint
     }>
   | Readonly<{
       name: 'receive.operation.discarded' | 'receive.operation.cleanup_completed'

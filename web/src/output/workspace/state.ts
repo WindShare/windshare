@@ -131,6 +131,8 @@ export type ReceiveLifecycleState =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      /** Verified payload in completed and incomplete files, counted once. */
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
     }>
@@ -260,11 +262,7 @@ export function nextReceiveLifecycleState(
   const durablePayload = payload.kind === 'resumable-receive' && payload.payloadKind === 'file-set'
     ? Object.freeze({
         ...payload,
-        selectionFacts: snapshotRecoverySelectionFacts(
-          payload.selectionFacts,
-          payload.completedFileCount,
-          payload.completedBytes,
-        ),
+        ...snapshotRetainedFileSetProgress(payload),
       })
     : payload
   const { contentWarning, ...statePayload } = durablePayload
@@ -276,6 +274,24 @@ export function nextReceiveLifecycleState(
     ...advanceReceiveTiming(current.timing, payload.kind, clock),
     ...receiveContentWarningFields(Object.hasOwn(payload, 'contentWarning') ? contentWarning ?? undefined : current.contentWarning),
   }) as ReceiveLifecycleState
+}
+
+export function snapshotRetainedFileSetProgress(input: Readonly<{
+  completedFileCount: bigint
+  completedBytes: bigint
+  retainedBytes: bigint
+  selectionFacts: RecoverySelectionFacts
+}>) {
+  const selectionFacts = snapshotRecoverySelectionFacts(
+    input.selectionFacts, input.completedFileCount, input.completedBytes,
+  )
+  if (typeof input.retainedBytes !== 'bigint' || input.retainedBytes < input.completedBytes ||
+      input.retainedBytes > selectionFacts.discoveredBytes ||
+      (input.completedFileCount === selectionFacts.discoveredFileCount && input.retainedBytes !== input.completedBytes)) {
+    throw new TypeError('retained file-set bytes do not contain completed output within discovery')
+  }
+  return Object.freeze({ completedFileCount: input.completedFileCount, completedBytes: input.completedBytes,
+    retainedBytes: input.retainedBytes, selectionFacts })
 }
 
 export function snapshotRecoverySelectionFacts(

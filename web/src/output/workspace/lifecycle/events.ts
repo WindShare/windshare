@@ -32,6 +32,7 @@ export type LifecycleEvent =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
     }>
@@ -63,6 +64,7 @@ export type LifecycleEvent =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       partialReceiptDigest?: string
     }>
@@ -95,6 +97,7 @@ export type LifecycleEvent =
       checkpointSetDigest: string
       completedFileCount: bigint
       completedBytes: bigint
+      retainedBytes: bigint
       selectionFacts: RecoverySelectionFacts
       successCount: bigint
       failureCount: bigint

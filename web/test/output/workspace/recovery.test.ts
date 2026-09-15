@@ -23,6 +23,7 @@ describe('abandoned receive recovery', () => {
       kind: 'verified-receive',
       checkpointSetDigest: identity(32, 4),
       completedFileCount: 2n,
+      retainedBytes: 10n,
       completedBytes: 10n,
       selectionFacts: Object.freeze({
         discoveredFileCount: 4n,

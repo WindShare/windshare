@@ -155,7 +155,8 @@ export async function deriveFSARecoverySummary(input: Readonly<{
   }
 
   if (completedFileCount !== lifecycle.completedFileCount ||
-      completedBytes !== lifecycle.completedBytes) {
+      completedBytes !== lifecycle.completedBytes ||
+      completedBytes + verifiedPartialBytes !== lifecycle.retainedBytes) {
     throw new TypeError('FSA recovery checkpoint completion totals disagree with the lifecycle')
   }
   if (checkpointFileCount > selection.discoveredFileCount ||

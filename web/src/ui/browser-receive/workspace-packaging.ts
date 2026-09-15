@@ -97,16 +97,11 @@ export class WorkspaceReceivePackaging {
         cut: PersistentMaterializationSettlementCut<WorkspaceMaterializationEvidence>,
       ) => {
         await cut.closeMaterialization()
-        const digest = await checkpointSetDigest(this.#intent, cut.evidence)
-        if (request.kind === 'source-invalidated') return this.#stages.invalidateReceive(digest)
-        const files = cut.evidence.entries.filter(entry => entry.kind === 'file')
-        const completedBytes = files.reduce((total, entry) => total + entry.exactSize, 0n)
-        return this.#stages.pauseReceive({
-          checkpointSetDigest: digest,
-          completedFileCount: BigInt(files.length),
-          completedBytes,
-          selectionFacts: request.selectionFacts,
-        })
+        if (request.kind === 'source-invalidated') {
+          return this.#stages.invalidateReceive(await checkpointSetDigest(this.#intent, cut.evidence))
+        }
+        const summary = await backend.snapshotReceiveProgress(request.selectionFacts.discoveredBytes)
+        return this.#stages.pauseReceive({ ...summary, selectionFacts: request.selectionFacts })
       },
       settle: async (
         request: PlanSettlementRequest<SuccessfulTransferWorkerSettlement>,
@@ -162,7 +157,7 @@ export class WorkspaceReceivePackaging {
     if (lifecycle.kind === 'discarded' || lifecycle.kind === 'source-invalidated') return null
     let ownedBytes = 0n
     if (lifecycle.kind === 'resumable-receive' && lifecycle.payloadKind !== 'direct-zip') {
-      ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.completedBytes
+      ownedBytes = lifecycle.payloadKind === 'opfs-zip' ? lifecycle.occupiedBytes : lifecycle.retainedBytes
     }
     else if (this.#packageExactBytes !== undefined &&
         (lifecycle.kind === 'waiting-to-save' ||

@@ -1,3 +1,8 @@
+export type FileTransferSettlement =
+  | Readonly<{ kind: 'completed'; exactSize: bigint }>
+  | Readonly<{ kind: 'paused'; retainedBytes: bigint }>
+  | Readonly<{ kind: 'unconfirmed' }>
+
 import type { V2CatalogClient } from '../../catalog/v2-client'
 import type {
   V2CatalogEntry,
