@@ -85,6 +85,7 @@ export interface PersistedReceiveRecord {
   readonly state?: number
   readonly lifecycleGeneration?: string
   readonly timing?: import('./lifecycle/timing').ReceiveTiming
+  readonly contentWarning?: import('./lifecycle/content-warning').ReceiveContentWarning
 }
 
 export interface ManifestPageRecord {
@@ -705,6 +706,7 @@ function assertExactPersistedRecordShape(record: PersistedReceiveRecord): void {
   if (record.kind === RECEIVE_RECORD_LIFECYCLE_STATE) {
     expected.push('state', 'lifecycleGeneration')
     if (Object.hasOwn(record, 'timing')) expected.push('timing')
+    if (Object.hasOwn(record, 'contentWarning')) expected.push('contentWarning')
   }
   const actual = Object.keys(record).sort()
   expected.sort()

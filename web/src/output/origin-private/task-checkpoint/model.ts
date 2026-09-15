@@ -1,4 +1,5 @@
 import { snapshotPortableCatalogPath } from '../../../catalog/path-policy'
+import { receiveContentWarningFields, type ReceiveContentWarning } from '../../workspace/lifecycle/content-warning'
 import { validateZipEntryPlan, type ZipEntryPlanV1 } from '../../zip-layout/policy'
 
 export interface TaskObjectRef {
@@ -56,6 +57,7 @@ export interface TaskCheckpoint {
   readonly physicalLength: bigint
   readonly entryCount: bigint
   readonly discoveryComplete: boolean
+  readonly contentWarning?: ReceiveContentWarning
   readonly selectedPaths: readonly (readonly string[])[]
   readonly artifactState: 'receiving' | 'finalizing' | 'sealed'
   readonly finalization?: Readonly<{
@@ -96,6 +98,7 @@ export function snapshotTaskCheckpoint(value: TaskCheckpoint): TaskCheckpoint {
   }
   return Object.freeze({
     ...value,
+    ...receiveContentWarningFields(value.contentWarning),
     object: Object.freeze({ ...value.object }),
     selectedPaths: Object.freeze(value.selectedPaths.map(path => Object.freeze([...path]))),
     ...(value.finalization === undefined ? {} : { finalization: Object.freeze({ ...value.finalization }) }),

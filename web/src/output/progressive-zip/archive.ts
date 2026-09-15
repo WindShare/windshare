@@ -1,4 +1,5 @@
 import { SourceRevisionChangedError } from '../persistent-tree/errors'
+import { receiveContentWarningFields, snapshotReceiveContentWarning, type ReceiveContentWarning } from '../workspace/lifecycle/content-warning'
 import type { NativeObjectIO } from '../origin-private/native-object/contracts'
 import { writeObjectBatch, type NativeObjectWrite, type ObjectWriteBatchCapacity } from '../origin-private/native-object/write-batch'
 import { zipFinalizationBatches } from './finalization'
@@ -249,9 +250,14 @@ export class ProgressiveZipArchive {
     })
   }
 
-  async markDiscoveryComplete(): Promise<void> {
+  async markDiscoveryComplete(warning?: ReceiveContentWarning): Promise<void> {
+    const contentWarning = warning === undefined ? undefined : snapshotReceiveContentWarning(warning)
     await this.#input.coordinator.checkpoint('zip-discovery-complete', () =>
-      this.#commit({ discoveryComplete: true }))
+      this.#commit({ discoveryComplete: true, contentWarning: contentWarning ?? null }))
+    if (contentWarning !== undefined) this.#trace('zip_selected_content_missing', {
+      reason: JSON.stringify({ completed_file_count: contentWarning.completedFileCount.toString(),
+        selected_file_count: contentWarning.selectedFileCount.toString(), missing_files: contentWarning.missingFiles }),
+    })
   }
 
   async markRevisionFailure(entryId: string, reason: string): Promise<void> {
@@ -378,13 +384,16 @@ export class ProgressiveZipArchive {
   }
 
   async #commit(
-    changes: Partial<TaskCheckpoint>,
+    changes: Partial<Omit<TaskCheckpoint, 'contentWarning'>> & { contentWarning?: ReceiveContentWarning | null },
     entries: readonly TaskEntry[] = [],
     directoryPins: readonly TaskDirectoryPin[] = [],
   ): Promise<TaskCheckpoint> {
     const changed = new Map(this.#dirty)
     for (const entry of entries) changed.set(entry.entryId, entry)
-    const checkpoint = { ...this.#checkpoint, ...changes, physicalLength: this.#physicalLength,
+    const { contentWarning: previousWarning, ...previous } = this.#checkpoint
+    const { contentWarning: updatedWarning, ...updates } = changes
+    const warning = Object.hasOwn(changes, 'contentWarning') ? updatedWarning ?? undefined : previousWarning
+    const checkpoint = { ...previous, ...updates, ...receiveContentWarningFields(warning), physicalLength: this.#physicalLength,
       generation: this.#checkpoint.generation + 1n }
     await this.#ensureHeadroom(this.#physicalLength, this.#metadataBytes(entries))
     await this.#input.store.commit({

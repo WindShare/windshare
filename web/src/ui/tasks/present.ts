@@ -1,10 +1,16 @@
 import type { TaskAction, TaskFacts, TaskPresentation, TaskPresentationTransition, TaskStage } from './model'
 import { presentTaskProgress } from './progress'
 import { receiveElapsedMilliseconds } from '../../output/workspace/lifecycle/timing'
+import type { ReceiveContentWarning } from '../../output/workspace/lifecycle/content-warning'
 
 import { resolveTaskStage, type StageCopy } from './stage'
 
 const FALLBACK_OPERATION_LABEL_LENGTH = 8
+const MISSING_FILE_DESCRIPTIONS = {
+  'source-changed': 'The source file changed or was deleted.',
+  'source-unavailable': 'The source file is unavailable or was deleted.',
+  'file-failed': 'The file could not be received.',
+} as const
 
 export function presentTask(facts: TaskFacts): TaskPresentation {
   const copy = resolveTaskStage(facts)
@@ -17,7 +23,8 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
   const progress = presentTaskProgress(facts)
   const showProgress = ['preparing', 'downloading', 'waiting', 'paused', 'finishing'].includes(copy.stage)
   if (!showProgress && progress !== null) details.push(progress.label, ...progress.details)
-  if (facts.completeness === 'partial') details.unshift('Partial result: some selected items are missing or unfinished.')
+  if (facts.lifecycle.contentWarning !== undefined) details.unshift(...contentWarningDetails(facts.lifecycle.contentWarning))
+  else if (facts.completeness === 'partial') details.unshift('Partial result: some selected items are missing or unfinished.')
   if (facts.fidelity !== null) {
     const count = facts.fidelity.replacementCount
     details.push(`${count} ${count === 1 ? 'filename was' : 'filenames were'} adjusted for this device.`)
@@ -50,6 +57,18 @@ export function presentTask(facts: TaskFacts): TaskPresentation {
     publication: facts.publication,
     transition,
   })
+}
+
+function contentWarningDetails(warning: ReceiveContentWarning): readonly string[] {
+  const missing = warning.selectedFileCount - warning.completedFileCount
+  const details = [`Partial result: ${warning.completedFileCount}/${warning.selectedFileCount} files received; ${missing} not included in the ZIP.`]
+  for (const file of warning.missingFiles) {
+    const reason = MISSING_FILE_DESCRIPTIONS[file.reason]
+    details.push(`${file.path.join('/')}: ${reason} Not included in the ZIP.`)
+  }
+  const additional = missing - BigInt(warning.missingFiles.length)
+  if (additional > 0n) details.push(`${additional} additional missing ${additional === 1n ? 'file is' : 'files are'} not listed.`)
+  return details
 }
 
 function taskTone(stage: TaskStage, attention: boolean, facts: TaskFacts): TaskPresentation['tone'] {

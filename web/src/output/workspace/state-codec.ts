@@ -1,5 +1,6 @@
 import { encodeBase64Url, equalBytes } from '../../crypto/bytes'
 import { receiveTimingFields } from './lifecycle/timing'
+import { receiveContentWarningFields } from './lifecycle/content-warning'
 import {
   canonicalFrame,
   canonicalIdentity,
@@ -56,7 +57,7 @@ export async function storedReceiveLifecycleState(
     state: receiveStateByte(state),
     lifecycleGeneration: state.generation,
   })
-  return Object.freeze({ ...record, ...receiveTimingFields(state.timing) })
+  return Object.freeze({ ...record, ...receiveTimingFields(state.timing), ...receiveContentWarningFields(state.contentWarning) })
 }
 
 export function decodeStoredReceiveLifecycleState(
@@ -71,7 +72,7 @@ export function decodeStoredReceiveLifecycleState(
       receiveStateByte(state) !== record.state) {
     throw new TypeError('lifecycle projections disagree with canonical bytes')
   }
-  return Object.freeze({ ...state, ...receiveTimingFields(record.timing) })
+  return Object.freeze({ ...state, ...receiveTimingFields(record.timing), ...receiveContentWarningFields(record.contentWarning) })
 }
 
 function lifecyclePayload(state: ReceiveLifecycleState): readonly CanonicalBytes[] {
