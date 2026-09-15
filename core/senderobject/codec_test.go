@@ -42,7 +42,7 @@ func TestDescriptorMatchesFrozenSenderObjectVector(t *testing.T) {
 	key := decoded("QJf/rkymcTqujczmpzms5e8PRSI08a/0Fm7ica6GlQ4=")
 	nonce := decoded("0NHS09TV1tfY2drb")
 	plaintext := decoded("qgABAQICAgNQQEFCQ0RFRkdISUpLTE1OTwRQUFFSU1RVVldYWVpbXF1eXwUaABAAAAYHB1ggKay64UG8yvCyLhqU000LxzYeUm0L/hLIl5S8kyKWbdcIGmVT8QAJeCB3aW5kc2hhcmUvcGF0aC92MS11bmljb2RlLTE1LjAuMA==")
-	want := decoded("AgAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBO1eZro4Q2/eBvLZYFXoul3IZ12dbXljAhPMxure5bwD4bJzI+qSRmw1G6aZems+gCERr/qm4+5Vtdpve2Fmf2tbEqKTtppABJrqXNgEaKnQ4=")
+	want := decoded("AwAAAAAAAI/Q0dLT1NXW19jZ2ttZiFtVkBUbMjw7HI/q5B9qTw6bdNmlWAQtMgPxJGkRSmmZjl6KhYM8wRjPSNppp6y8l+oskLhTNjknPbPR41l3KLLCcl8a3QGnBZltpRP2erySHhoULzJzlDcEAkmQJyrASmgNQdVQSipSRia3l7yRnZAeFhColC/WYAO47TBOn5u8MGIKWZC/L/pzet2u2qONbgraaKsFf/7sOCS0maBxagI8gLbTq0LV4gEWiLKOZaaFp5fLFOcFOtJApli8+KMutAhBTnazobRt+9RotAI=")
 	object, err := senderobject.Seal(binding, key, privateKey, nonce, plaintext)
 	if err != nil {
 		t.Fatal(err)
@@ -77,6 +77,13 @@ func TestSenderObjectRejectsIdentityCiphertextAndSignatureSubstitution(t *testin
 		t.Fatal(err)
 	}
 
+	otherPurpose, err := senderobject.NewDirectoryErrorBinding(share, file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := senderobject.Verify(otherPurpose, publicKey, object); !errors.Is(err, senderobject.ErrSignature) {
+		t.Fatalf("purpose substitution error = %v", err)
+	}
 	otherFile := bytes.Clone(file)
 	otherFile[0] ^= 1
 	otherBinding, _ := senderobject.NewRevisionBinding(share, otherFile)

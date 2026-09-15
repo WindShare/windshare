@@ -16,7 +16,8 @@ import (
 )
 
 const (
-	WireVersion    = byte(2)
+	// The object version owns the signature construction independently of the v2 session wire.
+	WireVersion    = byte(3)
 	HeaderBytes    = 8
 	NonceBytes     = 12
 	SignatureBytes = ed25519.SignatureSize
@@ -299,11 +300,14 @@ func authenticationData(domain Domain, contextHash [sha256.Size]byte, header []b
 }
 
 func signaturePreimage(domain Domain, contextHash [sha256.Size]byte, prefix []byte) []byte {
-	result := make([]byte, 0, len(domain)+1+sha256.Size+len(prefix))
+	// Committing to every sealed byte lets receivers hash large blocks natively
+	// while keeping ordinary Ed25519 verification independent of the block size.
+	objectHash := sha256.Sum256(prefix)
+	result := make([]byte, 0, len(domain)+1+sha256.Size*2)
 	result = append(result, domain...)
 	result = append(result, 0)
 	result = append(result, contextHash[:]...)
-	return append(result, prefix...)
+	return append(result, objectHash[:]...)
 }
 
 func objectAEAD(key []byte) (cipher.AEAD, error) {

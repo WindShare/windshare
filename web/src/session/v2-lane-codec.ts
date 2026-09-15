@@ -164,13 +164,12 @@ async function verifyEd25519(
   senderPublicKey: Uint8Array,
   preimage: Uint8Array,
   signature: Uint8Array,
-  runtime: CryptoRuntime,
 ): Promise<boolean> {
   if (senderPublicKey.byteLength !== 32 || signature.byteLength !== 64) {
     throw new V2LaneCodecError('input', 'Ed25519 verification material has an invalid width')
   }
   try {
-    return await verifyEd25519Signature(senderPublicKey, preimage, signature, runtime)
+    return await verifyEd25519Signature(senderPublicKey, preimage, signature)
   } catch (cause) {
     throw new V2LaneCodecError('signature', 'Unable to verify lane response signature', {
       cause,
@@ -289,7 +288,6 @@ export async function verifyV2LaneAccept(
       senderPublicKey,
       preimage,
       encoded.subarray(V2_LANE_ACCEPT_BODY_BYTES),
-      runtime,
     ))
   ) {
     throw new V2LaneCodecError('signature', 'LaneAccept sender signature is invalid')
@@ -367,7 +365,6 @@ export async function verifyV2LaneReject(
       senderPublicKey,
       preimage,
       encoded.subarray(V2_LANE_REJECT_BODY_BYTES),
-      runtime,
     ))
   ) {
     throw new V2LaneCodecError('signature', 'LaneReject sender signature is invalid')
