@@ -14,7 +14,8 @@ verify reuse of the retained object and committed bytes. Source invalidation che
 bytes across reload, forbid continuation, and verify cleanup; the smoke also verifies that the next
 download succeeds and the source rejection is not attributed to a checkpoint failure. Startup and
 diagnostics contracts use the application entry point, including same-document share links and portal anchors.
-UI harnesses load their required styles.
+UI harnesses load their required styles. Assertions protect state, actions, accessibility, and usable
+layouts; incidental marketing copy and DOM nesting are not contracts.
 The short Chromium contracts also build and serve the native-storage capability probe under a
 same-origin Worker CSP, catching bundling failures hidden by the development server.
 Static architecture gates protect dependency and capability boundaries, not

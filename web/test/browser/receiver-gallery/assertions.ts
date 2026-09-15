@@ -40,19 +40,3 @@ export async function expectNoHorizontalOverflow(page: Page) {
   }))
   expect(overflow.scrollWidth, JSON.stringify(overflow)).toBeLessThanOrEqual(overflow.width)
 }
-
-export async function portalStyles(page: Page) {
-  return page.evaluate(() => Object.fromEntries([
-    '.portal-root', '.portal-header', '.portal-brand-logo', '.portal-hero h1',
-    '.portal-console-card', '.portal-root .downloads-entry',
-  ].map(selector => {
-    const element = document.querySelector(selector)!
-    const style = getComputedStyle(element)
-    const rect = element.getBoundingClientRect()
-    return [selector, {
-      color: style.color, backgroundColor: style.backgroundColor, fontSize: style.fontSize,
-      fontWeight: style.fontWeight, borderRadius: style.borderRadius, borderColor: style.borderColor,
-      padding: style.padding, margin: style.margin, width: rect.width, height: rect.height, x: rect.x, y: rect.y,
-    }]
-  })))
-}

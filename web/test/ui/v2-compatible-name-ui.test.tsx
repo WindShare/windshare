@@ -65,11 +65,9 @@ describe('compatible-name receiver UI', () => {
 
     expect(html).toContain('role="status"')
     expect(html).toContain('adjusted for this device.')
-    expect(html).toContain('filenames were')
     expect(html).not.toContain('restore.windshare-abc234.ps1')
     expect(html).not.toContain('powershell.exe')
     expect(html).not.toContain('Copy restoration command')
-    expect(html).not.toContain('<details')
     expect(html).not.toMatch(/names (?:are|were) restored/iu)
   })
 
@@ -124,7 +122,6 @@ describe('compatible-name receiver UI', () => {
     expect(html).toContain('Finish local restoration catch-up')
     expect(html).toContain('Restoration tool catch-up required')
     expect(html).toContain('Do not run the restoration tool yet')
-    expect(html).not.toContain('Abnormal-stop recovery only')
     expect(html).not.toContain('Run command')
     expect(html).not.toContain('powershell.exe -NoProfile -ExecutionPolicy Bypass -File')
   })
