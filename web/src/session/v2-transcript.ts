@@ -158,7 +158,6 @@ async function acceptServerHello(
       senderSigningKey,
       signaturePreimage,
       encoded.subarray(body.length),
-      runtime,
     )
   } catch (cause) {
     throw new V2TranscriptError('Unable to verify ServerHello signature', { cause })
