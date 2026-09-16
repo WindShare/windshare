@@ -1,6 +1,8 @@
 import { isTerminalRecoveryFailure, isShareRecoveryFailure, isLaneRecoveryFailure, isSessionFailure, recoveryRetryAfter } from './recovery-failure'
-import { defaultReconnectBackoff, requireBackoff, systemReconnectClock, waitingReconnectBackoff,
-  type V2ReconnectClock } from './recovery-clock'
+import {
+  defaultReconnectBackoff, generationReconnectBackoff, reconnectPhase, requireBackoff,
+  systemReconnectClock, waitingReconnectBackoff, type V2ReconnectClock,
+} from './recovery-clock'
 import { RecoveryWake } from './recovery-wake'
 import { observeRecovery, type RecoveryObservation } from './recovery-observation'
 import { ReceiverConnectionState, type ReceiverReconnectActivity } from './connection-state'
@@ -49,7 +51,7 @@ import { DownloadMetrics } from './download-metrics'
 import {
   GenerationRecoveryBudget,
   GenerationRecoveryExhaustedError,
-  runGenerationRecovery, type GenerationRecoveryWave,
+  runGenerationRecovery,
 } from './generation-recovery'
 
 export interface V2ReceiverSupervisorOptions {
@@ -59,7 +61,7 @@ export interface V2ReceiverSupervisorOptions {
   readonly sessionFactory: V2ReceiverSessionFactory
   readonly clock?: V2ReconnectClock
   readonly generationRecovery?: GenerationRecoveryBudget
-  readonly backoffMilliseconds?: (attempt: number) => number
+  readonly generationBackoffMilliseconds?: (attempt: number) => number
   readonly offersFactory?: () => OfferChannelFactory
   readonly randomBytes?: (length: number) => Uint8Array
   readonly nativePeerUsable?: () => boolean
@@ -111,7 +113,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   readonly #networkAvailable = () => this.requestReconnect()
   #recoveryAttempt = 0
   #recoveryPhase: 'fast' | 'waiting' = 'fast'
-  readonly #backoffMilliseconds: (attempt: number) => number
+  readonly #generationBackoffMilliseconds: (attempt: number) => number
   readonly #protocolTrace: V2ProtocolTraceSource | undefined
   #operationSequence = 0
   readonly #onRecoveryError: (error: unknown) => void
@@ -134,7 +136,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     this.#factory = options.sessionFactory
     this.#clock = options.clock ?? systemReconnectClock
     this.#generationRecovery = options.generationRecovery ?? new GenerationRecoveryBudget()
-    this.#backoffMilliseconds = options.backoffMilliseconds ?? defaultReconnectBackoff
+    this.#generationBackoffMilliseconds = options.generationBackoffMilliseconds ?? generationReconnectBackoff
     this.#protocolTrace = options.protocolTrace
     this.#onRecoveryError = options.onRecoveryError ?? (() => undefined)
     this.#generations = new V2ReceiverGenerationFactory({
@@ -143,7 +145,7 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
       policy: this.#policy,
       clock: this.#clock,
       recoveryWake: this.#recoveryWake,
-      backoffMilliseconds: this.#backoffMilliseconds,
+      backoffMilliseconds: defaultReconnectBackoff,
       pathActivity: this.pathActivity,
       offersFactory: options.offersFactory,
       randomBytes: options.randomBytes,
@@ -411,34 +413,29 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
   }
 
   async #reconcile(): Promise<void> {
-    let attempt = 0
     this.#recoveryAttempt = 0
-    this.#recoveryPhase = 'fast'
-    let wave = this.#generationRecovery.openWave(this.#clock.now())
+    const startedAt = this.#clock.now()
     while (!this.#lifetime.signal.aborted) {
       this.#reconcileRequested = false
+      this.#recoveryPhase = reconnectPhase(this.#recoveryAttempt, this.#clock.now() - startedAt)
       try {
-        if (!(await this.#reconcileGeneration(this.#current, wave))) return
-        attempt = 0
+        if (!(await this.#reconcileGeneration(this.#current))) return
       } catch (error) {
         if (!(error instanceof GenerationRecoveryExhaustedError)) this.#traceConnection({ transition: 'attempt_failed', failure: error })
-        if (!(await this.#waitAfterRecoveryFailure(error, attempt++, wave))) return
-        if (error instanceof GenerationRecoveryExhaustedError || wave.exhausted(this.#clock.now())) {
-          wave = this.#generationRecovery.openWave(this.#clock.now())
-        }
+        if (!(await this.#waitAfterRecoveryFailure(error, startedAt))) return
       }
     }
   }
 
-  async #reconcileGeneration(generation: V2ReceiverGeneration, wave: GenerationRecoveryWave): Promise<boolean> {
+  async #reconcileGeneration(generation: V2ReceiverGeneration): Promise<boolean> {
     if (generation.retired || generation.session.laneIds().length === 0) {
-      await this.#replaceGeneration(generation, wave)
+      await this.#replaceGeneration(generation)
       return true
     }
     return false
   }
 
-  async #waitAfterRecoveryFailure(error: unknown, attempt: number, wave: GenerationRecoveryWave): Promise<boolean> {
+  async #waitAfterRecoveryFailure(error: unknown, startedAt: number): Promise<boolean> {
     if (this.#stopped || this.#lifetime.signal.aborted) return false
     if (isTerminalRecoveryFailure(error)) {
       this.#failTerminal(error)
@@ -446,12 +443,14 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     }
     this.#observeRecoveryError(error)
     const now = this.#clock.now()
-    if (error instanceof GenerationRecoveryExhaustedError || wave.exhausted(now)) this.#recoveryPhase = 'waiting'
+    this.#recoveryPhase = error instanceof GenerationRecoveryExhaustedError
+      ? 'waiting' : reconnectPhase(this.#recoveryAttempt, now - startedAt)
     const capacityDelay = this.#generationRecovery.nextCapacityMilliseconds(now)
     const serverDelay = recoveryRetryAfter(error)
     const requiredDelay = Math.max(capacityDelay, serverDelay)
-    const delay = Math.max(requiredDelay,
-      this.#recoveryPhase === 'waiting' ? waitingReconnectBackoff() : requireBackoff(this.#backoffMilliseconds(attempt)))
+    const backoff = this.#recoveryPhase === 'waiting' ? waitingReconnectBackoff()
+      : requireBackoff(this.#generationBackoffMilliseconds(this.#recoveryAttempt - 1))
+    const delay = Math.max(requiredDelay, backoff)
     const retryAt = now + delay
     try {
       // A manual request can skip backoff, but cannot manufacture capacity or
@@ -484,8 +483,8 @@ export class V2ReceiverReconnectSupervisor implements V2ContentGenerationProvide
     await wait
   }
 
-  async #replaceGeneration(previous: V2ReceiverGeneration, wave: GenerationRecoveryWave): Promise<void> {
-    const reservation = wave.reserve(this.#clock.now())
+  async #replaceGeneration(previous: V2ReceiverGeneration): Promise<void> {
+    const reservation = this.#generationRecovery.reserve(this.#clock.now())
     this.#recoveryAttempt += 1
     this.connection.reconnecting({ kind: 'connecting' })
     this.#traceConnection({ transition: 'attempt_started' })
