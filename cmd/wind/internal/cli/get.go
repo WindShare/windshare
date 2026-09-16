@@ -248,10 +248,6 @@ func (a *App) parseGetRequest(args []string) (getRequest, requestParseOutcome) {
 		a.writeCompleteLine("get: this build accepts only suite-02 links")
 		return getRequest{}, requestParseUsageFailure
 	}
-	if len(capability.Relays) == 0 {
-		a.writeCompleteLine("get: link has no relay address (?r=)")
-		return getRequest{}, requestParseUsageFailure
-	}
 	return getRequest{
 		outDir: *outDir, only: append([]string(nil), only...), link: capability, connectivity: connectivity,
 		observation: observation, waitTimeout: *waitTimeout,

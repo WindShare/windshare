@@ -194,9 +194,12 @@ func TestShareCancellationDurablyStopsRelayRoute(t *testing.T) {
 	}
 	secondaryCapability := capability
 	secondaryCapability.Relays = []string{secondaryServer.URL}
-	secondaryURL, err := secondaryCapability.URL(DefaultFrontURL)
+	secondaryURL, err := secondaryCapability.URL(secondaryServer.URL)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if strings.Contains(secondaryURL, "?") {
+		t.Fatal("same-origin receiver scenario did not produce a compact link")
 	}
 	for index, arguments := range [][]string{
 		{"get", strings.TrimPrefix(linkLine, "Link: "), "-o", testoutputroot.New(t).RootPath},

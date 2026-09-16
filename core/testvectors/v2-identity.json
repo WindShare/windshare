@@ -11,6 +11,72 @@
       "fileRevisionB64": "kJGSk5SVlpeYmZqbnJ2enw==",
       "fileSegmentKeyB64": "06GFV5Og2rr0wOuHIdcK/YuWlwQyhhf8s8MWtcf10Tw=",
       "keyString": "AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E",
+      "links": [
+        {
+          "name": "implicit-origin",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "same-origin-websocket",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://share.example/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "default-port",
+          "relays": [
+            "https://share.example"
+          ],
+          "url": "https://SHARE.example:443/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "local-port",
+          "relays": [
+            "http://localhost:8484"
+          ],
+          "url": "http://localhost:8484/app/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "ipv6",
+          "relays": [
+            "http://[::1]:8484"
+          ],
+          "url": "http://[::1]:8484/tVW-68OSeLBZTpU-#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "other-origin",
+          "relays": [
+            "wss://relay.example"
+          ],
+          "url": "https://share.example/tVW-68OSeLBZTpU-?r=wss%3A%2F%2Frelay.example#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "relay-subpath",
+          "relays": [
+            "wss://share.example/app"
+          ],
+          "url": "https://share.example/app/tVW-68OSeLBZTpU-?r=wss%3A%2F%2Fshare.example%2Fapp#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "relay-query",
+          "relays": [
+            "wss://share.example?token=abc"
+          ],
+          "url": "https://share.example/tVW-68OSeLBZTpU-?r=wss%3A%2F%2Fshare.example%3Ftoken%3Dabc#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        },
+        {
+          "name": "multiple-relays",
+          "relays": [
+            "wss://share.example",
+            "wss://relay.example"
+          ],
+          "url": "https://share.example/tVW-68OSeLBZTpU-?r=wss%3A%2F%2Fshare.example\u0026r=wss%3A%2F%2Frelay.example#AgABAgMEBQYHCAkKCwwNDg8kQqCgOKPbpFQm33t9wk_E"
+        }
+      ],
       "name": "suite-02-link-and-keys",
       "pkHashB64": "JEKgoDij26RUJt97fcJPxA==",
       "readSecretB64": "AAECAwQFBgcICQoLDA0ODw==",

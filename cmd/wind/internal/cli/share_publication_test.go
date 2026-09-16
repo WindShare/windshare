@@ -45,38 +45,61 @@ func TestCapabilityPublicationBuildsExactInvariantPayload(t *testing.T) {
 	}
 }
 
-func TestBrowserTraceLinkPreservesCapabilityAndRelayHints(t *testing.T) {
-	capability := testShareCapability(t)
-	capability.Relays = []string{"https://relay-a.example", "https://relay-b.example"}
-	for _, split := range []bool{false, true} {
-		payload, err := buildShareCapabilityPayload(capability, shareLinkPresentation{
-			frontURL: "https://windshare.example/app", splitKey: split, browserTrace: true,
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
-		linkText := strings.TrimPrefix(strings.TrimPrefix(lines[0], "Bare link: "), "Link: ")
-		page, err := url.Parse(linkText)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if page.Query().Get(browserTraceQueryParameter) != browserTraceQueryEnabled {
-			t.Fatal("browser trace request is missing from the URL query")
-		}
-		if split {
-			if page.Fragment != "" {
-				t.Fatal("split-key URL includes credentials")
+func TestPublishedLinksPreserveCapabilityAndResolveRelays(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		relays     []string
+		wantRelays []string
+		explicit   bool
+	}{
+		{"same origin", []string{"wss://windshare.example"}, []string{"https://windshare.example"}, false},
+		{"other origin", []string{"https://relay-a.example"}, []string{"https://relay-a.example"}, true},
+		{"multiple relays", []string{"https://windshare.example", "https://relay-b.example"}, []string{"https://windshare.example", "https://relay-b.example"}, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			capability := testShareCapability(t)
+			capability.Relays = test.relays
+			for _, split := range []bool{false, true} {
+				for _, trace := range []bool{false, true} {
+					payload, err := buildShareCapabilityPayload(capability, shareLinkPresentation{
+						frontURL: "https://windshare.example/app", splitKey: split, browserTrace: trace,
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+					lines := strings.Split(strings.TrimSpace(string(payload)), "\n")
+					linkText := strings.TrimPrefix(strings.TrimPrefix(lines[0], "Bare link: "), "Link: ")
+					page, err := url.Parse(linkText)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if page.Query().Has("r") != test.explicit {
+						t.Fatalf("unexpected relay hint: %s", linkText)
+					}
+					wantTrace := ""
+					if trace {
+						wantTrace = browserTraceQueryEnabled
+					}
+					if page.Query().Get(browserTraceQueryParameter) != wantTrace {
+						t.Fatal("browser tracing did not preserve the requested setting")
+					}
+					args := []string{linkText}
+					if split {
+						if page.Fragment != "" {
+							t.Fatal("split-key URL includes credentials")
+						}
+						args = append(args, "--key", strings.TrimPrefix(lines[1], "Key: "))
+					}
+					app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+					request, outcome := app.parseGetRequest(args)
+					want := capability
+					want.Relays = test.wantRelays
+					if outcome != requestParseReady || !reflect.DeepEqual(request.link, want) {
+						t.Fatalf("published link cannot be received: outcome=%d relays=%v stderr=%s", outcome, request.link.Relays, stderr.String())
+					}
+				}
 			}
-			page.Fragment = strings.TrimPrefix(lines[1], "Key: ")
-		}
-		parsed, err := link.Parse(page.String())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(parsed, capability) {
-			t.Fatal("browser presentation changed capability identity or relay hints")
-		}
+		})
 	}
 }
 

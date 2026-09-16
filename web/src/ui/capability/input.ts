@@ -1,6 +1,7 @@
 import { encodeBase64Url } from '../../crypto/bytes'
 import { sha256 } from '../../crypto/digest'
 import {
+  capabilityRelays,
   decodeSuite02CapabilityKey,
   parseSuite02CapabilityLink,
   type Suite02CapabilityLink,
@@ -16,7 +17,7 @@ export async function capabilityFromInput(input: string, pageUrl: string): Promi
   try {
     return Object.freeze({
       ...capability,
-      relayHints: Object.freeze(new URL(pageUrl).searchParams.getAll('r')),
+      relays: capabilityRelays(new URL(pageUrl)),
     })
   } catch (error) {
     capability.readSecret.fill(0)
@@ -30,8 +31,7 @@ export async function capabilityInputFingerprint(input: string, pageUrl: string)
   let encoded: Uint8Array<ArrayBuffer> | undefined
   try {
     capability = await capabilityFromInput(input, pageUrl)
-    const relays = receiverRelayBases(capability.relayHints.length > 0
-      ? capability.relayHints : [new URL(pageUrl).origin])
+    const relays = receiverRelayBases(capability.relays)
     encoded = TEXT_ENCODER.encode(JSON.stringify([
       capability.suite, encodeBase64Url(capability.readSecret), encodeBase64Url(capability.pkHash), relays,
     ]))

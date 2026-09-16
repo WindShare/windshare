@@ -217,18 +217,22 @@ func TestGetCapabilityInputStaysLocalAndUnambiguous(t *testing.T) {
 		}
 	})
 
-	t.Run("relay address is mandatory", func(t *testing.T) {
+	t.Run("omitted relay resolves from complete and split links", func(t *testing.T) {
 		withoutRelay := newSemanticCapability(t)
-		full, err := withoutRelay.URL("https://app.example")
+		full, err := withoutRelay.URL("https://relay.example/app")
 		if err != nil {
 			t.Fatal(err)
 		}
-		app, _, stderr := newSemanticTestApp(strings.NewReader(""))
-		if _, parse := app.parseGetRequest([]string{full}); parse != requestParseUsageFailure {
-			t.Fatalf("parse=%d want=%d", parse, requestParseUsageFailure)
+		bare, key, err := link.Split(full)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !strings.Contains(stderr.String(), "link has no relay address") {
-			t.Fatalf("stderr=%q", stderr.String())
+		for _, args := range [][]string{{full}, {bare, "--key", key}} {
+			app, _, stderr := newSemanticTestApp(strings.NewReader(""))
+			request, parse := app.parseGetRequest(args)
+			if parse != requestParseReady || !reflect.DeepEqual(request.link.Relays, []string{"https://relay.example"}) {
+				t.Fatalf("parse=%d relays=%v stderr=%q", parse, request.link.Relays, stderr.String())
+			}
 		}
 	})
 }
