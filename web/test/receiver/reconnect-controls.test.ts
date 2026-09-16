@@ -20,7 +20,7 @@ function fixture(budget = new GenerationRecoveryBudget()) {
   const traces: V2ProtocolTraceEvent[] = []
   const supervisor = new V2ReceiverReconnectSupervisor({
     descriptor: descriptor(), initial: core(session, new TrackedRelay(1)), sessionFactory: factory,
-    policy: 'relay-only', generationRecovery: budget, backoffMilliseconds: () => 5_000,
+    policy: 'relay-only', generationRecovery: budget, generationBackoffMilliseconds: () => 5_000,
     clock: { now: () => Date.now(), sleep: systemReconnectClock.sleep },
     protocolTrace: { current: event => traces.push(event) },
   })
@@ -31,10 +31,7 @@ function fixture(budget = new GenerationRecoveryBudget()) {
 describe('reconnect control admission', () => {
   it('keeps depleted capacity waiting through manual and online wakes, then reports one real attempt', async () => {
     const budget = new GenerationRecoveryBudget()
-    for (let wave = 0; wave < 2; wave += 1) {
-      const recovery = budget.openWave(0)
-      for (let attempt = 0; attempt < 4; attempt += 1) recovery.reserve(0).finish(0)
-    }
+    for (let attempt = 0; attempt < 8; attempt += 1) budget.reserve(0).finish(0)
     const online = new EventTarget()
     vi.stubGlobal('addEventListener', online.addEventListener.bind(online))
     vi.stubGlobal('removeEventListener', online.removeEventListener.bind(online))
@@ -102,10 +99,10 @@ describe('reconnect control admission', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
-  it('starts a fresh wave when retrying after the fourth failure, even from a synchronous observer', async () => {
+  it('accepts retries from synchronous observers without replenishing capacity', async () => {
     const { session, factory, supervisor, states } = fixture()
     factory.connectFreshImpl = async () => {
-      if (factory.connectFreshCalls <= 4) throw new Error('Network unavailable')
+      if (factory.connectFreshCalls <= 8) throw new Error('Network unavailable')
       return core(new FakeSession([2]), new TrackedRelay(2))
     }
     supervisor.connection.subscribe(state => {
@@ -116,7 +113,10 @@ describe('reconnect control admission', () => {
     try {
       session.detach(1)
       await vi.advanceTimersByTimeAsync(0)
-      expect(factory.connectFreshCalls).toBe(5)
+      expect(factory.connectFreshCalls).toBe(8)
+      expect(states.at(-1)).toMatchObject({ kind: 'reconnecting', activity: { reason: 'capacity' } })
+      await vi.advanceTimersByTimeAsync(75_000)
+      expect(factory.connectFreshCalls).toBe(9)
       expect(states.at(-1)).toEqual({ kind: 'connected' })
     } finally { await supervisor.close() }
     expect(vi.getTimerCount()).toBe(0)

@@ -1,13 +1,11 @@
 const RECOVERY_ATTEMPT_CAPACITY = 8
 const RECOVERY_TIME_CAPACITY_MILLISECONDS = 180_000
 const RECOVERY_REFILL_MILLISECONDS = 600_000
-const RECOVERY_WAVE_ATTEMPTS = 4
-const RECOVERY_WAVE_MILLISECONDS = 120_000
 const RECOVERY_ATTEMPT_MILLISECONDS = 45_000
 
 export class GenerationRecoveryExhaustedError extends Error {
   constructor() {
-    super('Fast connection recovery capacity is exhausted; waiting to retry')
+    super('Connection recovery capacity is exhausted; waiting to retry')
     this.name = 'GenerationRecoveryExhaustedError'
   }
 }
@@ -16,10 +14,6 @@ interface RecoveryReservation {
   readonly milliseconds: number
   finish(completedAt: number): void
 }
-export interface GenerationRecoveryWave {
-  exhausted(now: number): boolean
-  reserve(now: number): RecoveryReservation
-}
 
 /** One joined share borrows this ledger across session generations; relay handshakes spend no ICE tokens. */
 export class GenerationRecoveryBudget {
@@ -27,32 +21,20 @@ export class GenerationRecoveryBudget {
   #milliseconds = RECOVERY_TIME_CAPACITY_MILLISECONDS
   #updatedAt: number | undefined
 
-  openWave(startedAt: number): GenerationRecoveryWave {
-    let attempts = 0
-    const exhausted = (now: number) => attempts >= RECOVERY_WAVE_ATTEMPTS ||
-      now - startedAt >= RECOVERY_WAVE_MILLISECONDS
-    return {
-      exhausted,
-      reserve: (now) => {
-        this.#refill(now)
-        const milliseconds = Math.min(RECOVERY_ATTEMPT_MILLISECONDS, this.#milliseconds,
-          RECOVERY_WAVE_MILLISECONDS - (now - startedAt))
-        if (exhausted(now) || this.#attempts < 1 || milliseconds < 1) {
-          throw new GenerationRecoveryExhaustedError()
-        }
-        attempts += 1
-        this.#attempts -= 1
-        this.#milliseconds -= milliseconds
-        let finished = false
-        return { milliseconds, finish: (completedAt) => {
-          if (finished) return
-          finished = true
-          this.#refill(completedAt)
-          this.#milliseconds = Math.min(RECOVERY_TIME_CAPACITY_MILLISECONDS,
-            this.#milliseconds + Math.max(0, milliseconds - (completedAt - now)))
-        } }
-      },
-    }
+  reserve(now: number): RecoveryReservation {
+    // Admission and retry timing must agree: a new handshake needs its full
+    // deadline, even when the previous connection failed almost immediately.
+    if (this.nextCapacityMilliseconds(now) > 0) throw new GenerationRecoveryExhaustedError()
+    this.#attempts -= 1
+    this.#milliseconds -= RECOVERY_ATTEMPT_MILLISECONDS
+    let finished = false
+    return { milliseconds: RECOVERY_ATTEMPT_MILLISECONDS, finish: (completedAt) => {
+      if (finished) return
+      finished = true
+      this.#refill(completedAt)
+      this.#milliseconds = Math.min(RECOVERY_TIME_CAPACITY_MILLISECONDS,
+        this.#milliseconds + Math.max(0, RECOVERY_ATTEMPT_MILLISECONDS - (completedAt - now)))
+    } }
   }
 
   nextCapacityMilliseconds(now: number): number {
