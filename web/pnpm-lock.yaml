@@ -12,8 +12,8 @@ importers:
         specifier: 2.2.0
         version: 2.2.0
       cborg:
-        specifier: 5.1.7
-        version: 5.1.7
+        specifier: 6.1.1
+        version: 6.1.1
       mp4box:
         specifier: 2.4.1
         version: 2.4.1
@@ -550,8 +550,8 @@ packages:
   caniuse-lite@1.0.30001803:
     resolution: {integrity: sha512-g/uHREV2ZpK9qMalCsWaxmA6ol+DX8GYhuf3T40RKoP+oL7vhRJh8LNt73PCjpnR6l14FzfPrB5Yux4PKm2meg==}
 
-  cborg@5.1.7:
-    resolution: {integrity: sha512-rGg2MG9zZEUKtKqjkBppIWUecTXf9N1vs1Qru43vJWoDaODhCrtmzdehCaA/aq/c1cPI5A0kPrJ5Tf+jIfhV4w==}
+  cborg@6.1.1:
+    resolution: {integrity: sha512-Ci8+V1OMFtqea8EXicsATqV+3kEqCGXCicM+5MEzpKTxqy58WMzhJUjtUqAjfWpKPZ0wpG8F+u5mC8Xy/0Zevg==}
     hasBin: true
 
   chai@6.2.2:
@@ -1670,7 +1670,7 @@ snapshots:
 
   caniuse-lite@1.0.30001803: {}
 
-  cborg@5.1.7: {}
+  cborg@6.1.1: {}
 
   chai@6.2.2: {}
 
