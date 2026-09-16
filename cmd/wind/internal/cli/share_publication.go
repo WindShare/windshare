@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 	"io"
+	"net/url"
 
 	"github.com/windshare/windshare/core/link"
 )
@@ -64,19 +65,37 @@ func executeSharePublication(plan sharePublicationPlan) error {
 	return nil
 }
 
-func buildShareCapabilityPayload(capability link.Link, frontURL string, split bool) ([]byte, error) {
-	if split {
-		bare, key, err := capability.SplitURL(frontURL)
-		if err != nil {
-			return nil, err
-		}
-		return []byte("Bare link: " + bare + "\nKey: " + key + "\n"), nil
-	}
-	full, err := capability.URL(frontURL)
+const (
+	browserTraceQueryParameter = "trace"
+	browserTraceQueryEnabled   = "1"
+)
+
+// Browser presentation options do not grant capabilities or alter protocol identity.
+type shareLinkPresentation struct {
+	frontURL     string
+	splitKey     bool
+	browserTrace bool
+}
+
+func buildShareCapabilityPayload(capability link.Link, presentation shareLinkPresentation) ([]byte, error) {
+	bare, key, err := capability.SplitURL(presentation.frontURL)
 	if err != nil {
 		return nil, err
 	}
-	return []byte("Link: " + full + "\n"), nil
+	page, err := url.Parse(bare)
+	if err != nil {
+		return nil, err
+	}
+	if presentation.browserTrace {
+		query := page.Query()
+		query.Set(browserTraceQueryParameter, browserTraceQueryEnabled)
+		page.RawQuery = query.Encode()
+	}
+	if presentation.splitKey {
+		return []byte("Bare link: " + page.String() + "\nKey: " + key + "\n"), nil
+	}
+	page.Fragment = key
+	return []byte("Link: " + page.String() + "\n"), nil
 }
 
 func publishShareCapability(writer io.Writer, payload []byte) error {

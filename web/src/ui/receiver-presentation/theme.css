@@ -1,6 +1,7 @@
 /* Appearance belongs to the opening surface; descendant dialogs inherit it. */
 .receiver-shell,
-.portal-root {
+.portal-root,
+.diagnostics-surface {
   --receiver-page: light-dark(#f2f7f4, #070c09);
   --receiver-paper: light-dark(#fff, #122019);
   --receiver-ink: light-dark(#182b22, #f3f4f6);

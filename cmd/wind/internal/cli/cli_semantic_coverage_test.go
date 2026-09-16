@@ -101,9 +101,9 @@ func TestShareRequestValidationPreservesSuiteBoundaries(t *testing.T) {
 		}
 		if !reflect.DeepEqual(request.paths, []string{"root"}) ||
 			!reflect.DeepEqual(request.relayURLs, []string{"wss://relay.example"}) ||
-			request.frontURL != "https://app.example" ||
+			request.link.frontURL != "https://app.example" ||
 			request.chunkSize != 65536 ||
-			!request.splitKey {
+			!request.link.splitKey {
 			t.Fatalf("request=%+v", request)
 		}
 	})

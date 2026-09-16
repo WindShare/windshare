@@ -1,4 +1,5 @@
 import type { DomainTraceSource } from '../../diagnostics/trace/ports'
+import type { V2CapturedLocation } from '../capability/location'
 import type { CompatibleNameRepairSummary } from '../../output/file-system-access/compatible-name/model'
 import type {
   IncidentScopeHandle,
@@ -175,7 +176,12 @@ export interface V2ReceiverIncidentPort {
   submitDecision(scope: IncidentScopeHandle, decision: PresentationDecision): void
 }
 
+export interface CapabilityIntakePort {
+  accept(captured: V2CapturedLocation): void
+}
+
 export interface V2ReceiverControllerOptions {
+  readonly capabilityIntake?: CapabilityIntakePort
   readonly diagnosticFormatter?: V2DiagnosticFormatter
   readonly onSecurityMilestone?: (milestone: V2SecurityMilestone) => void
   readonly incidents?: V2ReceiverIncidentPort

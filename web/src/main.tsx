@@ -5,6 +5,10 @@ import './index.css'
 import { browserBuildSnapshot } from './diagnostics/build-identity'
 import { createBrowserDiagnosticsComposition } from './diagnostics/browser-composition'
 import { createBrowserTraceActivationStore } from './diagnostics/browser-trace-activation'
+import { BrowserDiagnosticsSession, observeDiagnosticsPage } from './diagnostics/browser/session'
+import { IndexedDBDiagnosticsArchive } from './diagnostics/browser/indexeddb-archive'
+import { createDiagnosticsDelivery } from './diagnostics/browser/delivery'
+import { DiagnosticsProvider } from './ui/diagnostics/DiagnosticsProvider'
 import { installWindShareDiagnostics } from './diagnostics/export/developer-api'
 import type { IncidentRecordV2 } from './diagnostics/export/incident-record-v2'
 import { createBrowserReceiveOperationMutationPort } from './output/resume/reopen-authority'
@@ -15,6 +19,7 @@ import {
 import { createBrowserDirectZipComposition } from './ui/browser-receive/direct-zip/production'
 import { V2ReceiverController } from './ui/v2-controller'
 import { captureV2Location, observeV2Location } from './ui/capability/location'
+import { BrowserCapabilityIntake } from './ui/capability/intake'
 import { V2BrowserReceiverGateway } from './ui/v2-gateway'
 import {
   createConnectivityTraceSource,
@@ -38,13 +43,26 @@ const controllerContext: {
 
 const diagnostics = createBrowserDiagnosticsComposition({
   build: browserBuildSnapshot(),
-  activationStore: createBrowserTraceActivationStore(() => window.localStorage),
+  activationStore: createBrowserTraceActivationStore(() => window.sessionStorage, initialCapability.pageUrl),
   secureContext: window.isSecureContext,
   consoleSink: Object.freeze({
     error: (record: IncidentRecordV2) => console.error(record),
   }),
   controllerSnapshot: () => controllerContext.read?.(),
 })
+const diagnosticSession = new BrowserDiagnosticsSession({
+  runtime: diagnostics.runtime,
+  observeCapture: diagnostics.trace.subscribe,
+  archive: new IndexedDBDiagnosticsArchive(() => window.indexedDB),
+  pageUrl: initialCapability.pageUrl,
+})
+const diagnosticDelivery = createDiagnosticsDelivery({
+  navigator: window.navigator,
+  document: window.document,
+  urls: URL,
+  defer: (callback, milliseconds) => window.setTimeout(callback, milliseconds),
+})
+const stopDiagnosticsObservation = observeDiagnosticsPage(window, diagnosticSession)
 const receiverTrace = createV2ReceiverTraceSource(diagnostics.trace)
 const outputTrace = createOutputTraceSource(diagnostics.trace)
 const protocolTrace = createProtocolTraceSource(diagnostics.trace)
@@ -65,6 +83,7 @@ const gateway = new V2BrowserReceiverGateway({
   connectivityTrace,
 })
 const controller = new V2ReceiverController(gateway, {
+  capabilityIntake: new BrowserCapabilityIntake(() => diagnosticSession.enableFromLink()),
   receive: receiveComposition,
   trace: receiverTrace,
   incidents: diagnostics.incidents,
@@ -72,7 +91,7 @@ const controller = new V2ReceiverController(gateway, {
 controllerContext.read = () => controller.getDiagnosticSnapshot()
 controller.initialize(initialCapability)
 const stopLocationObservation = observeV2Location(window, captured => controller.openLocation(captured))
-installWindShareDiagnostics(window, diagnostics.runtime)
+installWindShareDiagnostics(window, diagnosticSession)
 
 window.addEventListener('pagehide', (event) => {
   // A persisted page resumes the same controller from the back-forward cache;
@@ -81,11 +100,15 @@ window.addEventListener('pagehide', (event) => {
     return
   }
   stopLocationObservation()
+  stopDiagnosticsObservation()
+  diagnosticSession.dispose()
   controller.dispose().catch(() => undefined)
 })
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <App controller={controller} />
+    <DiagnosticsProvider session={diagnosticSession} delivery={diagnosticDelivery}>
+      <App controller={controller} />
+    </DiagnosticsProvider>
   </StrictMode>,
 )

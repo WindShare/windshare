@@ -3,6 +3,7 @@ import type { DiagnosticsStatusV2 } from './diagnostic-bundle-v2'
 import type { DiagnosticsRuntimePort } from '../runtime'
 
 export interface WindShareDiagnostics {
+  activation(): ReturnType<DiagnosticsRuntimePort['activation']>
   enable(): DiagnosticsStatusV2
   disable(): DiagnosticsStatusV2
   status(): DiagnosticsStatusV2
@@ -23,6 +24,7 @@ export function createWindShareDiagnostics(
   runtime: DiagnosticsRuntimePort,
 ): WindShareDiagnostics {
   return Object.freeze({
+    activation: () => runtime.activation(),
     enable: () => runtime.enable(),
     disable: () => runtime.disable(),
     status: () => runtime.status(),

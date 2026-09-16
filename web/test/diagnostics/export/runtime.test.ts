@@ -196,6 +196,12 @@ class FakeTracePort implements DiagnosticsTraceRuntimePort {
     this.#clearHook = clearHook
   }
 
+  activation() {
+    return this.#status.expiresAtMilliseconds === undefined
+      ? { kind: 'off' as const }
+      : { kind: 'active' as const, expiresAtMilliseconds: this.#status.expiresAtMilliseconds }
+  }
+
   enable(): TraceCoreStatus {
     const generation = this.#status.captureGeneration + 1n
     this.#status = traceStatus({

@@ -12,6 +12,7 @@ import { TaskCard, TaskDetails } from './tasks/TaskView'
 import { composeTasks } from './experience/task-composition'
 import { TaskDownloads, TaskSourceDetails } from './experience/TaskDownloads'
 import { ConnectionDetails } from './experience/ConnectionDetails'
+import { DiagnosticsEntry } from './diagnostics/DiagnosticsEntry'
 import { ConnectionRecovery } from './connection/ConnectionRecovery'
 import { connectedChannelCount } from './connection/path-presentation'
 import { ReceiverIcon } from './receiver-presentation/ReceiverIcon'
@@ -100,7 +101,7 @@ export function V2ReceiverApp({ controller }: { readonly controller: V2ReceiverC
         </div>
         <ReceiverFold compact={single?.kind === 'photo' || single?.kind === 'video'} />
       </div>
-      {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error}</div>}
+      {snapshot.error !== null && <div className="share-error" role="alert">{snapshot.error} <DiagnosticsEntry label="Export diagnostics" /></div>}
       {snapshot.phase === 'awaiting-key' && <KeyForm controller={controller} />}
       {!hasContent && snapshot.phase === 'joining' && <div className="share-loading">
         <p role="status">{snapshot.status}</p>
