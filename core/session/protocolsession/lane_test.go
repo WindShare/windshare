@@ -68,7 +68,7 @@ func TestLaneHelloAndAcceptMatchFrozenVector(t *testing.T) {
 	if !bytes.Equal(accept, wantAccept) {
 		t.Fatal("lane accept diverged from frozen vector")
 	}
-	nonce, err := ParseLaneAccept(accept, hello, privateKey.Public().(ed25519.PublicKey))
+	nonce, err := ParseLaneAccept(accept, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey)))
 	if err != nil || !bytes.Equal(nonce, laneSequence(0x81, LaneSenderNonceBytes)) {
 		t.Fatalf("parse lane accept: %v", err)
 	}
@@ -96,17 +96,17 @@ func TestLaneRejectIsSenderAuthenticatedAndHelloBound(t *testing.T) {
 	if len(encoded) != LaneRejectBytes {
 		t.Fatalf("reject length = %d", len(encoded))
 	}
-	got, err := ParseLaneReject(encoded, hello, privateKey.Public().(ed25519.PublicKey))
+	got, err := ParseLaneReject(encoded, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey)))
 	if err != nil || got.Code != LaneRejectAdmissionLimited || got.RetryAfter != time.Second {
 		t.Fatalf("reject = %+v, %v", got, err)
 	}
 	other, _ := NewLaneHello(share, session, 9, 4, operation, laneSequence(61, 16), traffic)
-	if _, err := ParseLaneReject(encoded, other, privateKey.Public().(ed25519.PublicKey)); !errors.Is(err, ErrLaneSignature) {
+	if _, err := ParseLaneReject(encoded, other, checkedSender(t, privateKey.Public().(ed25519.PublicKey))); !errors.Is(err, ErrLaneSignature) {
 		t.Fatalf("hello substitution error = %v", err)
 	}
 	tampered := bytes.Clone(encoded)
 	tampered[len(tampered)-1] ^= 1
-	if _, err := ParseLaneReject(tampered, hello, privateKey.Public().(ed25519.PublicKey)); !errors.Is(err, ErrLaneSignature) {
+	if _, err := ParseLaneReject(tampered, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey))); !errors.Is(err, ErrLaneSignature) {
 		t.Fatalf("signature substitution error = %v", err)
 	}
 	if _, err := NewLaneHello(share, session, 9, 3, operation, make([]byte, LaneAttachNonceBytes), traffic); !errors.Is(err, ErrLaneInput) {
@@ -144,14 +144,14 @@ func TestLaneRegistryOwnsGrantEpochAdmissionAndStop(t *testing.T) {
 		accepted.LaneID != grant.LaneID || accepted.LaneEpoch != grant.LaneEpoch {
 		t.Fatalf("accepted settlement correlation = %+v", accepted)
 	}
-	if _, err := ParseLaneAccept(accepted.Response, hello, privateKey.Public().(ed25519.PublicKey)); err != nil {
+	if _, err := ParseLaneAccept(accepted.Response, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey))); err != nil {
 		t.Fatal(err)
 	}
 	duplicate, err := registry.AdmitCandidate(hello.Encoded(), bytes.Repeat([]byte{0x61}, 16), allowLaneSettlement)
 	if err != nil || duplicate.Disposition != LaneAdmissionRejected || duplicate.Rejection.Code != LaneRejectGrantConsumed {
 		t.Fatalf("duplicate = %+v, %v", duplicate, err)
 	}
-	if rejection, err := ParseLaneReject(duplicate.Response, hello, privateKey.Public().(ed25519.PublicKey)); err != nil || rejection.Code != LaneRejectGrantConsumed {
+	if rejection, err := ParseLaneReject(duplicate.Response, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey))); err != nil || rejection.Code != LaneRejectGrantConsumed {
 		t.Fatalf("duplicate rejection = %+v, %v", rejection, err)
 	}
 
@@ -332,12 +332,12 @@ func TestLaneParsersRejectEveryHostileWireAxis(t *testing.T) {
 		t.Run("accept-"+name, func(t *testing.T) {
 			hostile := bytes.Clone(accept)
 			mutate(hostile)
-			if _, err := ParseLaneAccept(hostile, hello, publicKey); err == nil {
+			if _, err := ParseLaneAccept(hostile, hello, checkedSender(t, publicKey)); err == nil {
 				t.Fatal("hostile lane accept was accepted")
 			}
 		})
 	}
-	if _, err := ParseLaneAccept(accept, LaneHello{}, publicKey); !errors.Is(err, ErrLaneMalformed) {
+	if _, err := ParseLaneAccept(accept, LaneHello{}, checkedSender(t, publicKey)); !errors.Is(err, ErrLaneMalformed) {
 		t.Fatalf("unbound accept error = %v", err)
 	}
 
@@ -352,7 +352,7 @@ func TestLaneParsersRejectEveryHostileWireAxis(t *testing.T) {
 		t.Run("reject-"+name, func(t *testing.T) {
 			hostile := bytes.Clone(reject)
 			mutate(hostile)
-			if _, err := ParseLaneReject(hostile, hello, publicKey); err == nil {
+			if _, err := ParseLaneReject(hostile, hello, checkedSender(t, publicKey)); err == nil {
 				t.Fatal("hostile lane rejection was accepted")
 			}
 		})

@@ -66,9 +66,9 @@ func NewRegisterProof(init RegisterInit, challenge Challenge, relayIdentity Rela
 }
 
 type SenderAuthority struct {
-	initDigest      [sha256.Size]byte
-	senderPublicKey [SenderPublicKeyBytes]byte
-	valid           bool
+	initDigest [sha256.Size]byte
+	sender     *senderauth.Verifier
+	valid      bool
 }
 
 func authenticateRegisterProof(init RegisterInit, challenge Challenge, relayIdentity RelayIdentity, proof RegisterProof, now time.Time) (SenderAuthority, error) {
@@ -86,14 +86,15 @@ func authenticateRegisterProof(init RegisterInit, challenge Challenge, relayIden
 	if err != nil {
 		return SenderAuthority{}, err
 	}
-	if !senderauth.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
+	sender, err := senderauth.NewVerifier(publicKey(proof.SenderPublicKey))
+	if err != nil || !sender.Verify(preimage, proof.Signature[:]) {
 		return SenderAuthority{}, ErrProof
 	}
 	encoded, err := init.MarshalBinary()
 	if err != nil {
 		return SenderAuthority{}, err
 	}
-	authority := SenderAuthority{initDigest: sha256.Sum256(encoded), senderPublicKey: proof.SenderPublicKey, valid: true}
+	authority := SenderAuthority{initDigest: sha256.Sum256(encoded), sender: sender, valid: true}
 	return authority, nil
 }
 
@@ -205,20 +206,20 @@ func VerifyDescriptorUpload(init RegisterInit, authority SenderAuthority, upload
 	if subtle.ConstantTimeCompare(digest[:], init.DescriptorDigest[:]) != 1 {
 		return VerifiedDescriptor{}, ErrProof
 	}
-	if err := verifyDescriptorSignature(init, publicKey(authority.senderPublicKey), upload.Object); err != nil {
+	if err := verifyDescriptorSignature(init, authority.sender, upload.Object); err != nil {
 		return VerifiedDescriptor{}, ErrProof
 	}
 	return VerifiedDescriptor{initDigest: authority.initDigest, object: cloneBytes(upload.Object), valid: true}, nil
 }
 
-func verifyDescriptorSignature(init RegisterInit, senderPublicKey ed25519.PublicKey, object []byte) error {
+func verifyDescriptorSignature(init RegisterInit, sender *senderauth.Verifier, object []byte) error {
 	// Relay admission must enforce the same object version and authentication
 	// contract as receivers without maintaining another sealed-object codec.
 	binding, err := senderobject.NewDescriptorBinding(init.PKHash[:], init.ShareID[:])
 	if err != nil {
 		return ErrProof
 	}
-	if err := senderobject.Verify(binding, senderPublicKey, object); err != nil {
+	if err := senderobject.Verify(binding, sender, object); err != nil {
 		return ErrProof
 	}
 	return nil

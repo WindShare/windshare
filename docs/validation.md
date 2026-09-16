@@ -24,6 +24,9 @@ identity/content/signature substitutions, and exercise native capability failure
 vectors require identical Go, native-browser and portable acceptance of exceptional encodings.
 Unit contracts cover verifier reuse, bounded backend fallback, authentication failures and mutable
 caller buffers; object commitments hash concurrently and reuse one snapshot through decryption.
+Native descriptor bootstrap retains one checked sender verifier for catalog, content, control and
+lane authentication across reconnects. Teardown releases references without invalidating surviving
+receivers. `BenchmarkOpenBlock` measures the production receive path without sealing costs.
 Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 

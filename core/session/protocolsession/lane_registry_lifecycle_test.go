@@ -165,7 +165,7 @@ func TestLaneRegistryCloseJoinsAuthenticatedSettlementBeforeSecretDestruction(t 
 		t.Fatalf("close-raced settlement = %+v, %v", settled.admission, settled.err)
 	}
 	if rejection, err := ParseLaneReject(
-		settled.admission.Response, hello, privateKey.Public().(ed25519.PublicKey),
+		settled.admission.Response, hello, checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
 	); err != nil || rejection != settled.admission.Rejection {
 		t.Fatalf("close-raced signed rejection = %+v, %v", rejection, err)
 	}

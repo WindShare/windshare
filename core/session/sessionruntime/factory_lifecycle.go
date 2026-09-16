@@ -31,9 +31,8 @@ func (factory *ReceiverFactory) finishClose() {
 	factory.admissions.Wait()
 	factory.mu.Lock()
 	clear(factory.authKey)
-	clear(factory.publicKey)
 	factory.authKey = nil
-	factory.publicKey = nil
+	factory.sender = nil
 	factory.descriptor = catalog.ShareDescriptor{}
 	factory.verifier = nil
 	factory.opener = nil

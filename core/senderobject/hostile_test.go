@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 type codecFixture struct {
@@ -62,16 +63,16 @@ func TestHostileObjectHeadersFailBeforeCryptography(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			hostile := test.mutate(bytes.Clone(fixture.object))
-			if err := Verify(fixture.binding, fixture.publicKey, hostile); !errors.Is(err, test.want) {
+			if err := Verify(fixture.binding, checkedSender(t, fixture.publicKey), hostile); !errors.Is(err, test.want) {
 				t.Fatalf("Verify error = %v, want %v", err, test.want)
 			}
 		})
 	}
-	if err := Verify(Binding{}, fixture.publicKey, fixture.object); !errors.Is(err, ErrBinding) {
+	if err := Verify(Binding{}, checkedSender(t, fixture.publicKey), fixture.object); !errors.Is(err, ErrBinding) {
 		t.Fatalf("zero binding error = %v", err)
 	}
-	if err := Verify(fixture.binding, fixture.publicKey[:31], fixture.object); !errors.Is(err, ErrKey) {
-		t.Fatalf("short public key error = %v", err)
+	if err := Verify(fixture.binding, nil, fixture.object); !errors.Is(err, ErrKey) {
+		t.Fatalf("missing verifier error = %v", err)
 	}
 }
 
@@ -125,24 +126,24 @@ func TestDescriptorBootstrapNeverReleasesUnauthenticatedPlaintext(t *testing.T) 
 		binding  Binding
 		key      []byte
 		object   []byte
-		callback func([]byte) (ed25519.PublicKey, error)
+		callback func([]byte) (*senderauth.Verifier, error)
 		want     error
 	}{
-		{"wrong-domain", newCodecFixture(t).binding, key, object, func([]byte) (ed25519.PublicKey, error) { return publicKey, nil }, ErrBinding},
+		{"wrong-domain", newCodecFixture(t).binding, key, object, func([]byte) (*senderauth.Verifier, error) { return checkedSender(t, publicKey), nil }, ErrBinding},
 		{"nil-callback", binding, key, object, nil, ErrBinding},
-		{"callback-error", binding, key, object, func([]byte) (ed25519.PublicKey, error) { return nil, callbackError }, ErrKey},
-		{"short-public-key", binding, key, object, func([]byte) (ed25519.PublicKey, error) { return make([]byte, 31), nil }, ErrKey},
-		{"wrong-public-key", binding, key, object, func([]byte) (ed25519.PublicKey, error) {
+		{"callback-error", binding, key, object, func([]byte) (*senderauth.Verifier, error) { return nil, callbackError }, ErrKey},
+		{"unchecked-sender", binding, key, object, func([]byte) (*senderauth.Verifier, error) { return new(senderauth.Verifier), nil }, ErrKey},
+		{"wrong-public-key", binding, key, object, func([]byte) (*senderauth.Verifier, error) {
 			other := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{0x22}, 32))
-			return other.Public().(ed25519.PublicKey), nil
+			return checkedSender(t, other.Public().(ed25519.PublicKey)), nil
 		}, ErrSignature},
-		{"wrong-aead-key", binding, bytes.Repeat([]byte{0x32}, 32), object, func([]byte) (ed25519.PublicKey, error) { return publicKey, nil }, ErrAuth},
-		{"short-aead-key", binding, key[:31], object, func([]byte) (ed25519.PublicKey, error) { return publicKey, nil }, ErrKey},
+		{"wrong-aead-key", binding, bytes.Repeat([]byte{0x32}, 32), object, func([]byte) (*senderauth.Verifier, error) { return checkedSender(t, publicKey), nil }, ErrAuth},
+		{"short-aead-key", binding, key[:31], object, func([]byte) (*senderauth.Verifier, error) { return checkedSender(t, publicKey), nil }, ErrKey},
 		{"bad-signature", binding, key, func() []byte {
 			value := bytes.Clone(object)
 			value[len(value)-1] ^= 1
 			return value
-		}(), func([]byte) (ed25519.PublicKey, error) { return publicKey, nil }, ErrSignature},
+		}(), func([]byte) (*senderauth.Verifier, error) { return checkedSender(t, publicKey), nil }, ErrSignature},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -180,4 +181,13 @@ func TestEveryBindingConstructorRejectsWrongSemanticAxes(t *testing.T) {
 			t.Fatalf("binding case %d error = %v", index, err)
 		}
 	}
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

@@ -16,6 +16,7 @@ import (
 	"github.com/windshare/windshare/core/content/records"
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/observationstream"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -59,7 +60,7 @@ type ReceiverFactoryConfig struct {
 	ContentRoutePolicy                transfer.ContentRoutePolicy
 	Descriptor                        catalog.ShareDescriptor
 	SessionAuthKey                    []byte
-	SenderPublicKey                   ed25519.PublicKey
+	Sender                            *senderauth.Verifier
 	CatalogVerifier                   catalogflow.ObjectVerifier
 	RecordOpener                      RecordOpener
 	ReassemblyProcess                 *contentflow.ReassemblyAccount
@@ -83,7 +84,7 @@ type ReceiverFactory struct {
 	contentRoutePolicy                transfer.ContentRoutePolicy
 	descriptor                        catalog.ShareDescriptor
 	authKey                           []byte
-	publicKey                         ed25519.PublicKey
+	sender                            *senderauth.Verifier
 	verifier                          catalogflow.ObjectVerifier
 	opener                            RecordOpener
 	processReassembly                 *contentflow.ReassemblyAccount
@@ -114,8 +115,8 @@ type ReceiverFactory struct {
 func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) {
 	if config.Descriptor.ShareInstance().IsZero() ||
 		len(config.SessionAuthKey) != protocolsession.SessionAuthKeyBytes ||
-		len(config.SenderPublicKey) != ed25519.PublicKeySize ||
-		!ed25519.PublicKey(config.Descriptor.SenderPublicKey()).Equal(config.SenderPublicKey) ||
+		!config.Sender.Valid() ||
+		!ed25519.PublicKey(config.Descriptor.SenderPublicKey()).Equal(config.Sender.PublicKey()) ||
 		config.CatalogVerifier == nil || config.RecordOpener == nil ||
 		config.ReassemblyProcess == nil || config.ReassemblyShare == nil || config.PlaintextProcess == nil {
 		return nil, ErrRuntimeConfig
@@ -146,8 +147,8 @@ func NewReceiverFactory(config ReceiverFactoryConfig) (*ReceiverFactory, error) 
 	admissionContext, cancelAdmissions := context.WithCancel(context.Background())
 	return &ReceiverFactory{
 		descriptor: config.Descriptor, authKey: append([]byte(nil), config.SessionAuthKey...),
-		publicKey: append(ed25519.PublicKey(nil), config.SenderPublicKey...),
-		verifier:  config.CatalogVerifier, opener: config.RecordOpener,
+		sender:   config.Sender,
+		verifier: config.CatalogVerifier, opener: config.RecordOpener,
 		processReassembly: config.ReassemblyProcess, shareReassembly: config.ReassemblyShare,
 		plaintextProcess: config.PlaintextProcess, random: lockedRandom,
 		admissionContext: admissionContext, cancelAdmissions: cancelAdmissions,
@@ -285,7 +286,7 @@ func (factory *ReceiverFactory) Connect(ctx context.Context, channel protocolses
 	receiver := &ReceiverRuntime{
 		runtimeCore: runtime, descriptor: factory.descriptor, rpc: rpc,
 		catalog: catalogClient, revisions: revisions, assembler: assembler, laneSet: lanes, broker: broker,
-		publicKey: append(ed25519.PublicKey(nil), factory.publicKey...), opener: factory.opener,
+		sender: factory.sender, opener: factory.opener,
 		semantic: factory.semantic, resourceLease: resourceLease,
 	}
 	if err := receiver.bindRevisionAccess(); err != nil {
@@ -339,7 +340,7 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 	if err != nil {
 		return receiverHandshake{}, err
 	}
-	server, err := protocolsession.ParseServerHello(serverBytes, client, factory.publicKey)
+	server, err := protocolsession.ParseServerHello(serverBytes, client, factory.sender)
 	if err != nil {
 		return receiverHandshake{}, sessionProtocolBoundaryError(errors.Join(ErrHandshake, err))
 	}
@@ -353,7 +354,7 @@ func (factory *ReceiverFactory) completeReceiverHandshake(
 		ShareInstance: factory.descriptor.ShareInstance(), ProtocolSessionID: keys.ProtocolSessionID(),
 		LaneID: lane.ID, LaneEpoch: lane.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
 	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(factory.publicKey, base, factory.semantic)
+	authenticator, err := protocolsession.NewSenderControlAuthenticator(factory.sender, base, factory.semantic)
 	if err != nil {
 		keys.Destroy()
 		return receiverHandshake{}, err
@@ -380,7 +381,7 @@ func (factory *ReceiverFactory) acquireRuntimeResources() (ReceiverRuntimeResour
 type ReceiverRuntime struct {
 	*runtimeCore
 	descriptor    catalog.ShareDescriptor
-	publicKey     ed25519.PublicKey
+	sender        *senderauth.Verifier
 	opener        RecordOpener
 	rpc           *rpcClient
 	catalog       *catalogflow.Client
@@ -476,8 +477,7 @@ func (runtime *ReceiverRuntime) releaseOwnedResources() {
 		// resource lease is released so this closed runtime cannot pin shared crypto.
 		runtime.opener = nil
 		runtime.semantic = nil
-		clear(runtime.publicKey)
-		runtime.publicKey = nil
+		runtime.sender = nil
 		if runtime.resourceLease != nil {
 			runtime.resourceLease.Release()
 			runtime.resourceLease = nil

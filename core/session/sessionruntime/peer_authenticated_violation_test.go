@@ -35,7 +35,7 @@ func TestSignedMalformedPeerFailurePublishesUnsafeExactOperationBeforeShutdown(t
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(publicKey, base, validator)
+	authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestSignedMalformedPeerControlTerminatesOnlyExactOperation(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			authenticator, err := protocolsession.NewSenderControlAuthenticator(publicKey, base, validator)
+			authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
 			if err != nil {
 				t.Fatal(err)
 			}

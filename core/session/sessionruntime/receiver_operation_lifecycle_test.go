@@ -12,6 +12,7 @@ import (
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/transfer"
 	"github.com/windshare/windshare/core/transfer/ordinaryoutput"
@@ -332,7 +333,7 @@ func exerciseReceiverCatalogCallbackLifecycle(
 		t.Fatal(err)
 	}
 	sender, receiver := connectVerticalPair(t, fixture.senderFactory, receiverFactory)
-	ownedPublicKey := receiver.publicKey
+	retainedSender := receiver.sender
 	gate.runtime = receiver
 	t.Cleanup(func() {
 		gate.unblock()
@@ -375,7 +376,7 @@ func exerciseReceiverCatalogCallbackLifecycle(
 		t.Fatalf("catalog load after close = %v", loadErr)
 	}
 	<-resourceLease.released
-	assertReceiverBorrowedGraphReleased(t, receiver, ownedPublicKey)
+	assertReceiverBorrowedGraphReleased(t, receiver, retainedSender)
 	<-closeDone
 	if resourceLease.count.Load() != 1 {
 		t.Fatalf("receiver resource releases = %d, want 1", resourceLease.count.Load())
@@ -420,7 +421,7 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 			t.Fatal(err)
 		}
 		sender, receiver := connectVerticalPair(t, fixture.senderFactory, receiverFactory)
-		ownedPublicKey := receiver.publicKey
+		retainedSender := receiver.sender
 		gate.runtime = receiver
 		t.Cleanup(func() {
 			gate.unblock()
@@ -470,7 +471,7 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 			t.Fatalf("in-flight revision open after close = %v", openErr)
 		}
 		<-resourceLease.released
-		assertReceiverBorrowedGraphReleased(t, receiver, ownedPublicKey)
+		assertReceiverBorrowedGraphReleased(t, receiver, retainedSender)
 		<-closeDone
 		if resourceLease.count.Load() != 1 {
 			t.Fatalf("receiver resource releases = %d, want 1", resourceLease.count.Load())
@@ -481,7 +482,7 @@ func TestReceiverCloseJoinsRevisionOpenerBeforeResourceRelease(t *testing.T) {
 func assertReceiverBorrowedGraphReleased(
 	t *testing.T,
 	receiver *ReceiverRuntime,
-	ownedPublicKey []byte,
+	retainedSender *senderauth.Verifier,
 ) {
 	t.Helper()
 	receiver.revisions.mu.Lock()
@@ -497,13 +498,11 @@ func assertReceiverBorrowedGraphReleased(
 			retainedRevisionGraph,
 		)
 	}
-	if receiver.opener != nil || receiver.semantic != nil || receiver.publicKey != nil {
+	if receiver.opener != nil || receiver.semantic != nil || receiver.sender != nil {
 		t.Fatal("closed receiver runtime retained opener, semantic validator, or public-key aliases")
 	}
-	for index, value := range ownedPublicKey {
-		if value != 0 {
-			t.Fatalf("receiver public-key byte %d was not cleared", index)
-		}
+	if !retainedSender.Valid() {
+		t.Fatal("receiver teardown invalidated the shared sender verifier")
 	}
 	if _, err := receiver.OpenRevision(
 		context.Background(), catalog.FileID{},

@@ -70,7 +70,7 @@ func TestRetiredPeerContinuationSurvivesOperationGC(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
-		verified, e := protocolsession.VerifyControlBody(key.Public().(ed25519.PublicKey), domain, base, signed)
+		verified, e := protocolsession.VerifyControlBody(checkedSender(t, key.Public().(ed25519.PublicKey)), domain, base, signed)
 		if e != nil || !bytes.Equal(verified, body) {
 			t.Fatal("signature verification", e)
 		}
