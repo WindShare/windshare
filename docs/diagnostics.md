@@ -44,34 +44,56 @@ even during a local stop. For peer stops, correlate with `receiver_termination.l
 
 ## Browser Diagnostics
 
-The browser receiver retains an in-memory ring buffer of diagnostic events and incidents.
-
 ### Capturing an Issue
 
-1. Open DevTools console and enable capture:
-   ```js
-   window.windshareDiagnostics.enable()
-   ```
-   *(Capture stays active for 30 minutes across page reloads within the same origin).*
-2. Reproduce the transfer or connection issue.
-3. Export the logs:
-   - Click **Connection details → Developer diagnostics → Export diagnostics** in the UI, or
-   - Run `copy(window.windshareDiagnostics.export())` in DevTools to copy the JSON bundle to clipboard.
-4. Disable capture when finished:
-   ```js
-   window.windshareDiagnostics.disable()
-   ```
+Generate a test link that records diagnostics before the receiver's first connection:
+
+```sh
+wind share <path> --browser-trace --trace-dir ./traces
+```
+
+`--browser-trace` adds `trace=1` to the link's query, before `#<key>`, including with
+`--split-key`. Sender tracing remains independently controlled by `--trace` / `--trace-dir`.
+You can also add `?trace=1` (or `&trace=1` when a query exists) to an existing link.
+
+1. Open the test link or paste it into the receiver's input, then reproduce the issue.
+   The top bar shows recording or retained-failure status.
+2. Click **Export diagnostics**. Choose **Share file**, **Save file**, or **Copy log**.
+   File sharing appears when supported; some phones receive the same NDJSON content as a `.txt` attachment.
+   Clipboard denial exposes selectable text for manual copying.
+3. **Stop recording** ends capture without deleting evidence. **Hide notification** then dismisses the top
+   bar; the same files remain available from **Connection details → Diagnostics** or the landing page's
+   **Diagnostics** entry. Those entries also start recording for ordinary links.
+
+Activation is scoped to the current tab and page path. Reload preserves the original 30-minute
+deadline; it does not extend capture or undo a manual stop. The activation query is consumed on entry.
+Faults can seal the current evidence while leaving reload capture active until that deadline;
+**Stop recording** remains available to turn it off without deleting evidence.
+
+The trace ring is bounded to 4 MiB / 4,096 events. During capture, changed evidence is saved every five
+seconds and on page hiding; sealed captures are saved immediately after publication. Unchanged evidence
+is not rewritten, and retained events reuse their encoded records. Empty captures are not archived.
+After reload, **Previous diagnostics** exports the latest saved capture for that page, with its original
+run identity. An empty current run offers no file, so it cannot be mistaken for the saved evidence.
+The archive admits up to three captures for 24 hours, at most 12 MiB each / 16 MiB total;
+expired records are pruned on access. Startup reads only archive summaries; opening the diagnostics
+panel loads the previous file on demand. The archive is separate from transfer storage.
+Storage denial leaves live export available. Abrupt browser termination can lose events since the last
+successful save. Download names include the timestamp and run ID and use `.ndjson`.
 
 ### Console API
+
+The same controls are available through `window.windshareDiagnostics`:
 
 | Method | Description |
 |---|---|
 | `enable()` | Activates diagnostic recording (30-minute window). |
 | `disable()` | Stops recording and prevents capture on subsequent page loads. |
-| `export()` | Returns all captured events and incidents as a JSON string. |
+| `export()` | Returns the current run's events and incidents as NDJSON text. |
 | `status()` | Prints current capture state, event counts, and expiry deadline. |
+| `activation()` | Reports whether reload can resume capture and its original deadline, independently of sealed evidence. |
 | `inspectLastFailure()` | Returns the most recent failure incident and stack trace. |
-| `clear()` | Clears buffered logs without disabling capture. |
+| `clear()` | Clears buffered logs and the current capture's saved snapshot without disabling capture. |
 
 ### Key Browser Events
 

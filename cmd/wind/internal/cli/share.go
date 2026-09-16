@@ -30,9 +30,8 @@ const (
 type shareRequest struct {
 	paths       []string
 	relayURLs   []string
-	frontURL    string
+	link        shareLinkPresentation
 	chunkSize   uint32
-	splitKey    bool
 	observation observationOptions
 }
 
@@ -230,7 +229,7 @@ func (a *App) activateShare(
 	}
 	err = executeSharePublication(sharePublicationPlan{
 		buildPayload: func() ([]byte, error) {
-			return buildShareCapabilityPayload(prepared.Capability(), request.frontURL, request.splitKey)
+			return buildShareCapabilityPayload(prepared.Capability(), request.link)
 		},
 		publishPayload: func(payload []byte) error {
 			return publishShareCapability(a.Stdout, payload)
@@ -409,6 +408,7 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 	blockSize := flags.Int64("block-size", 0, "file-local block size in bytes; 0 uses 1 MiB")
 	splitKey := flags.Bool("split-key", false, "print a bare link and separate key string")
 	frontURL := flags.String("front-url", DefaultFrontURL, "frontend base URL embedded in the link")
+	browserTrace := flags.Bool("browser-trace", false, "enable browser diagnostics when the generated link is opened")
 	var observation observationOptions
 	if err := bindObservationOptions(flags, &observation); err != nil {
 		_, _ = fmt.Fprintln(a.stderrWriter(), "share: observation options are unavailable")
@@ -438,8 +438,9 @@ func (a *App) parseShareRequest(args []string) (shareRequest, requestParseOutcom
 		return shareRequest{}, requestParseUsageFailure
 	}
 	return shareRequest{
-		paths: paths, relayURLs: relayURLs, frontURL: *frontURL,
-		chunkSize: uint32(chunkSize), splitKey: *splitKey, observation: observation,
+		paths: paths, relayURLs: relayURLs,
+		link:      shareLinkPresentation{frontURL: *frontURL, splitKey: *splitKey, browserTrace: *browserTrace},
+		chunkSize: uint32(chunkSize), observation: observation,
 	}, requestParseReady
 }
 

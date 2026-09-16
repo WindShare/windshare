@@ -168,62 +168,98 @@ export function projectDiagnosticsStatusV2(
 export function createDiagnosticBundleV2(
   input: DiagnosticBundleSnapshotInput,
 ): DiagnosticBundleV2 {
-  const identity = copyIdentity(input.identity)
-  const healthAtExport = copyHealth(input.healthAtExport)
-  const status = copyStatus(input.status)
-  if (!sameHealth(status.health, healthAtExport)) {
-    throw new TypeError('trace status and export header must share one health cut')
+  return new DiagnosticBundleProjectorV2(input.identity).project(input)
+}
+
+/** One runtime owns its projection cache; evicted immutable records remain collectible. */
+export class DiagnosticBundleProjectorV2 {
+  readonly #identity: DiagnosticBundleIdentityV2
+  readonly #incidents = new WeakMap<IncidentRecordV2, DiagnosticBundleIncidentLineV2>()
+  readonly #events = new WeakMap<
+    TraceCapturedEvent<TraceEventObservationV2, IncidentLink>, DiagnosticBundleTraceEventLineV2
+  >()
+
+  constructor(identity: DiagnosticBundleIdentityV2) {
+    this.#identity = copyIdentity(identity)
   }
 
-  const incidentRecords = [...input.incidents]
-    .map((record) => validateIncident(record, identity))
-    .sort((left, right) => compareDecimal(left.sequence, right.sequence))
-  requireUniqueDecimalSequences(incidentRecords.map((record) => record.sequence), 'incident')
-  const incidents = Object.freeze(incidentRecords.map((record) =>
-    deepFreezeJson({ line_type: 'incident' as const, record })))
-  const localOutputFailures = Object.freeze(
-    [...(input.localOutputFailures ?? [])]
-      .map((record) => projectLocalOutputFailureLine(record, incidentRecords))
-      .filter((line): line is DiagnosticBundleLocalOutputFailureLineV2 => line !== undefined)
-      .sort(compareLocalOutputFailures),
-  )
+  project(input: Omit<DiagnosticBundleSnapshotInput, 'identity'>): DiagnosticBundleV2 {
+    const identity = this.#identity
+    const healthAtExport = copyHealth(input.healthAtExport)
+    const status = copyStatus(input.status)
+    if (!sameHealth(status.health, healthAtExport)) {
+      throw new TypeError('trace status and export header must share one health cut')
+    }
 
-  const capture = input.traceCapture
-  if ((capture === undefined) !== (status.state === 'idle')) {
-    throw new TypeError('trace capture presence contradicts exported status')
+    const incidents = Object.freeze(input.incidents.map(record => this.#incidentLine(record))
+      .sort((left, right) => compareDecimal(left.record.sequence, right.record.sequence)))
+    const incidentRecords = incidents.map(line => line.record)
+    requireUniqueDecimalSequences(incidentRecords.map(record => record.sequence), 'incident')
+    const localOutputFailures = Object.freeze(
+      [...(input.localOutputFailures ?? [])]
+        .map((record) => projectLocalOutputFailureLine(record, incidentRecords))
+        .filter((line): line is DiagnosticBundleLocalOutputFailureLineV2 => line !== undefined)
+        .sort(compareLocalOutputFailures),
+    )
+
+    const capture = input.traceCapture
+    if ((capture === undefined) !== (status.state === 'idle')) {
+      throw new TypeError('trace capture presence contradicts exported status')
+    }
+    if (capture !== undefined) validateCaptureCut(capture, status)
+
+    const capturedEvents = (capture?.events ?? [])
+      .slice()
+      .sort((left, right) => compareBigInt(left.sequence, right.sequence))
+    requireUniqueBigIntSequences(
+      capturedEvents.map((captured) => captured.sequence),
+      'trace event',
+    )
+    const traceEvents = Object.freeze(capturedEvents.map(captured => this.#traceLine(captured)))
+    const traceCapture = capture === undefined
+      ? undefined
+      : deepFreezeJson({ line_type: 'trace_capture' as const, status })
+
+    return Object.freeze({
+      header: deepFreezeJson({
+        line_type: 'bundle_header' as const,
+        schema_version: DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
+        build: identity.build,
+        runtime: identity.runtime,
+        runtime_run_id: identity.runtimeRunId,
+        time: utcRfc3339(input.time, 'diagnostic bundle time'),
+        diagnostics_health_at_export: healthAtExport,
+      }),
+      incidents,
+      localOutputFailures,
+      ...(traceCapture === undefined ? {} : { traceCapture }),
+      traceEvents,
+    })
   }
-  if (capture !== undefined) validateCaptureCut(capture, status)
 
-  const capturedEvents = (capture?.events ?? [])
-    .slice()
-    .sort((left, right) => compareBigInt(left.sequence, right.sequence))
-  requireUniqueBigIntSequences(
-    capturedEvents.map((captured) => captured.sequence),
-    'trace event',
-  )
-  const traceEvents = Object.freeze(capturedEvents.map((captured) => deepFreezeJson({
-    line_type: 'trace_event' as const,
-    record: projectCapturedEvent(captured, identity.runtimeRunId),
-  })))
-  const traceCapture = capture === undefined
-    ? undefined
-    : deepFreezeJson({ line_type: 'trace_capture' as const, status })
+  #incidentLine(record: IncidentRecordV2): DiagnosticBundleIncidentLineV2 {
+    const cached = this.#incidents.get(record)
+    if (cached !== undefined) return cached
+    const line = Object.freeze({
+      line_type: 'incident' as const,
+      record: validateIncident(record, this.#identity),
+    })
+    this.#incidents.set(record, line)
+    return line
+  }
 
-  return Object.freeze({
-    header: deepFreezeJson({
-      line_type: 'bundle_header' as const,
-      schema_version: DIAGNOSTIC_BUNDLE_SCHEMA_VERSION,
-      build: identity.build,
-      runtime: identity.runtime,
-      runtime_run_id: identity.runtimeRunId,
-      time: utcRfc3339(input.time, 'diagnostic bundle time'),
-      diagnostics_health_at_export: healthAtExport,
-    }),
-    incidents,
-    localOutputFailures,
-    ...(traceCapture === undefined ? {} : { traceCapture }),
-    traceEvents,
-  })
+  #traceLine(captured: TraceCapturedEvent<TraceEventObservationV2, IncidentLink>): DiagnosticBundleTraceEventLineV2 {
+    const cached = this.#events.get(captured)
+    if (cached !== undefined) return cached
+    const line = Object.freeze({
+      line_type: 'trace_event' as const,
+      record: projectCapturedEvent(captured, this.#identity.runtimeRunId),
+    })
+    // Custom snapshot providers can supply mutable records; only proven immutable
+    // captures may bypass validation and projection on a later checkpoint.
+    if (isDeeplyFrozen(captured)) this.#events.set(captured, line)
+    return line
+  }
 }
 
 function validateLocalOutputFailure(

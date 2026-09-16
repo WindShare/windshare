@@ -1,3 +1,5 @@
+import { DiagnosticsEntry } from '../diagnostics/DiagnosticsEntry'
+
 export function PortalFooter() {
   return (
     <footer className="portal-footer">
@@ -11,6 +13,7 @@ export function PortalFooter() {
           </div>
 
           <div className="portal-footer-links">
+            <DiagnosticsEntry />
             <a href="https://github.com/windshare/windshare" target="_blank" rel="noopener noreferrer">
               GitHub
             </a>

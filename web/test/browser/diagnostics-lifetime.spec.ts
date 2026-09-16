@@ -3,6 +3,7 @@ import type { WindShareDiagnostics } from '../../src/diagnostics/export/develope
 
 const BASE64URL_IDENTITY_PATTERN = /^[A-Za-z0-9_-]{22}$/u
 const EXPECTED_API_METHODS = Object.freeze([
+  'activation',
   'clear',
   'disable',
   'enable',
@@ -146,7 +147,7 @@ test('diagnostic evidence stays page-local and manual disable survives reload', 
   expect(detailedTraceConsoleMessages).toEqual([])
 })
 
-test('enabled diagnostics capture startup after reload and share-link navigation in a new tab', async ({ page, context }) => {
+test('diagnostic activation survives reload without leaking to another tab or share', async ({ page, context }) => {
   await page.goto('/')
   const enabled = await page.evaluate(() => ({
     status: window.windshareDiagnostics.enable(),
@@ -166,10 +167,10 @@ test('enabled diagnostics capture startup after reload and share-link navigation
   const reopened = await context.newPage()
   await reopened.goto('/')
   expect(await reopened.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
-    enabled: true, expires_at: enabled.status.expires_at,
+    enabled: false,
   })
   // Invalid key material fails during controller startup without external networking.
-  await reopened.goto('/AAAAAAAAAAAAAAAA#invalid-key')
+  await reopened.goto('/AAAAAAAAAAAAAAAA?trace=1#invalid-key')
   await expect.poll(() => reopened.evaluate(() => window.windshareDiagnostics.status().state))
     .toBe('sealed')
   const restored = await reopened.evaluate(() => ({
@@ -184,13 +185,15 @@ test('enabled diagnostics capture startup after reload and share-link navigation
   await reopened.evaluate(() => window.windshareDiagnostics.disable())
   await page.reload()
   expect(await page.evaluate(() => window.windshareDiagnostics.status())).toMatchObject({
-    enabled: false, state: 'idle',
+    enabled: true, expires_at: enabled.status.expires_at,
   })
+  await page.goto('/different-share')
+  expect(await page.evaluate(() => window.windshareDiagnostics.status().enabled)).toBe(false)
 })
 
 test('blocked browser storage does not break startup or manual capture', async ({ page }) => {
   await page.addInitScript(() => {
-    Object.defineProperty(window, 'localStorage', {
+    Object.defineProperty(window, 'sessionStorage', {
       get() { throw new DOMException('Storage denied', 'SecurityError') },
     })
   })

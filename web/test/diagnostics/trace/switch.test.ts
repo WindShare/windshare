@@ -92,6 +92,19 @@ describe('trace switch', () => {
     expect(trace.status().sealReason).toBe('expired')
   })
 
+  it('does not revoke a newer persisted activation when an older page expires', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    makeSwitch(time, store).enable()
+    time.advance(40)
+    const newerPage = makeSwitch(time, store)
+    const renewed = newerPage.enable()
+    time.advance(60)
+    expect(newerPage.status().enabled).toBe(true)
+    expect(store.readExpiry()).toBe(renewed.expiresAtMilliseconds)
+    expect(makeSwitch(time, store).status().expiresAtMilliseconds).toBe(renewed.expiresAtMilliseconds)
+  })
+
   it('clears an active recorder without changing generation or original expiry', () => {
     const time = new FakeTraceTime()
     const trace = makeSwitch(time)
@@ -164,6 +177,38 @@ describe('trace switch', () => {
     reopened.disable()
     expect(store.readExpiry()).toBeUndefined()
     expect(makeSwitch(time, store).status().state).toBe('idle')
+  })
+
+  it('revokes activation after a failure seals evidence, without discarding that evidence', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    const trace = makeSwitch(time, store)
+    trace.enable()
+    trace.current?.(testEvent(1))
+    const activation = trace.activation()
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
+    time.advance(testTraceCapacity().postFailureSilenceMs)
+    const sealed = trace.captureSnapshot()
+    expect(trace.status().enabled).toBe(false)
+    expect(trace.activation()).toEqual(activation)
+    trace.disable()
+    expect(trace.activation()).toEqual({ kind: 'off' })
+    expect(trace.captureSnapshot()).toEqual(sealed)
+    expect(makeSwitch(time, store).activation()).toEqual({ kind: 'off' })
+  })
+
+  it('expires activation even after sealed evidence has been cleared', () => {
+    const time = new FakeTraceTime()
+    const store = activationStore()
+    const trace = makeSwitch(time, store)
+    trace.enable()
+    trace.signal({ kind: 'incident_sealed', incident: testIncident(1n), elapsedMs: 0n })
+    time.advance(testTraceCapacity().postFailureSilenceMs)
+    trace.clear()
+    expect(trace.activation().kind).toBe('active')
+    time.advance(testTraceCapacity().captureExpiryMs)
+    expect(trace.activation()).toEqual({ kind: 'off' })
+    expect(store.readExpiry()).toBeUndefined()
   })
 
   it('clears activation even when disabling a page that has no capture', () => {

@@ -26,6 +26,10 @@ export interface TraceActivationStore {
   clear(): void
 }
 
+export type TraceActivationSnapshot =
+  | Readonly<{ kind: 'off' }>
+  | Readonly<{ kind: 'active'; expiresAtMilliseconds: number }>
+
 export type TraceSwitchOptions<Event, Incident, Scope> = Omit<
   BoundedTraceRecorderOptions<Event, Incident, Scope>,
   'captureGeneration' | 'capacity' | 'health' | 'onSealed'
@@ -38,8 +42,11 @@ interface ActiveTraceCapture<Event, Incident, Scope> {
   readonly generation: bigint
   readonly recorder: BoundedTraceRecorder<Event, Incident, Scope>
   readonly observer: TraceObserver<Event>
+}
+
+interface TraceActivation {
+  readonly expiresAtMilliseconds: number
   expiryTask?: TraceScheduledTask
-  expiresAtMilliseconds?: number
 }
 
 /** Owns revocation and capture replacement; product objects only see `current`. */
@@ -48,8 +55,10 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
   readonly #options: TraceSwitchOptions<Event, Incident, Scope>
   readonly #capacity: TraceCapacityPolicy
   readonly #health = new TraceHealthAccumulator()
+  readonly #listeners = new Set<() => void>()
   #captureGeneration = 0n
   #active: ActiveTraceCapture<Event, Incident, Scope> | undefined
+  #activation: TraceActivation | undefined
 
   constructor(options: TraceSwitchOptions<Event, Incident, Scope>) {
     this.#options = options
@@ -57,9 +66,28 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
     this.#restoreActivation()
   }
 
+  subscribe = (listener: () => void): (() => void) => {
+    this.#listeners.add(listener)
+    return () => { this.#listeners.delete(listener) }
+  }
+
+  #changed(): void {
+    for (const listener of this.#listeners) {
+      try { listener() } catch {
+        // Diagnostic consumers cannot interrupt capture or product workflows.
+      }
+    }
+  }
+
   get current(): TraceObserver<Event> | undefined {
     const active = this.#active
     return active?.recorder.enabled === true ? active.observer : undefined
+  }
+
+  activation(): TraceActivationSnapshot {
+    return this.#activation === undefined
+      ? Object.freeze({ kind: 'off' })
+      : Object.freeze({ kind: 'active', expiresAtMilliseconds: this.#activation.expiresAtMilliseconds })
   }
 
   enable(): TraceCoreStatus {
@@ -76,6 +104,7 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
   }
 
   #startCapture(now: number, expiresAt: number): TraceCoreStatus {
+    this.#cancelTask(this.#activation?.expiryTask)
     this.#discardPriorCapture()
     const generation = this.#captureGeneration + 1n
     this.#captureGeneration = generation
@@ -86,31 +115,30 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
       health: this.#health,
       onSealed: () => this.#captureSealed(generation),
     })
-    const active: ActiveTraceCapture<Event, Incident, Scope> = {
-      generation,
-      recorder,
-      observer: (event) => recorder.record(event),
-    }
-    this.#active = active
-    active.expiresAtMilliseconds = expiresAt
+    this.#active = { generation, recorder, observer: event => recorder.record(event) }
+    const activation: TraceActivation = { expiresAtMilliseconds: expiresAt }
+    this.#activation = activation
     try {
-      active.expiryTask = this.#options.scheduler.schedule(
+      activation.expiryTask = this.#options.scheduler.schedule(
         expiresAt - now,
-        () => this.#expire(generation, recorder),
+        () => this.#expire(activation),
       )
     } catch {
+      this.#endActivation()
       recorder.seal('expired')
     }
+    this.#changed()
     return this.status()
   }
 
   disable(): TraceCoreStatus {
-    this.#active?.recorder.seal('manual_disable')
-    try {
-      this.#options.activationStore?.clear()
-    } catch {
+    this.#endActivation()
+    try { this.#options.activationStore?.clear() } catch {
       // Revocation of this page's observer is independent of browser storage.
     }
+    this.#active?.recorder.seal('manual_disable')
+    // A sealed or cleared recorder still has an independently revocable activation.
+    this.#changed()
     return this.status()
   }
 
@@ -119,14 +147,17 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
     if (active === undefined) return
     if (active.recorder.enabled) {
       active.recorder.clear()
+      this.#changed()
       return
     }
-    this.#cancelTask(active.expiryTask)
     this.#active = undefined
+    this.#changed()
   }
 
   signal(signal: TraceCaptureSignal<Incident, Scope>): void {
+    const before = this.#active?.recorder.state
     this.#active?.recorder.signal(signal)
+    if (before !== this.#active?.recorder.state) this.#changed()
   }
 
   status(): TraceCoreStatus {
@@ -148,9 +179,9 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
       state: snapshot.state,
       enabled: active.recorder.enabled,
       captureGeneration: snapshot.captureGeneration,
-      ...(active.expiresAtMilliseconds === undefined
+      ...(!active.recorder.enabled || this.#activation === undefined
         ? {}
-        : { expiresAtMilliseconds: active.expiresAtMilliseconds }),
+        : { expiresAtMilliseconds: this.#activation.expiresAtMilliseconds }),
       ...(snapshot.sealReason === undefined ? {} : { sealReason: snapshot.sealReason }),
       capacity: this.#capacity,
       retainedEventCount: snapshot.retainedEventCount,
@@ -178,9 +209,9 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
         this.#options.activationStore?.clear()
         return
       }
-      // Activation outlives a page's recorder, including a sealed failure capture.
-      // Re-entry needs startup evidence without renewing the user's capture window.
-      this.#startCapture(now, expiresAt)
+      // Sealing preserves evidence, while activation permits re-entry until the
+      // original deadline. Neither re-entry nor clearing evidence renews it.
+      if (!this.#startCapture(now, expiresAt).enabled) this.#options.activationStore?.clear()
     } catch {
       // A blocked or corrupt preference cannot interrupt receiver startup.
     }
@@ -190,32 +221,37 @@ implements DomainTraceSource<Event>, TraceHealthReadPort {
     const prior = this.#active
     if (prior === undefined) return
     this.#active = undefined
-    this.#cancelTask(prior.expiryTask)
     prior.recorder.seal('manual_disable')
   }
 
-  #expire(
-    generation: bigint,
-    recorder: BoundedTraceRecorder<Event, Incident, Scope>,
-  ): void {
-    const active = this.#active
-    if (generation !== this.#captureGeneration || active?.recorder !== recorder) return
-    recorder.seal('expired')
+  #expire(activation: TraceActivation): void {
+    if (this.#activation !== activation) return
+    this.#endActivation()
+    try {
+      const store = this.#options.activationStore
+      // A cached page's old timer must not revoke a window renewed by a newer page.
+      if (store?.readExpiry() === activation.expiresAtMilliseconds) store.clear()
+    } catch {
+      // Restoring a stored deadline also checks expiry when cleanup is unavailable.
+    }
+    this.#active?.recorder.seal('expired')
+    this.#changed()
+  }
+
+  #endActivation(): void {
+    this.#cancelTask(this.#activation?.expiryTask)
+    this.#activation = undefined
   }
 
   #captureSealed(generation: bigint): void {
-    const active = this.#active
-    if (active?.generation !== generation) return
-    this.#cancelTask(active.expiryTask)
-    delete active.expiryTask
-    delete active.expiresAtMilliseconds
+    if (this.#active?.generation === generation) this.#changed()
   }
 
   #cancelTask(task: TraceScheduledTask | undefined): void {
     try {
       task?.cancel()
     } catch {
-      // Generation checks keep a cancellation failure from sealing a replacement.
+      // Activation identity keeps stale expiry callbacks from sealing a replacement.
     }
   }
 
