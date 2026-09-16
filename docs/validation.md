@@ -20,8 +20,10 @@ mappings in unit tests and use browser tests for interactions and representative
 The short Chromium contracts also build and serve the native-storage capability probe under a
 same-origin Worker CSP, catching bundling failures hidden by the development server.
 Cross-browser crypto contracts open version-3 sealed blocks from an independent signer, reject
-identity/content/signature substitutions, and simulate native Ed25519 returning false. Unit contracts
-also require concurrent native commitment hashes; frozen vectors cover every sender-object domain.
+identity/content/signature substitutions, and exercise native capability failures. Shared Ed25519
+vectors require identical Go, native-browser and portable acceptance of exceptional encodings.
+Unit contracts cover verifier reuse, bounded backend fallback, authentication failures and mutable
+caller buffers; object commitments hash concurrently and reuse one snapshot through decryption.
 Static architecture gates protect dependency and capability boundaries, not
 historical filenames, symbol names, or required internal module lists.
 

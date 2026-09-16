@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { ed25519 } from '@noble/curves/ed25519.js'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
@@ -50,7 +51,7 @@ export async function createSignedRootCollisionFixture(): Promise<SignedRootColl
     syntheticRootId: encodeBase64Url(syntheticRoot),
     chunkSize: 1 << 20,
     capabilities: 0n,
-    senderPublicKey,
+    sender: createEd25519Verifier(senderPublicKey),
     createdAtSeconds: 1n,
     pathPolicy: V2_PATH_POLICY,
   })

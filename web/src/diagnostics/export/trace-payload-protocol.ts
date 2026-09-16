@@ -480,3 +480,15 @@ export function validateRequestScheduling(payload: UnknownRecord): void {
     integerBetween(payload[key], 0, Number.MAX_SAFE_INTEGER, key)
   }
 }
+
+export function validateSenderVerification(payload: UnknownRecord): void {
+  exactKeys(payload, ['verifier_id', 'share_id', 'backend', 'transition', 'reason'], [], 'sender verification')
+  decimalUint64(payload.verifier_id, 'verifier ID')
+  boundedConnectionText(payload.share_id, CONNECTION_TRACE_TEXT_MAX_CHARACTERS, 'share ID')
+  member(payload.backend, ['native', 'noble'], 'verification backend')
+  member(payload.transition, ['selected', 'fallback', 'rejected', 'failed'], 'verification transition')
+  member(payload.reason, [
+    'qualified', 'unsupported', 'qualification-failed', 'timeout', 'operation-failed',
+    'invalid-key', 'invalid-signature', 'backend-error',
+  ], 'verification reason')
+}

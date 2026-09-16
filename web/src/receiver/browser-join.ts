@@ -48,7 +48,12 @@ export function joinBrowserRelays(
         })),
       })
       try {
-        const descriptor = await openV2ShareDescriptor(relay.descriptorObject, ownedCapability)
+        const descriptor = await openV2ShareDescriptor(relay.descriptorObject, ownedCapability, {
+          observe: event => protocolTrace?.current?.({
+            ...event, eventName: 'sender_verification', shareId: capability.shareId,
+            correlation: session === undefined ? {} : { protocolSessionId: session.protocolSessionIdentity },
+          }),
+        })
         attemptSignal.throwIfAborted()
         session = await V2ReceiverSessionRuntime.connect({
           descriptor,

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 const (
@@ -355,7 +356,7 @@ func ParseServerHello(encoded []byte, client ClientHello, senderVerificationKey 
 	body := encoded[:ServerHelloBodySize]
 	bodyDigest := sha256.Sum256(body)
 	preimage := append([]byte(serverHelloDomain), bodyDigest[:]...)
-	if !ed25519.Verify(senderVerificationKey, preimage, encoded[ServerHelloBodySize:]) {
+	if !senderauth.Verify(senderVerificationKey, preimage, encoded[ServerHelloBodySize:]) {
 		return ServerHello{}, ErrServerHelloSignature
 	}
 

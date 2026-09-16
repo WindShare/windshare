@@ -62,6 +62,9 @@ const PAYLOAD_FOR_EVERY_EVENT = {
     artifact_kind: 'directory_tree',
     plan_kind: 'direct_tree',
   },
+  sender_verification: {
+    verifier_id: '1', share_id: 'test-share', backend: 'native', transition: 'selected', reason: 'qualified',
+  },
   protocol_operation: { transition: 'request_sent', request_kind: 'list_children' },
   content_scheduling: {
     dispatch_sequence: '1', file_id: 'AQAAAAAAAAAAAAAAAAAAAA', block_index: '0', route: 'direct', purpose: 'content',

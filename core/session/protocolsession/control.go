@@ -9,6 +9,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 const (
@@ -314,7 +315,7 @@ func VerifyControlBody(
 		return nil, err
 	}
 	preimage := buildControlSignaturePreimage(domain, binding, unsignedWrapper)
-	if !ed25519.Verify(senderPublicKey, preimage, signature) {
+	if !senderauth.Verify(senderPublicKey, preimage, signature) {
 		return nil, ErrControlSignature
 	}
 	return semantic, nil

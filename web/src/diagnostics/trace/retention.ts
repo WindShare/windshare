@@ -88,6 +88,8 @@ const CONNECTION_RECOVERY_RETENTION = {
 
 export function traceEventRetention(event: TraceEventObservationV2): TraceRetention {
   switch (event.eventName) {
+    case 'sender_verification':
+      return event.payload.transition === 'selected' ? 'milestone' : 'outcome'
     case 'protocol_operation':
       switch (event.payload.transition) {
         case 'cancelled':

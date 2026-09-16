@@ -1,6 +1,7 @@
 artifact-choice-v1.json
 diagnostic-correlation-v1.json
 directory-admission-v2.json
+ed25519-acceptance.json
 envelope-sample.json
 file-checkpoint-v2.json
 path-policy.json

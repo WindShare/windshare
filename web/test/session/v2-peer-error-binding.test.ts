@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { decodeV2OperationErrorControl, encodeV2Body, encodeV2Message, V2_MESSAGE_KIND, verifyV2SenderControl } from '../../src/session/v2-message'
@@ -20,7 +21,7 @@ async function authenticated(item: typeof vector.peerErrors[number]) {
   protocolSessionId: bytes(vector.controlBinding.protocolSessionIdB64),
   laneId: vector.controlBinding.laneId, laneEpoch: vector.controlBinding.laneEpoch,
   direction: 1, sequence: BigInt(item.sequence),
- }, bytes(vector.senderPublicKeyB64))
+ }, createEd25519Verifier(bytes(vector.senderPublicKeyB64)))
  expect(body).toEqual(bytes(item.bodyB64))
  return encodeV2Message(V2_MESSAGE_KIND.operationError, operationId, body)
 }

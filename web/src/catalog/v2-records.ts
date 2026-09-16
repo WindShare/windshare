@@ -1,3 +1,4 @@
+import { createEd25519Verifier, type Ed25519Verifier, type Ed25519VerifierOptions } from '../crypto/ed25519'
 import {
   createCatalogPageObjectBinding,
   createDescriptorObjectBinding,
@@ -49,7 +50,7 @@ export interface V2ShareDescriptor {
   readonly syntheticRootId: string
   readonly chunkSize: number
   readonly capabilities: bigint
-  readonly senderPublicKey: Uint8Array<ArrayBuffer>
+  readonly sender: Ed25519Verifier
   readonly createdAtSeconds: bigint
   readonly pathPolicy: typeof V2_PATH_POLICY
 }
@@ -129,6 +130,7 @@ export type V2CatalogObject =
 export async function openV2ShareDescriptor(
   object: Uint8Array,
   capability: Suite02CapabilityKey,
+  verification: Ed25519VerifierOptions = {},
 ): Promise<V2ShareDescriptor> {
   if (object.byteLength === 0 || object.byteLength > V2_DESCRIPTOR_OBJECT_BYTES) {
     throw new V2CborError('Share descriptor object exceeds its limit')
@@ -142,18 +144,18 @@ export async function openV2ShareDescriptor(
       key,
       object,
       (candidate) => {
-        decoded = decodeV2ShareDescriptor(candidate)
-        return decoded.senderPublicKey
+        decoded = decodeV2ShareDescriptor(candidate, verification)
+        return decoded.sender
       },
     )
-    decoded ??= decodeV2ShareDescriptor(plaintext)
+    decoded ??= decodeV2ShareDescriptor(plaintext, verification)
     return decoded
   } finally {
     key.fill(0)
   }
 }
 
-export function decodeV2ShareDescriptor(plaintext: Uint8Array): V2ShareDescriptor {
+export function decodeV2ShareDescriptor(plaintext: Uint8Array, verification: Ed25519VerifierOptions = {}): V2ShareDescriptor {
   const fields = requireNumericMap(
     decodeCanonicalCbor(plaintext, V2_DESCRIPTOR_OBJECT_BYTES, 'share descriptor'),
     [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
@@ -206,7 +208,7 @@ export function decodeV2ShareDescriptor(plaintext: Uint8Array): V2ShareDescripto
     syntheticRootId: encodeBase64Url(syntheticRoot),
     chunkSize: Number(chunkSizeValue),
     capabilities,
-    senderPublicKey,
+    sender: createEd25519Verifier(senderPublicKey, verification),
     createdAtSeconds,
     pathPolicy: V2_PATH_POLICY,
   })
@@ -233,7 +235,7 @@ export async function openV2CatalogObject(
       const plaintext = await openSenderObject(
         pageBinding,
         key,
-        descriptor.senderPublicKey,
+        descriptor.sender,
         object,
       )
       const page = await decodeV2CatalogPage(plaintext, object)
@@ -249,7 +251,7 @@ export async function openV2CatalogObject(
     const plaintext = await openSenderObject(
       failureBinding,
       key,
-      descriptor.senderPublicKey,
+      descriptor.sender,
       object,
     )
     const failure = decodeV2DirectoryFailure(plaintext)

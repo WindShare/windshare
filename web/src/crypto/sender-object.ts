@@ -1,5 +1,5 @@
-import { concatBytes, encodeUint32, equalBytes } from './bytes'
-import { verifyEd25519Signature } from './curve25519'
+import { concatBytes, copyBytes, encodeUint32, equalBytes } from './bytes'
+import type { Ed25519Verifier } from './ed25519'
 import { sha256 } from './digest'
 import { suite02SenderKeyHash } from './suite02-link'
 import { SUITE02_DERIVED_KEY_BYTES } from './suite02-key-derivation'
@@ -213,12 +213,13 @@ export function createOfflineCommitObjectBinding(
 }
 
 function parseSenderObject(
-  object: Uint8Array,
+  input: Uint8Array,
   expectedBinding: SenderObjectBinding,
 ): ParsedSenderObject {
-  if (object.byteLength > expectedBinding.maxBytes) {
+  if (input.byteLength > expectedBinding.maxBytes) {
     throw new SenderObjectError('too-large', 'sender object exceeds its domain limit')
   }
+  const object = copyBytes(input)
   if (object.byteLength < SENDER_OBJECT_FIXED_BYTES + SENDER_OBJECT_TAG_BYTES) {
     throw new SenderObjectError('malformed', 'sender object is truncated')
   }
@@ -243,17 +244,17 @@ function parseSenderObject(
     throw new SenderObjectError('malformed', 'sender object length is inconsistent')
   }
   return {
-    header: object.slice(0, SENDER_OBJECT_HEADER_BYTES),
-    nonce: object.slice(
+    header: object.subarray(0, SENDER_OBJECT_HEADER_BYTES),
+    nonce: object.subarray(
       SENDER_OBJECT_HEADER_BYTES,
       SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES,
     ),
-    ciphertextAndTag: object.slice(
+    ciphertextAndTag: object.subarray(
       SENDER_OBJECT_HEADER_BYTES + SENDER_OBJECT_NONCE_BYTES,
       prefixLength,
     ),
-    prefix: object.slice(0, prefixLength),
-    signature: object.slice(prefixLength),
+    prefix: object.subarray(0, prefixLength),
+    signature: object.subarray(prefixLength),
   }
 }
 
@@ -306,56 +307,70 @@ export async function senderObjectSignaturePreimage(
   ])
 }
 
-async function verifySignature(
-  publicKey: Uint8Array,
-  preimage: Uint8Array,
-  signature: Uint8Array,
-): Promise<boolean> {
-  if (publicKey.byteLength !== 32 || signature.byteLength !== SENDER_OBJECT_SIGNATURE_BYTES) {
-    throw new SenderObjectError('key', 'Ed25519 verification material has an invalid width')
+interface PreparedSenderObject extends ParsedSenderObject {
+  readonly aad: Uint8Array<ArrayBuffer>
+  readonly signaturePreimage: Uint8Array<ArrayBuffer>
+}
+
+async function prepareSenderObject(
+  expectedBinding: SenderObjectBinding,
+  object: Uint8Array,
+  runtime: CryptoRuntime,
+): Promise<PreparedSenderObject> {
+  const parsed = parseSenderObject(object, expectedBinding)
+  const [bindingHash, objectHash] = await Promise.all([
+    contextHash(expectedBinding, runtime),
+    sha256(parsed.prefix, runtime),
+  ])
+  const domain = concatBytes([TEXT_ENCODER.encode(expectedBinding.domain), Uint8Array.of(0), bindingHash])
+  return {
+    ...parsed,
+    aad: concatBytes([domain, parsed.header]),
+    signaturePreimage: concatBytes([domain, objectHash]),
   }
+}
+
+async function verifyPreparedObject(
+  sender: Ed25519Verifier,
+  prepared: PreparedSenderObject,
+): Promise<void> {
+  let valid: boolean
   try {
-    return await verifyEd25519Signature(publicKey, preimage, signature)
+    valid = await sender.verify(prepared.signaturePreimage, prepared.signature)
   } catch (cause) {
     throw new SenderObjectError('key', 'Unable to verify Ed25519 sender signature', { cause })
   }
+  if (!valid) throw new SenderObjectError('signature', 'sender object signature is invalid')
 }
 
 export async function verifySenderObject(
   expectedBinding: SenderObjectBinding,
-  publicKey: Uint8Array,
+  sender: Ed25519Verifier,
   object: Uint8Array,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<void> {
-  const parsed = parseSenderObject(object, expectedBinding)
-  const preimage = await senderObjectSignaturePreimage(expectedBinding, parsed.prefix, runtime)
-  if (!(await verifySignature(publicKey, preimage, parsed.signature))) {
-    throw new SenderObjectError('signature', 'sender object signature is invalid')
-  }
+  await verifyPreparedObject(sender, await prepareSenderObject(expectedBinding, object, runtime))
 }
 
 async function decryptSenderObject(
-  expectedBinding: SenderObjectBinding,
+  prepared: PreparedSenderObject,
   keyBytes: Uint8Array,
-  object: Uint8Array,
   runtime: CryptoRuntime,
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (keyBytes.byteLength !== SUITE02_DERIVED_KEY_BYTES) {
     throw new SenderObjectError('key', 'sender object key must be 32 bytes')
   }
-  const parsed = parseSenderObject(object, expectedBinding)
-  const aad = await senderObjectAuthenticationData(expectedBinding, parsed.header, runtime)
   try {
     const key = await importAesGcmKey(keyBytes, runtime)
     const plaintext = await runtime.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: parsed.nonce,
-        additionalData: aad,
+        iv: prepared.nonce,
+        additionalData: prepared.aad,
         tagLength: SENDER_OBJECT_TAG_BYTES * 8,
       },
       key,
-      parsed.ciphertextAndTag,
+      prepared.ciphertextAndTag,
     )
     if (plaintext.byteLength === 0) {
       throw new SenderObjectError('malformed', 'sender object plaintext is empty')
@@ -363,39 +378,50 @@ async function decryptSenderObject(
     return new Uint8Array(plaintext)
   } catch (cause) {
     if (cause instanceof SenderObjectError) throw cause
-    throw new SenderObjectError('authentication', 'sender object ciphertext is invalid', {
-      cause,
-    })
+    throw new SenderObjectError('authentication', 'sender object ciphertext is invalid', { cause })
   }
 }
 
 export async function openSenderObject(
   expectedBinding: SenderObjectBinding,
   key: Uint8Array,
-  publicKey: Uint8Array,
+  sender: Ed25519Verifier,
   object: Uint8Array,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
-  await verifySenderObject(expectedBinding, publicKey, object, runtime)
-  return decryptSenderObject(expectedBinding, key, object, runtime)
+  const ownedKey = copyBytes(key)
+  try {
+    // One private snapshot defines both the verified commitment and decryption.
+    const prepared = await prepareSenderObject(expectedBinding, object, runtime)
+    await verifyPreparedObject(sender, prepared)
+    return await decryptSenderObject(prepared, ownedKey, runtime)
+  } finally {
+    ownedKey.fill(0)
+  }
 }
 
 export async function openDescriptorObjectBootstrap(
   expectedBinding: SenderObjectBinding,
   key: Uint8Array,
   object: Uint8Array,
-  senderPublicKey: (plaintext: Uint8Array) => Uint8Array,
+  senderIdentity: (plaintext: Uint8Array) => Ed25519Verifier,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (expectedBinding.domain !== SENDER_OBJECT_DOMAIN.descriptor) {
     throw new SenderObjectError('binding', 'descriptor bootstrap requires a descriptor binding')
   }
-  const plaintext = await decryptSenderObject(expectedBinding, key, object, runtime)
-  const publicKey = senderPublicKey(plaintext)
-  const expectedPKHash = expectedBinding.context.subarray(1, 1 + PK_HASH_BYTES)
-  if (!equalBytes(await suite02SenderKeyHash(publicKey, runtime), expectedPKHash)) {
-    throw new SenderObjectError('signature', 'descriptor sender key does not match link pkHash')
+  const ownedKey = copyBytes(key)
+  try {
+    const prepared = await prepareSenderObject(expectedBinding, object, runtime)
+    const plaintext = await decryptSenderObject(prepared, ownedKey, runtime)
+    const sender = senderIdentity(plaintext)
+    const expectedPKHash = expectedBinding.context.subarray(1, 1 + PK_HASH_BYTES)
+    if (!equalBytes(await suite02SenderKeyHash(sender.publicKey, runtime), expectedPKHash)) {
+      throw new SenderObjectError('signature', 'descriptor sender key does not match link pkHash')
+    }
+    await verifyPreparedObject(sender, prepared)
+    return plaintext
+  } finally {
+    ownedKey.fill(0)
   }
-  await verifySenderObject(expectedBinding, publicKey, object, runtime)
-  return plaintext
 }

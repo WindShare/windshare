@@ -7,6 +7,7 @@ import (
 	"encoding/binary"
 	"time"
 
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -85,7 +86,7 @@ func authenticateRegisterProof(init RegisterInit, challenge Challenge, relayIden
 	if err != nil {
 		return SenderAuthority{}, err
 	}
-	if !ed25519.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
+	if !senderauth.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
 		return SenderAuthority{}, ErrProof
 	}
 	encoded, err := init.MarshalBinary()
@@ -154,7 +155,7 @@ func authenticateStopProof(init StopInit, challenge Challenge, proof StopProof, 
 	if err != nil {
 		return StopAuthority{}, err
 	}
-	if !ed25519.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
+	if !senderauth.Verify(publicKey(proof.SenderPublicKey), preimage, proof.Signature[:]) {
 		return StopAuthority{}, ErrProof
 	}
 	encoded, err := init.MarshalBinary()

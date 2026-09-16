@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { describe, expect, it } from 'vitest'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import type { ChannelState, FrameChannel } from '../../src/contracts/channel'
@@ -585,7 +586,7 @@ function shareDescriptor(senderPublicKey: Uint8Array<ArrayBuffer>): V2ShareDescr
     syntheticRootId: 'root-21',
     chunkSize: 65_536,
     capabilities: 0n,
-    senderPublicKey: senderPublicKey.slice(),
+    sender: createEd25519Verifier(senderPublicKey.slice()),
     createdAtSeconds: 1n,
     pathPolicy: V2_PATH_POLICY,
   })

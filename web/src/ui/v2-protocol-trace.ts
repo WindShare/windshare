@@ -1,9 +1,10 @@
+import { projectCorrelationV1 } from '../diagnostics/export/correlation-v1'
 import { projectConnectionTrace } from '../diagnostics/trace/connection-payload'
 import { projectContentScheduling } from '../diagnostics/trace/content-scheduling'
 import { projectProtocolErrorContentV2 } from '../diagnostics/export/protocol-error-v2'
 import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-payload'
 import { formatDiagnosticText } from '../security/diagnostic-formatter'
-import type { V2LeaseRetirementTraceEvent, V2ProtocolTraceEvent } from '../session/v2-diagnostics'
+import type { V2LeaseRetirementTraceEvent, V2ProtocolTraceEvent, V2SenderVerificationTraceEvent } from '../session/v2-diagnostics'
 import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../diagnostics/trace/model'
 import { correlatedObservation, decimal, requiredCorrelation } from '../diagnostics/export/trace-observation'
 
@@ -17,6 +18,7 @@ export function projectProtocolTraceEvent(
   event: V2ProtocolTraceEvent,
 ): TraceEventObservationV2 {
   if (event.eventName === 'connection_recovery' || event.eventName === 'relay_heartbeat') return projectConnectionTrace(event)
+  if (event.eventName === 'sender_verification') return projectSenderVerification(event)
   const correlation = requiredCorrelation(event.correlation)
   if (event.eventName === 'lease_retirement') return projectLeaseRetirement(event)
   if (event.eventName === 'request_scheduling') {
@@ -138,4 +140,16 @@ function projectLeaseRetirement(event: V2LeaseRetirementTraceEvent): TraceEventO
     })
   }
   return correlatedObservation(event.eventName, correlation, { ...identity, transition: event.transition })
+}
+
+function projectSenderVerification(event: V2SenderVerificationTraceEvent): TraceEventObservationV2 {
+  const correlation = projectCorrelationV1(event.correlation)
+  return {
+    eventName: event.eventName,
+    ...(correlation === undefined ? {} : { correlation }),
+    payload: {
+      verifier_id: decimal(event.verifierId), share_id: event.shareId,
+      backend: event.backend, transition: event.transition, reason: event.reason,
+    },
+  }
 }

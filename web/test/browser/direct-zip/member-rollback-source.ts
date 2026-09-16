@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../../src/crypto/ed25519'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../../src/catalog/v2-records'
 import { FileGeometry } from '../../../src/content/geometry'
 import type { V2BlockRangeReader } from '../../../src/content/v2-broker'
@@ -28,7 +29,7 @@ export function memberRollbackSource(rootId: string, mode: MemberRollbackRevisio
   const descriptor: V2ShareDescriptor = {
     wireVersion: 2, suite: 2, shareInstance: bytesId(3), shareInstanceId: textId(3),
     syntheticRoot: bytesId(2), syntheticRootId: rootId, chunkSize: MEMBER_ROLLBACK_BLOCK_BYTES,
-    capabilities: 7n, senderPublicKey: new Uint8Array(32).fill(1), createdAtSeconds: 1n,
+    capabilities: 7n, sender: createEd25519Verifier(new Uint8Array(32).fill(1)), createdAtSeconds: 1n,
     pathPolicy: V2_PATH_POLICY,
   }
   const root = { directoryId: rootId, generation: textId(7),

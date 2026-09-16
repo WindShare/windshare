@@ -136,7 +136,7 @@ export class V2SessionLane {
             direction: 1,
             sequence: opened.sequence,
           },
-          this.#descriptor.senderPublicKey,
+          this.#descriptor.sender,
         )
         await this.#router.route(
           message.data

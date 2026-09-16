@@ -1,5 +1,5 @@
 import { concatBytes, copyBytes, encodeUint32, equalBytes } from '../crypto/bytes'
-import { verifyEd25519Signature } from '../crypto/curve25519'
+import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
 import {
@@ -161,15 +161,15 @@ async function hmacSha256(
 }
 
 async function verifyEd25519(
-  senderPublicKey: Uint8Array,
+  sender: Ed25519Verifier,
   preimage: Uint8Array,
   signature: Uint8Array,
 ): Promise<boolean> {
-  if (senderPublicKey.byteLength !== 32 || signature.byteLength !== 64) {
+  if (signature.byteLength !== 64) {
     throw new V2LaneCodecError('input', 'Ed25519 verification material has an invalid width')
   }
   try {
-    return await verifyEd25519Signature(senderPublicKey, preimage, signature)
+    return await sender.verify(preimage, signature)
   } catch (cause) {
     throw new V2LaneCodecError('signature', 'Unable to verify lane response signature', {
       cause,
@@ -268,7 +268,7 @@ async function laneResponsePreimage(
 export async function verifyV2LaneAccept(
   encoded: Uint8Array,
   hello: Uint8Array,
-  senderPublicKey: Uint8Array,
+  sender: Ed25519Verifier,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (
@@ -285,7 +285,7 @@ export async function verifyV2LaneAccept(
   const preimage = await laneResponsePreimage(LANE_ACCEPT_DOMAIN, body, runtime)
   if (
     !(await verifyEd25519(
-      senderPublicKey,
+      sender,
       preimage,
       encoded.subarray(V2_LANE_ACCEPT_BODY_BYTES),
     ))
@@ -330,7 +330,7 @@ export async function v2LaneRejectBody(
 export async function verifyV2LaneReject(
   encoded: Uint8Array,
   hello: Uint8Array,
-  senderPublicKey: Uint8Array,
+  sender: Ed25519Verifier,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<V2LaneRejection> {
   if (
@@ -362,7 +362,7 @@ export async function verifyV2LaneReject(
   const preimage = await laneResponsePreimage(LANE_REJECT_DOMAIN, body, runtime)
   if (
     !(await verifyEd25519(
-      senderPublicKey,
+      sender,
       preimage,
       encoded.subarray(V2_LANE_REJECT_BODY_BYTES),
     ))
@@ -379,20 +379,20 @@ type V2LaneResponseState = 'pending' | 'verifying' | 'settled'
 // valid but replayed accept/reject as a second channel decision.
 export class V2LaneResponseAuthority {
   readonly #hello: Uint8Array<ArrayBuffer>
-  readonly #senderPublicKey: Uint8Array<ArrayBuffer>
+  readonly #sender: Ed25519Verifier
   readonly #runtime: CryptoRuntime
   #state: V2LaneResponseState = 'pending'
 
   constructor(
     hello: Uint8Array,
-    senderPublicKey: Uint8Array,
+    sender: Ed25519Verifier,
     runtime: CryptoRuntime = defaultCryptoRuntime(),
   ) {
-    if (hello.byteLength !== V2_LANE_HELLO_BYTES || senderPublicKey.byteLength !== 32) {
+    if (hello.byteLength !== V2_LANE_HELLO_BYTES) {
       throw new V2LaneCodecError('input', 'lane response authority has invalid identity widths')
     }
     this.#hello = hello.slice()
-    this.#senderPublicKey = senderPublicKey.slice()
+    this.#sender = sender
     this.#runtime = runtime
   }
 
@@ -401,7 +401,7 @@ export class V2LaneResponseAuthority {
       verifyV2LaneAccept(
         encoded,
         this.#hello,
-        this.#senderPublicKey,
+        this.#sender,
         this.#runtime,
       ),
     )
@@ -412,7 +412,7 @@ export class V2LaneResponseAuthority {
       verifyV2LaneReject(
         encoded,
         this.#hello,
-        this.#senderPublicKey,
+        this.#sender,
         this.#runtime,
       ),
     )

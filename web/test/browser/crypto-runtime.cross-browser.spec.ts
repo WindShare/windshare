@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { createCipheriv, createHash, generateKeyPairSync, sign } from 'node:crypto'
 import { expect, test } from '@playwright/test'
 import { BROWSER_CONTRACT_HOST_PATH } from './contract-host'
@@ -17,6 +18,8 @@ test('production curve boundary works with the active browser capabilities', asy
     async ({ publicKeyHex, signatureHex }) => {
       const curvePath = '/src/crypto/curve25519.ts'
       const curves = await import(curvePath) as typeof import('../../src/crypto/curve25519')
+      const verifierPath = '/src/crypto/ed25519.ts'
+      const verifiers = await import(verifierPath) as typeof import('../../src/crypto/ed25519')
       const left = await curves.createX25519KeyAgreement()
       const right = await curves.createX25519KeyAgreement()
       const leftPublic = left.publicKey
@@ -29,14 +32,13 @@ test('production curve boundary works with the active browser capabilities', asy
 
       const publicKey = fromHex(publicKeyHex)
       const signature = fromHex(signatureHex)
-      const validSignature = await curves.verifyEd25519Signature(
-        publicKey,
+      const sender = verifiers.createEd25519Verifier(publicKey)
+      const validSignature = await sender.verify(
         new Uint8Array(),
         signature,
       )
       signature[0] = signature[0]! ^ 1
-      const mutatedSignature = await curves.verifyEd25519Signature(
-        publicKey,
+      const mutatedSignature = await sender.verify(
         new Uint8Array(),
         signature,
       )
@@ -92,24 +94,25 @@ test('opens committed blocks even when native Ed25519 rejects valid signatures',
   const result = await page.evaluate(async ({ publicKey, key, encodedObject, messageBytes, fill }) => {
     const objectPath = '/src/crypto/sender-object.ts'
     const objects = await import(objectPath) as typeof import('../../src/crypto/sender-object')
+    const verifierPath = '/src/crypto/ed25519.ts'
+    const verifiers = await import(verifierPath) as typeof import('../../src/crypto/ed25519')
     const publicBytes = Uint8Array.from(publicKey)
     const content = Uint8Array.from(atob(encodedObject), character => character.charCodeAt(0))
     const share = new Uint8Array(16).fill(1)
     const file = new Uint8Array(16).fill(2)
     const revision = new Uint8Array(16).fill(3)
     const binding = objects.createBlockRecordObjectBinding(share, file, revision, 9n, messageBytes)
-    const originalVerify = crypto.subtle.verify
     let nativeEd25519Calls = 0
-    crypto.subtle.verify = async function (algorithm, key, signature, data) {
-      const name = typeof algorithm === 'string' ? algorithm : algorithm.name
-      if (name === 'Ed25519') {
-        nativeEd25519Calls += 1
-        return false
-      }
-      return originalVerify.call(this, algorithm, key, signature, data)
-    }
-    try {
-      const opened = await objects.openSenderObject(binding, Uint8Array.from(key), publicBytes, content)
+    const runtime = { subtle: new Proxy(crypto.subtle, {
+      get(target, property) {
+        if (property === 'verify') return async () => { nativeEd25519Calls += 1; return false }
+        const value = Reflect.get(target, property) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) }
+    const sender = verifiers.createEd25519Verifier(publicBytes, { runtime })
+    {
+      const opened = await objects.openSenderObject(binding, Uint8Array.from(key), sender, content)
       const signatureInput = await objects.senderObjectSignaturePreimage(binding, content.subarray(0, -64))
       const changedContent = content.slice()
       changedContent[changedContent.length - 65] = changedContent[changedContent.length - 65]! ^ 1
@@ -121,7 +124,7 @@ test('opens committed blocks even when native Ed25519 rejects valid signatures',
         [binding, changedContent], [binding, changedSignature], [wrongIdentity, content],
       ] as const) {
         try {
-          await objects.verifySenderObject(bound, publicBytes, encoded)
+          await objects.verifySenderObject(bound, sender, encoded)
           rejectionKinds.push('accepted')
         } catch (cause) {
           if (!(cause instanceof objects.SenderObjectError)) throw cause
@@ -134,8 +137,6 @@ test('opens committed blocks even when native Ed25519 rejects valid signatures',
         rejectionKinds,
         nativeEd25519Calls,
       }
-    } finally {
-      crypto.subtle.verify = originalVerify
     }
   }, {
     publicKey: [...Buffer.from(publicKeyJwk.x, 'base64url')],
@@ -144,10 +145,45 @@ test('opens committed blocks even when native Ed25519 rejects valid signatures',
     messageBytes: BLOCK_SIGNATURE_MESSAGE_BYTES,
     fill: BLOCK_SIGNATURE_MESSAGE_FILL,
   })
+  expect(result.nativeEd25519Calls).toBeLessThanOrEqual(1)
   expect(result).toEqual({
     valid: true,
     signatureInput: [...preimage],
     rejectionKinds: ['signature', 'signature', 'signature'],
-    nativeEd25519Calls: 0,
+    nativeEd25519Calls: expect.any(Number),
   })
+})
+
+test('native and portable backends enforce the same frozen sender acceptance rules', async ({ page }) => {
+  const fixture = JSON.parse(readFileSync(
+    new URL('../../../core/testvectors/ed25519-acceptance.json', import.meta.url), 'utf8',
+  )) as { cases: Array<{ name: string; publicKeyHex: string; messageHex: string; signatureHex: string; accepted: boolean }> }
+  await page.goto(BROWSER_CONTRACT_HOST_PATH)
+  const results = await page.evaluate(async cases => {
+    const modulePath = '/src/crypto/ed25519.ts'
+    const { createEd25519Verifier } = await import(modulePath) as typeof import('../../src/crypto/ed25519')
+    const portable = { subtle: new Proxy(crypto.subtle, {
+      get(target, property) {
+        if (property === 'importKey') return async () => { throw new DOMException('', 'NotSupportedError') }
+        const value = Reflect.get(target, property) as unknown
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    }) }
+    const fromHex = (hex: string) => Uint8Array.from(hex.match(/../g) ?? [], byte => Number.parseInt(byte, 16))
+    const results = []
+    for (const row of cases) {
+      for (const runtime of [{ subtle: crypto.subtle }, portable]) {
+        let accepted = false
+        try {
+          accepted = await createEd25519Verifier(fromHex(row.publicKeyHex), { runtime })
+            .verify(fromHex(row.messageHex), fromHex(row.signatureHex))
+        } catch { /* Malformed identities fail before a backend can authenticate them. */ }
+        results.push({ name: row.name, accepted })
+      }
+    }
+    return results
+  }, fixture.cases)
+  expect(results).toEqual(fixture.cases.flatMap(row => [
+    { name: row.name, accepted: row.accepted }, { name: row.name, accepted: row.accepted },
+  ]))
 })
