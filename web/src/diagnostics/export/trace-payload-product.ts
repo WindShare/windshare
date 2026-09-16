@@ -1,3 +1,4 @@
+import { PROJECTION_DISCOVERY_STATES } from '../trace/model'
 import {
   RETAINED_ACTION_TRANSITIONS,
   RETAINED_ACTIONS,
@@ -145,9 +146,7 @@ export function validateProjection(payload: UnknownRecord): void {
       ], [], 'projection refined payload')
       decimalUint64(payload.projection_epoch, 'projection epoch')
       member(payload.shape_proof, PROJECTION_SHAPE_PROOFS, 'projection shape proof')
-      member(payload.discovery_state,
-        ['idle', 'discovering', 'retryable_failure', 'complete'],
-        'projection discovery state')
+      member(payload.discovery_state, PROJECTION_DISCOVERY_STATES, 'projection discovery state')
       decimalFields(payload, [
         'file_count_lower_bound', 'directory_count_lower_bound', 'byte_count_lower_bound',
         'unsettled_target_count',
