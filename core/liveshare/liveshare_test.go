@@ -21,6 +21,7 @@ import (
 	"github.com/windshare/windshare/core/internal/testoutputroot"
 	"github.com/windshare/windshare/core/link"
 	"github.com/windshare/windshare/core/osfs"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
 	"github.com/windshare/windshare/core/session/sessionruntime"
@@ -259,7 +260,7 @@ func TestReceiverRuntimeResourcesDestroySecretsAfterLastLease(t *testing.T) {
 	privateKey := ed25519.NewKeyFromSeed(bytes.Repeat([]byte{3}, ed25519.SeedSize))
 	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
 		ShareInstance: share, CatalogKey: bytes.Repeat([]byte{4}, 32),
-		SenderPublicKey: privateKey.Public().(ed25519.PublicKey),
+		Sender: checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -487,4 +488,13 @@ func (reader *budgetReader) Read(destination []byte) (int, error) {
 		return count, io.ErrUnexpectedEOF
 	}
 	return count, nil
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

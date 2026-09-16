@@ -334,11 +334,11 @@ func NewServerHello(
 	return hello, nil
 }
 
-func ParseServerHello(encoded []byte, client ClientHello, senderVerificationKey ed25519.PublicKey) (ServerHello, error) {
+func ParseServerHello(encoded []byte, client ClientHello, sender *senderauth.Verifier) (ServerHello, error) {
 	if len(encoded) != ServerHelloSize || !client.valid {
 		return ServerHello{}, fmt.Errorf("%w: got %d bytes", ErrServerHelloMalformed, len(encoded))
 	}
-	if len(senderVerificationKey) != ed25519.PublicKeySize {
+	if !sender.Valid() {
 		return ServerHello{}, ErrHandshakeInput
 	}
 	if string(encoded[:len(serverHelloMagic)]) != serverHelloMagic {
@@ -356,7 +356,7 @@ func ParseServerHello(encoded []byte, client ClientHello, senderVerificationKey 
 	body := encoded[:ServerHelloBodySize]
 	bodyDigest := sha256.Sum256(body)
 	preimage := append([]byte(serverHelloDomain), bodyDigest[:]...)
-	if !senderauth.Verify(senderVerificationKey, preimage, encoded[ServerHelloBodySize:]) {
+	if !sender.Verify(preimage, encoded[ServerHelloBodySize:]) {
 		return ServerHello{}, ErrServerHelloSignature
 	}
 

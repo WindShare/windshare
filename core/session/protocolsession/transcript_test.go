@@ -84,7 +84,7 @@ func TestTranscriptMatchesGoldenSessionVector(t *testing.T) {
 
 	senderVerificationKey := vectorSenderVerificationKey(t)
 	serverEncoded := decodeB64(t, vector.ServerHelloB64)
-	server, err := ParseServerHello(serverEncoded, parsedClient, senderVerificationKey)
+	server, err := ParseServerHello(serverEncoded, parsedClient, checkedSender(t, senderVerificationKey))
 	if err != nil {
 		t.Fatalf("parse server hello: %v", err)
 	}
@@ -155,7 +155,7 @@ func TestServerHelloBuilderAndParserBindClientAndSigningKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build server hello: %v", err)
 	}
-	parsed, err := ParseServerHello(server.Encoded(), client, signingKey.Public().(ed25519.PublicKey))
+	parsed, err := ParseServerHello(server.Encoded(), client, checkedSender(t, signingKey.Public().(ed25519.PublicKey)))
 	if err != nil {
 		t.Fatalf("parse server hello: %v", err)
 	}
@@ -170,14 +170,14 @@ func TestServerHelloBuilderAndParserBindClientAndSigningKey(t *testing.T) {
 		t.Fatalf("tampered client = (%v,%v), want proof rejection", wrongClient.valid, err)
 	}
 	wrongSigningKey := ed25519.NewKeyFromSeed(sequentialBytes(0x21, ed25519.SeedSize)).Public().(ed25519.PublicKey)
-	if _, err := ParseServerHello(server.Encoded(), client, wrongSigningKey); !errors.Is(err, ErrServerHelloSignature) {
+	if _, err := ParseServerHello(server.Encoded(), client, checkedSender(t, wrongSigningKey)); !errors.Is(err, ErrServerHelloSignature) {
 		t.Fatalf("wrong signing key: got %v", err)
 	}
 	otherClient, err := NewClientHello(share, receiver, sequentialBytes(0x81, HandshakeNonceBytes), receiverPrivate.PublicKey(), authKey)
 	if err != nil {
 		t.Fatalf("build other client: %v", err)
 	}
-	if _, err := ParseServerHello(server.Encoded(), otherClient, signingKey.Public().(ed25519.PublicKey)); !errors.Is(err, ErrServerHelloMalformed) {
+	if _, err := ParseServerHello(server.Encoded(), otherClient, checkedSender(t, signingKey.Public().(ed25519.PublicKey))); !errors.Is(err, ErrServerHelloMalformed) {
 		t.Fatalf("server/client transcript mismatch: got %v", err)
 	}
 	if _, err := DeriveReceiverSession(receiverPrivate, authKey, otherClient, server); !errors.Is(err, ErrHandshakeInput) {
@@ -243,23 +243,23 @@ func TestTranscriptRejectsMalformedAndUnboundInputs(t *testing.T) {
 		}, ErrClientHelloMalformed},
 		{"short auth key", func() error { _, err := parseClientHello(client.Encoded(), share, authKey[:31]); return err }, ErrKeyLength},
 		{"short server", func() error {
-			_, err := ParseServerHello(server.Encoded()[:ServerHelloSize-1], client, signingKey.Public().(ed25519.PublicKey))
+			_, err := ParseServerHello(server.Encoded()[:ServerHelloSize-1], client, checkedSender(t, signingKey.Public().(ed25519.PublicKey)))
 			return err
 		}, ErrServerHelloMalformed},
 		{"short sender verification key", func() error {
-			_, err := ParseServerHello(server.Encoded(), client, signingKey.Public().(ed25519.PublicKey)[:ed25519.PublicKeySize-1])
+			_, err := ParseServerHello(server.Encoded(), client, nil)
 			return err
 		}, ErrHandshakeInput},
 		{"wrong server magic", func() error {
 			raw := server.Encoded()
 			raw[0] ^= 1
-			_, err := ParseServerHello(raw, client, signingKey.Public().(ed25519.PublicKey))
+			_, err := ParseServerHello(raw, client, checkedSender(t, signingKey.Public().(ed25519.PublicKey)))
 			return err
 		}, ErrServerHelloMalformed},
 		{"wrong server version", func() error {
 			raw := server.Encoded()
 			raw[len(serverHelloMagic)]++
-			_, err := ParseServerHello(raw, client, signingKey.Public().(ed25519.PublicKey))
+			_, err := ParseServerHello(raw, client, checkedSender(t, signingKey.Public().(ed25519.PublicKey)))
 			return err
 		}, ErrUnsupportedVersion},
 		{"signed zero lane", func() error {
@@ -269,7 +269,7 @@ func TestTranscriptRejectsMalformedAndUnboundInputs(t *testing.T) {
 			digest := sha256.Sum256(raw[:ServerHelloBodySize])
 			signature := ed25519.Sign(signingKey, append([]byte(serverHelloDomain), digest[:]...))
 			copy(raw[ServerHelloBodySize:], signature)
-			_, err := ParseServerHello(raw, client, signingKey.Public().(ed25519.PublicKey))
+			_, err := ParseServerHello(raw, client, checkedSender(t, signingKey.Public().(ed25519.PublicKey)))
 			return err
 		}, ErrServerHelloMalformed},
 		{"zero lane", func() error {

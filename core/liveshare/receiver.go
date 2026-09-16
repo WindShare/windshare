@@ -2,7 +2,6 @@ package liveshare
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -62,14 +61,14 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	if err != nil {
 		return nil, err
 	}
-	descriptor, err := catalogflow.OpenDescriptor(
+	opened, err := catalogflow.OpenDescriptor(
 		config.DescriptorObject, capability.PKHash, shareIDRaw, descriptorKey,
 	)
 	clear(descriptorKey)
 	if err != nil {
 		return nil, err
 	}
-	publicKey := ed25519.PublicKey(descriptor.SenderPublicKey())
+	descriptor, sender := opened.Descriptor, opened.Sender
 	keyTree, err := content.NewKeyTree(capability.ReadSecret, descriptor.ShareInstance())
 	if err != nil {
 		return nil, err
@@ -88,7 +87,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 		return fail(err)
 	}
 	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: descriptor.ShareInstance(), CatalogKey: catalogKey.Bytes(), SenderPublicKey: publicKey,
+		ShareInstance: descriptor.ShareInstance(), CatalogKey: catalogKey.Bytes(), Sender: sender,
 	})
 	catalogKey.Destroy()
 	if err != nil {
@@ -96,7 +95,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	}
 	resources = newReceiverRuntimeResources(keyTree, verifier)
 	opener, err := records.NewOpener(records.OpenerConfig{
-		ShareInstance: descriptor.ShareInstance(), Keys: keyTree, VerificationKey: publicKey,
+		ShareInstance: descriptor.ShareInstance(), Keys: keyTree, Sender: sender,
 	})
 	if err != nil {
 		return fail(err)
@@ -125,7 +124,7 @@ func PrepareReceiver(config ReceiverConfig) (*PreparedReceiver, error) {
 	sessionAuthKey.Destroy()
 	factory, err := sessionruntime.NewReceiverFactory(sessionruntime.ReceiverFactoryConfig{
 		ContentRoutePolicy: config.ContentRoutePolicy,
-		Descriptor:         descriptor, SessionAuthKey: authKey, SenderPublicKey: publicKey,
+		Descriptor:         descriptor, SessionAuthKey: authKey, Sender: sender,
 		CatalogVerifier: verifier, RecordOpener: opener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: config.Random, CatalogProgress: config.CatalogProgress, PeerControls: config.PeerControls,

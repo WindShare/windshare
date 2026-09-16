@@ -17,6 +17,7 @@ import (
 	"github.com/windshare/windshare/core/content"
 	"github.com/windshare/windshare/core/content/records"
 	"github.com/windshare/windshare/core/content/revisioncapacity"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -212,7 +213,7 @@ func newRuntimeFixture(t *testing.T, blocks int) runtimeFixture {
 		t.Fatal(err)
 	}
 	opener, _ := records.NewOpener(records.OpenerConfig{
-		ShareInstance: share, Keys: keys, VerificationKey: privateKey.Public().(ed25519.PublicKey),
+		ShareInstance: share, Keys: keys, Sender: checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
 	})
 	service, err := NewSenderService(SenderServiceConfig{
 		Store: store, SessionCapacity: sessionCapacity, Sealer: sealer, Cache: cache,
@@ -940,4 +941,13 @@ func TestBlockHandlerKeepsRevisionFailuresOutOfTheBlockErrorDomain(t *testing.T)
 	case <-time.After(time.Second):
 		t.Fatal("unknown lease produced no operation error")
 	}
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

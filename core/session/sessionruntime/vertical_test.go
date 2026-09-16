@@ -20,6 +20,7 @@ import (
 	framechannel "github.com/windshare/windshare/core/framechannel"
 	"github.com/windshare/windshare/core/internal/keyderiv"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/catalogflow"
 	"github.com/windshare/windshare/core/session/contentflow"
 	"github.com/windshare/windshare/core/session/protocolsession"
@@ -175,7 +176,7 @@ func TestDescriptorObjectBootstrapAndFactoryValidation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open descriptor: %v", err)
 	}
-	if opened.ShareInstance() != fixture.share || opened.SyntheticRoot() != fixture.syntheticRoot {
+	if opened.Descriptor.ShareInstance() != fixture.share || opened.Descriptor.SyntheticRoot() != fixture.syntheticRoot {
 		t.Fatal("descriptor identity changed")
 	}
 	tampered := bytes.Clone(fixture.descriptorObject)
@@ -184,7 +185,7 @@ func TestDescriptorObjectBootstrapAndFactoryValidation(t *testing.T) {
 		t.Fatal("tampered descriptor accepted")
 	}
 	bad := fixture.receiverConfig
-	bad.SenderPublicKey = ed25519.PublicKey(bytes.Repeat([]byte{9}, ed25519.PublicKeySize))
+	bad.Sender = checkedSender(t, ed25519.NewKeyFromSeed(bytes.Repeat([]byte{9}, ed25519.SeedSize)).Public().(ed25519.PublicKey))
 	if _, err := NewReceiverFactory(bad); !errors.Is(err, ErrRuntimeConfig) {
 		t.Fatalf("bad receiver factory error = %v", err)
 	}
@@ -567,6 +568,7 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 	seed := bytes.Repeat([]byte{7}, ed25519.SeedSize)
 	privateKey := ed25519.NewKeyFromSeed(seed)
 	publicKey := privateKey.Public().(ed25519.PublicKey)
+	sender := checkedSender(t, publicKey)
 	pkHash, err := link.SenderKeyHash(publicKey)
 	if err != nil {
 		t.Fatal(err)
@@ -679,7 +681,7 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 		NonceSource: &deterministicReader{next: 13},
 	})
 	recordOpener, _ := records.NewOpener(records.OpenerConfig{
-		ShareInstance: fixture.share, Keys: keyTree, VerificationKey: publicKey,
+		ShareInstance: fixture.share, Keys: keyTree, Sender: sender,
 	})
 	geometry, _ := content.NewFileGeometry(uint64(len(fixture.fileData)), catalog.MinChunkSize)
 	revisionDescriptor, _ := content.NewFileRevisionDescriptor(
@@ -728,13 +730,13 @@ func newVerticalFixture(t *testing.T) *verticalFixture {
 		t.Fatal(err)
 	}
 	verifier, _ := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: catalogKey, SenderPublicKey: publicKey,
+		ShareInstance: fixture.share, CatalogKey: catalogKey, Sender: sender,
 	})
 	processReassembly, _ := contentflow.NewReassemblyAccount("process", contentflow.ReassemblyLimits{Bytes: 1 << 30, Records: 256})
 	shareReassembly, _ := contentflow.NewReassemblyAccount("share", contentflow.ReassemblyLimits{Bytes: 256 << 20, Records: 64})
 	plaintext, _ := transfer.NewPlaintextBudget(256 << 20)
 	fixture.receiverConfig = ReceiverFactoryConfig{
-		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, SenderPublicKey: publicKey,
+		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, Sender: sender,
 		CatalogVerifier: verifier, RecordOpener: recordOpener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: &deterministicReader{next: 19},
@@ -1056,4 +1058,13 @@ type verticalBoundPeerAuthority struct {
 
 func (verticalBoundPeerAuthority) PeerAttemptBinding() protocolsession.PeerAttemptBinding {
 	return protocolsession.PeerAttemptBinding{PeerPathID: [16]byte{1}, AttemptID: [16]byte{2}, AttemptSequence: 1}
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

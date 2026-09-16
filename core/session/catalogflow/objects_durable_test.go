@@ -14,6 +14,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -98,8 +99,11 @@ func TestDescriptorAndControlCodecsAuthenticateCanonicalValues(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opened.ShareInstance() != descriptor.ShareInstance() || opened.SyntheticRoot() != descriptor.SyntheticRoot() ||
-		!bytes.Equal(opened.SenderPublicKey(), descriptor.SenderPublicKey()) {
+	if !bytes.Equal(opened.Sender.PublicKey(), descriptor.SenderPublicKey()) {
+		t.Fatal("bootstrap lost its authenticated sender verifier")
+	}
+	if opened.Descriptor.ShareInstance() != descriptor.ShareInstance() || opened.Descriptor.SyntheticRoot() != descriptor.SyntheticRoot() ||
+		!bytes.Equal(opened.Descriptor.SenderPublicKey(), descriptor.SenderPublicKey()) {
 		t.Fatal("authenticated descriptor changed identity")
 	}
 	tampered := bytes.Clone(object)
@@ -272,7 +276,7 @@ func TestSealedPageObjectsVerifyAndCacheEvictionCannotAffectAddressedServing(t *
 		t.Fatalf("cached page object changed: err=%v", err)
 	}
 	verifier, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, SenderPublicKey: fixture.publicKey,
+		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -376,7 +380,7 @@ func TestAddressedPageServiceUsesDurableBackendAfterObjectCacheEviction(t *testi
 		t.Fatalf("durable addressed serving changed object: err=%v scans=%d", err, scans.Load())
 	}
 	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, SenderPublicKey: fixture.publicKey,
+		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
 	})
 	if _, err := verifier.Verify(context.Background(), fixture.share, request, served); err != nil {
 		t.Fatal(err)
@@ -518,7 +522,7 @@ func TestDurableFailureObjectSurvivesCacheEvictionAndRestartWithoutReseal(t *tes
 		t.Fatalf("restarted service changed failure bytes: %v", err)
 	}
 	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, SenderPublicKey: fixture.publicKey,
+		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
 	})
 	verified, err := verifier.Verify(context.Background(), fixture.share, request, served)
 	if err != nil || verified.Failure == nil || verified.Failure.AttemptID != firstFailure.AttemptID {
@@ -744,7 +748,7 @@ func TestHostileCatalogObjectsAndWireFieldsFailClosed(t *testing.T) {
 	}
 
 	verifier, _ := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance: fixture.share, CatalogKey: fixture.key, SenderPublicKey: fixture.publicKey,
+		ShareInstance: fixture.share, CatalogKey: fixture.key, Sender: checkedSender(t, fixture.publicKey),
 	})
 	if _, err := verifier.Verify(cancelled, fixture.share, request, []byte{1}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancelled verification = %v", err)
@@ -818,4 +822,13 @@ func mustCBOR(t *testing.T, mode cborMarshaler, value any) []byte {
 func mustRawCBOR(t *testing.T, value any) []byte {
 	t.Helper()
 	return mustCBOR(t, catalogWireEnc, value)
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

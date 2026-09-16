@@ -120,7 +120,7 @@ func TestReceiverFactoryClosePreservesConnectedRuntime(t *testing.T) {
 	defer receiver.Close()
 	factory.Close()
 	factory.mu.Lock()
-	retainedDependencies := len(factory.publicKey) != 0 || !factory.descriptor.ShareInstance().IsZero() ||
+	retainedDependencies := factory.sender != nil || !factory.descriptor.ShareInstance().IsZero() ||
 		factory.verifier != nil || factory.opener != nil || factory.processReassembly != nil ||
 		factory.shareReassembly != nil || factory.plaintextProcess != nil || factory.random != nil ||
 		factory.admissionContext != nil || factory.cancelAdmissions != nil || factory.instances != nil ||
@@ -180,5 +180,27 @@ func TestReceiverFactoryNilMethods(t *testing.T) {
 	nilFactory.WaitClosed()
 	if ctx, cancel, ok := nilFactory.beginAdmission(context.Background()); ok || ctx != nil || cancel != nil {
 		t.Fatalf("nil receiver factory admitted context: ctx=%v, cancelNil=%v, ok=%v", ctx, cancel == nil, ok)
+	}
+}
+
+func TestReceiverSenderVerificationSurvivesSiblingCloseAndReconnect(t *testing.T) {
+	fixture := newVerticalFixture(t)
+	firstSender, firstReceiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	t.Cleanup(firstSender.Close)
+	t.Cleanup(firstReceiver.Close)
+	secondSender, secondReceiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	t.Cleanup(secondSender.Close)
+	t.Cleanup(secondReceiver.Close)
+
+	firstReceiver.Close()
+	firstSender.Close()
+	if _, err := secondReceiver.RequestLane(t.Context(), 0); err != nil {
+		t.Fatalf("sibling close invalidated sender verification: %v", err)
+	}
+	thirdSender, thirdReceiver := connectVerticalPair(t, fixture.senderFactory, fixture.receiverFactory)
+	t.Cleanup(thirdSender.Close)
+	t.Cleanup(thirdReceiver.Close)
+	if _, err := thirdReceiver.RequestLane(t.Context(), 0); err != nil {
+		t.Fatalf("reconnect lost sender verification: %v", err)
 	}
 }

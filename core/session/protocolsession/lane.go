@@ -166,8 +166,8 @@ func NewLaneAccept(hello LaneHello, senderNonce []byte, senderPrivateKey ed25519
 	return append(body, signature...), nil
 }
 
-func ParseLaneAccept(encoded []byte, hello LaneHello, senderPublicKey ed25519.PublicKey) ([]byte, error) {
-	if len(encoded) != LaneAcceptBytes || !hello.valid || len(senderPublicKey) != ed25519.PublicKeySize || string(encoded[:4]) != laneAcceptMagic || encoded[4] != WireVersion {
+func ParseLaneAccept(encoded []byte, hello LaneHello, sender *senderauth.Verifier) ([]byte, error) {
+	if len(encoded) != LaneAcceptBytes || !hello.valid || !sender.Valid() || string(encoded[:4]) != laneAcceptMagic || encoded[4] != WireVersion {
 		return nil, ErrLaneMalformed
 	}
 	helloDigest := sha256.Sum256(hello.encoded[:])
@@ -176,7 +176,7 @@ func ParseLaneAccept(encoded []byte, hello LaneHello, senderPublicKey ed25519.Pu
 	}
 	body := encoded[:LaneAcceptBodyBytes]
 	digest := sha256.Sum256(body)
-	if !senderauth.Verify(senderPublicKey, append([]byte(laneAcceptDomain), digest[:]...), encoded[LaneAcceptBodyBytes:]) {
+	if !sender.Verify(append([]byte(laneAcceptDomain), digest[:]...), encoded[LaneAcceptBodyBytes:]) {
 		return nil, ErrLaneSignature
 	}
 	return bytes.Clone(body[5+sha256.Size:]), nil
@@ -218,8 +218,8 @@ func NewLaneReject(hello LaneHello, rejection LaneRejection, senderPrivateKey ed
 	return append(body, ed25519.Sign(senderPrivateKey, append([]byte(laneRejectDomain), digest[:]...))...), nil
 }
 
-func ParseLaneReject(encoded []byte, hello LaneHello, senderPublicKey ed25519.PublicKey) (LaneRejection, error) {
-	if len(encoded) != LaneRejectBytes || !hello.valid || len(senderPublicKey) != ed25519.PublicKeySize || string(encoded[:4]) != laneRejectMagic || encoded[4] != WireVersion || encoded[6] != 0 || encoded[7] != 0 {
+func ParseLaneReject(encoded []byte, hello LaneHello, sender *senderauth.Verifier) (LaneRejection, error) {
+	if len(encoded) != LaneRejectBytes || !hello.valid || !sender.Valid() || string(encoded[:4]) != laneRejectMagic || encoded[4] != WireVersion || encoded[6] != 0 || encoded[7] != 0 {
 		return LaneRejection{}, ErrLaneMalformed
 	}
 	code := LaneRejectCode(encoded[5])
@@ -236,7 +236,7 @@ func ParseLaneReject(encoded []byte, hello LaneHello, senderPublicKey ed25519.Pu
 	}
 	body := encoded[:LaneRejectBodyBytes]
 	digest := sha256.Sum256(body)
-	if !senderauth.Verify(senderPublicKey, append([]byte(laneRejectDomain), digest[:]...), encoded[LaneRejectBodyBytes:]) {
+	if !sender.Verify(append([]byte(laneRejectDomain), digest[:]...), encoded[LaneRejectBodyBytes:]) {
 		return LaneRejection{}, ErrLaneSignature
 	}
 	return LaneRejection{Code: code, RetryAfter: retry}, nil

@@ -35,7 +35,7 @@ func TestBlockRecordSignatureCommitsToEverySealedByte(t *testing.T) {
 	if len(preimage) != signatureInputBytes || !ed25519.Verify(publicKey, preimage, object[prefixEnd:]) {
 		t.Fatal("block signature does not authenticate the fixed-size commitment")
 	}
-	opened, err := senderobject.Open(binding, key, publicKey, object)
+	opened, err := senderobject.Open(binding, key, checkedSender(t, publicKey), object)
 	if err != nil || !bytes.Equal(opened, plaintext) {
 		t.Fatalf("open committed block: %v", err)
 	}
@@ -51,7 +51,7 @@ func TestBlockRecordSignatureCommitsToEverySealedByte(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			hostile := bytes.Clone(object)
 			hostile[offset] ^= 1
-			if err := senderobject.Verify(binding, publicKey, hostile); !errors.Is(err, senderobject.ErrSignature) {
+			if err := senderobject.Verify(binding, checkedSender(t, publicKey), hostile); !errors.Is(err, senderobject.ErrSignature) {
 				t.Fatalf("Verify error = %v, want signature rejection", err)
 			}
 		})
@@ -61,7 +61,7 @@ func TestBlockRecordSignatureCommitsToEverySealedByte(t *testing.T) {
 	rawPreimage := append([]byte(string(binding.Domain())+"\x00"), contextHash[:]...)
 	rawPreimage = append(rawPreimage, object[:prefixEnd]...)
 	rawSigned := append(bytes.Clone(object[:prefixEnd]), ed25519.Sign(privateKey, rawPreimage)...)
-	if err := senderobject.Verify(binding, publicKey, rawSigned); !errors.Is(err, senderobject.ErrSignature) {
+	if err := senderobject.Verify(binding, checkedSender(t, publicKey), rawSigned); !errors.Is(err, senderobject.ErrSignature) {
 		t.Fatalf("raw-object signature error = %v", err)
 	}
 }
@@ -93,7 +93,7 @@ func TestBlockRecordCommitmentRejectsEveryIdentityAxis(t *testing.T) {
 		"length":   bind(share, file, revision, blockIndex, dataLength+1),
 	} {
 		t.Run(name, func(t *testing.T) {
-			if err := senderobject.Verify(hostile, publicKey, object); !errors.Is(err, senderobject.ErrSignature) {
+			if err := senderobject.Verify(hostile, checkedSender(t, publicKey), object); !errors.Is(err, senderobject.ErrSignature) {
 				t.Fatalf("Verify error = %v, want identity rejection", err)
 			}
 		})

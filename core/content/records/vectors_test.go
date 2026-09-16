@@ -73,9 +73,9 @@ func TestSenderObjectsMatchFrozenCrossRuntimeVectors(t *testing.T) {
 		t.Fatal(err)
 	}
 	opener, err := NewOpener(OpenerConfig{
-		ShareInstance:   share,
-		Keys:            keys,
-		VerificationKey: privateKey.Public().(ed25519.PublicKey),
+		ShareInstance: share,
+		Keys:          keys,
+		Sender:        checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -305,7 +305,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 	recordOpener, err := records.NewOpener(records.OpenerConfig{
-		ShareInstance: share, Keys: keyTree, VerificationKey: publicKey,
+		ShareInstance: share, Keys: keyTree, Sender: checkedSender(t, publicKey),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -344,7 +344,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: share, CatalogKey: catalogKey, SenderPublicKey: publicKey,
+		ShareInstance: share, CatalogKey: catalogKey, Sender: checkedSender(t, publicKey),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -366,7 +366,7 @@ func newSyntheticCapacityFixture(t *testing.T, fileCount uint64) *syntheticCapac
 		t.Fatal(err)
 	}
 	receiverFactory, err := NewReceiverFactory(ReceiverFactoryConfig{
-		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, SenderPublicKey: publicKey,
+		Descriptor: descriptor, SessionAuthKey: sessionAuthKey, Sender: checkedSender(t, publicKey),
 		CatalogVerifier: verifier, RecordOpener: recordOpener,
 		ReassemblyProcess: processReassembly, ReassemblyShare: shareReassembly, PlaintextProcess: plaintext,
 		Random: &deterministicReader{next: 83},

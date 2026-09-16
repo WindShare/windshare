@@ -123,7 +123,7 @@ func TestCatalogServiceReplaysExactOpaquePageAfterEvictionAndRestart(t *testing.
 		t.Fatalf("durable replay resealed page %d times", recoveredNonces.calls.Load())
 	}
 	verifier, err := catalogflow.NewCatalogObjectVerifier(catalogflow.CatalogObjectVerifierConfig{
-		ShareInstance: share, CatalogKey: catalogKey, SenderPublicKey: publicKey,
+		ShareInstance: share, CatalogKey: catalogKey, Sender: checkedSender(t, publicKey),
 	})
 	if err != nil {
 		t.Fatal(err)

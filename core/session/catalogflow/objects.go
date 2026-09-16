@@ -11,7 +11,7 @@ import (
 	"sync"
 
 	"github.com/windshare/windshare/core/catalog"
-	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -97,32 +97,35 @@ func SealDescriptor(descriptor catalog.ShareDescriptor, config DescriptorObjectC
 	return senderobject.Seal(binding, config.DescriptorKey, config.SenderPrivateKey, config.Nonce, plaintext)
 }
 
-func OpenDescriptor(object []byte, pkHash, shareIDRaw, descriptorKey []byte) (catalog.ShareDescriptor, error) {
+// OpenedDescriptor keeps the authenticated sender identity with the data it
+// authenticated, so all receiver components can share its checked key.
+type OpenedDescriptor struct {
+	Descriptor catalog.ShareDescriptor
+	Sender     *senderauth.Verifier
+}
+
+func OpenDescriptor(object []byte, pkHash, shareIDRaw, descriptorKey []byte) (OpenedDescriptor, error) {
 	binding, err := senderobject.NewDescriptorBinding(pkHash, shareIDRaw)
 	if err != nil {
-		return catalog.ShareDescriptor{}, err
+		return OpenedDescriptor{}, err
 	}
-	var descriptor catalog.ShareDescriptor
-	plaintext, err := senderobject.OpenDescriptorBootstrap(binding, descriptorKey, object, func(plaintext []byte) (ed25519.PublicKey, error) {
-		decoded, decodeErr := decodeShareDescriptor(plaintext)
+	var opened OpenedDescriptor
+	_, err = senderobject.OpenDescriptorBootstrap(binding, descriptorKey, object, func(plaintext []byte) (*senderauth.Verifier, error) {
+		descriptor, decodeErr := decodeShareDescriptor(plaintext)
 		if decodeErr != nil {
 			return nil, decodeErr
 		}
-		publicKey := ed25519.PublicKey(decoded.SenderPublicKey())
-		hash, hashErr := link.SenderKeyHash(publicKey)
-		if hashErr != nil || !bytes.Equal(hash[:], pkHash) {
-			return nil, senderobject.ErrSignature
+		sender, keyErr := senderauth.NewVerifier(ed25519.PublicKey(descriptor.SenderPublicKey()))
+		if keyErr != nil {
+			return nil, keyErr
 		}
-		descriptor = decoded
-		return publicKey, nil
+		opened = OpenedDescriptor{Descriptor: descriptor, Sender: sender}
+		return sender, nil
 	})
 	if err != nil {
-		return catalog.ShareDescriptor{}, err
+		return OpenedDescriptor{}, err
 	}
-	if descriptor.ShareInstance().IsZero() {
-		descriptor, err = decodeShareDescriptor(plaintext)
-	}
-	return descriptor, err
+	return opened, nil
 }
 
 type SealedCatalogStoreConfig struct {
@@ -446,29 +449,29 @@ func (store *SealedCatalogStore) LoadSealedFailure(ctx context.Context, failure 
 }
 
 type CatalogObjectVerifierConfig struct {
-	ShareInstance   catalog.ShareInstance
-	CatalogKey      []byte
-	SenderPublicKey ed25519.PublicKey
+	ShareInstance catalog.ShareInstance
+	CatalogKey    []byte
+	Sender        *senderauth.Verifier
 }
 
-// CatalogObjectVerifier owns cloned verification inputs so receiver teardown
-// can erase its catalog key without mutating capability material held elsewhere.
+// CatalogObjectVerifier owns its catalog secret and shares immutable sender
+// verification state. Teardown must not invalidate other receiver components.
 type CatalogObjectVerifier struct {
 	lifecycle catalogObjectLifecycle
 
-	share     catalog.ShareInstance
-	key       []byte
-	publicKey ed25519.PublicKey
+	share  catalog.ShareInstance
+	key    []byte
+	sender *senderauth.Verifier
 }
 
 func NewCatalogObjectVerifier(config CatalogObjectVerifierConfig) (*CatalogObjectVerifier, error) {
-	if config.ShareInstance.IsZero() || len(config.CatalogKey) != 32 || len(config.SenderPublicKey) != ed25519.PublicKeySize {
+	if config.ShareInstance.IsZero() || len(config.CatalogKey) != 32 || !config.Sender.Valid() {
 		return nil, errors.New("catalog object verifier requires share, key, and sender public key")
 	}
 	return &CatalogObjectVerifier{
 		lifecycle: newCatalogObjectLifecycle(),
 		share:     config.ShareInstance, key: bytes.Clone(config.CatalogKey),
-		publicKey: append(ed25519.PublicKey(nil), config.SenderPublicKey...),
+		sender: config.Sender,
 	}, nil
 }
 
@@ -503,8 +506,7 @@ func (verifier *CatalogObjectVerifier) Destroy() {
 	}
 	clear(verifier.key)
 	verifier.key = nil
-	clear(verifier.publicKey)
-	verifier.publicKey = nil
+	verifier.sender = nil
 	verifier.lifecycle.secretsCleared = true
 }
 
@@ -529,7 +531,7 @@ func (verifier *CatalogObjectVerifier) Verify(
 	}
 	binding, err := senderobject.NewCatalogPageBinding(share.Bytes(), request.DirectoryID().Bytes(), request.PageIndex())
 	if err == nil {
-		if plaintext, openErr := senderobject.Open(binding, verifier.key, verifier.publicKey, object); openErr == nil {
+		if plaintext, openErr := senderobject.Open(binding, verifier.key, verifier.sender, object); openErr == nil {
 			digest := sha256.Sum256(object)
 			page, decodeErr := decodeCatalogPage(plaintext, catalog.PageCommitterFunc(func(catalog.PageCommitInput) (catalog.PageCommitment, error) {
 				return catalog.NewPageCommitment(digest[:])
@@ -548,7 +550,7 @@ func (verifier *CatalogObjectVerifier) Verify(
 	if err != nil {
 		return VerifiedObject{}, err
 	}
-	plaintext, err := senderobject.Open(failureBinding, verifier.key, verifier.publicKey, object)
+	plaintext, err := senderobject.Open(failureBinding, verifier.key, verifier.sender, object)
 	if err != nil {
 		return VerifiedObject{}, err
 	}
