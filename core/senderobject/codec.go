@@ -187,11 +187,11 @@ func Seal(binding Binding, key []byte, signingKey ed25519.PrivateKey, nonce, pla
 	return append(prefix, ed25519.Sign(signingKey, preimage)...), nil
 }
 
-func Verify(binding Binding, verificationKey ed25519.PublicKey, object []byte) error {
+func Verify(binding Binding, sender *senderauth.Verifier, object []byte) error {
 	if err := validateBinding(binding); err != nil {
 		return err
 	}
-	if len(verificationKey) != ed25519.PublicKeySize {
+	if !sender.Valid() {
 		return ErrKey
 	}
 	prefix, signature, _, _, _, err := split(binding, object)
@@ -199,14 +199,14 @@ func Verify(binding Binding, verificationKey ed25519.PublicKey, object []byte) e
 		return err
 	}
 	contextHash := sha256.Sum256(binding.context)
-	if !senderauth.Verify(verificationKey, signaturePreimage(binding.domain, contextHash, prefix), signature) {
+	if !sender.Verify(signaturePreimage(binding.domain, contextHash, prefix), signature) {
 		return ErrSignature
 	}
 	return nil
 }
 
-func Open(binding Binding, key []byte, verificationKey ed25519.PublicKey, object []byte) ([]byte, error) {
-	if err := Verify(binding, verificationKey, object); err != nil {
+func Open(binding Binding, key []byte, sender *senderauth.Verifier, object []byte) ([]byte, error) {
+	if err := Verify(binding, sender, object); err != nil {
 		return nil, err
 	}
 	return decrypt(binding, key, object)
@@ -214,23 +214,23 @@ func Open(binding Binding, key []byte, verificationKey ed25519.PublicKey, object
 
 // OpenDescriptorBootstrap decrypts only to discover the sender key, then checks
 // pkHash and the outer signature before releasing plaintext to the caller.
-func OpenDescriptorBootstrap(binding Binding, key []byte, object []byte, senderKey func([]byte) (ed25519.PublicKey, error)) ([]byte, error) {
-	if binding.domain != DomainDescriptor || senderKey == nil {
+func OpenDescriptorBootstrap(binding Binding, key []byte, object []byte, senderIdentity func([]byte) (*senderauth.Verifier, error)) ([]byte, error) {
+	if binding.domain != DomainDescriptor || senderIdentity == nil {
 		return nil, ErrBinding
 	}
 	plaintext, err := decrypt(binding, key, object)
 	if err != nil {
 		return nil, err
 	}
-	publicKey, err := senderKey(plaintext)
-	if err != nil || len(publicKey) != ed25519.PublicKeySize {
+	sender, err := senderIdentity(plaintext)
+	if err != nil || !sender.Valid() {
 		return nil, ErrKey
 	}
-	hash, err := link.SenderKeyHash(publicKey)
+	hash, err := link.SenderKeyHash(sender.PublicKey())
 	if err != nil || !bytes.Equal(hash[:], binding.context[1:1+link.PKHashBytes]) {
 		return nil, ErrSignature
 	}
-	if err := Verify(binding, publicKey, object); err != nil {
+	if err := Verify(binding, sender, object); err != nil {
 		return nil, err
 	}
 	return plaintext, nil

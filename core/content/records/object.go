@@ -10,6 +10,7 @@ import (
 
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -299,24 +300,24 @@ func (s *Sealer) sealObject(binding senderobject.Binding, key, plaintext []byte)
 }
 
 type OpenerConfig struct {
-	ShareInstance   catalog.ShareInstance
-	Keys            *content.KeyTree
-	VerificationKey ed25519.PublicKey
+	ShareInstance catalog.ShareInstance
+	Keys          *content.KeyTree
+	Sender        *senderauth.Verifier
 }
 
 type Opener struct {
-	share           catalog.ShareInstance
-	keys            *content.KeyTree
-	verificationKey ed25519.PublicKey
+	share  catalog.ShareInstance
+	keys   *content.KeyTree
+	sender *senderauth.Verifier
 }
 
 func NewOpener(config OpenerConfig) (*Opener, error) {
-	if config.ShareInstance.IsZero() || config.Keys == nil || len(config.VerificationKey) != ed25519.PublicKeySize {
+	if config.ShareInstance.IsZero() || config.Keys == nil || !config.Sender.Valid() {
 		return nil, errors.New("content record opener requires share keys and a verification key")
 	}
 	return &Opener{
 		share: config.ShareInstance, keys: config.Keys,
-		verificationKey: append(ed25519.PublicKey(nil), config.VerificationKey...),
+		sender: config.Sender,
 	}, nil
 }
 
@@ -367,7 +368,7 @@ func (o *Opener) OpenBlock(descriptor content.FileRevisionDescriptor, index uint
 }
 
 func (o *Opener) openObject(binding senderobject.Binding, key, object []byte) ([]byte, error) {
-	plaintext, err := senderobject.Open(binding, key, o.verificationKey, object)
+	plaintext, err := senderobject.Open(binding, key, o.sender, object)
 	return plaintext, mapSenderObjectError(err)
 }
 

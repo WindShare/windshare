@@ -59,9 +59,9 @@ type ControlBinding struct {
 // did not substitute for sender-key authority. Its lane binding is fixed at
 // construction; only the opener-authenticated sequence and decoded message vary.
 type SenderControlAuthenticator struct {
-	senderPublicKey ed25519.PublicKey
-	base            ControlBinding
-	semantic        SenderControlSemanticValidator
+	sender   *senderauth.Verifier
+	base     ControlBinding
+	semantic SenderControlSemanticValidator
 }
 
 // PreparedSenderControl contains a fixed-size callback rather than signed bytes.
@@ -76,18 +76,18 @@ type PreparedSenderControl struct {
 }
 
 func NewSenderControlAuthenticator(
-	senderPublicKey ed25519.PublicKey,
+	sender *senderauth.Verifier,
 	base ControlBinding,
 	semantic SenderControlSemanticValidator,
 ) (*SenderControlAuthenticator, error) {
-	if len(senderPublicKey) != ed25519.PublicKeySize {
+	if !sender.Valid() {
 		return nil, ErrControlSigningKey
 	}
 	if err := validateControlBase(base); err != nil {
 		return nil, ErrControlBinding
 	}
 	return &SenderControlAuthenticator{
-		senderPublicKey: append(ed25519.PublicKey(nil), senderPublicKey...), base: base, semantic: semantic,
+		sender: sender, base: base, semantic: semantic,
 	}, nil
 }
 
@@ -231,7 +231,7 @@ func (a *SenderControlAuthenticator) authenticate(
 	binding.Sequence = sequence
 	binding.MessageKind = message.kind
 	binding.OperationID, binding.HasOperationID = message.OperationID()
-	semantic, err := VerifyControlBody(a.senderPublicKey, domain, binding, message.Body())
+	semantic, err := VerifyControlBody(a.sender, domain, binding, message.Body())
 	if err != nil {
 		return InboundAuthenticationResult{}, err
 	}
@@ -295,12 +295,12 @@ func SignControlBody(
 // VerifyControlBody authenticates the exact unsigned wrapper and returns only
 // its canonical semantic value for typed decoding.
 func VerifyControlBody(
-	senderPublicKey ed25519.PublicKey,
+	sender *senderauth.Verifier,
 	domain ControlDomain,
 	binding ControlBinding,
 	canonicalSignedBody []byte,
 ) ([]byte, error) {
-	if len(senderPublicKey) != ed25519.PublicKeySize {
+	if !sender.Valid() {
 		return nil, ErrControlSigningKey
 	}
 	semantic, signature, err := decodeSignedControlBody(canonicalSignedBody)
@@ -315,7 +315,7 @@ func VerifyControlBody(
 		return nil, err
 	}
 	preimage := buildControlSignaturePreimage(domain, binding, unsignedWrapper)
-	if !senderauth.Verify(senderPublicKey, preimage, signature) {
+	if !sender.Verify(preimage, signature) {
 		return nil, ErrControlSignature
 	}
 	return semantic, nil

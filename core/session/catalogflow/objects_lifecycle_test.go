@@ -3,6 +3,7 @@ package catalogflow
 import (
 	"bytes"
 	"context"
+	"crypto/ed25519"
 	"errors"
 	"sync"
 	"testing"
@@ -165,15 +166,15 @@ func TestCatalogObjectVerifierDestroyClearsClonedKeyAndRejectsVerify(t *testing.
 	catalogKeySource := bytes.Clone(fixture.key)
 	publicKeySource := bytes.Clone(fixture.publicKey)
 	verifier, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance:   fixture.share,
-		CatalogKey:      catalogKeySource,
-		SenderPublicKey: publicKeySource,
+		ShareInstance: fixture.share,
+		CatalogKey:    catalogKeySource,
+		Sender:        checkedSender(t, publicKeySource),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ownedCatalogKey := verifier.key
-	ownedPublicKey := verifier.publicKey
+	retainedSender := verifier.sender
 	clear(catalogKeySource)
 	clear(publicKeySource)
 	if _, err := verifier.Verify(context.Background(), fixture.share, request, sealed.Bytes()); err != nil {
@@ -187,10 +188,14 @@ func TestCatalogObjectVerifierDestroyClearsClonedKeyAndRejectsVerify(t *testing.
 
 	verifier.Destroy()
 	verifier.Destroy()
-	if !allCatalogLifecycleBytesZero(ownedCatalogKey) || !allCatalogLifecycleBytesZero(ownedPublicKey) {
+	if !allCatalogLifecycleBytesZero(ownedCatalogKey) {
 		t.Fatal("destroyed verifier retained key material")
 	}
-	if verifier.key != nil || verifier.publicKey != nil {
+	message := []byte("sender lifetime outlives catalog verifier")
+	if !retainedSender.Verify(message, ed25519.Sign(fixture.privateKey, message)) {
+		t.Fatal("catalog teardown invalidated the shared sender verifier")
+	}
+	if verifier.key != nil || verifier.sender != nil {
 		t.Fatal("destroyed verifier retained key slices")
 	}
 	if _, err := verifier.Verify(context.Background(), fixture.share, request, sealed.Bytes()); !errors.Is(err, ErrCatalogObjectVerifierDestroyed) {
@@ -219,9 +224,9 @@ func TestCatalogObjectVerifierDestroyIsSafeWithConcurrentVerify(t *testing.T) {
 		t.Fatal(err)
 	}
 	verifier, err := NewCatalogObjectVerifier(CatalogObjectVerifierConfig{
-		ShareInstance:   fixture.share,
-		CatalogKey:      fixture.key,
-		SenderPublicKey: fixture.publicKey,
+		ShareInstance: fixture.share,
+		CatalogKey:    fixture.key,
+		Sender:        checkedSender(t, fixture.publicKey),
 	})
 	if err != nil {
 		t.Fatal(err)

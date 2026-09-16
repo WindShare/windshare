@@ -98,7 +98,7 @@ func TestSenderControlAuthenticatorClassifiesAuthenticatedSemanticFailures(t *te
 	operationID := testOperationID(233)
 	semantic := mustControlBody(t, map[uint64]any{0: uint64(1)})
 	authenticator, err := NewSenderControlAuthenticator(
-		key.Public().(ed25519.PublicKey), base, nil,
+		checkedSender(t, key.Public().(ed25519.PublicKey)), base, nil,
 	)
 	if err != nil {
 		t.Fatal(err)

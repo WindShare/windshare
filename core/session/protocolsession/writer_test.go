@@ -11,6 +11,8 @@ import (
 	"time"
 
 	framechannel "github.com/windshare/windshare/core/framechannel"
+
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
@@ -94,7 +96,7 @@ func TestSessionWriterSignsTheExactEmittedSequence(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	authenticator, err := NewSenderControlAuthenticator(publicKey, base, nil)
+	authenticator, err := NewSenderControlAuthenticator(checkedSender(t, publicKey), base, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,3 +672,12 @@ func mustPlaintext(t *testing.T, message Message) []byte {
 }
 
 func (p *passthroughSealer) String() string { return fmt.Sprintf("sequence=%d", p.next) }
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
+}

@@ -55,7 +55,7 @@ func TestRemoteOperationErrorRejectsAuthenticatedMalformedSemantics(t *testing.T
 				t.Fatal(err)
 			}
 			if _, err := protocolsession.VerifyControlBody(
-				privateKey.Public().(ed25519.PublicKey),
+				checkedSender(t, privateKey.Public().(ed25519.PublicKey)),
 				protocolsession.ControlDomainOperation,
 				binding,
 				signed,

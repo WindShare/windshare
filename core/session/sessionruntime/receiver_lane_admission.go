@@ -113,7 +113,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 	}
 	settlement := receiverLaneSettlement(grant)
 	if len(response) == protocolsession.LaneRejectBytes {
-		rejection, parseErr := protocolsession.ParseLaneReject(response, hello, runtime.publicKey)
+		rejection, parseErr := protocolsession.ParseLaneReject(response, hello, runtime.sender)
 		if parseErr != nil {
 			return unverified, parseErr
 		}
@@ -121,7 +121,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 		settlement.Rejection = rejection
 		return settlement, &LaneRejectedError{Rejection: rejection}
 	}
-	if _, err := protocolsession.ParseLaneAccept(response, hello, runtime.publicKey); err != nil {
+	if _, err := protocolsession.ParseLaneAccept(response, hello, runtime.sender); err != nil {
 		return unverified, err
 	}
 	responseTime := runtime.now().Sub(started)
@@ -132,7 +132,7 @@ func (runtime *ReceiverRuntime) AttachLane(
 		ShareInstance: runtime.descriptor.ShareInstance(), ProtocolSessionID: runtime.ProtocolSessionID(),
 		LaneID: identity.ID, LaneEpoch: identity.Epoch, Direction: protocolsession.DirectionSenderToReceiver,
 	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(runtime.publicKey, base, runtime.semantic)
+	authenticator, err := protocolsession.NewSenderControlAuthenticator(runtime.sender, base, runtime.semantic)
 	if err != nil {
 		return settlement, err
 	}

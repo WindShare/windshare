@@ -117,7 +117,7 @@ func assertGoldenControl(t *testing.T, vector goldenControlCase) {
 		t.Fatalf("decode vector control plaintext: %v", err)
 	}
 	assertBytes(t, "signed control body", signedBody, message.Body())
-	verified, err := VerifyControlBody(signingKey.Public().(ed25519.PublicKey), vector.domain, vector.binding, signedBody)
+	verified, err := VerifyControlBody(checkedSender(t, signingKey.Public().(ed25519.PublicKey)), vector.domain, vector.binding, signedBody)
 	if err != nil {
 		t.Fatalf("verify control body: %v", err)
 	}
@@ -159,21 +159,21 @@ func TestControlSignatureRejectsEveryDeliveryAxisMutation(t *testing.T) {
 		t.Run(mutation.name, func(t *testing.T) {
 			changed := binding
 			mutation.mutate(&changed)
-			if _, err := VerifyControlBody(publicKey, ControlDomainOperation, changed, signed); !errors.Is(err, ErrControlSignature) {
+			if _, err := VerifyControlBody(checkedSender(t, publicKey), ControlDomainOperation, changed, signed); !errors.Is(err, ErrControlSignature) {
 				t.Fatalf("got %v, want ErrControlSignature", err)
 			}
 		})
 	}
 
 	otherUnsigned := mustControlBody(t, map[uint64]any{0: uint64(1), 1: uint64(4)})
-	if _, err := VerifyControlBody(publicKey, ControlDomainOperation, binding, mustSignedControlBody(t, signed, otherUnsigned)); !errors.Is(err, ErrControlSignature) {
+	if _, err := VerifyControlBody(checkedSender(t, publicKey), ControlDomainOperation, binding, mustSignedControlBody(t, signed, otherUnsigned)); !errors.Is(err, ErrControlSignature) {
 		t.Fatalf("body substitution: got %v", err)
 	}
 	wrongKey := ed25519.NewKeyFromSeed(sequentialBytes(0x21, ed25519.SeedSize)).Public().(ed25519.PublicKey)
-	if _, err := VerifyControlBody(wrongKey, ControlDomainOperation, binding, signed); !errors.Is(err, ErrControlSignature) {
+	if _, err := VerifyControlBody(checkedSender(t, wrongKey), ControlDomainOperation, binding, signed); !errors.Is(err, ErrControlSignature) {
 		t.Fatalf("wrong sender key: got %v", err)
 	}
-	if _, err := VerifyControlBody(publicKey, ControlDomainLaneAttach, binding, signed); !errors.Is(err, ErrControlBinding) {
+	if _, err := VerifyControlBody(checkedSender(t, publicKey), ControlDomainLaneAttach, binding, signed); !errors.Is(err, ErrControlBinding) {
 		t.Fatalf("domain substitution: got %v", err)
 	}
 }
@@ -199,7 +199,7 @@ func TestSenderControlWrapperPreservesArraySemanticsAndRejectsShapeDrift(t *test
 		t.Fatalf("sign array semantic body: %v", err)
 	}
 	verified, err := VerifyControlBody(
-		key.Public().(ed25519.PublicKey), ControlDomainOperation, binding, signed,
+		checkedSender(t, key.Public().(ed25519.PublicKey)), ControlDomainOperation, binding, signed,
 	)
 	if err != nil || !bytes.Equal(verified, semanticBody) {
 		t.Fatalf("verified semantic body changed: %x, %v", verified, err)
@@ -220,7 +220,7 @@ func TestSenderControlWrapperPreservesArraySemanticsAndRejectsShapeDrift(t *test
 	}
 	for index, malformed := range malformedWrappers {
 		if _, err := VerifyControlBody(
-			key.Public().(ed25519.PublicKey), ControlDomainOperation, binding, malformed,
+			checkedSender(t, key.Public().(ed25519.PublicKey)), ControlDomainOperation, binding, malformed,
 		); !errors.Is(err, ErrControlBody) {
 			t.Fatalf("malformed wrapper %d error = %v", index, err)
 		}
@@ -256,10 +256,10 @@ func TestControlBodyAndBindingValidationFailClosed(t *testing.T) {
 	if _, err := SignControlBody(key[:ed25519.PrivateKeySize-1], ControlDomainOperation, binding, unsigned); !errors.Is(err, ErrControlSigningKey) {
 		t.Fatalf("short private key: got %v", err)
 	}
-	if _, err := VerifyControlBody(key.Public().(ed25519.PublicKey)[:ed25519.PublicKeySize-1], ControlDomainOperation, binding, unsigned); !errors.Is(err, ErrControlSigningKey) {
-		t.Fatalf("short public key: got %v", err)
+	if _, err := VerifyControlBody(nil, ControlDomainOperation, binding, unsigned); !errors.Is(err, ErrControlSigningKey) {
+		t.Fatalf("missing verifier: got %v", err)
 	}
-	if _, err := VerifyControlBody(key.Public().(ed25519.PublicKey), ControlDomainOperation, binding, unsigned); !errors.Is(err, ErrControlBody) {
+	if _, err := VerifyControlBody(checkedSender(t, key.Public().(ed25519.PublicKey)), ControlDomainOperation, binding, unsigned); !errors.Is(err, ErrControlBody) {
 		t.Fatalf("missing signature: got %v", err)
 	}
 
@@ -290,7 +290,7 @@ func TestSenderControlAuthenticatorRequiresSenderAuthorityBeforeDispatch(t *test
 		LaneID: vector.LaneID, LaneEpoch: vector.LaneEpoch, Direction: DirectionSenderToReceiver,
 	}
 	signingKey := vectorSenderSigningKey()
-	authenticator, err := NewSenderControlAuthenticator(signingKey.Public().(ed25519.PublicKey), base, nil)
+	authenticator, err := NewSenderControlAuthenticator(checkedSender(t, signingKey.Public().(ed25519.PublicKey)), base, nil)
 	if err != nil {
 		t.Fatalf("create sender control authenticator: %v", err)
 	}
@@ -351,12 +351,12 @@ func TestSenderControlAuthenticatorOwnsAndValidatesItsFixedBase(t *testing.T) {
 		LaneID: vector.LaneID, LaneEpoch: vector.LaneEpoch, Direction: DirectionSenderToReceiver,
 	}
 	publicKey := vectorSenderSigningKey().Public().(ed25519.PublicKey)
-	authenticator, err := NewSenderControlAuthenticator(publicKey, base, nil)
+	authenticator, err := NewSenderControlAuthenticator(checkedSender(t, publicKey), base, nil)
 	if err != nil {
 		t.Fatalf("create sender control authenticator: %v", err)
 	}
 	publicKey[0] ^= 1
-	if bytes.Equal(authenticator.senderPublicKey, publicKey) {
+	if bytes.Equal(authenticator.sender.PublicKey(), publicKey) {
 		t.Fatal("authenticator retained caller-owned sender key")
 	}
 
@@ -368,12 +368,12 @@ func TestSenderControlAuthenticatorOwnsAndValidatesItsFixedBase(t *testing.T) {
 		bindingWith(base, func(value *ControlBinding) { value.HasOperationID = true }),
 	}
 	for index, invalid := range invalidBases {
-		if _, err := NewSenderControlAuthenticator(authenticator.senderPublicKey, invalid, nil); !errors.Is(err, ErrControlBinding) {
+		if _, err := NewSenderControlAuthenticator(authenticator.sender, invalid, nil); !errors.Is(err, ErrControlBinding) {
 			t.Fatalf("invalid base %d: got %v", index, err)
 		}
 	}
-	if _, err := NewSenderControlAuthenticator(authenticator.senderPublicKey[:ed25519.PublicKeySize-1], base, nil); !errors.Is(err, ErrControlSigningKey) {
-		t.Fatalf("short sender key: got %v", err)
+	if _, err := NewSenderControlAuthenticator(nil, base, nil); !errors.Is(err, ErrControlSigningKey) {
+		t.Fatalf("missing verifier: got %v", err)
 	}
 }
 
@@ -432,7 +432,7 @@ func TestControlSignedBodyOwnsSignatureBytes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sign control body: %v", err)
 	}
-	verified, err := VerifyControlBody(vectorSenderSigningKey().Public().(ed25519.PublicKey), ControlDomainOperation, binding, signed)
+	verified, err := VerifyControlBody(checkedSender(t, vectorSenderSigningKey().Public().(ed25519.PublicKey)), ControlDomainOperation, binding, signed)
 	if err != nil {
 		t.Fatalf("verify control body: %v", err)
 	}

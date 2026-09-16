@@ -56,6 +56,10 @@ func TestVerifierOwnsKeyAndSupportsConcurrentUse(t *testing.T) {
 		t.Fatal(err)
 	}
 	clear(publicKey)
+	clear(verifier.PublicKey())
+	if !verifier.Valid() {
+		t.Fatal("checked key lost validity")
+	}
 	var workers sync.WaitGroup
 	for range 8 {
 		workers.Go(func() {
@@ -77,4 +81,12 @@ func decodeHex(t *testing.T, value string) []byte {
 		t.Fatal(err)
 	}
 	return result
+}
+
+func TestUncheckedVerifierHasNoSenderIdentity(t *testing.T) {
+	for _, verifier := range []*Verifier{nil, new(Verifier)} {
+		if verifier.Valid() || verifier.PublicKey() != nil || verifier.Verify(nil, nil) {
+			t.Fatal("unchecked verifier exposed a sender identity")
+		}
+	}
 }

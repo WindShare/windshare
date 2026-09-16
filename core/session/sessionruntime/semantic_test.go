@@ -26,7 +26,7 @@ func TestReceiverSemanticRegistryRejectsEverySignedMalformedSenderControl(t *tes
 		ShareInstance: id16Share(2), ProtocolSessionID: id16[protocolsession.ProtocolSessionID](3),
 		LaneID: 4, LaneEpoch: 5, Direction: protocolsession.DirectionSenderToReceiver,
 	}
-	authenticator, err := protocolsession.NewSenderControlAuthenticator(publicKey, base, validator)
+	authenticator, err := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,7 @@ func TestMalformedSignedFinalTerminatesBeforeOperationTransition(t *testing.T) {
 		ShareInstance: id16Share(7), ProtocolSessionID: id16[protocolsession.ProtocolSessionID](8),
 		LaneID: 9, LaneEpoch: 10, Direction: protocolsession.DirectionSenderToReceiver,
 	}
-	authenticator, _ := protocolsession.NewSenderControlAuthenticator(publicKey, base, validator)
+	authenticator, _ := protocolsession.NewSenderControlAuthenticator(checkedSender(t, publicKey), base, validator)
 	binding := base
 	binding.Sequence = 1
 	binding.MessageKind = protocolsession.MessageOpenResults

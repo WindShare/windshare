@@ -7,6 +7,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -50,15 +51,15 @@ func TestDescriptorMatchesFrozenSenderObjectVector(t *testing.T) {
 	if !bytes.Equal(object, want) {
 		t.Fatal("descriptor bytes diverged from the frozen vector")
 	}
-	opened, err := senderobject.Open(binding, key, publicKey, object)
+	opened, err := senderobject.Open(binding, key, checkedSender(t, publicKey), object)
 	if err != nil || !bytes.Equal(opened, plaintext) {
 		t.Fatalf("open descriptor: %v", err)
 	}
-	bootstrapped, err := senderobject.OpenDescriptorBootstrap(binding, key, object, func(candidate []byte) (ed25519.PublicKey, error) {
+	bootstrapped, err := senderobject.OpenDescriptorBootstrap(binding, key, object, func(candidate []byte) (*senderauth.Verifier, error) {
 		if !bytes.Equal(candidate, plaintext) {
 			t.Fatal("bootstrap callback saw wrong plaintext")
 		}
-		return publicKey, nil
+		return checkedSender(t, publicKey), nil
 	})
 	if err != nil || !bytes.Equal(bootstrapped, plaintext) {
 		t.Fatalf("bootstrap descriptor: %v", err)
@@ -81,28 +82,28 @@ func TestSenderObjectRejectsIdentityCiphertextAndSignatureSubstitution(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := senderobject.Verify(otherPurpose, publicKey, object); !errors.Is(err, senderobject.ErrSignature) {
+	if err := senderobject.Verify(otherPurpose, checkedSender(t, publicKey), object); !errors.Is(err, senderobject.ErrSignature) {
 		t.Fatalf("purpose substitution error = %v", err)
 	}
 	otherFile := bytes.Clone(file)
 	otherFile[0] ^= 1
 	otherBinding, _ := senderobject.NewRevisionBinding(share, otherFile)
-	if _, err := senderobject.Open(otherBinding, key, publicKey, object); !errors.Is(err, senderobject.ErrSignature) {
+	if _, err := senderobject.Open(otherBinding, key, checkedSender(t, publicKey), object); !errors.Is(err, senderobject.ErrSignature) {
 		t.Fatalf("context substitution error = %v", err)
 	}
 	ciphertext := bytes.Clone(object)
 	ciphertext[senderobject.HeaderBytes+senderobject.NonceBytes] ^= 1
-	if _, err := senderobject.Open(binding, key, publicKey, ciphertext); !errors.Is(err, senderobject.ErrSignature) {
+	if _, err := senderobject.Open(binding, key, checkedSender(t, publicKey), ciphertext); !errors.Is(err, senderobject.ErrSignature) {
 		t.Fatalf("ciphertext substitution error = %v", err)
 	}
 	signature := bytes.Clone(object)
 	signature[len(signature)-1] ^= 1
-	if _, err := senderobject.Open(binding, key, publicKey, signature); !errors.Is(err, senderobject.ErrSignature) {
+	if _, err := senderobject.Open(binding, key, checkedSender(t, publicKey), signature); !errors.Is(err, senderobject.ErrSignature) {
 		t.Fatalf("signature substitution error = %v", err)
 	}
 	wrongKey := bytes.Clone(key)
 	wrongKey[0] ^= 1
-	if _, err := senderobject.Open(binding, wrongKey, publicKey, object); !errors.Is(err, senderobject.ErrAuth) {
+	if _, err := senderobject.Open(binding, wrongKey, checkedSender(t, publicKey), object); !errors.Is(err, senderobject.ErrAuth) {
 		t.Fatalf("wrong AEAD key error = %v", err)
 	}
 }
@@ -193,4 +194,13 @@ func TestBindingsFreezeEveryContextAxisAndLimit(t *testing.T) {
 
 func privateKeyForLimit() ed25519.PrivateKey {
 	return ed25519.NewKeyFromSeed(bytes.Repeat([]byte{1}, ed25519.SeedSize))
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

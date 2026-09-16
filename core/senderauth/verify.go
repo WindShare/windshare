@@ -39,8 +39,21 @@ func NewVerifier(publicKey ed25519.PublicKey) (*Verifier, error) {
 	return &Verifier{publicKey: bytes.Clone(publicKey)}, nil
 }
 
+// Valid distinguishes a checked sender key from nil or zero-value verifiers.
+func (v *Verifier) Valid() bool {
+	return v != nil && len(v.publicKey) == ed25519.PublicKeySize
+}
+
+// PublicKey returns a copy so identity binding cannot mutate shared verification state.
+func (v *Verifier) PublicKey() ed25519.PublicKey {
+	if !v.Valid() {
+		return nil
+	}
+	return bytes.Clone(v.publicKey)
+}
+
 func (v *Verifier) Verify(message, signature []byte) bool {
-	if v == nil || len(v.publicKey) != ed25519.PublicKeySize || len(signature) != ed25519.SignatureSize {
+	if !v.Valid() || len(signature) != ed25519.SignatureSize {
 		return false
 	}
 	point, err := canonicalPoint(signature[:ed25519.PublicKeySize])
@@ -52,7 +65,8 @@ func (v *Verifier) Verify(message, signature []byte) bool {
 	return ed25519.Verify(v.publicKey, message, signature)
 }
 
-// Verify is the stateless boundary for codecs that do not own a sender lifetime.
+// Verify is for standalone proofs with no retained sender identity. Receivers
+// must retain a Verifier across objects and messages instead.
 func Verify(publicKey ed25519.PublicKey, message, signature []byte) bool {
 	verifier, err := NewVerifier(publicKey)
 	return err == nil && verifier.Verify(message, signature)

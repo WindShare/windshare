@@ -12,6 +12,7 @@ import (
 
 	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/catalog"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/session/protocolsession"
 )
 
@@ -212,7 +213,7 @@ func buildPeerControl(
 		t.Fatalf("sign peer control: %v", err)
 	}
 	verified, err := protocolsession.VerifyControlBody(
-		signingKey.Public().(ed25519.PublicKey), protocolsession.ControlDomainOperation, binding, signedBody,
+		checkedSender(t, signingKey.Public().(ed25519.PublicKey)), protocolsession.ControlDomainOperation, binding, signedBody,
 	)
 	if err != nil || !bytes.Equal(verified, semanticBody) {
 		t.Fatalf("verify peer control: semantic body changed: %v", err)
@@ -269,4 +270,13 @@ func peerVectorBytes(first byte, count int) []byte {
 		result[index] = first + byte(index)
 	}
 	return result
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }

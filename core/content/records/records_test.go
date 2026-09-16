@@ -12,6 +12,7 @@ import (
 	"github.com/fxamacker/cbor/v2"
 	"github.com/windshare/windshare/core/catalog"
 	"github.com/windshare/windshare/core/content"
+	"github.com/windshare/windshare/core/senderauth"
 	"github.com/windshare/windshare/core/senderobject"
 )
 
@@ -69,7 +70,7 @@ func (fixture recordFixture) sealer(t *testing.T, nonce io.Reader, limit uint64)
 
 func (fixture recordFixture) opener(t *testing.T) *Opener {
 	t.Helper()
-	opener, err := NewOpener(OpenerConfig{ShareInstance: fixture.share, Keys: fixture.keys, VerificationKey: fixture.publicKey})
+	opener, err := NewOpener(OpenerConfig{ShareInstance: fixture.share, Keys: fixture.keys, Sender: checkedSender(t, fixture.publicKey)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,4 +454,13 @@ func TestSenderObjectErrorsMapToRecordFailureCategories(t *testing.T) {
 			}
 		})
 	}
+}
+
+func checkedSender(t testing.TB, publicKey []byte) *senderauth.Verifier {
+	t.Helper()
+	sender, err := senderauth.NewVerifier(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return sender
 }
