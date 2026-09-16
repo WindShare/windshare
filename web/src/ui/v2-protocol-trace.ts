@@ -6,7 +6,7 @@ import { TRACE_FAILURE_DETAIL_MAX_CHARACTERS } from '../diagnostics/trace/lane-p
 import { formatDiagnosticText } from '../security/diagnostic-formatter'
 import type { V2LeaseRetirementTraceEvent, V2ProtocolTraceEvent, V2SenderVerificationTraceEvent } from '../session/v2-diagnostics'
 import type { TraceEventObservationV2, TraceEventPayloadByNameV2 } from '../diagnostics/trace/model'
-import { correlatedObservation, decimal, requiredCorrelation } from '../diagnostics/export/trace-observation'
+import { correlatedObservation, decimal, durationMilliseconds, requiredCorrelation } from '../diagnostics/export/trace-observation'
 
 const FAILURE_DETAIL_FORMAT = Object.freeze({
   maxDepth: 6,
@@ -24,8 +24,8 @@ export function projectProtocolTraceEvent(
   if (event.eventName === 'request_scheduling') {
     return correlatedObservation(event.eventName, correlation, {
       request_sequence: decimal(event.sequence), request_kind: event.kind, route: event.route,
-      transition: event.transition, expected_ms: Math.ceil(event.expectedMilliseconds),
-      elapsed_ms: Math.ceil(event.elapsedMilliseconds), pending_requests: event.pendingRequests,
+      transition: event.transition, expected_ms: durationMilliseconds(event.expectedMilliseconds),
+      elapsed_ms: durationMilliseconds(event.elapsedMilliseconds), pending_requests: event.pendingRequests,
     })
   }
   if (event.eventName === 'content_scheduling') return projectContentScheduling(event)
@@ -37,7 +37,7 @@ export function projectProtocolTraceEvent(
       lane_count: decimal(event.laneCount),
       unchanged_availability_retries: decimal(event.unchangedAvailabilityRetries),
       ...(event.transition === 'wait_for_availability'
-        ? { transition: event.transition, delay_ms: event.delayMilliseconds }
+        ? { transition: event.transition, delay_ms: durationMilliseconds(event.delayMilliseconds) }
         : { transition: event.transition }),
     })
   }
