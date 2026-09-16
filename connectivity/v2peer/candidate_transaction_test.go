@@ -69,13 +69,15 @@ func (channel *candidateTransactionChannel) Send(ctx context.Context, frame fram
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	channel.pipe.inbox[target] <- bytes.Clone(frame)
-	channel.sends.Add(1)
-
+	// Claim this send's fault before publication: the receiver can react to the
+	// delivered frame and arm the next send before this call returns.
 	channel.failureMu.Lock()
 	err := channel.nextDeliveredErr
 	channel.nextDeliveredErr = nil
 	channel.failureMu.Unlock()
+
+	channel.pipe.inbox[target] <- bytes.Clone(frame)
+	channel.sends.Add(1)
 	if err != nil {
 		// The frame is deliberately published before the error. This models the
 		// transport ambiguity that requires outbound replay authority across lanes.
