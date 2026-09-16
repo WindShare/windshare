@@ -124,7 +124,7 @@ export class ReceiveOperationTransitions {
       await this.#options.resetOwnership(new DOMException('Preparing a separate replacement download', 'AbortError'))
       if (!current()) return
       joined.selectOnlyFile(found.entry, found.page.directory.ancestry)
-      this.#options.publish({ ...this.#options.snapshot(), draft: projectDraft('selection', found.page, joined.selection, this.#options.snapshot().share) })
+      this.#options.publish({ ...this.#options.snapshot(), draft: projectDraft('selection', found.page.directory, joined.selection, this.#options.snapshot().share) })
       await this.#options.browse.loadPage(found.page.directory, found.page.pageIndex, found.directories)
       if (!current()) return
       this.#options.publish({ ...this.#options.snapshot(), error: null,
