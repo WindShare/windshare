@@ -22,7 +22,8 @@ import type {
   TraceScheduledTask,
   TraceScheduler,
 } from '../../src/diagnostics/trace/ports'
-import { nextProjectionEpoch } from '../../src/transfer/projection'
+import { createSelectionSpec } from '../../src/transfer/intent'
+import { nextProjectionEpoch, SelectionProjectionController } from '../../src/transfer/projection'
 import {
   createConnectivityTraceSource,
   projectConnectivityTraceEvent,
@@ -164,6 +165,37 @@ it('exports discovery scheduling decisions with bounded queue and operation cont
     emit(source, () => event)
   }
   expect(composition.runtime.status().retained_event_count).toBe('4')
+})
+
+it('retains bounded discovery from the projection controller through trace export', async () => {
+  const composition = productionComposition()
+  composition.runtime.enable()
+  const controller = new SelectionProjectionController(createV2ReceiverTraceSource(composition.trace))
+  const selection = await createSelectionSpec({
+    shareInstance: 'AgAAAAAAAAAAAAAAAAAAAA',
+    syntheticRoot: 'AQAAAAAAAAAAAAAAAAAAAA',
+    rules: { mode: 'node-id', defaultSelected: true, rules: [] },
+  })
+  const initial = controller.beginSelection(selection)
+  const epoch = initial.projection.epoch
+  controller.apply({ kind: 'discovery-started', epoch })
+  const bounded = controller.apply({ kind: 'discovery-bounded', epoch })
+  expect(bounded.discovery.kind).toBe('bounded')
+
+  const lines = composition.runtime.export().trimEnd().split('\n').map(
+    line => JSON.parse(line) as Record<string, unknown>,
+  )
+  expect(lines.at(-1)).toMatchObject({
+    line_type: 'trace_event',
+    record: {
+      event: 'projection_transition',
+      payload: { transition: 'refined', projection_epoch: String(epoch), discovery_state: 'bounded' },
+    },
+  })
+  expect(composition.runtime.status().health).toMatchObject({
+    trace_dropped_count: '0',
+    trace_overwritten_count: '0',
+  })
 })
 
 it('exports lane exception causes and bounded stacks without mutating the failure', () => {

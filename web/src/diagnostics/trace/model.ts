@@ -169,6 +169,15 @@ type AttemptTransitionV1 =
   | 'cancelled'
   | 'stale_replacement'
 
+// Capture validation must accept every state admitted by the typed trace adapter.
+export const PROJECTION_DISCOVERY_STATES = Object.freeze([
+  'idle',
+  'discovering',
+  'bounded',
+  'retryable_failure',
+  'complete',
+] as const)
+
 type ProjectionShapeProofV1 =
   | 'unknown'
   | 'none'
@@ -216,7 +225,7 @@ export interface TraceEventPayloadByNameV2 {
         transition: 'refined'
         projection_epoch: string
         shape_proof: ProjectionShapeProofV1
-        discovery_state: 'idle' | 'discovering' | 'bounded' | 'retryable_failure' | 'complete'
+        discovery_state: (typeof PROJECTION_DISCOVERY_STATES)[number]
         file_count_lower_bound: string
         directory_count_lower_bound: string
         byte_count_lower_bound: string

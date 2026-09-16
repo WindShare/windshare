@@ -210,16 +210,17 @@ const VALID_OBSERVATIONS: readonly TraceEventObservationV2[] = [
   observation('browse_transition', { transition: 'page_loaded', entry_count: '2' }),
   observation('preview_transition', { attempt: 'media', transition: 'completed' }),
   observation('projection_transition', { transition: 'started', projection_epoch: '1' }),
-  observation('projection_transition', {
-    transition: 'refined',
-    projection_epoch: '2',
-    shape_proof: 'tree',
-    discovery_state: 'discovering',
-    file_count_lower_bound: '3',
-    directory_count_lower_bound: '4',
-    byte_count_lower_bound: '5',
-    unsettled_target_count: '6',
-  }),
+  ...(['idle', 'discovering', 'bounded', 'retryable_failure', 'complete'] as const).map(discoveryState =>
+    observation('projection_transition', {
+      transition: 'refined',
+      projection_epoch: '2',
+      shape_proof: 'tree',
+      discovery_state: discoveryState,
+      file_count_lower_bound: '3',
+      directory_count_lower_bound: '4',
+      byte_count_lower_bound: '5',
+      unsettled_target_count: '6',
+    })),
   observation('projection_transition', {
     transition: 'proven',
     projection_epoch: '3',
