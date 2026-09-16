@@ -1,13 +1,12 @@
 import { V2SelectionPolicy } from '../../catalog/v2-selection'
-import type { V2BrowsePage } from '../v2-gateway'
+import type { V2BrowseDirectory, V2BrowsePage } from '../v2-gateway'
 import type { V2SelectionDraft, V2ShareIdentity } from '../v2-model'
 
 export const EMPTY_SELECTION_DRAFT: V2SelectionDraft = Object.freeze({
   mode: 'scope', scope: 'whole-share', label: 'Shared files', summary: 'All shared items', empty: false,
 })
 
-export function scopeSelection(page: V2BrowsePage): V2SelectionPolicy {
-  const directory = page.directory
+export function scopeSelection(directory: V2BrowseDirectory): V2SelectionPolicy {
   const root = directory.path.length === 0
   const selection = new V2SelectionPolicy(root)
   if (!root) {
@@ -20,15 +19,15 @@ export function scopeSelection(page: V2BrowsePage): V2SelectionPolicy {
 
 export function projectDraft(
   mode: V2SelectionDraft['mode'],
-  page: V2BrowsePage,
+  directory: V2BrowseDirectory,
   selection: V2SelectionPolicy,
   share: V2ShareIdentity | null,
 ): V2SelectionDraft {
   if (mode === 'scope') {
-    const root = page.directory.path.length === 0
+    const root = directory.path.length === 0
     return Object.freeze({
       mode, scope: root ? 'whole-share' : 'current-folder',
-      label: root ? share?.name ?? 'Shared files' : page.directory.name,
+      label: root ? share?.name ?? 'Shared files' : directory.name,
       summary: root ? 'All shared items' : 'This folder and its contents', empty: false,
     })
   }

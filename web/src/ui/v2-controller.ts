@@ -1,7 +1,8 @@
 import { initialReceiverSnapshot, joiningReceiverSnapshot, receiverDiagnosticSnapshot, receiverProgressSnapshot } from './v2-controller-state'
 import { ReceiverExperienceObservability } from './experience/observability'
 import { V2SelectionPolicy } from '../catalog/v2-selection'
-import { projectDraft, scopeSelection, shareIdentityFromRoot } from './draft/model'
+import { projectDraft, scopeSelection } from './draft/model'
+import { SelectionDraftScope } from './draft/scope'
 import type { V2BrowsePage } from './v2-gateway'
 import {
   createSelectionSpec,
@@ -98,6 +99,7 @@ export class V2ReceiverController {
   #diagnosticGeneration = 0n
   #pageUrl = ''
   #joined: V2JoinedBrowserShare | undefined
+  readonly #draftScope = new SelectionDraftScope()
   #joinNavigation: AbortController | undefined
   #joinRecovery: InitialJoinControl | undefined
   #disposed = false
@@ -337,7 +339,9 @@ export class V2ReceiverController {
     const joined = this.#joined
     const page = this.#browse.page
     if (this.#disposed || joined === undefined || page === undefined) return
-    joined.replaceSelection(scopeSelection(page))
+    const directory = this.#draftScope.directory
+    if (directory === undefined) return
+    joined.replaceSelection(scopeSelection(directory))
     this.#snapshot = Object.freeze({ ...this.#snapshot, draft: { ...this.#snapshot.draft, mode: 'scope' as const } })
     this.#refreshDraft(joined, page)
   }
@@ -589,6 +593,7 @@ export class V2ReceiverController {
         return false
       }
       this.#joined = joined
+      this.#draftScope.reset()
       this.#joinRecovery = undefined
       joinedReplacementInstalled = true
       this.#authority.completeJoin(joined, selection)
@@ -668,6 +673,7 @@ export class V2ReceiverController {
     joined: V2JoinedBrowserShare,
     replacement: 'selection-change' | 'observation-replacement' = 'selection-change',
   ): void {
+    if (this.#draftScope.directory === undefined) return
     if (replacement === 'selection-change') this.#outputs.resetDraft()
     this.#projectionObservation.start(joined, replacement)
   }
@@ -693,18 +699,11 @@ export class V2ReceiverController {
   #pageCommitted(page: V2BrowsePage): void {
     const joined = this.#joined
     if (joined === undefined) return
-    let share = this.#snapshot.share
-    if (page.directory.idText === joined.descriptor.syntheticRootId) {
-      share = shareIdentityFromRoot(page, joined.descriptor.shareInstanceId)
-    }
-    const mode = this.#snapshot.draft.mode
-    const scopeChanged = mode === 'scope' && this.#snapshot.breadcrumbs.at(-1)?.id !== page.directory.idText
-    if (scopeChanged) joined.replaceSelection(scopeSelection(page))
-    this.#snapshot = Object.freeze({ ...this.#snapshot, share, status: '',
-      draft: projectDraft(mode, page, joined.selection, share) })
-    if (scopeChanged || this.#projectionObservation.current === undefined) {
-      this.#beginSelectionProjection(joined,
-        this.#joinNavigation === undefined ? 'selection-change' : 'observation-replacement')
+    const { share, draft, transition } = this.#draftScope.commitPage(
+      joined, page, this.#snapshot.draft.mode, this.#snapshot.share)
+    this.#snapshot = Object.freeze({ ...this.#snapshot, share, draft, status: '' })
+    if (transition !== 'page-updated') {
+      this.#beginSelectionProjection(joined, transition === 'scope-initialized' ? 'observation-replacement' : 'selection-change')
     }
     if (share?.kind === 'photo' && page.directory.idText === joined.descriptor.syntheticRootId &&
         !this.#activeReceive.active && !this.#authority.pending && !this.#retained.pending) {
@@ -714,8 +713,10 @@ export class V2ReceiverController {
   }
 
   #refreshDraft(joined: V2JoinedBrowserShare, page: V2BrowsePage): void {
+    const directory = this.#draftScope.directory
+    if (directory === undefined) return
     this.#snapshot = Object.freeze({ ...this.#snapshot,
-      draft: projectDraft(this.#snapshot.draft.mode, page, joined.selection, this.#snapshot.share) })
+      draft: projectDraft(this.#snapshot.draft.mode, directory, joined.selection, this.#snapshot.share) })
     this.#browse.publishPage(page)
     this.#beginSelectionProjection(joined)
   }
