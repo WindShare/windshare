@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
@@ -69,7 +70,7 @@ const share: V2ShareDescriptor = Object.freeze({
   syntheticRootId: 'root',
   chunkSize: 65_536,
   capabilities: 0n,
-  senderPublicKey: new Uint8Array(32).fill(3),
+  sender: createEd25519Verifier(new Uint8Array(32).fill(3)),
   createdAtSeconds: 1n,
   pathPolicy: V2_PATH_POLICY,
 })
@@ -575,7 +576,7 @@ describe('v2 session block lane deadlines', () => {
       ...share,
       shareInstance: vectorBytes(identityVector.shareInstanceB64),
       shareInstanceId: 'vector-share',
-      senderPublicKey: vectorBytes(identityVector.senderPublicKeyB64),
+      sender: createEd25519Verifier(vectorBytes(identityVector.senderPublicKeyB64)),
       chunkSize: 1 << 20,
     })
     let renewAttempts = 0

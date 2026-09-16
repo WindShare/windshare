@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 
@@ -133,7 +134,7 @@ describe('v2 E2E peer signaling codec', () => {
       const verified = await verifyV2SenderControl(
         encodeV2Message(kind, operationId, signedBody),
         binding,
-        bytes(vector.senderPublicKeyB64),
+        createEd25519Verifier(bytes(vector.senderPublicKeyB64)),
       )
       expect(verified).toEqual(semanticBody)
       expect(decodeBody(verified)).toMatchObject({

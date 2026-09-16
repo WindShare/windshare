@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import type { FrameChannel, ChannelState } from '../../src/contracts/channel'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { V2ReceiverSessionRuntime } from '../../src/session/v2-runtime'
@@ -21,7 +22,7 @@ export function id(seed: number): Uint8Array<ArrayBuffer> {
 export const SHARE: V2ShareDescriptor = {
   wireVersion: 2, suite: 2, shareInstance: id(1), shareInstanceId: 'share',
   syntheticRoot: id(2), syntheticRootId: 'root', chunkSize: 65_536,
-  capabilities: 0n, senderPublicKey: new Uint8Array(32).fill(3),
+  capabilities: 0n, sender: createEd25519Verifier(new Uint8Array(32).fill(3)),
   createdAtSeconds: 1n, pathPolicy: V2_PATH_POLICY,
 }
 export const KEY = new Uint8Array(32).fill(4)

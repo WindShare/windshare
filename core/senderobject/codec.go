@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/windshare/windshare/core/link"
+	"github.com/windshare/windshare/core/senderauth"
 )
 
 const (
@@ -198,7 +199,7 @@ func Verify(binding Binding, verificationKey ed25519.PublicKey, object []byte) e
 		return err
 	}
 	contextHash := sha256.Sum256(binding.context)
-	if !ed25519.Verify(verificationKey, signaturePreimage(binding.domain, contextHash, prefix), signature) {
+	if !senderauth.Verify(verificationKey, signaturePreimage(binding.domain, contextHash, prefix), signature) {
 		return ErrSignature
 	}
 	return nil

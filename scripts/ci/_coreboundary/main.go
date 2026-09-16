@@ -27,6 +27,8 @@ var supportedTargets = []goTarget{
 }
 
 var allowedThirdPartyModules = map[string]struct{}{
+	// Sender-key subgroup checks require only field/group arithmetic, with no I/O capabilities.
+	"filippo.io/edwards25519":      {},
 	"github.com/fxamacker/cbor/v2": {},
 	"github.com/x448/float16":      {},
 	"golang.org/x/sys":             {},

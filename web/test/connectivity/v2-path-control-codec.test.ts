@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { readFileSync } from 'node:fs'
 import { expect, it } from 'vitest'
 import { decodeV2PeerPathControl, encodeV2PeerPathControl } from '../../src/connectivity/v2-path-control-codec'
@@ -30,7 +31,7 @@ it('verifies all Go-authored session-bound signed path controls and canonical bo
   expect(await verifyV2SenderControl(message, {
    shareInstance: bytes(vector.controlBinding.shareInstanceB64), protocolSessionId: bytes(vector.controlBinding.protocolSessionIdB64),
    laneId: vector.controlBinding.laneId, laneEpoch: vector.controlBinding.laneEpoch, direction: 1, sequence: BigInt(item.sequence),
-  }, bytes(vector.senderPublicKeyB64))).toEqual(body)
+  }, createEd25519Verifier(bytes(vector.senderPublicKeyB64)))).toEqual(body)
   expect(() => encodeV2Message(V2_MESSAGE_KIND.peerPathControl, new Uint8Array(16).fill(1), body)).toThrow()
  }
 })

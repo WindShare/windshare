@@ -1,6 +1,6 @@
 import { decodeV2PeerPathControl } from '../connectivity/v2-path-control-codec'
 import { concatBytes, equalBytes } from '../crypto/bytes'
-import { verifyEd25519Signature } from '../crypto/curve25519'
+import type { Ed25519Verifier } from '../crypto/ed25519'
 import { sha256 } from '../crypto/digest'
 import { type CryptoRuntime, defaultCryptoRuntime } from '../crypto/webcrypto'
 import { isWellFormedUnicode } from '../protocol/text'
@@ -164,7 +164,7 @@ export function decodeV2Message(plaintext: Uint8Array): V2SessionMessage {
 export async function verifyV2SenderControl(
   message: V2SessionMessage,
   binding: V2ControlBinding,
-  senderPublicKey: Uint8Array,
+  sender: Ed25519Verifier,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (message.data) return message.body.slice()
@@ -192,7 +192,7 @@ export async function verifyV2SenderControl(
     [CONTROL_BODY_KEY, semanticValue],
   ]))
   const preimage = await controlPreimage(message, binding, domain, unsignedWrapper, runtime)
-  if (!(await verifyEd25519(senderPublicKey, preimage, signature))) {
+  if (!(await verifyEd25519(sender, preimage, signature))) {
     throw new V2MessageError('Sender control signature is invalid')
   }
   validateV2SenderControlBody(message.kind, semanticBody)
@@ -652,12 +652,12 @@ function requireMessageIdentity(kind: V2MessageKind, operationId: Uint8Array | u
 }
 
 async function verifyEd25519(
-  publicKey: Uint8Array,
+  sender: Ed25519Verifier,
   preimage: Uint8Array,
   signature: Uint8Array,
 ): Promise<boolean> {
   try {
-    return await verifyEd25519Signature(publicKey, preimage, signature)
+    return await sender.verify(preimage, signature)
   } catch (cause) {
     throw new V2MessageError('Unable to verify sender control signature', { cause })
   }

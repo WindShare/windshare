@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { V2RevisionService } from '../../src/content/v2-session-services'
 import type { LeaseRetirementObservation } from '../../src/content/scheduling/lease-retirement'
@@ -32,7 +33,7 @@ function fixture() {
   const fileId = bytes(identity.fileIdB64)
   const share = {
     ...SHARE, shareInstance: bytes(identity.shareInstanceB64),
-    senderPublicKey: bytes(identity.senderPublicKeyB64), chunkSize: 1 << 20,
+    sender: createEd25519Verifier(bytes(identity.senderPublicKeyB64)), chunkSize: 1 << 20,
   }
   const requests: V2MessageKind[] = []
   const retirements: LeaseRetirementObservation[] = []

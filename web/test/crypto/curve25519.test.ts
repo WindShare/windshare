@@ -2,14 +2,9 @@ import { describe, expect, it } from 'vitest'
 
 import {
   createX25519KeyAgreement,
-  verifyEd25519Signature,
 } from '../../src/crypto/curve25519'
 import type { CryptoRuntime } from '../../src/crypto/webcrypto'
 import { b64ToBytes, loadVectorFile, type VectorCase } from '../vectors'
-
-interface IdentityVector extends VectorCase {
-  readonly senderPublicKeyB64: string
-}
 
 interface TranscriptVector extends VectorCase {
   readonly receiverPrivateB64: string
@@ -18,19 +13,10 @@ interface TranscriptVector extends VectorCase {
   readonly sharedSecretB64: string
 }
 
-interface RegistrationVector extends VectorCase {
-  readonly preimageB64: string
-  readonly signatureB64: string
-}
-
-const identity = loadVectorFile(
-  new URL('../../../core/testvectors/v2-identity.json', import.meta.url),
-).cases[0] as IdentityVector
 const sessionCases = loadVectorFile(
   new URL('../../../core/testvectors/v2-session.json', import.meta.url),
 ).cases
 const transcript = named<TranscriptVector>('sender-authenticated-x25519-transcript')
-const registration = named<RegistrationVector>('fresh-relay-registration-proof')
 
 describe('curve25519 browser boundary', () => {
   it('matches the shared X25519 vector through injected portable entropy', async () => {
@@ -60,21 +46,6 @@ describe('curve25519 browser boundary', () => {
     nativeSecret.fill(0)
   })
 
-  it('verifies shared Ed25519 vectors with strict portable semantics', async () => {
-    const publicKey = bytes(identity.senderPublicKeyB64)
-    const preimage = bytes(registration.preimageB64)
-    const signature = bytes(registration.signatureB64)
-
-    await expect(
-      verifyEd25519Signature(publicKey, preimage, signature),
-    ).resolves.toBe(true)
-
-    signature[0] = signature[0]! ^ 1
-    await expect(
-      verifyEd25519Signature(publicKey, preimage, signature),
-    ).resolves.toBe(false)
-  })
-
   it('does not disguise X25519 validation failures as missing-algorithm fallbacks', async () => {
     const failure = new DOMException('invalid key', 'DataError')
     await expect(
@@ -83,10 +54,6 @@ describe('curve25519 browser boundary', () => {
   })
 
   it('rejects invalid widths and low-order X25519 peers', async () => {
-    await expect(
-      verifyEd25519Signature(new Uint8Array(31), new Uint8Array(), new Uint8Array(64)),
-    ).rejects.toThrow('Ed25519 public key must be 32 bytes')
-
     const agreement = await createX25519KeyAgreement({
       randomBytes: () => bytes(transcript.receiverPrivateB64),
     })

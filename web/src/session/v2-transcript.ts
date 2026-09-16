@@ -1,8 +1,8 @@
+import type { Ed25519Verifier } from '../crypto/ed25519'
 import { concatBytes, copyBytes, equalBytes } from '../crypto/bytes'
 import {
   createX25519KeyAgreement,
   type X25519KeyAgreement,
-  verifyEd25519Signature,
 } from '../crypto/curve25519'
 import { sha256 } from '../crypto/digest'
 import { deriveSuite02SessionAuthKey } from '../crypto/suite02-key-derivation'
@@ -120,7 +120,7 @@ export async function createV2ReceiverHandshake(
           clientHello,
           keyAgreement,
           sessionAuthKey,
-          options.descriptor.senderPublicKey,
+          options.descriptor.sender,
           runtime,
         )
       } finally {
@@ -136,7 +136,7 @@ async function acceptServerHello(
   clientHello: Uint8Array,
   keyAgreement: X25519KeyAgreement,
   sessionAuthKey: Uint8Array,
-  senderSigningKey: Uint8Array,
+  sender: Ed25519Verifier,
   runtime: CryptoRuntime,
 ): Promise<V2SessionKeys> {
   if (
@@ -154,8 +154,7 @@ async function acceptServerHello(
   const signaturePreimage = concatBytes([SERVER_HELLO_DOMAIN, await sha256(body, runtime)])
   let signatureValid: boolean
   try {
-    signatureValid = await verifyEd25519Signature(
-      senderSigningKey,
+    signatureValid = await sender.verify(
       signaturePreimage,
       encoded.subarray(body.length),
     )

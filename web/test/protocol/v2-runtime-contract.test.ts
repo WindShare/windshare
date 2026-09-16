@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import { decodeReceiveCredit, encodeReceiveCredit } from '../../src/transport/relay/receive-credit-codec'
 import { decode } from 'cborg'
 import { describe, expect, it } from 'vitest'
@@ -475,25 +476,25 @@ describe('suite-02 Web runtime contract', () => {
       )
       const plaintext = vector === senderObjects[0]
         ? await openDescriptorObjectBootstrap(binding, key, object, (opened) => {
-          return mapBytes(mapBodyBytes(opened), 7, 32)
+          return createEd25519Verifier(mapBytes(mapBodyBytes(opened), 7, 32))
         })
-        : await openSenderObject(binding, key, senderPublicKey, object)
+        : await openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), object)
       expect(plaintext).toEqual(bytes(vector.canonicalCborB64))
 
       for (const offset of [8, 20, prefix.length - 17, prefix.length - 1, object.length - 1]) {
-        await expect(openSenderObject(binding, key, senderPublicKey, flip(object, offset)))
+        await expect(openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), flip(object, offset)))
           .rejects.toMatchObject({ kind: 'signature' })
       }
       const previousVersion = object.slice()
       previousVersion[0] = 2
-      await expect(openSenderObject(binding, key, senderPublicKey, previousVersion))
+      await expect(openSenderObject(binding, key, createEd25519Verifier(senderPublicKey), previousVersion))
         .rejects.toMatchObject({ kind: 'malformed' })
       for (const hostileBinding of await hostileObjectBindings(vector)) {
         await expect(
-          openSenderObject(hostileBinding, key, senderPublicKey, object),
+          openSenderObject(hostileBinding, key, createEd25519Verifier(senderPublicKey), object),
         ).rejects.toThrow()
       }
-      await expect(openSenderObject(binding, flip(key), senderPublicKey, object)).rejects.toThrow()
+      await expect(openSenderObject(binding, flip(key), createEd25519Verifier(senderPublicKey), object)).rejects.toThrow()
     }
     await expect(
       createDescriptorObjectBinding(bytes(identity.pkHashB64), flip(bytes(identity.shareIdRawB64))),
@@ -847,7 +848,7 @@ describe('suite-02 lane runtime contract', () => {
       bytes(vector.laneAckBodyB64),
     )
     const senderPublicKey = bytes(identity.senderPublicKeyB64)
-    expect(await verifyV2LaneAccept(bytes(vector.laneAckB64), hello, senderPublicKey)).toEqual(
+    expect(await verifyV2LaneAccept(bytes(vector.laneAckB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
       bytes(vector.laneAckBodyB64).subarray(37),
     )
     const rejection = {
@@ -855,7 +856,7 @@ describe('suite-02 lane runtime contract', () => {
       retryAfterMilliseconds: vector.laneRejectRetryAfterMilliseconds,
     }
     expect(await v2LaneRejectBody(hello, rejection)).toEqual(bytes(vector.laneRejectBodyB64))
-    expect(await verifyV2LaneReject(bytes(vector.laneRejectB64), hello, senderPublicKey)).toEqual(
+    expect(await verifyV2LaneReject(bytes(vector.laneRejectB64), hello, createEd25519Verifier(senderPublicKey))).toEqual(
       rejection,
     )
 
@@ -863,18 +864,18 @@ describe('suite-02 lane runtime contract', () => {
     for (const offset of axes) {
       const hostile = flip(hello, offset)
       await expect(decodeV2LaneHello(hostile, trafficKey)).rejects.toThrow()
-      await expect(verifyV2LaneAccept(bytes(vector.laneAckB64), hostile, senderPublicKey)).rejects.toThrow()
-      await expect(verifyV2LaneReject(bytes(vector.laneRejectB64), hostile, senderPublicKey)).rejects.toThrow()
+      await expect(verifyV2LaneAccept(bytes(vector.laneAckB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+      await expect(verifyV2LaneReject(bytes(vector.laneRejectB64), hostile, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
     }
     await expect(decodeV2LaneHello(hello, flip(trafficKey))).rejects.toThrow()
-    await expect(verifyV2LaneAccept(flip(bytes(vector.laneAckB64), 53), hello, senderPublicKey)).rejects.toThrow()
-    await expect(verifyV2LaneReject(flip(bytes(vector.laneRejectB64), 44), hello, senderPublicKey)).rejects.toThrow()
+    await expect(verifyV2LaneAccept(flip(bytes(vector.laneAckB64), 53), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
+    await expect(verifyV2LaneReject(flip(bytes(vector.laneRejectB64), 44), hello, createEd25519Verifier(senderPublicKey))).rejects.toThrow()
     await expect(encodeV2LaneHello({ ...fields, laneId: 0 }, trafficKey)).rejects.toThrow()
     await expect(
       v2LaneRejectBody(hello, { code: V2_LANE_REJECT.stopping, retryAfterMilliseconds: 1 }),
     ).rejects.toThrow()
 
-    const authority = new V2LaneResponseAuthority(hello, senderPublicKey)
+    const authority = new V2LaneResponseAuthority(hello, createEd25519Verifier(senderPublicKey))
     await expect(authority.accept(bytes(vector.laneAckB64))).resolves.toEqual(
       bytes(vector.laneAckBodyB64).subarray(37),
     )

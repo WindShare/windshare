@@ -1,3 +1,4 @@
+import { createEd25519Verifier } from '../../src/crypto/ed25519'
 import type { FrameChannel, ChannelState } from '../../src/contracts/channel'
 import { V2_PATH_POLICY, type V2ShareDescriptor } from '../../src/catalog/v2-records'
 import { concatBytes, encodeBase64Url } from '../../src/crypto/bytes'
@@ -137,7 +138,7 @@ export async function wireFixture(options: {
   const share: V2ShareDescriptor = {
     wireVersion: 2, suite: 2, shareInstance: identity(1), shareInstanceId: encodeBase64Url(identity(1)),
     syntheticRoot: identity(2), syntheticRootId: encodeBase64Url(identity(2)), chunkSize: 4,
-    capabilities: 0n, senderPublicKey: signing.publicKey, createdAtSeconds: 1n, pathPolicy: V2_PATH_POLICY,
+    capabilities: 0n, sender: createEd25519Verifier(signing.publicKey), createdAtSeconds: 1n, pathPolicy: V2_PATH_POLICY,
   }
   const files = [fileEntry(identity(11), 'first.bin', FILE_BYTES), fileEntry(identity(12), 'second.bin', FILE_BYTES)]
   const objects = new Map(await Promise.all(files.map(async file => [file.idText, await sealedRevision(share, file.id, signing)] as const)))

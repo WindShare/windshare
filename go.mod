@@ -37,6 +37,7 @@ require golang.org/x/term v0.45.0
 require github.com/rivo/uniseg v0.4.7
 
 require (
+	filippo.io/edwards25519 v1.2.0
 	github.com/pion/ice/v4 v4.4.2
 	github.com/pion/logging v0.2.4
 	github.com/pion/stun/v4 v4.0.0

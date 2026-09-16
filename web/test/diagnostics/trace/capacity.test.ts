@@ -79,6 +79,7 @@ describe('trace frozen contract', () => {
       'preview_transition',
       'projection_transition',
       'authority_transition',
+      'sender_verification',
       'protocol_operation',
       'content_scheduling',
       'request_scheduling',
