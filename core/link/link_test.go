@@ -56,13 +56,13 @@ func TestURLRoundTrip(t *testing.T) {
 		l    link.Link
 		base string
 	}{
-		{"无中转", newLink(), "https://windshare.top"},
+		{"同站点中转", newLink("https://windshare.top"), "https://windshare.top"},
 		{"单中转", newLink("relay.example.com"), "https://windshare.top"},
 		{"多中转保序", newLink("relay-a.example.com", "relay-b.example.com"), "https://windshare.top"},
 		{"中转带端口", newLink("relay.example.com:8443"), "https://windshare.top"},
-		{"基址尾斜杠", newLink(), "https://windshare.top/"},
+		{"基址尾斜杠", newLink("https://windshare.top"), "https://windshare.top/"},
 		{"基址带子路径", newLink("r.example.com"), "https://ex.com/app"},
-		{"localhost 开发基址", newLink(), "http://localhost:5173"},
+		{"localhost 开发基址", newLink("http://localhost:5173"), "http://localhost:5173"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -59,7 +59,7 @@ type Link struct {
 	ReadSecret []byte   // 16B;链接中唯一秘密
 	PKHash     []byte   // suite 0x02 only: first16(SHA-256(sender-key-domain || sender public key))
 	ShareID    string   // suite-specific base64url relay route; never an encryption input
-	Relays     []string // ?r= 多值,自始按列表解析(M1 仅用首个)
+	Relays     []string // Ordered relay bases; Parse and Merge resolve omitted hints from the link origin.
 }
 
 // SenderKeyHash binds a suite-0x02 capability to its Ed25519 sender identity.
@@ -169,8 +169,8 @@ func (l Link) bareURL(base string) (*url.URL, error) {
 	u = u.JoinPath(l.ShareID)
 	// 查询与 fragment 由链接语义独占,base 携带的一律丢弃。
 	u.RawQuery = ""
-	if len(l.Relays) > 0 {
-		u.RawQuery = url.Values{relayParam: l.Relays}.Encode()
+	if relays := explicitRelays(u, l.Relays); len(relays) > 0 {
+		u.RawQuery = url.Values{relayParam: relays}.Encode()
 	}
 	u.Fragment = ""
 	return u, nil
@@ -257,7 +257,7 @@ func parseBare(raw string) (Link, *url.URL, error) {
 	if err := validBareShareID(shareID); err != nil {
 		return Link{}, nil, err
 	}
-	return Link{ShareID: shareID, Relays: query[relayParam]}, u, nil
+	return Link{ShareID: shareID, Relays: resolveRelays(u, query)}, u, nil
 }
 
 func parseAbsoluteURL(raw string) (*url.URL, url.Values, error) {

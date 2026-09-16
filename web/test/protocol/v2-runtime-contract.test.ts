@@ -97,6 +97,7 @@ interface IdentityVector extends VectorCase {
   readonly shareIdRawB64: string
   readonly shareId: string
   readonly keyString: string
+  readonly links: readonly { readonly name: string; readonly url: string; readonly relays: readonly string[] }[]
   readonly descriptorKeyB64: string
   readonly catalogKeyB64: string
   readonly fileIdB64: string
@@ -412,6 +413,16 @@ async function hostileObjectBindings(
 }
 
 describe('suite-02 Web runtime contract', () => {
+  it('resolves Go-generated compact and explicit relay links identically', async () => {
+    for (const test of identity.links) {
+      const parsed = await parseSuite02CapabilityLink(test.url)
+      expect(parsed.relays, test.name).toEqual(test.relays)
+      expect(parsed.shareId, test.name).toBe(identity.shareId)
+      expect(parsed.readSecret, test.name).toEqual(bytes(identity.readSecretB64))
+      expect(parsed.pkHash, test.name).toEqual(bytes(identity.pkHashB64))
+    }
+  })
+
   it('derives capability identity and all six HKDF branches independently', async () => {
     const capability = await decodeSuite02CapabilityKey(identity.keyString)
     expect(capability.readSecret).toEqual(bytes(identity.readSecretB64))
@@ -425,7 +436,7 @@ describe('suite-02 Web runtime contract', () => {
       `https://share.example/s/${identity.shareId}?r=https%3A%2F%2Frelay.example#${identity.keyString}`,
     )
     expect(parsed.shareId).toBe(identity.shareId)
-    expect(parsed.relayHints).toEqual(['https://relay.example'])
+    expect(parsed.relays).toEqual(['https://relay.example'])
 
     const fileObject = await deriveSuite02FileObjectKey(
       capability.readSecret,
