@@ -41,6 +41,13 @@ export function decimal(value: number | bigint): string {
   return candidate.toString(10)
 }
 
+export function durationMilliseconds(value: number): number {
+  // Clocks and jitter retain fractional precision; only the trace representation
+  // rounds up so positive waits remain visible. Keep invalid inputs unchanged
+  // for capture validation to reject and count instead of hiding their failure.
+  return Number.isFinite(value) && value >= 0 ? Math.ceil(value) : value
+}
+
 export function snake<Value extends string>(value: Value): SnakeCase<Value> {
   return value.replaceAll('-', '_') as SnakeCase<Value>
 }

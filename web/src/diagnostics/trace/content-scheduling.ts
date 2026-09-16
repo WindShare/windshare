@@ -2,6 +2,7 @@ import type { V2BlockSchedulingObservation } from '../../content/v2-lane-set'
 import type { V2ContentSchedulingTraceEvent, V2ProtocolTraceSource } from '../../session/v2-diagnostics'
 import type { FailureIdentity } from '../incident/fact'
 import { projectCorrelationV1 } from '../export/correlation-v1'
+import { durationMilliseconds } from '../export/trace-observation'
 import type { TraceEventObservationV2 } from './model'
 
 export function traceContentScheduling(
@@ -30,7 +31,7 @@ export function projectContentScheduling(event: V2ContentSchedulingTraceEvent): 
       dispatch_sequence: String(event.dispatchSequence),
       file_id: event.fileId, block_index: String(event.localBlockIndex),
       route: event.route, purpose: event.purpose,
-      expected_ms: Math.ceil(event.expectedMilliseconds),
+      expected_ms: durationMilliseconds(event.expectedMilliseconds),
       pending_bytes: String(event.pendingBytes),
       bytes_per_second: Math.round(event.bytesPerSecond),
     }),
