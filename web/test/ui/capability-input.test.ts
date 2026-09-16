@@ -12,8 +12,30 @@ describe('capability input identity', () => {
     expect(expected).not.toContain(key.encoded)
     expect(await capabilityInputFingerprint(` #${key.encoded} `, pageUrl)).toBe(expected)
     expect(await capabilityFromInput(key.encoded, pageUrl)).toMatchObject({
-      shareId: key.shareId, relayHints: ['https://relay.invalid'],
+      shareId: key.shareId, relays: ['https://relay.invalid'],
     })
+  })
+
+  it('resolves a pasted short link against its own origin, independently of the portal', async () => {
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16).fill(1), new Uint8Array(16).fill(2))
+    const pageUrl = 'https://portal.invalid/'
+    const link = `https://RELAY.invalid:443/app/${key.shareId}?trace=1#${key.encoded}`
+    expect((await capabilityFromInput(link, pageUrl)).relays).toEqual(['https://relay.invalid'])
+    expect((await capabilityFromInput(key.encoded, pageUrl)).relays).toEqual(['https://portal.invalid'])
+    const fingerprint = await capabilityInputFingerprint(link, pageUrl)
+    expect(fingerprint).toBeDefined()
+    expect(await capabilityInputFingerprint(link, 'https://other-portal.invalid/')).toBe(fingerprint)
+    expect(await capabilityInputFingerprint(key.encoded, 'https://relay.invalid/')).toBe(fingerprint)
+    expect(await capabilityInputFingerprint(key.encoded, pageUrl)).not.toBe(fingerprint)
+  })
+
+  it('preserves explicit relay selection and rejects an empty hint instead of defaulting', async () => {
+    const key = await encodeSuite02CapabilityKey(new Uint8Array(16).fill(1), new Uint8Array(16).fill(2))
+    const pageUrl = 'https://portal.invalid/'
+    const link = `https://relay.invalid/${key.shareId}?r=&trace=1#${key.encoded}`
+    expect((await capabilityFromInput(link, pageUrl)).relays).toEqual([''])
+    expect(await capabilityInputFingerprint(link, pageUrl)).toBeUndefined()
+    expect(await capabilityInputFingerprint(key.encoded, `${pageUrl}?r=`)).toBeUndefined()
   })
 
   it('distinguishes read credentials and relay routes, and never accepts a mismatched URL route', async () => {

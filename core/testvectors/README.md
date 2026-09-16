@@ -46,7 +46,8 @@ Receiver-local canonical contracts:
   vectors a broader platform authority.
 
 Other generated v2 files retain sender objects, sessions, fragmentation,
-identity, and peer signaling. `v2-session.json` includes relay connection probes,
+identity, and peer signaling. `v2-identity.json` also checks compact link generation
+and origin-based relay resolution against the browser parser. `v2-session.json` includes relay connection probes,
 acknowledgements, stale resume errors, and independent frame/byte credit deltas for
 both relay directions alongside registration and session bytes.
 Peer signaling schema 2 includes monotonic attempt

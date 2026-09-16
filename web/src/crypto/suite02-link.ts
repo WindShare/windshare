@@ -26,7 +26,8 @@ export interface Suite02CapabilityKey {
 }
 
 export interface Suite02CapabilityLink extends Suite02CapabilityKey {
-  readonly relayHints: readonly string[]
+  /** Ordered relay bases, including the link origin when no hints are present. */
+  readonly relays: readonly string[]
 }
 
 function keyPayload(input: string): string {
@@ -109,6 +110,13 @@ export async function encodeSuite02CapabilityKey(
   })
 }
 
+// Resolve against the capability's URL before UI code can substitute its own
+// page origin. A separately entered key uses the page that supplies its route.
+export function capabilityRelays(url: URL): readonly string[] {
+  const hints = url.searchParams.getAll('r')
+  return Object.freeze(hints.length > 0 ? hints : [url.origin])
+}
+
 export async function parseSuite02CapabilityLink(
   input: string,
   runtime: CryptoRuntime = defaultCryptoRuntime(),
@@ -151,6 +159,6 @@ export async function parseSuite02CapabilityLink(
   }
   return Object.freeze({
     ...capability,
-    relayHints: Object.freeze(url.searchParams.getAll('r')),
+    relays: capabilityRelays(url),
   })
 }

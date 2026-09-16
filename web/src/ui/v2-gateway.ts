@@ -361,8 +361,7 @@ export class V2BrowserReceiverGateway {
     try {
       capability = await capabilityFromInput(input, pageUrl)
       signal?.throwIfAborted()
-      const relayBases = this.#relayBases ?? receiverRelayBases(capability.relayHints.length > 0
-        ? capability.relayHints : [new URL(pageUrl).origin])
+      const relayBases = this.#relayBases ?? receiverRelayBases(capability.relays)
       const initial = await joinBrowserRelays(relayBases, capability,
         signal ?? new AbortController().signal, this.#protocolTrace, recovery)
       relay = initial.relay
